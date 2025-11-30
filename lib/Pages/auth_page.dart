@@ -1,5 +1,5 @@
-import 'package:cruise_connect/Pages/Login_Page.dart';
 import 'package:cruise_connect/Pages/home_page.dart';
+import 'package:cruise_connect/Pages/welcome_page.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
@@ -18,7 +18,7 @@ class AuthPage extends StatelessWidget {
           }
           //user is NOT logged in
           else{
-            return LoginPage();
+            return WelcomePage();
           }
         }
       )
