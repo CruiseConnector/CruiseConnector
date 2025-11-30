@@ -82,8 +82,8 @@ EXTERNAL SOURCES:
 
 SPEC CHECKSUMS:
   Firebase: f07b15ae5a6ec0f93713e30b923d9970d144af3e
-  firebase_auth: 87ea88759d0282ccf1e2afe96f88ff3c07547938
-  firebase_core: e054894ab56033ef9bcbe2d9eac9395e5306e2fc
+  firebase_auth: f7f3fc5330acb24faf314a400d5814c91d90aaa9
+  firebase_core: bab38c0ca089203d6012b1ab19d744c30923b96e
   FirebaseAppCheckInterop: f734c802f21fe1da0837708f0f9a27218c8a4ed0
   FirebaseAuth: 4a2aed737c84114a9d9b33d11ae1b147d6b94889
   FirebaseAuthInterop: 858e6b754966e70740a4370dd1503dfffe6dbb49
