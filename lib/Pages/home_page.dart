@@ -349,8 +349,8 @@ class _HomePageState extends State<HomePage> {
                       ClipRRect(
                         borderRadius: BorderRadius.circular(12),
                         child: Container(
-                          width: 80, // Quadratisch
-                          height: 80,
+                          width: 180, // Quadratisch
+                          height: 120,
                           decoration: BoxDecoration(
                             gradient: LinearGradient(
                               begin: Alignment.topLeft,
@@ -674,14 +674,14 @@ class _HomePageState extends State<HomePage> {
   Widget _buildAnalyticsPage() {
     return SingleChildScrollView(
       child: Padding(
-        padding: const EdgeInsets.all(16.0),
+        padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 10.0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text(
               "Analytics",
               style: TextStyle(
-                fontSize: 22,
+                fontSize: 28,
                 fontWeight: FontWeight.bold,
                 color: Colors.white,
               ),
@@ -689,15 +689,16 @@ class _HomePageState extends State<HomePage> {
             const SizedBox(height: 24),
             GridView.count(
               crossAxisCount: 2,
-              crossAxisSpacing: 12,
-              mainAxisSpacing: 12,
+              crossAxisSpacing: 16,
+              mainAxisSpacing: 16,
               shrinkWrap: true,
               physics: const NeverScrollableScrollPhysics(),
               children: [
-                _buildAnalyticsCard("Fahrten", "42", Icons.directions_car, Colors.blue),
-                _buildAnalyticsCard("Distanz", "1.267 km", Icons.map, Colors.green),
-                _buildAnalyticsCard("Zeit", "28h", Icons.timer, Colors.orange),
-                _buildAnalyticsCard("Badges", "5", Icons.emoji_events, Colors.purple),
+                // Futuristische Neon-Farben für die Icons
+                _buildAnalyticsCard("Fahrten", "42", Icons.directions_car, const Color(0xFF00E5FF)),
+                _buildAnalyticsCard("Distanz", "1.267 km", Icons.map, const Color(0xFF00FF66)),
+                _buildAnalyticsCard("Zeit", "28h", Icons.timer, const Color(0xFFFF9900)),
+                _buildAnalyticsCard("Badges", "5", Icons.emoji_events, const Color(0xFFB026FF)),
               ],
             ),
             const SizedBox(height: 24),
@@ -705,8 +706,15 @@ class _HomePageState extends State<HomePage> {
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
                 color: const Color(0xFF1A1F26),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: const Color(0xFFFFFFFF).withOpacity(0.06), width: 1),
+                borderRadius: BorderRadius.circular(24),
+                border: Border.all(color: Colors.white.withOpacity(0.05), width: 1),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.2),
+                    blurRadius: 15,
+                    offset: const Offset(0, 5),
+                  )
+                ],
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -719,9 +727,10 @@ class _HomePageState extends State<HomePage> {
                       fontWeight: FontWeight.bold,
                     ),
                   ),
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 24),
+                  // FIX: Höhe auf 160 erhöht, um den 4px Overflow zu beheben
                   SizedBox(
-                    height: 120,
+                    height: 160, 
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                       crossAxisAlignment: CrossAxisAlignment.end,
@@ -739,31 +748,46 @@ class _HomePageState extends State<HomePage> {
                 ],
               ),
             ),
-            const SizedBox(height: 80),
+            const SizedBox(height: 120), // Ausreichend Platz für die schwebende Bottom Nav Bar
           ],
         ),
       ),
     );
   }
 
-  Widget _buildAnalyticsCard(String title, String value, IconData icon, Color color) {
+  Widget _buildAnalyticsCard(String title, String value, IconData icon, Color neonColor) {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: const Color(0xFF1A1F26),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFFFFFFFF).withOpacity(0.06), width: 1),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: Colors.white.withOpacity(0.05), width: 1),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.2),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          )
+        ],
       ),
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(icon, color: color, size: 32),
-          const SizedBox(height: 12),
+          // Icon mit farbigem Hintergrund-Glow
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: neonColor.withOpacity(0.15),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(icon, color: neonColor, size: 28),
+          ),
+          const Spacer(),
           Text(
             value,
             style: const TextStyle(
               color: Colors.white,
-              fontSize: 18,
+              fontSize: 22,
               fontWeight: FontWeight.bold,
             ),
           ),
@@ -771,8 +795,9 @@ class _HomePageState extends State<HomePage> {
           Text(
             title,
             style: const TextStyle(
-              color: Colors.white70,
-              fontSize: 12,
+              color: Color(0xFFA0AEC0),
+              fontSize: 13,
+              fontWeight: FontWeight.w500,
             ),
           ),
         ],
