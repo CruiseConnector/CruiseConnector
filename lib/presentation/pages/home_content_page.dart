@@ -1,5 +1,5 @@
-import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/material.dart';
 
 class HomeContentPage extends StatefulWidget {
   const HomeContentPage({super.key});
@@ -46,7 +46,7 @@ class _HomeContentPageState extends State<HomeContentPage> {
     return SingleChildScrollView(
       physics: const BouncingScrollPhysics(),
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 20, 20, 30),
+        padding: const EdgeInsets.fromLTRB(20, 10, 20, 30),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -78,13 +78,13 @@ class _HomeContentPageState extends State<HomeContentPage> {
                   alignment: Alignment.topRight,
                   children: [
                     CircleAvatar(
-                      radius: 32,
+                      radius: 28,
                       backgroundColor: const Color(0xFFFF3B30),
                       child: const Icon(Icons.person, color: Colors.white, size: 32),
                     ),
                     Container(
-                      width: 28,
-                      height: 28,
+                      width: 24,
+                      height: 24,
                       decoration: BoxDecoration(
                         color: Colors.blue[700],
                         shape: BoxShape.circle,
@@ -105,7 +105,7 @@ class _HomeContentPageState extends State<HomeContentPage> {
                 ),
               ],
             ),
-            const SizedBox(height: 20),
+            const SizedBox(height: 10),
 
             // Fortschritt Section
             Container(
@@ -212,14 +212,14 @@ class _HomeContentPageState extends State<HomeContentPage> {
                 ],
               ),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 10),
 
             // Heute für dich Section
             const Text(
               "Heute für dich",
               style: TextStyle(
                 color: Colors.white,
-                fontSize: 15,
+                fontSize: 20,
                 fontWeight: FontWeight.bold,
               ),
             ),
@@ -329,7 +329,7 @@ class _HomeContentPageState extends State<HomeContentPage> {
               children: [
                 Expanded(
                   child: Container(
-                    height: 190,
+                    height: 180,
                     padding: const EdgeInsets.all(10),
                     decoration: BoxDecoration(
                       color: const Color(0xFF1C1F26),
@@ -390,7 +390,7 @@ class _HomeContentPageState extends State<HomeContentPage> {
                 const SizedBox(width: 16),
                 Expanded(
                   child: Container(
-                    height: 190,
+                    height: 180,
                     padding: const EdgeInsets.all(10),
                     decoration: BoxDecoration(
                       color: const Color(0xFF1C1F26),
@@ -404,12 +404,12 @@ class _HomeContentPageState extends State<HomeContentPage> {
                           "Letzte 7 Tage",
                           style: TextStyle(
                             color: Colors.white,
-                            fontSize: 12,
+                            fontSize: 16,
                             fontWeight: FontWeight.bold,
                             
                           ),
                         ),
-                        const SizedBox(height: 24),
+                        const SizedBox(height: 10),
                         Row(
                           children: [
                             

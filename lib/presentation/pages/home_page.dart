@@ -42,7 +42,7 @@ class _HomePageState extends State<HomePage> {
 
   Widget _buildBottomNav() {
     return Container(
-      height: 90,
+      height: 80,
       padding: const EdgeInsets.only(bottom: 20),
       decoration: BoxDecoration(
         color: Colors.white,
@@ -71,16 +71,16 @@ class _HomePageState extends State<HomePage> {
             ],
           ),
           Positioned(
-            top: -30,
+            top: -25,
             child: GestureDetector(
               onTap: () => _onNavItemTapped(2),
               child: AnimatedScale(
                 scale: _selectedIndex == 2 ? 1.15 : 1.0,
-                duration: const Duration(milliseconds: 300),
+                duration: const Duration(milliseconds: 400),
                 curve: Curves.easeOutCubic,
                 child: Container(
-                  width: 68,
-                  height: 68,
+                  width: 78,
+                  height: 78,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
                     // Angepasster Gradient für den exakten Figma-Look
