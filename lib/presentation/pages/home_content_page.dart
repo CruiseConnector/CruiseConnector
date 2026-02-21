@@ -1,8 +1,10 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:cruise_connect/presentation/pages/route_join_page.dart';
 
 class HomeContentPage extends StatefulWidget {
-  const HomeContentPage({super.key});
+  final Function(int)? onTabChange;
+  const HomeContentPage({super.key, this.onTabChange});
 
   @override
   State<HomeContentPage> createState() => _HomeContentPageState();
@@ -231,7 +233,10 @@ class _HomeContentPageState extends State<HomeContentPage> {
               child: InkWell(
                 borderRadius: BorderRadius.circular(24),
                 onTap: () {
-                  // Navigation logic here
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (context) => const RouteJoinPage()),
+                  );
                 },
                 child: Container(
                   padding: const EdgeInsets.all(12),
@@ -359,7 +364,7 @@ class _HomeContentPageState extends State<HomeContentPage> {
                           width: double.infinity, 
                           child: GestureDetector(
                             onTap: () {
-                                // Navigation logic if needed
+                                widget.onTabChange?.call(1);
                             },
                             child: Container(
                               height: 35.0,

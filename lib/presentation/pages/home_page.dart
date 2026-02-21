@@ -15,13 +15,19 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   int _selectedIndex = 0;
 
-  final List<Widget> _pages = [
-    const HomeContentPage(),
-    const CommunityPage(),
-    const CruiseModePage(),
-    const AnalyticsPage(),
-    const ProfilePage(),
-  ];
+  late final List<Widget> _pages;
+
+  @override
+  void initState() {
+    super.initState();
+    _pages = [
+      HomeContentPage(onTabChange: _onNavItemTapped),
+      const CommunityPage(),
+      const CruiseModePage(),
+      const AnalyticsPage(),
+      const ProfilePage(),
+    ];
+  }
 
   void _onNavItemTapped(int index) {
     setState(() {
