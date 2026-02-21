@@ -1,4 +1,4 @@
-import 'package:cruise_connect/Pages/Auth_Page.dart';
+import 'package:cruise_connect/presentation/pages/auth_page.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'firebase_options.dart';
