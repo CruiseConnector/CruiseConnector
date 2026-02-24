@@ -2,6 +2,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:cruise_connect/pages/welcome_page.dart';
 import 'package:cruise_connect/Pages/route_join_page.dart';
+import 'package:cruise_connect/presentation/pages/cruise_mode_page.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -80,7 +81,7 @@ class _HomePageState extends State<HomePage> {
       case 1:
         return _buildCommunityPage();
       case 2:
-        return _buildCruiseModePage();
+        return const CruiseModePage();
       case 3:
         return _buildAnalyticsPage();
       case 4:
