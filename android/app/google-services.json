@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "643677007260",
+    "project_id": "cruise-connect-a1772",
+    "storage_bucket": "cruise-connect-a1772.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:643677007260:android:9b553a0314c14012b76c59",
+        "android_client_info": {
+          "package_name": "com.example.cruise_connect"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBEanuPYPcaiTHwZZGvbb5qDgoTTHajMP4"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

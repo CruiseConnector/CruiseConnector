@@ -342,10 +342,7 @@ class _CommunityPageState extends State<CommunityPage> with SingleTickerProvider
                           topRight: Radius.circular(16),
                           bottomRight: Radius.circular(16),
                         ),
-                        image: const DecorationImage(
-                          image: AssetImage('lib/images/car_placeholder.jpg'), // Fallback
-                          fit: BoxFit.cover,
-                        ),
+
                       ),
                       child: Container(
                     decoration: BoxDecoration(

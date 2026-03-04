@@ -1,0 +1,77 @@
+[33mcommit c4edc7fd69ff7e08895b596b3b9de10f3bf551dc[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m)[m
+Author: Iamvucko <david.vuckovic@gmx.at>
+Date:   Sat Feb 21 02:00:26 2026 +0100
+
+    minimale verbesserungen
+
+[33mcommit 8b1f8ce1e437698ca318bbb3ab34aa80111bb1a9[m
+Author: Iamvucko <david.vuckovic@gmx.at>
+Date:   Sat Feb 21 01:39:48 2026 +0100
+
+    Alles in verschiedene Dateien gepackt
+
+[33mcommit eb7ce2e94547750a0b23c306d99ae929c02bbecf[m
+Author: Iamvucko <david.vuckovic@gmx.at>
+Date:   Fri Feb 20 20:34:50 2026 +0100
+
+    Route vergrößert
+
+[33mcommit 6205a65b5997e2a158812253e2440e5e80e8750d[m
+Author: Iamvucko <david.vuckovic@gmx.at>
+Date:   Fri Feb 20 19:28:03 2026 +0100
+
+    Der Login wurde bereits gemacht, Registrierungs pages müssen noch erledigt werden. Homepage wurde fertig gestellt mit der animierten / funktionierenden bottom nav bar
+
+[33mcommit ceafdd96f0d009a933e2b68ffc63acdaa4ab1d09[m
+Author: jonathanhasb14 <jonathan.hasberger@gmail.com>
+Date:   Sun Nov 30 20:58:22 2025 +0100
+
+    mainfix
+
+[33mcommit 7bc58f804aa3226517fe370442ba57ee10ab705f[m
+Author: Iamvucko <david.vuckovic@gmx.at>
+Date:   Sun Nov 30 20:07:38 2025 +0100
+
+    Fix: Login wurde neu designed + app launch auf virtuellem Handy
+
+[33mcommit 8ee61681dcd363909ef367eece0113d24832c47a[m
+Author: David Vuckovic <david.vuckovic@gmx.at>
+Date:   Mon Nov 24 04:19:01 2025 +0100
+
+     Email Login & Logout (zur hälfte fertig)
+
+[33mcommit 298d2d34efe2b7fed874a147498a84e8cd5495bd[m
+Author: David Vuckovic <david.vuckovic@gmx.at>
+Date:   Tue Nov 18 03:23:32 2025 +0100
+
+    Test Frontend UI
+
+[33mcommit bfdd7e4d91c0ffad15b5335fa3884ae10d000f9b[m
+Author: Iamvucko <david.vuckovic@gmx.at>
+Date:   Mon Oct 27 20:38:28 2025 +0100
+
+    first Commit
+
+[33mcommit bb87cdd12c979bb17bdab19a18925911ca8a564b[m
+Author: jonathanhasb14 <jonathan.hasberger@gmail.com>
+Date:   Mon Oct 27 20:32:32 2025 +0100
+
+    First Test
+
+[33mcommit e37fb765ca5e57d61bab94f4e7a172837228349f[m
+Author: Jonathan Hasberger <jonathanhasberger@wifi-eduroam-studtech-4e-e8-9a-95-a5-85.wlan.uclv.net>
+Date:   Mon Oct 27 19:36:24 2025 +0100
+
+    First commit
+
+[33mcommit cf1a9a36b219fe8be317b9cc883f9fda4a4ad17f[m
+Author: Iamvucko <86718584+Deistroy@users.noreply.github.com>
+Date:   Mon Oct 27 19:39:24 2025 +0100
+
+    Delete README.md
+
+[33mcommit b30e5fc983b245d6fcc7f68cc3f1a76a31a059f9[m
+Author: jonathanhasb14 <76035049+jonathanhasb14@users.noreply.github.com>
+Date:   Mon Oct 27 19:22:55 2025 +0100
+
+    Initial commit

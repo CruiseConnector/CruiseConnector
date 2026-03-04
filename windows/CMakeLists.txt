@@ -2,6 +2,13 @@
 cmake_minimum_required(VERSION 3.14)
 project(cruise_connect LANGUAGES CXX)
 
+if(DEFINED ENV{LOCALAPPDATA})
+  list(APPEND CMAKE_PROGRAM_PATH "$ENV{LOCALAPPDATA}/Microsoft/WinGet/Links")
+endif()
+if(DEFINED ENV{ChocolateyInstall})
+  list(APPEND CMAKE_PROGRAM_PATH "$ENV{ChocolateyInstall}/bin")
+endif()
+
 # The name of the executable created for the application. Change this to change
 # the on-disk name of your application.
 set(BINARY_NAME "cruise_connect")

@@ -106,11 +106,7 @@ class LoginPage extends StatelessWidget {
                               offset: const Offset(0, 8),
                             ),
                           ],
-                          image: const DecorationImage(
-                            // image: AssetImage('lib/images/car_intro.jpg'),
-                            image: AssetImage('lib/images/car_placeholder.jpg'),
-                            fit: BoxFit.cover,
-                          ),
+
                         ),
                         child: const Icon(
                           Icons.directions_car,

@@ -432,8 +432,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
               primary: Color(0xFFFF3B30),
               surface: Color(0xFF1C1F26),
               onSurface: Colors.white,
-            ),
-            dialogBackgroundColor: const Color(0xFF1C1F26),
+            ), dialogTheme: DialogThemeData(backgroundColor: const Color(0xFF1C1F26)),
           ),
           child: child!,
         );

@@ -21,10 +21,7 @@ class DefaultFirebaseOptions {
     }
     switch (defaultTargetPlatform) {
       case TargetPlatform.android:
-        throw UnsupportedError(
-          'DefaultFirebaseOptions have not been configured for android - '
-          'you can reconfigure this by running the FlutterFire CLI again.',
-        );
+        return android;
       case TargetPlatform.iOS:
         return ios;
       case TargetPlatform.macOS:
@@ -55,11 +52,11 @@ class DefaultFirebaseOptions {
 
   static const FirebaseOptions ios = FirebaseOptions(
     apiKey: 'AIzaSyBnG4JDcppSoWYZd35Wdvf8ESGSeB18vJs',
-    appId: '1:643677007260:ios:f1c5d37b5fca499bb76c59',
+    appId: '1:643677007260:ios:92c832517c3a0c92b76c59',
     messagingSenderId: '643677007260',
     projectId: 'cruise-connect-a1772',
     storageBucket: 'cruise-connect-a1772.firebasestorage.app',
-    iosBundleId: 'com.example.cruiseConnect',
+    iosBundleId: 'com.david.cruiserconnect',
   );
 
   static const FirebaseOptions macos = FirebaseOptions(
@@ -79,6 +76,14 @@ class DefaultFirebaseOptions {
     authDomain: 'cruise-connect-a1772.firebaseapp.com',
     storageBucket: 'cruise-connect-a1772.firebasestorage.app',
     measurementId: 'G-80TGNX6GQ6',
+  );
+
+  static const FirebaseOptions android = FirebaseOptions(
+    apiKey: 'AIzaSyBEanuPYPcaiTHwZZGvbb5qDgoTTHajMP4',
+    appId: '1:643677007260:android:9b553a0314c14012b76c59',
+    messagingSenderId: '643677007260',
+    projectId: 'cruise-connect-a1772',
+    storageBucket: 'cruise-connect-a1772.firebasestorage.app',
   );
 
 }
