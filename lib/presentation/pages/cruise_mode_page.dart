@@ -650,7 +650,32 @@ class _CruiseModePageState extends State<CruiseModePage> {
 
   Future<void> _initializeMapLocation() async {
     try {
-      final position = await geo.Geolocator.getCurrentPosition();
+      final serviceEnabled = await geo.Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) return;
+
+      var permission = await geo.Geolocator.checkPermission();
+      if (permission == geo.LocationPermission.denied) {
+        permission = await geo.Geolocator.requestPermission();
+        if (permission == geo.LocationPermission.denied) return;
+      }
+      if (permission == geo.LocationPermission.deniedForever) return;
+
+      final position = await geo.Geolocator.getCurrentPosition(
+        locationSettings: const geo.LocationSettings(
+          accuracy: geo.LocationAccuracy.high,
+        ),
+      );
+
+      _userLocation = position;
+
+      await _mapboxMap?.location.updateSettings(
+        LocationComponentSettings(
+          enabled: true,
+          puckBearingEnabled: true,
+          puckBearing: PuckBearing.HEADING,
+        ),
+      );
+
       _mapboxMap?.setCamera(
         CameraOptions(
           center: Point(
