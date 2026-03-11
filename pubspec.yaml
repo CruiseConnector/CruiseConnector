@@ -41,6 +41,7 @@ dependencies:
   mapbox_maps_flutter: ^2.19.0
   http: ^1.6.0
   flutter_tts: ^4.2.5
+  flutter_typeahead: ^5.2.0
 
 dev_dependencies:
   flutter_test:

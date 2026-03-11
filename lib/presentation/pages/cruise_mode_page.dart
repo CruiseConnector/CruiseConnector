@@ -4,11 +4,12 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_tts/flutter_tts.dart';
+// TTS deaktiviert - import 'package:flutter_tts/flutter_tts.dart';
 import 'package:geolocator/geolocator.dart' as geo;
 import 'package:http/http.dart' as http;
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:flutter_typeahead/flutter_typeahead.dart';
 
 class _RouteManeuver {
   const _RouteManeuver({
@@ -62,9 +63,10 @@ class _CruiseModePageState extends State<CruiseModePage> {
   PolylineAnnotationManager? _polylineAnnotationManager;
   PolylineAnnotationManager? _cursorAnnotationManager;
   ViewportState? _viewportState;
-  final FlutterTts _flutterTts = FlutterTts();
+  // TTS deaktiviert - zu viele Audio-Probleme
+  // final FlutterTts _flutterTts = FlutterTts();
   StreamSubscription<geo.Position>? _positionSubscription;
-  bool _ttsAvailable = true;
+  bool _ttsAvailable = false; // false = komplett deaktiviert
 
   geo.Position? _userLocation;
   List<List<double>> _fullRouteCoordinates = [];
@@ -93,9 +95,10 @@ class _CruiseModePageState extends State<CruiseModePage> {
   void dispose() {
     _stopSimulation(restartLiveTracking: false);
     _positionSubscription?.cancel();
-    if (_ttsAvailable) {
-      _flutterTts.stop();
-    }
+    // TTS deaktiviert
+    // if (_ttsAvailable) {
+    //   _flutterTts.stop();
+    // }
     _destinationController.dispose();
     super.dispose();
   }
@@ -817,6 +820,12 @@ class _CruiseModePageState extends State<CruiseModePage> {
   }
 
   Future<void> _configureTts() async {
+    // TTS komplett deaktiviert - zu viele Audio-Probleme/Knirschen
+    _ttsAvailable = false;
+    debugPrint('TTS deaktiviert');
+    return;
+    
+    /* Ursprünglicher TTS-Code:
     try {
       await _flutterTts.setLanguage('de-DE');
       await _flutterTts.setSpeechRate(0.48);
@@ -832,6 +841,7 @@ class _CruiseModePageState extends State<CruiseModePage> {
       _ttsAvailable = false;
       debugPrint('TTS konnte nicht initialisiert werden: ${error.message}');
     }
+    */
   }
 
   Future<void> _recenterMap() async {
@@ -1221,6 +1231,10 @@ class _CruiseModePageState extends State<CruiseModePage> {
   }
 
   Future<void> _speakUpcomingManeuverIfNeeded(geo.Position position) async {
+    // TTS deaktiviert - keine Audio-Ausgabe
+    return;
+    
+    /* Ursprünglicher Code:
     if (!_ttsAvailable ||
         _maneuvers.isEmpty ||
         _activeManeuverIndex >= _maneuvers.length) {
@@ -1385,13 +1399,45 @@ class _CruiseModePageState extends State<CruiseModePage> {
     return '${km.toStringAsFixed(1).replaceAll('.', ',')} km';
   }
 
+  // === MAPBOX GEOCODING & AUTOCOMPLETE ===
+  
+  static const String _mapboxToken =
+      'pk.eyJ1IjoibHVjd3F6IiwiYSI6ImNtbHdnMXFpdjBjZTAzZXF3NDgyYmZ3c2oifQ.upeLKXUnY5z6Pe0JiuznEQ';
+
+  /// Autocomplete-Adresssuche - gibt Vorschläge zurück
+  Future<List<MapboxSuggestion>> _searchAddressSuggestions(String query) async {
+    if (query.length < 3) return [];
+    
+    final url =
+        'https://api.mapbox.com/geocoding/v5/mapbox.places/${Uri.encodeComponent(query)}.json?'
+        'access_token=$_mapboxToken&autocomplete=true&limit=5&language=de&country=de,at,ch';
+
+    try {
+      final response = await http.get(Uri.parse(url));
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        final features = data['features'] as List? ?? [];
+        
+        return features.map((f) => MapboxSuggestion(
+          placeName: f['place_name'] as String,
+          coordinates: [
+            (f['center'][0] as num).toDouble(),
+            (f['center'][1] as num).toDouble(),
+          ],
+          context: f['context']?['text'] as String?,
+        )).toList();
+      }
+    } catch (e) {
+      debugPrint('Autocomplete Fehler: $e');
+    }
+    return [];
+  }
+
   Future<Map<String, double>?> _getCoordinatesFromAddress(
     String address,
   ) async {
-    const String mapboxToken =
-        'pk.eyJ1IjoibHVjd3F6IiwiYSI6ImNtbHdnMXFpdjBjZTAzZXF3NDgyYmZ3c2oifQ.upeLKXUnY5z6Pe0JiuznEQ';
     final url =
-        'https://api.mapbox.com/geocoding/v5/mapbox.places/${Uri.encodeComponent(address)}.json?access_token=$mapboxToken&limit=1';
+        'https://api.mapbox.com/geocoding/v5/mapbox.places/${Uri.encodeComponent(address)}.json?access_token=$_mapboxToken&limit=1';
 
     try {
       final response = await http.get(Uri.parse(url));
@@ -1887,6 +1933,41 @@ class _CruiseModePageState extends State<CruiseModePage> {
           ),
         ),
       ],
+    );
+  }
+
+  
+  // === Wegpunkt-Typ für Haltestop vs normaler Wegpunkt ===
+  void _showWaypointTypeDialog(List<double> coordinates, Function(WaypointType) onSelect) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF1C1F26),
+        title: const Text('Wegpunkt-Typ', style: TextStyle(color: Colors.white)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.location_on, color: Color(0xFFFF3B30)),
+              title: const Text('Wegpunkt', style: TextStyle(color: Colors.white)),
+              subtitle: const Text('Einfache Durchfahrt', style: TextStyle(color: Colors.grey)),
+              onTap: () {
+                Navigator.pop(context);
+                onSelect(WaypointType.normal);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.local_parking, color: Colors.orange),
+              title: const Text('Haltestop', style: TextStyle(color: Colors.white)),
+              subtitle: const Text('Route pausiert hier', style: TextStyle(color: Colors.grey)),
+              onTap: () {
+                Navigator.pop(context);
+                onSelect(WaypointType.stop);
+              },
+            ),
+          ],
+        ),
+      ),
     );
   }
 
