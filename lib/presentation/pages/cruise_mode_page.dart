@@ -520,20 +520,41 @@ class _CruiseModePageState extends State<CruiseModePage> {
 
   Future<void> _initializeMapLocation() async {
     try {
+      debugPrint('Initialisiere Karten-Standort...');
+      
       final serviceEnabled = await geo.Geolocator.isLocationServiceEnabled();
-      if (!serviceEnabled) return;
+      if (!serviceEnabled) {
+        debugPrint('Standortdienste deaktiviert - Karte zeigt Standard-Position');
+        return;
+      }
 
       var permission = await geo.Geolocator.checkPermission();
       if (permission == geo.LocationPermission.denied) {
         permission = await geo.Geolocator.requestPermission();
-        if (permission == geo.LocationPermission.denied) return;
+        if (permission == geo.LocationPermission.denied) {
+          debugPrint('Standortberechtigung verweigert');
+          return;
+        }
       }
-      if (permission == geo.LocationPermission.deniedForever) return;
-
-      final position = await geo.Geolocator.getCurrentPosition(
-        locationSettings: const geo.LocationSettings(accuracy: geo.LocationAccuracy.high),
-      );
+      if (permission == geo.LocationPermission.deniedForever) {
+        debugPrint('Standortberechtigung dauerhaft verweigert');
+        return;
+      }
+      
+      // Versuche letzte bekannte Position zuerst
+      geo.Position? position = await geo.Geolocator.getLastKnownPosition();
+      if (position == null) {
+        // Dann aktuelle Position mit Timeout
+        position = await geo.Geolocator.getCurrentPosition(
+          locationSettings: const geo.LocationSettings(accuracy: geo.LocationAccuracy.high),
+        ).timeout(const Duration(seconds: 10), onTimeout: () {
+          debugPrint('Timeout beim Abrufen der Position');
+          throw Exception('Timeout');
+        });
+      }
+      
       _userLocation = position;
+      debugPrint('Standort gefunden: ${position.latitude}, ${position.longitude}');
 
       await _mapboxMap?.location.updateSettings(
         LocationComponentSettings(
@@ -549,6 +570,7 @@ class _CruiseModePageState extends State<CruiseModePage> {
           padding: MbxEdgeInsets(top: 0, left: 0, bottom: 0, right: 0),
         ),
       );
+      debugPrint('Karte auf aktuellen Standort zentriert');
     } catch (e) {
       debugPrint('Konnte Karten-Position nicht setzen: $e');
     }
@@ -556,22 +578,44 @@ class _CruiseModePageState extends State<CruiseModePage> {
 
   Future<geo.Position> _getStartCoordinates() async {
     if (_selectedLocation == 'Aktueller Standort') {
-      final serviceEnabled = await geo.Geolocator.isLocationServiceEnabled();
-      if (!serviceEnabled) throw Exception('Standortdienste sind deaktiviert.');
+      // Prüfe GPS-Dienste
+      bool serviceEnabled = await geo.Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        throw Exception('Bitte aktiviere GPS/Standort in deinen Geräteeinstellungen und versuche es erneut.');
+      }
 
       var permission = await geo.Geolocator.checkPermission();
       if (permission == geo.LocationPermission.denied) {
         permission = await geo.Geolocator.requestPermission();
         if (permission == geo.LocationPermission.denied) {
-          throw Exception('Standortberechtigung verweigert.');
+          throw Exception('Standortberechtigung verweigert. Bitte erlaube den Zugriff in den Einstellungen.');
         }
       }
       if (permission == geo.LocationPermission.deniedForever) {
-        throw Exception('Standortberechtigung dauerhaft verweigert.');
+        throw Exception('Standortberechtigung dauerhaft verweigert. Bitte in den App-Einstellungen aktivieren.');
       }
-      return geo.Geolocator.getCurrentPosition(
-        locationSettings: const geo.LocationSettings(accuracy: geo.LocationAccuracy.high),
-      );
+      
+      try {
+        // Versuche zuerst die letzte bekannte Position (schneller)
+        geo.Position? lastPosition = await geo.Geolocator.getLastKnownPosition();
+        if (lastPosition != null) {
+          debugPrint('Verwende letzte bekannte Position: ${lastPosition.latitude}, ${lastPosition.longitude}');
+          return lastPosition;
+        }
+        
+        // Warte auf aktuelle Position mit Timeout
+        debugPrint('Frage aktuelle Position ab...');
+        return await geo.Geolocator.getCurrentPosition(
+          locationSettings: const geo.LocationSettings(
+            accuracy: geo.LocationAccuracy.best,
+          ),
+        ).timeout(const Duration(seconds: 15), onTimeout: () {
+          throw Exception('Standort konnte nicht ermittelt werden. Bitte prüfe deine GPS-Verbindung.');
+        });
+      } catch (e) {
+        debugPrint('Fehler beim Abrufen der Position: $e');
+        rethrow;
+      }
     }
     // Fallback: Berlin
     return geo.Position(

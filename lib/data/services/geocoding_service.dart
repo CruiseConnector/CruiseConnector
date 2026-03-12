@@ -15,34 +15,55 @@ class GeocodingService {
 
   /// Gibt Autocomplete-Vorschläge für eine Suchanfrage zurück.
   Future<List<MapboxSuggestion>> searchSuggestions(String query) async {
-    if (query.length < 2) return const [];
+    // KEIN Zeichenlimit - sofort suchen ab 1 Zeichen
+    if (query.isEmpty) return const [];
+
+    debugPrint('GeocodingService: Suche nach "$query"');
 
     final uri = Uri.parse(
       '$_baseUrl/${Uri.encodeComponent(query)}.json'
       '?access_token=${AppConstants.mapboxPublicToken}'
-      '&autocomplete=true&limit=5&language=de&country=de,at,ch',
+      '&autocomplete=true&limit=5&language=de',
     );
 
     try {
       final response = await http.get(uri);
+      debugPrint('GeocodingService: Response ${response.statusCode}');
+      
       if (response.statusCode == 200) {
         final data = json.decode(response.body) as Map<String, dynamic>;
         final features = data['features'] as List? ?? const [];
+        debugPrint('GeocodingService: ${features.length} Ergebnisse gefunden');
+        
         return features
             .map(
-              (f) => MapboxSuggestion(
-                placeName: f['place_name'] as String,
-                coordinates: [
-                  (f['center'][0] as num).toDouble(),
-                  (f['center'][1] as num).toDouble(),
-                ],
-                context: f['context']?['text'] as String?,
-              ),
+              (f) {
+                // Context ist eine Liste, nicht ein Objekt!
+                String? contextText;
+                if (f['context'] != null && f['context'] is List) {
+                  final contextList = f['context'] as List;
+                  if (contextList.isNotEmpty) {
+                    contextText = contextList.map((c) => c['text'] ?? '').where((t) => t.isNotEmpty).join(', ');
+                  }
+                }
+                
+                return MapboxSuggestion(
+                  placeName: f['place_name'] as String,
+                  coordinates: [
+                    (f['center'][0] as num).toDouble(),
+                    (f['center'][1] as num).toDouble(),
+                  ],
+                  context: contextText,
+                );
+              },
             )
             .toList();
+      } else {
+        debugPrint('GeocodingService API Fehler: ${response.body}');
       }
-    } catch (e) {
+    } catch (e, stack) {
       debugPrint('GeocodingService.searchSuggestions Fehler: $e');
+      debugPrint('Stack: $stack');
     }
     return const [];
   }
