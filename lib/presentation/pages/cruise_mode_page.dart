@@ -36,6 +36,20 @@ class _RouteWindowMatch {
   final double distanceMeters;
 }
 
+class MapboxSuggestion {
+  const MapboxSuggestion({
+    required this.placeName,
+    required this.coordinates,
+    this.context,
+  });
+
+  final String placeName;
+  final List<double> coordinates;
+  final String? context;
+}
+
+enum WaypointType { normal, stop }
+
 class CruiseModePage extends StatefulWidget {
   const CruiseModePage({super.key});
 
@@ -1261,6 +1275,7 @@ class _CruiseModePageState extends State<CruiseModePage> {
         _ttsAvailable = false;
       }
     }
+    */
   }
 
   Widget _buildManeuverIndicator() {
