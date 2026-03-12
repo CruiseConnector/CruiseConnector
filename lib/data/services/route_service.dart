@@ -47,9 +47,6 @@ class RouteService {
     bool scenic = false,
     int routeVariant = 0,
   }) async {
-    // Variierende Routen durch Zufalls-Seed basierend auf routeVariant
-    final randomFactor = routeVariant * 0.1; // Leichte Variationen je nach Route
-    
     final body = <String, dynamic>{
       'startLocation': {
         'latitude': startPosition.latitude,
@@ -171,7 +168,7 @@ class RouteService {
             longitude: longitude,
             routeIndex: routeIndex,
             icon: _iconForModifier(modifier),
-            announcement: _announcementFromInstruction(rawInstruction, modifier),
+            announcement: _announcementFromInstruction(rawInstruction, modifier, distance),
             instruction: _normalizeInstruction(rawInstruction, modifier),
           ),
         );

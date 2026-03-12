@@ -1109,6 +1109,15 @@ class _CruiseModePageState extends State<CruiseModePage> {
     );
   }
 
+  // ─────────────────────── Navigation Panel ─────────────────────────────────
+
+  Widget _buildEnhancedNavigationPanel() {
+    return CruiseNavigationInfoPanel(
+      durationSeconds: _routeDuration,
+      distanceMeters: _routeDistance,
+    );
+  }
+
   // ═══════════════════════ DIALOGS ══════════════════════════════════════════
 
   void _showRouteTypeDialog(MapboxSuggestion suggestion) {
