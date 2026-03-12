@@ -37,6 +37,11 @@ class _CruiseModePageState extends State<CruiseModePage> {
   String _selectedLocation = 'Aktueller Standort';
   String _selectedStyle = 'Sport Mode';
   final TextEditingController _destinationController = TextEditingController();
+  
+  // ─────────────────────── A-to-B Route Selection State ──────────────────────
+  MapboxSuggestion? _selectedDestination;
+  bool _showRouteTypeSelector = false;
+  String _selectedRouteMode = 'direct'; // 'direct', 'sport', 'scenic'
 
   // ─────────────────────── Route Result State ────────────────────────────────
   bool _isRouteConfirmed = false;
@@ -78,8 +83,9 @@ class _CruiseModePageState extends State<CruiseModePage> {
   // ──────────────────────────────────────────────────────────────────────────
   @override
   void dispose() {
+    // Navigation läuft im Hintergrund weiter bis expliziter "Zurück"
     _stopSimulation(restartLiveTracking: false);
-    _positionSubscription?.cancel();
+    // NICHT: _positionSubscription?.cancel()
     _destinationController.dispose();
     super.dispose();
   }
@@ -435,6 +441,124 @@ class _CruiseModePageState extends State<CruiseModePage> {
   // ═══════════════════════ BOTTOM ACTIONS ═══════════════════════════════════
 
   Widget _buildBottomActions() {
+    // Route-Modus-Selektor für A-nach-B wenn Ziel ausgewählt
+    if (_showRouteTypeSelector && !_isRoundTrip) {
+      return Container(
+        padding: const EdgeInsets.fromLTRB(24, 16, 24, 24),
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [Colors.transparent, Color(0xFF0B0E14)],
+            stops: [0.0, 0.3],
+          ),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Route-Modus Auswahl
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1C1F26),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: Colors.white10),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Routentyp wählen',
+                    style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _buildRouteModeButton(
+                          label: 'Direkt',
+                          icon: Icons.speed,
+                          isSelected: _selectedRouteMode == 'direct',
+                          onTap: () => _onRouteModeSelected('direct'),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: _buildRouteModeButton(
+                          label: 'Sport',
+                          icon: Icons.sports_motor,
+                          isSelected: _selectedRouteMode == 'sport',
+                          onTap: () => _onRouteModeSelected('sport'),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: _buildRouteModeButton(
+                          label: 'Abenteuer',
+                          icon: Icons.landscape,
+                          isSelected: _selectedRouteMode == 'scenic',
+                          onTap: () => _onRouteModeSelected('scenic'),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: _buildRouteModeButton(
+                          label: 'Entspannt',
+                          icon: Icons.local_cafe,
+                          isSelected: _selectedRouteMode == 'relaxed',
+                          onTap: () => _onRouteModeSelected('relaxed'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            // Route berechnen Button
+            Container(
+              height: 56,
+              width: double.infinity,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(28),
+                boxShadow: [
+                  BoxShadow(
+                    color: const Color(0xFFFF3B30).withValues(alpha: 0.3),
+                    blurRadius: 12,
+                    offset: const Offset(0, 4),
+                  ),
+                ],
+              ),
+              child: ElevatedButton(
+                onPressed: _isLoading ? null : () => _onRouteModeSelected(_selectedRouteMode),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFFFF3B30),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
+                  elevation: 0,
+                ),
+                child: _isLoading
+                    ? const SizedBox(
+                        width: 24,
+                        height: 24,
+                        child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
+                      )
+                    : const Text(
+                        'Route berechnen',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: 1.2,
+                        ),
+                      ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    // Standard Bottom Actions
     return Container(
       height: 160,
       padding: const EdgeInsets.symmetric(horizontal: 24),
@@ -505,6 +629,44 @@ class _CruiseModePageState extends State<CruiseModePage> {
                           letterSpacing: 1.2,
                         ),
                       ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildRouteModeButton({
+    required String label,
+    required IconData icon,
+    required bool isSelected,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+        decoration: BoxDecoration(
+          color: isSelected ? const Color(0xFFFF3B30) : const Color(0xFF0B0E14),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: isSelected ? const Color(0xFFFF3B30) : Colors.white24,
+            width: 1,
+          ),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, color: isSelected ? Colors.white : Colors.white60, size: 20),
+            const SizedBox(height: 4),
+            Text(
+              label,
+              style: TextStyle(
+                color: isSelected ? Colors.white : Colors.white60,
+                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                fontSize: 11,
               ),
             ),
           ],
@@ -734,7 +896,34 @@ class _CruiseModePageState extends State<CruiseModePage> {
       _activeManeuverIndex = 0;
       _currentRouteIndex = 0;
       _announcedManeuverIndices.clear();
+      // Reset A-to-B selection after route calculated
+      if (!_isRoundTrip) {
+        _showRouteTypeSelector = false;
+      }
     });
+  }
+  
+  void _onDestinationSelected(MapboxSuggestion suggestion) {
+    setState(() {
+      _selectedDestination = suggestion;
+      _destinationController.text = suggestion.placeName;
+      _showRouteTypeSelector = true;
+    });
+  }
+  
+  void _onRouteModeSelected(String mode) {
+    setState(() {
+      _selectedRouteMode = mode;
+    });
+    if (_selectedDestination != null) {
+      final isSport = mode == 'sport';
+      final isScenic = mode == 'scenic';
+      _calculateRouteToDestination(
+        _selectedDestination!,
+        scenic: isSport || isScenic,
+        routeVariant: isScenic ? 1 : 0,
+      );
+    }
   }
 
   Future<void> _confirmRoute() async {
@@ -1381,6 +1570,67 @@ class _CruiseModePageState extends State<CruiseModePage> {
   }
 
   Widget _buildAtoBOptions() {
+    // Wenn Ziel ausgewählt, zeige Ziel-Info statt Suchfeld
+    if (_selectedDestination != null) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Zielort',
+            style: TextStyle(color: Colors.grey, fontSize: 14, fontWeight: FontWeight.w500),
+          ),
+          const SizedBox(height: 12),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: const Color(0xFF0B0E14),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: const Color(0xFFFF3B30).withValues(alpha: 0.5)),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.location_on, color: Color(0xFFFF3B30), size: 24),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        _selectedDestination!.placeName,
+                        style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      if (_selectedDestination!.context != null)
+                        Text(
+                          _selectedDestination!.context!,
+                          style: const TextStyle(color: Colors.grey, fontSize: 12),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                    ],
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.close, color: Colors.white70, size: 20),
+                  onPressed: () {
+                    setState(() {
+                      _selectedDestination = null;
+                      _showRouteTypeSelector = false;
+                      _destinationController.clear();
+                    });
+                  },
+                  tooltip: 'Ziel ändern',
+                ),
+              ],
+            ),
+          ),
+        ],
+      );
+    }
+
+    // Normales Suchfeld wenn kein Ziel ausgewählt
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1430,8 +1680,7 @@ class _CruiseModePageState extends State<CruiseModePage> {
                   : null,
             ),
             onSelected: (suggestion) {
-              _destinationController.text = suggestion.placeName;
-              _showRouteTypeDialog(suggestion);
+              _onDestinationSelected(suggestion);
             },
             emptyBuilder: (context) => const Padding(
               padding: EdgeInsets.all(16),
