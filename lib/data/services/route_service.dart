@@ -35,7 +35,9 @@ class RouteService {
       'planning_type': planningType,
       if (targetLocation != null) 'targetLocation': targetLocation,
     };
-    return _invoke(body);
+    final result = await _invoke(body);
+    // Snap Route-Start und Ende auf exakte GPS-Position (verhindert Kreis-Bug)
+    return _snapRouteToStartPosition(result, startPosition);
   }
 
   /// Berechnet eine Route von A nach B (direkt oder scenic).
@@ -64,7 +66,9 @@ class RouteService {
         'randomSeed': routeVariant, // Für Backend: verschiedene Algorithmen/Parameter
       },
     };
-    return _invoke(body);
+    final result = await _invoke(body);
+    // Snap Route-Start auf exakte GPS-Position (verhindert Kreis-Bug)
+    return _snapRouteToStartPosition(result, startPosition);
   }
 
   // ──────────────────────────── Internal ─────────────────────────────────────
@@ -256,6 +260,48 @@ class RouteService {
 
   String _announcementFromInstruction(String instruction, String modifier, double distance) {
     return '${_formatDistance(distance)} ${_normalizeInstruction(instruction, modifier)}';
+  }
+
+  // ─────────────────────── Route Snapping ───────────────────────────────────
+
+  /// Snappt den ersten (und letzten bei Rundkurs) Routenpunkt auf die exakte Startposition.
+  /// Verhindert den Kreis-Bug am Routenanfang.
+  RouteResult _snapRouteToStartPosition(RouteResult result, geo.Position startPosition) {
+    if (result.coordinates.isEmpty) return result;
+    
+    final snappedCoordinates = List<List<double>>.from(result.coordinates);
+    final startLng = startPosition.longitude;
+    final startLat = startPosition.latitude;
+    
+    // Ersten Punkt auf exakte Position snap
+    snappedCoordinates[0] = [startLng, startLat];
+    
+    // Bei Rundkurs: Letzten Punkt auch auf Startposition snap
+    if (snappedCoordinates.length > 1) {
+      final firstPoint = result.coordinates.first;
+      final lastPoint = result.coordinates.last;
+      final distanceBetween = geo.Geolocator.distanceBetween(
+        firstPoint[1], firstPoint[0], lastPoint[1], lastPoint[0],
+      );
+      // Wenn Start und Ende nahe beieinander (Rundkurs), snap Ende auch
+      if (distanceBetween < 500) {
+        snappedCoordinates.last = [startLng, startLat];
+      }
+    }
+    
+    // Update geometry mit neuen Koordinaten
+    final newGeometry = Map<String, dynamic>.from(result.geometry);
+    newGeometry['coordinates'] = snappedCoordinates;
+    
+    return RouteResult(
+      geoJson: json.encode(newGeometry),
+      geometry: newGeometry,
+      coordinates: snappedCoordinates,
+      maneuvers: result.maneuvers,
+      distanceMeters: result.distanceMeters,
+      durationSeconds: result.durationSeconds,
+      distanceKm: result.distanceKm,
+    );
   }
 }
 
