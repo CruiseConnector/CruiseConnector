@@ -77,20 +77,94 @@ function getDistanceConfig(targetDistance: number): DistanceConfig {
 
 /**
  * Calculates triangle-like waypoints from a fixed search radius in km.
+ * @deprecated Use calculateLoopWaypoints instead for better variety
  */
 function calculateTriangleWaypoints(start: Coordinate, searchRadiusKm: number): Coordinate[] {
+    return calculateLoopWaypoints(start, searchRadiusKm, 3);
+}
 
-    // Random initial bearing (0 to 360)
-    const randomBearing = Math.random() * 360;
-    const theta = 60 + (Math.random() * 20 - 10);
+/**
+ * Generates loop waypoints with multiple points for varied routes.
+ * Uses 4-6 waypoints arranged in a circle pattern for true loop experience.
+ * Avoids returning on the same path by offsetting return route.
+ */
+function calculateLoopWaypoints(start: Coordinate, searchRadiusKm: number, numWaypoints: number = 5): Coordinate[] {
+    // Random start bearing
+    const baseBearing = Math.random() * 360;
+    const angleStep = 360 / (numWaypoints + 1);
+    
+    const waypoints: Coordinate[] = [];
+    
+    for (let i = 0; i < numWaypoints; i++) {
+        // Vary the distance slightly (0.7 to 1.3 of radius)
+        const distanceVariation = 0.7 + (Math.random() * 0.6);
+        const distance = searchRadiusKm * distanceVariation;
+        
+        // Calculate bearing with some randomness
+        const bearing = baseBearing + (angleStep * i) + (Math.random() * 30 - 15);
+        
+        const wp = calculateDestination(start, distance, bearing);
+        waypoints.push(wp);
+    }
+    
+    return waypoints;
+}
 
-    const bearing1 = randomBearing - (theta / 2);
-    const bearing2 = randomBearing + (theta / 2);
+/**
+ * Generates return path waypoints that avoid the outbound route.
+ * Creates a "figure-8" or wide loop pattern instead of backtracking.
+ */
+function calculateReturnPath(start: Coordinate, outboundWaypoints: Coordinate[]): Coordinate[] {
+    // If we have enough outbound waypoints, create a wider return arc
+    if (outboundWaypoints.length < 2) return [];
+    
+    const lastWp = outboundWaypoints[outboundWaypoints.length - 1];
+    const midWp = outboundWaypoints[Math.floor(outboundWaypoints.length / 2)];
+    
+    // Calculate bearing from start to midpoint
+    const midBearing = calculateBearing(start, midWp);
+    
+    // Create return waypoint on opposite side (offset by 120-180 degrees)
+    const returnBearing = (midBearing + 120 + Math.random() * 60) % 360;
+    const returnDistance = calculateDistance(start, lastWp) * (0.6 + Math.random() * 0.3);
+    
+    const returnWp = calculateDestination(start, returnDistance, returnBearing);
+    
+    return [returnWp];
+}
 
-    const wp1 = calculateDestination(start, searchRadiusKm, bearing1);
-    const wp2 = calculateDestination(start, searchRadiusKm, bearing2);
+/**
+ * Calculate bearing between two coordinates in degrees.
+ */
+function calculateBearing(from: Coordinate, to: Coordinate): number {
+    const lat1 = (from.latitude * Math.PI) / 180;
+    const lat2 = (to.latitude * Math.PI) / 180;
+    const dLon = ((to.longitude - from.longitude) * Math.PI) / 180;
+    
+    const y = Math.sin(dLon) * Math.cos(lat2);
+    const x = Math.cos(lat1) * Math.sin(lat2) -
+              Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLon);
+    
+    const bearing = (Math.atan2(y, x) * 180) / Math.PI;
+    return (bearing + 360) % 360;
+}
 
-    return [wp1, wp2];
+/**
+ * Calculate distance between two coordinates in km.
+ */
+function calculateDistance(from: Coordinate, to: Coordinate): number {
+    const R = 6371;
+    const lat1 = (from.latitude * Math.PI) / 180;
+    const lat2 = (to.latitude * Math.PI) / 180;
+    const dLat = ((to.latitude - from.latitude) * Math.PI) / 180;
+    const dLon = ((to.longitude - from.longitude) * Math.PI) / 180;
+    
+    const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+              Math.cos(lat1) * Math.cos(lat2) *
+              Math.sin(dLon/2) * Math.sin(dLon/2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    
+    return R * c;
 }
 
 /**
