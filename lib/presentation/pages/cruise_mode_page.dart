@@ -1926,7 +1926,8 @@ class _CruiseModePageState extends State<CruiseModePage> {
           child: TypeAheadField<MapboxSuggestion>(
             controller: _destinationController,
             suggestionsCallback: (pattern) async {
-              if (pattern.length < 3) return [];
+              // Kein Zeichenlimit - sofort Vorschläge ab 1 Zeichen
+              if (pattern.isEmpty) return [];
               return await _searchAddressSuggestions(pattern);
             },
             builder: (context, controller, focusNode) {
@@ -1966,13 +1967,13 @@ class _CruiseModePageState extends State<CruiseModePage> {
             },
             onSelected: (suggestion) {
               _destinationController.text = suggestion.placeName;
-              // Koordinaten speichern für spätere Verwendung
-              debugPrint('Ausgewählt: ${suggestion.coordinates}');
+              // Zeige Dialog für Routen-Auswahl
+              _showRouteTypeDialog(suggestion);
             },
             emptyBuilder: (context) => const Padding(
               padding: EdgeInsets.all(16),
               child: Text(
-                'Mindestens 3 Zeichen eingeben...',
+                'Adresse eingeben...',
                 style: TextStyle(color: Colors.grey),
               ),
             ),
@@ -1986,6 +1987,147 @@ class _CruiseModePageState extends State<CruiseModePage> {
         ),
       ],
     );
+  }
+
+  /// Zeigt Dialog für Direkte vs Coole Route
+  void _showRouteTypeDialog(MapboxSuggestion suggestion) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF1C1F26),
+        title: const Text('Routen-Typ wählen', style: TextStyle(color: Colors.white)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Ziel: ${suggestion.placeName}',
+              style: const TextStyle(color: Colors.grey, fontSize: 14),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+            const SizedBox(height: 20),
+            ListTile(
+              leading: const Icon(Icons.arrow_forward, color: Color(0xFFFF3B30)),
+              title: const Text('Direkte Route', style: TextStyle(color: Colors.white)),
+              subtitle: const Text('Schnellster Weg zum Ziel', style: TextStyle(color: Colors.grey)),
+              onTap: () {
+                Navigator.pop(context);
+                _calculateRouteToDestination(suggestion, scenic: false);
+              },
+            ),
+            const Divider(color: Colors.white10),
+            ListTile(
+              leading: const Icon(Icons.route, color: Colors.orange),
+              title: const Text('Coole Route', style: TextStyle(color: Colors.white)),
+              subtitle: Text('Mit ${_selectedStyle} zum Ziel', style: const TextStyle(color: Colors.grey)),
+              onTap: () {
+                Navigator.pop(context);
+                _calculateRouteToDestination(suggestion, scenic: true);
+              },
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Abbrechen', style: TextStyle(color: Colors.grey)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Berechnet Route von aktueller Position zur Zieladresse
+  Future<void> _calculateRouteToDestination(MapboxSuggestion suggestion, {required bool scenic}) async {
+    setState(() => _isLoading = true);
+    
+    try {
+      // Aktuelle Position holen oder Standard nutzen
+      geo.Position startPosition;
+      if (_selectedLocation == 'Aktueller Standort') {
+        startPosition = await _getStartCoordinates();
+      } else {
+        // Fallback auf Berlin wenn kein Standort verfügbar
+        startPosition = geo.Position(
+          longitude: 13.404954,
+          latitude: 52.520008,
+          timestamp: DateTime.now(),
+          accuracy: 0, altitude: 0, heading: 0, speed: 0,
+          speedAccuracy: 0, altitudeAccuracy: 0, headingAccuracy: 0,
+        );
+      }
+      
+      final startCoords = {
+        'latitude': startPosition.latitude,
+        'longitude': startPosition.longitude,
+      };
+      
+      final destinationCoords = {
+        'latitude': suggestion.latitude,
+        'longitude': suggestion.longitude,
+      };
+      
+      // Body für Edge Function
+      final body = {
+        'startLocation': startCoords,
+        'destination_location': destinationCoords,
+        'route_type': 'POINT_TO_POINT',
+        'planning_type': 'Zufall',
+        'mode': scenic ? _selectedStyle : 'Standard',
+        if (scenic) 'targetDistance': 50, // Für coole Route mit Stil
+      };
+      
+      final response = await Supabase.instance.client.functions.invoke(
+        'generate-cruise-route',
+        body: body,
+      );
+      
+      final data = response.data;
+      if (data == null || data['error'] != null) {
+        throw Exception(data?['error'] ?? 'Fehler bei Routenberechnung');
+      }
+      
+      final geometry = Map<String, dynamic>.from(data['route']['geometry']);
+      final parsedCoordinates = _extractCoordinatesFromGeometry(geometry);
+      final allManeuvers = _extractManeuvers(data, parsedCoordinates);
+      
+      setState(() {
+        _routeGeoJson = json.encode(geometry);
+        _routeDistance = (data['route']['distance'] as num?)?.toDouble();
+        _routeDuration = (data['route']['duration'] as num?)?.toDouble();
+        _isRouteConfirmed = false;
+        _viewportState = null;
+        _fullRouteCoordinates = parsedCoordinates;
+        _remainingRouteCoordinates = parsedCoordinates;
+        _maneuvers = allManeuvers.where((m) => m.icon != Icons.u_turn_left).toList();
+        _activeManeuverIndex = 0;
+        _currentRouteIndex = 0;
+        _announcedManeuverIndices.clear();
+      });
+      
+      await _drawRoute(geometry);
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('${scenic ? "Coole" : "Direkte"} Route berechnet! (${data['meta']['distance_km']} km)'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Fehler: ${e.toString()}'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
   }
 
   void _openMapForWaypointSelection() {
