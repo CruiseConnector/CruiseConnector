@@ -1903,36 +1903,83 @@ class _CruiseModePageState extends State<CruiseModePage> {
         ),
         const SizedBox(height: 12),
         Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
           decoration: BoxDecoration(
             color: const Color(0xFF0B0E14),
             borderRadius: BorderRadius.circular(16),
             border: Border.all(color: Colors.white12),
           ),
-          child: Row(
-            children: [
-              const Icon(Icons.search, color: Colors.white38),
-              const SizedBox(width: 12),
-              Expanded(
-                child: TextField(
-                  controller: _destinationController,
-                  style: const TextStyle(color: Colors.white),
-                  decoration: const InputDecoration(
-                    hintText: 'Adresse suchen...',
-                    hintStyle: TextStyle(color: Colors.white38),
-                    border: InputBorder.none,
+          child: TypeAheadField<MapboxSuggestion>(
+            controller: _destinationController,
+            suggestionsCallback: (pattern) async {
+              if (pattern.length < 3) return [];
+              return await _searchAddressSuggestions(pattern);
+            },
+            builder: (context, controller, focusNode) {
+              return TextField(
+                controller: controller,
+                focusNode: focusNode,
+                style: const TextStyle(color: Colors.white),
+                decoration: InputDecoration(
+                  prefixIcon: const Icon(Icons.search, color: Colors.white38),
+                  suffixIcon: IconButton(
+                    icon: const Icon(Icons.map_outlined, color: Colors.white70),
+                    onPressed: () => _openMapForWaypointSelection(),
+                    tooltip: 'Auf Karte wählen',
                   ),
+                  hintText: 'Adresse suchen...',
+                  hintStyle: const TextStyle(color: Colors.white38),
+                  border: InputBorder.none,
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
                 ),
+              );
+            },
+            itemBuilder: (context, suggestion) {
+              return ListTile(
+                tileColor: const Color(0xFF1C1F26),
+                leading: const Icon(Icons.location_on, color: Color(0xFFFF3B30)),
+                title: Text(
+                  suggestion.placeName,
+                  style: const TextStyle(color: Colors.white, fontSize: 14),
+                ),
+                subtitle: suggestion.context != null
+                    ? Text(
+                        suggestion.context!,
+                        style: const TextStyle(color: Colors.grey, fontSize: 12),
+                      )
+                    : null,
+              );
+            },
+            onSelected: (suggestion) {
+              _destinationController.text = suggestion.placeName;
+              // Koordinaten speichern für spätere Verwendung
+              debugPrint('Ausgewählt: ${suggestion.coordinates}');
+            },
+            emptyBuilder: (context) => const Padding(
+              padding: EdgeInsets.all(16),
+              child: Text(
+                'Mindestens 3 Zeichen eingeben...',
+                style: TextStyle(color: Colors.grey),
               ),
-              IconButton(
-                icon: const Icon(Icons.map_outlined, color: Colors.white70),
-                onPressed: () {},
-                tooltip: 'Auf Karte wählen',
+            ),
+            loadingBuilder: (context) => const Padding(
+              padding: EdgeInsets.all(16),
+              child: Center(
+                child: CircularProgressIndicator(color: Color(0xFFFF3B30)),
               ),
-            ],
+            ),
           ),
         ),
       ],
+    );
+  }
+
+  void _openMapForWaypointSelection() {
+    // TODO: Karten-Overlay für Wegpunkt-Auswahl öffnen
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Karten-Auswahl kommt im nächsten Update'),
+        duration: Duration(seconds: 2),
+      ),
     );
   }
 
