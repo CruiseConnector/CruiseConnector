@@ -45,7 +45,11 @@ class RouteService {
     required double destinationLng,
     required String mode,
     bool scenic = false,
+    int routeVariant = 0,
   }) async {
+    // Variierende Routen durch Zufalls-Seed basierend auf routeVariant
+    final randomFactor = routeVariant * 0.1; // Leichte Variationen je nach Route
+    
     final body = <String, dynamic>{
       'startLocation': {
         'latitude': startPosition.latitude,
@@ -58,7 +62,10 @@ class RouteService {
       'route_type': 'POINT_TO_POINT',
       'planning_type': 'Zufall',
       'mode': scenic ? mode : 'Standard',
-      if (scenic) 'targetDistance': 50,
+      if (scenic) ...{
+        'targetDistance': 50 + (routeVariant * 10), // Unterschiedliche Ziel-Distanzen
+        'randomSeed': routeVariant, // Für Backend: verschiedene Algorithmen/Parameter
+      },
     };
     return _invoke(body);
   }
@@ -137,9 +144,13 @@ class RouteService {
         final maneuver = step['maneuver'];
         if (maneuver is! Map) continue;
 
-        // Arrive-Steps überspringen (falsch bei Rundkursen)
+        // Depart und Arrive-Steps überspringen
         final type = (maneuver['type'] as String?) ?? '';
-        if (type == 'arrive') continue;
+        if (type == 'arrive' || type == 'depart') continue;
+
+        // Prüfe Distanz zum vorherigen Maneuver (vermeide Kreise am Start)
+        final distance = (step['distance'] as num?)?.toDouble() ?? 0;
+        if (distance < 50) continue; // Überspringe zu kurze Segmente
 
         final location = maneuver['location'];
         if (location is! List || location.length < 2) continue;
@@ -212,22 +223,32 @@ class RouteService {
     }
   }
 
-  String _announcementForModifier(String modifier) {
+  /// Formatiert Distanz lesbar (z.B. 6385m → 6,4 km)
+  String _formatDistance(double meters) {
+    if (meters >= 1000) {
+      return 'In ${(meters / 1000).toStringAsFixed(1).replaceAll('.', ',')} km';
+    } else {
+      return 'In ${meters.toInt()} m';
+    }
+  }
+
+  String _announcementForModifier(String modifier, {double? distance}) {
+    final distText = distance != null ? _formatDistance(distance) : 'In 100 m';
     switch (modifier.toLowerCase()) {
       case 'left':
       case 'slight left':
       case 'sharp left':
-        return 'In 100 Metern links abbiegen';
+        return '$distText links abbiegen';
       case 'right':
       case 'slight right':
       case 'sharp right':
-        return 'In 100 Metern rechts abbiegen';
+        return '$distText rechts abbiegen';
       case 'uturn':
       case 'uturn left':
       case 'uturn right':
-        return 'In 100 Metern bitte wenden';
+        return '$distText bitte wenden';
       default:
-        return 'In 100 Metern geradeaus weiterfahren';
+        return '$distText geradeaus weiterfahren';
     }
   }
 
@@ -236,8 +257,8 @@ class RouteService {
     return trimmed.isEmpty ? _announcementForModifier(modifier) : trimmed;
   }
 
-  String _announcementFromInstruction(String instruction, String modifier) {
-    return 'In 150 Metern ${_normalizeInstruction(instruction, modifier)}';
+  String _announcementFromInstruction(String instruction, String modifier, double distance) {
+    return '${_formatDistance(distance)} ${_normalizeInstruction(instruction, modifier)}';
   }
 }
 

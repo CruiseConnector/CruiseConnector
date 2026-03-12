@@ -187,10 +187,7 @@ class _CruiseModePageState extends State<CruiseModePage> {
             left: 16,
             right: 16,
             bottom: 20,
-            child: CruiseNavigationInfoPanel(
-              durationSeconds: _routeDuration,
-              distanceMeters: _routeDistance,
-            ),
+            child: _buildEnhancedNavigationPanel(),
           ),
           Positioned(
             right: 16,
@@ -692,6 +689,7 @@ class _CruiseModePageState extends State<CruiseModePage> {
   Future<void> _calculateRouteToDestination(
     MapboxSuggestion suggestion, {
     required bool scenic,
+    int routeVariant = 0,
   }) async {
     setState(() => _isLoading = true);
     try {
@@ -1114,51 +1112,130 @@ class _CruiseModePageState extends State<CruiseModePage> {
   // ═══════════════════════ DIALOGS ══════════════════════════════════════════
 
   void _showRouteTypeDialog(MapboxSuggestion suggestion) {
-    showDialog<void>(
+    showModalBottomSheet(
       context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: const Color(0xFF1C1F26),
-        title: const Text('Routen-Typ wählen', style: TextStyle(color: Colors.white)),
-        content: Column(
+      backgroundColor: const Color(0xFF1C1F26),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (context) => Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            Center(
+              child: Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.grey[600],
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            const SizedBox(height: 20),
+            const Text(
+              'Routen auswählen',
+              style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 8),
             Text(
               'Ziel: ${suggestion.placeName}',
               style: const TextStyle(color: Colors.grey, fontSize: 14),
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
             ),
-            const SizedBox(height: 20),
-            ListTile(
-              leading: const Icon(Icons.arrow_forward, color: Color(0xFFFF3B30)),
-              title: const Text('Direkte Route', style: TextStyle(color: Colors.white)),
-              subtitle: const Text('Schnellster Weg zum Ziel',
-                  style: TextStyle(color: Colors.grey)),
+            const SizedBox(height: 24),
+            _buildRouteOption(
+              icon: Icons.speed,
+              color: const Color(0xFFFF3B30),
+              title: 'Schnellste Route',
+              subtitle: 'Direkter Weg zum Ziel',
               onTap: () {
                 Navigator.pop(context);
                 _calculateRouteToDestination(suggestion, scenic: false);
               },
             ),
-            const Divider(color: Colors.white10),
-            ListTile(
-              leading: const Icon(Icons.route, color: Colors.orange),
-              title: const Text('Coole Route', style: TextStyle(color: Colors.white)),
-              subtitle: Text('Mit $_selectedStyle zum Ziel',
-                  style: const TextStyle(color: Colors.grey)),
+            const SizedBox(height: 12),
+            _buildRouteOption(
+              icon: Icons.route,
+              color: Colors.orange,
+              title: 'Coole Route (Sport)',
+              subtitle: 'Mit $_selectedStyle - anspruchsvoll',
               onTap: () {
                 Navigator.pop(context);
-                _calculateRouteToDestination(suggestion, scenic: true);
+                _calculateRouteToDestination(suggestion, scenic: true, routeVariant: 0);
               },
+            ),
+            const SizedBox(height: 12),
+            _buildRouteOption(
+              icon: Icons.landscape,
+              color: Colors.green,
+              title: 'Coole Route (Abwechslung)',
+              subtitle: 'Alternative mit Kurven & Natur',
+              onTap: () {
+                Navigator.pop(context);
+                _calculateRouteToDestination(suggestion, scenic: true, routeVariant: 1);
+              },
+            ),
+            const SizedBox(height: 20),
+            SizedBox(
+              width: double.infinity,
+              child: TextButton(
+                onPressed: () => Navigator.pop(context),
+                style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                ),
+                child: const Text('Abbrechen', style: TextStyle(color: Colors.grey, fontSize: 16)),
+              ),
             ),
           ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Abbrechen', style: TextStyle(color: Colors.grey)),
-          ),
-        ],
+      ),
+    );
+  }
+
+  Widget _buildRouteOption({
+    required IconData icon,
+    required Color color,
+    required String title,
+    required String subtitle,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: const Color(0xFF0B0E14),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: Colors.white12),
+        ),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: color.withOpacity(0.2),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Icon(icon, color: color, size: 24),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title, style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 4),
+                  Text(subtitle, style: const TextStyle(color: Colors.grey, fontSize: 13)),
+                ],
+              ),
+            ),
+            const Icon(Icons.arrow_forward_ios, color: Colors.grey, size: 16),
+          ],
+        ),
       ),
     );
   }
