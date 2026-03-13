@@ -33,6 +33,7 @@ class RouteService {
       'mode': mode,
       'route_type': 'ROUND_TRIP',
       'planning_type': planningType,
+      'language': 'de',
       if (targetLocation != null) 'targetLocation': targetLocation,
     };
     final result = await _invoke(body);
@@ -61,6 +62,7 @@ class RouteService {
       'route_type': 'POINT_TO_POINT',
       'planning_type': 'Zufall',
       'mode': scenic ? mode : 'Standard',
+      'language': 'de',
       if (scenic) ...{
         'targetDistance': 50 + (routeVariant * 10), // Unterschiedliche Ziel-Distanzen
         'randomSeed': routeVariant, // Für Backend: verschiedene Algorithmen/Parameter
