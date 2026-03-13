@@ -1,5 +1,5 @@
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:cruise_connect/presentation/pages/route_join_page.dart';
 
 class HomeContentPage extends StatefulWidget {
@@ -23,10 +23,9 @@ class _HomeContentPageState extends State<HomeContentPage> {
   }
 
   void _initializeUserLevel() {
-    final user = FirebaseAuth.instance.currentUser;
-    bool isTestUser = (user?.email?.contains('david') ?? false) || 
-                      (user?.email?.contains('test') ?? false);
-    
+    final email = Supabase.instance.client.auth.currentUser?.email ?? '';
+    final isTestUser = email.contains('david') || email.contains('test');
+
     if (isTestUser) {
       userLevel = 5;
       levelProgress = 0.35;
@@ -42,8 +41,10 @@ class _HomeContentPageState extends State<HomeContentPage> {
 
   @override
   Widget build(BuildContext context) {
-    final User? user = FirebaseAuth.instance.currentUser;
-    final String userName = user?.displayName ?? user?.email?.split('@')[0] ?? "User";
+    final user = Supabase.instance.client.auth.currentUser;
+    final String userName = (user?.userMetadata?['username'] as String?)
+        ?? user?.email?.split('@')[0]
+        ?? 'User';
 
     return SingleChildScrollView(
       physics: const BouncingScrollPhysics(),

@@ -261,64 +261,47 @@ class RouteService {
     return _translateToGerman(trimmed);
   }
 
-  /// Übersetzt englische Navigationsanweisungen ins Deutsche
+  /// Übersetzt englische Navigationsanweisungen ins Deutsche (sequenziell, kein early return)
   String _translateToGerman(String instruction) {
-    final lower = instruction.toLowerCase();
-    
-    // Häufige englische Phrasen übersetzen
-    if (lower.contains('head') || lower.contains('continue')) {
-      return instruction
-          .replaceAll(RegExp(r'head (north|south|east|west|northwest|northeast|southwest|southeast)', caseSensitive: false), 'Fahren Sie Richtung $1')
-          .replaceAll(RegExp(r'head (?:toward|to)', caseSensitive: false), 'Fahren Sie nach')
-          .replaceAll('continue', 'Weiterfahren')
-          .replaceAll('on', 'auf');
-    }
-    
-    if (lower.contains('turn')) {
-      return instruction
-          .replaceAll(RegExp(r'turn (?:slightly |sharp )?left', caseSensitive: false), 'Links abbiegen')
-          .replaceAll(RegExp(r'turn (?:slightly |sharp )?right', caseSensitive: false), 'Rechts abbiegen')
-          .replaceAll(RegExp(r'turn (?:slightly |sharp )?uturn', caseSensitive: false), 'Bitte wenden');
-    }
-    
-    if (lower.contains('bear')) {
-      return instruction
-          .replaceAll(RegExp(r'bear left', caseSensitive: false), 'Links halten')
-          .replaceAll(RegExp(r'bear right', caseSensitive: false), 'Rechts halten')
-          .replaceAll(RegExp(r'bear (?:toward|to)', caseSensitive: false), 'Richtung');
-    }
-    
-    if (lower.contains('keep')) {
-      return instruction
-          .replaceAll(RegExp(r'keep left', caseSensitive: false), 'Links halten')
-          .replaceAll(RegExp(r'keep right', caseSensitive: false), 'Rechts halten')
-          .replaceAll(RegExp(r'keep (?:straight|going)', caseSensitive: false), 'Geradeaus weiterfahren');
-    }
-    
-    if (lower.contains('take')) {
-      return instruction
-          .replaceAll(RegExp(r'take the \w+ (?:exit|ramp)', caseSensitive: false), 'Ausfahrt nehmen')
-          .replaceAll(RegExp(r'take (?:the )?exit', caseSensitive: false), 'Ausfahrt nehmen');
-    }
-    
-    if (lower.contains('enter') || lower.contains('merge')) {
-      return instruction
-          .replaceAll(RegExp(r'enter (?:the )?(?:roundabout|traffic circle|rotary)', caseSensitive: false), 'In den Kreisverkehr einfahren')
-          .replaceAll(RegExp(r'merge (?:onto|into)', caseSensitive: false), 'Auffahren auf');
-    }
-    
-    if (lower.contains('exit') || lower.contains('leave')) {
-      return instruction
-          .replaceAll(RegExp(r'exit (?:the )?(?:roundabout|traffic circle|rotary)', caseSensitive: false), 'Kreisverkehr verlassen')
-          .replaceAll(RegExp(r'exit (?:onto|to)', caseSensitive: false), 'Abfahrt auf');
-    }
-    
-    if (lower.contains('arrive') || lower.contains('destination')) {
-      return 'Ziel erreicht';
-    }
-    
-    // Wenn keine Übersetzung gefunden, gib original zurück
-    return instruction;
+    var r = instruction;
+
+    // Kreisverkehr (vor generischen "enter"/"exit" erkennen)
+    r = r.replaceAll(RegExp(r'\benter (?:the )?(?:roundabout|traffic circle|rotary)\b', caseSensitive: false), 'In den Kreisverkehr einfahren');
+    r = r.replaceAll(RegExp(r'\bexit (?:the )?(?:roundabout|traffic circle|rotary)\b', caseSensitive: false), 'Kreisverkehr verlassen');
+
+    // Abbiegungen
+    r = r.replaceAll(RegExp(r'\bturn (?:slightly |sharp )?left\b', caseSensitive: false), 'Links abbiegen');
+    r = r.replaceAll(RegExp(r'\bturn (?:slightly |sharp )?right\b', caseSensitive: false), 'Rechts abbiegen');
+    r = r.replaceAll(RegExp(r'\buturn\b', caseSensitive: false), 'Wenden');
+
+    // Halten
+    r = r.replaceAll(RegExp(r'\bbear left\b', caseSensitive: false), 'Links halten');
+    r = r.replaceAll(RegExp(r'\bbear right\b', caseSensitive: false), 'Rechts halten');
+    r = r.replaceAll(RegExp(r'\bkeep left\b', caseSensitive: false), 'Links halten');
+    r = r.replaceAll(RegExp(r'\bkeep right\b', caseSensitive: false), 'Rechts halten');
+    r = r.replaceAll(RegExp(r'\bkeep (?:straight|going)\b', caseSensitive: false), 'Geradeaus weiterfahren');
+
+    // Geradeaus / Starten
+    r = r.replaceAll(RegExp(r'\bhead (?:north|south|east|west|northwest|northeast|southwest|southeast)\b', caseSensitive: false), 'Geradeaus fahren');
+    r = r.replaceAll(RegExp(r'\bcontinue\b', caseSensitive: false), 'Weiterfahren');
+
+    // Ausfahrten
+    r = r.replaceAll(RegExp(r'\btake the \w+ (?:exit|ramp)\b', caseSensitive: false), 'Ausfahrt nehmen');
+    r = r.replaceAll(RegExp(r'\btake (?:the )?exit\b', caseSensitive: false), 'Ausfahrt nehmen');
+
+    // Auffahren / Abfahren
+    r = r.replaceAll(RegExp(r'\bmerge (?:onto|into)\b', caseSensitive: false), 'Auffahren auf');
+    r = r.replaceAll(RegExp(r'\bexit (?:onto|to)\b', caseSensitive: false), 'Abfahrt auf');
+
+    // Ziel
+    r = r.replaceAll(RegExp(r'\b(?:you have arrived|arrive at|destination)\b', caseSensitive: false), 'Ziel erreicht');
+
+    // Englische Verbindungswörter — zuletzt, nach allen längeren Mustern
+    r = r.replaceAll(RegExp(r'\bonto\b', caseSensitive: false), 'auf');
+    r = r.replaceAll(RegExp(r'\btoward\b', caseSensitive: false), 'Richtung');
+    r = r.replaceAll(RegExp(r'\bvia\b', caseSensitive: false), 'über');
+
+    return r;
   }
 
   String _announcementFromInstruction(String instruction, String modifier, double distance) {
@@ -327,44 +310,136 @@ class RouteService {
 
   // ─────────────────────── Route Snapping ───────────────────────────────────
 
-  /// Snappt den ersten (und letzten bei Rundkurs) Routenpunkt auf die exakte Startposition.
-  /// Verhindert den Kreis-Bug am Routenanfang.
+  /// Snappt Start (und Rundkurs-Ende) auf die exakte GPS-Position und
+  /// entfernt die Anfangs-Schleife die Mapbox manchmal erzeugt.
   RouteResult _snapRouteToStartPosition(RouteResult result, geo.Position startPosition) {
     if (result.coordinates.isEmpty) return result;
-    
-    final snappedCoordinates = List<List<double>>.from(result.coordinates);
+
     final startLng = startPosition.longitude;
     final startLat = startPosition.latitude;
-    
-    // Ersten Punkt auf exakte Position snap
-    snappedCoordinates[0] = [startLng, startLat];
-    
-    // Bei Rundkurs: Letzten Punkt auch auf Startposition snap
-    if (snappedCoordinates.length > 1) {
-      final firstPoint = result.coordinates.first;
-      final lastPoint = result.coordinates.last;
-      final distanceBetween = geo.Geolocator.distanceBetween(
-        firstPoint[1], firstPoint[0], lastPoint[1], lastPoint[0],
-      );
-      // Wenn Start und Ende nahe beieinander (Rundkurs), snap Ende auch
-      if (distanceBetween < 500) {
-        snappedCoordinates.last = [startLng, startLat];
+    var coords = List<List<double>>.from(result.coordinates);
+
+    // ── Anfangs-Haken/Schleife entfernen ─────────────────────────────────────
+    // Mapbox erzeugt manchmal einen Haken: Route geht kurz weg, dreht um,
+    // kommt zurück zum Startbereich und fährt dann in die richtige Richtung.
+    // Erkennung: Nach einem Abstand von ≥100 m sinkt die Distanz wieder auf <80 m.
+    // Wir trimmen bis zum letzten solchen Rückkehr-Punkt.
+    final searchEnd = (coords.length * 0.20).round().clamp(5, 200);
+
+    // Größten Abstand vom Start in der Suchzone finden
+    var maxDist = 0.0;
+    var maxDistIdx = 0;
+    for (var i = 0; i < searchEnd; i++) {
+      final d = geo.Geolocator.distanceBetween(startLat, startLng, coords[i][1], coords[i][0]);
+      if (d > maxDist) {
+        maxDist = d;
+        maxDistIdx = i;
       }
     }
-    
-    // Update geometry mit neuen Koordinaten
+
+    var trimTo = 0;
+    if (maxDist > 100.0) {
+      // Route hat sich ≥100 m entfernt — prüfe ob sie danach zurückkommt
+      for (var i = maxDistIdx; i < searchEnd; i++) {
+        final d = geo.Geolocator.distanceBetween(startLat, startLng, coords[i][1], coords[i][0]);
+        if (d < 80.0) trimTo = i; // Rückkehr zum Startbereich
+      }
+    } else {
+      // Fallback: alter Algorithmus für sehr kurze Ausreißer (<100 m)
+      for (var i = 1; i < searchEnd; i++) {
+        final d = geo.Geolocator.distanceBetween(startLat, startLng, coords[i][1], coords[i][0]);
+        if (d < 35.0) trimTo = i;
+      }
+    }
+    if (trimTo > 0) coords = coords.sublist(trimTo);
+    if (coords.isEmpty) return result;
+
+    // ── Startpunkt auf exakte GPS-Position setzen ─────────────────────────────
+    coords[0] = [startLng, startLat];
+
+    // ── Rundkurs: letzten Punkt auch auf Start setzen ─────────────────────────
+    if (coords.length > 1) {
+      final last = coords.last;
+      final d = geo.Geolocator.distanceBetween(startLat, startLng, last[1], last[0]);
+      if (d < 500) coords.last = [startLng, startLat];
+    }
+
+    // ── Selbstschneidende Schleifen aus der Route entfernen ───────────────────
+    coords = _removeRouteLoops(coords);
+
+    // ── Maneuver-Indices komplett neu berechnen (nach allen Koordinaten-Änderungen) ─
+    // Statt Offset-Korrektur: lat/lng-Position des Maneuvers in neuen Koordinaten suchen.
+    final finalManeuvers = result.maneuvers
+        .map((m) => RouteManeuver(
+              latitude: m.latitude,
+              longitude: m.longitude,
+              routeIndex: _findNearestIndex(m.latitude, m.longitude, coords),
+              icon: m.icon,
+              announcement: m.announcement,
+              instruction: m.instruction,
+            ))
+        .toList();
+
     final newGeometry = Map<String, dynamic>.from(result.geometry);
-    newGeometry['coordinates'] = snappedCoordinates;
-    
+    newGeometry['coordinates'] = coords;
+
     return RouteResult(
       geoJson: json.encode(newGeometry),
       geometry: newGeometry,
-      coordinates: snappedCoordinates,
-      maneuvers: result.maneuvers,
+      coordinates: coords,
+      maneuvers: finalManeuvers,
       distanceMeters: result.distanceMeters,
       durationSeconds: result.durationSeconds,
       distanceKm: result.distanceKm,
     );
+  }
+
+  /// Entfernt Schleifen (Loops) aus einer Route.
+  ///
+  /// Erkennt eine Schleife anhand von drei Kriterien:
+  ///   1. Direktabstand zwischen Punkt j und i < 80 m  (fängt auch breitere Haken)
+  ///   2. Weglänge j→i ist > 3,5× der Direktdistanz   (echter Umweg, kein normaler Bogen)
+  ///   3. Weglänge j→i < 1500 m                        (lokale Schleife, kein legitimer Umweg)
+  ///
+  /// Kumulierte Distanzen werden vorab berechnet → O(n) pro Durchlauf.
+  List<List<double>> _removeRouteLoops(List<List<double>> coords) {
+    if (coords.length < 10) return coords;
+
+    // Kumulierte Streckenlängen vorberechnen
+    final cum = <double>[0.0];
+    for (var i = 1; i < coords.length; i++) {
+      cum.add(cum.last +
+          geo.Geolocator.distanceBetween(
+            coords[i - 1][1], coords[i - 1][0],
+            coords[i][1],     coords[i][0],
+          ));
+    }
+
+    // Letzten 15 % nicht scannen — Rundkurs endet legitim nah am Start
+    final safeEnd = (coords.length * 0.85).round().clamp(10, coords.length);
+
+    for (var i = 10; i < safeEnd; i++) {
+      final lookBack = math.max(0, i - 400); // 400 Punkte Rückblick (vorher 150)
+      for (var j = lookBack; j < i - 5; j++) {
+        final directDist = geo.Geolocator.distanceBetween(
+          coords[i][1], coords[i][0],
+          coords[j][1], coords[j][0],
+        );
+        if (directDist > 80.0) continue;          // zu weit weg, kein Loop
+
+        final pathLen = cum[i] - cum[j];
+        if (pathLen < directDist * 3.5) continue; // normaler Bogen, kein Umweg
+        if (pathLen > 1500) continue;             // zu lang = legitimer Umweg
+
+        // Schleife gefunden → Kurzschluss: coords[j] direkt mit coords[i] verbinden
+        final shortened = [
+          ...coords.sublist(0, j + 1),
+          ...coords.sublist(i),
+        ];
+        return _removeRouteLoops(shortened); // rekursiv weitere Schleifen entfernen
+      }
+    }
+    return coords;
   }
 }
 

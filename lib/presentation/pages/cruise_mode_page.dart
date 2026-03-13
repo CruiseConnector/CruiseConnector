@@ -12,6 +12,7 @@ import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
 
 import 'package:cruise_connect/data/services/geocoding_service.dart';
 import 'package:cruise_connect/data/services/route_service.dart';
+import 'package:cruise_connect/data/services/saved_routes_service.dart';
 import 'package:cruise_connect/domain/models/mapbox_suggestion.dart';
 import 'package:cruise_connect/domain/models/route_maneuver.dart' show RouteManeuver;
 import 'package:cruise_connect/domain/models/route_result.dart';
@@ -48,6 +49,7 @@ class _CruiseModePageState extends State<CruiseModePage> {
   String? _routeGeoJson;
   double? _routeDistance;
   double? _routeDuration;
+  RouteResult? _lastRouteResult; // Wird beim Speichern benötigt
 
   // ─────────────────────── Map State ─────────────────────────────────────────
   bool _isLoading = false;
@@ -766,6 +768,7 @@ class _CruiseModePageState extends State<CruiseModePage> {
   }
 
   void _applyRouteResult(RouteResult result) {
+    _lastRouteResult = result;
     setState(() {
       _routeGeoJson = result.geoJson;
       _routeDistance = result.distanceMeters;
@@ -773,12 +776,11 @@ class _CruiseModePageState extends State<CruiseModePage> {
       _isRouteConfirmed = false;
       _viewportState = null;
       _fullRouteCoordinates = result.coordinates;
-      _remainingRouteCoordinates = result.coordinates;
+      _remainingRouteCoordinates = result.coordinates; // Preview: volle Route sichtbar
       _maneuvers = result.maneuvers;
       _activeManeuverIndex = 0;
       _currentRouteIndex = 0;
       _announcedManeuverIndices.clear();
-      // Reset A-to-B selection after route calculated
       if (!_isRoundTrip) {
         _showRouteTypeSelector = false;
       }
@@ -810,15 +812,50 @@ class _CruiseModePageState extends State<CruiseModePage> {
   }
 
   Future<void> _confirmRoute() async {
-    setState(() => _isRouteConfirmed = true);
+    final total = _fullRouteCoordinates.length;
+    setState(() {
+      _isRouteConfirmed = true;
+      _currentRouteIndex = 0;
+      // Zeige nächste 3 km der Route als Sliding Window
+      final windowEnd = _findLookAheadIndex(0, 3000);
+      _remainingRouteCoordinates = total >= 2
+          ? _fullRouteCoordinates.sublist(0, windowEnd)
+          : _fullRouteCoordinates;
+    });
+
+    // Route automatisch für eingeloggten User speichern (feuern & vergessen)
+    if (_lastRouteResult != null) {
+      SavedRoutesService.saveRoute(
+        result: _lastRouteResult!,
+        style: _selectedStyle,
+        isRoundTrip: _isRoundTrip,
+      ).catchError((_) {}); // Fehler still ignorieren — Navigation nicht blockieren
+    }
+
     _startNavigationTracking();
-    if (_fullRouteCoordinates.length >= 2) {
+    if (total >= 2) {
       await _drawRoute(
         {'type': 'LineString', 'coordinates': _remainingRouteCoordinates},
         animateCamera: false,
       );
     }
     await _activateNavigationCamera();
+  }
+
+  // ═══════════════════════ LOOK-AHEAD HELPER ════════════════════════════════
+
+  /// Gibt den Index zurück der ~[targetMeters] nach [startIndex] auf der Route liegt.
+  /// Wird für das Sliding-Window (3 km Vorausschau) verwendet.
+  int _findLookAheadIndex(int startIndex, double targetMeters) {
+    double accumulated = 0.0;
+    final total = _fullRouteCoordinates.length;
+    for (var i = startIndex; i < total - 1; i++) {
+      final c1 = _fullRouteCoordinates[i];
+      final c2 = _fullRouteCoordinates[i + 1];
+      accumulated += geo.Geolocator.distanceBetween(c1[1], c1[0], c2[1], c2[0]);
+      if (accumulated >= targetMeters) return (i + 1).clamp(0, total);
+    }
+    return total;
   }
 
   // ═══════════════════════ DRAW ROUTE ═══════════════════════════════════════
@@ -837,28 +874,8 @@ class _CruiseModePageState extends State<CruiseModePage> {
         .toList();
     if (activeCoordinates.length < 2) return;
 
-    // Graue Vollroute (nur bei bestätigter Route)
-    if (_isRouteConfirmed && _fullRouteCoordinates.length >= 2) {
-      final fullPositions = _fullRouteCoordinates.map((c) => Position(c[0], c[1])).toList();
-      try {
-        _greyAnnotationManager ??=
-            await _mapboxMap!.annotations.createPolylineAnnotationManager();
-        await _greyAnnotationManager!.deleteAll();
-        await _greyAnnotationManager!.create(PolylineAnnotationOptions(
-          geometry: LineString(coordinates: fullPositions),
-          lineColor: const Color(0xFF6B7280).toARGB32(),
-          lineWidth: 5.0,
-        ));
-      } catch (_) {
-        _greyAnnotationManager =
-            await _mapboxMap!.annotations.createPolylineAnnotationManager();
-        await _greyAnnotationManager!.create(PolylineAnnotationOptions(
-          geometry: LineString(coordinates: fullPositions),
-          lineColor: const Color(0xFF6B7280).toARGB32(),
-          lineWidth: 5.0,
-        ));
-      }
-    }
+    // Graue Hintergundlinie vollständig entfernt — nur eine rote Linie sichtbar
+    try { await _greyAnnotationManager?.deleteAll(); } catch (_) {}
 
     // Rote aktive Route
     final routePositions = activeCoordinates.map((c) => Position(c[0], c[1])).toList();
@@ -928,7 +945,7 @@ class _CruiseModePageState extends State<CruiseModePage> {
     }
 
     if (!_isRouteConfirmed || _fullRouteCoordinates.length < 2) {
-      setState(() {});
+      // Kein setState nötig — kein visuelles Update beim Preview
       return;
     }
 
@@ -938,19 +955,27 @@ class _CruiseModePageState extends State<CruiseModePage> {
       currentIndex: _currentRouteIndex,
     );
 
+    var needsRebuild = false;
+
     if (match.index > _currentRouteIndex && match.distanceMeters <= 45.0) {
       _currentRouteIndex = match.index;
-      _remainingRouteCoordinates = _fullRouteCoordinates.sublist(_currentRouteIndex);
+      needsRebuild = true;
+
+      // Sliding Window: zeige nächste 3 km ab aktueller Position
+      final windowEnd = _findLookAheadIndex(_currentRouteIndex, 3000);
+      _remainingRouteCoordinates = _fullRouteCoordinates.sublist(_currentRouteIndex, windowEnd);
       final clipped = {'type': 'LineString', 'coordinates': _remainingRouteCoordinates};
       _routeGeoJson = json.encode(clipped);
       await _drawRoute(clipped, animateCamera: false);
     }
 
+    // Maneuver nur neu berechnen wenn sich der Index geändert hat
+    final prevManeuver = _activeManeuverIndex;
     _updateActiveManeuver();
-    // TTS deaktiviert:
-    // await _speakUpcomingManeuverIfNeeded(position);
+    if (_activeManeuverIndex != prevManeuver) needsRebuild = true;
 
-    if (mounted) setState(() {});
+    // setState nur wenn sich etwas Sichtbares geändert hat
+    if (needsRebuild && mounted) setState(() {});
   }
 
   void _updateActiveManeuver() {
@@ -1113,11 +1138,12 @@ class _CruiseModePageState extends State<CruiseModePage> {
     _stopNavigationTracking();
     _simulationIndex = 0;
     _currentRouteIndex = 0;
-    _remainingRouteCoordinates = List.from(_fullRouteCoordinates);
     _announcedManeuverIndices.clear();
     _activeManeuverIndex = 0;
     _isSimulationRunning = true;
 
+    final windowEnd = _findLookAheadIndex(0, 3000);
+    _remainingRouteCoordinates = _fullRouteCoordinates.sublist(0, windowEnd);
     final fullGeometry = {'type': 'LineString', 'coordinates': _remainingRouteCoordinates};
     _routeGeoJson = json.encode(fullGeometry);
     await _drawRoute(fullGeometry, animateCamera: false);

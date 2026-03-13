@@ -76,11 +76,35 @@ function getDistanceConfig(targetDistance: number): DistanceConfig {
 }
 
 /**
- * Calculates triangle-like waypoints from a fixed search radius in km.
- * @deprecated Use calculateLoopWaypoints instead for better variety
+ * Generates 2 waypoints forming a true triangle to prevent start-area loops.
+ *
+ * Triangle approach: WP1 and WP2 are on OPPOSITE SIDES of the start,
+ * separated by 100–140°. This creates a natural triangle where Mapbox
+ * routes Start→WP1→WP2→Start using three clearly distinct road segments
+ * and never needs to pass back through the start area.
+ *
+ * Route: Start → WP1 → WP2 → Start
  */
 function calculateTriangleWaypoints(start: Coordinate, searchRadiusKm: number): Coordinate[] {
-    return calculateLoopWaypoints(start, searchRadiusKm, 3);
+    const baseBearing = Math.random() * 360;
+
+    // WP1: Outbound direction, full radius
+    const wp1 = calculateDestination(
+        start,
+        searchRadiusKm * (0.8 + Math.random() * 0.4), // 0.8–1.2× radius
+        baseBearing,
+    );
+
+    // WP2: 100–140° offset from WP1 direction, slightly shorter
+    // Wide enough angle that the return path doesn't clip the start area
+    const returnBearing = (baseBearing + 100 + Math.random() * 40) % 360;
+    const wp2 = calculateDestination(
+        start,
+        searchRadiusKm * (0.65 + Math.random() * 0.2), // 0.65–0.85× radius
+        returnBearing,
+    );
+
+    return [wp1, wp2];
 }
 
 /**
@@ -195,7 +219,7 @@ async function getMapboxRoute(
 
     // Base URL
     // We use geometries=geojson to get the path geometry
-    let url = `https://api.mapbox.com/directions/v5/${profile}/${coordinatesStr}?access_token=${accessToken}&geometries=geojson&overview=full&steps=true&voice_instructions=true&banner_instructions=true`
+    let url = `https://api.mapbox.com/directions/v5/${profile}/${coordinatesStr}?access_token=${accessToken}&geometries=geojson&overview=full&steps=true&voice_instructions=true&banner_instructions=true&language=de&continue_straight=false`
 
     // Append optional parameters if they exist
     if (exclude && exclude.trim() !== '') {
@@ -249,7 +273,7 @@ Deno.serve(async (req) => {
 
         if (mode === 'Kurvenjagd') {
                 mapboxProfile = 'mapbox/driving';
-                excludeParams = 'motorway,trunk,primary';
+                excludeParams = 'motorway'; // Nur Autobahnen ausschließen — trunk/primary können Sackgassen verursachen
         } else if (mode === 'Sport Mode') {
                 mapboxProfile = 'mapbox/driving';
                 excludeParams = 'motorway';
@@ -305,12 +329,11 @@ Deno.serve(async (req) => {
                 throw new Error("Invalid planning_type. Must be 'Zufall' or 'Wegpunkte'.")
         }
 
-        // Prepare dynamic radiuses if needed (Sport Mode wants "1000;1000;...")
-        if (mode === 'Sport Mode') {
-                radiusesParams = finalWaypoints.map(() => '1000').join(';');
-        } else {
-                radiusesParams = '';
-        }
+        // Radiuses: Start/Ende unlimited (echte GPS-Position), Zwischenpunkte 5000m
+        // Das verhindert Fehler wenn ein Zwischenpunkt in einem nicht zugänglichen Gebiet liegt
+        radiusesParams = finalWaypoints
+            .map((_, i) => (i === 0 || i === finalWaypoints.length - 1) ? 'unlimited' : '5000')
+            .join(';');
 
         // --- Execute Route Request ---
         let route = await getMapboxRoute(finalWaypoints, mapboxProfile, excludeParams, radiusesParams, MAPBOX_ACCESS_TOKEN);

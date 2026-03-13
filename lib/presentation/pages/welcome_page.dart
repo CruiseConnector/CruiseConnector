@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:cruise_connect/presentation/pages/login_page.dart';
-// import 'package:cruise_connect/presentation/pages/register_page.dart'; // TODO: Seite später erstellen
+import 'package:cruise_connect/presentation/pages/register_page.dart';
 
 class WelcomePage extends StatelessWidget {
   const WelcomePage({super.key});
@@ -99,7 +99,10 @@ class WelcomePage extends StatelessWidget {
                       text: "Registrieren", // Deutsch
                       color: brandColor,
                       onTap: () {
-                         // TODO: Zur Registrierung navigieren
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(builder: (_) => const RegisterPage()),
+                        );
                       },
                     ),
 
