@@ -441,124 +441,6 @@ class _CruiseModePageState extends State<CruiseModePage> {
   // ═══════════════════════ BOTTOM ACTIONS ═══════════════════════════════════
 
   Widget _buildBottomActions() {
-    // Route-Modus-Selektor für A-nach-B wenn Ziel ausgewählt
-    if (_showRouteTypeSelector && !_isRoundTrip) {
-      return Container(
-        padding: const EdgeInsets.fromLTRB(24, 16, 24, 24),
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [Colors.transparent, Color(0xFF0B0E14)],
-            stops: [0.0, 0.3],
-          ),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // Route-Modus Auswahl
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: const Color(0xFF1C1F26),
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: Colors.white10),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'Routentyp wählen',
-                    style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
-                  ),
-                  const SizedBox(height: 12),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: _buildRouteModeButton(
-                          label: 'Direkt',
-                          icon: Icons.speed,
-                          isSelected: _selectedRouteMode == 'direct',
-                          onTap: () => _onRouteModeSelected('direct'),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: _buildRouteModeButton(
-                          label: 'Sport',
-                          icon: Icons.sports_motor,
-                          isSelected: _selectedRouteMode == 'sport',
-                          onTap: () => _onRouteModeSelected('sport'),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: _buildRouteModeButton(
-                          label: 'Abenteuer',
-                          icon: Icons.landscape,
-                          isSelected: _selectedRouteMode == 'scenic',
-                          onTap: () => _onRouteModeSelected('scenic'),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: _buildRouteModeButton(
-                          label: 'Entspannt',
-                          icon: Icons.local_cafe,
-                          isSelected: _selectedRouteMode == 'relaxed',
-                          onTap: () => _onRouteModeSelected('relaxed'),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 12),
-            // Route berechnen Button
-            Container(
-              height: 56,
-              width: double.infinity,
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(28),
-                boxShadow: [
-                  BoxShadow(
-                    color: const Color(0xFFFF3B30).withValues(alpha: 0.3),
-                    blurRadius: 12,
-                    offset: const Offset(0, 4),
-                  ),
-                ],
-              ),
-              child: ElevatedButton(
-                onPressed: _isLoading ? null : () => _onRouteModeSelected(_selectedRouteMode),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFFFF3B30),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
-                  elevation: 0,
-                ),
-                child: _isLoading
-                    ? const SizedBox(
-                        width: 24,
-                        height: 24,
-                        child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
-                      )
-                    : const Text(
-                        'Route berechnen',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                          letterSpacing: 1.2,
-                        ),
-                      ),
-              ),
-            ),
-          ],
-        ),
-      );
-    }
-
-    // Standard Bottom Actions
     return Container(
       height: 160,
       padding: const EdgeInsets.symmetric(horizontal: 24),
@@ -917,11 +799,12 @@ class _CruiseModePageState extends State<CruiseModePage> {
     });
     if (_selectedDestination != null) {
       final isSport = mode == 'sport';
-      final isScenic = mode == 'scenic';
+      final isScenic = mode == 'scenic' || mode == 'relaxed';
+      final variant = mode == 'scenic' ? 1 : (mode == 'relaxed' ? 2 : 0);
       _calculateRouteToDestination(
         _selectedDestination!,
         scenic: isSport || isScenic,
-        routeVariant: isScenic ? 1 : 0,
+        routeVariant: variant,
       );
     }
   }
@@ -1625,6 +1508,51 @@ class _CruiseModePageState extends State<CruiseModePage> {
                 ),
               ],
             ),
+          ),
+          const SizedBox(height: 20),
+          const Text(
+            'Routentyp',
+            style: TextStyle(color: Colors.grey, fontSize: 14, fontWeight: FontWeight.w500),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: _buildRouteModeButton(
+                  label: 'Direkt',
+                  icon: Icons.speed,
+                  isSelected: _selectedRouteMode == 'direct',
+                  onTap: () => _onRouteModeSelected('direct'),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _buildRouteModeButton(
+                  label: 'Sport',
+                  icon: Icons.sports_motorsports,
+                  isSelected: _selectedRouteMode == 'sport',
+                  onTap: () => _onRouteModeSelected('sport'),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _buildRouteModeButton(
+                  label: 'Abenteuer',
+                  icon: Icons.landscape,
+                  isSelected: _selectedRouteMode == 'scenic',
+                  onTap: () => _onRouteModeSelected('scenic'),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _buildRouteModeButton(
+                  label: 'Entspannt',
+                  icon: Icons.local_cafe,
+                  isSelected: _selectedRouteMode == 'relaxed',
+                  onTap: () => _onRouteModeSelected('relaxed'),
+                ),
+              ),
+            ],
           ),
         ],
       );
