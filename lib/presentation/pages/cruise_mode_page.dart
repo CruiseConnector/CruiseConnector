@@ -1509,51 +1509,6 @@ class _CruiseModePageState extends State<CruiseModePage> {
               ],
             ),
           ),
-          const SizedBox(height: 20),
-          const Text(
-            'Routentyp',
-            style: TextStyle(color: Colors.grey, fontSize: 14, fontWeight: FontWeight.w500),
-          ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Expanded(
-                child: _buildRouteModeButton(
-                  label: 'Direkt',
-                  icon: Icons.speed,
-                  isSelected: _selectedRouteMode == 'direct',
-                  onTap: () => _onRouteModeSelected('direct'),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: _buildRouteModeButton(
-                  label: 'Sport',
-                  icon: Icons.sports_motorsports,
-                  isSelected: _selectedRouteMode == 'sport',
-                  onTap: () => _onRouteModeSelected('sport'),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: _buildRouteModeButton(
-                  label: 'Abenteuer',
-                  icon: Icons.landscape,
-                  isSelected: _selectedRouteMode == 'scenic',
-                  onTap: () => _onRouteModeSelected('scenic'),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: _buildRouteModeButton(
-                  label: 'Entspannt',
-                  icon: Icons.local_cafe,
-                  isSelected: _selectedRouteMode == 'relaxed',
-                  onTap: () => _onRouteModeSelected('relaxed'),
-                ),
-              ),
-            ],
-          ),
         ],
       );
     }

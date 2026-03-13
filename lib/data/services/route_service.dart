@@ -153,7 +153,7 @@ class RouteService {
 
         // Prüfe Distanz zum vorherigen Maneuver (vermeide Kreise am Start)
         final distance = (step['distance'] as num?)?.toDouble() ?? 0;
-        if (distance < 50) continue; // Überspringe zu kurze Segmente
+        if (distance < 100) continue; // Überspringe zu kurze Segmente (erhöht von 50 auf 100m)
 
         final location = maneuver['location'];
         if (location is! List || location.length < 2) continue;
@@ -257,7 +257,68 @@ class RouteService {
 
   String _normalizeInstruction(String instruction, String modifier) {
     final trimmed = instruction.trim();
-    return trimmed.isEmpty ? _announcementForModifier(modifier) : trimmed;
+    if (trimmed.isEmpty) return _announcementForModifier(modifier);
+    return _translateToGerman(trimmed);
+  }
+
+  /// Übersetzt englische Navigationsanweisungen ins Deutsche
+  String _translateToGerman(String instruction) {
+    final lower = instruction.toLowerCase();
+    
+    // Häufige englische Phrasen übersetzen
+    if (lower.contains('head') || lower.contains('continue')) {
+      return instruction
+          .replaceAll(RegExp(r'head (north|south|east|west|northwest|northeast|southwest|southeast)', caseSensitive: false), 'Fahren Sie Richtung $1')
+          .replaceAll(RegExp(r'head (?:toward|to)', caseSensitive: false), 'Fahren Sie nach')
+          .replaceAll('continue', 'Weiterfahren')
+          .replaceAll('on', 'auf');
+    }
+    
+    if (lower.contains('turn')) {
+      return instruction
+          .replaceAll(RegExp(r'turn (?:slightly |sharp )?left', caseSensitive: false), 'Links abbiegen')
+          .replaceAll(RegExp(r'turn (?:slightly |sharp )?right', caseSensitive: false), 'Rechts abbiegen')
+          .replaceAll(RegExp(r'turn (?:slightly |sharp )?uturn', caseSensitive: false), 'Bitte wenden');
+    }
+    
+    if (lower.contains('bear')) {
+      return instruction
+          .replaceAll(RegExp(r'bear left', caseSensitive: false), 'Links halten')
+          .replaceAll(RegExp(r'bear right', caseSensitive: false), 'Rechts halten')
+          .replaceAll(RegExp(r'bear (?:toward|to)', caseSensitive: false), 'Richtung');
+    }
+    
+    if (lower.contains('keep')) {
+      return instruction
+          .replaceAll(RegExp(r'keep left', caseSensitive: false), 'Links halten')
+          .replaceAll(RegExp(r'keep right', caseSensitive: false), 'Rechts halten')
+          .replaceAll(RegExp(r'keep (?:straight|going)', caseSensitive: false), 'Geradeaus weiterfahren');
+    }
+    
+    if (lower.contains('take')) {
+      return instruction
+          .replaceAll(RegExp(r'take the \w+ (?:exit|ramp)', caseSensitive: false), 'Ausfahrt nehmen')
+          .replaceAll(RegExp(r'take (?:the )?exit', caseSensitive: false), 'Ausfahrt nehmen');
+    }
+    
+    if (lower.contains('enter') || lower.contains('merge')) {
+      return instruction
+          .replaceAll(RegExp(r'enter (?:the )?(?:roundabout|traffic circle|rotary)', caseSensitive: false), 'In den Kreisverkehr einfahren')
+          .replaceAll(RegExp(r'merge (?:onto|into)', caseSensitive: false), 'Auffahren auf');
+    }
+    
+    if (lower.contains('exit') || lower.contains('leave')) {
+      return instruction
+          .replaceAll(RegExp(r'exit (?:the )?(?:roundabout|traffic circle|rotary)', caseSensitive: false), 'Kreisverkehr verlassen')
+          .replaceAll(RegExp(r'exit (?:onto|to)', caseSensitive: false), 'Abfahrt auf');
+    }
+    
+    if (lower.contains('arrive') || lower.contains('destination')) {
+      return 'Ziel erreicht';
+    }
+    
+    // Wenn keine Übersetzung gefunden, gib original zurück
+    return instruction;
   }
 
   String _announcementFromInstruction(String instruction, String modifier, double distance) {
