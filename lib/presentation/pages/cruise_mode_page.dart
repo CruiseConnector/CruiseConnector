@@ -18,6 +18,7 @@ import 'package:cruise_connect/presentation/widgets/cruise/cruise_maneuver_indic
 import 'package:cruise_connect/presentation/widgets/cruise/cruise_navigation_info_panel.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/cruise_route_type_dialog.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/cruise_setup_card.dart';
+import 'package:cruise_connect/data/services/drive_control_panel.dart';
 
 class CruiseModePage extends StatefulWidget {
   const CruiseModePage({super.key, this.initialRoute});
@@ -78,6 +79,7 @@ class _CruiseModePageState extends State<CruiseModePage> {
   bool _isSimulationRunning = false;
   bool _isSimulationStepRunning = false;
   int _simulationIndex = 0;
+  final bool _isSimulationEnabled = false; // Task 2: Hard-Disable der Simulation
 
   bool _disposed = false;
 
@@ -223,14 +225,7 @@ class _CruiseModePageState extends State<CruiseModePage> {
               ),
             ),
           Positioned(
-            left: 16, right: 16, bottom: 20,
-            child: CruiseNavigationInfoPanel(
-              durationSeconds: _routeDuration,
-              distanceMeters: _routeDistance,
-            ),
-          ),
-          Positioned(
-            right: 16, bottom: 112,
+            right: 16, bottom: 260, // Weiter nach oben verschoben für das neue UI-Layout
             child: FloatingActionButton(
               heroTag: 'recenter_map_fab',
               backgroundColor: const Color(0xFF2D3138),
@@ -239,9 +234,9 @@ class _CruiseModePageState extends State<CruiseModePage> {
               child: const Icon(Icons.explore),
             ),
           ),
-          if (_fullRouteCoordinates.length > 1)
+          if (_isSimulationEnabled && _fullRouteCoordinates.length > 1)
             Positioned(
-              right: 16, bottom: 170,
+              right: 16, bottom: 320, // Weiter nach oben verschoben
               child: FloatingActionButton(
                 heroTag: 'simulation_fab',
                 mini: true,
@@ -251,6 +246,49 @@ class _CruiseModePageState extends State<CruiseModePage> {
                 child: Icon(_isSimulationRunning ? Icons.pause : Icons.play_arrow),
               ),
             ),
+          Positioned(
+            bottom: 0, left: 0, right: 0,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: CruiseNavigationInfoPanel(
+                    durationSeconds: _routeDuration,
+                    distanceMeters: _routeDistance,
+                  ),
+                ),
+                const SizedBox(height: 24), // Sauberer, deutlicher Abstand
+                DriveControlPanel(
+                  onStart: () async {
+                    _startNavigationTracking();
+                    _activateNavigationCamera(); // Kamera in den 3D Go-Modus kippen
+                    
+                    // Task 2: 3km-Cut exakt in dem Moment anwenden, wenn "Fahrt starten" gedrückt wird
+                    final windowEnd = _findLookAheadIndex(_currentRouteIndex, 3000);
+                    setState(() {
+                      _remainingRouteCoordinates = _fullRouteCoordinates.sublist(_currentRouteIndex, windowEnd);
+                    });
+                    await _drawRoute(
+                      {'type': 'LineString', 'coordinates': _remainingRouteCoordinates},
+                      animateCamera: false,
+                    );
+                  },
+                  onPause: () {
+                    _stopNavigationTracking(); // GPS-Tracking pausieren
+                  },
+                  onStop: () {
+                    _stopNavigationTracking();
+                    _stopSimulation(restartLiveTracking: false);
+                    setState(() {
+                      _isRouteConfirmed = false;
+                      _viewportState = null; // Zurück zur 2D-Ansicht
+                    });
+                  },
+                ),
+              ],
+            ),
+          ),
         ],
       ),
     );
@@ -669,10 +707,8 @@ class _CruiseModePageState extends State<CruiseModePage> {
     setState(() {
       _isRouteConfirmed = true;
       _currentRouteIndex = 0;
-      final windowEnd = _findLookAheadIndex(0, 3000);
-      _remainingRouteCoordinates = total >= 2
-          ? _fullRouteCoordinates.sublist(0, windowEnd)
-          : _fullRouteCoordinates;
+      // Task 1: Full Route Preview - Hier wird die komplette Route gezeichnet, noch kein 3km Cut!
+      _remainingRouteCoordinates = _fullRouteCoordinates;
     });
 
     // Route sofort speichern (ohne Bewertung)
@@ -694,14 +730,14 @@ class _CruiseModePageState extends State<CruiseModePage> {
       }).catchError((_) {});
     }
 
-    _startNavigationTracking();
-    if (total >= 2) {
-      await _drawRoute(
-        {'type': 'LineString', 'coordinates': _remainingRouteCoordinates},
-        animateCamera: false,
-      );
-    }
-    await _activateNavigationCamera();
+    // _startNavigationTracking(); // Tracking startet erst bei Klick auf "Fahrt starten"
+    // if (total >= 2) {
+    //   await _drawRoute(
+    //     {'type': 'LineString', 'coordinates': _remainingRouteCoordinates},
+    //     animateCamera: false,
+    //   );
+    // }
+    // await _activateNavigationCamera(); // 3D Kamera startet erst bei "Fahrt starten"
   }
 
   // ═══════════════════════ LOOK-AHEAD HELPER ════════════════════════════════
@@ -817,6 +853,7 @@ class _CruiseModePageState extends State<CruiseModePage> {
       _currentRouteIndex = match.index;
       needsRebuild = true;
 
+      // Task 3: Dynamisches 3km-Fenster wandert während der Location-Updates sauber mit
       final windowEnd = _findLookAheadIndex(_currentRouteIndex, 3000);
       _remainingRouteCoordinates = _fullRouteCoordinates.sublist(_currentRouteIndex, windowEnd);
       final clipped = {'type': 'LineString', 'coordinates': _remainingRouteCoordinates};
@@ -990,6 +1027,7 @@ class _CruiseModePageState extends State<CruiseModePage> {
   }
 
   Future<void> _startSimulation() async {
+    if (!_isSimulationEnabled) return; // Hard-Disable Trigger
     if (_fullRouteCoordinates.length < 2) return;
     _stopNavigationTracking();
     _simulationIndex = 0;

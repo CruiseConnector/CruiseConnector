@@ -23,7 +23,7 @@ class SocialService {
 
     final posts = await _db
         .from('posts')
-        .select('*, profiles!posts_user_id_fkey(username, email, avatar_url)')
+        .select('*, profiles!posts_user_id_fkey(username, email)')
         .inFilter('user_id', ids)
         .order('created_at', ascending: false)
         .limit(50);
@@ -34,7 +34,7 @@ class SocialService {
   static Future<List<Map<String, dynamic>>> getUserPosts(String userId) async {
     final posts = await _db
         .from('posts')
-        .select('*, profiles!posts_user_id_fkey(username, email, avatar_url)')
+        .select('*, profiles!posts_user_id_fkey(username, email)')
         .eq('user_id', userId)
         .order('created_at', ascending: false);
 
@@ -45,7 +45,7 @@ class SocialService {
     // Neueste öffentliche Posts von allen
     final posts = await _db
         .from('posts')
-        .select('*, profiles!posts_user_id_fkey(username, email, avatar_url)')
+        .select('*, profiles!posts_user_id_fkey(username, email)')
         .order('created_at', ascending: false)
         .limit(30);
 
@@ -177,7 +177,7 @@ class SocialService {
 
     final results = await _db
         .from('profiles')
-        .select('id, username, email, avatar_url, bio')
+        .select('id, username, email')
         .or('username.ilike.%$query%,email.ilike.%$query%')
         .limit(20);
 
@@ -286,7 +286,7 @@ class SocialService {
 
     final results = await _db
         .from('notifications')
-        .select('*, profiles!notifications_from_user_id_fkey(username, email, avatar_url)')
+        .select('*, profiles!notifications_from_user_id_fkey(username, email)')
         .eq('user_id', uid)
         .order('created_at', ascending: false)
         .limit(50);
@@ -326,7 +326,7 @@ class SocialService {
 
     final profile = await _db
         .from('profiles')
-        .select('username, email, avatar_url, bio, created_at')
+        .select('username, email, created_at')
         .eq('id', userId)
         .maybeSingle();
 
@@ -335,8 +335,6 @@ class SocialService {
       'following_count': following,
       'username': profile?['username'],
       'email': profile?['email'],
-      'avatar_url': profile?['avatar_url'],
-      'bio': profile?['bio'],
       'created_at': profile?['created_at'],
     };
   }
