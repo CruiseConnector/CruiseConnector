@@ -53,7 +53,35 @@ class _RegisterPageState extends State<RegisterPage> {
 
     try {
       await AuthService.signUp(email: email, password: password, username: username);
-      // AuthPage-Stream erkennt die neue Session und navigiert automatisch
+      if (!mounted) return;
+      await showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: const Row(
+            children: [
+              Icon(Icons.mark_email_unread_outlined, color: Color(0xFFEF4F4F)),
+              SizedBox(width: 10),
+              Text('E-Mail bestätigen'),
+            ],
+          ),
+          content: Text(
+            'Wir haben eine Bestätigungs-E-Mail an $email gesendet.\n\nBitte öffne die E-Mail und klicke auf den Link, um dein Konto zu aktivieren.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Zur Anmeldung', style: TextStyle(color: Color(0xFFEF4F4F), fontWeight: FontWeight.bold)),
+            ),
+          ],
+        ),
+      );
+      if (!mounted) return;
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => const LoginPage()),
+      );
     } on AuthException catch (e) {
       setState(() => _errorMsg = _translateError(e.message));
     } catch (_) {

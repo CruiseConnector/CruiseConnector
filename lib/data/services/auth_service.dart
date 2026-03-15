@@ -34,20 +34,11 @@ class AuthService {
         ? username!.trim()
         : email.split('@').first;
 
-    final response = await _db.auth.signUp(
+    await _db.auth.signUp(
       email: email,
       password: password,
       data: {'username': derivedName},
     );
-
-    // Profil anlegen (Trigger macht das zwar auch, aber als Fallback):
-    if (response.user != null) {
-      await _db.from('profiles').upsert({
-        'id': response.user!.id,
-        'email': email,
-        'username': derivedName,
-      });
-    }
   }
 
   // ─── Abmelden ─────────────────────────────────────────────────────────────

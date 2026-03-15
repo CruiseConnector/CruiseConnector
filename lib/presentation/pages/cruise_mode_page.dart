@@ -82,12 +82,23 @@ class _CruiseModePageState extends State<CruiseModePage> {
   // final FlutterTts _flutterTts = FlutterTts();
   // bool _ttsAvailable = false;
 
+  bool _disposed = false;
+
   // ──────────────────────────────────────────────────────────────────────────
+
+  /// Sichere setState-Alternative: verhindert Aufrufe nach dispose().
+  /// Flutter setzt _element erst NACH dispose() auf null, daher reicht
+  /// `mounted` allein nicht als Schutz gegen den lockState-Zeitraum.
+  void _safeSetState(VoidCallback fn) {
+    if (mounted && !_disposed) setState(fn);
+  }
+
   @override
   void dispose() {
-    // Navigation läuft im Hintergrund weiter bis expliziter "Zurück"
+    _disposed = true;
     _stopSimulation(restartLiveTracking: false);
-    // NICHT: _positionSubscription?.cancel()
+    _positionSubscription?.cancel();
+    _mapboxMap = null; // Verhindert unknown_view PlatformException nach Widget-Removal
     _destinationController.dispose();
     super.dispose();
   }
@@ -237,16 +248,26 @@ class _CruiseModePageState extends State<CruiseModePage> {
           textureView: true,
           styleUri: MapboxStyles.DARK,
           onMapCreated: _onMapCreated,
-          onStyleLoadedListener: (_) {
-            if (!mounted) return;
-            setState(() {
+          onStyleLoadedListener: (_) async {
+            if (!mounted || _disposed) return;
+            _safeSetState(() {
               _isMapStyleLoaded = true;
               _mapLoadError = null;
             });
+            // Jetzt ist der Style geladen – Location-Puck sicher aktivieren
+            try {
+              await _mapboxMap?.location.updateSettings(
+                LocationComponentSettings(
+                  enabled: true,
+                  puckBearingEnabled: true,
+                  puckBearing: PuckBearing.HEADING,
+                ),
+              );
+            } catch (_) {}
           },
           onMapLoadErrorListener: (event) {
-            if (!mounted) return;
-            setState(() => _mapLoadError = event.message);
+            if (!mounted || _disposed) return;
+            _safeSetState(() => _mapLoadError = event.message);
           },
           cameraOptions: CameraOptions(zoom: 13.0, pitch: 0.0, bearing: 0.0),
           viewport: _viewportState,
@@ -292,7 +313,7 @@ class _CruiseModePageState extends State<CruiseModePage> {
     _greyAnnotationManager = null;
     _polylineAnnotationManager = null;
     _cursorAnnotationManager = null;
-    if (mounted) setState(() => _isMapStyleLoaded = false);
+    _safeSetState(() => _isMapStyleLoaded = false);
 
     try {
       if (_routeGeoJson != null) {
@@ -305,9 +326,7 @@ class _CruiseModePageState extends State<CruiseModePage> {
       if (_userLocation != null) await _updateVisibleCursor(_userLocation!);
     } catch (e) {
       debugPrint('Map initialization failed: $e');
-      if (mounted) {
-        setState(() => _mapLoadError = 'Karte konnte nicht initialisiert werden.');
-      }
+      _safeSetState(() => _mapLoadError = 'Karte konnte nicht initialisiert werden.');
     }
   }
 
@@ -599,13 +618,6 @@ class _CruiseModePageState extends State<CruiseModePage> {
       _userLocation = position;
       debugPrint('Standort gefunden: ${position.latitude}, ${position.longitude}');
 
-      await _mapboxMap?.location.updateSettings(
-        LocationComponentSettings(
-          enabled: true,
-          puckBearingEnabled: true,
-          puckBearing: PuckBearing.HEADING,
-        ),
-      );
       _mapboxMap?.setCamera(
         CameraOptions(
           center: Point(coordinates: Position(position.longitude, position.latitude)),
@@ -728,7 +740,7 @@ class _CruiseModePageState extends State<CruiseModePage> {
     } catch (e) {
       _showError(e.toString());
     } finally {
-      if (mounted) setState(() => _isLoading = false);
+      _safeSetState(() => _isLoading = false);
     }
   }
 
@@ -763,7 +775,7 @@ class _CruiseModePageState extends State<CruiseModePage> {
     } catch (e) {
       _showError(e.toString());
     } finally {
-      if (mounted) setState(() => _isLoading = false);
+      _safeSetState(() => _isLoading = false);
     }
   }
 
@@ -823,13 +835,23 @@ class _CruiseModePageState extends State<CruiseModePage> {
           : _fullRouteCoordinates;
     });
 
-    // Route automatisch für eingeloggten User speichern (feuern & vergessen)
+    // Route für eingeloggten User speichern
     if (_lastRouteResult != null) {
       SavedRoutesService.saveRoute(
         result: _lastRouteResult!,
         style: _selectedStyle,
         isRoundTrip: _isRoundTrip,
-      ).catchError((_) {}); // Fehler still ignorieren — Navigation nicht blockieren
+      ).then((_) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Route gespeichert'),
+              duration: Duration(seconds: 2),
+              backgroundColor: Color(0xFF1A1F26),
+            ),
+          );
+        }
+      }).catchError((_) {});
     }
 
     _startNavigationTracking();
@@ -936,7 +958,7 @@ class _CruiseModePageState extends State<CruiseModePage> {
   }
 
   Future<void> _onLocationUpdate(geo.Position position) async {
-    if (!mounted) return;
+    if (!mounted || _disposed) return;
     _userLocation = position;
     await _updateVisibleCursor(position);
 
@@ -975,7 +997,7 @@ class _CruiseModePageState extends State<CruiseModePage> {
     if (_activeManeuverIndex != prevManeuver) needsRebuild = true;
 
     // setState nur wenn sich etwas Sichtbares geändert hat
-    if (needsRebuild && mounted) setState(() {});
+    if (needsRebuild) _safeSetState(() {});
   }
 
   void _updateActiveManeuver() {
@@ -1048,13 +1070,17 @@ class _CruiseModePageState extends State<CruiseModePage> {
       position = await _getStartCoordinates();
     }
     _userLocation = position;
-    await _mapboxMap!.location.updateSettings(
-      LocationComponentSettings(
-        enabled: true,
-        puckBearingEnabled: true,
-        puckBearing: PuckBearing.HEADING,
-      ),
-    );
+    if (_isMapStyleLoaded) {
+      try {
+        await _mapboxMap?.location.updateSettings(
+          LocationComponentSettings(
+            enabled: true,
+            puckBearingEnabled: true,
+            puckBearing: PuckBearing.HEADING,
+          ),
+        );
+      } catch (_) {}
+    }
     await _mapboxMap!.setCamera(
       CameraOptions(
         center: Point(coordinates: Position(position.longitude, position.latitude)),
@@ -1063,15 +1089,13 @@ class _CruiseModePageState extends State<CruiseModePage> {
         bearing: position.heading.isFinite ? position.heading : 0.0,
       ),
     );
-    if (mounted) {
-      setState(() {
-        _viewportState = const FollowPuckViewportState(
-          zoom: 16.0,
-          pitch: 45.0,
-          bearing: FollowPuckViewportStateBearingHeading(),
-        );
-      });
-    }
+    _safeSetState(() {
+      _viewportState = const FollowPuckViewportState(
+        zoom: 16.0,
+        pitch: 45.0,
+        bearing: FollowPuckViewportStateBearingHeading(),
+      );
+    });
   }
 
   // ═══════════════════════ CURSOR ═══════════════════════════════════════════
@@ -1128,6 +1152,7 @@ class _CruiseModePageState extends State<CruiseModePage> {
   Future<void> _toggleSimulation() async {
     if (_isSimulationRunning) {
       _stopSimulation();
+      _safeSetState(() {});
       return;
     }
     await _startSimulation();
@@ -1151,22 +1176,34 @@ class _CruiseModePageState extends State<CruiseModePage> {
     final first = _fullRouteCoordinates.first;
     final second = _fullRouteCoordinates[1];
     await _focusCameraOnPosition(_buildSimulatedPosition(first, second), animated: true);
-    if (mounted) setState(() {});
+    _safeSetState(() {});
 
     _simulationTimer?.cancel();
-    _simulationTimer = Timer.periodic(const Duration(milliseconds: 850), (_) {
-      _runSimulationStep();
-    });
+    _scheduleNextSimulationStep();
   }
 
   void _stopSimulation({bool restartLiveTracking = true}) {
     _simulationTimer?.cancel();
     _simulationTimer = null;
     _isSimulationStepRunning = false;
-    final wasRunning = _isSimulationRunning;
     _isSimulationRunning = false;
     if (restartLiveTracking && _isRouteConfirmed) _startNavigationTracking();
-    if (wasRunning && mounted) setState(() {});
+  }
+
+  void _scheduleNextSimulationStep() {
+    _simulationTimer?.cancel();
+    if (!_isSimulationRunning || _fullRouteCoordinates.length < 2) return;
+    final lastIndex = _fullRouteCoordinates.length - 1;
+    if (_simulationIndex >= lastIndex) return;
+
+    final current = _fullRouteCoordinates[_simulationIndex];
+    final next = _fullRouteCoordinates[math.min(_simulationIndex + 1, lastIndex)];
+    final distMeters = geo.Geolocator.distanceBetween(
+      current[1], current[0], next[1], next[0],
+    );
+    // 100 km/h = 27.78 m/s → delay per segment
+    final delayMs = (distMeters / 27.78 * 1000).round().clamp(30, 5000);
+    _simulationTimer = Timer(Duration(milliseconds: delayMs), _runSimulationStep);
   }
 
   Future<void> _runSimulationStep() async {
@@ -1179,16 +1216,22 @@ class _CruiseModePageState extends State<CruiseModePage> {
       final lastIndex = _fullRouteCoordinates.length - 1;
       if (_simulationIndex >= lastIndex) {
         _stopSimulation();
+        _safeSetState(() {});
         return;
       }
       _simulationIndex = math.min(_simulationIndex + 1, lastIndex);
       final current = _fullRouteCoordinates[_simulationIndex];
       final next = _fullRouteCoordinates[math.min(_simulationIndex + 1, lastIndex)];
       await _onLocationUpdate(_buildSimulatedPosition(current, next));
-      if (_simulationIndex >= lastIndex) _stopSimulation();
+      if (_simulationIndex >= lastIndex) {
+        _stopSimulation();
+        _safeSetState(() {});
+        return;
+      }
     } finally {
       _isSimulationStepRunning = false;
     }
+    _scheduleNextSimulationStep();
   }
 
   geo.Position _buildSimulatedPosition(List<double> current, List<double> next) {
@@ -1200,7 +1243,7 @@ class _CruiseModePageState extends State<CruiseModePage> {
       accuracy: 5,
       altitude: 0,
       heading: heading,
-      speed: 13.5,
+      speed: 27.78,
       speedAccuracy: 1,
       altitudeAccuracy: 0,
       headingAccuracy: 5,
@@ -1357,7 +1400,7 @@ class _CruiseModePageState extends State<CruiseModePage> {
   }
 
   void _showError(String message) {
-    if (!mounted) return;
+    if (!mounted || _disposed) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('Fehler: $message'), backgroundColor: Colors.red),
     );

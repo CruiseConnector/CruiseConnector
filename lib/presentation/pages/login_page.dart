@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:cruise_connect/data/services/auth_service.dart';
+import 'package:cruise_connect/presentation/pages/home_page.dart';
 
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
@@ -37,7 +38,11 @@ class _LoginPageState extends State<LoginPage> {
 
     try {
       await AuthService.signIn(email: email, password: password);
-      // AuthPage-Stream reagiert automatisch → kein manueller Navigator nötig
+      if (!mounted) return;
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const HomePage()),
+        (route) => false,
+      );
     } on AuthException catch (e) {
       setState(() => _errorMsg = _translateError(e.message));
     } catch (_) {

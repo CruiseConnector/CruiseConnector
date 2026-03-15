@@ -1,3 +1,6 @@
+import 'dart:async';
+
+import 'package:flutter/services.dart';
 import 'package:flutter/material.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -15,7 +18,14 @@ void main() async {
     anonKey: AppConstants.supabaseAnonKey,
   );
 
-  runApp(const MyApp());
+  runZonedGuarded(
+    () => runApp(const MyApp()),
+    (error, stack) {
+      // Bekannter Mapbox-SDK Bug: view wird disposed bevor SDK es erwartet
+      if (error is PlatformException && error.code == 'unknown_view') return;
+      FlutterError.reportError(FlutterErrorDetails(exception: error, stack: stack));
+    },
+  );
 }
 
 class MyApp extends StatelessWidget {
