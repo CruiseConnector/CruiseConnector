@@ -1,11 +1,11 @@
+import 'package:cruise_connect/presentation/pages/interactive_post_card.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-
-import 'package:cruise_connect/data/services/auth_service.dart';
-import 'package:cruise_connect/data/services/saved_routes_service.dart';
-import 'package:cruise_connect/domain/models/saved_route.dart';
-import 'package:cruise_connect/presentation/pages/cruise_mode_page.dart';
 import 'package:cruise_connect/presentation/pages/welcome_page.dart';
+import 'package:cruise_connect/presentation/pages/create_post_page.dart';
+import 'package:cruise_connect/presentation/pages/edit_profile_page.dart';
+import 'package:cruise_connect/presentation/pages/settings_page.dart';
 
 class ProfilePage extends StatefulWidget {
   const ProfilePage({super.key});
@@ -14,533 +14,314 @@ class ProfilePage extends StatefulWidget {
   State<ProfilePage> createState() => _ProfilePageState();
 }
 
-class _ProfilePageState extends State<ProfilePage> {
-  List<SavedRoute> _routes = const [];
-  bool _loadingRoutes = true;
-  String? _username;
+class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStateMixin {
+  late TabController _tabController;
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
 
   @override
   void initState() {
     super.initState();
-    _load();
-  }
-
-  Future<void> _load() async {
-    try {
-      final results = await Future.wait([
-        SavedRoutesService.getUserRoutes(),
-        AuthService.getUsername(),
-      ]);
-      if (!mounted) return;
-      setState(() {
-        _routes        = results[0] as List<SavedRoute>;
-        _username      = results[1] as String?;
-        _loadingRoutes = false;
-      });
-    } catch (_) {
-      if (!mounted) return;
-      setState(() => _loadingRoutes = false);
-    }
-  }
-
-  Future<void> _deleteRoute(String id) async {
-    await SavedRoutesService.deleteRoute(id);
-    setState(() => _routes.removeWhere((r) => r.id == id));
-  }
-
-  Future<void> _signOut() async {
-    await AuthService.signOut();
-    if (!mounted) return;
-    Navigator.pushAndRemoveUntil(
-      context,
-      MaterialPageRoute(builder: (_) => const WelcomePage()),
-      (_) => false,
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final user  = Supabase.instance.client.auth.currentUser;
-    final email = user?.email ?? '–';
-    final name  = _username ?? email.split('@').first;
-
-    return SingleChildScrollView(
-      physics: const BouncingScrollPhysics(),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 16, 20, 30),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // ── Profilkarte ────────────────────────────────────────────────
-            Container(
-              padding: const EdgeInsets.all(20),
-              decoration: BoxDecoration(
-                color: const Color(0xFF1A1F26),
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
-              ),
-              child: Row(
-                children: [
-                  // Avatar
-                  Container(
-                    width: 64, height: 64,
-                    decoration: const BoxDecoration(
-                      color: Color(0xFFFF3B30),
-                      shape: BoxShape.circle,
-                    ),
-                    child: Center(
-                      child: Text(
-                        name.isNotEmpty ? name[0].toUpperCase() : '?',
-                        style: const TextStyle(color: Colors.white, fontSize: 28, fontWeight: FontWeight.bold),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 16),
-                  // Info
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          name,
-                          style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          email,
-                          style: const TextStyle(color: Color(0xFFA0AEC0), fontSize: 13),
-                        ),
-                        const SizedBox(height: 8),
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFFF3B30).withValues(alpha: 0.15),
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                          child: const Text('Aktiv', style: TextStyle(color: Color(0xFFFF3B30), fontSize: 12, fontWeight: FontWeight.w600)),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 24),
-
-            // ── Statistik ─────────────────────────────────────────────────
-            _sectionTitle('Statistiken'),
-            const SizedBox(height: 10),
-            Row(
-              children: [
-                _statCard('${_routes.length}', 'Routen', Icons.route),
-                const SizedBox(width: 12),
-                _statCard(
-                  _routes.isEmpty
-                      ? '0 km'
-                      : '${_routes.fold(0.0, (s, r) => s + r.distanceKm).toStringAsFixed(0)} km',
-                  'Gesamt',
-                  Icons.speed,
-                ),
-                const SizedBox(width: 12),
-                _statCard(
-                  _routes.isEmpty
-                      ? '0'
-                      : '${_routes.where((r) => r.isRoundTrip).length}',
-                  'Rundkurse',
-                  Icons.loop,
-                ),
-              ],
-            ),
-            const SizedBox(height: 28),
-
-            // ── Gespeicherte Routen ───────────────────────────────────────
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                _sectionTitle('Gespeicherte Routen'),
-                if (_loadingRoutes)
-                  const SizedBox(
-                    width: 16, height: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFFFF3B30)),
-                  ),
-              ],
-            ),
-            const SizedBox(height: 10),
-
-            if (!_loadingRoutes && _routes.isEmpty)
-              _emptyRoutes()
-            else
-              ListView.separated(
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                itemCount: _routes.length,
-                separatorBuilder: (context, i) => const SizedBox(height: 10),
-                itemBuilder: (_, i) => _routeCard(_routes[i]),
-              ),
-
-            const SizedBox(height: 28),
-
-            // ── Menü ──────────────────────────────────────────────────────
-            _sectionTitle('Konto'),
-            const SizedBox(height: 10),
-            Container(
-              decoration: BoxDecoration(
-                color: const Color(0xFF1A1F26),
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
-              ),
-              child: Column(
-                children: [
-                  _menuItem(Icons.settings_outlined, 'Einstellungen', onTap: () {}),
-                  _divider(),
-                  _menuItem(Icons.help_outline, 'Hilfe & Support', onTap: () {}),
-                  _divider(),
-                  _menuItem(Icons.info_outline, 'Über CruiseConnect', onTap: () {}),
-                  _divider(),
-                  _menuItem(
-                    Icons.logout,
-                    'Abmelden',
-                    color: const Color(0xFFFF3B30),
-                    onTap: _signOut,
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  // ── Helper Widgets ─────────────────────────────────────────────────────────
-
-  Widget _sectionTitle(String text) => Text(
-    text,
-    style: const TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.bold),
-  );
-
-  Widget _statCard(String value, String label, IconData icon) => Expanded(
-    child: Container(
-      padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 10),
-      decoration: BoxDecoration(
-        color: const Color(0xFF1A1F26),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
-      ),
-      child: Column(
-        children: [
-          Icon(icon, color: const Color(0xFFFF3B30), size: 22),
-          const SizedBox(height: 6),
-          Text(value, style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
-          const SizedBox(height: 2),
-          Text(label, style: const TextStyle(color: Color(0xFFA0AEC0), fontSize: 11)),
-        ],
-      ),
-    ),
-  );
-
-  Widget _routeCard(SavedRoute route) {
-    return Dismissible(
-      key: ValueKey(route.id),
-      direction: DismissDirection.endToStart,
-      background: Container(
-        alignment: Alignment.centerRight,
-        padding: const EdgeInsets.only(right: 20),
-        decoration: BoxDecoration(
-          color: Colors.red.shade800,
-          borderRadius: BorderRadius.circular(16),
-        ),
-        child: const Icon(Icons.delete_outline, color: Colors.white),
-      ),
-      onDismissed: (_) => _deleteRoute(route.id),
-      child: Container(
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          color: const Color(0xFF1A1F26),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
-        ),
-        child: Row(
-          children: [
-            // Style-Emoji
-            Container(
-              width: 44, height: 44,
-              decoration: BoxDecoration(
-                color: const Color(0xFF0B0E14),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Center(
-                child: Text(route.styleEmoji, style: const TextStyle(fontSize: 22)),
-              ),
-            ),
-            const SizedBox(width: 12),
-            // Info
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    route.name ?? route.style,
-                    style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w600),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  const SizedBox(height: 4),
-                  Row(
-                    children: [
-                      const Icon(Icons.straighten, size: 12, color: Color(0xFFA0AEC0)),
-                      const SizedBox(width: 4),
-                      Text(route.formattedDistance, style: const TextStyle(color: Color(0xFFA0AEC0), fontSize: 12)),
-                      const SizedBox(width: 12),
-                      const Icon(Icons.timer_outlined, size: 12, color: Color(0xFFA0AEC0)),
-                      const SizedBox(width: 4),
-                      Text(route.formattedDuration, style: const TextStyle(color: Color(0xFFA0AEC0), fontSize: 12)),
-                      const SizedBox(width: 12),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFFF3B30).withValues(alpha: 0.12),
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        child: Text(
-                          route.isRoundTrip ? 'Rundkurs' : 'A → B',
-                          style: const TextStyle(color: Color(0xFFFF3B30), fontSize: 10, fontWeight: FontWeight.w600),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-            // Aktionen
-            Column(
-              children: [
-                IconButton(
-                  icon: const Icon(Icons.play_circle_fill, color: Color(0xFFFF3B30), size: 28),
-                  tooltip: 'Route starten',
-                  onPressed: () => _startRoute(route),
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(),
-                ),
-                const SizedBox(height: 8),
-                IconButton(
-                  icon: const Icon(Icons.share_outlined, color: Color(0xFFA0AEC0), size: 20),
-                  tooltip: 'Route teilen',
-                  onPressed: () => _shareRoute(route),
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  void _startRoute(SavedRoute route) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => Scaffold(
-          body: CruiseModePage(initialRoute: route),
-        ),
-      ),
-    );
-  }
-
-  void _shareRoute(SavedRoute route) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => _ShareRouteAsPostPage(route: route),
-      ),
-    );
-  }
-
-  Widget _emptyRoutes() => Container(
-    padding: const EdgeInsets.symmetric(vertical: 32),
-    alignment: Alignment.center,
-    decoration: BoxDecoration(
-      color: const Color(0xFF1A1F26),
-      borderRadius: BorderRadius.circular(16),
-      border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
-    ),
-    child: Column(
-      children: const [
-        Icon(Icons.route, size: 40, color: Color(0xFF2D3748)),
-        SizedBox(height: 12),
-        Text('Noch keine Routen gespeichert', style: TextStyle(color: Color(0xFFA0AEC0), fontSize: 14)),
-        SizedBox(height: 4),
-        Text('Fahre los und bestätige deine erste Route!', style: TextStyle(color: Color(0xFF4A5568), fontSize: 12)),
-      ],
-    ),
-  );
-
-  Widget _menuItem(IconData icon, String label, {required VoidCallback onTap, Color? color}) {
-    final c = color ?? Colors.white;
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(12),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-        child: Row(
-          children: [
-            Icon(icon, color: c, size: 22),
-            const SizedBox(width: 14),
-            Expanded(child: Text(label, style: TextStyle(color: c, fontSize: 15))),
-            Icon(Icons.chevron_right, color: c.withValues(alpha: 0.4), size: 20),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _divider() => Divider(height: 1, color: Colors.white.withValues(alpha: 0.06), indent: 52);
-
-  String _formatDate(DateTime dt) {
-    return '${dt.day.toString().padLeft(2, '0')}.${dt.month.toString().padLeft(2, '0')}.${dt.year}';
-  }
-}
-
-// ═══════════════════════ SHARE ROUTE AS POST ════════════════════════════════
-
-class _ShareRouteAsPostPage extends StatefulWidget {
-  const _ShareRouteAsPostPage({required this.route});
-  final SavedRoute route;
-
-  @override
-  State<_ShareRouteAsPostPage> createState() => _ShareRouteAsPostPageState();
-}
-
-class _ShareRouteAsPostPageState extends State<_ShareRouteAsPostPage> {
-  final _textController = TextEditingController();
-  bool _posting = false;
-
-  @override
-  void initState() {
-    super.initState();
-    final r = widget.route;
-    _textController.text =
-        'Schaut euch meine Route an! ${r.styleEmoji}\n'
-        '${r.formattedDistance} - ${r.formattedDuration}\n'
-        '${r.isRoundTrip ? "Rundkurs" : "A \u2192 B"} im Stil "${r.style}"';
+    _tabController = TabController(length: 2, vsync: this);
   }
 
   @override
   void dispose() {
-    _textController.dispose();
+    _tabController.dispose();
     super.dispose();
   }
 
-  Future<void> _post() async {
-    if (_textController.text.trim().isEmpty) return;
-    setState(() => _posting = true);
-    try {
-      final userId = Supabase.instance.client.auth.currentUser?.id;
-      if (userId == null) return;
+  void signUserOut() async {
+    await Supabase.instance.client.auth.signOut();
 
-      final username = await AuthService.getUsername();
-
-      await Supabase.instance.client.from('posts').insert({
-        'user_id': userId,
-        'username': username ?? 'Unbekannt',
-        'content': _textController.text.trim(),
-        'route_id': widget.route.id,
-        'route_style': widget.route.style,
-        'route_distance_km': widget.route.distanceKm,
-        'route_name': widget.route.name ?? widget.route.style,
-      });
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Route geteilt!'), backgroundColor: Color(0xFF1A1F26)),
-        );
-        Navigator.pop(context);
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Fehler: $e'), backgroundColor: Colors.red),
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _posting = false);
+    if (mounted) {
+      Navigator.pushAndRemoveUntil(
+        context,
+        MaterialPageRoute(builder: (context) => const WelcomePage()),
+        (route) => false,
+      );
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final r = widget.route;
+    final user = Supabase.instance.client.auth.currentUser;
+    final String userEmail = user?.email ?? "user@cruiseconnect.com";
+    final String userName = (user?.userMetadata?['username'] as String?) ?? "Cruiser";
+    final String userHandle = "@${userEmail.split('@')[0]}";
+
     return Scaffold(
+      key: _scaffoldKey,
       backgroundColor: const Color(0xFF0B0E14),
-      appBar: AppBar(
-        backgroundColor: const Color(0xFF0B0E14),
-        elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.close, color: Colors.white),
-          onPressed: () => Navigator.pop(context),
-        ),
-        title: const Text('Route teilen', style: TextStyle(color: Colors.white)),
-        actions: [
-          Padding(
-            padding: const EdgeInsets.only(right: 12, top: 8, bottom: 8),
-            child: ElevatedButton(
-              onPressed: _posting ? null : _post,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFFFF3B30),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-              ),
-              child: _posting
-                  ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                  : const Text('Posten', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-            ),
-          ),
-        ],
+      endDrawer: _buildBurgerMenu(),
+      floatingActionButton: FloatingActionButton(
+        backgroundColor: const Color(0xFFFF3B30),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        child: const Icon(Icons.add, color: Colors.white),
+        onPressed: () {
+          Navigator.push(context, MaterialPageRoute(builder: (_) => const CreatePostPage()));
+        },
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          children: [
-            // Route Info Card
-            Container(
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                color: const Color(0xFF1A1F26),
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: const Color(0xFFFF3B30).withValues(alpha: 0.3)),
+      body: NestedScrollView(
+        headerSliverBuilder: (context, innerBoxIsScrolled) {
+          return [
+            // A. SliverAppBar (Banner + Burger Menu)
+            SliverAppBar(
+              systemOverlayStyle: const SystemUiOverlayStyle(
+                statusBarColor: Colors.transparent,
+                statusBarIconBrightness: Brightness.light,
               ),
-              child: Row(
-                children: [
-                  Text(r.styleEmoji, style: const TextStyle(fontSize: 28)),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+              stretch: true,
+              expandedHeight: 150,
+              pinned: true,
+              backgroundColor: Colors.transparent,
+              elevation: 0,
+              automaticallyImplyLeading: false,
+              flexibleSpace: FlexibleSpaceBar(
+                background: ShaderMask(
+                  shaderCallback: (Rect bounds) {
+                    return const LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [
+                        Colors.white,
+                        Colors.transparent,
+                      ],
+                      stops: [0.6, 1.0],
+                    ).createShader(bounds);
+                  },
+                  blendMode: BlendMode.dstIn,
+                  child: Container(
+                    decoration: const BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [Color(0xFF1C1F26), Color(0xFF0B0E14)],
+                        stops: [0.3, 1.0],
+                      ),
+                    ),
+                    child: Center(
+                      child: Icon(Icons.camera_alt_outlined, size: 80, color: Colors.white.withOpacity(0.05)),
+                    ),
+                  ),
+                ),
+              ),
+              actions: [
+                Container(
+                  margin: const EdgeInsets.only(right: 8),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withOpacity(0.5),
+                    shape: BoxShape.circle,
+                  ),
+                  child: IconButton(
+                    icon: const Icon(Icons.menu, color: Colors.white),
+                    onPressed: () => _scaffoldKey.currentState?.openEndDrawer(),
+                  ),
+                ),
+              ],
+            ),
+
+            // B. SliverToBoxAdapter (Profil-Infos)
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Avatar & Edit Button Row
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      crossAxisAlignment: CrossAxisAlignment.end,
                       children: [
-                        Text(r.name ?? r.style, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                        const SizedBox(height: 4),
-                        Text(
-                          '${r.formattedDistance} \u00b7 ${r.formattedDuration} \u00b7 ${r.isRoundTrip ? "Rundkurs" : "A \u2192 B"}',
-                          style: const TextStyle(color: Color(0xFFA0AEC0), fontSize: 12),
+                        // Avatar (Overlapping)
+                        Transform.translate(
+                          offset: const Offset(0, -40),
+                          child: Container(
+                            padding: const EdgeInsets.all(5),
+                            decoration: const BoxDecoration(
+                              color: Color(0xFF0B0E14), // Match Scaffold bg for border effect
+                              shape: BoxShape.circle,
+                            ),
+                            child: const CircleAvatar(
+                              radius: 40,
+                              backgroundColor: Color(0xFF3A3E48),
+                              child: Icon(Icons.person, size: 40, color: Colors.white),
+                            ),
+                          ),
+                        ),
+                        // Edit Profile Button
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 10),
+                          child: GestureDetector(
+                            onTap: () {
+                              Navigator.push(context, MaterialPageRoute(builder: (_) => const EditProfilePage()));
+                            },
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                              decoration: BoxDecoration(
+                                color: Colors.transparent,
+                                borderRadius: BorderRadius.circular(20),
+                                border: Border.all(color: Colors.white30, width: 1),
+                              ),
+                              child: const Text(
+                                "Profil bearbeiten",
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 14,
+                                ),
+                              ),
+                            ),
+                          ),
                         ),
                       ],
                     ),
-                  ),
-                ],
+                    
+                    // Infos (Pull up slightly due to transform above)
+                    Transform.translate(
+                      offset: const Offset(0, -30),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            userName,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 24,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            userHandle,
+                            style: const TextStyle(
+                              color: Colors.grey,
+                              fontSize: 15,
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          Row(
+                            children: [
+                              const Icon(Icons.calendar_month_outlined, color: Colors.grey, size: 16),
+                              const SizedBox(width: 6),
+                              const Text(
+                                "Beigetreten April 2023",
+                                style: TextStyle(color: Colors.grey, fontSize: 14),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 12),
+                          Row(
+                            children: [
+                              _buildFollowStat("12", "Folge ich"),
+                              const SizedBox(width: 16),
+                              _buildFollowStat("240", "Follower"),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
-            const SizedBox(height: 16),
-            // Text Input
-            Expanded(
-              child: TextField(
-                controller: _textController,
-                style: const TextStyle(color: Colors.white, fontSize: 16),
-                maxLines: null,
-                decoration: const InputDecoration(
-                  hintText: 'Beschreibe deine Route...',
-                  hintStyle: TextStyle(color: Colors.grey),
-                  border: InputBorder.none,
+
+            // C. SliverPersistentHeader (Tabs)
+            SliverPersistentHeader(
+              delegate: _SliverAppBarDelegate(
+                TabBar(
+                  controller: _tabController,
+                  indicatorColor: const Color(0xFFFF3B30),
+                  indicatorSize: TabBarIndicatorSize.tab,
+                  labelColor: Colors.white,
+                  unselectedLabelColor: Colors.grey,
+                  labelStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                  tabs: const [
+                    Tab(text: "Posts"),
+                    Tab(text: "Aktive Gruppen"),
+                  ],
+                ),
+              ),
+              pinned: true,
+            ),
+          ];
+        },
+        body: TabBarView(
+          controller: _tabController,
+          children: [
+            // Tab 1: Posts
+            ListView(
+              padding: const EdgeInsets.only(top: 10, bottom: 40),
+              children: [
+                InteractivePostCard(name: userName, handle: userHandle, time: "2 Std.", content: "Endlich Level 5 erreicht! Die 'Alpine Master' Badge sieht im Profil echt gut aus. 🏔️🏎️", initialLikeCount: "24", initialCommentCount: "2"),
+                InteractivePostCard(name: userName, handle: userHandle, time: "1 Tag", content: "Suche noch Leute für den Night Run am Freitag. Wer ist dabei?", initialLikeCount: "5", initialCommentCount: "8"),
+                InteractivePostCard(name: userName, handle: userHandle, time: "3 Tage", content: "Mein neuer Rekord auf der Hausstrecke: 4:20 min. 🔥", initialLikeCount: "42", initialRepostCount: "3"),
+              ],
+            ),
+            
+            // Tab 2: Aktive Gruppen
+            ListView(
+              padding: const EdgeInsets.all(16),
+              children: [
+                _buildGroupCard("Alpine Rush", "Passstraße", "87 Km • 132 Kurven", 23, "18 Uhr | P3", true),
+                const SizedBox(height: 16),
+                _buildGroupCard("City Loop", "Innenstadt", "45 Km • 20 Kurven", 12, "22 Uhr | Tankstelle", true),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildBurgerMenu() {
+    return Drawer(
+      backgroundColor: const Color(0xFF1C1F26),
+      child: SafeArea(
+        child: Column(
+          children: [
+            const SizedBox(height: 20),
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 20),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  "Menü",
+                  style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold),
+                ),
+              ),
+            ),
+            const SizedBox(height: 20),
+            _buildMenuItem(
+              Icons.settings, 
+              "Einstellungen", 
+              onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const SettingsPage()))
+            ),
+            _buildMenuItem(Icons.lock, "Privatsphäre"),
+            _buildMenuItem(Icons.bookmark, "Gespeicherte Routen"),
+            _buildMenuItem(Icons.history, "Fahrtverlauf"),
+            _buildMenuItem(Icons.help_outline, "Hilfe & Support"),
+            
+            const Spacer(),
+            
+            Padding(
+              padding: const EdgeInsets.all(20.0),
+              child: SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: signUserOut,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFFFF3B30).withOpacity(0.1),
+                    foregroundColor: const Color(0xFFFF3B30),
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      side: const BorderSide(color: Color(0xFFFF3B30)),
+                    ),
+                  ),
+                  child: const Text(
+                    "Ausloggen",
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                  ),
                 ),
               ),
             ),
@@ -548,5 +329,166 @@ class _ShareRouteAsPostPageState extends State<_ShareRouteAsPostPage> {
         ),
       ),
     );
+  }
+
+  Widget _buildMenuItem(IconData icon, String title, {VoidCallback? onTap}) {
+    return ListTile(
+      leading: Icon(icon, color: Colors.white70),
+      title: Text(title, style: const TextStyle(color: Colors.white, fontSize: 16)),
+      onTap: () {
+        Navigator.pop(context); // Close drawer
+        if (onTap != null) {
+          onTap();
+        }
+      },
+    );
+  }
+
+  Widget _buildFollowStat(String count, String label) {
+    return Row(
+      children: [
+        Text(
+          count,
+          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15),
+        ),
+        const SizedBox(width: 4),
+        Text(
+          label,
+          style: const TextStyle(color: Colors.grey, fontSize: 15),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildGroupCard(String title, String routeName, String stats, int drivers, String timeLoc, bool isJoined) {
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFF1C1F26),
+        borderRadius: BorderRadius.circular(16),
+        border: isJoined ? Border.all(color: Colors.greenAccent.withOpacity(0.5), width: 1) : null,
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.2),
+            blurRadius: 8,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Stack(
+        children: [
+          IntrinsicHeight(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Expanded(
+                  flex: 3,
+                  child: Padding(
+                    padding: const EdgeInsets.all(16.0),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text(title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+                        const SizedBox(height: 8),
+                        Row(
+                          children: [
+                            const Icon(Icons.terrain, color: Colors.white70, size: 14),
+                            const SizedBox(width: 6),
+                            Text(routeName, style: const TextStyle(color: Colors.white, fontSize: 14)),
+                          ],
+                        ),
+                        const SizedBox(height: 6),
+                        Text(stats, style: const TextStyle(color: Colors.grey, fontSize: 11)),
+                        const SizedBox(height: 12),
+                        Row(
+                          children: [
+                            const Icon(Icons.local_fire_department, color: Colors.orange, size: 14),
+                            const SizedBox(width: 6),
+                            Text("$drivers Fahrer", style: const TextStyle(color: Colors.white70, fontSize: 12)),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                Expanded(
+                  flex: 2,
+                  child: Container(
+                    constraints: const BoxConstraints(minHeight: 130),
+                    decoration: BoxDecoration(
+                      borderRadius: const BorderRadius.only(
+                        topRight: Radius.circular(16),
+                        bottomRight: Radius.circular(16),
+                      ),
+                      image: const DecorationImage(
+                        image: AssetImage('lib/images/car_placeholder.jpg'),
+                        fit: BoxFit.cover,
+                      ),
+                    ),
+                    child: Container(
+                      decoration: BoxDecoration(
+                        borderRadius: const BorderRadius.only(
+                          topRight: Radius.circular(16),
+                          bottomRight: Radius.circular(16),
+                        ),
+                        gradient: LinearGradient(
+                          begin: Alignment.centerLeft,
+                          end: Alignment.centerRight,
+                          colors: [
+                            const Color(0xFF1C1F26),
+                            const Color(0xFF1C1F26).withOpacity(0.0),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (isJoined)
+            Positioned(
+              top: 12,
+              right: 12,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: Colors.greenAccent.withOpacity(0.2),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.greenAccent.withOpacity(0.5)),
+                ),
+                child: const Text(
+                  "Dabei",
+                  style: TextStyle(color: Colors.greenAccent, fontSize: 10, fontWeight: FontWeight.bold),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SliverAppBarDelegate extends SliverPersistentHeaderDelegate {
+  final TabBar _tabBar;
+
+  _SliverAppBarDelegate(this._tabBar);
+
+  @override
+  double get minExtent => _tabBar.preferredSize.height;
+  @override
+  double get maxExtent => _tabBar.preferredSize.height;
+
+  @override
+  Widget build(BuildContext context, double shrinkOffset, bool overlapsContent) {
+    return Container(
+      color: const Color(0xFF0B0E14), // Background color for sticky header
+      child: _tabBar,
+    );
+  }
+
+  @override
+  bool shouldRebuild(_SliverAppBarDelegate oldDelegate) {
+    return false;
   }
 }
