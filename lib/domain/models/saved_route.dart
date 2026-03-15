@@ -9,6 +9,7 @@ class SavedRoute {
     this.name,
     this.durationSeconds,
     this.routeType,
+    this.rating,
   });
 
   final String id;
@@ -19,6 +20,7 @@ class SavedRoute {
   final String? name;
   final double? durationSeconds;
   final String? routeType;
+  final int? rating;
 
   factory SavedRoute.fromJson(Map<String, dynamic> json) {
     return SavedRoute(
@@ -30,6 +32,7 @@ class SavedRoute {
       name: json['name'] as String?,
       durationSeconds: (json['duration_seconds'] as num?)?.toDouble(),
       routeType: (json['route_type'] as String?) ?? 'ROUND_TRIP',
+      rating: (json['rating'] as num?)?.toInt(),
     );
   }
 

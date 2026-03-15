@@ -3,10 +3,6 @@ import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
-// TTS deaktiviert:
-// import 'package:flutter/services.dart';
-// import 'package:flutter_tts/flutter_tts.dart';
-import 'package:flutter_typeahead/flutter_typeahead.dart';
 import 'package:geolocator/geolocator.dart' as geo;
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
 
@@ -16,11 +12,18 @@ import 'package:cruise_connect/data/services/saved_routes_service.dart';
 import 'package:cruise_connect/domain/models/mapbox_suggestion.dart';
 import 'package:cruise_connect/domain/models/route_maneuver.dart' show RouteManeuver;
 import 'package:cruise_connect/domain/models/route_result.dart';
+import 'package:cruise_connect/domain/models/saved_route.dart';
+import 'package:cruise_connect/presentation/widgets/cruise/cruise_completion_dialog.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/cruise_maneuver_indicator.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/cruise_navigation_info_panel.dart';
+import 'package:cruise_connect/presentation/widgets/cruise/cruise_route_type_dialog.dart';
+import 'package:cruise_connect/presentation/widgets/cruise/cruise_setup_card.dart';
 
 class CruiseModePage extends StatefulWidget {
-  const CruiseModePage({super.key});
+  const CruiseModePage({super.key, this.initialRoute});
+
+  /// Wenn gesetzt, wird diese Route direkt geladen und bestätigt.
+  final SavedRoute? initialRoute;
 
   @override
   State<CruiseModePage> createState() => _CruiseModePageState();
@@ -38,18 +41,16 @@ class _CruiseModePageState extends State<CruiseModePage> {
   String _selectedLocation = 'Aktueller Standort';
   String _selectedStyle = 'Sport Mode';
   final TextEditingController _destinationController = TextEditingController();
-  
+
   // ─────────────────────── A-to-B Route Selection State ──────────────────────
   MapboxSuggestion? _selectedDestination;
-  bool _showRouteTypeSelector = false;
-  String _selectedRouteMode = 'direct'; // 'direct', 'sport', 'scenic'
 
   // ─────────────────────── Route Result State ────────────────────────────────
   bool _isRouteConfirmed = false;
   String? _routeGeoJson;
   double? _routeDistance;
   double? _routeDuration;
-  RouteResult? _lastRouteResult; // Wird beim Speichern benötigt
+  RouteResult? _lastRouteResult;
 
   // ─────────────────────── Map State ─────────────────────────────────────────
   bool _isLoading = false;
@@ -78,19 +79,20 @@ class _CruiseModePageState extends State<CruiseModePage> {
   bool _isSimulationStepRunning = false;
   int _simulationIndex = 0;
 
-  // TTS deaktiviert - zu viele Audio-Probleme
-  // final FlutterTts _flutterTts = FlutterTts();
-  // bool _ttsAvailable = false;
-
   bool _disposed = false;
 
   // ──────────────────────────────────────────────────────────────────────────
 
-  /// Sichere setState-Alternative: verhindert Aufrufe nach dispose().
-  /// Flutter setzt _element erst NACH dispose() auf null, daher reicht
-  /// `mounted` allein nicht als Schutz gegen den lockState-Zeitraum.
   void _safeSetState(VoidCallback fn) {
     if (mounted && !_disposed) setState(fn);
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.initialRoute != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _loadSavedRoute(widget.initialRoute!));
+    }
   }
 
   @override
@@ -98,7 +100,7 @@ class _CruiseModePageState extends State<CruiseModePage> {
     _disposed = true;
     _stopSimulation(restartLiveTracking: false);
     _positionSubscription?.cancel();
-    _mapboxMap = null; // Verhindert unknown_view PlatformException nach Widget-Removal
+    _mapboxMap = null;
     _destinationController.dispose();
     super.dispose();
   }
@@ -147,16 +149,35 @@ class _CruiseModePageState extends State<CruiseModePage> {
                 child: Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
                   child: Column(
-                    children: [_buildSetupCard(), const SizedBox(height: 140)],
+                    children: [
+                      CruiseSetupCard(
+                        isRoundTrip: _isRoundTrip,
+                        planningType: _planningType,
+                        selectedLength: _selectedLength,
+                        selectedLocation: _selectedLocation,
+                        selectedStyle: _selectedStyle,
+                        selectedDestination: _selectedDestination,
+                        destinationController: _destinationController,
+                        onRoundTripChanged: (v) => setState(() => _isRoundTrip = v),
+                        onPlanningTypeChanged: (v) => setState(() => _planningType = v),
+                        onLengthChanged: (v) => setState(() => _selectedLength = v),
+                        onLocationChanged: (v) => setState(() => _selectedLocation = v),
+                        onStyleChanged: (v) => setState(() => _selectedStyle = v),
+                        onDestinationSelected: _onDestinationSelected,
+                        onDestinationCleared: () => setState(() {
+                          _selectedDestination = null;
+                          _destinationController.clear();
+                        }),
+                      ),
+                      const SizedBox(height: 140),
+                    ],
                   ),
                 ),
               ),
             ],
           ),
           Positioned(
-            bottom: 0,
-            left: 0,
-            right: 0,
+            bottom: 0, left: 0, right: 0,
             child: _buildBottomActions(),
           ),
         ],
@@ -195,22 +216,21 @@ class _CruiseModePageState extends State<CruiseModePage> {
           if (_maneuvers.isNotEmpty)
             Positioned(
               top: MediaQuery.of(context).padding.top + 8,
-              left: 12,
-              right: 12,
+              left: 12, right: 12,
               child: CruiseManeuverIndicator(
                 maneuver: _maneuvers[_activeManeuverIndex.clamp(0, _maneuvers.length - 1)],
                 userPosition: _userLocation,
               ),
             ),
           Positioned(
-            left: 16,
-            right: 16,
-            bottom: 20,
-            child: _buildEnhancedNavigationPanel(),
+            left: 16, right: 16, bottom: 20,
+            child: CruiseNavigationInfoPanel(
+              durationSeconds: _routeDuration,
+              distanceMeters: _routeDistance,
+            ),
           ),
           Positioned(
-            right: 16,
-            bottom: 112,
+            right: 16, bottom: 112,
             child: FloatingActionButton(
               heroTag: 'recenter_map_fab',
               backgroundColor: const Color(0xFF2D3138),
@@ -221,8 +241,7 @@ class _CruiseModePageState extends State<CruiseModePage> {
           ),
           if (_fullRouteCoordinates.length > 1)
             Positioned(
-              right: 16,
-              bottom: 170,
+              right: 16, bottom: 170,
               child: FloatingActionButton(
                 heroTag: 'simulation_fab',
                 mini: true,
@@ -254,7 +273,6 @@ class _CruiseModePageState extends State<CruiseModePage> {
               _isMapStyleLoaded = true;
               _mapLoadError = null;
             });
-            // Jetzt ist der Style geladen – Location-Puck sicher aktivieren
             try {
               await _mapboxMap?.location.updateSettings(
                 LocationComponentSettings(
@@ -308,6 +326,8 @@ class _CruiseModePageState extends State<CruiseModePage> {
     );
   }
 
+  // ═══════════════════════ MAP LIFECYCLE ═════════════════════════════════════
+
   Future<void> _onMapCreated(MapboxMap mapboxMap) async {
     _mapboxMap = mapboxMap;
     _greyAnnotationManager = null;
@@ -345,120 +365,6 @@ class _CruiseModePageState extends State<CruiseModePage> {
     });
   }
 
-  // ═══════════════════════ SETUP CARD ═══════════════════════════════════════
-
-  Widget _buildSetupCard() {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: const Color(0xFF1C1F26),
-        borderRadius: BorderRadius.circular(24),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            'Strecken-Setup',
-            style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
-          ),
-          const SizedBox(height: 24),
-          const Text(
-            'Routen-Modus',
-            style: TextStyle(color: Colors.grey, fontSize: 14, fontWeight: FontWeight.w500),
-          ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Expanded(
-                child: _buildLargeModeButton(
-                  label: 'Rundkurs',
-                  icon: Icons.loop,
-                  isActive: _isRoundTrip,
-                  onTap: () => setState(() => _isRoundTrip = true),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: _buildLargeModeButton(
-                  label: 'A nach B',
-                  icon: Icons.alt_route,
-                  isActive: !_isRoundTrip,
-                  onTap: () => setState(() => _isRoundTrip = false),
-                ),
-              ),
-            ],
-          ),
-          const Divider(color: Colors.white10, height: 32),
-          AnimatedCrossFade(
-            firstChild: _buildRoundTripOptions(),
-            secondChild: _buildAtoBOptions(),
-            crossFadeState: _isRoundTrip ? CrossFadeState.showFirst : CrossFadeState.showSecond,
-            duration: const Duration(milliseconds: 300),
-          ),
-          const Divider(color: Colors.white10, height: 32),
-          if (_isRoundTrip)
-            _buildSelectionRow(
-              'Länge',
-              ['20 Km', '50 Km', '100 Km', '+100 Km'],
-              _selectedLength,
-              (val) => setState(() => _selectedLength = val),
-            )
-          else
-            _buildDistanceInfoBox(),
-          const Divider(color: Colors.white10, height: 32),
-          _buildSelectionRow(
-            'Standort',
-            ['Aktueller Standort', 'Standort wählen'],
-            _selectedLocation,
-            (val) => setState(() => _selectedLocation = val),
-          ),
-          const Divider(color: Colors.white10, height: 32),
-          _buildSelectionRow(
-            'Stil',
-            ['Kurvenjagd', 'Sport Mode', 'Abendrunde', 'Entdecker'],
-            _selectedStyle,
-            (val) => setState(() => _selectedStyle = val),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildDistanceInfoBox() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Text(
-          'Länge',
-          style: TextStyle(color: Colors.grey, fontSize: 14, fontWeight: FontWeight.w500),
-        ),
-        const SizedBox(height: 12),
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: 0.05),
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: Colors.white10),
-          ),
-          child: Row(
-            children: [
-              const Icon(Icons.info_outline, color: Colors.grey, size: 20),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  'Distanz wird automatisch basierend auf dem Zielort berechnet.',
-                  style: TextStyle(color: Colors.grey[400], fontSize: 13),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-
   // ═══════════════════════ BOTTOM ACTIONS ═══════════════════════════════════
 
   Widget _buildBottomActions() {
@@ -481,8 +387,7 @@ class _CruiseModePageState extends State<CruiseModePage> {
               Padding(
                 padding: const EdgeInsets.only(bottom: 12),
                 child: SizedBox(
-                  width: double.infinity,
-                  height: 50,
+                  width: double.infinity, height: 50,
                   child: OutlinedButton(
                     onPressed: _confirmRoute,
                     style: OutlinedButton.styleFrom(
@@ -498,15 +403,13 @@ class _CruiseModePageState extends State<CruiseModePage> {
                 ),
               ),
             Container(
-              height: 60,
-              width: double.infinity,
+              height: 60, width: double.infinity,
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(30),
                 boxShadow: [
                   BoxShadow(
                     color: const Color(0xFFFF3B30).withValues(alpha: 0.3),
-                    blurRadius: 12,
-                    offset: const Offset(0, 4),
+                    blurRadius: 12, offset: const Offset(0, 4),
                   ),
                 ],
               ),
@@ -519,57 +422,16 @@ class _CruiseModePageState extends State<CruiseModePage> {
                 ),
                 child: _isLoading
                     ? const SizedBox(
-                        width: 24,
-                        height: 24,
+                        width: 24, height: 24,
                         child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
                       )
                     : Text(
                         _isRoundTrip ? 'Rundkurs suchen' : 'Route berechnen',
                         style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                          letterSpacing: 1.2,
+                          color: Colors.white, fontSize: 18,
+                          fontWeight: FontWeight.bold, letterSpacing: 1.2,
                         ),
                       ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildRouteModeButton({
-    required String label,
-    required IconData icon,
-    required bool isSelected,
-    required VoidCallback onTap,
-  }) {
-    return GestureDetector(
-      onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
-        decoration: BoxDecoration(
-          color: isSelected ? const Color(0xFFFF3B30) : const Color(0xFF0B0E14),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            color: isSelected ? const Color(0xFFFF3B30) : Colors.white24,
-            width: 1,
-          ),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, color: isSelected ? Colors.white : Colors.white60, size: 20),
-            const SizedBox(height: 4),
-            Text(
-              label,
-              style: TextStyle(
-                color: isSelected ? Colors.white : Colors.white60,
-                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                fontSize: 11,
               ),
             ),
           ],
@@ -582,50 +444,33 @@ class _CruiseModePageState extends State<CruiseModePage> {
 
   Future<void> _initializeMapLocation() async {
     try {
-      debugPrint('Initialisiere Karten-Standort...');
-      
       final serviceEnabled = await geo.Geolocator.isLocationServiceEnabled();
-      if (!serviceEnabled) {
-        debugPrint('Standortdienste deaktiviert - Karte zeigt Standard-Position');
-        return;
-      }
+      if (!serviceEnabled) return;
 
       var permission = await geo.Geolocator.checkPermission();
       if (permission == geo.LocationPermission.denied) {
         permission = await geo.Geolocator.requestPermission();
-        if (permission == geo.LocationPermission.denied) {
-          debugPrint('Standortberechtigung verweigert');
-          return;
-        }
+        if (permission == geo.LocationPermission.denied) return;
       }
-      if (permission == geo.LocationPermission.deniedForever) {
-        debugPrint('Standortberechtigung dauerhaft verweigert');
-        return;
-      }
-      
-      // Versuche letzte bekannte Position zuerst
-      geo.Position? position = await geo.Geolocator.getLastKnownPosition();
-      if (position == null) {
-        // Dann aktuelle Position mit Timeout
-        position = await geo.Geolocator.getCurrentPosition(
-          locationSettings: const geo.LocationSettings(accuracy: geo.LocationAccuracy.high),
-        ).timeout(const Duration(seconds: 10), onTimeout: () {
-          debugPrint('Timeout beim Abrufen der Position');
-          throw Exception('Timeout');
-        });
-      }
-      
-      _userLocation = position;
-      debugPrint('Standort gefunden: ${position.latitude}, ${position.longitude}');
+      if (permission == geo.LocationPermission.deniedForever) return;
 
-      _mapboxMap?.setCamera(
-        CameraOptions(
-          center: Point(coordinates: Position(position.longitude, position.latitude)),
-          zoom: 13.0,
-          padding: MbxEdgeInsets(top: 0, left: 0, bottom: 0, right: 0),
-        ),
-      );
-      debugPrint('Karte auf aktuellen Standort zentriert');
+      geo.Position? position = await geo.Geolocator.getLastKnownPosition();
+      position ??= await geo.Geolocator.getCurrentPosition(
+        locationSettings: const geo.LocationSettings(accuracy: geo.LocationAccuracy.high),
+      ).timeout(const Duration(seconds: 10), onTimeout: () {
+        throw Exception('Timeout');
+      });
+
+      _userLocation = position;
+      try {
+        _mapboxMap?.setCamera(
+          CameraOptions(
+            center: Point(coordinates: Position(position.longitude, position.latitude)),
+            zoom: 13.0,
+            padding: MbxEdgeInsets(top: 0, left: 0, bottom: 0, right: 0),
+          ),
+        );
+      } catch (_) {}
     } catch (e) {
       debugPrint('Konnte Karten-Position nicht setzen: $e');
     }
@@ -633,57 +478,37 @@ class _CruiseModePageState extends State<CruiseModePage> {
 
   Future<geo.Position> _getStartCoordinates() async {
     if (_selectedLocation == 'Aktueller Standort') {
-      // Prüfe GPS-Dienste
       bool serviceEnabled = await geo.Geolocator.isLocationServiceEnabled();
       if (!serviceEnabled) {
-        throw Exception('Bitte aktiviere GPS/Standort in deinen Geräteeinstellungen und versuche es erneut.');
+        throw Exception('Bitte aktiviere GPS/Standort in deinen Geräteeinstellungen.');
       }
 
       var permission = await geo.Geolocator.checkPermission();
       if (permission == geo.LocationPermission.denied) {
         permission = await geo.Geolocator.requestPermission();
         if (permission == geo.LocationPermission.denied) {
-          throw Exception('Standortberechtigung verweigert. Bitte erlaube den Zugriff in den Einstellungen.');
+          throw Exception('Standortberechtigung verweigert.');
         }
       }
       if (permission == geo.LocationPermission.deniedForever) {
-        throw Exception('Standortberechtigung dauerhaft verweigert. Bitte in den App-Einstellungen aktivieren.');
+        throw Exception('Standortberechtigung dauerhaft verweigert.');
       }
-      
-      try {
-        // Versuche zuerst die letzte bekannte Position (schneller)
-        geo.Position? lastPosition = await geo.Geolocator.getLastKnownPosition();
-        if (lastPosition != null) {
-          debugPrint('Verwende letzte bekannte Position: ${lastPosition.latitude}, ${lastPosition.longitude}');
-          return lastPosition;
-        }
-        
-        // Warte auf aktuelle Position mit Timeout
-        debugPrint('Frage aktuelle Position ab...');
-        return await geo.Geolocator.getCurrentPosition(
-          locationSettings: const geo.LocationSettings(
-            accuracy: geo.LocationAccuracy.best,
-          ),
-        ).timeout(const Duration(seconds: 15), onTimeout: () {
-          throw Exception('Standort konnte nicht ermittelt werden. Bitte prüfe deine GPS-Verbindung.');
-        });
-      } catch (e) {
-        debugPrint('Fehler beim Abrufen der Position: $e');
-        rethrow;
-      }
+
+      geo.Position? lastPosition = await geo.Geolocator.getLastKnownPosition();
+      if (lastPosition != null) return lastPosition;
+
+      return await geo.Geolocator.getCurrentPosition(
+        locationSettings: const geo.LocationSettings(accuracy: geo.LocationAccuracy.best),
+      ).timeout(const Duration(seconds: 15), onTimeout: () {
+        throw Exception('Standort konnte nicht ermittelt werden.');
+      });
     }
     // Fallback: Berlin
     return geo.Position(
-      longitude: 13.404954,
-      latitude: 52.520008,
-      timestamp: DateTime.now(),
-      accuracy: 0,
-      altitude: 0,
-      heading: 0,
-      speed: 0,
-      speedAccuracy: 0,
-      altitudeAccuracy: 0,
-      headingAccuracy: 0,
+      longitude: 13.404954, latitude: 52.520008,
+      timestamp: DateTime.now(), accuracy: 0, altitude: 0,
+      heading: 0, speed: 0, speedAccuracy: 0,
+      altitudeAccuracy: 0, headingAccuracy: 0,
     );
   }
 
@@ -730,9 +555,7 @@ class _CruiseModePageState extends State<CruiseModePage> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(
-              'Route berechnet! (${result.distanceKm?.toStringAsFixed(1) ?? '--'} km)',
-            ),
+            content: Text('Route berechnet! (${result.distanceKm?.toStringAsFixed(1) ?? '--'} km)'),
             backgroundColor: Colors.green,
           ),
         );
@@ -765,9 +588,7 @@ class _CruiseModePageState extends State<CruiseModePage> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(
-              '${scenic ? "Coole" : "Direkte"} Route berechnet! (${result.distanceKm?.toStringAsFixed(1) ?? '--'} km)',
-            ),
+            content: Text('${scenic ? "Coole" : "Direkte"} Route berechnet! (${result.distanceKm?.toStringAsFixed(1) ?? '--'} km)'),
             backgroundColor: Colors.green,
           ),
         );
@@ -788,54 +609,73 @@ class _CruiseModePageState extends State<CruiseModePage> {
       _isRouteConfirmed = false;
       _viewportState = null;
       _fullRouteCoordinates = result.coordinates;
-      _remainingRouteCoordinates = result.coordinates; // Preview: volle Route sichtbar
+      _remainingRouteCoordinates = result.coordinates;
       _maneuvers = result.maneuvers;
       _activeManeuverIndex = 0;
       _currentRouteIndex = 0;
       _announcedManeuverIndices.clear();
-      if (!_isRoundTrip) {
-        _showRouteTypeSelector = false;
-      }
     });
   }
-  
+
   void _onDestinationSelected(MapboxSuggestion suggestion) {
     setState(() {
       _selectedDestination = suggestion;
       _destinationController.text = suggestion.placeName;
-      _showRouteTypeSelector = true;
     });
   }
-  
-  void _onRouteModeSelected(String mode) {
-    setState(() {
-      _selectedRouteMode = mode;
-    });
-    if (_selectedDestination != null) {
-      final isSport = mode == 'sport';
-      final isScenic = mode == 'scenic' || mode == 'relaxed';
-      final variant = mode == 'scenic' ? 1 : (mode == 'relaxed' ? 2 : 0);
-      _calculateRouteToDestination(
-        _selectedDestination!,
-        scenic: isSport || isScenic,
-        routeVariant: variant,
-      );
+
+  // ═══════════════════════ LOAD SAVED ROUTE ══════════════════════════════════
+
+  Future<void> _loadSavedRoute(SavedRoute route) async {
+    final geometry = route.geometry;
+    final coordsRaw = (geometry['coordinates'] as List?) ?? const [];
+    final coordinates = coordsRaw
+        .whereType<List>()
+        .where((c) => c.length >= 2)
+        .map((c) => [(c[0] as num).toDouble(), (c[1] as num).toDouble()])
+        .toList();
+
+    if (coordinates.length < 2) {
+      _showError('Route hat nicht genug Koordinaten.');
+      return;
     }
+
+    setState(() {
+      _routeGeoJson = json.encode(geometry);
+      _routeDistance = route.distanceKm * 1000; // km → m
+      _routeDuration = route.durationSeconds;
+      _isRouteConfirmed = false;
+      _viewportState = null;
+      _fullRouteCoordinates = coordinates;
+      _remainingRouteCoordinates = coordinates;
+      _maneuvers = const [];
+      _activeManeuverIndex = 0;
+      _currentRouteIndex = 0;
+      _announcedManeuverIndices.clear();
+      _isRoundTrip = route.isRoundTrip;
+      _selectedStyle = route.style;
+    });
+
+    await _drawRoute(geometry);
+
+    // Automatisch bestätigen und Navigation starten
+    await _confirmRoute();
   }
+
+  // ═══════════════════════ ROUTE CONFIRM ═════════════════════════════════════
 
   Future<void> _confirmRoute() async {
     final total = _fullRouteCoordinates.length;
     setState(() {
       _isRouteConfirmed = true;
       _currentRouteIndex = 0;
-      // Zeige nächste 3 km der Route als Sliding Window
       final windowEnd = _findLookAheadIndex(0, 3000);
       _remainingRouteCoordinates = total >= 2
           ? _fullRouteCoordinates.sublist(0, windowEnd)
           : _fullRouteCoordinates;
     });
 
-    // Route für eingeloggten User speichern
+    // Route sofort speichern (ohne Bewertung)
     if (_lastRouteResult != null) {
       SavedRoutesService.saveRoute(
         result: _lastRouteResult!,
@@ -866,8 +706,6 @@ class _CruiseModePageState extends State<CruiseModePage> {
 
   // ═══════════════════════ LOOK-AHEAD HELPER ════════════════════════════════
 
-  /// Gibt den Index zurück der ~[targetMeters] nach [startIndex] auf der Route liegt.
-  /// Wird für das Sliding-Window (3 km Vorausschau) verwendet.
   int _findLookAheadIndex(int startIndex, double targetMeters) {
     double accumulated = 0.0;
     final total = _fullRouteCoordinates.length;
@@ -875,12 +713,12 @@ class _CruiseModePageState extends State<CruiseModePage> {
       final c1 = _fullRouteCoordinates[i];
       final c2 = _fullRouteCoordinates[i + 1];
       accumulated += geo.Geolocator.distanceBetween(c1[1], c1[0], c2[1], c2[0]);
-      if (accumulated >= targetMeters) return (i + 1).clamp(0, total);
+      if (accumulated >= targetMeters) return math.min(i + 2, total);
     }
     return total;
   }
 
-  // ═══════════════════════ DRAW ROUTE ═══════════════════════════════════════
+  // ═══════════════════════ ROUTE DRAWING ═════════════════════════════════════
 
   Future<void> _drawRoute(
     Map<String, dynamic> geometry, {
@@ -896,10 +734,8 @@ class _CruiseModePageState extends State<CruiseModePage> {
         .toList();
     if (activeCoordinates.length < 2) return;
 
-    // Graue Hintergundlinie vollständig entfernt — nur eine rote Linie sichtbar
     try { await _greyAnnotationManager?.deleteAll(); } catch (_) {}
 
-    // Rote aktive Route
     final routePositions = activeCoordinates.map((c) => Position(c[0], c[1])).toList();
     try {
       _polylineAnnotationManager ??=
@@ -932,11 +768,12 @@ class _CruiseModePageState extends State<CruiseModePage> {
         routePoints,
         CameraOptions(),
         MbxEdgeInsets(top: topInset, left: 24, bottom: bottomInset, right: 24),
-        null,
-        null,
+        null, null,
       );
       await Future.delayed(const Duration(milliseconds: 100));
-      await _mapboxMap!.flyTo(previewCamera, MapAnimationOptions(duration: 2500));
+      try {
+        await _mapboxMap!.flyTo(previewCamera, MapAnimationOptions(duration: 2500));
+      } catch (_) {}
     }
   }
 
@@ -966,10 +803,7 @@ class _CruiseModePageState extends State<CruiseModePage> {
       await _focusCameraOnPosition(position, animated: false);
     }
 
-    if (!_isRouteConfirmed || _fullRouteCoordinates.length < 2) {
-      // Kein setState nötig — kein visuelles Update beim Preview
-      return;
-    }
+    if (!_isRouteConfirmed || _fullRouteCoordinates.length < 2) return;
 
     final match = findNearestInWindow(
       position: position,
@@ -983,7 +817,6 @@ class _CruiseModePageState extends State<CruiseModePage> {
       _currentRouteIndex = match.index;
       needsRebuild = true;
 
-      // Sliding Window: zeige nächste 3 km ab aktueller Position
       final windowEnd = _findLookAheadIndex(_currentRouteIndex, 3000);
       _remainingRouteCoordinates = _fullRouteCoordinates.sublist(_currentRouteIndex, windowEnd);
       final clipped = {'type': 'LineString', 'coordinates': _remainingRouteCoordinates};
@@ -991,12 +824,25 @@ class _CruiseModePageState extends State<CruiseModePage> {
       await _drawRoute(clipped, animateCamera: false);
     }
 
-    // Maneuver nur neu berechnen wenn sich der Index geändert hat
+    // Prüfe ob Route zu Ende ist
+    final lastIndex = _fullRouteCoordinates.length - 1;
+    if (_currentRouteIndex >= lastIndex - 1) {
+      final end = _fullRouteCoordinates.last;
+      final distToEnd = geo.Geolocator.distanceBetween(
+        position.latitude, position.longitude, end[1], end[0],
+      );
+      if (distToEnd <= 50.0) {
+        _stopNavigationTracking();
+        _stopSimulation(restartLiveTracking: false);
+        _onRouteCompleted();
+        return;
+      }
+    }
+
     final prevManeuver = _activeManeuverIndex;
     _updateActiveManeuver();
     if (_activeManeuverIndex != prevManeuver) needsRebuild = true;
 
-    // setState nur wenn sich etwas Sichtbares geändert hat
     if (needsRebuild) _safeSetState(() {});
   }
 
@@ -1011,54 +857,41 @@ class _CruiseModePageState extends State<CruiseModePage> {
     _activeManeuverIndex = _maneuvers.length - 1;
   }
 
-  // TTS deaktiviert - bei Reaktivierung hier einkommentieren:
-  // Future<void> _speakUpcomingManeuverIfNeeded(geo.Position position) async {
-  //   if (!_ttsAvailable || _maneuvers.isEmpty) return;
-  //   final maneuver = _maneuvers[_activeManeuverIndex];
-  //   final distance = geo.Geolocator.distanceBetween(
-  //     position.latitude, position.longitude,
-  //     maneuver.latitude, maneuver.longitude,
-  //   );
-  //   if (distance <= 150 && !_announcedManeuverIndices.contains(_activeManeuverIndex)) {
-  //     _announcedManeuverIndices.add(_activeManeuverIndex);
-  //     await _flutterTts.stop();
-  //     await _flutterTts.speak(maneuver.announcement);
-  //   }
-  // }
-
   // ═══════════════════════ CAMERA ═══════════════════════════════════════════
 
   Future<void> _recenterMap() async {
     final map = _mapboxMap;
     final position = _userLocation;
-    if (map == null || position == null) return;
-    await map.flyTo(
-      CameraOptions(
-        center: Point(coordinates: Position(position.longitude, position.latitude)),
-        zoom: 16.0,
-        pitch: 45.0,
-        bearing: position.heading.isFinite ? position.heading : 0.0,
-      ),
-      MapAnimationOptions(duration: 900),
-    );
+    if (map == null || position == null || !_isMapStyleLoaded) return;
+    try {
+      await map.flyTo(
+        CameraOptions(
+          center: Point(coordinates: Position(position.longitude, position.latitude)),
+          zoom: 16.0, pitch: 45.0,
+          bearing: position.heading.isFinite ? position.heading : 0.0,
+        ),
+        MapAnimationOptions(duration: 900),
+      );
+    } catch (_) {}
   }
 
   Future<void> _focusCameraOnPosition(
     geo.Position position, {
     required bool animated,
   }) async {
-    if (_mapboxMap == null) return;
-    final options = CameraOptions(
-      center: Point(coordinates: Position(position.longitude, position.latitude)),
-      zoom: 16.0,
-      pitch: 45.0,
-      bearing: position.heading.isFinite ? position.heading : 0.0,
-    );
-    if (animated) {
-      await _mapboxMap!.flyTo(options, MapAnimationOptions(duration: 700));
-    } else {
-      await _mapboxMap!.setCamera(options);
-    }
+    if (_mapboxMap == null || !_isMapStyleLoaded) return;
+    try {
+      final options = CameraOptions(
+        center: Point(coordinates: Position(position.longitude, position.latitude)),
+        zoom: 16.0, pitch: 45.0,
+        bearing: position.heading.isFinite ? position.heading : 0.0,
+      );
+      if (animated) {
+        await _mapboxMap!.flyTo(options, MapAnimationOptions(duration: 700));
+      } else {
+        await _mapboxMap!.setCamera(options);
+      }
+    } catch (_) {}
   }
 
   Future<void> _activateNavigationCamera() async {
@@ -1081,14 +914,15 @@ class _CruiseModePageState extends State<CruiseModePage> {
         );
       } catch (_) {}
     }
-    await _mapboxMap!.setCamera(
-      CameraOptions(
-        center: Point(coordinates: Position(position.longitude, position.latitude)),
-        zoom: 16.0,
-        pitch: 45.0,
-        bearing: position.heading.isFinite ? position.heading : 0.0,
-      ),
-    );
+    try {
+      await _mapboxMap!.setCamera(
+        CameraOptions(
+          center: Point(coordinates: Position(position.longitude, position.latitude)),
+          zoom: 16.0, pitch: 45.0,
+          bearing: position.heading.isFinite ? position.heading : 0.0,
+        ),
+      );
+    } catch (_) {}
     _safeSetState(() {
       _viewportState = const FollowPuckViewportState(
         zoom: 16.0,
@@ -1123,18 +957,15 @@ class _CruiseModePageState extends State<CruiseModePage> {
       await _cursorAnnotationManager!.deleteAll();
       await _cursorAnnotationManager!.create(PolylineAnnotationOptions(
         geometry: LineString(coordinates: verticalLine),
-        lineColor: Colors.white.toARGB32(),
-        lineWidth: 4.0,
+        lineColor: Colors.white.toARGB32(), lineWidth: 4.0,
       ));
       await _cursorAnnotationManager!.create(PolylineAnnotationOptions(
         geometry: LineString(coordinates: horizontalLine),
-        lineColor: Colors.white.toARGB32(),
-        lineWidth: 4.0,
+        lineColor: Colors.white.toARGB32(), lineWidth: 4.0,
       ));
       await _cursorAnnotationManager!.create(PolylineAnnotationOptions(
         geometry: LineString(coordinates: headingLine),
-        lineColor: const Color(0xFFFF3B30).toARGB32(),
-        lineWidth: 4.5,
+        lineColor: const Color(0xFFFF3B30).toARGB32(), lineWidth: 4.5,
       ));
     }
 
@@ -1201,8 +1032,7 @@ class _CruiseModePageState extends State<CruiseModePage> {
     final distMeters = geo.Geolocator.distanceBetween(
       current[1], current[0], next[1], next[0],
     );
-    // 100 km/h = 27.78 m/s → delay per segment
-    final delayMs = (distMeters / 27.78 * 1000).round().clamp(30, 5000);
+    final delayMs = (distMeters / 41.67 * 1000).round().clamp(30, 5000); // 150 km/h
     _simulationTimer = Timer(Duration(milliseconds: delayMs), _runSimulationStep);
   }
 
@@ -1215,8 +1045,8 @@ class _CruiseModePageState extends State<CruiseModePage> {
     try {
       final lastIndex = _fullRouteCoordinates.length - 1;
       if (_simulationIndex >= lastIndex) {
-        _stopSimulation();
-        _safeSetState(() {});
+        _stopSimulation(restartLiveTracking: false);
+        _onRouteCompleted();
         return;
       }
       _simulationIndex = math.min(_simulationIndex + 1, lastIndex);
@@ -1224,8 +1054,8 @@ class _CruiseModePageState extends State<CruiseModePage> {
       final next = _fullRouteCoordinates[math.min(_simulationIndex + 1, lastIndex)];
       await _onLocationUpdate(_buildSimulatedPosition(current, next));
       if (_simulationIndex >= lastIndex) {
-        _stopSimulation();
-        _safeSetState(() {});
+        _stopSimulation(restartLiveTracking: false);
+        _onRouteCompleted();
         return;
       }
     } finally {
@@ -1243,159 +1073,51 @@ class _CruiseModePageState extends State<CruiseModePage> {
       accuracy: 5,
       altitude: 0,
       heading: heading,
-      speed: 27.78,
+      speed: 41.67, // 150 km/h
       speedAccuracy: 1,
       altitudeAccuracy: 0,
       headingAccuracy: 5,
     );
   }
 
-  // ─────────────────────── Navigation Panel ─────────────────────────────────
+  // ═══════════════════════ ROUTE COMPLETION ═════════════════════════════════
 
-  Widget _buildEnhancedNavigationPanel() {
-    return CruiseNavigationInfoPanel(
-      durationSeconds: _routeDuration,
-      distanceMeters: _routeDistance,
+  void _onRouteCompleted() {
+    if (!mounted || _disposed) return;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => CruiseCompletionDialog(
+        distanceKm: _routeDistance != null ? _routeDistance! / 1000 : null,
+        onSave: (rating) {
+          Navigator.pop(ctx);
+          _resetAfterCompletion();
+        },
+        onDiscard: () {
+          Navigator.pop(ctx);
+          _resetAfterCompletion();
+        },
+      ),
     );
+  }
+
+  void _resetAfterCompletion() {
+    _safeSetState(() {
+      _isRouteConfirmed = false;
+      _viewportState = null;
+    });
   }
 
   // ═══════════════════════ DIALOGS ══════════════════════════════════════════
 
   void _showRouteTypeDialog(MapboxSuggestion suggestion) {
-    showModalBottomSheet(
+    showRouteTypeDialog(
       context: context,
-      backgroundColor: const Color(0xFF1C1F26),
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      builder: (context) => Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Center(
-              child: Container(
-                width: 40,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: Colors.grey[600],
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-            ),
-            const SizedBox(height: 20),
-            const Text(
-              'Routen auswählen',
-              style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Ziel: ${suggestion.placeName}',
-              style: const TextStyle(color: Colors.grey, fontSize: 14),
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-            ),
-            const SizedBox(height: 24),
-            _buildRouteOption(
-              icon: Icons.speed,
-              color: const Color(0xFFFF3B30),
-              title: 'Schnellste Route',
-              subtitle: 'Direkter Weg zum Ziel',
-              onTap: () {
-                Navigator.pop(context);
-                _calculateRouteToDestination(suggestion, scenic: false);
-              },
-            ),
-            const SizedBox(height: 12),
-            _buildRouteOption(
-              icon: Icons.route,
-              color: Colors.orange,
-              title: 'Coole Route (Sport)',
-              subtitle: 'Mit $_selectedStyle - anspruchsvoll',
-              onTap: () {
-                Navigator.pop(context);
-                _calculateRouteToDestination(suggestion, scenic: true, routeVariant: 0);
-              },
-            ),
-            const SizedBox(height: 12),
-            _buildRouteOption(
-              icon: Icons.landscape,
-              color: Colors.green,
-              title: 'Coole Route (Abwechslung)',
-              subtitle: 'Alternative mit Kurven & Natur',
-              onTap: () {
-                Navigator.pop(context);
-                _calculateRouteToDestination(suggestion, scenic: true, routeVariant: 1);
-              },
-            ),
-            const SizedBox(height: 20),
-            SizedBox(
-              width: double.infinity,
-              child: TextButton(
-                onPressed: () => Navigator.pop(context),
-                style: TextButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 16),
-                ),
-                child: const Text('Abbrechen', style: TextStyle(color: Colors.grey, fontSize: 16)),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildRouteOption({
-    required IconData icon,
-    required Color color,
-    required String title,
-    required String subtitle,
-    required VoidCallback onTap,
-  }) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: const Color(0xFF0B0E14),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: Colors.white12),
-        ),
-        child: Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: color.withOpacity(0.2),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Icon(icon, color: color, size: 24),
-            ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(title, style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 4),
-                  Text(subtitle, style: const TextStyle(color: Colors.grey, fontSize: 13)),
-                ],
-              ),
-            ),
-            const Icon(Icons.arrow_forward_ios, color: Colors.grey, size: 16),
-          ],
-        ),
-      ),
-    );
-  }
-
-  void _openMapForWaypointSelection() {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Karten-Auswahl kommt im nächsten Update'),
-        duration: Duration(seconds: 2),
-      ),
+      suggestion: suggestion,
+      selectedStyle: _selectedStyle,
+      onRouteSelected: (s, {required bool scenic, int routeVariant = 0}) {
+        _calculateRouteToDestination(s, scenic: scenic, routeVariant: routeVariant);
+      },
     );
   }
 
@@ -1403,302 +1125,6 @@ class _CruiseModePageState extends State<CruiseModePage> {
     if (!mounted || _disposed) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('Fehler: $message'), backgroundColor: Colors.red),
-    );
-  }
-
-  // ═══════════════════════ UI HELPER WIDGETS ════════════════════════════════
-
-  Widget _buildLargeModeButton({
-    required String label,
-    required IconData icon,
-    required bool isActive,
-    required VoidCallback onTap,
-  }) {
-    return GestureDetector(
-      onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        height: 100,
-        decoration: BoxDecoration(
-          color: isActive ? const Color(0xFF1C1F26) : const Color(0xFF0B0E14),
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(
-            color: isActive ? const Color(0xFFFF3B30) : Colors.white12,
-            width: isActive ? 2 : 1,
-          ),
-          boxShadow: isActive
-              ? [
-                  BoxShadow(
-                    color: const Color(0xFFFF3B30).withValues(alpha: 0.3),
-                    blurRadius: 15,
-                    spreadRadius: 1,
-                  ),
-                ]
-              : [],
-        ),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(icon, color: isActive ? const Color(0xFFFF3B30) : Colors.white38, size: 32),
-            const SizedBox(height: 10),
-            Text(
-              label,
-              style: TextStyle(
-                color: isActive ? Colors.white : Colors.white54,
-                fontWeight: FontWeight.bold,
-                fontSize: 16,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildRoundTripOptions() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const SizedBox(height: 12),
-        const Text(
-          'Planungs-Typ',
-          style: TextStyle(color: Colors.grey, fontSize: 14, fontWeight: FontWeight.w500),
-        ),
-        const SizedBox(height: 12),
-        Row(
-          children: [
-            Expanded(
-              child: _buildChoiceButton(
-                label: 'Zufall',
-                isSelected: _planningType == 'Zufall',
-                onTap: () => setState(() => _planningType = 'Zufall'),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: _buildChoiceButton(
-                label: 'Wegpunkte',
-                isSelected: _planningType == 'Wegpunkte',
-                onTap: () => setState(() => _planningType = 'Wegpunkte'),
-              ),
-            ),
-          ],
-        ),
-      ],
-    );
-  }
-
-  Widget _buildChoiceButton({
-    required String label,
-    required bool isSelected,
-    required VoidCallback onTap,
-  }) {
-    return GestureDetector(
-      onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        padding: const EdgeInsets.symmetric(vertical: 20),
-        decoration: BoxDecoration(
-          color: isSelected
-              ? const Color(0xFFFF3B30).withValues(alpha: 0.15)
-              : const Color(0xFF0B0E14),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(
-            color: isSelected ? const Color(0xFFFF3B30) : Colors.transparent,
-            width: 1.5,
-          ),
-        ),
-        alignment: Alignment.center,
-        child: Text(
-          label,
-          style: TextStyle(
-            color: isSelected ? const Color(0xFFFF3B30) : Colors.white60,
-            fontWeight: FontWeight.bold,
-            fontSize: 15,
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildAtoBOptions() {
-    // Wenn Ziel ausgewählt, zeige Ziel-Info statt Suchfeld
-    if (_selectedDestination != null) {
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            'Zielort',
-            style: TextStyle(color: Colors.grey, fontSize: 14, fontWeight: FontWeight.w500),
-          ),
-          const SizedBox(height: 12),
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: const Color(0xFF0B0E14),
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: const Color(0xFFFF3B30).withValues(alpha: 0.5)),
-            ),
-            child: Row(
-              children: [
-                const Icon(Icons.location_on, color: Color(0xFFFF3B30), size: 24),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        _selectedDestination!.placeName,
-                        style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      if (_selectedDestination!.context != null)
-                        Text(
-                          _selectedDestination!.context!,
-                          style: const TextStyle(color: Colors.grey, fontSize: 12),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                    ],
-                  ),
-                ),
-                IconButton(
-                  icon: const Icon(Icons.close, color: Colors.white70, size: 20),
-                  onPressed: () {
-                    setState(() {
-                      _selectedDestination = null;
-                      _showRouteTypeSelector = false;
-                      _destinationController.clear();
-                    });
-                  },
-                  tooltip: 'Ziel ändern',
-                ),
-              ],
-            ),
-          ),
-        ],
-      );
-    }
-
-    // Normales Suchfeld wenn kein Ziel ausgewählt
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Text(
-          'Zielort',
-          style: TextStyle(color: Colors.grey, fontSize: 14, fontWeight: FontWeight.w500),
-        ),
-        const SizedBox(height: 12),
-        Container(
-          decoration: BoxDecoration(
-            color: const Color(0xFF0B0E14),
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: Colors.white12),
-          ),
-          child: TypeAheadField<MapboxSuggestion>(
-            controller: _destinationController,
-            suggestionsCallback: (pattern) async {
-              if (pattern.isEmpty) return const [];
-              return _geocodingService.searchSuggestions(pattern);
-            },
-            builder: (context, controller, focusNode) => TextField(
-              controller: controller,
-              focusNode: focusNode,
-              style: const TextStyle(color: Colors.white),
-              decoration: InputDecoration(
-                prefixIcon: const Icon(Icons.search, color: Colors.white38),
-                suffixIcon: IconButton(
-                  icon: const Icon(Icons.map_outlined, color: Colors.white70),
-                  onPressed: _openMapForWaypointSelection,
-                  tooltip: 'Auf Karte wählen',
-                ),
-                hintText: 'Adresse suchen...',
-                hintStyle: const TextStyle(color: Colors.white38),
-                border: InputBorder.none,
-                contentPadding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-              ),
-            ),
-            itemBuilder: (context, suggestion) => ListTile(
-              tileColor: const Color(0xFF1C1F26),
-              leading: const Icon(Icons.location_on, color: Color(0xFFFF3B30)),
-              title: Text(suggestion.placeName,
-                  style: const TextStyle(color: Colors.white, fontSize: 14)),
-              subtitle: suggestion.context != null
-                  ? Text(suggestion.context!,
-                      style: const TextStyle(color: Colors.grey, fontSize: 12))
-                  : null,
-            ),
-            onSelected: (suggestion) {
-              _onDestinationSelected(suggestion);
-            },
-            emptyBuilder: (context) => const Padding(
-              padding: EdgeInsets.all(16),
-              child: Text('Adresse eingeben...', style: TextStyle(color: Colors.grey)),
-            ),
-            loadingBuilder: (context) => const Padding(
-              padding: EdgeInsets.all(16),
-              child: Center(child: CircularProgressIndicator(color: Color(0xFFFF3B30))),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildSelectionRow(
-    String title,
-    List<String> options,
-    String selectedValue,
-    void Function(String) onSelect,
-  ) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          title,
-          style: const TextStyle(
-              color: Colors.grey, fontSize: 14, fontWeight: FontWeight.w500),
-        ),
-        const SizedBox(height: 12),
-        Wrap(
-          spacing: 12,
-          runSpacing: 12,
-          children: options.map((option) {
-            final isSelected = option == selectedValue;
-            return GestureDetector(
-              onTap: () => onSelect(option),
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 200),
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                decoration: BoxDecoration(
-                  color: isSelected ? const Color(0xFFFF3B30) : const Color(0xFF0B0E14),
-                  borderRadius: BorderRadius.circular(20),
-                  boxShadow: isSelected
-                      ? [
-                          BoxShadow(
-                            color: const Color(0xFFFF3B30).withValues(alpha: 0.4),
-                            blurRadius: 8,
-                            offset: const Offset(0, 2),
-                          ),
-                        ]
-                      : [],
-                ),
-                child: Text(
-                  option,
-                  style: TextStyle(
-                    color: isSelected ? Colors.white : Colors.grey[400],
-                    fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
-                    fontSize: 14,
-                  ),
-                ),
-              ),
-            );
-          }).toList(),
-        ),
-      ],
     );
   }
 }

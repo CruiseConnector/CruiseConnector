@@ -16,6 +16,7 @@ class SavedRoutesService {
     required String style,
     required bool isRoundTrip,
     String? customName,
+    int? rating,
   }) async {
     final userId = _db.auth.currentUser?.id;
     if (userId == null) return;
@@ -28,7 +29,7 @@ class SavedRoutesService {
     final distKm = result.distanceKm ??
         (result.distanceMeters != null ? result.distanceMeters! / 1000 : 0.0);
 
-    await _db.from('routes').insert({
+    final row = <String, dynamic>{
       'user_id': userId,
       'name': name,
       'style': style,
@@ -36,7 +37,10 @@ class SavedRoutesService {
       'distance_actual': distKm,
       'duration_seconds': result.durationSeconds,
       'geometry': result.geometry,
-    });
+    };
+    if (rating != null && rating > 0) row['rating'] = rating;
+
+    await _db.from('routes').insert(row);
   }
 
   // ─── Laden ────────────────────────────────────────────────────────────────
@@ -53,6 +57,38 @@ class SavedRoutesService {
         .eq('user_id', userId)
         .order('created_at', ascending: false);
 
+    return (data as List)
+        .map((row) => SavedRoute.fromJson(row as Map<String, dynamic>))
+        .toList();
+  }
+
+  // ─── Beliebte Routen ────────────────────────────────────────────────────
+
+  /// Gibt beliebte Routen anderer Nutzer zurück (ähnlicher Stil, gute Bewertung).
+  /// Kann als Vorschlag für neue Nutzer verwendet werden.
+  static Future<List<SavedRoute>> getPopularRoutes({
+    String? style,
+    int limit = 10,
+  }) async {
+    var query = _db
+        .from('routes')
+        .select()
+        .gte('rating', 3)
+        .order('rating', ascending: false)
+        .order('created_at', ascending: false)
+        .limit(limit);
+
+    if (style != null) {
+      query = _db
+          .from('routes')
+          .select()
+          .eq('style', style)
+          .gte('rating', 3)
+          .order('rating', ascending: false)
+          .limit(limit);
+    }
+
+    final data = await query;
     return (data as List)
         .map((row) => SavedRoute.fromJson(row as Map<String, dynamic>))
         .toList();

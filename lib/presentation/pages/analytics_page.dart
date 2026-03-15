@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 
-import 'package:cruise_connect/data/services/saved_routes_service.dart';
+import 'package:cruise_connect/data/services/gamification_service.dart';
+import 'package:cruise_connect/domain/models/badge.dart' as app;
 import 'package:cruise_connect/domain/models/saved_route.dart';
+import 'package:cruise_connect/data/services/saved_routes_service.dart';
 
 class AnalyticsPage extends StatefulWidget {
   const AnalyticsPage({super.key, this.refreshNotifier});
@@ -18,6 +20,7 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
   int _totalRoutes = 0;
   double _totalDistanceKm = 0;
   double _totalHours = 0;
+  List<app.Badge> _earnedBadges = [];
   List<SavedRoute> _recentRoutes = [];
 
   @override
@@ -36,18 +39,15 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
   Future<void> _loadStats() async {
     setState(() => _isLoading = true);
     try {
+      final gamResult = await GamificationService.calculateAndSync();
       final routes = await SavedRoutesService.getUserRoutes();
-      double dist = 0;
-      double secs = 0;
-      for (final r in routes) {
-        dist += r.distanceKm;
-        secs += r.durationSeconds ?? 0;
-      }
+
       if (mounted) {
         setState(() {
-          _totalRoutes = routes.length;
-          _totalDistanceKm = dist;
-          _totalHours = secs / 3600;
+          _totalRoutes = gamResult.totalRoutes;
+          _totalDistanceKm = gamResult.totalDistanceKm;
+          _totalHours = gamResult.totalHours;
+          _earnedBadges = gamResult.earnedBadges;
           _recentRoutes = routes.take(7).toList();
           _isLoading = false;
         });
@@ -113,8 +113,101 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
                   Icons.timer,
                   const Color(0xFFFF9900),
                 ),
-                _buildAnalyticsCard("Badges", '0', Icons.emoji_events, const Color(0xFFB026FF)),
+                _buildAnalyticsCard("Badges", '${_earnedBadges.length}', Icons.emoji_events, const Color(0xFFB026FF)),
               ],
+            ),
+            const SizedBox(height: 24),
+
+            // Badge Collection
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1A1F26),
+                borderRadius: BorderRadius.circular(24),
+                border: Border.all(color: Colors.white.withValues(alpha: 0.05), width: 1),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.2),
+                    blurRadius: 15,
+                    offset: const Offset(0, 5),
+                  )
+                ],
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text(
+                        "Badge Sammlung",
+                        style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                      ),
+                      Text(
+                        '${_earnedBadges.length}/${app.Badge.all.length}',
+                        style: const TextStyle(color: Color(0xFFA0AEC0), fontSize: 13),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  if (_earnedBadges.isEmpty)
+                    const Center(
+                      child: Padding(
+                        padding: EdgeInsets.symmetric(vertical: 16),
+                        child: Text(
+                          'Fahre Routen um Badges zu verdienen!',
+                          style: TextStyle(color: Colors.grey, fontSize: 14),
+                        ),
+                      ),
+                    )
+                  else
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: app.Badge.all.map((badge) {
+                        final earned = _earnedBadges.any((b) => b.id == badge.id);
+                        return Tooltip(
+                          message: '${badge.name}\n${badge.description}',
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                            decoration: BoxDecoration(
+                              color: earned
+                                  ? const Color(0xFF2A2F3A)
+                                  : const Color(0xFF14171C),
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(
+                                color: earned
+                                    ? const Color(0xFFFF3B30).withValues(alpha: 0.4)
+                                    : Colors.white.withValues(alpha: 0.05),
+                              ),
+                            ),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  badge.emoji,
+                                  style: TextStyle(
+                                    fontSize: 22,
+                                    color: earned ? null : Colors.white.withValues(alpha: 0.2),
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  badge.name,
+                                  style: TextStyle(
+                                    color: earned ? Colors.white : Colors.white.withValues(alpha: 0.2),
+                                    fontSize: 9,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      }).toList(),
+                    ),
+                ],
+              ),
             ),
             const SizedBox(height: 24),
             Container(

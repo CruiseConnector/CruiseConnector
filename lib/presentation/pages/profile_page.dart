@@ -4,6 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:cruise_connect/data/services/auth_service.dart';
 import 'package:cruise_connect/data/services/saved_routes_service.dart';
 import 'package:cruise_connect/domain/models/saved_route.dart';
+import 'package:cruise_connect/presentation/pages/cruise_mode_page.dart';
 import 'package:cruise_connect/presentation/pages/welcome_page.dart';
 
 class ProfilePage extends StatefulWidget {
@@ -25,16 +26,21 @@ class _ProfilePageState extends State<ProfilePage> {
   }
 
   Future<void> _load() async {
-    final results = await Future.wait([
-      SavedRoutesService.getUserRoutes(),
-      AuthService.getUsername(),
-    ]);
-    if (!mounted) return;
-    setState(() {
-      _routes        = results[0] as List<SavedRoute>;
-      _username      = results[1] as String?;
-      _loadingRoutes = false;
-    });
+    try {
+      final results = await Future.wait([
+        SavedRoutesService.getUserRoutes(),
+        AuthService.getUsername(),
+      ]);
+      if (!mounted) return;
+      setState(() {
+        _routes        = results[0] as List<SavedRoute>;
+        _username      = results[1] as String?;
+        _loadingRoutes = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _loadingRoutes = false);
+    }
   }
 
   Future<void> _deleteRoute(String id) async {
@@ -306,13 +312,48 @@ class _ProfilePageState extends State<ProfilePage> {
                 ],
               ),
             ),
-            // Datum
-            Text(
-              _formatDate(route.createdAt),
-              style: const TextStyle(color: Color(0xFFA0AEC0), fontSize: 11),
+            // Aktionen
+            Column(
+              children: [
+                IconButton(
+                  icon: const Icon(Icons.play_circle_fill, color: Color(0xFFFF3B30), size: 28),
+                  tooltip: 'Route starten',
+                  onPressed: () => _startRoute(route),
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(),
+                ),
+                const SizedBox(height: 8),
+                IconButton(
+                  icon: const Icon(Icons.share_outlined, color: Color(0xFFA0AEC0), size: 20),
+                  tooltip: 'Route teilen',
+                  onPressed: () => _shareRoute(route),
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(),
+                ),
+              ],
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  void _startRoute(SavedRoute route) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => Scaffold(
+          body: CruiseModePage(initialRoute: route),
+        ),
+      ),
+    );
+  }
+
+  void _shareRoute(SavedRoute route) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => _ShareRouteAsPostPage(route: route),
       ),
     );
   }
@@ -359,5 +400,153 @@ class _ProfilePageState extends State<ProfilePage> {
 
   String _formatDate(DateTime dt) {
     return '${dt.day.toString().padLeft(2, '0')}.${dt.month.toString().padLeft(2, '0')}.${dt.year}';
+  }
+}
+
+// ═══════════════════════ SHARE ROUTE AS POST ════════════════════════════════
+
+class _ShareRouteAsPostPage extends StatefulWidget {
+  const _ShareRouteAsPostPage({required this.route});
+  final SavedRoute route;
+
+  @override
+  State<_ShareRouteAsPostPage> createState() => _ShareRouteAsPostPageState();
+}
+
+class _ShareRouteAsPostPageState extends State<_ShareRouteAsPostPage> {
+  final _textController = TextEditingController();
+  bool _posting = false;
+
+  @override
+  void initState() {
+    super.initState();
+    final r = widget.route;
+    _textController.text =
+        'Schaut euch meine Route an! ${r.styleEmoji}\n'
+        '${r.formattedDistance} - ${r.formattedDuration}\n'
+        '${r.isRoundTrip ? "Rundkurs" : "A \u2192 B"} im Stil "${r.style}"';
+  }
+
+  @override
+  void dispose() {
+    _textController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _post() async {
+    if (_textController.text.trim().isEmpty) return;
+    setState(() => _posting = true);
+    try {
+      final userId = Supabase.instance.client.auth.currentUser?.id;
+      if (userId == null) return;
+
+      final username = await AuthService.getUsername();
+
+      await Supabase.instance.client.from('posts').insert({
+        'user_id': userId,
+        'username': username ?? 'Unbekannt',
+        'content': _textController.text.trim(),
+        'route_id': widget.route.id,
+        'route_style': widget.route.style,
+        'route_distance_km': widget.route.distanceKm,
+        'route_name': widget.route.name ?? widget.route.style,
+      });
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Route geteilt!'), backgroundColor: Color(0xFF1A1F26)),
+        );
+        Navigator.pop(context);
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Fehler: $e'), backgroundColor: Colors.red),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _posting = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final r = widget.route;
+    return Scaffold(
+      backgroundColor: const Color(0xFF0B0E14),
+      appBar: AppBar(
+        backgroundColor: const Color(0xFF0B0E14),
+        elevation: 0,
+        leading: IconButton(
+          icon: const Icon(Icons.close, color: Colors.white),
+          onPressed: () => Navigator.pop(context),
+        ),
+        title: const Text('Route teilen', style: TextStyle(color: Colors.white)),
+        actions: [
+          Padding(
+            padding: const EdgeInsets.only(right: 12, top: 8, bottom: 8),
+            child: ElevatedButton(
+              onPressed: _posting ? null : _post,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFFFF3B30),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+              ),
+              child: _posting
+                  ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                  : const Text('Posten', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+            ),
+          ),
+        ],
+      ),
+      body: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          children: [
+            // Route Info Card
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1A1F26),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: const Color(0xFFFF3B30).withValues(alpha: 0.3)),
+              ),
+              child: Row(
+                children: [
+                  Text(r.styleEmoji, style: const TextStyle(fontSize: 28)),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(r.name ?? r.style, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                        const SizedBox(height: 4),
+                        Text(
+                          '${r.formattedDistance} \u00b7 ${r.formattedDuration} \u00b7 ${r.isRoundTrip ? "Rundkurs" : "A \u2192 B"}',
+                          style: const TextStyle(color: Color(0xFFA0AEC0), fontSize: 12),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+            // Text Input
+            Expanded(
+              child: TextField(
+                controller: _textController,
+                style: const TextStyle(color: Colors.white, fontSize: 16),
+                maxLines: null,
+                decoration: const InputDecoration(
+                  hintText: 'Beschreibe deine Route...',
+                  hintStyle: TextStyle(color: Colors.grey),
+                  border: InputBorder.none,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
