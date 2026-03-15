@@ -14,8 +14,6 @@ class HomePage extends StatefulWidget {
 
 class _HomePageState extends State<HomePage> {
   int _selectedIndex = 0;
-  final ValueNotifier<int> _analyticsRefresh = ValueNotifier<int>(0);
-
   late final List<Widget> _pages;
 
   @override
@@ -25,25 +23,15 @@ class _HomePageState extends State<HomePage> {
       HomeContentPage(onTabChange: _onNavItemTapped),
       const CommunityPage(),
       const CruiseModePage(),
-      AnalyticsPage(refreshNotifier: _analyticsRefresh),
+      const AnalyticsPage(),
       const ProfilePage(),
     ];
-  }
-
-  @override
-  void dispose() {
-    _analyticsRefresh.dispose();
-    super.dispose();
   }
 
   void _onNavItemTapped(int index) {
     setState(() {
       _selectedIndex = index;
     });
-    // Analytics-Daten neu laden wenn der Tab gewählt wird
-    if (index == 3) {
-      _analyticsRefresh.value++;
-    }
   }
 
   @override

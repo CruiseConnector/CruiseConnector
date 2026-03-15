@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:cruise_connect/data/services/gamification_service.dart';
 import 'package:cruise_connect/presentation/pages/route_join_page.dart';
 
 class HomeContentPage extends StatefulWidget {
@@ -11,32 +12,38 @@ class HomeContentPage extends StatefulWidget {
 }
 
 class _HomeContentPageState extends State<HomeContentPage> {
-  late int userLevel;
-  late double levelProgress;
-  late String levelName;
-  late int kmToNextLevel;
+  int userLevel = 1;
+  double levelProgress = 0;
+  String levelName = 'Street Rookie';
+  int kmToNextLevel = 10;
+  int totalRoutes = 0;
+  double totalDistanceKm = 0;
+  int badgeCount = 0;
+  bool _loading = true;
 
   @override
   void initState() {
     super.initState();
-    _initializeUserLevel();
+    _loadStats();
   }
 
-  void _initializeUserLevel() {
-    final user = Supabase.instance.client.auth.currentUser;
-    bool isTestUser = (user?.email?.contains('david') ?? false) ||
-                      (user?.email?.contains('test') ?? false);
-    
-    if (isTestUser) {
-      userLevel = 5;
-      levelProgress = 0.35;
-      levelName = "Alpine Master";
-      kmToNextLevel = 650;
-    } else {
-      userLevel = 1;
-      levelProgress = 0.10;
-      levelName = "Street Rookie";
-      kmToNextLevel = 899;
+  Future<void> _loadStats() async {
+    try {
+      final result = await GamificationService.calculateAndSync();
+      if (mounted) {
+        setState(() {
+          userLevel = result.level.level;
+          levelProgress = result.level.progress;
+          levelName = result.level.name;
+          kmToNextLevel = result.level.kmToNextLevel;
+          totalRoutes = result.totalRoutes;
+          totalDistanceKm = result.totalDistanceKm;
+          badgeCount = result.earnedBadgeIds.length;
+          _loading = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) setState(() => _loading = false);
     }
   }
 
@@ -128,32 +135,22 @@ class _HomeContentPageState extends State<HomeContentPage> {
                   ),
                   const SizedBox(height: 12),
                   // Stats List & Percentage
-                  Row(
-                    children: [
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
+                  _loading
+                    ? const Center(child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFFFF3B30))))
+                    : Row(
                         children: [
-                          Row(children: const [
-                            Text("🏎️", style: TextStyle(fontSize: 14)),
-                            SizedBox(width: 8),
-                            Text("1.287 Km gesamt", style: TextStyle(color: Colors.white70, fontSize: 12)),
-                          ]),
-                          const SizedBox(height: 6),
-                          Row(children: const [
-                            Text("🛣️", style: TextStyle(fontSize: 14)),
-                            SizedBox(width: 8),
-                            Text("3 neue Strecken", style: TextStyle(color: Colors.white70, fontSize: 12)),
-                          ]),
-                          const SizedBox(height: 6),
-                          Row(children: const [
-                            Text("🏅", style: TextStyle(fontSize: 14)),
-                            SizedBox(width: 8),
-                            Text("5 Badges", style: TextStyle(color: Colors.white70, fontSize: 12)),
-                          ]),
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              _statRow("🏎️", "${totalDistanceKm.toStringAsFixed(0)} Km gesamt"),
+                              const SizedBox(height: 6),
+                              _statRow("🛣️", "$totalRoutes Strecken"),
+                              const SizedBox(height: 6),
+                              _statRow("🏅", "$badgeCount Badges"),
+                            ],
+                          ),
                         ],
                       ),
-                    ],
-                  ),
                   const SizedBox(height: 12),
                   // Progress Bar with Gradient
                   Column(
@@ -458,6 +455,14 @@ class _HomeContentPageState extends State<HomeContentPage> {
         ),
       ),
     );
+  }
+
+  Widget _statRow(String emoji, String text) {
+    return Row(children: [
+      Text(emoji, style: const TextStyle(fontSize: 14)),
+      const SizedBox(width: 8),
+      Text(text, style: const TextStyle(color: Colors.white70, fontSize: 12)),
+    ]);
   }
 
   Widget _buildCommunityItem(String text, String emoji) {

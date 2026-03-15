@@ -2,10 +2,14 @@ import 'package:cruise_connect/presentation/pages/interactive_post_card.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:cruise_connect/data/services/social_service.dart';
+import 'package:cruise_connect/data/services/saved_routes_service.dart';
+import 'package:cruise_connect/domain/models/saved_route.dart';
 import 'package:cruise_connect/presentation/pages/welcome_page.dart';
 import 'package:cruise_connect/presentation/pages/create_post_page.dart';
 import 'package:cruise_connect/presentation/pages/edit_profile_page.dart';
 import 'package:cruise_connect/presentation/pages/settings_page.dart';
+import 'package:cruise_connect/presentation/pages/cruise_mode_page.dart';
 
 class ProfilePage extends StatefulWidget {
   const ProfilePage({super.key});
@@ -18,10 +22,18 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
   late TabController _tabController;
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
 
+  bool _loading = true;
+  int _followerCount = 0;
+  int _followingCount = 0;
+  List<Map<String, dynamic>> _posts = [];
+  List<Map<String, dynamic>> _groups = [];
+  List<SavedRoute> _savedRoutes = [];
+
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 2, vsync: this);
+    _tabController = TabController(length: 3, vsync: this);
+    _loadData();
   }
 
   @override
@@ -30,9 +42,39 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
     super.dispose();
   }
 
+  Future<void> _loadData() async {
+    final uid = Supabase.instance.client.auth.currentUser?.id;
+    if (uid == null) {
+      if (mounted) setState(() => _loading = false);
+      return;
+    }
+
+    try {
+      final results = await Future.wait([
+        SocialService.getFollowerCount(uid),
+        SocialService.getFollowingCount(uid),
+        SocialService.getUserPosts(uid),
+        SocialService.getMyGroups(),
+        SavedRoutesService.getUserRoutes(),
+      ]);
+
+      if (mounted) {
+        setState(() {
+          _followerCount = results[0] as int;
+          _followingCount = results[1] as int;
+          _posts = results[2] as List<Map<String, dynamic>>;
+          _groups = results[3] as List<Map<String, dynamic>>;
+          _savedRoutes = results[4] as List<SavedRoute>;
+          _loading = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
   void signUserOut() async {
     await Supabase.instance.client.auth.signOut();
-
     if (mounted) {
       Navigator.pushAndRemoveUntil(
         context,
@@ -42,11 +84,22 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
     }
   }
 
+  String _formatTimeAgo(String? dateStr) {
+    if (dateStr == null) return '';
+    final date = DateTime.tryParse(dateStr);
+    if (date == null) return '';
+    final diff = DateTime.now().difference(date);
+    if (diff.inMinutes < 60) return '${diff.inMinutes} Min.';
+    if (diff.inHours < 24) return '${diff.inHours} Std.';
+    if (diff.inDays < 30) return '${diff.inDays} Tage';
+    return '${(diff.inDays / 30).floor()} Mon.';
+  }
+
   @override
   Widget build(BuildContext context) {
     final user = Supabase.instance.client.auth.currentUser;
     final String userEmail = user?.email ?? "user@cruiseconnect.com";
-    final String userName = (user?.userMetadata?['username'] as String?) ?? "Cruiser";
+    final String userName = (user?.userMetadata?['username'] as String?) ?? userEmail.split('@')[0];
     final String userHandle = "@${userEmail.split('@')[0]}";
 
     return Scaffold(
@@ -57,14 +110,14 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
         backgroundColor: const Color(0xFFFF3B30),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         child: const Icon(Icons.add, color: Colors.white),
-        onPressed: () {
-          Navigator.push(context, MaterialPageRoute(builder: (_) => const CreatePostPage()));
+        onPressed: () async {
+          await Navigator.push(context, MaterialPageRoute(builder: (_) => const CreatePostPage()));
+          _loadData();
         },
       ),
       body: NestedScrollView(
         headerSliverBuilder: (context, innerBoxIsScrolled) {
           return [
-            // A. SliverAppBar (Banner + Burger Menu)
             SliverAppBar(
               systemOverlayStyle: const SystemUiOverlayStyle(
                 statusBarColor: Colors.transparent,
@@ -82,10 +135,7 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
                     return const LinearGradient(
                       begin: Alignment.topCenter,
                       end: Alignment.bottomCenter,
-                      colors: [
-                        Colors.white,
-                        Colors.transparent,
-                      ],
+                      colors: [Colors.white, Colors.transparent],
                       stops: [0.6, 1.0],
                     ).createShader(bounds);
                   },
@@ -100,7 +150,7 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
                       ),
                     ),
                     child: Center(
-                      child: Icon(Icons.camera_alt_outlined, size: 80, color: Colors.white.withOpacity(0.05)),
+                      child: Icon(Icons.camera_alt_outlined, size: 80, color: Colors.white.withValues(alpha: 0.05)),
                     ),
                   ),
                 ),
@@ -109,7 +159,7 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
                 Container(
                   margin: const EdgeInsets.only(right: 8),
                   decoration: BoxDecoration(
-                    color: Colors.black.withOpacity(0.5),
+                    color: Colors.black.withValues(alpha: 0.5),
                     shape: BoxShape.circle,
                   ),
                   child: IconButton(
@@ -120,101 +170,64 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
               ],
             ),
 
-            // B. SliverToBoxAdapter (Profil-Infos)
             SliverToBoxAdapter(
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 16.0),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // Avatar & Edit Button Row
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       crossAxisAlignment: CrossAxisAlignment.end,
                       children: [
-                        // Avatar (Overlapping)
                         Transform.translate(
                           offset: const Offset(0, -40),
                           child: Container(
                             padding: const EdgeInsets.all(5),
                             decoration: const BoxDecoration(
-                              color: Color(0xFF0B0E14), // Match Scaffold bg for border effect
+                              color: Color(0xFF0B0E14),
                               shape: BoxShape.circle,
                             ),
-                            child: const CircleAvatar(
+                            child: CircleAvatar(
                               radius: 40,
-                              backgroundColor: Color(0xFF3A3E48),
-                              child: Icon(Icons.person, size: 40, color: Colors.white),
+                              backgroundColor: const Color(0xFFFF3B30),
+                              child: Text(
+                                userName.isNotEmpty ? userName[0].toUpperCase() : 'U',
+                                style: const TextStyle(color: Colors.white, fontSize: 32, fontWeight: FontWeight.bold),
+                              ),
                             ),
                           ),
                         ),
-                        // Edit Profile Button
                         Padding(
                           padding: const EdgeInsets.only(bottom: 10),
                           child: GestureDetector(
-                            onTap: () {
-                              Navigator.push(context, MaterialPageRoute(builder: (_) => const EditProfilePage()));
-                            },
+                            onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const EditProfilePage())),
                             child: Container(
                               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                               decoration: BoxDecoration(
-                                color: Colors.transparent,
                                 borderRadius: BorderRadius.circular(20),
-                                border: Border.all(color: Colors.white30, width: 1),
+                                border: Border.all(color: Colors.white30),
                               ),
-                              child: const Text(
-                                "Profil bearbeiten",
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 14,
-                                ),
-                              ),
+                              child: const Text("Profil bearbeiten", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
                             ),
                           ),
                         ),
                       ],
                     ),
-                    
-                    // Infos (Pull up slightly due to transform above)
                     Transform.translate(
                       offset: const Offset(0, -30),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(
-                            userName,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 24,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
+                          Text(userName, style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
                           const SizedBox(height: 4),
-                          Text(
-                            userHandle,
-                            style: const TextStyle(
-                              color: Colors.grey,
-                              fontSize: 15,
-                            ),
-                          ),
+                          Text(userHandle, style: const TextStyle(color: Colors.grey, fontSize: 15)),
                           const SizedBox(height: 12),
                           Row(
                             children: [
-                              const Icon(Icons.calendar_month_outlined, color: Colors.grey, size: 16),
-                              const SizedBox(width: 6),
-                              const Text(
-                                "Beigetreten April 2023",
-                                style: TextStyle(color: Colors.grey, fontSize: 14),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 12),
-                          Row(
-                            children: [
-                              _buildFollowStat("12", "Folge ich"),
+                              _buildFollowStat('$_followingCount', "Folge ich"),
                               const SizedBox(width: 16),
-                              _buildFollowStat("240", "Follower"),
+                              _buildFollowStat('$_followerCount', "Follower"),
                             ],
                           ),
                         ],
@@ -225,50 +238,154 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
               ),
             ),
 
-            // C. SliverPersistentHeader (Tabs)
-            SliverPersistentHeader(
-              delegate: _SliverAppBarDelegate(
-                TabBar(
+            // Tabs (scrollt mit)
+            SliverToBoxAdapter(
+              child: Container(
+                color: const Color(0xFF0B0E14),
+                child: TabBar(
                   controller: _tabController,
                   indicatorColor: const Color(0xFFFF3B30),
                   indicatorSize: TabBarIndicatorSize.tab,
                   labelColor: Colors.white,
                   unselectedLabelColor: Colors.grey,
-                  labelStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                  labelStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
                   tabs: const [
                     Tab(text: "Posts"),
-                    Tab(text: "Aktive Gruppen"),
+                    Tab(text: "Routen"),
+                    Tab(text: "Gruppen"),
                   ],
                 ),
               ),
-              pinned: true,
             ),
           ];
         },
-        body: TabBarView(
-          controller: _tabController,
-          children: [
-            // Tab 1: Posts
-            ListView(
-              padding: const EdgeInsets.only(top: 10, bottom: 40),
+        body: _loading
+            ? const Center(child: CircularProgressIndicator(color: Color(0xFFFF3B30)))
+            : TabBarView(
+                controller: _tabController,
+                children: [
+                  // Tab 1: Posts
+                  _posts.isEmpty
+                      ? const Center(child: Text('Noch keine Posts', style: TextStyle(color: Colors.grey)))
+                      : ListView.builder(
+                          padding: const EdgeInsets.only(top: 10, bottom: 80),
+                          itemCount: _posts.length,
+                          itemBuilder: (context, index) {
+                            final post = _posts[index];
+                            final profile = post['profiles'] as Map<String, dynamic>?;
+                            return InteractivePostCard(
+                              name: profile?['username'] ?? userName,
+                              handle: userHandle,
+                              time: _formatTimeAgo(post['created_at']),
+                              content: post['content'] ?? '',
+                              initialLikeCount: '${post['likes_count'] ?? 0}',
+                              initialCommentCount: '${post['comments_count'] ?? 0}',
+                              initialRepostCount: '${post['reposts_count'] ?? 0}',
+                            );
+                          },
+                        ),
+
+                  // Tab 2: Gespeicherte Routen
+                  _savedRoutes.isEmpty
+                      ? Center(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.route, color: Colors.grey[700], size: 48),
+                              const SizedBox(height: 12),
+                              const Text('Noch keine Routen gespeichert', style: TextStyle(color: Colors.grey)),
+                              const SizedBox(height: 4),
+                              const Text('Fahre los und bestätige deine erste Route!', style: TextStyle(color: Colors.grey, fontSize: 12)),
+                            ],
+                          ),
+                        )
+                      : ListView.builder(
+                          padding: const EdgeInsets.all(16),
+                          itemCount: _savedRoutes.length,
+                          itemBuilder: (context, index) {
+                            final route = _savedRoutes[index];
+                            return _buildRouteCard(route);
+                          },
+                        ),
+
+                  // Tab 3: Gruppen
+                  _groups.isEmpty
+                      ? const Center(child: Text('Noch keiner Gruppe beigetreten', style: TextStyle(color: Colors.grey)))
+                      : ListView.builder(
+                          padding: const EdgeInsets.all(16),
+                          itemCount: _groups.length,
+                          itemBuilder: (context, index) {
+                            final group = _groups[index];
+                            return Padding(
+                              padding: const EdgeInsets.only(bottom: 16),
+                              child: _buildGroupCard(
+                                group['name'] ?? 'Gruppe',
+                                group['route_name'] ?? '',
+                                group['stats'] ?? '',
+                                (group['group_members'] as List?)?.length ?? 0,
+                                group['time_location'] ?? '',
+                                true,
+                              ),
+                            );
+                          },
+                        ),
+                ],
+              ),
+      ),
+    );
+  }
+
+  Widget _buildRouteCard(SavedRoute route) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1C1F26),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: const Color(0xFFFF3B30).withValues(alpha: 0.15),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Center(child: Text(route.styleEmoji, style: const TextStyle(fontSize: 20))),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                InteractivePostCard(name: userName, handle: userHandle, time: "2 Std.", content: "Endlich Level 5 erreicht! Die 'Alpine Master' Badge sieht im Profil echt gut aus. 🏔️🏎️", initialLikeCount: "24", initialCommentCount: "2"),
-                InteractivePostCard(name: userName, handle: userHandle, time: "1 Tag", content: "Suche noch Leute für den Night Run am Freitag. Wer ist dabei?", initialLikeCount: "5", initialCommentCount: "8"),
-                InteractivePostCard(name: userName, handle: userHandle, time: "3 Tage", content: "Mein neuer Rekord auf der Hausstrecke: 4:20 min. 🔥", initialLikeCount: "42", initialRepostCount: "3"),
+                Text(route.name ?? route.style, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
+                const SizedBox(height: 4),
+                Text(
+                  '${route.formattedDistance} · ${route.formattedDuration}',
+                  style: const TextStyle(color: Colors.grey, fontSize: 12),
+                ),
               ],
             ),
-            
-            // Tab 2: Aktive Gruppen
-            ListView(
-              padding: const EdgeInsets.all(16),
-              children: [
-                _buildGroupCard("Alpine Rush", "Passstraße", "87 Km • 132 Kurven", 23, "18 Uhr | P3", true),
-                const SizedBox(height: 16),
-                _buildGroupCard("City Loop", "Innenstadt", "45 Km • 20 Kurven", 12, "22 Uhr | Tankstelle", true),
-              ],
+          ),
+          // Play Button
+          if (route.geometry != null)
+            IconButton(
+              icon: const Icon(Icons.play_circle_fill, color: Color(0xFFFF3B30), size: 32),
+              onPressed: () {
+                Navigator.push(context, MaterialPageRoute(builder: (_) => CruiseModePage(initialRoute: route)));
+              },
             ),
-          ],
-        ),
+          // Delete
+          IconButton(
+            icon: Icon(Icons.delete_outline, color: Colors.grey[600], size: 20),
+            onPressed: () async {
+              await SavedRoutesService.deleteRoute(route.id);
+              _loadData();
+            },
+          ),
+        ],
       ),
     );
   }
@@ -284,25 +401,17 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
               padding: EdgeInsets.symmetric(horizontal: 20),
               child: Align(
                 alignment: Alignment.centerLeft,
-                child: Text(
-                  "Menü",
-                  style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold),
-                ),
+                child: Text("Menü", style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold)),
               ),
             ),
             const SizedBox(height: 20),
-            _buildMenuItem(
-              Icons.settings, 
-              "Einstellungen", 
-              onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const SettingsPage()))
-            ),
-            _buildMenuItem(Icons.lock, "Privatsphäre"),
-            _buildMenuItem(Icons.bookmark, "Gespeicherte Routen"),
-            _buildMenuItem(Icons.history, "Fahrtverlauf"),
+            _buildMenuItem(Icons.settings, "Einstellungen",
+                onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const SettingsPage()))),
+            _buildMenuItem(Icons.bookmark, "Gespeicherte Routen", onTap: () {
+              _tabController.animateTo(1);
+            }),
             _buildMenuItem(Icons.help_outline, "Hilfe & Support"),
-            
             const Spacer(),
-            
             Padding(
               padding: const EdgeInsets.all(20.0),
               child: SizedBox(
@@ -310,7 +419,7 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
                 child: ElevatedButton(
                   onPressed: signUserOut,
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFFFF3B30).withOpacity(0.1),
+                    backgroundColor: const Color(0xFFFF3B30).withValues(alpha: 0.1),
                     foregroundColor: const Color(0xFFFF3B30),
                     padding: const EdgeInsets.symmetric(vertical: 16),
                     shape: RoundedRectangleBorder(
@@ -318,10 +427,7 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
                       side: const BorderSide(color: Color(0xFFFF3B30)),
                     ),
                   ),
-                  child: const Text(
-                    "Ausloggen",
-                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-                  ),
+                  child: const Text("Ausloggen", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
                 ),
               ),
             ),
@@ -336,10 +442,8 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
       leading: Icon(icon, color: Colors.white70),
       title: Text(title, style: const TextStyle(color: Colors.white, fontSize: 16)),
       onTap: () {
-        Navigator.pop(context); // Close drawer
-        if (onTap != null) {
-          onTap();
-        }
+        Navigator.pop(context);
+        onTap?.call();
       },
     );
   }
@@ -347,15 +451,9 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
   Widget _buildFollowStat(String count, String label) {
     return Row(
       children: [
-        Text(
-          count,
-          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15),
-        ),
+        Text(count, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
         const SizedBox(width: 4),
-        Text(
-          label,
-          style: const TextStyle(color: Colors.grey, fontSize: 15),
-        ),
+        Text(label, style: const TextStyle(color: Colors.grey, fontSize: 15)),
       ],
     );
   }
@@ -365,130 +463,49 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
       decoration: BoxDecoration(
         color: const Color(0xFF1C1F26),
         borderRadius: BorderRadius.circular(16),
-        border: isJoined ? Border.all(color: Colors.greenAccent.withOpacity(0.5), width: 1) : null,
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.2),
-            blurRadius: 8,
-            offset: const Offset(0, 4),
-          ),
-        ],
+        border: isJoined ? Border.all(color: Colors.greenAccent.withValues(alpha: 0.5)) : null,
       ),
-      child: Stack(
-        children: [
-          IntrinsicHeight(
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Expanded(
-                  flex: 3,
-                  child: Padding(
-                    padding: const EdgeInsets.all(16.0),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Text(title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
-                        const SizedBox(height: 8),
-                        Row(
-                          children: [
-                            const Icon(Icons.terrain, color: Colors.white70, size: 14),
-                            const SizedBox(width: 6),
-                            Text(routeName, style: const TextStyle(color: Colors.white, fontSize: 14)),
-                          ],
-                        ),
-                        const SizedBox(height: 6),
-                        Text(stats, style: const TextStyle(color: Colors.grey, fontSize: 11)),
-                        const SizedBox(height: 12),
-                        Row(
-                          children: [
-                            const Icon(Icons.local_fire_department, color: Colors.orange, size: 14),
-                            const SizedBox(width: 6),
-                            Text("$drivers Fahrer", style: const TextStyle(color: Colors.white70, fontSize: 12)),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-                Expanded(
-                  flex: 2,
-                  child: Container(
-                    constraints: const BoxConstraints(minHeight: 130),
+                Text(title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+                if (isJoined)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                     decoration: BoxDecoration(
-                      borderRadius: const BorderRadius.only(
-                        topRight: Radius.circular(16),
-                        bottomRight: Radius.circular(16),
-                      ),
-                      image: const DecorationImage(
-                        image: AssetImage('lib/images/car_placeholder.jpg'),
-                        fit: BoxFit.cover,
-                      ),
+                      color: Colors.greenAccent.withValues(alpha: 0.2),
+                      borderRadius: BorderRadius.circular(8),
                     ),
-                    child: Container(
-                      decoration: BoxDecoration(
-                        borderRadius: const BorderRadius.only(
-                          topRight: Radius.circular(16),
-                          bottomRight: Radius.circular(16),
-                        ),
-                        gradient: LinearGradient(
-                          begin: Alignment.centerLeft,
-                          end: Alignment.centerRight,
-                          colors: [
-                            const Color(0xFF1C1F26),
-                            const Color(0xFF1C1F26).withOpacity(0.0),
-                          ],
-                        ),
-                      ),
-                    ),
+                    child: const Text("Dabei", style: TextStyle(color: Colors.greenAccent, fontSize: 10, fontWeight: FontWeight.bold)),
                   ),
-                ),
               ],
             ),
-          ),
-          if (isJoined)
-            Positioned(
-              top: 12,
-              right: 12,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: Colors.greenAccent.withOpacity(0.2),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: Colors.greenAccent.withOpacity(0.5)),
-                ),
-                child: const Text(
-                  "Dabei",
-                  style: TextStyle(color: Colors.greenAccent, fontSize: 10, fontWeight: FontWeight.bold),
-                ),
-              ),
-            ),
-        ],
+            if (routeName.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Row(children: [
+                const Icon(Icons.terrain, color: Colors.white70, size: 14),
+                const SizedBox(width: 6),
+                Text(routeName, style: const TextStyle(color: Colors.white, fontSize: 14)),
+              ]),
+            ],
+            if (stats.isNotEmpty) ...[
+              const SizedBox(height: 4),
+              Text(stats, style: const TextStyle(color: Colors.grey, fontSize: 11)),
+            ],
+            const SizedBox(height: 8),
+            Row(children: [
+              const Icon(Icons.local_fire_department, color: Colors.orange, size: 14),
+              const SizedBox(width: 6),
+              Text("$drivers Fahrer", style: const TextStyle(color: Colors.white70, fontSize: 12)),
+            ]),
+          ],
+        ),
       ),
     );
-  }
-}
-
-class _SliverAppBarDelegate extends SliverPersistentHeaderDelegate {
-  final TabBar _tabBar;
-
-  _SliverAppBarDelegate(this._tabBar);
-
-  @override
-  double get minExtent => _tabBar.preferredSize.height;
-  @override
-  double get maxExtent => _tabBar.preferredSize.height;
-
-  @override
-  Widget build(BuildContext context, double shrinkOffset, bool overlapsContent) {
-    return Container(
-      color: const Color(0xFF0B0E14), // Background color for sticky header
-      child: _tabBar,
-    );
-  }
-
-  @override
-  bool shouldRebuild(_SliverAppBarDelegate oldDelegate) {
-    return false;
   }
 }
