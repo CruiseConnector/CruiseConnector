@@ -3,7 +3,6 @@
 // This enables autocomplete, go to definition, etc.
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts"
-import { createClient } from 'jsr:@supabase/supabase-js@2'
 
 // Environment variables
 const MAPBOX_ACCESS_TOKEN = Deno.env.get('MAPBOX_ACCESS_TOKEN')
@@ -272,21 +271,23 @@ Deno.serve(async (req) => {
         let radiusesParams = '';
 
         if (mode === 'Kurvenjagd') {
+                // Bergstraßen & Kurven: Autobahnen + Schnellstraßen ausschließen → nur Landstraßen
                 mapboxProfile = 'mapbox/driving';
-                excludeParams = 'motorway'; // Nur Autobahnen ausschließen — trunk/primary können Sackgassen verursachen
+                excludeParams = 'motorway,toll';
         } else if (mode === 'Sport Mode') {
+                // Schnelle, leicht kurvige Strecken: nur Autobahn vermeiden
                 mapboxProfile = 'mapbox/driving';
                 excludeParams = 'motorway';
-                // Radiuses need to be set for EACH coordinate. We will calculate this after we determine the waypoints list.
         } else if (mode === 'Abendrunde') {
+                // Entspannte Stadt-Route: Traffic-Profil bevorzugt beleuchtete Hauptstraßen
                 mapboxProfile = 'mapbox/driving-traffic';
-                // 'beleuchtete Hauptstra뿯½en' -> traffic profile favors main roads. No specific exclude.
-                excludeParams = '';
+                excludeParams = 'motorway,unpaved';
         } else if (mode === 'Entdecker') {
+                // Unbefahrene Strecken: keine Einschränkungen, alle Straßentypen erlaubt
                 mapboxProfile = 'mapbox/driving';
-                excludeParams = ''; // Standard profile, minimal filters
+                excludeParams = 'motorway,toll';
         } else {
-                // Default fallback
+                // Default/Standard fallback
                 mapboxProfile = 'mapbox/driving';
         }
 
@@ -313,10 +314,23 @@ Deno.serve(async (req) => {
                         const effectiveDistance = Math.min(targetDistance, 150);
                         distanceConfig = getDistanceConfig(effectiveDistance)
 
-                        // Generate WP1 and WP2
-                        const generatedWPs = calculateTriangleWaypoints(startLocation, distanceConfig.radiusKm);
+                        // Waypoint-Strategie je nach Fahrstil
+                        let generatedWPs: Coordinate[];
+                        if (mode === 'Kurvenjagd') {
+                            // Mehr Waypoints für kurvigere Routen (4-5 Punkte im Kreis)
+                            generatedWPs = calculateLoopWaypoints(startLocation, distanceConfig.radiusKm * 1.1, 4);
+                        } else if (mode === 'Entdecker') {
+                            // Loop mit vielen Waypoints für abwechslungsreiche Strecken
+                            generatedWPs = calculateLoopWaypoints(startLocation, distanceConfig.radiusKm * 0.9, 5);
+                        } else if (mode === 'Abendrunde') {
+                            // Kompakter Dreieck, kürzerer Radius für Stadtnähe
+                            generatedWPs = calculateTriangleWaypoints(startLocation, distanceConfig.radiusKm * 0.7);
+                        } else {
+                            // Sport Mode & Standard: normales Dreieck
+                            generatedWPs = calculateTriangleWaypoints(startLocation, distanceConfig.radiusKm);
+                        }
 
-                        // Route: Start -> WP1 -> WP2 -> Start
+                        // Route: Start -> WPs -> Start
                         finalWaypoints = [startLocation, ...generatedWPs, startLocation];
                 }
 
@@ -329,10 +343,11 @@ Deno.serve(async (req) => {
                 throw new Error("Invalid planning_type. Must be 'Zufall' or 'Wegpunkte'.")
         }
 
-        // Radiuses: Start/Ende unlimited (echte GPS-Position), Zwischenpunkte 5000m
-        // Das verhindert Fehler wenn ein Zwischenpunkt in einem nicht zugänglichen Gebiet liegt
+        // Radiuses: Start/Ende unlimited (echte GPS-Position), Zwischenpunkte 2000m
+        // Nicht zu groß (verhindert Snapping auf weit entfernte Autobahnen)
+        // Nicht zu klein (verhindert "no route found" bei ländlichen Wegpunkten)
         radiusesParams = finalWaypoints
-            .map((_, i) => (i === 0 || i === finalWaypoints.length - 1) ? 'unlimited' : '5000')
+            .map((_, i) => (i === 0 || i === finalWaypoints.length - 1) ? 'unlimited' : '2000')
             .join(';');
 
         // --- Execute Route Request ---
@@ -404,32 +419,13 @@ Deno.serve(async (req) => {
             ? Math.min(Math.max(actualDistanceKm, distanceConfig.minKm), distanceConfig.maxKm)
             : actualDistanceKm
 
-        // --- 5. Database Integration ---
-        // Save successful route to DB
-        const supabase = createClient(
-            Deno.env.get('SUPABASE_URL') ?? '',
-            Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
-        )
-
-        // We assume the table 'routes' exists with strict columns per request
-        const { error: dbError } = await supabase
-            .from('routes')
-            .insert({
-                style: mode,
-                distance_target: targetDistance || clampedDistanceKm, // Fallback if no target set
-                distance_actual: clampedDistanceKm,
-                geometry: route.geometry, // GeoJSON geometry from Mapbox
-                // Optional: user_id if authentication was available in context, or other metadata
-            })
-
-        if (dbError) {
-                console.error("Failed to save route to database:", dbError)
-                // We choose not to fail the request if DB save fails, just log it.
-        }
+        // Route wird NICHT in der Edge Function gespeichert.
+        // Die App speichert via SavedRoutesService.saveRoute() MIT user_id.
+        // (Edge Function hat keinen Auth-Context → konnte vorher kein user_id setzen)
 
         const routeForFrontend = {
             ...route,
-            distance: clampedDistanceKm,
+            distance: route.distance, // Mapbox-Originalwert in METERN beibehalten
             legs: route.legs ?? [],
         }
 

@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-/// Dialog der nach Abschluss einer Route angezeigt wird.
+/// Dialog der nach Abschluss oder vorzeitigem Beenden einer Route angezeigt wird.
 /// Zeigt Statistiken und eine Sterne-Bewertung.
 class CruiseCompletionDialog extends StatefulWidget {
   const CruiseCompletionDialog({
@@ -8,11 +8,15 @@ class CruiseCompletionDialog extends StatefulWidget {
     required this.distanceKm,
     required this.onSave,
     required this.onDiscard,
+    this.isEarlyStop = false,
+    this.totalRouteKm,
   });
 
   final double? distanceKm;
   final ValueChanged<int> onSave; // rating (1-5)
   final VoidCallback onDiscard;
+  final bool isEarlyStop;
+  final double? totalRouteKm; // Gesamte geplante Route
 
   @override
   State<CruiseCompletionDialog> createState() => _CruiseCompletionDialogState();
@@ -23,16 +27,24 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final drivenKm = widget.distanceKm?.toStringAsFixed(1) ?? '--';
+    final progressPercent = (widget.distanceKm != null && widget.totalRouteKm != null && widget.totalRouteKm! > 0)
+        ? ((widget.distanceKm! / widget.totalRouteKm!) * 100).clamp(0, 100).round()
+        : null;
+
     return AlertDialog(
       backgroundColor: const Color(0xFF1C1F26),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-      title: const Column(
+      title: Column(
         children: [
-          Text('\u{1F3C1}', style: TextStyle(fontSize: 48)),
-          SizedBox(height: 8),
           Text(
-            'Route abgeschlossen!',
-            style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
+            widget.isEarlyStop ? '\u{1F6D1}' : '\u{1F3C1}',
+            style: const TextStyle(fontSize: 48),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            widget.isEarlyStop ? 'Fahrt beendet' : 'Route abgeschlossen!',
+            style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
             textAlign: TextAlign.center,
           ),
         ],
@@ -40,10 +52,36 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog> {
       content: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text(
-            '${widget.distanceKm?.toStringAsFixed(1) ?? '--'} km gefahren',
-            style: const TextStyle(color: Color(0xFFA0AEC0), fontSize: 14),
+          // Gefahrene Distanz
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.straighten_rounded, color: Color(0xFFFF3B30), size: 20),
+              const SizedBox(width: 8),
+              Text(
+                '$drivenKm km gefahren',
+                style: const TextStyle(color: Color(0xFFA0AEC0), fontSize: 15, fontWeight: FontWeight.w500),
+              ),
+            ],
           ),
+          if (widget.isEarlyStop && progressPercent != null) ...[
+            const SizedBox(height: 8),
+            // Fortschrittsbalken
+            ClipRRect(
+              borderRadius: BorderRadius.circular(4),
+              child: LinearProgressIndicator(
+                value: (progressPercent / 100).clamp(0.0, 1.0),
+                backgroundColor: Colors.white12,
+                valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFFFF3B30)),
+                minHeight: 6,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              '$progressPercent% der Route geschafft',
+              style: const TextStyle(color: Colors.white38, fontSize: 12),
+            ),
+          ],
           const SizedBox(height: 20),
           const Text(
             'Wie war die Strecke?',

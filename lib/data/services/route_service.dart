@@ -168,14 +168,26 @@ class RouteService {
 
         final routeIndex = _findNearestIndex(latitude, longitude, routeCoordinates);
 
+        // Kreisverkehr erkennen
+        final isRoundabout = type == 'roundabout' ||
+            type == 'rotary' ||
+            type == 'roundabout turn';
+        final exitNumber = isRoundabout
+            ? (maneuver['exit'] as num?)?.toInt()
+            : null;
+
         maneuvers.add(
           RouteManeuver(
             latitude: latitude,
             longitude: longitude,
             routeIndex: routeIndex,
-            icon: _iconForModifier(modifier),
+            icon: isRoundabout ? Icons.roundabout_left : _iconForManeuver(type, modifier),
             announcement: _announcementFromInstruction(rawInstruction, modifier, distance),
-            instruction: _normalizeInstruction(rawInstruction, modifier),
+            instruction: isRoundabout
+                ? _roundaboutInstruction(exitNumber, rawInstruction, modifier)
+                : _normalizeInstruction(rawInstruction, modifier),
+            maneuverType: isRoundabout ? ManeuverType.roundabout : ManeuverType.normal,
+            roundaboutExitNumber: exitNumber,
           ),
         );
       }
@@ -207,20 +219,37 @@ class RouteService {
 
   // ────────────────────── Icon / Text Helpers ────────────────────────────────
 
-  IconData _iconForModifier(String modifier) {
+  IconData _iconForManeuver(String type, String modifier) {
+    // Typen die immer "geradeaus" sind, egal welcher modifier
+    const straightTypes = {'new name', 'continue', 'merge', 'on ramp', 'notification'};
+    if (straightTypes.contains(type)) {
+      // Bei merge/ramp trotzdem Richtung anzeigen wenn stark
+      if (type == 'merge' || type == 'on ramp') {
+        if (modifier.contains('left')) return Icons.turn_slight_left;
+        if (modifier.contains('right')) return Icons.turn_slight_right;
+      }
+      return Icons.straight;
+    }
+
     switch (modifier.toLowerCase()) {
       case 'left':
+        return Icons.turn_left;
       case 'slight left':
+        return Icons.turn_slight_left;
       case 'sharp left':
         return Icons.turn_left;
       case 'right':
+        return Icons.turn_right;
       case 'slight right':
+        return Icons.turn_slight_right;
       case 'sharp right':
         return Icons.turn_right;
       case 'uturn':
       case 'uturn left':
       case 'uturn right':
         return Icons.u_turn_left;
+      case 'straight':
+        return Icons.straight;
       default:
         return Icons.straight;
     }
@@ -232,6 +261,27 @@ class RouteService {
       return 'In ${(meters / 1000).toStringAsFixed(1).replaceAll('.', ',')} km';
     } else {
       return 'In ${meters.toInt()} m';
+    }
+  }
+
+  String _roundaboutInstruction(int? exitNumber, String rawInstruction, String modifier) {
+    if (exitNumber != null && exitNumber > 0) {
+      final ordinal = _exitOrdinal(exitNumber);
+      return 'Im Kreisverkehr $ordinal Ausfahrt nehmen';
+    }
+    final normalized = _normalizeInstruction(rawInstruction, modifier);
+    if (normalized.toLowerCase().contains('kreisverkehr')) return normalized;
+    return 'Im Kreisverkehr weiterfahren';
+  }
+
+  String _exitOrdinal(int exit) {
+    switch (exit) {
+      case 1: return '1.';
+      case 2: return '2.';
+      case 3: return '3.';
+      case 4: return '4.';
+      case 5: return '5.';
+      default: return '$exit.';
     }
   }
 

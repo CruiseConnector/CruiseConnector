@@ -1,5 +1,11 @@
 import 'package:flutter/material.dart';
 
+/// Typ des Manövers für spezielle Darstellungen (z.B. Kreisverkehr).
+enum ManeuverType {
+  normal,
+  roundabout,
+}
+
 /// Eine einzelne Navigationsanweisung entlang einer Cruise-Route.
 class RouteManeuver {
   const RouteManeuver({
@@ -9,6 +15,8 @@ class RouteManeuver {
     required this.icon,
     required this.announcement,
     required this.instruction,
+    this.maneuverType = ManeuverType.normal,
+    this.roundaboutExitNumber,
   });
 
   final double latitude;
@@ -17,6 +25,8 @@ class RouteManeuver {
   final IconData icon;
   final String announcement;
   final String instruction;
+  final ManeuverType maneuverType;
+  final int? roundaboutExitNumber; // Welche Ausfahrt im Kreisverkehr (1, 2, 3...)
 }
 
 /// Ergebnis einer Nearest-Route-Point Fenstersuche.

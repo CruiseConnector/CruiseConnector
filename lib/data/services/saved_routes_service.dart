@@ -17,6 +17,7 @@ class SavedRoutesService {
     required bool isRoundTrip,
     String? customName,
     int? rating,
+    double? drivenKm,
   }) async {
     final userId = _db.auth.currentUser?.id;
     if (userId == null) return;
@@ -34,11 +35,13 @@ class SavedRoutesService {
       'name': name,
       'style': style,
       'route_type': routeType,
-      'distance_actual': distKm,
+      'distance_target': distKm,
+      'distance_actual': drivenKm ?? distKm,
       'duration_seconds': result.durationSeconds,
       'geometry': result.geometry,
     };
     if (rating != null && rating > 0) row['rating'] = rating;
+    if (drivenKm != null) row['driven_km'] = drivenKm;
 
     await _db.from('routes').insert(row);
   }

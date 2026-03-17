@@ -3,6 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/presentation/pages/create_post_page.dart';
 import 'package:cruise_connect/presentation/pages/create_group_page.dart';
+import 'package:cruise_connect/presentation/pages/user_profile_page.dart';
 
 class CommunityPage extends StatefulWidget {
   const CommunityPage({super.key});
@@ -324,22 +325,30 @@ class _CommunityPageState extends State<CommunityPage> with SingleTickerProvider
 
   // ── Post Item ─────────────────────────────────────────────────────────
 
+  void _openUserProfile(String userId) {
+    Navigator.push(context, MaterialPageRoute(builder: (_) => UserProfilePage(userId: userId)));
+  }
+
   Widget _buildPostItem(Map<String, dynamic> post, {bool showFollow = false}) {
     final profile = post['profiles'] as Map<String, dynamic>?;
     final name = profile?['username'] ?? profile?['email']?.split('@')[0] ?? 'User';
     final handle = '@${profile?['email']?.split('@')[0] ?? 'user'}';
     final time = _formatTimeAgo(post['created_at']);
     final content = post['content'] ?? '';
+    final postUserId = post['user_id'] as String?;
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          CircleAvatar(
-            radius: 20,
-            backgroundColor: const Color(0xFFFF3B30),
-            child: Text(name.isNotEmpty ? name[0].toUpperCase() : 'U', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+          GestureDetector(
+            onTap: () { if (postUserId != null) _openUserProfile(postUserId); },
+            child: CircleAvatar(
+              radius: 20,
+              backgroundColor: const Color(0xFFFF3B30),
+              child: Text(name.isNotEmpty ? name[0].toUpperCase() : 'U', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+            ),
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -348,7 +357,10 @@ class _CommunityPageState extends State<CommunityPage> with SingleTickerProvider
               children: [
                 Row(
                   children: [
-                    Text(name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
+                    GestureDetector(
+                      onTap: () { if (postUserId != null) _openUserProfile(postUserId); },
+                      child: Text(name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
+                    ),
                     const SizedBox(width: 5),
                     Flexible(child: Text(handle, style: const TextStyle(color: Colors.grey, fontSize: 14), overflow: TextOverflow.ellipsis)),
                     const SizedBox(width: 5),
@@ -546,6 +558,10 @@ class _CommunityPageState extends State<CommunityPage> with SingleTickerProvider
                                 final user = _searchResults[index];
                                 final username = user['username'] ?? user['email']?.split('@')[0] ?? 'User';
                                 return ListTile(
+                                  onTap: () {
+                                    Navigator.pop(context);
+                                    _openUserProfile(user['id']);
+                                  },
                                   leading: CircleAvatar(
                                     backgroundColor: const Color(0xFFFF3B30),
                                     child: Text(username[0].toUpperCase(), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
@@ -607,6 +623,7 @@ class _CommunityPageState extends State<CommunityPage> with SingleTickerProvider
               ...notifications.take(10).map((n) {
                 final from = n['profiles'] as Map<String, dynamic>?;
                 final fromName = from?['username'] ?? from?['email']?.split('@')[0] ?? 'User';
+                final fromId = from?['id'] as String?;
                 final type = n['type'];
                 String message;
                 IconData icon;
@@ -619,14 +636,45 @@ class _CommunityPageState extends State<CommunityPage> with SingleTickerProvider
                     message = '$fromName hat deinen Post geliked';
                     icon = Icons.favorite;
                     break;
+                  case 'group_invite':
+                    message = '$fromName hat dich in eine Gruppe eingeladen';
+                    icon = Icons.group_add;
+                    break;
                   default:
                     message = '$fromName hat interagiert';
                     icon = Icons.notifications;
                 }
+
                 return ListTile(
+                  onTap: () {
+                    Navigator.pop(context);
+                    if (fromId != null) _openUserProfile(fromId);
+                  },
                   leading: Icon(icon, color: const Color(0xFFFF3B30)),
                   title: Text(message, style: const TextStyle(color: Colors.white, fontSize: 14)),
                   subtitle: Text(_formatTimeAgo(n['created_at']), style: const TextStyle(color: Colors.grey, fontSize: 12)),
+                  trailing: type == 'group_invite' && n['reference_id'] != null
+                      ? GestureDetector(
+                          onTap: () async {
+                            await SocialService.joinGroup(n['reference_id']);
+                            if (mounted) {
+                              Navigator.pop(context);
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(content: Text('Gruppe beigetreten!'), backgroundColor: Color(0xFF1C1F26)),
+                              );
+                              _loadData();
+                            }
+                          },
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFFF3B30),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: const Text('Beitreten', style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
+                          ),
+                        )
+                      : null,
                 );
               }),
             const SizedBox(height: 20),

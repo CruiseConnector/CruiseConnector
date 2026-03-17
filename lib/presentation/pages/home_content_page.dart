@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:cruise_connect/data/services/gamification_service.dart';
+import 'package:cruise_connect/data/services/saved_routes_service.dart';
+import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/presentation/pages/route_join_page.dart';
 
 class HomeContentPage extends StatefulWidget {
@@ -20,6 +22,8 @@ class _HomeContentPageState extends State<HomeContentPage> {
   double totalDistanceKm = 0;
   int badgeCount = 0;
   bool _loading = true;
+  List<double> _weeklyChartData = List.filled(7, 0);
+  int _followerCount = 0;
 
   @override
   void initState() {
@@ -30,6 +34,34 @@ class _HomeContentPageState extends State<HomeContentPage> {
   Future<void> _loadStats() async {
     try {
       final result = await GamificationService.calculateAndSync();
+      final routes = await SavedRoutesService.getUserRoutes();
+
+      // Wöchentliche Daten berechnen
+      final now = DateTime.now();
+      final weekStart = now.subtract(Duration(days: now.weekday - 1));
+      final weeklyKm = List<double>.filled(7, 0);
+      for (final r in routes) {
+        if (r.createdAt.isAfter(weekStart)) {
+          final dayIndex = r.createdAt.weekday - 1;
+          if (dayIndex >= 0 && dayIndex < 7) {
+            weeklyKm[dayIndex] += r.distanceKm;
+          }
+        }
+      }
+      final maxKm = weeklyKm.fold<double>(0, (a, b) => a > b ? a : b);
+      final normalized = weeklyKm
+          .map((km) => maxKm > 0 ? (km / maxKm).clamp(0.0, 1.0) : 0.0)
+          .toList();
+
+      // Community stats
+      final uid = Supabase.instance.client.auth.currentUser?.id;
+      int followers = 0;
+      if (uid != null) {
+        try {
+          followers = await SocialService.getFollowerCount(uid);
+        } catch (_) {}
+      }
+
       if (mounted) {
         setState(() {
           userLevel = result.level.level;
@@ -39,6 +71,8 @@ class _HomeContentPageState extends State<HomeContentPage> {
           totalRoutes = result.totalRoutes;
           totalDistanceKm = result.totalDistanceKm;
           badgeCount = result.earnedBadgeIds.length;
+          _weeklyChartData = normalized;
+          _followerCount = followers;
           _loading = false;
         });
       }
@@ -353,11 +387,11 @@ class _HomeContentPageState extends State<HomeContentPage> {
                           ),
                         ),
                         const SizedBox(height: 10),
-                        _buildCommunityItem("6 Fahrer in deiner Nähe", "👥"),
+                        _buildCommunityItem("$_followerCount Follower", "👥"),
                         const SizedBox(height: 4),
-                        _buildCommunityItem("Meetup heute 18:30", "🔥"),
+                        _buildCommunityItem("$totalRoutes Fahrten absolviert", "🔥"),
                         const SizedBox(height: 4),
-                        _buildCommunityItem("Vorarlberg - Dornbirn", "📍"),
+                        _buildCommunityItem("Level $userLevel - $levelName", "📍"),
                         const SizedBox(height: 10),
                         SizedBox(
                           width: double.infinity, 
@@ -433,13 +467,13 @@ class _HomeContentPageState extends State<HomeContentPage> {
                                 mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                                 crossAxisAlignment: CrossAxisAlignment.end,
                                 children: [
-                                  _buildChartBar("01", 0.3),
-                                  _buildChartBar("02", 0.5),
-                                  _buildChartBar("03", 0.4),
-                                  _buildChartBar("04", 0.6),
-                                  _buildChartBar("05", 0.7),
-                                  _buildChartBar("06", 0.55),
-                                  _buildChartBar("07", 0.8),
+                                  _buildChartBar("Mo", _weeklyChartData[0]),
+                                  _buildChartBar("Di", _weeklyChartData[1]),
+                                  _buildChartBar("Mi", _weeklyChartData[2]),
+                                  _buildChartBar("Do", _weeklyChartData[3]),
+                                  _buildChartBar("Fr", _weeklyChartData[4]),
+                                  _buildChartBar("Sa", _weeklyChartData[5]),
+                                  _buildChartBar("So", _weeklyChartData[6]),
                                 ],
                               ),
                             ),

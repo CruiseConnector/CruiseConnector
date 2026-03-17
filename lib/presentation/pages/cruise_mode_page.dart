@@ -19,12 +19,17 @@ import 'package:cruise_connect/presentation/widgets/cruise/cruise_navigation_inf
 import 'package:cruise_connect/presentation/widgets/cruise/cruise_route_type_dialog.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/cruise_setup_card.dart';
 import 'package:cruise_connect/data/services/drive_control_panel.dart';
+import 'package:cruise_connect/data/services/gamification_service.dart';
 
 class CruiseModePage extends StatefulWidget {
   const CruiseModePage({super.key, this.initialRoute});
 
   /// Wenn gesetzt, wird diese Route direkt geladen und bestätigt.
   final SavedRoute? initialRoute;
+
+  /// Signalisiert dem Parent (HomePage), dass die Navigation im Fullscreen-Modus ist.
+  /// Wenn true, soll die BottomNavigationBar ausgeblendet werden.
+  static final ValueNotifier<bool> isFullscreen = ValueNotifier<bool>(false);
 
   @override
   State<CruiseModePage> createState() => _CruiseModePageState();
@@ -59,6 +64,7 @@ class _CruiseModePageState extends State<CruiseModePage> {
   PolylineAnnotationManager? _greyAnnotationManager;
   PolylineAnnotationManager? _polylineAnnotationManager;
   PolylineAnnotationManager? _cursorAnnotationManager;
+  CircleAnnotationManager? _simPuckManager;
   ViewportState? _viewportState;
   bool _isMapStyleLoaded = false;
   String? _mapLoadError;
@@ -79,7 +85,21 @@ class _CruiseModePageState extends State<CruiseModePage> {
   bool _isSimulationRunning = false;
   bool _isSimulationStepRunning = false;
   int _simulationIndex = 0;
-  final bool _isSimulationEnabled = false; // Task 2: Hard-Disable der Simulation
+  bool _isSimulationEnabled = true; // Simulation für Testing
+  double _simulationSpeedKmh = 60; // Aktuelle Simulationsgeschwindigkeit
+
+  bool _isCameraLocked = false; // Compass-Toggle: true = Kamera folgt dem Standort
+  double? _remainingDistance; // Live verbleibende Distanz in Metern
+  double? _remainingDuration; // Live verbleibende Zeit in Sekunden
+  bool _isRerouting = false; // Verhindert mehrfaches gleichzeitiges Rerouting
+  DateTime? _lastRerouteTime; // Cooldown zwischen Reroutes
+  int _offRouteCount = 0; // Zählt aufeinanderfolgende Off-Route-Updates
+  static const double _offRouteThresholdMeters = 150.0; // Ab wann Rerouting ausgelöst wird
+  static const int _offRouteCountThreshold = 5; // Mindestanzahl Off-Route-Updates vor Reroute
+  double _totalDistanceDriven = 0.0; // Gesamte gefahrene Strecke in Metern
+  double? _originalRouteDistance; // Ursprüngliche Gesamtdistanz (für Zeitberechnung)
+  double? _originalRouteDuration; // Ursprüngliche Gesamtdauer (für Zeitberechnung)
+  int _lastDrawnRouteIndex = 0; // Letzter Index bei dem die Route neu gezeichnet wurde
 
   bool _disposed = false;
 
@@ -100,6 +120,7 @@ class _CruiseModePageState extends State<CruiseModePage> {
   @override
   void dispose() {
     _disposed = true;
+    CruiseModePage.isFullscreen.value = false;
     _stopSimulation(restartLiveTracking: false);
     _positionSubscription?.cancel();
     _mapboxMap = null;
@@ -195,100 +216,94 @@ class _CruiseModePageState extends State<CruiseModePage> {
       body: Stack(
         children: [
           _buildMapWidget(),
-          Positioned(
-            top: MediaQuery.of(context).padding.top + 8,
-            left: 12,
-            child: Container(
-              decoration: BoxDecoration(
-                color: Colors.black.withValues(alpha: 0.45),
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: IconButton(
-                onPressed: () => setState(() {
-                  _stopSimulation(restartLiveTracking: false);
-                  _stopNavigationTracking();
-                  _isRouteConfirmed = false;
-                  _viewportState = null;
-                }),
-                icon: const Icon(Icons.close, color: Colors.white),
-                tooltip: 'Zurück',
-              ),
-            ),
-          ),
           if (_maneuvers.isNotEmpty)
             Positioned(
               top: MediaQuery.of(context).padding.top + 8,
               left: 12, right: 12,
               child: CruiseManeuverIndicator(
                 maneuver: _maneuvers[_activeManeuverIndex.clamp(0, _maneuvers.length - 1)],
-                userPosition: _userLocation,
+                distanceToManeuverMeters: _calculateDistanceToManeuver(),
               ),
             ),
+          // FAB-Spalte rechts: Simulation + Zentrieren
           Positioned(
-            right: 16, bottom: 260, // Weiter nach oben verschoben für das neue UI-Layout
-            child: FloatingActionButton(
-              heroTag: 'recenter_map_fab',
-              backgroundColor: const Color(0xFF2D3138),
-              foregroundColor: Colors.white,
-              onPressed: _recenterMap,
-              child: const Icon(Icons.explore),
-            ),
-          ),
-          if (_isSimulationEnabled && _fullRouteCoordinates.length > 1)
-            Positioned(
-              right: 16, bottom: 320, // Weiter nach oben verschoben
-              child: FloatingActionButton(
-                heroTag: 'simulation_fab',
-                mini: true,
-                backgroundColor: const Color(0xFF2D3138),
-                foregroundColor: Colors.white,
-                onPressed: _toggleSimulation,
-                child: Icon(_isSimulationRunning ? Icons.pause : Icons.play_arrow),
-              ),
-            ),
-          Positioned(
-            bottom: 0, left: 0, right: 0,
+            right: 16, bottom: 260,
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  child: CruiseNavigationInfoPanel(
-                    durationSeconds: _routeDuration,
-                    distanceMeters: _routeDistance,
+                // Simulation Start/Stop Button
+                if (_isSimulationEnabled && _fullRouteCoordinates.length > 1)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: FloatingActionButton(
+                      heroTag: 'simulation_fab',
+                      backgroundColor: _isSimulationRunning
+                          ? const Color(0xFFFF9500)
+                          : const Color(0xFF34C759),
+                      foregroundColor: Colors.white,
+                      onPressed: _toggleSimulation,
+                      child: Icon(
+                        _isSimulationRunning ? Icons.stop_rounded : Icons.play_arrow_rounded,
+                        size: 28,
+                      ),
+                    ),
                   ),
-                ),
-                const SizedBox(height: 24), // Sauberer, deutlicher Abstand
-                DriveControlPanel(
-                  onStart: () async {
-                    _startNavigationTracking();
-                    _activateNavigationCamera(); // Kamera in den 3D Go-Modus kippen
-                    
-                    // Task 2: 3km-Cut exakt in dem Moment anwenden, wenn "Fahrt starten" gedrückt wird
-                    final windowEnd = _findLookAheadIndex(_currentRouteIndex, 3000);
-                    setState(() {
-                      _remainingRouteCoordinates = _fullRouteCoordinates.sublist(_currentRouteIndex, windowEnd);
-                    });
-                    await _drawRoute(
-                      {'type': 'LineString', 'coordinates': _remainingRouteCoordinates},
-                      animateCamera: false,
-                    );
-                  },
-                  onPause: () {
-                    _stopNavigationTracking(); // GPS-Tracking pausieren
-                  },
-                  onStop: () {
-                    _stopNavigationTracking();
-                    _stopSimulation(restartLiveTracking: false);
-                    setState(() {
-                      _isRouteConfirmed = false;
-                      _viewportState = null; // Zurück zur 2D-Ansicht
-                    });
-                  },
+                // Zentrierungs-Button
+                FloatingActionButton(
+                  heroTag: 'recenter_map_fab',
+                  backgroundColor: _isCameraLocked
+                      ? const Color(0xFFFF3B30)
+                      : const Color(0xFF2D3138),
+                  foregroundColor: Colors.white,
+                  onPressed: _toggleCameraLock,
+                  child: Icon(_isCameraLocked ? Icons.explore : Icons.explore_off),
                 ),
               ],
             ),
           ),
+          Positioned(
+            bottom: 0, left: 0, right: 0,
+            child: SafeArea(
+              top: false,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: CruiseNavigationInfoPanel(
+                      durationSeconds: _remainingDuration ?? _routeDuration,
+                      distanceMeters: _remainingDistance ?? _routeDistance,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  DriveControlPanel(
+                      onStart: () async {
+                        _startNavigationTracking();
+                        _isCameraLocked = true;
+                        _activateNavigationCamera();
+
+                        final windowEnd = _findLookAheadIndex(_currentRouteIndex, 3000);
+                        setState(() {
+                          _remainingRouteCoordinates = _fullRouteCoordinates.sublist(_currentRouteIndex, windowEnd);
+                        });
+                        await _drawRoute(
+                          {'type': 'LineString', 'coordinates': _remainingRouteCoordinates},
+                          animateCamera: false,
+                        );
+                      },
+                      onPause: () {
+                        _stopNavigationTracking();
+                      },
+                      onStop: () {
+                        _stopNavigationTracking();
+                        _stopSimulation(restartLiveTracking: false);
+                        _onRouteEarlyStopped();
+                      },
+                    ),
+                  ],
+                ),
+              ),
+            ),
         ],
       ),
     );
@@ -300,7 +315,17 @@ class _CruiseModePageState extends State<CruiseModePage> {
     return Stack(
       fit: StackFit.expand,
       children: [
-        MapWidget(
+        Listener(
+          onPointerDown: (_) {
+            // Bei Berührung der Karte: Kamera-Lock automatisch deaktivieren
+            if (_isCameraLocked && _isRouteConfirmed) {
+              _safeSetState(() {
+                _isCameraLocked = false;
+                _viewportState = null;
+              });
+            }
+          },
+          child: MapWidget(
           key: ValueKey('map_widget_$_mapWidgetVersion'),
           textureView: true,
           styleUri: MapboxStyles.DARK,
@@ -327,7 +352,7 @@ class _CruiseModePageState extends State<CruiseModePage> {
           },
           cameraOptions: CameraOptions(zoom: 13.0, pitch: 0.0, bearing: 0.0),
           viewport: _viewportState,
-        ),
+        )),
         if (!_isMapStyleLoaded && _mapLoadError == null)
           const ColoredBox(
             color: Color(0x880B0E14),
@@ -381,7 +406,8 @@ class _CruiseModePageState extends State<CruiseModePage> {
       } else {
         await _initializeMapLocation();
       }
-      if (_userLocation != null) await _updateVisibleCursor(_userLocation!);
+      // Cursor deaktiviert – nur der blaue Mapbox-Puck wird angezeigt
+    // if (_userLocation != null) await _updateVisibleCursor(_userLocation!);
     } catch (e) {
       debugPrint('Map initialization failed: $e');
       _safeSetState(() => _mapLoadError = 'Karte konnte nicht initialisiert werden.');
@@ -644,6 +670,8 @@ class _CruiseModePageState extends State<CruiseModePage> {
       _routeGeoJson = result.geoJson;
       _routeDistance = result.distanceMeters;
       _routeDuration = result.durationSeconds;
+      _originalRouteDistance = result.distanceMeters;
+      _originalRouteDuration = result.durationSeconds;
       _isRouteConfirmed = false;
       _viewportState = null;
       _fullRouteCoordinates = result.coordinates;
@@ -652,6 +680,11 @@ class _CruiseModePageState extends State<CruiseModePage> {
       _activeManeuverIndex = 0;
       _currentRouteIndex = 0;
       _announcedManeuverIndices.clear();
+      _totalDistanceDriven = 0.0;
+      _offRouteCount = 0;
+      _lastRerouteTime = null;
+      _remainingDistance = null;
+      _remainingDuration = null;
     });
   }
 
@@ -710,25 +743,9 @@ class _CruiseModePageState extends State<CruiseModePage> {
       // Task 1: Full Route Preview - Hier wird die komplette Route gezeichnet, noch kein 3km Cut!
       _remainingRouteCoordinates = _fullRouteCoordinates;
     });
+    CruiseModePage.isFullscreen.value = true;
 
-    // Route sofort speichern (ohne Bewertung)
-    if (_lastRouteResult != null) {
-      SavedRoutesService.saveRoute(
-        result: _lastRouteResult!,
-        style: _selectedStyle,
-        isRoundTrip: _isRoundTrip,
-      ).then((_) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Route gespeichert'),
-              duration: Duration(seconds: 2),
-              backgroundColor: Color(0xFF1A1F26),
-            ),
-          );
-        }
-      }).catchError((_) {});
-    }
+    // Route wird erst nach Fahrtende gespeichert (mit Bewertung + XP-Sync)
 
     // _startNavigationTracking(); // Tracking startet erst bei Klick auf "Fahrt starten"
     // if (total >= 2) {
@@ -833,11 +850,10 @@ class _CruiseModePageState extends State<CruiseModePage> {
   Future<void> _onLocationUpdate(geo.Position position) async {
     if (!mounted || _disposed) return;
     _userLocation = position;
-    await _updateVisibleCursor(position);
+    // Cursor deaktiviert – nur der blaue Mapbox-Puck wird angezeigt
+    // await _updateVisibleCursor(position);
 
-    if (_isRouteConfirmed && _mapboxMap != null) {
-      await _focusCameraOnPosition(position, animated: false);
-    }
+    // Kamera folgt über FollowPuckViewportState (smooth) – kein manuelles setCamera nötig
 
     if (!_isRouteConfirmed || _fullRouteCoordinates.length < 2) return;
 
@@ -845,20 +861,59 @@ class _CruiseModePageState extends State<CruiseModePage> {
       position: position,
       coordinates: _fullRouteCoordinates,
       currentIndex: _currentRouteIndex,
+      windowSize: 40,
     );
+
+    // Rerouting: Wenn zu weit von der Route entfernt → erst zählen, dann neu berechnen
+    if (match.distanceMeters > _offRouteThresholdMeters) {
+      _offRouteCount++;
+      if (_offRouteCount >= _offRouteCountThreshold && !_isRerouting) {
+        final now = DateTime.now();
+        final cooldownOk = _lastRerouteTime == null ||
+            now.difference(_lastRerouteTime!).inSeconds >= 30;
+        if (cooldownOk) {
+          _lastRerouteTime = now;
+          _offRouteCount = 0;
+          _rerouteToOriginalRoute(position);
+          return;
+        }
+      }
+    } else {
+      _offRouteCount = 0; // Wieder auf der Route → Counter zurücksetzen
+    }
 
     var needsRebuild = false;
 
     if (match.index > _currentRouteIndex && match.distanceMeters <= 45.0) {
+      // Gefahrene Distanz tracken
+      for (var i = _currentRouteIndex; i < match.index; i++) {
+        final c1 = _fullRouteCoordinates[i];
+        final c2 = _fullRouteCoordinates[i + 1];
+        _totalDistanceDriven += geo.Geolocator.distanceBetween(c1[1], c1[0], c2[1], c2[0]);
+      }
       _currentRouteIndex = match.index;
       needsRebuild = true;
 
-      // Task 3: Dynamisches 3km-Fenster wandert während der Location-Updates sauber mit
-      final windowEnd = _findLookAheadIndex(_currentRouteIndex, 3000);
-      _remainingRouteCoordinates = _fullRouteCoordinates.sublist(_currentRouteIndex, windowEnd);
-      final clipped = {'type': 'LineString', 'coordinates': _remainingRouteCoordinates};
-      _routeGeoJson = json.encode(clipped);
-      await _drawRoute(clipped, animateCamera: false);
+      // Verbleibende Distanz und Zeit live berechnen
+      _updateRemainingDistanceAndDuration();
+
+      // Route bei jedem Index-Schritt neu zeichnen, mit User-Position
+      // als Startpunkt interpoliert (kein Gap, kein Trail hinter dem Punkt)
+      if (_currentRouteIndex - _lastDrawnRouteIndex >= 1) {
+        _lastDrawnRouteIndex = _currentRouteIndex;
+        final windowEnd = _findLookAheadIndex(_currentRouteIndex, 3000);
+        final routeSlice = _fullRouteCoordinates.sublist(_currentRouteIndex, windowEnd);
+
+        // Route startet exakt an der User-Position (kein Gap/Trail)
+        if (_userLocation != null && routeSlice.isNotEmpty) {
+          routeSlice[0] = [_userLocation!.longitude, _userLocation!.latitude];
+        }
+
+        _remainingRouteCoordinates = routeSlice;
+        final clipped = {'type': 'LineString', 'coordinates': _remainingRouteCoordinates};
+        _routeGeoJson = json.encode(clipped);
+        await _drawRoute(clipped, animateCamera: false);
+      }
     }
 
     // Prüfe ob Route zu Ende ist
@@ -883,6 +938,186 @@ class _CruiseModePageState extends State<CruiseModePage> {
     if (needsRebuild) _safeSetState(() {});
   }
 
+  void _updateRemainingDistanceAndDuration() {
+    if (_fullRouteCoordinates.length < 2 || _currentRouteIndex >= _fullRouteCoordinates.length - 1) {
+      _remainingDistance = 0;
+      _remainingDuration = 0;
+      return;
+    }
+    // Verbleibende Distanz ab aktuellem Index bis Ende summieren
+    double dist = 0.0;
+    for (var i = _currentRouteIndex; i < _fullRouteCoordinates.length - 1; i++) {
+      final c1 = _fullRouteCoordinates[i];
+      final c2 = _fullRouteCoordinates[i + 1];
+      dist += geo.Geolocator.distanceBetween(c1[1], c1[0], c2[1], c2[0]);
+    }
+    _remainingDistance = dist;
+
+    // Stabile Zeitberechnung: Mapbox-Originalzeit × verbleibender Anteil.
+    // Wie echte Navigation — die Zeit basiert auf der Routenplanung,
+    // nicht auf der aktuellen GPS-Geschwindigkeit.
+    final origDur = _originalRouteDuration ?? _routeDuration;
+    if (origDur != null && origDur > 0 && _fullRouteCoordinates.length > 1) {
+      final remainingFraction = (_fullRouteCoordinates.length - 1 - _currentRouteIndex) /
+          (_fullRouteCoordinates.length - 1);
+      final newDuration = origDur * remainingFraction;
+
+      // Sanft interpolieren damit es nicht springt
+      if (_remainingDuration != null) {
+        _remainingDuration = _remainingDuration! + (newDuration - _remainingDuration!) * 0.2;
+      } else {
+        _remainingDuration = newDuration;
+      }
+    } else {
+      _remainingDuration = dist / 13.89; // Fallback 50 km/h
+    }
+  }
+
+  /// Berechnet eine neue Route von der aktuellen Position zurück zur Originalroute.
+  /// Nutzt einen Punkt weiter voraus auf der Route als Ziel und berechnet via
+  /// Mapbox eine befahrbare Straßenroute (keine Luftlinie).
+  Future<void> _rerouteToOriginalRoute(geo.Position position) async {
+    if (_isRerouting) return;
+    _isRerouting = true;
+
+    if (mounted) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(const SnackBar(
+          content: Text('Route wird neu berechnet...'),
+          backgroundColor: Color(0xFFFF9500),
+          duration: Duration(seconds: 2),
+        ));
+    }
+
+    try {
+      // Suche den nächsten Punkt auf der GESAMTEN verbleibenden Route (großes Fenster)
+      final globalMatch = findNearestInWindow(
+        position: position,
+        coordinates: _fullRouteCoordinates,
+        currentIndex: _currentRouteIndex,
+        windowSize: _fullRouteCoordinates.length - _currentRouteIndex,
+      );
+
+      // Zielpunkt: mindestens 100 Punkte voraus (genug Abstand um sinnvolle Route zu berechnen)
+      final rejoinIndex = math.min(
+        globalMatch.index + 100,
+        _fullRouteCoordinates.length - 1,
+      );
+      final rejoinPoint = _fullRouteCoordinates[rejoinIndex];
+
+      // Wenn Zielpunkt zu nah (< 200m) → kein Rerouting nötig, einfach weiterfahren
+      final distToRejoin = geo.Geolocator.distanceBetween(
+        position.latitude, position.longitude, rejoinPoint[1], rejoinPoint[0],
+      );
+      if (distToRejoin < 200) return;
+
+      // Neue Route via Edge Function (= Mapbox Directions API = befahrbare Straßen)
+      final rerouteResult = await _routeService.generatePointToPoint(
+        startPosition: position,
+        destinationLat: rejoinPoint[1],
+        destinationLng: rejoinPoint[0],
+        mode: 'Standard',
+      );
+
+      if (!mounted || _disposed) return;
+
+      // Neue Route mit dem Rest der Originalroute zusammenführen
+      final rerouteCoords = rerouteResult.coordinates;
+      if (rerouteCoords.length < 2) {
+        // Reroute hat keine brauchbare Route ergeben → ignorieren
+        return;
+      }
+
+      final remainingOriginal = _fullRouteCoordinates.sublist(rejoinIndex);
+      final mergedCoordinates = [...rerouteCoords, ...remainingOriginal];
+
+      // Maneuvers für den neuen Abschnitt + verbleibende originale Maneuvers
+      final remainingManeuvers = _maneuvers
+          .where((m) => m.routeIndex >= rejoinIndex)
+          .map((m) => RouteManeuver(
+                latitude: m.latitude,
+                longitude: m.longitude,
+                routeIndex: m.routeIndex - rejoinIndex + rerouteCoords.length,
+                icon: m.icon,
+                announcement: m.announcement,
+                instruction: m.instruction,
+              ))
+          .toList();
+
+      final rerouteManeuvers = rerouteResult.maneuvers;
+      final allManeuvers = [...rerouteManeuvers, ...remainingManeuvers];
+
+      // WICHTIG: Alte Route komplett löschen bevor neue gezeichnet wird
+      // Verhindert das Stern/Fan-Muster aus alten Linien
+      try {
+        await _polylineAnnotationManager?.deleteAll();
+      } catch (_) {}
+
+      _safeSetState(() {
+        _fullRouteCoordinates = mergedCoordinates;
+        _currentRouteIndex = 0;
+        _lastDrawnRouteIndex = 0; // Reset damit Route sofort gezeichnet wird
+        _maneuvers = allManeuvers;
+        _activeManeuverIndex = 0;
+        _announcedManeuverIndices.clear();
+        // Speed-History entfernt — Zeit wird über Mapbox-Proportion berechnet
+      });
+
+      // Verbleibende Distanz/Zeit neu berechnen (ohne originale Werte zu überschreiben)
+      _updateRemainingDistanceAndDuration();
+
+      // Route auf der Karte neu zeichnen — Start bei User-Position
+      final windowEnd = _findLookAheadIndex(0, 3000);
+      final routeSlice = mergedCoordinates.sublist(0, windowEnd);
+      if (routeSlice.isNotEmpty) {
+        routeSlice[0] = [position.longitude, position.latitude];
+      }
+      _remainingRouteCoordinates = routeSlice;
+      final clipped = {'type': 'LineString', 'coordinates': _remainingRouteCoordinates};
+      _routeGeoJson = json.encode(clipped);
+      await _drawRoute(clipped, animateCamera: false);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(const SnackBar(
+            content: Text('Route neu berechnet!'),
+            backgroundColor: Colors.green,
+            duration: Duration(seconds: 2),
+          ));
+      }
+    } catch (e) {
+      debugPrint('Rerouting fehlgeschlagen: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(SnackBar(
+            content: Text('Rerouting fehlgeschlagen: $e'),
+            backgroundColor: Colors.red,
+          ));
+      }
+    } finally {
+      _isRerouting = false;
+    }
+  }
+
+  /// Berechnet die Distanz entlang der Route vom aktuellen Index zum nächsten Manöver.
+  double? _calculateDistanceToManeuver() {
+    if (_maneuvers.isEmpty || _fullRouteCoordinates.length < 2) return null;
+    final maneuver = _maneuvers[_activeManeuverIndex.clamp(0, _maneuvers.length - 1)];
+    final targetIndex = maneuver.routeIndex.clamp(0, _fullRouteCoordinates.length - 1);
+    if (targetIndex <= _currentRouteIndex) return 0;
+
+    double dist = 0.0;
+    for (var i = _currentRouteIndex; i < targetIndex; i++) {
+      final c1 = _fullRouteCoordinates[i];
+      final c2 = _fullRouteCoordinates[i + 1];
+      dist += geo.Geolocator.distanceBetween(c1[1], c1[0], c2[1], c2[0]);
+    }
+    return dist;
+  }
+
   void _updateActiveManeuver() {
     if (_maneuvers.isEmpty) return;
     for (var i = _activeManeuverIndex; i < _maneuvers.length; i++) {
@@ -895,6 +1130,24 @@ class _CruiseModePageState extends State<CruiseModePage> {
   }
 
   // ═══════════════════════ CAMERA ═══════════════════════════════════════════
+
+  void _toggleCameraLock() {
+    _safeSetState(() => _isCameraLocked = !_isCameraLocked);
+    if (_isCameraLocked) {
+      // Sofort zur aktuellen Position fliegen und FollowPuck aktivieren
+      _recenterMap();
+      _safeSetState(() {
+        _viewportState = const FollowPuckViewportState(
+          zoom: 16.0,
+          pitch: 45.0,
+          bearing: FollowPuckViewportStateBearingHeading(),
+        );
+      });
+    } else {
+      // FollowPuck deaktivieren → freie Kartenbewegung
+      _safeSetState(() => _viewportState = null);
+    }
+  }
 
   Future<void> _recenterMap() async {
     final map = _mapboxMap;
@@ -1027,24 +1280,36 @@ class _CruiseModePageState extends State<CruiseModePage> {
   }
 
   Future<void> _startSimulation() async {
-    if (!_isSimulationEnabled) return; // Hard-Disable Trigger
+    if (!_isSimulationEnabled) return;
     if (_fullRouteCoordinates.length < 2) return;
     _stopNavigationTracking();
     _simulationIndex = 0;
     _currentRouteIndex = 0;
+    _lastDrawnRouteIndex = 0;
+    _totalDistanceDriven = 0;
     _announcedManeuverIndices.clear();
     _activeManeuverIndex = 0;
+    // Speed-History entfernt
     _isSimulationRunning = true;
+    _simulationSpeedKmh = 60;
 
+    // Initiale Route zeichnen
     final windowEnd = _findLookAheadIndex(0, 3000);
     _remainingRouteCoordinates = _fullRouteCoordinates.sublist(0, windowEnd);
     final fullGeometry = {'type': 'LineString', 'coordinates': _remainingRouteCoordinates};
     _routeGeoJson = json.encode(fullGeometry);
     await _drawRoute(fullGeometry, animateCamera: false);
 
-    final first = _fullRouteCoordinates.first;
-    final second = _fullRouteCoordinates[1];
-    await _focusCameraOnPosition(_buildSimulatedPosition(first, second), animated: true);
+    // Simulations-Puck am Startpunkt anzeigen
+    final startCoord = _fullRouteCoordinates.first;
+    await _updateSimulationPuck(startCoord[0], startCoord[1]);
+
+    // Kamera aktivieren
+    _isCameraLocked = true;
+    await _activateNavigationCamera();
+
+    // Initiale Distanz/Zeit setzen
+    _updateRemainingDistanceAndDuration();
     _safeSetState(() {});
 
     _simulationTimer?.cancel();
@@ -1056,7 +1321,47 @@ class _CruiseModePageState extends State<CruiseModePage> {
     _simulationTimer = null;
     _isSimulationStepRunning = false;
     _isSimulationRunning = false;
+    _removeSimulationPuck();
     if (restartLiveTracking && _isRouteConfirmed) _startNavigationTracking();
+  }
+
+  /// Berechnet realistische Geschwindigkeit basierend auf Kurven voraus.
+  /// Bremst vor Kurven ab und beschleunigt auf Geraden.
+  double _calculateSimulationSpeed() {
+    final lastIndex = _fullRouteCoordinates.length - 1;
+    if (_simulationIndex >= lastIndex - 2) return _simulationSpeedKmh;
+
+    // Schaue 5-10 Punkte voraus für Kurven
+    double maxAngleChange = 0;
+    final lookAhead = math.min(10, lastIndex - _simulationIndex);
+    for (var i = 0; i < lookAhead - 1; i++) {
+      final idx = _simulationIndex + i;
+      if (idx + 2 > lastIndex) break;
+      final p1 = _fullRouteCoordinates[idx];
+      final p2 = _fullRouteCoordinates[idx + 1];
+      final p3 = _fullRouteCoordinates[idx + 2];
+      final bearing1 = calculateBearing(p1[1], p1[0], p2[1], p2[0]);
+      final bearing2 = calculateBearing(p2[1], p2[0], p3[1], p3[0]);
+      var diff = (bearing2 - bearing1).abs();
+      if (diff > 180) diff = 360 - diff;
+      if (diff > maxAngleChange) maxAngleChange = diff;
+    }
+
+    // Zielgeschwindigkeit basierend auf Kurvenwinkel
+    double targetKmh;
+    if (maxAngleChange > 60) {
+      targetKmh = 25; // Scharfe Kurve / Kreisverkehr
+    } else if (maxAngleChange > 30) {
+      targetKmh = 40; // Normale Kurve
+    } else if (maxAngleChange > 15) {
+      targetKmh = 55; // Leichte Kurve
+    } else {
+      targetKmh = 70; // Gerade
+    }
+
+    // Sanft zur Zielgeschwindigkeit interpolieren (kein abruptes Bremsen)
+    _simulationSpeedKmh += (targetKmh - _simulationSpeedKmh) * 0.15;
+    return _simulationSpeedKmh.clamp(15.0, 80.0);
   }
 
   void _scheduleNextSimulationStep() {
@@ -1070,7 +1375,13 @@ class _CruiseModePageState extends State<CruiseModePage> {
     final distMeters = geo.Geolocator.distanceBetween(
       current[1], current[0], next[1], next[0],
     );
-    final delayMs = (distMeters / 41.67 * 1000).round().clamp(30, 5000); // 150 km/h
+
+    final speedKmh = _calculateSimulationSpeed();
+    final speedMs = speedKmh / 3.6;
+    final delayMs = distMeters > 0
+        ? (distMeters / speedMs * 1000).round().clamp(16, 3000)
+        : 50;
+
     _simulationTimer = Timer(Duration(milliseconds: delayMs), _runSimulationStep);
   }
 
@@ -1090,7 +1401,12 @@ class _CruiseModePageState extends State<CruiseModePage> {
       _simulationIndex = math.min(_simulationIndex + 1, lastIndex);
       final current = _fullRouteCoordinates[_simulationIndex];
       final next = _fullRouteCoordinates[math.min(_simulationIndex + 1, lastIndex)];
-      await _onLocationUpdate(_buildSimulatedPosition(current, next));
+      final speedMs = _simulationSpeedKmh / 3.6;
+
+      // Simulations-Puck auf der Karte bewegen
+      await _updateSimulationPuck(current[0], current[1]);
+
+      await _onLocationUpdate(_buildSimulatedPosition(current, next, speedMs));
       if (_simulationIndex >= lastIndex) {
         _stopSimulation(restartLiveTracking: false);
         _onRouteCompleted();
@@ -1102,7 +1418,37 @@ class _CruiseModePageState extends State<CruiseModePage> {
     _scheduleNextSimulationStep();
   }
 
-  geo.Position _buildSimulatedPosition(List<double> current, List<double> next) {
+  /// Zeigt einen blauen Punkt + weißen Ring als simuliertes Auto auf der Karte.
+  Future<void> _updateSimulationPuck(double lng, double lat) async {
+    if (_mapboxMap == null) return;
+    try {
+      _simPuckManager ??= await _mapboxMap!.annotations.createCircleAnnotationManager();
+      await _simPuckManager!.deleteAll();
+      // Weißer äußerer Ring
+      await _simPuckManager!.create(CircleAnnotationOptions(
+        geometry: Point(coordinates: Position(lng, lat)),
+        circleRadius: 12,
+        circleColor: Colors.white.toARGB32(),
+        circleOpacity: 0.9,
+      ));
+      // Blauer innerer Punkt
+      await _simPuckManager!.create(CircleAnnotationOptions(
+        geometry: Point(coordinates: Position(lng, lat)),
+        circleRadius: 8,
+        circleColor: const Color(0xFF007AFF).toARGB32(),
+        circleOpacity: 1.0,
+      ));
+    } catch (_) {}
+  }
+
+  /// Entfernt den Simulations-Puck von der Karte.
+  Future<void> _removeSimulationPuck() async {
+    try {
+      await _simPuckManager?.deleteAll();
+    } catch (_) {}
+  }
+
+  geo.Position _buildSimulatedPosition(List<double> current, List<double> next, double speedMs) {
     final heading = calculateBearing(current[1], current[0], next[1], next[0]);
     return geo.Position(
       longitude: current[0],
@@ -1111,7 +1457,7 @@ class _CruiseModePageState extends State<CruiseModePage> {
       accuracy: 5,
       altitude: 0,
       heading: heading,
-      speed: 41.67, // 150 km/h
+      speed: speedMs,
       speedAccuracy: 1,
       altitudeAccuracy: 0,
       headingAccuracy: 5,
@@ -1122,27 +1468,100 @@ class _CruiseModePageState extends State<CruiseModePage> {
 
   void _onRouteCompleted() {
     if (!mounted || _disposed) return;
+    final drivenKm = _totalDistanceDriven > 0
+        ? _totalDistanceDriven / 1000
+        : (_routeDistance != null ? _routeDistance! / 1000 : null);
     showDialog(
       context: context,
       barrierDismissible: false,
       builder: (ctx) => CruiseCompletionDialog(
-        distanceKm: _routeDistance != null ? _routeDistance! / 1000 : null,
+        distanceKm: drivenKm,
         onSave: (rating) {
           Navigator.pop(ctx);
+          _saveRouteAndSyncXp(rating: rating);
           _resetAfterCompletion();
         },
         onDiscard: () {
           Navigator.pop(ctx);
+          _saveRouteAndSyncXp();
           _resetAfterCompletion();
         },
       ),
     );
   }
 
+  void _onRouteEarlyStopped() {
+    if (!mounted || _disposed) return;
+    final drivenKm = _totalDistanceDriven / 1000;
+    final totalKm = _originalRouteDistance != null ? _originalRouteDistance! / 1000 : null;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => CruiseCompletionDialog(
+        distanceKm: drivenKm,
+        totalRouteKm: totalKm,
+        isEarlyStop: true,
+        onSave: (rating) {
+          Navigator.pop(ctx);
+          _saveRouteAndSyncXp(rating: rating);
+          _resetAfterCompletion();
+        },
+        onDiscard: () {
+          Navigator.pop(ctx);
+          _saveRouteAndSyncXp();
+          _resetAfterCompletion();
+        },
+      ),
+    );
+  }
+
+  /// Speichert die gefahrene Route und synchronisiert XP/Level/Badges.
+  Future<void> _saveRouteAndSyncXp({int? rating}) async {
+    try {
+      if (_lastRouteResult != null) {
+        // Route mit tatsächlich gefahrener Distanz speichern
+        final drivenDistanceMeters = _totalDistanceDriven > 0 ? _totalDistanceDriven : _routeDistance;
+        final adjustedResult = RouteResult(
+          geoJson: _lastRouteResult!.geoJson,
+          geometry: _lastRouteResult!.geometry,
+          coordinates: _lastRouteResult!.coordinates,
+          maneuvers: _lastRouteResult!.maneuvers,
+          distanceMeters: drivenDistanceMeters,
+          durationSeconds: _lastRouteResult!.durationSeconds,
+          distanceKm: drivenDistanceMeters != null ? drivenDistanceMeters / 1000 : null,
+        );
+        await SavedRoutesService.saveRoute(
+          result: adjustedResult,
+          style: _selectedStyle,
+          isRoundTrip: _isRoundTrip,
+          rating: rating,
+          drivenKm: _totalDistanceDriven > 0 ? _totalDistanceDriven / 1000 : null,
+        );
+      }
+      // XP/Level/Badges synchronisieren
+      final gamResult = await GamificationService.calculateAndSync();
+      if (mounted && gamResult.newBadgeIds.isNotEmpty) {
+        final badgeNames = gamResult.newBadges.map((b) => b.emoji).join(' ');
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Neues Badge: $badgeNames'),
+            backgroundColor: const Color(0xFFFFD700),
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    } catch (e) {
+      debugPrint('Route speichern / XP sync fehlgeschlagen: $e');
+    }
+  }
+
   void _resetAfterCompletion() {
+    CruiseModePage.isFullscreen.value = false;
     _safeSetState(() {
       _isRouteConfirmed = false;
       _viewportState = null;
+      _isCameraLocked = false;
+      _totalDistanceDriven = 0.0;
     });
   }
 

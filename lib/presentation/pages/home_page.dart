@@ -36,15 +36,19 @@ class _HomePageState extends State<HomePage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFF0B0E14),
-      body: SafeArea(
-        child: IndexedStack(
-          index: _selectedIndex,
-          children: _pages,
-        ),
-      ),
-      bottomNavigationBar: _buildBottomNav(),
+    return ValueListenableBuilder<bool>(
+      valueListenable: CruiseModePage.isFullscreen,
+      builder: (context, isFullscreen, _) {
+        return Scaffold(
+          backgroundColor: const Color(0xFF0B0E14),
+          body: isFullscreen
+              ? IndexedStack(index: _selectedIndex, children: _pages)
+              : SafeArea(
+                  child: IndexedStack(index: _selectedIndex, children: _pages),
+                ),
+          bottomNavigationBar: isFullscreen ? null : _buildBottomNav(),
+        );
+      },
     );
   }
 

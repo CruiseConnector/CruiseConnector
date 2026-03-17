@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 enum DriveState { stopped, started, paused }
 
 /// Ein UI-Panel zur Steuerung einer aktiven Fahrt (Start, Pause, Stopp).
-/// Wird typischerweise am unteren Bildschirmrand angezeigt.
 class DriveControlPanel extends StatefulWidget {
   final VoidCallback? onStart;
   final VoidCallback? onPause;
@@ -23,61 +22,43 @@ class _DriveControlPanelState extends State<DriveControlPanel> {
     if (!mounted) return;
     setState(() => _driveState = DriveState.started);
     widget.onStart?.call();
-    print('DriveControlPanel: Fahrt gestartet!');
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(const SnackBar(content: Text('Fahrt gestartet!')));
   }
 
   void _handlePause() {
     if (!mounted) return;
     setState(() => _driveState = DriveState.paused);
     widget.onPause?.call();
-    print('DriveControlPanel: Fahrt pausiert!');
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(const SnackBar(content: Text('Fahrt pausiert!')));
   }
 
   void _handleStop() {
     if (!mounted) return;
     setState(() => _driveState = DriveState.stopped);
     widget.onStop?.call();
-    print('DriveControlPanel: Fahrt beendet!');
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(const SnackBar(content: Text('Fahrt beendet!')));
-    // Hier könnte später ein Callback aufgerufen werden, um den Dialog zu schließen
-    // oder zur Zusammenfassung zu navigieren.
   }
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      margin: const EdgeInsets.only(bottom: 20, left: 16, right: 16),
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 20),
+      margin: const EdgeInsets.only(bottom: 2, left: 16, right: 16),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
-        color: const Color(0xFF1C1F26),
-        borderRadius: BorderRadius.circular(24),
+        color: const Color(0xFF1C2028).withValues(alpha: 0.97),
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.3),
+            color: Colors.black.withValues(alpha: 0.35),
             blurRadius: 20,
-            offset: const Offset(0, 10),
+            offset: const Offset(0, 8),
           ),
         ],
       ),
       child: SafeArea(
         top: false,
-        bottom: false, // Wegen Margin nicht mehr zwingend nötig
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            AnimatedSwitcher(
-              duration: const Duration(milliseconds: 300),
-              child: _buildControls(),
-            ),
-          ],
+        bottom: false,
+        child: AnimatedSwitcher(
+          duration: const Duration(milliseconds: 300),
+          child: _buildControls(),
         ),
       ),
     );
@@ -89,16 +70,19 @@ class _DriveControlPanelState extends State<DriveControlPanel> {
         return SizedBox(
           key: const ValueKey('start'),
           width: double.infinity,
-          height: 50,
-          child: ElevatedButton(
+          height: 52,
+          child: ElevatedButton.icon(
             onPressed: _handleStart,
+            icon: const Icon(Icons.navigation_rounded, size: 22),
+            label: const Text(
+              'Fahrt starten',
+              style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: Colors.white),
+            ),
             style: ElevatedButton.styleFrom(
               backgroundColor: const Color(0xFFFF3B30),
+              foregroundColor: Colors.white,
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-            ),
-            child: const Text(
-              'Fahrt starten',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white),
+              elevation: 0,
             ),
           ),
         );
@@ -107,35 +91,44 @@ class _DriveControlPanelState extends State<DriveControlPanel> {
         return Row(
           key: const ValueKey('running'),
           children: [
-            // Pause/Fortsetzen Button
             Expanded(
               child: SizedBox(
                 height: 50,
                 child: ElevatedButton.icon(
                   onPressed: _driveState == DriveState.started ? _handlePause : _handleStart,
-                  icon: Icon(_driveState == DriveState.started ? Icons.pause_rounded : Icons.play_arrow_rounded),
-                  label: Text(_driveState == DriveState.started ? 'Pausieren' : 'Fortsetzen'),
+                  icon: Icon(
+                    _driveState == DriveState.started ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                    size: 22,
+                  ),
+                  label: Text(
+                    _driveState == DriveState.started ? 'Pause' : 'Weiter',
+                    style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+                  ),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF3A3D46),
+                    backgroundColor: Colors.white.withValues(alpha: 0.1),
                     foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                    elevation: 0,
                   ),
                 ),
               ),
             ),
-            const SizedBox(width: 16),
-            // Beenden Button
+            const SizedBox(width: 12),
             Expanded(
               child: SizedBox(
                 height: 50,
                 child: ElevatedButton.icon(
                   onPressed: _handleStop,
-                  icon: const Icon(Icons.stop_rounded),
-                  label: const Text('Beenden'),
+                  icon: const Icon(Icons.stop_rounded, size: 22),
+                  label: const Text(
+                    'Beenden',
+                    style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+                  ),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: const Color(0xFFFF3B30),
                     foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                    elevation: 0,
                   ),
                 ),
               ),
