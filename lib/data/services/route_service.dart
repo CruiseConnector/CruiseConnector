@@ -76,23 +76,65 @@ class RouteService {
   // ──────────────────────────── Internal ─────────────────────────────────────
 
   Future<RouteResult> _invoke(Map<String, dynamic> body) async {
-    final response = await Supabase.instance.client.functions.invoke(
-      _edgeFunction,
-      body: body,
-    );
+    debugPrint('[RouteService] Invoking Edge Function with: ${body['planning_type']}, mode: ${body['mode']}');
 
-    final data = response.data;
-    if (data == null || data['error'] != null) {
-      throw Exception(data?['error'] ?? 'Unbekannter Fehler bei der Berechnung.');
+    dynamic data;
+    try {
+      final response = await Supabase.instance.client.functions.invoke(
+        _edgeFunction,
+        body: body,
+      );
+      data = response.data;
+      debugPrint('[RouteService] Response received: ${data?.runtimeType}');
+    } catch (e) {
+      debugPrint('[RouteService] Edge Function call failed: $e');
+      throw Exception('Verbindungsfehler: $e');
     }
 
-    final geometry = Map<String, dynamic>.from(data['route']['geometry'] as Map);
+    if (data == null) {
+      throw Exception('Keine Antwort von der Route-Berechnung erhalten.');
+    }
+
+    // Wenn data ein String ist (JSON), parsen
+    if (data is String) {
+      try {
+        data = json.decode(data);
+      } catch (e) {
+        throw Exception('Ungültige Antwort: $data');
+      }
+    }
+
+    if (data is! Map) {
+      throw Exception('Unerwartetes Antwortformat: ${data.runtimeType}');
+    }
+
+    if (data['error'] != null) {
+      throw Exception(data['error'].toString());
+    }
+
+    if (data['route'] == null) {
+      throw Exception('Keine Route in der Antwort gefunden.');
+    }
+
+    final route = data['route'] as Map;
+    if (route['geometry'] == null) {
+      throw Exception('Route enthält keine Geometrie-Daten.');
+    }
+
+    final geometry = Map<String, dynamic>.from(route['geometry'] as Map);
     final coordinates = extractCoordinates(geometry);
+
+    if (coordinates.length < 2) {
+      throw Exception('Route hat zu wenig Koordinaten (${coordinates.length}).');
+    }
+
     final maneuvers = extractManeuvers(data, coordinates);
 
-    final distanceRaw = (data['route']['distance'] as num?)?.toDouble();
-    final durationRaw = (data['route']['duration'] as num?)?.toDouble();
+    final distanceRaw = (route['distance'] as num?)?.toDouble();
+    final durationRaw = (route['duration'] as num?)?.toDouble();
     final distanceKmRaw = (data['meta']?['distance_km'] as num?)?.toDouble();
+
+    debugPrint('[RouteService] Route OK: ${coordinates.length} Punkte, ${distanceKmRaw?.toStringAsFixed(1)} km');
 
     return RouteResult(
       geoJson: json.encode(geometry),

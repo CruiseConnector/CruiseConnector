@@ -132,180 +132,180 @@ class _CruiseModePageState extends State<CruiseModePage> {
 
   @override
   Widget build(BuildContext context) {
-    if (_isRouteConfirmed) return _buildFullscreenMap();
-
     return Scaffold(
       backgroundColor: const Color(0xFF0B0E14),
       body: Stack(
         children: [
-          CustomScrollView(
-            slivers: [
-              SliverAppBar(
-                expandedHeight: 300,
-                pinned: true,
-                backgroundColor: const Color(0xFF0B0E14),
-                elevation: 0,
-                automaticallyImplyLeading: false,
-                flexibleSpace: FlexibleSpaceBar(
-                  background: Stack(
-                    children: [
-                      _buildMapWidget(),
-                      Container(
-                        decoration: BoxDecoration(
-                          gradient: LinearGradient(
-                            begin: Alignment.topCenter,
-                            end: Alignment.bottomCenter,
-                            colors: [
-                              Colors.transparent,
-                              const Color(0xFF0B0E14).withValues(alpha: 0.8),
-                              const Color(0xFF0B0E14),
-                            ],
-                            stops: const [0.6, 0.9, 1.0],
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              SliverToBoxAdapter(
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
-                  child: Column(
-                    children: [
-                      CruiseSetupCard(
-                        isRoundTrip: _isRoundTrip,
-                        planningType: _planningType,
-                        selectedLength: _selectedLength,
-                        selectedLocation: _selectedLocation,
-                        selectedStyle: _selectedStyle,
-                        selectedDestination: _selectedDestination,
-                        destinationController: _destinationController,
-                        onRoundTripChanged: (v) => setState(() => _isRoundTrip = v),
-                        onPlanningTypeChanged: (v) => setState(() => _planningType = v),
-                        onLengthChanged: (v) => setState(() => _selectedLength = v),
-                        onLocationChanged: (v) => setState(() => _selectedLocation = v),
-                        onStyleChanged: (v) => setState(() => _selectedStyle = v),
-                        onDestinationSelected: _onDestinationSelected,
-                        onDestinationCleared: () => setState(() {
-                          _selectedDestination = null;
-                          _destinationController.clear();
-                        }),
-                      ),
-                      const SizedBox(height: 140),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-          ),
-          Positioned(
-            bottom: 0, left: 0, right: 0,
-            child: _buildBottomActions(),
-          ),
+          // Map IMMER an gleicher Stelle im Widget-Tree (verhindert Neu-Erstellung)
+          Positioned.fill(child: _buildMapWidget()),
+
+          // Config-Overlay ODER Navigation-Overlay
+          if (!_isRouteConfirmed) _buildConfigOverlay(),
+          if (_isRouteConfirmed) _buildNavigationOverlay(),
         ],
       ),
     );
   }
 
-  // ═══════════════════════ FULLSCREEN MAP ═══════════════════════════════════
+  // ═══════════════════════ CONFIG OVERLAY ═════════════════════════════════
 
-  Widget _buildFullscreenMap() {
-    return Scaffold(
-      backgroundColor: const Color(0xFF0B0E14),
-      body: Stack(
-        children: [
-          _buildMapWidget(),
-          if (_maneuvers.isNotEmpty)
-            Positioned(
-              top: MediaQuery.of(context).padding.top + 8,
-              left: 12, right: 12,
-              child: CruiseManeuverIndicator(
-                maneuver: _maneuvers[_activeManeuverIndex.clamp(0, _maneuvers.length - 1)],
-                distanceToManeuverMeters: _calculateDistanceToManeuver(),
+  Widget _buildConfigOverlay() {
+    return Stack(
+      children: [
+        CustomScrollView(
+          slivers: [
+            // Transparenter Bereich oben → Map scheint durch
+            SliverToBoxAdapter(
+              child: Container(
+                height: 300,
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      Colors.transparent,
+                      const Color(0xFF0B0E14).withValues(alpha: 0.8),
+                      const Color(0xFF0B0E14),
+                    ],
+                    stops: const [0.6, 0.9, 1.0],
+                  ),
+                ),
               ),
             ),
-          // FAB-Spalte rechts: Simulation + Zentrieren
-          Positioned(
-            right: 16, bottom: 260,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // Simulation Start/Stop Button
-                if (_isSimulationEnabled && _fullRouteCoordinates.length > 1)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 12),
-                    child: FloatingActionButton(
-                      heroTag: 'simulation_fab',
-                      backgroundColor: _isSimulationRunning
-                          ? const Color(0xFFFF9500)
-                          : const Color(0xFF34C759),
-                      foregroundColor: Colors.white,
-                      onPressed: _toggleSimulation,
-                      child: Icon(
-                        _isSimulationRunning ? Icons.stop_rounded : Icons.play_arrow_rounded,
-                        size: 28,
-                      ),
+            SliverToBoxAdapter(
+              child: Container(
+                color: const Color(0xFF0B0E14),
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+                child: Column(
+                  children: [
+                    CruiseSetupCard(
+                      isRoundTrip: _isRoundTrip,
+                      planningType: _planningType,
+                      selectedLength: _selectedLength,
+                      selectedLocation: _selectedLocation,
+                      selectedStyle: _selectedStyle,
+                      selectedDestination: _selectedDestination,
+                      destinationController: _destinationController,
+                      onRoundTripChanged: (v) => setState(() => _isRoundTrip = v),
+                      onPlanningTypeChanged: (v) => setState(() => _planningType = v),
+                      onLengthChanged: (v) => setState(() => _selectedLength = v),
+                      onLocationChanged: (v) => setState(() => _selectedLocation = v),
+                      onStyleChanged: (v) => setState(() => _selectedStyle = v),
+                      onDestinationSelected: _onDestinationSelected,
+                      onDestinationCleared: () => setState(() {
+                        _selectedDestination = null;
+                        _destinationController.clear();
+                      }),
                     ),
-                  ),
-                // Zentrierungs-Button
-                FloatingActionButton(
-                  heroTag: 'recenter_map_fab',
-                  backgroundColor: _isCameraLocked
-                      ? const Color(0xFFFF3B30)
-                      : const Color(0xFF2D3138),
-                  foregroundColor: Colors.white,
-                  onPressed: _toggleCameraLock,
-                  child: Icon(_isCameraLocked ? Icons.explore : Icons.explore_off),
-                ),
-              ],
-            ),
-          ),
-          Positioned(
-            bottom: 0, left: 0, right: 0,
-            child: SafeArea(
-              top: false,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: CruiseNavigationInfoPanel(
-                      durationSeconds: _remainingDuration ?? _routeDuration,
-                      distanceMeters: _remainingDistance ?? _routeDistance,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  DriveControlPanel(
-                      onStart: () async {
-                        _startNavigationTracking();
-                        _isCameraLocked = true;
-                        _activateNavigationCamera();
-
-                        final windowEnd = _findLookAheadIndex(_currentRouteIndex, 3000);
-                        setState(() {
-                          _remainingRouteCoordinates = _fullRouteCoordinates.sublist(_currentRouteIndex, windowEnd);
-                        });
-                        await _drawRoute(
-                          {'type': 'LineString', 'coordinates': _remainingRouteCoordinates},
-                          animateCamera: false,
-                        );
-                      },
-                      onPause: () {
-                        _stopNavigationTracking();
-                      },
-                      onStop: () {
-                        _stopNavigationTracking();
-                        _stopSimulation(restartLiveTracking: false);
-                        _onRouteEarlyStopped();
-                      },
-                    ),
+                    const SizedBox(height: 140),
                   ],
                 ),
               ),
             ),
-        ],
-      ),
+          ],
+        ),
+        Positioned(
+          bottom: 0, left: 0, right: 0,
+          child: _buildBottomActions(),
+        ),
+      ],
+    );
+  }
+
+  // ═══════════════════════ NAVIGATION OVERLAY ═════════════════════════════
+
+  Widget _buildNavigationOverlay() {
+    return Stack(
+      children: [
+        if (_maneuvers.isNotEmpty)
+          Positioned(
+            top: MediaQuery.of(context).padding.top + 8,
+            left: 12, right: 12,
+            child: CruiseManeuverIndicator(
+              maneuver: _maneuvers[_activeManeuverIndex.clamp(0, _maneuvers.length - 1)],
+              distanceToManeuverMeters: _calculateDistanceToManeuver(),
+            ),
+          ),
+        // FAB-Spalte rechts: Simulation + Zentrieren
+        Positioned(
+          right: 16, bottom: 260,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Simulation Start/Stop Button
+              if (_isSimulationEnabled && _fullRouteCoordinates.length > 1)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: FloatingActionButton(
+                    heroTag: 'simulation_fab',
+                    backgroundColor: _isSimulationRunning
+                        ? const Color(0xFFFF9500)
+                        : const Color(0xFF34C759),
+                    foregroundColor: Colors.white,
+                    onPressed: _toggleSimulation,
+                    child: Icon(
+                      _isSimulationRunning ? Icons.stop_rounded : Icons.play_arrow_rounded,
+                      size: 28,
+                    ),
+                  ),
+                ),
+              // Zentrierungs-Button
+              FloatingActionButton(
+                heroTag: 'recenter_map_fab',
+                backgroundColor: _isCameraLocked
+                    ? const Color(0xFFFF3B30)
+                    : const Color(0xFF2D3138),
+                foregroundColor: Colors.white,
+                onPressed: _toggleCameraLock,
+                child: Icon(_isCameraLocked ? Icons.explore : Icons.explore_off),
+              ),
+            ],
+          ),
+        ),
+        Positioned(
+          bottom: 0, left: 0, right: 0,
+          child: SafeArea(
+            top: false,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: CruiseNavigationInfoPanel(
+                    durationSeconds: _remainingDuration ?? _routeDuration,
+                    distanceMeters: _remainingDistance ?? _routeDistance,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                DriveControlPanel(
+                    onStart: () async {
+                      _startNavigationTracking();
+                      _isCameraLocked = true;
+                      _activateNavigationCamera();
+
+                      final windowEnd = _findLookAheadIndex(_currentRouteIndex, 3000);
+                      setState(() {
+                        _remainingRouteCoordinates = _fullRouteCoordinates.sublist(_currentRouteIndex, windowEnd);
+                      });
+                      await _drawRoute(
+                        {'type': 'LineString', 'coordinates': _remainingRouteCoordinates},
+                        animateCamera: false,
+                      );
+                    },
+                    onPause: () {
+                      _stopNavigationTracking();
+                    },
+                    onStop: () {
+                      _stopNavigationTracking();
+                      _stopSimulation(restartLiveTracking: false);
+                      _onRouteEarlyStopped();
+                    },
+                  ),
+                ],
+              ),
+            ),
+          ),
+      ],
     );
   }
 
@@ -345,6 +345,18 @@ class _CruiseModePageState extends State<CruiseModePage> {
                 ),
               );
             } catch (_) {}
+            // Route zeichnen oder Karte initialisieren (erst hier, weil Annotations den Style brauchen)
+            try {
+              if (_routeGeoJson != null) {
+                final geometry = Map<String, dynamic>.from(json.decode(_routeGeoJson!) as Map);
+                await _drawRoute(geometry);
+                if (_isRouteConfirmed) await _activateNavigationCamera();
+              } else {
+                await _initializeMapLocation();
+              }
+            } catch (e) {
+              debugPrint('Map post-style init failed: $e');
+            }
           },
           onMapLoadErrorListener: (event) {
             if (!mounted || _disposed) return;
@@ -397,21 +409,8 @@ class _CruiseModePageState extends State<CruiseModePage> {
     _polylineAnnotationManager = null;
     _cursorAnnotationManager = null;
     _safeSetState(() => _isMapStyleLoaded = false);
-
-    try {
-      if (_routeGeoJson != null) {
-        final geometry = Map<String, dynamic>.from(json.decode(_routeGeoJson!) as Map);
-        await _drawRoute(geometry);
-        if (_isRouteConfirmed) await _activateNavigationCamera();
-      } else {
-        await _initializeMapLocation();
-      }
-      // Cursor deaktiviert – nur der blaue Mapbox-Puck wird angezeigt
-    // if (_userLocation != null) await _updateVisibleCursor(_userLocation!);
-    } catch (e) {
-      debugPrint('Map initialization failed: $e');
-      _safeSetState(() => _mapLoadError = 'Karte konnte nicht initialisiert werden.');
-    }
+    // Route-Zeichnung wird in onStyleLoadedListener gemacht,
+    // da Annotation Manager erst nach Style-Load funktionieren.
   }
 
   void _retryMapLoad() {
@@ -1387,7 +1386,7 @@ class _CruiseModePageState extends State<CruiseModePage> {
 
   Future<void> _runSimulationStep() async {
     if (!_isSimulationRunning || _isSimulationStepRunning ||
-        _fullRouteCoordinates.length < 2) {
+        _fullRouteCoordinates.length < 2 || !mounted || _disposed) {
       return;
     }
     _isSimulationStepRunning = true;
@@ -1403,19 +1402,23 @@ class _CruiseModePageState extends State<CruiseModePage> {
       final next = _fullRouteCoordinates[math.min(_simulationIndex + 1, lastIndex)];
       final speedMs = _simulationSpeedKmh / 3.6;
 
-      // Simulations-Puck auf der Karte bewegen
-      await _updateSimulationPuck(current[0], current[1]);
+      // Simulations-Puck auf der Karte bewegen (Fehler ignorieren)
+      try { await _updateSimulationPuck(current[0], current[1]); } catch (_) {}
 
-      await _onLocationUpdate(_buildSimulatedPosition(current, next, speedMs));
+      // Location Update (Fehler ignorieren, Simulation weiterlaufen lassen)
+      try { await _onLocationUpdate(_buildSimulatedPosition(current, next, speedMs)); } catch (_) {}
+
       if (_simulationIndex >= lastIndex) {
         _stopSimulation(restartLiveTracking: false);
         _onRouteCompleted();
         return;
       }
+    } catch (_) {
+      // Simulation darf nie durch einen Fehler stoppen
     } finally {
       _isSimulationStepRunning = false;
     }
-    _scheduleNextSimulationStep();
+    if (_isSimulationRunning) _scheduleNextSimulationStep();
   }
 
   /// Zeigt einen blauen Punkt + weißen Ring als simuliertes Auto auf der Karte.

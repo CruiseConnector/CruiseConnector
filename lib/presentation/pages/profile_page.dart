@@ -1,4 +1,3 @@
-import 'package:cruise_connect/presentation/pages/interactive_post_card.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -10,6 +9,7 @@ import 'package:cruise_connect/presentation/pages/create_post_page.dart';
 import 'package:cruise_connect/presentation/pages/edit_profile_page.dart';
 import 'package:cruise_connect/presentation/pages/settings_page.dart';
 import 'package:cruise_connect/presentation/pages/cruise_mode_page.dart';
+import 'package:cruise_connect/presentation/pages/user_profile_page.dart';
 
 class ProfilePage extends StatefulWidget {
   const ProfilePage({super.key});
@@ -26,13 +26,14 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
   int _followerCount = 0;
   int _followingCount = 0;
   List<Map<String, dynamic>> _posts = [];
+  List<Map<String, dynamic>> _reposts = [];
   List<Map<String, dynamic>> _groups = [];
   List<SavedRoute> _savedRoutes = [];
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 3, vsync: this);
+    _tabController = TabController(length: 4, vsync: this);
     _loadData();
   }
 
@@ -54,6 +55,7 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
         SocialService.getFollowerCount(uid),
         SocialService.getFollowingCount(uid),
         SocialService.getUserPosts(uid),
+        SocialService.getUserReposts(uid),
         SocialService.getMyGroups(),
         SavedRoutesService.getUserRoutes(),
       ]);
@@ -63,8 +65,9 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
           _followerCount = results[0] as int;
           _followingCount = results[1] as int;
           _posts = results[2] as List<Map<String, dynamic>>;
-          _groups = results[3] as List<Map<String, dynamic>>;
-          _savedRoutes = results[4] as List<SavedRoute>;
+          _reposts = results[3] as List<Map<String, dynamic>>;
+          _groups = results[4] as List<Map<String, dynamic>>;
+          _savedRoutes = results[5] as List<SavedRoute>;
           _loading = false;
         });
       }
@@ -107,6 +110,7 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
       backgroundColor: const Color(0xFF0B0E14),
       endDrawer: _buildBurgerMenu(),
       floatingActionButton: FloatingActionButton(
+        heroTag: 'profile_fab',
         backgroundColor: const Color(0xFFFF3B30),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         child: const Icon(Icons.add, color: Colors.white),
@@ -225,9 +229,15 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
                           const SizedBox(height: 12),
                           Row(
                             children: [
-                              _buildFollowStat('$_followingCount', "Folge ich"),
+                              GestureDetector(
+                                onTap: () => _showFollowList('following'),
+                                child: _buildFollowStat('$_followingCount', "Folge ich"),
+                              ),
                               const SizedBox(width: 16),
-                              _buildFollowStat('$_followerCount', "Follower"),
+                              GestureDetector(
+                                onTap: () => _showFollowList('followers'),
+                                child: _buildFollowStat('$_followerCount', "Follower"),
+                              ),
                             ],
                           ),
                         ],
@@ -251,6 +261,7 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
                   labelStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
                   tabs: const [
                     Tab(text: "Posts"),
+                    Tab(text: "Reposts"),
                     Tab(text: "Routen"),
                     Tab(text: "Gruppen"),
                   ],
@@ -264,7 +275,7 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
             : TabBarView(
                 controller: _tabController,
                 children: [
-                  // Tab 1: Posts
+                  // Tab 1: Posts (mit Lösch-Option)
                   _posts.isEmpty
                       ? const Center(child: Text('Noch keine Posts', style: TextStyle(color: Colors.grey)))
                       : ListView.builder(
@@ -273,19 +284,59 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
                           itemBuilder: (context, index) {
                             final post = _posts[index];
                             final profile = post['profiles'] as Map<String, dynamic>?;
-                            return InteractivePostCard(
+                            return _buildOwnPostCard(
+                              postId: post['id'],
                               name: profile?['username'] ?? userName,
                               handle: userHandle,
                               time: _formatTimeAgo(post['created_at']),
                               content: post['content'] ?? '',
-                              initialLikeCount: '${post['likes_count'] ?? 0}',
-                              initialCommentCount: '${post['comments_count'] ?? 0}',
-                              initialRepostCount: '${post['reposts_count'] ?? 0}',
+                              likesCount: post['likes_count'] ?? 0,
+                              commentsCount: post['comments_count'] ?? 0,
+                              repostsCount: post['reposts_count'] ?? 0,
                             );
                           },
                         ),
 
-                  // Tab 2: Gespeicherte Routen
+                  // Tab 2: Reposts
+                  _reposts.isEmpty
+                      ? const Center(child: Text('Noch keine Reposts', style: TextStyle(color: Colors.grey)))
+                      : ListView.builder(
+                          padding: const EdgeInsets.only(top: 10, bottom: 80),
+                          itemCount: _reposts.length,
+                          itemBuilder: (context, index) {
+                            final repost = _reposts[index];
+                            final post = repost['posts'] as Map<String, dynamic>?;
+                            if (post == null) return const SizedBox.shrink();
+                            final author = post['profiles'] as Map<String, dynamic>?;
+                            final authorName = author?['username'] ?? 'User';
+                            return Container(
+                              margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                              padding: const EdgeInsets.all(16),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF1C1F26),
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      const Icon(Icons.repeat, size: 14, color: Color(0xFF34C759)),
+                                      const SizedBox(width: 6),
+                                      Text('Repost von @$authorName', style: const TextStyle(color: Color(0xFF34C759), fontSize: 12)),
+                                      const Spacer(),
+                                      Text(_formatTimeAgo(repost['created_at']), style: const TextStyle(color: Colors.grey, fontSize: 11)),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 10),
+                                  Text(post['content'] ?? '', style: const TextStyle(color: Colors.white, fontSize: 15, height: 1.3)),
+                                ],
+                              ),
+                            );
+                          },
+                        ),
+
+                  // Tab 3: Gespeicherte Routen
                   _savedRoutes.isEmpty
                       ? Center(
                           child: Column(
@@ -332,6 +383,207 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
                 ],
               ),
       ),
+    );
+  }
+
+  Widget _buildOwnPostCard({
+    required String postId,
+    required String name,
+    required String handle,
+    required String time,
+    required String content,
+    required int likesCount,
+    required int commentsCount,
+    required int repostsCount,
+  }) {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1C1F26),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              CircleAvatar(
+                radius: 18,
+                backgroundColor: const Color(0xFFFF3B30),
+                child: Text(name.isNotEmpty ? name[0].toUpperCase() : 'U', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
+                    Row(
+                      children: [
+                        Text(handle, style: const TextStyle(color: Colors.grey, fontSize: 13)),
+                        const SizedBox(width: 5),
+                        Text("· $time", style: const TextStyle(color: Colors.grey, fontSize: 13)),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              PopupMenuButton<String>(
+                icon: const Icon(Icons.more_horiz, color: Colors.grey, size: 20),
+                color: const Color(0xFF1C1F26),
+                onSelected: (value) {
+                  if (value == 'delete') _deletePost(postId);
+                },
+                itemBuilder: (_) => [
+                  const PopupMenuItem(
+                    value: 'delete',
+                    child: Row(
+                      children: [
+                        Icon(Icons.delete_outline, color: Color(0xFFFF3B30), size: 18),
+                        SizedBox(width: 8),
+                        Text('Post löschen', style: TextStyle(color: Color(0xFFFF3B30))),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Text(content, style: const TextStyle(color: Colors.white, fontSize: 15, height: 1.4)),
+          const SizedBox(height: 16),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceAround,
+            children: [
+              Row(children: [
+                const Icon(Icons.chat_bubble_outline, color: Colors.grey, size: 18),
+                if (commentsCount > 0) ...[const SizedBox(width: 4), Text('$commentsCount', style: const TextStyle(color: Colors.grey, fontSize: 12))],
+              ]),
+              Row(children: [
+                const Icon(Icons.repeat, color: Colors.grey, size: 18),
+                if (repostsCount > 0) ...[const SizedBox(width: 4), Text('$repostsCount', style: const TextStyle(color: Colors.grey, fontSize: 12))],
+              ]),
+              Row(children: [
+                const Icon(Icons.favorite_border, color: Colors.grey, size: 18),
+                if (likesCount > 0) ...[const SizedBox(width: 4), Text('$likesCount', style: const TextStyle(color: Colors.grey, fontSize: 12))],
+              ]),
+              const Icon(Icons.share_outlined, color: Colors.grey, size: 18),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _deletePost(String postId) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF1C1F26),
+        title: const Text('Post löschen?', style: TextStyle(color: Colors.white)),
+        content: const Text('Dieser Post wird unwiderruflich gelöscht.', style: TextStyle(color: Colors.grey)),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Abbrechen', style: TextStyle(color: Colors.grey))),
+          TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('Löschen', style: TextStyle(color: Color(0xFFFF3B30)))),
+        ],
+      ),
+    );
+    if (confirmed == true) {
+      await SocialService.deletePost(postId);
+      _loadData();
+    }
+  }
+
+  void _showFollowList(String type) async {
+    final uid = Supabase.instance.client.auth.currentUser?.id;
+    if (uid == null) return;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF0B0E14),
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (sheetContext) {
+        return DraggableScrollableSheet(
+          initialChildSize: 0.6,
+          minChildSize: 0.3,
+          maxChildSize: 0.9,
+          expand: false,
+          builder: (context, scrollController) {
+            return FutureBuilder<List<Map<String, dynamic>>>(
+              future: type == 'followers'
+                  ? SocialService.getFollowers(uid)
+                  : SocialService.getFollowingList(uid),
+              builder: (context, snapshot) {
+                final title = type == 'followers' ? 'Follower' : 'Folge ich';
+                return Column(
+                  children: [
+                    Center(
+                      child: Container(
+                        margin: const EdgeInsets.symmetric(vertical: 12),
+                        width: 40, height: 4,
+                        decoration: BoxDecoration(color: Colors.grey[600], borderRadius: BorderRadius.circular(2)),
+                      ),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text(title, style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+                      ),
+                    ),
+                    if (snapshot.connectionState == ConnectionState.waiting)
+                      const Expanded(child: Center(child: CircularProgressIndicator(color: Color(0xFFFF3B30))))
+                    else if (!snapshot.hasData || snapshot.data!.isEmpty)
+                      Expanded(
+                        child: Center(
+                          child: Text(
+                            type == 'followers' ? 'Noch keine Follower' : 'Du folgst noch niemandem',
+                            style: const TextStyle(color: Colors.grey),
+                          ),
+                        ),
+                      )
+                    else
+                      Expanded(
+                        child: ListView.builder(
+                          controller: scrollController,
+                          itemCount: snapshot.data!.length,
+                          itemBuilder: (context, index) {
+                            final item = snapshot.data![index];
+                            final profileKey = type == 'followers' ? 'profiles' : 'profiles';
+                            final profile = item[profileKey] as Map<String, dynamic>?;
+                            final username = profile?['username'] ?? profile?['email']?.split('@')[0] ?? 'User';
+                            final userId = profile?['id'] as String?;
+
+                            return ListTile(
+                              onTap: () {
+                                Navigator.pop(sheetContext);
+                                if (userId != null) {
+                                  Future.delayed(const Duration(milliseconds: 150), () {
+                                    if (mounted) {
+                                      Navigator.push(context, MaterialPageRoute(builder: (_) => UserProfilePage(userId: userId)));
+                                    }
+                                  });
+                                }
+                              },
+                              leading: CircleAvatar(
+                                backgroundColor: const Color(0xFFFF3B30),
+                                child: Text(username[0].toUpperCase(), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                              ),
+                              title: Text(username, style: const TextStyle(color: Colors.white)),
+                              subtitle: Text('@${profile?['email']?.split('@')[0] ?? ''}', style: const TextStyle(color: Colors.grey, fontSize: 13)),
+                            );
+                          },
+                        ),
+                      ),
+                  ],
+                );
+              },
+            );
+          },
+        );
+      },
     );
   }
 

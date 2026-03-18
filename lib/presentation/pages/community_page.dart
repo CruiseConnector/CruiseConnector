@@ -142,6 +142,7 @@ class _CommunityPageState extends State<CommunityPage> with SingleTickerProvider
         elevation: 0,
       ),
       floatingActionButton: FloatingActionButton(
+        heroTag: 'community_fab',
         backgroundColor: const Color(0xFFFF3B30),
         child: Icon(_tabController.index == 1 ? Icons.group_add : Icons.add, color: Colors.white),
         onPressed: () async {
@@ -599,7 +600,7 @@ class _CommunityPageState extends State<CommunityPage> with SingleTickerProvider
       context: context,
       backgroundColor: const Color(0xFF0B0E14),
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (context) {
+      builder: (sheetContext) {
         return Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -636,6 +637,14 @@ class _CommunityPageState extends State<CommunityPage> with SingleTickerProvider
                     message = '$fromName hat deinen Post geliked';
                     icon = Icons.favorite;
                     break;
+                  case 'comment':
+                    message = '$fromName hat deinen Post kommentiert';
+                    icon = Icons.comment;
+                    break;
+                  case 'repost':
+                    message = '$fromName hat deinen Post geteilt';
+                    icon = Icons.repeat;
+                    break;
                   case 'group_invite':
                     message = '$fromName hat dich in eine Gruppe eingeladen';
                     icon = Icons.group_add;
@@ -647,8 +656,12 @@ class _CommunityPageState extends State<CommunityPage> with SingleTickerProvider
 
                 return ListTile(
                   onTap: () {
-                    Navigator.pop(context);
-                    if (fromId != null) _openUserProfile(fromId);
+                    Navigator.pop(sheetContext);
+                    if (fromId != null) {
+                      Future.delayed(const Duration(milliseconds: 150), () {
+                        if (mounted) _openUserProfile(fromId);
+                      });
+                    }
                   },
                   leading: Icon(icon, color: const Color(0xFFFF3B30)),
                   title: Text(message, style: const TextStyle(color: Colors.white, fontSize: 14)),
@@ -657,8 +670,8 @@ class _CommunityPageState extends State<CommunityPage> with SingleTickerProvider
                       ? GestureDetector(
                           onTap: () async {
                             await SocialService.joinGroup(n['reference_id']);
+                            Navigator.pop(sheetContext);
                             if (mounted) {
-                              Navigator.pop(context);
                               ScaffoldMessenger.of(context).showSnackBar(
                                 const SnackBar(content: Text('Gruppe beigetreten!'), backgroundColor: Color(0xFF1C1F26)),
                               );

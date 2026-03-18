@@ -350,19 +350,32 @@ Deno.serve(async (req) => {
             .map((_, i) => (i === 0 || i === finalWaypoints.length - 1) ? 'unlimited' : '2000')
             .join(';');
 
-        // --- Execute Route Request ---
+        // --- Execute Route Request (with retries) ---
         let route = await getMapboxRoute(finalWaypoints, mapboxProfile, excludeParams, radiusesParams, MAPBOX_ACCESS_TOKEN);
 
-        if (!route) {
-            // Fallback: retry without exclude constraints (e.g. Kurvenjagd excludes too much in this region)
-            if (excludeParams && excludeParams.trim() !== '') {
-                console.log(`No route found with excludes "${excludeParams}", retrying without constraints...`);
-                route = await getMapboxRoute(finalWaypoints, mapboxProfile, '', radiusesParams, MAPBOX_ACCESS_TOKEN);
-            }
+        if (!route && excludeParams && excludeParams.trim() !== '') {
+            console.log(`No route with excludes "${excludeParams}", retrying without...`);
+            route = await getMapboxRoute(finalWaypoints, mapboxProfile, '', radiusesParams, MAPBOX_ACCESS_TOKEN);
+        }
 
-            if (!route) {
-                throw new Error("No route found with current constraints.");
+        // Retry with different waypoint directions (up to 4 more attempts)
+        if (!route && planning_type === 'Zufall' && currentRouteType === 'ROUND_TRIP' && distanceConfig) {
+            for (let retry = 0; retry < 4 && !route; retry++) {
+                console.log(`Retry ${retry + 1}: generating new waypoints...`);
+                const retryWPs = calculateTriangleWaypoints(startLocation, distanceConfig.radiusKm * (0.6 + retry * 0.1));
+                const retryAll = [startLocation, ...retryWPs, startLocation];
+                const retryRadiuses = retryAll.map((_, i) => (i === 0 || i === retryAll.length - 1) ? 'unlimited' : '5000').join(';');
+
+                route = await getMapboxRoute(retryAll, mapboxProfile, '', retryRadiuses, MAPBOX_ACCESS_TOKEN);
+                if (route) {
+                    finalWaypoints = retryAll;
+                    radiusesParams = retryRadiuses;
+                }
             }
+        }
+
+        if (!route) {
+            throw new Error("No route found with current constraints.");
         }
 
         // Mapbox returns distance in meters -> convert to kilometers for app output.

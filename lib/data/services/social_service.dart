@@ -86,6 +86,20 @@ class SocialService {
     } else {
       await _db.from('post_likes').insert({'post_id': postId, 'user_id': uid});
       await _db.rpc('increment_likes', params: {'post_id_param': postId});
+
+      // Notification an Post-Autor
+      try {
+        final post = await _db.from('posts').select('user_id').eq('id', postId).single();
+        final postAuthor = post['user_id'] as String;
+        if (postAuthor != uid) {
+          await _db.from('notifications').insert({
+            'user_id': postAuthor,
+            'from_user_id': uid,
+            'type': 'like',
+            'reference_id': postId,
+          });
+        }
+      } catch (_) {}
       return true;
     }
   }
@@ -145,6 +159,69 @@ class SocialService {
   static Future<void> deleteComment(String commentId, String postId) async {
     await _db.from('comments').delete().eq('id', commentId);
     await _db.rpc('decrement_comments', params: {'post_id_param': postId});
+  }
+
+  // ── Reposts ─────────────────────────────────────────────────────────
+
+  static Future<bool> toggleRepost(String postId) async {
+    final uid = _userId;
+    if (uid == null) return false;
+
+    final existing = await _db
+        .from('reposts')
+        .select('id')
+        .eq('post_id', postId)
+        .eq('user_id', uid)
+        .maybeSingle();
+
+    if (existing != null) {
+      await _db.from('reposts').delete().eq('id', existing['id']);
+      await _db.rpc('decrement_reposts', params: {'post_id_param': postId});
+      return false;
+    } else {
+      await _db.from('reposts').insert({'post_id': postId, 'user_id': uid});
+      await _db.rpc('increment_reposts', params: {'post_id_param': postId});
+
+      // Notification an Post-Autor
+      try {
+        final post = await _db.from('posts').select('user_id').eq('id', postId).single();
+        final postAuthor = post['user_id'] as String;
+        if (postAuthor != uid) {
+          await _db.from('notifications').insert({
+            'user_id': postAuthor,
+            'from_user_id': uid,
+            'type': 'repost',
+            'reference_id': postId,
+          });
+        }
+      } catch (_) {}
+      return true;
+    }
+  }
+
+  static Future<bool> hasReposted(String postId) async {
+    final uid = _userId;
+    if (uid == null) return false;
+
+    final existing = await _db
+        .from('reposts')
+        .select('id')
+        .eq('post_id', postId)
+        .eq('user_id', uid)
+        .maybeSingle();
+
+    return existing != null;
+  }
+
+  /// Alle Reposts eines Users (für Profil-Seite)
+  static Future<List<Map<String, dynamic>>> getUserReposts(String userId) async {
+    final reposts = await _db
+        .from('reposts')
+        .select('*, posts(*, profiles!posts_user_id_profiles_fkey(id, username, email))')
+        .eq('user_id', userId)
+        .order('created_at', ascending: false);
+
+    return List<Map<String, dynamic>>.from(reposts);
   }
 
   // ── Follows ───────────────────────────────────────────────────────────
@@ -211,6 +288,26 @@ class SocialService {
         .eq('follower_id', userId)
         .eq('status', 'accepted');
     return (result as List).length;
+  }
+
+  /// Liste der Follower (Personen, die diesem User folgen)
+  static Future<List<Map<String, dynamic>>> getFollowers(String userId) async {
+    final result = await _db
+        .from('follows')
+        .select('follower_id, profiles!follows_follower_id_profiles_fkey(id, username, email)')
+        .eq('following_id', userId)
+        .eq('status', 'accepted');
+    return List<Map<String, dynamic>>.from(result);
+  }
+
+  /// Liste der Personen, denen dieser User folgt
+  static Future<List<Map<String, dynamic>>> getFollowingList(String userId) async {
+    final result = await _db
+        .from('follows')
+        .select('following_id, profiles!follows_following_id_profiles_fkey(id, username, email)')
+        .eq('follower_id', userId)
+        .eq('status', 'accepted');
+    return List<Map<String, dynamic>>.from(result);
   }
 
   // ── User Search ───────────────────────────────────────────────────────

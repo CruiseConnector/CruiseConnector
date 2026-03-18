@@ -15,6 +15,7 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   int _selectedIndex = 0;
   late final List<Widget> _pages;
+  bool _isFullscreen = false;
 
   @override
   void initState() {
@@ -26,6 +27,22 @@ class _HomePageState extends State<HomePage> {
       const AnalyticsPage(),
       const ProfilePage(),
     ];
+    CruiseModePage.isFullscreen.addListener(_onFullscreenChanged);
+  }
+
+  @override
+  void dispose() {
+    CruiseModePage.isFullscreen.removeListener(_onFullscreenChanged);
+    super.dispose();
+  }
+
+  void _onFullscreenChanged() {
+    final newValue = CruiseModePage.isFullscreen.value;
+    if (_isFullscreen != newValue) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) setState(() => _isFullscreen = newValue);
+      });
+    }
   }
 
   void _onNavItemTapped(int index) {
@@ -36,19 +53,17 @@ class _HomePageState extends State<HomePage> {
 
   @override
   Widget build(BuildContext context) {
-    return ValueListenableBuilder<bool>(
-      valueListenable: CruiseModePage.isFullscreen,
-      builder: (context, isFullscreen, _) {
-        return Scaffold(
-          backgroundColor: const Color(0xFF0B0E14),
-          body: isFullscreen
-              ? IndexedStack(index: _selectedIndex, children: _pages)
-              : SafeArea(
-                  child: IndexedStack(index: _selectedIndex, children: _pages),
-                ),
-          bottomNavigationBar: isFullscreen ? null : _buildBottomNav(),
-        );
-      },
+    return Scaffold(
+      backgroundColor: const Color(0xFF0B0E14),
+      body: SafeArea(
+        // Im Fullscreen-Modus: SafeArea-Padding deaktivieren, aber Widget-Tree bleibt gleich
+        top: !_isFullscreen,
+        bottom: !_isFullscreen,
+        left: !_isFullscreen,
+        right: !_isFullscreen,
+        child: IndexedStack(index: _selectedIndex, children: _pages),
+      ),
+      bottomNavigationBar: _isFullscreen ? null : _buildBottomNav(),
     );
   }
 

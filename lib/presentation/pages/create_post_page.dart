@@ -1,10 +1,45 @@
 import 'package:flutter/material.dart';
+import 'package:cruise_connect/data/services/social_service.dart';
 
-class CreatePostPage extends StatelessWidget {
+class CreatePostPage extends StatefulWidget {
   const CreatePostPage({super.key});
 
   @override
+  State<CreatePostPage> createState() => _CreatePostPageState();
+}
+
+class _CreatePostPageState extends State<CreatePostPage> {
+  final _controller = TextEditingController();
+  bool _posting = false;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submitPost() async {
+    final content = _controller.text.trim();
+    if (content.isEmpty) return;
+
+    setState(() => _posting = true);
+    try {
+      await SocialService.createPost(content);
+      if (mounted) Navigator.pop(context, true);
+    } catch (e) {
+      if (mounted) {
+        setState(() => _posting = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Fehler beim Erstellen des Posts'), backgroundColor: Color(0xFF1C1F26)),
+        );
+      }
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final hasContent = _controller.text.trim().isNotEmpty;
+
     return Scaffold(
       backgroundColor: const Color(0xFF0B0E14),
       appBar: AppBar(
@@ -19,13 +54,16 @@ class CreatePostPage extends StatelessWidget {
           Padding(
             padding: const EdgeInsets.only(right: 16.0, top: 10, bottom: 10),
             child: ElevatedButton(
-              onPressed: () => Navigator.pop(context),
+              onPressed: _posting || !hasContent ? null : _submitPost,
               style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFFFF3B30),
+                disabledBackgroundColor: const Color(0xFFFF3B30).withValues(alpha: 0.3),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
                 padding: const EdgeInsets.symmetric(horizontal: 20),
               ),
-              child: const Text("Posten", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+              child: _posting
+                  ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                  : const Text("Posten", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
             ),
           ),
         ],
@@ -42,19 +80,17 @@ class CreatePostPage extends StatelessWidget {
             ),
             const SizedBox(width: 12),
             Expanded(
-              child: Column(
-                children: const [
-                  TextField(
-                    autofocus: true,
-                    style: TextStyle(color: Colors.white, fontSize: 18),
-                    maxLines: null,
-                    decoration: InputDecoration(
-                      hintText: "Was gibt's Neues?",
-                      hintStyle: TextStyle(color: Colors.grey, fontSize: 18),
-                      border: InputBorder.none,
-                    ),
-                  ),
-                ],
+              child: TextField(
+                controller: _controller,
+                autofocus: true,
+                style: const TextStyle(color: Colors.white, fontSize: 18),
+                maxLines: null,
+                onChanged: (_) => setState(() {}),
+                decoration: const InputDecoration(
+                  hintText: "Was gibt's Neues?",
+                  hintStyle: TextStyle(color: Colors.grey, fontSize: 18),
+                  border: InputBorder.none,
+                ),
               ),
             ),
           ],
