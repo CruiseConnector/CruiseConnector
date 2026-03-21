@@ -20,6 +20,7 @@ ALTER TABLE public.profiles
 
 -- Profile öffentlich lesbar machen (nötig für Social Features)
 DROP POLICY IF EXISTS "User sieht eigenes Profil" ON public.profiles;
+DROP POLICY IF EXISTS "Profile sind öffentlich lesbar" ON public.profiles;
 CREATE POLICY "Profile sind öffentlich lesbar"
   ON public.profiles FOR SELECT
   USING (true);
@@ -36,6 +37,8 @@ ALTER TABLE public.routes
 DROP POLICY IF EXISTS "User sieht eigene Routen" ON public.routes;
 DROP POLICY IF EXISTS "User speichert eigene Routen" ON public.routes;
 DROP POLICY IF EXISTS "User löscht eigene Routen" ON public.routes;
+DROP POLICY IF EXISTS "Öffentliche bewertete Routen sind lesbar" ON public.routes;
+DROP POLICY IF EXISTS "User kann eigene Routen updaten" ON public.routes;
 
 CREATE POLICY "User sieht eigene Routen"
   ON public.routes FOR SELECT

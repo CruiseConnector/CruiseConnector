@@ -1479,14 +1479,14 @@ class _CruiseModePageState extends State<CruiseModePage> {
       barrierDismissible: false,
       builder: (ctx) => CruiseCompletionDialog(
         distanceKm: drivenKm,
-        onSave: (rating) {
+        onSave: (rating) async {
           Navigator.pop(ctx);
-          _saveRouteAndSyncXp(rating: rating);
+          await _saveRouteAndSyncXp(rating: rating);
           _resetAfterCompletion();
         },
-        onDiscard: () {
+        onDiscard: () async {
           Navigator.pop(ctx);
-          _saveRouteAndSyncXp();
+          await _saveRouteAndSyncXp();
           _resetAfterCompletion();
         },
       ),
@@ -1504,14 +1504,14 @@ class _CruiseModePageState extends State<CruiseModePage> {
         distanceKm: drivenKm,
         totalRouteKm: totalKm,
         isEarlyStop: true,
-        onSave: (rating) {
+        onSave: (rating) async {
           Navigator.pop(ctx);
-          _saveRouteAndSyncXp(rating: rating);
+          await _saveRouteAndSyncXp(rating: rating);
           _resetAfterCompletion();
         },
-        onDiscard: () {
+        onDiscard: () async {
           Navigator.pop(ctx);
-          _saveRouteAndSyncXp();
+          await _saveRouteAndSyncXp();
           _resetAfterCompletion();
         },
       ),
@@ -1521,6 +1521,7 @@ class _CruiseModePageState extends State<CruiseModePage> {
   /// Speichert die gefahrene Route und synchronisiert XP/Level/Badges.
   Future<void> _saveRouteAndSyncXp({int? rating}) async {
     try {
+      debugPrint('[CruiseMode] _saveRouteAndSyncXp: _lastRouteResult=${_lastRouteResult != null}, rating=$rating');
       if (_lastRouteResult != null) {
         // Route mit tatsächlich gefahrener Distanz speichern
         final drivenDistanceMeters = _totalDistanceDriven > 0 ? _totalDistanceDriven : _routeDistance;
@@ -1533,6 +1534,7 @@ class _CruiseModePageState extends State<CruiseModePage> {
           durationSeconds: _lastRouteResult!.durationSeconds,
           distanceKm: drivenDistanceMeters != null ? drivenDistanceMeters / 1000 : null,
         );
+        debugPrint('[CruiseMode] Saving route: style=$_selectedStyle, roundTrip=$_isRoundTrip, distKm=${adjustedResult.distanceKm}');
         await SavedRoutesService.saveRoute(
           result: adjustedResult,
           style: _selectedStyle,
@@ -1540,6 +1542,7 @@ class _CruiseModePageState extends State<CruiseModePage> {
           rating: rating,
           drivenKm: _totalDistanceDriven > 0 ? _totalDistanceDriven / 1000 : null,
         );
+        debugPrint('[CruiseMode] Route saved successfully!');
       }
       // XP/Level/Badges synchronisieren
       final gamResult = await GamificationService.calculateAndSync();
@@ -1553,8 +1556,14 @@ class _CruiseModePageState extends State<CruiseModePage> {
           ),
         );
       }
-    } catch (e) {
+    } catch (e, stack) {
       debugPrint('Route speichern / XP sync fehlgeschlagen: $e');
+      debugPrint('Stack: $stack');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Fehler beim Speichern: $e'), backgroundColor: Colors.red),
+        );
+      }
     }
   }
 

@@ -11,6 +11,7 @@ class CreatePostPage extends StatefulWidget {
 class _CreatePostPageState extends State<CreatePostPage> {
   final _controller = TextEditingController();
   bool _posting = false;
+  String _visibility = 'public'; // 'public' oder 'followers'
 
   @override
   void dispose() {
@@ -24,7 +25,7 @@ class _CreatePostPageState extends State<CreatePostPage> {
 
     setState(() => _posting = true);
     try {
-      await SocialService.createPost(content);
+      await SocialService.createPost(content, visibility: _visibility);
       if (mounted) Navigator.pop(context, true);
     } catch (e) {
       if (mounted) {
@@ -34,6 +35,35 @@ class _CreatePostPageState extends State<CreatePostPage> {
         );
       }
     }
+  }
+
+  Widget _buildVisibilityChip(String value, IconData icon, String label) {
+    final selected = _visibility == value;
+    return GestureDetector(
+      onTap: () => setState(() => _visibility = value),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        decoration: BoxDecoration(
+          color: selected ? const Color(0xFFFF3B30) : const Color(0xFF1C1F26),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: selected ? const Color(0xFFFF3B30) : Colors.grey[700]!,
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 16, color: selected ? Colors.white : Colors.grey),
+            const SizedBox(width: 6),
+            Text(label, style: TextStyle(
+              color: selected ? Colors.white : Colors.grey,
+              fontSize: 14,
+              fontWeight: selected ? FontWeight.bold : FontWeight.normal,
+            )),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
@@ -68,33 +98,52 @@ class _CreatePostPageState extends State<CreatePostPage> {
           ),
         ],
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            CircleAvatar(
-              radius: 20,
-              backgroundColor: Colors.grey[800],
-              child: const Icon(Icons.person, color: Colors.white),
+      body: Column(
+        children: [
+          // Sichtbarkeits-Toggle
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+            child: Row(
+              children: [
+                _buildVisibilityChip('public', Icons.public, 'Alle'),
+                const SizedBox(width: 8),
+                _buildVisibilityChip('followers', Icons.group, 'Follower'),
+              ],
             ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: TextField(
-                controller: _controller,
-                autofocus: true,
-                style: const TextStyle(color: Colors.white, fontSize: 18),
-                maxLines: null,
-                onChanged: (_) => setState(() {}),
-                decoration: const InputDecoration(
-                  hintText: "Was gibt's Neues?",
-                  hintStyle: TextStyle(color: Colors.grey, fontSize: 18),
-                  border: InputBorder.none,
-                ),
+          ),
+          const Divider(color: Color(0xFF1C1F26), height: 1),
+          // Post-Eingabe
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  CircleAvatar(
+                    radius: 20,
+                    backgroundColor: Colors.grey[800],
+                    child: const Icon(Icons.person, color: Colors.white),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: TextField(
+                      controller: _controller,
+                      autofocus: true,
+                      style: const TextStyle(color: Colors.white, fontSize: 18),
+                      maxLines: null,
+                      onChanged: (_) => setState(() {}),
+                      decoration: const InputDecoration(
+                        hintText: "Was gibt's Neues?",
+                        hintStyle: TextStyle(color: Colors.grey, fontSize: 18),
+                        border: InputBorder.none,
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }

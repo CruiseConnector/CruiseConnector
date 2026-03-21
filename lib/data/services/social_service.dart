@@ -11,7 +11,7 @@ class SocialService {
     final uid = _userId;
     if (uid == null) return [];
 
-    // Posts von Usern denen man folgt
+    // IDs der Leute denen man folgt
     final followingIds = await _db
         .from('follows')
         .select('following_id')
@@ -19,7 +19,8 @@ class SocialService {
         .eq('status', 'accepted');
 
     final ids = (followingIds as List).map((f) => f['following_id'] as String).toList();
-    if (ids.isEmpty) return [];
+    // Eigene ID hinzufügen damit eigene Posts auch im Feed erscheinen
+    ids.add(uid);
 
     final posts = await _db
         .from('posts')
@@ -42,23 +43,25 @@ class SocialService {
   }
 
   static Future<List<Map<String, dynamic>>> getDiscoverPosts() async {
-    // Neueste öffentliche Posts von allen
+    // Nur öffentliche Posts für Entdecken
     final posts = await _db
         .from('posts')
         .select('*, profiles!posts_user_id_profiles_fkey(id, username, email)')
+        .eq('visibility', 'public')
         .order('created_at', ascending: false)
         .limit(30);
 
     return List<Map<String, dynamic>>.from(posts);
   }
 
-  static Future<void> createPost(String content) async {
+  static Future<void> createPost(String content, {String visibility = 'public'}) async {
     final uid = _userId;
     if (uid == null) return;
 
     await _db.from('posts').insert({
       'user_id': uid,
       'content': content,
+      'visibility': visibility,
     });
   }
 
