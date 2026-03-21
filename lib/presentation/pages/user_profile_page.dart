@@ -20,6 +20,7 @@ class _UserProfilePageState extends State<UserProfilePage> with SingleTickerProv
   List<Map<String, dynamic>> _reposts = [];
   bool _isFollowing = false;
   bool _isOwnProfile = false;
+  bool _isPrivate = false;
 
   @override
   void initState() {
@@ -46,6 +47,7 @@ class _UserProfilePageState extends State<UserProfilePage> with SingleTickerProv
       if (mounted) {
         setState(() {
           _stats = results[0] as Map<String, dynamic>;
+          _isPrivate = _stats['is_private'] == true;
           _posts = results[1] as List<Map<String, dynamic>>;
           _reposts = results[2] as List<Map<String, dynamic>>;
           if (!_isOwnProfile) _isFollowing = results[3] as bool;
@@ -108,8 +110,15 @@ class _UserProfilePageState extends State<UserProfilePage> with SingleTickerProv
                             children: [
                               _buildStat('$totalRoutes', 'Fahrten'),
                               _buildStat('${totalKm.toStringAsFixed(0)} km', 'Gefahren'),
-                              _buildStat('$followers', 'Follower'),
-                              _buildStat('$following', 'Folgt'),
+                              // Follower/Following-Liste nur anklickbar wenn man folgt oder eigenes Profil
+                              GestureDetector(
+                                onTap: (_isFollowing || _isOwnProfile) ? () => _showFollowList('followers') : null,
+                                child: _buildStat('$followers', 'Follower'),
+                              ),
+                              GestureDetector(
+                                onTap: (_isFollowing || _isOwnProfile) ? () => _showFollowList('following') : null,
+                                child: _buildStat('$following', 'Folgt'),
+                              ),
                             ],
                           ),
                           const SizedBox(height: 16),
@@ -187,21 +196,25 @@ class _UserProfilePageState extends State<UserProfilePage> with SingleTickerProv
                   controller: _tabController,
                   children: [
                     // Posts Tab
-                    _posts.isEmpty
-                        ? const Center(child: Text('Noch keine Posts', style: TextStyle(color: Colors.grey)))
-                        : ListView.builder(
-                            itemCount: _posts.length,
-                            padding: EdgeInsets.zero,
-                            itemBuilder: (context, index) => _buildPostItem(_posts[index]),
-                          ),
+                    (_isPrivate && !_isFollowing && !_isOwnProfile)
+                        ? _buildPrivateMessage()
+                        : _posts.isEmpty
+                            ? const Center(child: Text('Noch keine Posts', style: TextStyle(color: Colors.grey)))
+                            : ListView.builder(
+                                itemCount: _posts.length,
+                                padding: EdgeInsets.zero,
+                                itemBuilder: (context, index) => _buildPostItem(_posts[index]),
+                              ),
                     // Reposts Tab
-                    _reposts.isEmpty
-                        ? const Center(child: Text('Noch keine Reposts', style: TextStyle(color: Colors.grey)))
-                        : ListView.builder(
-                            itemCount: _reposts.length,
-                            padding: EdgeInsets.zero,
-                            itemBuilder: (context, index) => _buildRepostItem(_reposts[index]),
-                          ),
+                    (_isPrivate && !_isFollowing && !_isOwnProfile)
+                        ? _buildPrivateMessage()
+                        : _reposts.isEmpty
+                            ? const Center(child: Text('Noch keine Reposts', style: TextStyle(color: Colors.grey)))
+                            : ListView.builder(
+                                itemCount: _reposts.length,
+                                padding: EdgeInsets.zero,
+                                itemBuilder: (context, index) => _buildRepostItem(_reposts[index]),
+                              ),
                   ],
                 ),
               ),
@@ -299,6 +312,120 @@ class _UserProfilePageState extends State<UserProfilePage> with SingleTickerProv
           Container(height: 1, color: Colors.white.withValues(alpha: 0.05)),
         ],
       ),
+    );
+  }
+
+  Widget _buildPrivateMessage() {
+    return const Center(
+      child: Padding(
+        padding: EdgeInsets.all(32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.lock_outline, color: Colors.grey, size: 48),
+            SizedBox(height: 16),
+            Text('Dieses Konto ist privat', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+            SizedBox(height: 8),
+            Text(
+              'Folge diesem Konto um die Posts und Reposts zu sehen.',
+              style: TextStyle(color: Colors.grey, fontSize: 14),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showFollowList(String type) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF0B0E14),
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (sheetContext) {
+        return DraggableScrollableSheet(
+          initialChildSize: 0.6,
+          minChildSize: 0.3,
+          maxChildSize: 0.9,
+          expand: false,
+          builder: (context, scrollController) {
+            return FutureBuilder<List<Map<String, dynamic>>>(
+              future: type == 'followers'
+                  ? SocialService.getFollowers(widget.userId)
+                  : SocialService.getFollowingList(widget.userId),
+              builder: (context, snapshot) {
+                final title = type == 'followers' ? 'Follower' : 'Folgt';
+                return Column(
+                  children: [
+                    Center(
+                      child: Container(
+                        margin: const EdgeInsets.symmetric(vertical: 12),
+                        width: 40, height: 4,
+                        decoration: BoxDecoration(color: Colors.grey[600], borderRadius: BorderRadius.circular(2)),
+                      ),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text(title, style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+                      ),
+                    ),
+                    if (snapshot.connectionState == ConnectionState.waiting)
+                      const Expanded(child: Center(child: CircularProgressIndicator(color: Color(0xFFFF3B30))))
+                    else if (!snapshot.hasData || snapshot.data!.isEmpty)
+                      Expanded(
+                        child: Center(
+                          child: Text(
+                            type == 'followers' ? 'Noch keine Follower' : 'Folgt noch niemandem',
+                            style: const TextStyle(color: Colors.grey),
+                          ),
+                        ),
+                      )
+                    else
+                      Expanded(
+                        child: ListView.builder(
+                          controller: scrollController,
+                          itemCount: snapshot.data!.length,
+                          itemBuilder: (context, index) {
+                            final item = snapshot.data![index];
+                            final profile = item['profiles'] as Map<String, dynamic>?;
+                            final username = profile?['username'] ?? profile?['email']?.split('@')[0] ?? 'User';
+                            final userId = profile?['id'] as String?;
+
+                            return ListTile(
+                              leading: CircleAvatar(
+                                backgroundColor: const Color(0xFFFF3B30),
+                                child: Text(
+                                  username.toString().isNotEmpty ? username.toString()[0].toUpperCase() : 'U',
+                                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                                ),
+                              ),
+                              title: Text(username.toString(), style: const TextStyle(color: Colors.white)),
+                              onTap: () {
+                                Navigator.pop(sheetContext);
+                                if (userId != null) {
+                                  Future.delayed(const Duration(milliseconds: 150), () {
+                                    if (mounted) {
+                                      Navigator.push(context, MaterialPageRoute(
+                                        builder: (_) => UserProfilePage(userId: userId),
+                                      ));
+                                    }
+                                  });
+                                }
+                              },
+                            );
+                          },
+                        ),
+                      ),
+                  ],
+                );
+              },
+            );
+          },
+        );
+      },
     );
   }
 

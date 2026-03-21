@@ -43,15 +43,21 @@ class SocialService {
   }
 
   static Future<List<Map<String, dynamic>>> getDiscoverPosts() async {
-    // Nur öffentliche Posts für Entdecken
+    // Nur öffentliche Posts von nicht-privaten Accounts für Entdecken
     final posts = await _db
         .from('posts')
-        .select('*, profiles!posts_user_id_profiles_fkey(id, username, email)')
+        .select('*, profiles!posts_user_id_profiles_fkey(id, username, email, is_private)')
         .eq('visibility', 'public')
         .order('created_at', ascending: false)
-        .limit(30);
+        .limit(50);
 
-    return List<Map<String, dynamic>>.from(posts);
+    // Private Accounts im Client filtern (Supabase kann nicht über FK-Joins filtern)
+    final filtered = (posts as List).where((p) {
+      final profile = p['profiles'] as Map<String, dynamic>?;
+      return profile?['is_private'] != true;
+    }).toList();
+
+    return List<Map<String, dynamic>>.from(filtered.take(30));
   }
 
   static Future<void> createPost(String content, {String visibility = 'public'}) async {
@@ -492,6 +498,7 @@ class SocialService {
       'total_km': profile?['total_km'] ?? 0,
       'total_routes': profile?['total_routes'] ?? 0,
       'badges': profile?['badges'] ?? [],
+      'is_private': profile?['is_private'] ?? false,
     };
   }
 
