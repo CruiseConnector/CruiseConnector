@@ -95,7 +95,7 @@ class CruiseSetupCard extends StatelessWidget {
           if (isRoundTrip)
             _SelectionRow(
               title: 'Länge',
-              options: const ['20 Km', '50 Km', '100 Km', '+100 Km'],
+              options: const ['50 Km', '75 Km', '100 Km', '150 Km'],
               selectedValue: selectedLength,
               onSelect: onLengthChanged,
             )

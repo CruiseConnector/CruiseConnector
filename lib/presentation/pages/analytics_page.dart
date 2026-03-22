@@ -3,6 +3,7 @@ import 'package:cruise_connect/data/services/gamification_service.dart';
 import 'package:cruise_connect/data/services/saved_routes_service.dart';
 import 'package:cruise_connect/domain/models/badge.dart' as app;
 import 'package:cruise_connect/domain/models/saved_route.dart';
+import 'package:cruise_connect/domain/models/user_level.dart';
 
 class AnalyticsPage extends StatefulWidget {
   const AnalyticsPage({super.key});
@@ -18,10 +19,13 @@ class _AnalyticsPageState extends State<AnalyticsPage> with SingleTickerProvider
   int _totalRoutes = 0;
   double _totalDistanceKm = 0;
   double _totalHours = 0;
+  int _totalXp = 0;
+  UserLevel _level = UserLevel.fromXp(0);
   List<app.Badge> _earnedBadges = [];
   List<SavedRoute> _allRoutes = [];
 
   List<double> _weeklyChartData = List.filled(7, 0);
+  List<double> _weeklyRawKm = List.filled(7, 0);
   final List<String> _weeklyLabels = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"];
 
   @override
@@ -47,24 +51,29 @@ class _AnalyticsPageState extends State<AnalyticsPage> with SingleTickerProvider
       final weekStart = now.subtract(Duration(days: now.weekday - 1));
       final weeklyKm = List<double>.filled(7, 0);
       for (final r in routes) {
-        if (r.createdAt != null && r.createdAt!.isAfter(weekStart)) {
-          final dayIndex = r.createdAt!.weekday - 1;
+        if (r.createdAt.isAfter(weekStart)) {
+          final dayIndex = r.createdAt.weekday - 1;
           if (dayIndex >= 0 && dayIndex < 7) {
             weeklyKm[dayIndex] += r.distanceKm;
           }
         }
       }
       final maxKm = weeklyKm.reduce((a, b) => a > b ? a : b);
-      final normalizedWeekly = weeklyKm.map((km) => maxKm > 0 ? (km / maxKm).clamp(0.0, 1.0) : 0.0).toList();
+      final normalizedWeekly = weeklyKm
+          .map((km) => maxKm > 0 ? (km / maxKm).clamp(0.0, 1.0) : 0.0)
+          .toList();
 
       if (mounted) {
         setState(() {
           _totalRoutes = gamResult.totalRoutes;
           _totalDistanceKm = gamResult.totalDistanceKm;
           _totalHours = gamResult.totalHours;
+          _totalXp = gamResult.totalXp;
+          _level = gamResult.level;
           _earnedBadges = gamResult.earnedBadges;
           _allRoutes = routes;
           _weeklyChartData = normalizedWeekly;
+          _weeklyRawKm = weeklyKm;
           _loading = false;
         });
       }
@@ -91,7 +100,9 @@ class _AnalyticsPageState extends State<AnalyticsPage> with SingleTickerProvider
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         _buildHeader(),
-                        const SizedBox(height: 24),
+                        const SizedBox(height: 20),
+                        _buildLevelCard(),
+                        const SizedBox(height: 16),
                         _buildStatsGrid(),
                         const SizedBox(height: 24),
                         _buildTabSection(),
@@ -122,6 +133,66 @@ class _AnalyticsPageState extends State<AnalyticsPage> with SingleTickerProvider
     );
   }
 
+  Widget _buildLevelCard() {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1C1F26),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 42,
+                height: 42,
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(colors: [Color(0xFFFF5252), Color(0xFFD32F2F)]),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Center(
+                  child: Text('${_level.level}', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18)),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(_level.name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+                    Text('$_totalXp XP gesamt', style: const TextStyle(color: Color(0xFFA0AEC0), fontSize: 12)),
+                  ],
+                ),
+              ),
+              Text(
+                '${(_level.progress * 100).toStringAsFixed(0)}%',
+                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 20),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: LinearProgressIndicator(
+              value: _level.progress,
+              backgroundColor: Colors.grey[800],
+              valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFFFF3B30)),
+              minHeight: 6,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Noch ${_level.xpToNextLevel} XP bis Level ${_level.level + 1}',
+            style: const TextStyle(color: Color(0xFFA0AEC0), fontSize: 11),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildStatsGrid() {
     return GridView.count(
       crossAxisCount: 2,
@@ -133,7 +204,7 @@ class _AnalyticsPageState extends State<AnalyticsPage> with SingleTickerProvider
         _buildAnalyticsCard("Fahrten", '$_totalRoutes', Icons.directions_car, const Color(0xFFFF3B30)),
         _buildAnalyticsCard("Distanz", _totalDistanceKm < 1 ? '0 km' : '${_totalDistanceKm.toStringAsFixed(0)} km', Icons.map, const Color(0xFF00E5FF)),
         _buildAnalyticsCard("Fahrzeit", _totalHours < 1 ? '${(_totalHours * 60).toStringAsFixed(0)} min' : '${_totalHours.toStringAsFixed(1)} h', Icons.timer, const Color(0xFFFFD700)),
-        _buildAnalyticsCard("Badges", '${_earnedBadges.length}', Icons.emoji_events, const Color(0xFFB026FF)),
+        _buildAnalyticsCard("XP", '$_totalXp', Icons.bolt, const Color(0xFFB026FF)),
       ],
     );
   }
@@ -151,7 +222,7 @@ class _AnalyticsPageState extends State<AnalyticsPage> with SingleTickerProvider
             unselectedLabelColor: const Color(0xFFA0AEC0),
             labelStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
             tabs: const [
-              Tab(icon: Icon(Icons.insights, size: 18), text: "Übersicht"),
+              Tab(icon: Icon(Icons.insights, size: 18), text: "Woche"),
               Tab(icon: Icon(Icons.route, size: 18), text: "Routen"),
               Tab(icon: Icon(Icons.emoji_events, size: 18), text: "Badges"),
             ],
@@ -170,6 +241,12 @@ class _AnalyticsPageState extends State<AnalyticsPage> with SingleTickerProvider
   }
 
   Widget _buildOverviewTab() {
+    final totalWeekKm = _weeklyRawKm.fold<double>(0, (a, b) => a + b);
+    final weekRoutes = _allRoutes.where((r) {
+      final weekStart = DateTime.now().subtract(Duration(days: DateTime.now().weekday - 1));
+      return r.createdAt.isAfter(weekStart);
+    }).length;
+
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -193,9 +270,9 @@ class _AnalyticsPageState extends State<AnalyticsPage> with SingleTickerProvider
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceAround,
             children: [
-              _buildSummaryItem("Routen", '$_totalRoutes', Icons.route),
-              _buildSummaryItem("Km", _totalDistanceKm.toStringAsFixed(0), Icons.straighten),
-              _buildSummaryItem("Badges", '${_earnedBadges.length}', Icons.emoji_events),
+              _buildSummaryItem("Routen", '$weekRoutes', Icons.route),
+              _buildSummaryItem("Km", totalWeekKm.toStringAsFixed(0), Icons.straighten),
+              _buildSummaryItem("Badges", '${_earnedBadges.length}/${app.Badge.all.length}', Icons.emoji_events),
             ],
           ),
         ],
@@ -224,9 +301,17 @@ class _AnalyticsPageState extends State<AnalyticsPage> with SingleTickerProvider
       decoration: BoxDecoration(color: const Color(0xFF1C1F26), borderRadius: BorderRadius.circular(20), border: Border.all(color: Colors.white.withValues(alpha: 0.05))),
       child: ListView.builder(
         padding: const EdgeInsets.all(12),
-        itemCount: _allRoutes.length.clamp(0, 10),
+        itemCount: _allRoutes.length.clamp(0, 15),
         itemBuilder: (context, index) {
           final route = _allRoutes[index];
+          // XP für diese Route berechnen
+          final estimatedCurves = (route.distanceKm / 5).round();
+          final routeXp = GamificationService.calculateRouteXp(
+            distanceKm: route.distanceKm,
+            curves: estimatedCurves,
+            style: route.style,
+          );
+
           return Container(
             margin: const EdgeInsets.only(bottom: 8),
             padding: const EdgeInsets.all(12),
@@ -241,7 +326,7 @@ class _AnalyticsPageState extends State<AnalyticsPage> with SingleTickerProvider
               Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 Text(route.name ?? route.style, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
                 const SizedBox(height: 2),
-                Text('${route.formattedDistance} · ${route.formattedDuration}', style: const TextStyle(color: Colors.grey, fontSize: 11)),
+                Text('${route.formattedDistance} · ${route.formattedDuration} · $routeXp XP', style: const TextStyle(color: Colors.grey, fontSize: 11)),
               ])),
               if (route.rating != null)
                 Row(children: [

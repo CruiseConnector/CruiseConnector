@@ -1,12 +1,17 @@
 import 'dart:convert';
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart' show compute;
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart' as geo;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:cruise_connect/domain/models/route_maneuver.dart';
 import 'package:cruise_connect/domain/models/route_result.dart';
+
+/// Top-level Funktion für Isolate-basiertes JSON-Parsing.
+Map<String, dynamic> _jsonDecodeIsolate(String data) =>
+    Map<String, dynamic>.from(json.decode(data) as Map);
 
 /// Service für die Routenberechnung via Supabase Edge Function.
 class RouteService {
@@ -95,10 +100,12 @@ class RouteService {
       throw Exception('Keine Antwort von der Route-Berechnung erhalten.');
     }
 
-    // Wenn data ein String ist (JSON), parsen
+    // Wenn data ein String ist (JSON), parsen — im Isolate für große Antworten
     if (data is String) {
       try {
-        data = json.decode(data);
+        data = data.length > 5000
+            ? await compute<String, Map<String, dynamic>>(_jsonDecodeIsolate, data)
+            : json.decode(data);
       } catch (e) {
         throw Exception('Ungültige Antwort: $data');
       }
@@ -124,8 +131,11 @@ class RouteService {
     final geometry = Map<String, dynamic>.from(route['geometry'] as Map);
     final coordinates = extractCoordinates(geometry);
 
-    if (coordinates.length < 2) {
-      throw Exception('Route hat zu wenig Koordinaten (${coordinates.length}).');
+    if (coordinates.length < 10) {
+      debugPrint('[RouteService] WARNUNG: Route hat nur ${coordinates.length} Koordinaten — möglicherweise keine Straßengeometrie!');
+      if (coordinates.length < 2) {
+        throw Exception('Route hat zu wenig Koordinaten (${coordinates.length}).');
+      }
     }
 
     final maneuvers = extractManeuvers(data, coordinates);
@@ -617,6 +627,7 @@ class RouteService {
       distanceMeters: result.distanceMeters,
       durationSeconds: result.durationSeconds,
       distanceKm: result.distanceKm,
+      speedLimits: result.speedLimits,
     );
   }
 

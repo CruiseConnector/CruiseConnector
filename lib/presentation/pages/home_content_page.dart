@@ -17,7 +17,8 @@ class _HomeContentPageState extends State<HomeContentPage> {
   int userLevel = 1;
   double levelProgress = 0;
   String levelName = 'Street Rookie';
-  int kmToNextLevel = 10;
+  int xpToNextLevel = 100;
+  int totalXp = 0;
   int totalRoutes = 0;
   double totalDistanceKm = 0;
   int badgeCount = 0;
@@ -67,7 +68,8 @@ class _HomeContentPageState extends State<HomeContentPage> {
           userLevel = result.level.level;
           levelProgress = result.level.progress;
           levelName = result.level.name;
-          kmToNextLevel = result.level.kmToNextLevel;
+          xpToNextLevel = result.level.xpToNextLevel;
+          totalXp = result.totalXp;
           totalRoutes = result.totalRoutes;
           totalDistanceKm = result.totalDistanceKm;
           badgeCount = result.earnedBadgeIds.length;
@@ -176,7 +178,9 @@ class _HomeContentPageState extends State<HomeContentPage> {
                           Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              _statRow("🏎️", "${totalDistanceKm.toStringAsFixed(0)} Km gesamt"),
+                              _statRow("⚡", "$totalXp XP gesamt"),
+                              const SizedBox(height: 6),
+                              _statRow("🏎️", "${totalDistanceKm.toStringAsFixed(0)} Km gefahren"),
                               const SizedBox(height: 6),
                               _statRow("🛣️", "$totalRoutes Strecken"),
                               const SizedBox(height: 6),
@@ -238,7 +242,7 @@ class _HomeContentPageState extends State<HomeContentPage> {
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    "Noch $kmToNextLevel km bis Level ${userLevel + 1}",
+                    "Noch $xpToNextLevel XP bis Level ${userLevel + 1}",
                     style: const TextStyle(
                       color: Color(0xFFA0AEC0),
                       fontSize: 10,

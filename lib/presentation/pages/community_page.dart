@@ -22,7 +22,6 @@ class _CommunityPageState extends State<CommunityPage> with SingleTickerProvider
   List<Map<String, dynamic>> _discoverGroups = [];
   List<Map<String, dynamic>> _searchResults = [];
   int _unreadNotifications = 0;
-  bool _isSearching = false;
   final _searchController = TextEditingController();
 
   @override
@@ -69,19 +68,12 @@ class _CommunityPageState extends State<CommunityPage> with SingleTickerProvider
 
   Future<void> _searchUsers(String query) async {
     if (query.trim().isEmpty) {
-      setState(() {
-        _searchResults = [];
-        _isSearching = false;
-      });
+      setState(() => _searchResults = []);
       return;
     }
-    setState(() => _isSearching = true);
     final results = await SocialService.searchUsers(query);
     if (mounted) {
-      setState(() {
-        _searchResults = results;
-        _isSearching = false;
-      });
+      setState(() => _searchResults = results);
     }
   }
 

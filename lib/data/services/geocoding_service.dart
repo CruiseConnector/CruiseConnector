@@ -47,16 +47,19 @@ class GeocodingService {
                   }
                 }
                 
+                final center = f['center'] as List?;
+                if (center == null || center.length < 2) return null;
                 return MapboxSuggestion(
-                  placeName: f['place_name'] as String,
+                  placeName: (f['place_name'] as String?) ?? '',
                   coordinates: [
-                    (f['center'][0] as num).toDouble(),
-                    (f['center'][1] as num).toDouble(),
+                    (center[0] as num).toDouble(),
+                    (center[1] as num).toDouble(),
                   ],
                   context: contextText,
                 );
               },
             )
+            .whereType<MapboxSuggestion>()
             .toList();
       } else {
         debugPrint('GeocodingService API Fehler: ${response.body}');
@@ -83,11 +86,13 @@ class GeocodingService {
         final data = json.decode(response.body) as Map<String, dynamic>;
         final features = data['features'] as List?;
         if (features != null && features.isNotEmpty) {
-          final coords = features[0]['center'] as List;
-          return {
-            'longitude': (coords[0] as num).toDouble(),
-            'latitude': (coords[1] as num).toDouble(),
-          };
+          final center = features[0]['center'] as List?;
+          if (center != null && center.length >= 2) {
+            return {
+              'longitude': (center[0] as num).toDouble(),
+              'latitude': (center[1] as num).toDouble(),
+            };
+          }
         }
       }
     } catch (e) {

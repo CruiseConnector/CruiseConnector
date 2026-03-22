@@ -80,7 +80,7 @@ class _InteractivePostCardState extends State<InteractivePostCard> {
               CircleAvatar(
                 radius: 18,
                 backgroundColor: const Color(0xFFFF3B30),
-                child: Text(widget.name[0], style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                child: Text(widget.name.isNotEmpty ? widget.name[0].toUpperCase() : 'U', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
               ),
               const SizedBox(width: 10),
               Expanded(

@@ -19,6 +19,7 @@ import 'package:cruise_connect/presentation/widgets/cruise/cruise_navigation_inf
 import 'package:cruise_connect/presentation/widgets/cruise/cruise_setup_card.dart';
 import 'package:cruise_connect/data/services/drive_control_panel.dart';
 import 'package:cruise_connect/data/services/gamification_service.dart';
+import 'package:cruise_connect/data/services/route_cache_service.dart';
 
 class CruiseModePage extends StatefulWidget {
   const CruiseModePage({super.key, this.initialRoute});
@@ -59,6 +60,7 @@ class _CruiseModePageState extends State<CruiseModePage> {
   bool _configCollapsed = false; // Config-Panel ein-/ausgeklappt
   bool _showRouteInfoBanner = false; // Route-Info Banner nach Generation
   static int _globalRouteAttempts = 0; // Zählt Generierungen über App-Lebensdauer
+  int _cachedCurveCount = 0; // Vorab im Isolate berechnet
 
   // ─────────────────────── Map State ─────────────────────────────────────────
   bool _isLoading = false;
@@ -86,7 +88,7 @@ class _CruiseModePageState extends State<CruiseModePage> {
   bool _isSimulationRunning = false;
   bool _isSimulationStepRunning = false;
   int _simulationIndex = 0;
-  bool _isSimulationEnabled = true; // Simulation für Testing
+  final bool _isSimulationEnabled = true; // Simulation für Testing
   double _simulationSpeedKmh = 60; // Aktuelle Simulationsgeschwindigkeit
 
   bool _isCameraLocked = false; // Compass-Toggle: true = Kamera folgt dem Standort
@@ -329,9 +331,8 @@ class _CruiseModePageState extends State<CruiseModePage> {
     final durationMin = result.durationSeconds != null ? (result.durationSeconds! / 60).round() : 0;
     final hours = durationMin ~/ 60;
     final mins = durationMin % 60;
-    final timeStr = hours > 0 ? '${hours}h ${mins}min' : '${mins} min';
-    // Kurven zählen: echte Richtungswechsel > 30° in der Geometrie
-    final curveCount = _countRealCurves(_fullRouteCoordinates);
+    final timeStr = hours > 0 ? '${hours}h ${mins}min' : '$mins min';
+    final curveCount = _cachedCurveCount;
 
     return Container(
       padding: const EdgeInsets.all(14),
@@ -359,42 +360,14 @@ class _CruiseModePageState extends State<CruiseModePage> {
     );
   }
 
-  /// Berechnet XP für die aktuelle Route.
-  /// Basis: 10 XP pro km + 5 XP pro Kurve + Stil-Bonus
+  /// Berechnet XP für die aktuelle Route via GamificationService.
   int _calculateRouteXp() {
     final distKm = _lastRouteResult?.distanceKm ?? 0;
-    final curves = _countRealCurves(_fullRouteCoordinates);
-    final baseXp = (distKm * 10).round();
-    final curveXp = curves * 5;
-    // Stil-Bonus
-    int styleBonus = 0;
-    if (_selectedStyle == 'Kurvenjagd') styleBonus = 20;
-    if (_selectedStyle == 'Entdecker') styleBonus = 15;
-    if (_selectedStyle == 'Sport Mode') styleBonus = 10;
-    return baseXp + curveXp + styleBonus;
-  }
-
-  /// Zählt echte Kurven in der Route anhand von Richtungswechseln > 30°.
-  /// Prüft alle ~200m einen Winkel zwischen 3 aufeinanderfolgenden Samples.
-  int _countRealCurves(List<List<double>> coords) {
-    if (coords.length < 3) return 0;
-    int curves = 0;
-    // Alle ~20 Punkte samplen (≈200m Abstände je nach Routendichte)
-    const step = 20;
-    for (var i = step; i < coords.length - step; i += step) {
-      final prev = coords[i - step];
-      final curr = coords[i];
-      final next = coords[math.min(i + step, coords.length - 1)];
-
-      final bearing1 = math.atan2(curr[0] - prev[0], curr[1] - prev[1]);
-      final bearing2 = math.atan2(next[0] - curr[0], next[1] - curr[1]);
-      var angle = (bearing2 - bearing1).abs();
-      if (angle > math.pi) angle = 2 * math.pi - angle;
-      final degrees = angle * 180 / math.pi;
-
-      if (degrees > 30) curves++;
-    }
-    return curves;
+    return GamificationService.calculateRouteXp(
+      distanceKm: distKm,
+      curves: _cachedCurveCount,
+      style: _selectedStyle,
+    );
   }
 
   Widget _buildInfoItem(IconData icon, String value, String label) {
@@ -619,8 +592,17 @@ class _CruiseModePageState extends State<CruiseModePage> {
         )),
         if (!_isMapStyleLoaded && _mapLoadError == null)
           const ColoredBox(
-            color: Color(0x880B0E14),
-            child: Center(child: CircularProgressIndicator(color: Colors.white)),
+            color: Color(0xFF0B0E14),
+            child: Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  CircularProgressIndicator(color: Color(0xFFFF3B30)),
+                  SizedBox(height: 16),
+                  Text('Karte wird geladen...', style: TextStyle(color: Colors.white54, fontSize: 14)),
+                ],
+              ),
+            ),
           ),
         if (_mapLoadError != null)
           Container(
@@ -767,26 +749,40 @@ class _CruiseModePageState extends State<CruiseModePage> {
       }
       if (permission == geo.LocationPermission.deniedForever) return;
 
+      // Erst instant den letzten bekannten Standort verwenden (kein Netzwerk nötig)
       geo.Position? position = await geo.Geolocator.getLastKnownPosition();
-      position ??= await geo.Geolocator.getCurrentPosition(
-        locationSettings: const geo.LocationSettings(accuracy: geo.LocationAccuracy.high),
-      ).timeout(const Duration(seconds: 10), onTimeout: () {
-        throw Exception('Timeout');
-      });
+      if (position != null) {
+        _userLocation = position;
+        _setCameraToPosition(position);
+      }
 
-      _userLocation = position;
+      // Dann genauere Position im Hintergrund holen
       try {
-        _mapboxMap?.setCamera(
-          CameraOptions(
-            center: Point(coordinates: Position(position.longitude, position.latitude)),
-            zoom: 13.0,
-            padding: MbxEdgeInsets(top: 0, left: 0, bottom: 0, right: 0),
+        final freshPosition = await geo.Geolocator.getCurrentPosition(
+          locationSettings: const geo.LocationSettings(
+            accuracy: geo.LocationAccuracy.medium,
+            timeLimit: Duration(seconds: 8),
           ),
         );
-      } catch (_) {}
+        _userLocation = freshPosition;
+        _setCameraToPosition(freshPosition);
+      } catch (_) {
+        // Letzter bekannter Standort reicht
+      }
     } catch (e) {
       debugPrint('Konnte Karten-Position nicht setzen: $e');
     }
+  }
+
+  void _setCameraToPosition(geo.Position position) {
+    try {
+      _mapboxMap?.setCamera(
+        CameraOptions(
+          center: Point(coordinates: Position(position.longitude, position.latitude)),
+          zoom: 13.0,
+        ),
+      );
+    } catch (_) {}
   }
 
   Future<geo.Position> _getStartCoordinates() async {
@@ -828,17 +824,14 @@ class _CruiseModePageState extends State<CruiseModePage> {
   // ═══════════════════════ ROUTE GENERATION ════════════════════════════════
 
   Future<void> _generateRoute() async {
+    // Doppelklick-Schutz: Wenn bereits generiert wird, ignorieren
+    if (_isLoading) return;
     setState(() => _isLoading = true);
     try {
       final startPosition = await _getStartCoordinates();
 
-      int distance = 50;
-      if (_selectedLength.contains('+')) {
-        distance = 150;
-      } else {
-        final digits = _selectedLength.replaceAll(RegExp(r'[^0-9]'), '');
-        if (digits.isNotEmpty) distance = int.parse(digits);
-      }
+      final digits = _selectedLength.replaceAll(RegExp(r'[^0-9]'), '');
+      final distance = digits.isNotEmpty ? int.parse(digits) : 50;
 
       Map<String, double>? targetLocation;
       if (!_isRoundTrip && _destinationController.text.isNotEmpty) {
@@ -854,11 +847,30 @@ class _CruiseModePageState extends State<CruiseModePage> {
         }
       }
 
-      // Warmup: Erste 2 Routen intern verwerfen (oft fehlerhaft/kurz)
-      // und direkt eine 3. generieren, die dem User gezeigt wird
-      final skipCount = (_globalRouteAttempts < 2) ? (2 - _globalRouteAttempts) : 0;
-      RouteResult? result;
-      for (var i = 0; i < skipCount + 1; i++) {
+      // Zuerst aus der Queue holen (vorberechnete Routen vom App-Start)
+      RouteResult? result = (distance == 50) ? RouteCacheService.instance.getNextRoute() : null;
+      if (result != null) {
+        debugPrint('[CruiseMode] Route aus Queue: ${result.distanceKm?.toStringAsFixed(1)} km, ${result.coordinates.length} Punkte');
+        _globalRouteAttempts = 3; // Warmup nicht mehr nötig
+      } else {
+        // Warmup: Erste 2 Routen intern verwerfen (oft fehlerhaft/kurz)
+        final skipCount = (_globalRouteAttempts < 2) ? (2 - _globalRouteAttempts) : 0;
+        for (var i = 0; i < skipCount + 1; i++) {
+          result = await _routeService.generateRoundTrip(
+            startPosition: startPosition,
+            targetDistanceKm: distance,
+            mode: _selectedStyle,
+            planningType: _planningType,
+            targetLocation: targetLocation,
+          );
+          _globalRouteAttempts++;
+        }
+      }
+
+      // Qualitätsprüfung: Eine echte Straßenroute hat hunderte Punkte.
+      // Weniger als 50 Punkte = nur Waypoint-Verbindungen ohne Straßengeometrie.
+      if (result!.coordinates.length < 50 && distance >= 20) {
+        debugPrint('[CruiseMode] Route-Qualität schlecht (${result.coordinates.length} Punkte) — generiere neu');
         result = await _routeService.generateRoundTrip(
           startPosition: startPosition,
           targetDistanceKm: distance,
@@ -867,10 +879,9 @@ class _CruiseModePageState extends State<CruiseModePage> {
           targetLocation: targetLocation,
         );
         _globalRouteAttempts++;
-        // Nur die letzte Route verwenden, vorherige verwerfen
       }
 
-      _applyRouteResult(result!);
+      _applyRouteResult(result);
       await _drawRoute(result.geometry);
 
       // Config einklappen + Info-Banner anzeigen damit man die Route sieht
@@ -908,6 +919,11 @@ class _CruiseModePageState extends State<CruiseModePage> {
       _lastRerouteTime = null;
       _remainingDistance = null;
       _remainingDuration = null;
+      _cachedCurveCount = 0;
+    });
+    // Kurven async im Isolate berechnen (blockiert UI nicht)
+    GamificationService.countCurvesAsync(result.coordinates).then((count) {
+      if (mounted) setState(() => _cachedCurveCount = count);
     });
   }
 

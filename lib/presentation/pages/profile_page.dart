@@ -622,13 +622,12 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
             ),
           ),
           // Play Button
-          if (route.geometry != null)
-            IconButton(
-              icon: const Icon(Icons.play_circle_fill, color: Color(0xFFFF3B30), size: 32),
-              onPressed: () {
-                Navigator.push(context, MaterialPageRoute(builder: (_) => CruiseModePage(initialRoute: route)));
-              },
-            ),
+          IconButton(
+            icon: const Icon(Icons.play_circle_fill, color: Color(0xFFFF3B30), size: 32),
+            onPressed: () {
+              Navigator.push(context, MaterialPageRoute(builder: (_) => CruiseModePage(initialRoute: route)));
+            },
+          ),
           // Delete
           IconButton(
             icon: Icon(Icons.delete_outline, color: Colors.grey[600], size: 20),

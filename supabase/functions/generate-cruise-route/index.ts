@@ -264,6 +264,31 @@ Deno.serve(async (req) => {
                 throw new Error("Missing startLocation")
         }
 
+        // Coordinate validation helper
+        const isValidCoord = (c: Coordinate): boolean =>
+            c != null &&
+            typeof c.latitude === 'number' && typeof c.longitude === 'number' &&
+            !isNaN(c.latitude) && !isNaN(c.longitude) &&
+            c.latitude >= -90 && c.latitude <= 90 &&
+            c.longitude >= -180 && c.longitude <= 180;
+
+        if (!isValidCoord(startLocation)) {
+            throw new Error("Invalid startLocation: coordinates out of bounds or not a number")
+        }
+        if (body.destination_location && !isValidCoord(body.destination_location)) {
+            throw new Error("Invalid destination_location: coordinates out of bounds or not a number")
+        }
+        if (manual_waypoints) {
+            for (let i = 0; i < manual_waypoints.length; i++) {
+                if (!isValidCoord(manual_waypoints[i])) {
+                    throw new Error(`Invalid waypoint at index ${i}: coordinates out of bounds or not a number`)
+                }
+            }
+        }
+        if (targetDistance != null && (typeof targetDistance !== 'number' || isNaN(targetDistance) || targetDistance <= 0 || targetDistance > 500)) {
+            throw new Error("Invalid targetDistance: must be a number between 1 and 500")
+        }
+
         // --- 2. Fahrstil-Parameter (Mapbox) ---
         let mapboxProfile = 'mapbox/driving';
         let excludeParams = '';

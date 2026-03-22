@@ -322,12 +322,13 @@ class SocialService {
   // ── User Search ───────────────────────────────────────────────────────
 
   static Future<List<Map<String, dynamic>>> searchUsers(String query) async {
-    if (query.trim().isEmpty) return [];
+    final sanitized = query.trim().replaceAll(RegExp(r'[%_\\,\.\(\)]'), '');
+    if (sanitized.isEmpty) return [];
 
     final results = await _db
         .from('profiles')
         .select('id, username, email')
-        .or('username.ilike.%$query%,email.ilike.%$query%')
+        .or('username.ilike.%$sanitized%,email.ilike.%$sanitized%')
         .limit(20);
 
     return List<Map<String, dynamic>>.from(results);
