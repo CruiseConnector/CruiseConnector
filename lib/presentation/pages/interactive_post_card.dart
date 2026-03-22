@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:cruise_connect/presentation/pages/post_detail_page.dart';
 
 class InteractivePostCard extends StatefulWidget {
+  final String postId;
   final String name;
   final String handle;
   final String time;
@@ -12,6 +13,7 @@ class InteractivePostCard extends StatefulWidget {
 
   const InteractivePostCard({
     super.key,
+    required this.postId,
     required this.name,
     required this.handle,
     required this.time,
@@ -122,6 +124,7 @@ class _InteractivePostCardState extends State<InteractivePostCard> {
                     context,
                     MaterialPageRoute(
                       builder: (context) => PostDetailPage(
+                        postId: widget.postId,
                         name: widget.name,
                         handle: widget.handle,
                         content: widget.content,

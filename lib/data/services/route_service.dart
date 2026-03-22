@@ -129,6 +129,7 @@ class RouteService {
     }
 
     final maneuvers = extractManeuvers(data, coordinates);
+    final speedLimits = _extractSpeedLimits(data, coordinates);
 
     final distanceRaw = (route['distance'] as num?)?.toDouble();
     final durationRaw = (route['duration'] as num?)?.toDouble();
@@ -144,6 +145,7 @@ class RouteService {
       distanceMeters: distanceRaw,
       durationSeconds: durationRaw,
       distanceKm: distanceKmRaw,
+      speedLimits: speedLimits,
     );
   }
 
@@ -189,9 +191,9 @@ class RouteService {
         final maneuver = step['maneuver'];
         if (maneuver is! Map) continue;
 
-        // Depart und Arrive-Steps überspringen
         final type = (maneuver['type'] as String?) ?? '';
-        if (type == 'arrive' || type == 'depart') continue;
+        // Depart überspringen (Start braucht kein Manöver)
+        if (type == 'depart') continue;
 
         // Prüfe Distanz zum vorherigen Maneuver (vermeide Kreise am Start)
         final distance = (step['distance'] as num?)?.toDouble() ?? 0;
@@ -218,16 +220,24 @@ class RouteService {
             ? (maneuver['exit'] as num?)?.toInt()
             : null;
 
+        // Instruction bestimmen
+        String instruction;
+        if (isRoundabout) {
+          instruction = _roundaboutInstruction(exitNumber, rawInstruction, modifier);
+        } else if (type == 'arrive') {
+          instruction = 'Ziel erreicht.';
+        } else {
+          instruction = _normalizeInstruction(rawInstruction, modifier);
+        }
+
         maneuvers.add(
           RouteManeuver(
             latitude: latitude,
             longitude: longitude,
             routeIndex: routeIndex,
-            icon: isRoundabout ? Icons.roundabout_left : _iconForManeuver(type, modifier),
-            announcement: _announcementFromInstruction(rawInstruction, modifier, distance),
-            instruction: isRoundabout
-                ? _roundaboutInstruction(exitNumber, rawInstruction, modifier)
-                : _normalizeInstruction(rawInstruction, modifier),
+            icon: isRoundabout ? Icons.roundabout_right : _iconForManeuver(type, modifier),
+            announcement: _announcementFromInstruction(rawInstruction, modifier, distance, type: type),
+            instruction: instruction,
             maneuverType: isRoundabout ? ManeuverType.roundabout : ManeuverType.normal,
             roundaboutExitNumber: exitNumber,
           ),
@@ -262,34 +272,65 @@ class RouteService {
   // ────────────────────── Icon / Text Helpers ────────────────────────────────
 
   IconData _iconForManeuver(String type, String modifier) {
-    // Typen die immer "geradeaus" sind, egal welcher modifier
-    const straightTypes = {'new name', 'continue', 'merge', 'on ramp', 'notification'};
-    if (straightTypes.contains(type)) {
-      // Bei merge/ramp trotzdem Richtung anzeigen wenn stark
-      if (type == 'merge' || type == 'on ramp') {
-        if (modifier.contains('left')) return Icons.turn_slight_left;
-        if (modifier.contains('right')) return Icons.turn_slight_right;
-      }
+    final mod = modifier.toLowerCase().trim();
+    final typ = type.toLowerCase().trim();
+
+    // Kreisverkehr → eigenes Symbol
+    if (typ == 'roundabout' || typ == 'rotary') {
+      return Icons.roundabout_right;
+    }
+
+    // Ankunft / Ziel erreicht
+    if (typ == 'arrive') return Icons.flag;
+    if (typ == 'depart') return Icons.navigation;
+
+    // Autobahn/Rampen
+    if (typ == 'on ramp' || typ == 'off ramp') {
+      if (mod.contains('left')) return Icons.ramp_left;
+      if (mod.contains('right')) return Icons.ramp_right;
+      return Icons.ramp_right;
+    }
+
+    // Zusammenführung (Merge)
+    if (typ == 'merge') {
+      if (mod.contains('left')) return Icons.merge;
+      if (mod.contains('right')) return Icons.merge;
+      return Icons.merge;
+    }
+
+    // Gabelung (Fork)
+    if (typ == 'fork') {
+      if (mod.contains('left')) return Icons.fork_left;
+      if (mod.contains('right')) return Icons.fork_right;
+      return Icons.fork_right;
+    }
+
+    // Geradeaus-Typen
+    if (typ == 'new name' || typ == 'continue' || typ == 'notification') {
+      if (mod == 'slight left') return Icons.turn_slight_left;
+      if (mod == 'slight right') return Icons.turn_slight_right;
       return Icons.straight;
     }
 
-    switch (modifier.toLowerCase()) {
+    // Richtungs-Modifier (Standard-Abbiegemanöver)
+    switch (mod) {
       case 'left':
         return Icons.turn_left;
       case 'slight left':
         return Icons.turn_slight_left;
       case 'sharp left':
-        return Icons.turn_left;
+        return Icons.turn_sharp_left;
       case 'right':
         return Icons.turn_right;
       case 'slight right':
         return Icons.turn_slight_right;
       case 'sharp right':
-        return Icons.turn_right;
+        return Icons.turn_sharp_right;
       case 'uturn':
       case 'uturn left':
-      case 'uturn right':
         return Icons.u_turn_left;
+      case 'uturn right':
+        return Icons.u_turn_right;
       case 'straight':
         return Icons.straight;
       default:
@@ -327,23 +368,54 @@ class RouteService {
     }
   }
 
-  String _announcementForModifier(String modifier, {double? distance}) {
+  String _announcementForModifier(String modifier, {double? distance, String type = ''}) {
     final distText = distance != null ? _formatDistance(distance) : 'In 100 m';
-    switch (modifier.toLowerCase()) {
+    final mod = modifier.toLowerCase();
+    final typ = type.toLowerCase();
+
+    // Autobahnausfahrt
+    if (typ == 'off ramp') {
+      if (mod.contains('left')) return '$distText Ausfahrt links nehmen';
+      return '$distText Ausfahrt rechts nehmen';
+    }
+    // Autobahnauffahrt
+    if (typ == 'on ramp') {
+      if (mod.contains('left')) return '$distText Auffahrt links nehmen';
+      return '$distText Auffahrt rechts nehmen';
+    }
+    // Gabelung
+    if (typ == 'fork') {
+      if (mod.contains('left')) return '$distText links halten';
+      return '$distText rechts halten';
+    }
+    // Zusammenführung
+    if (typ == 'merge') {
+      return '$distText einfädeln';
+    }
+    // Ankunft
+    if (typ == 'arrive') {
+      return 'Ziel erreicht.';
+    }
+
+    switch (mod) {
       case 'left':
+        return '$distText nach Links abbiegen.';
       case 'slight left':
+        return '$distText leicht links abbiegen.';
       case 'sharp left':
-        return '$distText links abbiegen';
+        return '$distText scharf links abbiegen.';
       case 'right':
+        return '$distText nach Rechts abbiegen.';
       case 'slight right':
+        return '$distText leicht rechts abbiegen.';
       case 'sharp right':
-        return '$distText rechts abbiegen';
+        return '$distText scharf rechts abbiegen.';
       case 'uturn':
       case 'uturn left':
       case 'uturn right':
-        return '$distText bitte wenden';
+        return '$distText bitte wenden.';
       default:
-        return '$distText geradeaus weiterfahren';
+        return '$distText geradeaus weiterfahren.';
     }
   }
 
@@ -396,7 +468,69 @@ class RouteService {
     return r;
   }
 
-  String _announcementFromInstruction(String instruction, String modifier, double distance) {
+  /// Extrahiert Tempolimits aus den Mapbox-Route-Legs/Steps.
+  /// Mapbox liefert `maxspeed` pro Annotation oder `speed_limit` pro Step.
+  List<SpeedLimitSegment> _extractSpeedLimits(
+    Map<dynamic, dynamic> data,
+    List<List<double>> coordinates,
+  ) {
+    final segments = <SpeedLimitSegment>[];
+    try {
+      final route = data['route'] as Map?;
+      final legs = route?['legs'] as List?;
+      if (legs == null) return segments;
+
+      int coordIndex = 0;
+      for (final leg in legs) {
+        if (leg is! Map) continue;
+        // Annotations-basiert (genauer)
+        final annotation = leg['annotation'] as Map?;
+        final maxspeeds = annotation?['maxspeed'] as List?;
+        if (maxspeeds != null && maxspeeds.isNotEmpty) {
+          for (var i = 0; i < maxspeeds.length; i++) {
+            final ms = maxspeeds[i];
+            if (ms is Map && ms['speed'] != null) {
+              final speed = (ms['speed'] as num).toInt();
+              final unit = ms['unit'] as String? ?? 'km/h';
+              final speedKmh = unit == 'mph' ? (speed * 1.60934).round() : speed;
+              segments.add(SpeedLimitSegment(
+                startIndex: coordIndex + i,
+                endIndex: coordIndex + i + 1,
+                speedKmh: speedKmh,
+              ));
+            }
+          }
+        }
+        // Steps-basiert als Fallback
+        final steps = leg['steps'] as List?;
+        if (steps != null && maxspeeds == null) {
+          for (final step in steps) {
+            if (step is! Map) continue;
+            final speedLimit = step['speed_limit'] as num?;
+            final stepGeometry = step['geometry'] as Map?;
+            final stepCoords = stepGeometry?['coordinates'] as List?;
+            final stepLen = stepCoords?.length ?? 1;
+            if (speedLimit != null && speedLimit > 0) {
+              segments.add(SpeedLimitSegment(
+                startIndex: coordIndex,
+                endIndex: coordIndex + stepLen,
+                speedKmh: speedLimit.toInt(),
+              ));
+            }
+            coordIndex += stepLen > 1 ? stepLen - 1 : 1;
+          }
+        }
+      }
+    } catch (_) {}
+    return segments;
+  }
+
+  String _announcementFromInstruction(String instruction, String modifier, double distance, {String type = ''}) {
+    // Für spezielle Typen (Rampe, Arrive, Fork etc.) den typbasierten Text nutzen
+    if (type.isNotEmpty && type != 'turn' && type != 'end of road') {
+      final typeBased = _announcementForModifier(modifier, distance: distance, type: type);
+      if (!typeBased.contains('geradeaus')) return typeBased;
+    }
     return '${_formatDistance(distance)} ${_normalizeInstruction(instruction, modifier)}';
   }
 
@@ -590,3 +724,4 @@ RouteWindowMatch findNearestInWindow({
 
   return RouteWindowMatch(index: nearestIndex, distanceMeters: nearestDistance);
 }
+

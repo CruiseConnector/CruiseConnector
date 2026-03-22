@@ -10,6 +10,7 @@ class RouteResult {
     this.distanceMeters,
     this.durationSeconds,
     this.distanceKm,
+    this.speedLimits = const [],
   });
 
   final String geoJson;
@@ -19,4 +20,18 @@ class RouteResult {
   final double? distanceMeters;
   final double? durationSeconds;
   final double? distanceKm;
+  /// Tempolimits pro Routenabschnitt: [{startIndex, endIndex, speedKmh}]
+  final List<SpeedLimitSegment> speedLimits;
+}
+
+/// Ein Abschnitt der Route mit einem bestimmten Tempolimit.
+class SpeedLimitSegment {
+  const SpeedLimitSegment({
+    required this.startIndex,
+    required this.endIndex,
+    required this.speedKmh,
+  });
+  final int startIndex;
+  final int endIndex;
+  final int speedKmh;
 }

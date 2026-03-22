@@ -61,17 +61,16 @@ function calculateDestination(start: Coordinate, distanceKm: number, bearingDegr
 }
 
 function getDistanceConfig(targetDistance: number): DistanceConfig {
-    if (targetDistance <= 20) {
-        return { radiusKm: 2.5, minKm: 10, maxKm: 20 }
-    }
-    if (targetDistance <= 50) {
-        return { radiusKm: 7.5, minKm: 40, maxKm: 50 }
-    }
-    if (targetDistance <= 100) {
-        return { radiusKm: 15, minKm: 60, maxKm: 100 }
-    }
+    // ±10% Toleranz um die Zieldistanz — z.B. 50km → 45-55km
+    const tolerance = 0.10;
+    const minKm = Math.round(targetDistance * (1 - tolerance));
+    const maxKm = Math.round(targetDistance * (1 + tolerance));
 
-    return { radiusKm: 22.5, minKm: 100, maxKm: 150 }
+    // Radius = ca. 1/4 der Zieldistanz (Dreiecksform: 3 Seiten ≈ Ziel)
+    // Leicht skaliert damit die Straßenroute im Band liegt
+    const radiusKm = targetDistance / 6;
+
+    return { radiusKm, minKm, maxKm };
 }
 
 /**
@@ -218,7 +217,7 @@ async function getMapboxRoute(
 
     // Base URL
     // We use geometries=geojson to get the path geometry
-    let url = `https://api.mapbox.com/directions/v5/${profile}/${coordinatesStr}?access_token=${accessToken}&geometries=geojson&overview=full&steps=true&voice_instructions=true&banner_instructions=true&language=de&continue_straight=false`
+    let url = `https://api.mapbox.com/directions/v5/${profile}/${coordinatesStr}?access_token=${accessToken}&geometries=geojson&overview=full&steps=true&voice_instructions=true&banner_instructions=true&language=de&continue_straight=false&annotations=maxspeed`
 
     // Append optional parameters if they exist
     if (exclude && exclude.trim() !== '') {
@@ -343,11 +342,11 @@ Deno.serve(async (req) => {
                 throw new Error("Invalid planning_type. Must be 'Zufall' or 'Wegpunkte'.")
         }
 
-        // Radiuses: Start/Ende unlimited (echte GPS-Position), Zwischenpunkte 2000m
-        // Nicht zu groß (verhindert Snapping auf weit entfernte Autobahnen)
-        // Nicht zu klein (verhindert "no route found" bei ländlichen Wegpunkten)
+        // Radiuses: Start/Ende unlimited (echte GPS-Position), Zwischenpunkte max 1000m
+        // Kleiner Radius = Waypoints müssen nahe einer Straße liegen → verhindert "Abkürzungen"
+        // durch Gelände wo keine Straße existiert
         radiusesParams = finalWaypoints
-            .map((_, i) => (i === 0 || i === finalWaypoints.length - 1) ? 'unlimited' : '2000')
+            .map((_, i) => (i === 0 || i === finalWaypoints.length - 1) ? 'unlimited' : '1000')
             .join(';');
 
         // --- Execute Route Request (with retries) ---
@@ -364,7 +363,7 @@ Deno.serve(async (req) => {
                 console.log(`Retry ${retry + 1}: generating new waypoints...`);
                 const retryWPs = calculateTriangleWaypoints(startLocation, distanceConfig.radiusKm * (0.6 + retry * 0.1));
                 const retryAll = [startLocation, ...retryWPs, startLocation];
-                const retryRadiuses = retryAll.map((_, i) => (i === 0 || i === retryAll.length - 1) ? 'unlimited' : '5000').join(';');
+                const retryRadiuses = retryAll.map((_, i) => (i === 0 || i === retryAll.length - 1) ? 'unlimited' : '1500').join(';');
 
                 route = await getMapboxRoute(retryAll, mapboxProfile, '', retryRadiuses, MAPBOX_ACCESS_TOKEN);
                 if (route) {
@@ -382,26 +381,28 @@ Deno.serve(async (req) => {
         let actualDistanceKm = (route.distance as number) / 1000;
 
         // --- 4. Distance Band Retry & Clamp ---
-        // Applies to generated random round trips only.
+        // Skaliert Waypoints näher/weiter zum Start bis die Route im ±10% Band liegt
         if (planning_type === 'Zufall' && currentRouteType === 'ROUND_TRIP' && distanceConfig) {
             let attempts = 0
             while (
-                attempts < 3 &&
+                attempts < 5 &&
                 (actualDistanceKm > distanceConfig.maxKm || actualDistanceKm < distanceConfig.minKm)
             ) {
-                const wp1 = finalWaypoints[1]
-                const wp2 = finalWaypoints[2]
-
                 const isTooLong = actualDistanceKm > distanceConfig.maxKm
-                const scaleFactor = isTooLong ? 0.75 : 1.2
+                // Feinere Skalierung für genauere Annäherung
+                const ratio = targetDistance! / actualDistanceKm;
+                // Sanfter skalieren: nur 60% des Unterschieds korrigieren (verhindert Oszillation)
+                const scaleFactor = 1 + (ratio - 1) * 0.6;
 
-                const newWp1 = scaleWaypoint(startLocation, wp1, scaleFactor)
-                const newWp2 = scaleWaypoint(startLocation, wp2, scaleFactor)
-                const scaledWaypoints = [startLocation, newWp1, newWp2, startLocation]
+                // Alle Zwischenpunkte skalieren (nicht nur 1+2)
+                const scaledWaypoints = finalWaypoints.map((wp, i) => {
+                    if (i === 0 || i === finalWaypoints.length - 1) return wp; // Start/Ende beibehalten
+                    return scaleWaypoint(startLocation, wp, scaleFactor);
+                });
 
-                const newRadiuses = mode === 'Sport Mode'
-                    ? scaledWaypoints.map(() => '1000').join(';')
-                    : ''
+                const newRadiuses = scaledWaypoints
+                    .map((_, i) => (i === 0 || i === scaledWaypoints.length - 1) ? 'unlimited' : '1000')
+                    .join(';');
 
                 let newRoute = await getMapboxRoute(
                     scaledWaypoints,
@@ -411,7 +412,6 @@ Deno.serve(async (req) => {
                     MAPBOX_ACCESS_TOKEN,
                 )
 
-                // Fallback for retry attempts as well
                 if (!newRoute && excludeParams && excludeParams.trim() !== '') {
                     newRoute = await getMapboxRoute(scaledWaypoints, mapboxProfile, '', newRadiuses, MAPBOX_ACCESS_TOKEN)
                 }
@@ -424,6 +424,7 @@ Deno.serve(async (req) => {
                 finalWaypoints = scaledWaypoints
                 actualDistanceKm = (newRoute.distance as number) / 1000
                 attempts += 1
+                console.log(`Distance retry ${attempts}: ${actualDistanceKm.toFixed(1)} km (target: ${targetDistance} km)`);
             }
         }
 

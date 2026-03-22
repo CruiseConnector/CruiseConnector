@@ -337,6 +337,8 @@ class _CommunityPageState extends State<CommunityPage> with SingleTickerProvider
     final time = _formatTimeAgo(post['created_at']);
     final content = post['content'] ?? '';
     final postUserId = post['user_id'] as String?;
+    final currentUserId = Supabase.instance.client.auth.currentUser?.id;
+    final isOwnPost = postUserId == currentUserId;
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -366,7 +368,7 @@ class _CommunityPageState extends State<CommunityPage> with SingleTickerProvider
                     Flexible(child: Text(handle, style: const TextStyle(color: Colors.grey, fontSize: 14), overflow: TextOverflow.ellipsis)),
                     const SizedBox(width: 5),
                     Text("· $time", style: const TextStyle(color: Colors.grey, fontSize: 14)),
-                    if (showFollow) ...[
+                    if (showFollow && !isOwnPost) ...[
                       const SizedBox(width: 8),
                       GestureDetector(
                         onTap: () async {
@@ -388,6 +390,44 @@ class _CommunityPageState extends State<CommunityPage> with SingleTickerProvider
                         ),
                       ),
                     ],
+                    const Spacer(),
+                    // 3-Punkte-Menü für eigene Posts
+                    if (isOwnPost)
+                      PopupMenuButton<String>(
+                        icon: const Icon(Icons.more_horiz, color: Colors.grey, size: 18),
+                        color: const Color(0xFF1C1F26),
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(),
+                        onSelected: (value) async {
+                          if (value == 'delete') {
+                            final confirmed = await showDialog<bool>(
+                              context: context,
+                              builder: (ctx) => AlertDialog(
+                                backgroundColor: const Color(0xFF1C1F26),
+                                title: const Text('Post löschen?', style: TextStyle(color: Colors.white)),
+                                content: const Text('Dieser Post wird unwiderruflich gelöscht.', style: TextStyle(color: Colors.grey)),
+                                actions: [
+                                  TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Abbrechen', style: TextStyle(color: Colors.grey))),
+                                  TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Löschen', style: TextStyle(color: Color(0xFFFF3B30)))),
+                                ],
+                              ),
+                            );
+                            if (confirmed == true) {
+                              await SocialService.deletePost(post['id']);
+                              _loadData();
+                            }
+                          }
+                        },
+                        itemBuilder: (_) => [
+                          const PopupMenuItem(value: 'delete', child: Row(
+                            children: [
+                              Icon(Icons.delete_outline, color: Color(0xFFFF3B30), size: 18),
+                              SizedBox(width: 8),
+                              Text('Löschen', style: TextStyle(color: Color(0xFFFF3B30))),
+                            ],
+                          )),
+                        ],
+                      ),
                   ],
                 ),
                 const SizedBox(height: 4),
@@ -396,9 +436,22 @@ class _CommunityPageState extends State<CommunityPage> with SingleTickerProvider
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    _buildInteraction(Icons.chat_bubble_outline, '${post['comments_count'] ?? 0}'),
-                    _buildInteraction(Icons.repeat, '${post['reposts_count'] ?? 0}'),
+                    // Kommentar-Button
+                    GestureDetector(
+                      onTap: () => _showComments(post),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.chat_bubble_outline, color: Colors.grey, size: 18),
+                          const SizedBox(width: 4),
+                          Text('${post['comments_count'] ?? 0}', style: const TextStyle(color: Colors.grey, fontSize: 12)),
+                        ],
+                      ),
+                    ),
+                    // Repost-Button
+                    _PostRepostButton(postId: post['id'], initialCount: post['reposts_count'] ?? 0),
+                    // Like-Button
                     _PostLikeButton(postId: post['id'], initialCount: post['likes_count'] ?? 0),
+                    // Share (Platzhalter)
                     _buildInteraction(Icons.share_outlined, ''),
                   ],
                 ),
@@ -407,6 +460,132 @@ class _CommunityPageState extends State<CommunityPage> with SingleTickerProvider
           ),
         ],
       ),
+    );
+  }
+
+  void _showComments(Map<String, dynamic> post) {
+    final commentController = TextEditingController();
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF0B0E14),
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (sheetContext) {
+        return DraggableScrollableSheet(
+          initialChildSize: 0.7,
+          minChildSize: 0.4,
+          maxChildSize: 0.95,
+          expand: false,
+          builder: (context, scrollController) {
+            return StatefulBuilder(
+              builder: (context, setSheetState) {
+                return Column(
+                  children: [
+                    Center(child: Container(
+                      margin: const EdgeInsets.symmetric(vertical: 12),
+                      width: 40, height: 4,
+                      decoration: BoxDecoration(color: Colors.grey[600], borderRadius: BorderRadius.circular(2)),
+                    )),
+                    const Padding(
+                      padding: EdgeInsets.all(16),
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text('Kommentare', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+                      ),
+                    ),
+                    Expanded(
+                      child: FutureBuilder<List<Map<String, dynamic>>>(
+                        future: SocialService.getComments(post['id']),
+                        builder: (context, snapshot) {
+                          if (snapshot.connectionState == ConnectionState.waiting) {
+                            return const Center(child: CircularProgressIndicator(color: Color(0xFFFF3B30)));
+                          }
+                          if (!snapshot.hasData || snapshot.data!.isEmpty) {
+                            return const Center(child: Text('Noch keine Kommentare', style: TextStyle(color: Colors.grey)));
+                          }
+                          return ListView.builder(
+                            controller: scrollController,
+                            itemCount: snapshot.data!.length,
+                            itemBuilder: (context, index) {
+                              final comment = snapshot.data![index];
+                              final cProfile = comment['profiles'] as Map<String, dynamic>?;
+                              final cName = cProfile?['username'] ?? cProfile?['email']?.split('@')[0] ?? 'User';
+                              final cTime = _formatTimeAgo(comment['created_at']);
+                              return Padding(
+                                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                                child: Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    CircleAvatar(
+                                      radius: 16,
+                                      backgroundColor: const Color(0xFFFF3B30),
+                                      child: Text(cName.isNotEmpty ? cName[0].toUpperCase() : 'U', style: const TextStyle(color: Colors.white, fontSize: 12)),
+                                    ),
+                                    const SizedBox(width: 10),
+                                    Expanded(child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Row(children: [
+                                          Text(cName, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+                                          const SizedBox(width: 6),
+                                          Text(cTime, style: const TextStyle(color: Colors.grey, fontSize: 11)),
+                                        ]),
+                                        const SizedBox(height: 4),
+                                        Text(comment['content'] ?? '', style: const TextStyle(color: Colors.white, fontSize: 14)),
+                                      ],
+                                    )),
+                                  ],
+                                ),
+                              );
+                            },
+                          );
+                        },
+                      ),
+                    ),
+                    // Kommentar-Eingabe
+                    Container(
+                      padding: EdgeInsets.only(
+                        left: 16, right: 8, top: 8,
+                        bottom: MediaQuery.of(context).viewInsets.bottom + 8,
+                      ),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF1C1F26),
+                        border: Border(top: BorderSide(color: Colors.white.withValues(alpha: 0.1))),
+                      ),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: TextField(
+                              controller: commentController,
+                              style: const TextStyle(color: Colors.white, fontSize: 14),
+                              decoration: const InputDecoration(
+                                hintText: 'Kommentar schreiben...',
+                                hintStyle: TextStyle(color: Colors.grey),
+                                border: InputBorder.none,
+                              ),
+                            ),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.send, color: Color(0xFFFF3B30)),
+                            onPressed: () async {
+                              final text = commentController.text.trim();
+                              if (text.isEmpty) return;
+                              await SocialService.addComment(post['id'], text);
+                              commentController.clear();
+                              setSheetState(() {});  // Rebuild um neue Kommentare zu laden
+                              _loadData();  // Feed-Zähler aktualisieren
+                            },
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                );
+              },
+            );
+          },
+        );
+      },
     );
   }
 
@@ -797,6 +976,54 @@ class _PostLikeButtonState extends State<_PostLikeButton> {
           Icon(_liked ? Icons.favorite : Icons.favorite_border, color: _liked ? const Color(0xFFFF3B30) : Colors.grey, size: 18),
           const SizedBox(width: 4),
           Text('$_count', style: TextStyle(color: _liked ? const Color(0xFFFF3B30) : Colors.grey, fontSize: 12)),
+        ],
+      ),
+    );
+  }
+}
+
+// ── Post Repost Button ────────────────────────────────────────────────
+
+class _PostRepostButton extends StatefulWidget {
+  final String postId;
+  final int initialCount;
+  const _PostRepostButton({required this.postId, required this.initialCount});
+
+  @override
+  State<_PostRepostButton> createState() => _PostRepostButtonState();
+}
+
+class _PostRepostButtonState extends State<_PostRepostButton> {
+  late int _count;
+  bool _reposted = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _count = widget.initialCount;
+    _checkReposted();
+  }
+
+  Future<void> _checkReposted() async {
+    final reposted = await SocialService.hasReposted(widget.postId);
+    if (mounted) setState(() => _reposted = reposted);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: () async {
+        final nowReposted = await SocialService.toggleRepost(widget.postId);
+        setState(() {
+          _reposted = nowReposted;
+          _count += nowReposted ? 1 : -1;
+        });
+      },
+      child: Row(
+        children: [
+          Icon(Icons.repeat, color: _reposted ? const Color(0xFF34C759) : Colors.grey, size: 18),
+          const SizedBox(width: 4),
+          Text('$_count', style: TextStyle(color: _reposted ? const Color(0xFF34C759) : Colors.grey, fontSize: 12)),
         ],
       ),
     );

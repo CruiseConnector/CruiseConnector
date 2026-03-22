@@ -26,6 +26,12 @@
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>MBXAccessToken</key>
+	<string>pk.eyJ1IjoibHVjd3F6IiwiYSI6ImNtbHdnMXFpdjBjZTAzZXF3NDgyYmZ3c2oifQ.upeLKXUnY5z6Pe0JiuznEQ</string>
+	<key>NSLocationAlwaysUsageDescription</key>
+	<string>This app needs access to location when in the background to track your ride.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>This app needs access to location when open to show your current location on the map.</string>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 	<key>UILaunchStoryboardName</key>
@@ -45,11 +51,5 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
-    <key>NSLocationWhenInUseUsageDescription</key>
-    <string>This app needs access to location when open to show your current location on the map.</string>
-    <key>MBXAccessToken</key>
-    <string>pk.eyJ1IjoibHVjd3F6IiwiYSI6ImNtbHdnMXFpdjBjZTAzZXF3NDgyYmZ3c2oifQ.upeLKXUnY5z6Pe0JiuznEQ</string>
-    <key>NSLocationAlwaysUsageDescription</key>
-    <string>This app needs access to location when in the background to track your ride.</string>
 </dict>
 </plist>

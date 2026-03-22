@@ -16,7 +16,6 @@ import 'package:cruise_connect/domain/models/saved_route.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/cruise_completion_dialog.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/cruise_maneuver_indicator.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/cruise_navigation_info_panel.dart';
-import 'package:cruise_connect/presentation/widgets/cruise/cruise_route_type_dialog.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/cruise_setup_card.dart';
 import 'package:cruise_connect/data/services/drive_control_panel.dart';
 import 'package:cruise_connect/data/services/gamification_service.dart';
@@ -57,13 +56,15 @@ class _CruiseModePageState extends State<CruiseModePage> {
   double? _routeDistance;
   double? _routeDuration;
   RouteResult? _lastRouteResult;
+  bool _configCollapsed = false; // Config-Panel ein-/ausgeklappt
+  bool _showRouteInfoBanner = false; // Route-Info Banner nach Generation
+  static int _globalRouteAttempts = 0; // Zählt Generierungen über App-Lebensdauer
 
   // ─────────────────────── Map State ─────────────────────────────────────────
   bool _isLoading = false;
   MapboxMap? _mapboxMap;
   PolylineAnnotationManager? _greyAnnotationManager;
   PolylineAnnotationManager? _polylineAnnotationManager;
-  PolylineAnnotationManager? _cursorAnnotationManager;
   CircleAnnotationManager? _simPuckManager;
   ViewportState? _viewportState;
   bool _isMapStyleLoaded = false;
@@ -100,6 +101,8 @@ class _CruiseModePageState extends State<CruiseModePage> {
   double? _originalRouteDistance; // Ursprüngliche Gesamtdistanz (für Zeitberechnung)
   double? _originalRouteDuration; // Ursprüngliche Gesamtdauer (für Zeitberechnung)
   int _lastDrawnRouteIndex = 0; // Letzter Index bei dem die Route neu gezeichnet wurde
+  double _currentSpeedKmh = 0; // Live-Geschwindigkeit
+  int? _currentSpeedLimit; // Tempolimit der aktuellen Straße
 
   bool _disposed = false;
 
@@ -150,64 +153,257 @@ class _CruiseModePageState extends State<CruiseModePage> {
   // ═══════════════════════ CONFIG OVERLAY ═════════════════════════════════
 
   Widget _buildConfigOverlay() {
+    // Eingeklappter Zustand: nur Buttons am unteren Rand + Expand-Handle + Info-Banner
+    if (_configCollapsed) {
+      return Stack(
+        children: [
+          // Route-Info Banner oben (bleibt bis zur Bestätigung)
+          if (_showRouteInfoBanner && _lastRouteResult != null)
+            Positioned(
+              top: MediaQuery.of(context).padding.top + 8,
+              left: 12, right: 12,
+              child: _buildRouteInfoBanner(),
+            ),
+          Positioned(
+            bottom: 0, left: 0, right: 0,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Handle zum Hochziehen
+                GestureDetector(
+                  onTap: () => setState(() => _configCollapsed = false),
+                  onVerticalDragEnd: (details) {
+                    if ((details.primaryVelocity ?? 0) < -100) {
+                      setState(() => _configCollapsed = false);
+                    }
+                  },
+                  child: Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.only(top: 12, bottom: 8),
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [Colors.transparent, const Color(0xFF0B0E14).withValues(alpha: 0.95)],
+                      ),
+                    ),
+                    child: Column(
+                      children: [
+                        Container(
+                          width: 40, height: 4,
+                          decoration: BoxDecoration(color: Colors.grey[600], borderRadius: BorderRadius.circular(2)),
+                        ),
+                        const SizedBox(height: 6),
+                        const Icon(Icons.keyboard_arrow_up, color: Colors.grey, size: 20),
+                      ],
+                    ),
+                  ),
+                ),
+                Container(
+                  color: const Color(0xFF0B0E14),
+                  child: _buildBottomActions(),
+                ),
+              ],
+            ),
+          ),
+        ],
+      );
+    }
+
+    // Ausgeklappter Zustand: vollständiges Config-Panel
     return Stack(
       children: [
-        CustomScrollView(
-          slivers: [
-            // Transparenter Bereich oben → Map scheint durch
-            SliverToBoxAdapter(
-              child: Container(
-                height: 300,
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [
-                      Colors.transparent,
-                      const Color(0xFF0B0E14).withValues(alpha: 0.8),
-                      const Color(0xFF0B0E14),
-                    ],
-                    stops: const [0.6, 0.9, 1.0],
+        // Overscroll nach oben (= Swipe-Down am Anfang) → einklappen
+        NotificationListener<OverscrollNotification>(
+          onNotification: (notification) {
+            // Overscroll am oberen Rand = User swipt nach unten
+            if (notification.overscroll < -15) {
+              setState(() => _configCollapsed = true);
+              return true;
+            }
+            return false;
+          },
+          child: CustomScrollView(
+            physics: const AlwaysScrollableScrollPhysics(),
+            slivers: [
+              // Transparenter Bereich oben → Map scheint durch + Einklapp-Pfeil
+              SliverToBoxAdapter(
+                child: GestureDetector(
+                  onVerticalDragEnd: (details) {
+                    if ((details.primaryVelocity ?? 0) > 150) {
+                      setState(() => _configCollapsed = true);
+                    }
+                  },
+                  child: Container(
+                    height: 300,
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [
+                          Colors.transparent,
+                          const Color(0xFF0B0E14).withValues(alpha: 0.8),
+                          const Color(0xFF0B0E14),
+                        ],
+                        stops: const [0.6, 0.9, 1.0],
+                      ),
+                    ),
+                    child: Align(
+                      alignment: Alignment.bottomCenter,
+                      child: Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: GestureDetector(
+                          onTap: () => setState(() => _configCollapsed = true),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF1C1F26).withValues(alpha: 0.8),
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                            child: const Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.keyboard_arrow_down, color: Colors.grey, size: 18),
+                                SizedBox(width: 4),
+                                Text('Einklappen', style: TextStyle(color: Colors.grey, fontSize: 12)),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
                   ),
                 ),
               ),
-            ),
-            SliverToBoxAdapter(
-              child: Container(
-                color: const Color(0xFF0B0E14),
-                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
-                child: Column(
-                  children: [
-                    CruiseSetupCard(
-                      isRoundTrip: _isRoundTrip,
-                      planningType: _planningType,
-                      selectedLength: _selectedLength,
-                      selectedLocation: _selectedLocation,
-                      selectedStyle: _selectedStyle,
-                      selectedDestination: _selectedDestination,
-                      destinationController: _destinationController,
-                      onRoundTripChanged: (v) => setState(() => _isRoundTrip = v),
-                      onPlanningTypeChanged: (v) => setState(() => _planningType = v),
-                      onLengthChanged: (v) => setState(() => _selectedLength = v),
-                      onLocationChanged: (v) => setState(() => _selectedLocation = v),
-                      onStyleChanged: (v) => setState(() => _selectedStyle = v),
-                      onDestinationSelected: _onDestinationSelected,
-                      onDestinationCleared: () => setState(() {
-                        _selectedDestination = null;
-                        _destinationController.clear();
-                      }),
-                    ),
-                    const SizedBox(height: 140),
-                  ],
+              SliverToBoxAdapter(
+                child: Container(
+                  color: const Color(0xFF0B0E14),
+                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+                  child: Column(
+                    children: [
+                      CruiseSetupCard(
+                        isRoundTrip: _isRoundTrip,
+                        planningType: _planningType,
+                        selectedLength: _selectedLength,
+                        selectedLocation: _selectedLocation,
+                        selectedStyle: _selectedStyle,
+                        selectedDestination: _selectedDestination,
+                        destinationController: _destinationController,
+                        onRoundTripChanged: (v) => setState(() => _isRoundTrip = v),
+                        onPlanningTypeChanged: (v) => setState(() => _planningType = v),
+                        onLengthChanged: (v) => setState(() => _selectedLength = v),
+                        onLocationChanged: (v) => setState(() => _selectedLocation = v),
+                        onStyleChanged: (v) => setState(() => _selectedStyle = v),
+                        onDestinationSelected: _onDestinationSelected,
+                        onDestinationCleared: () => setState(() {
+                          _selectedDestination = null;
+                          _destinationController.clear();
+                        }),
+                      ),
+                      const SizedBox(height: 140),
+                    ],
+                  ),
                 ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
+        // Route-Info Banner (bleibt bis zur Bestätigung)
+        if (_showRouteInfoBanner && _lastRouteResult != null)
+          Positioned(
+            top: MediaQuery.of(context).padding.top + 8,
+            left: 12, right: 12,
+            child: _buildRouteInfoBanner(),
+          ),
         Positioned(
           bottom: 0, left: 0, right: 0,
           child: _buildBottomActions(),
         ),
+      ],
+    );
+  }
+
+  Widget _buildRouteInfoBanner() {
+    final result = _lastRouteResult!;
+    final distKm = result.distanceKm?.toStringAsFixed(1) ?? '--';
+    final durationMin = result.durationSeconds != null ? (result.durationSeconds! / 60).round() : 0;
+    final hours = durationMin ~/ 60;
+    final mins = durationMin % 60;
+    final timeStr = hours > 0 ? '${hours}h ${mins}min' : '${mins} min';
+    // Kurven zählen: echte Richtungswechsel > 30° in der Geometrie
+    final curveCount = _countRealCurves(_fullRouteCoordinates);
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1C1F26),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFFFF3B30).withValues(alpha: 0.3)),
+        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.4), blurRadius: 12)],
+      ),
+      child: Column(
+        children: [
+          const Text('Route berechnet', style: TextStyle(color: Color(0xFFFF3B30), fontSize: 14, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 10),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            children: [
+              _buildInfoItem(Icons.straighten, '$distKm km', 'Distanz'),
+              _buildInfoItem(Icons.timer_outlined, timeStr, 'Dauer'),
+              _buildInfoItem(Icons.turn_right, '$curveCount', 'Kurven'),
+              _buildInfoItem(Icons.star_outline, '${_calculateRouteXp()}', 'XP'),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Berechnet XP für die aktuelle Route.
+  /// Basis: 10 XP pro km + 5 XP pro Kurve + Stil-Bonus
+  int _calculateRouteXp() {
+    final distKm = _lastRouteResult?.distanceKm ?? 0;
+    final curves = _countRealCurves(_fullRouteCoordinates);
+    final baseXp = (distKm * 10).round();
+    final curveXp = curves * 5;
+    // Stil-Bonus
+    int styleBonus = 0;
+    if (_selectedStyle == 'Kurvenjagd') styleBonus = 20;
+    if (_selectedStyle == 'Entdecker') styleBonus = 15;
+    if (_selectedStyle == 'Sport Mode') styleBonus = 10;
+    return baseXp + curveXp + styleBonus;
+  }
+
+  /// Zählt echte Kurven in der Route anhand von Richtungswechseln > 30°.
+  /// Prüft alle ~200m einen Winkel zwischen 3 aufeinanderfolgenden Samples.
+  int _countRealCurves(List<List<double>> coords) {
+    if (coords.length < 3) return 0;
+    int curves = 0;
+    // Alle ~20 Punkte samplen (≈200m Abstände je nach Routendichte)
+    const step = 20;
+    for (var i = step; i < coords.length - step; i += step) {
+      final prev = coords[i - step];
+      final curr = coords[i];
+      final next = coords[math.min(i + step, coords.length - 1)];
+
+      final bearing1 = math.atan2(curr[0] - prev[0], curr[1] - prev[1]);
+      final bearing2 = math.atan2(next[0] - curr[0], next[1] - curr[1]);
+      var angle = (bearing2 - bearing1).abs();
+      if (angle > math.pi) angle = 2 * math.pi - angle;
+      final degrees = angle * 180 / math.pi;
+
+      if (degrees > 30) curves++;
+    }
+    return curves;
+  }
+
+  Widget _buildInfoItem(IconData icon, String value, String label) {
+    return Column(
+      children: [
+        Icon(icon, color: const Color(0xFFFF3B30), size: 20),
+        const SizedBox(height: 4),
+        Text(value, style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold)),
+        Text(label, style: TextStyle(color: Colors.white.withValues(alpha: 0.5), fontSize: 10)),
       ],
     );
   }
@@ -224,6 +420,62 @@ class _CruiseModePageState extends State<CruiseModePage> {
             child: CruiseManeuverIndicator(
               maneuver: _maneuvers[_activeManeuverIndex.clamp(0, _maneuvers.length - 1)],
               distanceToManeuverMeters: _calculateDistanceToManeuver(),
+            ),
+          ),
+        // Geschwindigkeitsanzeige links
+        Positioned(
+          left: 16, bottom: 260,
+          child: Container(
+            width: 64, height: 64,
+            decoration: BoxDecoration(
+              color: const Color(0xFF1C1F26),
+              shape: BoxShape.circle,
+              border: Border.all(
+                color: _currentSpeedKmh > (_currentSpeedLimit ?? 999)
+                    ? const Color(0xFFFF3B30)
+                    : Colors.white.withValues(alpha: 0.2),
+                width: 2,
+              ),
+            ),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(
+                  '${_currentSpeedKmh.round()}',
+                  style: TextStyle(
+                    color: _currentSpeedKmh > (_currentSpeedLimit ?? 999)
+                        ? const Color(0xFFFF3B30)
+                        : Colors.white,
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                Text('km/h', style: TextStyle(color: Colors.white.withValues(alpha: 0.5), fontSize: 9)),
+              ],
+            ),
+          ),
+        ),
+        // Tempolimit-Anzeige (wenn verfügbar)
+        if (_currentSpeedLimit != null)
+          Positioned(
+            left: 16, bottom: 334,
+            child: Container(
+              width: 48, height: 48,
+              decoration: BoxDecoration(
+                color: Colors.white,
+                shape: BoxShape.circle,
+                border: Border.all(color: const Color(0xFFFF3B30), width: 3),
+              ),
+              child: Center(
+                child: Text(
+                  '$_currentSpeedLimit',
+                  style: const TextStyle(
+                    color: Colors.black,
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
             ),
           ),
         // FAB-Spalte rechts: Simulation + Zentrieren
@@ -407,7 +659,6 @@ class _CruiseModePageState extends State<CruiseModePage> {
     _mapboxMap = mapboxMap;
     _greyAnnotationManager = null;
     _polylineAnnotationManager = null;
-    _cursorAnnotationManager = null;
     _safeSetState(() => _isMapStyleLoaded = false);
     // Route-Zeichnung wird in onStyleLoadedListener gemacht,
     // da Annotation Manager erst nach Style-Load funktionieren.
@@ -420,7 +671,6 @@ class _CruiseModePageState extends State<CruiseModePage> {
       _mapboxMap = null;
       _greyAnnotationManager = null;
       _polylineAnnotationManager = null;
-      _cursorAnnotationManager = null;
       _viewportState = null;
       _isMapStyleLoaded = false;
       _mapLoadError = null;
@@ -604,57 +854,31 @@ class _CruiseModePageState extends State<CruiseModePage> {
         }
       }
 
-      final result = await _routeService.generateRoundTrip(
-        startPosition: startPosition,
-        targetDistanceKm: distance,
-        mode: _selectedStyle,
-        planningType: _planningType,
-        targetLocation: targetLocation,
-      );
-
-      _applyRouteResult(result);
-      await _drawRoute(result.geometry);
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Route berechnet! (${result.distanceKm?.toStringAsFixed(1) ?? '--'} km)'),
-            backgroundColor: Colors.green,
-          ),
+      // Warmup: Erste 2 Routen intern verwerfen (oft fehlerhaft/kurz)
+      // und direkt eine 3. generieren, die dem User gezeigt wird
+      final skipCount = (_globalRouteAttempts < 2) ? (2 - _globalRouteAttempts) : 0;
+      RouteResult? result;
+      for (var i = 0; i < skipCount + 1; i++) {
+        result = await _routeService.generateRoundTrip(
+          startPosition: startPosition,
+          targetDistanceKm: distance,
+          mode: _selectedStyle,
+          planningType: _planningType,
+          targetLocation: targetLocation,
         );
+        _globalRouteAttempts++;
+        // Nur die letzte Route verwenden, vorherige verwerfen
       }
-    } catch (e) {
-      _showError(e.toString());
-    } finally {
-      _safeSetState(() => _isLoading = false);
-    }
-  }
 
-  Future<void> _calculateRouteToDestination(
-    MapboxSuggestion suggestion, {
-    required bool scenic,
-    int routeVariant = 0,
-  }) async {
-    setState(() => _isLoading = true);
-    try {
-      final startPosition = await _getStartCoordinates();
-      final result = await _routeService.generatePointToPoint(
-        startPosition: startPosition,
-        destinationLat: suggestion.latitude,
-        destinationLng: suggestion.longitude,
-        mode: _selectedStyle,
-        scenic: scenic,
-      );
-      _applyRouteResult(result);
+      _applyRouteResult(result!);
       await _drawRoute(result.geometry);
 
+      // Config einklappen + Info-Banner anzeigen damit man die Route sieht
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('${scenic ? "Coole" : "Direkte"} Route berechnet! (${result.distanceKm?.toStringAsFixed(1) ?? '--'} km)'),
-            backgroundColor: Colors.green,
-          ),
-        );
+        setState(() {
+          _configCollapsed = true;
+          _showRouteInfoBanner = true;
+        });
       }
     } catch (e) {
       _showError(e.toString());
@@ -735,11 +959,11 @@ class _CruiseModePageState extends State<CruiseModePage> {
   // ═══════════════════════ ROUTE CONFIRM ═════════════════════════════════════
 
   Future<void> _confirmRoute() async {
-    final total = _fullRouteCoordinates.length;
     setState(() {
       _isRouteConfirmed = true;
       _currentRouteIndex = 0;
-      // Task 1: Full Route Preview - Hier wird die komplette Route gezeichnet, noch kein 3km Cut!
+      _showRouteInfoBanner = false;
+      _configCollapsed = false;
       _remainingRouteCoordinates = _fullRouteCoordinates;
     });
     CruiseModePage.isFullscreen.value = true;
@@ -849,6 +1073,12 @@ class _CruiseModePageState extends State<CruiseModePage> {
   Future<void> _onLocationUpdate(geo.Position position) async {
     if (!mounted || _disposed) return;
     _userLocation = position;
+    // Live-Geschwindigkeit aus GPS (m/s → km/h)
+    if (position.speed >= 0) {
+      _currentSpeedKmh = position.speed * 3.6;
+    }
+    // Tempolimit basierend auf aktuellem Routenindex aktualisieren
+    _updateSpeedLimit();
     // Cursor deaktiviert – nur der blaue Mapbox-Puck wird angezeigt
     // await _updateVisibleCursor(position);
 
@@ -896,18 +1126,12 @@ class _CruiseModePageState extends State<CruiseModePage> {
       // Verbleibende Distanz und Zeit live berechnen
       _updateRemainingDistanceAndDuration();
 
-      // Route bei jedem Index-Schritt neu zeichnen, mit User-Position
-      // als Startpunkt interpoliert (kein Gap, kein Trail hinter dem Punkt)
-      if (_currentRouteIndex - _lastDrawnRouteIndex >= 1) {
+      // Route nur alle 10 Index-Schritte neu zeichnen (Performance!)
+      if (_currentRouteIndex - _lastDrawnRouteIndex >= 10) {
         _lastDrawnRouteIndex = _currentRouteIndex;
-        final windowEnd = _findLookAheadIndex(_currentRouteIndex, 3000);
-        final routeSlice = _fullRouteCoordinates.sublist(_currentRouteIndex, windowEnd);
-
-        // Route startet exakt an der User-Position (kein Gap/Trail)
-        if (_userLocation != null && routeSlice.isNotEmpty) {
-          routeSlice[0] = [_userLocation!.longitude, _userLocation!.latitude];
-        }
-
+        // Komplette verbleibende Route zeichnen (nicht abschneiden!)
+        // Kein User-Position-Snap → verhindert Punkte/Fragmente
+        final routeSlice = _fullRouteCoordinates.sublist(_currentRouteIndex);
         _remainingRouteCoordinates = routeSlice;
         final clipped = {'type': 'LineString', 'coordinates': _remainingRouteCoordinates};
         _routeGeoJson = json.encode(clipped);
@@ -935,6 +1159,20 @@ class _CruiseModePageState extends State<CruiseModePage> {
     if (_activeManeuverIndex != prevManeuver) needsRebuild = true;
 
     if (needsRebuild) _safeSetState(() {});
+  }
+
+  void _updateSpeedLimit() {
+    if (_lastRouteResult == null || _lastRouteResult!.speedLimits.isEmpty) {
+      _currentSpeedLimit = null;
+      return;
+    }
+    for (final seg in _lastRouteResult!.speedLimits) {
+      if (_currentRouteIndex >= seg.startIndex && _currentRouteIndex < seg.endIndex) {
+        _currentSpeedLimit = seg.speedKmh;
+        return;
+      }
+    }
+    _currentSpeedLimit = null;
   }
 
   void _updateRemainingDistanceAndDuration() {
@@ -1164,25 +1402,6 @@ class _CruiseModePageState extends State<CruiseModePage> {
     } catch (_) {}
   }
 
-  Future<void> _focusCameraOnPosition(
-    geo.Position position, {
-    required bool animated,
-  }) async {
-    if (_mapboxMap == null || !_isMapStyleLoaded) return;
-    try {
-      final options = CameraOptions(
-        center: Point(coordinates: Position(position.longitude, position.latitude)),
-        zoom: 16.0, pitch: 45.0,
-        bearing: position.heading.isFinite ? position.heading : 0.0,
-      );
-      if (animated) {
-        await _mapboxMap!.flyTo(options, MapAnimationOptions(duration: 700));
-      } else {
-        await _mapboxMap!.setCamera(options);
-      }
-    } catch (_) {}
-  }
-
   Future<void> _activateNavigationCamera() async {
     if (_mapboxMap == null) return;
     geo.Position position;
@@ -1219,52 +1438,6 @@ class _CruiseModePageState extends State<CruiseModePage> {
         bearing: FollowPuckViewportStateBearingHeading(),
       );
     });
-  }
-
-  // ═══════════════════════ CURSOR ═══════════════════════════════════════════
-
-  Future<void> _updateVisibleCursor(geo.Position position) async {
-    if (_mapboxMap == null) return;
-    _cursorAnnotationManager ??=
-        await _mapboxMap!.annotations.createPolylineAnnotationManager();
-
-    final lng = position.longitude;
-    final lat = position.latitude;
-    const halfSize = 0.00007;
-    final verticalLine = [Position(lng, lat - halfSize), Position(lng, lat + halfSize)];
-    final hScale = math.cos(lat * math.pi / 180).abs();
-    final lonSize = hScale < 0.2 ? halfSize : halfSize / hScale;
-    final horizontalLine = [Position(lng - lonSize, lat), Position(lng + lonSize, lat)];
-    final heading = position.heading.isFinite ? position.heading : 0.0;
-    final headRad = heading * math.pi / 180;
-    const headLen = halfSize * 2.5;
-    final tipLat = lat + math.cos(headRad) * headLen;
-    final tipLng = lng + math.sin(headRad) * (headLen / hScale.clamp(0.2, 1.0));
-    final headingLine = [Position(lng, lat), Position(tipLng, tipLat)];
-
-    Future<void> draw() async {
-      await _cursorAnnotationManager!.deleteAll();
-      await _cursorAnnotationManager!.create(PolylineAnnotationOptions(
-        geometry: LineString(coordinates: verticalLine),
-        lineColor: Colors.white.toARGB32(), lineWidth: 4.0,
-      ));
-      await _cursorAnnotationManager!.create(PolylineAnnotationOptions(
-        geometry: LineString(coordinates: horizontalLine),
-        lineColor: Colors.white.toARGB32(), lineWidth: 4.0,
-      ));
-      await _cursorAnnotationManager!.create(PolylineAnnotationOptions(
-        geometry: LineString(coordinates: headingLine),
-        lineColor: const Color(0xFFFF3B30).toARGB32(), lineWidth: 4.5,
-      ));
-    }
-
-    try {
-      await draw();
-    } catch (_) {
-      _cursorAnnotationManager =
-          await _mapboxMap!.annotations.createPolylineAnnotationManager();
-      await draw();
-    }
   }
 
   // ═══════════════════════ SIMULATION ═══════════════════════════════════════
@@ -1324,64 +1497,15 @@ class _CruiseModePageState extends State<CruiseModePage> {
     if (restartLiveTracking && _isRouteConfirmed) _startNavigationTracking();
   }
 
-  /// Berechnet realistische Geschwindigkeit basierend auf Kurven voraus.
-  /// Bremst vor Kurven ab und beschleunigt auf Geraden.
-  double _calculateSimulationSpeed() {
-    final lastIndex = _fullRouteCoordinates.length - 1;
-    if (_simulationIndex >= lastIndex - 2) return _simulationSpeedKmh;
-
-    // Schaue 5-10 Punkte voraus für Kurven
-    double maxAngleChange = 0;
-    final lookAhead = math.min(10, lastIndex - _simulationIndex);
-    for (var i = 0; i < lookAhead - 1; i++) {
-      final idx = _simulationIndex + i;
-      if (idx + 2 > lastIndex) break;
-      final p1 = _fullRouteCoordinates[idx];
-      final p2 = _fullRouteCoordinates[idx + 1];
-      final p3 = _fullRouteCoordinates[idx + 2];
-      final bearing1 = calculateBearing(p1[1], p1[0], p2[1], p2[0]);
-      final bearing2 = calculateBearing(p2[1], p2[0], p3[1], p3[0]);
-      var diff = (bearing2 - bearing1).abs();
-      if (diff > 180) diff = 360 - diff;
-      if (diff > maxAngleChange) maxAngleChange = diff;
-    }
-
-    // Zielgeschwindigkeit basierend auf Kurvenwinkel
-    double targetKmh;
-    if (maxAngleChange > 60) {
-      targetKmh = 25; // Scharfe Kurve / Kreisverkehr
-    } else if (maxAngleChange > 30) {
-      targetKmh = 40; // Normale Kurve
-    } else if (maxAngleChange > 15) {
-      targetKmh = 55; // Leichte Kurve
-    } else {
-      targetKmh = 70; // Gerade
-    }
-
-    // Sanft zur Zielgeschwindigkeit interpolieren (kein abruptes Bremsen)
-    _simulationSpeedKmh += (targetKmh - _simulationSpeedKmh) * 0.15;
-    return _simulationSpeedKmh.clamp(15.0, 80.0);
-  }
-
   void _scheduleNextSimulationStep() {
     _simulationTimer?.cancel();
     if (!_isSimulationRunning || _fullRouteCoordinates.length < 2) return;
     final lastIndex = _fullRouteCoordinates.length - 1;
     if (_simulationIndex >= lastIndex) return;
 
-    final current = _fullRouteCoordinates[_simulationIndex];
-    final next = _fullRouteCoordinates[math.min(_simulationIndex + 1, lastIndex)];
-    final distMeters = geo.Geolocator.distanceBetween(
-      current[1], current[0], next[1], next[0],
-    );
-
-    final speedKmh = _calculateSimulationSpeed();
-    final speedMs = speedKmh / 3.6;
-    final delayMs = distMeters > 0
-        ? (distMeters / speedMs * 1000).round().clamp(16, 3000)
-        : 50;
-
-    _simulationTimer = Timer(Duration(milliseconds: delayMs), _runSimulationStep);
+    // Fester 50ms Intervall (20 FPS) — smooth für alle Geschwindigkeiten
+    // Die Anzahl übersprungener Punkte wird in _runSimulationStep berechnet
+    _simulationTimer = Timer(const Duration(milliseconds: 50), _runSimulationStep);
   }
 
   Future<void> _runSimulationStep() async {
@@ -1397,15 +1521,28 @@ class _CruiseModePageState extends State<CruiseModePage> {
         _onRouteCompleted();
         return;
       }
-      _simulationIndex = math.min(_simulationIndex + 1, lastIndex);
+
+      // Berechne wie viele Punkte bei aktueller Geschwindigkeit in 50ms übersprungen werden
+      final speedMs = _simulationSpeedKmh / 3.6;
+      final targetDistPerStep = speedMs * 0.05; // Meter in 50ms
+      double accumulated = 0.0;
+      int newIndex = _simulationIndex;
+      while (newIndex < lastIndex && accumulated < targetDistPerStep) {
+        final c1 = _fullRouteCoordinates[newIndex];
+        final c2 = _fullRouteCoordinates[newIndex + 1];
+        accumulated += geo.Geolocator.distanceBetween(c1[1], c1[0], c2[1], c2[0]);
+        newIndex++;
+      }
+      // Mindestens 1 Punkt vorwärts
+      _simulationIndex = math.max(newIndex, _simulationIndex + 1).clamp(0, lastIndex);
+
       final current = _fullRouteCoordinates[_simulationIndex];
       final next = _fullRouteCoordinates[math.min(_simulationIndex + 1, lastIndex)];
-      final speedMs = _simulationSpeedKmh / 3.6;
 
-      // Simulations-Puck auf der Karte bewegen (Fehler ignorieren)
+      // Simulations-Puck auf der Karte bewegen
       try { await _updateSimulationPuck(current[0], current[1]); } catch (_) {}
 
-      // Location Update (Fehler ignorieren, Simulation weiterlaufen lassen)
+      // Location Update
       try { await _onLocationUpdate(_buildSimulatedPosition(current, next, speedMs)); } catch (_) {}
 
       if (_simulationIndex >= lastIndex) {
@@ -1578,17 +1715,6 @@ class _CruiseModePageState extends State<CruiseModePage> {
   }
 
   // ═══════════════════════ DIALOGS ══════════════════════════════════════════
-
-  void _showRouteTypeDialog(MapboxSuggestion suggestion) {
-    showRouteTypeDialog(
-      context: context,
-      suggestion: suggestion,
-      selectedStyle: _selectedStyle,
-      onRouteSelected: (s, {required bool scenic, int routeVariant = 0}) {
-        _calculateRouteToDestination(s, scenic: scenic, routeVariant: routeVariant);
-      },
-    );
-  }
 
   void _showError(String message) {
     if (!mounted || _disposed) return;
