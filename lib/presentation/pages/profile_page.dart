@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/data/services/saved_routes_service.dart';
@@ -12,13 +13,20 @@ import 'package:cruise_connect/presentation/pages/cruise_mode_page.dart';
 import 'package:cruise_connect/presentation/pages/user_profile_page.dart';
 
 class ProfilePage extends StatefulWidget {
-  const ProfilePage({super.key});
+  final int refreshKey;
+  const ProfilePage({super.key, this.refreshKey = 0});
 
   @override
   State<ProfilePage> createState() => _ProfilePageState();
 }
 
 class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStateMixin {
+  @override
+  void didUpdateWidget(ProfilePage old) {
+    super.didUpdateWidget(old);
+    if (widget.refreshKey != old.refreshKey && widget.refreshKey > 0) _loadData();
+  }
+
   late TabController _tabController;
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
 
@@ -29,6 +37,8 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
   List<Map<String, dynamic>> _reposts = [];
   List<Map<String, dynamic>> _groups = [];
   List<SavedRoute> _savedRoutes = [];
+  String? _avatarUrl;
+  bool _uploadingAvatar = false;
 
   @override
   void initState() {
@@ -58,9 +68,11 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
         SocialService.getUserReposts(uid),
         SocialService.getMyGroups(),
         SavedRoutesService.getUserRoutes(),
+        SocialService.getUserProfile(uid),
       ]);
 
       if (mounted) {
+        final profile = results[6] as Map<String, dynamic>?;
         setState(() {
           _followerCount = results[0] as int;
           _followingCount = results[1] as int;
@@ -68,12 +80,69 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
           _reposts = results[3] as List<Map<String, dynamic>>;
           _groups = results[4] as List<Map<String, dynamic>>;
           _savedRoutes = results[5] as List<SavedRoute>;
+          _avatarUrl = profile?['avatar_url'] as String?;
           _loading = false;
         });
       }
     } catch (e) {
       debugPrint('[Profile] Daten laden fehlgeschlagen: $e');
       if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _pickAndUploadAvatar() async {
+    final picker = ImagePicker();
+    final image = await picker.pickImage(
+      source: ImageSource.gallery,
+      maxWidth: 512,
+      maxHeight: 512,
+      imageQuality: 80,
+    );
+    if (image == null) return;
+
+    final uid = Supabase.instance.client.auth.currentUser?.id;
+    if (uid == null) return;
+
+    setState(() => _uploadingAvatar = true);
+
+    try {
+      final bytes = await image.readAsBytes();
+      final ext = image.path.split('.').last.toLowerCase();
+      final path = 'avatars/$uid.$ext';
+
+      await Supabase.instance.client.storage
+          .from('avatars')
+          .uploadBinary(path, bytes, fileOptions: const FileOptions(upsert: true));
+
+      final publicUrl = Supabase.instance.client.storage
+          .from('avatars')
+          .getPublicUrl(path);
+
+      // URL mit Cache-Buster damit das neue Bild geladen wird
+      final urlWithCacheBuster = '$publicUrl?t=${DateTime.now().millisecondsSinceEpoch}';
+
+      await Supabase.instance.client
+          .from('profiles')
+          .update({'avatar_url': publicUrl})
+          .eq('id', uid);
+
+      if (mounted) {
+        setState(() {
+          _avatarUrl = urlWithCacheBuster;
+          _uploadingAvatar = false;
+        });
+      }
+    } catch (e) {
+      debugPrint('[Profile] Avatar-Upload fehlgeschlagen: $e');
+      if (mounted) {
+        setState(() => _uploadingAvatar = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Upload fehlgeschlagen: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     }
   }
 
@@ -187,18 +256,53 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
                       children: [
                         Transform.translate(
                           offset: const Offset(0, -40),
-                          child: Container(
-                            padding: const EdgeInsets.all(5),
-                            decoration: const BoxDecoration(
-                              color: Color(0xFF0B0E14),
-                              shape: BoxShape.circle,
-                            ),
-                            child: CircleAvatar(
-                              radius: 40,
-                              backgroundColor: const Color(0xFFFF3B30),
-                              child: Text(
-                                userName.isNotEmpty ? userName[0].toUpperCase() : 'U',
-                                style: const TextStyle(color: Colors.white, fontSize: 32, fontWeight: FontWeight.bold),
+                          child: GestureDetector(
+                            onTap: _pickAndUploadAvatar,
+                            child: Container(
+                              padding: const EdgeInsets.all(5),
+                              decoration: const BoxDecoration(
+                                color: Color(0xFF0B0E14),
+                                shape: BoxShape.circle,
+                              ),
+                              child: Stack(
+                                children: [
+                                  CircleAvatar(
+                                    radius: 40,
+                                    backgroundColor: const Color(0xFFFF3B30),
+                                    backgroundImage: _avatarUrl != null ? NetworkImage(_avatarUrl!) : null,
+                                    child: _avatarUrl == null
+                                        ? Text(
+                                            userName.isNotEmpty ? userName[0].toUpperCase() : 'U',
+                                            style: const TextStyle(color: Colors.white, fontSize: 32, fontWeight: FontWeight.bold),
+                                          )
+                                        : null,
+                                  ),
+                                  if (_uploadingAvatar)
+                                    const Positioned.fill(
+                                      child: CircleAvatar(
+                                        radius: 40,
+                                        backgroundColor: Colors.black54,
+                                        child: SizedBox(
+                                          width: 24, height: 24,
+                                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                                        ),
+                                      ),
+                                    ),
+                                  Positioned(
+                                    bottom: 0,
+                                    right: 0,
+                                    child: Container(
+                                      width: 28,
+                                      height: 28,
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xFFFF3B30),
+                                        shape: BoxShape.circle,
+                                        border: Border.all(color: const Color(0xFF0B0E14), width: 2),
+                                      ),
+                                      child: const Icon(Icons.camera_alt, color: Colors.white, size: 14),
+                                    ),
+                                  ),
+                                ],
                               ),
                             ),
                           ),
@@ -589,57 +693,119 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
   }
 
   Widget _buildRouteCard(SavedRoute route) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: const Color(0xFF1C1F26),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 44,
-            height: 44,
-            decoration: BoxDecoration(
-              color: const Color(0xFFFF3B30).withValues(alpha: 0.15),
-              borderRadius: BorderRadius.circular(12),
+    return GestureDetector(
+      onTap: () => _showRouteOptions(route),
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 12),
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: const Color(0xFF1C1F26),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 44,
+              height: 44,
+              decoration: BoxDecoration(
+                color: const Color(0xFFFF3B30).withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Center(child: Text(route.styleEmoji, style: const TextStyle(fontSize: 20))),
             ),
-            child: Center(child: Text(route.styleEmoji, style: const TextStyle(fontSize: 20))),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(route.name ?? route.style, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
+                  const SizedBox(height: 4),
+                  Text(
+                    '${route.formattedDistance} · ${route.formattedDuration}',
+                    style: const TextStyle(color: Colors.grey, fontSize: 12),
+                  ),
+                ],
+              ),
+            ),
+            const Icon(Icons.chevron_right, color: Colors.grey, size: 24),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showRouteOptions(SavedRoute route) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF1C1F26),
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (ctx) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 16),
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
               children: [
-                Text(route.name ?? route.style, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
-                const SizedBox(height: 4),
-                Text(
-                  '${route.formattedDistance} · ${route.formattedDuration}',
-                  style: const TextStyle(color: Colors.grey, fontSize: 12),
+                Container(
+                  width: 40, height: 4,
+                  decoration: BoxDecoration(color: Colors.grey[600], borderRadius: BorderRadius.circular(2)),
                 ),
+                const SizedBox(height: 16),
+                Text(route.name ?? route.style, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18)),
+                const SizedBox(height: 4),
+                Text('${route.formattedDistance} · ${route.formattedDuration}', style: const TextStyle(color: Colors.grey, fontSize: 13)),
+                const SizedBox(height: 20),
+                _buildOptionTile(Icons.play_circle_fill, 'Nochmal fahren', const Color(0xFFFF3B30), () {
+                  Navigator.pop(ctx);
+                  CruiseModePage.pendingRoute.value = route;
+                }),
+                _buildOptionTile(Icons.share, 'Als Post teilen', const Color(0xFF00E5FF), () {
+                  Navigator.pop(ctx);
+                  _shareRouteAsPost(route);
+                }),
+                _buildOptionTile(Icons.delete_outline, 'Route löschen', Colors.grey, () async {
+                  Navigator.pop(ctx);
+                  final confirmed = await showDialog<bool>(
+                    context: context,
+                    builder: (c) => AlertDialog(
+                      backgroundColor: const Color(0xFF1C1F26),
+                      title: const Text('Route löschen?', style: TextStyle(color: Colors.white)),
+                      content: const Text('Diese Route wird unwiderruflich gelöscht.', style: TextStyle(color: Colors.grey)),
+                      actions: [
+                        TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Abbrechen', style: TextStyle(color: Colors.grey))),
+                        TextButton(onPressed: () => Navigator.pop(c, true), child: const Text('Löschen', style: TextStyle(color: Color(0xFFFF3B30)))),
+                      ],
+                    ),
+                  );
+                  if (confirmed == true) {
+                    await SavedRoutesService.deleteRoute(route.id);
+                    _loadData();
+                  }
+                }),
               ],
             ),
           ),
-          // Play Button
-          IconButton(
-            icon: const Icon(Icons.play_circle_fill, color: Color(0xFFFF3B30), size: 32),
-            onPressed: () {
-              Navigator.push(context, MaterialPageRoute(builder: (_) => CruiseModePage(initialRoute: route)));
-            },
-          ),
-          // Delete
-          IconButton(
-            icon: Icon(Icons.delete_outline, color: Colors.grey[600], size: 20),
-            onPressed: () async {
-              await SavedRoutesService.deleteRoute(route.id);
-              _loadData();
-            },
-          ),
-        ],
-      ),
+        );
+      },
     );
+  }
+
+  Widget _buildOptionTile(IconData icon, String label, Color color, VoidCallback onTap) {
+    return ListTile(
+      leading: Icon(icon, color: color),
+      title: Text(label, style: const TextStyle(color: Colors.white, fontSize: 16)),
+      onTap: onTap,
+    );
+  }
+
+  void _shareRouteAsPost(SavedRoute route) {
+    final routeText = '${route.styleEmoji} ${route.name ?? route.style}\n'
+        '${route.formattedDistance} · ${route.formattedDuration}\n\n';
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => CreatePostPage(initialText: routeText, sharedRouteId: route.id)),
+    ).then((_) => _loadData());
   }
 
   Widget _buildBurgerMenu() {

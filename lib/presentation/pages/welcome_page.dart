@@ -51,8 +51,8 @@ class WelcomePage extends StatelessWidget {
 
                     // --- AUTO BILD (Im roten Bereich) ---
                     Container(
-                      height: 200,
-                      width: 320,
+                      height: size.height * 0.18,
+                      width: size.width * 0.75,
                       decoration: BoxDecoration(
                         color: Colors.black26,
                         borderRadius: BorderRadius.circular(20),
@@ -208,8 +208,8 @@ class WelcomePage extends StatelessWidget {
   Widget _buildSocialButton(String path) {
     return Container(
       padding: const EdgeInsets.all(12),
-      height: 85, // Größer
-      width: 85,  // Größer
+      height: 75,
+      width: 75,
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(15), 

@@ -15,20 +15,16 @@ class HomePage extends StatefulWidget {
 
 class _HomePageState extends State<HomePage> {
   int _selectedIndex = 0;
-  late final List<Widget> _pages;
   bool _isFullscreen = false;
+  // Refresh-Counter pro Tab — wird beim Tab-Wechsel erhöht,
+  // damit die Zielseite ihre Daten automatisch neu lädt.
+  int _refreshCounter = 0;
 
   @override
   void initState() {
     super.initState();
-    _pages = [
-      HomeContentPage(onTabChange: _onNavItemTapped),
-      const CommunityPage(),
-      const CruiseModePage(),
-      const AnalyticsPage(),
-      const ProfilePage(),
-    ];
     CruiseModePage.isFullscreen.addListener(_onFullscreenChanged);
+    CruiseModePage.pendingRoute.addListener(_onPendingRoute);
     // Dark-Style für Offline-Nutzung im Hintergrund cachen
     Future.delayed(const Duration(seconds: 2), () {
       OfflineMapService.instance.ensureStyleCached();
@@ -38,7 +34,17 @@ class _HomePageState extends State<HomePage> {
   @override
   void dispose() {
     CruiseModePage.isFullscreen.removeListener(_onFullscreenChanged);
+    CruiseModePage.pendingRoute.removeListener(_onPendingRoute);
     super.dispose();
+  }
+
+  void _onPendingRoute() {
+    if (CruiseModePage.pendingRoute.value != null && mounted) {
+      setState(() {
+        _selectedIndex = 2;
+        _refreshCounter++;
+      });
+    }
   }
 
   void _onFullscreenChanged() {
@@ -53,6 +59,7 @@ class _HomePageState extends State<HomePage> {
   void _onNavItemTapped(int index) {
     setState(() {
       _selectedIndex = index;
+      _refreshCounter++;
     });
   }
 
@@ -66,16 +73,26 @@ class _HomePageState extends State<HomePage> {
         bottom: !_isFullscreen,
         left: !_isFullscreen,
         right: !_isFullscreen,
-        child: IndexedStack(index: _selectedIndex, children: _pages),
+        child: IndexedStack(
+          index: _selectedIndex,
+          children: [
+            HomeContentPage(onTabChange: _onNavItemTapped, refreshKey: _selectedIndex == 0 ? _refreshCounter : 0),
+            CommunityPage(refreshKey: _selectedIndex == 1 ? _refreshCounter : 0),
+            const CruiseModePage(),
+            AnalyticsPage(refreshKey: _selectedIndex == 3 ? _refreshCounter : 0),
+            ProfilePage(refreshKey: _selectedIndex == 4 ? _refreshCounter : 0),
+          ],
+        ),
       ),
       bottomNavigationBar: _isFullscreen ? null : _buildBottomNav(),
     );
   }
 
   Widget _buildBottomNav() {
+    final bottomPadding = MediaQuery.of(context).padding.bottom;
     return Container(
-      height: 80,
-      padding: const EdgeInsets.only(bottom: 20),
+      height: 60 + bottomPadding,
+      padding: EdgeInsets.only(bottom: bottomPadding),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),

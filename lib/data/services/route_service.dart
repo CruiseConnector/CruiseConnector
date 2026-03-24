@@ -606,7 +606,17 @@ class RouteService {
     }
 
     // ── Selbstschneidende Schleifen aus der Route entfernen ───────────────────
-    coords = _removeRouteLoops(coords);
+    // Sicherheitscheck: Loop-Entfernung darf maximal 30% der Punkte entfernen.
+    // Mehr = Route wird zerstört (besonders in Stadtgebieten mit vielen Kreuzungen).
+    final coordsBefore = coords.length;
+    final coordsAfterLoops = _removeRouteLoops(coords);
+    final removedPercent = 1.0 - (coordsAfterLoops.length / coordsBefore);
+    if (removedPercent <= 0.30) {
+      coords = coordsAfterLoops;
+      debugPrint('[RouteService] Loop-Fix: ${coordsBefore - coords.length} Punkte entfernt (${(removedPercent * 100).toStringAsFixed(0)}%)');
+    } else {
+      debugPrint('[RouteService] Loop-Fix ÜBERSPRUNGEN: würde ${(removedPercent * 100).toStringAsFixed(0)}% der Route entfernen (${coordsBefore - coordsAfterLoops.length} von $coordsBefore Punkten)');
+    }
 
     // ── Maneuver-Indices komplett neu berechnen (nach allen Koordinaten-Änderungen) ─
     // Statt Offset-Korrektur: lat/lng-Position des Maneuvers in neuen Koordinaten suchen.
@@ -636,22 +646,34 @@ class RouteService {
       );
     }
 
-    // Dauer proportional zur Distanzänderung anpassen
+    // Sicherheitscheck: Wenn die bereinigte Route weniger als 50% der Mapbox-Distanz
+    // hat, wurde zu viel abgeschnitten — Originaldistanz/Dauer beibehalten.
     final origDist = result.distanceMeters ?? actualDistanceMeters;
     final distRatio = origDist > 0 ? actualDistanceMeters / origDist : 1.0;
-    final adjustedDuration = (result.durationSeconds ?? 0) * distRatio;
 
-    debugPrint('[RouteService] Snap/Loop-Fix: ${result.distanceMeters?.round()}m → ${actualDistanceMeters.round()}m '
-        '(${(actualDistanceMeters / 1000).toStringAsFixed(1)} km, ratio: ${distRatio.toStringAsFixed(2)})');
+    final double finalDistanceMeters;
+    final double? finalDuration;
+    if (distRatio < 0.50 && origDist > 10000) {
+      // Zu viel gekürzt — Originaldistanz beibehalten
+      debugPrint('[RouteService] Snap/Loop-Fix WARNUNG: Distanz fiel auf ${(distRatio * 100).toStringAsFixed(0)}% — behalte Mapbox-Original (${(origDist / 1000).toStringAsFixed(1)} km)');
+      finalDistanceMeters = origDist;
+      finalDuration = result.durationSeconds;
+    } else {
+      finalDistanceMeters = actualDistanceMeters;
+      final adjustedDuration = (result.durationSeconds ?? 0) * distRatio;
+      finalDuration = adjustedDuration > 0 ? adjustedDuration : result.durationSeconds;
+      debugPrint('[RouteService] Snap/Loop-Fix: ${origDist.round()}m → ${actualDistanceMeters.round()}m '
+          '(${(actualDistanceMeters / 1000).toStringAsFixed(1)} km, ratio: ${distRatio.toStringAsFixed(2)})');
+    }
 
     return RouteResult(
       geoJson: json.encode(newGeometry),
       geometry: newGeometry,
       coordinates: coords,
       maneuvers: finalManeuvers,
-      distanceMeters: actualDistanceMeters,
-      durationSeconds: adjustedDuration > 0 ? adjustedDuration : result.durationSeconds,
-      distanceKm: actualDistanceMeters / 1000.0,
+      distanceMeters: finalDistanceMeters,
+      durationSeconds: finalDuration,
+      distanceKm: finalDistanceMeters / 1000.0,
       speedLimits: result.speedLimits,
     );
   }

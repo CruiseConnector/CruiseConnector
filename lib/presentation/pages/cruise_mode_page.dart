@@ -21,8 +21,6 @@ import 'package:cruise_connect/presentation/widgets/cruise/cruise_navigation_inf
 import 'package:cruise_connect/presentation/widgets/cruise/cruise_setup_card.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/drive_control_panel.dart';
 import 'package:cruise_connect/data/services/gamification_service.dart';
-import 'package:cruise_connect/presentation/widgets/cruise/cruise_elevation_profile.dart';
-import 'package:cruise_connect/presentation/widgets/cruise/cruise_curve_warning.dart';
 
 class CruiseModePage extends StatefulWidget {
   const CruiseModePage({super.key, this.initialRoute});
@@ -33,6 +31,10 @@ class CruiseModePage extends StatefulWidget {
   /// Signalisiert dem Parent (HomePage), dass die Navigation im Fullscreen-Modus ist.
   /// Wenn true, soll die BottomNavigationBar ausgeblendet werden.
   static final ValueNotifier<bool> isFullscreen = ValueNotifier<bool>(false);
+
+  /// Wird gesetzt, wenn eine gespeicherte Route erneut gefahren werden soll.
+  /// HomePage hört darauf und wechselt zum Cruise-Tab.
+  static final ValueNotifier<SavedRoute?> pendingRoute = ValueNotifier<SavedRoute?>(null);
 
   @override
   State<CruiseModePage> createState() => _CruiseModePageState();
@@ -63,8 +65,6 @@ class _CruiseModePageState extends State<CruiseModePage> {
   bool _configCollapsed = false; // Config-Panel ein-/ausgeklappt
   bool _showRouteInfoBanner = false; // Route-Info Banner nach Generation
   int _cachedCurveCount = 0; // Vorab im Isolate berechnet
-  List<double> _elevationProfile = const []; // Höhenprofil der Route
-  DetectedCurve? _nextCurve; // Nächste erkannte Kurve voraus
 
   // ─────────────────────── Map State ─────────────────────────────────────────
   bool _isLoading = false;
@@ -124,12 +124,22 @@ class _CruiseModePageState extends State<CruiseModePage> {
     if (widget.initialRoute != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _loadSavedRoute(widget.initialRoute!));
     }
+    CruiseModePage.pendingRoute.addListener(_onPendingRoute);
+  }
+
+  void _onPendingRoute() {
+    final route = CruiseModePage.pendingRoute.value;
+    if (route != null) {
+      CruiseModePage.pendingRoute.value = null;
+      _loadSavedRoute(route);
+    }
   }
 
   @override
   void dispose() {
     _disposed = true;
     CruiseModePage.isFullscreen.value = false;
+    CruiseModePage.pendingRoute.removeListener(_onPendingRoute);
     _stopSimulation(restartLiveTracking: false);
     _positionSubscription?.cancel();
     _mapboxMap = null;
@@ -241,7 +251,7 @@ class _CruiseModePageState extends State<CruiseModePage> {
                     }
                   },
                   child: Container(
-                    height: 300,
+                    height: MediaQuery.of(context).size.height * 0.38,
                     decoration: BoxDecoration(
                       gradient: LinearGradient(
                         begin: Alignment.topCenter,
@@ -456,27 +466,6 @@ class _CruiseModePageState extends State<CruiseModePage> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                // Kurven-Vorwarnung (nur bei aktiver Navigation, wenn Kurve < 2km)
-                if (_nextCurve != null)
-                  Padding(
-                    padding: const EdgeInsets.only(left: 16, right: 16, bottom: 6),
-                    child: Align(
-                      alignment: Alignment.centerLeft,
-                      child: CruiseCurveWarning(curve: _nextCurve!),
-                    ),
-                  ),
-                // Höhenprofil
-                if (_elevationProfile.length > 2)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: CruiseElevationProfile(
-                      elevations: _elevationProfile,
-                      currentProgress: _fullRouteCoordinates.isNotEmpty
-                          ? _currentRouteIndex / (_fullRouteCoordinates.length - 1).clamp(1, double.infinity)
-                          : 0.0,
-                    ),
-                  ),
-                const SizedBox(height: 4),
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 16),
                   child: CruiseNavigationInfoPanel(
@@ -863,10 +852,15 @@ class _CruiseModePageState extends State<CruiseModePage> {
         );
       }
 
-      // Qualitätsprüfung: Wenn zu wenige Punkte, einmal neu versuchen
-      if (result.coordinates.length < 50 && distance >= 20) {
-        debugPrint('[CruiseMode] Route-Qualität schlecht (${result.coordinates.length} Punkte) — generiere neu');
-        if (_isRoundTrip) {
+      // Qualitätsprüfung: Route muss echte Straßengeometrie haben UND
+      // innerhalb des Distanzbandes liegen (±30% als Client-Toleranz)
+      final actualKm = result.distanceKm ?? 0;
+      final tooFewPoints = result.coordinates.length < 50 && distance >= 20;
+      final distanceTooFar = actualKm > distance * 1.5 || actualKm < distance * 0.3;
+
+      if ((tooFewPoints || distanceTooFar) && _isRoundTrip) {
+        debugPrint('[CruiseMode] Route-Qualität schlecht: ${result.coordinates.length} Punkte, ${actualKm.toStringAsFixed(1)} km (Ziel: $distance km) — bis zu 2 Retries');
+        for (var retry = 0; retry < 2; retry++) {
           result = await _routeService.generateRoundTrip(
             startPosition: startPosition,
             targetDistanceKm: distance,
@@ -874,6 +868,12 @@ class _CruiseModePageState extends State<CruiseModePage> {
             planningType: _planningType,
             targetLocation: targetLocation,
           );
+          final retryKm = result.distanceKm ?? 0;
+          if (result.coordinates.length >= 50 && retryKm <= distance * 1.5 && retryKm >= distance * 0.3) {
+            debugPrint('[CruiseMode] Retry ${retry + 1} erfolgreich: ${result.coordinates.length} Punkte, ${retryKm.toStringAsFixed(1)} km');
+            break;
+          }
+          debugPrint('[CruiseMode] Retry ${retry + 1} auch schlecht: ${result.coordinates.length} Punkte, ${retryKm.toStringAsFixed(1)} km');
         }
       }
 
@@ -916,8 +916,6 @@ class _CruiseModePageState extends State<CruiseModePage> {
       _remainingDistance = null;
       _remainingDuration = null;
       _cachedCurveCount = 0;
-      _elevationProfile = CruiseElevationProfile.estimateFromCoordinates(result.coordinates);
-      _nextCurve = null;
     });
     // Kurven async im Isolate berechnen (blockiert UI nicht)
     GamificationService.countCurvesAsync(result.coordinates).then((count) {
@@ -1279,11 +1277,6 @@ class _CruiseModePageState extends State<CruiseModePage> {
       _remainingDuration = dist / 13.89; // Fallback 50 km/h
     }
 
-    // Kurven-Vorwarnung aktualisieren
-    _nextCurve = CruiseCurveWarning.detectNextCurve(
-      coordinates: _fullRouteCoordinates,
-      currentIndex: _currentRouteIndex,
-    );
   }
 
   /// Berechnet eine neue Route von der aktuellen Position zurück zur Originalroute.

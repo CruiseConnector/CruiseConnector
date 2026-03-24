@@ -41,7 +41,7 @@ class _GroupDetailPageState extends State<GroupDetailPage> {
             slivers: [
               // 1. Premium Header mit Gradient
               SliverAppBar(
-                expandedHeight: 300,
+                expandedHeight: MediaQuery.of(context).size.height * 0.35,
                 pinned: true,
                 backgroundColor: const Color(0xFF0B0E14),
                 leading: Container(
@@ -128,11 +128,12 @@ class _GroupDetailPageState extends State<GroupDetailPage> {
 
                       // Stats Boxen
                       Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          _buildStatBox(Icons.straighten, "87 km", "Distanz"),
-                          _buildStatBox(Icons.timer, "1h 35m", "Dauer"),
-                          _buildStatBox(Icons.turn_right, "132", "Kurven"),
+                          Expanded(child: _buildStatBox(Icons.straighten, "87 km", "Distanz")),
+                          const SizedBox(width: 12),
+                          Expanded(child: _buildStatBox(Icons.timer, "1h 35m", "Dauer")),
+                          const SizedBox(width: 12),
+                          Expanded(child: _buildStatBox(Icons.turn_right, "132", "Kurven")),
                         ],
                       ),
 
@@ -192,36 +193,37 @@ class _GroupDetailPageState extends State<GroupDetailPage> {
   }
 
   Widget _buildStatBox(IconData icon, String value, String label) {
-    return Container(
-      width: 100,
-      height: 100,
-      decoration: BoxDecoration(
-        color: const Color(0xFF1C1F26),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white.withOpacity(0.05)),
-      ),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(icon, color: const Color(0xFFFF3B30), size: 28),
-          const SizedBox(height: 8),
-          Text(
-            value,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 16,
-              fontWeight: FontWeight.bold,
+    return AspectRatio(
+      aspectRatio: 1,
+      child: Container(
+        decoration: BoxDecoration(
+          color: const Color(0xFF1C1F26),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, color: const Color(0xFFFF3B30), size: 28),
+            const SizedBox(height: 8),
+            Text(
+              value,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+              ),
             ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            label,
-            style: const TextStyle(
-              color: Colors.grey,
-              fontSize: 12,
+            const SizedBox(height: 4),
+            Text(
+              label,
+              style: const TextStyle(
+                color: Colors.grey,
+                fontSize: 12,
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

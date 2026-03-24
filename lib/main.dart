@@ -6,6 +6,7 @@ import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:cruise_connect/core/constants.dart';
+import 'package:cruise_connect/data/services/carplay_service.dart';
 import 'package:cruise_connect/presentation/pages/auth_page.dart';
 
 void main() async {
@@ -17,6 +18,9 @@ void main() async {
     url: AppConstants.supabaseUrl,
     anonKey: AppConstants.supabaseAnonKey,
   );
+
+  // Initialize CarPlay bridge
+  CarPlayService.instance.init();
 
   runZonedGuarded(
     () => runApp(const MyApp()),

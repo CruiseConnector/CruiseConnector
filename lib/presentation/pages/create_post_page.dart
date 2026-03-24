@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
 
 class CreatePostPage extends StatefulWidget {
-  const CreatePostPage({super.key});
+  final String? initialText;
+  final String? sharedRouteId;
+  const CreatePostPage({super.key, this.initialText, this.sharedRouteId});
 
   @override
   State<CreatePostPage> createState() => _CreatePostPageState();
@@ -12,6 +14,14 @@ class _CreatePostPageState extends State<CreatePostPage> {
   final _controller = TextEditingController();
   bool _posting = false;
   String _visibility = 'public'; // 'public' oder 'followers'
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.initialText != null) {
+      _controller.text = widget.initialText!;
+    }
+  }
 
   @override
   void dispose() {

@@ -3,17 +3,25 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:cruise_connect/data/services/gamification_service.dart';
 import 'package:cruise_connect/data/services/saved_routes_service.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
-import 'package:cruise_connect/presentation/pages/route_join_page.dart';
+import 'package:cruise_connect/domain/models/saved_route.dart';
+import 'package:cruise_connect/presentation/pages/cruise_mode_page.dart';
 
 class HomeContentPage extends StatefulWidget {
   final Function(int)? onTabChange;
-  const HomeContentPage({super.key, this.onTabChange});
+  final int refreshKey;
+  const HomeContentPage({super.key, this.onTabChange, this.refreshKey = 0});
 
   @override
   State<HomeContentPage> createState() => _HomeContentPageState();
 }
 
 class _HomeContentPageState extends State<HomeContentPage> {
+  @override
+  void didUpdateWidget(HomeContentPage old) {
+    super.didUpdateWidget(old);
+    if (widget.refreshKey != old.refreshKey && widget.refreshKey > 0) _loadStats();
+  }
+
   int userLevel = 1;
   double levelProgress = 0;
   String levelName = 'Street Rookie';
@@ -25,6 +33,8 @@ class _HomeContentPageState extends State<HomeContentPage> {
   bool _loading = true;
   List<double> _weeklyChartData = List.filled(7, 0);
   int _followerCount = 0;
+  int _streakDays = 0;
+  List<SavedRoute> _recommendedRoutes = [];
 
   @override
   void initState() {
@@ -54,6 +64,35 @@ class _HomeContentPageState extends State<HomeContentPage> {
           .map((km) => maxKm > 0 ? (km / maxKm).clamp(0.0, 1.0) : 0.0)
           .toList();
 
+      // Streak berechnen (Tage in Folge gefahren)
+      int streak = 0;
+      if (routes.isNotEmpty) {
+        final today = DateTime(now.year, now.month, now.day);
+        // Alle Fahrtage sammeln
+        final driveDays = <DateTime>{};
+        for (final r in routes) {
+          driveDays.add(DateTime(r.createdAt.year, r.createdAt.month, r.createdAt.day));
+        }
+        // Von heute rückwärts zählen
+        var checkDay = today;
+        // Wenn heute noch nicht gefahren, starte ab gestern
+        if (!driveDays.contains(checkDay)) {
+          checkDay = checkDay.subtract(const Duration(days: 1));
+        }
+        while (driveDays.contains(checkDay)) {
+          streak++;
+          checkDay = checkDay.subtract(const Duration(days: 1));
+        }
+      }
+
+      // Empfohlene Routen laden (beliebte Routen anderer Nutzer)
+      List<SavedRoute> recommended = [];
+      try {
+        recommended = await SavedRoutesService.getPopularRoutes(limit: 5);
+      } catch (e) {
+        debugPrint('[Home] Empfohlene Routen fehlgeschlagen: $e');
+      }
+
       // Community stats
       final uid = Supabase.instance.client.auth.currentUser?.id;
       int followers = 0;
@@ -77,6 +116,8 @@ class _HomeContentPageState extends State<HomeContentPage> {
           badgeCount = result.earnedBadgeIds.length;
           _weeklyChartData = normalized;
           _followerCount = followers;
+          _streakDays = streak;
+          _recommendedRoutes = recommended;
           _loading = false;
         });
       }
@@ -104,33 +145,36 @@ class _HomeContentPageState extends State<HomeContentPage> {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      "Willkommen zurück",
-                      style: TextStyle(
-                        color: Color(0xFFA0AEC0),
-                        fontSize: 13,
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        "Willkommen zurück",
+                        style: TextStyle(
+                          color: Color(0xFFA0AEC0),
+                          fontSize: 13,
+                        ),
                       ),
-                    ),
-                    Text(
-                      "$userName!",
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 32,
-                        fontWeight: FontWeight.bold,
+                      Text(
+                        "$userName!",
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 32,
+                          fontWeight: FontWeight.bold,
+                        ),
+                        overflow: TextOverflow.ellipsis,
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
                 Stack(
                   alignment: Alignment.topRight,
                   children: [
-                    CircleAvatar(
+                    const CircleAvatar(
                       radius: 28,
-                      backgroundColor: const Color(0xFFFF3B30),
-                      child: const Icon(Icons.person, color: Colors.white, size: 32),
+                      backgroundColor: Color(0xFFFF3B30),
+                      child: Icon(Icons.person, color: Colors.white, size: 32),
                     ),
                     Container(
                       width: 24,
@@ -163,7 +207,7 @@ class _HomeContentPageState extends State<HomeContentPage> {
               decoration: BoxDecoration(
                 color: const Color(0xFF1C1F26),
                 borderRadius: BorderRadius.circular(24),
-                border: Border.all(color: const Color(0xFFFFFFFF).withOpacity(0.06), width: 1),
+                border: Border.all(color: const Color(0xFFFFFFFF).withValues(alpha: 0.06), width: 1),
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -173,27 +217,21 @@ class _HomeContentPageState extends State<HomeContentPage> {
                     style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold),
                   ),
                   const SizedBox(height: 12),
-                  // Stats List & Percentage
                   _loading
                     ? const Center(child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFFFF3B30))))
-                    : Row(
+                    : Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              _statRow("⚡", "$totalXp XP gesamt"),
-                              const SizedBox(height: 6),
-                              _statRow("🏎️", "${totalDistanceKm.toStringAsFixed(0)} Km gefahren"),
-                              const SizedBox(height: 6),
-                              _statRow("🛣️", "$totalRoutes Strecken"),
-                              const SizedBox(height: 6),
-                              _statRow("🏅", "$badgeCount Badges"),
-                            ],
-                          ),
+                          _statRow("⚡", "$totalXp XP gesamt"),
+                          const SizedBox(height: 6),
+                          _statRow("🏎️", "${totalDistanceKm.toStringAsFixed(0)} Km gefahren"),
+                          const SizedBox(height: 6),
+                          _statRow("🛣️", "$totalRoutes Strecken"),
+                          const SizedBox(height: 6),
+                          _statRow("🏅", "$badgeCount Badges"),
                         ],
                       ),
                   const SizedBox(height: 12),
-                  // Progress Bar with Gradient
                   Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -201,11 +239,14 @@ class _HomeContentPageState extends State<HomeContentPage> {
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         crossAxisAlignment: CrossAxisAlignment.end,
                         children: [
-                          Text(
-                            "Level $userLevel - $levelName",
-                            style: const TextStyle(
-                              color: Color(0xFFA0AEC0),
-                              fontSize: 12,
+                          Flexible(
+                            child: Text(
+                              "Level $userLevel - $levelName",
+                              style: const TextStyle(
+                                color: Color(0xFFA0AEC0),
+                                fontSize: 12,
+                              ),
+                              overflow: TextOverflow.ellipsis,
                             ),
                           ),
                           Text(
@@ -256,7 +297,7 @@ class _HomeContentPageState extends State<HomeContentPage> {
             ),
             const SizedBox(height: 10),
 
-            // Heute für dich Section
+            // Empfohlene Routen Section (echte Daten aus DB)
             const Text(
               "Heute für dich",
               style: TextStyle(
@@ -266,231 +307,250 @@ class _HomeContentPageState extends State<HomeContentPage> {
               ),
             ),
             const SizedBox(height: 10),
-            // InkWell Wrapper wie angefordert
-            Material(
-              color: const Color(0xFF1C1F26),
-              borderRadius: BorderRadius.circular(24),
-              child: InkWell(
-                borderRadius: BorderRadius.circular(24),
-                onTap: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (context) => const RouteJoinPage()),
-                  );
-                },
-                child: Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(24),
-                    border: Border.all(color: const Color(0xFFFFFFFF).withOpacity(0.06), width: 1),
-                  ),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Text(
-                              "Empfohlene Route",
-                              style: TextStyle(
-                                color: Color(0xFFA0AEC0),
-                                fontSize: 12,
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            const Text(
-                              "Alpine Rush",
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontSize: 16,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                            const SizedBox(height: 8),
-                            Row(
-                              children: [
-                                const Icon(Icons.star, color: Colors.amber, size: 16),
-                                const SizedBox(width: 4),
-                                const Text(
-                                  "4.9",
-                                  style: TextStyle(
-                                    color: Color(0xFFA0AEC0),
-                                    fontSize: 12,
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 4),
-                            Row(
-                              children: [
-                                const Icon(Icons.local_fire_department, color: Colors.orange, size: 16),
-                                const SizedBox(width: 4),
-                                const Text(
-                                  "23 Fahrer",
-                                  style: TextStyle(
-                                    color: Color(0xFFA0AEC0),
-                                    fontSize: 12,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ],
-                        ),
-                      ),
-                      // Quadratisches Map-Preview mit Radius 12
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(12),
-                        child: Container(
-                          width: 180, // Quadratisch
-                          height: 120,
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                              begin: Alignment.topLeft,
-                              end: Alignment.bottomRight,
-                              colors: [
-                                Colors.teal[900]!,
-                                Colors.teal[700]!,
-                              ],
-                            ),
-                          ),
-                          child: const Icon(
-                            Icons.map,
-                            color: Colors.white54,
-                            size: 30,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
+            if (_recommendedRoutes.isEmpty && !_loading)
+              _buildEmptyRecommendation()
+            else if (_recommendedRoutes.isNotEmpty)
+              SizedBox(
+                height: 140,
+                child: ListView.separated(
+                  scrollDirection: Axis.horizontal,
+                  itemCount: _recommendedRoutes.length,
+                  separatorBuilder: (_, __) => const SizedBox(width: 12),
+                  itemBuilder: (context, index) => _buildRecommendedRouteCard(_recommendedRoutes[index]),
                 ),
+              )
+            else
+              const SizedBox(height: 140, child: Center(child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFFFF3B30))))),
+            const SizedBox(height: 16),
+
+            // Community + Chart Section
+            SizedBox(
+              height: 200,
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Expanded(
+                    child: Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF1C1F26),
+                        borderRadius: BorderRadius.circular(24),
+                        border: Border.all(color: const Color(0xFFFFFFFF).withValues(alpha: 0.06), width: 1),
+                      ),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            "Community",
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                          _buildCommunityItem("$_followerCount Follower", "👥"),
+                          const SizedBox(height: 4),
+                          _buildCommunityItem("$totalRoutes Fahrten absolviert", "🔥"),
+                          const SizedBox(height: 4),
+                          _buildCommunityItem("Level $userLevel - $levelName", "📍"),
+                          const Spacer(),
+                          SizedBox(
+                            width: double.infinity,
+                            child: GestureDetector(
+                              onTap: () {
+                                  widget.onTabChange?.call(1);
+                              },
+                              child: Container(
+                                height: 35.0,
+                                decoration: BoxDecoration(
+                                  gradient: const LinearGradient(
+                                    colors: [Color(0xFFFF5252), Color(0xFFD32F2F)],
+                                    begin: Alignment.topLeft,
+                                    end: Alignment.bottomRight,
+                                  ),
+                                  borderRadius: BorderRadius.circular(30.0),
+                                ),
+                                alignment: Alignment.center,
+                                child: const Text(
+                                  "Beitreten",
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF1C1F26),
+                        borderRadius: BorderRadius.circular(24),
+                        border: Border.all(color: const Color(0xFFFFFFFF).withValues(alpha: 0.06), width: 1),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            "Letzte 7 Tage",
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                          Expanded(
+                            child: Row(
+                              children: [
+                                const RotatedBox(
+                                  quarterTurns: 3,
+                                  child: Text(
+                                    "Kilometer",
+                                    style: TextStyle(
+                                      color: Color(0xFFA0AEC0),
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                ),
+                                Expanded(
+                                  child: Row(
+                                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                                    crossAxisAlignment: CrossAxisAlignment.end,
+                                    children: [
+                                      _buildChartBar("Mo", _weeklyChartData[0]),
+                                      _buildChartBar("Di", _weeklyChartData[1]),
+                                      _buildChartBar("Mi", _weeklyChartData[2]),
+                                      _buildChartBar("Do", _weeklyChartData[3]),
+                                      _buildChartBar("Fr", _weeklyChartData[4]),
+                                      _buildChartBar("Sa", _weeklyChartData[5]),
+                                      _buildChartBar("So", _weeklyChartData[6]),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
             const SizedBox(height: 16),
 
-            // Community + Chart Section
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(
-                  child: Container(
-                    height: 180,
-                    padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF1C1F26),
-                      borderRadius: BorderRadius.circular(24),
-                      border: Border.all(color: const Color(0xFFFFFFFF).withOpacity(0.06), width: 1),
+            // Streak Widget
+            _buildStreakWidget(),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ── Empfohlene Route Card (echte Daten) ──────────────────────────────────
+
+  Widget _buildRecommendedRouteCard(SavedRoute route) {
+    final screenWidth = MediaQuery.of(context).size.width;
+    final cardWidth = screenWidth * 0.75;
+
+    // Farbschema basierend auf Stil
+    final colors = switch (route.style) {
+      'Kurvenjagd' => [const Color(0xFF1B5E20), const Color(0xFF388E3C)],
+      'Sport Mode' => [const Color(0xFFB71C1C), const Color(0xFFD32F2F)],
+      'Abendrunde' => [const Color(0xFF1A237E), const Color(0xFF3949AB)],
+      'Entdecker'  => [const Color(0xFFE65100), const Color(0xFFFB8C00)],
+      _            => [const Color(0xFF37474F), const Color(0xFF546E7A)],
+    };
+
+    return GestureDetector(
+      onTap: () {
+        CruiseModePage.pendingRoute.value = route;
+        widget.onTabChange?.call(2);
+      },
+      child: Container(
+        width: cardWidth,
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: colors,
+          ),
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(
+                    route.name ?? '${route.styleEmoji} ${route.style}',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
                     ),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text(
-                          "Community",
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        const SizedBox(height: 10),
-                        _buildCommunityItem("$_followerCount Follower", "👥"),
-                        const SizedBox(height: 4),
-                        _buildCommunityItem("$totalRoutes Fahrten absolviert", "🔥"),
-                        const SizedBox(height: 4),
-                        _buildCommunityItem("Level $userLevel - $levelName", "📍"),
-                        const SizedBox(height: 10),
-                        SizedBox(
-                          width: double.infinity, 
-                          child: GestureDetector(
-                            onTap: () {
-                                widget.onTabChange?.call(1);
-                            },
-                            child: Container(
-                              height: 35.0,
-                              decoration: BoxDecoration(
-                                gradient: const LinearGradient(
-                                  colors: [Color(0xFFFF5252), Color(0xFFD32F2F)],
-                                  begin: Alignment.topLeft,
-                                  end: Alignment.bottomRight,
-                                ),
-                                borderRadius: BorderRadius.circular(30.0),
-                              ),
-                              alignment: Alignment.center,
-                              child: const Text(
-                                "Beitreten",
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: Container(
-                    height: 180,
-                    padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF1C1F26),
-                      borderRadius: BorderRadius.circular(24),
-                      border: Border.all(color: const Color(0xFFFFFFFF).withOpacity(0.06), width: 1),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text(
-                          "Letzte 7 Tage",
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
-                            
-                          ),
-                        ),
-                        const SizedBox(height: 10),
-                        Row(
-                          children: [
-                            
-                            const RotatedBox(
-                              quarterTurns: 3,
-                              child: Text(
-                                "Kilometer",
-                                style: TextStyle(
-                                  color: Color(0xFFA0AEC0),
-                                  fontSize: 12,
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 0),
-                            Expanded(
-                              child: Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                                crossAxisAlignment: CrossAxisAlignment.end,
-                                children: [
-                                  _buildChartBar("Mo", _weeklyChartData[0]),
-                                  _buildChartBar("Di", _weeklyChartData[1]),
-                                  _buildChartBar("Mi", _weeklyChartData[2]),
-                                  _buildChartBar("Do", _weeklyChartData[3]),
-                                  _buildChartBar("Fr", _weeklyChartData[4]),
-                                  _buildChartBar("Sa", _weeklyChartData[5]),
-                                  _buildChartBar("So", _weeklyChartData[6]),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
+                  const SizedBox(height: 6),
+                  Text(
+                    '${route.formattedDistance} · ${route.formattedDuration}',
+                    style: const TextStyle(color: Colors.white70, fontSize: 13),
                   ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      if (route.rating != null) ...[
+                        const Icon(Icons.star, color: Colors.amber, size: 14),
+                        const SizedBox(width: 4),
+                        Text(
+                          '${route.rating}',
+                          style: const TextStyle(color: Colors.white70, fontSize: 12),
+                        ),
+                        const SizedBox(width: 12),
+                      ],
+                      Icon(
+                        route.isRoundTrip ? Icons.loop : Icons.arrow_forward,
+                        color: Colors.white54,
+                        size: 14,
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        route.isRoundTrip ? 'Rundkurs' : 'A nach B',
+                        style: const TextStyle(color: Colors.white54, fontSize: 12),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 12),
+            Container(
+              width: 56,
+              height: 56,
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Center(
+                child: Text(
+                  route.styleEmoji,
+                  style: const TextStyle(fontSize: 28),
                 ),
-              ],
+              ),
             ),
           ],
         ),
@@ -498,11 +558,131 @@ class _HomeContentPageState extends State<HomeContentPage> {
     );
   }
 
+  Widget _buildEmptyRecommendation() {
+    return GestureDetector(
+      onTap: () => widget.onTabChange?.call(2),
+      child: Container(
+        height: 140,
+        width: double.infinity,
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: const Color(0xFF1C1F26),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: const Color(0xFFFFFFFF).withValues(alpha: 0.06)),
+        ),
+        child: const Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.explore, color: Color(0xFFFF3B30), size: 32),
+            SizedBox(height: 10),
+            Text(
+              'Starte deine erste Fahrt!',
+              style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+            ),
+            SizedBox(height: 4),
+            Text(
+              'Empfohlene Routen erscheinen hier',
+              style: TextStyle(color: Color(0xFFA0AEC0), fontSize: 12),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ── Streak Widget ────────────────────────────────────────────────────────
+
+  Widget _buildStreakWidget() {
+    final hasStreak = _streakDays > 0;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1C1F26),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+          color: hasStreak
+              ? const Color(0xFFFF3B30).withValues(alpha: 0.3)
+              : const Color(0xFFFFFFFF).withValues(alpha: 0.06),
+        ),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 48,
+            height: 48,
+            decoration: BoxDecoration(
+              color: hasStreak
+                  ? const Color(0xFFFF3B30).withValues(alpha: 0.15)
+                  : const Color(0xFF2D3748),
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Center(
+              child: Text(
+                hasStreak ? '🔥' : '❄️',
+                style: const TextStyle(fontSize: 24),
+              ),
+            ),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  hasStreak ? '$_streakDays Tage Streak' : 'Kein aktiver Streak',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  hasStreak
+                      ? 'Weiter so! Fahre heute um den Streak zu halten.'
+                      : 'Starte eine Fahrt und beginne deinen Streak!',
+                  style: const TextStyle(color: Color(0xFFA0AEC0), fontSize: 12),
+                ),
+              ],
+            ),
+          ),
+          if (hasStreak)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  colors: [Color(0xFFFF5252), Color(0xFFD32F2F)],
+                ),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Text(
+                '${_streakDays}d',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 14,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  // ── Helper Widgets ───────────────────────────────────────────────────────
+
   Widget _statRow(String emoji, String text) {
     return Row(children: [
       Text(emoji, style: const TextStyle(fontSize: 14)),
       const SizedBox(width: 8),
-      Text(text, style: const TextStyle(color: Colors.white70, fontSize: 12)),
+      Flexible(
+        child: Text(
+          text,
+          style: const TextStyle(color: Colors.white70, fontSize: 12),
+          overflow: TextOverflow.ellipsis,
+        ),
+      ),
     ]);
   }
 
@@ -518,6 +698,7 @@ class _HomeContentPageState extends State<HomeContentPage> {
               color: Color(0xFFA0AEC0),
               fontSize: 11,
             ),
+            overflow: TextOverflow.ellipsis,
           ),
         ),
       ],
@@ -525,43 +706,48 @@ class _HomeContentPageState extends State<HomeContentPage> {
   }
 
   Widget _buildChartBar(String day, double value) {
-    const double barHeight = 110.0;
-    
-    return Column(
-      mainAxisAlignment: MainAxisAlignment.end,
-      children: [
-        Container(
-          width: 8,
-          height: barHeight,
-          decoration: BoxDecoration(
-            color: const Color(0xFF2D3748),
-            borderRadius: BorderRadius.circular(6),
-          ),
-          child: Align(
-            alignment: Alignment.bottomCenter,
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 2),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.end,
+        children: [
+          Expanded(
             child: Container(
               width: 8,
-              height: barHeight * value,
               decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  colors: [Color(0xFFFF5252), Color(0xFFD32F2F)],
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                ),
+                color: const Color(0xFF2D3748),
                 borderRadius: BorderRadius.circular(6),
+              ),
+              child: Align(
+                alignment: Alignment.bottomCenter,
+                child: FractionallySizedBox(
+                  heightFactor: value,
+                  child: Container(
+                    width: 8,
+                    decoration: BoxDecoration(
+                      gradient: const LinearGradient(
+                        colors: [Color(0xFFFF5252), Color(0xFFD32F2F)],
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                      ),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                  ),
+                ),
               ),
             ),
           ),
-        ),
-        Text(
-          day,
-          style: const TextStyle(
-            color: Color(0xFFA0AEC0),
-            fontSize: 10,
-            fontWeight: FontWeight.w500,
+          const SizedBox(height: 4),
+          Text(
+            day,
+            style: const TextStyle(
+              color: Color(0xFFA0AEC0),
+              fontSize: 10,
+              fontWeight: FontWeight.w500,
+            ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }

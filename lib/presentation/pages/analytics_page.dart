@@ -6,13 +6,20 @@ import 'package:cruise_connect/domain/models/saved_route.dart';
 import 'package:cruise_connect/domain/models/user_level.dart';
 
 class AnalyticsPage extends StatefulWidget {
-  const AnalyticsPage({super.key});
+  final int refreshKey;
+  const AnalyticsPage({super.key, this.refreshKey = 0});
 
   @override
   State<AnalyticsPage> createState() => _AnalyticsPageState();
 }
 
 class _AnalyticsPageState extends State<AnalyticsPage> with SingleTickerProviderStateMixin {
+  @override
+  void didUpdateWidget(AnalyticsPage old) {
+    super.didUpdateWidget(old);
+    if (widget.refreshKey != old.refreshKey && widget.refreshKey > 0) _loadData();
+  }
+
   late TabController _tabController;
   bool _loading = true;
 
@@ -26,12 +33,29 @@ class _AnalyticsPageState extends State<AnalyticsPage> with SingleTickerProvider
 
   List<double> _weeklyChartData = List.filled(7, 0);
   List<double> _weeklyRawKm = List.filled(7, 0);
+  List<double> _weeklyRawXp = List.filled(7, 0);
   final List<String> _weeklyLabels = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"];
+
+  // Streak
+  int _streakDays = 0;
+
+  // Monats-/Jahresvergleich
+  double _thisMonthKm = 0;
+  double _lastMonthKm = 0;
+  int _thisMonthRoutes = 0;
+  int _lastMonthRoutes = 0;
+  double _thisYearKm = 0;
+  double _lastYearKm = 0;
+  int _thisYearRoutes = 0;
+  int _lastYearRoutes = 0;
+
+  // Monatliche Chart-Daten (12 Monate)
+  List<double> _monthlyChartData = List.filled(12, 0);
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 3, vsync: this);
+    _tabController = TabController(length: 4, vsync: this);
     _loadData();
   }
 
@@ -50,17 +74,85 @@ class _AnalyticsPageState extends State<AnalyticsPage> with SingleTickerProvider
       final now = DateTime.now();
       final weekStart = now.subtract(Duration(days: now.weekday - 1));
       final weeklyKm = List<double>.filled(7, 0);
+      final weeklyXp = List<double>.filled(7, 0);
+
+      // Monats-/Jahresberechnung
+      final thisMonthStart = DateTime(now.year, now.month);
+      final lastMonthStart = DateTime(now.year, now.month - 1);
+      final thisYearStart = DateTime(now.year);
+      final lastYearStart = DateTime(now.year - 1);
+      final lastYearEnd = DateTime(now.year);
+
+      double thisMonthKm = 0, lastMonthKm = 0;
+      int thisMonthRoutes = 0, lastMonthRoutes = 0;
+      double thisYearKm = 0, lastYearKm = 0;
+      int thisYearRoutes = 0, lastYearRoutes = 0;
+
+      // Monatliche km (dieses Jahr)
+      final monthlyKm = List<double>.filled(12, 0);
+
+      // Streak-Berechnung
+      final driveDays = <DateTime>{};
+
       for (final r in routes) {
+        // Wöchentliche Daten
         if (r.createdAt.isAfter(weekStart)) {
           final dayIndex = r.createdAt.weekday - 1;
           if (dayIndex >= 0 && dayIndex < 7) {
             weeklyKm[dayIndex] += r.distanceKm;
+            final estCurves = (r.distanceKm / 5).round();
+            weeklyXp[dayIndex] += GamificationService.calculateRouteXp(
+              distanceKm: r.distanceKm, curves: estCurves, style: r.style,
+            );
           }
         }
+
+        // Monatsdaten
+        if (!r.createdAt.isBefore(thisMonthStart)) {
+          thisMonthKm += r.distanceKm;
+          thisMonthRoutes++;
+        } else if (!r.createdAt.isBefore(lastMonthStart) && r.createdAt.isBefore(thisMonthStart)) {
+          lastMonthKm += r.distanceKm;
+          lastMonthRoutes++;
+        }
+
+        // Jahresdaten
+        if (!r.createdAt.isBefore(thisYearStart)) {
+          thisYearKm += r.distanceKm;
+          thisYearRoutes++;
+          // Monatliche Aufschlüsselung
+          final monthIndex = r.createdAt.month - 1;
+          monthlyKm[monthIndex] += r.distanceKm;
+        } else if (!r.createdAt.isBefore(lastYearStart) && r.createdAt.isBefore(lastYearEnd)) {
+          lastYearKm += r.distanceKm;
+          lastYearRoutes++;
+        }
+
+        // Streaktage
+        driveDays.add(DateTime(r.createdAt.year, r.createdAt.month, r.createdAt.day));
       }
-      final maxKm = weeklyKm.reduce((a, b) => a > b ? a : b);
-      final normalizedWeekly = weeklyKm
-          .map((km) => maxKm > 0 ? (km / maxKm).clamp(0.0, 1.0) : 0.0)
+
+      // Streak zählen
+      int streak = 0;
+      final today = DateTime(now.year, now.month, now.day);
+      var checkDay = today;
+      if (!driveDays.contains(checkDay)) {
+        checkDay = checkDay.subtract(const Duration(days: 1));
+      }
+      while (driveDays.contains(checkDay)) {
+        streak++;
+        checkDay = checkDay.subtract(const Duration(days: 1));
+      }
+
+      // Normalisierung
+      final maxXp = weeklyXp.reduce((a, b) => a > b ? a : b);
+      final normalizedWeekly = weeklyXp
+          .map((xp) => maxXp > 0 ? (xp / maxXp).clamp(0.0, 1.0) : 0.0)
+          .toList();
+
+      final maxMonthlyKm = monthlyKm.reduce((a, b) => a > b ? a : b);
+      final normalizedMonthly = monthlyKm
+          .map((km) => maxMonthlyKm > 0 ? (km / maxMonthlyKm).clamp(0.0, 1.0) : 0.0)
           .toList();
 
       if (mounted) {
@@ -74,6 +166,17 @@ class _AnalyticsPageState extends State<AnalyticsPage> with SingleTickerProvider
           _allRoutes = routes;
           _weeklyChartData = normalizedWeekly;
           _weeklyRawKm = weeklyKm;
+          _weeklyRawXp = weeklyXp;
+          _streakDays = streak;
+          _thisMonthKm = thisMonthKm;
+          _lastMonthKm = lastMonthKm;
+          _thisMonthRoutes = thisMonthRoutes;
+          _lastMonthRoutes = lastMonthRoutes;
+          _thisYearKm = thisYearKm;
+          _lastYearKm = lastYearKm;
+          _thisYearRoutes = thisYearRoutes;
+          _lastYearRoutes = lastYearRoutes;
+          _monthlyChartData = normalizedMonthly;
           _loading = false;
         });
       }
@@ -103,6 +206,8 @@ class _AnalyticsPageState extends State<AnalyticsPage> with SingleTickerProvider
                         _buildHeader(),
                         const SizedBox(height: 20),
                         _buildLevelCard(),
+                        const SizedBox(height: 12),
+                        _buildStreakCard(),
                         const SizedBox(height: 16),
                         _buildStatsGrid(),
                         const SizedBox(height: 24),
@@ -122,18 +227,12 @@ class _AnalyticsPageState extends State<AnalyticsPage> with SingleTickerProvider
   }
 
   Widget _buildHeader() {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+    return const Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text("Analytics", style: TextStyle(fontSize: 32, fontWeight: FontWeight.bold, color: Colors.white)),
-            SizedBox(height: 4),
-            Text("Deine Fahr-Statistiken", style: TextStyle(fontSize: 14, color: Color(0xFFA0AEC0))),
-          ],
-        ),
-        IconButton(icon: const Icon(Icons.refresh, color: Colors.grey), onPressed: _loadData),
+        Text("Analytics", style: TextStyle(fontSize: 32, fontWeight: FontWeight.bold, color: Colors.white)),
+        SizedBox(height: 4),
+        Text("Deine Fahr-Statistiken", style: TextStyle(fontSize: 14, color: Color(0xFFA0AEC0))),
       ],
     );
   }
@@ -198,6 +297,71 @@ class _AnalyticsPageState extends State<AnalyticsPage> with SingleTickerProvider
     );
   }
 
+  // ── Streak Card ────────────────────────────────────────────────────────
+
+  Widget _buildStreakCard() {
+    final hasStreak = _streakDays > 0;
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1C1F26),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: hasStreak
+              ? const Color(0xFFFF3B30).withValues(alpha: 0.3)
+              : Colors.white.withValues(alpha: 0.05),
+        ),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 42,
+            height: 42,
+            decoration: BoxDecoration(
+              color: hasStreak
+                  ? const Color(0xFFFF3B30).withValues(alpha: 0.15)
+                  : const Color(0xFF2D3748),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Center(
+              child: Text(hasStreak ? '🔥' : '❄️', style: const TextStyle(fontSize: 22)),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  hasStreak ? '$_streakDays Tage Streak' : 'Kein aktiver Streak',
+                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15),
+                ),
+                Text(
+                  hasStreak
+                      ? 'Fahre heute um den Streak zu halten!'
+                      : 'Starte eine Fahrt für deinen Streak',
+                  style: const TextStyle(color: Color(0xFFA0AEC0), fontSize: 11),
+                ),
+              ],
+            ),
+          ),
+          if (hasStreak)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(colors: [Color(0xFFFF5252), Color(0xFFD32F2F)]),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Text(
+                '${_streakDays}d',
+                style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildRecentRoutesSection() {
     final recentRoutes = _allRoutes.take(5).toList();
     return Container(
@@ -236,7 +400,7 @@ class _AnalyticsPageState extends State<AnalyticsPage> with SingleTickerProvider
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(route.name ?? route.style, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 13)),
+                        Text(route.name ?? route.style, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 13), overflow: TextOverflow.ellipsis),
                         Text(
                           '${route.formattedDistance} · ${route.formattedDuration}',
                           style: const TextStyle(color: Color(0xFFA0AEC0), fontSize: 11),
@@ -299,20 +463,22 @@ class _AnalyticsPageState extends State<AnalyticsPage> with SingleTickerProvider
             indicatorSize: TabBarIndicatorSize.tab,
             labelColor: Colors.white,
             unselectedLabelColor: const Color(0xFFA0AEC0),
-            labelStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+            labelStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 11),
+            isScrollable: false,
             tabs: const [
-              Tab(icon: Icon(Icons.insights, size: 18), text: "Woche"),
-              Tab(icon: Icon(Icons.route, size: 18), text: "Routen"),
-              Tab(icon: Icon(Icons.emoji_events, size: 18), text: "Badges"),
+              Tab(icon: Icon(Icons.insights, size: 16), text: "Woche"),
+              Tab(icon: Icon(Icons.calendar_month, size: 16), text: "Monat"),
+              Tab(icon: Icon(Icons.route, size: 16), text: "Routen"),
+              Tab(icon: Icon(Icons.emoji_events, size: 16), text: "Badges"),
             ],
           ),
         ),
         const SizedBox(height: 16),
         SizedBox(
-          height: 420,
+          height: MediaQuery.of(context).size.height * 0.5,
           child: TabBarView(
             controller: _tabController,
-            children: [_buildOverviewTab(), _buildRoutesTab(), _buildBadgesTab()],
+            children: [_buildOverviewTab(), _buildMonthlyTab(), _buildRoutesTab(), _buildBadgesTab()],
           ),
         ),
       ],
@@ -321,6 +487,7 @@ class _AnalyticsPageState extends State<AnalyticsPage> with SingleTickerProvider
 
   Widget _buildOverviewTab() {
     final totalWeekKm = _weeklyRawKm.fold<double>(0, (a, b) => a + b);
+    final totalWeekXp = _weeklyRawXp.fold<double>(0, (a, b) => a + b);
     final weekRoutes = _allRoutes.where((r) {
       final weekStart = DateTime.now().subtract(Duration(days: DateTime.now().weekday - 1));
       return r.createdAt.isAfter(weekStart);
@@ -351,11 +518,173 @@ class _AnalyticsPageState extends State<AnalyticsPage> with SingleTickerProvider
             children: [
               _buildSummaryItem("Routen", '$weekRoutes', Icons.route),
               _buildSummaryItem("Km", totalWeekKm.toStringAsFixed(0), Icons.straighten),
-              _buildSummaryItem("Badges", '${_earnedBadges.length}/${app.Badge.all.length}', Icons.emoji_events),
+              _buildSummaryItem("XP", totalWeekXp.toStringAsFixed(0), Icons.bolt),
             ],
           ),
         ],
       ),
+    );
+  }
+
+  // ── Monats-/Jahresübersicht Tab ──────────────────────────────────────
+
+  Widget _buildMonthlyTab() {
+    final monthNames = ["Jan", "Feb", "Mär", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"];
+    final now = DateTime.now();
+    final currentMonthName = monthNames[now.month - 1];
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1C1F26),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text("Monats- & Jahresübersicht", style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 16),
+
+          // Monatsvergleich
+          _buildComparisonRow(
+            title: '$currentMonthName vs. Vormonat',
+            icon: Icons.calendar_today,
+            currentKm: _thisMonthKm,
+            previousKm: _lastMonthKm,
+            currentRoutes: _thisMonthRoutes,
+            previousRoutes: _lastMonthRoutes,
+          ),
+          const SizedBox(height: 12),
+
+          // Jahresvergleich
+          _buildComparisonRow(
+            title: '${now.year} vs. ${now.year - 1}',
+            icon: Icons.date_range,
+            currentKm: _thisYearKm,
+            previousKm: _lastYearKm,
+            currentRoutes: _thisYearRoutes,
+            previousRoutes: _lastYearRoutes,
+          ),
+          const SizedBox(height: 16),
+
+          // Monatliches Balkendiagramm
+          const Text("Km pro Monat (${2026})", style: TextStyle(color: Color(0xFFA0AEC0), fontSize: 12)),
+          const SizedBox(height: 12),
+          Expanded(
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: List.generate(12, (i) {
+                final isCurrentMonth = i == now.month - 1;
+                return _buildChartBar(monthNames[i], _monthlyChartData[i], isCurrentMonth);
+              }),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildComparisonRow({
+    required String title,
+    required IconData icon,
+    required double currentKm,
+    required double previousKm,
+    required int currentRoutes,
+    required int previousRoutes,
+  }) {
+    final kmDiff = previousKm > 0 ? ((currentKm - previousKm) / previousKm * 100) : (currentKm > 0 ? 100 : 0);
+    final routeDiff = previousRoutes > 0 ? ((currentRoutes - previousRoutes) / previousRoutes * 100) : (currentRoutes > 0 ? 100 : 0);
+    final kmUp = kmDiff >= 0;
+    final routeUp = routeDiff >= 0;
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0B0E14),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(icon, color: const Color(0xFFFF3B30), size: 16),
+              const SizedBox(width: 8),
+              Text(title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: _buildComparisonStat(
+                  label: 'Kilometer',
+                  current: '${currentKm.toStringAsFixed(0)} km',
+                  diff: '${kmUp ? '+' : ''}${kmDiff.toStringAsFixed(0)}%',
+                  isPositive: kmUp,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: _buildComparisonStat(
+                  label: 'Fahrten',
+                  current: '$currentRoutes',
+                  diff: '${routeUp ? '+' : ''}${routeDiff.toStringAsFixed(0)}%',
+                  isPositive: routeUp,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildComparisonStat({
+    required String label,
+    required String current,
+    required String diff,
+    required bool isPositive,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label, style: const TextStyle(color: Color(0xFFA0AEC0), fontSize: 10)),
+        const SizedBox(height: 2),
+        Row(
+          children: [
+            Text(current, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
+            const SizedBox(width: 6),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: (isPositive ? Colors.green : Colors.red).withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    isPositive ? Icons.arrow_upward : Icons.arrow_downward,
+                    color: isPositive ? Colors.green : Colors.red,
+                    size: 10,
+                  ),
+                  Text(
+                    diff,
+                    style: TextStyle(
+                      color: isPositive ? Colors.green : Colors.red,
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ],
     );
   }
 
@@ -383,7 +712,6 @@ class _AnalyticsPageState extends State<AnalyticsPage> with SingleTickerProvider
         itemCount: _allRoutes.length.clamp(0, 15),
         itemBuilder: (context, index) {
           final route = _allRoutes[index];
-          // XP für diese Route berechnen
           final estimatedCurves = (route.distanceKm / 5).round();
           final routeXp = GamificationService.calculateRouteXp(
             distanceKm: route.distanceKm,
@@ -403,7 +731,7 @@ class _AnalyticsPageState extends State<AnalyticsPage> with SingleTickerProvider
               ),
               const SizedBox(width: 12),
               Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text(route.name ?? route.style, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+                Text(route.name ?? route.style, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13), overflow: TextOverflow.ellipsis),
                 const SizedBox(height: 2),
                 Text('${route.formattedDistance} · ${route.formattedDuration} · $routeXp XP', style: const TextStyle(color: Colors.grey, fontSize: 11)),
               ])),
@@ -485,26 +813,36 @@ class _AnalyticsPageState extends State<AnalyticsPage> with SingleTickerProvider
   }
 
   Widget _buildChartBar(String label, double value, bool isHighlighted) {
-    return Column(mainAxisAlignment: MainAxisAlignment.end, children: [
-      Container(
-        width: 10, height: 140,
-        decoration: BoxDecoration(color: const Color(0xFF2D3748), borderRadius: BorderRadius.circular(6)),
-        child: Align(
-          alignment: Alignment.bottomCenter,
-          child: Container(
-            width: 10, height: 140 * value.clamp(0.0, 1.0),
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: isHighlighted ? [const Color(0xFFFF3B30), const Color(0xFFFF6B5B)] : [const Color(0xFF525252), const Color(0xFF3D3D3D)],
-                begin: Alignment.topCenter, end: Alignment.bottomCenter,
+    return Expanded(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 1),
+        child: Column(mainAxisAlignment: MainAxisAlignment.end, children: [
+          Expanded(
+            child: Container(
+              width: 10,
+              decoration: BoxDecoration(color: const Color(0xFF2D3748), borderRadius: BorderRadius.circular(6)),
+              child: Align(
+                alignment: Alignment.bottomCenter,
+                child: FractionallySizedBox(
+                  heightFactor: value.clamp(0.0, 1.0),
+                  child: Container(
+                    width: 10,
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: isHighlighted ? [const Color(0xFFFF3B30), const Color(0xFFFF6B5B)] : [const Color(0xFF525252), const Color(0xFF3D3D3D)],
+                        begin: Alignment.topCenter, end: Alignment.bottomCenter,
+                      ),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                  ),
+                ),
               ),
-              borderRadius: BorderRadius.circular(6),
             ),
           ),
-        ),
+          const SizedBox(height: 4),
+          Text(label, style: TextStyle(color: isHighlighted ? const Color(0xFFFF3B30) : const Color(0xFFA0AEC0), fontSize: 9, fontWeight: isHighlighted ? FontWeight.bold : FontWeight.normal)),
+        ]),
       ),
-      const SizedBox(height: 6),
-      Text(label, style: TextStyle(color: isHighlighted ? const Color(0xFFFF3B30) : const Color(0xFFA0AEC0), fontSize: 10, fontWeight: isHighlighted ? FontWeight.bold : FontWeight.normal)),
-    ]);
+    );
   }
 }

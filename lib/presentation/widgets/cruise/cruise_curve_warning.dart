@@ -94,58 +94,75 @@ class CruiseCurveWarning extends StatelessWidget {
     };
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
       decoration: BoxDecoration(
-        color: curve.color.withValues(alpha: 0.15),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: curve.color.withValues(alpha: 0.4)),
+        color: const Color(0xFF1C2028).withValues(alpha: 0.95),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: curve.color.withValues(alpha: 0.3)),
       ),
       child: Row(
-        mainAxisSize: MainAxisSize.min,
         children: [
-          // Richtungs-Icon
-          Icon(curve.icon, color: curve.color, size: 20),
-          const SizedBox(width: 8),
-          // Schärfe-Chevrons
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: List.generate(
-              chevronCount,
-              (i) => Padding(
-                padding: const EdgeInsets.only(right: 1),
-                child: Icon(
-                  curve.direction == 'left'
-                      ? Icons.chevron_left_rounded
-                      : Icons.chevron_right_rounded,
-                  color: curve.color,
-                  size: 14,
+          // Icon-Container mit farbigem Hintergrund
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: curve.color.withValues(alpha: 0.15),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(curve.icon, color: curve.color, size: 22),
+          ),
+          const SizedBox(width: 12),
+          // Label + Chevrons
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  curve.label,
+                  style: TextStyle(
+                    color: curve.color,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
-              ),
+                const SizedBox(height: 2),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: List.generate(
+                    chevronCount,
+                    (i) => Padding(
+                      padding: const EdgeInsets.only(right: 1),
+                      child: Icon(
+                        curve.direction == 'left'
+                            ? Icons.chevron_left_rounded
+                            : Icons.chevron_right_rounded,
+                        color: curve.color.withValues(alpha: 0.7),
+                        size: 16,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
-          const SizedBox(width: 6),
-          // Label + Distanz
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                curve.label,
-                style: TextStyle(
-                  color: curve.color,
-                  fontSize: 11,
-                  fontWeight: FontWeight.w700,
-                ),
+          // Distanz rechts
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(
+              color: curve.color.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Text(
+              distText,
+              style: TextStyle(
+                color: curve.color,
+                fontSize: 14,
+                fontWeight: FontWeight.w800,
               ),
-              Text(
-                'in $distText',
-                style: TextStyle(
-                  color: curve.color.withValues(alpha: 0.7),
-                  fontSize: 9,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ],
+            ),
           ),
         ],
       ),

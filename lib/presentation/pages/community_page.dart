@@ -6,13 +6,20 @@ import 'package:cruise_connect/presentation/pages/create_group_page.dart';
 import 'package:cruise_connect/presentation/pages/user_profile_page.dart';
 
 class CommunityPage extends StatefulWidget {
-  const CommunityPage({super.key});
+  final int refreshKey;
+  const CommunityPage({super.key, this.refreshKey = 0});
 
   @override
   State<CommunityPage> createState() => _CommunityPageState();
 }
 
 class _CommunityPageState extends State<CommunityPage> with SingleTickerProviderStateMixin {
+  @override
+  void didUpdateWidget(CommunityPage old) {
+    super.didUpdateWidget(old);
+    if (widget.refreshKey != old.refreshKey && widget.refreshKey > 0) _loadData();
+  }
+
   late TabController _tabController;
 
   bool _loading = true;
@@ -23,6 +30,8 @@ class _CommunityPageState extends State<CommunityPage> with SingleTickerProvider
   List<Map<String, dynamic>> _searchResults = [];
   int _unreadNotifications = 0;
   final _searchController = TextEditingController();
+  RealtimeChannel? _postsChannel;
+  RealtimeChannel? _notificationsChannel;
 
   @override
   void initState() {
@@ -32,13 +41,48 @@ class _CommunityPageState extends State<CommunityPage> with SingleTickerProvider
       if (!_tabController.indexIsChanging) setState(() {});
     });
     _loadData();
+    _setupRealtime();
   }
 
   @override
   void dispose() {
+    _postsChannel?.unsubscribe();
+    _notificationsChannel?.unsubscribe();
     _tabController.dispose();
     _searchController.dispose();
     super.dispose();
+  }
+
+  void _setupRealtime() {
+    final db = Supabase.instance.client;
+
+    // Echtzeit-Updates für Posts (neue Posts, Likes, Kommentare)
+    _postsChannel = db.channel('public:posts').onPostgresChanges(
+      event: PostgresChangeEvent.all,
+      schema: 'public',
+      table: 'posts',
+      callback: (payload) {
+        debugPrint('[Community] Realtime post update: ${payload.eventType}');
+        _loadData();
+      },
+    ).subscribe();
+
+    // Echtzeit-Updates für Benachrichtigungen
+    final uid = db.auth.currentUser?.id;
+    if (uid != null) {
+      _notificationsChannel = db.channel('public:notifications:$uid').onPostgresChanges(
+        event: PostgresChangeEvent.insert,
+        schema: 'public',
+        table: 'notifications',
+        filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'user_id', value: uid),
+        callback: (payload) {
+          debugPrint('[Community] New notification');
+          if (mounted) {
+            setState(() => _unreadNotifications++);
+          }
+        },
+      ).subscribe();
+    }
   }
 
   Future<void> _loadData() async {

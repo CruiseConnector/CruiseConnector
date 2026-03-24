@@ -128,13 +128,16 @@ class RouteCacheService {
       );
 
       // Qualitätsprüfung: Echte Straßenroute hat hunderte Punkte
+      // UND Distanz muss im 50km-Band liegen (±40% Toleranz für Cache)
       final actualKm = result.distanceKm ?? 0;
-      if (result.coordinates.length >= 50 && actualKm > 20) {
+      final hasGoodGeometry = result.coordinates.length >= 50;
+      final hasGoodDistance = actualKm >= 25 && actualKm <= 80; // 50km ±30km
+      if (hasGoodGeometry && hasGoodDistance) {
         _queue.add(_CachedRoute(result: result, style: style));
         _generationErrors = 0;
         debugPrint('[RouteCache] Route gecached: ${actualKm.toStringAsFixed(1)} km, ${result.coordinates.length} Punkte ($style)');
       } else {
-        debugPrint('[RouteCache] Route verworfen: nur ${result.coordinates.length} Punkte, ${actualKm.toStringAsFixed(1)} km');
+        debugPrint('[RouteCache] Route verworfen: ${result.coordinates.length} Punkte, ${actualKm.toStringAsFixed(1)} km (brauche ≥50 Punkte, 25-80 km)');
         _generationErrors++;
       }
     } catch (e) {

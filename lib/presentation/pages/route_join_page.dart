@@ -55,7 +55,7 @@ class RouteJoinPage extends StatelessWidget {
           
           // Zurück Button
           Positioned(
-            top: 50,
+            top: MediaQuery.of(context).padding.top + 8,
             left: 20,
             child: CircleAvatar(
               backgroundColor: Colors.black45,
@@ -118,11 +118,12 @@ class RouteJoinPage extends StatelessWidget {
 
                   // Stats Grid
                   Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      _buildStatItem(Icons.straighten, "87 km", "Distanz"),
-                      _buildStatItem(Icons.timer, "1h 36m", "Dauer"),
-                      _buildStatItem(Icons.turn_right, "132", "Kurven"),
+                      Expanded(child: _buildStatItem(Icons.straighten, "87 km", "Distanz")),
+                      const SizedBox(width: 12),
+                      Expanded(child: _buildStatItem(Icons.timer, "1h 36m", "Dauer")),
+                      const SizedBox(width: 12),
+                      Expanded(child: _buildStatItem(Icons.turn_right, "132", "Kurven")),
                     ],
                   ),
 
@@ -166,8 +167,7 @@ class RouteJoinPage extends StatelessWidget {
 
   Widget _buildStatItem(IconData icon, String value, String label) {
     return Container(
-      width: 100,
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 8),
       decoration: BoxDecoration(
         color: const Color(0xFF1C1F26),
         borderRadius: BorderRadius.circular(20),
