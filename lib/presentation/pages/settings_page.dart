@@ -35,7 +35,8 @@ class _SettingsPageState extends State<SettingsPage> {
           _loading = false;
         });
       }
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[Settings] Privacy laden fehlgeschlagen: $e');
       if (mounted) setState(() => _loading = false);
     }
   }
@@ -91,7 +92,8 @@ class _SettingsPageState extends State<SettingsPage> {
           ),
         );
       }
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[Settings] Privacy-Toggle fehlgeschlagen: $e');
       // Rollback
       if (mounted) {
         setState(() => _isPrivateAccount = !newValue);

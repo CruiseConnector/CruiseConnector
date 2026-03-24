@@ -71,7 +71,8 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
           _loading = false;
         });
       }
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[Profile] Daten laden fehlgeschlagen: $e');
       if (mounted) setState(() => _loading = false);
     }
   }
@@ -659,7 +660,7 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
             _buildMenuItem(Icons.settings, "Einstellungen",
                 onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const SettingsPage()))),
             _buildMenuItem(Icons.bookmark, "Gespeicherte Routen", onTap: () {
-              _tabController.animateTo(1);
+              _tabController.animateTo(2);
             }),
             _buildMenuItem(Icons.help_outline, "Hilfe & Support"),
             const Spacer(),

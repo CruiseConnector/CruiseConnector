@@ -60,7 +60,9 @@ class _HomeContentPageState extends State<HomeContentPage> {
       if (uid != null) {
         try {
           followers = await SocialService.getFollowerCount(uid);
-        } catch (_) {}
+        } catch (e) {
+          debugPrint('[Home] Follower-Count fehlgeschlagen: $e');
+        }
       }
 
       if (mounted) {
@@ -78,7 +80,8 @@ class _HomeContentPageState extends State<HomeContentPage> {
           _loading = false;
         });
       }
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[Home] Daten laden fehlgeschlagen: $e');
       if (mounted) setState(() => _loading = false);
     }
   }

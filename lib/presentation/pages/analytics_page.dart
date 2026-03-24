@@ -77,7 +77,8 @@ class _AnalyticsPageState extends State<AnalyticsPage> with SingleTickerProvider
           _loading = false;
         });
       }
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[Analytics] Daten laden fehlgeschlagen: $e');
       if (mounted) setState(() => _loading = false);
     }
   }
@@ -105,6 +106,10 @@ class _AnalyticsPageState extends State<AnalyticsPage> with SingleTickerProvider
                         const SizedBox(height: 16),
                         _buildStatsGrid(),
                         const SizedBox(height: 24),
+                        if (_allRoutes.isNotEmpty) ...[
+                          _buildRecentRoutesSection(),
+                          const SizedBox(height: 24),
+                        ],
                         _buildTabSection(),
                         const SizedBox(height: 120),
                       ],
@@ -191,6 +196,80 @@ class _AnalyticsPageState extends State<AnalyticsPage> with SingleTickerProvider
         ],
       ),
     );
+  }
+
+  Widget _buildRecentRoutesSection() {
+    final recentRoutes = _allRoutes.take(5).toList();
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1C1F26),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text('Letzte Fahrten', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+              Text('${recentRoutes.length} von $_totalRoutes', style: const TextStyle(color: Color(0xFFA0AEC0), fontSize: 12)),
+            ],
+          ),
+          const SizedBox(height: 12),
+          for (final route in recentRoutes)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Row(
+                children: [
+                  Container(
+                    width: 36, height: 36,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFF3B30).withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Center(child: Text(route.styleEmoji, style: const TextStyle(fontSize: 16))),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(route.name ?? route.style, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 13)),
+                        Text(
+                          '${route.formattedDistance} · ${route.formattedDuration}',
+                          style: const TextStyle(color: Color(0xFFA0AEC0), fontSize: 11),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Text(
+                    _formatDateShort(route.createdAt),
+                    style: const TextStyle(color: Color(0xFFA0AEC0), fontSize: 11),
+                  ),
+                  if (route.rating != null) ...[
+                    const SizedBox(width: 8),
+                    Row(children: [
+                      const Icon(Icons.star, color: Color(0xFFFFD700), size: 14),
+                      Text('${route.rating}', style: const TextStyle(color: Colors.white, fontSize: 12)),
+                    ]),
+                  ],
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  String _formatDateShort(DateTime date) {
+    final now = DateTime.now();
+    final diff = now.difference(date);
+    if (diff.inMinutes < 60) return '${diff.inMinutes} Min.';
+    if (diff.inHours < 24) return '${diff.inHours} Std.';
+    if (diff.inDays < 7) return '${diff.inDays} Tage';
+    return '${date.day}.${date.month}.';
   }
 
   Widget _buildStatsGrid() {

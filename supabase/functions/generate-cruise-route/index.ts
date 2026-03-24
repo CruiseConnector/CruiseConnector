@@ -7,9 +7,18 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts"
 // Environment variables
 const MAPBOX_ACCESS_TOKEN = Deno.env.get('MAPBOX_ACCESS_TOKEN')
 
-const corsHeaders = {
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+// Erlaubte Origins — nur die eigene App und Supabase-Domain
+const ALLOWED_ORIGINS = [
+    'https://tlcfaxvvqzobmzwvfnvb.supabase.co',
+]
+
+function getCorsHeaders(req?: Request) {
+    const origin = req?.headers.get('origin') ?? ''
+    const allowedOrigin = ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0]
+    return {
+        'Access-Control-Allow-Origin': allowedOrigin,
+        'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+    }
 }
 
 interface Coordinate {
@@ -246,7 +255,7 @@ async function getMapboxRoute(
 Deno.serve(async (req) => {
     // Handle CORS preflight
     if (req.method === 'OPTIONS') {
-        return new Response('ok', { headers: corsHeaders })
+        return new Response('ok', { headers: getCorsHeaders(req) })
     }
 
     try {
@@ -453,10 +462,9 @@ Deno.serve(async (req) => {
             }
         }
 
-        // Final clamp before returning to frontend, keeping distance inside target band.
-        const clampedDistanceKm = distanceConfig
-            ? Math.min(Math.max(actualDistanceKm, distanceConfig.minKm), distanceConfig.maxKm)
-            : actualDistanceKm
+        // Always use the ACTUAL Mapbox distance — never clamp.
+        // Clamping hid route-quality issues (e.g. 15 km route displayed as 45 km).
+        const finalDistanceKm = actualDistanceKm
 
         // Route wird NICHT in der Edge Function gespeichert.
         // Die App speichert via SavedRoutesService.saveRoute() MIT user_id.
@@ -474,13 +482,13 @@ Deno.serve(async (req) => {
                 route: routeForFrontend,
                 waypoints: finalWaypoints,
                 meta: {
-                    distance_km: clampedDistanceKm,
+                    distance_km: finalDistanceKm,
                         duration_min: route.duration / 60,
                         profile: mapboxProfile.replace('mapbox/', ''),
                         mode: mode
                 }
             }),
-            { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+            { headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' } }
         )
 
     } catch (error: any) {
@@ -489,7 +497,7 @@ Deno.serve(async (req) => {
             JSON.stringify({ error: error.message }),
             {
                 status: 400,
-                headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+                headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' }
             }
         )
     }

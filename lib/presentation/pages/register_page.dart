@@ -84,7 +84,8 @@ class _RegisterPageState extends State<RegisterPage> {
       );
     } on AuthException catch (e) {
       setState(() => _errorMsg = _translateError(e.message));
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[Register] Unerwarteter Fehler: $e');
       setState(() => _errorMsg = 'Registrierung fehlgeschlagen. Bitte erneut versuchen.');
     } finally {
       if (mounted) setState(() => _isLoading = false);

@@ -88,11 +88,15 @@ class RouteCacheService {
   /// Füllt einen freien Platz im Hintergrund nach.
   void _refillInBackground() {
     if (_isGenerating || _queue.length >= _queueSize) return;
+    // Flag sofort setzen um Race Condition zu verhindern
+    _isGenerating = true;
 
     // Fire-and-forget: Generiert im Hintergrund ohne zu blockieren
     Future(() async {
-      if (_isGenerating || _queue.length >= _queueSize) return;
-      _isGenerating = true;
+      if (_queue.length >= _queueSize) {
+        _isGenerating = false;
+        return;
+      }
       try {
         // Position aktualisieren falls verfügbar
         _lastPosition = await _getCurrentPosition() ?? _lastPosition;
@@ -157,7 +161,8 @@ class RouteCacheService {
           timeLimit: Duration(seconds: 10),
         ),
       );
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[RouteCache] GPS-Position fehlgeschlagen: $e');
       return null;
     }
   }

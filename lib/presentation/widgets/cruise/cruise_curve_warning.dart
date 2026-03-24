@@ -1,0 +1,235 @@
+import 'dart:math' as math;
+import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart' as geo;
+
+/// Schärfe-Stufe einer Kurve.
+enum CurveSeverity { gentle, moderate, sharp, hairpin }
+
+/// Eine erkannte Kurve auf der Route.
+class DetectedCurve {
+  const DetectedCurve({
+    required this.routeIndex,
+    required this.angleDegrees,
+    required this.severity,
+    required this.distanceMeters,
+    required this.direction, // 'left' oder 'right'
+  });
+
+  final int routeIndex;
+  final double angleDegrees;
+  final CurveSeverity severity;
+  final double distanceMeters; // Distanz vom aktuellen Standort
+  final String direction;
+
+  String get label {
+    switch (severity) {
+      case CurveSeverity.gentle:
+        return 'Leichte Kurve';
+      case CurveSeverity.moderate:
+        return 'Kurve';
+      case CurveSeverity.sharp:
+        return 'Scharfe Kurve';
+      case CurveSeverity.hairpin:
+        return 'Haarnadelkurve';
+    }
+  }
+
+  Color get color {
+    switch (severity) {
+      case CurveSeverity.gentle:
+        return const Color(0xFF34C759); // grün
+      case CurveSeverity.moderate:
+        return const Color(0xFFFF9500); // orange
+      case CurveSeverity.sharp:
+        return const Color(0xFFFF5722); // deep orange
+      case CurveSeverity.hairpin:
+        return const Color(0xFFFF3B30); // rot
+    }
+  }
+
+  IconData get icon {
+    if (direction == 'left') {
+      switch (severity) {
+        case CurveSeverity.hairpin:
+          return Icons.turn_sharp_left;
+        case CurveSeverity.sharp:
+          return Icons.turn_sharp_left;
+        default:
+          return Icons.turn_slight_left;
+      }
+    } else {
+      switch (severity) {
+        case CurveSeverity.hairpin:
+          return Icons.turn_sharp_right;
+        case CurveSeverity.sharp:
+          return Icons.turn_sharp_right;
+        default:
+          return Icons.turn_slight_right;
+      }
+    }
+  }
+}
+
+/// Kompakte Kurven-Vorwarnung die über dem Info-Panel angezeigt wird.
+class CruiseCurveWarning extends StatelessWidget {
+  const CruiseCurveWarning({
+    super.key,
+    required this.curve,
+  });
+
+  final DetectedCurve curve;
+
+  @override
+  Widget build(BuildContext context) {
+    final distText = curve.distanceMeters >= 1000
+        ? '${(curve.distanceMeters / 1000).toStringAsFixed(1).replaceAll('.', ',')} km'
+        : '${curve.distanceMeters.round()} m';
+
+    // Anzahl der Chevrons basierend auf Schärfe
+    final chevronCount = switch (curve.severity) {
+      CurveSeverity.gentle => 1,
+      CurveSeverity.moderate => 2,
+      CurveSeverity.sharp => 3,
+      CurveSeverity.hairpin => 4,
+    };
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: curve.color.withValues(alpha: 0.15),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: curve.color.withValues(alpha: 0.4)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Richtungs-Icon
+          Icon(curve.icon, color: curve.color, size: 20),
+          const SizedBox(width: 8),
+          // Schärfe-Chevrons
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: List.generate(
+              chevronCount,
+              (i) => Padding(
+                padding: const EdgeInsets.only(right: 1),
+                child: Icon(
+                  curve.direction == 'left'
+                      ? Icons.chevron_left_rounded
+                      : Icons.chevron_right_rounded,
+                  color: curve.color,
+                  size: 14,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 6),
+          // Label + Distanz
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                curve.label,
+                style: TextStyle(
+                  color: curve.color,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              Text(
+                'in $distText',
+                style: TextStyle(
+                  color: curve.color.withValues(alpha: 0.7),
+                  fontSize: 9,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Erkennt Kurven auf der Route voraus ab dem aktuellen Index.
+  /// Gibt die nächste relevante Kurve zurück (> 30° Richtungswechsel, < 2km entfernt).
+  static DetectedCurve? detectNextCurve({
+    required List<List<double>> coordinates,
+    required int currentIndex,
+    double maxDistanceMeters = 2000,
+  }) {
+    if (coordinates.length < 10 || currentIndex >= coordinates.length - 10) {
+      return null;
+    }
+
+    // Voraus-Scan: Suche Richtungswechsel in Segmenten
+    const segmentStep = 8; // Alle 8 Punkte prüfen (ca. 50-100m)
+    double cumDist = 0;
+    final scanEnd = math.min(currentIndex + 400, coordinates.length - segmentStep);
+
+    for (var i = currentIndex + segmentStep; i < scanEnd; i += segmentStep) {
+      // Distanz zum Segment berechnen
+      for (var d = i - segmentStep; d < i; d++) {
+        cumDist += geo.Geolocator.distanceBetween(
+          coordinates[d][1], coordinates[d][0],
+          coordinates[d + 1][1], coordinates[d + 1][0],
+        );
+      }
+
+      if (cumDist > maxDistanceMeters) break;
+
+      // Bearing vor und nach dem Punkt
+      final before = math.max(i - segmentStep, currentIndex);
+      final after = math.min(i + segmentStep, coordinates.length - 1);
+
+      final bearing1 = _bearing(
+        coordinates[before][1], coordinates[before][0],
+        coordinates[i][1], coordinates[i][0],
+      );
+      final bearing2 = _bearing(
+        coordinates[i][1], coordinates[i][0],
+        coordinates[after][1], coordinates[after][0],
+      );
+
+      var angleDiff = (bearing2 - bearing1).abs();
+      if (angleDiff > 180) angleDiff = 360 - angleDiff;
+
+      // Nur relevante Kurven (> 25°)
+      if (angleDiff < 25) continue;
+
+      // Richtung bestimmen (cross-product)
+      final cross = math.sin((bearing2 - bearing1) * math.pi / 180);
+      final direction = cross > 0 ? 'right' : 'left';
+
+      // Schärfe bestimmen
+      final severity = angleDiff >= 120
+          ? CurveSeverity.hairpin
+          : angleDiff >= 70
+              ? CurveSeverity.sharp
+              : angleDiff >= 40
+                  ? CurveSeverity.moderate
+                  : CurveSeverity.gentle;
+
+      return DetectedCurve(
+        routeIndex: i,
+        angleDegrees: angleDiff,
+        severity: severity,
+        distanceMeters: cumDist,
+        direction: direction,
+      );
+    }
+
+    return null;
+  }
+
+  static double _bearing(double lat1, double lon1, double lat2, double lon2) {
+    final dLon = (lon2 - lon1) * math.pi / 180;
+    final lat1R = lat1 * math.pi / 180;
+    final lat2R = lat2 * math.pi / 180;
+    final y = math.sin(dLon) * math.cos(lat2R);
+    final x = math.cos(lat1R) * math.sin(lat2R) -
+        math.sin(lat1R) * math.cos(lat2R) * math.cos(dLon);
+    return (math.atan2(y, x) * 180 / math.pi + 360) % 360;
+  }
+}

@@ -45,7 +45,8 @@ class _LoginPageState extends State<LoginPage> {
       );
     } on AuthException catch (e) {
       setState(() => _errorMsg = _translateError(e.message));
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[Login] Unerwarteter Fehler: $e');
       setState(() => _errorMsg = 'Login fehlgeschlagen. Bitte erneut versuchen.');
     } finally {
       if (mounted) setState(() => _isLoading = false);

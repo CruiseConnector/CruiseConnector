@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 /// Service für soziale Features: Posts, Follows, Gruppen, Notifications.
@@ -98,17 +99,21 @@ class SocialService {
 
       // Notification an Post-Autor
       try {
-        final post = await _db.from('posts').select('user_id').eq('id', postId).single();
-        final postAuthor = post['user_id'] as String;
-        if (postAuthor != uid) {
-          await _db.from('notifications').insert({
-            'user_id': postAuthor,
-            'from_user_id': uid,
-            'type': 'like',
-            'reference_id': postId,
-          });
+        final post = await _db.from('posts').select('user_id').eq('id', postId).maybeSingle();
+        if (post != null) {
+          final postAuthor = post['user_id'] as String;
+          if (postAuthor != uid) {
+            await _db.from('notifications').insert({
+              'user_id': postAuthor,
+              'from_user_id': uid,
+              'type': 'like',
+              'reference_id': postId,
+            });
+          }
         }
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[Social] Like-Notification fehlgeschlagen: $e');
+      }
       return true;
     }
   }
@@ -152,17 +157,21 @@ class SocialService {
 
     // Notification an Post-Autor
     try {
-      final post = await _db.from('posts').select('user_id').eq('id', postId).single();
-      final postAuthor = post['user_id'] as String;
-      if (postAuthor != uid) {
-        await _db.from('notifications').insert({
-          'user_id': postAuthor,
-          'from_user_id': uid,
-          'type': 'comment',
-          'reference_id': postId,
-        });
+      final post = await _db.from('posts').select('user_id').eq('id', postId).maybeSingle();
+      if (post != null) {
+        final postAuthor = post['user_id'] as String;
+        if (postAuthor != uid) {
+          await _db.from('notifications').insert({
+            'user_id': postAuthor,
+            'from_user_id': uid,
+            'type': 'comment',
+            'reference_id': postId,
+          });
+        }
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[Social] Comment-Notification fehlgeschlagen: $e');
+    }
   }
 
   static Future<void> deleteComment(String commentId, String postId) async {
@@ -193,17 +202,21 @@ class SocialService {
 
       // Notification an Post-Autor
       try {
-        final post = await _db.from('posts').select('user_id').eq('id', postId).single();
-        final postAuthor = post['user_id'] as String;
-        if (postAuthor != uid) {
-          await _db.from('notifications').insert({
-            'user_id': postAuthor,
-            'from_user_id': uid,
-            'type': 'repost',
-            'reference_id': postId,
-          });
+        final post = await _db.from('posts').select('user_id').eq('id', postId).maybeSingle();
+        if (post != null) {
+          final postAuthor = post['user_id'] as String;
+          if (postAuthor != uid) {
+            await _db.from('notifications').insert({
+              'user_id': postAuthor,
+              'from_user_id': uid,
+              'type': 'repost',
+              'reference_id': postId,
+            });
+          }
         }
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[Social] Repost-Notification fehlgeschlagen: $e');
+      }
       return true;
     }
   }
@@ -252,7 +265,9 @@ class SocialService {
         'from_user_id': uid,
         'type': 'follow',
       });
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[Social] Follow-Notification fehlgeschlagen: $e');
+    }
   }
 
   static Future<void> unfollowUser(String targetUserId) async {
@@ -478,7 +493,8 @@ class SocialService {
           .eq('id', userId)
           .maybeSingle();
       return profile;
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[Social] Profil-Abfrage fehlgeschlagen: $e');
       return null;
     }
   }

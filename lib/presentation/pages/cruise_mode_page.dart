@@ -3,10 +3,12 @@ import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show HapticFeedback;
 import 'package:geolocator/geolocator.dart' as geo;
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
 
 import 'package:cruise_connect/data/services/geocoding_service.dart';
+import 'package:cruise_connect/data/services/offline_map_service.dart';
 import 'package:cruise_connect/data/services/route_service.dart';
 import 'package:cruise_connect/data/services/saved_routes_service.dart';
 import 'package:cruise_connect/domain/models/mapbox_suggestion.dart';
@@ -17,9 +19,10 @@ import 'package:cruise_connect/presentation/widgets/cruise/cruise_completion_dia
 import 'package:cruise_connect/presentation/widgets/cruise/cruise_maneuver_indicator.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/cruise_navigation_info_panel.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/cruise_setup_card.dart';
-import 'package:cruise_connect/data/services/drive_control_panel.dart';
+import 'package:cruise_connect/presentation/widgets/cruise/drive_control_panel.dart';
 import 'package:cruise_connect/data/services/gamification_service.dart';
-import 'package:cruise_connect/data/services/route_cache_service.dart';
+import 'package:cruise_connect/presentation/widgets/cruise/cruise_elevation_profile.dart';
+import 'package:cruise_connect/presentation/widgets/cruise/cruise_curve_warning.dart';
 
 class CruiseModePage extends StatefulWidget {
   const CruiseModePage({super.key, this.initialRoute});
@@ -59,15 +62,18 @@ class _CruiseModePageState extends State<CruiseModePage> {
   RouteResult? _lastRouteResult;
   bool _configCollapsed = false; // Config-Panel ein-/ausgeklappt
   bool _showRouteInfoBanner = false; // Route-Info Banner nach Generation
-  static int _globalRouteAttempts = 0; // Zählt Generierungen über App-Lebensdauer
   int _cachedCurveCount = 0; // Vorab im Isolate berechnet
+  List<double> _elevationProfile = const []; // Höhenprofil der Route
+  DetectedCurve? _nextCurve; // Nächste erkannte Kurve voraus
 
   // ─────────────────────── Map State ─────────────────────────────────────────
   bool _isLoading = false;
   MapboxMap? _mapboxMap;
-  PolylineAnnotationManager? _greyAnnotationManager;
-  PolylineAnnotationManager? _polylineAnnotationManager;
   CircleAnnotationManager? _simPuckManager;
+  bool _routeSourceAdded = false; // Ob die GeoJSON Source+Layer bereits existiert
+  static const _routeSourceId = 'cruise-route-source';
+  static const _routeGlowLayerId = 'cruise-route-glow';
+  static const _routeLayerId = 'cruise-route-layer';
   ViewportState? _viewportState;
   bool _isMapStyleLoaded = false;
   String? _mapLoadError;
@@ -103,8 +109,6 @@ class _CruiseModePageState extends State<CruiseModePage> {
   double? _originalRouteDistance; // Ursprüngliche Gesamtdistanz (für Zeitberechnung)
   double? _originalRouteDuration; // Ursprüngliche Gesamtdauer (für Zeitberechnung)
   int _lastDrawnRouteIndex = 0; // Letzter Index bei dem die Route neu gezeichnet wurde
-  double _currentSpeedKmh = 0; // Live-Geschwindigkeit
-  int? _currentSpeedLimit; // Tempolimit der aktuellen Straße
 
   bool _disposed = false;
 
@@ -327,7 +331,10 @@ class _CruiseModePageState extends State<CruiseModePage> {
 
   Widget _buildRouteInfoBanner() {
     final result = _lastRouteResult!;
-    final distKm = result.distanceKm?.toStringAsFixed(1) ?? '--';
+    // Immer echte Mapbox-Distanz nutzen (distanceMeters), nicht distanceKm (war geclampt)
+    final distKm = result.distanceMeters != null
+        ? (result.distanceMeters! / 1000.0).toStringAsFixed(1)
+        : '--';
     final durationMin = result.durationSeconds != null ? (result.durationSeconds! / 60).round() : 0;
     final hours = durationMin ~/ 60;
     final mins = durationMin % 60;
@@ -339,7 +346,7 @@ class _CruiseModePageState extends State<CruiseModePage> {
       decoration: BoxDecoration(
         color: const Color(0xFF1C1F26),
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFFFF3B30).withValues(alpha: 0.3)),
+        border: Border.all(color: const Color(0xFFFF5722).withValues(alpha: 0.25)),
         boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.4), blurRadius: 12)],
       ),
       child: Column(
@@ -395,62 +402,6 @@ class _CruiseModePageState extends State<CruiseModePage> {
               distanceToManeuverMeters: _calculateDistanceToManeuver(),
             ),
           ),
-        // Geschwindigkeitsanzeige links
-        Positioned(
-          left: 16, bottom: 260,
-          child: Container(
-            width: 64, height: 64,
-            decoration: BoxDecoration(
-              color: const Color(0xFF1C1F26),
-              shape: BoxShape.circle,
-              border: Border.all(
-                color: _currentSpeedKmh > (_currentSpeedLimit ?? 999)
-                    ? const Color(0xFFFF3B30)
-                    : Colors.white.withValues(alpha: 0.2),
-                width: 2,
-              ),
-            ),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text(
-                  '${_currentSpeedKmh.round()}',
-                  style: TextStyle(
-                    color: _currentSpeedKmh > (_currentSpeedLimit ?? 999)
-                        ? const Color(0xFFFF3B30)
-                        : Colors.white,
-                    fontSize: 20,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                Text('km/h', style: TextStyle(color: Colors.white.withValues(alpha: 0.5), fontSize: 9)),
-              ],
-            ),
-          ),
-        ),
-        // Tempolimit-Anzeige (wenn verfügbar)
-        if (_currentSpeedLimit != null)
-          Positioned(
-            left: 16, bottom: 334,
-            child: Container(
-              width: 48, height: 48,
-              decoration: BoxDecoration(
-                color: Colors.white,
-                shape: BoxShape.circle,
-                border: Border.all(color: const Color(0xFFFF3B30), width: 3),
-              ),
-              child: Center(
-                child: Text(
-                  '$_currentSpeedLimit',
-                  style: const TextStyle(
-                    color: Colors.black,
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ),
-            ),
-          ),
         // FAB-Spalte rechts: Simulation + Zentrieren
         Positioned(
           right: 16, bottom: 260,
@@ -474,11 +425,22 @@ class _CruiseModePageState extends State<CruiseModePage> {
                     ),
                   ),
                 ),
+              // Route-Übersicht Button
+              Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: FloatingActionButton.small(
+                  heroTag: 'overview_fab',
+                  backgroundColor: const Color(0xFF2D3138),
+                  foregroundColor: Colors.white,
+                  onPressed: _showRouteOverview,
+                  child: const Icon(Icons.map_outlined, size: 20),
+                ),
+              ),
               // Zentrierungs-Button
               FloatingActionButton(
                 heroTag: 'recenter_map_fab',
                 backgroundColor: _isCameraLocked
-                    ? const Color(0xFFFF3B30)
+                    ? const Color(0xFFFF5722)
                     : const Color(0xFF2D3138),
                 foregroundColor: Colors.white,
                 onPressed: _toggleCameraLock,
@@ -494,6 +456,27 @@ class _CruiseModePageState extends State<CruiseModePage> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
+                // Kurven-Vorwarnung (nur bei aktiver Navigation, wenn Kurve < 2km)
+                if (_nextCurve != null)
+                  Padding(
+                    padding: const EdgeInsets.only(left: 16, right: 16, bottom: 6),
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: CruiseCurveWarning(curve: _nextCurve!),
+                    ),
+                  ),
+                // Höhenprofil
+                if (_elevationProfile.length > 2)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: CruiseElevationProfile(
+                      elevations: _elevationProfile,
+                      currentProgress: _fullRouteCoordinates.isNotEmpty
+                          ? _currentRouteIndex / (_fullRouteCoordinates.length - 1).clamp(1, double.infinity)
+                          : 0.0,
+                    ),
+                  ),
+                const SizedBox(height: 4),
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 16),
                   child: CruiseNavigationInfoPanel(
@@ -569,7 +552,9 @@ class _CruiseModePageState extends State<CruiseModePage> {
                   puckBearing: PuckBearing.HEADING,
                 ),
               );
-            } catch (_) {}
+            } catch (e) {
+              debugPrint('[CruiseMode] Location-Settings fehlgeschlagen: $e');
+            }
             // Route zeichnen oder Karte initialisieren (erst hier, weil Annotations den Style brauchen)
             try {
               if (_routeGeoJson != null) {
@@ -639,8 +624,7 @@ class _CruiseModePageState extends State<CruiseModePage> {
 
   Future<void> _onMapCreated(MapboxMap mapboxMap) async {
     _mapboxMap = mapboxMap;
-    _greyAnnotationManager = null;
-    _polylineAnnotationManager = null;
+    _routeSourceAdded = false;
     _safeSetState(() => _isMapStyleLoaded = false);
     // Route-Zeichnung wird in onStyleLoadedListener gemacht,
     // da Annotation Manager erst nach Style-Load funktionieren.
@@ -651,8 +635,7 @@ class _CruiseModePageState extends State<CruiseModePage> {
     _stopNavigationTracking();
     setState(() {
       _mapboxMap = null;
-      _greyAnnotationManager = null;
-      _polylineAnnotationManager = null;
+      _routeSourceAdded = false;
       _viewportState = null;
       _isMapStyleLoaded = false;
       _mapLoadError = null;
@@ -766,8 +749,8 @@ class _CruiseModePageState extends State<CruiseModePage> {
         );
         _userLocation = freshPosition;
         _setCameraToPosition(freshPosition);
-      } catch (_) {
-        // Letzter bekannter Standort reicht
+      } catch (e) {
+        debugPrint('[CruiseMode] Frische GPS-Position nicht verfügbar: $e');
       }
     } catch (e) {
       debugPrint('Konnte Karten-Position nicht setzen: $e');
@@ -782,7 +765,9 @@ class _CruiseModePageState extends State<CruiseModePage> {
           zoom: 13.0,
         ),
       );
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[CruiseMode] setCamera fehlgeschlagen: $e');
+    }
   }
 
   Future<geo.Position> _getStartCoordinates() async {
@@ -847,30 +832,28 @@ class _CruiseModePageState extends State<CruiseModePage> {
         }
       }
 
-      // Zuerst aus der Queue holen (vorberechnete Routen vom App-Start)
-      RouteResult? result = (distance == 50) ? RouteCacheService.instance.getNextRoute() : null;
-      if (result != null) {
-        debugPrint('[CruiseMode] Route aus Queue: ${result.distanceKm?.toStringAsFixed(1)} km, ${result.coordinates.length} Punkte');
-        _globalRouteAttempts = 3; // Warmup nicht mehr nötig
-      } else {
-        // Warmup: Erste 2 Routen intern verwerfen (oft fehlerhaft/kurz)
-        final skipCount = (_globalRouteAttempts < 2) ? (2 - _globalRouteAttempts) : 0;
-        for (var i = 0; i < skipCount + 1; i++) {
-          result = await _routeService.generateRoundTrip(
-            startPosition: startPosition,
-            targetDistanceKm: distance,
-            mode: _selectedStyle,
-            planningType: _planningType,
-            targetLocation: targetLocation,
-          );
-          _globalRouteAttempts++;
+      // Eine Route generieren — kein Warmup/Skip mehr (spart Mapbox Tokens)
+      RouteResult result;
+      if (!_isRoundTrip) {
+        double? destLat, destLng;
+        if (_selectedDestination != null) {
+          destLat = _selectedDestination!.latitude;
+          destLng = _selectedDestination!.longitude;
+        } else if (targetLocation != null) {
+          destLat = targetLocation['latitude'];
+          destLng = targetLocation['longitude'];
         }
-      }
-
-      // Qualitätsprüfung: Eine echte Straßenroute hat hunderte Punkte.
-      // Weniger als 50 Punkte = nur Waypoint-Verbindungen ohne Straßengeometrie.
-      if (result!.coordinates.length < 50 && distance >= 20) {
-        debugPrint('[CruiseMode] Route-Qualität schlecht (${result.coordinates.length} Punkte) — generiere neu');
+        if (destLat == null || destLng == null) {
+          throw Exception('Bitte wähle ein Ziel aus.');
+        }
+        result = await _routeService.generatePointToPoint(
+          startPosition: startPosition,
+          destinationLat: destLat,
+          destinationLng: destLng,
+          mode: _selectedStyle,
+          scenic: _selectedStyle != 'Standard',
+        );
+      } else {
         result = await _routeService.generateRoundTrip(
           startPosition: startPosition,
           targetDistanceKm: distance,
@@ -878,7 +861,20 @@ class _CruiseModePageState extends State<CruiseModePage> {
           planningType: _planningType,
           targetLocation: targetLocation,
         );
-        _globalRouteAttempts++;
+      }
+
+      // Qualitätsprüfung: Wenn zu wenige Punkte, einmal neu versuchen
+      if (result.coordinates.length < 50 && distance >= 20) {
+        debugPrint('[CruiseMode] Route-Qualität schlecht (${result.coordinates.length} Punkte) — generiere neu');
+        if (_isRoundTrip) {
+          result = await _routeService.generateRoundTrip(
+            startPosition: startPosition,
+            targetDistanceKm: distance,
+            mode: _selectedStyle,
+            planningType: _planningType,
+            targetLocation: targetLocation,
+          );
+        }
       }
 
       _applyRouteResult(result);
@@ -920,6 +916,8 @@ class _CruiseModePageState extends State<CruiseModePage> {
       _remainingDistance = null;
       _remainingDuration = null;
       _cachedCurveCount = 0;
+      _elevationProfile = CruiseElevationProfile.estimateFromCoordinates(result.coordinates);
+      _nextCurve = null;
     });
     // Kurven async im Isolate berechnen (blockiert UI nicht)
     GamificationService.countCurvesAsync(result.coordinates).then((count) {
@@ -984,6 +982,9 @@ class _CruiseModePageState extends State<CruiseModePage> {
     });
     CruiseModePage.isFullscreen.value = true;
 
+    // Kartenkacheln entlang der Route im Hintergrund cachen
+    OfflineMapService.instance.cacheRouteRegion(_fullRouteCoordinates);
+
     // Route wird erst nach Fahrtende gespeichert (mit Bewertung + XP-Sync)
 
     // _startNavigationTracking(); // Tracking startet erst bei Klick auf "Fahrt starten"
@@ -1026,29 +1027,90 @@ class _CruiseModePageState extends State<CruiseModePage> {
         .toList();
     if (activeCoordinates.length < 2) return;
 
-    try { await _greyAnnotationManager?.deleteAll(); } catch (_) {}
+    // GeoJSON FeatureCollection für die Source
+    final geoJsonData = json.encode({
+      'type': 'FeatureCollection',
+      'features': [
+        {
+          'type': 'Feature',
+          'geometry': {
+            'type': 'LineString',
+            'coordinates': activeCoordinates,
+          },
+          'properties': {},
+        }
+      ],
+    });
 
-    final routePositions = activeCoordinates.map((c) => Position(c[0], c[1])).toList();
     try {
-      _polylineAnnotationManager ??=
-          await _mapboxMap!.annotations.createPolylineAnnotationManager();
-      await _polylineAnnotationManager!.deleteAll();
-      await _polylineAnnotationManager!.create(PolylineAnnotationOptions(
-        geometry: LineString(coordinates: routePositions),
-        lineColor: Colors.red.toARGB32(),
-        lineWidth: 5.0,
-      ));
-    } catch (_) {
-      _polylineAnnotationManager =
-          await _mapboxMap!.annotations.createPolylineAnnotationManager();
-      await _polylineAnnotationManager!.create(PolylineAnnotationOptions(
-        geometry: LineString(coordinates: routePositions),
-        lineColor: Colors.red.toARGB32(),
-        lineWidth: 5.0,
-      ));
+      final style = _mapboxMap!.style;
+
+      if (_routeSourceAdded) {
+        // Source existiert schon → nur Daten aktualisieren (SUPER schnell, kein Flackern)
+        await style.setStyleSourceProperty(
+          _routeSourceId,
+          'data',
+          geoJsonData,
+        );
+      } else {
+        // Source + Layer erstmals anlegen
+        await style.addSource(GeoJsonSource(id: _routeSourceId, data: geoJsonData));
+        // Glow-Layer (breiterer, halbtransparenter Schein unter der Route)
+        await style.addLayer(LineLayer(
+          id: _routeGlowLayerId,
+          sourceId: _routeSourceId,
+          lineColor: const Color(0xFFFF5722).withValues(alpha: 0.3).toARGB32(),
+          lineWidth: 12.0,
+          lineCap: LineCap.ROUND,
+          lineJoin: LineJoin.ROUND,
+          lineBlur: 6.0,
+        ));
+        // Haupt-Routenlinie
+        await style.addLayer(LineLayer(
+          id: _routeLayerId,
+          sourceId: _routeSourceId,
+          lineColor: const Color(0xFFFF5722).toARGB32(),
+          lineWidth: 5.0,
+          lineCap: LineCap.ROUND,
+          lineJoin: LineJoin.ROUND,
+        ));
+        _routeSourceAdded = true;
+      }
+    } catch (e) {
+      // Fallback: Wenn Layer schon existiert (z.B. nach Style-Reload), entfernen und neu
+      debugPrint('[CruiseMode] Layer-Update fehlgeschlagen, versuche Neuanlage: $e');
+      try {
+        final style = _mapboxMap!.style;
+        try { await style.removeStyleLayer(_routeLayerId); } catch (_) {}
+        try { await style.removeStyleLayer(_routeGlowLayerId); } catch (_) {}
+        try { await style.removeStyleSource(_routeSourceId); } catch (_) {}
+        _routeSourceAdded = false;
+        await style.addSource(GeoJsonSource(id: _routeSourceId, data: geoJsonData));
+        await style.addLayer(LineLayer(
+          id: _routeGlowLayerId,
+          sourceId: _routeSourceId,
+          lineColor: const Color(0xFFFF5722).withValues(alpha: 0.3).toARGB32(),
+          lineWidth: 12.0,
+          lineCap: LineCap.ROUND,
+          lineJoin: LineJoin.ROUND,
+          lineBlur: 6.0,
+        ));
+        await style.addLayer(LineLayer(
+          id: _routeLayerId,
+          sourceId: _routeSourceId,
+          lineColor: const Color(0xFFFF5722).toARGB32(),
+          lineWidth: 5.0,
+          lineCap: LineCap.ROUND,
+          lineJoin: LineJoin.ROUND,
+        ));
+        _routeSourceAdded = true;
+      } catch (e2) {
+        debugPrint('[CruiseMode] Route-Layer Neuanlage fehlgeschlagen: $e2');
+      }
     }
 
     if (animateCamera && mounted) {
+      final routePositions = activeCoordinates.map((c) => Position(c[0], c[1])).toList();
       final routePoints = routePositions.map((p) => Point(coordinates: p)).toList();
       final safeTop = MediaQuery.of(context).padding.top;
       final safeBottom = MediaQuery.of(context).padding.bottom;
@@ -1065,7 +1127,9 @@ class _CruiseModePageState extends State<CruiseModePage> {
       await Future.delayed(const Duration(milliseconds: 100));
       try {
         await _mapboxMap!.flyTo(previewCamera, MapAnimationOptions(duration: 2500));
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[CruiseMode] Kamera-Vorschau fehlgeschlagen: $e');
+      }
     }
   }
 
@@ -1089,12 +1153,6 @@ class _CruiseModePageState extends State<CruiseModePage> {
   Future<void> _onLocationUpdate(geo.Position position) async {
     if (!mounted || _disposed) return;
     _userLocation = position;
-    // Live-Geschwindigkeit aus GPS (m/s → km/h)
-    if (position.speed >= 0) {
-      _currentSpeedKmh = position.speed * 3.6;
-    }
-    // Tempolimit basierend auf aktuellem Routenindex aktualisieren
-    _updateSpeedLimit();
     // Cursor deaktiviert – nur der blaue Mapbox-Puck wird angezeigt
     // await _updateVisibleCursor(position);
 
@@ -1142,12 +1200,12 @@ class _CruiseModePageState extends State<CruiseModePage> {
       // Verbleibende Distanz und Zeit live berechnen
       _updateRemainingDistanceAndDuration();
 
-      // Route nur alle 10 Index-Schritte neu zeichnen (Performance!)
-      if (_currentRouteIndex - _lastDrawnRouteIndex >= 10) {
+      // Route nur alle 15 Index-Schritte neu zeichnen (Performance!)
+      // WICHTIG: Immer nur 3km voraus zeigen (Sliding Window)
+      if (_currentRouteIndex - _lastDrawnRouteIndex >= 15) {
         _lastDrawnRouteIndex = _currentRouteIndex;
-        // Komplette verbleibende Route zeichnen (nicht abschneiden!)
-        // Kein User-Position-Snap → verhindert Punkte/Fragmente
-        final routeSlice = _fullRouteCoordinates.sublist(_currentRouteIndex);
+        final windowEnd = _findLookAheadIndex(_currentRouteIndex, 3000);
+        final routeSlice = _fullRouteCoordinates.sublist(_currentRouteIndex, windowEnd);
         _remainingRouteCoordinates = routeSlice;
         final clipped = {'type': 'LineString', 'coordinates': _remainingRouteCoordinates};
         _routeGeoJson = json.encode(clipped);
@@ -1172,24 +1230,20 @@ class _CruiseModePageState extends State<CruiseModePage> {
 
     final prevManeuver = _activeManeuverIndex;
     _updateActiveManeuver();
-    if (_activeManeuverIndex != prevManeuver) needsRebuild = true;
+    if (_activeManeuverIndex != prevManeuver) {
+      needsRebuild = true;
+      // Haptic Feedback wenn neues Manöver aktiv wird
+      HapticFeedback.mediumImpact();
+    }
+    // Leichtes Feedback kurz vor einem Manöver (< 150m)
+    final distToManeuver = _calculateDistanceToManeuver();
+    if (distToManeuver != null && distToManeuver < 150 && distToManeuver > 100) {
+      HapticFeedback.lightImpact();
+    }
 
     if (needsRebuild) _safeSetState(() {});
   }
 
-  void _updateSpeedLimit() {
-    if (_lastRouteResult == null || _lastRouteResult!.speedLimits.isEmpty) {
-      _currentSpeedLimit = null;
-      return;
-    }
-    for (final seg in _lastRouteResult!.speedLimits) {
-      if (_currentRouteIndex >= seg.startIndex && _currentRouteIndex < seg.endIndex) {
-        _currentSpeedLimit = seg.speedKmh;
-        return;
-      }
-    }
-    _currentSpeedLimit = null;
-  }
 
   void _updateRemainingDistanceAndDuration() {
     if (_fullRouteCoordinates.length < 2 || _currentRouteIndex >= _fullRouteCoordinates.length - 1) {
@@ -1206,24 +1260,30 @@ class _CruiseModePageState extends State<CruiseModePage> {
     }
     _remainingDistance = dist;
 
-    // Stabile Zeitberechnung: Mapbox-Originalzeit × verbleibender Anteil.
-    // Wie echte Navigation — die Zeit basiert auf der Routenplanung,
-    // nicht auf der aktuellen GPS-Geschwindigkeit.
+    // Zeitberechnung basiert auf DISTANZ-Anteil (nicht Index-Anteil),
+    // weil Mapbox-Koordinaten ungleichmäßig verteilt sind (mehr Punkte in Kurven).
     final origDur = _originalRouteDuration ?? _routeDuration;
-    if (origDur != null && origDur > 0 && _fullRouteCoordinates.length > 1) {
-      final remainingFraction = (_fullRouteCoordinates.length - 1 - _currentRouteIndex) /
-          (_fullRouteCoordinates.length - 1);
+    final origDist = _originalRouteDistance;
+    if (origDur != null && origDur > 0 && origDist != null && origDist > 0) {
+      // Verbleibende Distanz / Gesamtdistanz = korrekter Zeitanteil
+      final remainingFraction = (dist / origDist).clamp(0.0, 1.0);
       final newDuration = origDur * remainingFraction;
 
       // Sanft interpolieren damit es nicht springt
       if (_remainingDuration != null) {
-        _remainingDuration = _remainingDuration! + (newDuration - _remainingDuration!) * 0.2;
+        _remainingDuration = _remainingDuration! + (newDuration - _remainingDuration!) * 0.3;
       } else {
         _remainingDuration = newDuration;
       }
     } else {
       _remainingDuration = dist / 13.89; // Fallback 50 km/h
     }
+
+    // Kurven-Vorwarnung aktualisieren
+    _nextCurve = CruiseCurveWarning.detectNextCurve(
+      coordinates: _fullRouteCoordinates,
+      currentIndex: _currentRouteIndex,
+    );
   }
 
   /// Berechnet eine neue Route von der aktuellen Position zurück zur Originalroute.
@@ -1301,11 +1361,7 @@ class _CruiseModePageState extends State<CruiseModePage> {
       final rerouteManeuvers = rerouteResult.maneuvers;
       final allManeuvers = [...rerouteManeuvers, ...remainingManeuvers];
 
-      // WICHTIG: Alte Route komplett löschen bevor neue gezeichnet wird
-      // Verhindert das Stern/Fan-Muster aus alten Linien
-      try {
-        await _polylineAnnotationManager?.deleteAll();
-      } catch (_) {}
+      // Route wird über _drawRoute() automatisch aktualisiert (GeoJSON Source Update)
 
       _safeSetState(() {
         _fullRouteCoordinates = mergedCoordinates;
@@ -1415,7 +1471,57 @@ class _CruiseModePageState extends State<CruiseModePage> {
         ),
         MapAnimationOptions(duration: 900),
       );
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[CruiseMode] Recenter fehlgeschlagen: $e');
+    }
+  }
+
+  bool _isOverviewActive = false;
+
+  Future<void> _showRouteOverview() async {
+    if (_mapboxMap == null || _fullRouteCoordinates.length < 2) return;
+    if (_isOverviewActive) return;
+    _isOverviewActive = true;
+
+    // FollowPuck temporär deaktivieren
+    _safeSetState(() => _viewportState = null);
+
+    try {
+      final routePoints = _fullRouteCoordinates
+          .map((c) => Point(coordinates: Position(c[0], c[1])))
+          .toList();
+
+      final overviewCamera = await _mapboxMap!.cameraForCoordinatesPadding(
+        routePoints,
+        CameraOptions(pitch: 0, bearing: 0),
+        MbxEdgeInsets(top: 80, left: 40, bottom: 160, right: 40),
+        null, null,
+      );
+
+      await _mapboxMap!.flyTo(overviewCamera, MapAnimationOptions(duration: 1500));
+
+      // 4 Sekunden Übersicht zeigen, dann zurück zur Navigation
+      await Future.delayed(const Duration(seconds: 4));
+
+      if (!mounted || _disposed) return;
+
+      // Zurück zur Navigationsansicht
+      if (_isCameraLocked) {
+        _safeSetState(() {
+          _viewportState = const FollowPuckViewportState(
+            zoom: 16.0,
+            pitch: 45.0,
+            bearing: FollowPuckViewportStateBearingHeading(),
+          );
+        });
+      } else {
+        await _recenterMap();
+      }
+    } catch (e) {
+      debugPrint('[CruiseMode] Route-Übersicht fehlgeschlagen: $e');
+    }
+
+    _isOverviewActive = false;
   }
 
   Future<void> _activateNavigationCamera() async {
@@ -1423,7 +1529,8 @@ class _CruiseModePageState extends State<CruiseModePage> {
     geo.Position position;
     try {
       position = await geo.Geolocator.getCurrentPosition();
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[CruiseMode] getCurrentPosition fehlgeschlagen, verwende Fallback: $e');
       position = await _getStartCoordinates();
     }
     _userLocation = position;
@@ -1436,7 +1543,9 @@ class _CruiseModePageState extends State<CruiseModePage> {
             puckBearing: PuckBearing.HEADING,
           ),
         );
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[CruiseMode] Puck-Settings fehlgeschlagen: $e');
+      }
     }
     try {
       await _mapboxMap!.setCamera(
@@ -1446,7 +1555,9 @@ class _CruiseModePageState extends State<CruiseModePage> {
           bearing: position.heading.isFinite ? position.heading : 0.0,
         ),
       );
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[CruiseMode] Navigations-Kamera setzen fehlgeschlagen: $e');
+    }
     _safeSetState(() {
       _viewportState = const FollowPuckViewportState(
         zoom: 16.0,
@@ -1556,18 +1667,18 @@ class _CruiseModePageState extends State<CruiseModePage> {
       final next = _fullRouteCoordinates[math.min(_simulationIndex + 1, lastIndex)];
 
       // Simulations-Puck auf der Karte bewegen
-      try { await _updateSimulationPuck(current[0], current[1]); } catch (_) {}
+      try { await _updateSimulationPuck(current[0], current[1]); } catch (e) { debugPrint('[Sim] Puck-Update: $e'); }
 
       // Location Update
-      try { await _onLocationUpdate(_buildSimulatedPosition(current, next, speedMs)); } catch (_) {}
+      try { await _onLocationUpdate(_buildSimulatedPosition(current, next, speedMs)); } catch (e) { debugPrint('[Sim] Location-Update: $e'); }
 
       if (_simulationIndex >= lastIndex) {
         _stopSimulation(restartLiveTracking: false);
         _onRouteCompleted();
         return;
       }
-    } catch (_) {
-      // Simulation darf nie durch einen Fehler stoppen
+    } catch (e) {
+      debugPrint('[Sim] Simulationsschritt fehlgeschlagen: $e');
     } finally {
       _isSimulationStepRunning = false;
     }
@@ -1594,14 +1705,18 @@ class _CruiseModePageState extends State<CruiseModePage> {
         circleColor: const Color(0xFF007AFF).toARGB32(),
         circleOpacity: 1.0,
       ));
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[Sim] Puck zeichnen fehlgeschlagen: $e');
+    }
   }
 
   /// Entfernt den Simulations-Puck von der Karte.
   Future<void> _removeSimulationPuck() async {
     try {
       await _simPuckManager?.deleteAll();
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[Sim] Puck entfernen fehlgeschlagen: $e');
+    }
   }
 
   geo.Position _buildSimulatedPosition(List<double> current, List<double> next, double speedMs) {

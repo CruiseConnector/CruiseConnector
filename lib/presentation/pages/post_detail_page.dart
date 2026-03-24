@@ -44,7 +44,8 @@ class _PostDetailPageState extends State<PostDetailPage> {
     try {
       final comments = await SocialService.getComments(widget.postId);
       if (mounted) setState(() { _comments = comments; _loading = false; });
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[PostDetail] Kommentare laden fehlgeschlagen: $e');
       if (mounted) setState(() => _loading = false);
     }
   }
@@ -57,7 +58,9 @@ class _PostDetailPageState extends State<PostDetailPage> {
       await SocialService.addComment(widget.postId, text);
       _commentController.clear();
       await _loadComments();
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[PostDetail] Kommentar senden fehlgeschlagen: $e');
+    }
     if (mounted) setState(() => _sending = false);
   }
 

@@ -177,7 +177,9 @@ class GamificationService {
       if (profile != null && profile['badges'] != null) {
         previousBadges = List<String>.from(profile['badges'] as List);
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[Gamification] Badges-Abfrage fehlgeschlagen: $e');
+    }
 
     final newBadges = earned.where((b) => !previousBadges.contains(b)).toList();
 
@@ -190,8 +192,8 @@ class GamificationService {
         'total_routes': routes.length,
         'badges': earned,
       }).eq('id', userId);
-    } catch (_) {
-      // Spalten existieren vielleicht noch nicht — nicht kritisch
+    } catch (e) {
+      debugPrint('[Gamification] Profil-Update fehlgeschlagen: $e');
     }
 
     return GamificationResult(

@@ -143,9 +143,11 @@ class RouteService {
 
     final distanceRaw = (route['distance'] as num?)?.toDouble();
     final durationRaw = (route['duration'] as num?)?.toDouble();
-    final distanceKmRaw = (data['meta']?['distance_km'] as num?)?.toDouble();
+    // IMMER die echte Mapbox-Distanz nutzen (in Metern → km), NICHT meta.distance_km
+    // meta.distance_km war früher geclampt und zeigte falsche Werte
+    final distanceKmActual = distanceRaw != null ? distanceRaw / 1000.0 : null;
 
-    debugPrint('[RouteService] Route OK: ${coordinates.length} Punkte, ${distanceKmRaw?.toStringAsFixed(1)} km');
+    debugPrint('[RouteService] Route OK: ${coordinates.length} Punkte, ${distanceKmActual?.toStringAsFixed(1)} km (Mapbox: ${distanceRaw?.toStringAsFixed(0)} m)');
 
     return RouteResult(
       geoJson: json.encode(geometry),
@@ -154,7 +156,7 @@ class RouteService {
       maneuvers: maneuvers.where((m) => m.icon != Icons.u_turn_left).toList(),
       distanceMeters: distanceRaw,
       durationSeconds: durationRaw,
-      distanceKm: distanceKmRaw,
+      distanceKm: distanceKmActual,
       speedLimits: speedLimits,
     );
   }
@@ -205,9 +207,10 @@ class RouteService {
         // Depart überspringen (Start braucht kein Manöver)
         if (type == 'depart') continue;
 
-        // Prüfe Distanz zum vorherigen Maneuver (vermeide Kreise am Start)
         final distance = (step['distance'] as num?)?.toDouble() ?? 0;
-        if (distance < 100) continue; // Überspringe zu kurze Segmente (erhöht von 50 auf 100m)
+        // Nur "arrive" mit kurzer Distanz behalten, sonst zu kurze Steps
+        // ignorieren (vermeidet doppelte Manöver am Start)
+        if (distance < 15 && type != 'arrive') continue;
 
         final location = maneuver['location'];
         if (location is! List || location.length < 2) continue;
@@ -531,7 +534,9 @@ class RouteService {
           }
         }
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[RouteService] Speed-Limit-Extraktion fehlgeschlagen: $e');
+    }
     return segments;
   }
 
@@ -619,30 +624,51 @@ class RouteService {
     final newGeometry = Map<String, dynamic>.from(result.geometry);
     newGeometry['coordinates'] = coords;
 
+    // ── Distanz & Dauer aus den BEREINIGTEN Koordinaten neu berechnen ─────
+    // Nach Snapping + Loop-Removal können die Koordinaten deutlich kürzer sein
+    // als die originale Mapbox-Distanz. Ohne Neuberechnung zeigt die App z.B.
+    // 40 km an obwohl die bereinigte Route nur 6 km lang ist.
+    double actualDistanceMeters = 0.0;
+    for (var i = 0; i < coords.length - 1; i++) {
+      actualDistanceMeters += geo.Geolocator.distanceBetween(
+        coords[i][1], coords[i][0],
+        coords[i + 1][1], coords[i + 1][0],
+      );
+    }
+
+    // Dauer proportional zur Distanzänderung anpassen
+    final origDist = result.distanceMeters ?? actualDistanceMeters;
+    final distRatio = origDist > 0 ? actualDistanceMeters / origDist : 1.0;
+    final adjustedDuration = (result.durationSeconds ?? 0) * distRatio;
+
+    debugPrint('[RouteService] Snap/Loop-Fix: ${result.distanceMeters?.round()}m → ${actualDistanceMeters.round()}m '
+        '(${(actualDistanceMeters / 1000).toStringAsFixed(1)} km, ratio: ${distRatio.toStringAsFixed(2)})');
+
     return RouteResult(
       geoJson: json.encode(newGeometry),
       geometry: newGeometry,
       coordinates: coords,
       maneuvers: finalManeuvers,
-      distanceMeters: result.distanceMeters,
-      durationSeconds: result.durationSeconds,
-      distanceKm: result.distanceKm,
+      distanceMeters: actualDistanceMeters,
+      durationSeconds: adjustedDuration > 0 ? adjustedDuration : result.durationSeconds,
+      distanceKm: actualDistanceMeters / 1000.0,
       speedLimits: result.speedLimits,
     );
   }
 
   /// Entfernt Schleifen (Loops) aus einer Route.
   ///
-  /// Erkennt eine Schleife anhand von drei Kriterien:
-  ///   1. Direktabstand zwischen Punkt j und i < 80 m  (fängt auch breitere Haken)
-  ///   2. Weglänge j→i ist > 3,5× der Direktdistanz   (echter Umweg, kein normaler Bogen)
-  ///   3. Weglänge j→i < 1500 m                        (lokale Schleife, kein legitimer Umweg)
+  /// Erkennt eine Schleife wenn:
+  ///   1. Direktabstand zwischen Punkt j und i < 60 m
+  ///   2. Weglänge j→i ist > 4× der Direktdistanz (echter Umweg)
+  ///   3. Weglänge j→i < 1200 m (lokale Schleife, kein legitimer Umweg)
   ///
-  /// Kumulierte Distanzen werden vorab berechnet → O(n) pro Durchlauf.
+  /// WICHTIG: Entfernt nur den Loop-Abschnitt (j+1 bis i-1).
+  /// Punkt j und i liegen beide auf der originalen Straßengeometrie,
+  /// daher entsteht KEINE Luftlinie/Abkürzung durch Gelände.
   List<List<double>> _removeRouteLoops(List<List<double>> coords) {
     if (coords.length < 10) return coords;
 
-    // Kumulierte Streckenlängen vorberechnen
     final cum = <double>[0.0];
     for (var i = 1; i < coords.length; i++) {
       cum.add(cum.last +
@@ -656,24 +682,26 @@ class RouteService {
     final safeEnd = (coords.length * 0.85).round().clamp(10, coords.length);
 
     for (var i = 10; i < safeEnd; i++) {
-      final lookBack = math.max(0, i - 400); // 400 Punkte Rückblick (vorher 150)
-      for (var j = lookBack; j < i - 5; j++) {
+      final lookBack = math.max(0, i - 300);
+      for (var j = lookBack; j < i - 8; j++) {
         final directDist = geo.Geolocator.distanceBetween(
           coords[i][1], coords[i][0],
           coords[j][1], coords[j][0],
         );
-        if (directDist > 80.0) continue;          // zu weit weg, kein Loop
+        if (directDist > 60.0) continue;
 
         final pathLen = cum[i] - cum[j];
-        if (pathLen < directDist * 3.5) continue; // normaler Bogen, kein Umweg
-        if (pathLen > 1500) continue;             // zu lang = legitimer Umweg
+        if (pathLen < directDist * 4.0) continue;
+        if (pathLen > 1200) continue;
 
-        // Schleife gefunden → Kurzschluss: coords[j] direkt mit coords[i] verbinden
+        // Loop gefunden: Punkte j+1 bis i-1 sind der Umweg.
+        // Wir verbinden j direkt mit i — beide liegen auf der Originalstraße.
         final shortened = [
           ...coords.sublist(0, j + 1),
           ...coords.sublist(i),
         ];
-        return _removeRouteLoops(shortened); // rekursiv weitere Schleifen entfernen
+        debugPrint('[RouteService] Loop entfernt: ${i - j} Punkte, ${pathLen.toStringAsFixed(0)}m Umweg');
+        return _removeRouteLoops(shortened);
       }
     }
     return coords;

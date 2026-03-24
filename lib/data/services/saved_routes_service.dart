@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:cruise_connect/domain/models/route_result.dart';
@@ -35,15 +36,26 @@ class SavedRoutesService {
       'name': name,
       'style': style,
       'route_type': routeType,
-      'distance_target': distKm,
+      'distance_target': distKm.round(), // int-Spalte → runden
       'distance_actual': drivenKm ?? distKm,
-      'duration_seconds': result.durationSeconds,
+      'duration_seconds': result.durationSeconds?.round(),
       'geometry': result.geometry,
     };
     if (rating != null && rating > 0) row['rating'] = rating;
     if (drivenKm != null) row['driven_km'] = drivenKm;
 
-    await _db.from('routes').insert(row);
+    try {
+      await _db.from('routes').insert(row);
+    } on PostgrestException catch (e) {
+      // Fallback: Falls 'name' Spalte noch nicht existiert, ohne speichern
+      if (e.code == 'PGRST204' && e.message.contains('name')) {
+        debugPrint('[SavedRoutes] name-Spalte fehlt, speichere ohne name');
+        row.remove('name');
+        await _db.from('routes').insert(row);
+      } else {
+        rethrow;
+      }
+    }
   }
 
   // ─── Laden ────────────────────────────────────────────────────────────────

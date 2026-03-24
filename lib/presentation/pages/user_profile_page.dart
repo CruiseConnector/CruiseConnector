@@ -54,7 +54,8 @@ class _UserProfilePageState extends State<UserProfilePage> with SingleTickerProv
           _loading = false;
         });
       }
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[UserProfile] Daten laden fehlgeschlagen: $e');
       if (mounted) setState(() => _loading = false);
     }
   }
@@ -141,8 +142,8 @@ class _UserProfilePageState extends State<UserProfilePage> with SingleTickerProv
                                     } else {
                                       await SocialService.followUser(widget.userId);
                                     }
-                                  } catch (_) {
-                                    // Bei Fehler zurückrollen
+                                  } catch (e) {
+                                    debugPrint('[UserProfile] Follow/Unfollow fehlgeschlagen: $e');
                                     if (mounted) {
                                       setState(() {
                                         _isFollowing = wasFollowing;

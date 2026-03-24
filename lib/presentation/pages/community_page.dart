@@ -61,7 +61,8 @@ class _CommunityPageState extends State<CommunityPage> with SingleTickerProvider
           _loading = false;
         });
       }
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[Community] Daten laden fehlgeschlagen: $e');
       if (mounted) setState(() => _loading = false);
     }
   }

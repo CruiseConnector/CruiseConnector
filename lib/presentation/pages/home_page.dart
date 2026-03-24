@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:cruise_connect/data/services/route_cache_service.dart';
+import 'package:cruise_connect/data/services/offline_map_service.dart';
 import 'package:cruise_connect/presentation/pages/home_content_page.dart';
 import 'package:cruise_connect/presentation/pages/community_page.dart';
 import 'package:cruise_connect/presentation/pages/cruise_mode_page.dart';
@@ -29,9 +29,9 @@ class _HomePageState extends State<HomePage> {
       const ProfilePage(),
     ];
     CruiseModePage.isFullscreen.addListener(_onFullscreenChanged);
-    // Routen im Hintergrund vorberechnen — verzögert damit UI erst rendern kann
-    Future.delayed(const Duration(seconds: 3), () {
-      RouteCacheService.instance.preloadRoutes();
+    // Dark-Style für Offline-Nutzung im Hintergrund cachen
+    Future.delayed(const Duration(seconds: 2), () {
+      OfflineMapService.instance.ensureStyleCached();
     });
   }
 

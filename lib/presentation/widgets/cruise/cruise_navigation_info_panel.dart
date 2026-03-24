@@ -146,7 +146,9 @@ class CruiseNavigationInfoPanel extends StatelessWidget {
 
   static String _formatDistanceKm(double? rawDistance) {
     if (rawDistance == null || rawDistance <= 0) return '-- km';
-    final km = rawDistance > 1000 ? rawDistance / 1000 : rawDistance;
+    // rawDistance ist immer in Metern
+    final km = rawDistance / 1000;
+    if (km < 0.1) return '${rawDistance.round()} m';
     return '${km.toStringAsFixed(1).replaceAll('.', ',')} km';
   }
 }
