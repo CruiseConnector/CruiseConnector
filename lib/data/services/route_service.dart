@@ -153,7 +153,7 @@ class RouteService {
       geoJson: json.encode(geometry),
       geometry: geometry,
       coordinates: coordinates,
-      maneuvers: maneuvers.where((m) => m.icon != Icons.u_turn_left).toList(),
+      maneuvers: _filterManeuvers(maneuvers),
       distanceMeters: distanceRaw,
       durationSeconds: durationRaw,
       distanceKm: distanceKmActual,
@@ -239,6 +239,26 @@ class RouteService {
           instruction = _roundaboutInstruction(exitNumber, rawInstruction, modifier);
         } else if (type == 'arrive') {
           instruction = 'Ziel erreicht.';
+        } else if (type == 'end of road') {
+          // Straßenende: klare Abbiegeanweisung
+          final street = (step['name'] as String?) ?? '';
+          final dirText = modifier.contains('left') ? 'Links' : 'Rechts';
+          instruction = street.isNotEmpty
+              ? '$dirText auf $street abbiegen.'
+              : '$dirText abbiegen.';
+        } else if (type == 'new name' || type == 'continue') {
+          // Nur als echte Anweisung behalten wenn tatsächlich Richtungswechsel
+          final mod = modifier.toLowerCase();
+          if (mod == 'straight' || mod.isEmpty) {
+            instruction = _normalizeInstruction(rawInstruction, modifier);
+          } else {
+            // Echte Richtungsänderung bei Straßennamenwechsel
+            final street = (step['name'] as String?) ?? '';
+            final dirText = _directionText(mod);
+            instruction = street.isNotEmpty
+                ? '$dirText auf $street abbiegen.'
+                : '$dirText abbiegen.';
+          }
         } else {
           instruction = _normalizeInstruction(rawInstruction, modifier);
         }
@@ -282,6 +302,42 @@ class RouteService {
     return nearestIndex;
   }
 
+  /// Filtert problematische Manöver aus der Liste:
+  /// - U-Turns (beide Richtungen) — Mapbox generiert diese bei Rundkursen fälschlicherweise
+  /// - Zwischenziel-"Arrive" — nur das letzte "Ziel erreicht" behalten
+  /// - Kurze "continue/new name"-Manöver die eigentlich geradeaus sind
+  List<RouteManeuver> _filterManeuvers(List<RouteManeuver> maneuvers) {
+    if (maneuvers.isEmpty) return maneuvers;
+
+    // Finde den letzten Arrive-Index (= echtes Ziel)
+    int lastArriveIndex = -1;
+    for (var i = maneuvers.length - 1; i >= 0; i--) {
+      if (maneuvers[i].icon == Icons.flag) {
+        lastArriveIndex = i;
+        break;
+      }
+    }
+
+    final filtered = <RouteManeuver>[];
+    for (var i = 0; i < maneuvers.length; i++) {
+      final m = maneuvers[i];
+
+      // U-Turns komplett entfernen (beide Richtungen)
+      if (m.icon == Icons.u_turn_left || m.icon == Icons.u_turn_right) continue;
+
+      // Zwischenziel-Arrives entfernen (nur das LETZTE behalten)
+      if (m.icon == Icons.flag && i != lastArriveIndex) continue;
+
+      // "Geradeaus" Manöver entfernen die keinen echten Richtungswechsel darstellen
+      // (z.B. Straßennamenwechsel ohne Abbiegen)
+      if (m.icon == Icons.straight && m.instruction.contains('Weiterfahren')) continue;
+
+      filtered.add(m);
+    }
+
+    return filtered;
+  }
+
   // ────────────────────── Icon / Text Helpers ────────────────────────────────
 
   IconData _iconForManeuver(String type, String modifier) {
@@ -318,8 +374,20 @@ class RouteService {
       return Icons.fork_right;
     }
 
-    // Geradeaus-Typen
+    // Straßenende — MUSS abbiegen (wie eine Kreuzung)
+    if (typ == 'end of road') {
+      if (mod.contains('left')) return Icons.turn_left;
+      if (mod.contains('right')) return Icons.turn_right;
+      return Icons.turn_left;
+    }
+
+    // Geradeaus-Typen (Straßennamenwechsel, Weiterfahrt)
+    // Bei echten Richtungsänderungen trotzdem das richtige Abbiegesymbol zeigen
     if (typ == 'new name' || typ == 'continue' || typ == 'notification') {
+      if (mod == 'sharp left') return Icons.turn_sharp_left;
+      if (mod == 'sharp right') return Icons.turn_sharp_right;
+      if (mod == 'left') return Icons.turn_left;
+      if (mod == 'right') return Icons.turn_right;
       if (mod == 'slight left') return Icons.turn_slight_left;
       if (mod == 'slight right') return Icons.turn_slight_right;
       return Icons.straight;
@@ -360,6 +428,26 @@ class RouteService {
     }
   }
 
+  /// Gibt den deutschen Richtungstext für einen Modifier zurück.
+  String _directionText(String modifier) {
+    switch (modifier.toLowerCase().trim()) {
+      case 'left':
+        return 'Links';
+      case 'slight left':
+        return 'Leicht links';
+      case 'sharp left':
+        return 'Scharf links';
+      case 'right':
+        return 'Rechts';
+      case 'slight right':
+        return 'Leicht rechts';
+      case 'sharp right':
+        return 'Scharf rechts';
+      default:
+        return 'Weiter';
+    }
+  }
+
   String _roundaboutInstruction(int? exitNumber, String rawInstruction, String modifier) {
     if (exitNumber != null && exitNumber > 0) {
       final ordinal = _exitOrdinal(exitNumber);
@@ -386,6 +474,11 @@ class RouteService {
     final mod = modifier.toLowerCase();
     final typ = type.toLowerCase();
 
+    // Straßenende
+    if (typ == 'end of road') {
+      if (mod.contains('left')) return '$distText links abbiegen (Straßenende).';
+      return '$distText rechts abbiegen (Straßenende).';
+    }
     // Autobahnausfahrt
     if (typ == 'off ramp') {
       if (mod.contains('left')) return '$distText Ausfahrt links nehmen';
@@ -446,9 +539,13 @@ class RouteService {
     r = r.replaceAll(RegExp(r'\benter (?:the )?(?:roundabout|traffic circle|rotary)\b', caseSensitive: false), 'In den Kreisverkehr einfahren');
     r = r.replaceAll(RegExp(r'\bexit (?:the )?(?:roundabout|traffic circle|rotary)\b', caseSensitive: false), 'Kreisverkehr verlassen');
 
-    // Abbiegungen
-    r = r.replaceAll(RegExp(r'\bturn (?:slightly |sharp )?left\b', caseSensitive: false), 'Links abbiegen');
-    r = r.replaceAll(RegExp(r'\bturn (?:slightly |sharp )?right\b', caseSensitive: false), 'Rechts abbiegen');
+    // Abbiegungen — Reihenfolge wichtig: spezifischere Muster zuerst
+    r = r.replaceAll(RegExp(r'\bturn sharp left\b', caseSensitive: false), 'Scharf links abbiegen');
+    r = r.replaceAll(RegExp(r'\bturn sharp right\b', caseSensitive: false), 'Scharf rechts abbiegen');
+    r = r.replaceAll(RegExp(r'\bturn slight(?:ly)? left\b', caseSensitive: false), 'Leicht links abbiegen');
+    r = r.replaceAll(RegExp(r'\bturn slight(?:ly)? right\b', caseSensitive: false), 'Leicht rechts abbiegen');
+    r = r.replaceAll(RegExp(r'\bturn left\b', caseSensitive: false), 'Links abbiegen');
+    r = r.replaceAll(RegExp(r'\bturn right\b', caseSensitive: false), 'Rechts abbiegen');
     r = r.replaceAll(RegExp(r'\buturn\b', caseSensitive: false), 'Wenden');
 
     // Halten
@@ -542,7 +639,7 @@ class RouteService {
 
   String _announcementFromInstruction(String instruction, String modifier, double distance, {String type = ''}) {
     // Für spezielle Typen (Rampe, Arrive, Fork etc.) den typbasierten Text nutzen
-    if (type.isNotEmpty && type != 'turn' && type != 'end of road') {
+    if (type.isNotEmpty && type != 'turn') {
       final typeBased = _announcementForModifier(modifier, distance: distance, type: type);
       if (!typeBased.contains('geradeaus')) return typeBased;
     }

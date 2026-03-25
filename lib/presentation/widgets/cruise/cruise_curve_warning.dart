@@ -181,7 +181,8 @@ class CruiseCurveWarning extends StatelessWidget {
     }
 
     // Voraus-Scan: Suche Richtungswechsel in Segmenten
-    const segmentStep = 8; // Alle 8 Punkte prüfen (ca. 50-100m)
+    // Größerer Segmentabstand (12 Punkte ≈ 80-150m) reduziert Rauschen auf geraden Strecken
+    const segmentStep = 12;
     double cumDist = 0;
     final scanEnd = math.min(currentIndex + 400, coordinates.length - segmentStep);
 
@@ -196,9 +197,22 @@ class CruiseCurveWarning extends StatelessWidget {
 
       if (cumDist > maxDistanceMeters) break;
 
-      // Bearing vor und nach dem Punkt
-      final before = math.max(i - segmentStep, currentIndex);
-      final after = math.min(i + segmentStep, coordinates.length - 1);
+      // Bearing über längere Distanz berechnen (2× segmentStep),
+      // damit kleine GPS-Rauscher auf geraden Strecken nicht als Kurve erkannt werden
+      final before = math.max(i - segmentStep * 2, currentIndex);
+      final after = math.min(i + segmentStep * 2, coordinates.length - 1);
+
+      // Mindestabstand zwischen den Messpunkten prüfen — zu nah = unzuverlässig
+      final distBefore = geo.Geolocator.distanceBetween(
+        coordinates[before][1], coordinates[before][0],
+        coordinates[i][1], coordinates[i][0],
+      );
+      final distAfter = geo.Geolocator.distanceBetween(
+        coordinates[i][1], coordinates[i][0],
+        coordinates[after][1], coordinates[after][0],
+      );
+      // Wenn Messpunkte zu nah beieinander → Bearing unzuverlässig, überspringen
+      if (distBefore < 30 || distAfter < 30) continue;
 
       final bearing1 = _bearing(
         coordinates[before][1], coordinates[before][0],
@@ -212,19 +226,19 @@ class CruiseCurveWarning extends StatelessWidget {
       var angleDiff = (bearing2 - bearing1).abs();
       if (angleDiff > 180) angleDiff = 360 - angleDiff;
 
-      // Nur relevante Kurven (> 25°)
-      if (angleDiff < 25) continue;
+      // Nur echte Kurven (> 35°) — vorher 25° was zu viele Fehlalarme erzeugte
+      if (angleDiff < 35) continue;
 
       // Richtung bestimmen (cross-product)
       final cross = math.sin((bearing2 - bearing1) * math.pi / 180);
       final direction = cross > 0 ? 'right' : 'left';
 
-      // Schärfe bestimmen
-      final severity = angleDiff >= 120
+      // Schärfe bestimmen (erhöhte Schwellen um Fehlalarme zu reduzieren)
+      final severity = angleDiff >= 130
           ? CurveSeverity.hairpin
-          : angleDiff >= 70
+          : angleDiff >= 80
               ? CurveSeverity.sharp
-              : angleDiff >= 40
+              : angleDiff >= 50
                   ? CurveSeverity.moderate
                   : CurveSeverity.gentle;
 

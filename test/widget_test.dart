@@ -1,30 +1,85 @@
-// This is a basic Flutter widget test.
+// CruiseConnect – Widget Smoke Tests
 //
-// To perform an interaction with a widget in your test, use the WidgetTester
-// utility in the flutter_test package. For example, you can send tap and scroll
-// gestures. You can also use WidgetTester to find child widgets in the widget
-// tree, read text, and verify that the values of widget properties are correct.
+// Diese Tests prüfen die reinen UI-Widgets ohne Supabase-Verbindung.
+// Für echte Integrationstests wäre ein Supabase Mock notwendig.
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:cruise_connect/main.dart';
+import 'package:cruise_connect/presentation/widgets/my_button.dart';
+import 'package:cruise_connect/presentation/widgets/Textfeld.dart';
 
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(const MyApp());
+  group('MyButton', () {
+    testWidgets('rendert korrekt und reagiert auf Tap', (WidgetTester tester) async {
+      bool tapped = false;
 
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: MyButton(onTap: () => tapped = true),
+          ),
+        ),
+      );
 
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
-    await tester.pump();
+      // Button ist sichtbar
+      expect(find.byType(MyButton), findsOneWidget);
 
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
+      // Tap funktioniert
+      await tester.tap(find.byType(MyButton));
+      expect(tapped, isTrue);
+    });
+
+    testWidgets('onTap null ist sicher (kein Crash)', (WidgetTester tester) async {
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: Scaffold(
+            body: MyButton(onTap: null),
+          ),
+        ),
+      );
+      expect(find.byType(MyButton), findsOneWidget);
+      // Kein Crash erwartet beim Tap auf disabled Button
+      await tester.tap(find.byType(MyButton), warnIfMissed: false);
+    });
+  });
+
+  group('Textfeld', () {
+    testWidgets('zeigt Hint-Text korrekt an', (WidgetTester tester) async {
+      final controller = TextEditingController();
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Textfeld(
+              controller: controller,
+              hintText: 'E-Mail eingeben',
+              obscureText: false,
+            ),
+          ),
+        ),
+      );
+
+      expect(find.text('E-Mail eingeben'), findsOneWidget);
+    });
+
+    testWidgets('obscureText versteckt Eingabe', (WidgetTester tester) async {
+      final controller = TextEditingController();
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Textfeld(
+              controller: controller,
+              hintText: 'Passwort',
+              obscureText: true,
+            ),
+          ),
+        ),
+      );
+
+      final textField = tester.widget<TextField>(find.byType(TextField));
+      expect(textField.obscureText, isTrue);
+    });
   });
 }
