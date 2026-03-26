@@ -4,7 +4,9 @@
       "Bash(brew install:*)",
       "Bash(flutter build:*)",
       "Bash(gh auth:*)",
-      "Bash(git remote:*)"
+      "Bash(git remote:*)",
+      "WebFetch(domain:cruiseconnector.github.io)",
+      "Bash(git rm:*)"
     ]
   }
 }
