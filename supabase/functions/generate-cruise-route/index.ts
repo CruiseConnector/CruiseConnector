@@ -7,9 +7,10 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts"
 // Environment variables
 const MAPBOX_ACCESS_TOKEN = Deno.env.get('MAPBOX_ACCESS_TOKEN')
 
-// Erlaubte Origins — nur die eigene App und Supabase-Domain
+// Erlaubte Origins — eigene App, Supabase-Domain und GitHub Pages
 const ALLOWED_ORIGINS = [
     'https://tlcfaxvvqzobmzwvfnvb.supabase.co',
+    'https://cruiseconnector.github.io',
 ]
 
 function getCorsHeaders(req?: Request) {
