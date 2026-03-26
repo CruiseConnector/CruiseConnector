@@ -674,9 +674,9 @@ class _CruiseModePageState extends State<CruiseModePage> {
             markers: [
               Marker(
                 point: _userPosition!,
-                width: 60,
-                height: 60,
-                child: _buildAppleLocationDot(_userHeading),
+                width: 44,
+                height: 44,
+                child: _buildAppleLocationDot(_userHeading, isNavigating: true),
               ),
             ],
           ),
@@ -828,35 +828,43 @@ class _CruiseModePageState extends State<CruiseModePage> {
     );
   }
 
-  /// Apple-Style Standort-Punkt: blauer Kreis mit weißem Rand + Heading-Kegel.
-  Widget _buildAppleLocationDot(double headingDegrees) {
+  /// Apple-Style Standort-Punkt: blauer Pfeil der in Fahrtrichtung zeigt.
+  Widget _buildAppleLocationDot(double headingDegrees, {bool isNavigating = false}) {
+    if (isNavigating) {
+      // Navigation: Blauer Pfeil wie Apple Maps
+      return Transform.rotate(
+        angle: headingDegrees * (math.pi / 180.0),
+        child: SizedBox(
+          width: 44,
+          height: 44,
+          child: CustomPaint(
+            painter: _AppleNavArrowPainter(),
+          ),
+        ),
+      );
+    }
+    // Idle: Blauer Punkt mit Heading-Kegel wie Apple Maps
     return Stack(
       alignment: Alignment.center,
       children: [
-        // Heading-Kegel (halbtransparentes Dreieck das die Blickrichtung zeigt)
+        // Heading-Kegel
         Transform.rotate(
-          angle: headingDegrees * (3.14159265 / 180.0),
+          angle: headingDegrees * (math.pi / 180.0),
           child: CustomPaint(
             size: const Size(60, 60),
             painter: _HeadingConePainter(),
           ),
         ),
-        // Äußerer Glow
+        // Weißer Ring
         Container(
-          width: 24,
-          height: 24,
-          decoration: BoxDecoration(
-            color: const Color(0xFF007AFF).withValues(alpha: 0.15),
-            shape: BoxShape.circle,
-          ),
-        ),
-        // Weißer Rand
-        Container(
-          width: 18,
-          height: 18,
+          width: 20,
+          height: 20,
           decoration: const BoxDecoration(
             color: Colors.white,
             shape: BoxShape.circle,
+            boxShadow: [
+              BoxShadow(color: Color(0x40000000), blurRadius: 4, spreadRadius: 1),
+            ],
           ),
         ),
         // Blauer Kern
@@ -1350,12 +1358,13 @@ class _CruiseModePageState extends State<CruiseModePage> {
       }
     });
 
-    // Kamera folgt User-Position wenn Camera-Lock aktiv
+    // Kamera folgt User-Position + Rotation wenn Camera-Lock aktiv
     if (_isCameraLocked && _mapReady) {
       try {
-        _mapController.move(
+        _mapController.moveAndRotate(
           LatLng(position.latitude, position.longitude),
           16.0,
+          -_userHeading, // Karte dreht sich mit der Fahrtrichtung (Norden = oben wenn heading=0)
         );
       } catch (e) {
         debugPrint('[CruiseMode] Kamera-Folgen fehlgeschlagen: $e');
@@ -2112,25 +2121,62 @@ class _CruiseModePageState extends State<CruiseModePage> {
   }
 }
 
-/// Apple-Style Heading-Kegel: halbtransparentes blaues Dreieck nach oben.
+/// Apple-Style Heading-Kegel (Idle-Marker): halbtransparenter blauer Fächer.
 class _HeadingConePainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final paint = Paint()
-      ..color = const Color(0xFF007AFF).withValues(alpha: 0.25)
+      ..color = const Color(0xFF007AFF).withValues(alpha: 0.18)
       ..style = PaintingStyle.fill;
 
     final cx = size.width / 2;
     final cy = size.height / 2;
 
-    // dart:ui Path (nicht flutter_map Path)
     final p = ui.Path()
-      ..moveTo(cx, cy - 28) // Spitze nach oben
-      ..lineTo(cx - 10, cy - 4)
-      ..lineTo(cx + 10, cy - 4)
+      ..moveTo(cx, cy)
+      ..lineTo(cx - 12, cy - 26)
+      ..quadraticBezierTo(cx, cy - 32, cx + 12, cy - 26)
       ..close();
 
     canvas.drawPath(p, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+/// Apple-Maps-Style Navigations-Pfeil (blaues Dreieck mit weißem Rand).
+class _AppleNavArrowPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final cx = size.width / 2;
+    final cy = size.height / 2;
+
+    // Weißer Rand (Shadow)
+    final borderPaint = Paint()
+      ..color = Colors.white
+      ..style = PaintingStyle.fill;
+
+    final borderPath = ui.Path()
+      ..moveTo(cx, cy - 20)
+      ..lineTo(cx + 13, cy + 14)
+      ..lineTo(cx, cy + 7)
+      ..lineTo(cx - 13, cy + 14)
+      ..close();
+    canvas.drawPath(borderPath, borderPaint);
+
+    // Blauer Kern
+    final fillPaint = Paint()
+      ..color = const Color(0xFF007AFF)
+      ..style = PaintingStyle.fill;
+
+    final fillPath = ui.Path()
+      ..moveTo(cx, cy - 17)
+      ..lineTo(cx + 10, cy + 12)
+      ..lineTo(cx, cy + 6)
+      ..lineTo(cx - 10, cy + 12)
+      ..close();
+    canvas.drawPath(fillPath, fillPaint);
   }
 
   @override
