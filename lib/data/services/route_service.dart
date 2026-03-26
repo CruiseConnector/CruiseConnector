@@ -13,11 +13,37 @@ import 'package:cruise_connect/domain/models/route_result.dart';
 Map<String, dynamic> _jsonDecodeIsolate(String data) =>
     Map<String, dynamic>.from(json.decode(data) as Map);
 
+// ──────────────────── Testable Edge-Function Abstraction ────────────────────
+
+/// Abstraktion über den Supabase-Edge-Function-Aufruf — mockbar in Tests.
+abstract class RouteEdgeInvoker {
+  Future<dynamic> invoke(Map<String, dynamic> body);
+}
+
+/// Standard-Implementierung: leitet an Supabase weiter.
+class SupabaseRouteInvoker implements RouteEdgeInvoker {
+  const SupabaseRouteInvoker();
+
+  @override
+  Future<dynamic> invoke(Map<String, dynamic> body) async {
+    final response = await Supabase.instance.client.functions.invoke(
+      RouteService.edgeFunction,
+      body: body,
+    );
+    return response.data;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 /// Service für die Routenberechnung via Supabase Edge Function.
 class RouteService {
-  const RouteService();
+  RouteService({RouteEdgeInvoker? invoker})
+      : _invoker = invoker ?? const SupabaseRouteInvoker();
 
-  static const String _edgeFunction = 'generate-cruise-route';
+  static const String edgeFunction = 'generate-cruise-route';
+
+  final RouteEdgeInvoker _invoker;
 
   // ─────────────────────────── Public API ────────────────────────────────────
 
@@ -91,11 +117,7 @@ class RouteService {
     // Retry bei Verbindungsfehlern (Edge Function Cold-Start, schwaches Netz)
     for (var attempt = 1; attempt <= 2; attempt++) {
       try {
-        final response = await Supabase.instance.client.functions.invoke(
-          _edgeFunction,
-          body: body,
-        );
-        data = response.data;
+        data = await _invoker.invoke(body);
         debugPrint('[RouteService] Response received: ${data?.runtimeType}');
         break;
       } catch (e) {
@@ -177,7 +199,7 @@ class RouteService {
       geoJson: json.encode(geometry),
       geometry: geometry,
       coordinates: coordinates,
-      maneuvers: _filterManeuvers(maneuvers),
+      maneuvers: filterManeuvers(maneuvers),
       distanceMeters: distanceRaw,
       durationSeconds: durationRaw,
       distanceKm: distanceKmActual,
@@ -282,7 +304,7 @@ class RouteService {
           } else {
             // Echte Richtungsänderung bei Straßennamenwechsel
             final street = (step['name'] as String?) ?? '';
-            final dirText = _directionText(mod);
+            final dirText = directionText(mod);
             instruction = street.isNotEmpty
                 ? '$dirText auf $street abbiegen.'
                 : '$dirText abbiegen.';
@@ -298,7 +320,7 @@ class RouteService {
             routeIndex: routeIndex,
             icon: isRoundabout
                 ? Icons.roundabout_right
-                : _iconForManeuver(type, modifier),
+                : iconForManeuver(type, modifier),
             announcement: _announcementFromInstruction(
               rawInstruction,
               modifier,
@@ -343,7 +365,8 @@ class RouteService {
   /// - U-Turns (beide Richtungen) — Mapbox generiert diese bei Rundkursen fälschlicherweise
   /// - Zwischenziel-"Arrive" — nur das letzte "Ziel erreicht" behalten
   /// - Kurze "continue/new name"-Manöver die eigentlich geradeaus sind
-  List<RouteManeuver> _filterManeuvers(List<RouteManeuver> maneuvers) {
+  // ignore: library_private_types_in_public_api
+  List<RouteManeuver> filterManeuvers(List<RouteManeuver> maneuvers) {
     if (maneuvers.isEmpty) return maneuvers;
 
     // Finde den letzten Arrive-Index (= echtes Ziel)
@@ -379,7 +402,7 @@ class RouteService {
 
   // ────────────────────── Icon / Text Helpers ────────────────────────────────
 
-  IconData _iconForManeuver(String type, String modifier) {
+  IconData iconForManeuver(String type, String modifier) {
     final mod = modifier.toLowerCase().trim();
     final typ = type.toLowerCase().trim();
 
@@ -459,7 +482,7 @@ class RouteService {
   }
 
   /// Formatiert Distanz lesbar (z.B. 6385m → 6,4 km)
-  String _formatDistance(double meters) {
+  String formatDistance(double meters) {
     if (meters >= 1000) {
       return 'In ${(meters / 1000).toStringAsFixed(1).replaceAll('.', ',')} km';
     } else {
@@ -468,7 +491,7 @@ class RouteService {
   }
 
   /// Gibt den deutschen Richtungstext für einen Modifier zurück.
-  String _directionText(String modifier) {
+  String directionText(String modifier) {
     switch (modifier.toLowerCase().trim()) {
       case 'left':
         return 'Links';
@@ -523,7 +546,7 @@ class RouteService {
     double? distance,
     String type = '',
   }) {
-    final distText = distance != null ? _formatDistance(distance) : 'In 100 m';
+    final distText = distance != null ? formatDistance(distance) : 'In 100 m';
     final mod = modifier.toLowerCase();
     final typ = type.toLowerCase();
 
@@ -785,7 +808,7 @@ class RouteService {
       );
       if (!typeBased.contains('geradeaus')) return typeBased;
     }
-    return '${_formatDistance(distance)} ${_normalizeInstruction(instruction, modifier)}';
+    return '${formatDistance(distance)} ${_normalizeInstruction(instruction, modifier)}';
   }
 
   // ─────────────────────── Route Snapping ───────────────────────────────────
@@ -852,10 +875,19 @@ class RouteService {
     if (trimTo > 0) coords = coords.sublist(trimTo);
     if (coords.isEmpty) return result;
 
-    // ── Startpunkt auf exakte GPS-Position setzen ─────────────────────────────
-    coords[0] = [startLng, startLat];
+    // ── Startpunkt: Mapbox-Snap auf Straße beibehalten ────────────────────────
+    // Wir setzen den Start NICHT auf die exakte GPS-Position, da diese
+    // in einem Gebäude/Parkplatz liegen kann. Mapbox hat den Start bereits
+    // auf die nächste Straße gesnappt — das behalten wir bei.
+    // Nur bei sehr kurzer Distanz (<30m) auf GPS-Position überschreiben.
+    final distToFirstPoint = geo.Geolocator.distanceBetween(
+      startLat, startLng, coords[0][1], coords[0][0],
+    );
+    if (distToFirstPoint < 30) {
+      coords[0] = [startLng, startLat];
+    }
 
-    // ── Rundkurs: letzten Punkt auch auf Start setzen ─────────────────────────
+    // ── Rundkurs: letzten Punkt nur setzen wenn nah genug an der Straße ───────
     if (coords.length > 1) {
       final last = coords.last;
       final d = geo.Geolocator.distanceBetween(
@@ -864,7 +896,8 @@ class RouteService {
         last[1],
         last[0],
       );
-      if (d < 500) coords.last = [startLng, startLat];
+      // Nur auf GPS-Position setzen wenn <30m (= User steht auf der Straße)
+      if (d < 30) coords.last = [startLng, startLat];
     }
 
     // ── Selbstschneidende Schleifen aus der Route entfernen ───────────────────

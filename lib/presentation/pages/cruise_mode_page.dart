@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
@@ -50,7 +51,7 @@ class CruiseModePage extends StatefulWidget {
 class _CruiseModePageState extends State<CruiseModePage> {
   // ─────────────────────── Services ──────────────────────────────────────────
   final _geocodingService = const GeocodingService();
-  final _routeService = const RouteService();
+  final _routeService = RouteService();
   final _navigationSocketService = NavigationProgressSocketService();
 
   // ─────────────────────── Route Setup State ─────────────────────────────────
@@ -82,6 +83,7 @@ class _CruiseModePageState extends State<CruiseModePage> {
   List<LatLng> _routeLatLngs = [];
   // Aktuelle User-Position als Marker
   LatLng? _userPosition;
+  double _userHeading = 0.0; // GPS-Heading in Grad (0=Nord, 90=Ost)
   // Simulation-Puck-Position als Marker
   LatLng? _simulationPuckPosition;
 
@@ -112,9 +114,9 @@ class _CruiseModePageState extends State<CruiseModePage> {
   DateTime? _lastRerouteTime; // Cooldown zwischen Reroutes
   int _offRouteCount = 0; // Zählt aufeinanderfolgende Off-Route-Updates
   static const double _offRouteThresholdMeters =
-      150.0; // Ab wann Rerouting ausgelöst wird
+      50.0; // Ab wann Off-Route erkannt wird (wie Apple/Google Maps)
   static const int _offRouteCountThreshold =
-      5; // Mindestanzahl Off-Route-Updates vor Reroute
+      8; // Mindestanzahl Off-Route-Updates vor Reroute (verhindert Flackern)
   static const int _routeRedrawIndexThreshold =
       5; // Häufigere Teil-Redraws für flüssige Linie
   static const double _routeRedrawDistanceMeters = 30.0;
@@ -651,7 +653,7 @@ class _CruiseModePageState extends State<CruiseModePage> {
               ),
             ],
           ),
-        // ── Standort-Marker (immer sichtbar wenn Position bekannt) ──────────
+        // ── Standort-Marker (Apple-Style, immer sichtbar) ──────────────────
         if (_userLocation != null && !_isRouteConfirmed)
           MarkerLayer(
             markers: [
@@ -660,46 +662,21 @@ class _CruiseModePageState extends State<CruiseModePage> {
                   _userLocation!.latitude,
                   _userLocation!.longitude,
                 ),
-                width: 28,
-                height: 28,
-                child: Stack(
-                  alignment: Alignment.center,
-                  children: [
-                    Container(
-                      width: 28,
-                      height: 28,
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF007AFF).withValues(alpha: 0.2),
-                        shape: BoxShape.circle,
-                      ),
-                    ),
-                    Container(
-                      width: 14,
-                      height: 14,
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF007AFF),
-                        shape: BoxShape.circle,
-                        border: Border.all(color: Colors.white, width: 2),
-                      ),
-                    ),
-                  ],
-                ),
+                width: 60,
+                height: 60,
+                child: _buildAppleLocationDot(_userHeading),
               ),
             ],
           ),
-        // ── User-Position Marker (Live-Navigation) ───────────────────────────
+        // ── User-Position Marker (Apple-Style, Live-Navigation) ─────────────
         if (_userPosition != null && _isRouteConfirmed)
           MarkerLayer(
             markers: [
               Marker(
                 point: _userPosition!,
-                width: 40,
-                height: 40,
-                child: const Icon(
-                  Icons.navigation,
-                  color: Color(0xFF007AFF),
-                  size: 36,
-                ),
+                width: 60,
+                height: 60,
+                child: _buildAppleLocationDot(_userHeading),
               ),
             ],
           ),
@@ -848,6 +825,50 @@ class _CruiseModePageState extends State<CruiseModePage> {
           ],
         ),
       ),
+    );
+  }
+
+  /// Apple-Style Standort-Punkt: blauer Kreis mit weißem Rand + Heading-Kegel.
+  Widget _buildAppleLocationDot(double headingDegrees) {
+    return Stack(
+      alignment: Alignment.center,
+      children: [
+        // Heading-Kegel (halbtransparentes Dreieck das die Blickrichtung zeigt)
+        Transform.rotate(
+          angle: headingDegrees * (3.14159265 / 180.0),
+          child: CustomPaint(
+            size: const Size(60, 60),
+            painter: _HeadingConePainter(),
+          ),
+        ),
+        // Äußerer Glow
+        Container(
+          width: 24,
+          height: 24,
+          decoration: BoxDecoration(
+            color: const Color(0xFF007AFF).withValues(alpha: 0.15),
+            shape: BoxShape.circle,
+          ),
+        ),
+        // Weißer Rand
+        Container(
+          width: 18,
+          height: 18,
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            shape: BoxShape.circle,
+          ),
+        ),
+        // Blauer Kern
+        Container(
+          width: 14,
+          height: 14,
+          decoration: const BoxDecoration(
+            color: Color(0xFF007AFF),
+            shape: BoxShape.circle,
+          ),
+        ),
+      ],
     );
   }
 
@@ -1315,6 +1336,11 @@ class _CruiseModePageState extends State<CruiseModePage> {
   Future<void> _onLocationUpdate(geo.Position position) async {
     if (!mounted || _disposed) return;
     _userLocation = position;
+
+    // Heading tracken (nur wenn valide)
+    if (position.heading.isFinite && position.heading >= 0 && position.heading <= 360) {
+      _userHeading = position.heading;
+    }
 
     // User-Position als Marker rendern (MarkerLayer in _buildMapWidget)
     _safeSetState(() {
@@ -2084,4 +2110,29 @@ class _CruiseModePageState extends State<CruiseModePage> {
       SnackBar(content: Text('Fehler: $message'), backgroundColor: Colors.red),
     );
   }
+}
+
+/// Apple-Style Heading-Kegel: halbtransparentes blaues Dreieck nach oben.
+class _HeadingConePainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = const Color(0xFF007AFF).withValues(alpha: 0.25)
+      ..style = PaintingStyle.fill;
+
+    final cx = size.width / 2;
+    final cy = size.height / 2;
+
+    // dart:ui Path (nicht flutter_map Path)
+    final p = ui.Path()
+      ..moveTo(cx, cy - 28) // Spitze nach oben
+      ..lineTo(cx - 10, cy - 4)
+      ..lineTo(cx + 10, cy - 4)
+      ..close();
+
+    canvas.drawPath(p, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
