@@ -11,11 +11,14 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          submodules: false
 
       - name: Flutter Setup
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.38.5'
+          flutter-version: '3.38.x'
           channel: 'stable'
           cache: true
 
@@ -26,14 +29,12 @@ jobs:
         run: flutter build web --release
 
       - name: Install Vercel CLI
-        run: npm install -g vercel
+        run: npm install -g vercel@latest
 
       - name: Deploy to Vercel
         run: |
           cd build/web
-          vercel deploy --prod --token=${{ secrets.VERCEL_TOKEN }} \
-            --yes \
-            --name=cruiseconnector
+          vercel deploy --prod --yes --token=${{ secrets.VERCEL_TOKEN }}
         env:
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
