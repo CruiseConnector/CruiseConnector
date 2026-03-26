@@ -1,5 +1,6 @@
 {
-  "buildCommand": "flutter build web --release --web-renderer=canvaskit",
+  "installCommand": "echo skip",
+  "buildCommand": "echo skip",
   "outputDirectory": "build/web",
   "framework": null,
   "rewrites": [
