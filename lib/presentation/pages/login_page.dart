@@ -227,23 +227,24 @@ class _LoginPageState extends State<LoginPage> {
 
                       const SizedBox(height: 25),
 
-                      Center(
-                        child: GestureDetector(
-                          onTap: () => Navigator.pop(context),
-                          child: RichText(
-                            text: const TextSpan(
-                              text: 'Noch kein Konto? ',
-                              style: TextStyle(color: Colors.grey, fontSize: 14),
-                              children: [
-                                TextSpan(
-                                  text: 'Jetzt registrieren',
-                                  style: TextStyle(color: brand, fontWeight: FontWeight.bold),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
+                      // Registrierung temporär deaktiviert (Testphase)
+                      // Center(
+                      //   child: GestureDetector(
+                      //     onTap: () => Navigator.pop(context),
+                      //     child: RichText(
+                      //       text: const TextSpan(
+                      //         text: 'Noch kein Konto? ',
+                      //         style: TextStyle(color: Colors.grey, fontSize: 14),
+                      //         children: [
+                      //           TextSpan(
+                      //             text: 'Jetzt registrieren',
+                      //             style: TextStyle(color: brand, fontWeight: FontWeight.bold),
+                      //           ),
+                      //         ],
+                      //       ),
+                      //     ),
+                      //   ),
+                      // ),
                       const SizedBox(height: 50),
                     ],
                   ),
