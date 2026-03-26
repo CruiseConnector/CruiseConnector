@@ -722,19 +722,21 @@ class _CruiseModePageState extends State<CruiseModePage> {
         if (permission == geo.LocationPermission.deniedForever) return;
       }
 
-      // Erst instant den letzten bekannten Standort verwenden (kein Netzwerk nötig)
-      geo.Position? position = await geo.Geolocator.getLastKnownPosition();
-      if (position != null) {
-        _userLocation = position;
-        _setCameraToPosition(position);
+      // Erst instant den letzten bekannten Standort verwenden (nicht auf Web verfügbar)
+      if (!kIsWeb) {
+        geo.Position? position = await geo.Geolocator.getLastKnownPosition();
+        if (position != null) {
+          _userLocation = position;
+          _setCameraToPosition(position);
+        }
       }
 
-      // Dann genauere Position im Hintergrund holen
+      // Dann genauere Position holen (auf Web ist das der erste Aufruf)
       try {
         final freshPosition = await geo.Geolocator.getCurrentPosition(
           locationSettings: const geo.LocationSettings(
             accuracy: geo.LocationAccuracy.medium,
-            timeLimit: Duration(seconds: 8),
+            timeLimit: Duration(seconds: 10),
           ),
         );
         _userLocation = freshPosition;
@@ -779,8 +781,10 @@ class _CruiseModePageState extends State<CruiseModePage> {
         }
       }
 
-      geo.Position? lastPosition = await geo.Geolocator.getLastKnownPosition();
-      if (lastPosition != null) return lastPosition;
+      if (!kIsWeb) {
+        geo.Position? lastPosition = await geo.Geolocator.getLastKnownPosition();
+        if (lastPosition != null) return lastPosition;
+      }
 
       return await geo.Geolocator.getCurrentPosition(
         locationSettings: const geo.LocationSettings(accuracy: geo.LocationAccuracy.best),
