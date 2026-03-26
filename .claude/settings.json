@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(brew install:*)",
+      "Bash(flutter build:*)",
+      "Bash(gh auth:*)",
+      "Bash(git remote:*)"
+    ]
+  }
+}
