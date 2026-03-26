@@ -22,6 +22,18 @@ jobs:
           channel: 'stable'
           cache: true
 
+      - name: Generate Secrets File
+        run: |
+          mkdir -p lib/config
+          cat > lib/config/secrets.dart << 'DART'
+          class AppSecrets {
+            AppSecrets._();
+            static const String mapboxPublicToken = '${{ secrets.MAPBOX_PUBLIC_TOKEN }}';
+            static const String supabaseUrl = '${{ secrets.SUPABASE_URL }}';
+            static const String supabaseAnonKey = '${{ secrets.SUPABASE_ANON_KEY }}';
+          }
+          DART
+
       - name: Install Dependencies
         run: flutter pub get
 
