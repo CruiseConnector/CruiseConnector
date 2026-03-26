@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:cruise_connect/data/services/offline_map_service.dart';
 import 'package:cruise_connect/presentation/pages/home_content_page.dart';
 import 'package:cruise_connect/presentation/pages/community_page.dart';
@@ -25,10 +26,21 @@ class _HomePageState extends State<HomePage> {
     super.initState();
     CruiseModePage.isFullscreen.addListener(_onFullscreenChanged);
     CruiseModePage.pendingRoute.addListener(_onPendingRoute);
+    _requestLocationPermission();
     // Dark-Style für Offline-Nutzung im Hintergrund cachen
     Future.delayed(const Duration(seconds: 2), () {
       OfflineMapService.instance.ensureStyleCached();
     });
+  }
+
+  Future<void> _requestLocationPermission() async {
+    final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) return;
+
+    var permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+    }
   }
 
   @override
