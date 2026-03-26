@@ -786,15 +786,24 @@ class _CruiseModePageState extends State<CruiseModePage> {
         if (lastPosition != null) return lastPosition;
       }
 
-      return await geo.Geolocator.getCurrentPosition(
-        locationSettings: const geo.LocationSettings(accuracy: geo.LocationAccuracy.best),
-      ).timeout(const Duration(seconds: 15), onTimeout: () {
-        throw Exception('Standort konnte nicht ermittelt werden.');
-      });
+      try {
+        return await geo.Geolocator.getCurrentPosition(
+          locationSettings: const geo.LocationSettings(accuracy: geo.LocationAccuracy.best),
+        ).timeout(const Duration(seconds: 15), onTimeout: () {
+          throw Exception('Standort konnte nicht ermittelt werden. Bitte versuche es erneut.');
+        });
+      } catch (e) {
+        final msg = e.toString().toLowerCase();
+        if (msg.contains('denied') || msg.contains('permission')) {
+          throw Exception('Bitte erlaube den Standortzugriff in deinen Browser-/Geräteeinstellungen und lade die Seite neu.');
+        }
+        rethrow;
+      }
     }
-    // Fallback: Berlin
+    // Fallback: Eigene Position verwenden wenn vorhanden, sonst Vorarlberg
+    if (_userLocation != null) return _userLocation!;
     return geo.Position(
-      longitude: 13.404954, latitude: 52.520008,
+      longitude: 9.7415, latitude: 47.2607,
       timestamp: DateTime.now(), accuracy: 0, altitude: 0,
       heading: 0, speed: 0, speedAccuracy: 0,
       altitudeAccuracy: 0, headingAccuracy: 0,

@@ -84,16 +84,23 @@ class RouteService {
     debugPrint('[RouteService] Invoking Edge Function with: ${body['planning_type']}, mode: ${body['mode']}');
 
     dynamic data;
-    try {
-      final response = await Supabase.instance.client.functions.invoke(
-        _edgeFunction,
-        body: body,
-      );
-      data = response.data;
-      debugPrint('[RouteService] Response received: ${data?.runtimeType}');
-    } catch (e) {
-      debugPrint('[RouteService] Edge Function call failed: $e');
-      throw Exception('Verbindungsfehler: $e');
+    // Retry bei Verbindungsfehlern (Edge Function Cold-Start, schwaches Netz)
+    for (var attempt = 1; attempt <= 2; attempt++) {
+      try {
+        final response = await Supabase.instance.client.functions.invoke(
+          _edgeFunction,
+          body: body,
+        );
+        data = response.data;
+        debugPrint('[RouteService] Response received: ${data?.runtimeType}');
+        break;
+      } catch (e) {
+        debugPrint('[RouteService] Edge Function call failed (Versuch $attempt): $e');
+        if (attempt == 2) {
+          throw Exception('Routenberechnung fehlgeschlagen. Bitte prüfe deine Internetverbindung und versuche es erneut.');
+        }
+        await Future.delayed(const Duration(seconds: 2));
+      }
     }
 
     if (data == null) {
