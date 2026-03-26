@@ -26,7 +26,7 @@ class SocialService {
 
       final posts = await _db
           .from('posts')
-          .select('*, profiles!posts_user_id_profiles_fkey(id, username, email), shared_route_id')
+          .select('*, profiles(id, username, email), shared_route_id')
           .inFilter('user_id', ids)
           .order('created_at', ascending: false)
           .limit(50);
@@ -42,7 +42,7 @@ class SocialService {
     try {
       final posts = await _db
           .from('posts')
-          .select('*, profiles!posts_user_id_profiles_fkey(id, username, email)')
+          .select('*, profiles(id, username, email)')
           .eq('user_id', userId)
           .order('created_at', ascending: false);
 
@@ -54,21 +54,26 @@ class SocialService {
   }
 
   static Future<List<Map<String, dynamic>>> getDiscoverPosts() async {
-    // Nur öffentliche Posts von nicht-privaten Accounts für Entdecken
-    final posts = await _db
-        .from('posts')
-        .select('*, profiles!posts_user_id_profiles_fkey(id, username, email, is_private), shared_route_id')
-        .eq('visibility', 'public')
-        .order('created_at', ascending: false)
-        .limit(50);
+    try {
+      // Nur öffentliche Posts von nicht-privaten Accounts für Entdecken
+      final posts = await _db
+          .from('posts')
+          .select('*, profiles(id, username, email, is_private), shared_route_id')
+          .eq('visibility', 'public')
+          .order('created_at', ascending: false)
+          .limit(50);
 
-    // Private Accounts im Client filtern (Supabase kann nicht über FK-Joins filtern)
-    final filtered = (posts as List).where((p) {
-      final profile = p['profiles'] as Map<String, dynamic>?;
-      return profile?['is_private'] != true;
-    }).toList();
+      // Private Accounts im Client filtern (Supabase kann nicht über FK-Joins filtern)
+      final filtered = (posts as List).where((p) {
+        final profile = p['profiles'] as Map<String, dynamic>?;
+        return profile?['is_private'] != true;
+      }).toList();
 
-    return List<Map<String, dynamic>>.from(filtered.take(30));
+      return List<Map<String, dynamic>>.from(filtered.take(30));
+    } catch (e) {
+      debugPrint('[SocialService] getDiscoverPosts Fehler: $e');
+      return [];
+    }
   }
 
   static Future<void> createPost(
@@ -256,7 +261,7 @@ class SocialService {
   static Future<List<Map<String, dynamic>>> getUserReposts(String userId) async {
     final reposts = await _db
         .from('reposts')
-        .select('*, posts(*, profiles!posts_user_id_profiles_fkey(id, username, email))')
+        .select('*, posts(*, profiles(id, username, email))')
         .eq('user_id', userId)
         .order('created_at', ascending: false);
 

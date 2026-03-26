@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:cruise_connect/presentation/pages/login_page.dart';
-import 'package:cruise_connect/presentation/pages/register_page.dart';
+// import 'package:cruise_connect/presentation/pages/register_page.dart';
 
 class WelcomePage extends StatelessWidget {
   const WelcomePage({super.key});
@@ -98,15 +98,16 @@ class WelcomePage extends StatelessWidget {
                       ),
                       const SizedBox(height: 36),
 
-                      _buildButton(
-                        context,
-                        text: 'Registrieren',
-                        onTap: () => Navigator.push(
-                          context,
-                          MaterialPageRoute(builder: (_) => const RegisterPage()),
-                        ),
-                      ),
-                      const SizedBox(height: 16),
+                      // Registrierung temporär deaktiviert (Testphase — Testnutzer werden manuell vergeben)
+                      // _buildButton(
+                      //   context,
+                      //   text: 'Registrieren',
+                      //   onTap: () => Navigator.push(
+                      //     context,
+                      //     MaterialPageRoute(builder: (_) => const RegisterPage()),
+                      //   ),
+                      // ),
+                      // const SizedBox(height: 16),
                       _buildButton(
                         context,
                         text: 'Anmelden',
