@@ -627,19 +627,6 @@ class _CruiseModePageState extends State<CruiseModePage> {
     }
   }
 
-  void _retryMapLoad() {
-    _stopSimulation(restartLiveTracking: false);
-    _stopNavigationTracking();
-    _safeSetState(() {
-      _mapReady = false;
-      _routeLatLngs = [];
-      _overlapSegments = [];
-    });
-    // Karte neu initialisieren nach kurzer Verzögerung
-    Future.delayed(const Duration(milliseconds: 300), () {
-      if (mounted && !_disposed) _initializeMapLocation();
-    });
-  }
 
   // ═══════════════════════ BOTTOM ACTIONS ═══════════════════════════════════
 
@@ -1132,12 +1119,12 @@ class _CruiseModePageState extends State<CruiseModePage> {
   void _startNavigationTracking() {
     _positionSubscription?.cancel();
     // Web unterstützt kein bestForNavigation → fallback auf best
-    final locationSettings = kIsWeb
-        ? const geo.LocationSettings(
+    const locationSettings = kIsWeb
+        ? geo.LocationSettings(
             accuracy: geo.LocationAccuracy.best,
             distanceFilter: 8,
           )
-        : const geo.LocationSettings(
+        : geo.LocationSettings(
             accuracy: geo.LocationAccuracy.bestForNavigation,
             distanceFilter: 8,
           );

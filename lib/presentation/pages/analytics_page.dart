@@ -34,7 +34,7 @@ class _AnalyticsPageState extends State<AnalyticsPage> with SingleTickerProvider
   List<double> _weeklyChartData = List.filled(7, 0);
   List<double> _weeklyRawKm = List.filled(7, 0);
   List<double> _weeklyRawXp = List.filled(7, 0);
-  final List<String> _weeklyLabels = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"];
+  final List<String> _weeklyLabels = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
 
   // Streak
   int _streakDays = 0;
@@ -230,9 +230,9 @@ class _AnalyticsPageState extends State<AnalyticsPage> with SingleTickerProvider
     return const Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text("Analytics", style: TextStyle(fontSize: 32, fontWeight: FontWeight.bold, color: Colors.white)),
+        Text('Analytics', style: TextStyle(fontSize: 32, fontWeight: FontWeight.bold, color: Colors.white)),
         SizedBox(height: 4),
-        Text("Deine Fahr-Statistiken", style: TextStyle(fontSize: 14, color: Color(0xFFA0AEC0))),
+        Text('Deine Fahr-Statistiken', style: TextStyle(fontSize: 14, color: Color(0xFFA0AEC0))),
       ],
     );
   }
@@ -444,10 +444,10 @@ class _AnalyticsPageState extends State<AnalyticsPage> with SingleTickerProvider
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
       children: [
-        _buildAnalyticsCard("Fahrten", '$_totalRoutes', Icons.directions_car, const Color(0xFFFF3B30)),
-        _buildAnalyticsCard("Distanz", _totalDistanceKm < 1 ? '0 km' : '${_totalDistanceKm.toStringAsFixed(0)} km', Icons.map, const Color(0xFF00E5FF)),
-        _buildAnalyticsCard("Fahrzeit", _totalHours < 1 ? '${(_totalHours * 60).toStringAsFixed(0)} min' : '${_totalHours.toStringAsFixed(1)} h', Icons.timer, const Color(0xFFFFD700)),
-        _buildAnalyticsCard("XP", '$_totalXp', Icons.bolt, const Color(0xFFB026FF)),
+        _buildAnalyticsCard('Fahrten', '$_totalRoutes', Icons.directions_car, const Color(0xFFFF3B30)),
+        _buildAnalyticsCard('Distanz', _totalDistanceKm < 1 ? '0 km' : '${_totalDistanceKm.toStringAsFixed(0)} km', Icons.map, const Color(0xFF00E5FF)),
+        _buildAnalyticsCard('Fahrzeit', _totalHours < 1 ? '${(_totalHours * 60).toStringAsFixed(0)} min' : '${_totalHours.toStringAsFixed(1)} h', Icons.timer, const Color(0xFFFFD700)),
+        _buildAnalyticsCard('XP', '$_totalXp', Icons.bolt, const Color(0xFFB026FF)),
       ],
     );
   }
@@ -466,10 +466,10 @@ class _AnalyticsPageState extends State<AnalyticsPage> with SingleTickerProvider
             labelStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 11),
             isScrollable: false,
             tabs: const [
-              Tab(icon: Icon(Icons.insights, size: 16), text: "Woche"),
-              Tab(icon: Icon(Icons.calendar_month, size: 16), text: "Monat"),
-              Tab(icon: Icon(Icons.route, size: 16), text: "Routen"),
-              Tab(icon: Icon(Icons.emoji_events, size: 16), text: "Badges"),
+              Tab(icon: Icon(Icons.insights, size: 16), text: 'Woche'),
+              Tab(icon: Icon(Icons.calendar_month, size: 16), text: 'Monat'),
+              Tab(icon: Icon(Icons.route, size: 16), text: 'Routen'),
+              Tab(icon: Icon(Icons.emoji_events, size: 16), text: 'Badges'),
             ],
           ),
         ),
@@ -503,7 +503,7 @@ class _AnalyticsPageState extends State<AnalyticsPage> with SingleTickerProvider
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text("Fahraktivität diese Woche", style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+          const Text('Fahraktivität diese Woche', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
           const SizedBox(height: 24),
           Expanded(
             child: Row(
@@ -516,9 +516,9 @@ class _AnalyticsPageState extends State<AnalyticsPage> with SingleTickerProvider
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceAround,
             children: [
-              _buildSummaryItem("Routen", '$weekRoutes', Icons.route),
-              _buildSummaryItem("Km", totalWeekKm.toStringAsFixed(0), Icons.straighten),
-              _buildSummaryItem("XP", totalWeekXp.toStringAsFixed(0), Icons.bolt),
+              _buildSummaryItem('Routen', '$weekRoutes', Icons.route),
+              _buildSummaryItem('Km', totalWeekKm.toStringAsFixed(0), Icons.straighten),
+              _buildSummaryItem('XP', totalWeekXp.toStringAsFixed(0), Icons.bolt),
             ],
           ),
         ],
@@ -529,7 +529,7 @@ class _AnalyticsPageState extends State<AnalyticsPage> with SingleTickerProvider
   // ── Monats-/Jahresübersicht Tab ──────────────────────────────────────
 
   Widget _buildMonthlyTab() {
-    final monthNames = ["Jan", "Feb", "Mär", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"];
+    final monthNames = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dez'];
     final now = DateTime.now();
     final currentMonthName = monthNames[now.month - 1];
 
@@ -543,7 +543,7 @@ class _AnalyticsPageState extends State<AnalyticsPage> with SingleTickerProvider
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text("Monats- & Jahresübersicht", style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+          const Text('Monats- & Jahresübersicht', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
           const SizedBox(height: 16),
 
           // Monatsvergleich
@@ -569,7 +569,7 @@ class _AnalyticsPageState extends State<AnalyticsPage> with SingleTickerProvider
           const SizedBox(height: 16),
 
           // Monatliches Balkendiagramm
-          const Text("Km pro Monat (${2026})", style: TextStyle(color: Color(0xFFA0AEC0), fontSize: 12)),
+          const Text('Km pro Monat (${2026})', style: TextStyle(color: Color(0xFFA0AEC0), fontSize: 12)),
           const SizedBox(height: 12),
           Expanded(
             child: Row(
@@ -754,7 +754,7 @@ class _AnalyticsPageState extends State<AnalyticsPage> with SingleTickerProvider
       decoration: BoxDecoration(color: const Color(0xFF1C1F26), borderRadius: BorderRadius.circular(20), border: Border.all(color: Colors.white.withValues(alpha: 0.05))),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-          const Text("Badge Sammlung", style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+          const Text('Badge Sammlung', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
           Text('${_earnedBadges.length}/${app.Badge.all.length}', style: const TextStyle(color: Color(0xFFA0AEC0), fontSize: 13)),
         ]),
         const SizedBox(height: 4),

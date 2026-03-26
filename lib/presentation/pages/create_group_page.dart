@@ -39,7 +39,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
                 leading: Container(
                   margin: const EdgeInsets.all(8),
                   decoration: BoxDecoration(
-                    color: Colors.black.withOpacity(0.4),
+                    color: Colors.black.withValues(alpha: 0.4),
                     shape: BoxShape.circle,
                   ),
                   child: IconButton(
@@ -63,7 +63,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
                       child: Icon(
                         Icons.map_outlined,
                         size: 100,
-                        color: Colors.white.withOpacity(0.1),
+                        color: Colors.white.withValues(alpha: 0.1),
                       ),
                     ),
                   ),
@@ -83,23 +83,23 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
                           margin: const EdgeInsets.only(bottom: 24),
                           padding: const EdgeInsets.all(16),
                           decoration: BoxDecoration(
-                            color: const Color(0xFFFF3B30).withOpacity(0.1),
+                            color: const Color(0xFFFF3B30).withValues(alpha: 0.1),
                             borderRadius: BorderRadius.circular(16),
-                            border: Border.all(color: const Color(0xFFFF3B30).withOpacity(0.3)),
+                            border: Border.all(color: const Color(0xFFFF3B30).withValues(alpha: 0.3)),
                           ),
                           child: Column(
                             children: [
                               const Text(
-                                "Alpine Rush Route",
+                                'Alpine Rush Route',
                                 style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold),
                               ),
                               const SizedBox(height: 12),
                               Row(
                                 mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                                 children: [
-                                  _buildRouteStat(Icons.straighten, "87 km"),
-                                  _buildRouteStat(Icons.timer, "1h 35m"),
-                                  _buildRouteStat(Icons.turn_right, "132 Kurven"),
+                                  _buildRouteStat(Icons.straighten, '87 km'),
+                                  _buildRouteStat(Icons.timer, '1h 35m'),
+                                  _buildRouteStat(Icons.turn_right, '132 Kurven'),
                                 ],
                               ),
                             ],
@@ -108,13 +108,13 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
 
                       // --- SEKTION 1: STRECKEN-SETUP ---
                       const Text(
-                        "Strecken-Setup",
+                        'Strecken-Setup',
                         style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
                       ),
                       const SizedBox(height: 20),
 
                       _buildSelectionRow(
-                        "Länge",
+                        'Länge',
                         ['20 Km', '50 Km', '100 Km', '+100 Km'],
                         _selectedLength,
                         (val) => setState(() => _selectedLength = val),
@@ -122,7 +122,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
                       const SizedBox(height: 24),
 
                       _buildSelectionRow(
-                        "Standort",
+                        'Standort',
                         ['Aktueller Standort', 'Standort wählen'],
                         _selectedLocation,
                         (val) => setState(() => _selectedLocation = val),
@@ -130,7 +130,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
                       const SizedBox(height: 24),
 
                       _buildSelectionRow(
-                        "Stil",
+                        'Stil',
                         ['Kurvenjagd', 'Sport Mode', 'Abendrunde', 'Entdecker'],
                         _selectedStyle,
                         (val) => setState(() => _selectedStyle = val),
@@ -140,7 +140,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
                       
                       // --- SEKTION 2: GRUPPEN-DETAILS (iOS Style Block) ---
                       const Text(
-                        "Gruppen-Details",
+                        'Gruppen-Details',
                         style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
                       ),
                       const SizedBox(height: 16),
@@ -163,7 +163,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
                                   children: [
                                     const Icon(Icons.access_time, color: Colors.white, size: 20),
                                     const SizedBox(width: 12),
-                                    const Text("Startuhrzeit", style: TextStyle(color: Colors.white, fontSize: 16)),
+                                    const Text('Startuhrzeit', style: TextStyle(color: Colors.white, fontSize: 16)),
                                     const Spacer(),
                                     Container(
                                       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -172,7 +172,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
                                         borderRadius: BorderRadius.circular(8),
                                       ),
                                       child: Text(
-                                        _selectedTime != null ? _selectedTime!.format(context) : "Wählen",
+                                        _selectedTime != null ? _selectedTime!.format(context) : 'Wählen',
                                         style: TextStyle(
                                           color: _selectedTime != null ? Colors.white : const Color(0xFFFF3B30),
                                           fontWeight: FontWeight.bold,
@@ -191,8 +191,8 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
                               child: Row(
                                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                 children: [
-                                  const Text("Max. Personen", style: TextStyle(color: Colors.white, fontSize: 16)),
-                                  Text("${_maxPeople.round()}", style: const TextStyle(color: Colors.grey, fontSize: 16)),
+                                  const Text('Max. Personen', style: TextStyle(color: Colors.white, fontSize: 16)),
+                                  Text('${_maxPeople.round()}', style: const TextStyle(color: Colors.grey, fontSize: 16)),
                                 ],
                               ),
                             ),
@@ -201,7 +201,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
                                 activeTrackColor: const Color(0xFFFF3B30),
                                 inactiveTrackColor: Colors.grey[800],
                                 thumbColor: Colors.white,
-                                overlayColor: const Color(0xFFFF3B30).withOpacity(0.2),
+                                overlayColor: const Color(0xFFFF3B30).withValues(alpha: 0.2),
                                 trackHeight: 4,
                               ),
                               child: Slider(
@@ -221,7 +221,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  const Text("Zugänglichkeit", style: TextStyle(color: Colors.white, fontSize: 16)),
+                                  const Text('Zugänglichkeit', style: TextStyle(color: Colors.white, fontSize: 16)),
                                   const SizedBox(height: 12),
                                   Wrap(
                                     spacing: 12,
@@ -237,7 +237,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
                                             color: isSelected ? const Color(0xFFFF3B30) : const Color(0xFF1A1D24),
                                             borderRadius: BorderRadius.circular(20),
                                             boxShadow: isSelected 
-                                              ? [BoxShadow(color: const Color(0xFFFF3B30).withOpacity(0.4), blurRadius: 8, offset: const Offset(0, 2))]
+                                              ? [BoxShadow(color: const Color(0xFFFF3B30).withValues(alpha: 0.4), blurRadius: 8, offset: const Offset(0, 2))]
                                               : [],
                                           ),
                                           child: Text(
@@ -263,7 +263,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
 
                       // Beschreibung Textfeld
                       const Text(
-                        "Beschreibung",
+                        'Beschreibung',
                         style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
                       ),
                       const SizedBox(height: 12),
@@ -278,7 +278,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
                           style: const TextStyle(color: Colors.white),
                           maxLines: 5,
                           decoration: InputDecoration(
-                            hintText: "Beschreibe deine Gruppe...",
+                            hintText: 'Beschreibe deine Gruppe...',
                             hintStyle: TextStyle(color: Colors.grey[600]),
                             border: InputBorder.none,
                             enabledBorder: InputBorder.none,
@@ -307,7 +307,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
                   begin: Alignment.bottomCenter,
                   end: Alignment.topCenter,
                   colors: [
-                    Colors.black.withOpacity(0.9),
+                    Colors.black.withValues(alpha: 0.9),
                     Colors.transparent,
                   ],
                   stops: const [0.6, 1.0],
@@ -336,12 +336,12 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
                         ),
                         child: _isGenerating 
                           ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                          : Row(
+                          : const Row(
                           mainAxisAlignment: MainAxisAlignment.center,
-                          children: const [
+                          children: [
                             Icon(Icons.refresh, color: Colors.white, size: 20),
                             SizedBox(width: 8),
-                            Text("Generieren", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+                            Text('Generieren', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
                           ],
                         ),
                       ),
@@ -357,9 +357,9 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
                           backgroundColor: const Color(0xFFFF3B30),
                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                           elevation: 8,
-                          shadowColor: const Color(0xFFFF3B30).withOpacity(0.5),
+                          shadowColor: const Color(0xFFFF3B30).withValues(alpha: 0.5),
                         ),
-                        child: const Text("Erstellen", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+                        child: const Text('Erstellen', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
                       ),
                     ),
                   ),
@@ -392,7 +392,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
                   color: isSelected ? const Color(0xFFFF3B30) : const Color(0xFF0B0E14),
                   borderRadius: BorderRadius.circular(20),
                   boxShadow: isSelected 
-                    ? [BoxShadow(color: const Color(0xFFFF3B30).withOpacity(0.4), blurRadius: 8, offset: const Offset(0, 2))]
+                    ? [BoxShadow(color: const Color(0xFFFF3B30).withValues(alpha: 0.4), blurRadius: 8, offset: const Offset(0, 2))]
                     : [],
                 ),
                 child: Text(
@@ -432,7 +432,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
               primary: Color(0xFFFF3B30),
               surface: Color(0xFF1C1F26),
               onSurface: Colors.white,
-            ), dialogTheme: DialogThemeData(backgroundColor: const Color(0xFF1C1F26)),
+            ), dialogTheme: const DialogThemeData(backgroundColor: Color(0xFF1C1F26)),
           ),
           child: child!,
         );

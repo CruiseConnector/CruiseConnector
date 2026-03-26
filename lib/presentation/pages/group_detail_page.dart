@@ -47,7 +47,7 @@ class _GroupDetailPageState extends State<GroupDetailPage> {
                 leading: Container(
                   margin: const EdgeInsets.all(8),
                   decoration: BoxDecoration(
-                    color: Colors.black.withOpacity(0.4),
+                    color: Colors.black.withValues(alpha: 0.4),
                     shape: BoxShape.circle,
                   ),
                   child: IconButton(
@@ -71,7 +71,7 @@ class _GroupDetailPageState extends State<GroupDetailPage> {
                       child: Icon(
                         Icons.map_outlined,
                         size: 100,
-                        color: Colors.white.withOpacity(0.15),
+                        color: Colors.white.withValues(alpha: 0.15),
                       ),
                     ),
                   ),
@@ -105,12 +105,12 @@ class _GroupDetailPageState extends State<GroupDetailPage> {
                               color: const Color(0xFFFF3B30),
                               borderRadius: BorderRadius.circular(20),
                             ),
-                            child: Row(
-                              children: const [
+                            child: const Row(
+                              children: [
                                 Icon(Icons.star, color: Colors.white, size: 16),
                                 SizedBox(width: 4),
                                 Text(
-                                  "4.9",
+                                  '4.9',
                                   style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
                                 ),
                               ],
@@ -129,23 +129,23 @@ class _GroupDetailPageState extends State<GroupDetailPage> {
                       // Stats Boxen
                       Row(
                         children: [
-                          Expanded(child: _buildStatBox(Icons.straighten, "87 km", "Distanz")),
+                          Expanded(child: _buildStatBox(Icons.straighten, '87 km', 'Distanz')),
                           const SizedBox(width: 12),
-                          Expanded(child: _buildStatBox(Icons.timer, "1h 35m", "Dauer")),
+                          Expanded(child: _buildStatBox(Icons.timer, '1h 35m', 'Dauer')),
                           const SizedBox(width: 12),
-                          Expanded(child: _buildStatBox(Icons.turn_right, "132", "Kurven")),
+                          Expanded(child: _buildStatBox(Icons.turn_right, '132', 'Kurven')),
                         ],
                       ),
 
                       const SizedBox(height: 32),
                       
                       const Text(
-                        "Beschreibung",
+                        'Beschreibung',
                         style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
                       ),
                       const SizedBox(height: 12),
                       const Text(
-                        "Eine anspruchsvolle Route durch die Alpenpässe. Perfekt für Sportwagen und erfahrene Fahrer. Wir treffen uns am Parkplatz P3 und fahren gemeinsam los.",
+                        'Eine anspruchsvolle Route durch die Alpenpässe. Perfekt für Sportwagen und erfahrene Fahrer. Wir treffen uns am Parkplatz P3 und fahren gemeinsam los.',
                         style: TextStyle(color: Colors.grey, height: 1.5),
                       ),
                       
@@ -174,10 +174,10 @@ class _GroupDetailPageState extends State<GroupDetailPage> {
                     side: _isJoined ? const BorderSide(color: Color(0xFFFF3B30), width: 1) : BorderSide.none,
                   ),
                   elevation: _isJoined ? 0 : 8,
-                  shadowColor: const Color(0xFFFF3B30).withOpacity(0.5),
+                  shadowColor: const Color(0xFFFF3B30).withValues(alpha: 0.5),
                 ),
                 child: Text(
-                  _isJoined ? "Gruppe verlassen" : "Route beitreten",
+                  _isJoined ? 'Gruppe verlassen' : 'Route beitreten',
                   style: TextStyle(
                     fontSize: 18,
                     fontWeight: FontWeight.bold,

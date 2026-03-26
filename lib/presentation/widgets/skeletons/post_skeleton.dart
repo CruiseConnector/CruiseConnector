@@ -87,7 +87,7 @@ class PostSkeletonList extends StatelessWidget {
       itemCount: count,
       physics: const NeverScrollableScrollPhysics(),
       shrinkWrap: true,
-      itemBuilder: (_, __) => const PostSkeleton(),
+      itemBuilder: (_, _) => const PostSkeleton(),
     );
   }
 }

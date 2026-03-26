@@ -19,9 +19,9 @@ class InteractivePostCard extends StatefulWidget {
     required this.handle,
     required this.time,
     required this.content,
-    this.initialLikeCount = "0",
-    this.initialRepostCount = "0",
-    this.initialCommentCount = "0",
+    this.initialLikeCount = '0',
+    this.initialRepostCount = '0',
+    this.initialCommentCount = '0',
   });
 
   @override
@@ -112,7 +112,7 @@ class _InteractivePostCardState extends State<InteractivePostCard> {
                       children: [
                         Text(widget.handle, style: const TextStyle(color: Colors.grey, fontSize: 13)),
                         const SizedBox(width: 5),
-                        const Text("·", style: TextStyle(color: Colors.grey, fontSize: 13)),
+                        const Text('·', style: TextStyle(color: Colors.grey, fontSize: 13)),
                         const SizedBox(width: 5),
                         Text(widget.time, style: const TextStyle(color: Colors.grey, fontSize: 13)),
                       ],
@@ -159,7 +159,7 @@ class _InteractivePostCardState extends State<InteractivePostCard> {
               // Like Button
               _buildActionButton(icon: _isLiked ? Icons.favorite : Icons.favorite_border, color: _isLiked ? const Color(0xFFFF3B30) : Colors.grey, count: _likeCount.toString(), onTap: () => _toggleLike()),
               // Share Button
-              _buildActionButton(icon: Icons.share_outlined, color: Colors.grey, count: "", onTap: () {}),
+              _buildActionButton(icon: Icons.share_outlined, color: Colors.grey, count: '', onTap: () {}),
             ],
           ),
         ],
@@ -176,7 +176,7 @@ class _InteractivePostCardState extends State<InteractivePostCard> {
         child: Row(
           children: [
             Icon(icon, color: color, size: 20),
-            if (count.isNotEmpty && count != "0") ...[
+            if (count.isNotEmpty && count != '0') ...[
               const SizedBox(width: 6),
               Text(count, style: TextStyle(color: color, fontSize: 13)),
             ],

@@ -150,14 +150,14 @@ class _HomeContentPageState extends State<HomeContentPage> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       const Text(
-                        "Willkommen zurück",
+                        'Willkommen zurück',
                         style: TextStyle(
                           color: Color(0xFFA0AEC0),
                           fontSize: 13,
                         ),
                       ),
                       Text(
-                        "$userName!",
+                        '$userName!',
                         style: const TextStyle(
                           color: Colors.white,
                           fontSize: 32,
@@ -186,7 +186,7 @@ class _HomeContentPageState extends State<HomeContentPage> {
                       ),
                       child: Center(
                         child: Text(
-                          "$userLevel",
+                          '$userLevel',
                           style: const TextStyle(
                             color: Colors.white,
                             fontSize: 12,
@@ -213,7 +213,7 @@ class _HomeContentPageState extends State<HomeContentPage> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const Text(
-                    "Fortschritt",
+                    'Fortschritt',
                     style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold),
                   ),
                   const SizedBox(height: 12),
@@ -222,13 +222,13 @@ class _HomeContentPageState extends State<HomeContentPage> {
                     : Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          _statRow("⚡", "$totalXp XP gesamt"),
+                          _statRow('⚡', '$totalXp XP gesamt'),
                           const SizedBox(height: 6),
-                          _statRow("🏎️", "${totalDistanceKm.toStringAsFixed(0)} Km gefahren"),
+                          _statRow('🏎️', '${totalDistanceKm.toStringAsFixed(0)} Km gefahren'),
                           const SizedBox(height: 6),
-                          _statRow("🛣️", "$totalRoutes Strecken"),
+                          _statRow('🛣️', '$totalRoutes Strecken'),
                           const SizedBox(height: 6),
-                          _statRow("🏅", "$badgeCount Badges"),
+                          _statRow('🏅', '$badgeCount Badges'),
                         ],
                       ),
                   const SizedBox(height: 12),
@@ -241,7 +241,7 @@ class _HomeContentPageState extends State<HomeContentPage> {
                         children: [
                           Flexible(
                             child: Text(
-                              "Level $userLevel - $levelName",
+                              'Level $userLevel - $levelName',
                               style: const TextStyle(
                                 color: Color(0xFFA0AEC0),
                                 fontSize: 12,
@@ -250,7 +250,7 @@ class _HomeContentPageState extends State<HomeContentPage> {
                             ),
                           ),
                           Text(
-                            "${(levelProgress * 100).toStringAsFixed(0)}%",
+                            '${(levelProgress * 100).toStringAsFixed(0)}%',
                             style: const TextStyle(
                               color: Colors.white,
                               fontSize: 20,
@@ -286,7 +286,7 @@ class _HomeContentPageState extends State<HomeContentPage> {
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    "Noch $xpToNextLevel XP bis Level ${userLevel + 1}",
+                    'Noch $xpToNextLevel XP bis Level ${userLevel + 1}',
                     style: const TextStyle(
                       color: Color(0xFFA0AEC0),
                       fontSize: 10,
@@ -299,7 +299,7 @@ class _HomeContentPageState extends State<HomeContentPage> {
 
             // Empfohlene Routen Section (echte Daten aus DB)
             const Text(
-              "Heute für dich",
+              'Heute für dich',
               style: TextStyle(
                 color: Colors.white,
                 fontSize: 20,
@@ -340,7 +340,7 @@ class _HomeContentPageState extends State<HomeContentPage> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           const Text(
-                            "Community",
+                            'Community',
                             style: TextStyle(
                               color: Colors.white,
                               fontSize: 16,
@@ -348,11 +348,11 @@ class _HomeContentPageState extends State<HomeContentPage> {
                             ),
                           ),
                           const SizedBox(height: 10),
-                          _buildCommunityItem("$_followerCount Follower", "👥"),
+                          _buildCommunityItem('$_followerCount Follower', '👥'),
                           const SizedBox(height: 4),
-                          _buildCommunityItem("$totalRoutes Fahrten absolviert", "🔥"),
+                          _buildCommunityItem('$totalRoutes Fahrten absolviert', '🔥'),
                           const SizedBox(height: 4),
-                          _buildCommunityItem("Level $userLevel - $levelName", "📍"),
+                          _buildCommunityItem('Level $userLevel - $levelName', '📍'),
                           const Spacer(),
                           SizedBox(
                             width: double.infinity,
@@ -372,7 +372,7 @@ class _HomeContentPageState extends State<HomeContentPage> {
                                 ),
                                 alignment: Alignment.center,
                                 child: const Text(
-                                  "Beitreten",
+                                  'Beitreten',
                                   style: TextStyle(
                                     color: Colors.white,
                                     fontSize: 13,
@@ -399,7 +399,7 @@ class _HomeContentPageState extends State<HomeContentPage> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           const Text(
-                            "Letzte 7 Tage",
+                            'Letzte 7 Tage',
                             style: TextStyle(
                               color: Colors.white,
                               fontSize: 16,
@@ -413,7 +413,7 @@ class _HomeContentPageState extends State<HomeContentPage> {
                                 const RotatedBox(
                                   quarterTurns: 3,
                                   child: Text(
-                                    "Kilometer",
+                                    'Kilometer',
                                     style: TextStyle(
                                       color: Color(0xFFA0AEC0),
                                       fontSize: 12,
@@ -425,13 +425,13 @@ class _HomeContentPageState extends State<HomeContentPage> {
                                     mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                                     crossAxisAlignment: CrossAxisAlignment.end,
                                     children: [
-                                      _buildChartBar("Mo", _weeklyChartData[0]),
-                                      _buildChartBar("Di", _weeklyChartData[1]),
-                                      _buildChartBar("Mi", _weeklyChartData[2]),
-                                      _buildChartBar("Do", _weeklyChartData[3]),
-                                      _buildChartBar("Fr", _weeklyChartData[4]),
-                                      _buildChartBar("Sa", _weeklyChartData[5]),
-                                      _buildChartBar("So", _weeklyChartData[6]),
+                                      _buildChartBar('Mo', _weeklyChartData[0]),
+                                      _buildChartBar('Di', _weeklyChartData[1]),
+                                      _buildChartBar('Mi', _weeklyChartData[2]),
+                                      _buildChartBar('Do', _weeklyChartData[3]),
+                                      _buildChartBar('Fr', _weeklyChartData[4]),
+                                      _buildChartBar('Sa', _weeklyChartData[5]),
+                                      _buildChartBar('So', _weeklyChartData[6]),
                                     ],
                                   ),
                                 ),

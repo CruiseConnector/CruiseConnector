@@ -408,11 +408,10 @@ class _UserProfilePageState extends State<UserProfilePage> with SingleTickerProv
                                 Navigator.pop(sheetContext);
                                 if (userId != null) {
                                   Future.delayed(const Duration(milliseconds: 150), () {
-                                    if (mounted) {
-                                      Navigator.push(context, MaterialPageRoute(
-                                        builder: (_) => UserProfilePage(userId: userId),
-                                      ));
-                                    }
+                                    if (!context.mounted) return;
+                                    Navigator.push(context, MaterialPageRoute(
+                                      builder: (_) => UserProfilePage(userId: userId),
+                                    ));
                                   });
                                 }
                               },

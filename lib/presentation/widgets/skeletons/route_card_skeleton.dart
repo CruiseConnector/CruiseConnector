@@ -81,7 +81,7 @@ class RouteCardSkeletonList extends StatelessWidget {
       itemCount: count,
       physics: const NeverScrollableScrollPhysics(),
       shrinkWrap: true,
-      itemBuilder: (_, __) => const RouteCardSkeleton(),
+      itemBuilder: (_, _) => const RouteCardSkeleton(),
     );
   }
 }

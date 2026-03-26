@@ -88,7 +88,7 @@ class _CreatePostPageState extends State<CreatePostPage> {
         leadingWidth: 100,
         leading: TextButton(
           onPressed: () => Navigator.pop(context),
-          child: const Text("Abbrechen", style: TextStyle(color: Colors.white, fontSize: 16)),
+          child: const Text('Abbrechen', style: TextStyle(color: Colors.white, fontSize: 16)),
         ),
         actions: [
           Padding(
@@ -103,7 +103,7 @@ class _CreatePostPageState extends State<CreatePostPage> {
               ),
               child: _posting
                   ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                  : const Text("Posten", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                  : const Text('Posten', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
             ),
           ),
         ],

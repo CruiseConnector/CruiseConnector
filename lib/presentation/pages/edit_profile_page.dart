@@ -8,10 +8,10 @@ class EditProfilePage extends StatefulWidget {
 }
 
 class _EditProfilePageState extends State<EditProfilePage> {
-  final TextEditingController _nameController = TextEditingController(text: "David Racer");
-  final TextEditingController _usernameController = TextEditingController(text: "@david_racer");
-  final TextEditingController _bioController = TextEditingController(text: "Car enthusiast. Mountain roads lover. 🏔️🏎️");
-  final TextEditingController _linkController = TextEditingController(text: "cruiseconnect.com/david");
+  final TextEditingController _nameController = TextEditingController(text: 'David Racer');
+  final TextEditingController _usernameController = TextEditingController(text: '@david_racer');
+  final TextEditingController _bioController = TextEditingController(text: 'Car enthusiast. Mountain roads lover. 🏔️🏎️');
+  final TextEditingController _linkController = TextEditingController(text: 'cruiseconnect.com/david');
 
   @override
   Widget build(BuildContext context) {
@@ -24,7 +24,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
           icon: const Icon(Icons.arrow_back, color: Colors.white),
           onPressed: () => Navigator.pop(context),
         ),
-        title: const Text("Profil bearbeiten", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+        title: const Text('Profil bearbeiten', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
         actions: [
           TextButton(
             onPressed: () {
@@ -32,7 +32,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
               Navigator.pop(context);
             },
             child: const Text(
-              "Speichern",
+              'Speichern',
               style: TextStyle(color: Color(0xFFFF3B30), fontWeight: FontWeight.bold, fontSize: 16),
             ),
           ),
@@ -75,20 +75,20 @@ class _EditProfilePageState extends State<EditProfilePage> {
           const SizedBox(height: 10),
           const Center(
             child: Text(
-              "Bild ändern",
+              'Bild ändern',
               style: TextStyle(color: Color(0xFFFF3B30), fontWeight: FontWeight.w500),
             ),
           ),
           const SizedBox(height: 32),
 
           // Formular Felder
-          _buildLabel("Anzeigename"),
-          _buildTextField(_nameController, "Dein Name"),
+          _buildLabel('Anzeigename'),
+          _buildTextField(_nameController, 'Dein Name'),
           
           const SizedBox(height: 20),
           
-          _buildLabel("Username"),
-          _buildTextField(_usernameController, "@username"),
+          _buildLabel('Username'),
+          _buildTextField(_usernameController, '@username'),
           const SizedBox(height: 6),
           const Text(
             'Du kannst deinen Benutzernamen nur alle 60 Tage ändern.',
@@ -97,13 +97,13 @@ class _EditProfilePageState extends State<EditProfilePage> {
 
           const SizedBox(height: 20),
 
-          _buildLabel("Steckbrief / Bio"),
-          _buildTextField(_bioController, "Erzähl etwas über dich...", maxLines: 3),
+          _buildLabel('Steckbrief / Bio'),
+          _buildTextField(_bioController, 'Erzähl etwas über dich...', maxLines: 3),
 
           const SizedBox(height: 20),
 
-          _buildLabel("Link / Webseite"),
-          _buildTextField(_linkController, "https://..."),
+          _buildLabel('Link / Webseite'),
+          _buildTextField(_linkController, 'https://...'),
         ],
       ),
     );
@@ -131,7 +131,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
         style: const TextStyle(color: Colors.white),
         decoration: InputDecoration(
           hintText: hint,
-          hintStyle: TextStyle(color: Colors.grey.withOpacity(0.5)),
+          hintStyle: TextStyle(color: Colors.grey.withValues(alpha: 0.5)),
           border: InputBorder.none,
           contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         ),

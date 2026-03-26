@@ -31,7 +31,7 @@ class RouteJoinPage extends StatelessWidget {
                 fit: StackFit.expand,
                 children: [
                   // Platzhalter für echte Karte
-                  Icon(Icons.map_outlined, size: 120, color: Colors.white.withOpacity(0.1)),
+                  Icon(Icons.map_outlined, size: 120, color: Colors.white.withValues(alpha: 0.1)),
                   
                   // Verlauf nach unten (Fade to Black)
                   Container(
@@ -41,7 +41,7 @@ class RouteJoinPage extends StatelessWidget {
                         end: Alignment.bottomCenter,
                         colors: [
                           Colors.transparent,
-                          const Color(0xFF0B0E14).withOpacity(0.8),
+                          const Color(0xFF0B0E14).withValues(alpha: 0.8),
                           const Color(0xFF0B0E14),
                         ],
                         stops: const [0.6, 0.9, 1.0],
@@ -82,7 +82,7 @@ class RouteJoinPage extends StatelessWidget {
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       const Text(
-                        "Alpine Rush",
+                        'Alpine Rush',
                         style: TextStyle(
                           color: Colors.white,
                           fontSize: 32,
@@ -95,12 +95,12 @@ class RouteJoinPage extends StatelessWidget {
                           color: const Color(0xFFFF3B30),
                           borderRadius: BorderRadius.circular(20),
                         ),
-                        child: Row(
-                          children: const [
+                        child: const Row(
+                          children: [
                             Icon(Icons.star, color: Colors.white, size: 16),
                             SizedBox(width: 4),
                             Text(
-                              "4.9",
+                              '4.9',
                               style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
                             ),
                           ],
@@ -110,7 +110,7 @@ class RouteJoinPage extends StatelessWidget {
                   ),
                   const SizedBox(height: 8),
                   const Text(
-                    "Empfohlen für dich • Sportlich",
+                    'Empfohlen für dich • Sportlich',
                     style: TextStyle(color: Colors.grey, fontSize: 16),
                   ),
                   
@@ -119,11 +119,11 @@ class RouteJoinPage extends StatelessWidget {
                   // Stats Grid
                   Row(
                     children: [
-                      Expanded(child: _buildStatItem(Icons.straighten, "87 km", "Distanz")),
+                      Expanded(child: _buildStatItem(Icons.straighten, '87 km', 'Distanz')),
                       const SizedBox(width: 12),
-                      Expanded(child: _buildStatItem(Icons.timer, "1h 36m", "Dauer")),
+                      Expanded(child: _buildStatItem(Icons.timer, '1h 36m', 'Dauer')),
                       const SizedBox(width: 12),
-                      Expanded(child: _buildStatItem(Icons.turn_right, "132", "Kurven")),
+                      Expanded(child: _buildStatItem(Icons.turn_right, '132', 'Kurven')),
                     ],
                   ),
 
@@ -143,10 +143,10 @@ class RouteJoinPage extends StatelessWidget {
                           borderRadius: BorderRadius.circular(16),
                         ),
                         elevation: 8,
-                        shadowColor: const Color(0xFFFF3B30).withOpacity(0.5),
+                        shadowColor: const Color(0xFFFF3B30).withValues(alpha: 0.5),
                       ),
                       child: const Text(
-                        "Route beitreten",
+                        'Route beitreten',
                         style: TextStyle(
                           fontSize: 18,
                           fontWeight: FontWeight.bold,
@@ -171,7 +171,7 @@ class RouteJoinPage extends StatelessWidget {
       decoration: BoxDecoration(
         color: const Color(0xFF1C1F26),
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: Colors.white.withOpacity(0.05)),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
       ),
       child: Column(
         children: [

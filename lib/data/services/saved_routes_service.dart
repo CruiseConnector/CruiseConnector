@@ -117,7 +117,7 @@ class SavedRoutesService {
     try {
       final data = await _db.from('routes').select().eq('id', id).maybeSingle();
       if (data == null) return null;
-      return SavedRoute.fromJson(data as Map<String, dynamic>);
+      return SavedRoute.fromJson(data);
     } catch (e) {
       debugPrint('[SavedRoutes] getRouteById Fehler: $e');
       return null;

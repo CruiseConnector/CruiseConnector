@@ -115,17 +115,17 @@ class _SettingsPageState extends State<SettingsPage> {
           icon: const Icon(Icons.arrow_back, color: Colors.white),
           onPressed: () => Navigator.pop(context),
         ),
-        title: const Text("Einstellungen", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+        title: const Text('Einstellungen', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator(color: Color(0xFFFF3B30)))
           : ListView(
               padding: const EdgeInsets.all(16),
               children: [
-                _buildSectionHeader("KONTO & PRIVATSPHÄRE"),
+                _buildSectionHeader('KONTO & PRIVATSPHÄRE'),
                 _buildSectionContainer([
                   _buildSwitchTile(
-                    "Privates Konto",
+                    'Privates Konto',
                     _isPrivateAccount,
                     _togglePrivacy,
                     subtitle: _isPrivateAccount
@@ -133,21 +133,21 @@ class _SettingsPageState extends State<SettingsPage> {
                         : 'Jeder kann deine Posts sehen',
                   ),
                   const Divider(color: Colors.white10, height: 1),
-                  _buildNavTile("Passwort ändern", Icons.lock_outline),
+                  _buildNavTile('Passwort ändern', Icons.lock_outline),
                 ]),
 
                 const SizedBox(height: 24),
 
-                _buildSectionHeader("APP-EINSTELLUNGEN"),
+                _buildSectionHeader('APP-EINSTELLUNGEN'),
                 _buildSectionContainer([
                   _buildSwitchTile(
-                    "Push-Benachrichtigungen",
+                    'Push-Benachrichtigungen',
                     _pushNotifications,
                     (val) => setState(() => _pushNotifications = val),
                   ),
                   const Divider(color: Colors.white10, height: 1),
                   _buildSwitchTile(
-                    "Metrische Einheiten (km)",
+                    'Metrische Einheiten (km)',
                     _metricUnits,
                     (val) => setState(() => _metricUnits = val),
                   ),
@@ -155,12 +155,12 @@ class _SettingsPageState extends State<SettingsPage> {
 
                 const SizedBox(height: 24),
 
-                _buildSectionHeader("GEFAHRENZONE"),
+                _buildSectionHeader('GEFAHRENZONE'),
                 _buildSectionContainer([
                   ListTile(
                     leading: const Icon(Icons.delete_outline, color: Color(0xFFFF3B30)),
                     title: const Text(
-                      "Konto löschen",
+                      'Konto löschen',
                       style: TextStyle(color: Color(0xFFFF3B30), fontWeight: FontWeight.bold),
                     ),
                     onTap: () {

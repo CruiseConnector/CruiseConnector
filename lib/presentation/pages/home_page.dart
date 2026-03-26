@@ -98,7 +98,7 @@ class _HomePageState extends State<HomePage> {
         borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.08),
+            color: Colors.black.withValues(alpha: 0.08),
             blurRadius: 20,
             offset: const Offset(0, -5),
           )
@@ -141,7 +141,7 @@ class _HomePageState extends State<HomePage> {
                     // Der neue "Mini-Schatten" (subtiler)
                     boxShadow: [
                       BoxShadow(
-                        color: const Color(0xFFFF3B30).withOpacity(0.3),
+                        color: const Color(0xFFFF3B30).withValues(alpha: 0.3),
                         blurRadius: 10,
                         spreadRadius: 0,
                         offset: const Offset(0, 4),

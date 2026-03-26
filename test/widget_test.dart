@@ -7,7 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:cruise_connect/presentation/widgets/my_button.dart';
-import 'package:cruise_connect/presentation/widgets/Textfeld.dart';
+import 'package:cruise_connect/presentation/widgets/textfeld.dart';
 
 void main() {
   group('MyButton', () {

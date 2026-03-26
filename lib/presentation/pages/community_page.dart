@@ -141,7 +141,7 @@ class _CommunityPageState extends State<CommunityPage> with SingleTickerProvider
       backgroundColor: const Color(0xFF0B0E14),
       appBar: AppBar(
         backgroundColor: const Color(0xFF0B0E14),
-        title: const Text("Community", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+        title: const Text('Community', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
         actions: [
           IconButton(
             icon: const Icon(Icons.search, color: Colors.white),
@@ -173,9 +173,9 @@ class _CommunityPageState extends State<CommunityPage> with SingleTickerProvider
           unselectedLabelColor: Colors.grey,
           labelStyle: const TextStyle(fontWeight: FontWeight.bold),
           tabs: const [
-            Tab(text: "Feed"),
-            Tab(text: "Aktive Gruppen"),
-            Tab(text: "Entdecken"),
+            Tab(text: 'Feed'),
+            Tab(text: 'Aktive Gruppen'),
+            Tab(text: 'Entdecken'),
           ],
         ),
         elevation: 0,
@@ -236,7 +236,7 @@ class _CommunityPageState extends State<CommunityPage> with SingleTickerProvider
       child: ListView.separated(
         padding: const EdgeInsets.only(bottom: 80),
         itemCount: _feedPosts.length,
-        separatorBuilder: (_, __) => const Divider(color: Colors.white10, height: 1),
+        separatorBuilder: (_, _) => const Divider(color: Colors.white10, height: 1),
         itemBuilder: (context, index) => _buildPostItem(_feedPosts[index]),
       ),
     );
@@ -291,7 +291,7 @@ class _CommunityPageState extends State<CommunityPage> with SingleTickerProvider
           if (_discoverGroups.isNotEmpty) ...[
             const Padding(
               padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
-              child: Text("Gruppen entdecken", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18)),
+              child: Text('Gruppen entdecken', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18)),
             ),
             SizedBox(
               height: 120,
@@ -328,7 +328,7 @@ class _CommunityPageState extends State<CommunityPage> with SingleTickerProvider
                               color: const Color(0xFFFF3B30),
                               borderRadius: BorderRadius.circular(12),
                             ),
-                            child: const Text("Beitreten", style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
+                            child: const Text('Beitreten', style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
                           ),
                         ),
                       ],
@@ -340,7 +340,7 @@ class _CommunityPageState extends State<CommunityPage> with SingleTickerProvider
           ],
           const Padding(
             padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
-            child: Text("Vorschläge für dich", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18)),
+            child: Text('Vorschläge für dich', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18)),
           ),
           if (_discoverPosts.isEmpty)
             const Padding(
@@ -406,7 +406,7 @@ class _CommunityPageState extends State<CommunityPage> with SingleTickerProvider
                     const SizedBox(width: 5),
                     Flexible(child: Text(handle, style: const TextStyle(color: Colors.grey, fontSize: 14), overflow: TextOverflow.ellipsis)),
                     const SizedBox(width: 5),
-                    Text("· $time", style: const TextStyle(color: Colors.grey, fontSize: 14)),
+                    Text('· $time', style: const TextStyle(color: Colors.grey, fontSize: 14)),
                     if (showFollow && !isOwnPost) ...[
                       const SizedBox(width: 8),
                       GestureDetector(
@@ -425,7 +425,7 @@ class _CommunityPageState extends State<CommunityPage> with SingleTickerProvider
                             border: Border.all(color: const Color(0xFFFF3B30)),
                             borderRadius: BorderRadius.circular(4),
                           ),
-                          child: const Text("Folgen", style: TextStyle(color: Color(0xFFFF3B30), fontSize: 10, fontWeight: FontWeight.bold)),
+                          child: const Text('Folgen', style: TextStyle(color: Color(0xFFFF3B30), fontSize: 10, fontWeight: FontWeight.bold)),
                         ),
                       ),
                     ],
@@ -672,7 +672,7 @@ class _CommunityPageState extends State<CommunityPage> with SingleTickerProvider
                       color: Colors.greenAccent.withValues(alpha: 0.2),
                       borderRadius: BorderRadius.circular(8),
                     ),
-                    child: const Text("Dabei", style: TextStyle(color: Colors.greenAccent, fontSize: 10, fontWeight: FontWeight.bold)),
+                    child: const Text('Dabei', style: TextStyle(color: Colors.greenAccent, fontSize: 10, fontWeight: FontWeight.bold)),
                   )
                 else
                   GestureDetector(
@@ -683,7 +683,7 @@ class _CommunityPageState extends State<CommunityPage> with SingleTickerProvider
                     child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                       decoration: BoxDecoration(color: const Color(0xFFFF3B30), borderRadius: BorderRadius.circular(12)),
-                      child: const Text("Beitreten", style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
+                      child: const Text('Beitreten', style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
                     ),
                   ),
               ],
@@ -704,7 +704,7 @@ class _CommunityPageState extends State<CommunityPage> with SingleTickerProvider
             Row(children: [
               const Icon(Icons.local_fire_department, color: Colors.orange, size: 14),
               const SizedBox(width: 6),
-              Text("$memberCount Fahrer", style: const TextStyle(color: Colors.white70, fontSize: 12)),
+              Text('$memberCount Fahrer', style: const TextStyle(color: Colors.white70, fontSize: 12)),
             ]),
             if (group['time_location'] != null) ...[
               const SizedBox(height: 6),
@@ -836,7 +836,7 @@ class _CommunityPageState extends State<CommunityPage> with SingleTickerProvider
             ),
             const Padding(
               padding: EdgeInsets.all(16),
-              child: Align(alignment: Alignment.centerLeft, child: Text("Benachrichtigungen", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold))),
+              child: Align(alignment: Alignment.centerLeft, child: Text('Benachrichtigungen', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold))),
             ),
             if (notifications.isEmpty)
               const Padding(
@@ -893,6 +893,7 @@ class _CommunityPageState extends State<CommunityPage> with SingleTickerProvider
                       ? GestureDetector(
                           onTap: () async {
                             await SocialService.joinGroup(n['reference_id']);
+                            if (!context.mounted) return;
                             Navigator.pop(sheetContext);
                             if (mounted) {
                               ScaffoldMessenger.of(context).showSnackBar(
@@ -970,7 +971,7 @@ class _FollowButtonState extends State<_FollowButton> {
           border: _following ? Border.all(color: Colors.grey) : null,
         ),
         child: Text(
-          _following ? "Folgst du" : "Folgen",
+          _following ? 'Folgst du' : 'Folgen',
           style: TextStyle(color: _following ? Colors.grey : Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
         ),
       ),

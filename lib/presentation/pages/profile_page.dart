@@ -171,7 +171,7 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
   @override
   Widget build(BuildContext context) {
     final user = Supabase.instance.client.auth.currentUser;
-    final String userEmail = user?.email ?? "user@cruiseconnect.com";
+    final String userEmail = user?.email ?? 'user@cruiseconnect.com';
     final String userName = (user?.userMetadata?['username'] as String?) ?? userEmail.split('@')[0];
     final String userHandle = "@${userEmail.split('@')[0]}";
 
@@ -317,7 +317,7 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
                                 borderRadius: BorderRadius.circular(20),
                                 border: Border.all(color: Colors.white30),
                               ),
-                              child: const Text("Profil bearbeiten", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
+                              child: const Text('Profil bearbeiten', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
                             ),
                           ),
                         ),
@@ -336,12 +336,12 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
                             children: [
                               GestureDetector(
                                 onTap: () => _showFollowList('following'),
-                                child: _buildFollowStat('$_followingCount', "Folge ich"),
+                                child: _buildFollowStat('$_followingCount', 'Folge ich'),
                               ),
                               const SizedBox(width: 16),
                               GestureDetector(
                                 onTap: () => _showFollowList('followers'),
-                                child: _buildFollowStat('$_followerCount', "Follower"),
+                                child: _buildFollowStat('$_followerCount', 'Follower'),
                               ),
                             ],
                           ),
@@ -365,10 +365,10 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
                   unselectedLabelColor: Colors.grey,
                   labelStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
                   tabs: const [
-                    Tab(text: "Posts"),
-                    Tab(text: "Reposts"),
-                    Tab(text: "Routen"),
-                    Tab(text: "Gruppen"),
+                    Tab(text: 'Posts'),
+                    Tab(text: 'Reposts'),
+                    Tab(text: 'Routen'),
+                    Tab(text: 'Gruppen'),
                   ],
                 ),
               ),
@@ -439,7 +439,7 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
                                           padding: EdgeInsets.zero,
                                           constraints: const BoxConstraints(),
                                           onSelected: (value) async {
-                                            if (value == 'unrepost' && originalPostId != null) {
+                                            if (value == 'unrepost') {
                                               await SocialService.toggleRepost(originalPostId);
                                               _loadData();
                                             }
@@ -554,7 +554,7 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
                       children: [
                         Text(handle, style: const TextStyle(color: Colors.grey, fontSize: 13)),
                         const SizedBox(width: 5),
-                        Text("· $time", style: const TextStyle(color: Colors.grey, fontSize: 13)),
+                        Text('· $time', style: const TextStyle(color: Colors.grey, fontSize: 13)),
                       ],
                     ),
                   ],
@@ -692,9 +692,8 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
                                 Navigator.pop(sheetContext);
                                 if (userId != null) {
                                   Future.delayed(const Duration(milliseconds: 150), () {
-                                    if (mounted) {
-                                      Navigator.push(context, MaterialPageRoute(builder: (_) => UserProfilePage(userId: userId)));
-                                    }
+                                    if (!context.mounted) return;
+                                    Navigator.push(context, MaterialPageRoute(builder: (_) => UserProfilePage(userId: userId)));
                                   });
                                 }
                               },
@@ -845,16 +844,16 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
               padding: EdgeInsets.symmetric(horizontal: 20),
               child: Align(
                 alignment: Alignment.centerLeft,
-                child: Text("Menü", style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold)),
+                child: Text('Menü', style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold)),
               ),
             ),
             const SizedBox(height: 20),
-            _buildMenuItem(Icons.settings, "Einstellungen",
+            _buildMenuItem(Icons.settings, 'Einstellungen',
                 onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const SettingsPage()))),
-            _buildMenuItem(Icons.bookmark, "Gespeicherte Routen", onTap: () {
+            _buildMenuItem(Icons.bookmark, 'Gespeicherte Routen', onTap: () {
               _tabController.animateTo(2);
             }),
-            _buildMenuItem(Icons.help_outline, "Hilfe & Support"),
+            _buildMenuItem(Icons.help_outline, 'Hilfe & Support'),
             const Spacer(),
             Padding(
               padding: const EdgeInsets.all(20.0),
@@ -871,7 +870,7 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
                       side: const BorderSide(color: Color(0xFFFF3B30)),
                     ),
                   ),
-                  child: const Text("Ausloggen", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                  child: const Text('Ausloggen', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
                 ),
               ),
             ),
@@ -925,7 +924,7 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
                       color: Colors.greenAccent.withValues(alpha: 0.2),
                       borderRadius: BorderRadius.circular(8),
                     ),
-                    child: const Text("Dabei", style: TextStyle(color: Colors.greenAccent, fontSize: 10, fontWeight: FontWeight.bold)),
+                    child: const Text('Dabei', style: TextStyle(color: Colors.greenAccent, fontSize: 10, fontWeight: FontWeight.bold)),
                   ),
               ],
             ),
@@ -945,7 +944,7 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
             Row(children: [
               const Icon(Icons.local_fire_department, color: Colors.orange, size: 14),
               const SizedBox(width: 6),
-              Text("$drivers Fahrer", style: const TextStyle(color: Colors.white70, fontSize: 12)),
+              Text('$drivers Fahrer', style: const TextStyle(color: Colors.white70, fontSize: 12)),
             ]),
           ],
         ),

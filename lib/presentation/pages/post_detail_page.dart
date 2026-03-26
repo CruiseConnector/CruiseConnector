@@ -76,7 +76,7 @@ class _PostDetailPageState extends State<PostDetailPage> {
           icon: const Icon(Icons.arrow_back, color: Colors.white),
           onPressed: () => Navigator.pop(context),
         ),
-        title: const Text("Beitrag", style: TextStyle(color: Colors.white)),
+        title: const Text('Beitrag', style: TextStyle(color: Colors.white)),
       ),
       body: Column(
         children: [
@@ -111,13 +111,13 @@ class _PostDetailPageState extends State<PostDetailPage> {
                   Text(widget.content, style: const TextStyle(color: Colors.white, fontSize: 20, height: 1.4)),
                   const SizedBox(height: 20),
                   Text(
-                    "${widget.time} · CruiseConnect",
+                    '${widget.time} · CruiseConnect',
                     style: const TextStyle(color: Colors.grey, fontSize: 14),
                   ),
                   const Divider(color: Colors.white24),
                   const SizedBox(height: 10),
                   Text(
-                    "Kommentare (${_comments.length})",
+                    'Kommentare (${_comments.length})',
                     style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18),
                   ),
                   const SizedBox(height: 16),
@@ -171,7 +171,7 @@ class _PostDetailPageState extends State<PostDetailPage> {
                         controller: _commentController,
                         style: const TextStyle(color: Colors.white),
                         decoration: const InputDecoration(
-                          hintText: "Kommentar schreiben...",
+                          hintText: 'Kommentar schreiben...',
                           hintStyle: TextStyle(color: Colors.grey),
                           border: InputBorder.none,
                         ),

@@ -61,7 +61,7 @@ class WelcomePage extends StatelessWidget {
                           borderRadius: BorderRadius.circular(24),
                           boxShadow: [
                             BoxShadow(
-                              color: Colors.black.withOpacity(0.18),
+                              color: Colors.black.withValues(alpha: 0.18),
                               blurRadius: 20,
                               offset: const Offset(0, 10),
                             ),
@@ -112,7 +112,7 @@ class WelcomePage extends StatelessWidget {
                         text: 'Anmelden',
                         onTap: () => Navigator.push(
                           context,
-                          MaterialPageRoute(builder: (_) => LoginPage()),
+                          MaterialPageRoute(builder: (_) => const LoginPage()),
                         ),
                       ),
                       const SizedBox(height: 28),
@@ -169,7 +169,7 @@ class WelcomePage extends StatelessWidget {
             borderRadius: BorderRadius.circular(30),
             boxShadow: [
               BoxShadow(
-                color: _brand.withOpacity(0.4),
+                color: _brand.withValues(alpha: 0.4),
                 blurRadius: 15,
                 offset: const Offset(0, 8),
               ),
@@ -208,7 +208,7 @@ class WelcomePage extends StatelessWidget {
         border: Border.all(color: Colors.grey.shade200),
         boxShadow: [
           BoxShadow(
-            color: Colors.grey.withOpacity(0.1),
+            color: Colors.grey.withValues(alpha: 0.1),
             blurRadius: 10,
             offset: const Offset(0, 5),
           ),
