@@ -1778,7 +1778,12 @@ class _CruiseModePageState extends State<CruiseModePage> {
     if (!_mapReady) return;
     geo.Position position;
     try {
-      position = await geo.Geolocator.getCurrentPosition();
+      position = await geo.Geolocator.getCurrentPosition(
+        locationSettings: const geo.LocationSettings(
+          accuracy: geo.LocationAccuracy.best,
+          timeLimit: Duration(seconds: 10),
+        ),
+      );
     } catch (e) {
       debugPrint(
         '[CruiseMode] getCurrentPosition fehlgeschlagen, verwende Fallback: $e',

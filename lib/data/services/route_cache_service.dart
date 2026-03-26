@@ -148,8 +148,13 @@ class RouteCacheService {
 
   Future<geo.Position?> _getCurrentPosition() async {
     try {
-      final serviceEnabled = await geo.Geolocator.isLocationServiceEnabled();
-      if (!serviceEnabled) return null;
+      // Auf Web: checkPermission/isLocationServiceEnabled werden unterstützt,
+      // aber wir überspringen den Service-Check da Browser keinen "GPS aus"-Status hat
+      if (!kIsWeb) {
+        final serviceEnabled =
+            await geo.Geolocator.isLocationServiceEnabled();
+        if (!serviceEnabled) return null;
+      }
 
       var permission = await geo.Geolocator.checkPermission();
       if (permission == geo.LocationPermission.denied) {
