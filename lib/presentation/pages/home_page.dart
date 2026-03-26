@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:cruise_connect/data/services/offline_map_service.dart';
@@ -34,12 +35,23 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _requestLocationPermission() async {
-    final serviceEnabled = await Geolocator.isLocationServiceEnabled();
-    if (!serviceEnabled) return;
+    try {
+      // Auf Web: Browser zeigt eigenen Dialog bei getCurrentPosition()
+      // Trotzdem requestPermission aufrufen damit der Dialog sofort kommt
+      if (kIsWeb) {
+        await Geolocator.requestPermission();
+        return;
+      }
 
-    var permission = await Geolocator.checkPermission();
-    if (permission == LocationPermission.denied) {
-      permission = await Geolocator.requestPermission();
+      final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) return;
+
+      var permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+      }
+    } catch (e) {
+      debugPrint('[HomePage] Location permission request failed: $e');
     }
   }
 

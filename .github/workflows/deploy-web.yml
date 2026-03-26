@@ -27,18 +27,16 @@ jobs:
           cache: true
 
       - name: Generate Secrets
-        env:
-          MAPBOX_TOKEN: ${{ secrets.MAPBOX_PUBLIC_TOKEN }}
-          SB_URL: ${{ secrets.SUPABASE_URL }}
-          SB_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         run: |
           mkdir -p lib/config
-          echo "class AppSecrets {" > lib/config/secrets.dart
-          echo "  AppSecrets._();" >> lib/config/secrets.dart
-          echo "  static const String mapboxPublicToken = '${MAPBOX_TOKEN}';" >> lib/config/secrets.dart
-          echo "  static const String supabaseUrl = '${SB_URL}';" >> lib/config/secrets.dart
-          echo "  static const String supabaseAnonKey = '${SB_KEY}';" >> lib/config/secrets.dart
-          echo "}" >> lib/config/secrets.dart
+          printf '%s\n' \
+            'class AppSecrets {' \
+            '  AppSecrets._();' \
+            '  static const String mapboxPublicToken = '"'"'${{ secrets.MAPBOX_PUBLIC_TOKEN }}'"'"';' \
+            '  static const String supabaseUrl = '"'"'${{ secrets.SUPABASE_URL }}'"'"';' \
+            '  static const String supabaseAnonKey = '"'"'${{ secrets.SUPABASE_ANON_KEY }}'"'"';' \
+            '}' > lib/config/secrets.dart
+          cat lib/config/secrets.dart
 
       - name: Build
         run: |
