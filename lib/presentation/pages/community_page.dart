@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:cruise_connect/data/services/saved_routes_service.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/presentation/pages/create_post_page.dart';
 import 'package:cruise_connect/presentation/pages/create_group_page.dart';
+import 'package:cruise_connect/presentation/pages/cruise_mode_page.dart';
 import 'package:cruise_connect/presentation/pages/user_profile_page.dart';
 
 class CommunityPage extends StatefulWidget {
@@ -469,6 +471,11 @@ class _CommunityPageState extends State<CommunityPage> with SingleTickerProvider
                 ),
                 const SizedBox(height: 4),
                 Text(content, style: const TextStyle(color: Colors.white, fontSize: 15, height: 1.3)),
+                // Route-Chip: Wenn Post eine geteilte Route enthält
+                if (post['shared_route_id'] != null) ...[
+                  const SizedBox(height: 10),
+                  _RouteChip(routeId: post['shared_route_id'] as String),
+                ],
                 const SizedBox(height: 12),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -985,12 +992,24 @@ class _PostLikeButton extends StatefulWidget {
 class _PostLikeButtonState extends State<_PostLikeButton> {
   late int _count;
   bool _liked = false;
+  bool _busy = false;
 
   @override
   void initState() {
     super.initState();
     _count = widget.initialCount;
     _checkLiked();
+  }
+
+  @override
+  void didUpdateWidget(_PostLikeButton oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.postId != widget.postId) {
+      _count = widget.initialCount;
+      _liked = false;
+      _busy = false;
+      _checkLiked();
+    }
   }
 
   Future<void> _checkLiked() async {
@@ -1001,13 +1020,39 @@ class _PostLikeButtonState extends State<_PostLikeButton> {
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      onTap: () async {
-        final nowLiked = await SocialService.toggleLike(widget.postId);
-        setState(() {
-          _liked = nowLiked;
-          _count += nowLiked ? 1 : -1;
-        });
-      },
+      onTap: _busy
+          ? null
+          : () async {
+              // Optimistic Update: sofort UI aktualisieren
+              final wasLiked = _liked;
+              setState(() {
+                _liked = !_liked;
+                _count += _liked ? 1 : -1;
+                _busy = true;
+              });
+              try {
+                final nowLiked = await SocialService.toggleLike(widget.postId);
+                if (mounted) {
+                  setState(() {
+                    _liked = nowLiked;
+                    // Korrektur falls DB-Ergebnis abweicht
+                    if (nowLiked != !wasLiked) {
+                      _count = widget.initialCount + (nowLiked ? 1 : 0);
+                    }
+                    _busy = false;
+                  });
+                }
+              } catch (_) {
+                // Fehler: Optimistic Update rückgängig machen
+                if (mounted) {
+                  setState(() {
+                    _liked = wasLiked;
+                    _count = widget.initialCount + (wasLiked ? 1 : 0);
+                    _busy = false;
+                  });
+                }
+              }
+            },
       child: Row(
         children: [
           Icon(_liked ? Icons.favorite : Icons.favorite_border, color: _liked ? const Color(0xFFFF3B30) : Colors.grey, size: 18),
@@ -1033,12 +1078,24 @@ class _PostRepostButton extends StatefulWidget {
 class _PostRepostButtonState extends State<_PostRepostButton> {
   late int _count;
   bool _reposted = false;
+  bool _busy = false;
 
   @override
   void initState() {
     super.initState();
     _count = widget.initialCount;
     _checkReposted();
+  }
+
+  @override
+  void didUpdateWidget(_PostRepostButton oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.postId != widget.postId) {
+      _count = widget.initialCount;
+      _reposted = false;
+      _busy = false;
+      _checkReposted();
+    }
   }
 
   Future<void> _checkReposted() async {
@@ -1049,19 +1106,107 @@ class _PostRepostButtonState extends State<_PostRepostButton> {
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      onTap: () async {
-        final nowReposted = await SocialService.toggleRepost(widget.postId);
-        setState(() {
-          _reposted = nowReposted;
-          _count += nowReposted ? 1 : -1;
-        });
-      },
+      onTap: _busy
+          ? null
+          : () async {
+              // Optimistic Update
+              final wasReposted = _reposted;
+              setState(() {
+                _reposted = !_reposted;
+                _count += _reposted ? 1 : -1;
+                _busy = true;
+              });
+              try {
+                final nowReposted = await SocialService.toggleRepost(widget.postId);
+                if (mounted) {
+                  setState(() {
+                    _reposted = nowReposted;
+                    if (nowReposted != !wasReposted) {
+                      _count = widget.initialCount + (nowReposted ? 1 : 0);
+                    }
+                    _busy = false;
+                  });
+                }
+              } catch (_) {
+                if (mounted) {
+                  setState(() {
+                    _reposted = wasReposted;
+                    _count = widget.initialCount + (wasReposted ? 1 : 0);
+                    _busy = false;
+                  });
+                }
+              }
+            },
       child: Row(
         children: [
           Icon(Icons.repeat, color: _reposted ? const Color(0xFF34C759) : Colors.grey, size: 18),
           const SizedBox(width: 4),
           Text('$_count', style: TextStyle(color: _reposted ? const Color(0xFF34C759) : Colors.grey, fontSize: 12)),
         ],
+      ),
+    );
+  }
+}
+
+// ── Route Chip Widget ─────────────────────────────────────────────────
+// Zeigt bei Posts mit shared_route_id einen "Route fahren"-Button an.
+
+class _RouteChip extends StatefulWidget {
+  final String routeId;
+  const _RouteChip({required this.routeId});
+
+  @override
+  State<_RouteChip> createState() => _RouteChipState();
+}
+
+class _RouteChipState extends State<_RouteChip> {
+  bool _loading = false;
+
+  Future<void> _openRoute() async {
+    if (_loading) return;
+    setState(() => _loading = true);
+    try {
+      final route = await SavedRoutesService.getRouteById(widget.routeId);
+      if (route == null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Route nicht gefunden'), backgroundColor: Color(0xFF1C1F26)),
+          );
+        }
+        return;
+      }
+      // Route über den bestehenden pendingRoute-Mechanismus laden
+      CruiseModePage.pendingRoute.value = route;
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: _openRoute,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: const Color(0xFFFF3B30).withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: const Color(0xFFFF3B30).withValues(alpha: 0.4)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (_loading)
+              const SizedBox(
+                width: 14, height: 14,
+                child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFFFF3B30)),
+              )
+            else
+              const Icon(Icons.play_circle_outline, color: Color(0xFFFF3B30), size: 16),
+            const SizedBox(width: 6),
+            const Text('Route fahren', style: TextStyle(color: Color(0xFFFF3B30), fontSize: 13, fontWeight: FontWeight.w600)),
+          ],
+        ),
       ),
     );
   }

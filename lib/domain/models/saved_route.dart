@@ -38,6 +38,21 @@ class SavedRoute {
 
   bool get isRoundTrip => routeType == 'ROUND_TRIP';
 
+  /// Serialisiert die Route für den lokalen Cache (shared_preferences).
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'created_at': createdAt.toIso8601String(),
+      'style': style,
+      'distance_actual': distanceKm,
+      'geometry': geometry,
+      'name': name,
+      'duration_seconds': durationSeconds,
+      'route_type': routeType,
+      'rating': rating,
+    };
+  }
+
   /// Formatierte Distanz (z.B. "12,4 km").
   String get formattedDistance =>
       '${distanceKm.toStringAsFixed(1).replaceAll('.', ',')} km';

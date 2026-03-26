@@ -414,6 +414,7 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
                             if (post == null) return const SizedBox.shrink();
                             final author = post['profiles'] as Map<String, dynamic>?;
                             final authorName = author?['username'] ?? 'User';
+                            final originalPostId = post['id'] as String?;
                             return Container(
                               margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                               padding: const EdgeInsets.all(16),
@@ -431,6 +432,31 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
                                       Text('Repost von @$authorName', style: const TextStyle(color: Color(0xFF34C759), fontSize: 12)),
                                       const Spacer(),
                                       Text(_formatTimeAgo(repost['created_at']), style: const TextStyle(color: Colors.grey, fontSize: 11)),
+                                      if (originalPostId != null)
+                                        PopupMenuButton<String>(
+                                          icon: const Icon(Icons.more_horiz, color: Colors.grey, size: 18),
+                                          color: const Color(0xFF1C1F26),
+                                          padding: EdgeInsets.zero,
+                                          constraints: const BoxConstraints(),
+                                          onSelected: (value) async {
+                                            if (value == 'unrepost' && originalPostId != null) {
+                                              await SocialService.toggleRepost(originalPostId);
+                                              _loadData();
+                                            }
+                                          },
+                                          itemBuilder: (_) => [
+                                            const PopupMenuItem(
+                                              value: 'unrepost',
+                                              child: Row(
+                                                children: [
+                                                  Icon(Icons.repeat, color: Color(0xFF34C759), size: 18),
+                                                  SizedBox(width: 8),
+                                                  Text('Repost entfernen', style: TextStyle(color: Colors.white)),
+                                                ],
+                                              ),
+                                            ),
+                                          ],
+                                        ),
                                     ],
                                   ),
                                   const SizedBox(height: 10),

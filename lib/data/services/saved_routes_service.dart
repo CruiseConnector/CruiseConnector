@@ -61,20 +61,25 @@ class SavedRoutesService {
   // ─── Laden ────────────────────────────────────────────────────────────────
 
   /// Gibt alle gespeicherten Routen des eingeloggten Users zurück,
-  /// neueste zuerst.
+  /// neueste zuerst. Gibt leere Liste bei Fehler zurück.
   static Future<List<SavedRoute>> getUserRoutes() async {
     final userId = _db.auth.currentUser?.id;
     if (userId == null) return const [];
 
-    final data = await _db
-        .from('routes')
-        .select()
-        .eq('user_id', userId)
-        .order('created_at', ascending: false);
+    try {
+      final data = await _db
+          .from('routes')
+          .select()
+          .eq('user_id', userId)
+          .order('created_at', ascending: false);
 
-    return (data as List)
-        .map((row) => SavedRoute.fromJson(row as Map<String, dynamic>))
-        .toList();
+      return (data as List)
+          .map((row) => SavedRoute.fromJson(row as Map<String, dynamic>))
+          .toList();
+    } catch (e) {
+      debugPrint('[SavedRoutes] getUserRoutes Fehler: $e');
+      return const [];
+    }
   }
 
   // ─── Beliebte Routen ────────────────────────────────────────────────────
@@ -85,34 +90,49 @@ class SavedRoutesService {
     String? style,
     int limit = 10,
   }) async {
-    var query = _db
-        .from('routes')
-        .select()
-        .gte('rating', 3)
-        .order('rating', ascending: false)
-        .order('created_at', ascending: false)
-        .limit(limit);
-
-    if (style != null) {
-      query = _db
-          .from('routes')
-          .select()
-          .eq('style', style)
-          .gte('rating', 3)
+    try {
+      // Basisquery einmal aufbauen, dann optional nach Stil filtern (DRY)
+      var query = _db.from('routes').select().gte('rating', 3);
+      if (style != null) {
+        query = query.eq('style', style);
+      }
+      final data = await query
           .order('rating', ascending: false)
+          .order('created_at', ascending: false)
           .limit(limit);
-    }
 
-    final data = await query;
-    return (data as List)
-        .map((row) => SavedRoute.fromJson(row as Map<String, dynamic>))
-        .toList();
+      return (data as List)
+          .map((row) => SavedRoute.fromJson(row as Map<String, dynamic>))
+          .toList();
+    } catch (e) {
+      debugPrint('[SavedRoutes] getPopularRoutes Fehler: $e');
+      return const [];
+    }
+  }
+
+  // ─── Einzelne Route laden ─────────────────────────────────────────────────
+
+  /// Lädt eine einzelne Route anhand ihrer ID.
+  static Future<SavedRoute?> getRouteById(String id) async {
+    try {
+      final data = await _db.from('routes').select().eq('id', id).maybeSingle();
+      if (data == null) return null;
+      return SavedRoute.fromJson(data as Map<String, dynamic>);
+    } catch (e) {
+      debugPrint('[SavedRoutes] getRouteById Fehler: $e');
+      return null;
+    }
   }
 
   // ─── Löschen ─────────────────────────────────────────────────────────────
 
   /// Löscht eine Route anhand ihrer ID.
   static Future<void> deleteRoute(String id) async {
-    await _db.from('routes').delete().eq('id', id);
+    try {
+      await _db.from('routes').delete().eq('id', id);
+    } catch (e) {
+      debugPrint('[SavedRoutes] deleteRoute Fehler: $e');
+      rethrow; // UI soll informiert werden, dass Löschen fehlschlug
+    }
   }
 }

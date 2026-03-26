@@ -35,7 +35,7 @@ class _CreatePostPageState extends State<CreatePostPage> {
 
     setState(() => _posting = true);
     try {
-      await SocialService.createPost(content, visibility: _visibility);
+      await SocialService.createPost(content, visibility: _visibility, sharedRouteId: widget.sharedRouteId);
       if (mounted) Navigator.pop(context, true);
     } catch (e) {
       if (mounted) {

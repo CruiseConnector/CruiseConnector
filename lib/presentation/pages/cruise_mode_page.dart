@@ -2,10 +2,13 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show HapticFeedback;
 import 'package:geolocator/geolocator.dart' as geo;
-import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart';
+import 'package:cruise_connect/core/constants.dart';
 
 import 'package:cruise_connect/data/services/geocoding_service.dart';
 import 'package:cruise_connect/data/services/offline_map_service.dart';
@@ -66,18 +69,18 @@ class _CruiseModePageState extends State<CruiseModePage> {
   bool _showRouteInfoBanner = false; // Route-Info Banner nach Generation
   int _cachedCurveCount = 0; // Vorab im Isolate berechnet
 
-  // ─────────────────────── Map State ─────────────────────────────────────────
+  // ─────────────────────── Map State (flutter_map) ───────────────────────────
   bool _isLoading = false;
-  MapboxMap? _mapboxMap;
-  CircleAnnotationManager? _simPuckManager;
-  bool _routeSourceAdded = false; // Ob die GeoJSON Source+Layer bereits existiert
-  static const _routeSourceId = 'cruise-route-source';
-  static const _routeGlowLayerId = 'cruise-route-glow';
-  static const _routeLayerId = 'cruise-route-layer';
-  ViewportState? _viewportState;
-  bool _isMapStyleLoaded = false;
-  String? _mapLoadError;
-  int _mapWidgetVersion = 0;
+  final MapController _mapController = MapController();
+  bool _mapReady = false;
+  // Route als LatLng-Liste für PolylineLayer
+  List<LatLng> _routeLatLngs = [];
+  // Überlappende Segmente (jedes Segment ist eine eigene LatLng-Liste)
+  List<List<LatLng>> _overlapSegments = [];
+  // Aktuelle User-Position als Marker
+  LatLng? _userPosition;
+  // Simulation-Puck-Position als Marker
+  LatLng? _simulationPuckPosition;
 
   // ─────────────────────── Navigation State ─────────────────────────────────
   geo.Position? _userLocation;
@@ -142,7 +145,6 @@ class _CruiseModePageState extends State<CruiseModePage> {
     CruiseModePage.pendingRoute.removeListener(_onPendingRoute);
     _stopSimulation(restartLiveTracking: false);
     _positionSubscription?.cancel();
-    _mapboxMap = null;
     _destinationController.dispose();
     super.dispose();
   }
@@ -506,104 +508,105 @@ class _CruiseModePageState extends State<CruiseModePage> {
     );
   }
 
-  // ═══════════════════════ MAP WIDGET ═══════════════════════════════════════
+  // ═══════════════════════ MAP WIDGET (flutter_map) ════════════════════════
 
   Widget _buildMapWidget() {
-    return Stack(
-      fit: StackFit.expand,
+    return FlutterMap(
+      mapController: _mapController,
+      options: MapOptions(
+        // Startpunkt: Mitte Deutschlands (wird bei GPS-Erlaubnis sofort überschrieben)
+        initialCenter: const LatLng(51.165691, 10.451526),
+        initialZoom: 6.0,
+        onMapReady: _onMapReady,
+        // Bei Berührung der Karte: Kamera-Lock deaktivieren (war Listener-Widget)
+        onPointerDown: (event, point) {
+          if (_isCameraLocked && _isRouteConfirmed) {
+            _safeSetState(() => _isCameraLocked = false);
+          }
+        },
+      ),
       children: [
-        Listener(
-          onPointerDown: (_) {
-            // Bei Berührung der Karte: Kamera-Lock automatisch deaktivieren
-            if (_isCameraLocked && _isRouteConfirmed) {
-              _safeSetState(() {
-                _isCameraLocked = false;
-                _viewportState = null;
-              });
-            }
-          },
-          child: MapWidget(
-          key: ValueKey('map_widget_$_mapWidgetVersion'),
-          textureView: true,
-          styleUri: MapboxStyles.DARK,
-          onMapCreated: _onMapCreated,
-          onStyleLoadedListener: (_) async {
-            if (!mounted || _disposed) return;
-            _safeSetState(() {
-              _isMapStyleLoaded = true;
-              _mapLoadError = null;
-            });
-            try {
-              await _mapboxMap?.location.updateSettings(
-                LocationComponentSettings(
-                  enabled: true,
-                  puckBearingEnabled: true,
-                  puckBearing: PuckBearing.HEADING,
-                ),
-              );
-            } catch (e) {
-              debugPrint('[CruiseMode] Location-Settings fehlgeschlagen: $e');
-            }
-            // Route zeichnen oder Karte initialisieren (erst hier, weil Annotations den Style brauchen)
-            try {
-              if (_routeGeoJson != null) {
-                final geometry = Map<String, dynamic>.from(json.decode(_routeGeoJson!) as Map);
-                await _drawRoute(geometry);
-                if (_isRouteConfirmed) await _activateNavigationCamera();
-              } else {
-                await _initializeMapLocation();
-              }
-            } catch (e) {
-              debugPrint('Map post-style init failed: $e');
-            }
-          },
-          onMapLoadErrorListener: (event) {
-            if (!mounted || _disposed) return;
-            _safeSetState(() => _mapLoadError = event.message);
-          },
-          cameraOptions: CameraOptions(zoom: 13.0, pitch: 0.0, bearing: 0.0),
-          viewport: _viewportState,
-        )),
-        if (!_isMapStyleLoaded && _mapLoadError == null)
-          const ColoredBox(
-            color: Color(0xFF0B0E14),
-            child: Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  CircularProgressIndicator(color: Color(0xFFFF3B30)),
-                  SizedBox(height: 16),
-                  Text('Karte wird geladen...', style: TextStyle(color: Colors.white54, fontSize: 14)),
-                ],
+        // ── Mapbox Dark-Style als Raster-Tile-Layer ──────────────────────────
+        TileLayer(
+          urlTemplate:
+              'https://api.mapbox.com/styles/v1/mapbox/dark-v11/tiles/256/{z}/{x}/{y}?access_token={accessToken}',
+          additionalOptions: {'accessToken': AppConstants.mapboxPublicToken},
+          userAgentPackageName: 'com.cruise_connect.app',
+          retinaMode: true,
+        ),
+        // ── Route (Glow + Hauptlinie + Überlappungen) ────────────────────────
+        if (_routeLatLngs.length >= 2)
+          PolylineLayer(
+            polylines: [
+              // Glow-Effekt (breiter, halbtransparent)
+              Polyline(
+                points: _routeLatLngs,
+                color: const Color(0x4DFF5722),
+                strokeWidth: 12,
               ),
-            ),
+              // Haupt-Routenlinie
+              Polyline(
+                points: _routeLatLngs,
+                color: const Color(0xFFFF5722),
+                strokeWidth: 5,
+              ),
+              // Überlappende Segmente (blau)
+              ..._overlapSegments
+                  .where((s) => s.length >= 2)
+                  .map((s) => Polyline(
+                        points: s,
+                        color: const Color(0xFF2979FF),
+                        strokeWidth: 5,
+                      )),
+            ],
           ),
-        if (_mapLoadError != null)
-          Container(
-            color: const Color(0xCC0B0E14),
-            padding: const EdgeInsets.symmetric(horizontal: 20),
-            child: Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Icon(Icons.map_outlined, color: Colors.white70, size: 32),
-                  const SizedBox(height: 12),
-                  const Text(
-                    'Mapbox konnte nicht geladen werden.',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    _mapLoadError!,
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(color: Colors.white70, fontSize: 12),
-                  ),
-                  const SizedBox(height: 16),
-                  FilledButton(onPressed: _retryMapLoad, child: const Text('Erneut versuchen')),
-                ],
+        // ── User-Position Marker (Live-Navigation) ───────────────────────────
+        if (_userPosition != null && _isRouteConfirmed)
+          MarkerLayer(
+            markers: [
+              Marker(
+                point: _userPosition!,
+                width: 40,
+                height: 40,
+                child: const Icon(
+                  Icons.navigation,
+                  color: Color(0xFF007AFF),
+                  size: 36,
+                ),
               ),
-            ),
+            ],
+          ),
+        // ── Simulations-Puck (blauer Kreis mit weißem Ring) ──────────────────
+        if (_simulationPuckPosition != null)
+          MarkerLayer(
+            markers: [
+              Marker(
+                point: _simulationPuckPosition!,
+                width: 28,
+                height: 28,
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    Container(
+                      width: 28,
+                      height: 28,
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.9),
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    Container(
+                      width: 18,
+                      height: 18,
+                      decoration: const BoxDecoration(
+                        color: Color(0xFF007AFF),
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
       ],
     );
@@ -611,24 +614,30 @@ class _CruiseModePageState extends State<CruiseModePage> {
 
   // ═══════════════════════ MAP LIFECYCLE ═════════════════════════════════════
 
-  Future<void> _onMapCreated(MapboxMap mapboxMap) async {
-    _mapboxMap = mapboxMap;
-    _routeSourceAdded = false;
-    _safeSetState(() => _isMapStyleLoaded = false);
-    // Route-Zeichnung wird in onStyleLoadedListener gemacht,
-    // da Annotation Manager erst nach Style-Load funktionieren.
+  /// Wird von flutter_map aufgerufen wenn die Karte bereit ist.
+  void _onMapReady() {
+    _mapReady = true;
+    // Route zeichnen falls schon vorhanden, sonst GPS-Position holen
+    if (_routeGeoJson != null) {
+      final geometry = Map<String, dynamic>.from(json.decode(_routeGeoJson!) as Map);
+      _drawRoute(geometry);
+      if (_isRouteConfirmed) _activateNavigationCamera();
+    } else {
+      _initializeMapLocation();
+    }
   }
 
   void _retryMapLoad() {
     _stopSimulation(restartLiveTracking: false);
     _stopNavigationTracking();
-    setState(() {
-      _mapboxMap = null;
-      _routeSourceAdded = false;
-      _viewportState = null;
-      _isMapStyleLoaded = false;
-      _mapLoadError = null;
-      _mapWidgetVersion++;
+    _safeSetState(() {
+      _mapReady = false;
+      _routeLatLngs = [];
+      _overlapSegments = [];
+    });
+    // Karte neu initialisieren nach kurzer Verzögerung
+    Future.delayed(const Duration(milliseconds: 300), () {
+      if (mounted && !_disposed) _initializeMapLocation();
     });
   }
 
@@ -711,15 +720,20 @@ class _CruiseModePageState extends State<CruiseModePage> {
 
   Future<void> _initializeMapLocation() async {
     try {
-      final serviceEnabled = await geo.Geolocator.isLocationServiceEnabled();
-      if (!serviceEnabled) return;
+      // Auf Web: checkPermission/requestPermission nicht unterstützt →
+      // Browser zeigt automatisch einen eigenen Permission-Dialog beim ersten
+      // getCurrentPosition()-Aufruf. Wir überspringen den nativen Check.
+      if (!kIsWeb) {
+        final serviceEnabled = await geo.Geolocator.isLocationServiceEnabled();
+        if (!serviceEnabled) return;
 
-      var permission = await geo.Geolocator.checkPermission();
-      if (permission == geo.LocationPermission.denied) {
-        permission = await geo.Geolocator.requestPermission();
-        if (permission == geo.LocationPermission.denied) return;
+        var permission = await geo.Geolocator.checkPermission();
+        if (permission == geo.LocationPermission.denied) {
+          permission = await geo.Geolocator.requestPermission();
+          if (permission == geo.LocationPermission.denied) return;
+        }
+        if (permission == geo.LocationPermission.deniedForever) return;
       }
-      if (permission == geo.LocationPermission.deniedForever) return;
 
       // Erst instant den letzten bekannten Standort verwenden (kein Netzwerk nötig)
       geo.Position? position = await geo.Geolocator.getLastKnownPosition();
@@ -747,12 +761,11 @@ class _CruiseModePageState extends State<CruiseModePage> {
   }
 
   void _setCameraToPosition(geo.Position position) {
+    if (!_mapReady) return;
     try {
-      _mapboxMap?.setCamera(
-        CameraOptions(
-          center: Point(coordinates: Position(position.longitude, position.latitude)),
-          zoom: 13.0,
-        ),
+      _mapController.move(
+        LatLng(position.latitude, position.longitude),
+        13.0,
       );
     } catch (e) {
       debugPrint('[CruiseMode] setCamera fehlgeschlagen: $e');
@@ -761,20 +774,22 @@ class _CruiseModePageState extends State<CruiseModePage> {
 
   Future<geo.Position> _getStartCoordinates() async {
     if (_selectedLocation == 'Aktueller Standort') {
-      bool serviceEnabled = await geo.Geolocator.isLocationServiceEnabled();
-      if (!serviceEnabled) {
-        throw Exception('Bitte aktiviere GPS/Standort in deinen Geräteeinstellungen.');
-      }
-
-      var permission = await geo.Geolocator.checkPermission();
-      if (permission == geo.LocationPermission.denied) {
-        permission = await geo.Geolocator.requestPermission();
-        if (permission == geo.LocationPermission.denied) {
-          throw Exception('Standortberechtigung verweigert.');
+      if (!kIsWeb) {
+        bool serviceEnabled = await geo.Geolocator.isLocationServiceEnabled();
+        if (!serviceEnabled) {
+          throw Exception('Bitte aktiviere GPS/Standort in deinen Geräteeinstellungen.');
         }
-      }
-      if (permission == geo.LocationPermission.deniedForever) {
-        throw Exception('Standortberechtigung dauerhaft verweigert.');
+
+        var permission = await geo.Geolocator.checkPermission();
+        if (permission == geo.LocationPermission.denied) {
+          permission = await geo.Geolocator.requestPermission();
+          if (permission == geo.LocationPermission.denied) {
+            throw Exception('Standortberechtigung verweigert.');
+          }
+        }
+        if (permission == geo.LocationPermission.deniedForever) {
+          throw Exception('Standortberechtigung dauerhaft verweigert.');
+        }
       }
 
       geo.Position? lastPosition = await geo.Geolocator.getLastKnownPosition();
@@ -903,7 +918,6 @@ class _CruiseModePageState extends State<CruiseModePage> {
       _originalRouteDistance = result.distanceMeters;
       _originalRouteDuration = result.durationSeconds;
       _isRouteConfirmed = false;
-      _viewportState = null;
       _fullRouteCoordinates = result.coordinates;
       _remainingRouteCoordinates = result.coordinates;
       _maneuvers = result.maneuvers;
@@ -951,7 +965,6 @@ class _CruiseModePageState extends State<CruiseModePage> {
       _routeDistance = route.distanceKm * 1000; // km → m
       _routeDuration = route.durationSeconds;
       _isRouteConfirmed = false;
-      _viewportState = null;
       _fullRouteCoordinates = coordinates;
       _remainingRouteCoordinates = coordinates;
       _maneuvers = const [];
@@ -977,6 +990,7 @@ class _CruiseModePageState extends State<CruiseModePage> {
       _showRouteInfoBanner = false;
       _configCollapsed = false;
       _remainingRouteCoordinates = _fullRouteCoordinates;
+      // Kein _viewportState mehr (flutter_map nutzt MapController)
     });
     CruiseModePage.isFullscreen.value = true;
 
@@ -1009,14 +1023,15 @@ class _CruiseModePageState extends State<CruiseModePage> {
     return total;
   }
 
-  // ═══════════════════════ ROUTE DRAWING ═════════════════════════════════════
+  // ═══════════════════════ ROUTE DRAWING (flutter_map) ══════════════════════
+  //
+  // Statt Mapbox GeoJSON Sources/Layers zu verwalten, setzen wir einfach State.
+  // flutter_map rendert PolylineLayer und MarkerLayer automatisch neu.
 
   Future<void> _drawRoute(
     Map<String, dynamic> geometry, {
     bool animateCamera = true,
   }) async {
-    if (_mapboxMap == null) return;
-
     final coordinatesRaw = (geometry['coordinates'] as List?) ?? const [];
     final activeCoordinates = coordinatesRaw
         .whereType<List>()
@@ -1025,121 +1040,109 @@ class _CruiseModePageState extends State<CruiseModePage> {
         .toList();
     if (activeCoordinates.length < 2) return;
 
-    // GeoJSON FeatureCollection für die Source
-    final geoJsonData = json.encode({
-      'type': 'FeatureCollection',
-      'features': [
-        {
-          'type': 'Feature',
-          'geometry': {
-            'type': 'LineString',
-            'coordinates': activeCoordinates,
-          },
-          'properties': {},
-        }
-      ],
+    // KRITISCH: Mapbox liefert [longitude, latitude], flutter_map braucht LatLng(lat, lng)
+    final routeLatLngs = activeCoordinates
+        .map((c) => LatLng(c[1], c[0])) // [lng, lat] → LatLng(lat, lng)
+        .toList();
+
+    // Überlappende Segmente berechnen und ebenfalls konvertieren
+    final overlapRaw = _findOverlappingSegments(activeCoordinates);
+    final overlapLatLngs = overlapRaw
+        .map((seg) => seg.map((c) => LatLng(c[1], c[0])).toList())
+        .toList();
+
+    _safeSetState(() {
+      _routeLatLngs = routeLatLngs;
+      _overlapSegments = overlapLatLngs;
     });
 
-    try {
-      final style = _mapboxMap!.style;
-
-      if (_routeSourceAdded) {
-        // Source existiert schon → nur Daten aktualisieren (SUPER schnell, kein Flackern)
-        await style.setStyleSourceProperty(
-          _routeSourceId,
-          'data',
-          geoJsonData,
-        );
-      } else {
-        // Source + Layer erstmals anlegen
-        await style.addSource(GeoJsonSource(id: _routeSourceId, data: geoJsonData));
-        // Glow-Layer (breiterer, halbtransparenter Schein unter der Route)
-        await style.addLayer(LineLayer(
-          id: _routeGlowLayerId,
-          sourceId: _routeSourceId,
-          lineColor: const Color(0xFFFF5722).withValues(alpha: 0.3).toARGB32(),
-          lineWidth: 12.0,
-          lineCap: LineCap.ROUND,
-          lineJoin: LineJoin.ROUND,
-          lineBlur: 6.0,
-        ));
-        // Haupt-Routenlinie
-        await style.addLayer(LineLayer(
-          id: _routeLayerId,
-          sourceId: _routeSourceId,
-          lineColor: const Color(0xFFFF5722).toARGB32(),
-          lineWidth: 5.0,
-          lineCap: LineCap.ROUND,
-          lineJoin: LineJoin.ROUND,
-        ));
-        _routeSourceAdded = true;
-      }
-    } catch (e) {
-      // Fallback: Wenn Layer schon existiert (z.B. nach Style-Reload), entfernen und neu
-      debugPrint('[CruiseMode] Layer-Update fehlgeschlagen, versuche Neuanlage: $e');
-      try {
-        final style = _mapboxMap!.style;
-        try { await style.removeStyleLayer(_routeLayerId); } catch (_) {}
-        try { await style.removeStyleLayer(_routeGlowLayerId); } catch (_) {}
-        try { await style.removeStyleSource(_routeSourceId); } catch (_) {}
-        _routeSourceAdded = false;
-        await style.addSource(GeoJsonSource(id: _routeSourceId, data: geoJsonData));
-        await style.addLayer(LineLayer(
-          id: _routeGlowLayerId,
-          sourceId: _routeSourceId,
-          lineColor: const Color(0xFFFF5722).withValues(alpha: 0.3).toARGB32(),
-          lineWidth: 12.0,
-          lineCap: LineCap.ROUND,
-          lineJoin: LineJoin.ROUND,
-          lineBlur: 6.0,
-        ));
-        await style.addLayer(LineLayer(
-          id: _routeLayerId,
-          sourceId: _routeSourceId,
-          lineColor: const Color(0xFFFF5722).toARGB32(),
-          lineWidth: 5.0,
-          lineCap: LineCap.ROUND,
-          lineJoin: LineJoin.ROUND,
-        ));
-        _routeSourceAdded = true;
-      } catch (e2) {
-        debugPrint('[CruiseMode] Route-Layer Neuanlage fehlgeschlagen: $e2');
-      }
-    }
-
-    if (animateCamera && mounted) {
-      final routePositions = activeCoordinates.map((c) => Position(c[0], c[1])).toList();
-      final routePoints = routePositions.map((p) => Point(coordinates: p)).toList();
-      final safeTop = MediaQuery.of(context).padding.top;
-      final safeBottom = MediaQuery.of(context).padding.bottom;
-      final topInset = (safeTop + 18).clamp(16.0, 120.0).toDouble();
-      final bottomInset =
-          (_isRouteConfirmed ? safeBottom + 130 : safeBottom + 48).clamp(48.0, 220.0).toDouble();
-
-      final previewCamera = await _mapboxMap!.cameraForCoordinatesPadding(
-        routePoints,
-        CameraOptions(),
-        MbxEdgeInsets(top: topInset, left: 24, bottom: bottomInset, right: 24),
-        null, null,
-      );
+    if (animateCamera && _mapReady && routeLatLngs.isNotEmpty && mounted) {
+      // Kurze Verzögerung damit setState durchgelaufen ist
       await Future.delayed(const Duration(milliseconds: 100));
+      if (!mounted || _disposed) return;
       try {
-        await _mapboxMap!.flyTo(previewCamera, MapAnimationOptions(duration: 2500));
+        final bounds = LatLngBounds.fromPoints(routeLatLngs);
+        final safeTop = MediaQuery.of(context).padding.top;
+        final safeBottom = MediaQuery.of(context).padding.bottom;
+        final bottomPad =
+            (_isRouteConfirmed ? safeBottom + 130 : safeBottom + 48)
+                .clamp(48.0, 220.0);
+        _mapController.fitCamera(
+          CameraFit.bounds(
+            bounds: bounds,
+            padding: EdgeInsets.fromLTRB(24, safeTop + 18, 24, bottomPad),
+          ),
+        );
       } catch (e) {
-        debugPrint('[CruiseMode] Kamera-Vorschau fehlgeschlagen: $e');
+        debugPrint('[CruiseMode] Camera fit fehlgeschlagen: $e');
       }
     }
+  }
+
+  // ═══════════════════════ OVERLAP DETECTION ════════════════════════════════
+
+  /// Erkennt Route-Segmente, die über frühere Abschnitte zurücklaufen (≤35 m Abstand).
+  /// Gibt eine Liste von Koordinaten-Gruppen zurück, die als eigene LineStrings
+  /// gezeichnet werden (blaue Überlappungs-Linie).
+  List<List<List<double>>> _findOverlappingSegments(List<List<double>> coords) {
+    const double thresholdMeters = 35.0;
+    const int minLookbackSkip = 10; // Mindestabstand in Indizes, um Nachbarn zu ignorieren
+
+    final result = <List<List<double>>>[];
+    List<List<double>>? currentGroup;
+
+    for (int i = minLookbackSkip; i < coords.length; i++) {
+      final c = coords[i];
+      bool isOverlap = false;
+
+      // Vergleiche mit allen früheren Punkten (außer direkten Nachbarn)
+      for (int j = 0; j < i - minLookbackSkip; j++) {
+        final prev = coords[j];
+        final dist = geo.Geolocator.distanceBetween(
+          c[1], c[0], prev[1], prev[0],
+        );
+        if (dist <= thresholdMeters) {
+          isOverlap = true;
+          break;
+        }
+      }
+
+      if (isOverlap) {
+        if (currentGroup == null) {
+          // Segment beginnt: vorherigen Punkt als Anfang nehmen für Kontinuität
+          currentGroup = [coords[i - 1], c];
+        } else {
+          currentGroup.add(c);
+        }
+      } else {
+        if (currentGroup != null && currentGroup.length >= 2) {
+          result.add(currentGroup);
+        }
+        currentGroup = null;
+      }
+    }
+    if (currentGroup != null && currentGroup.length >= 2) {
+      result.add(currentGroup);
+    }
+    return result;
   }
 
   // ═══════════════════════ NAVIGATION TRACKING ══════════════════════════════
 
   void _startNavigationTracking() {
     _positionSubscription?.cancel();
+    // Web unterstützt kein bestForNavigation → fallback auf best
+    final locationSettings = kIsWeb
+        ? const geo.LocationSettings(
+            accuracy: geo.LocationAccuracy.best,
+            distanceFilter: 8,
+          )
+        : const geo.LocationSettings(
+            accuracy: geo.LocationAccuracy.bestForNavigation,
+            distanceFilter: 8,
+          );
     _positionSubscription = geo.Geolocator.getPositionStream(
-      locationSettings: const geo.LocationSettings(
-        accuracy: geo.LocationAccuracy.bestForNavigation,
-        distanceFilter: 8,
-      ),
+      locationSettings: locationSettings,
     ).listen(_onLocationUpdate);
   }
 
@@ -1151,10 +1154,23 @@ class _CruiseModePageState extends State<CruiseModePage> {
   Future<void> _onLocationUpdate(geo.Position position) async {
     if (!mounted || _disposed) return;
     _userLocation = position;
-    // Cursor deaktiviert – nur der blaue Mapbox-Puck wird angezeigt
-    // await _updateVisibleCursor(position);
 
-    // Kamera folgt über FollowPuckViewportState (smooth) – kein manuelles setCamera nötig
+    // User-Position als Marker rendern (MarkerLayer in _buildMapWidget)
+    _safeSetState(() {
+      _userPosition = LatLng(position.latitude, position.longitude);
+    });
+
+    // Kamera folgt User-Position wenn Camera-Lock aktiv
+    if (_isCameraLocked && _mapReady) {
+      try {
+        _mapController.move(
+          LatLng(position.latitude, position.longitude),
+          16.0,
+        );
+      } catch (e) {
+        debugPrint('[CruiseMode] Kamera-Folgen fehlgeschlagen: $e');
+      }
+    }
 
     if (!_isRouteConfirmed || _fullRouteCoordinates.length < 2) return;
 
@@ -1436,33 +1452,19 @@ class _CruiseModePageState extends State<CruiseModePage> {
   void _toggleCameraLock() {
     _safeSetState(() => _isCameraLocked = !_isCameraLocked);
     if (_isCameraLocked) {
-      // Sofort zur aktuellen Position fliegen und FollowPuck aktivieren
+      // Sofort zur aktuellen Position fliegen (flutter_map: direkt move())
       _recenterMap();
-      _safeSetState(() {
-        _viewportState = const FollowPuckViewportState(
-          zoom: 16.0,
-          pitch: 45.0,
-          bearing: FollowPuckViewportStateBearingHeading(),
-        );
-      });
-    } else {
-      // FollowPuck deaktivieren → freie Kartenbewegung
-      _safeSetState(() => _viewportState = null);
     }
+    // Wenn deaktiviert: freie Kartenbewegung — nichts extra nötig
   }
 
   Future<void> _recenterMap() async {
-    final map = _mapboxMap;
     final position = _userLocation;
-    if (map == null || position == null || !_isMapStyleLoaded) return;
+    if (position == null || !_mapReady) return;
     try {
-      await map.flyTo(
-        CameraOptions(
-          center: Point(coordinates: Position(position.longitude, position.latitude)),
-          zoom: 16.0, pitch: 45.0,
-          bearing: position.heading.isFinite ? position.heading : 0.0,
-        ),
-        MapAnimationOptions(duration: 900),
+      _mapController.move(
+        LatLng(position.latitude, position.longitude),
+        16.0,
       );
     } catch (e) {
       debugPrint('[CruiseMode] Recenter fehlgeschlagen: $e');
@@ -1472,42 +1474,29 @@ class _CruiseModePageState extends State<CruiseModePage> {
   bool _isOverviewActive = false;
 
   Future<void> _showRouteOverview() async {
-    if (_mapboxMap == null || _fullRouteCoordinates.length < 2) return;
+    if (!_mapReady || _fullRouteCoordinates.length < 2) return;
     if (_isOverviewActive) return;
     _isOverviewActive = true;
 
-    // FollowPuck temporär deaktivieren
-    _safeSetState(() => _viewportState = null);
-
     try {
-      final routePoints = _fullRouteCoordinates
-          .map((c) => Point(coordinates: Position(c[0], c[1])))
+      // Gesamte Route als Bounds berechnen
+      final routeLatLngs = _fullRouteCoordinates
+          .map((c) => LatLng(c[1], c[0]))
           .toList();
-
-      final overviewCamera = await _mapboxMap!.cameraForCoordinatesPadding(
-        routePoints,
-        CameraOptions(pitch: 0, bearing: 0),
-        MbxEdgeInsets(top: 80, left: 40, bottom: 160, right: 40),
-        null, null,
+      final bounds = LatLngBounds.fromPoints(routeLatLngs);
+      _mapController.fitCamera(
+        CameraFit.bounds(
+          bounds: bounds,
+          padding: const EdgeInsets.fromLTRB(40, 80, 40, 160),
+        ),
       );
 
-      await _mapboxMap!.flyTo(overviewCamera, MapAnimationOptions(duration: 1500));
-
-      // 4 Sekunden Übersicht zeigen, dann zurück zur Navigation
+      // 4 Sekunden Übersicht anzeigen, dann zurück
       await Future.delayed(const Duration(seconds: 4));
-
       if (!mounted || _disposed) return;
 
-      // Zurück zur Navigationsansicht
+      // Zurück zur Navigationsposition
       if (_isCameraLocked) {
-        _safeSetState(() {
-          _viewportState = const FollowPuckViewportState(
-            zoom: 16.0,
-            pitch: 45.0,
-            bearing: FollowPuckViewportStateBearingHeading(),
-          );
-        });
-      } else {
         await _recenterMap();
       }
     } catch (e) {
@@ -1518,7 +1507,7 @@ class _CruiseModePageState extends State<CruiseModePage> {
   }
 
   Future<void> _activateNavigationCamera() async {
-    if (_mapboxMap == null) return;
+    if (!_mapReady) return;
     geo.Position position;
     try {
       position = await geo.Geolocator.getCurrentPosition();
@@ -1527,37 +1516,19 @@ class _CruiseModePageState extends State<CruiseModePage> {
       position = await _getStartCoordinates();
     }
     _userLocation = position;
-    if (_isMapStyleLoaded) {
-      try {
-        await _mapboxMap?.location.updateSettings(
-          LocationComponentSettings(
-            enabled: true,
-            puckBearingEnabled: true,
-            puckBearing: PuckBearing.HEADING,
-          ),
-        );
-      } catch (e) {
-        debugPrint('[CruiseMode] Puck-Settings fehlgeschlagen: $e');
-      }
-    }
+    _safeSetState(() {
+      _userPosition = LatLng(position.latitude, position.longitude);
+      _isCameraLocked = true;
+    });
     try {
-      await _mapboxMap!.setCamera(
-        CameraOptions(
-          center: Point(coordinates: Position(position.longitude, position.latitude)),
-          zoom: 16.0, pitch: 45.0,
-          bearing: position.heading.isFinite ? position.heading : 0.0,
-        ),
+      // Kamera zur User-Position zoomen
+      _mapController.move(
+        LatLng(position.latitude, position.longitude),
+        16.0,
       );
     } catch (e) {
       debugPrint('[CruiseMode] Navigations-Kamera setzen fehlgeschlagen: $e');
     }
-    _safeSetState(() {
-      _viewportState = const FollowPuckViewportState(
-        zoom: 16.0,
-        pitch: 45.0,
-        bearing: FollowPuckViewportStateBearingHeading(),
-      );
-    });
   }
 
   // ═══════════════════════ SIMULATION ═══════════════════════════════════════
@@ -1678,38 +1649,19 @@ class _CruiseModePageState extends State<CruiseModePage> {
     if (_isSimulationRunning) _scheduleNextSimulationStep();
   }
 
-  /// Zeigt einen blauen Punkt + weißen Ring als simuliertes Auto auf der Karte.
+  /// Zeigt den Simulations-Puck (blauer Kreis mit weißem Ring) als MarkerLayer.
+  /// Kein Mapbox AnnotationManager mehr — flutter_map rendert via State.
   Future<void> _updateSimulationPuck(double lng, double lat) async {
-    if (_mapboxMap == null) return;
-    try {
-      _simPuckManager ??= await _mapboxMap!.annotations.createCircleAnnotationManager();
-      await _simPuckManager!.deleteAll();
-      // Weißer äußerer Ring
-      await _simPuckManager!.create(CircleAnnotationOptions(
-        geometry: Point(coordinates: Position(lng, lat)),
-        circleRadius: 12,
-        circleColor: Colors.white.toARGB32(),
-        circleOpacity: 0.9,
-      ));
-      // Blauer innerer Punkt
-      await _simPuckManager!.create(CircleAnnotationOptions(
-        geometry: Point(coordinates: Position(lng, lat)),
-        circleRadius: 8,
-        circleColor: const Color(0xFF007AFF).toARGB32(),
-        circleOpacity: 1.0,
-      ));
-    } catch (e) {
-      debugPrint('[Sim] Puck zeichnen fehlgeschlagen: $e');
-    }
+    _safeSetState(() {
+      _simulationPuckPosition = LatLng(lat, lng); // lng,lat → LatLng(lat,lng)
+    });
   }
 
-  /// Entfernt den Simulations-Puck von der Karte.
+  /// Entfernt den Simulations-Puck (State auf null setzen).
   Future<void> _removeSimulationPuck() async {
-    try {
-      await _simPuckManager?.deleteAll();
-    } catch (e) {
-      debugPrint('[Sim] Puck entfernen fehlgeschlagen: $e');
-    }
+    _safeSetState(() {
+      _simulationPuckPosition = null;
+    });
   }
 
   geo.Position _buildSimulatedPosition(List<double> current, List<double> next, double speedMs) {
@@ -1832,7 +1784,6 @@ class _CruiseModePageState extends State<CruiseModePage> {
     CruiseModePage.isFullscreen.value = false;
     _safeSetState(() {
       _isRouteConfirmed = false;
-      _viewportState = null;
       _isCameraLocked = false;
       _totalDistanceDriven = 0.0;
     });

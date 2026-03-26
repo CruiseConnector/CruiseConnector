@@ -18,7 +18,8 @@
 
   <meta charset="UTF-8">
   <meta content="IE=Edge" http-equiv="X-UA-Compatible">
-  <meta name="description" content="A new Flutter project.">
+  <meta name="description" content="CruiseConnect – Routen für Autofahrer">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
   <!-- iOS meta tags & icons -->
   <meta name="mobile-web-app-capable" content="yes">
@@ -29,8 +30,11 @@
   <!-- Favicon -->
   <link rel="icon" type="image/png" href="favicon.png"/>
 
-  <title>cruise_connect</title>
+  <title>CruiseConnect</title>
   <link rel="manifest" href="manifest.json">
+
+  <!-- flutter_map nutzt Mapbox Raster-Tiles direkt — kein mapbox-gl.js nötig -->
+  <!-- CORS-Header werden von Mapbox automatisch gesetzt für Tile-Requests -->
 </head>
 <body>
   <script src="flutter_bootstrap.js" async></script>

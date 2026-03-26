@@ -50,16 +50,21 @@ class AuthService {
   // ─── Hilfsmethoden ────────────────────────────────────────────────────────
 
   /// Lädt den Benutzernamen aus der `profiles` Tabelle.
+  /// Gibt null zurück wenn kein User eingeloggt oder DB-Fehler.
   static Future<String?> getUsername() async {
     final userId = currentUser?.id;
     if (userId == null) return null;
 
-    final data = await _db
-        .from('profiles')
-        .select('username')
-        .eq('id', userId)
-        .maybeSingle();
+    try {
+      final data = await _db
+          .from('profiles')
+          .select('username')
+          .eq('id', userId)
+          .maybeSingle();
 
-    return data?['username'] as String?;
+      return data?['username'] as String?;
+    } catch (e) {
+      return null;
+    }
   }
 }

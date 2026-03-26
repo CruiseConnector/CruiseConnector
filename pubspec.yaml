@@ -36,11 +36,22 @@ dependencies:
   cupertino_icons: ^1.0.8
   supabase_flutter: ^2.12.0
   geolocator: ^14.0.2
-  mapbox_maps_flutter: ^2.19.0
+  # Universelle Karte (Web + iOS + Android) — ersetzt mapbox_maps_flutter
+  flutter_map: ^7.0.2
+  # Koordinaten-Typ für flutter_map (LatLng)
+  latlong2: ^0.9.1
   http: ^1.6.0
   flutter_tts: ^4.2.5
   flutter_typeahead: ^5.2.0
   image_picker: ^1.2.1
+  # State Management
+  provider: ^6.1.2
+  # Skeleton Loader Animation
+  shimmer: ^3.0.0
+  # Lokale Persistenz (Caching, Offline)
+  shared_preferences: ^2.3.5
+  # Netzwerk-Status für Offline-Modus
+  connectivity_plus: ^6.1.4
 
 dev_dependencies:
   flutter_test:
@@ -52,6 +63,10 @@ dev_dependencies:
   # package. See that file for information about deactivating specific lint
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
+  # Test-Mocking Framework
+  # Nach Änderungen ausführen: dart run build_runner build
+  mockito: ^5.4.4
+  build_runner: ^2.4.14
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec

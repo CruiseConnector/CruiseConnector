@@ -98,15 +98,29 @@ class GamificationService {
     }
 
     // 1. Alle Routen laden
-    final data = await _db
-        .from('routes')
-        .select()
-        .eq('user_id', userId)
-        .order('created_at', ascending: false);
+    List<SavedRoute> routes;
+    try {
+      final data = await _db
+          .from('routes')
+          .select()
+          .eq('user_id', userId)
+          .order('created_at', ascending: false);
 
-    final routes = (data as List)
-        .map((row) => SavedRoute.fromJson(row as Map<String, dynamic>))
-        .toList();
+      routes = (data as List)
+          .map((row) => SavedRoute.fromJson(row as Map<String, dynamic>))
+          .toList();
+    } catch (e) {
+      debugPrint('[Gamification] Routen-Abfrage fehlgeschlagen: $e');
+      return GamificationResult(
+        level: UserLevel.fromXp(0),
+        earnedBadgeIds: const [],
+        newBadgeIds: const [],
+        totalRoutes: 0,
+        totalDistanceKm: 0,
+        totalHours: 0,
+        totalXp: 0,
+      );
+    }
 
     // 2. Statistiken berechnen
     double totalKm = 0;

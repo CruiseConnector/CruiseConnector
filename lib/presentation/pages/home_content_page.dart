@@ -310,17 +310,16 @@ class _HomeContentPageState extends State<HomeContentPage> {
             if (_recommendedRoutes.isEmpty && !_loading)
               _buildEmptyRecommendation()
             else if (_recommendedRoutes.isNotEmpty)
-              SizedBox(
-                height: 140,
-                child: ListView.separated(
-                  scrollDirection: Axis.horizontal,
-                  itemCount: _recommendedRoutes.length,
-                  separatorBuilder: (_, __) => const SizedBox(width: 12),
-                  itemBuilder: (context, index) => _buildRecommendedRouteCard(_recommendedRoutes[index]),
-                ),
+              Column(
+                children: _recommendedRoutes
+                    .map((r) => Padding(
+                          padding: const EdgeInsets.only(bottom: 10),
+                          child: _buildRecommendedRouteCard(r),
+                        ))
+                    .toList(),
               )
             else
-              const SizedBox(height: 140, child: Center(child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFFFF3B30))))),
+              const SizedBox(height: 160, child: Center(child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFFFF3B30))))),
             const SizedBox(height: 16),
 
             // Community + Chart Section
@@ -338,7 +337,6 @@ class _HomeContentPageState extends State<HomeContentPage> {
                         border: Border.all(color: const Color(0xFFFFFFFF).withValues(alpha: 0.06), width: 1),
                       ),
                       child: Column(
-                        mainAxisSize: MainAxisSize.min,
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           const Text(
@@ -460,9 +458,6 @@ class _HomeContentPageState extends State<HomeContentPage> {
   // ── Empfohlene Route Card (echte Daten) ──────────────────────────────────
 
   Widget _buildRecommendedRouteCard(SavedRoute route) {
-    final screenWidth = MediaQuery.of(context).size.width;
-    final cardWidth = screenWidth * 0.75;
-
     // Farbschema basierend auf Stil
     final colors = switch (route.style) {
       'Kurvenjagd' => [const Color(0xFF1B5E20), const Color(0xFF388E3C)],
@@ -478,7 +473,7 @@ class _HomeContentPageState extends State<HomeContentPage> {
         widget.onTabChange?.call(2);
       },
       child: Container(
-        width: cardWidth,
+        width: double.infinity,   // volle Breite wie Fortschritt-Widget
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
           gradient: LinearGradient(
@@ -562,7 +557,7 @@ class _HomeContentPageState extends State<HomeContentPage> {
     return GestureDetector(
       onTap: () => widget.onTabChange?.call(2),
       child: Container(
-        height: 140,
+        height: 160,
         width: double.infinity,
         padding: const EdgeInsets.all(20),
         decoration: BoxDecoration(

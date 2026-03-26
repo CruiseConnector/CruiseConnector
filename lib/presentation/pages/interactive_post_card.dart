@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/presentation/pages/post_detail_page.dart';
 
 class InteractivePostCard extends StatefulWidget {
@@ -32,34 +33,53 @@ class _InteractivePostCardState extends State<InteractivePostCard> {
   bool _isReposted = false;
   late int _likeCount;
   late int _repostCount;
+  bool _likeBusy = false;
+  bool _repostBusy = false;
 
   @override
   void initState() {
     super.initState();
     _likeCount = int.tryParse(widget.initialLikeCount) ?? 0;
     _repostCount = int.tryParse(widget.initialRepostCount) ?? 0;
+    _checkInitialState();
   }
 
-  void _toggleLike() {
+  Future<void> _checkInitialState() async {
+    final liked = await SocialService.hasLiked(widget.postId);
+    final reposted = await SocialService.hasReposted(widget.postId);
+    if (mounted) setState(() { _isLiked = liked; _isReposted = reposted; });
+  }
+
+  Future<void> _toggleLike() async {
+    if (_likeBusy) return;
+    final wasLiked = _isLiked;
     setState(() {
       _isLiked = !_isLiked;
-      if (_isLiked) {
-        _likeCount++;
-      } else {
-        _likeCount--;
-      }
+      _likeCount += _isLiked ? 1 : -1;
+      _likeBusy = true;
     });
+    try {
+      final nowLiked = await SocialService.toggleLike(widget.postId);
+      if (mounted) setState(() { _isLiked = nowLiked; _likeBusy = false; });
+    } catch (_) {
+      if (mounted) setState(() { _isLiked = wasLiked; _likeCount += wasLiked ? 1 : -1; _likeBusy = false; });
+    }
   }
 
-  void _toggleRepost() {
+  Future<void> _toggleRepost() async {
+    if (_repostBusy) return;
+    final wasReposted = _isReposted;
     setState(() {
       _isReposted = !_isReposted;
-      if (_isReposted) {
-        _repostCount++;
-      } else {
-        _repostCount--;
-      }
+      _repostCount += _isReposted ? 1 : -1;
+      _repostBusy = true;
     });
+    try {
+      final nowReposted = await SocialService.toggleRepost(widget.postId);
+      if (mounted) setState(() { _isReposted = nowReposted; _repostBusy = false; });
+    } catch (_) {
+      if (mounted) setState(() { _isReposted = wasReposted; _repostCount += wasReposted ? 1 : -1; _repostBusy = false; });
+    }
   }
 
   @override
@@ -135,9 +155,9 @@ class _InteractivePostCardState extends State<InteractivePostCard> {
                 },
               ),
               // Repost Button
-              _buildActionButton(icon: _isReposted ? Icons.repeat_on : Icons.repeat, color: _isReposted ? const Color(0xFF00C853) : Colors.grey, count: _repostCount.toString(), onTap: _toggleRepost),
+              _buildActionButton(icon: _isReposted ? Icons.repeat_on : Icons.repeat, color: _isReposted ? const Color(0xFF00C853) : Colors.grey, count: _repostCount.toString(), onTap: () => _toggleRepost()),
               // Like Button
-              _buildActionButton(icon: _isLiked ? Icons.favorite : Icons.favorite_border, color: _isLiked ? const Color(0xFFFF3B30) : Colors.grey, count: _likeCount.toString(), onTap: _toggleLike),
+              _buildActionButton(icon: _isLiked ? Icons.favorite : Icons.favorite_border, color: _isLiked ? const Color(0xFFFF3B30) : Colors.grey, count: _likeCount.toString(), onTap: () => _toggleLike()),
               // Share Button
               _buildActionButton(icon: Icons.share_outlined, color: Colors.grey, count: "", onTap: () {}),
             ],

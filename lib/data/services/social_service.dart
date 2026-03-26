@@ -12,42 +12,52 @@ class SocialService {
     final uid = _userId;
     if (uid == null) return [];
 
-    // IDs der Leute denen man folgt
-    final followingIds = await _db
-        .from('follows')
-        .select('following_id')
-        .eq('follower_id', uid)
-        .eq('status', 'accepted');
+    try {
+      // IDs der Leute denen man folgt
+      final followingIds = await _db
+          .from('follows')
+          .select('following_id')
+          .eq('follower_id', uid)
+          .eq('status', 'accepted');
 
-    final ids = (followingIds as List).map((f) => f['following_id'] as String).toList();
-    // Eigene ID hinzufügen damit eigene Posts auch im Feed erscheinen
-    ids.add(uid);
+      final ids = (followingIds as List).map((f) => f['following_id'] as String).toList();
+      // Eigene ID hinzufügen damit eigene Posts auch im Feed erscheinen
+      ids.add(uid);
 
-    final posts = await _db
-        .from('posts')
-        .select('*, profiles!posts_user_id_profiles_fkey(id, username, email)')
-        .inFilter('user_id', ids)
-        .order('created_at', ascending: false)
-        .limit(50);
+      final posts = await _db
+          .from('posts')
+          .select('*, profiles!posts_user_id_profiles_fkey(id, username, email), shared_route_id')
+          .inFilter('user_id', ids)
+          .order('created_at', ascending: false)
+          .limit(50);
 
-    return List<Map<String, dynamic>>.from(posts);
+      return List<Map<String, dynamic>>.from(posts);
+    } catch (e) {
+      debugPrint('[SocialService] getFeedPosts Fehler: $e');
+      return [];
+    }
   }
 
   static Future<List<Map<String, dynamic>>> getUserPosts(String userId) async {
-    final posts = await _db
-        .from('posts')
-        .select('*, profiles!posts_user_id_profiles_fkey(id, username, email)')
-        .eq('user_id', userId)
-        .order('created_at', ascending: false);
+    try {
+      final posts = await _db
+          .from('posts')
+          .select('*, profiles!posts_user_id_profiles_fkey(id, username, email)')
+          .eq('user_id', userId)
+          .order('created_at', ascending: false);
 
-    return List<Map<String, dynamic>>.from(posts);
+      return List<Map<String, dynamic>>.from(posts);
+    } catch (e) {
+      debugPrint('[SocialService] getUserPosts Fehler: $e');
+      return [];
+    }
   }
 
   static Future<List<Map<String, dynamic>>> getDiscoverPosts() async {
     // Nur öffentliche Posts von nicht-privaten Accounts für Entdecken
     final posts = await _db
         .from('posts')
-        .select('*, profiles!posts_user_id_profiles_fkey(id, username, email, is_private)')
+        .select('*, profiles!posts_user_id_profiles_fkey(id, username, email, is_private), shared_route_id')
         .eq('visibility', 'public')
         .order('created_at', ascending: false)
         .limit(50);
@@ -61,15 +71,22 @@ class SocialService {
     return List<Map<String, dynamic>>.from(filtered.take(30));
   }
 
-  static Future<void> createPost(String content, {String visibility = 'public'}) async {
+  static Future<void> createPost(
+    String content, {
+    String visibility = 'public',
+    String? sharedRouteId,
+  }) async {
     final uid = _userId;
     if (uid == null) return;
 
-    await _db.from('posts').insert({
+    final row = <String, dynamic>{
       'user_id': uid,
       'content': content,
       'visibility': visibility,
-    });
+    };
+    if (sharedRouteId != null) row['shared_route_id'] = sharedRouteId;
+
+    await _db.from('posts').insert(row);
   }
 
   static Future<void> deletePost(String postId) async {
