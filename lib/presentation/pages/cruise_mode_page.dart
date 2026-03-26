@@ -651,6 +651,42 @@ class _CruiseModePageState extends State<CruiseModePage> {
               ),
             ],
           ),
+        // ── Standort-Marker (immer sichtbar wenn Position bekannt) ──────────
+        if (_userLocation != null && !_isRouteConfirmed)
+          MarkerLayer(
+            markers: [
+              Marker(
+                point: LatLng(
+                  _userLocation!.latitude,
+                  _userLocation!.longitude,
+                ),
+                width: 28,
+                height: 28,
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    Container(
+                      width: 28,
+                      height: 28,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF007AFF).withValues(alpha: 0.2),
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    Container(
+                      width: 14,
+                      height: 14,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF007AFF),
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.white, width: 2),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
         // ── User-Position Marker (Live-Navigation) ───────────────────────────
         if (_userPosition != null && _isRouteConfirmed)
           MarkerLayer(
@@ -853,6 +889,7 @@ class _CruiseModePageState extends State<CruiseModePage> {
         );
         _userLocation = freshPosition;
         _setCameraToPosition(freshPosition);
+        _safeSetState(() {}); // Marker-Refresh
       } catch (e) {
         debugPrint('[CruiseMode] Frische GPS-Position nicht verfügbar: $e');
       }
