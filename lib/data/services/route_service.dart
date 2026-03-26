@@ -69,8 +69,10 @@ class RouteService {
       'mode': scenic ? mode : 'Standard',
       'language': 'de',
       if (scenic) ...{
-        'targetDistance': 50 + (routeVariant * 10), // Unterschiedliche Ziel-Distanzen
-        'randomSeed': routeVariant, // Für Backend: verschiedene Algorithmen/Parameter
+        'targetDistance':
+            50 + (routeVariant * 10), // Unterschiedliche Ziel-Distanzen
+        'randomSeed':
+            routeVariant, // Für Backend: verschiedene Algorithmen/Parameter
       },
     };
     final result = await _invoke(body);
@@ -81,7 +83,9 @@ class RouteService {
   // ──────────────────────────── Internal ─────────────────────────────────────
 
   Future<RouteResult> _invoke(Map<String, dynamic> body) async {
-    debugPrint('[RouteService] Invoking Edge Function with: ${body['planning_type']}, mode: ${body['mode']}');
+    debugPrint(
+      '[RouteService] Invoking Edge Function with: ${body['planning_type']}, mode: ${body['mode']}',
+    );
 
     dynamic data;
     // Retry bei Verbindungsfehlern (Edge Function Cold-Start, schwaches Netz)
@@ -95,9 +99,13 @@ class RouteService {
         debugPrint('[RouteService] Response received: ${data?.runtimeType}');
         break;
       } catch (e) {
-        debugPrint('[RouteService] Edge Function call failed (Versuch $attempt): $e');
+        debugPrint(
+          '[RouteService] Edge Function call failed (Versuch $attempt): $e',
+        );
         if (attempt == 2) {
-          throw Exception('Routenberechnung fehlgeschlagen. Bitte prüfe deine Internetverbindung und versuche es erneut.');
+          throw Exception(
+            'Routenberechnung fehlgeschlagen. Bitte prüfe deine Internetverbindung und versuche es erneut.',
+          );
         }
         await Future.delayed(const Duration(seconds: 2));
       }
@@ -111,7 +119,10 @@ class RouteService {
     if (data is String) {
       try {
         data = data.length > 5000
-            ? await compute<String, Map<String, dynamic>>(_jsonDecodeIsolate, data)
+            ? await compute<String, Map<String, dynamic>>(
+                _jsonDecodeIsolate,
+                data,
+              )
             : json.decode(data);
       } catch (e) {
         throw Exception('Ungültige Antwort: $data');
@@ -139,9 +150,13 @@ class RouteService {
     final coordinates = extractCoordinates(geometry);
 
     if (coordinates.length < 10) {
-      debugPrint('[RouteService] WARNUNG: Route hat nur ${coordinates.length} Koordinaten — möglicherweise keine Straßengeometrie!');
+      debugPrint(
+        '[RouteService] WARNUNG: Route hat nur ${coordinates.length} Koordinaten — möglicherweise keine Straßengeometrie!',
+      );
       if (coordinates.length < 2) {
-        throw Exception('Route hat zu wenig Koordinaten (${coordinates.length}).');
+        throw Exception(
+          'Route hat zu wenig Koordinaten (${coordinates.length}).',
+        );
       }
     }
 
@@ -154,7 +169,9 @@ class RouteService {
     // meta.distance_km war früher geclampt und zeigte falsche Werte
     final distanceKmActual = distanceRaw != null ? distanceRaw / 1000.0 : null;
 
-    debugPrint('[RouteService] Route OK: ${coordinates.length} Punkte, ${distanceKmActual?.toStringAsFixed(1)} km (Mapbox: ${distanceRaw?.toStringAsFixed(0)} m)');
+    debugPrint(
+      '[RouteService] Route OK: ${coordinates.length} Punkte, ${distanceKmActual?.toStringAsFixed(1)} km (Mapbox: ${distanceRaw?.toStringAsFixed(0)} m)',
+    );
 
     return RouteResult(
       geoJson: json.encode(geometry),
@@ -176,12 +193,7 @@ class RouteService {
     return raw
         .whereType<List>()
         .where((c) => c.length >= 2)
-        .map(
-          (c) => [
-            (c[0] as num).toDouble(),
-            (c[1] as num).toDouble(),
-          ],
-        )
+        .map((c) => [(c[0] as num).toDouble(), (c[1] as num).toDouble()])
         .toList();
   }
 
@@ -230,10 +242,15 @@ class RouteService {
             (step['name'] as String?) ??
             _announcementForModifier(modifier);
 
-        final routeIndex = _findNearestIndex(latitude, longitude, routeCoordinates);
+        final routeIndex = _findNearestIndex(
+          latitude,
+          longitude,
+          routeCoordinates,
+        );
 
         // Kreisverkehr erkennen
-        final isRoundabout = type == 'roundabout' ||
+        final isRoundabout =
+            type == 'roundabout' ||
             type == 'rotary' ||
             type == 'roundabout turn';
         final exitNumber = isRoundabout
@@ -243,7 +260,11 @@ class RouteService {
         // Instruction bestimmen
         String instruction;
         if (isRoundabout) {
-          instruction = _roundaboutInstruction(exitNumber, rawInstruction, modifier);
+          instruction = _roundaboutInstruction(
+            exitNumber,
+            rawInstruction,
+            modifier,
+          );
         } else if (type == 'arrive') {
           instruction = 'Ziel erreicht.';
         } else if (type == 'end of road') {
@@ -275,10 +296,19 @@ class RouteService {
             latitude: latitude,
             longitude: longitude,
             routeIndex: routeIndex,
-            icon: isRoundabout ? Icons.roundabout_right : _iconForManeuver(type, modifier),
-            announcement: _announcementFromInstruction(rawInstruction, modifier, distance, type: type),
+            icon: isRoundabout
+                ? Icons.roundabout_right
+                : _iconForManeuver(type, modifier),
+            announcement: _announcementFromInstruction(
+              rawInstruction,
+              modifier,
+              distance,
+              type: type,
+            ),
             instruction: instruction,
-            maneuverType: isRoundabout ? ManeuverType.roundabout : ManeuverType.normal,
+            maneuverType: isRoundabout
+                ? ManeuverType.roundabout
+                : ManeuverType.normal,
             roundaboutExitNumber: exitNumber,
           ),
         );
@@ -337,7 +367,9 @@ class RouteService {
 
       // "Geradeaus" Manöver entfernen die keinen echten Richtungswechsel darstellen
       // (z.B. Straßennamenwechsel ohne Abbiegen)
-      if (m.icon == Icons.straight && m.instruction.contains('Weiterfahren')) continue;
+      if (m.icon == Icons.straight && m.instruction.contains('Weiterfahren')) {
+        continue;
+      }
 
       filtered.add(m);
     }
@@ -455,7 +487,11 @@ class RouteService {
     }
   }
 
-  String _roundaboutInstruction(int? exitNumber, String rawInstruction, String modifier) {
+  String _roundaboutInstruction(
+    int? exitNumber,
+    String rawInstruction,
+    String modifier,
+  ) {
     if (exitNumber != null && exitNumber > 0) {
       final ordinal = _exitOrdinal(exitNumber);
       return 'Im Kreisverkehr $ordinal Ausfahrt nehmen';
@@ -467,23 +503,35 @@ class RouteService {
 
   String _exitOrdinal(int exit) {
     switch (exit) {
-      case 1: return '1.';
-      case 2: return '2.';
-      case 3: return '3.';
-      case 4: return '4.';
-      case 5: return '5.';
-      default: return '$exit.';
+      case 1:
+        return '1.';
+      case 2:
+        return '2.';
+      case 3:
+        return '3.';
+      case 4:
+        return '4.';
+      case 5:
+        return '5.';
+      default:
+        return '$exit.';
     }
   }
 
-  String _announcementForModifier(String modifier, {double? distance, String type = ''}) {
+  String _announcementForModifier(
+    String modifier, {
+    double? distance,
+    String type = '',
+  }) {
     final distText = distance != null ? _formatDistance(distance) : 'In 100 m';
     final mod = modifier.toLowerCase();
     final typ = type.toLowerCase();
 
     // Straßenende
     if (typ == 'end of road') {
-      if (mod.contains('left')) return '$distText links abbiegen (Straßenende).';
+      if (mod.contains('left')) {
+        return '$distText links abbiegen (Straßenende).';
+      }
       return '$distText rechts abbiegen (Straßenende).';
     }
     // Autobahnausfahrt
@@ -543,39 +591,111 @@ class RouteService {
     var r = instruction;
 
     // Kreisverkehr (vor generischen "enter"/"exit" erkennen)
-    r = r.replaceAll(RegExp(r'\benter (?:the )?(?:roundabout|traffic circle|rotary)\b', caseSensitive: false), 'In den Kreisverkehr einfahren');
-    r = r.replaceAll(RegExp(r'\bexit (?:the )?(?:roundabout|traffic circle|rotary)\b', caseSensitive: false), 'Kreisverkehr verlassen');
+    r = r.replaceAll(
+      RegExp(
+        r'\benter (?:the )?(?:roundabout|traffic circle|rotary)\b',
+        caseSensitive: false,
+      ),
+      'In den Kreisverkehr einfahren',
+    );
+    r = r.replaceAll(
+      RegExp(
+        r'\bexit (?:the )?(?:roundabout|traffic circle|rotary)\b',
+        caseSensitive: false,
+      ),
+      'Kreisverkehr verlassen',
+    );
 
     // Abbiegungen — Reihenfolge wichtig: spezifischere Muster zuerst
-    r = r.replaceAll(RegExp(r'\bturn sharp left\b', caseSensitive: false), 'Scharf links abbiegen');
-    r = r.replaceAll(RegExp(r'\bturn sharp right\b', caseSensitive: false), 'Scharf rechts abbiegen');
-    r = r.replaceAll(RegExp(r'\bturn slight(?:ly)? left\b', caseSensitive: false), 'Leicht links abbiegen');
-    r = r.replaceAll(RegExp(r'\bturn slight(?:ly)? right\b', caseSensitive: false), 'Leicht rechts abbiegen');
-    r = r.replaceAll(RegExp(r'\bturn left\b', caseSensitive: false), 'Links abbiegen');
-    r = r.replaceAll(RegExp(r'\bturn right\b', caseSensitive: false), 'Rechts abbiegen');
+    r = r.replaceAll(
+      RegExp(r'\bturn sharp left\b', caseSensitive: false),
+      'Scharf links abbiegen',
+    );
+    r = r.replaceAll(
+      RegExp(r'\bturn sharp right\b', caseSensitive: false),
+      'Scharf rechts abbiegen',
+    );
+    r = r.replaceAll(
+      RegExp(r'\bturn slight(?:ly)? left\b', caseSensitive: false),
+      'Leicht links abbiegen',
+    );
+    r = r.replaceAll(
+      RegExp(r'\bturn slight(?:ly)? right\b', caseSensitive: false),
+      'Leicht rechts abbiegen',
+    );
+    r = r.replaceAll(
+      RegExp(r'\bturn left\b', caseSensitive: false),
+      'Links abbiegen',
+    );
+    r = r.replaceAll(
+      RegExp(r'\bturn right\b', caseSensitive: false),
+      'Rechts abbiegen',
+    );
     r = r.replaceAll(RegExp(r'\buturn\b', caseSensitive: false), 'Wenden');
 
     // Halten
-    r = r.replaceAll(RegExp(r'\bbear left\b', caseSensitive: false), 'Links halten');
-    r = r.replaceAll(RegExp(r'\bbear right\b', caseSensitive: false), 'Rechts halten');
-    r = r.replaceAll(RegExp(r'\bkeep left\b', caseSensitive: false), 'Links halten');
-    r = r.replaceAll(RegExp(r'\bkeep right\b', caseSensitive: false), 'Rechts halten');
-    r = r.replaceAll(RegExp(r'\bkeep (?:straight|going)\b', caseSensitive: false), 'Geradeaus weiterfahren');
+    r = r.replaceAll(
+      RegExp(r'\bbear left\b', caseSensitive: false),
+      'Links halten',
+    );
+    r = r.replaceAll(
+      RegExp(r'\bbear right\b', caseSensitive: false),
+      'Rechts halten',
+    );
+    r = r.replaceAll(
+      RegExp(r'\bkeep left\b', caseSensitive: false),
+      'Links halten',
+    );
+    r = r.replaceAll(
+      RegExp(r'\bkeep right\b', caseSensitive: false),
+      'Rechts halten',
+    );
+    r = r.replaceAll(
+      RegExp(r'\bkeep (?:straight|going)\b', caseSensitive: false),
+      'Geradeaus weiterfahren',
+    );
 
     // Geradeaus / Starten
-    r = r.replaceAll(RegExp(r'\bhead (?:north|south|east|west|northwest|northeast|southwest|southeast)\b', caseSensitive: false), 'Geradeaus fahren');
-    r = r.replaceAll(RegExp(r'\bcontinue\b', caseSensitive: false), 'Weiterfahren');
+    r = r.replaceAll(
+      RegExp(
+        r'\bhead (?:north|south|east|west|northwest|northeast|southwest|southeast)\b',
+        caseSensitive: false,
+      ),
+      'Geradeaus fahren',
+    );
+    r = r.replaceAll(
+      RegExp(r'\bcontinue\b', caseSensitive: false),
+      'Weiterfahren',
+    );
 
     // Ausfahrten
-    r = r.replaceAll(RegExp(r'\btake the \w+ (?:exit|ramp)\b', caseSensitive: false), 'Ausfahrt nehmen');
-    r = r.replaceAll(RegExp(r'\btake (?:the )?exit\b', caseSensitive: false), 'Ausfahrt nehmen');
+    r = r.replaceAll(
+      RegExp(r'\btake the \w+ (?:exit|ramp)\b', caseSensitive: false),
+      'Ausfahrt nehmen',
+    );
+    r = r.replaceAll(
+      RegExp(r'\btake (?:the )?exit\b', caseSensitive: false),
+      'Ausfahrt nehmen',
+    );
 
     // Auffahren / Abfahren
-    r = r.replaceAll(RegExp(r'\bmerge (?:onto|into)\b', caseSensitive: false), 'Auffahren auf');
-    r = r.replaceAll(RegExp(r'\bexit (?:onto|to)\b', caseSensitive: false), 'Abfahrt auf');
+    r = r.replaceAll(
+      RegExp(r'\bmerge (?:onto|into)\b', caseSensitive: false),
+      'Auffahren auf',
+    );
+    r = r.replaceAll(
+      RegExp(r'\bexit (?:onto|to)\b', caseSensitive: false),
+      'Abfahrt auf',
+    );
 
     // Ziel
-    r = r.replaceAll(RegExp(r'\b(?:you have arrived|arrive at|destination)\b', caseSensitive: false), 'Ziel erreicht');
+    r = r.replaceAll(
+      RegExp(
+        r'\b(?:you have arrived|arrive at|destination)\b',
+        caseSensitive: false,
+      ),
+      'Ziel erreicht',
+    );
 
     // Englische Verbindungswörter — zuletzt, nach allen längeren Mustern
     r = r.replaceAll(RegExp(r'\bonto\b', caseSensitive: false), 'auf');
@@ -609,12 +729,16 @@ class RouteService {
             if (ms is Map && ms['speed'] != null) {
               final speed = (ms['speed'] as num).toInt();
               final unit = ms['unit'] as String? ?? 'km/h';
-              final speedKmh = unit == 'mph' ? (speed * 1.60934).round() : speed;
-              segments.add(SpeedLimitSegment(
-                startIndex: coordIndex + i,
-                endIndex: coordIndex + i + 1,
-                speedKmh: speedKmh,
-              ));
+              final speedKmh = unit == 'mph'
+                  ? (speed * 1.60934).round()
+                  : speed;
+              segments.add(
+                SpeedLimitSegment(
+                  startIndex: coordIndex + i,
+                  endIndex: coordIndex + i + 1,
+                  speedKmh: speedKmh,
+                ),
+              );
             }
           }
         }
@@ -628,11 +752,13 @@ class RouteService {
             final stepCoords = stepGeometry?['coordinates'] as List?;
             final stepLen = stepCoords?.length ?? 1;
             if (speedLimit != null && speedLimit > 0) {
-              segments.add(SpeedLimitSegment(
-                startIndex: coordIndex,
-                endIndex: coordIndex + stepLen,
-                speedKmh: speedLimit.toInt(),
-              ));
+              segments.add(
+                SpeedLimitSegment(
+                  startIndex: coordIndex,
+                  endIndex: coordIndex + stepLen,
+                  speedKmh: speedLimit.toInt(),
+                ),
+              );
             }
             coordIndex += stepLen > 1 ? stepLen - 1 : 1;
           }
@@ -644,10 +770,19 @@ class RouteService {
     return segments;
   }
 
-  String _announcementFromInstruction(String instruction, String modifier, double distance, {String type = ''}) {
+  String _announcementFromInstruction(
+    String instruction,
+    String modifier,
+    double distance, {
+    String type = '',
+  }) {
     // Für spezielle Typen (Rampe, Arrive, Fork etc.) den typbasierten Text nutzen
     if (type.isNotEmpty && type != 'turn') {
-      final typeBased = _announcementForModifier(modifier, distance: distance, type: type);
+      final typeBased = _announcementForModifier(
+        modifier,
+        distance: distance,
+        type: type,
+      );
       if (!typeBased.contains('geradeaus')) return typeBased;
     }
     return '${_formatDistance(distance)} ${_normalizeInstruction(instruction, modifier)}';
@@ -657,7 +792,10 @@ class RouteService {
 
   /// Snappt Start (und Rundkurs-Ende) auf die exakte GPS-Position und
   /// entfernt die Anfangs-Schleife die Mapbox manchmal erzeugt.
-  RouteResult _snapRouteToStartPosition(RouteResult result, geo.Position startPosition) {
+  RouteResult _snapRouteToStartPosition(
+    RouteResult result,
+    geo.Position startPosition,
+  ) {
     if (result.coordinates.isEmpty) return result;
 
     final startLng = startPosition.longitude;
@@ -675,7 +813,12 @@ class RouteService {
     var maxDist = 0.0;
     var maxDistIdx = 0;
     for (var i = 0; i < searchEnd; i++) {
-      final d = geo.Geolocator.distanceBetween(startLat, startLng, coords[i][1], coords[i][0]);
+      final d = geo.Geolocator.distanceBetween(
+        startLat,
+        startLng,
+        coords[i][1],
+        coords[i][0],
+      );
       if (d > maxDist) {
         maxDist = d;
         maxDistIdx = i;
@@ -686,13 +829,23 @@ class RouteService {
     if (maxDist > 100.0) {
       // Route hat sich ≥100 m entfernt — prüfe ob sie danach zurückkommt
       for (var i = maxDistIdx; i < searchEnd; i++) {
-        final d = geo.Geolocator.distanceBetween(startLat, startLng, coords[i][1], coords[i][0]);
+        final d = geo.Geolocator.distanceBetween(
+          startLat,
+          startLng,
+          coords[i][1],
+          coords[i][0],
+        );
         if (d < 80.0) trimTo = i; // Rückkehr zum Startbereich
       }
     } else {
       // Fallback: alter Algorithmus für sehr kurze Ausreißer (<100 m)
       for (var i = 1; i < searchEnd; i++) {
-        final d = geo.Geolocator.distanceBetween(startLat, startLng, coords[i][1], coords[i][0]);
+        final d = geo.Geolocator.distanceBetween(
+          startLat,
+          startLng,
+          coords[i][1],
+          coords[i][0],
+        );
         if (d < 35.0) trimTo = i;
       }
     }
@@ -705,7 +858,12 @@ class RouteService {
     // ── Rundkurs: letzten Punkt auch auf Start setzen ─────────────────────────
     if (coords.length > 1) {
       final last = coords.last;
-      final d = geo.Geolocator.distanceBetween(startLat, startLng, last[1], last[0]);
+      final d = geo.Geolocator.distanceBetween(
+        startLat,
+        startLng,
+        last[1],
+        last[0],
+      );
       if (d < 500) coords.last = [startLng, startLat];
     }
 
@@ -717,22 +875,28 @@ class RouteService {
     final removedPercent = 1.0 - (coordsAfterLoops.length / coordsBefore);
     if (removedPercent <= 0.30) {
       coords = coordsAfterLoops;
-      debugPrint('[RouteService] Loop-Fix: ${coordsBefore - coords.length} Punkte entfernt (${(removedPercent * 100).toStringAsFixed(0)}%)');
+      debugPrint(
+        '[RouteService] Loop-Fix: ${coordsBefore - coords.length} Punkte entfernt (${(removedPercent * 100).toStringAsFixed(0)}%)',
+      );
     } else {
-      debugPrint('[RouteService] Loop-Fix ÜBERSPRUNGEN: würde ${(removedPercent * 100).toStringAsFixed(0)}% der Route entfernen (${coordsBefore - coordsAfterLoops.length} von $coordsBefore Punkten)');
+      debugPrint(
+        '[RouteService] Loop-Fix ÜBERSPRUNGEN: würde ${(removedPercent * 100).toStringAsFixed(0)}% der Route entfernen (${coordsBefore - coordsAfterLoops.length} von $coordsBefore Punkten)',
+      );
     }
 
     // ── Maneuver-Indices komplett neu berechnen (nach allen Koordinaten-Änderungen) ─
     // Statt Offset-Korrektur: lat/lng-Position des Maneuvers in neuen Koordinaten suchen.
     final finalManeuvers = result.maneuvers
-        .map((m) => RouteManeuver(
-              latitude: m.latitude,
-              longitude: m.longitude,
-              routeIndex: _findNearestIndex(m.latitude, m.longitude, coords),
-              icon: m.icon,
-              announcement: m.announcement,
-              instruction: m.instruction,
-            ))
+        .map(
+          (m) => RouteManeuver(
+            latitude: m.latitude,
+            longitude: m.longitude,
+            routeIndex: _findNearestIndex(m.latitude, m.longitude, coords),
+            icon: m.icon,
+            announcement: m.announcement,
+            instruction: m.instruction,
+          ),
+        )
         .toList();
 
     final newGeometry = Map<String, dynamic>.from(result.geometry);
@@ -745,8 +909,10 @@ class RouteService {
     double actualDistanceMeters = 0.0;
     for (var i = 0; i < coords.length - 1; i++) {
       actualDistanceMeters += geo.Geolocator.distanceBetween(
-        coords[i][1], coords[i][0],
-        coords[i + 1][1], coords[i + 1][0],
+        coords[i][1],
+        coords[i][0],
+        coords[i + 1][1],
+        coords[i + 1][0],
       );
     }
 
@@ -759,15 +925,21 @@ class RouteService {
     final double? finalDuration;
     if (distRatio < 0.50 && origDist > 10000) {
       // Zu viel gekürzt — Originaldistanz beibehalten
-      debugPrint('[RouteService] Snap/Loop-Fix WARNUNG: Distanz fiel auf ${(distRatio * 100).toStringAsFixed(0)}% — behalte Mapbox-Original (${(origDist / 1000).toStringAsFixed(1)} km)');
+      debugPrint(
+        '[RouteService] Snap/Loop-Fix WARNUNG: Distanz fiel auf ${(distRatio * 100).toStringAsFixed(0)}% — behalte Mapbox-Original (${(origDist / 1000).toStringAsFixed(1)} km)',
+      );
       finalDistanceMeters = origDist;
       finalDuration = result.durationSeconds;
     } else {
       finalDistanceMeters = actualDistanceMeters;
       final adjustedDuration = (result.durationSeconds ?? 0) * distRatio;
-      finalDuration = adjustedDuration > 0 ? adjustedDuration : result.durationSeconds;
-      debugPrint('[RouteService] Snap/Loop-Fix: ${origDist.round()}m → ${actualDistanceMeters.round()}m '
-          '(${(actualDistanceMeters / 1000).toStringAsFixed(1)} km, ratio: ${distRatio.toStringAsFixed(2)})');
+      finalDuration = adjustedDuration > 0
+          ? adjustedDuration
+          : result.durationSeconds;
+      debugPrint(
+        '[RouteService] Snap/Loop-Fix: ${origDist.round()}m → ${actualDistanceMeters.round()}m '
+        '(${(actualDistanceMeters / 1000).toStringAsFixed(1)} km, ratio: ${distRatio.toStringAsFixed(2)})',
+      );
     }
 
     return RouteResult(
@@ -797,11 +969,15 @@ class RouteService {
 
     final cum = <double>[0.0];
     for (var i = 1; i < coords.length; i++) {
-      cum.add(cum.last +
-          geo.Geolocator.distanceBetween(
-            coords[i - 1][1], coords[i - 1][0],
-            coords[i][1],     coords[i][0],
-          ));
+      cum.add(
+        cum.last +
+            geo.Geolocator.distanceBetween(
+              coords[i - 1][1],
+              coords[i - 1][0],
+              coords[i][1],
+              coords[i][0],
+            ),
+      );
     }
 
     // Letzten 15 % nicht scannen — Rundkurs endet legitim nah am Start
@@ -811,8 +987,10 @@ class RouteService {
       final lookBack = math.max(0, i - 300);
       for (var j = lookBack; j < i - 8; j++) {
         final directDist = geo.Geolocator.distanceBetween(
-          coords[i][1], coords[i][0],
-          coords[j][1], coords[j][0],
+          coords[i][1],
+          coords[i][0],
+          coords[j][1],
+          coords[j][0],
         );
         if (directDist > 60.0) continue;
 
@@ -822,11 +1000,10 @@ class RouteService {
 
         // Loop gefunden: Punkte j+1 bis i-1 sind der Umweg.
         // Wir verbinden j direkt mit i — beide liegen auf der Originalstraße.
-        final shortened = [
-          ...coords.sublist(0, j + 1),
-          ...coords.sublist(i),
-        ];
-        debugPrint('[RouteService] Loop entfernt: ${i - j} Punkte, ${pathLen.toStringAsFixed(0)}m Umweg');
+        final shortened = [...coords.sublist(0, j + 1), ...coords.sublist(i)];
+        debugPrint(
+          '[RouteService] Loop entfernt: ${i - j} Punkte, ${pathLen.toStringAsFixed(0)}m Umweg',
+        );
         return _removeRouteLoops(shortened);
       }
     }
@@ -887,6 +1064,11 @@ RouteWindowMatch findNearestInWindow({
     }
   }
 
+  // Wenn das Match weit weg von der Route liegt, den Index nicht nach vorne
+  // springen lassen. Distanz bleibt erhalten für Off-Route-Erkennung.
+  if (nearestDistance > maxJumpMeters) {
+    return RouteWindowMatch(index: start, distanceMeters: nearestDistance);
+  }
+
   return RouteWindowMatch(index: nearestIndex, distanceMeters: nearestDistance);
 }
-

@@ -238,7 +238,7 @@ async function getMapboxRoute(
 
     // Base URL
     // We use geometries=geojson to get the path geometry
-    let url = `https://api.mapbox.com/directions/v5/${profile}/${coordinatesStr}?access_token=${accessToken}&geometries=geojson&overview=full&steps=true&voice_instructions=true&banner_instructions=true&language=de&continue_straight=false&annotations=maxspeed`
+    let url = `https://api.mapbox.com/directions/v5/${profile}/${coordinatesStr}?access_token=${accessToken}&geometries=geojson&overview=full&steps=true&voice_instructions=true&banner_instructions=true&language=de&continue_straight=true&annotations=maxspeed`
 
     // Append optional parameters if they exist
     if (exclude && exclude.trim() !== '') {
@@ -262,6 +262,38 @@ async function getMapboxRoute(
 
     // Return the best route
     return data.routes[0]
+}
+
+/**
+ * Prüft ob eine Route explizite Wendemanöver enthält.
+ */
+function hasUTurnManeuver(route: any): boolean {
+    const legs = route?.legs
+    if (!Array.isArray(legs)) return false
+
+    for (const leg of legs) {
+        const steps = leg?.steps
+        if (!Array.isArray(steps)) continue
+
+        for (const step of steps) {
+            const maneuver = step?.maneuver ?? {}
+            const modifier = String(maneuver?.modifier ?? '').toLowerCase()
+            const type = String(maneuver?.type ?? '').toLowerCase()
+            const instruction = String(maneuver?.instruction ?? '').toLowerCase()
+
+            if (
+                modifier.includes('uturn') ||
+                modifier.includes('u-turn') ||
+                type === 'uturn' ||
+                type === 'u-turn' ||
+                instruction.includes('wenden') ||
+                instruction.includes('u-turn')
+            ) {
+                return true
+            }
+        }
+    }
+    return false
 }
 
 Deno.serve(async (req) => {
@@ -403,6 +435,11 @@ Deno.serve(async (req) => {
             route = await getMapboxRoute(finalWaypoints, mapboxProfile, '', radiusesParams, MAPBOX_ACCESS_TOKEN);
         }
 
+        if (route && hasUTurnManeuver(route)) {
+            console.log('Initial route rejected: contains U-turn maneuver');
+            route = null;
+        }
+
         // Retry with different waypoint directions (up to 5 more attempts)
         // Alterniert zwischen Triangle und Loop-Strategien für maximale Chance
         if (!route && planning_type === 'Zufall' && currentRouteType === 'ROUND_TRIP' && distanceConfig) {
@@ -420,8 +457,9 @@ Deno.serve(async (req) => {
                 if (route) {
                     // Qualitätsprüfung auch bei Retries
                     const retryCoords = route.geometry?.coordinates?.length ?? 0;
-                    if (retryCoords < 30) {
-                        console.log(`Retry ${retry + 1}: Route has only ${retryCoords} coords — rejecting`);
+                    const hasUTurn = hasUTurnManeuver(route);
+                    if (retryCoords < 30 || hasUTurn) {
+                        console.log(`Retry ${retry + 1}: Route rejected (coords=${retryCoords}, uturn=${hasUTurn})`);
                         route = null;
                         continue;
                     }
@@ -490,8 +528,9 @@ Deno.serve(async (req) => {
 
                 // Qualitätsprüfung: Route muss echte Straßengeometrie haben
                 const coordCount = newRoute.geometry?.coordinates?.length ?? 0;
-                if (coordCount < 30) {
-                    console.log(`Scaling attempt ${attempts + 1}: Route has only ${coordCount} coordinates — bad quality, stopping`);
+                const hasUTurn = hasUTurnManeuver(newRoute);
+                if (coordCount < 30 || hasUTurn) {
+                    console.log(`Scaling attempt ${attempts + 1}: Route rejected (coords=${coordCount}, uturn=${hasUTurn})`);
                     break
                 }
 
@@ -508,6 +547,10 @@ Deno.serve(async (req) => {
         if (coordCount < 30 && actualDistanceKm > 10) {
             console.error(`Route quality too low: ${coordCount} coordinates for ${actualDistanceKm.toFixed(1)} km — likely straight lines, not roads`);
             throw new Error(`Route-Qualität zu niedrig (${coordCount} Koordinaten). Bitte erneut versuchen.`);
+        }
+        if (hasUTurnManeuver(route)) {
+            console.error('Route quality too low: route contains U-turn maneuver');
+            throw new Error('Route enthält einen Wendepunkt. Bitte erneut versuchen.');
         }
 
         // Always use the ACTUAL Mapbox distance — never clamp.
