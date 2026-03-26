@@ -80,8 +80,6 @@ class _CruiseModePageState extends State<CruiseModePage> {
   bool _mapReady = false;
   // Route als LatLng-Liste für PolylineLayer
   List<LatLng> _routeLatLngs = [];
-  // Überlappende Segmente (jedes Segment ist eine eigene LatLng-Liste)
-  List<List<LatLng>> _overlapSegments = [];
   // Aktuelle User-Position als Marker
   LatLng? _userPosition;
   // Simulation-Puck-Position als Marker
@@ -651,16 +649,6 @@ class _CruiseModePageState extends State<CruiseModePage> {
                 color: const Color(0xFFFF5722),
                 strokeWidth: 5,
               ),
-              // Überlappende Segmente (blau)
-              ..._overlapSegments
-                  .where((s) => s.length >= 2)
-                  .map(
-                    (s) => Polyline(
-                      points: s,
-                      color: const Color(0xFF2979FF),
-                      strokeWidth: 5,
-                    ),
-                  ),
             ],
           ),
         // ── User-Position Marker (Live-Navigation) ───────────────────────────
@@ -1199,15 +1187,8 @@ class _CruiseModePageState extends State<CruiseModePage> {
         .map((c) => LatLng(c[1], c[0])) // [lng, lat] → LatLng(lat, lng)
         .toList();
 
-    // Überlappende Segmente berechnen und ebenfalls konvertieren
-    final overlapRaw = _findOverlappingSegments(activeCoordinates);
-    final overlapLatLngs = overlapRaw
-        .map((seg) => seg.map((c) => LatLng(c[1], c[0])).toList())
-        .toList();
-
     _safeSetState(() {
       _routeLatLngs = routeLatLngs;
-      _overlapSegments = overlapLatLngs;
     });
 
     if (animateCamera && _mapReady && routeLatLngs.isNotEmpty && mounted) {
@@ -1236,56 +1217,6 @@ class _CruiseModePageState extends State<CruiseModePage> {
   }
 
   // ═══════════════════════ OVERLAP DETECTION ════════════════════════════════
-
-  /// Erkennt Route-Segmente, die über frühere Abschnitte zurücklaufen (≤35 m Abstand).
-  /// Gibt eine Liste von Koordinaten-Gruppen zurück, die als eigene LineStrings
-  /// gezeichnet werden (blaue Überlappungs-Linie).
-  List<List<List<double>>> _findOverlappingSegments(List<List<double>> coords) {
-    const double thresholdMeters = 35.0;
-    const int minLookbackSkip =
-        10; // Mindestabstand in Indizes, um Nachbarn zu ignorieren
-
-    final result = <List<List<double>>>[];
-    List<List<double>>? currentGroup;
-
-    for (int i = minLookbackSkip; i < coords.length; i++) {
-      final c = coords[i];
-      bool isOverlap = false;
-
-      // Vergleiche mit allen früheren Punkten (außer direkten Nachbarn)
-      for (int j = 0; j < i - minLookbackSkip; j++) {
-        final prev = coords[j];
-        final dist = geo.Geolocator.distanceBetween(
-          c[1],
-          c[0],
-          prev[1],
-          prev[0],
-        );
-        if (dist <= thresholdMeters) {
-          isOverlap = true;
-          break;
-        }
-      }
-
-      if (isOverlap) {
-        if (currentGroup == null) {
-          // Segment beginnt: vorherigen Punkt als Anfang nehmen für Kontinuität
-          currentGroup = [coords[i - 1], c];
-        } else {
-          currentGroup.add(c);
-        }
-      } else {
-        if (currentGroup != null && currentGroup.length >= 2) {
-          result.add(currentGroup);
-        }
-        currentGroup = null;
-      }
-    }
-    if (currentGroup != null && currentGroup.length >= 2) {
-      result.add(currentGroup);
-    }
-    return result;
-  }
 
   // ═══════════════════════ NAVIGATION TRACKING ══════════════════════════════
 
