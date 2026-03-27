@@ -16,7 +16,7 @@ class RouteCacheService {
   RouteCacheService._();
   static final RouteCacheService instance = RouteCacheService._();
 
-  final RouteService _routeService = const RouteService();
+  final RouteService _routeService = RouteService();
 
   static const int _queueSize = 5;
 
