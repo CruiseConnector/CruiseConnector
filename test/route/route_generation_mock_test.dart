@@ -343,6 +343,9 @@ void main() {
           verify(mockInvoker.invoke(captureAny)).captured.single
               as Map<String, dynamic>;
       expect(captured['mode'], 'Standard');
+      expect(captured.containsKey('targetDistance'), isFalse);
+      expect(captured.containsKey('detour_level'), isFalse);
+      expect(captured.containsKey('detour_factor'), isFalse);
     });
 
     test('scenic = true → übergibt den eigentlichen mode', () async {

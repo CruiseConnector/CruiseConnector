@@ -135,14 +135,19 @@ class CruiseSetupCard extends StatelessWidget {
             onSelect: onLocationChanged,
           ),
           const Divider(color: Colors.white10, height: 32),
-          _SelectionRow(
-            title: 'Stil',
-            options: isRoundTrip
-                ? const ['Kurvenjagd', 'Sport Mode', 'Abendrunde', 'Entdecker']
-                : const ['Direkt', 'Kurvenjagd', 'Sport Mode', 'Entdecker'],
-            selectedValue: selectedStyle,
-            onSelect: onStyleChanged,
-          ),
+          if (isRoundTrip || selectedDetour != 'Direkt') ...[
+            _SelectionRow(
+              title: 'Stil',
+              options: const [
+                'Kurvenjagd',
+                'Sport Mode',
+                'Abendrunde',
+                'Entdecker',
+              ],
+              selectedValue: selectedStyle,
+              onSelect: onStyleChanged,
+            ),
+          ],
         ],
       ),
     );

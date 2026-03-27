@@ -83,15 +83,15 @@ class RouteService {
   }) async {
     final normalizedVariant = routeVariant.clamp(0, 3);
     final detourFactor = switch (normalizedVariant) {
-      1 => 1.18,
-      2 => 1.35,
-      3 => 1.6,
+      1 => 1.22,
+      2 => 1.38,
+      3 => 1.62,
       _ => scenic ? 1.08 : 1.0,
     };
     final detourMinimumExtraKm = switch (normalizedVariant) {
-      1 => 5.0,
-      2 => 12.0,
-      3 => 20.0,
+      1 => 4.0,
+      2 => 9.0,
+      3 => 15.0,
       _ => scenic ? 2.0 : 0.0,
     };
     final directDistanceKm = math.max(
@@ -104,8 +104,14 @@ class RouteService {
           1000.0,
       1.0,
     );
+    final scenicTargetKm = switch (normalizedVariant) {
+      1 => directDistanceKm * 1.28,
+      2 => directDistanceKm * 1.45,
+      3 => directDistanceKm * 1.72,
+      _ => scenic ? directDistanceKm * 1.12 : directDistanceKm,
+    };
     final targetDistanceKm = math.max(
-      directDistanceKm * detourFactor,
+      scenicTargetKm,
       directDistanceKm + detourMinimumExtraKm,
     );
 

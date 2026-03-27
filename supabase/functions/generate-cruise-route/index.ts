@@ -316,6 +316,43 @@ function buildPointToPointScenicWaypoints({
     return [start, ...scenicWaypoints, destination]
 }
 
+function getRouteDistanceKm(route: any): number {
+    return typeof route?.distance === 'number' ? route.distance / 1000 : 0
+}
+
+function getPointToPointMinimumDistanceKm(
+    directDistanceKm: number,
+    targetDistance: number | undefined,
+    detourLevel: number,
+): number {
+    const detourMultiplier = detourLevel === 1
+        ? 1.18
+        : detourLevel === 2
+        ? 1.32
+        : detourLevel >= 3
+        ? 1.48
+        : 1.0
+
+    return Math.max(
+        targetDistance ? targetDistance * 0.96 : 0,
+        directDistanceKm * detourMultiplier,
+    )
+}
+
+function isPointToPointDetourAcceptable(
+    route: any,
+    directDistanceKm: number,
+    targetDistance: number | undefined,
+    detourLevel: number,
+): boolean {
+    const minimumDistanceKm = getPointToPointMinimumDistanceKm(
+        directDistanceKm,
+        targetDistance,
+        detourLevel,
+    )
+    return getRouteDistanceKm(route) >= minimumDistanceKm
+}
+
 /**
  * Scales a waypoint closer to the start location (center) by a given factor.
  * New = Start + (WP - Start) * factor
@@ -569,6 +606,25 @@ Deno.serve(async (req) => {
             route = null;
         }
 
+        if (
+            route &&
+            planning_type === 'Zufall' &&
+            currentRouteType === 'POINT_TO_POINT' &&
+            body.destination_location &&
+            pointToPointIsScenic &&
+            !isPointToPointDetourAcceptable(
+                route,
+                pointToPointDirectDistanceKm,
+                targetDistance,
+                detourLevel,
+            )
+        ) {
+            console.log(
+                `Initial P2P scenic route rejected: ${getRouteDistanceKm(route).toFixed(1)}km < required ${getPointToPointMinimumDistanceKm(pointToPointDirectDistanceKm, targetDistance, detourLevel).toFixed(1)}km`,
+            )
+            route = null
+        }
+
         // Retry with different waypoint directions (up to 5 more attempts)
         // Alterniert zwischen Triangle und Loop-Strategien für maximale Chance
         if (!route && planning_type === 'Zufall' && currentRouteType === 'ROUND_TRIP' && distanceConfig) {
@@ -627,6 +683,20 @@ Deno.serve(async (req) => {
                     continue;
                 }
                 if (route) {
+                    if (
+                        !isPointToPointDetourAcceptable(
+                            route,
+                            pointToPointDirectDistanceKm,
+                            targetDistance,
+                            detourLevel,
+                        )
+                    ) {
+                        console.log(
+                            `P2P scenic retry ${retry + 1}: route rejected because it is too short (${getRouteDistanceKm(route).toFixed(1)}km < required ${getPointToPointMinimumDistanceKm(pointToPointDirectDistanceKm, targetDistance, detourLevel).toFixed(1)}km)`,
+                        )
+                        route = null
+                        continue
+                    }
                     finalWaypoints = retryWaypoints;
                     radiusesParams = retryRadiuses;
                 }

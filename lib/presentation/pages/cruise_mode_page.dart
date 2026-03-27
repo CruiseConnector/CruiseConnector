@@ -179,9 +179,9 @@ class _CruiseModePageState extends State<CruiseModePage> {
       'Entdecker',
     };
     const pointToPointStyles = {
-      'Direkt',
       'Kurvenjagd',
       'Sport Mode',
+      'Abendrunde',
       'Entdecker',
     };
 
@@ -196,6 +196,8 @@ class _CruiseModePageState extends State<CruiseModePage> {
                 : 'Direkt');
       if (isRoundTrip) {
         _selectedDetour = 'Direkt';
+      } else if (_selectedDetour == 'Direkt' && _selectedStyle == 'Direkt') {
+        _selectedStyle = 'Sport Mode';
       }
     });
   }
@@ -400,8 +402,7 @@ class _CruiseModePageState extends State<CruiseModePage> {
                         onStyleChanged: (v) =>
                             setState(() => _selectedStyle = v),
                         selectedDetour: _selectedDetour,
-                        onDetourChanged: (v) =>
-                            setState(() => _selectedDetour = v),
+                        onDetourChanged: _handleDetourChanged,
                         onDestinationSelected: _onDestinationSelected,
                         onDestinationCleared: () => setState(() {
                           _selectedDestination = null;
@@ -1086,12 +1087,13 @@ class _CruiseModePageState extends State<CruiseModePage> {
           'Großer Umweg' => 3,
           _ => 0,
         };
+        final scenicMode = _selectedDetour != 'Direkt';
         result = await _routeService.generatePointToPoint(
           startPosition: startPosition,
           destinationLat: destLat,
           destinationLng: destLng,
-          mode: _selectedStyle == 'Direkt' ? 'Standard' : _selectedStyle,
-          scenic: _selectedStyle != 'Direkt',
+          mode: scenicMode ? _selectedStyle : 'Standard',
+          scenic: scenicMode,
           routeVariant: detourVariant,
         );
       } else {
@@ -1189,6 +1191,25 @@ class _CruiseModePageState extends State<CruiseModePage> {
     setState(() {
       _selectedDestination = suggestion;
       _destinationController.text = suggestion.placeName;
+    });
+  }
+
+  void _handleDetourChanged(String detour) {
+    setState(() {
+      _selectedDetour = detour;
+      if (detour == 'Direkt') {
+        return;
+      }
+      const allowedStyles = {
+        'Kurvenjagd',
+        'Sport Mode',
+        'Abendrunde',
+        'Entdecker',
+      };
+      if (!allowedStyles.contains(_selectedStyle) ||
+          _selectedStyle == 'Direkt') {
+        _selectedStyle = 'Sport Mode';
+      }
     });
   }
 
