@@ -393,7 +393,7 @@ void main() {
       },
     );
 
-    test('groesserer Umweg erzeugt groessere targetDistance', () async {
+    test('Umwegstufen skalieren die targetDistance sichtbar', () async {
       when(mockInvoker.invoke(any)).thenAnswer(
         (_) async =>
             _buildRouteResponse(distanceMeters: 60000, durationSeconds: 4000),
@@ -424,6 +424,25 @@ void main() {
         destinationLng: 12.0,
         mode: 'Sport Mode',
         scenic: true,
+        routeVariant: 2,
+      );
+
+      final mediumDetour =
+          verify(mockInvoker.invoke(captureAny)).captured.single
+              as Map<String, dynamic>;
+      clearInteractions(mockInvoker);
+
+      when(mockInvoker.invoke(any)).thenAnswer(
+        (_) async =>
+            _buildRouteResponse(distanceMeters: 60000, durationSeconds: 4000),
+      );
+
+      await service.generatePointToPoint(
+        startPosition: _munich(),
+        destinationLat: 47.8,
+        destinationLng: 12.0,
+        mode: 'Sport Mode',
+        scenic: true,
         routeVariant: 3,
       );
 
@@ -432,9 +451,19 @@ void main() {
               as Map<String, dynamic>;
 
       expect(
-        largeDetour['targetDistance'] as double,
+        mediumDetour['targetDistance'] as double,
         greaterThan(smallDetour['targetDistance'] as double),
       );
+      expect(
+        largeDetour['targetDistance'] as double,
+        greaterThan(mediumDetour['targetDistance'] as double),
+      );
+      expect(
+        (largeDetour['targetDistance'] as double) -
+            (smallDetour['targetDistance'] as double),
+        greaterThan(8),
+      );
+      expect(mediumDetour['detour_level'], 2);
       expect(largeDetour['detour_level'], 3);
     });
   });

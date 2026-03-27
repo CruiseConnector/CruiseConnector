@@ -193,11 +193,11 @@ class _CruiseModePageState extends State<CruiseModePage> {
                 : 'Sport Mode')
           : (pointToPointStyles.contains(_selectedStyle)
                 ? _selectedStyle
-                : 'Direkt');
+                : 'Abendrunde');
       if (isRoundTrip) {
         _selectedDetour = 'Direkt';
-      } else if (_selectedDetour == 'Direkt' && _selectedStyle == 'Direkt') {
-        _selectedStyle = 'Sport Mode';
+      } else if (!pointToPointStyles.contains(_selectedStyle)) {
+        _selectedStyle = 'Abendrunde';
       }
     });
   }
@@ -1208,7 +1208,7 @@ class _CruiseModePageState extends State<CruiseModePage> {
       };
       if (!allowedStyles.contains(_selectedStyle) ||
           _selectedStyle == 'Direkt') {
-        _selectedStyle = 'Sport Mode';
+        _selectedStyle = 'Abendrunde';
       }
     });
   }
