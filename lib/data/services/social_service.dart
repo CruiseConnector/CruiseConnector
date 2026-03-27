@@ -20,7 +20,9 @@ class SocialService {
           .eq('follower_id', uid)
           .eq('status', 'accepted');
 
-      final ids = (followingIds as List).map((f) => f['following_id'] as String).toList();
+      final ids = (followingIds as List)
+          .map((f) => f['following_id'] as String)
+          .toList();
       // Eigene ID hinzufügen damit eigene Posts auch im Feed erscheinen
       ids.add(uid);
 
@@ -40,11 +42,22 @@ class SocialService {
 
   static Future<List<Map<String, dynamic>>> getUserPosts(String userId) async {
     try {
-      final posts = await _db
+      final viewerId = _userId;
+      final canSeeFollowersPosts =
+          viewerId == userId || (viewerId != null && await isFollowing(userId));
+
+      var query = _db
           .from('posts')
-          .select('*, profiles(id, username, email)')
-          .eq('user_id', userId)
-          .order('created_at', ascending: false);
+          .select('*, profiles(id, username, email), shared_route_id')
+          .eq('user_id', userId);
+
+      if (viewerId != userId) {
+        query = canSeeFollowersPosts
+            ? query.inFilter('visibility', ['public', 'followers'])
+            : query.eq('visibility', 'public');
+      }
+
+      final posts = await query.order('created_at', ascending: false);
 
       return List<Map<String, dynamic>>.from(posts);
     } catch (e) {
@@ -55,18 +68,25 @@ class SocialService {
 
   static Future<List<Map<String, dynamic>>> getDiscoverPosts() async {
     try {
-      // Nur öffentliche Posts von nicht-privaten Accounts für Entdecken
+      final uid = _userId;
+      // Entdecken zeigt öffentliche Posts plus die eigenen Posts des Nutzers,
+      // damit Profil- und Community-Ansicht konsistent bleiben.
       final posts = await _db
           .from('posts')
-          .select('*, profiles(id, username, email, is_private), shared_route_id')
-          .eq('visibility', 'public')
+          .select(
+            '*, profiles(id, username, email, is_private), shared_route_id',
+          )
           .order('created_at', ascending: false)
-          .limit(50);
+          .limit(80);
 
-      // Private Accounts im Client filtern (Supabase kann nicht über FK-Joins filtern)
+      // Private Accounts und follower-only Posts clientseitig filtern.
       final filtered = (posts as List).where((p) {
         final profile = p['profiles'] as Map<String, dynamic>?;
-        return profile?['is_private'] != true;
+        final isOwnPost = uid != null && p['user_id'] == uid;
+        final visibility = (p['visibility'] as String?) ?? 'public';
+        if (!isOwnPost && visibility != 'public') return false;
+        if (!isOwnPost && profile?['is_private'] == true) return false;
+        return true;
       }).toList();
 
       return List<Map<String, dynamic>>.from(filtered.take(30));
@@ -121,7 +141,11 @@ class SocialService {
 
       // Notification an Post-Autor
       try {
-        final post = await _db.from('posts').select('user_id').eq('id', postId).maybeSingle();
+        final post = await _db
+            .from('posts')
+            .select('user_id')
+            .eq('id', postId)
+            .maybeSingle();
         if (post != null) {
           final postAuthor = post['user_id'] as String;
           if (postAuthor != uid) {
@@ -159,7 +183,9 @@ class SocialService {
   static Future<List<Map<String, dynamic>>> getComments(String postId) async {
     final results = await _db
         .from('comments')
-        .select('*, profiles!comments_user_id_profiles_fkey(id, username, email)')
+        .select(
+          '*, profiles!comments_user_id_profiles_fkey(id, username, email)',
+        )
         .eq('post_id', postId)
         .order('created_at', ascending: true);
 
@@ -179,7 +205,11 @@ class SocialService {
 
     // Notification an Post-Autor
     try {
-      final post = await _db.from('posts').select('user_id').eq('id', postId).maybeSingle();
+      final post = await _db
+          .from('posts')
+          .select('user_id')
+          .eq('id', postId)
+          .maybeSingle();
       if (post != null) {
         final postAuthor = post['user_id'] as String;
         if (postAuthor != uid) {
@@ -224,7 +254,11 @@ class SocialService {
 
       // Notification an Post-Autor
       try {
-        final post = await _db.from('posts').select('user_id').eq('id', postId).maybeSingle();
+        final post = await _db
+            .from('posts')
+            .select('user_id')
+            .eq('id', postId)
+            .maybeSingle();
         if (post != null) {
           final postAuthor = post['user_id'] as String;
           if (postAuthor != uid) {
@@ -258,7 +292,9 @@ class SocialService {
   }
 
   /// Alle Reposts eines Users (für Profil-Seite)
-  static Future<List<Map<String, dynamic>>> getUserReposts(String userId) async {
+  static Future<List<Map<String, dynamic>>> getUserReposts(
+    String userId,
+  ) async {
     final reposts = await _db
         .from('reposts')
         .select('*, posts(*, profiles(id, username, email))')
@@ -340,17 +376,23 @@ class SocialService {
   static Future<List<Map<String, dynamic>>> getFollowers(String userId) async {
     final result = await _db
         .from('follows')
-        .select('follower_id, profiles!follows_follower_id_profiles_fkey(id, username, email)')
+        .select(
+          'follower_id, profiles!follows_follower_id_profiles_fkey(id, username, email)',
+        )
         .eq('following_id', userId)
         .eq('status', 'accepted');
     return List<Map<String, dynamic>>.from(result);
   }
 
   /// Liste der Personen, denen dieser User folgt
-  static Future<List<Map<String, dynamic>>> getFollowingList(String userId) async {
+  static Future<List<Map<String, dynamic>>> getFollowingList(
+    String userId,
+  ) async {
     final result = await _db
         .from('follows')
-        .select('following_id, profiles!follows_following_id_profiles_fkey(id, username, email)')
+        .select(
+          'following_id, profiles!follows_following_id_profiles_fkey(id, username, email)',
+        )
         .eq('follower_id', userId)
         .eq('status', 'accepted');
     return List<Map<String, dynamic>>.from(result);
@@ -382,7 +424,9 @@ class SocialService {
         .select('group_id')
         .eq('user_id', uid);
 
-    final groupIds = (memberships as List).map((m) => m['group_id'] as String).toList();
+    final groupIds = (memberships as List)
+        .map((m) => m['group_id'] as String)
+        .toList();
     if (groupIds.isEmpty) return [];
 
     final groups = await _db
@@ -414,14 +458,18 @@ class SocialService {
     final uid = _userId;
     if (uid == null) return;
 
-    final result = await _db.from('groups').insert({
-      'created_by': uid,
-      'name': name,
-      'route_name': routeName,
-      'stats': stats,
-      'time_location': timeLocation,
-      'description': description,
-    }).select('id').single();
+    final result = await _db
+        .from('groups')
+        .insert({
+          'created_by': uid,
+          'name': name,
+          'route_name': routeName,
+          'stats': stats,
+          'time_location': timeLocation,
+          'description': description,
+        })
+        .select('id')
+        .single();
 
     // Creator automatisch als Mitglied
     await _db.from('group_members').insert({
@@ -473,7 +521,9 @@ class SocialService {
 
     final results = await _db
         .from('notifications')
-        .select('*, profiles!notifications_from_user_id_profiles_fkey(id, username, email)')
+        .select(
+          '*, profiles!notifications_from_user_id_profiles_fkey(id, username, email)',
+        )
         .eq('user_id', uid)
         .order('created_at', ascending: false)
         .limit(50);
@@ -511,7 +561,9 @@ class SocialService {
     try {
       final profile = await _db
           .from('profiles')
-          .select('id, username, email, created_at, level, total_km, total_routes, badges, bio, avatar_url')
+          .select(
+            'id, username, email, created_at, level, total_km, total_routes, badges, bio, avatar_url',
+          )
           .eq('id', userId)
           .maybeSingle();
       return profile;

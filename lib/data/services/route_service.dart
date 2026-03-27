@@ -39,7 +39,7 @@ class SupabaseRouteInvoker implements RouteEdgeInvoker {
 /// Service für die Routenberechnung via Supabase Edge Function.
 class RouteService {
   RouteService({RouteEdgeInvoker? invoker})
-      : _invoker = invoker ?? const SupabaseRouteInvoker();
+    : _invoker = invoker ?? const SupabaseRouteInvoker();
 
   static const String edgeFunction = 'generate-cruise-route';
 
@@ -81,6 +81,34 @@ class RouteService {
     bool scenic = false,
     int routeVariant = 0,
   }) async {
+    final normalizedVariant = routeVariant.clamp(0, 3);
+    final detourFactor = switch (normalizedVariant) {
+      1 => 1.18,
+      2 => 1.35,
+      3 => 1.6,
+      _ => scenic ? 1.08 : 1.0,
+    };
+    final detourMinimumExtraKm = switch (normalizedVariant) {
+      1 => 5.0,
+      2 => 12.0,
+      3 => 20.0,
+      _ => scenic ? 2.0 : 0.0,
+    };
+    final directDistanceKm = math.max(
+      geo.Geolocator.distanceBetween(
+            startPosition.latitude,
+            startPosition.longitude,
+            destinationLat,
+            destinationLng,
+          ) /
+          1000.0,
+      1.0,
+    );
+    final targetDistanceKm = math.max(
+      directDistanceKm * detourFactor,
+      directDistanceKm + detourMinimumExtraKm,
+    );
+
     final body = <String, dynamic>{
       'startLocation': {
         'latitude': startPosition.latitude,
@@ -94,11 +122,12 @@ class RouteService {
       'planning_type': 'Zufall',
       'mode': scenic ? mode : 'Standard',
       'language': 'de',
-      if (scenic) ...{
-        'targetDistance':
-            50 + (routeVariant * 10), // Unterschiedliche Ziel-Distanzen
-        'randomSeed':
-            routeVariant, // Für Backend: verschiedene Algorithmen/Parameter
+      // routeVariant: 0=direkt, 1=kleiner, 2=mittlerer, 3=großer Umweg
+      if (scenic || normalizedVariant > 0) ...{
+        'targetDistance': double.parse(targetDistanceKm.toStringAsFixed(1)),
+        'randomSeed': normalizedVariant,
+        'detour_level': normalizedVariant,
+        'detour_factor': detourFactor,
       },
     };
     final result = await _invoke(body);
@@ -881,7 +910,10 @@ class RouteService {
     // auf die nächste Straße gesnappt — das behalten wir bei.
     // Nur bei sehr kurzer Distanz (<30m) auf GPS-Position überschreiben.
     final distToFirstPoint = geo.Geolocator.distanceBetween(
-      startLat, startLng, coords[0][1], coords[0][0],
+      startLat,
+      startLng,
+      coords[0][1],
+      coords[0][0],
     );
     if (distToFirstPoint < 30) {
       coords[0] = [startLng, startLat];

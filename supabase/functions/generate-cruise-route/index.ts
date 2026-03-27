@@ -37,6 +37,9 @@ interface RequestData {
     startLocation: Coordinate
     destination_location?: Coordinate
     mode?: RouteMode
+    randomSeed?: number
+    detour_level?: number
+    detour_factor?: number
 }
 
 interface DistanceConfig {
@@ -211,6 +214,108 @@ function calculateDistance(from: Coordinate, to: Coordinate): number {
     return R * c;
 }
 
+function interpolateCoordinate(from: Coordinate, to: Coordinate, fraction: number): Coordinate {
+    const clamped = Math.min(1, Math.max(0, fraction))
+    return {
+        latitude: from.latitude + (to.latitude - from.latitude) * clamped,
+        longitude: from.longitude + (to.longitude - from.longitude) * clamped,
+    }
+}
+
+function seededUnit(seed: number): number {
+    const raw = Math.sin(seed * 12.9898 + 78.233) * 43758.5453123
+    return raw - Math.floor(raw)
+}
+
+function buildPointToPointScenicWaypoints({
+    start,
+    destination,
+    mode,
+    targetDistance,
+    detourLevel,
+    detourFactor,
+    randomSeed = 0,
+}: {
+    start: Coordinate
+    destination: Coordinate
+    mode?: RouteMode
+    targetDistance?: number
+    detourLevel: number
+    detourFactor?: number
+    randomSeed?: number
+}): Coordinate[] {
+    const directDistanceKm = calculateDistance(start, destination)
+    if (directDistanceKm < 1.5) {
+        return [start, destination]
+    }
+
+    const scenicModeBoost = mode === 'Kurvenjagd'
+        ? 0.18
+        : mode === 'Entdecker'
+        ? 0.22
+        : mode === 'Sport Mode'
+        ? 0.12
+        : mode === 'Abendrunde'
+        ? 0.08
+        : 0.0
+
+    const detourBoost = detourLevel === 1
+        ? 0.14
+        : detourLevel === 2
+        ? 0.28
+        : detourLevel >= 3
+        ? 0.42
+        : 0.0
+
+    const effectiveFactor = Math.max(
+        detourFactor ?? 1.0,
+        1.0 + scenicModeBoost + detourBoost,
+    )
+    const desiredDistanceKm = Math.max(
+        targetDistance ?? 0,
+        directDistanceKm * effectiveFactor,
+    )
+    const extraDistanceKm = Math.max(3.0, desiredDistanceKm - directDistanceKm)
+
+    let waypointCount = detourLevel >= 3 || mode === 'Entdecker'
+        ? 3
+        : detourLevel >= 2 || mode === 'Kurvenjagd' || mode === 'Sport Mode'
+        ? 2
+        : 1
+    if (directDistanceKm < 12) waypointCount = Math.min(waypointCount, 2)
+
+    const fractions = waypointCount === 1
+        ? [0.5]
+        : waypointCount === 2
+        ? [0.32, 0.74]
+        : [0.2, 0.48, 0.8]
+
+    const baseBearing = calculateBearing(start, destination)
+    const side = seededUnit(randomSeed + detourLevel + Math.round(directDistanceKm)) >= 0.5 ? 1 : -1
+    const maxOffsetKm = Math.max(4, directDistanceKm * 0.42)
+    const minOffsetKm = Math.min(maxOffsetKm, Math.max(2.5, extraDistanceKm / (waypointCount + 1)))
+
+    const scenicWaypoints = fractions.map((fraction, index) => {
+        const basePoint = interpolateCoordinate(start, destination, fraction)
+        const variationSeed = randomSeed + (index + 1) * 17
+        const variation = 0.86 + seededUnit(variationSeed) * 0.32
+        const arcFactor = waypointCount === 1 ? 0.95 : 0.62 + index * 0.18
+        const offsetKm = Math.min(
+            maxOffsetKm,
+            Math.max(minOffsetKm, extraDistanceKm * arcFactor * variation),
+        )
+        const angleDrift = (seededUnit(variationSeed + 7) - 0.5) * 20
+
+        return calculateDestination(
+            basePoint,
+            offsetKm,
+            baseBearing + side * (90 + angleDrift),
+        )
+    })
+
+    return [start, ...scenicWaypoints, destination]
+}
+
 /**
  * Scales a waypoint closer to the start location (center) by a given factor.
  * New = Start + (WP - Start) * factor
@@ -372,16 +477,37 @@ Deno.serve(async (req) => {
         // --- 3. Flexible Planung ---
         let finalWaypoints: Coordinate[] = []
         let distanceConfig: DistanceConfig | null = null
+        let pointToPointIsScenic = false
+        let pointToPointDirectDistanceKm = 0
         // Default to ROUND_TRIP if not specified, for backward compatibility or default 'Zufall' behavior
         const currentRouteType = body.route_type || 'ROUND_TRIP';
+        const detourLevel = Math.max(0, Math.min(3, body.detour_level ?? 0))
 
         if (planning_type === 'Zufall') {
                 if (currentRouteType === 'POINT_TO_POINT') {
                           if (!body.destination_location) {
                                   throw new Error("For 'POINT_TO_POINT' planning, a destination_location is required.")
                           }
-                          // Simple A -> B
-                          finalWaypoints = [startLocation, body.destination_location];
+                          pointToPointDirectDistanceKm = calculateDistance(startLocation, body.destination_location)
+                          pointToPointIsScenic =
+                              detourLevel > 0 ||
+                              (mode != null && mode !== 'Standard') ||
+                              (targetDistance != null && targetDistance > pointToPointDirectDistanceKm * 1.05)
+
+                          finalWaypoints = pointToPointIsScenic
+                              ? buildPointToPointScenicWaypoints({
+                                    start: startLocation,
+                                    destination: body.destination_location,
+                                    mode,
+                                    targetDistance,
+                                    detourLevel,
+                                    detourFactor: body.detour_factor,
+                                    randomSeed: body.randomSeed ?? 0,
+                                })
+                              : [startLocation, body.destination_location];
+                          radiusesParams = finalWaypoints
+                              .map((_, i) => (i === 0 || i === finalWaypoints.length - 1) ? 'unlimited' : '6000')
+                              .join(';');
                 } else {
                         // ROUND_TRIP logic
                         if (!targetDistance) {
@@ -424,9 +550,11 @@ Deno.serve(async (req) => {
         // Radiuses: Start/Ende unlimited (echte GPS-Position), Zwischenpunkte max 1000m
         // Kleiner Radius = Waypoints müssen nahe einer Straße liegen → verhindert "Abkürzungen"
         // durch Gelände wo keine Straße existiert
-        radiusesParams = finalWaypoints
-            .map((_, i) => (i === 0 || i === finalWaypoints.length - 1) ? 'unlimited' : '1000')
-            .join(';');
+        if (!radiusesParams) {
+            radiusesParams = finalWaypoints
+                .map((_, i) => (i === 0 || i === finalWaypoints.length - 1) ? 'unlimited' : '1000')
+                .join(';');
+        }
 
         // --- Execute Route Request (with retries) ---
         let route = await getMapboxRoute(finalWaypoints, mapboxProfile, excludeParams, radiusesParams, MAPBOX_ACCESS_TOKEN);
@@ -467,6 +595,52 @@ Deno.serve(async (req) => {
                     finalWaypoints = retryAll;
                     radiusesParams = retryRadiuses;
                 }
+            }
+        }
+
+        if (!route && planning_type === 'Zufall' && currentRouteType === 'POINT_TO_POINT' && body.destination_location && pointToPointIsScenic) {
+            for (let retry = 0; retry < 4 && !route; retry++) {
+                console.log(`P2P scenic retry ${retry + 1}: regenerating waypoints...`);
+                const softenedTarget = targetDistance != null
+                    ? Math.max(pointToPointDirectDistanceKm * 1.05, targetDistance * (0.92 - retry * 0.08))
+                    : undefined
+                const retryWaypoints = buildPointToPointScenicWaypoints({
+                    start: startLocation,
+                    destination: body.destination_location,
+                    mode,
+                    targetDistance: softenedTarget,
+                    detourLevel: Math.max(detourLevel - (retry >= 2 ? 1 : 0), 0),
+                    detourFactor: body.detour_factor,
+                    randomSeed: (body.randomSeed ?? 0) + retry + 1,
+                })
+                const retryRadiuses = retryWaypoints
+                    .map((_, i) => (i === 0 || i === retryWaypoints.length - 1) ? 'unlimited' : '6000')
+                    .join(';')
+
+                route = await getMapboxRoute(retryWaypoints, mapboxProfile, excludeParams, retryRadiuses, MAPBOX_ACCESS_TOKEN);
+                if (!route && excludeParams && excludeParams.trim() !== '') {
+                    route = await getMapboxRoute(retryWaypoints, mapboxProfile, '', retryRadiuses, MAPBOX_ACCESS_TOKEN);
+                }
+                if (route && hasUTurnManeuver(route)) {
+                    console.log(`P2P scenic retry ${retry + 1}: route rejected because of U-turn`);
+                    route = null;
+                    continue;
+                }
+                if (route) {
+                    finalWaypoints = retryWaypoints;
+                    radiusesParams = retryRadiuses;
+                }
+            }
+        }
+
+        if (!route && planning_type === 'Zufall' && currentRouteType === 'POINT_TO_POINT' && body.destination_location) {
+            console.log('P2P scenic fallback: using direct A->B route');
+            const fallbackWaypoints = [startLocation, body.destination_location];
+            const fallbackRadiuses = 'unlimited;unlimited';
+            route = await getMapboxRoute(fallbackWaypoints, mapboxProfile, '', fallbackRadiuses, MAPBOX_ACCESS_TOKEN);
+            if (route) {
+                finalWaypoints = fallbackWaypoints;
+                radiusesParams = fallbackRadiuses;
             }
         }
 

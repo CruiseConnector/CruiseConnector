@@ -28,7 +28,9 @@ class SavedRoute {
       createdAt: DateTime.parse(json['created_at'] as String),
       style: (json['style'] as String?) ?? 'Standard',
       distanceKm: (json['distance_actual'] as num?)?.toDouble() ?? 0.0,
-      geometry: (json['geometry'] as Map<String, dynamic>?) ?? const {},
+      geometry: json['geometry'] is Map
+          ? Map<String, dynamic>.from(json['geometry'] as Map)
+          : const {},
       name: json['name'] as String?,
       durationSeconds: (json['duration_seconds'] as num?)?.toDouble(),
       routeType: (json['route_type'] as String?) ?? 'ROUND_TRIP',
@@ -70,11 +72,16 @@ class SavedRoute {
   /// Icon-Name für den Fahrstil.
   String get styleEmoji {
     switch (style) {
-      case 'Kurvenjagd': return '🏔️';
-      case 'Sport Mode': return '🏎️';
-      case 'Abendrunde': return '🌙';
-      case 'Entdecker':  return '🧭';
-      default:           return '🛣️';
+      case 'Kurvenjagd':
+        return '🏔️';
+      case 'Sport Mode':
+        return '🏎️';
+      case 'Abendrunde':
+        return '🌙';
+      case 'Entdecker':
+        return '🧭';
+      default:
+        return '🛣️';
     }
   }
 }

@@ -13,17 +13,17 @@ import 'route_generation_mock_test.mocks.dart';
 // ─── Hilfsfunktionen ─────────────────────────────────────────────────────────
 
 geo.Position _munich() => geo.Position(
-      latitude: 48.1351,
-      longitude: 11.5820,
-      timestamp: DateTime.now(),
-      accuracy: 5.0,
-      altitude: 520.0,
-      altitudeAccuracy: 10.0,
-      heading: 0.0,
-      headingAccuracy: 5.0,
-      speed: 0.0,
-      speedAccuracy: 1.0,
-    );
+  latitude: 48.1351,
+  longitude: 11.5820,
+  timestamp: DateTime.now(),
+  accuracy: 5.0,
+  altitude: 520.0,
+  altitudeAccuracy: 10.0,
+  heading: 0.0,
+  headingAccuracy: 5.0,
+  speed: 0.0,
+  speedAccuracy: 1.0,
+);
 
 /// Erzeugt eine valide Supabase-Antwort mit der angegebenen Distanz.
 Map<String, dynamic> _buildRouteResponse({
@@ -40,13 +40,11 @@ Map<String, dynamic> _buildRouteResponse({
 
   return {
     'route': {
-      'geometry': {
-        'type': 'LineString',
-        'coordinates': coords,
-      },
+      'geometry': {'type': 'LineString', 'coordinates': coords},
       'distance': distanceMeters,
       'duration': durationSeconds,
-      'legs': legs ??
+      'legs':
+          legs ??
           [
             {
               'steps': [
@@ -60,10 +58,7 @@ Map<String, dynamic> _buildRouteResponse({
                   'name': 'Teststraße',
                 },
                 {
-                  'maneuver': {
-                    'type': 'arrive',
-                    'location': coords.last,
-                  },
+                  'maneuver': {'type': 'arrive', 'location': coords.last},
                   'distance': 0.0,
                   'name': '',
                 },
@@ -115,23 +110,21 @@ void main() {
       final minKm = targetKm * (1 - tolerancePercent);
       final maxKm = targetKm * (1 + tolerancePercent);
 
-      expect(actualKm, inInclusiveRange(minKm, maxKm),
-          reason: 'Route von ${actualKm.toStringAsFixed(1)} km liegt außerhalb '
-              '[$minKm, $maxKm] für Ziel $targetKm km');
+      expect(
+        actualKm,
+        inInclusiveRange(minKm, maxKm),
+        reason:
+            'Route von ${actualKm.toStringAsFixed(1)} km liegt außerhalb '
+            '[$minKm, $maxKm] für Ziel $targetKm km',
+      );
     }
 
     test('30 km Ziel → Route zwischen 24 km und 36 km', () async {
-      await _testDistanceTolerance(
-        targetKm: 30,
-        responseDistanceM: 30000,
-      );
+      await _testDistanceTolerance(targetKm: 30, responseDistanceM: 30000);
     });
 
     test('50 km Ziel → Route zwischen 40 km und 60 km', () async {
-      await _testDistanceTolerance(
-        targetKm: 50,
-        responseDistanceM: 50000,
-      );
+      await _testDistanceTolerance(targetKm: 50, responseDistanceM: 50000);
     });
 
     test('50 km Ziel, 45 km Antwort (10% unter) → noch akzeptiert', () async {
@@ -151,10 +144,7 @@ void main() {
     });
 
     test('80 km Ziel → Route zwischen 64 km und 96 km', () async {
-      await _testDistanceTolerance(
-        targetKm: 80,
-        responseDistanceM: 80000,
-      );
+      await _testDistanceTolerance(targetKm: 80, responseDistanceM: 80000);
     });
 
     test('100 km Ziel → Route zwischen 80 km und 120 km', () async {
@@ -171,7 +161,8 @@ void main() {
   group('generateRoundTrip – Request Body', () {
     test('sendet Startposition korrekt', () async {
       when(mockInvoker.invoke(any)).thenAnswer(
-        (_) async => _buildRouteResponse(distanceMeters: 50000, durationSeconds: 3600),
+        (_) async =>
+            _buildRouteResponse(distanceMeters: 50000, durationSeconds: 3600),
       );
 
       await service.generateRoundTrip(
@@ -181,15 +172,17 @@ void main() {
         planningType: 'Zufall',
       );
 
-      final captured = verify(mockInvoker.invoke(captureAny)).captured.single
-          as Map<String, dynamic>;
+      final captured =
+          verify(mockInvoker.invoke(captureAny)).captured.single
+              as Map<String, dynamic>;
       expect(captured['startLocation']['latitude'], closeTo(48.1351, 0.001));
       expect(captured['startLocation']['longitude'], closeTo(11.5820, 0.001));
     });
 
     test('sendet targetDistance korrekt', () async {
       when(mockInvoker.invoke(any)).thenAnswer(
-        (_) async => _buildRouteResponse(distanceMeters: 30000, durationSeconds: 2400),
+        (_) async =>
+            _buildRouteResponse(distanceMeters: 30000, durationSeconds: 2400),
       );
 
       await service.generateRoundTrip(
@@ -199,14 +192,16 @@ void main() {
         planningType: 'Zufall',
       );
 
-      final captured = verify(mockInvoker.invoke(captureAny)).captured.single
-          as Map<String, dynamic>;
+      final captured =
+          verify(mockInvoker.invoke(captureAny)).captured.single
+              as Map<String, dynamic>;
       expect(captured['targetDistance'], 30);
     });
 
     test('sendet route_type als ROUND_TRIP', () async {
       when(mockInvoker.invoke(any)).thenAnswer(
-        (_) async => _buildRouteResponse(distanceMeters: 50000, durationSeconds: 3600),
+        (_) async =>
+            _buildRouteResponse(distanceMeters: 50000, durationSeconds: 3600),
       );
 
       await service.generateRoundTrip(
@@ -216,14 +211,16 @@ void main() {
         planningType: 'Kurvenreich',
       );
 
-      final captured = verify(mockInvoker.invoke(captureAny)).captured.single
-          as Map<String, dynamic>;
+      final captured =
+          verify(mockInvoker.invoke(captureAny)).captured.single
+              as Map<String, dynamic>;
       expect(captured['route_type'], 'ROUND_TRIP');
     });
 
     test('sendet language als "de"', () async {
       when(mockInvoker.invoke(any)).thenAnswer(
-        (_) async => _buildRouteResponse(distanceMeters: 50000, durationSeconds: 3600),
+        (_) async =>
+            _buildRouteResponse(distanceMeters: 50000, durationSeconds: 3600),
       );
 
       await service.generateRoundTrip(
@@ -233,14 +230,16 @@ void main() {
         planningType: 'Zufall',
       );
 
-      final captured = verify(mockInvoker.invoke(captureAny)).captured.single
-          as Map<String, dynamic>;
+      final captured =
+          verify(mockInvoker.invoke(captureAny)).captured.single
+              as Map<String, dynamic>;
       expect(captured['language'], 'de');
     });
 
     test('sendet planning_type korrekt (Kurvenreich)', () async {
       when(mockInvoker.invoke(any)).thenAnswer(
-        (_) async => _buildRouteResponse(distanceMeters: 50000, durationSeconds: 3600),
+        (_) async =>
+            _buildRouteResponse(distanceMeters: 50000, durationSeconds: 3600),
       );
 
       await service.generateRoundTrip(
@@ -250,14 +249,16 @@ void main() {
         planningType: 'Kurvenreich',
       );
 
-      final captured = verify(mockInvoker.invoke(captureAny)).captured.single
-          as Map<String, dynamic>;
+      final captured =
+          verify(mockInvoker.invoke(captureAny)).captured.single
+              as Map<String, dynamic>;
       expect(captured['planning_type'], 'Kurvenreich');
     });
 
     test('optionaler targetLocation wird mitgesendet wenn angegeben', () async {
       when(mockInvoker.invoke(any)).thenAnswer(
-        (_) async => _buildRouteResponse(distanceMeters: 50000, durationSeconds: 3600),
+        (_) async =>
+            _buildRouteResponse(distanceMeters: 50000, durationSeconds: 3600),
       );
 
       await service.generateRoundTrip(
@@ -268,8 +269,9 @@ void main() {
         targetLocation: {'latitude': 47.8, 'longitude': 12.0},
       );
 
-      final captured = verify(mockInvoker.invoke(captureAny)).captured.single
-          as Map<String, dynamic>;
+      final captured =
+          verify(mockInvoker.invoke(captureAny)).captured.single
+              as Map<String, dynamic>;
       expect(captured['targetLocation'], isNotNull);
       expect(captured['targetLocation']['latitude'], closeTo(47.8, 0.01));
     });
@@ -280,7 +282,8 @@ void main() {
   group('generatePointToPoint – Request Body', () {
     test('sendet route_type als POINT_TO_POINT', () async {
       when(mockInvoker.invoke(any)).thenAnswer(
-        (_) async => _buildRouteResponse(distanceMeters: 20000, durationSeconds: 1800),
+        (_) async =>
+            _buildRouteResponse(distanceMeters: 20000, durationSeconds: 1800),
       );
 
       await service.generatePointToPoint(
@@ -290,14 +293,16 @@ void main() {
         mode: 'Sport Mode',
       );
 
-      final captured = verify(mockInvoker.invoke(captureAny)).captured.single
-          as Map<String, dynamic>;
+      final captured =
+          verify(mockInvoker.invoke(captureAny)).captured.single
+              as Map<String, dynamic>;
       expect(captured['route_type'], 'POINT_TO_POINT');
     });
 
     test('sendet destination_location korrekt', () async {
       when(mockInvoker.invoke(any)).thenAnswer(
-        (_) async => _buildRouteResponse(distanceMeters: 20000, durationSeconds: 1800),
+        (_) async =>
+            _buildRouteResponse(distanceMeters: 20000, durationSeconds: 1800),
       );
 
       await service.generatePointToPoint(
@@ -307,15 +312,23 @@ void main() {
         mode: 'Sport Mode',
       );
 
-      final captured = verify(mockInvoker.invoke(captureAny)).captured.single
-          as Map<String, dynamic>;
-      expect(captured['destination_location']['latitude'], closeTo(47.9123, 0.001));
-      expect(captured['destination_location']['longitude'], closeTo(12.4567, 0.001));
+      final captured =
+          verify(mockInvoker.invoke(captureAny)).captured.single
+              as Map<String, dynamic>;
+      expect(
+        captured['destination_location']['latitude'],
+        closeTo(47.9123, 0.001),
+      );
+      expect(
+        captured['destination_location']['longitude'],
+        closeTo(12.4567, 0.001),
+      );
     });
 
     test('scenic = false → mode wird auf "Standard" gesetzt', () async {
       when(mockInvoker.invoke(any)).thenAnswer(
-        (_) async => _buildRouteResponse(distanceMeters: 20000, durationSeconds: 1800),
+        (_) async =>
+            _buildRouteResponse(distanceMeters: 20000, durationSeconds: 1800),
       );
 
       await service.generatePointToPoint(
@@ -326,14 +339,16 @@ void main() {
         scenic: false,
       );
 
-      final captured = verify(mockInvoker.invoke(captureAny)).captured.single
-          as Map<String, dynamic>;
+      final captured =
+          verify(mockInvoker.invoke(captureAny)).captured.single
+              as Map<String, dynamic>;
       expect(captured['mode'], 'Standard');
     });
 
     test('scenic = true → übergibt den eigentlichen mode', () async {
       when(mockInvoker.invoke(any)).thenAnswer(
-        (_) async => _buildRouteResponse(distanceMeters: 20000, durationSeconds: 1800),
+        (_) async =>
+            _buildRouteResponse(distanceMeters: 20000, durationSeconds: 1800),
       );
 
       await service.generatePointToPoint(
@@ -344,14 +359,41 @@ void main() {
         scenic: true,
       );
 
-      final captured = verify(mockInvoker.invoke(captureAny)).captured.single
-          as Map<String, dynamic>;
+      final captured =
+          verify(mockInvoker.invoke(captureAny)).captured.single
+              as Map<String, dynamic>;
       expect(captured['mode'], 'Alpenstraßen');
     });
 
-    test('scenic = true → targetDistance und randomSeed werden mitgesendet', () async {
+    test(
+      'scenic = true → targetDistance und randomSeed werden mitgesendet',
+      () async {
+        when(mockInvoker.invoke(any)).thenAnswer(
+          (_) async =>
+              _buildRouteResponse(distanceMeters: 60000, durationSeconds: 4000),
+        );
+
+        await service.generatePointToPoint(
+          startPosition: _munich(),
+          destinationLat: 47.8,
+          destinationLng: 12.0,
+          mode: 'Sport Mode',
+          scenic: true,
+          routeVariant: 2,
+        );
+
+        final captured =
+            verify(mockInvoker.invoke(captureAny)).captured.single
+                as Map<String, dynamic>;
+        expect(captured['targetDistance'], isNotNull);
+        expect(captured['randomSeed'], 2);
+      },
+    );
+
+    test('groesserer Umweg erzeugt groessere targetDistance', () async {
       when(mockInvoker.invoke(any)).thenAnswer(
-        (_) async => _buildRouteResponse(distanceMeters: 60000, durationSeconds: 4000),
+        (_) async =>
+            _buildRouteResponse(distanceMeters: 60000, durationSeconds: 4000),
       );
 
       await service.generatePointToPoint(
@@ -360,13 +402,37 @@ void main() {
         destinationLng: 12.0,
         mode: 'Sport Mode',
         scenic: true,
-        routeVariant: 2,
+        routeVariant: 1,
       );
 
-      final captured = verify(mockInvoker.invoke(captureAny)).captured.single
-          as Map<String, dynamic>;
-      expect(captured['targetDistance'], isNotNull);
-      expect(captured['randomSeed'], 2);
+      final smallDetour =
+          verify(mockInvoker.invoke(captureAny)).captured.single
+              as Map<String, dynamic>;
+      clearInteractions(mockInvoker);
+
+      when(mockInvoker.invoke(any)).thenAnswer(
+        (_) async =>
+            _buildRouteResponse(distanceMeters: 60000, durationSeconds: 4000),
+      );
+
+      await service.generatePointToPoint(
+        startPosition: _munich(),
+        destinationLat: 47.8,
+        destinationLng: 12.0,
+        mode: 'Sport Mode',
+        scenic: true,
+        routeVariant: 3,
+      );
+
+      final largeDetour =
+          verify(mockInvoker.invoke(captureAny)).captured.single
+              as Map<String, dynamic>;
+
+      expect(
+        largeDetour['targetDistance'] as double,
+        greaterThan(smallDetour['targetDistance'] as double),
+      );
+      expect(largeDetour['detour_level'], 3);
     });
   });
 
@@ -387,9 +453,9 @@ void main() {
     });
 
     test('wirft Exception wenn "error" in Antwort enthalten', () async {
-      when(mockInvoker.invoke(any)).thenAnswer(
-        (_) async => {'error': 'Keine Route gefunden'},
-      );
+      when(
+        mockInvoker.invoke(any),
+      ).thenAnswer((_) async => {'error': 'Keine Route gefunden'});
       await expectLater(
         service.generateRoundTrip(
           startPosition: _munich(),
@@ -402,9 +468,7 @@ void main() {
     });
 
     test('wirft Exception wenn "route" fehlt', () async {
-      when(mockInvoker.invoke(any)).thenAnswer(
-        (_) async => {'meta': 'ok'},
-      );
+      when(mockInvoker.invoke(any)).thenAnswer((_) async => {'meta': 'ok'});
       await expectLater(
         service.generateRoundTrip(
           startPosition: _munich(),
@@ -418,7 +482,9 @@ void main() {
 
     test('wirft Exception wenn geometry fehlt', () async {
       when(mockInvoker.invoke(any)).thenAnswer(
-        (_) async => {'route': {'distance': 50000, 'duration': 3600}},
+        (_) async => {
+          'route': {'distance': 50000, 'duration': 3600},
+        },
       );
       await expectLater(
         service.generateRoundTrip(
@@ -437,7 +503,9 @@ void main() {
           'route': {
             'geometry': {
               'type': 'LineString',
-              'coordinates': [[11.58, 48.14]], // nur 1 Punkt
+              'coordinates': [
+                [11.58, 48.14],
+              ], // nur 1 Punkt
             },
             'distance': 50000,
             'duration': 3600,
@@ -461,7 +529,10 @@ void main() {
       when(mockInvoker.invoke(any)).thenAnswer((_) async {
         callCount++;
         if (callCount == 1) throw Exception('Netzwerkfehler');
-        return _buildRouteResponse(distanceMeters: 50000, durationSeconds: 3600);
+        return _buildRouteResponse(
+          distanceMeters: 50000,
+          durationSeconds: 3600,
+        );
       });
 
       // Retry-Logik: 2 Versuche, der zweite soll klappen
@@ -475,11 +546,17 @@ void main() {
       );
 
       expect(result, isA<RouteResult>());
-      expect(callCount, 2, reason: 'Service soll nach Fehler einmal retry versuchen');
+      expect(
+        callCount,
+        2,
+        reason: 'Service soll nach Fehler einmal retry versuchen',
+      );
     });
 
     test('wirft Exception nach 2× Netzwerkfehler', () async {
-      when(mockInvoker.invoke(any)).thenThrow(Exception('Immer Netzwerkfehler'));
+      when(
+        mockInvoker.invoke(any),
+      ).thenThrow(Exception('Immer Netzwerkfehler'));
 
       await expectLater(
         service.generateRoundTrip(
@@ -493,7 +570,9 @@ void main() {
     });
 
     test('wirft Exception bei ungültigem JSON-String', () async {
-      when(mockInvoker.invoke(any)).thenAnswer((_) async => 'kein valid json {{{');
+      when(
+        mockInvoker.invoke(any),
+      ).thenAnswer((_) async => 'kein valid json {{{');
       await expectLater(
         service.generateRoundTrip(
           startPosition: _munich(),
@@ -511,7 +590,8 @@ void main() {
   group('generateRoundTrip – RouteResult', () {
     test('distanceKm wird korrekt befüllt', () async {
       when(mockInvoker.invoke(any)).thenAnswer(
-        (_) async => _buildRouteResponse(distanceMeters: 47500, durationSeconds: 3400),
+        (_) async =>
+            _buildRouteResponse(distanceMeters: 47500, durationSeconds: 3400),
       );
 
       final result = await service.generateRoundTrip(
@@ -528,7 +608,8 @@ void main() {
 
     test('coordinates nicht leer', () async {
       when(mockInvoker.invoke(any)).thenAnswer(
-        (_) async => _buildRouteResponse(distanceMeters: 50000, durationSeconds: 3600),
+        (_) async =>
+            _buildRouteResponse(distanceMeters: 50000, durationSeconds: 3600),
       );
 
       final result = await service.generateRoundTrip(
@@ -543,7 +624,8 @@ void main() {
 
     test('geoJson ist valider String', () async {
       when(mockInvoker.invoke(any)).thenAnswer(
-        (_) async => _buildRouteResponse(distanceMeters: 50000, durationSeconds: 3600),
+        (_) async =>
+            _buildRouteResponse(distanceMeters: 50000, durationSeconds: 3600),
       );
 
       final result = await service.generateRoundTrip(
@@ -559,7 +641,8 @@ void main() {
 
     test('erster Koordinatenpunkt = Startpunkt nach Snapping', () async {
       when(mockInvoker.invoke(any)).thenAnswer(
-        (_) async => _buildRouteResponse(distanceMeters: 50000, durationSeconds: 3600),
+        (_) async =>
+            _buildRouteResponse(distanceMeters: 50000, durationSeconds: 3600),
       );
 
       final pos = _munich();
@@ -579,12 +662,19 @@ void main() {
   // ─────────────────────── Fahrstil-Validierung ─────────────────────────────
 
   group('generateRoundTrip – Fahrstile', () {
-    final styles = ['Sport Mode', 'Autobahn', 'Kurvenreich', 'Zufall', 'Panorama'];
+    final styles = [
+      'Sport Mode',
+      'Autobahn',
+      'Kurvenreich',
+      'Zufall',
+      'Panorama',
+    ];
 
     for (final style in styles) {
       test('Fahrstil "$style" wird korrekt übergeben', () async {
         when(mockInvoker.invoke(any)).thenAnswer(
-          (_) async => _buildRouteResponse(distanceMeters: 50000, durationSeconds: 3600),
+          (_) async =>
+              _buildRouteResponse(distanceMeters: 50000, durationSeconds: 3600),
         );
 
         await service.generateRoundTrip(
@@ -594,8 +684,9 @@ void main() {
           planningType: 'Zufall',
         );
 
-        final captured = verify(mockInvoker.invoke(captureAny)).captured.single
-            as Map<String, dynamic>;
+        final captured =
+            verify(mockInvoker.invoke(captureAny)).captured.single
+                as Map<String, dynamic>;
         expect(captured['mode'], style);
       });
     }
@@ -605,7 +696,10 @@ void main() {
 
   group('generateRoundTrip – JSON als String', () {
     test('verarbeitet JSON-String-Antwort korrekt', () async {
-      final responseMap = _buildRouteResponse(distanceMeters: 50000, durationSeconds: 3600);
+      final responseMap = _buildRouteResponse(
+        distanceMeters: 50000,
+        durationSeconds: 3600,
+      );
       when(mockInvoker.invoke(any)).thenAnswer(
         (_) async => json.encode(responseMap), // als String zurückgeben
       );

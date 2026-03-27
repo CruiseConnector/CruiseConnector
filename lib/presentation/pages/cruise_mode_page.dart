@@ -60,6 +60,7 @@ class _CruiseModePageState extends State<CruiseModePage> {
   String _selectedLength = '50 Km';
   String _selectedLocation = 'Aktueller Standort';
   String _selectedStyle = 'Sport Mode';
+  String _selectedDetour = 'Direkt';
   final TextEditingController _destinationController = TextEditingController();
 
   // ─────────────────────── A-to-B Route Selection State ──────────────────────
@@ -95,7 +96,8 @@ class _CruiseModePageState extends State<CruiseModePage> {
   final Set<int> _announcedManeuverIndices = <int>{};
   StreamSubscription<geo.Position>? _positionSubscription;
   StreamSubscription<geo.Position>? _socketPositionSubscription;
-  StreamSubscription<geo.Position>? _idlePositionSubscription; // Standort-Stream für Heading im Idle
+  StreamSubscription<geo.Position>?
+  _idlePositionSubscription; // Standort-Stream für Heading im Idle
 
   // ─────────────────────── Simulation State ─────────────────────────────────
   Timer? _simulationTimer;
@@ -167,6 +169,35 @@ class _CruiseModePageState extends State<CruiseModePage> {
     unawaited(_navigationSocketService.dispose());
     _destinationController.dispose();
     super.dispose();
+  }
+
+  void _handleRouteModeChanged(bool isRoundTrip) {
+    const roundTripStyles = {
+      'Kurvenjagd',
+      'Sport Mode',
+      'Abendrunde',
+      'Entdecker',
+    };
+    const pointToPointStyles = {
+      'Direkt',
+      'Kurvenjagd',
+      'Sport Mode',
+      'Entdecker',
+    };
+
+    setState(() {
+      _isRoundTrip = isRoundTrip;
+      _selectedStyle = isRoundTrip
+          ? (roundTripStyles.contains(_selectedStyle)
+                ? _selectedStyle
+                : 'Sport Mode')
+          : (pointToPointStyles.contains(_selectedStyle)
+                ? _selectedStyle
+                : 'Direkt');
+      if (isRoundTrip) {
+        _selectedDetour = 'Direkt';
+      }
+    });
   }
 
   // ═══════════════════════ BUILD ════════════════════════════════════════════
@@ -359,8 +390,7 @@ class _CruiseModePageState extends State<CruiseModePage> {
                         selectedStyle: _selectedStyle,
                         selectedDestination: _selectedDestination,
                         destinationController: _destinationController,
-                        onRoundTripChanged: (v) =>
-                            setState(() => _isRoundTrip = v),
+                        onRoundTripChanged: _handleRouteModeChanged,
                         onPlanningTypeChanged: (v) =>
                             setState(() => _planningType = v),
                         onLengthChanged: (v) =>
@@ -369,6 +399,9 @@ class _CruiseModePageState extends State<CruiseModePage> {
                             setState(() => _selectedLocation = v),
                         onStyleChanged: (v) =>
                             setState(() => _selectedStyle = v),
+                        selectedDetour: _selectedDetour,
+                        onDetourChanged: (v) =>
+                            setState(() => _selectedDetour = v),
                         onDestinationSelected: _onDestinationSelected,
                         onDestinationCleared: () => setState(() {
                           _selectedDestination = null;
@@ -819,7 +852,11 @@ class _CruiseModePageState extends State<CruiseModePage> {
             color: Colors.white,
             shape: BoxShape.circle,
             boxShadow: [
-              BoxShadow(color: Color(0x50000000), blurRadius: 6, spreadRadius: 1),
+              BoxShadow(
+                color: Color(0x50000000),
+                blurRadius: 6,
+                spreadRadius: 1,
+              ),
             ],
           ),
         ),
@@ -873,7 +910,9 @@ class _CruiseModePageState extends State<CruiseModePage> {
           ),
         );
         _userLocation = freshPosition;
-        if (freshPosition.heading.isFinite && freshPosition.heading >= 0 && freshPosition.heading <= 360) {
+        if (freshPosition.heading.isFinite &&
+            freshPosition.heading >= 0 &&
+            freshPosition.heading <= 360) {
           _userHeading = freshPosition.heading;
         }
         _setCameraToPosition(freshPosition);
@@ -901,21 +940,22 @@ class _CruiseModePageState extends State<CruiseModePage> {
             accuracy: geo.LocationAccuracy.bestForNavigation,
             distanceFilter: 2,
           );
-    _idlePositionSubscription = geo.Geolocator.getPositionStream(
-      locationSettings: settings,
-    ).listen(
-      (position) {
-        if (!mounted || _disposed) return;
-        _userLocation = position;
-        if (position.heading.isFinite && position.heading >= 0 && position.heading <= 360) {
-          _userHeading = position.heading;
-        }
-        _safeSetState(() {});
-      },
-      onError: (Object e) {
-        debugPrint('[CruiseMode] Idle-Positionsstream Fehler: $e');
-      },
-    );
+    _idlePositionSubscription =
+        geo.Geolocator.getPositionStream(locationSettings: settings).listen(
+          (position) {
+            if (!mounted || _disposed) return;
+            _userLocation = position;
+            if (position.heading.isFinite &&
+                position.heading >= 0 &&
+                position.heading <= 360) {
+              _userHeading = position.heading;
+            }
+            _safeSetState(() {});
+          },
+          onError: (Object e) {
+            debugPrint('[CruiseMode] Idle-Positionsstream Fehler: $e');
+          },
+        );
   }
 
   void _stopIdlePositionStream() {
@@ -1039,12 +1079,20 @@ class _CruiseModePageState extends State<CruiseModePage> {
         if (destLat == null || destLng == null) {
           throw Exception('Bitte wähle ein Ziel aus.');
         }
+        // Umweg-Variante bestimmen (0 = direkt, 1-3 = Umwege)
+        final detourVariant = switch (_selectedDetour) {
+          'Kleiner Umweg' => 1,
+          'Mittlerer Umweg' => 2,
+          'Großer Umweg' => 3,
+          _ => 0,
+        };
         result = await _routeService.generatePointToPoint(
           startPosition: startPosition,
           destinationLat: destLat,
           destinationLng: destLng,
-          mode: _selectedStyle,
-          scenic: _selectedStyle != 'Standard',
+          mode: _selectedStyle == 'Direkt' ? 'Standard' : _selectedStyle,
+          scenic: _selectedStyle != 'Direkt',
+          routeVariant: detourVariant,
         );
       } else {
         result = await _routeService.generateRoundTrip(
@@ -1160,27 +1208,30 @@ class _CruiseModePageState extends State<CruiseModePage> {
       return;
     }
 
+    final previewResult = RouteResult(
+      geoJson: json.encode(geometry),
+      geometry: geometry,
+      coordinates: coordinates,
+      maneuvers: const [],
+      distanceMeters: route.distanceKm * 1000,
+      durationSeconds: route.durationSeconds,
+      distanceKm: route.distanceKm,
+    );
+
+    _applyRouteResult(previewResult);
     setState(() {
-      _routeGeoJson = json.encode(geometry);
-      _routeDistance = route.distanceKm * 1000; // km → m
-      _routeDuration = route.durationSeconds;
-      _isRouteConfirmed = false;
-      _fullRouteCoordinates = coordinates;
-      _remainingRouteCoordinates = coordinates;
-      _maneuvers = const [];
-      _activeManeuverIndex = 0;
-      _currentRouteIndex = 0;
-      _lastDrawnRouteIndex = 0;
-      _distanceSinceLastRedraw = 0.0;
-      _announcedManeuverIndices.clear();
       _isRoundTrip = route.isRoundTrip;
       _selectedStyle = route.style;
+      _selectedDetour = 'Direkt';
+      _selectedDestination = null;
+      _destinationController.clear();
+      _isCameraLocked = false;
+      _configCollapsed = true;
+      _showRouteInfoBanner = true;
     });
+    CruiseModePage.isFullscreen.value = false;
 
     await _drawRoute(geometry);
-
-    // Automatisch bestätigen und Navigation starten
-    await _confirmRoute();
   }
 
   // ═══════════════════════ ROUTE CONFIRM ═════════════════════════════════════
@@ -1344,7 +1395,9 @@ class _CruiseModePageState extends State<CruiseModePage> {
     _userLocation = position;
 
     // Heading tracken (nur wenn valide)
-    if (position.heading.isFinite && position.heading >= 0 && position.heading <= 360) {
+    if (position.heading.isFinite &&
+        position.heading >= 0 &&
+        position.heading <= 360) {
       _userHeading = position.heading;
     }
 
@@ -2134,4 +2187,3 @@ class _HeadingConePainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
-

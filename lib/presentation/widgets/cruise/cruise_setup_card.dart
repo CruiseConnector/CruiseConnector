@@ -22,6 +22,8 @@ class CruiseSetupCard extends StatelessWidget {
     required this.onStyleChanged,
     required this.onDestinationSelected,
     required this.onDestinationCleared,
+    required this.selectedDetour,
+    required this.onDetourChanged,
   });
 
   final bool isRoundTrip;
@@ -29,6 +31,7 @@ class CruiseSetupCard extends StatelessWidget {
   final String selectedLength;
   final String selectedLocation;
   final String selectedStyle;
+  final String selectedDetour;
   final MapboxSuggestion? selectedDestination;
   final TextEditingController destinationController;
   final ValueChanged<bool> onRoundTripChanged;
@@ -36,6 +39,7 @@ class CruiseSetupCard extends StatelessWidget {
   final ValueChanged<String> onLengthChanged;
   final ValueChanged<String> onLocationChanged;
   final ValueChanged<String> onStyleChanged;
+  final ValueChanged<String> onDetourChanged;
   final ValueChanged<MapboxSuggestion> onDestinationSelected;
   final VoidCallback onDestinationCleared;
 
@@ -55,12 +59,20 @@ class CruiseSetupCard extends StatelessWidget {
         children: [
           const Text(
             'Strecken-Setup',
-            style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 20,
+              fontWeight: FontWeight.bold,
+            ),
           ),
           const SizedBox(height: 24),
           const Text(
             'Routen-Modus',
-            style: TextStyle(color: Colors.grey, fontSize: 14, fontWeight: FontWeight.w500),
+            style: TextStyle(
+              color: Colors.grey,
+              fontSize: 14,
+              fontWeight: FontWeight.w500,
+            ),
           ),
           const SizedBox(height: 12),
           Row(
@@ -88,20 +100,34 @@ class CruiseSetupCard extends StatelessWidget {
           AnimatedCrossFade(
             firstChild: _buildRoundTripOptions(),
             secondChild: _buildAtoBOptions(context),
-            crossFadeState: isRoundTrip ? CrossFadeState.showFirst : CrossFadeState.showSecond,
+            crossFadeState: isRoundTrip
+                ? CrossFadeState.showFirst
+                : CrossFadeState.showSecond,
             duration: const Duration(milliseconds: 300),
           ),
           const Divider(color: Colors.white10, height: 32),
-          if (isRoundTrip)
+          if (isRoundTrip) ...[
             _SelectionRow(
               title: 'Länge',
               options: const ['50 Km', '75 Km', '100 Km', '150 Km'],
               selectedValue: selectedLength,
               onSelect: onLengthChanged,
-            )
-          else
-            _buildDistanceInfoBox(),
-          const Divider(color: Colors.white10, height: 32),
+            ),
+            const Divider(color: Colors.white10, height: 32),
+          ] else ...[
+            _SelectionRow(
+              title: 'Route',
+              options: const [
+                'Direkt',
+                'Kleiner Umweg',
+                'Mittlerer Umweg',
+                'Großer Umweg',
+              ],
+              selectedValue: selectedDetour,
+              onSelect: onDetourChanged,
+            ),
+            const Divider(color: Colors.white10, height: 32),
+          ],
           _SelectionRow(
             title: 'Standort',
             options: const ['Aktueller Standort', 'Standort wählen'],
@@ -111,7 +137,9 @@ class CruiseSetupCard extends StatelessWidget {
           const Divider(color: Colors.white10, height: 32),
           _SelectionRow(
             title: 'Stil',
-            options: const ['Kurvenjagd', 'Sport Mode', 'Abendrunde', 'Entdecker'],
+            options: isRoundTrip
+                ? const ['Kurvenjagd', 'Sport Mode', 'Abendrunde', 'Entdecker']
+                : const ['Direkt', 'Kurvenjagd', 'Sport Mode', 'Entdecker'],
             selectedValue: selectedStyle,
             onSelect: onStyleChanged,
           ),
@@ -127,7 +155,11 @@ class CruiseSetupCard extends StatelessWidget {
         const SizedBox(height: 12),
         const Text(
           'Planungs-Typ',
-          style: TextStyle(color: Colors.grey, fontSize: 14, fontWeight: FontWeight.w500),
+          style: TextStyle(
+            color: Colors.grey,
+            fontSize: 14,
+            fontWeight: FontWeight.w500,
+          ),
         ),
         const SizedBox(height: 12),
         Row(
@@ -160,7 +192,11 @@ class CruiseSetupCard extends StatelessWidget {
         children: [
           const Text(
             'Zielort',
-            style: TextStyle(color: Colors.grey, fontSize: 14, fontWeight: FontWeight.w500),
+            style: TextStyle(
+              color: Colors.grey,
+              fontSize: 14,
+              fontWeight: FontWeight.w500,
+            ),
           ),
           const SizedBox(height: 12),
           Container(
@@ -169,11 +205,17 @@ class CruiseSetupCard extends StatelessWidget {
             decoration: BoxDecoration(
               color: const Color(0xFF0B0E14),
               borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: const Color(0xFFFF3B30).withValues(alpha: 0.5)),
+              border: Border.all(
+                color: const Color(0xFFFF3B30).withValues(alpha: 0.5),
+              ),
             ),
             child: Row(
               children: [
-                const Icon(Icons.location_on, color: Color(0xFFFF3B30), size: 24),
+                const Icon(
+                  Icons.location_on,
+                  color: Color(0xFFFF3B30),
+                  size: 24,
+                ),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Column(
@@ -181,20 +223,33 @@ class CruiseSetupCard extends StatelessWidget {
                     children: [
                       Text(
                         selectedDestination!.placeName,
-                        style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
-                        maxLines: 1, overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 14,
+                          fontWeight: FontWeight.bold,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                       ),
                       if (selectedDestination!.context != null)
                         Text(
                           selectedDestination!.context!,
-                          style: const TextStyle(color: Colors.grey, fontSize: 12),
-                          maxLines: 1, overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.grey,
+                            fontSize: 12,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                         ),
                     ],
                   ),
                 ),
                 IconButton(
-                  icon: const Icon(Icons.close, color: Colors.white70, size: 20),
+                  icon: const Icon(
+                    Icons.close,
+                    color: Colors.white70,
+                    size: 20,
+                  ),
                   onPressed: onDestinationCleared,
                   tooltip: 'Ziel ändern',
                 ),
@@ -210,7 +265,11 @@ class CruiseSetupCard extends StatelessWidget {
       children: [
         const Text(
           'Zielort',
-          style: TextStyle(color: Colors.grey, fontSize: 14, fontWeight: FontWeight.w500),
+          style: TextStyle(
+            color: Colors.grey,
+            fontSize: 14,
+            fontWeight: FontWeight.w500,
+          ),
         ),
         const SizedBox(height: 12),
         Container(
@@ -234,62 +293,40 @@ class CruiseSetupCard extends StatelessWidget {
                 hintText: 'Adresse suchen...',
                 hintStyle: TextStyle(color: Colors.white38),
                 border: InputBorder.none,
-                contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                contentPadding: EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 14,
+                ),
               ),
             ),
             itemBuilder: (context, suggestion) => ListTile(
               tileColor: const Color(0xFF1C1F26),
               leading: const Icon(Icons.location_on, color: Color(0xFFFF3B30)),
-              title: Text(suggestion.placeName,
-                  style: const TextStyle(color: Colors.white, fontSize: 14)),
+              title: Text(
+                suggestion.placeName,
+                style: const TextStyle(color: Colors.white, fontSize: 14),
+              ),
               subtitle: suggestion.context != null
-                  ? Text(suggestion.context!,
-                      style: const TextStyle(color: Colors.grey, fontSize: 12))
+                  ? Text(
+                      suggestion.context!,
+                      style: const TextStyle(color: Colors.grey, fontSize: 12),
+                    )
                   : null,
             ),
             onSelected: onDestinationSelected,
             emptyBuilder: (context) => const Padding(
               padding: EdgeInsets.all(16),
-              child: Text('Adresse eingeben...', style: TextStyle(color: Colors.grey)),
+              child: Text(
+                'Adresse eingeben...',
+                style: TextStyle(color: Colors.grey),
+              ),
             ),
             loadingBuilder: (context) => const Padding(
               padding: EdgeInsets.all(16),
-              child: Center(child: CircularProgressIndicator(color: Color(0xFFFF3B30))),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildDistanceInfoBox() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Text(
-          'Länge',
-          style: TextStyle(color: Colors.grey, fontSize: 14, fontWeight: FontWeight.w500),
-        ),
-        const SizedBox(height: 12),
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: 0.05),
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: Colors.white10),
-          ),
-          child: Row(
-            children: [
-              const Icon(Icons.info_outline, color: Colors.grey, size: 20),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  'Distanz wird automatisch basierend auf dem Zielort berechnet.',
-                  style: TextStyle(color: Colors.grey[400], fontSize: 13),
-                ),
+              child: Center(
+                child: CircularProgressIndicator(color: Color(0xFFFF3B30)),
               ),
-            ],
+            ),
           ),
         ),
       ],
@@ -327,19 +364,30 @@ class _LargeModeButton extends StatelessWidget {
             width: isActive ? 2 : 1,
           ),
           boxShadow: isActive
-              ? [BoxShadow(color: const Color(0xFFFF3B30).withValues(alpha: 0.3), blurRadius: 15, spreadRadius: 1)]
+              ? [
+                  BoxShadow(
+                    color: const Color(0xFFFF3B30).withValues(alpha: 0.3),
+                    blurRadius: 15,
+                    spreadRadius: 1,
+                  ),
+                ]
               : [],
         ),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(icon, color: isActive ? const Color(0xFFFF3B30) : Colors.white38, size: 32),
+            Icon(
+              icon,
+              color: isActive ? const Color(0xFFFF3B30) : Colors.white38,
+              size: 32,
+            ),
             const SizedBox(height: 10),
             Text(
               label,
               style: TextStyle(
                 color: isActive ? Colors.white : Colors.white54,
-                fontWeight: FontWeight.bold, fontSize: 16,
+                fontWeight: FontWeight.bold,
+                fontSize: 16,
               ),
             ),
           ],
@@ -382,7 +430,8 @@ class _ChoiceButton extends StatelessWidget {
           label,
           style: TextStyle(
             color: isSelected ? const Color(0xFFFF3B30) : Colors.white60,
-            fontWeight: FontWeight.bold, fontSize: 15,
+            fontWeight: FontWeight.bold,
+            fontSize: 15,
           ),
         ),
       ),
@@ -410,7 +459,11 @@ class _SelectionRow extends StatelessWidget {
       children: [
         Text(
           title,
-          style: const TextStyle(color: Colors.grey, fontSize: 14, fontWeight: FontWeight.w500),
+          style: const TextStyle(
+            color: Colors.grey,
+            fontSize: 14,
+            fontWeight: FontWeight.w500,
+          ),
         ),
         const SizedBox(height: 12),
         Wrap(
@@ -422,12 +475,25 @@ class _SelectionRow extends StatelessWidget {
               onTap: () => onSelect(option),
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 200),
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 10,
+                ),
                 decoration: BoxDecoration(
-                  color: isSelected ? const Color(0xFFFF3B30) : const Color(0xFF0B0E14),
+                  color: isSelected
+                      ? const Color(0xFFFF3B30)
+                      : const Color(0xFF0B0E14),
                   borderRadius: BorderRadius.circular(20),
                   boxShadow: isSelected
-                      ? [BoxShadow(color: const Color(0xFFFF3B30).withValues(alpha: 0.4), blurRadius: 8, offset: const Offset(0, 2))]
+                      ? [
+                          BoxShadow(
+                            color: const Color(
+                              0xFFFF3B30,
+                            ).withValues(alpha: 0.4),
+                            blurRadius: 8,
+                            offset: const Offset(0, 2),
+                          ),
+                        ]
                       : [],
                 ),
                 child: Text(
