@@ -84,8 +84,6 @@ class _CruiseModePageState extends State<CruiseModePage> {
   // Aktuelle User-Position als Marker
   LatLng? _userPosition;
   double _userHeading = 0.0; // GPS-Heading in Grad (0=Nord, 90=Ost)
-  // Simulation-Puck-Position als Marker
-  LatLng? _simulationPuckPosition;
 
   // ─────────────────────── Navigation State ─────────────────────────────────
   geo.Position? _userLocation;
@@ -104,7 +102,7 @@ class _CruiseModePageState extends State<CruiseModePage> {
   bool _isSimulationRunning = false;
   bool _isSimulationStepRunning = false;
   int _simulationIndex = 0;
-  final bool _isSimulationEnabled = true; // Simulation für Testing
+  final bool _isSimulationEnabled = false; // Simulation deaktiviert
   double _simulationSpeedKmh = 60; // Aktuelle Simulationsgeschwindigkeit
 
   bool _isCameraLocked =
@@ -682,38 +680,6 @@ class _CruiseModePageState extends State<CruiseModePage> {
               ),
             ],
           ),
-        // ── Simulations-Puck (blauer Kreis mit weißem Ring) ──────────────────
-        if (_simulationPuckPosition != null)
-          MarkerLayer(
-            markers: [
-              Marker(
-                point: _simulationPuckPosition!,
-                width: 28,
-                height: 28,
-                child: Stack(
-                  alignment: Alignment.center,
-                  children: [
-                    Container(
-                      width: 28,
-                      height: 28,
-                      decoration: BoxDecoration(
-                        color: Colors.white.withValues(alpha: 0.9),
-                        shape: BoxShape.circle,
-                      ),
-                    ),
-                    Container(
-                      width: 18,
-                      height: 18,
-                      decoration: const BoxDecoration(
-                        color: Color(0xFF007AFF),
-                        shape: BoxShape.circle,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
       ],
     );
   }
@@ -830,35 +796,37 @@ class _CruiseModePageState extends State<CruiseModePage> {
     );
   }
 
-  /// Apple-Style Standort-Punkt: blauer Kreis mit Heading-Kegel.
+  /// Apple-Style Standort-Punkt: blauer Kreis mit animiertem Heading-Kegel.
   Widget _buildAppleLocationDot(double headingDegrees) {
     return Stack(
       alignment: Alignment.center,
       children: [
-        // Heading-Kegel
-        Transform.rotate(
-          angle: headingDegrees * (math.pi / 180.0),
+        // Heading-Kegel (smooth animiert)
+        AnimatedRotation(
+          turns: headingDegrees / 360.0,
+          duration: const Duration(milliseconds: 400),
+          curve: Curves.easeOutCubic,
           child: CustomPaint(
             size: const Size(60, 60),
             painter: _HeadingConePainter(),
           ),
         ),
-        // Weißer Ring
+        // Weißer Ring mit Schatten
         Container(
-          width: 20,
-          height: 20,
+          width: 22,
+          height: 22,
           decoration: const BoxDecoration(
             color: Colors.white,
             shape: BoxShape.circle,
             boxShadow: [
-              BoxShadow(color: Color(0x40000000), blurRadius: 4, spreadRadius: 1),
+              BoxShadow(color: Color(0x50000000), blurRadius: 6, spreadRadius: 1),
             ],
           ),
         ),
         // Blauer Kern
         Container(
-          width: 14,
-          height: 14,
+          width: 15,
+          height: 15,
           decoration: const BoxDecoration(
             color: Color(0xFF007AFF),
             shape: BoxShape.circle,
@@ -923,10 +891,16 @@ class _CruiseModePageState extends State<CruiseModePage> {
 
   void _startIdlePositionStream() {
     _idlePositionSubscription?.cancel();
-    const settings = geo.LocationSettings(
-      accuracy: geo.LocationAccuracy.best,
-      distanceFilter: 3,
-    );
+    // iOS: bestForNavigation für Heading-Updates, Web: best (kein bestForNavigation)
+    const settings = kIsWeb
+        ? geo.LocationSettings(
+            accuracy: geo.LocationAccuracy.best,
+            distanceFilter: 3,
+          )
+        : geo.LocationSettings(
+            accuracy: geo.LocationAccuracy.bestForNavigation,
+            distanceFilter: 2,
+          );
     _idlePositionSubscription = geo.Geolocator.getPositionStream(
       locationSettings: settings,
     ).listen(
@@ -1976,19 +1950,12 @@ class _CruiseModePageState extends State<CruiseModePage> {
     if (_isSimulationRunning) _scheduleNextSimulationStep();
   }
 
-  /// Zeigt den Simulations-Puck (blauer Kreis mit weißem Ring) als MarkerLayer.
-  /// Kein Mapbox AnnotationManager mehr — flutter_map rendert via State.
   Future<void> _updateSimulationPuck(double lng, double lat) async {
-    _safeSetState(() {
-      _simulationPuckPosition = LatLng(lat, lng); // lng,lat → LatLng(lat,lng)
-    });
+    // Simulation deaktiviert — Puck nicht mehr anzeigen
   }
 
-  /// Entfernt den Simulations-Puck (State auf null setzen).
   Future<void> _removeSimulationPuck() async {
-    _safeSetState(() {
-      _simulationPuckPosition = null;
-    });
+    // Simulation deaktiviert
   }
 
   geo.Position _buildSimulatedPosition(
@@ -2030,7 +1997,6 @@ class _CruiseModePageState extends State<CruiseModePage> {
         },
         onDiscard: () async {
           Navigator.pop(ctx);
-          await _saveRouteAndSyncXp();
           _resetAfterCompletion();
         },
       ),
@@ -2057,7 +2023,6 @@ class _CruiseModePageState extends State<CruiseModePage> {
         },
         onDiscard: () async {
           Navigator.pop(ctx);
-          await _saveRouteAndSyncXp();
           _resetAfterCompletion();
         },
       ),

@@ -71,8 +71,8 @@ function calculateDestination(start: Coordinate, distanceKm: number, bearingDegr
 }
 
 function getDistanceConfig(targetDistance: number, mode?: string): DistanceConfig {
-    // ±10% Toleranz um die Zieldistanz — z.B. 50km → 45-55km
-    const tolerance = 0.10;
+    // ±15% Toleranz um die Zieldistanz — z.B. 50km → 42.5-57.5km
+    const tolerance = 0.15;
     const minKm = Math.round(targetDistance * (1 - tolerance));
     const maxKm = Math.round(targetDistance * (1 + tolerance));
 
