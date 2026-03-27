@@ -97,6 +97,7 @@ class _CruiseModePageState extends State<CruiseModePage> {
   final Set<int> _announcedManeuverIndices = <int>{};
   StreamSubscription<geo.Position>? _positionSubscription;
   StreamSubscription<geo.Position>? _socketPositionSubscription;
+  StreamSubscription<geo.Position>? _idlePositionSubscription; // Standort-Stream für Heading im Idle
 
   // ─────────────────────── Simulation State ─────────────────────────────────
   Timer? _simulationTimer;
@@ -164,6 +165,7 @@ class _CruiseModePageState extends State<CruiseModePage> {
     _stopSimulation(restartLiveTracking: false);
     _positionSubscription?.cancel();
     _socketPositionSubscription?.cancel();
+    _stopIdlePositionStream();
     unawaited(_navigationSocketService.dispose());
     _destinationController.dispose();
     super.dispose();
@@ -668,15 +670,15 @@ class _CruiseModePageState extends State<CruiseModePage> {
               ),
             ],
           ),
-        // ── User-Position Marker (Apple-Style, Live-Navigation) ─────────────
+        // ── User-Position Marker (Live-Navigation) ─────────────────────────
         if (_userPosition != null && _isRouteConfirmed)
           MarkerLayer(
             markers: [
               Marker(
                 point: _userPosition!,
-                width: 44,
-                height: 44,
-                child: _buildAppleLocationDot(_userHeading, isNavigating: true),
+                width: 60,
+                height: 60,
+                child: _buildAppleLocationDot(_userHeading),
               ),
             ],
           ),
@@ -828,22 +830,8 @@ class _CruiseModePageState extends State<CruiseModePage> {
     );
   }
 
-  /// Apple-Style Standort-Punkt: blauer Pfeil der in Fahrtrichtung zeigt.
-  Widget _buildAppleLocationDot(double headingDegrees, {bool isNavigating = false}) {
-    if (isNavigating) {
-      // Navigation: Blauer Pfeil wie Apple Maps
-      return Transform.rotate(
-        angle: headingDegrees * (math.pi / 180.0),
-        child: SizedBox(
-          width: 44,
-          height: 44,
-          child: CustomPaint(
-            painter: _AppleNavArrowPainter(),
-          ),
-        ),
-      );
-    }
-    // Idle: Blauer Punkt mit Heading-Kegel wie Apple Maps
+  /// Apple-Style Standort-Punkt: blauer Kreis mit Heading-Kegel.
+  Widget _buildAppleLocationDot(double headingDegrees) {
     return Stack(
       alignment: Alignment.center,
       children: [
@@ -917,14 +905,48 @@ class _CruiseModePageState extends State<CruiseModePage> {
           ),
         );
         _userLocation = freshPosition;
+        if (freshPosition.heading.isFinite && freshPosition.heading >= 0 && freshPosition.heading <= 360) {
+          _userHeading = freshPosition.heading;
+        }
         _setCameraToPosition(freshPosition);
         _safeSetState(() {}); // Marker-Refresh
       } catch (e) {
         debugPrint('[CruiseMode] Frische GPS-Position nicht verfügbar: $e');
       }
+
+      // Idle-Positions-Stream starten für Heading-Updates (stoppt wenn Navigation startet)
+      _startIdlePositionStream();
     } catch (e) {
       debugPrint('Konnte Karten-Position nicht setzen: $e');
     }
+  }
+
+  void _startIdlePositionStream() {
+    _idlePositionSubscription?.cancel();
+    const settings = geo.LocationSettings(
+      accuracy: geo.LocationAccuracy.best,
+      distanceFilter: 3,
+    );
+    _idlePositionSubscription = geo.Geolocator.getPositionStream(
+      locationSettings: settings,
+    ).listen(
+      (position) {
+        if (!mounted || _disposed) return;
+        _userLocation = position;
+        if (position.heading.isFinite && position.heading >= 0 && position.heading <= 360) {
+          _userHeading = position.heading;
+        }
+        _safeSetState(() {});
+      },
+      onError: (Object e) {
+        debugPrint('[CruiseMode] Idle-Positionsstream Fehler: $e');
+      },
+    );
+  }
+
+  void _stopIdlePositionStream() {
+    _idlePositionSubscription?.cancel();
+    _idlePositionSubscription = null;
   }
 
   void _setCameraToPosition(geo.Position position) {
@@ -1287,6 +1309,7 @@ class _CruiseModePageState extends State<CruiseModePage> {
   // ═══════════════════════ NAVIGATION TRACKING ══════════════════════════════
 
   void _startNavigationTracking() {
+    _stopIdlePositionStream(); // Idle-Stream stoppen, Navigation übernimmt
     _positionSubscription?.cancel();
     _socketPositionSubscription?.cancel();
 
@@ -1339,6 +1362,7 @@ class _CruiseModePageState extends State<CruiseModePage> {
     _socketPositionSubscription?.cancel();
     _socketPositionSubscription = null;
     unawaited(_navigationSocketService.close());
+    _startIdlePositionStream(); // Idle-Stream wieder starten
   }
 
   Future<void> _onLocationUpdate(geo.Position position) async {
@@ -2121,21 +2145,22 @@ class _CruiseModePageState extends State<CruiseModePage> {
   }
 }
 
-/// Apple-Style Heading-Kegel (Idle-Marker): halbtransparenter blauer Fächer.
+/// Apple-Style Heading-Kegel: halbtransparenter blauer Fächer zeigt Blickrichtung.
 class _HeadingConePainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final paint = Paint()
-      ..color = const Color(0xFF007AFF).withValues(alpha: 0.18)
+      ..color = const Color(0xFF007AFF).withValues(alpha: 0.3)
       ..style = PaintingStyle.fill;
 
     final cx = size.width / 2;
     final cy = size.height / 2;
 
+    // Breiter Fächer nach oben (Blickrichtung)
     final p = ui.Path()
       ..moveTo(cx, cy)
-      ..lineTo(cx - 12, cy - 26)
-      ..quadraticBezierTo(cx, cy - 32, cx + 12, cy - 26)
+      ..lineTo(cx - 14, cy - 28)
+      ..quadraticBezierTo(cx, cy - 35, cx + 14, cy - 28)
       ..close();
 
     canvas.drawPath(p, paint);
@@ -2145,40 +2170,3 @@ class _HeadingConePainter extends CustomPainter {
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
-/// Apple-Maps-Style Navigations-Pfeil (blaues Dreieck mit weißem Rand).
-class _AppleNavArrowPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final cx = size.width / 2;
-    final cy = size.height / 2;
-
-    // Weißer Rand (Shadow)
-    final borderPaint = Paint()
-      ..color = Colors.white
-      ..style = PaintingStyle.fill;
-
-    final borderPath = ui.Path()
-      ..moveTo(cx, cy - 20)
-      ..lineTo(cx + 13, cy + 14)
-      ..lineTo(cx, cy + 7)
-      ..lineTo(cx - 13, cy + 14)
-      ..close();
-    canvas.drawPath(borderPath, borderPaint);
-
-    // Blauer Kern
-    final fillPaint = Paint()
-      ..color = const Color(0xFF007AFF)
-      ..style = PaintingStyle.fill;
-
-    final fillPath = ui.Path()
-      ..moveTo(cx, cy - 17)
-      ..lineTo(cx + 10, cy + 12)
-      ..lineTo(cx, cy + 6)
-      ..lineTo(cx - 10, cy + 12)
-      ..close();
-    canvas.drawPath(fillPath, fillPaint);
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
-}
