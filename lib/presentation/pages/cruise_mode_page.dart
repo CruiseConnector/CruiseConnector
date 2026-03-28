@@ -1446,7 +1446,8 @@ class _CruiseModePageState extends State<CruiseModePage> {
   Future<void> _onLocationUpdate(geo.Position position) async {
     if (!mounted || _disposed) return;
 
-    // Web: GPS-Smoother anwenden für flüssige Darstellung
+    // Web: GPS-Smoother anwenden — berechnet Heading aus Positionsverlauf
+    // (Browser liefert kein zuverlässiges heading, oft 0 oder NaN)
     geo.Position effectivePosition;
     if (kIsWeb) {
       final smoothed = _webSmoother.update(position);
@@ -1461,6 +1462,21 @@ class _CruiseModePageState extends State<CruiseModePage> {
           position.heading >= 0 &&
           position.heading <= 360) {
         _userHeading = position.heading;
+      }
+    }
+
+    // Kamera folgt User-Position + Rotation wenn Camera-Lock aktiv.
+    // WICHTIG: Kamera-Bewegung IMMER ausführen (nicht vom Rebuild-Throttle blockieren),
+    // damit die Karte auf Web flüssig mitdreht und der Position folgt.
+    if (_isCameraLocked && _mapReady) {
+      try {
+        _mapController.moveAndRotate(
+          LatLng(effectivePosition.latitude, effectivePosition.longitude),
+          16.0,
+          -_userHeading,
+        );
+      } catch (e) {
+        debugPrint('[CruiseMode] Kamera-Folgen fehlgeschlagen: $e');
       }
     }
 
@@ -1484,19 +1500,6 @@ class _CruiseModePageState extends State<CruiseModePage> {
       _userPosition = LatLng(effectivePosition.latitude, effectivePosition.longitude);
       if (_routeLatLngs.isNotEmpty) {
         _routeLatLngs[0] = LatLng(effectivePosition.latitude, effectivePosition.longitude);
-      }
-    }
-
-    // Kamera folgt User-Position + Rotation wenn Camera-Lock aktiv
-    if (_isCameraLocked && _mapReady) {
-      try {
-        _mapController.moveAndRotate(
-          LatLng(effectivePosition.latitude, effectivePosition.longitude),
-          16.0,
-          -_userHeading, // Karte dreht sich mit der Fahrtrichtung (Norden = oben wenn heading=0)
-        );
-      } catch (e) {
-        debugPrint('[CruiseMode] Kamera-Folgen fehlgeschlagen: $e');
       }
     }
 

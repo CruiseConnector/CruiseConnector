@@ -1,16 +1,19 @@
+import 'dart:math' as math;
 import 'package:geolocator/geolocator.dart' as geo;
 
-/// Glättet GPS-Positionen auf Web-Plattformen mittels exponentieller Gewichtung.
+/// Glättet GPS-Positionen auf Web-Plattformen mittels exponentieller Gewichtung
+/// und berechnet Heading aus aufeinanderfolgenden Positionen.
 ///
-/// Browser-Geolocation liefert oft sprunghaftere Werte als native GPS-Chips.
-/// Dieser Smoother interpoliert Position und Heading, sodass die Darstellung
-/// auf der Karte flüssig wie bei Apple Maps wirkt.
+/// Browser-Geolocation liefert oft kein brauchbares Heading (0 oder NaN).
+/// Dieser Smoother berechnet die Fahrtrichtung selbst aus der Positionshistorie
+/// und interpoliert Position + Heading für flüssige Darstellung.
 class WebPositionSmoother {
   WebPositionSmoother({
     this.positionAlpha = 0.35,
     this.headingAlpha = 0.25,
     this.minMovementMeters = 2.0,
     this.maxJumpMeters = 500.0,
+    this.minHeadingDistanceMeters = 3.0,
   });
 
   /// Gewichtungsfaktor für neue Position (0–1). Höher = reaktiver, niedriger = glatter.
@@ -25,8 +28,17 @@ class WebPositionSmoother {
   /// Maximale Distanz, bei der ein Sprung akzeptiert wird (darüber: Reset).
   final double maxJumpMeters;
 
+  /// Minimale Distanz zwischen zwei Positionen, ab der ein neues Heading berechnet wird.
+  /// Verhindert Heading-Flackern bei GPS-Jitter im Stillstand.
+  final double minHeadingDistanceMeters;
+
   geo.Position? _smoothedPosition;
   double _smoothedHeading = 0.0;
+  bool _hasValidHeading = false;
+
+  // Letzte Position für Heading-Berechnung (ungeglättet, für korrekte Richtung)
+  double? _lastRawLat;
+  double? _lastRawLng;
 
   /// Gibt die aktuell geglättete Position zurück (oder null vor dem ersten Update).
   geo.Position? get current => _smoothedPosition;
@@ -34,16 +46,21 @@ class WebPositionSmoother {
   /// Gibt das geglättete Heading zurück.
   double get heading => _smoothedHeading;
 
+  /// Ob bereits ein valides Heading berechnet wurde.
+  bool get hasValidHeading => _hasValidHeading;
+
   /// Verarbeitet eine neue rohe GPS-Position und gibt die geglättete zurück.
   /// Gibt `null` zurück, wenn das Update zu klein ist und kein Rebuild nötig.
   geo.Position? update(geo.Position raw) {
     final prev = _smoothedPosition;
 
+    // Heading aus Positions-Differenz berechnen (zuverlässiger als Browser-Heading)
+    _updateComputedHeading(raw);
+
     // Erster Wert: direkt übernehmen
     if (prev == null) {
-      _smoothedPosition = raw;
-      _smoothedHeading = _validHeading(raw.heading);
-      return raw;
+      _smoothedPosition = _withHeading(raw, _smoothedHeading);
+      return _smoothedPosition;
     }
 
     final distance = geo.Geolocator.distanceBetween(
@@ -55,14 +72,9 @@ class WebPositionSmoother {
 
     // Sprung zu groß (Teleport/GPS-Reset) → Position direkt übernehmen
     if (distance > maxJumpMeters) {
-      _smoothedPosition = raw;
-      _smoothedHeading = _validHeading(raw.heading);
-      return raw;
+      _smoothedPosition = _withHeading(raw, _smoothedHeading);
+      return _smoothedPosition;
     }
-
-    // Heading glätten (zirkulär, damit 359°→1° korrekt interpoliert)
-    final rawHeading = _validHeading(raw.heading);
-    _smoothedHeading = _lerpAngle(_smoothedHeading, rawHeading, headingAlpha);
 
     // Position glätten
     final smoothLat = prev.latitude + (raw.latitude - prev.latitude) * positionAlpha;
@@ -102,13 +114,85 @@ class WebPositionSmoother {
   void reset() {
     _smoothedPosition = null;
     _smoothedHeading = 0.0;
+    _hasValidHeading = false;
+    _lastRawLat = null;
+    _lastRawLng = null;
   }
 
-  // ── Hilfsfunktionen ──────────────────────────────────────────────────────
+  // ── Heading-Berechnung ───────────────────────────────────────────────────
 
-  double _validHeading(double heading) {
-    if (!heading.isFinite || heading < 0 || heading > 360) return _smoothedHeading;
-    return heading;
+  /// Berechnet das Heading aus der Differenz zwischen aktueller und letzter Position.
+  /// Nutzt die rohen (ungeglätteten) Koordinaten für korrekte Richtung.
+  void _updateComputedHeading(geo.Position raw) {
+    final prevLat = _lastRawLat;
+    final prevLng = _lastRawLng;
+
+    if (prevLat == null || prevLng == null) {
+      _lastRawLat = raw.latitude;
+      _lastRawLng = raw.longitude;
+      // Beim ersten Punkt: Browser-Heading als Fallback nutzen (falls brauchbar)
+      final browserHeading = raw.heading;
+      if (browserHeading.isFinite && browserHeading > 0 && browserHeading < 360) {
+        _smoothedHeading = browserHeading;
+        _hasValidHeading = true;
+      }
+      return;
+    }
+
+    final distance = geo.Geolocator.distanceBetween(
+      prevLat, prevLng, raw.latitude, raw.longitude,
+    );
+
+    // Nur Heading berechnen wenn genug Distanz zurückgelegt (sonst GPS-Jitter)
+    if (distance >= minHeadingDistanceMeters) {
+      final computedHeading = _calculateBearing(
+        prevLat, prevLng, raw.latitude, raw.longitude,
+      );
+
+      if (_hasValidHeading) {
+        // Bestehendes Heading smooth interpolieren
+        _smoothedHeading = _lerpAngle(_smoothedHeading, computedHeading, headingAlpha);
+      } else {
+        // Erstes valides Heading: direkt übernehmen
+        _smoothedHeading = computedHeading;
+        _hasValidHeading = true;
+      }
+
+      _lastRawLat = raw.latitude;
+      _lastRawLng = raw.longitude;
+    }
+  }
+
+  /// Berechnet den Bearing (Richtung) von Punkt A nach Punkt B in Grad (0–360, Nord=0).
+  double _calculateBearing(double lat1, double lng1, double lat2, double lng2) {
+    final lat1Rad = lat1 * math.pi / 180;
+    final lat2Rad = lat2 * math.pi / 180;
+    final dLng = (lng2 - lng1) * math.pi / 180;
+
+    final y = math.sin(dLng) * math.cos(lat2Rad);
+    final x = math.cos(lat1Rad) * math.sin(lat2Rad) -
+        math.sin(lat1Rad) * math.cos(lat2Rad) * math.cos(dLng);
+
+    final bearing = math.atan2(y, x) * 180 / math.pi;
+    return (bearing + 360) % 360; // Normalisieren auf 0–360
+  }
+
+  /// Position mit überschriebenem Heading zurückgeben.
+  geo.Position _withHeading(geo.Position p, double heading) {
+    return geo.Position(
+      latitude: p.latitude,
+      longitude: p.longitude,
+      timestamp: p.timestamp,
+      accuracy: p.accuracy,
+      altitude: p.altitude,
+      altitudeAccuracy: p.altitudeAccuracy,
+      heading: heading,
+      headingAccuracy: p.headingAccuracy,
+      speed: p.speed,
+      speedAccuracy: p.speedAccuracy,
+      floor: p.floor,
+      isMocked: p.isMocked,
+    );
   }
 
   /// Zirkuläre lineare Interpolation für Winkel (0–360°).
