@@ -41,7 +41,9 @@ jobs:
       - name: Build
         run: |
           flutter pub get
-          flutter build web --release --base-href "/${{ github.event.repository.name }}/"
+          flutter build web --release \
+            --web-renderer canvaskit \
+            --base-href "/${{ github.event.repository.name }}/"
 
       - name: Upload Pages Artifact
         uses: actions/upload-pages-artifact@v3

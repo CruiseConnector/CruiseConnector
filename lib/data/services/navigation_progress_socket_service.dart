@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:geolocator/geolocator.dart' as geo;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -57,6 +58,14 @@ class NavigationProgressSocketService {
   }
 
   Future<void> publishPosition(geo.Position position) async {
+    // Web: Supabase Realtime-Roundtrip (WebSocket → Server → zurück) ist zu
+    // langsam für Echtzeit-Navigation (~50–500ms Latenz pro Update).
+    // Auf Web direkt emittieren — kein Netzwerk-Roundtrip.
+    if (kIsWeb) {
+      _emit(position);
+      return;
+    }
+
     final payload = _positionToPayload(position);
     final channel = _channel;
     if (channel == null || !_isSubscribed) {

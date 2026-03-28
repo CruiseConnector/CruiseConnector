@@ -132,6 +132,9 @@ class _CruiseModePageState extends State<CruiseModePage> {
 
   bool _disposed = false;
 
+  // Web-only: Letzte setState-Zeit für Throttling (max. 1 Rebuild / 100ms)
+  DateTime? _lastWebRebuildTime;
+
   // ──────────────────────────────────────────────────────────────────────────
 
   void _safeSetState(VoidCallback fn) {
@@ -211,11 +214,17 @@ class _CruiseModePageState extends State<CruiseModePage> {
       body: Stack(
         children: [
           // Map IMMER an gleicher Stelle im Widget-Tree (verhindert Neu-Erstellung)
-          Positioned.fill(child: _buildMapWidget()),
+          // RepaintBoundary isoliert Canvas-Repaints vom Rest der UI (Web-Performance).
+          Positioned.fill(
+            child: RepaintBoundary(child: _buildMapWidget()),
+          ),
 
           // Config-Overlay ODER Navigation-Overlay
-          if (!_isRouteConfirmed) _buildConfigOverlay(),
-          if (_isRouteConfirmed) _buildNavigationOverlay(),
+          // RepaintBoundary trennt UI-Overlays vom Karten-Repaint (Web-Performance).
+          if (!_isRouteConfirmed)
+            RepaintBoundary(child: _buildConfigOverlay()),
+          if (_isRouteConfirmed)
+            RepaintBoundary(child: _buildNavigationOverlay()),
         ],
       ),
     );
@@ -931,11 +940,13 @@ class _CruiseModePageState extends State<CruiseModePage> {
 
   void _startIdlePositionStream() {
     _idlePositionSubscription?.cancel();
-    // iOS: bestForNavigation für Heading-Updates, Web: best (kein bestForNavigation)
+    // iOS/Android: bestForNavigation für Heading-Updates.
+    // Web: distanceFilter=0, da Browser-watchPosition() kein natives
+    // Distanz-Filtern unterstützt — Plugin-Emulation ist unzuverlässig.
     const settings = kIsWeb
         ? geo.LocationSettings(
             accuracy: geo.LocationAccuracy.best,
-            distanceFilter: 3,
+            distanceFilter: 0,
           )
         : geo.LocationSettings(
             accuracy: geo.LocationAccuracy.bestForNavigation,
@@ -1381,10 +1392,12 @@ class _CruiseModePageState extends State<CruiseModePage> {
     );
 
     // Web unterstützt kein bestForNavigation → fallback auf best
+    // Web: distanceFilter=0 (Browser-API unterstützt kein natives Distanz-Filtern).
+    // iOS/Android: 3m Filter für flüssiges Tracking ohne zu viele Updates.
     const locationSettings = kIsWeb
         ? geo.LocationSettings(
             accuracy: geo.LocationAccuracy.best,
-            distanceFilter: 3,
+            distanceFilter: 0,
           )
         : geo.LocationSettings(
             accuracy: geo.LocationAccuracy.bestForNavigation,
@@ -1423,12 +1436,26 @@ class _CruiseModePageState extends State<CruiseModePage> {
     }
 
     // User-Position als Marker rendern (MarkerLayer in _buildMapWidget)
-    _safeSetState(() {
+    // Web: setState maximal alle 100ms aufrufen — CanvasKit repaint ist teuer.
+    final now = DateTime.now();
+    final skipRebuild = kIsWeb &&
+        _lastWebRebuildTime != null &&
+        now.difference(_lastWebRebuildTime!).inMilliseconds < 100;
+    if (!skipRebuild) {
+      _lastWebRebuildTime = now;
+      _safeSetState(() {
+        _userPosition = LatLng(position.latitude, position.longitude);
+        if (_routeLatLngs.isNotEmpty) {
+          _routeLatLngs[0] = LatLng(position.latitude, position.longitude);
+        }
+      });
+    } else {
+      // State aktualisieren ohne Rebuild (für nachfolgende Berechnungen)
       _userPosition = LatLng(position.latitude, position.longitude);
       if (_routeLatLngs.isNotEmpty) {
         _routeLatLngs[0] = LatLng(position.latitude, position.longitude);
       }
-    });
+    }
 
     // Kamera folgt User-Position + Rotation wenn Camera-Lock aktiv
     if (_isCameraLocked && _mapReady) {
