@@ -42,7 +42,6 @@ jobs:
         run: |
           flutter pub get
           flutter build web --release \
-            --web-renderer canvaskit \
             --base-href "/${{ github.event.repository.name }}/"
 
       - name: Upload Pages Artifact
