@@ -11,6 +11,7 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:cruise_connect/core/constants.dart';
 
+import 'package:cruise_connect/data/services/web_position_smoother.dart';
 import 'package:cruise_connect/data/services/geocoding_service.dart';
 import 'package:cruise_connect/data/services/navigation_guidance_utils.dart';
 import 'package:cruise_connect/data/services/navigation_progress_socket_service.dart';
@@ -132,8 +133,11 @@ class _CruiseModePageState extends State<CruiseModePage> {
 
   bool _disposed = false;
 
-  // Web-only: Letzte setState-Zeit für Throttling (max. 1 Rebuild / 100ms)
+  // Web-only: Letzte setState-Zeit für Throttling (max. 1 Rebuild / 200ms auf Web)
   DateTime? _lastWebRebuildTime;
+
+  // Web-only: GPS-Smoother für flüssige Positionsdarstellung
+  final WebPositionSmoother _webSmoother = WebPositionSmoother();
 
   // ──────────────────────────────────────────────────────────────────────────
 
@@ -671,28 +675,31 @@ class _CruiseModePageState extends State<CruiseModePage> {
       ),
       children: [
         // ── Mapbox Dark-Style als Raster-Tile-Layer ──────────────────────────
+        // Web: Retina deaktiviert — halbiert Tile-Downloads, weniger Speicher/GPU-Last.
         TileLayer(
           urlTemplate:
               'https://api.mapbox.com/styles/v1/mapbox/dark-v11/tiles/256/{z}/{x}/{y}?access_token={accessToken}',
           additionalOptions: {'accessToken': AppConstants.mapboxPublicToken},
           userAgentPackageName: 'com.cruise_connect.app',
-          retinaMode: true,
+          retinaMode: !kIsWeb,
         ),
-        // ── Route (Glow + Hauptlinie + Überlappungen) ────────────────────────
+        // ── Route (Glow + Hauptlinie) ────────────────────────────────────────
+        // Web: Glow-Effekt entfernt — spart eine komplette Polyline-Layer-Berechnung.
         if (_routeLatLngs.length >= 2)
           PolylineLayer(
             polylines: [
-              // Glow-Effekt (breiter, halbtransparent)
-              Polyline(
-                points: _routeLatLngs,
-                color: const Color(0x4DFF5722),
-                strokeWidth: 12,
-              ),
+              if (!kIsWeb)
+                // Glow-Effekt (nur native — auf Web zu teuer für CanvasKit)
+                Polyline(
+                  points: _routeLatLngs,
+                  color: const Color(0x4DFF5722),
+                  strokeWidth: 12,
+                ),
               // Haupt-Routenlinie
               Polyline(
                 points: _routeLatLngs,
                 color: const Color(0xFFFF5722),
-                strokeWidth: 5,
+                strokeWidth: kIsWeb ? 4 : 5,
               ),
             ],
           ),
@@ -845,9 +852,10 @@ class _CruiseModePageState extends State<CruiseModePage> {
       alignment: Alignment.center,
       children: [
         // Heading-Kegel (smooth animiert)
+        // Web: kürzere Animation (weniger Frames), schnellere Reaktion
         AnimatedRotation(
           turns: headingDegrees / 360.0,
-          duration: const Duration(milliseconds: 400),
+          duration: Duration(milliseconds: kIsWeb ? 200 : 400),
           curve: Curves.easeOutCubic,
           child: CustomPaint(
             size: const Size(60, 60),
@@ -956,11 +964,19 @@ class _CruiseModePageState extends State<CruiseModePage> {
         geo.Geolocator.getPositionStream(locationSettings: settings).listen(
           (position) {
             if (!mounted || _disposed) return;
-            _userLocation = position;
-            if (position.heading.isFinite &&
-                position.heading >= 0 &&
-                position.heading <= 360) {
-              _userHeading = position.heading;
+            // Web: Smoother anwenden für flüssige Darstellung
+            if (kIsWeb) {
+              final smoothed = _webSmoother.update(position);
+              if (smoothed == null) return; // Zu wenig Bewegung → kein Rebuild
+              _userLocation = smoothed;
+              _userHeading = _webSmoother.heading;
+            } else {
+              _userLocation = position;
+              if (position.heading.isFinite &&
+                  position.heading >= 0 &&
+                  position.heading <= 360) {
+                _userHeading = position.heading;
+              }
             }
             _safeSetState(() {});
           },
@@ -1370,6 +1386,9 @@ class _CruiseModePageState extends State<CruiseModePage> {
     _positionSubscription?.cancel();
     _socketPositionSubscription?.cancel();
 
+    // Web: Smoother resetten für frischen Start
+    if (kIsWeb) _webSmoother.reset();
+
     _distanceSinceLastRedraw = 0.0;
     _lastDrawnRouteIndex = _currentRouteIndex;
 
@@ -1426,34 +1445,45 @@ class _CruiseModePageState extends State<CruiseModePage> {
 
   Future<void> _onLocationUpdate(geo.Position position) async {
     if (!mounted || _disposed) return;
-    _userLocation = position;
 
-    // Heading tracken (nur wenn valide)
-    if (position.heading.isFinite &&
-        position.heading >= 0 &&
-        position.heading <= 360) {
-      _userHeading = position.heading;
+    // Web: GPS-Smoother anwenden für flüssige Darstellung
+    geo.Position effectivePosition;
+    if (kIsWeb) {
+      final smoothed = _webSmoother.update(position);
+      // Smoother gibt null zurück wenn Bewegung < 2m → trotzdem intern tracken
+      effectivePosition = smoothed ?? _webSmoother.current ?? position;
+      _userLocation = effectivePosition;
+      _userHeading = _webSmoother.heading;
+    } else {
+      effectivePosition = position;
+      _userLocation = position;
+      if (position.heading.isFinite &&
+          position.heading >= 0 &&
+          position.heading <= 360) {
+        _userHeading = position.heading;
+      }
     }
 
     // User-Position als Marker rendern (MarkerLayer in _buildMapWidget)
-    // Web: setState maximal alle 100ms aufrufen — CanvasKit repaint ist teuer.
+    // Web: setState maximal alle 200ms aufrufen — CanvasKit repaint ist teuer.
+    // Native: kein Throttle (GPU-beschleunigt, kein Performance-Problem).
     final now = DateTime.now();
     final skipRebuild = kIsWeb &&
         _lastWebRebuildTime != null &&
-        now.difference(_lastWebRebuildTime!).inMilliseconds < 100;
+        now.difference(_lastWebRebuildTime!).inMilliseconds < 200;
     if (!skipRebuild) {
       _lastWebRebuildTime = now;
       _safeSetState(() {
-        _userPosition = LatLng(position.latitude, position.longitude);
+        _userPosition = LatLng(effectivePosition.latitude, effectivePosition.longitude);
         if (_routeLatLngs.isNotEmpty) {
-          _routeLatLngs[0] = LatLng(position.latitude, position.longitude);
+          _routeLatLngs[0] = LatLng(effectivePosition.latitude, effectivePosition.longitude);
         }
       });
     } else {
       // State aktualisieren ohne Rebuild (für nachfolgende Berechnungen)
-      _userPosition = LatLng(position.latitude, position.longitude);
+      _userPosition = LatLng(effectivePosition.latitude, effectivePosition.longitude);
       if (_routeLatLngs.isNotEmpty) {
-        _routeLatLngs[0] = LatLng(position.latitude, position.longitude);
+        _routeLatLngs[0] = LatLng(effectivePosition.latitude, effectivePosition.longitude);
       }
     }
 
@@ -1461,7 +1491,7 @@ class _CruiseModePageState extends State<CruiseModePage> {
     if (_isCameraLocked && _mapReady) {
       try {
         _mapController.moveAndRotate(
-          LatLng(position.latitude, position.longitude),
+          LatLng(effectivePosition.latitude, effectivePosition.longitude),
           16.0,
           -_userHeading, // Karte dreht sich mit der Fahrtrichtung (Norden = oben wenn heading=0)
         );
@@ -1472,6 +1502,7 @@ class _CruiseModePageState extends State<CruiseModePage> {
 
     if (!_isRouteConfirmed || _fullRouteCoordinates.length < 2) return;
 
+    // Für Route-Matching die rohe Position verwenden (genauer für Snap-to-Route)
     final match = findNearestInWindow(
       position: position,
       coordinates: _fullRouteCoordinates,
@@ -1520,13 +1551,14 @@ class _CruiseModePageState extends State<CruiseModePage> {
       // Verbleibende Distanz und Zeit live berechnen
       _updateRemainingDistanceAndDuration();
 
-      // Route häufiger in kleineren Schritten neu zeichnen (flüssigere Orange-Linie)
-      // WICHTIG: Immer nur 3km voraus zeigen (Sliding Window)
+      // Route in Schritten neu zeichnen (Sliding Window, 3km voraus)
+      // Web: größere Schwellen um teure CanvasKit-Repaints zu reduzieren
+      final indexThreshold = kIsWeb ? _routeRedrawIndexThreshold * 2 : _routeRedrawIndexThreshold;
+      final distThreshold = kIsWeb ? _routeRedrawDistanceMeters * 2 : _routeRedrawDistanceMeters;
       final redrawByIndex =
-          _currentRouteIndex - _lastDrawnRouteIndex >=
-          _routeRedrawIndexThreshold;
+          _currentRouteIndex - _lastDrawnRouteIndex >= indexThreshold;
       final redrawByDistance =
-          _distanceSinceLastRedraw >= _routeRedrawDistanceMeters;
+          _distanceSinceLastRedraw >= distThreshold;
       if (redrawByIndex || redrawByDistance) {
         _lastDrawnRouteIndex = _currentRouteIndex;
         _distanceSinceLastRedraw = 0.0;

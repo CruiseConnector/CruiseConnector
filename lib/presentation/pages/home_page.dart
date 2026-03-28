@@ -22,6 +22,10 @@ class _HomePageState extends State<HomePage> {
   // damit die Zielseite ihre Daten automatisch neu lädt.
   int _refreshCounter = 0;
 
+  // Web-only: Lazy-Loading — Tabs werden erst beim ersten Besuch erstellt.
+  // Auf Native bleibt IndexedStack unverändert (schnell genug).
+  final Set<int> _visitedTabs = {0}; // Tab 0 (Home) ist immer besucht
+
   @override
   void initState() {
     super.initState();
@@ -84,6 +88,7 @@ class _HomePageState extends State<HomePage> {
     setState(() {
       _selectedIndex = index;
       _refreshCounter++;
+      _visitedTabs.add(index);
     });
   }
 
@@ -97,18 +102,51 @@ class _HomePageState extends State<HomePage> {
         bottom: !_isFullscreen,
         left: !_isFullscreen,
         right: !_isFullscreen,
-        child: IndexedStack(
-          index: _selectedIndex,
-          children: [
-            HomeContentPage(onTabChange: _onNavItemTapped, refreshKey: _selectedIndex == 0 ? _refreshCounter : 0),
-            CommunityPage(refreshKey: _selectedIndex == 1 ? _refreshCounter : 0),
-            const CruiseModePage(),
-            AnalyticsPage(refreshKey: _selectedIndex == 3 ? _refreshCounter : 0),
-            ProfilePage(refreshKey: _selectedIndex == 4 ? _refreshCounter : 0),
-          ],
-        ),
+        child: kIsWeb ? _buildWebTabs() : _buildNativeTabs(),
       ),
       bottomNavigationBar: _isFullscreen ? null : _buildBottomNav(),
+    );
+  }
+
+  /// Native: IndexedStack wie bisher — alle Tabs live, GPU-beschleunigt.
+  Widget _buildNativeTabs() {
+    return IndexedStack(
+      index: _selectedIndex,
+      children: [
+        HomeContentPage(onTabChange: _onNavItemTapped, refreshKey: _selectedIndex == 0 ? _refreshCounter : 0),
+        CommunityPage(refreshKey: _selectedIndex == 1 ? _refreshCounter : 0),
+        const CruiseModePage(),
+        AnalyticsPage(refreshKey: _selectedIndex == 3 ? _refreshCounter : 0),
+        ProfilePage(refreshKey: _selectedIndex == 4 ? _refreshCounter : 0),
+      ],
+    );
+  }
+
+  /// Web: Lazy-Loading + TickerMode für nicht-aktive Tabs.
+  /// Tabs werden erst beim ersten Besuch erstellt (spart initiale Ladezeit).
+  /// Nicht-aktive Tabs werden mit TickerMode(enabled: false) pausiert,
+  /// sodass Animationen keine CPU verbrauchen.
+  Widget _buildWebTabs() {
+    final tabs = <Widget>[
+      HomeContentPage(onTabChange: _onNavItemTapped, refreshKey: _selectedIndex == 0 ? _refreshCounter : 0),
+      CommunityPage(refreshKey: _selectedIndex == 1 ? _refreshCounter : 0),
+      const CruiseModePage(),
+      AnalyticsPage(refreshKey: _selectedIndex == 3 ? _refreshCounter : 0),
+      ProfilePage(refreshKey: _selectedIndex == 4 ? _refreshCounter : 0),
+    ];
+
+    return Stack(
+      children: [
+        for (var i = 0; i < tabs.length; i++)
+          if (_visitedTabs.contains(i))
+            Offstage(
+              offstage: _selectedIndex != i,
+              child: TickerMode(
+                enabled: _selectedIndex == i,
+                child: tabs[i],
+              ),
+            ),
+      ],
     );
   }
 

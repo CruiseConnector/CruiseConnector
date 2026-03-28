@@ -134,7 +134,10 @@ class NavigationProgressSocketService {
       );
 
       // Zwischenpunkte glätten sichtbare Sprünge der Routenlinie.
-      final interpolationSteps = (distance / 4.0).floor().clamp(0, 3);
+      // Web: max 1 Zwischenpunkt (weniger Events → weniger CanvasKit-Repaints).
+      // Native: bis zu 3 Zwischenpunkte für maximale Glätte.
+      final maxSteps = kIsWeb ? 1 : 3;
+      final interpolationSteps = (distance / 4.0).floor().clamp(0, maxSteps);
       if (interpolationSteps > 0) {
         for (var i = 1; i <= interpolationSteps; i++) {
           final t = i / (interpolationSteps + 1);
