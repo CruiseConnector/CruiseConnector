@@ -49,7 +49,8 @@ class CruiseModePage extends StatefulWidget {
   State<CruiseModePage> createState() => _CruiseModePageState();
 }
 
-class _CruiseModePageState extends State<CruiseModePage> {
+class _CruiseModePageState extends State<CruiseModePage>
+    with TickerProviderStateMixin {
   // ─────────────────────── Services ──────────────────────────────────────────
   final _geocodingService = const GeocodingService();
   final _routeService = RouteService();
@@ -136,8 +137,17 @@ class _CruiseModePageState extends State<CruiseModePage> {
   // Web-only: Letzte setState-Zeit für Throttling (max. 1 Rebuild / 200ms auf Web)
   DateTime? _lastWebRebuildTime;
 
-  // Web-only: GPS-Smoother für flüssige Positionsdarstellung
+  // Web-only: GPS-Smoother für flüssige Positionsdarstellung (Kalman-Filter)
   final WebPositionSmoother _webSmoother = WebPositionSmoother();
+
+  // Web-only: Animierte Kamera-Bewegung zwischen GPS-Updates
+  AnimationController? _cameraAnimController;
+  double _camFromLat = 0.0;
+  double _camFromLng = 0.0;
+  double _camToLat = 0.0;
+  double _camToLng = 0.0;
+  double _camFromHeading = 0.0;
+  double _camToHeading = 0.0;
 
   // ──────────────────────────────────────────────────────────────────────────
 
@@ -148,6 +158,13 @@ class _CruiseModePageState extends State<CruiseModePage> {
   @override
   void initState() {
     super.initState();
+    // Web: Animierte Kamera-Bewegung zwischen GPS-Updates (60fps Interpolation)
+    if (kIsWeb) {
+      _cameraAnimController = AnimationController(
+        vsync: this,
+        duration: const Duration(milliseconds: 800),
+      )..addListener(_onCameraAnimationTick);
+    }
     if (widget.initialRoute != null) {
       WidgetsBinding.instance.addPostFrameCallback(
         (_) => _loadSavedRoute(widget.initialRoute!),
@@ -167,6 +184,8 @@ class _CruiseModePageState extends State<CruiseModePage> {
   @override
   void dispose() {
     _disposed = true;
+    _cameraAnimController?.removeListener(_onCameraAnimationTick);
+    _cameraAnimController?.dispose();
     CruiseModePage.isFullscreen.value = false;
     CruiseModePage.pendingRoute.removeListener(_onPendingRoute);
     _stopSimulation(restartLiveTracking: false);
@@ -176,6 +195,59 @@ class _CruiseModePageState extends State<CruiseModePage> {
     unawaited(_navigationSocketService.dispose());
     _destinationController.dispose();
     super.dispose();
+  }
+
+  // ── Web: Smooth Kamera-Animation (60fps zwischen GPS-Updates) ─────────
+  void _onCameraAnimationTick() {
+    final controller = _cameraAnimController;
+    if (controller == null || !_isCameraLocked || !_mapReady) return;
+
+    final t = Curves.easeOutCubic.transform(controller.value);
+    final lat = _camFromLat + (_camToLat - _camFromLat) * t;
+    final lng = _camFromLng + (_camToLng - _camFromLng) * t;
+    final heading = _lerpAngleDeg(_camFromHeading, _camToHeading, t);
+
+    try {
+      _mapController.moveAndRotate(LatLng(lat, lng), 16.0, -heading);
+    } catch (_) {}
+  }
+
+  /// Startet eine animierte Kamera-Bewegung von der aktuellen zur neuen Position.
+  void _animateCameraTo(double lat, double lng, double heading) {
+    final controller = _cameraAnimController;
+    if (controller == null) {
+      // Fallback (native): direkter Jump
+      if (_isCameraLocked && _mapReady) {
+        try {
+          _mapController.moveAndRotate(LatLng(lat, lng), 16.0, -heading);
+        } catch (_) {}
+      }
+      return;
+    }
+
+    _camFromLat = _camToLat;
+    _camFromLng = _camToLng;
+    _camFromHeading = _camToHeading;
+    _camToLat = lat;
+    _camToLng = lng;
+    _camToHeading = heading;
+
+    // Wenn erste Animation: From = To (kein Sprung)
+    if (_camFromLat == 0.0 && _camFromLng == 0.0) {
+      _camFromLat = lat;
+      _camFromLng = lng;
+      _camFromHeading = heading;
+    }
+
+    controller.forward(from: 0.0);
+  }
+
+  /// Zirkuläre Interpolation für Heading (0–360°).
+  static double _lerpAngleDeg(double from, double to, double t) {
+    var diff = (to - from) % 360;
+    if (diff > 180) diff -= 360;
+    if (diff < -180) diff += 360;
+    return (from + diff * t) % 360;
   }
 
   void _handleRouteModeChanged(bool isRoundTrip) {
@@ -855,7 +927,7 @@ class _CruiseModePageState extends State<CruiseModePage> {
         // Web: kürzere Animation (weniger Frames), schnellere Reaktion
         AnimatedRotation(
           turns: headingDegrees / 360.0,
-          duration: Duration(milliseconds: kIsWeb ? 200 : 400),
+          duration: const Duration(milliseconds: kIsWeb ? 200 : 400),
           curve: Curves.easeOutCubic,
           child: CustomPaint(
             size: const Size(60, 60),
@@ -977,6 +1049,15 @@ class _CruiseModePageState extends State<CruiseModePage> {
                   position.heading <= 360) {
                 _userHeading = position.heading;
               }
+            }
+            // Web: Idle-Rebuilds auf 500ms throttlen (nicht zeitkritisch)
+            if (kIsWeb) {
+              final now = DateTime.now();
+              if (_lastWebRebuildTime != null &&
+                  now.difference(_lastWebRebuildTime!).inMilliseconds < 500) {
+                return;
+              }
+              _lastWebRebuildTime = now;
             }
             _safeSetState(() {});
           },
@@ -1465,42 +1546,31 @@ class _CruiseModePageState extends State<CruiseModePage> {
       }
     }
 
-    // Kamera folgt User-Position + Rotation wenn Camera-Lock aktiv.
-    // WICHTIG: Kamera-Bewegung IMMER ausführen (nicht vom Rebuild-Throttle blockieren),
-    // damit die Karte auf Web flüssig mitdreht und der Position folgt.
+    // ── Kamera-Bewegung ──────────────────────────────────────────────────────
+    // Web: Animierte Interpolation (60fps smooth), Native: direkter Move
     if (_isCameraLocked && _mapReady) {
-      try {
-        _mapController.moveAndRotate(
-          LatLng(effectivePosition.latitude, effectivePosition.longitude),
-          16.0,
-          -_userHeading,
-        );
-      } catch (e) {
-        debugPrint('[CruiseMode] Kamera-Folgen fehlgeschlagen: $e');
-      }
+      _animateCameraTo(
+        effectivePosition.latitude,
+        effectivePosition.longitude,
+        _userHeading,
+      );
     }
 
-    // User-Position als Marker rendern (MarkerLayer in _buildMapWidget)
-    // Web: setState maximal alle 200ms aufrufen — CanvasKit repaint ist teuer.
-    // Native: kein Throttle (GPU-beschleunigt, kein Performance-Problem).
+    // ── UI-Rebuild Throttling ───────────────────────────────────────────────
+    // Marker-Position + Route-Start immer intern aktualisieren.
+    // setState nur wenn genug Zeit vergangen (Web: 300ms, Native: sofort).
+    _userPosition = LatLng(effectivePosition.latitude, effectivePosition.longitude);
+    if (_routeLatLngs.isNotEmpty) {
+      _routeLatLngs[0] = LatLng(effectivePosition.latitude, effectivePosition.longitude);
+    }
+
     final now = DateTime.now();
     final skipRebuild = kIsWeb &&
         _lastWebRebuildTime != null &&
-        now.difference(_lastWebRebuildTime!).inMilliseconds < 200;
+        now.difference(_lastWebRebuildTime!).inMilliseconds < 300;
     if (!skipRebuild) {
       _lastWebRebuildTime = now;
-      _safeSetState(() {
-        _userPosition = LatLng(effectivePosition.latitude, effectivePosition.longitude);
-        if (_routeLatLngs.isNotEmpty) {
-          _routeLatLngs[0] = LatLng(effectivePosition.latitude, effectivePosition.longitude);
-        }
-      });
-    } else {
-      // State aktualisieren ohne Rebuild (für nachfolgende Berechnungen)
-      _userPosition = LatLng(effectivePosition.latitude, effectivePosition.longitude);
-      if (_routeLatLngs.isNotEmpty) {
-        _routeLatLngs[0] = LatLng(effectivePosition.latitude, effectivePosition.longitude);
-      }
+      _safeSetState(() {});
     }
 
     if (!_isRouteConfirmed || _fullRouteCoordinates.length < 2) return;
@@ -1556,8 +1626,8 @@ class _CruiseModePageState extends State<CruiseModePage> {
 
       // Route in Schritten neu zeichnen (Sliding Window, 3km voraus)
       // Web: größere Schwellen um teure CanvasKit-Repaints zu reduzieren
-      final indexThreshold = kIsWeb ? _routeRedrawIndexThreshold * 2 : _routeRedrawIndexThreshold;
-      final distThreshold = kIsWeb ? _routeRedrawDistanceMeters * 2 : _routeRedrawDistanceMeters;
+      const indexThreshold = kIsWeb ? _routeRedrawIndexThreshold * 2 : _routeRedrawIndexThreshold;
+      const distThreshold = kIsWeb ? _routeRedrawDistanceMeters * 2 : _routeRedrawDistanceMeters;
       final redrawByIndex =
           _currentRouteIndex - _lastDrawnRouteIndex >= indexThreshold;
       final redrawByDistance =

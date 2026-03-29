@@ -1,88 +1,280 @@
 import 'dart:math' as math;
 import 'package:geolocator/geolocator.dart' as geo;
 
-/// Glättet GPS-Positionen auf Web-Plattformen mittels exponentieller Gewichtung
-/// und berechnet Heading aus aufeinanderfolgenden Positionen.
+/// Fortgeschrittener GPS-Smoother für Web-Plattformen.
 ///
-/// Browser-Geolocation liefert oft kein brauchbares Heading (0 oder NaN).
-/// Dieser Smoother berechnet die Fahrtrichtung selbst aus der Positionshistorie
-/// und interpoliert Position + Heading für flüssige Darstellung.
+/// Nutzt einen vereinfachten Kalman-artigen Filter mit Velocity-Prediction:
+/// 1. Position wird anhand der letzten Geschwindigkeit vorhergesagt (Prediction)
+/// 2. GPS-Messung wird mit Accuracy gewichtet eingerechnet (Correction)
+/// 3. Heading wird aus Bewegungsrichtung berechnet (Browser liefert kein brauchbares)
+/// 4. Zwischen GPS-Updates wird die Position per Timer interpoliert
 class WebPositionSmoother {
   WebPositionSmoother({
-    this.positionAlpha = 0.35,
-    this.headingAlpha = 0.25,
-    this.minMovementMeters = 2.0,
+    this.minMovementMeters = 1.5,
     this.maxJumpMeters = 500.0,
     this.minHeadingDistanceMeters = 3.0,
+    this.headingSmoothingFactor = 0.3,
+    this.processNoise = 2.0,
   });
 
-  /// Gewichtungsfaktor für neue Position (0–1). Höher = reaktiver, niedriger = glatter.
-  final double positionAlpha;
-
-  /// Gewichtungsfaktor für neues Heading (0–1).
-  final double headingAlpha;
-
-  /// Minimale Distanz in Metern, ab der ein Update als "echte Bewegung" gilt.
+  /// Minimale Distanz für Rebuild-Trigger (in Metern).
   final double minMovementMeters;
 
-  /// Maximale Distanz, bei der ein Sprung akzeptiert wird (darüber: Reset).
+  /// Maximale akzeptierte Distanz zwischen Updates (darüber: Reset/Teleport).
   final double maxJumpMeters;
 
-  /// Minimale Distanz zwischen zwei Positionen, ab der ein neues Heading berechnet wird.
-  /// Verhindert Heading-Flackern bei GPS-Jitter im Stillstand.
+  /// Minimale Distanz für Heading-Berechnung (unter diesem Wert: GPS-Jitter).
   final double minHeadingDistanceMeters;
 
-  geo.Position? _smoothedPosition;
+  /// Smoothing-Faktor für Heading (0–1, höher = reaktiver).
+  final double headingSmoothingFactor;
+
+  /// Prozessrauschen für den Kalman-Filter (höher = vertraut GPS mehr).
+  final double processNoise;
+
+  // ── Kalman State ──────────────────────────────────────────────────────────
+  double? _lat;
+  double? _lng;
+  double _vLat = 0.0; // Geschwindigkeit in Breitengrad/Sekunde
+  double _vLng = 0.0; // Geschwindigkeit in Längengrad/Sekunde
+  double _pLat = 10.0; // Unsicherheit Position Lat
+  double _pLng = 10.0; // Unsicherheit Position Lng
+  double _pvLat = 10.0; // Unsicherheit Velocity Lat
+  double _pvLng = 10.0; // Unsicherheit Velocity Lng
+  DateTime? _lastTimestamp;
+
+  // ── Heading State ─────────────────────────────────────────────────────────
   double _smoothedHeading = 0.0;
   bool _hasValidHeading = false;
+  double? _lastHeadingLat;
+  double? _lastHeadingLng;
 
-  // Letzte Position für Heading-Berechnung (ungeglättet, für korrekte Richtung)
-  double? _lastRawLat;
-  double? _lastRawLng;
+  // ── Output ────────────────────────────────────────────────────────────────
+  geo.Position? _lastOutput;
 
-  /// Gibt die aktuell geglättete Position zurück (oder null vor dem ersten Update).
-  geo.Position? get current => _smoothedPosition;
+  /// Aktuell geglättete Position (null vor erstem Update).
+  geo.Position? get current => _lastOutput;
 
-  /// Gibt das geglättete Heading zurück.
+  /// Geglättetes Heading in Grad (0–360, Nord=0).
   double get heading => _smoothedHeading;
 
   /// Ob bereits ein valides Heading berechnet wurde.
   bool get hasValidHeading => _hasValidHeading;
 
-  /// Verarbeitet eine neue rohe GPS-Position und gibt die geglättete zurück.
-  /// Gibt `null` zurück, wenn das Update zu klein ist und kein Rebuild nötig.
+  /// Aktuelle geglättete Latitude (für Animation).
+  double get lat => _lat ?? 0.0;
+
+  /// Aktuelle geglättete Longitude (für Animation).
+  double get lng => _lng ?? 0.0;
+
+  /// Aktuelle Velocity in lat/s (für Prediction bei Animation).
+  double get velocityLat => _vLat;
+
+  /// Aktuelle Velocity in lng/s (für Prediction bei Animation).
+  double get velocityLng => _vLng;
+
+  /// Verarbeitet eine neue rohe GPS-Position.
+  /// Gibt die geglättete Position zurück, oder `null` wenn kein Rebuild nötig.
   geo.Position? update(geo.Position raw) {
-    final prev = _smoothedPosition;
+    final now = raw.timestamp;
 
-    // Heading aus Positions-Differenz berechnen (zuverlässiger als Browser-Heading)
-    _updateComputedHeading(raw);
+    // ── Heading aus Positionsverlauf berechnen ──────────────────────────────
+    _updateHeading(raw);
 
-    // Erster Wert: direkt übernehmen
-    if (prev == null) {
-      _smoothedPosition = _withHeading(raw, _smoothedHeading);
-      return _smoothedPosition;
+    // ── Erster Wert: State initialisieren ───────────────────────────────────
+    if (_lat == null || _lastTimestamp == null) {
+      _lat = raw.latitude;
+      _lng = raw.longitude;
+      _vLat = 0.0;
+      _vLng = 0.0;
+      _lastTimestamp = now;
+      _lastOutput = _buildPosition(raw, _lat!, _lng!);
+      return _lastOutput;
+    }
+
+    // ── Delta-Time berechnen ────────────────────────────────────────────────
+    final dt = now.difference(_lastTimestamp!).inMilliseconds / 1000.0;
+    if (dt <= 0) return null; // Doppeltes Event ignorieren
+    _lastTimestamp = now;
+
+    // ── Teleport-Check ──────────────────────────────────────────────────────
+    final jumpDist = geo.Geolocator.distanceBetween(
+      _lat!, _lng!, raw.latitude, raw.longitude,
+    );
+    if (jumpDist > maxJumpMeters) {
+      _lat = raw.latitude;
+      _lng = raw.longitude;
+      _vLat = 0.0;
+      _vLng = 0.0;
+      _pLat = 10.0;
+      _pLng = 10.0;
+      _pvLat = 10.0;
+      _pvLng = 10.0;
+      _lastOutput = _buildPosition(raw, _lat!, _lng!);
+      return _lastOutput;
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // KALMAN PREDICT: Position anhand Velocity vorhersagen
+    // ════════════════════════════════════════════════════════════════════════
+    final predictedLat = _lat! + _vLat * dt;
+    final predictedLng = _lng! + _vLng * dt;
+
+    // Unsicherheit wächst mit der Zeit (Prozessrauschen)
+    final q = processNoise * dt * dt;
+    _pLat += q + _pvLat * dt * dt;
+    _pLng += q + _pvLng * dt * dt;
+    _pvLat += q * 0.5;
+    _pvLng += q * 0.5;
+
+    // ════════════════════════════════════════════════════════════════════════
+    // KALMAN UPDATE: GPS-Messung einrechnen (gewichtet nach Accuracy)
+    // ════════════════════════════════════════════════════════════════════════
+    // Messrauschen: accuracy in Meter → in Grad umrechnen (grobe Näherung)
+    final accuracyDeg = (raw.accuracy.isFinite && raw.accuracy > 0)
+        ? raw.accuracy / 111_000.0 // ~111km pro Grad
+        : 0.0001; // Fallback ~11m
+    final rLat = accuracyDeg * accuracyDeg;
+    final rLng = rLat;
+
+    // Kalman Gain: wie viel vertrauen wir der Messung?
+    final kLat = _pLat / (_pLat + rLat);
+    final kLng = _pLng / (_pLng + rLng);
+
+    // Position korrigieren
+    _lat = predictedLat + kLat * (raw.latitude - predictedLat);
+    _lng = predictedLng + kLng * (raw.longitude - predictedLng);
+
+    // Velocity aus Innovation ableiten (wie stark weicht GPS von Prediction ab)
+    if (dt > 0.05) {
+      final kvLat = _pvLat / (_pvLat + rLat * 2);
+      final kvLng = _pvLng / (_pvLng + rLng * 2);
+      final innovLat = raw.latitude - predictedLat;
+      final innovLng = raw.longitude - predictedLng;
+      _vLat = _vLat + kvLat * (innovLat / dt - _vLat) * 0.5;
+      _vLng = _vLng + kvLng * (innovLng / dt - _vLng) * 0.5;
+      _pvLat *= (1 - kvLat);
+      _pvLng *= (1 - kvLng);
+    }
+
+    // Unsicherheit nach Update reduzieren
+    _pLat *= (1 - kLat);
+    _pLng *= (1 - kLng);
+
+    // ════════════════════════════════════════════════════════════════════════
+    // Output: Rebuild nur wenn sichtbare Bewegung
+    // ════════════════════════════════════════════════════════════════════════
+    final prev = _lastOutput;
+    if (prev != null) {
+      final movedMeters = geo.Geolocator.distanceBetween(
+        prev.latitude, prev.longitude, _lat!, _lng!,
+      );
+      if (movedMeters < minMovementMeters) {
+        return null; // Zu wenig Bewegung → kein visuelles Update
+      }
+    }
+
+    _lastOutput = _buildPosition(raw, _lat!, _lng!);
+    return _lastOutput;
+  }
+
+  /// Gibt eine vorhergesagte Position für den Zeitpunkt `now` zurück,
+  /// basierend auf dem letzten Kalman-State + Velocity.
+  /// Für smooth Animation zwischen GPS-Updates.
+  ({double lat, double lng, double heading}) predict(DateTime now) {
+    if (_lat == null || _lastTimestamp == null) {
+      return (lat: 0.0, lng: 0.0, heading: _smoothedHeading);
+    }
+    final dt = now.difference(_lastTimestamp!).inMilliseconds / 1000.0;
+    // Prediction maximal 2 Sekunden voraus (danach zu ungenau)
+    final clampedDt = dt.clamp(0.0, 2.0);
+    return (
+      lat: _lat! + _vLat * clampedDt,
+      lng: _lng! + _vLng * clampedDt,
+      heading: _smoothedHeading,
+    );
+  }
+
+  /// Setzt den Smoother zurück (z.B. bei Navigation-Start).
+  void reset() {
+    _lat = null;
+    _lng = null;
+    _vLat = 0.0;
+    _vLng = 0.0;
+    _pLat = 10.0;
+    _pLng = 10.0;
+    _pvLat = 10.0;
+    _pvLng = 10.0;
+    _lastTimestamp = null;
+    _smoothedHeading = 0.0;
+    _hasValidHeading = false;
+    _lastHeadingLat = null;
+    _lastHeadingLng = null;
+    _lastOutput = null;
+  }
+
+  // ── Heading-Berechnung ───────────────────────────────────────────────────
+
+  void _updateHeading(geo.Position raw) {
+    final prevLat = _lastHeadingLat;
+    final prevLng = _lastHeadingLng;
+
+    if (prevLat == null || prevLng == null) {
+      _lastHeadingLat = raw.latitude;
+      _lastHeadingLng = raw.longitude;
+      // Browser-Heading als Fallback nutzen (falls brauchbar)
+      final bh = raw.heading;
+      if (bh.isFinite && bh > 0 && bh < 360) {
+        _smoothedHeading = bh;
+        _hasValidHeading = true;
+      }
+      return;
     }
 
     final distance = geo.Geolocator.distanceBetween(
-      prev.latitude,
-      prev.longitude,
-      raw.latitude,
-      raw.longitude,
+      prevLat, prevLng, raw.latitude, raw.longitude,
     );
 
-    // Sprung zu groß (Teleport/GPS-Reset) → Position direkt übernehmen
-    if (distance > maxJumpMeters) {
-      _smoothedPosition = _withHeading(raw, _smoothedHeading);
-      return _smoothedPosition;
+    if (distance >= minHeadingDistanceMeters) {
+      final computed = _calculateBearing(
+        prevLat, prevLng, raw.latitude, raw.longitude,
+      );
+
+      if (_hasValidHeading) {
+        _smoothedHeading = _lerpAngle(
+          _smoothedHeading, computed, headingSmoothingFactor,
+        );
+      } else {
+        _smoothedHeading = computed;
+        _hasValidHeading = true;
+      }
+
+      _lastHeadingLat = raw.latitude;
+      _lastHeadingLng = raw.longitude;
     }
+  }
 
-    // Position glätten
-    final smoothLat = prev.latitude + (raw.latitude - prev.latitude) * positionAlpha;
-    final smoothLng = prev.longitude + (raw.longitude - prev.longitude) * positionAlpha;
+  double _calculateBearing(double lat1, double lng1, double lat2, double lng2) {
+    final lat1R = lat1 * math.pi / 180;
+    final lat2R = lat2 * math.pi / 180;
+    final dLng = (lng2 - lng1) * math.pi / 180;
+    final y = math.sin(dLng) * math.cos(lat2R);
+    final x = math.cos(lat1R) * math.sin(lat2R) -
+        math.sin(lat1R) * math.cos(lat2R) * math.cos(dLng);
+    return (math.atan2(y, x) * 180 / math.pi + 360) % 360;
+  }
 
-    final smoothed = geo.Position(
-      latitude: smoothLat,
-      longitude: smoothLng,
+  double _lerpAngle(double from, double to, double t) {
+    var diff = (to - from) % 360;
+    if (diff > 180) diff -= 360;
+    if (diff < -180) diff += 360;
+    return (from + diff * t) % 360;
+  }
+
+  geo.Position _buildPosition(geo.Position raw, double lat, double lng) {
+    return geo.Position(
+      latitude: lat,
+      longitude: lng,
       timestamp: raw.timestamp,
       accuracy: raw.accuracy,
       altitude: raw.altitude,
@@ -94,112 +286,5 @@ class WebPositionSmoother {
       floor: raw.floor,
       isMocked: raw.isMocked,
     );
-    _smoothedPosition = smoothed;
-
-    // Unter Mindest-Bewegung: kein visuelles Update nötig
-    final movedMeters = geo.Geolocator.distanceBetween(
-      prev.latitude,
-      prev.longitude,
-      smoothLat,
-      smoothLng,
-    );
-    if (movedMeters < minMovementMeters) {
-      return null; // Signal: kein Rebuild nötig
-    }
-
-    return smoothed;
-  }
-
-  /// Setzt den Smoother zurück (z.B. bei Navigation-Start).
-  void reset() {
-    _smoothedPosition = null;
-    _smoothedHeading = 0.0;
-    _hasValidHeading = false;
-    _lastRawLat = null;
-    _lastRawLng = null;
-  }
-
-  // ── Heading-Berechnung ───────────────────────────────────────────────────
-
-  /// Berechnet das Heading aus der Differenz zwischen aktueller und letzter Position.
-  /// Nutzt die rohen (ungeglätteten) Koordinaten für korrekte Richtung.
-  void _updateComputedHeading(geo.Position raw) {
-    final prevLat = _lastRawLat;
-    final prevLng = _lastRawLng;
-
-    if (prevLat == null || prevLng == null) {
-      _lastRawLat = raw.latitude;
-      _lastRawLng = raw.longitude;
-      // Beim ersten Punkt: Browser-Heading als Fallback nutzen (falls brauchbar)
-      final browserHeading = raw.heading;
-      if (browserHeading.isFinite && browserHeading > 0 && browserHeading < 360) {
-        _smoothedHeading = browserHeading;
-        _hasValidHeading = true;
-      }
-      return;
-    }
-
-    final distance = geo.Geolocator.distanceBetween(
-      prevLat, prevLng, raw.latitude, raw.longitude,
-    );
-
-    // Nur Heading berechnen wenn genug Distanz zurückgelegt (sonst GPS-Jitter)
-    if (distance >= minHeadingDistanceMeters) {
-      final computedHeading = _calculateBearing(
-        prevLat, prevLng, raw.latitude, raw.longitude,
-      );
-
-      if (_hasValidHeading) {
-        // Bestehendes Heading smooth interpolieren
-        _smoothedHeading = _lerpAngle(_smoothedHeading, computedHeading, headingAlpha);
-      } else {
-        // Erstes valides Heading: direkt übernehmen
-        _smoothedHeading = computedHeading;
-        _hasValidHeading = true;
-      }
-
-      _lastRawLat = raw.latitude;
-      _lastRawLng = raw.longitude;
-    }
-  }
-
-  /// Berechnet den Bearing (Richtung) von Punkt A nach Punkt B in Grad (0–360, Nord=0).
-  double _calculateBearing(double lat1, double lng1, double lat2, double lng2) {
-    final lat1Rad = lat1 * math.pi / 180;
-    final lat2Rad = lat2 * math.pi / 180;
-    final dLng = (lng2 - lng1) * math.pi / 180;
-
-    final y = math.sin(dLng) * math.cos(lat2Rad);
-    final x = math.cos(lat1Rad) * math.sin(lat2Rad) -
-        math.sin(lat1Rad) * math.cos(lat2Rad) * math.cos(dLng);
-
-    final bearing = math.atan2(y, x) * 180 / math.pi;
-    return (bearing + 360) % 360; // Normalisieren auf 0–360
-  }
-
-  /// Position mit überschriebenem Heading zurückgeben.
-  geo.Position _withHeading(geo.Position p, double heading) {
-    return geo.Position(
-      latitude: p.latitude,
-      longitude: p.longitude,
-      timestamp: p.timestamp,
-      accuracy: p.accuracy,
-      altitude: p.altitude,
-      altitudeAccuracy: p.altitudeAccuracy,
-      heading: heading,
-      headingAccuracy: p.headingAccuracy,
-      speed: p.speed,
-      speedAccuracy: p.speedAccuracy,
-      floor: p.floor,
-      isMocked: p.isMocked,
-    );
-  }
-
-  /// Zirkuläre lineare Interpolation für Winkel (0–360°).
-  double _lerpAngle(double from, double to, double t) {
-    var diff = (to - from) % 360;
-    if (diff > 180) diff -= 360;
-    if (diff < -180) diff += 360;
-    return (from + diff * t) % 360;
   }
 }

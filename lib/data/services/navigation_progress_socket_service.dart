@@ -125,19 +125,19 @@ class NavigationProgressSocketService {
 
   void _emit(geo.Position position) {
     final last = _lastEmittedPosition;
-    if (last != null) {
+
+    // Native: Zwischenpunkte für flüssige Routenlinie (bis zu 3 Steps).
+    // Web: KEINE Interpolation hier — der WebPositionSmoother (Kalman-Filter)
+    // + Kamera-Animation übernehmen die Glättung. Zusätzliche Events würden
+    // nur unnötige _onLocationUpdate-Durchläufe verursachen.
+    if (!kIsWeb && last != null) {
       final distance = geo.Geolocator.distanceBetween(
         last.latitude,
         last.longitude,
         position.latitude,
         position.longitude,
       );
-
-      // Zwischenpunkte glätten sichtbare Sprünge der Routenlinie.
-      // Web: max 1 Zwischenpunkt (weniger Events → weniger CanvasKit-Repaints).
-      // Native: bis zu 3 Zwischenpunkte für maximale Glätte.
-      final maxSteps = kIsWeb ? 1 : 3;
-      final interpolationSteps = (distance / 4.0).floor().clamp(0, maxSteps);
+      final interpolationSteps = (distance / 4.0).floor().clamp(0, 3);
       if (interpolationSteps > 0) {
         for (var i = 1; i <= interpolationSteps; i++) {
           final t = i / (interpolationSteps + 1);
