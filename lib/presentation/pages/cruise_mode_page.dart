@@ -140,7 +140,7 @@ class _CruiseModePageState extends State<CruiseModePage>
   // Web-only: GPS-Smoother für flüssige Positionsdarstellung (Kalman-Filter)
   final WebPositionSmoother _webSmoother = WebPositionSmoother();
 
-  // Web-only: Animierte Kamera-Bewegung zwischen GPS-Updates
+  // Animierte Kamera-Bewegung zwischen GPS-Updates (alle Plattformen)
   AnimationController? _cameraAnimController;
   double _camFromLat = 0.0;
   double _camFromLng = 0.0;
@@ -148,6 +148,7 @@ class _CruiseModePageState extends State<CruiseModePage>
   double _camToLng = 0.0;
   double _camFromHeading = 0.0;
   double _camToHeading = 0.0;
+  double _lastCameraHeading = 0.0; // Für Bearing-Dead-Zone (< 5° ignorieren)
 
   // ──────────────────────────────────────────────────────────────────────────
 
@@ -158,13 +159,11 @@ class _CruiseModePageState extends State<CruiseModePage>
   @override
   void initState() {
     super.initState();
-    // Web: Animierte Kamera-Bewegung zwischen GPS-Updates (60fps Interpolation)
-    if (kIsWeb) {
-      _cameraAnimController = AnimationController(
-        vsync: this,
-        duration: const Duration(milliseconds: 800),
-      )..addListener(_onCameraAnimationTick);
-    }
+    // Animierte Kamera-Bewegung zwischen GPS-Updates (alle Plattformen, 60fps)
+    _cameraAnimController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 250),
+    )..addListener(_onCameraAnimationTick);
     if (widget.initialRoute != null) {
       WidgetsBinding.instance.addPostFrameCallback(
         (_) => _loadSavedRoute(widget.initialRoute!),
@@ -197,7 +196,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     super.dispose();
   }
 
-  // ── Web: Smooth Kamera-Animation (60fps zwischen GPS-Updates) ─────────
+  // ── Smooth Kamera-Animation (60fps zwischen GPS-Updates) ───────────────
   void _onCameraAnimationTick() {
     final controller = _cameraAnimController;
     if (controller == null || !_isCameraLocked || !_mapReady) return;
@@ -207,22 +206,30 @@ class _CruiseModePageState extends State<CruiseModePage>
     final lng = _camFromLng + (_camToLng - _camFromLng) * t;
     final heading = _lerpAngleDeg(_camFromHeading, _camToHeading, t);
 
+    // Forward-Offset: Kartenzentrum ~100m in Fahrtrichtung verschieben,
+    // damit der Fahrer mehr Straße vor sich sieht (Marker im unteren Drittel).
+    final offsetLat = lat + _forwardOffsetLat(heading);
+    final offsetLng = lng + _forwardOffsetLng(heading);
+
     try {
-      _mapController.moveAndRotate(LatLng(lat, lng), 16.0, -heading);
+      _mapController.moveAndRotate(
+        LatLng(offsetLat, offsetLng), 16.5, -heading,
+      );
     } catch (_) {}
   }
 
   /// Startet eine animierte Kamera-Bewegung von der aktuellen zur neuen Position.
   void _animateCameraTo(double lat, double lng, double heading) {
     final controller = _cameraAnimController;
-    if (controller == null) {
-      // Fallback (native): direkter Jump
-      if (_isCameraLocked && _mapReady) {
-        try {
-          _mapController.moveAndRotate(LatLng(lat, lng), 16.0, -heading);
-        } catch (_) {}
-      }
-      return;
+    if (controller == null) return;
+
+    // Bearing-Dead-Zone: Heading-Änderungen unter 5° ignorieren (GPS-Rauschen)
+    var effectiveHeading = heading;
+    final headingDelta = _angleDiff(_lastCameraHeading, heading).abs();
+    if (headingDelta < 5.0) {
+      effectiveHeading = _lastCameraHeading;
+    } else {
+      _lastCameraHeading = heading;
     }
 
     _camFromLat = _camToLat;
@@ -230,13 +237,13 @@ class _CruiseModePageState extends State<CruiseModePage>
     _camFromHeading = _camToHeading;
     _camToLat = lat;
     _camToLng = lng;
-    _camToHeading = heading;
+    _camToHeading = effectiveHeading;
 
     // Wenn erste Animation: From = To (kein Sprung)
     if (_camFromLat == 0.0 && _camFromLng == 0.0) {
       _camFromLat = lat;
       _camFromLng = lng;
-      _camFromHeading = heading;
+      _camFromHeading = effectiveHeading;
     }
 
     controller.forward(from: 0.0);
@@ -248,6 +255,24 @@ class _CruiseModePageState extends State<CruiseModePage>
     if (diff > 180) diff -= 360;
     if (diff < -180) diff += 360;
     return (from + diff * t) % 360;
+  }
+
+  /// Kleinster Winkelunterschied (mit Vorzeichen, -180..+180).
+  static double _angleDiff(double from, double to) {
+    var diff = (to - from) % 360;
+    if (diff > 180) diff -= 360;
+    if (diff < -180) diff += 360;
+    return diff;
+  }
+
+  /// Forward-Offset: ~100m nach Norden in Breitengrad-Grad.
+  static double _forwardOffsetLat(double headingDeg) {
+    return math.cos(headingDeg * math.pi / 180) * 0.0009; // ~100m
+  }
+
+  /// Forward-Offset: ~100m nach Osten in Längengrad-Grad.
+  static double _forwardOffsetLng(double headingDeg) {
+    return math.sin(headingDeg * math.pi / 180) * 0.0012; // ~100m (breitenabhängig)
   }
 
   void _handleRouteModeChanged(bool isRoundTrip) {
@@ -784,8 +809,8 @@ class _CruiseModePageState extends State<CruiseModePage>
                   _userLocation!.latitude,
                   _userLocation!.longitude,
                 ),
-                width: 60,
-                height: 60,
+                width: 80,
+                height: 80,
                 child: _buildAppleLocationDot(_userHeading),
               ),
             ],
@@ -796,8 +821,8 @@ class _CruiseModePageState extends State<CruiseModePage>
             markers: [
               Marker(
                 point: _userPosition!,
-                width: 60,
-                height: 60,
+                width: 80,
+                height: 80,
                 child: _buildAppleLocationDot(_userHeading),
               ),
             ],
@@ -918,48 +943,65 @@ class _CruiseModePageState extends State<CruiseModePage>
     );
   }
 
-  /// Apple-Style Standort-Punkt: blauer Kreis mit animiertem Heading-Kegel.
+  /// Apple-Maps-Style Navigations-Marker:
+  /// Blauer Richtungspfeil + Genauigkeits-Pulse + weißer Ring + blauer Kern.
   Widget _buildAppleLocationDot(double headingDegrees) {
-    return Stack(
-      alignment: Alignment.center,
-      children: [
-        // Heading-Kegel (smooth animiert)
-        // Web: kürzere Animation (weniger Frames), schnellere Reaktion
-        AnimatedRotation(
-          turns: headingDegrees / 360.0,
-          duration: const Duration(milliseconds: kIsWeb ? 200 : 400),
-          curve: Curves.easeOutCubic,
-          child: CustomPaint(
-            size: const Size(60, 60),
-            painter: _HeadingConePainter(),
-          ),
-        ),
-        // Weißer Ring mit Schatten
-        Container(
-          width: 22,
-          height: 22,
-          decoration: const BoxDecoration(
-            color: Colors.white,
-            shape: BoxShape.circle,
-            boxShadow: [
-              BoxShadow(
-                color: Color(0x50000000),
-                blurRadius: 6,
-                spreadRadius: 1,
+    return SizedBox(
+      width: 80,
+      height: 80,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          // Äußerer Genauigkeits-Pulse (halbtransparenter Ring)
+          Container(
+            width: 52,
+            height: 52,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: const Color(0xFF007AFF).withValues(alpha: 0.12),
+              border: Border.all(
+                color: const Color(0xFF007AFF).withValues(alpha: 0.25),
+                width: 1.5,
               ),
-            ],
+            ),
           ),
-        ),
-        // Blauer Kern
-        Container(
-          width: 15,
-          height: 15,
-          decoration: const BoxDecoration(
-            color: Color(0xFF007AFF),
-            shape: BoxShape.circle,
+          // Richtungspfeil (dreht sich smooth mit Heading)
+          AnimatedRotation(
+            turns: headingDegrees / 360.0,
+            duration: const Duration(milliseconds: 150),
+            curve: Curves.easeOutCubic,
+            child: CustomPaint(
+              size: const Size(80, 80),
+              painter: _NavigationArrowPainter(),
+            ),
           ),
-        ),
-      ],
+          // Weißer Ring mit Schatten
+          Container(
+            width: 22,
+            height: 22,
+            decoration: const BoxDecoration(
+              color: Colors.white,
+              shape: BoxShape.circle,
+              boxShadow: [
+                BoxShadow(
+                  color: Color(0x50000000),
+                  blurRadius: 6,
+                  spreadRadius: 1,
+                ),
+              ],
+            ),
+          ),
+          // Blauer Kern
+          Container(
+            width: 15,
+            height: 15,
+            decoration: const BoxDecoration(
+              color: Color(0xFF007AFF),
+              shape: BoxShape.circle,
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -2316,25 +2358,34 @@ class _CruiseModePageState extends State<CruiseModePage>
   }
 }
 
-/// Apple-Style Heading-Kegel: halbtransparenter blauer Fächer zeigt Blickrichtung.
-class _HeadingConePainter extends CustomPainter {
+/// Apple-Maps-Style Navigations-Pfeil: Blauer Tropfen/Pfeil zeigt Fahrtrichtung.
+class _NavigationArrowPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = const Color(0xFF007AFF).withValues(alpha: 0.3)
-      ..style = PaintingStyle.fill;
-
     final cx = size.width / 2;
     final cy = size.height / 2;
 
-    // Breiter Fächer nach oben (Blickrichtung)
-    final p = ui.Path()
-      ..moveTo(cx, cy)
-      ..lineTo(cx - 14, cy - 28)
-      ..quadraticBezierTo(cx, cy - 35, cx + 14, cy - 28)
+    // Pfeil-Spitze (zeigt nach oben = Fahrtrichtung)
+    final arrowPaint = Paint()
+      ..color = const Color(0xFF007AFF)
+      ..style = PaintingStyle.fill;
+
+    final arrow = ui.Path()
+      ..moveTo(cx, cy - 32) // Spitze oben
+      ..lineTo(cx - 10, cy - 12) // Links unten
+      ..quadraticBezierTo(cx, cy - 16, cx + 10, cy - 12) // Kurve unten
       ..close();
 
-    canvas.drawPath(p, paint);
+    // Schatten für den Pfeil
+    canvas.drawShadow(arrow, const Color(0x60000000), 3.0, false);
+    canvas.drawPath(arrow, arrowPaint);
+
+    // Weißer Rand um den Pfeil für bessere Sichtbarkeit
+    final borderPaint = Paint()
+      ..color = const Color(0xCCFFFFFF)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.5;
+    canvas.drawPath(arrow, borderPaint);
   }
 
   @override
