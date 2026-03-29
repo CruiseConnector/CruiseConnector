@@ -343,6 +343,31 @@ void main() {
           verify(mockInvoker.invoke(captureAny)).captured.single
               as Map<String, dynamic>;
       expect(captured['mode'], 'Standard');
+      expect(captured['avoid_highways'], isFalse);
+      expect(captured.containsKey('targetDistance'), isFalse);
+      expect(captured.containsKey('detour_level'), isFalse);
+      expect(captured.containsKey('detour_factor'), isFalse);
+    });
+
+    test('avoidHighways = true → highway flag wird mitgesendet', () async {
+      when(mockInvoker.invoke(any)).thenAnswer(
+        (_) async =>
+            _buildRouteResponse(distanceMeters: 20000, durationSeconds: 1800),
+      );
+
+      await service.generatePointToPoint(
+        startPosition: _munich(),
+        destinationLat: 47.8,
+        destinationLng: 12.0,
+        mode: 'Sport Mode',
+        scenic: false,
+        avoidHighways: true,
+      );
+
+      final captured =
+          verify(mockInvoker.invoke(captureAny)).captured.single
+              as Map<String, dynamic>;
+      expect(captured['avoid_highways'], isTrue);
       expect(captured.containsKey('targetDistance'), isFalse);
       expect(captured.containsKey('detour_level'), isFalse);
       expect(captured.containsKey('detour_factor'), isFalse);
@@ -390,6 +415,34 @@ void main() {
                 as Map<String, dynamic>;
         expect(captured['targetDistance'], isNotNull);
         expect(captured['randomSeed'], 2);
+      },
+    );
+
+    test(
+      'scenic + avoidHighways → Detour-Parameter bleiben erhalten',
+      () async {
+        when(mockInvoker.invoke(any)).thenAnswer(
+          (_) async =>
+              _buildRouteResponse(distanceMeters: 60000, durationSeconds: 4000),
+        );
+
+        await service.generatePointToPoint(
+          startPosition: _munich(),
+          destinationLat: 47.8,
+          destinationLng: 12.0,
+          mode: 'Sport Mode',
+          scenic: true,
+          routeVariant: 3,
+          avoidHighways: true,
+        );
+
+        final captured =
+            verify(mockInvoker.invoke(captureAny)).captured.single
+                as Map<String, dynamic>;
+        expect(captured['avoid_highways'], isTrue);
+        expect(captured['targetDistance'], isNotNull);
+        expect(captured['detour_level'], 3);
+        expect(captured['detour_factor'], isNotNull);
       },
     );
 

@@ -40,6 +40,7 @@ interface RequestData {
     randomSeed?: number
     detour_level?: number
     detour_factor?: number
+    avoid_highways?: boolean
 }
 
 interface DistanceConfig {
@@ -553,6 +554,8 @@ Deno.serve(async (req) => {
             throw new Error("Invalid targetDistance: must be a number between 1 and 500")
         }
 
+        const avoidHighways = body.avoid_highways === true
+
         // --- 2. Fahrstil-Parameter (Mapbox) ---
         // Jeder Stil nutzt unterschiedliche Mapbox-Profile und Exclude-Parameter.
         // Da Mapbox kein "prefer" unterstützt, erzwingen wir Straßentypen durch
@@ -598,6 +601,9 @@ Deno.serve(async (req) => {
 
         if (planning_type === 'Zufall') {
                 if (currentRouteType === 'POINT_TO_POINT') {
+                          // A→B: direkte Straßenroute, optional ohne Autobahnen.
+                          mapboxProfile = 'mapbox/driving';
+                          excludeParams = avoidHighways ? 'motorway,motorway_link,trunk' : '';
                           if (!body.destination_location) {
                                   throw new Error("For 'POINT_TO_POINT' planning, a destination_location is required.")
                           }

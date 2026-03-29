@@ -80,13 +80,15 @@ class RouteService {
     required String mode,
     bool scenic = false,
     int routeVariant = 0,
+    bool avoidHighways = false,
   }) async {
     final normalizedVariant = routeVariant.clamp(0, 3);
-    // Detour-Faktoren drastisch gespreizt für sichtbaren Unterschied auf der Karte
+    // Direkt = normale Straßenroute ohne künstliche Umweg-Parameter.
+    // Scenic-Varianten bekommen zusätzliche Detour-Faktoren für echte Abweichung.
     final detourFactor = switch (normalizedVariant) {
-      1 => 1.35,  // Kleiner Umweg: leichter Bogen
-      2 => 1.75,  // Mittlerer Umweg: deutlicher Bogen
-      3 => 2.20,  // Großer Umweg: komplett anderer Weg
+      1 => 1.35, // Kleiner Umweg: leichter Bogen
+      2 => 1.75, // Mittlerer Umweg: deutlicher Bogen
+      3 => 2.20, // Großer Umweg: komplett anderer Weg
       _ => scenic ? 1.15 : 1.0,
     };
     final detourMinimumExtraKm = switch (normalizedVariant) {
@@ -105,11 +107,11 @@ class RouteService {
           1000.0,
       1.0,
     );
-    // Scenic-Target: wie lang soll die Route mindestens werden
+    // Scenic-Target: wie lang soll die Route mindestens werden.
     final scenicTargetKm = switch (normalizedVariant) {
-      1 => directDistanceKm * 1.30,  // ~30% länger
-      2 => directDistanceKm * 1.65,  // ~65% länger
-      3 => directDistanceKm * 2.15,  // ~115% länger
+      1 => directDistanceKm * 1.30, // ~30% länger
+      2 => directDistanceKm * 1.65, // ~65% länger
+      3 => directDistanceKm * 2.15, // ~115% länger
       _ => scenic ? directDistanceKm * 1.15 : directDistanceKm,
     };
     final targetDistanceKm = math.max(
@@ -129,6 +131,7 @@ class RouteService {
       'route_type': 'POINT_TO_POINT',
       'planning_type': 'Zufall',
       'mode': scenic ? mode : 'Standard',
+      'avoid_highways': avoidHighways,
       'language': 'de',
       // routeVariant: 0=direkt, 1=kleiner, 2=mittlerer, 3=großer Umweg
       if (scenic || normalizedVariant > 0) ...{
