@@ -29,6 +29,7 @@ import 'package:cruise_connect/presentation/widgets/cruise/cruise_navigation_inf
 import 'package:cruise_connect/presentation/widgets/cruise/cruise_setup_card.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/drive_control_panel.dart';
 import 'package:cruise_connect/data/services/gamification_service.dart';
+import 'package:cruise_connect/data/services/route_quality_validator.dart';
 
 class CruiseModePage extends StatefulWidget {
   const CruiseModePage({super.key, this.initialRoute});
@@ -1264,18 +1265,27 @@ class _CruiseModePageState extends State<CruiseModePage>
         );
       }
 
-      // Qualitätsprüfung: Route muss echte Straßengeometrie haben UND
-      // innerhalb des Distanzbandes liegen (±30% als Client-Toleranz)
+      // ── Qualitätsprüfung mit RouteQualityValidator ─────────────────────
+      const validator = RouteQualityValidator();
       final actualKm = result.distanceKm ?? 0;
-      final tooFewPoints = result.coordinates.length < 50 && distance >= 20;
-      final distanceTooFar =
-          actualKm > distance * 1.5 || actualKm < distance * 0.3;
+      final targetKm = _isRoundTrip ? distance.toDouble() : 0.0;
 
-      if ((tooFewPoints || distanceTooFar) && _isRoundTrip) {
+      var quality = validator.validateQuality(
+        coordinates: result.coordinates,
+        isRoundTrip: _isRoundTrip,
+        targetDistanceKm: targetKm,
+        actualDistanceKm: actualKm,
+      );
+
+      // Basis-Check: zu wenige Punkte oder komplett falsche Distanz
+      final tooFewPoints = result.coordinates.length < 50 && distance >= 20;
+
+      // Retry bis zu 3x wenn Qualität schlecht ist (Overlap, U-Turns, Distanz)
+      if ((!quality.passed || tooFewPoints) && _isRoundTrip) {
         debugPrint(
-          '[CruiseMode] Route-Qualität schlecht: ${result.coordinates.length} Punkte, ${actualKm.toStringAsFixed(1)} km (Ziel: $distance km) — bis zu 2 Retries',
+          '[CruiseMode] Route-Qualität schlecht: $quality — bis zu 3 Retries',
         );
-        for (var retry = 0; retry < 2; retry++) {
+        for (var retry = 0; retry < 3; retry++) {
           result = await _routeService.generateRoundTrip(
             startPosition: startPosition,
             targetDistanceKm: distance,
@@ -1284,17 +1294,17 @@ class _CruiseModePageState extends State<CruiseModePage>
             targetLocation: targetLocation,
           );
           final retryKm = result.distanceKm ?? 0;
-          if (result.coordinates.length >= 50 &&
-              retryKm <= distance * 1.5 &&
-              retryKm >= distance * 0.3) {
-            debugPrint(
-              '[CruiseMode] Retry ${retry + 1} erfolgreich: ${result.coordinates.length} Punkte, ${retryKm.toStringAsFixed(1)} km',
-            );
+          quality = validator.validateQuality(
+            coordinates: result.coordinates,
+            isRoundTrip: true,
+            targetDistanceKm: targetKm,
+            actualDistanceKm: retryKm,
+          );
+          if (quality.passed && result.coordinates.length >= 50) {
+            debugPrint('[CruiseMode] Retry ${retry + 1} erfolgreich: $quality');
             break;
           }
-          debugPrint(
-            '[CruiseMode] Retry ${retry + 1} auch schlecht: ${result.coordinates.length} Punkte, ${retryKm.toStringAsFixed(1)} km',
-          );
+          debugPrint('[CruiseMode] Retry ${retry + 1} auch schlecht: $quality');
         }
       }
 

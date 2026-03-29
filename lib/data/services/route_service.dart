@@ -82,16 +82,17 @@ class RouteService {
     int routeVariant = 0,
   }) async {
     final normalizedVariant = routeVariant.clamp(0, 3);
+    // Detour-Faktoren drastisch gespreizt für sichtbaren Unterschied auf der Karte
     final detourFactor = switch (normalizedVariant) {
-      1 => 1.32,
-      2 => 1.62,
-      3 => 1.96,
-      _ => scenic ? 1.12 : 1.0,
+      1 => 1.35,  // Kleiner Umweg: leichter Bogen
+      2 => 1.75,  // Mittlerer Umweg: deutlicher Bogen
+      3 => 2.20,  // Großer Umweg: komplett anderer Weg
+      _ => scenic ? 1.15 : 1.0,
     };
     final detourMinimumExtraKm = switch (normalizedVariant) {
-      1 => 5.0,
-      2 => 12.0,
-      3 => 22.0,
+      1 => 6.0,
+      2 => 15.0,
+      3 => 30.0,
       _ => scenic ? 3.0 : 0.0,
     };
     final directDistanceKm = math.max(
@@ -104,11 +105,12 @@ class RouteService {
           1000.0,
       1.0,
     );
+    // Scenic-Target: wie lang soll die Route mindestens werden
     final scenicTargetKm = switch (normalizedVariant) {
-      1 => directDistanceKm * 1.34,
-      2 => directDistanceKm * 1.68,
-      3 => directDistanceKm * 2.05,
-      _ => scenic ? directDistanceKm * 1.12 : directDistanceKm,
+      1 => directDistanceKm * 1.30,  // ~30% länger
+      2 => directDistanceKm * 1.65,  // ~65% länger
+      3 => directDistanceKm * 2.15,  // ~115% länger
+      _ => scenic ? directDistanceKm * 1.15 : directDistanceKm,
     };
     final targetDistanceKm = math.max(
       scenicTargetKm,

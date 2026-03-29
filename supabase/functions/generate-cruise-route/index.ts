@@ -74,27 +74,34 @@ function calculateDestination(start: Coordinate, distanceKm: number, bearingDegr
 }
 
 function getDistanceConfig(targetDistance: number, mode?: string): DistanceConfig {
-    // ±15% Toleranz um die Zieldistanz — z.B. 50km → 42.5-57.5km
-    const tolerance = 0.15;
+    // ±12% Toleranz (enger als vorher ±15% für bessere Qualität)
+    const tolerance = 0.12;
     const minKm = Math.round(targetDistance * (1 - tolerance));
     const maxKm = Math.round(targetDistance * (1 + tolerance));
 
-    // Radius muss VIEL kleiner sein als die Zieldistanz, weil:
-    // - Straßenrouten sind 1.3-2x länger als Luftlinie
-    // - Bei exclude=motorway,toll werden Routen noch länger (Landstraßen-Umwege)
-    // - 4-5 Waypoints im Kreis erzeugen eine Route ≈ 2*PI*radius * road_factor
-    //
     // Formel: radius = targetDistance / (2 * PI * road_factor)
-    // road_factor: 1.4 normal, 1.8 für Kurvenjagd/Entdecker (keine Autobahn)
-    let roadFactor = 1.4;
-    if (mode === 'Kurvenjagd' || mode === 'Entdecker') {
-        roadFactor = 1.8; // Landstraßen sind deutlich länger
-    } else if (mode === 'Abendrunde') {
-        roadFactor = 1.5; // Stadt-Routing etwas länger
+    // road_factor variiert stark je nach Stil, weil Landstraßen-Routing
+    // deutlich längere Wege erzeugt als Direktverbindungen.
+    let roadFactor: number;
+    switch (mode) {
+        case 'Kurvenjagd':
+            roadFactor = 2.0; // Enge Bergstraßen = sehr lange Umwege
+            break;
+        case 'Entdecker':
+            roadFactor = 1.9; // Abgelegene Straßen = lange Umwege
+            break;
+        case 'Abendrunde':
+            roadFactor = 1.4; // Stadtnah, kurze Wege → größerer Radius nötig
+            break;
+        case 'Sport Mode':
+            roadFactor = 1.6; // Mix aus Landstraße und breiten Straßen
+            break;
+        default:
+            roadFactor = 1.5;
     }
     const radiusKm = targetDistance / (2 * Math.PI * roadFactor);
 
-    console.log(`Distance config: target=${targetDistance}km, radius=${radiusKm.toFixed(1)}km, band=${minKm}-${maxKm}km, roadFactor=${roadFactor}`);
+    console.log(`Distance config: target=${targetDistance}km, radius=${radiusKm.toFixed(1)}km, band=${minKm}-${maxKm}km, roadFactor=${roadFactor}, mode=${mode}`);
     return { radiusKm, minKm, maxKm };
 }
 
@@ -249,22 +256,25 @@ function buildPointToPointScenicWaypoints({
         return [start, destination]
     }
 
+    // Stil-Boost: wie viel Extra-Distanz der Stil zur Route hinzufügt
+    // Kurvenjagd braucht mehr Umweg (enge Straßen = längere Wege)
     const scenicModeBoost = mode === 'Kurvenjagd'
-        ? 0.22
+        ? 0.30
         : mode === 'Entdecker'
-        ? 0.28
+        ? 0.35
         : mode === 'Sport Mode'
-        ? 0.15
+        ? 0.18
         : mode === 'Abendrunde'
-        ? 0.11
+        ? 0.12
         : 0.0
 
+    // Umweg-Boost: drastischer gespreizt für sichtbaren Unterschied
     const detourBoost = detourLevel === 1
-        ? 0.24
+        ? 0.25
         : detourLevel === 2
-        ? 0.45
+        ? 0.55
         : detourLevel >= 3
-        ? 0.68
+        ? 0.85
         : 0.0
 
     const effectiveFactor = Math.max(
@@ -287,39 +297,82 @@ function buildPointToPointScenicWaypoints({
         desiredDistanceKm - directDistanceKm,
     )
 
-    let waypointCount = detourLevel >= 3 || mode === 'Entdecker'
-        ? 4
-        : detourLevel >= 2 || mode === 'Kurvenjagd' || mode === 'Sport Mode'
-        ? 3
-        : 2
-    if (directDistanceKm < 12) waypointCount = Math.min(waypointCount, 3)
+    // Waypoint-Anzahl: Stil + Umweg-Level bestimmen die Komplexität
+    let waypointCount: number;
+    if (detourLevel >= 3) {
+        waypointCount = mode === 'Entdecker' ? 5 : 4;
+    } else if (detourLevel >= 2) {
+        waypointCount = mode === 'Kurvenjagd' ? 4 : 3;
+    } else if (detourLevel >= 1) {
+        waypointCount = mode === 'Entdecker' || mode === 'Kurvenjagd' ? 2 : 1;
+    } else {
+        waypointCount = 2;
+    }
+    if (directDistanceKm < 12) waypointCount = Math.min(waypointCount, 3);
+    if (directDistanceKm < 6) waypointCount = Math.min(waypointCount, 2);
 
+    // Fractions: wo auf der A→B Linie werden die Waypoints platziert
     const fractions = waypointCount === 1
         ? [0.5]
         : waypointCount === 2
-        ? [0.32, 0.74]
+        ? [0.3, 0.7]
         : waypointCount === 3
-        ? [0.2, 0.5, 0.82]
-        : [0.14, 0.36, 0.62, 0.86]
+        ? [0.2, 0.5, 0.8]
+        : waypointCount === 4
+        ? [0.15, 0.38, 0.62, 0.85]
+        : [0.12, 0.3, 0.5, 0.7, 0.88]
 
     const baseBearing = calculateBearing(start, destination)
-    const side = seededUnit(randomSeed + detourLevel + Math.round(directDistanceKm)) >= 0.5 ? 1 : -1
-    const maxOffsetKm = Math.max(8, directDistanceKm * 0.7)
+    // Seite determiniert durch Seed — aber bei Entdecker wechselnd pro WP
+    const baseSide = seededUnit(randomSeed + detourLevel + Math.round(directDistanceKm)) >= 0.5 ? 1 : -1
+
+    // Offset-Limits je nach Umweg-Level (drastischer gespreizt)
+    const maxOffsetKm = Math.max(10, directDistanceKm * 0.8)
     const minOffsetKm = Math.min(
         maxOffsetKm,
-        Math.max(3.5, extraDistanceKm / Math.max(2, waypointCount)),
+        Math.max(4.0, extraDistanceKm / Math.max(2, waypointCount)),
     )
 
     const scenicWaypoints = fractions.map((fraction, index) => {
         const basePoint = interpolateCoordinate(start, destination, fraction)
         const variationSeed = randomSeed + (index + 1) * 17
-        const variation = 0.86 + seededUnit(variationSeed) * 0.32
-        const arcFactor = waypointCount === 1 ? 0.95 : 0.78 + index * 0.18
+        const variation = 0.85 + seededUnit(variationSeed) * 0.35
+
+        // Stilspezifische Offset-Berechnung
+        let arcFactor: number;
+        let angleDrift: number;
+        let side: number;
+
+        switch (mode) {
+            case 'Kurvenjagd':
+                // Engere, stärkere Ausschläge → mehr Zickzack = mehr Kurven
+                arcFactor = 0.9 + index * 0.15;
+                angleDrift = (seededUnit(variationSeed + 7) - 0.5) * 40;
+                side = index % 2 === 0 ? baseSide : -baseSide; // Wechselnde Seiten!
+                break;
+            case 'Entdecker':
+                // Maximale Variation, alle WPs auf verschiedenen Seiten
+                arcFactor = 0.7 + seededUnit(variationSeed + 3) * 0.6;
+                angleDrift = (seededUnit(variationSeed + 7) - 0.5) * 55;
+                side = seededUnit(variationSeed + 11) >= 0.5 ? 1 : -1; // Zufällig
+                break;
+            case 'Abendrunde':
+                // Sanfter, gleichmäßiger Bogen — alle auf einer Seite
+                arcFactor = 0.6 + index * 0.12;
+                angleDrift = (seededUnit(variationSeed + 7) - 0.5) * 15;
+                side = baseSide;
+                break;
+            default: // Sport Mode
+                // Weicher Bogen, mittlerer Offset
+                arcFactor = 0.75 + index * 0.2;
+                angleDrift = (seededUnit(variationSeed + 7) - 0.5) * 25;
+                side = baseSide;
+        }
+
         const offsetKm = Math.min(
             maxOffsetKm,
             Math.max(minOffsetKm, extraDistanceKm * arcFactor * variation),
         )
-        const angleDrift = (seededUnit(variationSeed + 7) - 0.5) * 28
 
         return calculateDestination(
             basePoint,
@@ -501,29 +554,37 @@ Deno.serve(async (req) => {
         }
 
         // --- 2. Fahrstil-Parameter (Mapbox) ---
+        // Jeder Stil nutzt unterschiedliche Mapbox-Profile und Exclude-Parameter.
+        // Da Mapbox kein "prefer" unterstützt, erzwingen wir Straßentypen durch
+        // Excludes + stilspezifische Waypoint-Platzierung (siehe Subtask 2).
         let mapboxProfile = 'mapbox/driving';
         let excludeParams = '';
         let radiusesParams = '';
 
         if (mode === 'Kurvenjagd') {
-                // Bergstraßen & Kurven: Autobahnen + Schnellstraßen ausschließen → nur Landstraßen
+                // Bergstraßen & enge Kurven: Autobahn + Maut + Fähre ausschließen
+                // → zwingt Mapbox auf secondary/tertiary Landstraßen
                 mapboxProfile = 'mapbox/driving';
-                excludeParams = 'motorway,toll';
+                excludeParams = 'motorway,toll,ferry';
         } else if (mode === 'Sport Mode') {
-                // Schnelle, leicht kurvige Strecken: nur Autobahn vermeiden
+                // Schnelle Landstraßen mit breiten Kurven: nur Autobahn + Fähre vermeiden
+                // → Mapbox bevorzugt primary/secondary (schnellste Nicht-Autobahn-Route)
                 mapboxProfile = 'mapbox/driving';
-                excludeParams = 'motorway';
+                excludeParams = 'motorway,ferry';
         } else if (mode === 'Abendrunde') {
-                // Entspannte Stadt-Route: Traffic-Profil bevorzugt beleuchtete Hauptstraßen
+                // Ruhige Nebenstraßen: Autobahn + Schnellstraßen + unbefestigt vermeiden
+                // → driving-traffic bevorzugt beleuchtete, befahrene Straßen
                 mapboxProfile = 'mapbox/driving-traffic';
-                excludeParams = 'motorway,unpaved';
+                excludeParams = 'motorway,trunk,ferry,unpaved';
         } else if (mode === 'Entdecker') {
-                // Unbefahrene Strecken: keine Einschränkungen, alle Straßentypen erlaubt
+                // Abgelegene Strecken: nur Autobahn + Maut vermeiden, alles andere erlaubt
+                // → lässt auch unpaved/unclassified zu für echte Entdecker-Routen
                 mapboxProfile = 'mapbox/driving';
                 excludeParams = 'motorway,toll';
         } else {
-                // Default/Standard fallback
+                // Standard: minimal eingeschränkt
                 mapboxProfile = 'mapbox/driving';
+                excludeParams = 'ferry';
         }
 
         // --- 3. Flexible Planung ---
@@ -577,20 +638,26 @@ Deno.serve(async (req) => {
                         const effectiveDistance = Math.min(targetDistance, 150);
                         distanceConfig = getDistanceConfig(effectiveDistance, mode)
 
-                        // Waypoint-Strategie je nach Fahrstil
+                        // Waypoint-Strategie je nach Fahrstil — jeder Stil erzeugt
+                        // eine grundlegend andere Route-Geometrie
                         let generatedWPs: Coordinate[];
                         if (mode === 'Kurvenjagd') {
-                            // Mehr Waypoints für kurvigere Routen (4-5 Punkte im Kreis)
-                            generatedWPs = calculateLoopWaypoints(startLocation, distanceConfig.radiusKm * 1.1, 4);
+                            // KURVENJAGD: 5 eng gesetzte Loop-WPs, großer Radius
+                            // → Route wird durch viele Richtungswechsel gezwungen = mehr Kurven
+                            // Enger Winkel-Step (60°) + wenig Variation → kompakte Schleife
+                            generatedWPs = calculateLoopWaypoints(startLocation, distanceConfig.radiusKm * 1.15, 5);
                         } else if (mode === 'Entdecker') {
-                            // Loop mit vielen Waypoints für abwechslungsreiche Strecken
-                            generatedWPs = calculateLoopWaypoints(startLocation, distanceConfig.radiusKm * 0.9, 5);
+                            // ENTDECKER: 6 weit gestreute WPs, wechselnde Distanzen
+                            // → maximale Variation, Route geht in unerwartete Richtungen
+                            generatedWPs = calculateLoopWaypoints(startLocation, distanceConfig.radiusKm * 1.0, 6);
                         } else if (mode === 'Abendrunde') {
-                            // Kompakter Dreieck, kürzerer Radius für Stadtnähe
-                            generatedWPs = calculateTriangleWaypoints(startLocation, distanceConfig.radiusKm * 0.7);
+                            // ABENDRUNDE: Einfaches Dreieck, kompakter Radius
+                            // → bleibt nah am Startpunkt, ruhige Strecke
+                            generatedWPs = calculateTriangleWaypoints(startLocation, distanceConfig.radiusKm * 0.85);
                         } else {
-                            // Sport Mode & Standard: normales Dreieck
-                            generatedWPs = calculateTriangleWaypoints(startLocation, distanceConfig.radiusKm);
+                            // SPORT MODE: 3 Loop-WPs, mittlerer Radius, breite Spreizung
+                            // → fließende Bögen auf breiten Landstraßen
+                            generatedWPs = calculateLoopWaypoints(startLocation, distanceConfig.radiusKm * 1.05, 3);
                         }
 
                         // Route: Start -> WPs -> Start
