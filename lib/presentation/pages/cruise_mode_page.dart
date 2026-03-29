@@ -223,18 +223,27 @@ class _CruiseModePageState extends State<CruiseModePage>
     final controller = _cameraAnimController;
     if (controller == null) return;
 
-    // Bearing-Dead-Zone: Heading-Änderungen unter 5° ignorieren (GPS-Rauschen)
+    // Bearing-Dead-Zone: Heading-Änderungen unter 2° ignorieren (GPS-Rauschen)
     var effectiveHeading = heading;
     final headingDelta = _angleDiff(_lastCameraHeading, heading).abs();
-    if (headingDelta < 5.0) {
+    if (headingDelta < 2.0) {
       effectiveHeading = _lastCameraHeading;
     } else {
       _lastCameraHeading = heading;
     }
 
-    _camFromLat = _camToLat;
-    _camFromLng = _camToLng;
-    _camFromHeading = _camToHeading;
+    // Fließender Übergang: aktuelle interpolierte Position als neuen Startpunkt nehmen
+    // (statt vom letzten Ziel zu starten → verhindert Ruckeln bei schnellen Updates)
+    if (controller.isAnimating) {
+      final t = Curves.easeOutCubic.transform(controller.value);
+      _camFromLat = _camFromLat + (_camToLat - _camFromLat) * t;
+      _camFromLng = _camFromLng + (_camToLng - _camFromLng) * t;
+      _camFromHeading = _lerpAngleDeg(_camFromHeading, _camToHeading, t);
+    } else {
+      _camFromLat = _camToLat;
+      _camFromLng = _camToLng;
+      _camFromHeading = _camToHeading;
+    }
     _camToLat = lat;
     _camToLng = lng;
     _camToHeading = effectiveHeading;
@@ -1062,9 +1071,8 @@ class _CruiseModePageState extends State<CruiseModePage>
 
   void _startIdlePositionStream() {
     _idlePositionSubscription?.cancel();
-    // iOS/Android: bestForNavigation für Heading-Updates.
-    // Web: distanceFilter=0, da Browser-watchPosition() kein natives
-    // Distanz-Filtern unterstützt — Plugin-Emulation ist unzuverlässig.
+    // distanceFilter=0 auf allen Plattformen: auch reine Heading-Änderungen
+    // (Kompass-Drehung ohne Bewegung) sollen durchkommen.
     const settings = kIsWeb
         ? geo.LocationSettings(
             accuracy: geo.LocationAccuracy.best,
@@ -1072,7 +1080,7 @@ class _CruiseModePageState extends State<CruiseModePage>
           )
         : geo.LocationSettings(
             accuracy: geo.LocationAccuracy.bestForNavigation,
-            distanceFilter: 2,
+            distanceFilter: 0,
           );
     _idlePositionSubscription =
         geo.Geolocator.getPositionStream(locationSettings: settings).listen(
@@ -1081,9 +1089,11 @@ class _CruiseModePageState extends State<CruiseModePage>
             // Web: Smoother anwenden für flüssige Darstellung
             if (kIsWeb) {
               final smoothed = _webSmoother.update(position);
-              if (smoothed == null) return; // Zu wenig Bewegung → kein Rebuild
-              _userLocation = smoothed;
+              // Heading trotzdem immer aktualisieren (auch ohne Positions-Rebuild)
               _userHeading = _webSmoother.heading;
+              if (smoothed != null) {
+                _userLocation = smoothed;
+              }
             } else {
               _userLocation = position;
               if (position.heading.isFinite &&
@@ -1092,15 +1102,13 @@ class _CruiseModePageState extends State<CruiseModePage>
                 _userHeading = position.heading;
               }
             }
-            // Web: Idle-Rebuilds auf 500ms throttlen (nicht zeitkritisch)
-            if (kIsWeb) {
-              final now = DateTime.now();
-              if (_lastWebRebuildTime != null &&
-                  now.difference(_lastWebRebuildTime!).inMilliseconds < 500) {
-                return;
-              }
-              _lastWebRebuildTime = now;
+            // Idle-Rebuilds auf 100ms throttlen: flüssige Kompass-Rotation
+            final now = DateTime.now();
+            if (_lastWebRebuildTime != null &&
+                now.difference(_lastWebRebuildTime!).inMilliseconds < 100) {
+              return;
             }
+            _lastWebRebuildTime = now;
             _safeSetState(() {});
           },
           onError: (Object e) {
@@ -1533,9 +1541,8 @@ class _CruiseModePageState extends State<CruiseModePage>
       }),
     );
 
-    // Web unterstützt kein bestForNavigation → fallback auf best
     // Web: distanceFilter=0 (Browser-API unterstützt kein natives Distanz-Filtern).
-    // iOS/Android: 3m Filter für flüssiges Tracking ohne zu viele Updates.
+    // iOS/Android: 1m Filter für hochfrequente Updates (Apple-Maps-Feeling).
     const locationSettings = kIsWeb
         ? geo.LocationSettings(
             accuracy: geo.LocationAccuracy.best,
@@ -1543,7 +1550,7 @@ class _CruiseModePageState extends State<CruiseModePage>
           )
         : geo.LocationSettings(
             accuracy: geo.LocationAccuracy.bestForNavigation,
-            distanceFilter: 3,
+            distanceFilter: 1,
           );
     _positionSubscription =
         geo.Geolocator.getPositionStream(
@@ -1609,7 +1616,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     final now = DateTime.now();
     final skipRebuild = kIsWeb &&
         _lastWebRebuildTime != null &&
-        now.difference(_lastWebRebuildTime!).inMilliseconds < 300;
+        now.difference(_lastWebRebuildTime!).inMilliseconds < 150;
     if (!skipRebuild) {
       _lastWebRebuildTime = now;
       _safeSetState(() {});

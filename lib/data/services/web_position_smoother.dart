@@ -10,11 +10,11 @@ import 'package:geolocator/geolocator.dart' as geo;
 /// 4. Zwischen GPS-Updates wird die Position per Timer interpoliert
 class WebPositionSmoother {
   WebPositionSmoother({
-    this.minMovementMeters = 1.5,
+    this.minMovementMeters = 1.0,
     this.maxJumpMeters = 500.0,
-    this.minHeadingDistanceMeters = 3.0,
-    this.headingSmoothingFactor = 0.3,
-    this.processNoise = 2.0,
+    this.minHeadingDistanceMeters = 1.5,
+    this.headingSmoothingFactor = 0.5,
+    this.processNoise = 3.0,
   });
 
   /// Minimale Distanz für Rebuild-Trigger (in Metern).
