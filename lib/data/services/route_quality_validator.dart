@@ -55,19 +55,19 @@ class RouteQualityValidator {
   static const double maxOverlapPercent = 15.0;
 
   /// Minimaler Bearing-Winkel der als U-Turn gilt (Grad).
-  static const double uturnBearingThreshold = 150.0;
+  static const double uturnBearingThreshold = 140.0;
 
   /// Maximale Distanz in der ein U-Turn erkannt wird (Meter).
-  static const double uturnDistanceThreshold = 200.0;
+  static const double uturnDistanceThreshold = 300.0;
 
   /// Maximale Distanz zwischen Start und Ende für geschlossene Schleife (Meter).
   static const double loopCloseThreshold = 100.0;
 
-  /// Distanz-Toleranz (±12%).
-  static const double distanceTolerance = 0.12;
+  /// Distanz-Toleranz (±10%).
+  static const double distanceTolerance = 0.10;
 
   /// Minimale Distanz zwischen zwei Segmenten um als Overlap zu gelten (Meter).
-  static const double overlapProximity = 40.0;
+  static const double overlapProximity = 50.0;
 
   /// Minimaler Index-Abstand damit ein Punkt als Overlap zählt
   /// (verhindert False-Positives bei benachbarten Segmenten).
@@ -79,12 +79,14 @@ class RouteQualityValidator {
   /// mit sich selbst überlappt (Backtracking-Erkennung).
   ///
   /// Algorithmus: Samplet jeden 5. Punkt und prüft ob ein anderes
-  /// Segment (>30 Indizes entfernt) <40m nahe kommt.
+  /// Segment (>30 Indizes entfernt) <50m nahe kommt und die lokale
+  /// Fahrtrichtung ähnlich oder gegensinnig ist. So werden Kreuzungen
+  /// weniger hart bestraft, echtes Hin-und-Zurück aber sicher erkannt.
   double validateOverlap(List<List<double>> coordinates) {
     if (coordinates.length < 20) return 0.0;
 
     // Sampling: jeden 5. Punkt prüfen (Performance)
-    const sampleStep = 5;
+    const sampleStep = 4;
     var overlapCount = 0;
     var sampleCount = 0;
 
@@ -92,19 +94,27 @@ class RouteQualityValidator {
       sampleCount++;
       final ci = coordinates[i];
       if (ci.length < 2) continue;
+      final headingI = _localHeading(coordinates, i);
 
       var foundOverlap = false;
       // Prüfe gegen alle Punkte die >minIndexGap entfernt sind
-      for (var j = i + overlapMinIndexGap;
-          j < coordinates.length;
-          j += sampleStep) {
+      for (
+        var j = i + overlapMinIndexGap;
+        j < coordinates.length;
+        j += sampleStep
+      ) {
         final cj = coordinates[j];
         if (cj.length < 2) continue;
 
-        final dist = geo.Geolocator.distanceBetween(
-          ci[1], ci[0], cj[1], cj[0],
-        );
-        if (dist < overlapProximity) {
+        final dist = geo.Geolocator.distanceBetween(ci[1], ci[0], cj[1], cj[0]);
+        if (dist >= overlapProximity) continue;
+
+        final headingJ = _localHeading(coordinates, j);
+        final headingDelta = _angleDiff(headingI, headingJ).abs();
+        final alignedDirection = headingDelta <= 35.0;
+        final oppositeDirection = headingDelta >= 145.0;
+
+        if (alignedDirection || oppositeDirection) {
           foundOverlap = true;
           break;
         }
@@ -132,7 +142,10 @@ class RouteQualityValidator {
 
       // Distanz zwischen prev und next muss <200m sein
       final segDist = geo.Geolocator.distanceBetween(
-        prev[1], prev[0], next[1], next[0],
+        prev[1],
+        prev[0],
+        next[1],
+        next[0],
       );
       if (segDist > uturnDistanceThreshold) continue;
 
@@ -160,7 +173,10 @@ class RouteQualityValidator {
     if (start.length < 2 || end.length < 2) return false;
 
     final dist = geo.Geolocator.distanceBetween(
-      start[1], start[0], end[1], end[0],
+      start[1],
+      start[0],
+      end[1],
+      end[0],
     );
     return dist <= loopCloseThreshold;
   }
@@ -190,10 +206,8 @@ class RouteQualityValidator {
         ? validateDistanceTolerance(targetDistanceKm, actualDistanceKm)
         : true;
 
-    final passed = overlap <= maxOverlapPercent &&
-        uturns.isEmpty &&
-        loopClosed &&
-        distOk;
+    final passed =
+        overlap <= maxOverlapPercent && uturns.isEmpty && loopClosed && distOk;
 
     final result = RouteQualityResult(
       overlapPercent: overlap,
@@ -211,6 +225,43 @@ class RouteQualityValidator {
     return result;
   }
 
+  /// Baut einen kompakten Fingerprint aus Distanz, Punktzahl und
+  /// gleichmäßig verteilten Sample-Punkten.
+  ///
+  /// Das dient dazu, nahezu identische Routen bei wiederholter Generierung
+  /// derselben Konfiguration zu erkennen und erneut generieren zu lassen.
+  static String buildRouteFingerprint(
+    List<List<double>> coordinates, {
+    double? distanceKm,
+    int sampleCount = 10,
+    int precision = 4,
+  }) {
+    if (coordinates.isEmpty) {
+      return 'empty';
+    }
+
+    final effectiveSamples = math.max(
+      2,
+      math.min(sampleCount, coordinates.length),
+    );
+    final parts = <String>[
+      'n:${coordinates.length}',
+      if (distanceKm != null) 'd:${distanceKm.toStringAsFixed(1)}',
+    ];
+
+    for (var i = 0; i < effectiveSamples; i++) {
+      final ratio = effectiveSamples == 1 ? 0.0 : i / (effectiveSamples - 1);
+      final index = ((coordinates.length - 1) * ratio).round();
+      final point = coordinates[index];
+      if (point.length < 2) continue;
+      parts.add(
+        '${point[0].toStringAsFixed(precision)},${point[1].toStringAsFixed(precision)}',
+      );
+    }
+
+    return parts.join('|');
+  }
+
   // ── Helper ─────────────────────────────────────────────────────────────
 
   /// Bearing von Punkt A nach Punkt B in Grad (0–360).
@@ -219,7 +270,8 @@ class RouteQualityValidator {
     final lat2R = lat2 * math.pi / 180;
     final dLng = (lng2 - lng1) * math.pi / 180;
     final y = math.sin(dLng) * math.cos(lat2R);
-    final x = math.cos(lat1R) * math.sin(lat2R) -
+    final x =
+        math.cos(lat1R) * math.sin(lat2R) -
         math.sin(lat1R) * math.cos(lat2R) * math.cos(dLng);
     return (math.atan2(y, x) * 180 / math.pi + 360) % 360;
   }
@@ -230,5 +282,15 @@ class RouteQualityValidator {
     if (diff > 180) diff -= 360;
     if (diff < -180) diff += 360;
     return diff;
+  }
+
+  static double _localHeading(List<List<double>> coordinates, int index) {
+    if (coordinates.length < 2) return 0.0;
+    final startIndex = math.max(0, math.min(index, coordinates.length - 2));
+    final endIndex = math.min(coordinates.length - 1, startIndex + 1);
+    final from = coordinates[startIndex];
+    final to = coordinates[endIndex];
+    if (from.length < 2 || to.length < 2) return 0.0;
+    return _bearing(from[1], from[0], to[1], to[0]);
   }
 }

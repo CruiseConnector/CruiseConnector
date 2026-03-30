@@ -85,7 +85,7 @@ void main() {
 
   group('generateRoundTrip – Distanztoleranzen', () {
     /// Helper: Testet ob die zurückgegebene Route innerhalb der Toleranz liegt.
-    Future<void> _testDistanceTolerance({
+    Future<void> testDistanceTolerance({
       required int targetKm,
       required double responseDistanceM,
       double tolerancePercent = 0.20, // 20% Toleranz
@@ -120,15 +120,15 @@ void main() {
     }
 
     test('30 km Ziel → Route zwischen 24 km und 36 km', () async {
-      await _testDistanceTolerance(targetKm: 30, responseDistanceM: 30000);
+      await testDistanceTolerance(targetKm: 30, responseDistanceM: 30000);
     });
 
     test('50 km Ziel → Route zwischen 40 km und 60 km', () async {
-      await _testDistanceTolerance(targetKm: 50, responseDistanceM: 50000);
+      await testDistanceTolerance(targetKm: 50, responseDistanceM: 50000);
     });
 
     test('50 km Ziel, 45 km Antwort (10% unter) → noch akzeptiert', () async {
-      await _testDistanceTolerance(
+      await testDistanceTolerance(
         targetKm: 50,
         responseDistanceM: 45000,
         tolerancePercent: 0.15,
@@ -136,7 +136,7 @@ void main() {
     });
 
     test('50 km Ziel, 55 km Antwort (10% über) → noch akzeptiert', () async {
-      await _testDistanceTolerance(
+      await testDistanceTolerance(
         targetKm: 50,
         responseDistanceM: 55000,
         tolerancePercent: 0.15,
@@ -144,11 +144,11 @@ void main() {
     });
 
     test('80 km Ziel → Route zwischen 64 km und 96 km', () async {
-      await _testDistanceTolerance(targetKm: 80, responseDistanceM: 80000);
+      await testDistanceTolerance(targetKm: 80, responseDistanceM: 80000);
     });
 
     test('100 km Ziel → Route zwischen 80 km und 120 km', () async {
-      await _testDistanceTolerance(
+      await testDistanceTolerance(
         targetKm: 100,
         responseDistanceM: 100000,
         coordinateCount: 500,
@@ -235,6 +235,47 @@ void main() {
               as Map<String, dynamic>;
       expect(captured['language'], 'de');
     });
+
+    test(
+      'wiederholte Rundkurs-Generierung nutzt unterschiedliche Seeds',
+      () async {
+        when(mockInvoker.invoke(any)).thenAnswer(
+          (_) async =>
+              _buildRouteResponse(distanceMeters: 50000, durationSeconds: 3600),
+        );
+
+        await service.generateRoundTrip(
+          startPosition: _munich(),
+          targetDistanceKm: 50,
+          mode: 'Sport Mode',
+          planningType: 'Zufall',
+        );
+
+        final first =
+            verify(mockInvoker.invoke(captureAny)).captured.single
+                as Map<String, dynamic>;
+        clearInteractions(mockInvoker);
+
+        when(mockInvoker.invoke(any)).thenAnswer(
+          (_) async =>
+              _buildRouteResponse(distanceMeters: 50000, durationSeconds: 3600),
+        );
+
+        await service.generateRoundTrip(
+          startPosition: _munich(),
+          targetDistanceKm: 50,
+          mode: 'Sport Mode',
+          planningType: 'Zufall',
+        );
+
+        final second =
+            verify(mockInvoker.invoke(captureAny)).captured.single
+                as Map<String, dynamic>;
+
+        expect(first['randomSeed'], isA<int>());
+        expect(first['randomSeed'], isNot(equals(second['randomSeed'])));
+      },
+    );
 
     test('sendet planning_type korrekt (Kurvenreich)', () async {
       when(mockInvoker.invoke(any)).thenAnswer(
@@ -394,7 +435,7 @@ void main() {
     });
 
     test(
-      'scenic = true → targetDistance und randomSeed werden mitgesendet',
+      'scenic = true → targetDistance und dynamischer randomSeed werden mitgesendet',
       () async {
         when(mockInvoker.invoke(any)).thenAnswer(
           (_) async =>
@@ -414,7 +455,8 @@ void main() {
             verify(mockInvoker.invoke(captureAny)).captured.single
                 as Map<String, dynamic>;
         expect(captured['targetDistance'], isNotNull);
-        expect(captured['randomSeed'], 2);
+        expect(captured['randomSeed'], isA<int>());
+        expect(captured['randomSeed'], greaterThan(0));
       },
     );
 
@@ -519,6 +561,50 @@ void main() {
       expect(mediumDetour['detour_level'], 2);
       expect(largeDetour['detour_level'], 3);
     });
+
+    test(
+      'wiederholte scenic Generierung nutzt unterschiedliche Seeds',
+      () async {
+        when(mockInvoker.invoke(any)).thenAnswer(
+          (_) async =>
+              _buildRouteResponse(distanceMeters: 60000, durationSeconds: 4000),
+        );
+
+        await service.generatePointToPoint(
+          startPosition: _munich(),
+          destinationLat: 47.8,
+          destinationLng: 12.0,
+          mode: 'Sport Mode',
+          scenic: true,
+          routeVariant: 1,
+        );
+
+        final first =
+            verify(mockInvoker.invoke(captureAny)).captured.single
+                as Map<String, dynamic>;
+        clearInteractions(mockInvoker);
+
+        when(mockInvoker.invoke(any)).thenAnswer(
+          (_) async =>
+              _buildRouteResponse(distanceMeters: 60000, durationSeconds: 4000),
+        );
+
+        await service.generatePointToPoint(
+          startPosition: _munich(),
+          destinationLat: 47.8,
+          destinationLng: 12.0,
+          mode: 'Sport Mode',
+          scenic: true,
+          routeVariant: 1,
+        );
+
+        final second =
+            verify(mockInvoker.invoke(captureAny)).captured.single
+                as Map<String, dynamic>;
+
+        expect(first['randomSeed'], isNot(equals(second['randomSeed'])));
+      },
+    );
   });
 
   // ─────────────────────── Fehlerbehandlung ──────────────────────────────────

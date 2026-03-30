@@ -75,8 +75,8 @@ function calculateDestination(start: Coordinate, distanceKm: number, bearingDegr
 }
 
 function getDistanceConfig(targetDistance: number, mode?: string): DistanceConfig {
-    // ±12% Toleranz (enger als vorher ±15% für bessere Qualität)
-    const tolerance = 0.12;
+    // ±10% Toleranz für präzise Distanz-Einhaltung
+    const tolerance = 0.10;
     const minKm = Math.round(targetDistance * (1 - tolerance));
     const maxKm = Math.round(targetDistance * (1 + tolerance));
 
@@ -86,16 +86,16 @@ function getDistanceConfig(targetDistance: number, mode?: string): DistanceConfi
     let roadFactor: number;
     switch (mode) {
         case 'Kurvenjagd':
-            roadFactor = 2.0; // Enge Bergstraßen = sehr lange Umwege
+            roadFactor = 2.2; // Enge Bergstraßen = sehr lange Umwege
             break;
         case 'Entdecker':
-            roadFactor = 1.9; // Abgelegene Straßen = lange Umwege
+            roadFactor = 2.0; // Abgelegene Straßen = lange Umwege
             break;
         case 'Abendrunde':
-            roadFactor = 1.4; // Stadtnah, kurze Wege → größerer Radius nötig
+            roadFactor = 1.3; // Stadtnah, kurze Wege → größerer Radius nötig
             break;
         case 'Sport Mode':
-            roadFactor = 1.6; // Mix aus Landstraße und breiten Straßen
+            roadFactor = 1.5; // Breite Straßen, weniger Umwege als Kurven
             break;
         default:
             roadFactor = 1.5;
@@ -116,22 +116,25 @@ function getDistanceConfig(targetDistance: number, mode?: string): DistanceConfi
  *
  * Route: Start → WP1 → WP2 → Start
  */
-function calculateTriangleWaypoints(start: Coordinate, searchRadiusKm: number): Coordinate[] {
-    const baseBearing = Math.random() * 360;
+function calculateTriangleWaypoints(start: Coordinate, searchRadiusKm: number, seed?: number): Coordinate[] {
+    // Seeded random für reproduzierbare aber variable Routen
+    const s = seed ?? Math.floor(Math.random() * 100000);
+    const rng = (offset: number) => seededUnit(s + offset);
+
+    const baseBearing = rng(0) * 360;
 
     // WP1: Outbound direction, full radius
     const wp1 = calculateDestination(
         start,
-        searchRadiusKm * (0.8 + Math.random() * 0.4), // 0.8–1.2× radius
+        searchRadiusKm * (0.8 + rng(1) * 0.4), // 0.8–1.2× radius
         baseBearing,
     );
 
     // WP2: 100–140° offset from WP1 direction, slightly shorter
-    // Wide enough angle that the return path doesn't clip the start area
-    const returnBearing = (baseBearing + 100 + Math.random() * 40) % 360;
+    const returnBearing = (baseBearing + 100 + rng(2) * 40) % 360;
     const wp2 = calculateDestination(
         start,
-        searchRadiusKm * (0.65 + Math.random() * 0.2), // 0.65–0.85× radius
+        searchRadiusKm * (0.65 + rng(3) * 0.2), // 0.65–0.85× radius
         returnBearing,
     );
 
@@ -143,25 +146,28 @@ function calculateTriangleWaypoints(start: Coordinate, searchRadiusKm: number): 
  * Uses 4-6 waypoints arranged in a circle pattern for true loop experience.
  * Avoids returning on the same path by offsetting return route.
  */
-function calculateLoopWaypoints(start: Coordinate, searchRadiusKm: number, numWaypoints: number = 5): Coordinate[] {
-    // Random start bearing
-    const baseBearing = Math.random() * 360;
+function calculateLoopWaypoints(start: Coordinate, searchRadiusKm: number, numWaypoints: number = 5, seed?: number): Coordinate[] {
+    // Seeded random für reproduzierbare aber variable Routen
+    const s = seed ?? Math.floor(Math.random() * 100000);
+    const rng = (offset: number) => seededUnit(s + offset);
+
+    const baseBearing = rng(0) * 360;
     const angleStep = 360 / (numWaypoints + 1);
-    
+
     const waypoints: Coordinate[] = [];
-    
+
     for (let i = 0; i < numWaypoints; i++) {
         // Vary the distance slightly (0.7 to 1.3 of radius)
-        const distanceVariation = 0.7 + (Math.random() * 0.6);
+        const distanceVariation = 0.7 + (rng(10 + i * 2) * 0.6);
         const distance = searchRadiusKm * distanceVariation;
-        
+
         // Calculate bearing with some randomness
-        const bearing = baseBearing + (angleStep * i) + (Math.random() * 30 - 15);
-        
+        const bearing = baseBearing + (angleStep * i) + (rng(11 + i * 2) * 30 - 15);
+
         const wp = calculateDestination(start, distance, bearing);
         waypoints.push(wp);
     }
-    
+
     return waypoints;
 }
 
@@ -169,22 +175,19 @@ function calculateLoopWaypoints(start: Coordinate, searchRadiusKm: number, numWa
  * Generates return path waypoints that avoid the outbound route.
  * Creates a "figure-8" or wide loop pattern instead of backtracking.
  */
-function calculateReturnPath(start: Coordinate, outboundWaypoints: Coordinate[]): Coordinate[] {
-    // If we have enough outbound waypoints, create a wider return arc
+function calculateReturnPath(start: Coordinate, outboundWaypoints: Coordinate[], seed?: number): Coordinate[] {
     if (outboundWaypoints.length < 2) return [];
-    
+    const s = seed ?? Math.floor(Math.random() * 100000);
+    const rng = (offset: number) => seededUnit(s + offset);
+
     const lastWp = outboundWaypoints[outboundWaypoints.length - 1];
     const midWp = outboundWaypoints[Math.floor(outboundWaypoints.length / 2)];
-    
-    // Calculate bearing from start to midpoint
+
     const midBearing = calculateBearing(start, midWp);
-    
-    // Create return waypoint on opposite side (offset by 120-180 degrees)
-    const returnBearing = (midBearing + 120 + Math.random() * 60) % 360;
-    const returnDistance = calculateDistance(start, lastWp) * (0.6 + Math.random() * 0.3);
-    
+    const returnBearing = (midBearing + 120 + rng(50) * 60) % 360;
+    const returnDistance = calculateDistance(start, lastWp) * (0.6 + rng(51) * 0.3);
+
     const returnWp = calculateDestination(start, returnDistance, returnBearing);
-    
     return [returnWp];
 }
 
@@ -269,13 +272,13 @@ function buildPointToPointScenicWaypoints({
         ? 0.12
         : 0.0
 
-    // Umweg-Boost: drastischer gespreizt für sichtbaren Unterschied
+    // Umweg-Boost: lateral offset 18% / 40% / 70% der Luftlinie
     const detourBoost = detourLevel === 1
-        ? 0.25
+        ? 0.18
         : detourLevel === 2
-        ? 0.55
+        ? 0.40
         : detourLevel >= 3
-        ? 0.85
+        ? 0.70
         : 0.0
 
     const effectiveFactor = Math.max(
@@ -298,16 +301,17 @@ function buildPointToPointScenicWaypoints({
         desiredDistanceKm - directDistanceKm,
     )
 
-    // Waypoint-Anzahl: Stil + Umweg-Level bestimmen die Komplexität
+    // Waypoint-Anzahl: feste Regel pro Umweg-Level
+    // Direkt=0, Klein=1, Mittel=2, Groß=3 Waypoints
     let waypointCount: number;
     if (detourLevel >= 3) {
-        waypointCount = mode === 'Entdecker' ? 5 : 4;
+        waypointCount = 3; // Groß: 3 WPs weit aufgefächert
     } else if (detourLevel >= 2) {
-        waypointCount = mode === 'Kurvenjagd' ? 4 : 3;
+        waypointCount = 2; // Mittel: 2 WPs in S-Form
     } else if (detourLevel >= 1) {
-        waypointCount = mode === 'Entdecker' || mode === 'Kurvenjagd' ? 2 : 1;
+        waypointCount = 1; // Klein: 1 WP senkrecht zur Linie
     } else {
-        waypointCount = 2;
+        waypointCount = 0; // Direkt: keine Extra-Waypoints
     }
     if (directDistanceKm < 12) waypointCount = Math.min(waypointCount, 3);
     if (directDistanceKm < 6) waypointCount = Math.min(waypointCount, 2);
@@ -346,28 +350,28 @@ function buildPointToPointScenicWaypoints({
 
         switch (mode) {
             case 'Kurvenjagd':
-                // Engere, stärkere Ausschläge → mehr Zickzack = mehr Kurven
-                arcFactor = 0.9 + index * 0.15;
-                angleDrift = (seededUnit(variationSeed + 7) - 0.5) * 40;
-                side = index % 2 === 0 ? baseSide : -baseSide; // Wechselnde Seiten!
+                // Starke Ausschläge, wechselnde Seiten → Zickzack = viele Kurven
+                arcFactor = 1.0 + index * 0.2;
+                angleDrift = (seededUnit(variationSeed + 7) - 0.5) * 50;
+                side = index % 2 === 0 ? baseSide : -baseSide;
                 break;
             case 'Entdecker':
-                // Maximale Variation, alle WPs auf verschiedenen Seiten
-                arcFactor = 0.7 + seededUnit(variationSeed + 3) * 0.6;
-                angleDrift = (seededUnit(variationSeed + 7) - 0.5) * 55;
-                side = seededUnit(variationSeed + 11) >= 0.5 ? 1 : -1; // Zufällig
+                // Maximale Variation, zufällige Seiten → unbekannte Wege
+                arcFactor = 0.8 + seededUnit(variationSeed + 3) * 0.7;
+                angleDrift = (seededUnit(variationSeed + 7) - 0.5) * 65;
+                side = seededUnit(variationSeed + 11) >= 0.5 ? 1 : -1;
                 break;
             case 'Abendrunde':
-                // Sanfter, gleichmäßiger Bogen — alle auf einer Seite
-                arcFactor = 0.6 + index * 0.12;
-                angleDrift = (seededUnit(variationSeed + 7) - 0.5) * 15;
+                // Sanfter, gleichmäßiger Bogen — alle auf einer Seite, nah dran
+                arcFactor = 0.5 + index * 0.1;
+                angleDrift = (seededUnit(variationSeed + 7) - 0.5) * 12;
                 side = baseSide;
                 break;
             default: // Sport Mode
-                // Weicher Bogen, mittlerer Offset
-                arcFactor = 0.75 + index * 0.2;
-                angleDrift = (seededUnit(variationSeed + 7) - 0.5) * 25;
-                side = baseSide;
+                // Weicher Bogen, mittlerer Offset, leicht wechselnd
+                arcFactor = 0.75 + index * 0.18;
+                angleDrift = (seededUnit(variationSeed + 7) - 0.5) * 30;
+                side = index % 2 === 0 ? baseSide : -baseSide;
         }
 
         const offsetKm = Math.min(
@@ -395,11 +399,11 @@ function getPointToPointMinimumDistanceKm(
     detourLevel: number,
 ): number {
     const detourMultiplier = detourLevel === 1
-        ? 1.26
+        ? 1.20   // Klein: mindestens +20%
         : detourLevel === 2
-        ? 1.5
+        ? 1.50   // Mittel: mindestens +50%
         : detourLevel >= 3
-        ? 1.8
+        ? 1.90   // Groß: mindestens +90%
         : 1.0
 
     return Math.max(
@@ -508,6 +512,122 @@ function hasUTurnManeuver(route: any): boolean {
     return false
 }
 
+function headingDeltaDegrees(a: number, b: number): number {
+    let delta = Math.abs((a - b) % 360)
+    if (delta > 180) {
+        delta = 360 - delta
+    }
+    return delta
+}
+
+function pointToCoordinate(point: any): Coordinate | null {
+    if (!Array.isArray(point) || point.length < 2) return null
+    const longitude = Number(point[0])
+    const latitude = Number(point[1])
+    if (!Number.isFinite(longitude) || !Number.isFinite(latitude)) {
+        return null
+    }
+    return { latitude, longitude }
+}
+
+function routeHeadingAt(routeCoordinates: any[], index: number): number {
+    if (!Array.isArray(routeCoordinates) || routeCoordinates.length < 2) {
+        return 0
+    }
+    const safeIndex = Math.max(0, Math.min(index, routeCoordinates.length - 2))
+    const from = pointToCoordinate(routeCoordinates[safeIndex])
+    const to = pointToCoordinate(routeCoordinates[safeIndex + 1])
+    if (!from || !to) return 0
+    return calculateBearing(from, to)
+}
+
+function calculateRouteOverlapPercent(route: any): number {
+    const coordinates = route?.geometry?.coordinates
+    if (!Array.isArray(coordinates) || coordinates.length < 25) {
+        return 0
+    }
+
+    const sampleStep = 4
+    const minIndexGap = 30
+    const overlapDistanceMeters = 45
+    let sampleCount = 0
+    let overlapCount = 0
+
+    for (let i = 0; i < coordinates.length; i += sampleStep) {
+        const current = pointToCoordinate(coordinates[i])
+        if (!current) continue
+
+        sampleCount += 1
+        const headingI = routeHeadingAt(coordinates, i)
+        let foundOverlap = false
+
+        for (let j = i + minIndexGap; j < coordinates.length; j += sampleStep) {
+            const candidate = pointToCoordinate(coordinates[j])
+            if (!candidate) continue
+
+            const distanceMeters = calculateDistance(current, candidate) * 1000
+            if (distanceMeters >= overlapDistanceMeters) continue
+
+            const headingJ = routeHeadingAt(coordinates, j)
+            const headingDelta = headingDeltaDegrees(headingI, headingJ)
+            const sameDirection = headingDelta <= 35
+            const oppositeDirection = headingDelta >= 145
+
+            if (sameDirection || oppositeDirection) {
+                foundOverlap = true
+                break
+            }
+        }
+
+        if (foundOverlap) {
+            overlapCount += 1
+        }
+    }
+
+    if (sampleCount === 0) return 0
+    return (overlapCount / sampleCount) * 100
+}
+
+function evaluateRouteQuality(route: any, routeType: 'ROUND_TRIP' | 'POINT_TO_POINT') {
+    const coordinateCount = route?.geometry?.coordinates?.length ?? 0
+    const actualDistanceKm = getRouteDistanceKm(route)
+    const hasUTurn = hasUTurnManeuver(route)
+    const overlapPercent = calculateRouteOverlapPercent(route)
+    const overlapThreshold = routeType === 'ROUND_TRIP' ? 18 : 14
+
+    if (coordinateCount < 30 && actualDistanceKm > 10) {
+        return {
+            passed: false,
+            reason: `coords=${coordinateCount}`,
+            overlapPercent,
+            hasUTurn,
+        }
+    }
+    if (hasUTurn) {
+        return {
+            passed: false,
+            reason: 'u_turn',
+            overlapPercent,
+            hasUTurn,
+        }
+    }
+    if (overlapPercent > overlapThreshold) {
+        return {
+            passed: false,
+            reason: `overlap=${overlapPercent.toFixed(1)}%`,
+            overlapPercent,
+            hasUTurn,
+        }
+    }
+
+    return {
+        passed: true,
+        reason: 'ok',
+        overlapPercent,
+        hasUTurn,
+    }
+}
+
 Deno.serve(async (req) => {
     // Handle CORS preflight
     if (req.method === 'OPTIONS') {
@@ -555,6 +675,7 @@ Deno.serve(async (req) => {
         }
 
         const avoidHighways = body.avoid_highways === true
+        const randomSeed = body.randomSeed ?? Math.floor(Math.random() * 100000)
 
         // --- 2. Fahrstil-Parameter (Mapbox) ---
         // Jeder Stil nutzt unterschiedliche Mapbox-Profile und Exclude-Parameter.
@@ -648,22 +769,17 @@ Deno.serve(async (req) => {
                         // eine grundlegend andere Route-Geometrie
                         let generatedWPs: Coordinate[];
                         if (mode === 'Kurvenjagd') {
-                            // KURVENJAGD: 5 eng gesetzte Loop-WPs, großer Radius
-                            // → Route wird durch viele Richtungswechsel gezwungen = mehr Kurven
-                            // Enger Winkel-Step (60°) + wenig Variation → kompakte Schleife
-                            generatedWPs = calculateLoopWaypoints(startLocation, distanceConfig.radiusKm * 1.15, 5);
+                            // 6 eng gesetzte WPs, großer Radius → viele Richtungswechsel = mehr Kurven
+                            generatedWPs = calculateLoopWaypoints(startLocation, distanceConfig.radiusKm * 1.25, 6, randomSeed);
                         } else if (mode === 'Entdecker') {
-                            // ENTDECKER: 6 weit gestreute WPs, wechselnde Distanzen
-                            // → maximale Variation, Route geht in unerwartete Richtungen
-                            generatedWPs = calculateLoopWaypoints(startLocation, distanceConfig.radiusKm * 1.0, 6);
+                            // 7 weit gestreute WPs → maximale Variation, unerwartete Richtungen
+                            generatedWPs = calculateLoopWaypoints(startLocation, distanceConfig.radiusKm * 1.1, 7, randomSeed);
                         } else if (mode === 'Abendrunde') {
-                            // ABENDRUNDE: Einfaches Dreieck, kompakter Radius
-                            // → bleibt nah am Startpunkt, ruhige Strecke
-                            generatedWPs = calculateTriangleWaypoints(startLocation, distanceConfig.radiusKm * 0.85);
+                            // Einfaches Dreieck, kompakter Radius → bleibt nah, ruhige Strecke
+                            generatedWPs = calculateTriangleWaypoints(startLocation, distanceConfig.radiusKm * 0.75, randomSeed);
                         } else {
-                            // SPORT MODE: 3 Loop-WPs, mittlerer Radius, breite Spreizung
-                            // → fließende Bögen auf breiten Landstraßen
-                            generatedWPs = calculateLoopWaypoints(startLocation, distanceConfig.radiusKm * 1.05, 3);
+                            // SPORT MODE: 3 WPs, breiter Radius → fließende Bögen auf breiten Straßen
+                            generatedWPs = calculateLoopWaypoints(startLocation, distanceConfig.radiusKm * 1.15, 3, randomSeed);
                         }
 
                         // Route: Start -> WPs -> Start
@@ -696,9 +812,12 @@ Deno.serve(async (req) => {
             route = await getMapboxRoute(finalWaypoints, mapboxProfile, '', radiusesParams, MAPBOX_ACCESS_TOKEN);
         }
 
-        if (route && hasUTurnManeuver(route)) {
-            console.log('Initial route rejected: contains U-turn maneuver');
-            route = null;
+        if (route) {
+            const initialQuality = evaluateRouteQuality(route, currentRouteType)
+            if (!initialQuality.passed) {
+                console.log(`Initial route rejected: ${initialQuality.reason}`);
+                route = null
+            }
         }
 
         if (
@@ -727,19 +846,18 @@ Deno.serve(async (req) => {
                 console.log(`Retry ${retry + 1}: generating new waypoints...`);
                 // Gerade Versuche: Triangle, ungerade: Loop mit 3 Punkten
                 const retryRadius = distanceConfig.radiusKm * (0.7 + retry * 0.15);
+                const retrySeed = randomSeed + (retry + 1) * 1000;
                 const retryWPs = retry % 2 === 0
-                    ? calculateTriangleWaypoints(startLocation, retryRadius)
-                    : calculateLoopWaypoints(startLocation, retryRadius, 3);
+                    ? calculateTriangleWaypoints(startLocation, retryRadius, retrySeed)
+                    : calculateLoopWaypoints(startLocation, retryRadius, 3, retrySeed);
                 const retryAll = [startLocation, ...retryWPs, startLocation];
                 const retryRadiuses = retryAll.map((_, i) => (i === 0 || i === retryAll.length - 1) ? 'unlimited' : '2000').join(';');
 
                 route = await getMapboxRoute(retryAll, mapboxProfile, '', retryRadiuses, MAPBOX_ACCESS_TOKEN);
                 if (route) {
-                    // Qualitätsprüfung auch bei Retries
-                    const retryCoords = route.geometry?.coordinates?.length ?? 0;
-                    const hasUTurn = hasUTurnManeuver(route);
-                    if (retryCoords < 30 || hasUTurn) {
-                        console.log(`Retry ${retry + 1}: Route rejected (coords=${retryCoords}, uturn=${hasUTurn})`);
+                    const retryQuality = evaluateRouteQuality(route, currentRouteType)
+                    if (!retryQuality.passed) {
+                        console.log(`Retry ${retry + 1}: Route rejected (${retryQuality.reason})`);
                         route = null;
                         continue;
                     }
@@ -786,10 +904,13 @@ Deno.serve(async (req) => {
                 if (!route && excludeParams && excludeParams.trim() !== '') {
                     route = await getMapboxRoute(retryWaypoints, mapboxProfile, '', retryRadiuses, MAPBOX_ACCESS_TOKEN);
                 }
-                if (route && hasUTurnManeuver(route)) {
-                    console.log(`P2P scenic retry ${retry + 1}: route rejected because of U-turn`);
-                    route = null;
-                    continue;
+                if (route) {
+                    const retryQuality = evaluateRouteQuality(route, currentRouteType)
+                    if (!retryQuality.passed) {
+                        console.log(`P2P scenic retry ${retry + 1}: route rejected because of ${retryQuality.reason}`);
+                        route = null;
+                        continue;
+                    }
                 }
                 if (route) {
                     if (
@@ -880,11 +1001,9 @@ Deno.serve(async (req) => {
                     break
                 }
 
-                // Qualitätsprüfung: Route muss echte Straßengeometrie haben
-                const coordCount = newRoute.geometry?.coordinates?.length ?? 0;
-                const hasUTurn = hasUTurnManeuver(newRoute);
-                if (coordCount < 30 || hasUTurn) {
-                    console.log(`Scaling attempt ${attempts + 1}: Route rejected (coords=${coordCount}, uturn=${hasUTurn})`);
+                const scaledQuality = evaluateRouteQuality(newRoute, currentRouteType)
+                if (!scaledQuality.passed) {
+                    console.log(`Scaling attempt ${attempts + 1}: Route rejected (${scaledQuality.reason})`);
                     break
                 }
 
@@ -897,14 +1016,10 @@ Deno.serve(async (req) => {
         }
 
         // ── Quality gate: Route muss echte Straßengeometrie haben ──
-        const coordCount = route.geometry?.coordinates?.length ?? 0;
-        if (coordCount < 30 && actualDistanceKm > 10) {
-            console.error(`Route quality too low: ${coordCount} coordinates for ${actualDistanceKm.toFixed(1)} km — likely straight lines, not roads`);
-            throw new Error(`Route-Qualität zu niedrig (${coordCount} Koordinaten). Bitte erneut versuchen.`);
-        }
-        if (hasUTurnManeuver(route)) {
-            console.error('Route quality too low: route contains U-turn maneuver');
-            throw new Error('Route enthält einen Wendepunkt. Bitte erneut versuchen.');
+        const finalQuality = evaluateRouteQuality(route, currentRouteType)
+        if (!finalQuality.passed) {
+            console.error(`Route quality too low: ${finalQuality.reason}`);
+            throw new Error(`Route-Qualität zu niedrig (${finalQuality.reason}). Bitte erneut versuchen.`);
         }
 
         // Always use the ACTUAL Mapbox distance — never clamp.

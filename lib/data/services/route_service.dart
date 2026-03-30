@@ -42,6 +42,7 @@ class RouteService {
     : _invoker = invoker ?? const SupabaseRouteInvoker();
 
   static const String edgeFunction = 'generate-cruise-route';
+  static int _lastRandomSeed = 0;
 
   final RouteEdgeInvoker _invoker;
 
@@ -55,6 +56,8 @@ class RouteService {
     required String planningType,
     Map<String, double>? targetLocation,
   }) async {
+    // Zufälliger Seed pro Aufruf → jede Generierung erzeugt andere Route
+    final randomSeed = _nextRandomSeed();
     final body = <String, dynamic>{
       'startLocation': {
         'latitude': startPosition.latitude,
@@ -65,6 +68,7 @@ class RouteService {
       'route_type': 'ROUND_TRIP',
       'planning_type': planningType,
       'language': 'de',
+      'randomSeed': randomSeed,
       if (targetLocation != null) 'targetLocation': targetLocation,
     };
     final result = await _invoke(body);
@@ -86,15 +90,15 @@ class RouteService {
     // Direkt = normale Straßenroute ohne künstliche Umweg-Parameter.
     // Scenic-Varianten bekommen zusätzliche Detour-Faktoren für echte Abweichung.
     final detourFactor = switch (normalizedVariant) {
-      1 => 1.35, // Kleiner Umweg: leichter Bogen
-      2 => 1.75, // Mittlerer Umweg: deutlicher Bogen
-      3 => 2.20, // Großer Umweg: komplett anderer Weg
+      1 => 1.30, // Kleiner Umweg: sichtbarer Bogen
+      2 => 1.65, // Mittlerer Umweg: klar anderer Streckenverlauf
+      3 => 2.10, // Großer Umweg: deutlich längere Alternativroute
       _ => scenic ? 1.15 : 1.0,
     };
     final detourMinimumExtraKm = switch (normalizedVariant) {
-      1 => 6.0,
-      2 => 15.0,
-      3 => 30.0,
+      1 => 6.0, // Min +6km
+      2 => 16.0, // Min +16km
+      3 => 34.0, // Min +34km
       _ => scenic ? 3.0 : 0.0,
     };
     final directDistanceKm = math.max(
@@ -109,11 +113,12 @@ class RouteService {
     );
     // Scenic-Target: wie lang soll die Route mindestens werden.
     final scenicTargetKm = switch (normalizedVariant) {
-      1 => directDistanceKm * 1.30, // ~30% länger
-      2 => directDistanceKm * 1.65, // ~65% länger
-      3 => directDistanceKm * 2.15, // ~115% länger
+      1 => directDistanceKm * 1.30, // +30%
+      2 => directDistanceKm * 1.65, // +65%
+      3 => directDistanceKm * 2.05, // +105%
       _ => scenic ? directDistanceKm * 1.15 : directDistanceKm,
     };
+    final randomSeed = _nextRandomSeed();
     final targetDistanceKm = math.max(
       scenicTargetKm,
       directDistanceKm + detourMinimumExtraKm,
@@ -134,9 +139,10 @@ class RouteService {
       'avoid_highways': avoidHighways,
       'language': 'de',
       // routeVariant: 0=direkt, 1=kleiner, 2=mittlerer, 3=großer Umweg
+      // Monotoner Seed → auch schnelle Mehrfach-Generierungen bleiben verschieden
       if (scenic || normalizedVariant > 0) ...{
         'targetDistance': double.parse(targetDistanceKm.toStringAsFixed(1)),
-        'randomSeed': normalizedVariant,
+        'randomSeed': randomSeed,
         'detour_level': normalizedVariant,
         'detour_factor': detourFactor,
       },
@@ -245,6 +251,16 @@ class RouteService {
       distanceKm: distanceKmActual,
       speedLimits: speedLimits,
     );
+  }
+
+  static int _nextRandomSeed() {
+    final candidate = DateTime.now().microsecondsSinceEpoch % 2147483647;
+    if (candidate <= _lastRandomSeed) {
+      _lastRandomSeed += 1;
+    } else {
+      _lastRandomSeed = candidate;
+    }
+    return _lastRandomSeed;
   }
 
   // ─────────────────────── Coordinate Helpers ────────────────────────────────

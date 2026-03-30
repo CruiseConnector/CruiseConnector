@@ -35,7 +35,7 @@ void main() {
     test('Autobahn-Fall waehlt die naechste Ausfahrt', () {
       final coordinates = buildStraightRoute();
       final maneuvers = <RouteManeuver>[
-        RouteManeuver(
+        const RouteManeuver(
           latitude: 48.0020,
           longitude: 11.0040,
           routeIndex: 40,
@@ -65,7 +65,7 @@ void main() {
     test('Kreisverkehr im Nahbereich waehlt roundabout-Strategie', () {
       final coordinates = buildStraightRoute();
       final maneuvers = <RouteManeuver>[
-        RouteManeuver(
+        const RouteManeuver(
           latitude: 48.0014,
           longitude: 11.0014,
           routeIndex: 20,
@@ -97,7 +97,7 @@ void main() {
     test('sonst wird ein sinnvoller Vorwaerts-Join gewaehlt', () {
       final coordinates = buildStraightRoute();
       final maneuvers = <RouteManeuver>[
-        RouteManeuver(
+        const RouteManeuver(
           latitude: 48.0008,
           longitude: 11.0032,
           routeIndex: 36,

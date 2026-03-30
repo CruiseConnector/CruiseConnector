@@ -88,6 +88,7 @@ class _CruiseModePageState extends State<CruiseModePage>
   bool _activeAvoidHighways = false;
   List<double> _recentDestinationDistances = [];
   List<SpeedLimitSegment> _activeSpeedLimits = const [];
+  final Map<String, List<String>> _recentRouteFingerprintsByConfig = {};
 
   // ─────────────────────── Map State (flutter_map) ───────────────────────────
   bool _isLoading = false;
@@ -213,9 +214,16 @@ class _CruiseModePageState extends State<CruiseModePage>
     if (controller == null || !_isCameraLocked || !_mapReady) return;
 
     final t = Curves.easeOutCubic.transform(controller.value);
-    final lat = _camFromLat + (_camToLat - _camFromLat) * t;
-    final lng = _camFromLng + (_camToLng - _camFromLng) * t;
-    final heading = _lerpAngleDeg(_camFromHeading, _camToHeading, t);
+    var lat = _camFromLat + (_camToLat - _camFromLat) * t;
+    var lng = _camFromLng + (_camToLng - _camFromLng) * t;
+    var heading = _lerpAngleDeg(_camFromHeading, _camToHeading, t);
+
+    if (kIsWeb && _webSmoother.current != null) {
+      final prediction = _webSmoother.predict(DateTime.now());
+      lat = lat + (prediction.lat - lat) * 0.35;
+      lng = lng + (prediction.lng - lng) * 0.35;
+      heading = _lerpAngleDeg(heading, prediction.heading, 0.35);
+    }
 
     // Forward-Offset: Kartenzentrum ~100m in Fahrtrichtung verschieben,
     // damit der Fahrer mehr Straße vor sich sieht (Marker im unteren Drittel).
@@ -1224,6 +1232,10 @@ class _CruiseModePageState extends State<CruiseModePage>
 
       final digits = _selectedLength.replaceAll(RegExp(r'[^0-9]'), '');
       final distance = digits.isNotEmpty ? int.parse(digits) : 50;
+      double? destLat;
+      double? destLng;
+      var detourVariant = 0;
+      var scenicMode = false;
 
       Map<String, double>? targetLocation;
       if (!_isRoundTrip && _destinationController.text.isNotEmpty) {
@@ -1242,7 +1254,6 @@ class _CruiseModePageState extends State<CruiseModePage>
       // Eine Route generieren — kein Warmup/Skip mehr (spart Mapbox Tokens)
       RouteResult result;
       if (!_isRoundTrip) {
-        double? destLat, destLng;
         if (_selectedDestination != null) {
           destLat = _selectedDestination!.latitude;
           destLng = _selectedDestination!.longitude;
@@ -1254,13 +1265,13 @@ class _CruiseModePageState extends State<CruiseModePage>
           throw Exception('Bitte wähle ein Ziel aus.');
         }
         // Umweg-Variante bestimmen (0 = direkt, 1-3 = Umwege)
-        final detourVariant = switch (_selectedDetour) {
+        detourVariant = switch (_selectedDetour) {
           'Kleiner Umweg' => 1,
           'Mittlerer Umweg' => 2,
           'Großer Umweg' => 3,
           _ => 0,
         };
-        final scenicMode = _selectedDetour != 'Direkt';
+        scenicMode = _selectedDetour != 'Direkt';
         _activeDestinationCoordinate = [destLng, destLat];
         _activeDetourVariant = detourVariant;
         _activePointToPointScenic = scenicMode;
@@ -1303,16 +1314,34 @@ class _CruiseModePageState extends State<CruiseModePage>
         targetDistanceKm: targetKm,
         actualDistanceKm: actualKm,
       );
+      final routeConfigKey = _buildRouteConfigKey(
+        startPosition: startPosition,
+        isRoundTrip: _isRoundTrip,
+        targetDistanceKm: distance,
+        planningType: _planningType,
+        style: _selectedStyle,
+        detour: _selectedDetour,
+        avoidHighways: _avoidHighways,
+        destinationLat: destLat,
+        destinationLng: destLng,
+      );
 
       // Basis-Check: zu wenige Punkte oder komplett falsche Distanz
-      final tooFewPoints = result.coordinates.length < 50 && distance >= 20;
+      final tooFewPoints = _isRoundTrip
+          ? result.coordinates.length < 50 && distance >= 20
+          : result.coordinates.length < 30 && actualKm >= 10;
 
-      // Retry bis zu 3x wenn Qualität schlecht ist (Overlap, U-Turns, Distanz)
+      // Retry bis zu 5x wenn Qualität schlecht ist (Overlap, U-Turns, Distanz)
+      // Fallback: beste Route nehmen wenn keine perfekt ist
       if ((!quality.passed || tooFewPoints) && _isRoundTrip) {
         debugPrint(
-          '[CruiseMode] Route-Qualität schlecht: $quality — bis zu 3 Retries',
+          '[CruiseMode] Route-Qualität schlecht: $quality — bis zu 5 Retries',
         );
-        for (var retry = 0; retry < 3; retry++) {
+        var bestResult = result;
+        var bestOverlap = quality.overlapPercent;
+        var bestUturns = quality.uturnPositions.length;
+
+        for (var retry = 0; retry < 5; retry++) {
           result = await _routeService.generateRoundTrip(
             startPosition: startPosition,
             targetDistanceKm: distance,
@@ -1327,12 +1356,158 @@ class _CruiseModePageState extends State<CruiseModePage>
             targetDistanceKm: targetKm,
             actualDistanceKm: retryKm,
           );
+          debugPrint(
+            '[CruiseMode] Versuch ${retry + 1}: Overlap=${quality.overlapPercent.toStringAsFixed(1)}%, '
+            'Wenden=${quality.uturnPositions.length} → ${quality.passed ? "OK" : "verworfen"}',
+          );
+
+          // Beste Route tracken (geringster Overlap + wenigste U-Turns)
+          final score =
+              quality.overlapPercent + quality.uturnPositions.length * 10;
+          final bestScore = bestOverlap + bestUturns * 10;
+          if (score < bestScore) {
+            bestResult = result;
+            bestOverlap = quality.overlapPercent;
+            bestUturns = quality.uturnPositions.length;
+          }
+
           if (quality.passed && result.coordinates.length >= 50) {
             debugPrint('[CruiseMode] Retry ${retry + 1} erfolgreich: $quality');
             break;
           }
-          debugPrint('[CruiseMode] Retry ${retry + 1} auch schlecht: $quality');
+
+          // Letzter Versuch: beste verfügbare Route nehmen
+          if (retry == 4) {
+            debugPrint(
+              '[CruiseMode] Max Retries erreicht — nehme beste Route '
+              '(Overlap=${bestOverlap.toStringAsFixed(1)}%, Wenden=$bestUturns)',
+            );
+            result = bestResult;
+          }
         }
+      } else if ((!quality.passed || tooFewPoints) &&
+          !_isRoundTrip &&
+          destLat != null &&
+          destLng != null) {
+        debugPrint(
+          '[CruiseMode] A→B-Qualität schlecht: $quality — bis zu 4 Retries',
+        );
+        var bestResult = result;
+        var bestOverlap = quality.overlapPercent;
+        var bestUturns = quality.uturnPositions.length;
+        var bestPointScore = result.coordinates.length;
+
+        for (var retry = 0; retry < 4; retry++) {
+          result = await _routeService.generatePointToPoint(
+            startPosition: startPosition,
+            destinationLat: destLat,
+            destinationLng: destLng,
+            mode: scenicMode ? _selectedStyle : 'Standard',
+            scenic: scenicMode,
+            routeVariant: detourVariant,
+            avoidHighways: _avoidHighways,
+          );
+          final retryKm = result.distanceKm ?? 0;
+          quality = validator.validateQuality(
+            coordinates: result.coordinates,
+            isRoundTrip: false,
+            actualDistanceKm: retryKm,
+          );
+          final retryTooFewPoints =
+              result.coordinates.length < 30 && retryKm >= 10;
+          debugPrint(
+            '[CruiseMode] A→B Versuch ${retry + 1}: Overlap=${quality.overlapPercent.toStringAsFixed(1)}%, '
+            'Wenden=${quality.uturnPositions.length}, Punkte=${result.coordinates.length} '
+            '→ ${(quality.passed && !retryTooFewPoints) ? "OK" : "verworfen"}',
+          );
+
+          final score =
+              quality.overlapPercent +
+              quality.uturnPositions.length * 10 +
+              (retryTooFewPoints ? 30 : 0);
+          final bestScore =
+              bestOverlap + bestUturns * 10 + (bestPointScore < 30 ? 30 : 0);
+          if (score < bestScore) {
+            bestResult = result;
+            bestOverlap = quality.overlapPercent;
+            bestUturns = quality.uturnPositions.length;
+            bestPointScore = result.coordinates.length;
+          }
+
+          if (quality.passed && !retryTooFewPoints) {
+            debugPrint('[CruiseMode] A→B Retry ${retry + 1} erfolgreich');
+            break;
+          }
+
+          if (retry == 3) {
+            debugPrint(
+              '[CruiseMode] A→B Max Retries erreicht — nehme beste Route '
+              '(Overlap=${bestOverlap.toStringAsFixed(1)}%, Wenden=$bestUturns, Punkte=$bestPointScore)',
+            );
+            result = bestResult;
+          }
+        }
+      }
+
+      quality = validator.validateQuality(
+        coordinates: result.coordinates,
+        isRoundTrip: _isRoundTrip,
+        targetDistanceKm: targetKm,
+        actualDistanceKm: result.distanceKm ?? 0,
+      );
+
+      final shouldAvoidDuplicateRoutes = _isRoundTrip || scenicMode;
+      if (shouldAvoidDuplicateRoutes &&
+          _hasRecentDuplicateRoute(routeConfigKey, result)) {
+        for (var duplicateRetry = 0; duplicateRetry < 3; duplicateRetry++) {
+          debugPrint(
+            '[CruiseMode] Ähnliche Route erkannt — generiere Alternative (${duplicateRetry + 1}/3)',
+          );
+          final candidate = _isRoundTrip
+              ? await _routeService.generateRoundTrip(
+                  startPosition: startPosition,
+                  targetDistanceKm: distance,
+                  mode: _selectedStyle,
+                  planningType: _planningType,
+                  targetLocation: targetLocation,
+                )
+              : await _routeService.generatePointToPoint(
+                  startPosition: startPosition,
+                  destinationLat: destLat!,
+                  destinationLng: destLng!,
+                  mode: scenicMode ? _selectedStyle : 'Standard',
+                  scenic: scenicMode,
+                  routeVariant: detourVariant,
+                  avoidHighways: _avoidHighways,
+                );
+          final candidateDistanceKm = candidate.distanceKm ?? 0;
+          final candidateQuality = validator.validateQuality(
+            coordinates: candidate.coordinates,
+            isRoundTrip: _isRoundTrip,
+            targetDistanceKm: targetKm,
+            actualDistanceKm: candidateDistanceKm,
+          );
+          final candidateTooFewPoints = _isRoundTrip
+              ? candidate.coordinates.length < 50 && distance >= 20
+              : candidate.coordinates.length < 30 && candidateDistanceKm >= 10;
+
+          if (!candidateQuality.passed || candidateTooFewPoints) {
+            debugPrint(
+              '[CruiseMode] Alternative verworfen: Qualität nicht ausreichend.',
+            );
+            continue;
+          }
+
+          result = candidate;
+          quality = candidateQuality;
+          if (!_hasRecentDuplicateRoute(routeConfigKey, result)) {
+            break;
+          }
+        }
+      }
+
+      if (shouldAvoidDuplicateRoutes) {
+        _rememberRouteFingerprint(routeConfigKey, result);
       }
 
       _applyRouteResult(result);
@@ -1436,6 +1611,55 @@ class _CruiseModePageState extends State<CruiseModePage>
     }
 
     return isApproachingDestination(_recentDestinationDistances);
+  }
+
+  String _buildRouteConfigKey({
+    required geo.Position startPosition,
+    required bool isRoundTrip,
+    required int targetDistanceKm,
+    required String planningType,
+    required String style,
+    required String detour,
+    required bool avoidHighways,
+    double? destinationLat,
+    double? destinationLng,
+  }) {
+    final startBucket =
+        '${startPosition.latitude.toStringAsFixed(3)},${startPosition.longitude.toStringAsFixed(3)}';
+    if (isRoundTrip) {
+      return 'rt|$startBucket|$targetDistanceKm|$planningType|$style';
+    }
+
+    final destinationBucket = destinationLat != null && destinationLng != null
+        ? '${destinationLat.toStringAsFixed(3)},${destinationLng.toStringAsFixed(3)}'
+        : 'none';
+    final effectiveStyle = detour == 'Direkt' ? 'Standard' : style;
+    return 'ab|$startBucket|$destinationBucket|$detour|$effectiveStyle|$avoidHighways';
+  }
+
+  bool _hasRecentDuplicateRoute(String routeConfigKey, RouteResult result) {
+    final fingerprints = _recentRouteFingerprintsByConfig[routeConfigKey];
+    if (fingerprints == null || fingerprints.isEmpty) return false;
+    final fingerprint = RouteQualityValidator.buildRouteFingerprint(
+      result.coordinates,
+      distanceKm: result.distanceKm,
+    );
+    return fingerprints.contains(fingerprint);
+  }
+
+  void _rememberRouteFingerprint(String routeConfigKey, RouteResult result) {
+    final fingerprint = RouteQualityValidator.buildRouteFingerprint(
+      result.coordinates,
+      distanceKm: result.distanceKm,
+    );
+    final updated = [...?_recentRouteFingerprintsByConfig[routeConfigKey]];
+    if (!updated.contains(fingerprint)) {
+      updated.add(fingerprint);
+    }
+    if (updated.length > 3) {
+      updated.removeRange(0, updated.length - 3);
+    }
+    _recentRouteFingerprintsByConfig[routeConfigKey] = updated;
   }
 
   String _rerouteMode({required bool mergeWithOriginal}) {
@@ -1828,11 +2052,18 @@ class _CruiseModePageState extends State<CruiseModePage>
     // ── Kamera-Bewegung ──────────────────────────────────────────────────────
     // Web: Animierte Interpolation (60fps smooth), Native: direkter Move
     if (_isCameraLocked && _mapReady) {
-      _animateCameraTo(
-        effectivePosition.latitude,
-        effectivePosition.longitude,
-        _userHeading,
-      );
+      if (kIsWeb) {
+        final predicted = _webSmoother.predict(
+          DateTime.now().add(const Duration(milliseconds: 180)),
+        );
+        _animateCameraTo(predicted.lat, predicted.lng, predicted.heading);
+      } else {
+        _animateCameraTo(
+          effectivePosition.latitude,
+          effectivePosition.longitude,
+          _userHeading,
+        );
+      }
     }
 
     // ── UI-Rebuild Throttling ───────────────────────────────────────────────
@@ -2054,6 +2285,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     }
 
     try {
+      const validator = RouteQualityValidator();
       // Suche den nächsten Punkt auf der GESAMTEN verbleibenden Route (großes Fenster)
       final globalMatch = findNearestInWindow(
         position: position,
@@ -2096,36 +2328,50 @@ class _CruiseModePageState extends State<CruiseModePage>
         );
 
         if (destinationResult.coordinates.length >= 2) {
-          final distanceMeters =
-              destinationResult.distanceMeters ??
-              _calculatePolylineDistanceMeters(destinationResult.coordinates);
-          final durationSeconds =
-              destinationResult.durationSeconds ??
-              _estimateDurationSecondsForDistance(distanceMeters);
-
-          await _commitRerouteResult(
-            result: _buildRouteResultFromCoordinates(
-              coordinates: destinationResult.coordinates,
-              maneuvers: destinationResult.maneuvers,
-              distanceMeters: distanceMeters,
-              durationSeconds: durationSeconds,
-              speedLimits: destinationResult.speedLimits,
-            ),
-            position: position,
+          final destinationQuality = validator.validateQuality(
+            coordinates: destinationResult.coordinates,
+            isRoundTrip: false,
+            actualDistanceKm: destinationResult.distanceKm ?? 0,
           );
+          final destinationTooFewPoints =
+              destinationResult.coordinates.length < 30 &&
+              (destinationResult.distanceKm ?? 0) >= 10;
+          if (!destinationQuality.passed || destinationTooFewPoints) {
+            debugPrint(
+              '[CruiseMode] Direkter Ziel-Reroute verworfen: Qualität unzureichend.',
+            );
+          } else {
+            final distanceMeters =
+                destinationResult.distanceMeters ??
+                _calculatePolylineDistanceMeters(destinationResult.coordinates);
+            final durationSeconds =
+                destinationResult.durationSeconds ??
+                _estimateDurationSecondsForDistance(distanceMeters);
 
-          if (mounted) {
-            ScaffoldMessenger.of(context)
-              ..hideCurrentSnackBar()
-              ..showSnackBar(
-                const SnackBar(
-                  content: Text('Neue Strecke zum Ziel wurde übernommen.'),
-                  backgroundColor: Colors.green,
-                  duration: Duration(seconds: 2),
-                ),
-              );
+            await _commitRerouteResult(
+              result: _buildRouteResultFromCoordinates(
+                coordinates: destinationResult.coordinates,
+                maneuvers: destinationResult.maneuvers,
+                distanceMeters: distanceMeters,
+                durationSeconds: durationSeconds,
+                speedLimits: destinationResult.speedLimits,
+              ),
+              position: position,
+            );
+
+            if (mounted) {
+              ScaffoldMessenger.of(context)
+                ..hideCurrentSnackBar()
+                ..showSnackBar(
+                  const SnackBar(
+                    content: Text('Neue Strecke zum Ziel wurde übernommen.'),
+                    backgroundColor: Colors.green,
+                    duration: Duration(seconds: 2),
+                  ),
+                );
+            }
+            return;
           }
-          return;
         }
       }
 
@@ -2186,6 +2432,22 @@ class _CruiseModePageState extends State<CruiseModePage>
 
         if (candidate.coordinates.length < 2) {
           rejoinIndex = math.min(rejoinIndex + 80, maxRejoinIndex).toInt();
+          continue;
+        }
+
+        final candidateQuality = validator.validateQuality(
+          coordinates: candidate.coordinates,
+          isRoundTrip: false,
+          actualDistanceKm: candidate.distanceKm ?? 0,
+        );
+        final candidateTooFewPoints =
+            candidate.coordinates.length < 30 &&
+            (candidate.distanceKm ?? 0) >= 10;
+        if (!candidateQuality.passed || candidateTooFewPoints) {
+          rejoinIndex = math.min(rejoinIndex + 80, maxRejoinIndex).toInt();
+          debugPrint(
+            '[CruiseMode] Reroute-Attempt ${attempt + 1}: Kandidat verworfen (Qualität)',
+          );
           continue;
         }
 

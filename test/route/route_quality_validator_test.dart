@@ -19,10 +19,7 @@ void main() {
       // Hin und exakt zurück = Backtracking
       // 200 Punkte pro Richtung, 0.0001° Abstand ≈ 11m pro Schritt
       // overlapProximity=40m, also müssen Punkte <40m auseinander sein
-      final outbound = List.generate(
-        200,
-        (i) => [11.0, 48.0 + i * 0.0001],
-      );
+      final outbound = List.generate(200, (i) => [11.0, 48.0 + i * 0.0001]);
       final inbound = List.generate(
         200,
         (i) => [11.0, 48.0 + (199 - i) * 0.0001],
@@ -30,6 +27,61 @@ void main() {
       final coords = [...outbound, ...inbound];
       final overlap = validator.validateOverlap(coords);
       expect(overlap, greaterThan(20.0));
+    });
+
+    test('Nahe Kreuzung ohne Backtracking bleibt unter dem Grenzwert', () {
+      final vertical = List.generate(120, (i) => [11.0, 48.0 + i * 0.0001]);
+      final horizontal = List.generate(
+        120,
+        (i) => [10.994 + i * 0.0001, 48.006],
+      );
+      final coords = [...vertical, ...horizontal];
+
+      final overlap = validator.validateOverlap(coords);
+
+      expect(overlap, lessThan(12.0));
+    });
+  });
+
+  group('buildRouteFingerprint', () {
+    test('gleiche Route erzeugt denselben Fingerprint', () {
+      final coordinates = List.generate(
+        40,
+        (i) => [11.0 + i * 0.0002, 48.0 + i * 0.0001],
+      );
+
+      final first = RouteQualityValidator.buildRouteFingerprint(
+        coordinates,
+        distanceKm: 24.6,
+      );
+      final second = RouteQualityValidator.buildRouteFingerprint(
+        coordinates,
+        distanceKm: 24.6,
+      );
+
+      expect(first, equals(second));
+    });
+
+    test('deutlich andere Route erzeugt anderen Fingerprint', () {
+      final firstRoute = List.generate(
+        40,
+        (i) => [11.0 + i * 0.0002, 48.0 + i * 0.0001],
+      );
+      final secondRoute = List.generate(
+        40,
+        (i) => [11.02 + i * 0.00015, 48.01 - i * 0.00008],
+      );
+
+      final first = RouteQualityValidator.buildRouteFingerprint(
+        firstRoute,
+        distanceKm: 24.6,
+      );
+      final second = RouteQualityValidator.buildRouteFingerprint(
+        secondRoute,
+        distanceKm: 31.4,
+      );
+
+      expect(first, isNot(equals(second)));
     });
   });
 
@@ -46,14 +98,8 @@ void main() {
 
     test('U-Turn erkannt bei 180° Wende', () {
       // Gerade nach Norden, dann abrupt nach Süden
-      final north = List.generate(
-        20,
-        (i) => [11.0, 48.0 + i * 0.0003],
-      );
-      final south = List.generate(
-        20,
-        (i) => [11.0, 48.0 + 0.006 - i * 0.0003],
-      );
+      final north = List.generate(20, (i) => [11.0, 48.0 + i * 0.0003]);
+      final south = List.generate(20, (i) => [11.0, 48.0 + 0.006 - i * 0.0003]);
       final coords = [...north, ...south];
       final uturns = validator.validateNoUturns(coords);
       expect(uturns, isNotEmpty);
@@ -109,10 +155,7 @@ void main() {
       // Leg 3: Zurück zum Start
       for (var i = 0; i < 40; i++) {
         final t = i / 39;
-        coords.add([
-          11.08 * (1 - t) + 11.0 * t,
-          48.08 * (1 - t) + 48.0 * t,
-        ]);
+        coords.add([11.08 * (1 - t) + 11.0 * t, 48.08 * (1 - t) + 48.0 * t]);
       }
 
       final result = validator.validateQuality(

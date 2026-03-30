@@ -10,11 +10,13 @@ import 'package:geolocator/geolocator.dart' as geo;
 /// 4. Zwischen GPS-Updates wird die Position per Timer interpoliert
 class WebPositionSmoother {
   WebPositionSmoother({
-    this.minMovementMeters = 1.0,
-    this.maxJumpMeters = 500.0,
-    this.minHeadingDistanceMeters = 1.5,
-    this.headingSmoothingFactor = 0.5,
-    this.processNoise = 3.0,
+    this.minMovementMeters = 2.5,
+    this.maxJumpMeters = 350.0,
+    this.minHeadingDistanceMeters = 4.0,
+    this.headingSmoothingFactor = 0.35,
+    this.processNoise = 2.5,
+    this.stationaryNoiseMeters = 6.0,
+    this.headingNoiseThresholdDegrees = 18.0,
   });
 
   /// Minimale Distanz für Rebuild-Trigger (in Metern).
@@ -32,6 +34,12 @@ class WebPositionSmoother {
   /// Prozessrauschen für den Kalman-Filter (höher = vertraut GPS mehr).
   final double processNoise;
 
+  /// Unterhalb dieser Distanz gilt ein Web-GPS-Update als Standrauschen.
+  final double stationaryNoiseMeters;
+
+  /// Unterhalb dieser Winkelabweichung wird Heading noch stärker geglättet.
+  final double headingNoiseThresholdDegrees;
+
   // ── Kalman State ──────────────────────────────────────────────────────────
   double? _lat;
   double? _lng;
@@ -42,6 +50,8 @@ class WebPositionSmoother {
   double _pvLat = 10.0; // Unsicherheit Velocity Lat
   double _pvLng = 10.0; // Unsicherheit Velocity Lng
   DateTime? _lastTimestamp;
+  double? _lastRawLat;
+  double? _lastRawLng;
 
   // ── Heading State ─────────────────────────────────────────────────────────
   double _smoothedHeading = 0.0;
@@ -88,6 +98,8 @@ class WebPositionSmoother {
       _vLat = 0.0;
       _vLng = 0.0;
       _lastTimestamp = now;
+      _lastRawLat = raw.latitude;
+      _lastRawLng = raw.longitude;
       _lastOutput = _buildPosition(raw, _lat!, _lng!);
       return _lastOutput;
     }
@@ -97,11 +109,23 @@ class WebPositionSmoother {
     if (dt <= 0) return null; // Doppeltes Event ignorieren
     _lastTimestamp = now;
 
+    final rawStepMeters = _lastRawLat != null && _lastRawLng != null
+        ? geo.Geolocator.distanceBetween(
+            _lastRawLat!,
+            _lastRawLng!,
+            raw.latitude,
+            raw.longitude,
+          )
+        : double.infinity;
+
     // ── Teleport-Check ──────────────────────────────────────────────────────
     final jumpDist = geo.Geolocator.distanceBetween(
-      _lat!, _lng!, raw.latitude, raw.longitude,
+      _lat!,
+      _lng!,
+      raw.latitude,
+      raw.longitude,
     );
-    if (jumpDist > maxJumpMeters) {
+    if (jumpDist > maxJumpMeters || rawStepMeters > maxJumpMeters) {
       _lat = raw.latitude;
       _lng = raw.longitude;
       _vLat = 0.0;
@@ -110,8 +134,18 @@ class WebPositionSmoother {
       _pLng = 10.0;
       _pvLat = 10.0;
       _pvLng = 10.0;
+      _lastRawLat = raw.latitude;
+      _lastRawLng = raw.longitude;
       _lastOutput = _buildPosition(raw, _lat!, _lng!);
       return _lastOutput;
+    }
+
+    // ── Standrauschen unterdrücken ─────────────────────────────────────────
+    if (rawStepMeters < stationaryNoiseMeters &&
+        (raw.speed.isNaN || raw.speed < 1.5)) {
+      _lastRawLat = raw.latitude;
+      _lastRawLng = raw.longitude;
+      return null;
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -132,7 +166,8 @@ class WebPositionSmoother {
     // ════════════════════════════════════════════════════════════════════════
     // Messrauschen: accuracy in Meter → in Grad umrechnen (grobe Näherung)
     final accuracyDeg = (raw.accuracy.isFinite && raw.accuracy > 0)
-        ? raw.accuracy / 111_000.0 // ~111km pro Grad
+        ? raw.accuracy /
+              111_000.0 // ~111km pro Grad
         : 0.0001; // Fallback ~11m
     final rLat = accuracyDeg * accuracyDeg;
     final rLng = rLat;
@@ -167,13 +202,20 @@ class WebPositionSmoother {
     final prev = _lastOutput;
     if (prev != null) {
       final movedMeters = geo.Geolocator.distanceBetween(
-        prev.latitude, prev.longitude, _lat!, _lng!,
+        prev.latitude,
+        prev.longitude,
+        _lat!,
+        _lng!,
       );
       if (movedMeters < minMovementMeters) {
+        _lastRawLat = raw.latitude;
+        _lastRawLng = raw.longitude;
         return null; // Zu wenig Bewegung → kein visuelles Update
       }
     }
 
+    _lastRawLat = raw.latitude;
+    _lastRawLng = raw.longitude;
     _lastOutput = _buildPosition(raw, _lat!, _lng!);
     return _lastOutput;
   }
@@ -206,6 +248,8 @@ class WebPositionSmoother {
     _pvLat = 10.0;
     _pvLng = 10.0;
     _lastTimestamp = null;
+    _lastRawLat = null;
+    _lastRawLng = null;
     _smoothedHeading = 0.0;
     _hasValidHeading = false;
     _lastHeadingLat = null;
@@ -232,18 +276,26 @@ class WebPositionSmoother {
     }
 
     final distance = geo.Geolocator.distanceBetween(
-      prevLat, prevLng, raw.latitude, raw.longitude,
+      prevLat,
+      prevLng,
+      raw.latitude,
+      raw.longitude,
     );
 
     if (distance >= minHeadingDistanceMeters) {
       final computed = _calculateBearing(
-        prevLat, prevLng, raw.latitude, raw.longitude,
+        prevLat,
+        prevLng,
+        raw.latitude,
+        raw.longitude,
       );
 
       if (_hasValidHeading) {
-        _smoothedHeading = _lerpAngle(
-          _smoothedHeading, computed, headingSmoothingFactor,
-        );
+        final headingDelta = _angleDelta(_smoothedHeading, computed);
+        final blend = headingDelta <= headingNoiseThresholdDegrees
+            ? headingSmoothingFactor * 0.65
+            : headingSmoothingFactor;
+        _smoothedHeading = _lerpAngle(_smoothedHeading, computed, blend);
       } else {
         _smoothedHeading = computed;
         _hasValidHeading = true;
@@ -259,7 +311,8 @@ class WebPositionSmoother {
     final lat2R = lat2 * math.pi / 180;
     final dLng = (lng2 - lng1) * math.pi / 180;
     final y = math.sin(dLng) * math.cos(lat2R);
-    final x = math.cos(lat1R) * math.sin(lat2R) -
+    final x =
+        math.cos(lat1R) * math.sin(lat2R) -
         math.sin(lat1R) * math.cos(lat2R) * math.cos(dLng);
     return (math.atan2(y, x) * 180 / math.pi + 360) % 360;
   }
@@ -269,6 +322,11 @@ class WebPositionSmoother {
     if (diff > 180) diff -= 360;
     if (diff < -180) diff += 360;
     return (from + diff * t) % 360;
+  }
+
+  double _angleDelta(double from, double to) {
+    final diff = (to - from).abs() % 360;
+    return diff > 180 ? 360 - diff : diff;
   }
 
   geo.Position _buildPosition(geo.Position raw, double lat, double lng) {
