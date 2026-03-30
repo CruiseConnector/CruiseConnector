@@ -138,6 +138,24 @@ void main() {
       expect(validator.validateDistanceTolerance(50.0, 40.0), isFalse);
       expect(validator.validateDistanceTolerance(50.0, 60.0), isFalse);
     });
+
+    test(
+      'Rundkurse bekommen realistischere Toleranzen je nach Zieldistanz',
+      () {
+        expect(
+          validator.roundTripDistanceTolerance(50.0),
+          closeTo(0.18, 0.001),
+        );
+        expect(
+          validator.roundTripDistanceTolerance(75.0),
+          closeTo(0.16, 0.001),
+        );
+        expect(
+          validator.roundTripDistanceTolerance(150.0),
+          closeTo(0.14, 0.001),
+        );
+      },
+    );
   });
 
   group('validateQuality – Gesamtbewertung', () {
@@ -185,6 +203,36 @@ void main() {
       expect(result.isLoopClosed, isTrue);
       expect(result.passed, isTrue);
     });
+
+    test(
+      'Rundkurs toleriert brauchbare Distanzabweichung bei 50km realistischer',
+      () {
+        final coords = <List<double>>[];
+        for (var i = 0; i < 45; i++) {
+          coords.add([11.0, 48.0 + i * 0.0018]);
+        }
+        for (var i = 0; i < 45; i++) {
+          coords.add([11.0 + i * 0.0016, 48.081]);
+        }
+        for (var i = 0; i < 45; i++) {
+          final t = i / 44;
+          coords.add([
+            11.0704 * (1 - t) + 11.0 * t,
+            48.081 * (1 - t) + 48.0 * t,
+          ]);
+        }
+
+        final result = validator.validateQuality(
+          coordinates: coords,
+          isRoundTrip: true,
+          targetDistanceKm: 50.0,
+          actualDistanceKm: 57.8,
+        );
+
+        expect(result.distanceInTolerance, isTrue);
+        expect(result.passed, isTrue);
+      },
+    );
   });
 
   group('Route Similarity', () {
@@ -246,6 +294,71 @@ void main() {
         ),
         isFalse,
       );
+    });
+  });
+
+  group('classifyGeneratedRoute', () {
+    test(
+      'brauchbarer Rundkurs wird als akzeptabel statt schlecht klassifiziert',
+      () {
+        final coords = <List<double>>[];
+        for (var i = 0; i < 24; i++) {
+          coords.add([11.0, 48.0 + i * 0.0015]);
+        }
+        for (var i = 0; i < 24; i++) {
+          coords.add([11.0 + i * 0.0015, 48.0345]);
+        }
+        for (var i = 0; i < 24; i++) {
+          final t = i / 23;
+          coords.add([
+            11.0345 * (1 - t) + 11.0 * t,
+            48.0345 * (1 - t) + 48.0 * t,
+          ]);
+        }
+
+        final quality = validator.validateQuality(
+          coordinates: coords,
+          isRoundTrip: true,
+          targetDistanceKm: 50.0,
+          actualDistanceKm: 58.2,
+        );
+        final classification = validator.classifyGeneratedRoute(
+          quality: quality,
+          isRoundTrip: true,
+          coordinateCount: coords.length,
+          actualDistanceKm: 58.2,
+          targetDistanceKm: 50.0,
+        );
+
+        expect(classification.isAcceptable, isTrue);
+        expect(classification.tier, isNot(RouteQualityTier.poor));
+      },
+    );
+
+    test('klar fehlerhafte Rundkurs-Geometrie bleibt schlecht', () {
+      final coords = [
+        [11.0, 48.0],
+        [11.02, 48.02],
+        [11.0, 48.0],
+        [11.02, 48.02],
+        [11.0, 48.0],
+      ];
+
+      final quality = validator.validateQuality(
+        coordinates: coords,
+        isRoundTrip: true,
+        targetDistanceKm: 50.0,
+        actualDistanceKm: 12.0,
+      );
+      final classification = validator.classifyGeneratedRoute(
+        quality: quality,
+        isRoundTrip: true,
+        coordinateCount: coords.length,
+        actualDistanceKm: 12.0,
+        targetDistanceKm: 50.0,
+      );
+
+      expect(classification.tier, RouteQualityTier.poor);
     });
   });
 }

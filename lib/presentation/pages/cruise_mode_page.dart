@@ -1327,6 +1327,13 @@ class _CruiseModePageState extends State<CruiseModePage>
         targetDistanceKm: targetKm,
         actualDistanceKm: actualKm,
       );
+      var routeClassification = validator.classifyGeneratedRoute(
+        quality: quality,
+        isRoundTrip: _isRoundTrip,
+        coordinateCount: result.coordinates.length,
+        actualDistanceKm: actualKm,
+        targetDistanceKm: targetKm,
+      );
       final routeConfigKey = _buildRouteConfigKey(
         startPosition: startPosition,
         isRoundTrip: _isRoundTrip,
@@ -1340,19 +1347,24 @@ class _CruiseModePageState extends State<CruiseModePage>
       );
 
       // Basis-Check: zu wenige Punkte oder komplett falsche Distanz
-      final tooFewPoints = _isRoundTrip
-          ? result.coordinates.length < 50 && distance >= 20
-          : result.coordinates.length < 30 && actualKm >= 10;
+      final minimumPointCount = _minimumRoutePointCount(
+        isRoundTrip: _isRoundTrip,
+        targetDistanceKm: targetKm,
+        actualDistanceKm: actualKm,
+      );
+      var tooFewPoints = result.coordinates.length < minimumPointCount;
 
       // Retry bis zu 5x wenn Qualität schlecht ist (Overlap, U-Turns, Distanz)
       // Fallback: beste Route nehmen wenn keine perfekt ist
-      if ((!quality.passed || tooFewPoints) && _isRoundTrip) {
+      if ((!routeClassification.isAcceptable || tooFewPoints) && _isRoundTrip) {
         debugPrint(
-          '[CruiseMode] Route-Qualität schlecht: $quality — bis zu 5 Retries',
+          '[CruiseMode] Rundkurs-Qualität noch nicht ausreichend: '
+          '${routeClassification.tier} / score=${routeClassification.score.toStringAsFixed(1)} '
+          '— bis zu 5 Retries',
         );
         var bestResult = result;
-        var bestOverlap = quality.overlapPercent;
-        var bestUturns = quality.uturnPositions.length;
+        var bestQuality = quality;
+        var bestClassification = routeClassification;
 
         for (var retry = 0; retry < 5; retry++) {
           result = await _routeService.generateRoundTrip(
@@ -1368,33 +1380,41 @@ class _CruiseModePageState extends State<CruiseModePage>
             targetDistanceKm: targetKm,
             actualDistanceKm: retryKm,
           );
+          final retryClassification = validator.classifyGeneratedRoute(
+            quality: quality,
+            isRoundTrip: true,
+            coordinateCount: result.coordinates.length,
+            actualDistanceKm: retryKm,
+            targetDistanceKm: targetKm,
+          );
           debugPrint(
             '[CruiseMode] Versuch ${retry + 1}: Overlap=${quality.overlapPercent.toStringAsFixed(1)}%, '
-            'Wenden=${quality.uturnPositions.length} → ${quality.passed ? "OK" : "verworfen"}',
+            'Wenden=${quality.uturnPositions.length}, tier=${retryClassification.tier}, '
+            'score=${retryClassification.score.toStringAsFixed(1)}',
           );
 
-          // Beste Route tracken (geringster Overlap + wenigste U-Turns)
-          final score =
-              quality.overlapPercent + quality.uturnPositions.length * 10;
-          final bestScore = bestOverlap + bestUturns * 10;
-          if (score < bestScore) {
+          if (retryClassification.score < bestClassification.score) {
             bestResult = result;
-            bestOverlap = quality.overlapPercent;
-            bestUturns = quality.uturnPositions.length;
+            bestQuality = quality;
+            bestClassification = retryClassification;
           }
 
-          if (quality.passed && result.coordinates.length >= 50) {
-            debugPrint('[CruiseMode] Retry ${retry + 1} erfolgreich: $quality');
+          if (retryClassification.isIdeal) {
+            routeClassification = retryClassification;
+            debugPrint(
+              '[CruiseMode] Retry ${retry + 1} erfolgreich: idealer Rundkurs',
+            );
             break;
           }
 
-          // Letzter Versuch: beste verfügbare Route nehmen
           if (retry == 4) {
             debugPrint(
               '[CruiseMode] Max Retries erreicht — nehme beste Route '
-              '(Overlap=${bestOverlap.toStringAsFixed(1)}%, Wenden=$bestUturns)',
+              '(tier=${bestClassification.tier}, score=${bestClassification.score.toStringAsFixed(1)})',
             );
             result = bestResult;
+            quality = bestQuality;
+            routeClassification = bestClassification;
           }
         }
       } else if ((!quality.passed || tooFewPoints) &&
@@ -1467,6 +1487,26 @@ class _CruiseModePageState extends State<CruiseModePage>
         targetDistanceKm: targetKm,
         actualDistanceKm: result.distanceKm ?? 0,
       );
+      routeClassification = validator.classifyGeneratedRoute(
+        quality: quality,
+        isRoundTrip: _isRoundTrip,
+        coordinateCount: result.coordinates.length,
+        actualDistanceKm: result.distanceKm ?? 0,
+        targetDistanceKm: targetKm,
+      );
+      tooFewPoints = _isRoundTrip
+          ? result.coordinates.length <
+                _minimumRoutePointCount(
+                  isRoundTrip: true,
+                  targetDistanceKm: targetKm,
+                  actualDistanceKm: result.distanceKm ?? 0,
+                )
+          : result.coordinates.length <
+                _minimumRoutePointCount(
+                  isRoundTrip: false,
+                  targetDistanceKm: targetKm,
+                  actualDistanceKm: result.distanceKm ?? 0,
+                );
 
       final shouldAvoidDuplicateRoutes = _isRoundTrip || scenicMode;
       final similarityThresholdPercent = _routeSimilarityThresholdPercent(
@@ -1515,11 +1555,29 @@ class _CruiseModePageState extends State<CruiseModePage>
             targetDistanceKm: targetKm,
             actualDistanceKm: candidateDistanceKm,
           );
+          final candidateClassification = validator.classifyGeneratedRoute(
+            quality: candidateQuality,
+            isRoundTrip: _isRoundTrip,
+            coordinateCount: candidate.coordinates.length,
+            actualDistanceKm: candidateDistanceKm,
+            targetDistanceKm: targetKm,
+          );
           final candidateTooFewPoints = _isRoundTrip
-              ? candidate.coordinates.length < 50 && distance >= 20
-              : candidate.coordinates.length < 30 && candidateDistanceKm >= 10;
+              ? candidate.coordinates.length <
+                    _minimumRoutePointCount(
+                      isRoundTrip: true,
+                      targetDistanceKm: targetKm,
+                      actualDistanceKm: candidateDistanceKm,
+                    )
+              : candidate.coordinates.length <
+                    _minimumRoutePointCount(
+                      isRoundTrip: false,
+                      targetDistanceKm: targetKm,
+                      actualDistanceKm: candidateDistanceKm,
+                    );
 
-          if (!candidateQuality.passed || candidateTooFewPoints) {
+          if (candidateTooFewPoints ||
+              (!_isRoundTrip && !candidateQuality.passed)) {
             debugPrint(
               '[CruiseMode] Alternative verworfen: Qualität nicht ausreichend.',
             );
@@ -1528,6 +1586,7 @@ class _CruiseModePageState extends State<CruiseModePage>
 
           result = candidate;
           quality = candidateQuality;
+          routeClassification = candidateClassification;
           if (!_isRouteTooSimilarToPrevious(
             routeConfigKey,
             result,
@@ -1696,6 +1755,20 @@ class _CruiseModePageState extends State<CruiseModePage>
     if (detourVariant <= 1) return 76.0;
     if (detourVariant == 2) return 74.0;
     return 72.0;
+  }
+
+  int _minimumRoutePointCount({
+    required bool isRoundTrip,
+    required double targetDistanceKm,
+    required double actualDistanceKm,
+  }) {
+    if (!isRoundTrip) {
+      return actualDistanceKm >= 10 ? 30 : 0;
+    }
+    if (targetDistanceKm >= 120) return 28;
+    if (targetDistanceKm >= 75) return 24;
+    if (targetDistanceKm >= 35) return 20;
+    return actualDistanceKm >= 15 ? 18 : 14;
   }
 
   bool _isRouteTooSimilarToPrevious(

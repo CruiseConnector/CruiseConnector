@@ -44,6 +44,18 @@ class RouteQualityResult {
   }
 }
 
+enum RouteQualityTier { ideal, acceptable, poor }
+
+class RouteQualityClassification {
+  const RouteQualityClassification({required this.tier, required this.score});
+
+  final RouteQualityTier tier;
+  final double score;
+
+  bool get isIdeal => tier == RouteQualityTier.ideal;
+  bool get isAcceptable => tier != RouteQualityTier.poor;
+}
+
 /// Prüft die Qualität einer generierten Route.
 ///
 /// Erkennt Backtracking, Wendemanöver, nicht geschlossene Schleifen
@@ -53,6 +65,7 @@ class RouteQualityValidator {
 
   /// Maximaler Overlap-Prozentsatz bevor die Route als schlecht gilt.
   static const double maxOverlapPercent = 15.0;
+  static const double roundTripMaxOverlapPercent = 20.0;
 
   /// Minimaler Bearing-Winkel der als U-Turn gilt (Grad).
   static const double uturnBearingThreshold = 140.0;
@@ -182,11 +195,22 @@ class RouteQualityValidator {
   }
 
   /// Prüft ob die tatsächliche Distanz innerhalb ±12% der Zieldistanz liegt.
-  bool validateDistanceTolerance(double targetKm, double actualKm) {
+  bool validateDistanceTolerance(
+    double targetKm,
+    double actualKm, {
+    double tolerancePercent = distanceTolerance,
+  }) {
     if (targetKm <= 0) return true;
     final ratio = actualKm / targetKm;
-    return ratio >= (1.0 - distanceTolerance) &&
-        ratio <= (1.0 + distanceTolerance);
+    return ratio >= (1.0 - tolerancePercent) &&
+        ratio <= (1.0 + tolerancePercent);
+  }
+
+  double roundTripDistanceTolerance(double targetKm) {
+    if (targetKm <= 0) return distanceTolerance;
+    if (targetKm <= 60) return 0.18;
+    if (targetKm <= 100) return 0.16;
+    return 0.14;
   }
 
   /// Gesamtbewertung: führt alle Checks durch und gibt ein Ergebnis zurück.
@@ -202,12 +226,22 @@ class RouteQualityValidator {
     final overlap = validateOverlap(coordinates);
     final uturns = validateNoUturns(coordinates);
     final loopClosed = isRoundTrip ? validateLoopClosed(coordinates) : true;
+    final effectiveDistanceTolerance = isRoundTrip
+        ? roundTripDistanceTolerance(targetDistanceKm)
+        : distanceTolerance;
     final distOk = targetDistanceKm > 0
-        ? validateDistanceTolerance(targetDistanceKm, actualDistanceKm)
+        ? validateDistanceTolerance(
+            targetDistanceKm,
+            actualDistanceKm,
+            tolerancePercent: effectiveDistanceTolerance,
+          )
         : true;
+    final overlapThreshold = isRoundTrip
+        ? roundTripMaxOverlapPercent
+        : maxOverlapPercent;
 
     final passed =
-        overlap <= maxOverlapPercent && uturns.isEmpty && loopClosed && distOk;
+        overlap <= overlapThreshold && uturns.isEmpty && loopClosed && distOk;
 
     final result = RouteQualityResult(
       overlapPercent: overlap,
@@ -223,6 +257,91 @@ class RouteQualityValidator {
     debugPrint('[RouteQuality] $result');
 
     return result;
+  }
+
+  RouteQualityClassification classifyGeneratedRoute({
+    required RouteQualityResult quality,
+    required bool isRoundTrip,
+    required int coordinateCount,
+    required double actualDistanceKm,
+    double targetDistanceKm = 0,
+  }) {
+    final effectiveTarget = targetDistanceKm > 0
+        ? targetDistanceKm
+        : (actualDistanceKm > 0 ? actualDistanceKm : 1.0);
+    final distanceDeltaPercent = effectiveTarget > 0
+        ? ((actualDistanceKm - effectiveTarget).abs() / effectiveTarget)
+        : 0.0;
+
+    final idealMinCoordinates = isRoundTrip
+        ? (effectiveTarget >= 100
+              ? 42
+              : effectiveTarget >= 70
+              ? 34
+              : 26)
+        : (actualDistanceKm >= 30 ? 28 : 20);
+    final acceptableMinCoordinates = isRoundTrip
+        ? (effectiveTarget >= 100
+              ? 28
+              : effectiveTarget >= 70
+              ? 24
+              : 18)
+        : (actualDistanceKm >= 30 ? 20 : 14);
+
+    final idealDistanceOk = targetDistanceKm <= 0
+        ? true
+        : distanceDeltaPercent <= roundTripDistanceTolerance(targetDistanceKm);
+    final acceptableDistanceOk = targetDistanceKm <= 0
+        ? true
+        : distanceDeltaPercent <=
+              (roundTripDistanceTolerance(targetDistanceKm) + 0.08);
+
+    final idealOverlap = isRoundTrip
+        ? roundTripMaxOverlapPercent
+        : maxOverlapPercent;
+    final acceptableOverlap = isRoundTrip ? 28.0 : 20.0;
+
+    final pointPenalty = coordinateCount < acceptableMinCoordinates
+        ? (acceptableMinCoordinates - coordinateCount) * 2.0
+        : coordinateCount < idealMinCoordinates
+        ? (idealMinCoordinates - coordinateCount) * 0.8
+        : 0.0;
+    final score =
+        quality.overlapPercent +
+        quality.uturnPositions.length * 18 +
+        distanceDeltaPercent * 100 * 1.6 +
+        pointPenalty +
+        (!quality.isLoopClosed ? 80 : 0);
+
+    if (!quality.isLoopClosed || quality.uturnPositions.isNotEmpty) {
+      return RouteQualityClassification(
+        tier: RouteQualityTier.poor,
+        score: score + 90,
+      );
+    }
+
+    if (coordinateCount < acceptableMinCoordinates ||
+        quality.overlapPercent > acceptableOverlap ||
+        !acceptableDistanceOk) {
+      return RouteQualityClassification(
+        tier: RouteQualityTier.poor,
+        score: score + 24,
+      );
+    }
+
+    if (coordinateCount >= idealMinCoordinates &&
+        quality.overlapPercent <= idealOverlap &&
+        idealDistanceOk) {
+      return RouteQualityClassification(
+        tier: RouteQualityTier.ideal,
+        score: score,
+      );
+    }
+
+    return RouteQualityClassification(
+      tier: RouteQualityTier.acceptable,
+      score: score + 6,
+    );
   }
 
   /// Baut einen kompakten Fingerprint aus Distanz, Punktzahl und

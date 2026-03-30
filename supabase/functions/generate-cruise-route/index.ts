@@ -47,6 +47,48 @@ interface DistanceConfig {
     radiusKm: number
     minKm: number
     maxKm: number
+    acceptableMinKm: number
+    acceptableMaxKm: number
+    waypointRadiusMeters: number
+}
+
+type RouteQualityTier = 'ideal' | 'acceptable' | 'fallback' | 'reject'
+
+interface RouteQualityEvaluation {
+    passed: boolean
+    reason: string
+    overlapPercent: number
+    hasUTurn: boolean
+    tier: RouteQualityTier
+    score: number
+    coordinateCount: number
+    actualDistanceKm: number
+    distanceDeltaKm: number
+}
+
+interface RoundTripCandidatePlan {
+    label: string
+    waypoints: Coordinate[]
+    radiuses: string
+}
+
+interface RoundTripSearchResult {
+    route: any
+    waypoints: Coordinate[]
+    radiuses: string
+    quality: RouteQualityEvaluation
+    candidateAttempts: number
+    acceptedCandidates: number
+    rejectedCandidates: number
+    rejectReasons: Record<string, number>
+    searchPhases: string[]
+}
+
+interface MapboxRouteFetchResult {
+    route: any | null
+    outcome: 'ok' | 'no_route' | 'http_error' | 'network_error'
+    statusCode?: number
+    details?: string
 }
 
 /**
@@ -75,10 +117,22 @@ function calculateDestination(start: Coordinate, distanceKm: number, bearingDegr
 }
 
 function getDistanceConfig(targetDistance: number, mode?: string): DistanceConfig {
-    // ±10% Toleranz für präzise Distanz-Einhaltung
-    const tolerance = 0.10;
-    const minKm = Math.round(targetDistance * (1 - tolerance));
-    const maxKm = Math.round(targetDistance * (1 + tolerance));
+    // Erfolgsquote vor Perfektion: idealer Zielkorridor plus breiterer
+    // akzeptabler Bereich, damit brauchbare Rundkurse nicht zu früh scheitern.
+    const idealTolerance = targetDistance <= 60
+        ? 0.16
+        : targetDistance <= 100
+        ? 0.14
+        : 0.12;
+    const acceptableTolerance = targetDistance <= 60
+        ? 0.32
+        : targetDistance <= 100
+        ? 0.28
+        : 0.24;
+    const minKm = Math.round(targetDistance * (1 - idealTolerance));
+    const maxKm = Math.round(targetDistance * (1 + idealTolerance));
+    const acceptableMinKm = Math.round(targetDistance * (1 - acceptableTolerance));
+    const acceptableMaxKm = Math.round(targetDistance * (1 + acceptableTolerance));
 
     // Formel: radius = targetDistance / (2 * PI * road_factor)
     // road_factor variiert stark je nach Stil, weil Landstraßen-Routing
@@ -86,24 +140,44 @@ function getDistanceConfig(targetDistance: number, mode?: string): DistanceConfi
     let roadFactor: number;
     switch (mode) {
         case 'Kurvenjagd':
-            roadFactor = 2.2; // Enge Bergstraßen = sehr lange Umwege
+            roadFactor = 1.70; // Mehr Suchraum, damit Kurvenmodus nicht verhungert
             break;
         case 'Entdecker':
-            roadFactor = 2.0; // Abgelegene Straßen = lange Umwege
+            roadFactor = 1.60; // Breiterer Suchraum für ungewöhnliche Straßen
             break;
         case 'Abendrunde':
-            roadFactor = 1.3; // Stadtnah, kurze Wege → größerer Radius nötig
+            roadFactor = 1.12; // Ruhiger, aber nicht zu eng um den Start
             break;
         case 'Sport Mode':
-            roadFactor = 1.5; // Breite Straßen, weniger Umwege als Kurven
+            roadFactor = 1.28; // Fließender Radius, bessere Trefferquote
             break;
         default:
-            roadFactor = 1.5;
+            roadFactor = 1.25;
     }
-    const radiusKm = targetDistance / (2 * Math.PI * roadFactor);
+    const shortDistanceBoost = targetDistance <= 60
+        ? 0.80
+        : targetDistance <= 100
+        ? 0.89
+        : 0.96;
+    const radiusKm = targetDistance / (2 * Math.PI * roadFactor * shortDistanceBoost);
+    let waypointRadiusMeters = targetDistance <= 60 ? 3200 : targetDistance <= 100 ? 4200 : 5200;
+    if (mode === 'Kurvenjagd') waypointRadiusMeters += 500;
+    if (mode === 'Entdecker') waypointRadiusMeters += 700;
+    if (mode === 'Abendrunde') waypointRadiusMeters = Math.max(2800, waypointRadiusMeters - 200);
 
-    console.log(`Distance config: target=${targetDistance}km, radius=${radiusKm.toFixed(1)}km, band=${minKm}-${maxKm}km, roadFactor=${roadFactor}, mode=${mode}`);
-    return { radiusKm, minKm, maxKm };
+    console.log(
+        `Distance config: target=${targetDistance}km, radius=${radiusKm.toFixed(1)}km, ` +
+        `idealBand=${minKm}-${maxKm}km, acceptableBand=${acceptableMinKm}-${acceptableMaxKm}km, ` +
+        `snapRadius=${waypointRadiusMeters}m, roadFactor=${roadFactor}, mode=${mode}`,
+    );
+    return {
+        radiusKm,
+        minKm,
+        maxKm,
+        acceptableMinKm,
+        acceptableMaxKm,
+        waypointRadiusMeters,
+    };
 }
 
 /**
@@ -189,6 +263,167 @@ function calculateReturnPath(start: Coordinate, outboundWaypoints: Coordinate[],
 
     const returnWp = calculateDestination(start, returnDistance, returnBearing);
     return [returnWp];
+}
+
+function calculateLoopWithReturnWaypoints(
+    start: Coordinate,
+    searchRadiusKm: number,
+    outboundWaypointCount: number,
+    seed?: number,
+): Coordinate[] {
+    const outbound = calculateLoopWaypoints(
+        start,
+        searchRadiusKm,
+        Math.max(2, outboundWaypointCount),
+        seed,
+    );
+    const returnWaypoints = calculateReturnPath(start, outbound, (seed ?? 0) + 73);
+    return [...outbound, ...returnWaypoints];
+}
+
+function buildWaypointRadiuses(waypoints: Coordinate[], intermediateRadiusMeters: number): string {
+    return waypoints
+        .map((_, i) => (i === 0 || i === waypoints.length - 1) ? 'unlimited' : `${intermediateRadiusMeters}`)
+        .join(';');
+}
+
+function dedupeRoundTripPlans(plans: RoundTripCandidatePlan[]): RoundTripCandidatePlan[] {
+    const seen = new Set<string>();
+    const result: RoundTripCandidatePlan[] = [];
+
+    for (const plan of plans) {
+        const signature = plan.waypoints
+            .map((wp) => `${wp.latitude.toFixed(4)},${wp.longitude.toFixed(4)}`)
+            .join('|');
+        if (seen.has(signature)) continue;
+        seen.add(signature);
+        result.push(plan);
+    }
+
+    return result;
+}
+
+function buildRoundTripWaypointCandidates({
+    start,
+    distanceConfig,
+    targetDistanceKm,
+    mode,
+    randomSeed,
+}: {
+    start: Coordinate
+    distanceConfig: DistanceConfig
+    targetDistanceKm: number
+    mode?: RouteMode
+    randomSeed: number
+}): RoundTripCandidatePlan[] {
+    const plans: RoundTripCandidatePlan[] = [];
+    const shortTarget = targetDistanceKm <= 60;
+    const mediumTarget = targetDistanceKm > 60 && targetDistanceKm <= 110;
+    const longTarget = targetDistanceKm > 110;
+    const baseRadius = distanceConfig.radiusKm;
+    const baseSnapRadius = distanceConfig.waypointRadiusMeters;
+
+    const addPlan = (
+        label: string,
+        waypoints: Coordinate[],
+        snapMultiplier: number = 1,
+    ) => {
+        const fullWaypoints = [start, ...waypoints, start];
+        plans.push({
+            label,
+            waypoints: fullWaypoints,
+            radiuses: buildWaypointRadiuses(
+                fullWaypoints,
+                Math.round(baseSnapRadius * snapMultiplier),
+            ),
+        });
+    };
+
+    const triangle = (multiplier: number, seedOffset: number) =>
+        calculateTriangleWaypoints(start, baseRadius * multiplier, randomSeed + seedOffset);
+    const loop = (
+        multiplier: number,
+        waypointCount: number,
+        seedOffset: number,
+    ) => calculateLoopWaypoints(
+        start,
+        baseRadius * multiplier,
+        waypointCount,
+        randomSeed + seedOffset,
+    );
+    const loopWithReturn = (
+        multiplier: number,
+        waypointCount: number,
+        seedOffset: number,
+    ) => calculateLoopWithReturnWaypoints(
+        start,
+        baseRadius * multiplier,
+        waypointCount,
+        randomSeed + seedOffset,
+    );
+
+    switch (mode) {
+        case 'Kurvenjagd':
+            if (longTarget) {
+                addPlan('curve-triangle-wide', triangle(1.18, 887), 1.12);
+                addPlan('curve-return-long', loopWithReturn(1.14, 3, 263), 1.18);
+                addPlan('curve-loop-wide', loop(1.28, 4, 131), 1.2);
+                addPlan('curve-loop-open', loop(1.38, 4, 541), 1.26);
+                addPlan('curve-triangle', triangle(1.00, 397), 1.0);
+                addPlan('curve-loop-tight', loop(1.02, 4, 11), 1.05);
+                addPlan('curve-loop-scout', loop(0.92, 3, 997), 1.0);
+            } else {
+                addPlan('curve-loop-tight', loop(1.08, shortTarget ? 4 : 5, 11), 1.05);
+                addPlan('curve-loop-wide', loop(longTarget ? 1.36 : 1.22, mediumTarget ? 4 : 5, 131), 1.2);
+                addPlan('curve-loop-open', loop(longTarget ? 1.48 : 1.30, mediumTarget ? 5 : 4, 541), 1.3);
+                addPlan('curve-return', loopWithReturn(1.16, 3, 263), 1.25);
+                addPlan('curve-triangle', triangle(1.02, 397), 1.0);
+                addPlan('curve-triangle-wide', triangle(1.26, 887), 1.18);
+                addPlan('curve-loop-scout', loop(0.94, shortTarget ? 3 : 4, 997), 1.0);
+            }
+            break;
+        case 'Abendrunde':
+            addPlan('evening-triangle-compact', triangle(0.90, 17), 0.95);
+            addPlan('evening-triangle-wide', triangle(1.05, 149), 1.0);
+            addPlan('evening-triangle-extended', triangle(1.18, 563), 1.1);
+            addPlan('evening-loop-soft', loop(0.98, 3, 281), 1.0);
+            addPlan('evening-return', loopWithReturn(0.94, 2, 419), 1.05);
+            addPlan('evening-loop-wide', loop(1.12, 3, 881), 1.12);
+            addPlan('evening-triangle-relaxed', triangle(1.28, 1151), 1.16);
+            break;
+        case 'Entdecker':
+            addPlan('explore-loop-wide', loop(longTarget ? 1.40 : 1.24, mediumTarget ? 4 : 5, 23), 1.2);
+            addPlan('explore-return', loopWithReturn(1.18, 4, 163), 1.3);
+            addPlan('explore-loop-offset', loop(1.08, shortTarget ? 3 : 4, 307), 1.15);
+            addPlan('explore-loop-far', loop(longTarget ? 1.52 : 1.32, mediumTarget ? 5 : 4, 587), 1.35);
+            addPlan('explore-triangle', triangle(1.12, 443), 1.0);
+            addPlan('explore-loop-scout', loop(0.96, shortTarget ? 3 : 4, 953), 1.08);
+            addPlan('explore-return-open', loopWithReturn(1.34, 4, 1301), 1.38);
+            break;
+        case 'Sport Mode':
+        default:
+            addPlan('sport-loop-flow', loop(1.10, shortTarget ? 3 : 4, 29), 1.0);
+            addPlan('sport-loop-wide', loop(longTarget ? 1.30 : 1.18, mediumTarget ? 4 : 3, 173), 1.15);
+            addPlan('sport-loop-extended', loop(longTarget ? 1.42 : 1.26, mediumTarget ? 4 : 3, 611), 1.25);
+            addPlan('sport-return', loopWithReturn(1.08, 3, 313), 1.15);
+            addPlan('sport-triangle', triangle(1.00, 457), 1.0);
+            addPlan('sport-loop-scout', loop(0.92, 3, 1031), 1.0);
+            addPlan('sport-triangle-wide', triangle(1.22, 1289), 1.12);
+            break;
+    }
+
+    addPlan('fallback-triangle-compact', triangle(0.84, 503), 1.0);
+    addPlan('fallback-triangle-balanced', triangle(1.00, 619), 1.05);
+    addPlan('fallback-triangle-wide', triangle(1.22, 1181), 1.15);
+    addPlan('fallback-triangle-very-wide', triangle(1.42, 1571), 1.24);
+    addPlan('fallback-loop-3', loop(1.02, 3, 733), 1.1);
+    addPlan('fallback-loop-4', loop(1.18, 4, 857), 1.2);
+    addPlan('fallback-loop-5', loop(1.30, 5, 1093), 1.35);
+    addPlan('fallback-loop-6', loop(1.46, 6, 1741), 1.42);
+    addPlan('fallback-return', loopWithReturn(1.12, 3, 977), 1.25);
+    addPlan('fallback-return-wide', loopWithReturn(1.34, 4, 1901), 1.38);
+
+    return dedupeRoundTripPlans(plans);
 }
 
 /**
@@ -465,13 +700,16 @@ function scaleWaypoint(start: Coordinate, wp: Coordinate, factor: number): Coord
 /**
  * Calls Mapbox Directions API.
  */
-async function getMapboxRoute(
+async function getMapboxRouteDetailed(
     waypoints: Coordinate[],
     profile: string,
     exclude: string,
     radiuses: string,
-    accessToken: string
-) {
+    accessToken: string,
+    options?: {
+        continueStraight?: boolean
+    },
+): Promise<MapboxRouteFetchResult> {
     // Format coordinates: "lon,lat;lon,lat;..."
     const coordinatesStr = waypoints
         .map(p => `${p.longitude},${p.latitude}`)
@@ -479,7 +717,8 @@ async function getMapboxRoute(
 
     // Base URL
     // We use geometries=geojson to get the path geometry
-    let url = `https://api.mapbox.com/directions/v5/${profile}/${coordinatesStr}?access_token=${accessToken}&geometries=geojson&overview=full&steps=true&voice_instructions=true&banner_instructions=true&language=de&continue_straight=true&annotations=maxspeed`
+    const continueStraight = options?.continueStraight ?? true
+    let url = `https://api.mapbox.com/directions/v5/${profile}/${coordinatesStr}?access_token=${accessToken}&geometries=geojson&overview=full&steps=true&voice_instructions=true&banner_instructions=true&language=de&continue_straight=${continueStraight ? 'true' : 'false'}&annotations=maxspeed`
 
     // Append optional parameters if they exist
     if (exclude && exclude.trim() !== '') {
@@ -489,20 +728,63 @@ async function getMapboxRoute(
         url += `&radiuses=${radiuses}`
     }
 
-    const res = await fetch(url)
-    if (!res.ok) {
-        const text = await res.text()
-        console.error(`Mapbox API Error (${res.status}): ${text}`)
-        return null
-    }
+    try {
+        const res = await fetch(url)
+        if (!res.ok) {
+            const text = await res.text()
+            console.error(`Mapbox API Error (${res.status}): ${text}`)
+            return {
+                route: null,
+                outcome: 'http_error',
+                statusCode: res.status,
+                details: text,
+            }
+        }
 
-    const data = await res.json()
-    if (!data.routes || data.routes.length === 0) {
-        return null
-    }
+        const data = await res.json()
+        if (!data.routes || data.routes.length === 0) {
+            return {
+                route: null,
+                outcome: 'no_route',
+                details: JSON.stringify(data).slice(0, 500),
+            }
+        }
 
-    // Return the best route
-    return data.routes[0]
+        // Return the best route
+        return {
+            route: data.routes[0],
+            outcome: 'ok',
+        }
+    } catch (error) {
+        const details = error instanceof Error ? error.message : String(error)
+        console.error(`Mapbox fetch failed: ${details}`)
+        return {
+            route: null,
+            outcome: 'network_error',
+            details,
+        }
+    }
+}
+
+async function getMapboxRoute(
+    waypoints: Coordinate[],
+    profile: string,
+    exclude: string,
+    radiuses: string,
+    accessToken: string,
+    options?: {
+        continueStraight?: boolean
+    },
+) {
+    const result = await getMapboxRouteDetailed(
+        waypoints,
+        profile,
+        exclude,
+        radiuses,
+        accessToken,
+        options,
+    )
+    return result.route
 }
 
 /**
@@ -613,43 +895,453 @@ function calculateRouteOverlapPercent(route: any): number {
     return (overlapCount / sampleCount) * 100
 }
 
-function evaluateRouteQuality(route: any, routeType: 'ROUND_TRIP' | 'POINT_TO_POINT') {
+function evaluateRouteQuality(
+    route: any,
+    routeType: 'ROUND_TRIP' | 'POINT_TO_POINT',
+    options?: {
+        targetDistanceKm?: number
+        distanceConfig?: DistanceConfig
+    },
+): RouteQualityEvaluation {
     const coordinateCount = route?.geometry?.coordinates?.length ?? 0
     const actualDistanceKm = getRouteDistanceKm(route)
     const hasUTurn = hasUTurnManeuver(route)
     const overlapPercent = calculateRouteOverlapPercent(route)
     const overlapThreshold = routeType === 'ROUND_TRIP' ? 18 : 14
+    const targetDistanceKm = options?.targetDistanceKm ?? 0
+    const distanceConfig = options?.distanceConfig
+    const distanceDeltaKm =
+        targetDistanceKm > 0 ? Math.abs(actualDistanceKm - targetDistanceKm) : 0
 
-    if (coordinateCount < 30 && actualDistanceKm > 10) {
+    if (routeType !== 'ROUND_TRIP') {
+        if (coordinateCount < 30 && actualDistanceKm > 10) {
+            return {
+                passed: false,
+                reason: `coords=${coordinateCount}`,
+                overlapPercent,
+                hasUTurn,
+                tier: 'reject',
+                score: 1000 + Math.max(0, 30 - coordinateCount),
+                coordinateCount,
+                actualDistanceKm,
+                distanceDeltaKm,
+            }
+        }
+        if (hasUTurn) {
+            return {
+                passed: false,
+                reason: 'u_turn',
+                overlapPercent,
+                hasUTurn,
+                tier: 'reject',
+                score: 1200,
+                coordinateCount,
+                actualDistanceKm,
+                distanceDeltaKm,
+            }
+        }
+        if (overlapPercent > overlapThreshold) {
+            return {
+                passed: false,
+                reason: `overlap=${overlapPercent.toFixed(1)}%`,
+                overlapPercent,
+                hasUTurn,
+                tier: 'reject',
+                score: 1100 + overlapPercent,
+                coordinateCount,
+                actualDistanceKm,
+                distanceDeltaKm,
+            }
+        }
+
         return {
-            passed: false,
-            reason: `coords=${coordinateCount}`,
+            passed: true,
+            reason: 'ok',
             overlapPercent,
             hasUTurn,
+            tier: 'ideal',
+            score: overlapPercent,
+            coordinateCount,
+            actualDistanceKm,
+            distanceDeltaKm,
         }
     }
+
+    const withinIdealDistance =
+        !distanceConfig ||
+        targetDistanceKm <= 0 ||
+        (actualDistanceKm >= distanceConfig.minKm &&
+            actualDistanceKm <= distanceConfig.maxKm)
+    const withinAcceptableDistance =
+        !distanceConfig ||
+        targetDistanceKm <= 0 ||
+        (actualDistanceKm >= distanceConfig.acceptableMinKm &&
+            actualDistanceKm <= distanceConfig.acceptableMaxKm)
+    const severeOverlap = overlapPercent > 52
+    const acceptableOverlap = overlapPercent <= 36
+    const idealOverlap = overlapPercent <= overlapThreshold
+    const severeCoordinateThreshold =
+        targetDistanceKm <= 60 ? 16 : targetDistanceKm <= 100 ? 18 : 22
+    const weakGeometryThreshold =
+        targetDistanceKm <= 60 ? 22 : targetDistanceKm <= 100 ? 26 : 30
+    const severeCoordinateShortage =
+        coordinateCount < severeCoordinateThreshold && actualDistanceKm > 8
+    const weakGeometry =
+        coordinateCount < weakGeometryThreshold && actualDistanceKm > 15
+
     if (hasUTurn) {
         return {
             passed: false,
             reason: 'u_turn',
             overlapPercent,
             hasUTurn,
+            tier: 'reject',
+            score: 1200,
+            coordinateCount,
+            actualDistanceKm,
+            distanceDeltaKm,
         }
     }
-    if (overlapPercent > overlapThreshold) {
+    if (severeCoordinateShortage) {
+        return {
+            passed: false,
+            reason: `coords=${coordinateCount}`,
+            overlapPercent,
+            hasUTurn,
+            tier: 'reject',
+            score: 900 + Math.max(0, severeCoordinateThreshold - coordinateCount) * 8,
+            coordinateCount,
+            actualDistanceKm,
+            distanceDeltaKm,
+        }
+    }
+    if (severeOverlap) {
         return {
             passed: false,
             reason: `overlap=${overlapPercent.toFixed(1)}%`,
             overlapPercent,
             hasUTurn,
+            tier: 'reject',
+            score: 900 + overlapPercent * 6,
+            coordinateCount,
+            actualDistanceKm,
+            distanceDeltaKm,
         }
     }
 
+    let tier: RouteQualityTier = 'fallback'
+    if (withinIdealDistance && idealOverlap && coordinateCount >= 38) {
+        tier = 'ideal'
+    } else if (withinAcceptableDistance && acceptableOverlap && !weakGeometry) {
+        tier = 'acceptable'
+    }
+
+    const score =
+        distanceDeltaKm * 7 +
+        overlapPercent * 3 +
+        (tier === 'ideal' ? 0 : tier === 'acceptable' ? 24 : 60) +
+        (withinAcceptableDistance ? 0 : 45) +
+        Math.max(0, 34 - coordinateCount) * 2
+
     return {
         passed: true,
-        reason: 'ok',
+        reason:
+            tier === 'ideal'
+                ? 'ideal'
+                : tier === 'acceptable'
+                ? 'acceptable'
+                : `fallback(dist=${actualDistanceKm.toFixed(1)}km, overlap=${overlapPercent.toFixed(1)}%)`,
         overlapPercent,
         hasUTurn,
+        tier,
+        score,
+        coordinateCount,
+        actualDistanceKm,
+        distanceDeltaKm,
+    }
+}
+
+function widenDistanceConfigForRoundTripSearch(
+    base: DistanceConfig,
+    targetDistanceKm: number,
+    phase: 'balanced' | 'fallback',
+): DistanceConfig {
+    const minFactor = phase === 'fallback' ? 0.64 : 0.72
+    const maxFactor = phase === 'fallback' ? 1.38 : 1.28
+    const radiusMultiplier = phase === 'fallback' ? 1.26 : 1.12
+    const snapMultiplier = phase === 'fallback' ? 1.42 : 1.22
+
+    return {
+        radiusKm: base.radiusKm * radiusMultiplier,
+        minKm: base.minKm,
+        maxKm: base.maxKm,
+        acceptableMinKm: Math.min(base.acceptableMinKm, Math.round(targetDistanceKm * minFactor)),
+        acceptableMaxKm: Math.max(base.acceptableMaxKm, Math.round(targetDistanceKm * maxFactor)),
+        waypointRadiusMeters: Math.round(base.waypointRadiusMeters * snapMultiplier),
+    }
+}
+
+function normalizeRoundTripRejectReason(reason: string): string {
+    if (reason.startsWith('coords=')) return 'coords'
+    if (reason.startsWith('overlap=')) return 'overlap'
+    if (reason.startsWith('mapbox_http_')) return 'mapbox_http'
+    if (reason.startsWith('mapbox_')) return reason
+    if (reason.includes('u_turn')) return 'u_turn'
+    if (reason.includes('fallback')) return 'fallback'
+    return reason
+}
+
+async function searchBestRoundTripRoute({
+    startLocation,
+    targetDistanceKm,
+    distanceConfig,
+    mode,
+    randomSeed,
+    mapboxProfile,
+    excludeParams,
+    accessToken,
+}: {
+    startLocation: Coordinate
+    targetDistanceKm: number
+    distanceConfig: DistanceConfig
+    mode?: RouteMode
+    randomSeed: number
+    mapboxProfile: string
+    excludeParams: string
+    accessToken: string
+}): Promise<RoundTripSearchResult | null> {
+    const highCostCurveSearch = mode === 'Kurvenjagd' && targetDistanceKm >= 130
+    const searchPhases = [
+        {
+            name: 'strict',
+            distanceConfig,
+            seedOffset: 0,
+            continueStraight: true,
+            exclude: excludeParams,
+        },
+        {
+            name: 'balanced',
+            distanceConfig: widenDistanceConfigForRoundTripSearch(
+                distanceConfig,
+                targetDistanceKm,
+                'balanced',
+            ),
+            seedOffset: 911,
+            continueStraight: false,
+            exclude: excludeParams,
+        },
+        {
+            name: 'fallback',
+            distanceConfig: widenDistanceConfigForRoundTripSearch(
+                distanceConfig,
+                targetDistanceKm,
+                'fallback',
+            ),
+            seedOffset: 1777,
+            continueStraight: false,
+            exclude: '',
+        },
+    ].filter((phase) => !(highCostCurveSearch && phase.name === 'fallback'))
+
+    let candidateAttempts = 0
+    let acceptedCandidates = 0
+    let rejectedCandidates = 0
+    let bestPlan: RoundTripCandidatePlan | null = null
+    let bestRoute: any = null
+    let bestQuality: RouteQualityEvaluation | null = null
+    const rejectReasons = new Map<string, number>()
+
+    const registerReject = (reason: string) => {
+        const normalized = normalizeRoundTripRejectReason(reason)
+        rejectReasons.set(normalized, (rejectReasons.get(normalized) ?? 0) + 1)
+    }
+
+    for (const phase of searchPhases) {
+        const candidatePlans = buildRoundTripWaypointCandidates({
+            start: startLocation,
+            distanceConfig: phase.distanceConfig,
+            targetDistanceKm,
+            mode,
+            randomSeed: randomSeed + phase.seedOffset,
+        }).slice(0, highCostCurveSearch ? 4 : undefined)
+        const maxPhaseAttempts =
+            highCostCurveSearch
+                ? phase.name === 'strict'
+                    ? 4
+                    : 3
+                : phase.name === 'strict'
+                ? 12
+                : phase.name === 'balanced'
+                ? 10
+                : 8
+        let phaseAttempts = 0
+        let phaseAcceptedCandidates = 0
+
+        console.log(
+            `[RT] Phase ${phase.name}: candidates=${candidatePlans.length}, radius=${phase.distanceConfig.radiusKm.toFixed(1)}km, ` +
+            `snap=${phase.distanceConfig.waypointRadiusMeters}m, exclude=${phase.exclude || 'none'}, continueStraight=${phase.continueStraight}`,
+        )
+
+        for (const plan of candidatePlans) {
+            if (phaseAttempts >= maxPhaseAttempts || candidateAttempts >= (highCostCurveSearch ? 10 : 24)) {
+                console.log(
+                    `[RT] Phase ${phase.name}: stopping early after ${phaseAttempts} attempts (global=${candidateAttempts})`,
+                )
+                break
+            }
+
+            phaseAttempts += 1
+            candidateAttempts += 1
+            console.log(
+                `[RT] Candidate ${candidateAttempts}: ${phase.name}/${plan.label} (${plan.waypoints.length - 2} WPs)`,
+            )
+
+            let fetchResult = await getMapboxRouteDetailed(
+                plan.waypoints,
+                mapboxProfile,
+                phase.exclude,
+                plan.radiuses,
+                accessToken,
+                { continueStraight: phase.continueStraight },
+            )
+
+            if (fetchResult.outcome !== 'ok' && phase.exclude && phase.exclude.trim() !== '') {
+                console.log(`[RT] ${plan.label}: retry without excludes`)
+                const relaxedFetch = await getMapboxRouteDetailed(
+                    plan.waypoints,
+                    mapboxProfile,
+                    '',
+                    plan.radiuses,
+                    accessToken,
+                    { continueStraight: phase.continueStraight },
+                )
+                if (
+                    relaxedFetch.outcome === 'ok' ||
+                    (fetchResult.outcome !== 'ok' && relaxedFetch.outcome !== 'ok' && relaxedFetch.outcome !== 'http_error')
+                ) {
+                    fetchResult = relaxedFetch
+                }
+            }
+
+            if (!fetchResult.route) {
+                rejectedCandidates += 1
+                const reason = fetchResult.outcome === 'http_error'
+                    ? `mapbox_http_${fetchResult.statusCode ?? 'unknown'}`
+                    : `mapbox_${fetchResult.outcome}`
+                registerReject(reason)
+                console.log(
+                    `[RT] ${phase.name}/${plan.label}: ${reason}${fetchResult.details ? ` (${fetchResult.details.slice(0, 160)})` : ''}`,
+                )
+                continue
+            }
+
+            let route = fetchResult.route
+            let quality = evaluateRouteQuality(route, 'ROUND_TRIP', {
+                targetDistanceKm,
+                distanceConfig: phase.distanceConfig,
+            })
+
+            if (
+                quality.tier === 'reject' &&
+                phase.exclude &&
+                phase.exclude.trim() !== ''
+            ) {
+                console.log(`[RT] ${plan.label}: rejected with excludes, trying relaxed street filter`)
+                const relaxedFetch = await getMapboxRouteDetailed(
+                    plan.waypoints,
+                    mapboxProfile,
+                    '',
+                    plan.radiuses,
+                    accessToken,
+                    { continueStraight: phase.continueStraight },
+                )
+                if (relaxedFetch.route) {
+                    const relaxedQuality = evaluateRouteQuality(relaxedFetch.route, 'ROUND_TRIP', {
+                        targetDistanceKm,
+                        distanceConfig: phase.distanceConfig,
+                    })
+                    console.log(
+                        `[RT] ${plan.label}: relaxed tier=${relaxedQuality.tier}, score=${relaxedQuality.score.toFixed(1)}, ` +
+                        `distance=${relaxedQuality.actualDistanceKm.toFixed(1)}km, overlap=${relaxedQuality.overlapPercent.toFixed(1)}%, coords=${relaxedQuality.coordinateCount}`,
+                    )
+                    if (relaxedQuality.tier !== 'reject' || relaxedQuality.score < quality.score) {
+                        route = relaxedFetch.route
+                        quality = relaxedQuality
+                    }
+                }
+            }
+
+            console.log(
+                `[RT] ${phase.name}/${plan.label}: tier=${quality.tier}, score=${quality.score.toFixed(1)}, ` +
+                `distance=${quality.actualDistanceKm.toFixed(1)}km, overlap=${quality.overlapPercent.toFixed(1)}%, coords=${quality.coordinateCount}`,
+            )
+
+            if (quality.tier === 'reject') {
+                rejectedCandidates += 1
+                registerReject(quality.reason)
+                continue
+            }
+
+            acceptedCandidates += 1
+            phaseAcceptedCandidates += 1
+            if (!bestQuality || quality.score < bestQuality.score) {
+                bestPlan = plan
+                bestRoute = route
+                bestQuality = quality
+            }
+
+            const shouldStopAfterGoodCandidate =
+                candidateAttempts >= 6 &&
+                (
+                    quality.tier === 'ideal' ||
+                    (quality.tier === 'acceptable' && phaseAcceptedCandidates >= 2) ||
+                    (phase.name === 'fallback' && phaseAcceptedCandidates >= 1)
+                )
+
+            if (shouldStopAfterGoodCandidate) {
+                console.log(
+                    `[RT] Phase ${phase.name}: good candidate found, stopping early after ${phaseAttempts} attempts`,
+                )
+                break
+            }
+        }
+
+        if (candidateAttempts >= (highCostCurveSearch ? 10 : 24)) {
+            break
+        }
+        if (bestQuality?.tier === 'ideal') {
+            break
+        }
+        if (
+            phaseAcceptedCandidates > 0 &&
+            (bestQuality?.tier === 'acceptable' || phase.name === 'fallback')
+        ) {
+            break
+        }
+    }
+
+    if (!bestPlan || !bestRoute || !bestQuality) {
+        console.log(
+            `[RT] Search exhausted: ${candidateAttempts} candidates, none usable. Reject summary=${JSON.stringify(Object.fromEntries(rejectReasons))}`,
+        )
+        return null
+    }
+
+    console.log(
+        `[RT] Selected ${bestPlan.label}: tier=${bestQuality.tier}, score=${bestQuality.score.toFixed(1)}, ` +
+        `attempts=${candidateAttempts}, accepted=${acceptedCandidates}, rejected=${rejectedCandidates}, rejects=${JSON.stringify(Object.fromEntries(rejectReasons))}`,
+    )
+
+    return {
+        route: bestRoute,
+        waypoints: bestPlan.waypoints,
+        radiuses: bestPlan.radiuses,
+        quality: bestQuality,
+        candidateAttempts,
+        acceptedCandidates,
+        rejectedCandidates,
+        rejectReasons: Object.fromEntries(rejectReasons),
+        searchPhases: searchPhases.map((phase) => phase.name),
     }
 }
 
@@ -767,6 +1459,17 @@ Deno.serve(async (req) => {
         const currentRouteType = body.route_type || 'ROUND_TRIP';
         const detourLevel = Math.max(0, Math.min(3, body.detour_level ?? 0))
 
+        if (planning_type === 'Zufall' && currentRouteType === 'ROUND_TRIP') {
+            if (mode === 'Kurvenjagd') {
+                excludeParams = 'motorway,ferry'
+            } else if (mode === 'Abendrunde') {
+                mapboxProfile = 'mapbox/driving'
+                excludeParams = 'motorway,ferry'
+            } else if (mode === 'Entdecker') {
+                excludeParams = 'motorway'
+            }
+        }
+
         if (planning_type === 'Zufall') {
                 if (currentRouteType === 'POINT_TO_POINT') {
                           // A→B: direkte Straßenroute, optional ohne Autobahnen.
@@ -811,26 +1514,6 @@ Deno.serve(async (req) => {
                         // >100 km is capped to 150 km maximum route target
                         const effectiveDistance = Math.min(targetDistance, 150);
                         distanceConfig = getDistanceConfig(effectiveDistance, mode)
-
-                        // Waypoint-Strategie je nach Fahrstil — jeder Stil erzeugt
-                        // eine grundlegend andere Route-Geometrie
-                        let generatedWPs: Coordinate[];
-                        if (mode === 'Kurvenjagd') {
-                            // 6 eng gesetzte WPs, großer Radius → viele Richtungswechsel = mehr Kurven
-                            generatedWPs = calculateLoopWaypoints(startLocation, distanceConfig.radiusKm * 1.25, 6, randomSeed);
-                        } else if (mode === 'Entdecker') {
-                            // 7 weit gestreute WPs → maximale Variation, unerwartete Richtungen
-                            generatedWPs = calculateLoopWaypoints(startLocation, distanceConfig.radiusKm * 1.1, 7, randomSeed);
-                        } else if (mode === 'Abendrunde') {
-                            // Einfaches Dreieck, kompakter Radius → bleibt nah, ruhige Strecke
-                            generatedWPs = calculateTriangleWaypoints(startLocation, distanceConfig.radiusKm * 0.75, randomSeed);
-                        } else {
-                            // SPORT MODE: 3 WPs, breiter Radius → fließende Bögen auf breiten Straßen
-                            generatedWPs = calculateLoopWaypoints(startLocation, distanceConfig.radiusKm * 1.15, 3, randomSeed);
-                        }
-
-                        // Route: Start -> WPs -> Start
-                        finalWaypoints = [startLocation, ...generatedWPs, startLocation];
                 }
 
         } else if (planning_type === 'Wegpunkte') {
@@ -845,72 +1528,73 @@ Deno.serve(async (req) => {
         // Radiuses: Start/Ende unlimited (echte GPS-Position), Zwischenpunkte max 1000m
         // Kleiner Radius = Waypoints müssen nahe einer Straße liegen → verhindert "Abkürzungen"
         // durch Gelände wo keine Straße existiert
-        if (!radiusesParams) {
+        if (!radiusesParams && finalWaypoints.isNotEmpty) {
             radiusesParams = finalWaypoints
                 .map((_, i) => (i === 0 || i === finalWaypoints.length - 1) ? 'unlimited' : '1000')
                 .join(';');
         }
 
         // --- Execute Route Request (with retries) ---
-        let route = await getMapboxRoute(finalWaypoints, mapboxProfile, excludeParams, radiusesParams, MAPBOX_ACCESS_TOKEN);
-
-        if (!route && excludeParams && excludeParams.trim() !== '') {
-            console.log(`No route with excludes "${excludeParams}", retrying without...`);
-            route = await getMapboxRoute(finalWaypoints, mapboxProfile, '', radiusesParams, MAPBOX_ACCESS_TOKEN);
-        }
-
-        if (route) {
-            const initialQuality = evaluateRouteQuality(route, currentRouteType)
-            if (!initialQuality.passed) {
-                console.log(`Initial route rejected: ${initialQuality.reason}`);
-                route = null
-            }
-        }
-
-        if (
-            route &&
+        let route = null;
+        let roundTripSearch: RoundTripSearchResult | null = null
+        const useRoundTripSearch =
             planning_type === 'Zufall' &&
-            currentRouteType === 'POINT_TO_POINT' &&
-            body.destination_location &&
-            pointToPointIsScenic &&
-            !isPointToPointDetourAcceptable(
-                route,
-                pointToPointDirectDistanceKm,
-                targetDistance,
-                detourLevel,
-            )
-        ) {
-            console.log(
-                `Initial P2P scenic route rejected: ${getRouteDistanceKm(route).toFixed(1)}km < required ${getPointToPointMinimumDistanceKm(pointToPointDirectDistanceKm, targetDistance, detourLevel).toFixed(1)}km`,
-            )
-            route = null
-        }
+            currentRouteType === 'ROUND_TRIP' &&
+            distanceConfig != null &&
+            targetDistance != null;
 
-        // Retry with different waypoint directions (up to 5 more attempts)
-        // Alterniert zwischen Triangle und Loop-Strategien für maximale Chance
-        if (!route && planning_type === 'Zufall' && currentRouteType === 'ROUND_TRIP' && distanceConfig) {
-            for (let retry = 0; retry < 5 && !route; retry++) {
-                console.log(`Retry ${retry + 1}: generating new waypoints...`);
-                // Gerade Versuche: Triangle, ungerade: Loop mit 3 Punkten
-                const retryRadius = distanceConfig.radiusKm * (0.7 + retry * 0.15);
-                const retrySeed = randomSeed + (retry + 1) * 1000;
-                const retryWPs = retry % 2 === 0
-                    ? calculateTriangleWaypoints(startLocation, retryRadius, retrySeed)
-                    : calculateLoopWaypoints(startLocation, retryRadius, 3, retrySeed);
-                const retryAll = [startLocation, ...retryWPs, startLocation];
-                const retryRadiuses = retryAll.map((_, i) => (i === 0 || i === retryAll.length - 1) ? 'unlimited' : '2000').join(';');
+        if (useRoundTripSearch) {
+            roundTripSearch = await searchBestRoundTripRoute({
+                startLocation,
+                targetDistanceKm: targetDistance!,
+                distanceConfig: distanceConfig!,
+                mode,
+                randomSeed,
+                mapboxProfile,
+                excludeParams,
+                accessToken: MAPBOX_ACCESS_TOKEN,
+            });
+            if (roundTripSearch) {
+                route = roundTripSearch.route;
+                finalWaypoints = roundTripSearch.waypoints;
+                radiusesParams = roundTripSearch.radiuses;
+                console.log(
+                    `[RT] Search summary: attempts=${roundTripSearch.candidateAttempts}, accepted=${roundTripSearch.acceptedCandidates}, rejected=${roundTripSearch.rejectedCandidates}, chosen=${roundTripSearch.quality.tier}`,
+                );
+            }
+        } else {
+            route = await getMapboxRoute(finalWaypoints, mapboxProfile, excludeParams, radiusesParams, MAPBOX_ACCESS_TOKEN);
 
-                route = await getMapboxRoute(retryAll, mapboxProfile, '', retryRadiuses, MAPBOX_ACCESS_TOKEN);
-                if (route) {
-                    const retryQuality = evaluateRouteQuality(route, currentRouteType)
-                    if (!retryQuality.passed) {
-                        console.log(`Retry ${retry + 1}: Route rejected (${retryQuality.reason})`);
-                        route = null;
-                        continue;
-                    }
-                    finalWaypoints = retryAll;
-                    radiusesParams = retryRadiuses;
+            if (!route && excludeParams && excludeParams.trim() !== '') {
+                console.log(`No route with excludes "${excludeParams}", retrying without...`);
+                route = await getMapboxRoute(finalWaypoints, mapboxProfile, '', radiusesParams, MAPBOX_ACCESS_TOKEN);
+            }
+
+            if (route) {
+                const initialQuality = evaluateRouteQuality(route, currentRouteType)
+                if (!initialQuality.passed) {
+                    console.log(`Initial route rejected: ${initialQuality.reason}`);
+                    route = null
                 }
+            }
+
+            if (
+                route &&
+                planning_type === 'Zufall' &&
+                currentRouteType === 'POINT_TO_POINT' &&
+                body.destination_location &&
+                pointToPointIsScenic &&
+                !isPointToPointDetourAcceptable(
+                    route,
+                    pointToPointDirectDistanceKm,
+                    targetDistance,
+                    detourLevel,
+                )
+            ) {
+                console.log(
+                    `Initial P2P scenic route rejected: ${getRouteDistanceKm(route).toFixed(1)}km < required ${getPointToPointMinimumDistanceKm(pointToPointDirectDistanceKm, targetDistance, detourLevel).toFixed(1)}km`,
+                )
+                route = null
             }
         }
 
@@ -992,7 +1676,11 @@ Deno.serve(async (req) => {
         }
 
         if (!route) {
-            throw new Error("No route found with current constraints.");
+            throw new Error(
+                useRoundTripSearch
+                    ? "No route found with current constraints after exhausting round-trip search."
+                    : "No route found with current constraints.",
+            );
         }
 
         // Mapbox returns distance in meters -> convert to kilometers for app output.
@@ -1001,7 +1689,11 @@ Deno.serve(async (req) => {
         // --- 4. Distance Band Retry & Scaling ---
         // Skaliert Waypoints näher/weiter zum Start bis die Route im ±10% Band liegt.
         // Aggressive Korrektur bei großem Fehler, sanfter bei Annäherung.
-        if (planning_type === 'Zufall' && currentRouteType === 'ROUND_TRIP' && distanceConfig) {
+        if (
+            planning_type === 'Zufall' &&
+            currentRouteType === 'ROUND_TRIP' &&
+            distanceConfig
+        ) {
             let attempts = 0
             const maxAttempts = 8 // Mehr Versuche für bessere Konvergenz
             while (
@@ -1028,7 +1720,11 @@ Deno.serve(async (req) => {
                 });
 
                 const newRadiuses = scaledWaypoints
-                    .map((_, i) => (i === 0 || i === scaledWaypoints.length - 1) ? 'unlimited' : '2000')
+                    .map((_, i) =>
+                        (i === 0 || i === scaledWaypoints.length - 1)
+                            ? 'unlimited'
+                            : `${Math.round(distanceConfig.waypointRadiusMeters * 0.9)}`,
+                    )
                     .join(';');
 
                 let newRoute = await getMapboxRoute(
@@ -1037,10 +1733,18 @@ Deno.serve(async (req) => {
                     excludeParams,
                     newRadiuses,
                     MAPBOX_ACCESS_TOKEN,
+                    { continueStraight: currentRouteType !== 'ROUND_TRIP' },
                 )
 
                 if (!newRoute && excludeParams && excludeParams.trim() !== '') {
-                    newRoute = await getMapboxRoute(scaledWaypoints, mapboxProfile, '', newRadiuses, MAPBOX_ACCESS_TOKEN)
+                    newRoute = await getMapboxRoute(
+                        scaledWaypoints,
+                        mapboxProfile,
+                        '',
+                        newRadiuses,
+                        MAPBOX_ACCESS_TOKEN,
+                        { continueStraight: currentRouteType !== 'ROUND_TRIP' },
+                    )
                 }
 
                 if (!newRoute) {
@@ -1048,7 +1752,10 @@ Deno.serve(async (req) => {
                     break
                 }
 
-                const scaledQuality = evaluateRouteQuality(newRoute, currentRouteType)
+                const scaledQuality = evaluateRouteQuality(newRoute, currentRouteType, {
+                    targetDistanceKm: targetDistance,
+                    distanceConfig,
+                })
                 if (!scaledQuality.passed) {
                     console.log(`Scaling attempt ${attempts + 1}: Route rejected (${scaledQuality.reason})`);
                     break
@@ -1063,7 +1770,10 @@ Deno.serve(async (req) => {
         }
 
         // ── Quality gate: Route muss echte Straßengeometrie haben ──
-        const finalQuality = evaluateRouteQuality(route, currentRouteType)
+        const finalQuality = evaluateRouteQuality(route, currentRouteType, {
+            targetDistanceKm: currentRouteType === 'ROUND_TRIP' ? targetDistance : undefined,
+            distanceConfig: currentRouteType === 'ROUND_TRIP' ? distanceConfig ?? undefined : undefined,
+        })
         if (!finalQuality.passed) {
             console.error(`Route quality too low: ${finalQuality.reason}`);
             throw new Error(`Route-Qualität zu niedrig (${finalQuality.reason}). Bitte erneut versuchen.`);
@@ -1089,9 +1799,29 @@ Deno.serve(async (req) => {
                 waypoints: finalWaypoints,
                 meta: {
                     distance_km: finalDistanceKm,
-                        duration_min: route.duration / 60,
-                        profile: mapboxProfile.replace('mapbox/', ''),
-                        mode: mode
+                    duration_min: route.duration / 60,
+                    profile: mapboxProfile.replace('mapbox/', ''),
+                    mode: mode,
+                    quality_tier: finalQuality.tier,
+                    quality_reason: finalQuality.reason,
+                    quality_overlap_percent: finalQuality.overlapPercent,
+                    quality_coordinate_count: finalQuality.coordinateCount,
+                    ...(roundTripSearch != null
+                        ? {
+                            search_summary: {
+                                candidate_attempts:
+                                    roundTripSearch.candidateAttempts,
+                                accepted_candidates:
+                                    roundTripSearch.acceptedCandidates,
+                                rejected_candidates:
+                                    roundTripSearch.rejectedCandidates,
+                                reject_reasons:
+                                    roundTripSearch.rejectReasons,
+                                search_phases:
+                                    roundTripSearch.searchPhases,
+                            },
+                          }
+                        : {}),
                 }
             }),
             { headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' } }

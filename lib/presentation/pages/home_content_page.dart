@@ -1,9 +1,11 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart' as geo;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:cruise_connect/data/services/gamification_service.dart';
+import 'package:cruise_connect/data/services/route_elevation_service.dart';
 import 'package:cruise_connect/data/services/saved_routes_service.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/domain/models/saved_route.dart';
@@ -41,6 +43,8 @@ class _HomeContentPageState extends State<HomeContentPage> {
   int _streakDays = 0;
   SavedRoute? _weeklyTopRoute;
   bool _isRouteSaved = false;
+  final Map<String, _HeroRouteInsights> _heroInsightsByRouteId = {};
+  final Set<String> _heroInsightsLoading = <String>{};
 
   @override
   void initState() {
@@ -179,10 +183,81 @@ class _HomeContentPageState extends State<HomeContentPage> {
           _loading = false;
         });
       }
+
+      if (topRoute != null) {
+        unawaited(_ensureHeroRouteInsights(topRoute));
+      }
     } catch (e) {
       debugPrint('[Home] Daten laden fehlgeschlagen: $e');
       if (mounted) setState(() => _loading = false);
     }
+  }
+
+  Future<void> _ensureHeroRouteInsights(SavedRoute route) async {
+    if (_heroInsightsByRouteId.containsKey(route.id) ||
+        _heroInsightsLoading.contains(route.id)) {
+      return;
+    }
+
+    final coordinates = _extractCoordinates(route.geometry);
+    if (coordinates.length < 2) return;
+
+    if (mounted) {
+      setState(() {
+        _heroInsightsLoading.add(route.id);
+      });
+    } else {
+      _heroInsightsLoading.add(route.id);
+    }
+
+    try {
+      final curves = await GamificationService.countCurvesAsync(coordinates);
+      final xp = GamificationService.calculateRouteXp(
+        distanceKm: route.distanceKm,
+        curves: curves,
+        style: route.style,
+      );
+      final elevationSummary = await const RouteElevationService().getSummary(
+        routeKey: route.id,
+        coordinates: coordinates,
+      );
+
+      if (!mounted) return;
+      setState(() {
+        _heroInsightsByRouteId[route.id] = _HeroRouteInsights(
+          curves: curves,
+          xp: xp,
+          elevation: elevationSummary,
+        );
+        _heroInsightsLoading.remove(route.id);
+      });
+    } catch (e) {
+      debugPrint('[Home] Hero-Insights fehlgeschlagen: $e');
+      if (!mounted) return;
+      setState(() {
+        _heroInsightsLoading.remove(route.id);
+      });
+    }
+  }
+
+  List<List<double>> _extractCoordinates(Map<String, dynamic> geometry) {
+    final extracted = <List<double>>[];
+    try {
+      final coords = geometry['coordinates'];
+      if (coords is List) {
+        for (final point in coords) {
+          if (point is List && point.length >= 2) {
+            extracted.add([
+              (point[0] as num).toDouble(),
+              (point[1] as num).toDouble(),
+            ]);
+          }
+        }
+      }
+    } catch (_) {
+      return const [];
+    }
+    return extracted;
   }
 
   @override
@@ -552,212 +627,248 @@ class _HomeContentPageState extends State<HomeContentPage> {
   // ── Hero Route Card (wöchentliche Top-Strecke) ──────────────────────────
 
   Widget _buildHeroRouteCard(SavedRoute route) {
-    // Gradient-Farben basierend auf Stil
-    final gradientColors = switch (route.style) {
-      'Kurvenjagd' => [const Color(0xFF1B5E20), const Color(0xFF388E3C)],
-      'Sport Mode' => [const Color(0xFFB71C1C), const Color(0xFFD32F2F)],
-      'Abendrunde' => [const Color(0xFF1A237E), const Color(0xFF3949AB)],
-      'Entdecker' => [const Color(0xFFE65100), const Color(0xFFFB8C00)],
-      _ => [const Color(0xFFB71C1C), const Color(0xFFE65100)],
-    };
-
-    // Koordinaten aus Geometrie extrahieren
-    List<List<double>> coordinates = [];
-    try {
-      final coords = route.geometry['coordinates'];
-      if (coords is List) {
-        for (final c in coords) {
-          if (c is List && c.length >= 2) {
-            coordinates.add([
-              (c[0] as num).toDouble(),
-              (c[1] as num).toDouble(),
-            ]);
-          }
-        }
-      }
-    } catch (_) {}
-
-    final ratingValue = route.rating?.toDouble() ?? 0.0;
+    final coordinates = _extractCoordinates(route.geometry);
+    final heroInsights = _heroInsightsByRouteId[route.id];
+    final isLoadingInsights = _heroInsightsLoading.contains(route.id);
+    final ratingValue = route.rating?.toDouble();
+    final title = (route.name?.trim().isNotEmpty ?? false)
+        ? route.name!.trim()
+        : '${route.styleEmoji} ${route.style}';
+    final climbMeters = heroInsights?.elevation?.ascentMeters;
+    final routeTypeLabel = route.isRoundTrip ? 'Rundkurs' : 'A nach B';
 
     return Container(
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: const Color(0xFF1C1F26),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(
-          color: const Color(0xFFFFFFFF).withValues(alpha: 0.08),
-          width: 1,
+        borderRadius: BorderRadius.circular(28),
+        gradient: const LinearGradient(
+          colors: [Color(0xFFFF5A3D), Color(0xFFF59E0B)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
         ),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFFFF5A3D).withValues(alpha: 0.22),
+            blurRadius: 28,
+            offset: const Offset(0, 18),
+          ),
+        ],
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Stack(
         children: [
-          // Header mit Gold-Akzent
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
-            child: Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFFFD700).withValues(alpha: 0.15),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: const Text('🏆', style: TextStyle(fontSize: 20)),
-                ),
-                const SizedBox(width: 12),
-                const Expanded(
-                  child: Text(
-                    'Top-Strecke dieser Woche',
-                    style: TextStyle(
-                      color: Color(0xFFFFD700),
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
+          Positioned(
+            right: -26,
+            top: -22,
+            child: Container(
+              width: 126,
+              height: 126,
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.08),
+                shape: BoxShape.circle,
+              ),
+            ),
+          ),
+          Positioned(
+            left: -34,
+            bottom: -52,
+            child: Container(
+              width: 148,
+              height: 148,
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.08),
+                shape: BoxShape.circle,
+              ),
+            ),
+          ),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 8,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.16),
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(
+                        color: Colors.white.withValues(alpha: 0.12),
+                      ),
+                    ),
+                    child: const Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text('🏆', style: TextStyle(fontSize: 14)),
+                        SizedBox(width: 8),
+                        Text(
+                          'Top-Strecke dieser Woche',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
-                ),
-              ],
-            ),
-          ),
-
-          // Route Visual mit Polyline
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(16),
-              child: Container(
-                height: 180,
-                width: double.infinity,
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: gradientColors,
+                  const Spacer(),
+                  _buildStyleChip(route),
+                  const SizedBox(width: 10),
+                  _buildSaveChip(route),
+                ],
+              ),
+              const SizedBox(height: 14),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          title,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 22,
+                            fontWeight: FontWeight.w800,
+                            height: 1.05,
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        Text(
+                          '${route.formattedDistance} • ${route.formattedDuration}',
+                          style: TextStyle(
+                            color: Colors.white.withValues(alpha: 0.92),
+                            fontSize: 14,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          'Top im 50-km-Umkreis',
+                          style: TextStyle(
+                            color: Colors.white.withValues(alpha: 0.72),
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 10,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.14),
+                            borderRadius: BorderRadius.circular(18),
+                            border: Border.all(
+                              color: Colors.white.withValues(alpha: 0.08),
+                            ),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Wrap(
+                                spacing: 12,
+                                runSpacing: 8,
+                                children: [
+                                  if (ratingValue != null && ratingValue > 0)
+                                    _buildHeroMetaItem(
+                                      icon: Icons.star_rounded,
+                                      label: ratingValue.toStringAsFixed(1),
+                                      tint: const Color(0xFFFFE2A8),
+                                    ),
+                                  _buildHeroMetaItem(
+                                    icon: route.isRoundTrip
+                                        ? Icons.loop_rounded
+                                        : Icons.alt_route_rounded,
+                                    label: routeTypeLabel,
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 8),
+                              Wrap(
+                                spacing: 12,
+                                runSpacing: 8,
+                                children: [
+                                  _buildHeroMetaItem(
+                                    icon: Icons.turn_slight_right_rounded,
+                                    label: heroInsights != null
+                                        ? '${heroInsights.curves} Kurven'
+                                        : isLoadingInsights
+                                        ? 'Kurven ...'
+                                        : 'Kurven --',
+                                  ),
+                                  _buildHeroMetaItem(
+                                    icon: Icons.bolt_rounded,
+                                    label: heroInsights != null
+                                        ? '${heroInsights.xp} XP'
+                                        : isLoadingInsights
+                                        ? 'XP ...'
+                                        : 'XP --',
+                                  ),
+                                  if (climbMeters != null)
+                                    _buildHeroMetaItem(
+                                      icon: Icons.north_rounded,
+                                      label: '↑ $climbMeters m',
+                                      tint: const Color(0xFFDCFCE7),
+                                    )
+                                  else if (isLoadingInsights)
+                                    _buildHeroMetaItem(
+                                      icon: Icons.north_rounded,
+                                      label: '↑ ...',
+                                    ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
-                ),
-                child: coordinates.length >= 2
-                    ? CustomPaint(
-                        painter: _RoutePolylinePainter(
-                          coordinates: coordinates,
-                        ),
-                        size: const Size(double.infinity, 180),
-                      )
-                    : Center(
-                        child: Text(
-                          route.styleEmoji,
-                          style: const TextStyle(fontSize: 64),
-                        ),
+                  const SizedBox(width: 12),
+                  _buildHeroRoutePreview(route, coordinates),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'Ausgewählte Featured-Route für diese Woche',
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.72),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
                       ),
-              ),
-            ),
-          ),
-          const SizedBox(height: 16),
-
-          // Route Name
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20),
-            child: Text(
-              route.name ?? '${route.styleEmoji} ${route.style}',
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-              ),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-          const SizedBox(height: 8),
-
-          // Rating + Subtitle
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20),
-            child: Row(
-              children: [
-                // Sterne
-                ...List.generate(5, (i) {
-                  return Icon(
-                    i < ratingValue.floor()
-                        ? Icons.star
-                        : (i < ratingValue
-                              ? Icons.star_half
-                              : Icons.star_border),
-                    color: const Color(0xFFFFD700),
-                    size: 18,
-                  );
-                }),
-                const SizedBox(width: 8),
-                Text(
-                  ratingValue > 0 ? ratingValue.toStringAsFixed(1) : '--',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
+                    ),
                   ),
-                ),
-                const SizedBox(width: 10),
-                const Text(
-                  '·',
-                  style: TextStyle(color: Color(0xFFA0AEC0), fontSize: 14),
-                ),
-                const SizedBox(width: 10),
-                const Expanded(
-                  child: Text(
-                    'Top bewertet diese Woche',
-                    style: TextStyle(color: Color(0xFFA0AEC0), fontSize: 12),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 16),
-
-          // Metric Pills
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20),
-            child: Row(
-              children: [
-                _buildMetricPill(route.formattedDistance, 'Distanz'),
-                const SizedBox(width: 10),
-                _buildMetricPill(route.formattedDuration, 'Dauer'),
-                const SizedBox(width: 10),
-                _buildMetricPill(
-                  route.isRoundTrip ? 'Rundkurs' : 'A nach B',
-                  'Typ',
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 16),
-
-          // Action Buttons
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
-            child: Row(
-              children: [
-                // Route fahren Button
-                Expanded(
-                  child: GestureDetector(
+                  const SizedBox(width: 12),
+                  GestureDetector(
                     onTap: () {
                       CruiseModePage.pendingRoute.value = route;
                       widget.onTabChange?.call(2);
                     },
                     child: Container(
-                      height: 48,
+                      height: 42,
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
                       decoration: BoxDecoration(
-                        gradient: const LinearGradient(
-                          colors: [Color(0xFFFF5252), Color(0xFFD32F2F)],
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
+                        color: const Color(0xFF10131A),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(
+                          color: Colors.white.withValues(alpha: 0.08),
                         ),
-                        borderRadius: BorderRadius.circular(14),
                       ),
                       alignment: Alignment.center,
                       child: const Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
+                        mainAxisSize: MainAxisSize.min,
                         children: [
                           Icon(
-                            Icons.directions_car,
+                            Icons.directions_car_rounded,
                             color: Colors.white,
                             size: 18,
                           ),
@@ -766,102 +877,152 @@ class _HomeContentPageState extends State<HomeContentPage> {
                             'Route fahren',
                             style: TextStyle(
                               color: Colors.white,
-                              fontSize: 15,
-                              fontWeight: FontWeight.w600,
+                              fontSize: 14,
+                              fontWeight: FontWeight.w700,
                             ),
                           ),
                         ],
                       ),
                     ),
                   ),
-                ),
-                const SizedBox(width: 12),
-                // Speichern Button
-                Expanded(
-                  child: GestureDetector(
-                    onTap: () async {
-                      if (_isRouteSaved) return;
-                      try {
-                        await SavedRoutesService.saveExistingRoute(route);
-                        if (mounted) {
-                          setState(() => _isRouteSaved = true);
-                        }
-                      } catch (e) {
-                        debugPrint('[Home] Route speichern fehlgeschlagen: $e');
-                      }
-                    },
-                    child: Container(
-                      height: 48,
-                      decoration: BoxDecoration(
-                        color: Colors.transparent,
-                        borderRadius: BorderRadius.circular(14),
-                        border: Border.all(
-                          color: _isRouteSaved
-                              ? const Color(0xFFFFD700).withValues(alpha: 0.5)
-                              : const Color(0xFFFFFFFF).withValues(alpha: 0.2),
-                          width: 1.5,
-                        ),
-                      ),
-                      alignment: Alignment.center,
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(
-                            _isRouteSaved
-                                ? Icons.bookmark
-                                : Icons.bookmark_border,
-                            color: _isRouteSaved
-                                ? const Color(0xFFFFD700)
-                                : const Color(0xFFA0AEC0),
-                            size: 18,
-                          ),
-                          const SizedBox(width: 8),
-                          Text(
-                            _isRouteSaved ? 'Gespeichert' : 'Speichern',
-                            style: TextStyle(
-                              color: _isRouteSaved
-                                  ? const Color(0xFFFFD700)
-                                  : const Color(0xFFA0AEC0),
-                              fontSize: 15,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
+                ],
+              ),
+            ],
           ),
         ],
       ),
     );
   }
 
-  Widget _buildMetricPill(String value, String label) {
-    return Expanded(
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 10),
+  Widget _buildSaveChip(SavedRoute route) {
+    return GestureDetector(
+      onTap: () async {
+        if (_isRouteSaved) return;
+        try {
+          await SavedRoutesService.saveExistingRoute(route);
+          if (mounted) {
+            setState(() => _isRouteSaved = true);
+          }
+        } catch (e) {
+          debugPrint('[Home] Route speichern fehlgeschlagen: $e');
+        }
+      },
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        width: 44,
+        height: 44,
         decoration: BoxDecoration(
-          color: const Color(0xFF0B0E14),
-          borderRadius: BorderRadius.circular(12),
+          color: _isRouteSaved
+              ? const Color(0xFFFFE2A8).withValues(alpha: 0.16)
+              : Colors.black.withValues(alpha: 0.14),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: _isRouteSaved
+                ? const Color(0xFFFFE2A8).withValues(alpha: 0.45)
+                : Colors.white.withValues(alpha: 0.10),
+          ),
         ),
-        child: Column(
+        child: Icon(
+          _isRouteSaved
+              ? Icons.bookmark_rounded
+              : Icons.bookmark_border_rounded,
+          color: _isRouteSaved ? const Color(0xFFFFE2A8) : Colors.white,
+          size: 20,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStyleChip(SavedRoute route) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
+      ),
+      child: Text(
+        '${route.styleEmoji} ${route.style}',
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 12,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildHeroMetaItem({
+    required IconData icon,
+    required String label,
+    Color tint = const Color(0xFFEFEFEF),
+  }) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 14, color: tint),
+        const SizedBox(width: 6),
+        Text(
+          label,
+          style: TextStyle(
+            color: tint,
+            fontSize: 12,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildHeroRoutePreview(
+    SavedRoute route,
+    List<List<double>> coordinates,
+  ) {
+    return SizedBox(
+      width: 96,
+      child: Container(
+        height: 112,
+        decoration: BoxDecoration(
+          color: const Color(0xFF10131A).withValues(alpha: 0.78),
+          borderRadius: BorderRadius.circular(22),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
+        ),
+        child: Stack(
           children: [
-            Text(
-              value,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 14,
-                fontWeight: FontWeight.bold,
+            Positioned.fill(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(10, 12, 10, 12),
+                child: coordinates.length >= 2
+                    ? CustomPaint(
+                        painter: _RoutePolylinePainter(
+                          coordinates: coordinates,
+                        ),
+                        size: const Size(76, 80),
+                      )
+                    : Center(
+                        child: Text(
+                          route.styleEmoji,
+                          style: const TextStyle(fontSize: 34),
+                        ),
+                      ),
               ),
-              textAlign: TextAlign.center,
             ),
-            const SizedBox(height: 2),
-            Text(
-              label,
-              style: const TextStyle(color: Color(0xFFA0AEC0), fontSize: 11),
+            Positioned(
+              right: 10,
+              top: 10,
+              child: Container(
+                width: 30,
+                height: 30,
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.12),
+                  shape: BoxShape.circle,
+                ),
+                alignment: Alignment.center,
+                child: Text(
+                  route.styleEmoji,
+                  style: const TextStyle(fontSize: 16),
+                ),
+              ),
             ),
           ],
         ),
@@ -1083,6 +1244,18 @@ class _HomeContentPageState extends State<HomeContentPage> {
 }
 
 // ── CustomPainter für Route-Polyline auf dem Gradient-Hintergrund ──────────
+
+class _HeroRouteInsights {
+  const _HeroRouteInsights({
+    required this.curves,
+    required this.xp,
+    required this.elevation,
+  });
+
+  final int curves;
+  final int xp;
+  final RouteElevationSummary? elevation;
+}
 
 class _RoutePolylinePainter extends CustomPainter {
   final List<List<double>> coordinates;
