@@ -144,7 +144,8 @@ class _CruiseModePageState extends State<CruiseModePage>
 
   // Schwellenwerte für anteilige Gutschrift
   static const double _minProgressForCredit = 0.10; // 10% Minimum
-  static const double _minProgressForFullCredit = 0.95; // 95% = volle Gutschrift
+  static const double _minProgressForFullCredit =
+      0.95; // 95% = volle Gutschrift
   int _lastDrawnRouteIndex =
       0; // Letzter Index bei dem die Route neu gezeichnet wurde
   double _distanceSinceLastRedraw = 0.0;
@@ -3082,10 +3083,7 @@ class _CruiseModePageState extends State<CruiseModePage>
         belowMinimum: belowMinimum,
         onSave: (rating) async {
           Navigator.pop(ctx);
-          await _saveRouteAndSyncXp(
-            rating: rating,
-            skipXpSync: belowMinimum,
-          );
+          await _saveRouteAndSyncXp(rating: rating, skipXpSync: belowMinimum);
           _resetAfterCompletion();
         },
         onDiscard: () async {
@@ -3102,7 +3100,10 @@ class _CruiseModePageState extends State<CruiseModePage>
 
   /// Speichert die gefahrene Route und synchronisiert XP/Level/Badges.
   /// [skipXpSync] = true → Route wird gespeichert, aber keine XP vergeben (< 10% gefahren).
-  Future<void> _saveRouteAndSyncXp({int? rating, bool skipXpSync = false}) async {
+  Future<void> _saveRouteAndSyncXp({
+    int? rating,
+    bool skipXpSync = false,
+  }) async {
     try {
       debugPrint(
         '[CruiseMode] _saveRouteAndSyncXp: _lastRouteResult=${_lastRouteResult != null}, rating=$rating, skipXp=$skipXpSync',
@@ -3115,16 +3116,22 @@ class _CruiseModePageState extends State<CruiseModePage>
 
         // Proportionale Dauer berechnen
         final double progressFraction =
-            (drivenDistanceMeters != null && _originalRouteDistance != null && _originalRouteDistance! > 0)
-                ? (drivenDistanceMeters / _originalRouteDistance!).clamp(0.0, 1.0)
-                : 1.0;
-        final double? proportionalDuration = _lastRouteResult!.durationSeconds != null
+            (drivenDistanceMeters != null &&
+                _originalRouteDistance != null &&
+                _originalRouteDistance! > 0)
+            ? (drivenDistanceMeters / _originalRouteDistance!).clamp(0.0, 1.0)
+            : 1.0;
+        final double? proportionalDuration =
+            _lastRouteResult!.durationSeconds != null
             ? _lastRouteResult!.durationSeconds! * progressFraction
             : null;
 
         // Tatsächlich verstrichene Zeit als Obergrenze (verhindert Gaming)
         final double? elapsedSeconds = _navigationStartTime != null
-            ? DateTime.now().difference(_navigationStartTime!).inSeconds.toDouble()
+            ? DateTime.now()
+                  .difference(_navigationStartTime!)
+                  .inSeconds
+                  .toDouble()
             : null;
 
         // Minimum aus proportionaler und tatsächlicher Zeit verwenden
@@ -3158,9 +3165,10 @@ class _CruiseModePageState extends State<CruiseModePage>
           style: _selectedStyle,
           isRoundTrip: _isRoundTrip,
           rating: rating,
-          drivenKm: _totalDistanceDriven > 0
-              ? _totalDistanceDriven / 1000
-              : null,
+          drivenKm: adjustedResult.distanceKm,
+          plannedDistanceKm: _originalRouteDistance != null
+              ? _originalRouteDistance! / 1000
+              : adjustedResult.distanceKm,
         );
         debugPrint('[CruiseMode] Route saved successfully!');
       }
@@ -3178,7 +3186,9 @@ class _CruiseModePageState extends State<CruiseModePage>
           );
         }
       } else {
-        debugPrint('[CruiseMode] XP-Sync übersprungen (unter Minimum-Schwelle)');
+        debugPrint(
+          '[CruiseMode] XP-Sync übersprungen (unter Minimum-Schwelle)',
+        );
       }
     } catch (e, stack) {
       debugPrint('Route speichern / XP sync fehlgeschlagen: $e');

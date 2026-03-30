@@ -48,9 +48,15 @@ class GamificationService {
     final curveXp = curves * 5;
     int styleBonus = 0;
     switch (style) {
-      case 'Kurvenjagd': styleBonus = 20; break;
-      case 'Entdecker': styleBonus = 15; break;
-      case 'Sport Mode': styleBonus = 10; break;
+      case 'Kurvenjagd':
+        styleBonus = 20;
+        break;
+      case 'Entdecker':
+        styleBonus = 15;
+        break;
+      case 'Sport Mode':
+        styleBonus = 10;
+        break;
     }
     return baseXp + curveXp + styleBonus;
   }
@@ -79,7 +85,8 @@ class GamificationService {
     return compute(_countCurvesIsolate, coords);
   }
 
-  static int _countCurvesIsolate(List<List<double>> coords) => countCurves(coords);
+  static int _countCurvesIsolate(List<List<double>> coords) =>
+      countCurves(coords);
 
   /// Berechnet Level und Badges basierend auf allen Routen des Users.
   /// Speichert den Fortschritt in der `profiles`-Tabelle.
@@ -122,6 +129,11 @@ class GamificationService {
       );
     }
 
+    final rideRoutes = routes.where((route) => route.isDrivenSession).toList();
+    final xpEligibleRoutes = rideRoutes
+        .where((route) => route.qualifiesForXpCredit)
+        .toList();
+
     // 2. Statistiken berechnen
     double totalKm = 0;
     double totalSecs = 0;
@@ -130,19 +142,19 @@ class GamificationService {
     final styleCounts = <String, int>{};
     bool hasLongRoute = false;
 
-    for (final r in routes) {
-      totalKm += r.distanceKm;
+    for (final r in rideRoutes) {
+      totalKm += r.actualDistanceKm;
       totalSecs += r.durationSeconds ?? 0;
+    }
+
+    for (final r in xpEligibleRoutes) {
       if (r.isRoundTrip) roundTrips++;
       styleCounts[r.style] = (styleCounts[r.style] ?? 0) + 1;
-      if (r.distanceKm >= 100) hasLongRoute = true;
+      if (r.actualDistanceKm >= 100) hasLongRoute = true;
 
-      // XP pro Route: 10/km + pauschale für Kurven (geschätzt ~1 Kurve/5km)
-      // Exakte Kurven können wir nicht mehr zählen (Geometrie nicht immer geladen),
-      // daher schätzen wir basierend auf Distanz und Stil
-      final estimatedCurves = (r.distanceKm / 5).round();
+      final estimatedCurves = (r.actualDistanceKm / 5).round();
       totalXp += calculateRouteXp(
-        distanceKm: r.distanceKm,
+        distanceKm: r.actualDistanceKm,
         curves: estimatedCurves,
         style: r.style,
       );
@@ -163,11 +175,11 @@ class GamificationService {
     if (totalKm >= 5000) earned.add('dist_5000');
 
     // Routen-Badges
-    if (routes.isNotEmpty) earned.add('route_1');
-    if (routes.length >= 5) earned.add('route_5');
-    if (routes.length >= 10) earned.add('route_10');
-    if (routes.length >= 25) earned.add('route_25');
-    if (routes.length >= 50) earned.add('route_50');
+    if (xpEligibleRoutes.isNotEmpty) earned.add('route_1');
+    if (xpEligibleRoutes.length >= 5) earned.add('route_5');
+    if (xpEligibleRoutes.length >= 10) earned.add('route_10');
+    if (xpEligibleRoutes.length >= 25) earned.add('route_25');
+    if (xpEligibleRoutes.length >= 50) earned.add('route_50');
 
     // Stil-Badges
     if ((styleCounts['Kurvenjagd'] ?? 0) >= 5) earned.add('style_kurven');
@@ -199,13 +211,16 @@ class GamificationService {
 
     // 6. Fortschritt im Backend speichern
     try {
-      await _db.from('profiles').update({
-        'level': level.level,
-        'total_km': totalKm,
-        'total_xp': totalXp,
-        'total_routes': routes.length,
-        'badges': earned,
-      }).eq('id', userId);
+      await _db
+          .from('profiles')
+          .update({
+            'level': level.level,
+            'total_km': totalKm,
+            'total_xp': totalXp,
+            'total_routes': rideRoutes.length,
+            'badges': earned,
+          })
+          .eq('id', userId);
     } catch (e) {
       debugPrint('[Gamification] Profil-Update fehlgeschlagen: $e');
     }
@@ -214,7 +229,7 @@ class GamificationService {
       level: level,
       earnedBadgeIds: earned,
       newBadgeIds: newBadges,
-      totalRoutes: routes.length,
+      totalRoutes: rideRoutes.length,
       totalDistanceKm: totalKm,
       totalHours: totalSecs / 3600,
       totalXp: totalXp,

@@ -10,6 +10,9 @@ class SavedRoute {
     this.durationSeconds,
     this.routeType,
     this.rating,
+    this.distanceTargetKm,
+    this.drivenKm,
+    this.sourceRouteId,
   });
 
   final String id;
@@ -21,6 +24,9 @@ class SavedRoute {
   final double? durationSeconds;
   final String? routeType;
   final int? rating;
+  final double? distanceTargetKm;
+  final double? drivenKm;
+  final String? sourceRouteId;
 
   factory SavedRoute.fromJson(Map<String, dynamic> json) {
     return SavedRoute(
@@ -35,10 +41,63 @@ class SavedRoute {
       durationSeconds: (json['duration_seconds'] as num?)?.toDouble(),
       routeType: (json['route_type'] as String?) ?? 'ROUND_TRIP',
       rating: (json['rating'] as num?)?.toInt(),
+      distanceTargetKm: (json['distance_target'] as num?)?.toDouble(),
+      drivenKm: (json['driven_km'] as num?)?.toDouble(),
+      sourceRouteId: json['source_route_id'] as String?,
     );
   }
 
   bool get isRoundTrip => routeType == 'ROUND_TRIP';
+
+  bool get isDrivenSession => (drivenKm ?? 0) > 0;
+
+  double get actualDistanceKm => drivenKm ?? distanceKm;
+
+  double? get completionRatio {
+    if (!isDrivenSession) return null;
+    final planned = distanceTargetKm;
+    if (planned == null || planned <= 0) return null;
+    return (actualDistanceKm / planned).clamp(0.0, 1.0);
+  }
+
+  bool get qualifiesForXpCredit {
+    final ratio = completionRatio;
+    if (!isDrivenSession) return false;
+    if (ratio == null) return true;
+    return ratio >= 0.10;
+  }
+
+  bool get isRecommendationEligible {
+    if (rating == null || rating! < 3) return false;
+    final ratio = completionRatio;
+    if (ratio == null) return true;
+    return ratio >= 0.85;
+  }
+
+  String get routeSignature {
+    final coordinates = geometry['coordinates'];
+    if (coordinates is! List || coordinates.isEmpty) {
+      return '$routeType|$style|${distanceKm.toStringAsFixed(1)}';
+    }
+
+    final sampleIndexes = <int>{
+      0,
+      (coordinates.length * 0.25).floor(),
+      (coordinates.length * 0.5).floor(),
+      (coordinates.length * 0.75).floor(),
+      coordinates.length - 1,
+    };
+    final samples = <String>[];
+    for (final index in sampleIndexes.toList()..sort()) {
+      final point = coordinates[index];
+      if (point is List && point.length >= 2) {
+        final lng = (point[0] as num).toDouble().toStringAsFixed(4);
+        final lat = (point[1] as num).toDouble().toStringAsFixed(4);
+        samples.add('$lng,$lat');
+      }
+    }
+    return '$routeType|$style|${distanceKm.toStringAsFixed(1)}|${samples.join("|")}';
+  }
 
   /// Serialisiert die Route für den lokalen Cache (shared_preferences).
   Map<String, dynamic> toJson() {
@@ -52,6 +111,9 @@ class SavedRoute {
       'duration_seconds': durationSeconds,
       'route_type': routeType,
       'rating': rating,
+      'distance_target': distanceTargetKm,
+      'driven_km': drivenKm,
+      'source_route_id': sourceRouteId,
     };
   }
 

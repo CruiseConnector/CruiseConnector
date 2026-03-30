@@ -84,6 +84,9 @@ class _AnalyticsPageState extends State<AnalyticsPage>
     try {
       final gamResult = await GamificationService.calculateAndSync();
       final routes = await SavedRoutesService.getUserRoutes();
+      final rideRoutes = routes
+          .where((route) => route.isDrivenSession)
+          .toList();
 
       final now = DateTime.now();
       final todayStart = DateTime(now.year, now.month, now.day);
@@ -115,47 +118,49 @@ class _AnalyticsPageState extends State<AnalyticsPage>
       // Streak-Berechnung
       final driveDays = <DateTime>{};
 
-      for (final r in routes) {
+      for (final r in rideRoutes) {
         final createdAt = r.createdAt.toLocal();
         final routeDay = DateTime(
           createdAt.year,
           createdAt.month,
           createdAt.day,
         );
+        final actualDistanceKm = r.actualDistanceKm;
 
         final routeDuration = r.durationSeconds ?? 0.0;
-        final estCurves = (r.distanceKm / 5).round();
-        final routeXp = GamificationService.calculateRouteXp(
-          distanceKm: r.distanceKm,
-          curves: estCurves,
-          style: r.style,
-        );
+        final routeXp = r.qualifiesForXpCredit
+            ? GamificationService.calculateRouteXp(
+                distanceKm: actualDistanceKm,
+                curves: (actualDistanceKm / 5).round(),
+                style: r.style,
+              )
+            : 0;
 
         // Wöchentliche Daten
         if (!routeDay.isBefore(weekStart)) {
           final dayIndex = createdAt.weekday - 1;
           if (dayIndex >= 0 && dayIndex < 7) {
-            weeklyKm[dayIndex] += r.distanceKm;
+            weeklyKm[dayIndex] += actualDistanceKm;
             weeklyXp[dayIndex] += routeXp;
           }
           weekRouteCount++;
           weeklyTotalTime += routeDuration;
         } else if (!routeDay.isBefore(lastWeekStart) &&
             routeDay.isBefore(weekStart)) {
-          lastWeekKm += r.distanceKm;
+          lastWeekKm += actualDistanceKm;
           lastWeekXp += routeXp;
           lastWeekTotalTime += routeDuration;
         }
 
         // Monatsdaten
         if (!createdAt.isBefore(thisMonthStart)) {
-          thisMonthKm += r.distanceKm;
+          thisMonthKm += actualDistanceKm;
           thisMonthRoutes++;
           thisMonthXp += routeXp;
           thisMonthTime += routeDuration;
         } else if (!createdAt.isBefore(lastMonthStart) &&
             createdAt.isBefore(thisMonthStart)) {
-          lastMonthKm += r.distanceKm;
+          lastMonthKm += actualDistanceKm;
           lastMonthXp += routeXp;
           lastMonthTime += routeDuration;
         }
@@ -163,7 +168,7 @@ class _AnalyticsPageState extends State<AnalyticsPage>
         // Monatliche Aufschlüsselung (dieses Jahr, für Chart)
         if (!createdAt.isBefore(thisYearStart)) {
           final monthIndex = createdAt.month - 1;
-          monthlyKm[monthIndex] += r.distanceKm;
+          monthlyKm[monthIndex] += actualDistanceKm;
         }
 
         // Streaktage
@@ -211,7 +216,7 @@ class _AnalyticsPageState extends State<AnalyticsPage>
           _totalXp = gamResult.totalXp;
           _level = gamResult.level;
           _earnedBadges = gamResult.earnedBadges;
-          _allRoutes = routes;
+          _allRoutes = rideRoutes;
           _weeklyChartData = normalizedWeekly;
           _streakDays = streak;
           _thisMonthKm = thisMonthKm;
@@ -711,10 +716,7 @@ class _AnalyticsPageState extends State<AnalyticsPage>
               ),
               Text(
                 'vs. letzte',
-                style: TextStyle(
-                  color: Color(0xFF8A94A6),
-                  fontSize: 12,
-                ),
+                style: TextStyle(color: Color(0xFF8A94A6), fontSize: 12),
               ),
             ],
           ),
@@ -777,8 +779,9 @@ class _AnalyticsPageState extends State<AnalyticsPage>
                                 child: Align(
                                   alignment: Alignment.bottomCenter,
                                   child: FractionallySizedBox(
-                                    heightFactor:
-                                        barValue > 0 ? barValue : 0.06,
+                                    heightFactor: barValue > 0
+                                        ? barValue
+                                        : 0.06,
                                     child: Container(
                                       decoration: BoxDecoration(
                                         gradient: isToday
@@ -794,8 +797,7 @@ class _AnalyticsPageState extends State<AnalyticsPage>
                                         color: isToday
                                             ? null
                                             : const Color(0xFF2A2F3A),
-                                        borderRadius:
-                                            BorderRadius.circular(4),
+                                        borderRadius: BorderRadius.circular(4),
                                       ),
                                     ),
                                   ),
@@ -875,7 +877,20 @@ class _AnalyticsPageState extends State<AnalyticsPage>
   // ── Monats-/Jahresübersicht Tab ──────────────────────────────────────
 
   Widget _buildMonthlyTab() {
-    const monthLabels = ['J', 'F', 'M', 'A', 'M', 'J', 'J', 'A', 'S', 'O', 'N', 'D'];
+    const monthLabels = [
+      'J',
+      'F',
+      'M',
+      'A',
+      'M',
+      'J',
+      'J',
+      'A',
+      'S',
+      'O',
+      'N',
+      'D',
+    ];
     final now = DateTime.now();
     final kmDelta = _thisMonthKm - _lastMonthKm;
     final xpDelta = _thisMonthXp - _lastMonthXp;
@@ -908,10 +923,7 @@ class _AnalyticsPageState extends State<AnalyticsPage>
               ),
               Text(
                 'vs. letzter',
-                style: TextStyle(
-                  color: Color(0xFF8A94A6),
-                  fontSize: 12,
-                ),
+                style: TextStyle(color: Color(0xFF8A94A6), fontSize: 12),
               ),
             ],
           ),
@@ -972,10 +984,7 @@ class _AnalyticsPageState extends State<AnalyticsPage>
               ),
               Text(
                 '\u00d8 ${avgKmPerRoute.toStringAsFixed(1)} km/Fahrt',
-                style: const TextStyle(
-                  color: Color(0xFF8A94A6),
-                  fontSize: 13,
-                ),
+                style: const TextStyle(color: Color(0xFF8A94A6), fontSize: 13),
               ),
             ],
           ),
@@ -1057,8 +1066,8 @@ class _AnalyticsPageState extends State<AnalyticsPage>
     final deltaColor = deltaZero
         ? const Color(0xFF8A94A6)
         : deltaPositive
-            ? const Color(0xFF4ADE80)
-            : const Color(0xFFFF6B6B);
+        ? const Color(0xFF4ADE80)
+        : const Color(0xFFFF6B6B);
 
     return Container(
       padding: const EdgeInsets.all(14),
@@ -1082,10 +1091,7 @@ class _AnalyticsPageState extends State<AnalyticsPage>
           const SizedBox(height: 4),
           Text(
             label,
-            style: const TextStyle(
-              color: Color(0xFF8A94A6),
-              fontSize: 12,
-            ),
+            style: const TextStyle(color: Color(0xFF8A94A6), fontSize: 12),
           ),
           const SizedBox(height: 6),
           Text(
@@ -1427,5 +1433,4 @@ class _AnalyticsPageState extends State<AnalyticsPage>
       ),
     );
   }
-
 }

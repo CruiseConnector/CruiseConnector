@@ -22,7 +22,9 @@ class _HomeContentPageState extends State<HomeContentPage> {
   @override
   void didUpdateWidget(HomeContentPage old) {
     super.didUpdateWidget(old);
-    if (widget.refreshKey != old.refreshKey && widget.refreshKey > 0) _loadStats();
+    if (widget.refreshKey != old.refreshKey && widget.refreshKey > 0) {
+      _loadStats();
+    }
   }
 
   int userLevel = 1;
@@ -50,16 +52,28 @@ class _HomeContentPageState extends State<HomeContentPage> {
     try {
       final result = await GamificationService.calculateAndSync();
       final routes = await SavedRoutesService.getUserRoutes();
+      final rideRoutes = routes
+          .where((route) => route.isDrivenSession)
+          .toList();
 
       // Wöchentliche Daten berechnen
       final now = DateTime.now();
-      final weekStart = now.subtract(Duration(days: now.weekday - 1));
+      final todayStart = DateTime(now.year, now.month, now.day);
+      final weekStart = todayStart.subtract(
+        Duration(days: todayStart.weekday - 1),
+      );
       final weeklyKm = List<double>.filled(7, 0);
-      for (final r in routes) {
-        if (r.createdAt.isAfter(weekStart)) {
-          final dayIndex = r.createdAt.weekday - 1;
+      for (final r in rideRoutes) {
+        final localCreatedAt = r.createdAt.toLocal();
+        final routeDay = DateTime(
+          localCreatedAt.year,
+          localCreatedAt.month,
+          localCreatedAt.day,
+        );
+        if (!routeDay.isBefore(weekStart)) {
+          final dayIndex = routeDay.weekday - 1;
           if (dayIndex >= 0 && dayIndex < 7) {
-            weeklyKm[dayIndex] += r.distanceKm;
+            weeklyKm[dayIndex] += r.actualDistanceKm;
           }
         }
       }
@@ -70,11 +84,18 @@ class _HomeContentPageState extends State<HomeContentPage> {
 
       // Streak berechnen (Tage in Folge gefahren)
       int streak = 0;
-      if (routes.isNotEmpty) {
+      if (rideRoutes.isNotEmpty) {
         final today = DateTime(now.year, now.month, now.day);
         final driveDays = <DateTime>{};
-        for (final r in routes) {
-          driveDays.add(DateTime(r.createdAt.year, r.createdAt.month, r.createdAt.day));
+        for (final r in rideRoutes) {
+          final localCreatedAt = r.createdAt.toLocal();
+          driveDays.add(
+            DateTime(
+              localCreatedAt.year,
+              localCreatedAt.month,
+              localCreatedAt.day,
+            ),
+          );
         }
         var checkDay = today;
         if (!driveDays.contains(checkDay)) {
@@ -95,7 +116,8 @@ class _HomeContentPageState extends State<HomeContentPage> {
         double userLng = 8.6821;
         try {
           final permission = await geo.Geolocator.checkPermission();
-          final hasPermission = permission == geo.LocationPermission.always ||
+          final hasPermission =
+              permission == geo.LocationPermission.always ||
               permission == geo.LocationPermission.whileInUse;
           if (!hasPermission) {
             await geo.Geolocator.requestPermission();
@@ -119,7 +141,10 @@ class _HomeContentPageState extends State<HomeContentPage> {
 
         // Prüfen ob Route bereits gespeichert
         if (topRoute != null) {
-          routeSaved = await SavedRoutesService.isRouteSavedByUser(topRoute.id);
+          routeSaved = SavedRoutesService.hasEquivalentSavedRoute(
+            topRoute,
+            routes,
+          );
         }
       } catch (e) {
         debugPrint('[Home] Top-Route laden fehlgeschlagen: $e');
@@ -163,9 +188,10 @@ class _HomeContentPageState extends State<HomeContentPage> {
   @override
   Widget build(BuildContext context) {
     final user = Supabase.instance.client.auth.currentUser;
-    final String userName = (user?.userMetadata?['username'] as String?)
-        ?? user?.email?.split('@')[0]
-        ?? 'User';
+    final String userName =
+        (user?.userMetadata?['username'] as String?) ??
+        user?.email?.split('@')[0] ??
+        'User';
 
     return SingleChildScrollView(
       physics: const BouncingScrollPhysics(),
@@ -240,30 +266,49 @@ class _HomeContentPageState extends State<HomeContentPage> {
               decoration: BoxDecoration(
                 color: const Color(0xFF1C1F26),
                 borderRadius: BorderRadius.circular(24),
-                border: Border.all(color: const Color(0xFFFFFFFF).withValues(alpha: 0.06), width: 1),
+                border: Border.all(
+                  color: const Color(0xFFFFFFFF).withValues(alpha: 0.06),
+                  width: 1,
+                ),
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const Text(
                     'Fortschritt',
-                    style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold),
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 15,
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
                   const SizedBox(height: 12),
                   _loading
-                    ? const Center(child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFFFF3B30))))
-                    : Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          _statRow('⚡', '$totalXp XP gesamt'),
-                          const SizedBox(height: 6),
-                          _statRow('🏎️', '${totalDistanceKm.toStringAsFixed(0)} Km gefahren'),
-                          const SizedBox(height: 6),
-                          _statRow('🛣️', '$totalRoutes Strecken'),
-                          const SizedBox(height: 6),
-                          _statRow('🏅', '$badgeCount Badges'),
-                        ],
-                      ),
+                      ? const Center(
+                          child: SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Color(0xFFFF3B30),
+                            ),
+                          ),
+                        )
+                      : Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            _statRow('⚡', '$totalXp XP gesamt'),
+                            const SizedBox(height: 6),
+                            _statRow(
+                              '🏎️',
+                              '${totalDistanceKm.toStringAsFixed(0)} Km gefahren',
+                            ),
+                            const SizedBox(height: 6),
+                            _statRow('🛣️', '$totalRoutes Strecken'),
+                            const SizedBox(height: 6),
+                            _statRow('🏅', '$badgeCount Badges'),
+                          ],
+                        ),
                   const SizedBox(height: 12),
                   Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -363,7 +408,12 @@ class _HomeContentPageState extends State<HomeContentPage> {
                       decoration: BoxDecoration(
                         color: const Color(0xFF1C1F26),
                         borderRadius: BorderRadius.circular(24),
-                        border: Border.all(color: const Color(0xFFFFFFFF).withValues(alpha: 0.06), width: 1),
+                        border: Border.all(
+                          color: const Color(
+                            0xFFFFFFFF,
+                          ).withValues(alpha: 0.06),
+                          width: 1,
+                        ),
                       ),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -379,21 +429,30 @@ class _HomeContentPageState extends State<HomeContentPage> {
                           const SizedBox(height: 10),
                           _buildCommunityItem('$_followerCount Follower', '👥'),
                           const SizedBox(height: 4),
-                          _buildCommunityItem('$totalRoutes Fahrten absolviert', '🔥'),
+                          _buildCommunityItem(
+                            '$totalRoutes Fahrten absolviert',
+                            '🔥',
+                          ),
                           const SizedBox(height: 4),
-                          _buildCommunityItem('Level $userLevel - $levelName', '📍'),
+                          _buildCommunityItem(
+                            'Level $userLevel - $levelName',
+                            '📍',
+                          ),
                           const Spacer(),
                           SizedBox(
                             width: double.infinity,
                             child: GestureDetector(
                               onTap: () {
-                                  widget.onTabChange?.call(1);
+                                widget.onTabChange?.call(1);
                               },
                               child: Container(
                                 height: 35.0,
                                 decoration: BoxDecoration(
                                   gradient: const LinearGradient(
-                                    colors: [Color(0xFFFF5252), Color(0xFFD32F2F)],
+                                    colors: [
+                                      Color(0xFFFF5252),
+                                      Color(0xFFD32F2F),
+                                    ],
                                     begin: Alignment.topLeft,
                                     end: Alignment.bottomRight,
                                   ),
@@ -422,7 +481,12 @@ class _HomeContentPageState extends State<HomeContentPage> {
                       decoration: BoxDecoration(
                         color: const Color(0xFF1C1F26),
                         borderRadius: BorderRadius.circular(24),
-                        border: Border.all(color: const Color(0xFFFFFFFF).withValues(alpha: 0.06), width: 1),
+                        border: Border.all(
+                          color: const Color(
+                            0xFFFFFFFF,
+                          ).withValues(alpha: 0.06),
+                          width: 1,
+                        ),
                       ),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -451,7 +515,8 @@ class _HomeContentPageState extends State<HomeContentPage> {
                                 ),
                                 Expanded(
                                   child: Row(
-                                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                                    mainAxisAlignment:
+                                        MainAxisAlignment.spaceEvenly,
                                     crossAxisAlignment: CrossAxisAlignment.end,
                                     children: [
                                       _buildChartBar('Mo', _weeklyChartData[0]),
@@ -492,8 +557,8 @@ class _HomeContentPageState extends State<HomeContentPage> {
       'Kurvenjagd' => [const Color(0xFF1B5E20), const Color(0xFF388E3C)],
       'Sport Mode' => [const Color(0xFFB71C1C), const Color(0xFFD32F2F)],
       'Abendrunde' => [const Color(0xFF1A237E), const Color(0xFF3949AB)],
-      'Entdecker'  => [const Color(0xFFE65100), const Color(0xFFFB8C00)],
-      _            => [const Color(0xFFB71C1C), const Color(0xFFE65100)],
+      'Entdecker' => [const Color(0xFFE65100), const Color(0xFFFB8C00)],
+      _ => [const Color(0xFFB71C1C), const Color(0xFFE65100)],
     };
 
     // Koordinaten aus Geometrie extrahieren
@@ -571,7 +636,9 @@ class _HomeContentPageState extends State<HomeContentPage> {
                 ),
                 child: coordinates.length >= 2
                     ? CustomPaint(
-                        painter: _RoutePolylinePainter(coordinates: coordinates),
+                        painter: _RoutePolylinePainter(
+                          coordinates: coordinates,
+                        ),
                         size: const Size(double.infinity, 180),
                       )
                     : Center(
@@ -611,7 +678,9 @@ class _HomeContentPageState extends State<HomeContentPage> {
                   return Icon(
                     i < ratingValue.floor()
                         ? Icons.star
-                        : (i < ratingValue ? Icons.star_half : Icons.star_border),
+                        : (i < ratingValue
+                              ? Icons.star_half
+                              : Icons.star_border),
                     color: const Color(0xFFFFD700),
                     size: 18,
                   );
@@ -634,10 +703,7 @@ class _HomeContentPageState extends State<HomeContentPage> {
                 const Expanded(
                   child: Text(
                     'Top bewertet diese Woche',
-                    style: TextStyle(
-                      color: Color(0xFFA0AEC0),
-                      fontSize: 12,
-                    ),
+                    style: TextStyle(color: Color(0xFFA0AEC0), fontSize: 12),
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
@@ -690,7 +756,11 @@ class _HomeContentPageState extends State<HomeContentPage> {
                       child: const Row(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          Icon(Icons.directions_car, color: Colors.white, size: 18),
+                          Icon(
+                            Icons.directions_car,
+                            color: Colors.white,
+                            size: 18,
+                          ),
                           SizedBox(width: 8),
                           Text(
                             'Route fahren',
@@ -737,7 +807,9 @@ class _HomeContentPageState extends State<HomeContentPage> {
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
                           Icon(
-                            _isRouteSaved ? Icons.bookmark : Icons.bookmark_border,
+                            _isRouteSaved
+                                ? Icons.bookmark
+                                : Icons.bookmark_border,
                             color: _isRouteSaved
                                 ? const Color(0xFFFFD700)
                                 : const Color(0xFFA0AEC0),
@@ -789,10 +861,7 @@ class _HomeContentPageState extends State<HomeContentPage> {
             const SizedBox(height: 2),
             Text(
               label,
-              style: const TextStyle(
-                color: Color(0xFFA0AEC0),
-                fontSize: 11,
-              ),
+              style: const TextStyle(color: Color(0xFFA0AEC0), fontSize: 11),
             ),
           ],
         ),
@@ -807,7 +876,9 @@ class _HomeContentPageState extends State<HomeContentPage> {
       decoration: BoxDecoration(
         color: const Color(0xFF1C1F26),
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: const Color(0xFFFFFFFF).withValues(alpha: 0.06)),
+        border: Border.all(
+          color: const Color(0xFFFFFFFF).withValues(alpha: 0.06),
+        ),
       ),
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
@@ -885,7 +956,9 @@ class _HomeContentPageState extends State<HomeContentPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  hasStreak ? '$_streakDays Tage Streak' : 'Kein aktiver Streak',
+                  hasStreak
+                      ? '$_streakDays Tage Streak'
+                      : 'Kein aktiver Streak',
                   style: const TextStyle(
                     color: Colors.white,
                     fontSize: 16,
@@ -897,7 +970,10 @@ class _HomeContentPageState extends State<HomeContentPage> {
                   hasStreak
                       ? 'Weiter so! Fahre heute um den Streak zu halten.'
                       : 'Starte eine Fahrt und beginne deinen Streak!',
-                  style: const TextStyle(color: Color(0xFFA0AEC0), fontSize: 12),
+                  style: const TextStyle(
+                    color: Color(0xFFA0AEC0),
+                    fontSize: 12,
+                  ),
                 ),
               ],
             ),
@@ -928,17 +1004,19 @@ class _HomeContentPageState extends State<HomeContentPage> {
   // ── Helper Widgets ───────────────────────────────────────────────────────
 
   Widget _statRow(String emoji, String text) {
-    return Row(children: [
-      Text(emoji, style: const TextStyle(fontSize: 14)),
-      const SizedBox(width: 8),
-      Flexible(
-        child: Text(
-          text,
-          style: const TextStyle(color: Colors.white70, fontSize: 12),
-          overflow: TextOverflow.ellipsis,
+    return Row(
+      children: [
+        Text(emoji, style: const TextStyle(fontSize: 14)),
+        const SizedBox(width: 8),
+        Flexible(
+          child: Text(
+            text,
+            style: const TextStyle(color: Colors.white70, fontSize: 12),
+            overflow: TextOverflow.ellipsis,
+          ),
         ),
-      ),
-    ]);
+      ],
+    );
   }
 
   Widget _buildCommunityItem(String text, String emoji) {
@@ -949,10 +1027,7 @@ class _HomeContentPageState extends State<HomeContentPage> {
         Expanded(
           child: Text(
             text,
-            style: const TextStyle(
-              color: Color(0xFFA0AEC0),
-              fontSize: 11,
-            ),
+            style: const TextStyle(color: Color(0xFFA0AEC0), fontSize: 11),
             overflow: TextOverflow.ellipsis,
           ),
         ),
