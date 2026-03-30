@@ -50,6 +50,10 @@ class RouteService {
 
   // ─────────────────────────── Public API ────────────────────────────────────
 
+  static bool requiresDestination(String routeType) {
+    return routeType == 'POINT_TO_POINT';
+  }
+
   /// Berechnet eine Rundkurs-Route von der aktuellen Position.
   Future<RouteResult> generateRoundTrip({
     required geo.Position startPosition,
@@ -58,21 +62,13 @@ class RouteService {
     required String planningType,
     Map<String, double>? targetLocation,
   }) async {
-    // Zufälliger Seed pro Aufruf → jede Generierung erzeugt andere Route
-    final randomSeed = _nextRandomSeed();
-    final body = <String, dynamic>{
-      'startLocation': {
-        'latitude': startPosition.latitude,
-        'longitude': startPosition.longitude,
-      },
-      'targetDistance': targetDistanceKm,
-      'mode': mode,
-      'route_type': 'ROUND_TRIP',
-      'planning_type': planningType,
-      'language': 'de',
-      'randomSeed': randomSeed,
-      if (targetLocation != null) 'targetLocation': targetLocation,
-    };
+    final body = _buildRoundTripRequest(
+      startPosition: startPosition,
+      targetDistanceKm: targetDistanceKm,
+      mode: mode,
+      planningType: planningType,
+      targetLocation: targetLocation,
+    );
     final result = await _invoke(body);
     // Snap Route-Start und Ende auf exakte GPS-Position (verhindert Kreis-Bug)
     return _snapRouteToStartPosition(result, startPosition);
@@ -126,7 +122,61 @@ class RouteService {
       directDistanceKm + detourMinimumExtraKm,
     );
 
-    final body = <String, dynamic>{
+    final body = _buildPointToPointRequest(
+      startPosition: startPosition,
+      destinationLat: destinationLat,
+      destinationLng: destinationLng,
+      mode: mode,
+      scenic: scenic,
+      normalizedVariant: normalizedVariant,
+      avoidHighways: avoidHighways,
+      targetDistanceKm: targetDistanceKm,
+      randomSeed: randomSeed,
+      detourFactor: detourFactor,
+    );
+    final result = await _invoke(body);
+    // Snap Route-Start auf exakte GPS-Position (verhindert Kreis-Bug)
+    return _snapRouteToStartPosition(result, startPosition);
+  }
+
+  // ──────────────────────────── Internal ─────────────────────────────────────
+
+  Map<String, dynamic> _buildRoundTripRequest({
+    required geo.Position startPosition,
+    required int targetDistanceKm,
+    required String mode,
+    required String planningType,
+    Map<String, double>? targetLocation,
+  }) {
+    final randomSeed = _nextRandomSeed();
+    return <String, dynamic>{
+      'startLocation': {
+        'latitude': startPosition.latitude,
+        'longitude': startPosition.longitude,
+      },
+      'targetDistance': targetDistanceKm,
+      'mode': mode,
+      'route_type': 'ROUND_TRIP',
+      'planning_type': planningType,
+      'language': 'de',
+      'randomSeed': randomSeed,
+      if (targetLocation != null) 'targetLocation': targetLocation,
+    };
+  }
+
+  Map<String, dynamic> _buildPointToPointRequest({
+    required geo.Position startPosition,
+    required double destinationLat,
+    required double destinationLng,
+    required String mode,
+    required bool scenic,
+    required int normalizedVariant,
+    required bool avoidHighways,
+    required double targetDistanceKm,
+    required int randomSeed,
+    required double detourFactor,
+  }) {
+    return <String, dynamic>{
       'startLocation': {
         'latitude': startPosition.latitude,
         'longitude': startPosition.longitude,
@@ -140,8 +190,6 @@ class RouteService {
       'mode': scenic ? mode : 'Standard',
       'avoid_highways': avoidHighways,
       'language': 'de',
-      // routeVariant: 0=direkt, 1=kleiner, 2=mittlerer, 3=großer Umweg
-      // Monotoner Seed → auch schnelle Mehrfach-Generierungen bleiben verschieden
       if (scenic || normalizedVariant > 0) ...{
         'targetDistance': double.parse(targetDistanceKm.toStringAsFixed(1)),
         'randomSeed': randomSeed,
@@ -149,19 +197,16 @@ class RouteService {
         'detour_factor': detourFactor,
       },
     };
-    final result = await _invoke(body);
-    // Snap Route-Start auf exakte GPS-Position (verhindert Kreis-Bug)
-    return _snapRouteToStartPosition(result, startPosition);
   }
-
-  // ──────────────────────────── Internal ─────────────────────────────────────
 
   Future<RouteResult> _invoke(Map<String, dynamic> body) async {
     final requestUrl = '${AppConstants.supabaseUrl}/functions/v1/$edgeFunction';
-    final routeType = body['route_type'];
+    final routeType = body['route_type']?.toString() ?? 'ROUND_TRIP';
     final mode = body['mode'];
     final planningType = body['planning_type'];
-    final hasDestination = body['destination_location'] != null;
+    final hasDestination = requiresDestination(routeType)
+        ? body['destination_location'] != null
+        : false;
     final hasTargetDistance = body['targetDistance'] != null;
     debugPrint(
       '[RouteService] Request → url=$requestUrl, routeType=$routeType, planning=$planningType, mode=$mode, hasDestination=$hasDestination, hasTargetDistance=$hasTargetDistance, avoidHighways=${body['avoid_highways'] == true}',
@@ -195,6 +240,7 @@ class RouteService {
           error: e,
           stack: stack,
           statusCode: e is FunctionException ? e.status : statusCode,
+          routeType: routeType,
         );
         lastMappedError = mapped;
         debugPrint(
@@ -261,14 +307,17 @@ class RouteService {
         errorMessage: errorMessage,
         statusCode: statusCode,
         details: data,
+        routeType: routeType,
       );
     }
 
     if (data['route'] == null) {
+      final userMessage = routeType == 'ROUND_TRIP'
+          ? 'Kein passender Rundkurs gefunden. Bitte ändere Stil, Länge oder Standort.'
+          : 'Keine passende Route gefunden. Bitte ändere Stil, Umweg oder Start/Ziel.';
       throw RouteServiceException(
         type: RouteErrorType.noRoute,
-        userMessage:
-            'Keine passende Route gefunden. Bitte ändere Stil, Umweg oder Start/Ziel.',
+        userMessage: userMessage,
         debugMessage: 'Response has no "route" field.',
         statusCode: statusCode,
       );
@@ -338,6 +387,7 @@ class RouteService {
     required Object error,
     required StackTrace stack,
     int? statusCode,
+    required String routeType,
   }) {
     if (error is RouteServiceException) return error;
 
@@ -349,6 +399,7 @@ class RouteService {
         details: error.details,
         stackTrace: stack,
         reasonPhrase: error.reasonPhrase,
+        routeType: routeType,
       );
     }
 
@@ -386,6 +437,7 @@ class RouteService {
     Object? details,
     StackTrace? stackTrace,
     String? reasonPhrase,
+    String routeType = 'ROUND_TRIP',
   }) {
     final lower = errorMessage.toLowerCase();
 
@@ -431,10 +483,12 @@ class RouteService {
         lower.contains('keine route gefunden') ||
         lower.contains('no route') ||
         lower.contains('keine passende route')) {
+      final userMessage = routeType == 'ROUND_TRIP'
+          ? 'Kein passender Rundkurs gefunden. Bitte ändere Stil, Länge oder Standort.'
+          : 'Keine passende Route gefunden. Bitte ändere Start/Ziel oder die Routeneinstellungen.';
       return RouteServiceException(
         type: RouteErrorType.noRoute,
-        userMessage:
-            'Keine passende Route gefunden. Bitte ändere Start/Ziel oder die Routeneinstellungen.',
+        userMessage: userMessage,
         debugMessage:
             'No-route error (status=$statusCode, reason=$reasonPhrase): $errorMessage, details=$details',
         statusCode: statusCode,
@@ -448,10 +502,12 @@ class RouteService {
         lower.contains('out of bounds') ||
         lower.contains('destination') ||
         lower.contains('startlocation')) {
+      final userMessage = routeType == 'ROUND_TRIP'
+          ? 'Rundkurs-Parameter sind ungültig. Bitte Länge, Stil oder Standort prüfen.'
+          : 'Start, Ziel oder Routenparameter sind ungültig. Bitte Eingaben prüfen.';
       return RouteServiceException(
         type: RouteErrorType.validation,
-        userMessage:
-            'Start, Ziel oder Routenparameter sind ungültig. Bitte Eingaben prüfen.',
+        userMessage: userMessage,
         debugMessage:
             'Validation error (status=$statusCode, reason=$reasonPhrase): $errorMessage, details=$details',
         statusCode: statusCode,

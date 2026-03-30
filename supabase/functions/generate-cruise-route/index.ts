@@ -274,7 +274,7 @@ function buildPointToPointScenicWaypoints({
 
     // Umweg-Boost: lateral offset 18% / 40% / 70% der Luftlinie
     const detourBoost = detourLevel === 1
-        ? 0.18
+        ? 0.26
         : detourLevel === 2
         ? 0.40
         : detourLevel >= 3
@@ -290,7 +290,7 @@ function buildPointToPointScenicWaypoints({
         directDistanceKm * effectiveFactor,
     )
     const minimumExtraDistanceKm = detourLevel === 1
-        ? 5.0
+        ? 6.5
         : detourLevel === 2
         ? 12.0
         : detourLevel >= 3
@@ -301,42 +301,62 @@ function buildPointToPointScenicWaypoints({
         desiredDistanceKm - directDistanceKm,
     )
 
-    // Waypoint-Anzahl: feste Regel pro Umweg-Level
-    // Direkt=0, Klein=1, Mittel=2, Groß=3 Waypoints
+    // Waypoint-Anzahl: je Umweg-Level + Seed-Variation.
+    // Klein kann auf längeren Strecken 1 oder 2 Wegpunkte nutzen.
     let waypointCount: number;
     if (detourLevel >= 3) {
         waypointCount = 3; // Groß: 3 WPs weit aufgefächert
     } else if (detourLevel >= 2) {
         waypointCount = 2; // Mittel: 2 WPs in S-Form
     } else if (detourLevel >= 1) {
-        waypointCount = 1; // Klein: 1 WP senkrecht zur Linie
+        const useTwoWaypoints = directDistanceKm >= 18 &&
+            seededUnit(randomSeed + Math.round(directDistanceKm * 10)) > 0.35
+        waypointCount = useTwoWaypoints ? 2 : 1;
     } else {
         waypointCount = 0; // Direkt: keine Extra-Waypoints
     }
-    if (directDistanceKm < 12) waypointCount = Math.min(waypointCount, 3);
-    if (directDistanceKm < 6) waypointCount = Math.min(waypointCount, 2);
+    if (directDistanceKm < 12) waypointCount = Math.min(waypointCount, 2);
+    if (directDistanceKm < 6) waypointCount = Math.min(waypointCount, 1);
 
     // Fractions: wo auf der A→B Linie werden die Waypoints platziert
-    const fractions = waypointCount === 1
-        ? [0.5]
+    const onePointFraction = 0.50 + (seededUnit(randomSeed + 211) - 0.5) * 0.24
+    const twoPointTemplate = seededUnit(randomSeed + 307) >= 0.5
+        ? [0.28, 0.72]
+        : [0.35, 0.67]
+    const rawFractions = waypointCount === 1
+        ? [onePointFraction]
         : waypointCount === 2
-        ? [0.3, 0.7]
+        ? twoPointTemplate
         : waypointCount === 3
         ? [0.2, 0.5, 0.8]
         : waypointCount === 4
         ? [0.15, 0.38, 0.62, 0.85]
         : [0.12, 0.3, 0.5, 0.7, 0.88]
+    const fractionJitter = detourLevel === 1 ? 0.08 : detourLevel === 2 ? 0.06 : 0.05
+    const fractions = rawFractions
+        .map((fraction, index) => {
+            const jitter = (seededUnit(randomSeed + 401 + index * 29) - 0.5) * 2 * fractionJitter
+            return Math.min(0.9, Math.max(0.1, fraction + jitter))
+        })
+        .sort((a, b) => a - b)
 
     const baseBearing = calculateBearing(start, destination)
     // Seite determiniert durch Seed — aber bei Entdecker wechselnd pro WP
     const baseSide = seededUnit(randomSeed + detourLevel + Math.round(directDistanceKm)) >= 0.5 ? 1 : -1
 
     // Offset-Limits je nach Umweg-Level (drastischer gespreizt)
-    const maxOffsetKm = Math.max(10, directDistanceKm * 0.8)
-    const minOffsetKm = Math.min(
-        maxOffsetKm,
-        Math.max(4.0, extraDistanceKm / Math.max(2, waypointCount)),
-    )
+    const maxOffsetKm = detourLevel === 1
+        ? Math.max(12, directDistanceKm * 0.95)
+        : Math.max(10, directDistanceKm * 0.8)
+    const minOffsetKm = detourLevel === 1
+        ? Math.min(
+            maxOffsetKm,
+            Math.max(5.5, extraDistanceKm / Math.max(1.8, waypointCount)),
+        )
+        : Math.min(
+            maxOffsetKm,
+            Math.max(4.0, extraDistanceKm / Math.max(2, waypointCount)),
+        )
 
     const scenicWaypoints = fractions.map((fraction, index) => {
         const basePoint = interpolateCoordinate(start, destination, fraction)
@@ -369,9 +389,14 @@ function buildPointToPointScenicWaypoints({
                 break;
             default: // Sport Mode
                 // Weicher Bogen, mittlerer Offset, leicht wechselnd
-                arcFactor = 0.75 + index * 0.18;
-                angleDrift = (seededUnit(variationSeed + 7) - 0.5) * 30;
-                side = index % 2 === 0 ? baseSide : -baseSide;
+                arcFactor = detourLevel === 1
+                    ? 0.9 + index * 0.16
+                    : 0.75 + index * 0.18;
+                angleDrift = (seededUnit(variationSeed + 7) - 0.5) *
+                    (detourLevel === 1 ? 38 : 30);
+                side = waypointCount <= 1
+                    ? baseSide
+                    : (index % 2 === 0 ? baseSide : -baseSide);
         }
 
         const offsetKm = Math.min(
@@ -399,7 +424,7 @@ function getPointToPointMinimumDistanceKm(
     detourLevel: number,
 ): number {
     const detourMultiplier = detourLevel === 1
-        ? 1.20   // Klein: mindestens +20%
+        ? 1.25   // Klein: mindestens +25%
         : detourLevel === 2
         ? 1.50   // Mittel: mindestens +50%
         : detourLevel >= 3
@@ -772,7 +797,7 @@ Deno.serve(async (req) => {
                               : detourLevel === 2
                               ? '14000'
                               : detourLevel === 1
-                              ? '10000'
+                              ? '13000'
                               : '6000'
                           radiusesParams = finalWaypoints
                               .map((_, i) => (i === 0 || i === finalWaypoints.length - 1) ? 'unlimited' : scenicRadius)
@@ -898,7 +923,7 @@ Deno.serve(async (req) => {
                 )
                 const softenedTarget = targetDistance != null
                     ? Math.max(
-                        pointToPointDirectDistanceKm * 1.18,
+                        pointToPointDirectDistanceKm * 1.22,
                         targetDistance * (0.99 - retry * 0.04),
                     )
                     : undefined
@@ -916,7 +941,7 @@ Deno.serve(async (req) => {
                     : retryDetourLevel === 2
                     ? '15000'
                     : retryDetourLevel === 1
-                    ? '11000'
+                    ? '13500'
                     : '7000'
                 const retryRadiuses = retryWaypoints
                     .map((_, i) => (i === 0 || i === retryWaypoints.length - 1) ? 'unlimited' : retryRadius)

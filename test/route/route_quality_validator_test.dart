@@ -169,5 +169,83 @@ void main() {
       expect(result.isLoopClosed, isTrue);
       expect(result.distanceInTolerance, isTrue);
     });
+
+    test('A→B-Route braucht keinen Loop-Closure-Check', () {
+      final coords = List.generate(
+        80,
+        (i) => [11.0 + i * 0.0003, 48.0 + i * 0.0002],
+      );
+
+      final result = validator.validateQuality(
+        coordinates: coords,
+        isRoundTrip: false,
+        actualDistanceKm: 22.0,
+      );
+
+      expect(result.isLoopClosed, isTrue);
+      expect(result.passed, isTrue);
+    });
+  });
+
+  group('Route Similarity', () {
+    test('nahezu identische Routen werden als ähnlich erkannt', () {
+      final base = List.generate(
+        120,
+        (i) => [11.0 + i * 0.0002, 48.0 + i * 0.0001],
+      );
+      final slightlyShifted = List.generate(
+        120,
+        (i) => [11.0002 + i * 0.0002, 48.0001 + i * 0.0001],
+      );
+
+      final similarity = RouteQualityValidator.calculateRouteSimilarityPercent(
+        base,
+        slightlyShifted,
+        sampleCount: 40,
+        proximityMeters: 150,
+      );
+
+      expect(similarity, greaterThan(75));
+      expect(
+        RouteQualityValidator.isRouteTooSimilarToPrevious(
+          base,
+          [slightlyShifted],
+          thresholdPercent: 75,
+          sampleCount: 40,
+          proximityMeters: 150,
+        ),
+        isTrue,
+      );
+    });
+
+    test('deutlich andere Routen fallen unter Similarity-Threshold', () {
+      final first = List.generate(
+        120,
+        (i) => [11.0 + i * 0.0002, 48.0 + i * 0.0001],
+      );
+      final second = List.generate(
+        120,
+        (i) => [11.04 + i * 0.0002, 48.03 - i * 0.0001],
+      );
+
+      final similarity = RouteQualityValidator.calculateRouteSimilarityPercent(
+        first,
+        second,
+        sampleCount: 40,
+        proximityMeters: 120,
+      );
+
+      expect(similarity, lessThan(35));
+      expect(
+        RouteQualityValidator.isRouteTooSimilarToPrevious(
+          first,
+          [second],
+          thresholdPercent: 70,
+          sampleCount: 40,
+          proximityMeters: 120,
+        ),
+        isFalse,
+      );
+    });
   });
 }

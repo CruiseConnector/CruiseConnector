@@ -262,6 +262,110 @@ class RouteQualityValidator {
     return parts.join('|');
   }
 
+  /// Schätzt die geometrische Ähnlichkeit zweier Routen (0-100%).
+  ///
+  /// Beide Routen werden auf eine feste Anzahl Punkte gesampelt. Für jeden
+  /// Sample-Punkt wird geprüft, ob auf der jeweils anderen Route ein naher
+  /// Punkt liegt. Das Ergebnis ist der Mittelwert beider Richtungen.
+  static double calculateRouteSimilarityPercent(
+    List<List<double>> first,
+    List<List<double>> second, {
+    int sampleCount = 40,
+    double proximityMeters = 120.0,
+  }) {
+    if (first.length < 2 || second.length < 2) return 0.0;
+
+    final firstSamples = _sampleRoute(first, sampleCount: sampleCount);
+    final secondSamples = _sampleRoute(second, sampleCount: sampleCount);
+    if (firstSamples.isEmpty || secondSamples.isEmpty) return 0.0;
+
+    final forward = _percentPointsNearOtherRoute(
+      source: firstSamples,
+      target: secondSamples,
+      proximityMeters: proximityMeters,
+    );
+    final backward = _percentPointsNearOtherRoute(
+      source: secondSamples,
+      target: firstSamples,
+      proximityMeters: proximityMeters,
+    );
+    return (forward + backward) / 2.0;
+  }
+
+  /// Prüft, ob die neue Route einer der vorherigen Routen zu ähnlich ist.
+  static bool isRouteTooSimilarToPrevious(
+    List<List<double>> candidate,
+    Iterable<List<List<double>>> previousRoutes, {
+    double thresholdPercent = 78.0,
+    int sampleCount = 40,
+    double proximityMeters = 120.0,
+  }) {
+    for (final previous in previousRoutes) {
+      final similarity = calculateRouteSimilarityPercent(
+        candidate,
+        previous,
+        sampleCount: sampleCount,
+        proximityMeters: proximityMeters,
+      );
+      if (similarity >= thresholdPercent) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  static List<List<double>> _sampleRoute(
+    List<List<double>> coordinates, {
+    required int sampleCount,
+  }) {
+    if (coordinates.isEmpty) return const [];
+    final effectiveSamples = math.max(
+      2,
+      math.min(sampleCount, coordinates.length),
+    );
+    final samples = <List<double>>[];
+    for (var i = 0; i < effectiveSamples; i++) {
+      final ratio = effectiveSamples == 1 ? 0.0 : i / (effectiveSamples - 1);
+      final index = ((coordinates.length - 1) * ratio).round();
+      final point = coordinates[index];
+      if (point.length < 2) continue;
+      samples.add([point[0], point[1]]);
+    }
+    return samples;
+  }
+
+  static double _percentPointsNearOtherRoute({
+    required List<List<double>> source,
+    required List<List<double>> target,
+    required double proximityMeters,
+  }) {
+    if (source.isEmpty || target.isEmpty) return 0.0;
+    var nearCount = 0;
+    for (final sourcePoint in source) {
+      if (sourcePoint.length < 2) continue;
+      var minDistance = double.infinity;
+      for (final targetPoint in target) {
+        if (targetPoint.length < 2) continue;
+        final distance = geo.Geolocator.distanceBetween(
+          sourcePoint[1],
+          sourcePoint[0],
+          targetPoint[1],
+          targetPoint[0],
+        );
+        if (distance < minDistance) {
+          minDistance = distance;
+        }
+        if (minDistance <= proximityMeters) {
+          break;
+        }
+      }
+      if (minDistance <= proximityMeters) {
+        nearCount++;
+      }
+    }
+    return (nearCount / source.length) * 100.0;
+  }
+
   // ── Helper ─────────────────────────────────────────────────────────────
 
   /// Bearing von Punkt A nach Punkt B in Grad (0–360).

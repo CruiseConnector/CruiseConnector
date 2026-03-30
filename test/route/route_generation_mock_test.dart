@@ -82,6 +82,13 @@ void main() {
     service = RouteService(invoker: mockInvoker);
   });
 
+  group('RouteService – Modusregeln', () {
+    test('requiresDestination trennt A→B und Rundkurs korrekt', () {
+      expect(RouteService.requiresDestination('ROUND_TRIP'), isFalse);
+      expect(RouteService.requiresDestination('POINT_TO_POINT'), isTrue);
+    });
+  });
+
   // ─────────────────────── Distanztoleranzen ─────────────────────────────────
 
   group('generateRoundTrip – Distanztoleranzen', () {
@@ -295,6 +302,25 @@ void main() {
           verify(mockInvoker.invoke(captureAny)).captured.single
               as Map<String, dynamic>;
       expect(captured['planning_type'], 'Kurvenreich');
+    });
+
+    test('sendet im Rundkurs kein destination_location', () async {
+      when(mockInvoker.invoke(any)).thenAnswer(
+        (_) async =>
+            _buildRouteResponse(distanceMeters: 50000, durationSeconds: 3600),
+      );
+
+      await service.generateRoundTrip(
+        startPosition: _munich(),
+        targetDistanceKm: 50,
+        mode: 'Sport Mode',
+        planningType: 'Zufall',
+      );
+
+      final captured =
+          verify(mockInvoker.invoke(captureAny)).captured.single
+              as Map<String, dynamic>;
+      expect(captured.containsKey('destination_location'), isFalse);
     });
 
     test('optionaler targetLocation wird mitgesendet wenn angegeben', () async {
@@ -655,6 +681,55 @@ void main() {
             (e) => e.type,
             'type',
             RouteErrorType.noRoute,
+          ),
+        ),
+      );
+    });
+
+    test(
+      'mapped noRoute im Rundkurs auf rundkurs-spezifische Meldung',
+      () async {
+        when(
+          mockInvoker.invoke(any),
+        ).thenAnswer((_) async => {'error': 'Keine Route gefunden'});
+
+        await expectLater(
+          service.generateRoundTrip(
+            startPosition: _munich(),
+            targetDistanceKm: 50,
+            mode: 'Sport Mode',
+            planningType: 'Zufall',
+          ),
+          throwsA(
+            isA<RouteServiceException>().having(
+              (e) => e.userMessage,
+              'userMessage',
+              contains('Rundkurs'),
+            ),
+          ),
+        );
+      },
+    );
+
+    test('mapped noRoute bei A→B auf Start/Ziel-Meldung', () async {
+      when(
+        mockInvoker.invoke(any),
+      ).thenAnswer((_) async => {'error': 'Keine Route gefunden'});
+
+      await expectLater(
+        service.generatePointToPoint(
+          startPosition: _munich(),
+          destinationLat: 48.2082,
+          destinationLng: 16.3738,
+          mode: 'Abendrunde',
+          scenic: true,
+          routeVariant: 1,
+        ),
+        throwsA(
+          isA<RouteServiceException>().having(
+            (e) => e.userMessage,
+            'userMessage',
+            contains('Start/Ziel'),
           ),
         ),
       );

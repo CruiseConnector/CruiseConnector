@@ -88,7 +88,7 @@ class _CruiseModePageState extends State<CruiseModePage>
   bool _activeAvoidHighways = false;
   List<double> _recentDestinationDistances = [];
   List<SpeedLimitSegment> _activeSpeedLimits = const [];
-  final Map<String, List<String>> _recentRouteFingerprintsByConfig = {};
+  final Map<String, List<_RecentRouteSignature>> _recentRoutesByConfig = {};
 
   // ─────────────────────── Map State (flutter_map) ───────────────────────────
   bool _isLoading = false;
@@ -332,11 +332,15 @@ class _CruiseModePageState extends State<CruiseModePage>
       if (isRoundTrip) {
         _selectedDetour = 'Direkt';
         _avoidHighways = false;
+        _selectedDestination = null;
+        _destinationController.clear();
       } else if (!pointToPointStyles.contains(_selectedStyle)) {
         _selectedStyle = 'Abendrunde';
       }
     });
   }
+
+  bool _requiresDestination(bool isRoundTrip) => !isRoundTrip;
 
   // ═══════════════════════ BUILD ════════════════════════════════════════════
 
@@ -1238,7 +1242,8 @@ class _CruiseModePageState extends State<CruiseModePage>
       var scenicMode = false;
 
       Map<String, double>? targetLocation;
-      if (!_isRoundTrip && _destinationController.text.isNotEmpty) {
+      if (_requiresDestination(_isRoundTrip) &&
+          _destinationController.text.isNotEmpty) {
         try {
           targetLocation = await _geocodingService.getCoordinatesFromAddress(
             _destinationController.text,
@@ -1256,7 +1261,7 @@ class _CruiseModePageState extends State<CruiseModePage>
 
       // Eine Route generieren — kein Warmup/Skip mehr (spart Mapbox Tokens)
       RouteResult result;
-      if (!_isRoundTrip) {
+      if (_requiresDestination(_isRoundTrip)) {
         if (_selectedDestination != null) {
           destLat = _selectedDestination!.latitude;
           destLng = _selectedDestination!.longitude;
@@ -1302,7 +1307,6 @@ class _CruiseModePageState extends State<CruiseModePage>
           targetDistanceKm: distance,
           mode: _selectedStyle,
           planningType: _planningType,
-          targetLocation: targetLocation,
         );
       }
 
@@ -1350,7 +1354,6 @@ class _CruiseModePageState extends State<CruiseModePage>
             targetDistanceKm: distance,
             mode: _selectedStyle,
             planningType: _planningType,
-            targetLocation: targetLocation,
           );
           final retryKm = result.distanceKm ?? 0;
           quality = validator.validateQuality(
@@ -1460,11 +1463,28 @@ class _CruiseModePageState extends State<CruiseModePage>
       );
 
       final shouldAvoidDuplicateRoutes = _isRoundTrip || scenicMode;
+      final similarityThresholdPercent = _routeSimilarityThresholdPercent(
+        isRoundTrip: _isRoundTrip,
+        scenicMode: scenicMode,
+        detourVariant: detourVariant,
+      );
       if (shouldAvoidDuplicateRoutes &&
-          _hasRecentDuplicateRoute(routeConfigKey, result)) {
-        for (var duplicateRetry = 0; duplicateRetry < 3; duplicateRetry++) {
+          _isRouteTooSimilarToPrevious(
+            routeConfigKey,
+            result,
+            thresholdPercent: similarityThresholdPercent,
+          )) {
+        final duplicateRetryLimit = (!_isRoundTrip && detourVariant == 1)
+            ? 5
+            : 3;
+        for (
+          var duplicateRetry = 0;
+          duplicateRetry < duplicateRetryLimit;
+          duplicateRetry++
+        ) {
           debugPrint(
-            '[CruiseMode] Ähnliche Route erkannt — generiere Alternative (${duplicateRetry + 1}/3)',
+            '[CruiseMode] Ähnliche Route erkannt — generiere Alternative '
+            '(${duplicateRetry + 1}/$duplicateRetryLimit)',
           );
           final candidate = _isRoundTrip
               ? await _routeService.generateRoundTrip(
@@ -1472,7 +1492,6 @@ class _CruiseModePageState extends State<CruiseModePage>
                   targetDistanceKm: distance,
                   mode: _selectedStyle,
                   planningType: _planningType,
-                  targetLocation: targetLocation,
                 )
               : await _routeService.generatePointToPoint(
                   startPosition: startPosition,
@@ -1503,14 +1522,18 @@ class _CruiseModePageState extends State<CruiseModePage>
 
           result = candidate;
           quality = candidateQuality;
-          if (!_hasRecentDuplicateRoute(routeConfigKey, result)) {
+          if (!_isRouteTooSimilarToPrevious(
+            routeConfigKey,
+            result,
+            thresholdPercent: similarityThresholdPercent,
+          )) {
             break;
           }
         }
       }
 
       if (shouldAvoidDuplicateRoutes) {
-        _rememberRouteFingerprint(routeConfigKey, result);
+        _rememberRouteSnapshot(routeConfigKey, result);
       }
 
       _applyRouteResult(result);
@@ -1656,29 +1679,98 @@ class _CruiseModePageState extends State<CruiseModePage>
     return 'ab|$startBucket|$destinationBucket|$detour|$effectiveStyle|$avoidHighways';
   }
 
-  bool _hasRecentDuplicateRoute(String routeConfigKey, RouteResult result) {
-    final fingerprints = _recentRouteFingerprintsByConfig[routeConfigKey];
-    if (fingerprints == null || fingerprints.isEmpty) return false;
-    final fingerprint = RouteQualityValidator.buildRouteFingerprint(
-      result.coordinates,
-      distanceKm: result.distanceKm,
-    );
-    return fingerprints.contains(fingerprint);
+  double _routeSimilarityThresholdPercent({
+    required bool isRoundTrip,
+    required bool scenicMode,
+    required int detourVariant,
+  }) {
+    if (isRoundTrip) return 80.0;
+    if (!scenicMode) return 88.0;
+    if (detourVariant <= 1) return 76.0;
+    if (detourVariant == 2) return 74.0;
+    return 72.0;
   }
 
-  void _rememberRouteFingerprint(String routeConfigKey, RouteResult result) {
-    final fingerprint = RouteQualityValidator.buildRouteFingerprint(
+  bool _isRouteTooSimilarToPrevious(
+    String routeConfigKey,
+    RouteResult result, {
+    required double thresholdPercent,
+  }) {
+    final history = _recentRoutesByConfig[routeConfigKey];
+    if (history == null || history.isEmpty) return false;
+
+    final candidateCoordinates = _sampleCoordinatesForSimilarity(
       result.coordinates,
-      distanceKm: result.distanceKm,
     );
-    final updated = [...?_recentRouteFingerprintsByConfig[routeConfigKey]];
-    if (!updated.contains(fingerprint)) {
-      updated.add(fingerprint);
+    final candidateFingerprint = RouteQualityValidator.buildRouteFingerprint(
+      candidateCoordinates,
+      distanceKm: result.distanceKm,
+      precision: 4,
+    );
+
+    if (history.any((item) => item.fingerprint == candidateFingerprint)) {
+      return true;
     }
-    if (updated.length > 3) {
-      updated.removeRange(0, updated.length - 3);
+
+    final tooSimilar = RouteQualityValidator.isRouteTooSimilarToPrevious(
+      candidateCoordinates,
+      history.map((item) => item.coordinates),
+      thresholdPercent: thresholdPercent,
+      sampleCount: 40,
+      proximityMeters: _isRoundTrip ? 130.0 : 160.0,
+    );
+    if (tooSimilar) {
+      debugPrint(
+        '[CruiseMode] Route verworfen: zu ähnlich zur letzten Route '
+        '(threshold=${thresholdPercent.toStringAsFixed(1)}%)',
+      );
     }
-    _recentRouteFingerprintsByConfig[routeConfigKey] = updated;
+    return tooSimilar;
+  }
+
+  void _rememberRouteSnapshot(String routeConfigKey, RouteResult result) {
+    final sampledCoordinates = _sampleCoordinatesForSimilarity(
+      result.coordinates,
+    );
+    final fingerprint = RouteQualityValidator.buildRouteFingerprint(
+      sampledCoordinates,
+      distanceKm: result.distanceKm,
+      precision: 4,
+    );
+    final updated = [...?_recentRoutesByConfig[routeConfigKey]];
+    if (!updated.any((item) => item.fingerprint == fingerprint)) {
+      updated.add(
+        _RecentRouteSignature(
+          fingerprint: fingerprint,
+          coordinates: sampledCoordinates,
+        ),
+      );
+    }
+    if (updated.length > 4) {
+      updated.removeRange(0, updated.length - 4);
+    }
+    _recentRoutesByConfig[routeConfigKey] = updated;
+  }
+
+  List<List<double>> _sampleCoordinatesForSimilarity(
+    List<List<double>> coordinates, {
+    int maxSamples = 80,
+  }) {
+    if (coordinates.length <= maxSamples) {
+      return coordinates
+          .where((point) => point.length >= 2)
+          .map((point) => [point[0], point[1]])
+          .toList();
+    }
+    final sampled = <List<double>>[];
+    for (var i = 0; i < maxSamples; i++) {
+      final ratio = maxSamples == 1 ? 0.0 : i / (maxSamples - 1);
+      final index = ((coordinates.length - 1) * ratio).round();
+      final point = coordinates[index];
+      if (point.length < 2) continue;
+      sampled.add([point[0], point[1]]);
+    }
+    return sampled;
   }
 
   String _rerouteMode({required bool mergeWithOriginal}) {
@@ -2615,7 +2707,10 @@ class _CruiseModePageState extends State<CruiseModePage>
       }
     } catch (e, stack) {
       debugPrint('Rerouting fehlgeschlagen: $e');
-      debugPrintStack(label: '[CruiseMode] Rerouting stacktrace', stackTrace: stack);
+      debugPrintStack(
+        label: '[CruiseMode] Rerouting stacktrace',
+        stackTrace: stack,
+      );
       final userMessage = e is RouteServiceException
           ? e.userMessage
           : _sanitizeErrorMessage(e.toString());
@@ -3054,6 +3149,16 @@ class _CruiseModePageState extends State<CruiseModePage>
       SnackBar(content: Text('Fehler: $message'), backgroundColor: Colors.red),
     );
   }
+}
+
+class _RecentRouteSignature {
+  const _RecentRouteSignature({
+    required this.fingerprint,
+    required this.coordinates,
+  });
+
+  final String fingerprint;
+  final List<List<double>> coordinates;
 }
 
 /// Apple-Maps-Style Navigations-Pfeil: Blauer Tropfen/Pfeil zeigt Fahrtrichtung.
