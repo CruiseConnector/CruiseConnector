@@ -566,11 +566,11 @@ class _UserProfilePageState extends State<UserProfilePage>
                             final item = snapshot.data![index];
                             final profile =
                                 item['profiles'] as Map<String, dynamic>?;
-                            final username =
-                                profile?['username'] ??
-                                profile?['email']?.split('@')[0] ??
-                                'User';
                             final userId = profile?['id'] as String?;
+                            final username = SocialService.publicDisplayName(
+                              profile,
+                              fallbackUserId: userId,
+                            );
 
                             return ListTile(
                               leading: CircleAvatar(

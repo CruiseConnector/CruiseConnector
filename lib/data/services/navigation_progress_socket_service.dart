@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show debugPrint, kDebugMode, kIsWeb;
 import 'package:geolocator/geolocator.dart' as geo;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -46,10 +46,9 @@ class NavigationProgressSocketService {
           status == RealtimeSubscribeStatus.timedOut) {
         _isSubscribed = false;
         if (error != null) {
-          // Kein throw: Navigation darf bei Socketfehlern weiterlaufen.
-          // Fehler wird nur geloggt.
-          // ignore: avoid_print
-          print('[NavigationSocket] Realtime status $status: $error');
+          if (kDebugMode) {
+            debugPrint('[NavigationSocket] Realtime status $status');
+          }
         }
       }
     });

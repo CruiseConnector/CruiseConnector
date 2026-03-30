@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:cruise_connect/data/services/auth_service.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/data/services/saved_routes_service.dart';
 import 'package:cruise_connect/domain/models/saved_route.dart';
@@ -146,8 +147,8 @@ class _ProfilePageState extends State<ProfilePage>
       if (mounted) {
         setState(() => _uploadingAvatar = false);
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Upload fehlgeschlagen: $e'),
+          const SnackBar(
+            content: Text('Upload fehlgeschlagen. Bitte erneut versuchen.'),
             backgroundColor: Colors.red,
           ),
         );
@@ -156,7 +157,7 @@ class _ProfilePageState extends State<ProfilePage>
   }
 
   void signUserOut() async {
-    await Supabase.instance.client.auth.signOut();
+    await AuthService.signOut();
     if (mounted) {
       Navigator.pushAndRemoveUntil(
         context,
@@ -954,11 +955,11 @@ class _ProfilePageState extends State<ProfilePage>
                                 : 'profiles';
                             final profile =
                                 item[profileKey] as Map<String, dynamic>?;
-                            final username =
-                                profile?['username'] ??
-                                profile?['email']?.split('@')[0] ??
-                                'User';
                             final userId = profile?['id'] as String?;
+                            final username = SocialService.publicDisplayName(
+                              profile,
+                              fallbackUserId: userId,
+                            );
 
                             return ListTile(
                               onTap: () {
@@ -994,7 +995,10 @@ class _ProfilePageState extends State<ProfilePage>
                                 style: const TextStyle(color: Colors.white),
                               ),
                               subtitle: Text(
-                                '@${profile?['email']?.split('@')[0] ?? ''}',
+                                SocialService.publicHandle(
+                                  profile,
+                                  fallbackUserId: userId,
+                                ),
                                 style: const TextStyle(
                                   color: Colors.grey,
                                   fontSize: 13,

@@ -483,12 +483,17 @@ class _CommunityPageState extends State<CommunityPage>
 
   Widget _buildPostItem(Map<String, dynamic> post, {bool showFollow = false}) {
     final profile = post['profiles'] as Map<String, dynamic>?;
-    final name =
-        profile?['username'] ?? profile?['email']?.split('@')[0] ?? 'User';
-    final handle = '@${profile?['email']?.split('@')[0] ?? 'user'}';
+    final postUserId = post['user_id'] as String?;
+    final name = SocialService.publicDisplayName(
+      profile,
+      fallbackUserId: postUserId,
+    );
+    final handle = SocialService.publicHandle(
+      profile,
+      fallbackUserId: postUserId,
+    );
     final time = _formatTimeAgo(post['created_at']);
     final content = post['content'] ?? '';
-    final postUserId = post['user_id'] as String?;
     final currentUserId = Supabase.instance.client.auth.currentUser?.id;
     final isOwnPost = postUserId == currentUserId;
 
@@ -793,10 +798,12 @@ class _CommunityPageState extends State<CommunityPage>
                               final comment = snapshot.data![index];
                               final cProfile =
                                   comment['profiles'] as Map<String, dynamic>?;
-                              final cName =
-                                  cProfile?['username'] ??
-                                  cProfile?['email']?.split('@')[0] ??
-                                  'User';
+                              final commentUserId =
+                                  comment['user_id'] as String?;
+                              final cName = SocialService.publicDisplayName(
+                                cProfile,
+                                fallbackUserId: commentUserId,
+                              );
                               final cTime = _formatTimeAgo(
                                 comment['created_at'],
                               );
@@ -1144,10 +1151,12 @@ class _CommunityPageState extends State<CommunityPage>
                               itemCount: _searchResults.length,
                               itemBuilder: (context, index) {
                                 final user = _searchResults[index];
+                                final userId = user['id'] as String?;
                                 final username =
-                                    user['username'] ??
-                                    user['email']?.split('@')[0] ??
-                                    'User';
+                                    SocialService.publicDisplayName(
+                                      user,
+                                      fallbackUserId: userId,
+                                    );
                                 return ListTile(
                                   onTap: () {
                                     Navigator.pop(context);
@@ -1168,7 +1177,10 @@ class _CommunityPageState extends State<CommunityPage>
                                     style: const TextStyle(color: Colors.white),
                                   ),
                                   subtitle: Text(
-                                    '@${user['email']?.split('@')[0] ?? ''}',
+                                    SocialService.publicHandle(
+                                      user,
+                                      fallbackUserId: userId,
+                                    ),
                                     style: const TextStyle(
                                       color: Colors.grey,
                                       fontSize: 13,
@@ -1250,11 +1262,11 @@ class _CommunityPageState extends State<CommunityPage>
             else
               ...notifications.take(10).map((n) {
                 final from = n['profiles'] as Map<String, dynamic>?;
-                final fromName =
-                    from?['username'] ??
-                    from?['email']?.split('@')[0] ??
-                    'User';
                 final fromId = from?['id'] as String?;
+                final fromName = SocialService.publicDisplayName(
+                  from,
+                  fallbackUserId: fromId,
+                );
                 final type = n['type'];
                 String message;
                 IconData icon;
@@ -1371,16 +1383,17 @@ class _FollowButtonState extends State<_FollowButton> {
 
   Future<void> _checkFollow() async {
     final result = await SocialService.isFollowing(widget.userId);
-    if (mounted)
+    if (mounted) {
       setState(() {
         _following = result;
         _loading = false;
       });
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_loading)
+    if (_loading) {
       return const SizedBox(
         width: 24,
         height: 24,
@@ -1389,8 +1402,10 @@ class _FollowButtonState extends State<_FollowButton> {
           color: Color(0xFFFF3B30),
         ),
       );
-    if (widget.userId == Supabase.instance.client.auth.currentUser?.id)
+    }
+    if (widget.userId == Supabase.instance.client.auth.currentUser?.id) {
       return const SizedBox.shrink();
+    }
 
     return GestureDetector(
       onTap: () async {

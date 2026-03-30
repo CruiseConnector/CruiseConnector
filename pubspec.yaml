@@ -44,8 +44,6 @@ dependencies:
   flutter_tts: ^4.2.5
   flutter_typeahead: ^5.2.0
   image_picker: ^1.2.1
-  # State Management
-  provider: ^6.1.2
   # Skeleton Loader Animation
   shimmer: ^3.0.0
   # Lokale Persistenz (Caching, Offline)

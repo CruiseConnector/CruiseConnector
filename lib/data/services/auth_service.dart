@@ -1,5 +1,7 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'package:cruise_connect/data/services/saved_routes_cache_service.dart';
+
 /// Wrapper um Supabase Auth — Login, Registrierung, Abmelden.
 class AuthService {
   static SupabaseClient get _db => Supabase.instance.client;
@@ -8,8 +10,7 @@ class AuthService {
   static User? get currentUser => _db.auth.currentUser;
 
   /// Stream für Auth-State-Änderungen (Login / Logout).
-  static Stream<AuthState> get authStateChanges =>
-      _db.auth.onAuthStateChange;
+  static Stream<AuthState> get authStateChanges => _db.auth.onAuthStateChange;
 
   // ─── Login ────────────────────────────────────────────────────────────────
 
@@ -44,6 +45,7 @@ class AuthService {
   // ─── Abmelden ─────────────────────────────────────────────────────────────
 
   static Future<void> signOut() async {
+    await SavedRoutesCacheService.clearAll();
     await _db.auth.signOut();
   }
 

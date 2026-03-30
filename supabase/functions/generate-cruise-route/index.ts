@@ -1376,8 +1376,20 @@ Deno.serve(async (req) => {
     try {
         // 1. Parse Request
         const body = await req.json() as RequestData
-        console.log("Anfrage erhalten!", body);
         const { planning_type, startLocation, targetDistance, manual_waypoints, mode } = body
+        console.log(
+            '[RoutingRequest]',
+            JSON.stringify({
+                planningType: planning_type,
+                routeType: body.route_type ?? 'ROUND_TRIP',
+                mode: mode ?? 'Standard',
+                hasDestination: body.destination_location != null,
+                manualWaypointCount: manual_waypoints?.length ?? 0,
+                targetDistance: targetDistance ?? null,
+                detourLevel: body.detour_level ?? 0,
+                avoidHighways: body.avoid_highways === true,
+            }),
+        )
 
         if (!MAPBOX_ACCESS_TOKEN) {
             throw new Error("Server Error: MAPBOX_ACCESS_TOKEN is not configured.")
