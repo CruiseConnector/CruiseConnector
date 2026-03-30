@@ -136,10 +136,15 @@ class _CruiseModePageState extends State<CruiseModePage>
       5; // Häufigere Teil-Redraws für flüssige Linie
   static const double _routeRedrawDistanceMeters = 30.0;
   double _totalDistanceDriven = 0.0; // Gesamte gefahrene Strecke in Metern
+  DateTime? _navigationStartTime; // Zeitpunkt des Navigations-Starts
   double?
   _originalRouteDistance; // Ursprüngliche Gesamtdistanz (für Zeitberechnung)
   double?
   _originalRouteDuration; // Ursprüngliche Gesamtdauer (für Zeitberechnung)
+
+  // Schwellenwerte für anteilige Gutschrift
+  static const double _minProgressForCredit = 0.10; // 10% Minimum
+  static const double _minProgressForFullCredit = 0.95; // 95% = volle Gutschrift
   int _lastDrawnRouteIndex =
       0; // Letzter Index bei dem die Route neu gezeichnet wurde
   double _distanceSinceLastRedraw = 0.0;
@@ -1589,6 +1594,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       _distanceSinceLastRedraw = 0.0;
       _announcedManeuverIndices.clear();
       _totalDistanceDriven = 0.0;
+      _navigationStartTime = null;
       _offRouteCount = 0;
       _lastRerouteTime = null;
       _remainingDistance = null;
@@ -2081,6 +2087,9 @@ class _CruiseModePageState extends State<CruiseModePage>
     _stopIdlePositionStream(); // Idle-Stream stoppen, Navigation übernimmt
     _positionSubscription?.cancel();
     _socketPositionSubscription?.cancel();
+
+    // Navigations-Startzeit setzen (nur beim ersten Start, nicht bei Resume)
+    _navigationStartTime ??= DateTime.now();
 
     // Web: Smoother resetten für frischen Start
     if (kIsWeb) _webSmoother.reset();
@@ -2865,6 +2874,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     _lastDrawnRouteIndex = 0;
     _distanceSinceLastRedraw = 0.0;
     _totalDistanceDriven = 0;
+    _navigationStartTime = DateTime.now();
     _announcedManeuverIndices.clear();
     _activeManeuverIndex = 0;
     // Speed-History entfernt
@@ -3049,21 +3059,41 @@ class _CruiseModePageState extends State<CruiseModePage>
     final drivenKm = _totalDistanceDriven / 1000;
     final totalKm = _originalRouteDistance != null
         ? _originalRouteDistance! / 1000
-        : null;
+        : 0.0;
+    final progressFraction = totalKm > 0
+        ? (drivenKm / totalKm).clamp(0.0, 1.0)
+        : 0.0;
+
+    // Fast fertig → als volle Completion behandeln
+    if (progressFraction >= _minProgressForFullCredit) {
+      _onRouteCompleted();
+      return;
+    }
+
+    final belowMinimum = progressFraction < _minProgressForCredit;
+
     showDialog(
       context: context,
       barrierDismissible: false,
       builder: (ctx) => CruiseCompletionDialog(
         distanceKm: drivenKm,
-        totalRouteKm: totalKm,
+        totalRouteKm: totalKm > 0 ? totalKm : null,
         isEarlyStop: true,
+        belowMinimum: belowMinimum,
         onSave: (rating) async {
           Navigator.pop(ctx);
-          await _saveRouteAndSyncXp(rating: rating);
+          await _saveRouteAndSyncXp(
+            rating: rating,
+            skipXpSync: belowMinimum,
+          );
           _resetAfterCompletion();
         },
         onDiscard: () async {
           Navigator.pop(ctx);
+          // Discard mit anteiliger Gutschrift wenn über Minimum
+          if (!belowMinimum && _totalDistanceDriven > 0) {
+            await _saveRouteAndSyncXp(skipXpSync: false);
+          }
           _resetAfterCompletion();
         },
       ),
@@ -3071,29 +3101,57 @@ class _CruiseModePageState extends State<CruiseModePage>
   }
 
   /// Speichert die gefahrene Route und synchronisiert XP/Level/Badges.
-  Future<void> _saveRouteAndSyncXp({int? rating}) async {
+  /// [skipXpSync] = true → Route wird gespeichert, aber keine XP vergeben (< 10% gefahren).
+  Future<void> _saveRouteAndSyncXp({int? rating, bool skipXpSync = false}) async {
     try {
       debugPrint(
-        '[CruiseMode] _saveRouteAndSyncXp: _lastRouteResult=${_lastRouteResult != null}, rating=$rating',
+        '[CruiseMode] _saveRouteAndSyncXp: _lastRouteResult=${_lastRouteResult != null}, rating=$rating, skipXp=$skipXpSync',
       );
       if (_lastRouteResult != null) {
         // Route mit tatsächlich gefahrener Distanz speichern
         final drivenDistanceMeters = _totalDistanceDriven > 0
             ? _totalDistanceDriven
             : _routeDistance;
+
+        // Proportionale Dauer berechnen
+        final double progressFraction =
+            (drivenDistanceMeters != null && _originalRouteDistance != null && _originalRouteDistance! > 0)
+                ? (drivenDistanceMeters / _originalRouteDistance!).clamp(0.0, 1.0)
+                : 1.0;
+        final double? proportionalDuration = _lastRouteResult!.durationSeconds != null
+            ? _lastRouteResult!.durationSeconds! * progressFraction
+            : null;
+
+        // Tatsächlich verstrichene Zeit als Obergrenze (verhindert Gaming)
+        final double? elapsedSeconds = _navigationStartTime != null
+            ? DateTime.now().difference(_navigationStartTime!).inSeconds.toDouble()
+            : null;
+
+        // Minimum aus proportionaler und tatsächlicher Zeit verwenden
+        final double? adjustedDuration;
+        if (proportionalDuration != null && elapsedSeconds != null) {
+          adjustedDuration = proportionalDuration < elapsedSeconds
+              ? proportionalDuration
+              : elapsedSeconds;
+        } else {
+          adjustedDuration = proportionalDuration ?? elapsedSeconds;
+        }
+
         final adjustedResult = RouteResult(
           geoJson: _lastRouteResult!.geoJson,
           geometry: _lastRouteResult!.geometry,
           coordinates: _lastRouteResult!.coordinates,
           maneuvers: _lastRouteResult!.maneuvers,
           distanceMeters: drivenDistanceMeters,
-          durationSeconds: _lastRouteResult!.durationSeconds,
+          durationSeconds: adjustedDuration,
           distanceKm: drivenDistanceMeters != null
               ? drivenDistanceMeters / 1000
               : null,
         );
         debugPrint(
-          '[CruiseMode] Saving route: style=$_selectedStyle, roundTrip=$_isRoundTrip, distKm=${adjustedResult.distanceKm}',
+          '[CruiseMode] Saving route: style=$_selectedStyle, roundTrip=$_isRoundTrip, '
+          'distKm=${adjustedResult.distanceKm}, durationSec=${adjustedDuration?.round()}, '
+          'progress=${(progressFraction * 100).round()}%',
         );
         await SavedRoutesService.saveRoute(
           result: adjustedResult,
@@ -3106,17 +3164,21 @@ class _CruiseModePageState extends State<CruiseModePage>
         );
         debugPrint('[CruiseMode] Route saved successfully!');
       }
-      // XP/Level/Badges synchronisieren
-      final gamResult = await GamificationService.calculateAndSync();
-      if (mounted && gamResult.newBadgeIds.isNotEmpty) {
-        final badgeNames = gamResult.newBadges.map((b) => b.emoji).join(' ');
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Neues Badge: $badgeNames'),
-            backgroundColor: const Color(0xFFFFD700),
-            duration: const Duration(seconds: 3),
-          ),
-        );
+      // XP/Level/Badges synchronisieren (nur wenn über Minimum-Schwelle)
+      if (!skipXpSync) {
+        final gamResult = await GamificationService.calculateAndSync();
+        if (mounted && gamResult.newBadgeIds.isNotEmpty) {
+          final badgeNames = gamResult.newBadges.map((b) => b.emoji).join(' ');
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Neues Badge: $badgeNames'),
+              backgroundColor: const Color(0xFFFFD700),
+              duration: const Duration(seconds: 3),
+            ),
+          );
+        }
+      } else {
+        debugPrint('[CruiseMode] XP-Sync übersprungen (unter Minimum-Schwelle)');
       }
     } catch (e, stack) {
       debugPrint('Route speichern / XP sync fehlgeschlagen: $e');
@@ -3138,6 +3200,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       _isRouteConfirmed = false;
       _isCameraLocked = false;
       _totalDistanceDriven = 0.0;
+      _navigationStartTime = null;
     });
   }
 

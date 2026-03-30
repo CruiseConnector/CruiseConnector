@@ -35,8 +35,6 @@ class _AnalyticsPageState extends State<AnalyticsPage>
   List<SavedRoute> _allRoutes = [];
 
   List<double> _weeklyChartData = List.filled(7, 0);
-  List<double> _weeklyRawKm = List.filled(7, 0);
-  List<double> _weeklyRawXp = List.filled(7, 0);
   final List<String> _weeklyLabels = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
 
   // Streak
@@ -46,16 +44,23 @@ class _AnalyticsPageState extends State<AnalyticsPage>
   double _thisMonthKm = 0;
   double _lastMonthKm = 0;
   int _thisMonthRoutes = 0;
-  int _lastMonthRoutes = 0;
-  double _thisYearKm = 0;
-  double _lastYearKm = 0;
-  int _thisYearRoutes = 0;
-  int _lastYearRoutes = 0;
+  // Wochendaten (neu)
+  double _weeklyTotalKm = 0;
+  double _weeklyTotalXp = 0;
+  int _weeklyRouteCount = 0;
+  double _weeklyTotalTime = 0; // Sekunden
+  double _lastWeekTotalKm = 0;
+  double _lastWeekTotalXp = 0;
+  double _lastWeekTotalTime = 0; // Sekunden
+
+  // Monatsdaten (neu)
+  double _thisMonthXp = 0;
+  double _lastMonthXp = 0;
+  double _thisMonthTime = 0; // Sekunden
+  double _lastMonthTime = 0; // Sekunden
 
   // Monatliche Chart-Daten (12 Monate)
   List<double> _monthlyChartData = List.filled(12, 0);
-  List<double> _monthlyRawKm = List.filled(12, 0);
-
   @override
   void initState() {
     super.initState();
@@ -92,13 +97,17 @@ class _AnalyticsPageState extends State<AnalyticsPage>
       final thisMonthStart = DateTime(now.year, now.month);
       final lastMonthStart = DateTime(now.year, now.month - 1);
       final thisYearStart = DateTime(now.year);
-      final lastYearStart = DateTime(now.year - 1);
-      final lastYearEnd = DateTime(now.year);
 
       double thisMonthKm = 0, lastMonthKm = 0;
-      int thisMonthRoutes = 0, lastMonthRoutes = 0;
-      double thisYearKm = 0, lastYearKm = 0;
-      int thisYearRoutes = 0, lastYearRoutes = 0;
+      int thisMonthRoutes = 0;
+
+      // Neue Tracking-Variablen
+      double weeklyTotalTime = 0, lastWeekTotalTime = 0;
+      double lastWeekKm = 0, lastWeekXp = 0;
+      int weekRouteCount = 0;
+      double thisMonthXp = 0, lastMonthXp = 0;
+      double thisMonthTime = 0, lastMonthTime = 0;
+      final lastWeekStart = weekStart.subtract(const Duration(days: 7));
 
       // Monatliche km (dieses Jahr)
       final monthlyKm = List<double>.filled(12, 0);
@@ -114,41 +123,47 @@ class _AnalyticsPageState extends State<AnalyticsPage>
           createdAt.day,
         );
 
+        final routeDuration = r.durationSeconds ?? 0.0;
+        final estCurves = (r.distanceKm / 5).round();
+        final routeXp = GamificationService.calculateRouteXp(
+          distanceKm: r.distanceKm,
+          curves: estCurves,
+          style: r.style,
+        );
+
         // Wöchentliche Daten
         if (!routeDay.isBefore(weekStart)) {
           final dayIndex = createdAt.weekday - 1;
           if (dayIndex >= 0 && dayIndex < 7) {
             weeklyKm[dayIndex] += r.distanceKm;
-            final estCurves = (r.distanceKm / 5).round();
-            weeklyXp[dayIndex] += GamificationService.calculateRouteXp(
-              distanceKm: r.distanceKm,
-              curves: estCurves,
-              style: r.style,
-            );
+            weeklyXp[dayIndex] += routeXp;
           }
+          weekRouteCount++;
+          weeklyTotalTime += routeDuration;
+        } else if (!routeDay.isBefore(lastWeekStart) &&
+            routeDay.isBefore(weekStart)) {
+          lastWeekKm += r.distanceKm;
+          lastWeekXp += routeXp;
+          lastWeekTotalTime += routeDuration;
         }
 
         // Monatsdaten
         if (!createdAt.isBefore(thisMonthStart)) {
           thisMonthKm += r.distanceKm;
           thisMonthRoutes++;
+          thisMonthXp += routeXp;
+          thisMonthTime += routeDuration;
         } else if (!createdAt.isBefore(lastMonthStart) &&
             createdAt.isBefore(thisMonthStart)) {
           lastMonthKm += r.distanceKm;
-          lastMonthRoutes++;
+          lastMonthXp += routeXp;
+          lastMonthTime += routeDuration;
         }
 
-        // Jahresdaten
+        // Monatliche Aufschlüsselung (dieses Jahr, für Chart)
         if (!createdAt.isBefore(thisYearStart)) {
-          thisYearKm += r.distanceKm;
-          thisYearRoutes++;
-          // Monatliche Aufschlüsselung
           final monthIndex = createdAt.month - 1;
           monthlyKm[monthIndex] += r.distanceKm;
-        } else if (!createdAt.isBefore(lastYearStart) &&
-            createdAt.isBefore(lastYearEnd)) {
-          lastYearKm += r.distanceKm;
-          lastYearRoutes++;
         }
 
         // Streaktage
@@ -198,19 +213,22 @@ class _AnalyticsPageState extends State<AnalyticsPage>
           _earnedBadges = gamResult.earnedBadges;
           _allRoutes = routes;
           _weeklyChartData = normalizedWeekly;
-          _weeklyRawKm = weeklyKm;
-          _weeklyRawXp = weeklyXp;
           _streakDays = streak;
           _thisMonthKm = thisMonthKm;
           _lastMonthKm = lastMonthKm;
           _thisMonthRoutes = thisMonthRoutes;
-          _lastMonthRoutes = lastMonthRoutes;
-          _thisYearKm = thisYearKm;
-          _lastYearKm = lastYearKm;
-          _thisYearRoutes = thisYearRoutes;
-          _lastYearRoutes = lastYearRoutes;
           _monthlyChartData = normalizedMonthly;
-          _monthlyRawKm = monthlyKm;
+          _weeklyTotalKm = weeklyKm.fold(0.0, (a, b) => a + b);
+          _weeklyTotalXp = weeklyXp.fold(0.0, (a, b) => a + b);
+          _weeklyRouteCount = weekRouteCount;
+          _weeklyTotalTime = weeklyTotalTime;
+          _lastWeekTotalKm = lastWeekKm;
+          _lastWeekTotalXp = lastWeekXp;
+          _lastWeekTotalTime = lastWeekTotalTime;
+          _thisMonthXp = thisMonthXp;
+          _lastMonthXp = lastMonthXp;
+          _thisMonthTime = thisMonthTime;
+          _lastMonthTime = lastMonthTime;
           _loading = false;
         });
       }
@@ -665,466 +683,448 @@ class _AnalyticsPageState extends State<AnalyticsPage>
 
   Widget _buildOverviewTab() {
     final now = DateTime.now();
-    final todayStart = DateTime(now.year, now.month, now.day);
-    final weekStart = todayStart.subtract(
-      Duration(days: todayStart.weekday - 1),
-    );
-    final lastWeekStart = weekStart.subtract(const Duration(days: 7));
-    final totalWeekKm = _weeklyRawKm.fold<double>(0, (a, b) => a + b);
-    final totalWeekXp = _weeklyRawXp.fold<double>(0, (a, b) => a + b);
-    final weekRoutes = _allRoutes.where((r) {
-      final routeDay = DateTime(
-        r.createdAt.toLocal().year,
-        r.createdAt.toLocal().month,
-        r.createdAt.toLocal().day,
-      );
-      return !routeDay.isBefore(weekStart);
-    }).length;
-    final activeDays = _weeklyRawKm.where((km) => km > 0).length;
-    final avgKmPerRoute = weekRoutes > 0 ? totalWeekKm / weekRoutes : 0.0;
+    final kmDelta = _weeklyTotalKm - _lastWeekTotalKm;
+    final xpDelta = _weeklyTotalXp - _lastWeekTotalXp;
+    final timeDelta = _weeklyTotalTime - _lastWeekTotalTime;
 
-    double lastWeekKm = 0;
-    double lastWeekXp = 0;
-    var lastWeekRoutes = 0;
-    for (final route in _allRoutes) {
-      final routeDay = DateTime(
-        route.createdAt.toLocal().year,
-        route.createdAt.toLocal().month,
-        route.createdAt.toLocal().day,
-      );
-      if (!routeDay.isBefore(lastWeekStart) && routeDay.isBefore(weekStart)) {
-        lastWeekKm += route.distanceKm;
-        lastWeekRoutes++;
-        final estimatedCurves = (route.distanceKm / 5).round();
-        lastWeekXp += GamificationService.calculateRouteXp(
-          distanceKm: route.distanceKm,
-          curves: estimatedCurves,
-          style: route.style,
-        );
-      }
-    }
-
-    final weekKmDelta = totalWeekKm - lastWeekKm;
-    final weekXpDelta = totalWeekXp - lastWeekXp;
-
-    return Column(
-      children: [
-        _buildSectionCard(
-          title: 'Fahraktivität diese Woche',
-          subtitle: 'Kilometer pro Tag, kompakt mit Vorwochenvergleich.',
-          accentColor: const Color(0xFFFF3B30),
-          child: Column(
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1C1F26),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header
+          const Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              LayoutBuilder(
-                builder: (context, constraints) {
-                  final expanded = constraints.maxWidth >= 430;
-                  return Wrap(
-                    spacing: 10,
-                    runSpacing: 10,
-                    children: [
-                      _buildMiniMetricCard(
-                        'Kilometer',
-                        '${totalWeekKm.toStringAsFixed(0)} km',
-                        Icons.straighten,
-                        expanded: expanded,
-                      ),
-                      _buildMiniMetricCard(
-                        'Fahrten',
-                        '$weekRoutes',
-                        Icons.route,
-                        expanded: expanded,
-                      ),
-                      _buildMiniMetricCard(
-                        'Fahrttage',
-                        '$activeDays / 7',
-                        Icons.calendar_today,
-                        expanded: expanded,
-                      ),
-                      _buildMiniMetricCard(
-                        'Ø km/Fahrt',
-                        '${avgKmPerRoute.toStringAsFixed(1)} km',
-                        Icons.speed,
-                        expanded: expanded,
-                      ),
-                    ],
-                  );
-                },
+              Text(
+                'Diese Woche',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
-              const SizedBox(height: 14),
-              LayoutBuilder(
-                builder: (context, constraints) {
-                  final pillWidth = constraints.maxWidth >= 560 ? 220.0 : 160.0;
-                  return Wrap(
-                    spacing: 10,
-                    runSpacing: 10,
-                    children: [
-                      _buildTrendPill(
-                        width: pillWidth,
-                        label: 'Vorwoche',
-                        value:
-                            '${lastWeekKm.toStringAsFixed(0)} km · $lastWeekRoutes Fahrten',
-                        caption:
-                            '${lastWeekXp.toStringAsFixed(0)} XP im gleichen Zeitraum',
-                        accentColor: const Color(0xFF00E5FF),
-                      ),
-                      _buildTrendPill(
-                        width: pillWidth,
-                        label: 'Trend',
-                        value: _formatSignedDistance(weekKmDelta),
-                        caption:
-                            '${_formatSignedNumber(weekXpDelta, suffix: ' XP')} vs. letzte Woche',
-                        accentColor: weekKmDelta >= 0
-                            ? const Color(0xFFFF3B30)
-                            : const Color(0xFFA0AEC0),
-                      ),
-                    ],
-                  );
-                },
+              Text(
+                'vs. letzte',
+                style: TextStyle(
+                  color: Color(0xFF8A94A6),
+                  fontSize: 12,
+                ),
               ),
-              const SizedBox(height: 18),
-              SizedBox(
-                height: 168,
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: List.generate(
-                    7,
-                    (i) => _buildChartBar(
-                      _weeklyLabels[i],
-                      _weeklyChartData[i],
-                      i == now.weekday - 1,
-                    ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          // KPI Cards
+          Row(
+            children: [
+              Expanded(
+                child: _buildKpiCard(
+                  value: _weeklyTotalKm < 10
+                      ? '${_weeklyTotalKm.toStringAsFixed(1)} km'
+                      : '${_weeklyTotalKm.toStringAsFixed(0)} km',
+                  label: 'Distanz',
+                  delta: _formatKpiDelta(kmDelta, suffix: ''),
+                  deltaPositive: kmDelta >= 0,
+                  deltaZero: kmDelta == 0,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _buildKpiCard(
+                  value: _formatDurationShort(_weeklyTotalTime),
+                  label: 'Fahrzeit',
+                  delta: _formatTimeDelta(timeDelta),
+                  deltaPositive: timeDelta >= 0,
+                  deltaZero: timeDelta == 0,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _buildKpiCard(
+                  value: _weeklyTotalXp.toStringAsFixed(0),
+                  label: 'XP',
+                  delta: _formatKpiDelta(xpDelta, suffix: ''),
+                  deltaPositive: xpDelta >= 0,
+                  deltaZero: xpDelta == 0,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 18),
+          // Mini bar chart + route count
+          Row(
+            children: [
+              Expanded(
+                child: SizedBox(
+                  height: 60,
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: List.generate(7, (i) {
+                      final isToday = i == now.weekday - 1;
+                      final barValue = _weeklyChartData[i].clamp(0.0, 1.0);
+                      return Expanded(
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 3),
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.end,
+                            children: [
+                              Expanded(
+                                child: Align(
+                                  alignment: Alignment.bottomCenter,
+                                  child: FractionallySizedBox(
+                                    heightFactor:
+                                        barValue > 0 ? barValue : 0.06,
+                                    child: Container(
+                                      decoration: BoxDecoration(
+                                        gradient: isToday
+                                            ? const LinearGradient(
+                                                colors: [
+                                                  Color(0xFFFF3B30),
+                                                  Color(0xFFFF6B35),
+                                                ],
+                                                begin: Alignment.topCenter,
+                                                end: Alignment.bottomCenter,
+                                              )
+                                            : null,
+                                        color: isToday
+                                            ? null
+                                            : const Color(0xFF2A2F3A),
+                                        borderRadius:
+                                            BorderRadius.circular(4),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                _weeklyLabels[i],
+                                style: TextStyle(
+                                  color: isToday
+                                      ? Colors.white
+                                      : const Color(0xFF8A94A6),
+                                  fontSize: 9,
+                                  fontWeight: isToday
+                                      ? FontWeight.bold
+                                      : FontWeight.normal,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    }),
                   ),
                 ),
               ),
-              const SizedBox(height: 12),
-              Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  'Balken zeigen Kilometer pro Tag. XP stehen unten je Wochentag.',
-                  style: TextStyle(color: Colors.grey[500], fontSize: 11),
+              const SizedBox(width: 14),
+              Text(
+                '$_weeklyRouteCount Fahrten',
+                style: const TextStyle(
+                  color: Color(0xFF8A94A6),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
                 ),
               ),
             ],
           ),
-        ),
-        const SizedBox(height: 12),
-        _buildSectionCard(
-          title: 'Tagesübersicht',
-          subtitle: 'Montag bis Sonntag mit Distanz und XP auf einen Blick.',
-          accentColor: const Color(0xFF00E5FF),
-          child: Column(
+          const SizedBox(height: 14),
+          // Streak line
+          Row(
             children: [
-              for (var i = 0; i < 7; i++) ...[
-                _buildPeriodBreakdownRow(
-                  label: _weeklyLabels[i],
-                  value: '${_weeklyRawKm[i].toStringAsFixed(0)} km',
-                  secondary: '${_weeklyRawXp[i].toStringAsFixed(0)} XP',
-                  isHighlighted: i == DateTime.now().weekday - 1,
+              Expanded(
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(2),
+                  child: LinearProgressIndicator(
+                    value: _streakDays > 0
+                        ? (_streakDays / 7).clamp(0.0, 1.0)
+                        : 0.0,
+                    backgroundColor: const Color(0xFF2A2F3A),
+                    valueColor: const AlwaysStoppedAnimation<Color>(
+                      Color(0xFFFF3B30),
+                    ),
+                    minHeight: 3,
+                  ),
                 ),
-                if (i < 6) const SizedBox(height: 10),
-              ],
+              ),
+              const SizedBox(width: 12),
+              Text(
+                _streakDays > 0
+                    ? '\u{1F525} $_streakDays Tage Streak'
+                    : 'Kein Streak',
+                style: TextStyle(
+                  color: _streakDays > 0
+                      ? Colors.white
+                      : const Color(0xFF8A94A6),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
             ],
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 
   // ── Monats-/Jahresübersicht Tab ──────────────────────────────────────
 
   Widget _buildMonthlyTab() {
-    final monthNames = [
-      'Jan',
-      'Feb',
-      'Mär',
-      'Apr',
-      'Mai',
-      'Jun',
-      'Jul',
-      'Aug',
-      'Sep',
-      'Okt',
-      'Nov',
-      'Dez',
-    ];
+    const monthLabels = ['J', 'F', 'M', 'A', 'M', 'J', 'J', 'A', 'S', 'O', 'N', 'D'];
     final now = DateTime.now();
-    final currentMonthName = monthNames[now.month - 1];
-    final lastMonthIndex = now.month == 1 ? 11 : now.month - 2;
-    final lastMonthName = monthNames[lastMonthIndex];
-    final lastMonthYear = now.month == 1 ? now.year - 1 : now.year;
-
-    final avgKmThisMonth = _thisMonthRoutes > 0
+    final kmDelta = _thisMonthKm - _lastMonthKm;
+    final xpDelta = _thisMonthXp - _lastMonthXp;
+    final timeDelta = _thisMonthTime - _lastMonthTime;
+    final avgKmPerRoute = _thisMonthRoutes > 0
         ? _thisMonthKm / _thisMonthRoutes
         : 0.0;
-    final avgKmLastMonth = _lastMonthRoutes > 0
-        ? _lastMonthKm / _lastMonthRoutes
-        : 0.0;
-    final monthDeltaKm = _thisMonthKm - _lastMonthKm;
-    final oldYearAvg = _lastYearRoutes > 0
-        ? _lastYearKm / _lastYearRoutes
-        : 0.0;
-    final currentYearAvg = _thisYearRoutes > 0
-        ? _thisYearKm / _thisYearRoutes
-        : 0.0;
-    final yearDeltaKm = _thisYearKm - _lastYearKm;
 
-    return Column(
-      children: [
-        _buildSectionCard(
-          title: 'Monatsvergleich',
-          subtitle: 'Vergangener Monat zuerst, aktueller Monat danach.',
-          accentColor: const Color(0xFFFF3B30),
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              final stacked = constraints.maxWidth < 560;
-              return _buildComparisonLayout(
-                leftTitle: '$lastMonthName $lastMonthYear',
-                leftAccent: const Color(0xFF637082),
-                leftMetrics: [
-                  _buildComparisonMetric(
-                    'Kilometer',
-                    '${_lastMonthKm.toStringAsFixed(0)} km',
-                  ),
-                  _buildComparisonMetric('Fahrten', '$_lastMonthRoutes'),
-                  _buildComparisonMetric(
-                    'Ø km/Fahrt',
-                    '${avgKmLastMonth.toStringAsFixed(1)} km',
-                  ),
-                ],
-                rightTitle: '$currentMonthName ${now.year}',
-                rightAccent: const Color(0xFFFF3B30),
-                rightMetrics: [
-                  _buildComparisonMetric(
-                    'Kilometer',
-                    '${_thisMonthKm.toStringAsFixed(0)} km',
-                  ),
-                  _buildComparisonMetric('Fahrten', '$_thisMonthRoutes'),
-                  _buildComparisonMetric(
-                    'Ø km/Fahrt',
-                    '${avgKmThisMonth.toStringAsFixed(1)} km',
-                  ),
-                  _buildComparisonMetric(
-                    'Delta',
-                    _formatSignedDistance(monthDeltaKm),
-                  ),
-                ],
-                stacked: stacked,
-              );
-            },
-          ),
-        ),
-        const SizedBox(height: 12),
-        _buildSectionCard(
-          title: 'Jahresvergleich',
-          subtitle: 'Vergangenes Jahr zuerst, aktuelles Jahr danach.',
-          accentColor: const Color(0xFF00E5FF),
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              final stacked = constraints.maxWidth < 560;
-              return _buildComparisonLayout(
-                leftTitle: '${now.year - 1}',
-                leftAccent: const Color(0xFF637082),
-                leftMetrics: [
-                  _buildComparisonMetric(
-                    'Kilometer',
-                    '${_lastYearKm.toStringAsFixed(0)} km',
-                  ),
-                  _buildComparisonMetric('Fahrten', '$_lastYearRoutes'),
-                  _buildComparisonMetric(
-                    'Ø km/Fahrt',
-                    '${oldYearAvg.toStringAsFixed(1)} km',
-                  ),
-                ],
-                rightTitle: '${now.year}',
-                rightAccent: const Color(0xFF00E5FF),
-                rightMetrics: [
-                  _buildComparisonMetric(
-                    'Kilometer',
-                    '${_thisYearKm.toStringAsFixed(0)} km',
-                  ),
-                  _buildComparisonMetric('Fahrten', '$_thisYearRoutes'),
-                  _buildComparisonMetric(
-                    'Ø km/Fahrt',
-                    '${currentYearAvg.toStringAsFixed(1)} km',
-                  ),
-                  _buildComparisonMetric(
-                    'Delta',
-                    _formatSignedDistance(yearDeltaKm),
-                  ),
-                ],
-                stacked: stacked,
-              );
-            },
-          ),
-        ),
-        const SizedBox(height: 12),
-        _buildSectionCard(
-          title: 'Km pro Monat (${now.year})',
-          subtitle: 'Monatliche Verteilung für das aktuelle Jahr.',
-          accentColor: const Color(0xFFFFD700),
-          child: Column(
-            children: [
-              SizedBox(
-                height: 176,
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: List.generate(12, (i) {
-                    final isCurrentMonth = i == now.month - 1;
-                    return _buildChartBar(
-                      monthNames[i],
-                      _monthlyChartData[i],
-                      isCurrentMonth,
-                    );
-                  }),
-                ),
-              ),
-              const SizedBox(height: 16),
-              Wrap(
-                spacing: 10,
-                runSpacing: 10,
-                children: [
-                  for (var i = 0; i < 12; i++)
-                    _buildMiniMonthCard(
-                      monthNames[i],
-                      '${_monthlyRawKm[i].toStringAsFixed(0)} km',
-                      i == now.month - 1,
-                    ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildComparisonLayout({
-    required String leftTitle,
-    required Color leftAccent,
-    required List<Widget> leftMetrics,
-    required String rightTitle,
-    required Color rightAccent,
-    required List<Widget> rightMetrics,
-    required bool stacked,
-  }) {
-    if (stacked) {
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          _buildComparisonSide(
-            title: leftTitle,
-            accentColor: leftAccent,
-            metrics: leftMetrics,
-          ),
-          const SizedBox(height: 12),
-          _buildComparisonSide(
-            title: rightTitle,
-            accentColor: rightAccent,
-            metrics: rightMetrics,
-          ),
-        ],
-      );
-    }
-
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Expanded(
-          child: _buildComparisonSide(
-            title: leftTitle,
-            accentColor: leftAccent,
-            metrics: leftMetrics,
-          ),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: _buildComparisonSide(
-            title: rightTitle,
-            accentColor: rightAccent,
-            metrics: rightMetrics,
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildComparisonSide({
-    required String title,
-    required Color accentColor,
-    required List<Widget> metrics,
-  }) {
     return Container(
-      padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
-        color: const Color(0xFF0B0E14),
+        color: const Color(0xFF1C1F26),
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: accentColor.withValues(alpha: 0.18)),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
+          // Header
+          const Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Container(
-                width: 10,
-                height: 10,
-                decoration: BoxDecoration(
-                  color: accentColor,
-                  shape: BoxShape.circle,
+              Text(
+                'Dieser Monat',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
                 ),
               ),
-              const SizedBox(width: 8),
               Text(
-                title,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 14,
-                  fontWeight: FontWeight.bold,
+                'vs. letzter',
+                style: TextStyle(
+                  color: Color(0xFF8A94A6),
+                  fontSize: 12,
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 12),
-          for (var i = 0; i < metrics.length; i++) ...[
-            metrics[i],
-            if (i < metrics.length - 1) const SizedBox(height: 10),
-          ],
+          const SizedBox(height: 16),
+          // KPI Cards
+          Row(
+            children: [
+              Expanded(
+                child: _buildKpiCard(
+                  value: _thisMonthKm < 10
+                      ? '${_thisMonthKm.toStringAsFixed(1)} km'
+                      : '${_thisMonthKm.toStringAsFixed(0)} km',
+                  label: 'Distanz',
+                  delta: _formatKpiDelta(kmDelta, suffix: ''),
+                  deltaPositive: kmDelta >= 0,
+                  deltaZero: kmDelta == 0,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _buildKpiCard(
+                  value: _formatDurationShort(_thisMonthTime),
+                  label: 'Fahrzeit',
+                  delta: _formatTimeDelta(timeDelta),
+                  deltaPositive: timeDelta >= 0,
+                  deltaZero: timeDelta == 0,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _buildKpiCard(
+                  value: _thisMonthXp >= 1000
+                      ? '${(_thisMonthXp / 1000).toStringAsFixed(1)}k'
+                      : _thisMonthXp.toStringAsFixed(0),
+                  label: 'XP',
+                  delta: _formatKpiDelta(xpDelta, suffix: ''),
+                  deltaPositive: xpDelta >= 0,
+                  deltaZero: xpDelta == 0,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          // Summary line
+          Row(
+            children: [
+              Text(
+                '$_thisMonthRoutes Fahrten',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const Text(
+                '  \u00b7  ',
+                style: TextStyle(color: Color(0xFF8A94A6), fontSize: 13),
+              ),
+              Text(
+                '\u00d8 ${avgKmPerRoute.toStringAsFixed(1)} km/Fahrt',
+                style: const TextStyle(
+                  color: Color(0xFF8A94A6),
+                  fontSize: 13,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          // Yearly mini chart (12 bars)
+          SizedBox(
+            height: 50,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: List.generate(12, (i) {
+                final isCurrentMonth = i == now.month - 1;
+                final barValue = _monthlyChartData[i].clamp(0.0, 1.0);
+                return Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 2),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        Expanded(
+                          child: Align(
+                            alignment: Alignment.bottomCenter,
+                            child: FractionallySizedBox(
+                              heightFactor: barValue > 0 ? barValue : 0.06,
+                              child: Container(
+                                decoration: BoxDecoration(
+                                  gradient: isCurrentMonth
+                                      ? const LinearGradient(
+                                          colors: [
+                                            Color(0xFFFF3B30),
+                                            Color(0xFFFF6B35),
+                                          ],
+                                          begin: Alignment.topCenter,
+                                          end: Alignment.bottomCenter,
+                                        )
+                                      : null,
+                                  color: isCurrentMonth
+                                      ? null
+                                      : const Color(0xFF2A2F3A),
+                                  borderRadius: BorderRadius.circular(3),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          monthLabels[i],
+                          style: TextStyle(
+                            color: isCurrentMonth
+                                ? Colors.white
+                                : const Color(0xFF8A94A6),
+                            fontSize: 8,
+                            fontWeight: isCurrentMonth
+                                ? FontWeight.bold
+                                : FontWeight.normal,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              }),
+            ),
+          ),
         ],
       ),
     );
   }
 
-  Widget _buildComparisonMetric(String label, String value) {
+  // ── KPI Card (shared by Week + Month) ──────────────────────────────
+
+  Widget _buildKpiCard({
+    required String value,
+    required String label,
+    required String delta,
+    required bool deltaPositive,
+    required bool deltaZero,
+  }) {
+    final deltaColor = deltaZero
+        ? const Color(0xFF8A94A6)
+        : deltaPositive
+            ? const Color(0xFF4ADE80)
+            : const Color(0xFFFF6B6B);
+
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: const Color(0xFF141922),
-        borderRadius: BorderRadius.circular(12),
+        color: const Color(0xFF252A33),
+        borderRadius: BorderRadius.circular(14),
       ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            label,
-            style: const TextStyle(
-              color: Color(0xFFA0AEC0),
-              fontSize: 12,
-              fontWeight: FontWeight.w500,
-            ),
-          ),
           Text(
             value,
             style: const TextStyle(
               color: Colors.white,
-              fontSize: 13,
+              fontSize: 22,
               fontWeight: FontWeight.bold,
+            ),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          const SizedBox(height: 4),
+          Text(
+            label,
+            style: const TextStyle(
+              color: Color(0xFF8A94A6),
+              fontSize: 12,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            delta,
+            style: TextStyle(
+              color: deltaColor,
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
             ),
           ),
         ],
       ),
     );
+  }
+
+  // ── Format helpers ─────────────────────────────────────────────────
+
+  String _formatDurationShort(double seconds) {
+    final totalMinutes = (seconds / 60).round();
+    if (totalMinutes < 60) return '${totalMinutes}m';
+    final h = totalMinutes ~/ 60;
+    final m = totalMinutes % 60;
+    return '${h}h ${m.toString().padLeft(2, '0')}m';
+  }
+
+  String _formatKpiDelta(double delta, {String suffix = ''}) {
+    if (delta == 0) return '\u00b10$suffix';
+    final prefix = delta > 0 ? '+' : '';
+    return '$prefix${delta.toStringAsFixed(delta.abs() >= 10 ? 0 : 1)}$suffix';
+  }
+
+  String _formatTimeDelta(double deltaSeconds) {
+    if (deltaSeconds == 0) return '\u00b10:00';
+    final prefix = deltaSeconds > 0 ? '+' : '-';
+    final abs = deltaSeconds.abs();
+    final totalMinutes = (abs / 60).round();
+    final h = totalMinutes ~/ 60;
+    final m = totalMinutes % 60;
+    return '$prefix$h:${m.toString().padLeft(2, '0')}';
   }
 
   Widget _buildSectionCard({
@@ -1188,193 +1188,6 @@ class _AnalyticsPageState extends State<AnalyticsPage>
           ),
           const SizedBox(height: 20),
           child,
-        ],
-      ),
-    );
-  }
-
-  Widget _buildMiniMetricCard(
-    String label,
-    String value,
-    IconData icon, {
-    bool expanded = true,
-  }) {
-    return Container(
-      width: expanded ? 150 : 110,
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: const Color(0xFF0B0E14),
-        borderRadius: BorderRadius.circular(14),
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 34,
-            height: 34,
-            decoration: BoxDecoration(
-              color: const Color(0xFFFF3B30).withValues(alpha: 0.15),
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: Icon(icon, color: const Color(0xFFFF3B30), size: 18),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  label,
-                  style: const TextStyle(
-                    color: Color(0xFFA0AEC0),
-                    fontSize: 10,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  value,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 14,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildTrendPill({
-    required double width,
-    required String label,
-    required String value,
-    required String caption,
-    required Color accentColor,
-  }) {
-    return Container(
-      width: width,
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: const Color(0xFF0B0E14),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: accentColor.withValues(alpha: 0.18)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            label,
-            style: TextStyle(
-              color: accentColor,
-              fontSize: 11,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            value,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 14,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            caption,
-            style: const TextStyle(color: Color(0xFFA0AEC0), fontSize: 11),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildMiniMonthCard(String label, String value, bool isHighlighted) {
-    return Container(
-      width: 88,
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
-      decoration: BoxDecoration(
-        color: isHighlighted
-            ? const Color(0xFFFFD700).withValues(alpha: 0.1)
-            : const Color(0xFF0B0E14),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(
-          color: isHighlighted
-              ? const Color(0xFFFFD700).withValues(alpha: 0.25)
-              : Colors.white.withValues(alpha: 0.04),
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            label,
-            style: TextStyle(
-              color: isHighlighted ? const Color(0xFFFFD700) : Colors.white,
-              fontSize: 11,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            value,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildPeriodBreakdownRow({
-    required String label,
-    required String value,
-    required String secondary,
-    bool isHighlighted = false,
-  }) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      decoration: BoxDecoration(
-        color: isHighlighted
-            ? const Color(0xFFFF3B30).withValues(alpha: 0.08)
-            : const Color(0xFF0B0E14),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(
-          color: isHighlighted
-              ? const Color(0xFFFF3B30).withValues(alpha: 0.25)
-              : Colors.white.withValues(alpha: 0.04),
-        ),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: Text(
-              label,
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 13,
-                fontWeight: isHighlighted ? FontWeight.bold : FontWeight.w600,
-              ),
-            ),
-          ),
-          Text(
-            secondary,
-            style: TextStyle(color: Colors.grey[500], fontSize: 11),
-          ),
-          const SizedBox(width: 12),
-          Text(
-            value,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 13,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
         ],
       ),
     );
@@ -1615,71 +1428,4 @@ class _AnalyticsPageState extends State<AnalyticsPage>
     );
   }
 
-  Widget _buildChartBar(String label, double value, bool isHighlighted) {
-    return Expanded(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 1),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.end,
-          children: [
-            Expanded(
-              child: Container(
-                width: 10,
-                decoration: BoxDecoration(
-                  color: const Color(0xFF2D3748),
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: Align(
-                  alignment: Alignment.bottomCenter,
-                  child: FractionallySizedBox(
-                    heightFactor: value.clamp(0.0, 1.0),
-                    child: Container(
-                      width: 10,
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          colors: isHighlighted
-                              ? [
-                                  const Color(0xFFFF3B30),
-                                  const Color(0xFFFF6B5B),
-                                ]
-                              : [
-                                  const Color(0xFF525252),
-                                  const Color(0xFF3D3D3D),
-                                ],
-                          begin: Alignment.topCenter,
-                          end: Alignment.bottomCenter,
-                        ),
-                        borderRadius: BorderRadius.circular(6),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              label,
-              style: TextStyle(
-                color: isHighlighted
-                    ? const Color(0xFFFF3B30)
-                    : const Color(0xFFA0AEC0),
-                fontSize: 9,
-                fontWeight: isHighlighted ? FontWeight.bold : FontWeight.normal,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  String _formatSignedDistance(double value) {
-    final prefix = value >= 0 ? '+' : '-';
-    return '$prefix${value.abs().toStringAsFixed(0)} km';
-  }
-
-  String _formatSignedNumber(double value, {String suffix = ''}) {
-    final prefix = value >= 0 ? '+' : '-';
-    return '$prefix${value.abs().toStringAsFixed(0)}$suffix';
-  }
 }
