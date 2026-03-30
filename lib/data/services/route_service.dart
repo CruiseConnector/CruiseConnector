@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 
@@ -6,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart' as geo;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'package:cruise_connect/core/constants.dart';
 import 'package:cruise_connect/domain/models/route_maneuver.dart';
 import 'package:cruise_connect/domain/models/route_result.dart';
 
@@ -155,32 +157,68 @@ class RouteService {
   // ──────────────────────────── Internal ─────────────────────────────────────
 
   Future<RouteResult> _invoke(Map<String, dynamic> body) async {
+    final requestUrl = '${AppConstants.supabaseUrl}/functions/v1/$edgeFunction';
+    final routeType = body['route_type'];
+    final mode = body['mode'];
+    final planningType = body['planning_type'];
+    final hasDestination = body['destination_location'] != null;
+    final hasTargetDistance = body['targetDistance'] != null;
+    debugPrint(
+      '[RouteService] Request → url=$requestUrl, routeType=$routeType, planning=$planningType, mode=$mode, hasDestination=$hasDestination, hasTargetDistance=$hasTargetDistance, avoidHighways=${body['avoid_highways'] == true}',
+    );
+
     debugPrint(
       '[RouteService] Invoking Edge Function with: ${body['planning_type']}, mode: ${body['mode']}',
     );
 
     dynamic data;
+    int? statusCode;
+    RouteServiceException? lastMappedError;
     // Retry bei Verbindungsfehlern (Edge Function Cold-Start, schwaches Netz)
     for (var attempt = 1; attempt <= 2; attempt++) {
       try {
-        data = await _invoker.invoke(body);
-        debugPrint('[RouteService] Response received: ${data?.runtimeType}');
-        break;
-      } catch (e) {
+        final rawResponse = await _invoker.invoke(body);
+        if (rawResponse is FunctionResponse) {
+          statusCode = rawResponse.status;
+          data = rawResponse.data;
+        } else {
+          statusCode = null;
+          data = rawResponse;
+        }
+
         debugPrint(
-          '[RouteService] Edge Function call failed (Versuch $attempt): $e',
+          '[RouteService] Response received: status=${statusCode ?? 200}, type=${data?.runtimeType}',
         );
-        if (attempt == 2) {
-          throw Exception(
-            'Routenberechnung fehlgeschlagen. Bitte prüfe deine Internetverbindung und versuche es erneut.',
-          );
+        break;
+      } catch (e, stack) {
+        final mapped = _mapInvokeException(
+          error: e,
+          stack: stack,
+          statusCode: e is FunctionException ? e.status : statusCode,
+        );
+        lastMappedError = mapped;
+        debugPrint(
+          '[RouteService] Edge Function call failed (Versuch $attempt): ${mapped.debugMessage}',
+        );
+        if (!_isRetryable(mapped) || attempt == 2) {
+          throw mapped;
         }
         await Future.delayed(const Duration(seconds: 2));
       }
     }
 
+    if (lastMappedError != null && data == null) {
+      throw lastMappedError;
+    }
+
     if (data == null) {
-      throw Exception('Keine Antwort von der Route-Berechnung erhalten.');
+      throw RouteServiceException(
+        type: RouteErrorType.emptyResponse,
+        userMessage:
+            'Der Routing-Dienst hat keine Daten geliefert. Bitte versuche es erneut.',
+        debugMessage: 'Empty response body from routing function.',
+        statusCode: statusCode,
+      );
     }
 
     // Wenn data ein String ist (JSON), parsen — im Isolate für große Antworten
@@ -192,26 +230,58 @@ class RouteService {
                 data,
               )
             : json.decode(data);
-      } catch (e) {
-        throw Exception('Ungültige Antwort: $data');
+      } catch (e, stack) {
+        debugPrint(
+          '[RouteService] JSON parsing failed: error=$e, raw=${data.toString().substring(0, math.min(600, data.length))}',
+        );
+        throw RouteServiceException(
+          type: RouteErrorType.parsing,
+          userMessage:
+              'Die Antwort des Routing-Dienstes konnte nicht verarbeitet werden.',
+          debugMessage: 'Invalid JSON response: $e',
+          statusCode: statusCode,
+          stackTrace: stack,
+        );
       }
     }
 
     if (data is! Map) {
-      throw Exception('Unerwartetes Antwortformat: ${data.runtimeType}');
+      throw RouteServiceException(
+        type: RouteErrorType.parsing,
+        userMessage:
+            'Der Routing-Dienst hat ein ungültiges Antwortformat gesendet.',
+        debugMessage: 'Unexpected response type: ${data.runtimeType}',
+        statusCode: statusCode,
+      );
     }
 
     if (data['error'] != null) {
-      throw Exception(data['error'].toString());
+      final errorMessage = data['error'].toString();
+      throw _mapServiceError(
+        errorMessage: errorMessage,
+        statusCode: statusCode,
+        details: data,
+      );
     }
 
     if (data['route'] == null) {
-      throw Exception('Keine Route in der Antwort gefunden.');
+      throw RouteServiceException(
+        type: RouteErrorType.noRoute,
+        userMessage:
+            'Keine passende Route gefunden. Bitte ändere Stil, Umweg oder Start/Ziel.',
+        debugMessage: 'Response has no "route" field.',
+        statusCode: statusCode,
+      );
     }
 
     final route = data['route'] as Map;
     if (route['geometry'] == null) {
-      throw Exception('Route enthält keine Geometrie-Daten.');
+      throw RouteServiceException(
+        type: RouteErrorType.parsing,
+        userMessage: 'Die Route ist unvollständig (keine Geometriedaten).',
+        debugMessage: 'Route payload has no geometry.',
+        statusCode: statusCode,
+      );
     }
 
     final geometry = Map<String, dynamic>.from(route['geometry'] as Map);
@@ -222,8 +292,13 @@ class RouteService {
         '[RouteService] WARNUNG: Route hat nur ${coordinates.length} Koordinaten — möglicherweise keine Straßengeometrie!',
       );
       if (coordinates.length < 2) {
-        throw Exception(
-          'Route hat zu wenig Koordinaten (${coordinates.length}).',
+        throw RouteServiceException(
+          type: RouteErrorType.noRoute,
+          userMessage:
+              'Keine nutzbare Route gefunden. Bitte versuche andere Einstellungen.',
+          debugMessage:
+              'Route geometry has too few points (${coordinates.length}).',
+          statusCode: statusCode,
         );
       }
     }
@@ -250,6 +325,159 @@ class RouteService {
       durationSeconds: durationRaw,
       distanceKm: distanceKmActual,
       speedLimits: speedLimits,
+    );
+  }
+
+  static bool _isRetryable(RouteServiceException error) {
+    return error.type == RouteErrorType.network ||
+        error.type == RouteErrorType.server ||
+        error.type == RouteErrorType.rateLimit;
+  }
+
+  static RouteServiceException _mapInvokeException({
+    required Object error,
+    required StackTrace stack,
+    int? statusCode,
+  }) {
+    if (error is RouteServiceException) return error;
+
+    if (error is FunctionException) {
+      final detailsMessage = error.details?.toString() ?? '';
+      return _mapServiceError(
+        errorMessage: detailsMessage,
+        statusCode: error.status,
+        details: error.details,
+        stackTrace: stack,
+        reasonPhrase: error.reasonPhrase,
+      );
+    }
+
+    final raw = error.toString();
+    final lower = raw.toLowerCase();
+    if (error is TimeoutException ||
+        lower.contains('timeout') ||
+        lower.contains('netzwerk') ||
+        lower.contains('socketexception') ||
+        lower.contains('failed host lookup') ||
+        lower.contains('connection refused') ||
+        lower.contains('network')) {
+      return RouteServiceException(
+        type: RouteErrorType.network,
+        userMessage:
+            'Keine Verbindung zum Routing-Dienst. Bitte Internetverbindung prüfen.',
+        debugMessage: raw,
+        statusCode: statusCode,
+        stackTrace: stack,
+      );
+    }
+
+    return RouteServiceException(
+      type: RouteErrorType.unknown,
+      userMessage: 'Routenberechnung fehlgeschlagen. Bitte erneut versuchen.',
+      debugMessage: raw,
+      statusCode: statusCode,
+      stackTrace: stack,
+    );
+  }
+
+  static RouteServiceException _mapServiceError({
+    required String errorMessage,
+    int? statusCode,
+    Object? details,
+    StackTrace? stackTrace,
+    String? reasonPhrase,
+  }) {
+    final lower = errorMessage.toLowerCase();
+
+    if (statusCode == 401 || statusCode == 403 || lower.contains('jwt')) {
+      return RouteServiceException(
+        type: RouteErrorType.auth,
+        userMessage:
+            'Routing-Anfrage wurde abgelehnt. Bitte erneut anmelden und nochmals versuchen.',
+        debugMessage:
+            'Auth error (status=$statusCode, reason=$reasonPhrase): $errorMessage, details=$details',
+        statusCode: statusCode,
+        stackTrace: stackTrace,
+      );
+    }
+
+    if (statusCode == 429 ||
+        lower.contains('rate limit') ||
+        lower.contains('too many')) {
+      return RouteServiceException(
+        type: RouteErrorType.rateLimit,
+        userMessage:
+            'Zu viele Routing-Anfragen in kurzer Zeit. Bitte kurz warten und erneut versuchen.',
+        debugMessage:
+            'Rate limit (status=$statusCode, reason=$reasonPhrase): $errorMessage, details=$details',
+        statusCode: statusCode,
+        stackTrace: stackTrace,
+      );
+    }
+
+    if (statusCode != null && statusCode >= 500) {
+      return RouteServiceException(
+        type: RouteErrorType.server,
+        userMessage:
+            'Temporärer Serverfehler beim Routing. Bitte in wenigen Sekunden erneut versuchen.',
+        debugMessage:
+            'Server error (status=$statusCode, reason=$reasonPhrase): $errorMessage, details=$details',
+        statusCode: statusCode,
+        stackTrace: stackTrace,
+      );
+    }
+
+    if (lower.contains('no route found') ||
+        lower.contains('keine route gefunden') ||
+        lower.contains('no route') ||
+        lower.contains('keine passende route')) {
+      return RouteServiceException(
+        type: RouteErrorType.noRoute,
+        userMessage:
+            'Keine passende Route gefunden. Bitte ändere Start/Ziel oder die Routeneinstellungen.',
+        debugMessage:
+            'No-route error (status=$statusCode, reason=$reasonPhrase): $errorMessage, details=$details',
+        statusCode: statusCode,
+        stackTrace: stackTrace,
+      );
+    }
+
+    if (lower.contains('invalid') ||
+        lower.contains('missing') ||
+        lower.contains('ungültig') ||
+        lower.contains('out of bounds') ||
+        lower.contains('destination') ||
+        lower.contains('startlocation')) {
+      return RouteServiceException(
+        type: RouteErrorType.validation,
+        userMessage:
+            'Start, Ziel oder Routenparameter sind ungültig. Bitte Eingaben prüfen.',
+        debugMessage:
+            'Validation error (status=$statusCode, reason=$reasonPhrase): $errorMessage, details=$details',
+        statusCode: statusCode,
+        stackTrace: stackTrace,
+      );
+    }
+
+    if (lower.contains('qualität') || lower.contains('quality')) {
+      return RouteServiceException(
+        type: RouteErrorType.quality,
+        userMessage:
+            'Für diese Einstellungen konnte keine stabile Route erzeugt werden. Bitte leicht anpassen und erneut versuchen.',
+        debugMessage:
+            'Quality error (status=$statusCode, reason=$reasonPhrase): $errorMessage, details=$details',
+        statusCode: statusCode,
+        stackTrace: stackTrace,
+      );
+    }
+
+    return RouteServiceException(
+      type: RouteErrorType.unknown,
+      userMessage: 'Routenberechnung fehlgeschlagen. Bitte erneut versuchen.',
+      debugMessage:
+          'Unmapped routing error (status=$statusCode, reason=$reasonPhrase): $errorMessage, details=$details',
+      statusCode: statusCode,
+      stackTrace: stackTrace,
     );
   }
 
@@ -1100,6 +1328,40 @@ class RouteService {
       }
     }
     return coords;
+  }
+}
+
+enum RouteErrorType {
+  network,
+  auth,
+  validation,
+  rateLimit,
+  server,
+  noRoute,
+  emptyResponse,
+  parsing,
+  quality,
+  unknown,
+}
+
+class RouteServiceException implements Exception {
+  const RouteServiceException({
+    required this.type,
+    required this.userMessage,
+    required this.debugMessage,
+    this.statusCode,
+    this.stackTrace,
+  });
+
+  final RouteErrorType type;
+  final String userMessage;
+  final String debugMessage;
+  final int? statusCode;
+  final StackTrace? stackTrace;
+
+  @override
+  String toString() {
+    return 'RouteServiceException(type=$type, status=$statusCode, debug=$debugMessage)';
   }
 }
 

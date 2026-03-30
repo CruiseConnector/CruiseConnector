@@ -628,6 +628,28 @@ function evaluateRouteQuality(route: any, routeType: 'ROUND_TRIP' | 'POINT_TO_PO
     }
 }
 
+function classifyHttpStatusFromRoutingError(message: string): number {
+    const lower = message.toLowerCase()
+    if (
+        lower.includes('invalid') ||
+        lower.includes('missing') ||
+        lower.includes('out of bounds') ||
+        lower.includes('required')
+    ) {
+        return 422
+    }
+    if (lower.includes('no route found') || lower.includes('keine route')) {
+        return 404
+    }
+    if (lower.includes('unauthorized') || lower.includes('forbidden') || lower.includes('jwt')) {
+        return 401
+    }
+    if (lower.includes('rate limit') || lower.includes('too many requests')) {
+        return 429
+    }
+    return 500
+}
+
 Deno.serve(async (req) => {
     // Handle CORS preflight
     if (req.method === 'OPTIONS') {
@@ -1051,11 +1073,13 @@ Deno.serve(async (req) => {
         )
 
     } catch (error: any) {
-        console.error("Error in generate-cruise-route:", error.message);
+        const message = error?.message ?? 'Unbekannter Fehler in generate-cruise-route'
+        const status = classifyHttpStatusFromRoutingError(message)
+        console.error("Error in generate-cruise-route:", message, error?.stack ?? '')
         return new Response(
-            JSON.stringify({ error: error.message }),
+            JSON.stringify({ error: message }),
             {
-                status: 400,
+                status,
                 headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' }
             }
         )

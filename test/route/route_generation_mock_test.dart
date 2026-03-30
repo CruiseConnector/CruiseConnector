@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mockito/annotations.dart';
 import 'package:mockito/mockito.dart';
 import 'package:geolocator/geolocator.dart' as geo;
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:cruise_connect/data/services/route_service.dart';
 import 'package:cruise_connect/domain/models/route_result.dart';
 
@@ -638,6 +639,27 @@ void main() {
       );
     });
 
+    test('mapped "Keine Route gefunden" auf noRoute', () async {
+      when(
+        mockInvoker.invoke(any),
+      ).thenAnswer((_) async => {'error': 'Keine Route gefunden'});
+      await expectLater(
+        service.generateRoundTrip(
+          startPosition: _munich(),
+          targetDistanceKm: 50,
+          mode: 'Sport Mode',
+          planningType: 'Zufall',
+        ),
+        throwsA(
+          isA<RouteServiceException>().having(
+            (e) => e.type,
+            'type',
+            RouteErrorType.noRoute,
+          ),
+        ),
+      );
+    });
+
     test('wirft Exception wenn "route" fehlt', () async {
       when(mockInvoker.invoke(any)).thenAnswer((_) async => {'meta': 'ok'});
       await expectLater(
@@ -737,6 +759,58 @@ void main() {
           planningType: 'Zufall',
         ),
         throwsException,
+      );
+    });
+
+    test('klassifiziert 401/403 nicht als Internetfehler', () async {
+      when(mockInvoker.invoke(any)).thenThrow(
+        const FunctionException(
+          status: 401,
+          details: {'error': 'Unauthorized'},
+          reasonPhrase: 'Unauthorized',
+        ),
+      );
+
+      await expectLater(
+        service.generateRoundTrip(
+          startPosition: _munich(),
+          targetDistanceKm: 50,
+          mode: 'Sport Mode',
+          planningType: 'Zufall',
+        ),
+        throwsA(
+          isA<RouteServiceException>().having(
+            (e) => e.type,
+            'type',
+            RouteErrorType.auth,
+          ),
+        ),
+      );
+    });
+
+    test('klassifiziert 429 als Rate-Limit', () async {
+      when(mockInvoker.invoke(any)).thenThrow(
+        const FunctionException(
+          status: 429,
+          details: {'error': 'Too many requests'},
+          reasonPhrase: 'Too Many Requests',
+        ),
+      );
+
+      await expectLater(
+        service.generateRoundTrip(
+          startPosition: _munich(),
+          targetDistanceKm: 50,
+          mode: 'Sport Mode',
+          planningType: 'Zufall',
+        ),
+        throwsA(
+          isA<RouteServiceException>().having(
+            (e) => e.type,
+            'type',
+            RouteErrorType.rateLimit,
+          ),
+        ),
       );
     });
 

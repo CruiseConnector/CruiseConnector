@@ -1520,11 +1520,27 @@ class _CruiseModePageState extends State<CruiseModePage>
           _showRouteInfoBanner = true;
         });
       }
-    } catch (e) {
-      _showError(e.toString());
+    } catch (e, stack) {
+      debugPrint('[CruiseMode] Route generation failed: $e');
+      debugPrintStack(
+        label: '[CruiseMode] Route generation stacktrace',
+        stackTrace: stack,
+      );
+      final userMessage = e is RouteServiceException
+          ? e.userMessage
+          : _sanitizeErrorMessage(e.toString());
+      _showError(userMessage);
     } finally {
       _safeSetState(() => _isLoading = false);
     }
+  }
+
+  String _sanitizeErrorMessage(String raw) {
+    final withoutPrefix = raw.replaceFirst('Exception: ', '').trim();
+    if (withoutPrefix.isEmpty) {
+      return 'Routenberechnung fehlgeschlagen. Bitte erneut versuchen.';
+    }
+    return withoutPrefix;
   }
 
   void _applyRouteResult(RouteResult result) {
