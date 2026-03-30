@@ -1239,14 +1239,17 @@ class _CruiseModePageState extends State<CruiseModePage>
 
       Map<String, double>? targetLocation;
       if (!_isRoundTrip && _destinationController.text.isNotEmpty) {
-        targetLocation = await _geocodingService.getCoordinatesFromAddress(
-          _destinationController.text,
-        );
-        if (targetLocation == null && mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Konnte Zieladresse nicht finden.')),
+        try {
+          targetLocation = await _geocodingService.getCoordinatesFromAddress(
+            _destinationController.text,
           );
-          setState(() => _isLoading = false);
+        } on GeocodingException catch (e) {
+          debugPrint('[CruiseMode] Geocoding failed: ${e.debugMessage}');
+          _showError(e.userMessage);
+          return;
+        }
+        if (targetLocation == null && mounted) {
+          _showError('Konnte Zieladresse nicht finden.');
           return;
         }
       }
@@ -2610,14 +2613,18 @@ class _CruiseModePageState extends State<CruiseModePage>
             ),
           );
       }
-    } catch (e) {
+    } catch (e, stack) {
       debugPrint('Rerouting fehlgeschlagen: $e');
+      debugPrintStack(label: '[CruiseMode] Rerouting stacktrace', stackTrace: stack);
+      final userMessage = e is RouteServiceException
+          ? e.userMessage
+          : _sanitizeErrorMessage(e.toString());
       if (mounted) {
         ScaffoldMessenger.of(context)
           ..hideCurrentSnackBar()
           ..showSnackBar(
             SnackBar(
-              content: Text('Rerouting fehlgeschlagen: $e'),
+              content: Text('Rerouting fehlgeschlagen: $userMessage'),
               backgroundColor: Colors.red,
             ),
           );
