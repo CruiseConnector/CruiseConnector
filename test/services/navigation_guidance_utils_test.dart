@@ -112,6 +112,50 @@ void main() {
       expect(match.distanceMeters, lessThan(1));
     });
   });
+
+  group('distanceToCoordinateMeters', () {
+    test('liefert fuer identische Koordinaten nahezu 0 Meter', () {
+      final position = _position(latitude: 48.137, longitude: 11.575);
+
+      final distance = distanceToCoordinateMeters(
+        position: position,
+        coordinate: [11.575, 48.137],
+      );
+
+      expect(distance, closeTo(0, 0.001));
+    });
+
+    test('liefert fuer einen Punkt noerdlich davon etwa 1 km', () {
+      final position = _position(latitude: 48.137, longitude: 11.575);
+
+      final distance = distanceToCoordinateMeters(
+        position: position,
+        coordinate: [11.575, 48.14599],
+      );
+
+      expect(distance, closeTo(1000, 30));
+    });
+  });
+
+  group('isApproachingDestination', () {
+    test('erkennt eine klare Zielannaeherung', () {
+      expect(isApproachingDestination([1200, 1040, 930, 810, 700]), isTrue);
+    });
+
+    test(
+      'erkennt keine stabile Zielannaeherung ohne genuegende Verbesserung',
+      () {
+        expect(
+          isApproachingDestination([1200, 1198, 1194, 1191, 1189]),
+          isFalse,
+        );
+      },
+    );
+
+    test('braucht mindestens drei Samples', () {
+      expect(isApproachingDestination([1200, 1100]), isFalse);
+    });
+  });
 }
 
 geo.Position _position({required double latitude, required double longitude}) {

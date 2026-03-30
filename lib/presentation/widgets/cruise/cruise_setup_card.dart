@@ -5,7 +5,7 @@ import 'package:cruise_connect/data/services/geocoding_service.dart';
 import 'package:cruise_connect/domain/models/mapbox_suggestion.dart';
 
 /// Setup-Karte für die Routenplanung (Rundkurs / A-nach-B).
-class CruiseSetupCard extends StatelessWidget {
+class CruiseSetupCard extends StatefulWidget {
   const CruiseSetupCard({
     super.key,
     required this.isRoundTrip,
@@ -24,6 +24,8 @@ class CruiseSetupCard extends StatelessWidget {
     required this.onDestinationCleared,
     required this.selectedDetour,
     required this.onDetourChanged,
+    this.selectedAvoidHighways = false,
+    this.onAvoidHighwaysChanged,
   });
 
   final bool isRoundTrip;
@@ -42,11 +44,40 @@ class CruiseSetupCard extends StatelessWidget {
   final ValueChanged<String> onDetourChanged;
   final ValueChanged<MapboxSuggestion> onDestinationSelected;
   final VoidCallback onDestinationCleared;
+  final bool selectedAvoidHighways;
+  final ValueChanged<bool>? onAvoidHighwaysChanged;
 
   static const _geocodingService = GeocodingService();
 
   @override
+  State<CruiseSetupCard> createState() => _CruiseSetupCardState();
+}
+
+class _CruiseSetupCardState extends State<CruiseSetupCard> {
+  late bool _avoidHighways;
+
+  @override
+  void initState() {
+    super.initState();
+    _avoidHighways = widget.selectedAvoidHighways;
+  }
+
+  @override
+  void didUpdateWidget(CruiseSetupCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.selectedAvoidHighways != widget.selectedAvoidHighways) {
+      _avoidHighways = widget.selectedAvoidHighways;
+    }
+  }
+
+  void _setAvoidHighways(bool value) {
+    setState(() => _avoidHighways = value);
+    widget.onAvoidHighwaysChanged?.call(value);
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final isRoundTrip = widget.isRoundTrip;
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(20),
@@ -82,7 +113,7 @@ class CruiseSetupCard extends StatelessWidget {
                   label: 'Rundkurs',
                   icon: Icons.loop,
                   isActive: isRoundTrip,
-                  onTap: () => onRoundTripChanged(true),
+                  onTap: () => widget.onRoundTripChanged(true),
                 ),
               ),
               const SizedBox(width: 12),
@@ -91,7 +122,7 @@ class CruiseSetupCard extends StatelessWidget {
                   label: 'A nach B',
                   icon: Icons.alt_route,
                   isActive: !isRoundTrip,
-                  onTap: () => onRoundTripChanged(false),
+                  onTap: () => widget.onRoundTripChanged(false),
                 ),
               ),
             ],
@@ -110,8 +141,8 @@ class CruiseSetupCard extends StatelessWidget {
             _SelectionRow(
               title: 'Länge',
               options: const ['50 Km', '75 Km', '100 Km', '150 Km'],
-              selectedValue: selectedLength,
-              onSelect: onLengthChanged,
+              selectedValue: widget.selectedLength,
+              onSelect: widget.onLengthChanged,
             ),
             const Divider(color: Colors.white10, height: 32),
           ] else ...[
@@ -123,19 +154,27 @@ class CruiseSetupCard extends StatelessWidget {
                 'Mittlerer Umweg',
                 'Großer Umweg',
               ],
-              selectedValue: selectedDetour,
-              onSelect: onDetourChanged,
+              selectedValue: widget.selectedDetour,
+              onSelect: widget.onDetourChanged,
+            ),
+            const Divider(color: Colors.white10, height: 32),
+            _FeatureToggleButton(
+              title: 'Autobahn vermeiden',
+              subtitle: 'Motorways, motorway_link und trunk werden gemieden.',
+              icon: Icons.alt_route,
+              isEnabled: _avoidHighways,
+              onTap: () => _setAvoidHighways(!_avoidHighways),
             ),
             const Divider(color: Colors.white10, height: 32),
           ],
           _SelectionRow(
             title: 'Standort',
             options: const ['Aktueller Standort', 'Standort wählen'],
-            selectedValue: selectedLocation,
-            onSelect: onLocationChanged,
+            selectedValue: widget.selectedLocation,
+            onSelect: widget.onLocationChanged,
           ),
           const Divider(color: Colors.white10, height: 32),
-          if (isRoundTrip || selectedDetour != 'Direkt') ...[
+          if (isRoundTrip || widget.selectedDetour != 'Direkt') ...[
             _SelectionRow(
               title: 'Stil',
               options: const [
@@ -144,8 +183,8 @@ class CruiseSetupCard extends StatelessWidget {
                 'Abendrunde',
                 'Entdecker',
               ],
-              selectedValue: selectedStyle,
-              onSelect: onStyleChanged,
+              selectedValue: widget.selectedStyle,
+              onSelect: widget.onStyleChanged,
             ),
           ],
         ],
@@ -172,16 +211,16 @@ class CruiseSetupCard extends StatelessWidget {
             Expanded(
               child: _ChoiceButton(
                 label: 'Zufall',
-                isSelected: planningType == 'Zufall',
-                onTap: () => onPlanningTypeChanged('Zufall'),
+                isSelected: widget.planningType == 'Zufall',
+                onTap: () => widget.onPlanningTypeChanged('Zufall'),
               ),
             ),
             const SizedBox(width: 12),
             Expanded(
               child: _ChoiceButton(
                 label: 'Wegpunkte',
-                isSelected: planningType == 'Wegpunkte',
-                onTap: () => onPlanningTypeChanged('Wegpunkte'),
+                isSelected: widget.planningType == 'Wegpunkte',
+                onTap: () => widget.onPlanningTypeChanged('Wegpunkte'),
               ),
             ),
           ],
@@ -191,7 +230,7 @@ class CruiseSetupCard extends StatelessWidget {
   }
 
   Widget _buildAtoBOptions(BuildContext context) {
-    if (selectedDestination != null) {
+    if (widget.selectedDestination != null) {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -227,7 +266,7 @@ class CruiseSetupCard extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        selectedDestination!.placeName,
+                        widget.selectedDestination!.placeName,
                         style: const TextStyle(
                           color: Colors.white,
                           fontSize: 14,
@@ -236,9 +275,9 @@ class CruiseSetupCard extends StatelessWidget {
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
-                      if (selectedDestination!.context != null)
+                      if (widget.selectedDestination!.context != null)
                         Text(
-                          selectedDestination!.context!,
+                          widget.selectedDestination!.context!,
                           style: const TextStyle(
                             color: Colors.grey,
                             fontSize: 12,
@@ -255,7 +294,7 @@ class CruiseSetupCard extends StatelessWidget {
                     color: Colors.white70,
                     size: 20,
                   ),
-                  onPressed: onDestinationCleared,
+                  onPressed: widget.onDestinationCleared,
                   tooltip: 'Ziel ändern',
                 ),
               ],
@@ -284,10 +323,12 @@ class CruiseSetupCard extends StatelessWidget {
             border: Border.all(color: Colors.white12),
           ),
           child: TypeAheadField<MapboxSuggestion>(
-            controller: destinationController,
+            controller: widget.destinationController,
             suggestionsCallback: (pattern) async {
               if (pattern.isEmpty) return const [];
-              return _geocodingService.searchSuggestions(pattern);
+              return CruiseSetupCard._geocodingService.searchSuggestions(
+                pattern,
+              );
             },
             builder: (context, controller, focusNode) => TextField(
               controller: controller,
@@ -318,7 +359,7 @@ class CruiseSetupCard extends StatelessWidget {
                     )
                   : null,
             ),
-            onSelected: onDestinationSelected,
+            onSelected: widget.onDestinationSelected,
             emptyBuilder: (context) => const Padding(
               padding: EdgeInsets.all(16),
               child: Text(
@@ -438,6 +479,115 @@ class _ChoiceButton extends StatelessWidget {
             fontWeight: FontWeight.bold,
             fontSize: 15,
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _FeatureToggleButton extends StatelessWidget {
+  const _FeatureToggleButton({
+    required this.title,
+    required this.subtitle,
+    required this.icon,
+    required this.isEnabled,
+    required this.onTap,
+  });
+
+  final String title;
+  final String subtitle;
+  final IconData icon;
+  final bool isEnabled;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        width: double.infinity,
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: isEnabled
+              ? const Color(0xFFFF3B30).withValues(alpha: 0.12)
+              : const Color(0xFF0B0E14),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(
+            color: isEnabled
+                ? const Color(0xFFFF3B30)
+                : Colors.white.withValues(alpha: 0.08),
+            width: isEnabled ? 1.5 : 1,
+          ),
+          boxShadow: isEnabled
+              ? [
+                  BoxShadow(
+                    color: const Color(0xFFFF3B30).withValues(alpha: 0.18),
+                    blurRadius: 12,
+                    offset: const Offset(0, 4),
+                  ),
+                ]
+              : [],
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 42,
+              height: 42,
+              decoration: BoxDecoration(
+                color: isEnabled
+                    ? const Color(0xFFFF3B30).withValues(alpha: 0.18)
+                    : Colors.white.withValues(alpha: 0.04),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Icon(
+                icon,
+                color: isEnabled ? const Color(0xFFFF3B30) : Colors.white54,
+                size: 22,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: TextStyle(
+                      color: isEnabled ? Colors.white : Colors.white70,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 15,
+                    ),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    subtitle,
+                    style: const TextStyle(
+                      color: Color(0xFFA0AEC0),
+                      fontSize: 11,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 12),
+            AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
+              width: 20,
+              height: 20,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: isEnabled ? const Color(0xFFFF3B30) : Colors.transparent,
+                border: Border.all(
+                  color: isEnabled ? const Color(0xFFFF3B30) : Colors.white38,
+                  width: 1.5,
+                ),
+              ),
+              child: isEnabled
+                  ? const Icon(Icons.check, color: Colors.white, size: 14)
+                  : null,
+            ),
+          ],
         ),
       ),
     );
