@@ -3,9 +3,11 @@ import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:cruise_connect/data/services/auth_service.dart';
+import 'package:cruise_connect/data/services/gamification_service.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/data/services/saved_routes_service.dart';
 import 'package:cruise_connect/domain/models/saved_route.dart';
+import 'package:cruise_connect/domain/models/user_level.dart';
 import 'package:cruise_connect/presentation/pages/welcome_page.dart';
 import 'package:cruise_connect/presentation/pages/create_post_page.dart';
 import 'package:cruise_connect/presentation/pages/edit_profile_page.dart';
@@ -38,22 +40,48 @@ class _ProfilePageState extends State<ProfilePage>
   bool _loading = true;
   int _followerCount = 0;
   int _followingCount = 0;
+  int _profileTotalXp = 0;
+  int _profileLevel = 1;
+  String _profileLevelName = 'Street Rookie';
+  double _profileProgress = 0;
+  int _streakDays = 0;
   List<Map<String, dynamic>> _posts = [];
   List<Map<String, dynamic>> _reposts = [];
   List<Map<String, dynamic>> _groups = [];
   List<SavedRoute> _savedRoutes = [];
   String? _avatarUrl;
   bool _uploadingAvatar = false;
+  late final AnimationController _streakPulseController;
+  late final Animation<double> _streakPulseAnimation;
 
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 4, vsync: this);
+    _streakPulseController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 640),
+    );
+    _streakPulseAnimation = TweenSequence<double>([
+      TweenSequenceItem(
+        tween: Tween(begin: 0.9, end: 1.1).chain(
+          CurveTween(curve: Curves.easeOut),
+        ),
+        weight: 50,
+      ),
+      TweenSequenceItem(
+        tween: Tween(begin: 1.1, end: 1.0).chain(
+          CurveTween(curve: Curves.easeIn),
+        ),
+        weight: 50,
+      ),
+    ]).animate(_streakPulseController);
     _loadData();
   }
 
   @override
   void dispose() {
+    _streakPulseController.dispose();
     _tabController.dispose();
     super.dispose();
   }
@@ -78,16 +106,28 @@ class _ProfilePageState extends State<ProfilePage>
 
       if (mounted) {
         final profile = results[6] as Map<String, dynamic>?;
+        final routes = results[5] as List<SavedRoute>;
+        final summary = _calculateProfileSummary(routes);
         setState(() {
           _followerCount = results[0] as int;
           _followingCount = results[1] as int;
           _posts = results[2] as List<Map<String, dynamic>>;
           _reposts = results[3] as List<Map<String, dynamic>>;
           _groups = results[4] as List<Map<String, dynamic>>;
-          _savedRoutes = results[5] as List<SavedRoute>;
+          _savedRoutes = routes;
           _avatarUrl = profile?['avatar_url'] as String?;
+          _profileTotalXp = summary.totalXp;
+          _profileLevel = summary.level.level;
+          _profileLevelName = summary.level.name;
+          _profileProgress = summary.level.progress;
+          _streakDays = summary.streakDays;
           _loading = false;
         });
+        if (summary.streakDays > 0) {
+          _streakPulseController.forward(from: 0);
+        } else {
+          _streakPulseController.value = 0;
+        }
       }
     } catch (e) {
       debugPrint('[Profile] Daten laden fehlgeschlagen: $e');
@@ -176,6 +216,190 @@ class _ProfilePageState extends State<ProfilePage>
     if (diff.inHours < 24) return '${diff.inHours} Std.';
     if (diff.inDays < 30) return '${diff.inDays} Tage';
     return '${(diff.inDays / 30).floor()} Mon.';
+  }
+
+  _ProfileRideSummary _calculateProfileSummary(List<SavedRoute> routes) {
+    final rideRoutes = routes.where((route) => route.isDrivenSession).toList();
+    final xpEligibleRoutes = rideRoutes
+        .where((route) => route.qualifiesForXpCredit)
+        .toList();
+
+    int totalXp = 0;
+    for (final route in xpEligibleRoutes) {
+      final estimatedCurves = (route.actualDistanceKm / 5).round();
+      totalXp += GamificationService.calculateRouteXp(
+        distanceKm: route.actualDistanceKm,
+        curves: estimatedCurves,
+        style: route.style,
+      );
+    }
+
+    int streak = 0;
+    if (rideRoutes.isNotEmpty) {
+      final now = DateTime.now();
+      final today = DateTime(now.year, now.month, now.day);
+      final driveDays = <DateTime>{};
+
+      for (final route in rideRoutes) {
+        final localCreatedAt = route.createdAt.toLocal();
+        driveDays.add(
+          DateTime(
+            localCreatedAt.year,
+            localCreatedAt.month,
+            localCreatedAt.day,
+          ),
+        );
+      }
+
+      var checkDay = today;
+      if (!driveDays.contains(checkDay)) {
+        checkDay = checkDay.subtract(const Duration(days: 1));
+      }
+
+      while (driveDays.contains(checkDay)) {
+        streak++;
+        checkDay = checkDay.subtract(const Duration(days: 1));
+      }
+    }
+
+    return _ProfileRideSummary(
+      totalXp: totalXp,
+      level: UserLevel.fromXp(totalXp.toDouble()),
+      streakDays: streak,
+    );
+  }
+
+  Widget _buildProfileProgressAndStreak() {
+    final progress = _profileProgress.clamp(0.0, 1.0);
+    final streakMessage = _streakDays > 0
+        ? '$_streakDays Tage in Folge gefahren!'
+        : 'Starte heute deine nächste Serie.';
+
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(top: 18),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF151922),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        'Level $_profileLevel - $_profileLevelName',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Text(
+                      '${(progress * 100).toStringAsFixed(0)}%',
+                      style: const TextStyle(
+                        color: Color(0xFFFF3B30),
+                        fontSize: 13,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(999),
+                  child: LinearProgressIndicator(
+                    value: progress,
+                    minHeight: 10,
+                    backgroundColor: const Color(0xFF212733),
+                    valueColor: const AlwaysStoppedAnimation<Color>(
+                      Color(0xFFFF3B30),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  '$_profileTotalXp XP gesammelt',
+                  style: const TextStyle(
+                    color: Color(0xFF8C94A6),
+                    fontSize: 11,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          Tooltip(
+            message: streakMessage,
+            triggerMode: TooltipTriggerMode.longPress,
+            child: ScaleTransition(
+              scale: _streakDays > 0
+                  ? _streakPulseAnimation
+                  : const AlwaysStoppedAnimation<double>(1.0),
+              child: Container(
+                width: 78,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 10,
+                ),
+                decoration: BoxDecoration(
+                  color: _streakDays > 0
+                      ? const Color(0xFFFF6B00).withValues(alpha: 0.12)
+                      : Colors.white.withValues(alpha: 0.04),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(
+                    color: _streakDays > 0
+                        ? const Color(0xFFFF6B00).withValues(alpha: 0.35)
+                        : Colors.white.withValues(alpha: 0.06),
+                  ),
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.local_fire_department,
+                      color: _streakDays > 0
+                          ? const Color(0xFFFF6B00)
+                          : const Color(0xFF6F7787),
+                      size: 22,
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '$_streakDays',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    const Text(
+                      'Streak',
+                      style: TextStyle(
+                        color: Color(0xFF8C94A6),
+                        fontSize: 10,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -416,6 +640,7 @@ class _ProfilePageState extends State<ProfilePage>
                               ),
                             ],
                           ),
+                          _buildProfileProgressAndStreak(),
                         ],
                       ),
                     ),
@@ -1400,4 +1625,16 @@ class _ProfilePageState extends State<ProfilePage>
       ),
     );
   }
+}
+
+class _ProfileRideSummary {
+  const _ProfileRideSummary({
+    required this.totalXp,
+    required this.level,
+    required this.streakDays,
+  });
+
+  final int totalXp;
+  final UserLevel level;
+  final int streakDays;
 }
