@@ -212,15 +212,16 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
                 onTap: () => widget.onPlanningTypeChanged('Zufall'),
               ),
             ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: _ChoiceButton(
-                label: 'Wegpunkte',
-                isSelected: widget.planningType == 'Wegpunkte',
-                onTap: () => widget.onPlanningTypeChanged('Wegpunkte'),
-              ),
-            ),
           ],
+        ),
+        const SizedBox(height: 10),
+        const Text(
+          'Wegpunkt-Planung folgt in einer separaten Ausbaustufe.',
+          style: TextStyle(
+            color: Colors.white38,
+            fontSize: 12,
+            fontWeight: FontWeight.w400,
+          ),
         ),
       ],
     );

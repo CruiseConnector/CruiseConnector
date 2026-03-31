@@ -70,6 +70,56 @@ Map<String, dynamic> _buildRouteResponse({
   };
 }
 
+Map<String, dynamic> _buildClosedLoopRouteResponse({
+  required double distanceMeters,
+  required double durationSeconds,
+  int pointsPerSide = 24,
+}) {
+  final coords = <List<double>>[];
+
+  for (var i = 0; i < pointsPerSide; i++) {
+    coords.add([11.5820 + i * 0.0001, 48.1350]);
+  }
+  for (var i = 1; i < pointsPerSide; i++) {
+    coords.add([11.5820 + (pointsPerSide - 1) * 0.0001, 48.1350 + i * 0.0001]);
+  }
+  for (var i = pointsPerSide - 2; i >= 0; i--) {
+    coords.add([11.5820 + i * 0.0001, 48.1350 + (pointsPerSide - 1) * 0.0001]);
+  }
+  for (var i = pointsPerSide - 2; i > 0; i--) {
+    coords.add([11.5820, 48.1350 + i * 0.0001]);
+  }
+  coords.add([11.5820, 48.1350]);
+
+  return {
+    'route': {
+      'geometry': {'type': 'LineString', 'coordinates': coords},
+      'distance': distanceMeters,
+      'duration': durationSeconds,
+      'legs': [
+        {
+          'steps': [
+            {
+              'maneuver': {
+                'type': 'turn',
+                'modifier': 'left',
+                'location': [11.583, 48.136],
+              },
+              'distance': 500.0,
+              'name': 'Testroute',
+            },
+            {
+              'maneuver': {'type': 'arrive', 'location': coords.last},
+              'distance': 0.0,
+              'name': '',
+            },
+          ],
+        },
+      ],
+    },
+  };
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 @GenerateMocks([RouteEdgeInvoker])
@@ -181,7 +231,7 @@ void main() {
       );
 
       final captured =
-          verify(mockInvoker.invoke(captureAny)).captured.single
+          verify(mockInvoker.invoke(captureAny)).captured.last
               as Map<String, dynamic>;
       expect(captured['startLocation']['latitude'], closeTo(48.1351, 0.001));
       expect(captured['startLocation']['longitude'], closeTo(11.5820, 0.001));
@@ -201,7 +251,7 @@ void main() {
       );
 
       final captured =
-          verify(mockInvoker.invoke(captureAny)).captured.single
+          verify(mockInvoker.invoke(captureAny)).captured.last
               as Map<String, dynamic>;
       expect(captured['targetDistance'], 30);
     });
@@ -220,7 +270,7 @@ void main() {
       );
 
       final captured =
-          verify(mockInvoker.invoke(captureAny)).captured.single
+          verify(mockInvoker.invoke(captureAny)).captured.last
               as Map<String, dynamic>;
       expect(captured['route_type'], 'ROUND_TRIP');
     });
@@ -239,7 +289,7 @@ void main() {
       );
 
       final captured =
-          verify(mockInvoker.invoke(captureAny)).captured.single
+          verify(mockInvoker.invoke(captureAny)).captured.last
               as Map<String, dynamic>;
       expect(captured['language'], 'de');
     });
@@ -260,7 +310,7 @@ void main() {
         );
 
         final first =
-            verify(mockInvoker.invoke(captureAny)).captured.single
+            verify(mockInvoker.invoke(captureAny)).captured.last
                 as Map<String, dynamic>;
         clearInteractions(mockInvoker);
 
@@ -277,7 +327,7 @@ void main() {
         );
 
         final second =
-            verify(mockInvoker.invoke(captureAny)).captured.single
+            verify(mockInvoker.invoke(captureAny)).captured.last
                 as Map<String, dynamic>;
 
         expect(first['randomSeed'], isA<int>());
@@ -299,7 +349,7 @@ void main() {
       );
 
       final captured =
-          verify(mockInvoker.invoke(captureAny)).captured.single
+          verify(mockInvoker.invoke(captureAny)).captured.last
               as Map<String, dynamic>;
       expect(captured['planning_type'], 'Kurvenreich');
     });
@@ -318,7 +368,7 @@ void main() {
       );
 
       final captured =
-          verify(mockInvoker.invoke(captureAny)).captured.single
+          verify(mockInvoker.invoke(captureAny)).captured.last
               as Map<String, dynamic>;
       expect(captured.containsKey('destination_location'), isFalse);
     });
@@ -338,7 +388,7 @@ void main() {
       );
 
       final captured =
-          verify(mockInvoker.invoke(captureAny)).captured.single
+          verify(mockInvoker.invoke(captureAny)).captured.last
               as Map<String, dynamic>;
       expect(captured['targetLocation'], isNotNull);
       expect(captured['targetLocation']['latitude'], closeTo(47.8, 0.01));
@@ -362,7 +412,7 @@ void main() {
       );
 
       final captured =
-          verify(mockInvoker.invoke(captureAny)).captured.single
+          verify(mockInvoker.invoke(captureAny)).captured.last
               as Map<String, dynamic>;
       expect(captured['route_type'], 'POINT_TO_POINT');
     });
@@ -381,7 +431,7 @@ void main() {
       );
 
       final captured =
-          verify(mockInvoker.invoke(captureAny)).captured.single
+          verify(mockInvoker.invoke(captureAny)).captured.last
               as Map<String, dynamic>;
       expect(
         captured['destination_location']['latitude'],
@@ -408,7 +458,7 @@ void main() {
       );
 
       final captured =
-          verify(mockInvoker.invoke(captureAny)).captured.single
+          verify(mockInvoker.invoke(captureAny)).captured.last
               as Map<String, dynamic>;
       expect(captured['mode'], 'Standard');
       expect(captured['avoid_highways'], isFalse);
@@ -433,7 +483,7 @@ void main() {
       );
 
       final captured =
-          verify(mockInvoker.invoke(captureAny)).captured.single
+          verify(mockInvoker.invoke(captureAny)).captured.last
               as Map<String, dynamic>;
       expect(captured['avoid_highways'], isTrue);
       expect(captured.containsKey('targetDistance'), isFalse);
@@ -456,7 +506,7 @@ void main() {
       );
 
       final captured =
-          verify(mockInvoker.invoke(captureAny)).captured.single
+          verify(mockInvoker.invoke(captureAny)).captured.last
               as Map<String, dynamic>;
       expect(captured['mode'], 'Alpenstraßen');
     });
@@ -479,7 +529,7 @@ void main() {
         );
 
         final captured =
-            verify(mockInvoker.invoke(captureAny)).captured.single
+            verify(mockInvoker.invoke(captureAny)).captured.last
                 as Map<String, dynamic>;
         expect(captured['targetDistance'], isNotNull);
         expect(captured['randomSeed'], isA<int>());
@@ -506,7 +556,7 @@ void main() {
         );
 
         final captured =
-            verify(mockInvoker.invoke(captureAny)).captured.single
+            verify(mockInvoker.invoke(captureAny)).captured.last
                 as Map<String, dynamic>;
         expect(captured['avoid_highways'], isTrue);
         expect(captured['targetDistance'], isNotNull);
@@ -531,7 +581,7 @@ void main() {
       );
 
       final smallDetour =
-          verify(mockInvoker.invoke(captureAny)).captured.single
+          verify(mockInvoker.invoke(captureAny)).captured.last
               as Map<String, dynamic>;
       clearInteractions(mockInvoker);
 
@@ -550,7 +600,7 @@ void main() {
       );
 
       final mediumDetour =
-          verify(mockInvoker.invoke(captureAny)).captured.single
+          verify(mockInvoker.invoke(captureAny)).captured.last
               as Map<String, dynamic>;
       clearInteractions(mockInvoker);
 
@@ -569,7 +619,7 @@ void main() {
       );
 
       final largeDetour =
-          verify(mockInvoker.invoke(captureAny)).captured.single
+          verify(mockInvoker.invoke(captureAny)).captured.last
               as Map<String, dynamic>;
 
       expect(
@@ -607,7 +657,7 @@ void main() {
         );
 
         final first =
-            verify(mockInvoker.invoke(captureAny)).captured.single
+            verify(mockInvoker.invoke(captureAny)).captured.last
                 as Map<String, dynamic>;
         clearInteractions(mockInvoker);
 
@@ -626,7 +676,7 @@ void main() {
         );
 
         final second =
-            verify(mockInvoker.invoke(captureAny)).captured.single
+            verify(mockInvoker.invoke(captureAny)).captured.last
                 as Map<String, dynamic>;
 
         expect(first['randomSeed'], isNot(equals(second['randomSeed'])));
@@ -797,7 +847,7 @@ void main() {
       when(mockInvoker.invoke(any)).thenAnswer((_) async {
         callCount++;
         if (callCount == 1) throw Exception('Netzwerkfehler');
-        return _buildRouteResponse(
+        return _buildClosedLoopRouteResponse(
           distanceMeters: 50000,
           durationSeconds: 3600,
         );
@@ -1005,7 +1055,7 @@ void main() {
         );
 
         final captured =
-            verify(mockInvoker.invoke(captureAny)).captured.single
+            verify(mockInvoker.invoke(captureAny)).captured.last
                 as Map<String, dynamic>;
         expect(captured['mode'], style);
       });

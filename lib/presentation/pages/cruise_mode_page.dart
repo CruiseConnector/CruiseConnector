@@ -543,7 +543,7 @@ class _CruiseModePageState extends State<CruiseModePage>
                         destinationController: _destinationController,
                         onRoundTripChanged: _handleRouteModeChanged,
                         onPlanningTypeChanged: (v) =>
-                            setState(() => _planningType = v),
+                            setState(() => _planningType = 'Zufall'),
                         onLengthChanged: (v) =>
                             setState(() => _selectedLength = v),
                         onLocationChanged: (v) =>
@@ -1238,6 +1238,9 @@ class _CruiseModePageState extends State<CruiseModePage>
     if (_isLoading) return;
     setState(() => _isLoading = true);
     try {
+      if (_isRoundTrip && _planningType != 'Zufall') {
+        _planningType = 'Zufall';
+      }
       final startPosition = await _getStartCoordinates();
 
       final digits = _selectedLength.replaceAll(RegExp(r'[^0-9]'), '');
@@ -1404,9 +1407,7 @@ class _CruiseModePageState extends State<CruiseModePage>
           }
 
           if (retryClassification.isIdeal) {
-            debugPrint(
-              '[CruiseMode] Kandidat ${i + 1} ist ideal — übernommen',
-            );
+            debugPrint('[CruiseMode] Kandidat ${i + 1} ist ideal — übernommen');
             break;
           }
         }

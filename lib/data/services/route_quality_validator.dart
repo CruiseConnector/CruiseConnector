@@ -10,6 +10,7 @@ class RouteQualityResult {
     required this.isLoopClosed,
     required this.distanceInTolerance,
     required this.passed,
+    this.returnPathPercent = 0.0,
     this.actualDistanceKm,
     this.targetDistanceKm,
   });
@@ -28,6 +29,7 @@ class RouteQualityResult {
 
   /// Gesamtbewertung: true wenn alle Checks bestanden.
   final bool passed;
+  final double returnPathPercent;
 
   final double? actualDistanceKm;
   final double? targetDistanceKm;
@@ -37,6 +39,7 @@ class RouteQualityResult {
     return 'RouteQuality(overlap=${overlapPercent.toStringAsFixed(1)}%, '
         'uturns=${uturnPositions.length}, '
         'loopClosed=$isLoopClosed, '
+        'returnPath=${returnPathPercent.toStringAsFixed(1)}%, '
         'distOk=$distanceInTolerance, '
         'passed=$passed'
         '${actualDistanceKm != null ? ', ${actualDistanceKm!.toStringAsFixed(1)}km' : ''}'
@@ -78,6 +81,10 @@ class RouteQualityValidator {
 
   /// Distanz-Toleranz (±10%).
   static const double distanceTolerance = 0.10;
+
+  /// Maximal erlaubter Anteil der Route, der einem Rückweg entlang derselben
+  /// Straße entspricht (für Rundkurse).
+  static const double maxReturnPathPercent = 36.0;
 
   /// Minimale Distanz zwischen zwei Segmenten um als Overlap zu gelten (Meter).
   static const double overlapProximity = 50.0;
@@ -213,6 +220,36 @@ class RouteQualityValidator {
     return 0.14;
   }
 
+  /// Schätzt, wie stark sich zweite und erste Routenhälfte in entgegengesetzter
+  /// Richtung überdecken (klassisches Hin-und-zurück-Muster).
+  double estimateReturnPathPercent(
+    List<List<double>> coordinates, {
+    double proximityMeters = 85.0,
+    int sampleCount = 22,
+  }) {
+    if (coordinates.length < 24) return 0.0;
+
+    final half = coordinates.length ~/ 2;
+    if (half < 12) return 0.0;
+    final firstHalf = coordinates.sublist(0, half);
+    final secondHalfReversed = coordinates.sublist(half).reversed.toList();
+    final sampledA = _sampleRoute(firstHalf, sampleCount: sampleCount);
+    final sampledB = _sampleRoute(secondHalfReversed, sampleCount: sampleCount);
+    if (sampledA.isEmpty || sampledB.isEmpty) return 0.0;
+
+    final pairedCount = math.min(sampledA.length, sampledB.length);
+    var nearPairs = 0;
+    for (var i = 0; i < pairedCount; i++) {
+      final a = sampledA[i];
+      final b = sampledB[i];
+      if (a.length < 2 || b.length < 2) continue;
+      final dist = geo.Geolocator.distanceBetween(a[1], a[0], b[1], b[0]);
+      if (dist <= proximityMeters) nearPairs++;
+    }
+    if (pairedCount == 0) return 0.0;
+    return (nearPairs / pairedCount) * 100.0;
+  }
+
   /// Gesamtbewertung: führt alle Checks durch und gibt ein Ergebnis zurück.
   ///
   /// [isRoundTrip]: Wenn true, wird auch der Loop-Check durchgeführt.
@@ -226,6 +263,9 @@ class RouteQualityValidator {
     final overlap = validateOverlap(coordinates);
     final uturns = validateNoUturns(coordinates);
     final loopClosed = isRoundTrip ? validateLoopClosed(coordinates) : true;
+    final returnPathPercent = isRoundTrip
+        ? estimateReturnPathPercent(coordinates)
+        : 0.0;
     final effectiveDistanceTolerance = isRoundTrip
         ? roundTripDistanceTolerance(targetDistanceKm)
         : distanceTolerance;
@@ -241,7 +281,11 @@ class RouteQualityValidator {
         : maxOverlapPercent;
 
     final passed =
-        overlap <= overlapThreshold && uturns.isEmpty && loopClosed && distOk;
+        overlap <= overlapThreshold &&
+        uturns.isEmpty &&
+        loopClosed &&
+        distOk &&
+        (!isRoundTrip || returnPathPercent <= maxReturnPathPercent);
 
     final result = RouteQualityResult(
       overlapPercent: overlap,
@@ -249,6 +293,7 @@ class RouteQualityValidator {
       isLoopClosed: loopClosed,
       distanceInTolerance: distOk,
       passed: passed,
+      returnPathPercent: returnPathPercent,
       actualDistanceKm: actualDistanceKm > 0 ? actualDistanceKm : null,
       targetDistanceKm: targetDistanceKm > 0 ? targetDistanceKm : null,
     );
@@ -300,6 +345,10 @@ class RouteQualityValidator {
         ? roundTripMaxOverlapPercent
         : maxOverlapPercent;
     final acceptableOverlap = isRoundTrip ? 28.0 : 20.0;
+    final idealReturnPath = isRoundTrip ? 18.0 : double.infinity;
+    final acceptableReturnPath = isRoundTrip
+        ? maxReturnPathPercent
+        : double.infinity;
 
     final pointPenalty = coordinateCount < acceptableMinCoordinates
         ? (acceptableMinCoordinates - coordinateCount) * 2.0
@@ -310,10 +359,13 @@ class RouteQualityValidator {
         quality.overlapPercent +
         quality.uturnPositions.length * 18 +
         distanceDeltaPercent * 100 * 1.6 +
+        (isRoundTrip ? quality.returnPathPercent * 1.4 : 0.0) +
         pointPenalty +
         (!quality.isLoopClosed ? 80 : 0);
 
-    if (!quality.isLoopClosed || quality.uturnPositions.isNotEmpty) {
+    if (!quality.isLoopClosed ||
+        quality.uturnPositions.isNotEmpty ||
+        (isRoundTrip && quality.returnPathPercent > acceptableReturnPath)) {
       return RouteQualityClassification(
         tier: RouteQualityTier.poor,
         score: score + 90,
@@ -331,7 +383,8 @@ class RouteQualityValidator {
 
     if (coordinateCount >= idealMinCoordinates &&
         quality.overlapPercent <= idealOverlap &&
-        idealDistanceOk) {
+        idealDistanceOk &&
+        (!isRoundTrip || quality.returnPathPercent <= idealReturnPath)) {
       return RouteQualityClassification(
         tier: RouteQualityTier.ideal,
         score: score,
