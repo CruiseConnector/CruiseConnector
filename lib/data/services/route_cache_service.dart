@@ -47,11 +47,20 @@ class RouteCacheService {
         return;
       }
 
-      // Sequentiell auffüllen bis die Queue voll ist
+      // Parallel auffüllen: Routen in Batches von 3 gleichzeitig generieren
+      // → deutlich schnellerer Queue-Aufbau als sequentiell
       while (_queue.length < _queueSize && _generationErrors < 3) {
-        await _generateOne();
-        // Kurze Pause zwischen Generierungen → CPU-Last verteilen
-        await Future.delayed(const Duration(milliseconds: 500));
+        final remaining = (_queueSize - _queue.length).clamp(1, 3);
+        final startVariant = _styleIndex;
+        final futures = List.generate(
+          remaining,
+          (i) => _generateOne(variantIndex: startVariant + i),
+        );
+        await Future.wait(futures);
+        // Kurze Pause zwischen Batches → CPU-Last verteilen
+        if (_queue.length < _queueSize) {
+          await Future.delayed(const Duration(milliseconds: 300));
+        }
       }
 
       debugPrint('[RouteCache] Queue gefüllt: ${_queue.length}/$_queueSize Routen');
@@ -113,7 +122,8 @@ class RouteCacheService {
   }
 
   /// Generiert eine einzelne Route und fügt sie zur Queue hinzu.
-  Future<void> _generateOne() async {
+  /// [variantIndex] steuert die Richtungs-Diversifizierung für parallele Batches.
+  Future<void> _generateOne({int? variantIndex}) async {
     if (_lastPosition == null) return;
 
     final style = _styles[_styleIndex % _styles.length];
@@ -125,6 +135,7 @@ class RouteCacheService {
         targetDistanceKm: 50, // Standard-Distanz für Vorberechnung
         mode: style,
         planningType: 'Zufall',
+        variantIndex: variantIndex,
       );
 
       // Qualitätsprüfung: Echte Straßenroute hat hunderte Punkte

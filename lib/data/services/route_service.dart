@@ -45,6 +45,8 @@ class RouteService {
 
   static const String edgeFunction = 'generate-cruise-route';
   static int _lastRandomSeed = 0;
+  /// Auto-inkrementierende Variante für Richtungs-Diversifizierung (0-7)
+  static int _variantCounter = 0;
 
   final RouteEdgeInvoker _invoker;
 
@@ -55,23 +57,76 @@ class RouteService {
   }
 
   /// Berechnet eine Rundkurs-Route von der aktuellen Position.
+  /// [variantIndex] steuert die Richtungs-Diversifizierung (0-7 = 8 Himmelsrichtungen).
+  /// Ohne Angabe wird automatisch rotiert → jede Route geht in eine andere Richtung.
   Future<RouteResult> generateRoundTrip({
     required geo.Position startPosition,
     required int targetDistanceKm,
     required String mode,
     required String planningType,
     Map<String, double>? targetLocation,
+    int? variantIndex,
   }) async {
+    // Diversifiziertes Ziel generieren wenn keins explizit angegeben wurde.
+    // Jeder Aufruf bekommt einen anderen Kreisbogen-Winkel um den Startpunkt,
+    // damit Mapbox in eine andere Richtung routet.
+    final effectiveTarget = targetLocation ??
+        _generateDiversifiedTarget(
+          startLat: startPosition.latitude,
+          startLng: startPosition.longitude,
+          targetDistanceKm: targetDistanceKm,
+          variantIndex: variantIndex,
+        );
+
     final body = _buildRoundTripRequest(
       startPosition: startPosition,
       targetDistanceKm: targetDistanceKm,
       mode: mode,
       planningType: planningType,
-      targetLocation: targetLocation,
+      targetLocation: effectiveTarget,
     );
     final result = await _invoke(body);
-    // Snap Route-Start und Ende auf exakte GPS-Position (verhindert Kreis-Bug)
-    return _snapRouteToStartPosition(result, startPosition);
+    final snapped = _snapRouteToStartPosition(result, startPosition);
+
+    // U-Turn-Prüfung: wenn U-Turns vorhanden, mit verschobenem Ziel nochmal versuchen
+    final uturnCount = _countUturnManeuvers(snapped.maneuvers);
+    if (uturnCount > 0 && targetLocation == null) {
+      debugPrint(
+        '[RouteService] $uturnCount U-Turns erkannt — Retry mit verschobenem Ziel',
+      );
+      // Ziel um 4 Varianten (180°) drehen → komplett andere Richtung
+      final shiftedTarget = _generateDiversifiedTarget(
+        startLat: startPosition.latitude,
+        startLng: startPosition.longitude,
+        targetDistanceKm: targetDistanceKm,
+        variantIndex: ((variantIndex ?? _variantCounter) + 4) % 8,
+      );
+      final retryBody = _buildRoundTripRequest(
+        startPosition: startPosition,
+        targetDistanceKm: targetDistanceKm,
+        mode: mode,
+        planningType: planningType,
+        targetLocation: shiftedTarget,
+      );
+      try {
+        final retryResult = await _invoke(retryBody);
+        final retrySnapped =
+            _snapRouteToStartPosition(retryResult, startPosition);
+        final retryUturns = _countUturnManeuvers(retrySnapped.maneuvers);
+        if (retryUturns < uturnCount) {
+          debugPrint(
+            '[RouteService] U-Turn-Retry erfolgreich: $retryUturns statt $uturnCount',
+          );
+          return _finalizeRoute(retrySnapped);
+        }
+      } catch (e) {
+        debugPrint(
+          '[RouteService] U-Turn-Retry fehlgeschlagen: $e — behalte Original',
+        );
+      }
+    }
+
+    return _finalizeRoute(snapped);
   }
 
   /// Berechnet eine Route von A nach B (direkt oder scenic).
@@ -136,10 +191,126 @@ class RouteService {
     );
     final result = await _invoke(body);
     // Snap Route-Start auf exakte GPS-Position (verhindert Kreis-Bug)
-    return _snapRouteToStartPosition(result, startPosition);
+    return _finalizeRoute(_snapRouteToStartPosition(result, startPosition));
+  }
+
+  /// Generiert mehrere Rundkurse PARALLEL mit verschiedenen Richtungen.
+  /// Nutzt Future.wait() statt sequentieller Calls → deutlich schneller.
+  Future<List<RouteResult>> generateMultipleRoundTrips({
+    required geo.Position startPosition,
+    required int targetDistanceKm,
+    required String mode,
+    required String planningType,
+    int count = 5,
+  }) async {
+    debugPrint(
+      '[RouteService] Starte parallele Generierung von $count Rundkursen',
+    );
+    // Jede Route bekommt einen anderen variantIndex → andere Richtung
+    final futures = List.generate(count, (i) async {
+      try {
+        return await generateRoundTrip(
+          startPosition: startPosition,
+          targetDistanceKm: targetDistanceKm,
+          mode: mode,
+          planningType: planningType,
+          variantIndex: i,
+        );
+      } catch (e) {
+        debugPrint('[RouteService] Parallele Route $i fehlgeschlagen: $e');
+        return null;
+      }
+    });
+
+    final results = await Future.wait(futures);
+    final valid = results.whereType<RouteResult>().toList();
+    debugPrint(
+      '[RouteService] ${valid.length}/$count Rundkurse erfolgreich generiert',
+    );
+    return valid;
+  }
+
+  /// Generiert mehrere A→B-Routen PARALLEL für schnellere Qualitätsauswahl.
+  Future<List<RouteResult>> generateMultiplePointToPoints({
+    required geo.Position startPosition,
+    required double destinationLat,
+    required double destinationLng,
+    required String mode,
+    bool scenic = false,
+    int routeVariant = 0,
+    bool avoidHighways = false,
+    int count = 4,
+  }) async {
+    debugPrint(
+      '[RouteService] Starte parallele Generierung von $count A→B-Routen',
+    );
+    final futures = List.generate(count, (i) async {
+      try {
+        return await generatePointToPoint(
+          startPosition: startPosition,
+          destinationLat: destinationLat,
+          destinationLng: destinationLng,
+          mode: mode,
+          scenic: scenic,
+          routeVariant: routeVariant,
+          avoidHighways: avoidHighways,
+        );
+      } catch (e) {
+        debugPrint('[RouteService] Parallele A→B Route $i fehlgeschlagen: $e');
+        return null;
+      }
+    });
+
+    final results = await Future.wait(futures);
+    final valid = results.whereType<RouteResult>().toList();
+    debugPrint(
+      '[RouteService] ${valid.length}/$count A→B-Routen erfolgreich generiert',
+    );
+    return valid;
   }
 
   // ──────────────────────────── Internal ─────────────────────────────────────
+
+  /// Erzeugt einen Zielpunkt auf einem Kreisbogen um den Startpunkt.
+  /// 8 Hauptrichtungen (0°, 45°, 90°, ..., 315°) mit Zufalls-Jitter.
+  /// Sorgt dafür, dass jede Route in eine andere Richtung geht.
+  static Map<String, double> _generateDiversifiedTarget({
+    required double startLat,
+    required double startLng,
+    required int targetDistanceKm,
+    int? variantIndex,
+  }) {
+    final rng = math.Random();
+    final variant = variantIndex ?? (_variantCounter++ % 8);
+
+    // 8 Richtungen à 45° mit ±15° Jitter → nie exakt gleicher Winkel
+    final baseAngle = (variant % 8) * 45.0;
+    final angleJitter = (rng.nextDouble() - 0.5) * 30.0;
+    final angleDeg = (baseAngle + angleJitter) % 360;
+    final angleRad = angleDeg * math.pi / 180;
+
+    // Radius: ~30% der Zieldistanz (Rundkurs geht hin und zurück)
+    // ±10% Jitter für zusätzliche Variation
+    final baseRadiusKm = targetDistanceKm * 0.30;
+    final radiusJitter = 1.0 + (rng.nextDouble() - 0.5) * 0.20;
+    final radiusKm = baseRadiusKm * radiusJitter;
+
+    // Geo-Offset: 1 Breitengrad ≈ 111.32 km
+    final dLat = (radiusKm / 111.32) * math.cos(angleRad);
+    final cosLat = math.cos(startLat * math.pi / 180);
+    final dLng = (radiusKm / (111.32 * cosLat)) * math.sin(angleRad);
+
+    debugPrint(
+      '[RouteService] Diversifizierung: Variante=$variant, '
+      'Winkel=${angleDeg.toStringAsFixed(0)}°, '
+      'Radius=${radiusKm.toStringAsFixed(1)}km',
+    );
+
+    return {
+      'latitude': startLat + dLat,
+      'longitude': startLng + dLng,
+    };
+  }
 
   Map<String, dynamic> _buildRoundTripRequest({
     required geo.Position startPosition,
@@ -160,6 +331,7 @@ class RouteService {
       'planning_type': planningType,
       'language': 'de',
       'randomSeed': randomSeed,
+      'continue_straight': true, // Verhindert unnötige U-Turns
       if (targetLocation != null) 'targetLocation': targetLocation,
     };
   }
@@ -190,6 +362,7 @@ class RouteService {
       'mode': scenic ? mode : 'Standard',
       'avoid_highways': avoidHighways,
       'language': 'de',
+      'continue_straight': true, // Verhindert unnötige U-Turns
       if (scenic || normalizedVariant > 0) ...{
         'targetDistance': double.parse(targetDistanceKm.toStringAsFixed(1)),
         'randomSeed': randomSeed,
@@ -369,7 +542,7 @@ class RouteService {
       geoJson: json.encode(geometry),
       geometry: geometry,
       coordinates: coordinates,
-      maneuvers: filterManeuvers(maneuvers),
+      maneuvers: maneuvers, // Ungefiltert — Filterung in generateRoundTrip/generatePointToPoint
       distanceMeters: distanceRaw,
       durationSeconds: durationRaw,
       distanceKm: distanceKmActual,
@@ -738,6 +911,33 @@ class RouteService {
     }
 
     return filtered;
+  }
+
+  /// Finalisiert eine Route: filtert problematische Manöver (U-Turns, Zwischen-Arrives).
+  /// Wird am Ende von generateRoundTrip/generatePointToPoint aufgerufen.
+  RouteResult _finalizeRoute(RouteResult result) {
+    return RouteResult(
+      geoJson: result.geoJson,
+      geometry: result.geometry,
+      coordinates: result.coordinates,
+      maneuvers: filterManeuvers(result.maneuvers),
+      distanceMeters: result.distanceMeters,
+      durationSeconds: result.durationSeconds,
+      distanceKm: result.distanceKm,
+      speedLimits: result.speedLimits,
+    );
+  }
+
+  /// Zählt U-Turn-Manöver in der ungefilterten Manöver-Liste.
+  /// Wird VOR dem Filtern aufgerufen um zu entscheiden ob ein Retry nötig ist.
+  static int _countUturnManeuvers(List<RouteManeuver> maneuvers) {
+    var count = 0;
+    for (final m in maneuvers) {
+      if (m.icon == Icons.u_turn_left || m.icon == Icons.u_turn_right) {
+        count++;
+      }
+    }
+    return count;
   }
 
   // ────────────────────── Icon / Text Helpers ────────────────────────────────
