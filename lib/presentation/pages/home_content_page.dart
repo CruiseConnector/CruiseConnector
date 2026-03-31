@@ -621,27 +621,11 @@ class _HomeContentPageState extends State<HomeContentPage>
 
   Widget _buildSuggestedRouteSection() {
     if (_weeklyTopRoute != null) {
-      final cardWidth = math.max(MediaQuery.of(context).size.width - 40, 680);
-      return SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        physics: const BouncingScrollPhysics(),
-        child: SizedBox(
-          width: cardWidth.toDouble(),
-          child: _buildSuggestedRouteCard(_weeklyTopRoute!),
-        ),
-      );
+      return _buildSuggestedRouteCard(_weeklyTopRoute!);
     }
 
     if (_loading) {
-      final cardWidth = math.max(MediaQuery.of(context).size.width - 40, 680);
-      return SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        physics: const BouncingScrollPhysics(),
-        child: SizedBox(
-          width: cardWidth.toDouble(),
-          child: _buildSuggestedRouteSkeleton(),
-        ),
-      );
+      return _buildSuggestedRouteSkeleton();
     }
 
     return _buildEmptyRecommendation();
@@ -657,171 +641,369 @@ class _HomeContentPageState extends State<HomeContentPage>
         : '${route.styleEmoji} ${route.style}';
     final climbMeters = heroInsights?.elevation?.ascentMeters;
     final routeTypeLabel = route.isRoundTrip ? 'Rundkurs' : 'A nach B';
+    final curvesLabel = heroInsights != null
+        ? '${heroInsights.curves} Kurven'
+        : isLoadingInsights
+        ? 'Kurven ...'
+        : 'Kurven --';
+    final durationLabel = route.formattedDuration;
+    final distanceLabel = route.formattedDistance;
+    final tertiaryLabel = heroInsights != null
+        ? '${heroInsights.xp} XP'
+        : climbMeters != null
+        ? '↑ $climbMeters m'
+        : routeTypeLabel;
 
-    return Container(
-      height: 234,
-      decoration: BoxDecoration(
-        color: const Color(0xFF1A1A1A),
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: const Color(0xFFFF3B30).withValues(alpha: 0.15),
-            blurRadius: 12,
-            offset: const Offset(0, 8),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isCompact = constraints.maxWidth < 680;
+        final previewSize = isCompact ? 148.0 : 232.0;
+
+        return Container(
+          width: double.infinity,
+          decoration: BoxDecoration(
+            color: const Color(0xFF2A313C),
+            borderRadius: BorderRadius.circular(34),
+            boxShadow: [
+              BoxShadow(
+                color: const Color(0xFFFF3B30).withValues(alpha: 0.12),
+                blurRadius: 28,
+                offset: const Offset(0, 14),
+              ),
+            ],
           ),
-        ],
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(16),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Container(width: 4, color: const Color(0xFFFF3B30)),
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(16, 14, 14, 14),
-                child: Row(
-                  children: [
-                    Expanded(
-                      flex: 7,
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text(
-                            'VORGESCHLAGENE ROUTE',
-                            style: TextStyle(
-                              color: Color(0xFFFF3B30),
-                              fontSize: 10,
-                              fontWeight: FontWeight.w700,
-                              letterSpacing: 1.5,
-                            ),
+          child: Padding(
+            padding: const EdgeInsets.all(18),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.only(right: 16, top: 4, bottom: 4),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Heute für dich',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 17,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 0.2,
                           ),
-                          const SizedBox(height: 10),
-                          Text(
-                            title,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 22,
-                              fontWeight: FontWeight.w800,
-                              height: 1.0,
-                            ),
+                        ),
+                        const SizedBox(height: 18),
+                        Text(
+                          '${route.styleEmoji} – $title',
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: isCompact ? 21 : 25,
+                            fontWeight: FontWeight.w800,
+                            height: 1.05,
                           ),
-                          const SizedBox(height: 8),
-                          Text(
-                            '${route.formattedDistance} • ${route.formattedDuration}',
-                            style: TextStyle(
-                              color: Colors.white.withValues(alpha: 0.76),
-                              fontSize: 13,
-                              fontWeight: FontWeight.w600,
-                            ),
+                        ),
+                        const SizedBox(height: 12),
+                        Text(
+                          '$distanceLabel • $curvesLabel • $durationLabel',
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: Colors.white.withValues(alpha: 0.92),
+                            fontSize: isCompact ? 14 : 17,
+                            fontWeight: FontWeight.w600,
+                            height: 1.2,
                           ),
-                          const SizedBox(height: 12),
-                          Wrap(
-                            spacing: 8,
-                            runSpacing: 8,
-                            children: [
-                              _buildSuggestedMetric(
-                                icon: Icons.route_rounded,
-                                label: route.formattedDistance,
-                              ),
-                              _buildSuggestedMetric(
-                                icon: Icons.schedule_rounded,
-                                label: route.formattedDuration,
-                              ),
-                              _buildSuggestedMetric(
-                                icon: Icons.turn_slight_right_rounded,
-                                label: heroInsights != null
-                                    ? '${heroInsights.curves} Kurven'
-                                    : isLoadingInsights
-                                    ? 'Kurven ...'
-                                    : 'Kurven --',
-                              ),
-                              _buildSuggestedMetric(
-                                icon: Icons.bolt_rounded,
-                                label: heroInsights != null
-                                    ? '${heroInsights.xp} XP'
-                                    : isLoadingInsights
-                                    ? 'XP ...'
-                                    : 'XP --',
-                              ),
-                              if (ratingValue != null && ratingValue > 0)
-                                _buildSuggestedMetric(
-                                  icon: Icons.star_rounded,
-                                  label: ratingValue.toStringAsFixed(1),
-                                  tint: const Color(0xFFFFE2A8),
+                        ),
+                        const SizedBox(height: 24),
+                        if (ratingValue != null && ratingValue > 0)
+                          _buildSuggestedInfoRow(
+                            icon: Icons.star_rounded,
+                            label:
+                                '${ratingValue.toStringAsFixed(1)} Bewertung',
+                            tint: const Color(0xFFFFD76A),
+                          ),
+                        const SizedBox(height: 14),
+                        _buildSuggestedInfoRow(
+                          icon: Icons.local_fire_department_rounded,
+                          label: tertiaryLabel,
+                          tint: const Color(0xFFFF6B3D),
+                        ),
+                        const SizedBox(height: 18),
+                        Wrap(
+                          spacing: 10,
+                          runSpacing: 10,
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          children: [
+                            _buildStyleChip(route),
+                            _buildSaveChip(route),
+                            GestureDetector(
+                              onTap: () {
+                                CruiseModePage.pendingRoute.value = route;
+                                widget.onTabChange?.call(2);
+                              },
+                              child: Container(
+                                height: 42,
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 16,
                                 ),
-                              _buildSuggestedMetric(
-                                icon: route.isRoundTrip
-                                    ? Icons.loop_rounded
-                                    : Icons.alt_route_rounded,
-                                label: routeTypeLabel,
-                              ),
-                              if (climbMeters != null)
-                                _buildSuggestedMetric(
-                                  icon: Icons.north_rounded,
-                                  label: '↑ $climbMeters m',
-                                  tint: const Color(0xFFDCFCE7),
-                                )
-                              else if (isLoadingInsights)
-                                _buildSuggestedMetric(
-                                  icon: Icons.north_rounded,
-                                  label: '↑ ...',
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFFF3B30),
+                                  borderRadius: BorderRadius.circular(16),
                                 ),
-                            ],
-                          ),
-                          const Spacer(),
-                          Row(
-                            children: [
-                              _buildStyleChip(route),
-                              const SizedBox(width: 10),
-                              _buildSaveChip(route),
-                              const Spacer(),
-                              GestureDetector(
-                                onTap: () {
-                                  CruiseModePage.pendingRoute.value = route;
-                                  widget.onTabChange?.call(2);
-                                },
-                                child: Container(
-                                  height: 40,
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 14,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: const Color(0xFFFF3B30),
-                                    borderRadius: BorderRadius.circular(14),
-                                  ),
-                                  alignment: Alignment.center,
-                                  child: const Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      Icon(
-                                        Icons.directions_car_rounded,
+                                alignment: Alignment.center,
+                                child: const Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(
+                                      Icons.directions_car_rounded,
+                                      color: Colors.white,
+                                      size: 18,
+                                    ),
+                                    SizedBox(width: 8),
+                                    Text(
+                                      'Fahren',
+                                      style: TextStyle(
                                         color: Colors.white,
-                                        size: 18,
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w700,
                                       ),
-                                      SizedBox(width: 8),
-                                      Text(
-                                        'Route fahren',
-                                        style: TextStyle(
-                                          color: Colors.white,
-                                          fontSize: 13,
-                                          fontWeight: FontWeight.w700,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
+                                    ),
+                                  ],
                                 ),
                               ),
-                            ],
-                          ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                _buildSuggestedRoutePreview(
+                  route,
+                  coordinates,
+                  size: previewSize,
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildSuggestedInfoRow({
+    required IconData icon,
+    required String label,
+    required Color tint,
+  }) {
+    return Row(
+      children: [
+        Icon(icon, size: 22, color: tint),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 16,
+              fontWeight: FontWeight.w600,
+              height: 1.1,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildSuggestedRoutePreview(
+    SavedRoute route,
+    List<List<double>> coordinates,
+    {required double size}
+  ) {
+    return SizedBox(
+      width: size,
+      height: size,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(30),
+          gradient: const LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [Color(0xFFFF5A5A), Color(0xFFC70000)],
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: const Color(0xFFFF3B30).withValues(alpha: 0.28),
+              blurRadius: 28,
+              offset: const Offset(0, 10),
+            ),
+          ],
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(10),
+          child: Container(
+            decoration: BoxDecoration(
+              color: const Color(0xFF171C24),
+              borderRadius: BorderRadius.circular(24),
+            ),
+            child: Stack(
+              children: [
+                Positioned.fill(
+                  child: Container(
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(24),
+                      gradient: LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors: [
+                          Colors.white.withValues(alpha: 0.06),
+                          Colors.transparent,
                         ],
                       ),
                     ),
-                    const SizedBox(width: 14),
-                    _buildSuggestedRoutePreview(route, coordinates),
-                  ],
+                  ),
+                ),
+                Positioned.fill(
+                  child: Padding(
+                    padding: const EdgeInsets.all(18),
+                    child: coordinates.length >= 2
+                        ? CustomPaint(
+                            painter: _RoutePolylinePainter(
+                              coordinates: coordinates,
+                            ),
+                          )
+                        : Center(
+                            child: Text(
+                              route.styleEmoji,
+                              style: const TextStyle(fontSize: 46),
+                            ),
+                          ),
+                  ),
+                ),
+                Positioned(
+                  left: 14,
+                  top: 14,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 5,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.28),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Text(
+                      route.styleEmoji,
+                      style: const TextStyle(fontSize: 13),
+                    ),
+                  ),
+                ),
+                Positioned(
+                  right: 14,
+                  bottom: 14,
+                  child: Container(
+                    width: 28,
+                    height: 28,
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.28),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      Icons.map_outlined,
+                      color: Colors.white,
+                      size: 14,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildEmptyRecommendation() {
+    return Container(
+      width: double.infinity,
+      decoration: BoxDecoration(
+        color: const Color(0xFF2A313C),
+        borderRadius: BorderRadius.circular(34),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFFFF3B30).withValues(alpha: 0.1),
+            blurRadius: 24,
+            offset: const Offset(0, 12),
+          ),
+        ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(18),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text(
+                    'Heute für dich',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 17,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  const Text(
+                    'Starte deine erste Route',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 24,
+                      fontWeight: FontWeight.w800,
+                      height: 1.05,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    'Sobald eine Empfehlung verfügbar ist, erscheint sie hier als kompakte Featured-Route.',
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.68),
+                      fontSize: 14,
+                      height: 1.3,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 16),
+            SizedBox(
+              width: 132,
+              height: 132,
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(28),
+                  gradient: const LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [Color(0xFFFF5A5A), Color(0xFFC70000)],
+                  ),
+                ),
+                child: Container(
+                  margin: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF171C24),
+                    borderRadius: BorderRadius.circular(22),
+                  ),
+                  child: const Icon(
+                    Icons.explore_outlined,
+                    color: Color(0xFFFF3B30),
+                    size: 40,
+                  ),
                 ),
               ),
             ),
@@ -831,104 +1013,55 @@ class _HomeContentPageState extends State<HomeContentPage>
     );
   }
 
-  Widget _buildSuggestedMetric({
-    required IconData icon,
-    required String label,
-    Color tint = const Color(0xFFEFEFEF),
-  }) {
+  Widget _buildSuggestedRouteSkeleton() {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      width: double.infinity,
       decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.16),
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 14, color: tint),
-          const SizedBox(width: 6),
-          Text(
-            label,
-            style: TextStyle(
-              color: tint,
-              fontSize: 12,
-              fontWeight: FontWeight.w700,
-            ),
+        color: const Color(0xFF2A313C),
+        borderRadius: BorderRadius.circular(34),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFFFF3B30).withValues(alpha: 0.08),
+            blurRadius: 24,
+            offset: const Offset(0, 12),
           ),
         ],
       ),
-    );
-  }
-
-  Widget _buildSuggestedRoutePreview(
-    SavedRoute route,
-    List<List<double>> coordinates,
-  ) {
-    return SizedBox(
-      width: 188,
-      child: AspectRatio(
-        aspectRatio: 16 / 9,
+      child: Padding(
+        padding: const EdgeInsets.all(18),
         child: Container(
-          decoration: BoxDecoration(
-            color: const Color(0xFF10131A),
-            borderRadius: BorderRadius.circular(18),
-            border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
-          ),
-          child: Stack(
+          constraints: const BoxConstraints(minHeight: 208),
+          child: Row(
             children: [
-              Positioned.fill(
-                child: Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: coordinates.length >= 2
-                      ? CustomPaint(
-                          painter: _RoutePolylinePainter(
-                            coordinates: coordinates,
-                          ),
-                        )
-                      : Center(
-                          child: Text(
-                            route.styleEmoji,
-                            style: const TextStyle(fontSize: 38),
-                          ),
-                        ),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    _shimmerBar(width: 150, height: 18),
+                    const SizedBox(height: 20),
+                    _shimmerBar(width: 250, height: 28),
+                    const SizedBox(height: 12),
+                    _shimmerBar(width: 260, height: 18),
+                    const SizedBox(height: 28),
+                    _shimmerBar(width: 220, height: 18),
+                    const SizedBox(height: 14),
+                    _shimmerBar(width: 180, height: 18),
+                    const SizedBox(height: 20),
+                    Row(
+                      children: [
+                        _shimmerPill(width: 92),
+                        const SizedBox(width: 10),
+                        _shimmerPill(width: 42),
+                        const SizedBox(width: 10),
+                        _shimmerPill(width: 90),
+                      ],
+                    ),
+                  ],
                 ),
               ),
-              Positioned(
-                left: 10,
-                top: 10,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 4,
-                  ),
-                  decoration: BoxDecoration(
-                    color: Colors.black.withValues(alpha: 0.55),
-                    borderRadius: BorderRadius.circular(999),
-                  ),
-                  child: Text(
-                    route.styleEmoji,
-                    style: const TextStyle(fontSize: 14),
-                  ),
-                ),
-              ),
-              Positioned(
-                right: 10,
-                bottom: 10,
-                child: Container(
-                  width: 26,
-                  height: 26,
-                  decoration: BoxDecoration(
-                    color: Colors.black.withValues(alpha: 0.55),
-                    shape: BoxShape.circle,
-                  ),
-                  child: const Icon(
-                    Icons.map_outlined,
-                    color: Colors.white,
-                    size: 14,
-                  ),
-                ),
-              ),
+              const SizedBox(width: 16),
+              _shimmerRoutePreview(),
             ],
           ),
         ),
@@ -994,183 +1127,6 @@ class _HomeContentPageState extends State<HomeContentPage>
     );
   }
 
-  Widget _buildEmptyRecommendation() {
-    return Container(
-      decoration: BoxDecoration(
-        color: const Color(0xFF1A1A1A),
-        borderRadius: BorderRadius.circular(16),
-        border: const Border(
-          left: BorderSide(color: Color(0xFFFF3B30), width: 4),
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: const Color(0xFFFF3B30).withValues(alpha: 0.15),
-            blurRadius: 12,
-            offset: const Offset(0, 8),
-          ),
-        ],
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(16),
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Row(
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Text(
-                      'Vorgeschlagene Route',
-                      style: TextStyle(
-                        color: Color(0xFFFF3B30),
-                        fontSize: 11,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: 1.5,
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    const Text(
-                      'Starte deine erste Route',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 20,
-                        fontWeight: FontWeight.w800,
-                        height: 1.05,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      'Sobald eine Empfehlung verfügbar ist, erscheint sie hier als kompakte Hero-Route.',
-                      style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.65),
-                        fontSize: 12,
-                        height: 1.35,
-                      ),
-                    ),
-                    const SizedBox(height: 14),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 8,
-                      ),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFFF3B30).withValues(alpha: 0.12),
-                        borderRadius: BorderRadius.circular(999),
-                      ),
-                      child: const Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            Icons.route_rounded,
-                            color: Color(0xFFFF3B30),
-                            size: 16,
-                          ),
-                          SizedBox(width: 8),
-                          Text(
-                            'Keine Route vorhanden',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 12,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 14),
-              Container(
-                width: 112,
-                height: 112,
-                decoration: BoxDecoration(
-                  color: const Color(0xFF10131A),
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(
-                    color: Colors.white.withValues(alpha: 0.08),
-                  ),
-                ),
-                child: const Icon(
-                  Icons.explore_outlined,
-                  color: Color(0xFFFF3B30),
-                  size: 42,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildSuggestedRouteSkeleton() {
-    return Container(
-      decoration: BoxDecoration(
-        color: const Color(0xFF1A1A1A),
-        borderRadius: BorderRadius.circular(16),
-        border: const Border(
-          left: BorderSide(color: Color(0xFFFF3B30), width: 4),
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: const Color(0xFFFF3B30).withValues(alpha: 0.12),
-            blurRadius: 12,
-            offset: const Offset(0, 8),
-          ),
-        ],
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(16),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    _shimmerBar(width: 146, height: 10),
-                    const SizedBox(height: 12),
-                    _shimmerBar(width: 240, height: 22),
-                    const SizedBox(height: 8),
-                    _shimmerBar(width: 190, height: 22),
-                    const SizedBox(height: 14),
-                    Wrap(
-                      spacing: 10,
-                      runSpacing: 8,
-                      children: [
-                        _shimmerPill(width: 76),
-                        _shimmerPill(width: 82),
-                        _shimmerPill(width: 86),
-                        _shimmerPill(width: 72),
-                        _shimmerPill(width: 78),
-                      ],
-                    ),
-                    const SizedBox(height: 14),
-                    Row(
-                      children: [
-                        Expanded(child: _shimmerBar(width: double.infinity, height: 40)),
-                        const SizedBox(width: 10),
-                        _shimmerBar(width: 128, height: 40),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 14),
-              _shimmerRoutePreview(),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
   Widget _shimmerBar({
     required double width,
     required double height,
@@ -1207,45 +1163,43 @@ class _HomeContentPageState extends State<HomeContentPage>
 
   Widget _shimmerRoutePreview() {
     return SizedBox(
-      width: 132,
-      child: Container(
-        height: 176,
+      width: 188,
+      height: 188,
+      child: DecoratedBox(
         decoration: BoxDecoration(
-          color: const Color(0xFF10131A),
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+          borderRadius: BorderRadius.circular(30),
+          gradient: const LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [Color(0xFFFF5A5A), Color(0xFFC70000)],
+          ),
         ),
-        padding: const EdgeInsets.all(10),
-        child: Column(
-          children: [
-            _shimmerBar(width: double.infinity, height: 12, radius: 999),
-            const SizedBox(height: 10),
-            Expanded(
-              child: Container(
-                decoration: BoxDecoration(
-                  color: const Color(0xFF151922),
-                  borderRadius: BorderRadius.circular(16),
+        child: Container(
+          margin: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: const Color(0xFF171C24),
+            borderRadius: BorderRadius.circular(24),
+          ),
+          child: AnimatedBuilder(
+            animation: _shimmerController,
+            builder: (context, child) {
+              return Padding(
+                padding: const EdgeInsets.all(18),
+                child: CustomPaint(
+                  painter: _RoutePolylinePainter(
+                    coordinates: const [
+                      [0.12, 0.78],
+                      [0.26, 0.52],
+                      [0.42, 0.60],
+                      [0.58, 0.30],
+                      [0.76, 0.44],
+                      [0.88, 0.18],
+                    ],
+                  ),
                 ),
-                child: AnimatedBuilder(
-                  animation: _shimmerController,
-                  builder: (context, child) {
-                    return CustomPaint(
-                      painter: _RoutePolylinePainter(
-                        coordinates: const [
-                          [0.12, 0.78],
-                          [0.26, 0.52],
-                          [0.42, 0.60],
-                          [0.58, 0.30],
-                          [0.76, 0.44],
-                          [0.88, 0.18],
-                        ],
-                      ),
-                    );
-                  },
-                ),
-              ),
-            ),
-          ],
+              );
+            },
+          ),
         ),
       ),
     );

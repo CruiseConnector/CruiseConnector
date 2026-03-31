@@ -9,6 +9,7 @@ import 'package:flutter/services.dart' show HapticFeedback;
 import 'package:geolocator/geolocator.dart' as geo;
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:cruise_connect/core/constants.dart';
 
 import 'package:cruise_connect/data/services/web_position_smoother.dart';
@@ -3136,23 +3137,162 @@ class _CruiseModePageState extends State<CruiseModePage>
 
   // ═══════════════════════ ROUTE COMPLETION ═════════════════════════════════
 
+  RouteResult? _buildAdjustedCompletionResult() {
+    final result = _lastRouteResult;
+    if (result == null) return null;
+
+    final drivenDistanceMeters = _totalDistanceDriven > 0
+        ? _totalDistanceDriven
+        : _routeDistance;
+    final progressFraction = _calculateCompletionProgressFraction(
+      drivenDistanceMeters,
+    );
+    final adjustedDuration = _calculateAdjustedCompletionDuration(
+      progressFraction,
+    );
+    final completionCoordinates = _buildCompletionCoordinates(progressFraction);
+    final geometry = <String, dynamic>{
+      'type': 'LineString',
+      'coordinates': completionCoordinates,
+    };
+
+    return RouteResult(
+      geoJson: json.encode(geometry),
+      geometry: geometry,
+      coordinates: completionCoordinates,
+      maneuvers: result.maneuvers,
+      distanceMeters: drivenDistanceMeters,
+      durationSeconds: adjustedDuration,
+      distanceKm: drivenDistanceMeters != null
+          ? drivenDistanceMeters / 1000
+          : null,
+      speedLimits: result.speedLimits,
+    );
+  }
+
+  double _calculateCompletionProgressFraction(double? drivenDistanceMeters) {
+    if (drivenDistanceMeters == null ||
+        _originalRouteDistance == null ||
+        _originalRouteDistance! <= 0) {
+      return 1.0;
+    }
+    return (drivenDistanceMeters / _originalRouteDistance!).clamp(0.0, 1.0);
+  }
+
+  double? _calculateAdjustedCompletionDuration(double progressFraction) {
+    final proportionalDuration = _lastRouteResult?.durationSeconds != null
+        ? _lastRouteResult!.durationSeconds! * progressFraction
+        : null;
+    final elapsedSeconds = _navigationStartTime != null
+        ? DateTime.now().difference(_navigationStartTime!).inSeconds.toDouble()
+        : null;
+
+    if (proportionalDuration != null && elapsedSeconds != null) {
+      return proportionalDuration < elapsedSeconds
+          ? proportionalDuration
+          : elapsedSeconds;
+    }
+    return proportionalDuration ?? elapsedSeconds;
+  }
+
+  List<List<double>> _buildCompletionCoordinates(double progressFraction) {
+    final sourceCoordinates = _fullRouteCoordinates.isNotEmpty
+        ? _fullRouteCoordinates
+        : (_lastRouteResult?.coordinates ?? const <List<double>>[]);
+    if (sourceCoordinates.length < 2) return sourceCoordinates;
+
+    final routeIndexLength = _currentRouteIndex > 1
+        ? math.min(_currentRouteIndex + 1, sourceCoordinates.length)
+        : 0;
+    final sampledLength = math.max(
+      2,
+      (sourceCoordinates.length * progressFraction).round(),
+    );
+    final targetLength = math.max(routeIndexLength, sampledLength);
+    return List<List<double>>.from(
+      sourceCoordinates.take(math.min(targetLength, sourceCoordinates.length)),
+    );
+  }
+
+  int _estimateCompletionCurves(
+    List<List<double>> coordinates,
+    double progressFraction,
+  ) {
+    if (coordinates.length >= 6) {
+      final sampled = _sampleCoordinatesForSimilarity(
+        coordinates,
+        maxSamples: 120,
+      );
+      final counted = GamificationService.countCurves(sampled);
+      if (counted > 0) return counted;
+    }
+    return math.max(0, (_cachedCurveCount * progressFraction).round());
+  }
+
+  String _formatCompletionDuration(double? durationSeconds) {
+    if (durationSeconds == null || durationSeconds <= 0) return '--';
+    final minutes = (durationSeconds / 60).round();
+    if (minutes < 60) return '$minutes min';
+    final hours = minutes ~/ 60;
+    final restMinutes = minutes % 60;
+    if (restMinutes == 0) return '${hours}h';
+    return '${hours}h ${restMinutes}min';
+  }
+
+  _CruiseCompletionSnapshot _buildCompletionSnapshot({
+    required bool isEarlyStop,
+    required bool belowMinimum,
+  }) {
+    final adjustedResult = _buildAdjustedCompletionResult();
+    final drivenKm = adjustedResult?.distanceKm ?? 0;
+    final progressFraction = _calculateCompletionProgressFraction(
+      adjustedResult?.distanceMeters,
+    );
+    final previewCoordinates =
+        adjustedResult?.coordinates ?? const <List<double>>[];
+    final curves = _estimateCompletionCurves(
+      previewCoordinates,
+      progressFraction,
+    );
+    final xpEarned = belowMinimum
+        ? 0
+        : GamificationService.calculateRouteXp(
+            distanceKm: drivenKm,
+            curves: curves,
+            style: _selectedStyle,
+          );
+
+    return _CruiseCompletionSnapshot(
+      distanceKm: drivenKm,
+      durationText: _formatCompletionDuration(adjustedResult?.durationSeconds),
+      curves: curves,
+      xpEarned: xpEarned,
+      coordinates: previewCoordinates,
+      isEarlyStop: isEarlyStop,
+      belowMinimum: belowMinimum,
+    );
+  }
+
   void _onRouteCompleted() {
     if (!mounted || _disposed) return;
-    final drivenKm = _totalDistanceDriven > 0
-        ? _totalDistanceDriven / 1000
-        : (_routeDistance != null ? _routeDistance! / 1000 : null);
-    showDialog(
+    final snapshot = _buildCompletionSnapshot(
+      isEarlyStop: false,
+      belowMinimum: false,
+    );
+    showCruiseCompletionSheet(
       context: context,
-      barrierDismissible: false,
-      builder: (ctx) => CruiseCompletionDialog(
-        distanceKm: drivenKm,
-        onSave: (rating) async {
-          Navigator.pop(ctx);
-          await _saveRouteAndSyncXp(rating: rating);
+      child: CruiseCompletionDialog(
+        distanceKm: snapshot.distanceKm,
+        durationText: snapshot.durationText,
+        curves: snapshot.curves,
+        xpEarned: snapshot.xpEarned,
+        routeCoordinates: snapshot.coordinates,
+        onSave: () async {
+          final result = await _saveRouteAndSyncXp();
           _resetAfterCompletion();
+          return result;
         },
         onDiscard: () async {
-          Navigator.pop(ctx);
           _resetAfterCompletion();
         },
       ),
@@ -3177,25 +3317,27 @@ class _CruiseModePageState extends State<CruiseModePage>
 
     final belowMinimum = progressFraction < _minProgressForCredit;
 
-    showDialog(
+    final snapshot = _buildCompletionSnapshot(
+      isEarlyStop: true,
+      belowMinimum: belowMinimum,
+    );
+
+    showCruiseCompletionSheet(
       context: context,
-      barrierDismissible: false,
-      builder: (ctx) => CruiseCompletionDialog(
-        distanceKm: drivenKm,
-        totalRouteKm: totalKm > 0 ? totalKm : null,
-        isEarlyStop: true,
-        belowMinimum: belowMinimum,
-        onSave: (rating) async {
-          Navigator.pop(ctx);
-          await _saveRouteAndSyncXp(rating: rating, skipXpSync: belowMinimum);
+      child: CruiseCompletionDialog(
+        distanceKm: snapshot.distanceKm,
+        durationText: snapshot.durationText,
+        curves: snapshot.curves,
+        xpEarned: snapshot.xpEarned,
+        routeCoordinates: snapshot.coordinates,
+        isEarlyStop: snapshot.isEarlyStop,
+        belowMinimum: snapshot.belowMinimum,
+        onSave: () async {
+          final result = await _saveRouteAndSyncXp(skipXpSync: belowMinimum);
           _resetAfterCompletion();
+          return result;
         },
         onDiscard: () async {
-          Navigator.pop(ctx);
-          // Discard mit anteiliger Gutschrift wenn über Minimum
-          if (!belowMinimum && _totalDistanceDriven > 0) {
-            await _saveRouteAndSyncXp(skipXpSync: false);
-          }
           _resetAfterCompletion();
         },
       ),
@@ -3204,64 +3346,39 @@ class _CruiseModePageState extends State<CruiseModePage>
 
   /// Speichert die gefahrene Route und synchronisiert XP/Level/Badges.
   /// [skipXpSync] = true → Route wird gespeichert, aber keine XP vergeben (< 10% gefahren).
-  Future<void> _saveRouteAndSyncXp({
+  Future<CruiseCompletionActionResult> _saveRouteAndSyncXp({
     int? rating,
     bool skipXpSync = false,
   }) async {
+    int? previousLevel;
+    if (!skipXpSync) {
+      final userId = Supabase.instance.client.auth.currentUser?.id;
+      if (userId != null) {
+        try {
+          final profile = await Supabase.instance.client
+              .from('profiles')
+              .select('level')
+              .eq('id', userId)
+              .maybeSingle();
+          previousLevel = (profile?['level'] as num?)?.toInt();
+        } catch (e) {
+          debugPrint('[CruiseMode] Vorheriges Level nicht lesbar: $e');
+        }
+      }
+    }
+
     try {
       debugPrint(
         '[CruiseMode] _saveRouteAndSyncXp: _lastRouteResult=${_lastRouteResult != null}, rating=$rating, skipXp=$skipXpSync',
       );
-      if (_lastRouteResult != null) {
-        // Route mit tatsächlich gefahrener Distanz speichern
-        final drivenDistanceMeters = _totalDistanceDriven > 0
-            ? _totalDistanceDriven
-            : _routeDistance;
-
-        // Proportionale Dauer berechnen
-        final double progressFraction =
-            (drivenDistanceMeters != null &&
-                _originalRouteDistance != null &&
-                _originalRouteDistance! > 0)
-            ? (drivenDistanceMeters / _originalRouteDistance!).clamp(0.0, 1.0)
-            : 1.0;
-        final double? proportionalDuration =
-            _lastRouteResult!.durationSeconds != null
-            ? _lastRouteResult!.durationSeconds! * progressFraction
-            : null;
-
-        // Tatsächlich verstrichene Zeit als Obergrenze (verhindert Gaming)
-        final double? elapsedSeconds = _navigationStartTime != null
-            ? DateTime.now()
-                  .difference(_navigationStartTime!)
-                  .inSeconds
-                  .toDouble()
-            : null;
-
-        // Minimum aus proportionaler und tatsächlicher Zeit verwenden
-        final double? adjustedDuration;
-        if (proportionalDuration != null && elapsedSeconds != null) {
-          adjustedDuration = proportionalDuration < elapsedSeconds
-              ? proportionalDuration
-              : elapsedSeconds;
-        } else {
-          adjustedDuration = proportionalDuration ?? elapsedSeconds;
-        }
-
-        final adjustedResult = RouteResult(
-          geoJson: _lastRouteResult!.geoJson,
-          geometry: _lastRouteResult!.geometry,
-          coordinates: _lastRouteResult!.coordinates,
-          maneuvers: _lastRouteResult!.maneuvers,
-          distanceMeters: drivenDistanceMeters,
-          durationSeconds: adjustedDuration,
-          distanceKm: drivenDistanceMeters != null
-              ? drivenDistanceMeters / 1000
-              : null,
+      final adjustedResult = _buildAdjustedCompletionResult();
+      if (adjustedResult != null) {
+        final progressFraction = _calculateCompletionProgressFraction(
+          adjustedResult.distanceMeters,
         );
         debugPrint(
           '[CruiseMode] Saving route: style=$_selectedStyle, roundTrip=$_isRoundTrip, '
-          'distKm=${adjustedResult.distanceKm}, durationSec=${adjustedDuration?.round()}, '
+          'distKm=${adjustedResult.distanceKm}, durationSec=${adjustedResult.durationSeconds?.round()}, '
           'progress=${(progressFraction * 100).round()}%',
         );
         await SavedRoutesService.saveRoute(
@@ -3279,32 +3396,31 @@ class _CruiseModePageState extends State<CruiseModePage>
       // XP/Level/Badges synchronisieren (nur wenn über Minimum-Schwelle)
       if (!skipXpSync) {
         final gamResult = await GamificationService.calculateAndSync();
-        if (mounted && gamResult.newBadgeIds.isNotEmpty) {
-          final badgeNames = gamResult.newBadges.map((b) => b.emoji).join(' ');
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Neues Badge: $badgeNames'),
-              backgroundColor: const Color(0xFFFFD700),
-              duration: const Duration(seconds: 3),
-            ),
-          );
-        }
+        return CruiseCompletionActionResult(
+          success: true,
+          newBadgeEmojis: gamResult.newBadges.map((badge) => badge.emoji).toList(),
+          levelUp: previousLevel != null &&
+              gamResult.level.level > previousLevel,
+          newLevel: gamResult.level.level,
+        );
       } else {
         debugPrint(
           '[CruiseMode] XP-Sync übersprungen (unter Minimum-Schwelle)',
         );
       }
+      return const CruiseCompletionActionResult(success: true);
     } catch (e, stack) {
       debugPrint('Route speichern / XP sync fehlgeschlagen: $e');
       debugPrint('Stack: $stack');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Fehler beim Speichern: $e'),
+          const SnackBar(
+            content: Text('Fehler beim Speichern. Bitte erneut versuchen.'),
             backgroundColor: Colors.red,
           ),
         );
       }
+      return const CruiseCompletionActionResult(success: false);
     }
   }
 
@@ -3336,6 +3452,26 @@ class _RecentRouteSignature {
 
   final String fingerprint;
   final List<List<double>> coordinates;
+}
+
+class _CruiseCompletionSnapshot {
+  const _CruiseCompletionSnapshot({
+    required this.distanceKm,
+    required this.durationText,
+    required this.curves,
+    required this.xpEarned,
+    required this.coordinates,
+    required this.isEarlyStop,
+    required this.belowMinimum,
+  });
+
+  final double distanceKm;
+  final String durationText;
+  final int curves;
+  final int xpEarned;
+  final List<List<double>> coordinates;
+  final bool isEarlyStop;
+  final bool belowMinimum;
 }
 
 /// Apple-Maps-Style Navigations-Pfeil: Blauer Tropfen/Pfeil zeigt Fahrtrichtung.
