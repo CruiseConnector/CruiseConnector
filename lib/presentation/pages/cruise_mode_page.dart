@@ -152,7 +152,7 @@ class _CruiseModePageState extends State<CruiseModePage>
 
   bool _disposed = false;
 
-  // Web-only: Letzte setState-Zeit für Throttling (max. 1 Rebuild / 200ms auf Web)
+  // Web-only: Letzte setState-Zeit für Throttling (max. 1 Rebuild / 16ms auf Web)
   DateTime? _lastWebRebuildTime;
 
   // Web-only: GPS-Smoother für flüssige Positionsdarstellung (Kalman-Filter)
@@ -172,6 +172,31 @@ class _CruiseModePageState extends State<CruiseModePage>
 
   void _safeSetState(VoidCallback fn) {
     if (mounted && !_disposed) setState(fn);
+  }
+
+  bool _hasMeaningfulRouteChange(
+    List<LatLng> previous,
+    List<LatLng> next,
+  ) {
+    if (previous.length != next.length) return true;
+    if (previous.isEmpty) return false;
+
+    final sampleCount = math.min(16, previous.length);
+    final lastIndex = previous.length - 1;
+    for (var i = 0; i < sampleCount; i++) {
+      final ratio = sampleCount == 1 ? 0.0 : i / (sampleCount - 1);
+      final index = (lastIndex * ratio).round();
+      final prevPoint = previous[index];
+      final nextPoint = next[index];
+      final distance = geo.Geolocator.distanceBetween(
+        prevPoint.latitude,
+        prevPoint.longitude,
+        nextPoint.latitude,
+        nextPoint.longitude,
+      );
+      if (distance > 1.0) return true;
+    }
+    return false;
   }
 
   @override
@@ -1135,10 +1160,10 @@ class _CruiseModePageState extends State<CruiseModePage>
                 _userHeading = position.heading;
               }
             }
-            // Idle-Rebuilds auf 100ms throttlen: flüssige Kompass-Rotation
+            // Idle-Rebuilds auf 16ms throttlen: max. ein Rebuild pro Frame.
             final now = DateTime.now();
             if (_lastWebRebuildTime != null &&
-                now.difference(_lastWebRebuildTime!).inMilliseconds < 100) {
+                now.difference(_lastWebRebuildTime!).inMilliseconds < 16) {
               return;
             }
             _lastWebRebuildTime = now;
@@ -2128,9 +2153,11 @@ class _CruiseModePageState extends State<CruiseModePage>
         .map((c) => LatLng(c[1], c[0])) // [lng, lat] → LatLng(lat, lng)
         .toList();
 
-    _safeSetState(() {
-      _routeLatLngs = routeLatLngs;
-    });
+    if (_hasMeaningfulRouteChange(_routeLatLngs, routeLatLngs)) {
+      _safeSetState(() {
+        _routeLatLngs = routeLatLngs;
+      });
+    }
 
     if (animateCamera && _mapReady && routeLatLngs.isNotEmpty && mounted) {
       // Kurze Verzögerung damit setState durchgelaufen ist
@@ -2266,7 +2293,7 @@ class _CruiseModePageState extends State<CruiseModePage>
 
     // ── UI-Rebuild Throttling ───────────────────────────────────────────────
     // Marker-Position + Route-Start immer intern aktualisieren.
-    // setState nur wenn genug Zeit vergangen (Web: 300ms, Native: sofort).
+    // setState nur wenn genug Zeit vergangen (Web: 16ms, Native: sofort).
     _userPosition = LatLng(
       effectivePosition.latitude,
       effectivePosition.longitude,
@@ -2282,7 +2309,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     final skipRebuild =
         kIsWeb &&
         _lastWebRebuildTime != null &&
-        now.difference(_lastWebRebuildTime!).inMilliseconds < 150;
+        now.difference(_lastWebRebuildTime!).inMilliseconds < 16;
     if (!skipRebuild) {
       _lastWebRebuildTime = now;
       _safeSetState(() {});

@@ -291,6 +291,7 @@ class RouteService {
         final quality = _qualityValidator.validateQuality(
           coordinates: snapped.coordinates,
           isRoundTrip: false,
+          targetDistanceKm: targetDistanceKm,
           actualDistanceKm: actualKm,
         );
         final styleOk = styleConfig.validateStyleQuality(

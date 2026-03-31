@@ -494,76 +494,170 @@ class _HighwayToggleSwitch extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 200),
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      decoration: BoxDecoration(
-        color: isEnabled
-            ? const Color(0xFFFF3B30).withValues(alpha: 0.10)
-            : const Color(0xFF0B0E14),
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(
-          color: isEnabled
-              ? const Color(0xFFFF3B30).withValues(alpha: 0.4)
-              : Colors.white.withValues(alpha: 0.08),
-        ),
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 40,
-            height: 40,
+    final highwaysIncluded = !isEnabled;
+    final accentColor = highwaysIncluded
+        ? const Color(0xFFFF5A36)
+        : const Color(0xFFFF3B30);
+    final backgroundColor = highwaysIncluded
+        ? accentColor.withValues(alpha: 0.12)
+        : const Color(0xFF0B0E14);
+    final borderColor = highwaysIncluded
+        ? accentColor.withValues(alpha: 0.55)
+        : Colors.white.withValues(alpha: 0.08);
+    final description = highwaysIncluded
+        ? 'Autobahnen eingeschlossen'
+        : 'Nur Landstraßen & Ortsstraßen';
+
+    return Semantics(
+      button: true,
+      toggled: highwaysIncluded,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () => onChanged(!isEnabled),
+          borderRadius: BorderRadius.circular(12),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
+            width: double.infinity,
+            padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
-              color: isEnabled
-                  ? const Color(0xFFFF3B30).withValues(alpha: 0.18)
-                  : Colors.white.withValues(alpha: 0.04),
+              color: backgroundColor,
               borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: borderColor,
+                width: highwaysIncluded ? 1.5 : 1,
+              ),
+              boxShadow: highwaysIncluded
+                  ? [
+                      BoxShadow(
+                        color: accentColor.withValues(alpha: 0.22),
+                        blurRadius: 18,
+                        offset: const Offset(0, 8),
+                      ),
+                    ]
+                  : null,
             ),
-            child: Icon(
-              Icons.block_rounded,
-              color: isEnabled ? const Color(0xFFFF3B30) : Colors.white54,
-              size: 22,
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+            child: Row(
               children: [
-                Text(
-                  'Autobahn vermeiden',
-                  style: TextStyle(
-                    color: isEnabled ? Colors.white : Colors.white70,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 15,
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 200),
+                  width: 46,
+                  height: 46,
+                  decoration: BoxDecoration(
+                    color: highwaysIncluded
+                        ? accentColor.withValues(alpha: 0.18)
+                        : Colors.white.withValues(alpha: 0.04),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Icon(
+                    highwaysIncluded
+                        ? Icons.speed_rounded
+                        : Icons.route_rounded,
+                    color: highwaysIncluded ? accentColor : Colors.white60,
+                    size: 24,
                   ),
                 ),
-                const SizedBox(height: 2),
-                const Text(
-                  'Motorway, motorway_link und trunk werden gemieden.',
-                  style: TextStyle(color: Color(0xFFA0AEC0), fontSize: 11),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Text(
+                            'Autobahn-Zugang',
+                            style: TextStyle(
+                              color: Colors.white.withValues(alpha: 0.96),
+                              fontWeight: FontWeight.w700,
+                              fontSize: 15,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          AnimatedContainer(
+                            duration: const Duration(milliseconds: 200),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 4,
+                            ),
+                            decoration: BoxDecoration(
+                              color: highwaysIncluded
+                                  ? accentColor.withValues(alpha: 0.18)
+                                  : Colors.white.withValues(alpha: 0.06),
+                              borderRadius: BorderRadius.circular(999),
+                            ),
+                            child: Text(
+                              highwaysIncluded ? 'AN' : 'AUS',
+                              style: TextStyle(
+                                color: highwaysIncluded
+                                    ? accentColor
+                                    : Colors.white70,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w800,
+                                letterSpacing: 0.5,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        description,
+                        style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.68),
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500,
+                          height: 1.2,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 12),
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 200),
+                  width: 54,
+                  height: 32,
+                  padding: const EdgeInsets.all(4),
+                  decoration: BoxDecoration(
+                    color: highwaysIncluded
+                        ? accentColor.withValues(alpha: 0.22)
+                        : Colors.white.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(999),
+                    border: Border.all(
+                      color: highwaysIncluded
+                          ? accentColor.withValues(alpha: 0.4)
+                          : Colors.white.withValues(alpha: 0.06),
+                    ),
+                  ),
+                  child: AnimatedAlign(
+                    duration: const Duration(milliseconds: 200),
+                    alignment: highwaysIncluded
+                        ? Alignment.centerRight
+                        : Alignment.centerLeft,
+                    child: Container(
+                      width: 22,
+                      height: 22,
+                      decoration: BoxDecoration(
+                        color: highwaysIncluded ? accentColor : Colors.white70,
+                        shape: BoxShape.circle,
+                        boxShadow: [
+                          BoxShadow(
+                            color: (highwaysIncluded
+                                    ? accentColor
+                                    : Colors.black)
+                                .withValues(alpha: 0.25),
+                            blurRadius: 10,
+                            offset: const Offset(0, 3),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
                 ),
               ],
             ),
           ),
-          const SizedBox(width: 8),
-          SizedBox(
-            height: 30,
-            child: FittedBox(
-              child: Switch.adaptive(
-                value: isEnabled,
-                onChanged: onChanged,
-                activeThumbColor: const Color(0xFFFF3B30),
-                activeTrackColor: const Color(
-                  0xFFFF3B30,
-                ).withValues(alpha: 0.4),
-                inactiveThumbColor: Colors.white54,
-                inactiveTrackColor: Colors.white.withValues(alpha: 0.12),
-              ),
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }

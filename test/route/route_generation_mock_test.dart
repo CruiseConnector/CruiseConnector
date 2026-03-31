@@ -682,6 +682,41 @@ void main() {
         expect(first['randomSeed'], isNot(equals(second['randomSeed'])));
       },
     );
+
+    test(
+      'verwirft überlange Scenic-A→B-Routen und nimmt die nächste plausible Alternative',
+      () async {
+        var callCount = 0;
+        when(mockInvoker.invoke(any)).thenAnswer((_) async {
+          callCount++;
+          if (callCount == 1) {
+            return _buildRouteResponse(
+              distanceMeters: 640000,
+              durationSeconds: 24000,
+              coordinateCount: 800,
+            );
+          }
+          return _buildRouteResponse(
+            distanceMeters: 144000,
+            durationSeconds: 9000,
+            coordinateCount: 500,
+          );
+        });
+
+        final result = await service.generatePointToPoint(
+          startPosition: _munich(),
+          destinationLat: 47.8095,
+          destinationLng: 13.0550,
+          mode: 'Sport Mode',
+          scenic: true,
+          routeVariant: 1,
+        );
+
+        expect(callCount, 2);
+        expect(result.distanceKm, isNotNull);
+        expect(result.distanceKm!, lessThan(200));
+      },
+    );
   });
 
   // ─────────────────────── Fehlerbehandlung ──────────────────────────────────
