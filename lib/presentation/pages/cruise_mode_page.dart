@@ -15,6 +15,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:cruise_connect/core/constants.dart';
 
 import 'package:cruise_connect/data/services/web_position_smoother.dart';
+import 'package:cruise_connect/data/services/native_position_smoother.dart';
 import 'package:cruise_connect/data/services/geocoding_service.dart';
 import 'package:cruise_connect/data/services/navigation_guidance_utils.dart';
 import 'package:cruise_connect/data/services/navigation_progress_socket_service.dart';
@@ -166,6 +167,19 @@ class _CruiseModePageState extends State<CruiseModePage>
   // Web-only: GPS-Smoother für flüssige Positionsdarstellung (Kalman-Filter)
   final WebPositionSmoother _webSmoother = WebPositionSmoother();
 
+  // iOS/Android: Native GPS-Smoother mit Heading-Fusion (Kalman-Filter)
+  final NativePositionSmoother _nativeSmoother = NativePositionSmoother(
+    minMovementMeters: 1.5,
+    maxJumpMeters: 500.0,
+    minHeadingDistanceMeters: 3.0,
+    headingSmoothingFactor: 0.45, // iOS-optimiert: reaktiv aber nicht nervös
+    processNoise: 1.8,
+    stationaryNoiseMeters: 4.0,
+    headingNoiseThresholdDegrees: 12.0,
+    lowSpeedThresholdMs: 2.5, // Unter 9 km/h: Bewegungs-Heading priorisieren
+    highSpeedThresholdMs: 8.0, // Über 29 km/h: GPS-Heading priorisieren
+  );
+
   // Animierte Kamera-Bewegung zwischen GPS-Updates (alle Plattformen)
   AnimationController? _cameraAnimController;
   double _camFromLat = 0.0;
@@ -211,9 +225,14 @@ class _CruiseModePageState extends State<CruiseModePage>
   void initState() {
     super.initState();
     // Animierte Kamera-Bewegung zwischen GPS-Updates (alle Plattformen, 60fps)
+    // iOS: Kürzere Animation (200ms) für reaktiveres Apple-Maps-artiges Gefühl
+    // Web: Längere Animation (250ms) für smoothere Darstellung trotz unzuverlässiger GPS-Updates
+    final animDuration = (!kIsWeb && Platform.isIOS)
+        ? const Duration(milliseconds: 200)
+        : const Duration(milliseconds: 250);
     _cameraAnimController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 250),
+      duration: animDuration,
     )..addListener(_onCameraAnimationTick);
     if (widget.initialRoute != null) {
       WidgetsBinding.instance.addPostFrameCallback(
@@ -257,11 +276,20 @@ class _CruiseModePageState extends State<CruiseModePage>
     var lng = _camFromLng + (_camToLng - _camFromLng) * t;
     var heading = _lerpAngleDeg(_camFromHeading, _camToHeading, t);
 
+    // Plattformspezifische Vorhersage für flüssigere Animation
     if (kIsWeb && _webSmoother.current != null) {
       final prediction = _webSmoother.predict(DateTime.now());
       lat = lat + (prediction.lat - lat) * 0.35;
       lng = lng + (prediction.lng - lng) * 0.35;
       heading = _lerpAngleDeg(heading, prediction.heading, 0.35);
+    } else if (!kIsWeb && _nativeSmoother.hasValidHeading) {
+      // iOS/Android: Native Smoother für Heading-Prediction
+      final prediction = _nativeSmoother.predict(DateTime.now());
+      // Position sanft mischen (Kalman-geglättet)
+      lat = lat + (prediction.lat - lat) * 0.30;
+      lng = lng + (prediction.lng - lng) * 0.30;
+      // Heading stärker gewichten für reaktive Drehung (Apple-Maps-artig)
+      heading = _lerpAngleDeg(heading, prediction.heading, 0.45);
     }
 
     // Forward-Offset: Kartenzentrum ~100m in Fahrtrichtung verschieben,
@@ -283,10 +311,14 @@ class _CruiseModePageState extends State<CruiseModePage>
     final controller = _cameraAnimController;
     if (controller == null) return;
 
-    // Bearing-Dead-Zone: Heading-Änderungen unter 2° ignorieren (GPS-Rauschen)
+    // iOS: Kleinere Dead-Zone (1.5°) für reaktiveres Heading
+    // Andere Plattformen: 2° Standard
+    final deadZoneDegrees = (!kIsWeb && Platform.isIOS) ? 1.5 : 2.0;
+
+    // Bearing-Dead-Zone: Sehr kleine Heading-Änderungen ignorieren (GPS-Rauschen)
     var effectiveHeading = heading;
     final headingDelta = _angleDiff(_lastCameraHeading, heading).abs();
-    if (headingDelta < 2.0) {
+    if (headingDelta < deadZoneDegrees) {
       effectiveHeading = _lastCameraHeading;
     } else {
       _lastCameraHeading = heading;
@@ -1176,8 +1208,9 @@ class _CruiseModePageState extends State<CruiseModePage>
         geo.Geolocator.getPositionStream(locationSettings: settings).listen(
           (position) {
             if (!mounted || _disposed) return;
-            // Web: Smoother anwenden für flüssige Darstellung
+            // Plattformspezifisches Smoothing
             if (kIsWeb) {
+              // Web: Smoother anwenden für flüssige Darstellung
               final smoothed = _webSmoother.update(position);
               // Heading trotzdem immer aktualisieren (auch ohne Positions-Rebuild)
               _userHeading = _webSmoother.heading;
@@ -1185,11 +1218,18 @@ class _CruiseModePageState extends State<CruiseModePage>
                 _userLocation = smoothed;
               }
             } else {
-              _userLocation = position;
-              if (position.heading.isFinite &&
-                  position.heading >= 0 &&
-                  position.heading <= 360) {
-                _userHeading = position.heading;
+              // iOS/Android: Native Smoother mit Heading-Fusion
+              final smoothed = _nativeSmoother.update(position);
+              // Geglättetes Heading verwenden (fusioniert GPS + Bewegung)
+              if (_nativeSmoother.hasValidHeading) {
+                _userHeading = _nativeSmoother.heading;
+              }
+              // Position aktualisieren
+              if (smoothed != null) {
+                _userLocation = smoothed;
+              } else {
+                // Auch bei Stillstand: Heading-Updates zulassen
+                _userLocation = position;
               }
             }
             // Idle-Rebuilds auf 16ms throttlen: max. ein Rebuild pro Frame.
@@ -2232,8 +2272,12 @@ class _CruiseModePageState extends State<CruiseModePage>
     // Navigations-Startzeit setzen (nur beim ersten Start, nicht bei Resume)
     _navigationStartTime ??= DateTime.now();
 
-    // Web: Smoother resetten für frischen Start
-    if (kIsWeb) _webSmoother.reset();
+    // Smoother resetten für frischen Start
+    if (kIsWeb) {
+      _webSmoother.reset();
+    } else {
+      _nativeSmoother.reset();
+    }
 
     _distanceSinceLastRedraw = 0.0;
     _lastDrawnRouteIndex = _currentRouteIndex;
@@ -2291,27 +2335,29 @@ class _CruiseModePageState extends State<CruiseModePage>
   Future<void> _onLocationUpdate(geo.Position position) async {
     if (!mounted || _disposed) return;
 
-    // Web: GPS-Smoother anwenden — berechnet Heading aus Positionsverlauf
-    // (Browser liefert kein zuverlässiges heading, oft 0 oder NaN)
+    // Plattformspezifisches GPS-Smoothing und Heading-Fusion
     geo.Position effectivePosition;
     if (kIsWeb) {
+      // Web: Smoother berechnet Heading aus Positionsverlauf
+      // (Browser liefert kein zuverlässiges heading, oft 0 oder NaN)
       final smoothed = _webSmoother.update(position);
-      // Smoother gibt null zurück wenn Bewegung < 2m → trotzdem intern tracken
       effectivePosition = smoothed ?? _webSmoother.current ?? position;
       _userLocation = effectivePosition;
       _userHeading = _webSmoother.heading;
     } else {
-      effectivePosition = position;
-      _userLocation = position;
-      if (position.heading.isFinite &&
-          position.heading >= 0 &&
-          position.heading <= 360) {
-        _userHeading = position.heading;
+      // iOS/Android: Native Smoother mit Kalman-Filter und Heading-Fusion
+      // Kombiniert GPS-Heading mit Bewegungsrichtung für flüssige Rotation
+      final smoothed = _nativeSmoother.update(position);
+      effectivePosition = smoothed ?? _nativeSmoother.current ?? position;
+      _userLocation = effectivePosition;
+      // Geglättetes Heading verwenden (Apple-Maps-artiges Verhalten)
+      if (_nativeSmoother.hasValidHeading) {
+        _userHeading = _nativeSmoother.heading;
       }
     }
 
     // ── Kamera-Bewegung ──────────────────────────────────────────────────────
-    // Web: Animierte Interpolation (60fps smooth), Native: direkter Move
+    // Alle Plattformen: Animierte Interpolation (60fps smooth)
     if (_isCameraLocked && _mapReady) {
       if (kIsWeb) {
         final predicted = _webSmoother.predict(
@@ -2319,10 +2365,14 @@ class _CruiseModePageState extends State<CruiseModePage>
         );
         _animateCameraTo(predicted.lat, predicted.lng, predicted.heading);
       } else {
+        // iOS/Android: Vorhersage für noch flüssigere Animation
+        final predicted = _nativeSmoother.predict(
+          DateTime.now().add(const Duration(milliseconds: 150)),
+        );
         _animateCameraTo(
-          effectivePosition.latitude,
-          effectivePosition.longitude,
-          _userHeading,
+          predicted.lat != 0 ? predicted.lat : effectivePosition.latitude,
+          predicted.lng != 0 ? predicted.lng : effectivePosition.longitude,
+          _nativeSmoother.hasValidHeading ? predicted.heading : _userHeading,
         );
       }
     }
