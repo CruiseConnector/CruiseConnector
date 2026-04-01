@@ -2,16 +2,21 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 
-import 'package:flutter/foundation.dart' show compute;
+import 'package:flutter/foundation.dart' show compute, visibleForTesting;
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart' as geo;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:cruise_connect/core/constants.dart';
+import 'package:cruise_connect/data/services/prepared_route_buffer.dart';
+import 'package:cruise_connect/data/services/route_generation_coordinator.dart';
 import 'package:cruise_connect/data/services/route_quality_validator.dart';
+import 'package:cruise_connect/data/services/route_scenario.dart';
 import 'package:cruise_connect/domain/models/route_maneuver.dart';
 import 'package:cruise_connect/data/services/route_style_config.dart';
+import 'package:cruise_connect/data/services/route_variant.dart';
+import 'package:cruise_connect/data/services/seen_route_registry.dart';
 import 'package:cruise_connect/domain/models/route_result.dart';
 
 /// Top-level Funktion für Isolate-basiertes JSON-Parsing.
@@ -55,29 +60,19 @@ class RouteService {
   /// Flag: letzte Route kam aus dem Offline-Cache
   static bool lastRouteFromCache = false;
 
-  /// Letzte Seite für A→B Waypoint-Offset: 1 = rechts, -1 = links.
-  /// Wird bei jeder Generierung invertiert → garantiert verschiedene Routen.
-  static int _lastOffsetSide = 1;
-
   /// Letzte 3 Entdecker-Richtungen (in Grad) für Diversifizierung.
   // TODO: In SharedPreferences persistieren für Session-übergreifende Diversifizierung
   static final List<double> _recentExplorerBearings = [];
   static const RouteQualityValidator _qualityValidator =
       RouteQualityValidator();
-  static final List<List<List<double>>> _recentPointToPointRoutes = [];
+  static final Map<String, int> _scenarioVariantCounters = {};
 
   /// Session-Cache: verhindert doppelte API-Calls für identische Anfragen.
-  /// Key = gerundete Position + Modus + Distanz + diversityIndex, Value = RouteResult.
+  /// Key = konkrete Variant-/Request-Signatur, Value = RouteResult.
   static final Map<String, RouteResult> _sessionCache = {};
   
-  /// Diversitäts-Index: Wird bei jeder Neugenerierung erhöht.
-  /// Garantiert unterschiedliche direction_hints bei wiederholten Klicks.
+  /// Globaler Request-Zähler als Fallback für Legacy-Aufrufer.
   static int _globalDiversityIndex = 0;
-  
-  /// Fingerprints der zuletzt angezeigten Routen pro Szenario.
-  /// Verhindert identische Routen bei erneutem Klick.
-  static final Map<String, List<String>> _seenRouteFingerprints = {};
-  static const int _maxSeenFingerprints = 8;
   
   /// WORKER_LIMIT Cooldown: Nach diesem Fehler keine neuen Requests für X ms.
   static DateTime? _workerLimitCooldownUntil;
@@ -88,6 +83,19 @@ class RouteService {
 
   static bool requiresDestination(String routeType) {
     return routeType == 'POINT_TO_POINT';
+  }
+
+  @visibleForTesting
+  static bool disableBackgroundPreparation = false;
+
+  @visibleForTesting
+  static void resetForTests() {
+    _sessionCache.clear();
+    _scenarioVariantCounters.clear();
+    _globalDiversityIndex = 0;
+    _workerLimitCooldownUntil = null;
+    SeenRouteRegistry.clearAll();
+    PreparedRouteBuffer.clearAll();
   }
 
   /// Berechnet eine Rundkurs-Route von der aktuellen Position.
@@ -106,192 +114,145 @@ class RouteService {
     Map<String, double>? targetLocation,
     int? variantIndex,
   }) async {
-    final rng = math.Random(DateTime.now().millisecondsSinceEpoch);
     final styleConfig = RouteStyleConfig.forMode(mode);
     final normalizedTargetKm = styleConfig.clampRoundTripDistanceKm(
       targetDistanceKm,
     );
-    const maxAttempts = 1; // Single-Request: 1 Hauptversuch (+ 1 Fallback bei Timeout)
-
-    var directionHint = await _initialRoundTripDirectionHint(
-      rng: rng,
-      mode: mode,
-      variantIndex: variantIndex,
+    final scenario = RouteScenario(
+      routeType: 'ROUND_TRIP',
+      startLatitude: startPosition.latitude,
+      startLongitude: startPosition.longitude,
+      style: mode,
+      planningType: planningType,
+      targetDistanceKm: normalizedTargetKm.toDouble(),
     );
-    RouteResult? bestRoute;
-    var bestScore = double.infinity;
-    RouteServiceException? lastError;
 
-    for (var attempt = 0; attempt < maxAttempts; attempt++) {
-      if (attempt > 0) {
-        directionHint = _nextRetryDirectionHint(
-          baseDirectionHint: directionHint,
-          attempt: attempt,
-          rng: rng,
+    return RouteGenerationCoordinator.runSingleFlight(
+      scenario.scenarioKey,
+      () async {
+        final prepared = _takePreparedRoute(
+          scenario: scenario,
         );
-      }
-
-      try {
-        final body = _buildRoundTripRequest(
-          startPosition: startPosition,
-          targetDistanceKm: normalizedTargetKm,
-          mode: mode,
-          planningType: planningType,
-          styleConfig: styleConfig,
-          targetLocation: targetLocation,
-          directionHint: directionHint,
-        );
-        final result = await _invoke(body);
-        final snapped = _snapRouteToStartPosition(result, startPosition);
-        final actualKm = snapped.distanceKm ?? 0;
-        final quality = _qualityValidator.validateQuality(
-          coordinates: snapped.coordinates,
-          isRoundTrip: true,
-          targetDistanceKm: normalizedTargetKm.toDouble(),
-          actualDistanceKm: actualKm,
-        );
-        final classification = _qualityValidator.classifyGeneratedRoute(
-          quality: quality,
-          isRoundTrip: true,
-          coordinateCount: snapped.coordinates.length,
-          actualDistanceKm: actualKm,
-          targetDistanceKm: normalizedTargetKm.toDouble(),
-        );
-        final styleOk = styleConfig.validateStyleQuality(
-          coordinates: snapped.coordinates,
-          distanceKm: actualKm,
-          durationSeconds: snapped.durationSeconds,
-        );
-        final score =
-            classification.score +
-            (styleOk ? 0 : 20) +
-            quality.returnPathPercent * 0.5;
-
-        if (score < bestScore) {
-          bestRoute = snapped;
-          bestScore = score;
+        if (prepared != null) {
+          return prepared;
         }
 
-        final isAccepted = quality.passed && styleOk;
-        debugPrint(
-          '[RouteService] RoundTrip attempt ${attempt + 1}/$maxAttempts: '
-          'target=${normalizedTargetKm}km, actual=${actualKm.toStringAsFixed(1)}km, '
-          'overlap=${quality.overlapPercent.toStringAsFixed(1)}%, '
-          'return=${quality.returnPathPercent.toStringAsFixed(1)}%, '
-          'uturns=${quality.uturnPositions.length}, loop=${quality.isLoopClosed}, '
-          'styleOk=$styleOk, accepted=$isAccepted',
-        );
-        if (isAccepted) {
-          return _finalizeRoute(snapped);
-        }
-      } catch (e, stack) {
-        final mapped = e is RouteServiceException
-            ? e
-            : _mapInvokeException(
-                error: e,
-                stack: stack,
-                routeType: 'ROUND_TRIP',
+        final hasSeenHistory = SeenRouteRegistry.entriesFor(
+          scenario.scenarioKey,
+        ).isNotEmpty;
+        final maxAttempts = hasSeenHistory
+            ? math.min(3, math.max(2, styleConfig.retryAttempts))
+            : 1;
+        _RouteCandidate? bestCandidate;
+        _RouteCandidate? spareCandidate;
+        var bestScore = double.infinity;
+        RouteServiceException? lastError;
+
+        for (var attempt = 0; attempt < maxAttempts; attempt++) {
+          if (_isInWorkerLimitCooldown()) break;
+          final variant = await _nextRoundTripVariant(
+            scenario,
+            styleConfig: styleConfig,
+            explicitIndex: attempt == 0 ? variantIndex : null,
+          );
+          try {
+            final candidate = await _requestRoundTripVariant(
+              scenario: scenario,
+              styleConfig: styleConfig,
+              startPosition: startPosition,
+              targetLocation: targetLocation,
+              variant: variant,
+              candidateBudget: hasSeenHistory ? 4 : 5,
+            );
+            if (!candidate.hardRejected && candidate.score < bestScore) {
+              if (bestCandidate != null && candidate.accepted) {
+                spareCandidate ??= candidate;
+              }
+              bestCandidate = candidate;
+              bestScore = candidate.score;
+            } else if (candidate.accepted) {
+              spareCandidate ??= candidate;
+            }
+            if (candidate.accepted) {
+              final finalized = _finalizeAndRemember(
+                scenario: scenario,
+                route: candidate.route,
+                sampledCoordinates: candidate.sampledCoordinates,
+                fingerprint: candidate.fingerprint,
               );
-        lastError = mapped;
-        debugPrint(
-          '[RouteService] RoundTrip attempt ${attempt + 1}/$maxAttempts fehlgeschlagen: ${mapped.debugMessage}',
-        );
-      }
-    }
+              if (spareCandidate != null) {
+                PreparedRouteBuffer.store(
+                  scenario.scenarioKey,
+                  PreparedRouteEntry(
+                    route: spareCandidate.route,
+                    variant: spareCandidate.variant,
+                    preparedAt: DateTime.now(),
+                  ),
+                );
+              } else if (!hasSeenHistory) {
+                _schedulePreparedRoundTripRoute(
+                  scenario: scenario,
+                  styleConfig: styleConfig,
+                  startPosition: startPosition,
+                );
+              }
+              return finalized;
+            }
+          } catch (e, stack) {
+            final mapped = e is RouteServiceException
+                ? e
+                : _mapInvokeException(
+                    error: e,
+                    stack: stack,
+                    routeType: scenario.routeType,
+                  );
+            lastError = mapped;
+            if (_isWorkerLimitError(mapped)) {
+              _setWorkerLimitCooldown();
+            }
+            debugPrint(
+              '[RouteService] RoundTrip candidate ${attempt + 1}/$maxAttempts fehlgeschlagen: ${mapped.debugMessage}',
+            );
+          }
+        }
 
-    // ══════════════════════════════════════════════════════════════════════════
-    // SILENT FALLBACK SYSTEM — Keine Fehlermeldungen, immer eine Route liefern
-    // ══════════════════════════════════════════════════════════════════════════
-    
-    // Stufe 2: Vereinfachte Waypoints (nur 2 statt 4)
-    if (bestRoute == null) {
-      debugPrint('[RouteService] 🔄 Stufe 2: Vereinfachte Waypoints...');
-      try {
-        final fallbackBody = _buildRoundTripRequest(
-          startPosition: startPosition,
-          targetDistanceKm: normalizedTargetKm,
-          mode: mode,
-          planningType: planningType,
+        if (bestCandidate != null) {
+          return _finalizeAndRemember(
+            scenario: scenario,
+            route: bestCandidate.route,
+            sampledCoordinates: bestCandidate.sampledCoordinates,
+            fingerprint: bestCandidate.fingerprint,
+          );
+        }
+
+        final fallback = await _tryRoundTripFallback(
+          scenario: scenario,
           styleConfig: styleConfig,
-          targetLocation: targetLocation,
-          directionHint: directionHint,
-        );
-        fallbackBody['simplify_waypoints'] = true;
-        fallbackBody['max_waypoints'] = 2;
-        final fallbackResult = await _invoke(fallbackBody);
-        final snapped = _snapRouteToStartPosition(
-          fallbackResult,
-          startPosition,
-        );
-        lastRouteFromCache = false;
-        return _finalizeRoute(snapped);
-      } catch (e) {
-        debugPrint('[RouteService] Stufe 2 fehlgeschlagen: $e');
-      }
-    }
-    
-    // Stufe 3: Direkte A→B Route (kein Rundkurs, aber besser als nichts)
-    if (bestRoute == null) {
-      debugPrint('[RouteService] 🔄 Stufe 3: Direkte Fallback-Route...');
-      try {
-        // Erzeuge einen Punkt in Zielrichtung als Pseudo-Ziel
-        final pseudoDestLat = startPosition.latitude + 
-            (math.cos(directionHint * math.pi / 180) * normalizedTargetKm / 111.0 / 2);
-        final pseudoDestLng = startPosition.longitude + 
-            (math.sin(directionHint * math.pi / 180) * normalizedTargetKm / 111.0 / 2);
-        
-        final directBody = _buildPointToPointRequest(
           startPosition: startPosition,
-          destinationLat: pseudoDestLat,
-          destinationLng: pseudoDestLng,
-          mode: 'Standard',
-          scenic: false,
-          normalizedVariant: 0,
-          avoidHighways: false,
-          styleConfig: RouteStyleConfig.forMode('Sport Mode'),
-          targetDistanceKm: normalizedTargetKm.toDouble(),
-          randomSeed: _nextRandomSeed(),
-          detourFactor: 1.0,
+          targetLocation: targetLocation,
         );
-        directBody['simplify_waypoints'] = true;
-        directBody['max_waypoints'] = 0;
-        final directResult = await _invoke(directBody);
-        final snapped = _snapRouteToStartPosition(directResult, startPosition);
-        lastRouteFromCache = false;
-        return _finalizeRoute(snapped);
-      } catch (e) {
-        debugPrint('[RouteService] Stufe 3 fehlgeschlagen: $e');
-      }
-    }
-    
-    // Stufe 4: Letzte gecachte Route aus SharedPreferences
-    if (bestRoute == null) {
-      debugPrint('[RouteService] 🔄 Stufe 4: Offline-Cache...');
-      final cached = await _loadCachedRoute();
-      if (cached != null) {
-        debugPrint('[RouteService] 📶 Letzte bekannte Route geladen');
-        lastRouteFromCache = true;
-        return cached;
-      }
-    }
+        if (fallback != null) {
+          return fallback;
+        }
 
-    // Fallback: Wenn bestRoute existiert, diese nutzen
-    if (bestRoute != null) {
-      debugPrint(
-        '[RouteService] Kein idealer Rundkurs gefunden, liefere beste verfügbare Route zurück (score=${bestScore.toStringAsFixed(1)}).',
-      );
-      lastRouteFromCache = false;
-      return _finalizeRoute(bestRoute);
-    }
-
-    // Letzter Ausweg: Werfe Exception (sollte fast nie passieren)
-    throw lastError ??
-        const RouteServiceException(
-          type: RouteErrorType.quality,
-          userMessage:
-              'Route wird geladen...',
-          debugMessage: 'RoundTrip generation failed without usable result.',
+        final cached = await _loadCachedRoute(
+          scenarioKey: scenario.scenarioKey,
         );
+        if (cached != null) {
+          lastRouteFromCache = true;
+          return cached;
+        }
+
+        throw lastError ??
+            const RouteServiceException(
+              type: RouteErrorType.quality,
+              userMessage:
+                  'Kein passender Rundkurs gefunden. Bitte versuche es erneut.',
+              debugMessage:
+                  'RoundTrip generation failed without usable result.',
+            );
+      },
+    );
   }
 
   /// Berechnet eine Route von A nach B (direkt oder scenic).
@@ -312,15 +273,15 @@ class RouteService {
     final styleConfig = RouteStyleConfig.forMode(mode);
     final normalizedVariant = routeVariant.clamp(0, 3);
     final detourFactor = switch (normalizedVariant) {
-      1 => 1.30,
-      2 => 1.65,
-      3 => 2.10,
+      1 => 1.24,
+      2 => 1.52,
+      3 => 1.92,
       _ => scenic ? 1.15 : 1.0,
     };
     final detourMinimumExtraKm = switch (normalizedVariant) {
-      1 => 6.0,
-      2 => 16.0,
-      3 => 34.0,
+      1 => 5.0,
+      2 => 12.0,
+      3 => 24.0,
       _ => scenic ? 3.0 : 0.0,
     };
     final directDistanceKm = math.max(
@@ -334,9 +295,9 @@ class RouteService {
       1.0,
     );
     final scenicTargetKm = switch (normalizedVariant) {
-      1 => directDistanceKm * 1.30,
-      2 => directDistanceKm * 1.65,
-      3 => directDistanceKm * 2.05,
+      1 => directDistanceKm * 1.24,
+      2 => directDistanceKm * 1.50,
+      3 => directDistanceKm * 1.88,
       _ => scenic ? directDistanceKm * 1.15 : directDistanceKm,
     };
     final initialTargetDistanceKm = math.max(
@@ -350,182 +311,158 @@ class RouteService {
       detourVariant: normalizedVariant,
     );
     final shouldDiversify = scenic || normalizedVariant > 0;
-    const maxAttempts = 1; // Single-Request: 1 Hauptversuch (+ 1 Fallback bei Timeout)
+    final scenario = RouteScenario(
+      routeType: 'POINT_TO_POINT',
+      startLatitude: startPosition.latitude,
+      startLongitude: startPosition.longitude,
+      destinationLatitude: destinationLat,
+      destinationLongitude: destinationLng,
+      style: shouldDiversify ? mode : 'Standard',
+      planningType: 'Zufall',
+      targetDistanceKm: targetDistanceKm,
+      detourLevel: normalizedVariant,
+      avoidHighways: avoidHighways,
+    );
 
-    RouteResult? bestRoute;
-    var bestScore = double.infinity;
-    RouteServiceException? lastError;
+    return RouteGenerationCoordinator.runSingleFlight(
+      scenario.scenarioKey,
+      () async {
+        final prepared = _takePreparedRoute(
+          scenario: scenario,
+        );
+        if (prepared != null) {
+          return prepared;
+        }
 
-    for (var attempt = 0; attempt < maxAttempts; attempt++) {
-      final diversityIndex = diversitySeed + attempt;
-      final randomSeed = _nextRandomSeed();
-      final jitteredDetourFactor = _jitteredDetourFactor(
-        base: detourFactor,
-        scenic: scenic,
-        normalizedVariant: normalizedVariant,
-        randomSeed: randomSeed,
-      );
-      final offsetSide = shouldDiversify
-          ? _nextOffsetSideForDiversity(diversityIndex)
-          : null;
+        final hasSeenHistory = SeenRouteRegistry.entriesFor(
+          scenario.scenarioKey,
+        ).isNotEmpty;
+        final maxAttempts = shouldDiversify
+            ? 2
+            : (hasSeenHistory ? 2 : 1);
+        _RouteCandidate? bestCandidate;
+        _RouteCandidate? spareCandidate;
+        var bestScore = double.infinity;
+        RouteServiceException? lastError;
 
-      try {
-        final body = _buildPointToPointRequest(
+        for (var attempt = 0; attempt < maxAttempts; attempt++) {
+          if (_isInWorkerLimitCooldown()) break;
+          final variant = _nextPointToPointVariant(
+            scenario,
+            normalizedVariant: normalizedVariant,
+            diversitySeed: diversitySeed + attempt,
+            shouldDiversify: shouldDiversify,
+          );
+          try {
+            final candidate = await _requestPointToPointVariant(
+              scenario: scenario,
+              styleConfig: styleConfig,
+              startPosition: startPosition,
+              destinationLat: destinationLat,
+              destinationLng: destinationLng,
+              scenic: scenic,
+              normalizedVariant: normalizedVariant,
+              avoidHighways: avoidHighways,
+              directDistanceKm: directDistanceKm,
+              targetDistanceKm: targetDistanceKm,
+              detourFactor: detourFactor,
+              variant: variant,
+              candidateBudget: hasSeenHistory ? 3 : 4,
+            );
+            if (!candidate.hardRejected && candidate.score < bestScore) {
+              if (bestCandidate != null && candidate.accepted) {
+                spareCandidate ??= candidate;
+              }
+              bestCandidate = candidate;
+              bestScore = candidate.score;
+            } else if (candidate.accepted) {
+              spareCandidate ??= candidate;
+            }
+            if (candidate.accepted) {
+              final finalized = _finalizeAndRemember(
+                scenario: scenario,
+                route: candidate.route,
+                sampledCoordinates: candidate.sampledCoordinates,
+                fingerprint: candidate.fingerprint,
+              );
+              if (spareCandidate != null) {
+                PreparedRouteBuffer.store(
+                  scenario.scenarioKey,
+                  PreparedRouteEntry(
+                    route: spareCandidate.route,
+                    variant: spareCandidate.variant,
+                    preparedAt: DateTime.now(),
+                  ),
+                );
+              } else if (shouldDiversify) {
+                _schedulePreparedPointToPointRoute(
+                  scenario: scenario,
+                  styleConfig: styleConfig,
+                  startPosition: startPosition,
+                  destinationLat: destinationLat,
+                  destinationLng: destinationLng,
+                  avoidHighways: avoidHighways,
+                  directDistanceKm: directDistanceKm,
+                );
+              }
+              return finalized;
+            }
+          } catch (e, stack) {
+            final mapped = e is RouteServiceException
+                ? e
+                : _mapInvokeException(
+                    error: e,
+                    stack: stack,
+                    routeType: scenario.routeType,
+                  );
+            lastError = mapped;
+            if (_isWorkerLimitError(mapped)) {
+              _setWorkerLimitCooldown();
+            }
+            debugPrint(
+              '[RouteService] A→B candidate ${attempt + 1}/$maxAttempts fehlgeschlagen: ${mapped.debugMessage}',
+            );
+          }
+        }
+
+        if (bestCandidate != null) {
+          return _finalizeAndRemember(
+            scenario: scenario,
+            route: bestCandidate.route,
+            sampledCoordinates: bestCandidate.sampledCoordinates,
+            fingerprint: bestCandidate.fingerprint,
+          );
+        }
+
+        final fallback = await _tryPointToPointFallback(
+          scenario: scenario,
           startPosition: startPosition,
           destinationLat: destinationLat,
           destinationLng: destinationLng,
-          mode: mode,
-          scenic: scenic,
-          normalizedVariant: normalizedVariant,
           avoidHighways: avoidHighways,
-          styleConfig: styleConfig,
-          targetDistanceKm: targetDistanceKm,
-          randomSeed: randomSeed,
-          detourFactor: jitteredDetourFactor,
-          offsetSide: offsetSide,
+          directDistanceKm: directDistanceKm,
         );
-        final result = await _invoke(body);
-        final snapped = _snapRouteToStartPosition(result, startPosition);
-        final actualKm = snapped.distanceKm ?? 0;
-        final quality = _qualityValidator.validateQuality(
-          coordinates: snapped.coordinates,
-          isRoundTrip: false,
-          targetDistanceKm: targetDistanceKm,
-          actualDistanceKm: actualKm,
-        );
-        final styleOk = styleConfig.validateStyleQuality(
-          coordinates: snapped.coordinates,
-          distanceKm: actualKm,
-          durationSeconds: snapped.durationSeconds,
-        );
-        final isSimilarToRecent = shouldDiversify
-            ? RouteQualityValidator.isRouteTooSimilarToPrevious(
-                snapped.coordinates,
-                _recentPointToPointRoutes,
-                thresholdPercent: 82.0,
-              )
-            : false;
-
-        final score =
-            quality.overlapPercent +
-            quality.uturnPositions.length * 20 +
-            (styleOk ? 0 : 15) +
-            (isSimilarToRecent ? 35 : 0);
-        if (score < bestScore) {
-          bestScore = score;
-          bestRoute = snapped;
+        if (fallback != null) {
+          return fallback;
         }
 
-        final accepted =
-            quality.passed &&
-            styleOk &&
-            (!shouldDiversify || !isSimilarToRecent);
-        debugPrint(
-          '[RouteService] A→B attempt ${attempt + 1}/$maxAttempts: '
-          'variant=$normalizedVariant, target=${targetDistanceKm.toStringAsFixed(1)}km, '
-          'actual=${actualKm.toStringAsFixed(1)}km, overlap=${quality.overlapPercent.toStringAsFixed(1)}%, '
-          'uturns=${quality.uturnPositions.length}, styleOk=$styleOk, '
-          'offset=$offsetSide, accepted=$accepted',
+        final cached = await _loadCachedRoute(
+          scenarioKey: scenario.scenarioKey,
         );
-        if (accepted) {
-          _rememberPointToPointFingerprint(snapped);
-          return _finalizeRoute(snapped);
+        if (cached != null) {
+          lastRouteFromCache = true;
+          return cached;
         }
-      } catch (e, stack) {
-        final mapped = e is RouteServiceException
-            ? e
-            : _mapInvokeException(
-                error: e,
-                stack: stack,
-                routeType: 'POINT_TO_POINT',
-              );
-        lastError = mapped;
-        debugPrint(
-          '[RouteService] A→B attempt ${attempt + 1}/$maxAttempts fehlgeschlagen: ${mapped.debugMessage}',
-        );
-      }
-    }
 
-    if (bestRoute != null) {
-      _rememberPointToPointFingerprint(bestRoute);
-      lastRouteFromCache = false;
-      return _finalizeRoute(bestRoute);
-    }
-
-    // ══════════════════════════════════════════════════════════════════════════
-    // SILENT FALLBACK SYSTEM — Keine Fehlermeldungen, immer eine Route liefern
-    // ══════════════════════════════════════════════════════════════════════════
-    
-    // Stufe 2: Vereinfachte Waypoints (nur 2 statt 4)
-    debugPrint('[RouteService] 🔄 Stufe 2: Vereinfachte A→B Waypoints...');
-    try {
-      final simplifiedBody = _buildPointToPointRequest(
-        startPosition: startPosition,
-        destinationLat: destinationLat,
-        destinationLng: destinationLng,
-        mode: 'Standard',
-        scenic: false,
-        normalizedVariant: 0,
-        avoidHighways: avoidHighways,
-        styleConfig: RouteStyleConfig.forMode('Sport Mode'),
-        targetDistanceKm: directDistanceKm,
-        randomSeed: _nextRandomSeed(),
-        detourFactor: 1.0,
-      );
-      simplifiedBody['simplify_waypoints'] = true;
-      simplifiedBody['max_waypoints'] = 2;
-      final result = await _invoke(simplifiedBody);
-      final snapped = _snapRouteToStartPosition(result, startPosition);
-      _rememberPointToPointFingerprint(snapped);
-      lastRouteFromCache = false;
-      return _finalizeRoute(snapped);
-    } catch (e) {
-      debugPrint('[RouteService] Stufe 2 fehlgeschlagen: $e');
-    }
-    
-    // Stufe 3: Reine A→B Direktroute ohne Zwischenpunkte
-    debugPrint('[RouteService] 🔄 Stufe 3: Direkte A→B Route ohne Waypoints...');
-    try {
-      final directBody = _buildPointToPointRequest(
-        startPosition: startPosition,
-        destinationLat: destinationLat,
-        destinationLng: destinationLng,
-        mode: 'Standard',
-        scenic: false,
-        normalizedVariant: 0,
-        avoidHighways: false,
-        styleConfig: RouteStyleConfig.forMode('Sport Mode'),
-        targetDistanceKm: directDistanceKm,
-        randomSeed: _nextRandomSeed(),
-        detourFactor: 1.0,
-      );
-      directBody['simplify_waypoints'] = true;
-      directBody['max_waypoints'] = 0;
-      final result = await _invoke(directBody);
-      final snapped = _snapRouteToStartPosition(result, startPosition);
-      _rememberPointToPointFingerprint(snapped);
-      lastRouteFromCache = false;
-      return _finalizeRoute(snapped);
-    } catch (e) {
-      debugPrint('[RouteService] Stufe 3 fehlgeschlagen: $e');
-    }
-    
-    // Stufe 4: Letzte gecachte Route aus SharedPreferences
-    debugPrint('[RouteService] 🔄 Stufe 4: Offline-Cache...');
-    final cached = await _loadCachedRoute();
-    if (cached != null) {
-      debugPrint('[RouteService] 📶 Letzte bekannte Route geladen');
-      lastRouteFromCache = true;
-      return cached;
-    }
-
-    // Letzter Ausweg: Exception mit neutraler Nachricht
-    throw lastError ??
-        const RouteServiceException(
-          type: RouteErrorType.noRoute,
-          userMessage: 'Route wird geladen...',
-          debugMessage: 'Point-to-point generation failed without result.',
-        );
+        throw lastError ??
+            const RouteServiceException(
+              type: RouteErrorType.noRoute,
+              userMessage:
+                  'Keine passende Route gefunden. Bitte versuche es erneut.',
+              debugMessage: 'Point-to-point generation failed without result.',
+            );
+      },
+    );
   }
 
   /// Generiert sequentiell Rundkurse mit Early-Exit bei guter Qualität.
@@ -540,72 +477,21 @@ class RouteService {
     required String planningType,
     int maxCandidates = 3,
   }) async {
-    debugPrint(
-      '[RouteService] 🔄 Sequentielle Kandidatensuche: max $maxCandidates Versuche',
-    );
     final results = <RouteResult>[];
-    
     for (var i = 0; i < maxCandidates; i++) {
-      // WORKER_LIMIT Cooldown prüfen
-      if (_isInWorkerLimitCooldown()) {
-        debugPrint('[RouteService] ⏳ WORKER_LIMIT Cooldown aktiv — Abbruch');
+      try {
+        results.add(
+          await generateRoundTrip(
+            startPosition: startPosition,
+            targetDistanceKm: targetDistanceKm,
+            mode: mode,
+            planningType: planningType,
+          ),
+        );
+      } catch (_) {
         break;
       }
-      
-      try {
-        final candidate = await generateRoundTrip(
-          startPosition: startPosition,
-          targetDistanceKm: targetDistanceKm,
-          mode: mode,
-          planningType: planningType,
-          variantIndex: _globalDiversityIndex + i,
-        );
-        results.add(candidate);
-        
-        // Qualitätsprüfung mit Early-Exit
-        final quality = _qualityValidator.validateQuality(
-          coordinates: candidate.coordinates,
-          isRoundTrip: true,
-          targetDistanceKm: targetDistanceKm.toDouble(),
-          actualDistanceKm: candidate.distanceKm ?? 0,
-        );
-        final classification = _qualityValidator.classifyGeneratedRoute(
-          quality: quality,
-          isRoundTrip: true,
-          coordinateCount: candidate.coordinates.length,
-          actualDistanceKm: candidate.distanceKm ?? 0,
-          targetDistanceKm: targetDistanceKm.toDouble(),
-        );
-        
-        debugPrint(
-          '[RouteService] Kandidat ${i + 1}: tier=${classification.tier}, '
-          'score=${classification.score.toStringAsFixed(1)}, '
-          'overlap=${quality.overlapPercent.toStringAsFixed(1)}%',
-        );
-        
-        // Early-Exit bei idealer Route
-        if (classification.isIdeal) {
-          debugPrint('[RouteService] ✓ Ideale Route gefunden — Early-Exit');
-          break;
-        }
-        // Early-Exit bei acceptable Route nach 2+ Versuchen
-        if (classification.isAcceptable && i >= 1) {
-          debugPrint('[RouteService] ✓ Acceptable Route gefunden — Early-Exit');
-          break;
-        }
-      } catch (e) {
-        debugPrint('[RouteService] Kandidat ${i + 1} fehlgeschlagen: $e');
-        // Bei WORKER_LIMIT sofort abbrechen
-        if (_isWorkerLimitError(e)) {
-          _setWorkerLimitCooldown();
-          break;
-        }
-      }
     }
-    
-    debugPrint(
-      '[RouteService] ${results.length} Rundkurse sequentiell generiert',
-    );
     return results;
   }
 
@@ -621,59 +507,25 @@ class RouteService {
     bool avoidHighways = false,
     int maxCandidates = 2,
   }) async {
-    debugPrint(
-      '[RouteService] 🔄 Sequentielle A→B-Suche: max $maxCandidates Versuche',
-    );
     final results = <RouteResult>[];
-    
     for (var i = 0; i < maxCandidates; i++) {
-      if (_isInWorkerLimitCooldown()) {
-        debugPrint('[RouteService] ⏳ WORKER_LIMIT Cooldown aktiv — Abbruch');
+      try {
+        results.add(
+          await generatePointToPoint(
+            startPosition: startPosition,
+            destinationLat: destinationLat,
+            destinationLng: destinationLng,
+            mode: mode,
+            scenic: scenic,
+            routeVariant: routeVariant,
+            avoidHighways: avoidHighways,
+            diversitySeed: i,
+          ),
+        );
+      } catch (_) {
         break;
       }
-      
-      try {
-        final candidate = await generatePointToPoint(
-          startPosition: startPosition,
-          destinationLat: destinationLat,
-          destinationLng: destinationLng,
-          mode: mode,
-          scenic: scenic,
-          routeVariant: routeVariant,
-          avoidHighways: avoidHighways,
-          diversitySeed: _globalDiversityIndex + i * 3,
-        );
-        results.add(candidate);
-        
-        // Qualitätsprüfung
-        final quality = _qualityValidator.validateQuality(
-          coordinates: candidate.coordinates,
-          isRoundTrip: false,
-          actualDistanceKm: candidate.distanceKm ?? 0,
-        );
-        
-        debugPrint(
-          '[RouteService] A→B Kandidat ${i + 1}: overlap=${quality.overlapPercent.toStringAsFixed(1)}%, '
-          'Punkte=${candidate.coordinates.length}',
-        );
-        
-        // Early-Exit bei guter Qualität
-        if (quality.passed && candidate.coordinates.length >= 30) {
-          debugPrint('[RouteService] ✓ Gute A→B-Route gefunden — Early-Exit');
-          break;
-        }
-      } catch (e) {
-        debugPrint('[RouteService] A→B Kandidat ${i + 1} fehlgeschlagen: $e');
-        if (_isWorkerLimitError(e)) {
-          _setWorkerLimitCooldown();
-          break;
-        }
-      }
     }
-    
-    debugPrint(
-      '[RouteService] ${results.length} A→B-Routen sequentiell generiert',
-    );
     return results;
   }
   
@@ -681,7 +533,8 @@ class RouteService {
   
   static bool _isWorkerLimitError(dynamic error) {
     if (error is RouteServiceException) {
-      return error.debugMessage.contains('WORKER_LIMIT') ||
+      return error.type == RouteErrorType.workerLimit ||
+             error.debugMessage.contains('WORKER_LIMIT') ||
              error.debugMessage.contains('546') ||
              error.debugMessage.contains('compute resources');
     }
@@ -731,31 +584,31 @@ class RouteService {
   /// Prüft ob eine Route bereits kürzlich angezeigt wurde.
   static bool isRouteRecentlySeen(String scenarioKey, RouteResult route) {
     final fingerprint = _calculateRouteFingerprint(route);
-    final seen = _seenRouteFingerprints[scenarioKey] ?? [];
-    return seen.contains(fingerprint);
+    return SeenRouteRegistry.hasExactFingerprint(scenarioKey, fingerprint);
   }
   
   /// Merkt sich eine Route als "gesehen" für ein Szenario.
   static void markRouteAsSeen(String scenarioKey, RouteResult route) {
     final fingerprint = _calculateRouteFingerprint(route);
-    final seen = _seenRouteFingerprints.putIfAbsent(scenarioKey, () => []);
-    if (!seen.contains(fingerprint)) {
-      seen.add(fingerprint);
-      // Max N Fingerprints behalten
-      while (seen.length > _maxSeenFingerprints) {
-        seen.removeAt(0);
-      }
-    }
+    final sampledCoordinates = route.coordinates
+        .where((point) => point.length >= 2)
+        .map((point) => [point[0], point[1]])
+        .toList();
+    SeenRouteRegistry.remember(
+      scenarioKey,
+      fingerprint: fingerprint,
+      sampledCoordinates: sampledCoordinates,
+    );
   }
   
   /// Löscht die "gesehen"-Historie für ein Szenario.
   static void clearSeenRoutes(String scenarioKey) {
-    _seenRouteFingerprints.remove(scenarioKey);
+    SeenRouteRegistry.clearScenario(scenarioKey);
   }
-  
+
   /// Löscht alle "gesehen"-Historien.
   static void clearAllSeenRoutes() {
-    _seenRouteFingerprints.clear();
+    SeenRouteRegistry.clearAll();
   }
   
   // ─────────────────────── LEGACY: Parallel-Methoden (deprecated) ──────────
@@ -813,10 +666,11 @@ class RouteService {
     required String mode,
     required String planningType,
     required RouteStyleConfig styleConfig,
+    required RouteVariant variant,
     Map<String, double>? targetLocation,
     double? directionHint,
+    int candidateBudget = 6,
   }) {
-    final randomSeed = _nextRandomSeed();
     return <String, dynamic>{
       'startLocation': {
         'latitude': startPosition.latitude,
@@ -827,8 +681,11 @@ class RouteService {
       'route_type': 'ROUND_TRIP',
       'planning_type': planningType,
       'language': 'de',
-      'randomSeed': randomSeed,
+      'randomSeed': variant.seed,
       'continue_straight': true, // Verhindert unnötige U-Turns
+      'route_variant_hint': variant.variantHint,
+      'route_fingerprint_hint': variant.fingerprintHint,
+      'max_candidate_attempts': candidateBudget,
       ...styleConfig.toRequestHints(),
       if (targetLocation != null) 'targetLocation': targetLocation,
       // Richtungshinweis für die Edge Function: bestimmt die Hauptrichtung
@@ -847,9 +704,10 @@ class RouteService {
     required bool avoidHighways,
     required RouteStyleConfig styleConfig,
     required double targetDistanceKm,
-    required int randomSeed,
     required double detourFactor,
+    required RouteVariant variant,
     int? offsetSide,
+    int candidateBudget = 5,
   }) {
     return <String, dynamic>{
       'startLocation': {
@@ -866,16 +724,20 @@ class RouteService {
       'avoid_highways': avoidHighways,
       'language': 'de',
       'continue_straight': true,
+      'randomSeed': variant.seed,
+      'route_variant_hint': variant.variantHint,
+      'route_fingerprint_hint': variant.fingerprintHint,
+      'max_candidate_attempts': candidateBudget,
       ...styleConfig.toRequestHints(),
       if (scenic || normalizedVariant > 0) ...{
         'targetDistance': double.parse(targetDistanceKm.toStringAsFixed(1)),
-        'randomSeed': randomSeed,
         'detour_level': normalizedVariant,
         'detour_factor': detourFactor,
       },
       // Seite für Waypoint-Offset: -1 = links, +1 = rechts der Direktlinie.
       // Edge Function nutzt dies als baseSide-Override für Diversifizierung.
-      if (offsetSide != null) 'offset_side': offsetSide,
+      if ((offsetSide ?? variant.offsetSide) != null)
+        'offset_side': offsetSide ?? variant.offsetSide,
     };
   }
 
@@ -920,7 +782,7 @@ class RouteService {
       try {
         final rawResponse = await _invoker
             .invoke(body)
-            .timeout(const Duration(seconds: 20));
+            .timeout(const Duration(seconds: 15));
         if (rawResponse is FunctionResponse) {
           statusCode = rawResponse.status;
           data = rawResponse.data;
@@ -1093,7 +955,8 @@ class RouteService {
     // Nur HTTP 429 (Rate Limit) und 5xx (Server) → exponential backoff.
     // Timeout/Netzwerk-Fehler werden NICHT retried — Caller macht Fallback.
     return error.type == RouteErrorType.rateLimit ||
-        error.type == RouteErrorType.server;
+        error.type == RouteErrorType.server ||
+        error.type == RouteErrorType.workerLimit;
   }
 
   /// Erzeugt einen Cache-Key aus den user-facing Request-Parametern.
@@ -1114,7 +977,15 @@ class RouteService {
     final seed = body['randomSeed'] ?? 0;
     final dirHint = ((body['direction_hint'] as num?)?.toDouble() ?? 0).round();
     final offsetSide = body['offset_side'] ?? 0;
-    return '${body['route_type']}_${body['mode']}_${body['targetDistance']}_${rLat}_$rLng${dKey}_s${seed}_d${dirHint}_o$offsetSide';
+    final variantHint = body['route_variant_hint'] ?? body['variant_hint'] ?? '';
+    final fingerprintHint =
+        body['route_fingerprint_hint'] ?? body['fingerprint_hint'] ?? '';
+    final avoidHighways = body['avoid_highways'] == true ? 1 : 0;
+    final detourLevel = body['detour_level'] ?? 0;
+    return '${body['route_type']}_${body['mode']}_${body['planning_type']}_${body['targetDistance']}_${rLat}_$rLng$dKey'
+        '_h${avoidHighways}_v${detourLevel}_s${seed}_d${dirHint}_o$offsetSide'
+        '_vh$variantHint'
+        '_fh$fingerprintHint';
   }
   
   /// Erzeugt einen Szenario-Key OHNE Diversitäts-Parameter.
@@ -1130,7 +1001,11 @@ class RouteService {
         ? '_${((dest['latitude'] as num).toDouble() * 500).round()}'
           '_${((dest['longitude'] as num).toDouble() * 500).round()}'
         : '';
-    return '${body['route_type']}_${body['mode']}_${body['targetDistance']}_${rLat}_$rLng$dKey';
+    final avoidHighways = body['avoid_highways'] == true ? 1 : 0;
+    final detourLevel = body['detour_level'] ?? 0;
+    return '${body['route_type']}_${body['mode']}_${body['planning_type']}_${body['targetDistance']}_${rLat}_$rLng$dKey'
+        '_h$avoidHighways'
+        '_d$detourLevel';
   }
 
   Future<double> _initialRoundTripDirectionHint({
@@ -1148,16 +1023,6 @@ class RouteService {
     return rng.nextDouble() * 360;
   }
 
-  double _nextRetryDirectionHint({
-    required double baseDirectionHint,
-    required int attempt,
-    required math.Random rng,
-  }) {
-    final rotation = 68.0 + (attempt * 39.0);
-    final jitter = (rng.nextDouble() - 0.5) * 24.0;
-    return (baseDirectionHint + rotation + jitter) % 360;
-  }
-
   double _jitteredDetourFactor({
     required double base,
     required bool scenic,
@@ -1170,24 +1035,641 @@ class RouteService {
       1.0,
     );
     final jitterRange = normalizedVariant >= 3
-        ? 0.14
+        ? 0.08
         : normalizedVariant == 2
-        ? 0.12
-        : 0.10;
+        ? 0.07
+        : 0.06;
     final jitter = (seeded - 0.5) * 2 * jitterRange;
     return math.max(1.0, base * (1.0 + jitter));
   }
 
-  int _nextOffsetSideForDiversity(int diversityIndex) {
-    _lastOffsetSide *= -1;
-    return diversityIndex.isEven ? _lastOffsetSide : -_lastOffsetSide;
+  int _nextScenarioVariantIndex(String scenarioKey, {int? explicitIndex}) {
+    if (explicitIndex != null) {
+      _scenarioVariantCounters[scenarioKey] = explicitIndex + 1;
+      return explicitIndex;
+    }
+    final next = _scenarioVariantCounters[scenarioKey] ?? 0;
+    _scenarioVariantCounters[scenarioKey] = next + 1;
+    return next;
   }
 
-  void _rememberPointToPointFingerprint(RouteResult route) {
-    if (route.coordinates.length < 2) return;
-    _recentPointToPointRoutes.add(route.coordinates);
-    while (_recentPointToPointRoutes.length > 4) {
-      _recentPointToPointRoutes.removeAt(0);
+  Future<RouteVariant> _nextRoundTripVariant(
+    RouteScenario scenario, {
+    required RouteStyleConfig styleConfig,
+    int? explicitIndex,
+  }) async {
+    final index = _nextScenarioVariantIndex(
+      scenario.scenarioKey,
+      explicitIndex: explicitIndex,
+    );
+    final seed = _nextRandomSeed() + index * 37;
+    final rng = math.Random(seed);
+    final baseDirection = await _initialRoundTripDirectionHint(
+      rng: rng,
+      mode: scenario.style,
+      variantIndex: index,
+    );
+    final radiusJitter = 1.0 + ((rng.nextDouble() - 0.5) * 0.24);
+    final angleOffset = (baseDirection + (index * 43.0)) % 360;
+    return RouteVariant(
+      index: index,
+      seed: seed,
+      angleOffset: angleOffset,
+      radiusJitter: radiusJitter,
+      offsetBearing: angleOffset,
+      fingerprintHint:
+          '${scenario.scenarioKey}|rt|$index|${angleOffset.round()}|${(radiusJitter * 100).round()}',
+      variantHint:
+          'rt-${styleConfig.profileKey}-${index % 8}-${(angleOffset / 45).round()}',
+      styleBias: styleConfig.profileKey,
+    );
+  }
+
+  RouteVariant _nextPointToPointVariant(
+    RouteScenario scenario, {
+    required int normalizedVariant,
+    required int diversitySeed,
+    required bool shouldDiversify,
+  }) {
+    final index = _nextScenarioVariantIndex(scenario.scenarioKey) + diversitySeed;
+    final seed = _nextRandomSeed() + index * 53;
+    final rng = math.Random(seed);
+    final offsetBearingBase = switch (normalizedVariant) {
+      1 => 28.0,
+      2 => 52.0,
+      3 => 76.0,
+      _ => 16.0,
+    };
+    final offsetBearing =
+        offsetBearingBase + ((rng.nextDouble() - 0.5) * 18.0);
+    final radiusJitter = switch (normalizedVariant) {
+      1 => 1.04 + rng.nextDouble() * 0.08,
+      2 => 1.10 + rng.nextDouble() * 0.12,
+      3 => 1.18 + rng.nextDouble() * 0.16,
+      _ => 0.98 + rng.nextDouble() * 0.05,
+    };
+    final offsetSide = shouldDiversify ? (index.isEven ? 1 : -1) : null;
+    return RouteVariant(
+      index: index,
+      seed: seed,
+      angleOffset: offsetBearing,
+      radiusJitter: radiusJitter,
+      offsetSide: offsetSide,
+      offsetBearing: offsetBearing,
+      fingerprintHint:
+          '${scenario.scenarioKey}|ab|$index|${offsetSide ?? 0}|${offsetBearing.round()}|${(radiusJitter * 100).round()}',
+      variantHint:
+          'ab-${scenario.detourLevel}-${offsetSide ?? 0}-${offsetBearing.round()}',
+      styleBias: scenario.style,
+    );
+  }
+
+  Future<_RouteCandidate> _requestRoundTripVariant({
+    required RouteScenario scenario,
+    required RouteStyleConfig styleConfig,
+    required geo.Position startPosition,
+    required RouteVariant variant,
+    required int candidateBudget,
+    Map<String, double>? targetLocation,
+  }) async {
+    final adjustedTargetKm = styleConfig.clampRoundTripDistanceKm(
+      variant.index == 0
+          ? (scenario.targetDistanceKm ?? 50.0).round()
+          : ((scenario.targetDistanceKm ?? 50.0) * variant.radiusJitter)
+                .round(),
+    );
+    final body = _buildRoundTripRequest(
+      startPosition: startPosition,
+      targetDistanceKm: adjustedTargetKm,
+      mode: scenario.style,
+      planningType: scenario.planningType,
+      styleConfig: styleConfig,
+      variant: variant,
+      targetLocation: targetLocation,
+      directionHint: variant.angleOffset,
+      candidateBudget: candidateBudget,
+    );
+    final result = await _invoke(body);
+    final snapped = _snapRouteToStartPosition(result, startPosition);
+    return _evaluateCandidate(
+      scenario: scenario,
+      styleConfig: styleConfig,
+      route: snapped,
+      variant: variant,
+    );
+  }
+
+  Future<_RouteCandidate> _requestPointToPointVariant({
+    required RouteScenario scenario,
+    required RouteStyleConfig styleConfig,
+    required geo.Position startPosition,
+    required double destinationLat,
+    required double destinationLng,
+    required bool scenic,
+    required int normalizedVariant,
+    required bool avoidHighways,
+    required double directDistanceKm,
+    required double targetDistanceKm,
+    required double detourFactor,
+    required RouteVariant variant,
+    required int candidateBudget,
+  }) async {
+    final jitteredTargetKm = styleConfig.clampPointToPointTargetKm(
+      targetDistanceKm * variant.radiusJitter,
+      directDistanceKm: directDistanceKm,
+      scenic: scenic,
+      detourVariant: normalizedVariant,
+    );
+    final jitteredDetourFactor = _jitteredDetourFactor(
+      base: detourFactor,
+      scenic: scenic,
+      normalizedVariant: normalizedVariant,
+      randomSeed: variant.seed,
+    );
+    final body = _buildPointToPointRequest(
+      startPosition: startPosition,
+      destinationLat: destinationLat,
+      destinationLng: destinationLng,
+      mode: scenario.style,
+      scenic: scenic,
+      normalizedVariant: normalizedVariant,
+      avoidHighways: avoidHighways,
+      styleConfig: styleConfig,
+      targetDistanceKm: jitteredTargetKm,
+      detourFactor: jitteredDetourFactor,
+      variant: variant,
+      offsetSide: variant.offsetSide,
+      candidateBudget: candidateBudget,
+    );
+    final result = await _invoke(body);
+    final snapped = _snapRouteToStartPosition(result, startPosition);
+    return _evaluateCandidate(
+      scenario: scenario,
+      styleConfig: styleConfig,
+      route: snapped,
+      variant: variant,
+      directDistanceKm: directDistanceKm,
+    );
+  }
+
+  _RouteCandidate _evaluateCandidate({
+    required RouteScenario scenario,
+    required RouteStyleConfig styleConfig,
+    required RouteResult route,
+    required RouteVariant variant,
+    double? directDistanceKm,
+  }) {
+    final actualDistanceKm = route.distanceKm ?? 0.0;
+    final sampledCoordinates = _sampleRouteForSimilarity(route.coordinates);
+    final fingerprint = RouteQualityValidator.buildRouteFingerprint(
+      sampledCoordinates,
+      distanceKm: route.distanceKm,
+      precision: 4,
+    );
+    final quality = _qualityValidator.validateQuality(
+      coordinates: route.coordinates,
+      isRoundTrip: scenario.isRoundTrip,
+      targetDistanceKm: scenario.targetDistanceKm ?? 0.0,
+      actualDistanceKm: actualDistanceKm,
+    );
+    final classification = _qualityValidator.classifyGeneratedRoute(
+      quality: quality,
+      isRoundTrip: scenario.isRoundTrip,
+      coordinateCount: route.coordinates.length,
+      actualDistanceKm: actualDistanceKm,
+      targetDistanceKm: scenario.targetDistanceKm ?? 0.0,
+    );
+    final styleOk = styleConfig.validateStyleQuality(
+      coordinates: route.coordinates,
+      distanceKm: actualDistanceKm,
+      durationSeconds: route.durationSeconds,
+    );
+    final similarityThreshold = _similarityThresholdForScenario(scenario);
+    final tooSimilar =
+        SeenRouteRegistry.hasExactFingerprint(scenario.scenarioKey, fingerprint) ||
+        SeenRouteRegistry.hasSimilarRoute(
+          scenario.scenarioKey,
+          sampledCoordinates,
+          thresholdPercent: similarityThreshold,
+          proximityMeters: scenario.isRoundTrip ? 130.0 : 160.0,
+        );
+    final minPoints = _minimumPointsForScenario(
+      scenario,
+      actualDistanceKm: actualDistanceKm,
+    );
+    final hasEnoughPoints = route.coordinates.length >= minPoints;
+    final pointToPointMinDistance =
+        !scenario.isPointToPoint || scenario.detourLevel <= 0
+        ? 0.0
+        : styleConfig.minimumPointToPointDistanceKm(
+            directDistanceKm: directDistanceKm ?? 0.0,
+            scenic: true,
+            detourVariant: scenario.detourLevel,
+          );
+    final pointToPointMaxDistance =
+        !scenario.isPointToPoint || scenario.detourLevel <= 0
+        ? double.infinity
+        : styleConfig.maximumPointToPointDistanceKm(
+            targetKm: scenario.targetDistanceKm ?? actualDistanceKm,
+            directDistanceKm: directDistanceKm ?? 0.0,
+            scenic: true,
+            detourVariant: scenario.detourLevel,
+          );
+    final detourDistanceOk =
+        !scenario.isPointToPoint || scenario.detourLevel <= 0
+        ? true
+        : actualDistanceKm >= pointToPointMinDistance &&
+              actualDistanceKm <= pointToPointMaxDistance;
+    final qualityAcceptable = scenario.isRoundTrip
+        ? classification.isAcceptable
+        : quality.passed || classification.isAcceptable;
+    final softRenderable =
+        hasEnoughPoints && detourDistanceOk && !tooSimilar && qualityAcceptable;
+    final accepted = softRenderable && styleOk;
+    final score =
+        classification.score +
+        (styleOk ? 0.0 : 18.0) +
+        (tooSimilar ? 45.0 : 0.0) +
+        (detourDistanceOk ? 0.0 : 35.0) +
+        (hasEnoughPoints ? 0.0 : 24.0);
+
+    debugPrint(
+      '[RouteService] Candidate ${scenario.routeType} ${variant.variantHint}: '
+      'accepted=$accepted, score=${score.toStringAsFixed(1)}, '
+      'distance=${actualDistanceKm.toStringAsFixed(1)}km, '
+      'overlap=${quality.overlapPercent.toStringAsFixed(1)}%, '
+      'uturns=${quality.uturnPositions.length}, tooSimilar=$tooSimilar, '
+      'distanceWindow=${pointToPointMinDistance.toStringAsFixed(1)}-${pointToPointMaxDistance.isFinite ? pointToPointMaxDistance.toStringAsFixed(1) : 'inf'}',
+    );
+
+    return _RouteCandidate(
+      route: route,
+      variant: variant,
+      fingerprint: fingerprint,
+      sampledCoordinates: sampledCoordinates,
+      score: score,
+      accepted: accepted,
+      hardRejected: !softRenderable,
+    );
+  }
+
+  int _minimumPointsForScenario(
+    RouteScenario scenario, {
+    required double actualDistanceKm,
+  }) {
+    if (scenario.isRoundTrip) {
+      final target = scenario.targetDistanceKm ?? actualDistanceKm;
+      if (target >= 120) return 28;
+      if (target >= 75) return 24;
+      if (target >= 35) return 20;
+      return actualDistanceKm >= 15 ? 18 : 14;
+    }
+    return actualDistanceKm >= 10 ? 30 : 0;
+  }
+
+  double _similarityThresholdForScenario(RouteScenario scenario) {
+    if (scenario.isRoundTrip) return 78.0;
+    if (scenario.detourLevel <= 0) {
+      return scenario.avoidHighways ? 92.0 : 96.0;
+    }
+    if (scenario.detourLevel == 1) return 76.0;
+    if (scenario.detourLevel == 2) return 74.0;
+    return 72.0;
+  }
+
+  List<List<double>> _sampleRouteForSimilarity(
+    List<List<double>> coordinates, {
+    int maxSamples = 80,
+  }) {
+    if (coordinates.length <= maxSamples) {
+      return coordinates
+          .where((point) => point.length >= 2)
+          .map((point) => [point[0], point[1]])
+          .toList();
+    }
+    final sampled = <List<double>>[];
+    for (var i = 0; i < maxSamples; i++) {
+      final ratio = maxSamples == 1 ? 0.0 : i / (maxSamples - 1);
+      final index = ((coordinates.length - 1) * ratio).round();
+      final point = coordinates[index];
+      if (point.length < 2) continue;
+      sampled.add([point[0], point[1]]);
+    }
+    return sampled;
+  }
+
+  RouteResult? _takePreparedRoute({
+    required RouteScenario scenario,
+  }) {
+    final entry = PreparedRouteBuffer.take(scenario.scenarioKey);
+    if (entry == null) return null;
+    final sampled = _sampleRouteForSimilarity(entry.route.coordinates);
+    final fingerprint = RouteQualityValidator.buildRouteFingerprint(
+      sampled,
+      distanceKm: entry.route.distanceKm,
+      precision: 4,
+    );
+    if (SeenRouteRegistry.hasExactFingerprint(scenario.scenarioKey, fingerprint)) {
+      return null;
+    }
+    if (SeenRouteRegistry.hasSimilarRoute(
+      scenario.scenarioKey,
+      sampled,
+      thresholdPercent: _similarityThresholdForScenario(scenario),
+      proximityMeters: scenario.isRoundTrip ? 130.0 : 160.0,
+    )) {
+      return null;
+    }
+    return _finalizeAndRemember(
+      scenario: scenario,
+      route: entry.route,
+      sampledCoordinates: sampled,
+      fingerprint: fingerprint,
+    );
+  }
+
+  void _schedulePreparedRoundTripRoute({
+    required RouteScenario scenario,
+    required RouteStyleConfig styleConfig,
+    required geo.Position startPosition,
+  }) {
+    if (disableBackgroundPreparation) return;
+    if (PreparedRouteBuffer.hasFreshEntry(scenario.scenarioKey)) return;
+    unawaited(
+      Future<void>.delayed(Duration.zero, () async {
+        if (!RouteGenerationCoordinator.canPrepare(scenario.scenarioKey)) return;
+        await RouteGenerationCoordinator.prepareInBackground(
+          scenario.scenarioKey,
+          () async {
+            if (_isInWorkerLimitCooldown() ||
+                PreparedRouteBuffer.hasFreshEntry(scenario.scenarioKey)) {
+              return;
+            }
+            try {
+              final variant = await _nextRoundTripVariant(
+                scenario,
+                styleConfig: styleConfig,
+              );
+              final candidate = await _requestRoundTripVariant(
+                scenario: scenario,
+                styleConfig: styleConfig,
+                startPosition: startPosition,
+                variant: variant,
+                candidateBudget: 2,
+              );
+              if (!candidate.accepted) return;
+              PreparedRouteBuffer.store(
+                scenario.scenarioKey,
+                PreparedRouteEntry(
+                  route: candidate.route,
+                  variant: candidate.variant,
+                  preparedAt: DateTime.now(),
+                ),
+              );
+            } catch (e) {
+              debugPrint('[RouteService] Prepared round-trip skipped: $e');
+            }
+          },
+        );
+      }),
+    );
+  }
+
+  void _schedulePreparedPointToPointRoute({
+    required RouteScenario scenario,
+    required RouteStyleConfig styleConfig,
+    required geo.Position startPosition,
+    required double destinationLat,
+    required double destinationLng,
+    required bool avoidHighways,
+    required double directDistanceKm,
+  }) {
+    if (disableBackgroundPreparation) return;
+    if (PreparedRouteBuffer.hasFreshEntry(scenario.scenarioKey)) return;
+    unawaited(
+      Future<void>.delayed(Duration.zero, () async {
+        if (!RouteGenerationCoordinator.canPrepare(scenario.scenarioKey)) return;
+        await RouteGenerationCoordinator.prepareInBackground(
+          scenario.scenarioKey,
+          () async {
+            if (_isInWorkerLimitCooldown() ||
+                PreparedRouteBuffer.hasFreshEntry(scenario.scenarioKey)) {
+              return;
+            }
+            try {
+              final variant = _nextPointToPointVariant(
+                scenario,
+                normalizedVariant: scenario.detourLevel,
+                diversitySeed: 211,
+                shouldDiversify: true,
+              );
+              final targetDistanceKm = scenario.targetDistanceKm ?? directDistanceKm;
+              final detourFactor = switch (scenario.detourLevel) {
+                1 => 1.24,
+                2 => 1.52,
+                3 => 1.92,
+                _ => 1.15,
+              };
+              final candidate = await _requestPointToPointVariant(
+                scenario: scenario,
+                styleConfig: styleConfig,
+                startPosition: startPosition,
+                destinationLat: destinationLat,
+                destinationLng: destinationLng,
+                scenic: scenario.detourLevel > 0,
+                normalizedVariant: scenario.detourLevel,
+                avoidHighways: avoidHighways,
+                directDistanceKm: directDistanceKm,
+                targetDistanceKm: targetDistanceKm,
+                detourFactor: detourFactor,
+                variant: variant,
+                candidateBudget: 2,
+              );
+              if (!candidate.accepted) return;
+              PreparedRouteBuffer.store(
+                scenario.scenarioKey,
+                PreparedRouteEntry(
+                  route: candidate.route,
+                  variant: candidate.variant,
+                  preparedAt: DateTime.now(),
+                ),
+              );
+            } catch (e) {
+              debugPrint('[RouteService] Prepared A→B skipped: $e');
+            }
+          },
+        );
+      }),
+    );
+  }
+
+  RouteResult _finalizeAndRemember({
+    required RouteScenario scenario,
+    required RouteResult route,
+    required List<List<double>> sampledCoordinates,
+    required String fingerprint,
+  }) {
+    final finalized = _finalizeRoute(route, scenarioKey: scenario.scenarioKey);
+    SeenRouteRegistry.remember(
+      scenario.scenarioKey,
+      fingerprint: fingerprint,
+      sampledCoordinates: sampledCoordinates,
+    );
+    lastRouteFromCache = false;
+    return finalized;
+  }
+
+  Future<RouteResult?> _tryRoundTripFallback({
+    required RouteScenario scenario,
+    required RouteStyleConfig styleConfig,
+    required geo.Position startPosition,
+    Map<String, double>? targetLocation,
+  }) async {
+    try {
+      final variant = await _nextRoundTripVariant(
+        scenario,
+        styleConfig: styleConfig,
+      );
+      final body = _buildRoundTripRequest(
+        startPosition: startPosition,
+        targetDistanceKm:
+            (scenario.targetDistanceKm ?? 50.0).round(),
+        mode: scenario.style,
+        planningType: scenario.planningType,
+        styleConfig: styleConfig,
+        variant: variant,
+        targetLocation: targetLocation,
+        directionHint: variant.angleOffset,
+        candidateBudget: 3,
+      );
+      body['simplify_waypoints'] = true;
+      body['max_waypoints'] = 3;
+      final result = await _invoke(body);
+      final snapped = _snapRouteToStartPosition(result, startPosition);
+      final sampled = _sampleRouteForSimilarity(snapped.coordinates);
+      final fingerprint = RouteQualityValidator.buildRouteFingerprint(
+        sampled,
+        distanceKm: snapped.distanceKm,
+        precision: 4,
+      );
+      return _finalizeAndRemember(
+        scenario: scenario,
+        route: snapped,
+        sampledCoordinates: sampled,
+        fingerprint: fingerprint,
+      );
+    } catch (e) {
+      debugPrint('[RouteService] Rundkurs-Fallback fehlgeschlagen: $e');
+      return null;
+    }
+  }
+
+  Future<RouteResult?> _tryPointToPointFallback({
+    required RouteScenario scenario,
+    required geo.Position startPosition,
+    required double destinationLat,
+    required double destinationLng,
+    required bool avoidHighways,
+    required double directDistanceKm,
+  }) async {
+    try {
+      if (scenario.detourLevel > 0) {
+        final scenicVariant = _nextPointToPointVariant(
+          scenario,
+          normalizedVariant: scenario.detourLevel,
+          diversitySeed: 97,
+          shouldDiversify: true,
+        );
+        final scenicMode = scenario.style == 'Standard'
+            ? 'Sport Mode'
+            : scenario.style;
+        final scenicStyleConfig = RouteStyleConfig.forMode(scenicMode);
+        final scenicDetourFactor = switch (scenario.detourLevel) {
+          1 => 1.24,
+          2 => 1.55,
+          3 => 1.92,
+          _ => 1.15,
+        };
+        final scenicBody = _buildPointToPointRequest(
+          startPosition: startPosition,
+          destinationLat: destinationLat,
+          destinationLng: destinationLng,
+          mode: scenicMode,
+          scenic: true,
+          normalizedVariant: scenario.detourLevel,
+          avoidHighways: avoidHighways,
+          styleConfig: scenicStyleConfig,
+          targetDistanceKm: scenario.targetDistanceKm ?? directDistanceKm,
+          detourFactor: scenicDetourFactor,
+          variant: scenicVariant,
+          candidateBudget: 2,
+        );
+        scenicBody['simplify_waypoints'] = true;
+        scenicBody['max_waypoints'] = scenario.detourLevel >= 3 ? 2 : 1;
+        final scenicResult = await _invoke(scenicBody);
+        final scenicSnapped = _snapRouteToStartPosition(
+          scenicResult,
+          startPosition,
+        );
+        final scenicCandidate = _evaluateCandidate(
+          scenario: scenario,
+          styleConfig: scenicStyleConfig,
+          route: scenicSnapped,
+          variant: scenicVariant,
+          directDistanceKm: directDistanceKm,
+        );
+        if (!scenicCandidate.hardRejected) {
+          return _finalizeAndRemember(
+            scenario: scenario,
+            route: scenicCandidate.route,
+            sampledCoordinates: scenicCandidate.sampledCoordinates,
+            fingerprint: scenicCandidate.fingerprint,
+          );
+        }
+        debugPrint(
+          '[RouteService] Vereinfachter Scenic-Fallback verworfen: ${scenicCandidate.route.distanceKm?.toStringAsFixed(1)}km',
+        );
+      }
+
+      final variant = _nextPointToPointVariant(
+        scenario,
+        normalizedVariant: 0,
+        diversitySeed: 0,
+        shouldDiversify: false,
+      );
+      final body = _buildPointToPointRequest(
+        startPosition: startPosition,
+        destinationLat: destinationLat,
+        destinationLng: destinationLng,
+        mode: 'Standard',
+        scenic: false,
+        normalizedVariant: 0,
+        avoidHighways: avoidHighways,
+        styleConfig: RouteStyleConfig.forMode('Sport Mode'),
+        targetDistanceKm: directDistanceKm,
+        detourFactor: 1.0,
+        variant: variant,
+        candidateBudget: 2,
+      );
+      body['simplify_waypoints'] = true;
+      body['max_waypoints'] = 0;
+      final result = await _invoke(body);
+      final snapped = _snapRouteToStartPosition(result, startPosition);
+      final sampled = _sampleRouteForSimilarity(snapped.coordinates);
+      final fingerprint = RouteQualityValidator.buildRouteFingerprint(
+        sampled,
+        distanceKm: snapped.distanceKm,
+        precision: 4,
+      );
+      return _finalizeAndRemember(
+        scenario: scenario,
+        route: snapped,
+        sampledCoordinates: sampled,
+        fingerprint: fingerprint,
+      );
+    } catch (e) {
+      debugPrint('[RouteService] A→B-Fallback fehlgeschlagen: $e');
+      return null;
     }
   }
 
@@ -1248,6 +1730,10 @@ class RouteService {
     String routeType = 'ROUND_TRIP',
   }) {
     final lower = errorMessage.toLowerCase();
+    final detailsMap = details is Map ? Map<String, dynamic>.from(details) : null;
+    final errorCode = detailsMap?['code']?.toString().toUpperCase();
+    final retryAfterSec =
+        (detailsMap?['retry_after_sec'] as num?)?.toInt();
 
     if (statusCode == 401 || statusCode == 403 || lower.contains('jwt')) {
       return RouteServiceException(
@@ -1262,6 +1748,7 @@ class RouteService {
     }
 
     if (statusCode == 429 ||
+        errorCode == 'RATE_LIMIT' ||
         lower.contains('rate limit') ||
         lower.contains('too many')) {
       return RouteServiceException(
@@ -1270,6 +1757,35 @@ class RouteService {
             'Zu viele Routing-Anfragen in kurzer Zeit. Bitte kurz warten und erneut versuchen.',
         debugMessage:
             'Rate limit (status=$statusCode, reason=$reasonPhrase): $errorMessage, details=$details',
+        statusCode: statusCode,
+        stackTrace: stackTrace,
+      );
+    }
+
+    if (errorCode == 'WORKER_LIMIT' ||
+        lower.contains('worker limit') ||
+        lower.contains('resource limit') ||
+        lower.contains('cpu time limit')) {
+      return RouteServiceException(
+        type: RouteErrorType.workerLimit,
+        userMessage:
+            'Der Routing-Dienst ist gerade stark ausgelastet. Bitte ${retryAfterSec ?? 2} Sekunden warten und erneut versuchen.',
+        debugMessage:
+            'Worker limit (status=$statusCode, reason=$reasonPhrase): $errorMessage, details=$details',
+        statusCode: statusCode,
+        stackTrace: stackTrace,
+      );
+    }
+
+    if (errorCode == 'TIMEOUT' ||
+        lower.contains('timeout') ||
+        lower.contains('timed out')) {
+      return RouteServiceException(
+        type: RouteErrorType.server,
+        userMessage:
+            'Die Routenberechnung hat zu lange gedauert. Bitte erneut versuchen.',
+        debugMessage:
+            'Timeout (status=$statusCode, reason=$reasonPhrase): $errorMessage, details=$details',
         statusCode: statusCode,
         stackTrace: stackTrace,
       );
@@ -1358,7 +1874,10 @@ class RouteService {
   // ─────────────────────── Persistent Route Cache ────────────────────────────
   
   /// Speichert eine erfolgreiche Route im SharedPreferences für Offline-Fallback.
-  Future<void> _cacheSuccessfulRoute(RouteResult route) async {
+  Future<void> _cacheSuccessfulRoute(
+    RouteResult route, {
+    String? scenarioKey,
+  }) async {
     try {
       final prefs = await SharedPreferences.getInstance();
       final cacheData = {
@@ -1370,7 +1889,10 @@ class RouteService {
         'distanceKm': route.distanceKm,
         'timestamp': DateTime.now().millisecondsSinceEpoch,
       };
-      await prefs.setString(_lastSuccessfulRouteKey, json.encode(cacheData));
+      final cacheKey = scenarioKey == null
+          ? _lastSuccessfulRouteKey
+          : '$_lastSuccessfulRouteKey|$scenarioKey';
+      await prefs.setString(cacheKey, json.encode(cacheData));
       debugPrint('[RouteService] ✓ Route im Offline-Cache gespeichert');
     } catch (e) {
       debugPrint('[RouteService] Cache-Speicherung fehlgeschlagen: $e');
@@ -1379,10 +1901,14 @@ class RouteService {
   
   /// Lädt die letzte erfolgreiche Route aus SharedPreferences.
   /// Gibt null zurück wenn keine gecachte Route existiert oder sie >24h alt ist.
-  Future<RouteResult?> _loadCachedRoute() async {
+  Future<RouteResult?> _loadCachedRoute({String? scenarioKey}) async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final cached = prefs.getString(_lastSuccessfulRouteKey);
+      final scopedKey = scenarioKey == null
+          ? _lastSuccessfulRouteKey
+          : '$_lastSuccessfulRouteKey|$scenarioKey';
+      final cached =
+          prefs.getString(scopedKey) ?? prefs.getString(_lastSuccessfulRouteKey);
       if (cached == null) return null;
       
       final data = json.decode(cached) as Map<String, dynamic>;
@@ -1614,7 +2140,7 @@ class RouteService {
   /// Finalisiert eine Route: filtert problematische Manöver (U-Turns, Zwischen-Arrives).
   /// Wird am Ende von generateRoundTrip/generatePointToPoint aufgerufen.
   /// Speichert die Route auch im Offline-Cache für Stufe-4-Fallback.
-  RouteResult _finalizeRoute(RouteResult result) {
+  RouteResult _finalizeRoute(RouteResult result, {String? scenarioKey}) {
     final finalized = RouteResult(
       geoJson: result.geoJson,
       geometry: result.geometry,
@@ -1626,7 +2152,7 @@ class RouteService {
       speedLimits: result.speedLimits,
     );
     // Asynchron cachen ohne auf Ergebnis zu warten
-    _cacheSuccessfulRoute(finalized);
+    _cacheSuccessfulRoute(finalized, scenarioKey: scenarioKey);
     return finalized;
   }
 
@@ -2332,11 +2858,32 @@ class RouteService {
   }
 }
 
+class _RouteCandidate {
+  const _RouteCandidate({
+    required this.route,
+    required this.variant,
+    required this.fingerprint,
+    required this.sampledCoordinates,
+    required this.score,
+    required this.accepted,
+    required this.hardRejected,
+  });
+
+  final RouteResult route;
+  final RouteVariant variant;
+  final String fingerprint;
+  final List<List<double>> sampledCoordinates;
+  final double score;
+  final bool accepted;
+  final bool hardRejected;
+}
+
 enum RouteErrorType {
   network,
   auth,
   validation,
   rateLimit,
+  workerLimit,
   server,
   noRoute,
   emptyResponse,

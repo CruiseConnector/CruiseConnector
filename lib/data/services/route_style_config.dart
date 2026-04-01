@@ -109,11 +109,12 @@ class RouteStyleConfig {
 
   /// Gibt die passende Config für einen Stil-Namen zurück.
   static RouteStyleConfig forMode(String mode) {
-    return switch (mode) {
-      'Sport Mode' => sport,
-      'Kurvenjagd' => kurvenjagd,
-      'Abendrunde' => abendrunde,
-      'Entdecker' => entdecker,
+    final normalized = mode.trim().toLowerCase();
+    return switch (normalized) {
+      'sport mode' || 'sport' || 'autobahn' => sport,
+      'kurvenjagd' || 'kurvenreich' || 'alpenstraßen' => kurvenjagd,
+      'abendrunde' || 'panorama' => abendrunde,
+      'entdecker' || 'zufall' => entdecker,
       _ => sport,
     };
   }
@@ -165,20 +166,76 @@ class RouteStyleConfig {
     if (!scenic && detourVariant <= 0) {
       return directDistanceKm;
     }
+    final lowerBound = minimumPointToPointDistanceKm(
+      directDistanceKm: directDistanceKm,
+      scenic: scenic,
+      detourVariant: detourVariant,
+    );
+    final upperBound = maximumPointToPointDistanceKm(
+      targetKm: requestedKm,
+      directDistanceKm: directDistanceKm,
+      scenic: scenic,
+      detourVariant: detourVariant,
+    );
+    return requestedKm.clamp(lowerBound, upperBound);
+  }
+
+  double minimumPointToPointDistanceKm({
+    required double directDistanceKm,
+    required bool scenic,
+    required int detourVariant,
+  }) {
+    if (!scenic && detourVariant <= 0) {
+      return directDistanceKm;
+    }
     final minByVariant = switch (detourVariant) {
       1 => directDistanceKm * 1.18,
       2 => directDistanceKm * 1.42,
       3 => directDistanceKm * 1.75,
       _ => directDistanceKm * 1.08,
     };
-    final maxByVariant = switch (detourVariant) {
-      1 => directDistanceKm * 1.75,
-      2 => directDistanceKm * 2.15,
-      3 => directDistanceKm * 2.70,
-      _ => directDistanceKm * 1.40,
+    final paddingKm = switch (detourVariant) {
+      1 => 1.0,
+      2 => 2.0,
+      3 => 4.0,
+      _ => 1.0,
     };
-    final lowerBound = math.max(minByVariant, directDistanceKm + 1.0);
-    return requestedKm.clamp(lowerBound, maxByVariant);
+    return math.max(minByVariant, directDistanceKm + paddingKm);
+  }
+
+  double maximumPointToPointDistanceKm({
+    required double targetKm,
+    required double directDistanceKm,
+    required bool scenic,
+    required int detourVariant,
+  }) {
+    if (!scenic && detourVariant <= 0) {
+      return math.max(directDistanceKm + 2.0, directDistanceKm * 1.12);
+    }
+    final maxByTarget = switch (detourVariant) {
+      1 => targetKm * 1.32,
+      2 => targetKm * 1.42,
+      3 => targetKm * 1.52,
+      _ => targetKm * 1.18,
+    };
+    final maxByDirect = switch (detourVariant) {
+      1 => directDistanceKm * 2.05,
+      2 => directDistanceKm * 2.85,
+      3 => directDistanceKm * 3.45,
+      _ => directDistanceKm * 1.35,
+    };
+    final slackKm = switch (detourVariant) {
+      1 => 3.0,
+      2 => 6.0,
+      3 => 10.0,
+      _ => 2.0,
+    };
+    final lowerBound = minimumPointToPointDistanceKm(
+      directDistanceKm: directDistanceKm,
+      scenic: scenic,
+      detourVariant: detourVariant,
+    );
+    return math.max(lowerBound + slackKm, math.max(maxByTarget, maxByDirect));
   }
 
   Map<String, dynamic> toRequestHints() {

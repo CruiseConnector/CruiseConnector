@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mockito/annotations.dart';
 import 'package:mockito/mockito.dart';
 import 'package:geolocator/geolocator.dart' as geo;
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:cruise_connect/data/services/route_service.dart';
 import 'package:cruise_connect/domain/models/route_result.dart';
@@ -124,12 +125,16 @@ Map<String, dynamic> _buildClosedLoopRouteResponse({
 
 @GenerateMocks([RouteEdgeInvoker])
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
   late MockRouteEdgeInvoker mockInvoker;
   late RouteService service;
 
   setUp(() {
+    SharedPreferences.setMockInitialValues({});
     mockInvoker = MockRouteEdgeInvoker();
     service = RouteService(invoker: mockInvoker);
+    RouteService.resetForTests();
+    RouteService.disableBackgroundPreparation = true;
   });
 
   group('RouteService – Modusregeln', () {
@@ -494,7 +499,7 @@ void main() {
     test('scenic = true → übergibt den eigentlichen mode', () async {
       when(mockInvoker.invoke(any)).thenAnswer(
         (_) async =>
-            _buildRouteResponse(distanceMeters: 20000, durationSeconds: 1800),
+            _buildRouteResponse(distanceMeters: 56000, durationSeconds: 3600),
       );
 
       await service.generatePointToPoint(
@@ -506,7 +511,7 @@ void main() {
       );
 
       final captured =
-          verify(mockInvoker.invoke(captureAny)).captured.last
+          verify(mockInvoker.invoke(captureAny)).captured.first
               as Map<String, dynamic>;
       expect(captured['mode'], 'Alpenstraßen');
     });
@@ -516,7 +521,7 @@ void main() {
       () async {
         when(mockInvoker.invoke(any)).thenAnswer(
           (_) async =>
-              _buildRouteResponse(distanceMeters: 60000, durationSeconds: 4000),
+              _buildRouteResponse(distanceMeters: 82000, durationSeconds: 5200),
         );
 
         await service.generatePointToPoint(
@@ -529,7 +534,7 @@ void main() {
         );
 
         final captured =
-            verify(mockInvoker.invoke(captureAny)).captured.last
+            verify(mockInvoker.invoke(captureAny)).captured.first
                 as Map<String, dynamic>;
         expect(captured['targetDistance'], isNotNull);
         expect(captured['randomSeed'], isA<int>());
@@ -542,7 +547,7 @@ void main() {
       () async {
         when(mockInvoker.invoke(any)).thenAnswer(
           (_) async =>
-              _buildRouteResponse(distanceMeters: 60000, durationSeconds: 4000),
+              _buildRouteResponse(distanceMeters: 98000, durationSeconds: 6200),
         );
 
         await service.generatePointToPoint(
@@ -556,7 +561,7 @@ void main() {
         );
 
         final captured =
-            verify(mockInvoker.invoke(captureAny)).captured.last
+            verify(mockInvoker.invoke(captureAny)).captured.first
                 as Map<String, dynamic>;
         expect(captured['avoid_highways'], isTrue);
         expect(captured['targetDistance'], isNotNull);
@@ -568,7 +573,7 @@ void main() {
     test('Umwegstufen skalieren die targetDistance sichtbar', () async {
       when(mockInvoker.invoke(any)).thenAnswer(
         (_) async =>
-            _buildRouteResponse(distanceMeters: 60000, durationSeconds: 4000),
+            _buildRouteResponse(distanceMeters: 66000, durationSeconds: 4200),
       );
 
       await service.generatePointToPoint(
@@ -581,13 +586,13 @@ void main() {
       );
 
       final smallDetour =
-          verify(mockInvoker.invoke(captureAny)).captured.last
+          verify(mockInvoker.invoke(captureAny)).captured.first
               as Map<String, dynamic>;
       clearInteractions(mockInvoker);
 
       when(mockInvoker.invoke(any)).thenAnswer(
         (_) async =>
-            _buildRouteResponse(distanceMeters: 60000, durationSeconds: 4000),
+            _buildRouteResponse(distanceMeters: 82000, durationSeconds: 5200),
       );
 
       await service.generatePointToPoint(
@@ -600,13 +605,13 @@ void main() {
       );
 
       final mediumDetour =
-          verify(mockInvoker.invoke(captureAny)).captured.last
+          verify(mockInvoker.invoke(captureAny)).captured.first
               as Map<String, dynamic>;
       clearInteractions(mockInvoker);
 
       when(mockInvoker.invoke(any)).thenAnswer(
         (_) async =>
-            _buildRouteResponse(distanceMeters: 60000, durationSeconds: 4000),
+            _buildRouteResponse(distanceMeters: 98000, durationSeconds: 6200),
       );
 
       await service.generatePointToPoint(
@@ -619,7 +624,7 @@ void main() {
       );
 
       final largeDetour =
-          verify(mockInvoker.invoke(captureAny)).captured.last
+          verify(mockInvoker.invoke(captureAny)).captured.first
               as Map<String, dynamic>;
 
       expect(

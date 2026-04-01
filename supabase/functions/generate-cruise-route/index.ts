@@ -49,6 +49,13 @@ interface RequestData {
     prefer_flat_terrain?: boolean
     zigzag_waypoints?: boolean
     continue_straight?: boolean
+    route_variant_hint?: string
+    variant_hint?: string
+    route_fingerprint_hint?: string
+    fingerprint_hint?: string
+    max_candidate_attempts?: number
+    simplify_waypoints?: boolean
+    max_waypoints?: number
 }
 
 interface DistanceConfig {
@@ -90,11 +97,13 @@ interface RoundTripSearchResult {
     rejectedCandidates: number
     rejectReasons: Record<string, number>
     searchPhases: string[]
+    variantHint?: string
+    fingerprintHint?: string
 }
 
 interface MapboxRouteFetchResult {
     route: any | null
-    outcome: 'ok' | 'no_route' | 'http_error' | 'network_error'
+    outcome: 'ok' | 'no_route' | 'http_error' | 'network_error' | 'timeout'
     statusCode?: number
     details?: string
 }
@@ -616,6 +625,69 @@ function seededUnit(seed: number): number {
     return raw - Math.floor(raw)
 }
 
+function stableStringHash(input: string): number {
+    let hash = 2166136261
+    for (let i = 0; i < input.length; i++) {
+        hash ^= input.charCodeAt(i)
+        hash = Math.imul(hash, 16777619)
+    }
+    return (hash >>> 0)
+}
+
+function normalizeHint(value?: string): string | undefined {
+    if (typeof value !== 'string') return undefined
+    const trimmed = value.trim()
+    return trimmed.length > 0 ? trimmed : undefined
+}
+
+function getRetryKindFromMapboxFailure(
+    failure: Pick<MapboxRouteFetchResult, 'outcome' | 'statusCode' | 'details'>,
+): 'rate_limit' | 'timeout' | 'other' {
+    if (failure.outcome === 'timeout') return 'timeout'
+    if (failure.statusCode === 429) return 'rate_limit'
+    const details = String(failure.details ?? '').toLowerCase()
+    if (details.includes('too many requests') || details.includes('rate limit')) {
+        return 'rate_limit'
+    }
+    if (details.includes('timeout') || details.includes('timed out') || details.includes('abort')) {
+        return 'timeout'
+    }
+    return 'other'
+}
+
+function prioritizeCandidatePlans(
+    plans: RoundTripCandidatePlan[],
+    phaseName: string,
+    variantHint?: string,
+    fingerprintHint?: string,
+): RoundTripCandidatePlan[] {
+    if (plans.length <= 1) return plans
+
+    const normalizedVariant = normalizeHint(variantHint)?.toLowerCase()
+    const preferredTokens = normalizedVariant
+        ? normalizedVariant.split(/[^a-z0-9_-]+/i).filter(Boolean)
+        : []
+
+    const preferred = preferredTokens.length === 0
+        ? []
+        : plans.filter((plan) => preferredTokens.some((token) => plan.label.toLowerCase().includes(token)))
+    const remaining = preferredTokens.length === 0
+        ? [...plans]
+        : plans.filter((plan) => !preferred.includes(plan))
+
+    if (remaining.length <= 1) {
+        return [...preferred, ...remaining]
+    }
+
+    const normalizedFingerprint = normalizeHint(fingerprintHint)
+    const rotationSeed = normalizedFingerprint
+        ? stableStringHash(`${phaseName}:${normalizedFingerprint}`)
+        : 0
+    const startIndex = rotationSeed % remaining.length
+    const rotated = remaining.slice(startIndex).concat(remaining.slice(0, startIndex))
+    return [...preferred, ...rotated]
+}
+
 function buildPointToPointScenicWaypoints({
     start,
     destination,
@@ -627,6 +699,8 @@ function buildPointToPointScenicWaypoints({
     waypointShapeFactor,
     zigzagWaypoints = false,
     randomSeed = 0,
+    simplifyWaypoints = false,
+    maxWaypoints,
 }: {
     start: Coordinate
     destination: Coordinate
@@ -638,6 +712,8 @@ function buildPointToPointScenicWaypoints({
     waypointShapeFactor?: number
     zigzagWaypoints?: boolean
     randomSeed?: number
+    simplifyWaypoints?: boolean
+    maxWaypoints?: number
 }): Coordinate[] {
     const directDistanceKm = calculateDistance(start, destination)
     if (directDistanceKm < 1.5) {
@@ -680,10 +756,13 @@ function buildPointToPointScenicWaypoints({
         : detourLevel >= 3
         ? 22.0
         : 3.0
-    const extraDistanceKm = Math.max(
+    let extraDistanceKm = Math.max(
         minimumExtraDistanceKm,
         desiredDistanceKm - directDistanceKm,
     )
+    if (simplifyWaypoints) {
+        extraDistanceKm *= detourLevel >= 2 ? 0.82 : 0.9
+    }
 
     // Waypoint-Anzahl: je Umweg-Level + Seed-Variation.
     // Klein kann auf längeren Strecken 1 oder 2 Wegpunkte nutzen.
@@ -701,6 +780,13 @@ function buildPointToPointScenicWaypoints({
     }
     if (directDistanceKm < 12) waypointCount = Math.min(waypointCount, 2);
     if (directDistanceKm < 6) waypointCount = Math.min(waypointCount, 1);
+    if (simplifyWaypoints) {
+        const cappedWaypoints = Math.max(
+            1,
+            Math.min(3, maxWaypoints ?? (detourLevel >= 3 ? 2 : 1)),
+        )
+        waypointCount = Math.min(waypointCount, cappedWaypoints)
+    }
 
     // Fractions: wo auf der A→B Linie werden die Waypoints platziert
     const onePointFraction = 0.50 + (seededUnit(randomSeed + 211) - 0.5) * 0.24
@@ -731,18 +817,29 @@ function buildPointToPointScenicWaypoints({
         (seededUnit(randomSeed + detourLevel + Math.round(directDistanceKm)) >= 0.5 ? 1 : -1)
 
     // Offset-Limits je nach Umweg-Level (drastischer gespreizt)
-    const maxOffsetKm = detourLevel === 1
-        ? Math.max(12, directDistanceKm * 0.95)
-        : Math.max(10, directDistanceKm * 0.8)
-    const minOffsetKm = detourLevel === 1
-        ? Math.min(
-            maxOffsetKm,
-            Math.max(5.5, extraDistanceKm / Math.max(1.8, waypointCount)),
+    let maxOffsetKm = detourLevel === 1
+        ? Math.max(
+            5.5,
+            Math.min(directDistanceKm * 0.42, extraDistanceKm * 0.85 + 3.5),
         )
-        : Math.min(
-            maxOffsetKm,
-            Math.max(4.0, extraDistanceKm / Math.max(2, waypointCount)),
+        : detourLevel === 2
+        ? Math.max(
+            7.0,
+            Math.min(directDistanceKm * 0.58, extraDistanceKm * 0.92 + 4.5),
         )
+        : Math.max(
+            9.0,
+            Math.min(directDistanceKm * 0.76, extraDistanceKm * 1.04 + 6.5),
+        )
+    let minOffsetKm = detourLevel === 1
+        ? Math.min(maxOffsetKm, Math.max(4.0, maxOffsetKm * 0.58))
+        : detourLevel === 2
+        ? Math.min(maxOffsetKm, Math.max(5.5, maxOffsetKm * 0.52))
+        : Math.min(maxOffsetKm, Math.max(7.0, maxOffsetKm * 0.48))
+    if (simplifyWaypoints) {
+        maxOffsetKm *= detourLevel >= 2 ? 0.74 : 0.80
+        minOffsetKm *= detourLevel >= 2 ? 0.72 : 0.78
+    }
 
     const scenicWaypoints = fractions.map((fraction, index) => {
         const basePoint = interpolateCoordinate(start, destination, fraction)
@@ -816,18 +913,97 @@ function getPointToPointMinimumDistanceKm(
     directDistanceKm: number,
     targetDistance: number | undefined,
     detourLevel: number,
+    relaxed = false,
 ): number {
-    const detourMultiplier = detourLevel === 1
+    const detourMultiplier = relaxed
+        ? detourLevel === 1
+            ? 1.14
+            : detourLevel === 2
+            ? 1.32
+            : detourLevel >= 3
+            ? 1.55
+            : 1.0
+        : detourLevel === 1
         ? 1.25   // Klein: mindestens +25%
         : detourLevel === 2
         ? 1.50   // Mittel: mindestens +50%
         : detourLevel >= 3
         ? 1.90   // Groß: mindestens +90%
         : 1.0
+    const targetFactor = relaxed
+        ? detourLevel >= 2
+            ? 0.88
+            : 0.90
+        : 0.985
 
     return Math.max(
-        targetDistance ? targetDistance * 0.985 : 0,
+        targetDistance ? targetDistance * targetFactor : 0,
         directDistanceKm * detourMultiplier,
+    )
+}
+
+function getPointToPointMaximumDistanceKm(
+    directDistanceKm: number,
+    targetDistance: number | undefined,
+    detourLevel: number,
+    relaxed = false,
+): number {
+    const targetKm = Math.max(targetDistance ?? directDistanceKm, directDistanceKm)
+    const targetMultiplier = relaxed
+        ? detourLevel === 1
+            ? 1.40
+            : detourLevel === 2
+            ? 1.50
+            : detourLevel >= 3
+            ? 1.60
+            : 1.22
+        : detourLevel === 1
+        ? 1.32
+        : detourLevel === 2
+        ? 1.42
+        : detourLevel >= 3
+        ? 1.52
+        : 1.18
+    const directMultiplier = relaxed
+        ? detourLevel === 1
+            ? 2.20
+            : detourLevel === 2
+            ? 3.00
+            : detourLevel >= 3
+            ? 3.60
+            : 1.45
+        : detourLevel === 1
+        ? 2.05
+        : detourLevel === 2
+        ? 2.85
+        : detourLevel >= 3
+        ? 3.45
+        : 1.35
+    const slackKm = relaxed
+        ? detourLevel === 1
+            ? 5.0
+            : detourLevel === 2
+            ? 8.0
+            : detourLevel >= 3
+            ? 12.0
+            : 3.0
+        : detourLevel === 1
+        ? 3.0
+        : detourLevel === 2
+        ? 6.0
+        : detourLevel >= 3
+        ? 10.0
+        : 2.0
+    const minimumDistanceKm = getPointToPointMinimumDistanceKm(
+        directDistanceKm,
+        targetDistance,
+        detourLevel,
+        relaxed,
+    )
+
+    return Math.max(
+        minimumDistanceKm + slackKm,
+        Math.max(targetKm * targetMultiplier, directDistanceKm * directMultiplier),
     )
 }
 
@@ -836,13 +1012,22 @@ function isPointToPointDetourAcceptable(
     directDistanceKm: number,
     targetDistance: number | undefined,
     detourLevel: number,
+    relaxed = false,
 ): boolean {
     const minimumDistanceKm = getPointToPointMinimumDistanceKm(
         directDistanceKm,
         targetDistance,
         detourLevel,
+        relaxed,
     )
-    return getRouteDistanceKm(route) >= minimumDistanceKm
+    const maximumDistanceKm = getPointToPointMaximumDistanceKm(
+        directDistanceKm,
+        targetDistance,
+        detourLevel,
+        relaxed,
+    )
+    const distanceKm = getRouteDistanceKm(route)
+    return distanceKm >= minimumDistanceKm && distanceKm <= maximumDistanceKm
 }
 
 /**
@@ -867,6 +1052,9 @@ async function getMapboxRouteDetailed(
     accessToken: string,
     options?: {
         continueStraight?: boolean
+        maxAttempts?: number
+        timeoutMs?: number
+        retryDelayBaseMs?: number
     },
 ): Promise<MapboxRouteFetchResult> {
     // Format coordinates: "lon,lat;lon,lat;..."
@@ -887,9 +1075,13 @@ async function getMapboxRouteDetailed(
         url += `&radiuses=${radiuses}`
     }
 
-    for (let attempt = 1; attempt <= MAX_MAPBOX_FETCH_ATTEMPTS; attempt++) {
+    const maxAttempts = Math.max(1, Math.min(4, options?.maxAttempts ?? MAX_MAPBOX_FETCH_ATTEMPTS))
+    const timeoutMs = Math.max(4000, Math.min(22000, options?.timeoutMs ?? MAPBOX_FETCH_TIMEOUT_MS))
+    const retryDelayBaseMs = Math.max(120, Math.min(800, options?.retryDelayBaseMs ?? 180))
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
         const controller = new AbortController()
-        const timeoutId = setTimeout(() => controller.abort(), MAPBOX_FETCH_TIMEOUT_MS)
+        const timeoutId = setTimeout(() => controller.abort(), timeoutMs)
         try {
             const res = await fetch(url, { signal: controller.signal })
             if (!res.ok) {
@@ -901,9 +1093,9 @@ async function getMapboxRouteDetailed(
                     details: text,
                 }
                 const retryable = RETRYABLE_MAPBOX_STATUS_CODES.has(res.status)
-                if (retryable && attempt < MAX_MAPBOX_FETCH_ATTEMPTS) {
-                    console.warn(`Mapbox API retryable error (${res.status}), retry ${attempt + 1}/${MAX_MAPBOX_FETCH_ATTEMPTS}`)
-                    await wait(180 * attempt)
+                if (retryable && attempt < maxAttempts) {
+                    console.warn(`Mapbox API retryable error (${res.status}), retry ${attempt + 1}/${maxAttempts}`)
+                    await wait(retryDelayBaseMs * attempt)
                     continue
                 }
                 console.error(`Mapbox API Error (${res.status}): ${text}`)
@@ -926,17 +1118,20 @@ async function getMapboxRouteDetailed(
             }
         } catch (error) {
             const details = error instanceof Error ? error.message : String(error)
+            const isAbort =
+                (error instanceof DOMException && error.name === 'AbortError') ||
+                String(details).toLowerCase().includes('abort')
             const failure: MapboxRouteFetchResult = {
                 route: null,
-                outcome: 'network_error',
+                outcome: isAbort ? 'timeout' : 'network_error',
                 details,
             }
-            if (attempt < MAX_MAPBOX_FETCH_ATTEMPTS) {
-                console.warn(`Mapbox network retry (${attempt + 1}/${MAX_MAPBOX_FETCH_ATTEMPTS}): ${details}`)
-                await wait(180 * attempt)
+            if (attempt < maxAttempts) {
+                console.warn(`Mapbox ${isAbort ? 'timeout' : 'network'} retry (${attempt + 1}/${maxAttempts}): ${details}`)
+                await wait(retryDelayBaseMs * attempt)
                 continue
             }
-            console.error(`Mapbox fetch failed: ${details}`)
+            console.error(`Mapbox fetch failed (${failure.outcome}): ${details}`)
             return failure
         } finally {
             clearTimeout(timeoutId)
@@ -958,6 +1153,9 @@ async function getMapboxRoute(
     accessToken: string,
     options?: {
         continueStraight?: boolean
+        maxAttempts?: number
+        timeoutMs?: number
+        retryDelayBaseMs?: number
     },
 ) {
     const result = await getMapboxRouteDetailed(
@@ -1250,10 +1448,10 @@ function widenDistanceConfigForRoundTripSearch(
     targetDistanceKm: number,
     phase: 'balanced' | 'fallback',
 ): DistanceConfig {
-    const minFactor = phase === 'fallback' ? 0.64 : 0.72
-    const maxFactor = phase === 'fallback' ? 1.38 : 1.28
-    const radiusMultiplier = phase === 'fallback' ? 1.26 : 1.12
-    const snapMultiplier = phase === 'fallback' ? 1.42 : 1.22
+    const minFactor = phase === 'fallback' ? 0.70 : 0.76
+    const maxFactor = phase === 'fallback' ? 1.34 : 1.24
+    const radiusMultiplier = phase === 'fallback' ? 1.20 : 1.10
+    const snapMultiplier = phase === 'fallback' ? 1.32 : 1.18
 
     return {
         radiusKm: base.radiusKm * radiusMultiplier,
@@ -1288,6 +1486,9 @@ async function searchBestRoundTripRoute({
     mapboxProfile,
     excludeParams,
     accessToken,
+    variantHint,
+    fingerprintHint,
+    maxCandidateAttemptsHint,
 }: {
     startLocation: Coordinate
     targetDistanceKm: number
@@ -1301,8 +1502,23 @@ async function searchBestRoundTripRoute({
     mapboxProfile: string
     excludeParams: string
     accessToken: string
+    variantHint?: string
+    fingerprintHint?: string
+    maxCandidateAttemptsHint?: number
 }): Promise<RoundTripSearchResult | null> {
     const highCostCurveSearch = mode === 'Kurvenjagd' && targetDistanceKm >= 130
+    const normalizedVariantHint = normalizeHint(variantHint)
+    const normalizedFingerprintHint = normalizeHint(fingerprintHint)
+    const globalAttemptBudget = Math.max(
+        highCostCurveSearch ? 4 : 5,
+        Math.min(
+            highCostCurveSearch ? 7 : 10,
+            Math.round(maxCandidateAttemptsHint ?? (highCostCurveSearch ? 7 : 9)),
+        ),
+    )
+    const searchStartTs = Date.now()
+    const roundTripTimeBudgetMs = highCostCurveSearch ? 16000 : 19000
+
     const searchPhases = [
         {
             name: 'strict',
@@ -1342,6 +1558,8 @@ async function searchBestRoundTripRoute({
     let bestRoute: any = null
     let bestQuality: RouteQualityEvaluation | null = null
     const rejectReasons = new Map<string, number>()
+    let rateLimitHits = 0
+    let timeoutHits = 0
 
     const registerReject = (reason: string) => {
         const normalized = normalizeRoundTripRejectReason(reason)
@@ -1349,7 +1567,8 @@ async function searchBestRoundTripRoute({
     }
 
     for (const phase of searchPhases) {
-        const candidatePlans = buildRoundTripWaypointCandidates({
+        const orderedCandidates = prioritizeCandidatePlans(
+            buildRoundTripWaypointCandidates({
             start: startLocation,
             distanceConfig: phase.distanceConfig,
             targetDistanceKm,
@@ -1359,17 +1578,22 @@ async function searchBestRoundTripRoute({
             waypointShapeFactor,
             radiusMultiplier,
             zigzagWaypoints,
-        }).slice(0, highCostCurveSearch ? 4 : undefined)
+            }),
+            phase.name,
+            normalizedVariantHint,
+            normalizedFingerprintHint,
+        )
         const maxPhaseAttempts =
             highCostCurveSearch
                 ? phase.name === 'strict'
-                    ? 4
-                    : 3
+                    ? 2
+                    : 1
                 : phase.name === 'strict'
-                ? 12
+                ? 4
                 : phase.name === 'balanced'
-                ? 10
-                : 8
+                ? 2
+                : 1
+        const candidatePlans = orderedCandidates.slice(0, Math.min(orderedCandidates.length, maxPhaseAttempts + 1))
         let phaseAttempts = 0
         let phaseAcceptedCandidates = 0
 
@@ -1379,7 +1603,11 @@ async function searchBestRoundTripRoute({
         )
 
         for (const plan of candidatePlans) {
-            if (phaseAttempts >= maxPhaseAttempts || candidateAttempts >= (highCostCurveSearch ? 10 : 24)) {
+            if (
+                phaseAttempts >= maxPhaseAttempts ||
+                candidateAttempts >= globalAttemptBudget ||
+                Date.now() - searchStartTs >= roundTripTimeBudgetMs
+            ) {
                 console.log(
                     `[RT] Phase ${phase.name}: stopping early after ${phaseAttempts} attempts (global=${candidateAttempts})`,
                 )
@@ -1398,10 +1626,29 @@ async function searchBestRoundTripRoute({
                 phase.exclude,
                 plan.radiuses,
                 accessToken,
-                { continueStraight: phase.continueStraight },
+                {
+                    continueStraight: phase.continueStraight,
+                    maxAttempts: 2,
+                    timeoutMs: 12000,
+                    retryDelayBaseMs: 220,
+                },
             )
+            const primaryFailureKind = getRetryKindFromMapboxFailure(fetchResult)
+            if (primaryFailureKind === 'rate_limit') rateLimitHits += 1
+            if (primaryFailureKind === 'timeout') timeoutHits += 1
 
-            if (fetchResult.outcome !== 'ok' && phase.exclude && phase.exclude.trim() !== '') {
+            if (rateLimitHits >= 2) {
+                throw new Error('Routing provider rate limit reached during round-trip search.')
+            }
+            if (timeoutHits >= 3) {
+                throw new Error('Routing provider timeout during round-trip search.')
+            }
+
+            if (
+                fetchResult.outcome === 'no_route' &&
+                phase.exclude &&
+                phase.exclude.trim() !== ''
+            ) {
                 console.log(`[RT] ${plan.label}: retry without excludes`)
                 const relaxedFetch = await getMapboxRouteDetailed(
                     plan.waypoints,
@@ -1409,12 +1656,22 @@ async function searchBestRoundTripRoute({
                     '',
                     plan.radiuses,
                     accessToken,
-                    { continueStraight: phase.continueStraight },
+                    {
+                        continueStraight: phase.continueStraight,
+                        maxAttempts: 1,
+                        timeoutMs: 10500,
+                    },
                 )
-                if (
-                    relaxedFetch.outcome === 'ok' ||
-                    (fetchResult.outcome !== 'ok' && relaxedFetch.outcome !== 'ok' && relaxedFetch.outcome !== 'http_error')
-                ) {
+                const relaxedFailureKind = getRetryKindFromMapboxFailure(relaxedFetch)
+                if (relaxedFailureKind === 'rate_limit') rateLimitHits += 1
+                if (relaxedFailureKind === 'timeout') timeoutHits += 1
+                if (rateLimitHits >= 2) {
+                    throw new Error('Routing provider rate limit reached during round-trip search.')
+                }
+                if (timeoutHits >= 3) {
+                    throw new Error('Routing provider timeout during round-trip search.')
+                }
+                if (relaxedFetch.outcome === 'ok') {
                     fetchResult = relaxedFetch
                 }
             }
@@ -1440,7 +1697,10 @@ async function searchBestRoundTripRoute({
             if (
                 quality.tier === 'reject' &&
                 phase.exclude &&
-                phase.exclude.trim() !== ''
+                phase.exclude.trim() !== '' &&
+                quality.reason.startsWith('overlap=') &&
+                rateLimitHits === 0 &&
+                timeoutHits < 2
             ) {
                 console.log(`[RT] ${plan.label}: rejected with excludes, trying relaxed street filter`)
                 const relaxedFetch = await getMapboxRouteDetailed(
@@ -1449,8 +1709,21 @@ async function searchBestRoundTripRoute({
                     '',
                     plan.radiuses,
                     accessToken,
-                    { continueStraight: phase.continueStraight },
+                    {
+                        continueStraight: phase.continueStraight,
+                        maxAttempts: 1,
+                        timeoutMs: 10500,
+                    },
                 )
+                const relaxedFailureKind = getRetryKindFromMapboxFailure(relaxedFetch)
+                if (relaxedFailureKind === 'rate_limit') rateLimitHits += 1
+                if (relaxedFailureKind === 'timeout') timeoutHits += 1
+                if (rateLimitHits >= 2) {
+                    throw new Error('Routing provider rate limit reached during round-trip search.')
+                }
+                if (timeoutHits >= 3) {
+                    throw new Error('Routing provider timeout during round-trip search.')
+                }
                 if (relaxedFetch.route) {
                     const relaxedQuality = evaluateRouteQuality(relaxedFetch.route, 'ROUND_TRIP', {
                         targetDistanceKm,
@@ -1487,10 +1760,10 @@ async function searchBestRoundTripRoute({
             }
 
             const shouldStopAfterGoodCandidate =
-                candidateAttempts >= 6 &&
+                candidateAttempts >= (highCostCurveSearch ? 3 : 4) &&
                 (
                     quality.tier === 'ideal' ||
-                    (quality.tier === 'acceptable' && phaseAcceptedCandidates >= 2) ||
+                    (quality.tier === 'acceptable' && phaseAcceptedCandidates >= 1) ||
                     (phase.name === 'fallback' && phaseAcceptedCandidates >= 1)
                 )
 
@@ -1502,7 +1775,10 @@ async function searchBestRoundTripRoute({
             }
         }
 
-        if (candidateAttempts >= (highCostCurveSearch ? 10 : 24)) {
+        if (
+            candidateAttempts >= globalAttemptBudget ||
+            Date.now() - searchStartTs >= roundTripTimeBudgetMs
+        ) {
             break
         }
         if (bestQuality?.tier === 'ideal') {
@@ -1538,10 +1814,17 @@ async function searchBestRoundTripRoute({
         rejectedCandidates,
         rejectReasons: Object.fromEntries(rejectReasons),
         searchPhases: searchPhases.map((phase) => phase.name),
+        variantHint: normalizedVariantHint,
+        fingerprintHint: normalizedFingerprintHint,
     }
 }
 
-function classifyHttpStatusFromRoutingError(message: string): number {
+function classifyRoutingError(message: string): {
+    status: number
+    code: 'INVALID_REQUEST' | 'NO_ROUTE' | 'UNAUTHORIZED' | 'RATE_LIMIT' | 'TIMEOUT' | 'WORKER_LIMIT' | 'INTERNAL_ERROR'
+    retryable: boolean
+    retryAfterSec?: number
+} {
     const lower = message.toLowerCase()
     if (
         lower.includes('invalid') ||
@@ -1549,18 +1832,35 @@ function classifyHttpStatusFromRoutingError(message: string): number {
         lower.includes('out of bounds') ||
         lower.includes('required')
     ) {
-        return 422
+        return { status: 422, code: 'INVALID_REQUEST', retryable: false }
     }
     if (lower.includes('no route found') || lower.includes('keine route')) {
-        return 404
+        return { status: 404, code: 'NO_ROUTE', retryable: false }
     }
     if (lower.includes('unauthorized') || lower.includes('forbidden') || lower.includes('jwt')) {
-        return 401
+        return { status: 401, code: 'UNAUTHORIZED', retryable: false }
     }
-    if (lower.includes('rate limit') || lower.includes('too many requests')) {
-        return 429
+    if (
+        lower.includes('worker limit') ||
+        lower.includes('cpu time limit') ||
+        lower.includes('memory limit') ||
+        lower.includes('wall clock') ||
+        lower.includes('resource limit')
+    ) {
+        return { status: 503, code: 'WORKER_LIMIT', retryable: true, retryAfterSec: 2 }
     }
-    return 500
+    if (lower.includes('rate limit') || lower.includes('too many requests') || lower.includes('mapbox_http_429')) {
+        return { status: 429, code: 'RATE_LIMIT', retryable: true, retryAfterSec: 8 }
+    }
+    if (
+        lower.includes('timeout') ||
+        lower.includes('timed out') ||
+        lower.includes('aborterror') ||
+        lower.includes('mapbox_timeout')
+    ) {
+        return { status: 504, code: 'TIMEOUT', retryable: true, retryAfterSec: 5 }
+    }
+    return { status: 500, code: 'INTERNAL_ERROR', retryable: false }
 }
 
 Deno.serve(async (req) => {
@@ -1588,6 +1888,16 @@ Deno.serve(async (req) => {
                 ? body.radius_multiplier
                 : undefined
         const zigzagWaypoints = body.zigzag_waypoints === true
+        const variantHint = normalizeHint(
+            body.route_variant_hint ?? body.variant_hint ?? body.style_profile,
+        )
+        const fingerprintHint = normalizeHint(body.route_fingerprint_hint ?? body.fingerprint_hint)
+        const maxCandidateAttemptsHint =
+            typeof body.max_candidate_attempts === 'number' && Number.isFinite(body.max_candidate_attempts)
+                ? body.max_candidate_attempts
+                : undefined
+        const hintSeedOffset =
+            stableStringHash(`${variantHint ?? ''}|${fingerprintHint ?? ''}`) % 9973
         console.log(
             '[RoutingRequest]',
             JSON.stringify({
@@ -1605,6 +1915,9 @@ Deno.serve(async (req) => {
                 radiusMultiplier: radiusMultiplier ?? null,
                 zigzagWaypoints,
                 avoidHighways: body.avoid_highways === true,
+                variantHint: variantHint ?? null,
+                fingerprintHint: fingerprintHint ?? null,
+                maxCandidateAttemptsHint: maxCandidateAttemptsHint ?? null,
             }),
         )
 
@@ -1653,10 +1966,13 @@ Deno.serve(async (req) => {
         if (body.radius_multiplier != null && (typeof body.radius_multiplier !== 'number' || !Number.isFinite(body.radius_multiplier))) {
             throw new Error("Invalid radius_multiplier: must be a finite number")
         }
+        if (body.max_candidate_attempts != null && (typeof body.max_candidate_attempts !== 'number' || !Number.isFinite(body.max_candidate_attempts))) {
+            throw new Error("Invalid max_candidate_attempts: must be a finite number")
+        }
 
         const avoidHighways = body.avoid_highways === true
         const requestContinueStraight = body.continue_straight !== false
-        const randomSeed = body.randomSeed ?? Math.floor(Math.random() * 100000)
+        const randomSeed = (body.randomSeed ?? Math.floor(Math.random() * 100000)) + hintSeedOffset
 
         // --- 2. Fahrstil-Parameter (Mapbox) ---
         // Jeder Stil nutzt unterschiedliche Mapbox-Profile und Exclude-Parameter.
@@ -1739,15 +2055,18 @@ Deno.serve(async (req) => {
                                     waypointShapeFactor,
                                     zigzagWaypoints,
                                     randomSeed: body.randomSeed ?? 0,
+                                    simplifyWaypoints: body.simplify_waypoints === true,
+                                    maxWaypoints: body.max_waypoints,
                                 })
                               : [startLocation, body.destination_location];
-                          const scenicRadius = detourLevel >= 3
-                              ? '18000'
+                          const scenicRadiusMeters = detourLevel >= 3
+                              ? Math.min(15000, Math.max(6500, Math.round(pointToPointDirectDistanceKm * 320)))
                               : detourLevel === 2
-                              ? '14000'
+                              ? Math.min(12000, Math.max(5400, Math.round(pointToPointDirectDistanceKm * 260)))
                               : detourLevel === 1
-                              ? '13000'
-                              : '6000'
+                              ? Math.min(9000, Math.max(4200, Math.round(pointToPointDirectDistanceKm * 220)))
+                              : 6000
+                          const scenicRadius = `${scenicRadiusMeters}`
                           radiusesParams = finalWaypoints
                               .map((_, i) => (i === 0 || i === finalWaypoints.length - 1) ? 'unlimited' : scenicRadius)
                               .join(';');
@@ -1804,6 +2123,9 @@ Deno.serve(async (req) => {
                 mapboxProfile,
                 excludeParams,
                 accessToken: MAPBOX_ACCESS_TOKEN,
+                variantHint,
+                fingerprintHint,
+                maxCandidateAttemptsHint,
             });
             if (roundTripSearch) {
                 route = roundTripSearch.route;
@@ -1820,7 +2142,12 @@ Deno.serve(async (req) => {
                 excludeParams,
                 radiusesParams,
                 MAPBOX_ACCESS_TOKEN,
-                { continueStraight: requestContinueStraight },
+                {
+                    continueStraight: requestContinueStraight,
+                    maxAttempts: pointToPointIsScenic ? 2 : 2,
+                    timeoutMs: pointToPointIsScenic ? 12000 : 10000,
+                    retryDelayBaseMs: 220,
+                },
             );
 
             if (!route && excludeParams && excludeParams.trim() !== '') {
@@ -1831,7 +2158,11 @@ Deno.serve(async (req) => {
                     '',
                     radiusesParams,
                     MAPBOX_ACCESS_TOKEN,
-                    { continueStraight: requestContinueStraight },
+                    {
+                        continueStraight: requestContinueStraight,
+                        maxAttempts: 1,
+                        timeoutMs: 9500,
+                    },
                 );
             }
 
@@ -1854,26 +2185,65 @@ Deno.serve(async (req) => {
                     pointToPointDirectDistanceKm,
                     targetDistance,
                     detourLevel,
+                    body.simplify_waypoints === true,
                 )
             ) {
+                const routeDistanceKm = getRouteDistanceKm(route)
+                const minimumDistanceKm = getPointToPointMinimumDistanceKm(
+                    pointToPointDirectDistanceKm,
+                    targetDistance,
+                    detourLevel,
+                    body.simplify_waypoints === true,
+                )
+                const maximumDistanceKm = getPointToPointMaximumDistanceKm(
+                    pointToPointDirectDistanceKm,
+                    targetDistance,
+                    detourLevel,
+                    body.simplify_waypoints === true,
+                )
                 console.log(
-                    `Initial P2P scenic route rejected: ${getRouteDistanceKm(route).toFixed(1)}km < required ${getPointToPointMinimumDistanceKm(pointToPointDirectDistanceKm, targetDistance, detourLevel).toFixed(1)}km`,
+                    `Initial P2P scenic route rejected: ${routeDistanceKm.toFixed(1)}km outside ${minimumDistanceKm.toFixed(1)}-${maximumDistanceKm.toFixed(1)}km`,
                 )
                 route = null
             }
         }
 
         if (!route && planning_type === 'Zufall' && currentRouteType === 'POINT_TO_POINT' && body.destination_location && pointToPointIsScenic) {
-            for (let retry = 0; retry < 4 && !route; retry++) {
+            const scenicRetryCount = body.simplify_waypoints === true ? 3 : 2
+            for (let retry = 0; retry < scenicRetryCount && !route; retry++) {
                 console.log(`P2P scenic retry ${retry + 1}: regenerating waypoints...`);
                 const retryDetourLevel = Math.max(
-                    detourLevel - (retry >= 3 ? 1 : 0),
-                    0,
+                    retry === 0
+                        ? detourLevel
+                        : retry === 1
+                        ? detourLevel - 1
+                        : 1,
+                    1,
                 )
+                const retrySimplifyWaypoints = body.simplify_waypoints === true || retry > 0
+                const retryMaxWaypoints = retrySimplifyWaypoints
+                    ? Math.max(
+                        1,
+                        Math.min(
+                            3,
+                            retry >= 2
+                                ? 1
+                                : body.max_waypoints ?? (retryDetourLevel >= 3 ? 2 : 1),
+                        ),
+                    )
+                    : undefined
+                const retryOffsetSide =
+                    offsetSide == null
+                        ? undefined
+                        : retry % 2 === 0
+                        ? offsetSide
+                        : -offsetSide
                 const softenedTarget = targetDistance != null
                     ? Math.max(
-                        pointToPointDirectDistanceKm * 1.22,
-                        targetDistance * (0.99 - retry * 0.04),
+                        pointToPointDirectDistanceKm *
+                            (retry >= 2 ? 1.10 : retrySimplifyWaypoints ? 1.14 : 1.22),
+                        targetDistance *
+                            (retry >= 2 ? 0.82 : retrySimplifyWaypoints ? 0.88 : 0.95),
                     )
                     : undefined
                 const retryWaypoints = buildPointToPointScenicWaypoints({
@@ -1883,18 +2253,21 @@ Deno.serve(async (req) => {
                     targetDistance: softenedTarget,
                     detourLevel: retryDetourLevel,
                     detourFactor: body.detour_factor,
-                    offsetSide,
+                    offsetSide: retryOffsetSide,
                     waypointShapeFactor,
                     zigzagWaypoints,
                     randomSeed: (body.randomSeed ?? 0) + retry + 1,
+                    simplifyWaypoints: retrySimplifyWaypoints,
+                    maxWaypoints: retryMaxWaypoints,
                 })
-                const retryRadius = retryDetourLevel >= 3
-                    ? '19000'
+                const retryRadiusMeters = retryDetourLevel >= 3
+                    ? Math.min(15500, Math.max(7000, Math.round(pointToPointDirectDistanceKm * 330)))
                     : retryDetourLevel === 2
-                    ? '15000'
+                    ? Math.min(12500, Math.max(5600, Math.round(pointToPointDirectDistanceKm * 270)))
                     : retryDetourLevel === 1
-                    ? '13500'
-                    : '7000'
+                    ? Math.min(9500, Math.max(4400, Math.round(pointToPointDirectDistanceKm * 230)))
+                    : 7000
+                const retryRadius = `${retryRadiusMeters}`
                 const retryRadiuses = retryWaypoints
                     .map((_, i) => (i === 0 || i === retryWaypoints.length - 1) ? 'unlimited' : retryRadius)
                     .join(';')
@@ -1905,7 +2278,11 @@ Deno.serve(async (req) => {
                     excludeParams,
                     retryRadiuses,
                     MAPBOX_ACCESS_TOKEN,
-                    { continueStraight: requestContinueStraight },
+                    {
+                        continueStraight: requestContinueStraight,
+                        maxAttempts: 1,
+                        timeoutMs: 10500,
+                    },
                 );
                 if (!route && excludeParams && excludeParams.trim() !== '') {
                     route = await getMapboxRoute(
@@ -1914,7 +2291,11 @@ Deno.serve(async (req) => {
                         '',
                         retryRadiuses,
                         MAPBOX_ACCESS_TOKEN,
-                        { continueStraight: requestContinueStraight },
+                        {
+                            continueStraight: requestContinueStraight,
+                            maxAttempts: 1,
+                            timeoutMs: 9500,
+                        },
                     );
                 }
                 if (route) {
@@ -1932,10 +2313,24 @@ Deno.serve(async (req) => {
                             pointToPointDirectDistanceKm,
                             softenedTarget ?? targetDistance,
                             retryDetourLevel,
+                            retrySimplifyWaypoints,
                         )
                     ) {
+                        const routeDistanceKm = getRouteDistanceKm(route)
+                        const minimumDistanceKm = getPointToPointMinimumDistanceKm(
+                            pointToPointDirectDistanceKm,
+                            softenedTarget ?? targetDistance,
+                            retryDetourLevel,
+                            retrySimplifyWaypoints,
+                        )
+                        const maximumDistanceKm = getPointToPointMaximumDistanceKm(
+                            pointToPointDirectDistanceKm,
+                            softenedTarget ?? targetDistance,
+                            retryDetourLevel,
+                            retrySimplifyWaypoints,
+                        )
                         console.log(
-                            `P2P scenic retry ${retry + 1}: route rejected because it is too short (${getRouteDistanceKm(route).toFixed(1)}km < required ${getPointToPointMinimumDistanceKm(pointToPointDirectDistanceKm, softenedTarget ?? targetDistance, retryDetourLevel).toFixed(1)}km)`,
+                            `P2P scenic retry ${retry + 1}: route rejected because ${routeDistanceKm.toFixed(1)}km is outside ${minimumDistanceKm.toFixed(1)}-${maximumDistanceKm.toFixed(1)}km`,
                         )
                         route = null
                         continue
@@ -1946,7 +2341,13 @@ Deno.serve(async (req) => {
             }
         }
 
-        if (!route && planning_type === 'Zufall' && currentRouteType === 'POINT_TO_POINT' && body.destination_location) {
+        if (
+            !route &&
+            planning_type === 'Zufall' &&
+            currentRouteType === 'POINT_TO_POINT' &&
+            body.destination_location &&
+            !pointToPointIsScenic
+        ) {
             console.log('P2P scenic fallback: using direct A->B route');
             const fallbackWaypoints = [startLocation, body.destination_location];
             const fallbackRadiuses = 'unlimited;unlimited';
@@ -1956,7 +2357,11 @@ Deno.serve(async (req) => {
                 '',
                 fallbackRadiuses,
                 MAPBOX_ACCESS_TOKEN,
-                { continueStraight: requestContinueStraight },
+                {
+                    continueStraight: requestContinueStraight,
+                    maxAttempts: 1,
+                    timeoutMs: 9000,
+                },
             );
             if (route) {
                 finalWaypoints = fallbackWaypoints;
@@ -2112,6 +2517,10 @@ Deno.serve(async (req) => {
                                     roundTripSearch.rejectReasons,
                                 search_phases:
                                     roundTripSearch.searchPhases,
+                                variant_hint:
+                                    roundTripSearch.variantHint ?? null,
+                                fingerprint_hint:
+                                    roundTripSearch.fingerprintHint ?? null,
                             },
                           }
                         : {}),
@@ -2122,13 +2531,25 @@ Deno.serve(async (req) => {
 
     } catch (error: any) {
         const message = error?.message ?? 'Unbekannter Fehler in generate-cruise-route'
-        const status = classifyHttpStatusFromRoutingError(message)
+        const classification = classifyRoutingError(message)
         console.error("Error in generate-cruise-route:", message, error?.stack ?? '')
+        const responseHeaders: Record<string, string> = {
+            ...getCorsHeaders(req),
+            'Content-Type': 'application/json',
+        }
+        if (classification.retryAfterSec != null) {
+            responseHeaders['Retry-After'] = String(classification.retryAfterSec)
+        }
         return new Response(
-            JSON.stringify({ error: message }),
+            JSON.stringify({
+                error: message,
+                code: classification.code,
+                retryable: classification.retryable,
+                retry_after_sec: classification.retryAfterSec ?? null,
+            }),
             {
-                status,
-                headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' }
+                status: classification.status,
+                headers: responseHeaders,
             }
         )
     }
