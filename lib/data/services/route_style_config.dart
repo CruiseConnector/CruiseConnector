@@ -15,6 +15,7 @@ class RouteStyleConfig {
     required this.minRoundTripKm,
     required this.maxRoundTripKm,
     required this.retryAttempts,
+    required this.minStyleFitScore,
     this.minCurvesPer50km,
     this.maxAvgSpeedKmh,
     this.preferFlatTerrain = false,
@@ -36,6 +37,7 @@ class RouteStyleConfig {
   final int minRoundTripKm;
   final int maxRoundTripKm;
   final int retryAttempts;
+  final double minStyleFitScore;
 
   /// Mindest-Kurven pro 50km (Bearing-Änderungen >15°).
   /// Nur für Kurvenjagd relevant — null = kein Check.
@@ -64,6 +66,7 @@ class RouteStyleConfig {
     minRoundTripKm: 25,
     maxRoundTripKm: 280,
     retryAttempts: 4,
+    minStyleFitScore: 50.0,
     preferFlatTerrain: true,
   );
 
@@ -78,6 +81,7 @@ class RouteStyleConfig {
     minRoundTripKm: 20,
     maxRoundTripKm: 230,
     retryAttempts: 5,
+    minStyleFitScore: 56.0,
     minCurvesPer50km: 20,
     zigzagWaypoints: true,
   );
@@ -92,6 +96,7 @@ class RouteStyleConfig {
     minRoundTripKm: 10,
     maxRoundTripKm: 130,
     retryAttempts: 3,
+    minStyleFitScore: 48.0,
     maxAvgSpeedKmh: 70.0,
   );
 
@@ -105,6 +110,7 @@ class RouteStyleConfig {
     minRoundTripKm: 30,
     maxRoundTripKm: 320,
     retryAttempts: 5,
+    minStyleFitScore: 46.0,
   );
 
   /// Gibt die passende Config für einen Stil-Namen zurück.
@@ -150,7 +156,130 @@ class RouteStyleConfig {
       }
     }
 
-    return true;
+    final styleFitScore = scoreStyleFit(
+      coordinates: coordinates,
+      distanceKm: distanceKm,
+      durationSeconds: durationSeconds,
+    );
+    return styleFitScore >= minStyleFitScore;
+  }
+
+  /// Weicher Stil-Score (0-100) für bereits generierte Routen.
+  ///
+  /// Der Score ergänzt die harten Style-Checks oben mit Form- und
+  /// Fahrdynamik-Heuristiken, ohne weitere API-Aufrufe auszulösen.
+  double scoreStyleFit({
+    required List<List<double>> coordinates,
+    required double distanceKm,
+    double? durationSeconds,
+  }) {
+    if (coordinates.length < 6 || distanceKm <= 0) {
+      return 0.0;
+    }
+
+    final curveCount = _countBearingChanges(coordinates, thresholdDegrees: 15);
+    final sharpCurveCount = _countBearingChanges(
+      coordinates,
+      thresholdDegrees: 32,
+    );
+    final curveDensityPer50Km = (curveCount / distanceKm) * 50.0;
+    final sharpCurveDensityPer50Km = (sharpCurveCount / distanceKm) * 50.0;
+    final spreadRatio = _estimateSpreadRatio(coordinates, distanceKm);
+    final compactnessScore = _estimateCompactnessScore(coordinates);
+    final microZigzagPercent = _estimateMicroZigzagPercent(coordinates);
+    final smoothnessScore = 1.0 - (microZigzagPercent / 100.0);
+    final averageSpeedKmh = durationSeconds != null && durationSeconds > 0
+        ? distanceKm / (durationSeconds / 3600.0)
+        : null;
+
+    final normalizedScore = switch (profileKey) {
+      'sport' => _weightedAverage([
+        _weighted(
+          _scoreAround(curveDensityPer50Km, center: 12.0, tolerance: 16.0),
+          0.26,
+        ),
+        _weighted(
+          _scoreAround(sharpCurveDensityPer50Km, center: 5.0, tolerance: 7.0),
+          0.14,
+        ),
+        _weighted(_scoreRamp(spreadRatio, softMin: 0.16, idealMin: 0.28), 0.26),
+        _weighted(
+          _scoreAround(compactnessScore, center: 46.0, tolerance: 28.0),
+          0.12,
+        ),
+        _weighted(smoothnessScore, 0.22),
+      ]),
+      'kurvenjagd' => _weightedAverage([
+        _weighted(
+          _scoreRamp(curveDensityPer50Km, softMin: 18.0, idealMin: 30.0),
+          0.34,
+        ),
+        _weighted(
+          _scoreRamp(sharpCurveDensityPer50Km, softMin: 7.0, idealMin: 15.0),
+          0.22,
+        ),
+        _weighted(
+          _scoreAround(spreadRatio, center: 0.24, tolerance: 0.16),
+          0.12,
+        ),
+        _weighted(
+          _scoreAround(compactnessScore, center: 52.0, tolerance: 26.0),
+          0.12,
+        ),
+        _weighted(
+          _scoreRamp(smoothnessScore, softMin: 0.55, idealMin: 0.8),
+          0.20,
+        ),
+      ]),
+      'abendrunde' => _weightedAverage([
+        _weighted(
+          _scoreAround(compactnessScore, center: 62.0, tolerance: 24.0),
+          0.28,
+        ),
+        _weighted(
+          _scoreAround(curveDensityPer50Km, center: 15.0, tolerance: 13.0),
+          0.18,
+        ),
+        _weighted(
+          _scoreAround(spreadRatio, center: 0.18, tolerance: 0.10),
+          0.14,
+        ),
+        _weighted(smoothnessScore, 0.20),
+        _weighted(
+          averageSpeedKmh == null
+              ? 0.65
+              : _scoreAround(averageSpeedKmh, center: 48.0, tolerance: 24.0),
+          0.20,
+        ),
+      ]),
+      'entdecker' => _weightedAverage([
+        _weighted(_scoreRamp(spreadRatio, softMin: 0.18, idealMin: 0.32), 0.30),
+        _weighted(
+          _scoreAround(curveDensityPer50Km, center: 18.0, tolerance: 14.0),
+          0.20,
+        ),
+        _weighted(
+          _scoreAround(compactnessScore, center: 42.0, tolerance: 24.0),
+          0.16,
+        ),
+        _weighted(smoothnessScore, 0.18),
+        _weighted(_scoreRamp(distanceKm, softMin: 35.0, idealMin: 70.0), 0.16),
+      ]),
+      _ => _weightedAverage([
+        _weighted(
+          _scoreAround(curveDensityPer50Km, center: 16.0, tolerance: 14.0),
+          0.35,
+        ),
+        _weighted(_scoreRamp(spreadRatio, softMin: 0.16, idealMin: 0.26), 0.25),
+        _weighted(
+          _scoreAround(compactnessScore, center: 50.0, tolerance: 24.0),
+          0.20,
+        ),
+        _weighted(smoothnessScore, 0.20),
+      ]),
+    };
+
+    return (normalizedScore * 100.0).clamp(0.0, 100.0);
   }
 
   int clampRoundTripDistanceKm(int requestedKm) {
@@ -298,6 +427,213 @@ class RouteStyleConfig {
     if (diff < -180) diff += 360;
     return diff;
   }
+
+  static List<_StyleProjectedPoint> _projectToMeters(
+    List<List<double>> coordinates,
+  ) {
+    if (coordinates.isEmpty) return const [];
+    final origin = coordinates.first;
+    if (origin.length < 2) return const [];
+    final originLng = origin[0];
+    final originLat = origin[1];
+    final cosLat = math.cos(originLat * math.pi / 180.0);
+
+    return coordinates
+        .where((point) => point.length >= 2)
+        .map(
+          (point) => _StyleProjectedPoint(
+            x: (point[0] - originLng) * 111320.0 * cosLat,
+            y: (point[1] - originLat) * 110540.0,
+          ),
+        )
+        .toList();
+  }
+
+  static double _estimateSpreadRatio(
+    List<List<double>> coordinates,
+    double distanceKm,
+  ) {
+    if (coordinates.length < 2 || distanceKm <= 0) return 0.0;
+    final projected = _projectToMeters(coordinates);
+    if (projected.isEmpty) return 0.0;
+
+    var minX = projected.first.x;
+    var maxX = projected.first.x;
+    var minY = projected.first.y;
+    var maxY = projected.first.y;
+    for (final point in projected.skip(1)) {
+      minX = math.min(minX, point.x);
+      maxX = math.max(maxX, point.x);
+      minY = math.min(minY, point.y);
+      maxY = math.max(maxY, point.y);
+    }
+
+    final diagonalKm =
+        math.sqrt(math.pow(maxX - minX, 2) + math.pow(maxY - minY, 2)) / 1000.0;
+    return (diagonalKm / distanceKm).clamp(0.0, 1.0);
+  }
+
+  static double _estimateCompactnessScore(List<List<double>> coordinates) {
+    if (coordinates.length < 5) return 0.0;
+    final projected = _projectToMeters(
+      _sampleCoordinates(coordinates, sampleCount: 56),
+    );
+    if (projected.length < 5) return 0.0;
+
+    final polygonArea = _polygonArea(projected);
+    if (polygonArea <= 0) return 0.0;
+
+    var perimeter = 0.0;
+    for (var i = 1; i < projected.length; i++) {
+      perimeter += projected[i - 1].distanceTo(projected[i]);
+    }
+    perimeter += projected.last.distanceTo(projected.first);
+    if (perimeter <= 0) return 0.0;
+
+    final quotient = (4 * math.pi * polygonArea) / (perimeter * perimeter);
+    return ((quotient / 0.24).clamp(0.0, 1.0)) * 100.0;
+  }
+
+  static double _estimateMicroZigzagPercent(List<List<double>> coordinates) {
+    if (coordinates.length < 10) return 0.0;
+    final sampled = _sampleCoordinates(coordinates, sampleCount: 72);
+    final projected = _projectToMeters(sampled);
+    if (projected.length < 6) return 0.0;
+
+    final headings = <double>[];
+    final segmentLengths = <double>[];
+    for (var i = 1; i < projected.length; i++) {
+      final previous = projected[i - 1];
+      final current = projected[i];
+      final distance = previous.distanceTo(current);
+      if (distance < 6) continue;
+      segmentLengths.add(distance);
+      headings.add(
+        (math.atan2(current.y - previous.y, current.x - previous.x) *
+                    180 /
+                    math.pi +
+                360) %
+            360,
+      );
+    }
+    if (headings.length < 4) return 0.0;
+
+    var zigzagCount = 0;
+    var windowCount = 0;
+    for (var i = 1; i < headings.length - 1; i++) {
+      final firstDelta = _angleDiff(headings[i - 1], headings[i]);
+      final secondDelta = _angleDiff(headings[i], headings[i + 1]);
+      final firstMagnitude = firstDelta.abs();
+      final secondMagnitude = secondDelta.abs();
+      final recovery = _angleDiff(headings[i - 1], headings[i + 1]).abs();
+      final windowDistance =
+          segmentLengths[i - 1] + segmentLengths[i] + segmentLengths[i + 1];
+      windowCount++;
+
+      final isAlternating =
+          (firstDelta > 0 && secondDelta < 0) ||
+          (firstDelta < 0 && secondDelta > 0);
+      if (isAlternating &&
+          firstMagnitude >= 18 &&
+          secondMagnitude >= 18 &&
+          firstMagnitude <= 95 &&
+          secondMagnitude <= 95 &&
+          recovery <= 35 &&
+          windowDistance <= 170) {
+        zigzagCount++;
+      }
+    }
+
+    if (windowCount == 0) return 0.0;
+    return ((zigzagCount / windowCount) * 100.0).clamp(0.0, 100.0);
+  }
+
+  static List<List<double>> _sampleCoordinates(
+    List<List<double>> coordinates, {
+    required int sampleCount,
+  }) {
+    if (coordinates.isEmpty) return const [];
+    final effectiveSamples = math.max(
+      2,
+      math.min(sampleCount, coordinates.length),
+    );
+    final samples = <List<double>>[];
+    for (var i = 0; i < effectiveSamples; i++) {
+      final ratio = effectiveSamples == 1 ? 0.0 : i / (effectiveSamples - 1);
+      final index = ((coordinates.length - 1) * ratio).round();
+      final point = coordinates[index];
+      if (point.length < 2) continue;
+      samples.add(point);
+    }
+    return samples;
+  }
+
+  static double _polygonArea(List<_StyleProjectedPoint> points) {
+    if (points.length < 3) return 0.0;
+    var twiceArea = 0.0;
+    for (var i = 0; i < points.length; i++) {
+      final current = points[i];
+      final next = points[(i + 1) % points.length];
+      twiceArea += current.x * next.y - next.x * current.y;
+    }
+    return twiceArea.abs() / 2.0;
+  }
+
+  static _WeightedScore _weighted(double value, double weight) {
+    return _WeightedScore(value: value.clamp(0.0, 1.0), weight: weight);
+  }
+
+  static double _weightedAverage(List<_WeightedScore> scores) {
+    var weightedValue = 0.0;
+    var totalWeight = 0.0;
+    for (final score in scores) {
+      weightedValue += score.value * score.weight;
+      totalWeight += score.weight;
+    }
+    if (totalWeight <= 0) return 0.0;
+    return (weightedValue / totalWeight).clamp(0.0, 1.0);
+  }
+
+  static double _scoreAround(
+    double value, {
+    required double center,
+    required double tolerance,
+  }) {
+    if (tolerance <= 0) return value == center ? 1.0 : 0.0;
+    final delta = ((value - center).abs() / tolerance).clamp(0.0, 1.0);
+    return 1.0 - delta;
+  }
+
+  static double _scoreRamp(
+    double value, {
+    required double softMin,
+    required double idealMin,
+  }) {
+    if (idealMin <= softMin) {
+      return value >= idealMin ? 1.0 : 0.0;
+    }
+    if (value <= softMin) return 0.0;
+    if (value >= idealMin) return 1.0;
+    return ((value - softMin) / (idealMin - softMin)).clamp(0.0, 1.0);
+  }
+}
+
+class _StyleProjectedPoint {
+  const _StyleProjectedPoint({required this.x, required this.y});
+
+  final double x;
+  final double y;
+
+  double distanceTo(_StyleProjectedPoint other) {
+    return math.sqrt(math.pow(other.x - x, 2) + math.pow(other.y - y, 2));
+  }
+}
+
+class _WeightedScore {
+  const _WeightedScore({required this.value, required this.weight});
+
+  final double value;
+  final double weight;
 }
 
 /// Vorbereitung für personalisierte Entdecker-Routen.

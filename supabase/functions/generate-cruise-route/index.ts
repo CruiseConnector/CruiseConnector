@@ -275,23 +275,31 @@ function calculateLoopWaypoints(
     const rng = (offset: number) => seededUnit(s + offset);
 
     const baseBearing = seededBaseBearing(s + 97, preferredBearingDegrees);
-    const angleStep = 360 / (numWaypoints + 1);
+    // Sweep < 360° to avoid star/spider plans that repeatedly cut back through center.
+    const sweepDegrees = 275 + rng(3) * 45;
+    const startOffset = -sweepDegrees / 2 + (rng(4) - 0.5) * 18;
+    const angleStep = numWaypoints <= 1 ? 0 : sweepDegrees / (numWaypoints - 1);
 
     const waypoints: Coordinate[] = [];
 
     for (let i = 0; i < numWaypoints; i++) {
-        // Vary the distance slightly (0.7 to 1.3 of radius)
-        const distanceVariation = 0.7 + (rng(10 + i * 2) * 0.6);
+        // Keep a tighter ring to reduce multi-arm center returns and hooks.
+        const distanceVariation = 0.86 + (rng(10 + i * 2) * 0.24);
         const distance = searchRadiusKm * distanceVariation;
 
-        // Calculate bearing with some randomness
-        const bearing = baseBearing + (angleStep * i) + (rng(11 + i * 2) * 30 - 15);
+        // Mild bearing jitter keeps routes natural without creating sharp spider spokes.
+        const bearing = baseBearing + startOffset + (angleStep * i) + (rng(11 + i * 2) * 12 - 6);
 
         const wp = calculateDestination(start, distance, bearing);
         waypoints.push(wp);
     }
 
-    return waypoints;
+    return enforceWaypointRadiusBand(
+        start,
+        smoothWaypointChain(waypoints, 0.22),
+        searchRadiusKm * 0.68,
+        searchRadiusKm * 1.22,
+    );
 }
 
 function calculateCardinalLoopWaypoints(
@@ -305,20 +313,26 @@ function calculateCardinalLoopWaypoints(
     const rng = (offset: number) => seededUnit(s + offset);
     const baseBearing = seededBaseBearing(s + 211, preferredBearingDegrees);
     const normalizedEllipse = Math.max(0.75, ellipseFactor);
-    const bearings = [0, 90, 180, 270];
-
-    return bearings.map((bearingOffset, index) => {
+    const bearings = [20, 102, 198, 286];
+    const waypoints = bearings.map((bearingOffset, index) => {
         const axisFactor = index % 2 === 0
             ? normalizedEllipse
             : Math.max(0.65, 1 / normalizedEllipse);
-        const distanceVariation = 0.88 + rng(31 + index * 7) * 0.18;
-        const bearingJitter = (rng(32 + index * 7) - 0.5) * 20;
+        const distanceVariation = 0.90 + rng(31 + index * 7) * 0.14;
+        const bearingJitter = (rng(32 + index * 7) - 0.5) * 10;
         return calculateDestination(
             start,
             searchRadiusKm * axisFactor * distanceVariation,
             baseBearing + bearingOffset + bearingJitter,
         );
     });
+
+    return enforceWaypointRadiusBand(
+        start,
+        smoothWaypointChain(waypoints, 0.2),
+        searchRadiusKm * 0.66,
+        searchRadiusKm * 1.24,
+    );
 }
 
 function calculateZigZagWaypoints(
@@ -330,17 +344,25 @@ function calculateZigZagWaypoints(
     const s = seed ?? Math.floor(Math.random() * 100000);
     const rng = (offset: number) => seededUnit(s + offset);
     const baseBearing = seededBaseBearing(s + 377, preferredBearingDegrees);
-    const offsets = [42, -58, 128, -142];
+    // Softer "S" rhythm to avoid aggressive hooks.
+    const offsets = [34, -32, 92, -86];
 
-    return offsets.map((offset, index) => {
-        const distanceFactor = 0.86 + rng(71 + index * 11) * 0.34;
-        const drift = (rng(72 + index * 11) - 0.5) * 18;
+    const waypoints = offsets.map((offset, index) => {
+        const distanceFactor = 0.90 + rng(71 + index * 11) * 0.20;
+        const drift = (rng(72 + index * 11) - 0.5) * 12;
         return calculateDestination(
             start,
             searchRadiusKm * distanceFactor,
             baseBearing + offset + drift,
         );
     });
+
+    return enforceWaypointRadiusBand(
+        start,
+        smoothWaypointChain(waypoints, 0.18),
+        searchRadiusKm * 0.70,
+        searchRadiusKm * 1.20,
+    );
 }
 
 /**
@@ -352,15 +374,27 @@ function calculateReturnPath(start: Coordinate, outboundWaypoints: Coordinate[],
     const s = seed ?? Math.floor(Math.random() * 100000);
     const rng = (offset: number) => seededUnit(s + offset);
 
+    const firstWp = outboundWaypoints[0];
     const lastWp = outboundWaypoints[outboundWaypoints.length - 1];
-    const midWp = outboundWaypoints[Math.floor(outboundWaypoints.length / 2)];
-
-    const midBearing = calculateBearing(start, midWp);
-    const returnBearing = (midBearing + 120 + rng(50) * 60) % 360;
-    const returnDistance = calculateDistance(start, lastWp) * (0.6 + rng(51) * 0.3);
+    const firstBearing = calculateBearing(start, firstWp);
+    const lastBearing = calculateBearing(start, lastWp);
+    const blendedBearing = normalizeBearingDegrees(
+        (firstBearing + lastBearing) / 2 + 90 + (rng(50) - 0.5) * 28,
+    );
+    const returnBearing = blendedBearing;
+    const outerRadius = Math.max(
+        calculateDistance(start, firstWp),
+        calculateDistance(start, lastWp),
+    );
+    const returnDistance = outerRadius * (0.78 + rng(51) * 0.2);
 
     const returnWp = calculateDestination(start, returnDistance, returnBearing);
-    return [returnWp];
+    return enforceWaypointRadiusBand(
+        start,
+        [returnWp],
+        Math.max(outerRadius * 0.62, 0.8),
+        Math.max(outerRadius * 1.18, 1.6),
+    );
 }
 
 function calculateLoopWithReturnWaypoints(
@@ -379,6 +413,41 @@ function calculateLoopWithReturnWaypoints(
     );
     const returnWaypoints = calculateReturnPath(start, outbound, (seed ?? 0) + 73);
     return [...outbound, ...returnWaypoints];
+}
+
+function enforceWaypointRadiusBand(
+    start: Coordinate,
+    waypoints: Coordinate[],
+    minRadiusKm: number,
+    maxRadiusKm: number,
+): Coordinate[] {
+    const clampedMin = Math.max(0, minRadiusKm)
+    const clampedMax = Math.max(clampedMin + 0.05, maxRadiusKm)
+    return waypoints.map((wp) => {
+        const radius = calculateDistance(start, wp)
+        if (radius >= clampedMin && radius <= clampedMax) return wp
+        const bearing = calculateBearing(start, wp)
+        const adjustedRadius = Math.min(clampedMax, Math.max(clampedMin, radius))
+        return calculateDestination(start, adjustedRadius, bearing)
+    })
+}
+
+function smoothWaypointChain(waypoints: Coordinate[], strength: number = 0.2): Coordinate[] {
+    if (waypoints.length < 3) return waypoints
+    const clampedStrength = Math.max(0, Math.min(0.45, strength))
+    return waypoints.map((wp, i) => {
+        if (i === 0 || i === waypoints.length - 1) return wp
+        const prev = waypoints[i - 1]
+        const next = waypoints[i + 1]
+        const corridorMid = {
+            latitude: (prev.latitude + next.latitude) / 2,
+            longitude: (prev.longitude + next.longitude) / 2,
+        }
+        return {
+            latitude: wp.latitude * (1 - clampedStrength) + corridorMid.latitude * clampedStrength,
+            longitude: wp.longitude * (1 - clampedStrength) + corridorMid.longitude * clampedStrength,
+        }
+    })
 }
 
 function buildWaypointRadiuses(waypoints: Coordinate[], intermediateRadiusMeters: number): string {
@@ -499,11 +568,11 @@ function buildRoundTripWaypointCandidates({
         case 'Kurvenjagd':
             if (longTarget) {
                 addPlan('curve-zigzag-core', zigzag(1.06, 73), 1.16);
-                addPlan('curve-cardinal-wide', cardinal(1.18, 101, 1.0), 1.14);
-                addPlan('curve-triangle-wide', triangle(1.18, 887), 1.12);
-                addPlan('curve-return-long', loopWithReturn(1.14, 3, 263), 1.18);
-                addPlan('curve-loop-wide', loop(1.28, 4, 131), 1.2);
-                addPlan('curve-loop-open', loop(1.38, 4, 541), 1.26);
+                addPlan('curve-cardinal-wide', cardinal(1.14, 101, 1.0), 1.12);
+                addPlan('curve-triangle-wide', triangle(1.14, 887), 1.10);
+                addPlan('curve-return-long', loopWithReturn(1.10, 3, 263), 1.14);
+                addPlan('curve-loop-wide', loop(1.20, 4, 131), 1.16);
+                addPlan('curve-loop-open', loop(1.28, 4, 541), 1.20);
                 addPlan('curve-triangle', triangle(1.00, 397), 1.0);
                 addPlan('curve-loop-tight', loop(1.02, 4, 11), 1.05);
                 addPlan('curve-loop-scout', loop(0.92, 3, 997), 1.0);
@@ -515,11 +584,11 @@ function buildRoundTripWaypointCandidates({
                     1.08,
                 );
                 addPlan('curve-loop-tight', loop(1.08, shortTarget ? 4 : 5, 11), 1.05);
-                addPlan('curve-loop-wide', loop(longTarget ? 1.36 : 1.22, mediumTarget ? 4 : 5, 131), 1.2);
-                addPlan('curve-loop-open', loop(longTarget ? 1.48 : 1.30, mediumTarget ? 5 : 4, 541), 1.3);
-                addPlan('curve-return', loopWithReturn(1.16, 3, 263), 1.25);
+                addPlan('curve-loop-wide', loop(longTarget ? 1.26 : 1.18, mediumTarget ? 4 : 5, 131), 1.16);
+                addPlan('curve-loop-open', loop(longTarget ? 1.34 : 1.24, mediumTarget ? 5 : 4, 541), 1.22);
+                addPlan('curve-return', loopWithReturn(1.12, 3, 263), 1.18);
                 addPlan('curve-triangle', triangle(1.02, 397), 1.0);
-                addPlan('curve-triangle-wide', triangle(1.26, 887), 1.18);
+                addPlan('curve-triangle-wide', triangle(1.20, 887), 1.14);
                 addPlan('curve-loop-scout', loop(0.94, shortTarget ? 3 : 4, 997), 1.0);
             }
             break;
@@ -534,17 +603,17 @@ function buildRoundTripWaypointCandidates({
             addPlan('evening-triangle-relaxed', triangle(1.28, 1151), 1.16);
             break;
         case 'Entdecker':
-            addPlan('explore-cardinal-wide', cardinal(1.16, 67, 1.08), 1.14);
+            addPlan('explore-cardinal-wide', cardinal(1.12, 67, 1.08), 1.12);
             if (zigzagWaypoints) {
-                addPlan('explore-zigzag', zigzag(1.10, 883), 1.16);
+                addPlan('explore-zigzag', zigzag(1.06, 883), 1.12);
             }
-            addPlan('explore-loop-wide', loop(longTarget ? 1.40 : 1.24, mediumTarget ? 4 : 5, 23), 1.2);
-            addPlan('explore-return', loopWithReturn(1.18, 4, 163), 1.3);
+            addPlan('explore-loop-wide', loop(longTarget ? 1.28 : 1.18, mediumTarget ? 4 : 5, 23), 1.16);
+            addPlan('explore-return', loopWithReturn(1.10, 4, 163), 1.20);
             addPlan('explore-loop-offset', loop(1.08, shortTarget ? 3 : 4, 307), 1.15);
-            addPlan('explore-loop-far', loop(longTarget ? 1.52 : 1.32, mediumTarget ? 5 : 4, 587), 1.35);
+            addPlan('explore-loop-far', loop(longTarget ? 1.36 : 1.24, mediumTarget ? 5 : 4, 587), 1.24);
             addPlan('explore-triangle', triangle(1.12, 443), 1.0);
             addPlan('explore-loop-scout', loop(0.96, shortTarget ? 3 : 4, 953), 1.08);
-            addPlan('explore-return-open', loopWithReturn(1.34, 4, 1301), 1.38);
+            addPlan('explore-return-open', loopWithReturn(1.22, 4, 1301), 1.26);
             break;
         case 'Sport Mode':
         default:
@@ -554,26 +623,26 @@ function buildRoundTripWaypointCandidates({
                 1.02,
             );
             addPlan('sport-loop-flow', loop(1.10, shortTarget ? 3 : 4, 29), 1.0);
-            addPlan('sport-loop-wide', loop(longTarget ? 1.30 : 1.18, mediumTarget ? 4 : 3, 173), 1.15);
-            addPlan('sport-loop-extended', loop(longTarget ? 1.42 : 1.26, mediumTarget ? 4 : 3, 611), 1.25);
-            addPlan('sport-return', loopWithReturn(1.08, 3, 313), 1.15);
+            addPlan('sport-loop-wide', loop(longTarget ? 1.22 : 1.14, mediumTarget ? 4 : 3, 173), 1.12);
+            addPlan('sport-loop-extended', loop(longTarget ? 1.30 : 1.18, mediumTarget ? 4 : 3, 611), 1.18);
+            addPlan('sport-return', loopWithReturn(1.04, 3, 313), 1.10);
             addPlan('sport-triangle', triangle(1.00, 457), 1.0);
             addPlan('sport-loop-scout', loop(0.92, 3, 1031), 1.0);
-            addPlan('sport-triangle-wide', triangle(1.22, 1289), 1.12);
+            addPlan('sport-triangle-wide', triangle(1.16, 1289), 1.08);
             break;
     }
 
     addPlan('fallback-cardinal', cardinal(1.00, 1499, waypointShapeFactor ?? 1.0), 1.08);
     addPlan('fallback-triangle-compact', triangle(0.84, 503), 1.0);
     addPlan('fallback-triangle-balanced', triangle(1.00, 619), 1.05);
-    addPlan('fallback-triangle-wide', triangle(1.22, 1181), 1.15);
-    addPlan('fallback-triangle-very-wide', triangle(1.42, 1571), 1.24);
+    addPlan('fallback-triangle-wide', triangle(1.16, 1181), 1.10);
+    addPlan('fallback-triangle-very-wide', triangle(1.28, 1571), 1.18);
     addPlan('fallback-loop-3', loop(1.02, 3, 733), 1.1);
-    addPlan('fallback-loop-4', loop(1.18, 4, 857), 1.2);
-    addPlan('fallback-loop-5', loop(1.30, 5, 1093), 1.35);
-    addPlan('fallback-loop-6', loop(1.46, 6, 1741), 1.42);
-    addPlan('fallback-return', loopWithReturn(1.12, 3, 977), 1.25);
-    addPlan('fallback-return-wide', loopWithReturn(1.34, 4, 1901), 1.38);
+    addPlan('fallback-loop-4', loop(1.12, 4, 857), 1.14);
+    addPlan('fallback-loop-5', loop(1.20, 5, 1093), 1.20);
+    addPlan('fallback-loop-6', loop(1.30, 5, 1741), 1.26);
+    addPlan('fallback-return', loopWithReturn(1.08, 3, 977), 1.16);
+    addPlan('fallback-return-wide', loopWithReturn(1.20, 4, 1901), 1.24);
 
     return dedupeRoundTripPlans(plans);
 }
@@ -853,16 +922,18 @@ function buildPointToPointScenicWaypoints({
 
         switch (mode) {
             case 'Kurvenjagd':
-                // Starke Ausschläge, wechselnde Seiten → Zickzack = viele Kurven
-                arcFactor = 1.0 + index * 0.2;
-                angleDrift = (seededUnit(variationSeed + 7) - 0.5) * 50;
+                // Curvy but controlled corridor to avoid hooks/stubs.
+                arcFactor = 0.96 + index * 0.16;
+                angleDrift = (seededUnit(variationSeed + 7) - 0.5) * 34;
                 side = index % 2 === 0 ? baseSide : -baseSide;
                 break;
             case 'Entdecker':
-                // Maximale Variation, zufällige Seiten → unbekannte Wege
-                arcFactor = 0.8 + seededUnit(variationSeed + 3) * 0.7;
-                angleDrift = (seededUnit(variationSeed + 7) - 0.5) * 65;
-                side = seededUnit(variationSeed + 11) >= 0.5 ? 1 : -1;
+                // Keep one dominant side with optional single crossover.
+                arcFactor = 0.84 + seededUnit(variationSeed + 3) * 0.46;
+                angleDrift = (seededUnit(variationSeed + 7) - 0.5) * 42;
+                side = waypointCount >= 3 && index === 1 && seededUnit(variationSeed + 11) >= 0.58
+                    ? -baseSide
+                    : baseSide;
                 break;
             case 'Abendrunde':
                 // Sanfter, gleichmäßiger Bogen — alle auf einer Seite, nah dran
@@ -873,10 +944,10 @@ function buildPointToPointScenicWaypoints({
             default: // Sport Mode
                 // Weicher Bogen, mittlerer Offset, leicht wechselnd
                 arcFactor = detourLevel === 1
-                    ? 0.9 + index * 0.16
-                    : 0.75 + index * 0.18;
+                    ? 0.86 + index * 0.14
+                    : 0.72 + index * 0.16;
                 angleDrift = (seededUnit(variationSeed + 7) - 0.5) *
-                    (detourLevel === 1 ? 38 : 30);
+                    (detourLevel === 1 ? 30 : 24);
                 side = waypointCount <= 1
                     ? baseSide
                     : (index % 2 === 0 ? baseSide : -baseSide);
@@ -884,7 +955,7 @@ function buildPointToPointScenicWaypoints({
 
         if (zigzagWaypoints) {
             side = index % 2 === 0 ? baseSide : -baseSide
-            angleDrift += 12
+            angleDrift += 7
         }
         if (typeof waypointShapeFactor === 'number' && Number.isFinite(waypointShapeFactor)) {
             arcFactor *= Math.max(0.75, Math.min(2.0, waypointShapeFactor))
@@ -902,7 +973,29 @@ function buildPointToPointScenicWaypoints({
         )
     })
 
-    return [start, ...scenicWaypoints, destination]
+    const corridorWaypoints = smoothWaypointChain(
+        scenicWaypoints,
+        simplifyWaypoints ? 0.24 : 0.18,
+    )
+    const minCorridorRadiusKm = Math.max(
+        directDistanceKm * (simplifyWaypoints ? 0.14 : 0.18),
+        0.9,
+    )
+    const maxCorridorRadiusKm = Math.max(
+        minCorridorRadiusKm + 0.4,
+        directDistanceKm * (detourLevel >= 2 ? 0.92 : 0.84),
+    )
+
+    return [
+        start,
+        ...enforceWaypointRadiusBand(
+            start,
+            corridorWaypoints,
+            minCorridorRadiusKm,
+            maxCorridorRadiusKm,
+        ),
+        destination,
+    ]
 }
 
 function getRouteDistanceKm(route: any): number {
@@ -1277,6 +1370,89 @@ function calculateRouteOverlapPercent(route: any): number {
     return (overlapCount / sampleCount) * 100
 }
 
+function extractRouteCoordinates(route: any): Coordinate[] {
+    const raw = route?.geometry?.coordinates
+    if (!Array.isArray(raw)) return []
+    const result: Coordinate[] = []
+    for (const point of raw) {
+        const parsed = pointToCoordinate(point)
+        if (parsed) result.push(parsed)
+    }
+    return result
+}
+
+function calculateRouteShapeSignals(route: any): {
+    angularRoughness: number
+    sharpTurnRate: number
+    hookCount: number
+    centralReturnPercent: number
+} {
+    const coordinates = extractRouteCoordinates(route)
+    if (coordinates.length < 12) {
+        return {
+            angularRoughness: 0,
+            sharpTurnRate: 0,
+            hookCount: 0,
+            centralReturnPercent: 0,
+        }
+    }
+
+    const sampleStep = 5
+    const start = coordinates[0]
+    const centralRadiusMeters = Math.max(140, Math.min(1300, (getRouteDistanceKm(route) * 1000) * 0.022))
+    const centralStartIndex = Math.floor(coordinates.length * 0.14)
+    const centralEndIndex = Math.ceil(coordinates.length * 0.84)
+
+    let centralSamples = 0
+    let centralHits = 0
+    let totalTurnSamples = 0
+    let turnDeltaSum = 0
+    let sharpTurnCount = 0
+    let hookCount = 0
+
+    for (let i = sampleStep; i < coordinates.length - sampleStep; i += sampleStep) {
+        const prev = coordinates[i - sampleStep]
+        const current = coordinates[i]
+        const next = coordinates[i + sampleStep]
+
+        const headingIn = calculateBearing(prev, current)
+        const headingOut = calculateBearing(current, next)
+        const delta = headingDeltaDegrees(headingIn, headingOut)
+        totalTurnSamples += 1
+        turnDeltaSum += delta
+        if (delta >= 78) sharpTurnCount += 1
+
+        const segmentInKm = calculateDistance(prev, current)
+        const segmentOutKm = calculateDistance(current, next)
+        if (
+            delta >= 132 &&
+            segmentInKm <= 0.24 &&
+            segmentOutKm <= 0.24
+        ) {
+            hookCount += 1
+        }
+
+        if (i >= centralStartIndex && i <= centralEndIndex) {
+            centralSamples += 1
+            const distanceToStartMeters = calculateDistance(start, current) * 1000
+            if (distanceToStartMeters <= centralRadiusMeters) {
+                centralHits += 1
+            }
+        }
+    }
+
+    const angularRoughness = totalTurnSamples > 0 ? turnDeltaSum / totalTurnSamples : 0
+    const sharpTurnRate = totalTurnSamples > 0 ? (sharpTurnCount / totalTurnSamples) * 100 : 0
+    const centralReturnPercent = centralSamples > 0 ? (centralHits / centralSamples) * 100 : 0
+
+    return {
+        angularRoughness,
+        sharpTurnRate,
+        hookCount,
+        centralReturnPercent,
+    }
+}
+
 function evaluateRouteQuality(
     route: any,
     routeType: 'ROUND_TRIP' | 'POINT_TO_POINT',
@@ -1294,6 +1470,11 @@ function evaluateRouteQuality(
     const distanceConfig = options?.distanceConfig
     const distanceDeltaKm =
         targetDistanceKm > 0 ? Math.abs(actualDistanceKm - targetDistanceKm) : 0
+    const shapeSignals = calculateRouteShapeSignals(route)
+    const severeHookCount = routeType === 'ROUND_TRIP' ? 5 : 4
+    const severeCentralReturn = routeType === 'ROUND_TRIP'
+        ? shapeSignals.centralReturnPercent > 16
+        : shapeSignals.centralReturnPercent > 11
 
     if (routeType !== 'ROUND_TRIP') {
         if (coordinateCount < 30 && actualDistanceKm > 10) {
@@ -1335,6 +1516,19 @@ function evaluateRouteQuality(
                 distanceDeltaKm,
             }
         }
+        if (shapeSignals.hookCount >= severeHookCount) {
+            return {
+                passed: false,
+                reason: `hooks=${shapeSignals.hookCount}`,
+                overlapPercent,
+                hasUTurn,
+                tier: 'reject',
+                score: 1040 + shapeSignals.hookCount * 20,
+                coordinateCount,
+                actualDistanceKm,
+                distanceDeltaKm,
+            }
+        }
 
         return {
             passed: true,
@@ -1342,7 +1536,12 @@ function evaluateRouteQuality(
             overlapPercent,
             hasUTurn,
             tier: 'ideal',
-            score: overlapPercent,
+            score:
+                overlapPercent +
+                shapeSignals.angularRoughness * 0.22 +
+                shapeSignals.sharpTurnRate * 0.65 +
+                shapeSignals.hookCount * 7 +
+                shapeSignals.centralReturnPercent * 0.45,
             coordinateCount,
             actualDistanceKm,
             distanceDeltaKm,
@@ -1410,17 +1609,63 @@ function evaluateRouteQuality(
             distanceDeltaKm,
         }
     }
+    if (shapeSignals.hookCount >= severeHookCount) {
+        return {
+            passed: false,
+            reason: `hooks=${shapeSignals.hookCount}`,
+            overlapPercent,
+            hasUTurn,
+            tier: 'reject',
+            score: 900 + shapeSignals.hookCount * 24,
+            coordinateCount,
+            actualDistanceKm,
+            distanceDeltaKm,
+        }
+    }
+    if (severeCentralReturn) {
+        return {
+            passed: false,
+            reason: `center_return=${shapeSignals.centralReturnPercent.toFixed(1)}%`,
+            overlapPercent,
+            hasUTurn,
+            tier: 'reject',
+            score: 920 + shapeSignals.centralReturnPercent * 8,
+            coordinateCount,
+            actualDistanceKm,
+            distanceDeltaKm,
+        }
+    }
 
     let tier: RouteQualityTier = 'fallback'
-    if (withinIdealDistance && idealOverlap && coordinateCount >= 38) {
+    if (
+        withinIdealDistance &&
+        idealOverlap &&
+        coordinateCount >= 38 &&
+        shapeSignals.angularRoughness <= 62 &&
+        shapeSignals.sharpTurnRate <= 34 &&
+        shapeSignals.centralReturnPercent <= 9 &&
+        shapeSignals.hookCount <= 1
+    ) {
         tier = 'ideal'
-    } else if (withinAcceptableDistance && acceptableOverlap && !weakGeometry) {
+    } else if (
+        withinAcceptableDistance &&
+        acceptableOverlap &&
+        !weakGeometry &&
+        shapeSignals.angularRoughness <= 74 &&
+        shapeSignals.sharpTurnRate <= 44 &&
+        shapeSignals.centralReturnPercent <= 13 &&
+        shapeSignals.hookCount <= 3
+    ) {
         tier = 'acceptable'
     }
 
     const score =
         distanceDeltaKm * 7 +
         overlapPercent * 3 +
+        shapeSignals.angularRoughness * 0.85 +
+        shapeSignals.sharpTurnRate * 1.7 +
+        shapeSignals.hookCount * 18 +
+        shapeSignals.centralReturnPercent * 3.4 +
         (tier === 'ideal' ? 0 : tier === 'acceptable' ? 24 : 60) +
         (withinAcceptableDistance ? 0 : 45) +
         Math.max(0, 34 - coordinateCount) * 2
@@ -1432,7 +1677,7 @@ function evaluateRouteQuality(
                 ? 'ideal'
                 : tier === 'acceptable'
                 ? 'acceptable'
-                : `fallback(dist=${actualDistanceKm.toFixed(1)}km, overlap=${overlapPercent.toFixed(1)}%)`,
+                : `fallback(dist=${actualDistanceKm.toFixed(1)}km, overlap=${overlapPercent.toFixed(1)}%, rough=${shapeSignals.angularRoughness.toFixed(1)}, center=${shapeSignals.centralReturnPercent.toFixed(1)}%)`,
         overlapPercent,
         hasUTurn,
         tier,
@@ -1466,6 +1711,8 @@ function widenDistanceConfigForRoundTripSearch(
 function normalizeRoundTripRejectReason(reason: string): string {
     if (reason.startsWith('coords=')) return 'coords'
     if (reason.startsWith('overlap=')) return 'overlap'
+    if (reason.startsWith('hooks=')) return 'hooks'
+    if (reason.startsWith('center_return=')) return 'center_return'
     if (reason.startsWith('mapbox_http_')) return 'mapbox_http'
     if (reason.startsWith('mapbox_')) return reason
     if (reason.includes('u_turn')) return 'u_turn'
