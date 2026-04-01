@@ -361,4 +361,173 @@ void main() {
       expect(classification.tier, RouteQualityTier.poor);
     });
   });
+
+  group('Shape-Metriken (Stern-/Spinnen-Erkennung)', () {
+    test('Sauberer Loop hat niedrigere shapePenalty als Stern', () {
+      // Kreisförmiger Loop um Dornbirn (47.41, 9.74)
+      final loopCoords = <List<double>>[];
+      const center = [9.74, 47.41];
+      const radius = 0.08; // ~8km
+      for (var i = 0; i <= 36; i++) {
+        final angle = (i / 36) * 2 * 3.14159;
+        loopCoords.add([
+          center[0] + radius * 1.2 * cos(angle),
+          center[1] + radius * sin(angle),
+        ]);
+      }
+
+      final loopResult = validator.validateQuality(
+        coordinates: loopCoords,
+        isRoundTrip: true,
+        targetDistanceKm: 50.0,
+        actualDistanceKm: 50.0,
+      );
+
+      // Stern-Route
+      final sternCoords = <List<double>>[];
+      for (var arm = 0; arm < 4; arm++) {
+        final angle = arm * 90.0 * 3.14159 / 180.0;
+        for (var i = 0; i <= 8; i++) {
+          final dist = i * 0.01;
+          sternCoords.add([
+            center[0] + dist * cos(angle),
+            center[1] + dist * sin(angle),
+          ]);
+        }
+        for (var i = 8; i >= 0; i--) {
+          final dist = i * 0.01;
+          sternCoords.add([
+            center[0] + dist * cos(angle),
+            center[1] + dist * sin(angle),
+          ]);
+        }
+      }
+
+      final sternResult = validator.validateQuality(
+        coordinates: sternCoords,
+        isRoundTrip: true,
+        targetDistanceKm: 50.0,
+        actualDistanceKm: 50.0,
+      );
+
+      // Loop sollte deutlich bessere shapePenalty haben als Stern
+      expect(loopResult.shapePenalty, lessThan(sternResult.shapePenalty));
+      expect(loopResult.centerReentryCount, equals(0));
+    });
+
+    test('Stern-Route mit mehreren Armen hat hohe shapePenalty', () {
+      // Stern mit 4 Armen vom Zentrum (Dornbirn)
+      final coords = <List<double>>[];
+      const center = [9.74, 47.41];
+
+      // 4 Arme: raus und zurück zum Zentrum
+      for (var arm = 0; arm < 4; arm++) {
+        final angle = arm * 90.0 * 3.14159 / 180.0;
+        // Raus
+        for (var i = 0; i <= 8; i++) {
+          final dist = i * 0.01;
+          coords.add([
+            center[0] + dist * cos(angle),
+            center[1] + dist * sin(angle),
+          ]);
+        }
+        // Zurück zum Zentrum
+        for (var i = 8; i >= 0; i--) {
+          final dist = i * 0.01;
+          coords.add([
+            center[0] + dist * cos(angle),
+            center[1] + dist * sin(angle),
+          ]);
+        }
+      }
+
+      final result = validator.validateQuality(
+        coordinates: coords,
+        isRoundTrip: true,
+        targetDistanceKm: 50.0,
+        actualDistanceKm: 50.0,
+      );
+
+      // Stern sollte hohe Penalty haben (>40) und Route sollte nicht bestehen
+      expect(result.shapePenalty, greaterThan(40.0));
+      expect(result.passed, isFalse); // Stern-Route soll abgelehnt werden
+    });
+
+    test('A→B Route mit vielen Corridor-Wechseln hat hohe shapePenalty', () {
+      // Zickzack von Dornbirn nach Feldkirch
+      final coords = <List<double>>[];
+      const start = [9.74, 47.41]; // Dornbirn
+      const end = [9.60, 47.24]; // Feldkirch
+
+      for (var i = 0; i <= 20; i++) {
+        final t = i / 20.0;
+        final baseX = start[0] + (end[0] - start[0]) * t;
+        final baseY = start[1] + (end[1] - start[1]) * t;
+        // Starkes Zickzack links/rechts vom Korridor
+        final offset = (i % 2 == 0 ? 0.03 : -0.03);
+        coords.add([baseX + offset, baseY]);
+      }
+
+      final result = validator.validateQuality(
+        coordinates: coords,
+        isRoundTrip: false,
+        targetDistanceKm: 25.0,
+        actualDistanceKm: 25.0,
+      );
+
+      // Zigzag sollte als microZigzag erkannt werden
+      expect(result.microZigzagPercent, greaterThan(50.0));
+    });
+
+    test('Sport-Stil bestraft microZigzag stärker', () {
+      // Route mit vielen kleinen Richtungswechseln
+      final coords = <List<double>>[];
+      for (var i = 0; i < 60; i++) {
+        final zigzag = (i % 3 == 0 ? 0.002 : (i % 3 == 1 ? -0.002 : 0.0));
+        coords.add([9.74 + i * 0.003 + zigzag, 47.41 + i * 0.001]);
+      }
+      // Zurück zum Start für Loop
+      coords.add([9.74, 47.41]);
+
+      final quality = validator.validateQuality(
+        coordinates: coords,
+        isRoundTrip: true,
+        targetDistanceKm: 50.0,
+        actualDistanceKm: 50.0,
+      );
+
+      final sportScore = validator.classifyGeneratedRoute(
+        quality: quality,
+        isRoundTrip: true,
+        coordinateCount: coords.length,
+        actualDistanceKm: 50.0,
+        targetDistanceKm: 50.0,
+        styleProfileKey: 'sport',
+      ).score;
+
+      final entdeckerScore = validator.classifyGeneratedRoute(
+        quality: quality,
+        isRoundTrip: true,
+        coordinateCount: coords.length,
+        actualDistanceKm: 50.0,
+        targetDistanceKm: 50.0,
+        styleProfileKey: 'entdecker',
+      ).score;
+
+      // Sport sollte Zigzag stärker bestrafen als Entdecker
+      expect(sportScore, greaterThan(entdeckerScore));
+    });
+  });
+}
+
+double cos(double x) => x.isNaN ? 0 : _cos(x);
+double sin(double x) => x.isNaN ? 0 : _sin(x);
+double _cos(double x) {
+  // Simple Taylor series approximation
+  x = x % (2 * 3.14159);
+  return 1 - x * x / 2 + x * x * x * x / 24;
+}
+double _sin(double x) {
+  x = x % (2 * 3.14159);
+  return x - x * x * x / 6 + x * x * x * x * x / 120;
 }
