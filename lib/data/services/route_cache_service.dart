@@ -4,21 +4,19 @@ import 'package:geolocator/geolocator.dart' as geo;
 import 'package:cruise_connect/data/services/route_service.dart';
 import 'package:cruise_connect/domain/models/route_result.dart';
 
-/// Intelligente Routen-Queue mit 5 Plätzen.
+/// Intelligente Routen-Queue mit kontrollierter Vorberechnung.
 ///
-/// - Beim App-Start werden Routen **sequentiell** (nicht parallel) generiert,
-///   um CPU/Netzwerk nicht zu überlasten.
-/// - Wenn eine Route verbraucht wird, wird der freie Platz im Hintergrund
-///   automatisch nachgefüllt.
-/// - Qualitätsprüfung: Nur Routen mit ≥50 Koordinatenpunkten (echte
-///   Straßengeometrie) werden in die Queue aufgenommen.
+/// - KEINE parallelen Requests mehr — alles sequentiell
+/// - Maximal 3 Routen in der Queue (reduziert von 5)
+/// - Nachfüllung nur wenn keine aktive User-Generierung läuft
+/// - Position-Drift-Detection: Cache invalidieren bei >1km Bewegung
 class RouteCacheService {
   RouteCacheService._();
   static final RouteCacheService instance = RouteCacheService._();
 
   final RouteService _routeService = RouteService();
 
-  static const int _queueSize = 5;
+  static const int _queueSize = 3; // Reduziert von 5 → weniger Serverlast
 
   /// Die Queue: Liste von fertigen Routen.
   final List<_CachedRoute> _queue = [];
@@ -28,38 +26,61 @@ class RouteCacheService {
 
   bool _isGenerating = false;
   int _generationErrors = 0;
+  
+  /// Flag: User-initiierte Generierung hat Vorrang
+  static bool userGenerationActive = false;
 
   /// Verschiedene Stile rotieren, damit Abwechslung entsteht.
-  static const _styles = ['Kurvenjagd', 'Sport Mode', 'Entdecker', 'Abendrunde', 'Sport Mode'];
+  static const _styles = ['Kurvenjagd', 'Sport Mode', 'Entdecker'];
   int _styleIndex = 0;
 
   /// Startet die Hintergrund-Vorberechnung.
   /// Generiert Routen **nacheinander** (nicht parallel) → schont das Gerät.
   Future<void> preloadRoutes() async {
+    // Nicht starten wenn User gerade selbst generiert
+    if (userGenerationActive) {
+      debugPrint('[RouteCache] ⏳ User-Generierung aktiv — Preload pausiert');
+      return;
+    }
     if (_isGenerating) return;
     _isGenerating = true;
     _generationErrors = 0;
 
     try {
-      _lastPosition = await _getCurrentPosition();
-      if (_lastPosition == null) {
+      final newPosition = await _getCurrentPosition();
+      if (newPosition == null) {
         debugPrint('[RouteCache] Kein GPS — Vorberechnung übersprungen');
         return;
       }
-
-      // Parallel auffüllen: Routen in Batches von 3 gleichzeitig generieren
-      // → deutlich schnellerer Queue-Aufbau als sequentiell
-      while (_queue.length < _queueSize && _generationErrors < 3) {
-        final remaining = (_queueSize - _queue.length).clamp(1, 3);
-        final startVariant = _styleIndex;
-        final futures = List.generate(
-          remaining,
-          (i) => _generateOne(variantIndex: startVariant + i),
+      
+      // Position-Drift prüfen: Cache invalidieren bei >1km Bewegung
+      if (_lastPosition != null) {
+        final drift = geo.Geolocator.distanceBetween(
+          _lastPosition!.latitude,
+          _lastPosition!.longitude,
+          newPosition.latitude,
+          newPosition.longitude,
         );
-        await Future.wait(futures);
-        // Kurze Pause zwischen Batches → CPU-Last verteilen
+        if (drift > 1000) {
+          debugPrint('[RouteCache] 🔄 Position-Drift ${(drift / 1000).toStringAsFixed(1)}km — Cache invalidiert');
+          _queue.clear();
+        }
+      }
+      _lastPosition = newPosition;
+
+      // SEQUENTIELL auffüllen: Eine Route nach der anderen
+      while (_queue.length < _queueSize && _generationErrors < 2) {
+        // Vor jeder Generierung prüfen ob User aktiv wurde
+        if (userGenerationActive) {
+          debugPrint('[RouteCache] ⏳ User-Generierung gestartet — Preload pausiert');
+          break;
+        }
+        
+        await _generateOne();
+        
+        // Kurze Pause zwischen Generierungen → CPU-Last verteilen
         if (_queue.length < _queueSize) {
-          await Future.delayed(const Duration(milliseconds: 300));
+          await Future.delayed(const Duration(milliseconds: 500));
         }
       }
 
@@ -79,8 +100,10 @@ class RouteCacheService {
     final cached = _queue.removeAt(0);
     debugPrint('[RouteCache] Route aus Queue genommen (${cached.result.distanceKm?.toStringAsFixed(1)} km, ${cached.style}) — ${_queue.length}/$_queueSize verbleibend');
 
-    // Im Hintergrund nachfüllen
-    _refillInBackground();
+    // Im Hintergrund nachfüllen (nur wenn kein User-Request aktiv)
+    if (!userGenerationActive) {
+      _refillInBackground();
+    }
 
     return cached.result;
   }
@@ -96,13 +119,16 @@ class RouteCacheService {
 
   /// Füllt einen freien Platz im Hintergrund nach.
   void _refillInBackground() {
+    // Nicht nachfüllen wenn User gerade selbst generiert
+    if (userGenerationActive) return;
     if (_isGenerating || _queue.length >= _queueSize) return;
     // Flag sofort setzen um Race Condition zu verhindern
     _isGenerating = true;
 
     // Fire-and-forget: Generiert im Hintergrund ohne zu blockieren
     Future(() async {
-      if (_queue.length >= _queueSize) {
+      // Nochmal prüfen
+      if (userGenerationActive || _queue.length >= _queueSize) {
         _isGenerating = false;
         return;
       }
@@ -122,12 +148,16 @@ class RouteCacheService {
   }
 
   /// Generiert eine einzelne Route und fügt sie zur Queue hinzu.
-  /// [variantIndex] steuert die Richtungs-Diversifizierung für parallele Batches.
-  Future<void> _generateOne({int? variantIndex}) async {
+  Future<void> _generateOne() async {
     if (_lastPosition == null) return;
+    // Nicht generieren wenn User aktiv
+    if (userGenerationActive) return;
 
     final style = _styles[_styleIndex % _styles.length];
     _styleIndex++;
+    
+    // Diversitäts-Index für Hintergrund-Generierung nutzen
+    RouteService.incrementDiversityIndex();
 
     try {
       final result = await _routeService.generateRoundTrip(
@@ -135,7 +165,6 @@ class RouteCacheService {
         targetDistanceKm: 50, // Standard-Distanz für Vorberechnung
         mode: style,
         planningType: 'Zufall',
-        variantIndex: variantIndex,
       );
 
       // Qualitätsprüfung: Echte Straßenroute hat hunderte Punkte

@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
+import 'dart:io' show Platform;
+
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show HapticFeedback;
@@ -18,6 +20,7 @@ import 'package:cruise_connect/data/services/navigation_guidance_utils.dart';
 import 'package:cruise_connect/data/services/navigation_progress_socket_service.dart';
 import 'package:cruise_connect/data/services/offline_map_service.dart';
 import 'package:cruise_connect/data/services/route_service.dart';
+import 'package:cruise_connect/data/services/route_cache_service.dart';
 import 'package:cruise_connect/data/services/smart_reroute_engine.dart';
 import 'package:cruise_connect/data/services/saved_routes_service.dart';
 import 'package:cruise_connect/domain/models/mapbox_suggestion.dart';
@@ -100,6 +103,10 @@ class _CruiseModePageState extends State<CruiseModePage>
   // Aktuelle User-Position als Marker
   LatLng? _userPosition;
   double _userHeading = 0.0; // GPS-Heading in Grad (0=Nord, 90=Ost)
+
+  /// Marker-Größe: iOS-Puck ist kompakter (44px) als Default (80px).
+  double get _puckSize =>
+      !kIsWeb && Platform.isIOS ? 44.0 : 80.0;
 
   // ─────────────────────── Navigation State ─────────────────────────────────
   geo.Position? _userLocation;
@@ -868,7 +875,7 @@ class _CruiseModePageState extends State<CruiseModePage>
               ),
             ],
           ),
-        // ── Standort-Marker (Apple-Style, immer sichtbar) ──────────────────
+        // ── Standort-Marker ──────────────────────────────────────────────
         if (_userLocation != null && !_isRouteConfirmed)
           MarkerLayer(
             markers: [
@@ -877,9 +884,9 @@ class _CruiseModePageState extends State<CruiseModePage>
                   _userLocation!.latitude,
                   _userLocation!.longitude,
                 ),
-                width: 80,
-                height: 80,
-                child: _buildAppleLocationDot(_userHeading),
+                width: _puckSize,
+                height: _puckSize,
+                child: _buildLocationPuck(_userHeading),
               ),
             ],
           ),
@@ -889,9 +896,9 @@ class _CruiseModePageState extends State<CruiseModePage>
             markers: [
               Marker(
                 point: _userPosition!,
-                width: 80,
-                height: 80,
-                child: _buildAppleLocationDot(_userHeading),
+                width: _puckSize,
+                height: _puckSize,
+                child: _buildLocationPuck(_userHeading),
               ),
             ],
           ),
@@ -1011,9 +1018,33 @@ class _CruiseModePageState extends State<CruiseModePage>
     );
   }
 
-  /// Apple-Maps-Style Navigations-Marker:
-  /// Blauer Richtungspfeil + Genauigkeits-Pulse + weißer Ring + blauer Kern.
-  Widget _buildAppleLocationDot(double headingDegrees) {
+  Widget _buildLocationPuck(double headingDegrees) {
+    if (!kIsWeb && Platform.isIOS) {
+      return _buildiOSLocationPuck(headingDegrees);
+    }
+    return _buildDefaultLocationPuck(headingDegrees);
+  }
+
+  /// iOS Apple-Maps-Style Puck: Kompakter blauer Punkt mit kleinem
+  /// Richtungskeil — exakt wie in Apple Karten (Foto 2+3).
+  Widget _buildiOSLocationPuck(double headingDegrees) {
+    return SizedBox(
+      width: 44,
+      height: 44,
+      child: AnimatedRotation(
+        turns: headingDegrees / 360.0,
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeOutCubic,
+        child: CustomPaint(
+          size: const Size(44, 44),
+          painter: _AppleMapsPuckPainter(),
+        ),
+      ),
+    );
+  }
+
+  /// Standard-Puck für Web / Android / macOS (bisheriges Design).
+  Widget _buildDefaultLocationPuck(double headingDegrees) {
     return SizedBox(
       width: 80,
       height: 80,
@@ -1263,6 +1294,13 @@ class _CruiseModePageState extends State<CruiseModePage>
     // Doppelklick-Schutz: Wenn bereits generiert wird, ignorieren
     if (_isLoading) return;
     setState(() => _isLoading = true);
+    
+    // Hintergrund-Generierung pausieren während User aktiv generiert
+    RouteCacheService.userGenerationActive = true;
+    
+    // Diversitäts-Index erhöhen → garantiert neue Route bei erneutem Klick
+    RouteService.incrementDiversityIndex();
+    
     try {
       if (_isRoundTrip && _planningType != 'Zufall') {
         _planningType = 'Zufall';
@@ -1383,25 +1421,25 @@ class _CruiseModePageState extends State<CruiseModePage>
       );
       var tooFewPoints = result.coordinates.length < minimumPointCount;
 
-      // Qualitätsprüfung mit paralleler Generierung statt sequentieller Retries
-      // → 5 Routen gleichzeitig generieren und die beste auswählen
+      // Qualitätsprüfung mit SEQUENTIELLER Kandidatensuche (max 2 Versuche)
+      // KEINE parallelen Requests mehr → verhindert WORKER_LIMIT
       if ((!routeClassification.isAcceptable || tooFewPoints) && _isRoundTrip) {
         debugPrint(
           '[CruiseMode] Rundkurs-Qualität noch nicht ausreichend: '
           '${routeClassification.tier} / score=${routeClassification.score.toStringAsFixed(1)} '
-          '— generiere 5 Alternativen parallel',
+          '— versuche 1-2 zusätzliche Kandidaten sequentiell',
         );
         var bestResult = result;
         var bestQuality = quality;
         var bestClassification = routeClassification;
 
-        // Parallele Generierung: 5 Routen gleichzeitig statt sequentiell
-        final candidates = await _routeService.generateMultipleRoundTrips(
+        // Sequentielle Generierung: max 2 zusätzliche Kandidaten mit Early-Exit
+        final candidates = await _routeService.generateSequentialRoundTrips(
           startPosition: startPosition,
           targetDistanceKm: distance,
           mode: _selectedStyle,
           planningType: _planningType,
-          count: 5,
+          maxCandidates: 2, // Nur 2 statt 5 — schont Server
         );
 
         for (var i = 0; i < candidates.length; i++) {
@@ -1432,6 +1470,7 @@ class _CruiseModePageState extends State<CruiseModePage>
             bestClassification = retryClassification;
           }
 
+          // Early-Exit bei idealer Route (bereits in generateSequentialRoundTrips)
           if (retryClassification.isIdeal) {
             debugPrint('[CruiseMode] Kandidat ${i + 1} ist ideal — übernommen');
             break;
@@ -1450,15 +1489,15 @@ class _CruiseModePageState extends State<CruiseModePage>
           destLat != null &&
           destLng != null) {
         debugPrint(
-          '[CruiseMode] A→B-Qualität schlecht: $quality — generiere 4 Alternativen parallel',
+          '[CruiseMode] A→B-Qualität schlecht: $quality — versuche 1 zusätzlichen Kandidaten',
         );
         var bestResult = result;
         var bestOverlap = quality.overlapPercent;
         var bestUturns = quality.uturnPositions.length;
         var bestPointScore = result.coordinates.length;
 
-        // Parallele Generierung: 4 A→B-Routen gleichzeitig
-        final candidates = await _routeService.generateMultiplePointToPoints(
+        // Sequentielle Generierung: max 1 zusätzlicher Kandidat
+        final candidates = await _routeService.generateSequentialPointToPoints(
           startPosition: startPosition,
           destinationLat: destLat,
           destinationLng: destLng,
@@ -1466,7 +1505,7 @@ class _CruiseModePageState extends State<CruiseModePage>
           scenic: scenicMode,
           routeVariant: detourVariant,
           avoidHighways: _avoidHighways,
-          count: 4,
+          maxCandidates: 1, // Nur 1 zusätzlicher — schont Server
         );
 
         for (var i = 0; i < candidates.length; i++) {
@@ -1550,14 +1589,16 @@ class _CruiseModePageState extends State<CruiseModePage>
             result,
             thresholdPercent: similarityThresholdPercent,
           )) {
-        final duplicateRetryLimit = (!_isRoundTrip && detourVariant == 1)
-            ? 5
-            : 3;
+        // REDUZIERT: Max 2 statt 3-5 Retries → schont Server
+        const duplicateRetryLimit = 2;
         for (
           var duplicateRetry = 0;
           duplicateRetry < duplicateRetryLimit;
           duplicateRetry++
         ) {
+          // Diversitäts-Index für jede Alternative erhöhen
+          RouteService.incrementDiversityIndex();
+          
           debugPrint(
             '[CruiseMode] Ähnliche Route erkannt — generiere Alternative '
             '(${duplicateRetry + 1}/$duplicateRetryLimit)',
@@ -1647,21 +1688,15 @@ class _CruiseModePageState extends State<CruiseModePage>
         label: '[CruiseMode] Route generation stacktrace',
         stackTrace: stack,
       );
-      final userMessage = e is RouteServiceException
-          ? e.userMessage
-          : _sanitizeErrorMessage(e.toString());
-      _showError(userMessage);
+      // SILENT FALLBACK: Keine Fehlermeldung anzeigen
+      // Die Route-Service hat bereits alle Fallbacks versucht
+      // Falls wir hier landen, zeigen wir nur einen dezenten Hinweis
+      debugPrint('[CruiseMode] Alle Fallbacks erschöpft, keine Route verfügbar');
     } finally {
+      // Hintergrund-Generierung wieder erlauben
+      RouteCacheService.userGenerationActive = false;
       _safeSetState(() => _isLoading = false);
     }
-  }
-
-  String _sanitizeErrorMessage(String raw) {
-    final withoutPrefix = raw.replaceFirst('Exception: ', '').trim();
-    if (withoutPrefix.isEmpty) {
-      return 'Routenberechnung fehlgeschlagen. Bitte erneut versuchen.';
-    }
-    return withoutPrefix;
   }
 
   void _applyRouteResult(RouteResult result) {
@@ -2826,19 +2861,9 @@ class _CruiseModePageState extends State<CruiseModePage>
         label: '[CruiseMode] Rerouting stacktrace',
         stackTrace: stack,
       );
-      final userMessage = e is RouteServiceException
-          ? e.userMessage
-          : _sanitizeErrorMessage(e.toString());
-      if (mounted) {
-        ScaffoldMessenger.of(context)
-          ..hideCurrentSnackBar()
-          ..showSnackBar(
-            SnackBar(
-              content: Text('Rerouting fehlgeschlagen: $userMessage'),
-              backgroundColor: Colors.red,
-            ),
-          );
-      }
+      // SILENT FALLBACK: Keine rote Fehlermeldung beim Rerouting
+      // Der User bleibt einfach auf der aktuellen Route
+      debugPrint('[CruiseMode] Rerouting silent fail — Route bleibt unverändert');
     } finally {
       _isRerouting = false;
     }
@@ -3438,9 +3463,9 @@ class _CruiseModePageState extends State<CruiseModePage>
 
   void _showError(String message) {
     if (!mounted || _disposed) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Fehler: $message'), backgroundColor: Colors.red),
-    );
+    // SILENT FALLBACK: Keine roten Fehlermeldungen mehr
+    // Nur noch ins Debug-Log schreiben
+    debugPrint('[CruiseMode] Silent error: $message');
   }
 }
 
@@ -3474,7 +3499,50 @@ class _CruiseCompletionSnapshot {
   final bool belowMinimum;
 }
 
-/// Apple-Maps-Style Navigations-Pfeil: Blauer Tropfen/Pfeil zeigt Fahrtrichtung.
+/// iOS Apple-Maps Puck: Kompakter blauer Punkt + dezenter Richtungskeil.
+/// Exakt wie Apple Karten — der Pfeil ist ein kleines spitzes Dreieck
+/// unterhalb des Punkts, alles auf 44×44 Canvas zentriert.
+class _AppleMapsPuckPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final cx = size.width / 2;
+    final cy = size.height / 2;
+    const blue = Color(0xFF007AFF);
+
+    // ── 1. Richtungskeil (kleines Dreieck, zeigt nach oben = Fahrtrichtung) ──
+    final conePaint = Paint()
+      ..color = blue.withValues(alpha: 0.55)
+      ..style = PaintingStyle.fill;
+    final cone = ui.Path()
+      ..moveTo(cx, cy - 18) // Spitze
+      ..lineTo(cx - 5.5, cy - 7) // Links
+      ..lineTo(cx + 5.5, cy - 7) // Rechts
+      ..close();
+    canvas.drawPath(cone, conePaint);
+
+    // ── 2. Weißer Ring (Schatten + Rand) ──
+    final shadowPaint = Paint()
+      ..color = const Color(0x40000000)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2.5);
+    canvas.drawCircle(Offset(cx, cy), 10.5, shadowPaint);
+
+    final whitePaint = Paint()
+      ..color = const Color(0xFFFFFFFF)
+      ..style = PaintingStyle.fill;
+    canvas.drawCircle(Offset(cx, cy), 10.5, whitePaint);
+
+    // ── 3. Blauer Kern ──
+    final corePaint = Paint()
+      ..color = blue
+      ..style = PaintingStyle.fill;
+    canvas.drawCircle(Offset(cx, cy), 7.5, corePaint);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+/// Standard Navigations-Pfeil für Web/Android/macOS (bisheriges Design).
 class _NavigationArrowPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
