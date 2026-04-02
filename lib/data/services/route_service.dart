@@ -10,6 +10,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:cruise_connect/core/constants.dart';
 import 'package:cruise_connect/data/services/prepared_route_buffer.dart';
+import 'package:cruise_connect/data/services/route_access_plan.dart';
 import 'package:cruise_connect/data/services/route_generation_coordinator.dart';
 import 'package:cruise_connect/data/services/route_quality_validator.dart';
 import 'package:cruise_connect/data/services/route_scenario.dart';
@@ -55,8 +56,9 @@ class RouteService {
   static int _lastRandomSeed = 0;
   static const String _explorerBearingPrefsKey =
       'route_service_recent_explorer_bearings';
-  static const String _lastSuccessfulRouteKey = 'route_service_last_successful_route';
-  
+  static const String _lastSuccessfulRouteKey =
+      'route_service_last_successful_route';
+
   /// Flag: letzte Route kam aus dem Offline-Cache
   static bool lastRouteFromCache = false;
 
@@ -65,15 +67,16 @@ class RouteService {
   static final List<double> _recentExplorerBearings = [];
   static const RouteQualityValidator _qualityValidator =
       RouteQualityValidator();
+  static const RouteAccessPlanner _accessPlanner = RouteAccessPlanner();
   static final Map<String, int> _scenarioVariantCounters = {};
 
   /// Session-Cache: verhindert doppelte API-Calls für identische Anfragen.
   /// Key = konkrete Variant-/Request-Signatur, Value = RouteResult.
   static final Map<String, RouteResult> _sessionCache = {};
-  
+
   /// Globaler Request-Zähler als Fallback für Legacy-Aufrufer.
   static int _globalDiversityIndex = 0;
-  
+
   /// WORKER_LIMIT Cooldown: Nach diesem Fehler keine neuen Requests für X ms.
   static DateTime? _workerLimitCooldownUntil;
 
@@ -358,9 +361,7 @@ class RouteService {
         final hasSeenHistory = SeenRouteRegistry.entriesFor(
           scenario.scenarioKey,
         ).isNotEmpty;
-        final maxAttempts = shouldDiversify
-            ? 2
-            : (hasSeenHistory ? 2 : 1);
+        final maxAttempts = shouldDiversify ? 2 : (hasSeenHistory ? 2 : 1);
         _RouteCandidate? bestCandidate;
         _RouteCandidate? spareCandidate;
         var bestScore = double.infinity;
@@ -505,9 +506,84 @@ class RouteService {
     );
   }
 
+  /// Baut einen direkten Zugang zu einer bestehenden Route, ohne deren
+  /// logischen Ursprung oder Endpunkt umzudefinieren.
+  ///
+  /// Das Ergebnis enthält:
+  /// - [originalRoute]: die unveränderte geplante Route
+  /// - [followOnRoute]: den ab dem Join-Punkt verbleibenden Teil der Originalroute
+  /// - [activeRoute]: Access-Leg + Follow-on-Teil für die aktuelle Navigation
+  Future<RouteAccessPlan> buildAccessRouteToExistingRoute({
+    required geo.Position currentPosition,
+    required RouteResult existingRoute,
+    String mode = 'Standard',
+    bool avoidHighways = false,
+    int? preferredJoinIndex,
+  }) async {
+    if (existingRoute.coordinates.length < 2) {
+      throw const RouteServiceException(
+        type: RouteErrorType.validation,
+        userMessage: 'Die bestehende Route ist unvollständig.',
+        debugMessage: 'Cannot build access plan for route with <2 coordinates.',
+      );
+    }
+
+    final joinPoint = _accessPlanner.chooseJoinPoint(
+      currentPosition: currentPosition,
+      existingRoute: existingRoute,
+      preferredJoinIndex: preferredJoinIndex,
+    );
+    final accessKey = _accessSingleFlightKey(
+      currentPosition: currentPosition,
+      joinPoint: joinPoint,
+      existingRoute: existingRoute,
+    );
+
+    return RouteGenerationCoordinator.runSingleFlight(accessKey, () async {
+      final followOnRoute = _sliceRouteFromIndex(
+        existingRoute,
+        joinPoint.index,
+      );
+      final logicalOrigin = _copyCoordinate(existingRoute.coordinates.first);
+      final logicalEnd = _copyCoordinate(existingRoute.coordinates.last);
+
+      if (joinPoint.distanceFromCurrentMeters <= 60.0) {
+        return RouteAccessPlan(
+          originalRoute: existingRoute,
+          activeRoute: followOnRoute,
+          followOnRoute: followOnRoute,
+          joinPoint: joinPoint,
+          logicalOrigin: logicalOrigin,
+          logicalEnd: logicalEnd,
+        );
+      }
+
+      final accessLeg = await _requestAccessLegToJoin(
+        currentPosition: currentPosition,
+        joinPoint: joinPoint,
+        mode: mode,
+        avoidHighways: avoidHighways,
+      );
+      final activeRoute = _mergeAccessAndFollowOnRoutes(
+        accessLeg: accessLeg,
+        followOnRoute: followOnRoute,
+      );
+
+      return RouteAccessPlan(
+        originalRoute: existingRoute,
+        activeRoute: activeRoute,
+        followOnRoute: followOnRoute,
+        accessLeg: accessLeg,
+        joinPoint: joinPoint,
+        logicalOrigin: logicalOrigin,
+        logicalEnd: logicalEnd,
+      );
+    });
+  }
+
   /// Generiert sequentiell Rundkurse mit Early-Exit bei guter Qualität.
   /// KEINE parallelen Requests mehr → schont Server und verhindert WORKER_LIMIT.
-  /// 
+  ///
   /// Strategie: Maximal [maxCandidates] Kandidaten nacheinander, Abbruch sobald
   /// ein "idealer" oder "acceptable" Kandidat gefunden wird.
   Future<List<RouteResult>> generateSequentialRoundTrips({
@@ -568,25 +644,27 @@ class RouteService {
     }
     return results;
   }
-  
+
   // ─────────────────────── WORKER_LIMIT Handling ───────────────────────────
-  
+
   static bool _isWorkerLimitError(dynamic error) {
     if (error is RouteServiceException) {
       return error.type == RouteErrorType.workerLimit ||
-             error.debugMessage.contains('WORKER_LIMIT') ||
-             error.debugMessage.contains('546') ||
-             error.debugMessage.contains('compute resources');
+          error.debugMessage.contains('WORKER_LIMIT') ||
+          error.debugMessage.contains('546') ||
+          error.debugMessage.contains('compute resources');
     }
     return error.toString().contains('WORKER_LIMIT') ||
-           error.toString().contains('546');
+        error.toString().contains('546');
   }
-  
+
   static void _setWorkerLimitCooldown() {
     _workerLimitCooldownUntil = DateTime.now().add(const Duration(seconds: 8));
-    debugPrint('[RouteService] ⚠️ WORKER_LIMIT erkannt — 8s Cooldown aktiviert');
+    debugPrint(
+      '[RouteService] ⚠️ WORKER_LIMIT erkannt — 8s Cooldown aktiviert',
+    );
   }
-  
+
   static bool _isInWorkerLimitCooldown() {
     if (_workerLimitCooldownUntil == null) return false;
     if (DateTime.now().isAfter(_workerLimitCooldownUntil!)) {
@@ -595,16 +673,16 @@ class RouteService {
     }
     return true;
   }
-  
+
   // ─────────────────────── Diversität & Fingerprint ────────────────────────
-  
+
   /// Inkrementiert den globalen Diversitäts-Index.
   /// Sollte bei jedem User-initiierten "Neu generieren" aufgerufen werden.
   static void incrementDiversityIndex() {
     _globalDiversityIndex = (_globalDiversityIndex + 1) % 360;
     debugPrint('[RouteService] 🎲 Diversitäts-Index: $_globalDiversityIndex');
   }
-  
+
   /// Berechnet einen Fingerprint für eine Route (basierend auf Geometrie).
   static String _calculateRouteFingerprint(RouteResult route) {
     if (route.coordinates.isEmpty) return 'empty';
@@ -620,13 +698,13 @@ class RouteService {
     }
     return samples.join('|');
   }
-  
+
   /// Prüft ob eine Route bereits kürzlich angezeigt wurde.
   static bool isRouteRecentlySeen(String scenarioKey, RouteResult route) {
     final fingerprint = _calculateRouteFingerprint(route);
     return SeenRouteRegistry.hasExactFingerprint(scenarioKey, fingerprint);
   }
-  
+
   /// Merkt sich eine Route als "gesehen" für ein Szenario.
   static void markRouteAsSeen(String scenarioKey, RouteResult route) {
     final fingerprint = _calculateRouteFingerprint(route);
@@ -640,7 +718,7 @@ class RouteService {
       sampledCoordinates: sampledCoordinates,
     );
   }
-  
+
   /// Löscht die "gesehen"-Historie für ein Szenario.
   static void clearSeenRoutes(String scenarioKey) {
     SeenRouteRegistry.clearScenario(scenarioKey);
@@ -650,12 +728,14 @@ class RouteService {
   static void clearAllSeenRoutes() {
     SeenRouteRegistry.clearAll();
   }
-  
+
   // ─────────────────────── LEGACY: Parallel-Methoden (deprecated) ──────────
-  
+
   /// @deprecated Nutze [generateSequentialRoundTrips] stattdessen.
   /// Diese Methode wird nur noch für Abwärtskompatibilität behalten.
-  @Deprecated('Nutze generateSequentialRoundTrips() — parallele Requests verursachen WORKER_LIMIT')
+  @Deprecated(
+    'Nutze generateSequentialRoundTrips() — parallele Requests verursachen WORKER_LIMIT',
+  )
   Future<List<RouteResult>> generateMultipleRoundTrips({
     required geo.Position startPosition,
     required int targetDistanceKm,
@@ -674,7 +754,9 @@ class RouteService {
   }
 
   /// @deprecated Nutze [generateSequentialPointToPoints] stattdessen.
-  @Deprecated('Nutze generateSequentialPointToPoints() — parallele Requests verursachen WORKER_LIMIT')
+  @Deprecated(
+    'Nutze generateSequentialPointToPoints() — parallele Requests verursachen WORKER_LIMIT',
+  )
   Future<List<RouteResult>> generateMultiplePointToPoints({
     required geo.Position startPosition,
     required double destinationLat,
@@ -779,6 +861,250 @@ class RouteService {
       if ((offsetSide ?? variant.offsetSide) != null)
         'offset_side': offsetSide ?? variant.offsetSide,
     };
+  }
+
+  String _accessSingleFlightKey({
+    required geo.Position currentPosition,
+    required RouteJoinPoint joinPoint,
+    required RouteResult existingRoute,
+  }) {
+    final roundedLat = (currentPosition.latitude * 1000).round();
+    final roundedLng = (currentPosition.longitude * 1000).round();
+    final joinLat = (joinPoint.coordinate[1] * 1000).round();
+    final joinLng = (joinPoint.coordinate[0] * 1000).round();
+    return 'access_${existingRoute.coordinates.length}_${joinPoint.index}'
+        '_${roundedLat}_$roundedLng'
+        '_${joinLat}_$joinLng';
+  }
+
+  Future<RouteResult> _requestAccessLegToJoin({
+    required geo.Position currentPosition,
+    required RouteJoinPoint joinPoint,
+    required String mode,
+    required bool avoidHighways,
+  }) async {
+    final directDistanceKm = math.max(
+      geo.Geolocator.distanceBetween(
+            currentPosition.latitude,
+            currentPosition.longitude,
+            joinPoint.coordinate[1],
+            joinPoint.coordinate[0],
+          ) /
+          1000.0,
+      0.4,
+    );
+    final styleConfig = RouteStyleConfig.forMode(mode);
+    final variant = RouteVariant(
+      index: joinPoint.index,
+      seed: _nextRandomSeed(),
+      angleOffset: 0,
+      radiusJitter: 0,
+      offsetBearing: 0,
+      fingerprintHint: 'join_${joinPoint.index}',
+      variantHint: 'access',
+    );
+    final request = _buildPointToPointRequest(
+      startPosition: currentPosition,
+      destinationLat: joinPoint.coordinate[1],
+      destinationLng: joinPoint.coordinate[0],
+      mode: 'Standard',
+      scenic: false,
+      normalizedVariant: 0,
+      avoidHighways: avoidHighways,
+      styleConfig: styleConfig,
+      targetDistanceKm: directDistanceKm,
+      detourFactor: 1.0,
+      variant: variant,
+      candidateBudget: 1,
+    );
+
+    final route = await _invoke(request);
+    final snapped = _snapRouteToStartPosition(route, currentPosition);
+    return _filteredRouteResult(snapped);
+  }
+
+  RouteResult _sliceRouteFromIndex(RouteResult route, int startIndex) {
+    final clampedStart = startIndex
+        .clamp(0, math.max(0, route.coordinates.length - 2))
+        .toInt();
+    final slicedCoordinates = route.coordinates
+        .sublist(clampedStart)
+        .map(_copyCoordinate)
+        .toList(growable: false);
+    final geometry = <String, dynamic>{
+      'type': 'LineString',
+      'coordinates': slicedCoordinates,
+    };
+    final distanceMeters = _distanceAlongCoordinates(slicedCoordinates);
+    final sourceDistanceMeters =
+        route.distanceMeters ?? _distanceAlongCoordinates(route.coordinates);
+    final durationSeconds =
+        route.durationSeconds != null && sourceDistanceMeters > 0
+        ? route.durationSeconds! * (distanceMeters / sourceDistanceMeters)
+        : route.durationSeconds;
+    final maneuvers = route.maneuvers
+        .where((maneuver) => maneuver.routeIndex >= clampedStart)
+        .map(
+          (maneuver) => _copyManeuver(
+            maneuver,
+            routeIndex: math.max(0, maneuver.routeIndex - clampedStart).toInt(),
+          ),
+        )
+        .toList(growable: false);
+    final speedLimits = route.speedLimits
+        .where((segment) => segment.endIndex >= clampedStart)
+        .map((segment) {
+          final start = math.max(0, segment.startIndex - clampedStart).toInt();
+          final end = math.max(start, segment.endIndex - clampedStart).toInt();
+          return SpeedLimitSegment(
+            startIndex: start,
+            endIndex: end,
+            speedKmh: segment.speedKmh,
+          );
+        })
+        .toList(growable: false);
+
+    return _filteredRouteResult(
+      RouteResult(
+        geoJson: json.encode(geometry),
+        geometry: geometry,
+        coordinates: slicedCoordinates,
+        maneuvers: maneuvers,
+        distanceMeters: distanceMeters,
+        durationSeconds: durationSeconds,
+        distanceKm: distanceMeters / 1000.0,
+        speedLimits: speedLimits,
+      ),
+    );
+  }
+
+  RouteResult _mergeAccessAndFollowOnRoutes({
+    required RouteResult accessLeg,
+    required RouteResult followOnRoute,
+  }) {
+    final accessCoordinates = accessLeg.coordinates
+        .map(_copyCoordinate)
+        .toList(growable: true);
+    final followCoordinates = followOnRoute.coordinates
+        .map(_copyCoordinate)
+        .toList(growable: true);
+
+    if (followCoordinates.isNotEmpty &&
+        accessCoordinates.isNotEmpty &&
+        _distanceBetweenCoordinates(
+              accessCoordinates.last,
+              followCoordinates.first,
+            ) <=
+            30.0) {
+      followCoordinates.removeAt(0);
+    }
+
+    final combinedCoordinates = <List<double>>[
+      ...accessCoordinates,
+      ...followCoordinates,
+    ];
+    final followOffset = math.max(0, accessCoordinates.length - 1);
+    final combinedManeuvers = <RouteManeuver>[
+      ...accessLeg.maneuvers.map(
+        (maneuver) => _copyManeuver(maneuver, routeIndex: maneuver.routeIndex),
+      ),
+      ...followOnRoute.maneuvers.map(
+        (maneuver) => _copyManeuver(
+          maneuver,
+          routeIndex: maneuver.routeIndex + followOffset,
+        ),
+      ),
+    ];
+    final combinedSpeedLimits = <SpeedLimitSegment>[
+      ...accessLeg.speedLimits,
+      ...followOnRoute.speedLimits.map(
+        (segment) => SpeedLimitSegment(
+          startIndex: segment.startIndex + followOffset,
+          endIndex: segment.endIndex + followOffset,
+          speedKmh: segment.speedKmh,
+        ),
+      ),
+    ];
+    final geometry = <String, dynamic>{
+      'type': 'LineString',
+      'coordinates': combinedCoordinates,
+    };
+    final distanceMeters =
+        (accessLeg.distanceMeters ??
+            _distanceAlongCoordinates(accessLeg.coordinates)) +
+        (followOnRoute.distanceMeters ??
+            _distanceAlongCoordinates(followOnRoute.coordinates));
+    final durationSeconds =
+        (accessLeg.durationSeconds ?? 0) + (followOnRoute.durationSeconds ?? 0);
+
+    return _filteredRouteResult(
+      RouteResult(
+        geoJson: json.encode(geometry),
+        geometry: geometry,
+        coordinates: combinedCoordinates,
+        maneuvers: combinedManeuvers,
+        distanceMeters: distanceMeters,
+        durationSeconds: durationSeconds > 0 ? durationSeconds : null,
+        distanceKm: distanceMeters / 1000.0,
+        speedLimits: combinedSpeedLimits,
+      ),
+    );
+  }
+
+  RouteResult _filteredRouteResult(RouteResult result) {
+    return RouteResult(
+      geoJson: result.geoJson,
+      geometry: result.geometry,
+      coordinates: result.coordinates
+          .map(_copyCoordinate)
+          .toList(growable: false),
+      maneuvers: filterManeuvers(result.maneuvers),
+      distanceMeters: result.distanceMeters,
+      durationSeconds: result.durationSeconds,
+      distanceKm: result.distanceKm,
+      speedLimits: result.speedLimits,
+    );
+  }
+
+  RouteManeuver _copyManeuver(
+    RouteManeuver maneuver, {
+    required int routeIndex,
+  }) {
+    return RouteManeuver(
+      latitude: maneuver.latitude,
+      longitude: maneuver.longitude,
+      routeIndex: routeIndex,
+      icon: maneuver.icon,
+      announcement: maneuver.announcement,
+      instruction: maneuver.instruction,
+      maneuverType: maneuver.maneuverType,
+      roundaboutExitNumber: maneuver.roundaboutExitNumber,
+    );
+  }
+
+  List<double> _copyCoordinate(List<double> coordinate) {
+    return [coordinate[0], coordinate[1]];
+  }
+
+  double _distanceAlongCoordinates(List<List<double>> coordinates) {
+    if (coordinates.length < 2) return 0.0;
+    var total = 0.0;
+    for (var index = 1; index < coordinates.length; index++) {
+      total += _distanceBetweenCoordinates(
+        coordinates[index - 1],
+        coordinates[index],
+      );
+    }
+    return total;
+  }
+
+  double _distanceBetweenCoordinates(List<double> first, List<double> second) {
+    return geo.Geolocator.distanceBetween(
+      first[1],
+      first[0],
+      second[1],
+      second[0],
+    );
   }
 
   Future<RouteResult> _invoke(Map<String, dynamic> body) async {
@@ -1011,13 +1337,14 @@ class RouteService {
     final dest = body['destination_location'] as Map?;
     final dKey = dest != null
         ? '_${((dest['latitude'] as num).toDouble() * 500).round()}'
-          '_${((dest['longitude'] as num).toDouble() * 500).round()}'
+              '_${((dest['longitude'] as num).toDouble() * 500).round()}'
         : '';
     // Diversitäts-Parameter für unterschiedliche Routen bei gleichen Einstellungen
     final seed = body['randomSeed'] ?? 0;
     final dirHint = ((body['direction_hint'] as num?)?.toDouble() ?? 0).round();
     final offsetSide = body['offset_side'] ?? 0;
-    final variantHint = body['route_variant_hint'] ?? body['variant_hint'] ?? '';
+    final variantHint =
+        body['route_variant_hint'] ?? body['variant_hint'] ?? '';
     final fingerprintHint =
         body['route_fingerprint_hint'] ?? body['fingerprint_hint'] ?? '';
     final avoidHighways = body['avoid_highways'] == true ? 1 : 0;
@@ -1027,7 +1354,7 @@ class RouteService {
         '_vh$variantHint'
         '_fh$fingerprintHint';
   }
-  
+
   /// Erzeugt einen Szenario-Key OHNE Diversitäts-Parameter.
   /// Wird für Single-Flight und "gesehene Routen" verwendet.
   static String scenarioKey(Map<String, dynamic> body) {
@@ -1039,7 +1366,7 @@ class RouteService {
     final dest = body['destination_location'] as Map?;
     final dKey = dest != null
         ? '_${((dest['latitude'] as num).toDouble() * 500).round()}'
-          '_${((dest['longitude'] as num).toDouble() * 500).round()}'
+              '_${((dest['longitude'] as num).toDouble() * 500).round()}'
         : '';
     final avoidHighways = body['avoid_highways'] == true ? 1 : 0;
     final detourLevel = body['detour_level'] ?? 0;
@@ -1131,7 +1458,8 @@ class RouteService {
     required int diversitySeed,
     required bool shouldDiversify,
   }) {
-    final index = _nextScenarioVariantIndex(scenario.scenarioKey) + diversitySeed;
+    final index =
+        _nextScenarioVariantIndex(scenario.scenarioKey) + diversitySeed;
     final seed = _nextRandomSeed() + index * 53;
     final rng = math.Random(seed);
     final offsetBearingBase = switch (normalizedVariant) {
@@ -1140,8 +1468,7 @@ class RouteService {
       3 => 76.0,
       _ => 16.0,
     };
-    final offsetBearing =
-        offsetBearingBase + ((rng.nextDouble() - 0.5) * 18.0);
+    final offsetBearing = offsetBearingBase + ((rng.nextDouble() - 0.5) * 18.0);
     final radiusJitter = switch (normalizedVariant) {
       1 => 1.04 + rng.nextDouble() * 0.08,
       2 => 1.10 + rng.nextDouble() * 0.12,
@@ -1293,7 +1620,10 @@ class RouteService {
     );
     final similarityThreshold = _similarityThresholdForScenario(scenario);
     final tooSimilar =
-        SeenRouteRegistry.hasExactFingerprint(scenario.scenarioKey, fingerprint) ||
+        SeenRouteRegistry.hasExactFingerprint(
+          scenario.scenarioKey,
+          fingerprint,
+        ) ||
         SeenRouteRegistry.hasSimilarRoute(
           scenario.scenarioKey,
           sampledCoordinates,
@@ -1456,7 +1786,9 @@ class RouteService {
     if (PreparedRouteBuffer.hasFreshEntry(scenario.scenarioKey)) return;
     unawaited(
       Future<void>.delayed(Duration.zero, () async {
-        if (!RouteGenerationCoordinator.canPrepare(scenario.scenarioKey)) return;
+        if (!RouteGenerationCoordinator.canPrepare(scenario.scenarioKey)) {
+          return;
+        }
         await RouteGenerationCoordinator.prepareInBackground(
           scenario.scenarioKey,
           () async {
@@ -1507,7 +1839,9 @@ class RouteService {
     if (PreparedRouteBuffer.hasFreshEntry(scenario.scenarioKey)) return;
     unawaited(
       Future<void>.delayed(Duration.zero, () async {
-        if (!RouteGenerationCoordinator.canPrepare(scenario.scenarioKey)) return;
+        if (!RouteGenerationCoordinator.canPrepare(scenario.scenarioKey)) {
+          return;
+        }
         await RouteGenerationCoordinator.prepareInBackground(
           scenario.scenarioKey,
           () async {
@@ -1522,7 +1856,8 @@ class RouteService {
                 diversitySeed: 211,
                 shouldDiversify: true,
               );
-              final targetDistanceKm = scenario.targetDistanceKm ?? directDistanceKm;
+              final targetDistanceKm =
+                  scenario.targetDistanceKm ?? directDistanceKm;
               final detourFactor = switch (scenario.detourLevel) {
                 1 => 1.24,
                 2 => 1.52,
@@ -1608,8 +1943,7 @@ class RouteService {
       );
       final body = _buildRoundTripRequest(
         startPosition: startPosition,
-        targetDistanceKm:
-            (scenario.targetDistanceKm ?? 50.0).round(),
+        targetDistanceKm: (scenario.targetDistanceKm ?? 50.0).round(),
         mode: scenario.style,
         planningType: scenario.planningType,
         styleConfig: styleConfig,
@@ -1809,10 +2143,11 @@ class RouteService {
     String routeType = 'ROUND_TRIP',
   }) {
     final lower = errorMessage.toLowerCase();
-    final detailsMap = details is Map ? Map<String, dynamic>.from(details) : null;
+    final detailsMap = details is Map
+        ? Map<String, dynamic>.from(details)
+        : null;
     final errorCode = detailsMap?['code']?.toString().toUpperCase();
-    final retryAfterSec =
-        (detailsMap?['retry_after_sec'] as num?)?.toInt();
+    final retryAfterSec = (detailsMap?['retry_after_sec'] as num?)?.toInt();
 
     if (statusCode == 401 || statusCode == 403 || lower.contains('jwt')) {
       return RouteServiceException(
@@ -1951,7 +2286,7 @@ class RouteService {
   }
 
   // ─────────────────────── Persistent Route Cache ────────────────────────────
-  
+
   /// Speichert eine erfolgreiche Route im SharedPreferences für Offline-Fallback.
   Future<void> _cacheSuccessfulRoute(
     RouteResult route, {
@@ -1977,7 +2312,7 @@ class RouteService {
       debugPrint('[RouteService] Cache-Speicherung fehlgeschlagen: $e');
     }
   }
-  
+
   /// Lädt die letzte erfolgreiche Route aus SharedPreferences.
   /// Gibt null zurück wenn keine gecachte Route existiert oder sie >24h alt ist.
   Future<RouteResult?> _loadCachedRoute({String? scenarioKey}) async {
@@ -1987,26 +2322,35 @@ class RouteService {
           ? _lastSuccessfulRouteKey
           : '$_lastSuccessfulRouteKey|$scenarioKey';
       final cached =
-          prefs.getString(scopedKey) ?? prefs.getString(_lastSuccessfulRouteKey);
+          prefs.getString(scopedKey) ??
+          prefs.getString(_lastSuccessfulRouteKey);
       if (cached == null) return null;
-      
+
       final data = json.decode(cached) as Map<String, dynamic>;
       final timestamp = data['timestamp'] as int?;
       if (timestamp != null) {
         final age = DateTime.now().millisecondsSinceEpoch - timestamp;
         if (age > 24 * 60 * 60 * 1000) {
-          debugPrint('[RouteService] Gecachte Route ist >24h alt, wird ignoriert');
+          debugPrint(
+            '[RouteService] Gecachte Route ist >24h alt, wird ignoriert',
+          );
           return null;
         }
       }
-      
-      final coordinates = (data['coordinates'] as List?)
-          ?.map((c) => (c as List).map((v) => (v as num).toDouble()).toList())
-          .toList() ?? [];
-      
+
+      final coordinates =
+          (data['coordinates'] as List?)
+              ?.map(
+                (c) => (c as List).map((v) => (v as num).toDouble()).toList(),
+              )
+              .toList() ??
+          [];
+
       if (coordinates.length < 2) return null;
-      
-      debugPrint('[RouteService] 📦 Gecachte Route geladen (${coordinates.length} Punkte)');
+
+      debugPrint(
+        '[RouteService] 📦 Gecachte Route geladen (${coordinates.length} Punkte)',
+      );
       return RouteResult(
         geoJson: data['geoJson'] as String? ?? '',
         geometry: Map<String, dynamic>.from(data['geometry'] as Map? ?? {}),
@@ -2220,16 +2564,7 @@ class RouteService {
   /// Wird am Ende von generateRoundTrip/generatePointToPoint aufgerufen.
   /// Speichert die Route auch im Offline-Cache für Stufe-4-Fallback.
   RouteResult _finalizeRoute(RouteResult result, {String? scenarioKey}) {
-    final finalized = RouteResult(
-      geoJson: result.geoJson,
-      geometry: result.geometry,
-      coordinates: result.coordinates,
-      maneuvers: filterManeuvers(result.maneuvers),
-      distanceMeters: result.distanceMeters,
-      durationSeconds: result.durationSeconds,
-      distanceKm: result.distanceKm,
-      speedLimits: result.speedLimits,
-    );
+    final finalized = _filteredRouteResult(result);
     // Asynchron cachen ohne auf Ergebnis zu warten
     _cacheSuccessfulRoute(finalized, scenarioKey: scenarioKey);
     return finalized;
