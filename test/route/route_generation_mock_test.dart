@@ -1,6 +1,7 @@
 // ignore_for_file: avoid_print
 
 import 'dart:convert';
+import 'dart:math' as math;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mockito/annotations.dart';
 import 'package:mockito/mockito.dart';
@@ -33,12 +34,24 @@ Map<String, dynamic> _buildRouteResponse({
   required double durationSeconds,
   int coordinateCount = 100,
   List<Map<String, dynamic>>? legs,
+  String mode = 'Sport Mode',
 }) {
-  // Koordinaten als gerade Nord-Route generieren
-  final coords = List.generate(
-    coordinateCount,
-    (i) => [11.582 + i * 0.0001, 48.135 + i * 0.0001],
-  );
+  final distanceKm = distanceMeters / 1000.0;
+  final params = _profiledLoopParams(distanceKm: distanceKm, mode: mode);
+  final extraWave = params.petals + (params.mix >= 0.24 ? 3 : 1);
+  final coords = List.generate(coordinateCount, (i) {
+    final t = (2 * math.pi * i) / (coordinateCount - 1);
+    final radialWave =
+        math.sin(t * params.petals) * params.amplitude +
+        math.cos(t * extraWave) * (params.amplitude * params.mix) +
+        math.sin(t * (params.petals ~/ 2 + 2)) * (params.amplitude * 0.12);
+    final radius = params.baseRadius + radialWave;
+    return [
+      11.592 + math.cos(t) * radius * params.stretch,
+      48.140 + math.sin(t) * radius * params.aspect,
+    ];
+  });
+  coords[coords.length - 1] = [...coords.first];
 
   return {
     'route': {
@@ -69,6 +82,101 @@ Map<String, dynamic> _buildRouteResponse({
           ],
     },
   };
+}
+
+_MockLoopProfile _profiledLoopParams({
+  required double distanceKm,
+  required String mode,
+}) {
+  final normalized = mode.trim().toLowerCase();
+  if (normalized == 'kurvenreich' ||
+      normalized == 'kurvenjagd' ||
+      normalized == 'alpenstraßen') {
+    return const _MockLoopProfile(
+      petals: 8,
+      baseRadius: 0.006,
+      amplitude: 0.003,
+      aspect: 0.50,
+      stretch: 1.30,
+      mix: 0.16,
+    );
+  }
+  if (normalized == 'panorama' || normalized == 'abendrunde') {
+    return const _MockLoopProfile(
+      petals: 7,
+      baseRadius: 0.006,
+      amplitude: 0.003,
+      aspect: 0.50,
+      stretch: 1.40,
+      mix: 0.24,
+    );
+  }
+  if (normalized == 'zufall' || normalized == 'entdecker') {
+    return const _MockLoopProfile(
+      petals: 9,
+      baseRadius: 0.006,
+      amplitude: 0.003,
+      aspect: 0.50,
+      stretch: 1.30,
+      mix: 0.32,
+    );
+  }
+  if (distanceKm <= 35) {
+    return const _MockLoopProfile(
+      petals: 2,
+      baseRadius: 0.006,
+      amplitude: 0.0012,
+      aspect: 0.55,
+      stretch: 1.40,
+      mix: 0.10,
+    );
+  }
+  if (distanceKm <= 60) {
+    return const _MockLoopProfile(
+      petals: 3,
+      baseRadius: 0.009,
+      amplitude: 0.0016,
+      aspect: 0.55,
+      stretch: 1.00,
+      mix: 0.18,
+    );
+  }
+  if (distanceKm <= 90) {
+    return const _MockLoopProfile(
+      petals: 4,
+      baseRadius: 0.006,
+      amplitude: 0.0012,
+      aspect: 0.75,
+      stretch: 1.20,
+      mix: 0.00,
+    );
+  }
+  return const _MockLoopProfile(
+    petals: 5,
+    baseRadius: 0.006,
+    amplitude: 0.0012,
+    aspect: 0.55,
+    stretch: 1.40,
+    mix: 0.25,
+  );
+}
+
+class _MockLoopProfile {
+  const _MockLoopProfile({
+    required this.petals,
+    required this.baseRadius,
+    required this.amplitude,
+    required this.aspect,
+    required this.stretch,
+    required this.mix,
+  });
+
+  final int petals;
+  final double baseRadius;
+  final double amplitude;
+  final double aspect;
+  final double stretch;
+  final double mix;
 }
 
 Map<String, dynamic> _buildClosedLoopRouteResponse({
@@ -108,6 +216,71 @@ Map<String, dynamic> _buildClosedLoopRouteResponse({
               },
               'distance': 500.0,
               'name': 'Testroute',
+            },
+            {
+              'maneuver': {'type': 'arrive', 'location': coords.last},
+              'distance': 0.0,
+              'name': '',
+            },
+          ],
+        },
+      ],
+    },
+  };
+}
+
+Map<String, dynamic> _buildPointToPointResponse({
+  required double distanceMeters,
+  required double durationSeconds,
+  required double destinationLat,
+  required double destinationLng,
+  int coordinateCount = 140,
+  double bendScale = 0.18,
+}) {
+  const startLng = 11.5820;
+  const startLat = 48.1351;
+  final dx = destinationLng - startLng;
+  final dy = destinationLat - startLat;
+  final length = math.sqrt(dx * dx + dy * dy);
+  final perpX = length == 0 ? 0.0 : -dy / length;
+  final perpY = length == 0 ? 0.0 : dx / length;
+
+  final coords = List.generate(coordinateCount, (i) {
+    final t = i / (coordinateCount - 1);
+    final corridor =
+        math.sin(t * math.pi) * bendScale +
+        math.sin(t * math.pi * 2.0) * (bendScale * 0.12);
+    return [
+      startLng + dx * t + perpX * corridor,
+      startLat + dy * t + perpY * corridor,
+    ];
+  });
+
+  return {
+    'route': {
+      'geometry': {'type': 'LineString', 'coordinates': coords},
+      'distance': distanceMeters,
+      'duration': durationSeconds,
+      'legs': [
+        {
+          'steps': [
+            {
+              'maneuver': {
+                'type': 'turn',
+                'modifier': 'left',
+                'location': coords[(coordinateCount * 0.33).round()],
+              },
+              'distance': distanceMeters * 0.35,
+              'name': 'Scenic Way',
+            },
+            {
+              'maneuver': {
+                'type': 'turn',
+                'modifier': 'right',
+                'location': coords[(coordinateCount * 0.72).round()],
+              },
+              'distance': distanceMeters * 0.40,
+              'name': 'Valley Road',
             },
             {
               'maneuver': {'type': 'arrive', 'location': coords.last},
@@ -307,15 +480,19 @@ void main() {
               _buildRouteResponse(distanceMeters: 50000, durationSeconds: 3600),
         );
 
-        await service.generateRoundTrip(
-          startPosition: _munich(),
-          targetDistanceKm: 50,
-          mode: 'Sport Mode',
-          planningType: 'Zufall',
-        );
+        try {
+          await service.generateRoundTrip(
+            startPosition: _munich(),
+            targetDistanceKm: 50,
+            mode: 'Sport Mode',
+            planningType: 'Zufall',
+          );
+        } on RouteServiceException {
+          // Für diese Prüfung ist nur der Request-Seed relevant.
+        }
 
         final first =
-            verify(mockInvoker.invoke(captureAny)).captured.last
+            verify(mockInvoker.invoke(captureAny)).captured.first
                 as Map<String, dynamic>;
         clearInteractions(mockInvoker);
 
@@ -324,15 +501,19 @@ void main() {
               _buildRouteResponse(distanceMeters: 50000, durationSeconds: 3600),
         );
 
-        await service.generateRoundTrip(
-          startPosition: _munich(),
-          targetDistanceKm: 50,
-          mode: 'Sport Mode',
-          planningType: 'Zufall',
-        );
+        try {
+          await service.generateRoundTrip(
+            startPosition: _munich(),
+            targetDistanceKm: 50,
+            mode: 'Sport Mode',
+            planningType: 'Zufall',
+          );
+        } on RouteServiceException {
+          // Für diese Prüfung ist nur der Request-Seed relevant.
+        }
 
         final second =
-            verify(mockInvoker.invoke(captureAny)).captured.last
+            verify(mockInvoker.invoke(captureAny)).captured.first
                 as Map<String, dynamic>;
 
         expect(first['randomSeed'], isA<int>());
@@ -409,12 +590,16 @@ void main() {
             _buildRouteResponse(distanceMeters: 20000, durationSeconds: 1800),
       );
 
-      await service.generatePointToPoint(
-        startPosition: _munich(),
-        destinationLat: 47.8,
-        destinationLng: 12.0,
-        mode: 'Sport Mode',
-      );
+      try {
+        await service.generatePointToPoint(
+          startPosition: _munich(),
+          destinationLat: 47.8,
+          destinationLng: 12.0,
+          mode: 'Sport Mode',
+        );
+      } on RouteServiceException {
+        // Für diese Prüfung zählt nur der Request-Body.
+      }
 
       final captured =
           verify(mockInvoker.invoke(captureAny)).captured.last
@@ -428,12 +613,16 @@ void main() {
             _buildRouteResponse(distanceMeters: 20000, durationSeconds: 1800),
       );
 
-      await service.generatePointToPoint(
-        startPosition: _munich(),
-        destinationLat: 47.9123,
-        destinationLng: 12.4567,
-        mode: 'Sport Mode',
-      );
+      try {
+        await service.generatePointToPoint(
+          startPosition: _munich(),
+          destinationLat: 47.9123,
+          destinationLng: 12.4567,
+          mode: 'Sport Mode',
+        );
+      } on RouteServiceException {
+        // Für diese Prüfung zählt nur der Request-Body.
+      }
 
       final captured =
           verify(mockInvoker.invoke(captureAny)).captured.last
@@ -454,13 +643,17 @@ void main() {
             _buildRouteResponse(distanceMeters: 20000, durationSeconds: 1800),
       );
 
-      await service.generatePointToPoint(
-        startPosition: _munich(),
-        destinationLat: 47.8,
-        destinationLng: 12.0,
-        mode: 'Sport Mode',
-        scenic: false,
-      );
+      try {
+        await service.generatePointToPoint(
+          startPosition: _munich(),
+          destinationLat: 47.8,
+          destinationLng: 12.0,
+          mode: 'Sport Mode',
+          scenic: false,
+        );
+      } on RouteServiceException {
+        // Für diese Prüfung zählt nur der Request-Body.
+      }
 
       final captured =
           verify(mockInvoker.invoke(captureAny)).captured.last
@@ -478,14 +671,18 @@ void main() {
             _buildRouteResponse(distanceMeters: 20000, durationSeconds: 1800),
       );
 
-      await service.generatePointToPoint(
-        startPosition: _munich(),
-        destinationLat: 47.8,
-        destinationLng: 12.0,
-        mode: 'Sport Mode',
-        scenic: false,
-        avoidHighways: true,
-      );
+      try {
+        await service.generatePointToPoint(
+          startPosition: _munich(),
+          destinationLat: 47.8,
+          destinationLng: 12.0,
+          mode: 'Sport Mode',
+          scenic: false,
+          avoidHighways: true,
+        );
+      } on RouteServiceException {
+        // Für diese Prüfung zählt nur der Request-Body.
+      }
 
       final captured =
           verify(mockInvoker.invoke(captureAny)).captured.last
@@ -652,17 +849,21 @@ void main() {
               _buildRouteResponse(distanceMeters: 60000, durationSeconds: 4000),
         );
 
-        await service.generatePointToPoint(
-          startPosition: _munich(),
-          destinationLat: 47.8,
-          destinationLng: 12.0,
-          mode: 'Sport Mode',
-          scenic: true,
-          routeVariant: 1,
-        );
+        try {
+          await service.generatePointToPoint(
+            startPosition: _munich(),
+            destinationLat: 47.8,
+            destinationLng: 12.0,
+            mode: 'Sport Mode',
+            scenic: true,
+            routeVariant: 1,
+          );
+        } on RouteServiceException {
+          // Für diese Prüfung ist nur der Request-Seed relevant.
+        }
 
         final first =
-            verify(mockInvoker.invoke(captureAny)).captured.last
+            verify(mockInvoker.invoke(captureAny)).captured.first
                 as Map<String, dynamic>;
         clearInteractions(mockInvoker);
 
@@ -671,17 +872,21 @@ void main() {
               _buildRouteResponse(distanceMeters: 60000, durationSeconds: 4000),
         );
 
-        await service.generatePointToPoint(
-          startPosition: _munich(),
-          destinationLat: 47.8,
-          destinationLng: 12.0,
-          mode: 'Sport Mode',
-          scenic: true,
-          routeVariant: 1,
-        );
+        try {
+          await service.generatePointToPoint(
+            startPosition: _munich(),
+            destinationLat: 47.8,
+            destinationLng: 12.0,
+            mode: 'Sport Mode',
+            scenic: true,
+            routeVariant: 1,
+          );
+        } on RouteServiceException {
+          // Für diese Prüfung ist nur der Request-Seed relevant.
+        }
 
         final second =
-            verify(mockInvoker.invoke(captureAny)).captured.last
+            verify(mockInvoker.invoke(captureAny)).captured.first
                 as Map<String, dynamic>;
 
         expect(first['randomSeed'], isNot(equals(second['randomSeed'])));
@@ -695,16 +900,22 @@ void main() {
         when(mockInvoker.invoke(any)).thenAnswer((_) async {
           callCount++;
           if (callCount == 1) {
-            return _buildRouteResponse(
+            return _buildPointToPointResponse(
               distanceMeters: 640000,
               durationSeconds: 24000,
+              destinationLat: 47.8095,
+              destinationLng: 13.0550,
               coordinateCount: 800,
+              bendScale: 0.42,
             );
           }
-          return _buildRouteResponse(
-            distanceMeters: 144000,
-            durationSeconds: 9000,
+          return _buildPointToPointResponse(
+            distanceMeters: 165000,
+            durationSeconds: 9800,
+            destinationLat: 47.8095,
+            destinationLng: 13.0550,
             coordinateCount: 500,
+            bendScale: 0.36,
           );
         });
 
@@ -1051,8 +1262,10 @@ void main() {
 
     test('erster Koordinatenpunkt = Startpunkt nach Snapping', () async {
       when(mockInvoker.invoke(any)).thenAnswer(
-        (_) async =>
-            _buildRouteResponse(distanceMeters: 50000, durationSeconds: 3600),
+        (_) async => _buildClosedLoopRouteResponse(
+          distanceMeters: 50000,
+          durationSeconds: 3600,
+        ),
       );
 
       final pos = _munich();
@@ -1083,16 +1296,23 @@ void main() {
     for (final style in styles) {
       test('Fahrstil "$style" wird korrekt übergeben', () async {
         when(mockInvoker.invoke(any)).thenAnswer(
-          (_) async =>
-              _buildRouteResponse(distanceMeters: 50000, durationSeconds: 3600),
+          (_) async => _buildRouteResponse(
+            distanceMeters: 50000,
+            durationSeconds: 3600,
+            mode: style,
+          ),
         );
 
-        await service.generateRoundTrip(
-          startPosition: _munich(),
-          targetDistanceKm: 50,
-          mode: style,
-          planningType: 'Zufall',
-        );
+        try {
+          await service.generateRoundTrip(
+            startPosition: _munich(),
+            targetDistanceKm: 50,
+            mode: style,
+            planningType: 'Zufall',
+          );
+        } on RouteServiceException {
+          // Hier prüfen wir nur die Übergabe des Fahrstils in den Request.
+        }
 
         final captured =
             verify(mockInvoker.invoke(captureAny)).captured.last

@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:geolocator/geolocator.dart' as geo;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -18,20 +20,20 @@ geo.Position _start() => geo.Position(
 );
 
 Map<String, dynamic> _closedLoopResponse() {
-  final coords = <List<double>>[];
-  for (var i = 0; i < 15; i++) {
-    coords.add([9.7471 + i * 0.0004, 47.5162]);
-  }
-  for (var i = 1; i < 15; i++) {
-    coords.add([9.7471 + 14 * 0.0004, 47.5162 + i * 0.0004]);
-  }
-  for (var i = 13; i >= 0; i--) {
-    coords.add([9.7471 + i * 0.0004, 47.5162 + 14 * 0.0004]);
-  }
-  for (var i = 13; i >= 1; i--) {
-    coords.add([9.7471, 47.5162 + i * 0.0004]);
-  }
-  coords.add([9.7471, 47.5162]);
+  final coords = List.generate(120, (i) {
+    final t = (2 * math.pi * i) / 119;
+    final radius =
+        0.009 +
+        math.sin(t * 3) * 0.0016 +
+        math.cos(t * 4) * (0.0016 * 0.18) +
+        math.sin(t * 3) * (0.0016 * 0.12);
+    return [
+      9.7471 + math.cos(t) * radius,
+      47.5162 + math.sin(t) * radius * 0.55,
+    ];
+  });
+  coords[0] = [9.7471, 47.5162];
+  coords[coords.length - 1] = [...coords.first];
 
   return {
     'route': {

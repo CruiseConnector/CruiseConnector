@@ -132,6 +132,7 @@ class RouteService {
       () async {
         final prepared = _takePreparedRoute(
           scenario: scenario,
+          styleConfig: styleConfig,
         );
         if (prepared != null) {
           return prepared;
@@ -164,39 +165,27 @@ class RouteService {
               variant: variant,
               candidateBudget: hasSeenHistory ? 4 : 5,
             );
-            if (!candidate.hardRejected && candidate.score < bestScore) {
-              if (bestCandidate != null && candidate.accepted) {
-                spareCandidate ??= candidate;
+            if (candidate.accepted && candidate.score < bestScore) {
+              if (bestCandidate != null) {
+                if (spareCandidate == null ||
+                    bestCandidate.score < spareCandidate.score) {
+                  spareCandidate = bestCandidate;
+                }
               }
               bestCandidate = candidate;
               bestScore = candidate.score;
-            } else if (candidate.accepted) {
-              spareCandidate ??= candidate;
+            } else if (candidate.accepted &&
+                (spareCandidate == null ||
+                    candidate.score < spareCandidate.score)) {
+              spareCandidate = candidate;
+            } else if (!candidate.hardRejected &&
+                candidate.score < bestScore &&
+                bestCandidate == null) {
+              bestCandidate = candidate;
+              bestScore = candidate.score;
             }
-            if (candidate.accepted) {
-              final finalized = _finalizeAndRemember(
-                scenario: scenario,
-                route: candidate.route,
-                sampledCoordinates: candidate.sampledCoordinates,
-                fingerprint: candidate.fingerprint,
-              );
-              if (spareCandidate != null) {
-                PreparedRouteBuffer.store(
-                  scenario.scenarioKey,
-                  PreparedRouteEntry(
-                    route: spareCandidate.route,
-                    variant: spareCandidate.variant,
-                    preparedAt: DateTime.now(),
-                  ),
-                );
-              } else if (!hasSeenHistory) {
-                _schedulePreparedRoundTripRoute(
-                  scenario: scenario,
-                  styleConfig: styleConfig,
-                  startPosition: startPosition,
-                );
-              }
-              return finalized;
+            if (candidate.accepted && candidate.isIdeal) {
+              break;
             }
           } catch (e, stack) {
             final mapped = e is RouteServiceException
@@ -216,13 +205,30 @@ class RouteService {
           }
         }
 
-        if (bestCandidate != null) {
-          return _finalizeAndRemember(
+        if (bestCandidate?.accepted == true) {
+          final finalized = _finalizeAndRemember(
             scenario: scenario,
-            route: bestCandidate.route,
+            route: bestCandidate!.route,
             sampledCoordinates: bestCandidate.sampledCoordinates,
             fingerprint: bestCandidate.fingerprint,
           );
+          if (spareCandidate != null) {
+            PreparedRouteBuffer.store(
+              scenario.scenarioKey,
+              PreparedRouteEntry(
+                route: spareCandidate.route,
+                variant: spareCandidate.variant,
+                preparedAt: DateTime.now(),
+              ),
+            );
+          } else if (!hasSeenHistory) {
+            _schedulePreparedRoundTripRoute(
+              scenario: scenario,
+              styleConfig: styleConfig,
+              startPosition: startPosition,
+            );
+          }
+          return finalized;
         }
 
         final fallback = await _tryRoundTripFallback(
@@ -239,8 +245,21 @@ class RouteService {
           scenarioKey: scenario.scenarioKey,
         );
         if (cached != null) {
-          lastRouteFromCache = true;
-          return cached;
+          final cachedCandidate = _evaluateCandidate(
+            scenario: scenario,
+            styleConfig: styleConfig,
+            route: cached,
+            variant: _reuseVariant(scenario, sourceLabel: 'cache'),
+          );
+          if (cachedCandidate.accepted) {
+            lastRouteFromCache = true;
+            return _finalizeAndRemember(
+              scenario: scenario,
+              route: cachedCandidate.route,
+              sampledCoordinates: cachedCandidate.sampledCoordinates,
+              fingerprint: cachedCandidate.fingerprint,
+            );
+          }
         }
 
         throw lastError ??
@@ -329,6 +348,8 @@ class RouteService {
       () async {
         final prepared = _takePreparedRoute(
           scenario: scenario,
+          styleConfig: styleConfig,
+          directDistanceKm: directDistanceKm,
         );
         if (prepared != null) {
           return prepared;
@@ -369,43 +390,27 @@ class RouteService {
               variant: variant,
               candidateBudget: hasSeenHistory ? 3 : 4,
             );
-            if (!candidate.hardRejected && candidate.score < bestScore) {
-              if (bestCandidate != null && candidate.accepted) {
-                spareCandidate ??= candidate;
+            if (candidate.accepted && candidate.score < bestScore) {
+              if (bestCandidate != null) {
+                if (spareCandidate == null ||
+                    bestCandidate.score < spareCandidate.score) {
+                  spareCandidate = bestCandidate;
+                }
               }
               bestCandidate = candidate;
               bestScore = candidate.score;
-            } else if (candidate.accepted) {
-              spareCandidate ??= candidate;
+            } else if (candidate.accepted &&
+                (spareCandidate == null ||
+                    candidate.score < spareCandidate.score)) {
+              spareCandidate = candidate;
+            } else if (!candidate.hardRejected &&
+                candidate.score < bestScore &&
+                bestCandidate == null) {
+              bestCandidate = candidate;
+              bestScore = candidate.score;
             }
-            if (candidate.accepted) {
-              final finalized = _finalizeAndRemember(
-                scenario: scenario,
-                route: candidate.route,
-                sampledCoordinates: candidate.sampledCoordinates,
-                fingerprint: candidate.fingerprint,
-              );
-              if (spareCandidate != null) {
-                PreparedRouteBuffer.store(
-                  scenario.scenarioKey,
-                  PreparedRouteEntry(
-                    route: spareCandidate.route,
-                    variant: spareCandidate.variant,
-                    preparedAt: DateTime.now(),
-                  ),
-                );
-              } else if (shouldDiversify) {
-                _schedulePreparedPointToPointRoute(
-                  scenario: scenario,
-                  styleConfig: styleConfig,
-                  startPosition: startPosition,
-                  destinationLat: destinationLat,
-                  destinationLng: destinationLng,
-                  avoidHighways: avoidHighways,
-                  directDistanceKm: directDistanceKm,
-                );
-              }
-              return finalized;
+            if (candidate.accepted && candidate.isIdeal) {
+              break;
             }
           } catch (e, stack) {
             final mapped = e is RouteServiceException
@@ -425,13 +430,34 @@ class RouteService {
           }
         }
 
-        if (bestCandidate != null) {
-          return _finalizeAndRemember(
+        if (bestCandidate?.accepted == true) {
+          final finalized = _finalizeAndRemember(
             scenario: scenario,
-            route: bestCandidate.route,
+            route: bestCandidate!.route,
             sampledCoordinates: bestCandidate.sampledCoordinates,
             fingerprint: bestCandidate.fingerprint,
           );
+          if (spareCandidate != null) {
+            PreparedRouteBuffer.store(
+              scenario.scenarioKey,
+              PreparedRouteEntry(
+                route: spareCandidate.route,
+                variant: spareCandidate.variant,
+                preparedAt: DateTime.now(),
+              ),
+            );
+          } else if (shouldDiversify) {
+            _schedulePreparedPointToPointRoute(
+              scenario: scenario,
+              styleConfig: styleConfig,
+              startPosition: startPosition,
+              destinationLat: destinationLat,
+              destinationLng: destinationLng,
+              avoidHighways: avoidHighways,
+              directDistanceKm: directDistanceKm,
+            );
+          }
+          return finalized;
         }
 
         final fallback = await _tryPointToPointFallback(
@@ -450,8 +476,22 @@ class RouteService {
           scenarioKey: scenario.scenarioKey,
         );
         if (cached != null) {
-          lastRouteFromCache = true;
-          return cached;
+          final cachedCandidate = _evaluateCandidate(
+            scenario: scenario,
+            styleConfig: styleConfig,
+            route: cached,
+            variant: _reuseVariant(scenario, sourceLabel: 'cache'),
+            directDistanceKm: directDistanceKm,
+          );
+          if (cachedCandidate.accepted) {
+            lastRouteFromCache = true;
+            return _finalizeAndRemember(
+              scenario: scenario,
+              route: cachedCandidate.route,
+              sampledCoordinates: cachedCandidate.sampledCoordinates,
+              fingerprint: cachedCandidate.fingerprint,
+            );
+          }
         }
 
         throw lastError ??
@@ -1232,12 +1272,19 @@ class RouteService {
       targetDistanceKm: scenario.targetDistanceKm ?? 0.0,
       actualDistanceKm: actualDistanceKm,
     );
+    final styleFitScore = styleConfig.scoreStyleFit(
+      coordinates: route.coordinates,
+      distanceKm: actualDistanceKm,
+      durationSeconds: route.durationSeconds,
+    );
     final classification = _qualityValidator.classifyGeneratedRoute(
       quality: quality,
       isRoundTrip: scenario.isRoundTrip,
       coordinateCount: route.coordinates.length,
       actualDistanceKm: actualDistanceKm,
       targetDistanceKm: scenario.targetDistanceKm ?? 0.0,
+      styleProfileKey: styleConfig.profileKey,
+      styleFitScore: styleFitScore,
     );
     final styleOk = styleConfig.validateStyleQuality(
       coordinates: route.coordinates,
@@ -1291,13 +1338,16 @@ class RouteService {
         (styleOk ? 0.0 : 18.0) +
         (tooSimilar ? 45.0 : 0.0) +
         (detourDistanceOk ? 0.0 : 35.0) +
-        (hasEnoughPoints ? 0.0 : 24.0);
+        (hasEnoughPoints ? 0.0 : 24.0) -
+        styleFitScore * 0.18;
 
     debugPrint(
       '[RouteService] Candidate ${scenario.routeType} ${variant.variantHint}: '
       'accepted=$accepted, score=${score.toStringAsFixed(1)}, '
       'distance=${actualDistanceKm.toStringAsFixed(1)}km, '
       'overlap=${quality.overlapPercent.toStringAsFixed(1)}%, '
+      'shape=${quality.shapePenalty.toStringAsFixed(1)}, '
+      'styleFit=${styleFitScore.toStringAsFixed(1)}, '
       'uturns=${quality.uturnPositions.length}, tooSimilar=$tooSimilar, '
       'distanceWindow=${pointToPointMinDistance.toStringAsFixed(1)}-${pointToPointMaxDistance.isFinite ? pointToPointMaxDistance.toStringAsFixed(1) : 'inf'}',
     );
@@ -1310,6 +1360,8 @@ class RouteService {
       score: score,
       accepted: accepted,
       hardRejected: !softRenderable,
+      isIdeal: classification.isIdeal,
+      styleFitScore: styleFitScore,
     );
   }
 
@@ -1360,21 +1412,28 @@ class RouteService {
 
   RouteResult? _takePreparedRoute({
     required RouteScenario scenario,
+    required RouteStyleConfig styleConfig,
+    double? directDistanceKm,
   }) {
     final entry = PreparedRouteBuffer.take(scenario.scenarioKey);
     if (entry == null) return null;
-    final sampled = _sampleRouteForSimilarity(entry.route.coordinates);
-    final fingerprint = RouteQualityValidator.buildRouteFingerprint(
-      sampled,
-      distanceKm: entry.route.distanceKm,
-      precision: 4,
+    final candidate = _evaluateCandidate(
+      scenario: scenario,
+      styleConfig: styleConfig,
+      route: entry.route,
+      variant: entry.variant,
+      directDistanceKm: directDistanceKm,
     );
-    if (SeenRouteRegistry.hasExactFingerprint(scenario.scenarioKey, fingerprint)) {
+    if (!candidate.accepted ||
+        SeenRouteRegistry.hasExactFingerprint(
+          scenario.scenarioKey,
+          candidate.fingerprint,
+        )) {
       return null;
     }
     if (SeenRouteRegistry.hasSimilarRoute(
       scenario.scenarioKey,
-      sampled,
+      candidate.sampledCoordinates,
       thresholdPercent: _similarityThresholdForScenario(scenario),
       proximityMeters: scenario.isRoundTrip ? 130.0 : 160.0,
     )) {
@@ -1382,9 +1441,9 @@ class RouteService {
     }
     return _finalizeAndRemember(
       scenario: scenario,
-      route: entry.route,
-      sampledCoordinates: sampled,
-      fingerprint: fingerprint,
+      route: candidate.route,
+      sampledCoordinates: candidate.sampledCoordinates,
+      fingerprint: candidate.fingerprint,
     );
   }
 
@@ -1519,6 +1578,23 @@ class RouteService {
     return finalized;
   }
 
+  RouteVariant _reuseVariant(
+    RouteScenario scenario, {
+    required String sourceLabel,
+  }) {
+    return RouteVariant(
+      index: -1,
+      seed: 0,
+      angleOffset: 0.0,
+      radiusJitter: 1.0,
+      offsetBearing: 0.0,
+      fingerprintHint: '${scenario.scenarioKey}|$sourceLabel',
+      variantHint: '$sourceLabel-${scenario.routeType.toLowerCase()}',
+      offsetSide: scenario.isPointToPoint ? 0 : null,
+      styleBias: scenario.style,
+    );
+  }
+
   Future<RouteResult?> _tryRoundTripFallback({
     required RouteScenario scenario,
     required RouteStyleConfig styleConfig,
@@ -1546,17 +1622,18 @@ class RouteService {
       body['max_waypoints'] = 3;
       final result = await _invoke(body);
       final snapped = _snapRouteToStartPosition(result, startPosition);
-      final sampled = _sampleRouteForSimilarity(snapped.coordinates);
-      final fingerprint = RouteQualityValidator.buildRouteFingerprint(
-        sampled,
-        distanceKm: snapped.distanceKm,
-        precision: 4,
+      final candidate = _evaluateCandidate(
+        scenario: scenario,
+        styleConfig: styleConfig,
+        route: snapped,
+        variant: variant,
       );
+      if (!candidate.accepted) return null;
       return _finalizeAndRemember(
         scenario: scenario,
-        route: snapped,
-        sampledCoordinates: sampled,
-        fingerprint: fingerprint,
+        route: candidate.route,
+        sampledCoordinates: candidate.sampledCoordinates,
+        fingerprint: candidate.fingerprint,
       );
     } catch (e) {
       debugPrint('[RouteService] Rundkurs-Fallback fehlgeschlagen: $e');
@@ -1618,7 +1695,7 @@ class RouteService {
           variant: scenicVariant,
           directDistanceKm: directDistanceKm,
         );
-        if (!scenicCandidate.hardRejected) {
+        if (scenicCandidate.accepted) {
           return _finalizeAndRemember(
             scenario: scenario,
             route: scenicCandidate.route,
@@ -1655,17 +1732,19 @@ class RouteService {
       body['max_waypoints'] = 0;
       final result = await _invoke(body);
       final snapped = _snapRouteToStartPosition(result, startPosition);
-      final sampled = _sampleRouteForSimilarity(snapped.coordinates);
-      final fingerprint = RouteQualityValidator.buildRouteFingerprint(
-        sampled,
-        distanceKm: snapped.distanceKm,
-        precision: 4,
+      final directCandidate = _evaluateCandidate(
+        scenario: scenario,
+        styleConfig: RouteStyleConfig.forMode('Sport Mode'),
+        route: snapped,
+        variant: variant,
+        directDistanceKm: directDistanceKm,
       );
+      if (!directCandidate.accepted) return null;
       return _finalizeAndRemember(
         scenario: scenario,
-        route: snapped,
-        sampledCoordinates: sampled,
-        fingerprint: fingerprint,
+        route: directCandidate.route,
+        sampledCoordinates: directCandidate.sampledCoordinates,
+        fingerprint: directCandidate.fingerprint,
       );
     } catch (e) {
       debugPrint('[RouteService] A→B-Fallback fehlgeschlagen: $e');
@@ -2867,6 +2946,8 @@ class _RouteCandidate {
     required this.score,
     required this.accepted,
     required this.hardRejected,
+    required this.isIdeal,
+    required this.styleFitScore,
   });
 
   final RouteResult route;
@@ -2876,6 +2957,8 @@ class _RouteCandidate {
   final double score;
   final bool accepted;
   final bool hardRejected;
+  final bool isIdeal;
+  final double styleFitScore;
 }
 
 enum RouteErrorType {

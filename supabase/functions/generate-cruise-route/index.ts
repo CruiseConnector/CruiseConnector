@@ -88,10 +88,10 @@ interface RoundTripCandidatePlan {
 }
 
 interface RoundTripSearchResult {
-    route: any
+    route: any | null
     waypoints: Coordinate[]
     radiuses: string
-    quality: RouteQualityEvaluation
+    quality: RouteQualityEvaluation | null
     candidateAttempts: number
     acceptedCandidates: number
     rejectedCandidates: number
@@ -99,6 +99,7 @@ interface RoundTripSearchResult {
     searchPhases: string[]
     variantHint?: string
     fingerprintHint?: string
+    exhausted?: boolean
 }
 
 interface MapboxRouteFetchResult {
@@ -178,16 +179,28 @@ function getDistanceConfig(targetDistance: number, mode?: string): DistanceConfi
     let roadFactor: number;
     switch (mode) {
         case 'Kurvenjagd':
-            roadFactor = 1.70; // Mehr Suchraum, damit Kurvenmodus nicht verhungert
+            roadFactor = targetDistance > 110
+                ? 1.56
+                : targetDistance <= 60
+                ? 1.62
+                : 1.66; // Mehr Raum für saubere Berg-/Loopformen statt gefalteter Äste
             break;
         case 'Entdecker':
-            roadFactor = 1.60; // Breiterer Suchraum für ungewöhnliche Straßen
+            roadFactor = targetDistance > 110
+                ? 1.50
+                : targetDistance <= 60
+                ? 1.54
+                : 1.58; // Etwas weiter greifen, damit Entdecker nicht zu eng faltet
             break;
         case 'Abendrunde':
-            roadFactor = 1.12; // Ruhiger, aber nicht zu eng um den Start
+            roadFactor = targetDistance > 110 ? 1.10 : 1.12; // Ruhiger Radius, aber kein Zentrumsknäuel
             break;
         case 'Sport Mode':
-            roadFactor = 1.28; // Fließender Radius, bessere Trefferquote
+            roadFactor = targetDistance > 110
+                ? 1.20
+                : targetDistance <= 60
+                ? 1.24
+                : 1.26; // Gestreckterer Suchraum für flüssige Sport-Loops
             break;
         default:
             roadFactor = 1.25;
@@ -415,6 +428,81 @@ function calculateLoopWithReturnWaypoints(
     return [...outbound, ...returnWaypoints];
 }
 
+function smoothDistanceSeries(values: number[]): number[] {
+    if (values.length < 3) return values
+    return values.map((value, index) => {
+        const start = Math.max(0, index - 1)
+        const end = Math.min(values.length - 1, index + 1)
+        let sum = 0
+        let count = 0
+        for (let i = start; i <= end; i++) {
+            sum += values[i]
+            count += 1
+        }
+        return count === 0 ? value : sum / count
+    })
+}
+
+function countCenterReentries(
+    distances: number[],
+    radiusMeters: number,
+): number {
+    if (distances.length < 6) return 0
+    let hasLeftStart = false
+    let previousInside = true
+    let reentries = 0
+
+    for (let i = 1; i < distances.length - 1; i++) {
+        const inside = distances[i] <= radiusMeters
+        if (!hasLeftStart && !inside) {
+            hasLeftStart = true
+        } else if (hasLeftStart && inside && !previousInside && i < distances.length - 3) {
+            reentries += 1
+        }
+        previousInside = inside
+    }
+
+    return reentries
+}
+
+function countMajorDistancePeaks(
+    distances: number[],
+    minimumHeight: number,
+): number {
+    if (distances.length < 5) return 0
+    let peaks = 0
+    for (let i = 2; i < distances.length - 2; i++) {
+        const current = distances[i]
+        if (current < minimumHeight) continue
+        if (
+            current >= distances[i - 1] &&
+            current >= distances[i + 1] &&
+            current > distances[i - 2] &&
+            current > distances[i + 2]
+        ) {
+            peaks += 1
+        }
+    }
+    return peaks
+}
+
+function estimateMiddleCoverageRatio(
+    distances: number[],
+    maxDistance: number,
+): number {
+    if (distances.length < 4 || maxDistance <= 0) return 0
+    const startIndex = Math.floor(distances.length * 0.22)
+    const endIndex = Math.ceil(distances.length * 0.78)
+    let sum = 0
+    let count = 0
+    for (let i = startIndex; i < endIndex && i < distances.length; i++) {
+        sum += distances[i]
+        count += 1
+    }
+    if (count === 0) return 0
+    return (sum / count) / maxDistance
+}
+
 function enforceWaypointRadiusBand(
     start: Coordinate,
     waypoints: Coordinate[],
@@ -567,11 +655,13 @@ function buildRoundTripWaypointCandidates({
     switch (mode) {
         case 'Kurvenjagd':
             if (longTarget) {
-                addPlan('curve-zigzag-core', zigzag(1.06, 73), 1.16);
                 addPlan('curve-cardinal-wide', cardinal(1.14, 101, 1.0), 1.12);
+                addPlan('curve-cardinal-grand', cardinal(1.24, 1601, 1.0), 1.16);
+                addPlan('curve-zigzag-core', zigzag(1.06, 73), 1.16);
                 addPlan('curve-triangle-wide', triangle(1.14, 887), 1.10);
-                addPlan('curve-return-long', loopWithReturn(1.10, 3, 263), 1.14);
                 addPlan('curve-loop-wide', loop(1.20, 4, 131), 1.16);
+                addPlan('curve-loop-grand', loop(1.34, 4, 1703), 1.20);
+                addPlan('curve-orbital-sweep', loopWithReturn(1.10, 4, 73), 1.14);
                 addPlan('curve-loop-open', loop(1.28, 4, 541), 1.20);
                 addPlan('curve-triangle', triangle(1.00, 397), 1.0);
                 addPlan('curve-loop-tight', loop(1.02, 4, 11), 1.05);
@@ -586,9 +676,9 @@ function buildRoundTripWaypointCandidates({
                 addPlan('curve-loop-tight', loop(1.08, shortTarget ? 4 : 5, 11), 1.05);
                 addPlan('curve-loop-wide', loop(longTarget ? 1.26 : 1.18, mediumTarget ? 4 : 5, 131), 1.16);
                 addPlan('curve-loop-open', loop(longTarget ? 1.34 : 1.24, mediumTarget ? 5 : 4, 541), 1.22);
-                addPlan('curve-return', loopWithReturn(1.12, 3, 263), 1.18);
                 addPlan('curve-triangle', triangle(1.02, 397), 1.0);
                 addPlan('curve-triangle-wide', triangle(1.20, 887), 1.14);
+                addPlan('curve-orbital-core', loopWithReturn(shortTarget ? 1.00 : 1.06, shortTarget ? 3 : 4, 73), 1.10);
                 addPlan('curve-loop-scout', loop(0.94, shortTarget ? 3 : 4, 997), 1.0);
             }
             break;
@@ -598,8 +688,8 @@ function buildRoundTripWaypointCandidates({
             addPlan('evening-triangle-wide', triangle(1.05, 149), 1.0);
             addPlan('evening-triangle-extended', triangle(1.18, 563), 1.1);
             addPlan('evening-loop-soft', loop(0.98, 3, 281), 1.0);
-            addPlan('evening-return', loopWithReturn(0.94, 2, 419), 1.05);
             addPlan('evening-loop-wide', loop(1.12, 3, 881), 1.12);
+            addPlan('evening-orbital-soft', loopWithReturn(0.92, 3, 41), 0.98);
             addPlan('evening-triangle-relaxed', triangle(1.28, 1151), 1.16);
             break;
         case 'Entdecker':
@@ -608,12 +698,11 @@ function buildRoundTripWaypointCandidates({
                 addPlan('explore-zigzag', zigzag(1.06, 883), 1.12);
             }
             addPlan('explore-loop-wide', loop(longTarget ? 1.28 : 1.18, mediumTarget ? 4 : 5, 23), 1.16);
-            addPlan('explore-return', loopWithReturn(1.10, 4, 163), 1.20);
             addPlan('explore-loop-offset', loop(1.08, shortTarget ? 3 : 4, 307), 1.15);
             addPlan('explore-loop-far', loop(longTarget ? 1.36 : 1.24, mediumTarget ? 5 : 4, 587), 1.24);
             addPlan('explore-triangle', triangle(1.12, 443), 1.0);
+            addPlan('explore-orbital-wide', loopWithReturn(longTarget ? 1.16 : 1.08, mediumTarget ? 4 : 3, 47), 1.12);
             addPlan('explore-loop-scout', loop(0.96, shortTarget ? 3 : 4, 953), 1.08);
-            addPlan('explore-return-open', loopWithReturn(1.22, 4, 1301), 1.26);
             break;
         case 'Sport Mode':
         default:
@@ -625,24 +714,29 @@ function buildRoundTripWaypointCandidates({
             addPlan('sport-loop-flow', loop(1.10, shortTarget ? 3 : 4, 29), 1.0);
             addPlan('sport-loop-wide', loop(longTarget ? 1.22 : 1.14, mediumTarget ? 4 : 3, 173), 1.12);
             addPlan('sport-loop-extended', loop(longTarget ? 1.30 : 1.18, mediumTarget ? 4 : 3, 611), 1.18);
-            addPlan('sport-return', loopWithReturn(1.04, 3, 313), 1.10);
+            if (longTarget) {
+                addPlan('sport-cardinal-long', cardinal(1.20, 1717, waypointShapeFactor ?? 2.0), 1.10);
+                addPlan('sport-loop-grand', loop(1.36, 4, 1423), 1.18);
+            }
             addPlan('sport-triangle', triangle(1.00, 457), 1.0);
+            addPlan('sport-orbital-flow', loopWithReturn(shortTarget ? 1.00 : 1.08, shortTarget ? 3 : 4, 37), 1.04);
             addPlan('sport-loop-scout', loop(0.92, 3, 1031), 1.0);
             addPlan('sport-triangle-wide', triangle(1.16, 1289), 1.08);
             break;
     }
 
     addPlan('fallback-cardinal', cardinal(1.00, 1499, waypointShapeFactor ?? 1.0), 1.08);
-    addPlan('fallback-triangle-compact', triangle(0.84, 503), 1.0);
-    addPlan('fallback-triangle-balanced', triangle(1.00, 619), 1.05);
-    addPlan('fallback-triangle-wide', triangle(1.16, 1181), 1.10);
-    addPlan('fallback-triangle-very-wide', triangle(1.28, 1571), 1.18);
-    addPlan('fallback-loop-3', loop(1.02, 3, 733), 1.1);
-    addPlan('fallback-loop-4', loop(1.12, 4, 857), 1.14);
-    addPlan('fallback-loop-5', loop(1.20, 5, 1093), 1.20);
-    addPlan('fallback-loop-6', loop(1.30, 5, 1741), 1.26);
-    addPlan('fallback-return', loopWithReturn(1.08, 3, 977), 1.16);
-    addPlan('fallback-return-wide', loopWithReturn(1.20, 4, 1901), 1.24);
+    addPlan('fallback-triangle-compact', triangle(shortTarget ? 0.88 : 0.84, 503), 1.0);
+    addPlan('fallback-triangle-balanced', triangle(shortTarget ? 0.96 : 1.00, 619), 1.05);
+    addPlan('fallback-triangle-wide', triangle(shortTarget ? 1.06 : 1.12, 1181), 1.08);
+    if (!shortTarget) {
+        addPlan('fallback-triangle-very-wide', triangle(mediumTarget ? 1.18 : 1.28, 1571), 1.14);
+    }
+    addPlan('fallback-loop-3', loop(shortTarget ? 0.98 : 1.02, 3, 733), 1.08);
+    addPlan('fallback-loop-4', loop(shortTarget ? 1.06 : 1.12, 4, 857), 1.12);
+    if (!shortTarget) {
+        addPlan('fallback-loop-5', loop(mediumTarget ? 1.10 : 1.16, 4, 1093), 1.14);
+    }
 
     return dedupeRoundTripPlans(plans);
 }
@@ -748,12 +842,19 @@ function prioritizeCandidatePlans(
         return [...preferred, ...remaining]
     }
 
+    const safer = remaining.filter((plan) => {
+        const label = plan.label.toLowerCase()
+        return !label.includes('return') && !label.includes('open')
+    })
+    const riskier = remaining.filter((plan) => !safer.includes(plan))
+
     const normalizedFingerprint = normalizeHint(fingerprintHint)
     const rotationSeed = normalizedFingerprint
         ? stableStringHash(`${phaseName}:${normalizedFingerprint}`)
         : 0
-    const startIndex = rotationSeed % remaining.length
-    const rotated = remaining.slice(startIndex).concat(remaining.slice(0, startIndex))
+    const orderedPool = safer.length > 0 ? [...safer, ...riskier] : remaining
+    const startIndex = rotationSeed % orderedPool.length
+    const rotated = orderedPool.slice(startIndex).concat(orderedPool.slice(0, startIndex))
     return [...preferred, ...rotated]
 }
 
@@ -837,11 +938,12 @@ function buildPointToPointScenicWaypoints({
     // Klein kann auf längeren Strecken 1 oder 2 Wegpunkte nutzen.
     let waypointCount: number;
     if (detourLevel >= 3) {
-        waypointCount = 3; // Groß: 3 WPs weit aufgefächert
+        waypointCount = directDistanceKm >= 26 ? 3 : 2;
     } else if (detourLevel >= 2) {
         waypointCount = 2; // Mittel: 2 WPs in S-Form
     } else if (detourLevel >= 1) {
-        const useTwoWaypoints = directDistanceKm >= 18 &&
+        const useTwoWaypoints = directDistanceKm >= 28 &&
+            (mode === 'Kurvenjagd' || mode === 'Entdecker') &&
             seededUnit(randomSeed + Math.round(directDistanceKm * 10)) > 0.35
         waypointCount = useTwoWaypoints ? 2 : 1;
     } else {
@@ -923,14 +1025,16 @@ function buildPointToPointScenicWaypoints({
         switch (mode) {
             case 'Kurvenjagd':
                 // Curvy but controlled corridor to avoid hooks/stubs.
-                arcFactor = 0.96 + index * 0.16;
-                angleDrift = (seededUnit(variationSeed + 7) - 0.5) * 34;
-                side = index % 2 === 0 ? baseSide : -baseSide;
+                arcFactor = 0.90 + index * 0.16;
+                angleDrift = (seededUnit(variationSeed + 7) - 0.5) * 26;
+                side = waypointCount >= 3 && index == waypointCount - 1
+                    ? -baseSide
+                    : baseSide;
                 break;
             case 'Entdecker':
                 // Keep one dominant side with optional single crossover.
                 arcFactor = 0.84 + seededUnit(variationSeed + 3) * 0.46;
-                angleDrift = (seededUnit(variationSeed + 7) - 0.5) * 42;
+                angleDrift = (seededUnit(variationSeed + 7) - 0.5) * 34;
                 side = waypointCount >= 3 && index === 1 && seededUnit(variationSeed + 11) >= 0.58
                     ? -baseSide
                     : baseSide;
@@ -942,20 +1046,18 @@ function buildPointToPointScenicWaypoints({
                 side = baseSide;
                 break;
             default: // Sport Mode
-                // Weicher Bogen, mittlerer Offset, leicht wechselnd
+                // Weicher, konsistenter Bogen statt Haken/S-Knicke.
                 arcFactor = detourLevel === 1
                     ? 0.86 + index * 0.14
                     : 0.72 + index * 0.16;
                 angleDrift = (seededUnit(variationSeed + 7) - 0.5) *
-                    (detourLevel === 1 ? 30 : 24);
-                side = waypointCount <= 1
-                    ? baseSide
-                    : (index % 2 === 0 ? baseSide : -baseSide);
+                    (detourLevel === 1 ? 22 : 18);
+                side = baseSide;
         }
 
         if (zigzagWaypoints) {
-            side = index % 2 === 0 ? baseSide : -baseSide
-            angleDrift += 7
+            side = waypointCount >= 3 && index == waypointCount - 1 ? -baseSide : baseSide
+            angleDrift += 5
         }
         if (typeof waypointShapeFactor === 'number' && Number.isFinite(waypointShapeFactor)) {
             arcFactor *= Math.max(0.75, Math.min(2.0, waypointShapeFactor))
@@ -1386,6 +1488,9 @@ function calculateRouteShapeSignals(route: any): {
     sharpTurnRate: number
     hookCount: number
     centralReturnPercent: number
+    centerReentryCount: number
+    radialPeakCount: number
+    middleCoverageRatio: number
 } {
     const coordinates = extractRouteCoordinates(route)
     if (coordinates.length < 12) {
@@ -1394,6 +1499,9 @@ function calculateRouteShapeSignals(route: any): {
             sharpTurnRate: 0,
             hookCount: 0,
             centralReturnPercent: 0,
+            centerReentryCount: 0,
+            radialPeakCount: 0,
+            middleCoverageRatio: 0,
         }
     }
 
@@ -1444,12 +1552,44 @@ function calculateRouteShapeSignals(route: any): {
     const angularRoughness = totalTurnSamples > 0 ? turnDeltaSum / totalTurnSamples : 0
     const sharpTurnRate = totalTurnSamples > 0 ? (sharpTurnCount / totalTurnSamples) * 100 : 0
     const centralReturnPercent = centralSamples > 0 ? (centralHits / centralSamples) * 100 : 0
+    const profileSampleStep = Math.max(sampleStep * 4, Math.floor(coordinates.length / 24))
+    const sampledStartDistances: number[] = []
+    for (let i = 0; i < coordinates.length; i += profileSampleStep) {
+        sampledStartDistances.push(calculateDistance(start, coordinates[i]) * 1000)
+    }
+    if (coordinates.length > 1) {
+        sampledStartDistances.push(calculateDistance(start, coordinates[coordinates.length - 1]) * 1000)
+    }
+    const maxStartDistance = sampledStartDistances.reduce((maxValue, value) => Math.max(maxValue, value), 0)
+    const smoothedDistances = smoothDistanceSeries(sampledStartDistances)
+    const centerReentryCount = maxStartDistance <= 0
+        ? 0
+        : countCenterReentries(
+            smoothedDistances,
+            Math.max(420, Math.min(1700, maxStartDistance * 0.24)),
+        )
+    const radialPeakCount = maxStartDistance <= 0
+        ? 0
+        : Math.max(
+            0,
+            countMajorDistancePeaks(
+            smoothedDistances,
+            maxStartDistance * 0.78,
+        ) - 1,
+        )
+    const middleCoverageRatio = estimateMiddleCoverageRatio(
+        smoothedDistances,
+        maxStartDistance,
+    )
 
     return {
         angularRoughness,
         sharpTurnRate,
         hookCount,
         centralReturnPercent,
+        centerReentryCount,
+        radialPeakCount,
+        middleCoverageRatio,
     }
 }
 
@@ -1471,9 +1611,15 @@ function evaluateRouteQuality(
     const distanceDeltaKm =
         targetDistanceKm > 0 ? Math.abs(actualDistanceKm - targetDistanceKm) : 0
     const shapeSignals = calculateRouteShapeSignals(route)
-    const severeHookCount = routeType === 'ROUND_TRIP' ? 5 : 4
+    const severeHookCount = routeType === 'ROUND_TRIP' ? 8 : 4
+    const severeRoundTripShape = routeType === 'ROUND_TRIP' &&
+        (
+            shapeSignals.centerReentryCount >= 4 ||
+            (shapeSignals.radialPeakCount >= 4 && shapeSignals.middleCoverageRatio < 0.30) ||
+            shapeSignals.middleCoverageRatio < 0.18
+        )
     const severeCentralReturn = routeType === 'ROUND_TRIP'
-        ? shapeSignals.centralReturnPercent > 16
+        ? shapeSignals.centralReturnPercent > 22
         : shapeSignals.centralReturnPercent > 11
 
     if (routeType !== 'ROUND_TRIP') {
@@ -1569,6 +1715,27 @@ function evaluateRouteQuality(
         coordinateCount < severeCoordinateThreshold && actualDistanceKm > 8
     const weakGeometry =
         coordinateCount < weakGeometryThreshold && actualDistanceKm > 15
+    const hardDistanceMin =
+        targetDistanceKm <= 0
+            ? 0
+            : targetDistanceKm *
+                (targetDistanceKm <= 60
+                    ? 0.68
+                    : targetDistanceKm <= 100
+                    ? 0.72
+                    : 0.68)
+    const hardDistanceMax =
+        targetDistanceKm <= 0
+            ? Number.POSITIVE_INFINITY
+            : targetDistanceKm *
+                (targetDistanceKm <= 60
+                    ? 1.40
+                    : targetDistanceKm <= 100
+                    ? 1.42
+                    : 1.40)
+    const severeDistanceMiss =
+        targetDistanceKm > 0 &&
+        (actualDistanceKm < hardDistanceMin || actualDistanceKm > hardDistanceMax)
 
     if (hasUTurn) {
         return {
@@ -1635,6 +1802,39 @@ function evaluateRouteQuality(
             distanceDeltaKm,
         }
     }
+    const branchPenalty =
+        shapeSignals.centerReentryCount * 16 +
+        Math.max(0, shapeSignals.radialPeakCount - 1) * 8 +
+        Math.max(0, 0.48 - shapeSignals.middleCoverageRatio) * 80
+    if (severeRoundTripShape) {
+        return {
+            passed: false,
+            reason: `shape=branches:${shapeSignals.radialPeakCount}/reentry:${shapeSignals.centerReentryCount}/coverage:${shapeSignals.middleCoverageRatio.toFixed(2)}`,
+            overlapPercent,
+            hasUTurn,
+            tier: 'reject',
+            score: 910 + branchPenalty,
+            coordinateCount,
+            actualDistanceKm,
+            distanceDeltaKm,
+        }
+    }
+    if (severeDistanceMiss) {
+        return {
+            passed: false,
+            reason: `distance=${actualDistanceKm.toFixed(1)}km`,
+            overlapPercent,
+            hasUTurn,
+            tier: 'reject',
+            score:
+                910 +
+                distanceDeltaKm * 7 +
+                Math.max(0, Math.abs(actualDistanceKm - targetDistanceKm)) * 2.5,
+            coordinateCount,
+            actualDistanceKm,
+            distanceDeltaKm,
+        }
+    }
 
     let tier: RouteQualityTier = 'fallback'
     if (
@@ -1643,8 +1843,11 @@ function evaluateRouteQuality(
         coordinateCount >= 38 &&
         shapeSignals.angularRoughness <= 62 &&
         shapeSignals.sharpTurnRate <= 34 &&
-        shapeSignals.centralReturnPercent <= 9 &&
+        shapeSignals.centralReturnPercent <= 12 &&
         shapeSignals.hookCount <= 1
+        && shapeSignals.centerReentryCount <= 1
+        && shapeSignals.radialPeakCount <= 3
+        && shapeSignals.middleCoverageRatio >= 0.46
     ) {
         tier = 'ideal'
     } else if (
@@ -1653,8 +1856,11 @@ function evaluateRouteQuality(
         !weakGeometry &&
         shapeSignals.angularRoughness <= 74 &&
         shapeSignals.sharpTurnRate <= 44 &&
-        shapeSignals.centralReturnPercent <= 13 &&
+        shapeSignals.centralReturnPercent <= 18 &&
         shapeSignals.hookCount <= 3
+        && shapeSignals.centerReentryCount <= 2
+        && shapeSignals.radialPeakCount <= 4
+        && shapeSignals.middleCoverageRatio >= 0.34
     ) {
         tier = 'acceptable'
     }
@@ -1666,6 +1872,7 @@ function evaluateRouteQuality(
         shapeSignals.sharpTurnRate * 1.7 +
         shapeSignals.hookCount * 18 +
         shapeSignals.centralReturnPercent * 3.4 +
+        branchPenalty +
         (tier === 'ideal' ? 0 : tier === 'acceptable' ? 24 : 60) +
         (withinAcceptableDistance ? 0 : 45) +
         Math.max(0, 34 - coordinateCount) * 2
@@ -1693,10 +1900,10 @@ function widenDistanceConfigForRoundTripSearch(
     targetDistanceKm: number,
     phase: 'balanced' | 'fallback',
 ): DistanceConfig {
-    const minFactor = phase === 'fallback' ? 0.70 : 0.76
-    const maxFactor = phase === 'fallback' ? 1.34 : 1.24
-    const radiusMultiplier = phase === 'fallback' ? 1.20 : 1.10
-    const snapMultiplier = phase === 'fallback' ? 1.32 : 1.18
+    const minFactor = phase === 'fallback' ? 0.76 : 0.82
+    const maxFactor = phase === 'fallback' ? 1.26 : 1.20
+    const radiusMultiplier = phase === 'fallback' ? 1.14 : 1.08
+    const snapMultiplier = phase === 'fallback' ? 1.20 : 1.14
 
     return {
         radiusKm: base.radiusKm * radiusMultiplier,
@@ -1754,13 +1961,17 @@ async function searchBestRoundTripRoute({
     maxCandidateAttemptsHint?: number
 }): Promise<RoundTripSearchResult | null> {
     const highCostCurveSearch = mode === 'Kurvenjagd' && targetDistanceKm >= 130
+    const extendedRoundTripSearch = targetDistanceKm >= 100 || mode === 'Entdecker'
     const normalizedVariantHint = normalizeHint(variantHint)
     const normalizedFingerprintHint = normalizeHint(fingerprintHint)
     const globalAttemptBudget = Math.max(
-        highCostCurveSearch ? 4 : 5,
+        highCostCurveSearch ? 5 : extendedRoundTripSearch ? 6 : 5,
         Math.min(
-            highCostCurveSearch ? 7 : 10,
-            Math.round(maxCandidateAttemptsHint ?? (highCostCurveSearch ? 7 : 9)),
+            highCostCurveSearch ? 8 : extendedRoundTripSearch ? 8 : 10,
+            Math.round(
+                maxCandidateAttemptsHint ??
+                    (highCostCurveSearch ? 8 : extendedRoundTripSearch ? 7 : 9),
+            ),
         ),
     )
     const searchStartTs = Date.now()
@@ -1771,7 +1982,7 @@ async function searchBestRoundTripRoute({
             name: 'strict',
             distanceConfig,
             seedOffset: 0,
-            continueStraight: true,
+            continueStraight: false,
             exclude: excludeParams,
         },
         {
@@ -1796,7 +2007,7 @@ async function searchBestRoundTripRoute({
             continueStraight: false,
             exclude: '',
         },
-    ].filter((phase) => !(highCostCurveSearch && phase.name === 'fallback'))
+    ]
 
     let candidateAttempts = 0
     let acceptedCandidates = 0
@@ -1833,13 +2044,15 @@ async function searchBestRoundTripRoute({
         const maxPhaseAttempts =
             highCostCurveSearch
                 ? phase.name === 'strict'
+                    ? 3
+                    : phase.name === 'balanced'
                     ? 2
-                    : 1
+                    : 2
                 : phase.name === 'strict'
                 ? 4
                 : phase.name === 'balanced'
                 ? 2
-                : 1
+                : 2
         const candidatePlans = orderedCandidates.slice(0, Math.min(orderedCandidates.length, maxPhaseAttempts + 1))
         let phaseAttempts = 0
         let phaseAcceptedCandidates = 0
@@ -2011,7 +2224,11 @@ async function searchBestRoundTripRoute({
                 (
                     quality.tier === 'ideal' ||
                     (quality.tier === 'acceptable' && phaseAcceptedCandidates >= 1) ||
-                    (phase.name === 'fallback' && phaseAcceptedCandidates >= 1)
+                    (
+                        phase.name === 'fallback' &&
+                        phaseAcceptedCandidates >= 2 &&
+                        quality.distanceDeltaKm <= targetDistanceKm * 0.18
+                    )
                 )
 
             if (shouldStopAfterGoodCandidate) {
@@ -2031,10 +2248,7 @@ async function searchBestRoundTripRoute({
         if (bestQuality?.tier === 'ideal') {
             break
         }
-        if (
-            phaseAcceptedCandidates > 0 &&
-            (bestQuality?.tier === 'acceptable' || phase.name === 'fallback')
-        ) {
+        if (phaseAcceptedCandidates > 0 && bestQuality?.tier === 'acceptable') {
             break
         }
     }
@@ -2043,7 +2257,20 @@ async function searchBestRoundTripRoute({
         console.log(
             `[RT] Search exhausted: ${candidateAttempts} candidates, none usable. Reject summary=${JSON.stringify(Object.fromEntries(rejectReasons))}`,
         )
-        return null
+        return {
+            route: null,
+            waypoints: [],
+            radiuses: '',
+            quality: null,
+            candidateAttempts,
+            acceptedCandidates,
+            rejectedCandidates,
+            rejectReasons: Object.fromEntries(rejectReasons),
+            searchPhases: searchPhases.map((phase) => phase.name),
+            variantHint: normalizedVariantHint,
+            fingerprintHint: normalizedFingerprintHint,
+            exhausted: true,
+        }
     }
 
     console.log(
@@ -2374,12 +2601,12 @@ Deno.serve(async (req) => {
                 fingerprintHint,
                 maxCandidateAttemptsHint,
             });
-            if (roundTripSearch) {
+            if (roundTripSearch?.route) {
                 route = roundTripSearch.route;
                 finalWaypoints = roundTripSearch.waypoints;
                 radiusesParams = roundTripSearch.radiuses;
                 console.log(
-                    `[RT] Search summary: attempts=${roundTripSearch.candidateAttempts}, accepted=${roundTripSearch.acceptedCandidates}, rejected=${roundTripSearch.rejectedCandidates}, chosen=${roundTripSearch.quality.tier}`,
+                    `[RT] Search summary: attempts=${roundTripSearch.candidateAttempts}, accepted=${roundTripSearch.acceptedCandidates}, rejected=${roundTripSearch.rejectedCandidates}, chosen=${roundTripSearch.quality?.tier}`,
                 );
             }
         } else {
@@ -2617,11 +2844,42 @@ Deno.serve(async (req) => {
         }
 
         if (!route) {
-            throw new Error(
-                useRoundTripSearch
-                    ? "No route found with current constraints after exhausting round-trip search."
-                    : "No route found with current constraints.",
-            );
+            const debugRoundTripSearch = body.debug_roundtrip_search === true
+            const noRouteMessage = useRoundTripSearch
+                ? "No route found with current constraints after exhausting round-trip search."
+                : "No route found with current constraints."
+            if (debugRoundTripSearch) {
+                return new Response(
+                    JSON.stringify({
+                        error: noRouteMessage,
+                        code: 'NO_ROUTE',
+                        retryable: false,
+                        retry_after_sec: null,
+                        debug: roundTripSearch != null
+                            ? {
+                                search_summary: {
+                                    candidate_attempts: roundTripSearch.candidateAttempts,
+                                    accepted_candidates: roundTripSearch.acceptedCandidates,
+                                    rejected_candidates: roundTripSearch.rejectedCandidates,
+                                    reject_reasons: roundTripSearch.rejectReasons,
+                                    search_phases: roundTripSearch.searchPhases,
+                                    variant_hint: roundTripSearch.variantHint ?? null,
+                                    fingerprint_hint: roundTripSearch.fingerprintHint ?? null,
+                                    exhausted: roundTripSearch.exhausted == true,
+                                },
+                              }
+                            : null,
+                    }),
+                    {
+                        status: 404,
+                        headers: {
+                            ...getCorsHeaders(req),
+                            'Content-Type': 'application/json',
+                        },
+                    },
+                )
+            }
+            throw new Error(noRouteMessage);
         }
 
         // Mapbox returns distance in meters -> convert to kilometers for app output.
@@ -2708,6 +2966,14 @@ Deno.serve(async (req) => {
                 attempts += 1
             }
             console.log(`Distance scaling done after ${attempts} attempts: ${actualDistanceKm.toFixed(1)} km (target: ${(effectiveTargetDistanceKm ?? targetDistance)} km, band: ${distanceConfig.minKm}-${distanceConfig.maxKm} km)`);
+            if (
+                actualDistanceKm < distanceConfig.acceptableMinKm ||
+                actualDistanceKm > distanceConfig.acceptableMaxKm
+            ) {
+                throw new Error(
+                    `No route found with current constraints after exhausting round-trip search. Final distance ${actualDistanceKm.toFixed(1)}km is outside acceptable band ${distanceConfig.acceptableMinKm}-${distanceConfig.acceptableMaxKm}km.`,
+                )
+            }
         }
 
         // ── Quality gate: Route muss echte Straßengeometrie haben ──
@@ -2751,7 +3017,7 @@ Deno.serve(async (req) => {
                         currentRouteType === 'ROUND_TRIP' ? targetDistance ?? null : null,
                     effective_target_distance_km:
                         currentRouteType === 'ROUND_TRIP' ? effectiveTargetDistanceKm ?? targetDistance ?? null : null,
-                    ...(roundTripSearch != null
+                    ...(roundTripSearch?.route != null
                         ? {
                             search_summary: {
                                 candidate_attempts:
