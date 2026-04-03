@@ -931,13 +931,20 @@ class _CruiseModePageState extends State<CruiseModePage>
 
   /// Wird von flutter_map aufgerufen wenn die Karte bereit ist.
   void _onMapReady() {
+    debugPrint('[CruiseMode] _onMapReady called, routeGeoJson=${_routeGeoJson != null}, routeLatLngs=${_routeLatLngs.length}');
     _mapReady = true;
     // Route zeichnen falls schon vorhanden, sonst GPS-Position holen
     if (_routeGeoJson != null) {
       final geometry = Map<String, dynamic>.from(
         json.decode(_routeGeoJson!) as Map,
       );
+      debugPrint('[CruiseMode] _onMapReady: Zeichne vorhandene Route');
       _drawRoute(geometry);
+      if (_isRouteConfirmed) _activateNavigationCamera();
+    } else if (_routeLatLngs.isNotEmpty) {
+      // Fallback: Route-LatLngs sind bereits gesetzt aber routeGeoJson fehlt
+      debugPrint('[CruiseMode] _onMapReady: routeLatLngs bereits vorhanden (${_routeLatLngs.length} Punkte)');
+      // Kein _drawRoute nötig da _routeLatLngs bereits im State ist
       if (_isRouteConfirmed) _activateNavigationCamera();
     } else {
       _initializeMapLocation();
@@ -1434,28 +1441,34 @@ class _CruiseModePageState extends State<CruiseModePage>
         'uturns=${quality.uturnPositions.length}',
       );
 
+      debugPrint('[CruiseMode] Applying route result: ${result.coordinates.length} coords');
       _applyRouteResult(result);
+
+      debugPrint('[CruiseMode] Drawing route...');
       await _drawRoute(result.geometry);
 
       // Config einklappen + Info-Banner anzeigen damit man die Route sieht
       if (mounted) {
+        debugPrint('[CruiseMode] Collapsing config, showing banner');
         setState(() {
           _configCollapsed = true;
           _showRouteInfoBanner = true;
         });
       }
+      debugPrint('[CruiseMode] Route generation SUCCESS');
     } catch (e, stack) {
       debugPrint('[CruiseMode] Route generation failed: $e');
       debugPrintStack(
         label: '[CruiseMode] Route generation stacktrace',
         stackTrace: stack,
       );
-      // SILENT FALLBACK: Keine Fehlermeldung anzeigen
-      // Die Route-Service hat bereits alle Fallbacks versucht
-      // Falls wir hier landen, zeigen wir nur einen dezenten Hinweis
-      debugPrint(
-        '[CruiseMode] Alle Fallbacks erschöpft, keine Route verfügbar',
-      );
+      // Fehlermeldung anzeigen bei kritischen Routing-Fehlern
+      if (mounted) {
+        final errorMessage = e is RouteServiceException
+            ? e.userMessage
+            : 'Route konnte nicht generiert werden. Bitte versuche es erneut.';
+        _showError(errorMessage, isCritical: true);
+      }
     } finally {
       // Hintergrund-Generierung wieder erlauben
       RouteCacheService.userGenerationActive = false;
@@ -2023,14 +2036,29 @@ class _CruiseModePageState extends State<CruiseModePage>
         .where((c) => c.length >= 2)
         .map((c) => [(c[0] as num).toDouble(), (c[1] as num).toDouble()])
         .toList();
-    if (activeCoordinates.length < 2) return;
+
+    debugPrint(
+      '[CruiseMode] _drawRoute: ${activeCoordinates.length} Koordinaten, '
+      'mapReady=$_mapReady, animateCamera=$animateCamera',
+    );
+
+    if (activeCoordinates.length < 2) {
+      debugPrint('[CruiseMode] _drawRoute: Unzureichende Koordinaten, Route wird nicht gezeichnet');
+      return;
+    }
 
     // KRITISCH: Mapbox liefert [longitude, latitude], flutter_map braucht LatLng(lat, lng)
     final routeLatLngs = activeCoordinates
         .map((c) => LatLng(c[1], c[0])) // [lng, lat] → LatLng(lat, lng)
         .toList();
 
-    if (_hasMeaningfulRouteChange(_routeLatLngs, routeLatLngs)) {
+    // Immer setState aufrufen wenn neue Route, nicht nur bei "meaningful change"
+    // (verhindert Race Condition auf Web wo initiales Rendern fehlen könnte)
+    final hasChange = _hasMeaningfulRouteChange(_routeLatLngs, routeLatLngs);
+    final isInitialRoute = _routeLatLngs.isEmpty && routeLatLngs.isNotEmpty;
+
+    if (hasChange || isInitialRoute) {
+      debugPrint('[CruiseMode] _drawRoute: setState für ${routeLatLngs.length} Punkte (initial=$isInitialRoute)');
       _safeSetState(() {
         _routeLatLngs = routeLatLngs;
       });
@@ -2055,9 +2083,13 @@ class _CruiseModePageState extends State<CruiseModePage>
             padding: EdgeInsets.fromLTRB(24, safeTop + 18, 24, bottomPad),
           ),
         );
+        debugPrint('[CruiseMode] _drawRoute: Kamera auf Route-Bounds angepasst');
       } catch (e) {
         debugPrint('[CruiseMode] Camera fit fehlgeschlagen: $e');
       }
+    } else if (!_mapReady) {
+      // Web-spezifisch: Map noch nicht ready, Route wird später gezeichnet via _onMapReady
+      debugPrint('[CruiseMode] _drawRoute: Map nicht ready, Route wird bei onMapReady gezeichnet');
     }
   }
 
@@ -3417,11 +3449,30 @@ class _CruiseModePageState extends State<CruiseModePage>
 
   // ═══════════════════════ DIALOGS ══════════════════════════════════════════
 
-  void _showError(String message) {
+  void _showError(String message, {bool isCritical = false}) {
     if (!mounted || _disposed) return;
-    // SILENT FALLBACK: Keine roten Fehlermeldungen mehr
-    // Nur noch ins Debug-Log schreiben
-    debugPrint('[CruiseMode] Silent error: $message');
+    debugPrint('[CruiseMode] Error: $message (critical=$isCritical)');
+
+    // Für kritische Fehler (Route konnte nicht generiert werden): Snackbar zeigen
+    if (isCritical) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            message,
+            style: const TextStyle(color: Colors.white),
+          ),
+          backgroundColor: const Color(0xFFFF3B30),
+          behavior: SnackBarBehavior.floating,
+          margin: const EdgeInsets.all(16),
+          duration: const Duration(seconds: 4),
+          action: SnackBarAction(
+            label: 'OK',
+            textColor: Colors.white,
+            onPressed: () {},
+          ),
+        ),
+      );
+    }
   }
 }
 
