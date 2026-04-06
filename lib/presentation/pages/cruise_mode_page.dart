@@ -20,6 +20,7 @@ import 'package:cruise_connect/data/services/geocoding_service.dart';
 import 'package:cruise_connect/data/services/navigation_guidance_utils.dart';
 import 'package:cruise_connect/data/services/navigation_progress_socket_service.dart';
 import 'package:cruise_connect/data/services/offline_map_service.dart';
+import 'package:cruise_connect/data/services/route_access_plan.dart';
 import 'package:cruise_connect/data/services/route_service.dart';
 import 'package:cruise_connect/data/services/route_cache_service.dart';
 import 'package:cruise_connect/data/services/smart_reroute_engine.dart';
@@ -1469,6 +1470,22 @@ class _CruiseModePageState extends State<CruiseModePage>
         label: '[CruiseMode] Route generation stacktrace',
         stackTrace: stack,
       );
+      // State sauber zurücksetzen, damit keine alten Preview-/Marker-Reste
+      // sichtbar bleiben (das war eine der UI-Korruptionsursachen).
+      _safeSetState(() {
+        _routeGeoJson = null;
+        _routeDistance = null;
+        _routeDuration = null;
+        _fullRouteCoordinates = const [];
+        _remainingRouteCoordinates = const [];
+        _maneuvers = const [];
+        _activeManeuverIndex = 0;
+        _currentRouteIndex = 0;
+        _lastDrawnRouteIndex = 0;
+        _showRouteInfoBanner = false;
+        _isRouteConfirmed = false;
+        _configCollapsed = false;
+      });
       // Fehlermeldung anzeigen bei kritischen Routing-Fehlern
       if (mounted) {
         final errorMessage = e is RouteServiceException
@@ -1704,12 +1721,30 @@ class _CruiseModePageState extends State<CruiseModePage>
       return;
     }
 
-    final accessPlan = await _routeService.buildAccessRouteToExistingRoute(
-      currentPosition: position,
-      existingRoute: sourceRoute,
-      mode: 'Standard',
-      avoidHighways: _activeAvoidHighways,
-    );
+    RouteAccessPlan accessPlan;
+    try {
+      accessPlan = await _routeService.buildAccessRouteToExistingRoute(
+        currentPosition: position,
+        existingRoute: sourceRoute,
+        mode: 'Standard',
+        avoidHighways: _activeAvoidHighways,
+      );
+    } catch (e) {
+      // Access-Leg konnte nicht geroutet werden — KEIN Luftlinien-Fallback.
+      // Lieber dem User klar sagen, dass er erst zum Routenstart muss, als
+      // eine sichtbar kaputte Route mit Luftlinien-Sprung anzuzeigen.
+      debugPrint(
+        '[CruiseMode] Access-Leg konnte nicht generiert werden: $e',
+      );
+      if (mounted) {
+        final message = e is RouteServiceException
+            ? e.userMessage
+            : 'Anfahrt zur gespeicherten Route konnte nicht berechnet werden. Bitte fahre näher an den Routenstart heran.';
+        _showError(message, isCritical: true);
+      }
+      return;
+    }
+
     if (!accessPlan.hasAccessLeg) {
       if (accessPlan.joinPoint.index > 0) {
         await _commitRerouteResult(

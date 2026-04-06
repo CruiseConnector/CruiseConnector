@@ -441,20 +441,23 @@ class RouteQualityValidator {
         quality.scenicLoopScore * (isRoundTrip ? 0.18 : 0.14) +
         (!quality.isLoopClosed ? 80 : 0);
 
-    // Verschärft: ≥3 radiale Peaks UND mindestens 1 Center-Reentry zählt als
-    // echtes Stern-Pattern. Saubere Loops mit modulierter Form (z.B. eine
-    // Ellipse mit Sinus-Welle) haben zwar mehrere Peaks, aber kein
-    // Center-Reentry → werden nicht fälschlich verworfen.
+    // Echte Stern-/Spider-Patterns brauchen MEHRERE radiale Peaks UND
+    // wiederholtes Reentry. Tal-Loops (z.B. Dornbirn: Tal hoch → Pass →
+    // Parallel-Tal zurück) haben natürlich centerReentryCount=2, ohne
+    // Stern-Charakter — wir verlangen daher ≥3 Reentries oder ≥4 Peaks
+    // mit ≥2 Reentries, sonst landet jede legitime Bergroute in poor.
+    // spurArm/repeatedStart bleibt der hard reject für echte Kraken.
     final severeRoundTripShape =
         isRoundTrip &&
-        (quality.centerReentryCount >= 2 ||
-            (quality.radialPeakCount >= 3 && quality.centerReentryCount >= 1) ||
-            (quality.spurArmPercent >= 60.0 &&
-                quality.repeatedStartAreaPercent >= 30.0) ||
-            (quality.middleCoverageRatio < 0.30 &&
-                (quality.centerRecrossPercent >= 35.0 ||
-                    quality.repeatedStartAreaPercent >= 35.0 ||
-                    quality.spurArmPercent >= 45.0)));
+        ((quality.centerReentryCount >= 3) ||
+            (quality.radialPeakCount >= 4 &&
+                quality.centerReentryCount >= 2) ||
+            (quality.spurArmPercent >= 65.0 &&
+                quality.repeatedStartAreaPercent >= 35.0) ||
+            (quality.middleCoverageRatio < 0.22 &&
+                (quality.centerRecrossPercent >= 45.0 ||
+                    quality.repeatedStartAreaPercent >= 45.0 ||
+                    quality.spurArmPercent >= 55.0)));
     final severePointShape =
         !isRoundTrip &&
         (quality.corridorSwitchCount >= 4 ||

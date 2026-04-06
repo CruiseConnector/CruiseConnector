@@ -1989,25 +1989,26 @@ async function searchBestRoundTripRoute({
     const normalizedVariantHint = normalizeHint(variantHint)
     const normalizedFingerprintHint = normalizeHint(fingerprintHint)
     // Budget so kalibriert, dass alle 3 Phasen (strict / balanced / fallback)
-    // garantiert mindestens einen Versuch bekommen. Floor 4 schützt vor zu
-    // niedrigen Hints; constrained Suchen bekommen ein kleines sequentielles
-    // Zusatzbudget, weil Autobahn-/Ferry-Excludes in Tälern sonst zu früh in
-    // NO_ROUTE laufen. Keine Parallelisierung, nur ein Edge-Flow.
+    // garantiert MEHRERE Pläne bekommen. Floor 7 schützt schwierige Geometrien
+    // (Bergtäler, Inseln) — wir hatten nach Floor 4 noch 3/3 Failures in
+    // Dornbirn, weil fairShareCeiling den Fallback auf 1 Plan reduzierte.
+    // Constrained Suchen (Autobahn vermeiden) bekommen +1, weil sie pro
+    // Versuch ggf. einen relax-retry brauchen (siehe `relaxedFetch` unten).
     const globalAttemptBudget = Math.max(
-        4,
+        7,
         Math.min(
-            highCostCurveSearch ? 6 : extendedRoundTripSearch ? 7 : (constrainedRoundTripSearch || shortCurvySearch) ? 8 : 6,
+            highCostCurveSearch ? 7 : extendedRoundTripSearch ? 8 : (constrainedRoundTripSearch || shortCurvySearch) ? 9 : 8,
             Math.round(
                 maxCandidateAttemptsHint ??
-                    (highCostCurveSearch ? 5 : extendedRoundTripSearch ? 6 : (constrainedRoundTripSearch || shortCurvySearch) ? 7 : 5),
+                    (highCostCurveSearch ? 6 : extendedRoundTripSearch ? 7 : (constrainedRoundTripSearch || shortCurvySearch) ? 8 : 7),
             ),
         ),
     )
     const searchStartTs = Date.now()
-    // Time Budget: constrained Suchen dürfen etwas länger suchen, bevor der
-    // Fallback mit gelockerten Excludes greift; Client-Timeout liegt darüber.
-    // Client-_invoke-Timeout muss in Flutter darüber liegen (siehe route_service).
-    const roundTripTimeBudgetMs = highCostCurveSearch ? 12000 : (constrainedRoundTripSearch || shortCurvySearch) ? 16000 : 14000
+    // Time Budget: jeder Mapbox-Call kostet ~1.5–3 s; mit 7–9 Plänen + relax
+    // brauchen wir ≥18 s, sonst killt das Time-Budget den Fallback bevor er
+    // läuft. Client-_invoke-Timeout muss DARÜBER liegen (siehe route_service).
+    const roundTripTimeBudgetMs = highCostCurveSearch ? 16000 : (constrainedRoundTripSearch || shortCurvySearch) ? 22000 : 19000
 
     const searchPhases = [
         {
@@ -2073,23 +2074,26 @@ async function searchBestRoundTripRoute({
             normalizedVariantHint,
             normalizedFingerprintHint,
         )
-        // Pro Phase max 2 Versuche, plus Fair-Share-Guard: jede spätere Phase
-        // muss noch mindestens 1 Versuch übrig haben, sonst landen tough cases
-        // (Bergtäler, Inselstart) wieder in "Kein passender Rundkurs". So
-        // bekommen strict / balanced / fallback im Normalfall je ≥1 Plan.
+        // Pro Phase 2-3 Versuche. WICHTIG: Fair-Share-Guard reserviert für
+        // jede spätere Phase MINDESTENS 2 Versuche (vorher: 1), damit der
+        // Fallback in Bergtälern wirklich Plan A+B testen kann. Strict darf
+        // 3 ausschöpfen, falls die Geometrie es zulässt; balanced/fallback
+        // bekommen je 2-3.
         const declaredMaxPerPhase =
             phase.name === 'strict'
-                ? (highCostCurveSearch ? 2 : 2)
+                ? 3
                 : phase.name === 'balanced'
-                ? (shortCurvySearch ? 3 : 2)
+                ? (constrainedRoundTripSearch || shortCurvySearch ? 3 : 2)
                 : (constrainedRoundTripSearch || shortCurvySearch)
                 ? 3
-                : 2
+                : 3
         const phasesRemainingAfterThis =
             searchPhases.length - 1 - searchPhases.indexOf(phase)
+        // Reserviere mindestens 2 Versuche pro nachfolgender Phase.
+        const reservedForLaterPhases = phasesRemainingAfterThis * 2
         const fairShareCeiling = Math.max(
             1,
-            globalAttemptBudget - candidateAttempts - phasesRemainingAfterThis,
+            globalAttemptBudget - candidateAttempts - reservedForLaterPhases,
         )
         const maxPhaseAttempts = Math.min(declaredMaxPerPhase, fairShareCeiling)
         const candidatePlans = orderedCandidates.slice(0, Math.min(orderedCandidates.length, maxPhaseAttempts))

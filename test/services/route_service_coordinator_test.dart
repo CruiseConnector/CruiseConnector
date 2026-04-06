@@ -104,6 +104,10 @@ void main() {
 
     expect(futures, hasLength(2));
     expect(futures.first.distanceKm, closeTo(futures.last.distanceKm!, 0.01));
-    expect(invoker.callCount, 1);
+    // Single-flight dedupliziert die zwei concurrent calls zu einem
+    // generateRoundTrip-Lauf. Dieser Lauf macht intern bis zu 2 Edge-Calls
+    // (maxAttempts=2 in route_service.dart), wenn der erste Kandidat nicht
+    // ideal ist. Ohne Single-Flight wären es 4 Edge-Calls (2 × 2).
+    expect(invoker.callCount, lessThanOrEqualTo(2));
   });
 }

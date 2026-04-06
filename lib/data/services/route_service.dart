@@ -112,14 +112,14 @@ class RouteService {
   ///
   /// ── Performance-Gov ──
   /// Auf der Edge Function läuft ein Multi-Phasen-Suchlauf
-  /// (strict → balanced → fallback). Wir capen die Anzahl interner Pläne über
-  /// `max_candidate_attempts` auf 6 (frisch) bzw. 4 (mit History). Eine
-  /// frühere, aggressivere Reduktion auf 3/2 hat in Tal-Geometrien (z.B.
-  /// Dornbirn) dazu geführt, dass nur strict-Kandidaten liefen und die
-  /// Generierung mit "Kein passender Rundkurs" abbrach. Das aktuelle Budget
-  /// hält den Worst-Case bei ~14 s Edge-Time und ~6 Mapbox-Calls.
-  /// Time-Budget Edge: 14 s (siehe roundTripTimeBudgetMs).
-  /// Client-Timeout: 18 s (_invoke).
+  /// (strict → balanced → fallback). Wir geben dem Edge Budget für 7-9
+  /// Mapbox-Calls (siehe `max_candidate_attempts`), damit alle drei Phasen
+  /// in Tal-Geometrien (z.B. Dornbirn) wirklich mehrere Pläne pro Phase
+  /// testen können. Vorher (3-6 Calls) sind wir in Dornbirn 3/3 in
+  /// "Kein passender Rundkurs" gelaufen, weil der Fallback nur 1 Plan bekam.
+  /// Time-Budget Edge: 19 s normal / 22 s constrained / 16 s high-cost.
+  /// Client-Timeout: 26 s (_invoke) — muss DARÜBER liegen.
+  /// Client-Schleife: max 2 Versuche pro User-Aktion.
   Future<RouteResult> generateRoundTrip({
     required geo.Position startPosition,
     required int targetDistanceKm,
@@ -157,10 +157,15 @@ class RouteService {
         final hasSeenHistory = SeenRouteRegistry.entriesFor(
           scenario.scenarioKey,
         ).isNotEmpty;
-        // Hard-Cap: max 1 Edge-Function-Invocation pro User-Aktion (war 1-3).
-        // Bei wiederholter Anforderung in selber Szene erlauben wir genau 1
-        // zusätzlichen Versuch mit anderem Seed/Bearing für Diversifizierung.
-        final maxAttempts = hasSeenHistory ? 2 : 1;
+        // Client-Schleife: 2 Versuche. Erster Versuch geht über die Edge
+        // Function (die selbst 7-9 Pläne testet), zweiter Versuch nutzt einen
+        // anderen Seed/Bearing für Diversifizierung. Wenn der erste Versuch
+        // eine Exception wirft (Mapbox-Hiccup, 429, Edge-Timeout), bleibt der
+        // zweite Versuch als echtes Recovery-Ventil — vorher (maxAttempts=1)
+        // hat das in Dornbirn jeden Hiccup zu einer User-sichtbaren Fehlermeldung
+        // gemacht, obwohl der Edge-Lauf prinzipiell hätte erfolgreich sein
+        // können.
+        const maxAttempts = 2;
         _RouteCandidate? bestCandidate;
         _RouteCandidate? spareCandidate;
         var bestScore = double.infinity;
@@ -180,15 +185,17 @@ class RouteService {
               startPosition: startPosition,
               targetLocation: targetLocation,
               variant: variant,
-              // Hint an Edge Function: vermeidet Parallel-Requests, gibt aber
-              // constrained Suchen (Autobahn vermeiden) genug sequentielles
-              // Budget, damit der Fallback nicht zu früh in NO_ROUTE endet.
+              // Hint an Edge Function: gibt strict/balanced/fallback je 2-3
+              // Pläne (siehe declaredMaxPerPhase und reservedForLaterPhases
+              // in der Edge Function). Constrained Suchen (Autobahn vermeiden,
+              // Kurvenjagd in engen Tälern) bekommen +1 Plan, weil sie pro
+              // Versuch ggf. einen relax-retry brauchen.
               candidateBudget:
                   avoidHighways ||
                       (styleConfig.profileKey == 'kurvenjagd' &&
                           targetDistanceKm <= 60)
-                  ? (hasSeenHistory ? 5 : 8)
-                  : (hasSeenHistory ? 4 : 6),
+                  ? 9
+                  : 8,
             );
             if (candidate.accepted && candidate.score < bestScore) {
               if (bestCandidate != null) {
@@ -326,9 +333,11 @@ class RouteService {
   }) async {
     final styleConfig = RouteStyleConfig.forMode(mode);
     final normalizedVariant = routeVariant.clamp(0, 3);
-    // Detour-Multiplier in Mitte der neuen Fenster (siehe RouteStyleConfig).
-    // Klein 1.32× landet in [1.18, 1.55], Mittel 1.65× in [1.45, 1.95],
-    // Groß 2.10× in [1.80, 2.70]. So bleiben sie deutlich differenziert.
+    // Detour-Multiplier in Mitte der Fenster (siehe RouteStyleConfig).
+    // Klein 1.32× landet in [1.15, 1.65], Mittel 1.65× in [1.40, 2.10],
+    // Groß 2.10× in [1.75, 2.95]. So bleiben sie deutlich differenziert,
+    // ohne dass Mapbox in Bergland (Dornbirn, Bregenzerwald) ständig das
+    // Fenster verfehlt und auf "direkt" zurückfällt.
     final detourFactor = switch (normalizedVariant) {
       1 => 1.32,
       2 => 1.65,
@@ -396,9 +405,10 @@ class RouteService {
         final hasSeenHistory = SeenRouteRegistry.entriesFor(
           scenario.scenarioKey,
         ).isNotEmpty;
-        // Hard-Cap: max 1 Invocation auf erstem Versuch (war 1-2).
-        // Diversifizierung nur, wenn schon eine Route in dieser Szene existiert.
-        final maxAttempts = hasSeenHistory ? 2 : 1;
+        // Client-Schleife: 2 Versuche, damit Mapbox-Hiccups (429/Timeout)
+        // nicht sofort als User-Fehler enden. Auf detourVariant > 0 brauchen
+        // wir den zweiten Versuch außerdem für echte Diversifikation.
+        const maxAttempts = 2;
         _RouteCandidate? bestCandidate;
         _RouteCandidate? spareCandidate;
         var bestScore = double.infinity;
@@ -426,8 +436,10 @@ class RouteService {
               targetDistanceKm: targetDistanceKm,
               detourFactor: detourFactor,
               variant: variant,
-              // Cap auf 3 Pläne (war 3-4).
-              candidateBudget: hasSeenHistory ? 2 : 3,
+              // 4-5 Pläne pro Versuch — A→B braucht Spielraum, damit
+              // Klein/Mittel/Groß ihre Detour-Fenster wirklich treffen können.
+              candidateBudget:
+                  normalizedVariant >= 2 ? 5 : (hasSeenHistory ? 3 : 4),
             );
             if (candidate.accepted && candidate.score < bestScore) {
               if (bestCandidate != null) {
@@ -955,12 +967,28 @@ class RouteService {
       targetDistanceKm: directDistanceKm,
       detourFactor: 1.0,
       variant: variant,
-      candidateBudget: 1,
+      // Access-Leg ist sicherheitskritisch — lieber 3 Pläne testen,
+      // als dem User ein Luftlinien-Fragment zu zeigen.
+      candidateBudget: 3,
     );
 
-    final route = await _invoke(request);
-    final snapped = _snapRouteToStartPosition(route, currentPosition);
-    return _filteredRouteResult(snapped);
+    try {
+      final route = await _invoke(request);
+      final snapped = _snapRouteToStartPosition(route, currentPosition);
+      return _filteredRouteResult(snapped);
+    } on RouteServiceException catch (e) {
+      // Bei avoidHighways=true: relax retry ohne Excludes — der Access-Leg
+      // muss Vorrang vor Style-Wünschen haben, sonst gibt es gar keine Route.
+      if (!avoidHighways) rethrow;
+      debugPrint(
+        '[RouteService] Access-Leg fehlgeschlagen mit avoidHighways=true (${e.debugMessage}) — retry ohne Excludes',
+      );
+      final relaxRequest = Map<String, dynamic>.from(request);
+      relaxRequest['avoid_highways'] = false;
+      final relaxRoute = await _invoke(relaxRequest);
+      final snapped = _snapRouteToStartPosition(relaxRoute, currentPosition);
+      return _filteredRouteResult(snapped);
+    }
   }
 
   RouteResult _sliceRouteFromIndex(RouteResult route, int startIndex) {
@@ -1181,18 +1209,17 @@ class RouteService {
     dynamic data;
     int? statusCode;
     RouteServiceException? lastMappedError;
-    // Exponential Backoff: nur bei HTTP 429/5xx, max 2 Retries (war 3).
-    // Begründung: jeder Retry kostet >1s + die Edge Function macht selbst
-    // schon mehrere Mapbox-Calls — Timeout muss aber das Edge-Time-Budget
-    // (14-16 s) plus Serialisierungs-Reserve abdecken, sonst killt der Client
-    // bei tough cases (Dornbirn-Tal etc.) die Generierung mitten im Lauf.
+    // Exponential Backoff: nur bei HTTP 429/5xx, max 2 Retries.
+    // Timeout muss das Edge-Time-Budget (16-22 s) plus Serialisierungs-Reserve
+    // abdecken, sonst killt der Client bei tough cases (Dornbirn-Tal etc.)
+    // die Generierung mitten im Lauf. Edge-Floor: 16 s, Worst Case: 22 s.
     const maxRetries = 2;
     final retryRng = math.Random();
     for (var attempt = 1; attempt <= maxRetries; attempt++) {
       try {
         final rawResponse = await _invoker
             .invoke(body)
-            .timeout(const Duration(seconds: 18));
+            .timeout(const Duration(seconds: 26));
         if (rawResponse is FunctionResponse) {
           statusCode = rawResponse.status;
           data = rawResponse.data;

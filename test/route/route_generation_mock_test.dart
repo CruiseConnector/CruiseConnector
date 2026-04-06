@@ -448,8 +448,10 @@ void main() {
         planningType: 'Zufall',
       );
 
+      // Erster Versuch geht ohne radiusJitter raus (variant.index == 0).
+      // Folge-Versuche jittern leicht — wir prüfen daher den ersten Call.
       final captured =
-          verify(mockInvoker.invoke(captureAny)).captured.last
+          verify(mockInvoker.invoke(captureAny)).captured.first
               as Map<String, dynamic>;
       expect(captured['targetDistance'], 30);
     });
@@ -660,13 +662,13 @@ void main() {
           expect(request['direction_hint'], isA<int>());
         }
 
-        expect(sportRequest['max_candidate_attempts'], 6);
+        expect(sportRequest['max_candidate_attempts'], 8);
         expect(sportRequest['style_profile'], 'sport');
         expect(sportRequest['waypoint_shape_factor'], 2.0);
         expect(sportRequest['radius_multiplier'], 1.0);
         expect(sportRequest['zigzag_waypoints'], isFalse);
 
-        expect(curveRequest['max_candidate_attempts'], 8);
+        expect(curveRequest['max_candidate_attempts'], 9);
         expect(curveRequest['style_profile'], 'kurvenjagd');
         expect(curveRequest['waypoint_shape_factor'], 1.0);
         expect(curveRequest['radius_multiplier'], 1.15);
@@ -1014,7 +1016,11 @@ void main() {
           expect(request['mode'], 'Sport Mode');
           expect(request['style_profile'], 'sport');
           expect(request['continue_straight'], isTrue);
-          expect(request['max_candidate_attempts'], 3);
+          // Variants 1-3 sind alle scenic — Klein bekommt 4, Mittel/Groß 5.
+          expect(
+            request['max_candidate_attempts'],
+            variant == 1 ? 4 : 5,
+          );
           expect(request['detour_factor'], isA<double>());
         }
 

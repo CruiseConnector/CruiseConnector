@@ -80,7 +80,7 @@ void main() {
         expect(request['route_type'], 'POINT_TO_POINT');
         expect(request['mode'], 'Standard');
         expect(request['route_variant_hint'], 'access');
-        expect(request['max_candidate_attempts'], 1);
+        expect(request['max_candidate_attempts'], 3);
         expect(request['continue_straight'], isTrue);
         expect(request['avoid_highways'], isFalse);
         expect(request.containsKey('targetDistance'), isFalse);
