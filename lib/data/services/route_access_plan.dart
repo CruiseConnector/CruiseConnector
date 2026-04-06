@@ -49,6 +49,9 @@ class RouteAccessPlan {
 class RouteAccessPlanner {
   const RouteAccessPlanner();
 
+  static const double _onRouteJoinDistanceMeters = 60.0;
+  static const double _closedLoopEndpointDistanceMeters = 80.0;
+
   RouteJoinPoint chooseJoinPoint({
     required geo.Position currentPosition,
     required RouteResult existingRoute,
@@ -73,6 +76,32 @@ class RouteAccessPlanner {
         totalDistanceMeters: totalDistanceMeters,
         index: cappedPreferred,
       );
+    }
+
+    final closedLoop = _isClosedLoop(coordinates);
+    if (closedLoop) {
+      final startJoinPoint = _buildJoinPoint(
+        currentPosition: currentPosition,
+        coordinates: coordinates,
+        cumulativeDistances: cumulativeDistances,
+        totalDistanceMeters: totalDistanceMeters,
+        index: 0,
+      );
+      if (startJoinPoint.distanceFromCurrentMeters <=
+          _closedLoopEndpointDistanceMeters) {
+        return startJoinPoint;
+      }
+    }
+
+    final onRouteJoinPoint = _nearestOnRouteJoinPoint(
+      currentPosition: currentPosition,
+      coordinates: coordinates,
+      cumulativeDistances: cumulativeDistances,
+      totalDistanceMeters: totalDistanceMeters,
+      closedLoop: closedLoop,
+    );
+    if (onRouteJoinPoint != null) {
+      return onRouteJoinPoint;
     }
 
     final minRemainingMeters = math.max(900.0, totalDistanceMeters * 0.14);
@@ -202,6 +231,48 @@ class RouteAccessPlanner {
       headingDeltaDegrees: headingDeltaDegrees,
       score: score,
     );
+  }
+
+  RouteJoinPoint? _nearestOnRouteJoinPoint({
+    required geo.Position currentPosition,
+    required List<List<double>> coordinates,
+    required List<double> cumulativeDistances,
+    required double totalDistanceMeters,
+    required bool closedLoop,
+  }) {
+    RouteJoinPoint? nearest;
+    for (var index = 0; index < coordinates.length; index++) {
+      if (closedLoop && index == coordinates.length - 1) continue;
+      final candidate = _buildJoinPoint(
+        currentPosition: currentPosition,
+        coordinates: coordinates,
+        cumulativeDistances: cumulativeDistances,
+        totalDistanceMeters: totalDistanceMeters,
+        index: index,
+      );
+      if (candidate.distanceFromCurrentMeters > _onRouteJoinDistanceMeters) {
+        continue;
+      }
+      if (nearest == null ||
+          candidate.distanceFromCurrentMeters <
+              nearest.distanceFromCurrentMeters) {
+        nearest = candidate;
+      }
+    }
+    return nearest;
+  }
+
+  bool _isClosedLoop(List<List<double>> coordinates) {
+    if (coordinates.length < 3) return false;
+    final first = coordinates.first;
+    final last = coordinates.last;
+    return geo.Geolocator.distanceBetween(
+          first[1],
+          first[0],
+          last[1],
+          last[0],
+        ) <=
+        _closedLoopEndpointDistanceMeters;
   }
 
   int _maxJoinIndexForRemainingDistance({

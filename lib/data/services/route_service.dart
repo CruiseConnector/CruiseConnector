@@ -180,10 +180,15 @@ class RouteService {
               startPosition: startPosition,
               targetLocation: targetLocation,
               variant: variant,
-              // Hint an Edge Function: 6 (frisch) erlaubt strict+balanced+
-              // fallback je 2 Versuche, 4 (mit History) je ~1. Niedriger geht
-              // nicht ohne tough-case-Locations (Dornbirn-Tal etc.) zu killen.
-              candidateBudget: hasSeenHistory ? 4 : 6,
+              // Hint an Edge Function: vermeidet Parallel-Requests, gibt aber
+              // constrained Suchen (Autobahn vermeiden) genug sequentielles
+              // Budget, damit der Fallback nicht zu früh in NO_ROUTE endet.
+              candidateBudget:
+                  avoidHighways ||
+                      (styleConfig.profileKey == 'kurvenjagd' &&
+                          targetDistanceKm <= 60)
+                  ? (hasSeenHistory ? 5 : 8)
+                  : (hasSeenHistory ? 4 : 6),
             );
             if (candidate.accepted && candidate.score < bestScore) {
               if (bestCandidate != null) {
@@ -1169,7 +1174,7 @@ class RouteService {
     // Exponential Backoff: nur bei HTTP 429/5xx, max 2 Retries (war 3).
     // Begründung: jeder Retry kostet >1s + die Edge Function macht selbst
     // schon mehrere Mapbox-Calls — Timeout muss aber das Edge-Time-Budget
-    // (14 s) plus Serialisierungs-Reserve abdecken, sonst killt der Client
+    // (14-16 s) plus Serialisierungs-Reserve abdecken, sonst killt der Client
     // bei tough cases (Dornbirn-Tal etc.) die Generierung mitten im Lauf.
     const maxRetries = 2;
     final retryRng = math.Random();
@@ -1692,10 +1697,18 @@ class RouteService {
         : quality.passed || classification.isAcceptable;
     final softRenderable =
         hasEnoughPoints && detourDistanceOk && !tooSimilar && qualityAcceptable;
-    final accepted = softRenderable && styleOk;
+    final styleSoftOk =
+        styleOk ||
+        (scenario.isRoundTrip &&
+            styleFitScore >= styleConfig.minStyleFitScore - 12.0 &&
+            quality.shapePenalty <= 72.0 &&
+            quality.foldedAreaPenalty <= 84.0 &&
+            quality.microZigzagPercent <= 52.0);
+    final accepted = softRenderable && styleSoftOk;
     final score =
         classification.score +
         (styleOk ? 0.0 : 18.0) +
+        (styleSoftOk ? 0.0 : 30.0) +
         (tooSimilar ? 45.0 : 0.0) +
         (detourDistanceOk ? 0.0 : 35.0) +
         (hasEnoughPoints ? 0.0 : 24.0) -
@@ -1708,6 +1721,7 @@ class RouteService {
       'overlap=${quality.overlapPercent.toStringAsFixed(1)}%, '
       'shape=${quality.shapePenalty.toStringAsFixed(1)}, '
       'styleFit=${styleFitScore.toStringAsFixed(1)}, '
+      'styleOk=$styleOk/$styleSoftOk, '
       'uturns=${quality.uturnPositions.length}, tooSimilar=$tooSimilar, '
       'distanceWindow=${pointToPointMinDistance.toStringAsFixed(1)}-${pointToPointMaxDistance.isFinite ? pointToPointMaxDistance.toStringAsFixed(1) : 'inf'}',
     );
@@ -1980,7 +1994,7 @@ class RouteService {
         variant: variant,
         targetLocation: targetLocation,
         directionHint: variant.angleOffset,
-        candidateBudget: 2,
+        candidateBudget: scenario.avoidHighways ? 3 : 2,
         avoidHighways: scenario.avoidHighways,
       );
       body['simplify_waypoints'] = true;

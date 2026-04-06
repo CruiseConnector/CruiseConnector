@@ -448,11 +448,13 @@ class RouteQualityValidator {
     final severeRoundTripShape =
         isRoundTrip &&
         (quality.centerReentryCount >= 2 ||
-            (quality.radialPeakCount >= 3 &&
-                quality.centerReentryCount >= 1) ||
+            (quality.radialPeakCount >= 3 && quality.centerReentryCount >= 1) ||
             (quality.spurArmPercent >= 60.0 &&
                 quality.repeatedStartAreaPercent >= 30.0) ||
-            quality.middleCoverageRatio < 0.42);
+            (quality.middleCoverageRatio < 0.30 &&
+                (quality.centerRecrossPercent >= 35.0 ||
+                    quality.repeatedStartAreaPercent >= 35.0 ||
+                    quality.spurArmPercent >= 45.0)));
     final severePointShape =
         !isRoundTrip &&
         (quality.corridorSwitchCount >= 4 ||
@@ -475,7 +477,7 @@ class RouteQualityValidator {
         quality.foldedAreaPenalty > (isRoundTrip ? 78.0 : 88.0) ||
         quality.repeatedStartAreaPercent > (isRoundTrip ? 62.0 : 72.0) ||
         quality.microZigzagPercent > (isRoundTrip ? 48.0 : 54.0) ||
-        quality.shapePenalty > (isRoundTrip ? 52.0 : 42.0)) {
+        quality.shapePenalty > (isRoundTrip ? 62.0 : 42.0)) {
       return RouteQualityClassification(
         tier: RouteQualityTier.poor,
         score: score + 24,

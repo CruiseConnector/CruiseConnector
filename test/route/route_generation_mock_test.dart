@@ -28,6 +28,24 @@ geo.Position _munich() => geo.Position(
   speedAccuracy: 1.0,
 );
 
+const _dornbirnLat = 47.4125;
+const _dornbirnLng = 9.7414;
+const _feldkirchLat = 47.2413;
+const _feldkirchLng = 9.5986;
+
+geo.Position _dornbirn() => geo.Position(
+  latitude: _dornbirnLat,
+  longitude: _dornbirnLng,
+  timestamp: DateTime.now(),
+  accuracy: 5.0,
+  altitude: 430.0,
+  altitudeAccuracy: 10.0,
+  heading: 0.0,
+  headingAccuracy: 5.0,
+  speed: 0.0,
+  speedAccuracy: 1.0,
+);
+
 /// Erzeugt eine valide Supabase-Antwort mit der angegebenen Distanz.
 Map<String, dynamic> _buildRouteResponse({
   required double distanceMeters,
@@ -35,6 +53,8 @@ Map<String, dynamic> _buildRouteResponse({
   int coordinateCount = 100,
   List<Map<String, dynamic>>? legs,
   String mode = 'Sport Mode',
+  double centerLat = 48.140,
+  double centerLng = 11.592,
 }) {
   final distanceKm = distanceMeters / 1000.0;
   final params = _profiledLoopParams(distanceKm: distanceKm, mode: mode);
@@ -47,8 +67,8 @@ Map<String, dynamic> _buildRouteResponse({
         math.sin(t * (params.petals ~/ 2 + 2)) * (params.amplitude * 0.12);
     final radius = params.baseRadius + radialWave;
     return [
-      11.592 + math.cos(t) * radius * params.stretch,
-      48.140 + math.sin(t) * radius * params.aspect,
+      centerLng + math.cos(t) * radius * params.stretch,
+      centerLat + math.sin(t) * radius * params.aspect,
     ];
   });
   coords[coords.length - 1] = [...coords.first];
@@ -67,7 +87,7 @@ Map<String, dynamic> _buildRouteResponse({
                   'maneuver': {
                     'type': 'turn',
                     'modifier': 'left',
-                    'location': [11.583, 48.136],
+                    'location': [centerLng, centerLat],
                   },
                   'distance': 500.0,
                   'name': 'Teststraße',
@@ -236,9 +256,9 @@ Map<String, dynamic> _buildPointToPointResponse({
   required double destinationLng,
   int coordinateCount = 140,
   double bendScale = 0.18,
+  double startLat = 48.1351,
+  double startLng = 11.5820,
 }) {
-  const startLng = 11.5820;
-  const startLat = 48.1351;
   final dx = destinationLng - startLng;
   final dy = destinationLat - startLat;
   final length = math.sqrt(dx * dx + dy * dy);
@@ -579,6 +599,80 @@ void main() {
       expect(captured['targetLocation'], isNotNull);
       expect(captured['targetLocation']['latitude'], closeTo(47.8, 0.01));
     });
+
+    test(
+      'Dornbirn 50km Sport/Kurvenjagd sendet robuste Roundtrip-Hints',
+      () async {
+        final requests = <Map<String, dynamic>>[];
+        when(mockInvoker.invoke(any)).thenAnswer((invocation) async {
+          final body = Map<String, dynamic>.from(
+            invocation.positionalArguments.first as Map,
+          );
+          requests.add(body);
+          return _buildRouteResponse(
+            distanceMeters: 50000,
+            durationSeconds: 3600,
+            coordinateCount: 220,
+            mode: body['mode'] as String,
+            centerLat: _dornbirnLat,
+            centerLng: _dornbirnLng,
+          );
+        });
+
+        for (final mode in const ['Sport Mode', 'Kurvenjagd']) {
+          try {
+            await service.generateRoundTrip(
+              startPosition: _dornbirn(),
+              targetDistanceKm: 50,
+              mode: mode,
+              planningType: 'Zufall',
+            );
+          } on RouteServiceException {
+            // Fuer diese Repro zaehlt der erste Edge-Request.
+          }
+        }
+
+        final sportRequest = requests.firstWhere(
+          (request) =>
+              request['route_type'] == 'ROUND_TRIP' &&
+              request['mode'] == 'Sport Mode',
+        );
+        final curveRequest = requests.firstWhere(
+          (request) =>
+              request['route_type'] == 'ROUND_TRIP' &&
+              request['mode'] == 'Kurvenjagd',
+        );
+
+        for (final request in [sportRequest, curveRequest]) {
+          expect(
+            request['startLocation']['latitude'],
+            closeTo(_dornbirnLat, 0.001),
+          );
+          expect(
+            request['startLocation']['longitude'],
+            closeTo(_dornbirnLng, 0.001),
+          );
+          expect(request['targetDistance'], 50);
+          expect(request['planning_type'], 'Zufall');
+          expect(request['continue_straight'], isTrue);
+          expect(request['avoid_highways'], isFalse);
+          expect(request.containsKey('destination_location'), isFalse);
+          expect(request['direction_hint'], isA<int>());
+        }
+
+        expect(sportRequest['max_candidate_attempts'], 6);
+        expect(sportRequest['style_profile'], 'sport');
+        expect(sportRequest['waypoint_shape_factor'], 2.0);
+        expect(sportRequest['radius_multiplier'], 1.0);
+        expect(sportRequest['zigzag_waypoints'], isFalse);
+
+        expect(curveRequest['max_candidate_attempts'], 8);
+        expect(curveRequest['style_profile'], 'kurvenjagd');
+        expect(curveRequest['waypoint_shape_factor'], 1.0);
+        expect(curveRequest['radius_multiplier'], 1.15);
+        expect(curveRequest['zigzag_waypoints'], isTrue);
+      },
+    );
   });
 
   // ─────────────────────── generatePointToPoint ──────────────────────────────
@@ -840,6 +934,97 @@ void main() {
       expect(mediumDetour['detour_level'], 2);
       expect(largeDetour['detour_level'], 3);
     });
+
+    test(
+      'Dornbirn nach Feldkirch Detours senden getrennte Zielkorridore',
+      () async {
+        final requests = <Map<String, dynamic>>[];
+        when(mockInvoker.invoke(any)).thenAnswer((invocation) async {
+          final body = Map<String, dynamic>.from(
+            invocation.positionalArguments.first as Map,
+          );
+          requests.add(body);
+          final targetKm = (body['targetDistance'] as num?)?.toDouble() ?? 25.0;
+          return _buildPointToPointResponse(
+            distanceMeters: targetKm * 1000,
+            durationSeconds: targetKm * 72,
+            destinationLat: _feldkirchLat,
+            destinationLng: _feldkirchLng,
+            startLat: _dornbirnLat,
+            startLng: _dornbirnLng,
+            coordinateCount: 220,
+            bendScale: 0.035,
+          );
+        });
+
+        for (final variant in const [1, 2, 3]) {
+          try {
+            await service.generatePointToPoint(
+              startPosition: _dornbirn(),
+              destinationLat: _feldkirchLat,
+              destinationLng: _feldkirchLng,
+              mode: 'Sport Mode',
+              scenic: true,
+              routeVariant: variant,
+            );
+          } on RouteServiceException {
+            // Fuer diese Repro zaehlt der erste Edge-Request je Detour-Stufe.
+          }
+        }
+
+        final byDetourLevel = <int, Map<String, dynamic>>{};
+        for (final request in requests) {
+          final level = request['detour_level'];
+          if (request['route_type'] == 'POINT_TO_POINT' && level is int) {
+            byDetourLevel.putIfAbsent(level, () => request);
+          }
+        }
+
+        final directKm =
+            geo.Geolocator.distanceBetween(
+              _dornbirnLat,
+              _dornbirnLng,
+              _feldkirchLat,
+              _feldkirchLng,
+            ) /
+            1000.0;
+        final targets = <int, double>{};
+
+        for (final variant in const [1, 2, 3]) {
+          final request = byDetourLevel[variant]!;
+          final targetDistance = (request['targetDistance'] as num).toDouble();
+          targets[variant] = targetDistance;
+
+          expect(
+            request['startLocation']['latitude'],
+            closeTo(_dornbirnLat, 0.001),
+          );
+          expect(
+            request['startLocation']['longitude'],
+            closeTo(_dornbirnLng, 0.001),
+          );
+          expect(
+            request['destination_location']['latitude'],
+            closeTo(_feldkirchLat, 0.001),
+          );
+          expect(
+            request['destination_location']['longitude'],
+            closeTo(_feldkirchLng, 0.001),
+          );
+          expect(request['mode'], 'Sport Mode');
+          expect(request['style_profile'], 'sport');
+          expect(request['continue_straight'], isTrue);
+          expect(request['max_candidate_attempts'], 3);
+          expect(request['detour_factor'], isA<double>());
+        }
+
+        expect(targets[1]!, inInclusiveRange(directKm + 4, directKm * 1.70));
+        expect(targets[2]!, inInclusiveRange(directKm + 10, directKm * 2.10));
+        expect(targets[3]!, inInclusiveRange(directKm + 20, directKm * 2.85));
+        expect(targets[2]!, greaterThan(targets[1]!));
+        expect(targets[3]!, greaterThan(targets[2]!));
+      },
+    );
 
     test(
       'wiederholte scenic Generierung nutzt unterschiedliche Seeds',

@@ -199,7 +199,7 @@ function getDistanceConfig(targetDistance: number, mode?: string): DistanceConfi
             roadFactor = targetDistance > 110
                 ? 1.20
                 : targetDistance <= 60
-                ? 1.24
+                ? 1.52
                 : 1.26; // Gestreckterer Suchraum für flüssige Sport-Loops
             break;
         default:
@@ -667,19 +667,19 @@ function buildRoundTripWaypointCandidates({
                 addPlan('curve-loop-tight', loop(1.02, 4, 11), 1.05);
                 addPlan('curve-loop-scout', loop(0.92, 3, 997), 1.0);
             } else {
-                addPlan('curve-zigzag-core', zigzag(1.02, 73), 1.12);
                 addPlan(
                     'curve-cardinal-tight',
                     cardinal(1.06, 101, 1.0),
                     1.08,
                 );
-                addPlan('curve-loop-tight', loop(1.08, shortTarget ? 4 : 5, 11), 1.05);
-                addPlan('curve-loop-wide', loop(longTarget ? 1.26 : 1.18, mediumTarget ? 4 : 5, 131), 1.16);
-                addPlan('curve-loop-open', loop(longTarget ? 1.34 : 1.24, mediumTarget ? 5 : 4, 541), 1.22);
-                addPlan('curve-triangle', triangle(1.02, 397), 1.0);
-                addPlan('curve-triangle-wide', triangle(1.20, 887), 1.14);
+                addPlan('curve-loop-tight', loop(1.02, shortTarget ? 4 : 5, 11), 1.04);
+                addPlan('curve-triangle', triangle(0.96, 397), 0.98);
+                addPlan('curve-loop-scout', loop(0.92, shortTarget ? 3 : 4, 997), 1.0);
+                addPlan('curve-zigzag-core', zigzag(0.96, 73), 1.06);
+                addPlan('curve-loop-wide', loop(longTarget ? 1.26 : 1.12, mediumTarget ? 4 : 5, 131), 1.12);
+                addPlan('curve-loop-open', loop(longTarget ? 1.34 : 1.16, mediumTarget ? 5 : 4, 541), 1.14);
+                addPlan('curve-triangle-wide', triangle(1.10, 887), 1.08);
                 addPlan('curve-orbital-core', loopWithReturn(shortTarget ? 1.00 : 1.06, shortTarget ? 3 : 4, 73), 1.10);
-                addPlan('curve-loop-scout', loop(0.94, shortTarget ? 3 : 4, 997), 1.0);
             }
             break;
         case 'Abendrunde':
@@ -853,7 +853,16 @@ function prioritizeCandidatePlans(
         ? stableStringHash(`${phaseName}:${normalizedFingerprint}`)
         : 0
     const orderedPool = safer.length > 0 ? [...safer, ...riskier] : remaining
-    const startIndex = rotationSeed % orderedPool.length
+    // Ohne echten Fingerprint starteten strict/balanced/fallback bisher alle
+    // bei denselben ersten Plänen. Dadurch wurden z.B. Sport-Loops immer mit
+    // denselben zwei Grundformen versucht und gute Fallback-Formen nie erreicht.
+    const phaseOffset =
+        phaseName === 'balanced'
+            ? Math.min(2, Math.max(0, orderedPool.length - 1))
+            : phaseName === 'fallback'
+            ? Math.max(0, Math.floor(orderedPool.length * 0.65))
+            : 0
+    const startIndex = (rotationSeed + phaseOffset) % orderedPool.length
     const rotated = orderedPool.slice(startIndex).concat(orderedPool.slice(0, startIndex))
     return [...preferred, ...rotated]
 }
@@ -1619,10 +1628,20 @@ function evaluateRouteQuality(
         (
             shapeSignals.centerReentryCount >= 4 ||
             (shapeSignals.radialPeakCount >= 4 && shapeSignals.middleCoverageRatio < 0.30) ||
-            shapeSignals.middleCoverageRatio < 0.18
+            (shapeSignals.middleCoverageRatio < 0.18 && shapeSignals.centralReturnPercent > 18)
         )
     const severeCentralReturn = routeType === 'ROUND_TRIP'
-        ? shapeSignals.centralReturnPercent > 22
+        ? (
+            shapeSignals.centralReturnPercent > 36 ||
+            (
+                shapeSignals.centralReturnPercent > 24 &&
+                (
+                    shapeSignals.centerReentryCount >= 2 ||
+                    shapeSignals.radialPeakCount >= 4 ||
+                    shapeSignals.hookCount >= 4
+                )
+            )
+        )
         : shapeSignals.centralReturnPercent > 11
 
     if (routeType !== 'ROUND_TRIP') {
@@ -1965,26 +1984,30 @@ async function searchBestRoundTripRoute({
 }): Promise<RoundTripSearchResult | null> {
     const highCostCurveSearch = mode === 'Kurvenjagd' && targetDistanceKm >= 130
     const extendedRoundTripSearch = targetDistanceKm >= 100 || mode === 'Entdecker'
+    const shortCurvySearch = mode === 'Kurvenjagd' && targetDistanceKm <= 60
+    const constrainedRoundTripSearch = excludeParams.trim() !== ''
     const normalizedVariantHint = normalizeHint(variantHint)
     const normalizedFingerprintHint = normalizeHint(fingerprintHint)
     // Budget so kalibriert, dass alle 3 Phasen (strict / balanced / fallback)
     // garantiert mindestens einen Versuch bekommen. Floor 4 schützt vor zu
-    // niedrigen Hints; Ceiling 6/7 hält die Generierung unter ~14 s im Worst
-    // Case (Mapbox ~1.5–2.5 s pro Plan).
+    // niedrigen Hints; constrained Suchen bekommen ein kleines sequentielles
+    // Zusatzbudget, weil Autobahn-/Ferry-Excludes in Tälern sonst zu früh in
+    // NO_ROUTE laufen. Keine Parallelisierung, nur ein Edge-Flow.
     const globalAttemptBudget = Math.max(
         4,
         Math.min(
-            highCostCurveSearch ? 6 : extendedRoundTripSearch ? 7 : 6,
+            highCostCurveSearch ? 6 : extendedRoundTripSearch ? 7 : (constrainedRoundTripSearch || shortCurvySearch) ? 8 : 6,
             Math.round(
                 maxCandidateAttemptsHint ??
-                    (highCostCurveSearch ? 5 : extendedRoundTripSearch ? 6 : 5),
+                    (highCostCurveSearch ? 5 : extendedRoundTripSearch ? 6 : (constrainedRoundTripSearch || shortCurvySearch) ? 7 : 5),
             ),
         ),
     )
     const searchStartTs = Date.now()
-    // Time Budget: 14 s gibt 6 Versuchen je ~2.3 s Mapbox-Latenz Spielraum;
+    // Time Budget: constrained Suchen dürfen etwas länger suchen, bevor der
+    // Fallback mit gelockerten Excludes greift; Client-Timeout liegt darüber.
     // Client-_invoke-Timeout muss in Flutter darüber liegen (siehe route_service).
-    const roundTripTimeBudgetMs = highCostCurveSearch ? 12000 : 14000
+    const roundTripTimeBudgetMs = highCostCurveSearch ? 12000 : (constrainedRoundTripSearch || shortCurvySearch) ? 16000 : 14000
 
     const searchPhases = [
         {
@@ -2058,7 +2081,9 @@ async function searchBestRoundTripRoute({
             phase.name === 'strict'
                 ? (highCostCurveSearch ? 2 : 2)
                 : phase.name === 'balanced'
-                ? 2
+                ? (shortCurvySearch ? 3 : 2)
+                : (constrainedRoundTripSearch || shortCurvySearch)
+                ? 3
                 : 2
         const phasesRemainingAfterThis =
             searchPhases.length - 1 - searchPhases.indexOf(phase)
@@ -2737,13 +2762,19 @@ Deno.serve(async (req) => {
                         : retry % 2 === 0
                         ? offsetSide
                         : -offsetSide
+                const emergencyScenicTarget = Math.max(
+                    pointToPointDirectDistanceKm * 1.24,
+                    pointToPointDirectDistanceKm + 4.0,
+                )
                 const softenedTarget = targetDistance != null
-                    ? Math.max(
-                        pointToPointDirectDistanceKm *
-                            (retry >= 2 ? 1.10 : retrySimplifyWaypoints ? 1.14 : 1.22),
-                        targetDistance *
-                            (retry >= 2 ? 0.82 : retrySimplifyWaypoints ? 0.88 : 0.95),
-                    )
+                    ? retry >= 2
+                        ? emergencyScenicTarget
+                        : Math.max(
+                            pointToPointDirectDistanceKm *
+                                (retrySimplifyWaypoints ? 1.14 : 1.22),
+                            targetDistance *
+                                (retrySimplifyWaypoints ? 0.88 : 0.95),
+                        )
                     : undefined
                 const retryWaypoints = buildPointToPointScenicWaypoints({
                     start: startLocation,
@@ -2840,14 +2871,78 @@ Deno.serve(async (req) => {
             }
         }
 
+        if (!route && planning_type === 'Zufall' && currentRouteType === 'POINT_TO_POINT' && body.destination_location && pointToPointIsScenic) {
+            console.log('P2P scenic safe fallback: trying single-corridor midpoint');
+            const directBearing = calculateBearing(startLocation, body.destination_location)
+            const midpoint = interpolateCoordinate(startLocation, body.destination_location, 0.5)
+            const fallbackOffsetCapKm = detourLevel >= 3 ? 11.0 : detourLevel === 2 ? 8.0 : 6.0
+            const fallbackOffsetMinKm = detourLevel >= 3 ? 5.0 : detourLevel === 2 ? 3.5 : 2.2
+            const fallbackOffsetFactor = detourLevel >= 3 ? 0.42 : detourLevel === 2 ? 0.34 : 0.28
+            const fallbackOffsetKm = Math.min(
+                fallbackOffsetCapKm,
+                Math.max(fallbackOffsetMinKm, pointToPointDirectDistanceKm * fallbackOffsetFactor),
+            )
+            const primarySide = offsetSide === -1 || offsetSide === 1 ? offsetSide : 1
+            for (const side of [primarySide, -primarySide]) {
+                const safeWaypoint = calculateDestination(
+                    midpoint,
+                    fallbackOffsetKm,
+                    directBearing + side * 90,
+                )
+                const safeWaypoints = [startLocation, safeWaypoint, body.destination_location]
+                const safeRadiuses = 'unlimited;12000;unlimited'
+                route = await getMapboxRoute(
+                    safeWaypoints,
+                    mapboxProfile,
+                    excludeParams,
+                    safeRadiuses,
+                    MAPBOX_ACCESS_TOKEN,
+                    {
+                        continueStraight: requestContinueStraight,
+                        maxAttempts: 1,
+                        timeoutMs: 8500,
+                    },
+                )
+                if (!route && excludeParams && excludeParams.trim() !== '') {
+                    route = await getMapboxRoute(
+                        safeWaypoints,
+                        mapboxProfile,
+                        '',
+                        safeRadiuses,
+                        MAPBOX_ACCESS_TOKEN,
+                        {
+                            continueStraight: requestContinueStraight,
+                            maxAttempts: 1,
+                            timeoutMs: 8000,
+                        },
+                    )
+                }
+                if (!route) continue
+                const fallbackQuality = evaluateRouteQuality(route, currentRouteType)
+                const fallbackDistanceKm = getRouteDistanceKm(route)
+                if (
+                    fallbackQuality.passed &&
+                    fallbackDistanceKm >= pointToPointDirectDistanceKm * 1.04
+                ) {
+                    finalWaypoints = safeWaypoints
+                    radiusesParams = safeRadiuses
+                    break
+                }
+                route = null
+            }
+        }
+
         if (
             !route &&
             planning_type === 'Zufall' &&
             currentRouteType === 'POINT_TO_POINT' &&
-            body.destination_location &&
-            !pointToPointIsScenic
+            body.destination_location
         ) {
-            console.log('P2P scenic fallback: using direct A->B route');
+            console.log(
+                pointToPointIsScenic
+                    ? 'P2P scenic fallback exhausted: using direct A->B route'
+                    : 'P2P direct fallback: using direct A->B route',
+            );
             const fallbackWaypoints = [startLocation, body.destination_location];
             const fallbackRadiuses = 'unlimited;unlimited';
             route = await getMapboxRoute(
@@ -2991,12 +3086,24 @@ Deno.serve(async (req) => {
                 attempts += 1
             }
             console.log(`Distance scaling done after ${attempts} attempts: ${actualDistanceKm.toFixed(1)} km (target: ${(effectiveTargetDistanceKm ?? targetDistance)} km, band: ${distanceConfig.minKm}-${distanceConfig.maxKm} km)`);
+            const finalAcceptableMinKm = avoidHighways
+                ? Math.min(
+                    distanceConfig.acceptableMinKm,
+                    Math.round((effectiveTargetDistanceKm ?? targetDistance!) * 0.64),
+                )
+                : Math.max(0, distanceConfig.acceptableMinKm - 1)
+            const finalAcceptableMaxKm = avoidHighways
+                ? Math.max(
+                    distanceConfig.acceptableMaxKm,
+                    Math.round((effectiveTargetDistanceKm ?? targetDistance!) * 1.38),
+                )
+                : distanceConfig.acceptableMaxKm + 2
             if (
-                actualDistanceKm < distanceConfig.acceptableMinKm ||
-                actualDistanceKm > distanceConfig.acceptableMaxKm
+                actualDistanceKm < finalAcceptableMinKm ||
+                actualDistanceKm > finalAcceptableMaxKm
             ) {
                 throw new Error(
-                    `No route found with current constraints after exhausting round-trip search. Final distance ${actualDistanceKm.toFixed(1)}km is outside acceptable band ${distanceConfig.acceptableMinKm}-${distanceConfig.acceptableMaxKm}km.`,
+                    `No route found with current constraints after exhausting round-trip search. Final distance ${actualDistanceKm.toFixed(1)}km is outside acceptable band ${finalAcceptableMinKm}-${finalAcceptableMaxKm}km.`,
                 )
             }
         }

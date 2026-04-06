@@ -66,7 +66,7 @@ class RouteStyleConfig {
     minRoundTripKm: 25,
     maxRoundTripKm: 280,
     retryAttempts: 4,
-    minStyleFitScore: 50.0,
+    minStyleFitScore: 44.0,
     preferFlatTerrain: true,
   );
 
@@ -81,8 +81,8 @@ class RouteStyleConfig {
     minRoundTripKm: 20,
     maxRoundTripKm: 230,
     retryAttempts: 5,
-    minStyleFitScore: 56.0,
-    minCurvesPer50km: 20,
+    minStyleFitScore: 48.0,
+    minCurvesPer50km: 16,
     zigzagWaypoints: true,
   );
 

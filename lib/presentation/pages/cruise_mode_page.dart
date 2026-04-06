@@ -931,7 +931,9 @@ class _CruiseModePageState extends State<CruiseModePage>
 
   /// Wird von flutter_map aufgerufen wenn die Karte bereit ist.
   void _onMapReady() {
-    debugPrint('[CruiseMode] _onMapReady called, routeGeoJson=${_routeGeoJson != null}, routeLatLngs=${_routeLatLngs.length}');
+    debugPrint(
+      '[CruiseMode] _onMapReady called, routeGeoJson=${_routeGeoJson != null}, routeLatLngs=${_routeLatLngs.length}',
+    );
     _mapReady = true;
     // Route zeichnen falls schon vorhanden, sonst GPS-Position holen
     if (_routeGeoJson != null) {
@@ -943,7 +945,9 @@ class _CruiseModePageState extends State<CruiseModePage>
       if (_isRouteConfirmed) _activateNavigationCamera();
     } else if (_routeLatLngs.isNotEmpty) {
       // Fallback: Route-LatLngs sind bereits gesetzt aber routeGeoJson fehlt
-      debugPrint('[CruiseMode] _onMapReady: routeLatLngs bereits vorhanden (${_routeLatLngs.length} Punkte)');
+      debugPrint(
+        '[CruiseMode] _onMapReady: routeLatLngs bereits vorhanden (${_routeLatLngs.length} Punkte)',
+      );
       // Kein _drawRoute nötig da _routeLatLngs bereits im State ist
       if (_isRouteConfirmed) _activateNavigationCamera();
     } else {
@@ -1442,7 +1446,9 @@ class _CruiseModePageState extends State<CruiseModePage>
         'uturns=${quality.uturnPositions.length}',
       );
 
-      debugPrint('[CruiseMode] Applying route result: ${result.coordinates.length} coords');
+      debugPrint(
+        '[CruiseMode] Applying route result: ${result.coordinates.length} coords',
+      );
       _applyRouteResult(result);
 
       debugPrint('[CruiseMode] Drawing route...');
@@ -1687,8 +1693,13 @@ class _CruiseModePageState extends State<CruiseModePage>
     final onStartCorridor = _isRoundTrip
         ? _offRouteThresholdMeters + 20
         : _currentPointToPointCorridorMeters() + 40;
+    final matchesRouteStartIndex =
+        globalMatch.index <= 24 ||
+        (_isRoundTrip &&
+            globalMatch.index >=
+                math.max(0, _fullRouteCoordinates.length - 25));
     if (distanceToRouteStart <= onStartCorridor &&
-        globalMatch.index <= 24 &&
+        matchesRouteStartIndex &&
         globalMatch.distanceMeters <= onStartCorridor) {
       return;
     }
@@ -1700,6 +1711,18 @@ class _CruiseModePageState extends State<CruiseModePage>
       avoidHighways: _activeAvoidHighways,
     );
     if (!accessPlan.hasAccessLeg) {
+      if (accessPlan.joinPoint.index > 0) {
+        await _commitRerouteResult(
+          result: accessPlan.followOnRoute,
+          sessionRouteResult: accessPlan.followOnRoute,
+          position: position,
+        );
+        _safeSetState(() {
+          _clearAccessLegState();
+          _sessionRouteStartIndexInActiveRoute = 0;
+          _totalDistanceDriven = 0.0;
+        });
+      }
       return;
     }
 
@@ -2044,7 +2067,9 @@ class _CruiseModePageState extends State<CruiseModePage>
     );
 
     if (activeCoordinates.length < 2) {
-      debugPrint('[CruiseMode] _drawRoute: Unzureichende Koordinaten, Route wird nicht gezeichnet');
+      debugPrint(
+        '[CruiseMode] _drawRoute: Unzureichende Koordinaten, Route wird nicht gezeichnet',
+      );
       return;
     }
 
@@ -2059,7 +2084,9 @@ class _CruiseModePageState extends State<CruiseModePage>
     final isInitialRoute = _routeLatLngs.isEmpty && routeLatLngs.isNotEmpty;
 
     if (hasChange || isInitialRoute) {
-      debugPrint('[CruiseMode] _drawRoute: setState für ${routeLatLngs.length} Punkte (initial=$isInitialRoute)');
+      debugPrint(
+        '[CruiseMode] _drawRoute: setState für ${routeLatLngs.length} Punkte (initial=$isInitialRoute)',
+      );
       _safeSetState(() {
         _routeLatLngs = routeLatLngs;
       });
@@ -2084,13 +2111,17 @@ class _CruiseModePageState extends State<CruiseModePage>
             padding: EdgeInsets.fromLTRB(24, safeTop + 18, 24, bottomPad),
           ),
         );
-        debugPrint('[CruiseMode] _drawRoute: Kamera auf Route-Bounds angepasst');
+        debugPrint(
+          '[CruiseMode] _drawRoute: Kamera auf Route-Bounds angepasst',
+        );
       } catch (e) {
         debugPrint('[CruiseMode] Camera fit fehlgeschlagen: $e');
       }
     } else if (!_mapReady) {
       // Web-spezifisch: Map noch nicht ready, Route wird später gezeichnet via _onMapReady
-      debugPrint('[CruiseMode] _drawRoute: Map nicht ready, Route wird bei onMapReady gezeichnet');
+      debugPrint(
+        '[CruiseMode] _drawRoute: Map nicht ready, Route wird bei onMapReady gezeichnet',
+      );
     }
   }
 
@@ -2212,18 +2243,16 @@ class _CruiseModePageState extends State<CruiseModePage>
     }
 
     // ── UI-Rebuild Throttling ───────────────────────────────────────────────
-    // Marker-Position + Route-Start immer intern aktualisieren.
+    // Marker-Position intern aktualisieren, Route-Geometrie aber stabil lassen.
     // setState nur wenn genug Zeit vergangen (Web: 16ms, Native: sofort).
     _userPosition = LatLng(
       effectivePosition.latitude,
       effectivePosition.longitude,
     );
-    if (_routeLatLngs.isNotEmpty) {
-      _routeLatLngs[0] = LatLng(
-        effectivePosition.latitude,
-        effectivePosition.longitude,
-      );
-    }
+    // Wichtig: Die kanonische Route hier nicht auf die aktuelle GPS-Position
+    // ziehen. Bei Off-Route-/Access-Leg-Starts erzeugt das sonst eine
+    // sichtbare Luftlinie vom Fahrer zur Route. Route-Slices werden nur nach
+    // einem echten Route-Match oder einer berechneten Access-/Reroute gesetzt.
 
     final now = DateTime.now();
     final skipRebuild =
@@ -2573,7 +2602,12 @@ class _CruiseModePageState extends State<CruiseModePage>
                 debugLabel: 'fallback_forward_rejoin_$attempt',
               )
             : smartPlan;
-        final rejoinPoint = activePlan.anchorCoordinate;
+        final mergeWithOriginal =
+            (accessLegMode || activePlan.mergeWithOriginal) &&
+            rejoinIndex < maxRejoinIndex;
+        final rejoinPoint = mergeWithOriginal
+            ? planningCoordinates[rejoinIndex]
+            : activePlan.anchorCoordinate;
         final distToRejoin = geo.Geolocator.distanceBetween(
           position.latitude,
           position.longitude,
@@ -2585,9 +2619,6 @@ class _CruiseModePageState extends State<CruiseModePage>
           continue;
         }
 
-        final mergeWithOriginal =
-            (accessLegMode || activePlan.mergeWithOriginal) &&
-            rejoinIndex < maxRejoinIndex;
         final scenicReroute = !mergeWithOriginal && _activePointToPointScenic;
 
         final candidate = await _routeService.generatePointToPoint(
@@ -2622,6 +2653,22 @@ class _CruiseModePageState extends State<CruiseModePage>
         }
 
         if (mergeWithOriginal) {
+          final candidateEnd = candidate.coordinates.last;
+          final originalJoinPoint = planningCoordinates[rejoinIndex];
+          final joinDistance = geo.Geolocator.distanceBetween(
+            candidateEnd[1],
+            candidateEnd[0],
+            originalJoinPoint[1],
+            originalJoinPoint[0],
+          );
+          if (joinDistance > 45.0 && rejoinIndex < maxRejoinIndex) {
+            rejoinIndex = math.min(rejoinIndex + 80, maxRejoinIndex).toInt();
+            debugPrint(
+              '[CruiseMode] Reroute-Attempt ${attempt + 1}: Join-Gap ${joinDistance.toStringAsFixed(0)}m, rejoinIndex=$rejoinIndex',
+            );
+            continue;
+          }
+
           final producesUTurn = isUTurnJoin(
             rerouteCoordinates: candidate.coordinates,
             originalCoordinates: planningCoordinates,
@@ -3458,10 +3505,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     if (isCritical) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(
-            message,
-            style: const TextStyle(color: Colors.white),
-          ),
+          content: Text(message, style: const TextStyle(color: Colors.white)),
           backgroundColor: const Color(0xFFFF3B30),
           behavior: SnackBarBehavior.floating,
           margin: const EdgeInsets.all(16),

@@ -75,6 +75,27 @@ void main() {
           plan.activeRoute.distanceMeters!,
           greaterThan(plan.followOnRoute.distanceMeters!),
         );
+
+        final request = invoker.lastBody!;
+        expect(request['route_type'], 'POINT_TO_POINT');
+        expect(request['mode'], 'Standard');
+        expect(request['route_variant_hint'], 'access');
+        expect(request['max_candidate_attempts'], 1);
+        expect(request['continue_straight'], isTrue);
+        expect(request['avoid_highways'], isFalse);
+        expect(request.containsKey('targetDistance'), isFalse);
+        expect(request.containsKey('detour_level'), isFalse);
+        expect(request.containsKey('detour_factor'), isFalse);
+        expect(request['startLocation']['latitude'], closeTo(47.312, 0.001));
+        expect(request['startLocation']['longitude'], closeTo(9.611, 0.001));
+        expect(
+          request['destination_location']['latitude'],
+          closeTo(plan.joinPoint.coordinate[1], 0.001),
+        );
+        expect(
+          request['destination_location']['longitude'],
+          closeTo(plan.joinPoint.coordinate[0], 0.001),
+        );
       },
     );
 
@@ -104,10 +125,12 @@ void main() {
 
 class _AccessInvoker implements RouteEdgeInvoker {
   int callCount = 0;
+  Map<String, dynamic>? lastBody;
 
   @override
   Future<dynamic> invoke(Map<String, dynamic> body) async {
     callCount += 1;
+    lastBody = Map<String, dynamic>.from(body);
     final start = Map<String, dynamic>.from(body['startLocation'] as Map);
     final destination = Map<String, dynamic>.from(
       body['destination_location'] as Map,
