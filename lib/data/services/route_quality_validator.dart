@@ -441,10 +441,17 @@ class RouteQualityValidator {
         quality.scenicLoopScore * (isRoundTrip ? 0.18 : 0.14) +
         (!quality.isLoopClosed ? 80 : 0);
 
+    // Verschärft: ≥3 radiale Peaks UND mindestens 1 Center-Reentry zählt als
+    // echtes Stern-Pattern. Saubere Loops mit modulierter Form (z.B. eine
+    // Ellipse mit Sinus-Welle) haben zwar mehrere Peaks, aber kein
+    // Center-Reentry → werden nicht fälschlich verworfen.
     final severeRoundTripShape =
         isRoundTrip &&
         (quality.centerReentryCount >= 2 ||
-            quality.radialPeakCount >= 4 ||
+            (quality.radialPeakCount >= 3 &&
+                quality.centerReentryCount >= 1) ||
+            (quality.spurArmPercent >= 60.0 &&
+                quality.repeatedStartAreaPercent >= 30.0) ||
             quality.middleCoverageRatio < 0.42);
     final severePointShape =
         !isRoundTrip &&

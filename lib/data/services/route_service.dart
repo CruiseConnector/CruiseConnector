@@ -109,6 +109,12 @@ class RouteService {
   ///
   /// Post-Validierung prüft: Overlap (<20%), U-Turns, Distanz (±15%),
   /// und stilspezifische Kriterien (Kurvenjagd: genug Kurven, Abendrunde: langsam).
+  ///
+  /// ── Performance-Gov (siehe RoutePerformanceGuard.kRoundTripCandidateBudget) ──
+  /// Auf der Edge Function läuft ein Multi-Phasen-Suchlauf
+  /// (strict → balanced → fallback). Wir capen die Anzahl interner Pläne über
+  /// `max_candidate_attempts`, damit eine User-getriggerte Generierung im
+  /// Worst-Case ≤ 5 Mapbox-Calls erzeugt (vorher 12-21).
   Future<RouteResult> generateRoundTrip({
     required geo.Position startPosition,
     required int targetDistanceKm,
@@ -116,6 +122,7 @@ class RouteService {
     required String planningType,
     Map<String, double>? targetLocation,
     int? variantIndex,
+    bool avoidHighways = false,
   }) async {
     final styleConfig = RouteStyleConfig.forMode(mode);
     final normalizedTargetKm = styleConfig.clampRoundTripDistanceKm(
@@ -128,6 +135,7 @@ class RouteService {
       style: mode,
       planningType: planningType,
       targetDistanceKm: normalizedTargetKm.toDouble(),
+      avoidHighways: avoidHighways,
     );
 
     return RouteGenerationCoordinator.runSingleFlight(
@@ -144,9 +152,10 @@ class RouteService {
         final hasSeenHistory = SeenRouteRegistry.entriesFor(
           scenario.scenarioKey,
         ).isNotEmpty;
-        final maxAttempts = hasSeenHistory
-            ? math.min(3, math.max(2, styleConfig.retryAttempts))
-            : 1;
+        // Hard-Cap: max 1 Edge-Function-Invocation pro User-Aktion (war 1-3).
+        // Bei wiederholter Anforderung in selber Szene erlauben wir genau 1
+        // zusätzlichen Versuch mit anderem Seed/Bearing für Diversifizierung.
+        final maxAttempts = hasSeenHistory ? 2 : 1;
         _RouteCandidate? bestCandidate;
         _RouteCandidate? spareCandidate;
         var bestScore = double.infinity;
@@ -166,7 +175,9 @@ class RouteService {
               startPosition: startPosition,
               targetLocation: targetLocation,
               variant: variant,
-              candidateBudget: hasSeenHistory ? 4 : 5,
+              // Cap Edge-Function-Pläne auf max 3 (war 4-5).
+              // Edge Fn macht ~1.3 Mapbox-Calls pro Plan → ≤ 4 Calls/Invocation.
+              candidateBudget: hasSeenHistory ? 2 : 3,
             );
             if (candidate.accepted && candidate.score < bestScore) {
               if (bestCandidate != null) {
@@ -294,16 +305,19 @@ class RouteService {
   }) async {
     final styleConfig = RouteStyleConfig.forMode(mode);
     final normalizedVariant = routeVariant.clamp(0, 3);
+    // Detour-Multiplier in Mitte der neuen Fenster (siehe RouteStyleConfig).
+    // Klein 1.32× landet in [1.18, 1.55], Mittel 1.65× in [1.45, 1.95],
+    // Groß 2.10× in [1.80, 2.70]. So bleiben sie deutlich differenziert.
     final detourFactor = switch (normalizedVariant) {
-      1 => 1.24,
-      2 => 1.52,
-      3 => 1.92,
+      1 => 1.32,
+      2 => 1.65,
+      3 => 2.10,
       _ => scenic ? 1.15 : 1.0,
     };
     final detourMinimumExtraKm = switch (normalizedVariant) {
-      1 => 5.0,
-      2 => 12.0,
-      3 => 24.0,
+      1 => 4.0,
+      2 => 10.0,
+      3 => 20.0,
       _ => scenic ? 3.0 : 0.0,
     };
     final directDistanceKm = math.max(
@@ -317,9 +331,9 @@ class RouteService {
       1.0,
     );
     final scenicTargetKm = switch (normalizedVariant) {
-      1 => directDistanceKm * 1.24,
-      2 => directDistanceKm * 1.50,
-      3 => directDistanceKm * 1.88,
+      1 => directDistanceKm * 1.32,
+      2 => directDistanceKm * 1.65,
+      3 => directDistanceKm * 2.10,
       _ => scenic ? directDistanceKm * 1.15 : directDistanceKm,
     };
     final initialTargetDistanceKm = math.max(
@@ -361,7 +375,9 @@ class RouteService {
         final hasSeenHistory = SeenRouteRegistry.entriesFor(
           scenario.scenarioKey,
         ).isNotEmpty;
-        final maxAttempts = shouldDiversify ? 2 : (hasSeenHistory ? 2 : 1);
+        // Hard-Cap: max 1 Invocation auf erstem Versuch (war 1-2).
+        // Diversifizierung nur, wenn schon eine Route in dieser Szene existiert.
+        final maxAttempts = hasSeenHistory ? 2 : 1;
         _RouteCandidate? bestCandidate;
         _RouteCandidate? spareCandidate;
         var bestScore = double.infinity;
@@ -389,7 +405,8 @@ class RouteService {
               targetDistanceKm: targetDistanceKm,
               detourFactor: detourFactor,
               variant: variant,
-              candidateBudget: hasSeenHistory ? 3 : 4,
+              // Cap auf 3 Pläne (war 3-4).
+              candidateBudget: hasSeenHistory ? 2 : 3,
             );
             if (candidate.accepted && candidate.score < bestScore) {
               if (bestCandidate != null) {
@@ -791,7 +808,8 @@ class RouteService {
     required RouteVariant variant,
     Map<String, double>? targetLocation,
     double? directionHint,
-    int candidateBudget = 6,
+    int candidateBudget = 3,
+    bool avoidHighways = false,
   }) {
     return <String, dynamic>{
       'startLocation': {
@@ -805,6 +823,7 @@ class RouteService {
       'language': 'de',
       'randomSeed': variant.seed,
       'continue_straight': true, // Verhindert unnötige U-Turns
+      'avoid_highways': avoidHighways,
       'route_variant_hint': variant.variantHint,
       'route_fingerprint_hint': variant.fingerprintHint,
       'max_candidate_attempts': candidateBudget,
@@ -1141,14 +1160,16 @@ class RouteService {
     dynamic data;
     int? statusCode;
     RouteServiceException? lastMappedError;
-    // Exponential Backoff: nur bei HTTP 429/5xx
-    const maxRetries = 3;
+    // Exponential Backoff: nur bei HTTP 429/5xx, max 2 Retries (war 3).
+    // Begründung: jeder Retry kostet >1s + die Edge Function macht selbst
+    // schon mehrere Mapbox-Calls — User-wahrgenommene Latenz muss < 12s bleiben.
+    const maxRetries = 2;
     final retryRng = math.Random();
     for (var attempt = 1; attempt <= maxRetries; attempt++) {
       try {
         final rawResponse = await _invoker
             .invoke(body)
-            .timeout(const Duration(seconds: 15));
+            .timeout(const Duration(seconds: 12));
         if (rawResponse is FunctionResponse) {
           statusCode = rawResponse.status;
           data = rawResponse.data;
@@ -1515,6 +1536,7 @@ class RouteService {
       targetLocation: targetLocation,
       directionHint: variant.angleOffset,
       candidateBudget: candidateBudget,
+      avoidHighways: scenario.avoidHighways,
     );
     final result = await _invoke(body);
     final snapped = _snapRouteToStartPosition(result, startPosition);
@@ -1950,7 +1972,8 @@ class RouteService {
         variant: variant,
         targetLocation: targetLocation,
         directionHint: variant.angleOffset,
-        candidateBudget: 3,
+        candidateBudget: 2,
+        avoidHighways: scenario.avoidHighways,
       );
       body['simplify_waypoints'] = true;
       body['max_waypoints'] = 3;
@@ -1996,9 +2019,9 @@ class RouteService {
             : scenario.style;
         final scenicStyleConfig = RouteStyleConfig.forMode(scenicMode);
         final scenicDetourFactor = switch (scenario.detourLevel) {
-          1 => 1.24,
-          2 => 1.55,
-          3 => 1.92,
+          1 => 1.32,
+          2 => 1.65,
+          3 => 2.10,
           _ => 1.15,
         };
         final scenicBody = _buildPointToPointRequest(

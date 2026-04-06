@@ -1406,13 +1406,14 @@ class _CruiseModePageState extends State<CruiseModePage>
         _activeDetourVariant = 0;
         _activePointToPointScenic = false;
         _activePointToPointMode = 'Standard';
-        _activeAvoidHighways = false;
+        _activeAvoidHighways = _avoidHighways;
         _recentDestinationDistances = [];
         result = await _routeService.generateRoundTrip(
           startPosition: startPosition,
           targetDistanceKm: distance,
           mode: _selectedStyle,
           planningType: _planningType,
+          avoidHighways: _avoidHighways,
         );
       }
 

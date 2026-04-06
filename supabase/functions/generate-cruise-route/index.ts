@@ -902,13 +902,15 @@ function buildPointToPointScenicWaypoints({
         ? 0.12
         : 0.0
 
-    // Umweg-Boost: lateral offset 18% / 40% / 70% der Luftlinie
+    // Umweg-Boost an die neuen Flutter-Fenster gekoppelt:
+    // Klein zielt auf 1.32× direkt, Mittel auf 1.65×, Groß auf 2.10×.
+    // (Vorher 1.26 / 1.40 / 1.70 → Groß war zu nah an Mittel.)
     const detourBoost = detourLevel === 1
-        ? 0.26
+        ? 0.32
         : detourLevel === 2
-        ? 0.40
+        ? 0.55
         : detourLevel >= 3
-        ? 0.70
+        ? 0.95
         : 0.0
 
     const effectiveFactor = Math.max(
@@ -987,26 +989,27 @@ function buildPointToPointScenicWaypoints({
     const baseSide = requestedOffsetSide ??
         (seededUnit(randomSeed + detourLevel + Math.round(directDistanceKm)) >= 0.5 ? 1 : -1)
 
-    // Offset-Limits je nach Umweg-Level (drastischer gespreizt)
+    // Offset-Limits — drastischer gespreizt zwischen Klein/Mittel/Groß,
+    // damit Mapbox tatsächlich verschiedene Korridore zurückliefert.
     let maxOffsetKm = detourLevel === 1
         ? Math.max(
-            5.5,
-            Math.min(directDistanceKm * 0.42, extraDistanceKm * 0.85 + 3.5),
+            4.5,
+            Math.min(directDistanceKm * 0.36, extraDistanceKm * 0.85 + 3.0),
         )
         : detourLevel === 2
         ? Math.max(
-            7.0,
-            Math.min(directDistanceKm * 0.58, extraDistanceKm * 0.92 + 4.5),
+            7.5,
+            Math.min(directDistanceKm * 0.62, extraDistanceKm * 0.95 + 5.0),
         )
         : Math.max(
-            9.0,
-            Math.min(directDistanceKm * 0.76, extraDistanceKm * 1.04 + 6.5),
+            12.0,
+            Math.min(directDistanceKm * 0.88, extraDistanceKm * 1.10 + 8.0),
         )
     let minOffsetKm = detourLevel === 1
-        ? Math.min(maxOffsetKm, Math.max(4.0, maxOffsetKm * 0.58))
+        ? Math.min(maxOffsetKm, Math.max(3.0, maxOffsetKm * 0.55))
         : detourLevel === 2
-        ? Math.min(maxOffsetKm, Math.max(5.5, maxOffsetKm * 0.52))
-        : Math.min(maxOffsetKm, Math.max(7.0, maxOffsetKm * 0.48))
+        ? Math.min(maxOffsetKm, Math.max(5.5, maxOffsetKm * 0.55))
+        : Math.min(maxOffsetKm, Math.max(8.5, maxOffsetKm * 0.55))
     if (simplifyWaypoints) {
         maxOffsetKm *= detourLevel >= 2 ? 0.74 : 0.80
         minOffsetKm *= detourLevel >= 2 ? 0.72 : 0.78
@@ -1964,18 +1967,23 @@ async function searchBestRoundTripRoute({
     const extendedRoundTripSearch = targetDistanceKm >= 100 || mode === 'Entdecker'
     const normalizedVariantHint = normalizeHint(variantHint)
     const normalizedFingerprintHint = normalizeHint(fingerprintHint)
+    // Hard-Cap: Floor von 5 → 2, Ceiling von 8/10 → 5/6.
+    // Vorher konnte ein Hint von 2 still auf 5 angehoben werden — jetzt
+    // respektieren wir kleine Hints, damit Flutter wirklich die Anzahl
+    // Mapbox-Calls steuern kann.
     const globalAttemptBudget = Math.max(
-        highCostCurveSearch ? 5 : extendedRoundTripSearch ? 6 : 5,
+        2,
         Math.min(
-            highCostCurveSearch ? 8 : extendedRoundTripSearch ? 8 : 10,
+            highCostCurveSearch ? 5 : extendedRoundTripSearch ? 6 : 5,
             Math.round(
                 maxCandidateAttemptsHint ??
-                    (highCostCurveSearch ? 8 : extendedRoundTripSearch ? 7 : 9),
+                    (highCostCurveSearch ? 4 : extendedRoundTripSearch ? 4 : 3),
             ),
         ),
     )
     const searchStartTs = Date.now()
-    const roundTripTimeBudgetMs = highCostCurveSearch ? 16000 : 19000
+    // Time Budget reduziert: 19s → 11s, damit Client-Timeout (12s) vor Cancel greift.
+    const roundTripTimeBudgetMs = highCostCurveSearch ? 10000 : 11000
 
     const searchPhases = [
         {
@@ -2041,19 +2049,16 @@ async function searchBestRoundTripRoute({
             normalizedVariantHint,
             normalizedFingerprintHint,
         )
+        // Hard-Cap pro Phase: strict=3, balanced=2, fallback=1 (war 4/2/2).
+        // Mit globalem Budget von 5 ergibt das im Worst-Case
+        // 3+2+(0..1) Mapbox-Pläne pro Edge-Function-Invocation.
         const maxPhaseAttempts =
-            highCostCurveSearch
-                ? phase.name === 'strict'
-                    ? 3
-                    : phase.name === 'balanced'
-                    ? 2
-                    : 2
-                : phase.name === 'strict'
-                ? 4
+            phase.name === 'strict'
+                ? (highCostCurveSearch ? 2 : 3)
                 : phase.name === 'balanced'
                 ? 2
-                : 2
-        const candidatePlans = orderedCandidates.slice(0, Math.min(orderedCandidates.length, maxPhaseAttempts + 1))
+                : 1
+        const candidatePlans = orderedCandidates.slice(0, Math.min(orderedCandidates.length, maxPhaseAttempts))
         let phaseAttempts = 0
         let phaseAcceptedCandidates = 0
 
@@ -2500,6 +2505,17 @@ Deno.serve(async (req) => {
                 excludeParams = 'motorway,ferry'
             } else if (mode === 'Entdecker') {
                 excludeParams = 'motorway'
+            }
+            // Autobahn-Toggle für Rundkurse: erzwingt motorway-Ausschluss
+            // unabhängig vom Style. Sport Mode + Standard schließen Autobahnen
+            // sonst nicht aus → der UI-Toggle wäre dort wirkungslos.
+            if (avoidHighways) {
+                const hasMotorway = excludeParams.split(',').some((p) => p.trim() === 'motorway')
+                if (!hasMotorway) {
+                    excludeParams = excludeParams.trim() === ''
+                        ? 'motorway,motorway_link'
+                        : `${excludeParams},motorway,motorway_link`
+                }
             }
         }
 

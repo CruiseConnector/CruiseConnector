@@ -309,6 +309,17 @@ class RouteStyleConfig {
     return requestedKm.clamp(lowerBound, upperBound);
   }
 
+  // Detour-Fenster — entkoppelt, damit Klein/Mittel/Groß sich tatsächlich
+  // unterschiedlich anfühlen. Vorher überlappten die Bereiche so stark, dass
+  // eine Route mit 1.85× direkter Distanz für alle drei Stufen gültig war.
+  // Jetzt:
+  //   Klein:  1.18×–1.55× direkt   (~Faktor 1.32×)
+  //   Mittel: 1.45×–1.95× direkt   (~Faktor 1.65×)
+  //   Groß:   1.80×–2.70× direkt   (~Faktor 2.10×)
+  // Schmale 5–10% Überlappung an den Rändern bleibt absichtlich erhalten,
+  // damit Mapbox bei schwierigen Gebieten nicht ständig den Kandidaten
+  // verwirft → der Fallback würde sonst auf "direkt" zurückfallen und alle
+  // drei Stufen würden wieder identisch wirken.
   double minimumPointToPointDistanceKm({
     required double directDistanceKm,
     required bool scenic,
@@ -319,14 +330,14 @@ class RouteStyleConfig {
     }
     final minByVariant = switch (detourVariant) {
       1 => directDistanceKm * 1.18,
-      2 => directDistanceKm * 1.42,
-      3 => directDistanceKm * 1.75,
+      2 => directDistanceKm * 1.45,
+      3 => directDistanceKm * 1.80,
       _ => directDistanceKm * 1.08,
     };
     final paddingKm = switch (detourVariant) {
       1 => 1.0,
-      2 => 2.0,
-      3 => 4.0,
+      2 => 3.0,
+      3 => 6.0,
       _ => 1.0,
     };
     return math.max(minByVariant, directDistanceKm + paddingKm);
@@ -342,21 +353,21 @@ class RouteStyleConfig {
       return math.max(directDistanceKm + 2.0, directDistanceKm * 1.12);
     }
     final maxByTarget = switch (detourVariant) {
-      1 => targetKm * 1.32,
-      2 => targetKm * 1.42,
-      3 => targetKm * 1.52,
+      1 => targetKm * 1.18,
+      2 => targetKm * 1.25,
+      3 => targetKm * 1.35,
       _ => targetKm * 1.18,
     };
     final maxByDirect = switch (detourVariant) {
-      1 => directDistanceKm * 2.05,
-      2 => directDistanceKm * 2.85,
-      3 => directDistanceKm * 3.45,
+      1 => directDistanceKm * 1.55,
+      2 => directDistanceKm * 1.95,
+      3 => directDistanceKm * 2.70,
       _ => directDistanceKm * 1.35,
     };
     final slackKm = switch (detourVariant) {
-      1 => 3.0,
-      2 => 6.0,
-      3 => 10.0,
+      1 => 2.5,
+      2 => 4.5,
+      3 => 8.0,
       _ => 2.0,
     };
     final lowerBound = minimumPointToPointDistanceKm(

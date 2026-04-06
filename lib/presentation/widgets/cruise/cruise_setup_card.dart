@@ -322,8 +322,12 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
           ),
           child: TypeAheadField<MapboxSuggestion>(
             controller: widget.destinationController,
+            // Debounce: Mapbox-Geocoding nur 350ms NACH dem letzten Tastendruck
+            // anfragen — verhindert eine Anfrage pro Zeichen.
+            debounceDuration: const Duration(milliseconds: 350),
             suggestionsCallback: (pattern) async {
-              if (pattern.isEmpty) return const [];
+              // Erst ab 2 Zeichen abfragen, sonst wenig sinnvolle Treffer.
+              if (pattern.trim().length < 2) return const [];
               return CruiseSetupCard._geocodingService.searchSuggestions(
                 pattern,
               );
