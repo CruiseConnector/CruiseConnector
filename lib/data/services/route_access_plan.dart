@@ -29,21 +29,30 @@ class RouteAccessPlan {
     required this.originalRoute,
     required this.activeRoute,
     required this.followOnRoute,
+    required this.sessionRoute,
     required this.joinPoint,
     required this.logicalOrigin,
     required this.logicalEnd,
+    required this.sessionOrigin,
+    required this.sessionEnd,
     this.accessLeg,
+    this.returnLeg,
   });
 
   final RouteResult originalRoute;
   final RouteResult activeRoute;
   final RouteResult followOnRoute;
+  final RouteResult sessionRoute;
   final RouteJoinPoint joinPoint;
   final RouteResult? accessLeg;
+  final RouteResult? returnLeg;
   final List<double> logicalOrigin;
   final List<double> logicalEnd;
+  final List<double> sessionOrigin;
+  final List<double> sessionEnd;
 
   bool get hasAccessLeg => accessLeg != null;
+  bool get hasReturnLeg => returnLeg != null;
 }
 
 class RouteAccessPlanner {

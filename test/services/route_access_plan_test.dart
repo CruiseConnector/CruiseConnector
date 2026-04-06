@@ -48,53 +48,79 @@ void main() {
 
   group('RouteService.buildAccessRouteToExistingRoute', () {
     test(
-      'baut Access-Leg und behaelt den logischen Endpunkt der Route',
+      'baut Access- und Return-Leg ohne Originalroute zu veraendern',
       () async {
         final invoker = _AccessInvoker();
         final service = RouteService(invoker: invoker);
         final existingRoute = _buildLoopRoute();
+        final sessionStart = _position(latitude: 47.312, longitude: 9.611);
 
         final plan = await service.buildAccessRouteToExistingRoute(
-          currentPosition: _position(latitude: 47.312, longitude: 9.611),
+          currentPosition: sessionStart,
           existingRoute: existingRoute,
+          returnToSessionOrigin: true,
         );
 
         expect(plan.hasAccessLeg, isTrue);
-        expect(invoker.callCount, 1);
+        expect(plan.hasReturnLeg, isTrue);
+        expect(invoker.callCount, 2);
         expect(plan.joinPoint.progressRatio, lessThanOrEqualTo(0.45));
         expect(
           plan.logicalOrigin,
           orderedEquals(existingRoute.coordinates.first),
         );
         expect(plan.logicalEnd, orderedEquals(existingRoute.coordinates.last));
+        expect(plan.sessionOrigin, orderedEquals([9.611, 47.312]));
+        expect(plan.sessionEnd, orderedEquals([9.611, 47.312]));
         expect(
           plan.activeRoute.coordinates.last,
-          orderedEquals(plan.followOnRoute.coordinates.last),
+          orderedEquals(plan.sessionOrigin),
         );
         expect(
           plan.activeRoute.distanceMeters!,
+          greaterThan(plan.sessionRoute.distanceMeters!),
+        );
+        expect(
+          plan.sessionRoute.distanceMeters!,
           greaterThan(plan.followOnRoute.distanceMeters!),
         );
 
-        final request = invoker.lastBody!;
-        expect(request['route_type'], 'POINT_TO_POINT');
-        expect(request['mode'], 'Standard');
-        expect(request['route_variant_hint'], 'access');
-        expect(request['max_candidate_attempts'], 3);
-        expect(request['continue_straight'], isTrue);
-        expect(request['avoid_highways'], isFalse);
-        expect(request.containsKey('targetDistance'), isFalse);
-        expect(request.containsKey('detour_level'), isFalse);
-        expect(request.containsKey('detour_factor'), isFalse);
-        expect(request['startLocation']['latitude'], closeTo(47.312, 0.001));
-        expect(request['startLocation']['longitude'], closeTo(9.611, 0.001));
+        final accessRequest = invoker.bodies.first;
+        expect(accessRequest['route_type'], 'POINT_TO_POINT');
+        expect(accessRequest['mode'], 'Standard');
+        expect(accessRequest['route_variant_hint'], 'access');
+        expect(accessRequest['max_candidate_attempts'], 3);
+        expect(accessRequest['continue_straight'], isTrue);
+        expect(accessRequest['avoid_highways'], isFalse);
+        expect(accessRequest.containsKey('targetDistance'), isFalse);
+        expect(accessRequest.containsKey('detour_level'), isFalse);
+        expect(accessRequest.containsKey('detour_factor'), isFalse);
         expect(
-          request['destination_location']['latitude'],
+          accessRequest['startLocation']['latitude'],
+          closeTo(47.312, 0.001),
+        );
+        expect(
+          accessRequest['startLocation']['longitude'],
+          closeTo(9.611, 0.001),
+        );
+        expect(
+          accessRequest['destination_location']['latitude'],
           closeTo(plan.joinPoint.coordinate[1], 0.001),
         );
         expect(
-          request['destination_location']['longitude'],
+          accessRequest['destination_location']['longitude'],
           closeTo(plan.joinPoint.coordinate[0], 0.001),
+        );
+
+        final returnRequest = invoker.bodies.last;
+        expect(returnRequest['route_variant_hint'], 'return');
+        expect(
+          returnRequest['destination_location']['latitude'],
+          closeTo(sessionStart.latitude, 0.001),
+        );
+        expect(
+          returnRequest['destination_location']['longitude'],
+          closeTo(sessionStart.longitude, 0.001),
         );
       },
     );
@@ -126,11 +152,13 @@ void main() {
 class _AccessInvoker implements RouteEdgeInvoker {
   int callCount = 0;
   Map<String, dynamic>? lastBody;
+  final List<Map<String, dynamic>> bodies = [];
 
   @override
   Future<dynamic> invoke(Map<String, dynamic> body) async {
     callCount += 1;
     lastBody = Map<String, dynamic>.from(body);
+    bodies.add(lastBody!);
     final start = Map<String, dynamic>.from(body['startLocation'] as Map);
     final destination = Map<String, dynamic>.from(
       body['destination_location'] as Map,

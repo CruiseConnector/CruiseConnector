@@ -438,8 +438,9 @@ class RouteService {
               variant: variant,
               // 4-5 Pläne pro Versuch — A→B braucht Spielraum, damit
               // Klein/Mittel/Groß ihre Detour-Fenster wirklich treffen können.
-              candidateBudget:
-                  normalizedVariant >= 2 ? 5 : (hasSeenHistory ? 3 : 4),
+              candidateBudget: normalizedVariant >= 2
+                  ? 5
+                  : (hasSeenHistory ? 3 : 4),
             );
             if (candidate.accepted && candidate.score < bestScore) {
               if (bestCandidate != null) {
@@ -561,14 +562,17 @@ class RouteService {
   ///
   /// Das Ergebnis enthält:
   /// - [originalRoute]: die unveränderte geplante Route
-  /// - [followOnRoute]: den ab dem Join-Punkt verbleibenden Teil der Originalroute
-  /// - [activeRoute]: Access-Leg + Follow-on-Teil für die aktuelle Navigation
+  /// - [followOnRoute]: die Originalroute ab dem Join-Punkt
+  /// - [sessionRoute]: die vom Join-Punkt weiterzufahrende Session-Route,
+  ///   optional mit Return-Leg zurück zum aktuellen Session-Startpunkt
+  /// - [activeRoute]: Access-Leg + Session-Route für die aktuelle Navigation
   Future<RouteAccessPlan> buildAccessRouteToExistingRoute({
     required geo.Position currentPosition,
     required RouteResult existingRoute,
     String mode = 'Standard',
     bool avoidHighways = false,
     int? preferredJoinIndex,
+    bool returnToSessionOrigin = false,
   }) async {
     if (existingRoute.coordinates.length < 2) {
       throw const RouteServiceException(
@@ -593,18 +597,37 @@ class RouteService {
       final followOnRoute = _sliceRouteFromIndex(
         existingRoute,
         joinPoint.index,
+        wrapClosedLoop: returnToSessionOrigin,
       );
       final logicalOrigin = _copyCoordinate(existingRoute.coordinates.first);
       final logicalEnd = _copyCoordinate(existingRoute.coordinates.last);
+      final sessionOrigin = [
+        currentPosition.longitude,
+        currentPosition.latitude,
+      ];
 
       if (joinPoint.distanceFromCurrentMeters <= 60.0) {
+        final returnLeg = await _buildReturnLegIfNeeded(
+          sessionOrigin: sessionOrigin,
+          followOnRoute: followOnRoute,
+          mode: mode,
+          avoidHighways: avoidHighways,
+          enabled: returnToSessionOrigin,
+        );
+        final sessionRoute = returnLeg == null
+            ? followOnRoute
+            : _mergeRouteSegments([followOnRoute, returnLeg]);
         return RouteAccessPlan(
           originalRoute: existingRoute,
-          activeRoute: followOnRoute,
+          activeRoute: sessionRoute,
           followOnRoute: followOnRoute,
+          sessionRoute: sessionRoute,
           joinPoint: joinPoint,
+          returnLeg: returnLeg,
           logicalOrigin: logicalOrigin,
           logicalEnd: logicalEnd,
+          sessionOrigin: sessionOrigin,
+          sessionEnd: _copyCoordinate(sessionRoute.coordinates.last),
         );
       }
 
@@ -614,19 +637,33 @@ class RouteService {
         mode: mode,
         avoidHighways: avoidHighways,
       );
+      final returnLeg = await _buildReturnLegIfNeeded(
+        sessionOrigin: sessionOrigin,
+        followOnRoute: followOnRoute,
+        mode: mode,
+        avoidHighways: avoidHighways,
+        enabled: returnToSessionOrigin,
+      );
+      final sessionRoute = returnLeg == null
+          ? followOnRoute
+          : _mergeRouteSegments([followOnRoute, returnLeg]);
       final activeRoute = _mergeAccessAndFollowOnRoutes(
         accessLeg: accessLeg,
-        followOnRoute: followOnRoute,
+        followOnRoute: sessionRoute,
       );
 
       return RouteAccessPlan(
         originalRoute: existingRoute,
         activeRoute: activeRoute,
         followOnRoute: followOnRoute,
+        sessionRoute: sessionRoute,
         accessLeg: accessLeg,
+        returnLeg: returnLeg,
         joinPoint: joinPoint,
         logicalOrigin: logicalOrigin,
         logicalEnd: logicalEnd,
+        sessionOrigin: sessionOrigin,
+        sessionEnd: _copyCoordinate(activeRoute.coordinates.last),
       );
     });
   }
@@ -935,30 +972,81 @@ class RouteService {
     required String mode,
     required bool avoidHighways,
   }) async {
+    return _requestDirectLegToCoordinate(
+      startPosition: currentPosition,
+      destinationCoordinate: joinPoint.coordinate,
+      mode: mode,
+      avoidHighways: avoidHighways,
+      variantIndex: joinPoint.index,
+      variantHint: 'access',
+      fingerprintHint: 'join_${joinPoint.index}',
+      candidateBudget: 3,
+    );
+  }
+
+  Future<RouteResult?> _buildReturnLegIfNeeded({
+    required List<double> sessionOrigin,
+    required RouteResult followOnRoute,
+    required String mode,
+    required bool avoidHighways,
+    required bool enabled,
+  }) async {
+    if (!enabled || followOnRoute.coordinates.length < 2) return null;
+    final endCoordinate = followOnRoute.coordinates.last;
+    final distanceToSessionOrigin = _distanceBetweenCoordinates(
+      endCoordinate,
+      sessionOrigin,
+    );
+    if (distanceToSessionOrigin <= 90.0) return null;
+
+    final startPosition = _positionFromCoordinate(endCoordinate);
+    return _requestDirectLegToCoordinate(
+      startPosition: startPosition,
+      destinationCoordinate: sessionOrigin,
+      mode: mode,
+      avoidHighways: avoidHighways,
+      variantIndex: followOnRoute.coordinates.length,
+      variantHint: 'return',
+      fingerprintHint:
+          'return_${(sessionOrigin[1] * 10000).round()}_${(sessionOrigin[0] * 10000).round()}',
+      candidateBudget: 3,
+    );
+  }
+
+  Future<RouteResult> _requestDirectLegToCoordinate({
+    required geo.Position startPosition,
+    required List<double> destinationCoordinate,
+    required String mode,
+    required bool avoidHighways,
+    required int variantIndex,
+    required String variantHint,
+    required String fingerprintHint,
+    required int candidateBudget,
+  }) async {
     final directDistanceKm = math.max(
       geo.Geolocator.distanceBetween(
-            currentPosition.latitude,
-            currentPosition.longitude,
-            joinPoint.coordinate[1],
-            joinPoint.coordinate[0],
+            startPosition.latitude,
+            startPosition.longitude,
+            destinationCoordinate[1],
+            destinationCoordinate[0],
           ) /
           1000.0,
       0.4,
     );
     final styleConfig = RouteStyleConfig.forMode(mode);
     final variant = RouteVariant(
-      index: joinPoint.index,
+      index: variantIndex,
       seed: _nextRandomSeed(),
       angleOffset: 0,
       radiusJitter: 0,
       offsetBearing: 0,
-      fingerprintHint: 'join_${joinPoint.index}',
-      variantHint: 'access',
+      fingerprintHint: fingerprintHint,
+      variantHint: variantHint,
     );
     final request = _buildPointToPointRequest(
-      startPosition: currentPosition,
-      destinationLat: joinPoint.coordinate[1],
-      destinationLng: joinPoint.coordinate[0],
+      startPosition: startPosition,
+      destinationLat: destinationCoordinate[1],
+      destinationLng: destinationCoordinate[0],
       mode: 'Standard',
       scenic: false,
       normalizedVariant: 0,
@@ -967,14 +1055,14 @@ class RouteService {
       targetDistanceKm: directDistanceKm,
       detourFactor: 1.0,
       variant: variant,
-      // Access-Leg ist sicherheitskritisch — lieber 3 Pläne testen,
-      // als dem User ein Luftlinien-Fragment zu zeigen.
-      candidateBudget: 3,
+      // Access-/Return-Legs sind sicherheitskritisch — lieber wenige echte
+      // Straßenpläne testen, als dem User ein Luftlinien-Fragment zu zeigen.
+      candidateBudget: candidateBudget,
     );
 
     try {
       final route = await _invoke(request);
-      final snapped = _snapRouteToStartPosition(route, currentPosition);
+      final snapped = _snapRouteToStartPosition(route, startPosition);
       return _filteredRouteResult(snapped);
     } on RouteServiceException catch (e) {
       // Bei avoidHighways=true: relax retry ohne Excludes — der Access-Leg
@@ -986,19 +1074,37 @@ class RouteService {
       final relaxRequest = Map<String, dynamic>.from(request);
       relaxRequest['avoid_highways'] = false;
       final relaxRoute = await _invoke(relaxRequest);
-      final snapped = _snapRouteToStartPosition(relaxRoute, currentPosition);
+      final snapped = _snapRouteToStartPosition(relaxRoute, startPosition);
       return _filteredRouteResult(snapped);
     }
   }
 
-  RouteResult _sliceRouteFromIndex(RouteResult route, int startIndex) {
+  RouteResult _sliceRouteFromIndex(
+    RouteResult route,
+    int startIndex, {
+    bool wrapClosedLoop = false,
+  }) {
     final clampedStart = startIndex
         .clamp(0, math.max(0, route.coordinates.length - 2))
         .toInt();
-    final slicedCoordinates = route.coordinates
-        .sublist(clampedStart)
-        .map(_copyCoordinate)
-        .toList(growable: false);
+    final shouldWrap =
+        wrapClosedLoop &&
+        clampedStart > 0 &&
+        _isClosedLoopCoordinates(route.coordinates);
+    final slicedCoordinates = shouldWrap
+        ? <List<double>>[
+            ...route.coordinates.sublist(clampedStart).map(_copyCoordinate),
+            ...route.coordinates
+                .sublist(
+                  1,
+                  math.min(clampedStart + 1, route.coordinates.length),
+                )
+                .map(_copyCoordinate),
+          ]
+        : route.coordinates
+              .sublist(clampedStart)
+              .map(_copyCoordinate)
+              .toList(growable: false);
     final geometry = <String, dynamic>{
       'type': 'LineString',
       'coordinates': slicedCoordinates,
@@ -1010,27 +1116,37 @@ class RouteService {
         route.durationSeconds != null && sourceDistanceMeters > 0
         ? route.durationSeconds! * (distanceMeters / sourceDistanceMeters)
         : route.durationSeconds;
-    final maneuvers = route.maneuvers
-        .where((maneuver) => maneuver.routeIndex >= clampedStart)
-        .map(
-          (maneuver) => _copyManeuver(
-            maneuver,
-            routeIndex: math.max(0, maneuver.routeIndex - clampedStart).toInt(),
-          ),
-        )
-        .toList(growable: false);
-    final speedLimits = route.speedLimits
-        .where((segment) => segment.endIndex >= clampedStart)
-        .map((segment) {
-          final start = math.max(0, segment.startIndex - clampedStart).toInt();
-          final end = math.max(start, segment.endIndex - clampedStart).toInt();
-          return SpeedLimitSegment(
-            startIndex: start,
-            endIndex: end,
-            speedKmh: segment.speedKmh,
-          );
-        })
-        .toList(growable: false);
+    final maneuvers = shouldWrap
+        ? const <RouteManeuver>[]
+        : route.maneuvers
+              .where((maneuver) => maneuver.routeIndex >= clampedStart)
+              .map(
+                (maneuver) => _copyManeuver(
+                  maneuver,
+                  routeIndex: math
+                      .max(0, maneuver.routeIndex - clampedStart)
+                      .toInt(),
+                ),
+              )
+              .toList(growable: false);
+    final speedLimits = shouldWrap
+        ? const <SpeedLimitSegment>[]
+        : route.speedLimits
+              .where((segment) => segment.endIndex >= clampedStart)
+              .map((segment) {
+                final start = math
+                    .max(0, segment.startIndex - clampedStart)
+                    .toInt();
+                final end = math
+                    .max(start, segment.endIndex - clampedStart)
+                    .toInt();
+                return SpeedLimitSegment(
+                  startIndex: start,
+                  endIndex: end,
+                  speedKmh: segment.speedKmh,
+                );
+              })
+              .toList(growable: false);
 
     return _filteredRouteResult(
       RouteResult(
@@ -1050,60 +1166,71 @@ class RouteService {
     required RouteResult accessLeg,
     required RouteResult followOnRoute,
   }) {
-    final accessCoordinates = accessLeg.coordinates
-        .map(_copyCoordinate)
-        .toList(growable: true);
-    final followCoordinates = followOnRoute.coordinates
-        .map(_copyCoordinate)
-        .toList(growable: true);
+    return _mergeRouteSegments([accessLeg, followOnRoute]);
+  }
 
-    if (followCoordinates.isNotEmpty &&
-        accessCoordinates.isNotEmpty &&
-        _distanceBetweenCoordinates(
-              accessCoordinates.last,
-              followCoordinates.first,
-            ) <=
-            30.0) {
-      followCoordinates.removeAt(0);
+  RouteResult _mergeRouteSegments(List<RouteResult> segments) {
+    final nonEmptySegments = segments
+        .where((segment) => segment.coordinates.length >= 2)
+        .toList(growable: false);
+    if (nonEmptySegments.isEmpty) {
+      throw const RouteServiceException(
+        type: RouteErrorType.validation,
+        userMessage: 'Die zusammengesetzte Route ist unvollständig.',
+        debugMessage: 'Cannot merge empty route segments.',
+      );
     }
 
-    final combinedCoordinates = <List<double>>[
-      ...accessCoordinates,
-      ...followCoordinates,
-    ];
-    final followOffset = math.max(0, accessCoordinates.length - 1);
-    final combinedManeuvers = <RouteManeuver>[
-      ...accessLeg.maneuvers.map(
-        (maneuver) => _copyManeuver(maneuver, routeIndex: maneuver.routeIndex),
-      ),
-      ...followOnRoute.maneuvers.map(
-        (maneuver) => _copyManeuver(
-          maneuver,
-          routeIndex: maneuver.routeIndex + followOffset,
+    final combinedCoordinates = <List<double>>[];
+    final combinedManeuvers = <RouteManeuver>[];
+    final combinedSpeedLimits = <SpeedLimitSegment>[];
+    var routeIndexOffset = 0;
+    var distanceMeters = 0.0;
+    var durationSeconds = 0.0;
+
+    for (final segment in nonEmptySegments) {
+      final coordinates = segment.coordinates
+          .map(_copyCoordinate)
+          .toList(growable: true);
+      if (combinedCoordinates.isNotEmpty &&
+          coordinates.isNotEmpty &&
+          _distanceBetweenCoordinates(
+                combinedCoordinates.last,
+                coordinates.first,
+              ) <=
+              30.0) {
+        coordinates.removeAt(0);
+      }
+
+      combinedCoordinates.addAll(coordinates);
+      combinedManeuvers.addAll(
+        segment.maneuvers.map(
+          (maneuver) => _copyManeuver(
+            maneuver,
+            routeIndex: maneuver.routeIndex + routeIndexOffset,
+          ),
         ),
-      ),
-    ];
-    final combinedSpeedLimits = <SpeedLimitSegment>[
-      ...accessLeg.speedLimits,
-      ...followOnRoute.speedLimits.map(
-        (segment) => SpeedLimitSegment(
-          startIndex: segment.startIndex + followOffset,
-          endIndex: segment.endIndex + followOffset,
-          speedKmh: segment.speedKmh,
+      );
+      combinedSpeedLimits.addAll(
+        segment.speedLimits.map(
+          (speedLimit) => SpeedLimitSegment(
+            startIndex: speedLimit.startIndex + routeIndexOffset,
+            endIndex: speedLimit.endIndex + routeIndexOffset,
+            speedKmh: speedLimit.speedKmh,
+          ),
         ),
-      ),
-    ];
+      );
+      distanceMeters +=
+          segment.distanceMeters ??
+          _distanceAlongCoordinates(segment.coordinates);
+      durationSeconds += segment.durationSeconds ?? 0.0;
+      routeIndexOffset = math.max(0, combinedCoordinates.length - 1);
+    }
+
     final geometry = <String, dynamic>{
       'type': 'LineString',
       'coordinates': combinedCoordinates,
     };
-    final distanceMeters =
-        (accessLeg.distanceMeters ??
-            _distanceAlongCoordinates(accessLeg.coordinates)) +
-        (followOnRoute.distanceMeters ??
-            _distanceAlongCoordinates(followOnRoute.coordinates));
-    final durationSeconds =
-        (accessLeg.durationSeconds ?? 0) + (followOnRoute.durationSeconds ?? 0);
 
     return _filteredRouteResult(
       RouteResult(
@@ -1117,6 +1244,27 @@ class RouteService {
         speedLimits: combinedSpeedLimits,
       ),
     );
+  }
+
+  geo.Position _positionFromCoordinate(List<double> coordinate) {
+    return geo.Position(
+      latitude: coordinate[1],
+      longitude: coordinate[0],
+      timestamp: DateTime.now(),
+      accuracy: 5,
+      altitude: 0,
+      altitudeAccuracy: 0,
+      heading: 0,
+      headingAccuracy: 5,
+      speed: 0,
+      speedAccuracy: 1,
+    );
+  }
+
+  bool _isClosedLoopCoordinates(List<List<double>> coordinates) {
+    if (coordinates.length < 3) return false;
+    return _distanceBetweenCoordinates(coordinates.first, coordinates.last) <=
+        90.0;
   }
 
   RouteResult _filteredRouteResult(RouteResult result) {

@@ -1728,14 +1728,13 @@ class _CruiseModePageState extends State<CruiseModePage>
         existingRoute: sourceRoute,
         mode: 'Standard',
         avoidHighways: _activeAvoidHighways,
+        returnToSessionOrigin: _isRoundTrip,
       );
     } catch (e) {
       // Access-Leg konnte nicht geroutet werden — KEIN Luftlinien-Fallback.
       // Lieber dem User klar sagen, dass er erst zum Routenstart muss, als
       // eine sichtbar kaputte Route mit Luftlinien-Sprung anzuzeigen.
-      debugPrint(
-        '[CruiseMode] Access-Leg konnte nicht generiert werden: $e',
-      );
+      debugPrint('[CruiseMode] Access-Leg konnte nicht generiert werden: $e');
       if (mounted) {
         final message = e is RouteServiceException
             ? e.userMessage
@@ -1748,8 +1747,8 @@ class _CruiseModePageState extends State<CruiseModePage>
     if (!accessPlan.hasAccessLeg) {
       if (accessPlan.joinPoint.index > 0) {
         await _commitRerouteResult(
-          result: accessPlan.followOnRoute,
-          sessionRouteResult: accessPlan.followOnRoute,
+          result: accessPlan.sessionRoute,
+          sessionRouteResult: accessPlan.sessionRoute,
           position: position,
         );
         _safeSetState(() {
@@ -1763,7 +1762,7 @@ class _CruiseModePageState extends State<CruiseModePage>
 
     await _commitRerouteResult(
       result: accessPlan.activeRoute,
-      sessionRouteResult: accessPlan.followOnRoute,
+      sessionRouteResult: accessPlan.activeRoute,
       position: position,
     );
 
@@ -1771,15 +1770,15 @@ class _CruiseModePageState extends State<CruiseModePage>
         .max(
           1,
           accessPlan.activeRoute.coordinates.length -
-              accessPlan.followOnRoute.coordinates.length,
+              accessPlan.sessionRoute.coordinates.length,
         )
         .clamp(1, math.max(1, accessPlan.activeRoute.coordinates.length - 1))
         .toInt();
     _safeSetState(() {
       _isAccessLegActive = true;
       _accessLegJoinIndex = joinIndexInMergedRoute;
-      _sessionRouteStartIndexInActiveRoute = joinIndexInMergedRoute;
-      _accessLegMainRouteResult = accessPlan.followOnRoute;
+      _sessionRouteStartIndexInActiveRoute = 0;
+      _accessLegMainRouteResult = accessPlan.sessionRoute;
       _totalDistanceDriven = 0.0;
     });
 
@@ -1971,7 +1970,16 @@ class _CruiseModePageState extends State<CruiseModePage>
       math.min(windowEnd, result.coordinates.length),
     );
     if (routeSlice.isNotEmpty) {
-      routeSlice[0] = [position.longitude, position.latitude];
+      final first = routeSlice.first;
+      final distanceToFirst = geo.Geolocator.distanceBetween(
+        position.latitude,
+        position.longitude,
+        first[1],
+        first[0],
+      );
+      if (distanceToFirst <= 35.0) {
+        routeSlice[0] = [position.longitude, position.latitude];
+      }
     }
 
     _remainingRouteCoordinates = routeSlice;
@@ -2885,7 +2893,8 @@ class _CruiseModePageState extends State<CruiseModePage>
         _safeSetState(() {
           _isAccessLegActive = true;
           _accessLegJoinIndex = joinIndexInMergedRoute;
-          _sessionRouteStartIndexInActiveRoute = joinIndexInMergedRoute;
+          _sessionRouteStartIndexInActiveRoute = 0;
+          _sessionRouteResult = finalResult;
           _accessLegMainRouteResult = sessionRouteResult;
           _totalDistanceDriven = 0.0;
         });
