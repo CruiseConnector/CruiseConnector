@@ -67,7 +67,7 @@ interface DistanceConfig {
     waypointRadiusMeters: number
 }
 
-type RouteQualityTier = 'ideal' | 'acceptable' | 'fallback' | 'reject'
+type RouteQualityTier = 'ideal' | 'good' | 'acceptable' | 'rejected'
 
 interface RouteQualityEvaluation {
     passed: boolean
@@ -1651,7 +1651,7 @@ function evaluateRouteQuality(
                 reason: `coords=${coordinateCount}`,
                 overlapPercent,
                 hasUTurn,
-                tier: 'reject',
+                tier: 'rejected',
                 score: 1000 + Math.max(0, 30 - coordinateCount),
                 coordinateCount,
                 actualDistanceKm,
@@ -1664,7 +1664,7 @@ function evaluateRouteQuality(
                 reason: 'u_turn',
                 overlapPercent,
                 hasUTurn,
-                tier: 'reject',
+                tier: 'rejected',
                 score: 1200,
                 coordinateCount,
                 actualDistanceKm,
@@ -1677,7 +1677,7 @@ function evaluateRouteQuality(
                 reason: `overlap=${overlapPercent.toFixed(1)}%`,
                 overlapPercent,
                 hasUTurn,
-                tier: 'reject',
+                tier: 'rejected',
                 score: 1100 + overlapPercent,
                 coordinateCount,
                 actualDistanceKm,
@@ -1690,7 +1690,7 @@ function evaluateRouteQuality(
                 reason: `hooks=${shapeSignals.hookCount}`,
                 overlapPercent,
                 hasUTurn,
-                tier: 'reject',
+                tier: 'rejected',
                 score: 1040 + shapeSignals.hookCount * 20,
                 coordinateCount,
                 actualDistanceKm,
@@ -1765,7 +1765,7 @@ function evaluateRouteQuality(
             reason: 'u_turn',
             overlapPercent,
             hasUTurn,
-            tier: 'reject',
+            tier: 'rejected',
             score: 1200,
             coordinateCount,
             actualDistanceKm,
@@ -1778,7 +1778,7 @@ function evaluateRouteQuality(
             reason: `coords=${coordinateCount}`,
             overlapPercent,
             hasUTurn,
-            tier: 'reject',
+            tier: 'rejected',
             score: 900 + Math.max(0, severeCoordinateThreshold - coordinateCount) * 8,
             coordinateCount,
             actualDistanceKm,
@@ -1791,7 +1791,7 @@ function evaluateRouteQuality(
             reason: `overlap=${overlapPercent.toFixed(1)}%`,
             overlapPercent,
             hasUTurn,
-            tier: 'reject',
+            tier: 'rejected',
             score: 900 + overlapPercent * 6,
             coordinateCount,
             actualDistanceKm,
@@ -1804,7 +1804,7 @@ function evaluateRouteQuality(
             reason: `hooks=${shapeSignals.hookCount}`,
             overlapPercent,
             hasUTurn,
-            tier: 'reject',
+            tier: 'rejected',
             score: 900 + shapeSignals.hookCount * 24,
             coordinateCount,
             actualDistanceKm,
@@ -1817,7 +1817,7 @@ function evaluateRouteQuality(
             reason: `center_return=${shapeSignals.centralReturnPercent.toFixed(1)}%`,
             overlapPercent,
             hasUTurn,
-            tier: 'reject',
+            tier: 'rejected',
             score: 920 + shapeSignals.centralReturnPercent * 8,
             coordinateCount,
             actualDistanceKm,
@@ -1834,7 +1834,7 @@ function evaluateRouteQuality(
             reason: `shape=branches:${shapeSignals.radialPeakCount}/reentry:${shapeSignals.centerReentryCount}/coverage:${shapeSignals.middleCoverageRatio.toFixed(2)}`,
             overlapPercent,
             hasUTurn,
-            tier: 'reject',
+            tier: 'rejected',
             score: 910 + branchPenalty,
             coordinateCount,
             actualDistanceKm,
@@ -1847,7 +1847,7 @@ function evaluateRouteQuality(
             reason: `distance=${actualDistanceKm.toFixed(1)}km`,
             overlapPercent,
             hasUTurn,
-            tier: 'reject',
+            tier: 'rejected',
             score:
                 910 +
                 distanceDeltaKm * 7 +
@@ -1858,7 +1858,7 @@ function evaluateRouteQuality(
         }
     }
 
-    let tier: RouteQualityTier = 'fallback'
+    let tier: RouteQualityTier = 'acceptable'
     if (
         withinIdealDistance &&
         idealOverlap &&
@@ -1884,7 +1884,7 @@ function evaluateRouteQuality(
         && shapeSignals.radialPeakCount <= 4
         && shapeSignals.middleCoverageRatio >= 0.34
     ) {
-        tier = 'acceptable'
+        tier = 'good'
     }
 
     const score =
@@ -1895,7 +1895,7 @@ function evaluateRouteQuality(
         shapeSignals.hookCount * 18 +
         shapeSignals.centralReturnPercent * 3.4 +
         branchPenalty +
-        (tier === 'ideal' ? 0 : tier === 'acceptable' ? 24 : 60) +
+        (tier === 'ideal' ? 0 : tier === 'good' ? 24 : 60) +
         (withinAcceptableDistance ? 0 : 45) +
         Math.max(0, 34 - coordinateCount) * 2
 
@@ -1904,9 +1904,9 @@ function evaluateRouteQuality(
         reason:
             tier === 'ideal'
                 ? 'ideal'
-                : tier === 'acceptable'
-                ? 'acceptable'
-                : `fallback(dist=${actualDistanceKm.toFixed(1)}km, overlap=${overlapPercent.toFixed(1)}%, rough=${shapeSignals.angularRoughness.toFixed(1)}, center=${shapeSignals.centralReturnPercent.toFixed(1)}%)`,
+                : tier === 'good'
+                ? 'good'
+                : `acceptable(dist=${actualDistanceKm.toFixed(1)}km, overlap=${overlapPercent.toFixed(1)}%, rough=${shapeSignals.angularRoughness.toFixed(1)}, center=${shapeSignals.centralReturnPercent.toFixed(1)}%)`,
         overlapPercent,
         hasUTurn,
         tier,
@@ -2198,7 +2198,7 @@ async function searchBestRoundTripRoute({
             })
 
             if (
-                quality.tier === 'reject' &&
+                quality.tier === 'rejected' &&
                 phase.exclude &&
                 phase.exclude.trim() !== '' &&
                 quality.reason.startsWith('overlap=') &&
@@ -2236,7 +2236,7 @@ async function searchBestRoundTripRoute({
                         `[RT] ${plan.label}: relaxed tier=${relaxedQuality.tier}, score=${relaxedQuality.score.toFixed(1)}, ` +
                         `distance=${relaxedQuality.actualDistanceKm.toFixed(1)}km, overlap=${relaxedQuality.overlapPercent.toFixed(1)}%, coords=${relaxedQuality.coordinateCount}`,
                     )
-                    if (relaxedQuality.tier !== 'reject' || relaxedQuality.score < quality.score) {
+                    if (relaxedQuality.tier !== 'rejected' || relaxedQuality.score < quality.score) {
                         route = relaxedFetch.route
                         quality = relaxedQuality
                     }
@@ -2248,7 +2248,7 @@ async function searchBestRoundTripRoute({
                 `distance=${quality.actualDistanceKm.toFixed(1)}km, overlap=${quality.overlapPercent.toFixed(1)}%, coords=${quality.coordinateCount}`,
             )
 
-            if (quality.tier === 'reject') {
+            if (quality.tier === 'rejected') {
                 rejectedCandidates += 1
                 registerReject(quality.reason)
                 continue
@@ -2266,7 +2266,7 @@ async function searchBestRoundTripRoute({
                 candidateAttempts >= (highCostCurveSearch ? 3 : 4) &&
                 (
                     quality.tier === 'ideal' ||
-                    (quality.tier === 'acceptable' && phaseAcceptedCandidates >= 1) ||
+                    quality.tier === 'good' ||
                     (
                         phase.name === 'fallback' &&
                         phaseAcceptedCandidates >= 2 &&
@@ -2291,7 +2291,7 @@ async function searchBestRoundTripRoute({
         if (bestQuality?.tier === 'ideal') {
             break
         }
-        if (phaseAcceptedCandidates > 0 && bestQuality?.tier === 'acceptable') {
+        if (phaseAcceptedCandidates > 0 && bestQuality?.tier === 'good') {
             break
         }
     }

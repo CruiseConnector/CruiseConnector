@@ -216,7 +216,7 @@ class RouteService {
               bestCandidate = candidate;
               bestScore = candidate.score;
             }
-            if (candidate.accepted && candidate.isIdeal) {
+            if (candidate.accepted && (candidate.isIdeal || candidate.isGood)) {
               break;
             }
           } catch (e, stack) {
@@ -461,7 +461,7 @@ class RouteService {
               bestCandidate = candidate;
               bestScore = candidate.score;
             }
-            if (candidate.accepted && candidate.isIdeal) {
+            if (candidate.accepted && (candidate.isIdeal || candidate.isGood)) {
               break;
             }
           } catch (e, stack) {
@@ -1924,6 +1924,7 @@ class RouteService {
       'distance=${actualDistanceKm.toStringAsFixed(1)}km, '
       'overlap=${quality.overlapPercent.toStringAsFixed(1)}%, '
       'shape=${quality.shapePenalty.toStringAsFixed(1)}, '
+      'tier=${classification.tier.name}, '
       'styleFit=${styleFitScore.toStringAsFixed(1)}, '
       'styleOk=$styleOk/$styleSoftOk, '
       'uturns=${quality.uturnPositions.length}, tooSimilar=$tooSimilar, '
@@ -1939,6 +1940,7 @@ class RouteService {
       accepted: accepted,
       hardRejected: !softRenderable,
       isIdeal: classification.isIdeal,
+      isGood: classification.isGood,
       styleFitScore: styleFitScore,
     );
   }
@@ -2054,7 +2056,12 @@ class RouteService {
                 styleConfig: styleConfig,
                 startPosition: startPosition,
                 variant: variant,
-                candidateBudget: 2,
+                candidateBudget:
+                    scenario.avoidHighways ||
+                        (styleConfig.profileKey == 'kurvenjagd' &&
+                            (scenario.targetDistanceKm ?? 50.0) <= 60)
+                    ? 4
+                    : 3,
               );
               if (!candidate.accepted) return;
               PreparedRouteBuffer.store(
@@ -2107,9 +2114,9 @@ class RouteService {
               final targetDistanceKm =
                   scenario.targetDistanceKm ?? directDistanceKm;
               final detourFactor = switch (scenario.detourLevel) {
-                1 => 1.24,
-                2 => 1.52,
-                3 => 1.92,
+                1 => 1.32,
+                2 => 1.65,
+                3 => 2.10,
                 _ => 1.15,
               };
               final candidate = await _requestPointToPointVariant(
@@ -2125,7 +2132,7 @@ class RouteService {
                 targetDistanceKm: targetDistanceKm,
                 detourFactor: detourFactor,
                 variant: variant,
-                candidateBudget: 2,
+                candidateBudget: scenario.detourLevel >= 2 ? 3 : 2,
               );
               if (!candidate.accepted) return;
               PreparedRouteBuffer.store(
@@ -3653,6 +3660,7 @@ class _RouteCandidate {
     required this.accepted,
     required this.hardRejected,
     required this.isIdeal,
+    required this.isGood,
     required this.styleFitScore,
   });
 
@@ -3664,6 +3672,7 @@ class _RouteCandidate {
   final bool accepted;
   final bool hardRejected;
   final bool isIdeal;
+  final bool isGood;
   final double styleFitScore;
 }
 

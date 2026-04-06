@@ -88,7 +88,7 @@ class RouteQualityResult {
   }
 }
 
-enum RouteQualityTier { ideal, acceptable, poor }
+enum RouteQualityTier { ideal, good, acceptable, rejected }
 
 class RouteQualityClassification {
   const RouteQualityClassification({required this.tier, required this.score});
@@ -97,7 +97,10 @@ class RouteQualityClassification {
   final double score;
 
   bool get isIdeal => tier == RouteQualityTier.ideal;
-  bool get isAcceptable => tier != RouteQualityTier.poor;
+  bool get isGood =>
+      tier == RouteQualityTier.ideal || tier == RouteQualityTier.good;
+  bool get isAcceptable => tier != RouteQualityTier.rejected;
+  bool get isRejected => tier == RouteQualityTier.rejected;
 }
 
 /// Prüft die Qualität einer generierten Route.
@@ -403,7 +406,8 @@ class RouteQualityValidator {
     final acceptableDistanceOk = targetDistanceKm <= 0
         ? true
         : distanceDeltaPercent <=
-              (roundTripDistanceTolerance(targetDistanceKm) + 0.08);
+              (roundTripDistanceTolerance(targetDistanceKm) +
+                  (isRoundTrip ? 0.12 : 0.08));
 
     final idealOverlap = isRoundTrip
         ? roundTripMaxOverlapPercent
@@ -445,13 +449,12 @@ class RouteQualityValidator {
     // wiederholtes Reentry. Tal-Loops (z.B. Dornbirn: Tal hoch → Pass →
     // Parallel-Tal zurück) haben natürlich centerReentryCount=2, ohne
     // Stern-Charakter — wir verlangen daher ≥3 Reentries oder ≥4 Peaks
-    // mit ≥2 Reentries, sonst landet jede legitime Bergroute in poor.
+    // mit ≥2 Reentries, sonst landet jede legitime Bergroute in rejected.
     // spurArm/repeatedStart bleibt der hard reject für echte Kraken.
     final severeRoundTripShape =
         isRoundTrip &&
         ((quality.centerReentryCount >= 3) ||
-            (quality.radialPeakCount >= 4 &&
-                quality.centerReentryCount >= 2) ||
+            (quality.radialPeakCount >= 4 && quality.centerReentryCount >= 2) ||
             (quality.spurArmPercent >= 65.0 &&
                 quality.repeatedStartAreaPercent >= 35.0) ||
             (quality.middleCoverageRatio < 0.22 &&
@@ -469,7 +472,7 @@ class RouteQualityValidator {
         severeRoundTripShape ||
         severePointShape) {
       return RouteQualityClassification(
-        tier: RouteQualityTier.poor,
+        tier: RouteQualityTier.rejected,
         score: score + 90,
       );
     }
@@ -481,9 +484,34 @@ class RouteQualityValidator {
         quality.repeatedStartAreaPercent > (isRoundTrip ? 62.0 : 72.0) ||
         quality.microZigzagPercent > (isRoundTrip ? 48.0 : 54.0) ||
         quality.shapePenalty > (isRoundTrip ? 62.0 : 42.0)) {
+      final hasHardDistanceMiss =
+          targetDistanceKm > 0 &&
+          distanceDeltaPercent >
+              (roundTripDistanceTolerance(targetDistanceKm) +
+                  (isRoundTrip ? 0.18 : 0.12));
+      final hasSevereSoftShape =
+          quality.foldedAreaPenalty > (isRoundTrip ? 90.0 : 94.0) ||
+          quality.repeatedStartAreaPercent > (isRoundTrip ? 74.0 : 82.0) ||
+          quality.microZigzagPercent > (isRoundTrip ? 62.0 : 66.0) ||
+          quality.shapePenalty > (isRoundTrip ? 82.0 : 58.0);
+      final hasInsufficientGeometry =
+          coordinateCount <
+          math.max(8, (acceptableMinCoordinates * 0.65).floor());
+
+      final hardOverlapLimit = isRoundTrip ? 52.0 : acceptableOverlap + 8.0;
+      if (hasInsufficientGeometry ||
+          quality.overlapPercent > hardOverlapLimit ||
+          hasHardDistanceMiss ||
+          hasSevereSoftShape) {
+        return RouteQualityClassification(
+          tier: RouteQualityTier.rejected,
+          score: score + 24,
+        );
+      }
+
       return RouteQualityClassification(
-        tier: RouteQualityTier.poor,
-        score: score + 24,
+        tier: RouteQualityTier.acceptable,
+        score: score + 18,
       );
     }
 
@@ -506,6 +534,26 @@ class RouteQualityValidator {
       return RouteQualityClassification(
         tier: RouteQualityTier.ideal,
         score: score,
+      );
+    }
+
+    final goodDistanceOk = targetDistanceKm <= 0
+        ? true
+        : distanceDeltaPercent <=
+              (roundTripDistanceTolerance(targetDistanceKm) + 0.04);
+    final goodShapeOk =
+        quality.overlapPercent <= idealOverlap + (isRoundTrip ? 6.0 : 4.0) &&
+        goodDistanceOk &&
+        (!isRoundTrip || quality.returnPathPercent <= idealReturnPath + 10.0) &&
+        quality.shapePenalty <= (isRoundTrip ? 34.0 : 26.0) &&
+        quality.foldedAreaPenalty <= (isRoundTrip ? 56.0 : 68.0) &&
+        quality.repeatedStartAreaPercent <= (isRoundTrip ? 38.0 : 46.0) &&
+        quality.microZigzagPercent <= 34.0 &&
+        quality.dominantLoopScore >= (isRoundTrip ? 46.0 : 36.0);
+    if (coordinateCount >= acceptableMinCoordinates && goodShapeOk) {
+      return RouteQualityClassification(
+        tier: RouteQualityTier.good,
+        score: score + 2,
       );
     }
 

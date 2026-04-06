@@ -331,9 +331,72 @@ void main() {
         );
 
         expect(classification.isAcceptable, isTrue);
-        expect(classification.tier, isNot(RouteQualityTier.poor));
+        expect(classification.tier, isNot(RouteQualityTier.rejected));
       },
     );
+
+    test(
+      'brauchbarer Edge-Fallback mit erhoehtem Overlap bleibt akzeptabel',
+      () {
+        const quality = RouteQualityResult(
+          overlapPercent: 45.1,
+          uturnPositions: [],
+          isLoopClosed: true,
+          distanceInTolerance: true,
+          passed: true,
+          returnPathPercent: 9.0,
+          actualDistanceKm: 49.4,
+          targetDistanceKm: 50.0,
+          centerReentryCount: 1,
+          middleCoverageRatio: 0.36,
+          shapePenalty: 34.0,
+          foldedAreaPenalty: 50.0,
+          repeatedStartAreaPercent: 34.0,
+          microZigzagPercent: 22.0,
+          dominantLoopScore: 44.0,
+        );
+
+        final classification = validator.classifyGeneratedRoute(
+          quality: quality,
+          isRoundTrip: true,
+          coordinateCount: 3200,
+          actualDistanceKm: 49.4,
+          targetDistanceKm: 50.0,
+        );
+
+        expect(classification.tier, RouteQualityTier.acceptable);
+      },
+    );
+
+    test('extremer Rundkurs-Overlap bleibt rejected', () {
+      const quality = RouteQualityResult(
+        overlapPercent: 55.0,
+        uturnPositions: [],
+        isLoopClosed: true,
+        distanceInTolerance: true,
+        passed: false,
+        returnPathPercent: 9.0,
+        actualDistanceKm: 49.4,
+        targetDistanceKm: 50.0,
+        centerReentryCount: 1,
+        middleCoverageRatio: 0.36,
+        shapePenalty: 34.0,
+        foldedAreaPenalty: 50.0,
+        repeatedStartAreaPercent: 34.0,
+        microZigzagPercent: 22.0,
+        dominantLoopScore: 44.0,
+      );
+
+      final classification = validator.classifyGeneratedRoute(
+        quality: quality,
+        isRoundTrip: true,
+        coordinateCount: 3200,
+        actualDistanceKm: 49.4,
+        targetDistanceKm: 50.0,
+      );
+
+      expect(classification.tier, RouteQualityTier.rejected);
+    });
 
     test('klar fehlerhafte Rundkurs-Geometrie bleibt schlecht', () {
       final coords = [
@@ -358,7 +421,7 @@ void main() {
         targetDistanceKm: 50.0,
       );
 
-      expect(classification.tier, RouteQualityTier.poor);
+      expect(classification.tier, RouteQualityTier.rejected);
     });
   });
 
@@ -496,23 +559,27 @@ void main() {
         actualDistanceKm: 50.0,
       );
 
-      final sportScore = validator.classifyGeneratedRoute(
-        quality: quality,
-        isRoundTrip: true,
-        coordinateCount: coords.length,
-        actualDistanceKm: 50.0,
-        targetDistanceKm: 50.0,
-        styleProfileKey: 'sport',
-      ).score;
+      final sportScore = validator
+          .classifyGeneratedRoute(
+            quality: quality,
+            isRoundTrip: true,
+            coordinateCount: coords.length,
+            actualDistanceKm: 50.0,
+            targetDistanceKm: 50.0,
+            styleProfileKey: 'sport',
+          )
+          .score;
 
-      final entdeckerScore = validator.classifyGeneratedRoute(
-        quality: quality,
-        isRoundTrip: true,
-        coordinateCount: coords.length,
-        actualDistanceKm: 50.0,
-        targetDistanceKm: 50.0,
-        styleProfileKey: 'entdecker',
-      ).score;
+      final entdeckerScore = validator
+          .classifyGeneratedRoute(
+            quality: quality,
+            isRoundTrip: true,
+            coordinateCount: coords.length,
+            actualDistanceKm: 50.0,
+            targetDistanceKm: 50.0,
+            styleProfileKey: 'entdecker',
+          )
+          .score;
 
       // Sport sollte Zigzag stärker bestrafen als Entdecker
       expect(sportScore, greaterThan(entdeckerScore));
@@ -527,6 +594,7 @@ double _cos(double x) {
   x = x % (2 * 3.14159);
   return 1 - x * x / 2 + x * x * x * x / 24;
 }
+
 double _sin(double x) {
   x = x % (2 * 3.14159);
   return x - x * x * x / 6 + x * x * x * x * x / 120;
