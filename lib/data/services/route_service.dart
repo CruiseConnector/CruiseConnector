@@ -266,6 +266,16 @@ class RouteService {
           return fallback;
         }
 
+        final rescueFallback = await _tryRoundTripRescueFallback(
+          scenario: scenario,
+          styleConfig: styleConfig,
+          startPosition: startPosition,
+          targetLocation: targetLocation,
+        );
+        if (rescueFallback != null) {
+          return rescueFallback;
+        }
+
         final cached = await _loadCachedRoute(
           scenarioKey: scenario.scenarioKey,
         );
@@ -1620,6 +1630,7 @@ class RouteService {
     required RouteResult route,
     required RouteVariant variant,
     double? directDistanceKm,
+    bool relaxedRoundTrip = false,
   }) {
     final actualDistanceKm = route.distanceKm ?? 0.0;
     final sampledCoordinates = _sampleRouteForSimilarity(route.coordinates);
@@ -1692,8 +1703,20 @@ class RouteService {
         ? true
         : actualDistanceKm >= pointToPointMinDistance &&
               actualDistanceKm <= pointToPointMaxDistance;
+    final rescueRoundTripAcceptable =
+        relaxedRoundTrip &&
+        scenario.isRoundTrip &&
+        quality.isLoopClosed &&
+        quality.uturnPositions.isEmpty &&
+        quality.overlapPercent <= 34.0 &&
+        quality.returnPathPercent <=
+            RouteQualityValidator.maxReturnPathPercent + 8.0 &&
+        quality.shapePenalty <= 82.0 &&
+        quality.foldedAreaPenalty <= 92.0 &&
+        quality.repeatedStartAreaPercent <= 72.0 &&
+        quality.microZigzagPercent <= 58.0;
     final qualityAcceptable = scenario.isRoundTrip
-        ? classification.isAcceptable
+        ? classification.isAcceptable || rescueRoundTripAcceptable
         : quality.passed || classification.isAcceptable;
     final softRenderable =
         hasEnoughPoints && detourDistanceOk && !tooSimilar && qualityAcceptable;
@@ -1703,7 +1726,13 @@ class RouteService {
             styleFitScore >= styleConfig.minStyleFitScore - 12.0 &&
             quality.shapePenalty <= 72.0 &&
             quality.foldedAreaPenalty <= 84.0 &&
-            quality.microZigzagPercent <= 52.0);
+            quality.microZigzagPercent <= 52.0) ||
+        (relaxedRoundTrip &&
+            scenario.isRoundTrip &&
+            styleFitScore >= styleConfig.minStyleFitScore - 24.0 &&
+            quality.shapePenalty <= 82.0 &&
+            quality.foldedAreaPenalty <= 92.0 &&
+            quality.microZigzagPercent <= 58.0);
     final accepted = softRenderable && styleSoftOk;
     final score =
         classification.score +
@@ -2016,6 +2045,128 @@ class RouteService {
       );
     } catch (e) {
       debugPrint('[RouteService] Rundkurs-Fallback fehlgeschlagen: $e');
+      return null;
+    }
+  }
+
+  Future<RouteResult?> _tryRoundTripRescueFallback({
+    required RouteScenario scenario,
+    required RouteStyleConfig styleConfig,
+    required geo.Position startPosition,
+    Map<String, double>? targetLocation,
+  }) async {
+    if (_isInWorkerLimitCooldown()) return null;
+
+    final sameStyle = await _requestRoundTripRescueVariant(
+      scenario: scenario,
+      requestStyleConfig: styleConfig,
+      startPosition: startPosition,
+      mode: scenario.style,
+      planningType: scenario.planningType,
+      targetLocation: targetLocation,
+      avoidHighways: scenario.avoidHighways,
+      candidateBudget: scenario.avoidHighways ? 8 : 7,
+      targetFactor: 0.96,
+      label: 'same-style',
+    );
+    if (sameStyle != null) return sameStyle;
+
+    // Letzter kontrollierter Rescue-Schritt: Wenn ein harter Stilfilter oder
+    // Highway-Ausschluss normale Rundkurse blockiert, versuchen wir eine
+    // einfache Sport-Loop-Variante. Das verändert nicht den UI-Modus, sondern
+    // verhindert nur, dass normale Gegenden im No-Route-Endzustand landen.
+    if (scenario.avoidHighways || styleConfig.profileKey != 'sport') {
+      final sportStyle = RouteStyleConfig.forMode('Sport Mode');
+      return _requestRoundTripRescueVariant(
+        scenario: scenario,
+        requestStyleConfig: sportStyle,
+        startPosition: startPosition,
+        mode: scenario.style,
+        planningType: scenario.planningType,
+        targetLocation: targetLocation,
+        avoidHighways: false,
+        candidateBudget: 8,
+        targetFactor: 0.94,
+        label: 'sport-relaxed',
+      );
+    }
+
+    return null;
+  }
+
+  Future<RouteResult?> _requestRoundTripRescueVariant({
+    required RouteScenario scenario,
+    required RouteStyleConfig requestStyleConfig,
+    required geo.Position startPosition,
+    required String mode,
+    required String planningType,
+    required bool avoidHighways,
+    required int candidateBudget,
+    required double targetFactor,
+    required String label,
+    Map<String, double>? targetLocation,
+  }) async {
+    try {
+      final variant = await _nextRoundTripVariant(
+        scenario,
+        styleConfig: requestStyleConfig,
+      );
+      final rawTarget = math.max(
+        25.0,
+        (scenario.targetDistanceKm ?? 50.0) * targetFactor,
+      );
+      final targetKm = requestStyleConfig
+          .clampRoundTripDistanceKm(rawTarget.round())
+          .round();
+      final body = _buildRoundTripRequest(
+        startPosition: startPosition,
+        targetDistanceKm: targetKm,
+        mode: mode,
+        planningType: planningType,
+        styleConfig: requestStyleConfig,
+        variant: variant,
+        targetLocation: targetLocation,
+        directionHint: (variant.angleOffset + 37.0) % 360.0,
+        candidateBudget: candidateBudget,
+        avoidHighways: avoidHighways,
+      );
+      body['simplify_waypoints'] = true;
+      body['max_waypoints'] = 3;
+      body['rescue_round_trip'] = true;
+      body['route_variant_hint'] = '${variant.variantHint}-rescue-$label';
+
+      debugPrint(
+        '[RouteService] Rundkurs-Rescue $label: '
+        'mode=$mode, target=${targetKm}km, avoidHighways=$avoidHighways, '
+        'budget=$candidateBudget',
+      );
+
+      final result = await _invoke(body);
+      final snapped = _snapRouteToStartPosition(result, startPosition);
+      final candidate = _evaluateCandidate(
+        scenario: scenario,
+        styleConfig: requestStyleConfig,
+        route: snapped,
+        variant: variant,
+        relaxedRoundTrip: true,
+      );
+      if (!candidate.accepted) {
+        debugPrint(
+          '[RouteService] Rundkurs-Rescue $label verworfen: '
+          'score=${candidate.score.toStringAsFixed(1)}, '
+          'styleFit=${candidate.styleFitScore.toStringAsFixed(1)}',
+        );
+        return null;
+      }
+      debugPrint('[RouteService] Rundkurs-Rescue $label akzeptiert.');
+      return _finalizeAndRemember(
+        scenario: scenario,
+        route: candidate.route,
+        sampledCoordinates: candidate.sampledCoordinates,
+        fingerprint: candidate.fingerprint,
+      );
+    } catch (e) {
+      debugPrint('[RouteService] Rundkurs-Rescue $label fehlgeschlagen: $e');
       return null;
     }
   }
