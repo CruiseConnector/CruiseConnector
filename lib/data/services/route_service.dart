@@ -110,11 +110,16 @@ class RouteService {
   /// Post-Validierung prüft: Overlap (<20%), U-Turns, Distanz (±15%),
   /// und stilspezifische Kriterien (Kurvenjagd: genug Kurven, Abendrunde: langsam).
   ///
-  /// ── Performance-Gov (siehe RoutePerformanceGuard.kRoundTripCandidateBudget) ──
+  /// ── Performance-Gov ──
   /// Auf der Edge Function läuft ein Multi-Phasen-Suchlauf
   /// (strict → balanced → fallback). Wir capen die Anzahl interner Pläne über
-  /// `max_candidate_attempts`, damit eine User-getriggerte Generierung im
-  /// Worst-Case ≤ 5 Mapbox-Calls erzeugt (vorher 12-21).
+  /// `max_candidate_attempts` auf 6 (frisch) bzw. 4 (mit History). Eine
+  /// frühere, aggressivere Reduktion auf 3/2 hat in Tal-Geometrien (z.B.
+  /// Dornbirn) dazu geführt, dass nur strict-Kandidaten liefen und die
+  /// Generierung mit "Kein passender Rundkurs" abbrach. Das aktuelle Budget
+  /// hält den Worst-Case bei ~14 s Edge-Time und ~6 Mapbox-Calls.
+  /// Time-Budget Edge: 14 s (siehe roundTripTimeBudgetMs).
+  /// Client-Timeout: 18 s (_invoke).
   Future<RouteResult> generateRoundTrip({
     required geo.Position startPosition,
     required int targetDistanceKm,
@@ -175,9 +180,10 @@ class RouteService {
               startPosition: startPosition,
               targetLocation: targetLocation,
               variant: variant,
-              // Cap Edge-Function-Pläne auf max 3 (war 4-5).
-              // Edge Fn macht ~1.3 Mapbox-Calls pro Plan → ≤ 4 Calls/Invocation.
-              candidateBudget: hasSeenHistory ? 2 : 3,
+              // Hint an Edge Function: 6 (frisch) erlaubt strict+balanced+
+              // fallback je 2 Versuche, 4 (mit History) je ~1. Niedriger geht
+              // nicht ohne tough-case-Locations (Dornbirn-Tal etc.) zu killen.
+              candidateBudget: hasSeenHistory ? 4 : 6,
             );
             if (candidate.accepted && candidate.score < bestScore) {
               if (bestCandidate != null) {
@@ -1162,14 +1168,16 @@ class RouteService {
     RouteServiceException? lastMappedError;
     // Exponential Backoff: nur bei HTTP 429/5xx, max 2 Retries (war 3).
     // Begründung: jeder Retry kostet >1s + die Edge Function macht selbst
-    // schon mehrere Mapbox-Calls — User-wahrgenommene Latenz muss < 12s bleiben.
+    // schon mehrere Mapbox-Calls — Timeout muss aber das Edge-Time-Budget
+    // (14 s) plus Serialisierungs-Reserve abdecken, sonst killt der Client
+    // bei tough cases (Dornbirn-Tal etc.) die Generierung mitten im Lauf.
     const maxRetries = 2;
     final retryRng = math.Random();
     for (var attempt = 1; attempt <= maxRetries; attempt++) {
       try {
         final rawResponse = await _invoker
             .invoke(body)
-            .timeout(const Duration(seconds: 12));
+            .timeout(const Duration(seconds: 18));
         if (rawResponse is FunctionResponse) {
           statusCode = rawResponse.status;
           data = rawResponse.data;

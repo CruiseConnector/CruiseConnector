@@ -145,6 +145,11 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
               onSelect: widget.onLengthChanged,
             ),
             const Divider(color: Colors.white10, height: 32),
+            _HighwayToggleSwitch(
+              isEnabled: _avoidHighways,
+              onChanged: _setAvoidHighways,
+            ),
+            const Divider(color: Colors.white10, height: 32),
           ] else ...[
             _SelectionRow(
               title: 'Route',

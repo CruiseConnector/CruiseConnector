@@ -1967,23 +1967,24 @@ async function searchBestRoundTripRoute({
     const extendedRoundTripSearch = targetDistanceKm >= 100 || mode === 'Entdecker'
     const normalizedVariantHint = normalizeHint(variantHint)
     const normalizedFingerprintHint = normalizeHint(fingerprintHint)
-    // Hard-Cap: Floor von 5 → 2, Ceiling von 8/10 → 5/6.
-    // Vorher konnte ein Hint von 2 still auf 5 angehoben werden — jetzt
-    // respektieren wir kleine Hints, damit Flutter wirklich die Anzahl
-    // Mapbox-Calls steuern kann.
+    // Budget so kalibriert, dass alle 3 Phasen (strict / balanced / fallback)
+    // garantiert mindestens einen Versuch bekommen. Floor 4 schützt vor zu
+    // niedrigen Hints; Ceiling 6/7 hält die Generierung unter ~14 s im Worst
+    // Case (Mapbox ~1.5–2.5 s pro Plan).
     const globalAttemptBudget = Math.max(
-        2,
+        4,
         Math.min(
-            highCostCurveSearch ? 5 : extendedRoundTripSearch ? 6 : 5,
+            highCostCurveSearch ? 6 : extendedRoundTripSearch ? 7 : 6,
             Math.round(
                 maxCandidateAttemptsHint ??
-                    (highCostCurveSearch ? 4 : extendedRoundTripSearch ? 4 : 3),
+                    (highCostCurveSearch ? 5 : extendedRoundTripSearch ? 6 : 5),
             ),
         ),
     )
     const searchStartTs = Date.now()
-    // Time Budget reduziert: 19s → 11s, damit Client-Timeout (12s) vor Cancel greift.
-    const roundTripTimeBudgetMs = highCostCurveSearch ? 10000 : 11000
+    // Time Budget: 14 s gibt 6 Versuchen je ~2.3 s Mapbox-Latenz Spielraum;
+    // Client-_invoke-Timeout muss in Flutter darüber liegen (siehe route_service).
+    const roundTripTimeBudgetMs = highCostCurveSearch ? 12000 : 14000
 
     const searchPhases = [
         {
@@ -2049,15 +2050,23 @@ async function searchBestRoundTripRoute({
             normalizedVariantHint,
             normalizedFingerprintHint,
         )
-        // Hard-Cap pro Phase: strict=3, balanced=2, fallback=1 (war 4/2/2).
-        // Mit globalem Budget von 5 ergibt das im Worst-Case
-        // 3+2+(0..1) Mapbox-Pläne pro Edge-Function-Invocation.
-        const maxPhaseAttempts =
+        // Pro Phase max 2 Versuche, plus Fair-Share-Guard: jede spätere Phase
+        // muss noch mindestens 1 Versuch übrig haben, sonst landen tough cases
+        // (Bergtäler, Inselstart) wieder in "Kein passender Rundkurs". So
+        // bekommen strict / balanced / fallback im Normalfall je ≥1 Plan.
+        const declaredMaxPerPhase =
             phase.name === 'strict'
-                ? (highCostCurveSearch ? 2 : 3)
+                ? (highCostCurveSearch ? 2 : 2)
                 : phase.name === 'balanced'
                 ? 2
-                : 1
+                : 2
+        const phasesRemainingAfterThis =
+            searchPhases.length - 1 - searchPhases.indexOf(phase)
+        const fairShareCeiling = Math.max(
+            1,
+            globalAttemptBudget - candidateAttempts - phasesRemainingAfterThis,
+        )
+        const maxPhaseAttempts = Math.min(declaredMaxPerPhase, fairShareCeiling)
         const candidatePlans = orderedCandidates.slice(0, Math.min(orderedCandidates.length, maxPhaseAttempts))
         let phaseAttempts = 0
         let phaseAcceptedCandidates = 0
