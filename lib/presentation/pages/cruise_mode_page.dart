@@ -414,6 +414,7 @@ class _CruiseModePageState extends State<CruiseModePage>
         _selectedStyle = 'Abendrunde';
       }
     });
+    _resetGeneratedRouteUiState();
   }
 
   bool _requiresDestination(bool isRoundTrip) => !isRoundTrip;
@@ -1335,9 +1336,10 @@ class _CruiseModePageState extends State<CruiseModePage>
     // Doppelklick-Schutz: Wenn bereits generiert wird, ignorieren
     if (_isLoading) return;
     setState(() => _isLoading = true);
+    _resetGeneratedRouteUiState();
 
     // Hintergrund-Generierung pausieren während User aktiv generiert
-    RouteCacheService.userGenerationActive = true;
+    RouteCacheService.beginUserGeneration();
 
     try {
       if (_isRoundTrip && _planningType != 'Zufall') {
@@ -1405,6 +1407,7 @@ class _CruiseModePageState extends State<CruiseModePage>
           scenic: scenicMode,
           routeVariant: detourVariant,
           avoidHighways: _avoidHighways,
+          forceFreshVariant: true,
         );
       } else {
         _activeDestinationCoordinate = null;
@@ -1419,6 +1422,7 @@ class _CruiseModePageState extends State<CruiseModePage>
           mode: _selectedStyle,
           planningType: _planningType,
           avoidHighways: _avoidHighways,
+          forceFreshVariant: true,
         );
       }
 
@@ -1470,22 +1474,7 @@ class _CruiseModePageState extends State<CruiseModePage>
         label: '[CruiseMode] Route generation stacktrace',
         stackTrace: stack,
       );
-      // State sauber zurücksetzen, damit keine alten Preview-/Marker-Reste
-      // sichtbar bleiben (das war eine der UI-Korruptionsursachen).
-      _safeSetState(() {
-        _routeGeoJson = null;
-        _routeDistance = null;
-        _routeDuration = null;
-        _fullRouteCoordinates = const [];
-        _remainingRouteCoordinates = const [];
-        _maneuvers = const [];
-        _activeManeuverIndex = 0;
-        _currentRouteIndex = 0;
-        _lastDrawnRouteIndex = 0;
-        _showRouteInfoBanner = false;
-        _isRouteConfirmed = false;
-        _configCollapsed = false;
-      });
+      _resetGeneratedRouteUiState();
       // Fehlermeldung anzeigen bei kritischen Routing-Fehlern
       if (mounted) {
         final errorMessage = e is RouteServiceException
@@ -1495,7 +1484,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       }
     } finally {
       // Hintergrund-Generierung wieder erlauben
-      RouteCacheService.userGenerationActive = false;
+      RouteCacheService.endUserGeneration();
       _safeSetState(() => _isLoading = false);
     }
   }
@@ -1616,6 +1605,49 @@ class _CruiseModePageState extends State<CruiseModePage>
     _isAccessLegActive = false;
     _accessLegJoinIndex = null;
     _accessLegMainRouteResult = null;
+  }
+
+  void _resetGeneratedRouteUiState() {
+    _clearAccessLegState();
+    _lastRouteResult = null;
+    _sessionRouteResult = null;
+    _activeDestinationCoordinate = null;
+    _activeDetourVariant = 0;
+    _activePointToPointScenic = false;
+    _activePointToPointMode = 'Standard';
+    _activeAvoidHighways = false;
+    _recentDestinationDistances = [];
+    _activeSpeedLimits = const [];
+    _announcedManeuverIndices.clear();
+    _safeSetState(() {
+      _routeGeoJson = null;
+      _routeDistance = null;
+      _routeDuration = null;
+      _routeLatLngs = [];
+      _fullRouteCoordinates = const [];
+      _remainingRouteCoordinates = const [];
+      _maneuvers = const [];
+      _activeManeuverIndex = 0;
+      _currentRouteIndex = 0;
+      _lastDrawnRouteIndex = 0;
+      _distanceSinceLastRedraw = 0.0;
+      _showRouteInfoBanner = false;
+      _isRouteConfirmed = false;
+      _isExistingRouteSession = false;
+      _cachedCurveCount = 0;
+      _remainingDistance = null;
+      _remainingDuration = null;
+      _sessionRouteStartIndexInActiveRoute = 0;
+      _navigationStartTime = null;
+      _offRouteCount = 0;
+      _lastRerouteTime = null;
+      _isRerouting = false;
+      _originalRouteDistance = null;
+      _originalRouteDuration = null;
+      _totalDistanceDriven = 0.0;
+      _isCameraLocked = false;
+      _configCollapsed = false;
+    });
   }
 
   void _maybeFinalizeAccessLegPhase() {

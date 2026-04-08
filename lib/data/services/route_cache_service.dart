@@ -15,6 +15,30 @@ class RouteCacheService {
 
   /// User-initiierte Generierung pausiert optionale Hintergrundarbeit.
   static bool userGenerationActive = false;
+  static DateTime? _lastUserGenerationAt;
+
+  static void beginUserGeneration() {
+    userGenerationActive = true;
+    _lastUserGenerationAt = DateTime.now();
+  }
+
+  static void endUserGeneration() {
+    userGenerationActive = false;
+    _lastUserGenerationAt = DateTime.now();
+  }
+
+  static bool get shouldPausePreparation {
+    if (userGenerationActive) return true;
+    final lastGeneration = _lastUserGenerationAt;
+    if (lastGeneration == null) return false;
+    return DateTime.now().difference(lastGeneration) <
+        const Duration(seconds: 2);
+  }
+
+  static void resetForTests() {
+    userGenerationActive = false;
+    _lastUserGenerationAt = null;
+  }
 
   Future<void> preloadRoutes() async {
     debugPrint(
@@ -31,10 +55,7 @@ class RouteCacheService {
     return PreparedRouteBuffer.take(scenario.scenarioKey)?.route;
   }
 
-  void storePreparedRoute(
-    RouteScenario scenario,
-    PreparedRouteEntry entry,
-  ) {
+  void storePreparedRoute(RouteScenario scenario, PreparedRouteEntry entry) {
     PreparedRouteBuffer.store(scenario.scenarioKey, entry);
   }
 

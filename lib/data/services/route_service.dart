@@ -11,6 +11,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:cruise_connect/core/constants.dart';
 import 'package:cruise_connect/data/services/prepared_route_buffer.dart';
 import 'package:cruise_connect/data/services/route_access_plan.dart';
+import 'package:cruise_connect/data/services/route_cache_service.dart';
 import 'package:cruise_connect/data/services/route_generation_coordinator.dart';
 import 'package:cruise_connect/data/services/route_quality_validator.dart';
 import 'package:cruise_connect/data/services/route_scenario.dart';
@@ -97,6 +98,8 @@ class RouteService {
     _scenarioVariantCounters.clear();
     _globalDiversityIndex = 0;
     _workerLimitCooldownUntil = null;
+    RouteGenerationCoordinator.resetForTests();
+    RouteCacheService.resetForTests();
     SeenRouteRegistry.clearAll();
     PreparedRouteBuffer.clearAll();
   }
@@ -128,6 +131,7 @@ class RouteService {
     Map<String, double>? targetLocation,
     int? variantIndex,
     bool avoidHighways = false,
+    bool forceFreshVariant = false,
   }) async {
     final styleConfig = RouteStyleConfig.forMode(mode);
     final normalizedTargetKm = styleConfig.clampRoundTripDistanceKm(
@@ -143,13 +147,17 @@ class RouteService {
       avoidHighways: avoidHighways,
     );
 
+    if (forceFreshVariant) {
+      RouteGenerationCoordinator.suspendBackgroundPreparation();
+      PreparedRouteBuffer.clearScenario(scenario.scenarioKey);
+    }
+
     return RouteGenerationCoordinator.runSingleFlight(
       scenario.scenarioKey,
       () async {
-        final prepared = _takePreparedRoute(
-          scenario: scenario,
-          styleConfig: styleConfig,
-        );
+        final prepared = forceFreshVariant
+            ? null
+            : _takePreparedRoute(scenario: scenario, styleConfig: styleConfig);
         if (prepared != null) {
           return prepared;
         }
@@ -253,7 +261,7 @@ class RouteService {
                 preparedAt: DateTime.now(),
               ),
             );
-          } else if (!hasSeenHistory) {
+          } else if (!hasSeenHistory && !forceFreshVariant) {
             _schedulePreparedRoundTripRoute(
               scenario: scenario,
               styleConfig: styleConfig,
@@ -283,9 +291,13 @@ class RouteService {
           return rescueFallback;
         }
 
-        final cached = await _loadCachedRoute(
-          scenarioKey: scenario.scenarioKey,
-        );
+        final cached =
+            _shouldUsePersistentFallback(
+              lastError,
+              forceFreshVariant: forceFreshVariant,
+            )
+            ? await _loadCachedRoute(scenarioKey: scenario.scenarioKey)
+            : null;
         if (cached != null) {
           final cachedCandidate = _evaluateCandidate(
             scenario: scenario,
@@ -330,6 +342,7 @@ class RouteService {
     int routeVariant = 0,
     bool avoidHighways = false,
     int diversitySeed = 0,
+    bool forceFreshVariant = false,
   }) async {
     final styleConfig = RouteStyleConfig.forMode(mode);
     final normalizedVariant = routeVariant.clamp(0, 3);
@@ -390,14 +403,21 @@ class RouteService {
       avoidHighways: avoidHighways,
     );
 
+    if (forceFreshVariant) {
+      RouteGenerationCoordinator.suspendBackgroundPreparation();
+      PreparedRouteBuffer.clearScenario(scenario.scenarioKey);
+    }
+
     return RouteGenerationCoordinator.runSingleFlight(
       scenario.scenarioKey,
       () async {
-        final prepared = _takePreparedRoute(
-          scenario: scenario,
-          styleConfig: styleConfig,
-          directDistanceKm: directDistanceKm,
-        );
+        final prepared = forceFreshVariant
+            ? null
+            : _takePreparedRoute(
+                scenario: scenario,
+                styleConfig: styleConfig,
+                directDistanceKm: directDistanceKm,
+              );
         if (prepared != null) {
           return prepared;
         }
@@ -498,7 +518,7 @@ class RouteService {
                 preparedAt: DateTime.now(),
               ),
             );
-          } else if (shouldDiversify) {
+          } else if (shouldDiversify && !forceFreshVariant) {
             _schedulePreparedPointToPointRoute(
               scenario: scenario,
               styleConfig: styleConfig,
@@ -524,9 +544,13 @@ class RouteService {
           return fallback;
         }
 
-        final cached = await _loadCachedRoute(
-          scenarioKey: scenario.scenarioKey,
-        );
+        final cached =
+            _shouldUsePersistentFallback(
+              lastError,
+              forceFreshVariant: forceFreshVariant,
+            )
+            ? await _loadCachedRoute(scenarioKey: scenario.scenarioKey)
+            : null;
         if (cached != null) {
           final cachedCandidate = _evaluateCandidate(
             scenario: scenario,
@@ -2032,10 +2056,14 @@ class RouteService {
     required RouteStyleConfig styleConfig,
     required geo.Position startPosition,
   }) {
-    if (disableBackgroundPreparation) return;
+    if (disableBackgroundPreparation ||
+        RouteCacheService.shouldPausePreparation) {
+      return;
+    }
     if (PreparedRouteBuffer.hasFreshEntry(scenario.scenarioKey)) return;
     unawaited(
-      Future<void>.delayed(Duration.zero, () async {
+      Future<void>.delayed(const Duration(milliseconds: 1500), () async {
+        if (RouteCacheService.shouldPausePreparation) return;
         if (!RouteGenerationCoordinator.canPrepare(scenario.scenarioKey)) {
           return;
         }
@@ -2090,10 +2118,14 @@ class RouteService {
     required bool avoidHighways,
     required double directDistanceKm,
   }) {
-    if (disableBackgroundPreparation) return;
+    if (disableBackgroundPreparation ||
+        RouteCacheService.shouldPausePreparation) {
+      return;
+    }
     if (PreparedRouteBuffer.hasFreshEntry(scenario.scenarioKey)) return;
     unawaited(
-      Future<void>.delayed(Duration.zero, () async {
+      Future<void>.delayed(const Duration(milliseconds: 1500), () async {
+        if (RouteCacheService.shouldPausePreparation) return;
         if (!RouteGenerationCoordinator.canPrepare(scenario.scenarioKey)) {
           return;
         }
@@ -2663,6 +2695,17 @@ class RouteService {
     return _lastRandomSeed;
   }
 
+  bool _shouldUsePersistentFallback(
+    RouteServiceException? lastError, {
+    required bool forceFreshVariant,
+  }) {
+    if (forceFreshVariant || lastError == null) return false;
+    return lastError.type == RouteErrorType.network ||
+        lastError.type == RouteErrorType.server ||
+        lastError.type == RouteErrorType.rateLimit ||
+        lastError.type == RouteErrorType.workerLimit;
+  }
+
   // ─────────────────────── Persistent Route Cache ────────────────────────────
 
   /// Speichert eine erfolgreiche Route im SharedPreferences für Offline-Fallback.
@@ -2699,9 +2742,9 @@ class RouteService {
       final scopedKey = scenarioKey == null
           ? _lastSuccessfulRouteKey
           : '$_lastSuccessfulRouteKey|$scenarioKey';
-      final cached =
-          prefs.getString(scopedKey) ??
-          prefs.getString(_lastSuccessfulRouteKey);
+      final cached = scenarioKey == null
+          ? prefs.getString(_lastSuccessfulRouteKey)
+          : prefs.getString(scopedKey);
       if (cached == null) return null;
 
       final data = json.decode(cached) as Map<String, dynamic>;
