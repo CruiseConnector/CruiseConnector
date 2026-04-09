@@ -11,6 +11,7 @@ class RouteResult {
     this.durationSeconds,
     this.distanceKm,
     this.speedLimits = const [],
+    this.edgeMeta = const {},
   });
 
   final String geoJson;
@@ -20,8 +21,12 @@ class RouteResult {
   final double? distanceMeters;
   final double? durationSeconds;
   final double? distanceKm;
+
   /// Tempolimits pro Routenabschnitt: [{startIndex, endIndex, speedKmh}]
   final List<SpeedLimitSegment> speedLimits;
+
+  /// Zusätzliche Metadaten der Edge Function, z.B. serverseitiges Quality-Tier.
+  final Map<String, dynamic> edgeMeta;
 }
 
 /// Ein Abschnitt der Route mit einem bestimmten Tempolimit.

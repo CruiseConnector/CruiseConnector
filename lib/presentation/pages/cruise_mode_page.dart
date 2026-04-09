@@ -57,6 +57,92 @@ class CruiseModePage extends StatefulWidget {
   State<CruiseModePage> createState() => _CruiseModePageState();
 }
 
+class _GeneratedRouteUiStateSnapshot {
+  const _GeneratedRouteUiStateSnapshot({
+    required this.lastRouteResult,
+    required this.sessionRouteResult,
+    required this.accessLegMainRouteResult,
+    required this.activeSpeedLimits,
+    required this.activeDestinationCoordinate,
+    required this.activeDetourVariant,
+    required this.activePointToPointScenic,
+    required this.activePointToPointMode,
+    required this.activeAvoidHighways,
+    required this.recentDestinationDistances,
+    required this.isAccessLegActive,
+    required this.accessLegJoinIndex,
+    required this.routeGeoJson,
+    required this.routeDistance,
+    required this.routeDuration,
+    required this.routeLatLngs,
+    required this.fullRouteCoordinates,
+    required this.remainingRouteCoordinates,
+    required this.maneuvers,
+    required this.activeManeuverIndex,
+    required this.currentRouteIndex,
+    required this.lastDrawnRouteIndex,
+    required this.distanceSinceLastRedraw,
+    required this.showRouteInfoBanner,
+    required this.isRouteConfirmed,
+    required this.isExistingRouteSession,
+    required this.cachedCurveCount,
+    required this.remainingDistance,
+    required this.remainingDuration,
+    required this.sessionRouteStartIndexInActiveRoute,
+    required this.navigationStartTime,
+    required this.offRouteCount,
+    required this.lastRerouteTime,
+    required this.isRerouting,
+    required this.originalRouteDistance,
+    required this.originalRouteDuration,
+    required this.totalDistanceDriven,
+    required this.isCameraLocked,
+    required this.configCollapsed,
+    required this.announcedManeuverIndices,
+  });
+
+  final RouteResult? lastRouteResult;
+  final RouteResult? sessionRouteResult;
+  final RouteResult? accessLegMainRouteResult;
+  final List<SpeedLimitSegment> activeSpeedLimits;
+  final List<double>? activeDestinationCoordinate;
+  final int activeDetourVariant;
+  final bool activePointToPointScenic;
+  final String activePointToPointMode;
+  final bool activeAvoidHighways;
+  final List<double> recentDestinationDistances;
+  final bool isAccessLegActive;
+  final int? accessLegJoinIndex;
+  final String? routeGeoJson;
+  final double? routeDistance;
+  final double? routeDuration;
+  final List<LatLng> routeLatLngs;
+  final List<List<double>> fullRouteCoordinates;
+  final List<List<double>> remainingRouteCoordinates;
+  final List<RouteManeuver> maneuvers;
+  final int activeManeuverIndex;
+  final int currentRouteIndex;
+  final int lastDrawnRouteIndex;
+  final double distanceSinceLastRedraw;
+  final bool showRouteInfoBanner;
+  final bool isRouteConfirmed;
+  final bool isExistingRouteSession;
+  final int cachedCurveCount;
+  final double? remainingDistance;
+  final double? remainingDuration;
+  final int sessionRouteStartIndexInActiveRoute;
+  final DateTime? navigationStartTime;
+  final int offRouteCount;
+  final DateTime? lastRerouteTime;
+  final bool isRerouting;
+  final double? originalRouteDistance;
+  final double? originalRouteDuration;
+  final double totalDistanceDriven;
+  final bool isCameraLocked;
+  final bool configCollapsed;
+  final Set<int> announcedManeuverIndices;
+}
+
 class _CruiseModePageState extends State<CruiseModePage>
     with TickerProviderStateMixin {
   // ─────────────────────── Services ──────────────────────────────────────────
@@ -202,6 +288,12 @@ class _CruiseModePageState extends State<CruiseModePage>
 
   void _safeSetState(VoidCallback fn) {
     if (mounted && !_disposed) setState(fn);
+  }
+
+  void _dismissTransientRouteUi() {
+    if (!mounted || _disposed) return;
+    FocusManager.instance.primaryFocus?.unfocus();
+    ScaffoldMessenger.maybeOf(context)?.clearSnackBars();
   }
 
   bool _hasMeaningfulRouteChange(List<LatLng> previous, List<LatLng> next) {
@@ -414,6 +506,7 @@ class _CruiseModePageState extends State<CruiseModePage>
         _selectedStyle = 'Abendrunde';
       }
     });
+    _dismissTransientRouteUi();
     _resetGeneratedRouteUiState();
   }
 
@@ -1335,8 +1428,12 @@ class _CruiseModePageState extends State<CruiseModePage>
   Future<void> _generateRoute() async {
     // Doppelklick-Schutz: Wenn bereits generiert wird, ignorieren
     if (_isLoading) return;
-    setState(() => _isLoading = true);
-    _resetGeneratedRouteUiState();
+    final previousUiState = _captureGeneratedRouteUiState();
+    _dismissTransientRouteUi();
+    setState(() {
+      _isLoading = true;
+      _showRouteInfoBanner = false;
+    });
 
     // Hintergrund-Generierung pausieren während User aktiv generiert
     RouteCacheService.beginUserGeneration();
@@ -1363,11 +1460,11 @@ class _CruiseModePageState extends State<CruiseModePage>
           );
         } on GeocodingException catch (e) {
           debugPrint('[CruiseMode] Geocoding failed: ${e.debugMessage}');
-          _showError(e.userMessage);
+          _showError(e.userMessage, isCritical: true);
           return;
         }
         if (targetLocation == null && mounted) {
-          _showError('Konnte Zieladresse nicht finden.');
+          _showError('Konnte Zieladresse nicht finden.', isCritical: true);
           return;
         }
       }
@@ -1426,6 +1523,8 @@ class _CruiseModePageState extends State<CruiseModePage>
         );
       }
 
+      if (!mounted || _disposed) return;
+
       const validator = RouteQualityValidator();
       final actualKm = result.distanceKm ?? 0.0;
       final targetKm = _isRoundTrip ? distance.toDouble() : 0.0;
@@ -1474,7 +1573,7 @@ class _CruiseModePageState extends State<CruiseModePage>
         label: '[CruiseMode] Route generation stacktrace',
         stackTrace: stack,
       );
-      _resetGeneratedRouteUiState();
+      _restoreGeneratedRouteUiState(previousUiState);
       // Fehlermeldung anzeigen bei kritischen Routing-Fehlern
       if (mounted) {
         final errorMessage = e is RouteServiceException
@@ -1605,6 +1704,117 @@ class _CruiseModePageState extends State<CruiseModePage>
     _isAccessLegActive = false;
     _accessLegJoinIndex = null;
     _accessLegMainRouteResult = null;
+  }
+
+  _GeneratedRouteUiStateSnapshot _captureGeneratedRouteUiState() {
+    return _GeneratedRouteUiStateSnapshot(
+      lastRouteResult: _lastRouteResult,
+      sessionRouteResult: _sessionRouteResult,
+      accessLegMainRouteResult: _accessLegMainRouteResult,
+      activeSpeedLimits: List<SpeedLimitSegment>.from(_activeSpeedLimits),
+      activeDestinationCoordinate: _activeDestinationCoordinate == null
+          ? null
+          : List<double>.from(_activeDestinationCoordinate!),
+      activeDetourVariant: _activeDetourVariant,
+      activePointToPointScenic: _activePointToPointScenic,
+      activePointToPointMode: _activePointToPointMode,
+      activeAvoidHighways: _activeAvoidHighways,
+      recentDestinationDistances: List<double>.from(
+        _recentDestinationDistances,
+      ),
+      isAccessLegActive: _isAccessLegActive,
+      accessLegJoinIndex: _accessLegJoinIndex,
+      routeGeoJson: _routeGeoJson,
+      routeDistance: _routeDistance,
+      routeDuration: _routeDuration,
+      routeLatLngs: List<LatLng>.from(_routeLatLngs),
+      fullRouteCoordinates: _fullRouteCoordinates
+          .map((point) => List<double>.from(point))
+          .toList(growable: false),
+      remainingRouteCoordinates: _remainingRouteCoordinates
+          .map((point) => List<double>.from(point))
+          .toList(growable: false),
+      maneuvers: List<RouteManeuver>.from(_maneuvers),
+      activeManeuverIndex: _activeManeuverIndex,
+      currentRouteIndex: _currentRouteIndex,
+      lastDrawnRouteIndex: _lastDrawnRouteIndex,
+      distanceSinceLastRedraw: _distanceSinceLastRedraw,
+      showRouteInfoBanner: _showRouteInfoBanner,
+      isRouteConfirmed: _isRouteConfirmed,
+      isExistingRouteSession: _isExistingRouteSession,
+      cachedCurveCount: _cachedCurveCount,
+      remainingDistance: _remainingDistance,
+      remainingDuration: _remainingDuration,
+      sessionRouteStartIndexInActiveRoute: _sessionRouteStartIndexInActiveRoute,
+      navigationStartTime: _navigationStartTime,
+      offRouteCount: _offRouteCount,
+      lastRerouteTime: _lastRerouteTime,
+      isRerouting: _isRerouting,
+      originalRouteDistance: _originalRouteDistance,
+      originalRouteDuration: _originalRouteDuration,
+      totalDistanceDriven: _totalDistanceDriven,
+      isCameraLocked: _isCameraLocked,
+      configCollapsed: _configCollapsed,
+      announcedManeuverIndices: Set<int>.from(_announcedManeuverIndices),
+    );
+  }
+
+  void _restoreGeneratedRouteUiState(_GeneratedRouteUiStateSnapshot snapshot) {
+    _lastRouteResult = snapshot.lastRouteResult;
+    _sessionRouteResult = snapshot.sessionRouteResult;
+    _accessLegMainRouteResult = snapshot.accessLegMainRouteResult;
+    _activeSpeedLimits = List<SpeedLimitSegment>.from(
+      snapshot.activeSpeedLimits,
+    );
+    _activeDestinationCoordinate = snapshot.activeDestinationCoordinate == null
+        ? null
+        : List<double>.from(snapshot.activeDestinationCoordinate!);
+    _activeDetourVariant = snapshot.activeDetourVariant;
+    _activePointToPointScenic = snapshot.activePointToPointScenic;
+    _activePointToPointMode = snapshot.activePointToPointMode;
+    _activeAvoidHighways = snapshot.activeAvoidHighways;
+    _recentDestinationDistances = List<double>.from(
+      snapshot.recentDestinationDistances,
+    );
+    _isAccessLegActive = snapshot.isAccessLegActive;
+    _accessLegJoinIndex = snapshot.accessLegJoinIndex;
+    _announcedManeuverIndices
+      ..clear()
+      ..addAll(snapshot.announcedManeuverIndices);
+    _safeSetState(() {
+      _routeGeoJson = snapshot.routeGeoJson;
+      _routeDistance = snapshot.routeDistance;
+      _routeDuration = snapshot.routeDuration;
+      _routeLatLngs = List<LatLng>.from(snapshot.routeLatLngs);
+      _fullRouteCoordinates = snapshot.fullRouteCoordinates
+          .map((point) => List<double>.from(point))
+          .toList(growable: false);
+      _remainingRouteCoordinates = snapshot.remainingRouteCoordinates
+          .map((point) => List<double>.from(point))
+          .toList(growable: false);
+      _maneuvers = List<RouteManeuver>.from(snapshot.maneuvers);
+      _activeManeuverIndex = snapshot.activeManeuverIndex;
+      _currentRouteIndex = snapshot.currentRouteIndex;
+      _lastDrawnRouteIndex = snapshot.lastDrawnRouteIndex;
+      _distanceSinceLastRedraw = snapshot.distanceSinceLastRedraw;
+      _showRouteInfoBanner = snapshot.showRouteInfoBanner;
+      _isRouteConfirmed = snapshot.isRouteConfirmed;
+      _isExistingRouteSession = snapshot.isExistingRouteSession;
+      _cachedCurveCount = snapshot.cachedCurveCount;
+      _remainingDistance = snapshot.remainingDistance;
+      _remainingDuration = snapshot.remainingDuration;
+      _sessionRouteStartIndexInActiveRoute =
+          snapshot.sessionRouteStartIndexInActiveRoute;
+      _navigationStartTime = snapshot.navigationStartTime;
+      _offRouteCount = snapshot.offRouteCount;
+      _lastRerouteTime = snapshot.lastRerouteTime;
+      _isRerouting = snapshot.isRerouting;
+      _originalRouteDistance = snapshot.originalRouteDistance;
+      _originalRouteDuration = snapshot.originalRouteDuration;
+      _totalDistanceDriven = snapshot.totalDistanceDriven;
+      _isCameraLocked = snapshot.isCameraLocked;
+      _configCollapsed = snapshot.configCollapsed;
+    });
   }
 
   void _resetGeneratedRouteUiState() {
@@ -3579,7 +3789,9 @@ class _CruiseModePageState extends State<CruiseModePage>
 
     // Für kritische Fehler (Route konnte nicht generiert werden): Snackbar zeigen
     if (isCritical) {
-      ScaffoldMessenger.of(context).showSnackBar(
+      final messenger = ScaffoldMessenger.of(context);
+      messenger.clearSnackBars();
+      messenger.showSnackBar(
         SnackBar(
           content: Text(message, style: const TextStyle(color: Colors.white)),
           backgroundColor: const Color(0xFFFF3B30),

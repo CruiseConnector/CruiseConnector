@@ -176,7 +176,6 @@ class RouteService {
         const maxAttempts = 2;
         _RouteCandidate? bestCandidate;
         _RouteCandidate? spareCandidate;
-        var bestScore = double.infinity;
         RouteServiceException? lastError;
 
         for (var attempt = 0; attempt < maxAttempts; attempt++) {
@@ -205,24 +204,16 @@ class RouteService {
                   ? 9
                   : 8,
             );
-            if (candidate.accepted && candidate.score < bestScore) {
-              if (bestCandidate != null) {
-                if (spareCandidate == null ||
-                    bestCandidate.score < spareCandidate.score) {
+            if (candidate.accepted) {
+              if (_isBetterCandidate(candidate, bestCandidate)) {
+                if (bestCandidate != null &&
+                    _isBetterCandidate(bestCandidate, spareCandidate)) {
                   spareCandidate = bestCandidate;
                 }
+                bestCandidate = candidate;
+              } else if (_isBetterCandidate(candidate, spareCandidate)) {
+                spareCandidate = candidate;
               }
-              bestCandidate = candidate;
-              bestScore = candidate.score;
-            } else if (candidate.accepted &&
-                (spareCandidate == null ||
-                    candidate.score < spareCandidate.score)) {
-              spareCandidate = candidate;
-            } else if (!candidate.hardRejected &&
-                candidate.score < bestScore &&
-                bestCandidate == null) {
-              bestCandidate = candidate;
-              bestScore = candidate.score;
             }
             if (candidate.accepted && (candidate.isIdeal || candidate.isGood)) {
               break;
@@ -431,7 +422,6 @@ class RouteService {
         const maxAttempts = 2;
         _RouteCandidate? bestCandidate;
         _RouteCandidate? spareCandidate;
-        var bestScore = double.infinity;
         RouteServiceException? lastError;
 
         for (var attempt = 0; attempt < maxAttempts; attempt++) {
@@ -462,24 +452,16 @@ class RouteService {
                   ? 5
                   : (hasSeenHistory ? 3 : 4),
             );
-            if (candidate.accepted && candidate.score < bestScore) {
-              if (bestCandidate != null) {
-                if (spareCandidate == null ||
-                    bestCandidate.score < spareCandidate.score) {
+            if (candidate.accepted) {
+              if (_isBetterCandidate(candidate, bestCandidate)) {
+                if (bestCandidate != null &&
+                    _isBetterCandidate(bestCandidate, spareCandidate)) {
                   spareCandidate = bestCandidate;
                 }
+                bestCandidate = candidate;
+              } else if (_isBetterCandidate(candidate, spareCandidate)) {
+                spareCandidate = candidate;
               }
-              bestCandidate = candidate;
-              bestScore = candidate.score;
-            } else if (candidate.accepted &&
-                (spareCandidate == null ||
-                    candidate.score < spareCandidate.score)) {
-              spareCandidate = candidate;
-            } else if (!candidate.hardRejected &&
-                candidate.score < bestScore &&
-                bestCandidate == null) {
-              bestCandidate = candidate;
-              bestScore = candidate.score;
             }
             if (candidate.accepted && (candidate.isIdeal || candidate.isGood)) {
               break;
@@ -963,7 +945,7 @@ class RouteService {
       'route_variant_hint': variant.variantHint,
       'route_fingerprint_hint': variant.fingerprintHint,
       'max_candidate_attempts': candidateBudget,
-      ...styleConfig.toRequestHints(),
+      if (scenic || normalizedVariant > 0) ...styleConfig.toRequestHints(),
       if (scenic || normalizedVariant > 0) ...{
         'targetDistance': double.parse(targetDistanceKm.toStringAsFixed(1)),
         'detour_level': normalizedVariant,
@@ -1303,6 +1285,7 @@ class RouteService {
       durationSeconds: result.durationSeconds,
       distanceKm: result.distanceKm,
       speedLimits: result.speedLimits,
+      edgeMeta: result.edgeMeta,
     );
   }
 
@@ -1546,6 +1529,10 @@ class RouteService {
       '[RouteService] ✅ Route erhalten nach ${stopwatch.elapsedMilliseconds}ms',
     );
 
+    final edgeMeta = data['meta'] is Map
+        ? Map<String, dynamic>.from(data['meta'] as Map)
+        : const <String, dynamic>{};
+
     final routeResult = RouteResult(
       geoJson: json.encode(geometry),
       geometry: geometry,
@@ -1555,6 +1542,7 @@ class RouteService {
       durationSeconds: durationRaw,
       distanceKm: distanceKmActual,
       speedLimits: speedLimits,
+      edgeMeta: edgeMeta,
     );
     _sessionCache[cacheKey] = routeResult;
     return routeResult;
@@ -1832,6 +1820,10 @@ class RouteService {
     bool relaxedRoundTrip = false,
   }) {
     final actualDistanceKm = route.distanceKm ?? 0.0;
+    final qualityTargetDistanceKm =
+        scenario.isPointToPoint && scenario.detourLevel <= 0
+        ? 0.0
+        : scenario.targetDistanceKm ?? 0.0;
     final sampledCoordinates = _sampleRouteForSimilarity(route.coordinates);
     final fingerprint = RouteQualityValidator.buildRouteFingerprint(
       sampledCoordinates,
@@ -1841,7 +1833,7 @@ class RouteService {
     final quality = _qualityValidator.validateQuality(
       coordinates: route.coordinates,
       isRoundTrip: scenario.isRoundTrip,
-      targetDistanceKm: scenario.targetDistanceKm ?? 0.0,
+      targetDistanceKm: qualityTargetDistanceKm,
       actualDistanceKm: actualDistanceKm,
     );
     final styleFitScore = styleConfig.scoreStyleFit(
@@ -1854,10 +1846,11 @@ class RouteService {
       isRoundTrip: scenario.isRoundTrip,
       coordinateCount: route.coordinates.length,
       actualDistanceKm: actualDistanceKm,
-      targetDistanceKm: scenario.targetDistanceKm ?? 0.0,
+      targetDistanceKm: qualityTargetDistanceKm,
       styleProfileKey: styleConfig.profileKey,
       styleFitScore: styleFitScore,
     );
+    final edgeTier = _edgeQualityTierFor(route);
     final styleOk = styleConfig.validateStyleQuality(
       coordinates: route.coordinates,
       distanceKm: actualDistanceKm,
@@ -1902,23 +1895,131 @@ class RouteService {
         ? true
         : actualDistanceKm >= pointToPointMinDistance &&
               actualDistanceKm <= pointToPointMaxDistance;
+    final scenicFallbackRenderable =
+        scenario.isPointToPoint &&
+        scenario.detourLevel > 0 &&
+        (directDistanceKm ?? 0.0) > 0.0 &&
+        actualDistanceKm >= (directDistanceKm ?? 0.0) * 0.96 &&
+        actualDistanceKm <= (directDistanceKm ?? 0.0) * 1.45 &&
+        quality.uturnPositions.isEmpty &&
+        quality.overlapPercent <= 16.0 &&
+        quality.shapePenalty <= 26.0 &&
+        route.coordinates.length >= 24;
     final rescueRoundTripAcceptable =
         relaxedRoundTrip &&
         scenario.isRoundTrip &&
         quality.isLoopClosed &&
-        quality.uturnPositions.isEmpty &&
-        quality.overlapPercent <= 34.0 &&
+        quality.uturnPositions.length <=
+            (styleConfig.profileKey == 'sport' ? 2 : 0) &&
+        quality.overlapPercent <=
+            (styleConfig.profileKey == 'sport' ? 26.0 : 20.0) &&
         quality.returnPathPercent <=
             RouteQualityValidator.maxReturnPathPercent + 8.0 &&
-        quality.shapePenalty <= 82.0 &&
-        quality.foldedAreaPenalty <= 92.0 &&
-        quality.repeatedStartAreaPercent <= 72.0 &&
-        quality.microZigzagPercent <= 58.0;
+        quality.shapePenalty <=
+            (styleConfig.profileKey == 'sport' ? 70.0 : 58.0) &&
+        quality.foldedAreaPenalty <=
+            (styleConfig.profileKey == 'sport' ? 86.0 : 72.0) &&
+        quality.spurArmPercent <=
+            (styleConfig.profileKey == 'sport' ? 36.0 : 18.0) &&
+        quality.repeatedStartAreaPercent <=
+            (styleConfig.profileKey == 'sport' ? 44.0 : 24.0) &&
+        quality.microZigzagPercent <=
+            (styleConfig.profileKey == 'sport' ? 48.0 : 34.0);
+    final serverApprovedGoodTier =
+        edgeTier == RouteQualityTier.ideal || edgeTier == RouteQualityTier.good;
+    final serverApprovedRoundTripUturnLimit = !scenario.isRoundTrip
+        ? 0
+        : styleConfig.profileKey == 'kurvenjagd'
+        ? 2
+        : serverApprovedGoodTier
+        ? 2
+        : 0;
+    final serverApprovedRepeatedStartLimit = !scenario.isRoundTrip
+        ? 72.0
+        : styleConfig.profileKey == 'sport' && serverApprovedGoodTier
+        ? 62.0
+        : 48.0;
+    // Kraken-Schutz: spurArmPercent-Obergrenzen für serverApproved-Pfad
+    // deutlich gesenkt (war 70/40), damit offene Stern-Formen nicht mehr
+    // via Edge-Approval durchrutschen.
+    final serverApprovedSpurLimit =
+        scenario.isRoundTrip &&
+            styleConfig.profileKey == 'sport' &&
+            serverApprovedGoodTier &&
+            quality.overlapPercent <= 22.0 &&
+            quality.repeatedStartAreaPercent <= 15.0
+        ? 52.0
+        : (scenario.isRoundTrip ? 32.0 : 55.0);
+    final successFirstDistanceOk = scenario.isRoundTrip
+        ? (() {
+            final targetKm = scenario.targetDistanceKm ?? actualDistanceKm;
+            if (targetKm <= 0) return true;
+            final minFactor = scenario.avoidHighways ? 0.66 : 0.70;
+            final maxFactor = scenario.avoidHighways ? 1.48 : 1.44;
+            return actualDistanceKm >= targetKm * minFactor &&
+                actualDistanceKm <= targetKm * maxFactor;
+          })()
+        : (() {
+            final directKm = directDistanceKm ?? 0.0;
+            if (directKm <= 0) return true;
+            if (scenario.detourLevel > 0) {
+              final maxKm = math.max(
+                pointToPointMaxDistance * 1.08,
+                directKm * 1.45,
+              );
+              return actualDistanceKm >= directKm * 0.96 &&
+                  actualDistanceKm <= maxKm;
+            }
+            return actualDistanceKm >= directKm * 0.92 &&
+                actualDistanceKm <= math.max(directKm * 1.35, directKm + 6.0);
+          })();
+    final serverApprovedAcceptable =
+        edgeTier != null &&
+        edgeTier != RouteQualityTier.rejected &&
+        hasEnoughPoints &&
+        successFirstDistanceOk &&
+        (scenario.isRoundTrip
+            ? quality.uturnPositions.length <= serverApprovedRoundTripUturnLimit
+            : quality.uturnPositions.isEmpty) &&
+        (!scenario.isRoundTrip || quality.isLoopClosed) &&
+        quality.overlapPercent <= (scenario.isRoundTrip ? 58.0 : 26.0) &&
+        quality.shapePenalty <= (scenario.isRoundTrip ? 92.0 : 58.0) &&
+        quality.foldedAreaPenalty <=
+            (scenario.isRoundTrip
+                ? (styleConfig.profileKey == 'kurvenjagd' ? 99.0 : 96.0)
+                : 94.0) &&
+        quality.spurArmPercent <= serverApprovedSpurLimit &&
+        quality.repeatedStartAreaPercent <= serverApprovedRepeatedStartLimit &&
+        quality.microZigzagPercent <= 66.0 &&
+        // Kraken-Schutz auch im Server-Approval: Stern-Patterns mit hohem
+        // Centerkreuzen dürfen hier nicht mehr als "acceptable" durchrutschen.
+        (!scenario.isRoundTrip || quality.centerRecrossPercent <= 50.0) &&
+        (!scenario.isRoundTrip || quality.centerReentryCount <= 2);
+    final serverApprovedSportRescue =
+        scenario.isRoundTrip &&
+        styleConfig.profileKey == 'sport' &&
+        edgeTier == RouteQualityTier.acceptable &&
+        hasEnoughPoints &&
+        successFirstDistanceOk &&
+        quality.isLoopClosed &&
+        quality.uturnPositions.length <= 2 &&
+        quality.overlapPercent <= 48.0 &&
+        quality.shapePenalty <= 62.0 &&
+        quality.foldedAreaPenalty <= 85.0 &&
+        quality.spurArmPercent <= 50.0 &&
+        quality.centerRecrossPercent <= 42.0 &&
+        quality.repeatedStartAreaPercent <= 44.0 &&
+        quality.microZigzagPercent <= 18.0;
     final qualityAcceptable = scenario.isRoundTrip
-        ? classification.isAcceptable || rescueRoundTripAcceptable
-        : quality.passed || classification.isAcceptable;
-    final softRenderable =
-        hasEnoughPoints && detourDistanceOk && !tooSimilar && qualityAcceptable;
+        ? classification.isAcceptable ||
+              rescueRoundTripAcceptable ||
+              serverApprovedAcceptable ||
+              serverApprovedSportRescue
+        : quality.passed ||
+              classification.isAcceptable ||
+              scenicFallbackRenderable ||
+              serverApprovedAcceptable;
+    final softRenderable = hasEnoughPoints && qualityAcceptable;
     final styleSoftOk =
         styleOk ||
         (scenario.isRoundTrip &&
@@ -1932,13 +2033,31 @@ class RouteService {
             quality.shapePenalty <= 82.0 &&
             quality.foldedAreaPenalty <= 92.0 &&
             quality.microZigzagPercent <= 58.0);
-    final accepted = softRenderable && styleSoftOk;
+    final hasSoftDetourPenalty =
+        scenario.isPointToPoint &&
+        scenario.detourLevel > 0 &&
+        !detourDistanceOk;
+    final hasSoftStylePenalty = !styleSoftOk;
+    final hasSoftSimilarityPenalty = tooSimilar;
+    final baseTier = _preferredTier(classification.tier, edgeTier);
+    final effectiveTier = !softRenderable
+        ? RouteQualityTier.rejected
+        : (hasSoftDetourPenalty ||
+              hasSoftStylePenalty ||
+              hasSoftSimilarityPenalty)
+        ? RouteQualityTier.acceptable
+        : baseTier;
+    final accepted = softRenderable;
     final score =
         classification.score +
+        (effectiveTier == RouteQualityTier.acceptable &&
+                classification.tier != RouteQualityTier.acceptable
+            ? 12.0
+            : 0.0) +
         (styleOk ? 0.0 : 18.0) +
         (styleSoftOk ? 0.0 : 30.0) +
         (tooSimilar ? 45.0 : 0.0) +
-        (detourDistanceOk ? 0.0 : 35.0) +
+        (detourDistanceOk ? 0.0 : 135.0) +
         (hasEnoughPoints ? 0.0 : 24.0) -
         styleFitScore * 0.18;
 
@@ -1952,6 +2071,8 @@ class RouteService {
       'styleFit=${styleFitScore.toStringAsFixed(1)}, '
       'styleOk=$styleOk/$styleSoftOk, '
       'uturns=${quality.uturnPositions.length}, tooSimilar=$tooSimilar, '
+      'edgeTier=${edgeTier?.name ?? 'none'}, '
+      'detourOk=$detourDistanceOk, '
       'distanceWindow=${pointToPointMinDistance.toStringAsFixed(1)}-${pointToPointMaxDistance.isFinite ? pointToPointMaxDistance.toStringAsFixed(1) : 'inf'}',
     );
 
@@ -1963,8 +2084,11 @@ class RouteService {
       score: score,
       accepted: accepted,
       hardRejected: !softRenderable,
-      isIdeal: classification.isIdeal,
-      isGood: classification.isGood,
+      tier: effectiveTier,
+      isIdeal: effectiveTier == RouteQualityTier.ideal,
+      isGood:
+          effectiveTier == RouteQualityTier.ideal ||
+          effectiveTier == RouteQualityTier.good,
       styleFitScore: styleFitScore,
     );
   }
@@ -1980,7 +2104,58 @@ class RouteService {
       if (target >= 35) return 20;
       return actualDistanceKm >= 15 ? 18 : 14;
     }
+    if (scenario.detourLevel <= 0) {
+      if (actualDistanceKm >= 20) return 18;
+      if (actualDistanceKm >= 10) return 12;
+      return 8;
+    }
     return actualDistanceKm >= 10 ? 30 : 0;
+  }
+
+  bool _isBetterCandidate(_RouteCandidate candidate, _RouteCandidate? current) {
+    if (!candidate.accepted) return false;
+    if (current == null || !current.accepted) return true;
+
+    final candidateRank = _tierRank(candidate.tier);
+    final currentRank = _tierRank(current.tier);
+    if (candidateRank != currentRank) {
+      return candidateRank < currentRank;
+    }
+
+    if ((candidate.score - current.score).abs() > 0.01) {
+      return candidate.score < current.score;
+    }
+
+    return (candidate.route.distanceKm ?? 0.0) >
+        (current.route.distanceKm ?? 0.0);
+  }
+
+  int _tierRank(RouteQualityTier tier) {
+    return switch (tier) {
+      RouteQualityTier.ideal => 0,
+      RouteQualityTier.good => 1,
+      RouteQualityTier.acceptable => 2,
+      RouteQualityTier.rejected => 3,
+    };
+  }
+
+  RouteQualityTier _preferredTier(
+    RouteQualityTier localTier,
+    RouteQualityTier? edgeTier,
+  ) {
+    if (edgeTier == null) return localTier;
+    return _tierRank(edgeTier) < _tierRank(localTier) ? edgeTier : localTier;
+  }
+
+  RouteQualityTier? _edgeQualityTierFor(RouteResult route) {
+    final rawTier = route.edgeMeta['quality_tier']?.toString().trim();
+    return switch (rawTier) {
+      'ideal' => RouteQualityTier.ideal,
+      'good' => RouteQualityTier.good,
+      'acceptable' => RouteQualityTier.acceptable,
+      'rejected' => RouteQualityTier.rejected,
+      _ => null,
+    };
   }
 
   double _similarityThresholdForScenario(RouteScenario scenario) {
@@ -2028,19 +2203,7 @@ class RouteService {
       variant: entry.variant,
       directDistanceKm: directDistanceKm,
     );
-    if (!candidate.accepted ||
-        SeenRouteRegistry.hasExactFingerprint(
-          scenario.scenarioKey,
-          candidate.fingerprint,
-        )) {
-      return null;
-    }
-    if (SeenRouteRegistry.hasSimilarRoute(
-      scenario.scenarioKey,
-      candidate.sampledCoordinates,
-      thresholdPercent: _similarityThresholdForScenario(scenario),
-      proximityMeters: scenario.isRoundTrip ? 130.0 : 160.0,
-    )) {
+    if (!candidate.accepted) {
       return null;
     }
     return _finalizeAndRemember(
@@ -2285,6 +2448,24 @@ class RouteService {
     );
     if (sameStyle != null) return sameStyle;
 
+    if (!scenario.avoidHighways && styleConfig.profileKey == 'sport') {
+      final spreadStyle = RouteStyleConfig.forMode('Entdecker');
+      final sportSpread = await _requestRoundTripRescueVariant(
+        scenario: scenario,
+        requestStyleConfig: spreadStyle,
+        evaluationStyleConfig: styleConfig,
+        startPosition: startPosition,
+        mode: scenario.style,
+        planningType: scenario.planningType,
+        targetLocation: targetLocation,
+        avoidHighways: false,
+        candidateBudget: 7,
+        targetFactor: 1.0,
+        label: 'sport-spread',
+      );
+      if (sportSpread != null) return sportSpread;
+    }
+
     // Letzter kontrollierter Rescue-Schritt: Wenn ein harter Stilfilter oder
     // Highway-Ausschluss normale Rundkurse blockiert, versuchen wir eine
     // einfache Sport-Loop-Variante. Das verändert nicht den UI-Modus, sondern
@@ -2311,6 +2492,7 @@ class RouteService {
   Future<RouteResult?> _requestRoundTripRescueVariant({
     required RouteScenario scenario,
     required RouteStyleConfig requestStyleConfig,
+    RouteStyleConfig? evaluationStyleConfig,
     required geo.Position startPosition,
     required String mode,
     required String planningType,
@@ -2359,7 +2541,7 @@ class RouteService {
       final snapped = _snapRouteToStartPosition(result, startPosition);
       final candidate = _evaluateCandidate(
         scenario: scenario,
-        styleConfig: requestStyleConfig,
+        styleConfig: evaluationStyleConfig ?? requestStyleConfig,
         route: snapped,
         variant: variant,
         relaxedRoundTrip: true,
@@ -3633,6 +3815,7 @@ class RouteService {
       durationSeconds: finalDuration,
       distanceKm: finalDistanceMeters / 1000.0,
       speedLimits: result.speedLimits,
+      edgeMeta: result.edgeMeta,
     );
   }
 
@@ -3702,6 +3885,7 @@ class _RouteCandidate {
     required this.score,
     required this.accepted,
     required this.hardRejected,
+    required this.tier,
     required this.isIdeal,
     required this.isGood,
     required this.styleFitScore,
@@ -3714,6 +3898,7 @@ class _RouteCandidate {
   final double score;
   final bool accepted;
   final bool hardRejected;
+  final RouteQualityTier tier;
   final bool isIdeal;
   final bool isGood;
   final double styleFitScore;

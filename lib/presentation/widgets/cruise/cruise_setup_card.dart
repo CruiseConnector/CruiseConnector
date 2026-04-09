@@ -337,21 +337,6 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
                 pattern,
               );
             },
-            builder: (context, controller, focusNode) => TextField(
-              controller: controller,
-              focusNode: focusNode,
-              style: const TextStyle(color: Colors.white),
-              decoration: const InputDecoration(
-                prefixIcon: Icon(Icons.search, color: Colors.white38),
-                hintText: 'Adresse suchen...',
-                hintStyle: TextStyle(color: Colors.white38),
-                border: InputBorder.none,
-                contentPadding: EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 14,
-                ),
-              ),
-            ),
             itemBuilder: (context, suggestion) => ListTile(
               tileColor: const Color(0xFF1C1F26),
               leading: const Icon(Icons.location_on, color: Color(0xFFFF3B30)),
@@ -366,7 +351,10 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
                     )
                   : null,
             ),
-            onSelected: widget.onDestinationSelected,
+            onSelected: (suggestion) {
+              FocusScope.of(context).unfocus();
+              widget.onDestinationSelected(suggestion);
+            },
             emptyBuilder: (context) => const Padding(
               padding: EdgeInsets.all(16),
               child: Text(
@@ -378,6 +366,22 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
               padding: EdgeInsets.all(16),
               child: Center(
                 child: CircularProgressIndicator(color: Color(0xFFFF3B30)),
+              ),
+            ),
+            builder: (context, controller, focusNode) => TextField(
+              controller: controller,
+              focusNode: focusNode,
+              style: const TextStyle(color: Colors.white),
+              onTapOutside: (_) => FocusScope.of(context).unfocus(),
+              decoration: const InputDecoration(
+                prefixIcon: Icon(Icons.search, color: Colors.white38),
+                hintText: 'Adresse suchen...',
+                hintStyle: TextStyle(color: Colors.white38),
+                border: InputBorder.none,
+                contentPadding: EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 14,
+                ),
               ),
             ),
           ),
@@ -651,10 +655,9 @@ class _HighwayToggleSwitch extends StatelessWidget {
                         shape: BoxShape.circle,
                         boxShadow: [
                           BoxShadow(
-                            color: (highwaysIncluded
-                                    ? accentColor
-                                    : Colors.black)
-                                .withValues(alpha: 0.25),
+                            color:
+                                (highwaysIncluded ? accentColor : Colors.black)
+                                    .withValues(alpha: 0.25),
                             blurRadius: 10,
                             offset: const Offset(0, 3),
                           ),

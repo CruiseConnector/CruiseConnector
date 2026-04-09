@@ -1965,6 +1965,7 @@ async function searchBestRoundTripRoute({
     variantHint,
     fingerprintHint,
     maxCandidateAttemptsHint,
+    continueStraight,
 }: {
     startLocation: Coordinate
     targetDistanceKm: number
@@ -1981,6 +1982,7 @@ async function searchBestRoundTripRoute({
     variantHint?: string
     fingerprintHint?: string
     maxCandidateAttemptsHint?: number
+    continueStraight: boolean
 }): Promise<RoundTripSearchResult | null> {
     const highCostCurveSearch = mode === 'Kurvenjagd' && targetDistanceKm >= 130
     const extendedRoundTripSearch = targetDistanceKm >= 100 || mode === 'Entdecker'
@@ -2015,7 +2017,7 @@ async function searchBestRoundTripRoute({
             name: 'strict',
             distanceConfig,
             seedOffset: 0,
-            continueStraight: false,
+            continueStraight,
             exclude: excludeParams,
         },
         {
@@ -2026,7 +2028,7 @@ async function searchBestRoundTripRoute({
                 'balanced',
             ),
             seedOffset: 911,
-            continueStraight: false,
+            continueStraight,
             exclude: excludeParams,
         },
         {
@@ -2037,7 +2039,7 @@ async function searchBestRoundTripRoute({
                 'fallback',
             ),
             seedOffset: 1777,
-            continueStraight: false,
+            continueStraight,
             exclude: '',
         },
     ]
@@ -2051,13 +2053,39 @@ async function searchBestRoundTripRoute({
     const rejectReasons = new Map<string, number>()
     let rateLimitHits = 0
     let timeoutHits = 0
+    let stopSearchWithBestCandidate = false
 
     const registerReject = (reason: string) => {
         const normalized = normalizeRoundTripRejectReason(reason)
         rejectReasons.set(normalized, (rejectReasons.get(normalized) ?? 0) + 1)
     }
 
+    const shouldAbortForProviderPressure = (): boolean => {
+        if (rateLimitHits >= 2) {
+            if (bestQuality && bestRoute && bestPlan) {
+                console.warn(
+                    `[RT] Provider rate limit after usable candidate (${bestQuality.tier}); returning current best instead of failing search.`,
+                )
+                stopSearchWithBestCandidate = true
+                return true
+            }
+            throw new Error('Routing provider rate limit reached during round-trip search.')
+        }
+        if (timeoutHits >= 3) {
+            if (bestQuality && bestRoute && bestPlan) {
+                console.warn(
+                    `[RT] Provider timeout pressure after usable candidate (${bestQuality.tier}); returning current best instead of failing search.`,
+                )
+                stopSearchWithBestCandidate = true
+                return true
+            }
+            throw new Error('Routing provider timeout during round-trip search.')
+        }
+        return false
+    }
+
     for (const phase of searchPhases) {
+        if (stopSearchWithBestCandidate) break
         const orderedCandidates = prioritizeCandidatePlans(
             buildRoundTripWaypointCandidates({
             start: startLocation,
@@ -2081,12 +2109,12 @@ async function searchBestRoundTripRoute({
         // bekommen je 2-3.
         const declaredMaxPerPhase =
             phase.name === 'strict'
-                ? 3
+                ? 2
                 : phase.name === 'balanced'
-                ? (constrainedRoundTripSearch || shortCurvySearch ? 3 : 2)
+                ? 2
                 : (constrainedRoundTripSearch || shortCurvySearch)
                 ? 3
-                : 3
+                : 2
         const phasesRemainingAfterThis =
             searchPhases.length - 1 - searchPhases.indexOf(phase)
         // Reserviere mindestens 2 Versuche pro nachfolgender Phase.
@@ -2139,13 +2167,7 @@ async function searchBestRoundTripRoute({
             const primaryFailureKind = getRetryKindFromMapboxFailure(fetchResult)
             if (primaryFailureKind === 'rate_limit') rateLimitHits += 1
             if (primaryFailureKind === 'timeout') timeoutHits += 1
-
-            if (rateLimitHits >= 2) {
-                throw new Error('Routing provider rate limit reached during round-trip search.')
-            }
-            if (timeoutHits >= 3) {
-                throw new Error('Routing provider timeout during round-trip search.')
-            }
+            if (shouldAbortForProviderPressure()) break
 
             if (
                 fetchResult.outcome === 'no_route' &&
@@ -2168,15 +2190,14 @@ async function searchBestRoundTripRoute({
                 const relaxedFailureKind = getRetryKindFromMapboxFailure(relaxedFetch)
                 if (relaxedFailureKind === 'rate_limit') rateLimitHits += 1
                 if (relaxedFailureKind === 'timeout') timeoutHits += 1
-                if (rateLimitHits >= 2) {
-                    throw new Error('Routing provider rate limit reached during round-trip search.')
-                }
-                if (timeoutHits >= 3) {
-                    throw new Error('Routing provider timeout during round-trip search.')
-                }
+                if (shouldAbortForProviderPressure()) break
                 if (relaxedFetch.outcome === 'ok') {
                     fetchResult = relaxedFetch
                 }
+            }
+
+            if (stopSearchWithBestCandidate) {
+                break
             }
 
             if (!fetchResult.route) {
@@ -2221,12 +2242,7 @@ async function searchBestRoundTripRoute({
                 const relaxedFailureKind = getRetryKindFromMapboxFailure(relaxedFetch)
                 if (relaxedFailureKind === 'rate_limit') rateLimitHits += 1
                 if (relaxedFailureKind === 'timeout') timeoutHits += 1
-                if (rateLimitHits >= 2) {
-                    throw new Error('Routing provider rate limit reached during round-trip search.')
-                }
-                if (timeoutHits >= 3) {
-                    throw new Error('Routing provider timeout during round-trip search.')
-                }
+                if (shouldAbortForProviderPressure()) break
                 if (relaxedFetch.route) {
                     const relaxedQuality = evaluateRouteQuality(relaxedFetch.route, 'ROUND_TRIP', {
                         targetDistanceKm,
@@ -2241,6 +2257,10 @@ async function searchBestRoundTripRoute({
                         quality = relaxedQuality
                     }
                 }
+            }
+
+            if (stopSearchWithBestCandidate) {
+                break
             }
 
             console.log(
@@ -2273,15 +2293,25 @@ async function searchBestRoundTripRoute({
                         quality.distanceDeltaKm <= targetDistanceKm * 0.18
                     )
                 )
+            const shouldStopAfterAcceptableCandidate =
+                quality.tier === 'acceptable' &&
+                (
+                    phase.name === 'fallback' ||
+                    phaseAcceptedCandidates >= 2 ||
+                    candidateAttempts >= (constrainedRoundTripSearch ? 3 : 2)
+                )
 
-            if (shouldStopAfterGoodCandidate) {
+            if (shouldStopAfterGoodCandidate || shouldStopAfterAcceptableCandidate) {
                 console.log(
-                    `[RT] Phase ${phase.name}: good candidate found, stopping early after ${phaseAttempts} attempts`,
+                    `[RT] Phase ${phase.name}: usable candidate found, stopping early after ${phaseAttempts} attempts`,
                 )
                 break
             }
         }
 
+        if (stopSearchWithBestCandidate) {
+            break
+        }
         if (
             candidateAttempts >= globalAttemptBudget ||
             Date.now() - searchStartTs >= roundTripTimeBudgetMs
@@ -2292,6 +2322,16 @@ async function searchBestRoundTripRoute({
             break
         }
         if (phaseAcceptedCandidates > 0 && bestQuality?.tier === 'good') {
+            break
+        }
+        if (
+            phaseAcceptedCandidates > 0 &&
+            bestQuality?.tier === 'acceptable' &&
+            (
+                phase.name === 'fallback' ||
+                candidateAttempts >= (constrainedRoundTripSearch ? 3 : 2)
+            )
+        ) {
             break
         }
     }
@@ -2654,6 +2694,7 @@ Deno.serve(async (req) => {
                 variantHint,
                 fingerprintHint,
                 maxCandidateAttemptsHint,
+                continueStraight: requestContinueStraight,
             });
             if (roundTripSearch?.route) {
                 route = roundTripSearch.route;
@@ -3102,12 +3143,29 @@ Deno.serve(async (req) => {
                     Math.round((effectiveTargetDistanceKm ?? targetDistance!) * 1.38),
                 )
                 : distanceConfig.acceptableMaxKm + 2
-            if (
-                actualDistanceKm < finalAcceptableMinKm ||
-                actualDistanceKm > finalAcceptableMaxKm
-            ) {
+            const successFirstHardMinKm = Math.max(
+                0,
+                Math.round((effectiveTargetDistanceKm ?? targetDistance!) * (avoidHighways ? 0.60 : 0.64)),
+            )
+            const successFirstHardMaxKm = Math.round(
+                (effectiveTargetDistanceKm ?? targetDistance!) * (avoidHighways ? 1.44 : 1.40),
+            )
+            const withinPreferredBand =
+                actualDistanceKm >= finalAcceptableMinKm &&
+                actualDistanceKm <= finalAcceptableMaxKm
+            const withinSuccessFirstHardBand =
+                actualDistanceKm >= successFirstHardMinKm &&
+                actualDistanceKm <= successFirstHardMaxKm
+            if (!withinPreferredBand && !withinSuccessFirstHardBand) {
                 throw new Error(
                     `No route found with current constraints after exhausting round-trip search. Final distance ${actualDistanceKm.toFixed(1)}km is outside acceptable band ${finalAcceptableMinKm}-${finalAcceptableMaxKm}km.`,
+                )
+            }
+            if (!withinPreferredBand && withinSuccessFirstHardBand) {
+                console.log(
+                    `[RT] Success-first keep: final distance ${actualDistanceKm.toFixed(1)}km outside preferred band ` +
+                    `${finalAcceptableMinKm}-${finalAcceptableMaxKm}km but inside hard band ` +
+                    `${successFirstHardMinKm}-${successFirstHardMaxKm}km`,
                 )
             }
         }

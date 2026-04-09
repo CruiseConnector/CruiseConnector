@@ -429,11 +429,15 @@ class RouteQualityValidator {
         distanceDeltaPercent * 100 * 1.6 +
         (isRoundTrip ? quality.returnPathPercent * 1.4 : 0.0) +
         quality.shapePenalty +
-        quality.centerRecrossPercent * (isRoundTrip ? 0.22 : 0.08) +
-        quality.spurArmPercent * (isRoundTrip ? 0.28 : 0.10) +
-        quality.foldedAreaPenalty * (isRoundTrip ? 0.32 : 0.12) +
-        quality.repeatedStartAreaPercent * (isRoundTrip ? 0.24 : 0.06) +
-        quality.microZigzagPercent * 0.20 +
+        // Loop-Shape-Gewichte für Rundkurse verstärkt (Präsentations-Fix):
+        // Vorher zu lax — krakenförmige Kandidaten mit 60–80% spurArm
+        // landeten trotz Shape-Penalties noch in "acceptable", weil
+        // curveCount/distanceFit sie überkompensierten.
+        quality.centerRecrossPercent * (isRoundTrip ? 0.40 : 0.08) +
+        quality.spurArmPercent * (isRoundTrip ? 0.46 : 0.10) +
+        quality.foldedAreaPenalty * (isRoundTrip ? 0.38 : 0.12) +
+        quality.repeatedStartAreaPercent * (isRoundTrip ? 0.32 : 0.06) +
+        quality.microZigzagPercent * 0.22 +
         pointPenalty +
         _styleSpecificShapePenalty(
           quality: quality,
@@ -441,8 +445,11 @@ class RouteQualityValidator {
           styleProfileKey: styleProfileKey,
         ) -
         styleFitScore * 0.22 -
-        quality.dominantLoopScore * (isRoundTrip ? 0.26 : 0.08) -
-        quality.scenicLoopScore * (isRoundTrip ? 0.18 : 0.14) +
+        // Saubere Schleifen deutlich stärker belohnen, damit ein lesbarer
+        // Loop eine hässliche 70-Kurven-Krake trotz hoher Kurvenzahl
+        // im Ranking überholen kann.
+        quality.dominantLoopScore * (isRoundTrip ? 0.42 : 0.08) -
+        quality.scenicLoopScore * (isRoundTrip ? 0.26 : 0.14) +
         (!quality.isLoopClosed ? 80 : 0);
 
     // Echte Stern-/Spider-Patterns brauchen MEHRERE radiale Peaks UND
@@ -451,12 +458,23 @@ class RouteQualityValidator {
     // Stern-Charakter — wir verlangen daher ≥3 Reentries oder ≥4 Peaks
     // mit ≥2 Reentries, sonst landet jede legitime Bergroute in rejected.
     // spurArm/repeatedStart bleibt der hard reject für echte Kraken.
+    // Zusätzliche Kraken-/Stern-Bedingungen: Einzelne harte Kriterien
+    // reichen bereits aus. Tal-Loops mit natürlichem centerReentry=2 bleiben
+    // geschont, weil wir weiterhin ≥3 Reentries oder ≥4 Peaks verlangen,
+    // ABER neu: einzeln extrem hoher spurArmPercent (echte Kraken) sowie
+    // kombinierte Stern-Pattern (radialPeak≥3 + spurArm≥55% ODER
+    // centerRecross≥55% + spurArm≥40%) kippen in rejected.
     final severeRoundTripShape =
         isRoundTrip &&
         ((quality.centerReentryCount >= 3) ||
             (quality.radialPeakCount >= 4 && quality.centerReentryCount >= 2) ||
-            (quality.spurArmPercent >= 65.0 &&
-                quality.repeatedStartAreaPercent >= 35.0) ||
+            (quality.spurArmPercent >= 80.0) ||
+            (quality.radialPeakCount >= 4 &&
+                quality.spurArmPercent >= 60.0) ||
+            (quality.centerRecrossPercent >= 55.0 &&
+                quality.spurArmPercent >= 40.0) ||
+            (quality.spurArmPercent >= 58.0 &&
+                quality.repeatedStartAreaPercent >= 32.0) ||
             (quality.middleCoverageRatio < 0.22 &&
                 (quality.centerRecrossPercent >= 45.0 ||
                     quality.repeatedStartAreaPercent >= 45.0 ||
@@ -480,10 +498,10 @@ class RouteQualityValidator {
     if (coordinateCount < acceptableMinCoordinates ||
         quality.overlapPercent > acceptableOverlap ||
         !acceptableDistanceOk ||
-        quality.foldedAreaPenalty > (isRoundTrip ? 78.0 : 88.0) ||
-        quality.repeatedStartAreaPercent > (isRoundTrip ? 62.0 : 72.0) ||
-        quality.microZigzagPercent > (isRoundTrip ? 48.0 : 54.0) ||
-        quality.shapePenalty > (isRoundTrip ? 62.0 : 42.0)) {
+        quality.foldedAreaPenalty > (isRoundTrip ? 74.0 : 88.0) ||
+        quality.repeatedStartAreaPercent > (isRoundTrip ? 56.0 : 72.0) ||
+        quality.microZigzagPercent > (isRoundTrip ? 44.0 : 54.0) ||
+        quality.shapePenalty > (isRoundTrip ? 58.0 : 42.0)) {
       final hasHardDistanceMiss =
           targetDistanceKm > 0 &&
           distanceDeltaPercent >
@@ -1327,20 +1345,27 @@ class RouteQualityValidator {
       case 'sport':
         return quality.microZigzagPercent * 0.14 +
             quality.corridorSwitchCount * 4.0 +
-            quality.foldedAreaPenalty * 0.08;
+            quality.foldedAreaPenalty * 0.08 +
+            (isRoundTrip ? quality.spurArmPercent * 0.16 : 0.0);
       case 'abendrunde':
         return quality.microZigzagPercent * 0.12 +
             quality.repeatedStartAreaPercent * 0.14 +
-            quality.centerReentryCount * 2.0;
+            quality.centerReentryCount * 2.0 +
+            (isRoundTrip ? quality.spurArmPercent * 0.18 : 0.0);
       case 'kurvenjagd':
-        return quality.centerRecrossPercent * 0.12 +
-            math.max(0, quality.spurArmCount - 2) * 4.0;
+        // Kurvenjagd bestraft spurArms/centerRecross bisher zu schwach —
+        // die hohe Kurvenzahl hat Krakenformen überkompensiert.
+        return quality.centerRecrossPercent * 0.22 +
+            math.max(0, quality.spurArmCount - 2) * 6.0 +
+            (isRoundTrip ? quality.spurArmPercent * 0.12 : 0.0);
       case 'entdecker':
         return quality.progressReversalCount * 3.0 +
-            quality.repeatedStartAreaPercent * 0.08;
+            quality.repeatedStartAreaPercent * 0.08 +
+            (isRoundTrip ? quality.spurArmPercent * 0.14 : 0.0);
       default:
         return isRoundTrip
-            ? quality.centerRecrossPercent * 0.08
+            ? quality.centerRecrossPercent * 0.08 +
+                  quality.spurArmPercent * 0.12
             : quality.corridorSwitchCount * 2.0;
     }
   }

@@ -87,16 +87,17 @@ class _VaryingCountingInvoker implements RouteEdgeInvoker {
 }
 
 class _FlakyCountingInvoker implements RouteEdgeInvoker {
-  _FlakyCountingInvoker(this.response);
+  _FlakyCountingInvoker(this.response, {this.failuresBeforeSuccess = 4});
 
   final Map<String, dynamic> response;
+  final int failuresBeforeSuccess;
   int callCount = 0;
 
   @override
   Future<dynamic> invoke(Map<String, dynamic> body) async {
     callCount += 1;
     await Future<void>.delayed(const Duration(milliseconds: 25));
-    if (callCount <= 4) {
+    if (callCount <= failuresBeforeSuccess) {
       throw TimeoutException('simulated timeout');
     }
     return response;
@@ -212,8 +213,37 @@ void main() {
     },
   );
 
+  test(
+    'gleiche brauchbare Route darf nach Seen-Historie erneut geliefert werden',
+    () async {
+      final first = await service.generateRoundTrip(
+        startPosition: _start(),
+        targetDistanceKm: 50,
+        mode: 'Sport Mode',
+        planningType: 'Zufall',
+        forceFreshVariant: true,
+      );
+
+      final second = await service.generateRoundTrip(
+        startPosition: _start(),
+        targetDistanceKm: 50,
+        mode: 'Sport Mode',
+        planningType: 'Zufall',
+        forceFreshVariant: true,
+      );
+
+      expect(first.coordinates, isNotEmpty);
+      expect(second.coordinates, isNotEmpty);
+      expect(second.distanceKm, closeTo(first.distanceKm!, 0.01));
+      expect(invoker.callCount, greaterThanOrEqualTo(2));
+    },
+  );
+
   test('nach einem Fehler kann direkt erneut frisch gesucht werden', () async {
-    final flakyInvoker = _FlakyCountingInvoker(_closedLoopResponse());
+    final flakyInvoker = _FlakyCountingInvoker(
+      _closedLoopResponse(),
+      failuresBeforeSuccess: 5,
+    );
     service = RouteService(invoker: flakyInvoker);
 
     await expectLater(
@@ -236,6 +266,6 @@ void main() {
     );
 
     expect(recovered.coordinates, isNotEmpty);
-    expect(flakyInvoker.callCount, greaterThanOrEqualTo(5));
+    expect(flakyInvoker.callCount, greaterThanOrEqualTo(6));
   });
 }

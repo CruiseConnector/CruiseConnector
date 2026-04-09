@@ -32,6 +32,8 @@ const _dornbirnLat = 47.4125;
 const _dornbirnLng = 9.7414;
 const _feldkirchLat = 47.2413;
 const _feldkirchLng = 9.5986;
+const _bregenzLat = 47.5031;
+const _bregenzLng = 9.7471;
 
 geo.Position _dornbirn() => geo.Position(
   latitude: _dornbirnLat,
@@ -508,6 +510,7 @@ void main() {
             targetDistanceKm: 50,
             mode: 'Sport Mode',
             planningType: 'Zufall',
+            forceFreshVariant: true,
           );
         } on RouteServiceException {
           // Für diese Prüfung ist nur der Request-Seed relevant.
@@ -529,6 +532,7 @@ void main() {
             targetDistanceKm: 50,
             mode: 'Sport Mode',
             planningType: 'Zufall',
+            forceFreshVariant: true,
           );
         } on RouteServiceException {
           // Für diese Prüfung ist nur der Request-Seed relevant.
@@ -759,6 +763,34 @@ void main() {
       expect(captured.containsKey('targetDistance'), isFalse);
       expect(captured.containsKey('detour_level'), isFalse);
       expect(captured.containsKey('detour_factor'), isFalse);
+    });
+
+    test('Direkt-A→B sendet keine Scenic-/Style-Hints mit', () async {
+      when(mockInvoker.invoke(any)).thenAnswer(
+        (_) async =>
+            _buildRouteResponse(distanceMeters: 20000, durationSeconds: 1800),
+      );
+
+      try {
+        await service.generatePointToPoint(
+          startPosition: _munich(),
+          destinationLat: 47.8,
+          destinationLng: 12.0,
+          mode: 'Sport Mode',
+          scenic: false,
+        );
+      } on RouteServiceException {
+        // Für diese Prüfung zählt nur der Request-Body.
+      }
+
+      final captured =
+          verify(mockInvoker.invoke(captureAny)).captured.last
+              as Map<String, dynamic>;
+      expect(captured.containsKey('style_profile'), isFalse);
+      expect(captured.containsKey('waypoint_shape_factor'), isFalse);
+      expect(captured.containsKey('radius_multiplier'), isFalse);
+      expect(captured.containsKey('prefer_flat_terrain'), isFalse);
+      expect(captured.containsKey('zigzag_waypoints'), isFalse);
     });
 
     test('avoidHighways = true → highway flag wird mitgesendet', () async {
@@ -1017,10 +1049,7 @@ void main() {
           expect(request['style_profile'], 'sport');
           expect(request['continue_straight'], isTrue);
           // Variants 1-3 sind alle scenic — Klein bekommt 4, Mittel/Groß 5.
-          expect(
-            request['max_candidate_attempts'],
-            variant == 1 ? 4 : 5,
-          );
+          expect(request['max_candidate_attempts'], variant == 1 ? 4 : 5);
           expect(request['detour_factor'], isA<double>());
         }
 
@@ -1048,6 +1077,7 @@ void main() {
             mode: 'Sport Mode',
             scenic: true,
             routeVariant: 1,
+            forceFreshVariant: true,
           );
         } on RouteServiceException {
           // Für diese Prüfung ist nur der Request-Seed relevant.
@@ -1071,6 +1101,7 @@ void main() {
             mode: 'Sport Mode',
             scenic: true,
             routeVariant: 1,
+            forceFreshVariant: true,
           );
         } on RouteServiceException {
           // Für diese Prüfung ist nur der Request-Seed relevant.
@@ -1122,6 +1153,115 @@ void main() {
         expect(callCount, 2);
         expect(result.distanceKm, isNotNull);
         expect(result.distanceKm!, lessThan(200));
+      },
+    );
+
+    test(
+      'scenic A→B liefert notfalls direkte brauchbare Fallback-Route statt no-route',
+      () async {
+        when(mockInvoker.invoke(any)).thenAnswer((_) async {
+          return _buildPointToPointResponse(
+            distanceMeters: 21500,
+            durationSeconds: 1500,
+            destinationLat: _feldkirchLat,
+            destinationLng: _feldkirchLng,
+            coordinateCount: 180,
+            bendScale: 0.04,
+            startLat: _dornbirnLat,
+            startLng: _dornbirnLng,
+          );
+        });
+
+        final result = await service.generatePointToPoint(
+          startPosition: _dornbirn(),
+          destinationLat: _feldkirchLat,
+          destinationLng: _feldkirchLng,
+          mode: 'Sport Mode',
+          scenic: true,
+          routeVariant: 3,
+        );
+
+        expect(result.coordinates, isNotEmpty);
+        expect(result.distanceKm, isNotNull);
+        expect(result.distanceKm!, greaterThan(18));
+        expect(result.distanceKm!, lessThan(30));
+        verify(mockInvoker.invoke(any)).called(greaterThanOrEqualTo(1));
+      },
+    );
+
+    test(
+      'Direkt-A→B bewertet normale Fahrdistanz nicht gegen Luftlinie und bleibt benutzbar',
+      () async {
+        when(mockInvoker.invoke(any)).thenAnswer((_) async {
+          return _buildPointToPointResponse(
+            distanceMeters: 16600,
+            durationSeconds: 1380,
+            destinationLat: _bregenzLat,
+            destinationLng: _bregenzLng,
+            coordinateCount: 220,
+            bendScale: 0.10,
+            startLat: _dornbirnLat,
+            startLng: _dornbirnLng,
+          );
+        });
+
+        final result = await service.generatePointToPoint(
+          startPosition: _dornbirn(),
+          destinationLat: _bregenzLat,
+          destinationLng: _bregenzLng,
+          mode: 'Sport Mode',
+          scenic: false,
+        );
+
+        expect(result.coordinates, isNotEmpty);
+        expect(result.distanceKm, isNotNull);
+        expect(result.distanceKm!, greaterThan(15));
+        verify(mockInvoker.invoke(any)).called(greaterThanOrEqualTo(1));
+      },
+    );
+
+    test(
+      'scenic A→B stoppt nicht zu früh bei direktem Acceptable-Fallback',
+      () async {
+        var callCount = 0;
+        when(mockInvoker.invoke(any)).thenAnswer((_) async {
+          callCount += 1;
+          if (callCount == 1) {
+            return _buildPointToPointResponse(
+              distanceMeters: 21500,
+              durationSeconds: 1500,
+              destinationLat: _feldkirchLat,
+              destinationLng: _feldkirchLng,
+              coordinateCount: 180,
+              bendScale: 0.04,
+              startLat: _dornbirnLat,
+              startLng: _dornbirnLng,
+            );
+          }
+          return _buildPointToPointResponse(
+            distanceMeters: 43000,
+            durationSeconds: 3200,
+            destinationLat: _feldkirchLat,
+            destinationLng: _feldkirchLng,
+            coordinateCount: 260,
+            bendScale: 0.22,
+            startLat: _dornbirnLat,
+            startLng: _dornbirnLng,
+          );
+        });
+
+        final result = await service.generatePointToPoint(
+          startPosition: _dornbirn(),
+          destinationLat: _feldkirchLat,
+          destinationLng: _feldkirchLng,
+          mode: 'Sport Mode',
+          scenic: true,
+          routeVariant: 3,
+        );
+
+        expect(callCount, 2);
+        expect(result.distanceKm, isNotNull);
+        expect(result.distanceKm!, greaterThan(35));
       },
     );
   });
