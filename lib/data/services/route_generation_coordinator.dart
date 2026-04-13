@@ -2,7 +2,7 @@ class RouteGenerationCoordinator {
   RouteGenerationCoordinator._();
 
   static final Map<String, Future<dynamic>> _inFlightByScenario = {};
-  static final Set<String> _backgroundPreparation = {};
+  static final Map<String, Future<void>> _backgroundPreparationByScenario = {};
   static DateTime? _backgroundPreparationSuspendedUntil;
 
   static Future<T> runSingleFlight<T>(
@@ -13,9 +13,17 @@ class RouteGenerationCoordinator {
     if (existing != null) {
       return existing as Future<T>;
     }
+    final background = _backgroundPreparationByScenario[scenarioKey];
 
     final future = Future<T>(() async {
       try {
+        if (background != null) {
+          try {
+            await background;
+          } catch (_) {
+            // Foreground request should continue even if prewarm failed.
+          }
+        }
         return await producer();
       } finally {
         _inFlightByScenario.remove(scenarioKey);
@@ -28,7 +36,7 @@ class RouteGenerationCoordinator {
   static bool canPrepare(String scenarioKey) {
     return !_isBackgroundPreparationSuspended() &&
         !_inFlightByScenario.containsKey(scenarioKey) &&
-        !_backgroundPreparation.contains(scenarioKey);
+        !_backgroundPreparationByScenario.containsKey(scenarioKey);
   }
 
   static Future<void> prepareInBackground(
@@ -36,12 +44,15 @@ class RouteGenerationCoordinator {
     Future<void> Function() producer,
   ) async {
     if (!canPrepare(scenarioKey)) return;
-    _backgroundPreparation.add(scenarioKey);
-    try {
-      await producer();
-    } finally {
-      _backgroundPreparation.remove(scenarioKey);
-    }
+    final future = Future<void>(() async {
+      try {
+        await producer();
+      } finally {
+        _backgroundPreparationByScenario.remove(scenarioKey);
+      }
+    });
+    _backgroundPreparationByScenario[scenarioKey] = future;
+    await future;
   }
 
   static bool hasInFlight(String scenarioKey) {
@@ -60,7 +71,7 @@ class RouteGenerationCoordinator {
 
   static void resetForTests() {
     _inFlightByScenario.clear();
-    _backgroundPreparation.clear();
+    _backgroundPreparationByScenario.clear();
     _backgroundPreparationSuspendedUntil = null;
   }
 

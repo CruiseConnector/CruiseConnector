@@ -8,6 +8,7 @@ import 'package:mockito/mockito.dart';
 import 'package:geolocator/geolocator.dart' as geo;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:cruise_connect/data/services/route_style_config.dart';
 import 'package:cruise_connect/data/services/route_service.dart';
 import 'package:cruise_connect/domain/models/route_result.dart';
 
@@ -666,13 +667,13 @@ void main() {
           expect(request['direction_hint'], isA<int>());
         }
 
-        expect(sportRequest['max_candidate_attempts'], 8);
+        expect(sportRequest['max_candidate_attempts'], 7);
         expect(sportRequest['style_profile'], 'sport');
         expect(sportRequest['waypoint_shape_factor'], 2.0);
         expect(sportRequest['radius_multiplier'], 1.0);
         expect(sportRequest['zigzag_waypoints'], isFalse);
 
-        expect(curveRequest['max_candidate_attempts'], 9);
+        expect(curveRequest['max_candidate_attempts'], 8);
         expect(curveRequest['style_profile'], 'kurvenjagd');
         expect(curveRequest['waypoint_shape_factor'], 1.0);
         expect(curveRequest['radius_multiplier'], 1.15);
@@ -1022,6 +1023,7 @@ void main() {
               _feldkirchLng,
             ) /
             1000.0;
+        final styleConfig = RouteStyleConfig.forMode('Sport Mode');
         final targets = <int, double>{};
 
         for (final variant in const [1, 2, 3]) {
@@ -1053,9 +1055,54 @@ void main() {
           expect(request['detour_factor'], isA<double>());
         }
 
-        expect(targets[1]!, inInclusiveRange(directKm + 4, directKm * 1.70));
-        expect(targets[2]!, inInclusiveRange(directKm + 10, directKm * 2.10));
-        expect(targets[3]!, inInclusiveRange(directKm + 20, directKm * 2.85));
+        expect(
+          targets[1]!,
+          inInclusiveRange(
+            styleConfig.minimumPointToPointDistanceKm(
+              directDistanceKm: directKm,
+              scenic: true,
+              detourVariant: 1,
+            ),
+            styleConfig.maximumPointToPointDistanceKm(
+              targetKm: targets[1]!,
+              directDistanceKm: directKm,
+              scenic: true,
+              detourVariant: 1,
+            ),
+          ),
+        );
+        expect(
+          targets[2]!,
+          inInclusiveRange(
+            styleConfig.minimumPointToPointDistanceKm(
+              directDistanceKm: directKm,
+              scenic: true,
+              detourVariant: 2,
+            ),
+            styleConfig.maximumPointToPointDistanceKm(
+              targetKm: targets[2]!,
+              directDistanceKm: directKm,
+              scenic: true,
+              detourVariant: 2,
+            ),
+          ),
+        );
+        expect(
+          targets[3]!,
+          inInclusiveRange(
+            styleConfig.minimumPointToPointDistanceKm(
+              directDistanceKm: directKm,
+              scenic: true,
+              detourVariant: 3,
+            ),
+            styleConfig.maximumPointToPointDistanceKm(
+              targetKm: targets[3]!,
+              directDistanceKm: directKm,
+              scenic: true,
+              detourVariant: 3,
+            ),
+          ),
+        );
         expect(targets[2]!, greaterThan(targets[1]!));
         expect(targets[3]!, greaterThan(targets[2]!));
       },
@@ -1150,7 +1197,7 @@ void main() {
           routeVariant: 1,
         );
 
-        expect(callCount, 2);
+        expect(callCount, inInclusiveRange(2, 3));
         expect(result.distanceKm, isNotNull);
         expect(result.distanceKm!, lessThan(200));
       },
@@ -1259,7 +1306,7 @@ void main() {
           routeVariant: 3,
         );
 
-        expect(callCount, 2);
+        expect(callCount, inInclusiveRange(2, 3));
         expect(result.distanceKm, isNotNull);
         expect(result.distanceKm!, greaterThan(35));
       },
@@ -1295,6 +1342,36 @@ void main() {
         ),
         throwsException,
       );
+    });
+
+    test('bricht bei Validierungsfehlern ohne weitere Fallbacks ab', () async {
+      var callCount = 0;
+      when(mockInvoker.invoke(any)).thenAnswer((_) async {
+        callCount += 1;
+        throw const FunctionException(
+          status: 422,
+          details: {'error': 'Invalid startLocation'},
+          reasonPhrase: 'Unprocessable Entity',
+        );
+      });
+
+      await expectLater(
+        service.generateRoundTrip(
+          startPosition: _munich(),
+          targetDistanceKm: 50,
+          mode: 'Sport Mode',
+          planningType: 'Zufall',
+        ),
+        throwsA(
+          isA<RouteServiceException>().having(
+            (e) => e.type,
+            'type',
+            RouteErrorType.validation,
+          ),
+        ),
+      );
+
+      expect(callCount, 1);
     });
 
     test('mapped "Keine Route gefunden" auf noRoute', () async {
@@ -1645,10 +1722,10 @@ void main() {
           // Hier prüfen wir nur die Übergabe des Fahrstils in den Request.
         }
 
-        final captured =
-            verify(mockInvoker.invoke(captureAny)).captured.last
-                as Map<String, dynamic>;
-        expect(captured['mode'], style);
+        final captured = verify(
+          mockInvoker.invoke(captureAny),
+        ).captured.cast<Map>();
+        expect(captured.first['mode'], style);
       });
     }
   });

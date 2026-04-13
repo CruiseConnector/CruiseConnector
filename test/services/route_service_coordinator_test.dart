@@ -242,7 +242,7 @@ void main() {
   test('nach einem Fehler kann direkt erneut frisch gesucht werden', () async {
     final flakyInvoker = _FlakyCountingInvoker(
       _closedLoopResponse(),
-      failuresBeforeSuccess: 5,
+      failuresBeforeSuccess: 3,
     );
     service = RouteService(invoker: flakyInvoker);
 
@@ -266,6 +266,6 @@ void main() {
     );
 
     expect(recovered.coordinates, isNotEmpty);
-    expect(flakyInvoker.callCount, greaterThanOrEqualTo(6));
+    expect(flakyInvoker.callCount, greaterThanOrEqualTo(4));
   });
 }

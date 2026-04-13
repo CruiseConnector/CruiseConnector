@@ -433,23 +433,23 @@ class RouteQualityValidator {
         // Vorher zu lax — krakenförmige Kandidaten mit 60–80% spurArm
         // landeten trotz Shape-Penalties noch in "acceptable", weil
         // curveCount/distanceFit sie überkompensierten.
-        quality.centerRecrossPercent * (isRoundTrip ? 0.40 : 0.08) +
-        quality.spurArmPercent * (isRoundTrip ? 0.46 : 0.10) +
-        quality.foldedAreaPenalty * (isRoundTrip ? 0.38 : 0.12) +
-        quality.repeatedStartAreaPercent * (isRoundTrip ? 0.32 : 0.06) +
-        quality.microZigzagPercent * 0.22 +
+        quality.centerRecrossPercent * (isRoundTrip ? 0.46 : 0.08) +
+        quality.spurArmPercent * (isRoundTrip ? 0.54 : 0.10) +
+        quality.foldedAreaPenalty * (isRoundTrip ? 0.42 : 0.12) +
+        quality.repeatedStartAreaPercent * (isRoundTrip ? 0.36 : 0.06) +
+        quality.microZigzagPercent * 0.24 +
         pointPenalty +
         _styleSpecificShapePenalty(
           quality: quality,
           isRoundTrip: isRoundTrip,
           styleProfileKey: styleProfileKey,
         ) -
-        styleFitScore * 0.22 -
+        styleFitScore * 0.16 -
         // Saubere Schleifen deutlich stärker belohnen, damit ein lesbarer
         // Loop eine hässliche 70-Kurven-Krake trotz hoher Kurvenzahl
         // im Ranking überholen kann.
-        quality.dominantLoopScore * (isRoundTrip ? 0.42 : 0.08) -
-        quality.scenicLoopScore * (isRoundTrip ? 0.26 : 0.14) +
+        quality.dominantLoopScore * (isRoundTrip ? 0.50 : 0.08) -
+        quality.scenicLoopScore * (isRoundTrip ? 0.30 : 0.14) +
         (!quality.isLoopClosed ? 80 : 0);
 
     // Echte Stern-/Spider-Patterns brauchen MEHRERE radiale Peaks UND
@@ -469,8 +469,7 @@ class RouteQualityValidator {
         ((quality.centerReentryCount >= 3) ||
             (quality.radialPeakCount >= 4 && quality.centerReentryCount >= 2) ||
             (quality.spurArmPercent >= 80.0) ||
-            (quality.radialPeakCount >= 4 &&
-                quality.spurArmPercent >= 60.0) ||
+            (quality.radialPeakCount >= 4 && quality.spurArmPercent >= 60.0) ||
             (quality.centerRecrossPercent >= 55.0 &&
                 quality.spurArmPercent >= 40.0) ||
             (quality.spurArmPercent >= 58.0 &&
@@ -832,26 +831,26 @@ class RouteQualityValidator {
         maxDistance: maxDistance,
       );
       final shapePenalty =
-          centerRecrossPercent * 0.28 +
-          repeatedStartAreaPercent * 0.20 +
-          spurArmPercent * 0.34 +
-          foldedAreaPenalty * 0.26 +
-          math.max(0.0, 0.60 - middleCoverageRatio) * 80.0 +
-          microZigzagPercent * 0.30;
+          centerRecrossPercent * 0.34 +
+          repeatedStartAreaPercent * 0.24 +
+          spurArmPercent * 0.40 +
+          foldedAreaPenalty * 0.30 +
+          math.max(0.0, 0.64 - middleCoverageRatio) * 88.0 +
+          microZigzagPercent * 0.34;
       final scenicLoopScore =
-          middleCoverageRatio * 38.0 +
-          compactnessScore * 0.18 +
-          (100.0 - foldedAreaPenalty) * 0.20 +
-          (100.0 - repeatedStartAreaPercent) * 0.10 +
-          (100.0 - centerRecrossPercent) * 0.10 -
-          spurArmPercent * 0.10 -
-          microZigzagPercent * 0.10;
-      final dominantLoopScore =
-          middleCoverageRatio * 32.0 +
-          compactnessScore * 0.22 +
+          middleCoverageRatio * 40.0 +
+          compactnessScore * 0.20 +
           (100.0 - foldedAreaPenalty) * 0.22 +
-          (100.0 - repeatedStartAreaPercent) * 0.12 +
-          (100.0 - centerRecrossPercent) * 0.12;
+          (100.0 - repeatedStartAreaPercent) * 0.14 +
+          (100.0 - centerRecrossPercent) * 0.14 -
+          spurArmPercent * 0.12 -
+          microZigzagPercent * 0.12;
+      final dominantLoopScore =
+          middleCoverageRatio * 34.0 +
+          compactnessScore * 0.24 +
+          (100.0 - foldedAreaPenalty) * 0.24 +
+          (100.0 - repeatedStartAreaPercent) * 0.14 +
+          (100.0 - centerRecrossPercent) * 0.14;
 
       return _RouteShapeMetrics(
         centerReentryCount: centerRecrossClusters,

@@ -59,6 +59,7 @@ class RouteService {
       'route_service_recent_explorer_bearings';
   static const String _lastSuccessfulRouteKey =
       'route_service_last_successful_route';
+  static final Map<String, RouteResult> _recentSuccessfulRoutes = {};
 
   /// Flag: letzte Route kam aus dem Offline-Cache
   static bool lastRouteFromCache = false;
@@ -95,6 +96,7 @@ class RouteService {
   @visibleForTesting
   static void resetForTests() {
     _sessionCache.clear();
+    _recentSuccessfulRoutes.clear();
     _scenarioVariantCounters.clear();
     _globalDiversityIndex = 0;
     _workerLimitCooldownUntil = null;
@@ -165,6 +167,10 @@ class RouteService {
         final hasSeenHistory = SeenRouteRegistry.entriesFor(
           scenario.scenarioKey,
         ).isNotEmpty;
+        final difficultScenario = _isDifficultRoundTripScenario(
+          scenario,
+          styleConfig,
+        );
         // Client-Schleife: 2 Versuche. Erster Versuch geht über die Edge
         // Function (die selbst 7-9 Pläne testet), zweiter Versuch nutzt einen
         // anderen Seed/Bearing für Diversifizierung. Wenn der erste Versuch
@@ -197,12 +203,7 @@ class RouteService {
               // in der Edge Function). Constrained Suchen (Autobahn vermeiden,
               // Kurvenjagd in engen Tälern) bekommen +1 Plan, weil sie pro
               // Versuch ggf. einen relax-retry brauchen.
-              candidateBudget:
-                  avoidHighways ||
-                      (styleConfig.profileKey == 'kurvenjagd' &&
-                          targetDistanceKm <= 60)
-                  ? 9
-                  : 8,
+              candidateBudget: _roundTripCandidateBudget(scenario, styleConfig),
             );
             if (candidate.accepted) {
               if (_isBetterCandidate(candidate, bestCandidate)) {
@@ -215,7 +216,11 @@ class RouteService {
                 spareCandidate = candidate;
               }
             }
-            if (candidate.accepted && (candidate.isIdeal || candidate.isGood)) {
+            if (candidate.accepted &&
+                (candidate.isIdeal ||
+                    candidate.isGood ||
+                    (candidate.tier == RouteQualityTier.acceptable &&
+                        !difficultScenario))) {
               break;
             }
           } catch (e, stack) {
@@ -233,6 +238,9 @@ class RouteService {
             debugPrint(
               '[RouteService] RoundTrip candidate ${attempt + 1}/$maxAttempts fehlgeschlagen: ${mapped.debugMessage}',
             );
+            if (_isFatalStructuredError(mapped)) {
+              break;
+            }
           }
         }
 
@@ -262,24 +270,26 @@ class RouteService {
           return finalized;
         }
 
-        final fallback = await _tryRoundTripFallback(
-          scenario: scenario,
-          styleConfig: styleConfig,
-          startPosition: startPosition,
-          targetLocation: targetLocation,
-        );
-        if (fallback != null) {
-          return fallback;
-        }
+        if (_canUseStructuredFallback(lastError)) {
+          final fallback = await _tryRoundTripFallback(
+            scenario: scenario,
+            styleConfig: styleConfig,
+            startPosition: startPosition,
+            targetLocation: targetLocation,
+          );
+          if (fallback != null) {
+            return fallback;
+          }
 
-        final rescueFallback = await _tryRoundTripRescueFallback(
-          scenario: scenario,
-          styleConfig: styleConfig,
-          startPosition: startPosition,
-          targetLocation: targetLocation,
-        );
-        if (rescueFallback != null) {
-          return rescueFallback;
+          final rescueFallback = await _tryRoundTripRescueFallback(
+            scenario: scenario,
+            styleConfig: styleConfig,
+            startPosition: startPosition,
+            targetLocation: targetLocation,
+          );
+          if (rescueFallback != null) {
+            return rescueFallback;
+          }
         }
 
         final cached =
@@ -287,24 +297,12 @@ class RouteService {
               lastError,
               forceFreshVariant: forceFreshVariant,
             )
-            ? await _loadCachedRoute(scenarioKey: scenario.scenarioKey)
+            ? await _loadRecentOrCachedRoute(scenarioKey: scenario.scenarioKey)
             : null;
         if (cached != null) {
-          final cachedCandidate = _evaluateCandidate(
-            scenario: scenario,
-            styleConfig: styleConfig,
-            route: cached,
-            variant: _reuseVariant(scenario, sourceLabel: 'cache'),
-          );
-          if (cachedCandidate.accepted) {
-            lastRouteFromCache = true;
-            return _finalizeAndRemember(
-              scenario: scenario,
-              route: cachedCandidate.route,
-              sampledCoordinates: cachedCandidate.sampledCoordinates,
-              fingerprint: cachedCandidate.fingerprint,
-            );
-          }
+          lastRouteFromCache = true;
+          markRouteAsSeen(scenario.scenarioKey, cached);
+          return _finalizeRoute(cached, scenarioKey: scenario.scenarioKey);
         }
 
         throw lastError ??
@@ -416,10 +414,11 @@ class RouteService {
         final hasSeenHistory = SeenRouteRegistry.entriesFor(
           scenario.scenarioKey,
         ).isNotEmpty;
-        // Client-Schleife: 2 Versuche, damit Mapbox-Hiccups (429/Timeout)
-        // nicht sofort als User-Fehler enden. Auf detourVariant > 0 brauchen
-        // wir den zweiten Versuch außerdem für echte Diversifikation.
-        const maxAttempts = 2;
+        final shouldUseTwoLiveAttempts = shouldDiversify;
+        // Client-Schleife: direkte A→B-Routen bekommen nur einen Live-Versuch,
+        // Scenic-/Detour-Varianten behalten einen zweiten Versuch für echte
+        // Diversifikation und transienten Provider-Pressure.
+        final maxAttempts = shouldUseTwoLiveAttempts ? 2 : 1;
         _RouteCandidate? bestCandidate;
         _RouteCandidate? spareCandidate;
         RouteServiceException? lastError;
@@ -463,7 +462,11 @@ class RouteService {
                 spareCandidate = candidate;
               }
             }
-            if (candidate.accepted && (candidate.isIdeal || candidate.isGood)) {
+            if (candidate.accepted &&
+                (candidate.isIdeal ||
+                    candidate.isGood ||
+                    (candidate.tier == RouteQualityTier.acceptable &&
+                        !shouldUseTwoLiveAttempts))) {
               break;
             }
           } catch (e, stack) {
@@ -481,15 +484,39 @@ class RouteService {
             debugPrint(
               '[RouteService] A→B candidate ${attempt + 1}/$maxAttempts fehlgeschlagen: ${mapped.debugMessage}',
             );
+            if (_isFatalStructuredError(mapped)) {
+              break;
+            }
           }
         }
 
-        if (bestCandidate?.accepted == true) {
+        final acceptedCandidate = bestCandidate;
+        if (acceptedCandidate != null && acceptedCandidate.accepted) {
+          if (_needsStrongerPointToPointDetour(
+            scenario: scenario,
+            styleConfig: styleConfig,
+            candidate: acceptedCandidate,
+            directDistanceKm: directDistanceKm,
+          )) {
+            final scenicUpgrade = await _tryPointToPointFallback(
+              scenario: scenario,
+              startPosition: startPosition,
+              destinationLat: destinationLat,
+              destinationLng: destinationLng,
+              avoidHighways: avoidHighways,
+              directDistanceKm: directDistanceKm,
+              allowDirectFallback: false,
+            );
+            if (scenicUpgrade != null) {
+              return scenicUpgrade;
+            }
+          }
+
           final finalized = _finalizeAndRemember(
             scenario: scenario,
-            route: bestCandidate!.route,
-            sampledCoordinates: bestCandidate.sampledCoordinates,
-            fingerprint: bestCandidate.fingerprint,
+            route: acceptedCandidate.route,
+            sampledCoordinates: acceptedCandidate.sampledCoordinates,
+            fingerprint: acceptedCandidate.fingerprint,
           );
           if (spareCandidate != null) {
             PreparedRouteBuffer.store(
@@ -514,16 +541,18 @@ class RouteService {
           return finalized;
         }
 
-        final fallback = await _tryPointToPointFallback(
-          scenario: scenario,
-          startPosition: startPosition,
-          destinationLat: destinationLat,
-          destinationLng: destinationLng,
-          avoidHighways: avoidHighways,
-          directDistanceKm: directDistanceKm,
-        );
-        if (fallback != null) {
-          return fallback;
+        if (_canUseStructuredFallback(lastError)) {
+          final fallback = await _tryPointToPointFallback(
+            scenario: scenario,
+            startPosition: startPosition,
+            destinationLat: destinationLat,
+            destinationLng: destinationLng,
+            avoidHighways: avoidHighways,
+            directDistanceKm: directDistanceKm,
+          );
+          if (fallback != null) {
+            return fallback;
+          }
         }
 
         final cached =
@@ -531,25 +560,12 @@ class RouteService {
               lastError,
               forceFreshVariant: forceFreshVariant,
             )
-            ? await _loadCachedRoute(scenarioKey: scenario.scenarioKey)
+            ? await _loadRecentOrCachedRoute(scenarioKey: scenario.scenarioKey)
             : null;
         if (cached != null) {
-          final cachedCandidate = _evaluateCandidate(
-            scenario: scenario,
-            styleConfig: styleConfig,
-            route: cached,
-            variant: _reuseVariant(scenario, sourceLabel: 'cache'),
-            directDistanceKm: directDistanceKm,
-          );
-          if (cachedCandidate.accepted) {
-            lastRouteFromCache = true;
-            return _finalizeAndRemember(
-              scenario: scenario,
-              route: cachedCandidate.route,
-              sampledCoordinates: cachedCandidate.sampledCoordinates,
-              fingerprint: cachedCandidate.fingerprint,
-            );
-          }
+          lastRouteFromCache = true;
+          markRouteAsSeen(scenario.scenarioKey, cached);
+          return _finalizeRoute(cached, scenarioKey: scenario.scenarioKey);
         }
 
         throw lastError ??
@@ -1401,9 +1417,11 @@ class RouteService {
         if (!_isRetryable(mapped) || attempt == maxRetries) {
           throw mapped;
         }
-        // Exponential Backoff + Jitter
-        final baseDelayMs = math.pow(2, attempt - 1).toInt() * 1000;
-        final jitterMs = retryRng.nextInt(450);
+        // Shorter Backoff + Jitter. Die strukturierten Fallbacks sitzen
+        // darüber und übernehmen den langen Tail, daher lieber zügig
+        // zum nächsten Versuch wechseln.
+        final baseDelayMs = math.pow(2, attempt - 1).toInt() * 400;
+        final jitterMs = retryRng.nextInt(220);
         final delay = Duration(milliseconds: baseDelayMs + jitterMs);
         debugPrint(
           '[RouteService] Warte ${delay.inMilliseconds}ms vor Retry...',
@@ -1554,6 +1572,69 @@ class RouteService {
     return error.type == RouteErrorType.rateLimit ||
         error.type == RouteErrorType.server ||
         error.type == RouteErrorType.workerLimit;
+  }
+
+  static bool _isFatalStructuredError(RouteServiceException error) {
+    return error.type == RouteErrorType.auth ||
+        error.type == RouteErrorType.validation ||
+        error.type == RouteErrorType.parsing;
+  }
+
+  static bool _isStructuredFallbackError(RouteServiceException error) {
+    if (_isFatalStructuredError(error)) return false;
+
+    return error.type == RouteErrorType.noRoute ||
+        error.type == RouteErrorType.quality ||
+        error.type == RouteErrorType.emptyResponse ||
+        error.type == RouteErrorType.unknown;
+  }
+
+  static bool _canUseStructuredFallback(RouteServiceException? error) {
+    if (error == null) return true;
+    return _isStructuredFallbackError(error);
+  }
+
+  static bool _isDifficultRoundTripScenario(
+    RouteScenario scenario,
+    RouteStyleConfig styleConfig,
+  ) {
+    final targetKm = scenario.targetDistanceKm ?? 0.0;
+    return scenario.avoidHighways ||
+        targetKm >= 100 ||
+        (styleConfig.profileKey == 'kurvenjagd' && targetKm <= 60) ||
+        styleConfig.profileKey == 'entdecker';
+  }
+
+  static int _roundTripCandidateBudget(
+    RouteScenario scenario,
+    RouteStyleConfig styleConfig,
+  ) {
+    final targetKm = scenario.targetDistanceKm ?? 0.0;
+    final highCostCurve =
+        styleConfig.profileKey == 'kurvenjagd' && targetKm >= 120;
+    final constrained =
+        scenario.avoidHighways ||
+        (styleConfig.profileKey == 'kurvenjagd' && targetKm <= 60);
+
+    if (highCostCurve) return 9;
+    if (constrained || targetKm >= 100) return 8;
+    return 7;
+  }
+
+  static int _preparedRoundTripCandidateBudget(
+    RouteScenario scenario,
+    RouteStyleConfig styleConfig,
+  ) {
+    final liveBudget = _roundTripCandidateBudget(scenario, styleConfig);
+    return (liveBudget - 3).clamp(3, 5).toInt();
+  }
+
+  static int _roundTripFallbackCandidateBudget(
+    RouteScenario scenario,
+    RouteStyleConfig styleConfig,
+  ) {
+    final liveBudget = _roundTripCandidateBudget(scenario, styleConfig);
+    return (liveBudget - 2).clamp(4, 6).toInt();
   }
 
   /// Erzeugt einen Cache-Key aus den user-facing Request-Parametern.
@@ -1895,6 +1976,29 @@ class RouteService {
         ? true
         : actualDistanceKm >= pointToPointMinDistance &&
               actualDistanceKm <= pointToPointMaxDistance;
+    final successFirstDistanceOk = scenario.isRoundTrip
+        ? (() {
+            final targetKm = scenario.targetDistanceKm ?? actualDistanceKm;
+            if (targetKm <= 0) return true;
+            final minFactor = scenario.avoidHighways ? 0.66 : 0.70;
+            final maxFactor = scenario.avoidHighways ? 1.48 : 1.44;
+            return actualDistanceKm >= targetKm * minFactor &&
+                actualDistanceKm <= targetKm * maxFactor;
+          })()
+        : (() {
+            final directKm = directDistanceKm ?? 0.0;
+            if (directKm <= 0) return true;
+            if (scenario.detourLevel > 0) {
+              final maxKm = math.max(
+                pointToPointMaxDistance * 1.08,
+                directKm * 1.45,
+              );
+              return actualDistanceKm >= directKm * 0.96 &&
+                  actualDistanceKm <= maxKm;
+            }
+            return actualDistanceKm >= directKm * 0.92 &&
+                actualDistanceKm <= math.max(directKm * 1.35, directKm + 6.0);
+          })();
     final scenicFallbackRenderable =
         scenario.isPointToPoint &&
         scenario.detourLevel > 0 &&
@@ -1908,6 +2012,7 @@ class RouteService {
     final rescueRoundTripAcceptable =
         relaxedRoundTrip &&
         scenario.isRoundTrip &&
+        successFirstDistanceOk &&
         quality.isLoopClosed &&
         quality.uturnPositions.length <=
             (styleConfig.profileKey == 'sport' ? 2 : 0) &&
@@ -1946,33 +2051,18 @@ class RouteService {
         scenario.isRoundTrip &&
             styleConfig.profileKey == 'sport' &&
             serverApprovedGoodTier &&
-            quality.overlapPercent <= 22.0 &&
-            quality.repeatedStartAreaPercent <= 15.0
+            quality.spurArmCount <= 1 &&
+            quality.centerRecrossPercent <= 16.0 &&
+            quality.foldedAreaPenalty <= 64.0 &&
+            quality.repeatedStartAreaPercent <= 44.0
+        ? 38.0
+        : (scenario.isRoundTrip &&
+              styleConfig.profileKey == 'sport' &&
+              serverApprovedGoodTier &&
+              quality.overlapPercent <= 22.0 &&
+              quality.repeatedStartAreaPercent <= 15.0)
         ? 52.0
         : (scenario.isRoundTrip ? 32.0 : 55.0);
-    final successFirstDistanceOk = scenario.isRoundTrip
-        ? (() {
-            final targetKm = scenario.targetDistanceKm ?? actualDistanceKm;
-            if (targetKm <= 0) return true;
-            final minFactor = scenario.avoidHighways ? 0.66 : 0.70;
-            final maxFactor = scenario.avoidHighways ? 1.48 : 1.44;
-            return actualDistanceKm >= targetKm * minFactor &&
-                actualDistanceKm <= targetKm * maxFactor;
-          })()
-        : (() {
-            final directKm = directDistanceKm ?? 0.0;
-            if (directKm <= 0) return true;
-            if (scenario.detourLevel > 0) {
-              final maxKm = math.max(
-                pointToPointMaxDistance * 1.08,
-                directKm * 1.45,
-              );
-              return actualDistanceKm >= directKm * 0.96 &&
-                  actualDistanceKm <= maxKm;
-            }
-            return actualDistanceKm >= directKm * 0.92 &&
-                actualDistanceKm <= math.max(directKm * 1.35, directKm + 6.0);
-          })();
     final serverApprovedAcceptable =
         edgeTier != null &&
         edgeTier != RouteQualityTier.rejected &&
@@ -2247,12 +2337,10 @@ class RouteService {
                 styleConfig: styleConfig,
                 startPosition: startPosition,
                 variant: variant,
-                candidateBudget:
-                    scenario.avoidHighways ||
-                        (styleConfig.profileKey == 'kurvenjagd' &&
-                            (scenario.targetDistanceKm ?? 50.0) <= 60)
-                    ? 4
-                    : 3,
+                candidateBudget: _preparedRoundTripCandidateBudget(
+                  scenario,
+                  styleConfig,
+                ),
               );
               if (!candidate.accepted) return;
               PreparedRouteBuffer.store(
@@ -2354,6 +2442,7 @@ class RouteService {
     required String fingerprint,
   }) {
     final finalized = _finalizeRoute(route, scenarioKey: scenario.scenarioKey);
+    _recentSuccessfulRoutes[scenario.scenarioKey] = finalized;
     SeenRouteRegistry.remember(
       scenario.scenarioKey,
       fingerprint: fingerprint,
@@ -2361,23 +2450,6 @@ class RouteService {
     );
     lastRouteFromCache = false;
     return finalized;
-  }
-
-  RouteVariant _reuseVariant(
-    RouteScenario scenario, {
-    required String sourceLabel,
-  }) {
-    return RouteVariant(
-      index: -1,
-      seed: 0,
-      angleOffset: 0.0,
-      radiusJitter: 1.0,
-      offsetBearing: 0.0,
-      fingerprintHint: '${scenario.scenarioKey}|$sourceLabel',
-      variantHint: '$sourceLabel-${scenario.routeType.toLowerCase()}',
-      offsetSide: scenario.isPointToPoint ? 0 : null,
-      styleBias: scenario.style,
-    );
   }
 
   Future<RouteResult?> _tryRoundTripFallback({
@@ -2400,7 +2472,10 @@ class RouteService {
         variant: variant,
         targetLocation: targetLocation,
         directionHint: variant.angleOffset,
-        candidateBudget: scenario.avoidHighways ? 3 : 2,
+        candidateBudget: _roundTripFallbackCandidateBudget(
+          scenario,
+          styleConfig,
+        ),
         avoidHighways: scenario.avoidHighways,
       );
       body['simplify_waypoints'] = true;
@@ -2442,7 +2517,7 @@ class RouteService {
       planningType: scenario.planningType,
       targetLocation: targetLocation,
       avoidHighways: scenario.avoidHighways,
-      candidateBudget: scenario.avoidHighways ? 8 : 7,
+      candidateBudget: _roundTripFallbackCandidateBudget(scenario, styleConfig),
       targetFactor: 0.96,
       label: 'same-style',
     );
@@ -2459,7 +2534,10 @@ class RouteService {
         planningType: scenario.planningType,
         targetLocation: targetLocation,
         avoidHighways: false,
-        candidateBudget: 7,
+        candidateBudget: _roundTripFallbackCandidateBudget(
+          scenario,
+          spreadStyle,
+        ),
         targetFactor: 1.0,
         label: 'sport-spread',
       );
@@ -2477,10 +2555,14 @@ class RouteService {
         requestStyleConfig: sportStyle,
         startPosition: startPosition,
         mode: scenario.style,
+        requestMode: 'Sport Mode',
         planningType: scenario.planningType,
         targetLocation: targetLocation,
         avoidHighways: false,
-        candidateBudget: 8,
+        candidateBudget: _roundTripFallbackCandidateBudget(
+          scenario,
+          sportStyle,
+        ),
         targetFactor: 0.94,
         label: 'sport-relaxed',
       );
@@ -2495,6 +2577,7 @@ class RouteService {
     RouteStyleConfig? evaluationStyleConfig,
     required geo.Position startPosition,
     required String mode,
+    String? requestMode,
     required String planningType,
     required bool avoidHighways,
     required int candidateBudget,
@@ -2517,7 +2600,7 @@ class RouteService {
       final body = _buildRoundTripRequest(
         startPosition: startPosition,
         targetDistanceKm: targetKm,
-        mode: mode,
+        mode: requestMode ?? mode,
         planningType: planningType,
         styleConfig: requestStyleConfig,
         variant: variant,
@@ -2533,7 +2616,8 @@ class RouteService {
 
       debugPrint(
         '[RouteService] Rundkurs-Rescue $label: '
-        'mode=$mode, target=${targetKm}km, avoidHighways=$avoidHighways, '
+        'mode=${requestMode ?? mode}, uiMode=$mode, '
+        'target=${targetKm}km, avoidHighways=$avoidHighways, '
         'budget=$candidateBudget',
       );
 
@@ -2574,6 +2658,7 @@ class RouteService {
     required double destinationLng,
     required bool avoidHighways,
     required double directDistanceKm,
+    bool allowDirectFallback = true,
   }) async {
     try {
       if (scenario.detourLevel > 0) {
@@ -2632,7 +2717,10 @@ class RouteService {
         debugPrint(
           '[RouteService] Vereinfachter Scenic-Fallback verworfen: ${scenicCandidate.route.distanceKm?.toStringAsFixed(1)}km',
         );
+        if (!allowDirectFallback) return null;
       }
+
+      if (!allowDirectFallback) return null;
 
       final variant = _nextPointToPointVariant(
         scenario,
@@ -2676,6 +2764,29 @@ class RouteService {
       debugPrint('[RouteService] A→B-Fallback fehlgeschlagen: $e');
       return null;
     }
+  }
+
+  bool _needsStrongerPointToPointDetour({
+    required RouteScenario scenario,
+    required RouteStyleConfig styleConfig,
+    required _RouteCandidate candidate,
+    required double directDistanceKm,
+  }) {
+    if (!scenario.isPointToPoint || scenario.detourLevel <= 0) return false;
+
+    final actualDistanceKm = candidate.route.distanceKm ?? 0.0;
+    final minimumRenderableKm = styleConfig.minimumPointToPointDistanceKm(
+      directDistanceKm: directDistanceKm,
+      scenic: true,
+      detourVariant: scenario.detourLevel,
+    );
+    final preferredSlackKm = switch (scenario.detourLevel) {
+      1 => 0.0,
+      2 => 1.5,
+      3 => 3.0,
+      _ => 0.0,
+    };
+    return actualDistanceKm < minimumRenderableKm + preferredSlackKm;
   }
 
   static RouteServiceException _mapInvokeException({
@@ -2881,11 +2992,17 @@ class RouteService {
     RouteServiceException? lastError, {
     required bool forceFreshVariant,
   }) {
-    if (forceFreshVariant || lastError == null) return false;
+    if (forceFreshVariant) return false;
+    if (lastError == null) return true;
+
     return lastError.type == RouteErrorType.network ||
         lastError.type == RouteErrorType.server ||
         lastError.type == RouteErrorType.rateLimit ||
-        lastError.type == RouteErrorType.workerLimit;
+        lastError.type == RouteErrorType.workerLimit ||
+        lastError.type == RouteErrorType.noRoute ||
+        lastError.type == RouteErrorType.quality ||
+        lastError.type == RouteErrorType.emptyResponse ||
+        lastError.type == RouteErrorType.unknown;
   }
 
   // ─────────────────────── Persistent Route Cache ────────────────────────────
@@ -2968,6 +3085,19 @@ class RouteService {
       debugPrint('[RouteService] Cache-Laden fehlgeschlagen: $e');
       return null;
     }
+  }
+
+  Future<RouteResult?> _loadRecentOrCachedRoute({String? scenarioKey}) async {
+    if (scenarioKey != null) {
+      final recent = _recentSuccessfulRoutes[scenarioKey];
+      if (recent != null) {
+        debugPrint(
+          '[RouteService] ♻️ Letzte erfolgreiche Route aus Memory-Cache geladen',
+        );
+        return recent;
+      }
+    }
+    return _loadCachedRoute(scenarioKey: scenarioKey);
   }
 
   // ─────────────────────── Coordinate Helpers ────────────────────────────────
@@ -3700,7 +3830,24 @@ class RouteService {
         if (d < 35.0) trimTo = i;
       }
     }
-    if (trimTo > 0) coords = coords.sublist(trimTo);
+    if (trimTo > 0) {
+      final trimmedCoords = coords.sublist(trimTo);
+      final originalDistanceMeters =
+          result.distanceMeters ?? _measurePathDistanceMeters(coords);
+      final trimmedDistanceMeters = _measurePathDistanceMeters(trimmedCoords);
+      final trimmedRatio = originalDistanceMeters > 0
+          ? trimmedDistanceMeters / originalDistanceMeters
+          : 1.0;
+      final removedPointRatio = trimTo / coords.length;
+      if (trimmedRatio >= 0.72 || removedPointRatio <= 0.08) {
+        coords = trimmedCoords;
+      } else {
+        debugPrint(
+          '[RouteService] Start-Hook-Trim übersprungen: würde ${(trimmedRatio * 100).toStringAsFixed(0)}% Distanz übrig lassen '
+          'bei ${(removedPointRatio * 100).toStringAsFixed(0)}% entfernten Punkten',
+        );
+      }
+    }
     if (coords.isEmpty) return result;
 
     // ── Startpunkt: Mapbox-Snap auf Straße beibehalten ────────────────────────
@@ -3731,6 +3878,8 @@ class RouteService {
       if (d < 30) coords.last = [startLng, startLat];
     }
 
+    final coordsBeforeLoopFix = List<List<double>>.from(coords);
+
     // ── Selbstschneidende Schleifen aus der Route entfernen ───────────────────
     // Sicherheitscheck: Loop-Entfernung darf maximal 30% der Punkte entfernen.
     // Mehr = Route wird zerstört (besonders in Stadtgebieten mit vielen Kreuzungen).
@@ -3745,6 +3894,52 @@ class RouteService {
     } else {
       debugPrint(
         '[RouteService] Loop-Fix ÜBERSPRUNGEN: würde ${(removedPercent * 100).toStringAsFixed(0)}% der Route entfernen (${coordsBefore - coordsAfterLoops.length} von $coordsBefore Punkten)',
+      );
+    }
+
+    // ── Distanz & Dauer aus den BEREINIGTEN Koordinaten neu berechnen ─────
+    // Nach Snapping + Loop-Removal können die Koordinaten deutlich kürzer sein
+    // als die originale Mapbox-Distanz. Ohne Neuberechnung zeigt die App z.B.
+    // 40 km an obwohl die bereinigte Route nur 6 km lang ist.
+    double actualDistanceMeters = _measurePathDistanceMeters(coords);
+
+    // Sicherheitscheck: Wenn die Loop-Bereinigung zu viel Distanz wegnimmt,
+    // behalten wir den vor der Loop-Bereinigung gesnappten Zustand.
+    final origDist = result.distanceMeters ?? actualDistanceMeters;
+    final distRatio = origDist > 0 ? actualDistanceMeters / origDist : 1.0;
+    final hasTrustedQualityMeta = result.edgeMeta['quality_tier'] != null;
+    final shouldPreserveProviderDistance =
+        !hasTrustedQualityMeta &&
+        result.distanceMeters != null &&
+        result.distanceMeters! > 0 &&
+        actualDistanceMeters / result.distanceMeters! < 0.55;
+
+    final double finalDistanceMeters;
+    final double? finalDuration;
+    if (shouldPreserveProviderDistance) {
+      debugPrint(
+        '[RouteService] Snap/Loop-Fix Legacy-Fallback: behalte Provider-Distanz ${(result.distanceMeters! / 1000).toStringAsFixed(1)} km '
+        'statt ${(actualDistanceMeters / 1000).toStringAsFixed(1)} km ohne Quality-Meta',
+      );
+      finalDistanceMeters = result.distanceMeters!.toDouble();
+      finalDuration = result.durationSeconds;
+    } else if (distRatio < 0.78 && origDist > 10000) {
+      coords = coordsBeforeLoopFix;
+      actualDistanceMeters = _measurePathDistanceMeters(coords);
+      debugPrint(
+        '[RouteService] Snap/Loop-Fix WARNUNG: Distanz fiel auf ${(distRatio * 100).toStringAsFixed(0)}% — verwerfe Loop-Bereinigung und behalte gesnappten Vorzustand (${(actualDistanceMeters / 1000).toStringAsFixed(1)} km)',
+      );
+      finalDistanceMeters = actualDistanceMeters;
+      finalDuration = result.durationSeconds;
+    } else {
+      finalDistanceMeters = actualDistanceMeters;
+      final adjustedDuration = (result.durationSeconds ?? 0) * distRatio;
+      finalDuration = adjustedDuration > 0
+          ? adjustedDuration
+          : result.durationSeconds;
+      debugPrint(
+        '[RouteService] Snap/Loop-Fix: ${origDist.round()}m → ${actualDistanceMeters.round()}m '
+        '(${(actualDistanceMeters / 1000).toStringAsFixed(1)} km, ratio: ${distRatio.toStringAsFixed(2)})',
       );
     }
 
@@ -3766,46 +3961,6 @@ class RouteService {
     final newGeometry = Map<String, dynamic>.from(result.geometry);
     newGeometry['coordinates'] = coords;
 
-    // ── Distanz & Dauer aus den BEREINIGTEN Koordinaten neu berechnen ─────
-    // Nach Snapping + Loop-Removal können die Koordinaten deutlich kürzer sein
-    // als die originale Mapbox-Distanz. Ohne Neuberechnung zeigt die App z.B.
-    // 40 km an obwohl die bereinigte Route nur 6 km lang ist.
-    double actualDistanceMeters = 0.0;
-    for (var i = 0; i < coords.length - 1; i++) {
-      actualDistanceMeters += geo.Geolocator.distanceBetween(
-        coords[i][1],
-        coords[i][0],
-        coords[i + 1][1],
-        coords[i + 1][0],
-      );
-    }
-
-    // Sicherheitscheck: Wenn die bereinigte Route weniger als 50% der Mapbox-Distanz
-    // hat, wurde zu viel abgeschnitten — Originaldistanz/Dauer beibehalten.
-    final origDist = result.distanceMeters ?? actualDistanceMeters;
-    final distRatio = origDist > 0 ? actualDistanceMeters / origDist : 1.0;
-
-    final double finalDistanceMeters;
-    final double? finalDuration;
-    if (distRatio < 0.50 && origDist > 10000) {
-      // Zu viel gekürzt — Originaldistanz beibehalten
-      debugPrint(
-        '[RouteService] Snap/Loop-Fix WARNUNG: Distanz fiel auf ${(distRatio * 100).toStringAsFixed(0)}% — behalte Mapbox-Original (${(origDist / 1000).toStringAsFixed(1)} km)',
-      );
-      finalDistanceMeters = origDist;
-      finalDuration = result.durationSeconds;
-    } else {
-      finalDistanceMeters = actualDistanceMeters;
-      final adjustedDuration = (result.durationSeconds ?? 0) * distRatio;
-      finalDuration = adjustedDuration > 0
-          ? adjustedDuration
-          : result.durationSeconds;
-      debugPrint(
-        '[RouteService] Snap/Loop-Fix: ${origDist.round()}m → ${actualDistanceMeters.round()}m '
-        '(${(actualDistanceMeters / 1000).toStringAsFixed(1)} km, ratio: ${distRatio.toStringAsFixed(2)})',
-      );
-    }
-
     return RouteResult(
       geoJson: json.encode(newGeometry),
       geometry: newGeometry,
@@ -3817,6 +3972,19 @@ class RouteService {
       speedLimits: result.speedLimits,
       edgeMeta: result.edgeMeta,
     );
+  }
+
+  double _measurePathDistanceMeters(List<List<double>> coords) {
+    var distanceMeters = 0.0;
+    for (var i = 0; i < coords.length - 1; i++) {
+      distanceMeters += geo.Geolocator.distanceBetween(
+        coords[i][1],
+        coords[i][0],
+        coords[i + 1][1],
+        coords[i + 1][0],
+      );
+    }
+    return distanceMeters;
   }
 
   /// Entfernt Schleifen (Loops) aus einer Route.

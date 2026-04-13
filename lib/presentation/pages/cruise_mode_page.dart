@@ -1460,11 +1460,18 @@ class _CruiseModePageState extends State<CruiseModePage>
           );
         } on GeocodingException catch (e) {
           debugPrint('[CruiseMode] Geocoding failed: ${e.debugMessage}');
-          _showError(e.userMessage, isCritical: true);
+          _restoreGeneratedRouteFailureUi(
+            previousUiState,
+            e.userMessage,
+            error: e,
+          );
           return;
         }
         if (targetLocation == null && mounted) {
-          _showError('Konnte Zieladresse nicht finden.', isCritical: true);
+          _restoreGeneratedRouteFailureUi(
+            previousUiState,
+            'Konnte Zieladresse nicht finden.',
+          );
           return;
         }
       }
@@ -1504,7 +1511,6 @@ class _CruiseModePageState extends State<CruiseModePage>
           scenic: scenicMode,
           routeVariant: detourVariant,
           avoidHighways: _avoidHighways,
-          forceFreshVariant: true,
         );
       } else {
         _activeDestinationCoordinate = null;
@@ -1519,7 +1525,6 @@ class _CruiseModePageState extends State<CruiseModePage>
           mode: _selectedStyle,
           planningType: _planningType,
           avoidHighways: _avoidHighways,
-          forceFreshVariant: true,
         );
       }
 
@@ -1573,14 +1578,10 @@ class _CruiseModePageState extends State<CruiseModePage>
         label: '[CruiseMode] Route generation stacktrace',
         stackTrace: stack,
       );
-      _restoreGeneratedRouteUiState(previousUiState);
-      // Fehlermeldung anzeigen bei kritischen Routing-Fehlern
-      if (mounted) {
-        final errorMessage = e is RouteServiceException
-            ? e.userMessage
-            : 'Route konnte nicht generiert werden. Bitte versuche es erneut.';
-        _showError(errorMessage, isCritical: true);
-      }
+      final errorMessage = e is RouteServiceException
+          ? e.userMessage
+          : 'Route konnte nicht generiert werden. Bitte versuche es erneut.';
+      _restoreGeneratedRouteFailureUi(previousUiState, errorMessage, error: e);
     } finally {
       // Hintergrund-Generierung wieder erlauben
       RouteCacheService.endUserGeneration();
@@ -1817,6 +1818,29 @@ class _CruiseModePageState extends State<CruiseModePage>
     });
   }
 
+  bool _snapshotHasVisibleRoute(_GeneratedRouteUiStateSnapshot snapshot) {
+    return snapshot.lastRouteResult != null ||
+        snapshot.routeLatLngs.length >= 2;
+  }
+
+  void _restoreGeneratedRouteFailureUi(
+    _GeneratedRouteUiStateSnapshot previousUiState,
+    String message, {
+    Object? error,
+  }) {
+    _restoreGeneratedRouteUiState(previousUiState);
+
+    if (_snapshotHasVisibleRoute(previousUiState)) {
+      debugPrint(
+        '[CruiseMode] Route attempt failed but previous route stayed visible: '
+        '$message${error == null ? "" : " ($error)"}',
+      );
+      return;
+    }
+
+    _showError(message, isCritical: true);
+  }
+
   void _resetGeneratedRouteUiState() {
     _clearAccessLegState();
     _lastRouteResult = null;
@@ -1977,12 +2001,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       // Lieber dem User klar sagen, dass er erst zum Routenstart muss, als
       // eine sichtbar kaputte Route mit Luftlinien-Sprung anzuzeigen.
       debugPrint('[CruiseMode] Access-Leg konnte nicht generiert werden: $e');
-      if (mounted) {
-        final message = e is RouteServiceException
-            ? e.userMessage
-            : 'Anfahrt zur gespeicherten Route konnte nicht berechnet werden. Bitte fahre näher an den Routenstart heran.';
-        _showError(message, isCritical: true);
-      }
+      // Die gespeicherte Route bleibt sichtbar; kein harter Fehler-Banner.
       return;
     }
 
@@ -2236,53 +2255,68 @@ class _CruiseModePageState extends State<CruiseModePage>
   // ═══════════════════════ LOAD SAVED ROUTE ══════════════════════════════════
 
   Future<void> _loadSavedRoute(SavedRoute route) async {
+    final previousUiState = _captureGeneratedRouteUiState();
     final geometry = route.geometry;
-    final coordsRaw = (geometry['coordinates'] as List?) ?? const [];
-    final coordinates = coordsRaw
-        .whereType<List>()
-        .where((c) => c.length >= 2)
-        .map((c) => [(c[0] as num).toDouble(), (c[1] as num).toDouble()])
-        .toList();
 
-    if (coordinates.length < 2) {
-      _showError('Route hat nicht genug Koordinaten.');
-      return;
+    try {
+      final coordsRaw = (geometry['coordinates'] as List?) ?? const [];
+      final coordinates = coordsRaw
+          .whereType<List>()
+          .where((c) => c.length >= 2)
+          .map((c) => [(c[0] as num).toDouble(), (c[1] as num).toDouble()])
+          .toList();
+
+      if (coordinates.length < 2) {
+        _restoreGeneratedRouteFailureUi(
+          previousUiState,
+          'Route hat nicht genug Koordinaten.',
+        );
+        return;
+      }
+
+      final previewResult = RouteResult(
+        geoJson: json.encode(geometry),
+        geometry: geometry,
+        coordinates: coordinates,
+        maneuvers: const [],
+        distanceMeters: route.distanceKm * 1000,
+        durationSeconds: route.durationSeconds,
+        distanceKm: route.distanceKm,
+      );
+
+      _applyRouteResult(previewResult);
+      final lastCoordinate = coordinates.last;
+      setState(() {
+        _isExistingRouteSession = true;
+        _isRoundTrip = route.isRoundTrip;
+        _selectedStyle = route.style;
+        _selectedDetour = 'Direkt';
+        _avoidHighways = false;
+        _selectedDestination = null;
+        _destinationController.clear();
+        _isCameraLocked = false;
+        _configCollapsed = true;
+        _showRouteInfoBanner = true;
+        _activeDestinationCoordinate = route.isRoundTrip
+            ? null
+            : lastCoordinate;
+        _activeDetourVariant = 0;
+        _activePointToPointScenic =
+            !route.isRoundTrip && route.style != 'Standard';
+        _activePointToPointMode = route.style;
+        _activeAvoidHighways = false;
+        _recentDestinationDistances = [];
+      });
+      CruiseModePage.isFullscreen.value = false;
+
+      await _drawRoute(geometry);
+    } catch (e) {
+      _restoreGeneratedRouteFailureUi(
+        previousUiState,
+        'Route konnte nicht geladen werden.',
+        error: e,
+      );
     }
-
-    final previewResult = RouteResult(
-      geoJson: json.encode(geometry),
-      geometry: geometry,
-      coordinates: coordinates,
-      maneuvers: const [],
-      distanceMeters: route.distanceKm * 1000,
-      durationSeconds: route.durationSeconds,
-      distanceKm: route.distanceKm,
-    );
-
-    _applyRouteResult(previewResult);
-    final lastCoordinate = coordinates.last;
-    setState(() {
-      _isExistingRouteSession = true;
-      _isRoundTrip = route.isRoundTrip;
-      _selectedStyle = route.style;
-      _selectedDetour = 'Direkt';
-      _avoidHighways = false;
-      _selectedDestination = null;
-      _destinationController.clear();
-      _isCameraLocked = false;
-      _configCollapsed = true;
-      _showRouteInfoBanner = true;
-      _activeDestinationCoordinate = route.isRoundTrip ? null : lastCoordinate;
-      _activeDetourVariant = 0;
-      _activePointToPointScenic =
-          !route.isRoundTrip && route.style != 'Standard';
-      _activePointToPointMode = route.style;
-      _activeAvoidHighways = false;
-      _recentDestinationDistances = [];
-    });
-    CruiseModePage.isFullscreen.value = false;
-
-    await _drawRoute(geometry);
   }
 
   // ═══════════════════════ ROUTE CONFIRM ═════════════════════════════════════

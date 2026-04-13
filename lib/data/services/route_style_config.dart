@@ -196,86 +196,86 @@ class RouteStyleConfig {
       'sport' => _weightedAverage([
         _weighted(
           _scoreAround(curveDensityPer50Km, center: 12.0, tolerance: 16.0),
-          0.26,
+          0.24,
         ),
         _weighted(
           _scoreAround(sharpCurveDensityPer50Km, center: 5.0, tolerance: 7.0),
-          0.14,
-        ),
-        _weighted(_scoreRamp(spreadRatio, softMin: 0.16, idealMin: 0.28), 0.26),
-        _weighted(
-          _scoreAround(compactnessScore, center: 46.0, tolerance: 28.0),
           0.12,
         ),
-        _weighted(smoothnessScore, 0.22),
+        _weighted(_scoreRamp(spreadRatio, softMin: 0.16, idealMin: 0.28), 0.24),
+        _weighted(
+          _scoreAround(compactnessScore, center: 46.0, tolerance: 28.0),
+          0.16,
+        ),
+        _weighted(smoothnessScore, 0.24),
       ]),
       'kurvenjagd' => _weightedAverage([
         _weighted(
           _scoreRamp(curveDensityPer50Km, softMin: 18.0, idealMin: 30.0),
-          0.34,
+          0.30,
         ),
         _weighted(
           _scoreRamp(sharpCurveDensityPer50Km, softMin: 7.0, idealMin: 15.0),
-          0.22,
+          0.20,
         ),
         _weighted(
           _scoreAround(spreadRatio, center: 0.24, tolerance: 0.16),
-          0.12,
+          0.10,
         ),
         _weighted(
           _scoreAround(compactnessScore, center: 52.0, tolerance: 26.0),
-          0.12,
+          0.16,
         ),
         _weighted(
           _scoreRamp(smoothnessScore, softMin: 0.55, idealMin: 0.8),
-          0.20,
+          0.24,
         ),
       ]),
       'abendrunde' => _weightedAverage([
         _weighted(
           _scoreAround(compactnessScore, center: 62.0, tolerance: 24.0),
-          0.28,
+          0.30,
         ),
         _weighted(
           _scoreAround(curveDensityPer50Km, center: 15.0, tolerance: 13.0),
-          0.18,
+          0.16,
         ),
         _weighted(
           _scoreAround(spreadRatio, center: 0.18, tolerance: 0.10),
-          0.14,
+          0.12,
         ),
-        _weighted(smoothnessScore, 0.20),
+        _weighted(smoothnessScore, 0.24),
         _weighted(
           averageSpeedKmh == null
               ? 0.65
               : _scoreAround(averageSpeedKmh, center: 48.0, tolerance: 24.0),
-          0.20,
+          0.18,
         ),
       ]),
       'entdecker' => _weightedAverage([
-        _weighted(_scoreRamp(spreadRatio, softMin: 0.18, idealMin: 0.32), 0.30),
+        _weighted(_scoreRamp(spreadRatio, softMin: 0.18, idealMin: 0.32), 0.28),
         _weighted(
           _scoreAround(curveDensityPer50Km, center: 18.0, tolerance: 14.0),
-          0.20,
+          0.18,
         ),
         _weighted(
           _scoreAround(compactnessScore, center: 42.0, tolerance: 24.0),
-          0.16,
+          0.18,
         ),
-        _weighted(smoothnessScore, 0.18),
+        _weighted(smoothnessScore, 0.20),
         _weighted(_scoreRamp(distanceKm, softMin: 35.0, idealMin: 70.0), 0.16),
       ]),
       _ => _weightedAverage([
         _weighted(
           _scoreAround(curveDensityPer50Km, center: 16.0, tolerance: 14.0),
-          0.35,
+          0.30,
         ),
-        _weighted(_scoreRamp(spreadRatio, softMin: 0.16, idealMin: 0.26), 0.25),
+        _weighted(_scoreRamp(spreadRatio, softMin: 0.16, idealMin: 0.26), 0.24),
         _weighted(
           _scoreAround(compactnessScore, center: 50.0, tolerance: 24.0),
-          0.20,
+          0.22,
         ),
-        _weighted(smoothnessScore, 0.20),
+        _weighted(smoothnessScore, 0.24),
       ]),
     };
 
@@ -309,6 +309,37 @@ class RouteStyleConfig {
     return requestedKm.clamp(lowerBound, upperBound);
   }
 
+  // Scenic-Umwege starten clientseitig nur mit Luftlinien-Distanz. Für kurze
+  // A→B-Strecken unterschätzt das die tatsächlich "direkte" Fahrdistanz oft
+  // deutlich, wodurch Klein/Mittel/Groß zu ähnlich werden. Diese Referenz
+  // hebt nur den Scenic-Basispunkt leicht an; direkte A→B-Routen bleiben
+  // unverändert.
+  double pointToPointScenicReferenceDistanceKm({
+    required double directDistanceKm,
+    required int detourVariant,
+  }) {
+    if (detourVariant <= 0) return directDistanceKm;
+
+    final shortHop = directDistanceKm <= 12.0;
+    final midHop = directDistanceKm <= 25.0;
+    final roadFactor = shortHop
+        ? 1.32
+        : midHop
+        ? 1.24
+        : 1.18;
+    final roadPaddingKm = switch (detourVariant) {
+      1 => shortHop ? 1.8 : (midHop ? 2.2 : 2.8),
+      2 => shortHop ? 2.6 : (midHop ? 3.1 : 3.8),
+      3 => shortHop ? 3.8 : (midHop ? 4.5 : 5.2),
+      _ => shortHop ? 1.5 : (midHop ? 2.0 : 2.5),
+    };
+
+    return math.max(
+      directDistanceKm,
+      math.max(directDistanceKm * roadFactor, directDistanceKm + roadPaddingKm),
+    );
+  }
+
   // Detour-Fenster — entkoppelt, damit Klein/Mittel/Groß sich tatsächlich
   // unterschiedlich anfühlen. Vorher überlappten die Bereiche so stark, dass
   // eine Route mit 1.85× direkter Distanz für alle drei Stufen gültig war.
@@ -330,11 +361,17 @@ class RouteStyleConfig {
     if (!scenic && detourVariant <= 0) {
       return directDistanceKm;
     }
+    final scenicReferenceKm = scenic
+        ? pointToPointScenicReferenceDistanceKm(
+            directDistanceKm: directDistanceKm,
+            detourVariant: detourVariant,
+          )
+        : directDistanceKm;
     final minByVariant = switch (detourVariant) {
-      1 => directDistanceKm * 1.15,
-      2 => directDistanceKm * 1.40,
-      3 => directDistanceKm * 1.75,
-      _ => directDistanceKm * 1.08,
+      1 => scenicReferenceKm * 1.15,
+      2 => scenicReferenceKm * 1.40,
+      3 => scenicReferenceKm * 1.75,
+      _ => scenicReferenceKm * 1.08,
     };
     final paddingKm = switch (detourVariant) {
       1 => 1.0,
@@ -342,7 +379,7 @@ class RouteStyleConfig {
       3 => 6.0,
       _ => 1.0,
     };
-    return math.max(minByVariant, directDistanceKm + paddingKm);
+    return math.max(minByVariant, scenicReferenceKm + paddingKm);
   }
 
   double maximumPointToPointDistanceKm({
@@ -354,6 +391,12 @@ class RouteStyleConfig {
     if (!scenic && detourVariant <= 0) {
       return math.max(directDistanceKm + 2.0, directDistanceKm * 1.12);
     }
+    final scenicReferenceKm = scenic
+        ? pointToPointScenicReferenceDistanceKm(
+            directDistanceKm: directDistanceKm,
+            detourVariant: detourVariant,
+          )
+        : directDistanceKm;
     final maxByTarget = switch (detourVariant) {
       1 => targetKm * 1.28,
       2 => targetKm * 1.38,
@@ -361,10 +404,10 @@ class RouteStyleConfig {
       _ => targetKm * 1.20,
     };
     final maxByDirect = switch (detourVariant) {
-      1 => directDistanceKm * 1.65,
-      2 => directDistanceKm * 2.10,
-      3 => directDistanceKm * 2.95,
-      _ => directDistanceKm * 1.40,
+      1 => scenicReferenceKm * 1.65,
+      2 => scenicReferenceKm * 2.10,
+      3 => scenicReferenceKm * 2.95,
+      _ => scenicReferenceKm * 1.40,
     };
     final slackKm = switch (detourVariant) {
       1 => 3.0,
