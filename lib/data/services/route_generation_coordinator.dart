@@ -13,17 +13,9 @@ class RouteGenerationCoordinator {
     if (existing != null) {
       return existing as Future<T>;
     }
-    final background = _backgroundPreparationByScenario[scenarioKey];
 
     final future = Future<T>(() async {
       try {
-        if (background != null) {
-          try {
-            await background;
-          } catch (_) {
-            // Foreground request should continue even if prewarm failed.
-          }
-        }
         return await producer();
       } finally {
         _inFlightByScenario.remove(scenarioKey);

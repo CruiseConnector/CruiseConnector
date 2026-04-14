@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:geolocator/geolocator.dart' as geo;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:cruise_connect/data/services/route_access_plan.dart';
 import 'package:cruise_connect/data/services/route_service.dart';
@@ -126,6 +127,50 @@ void main() {
     );
 
     test(
+      'uebergibt avoidHighways an Access- und Return-Leg unveraendert',
+      () async {
+        final invoker = _AccessInvoker();
+        final service = RouteService(invoker: invoker);
+        final existingRoute = _buildLoopRoute();
+        final sessionStart = _position(latitude: 47.312, longitude: 9.611);
+
+        await service.buildAccessRouteToExistingRoute(
+          currentPosition: sessionStart,
+          existingRoute: existingRoute,
+          avoidHighways: true,
+          returnToSessionOrigin: true,
+        );
+
+        expect(invoker.callCount, 2);
+        expect(
+          invoker.bodies.every((request) => request['avoid_highways'] == true),
+          isTrue,
+        );
+      },
+    );
+
+    test(
+      'lockert avoidHighways fuer Access-Legs nicht stillschweigend auf',
+      () async {
+        final invoker = _StrictAvoidHighwaysInvoker();
+        final service = RouteService(invoker: invoker);
+        final existingRoute = _buildLoopRoute();
+
+        await expectLater(
+          service.buildAccessRouteToExistingRoute(
+            currentPosition: _position(latitude: 47.312, longitude: 9.611),
+            existingRoute: existingRoute,
+            avoidHighways: true,
+          ),
+          throwsA(isA<RouteServiceException>()),
+        );
+
+        expect(invoker.callCount, 1);
+        expect(invoker.bodies.single['avoid_highways'], isTrue);
+      },
+    );
+
+    test(
       'verzichtet auf Access-Leg wenn der Nutzer bereits am Routeneinstieg ist',
       () async {
         final invoker = _AccessInvoker();
@@ -162,6 +207,55 @@ class _AccessInvoker implements RouteEdgeInvoker {
     final start = Map<String, dynamic>.from(body['startLocation'] as Map);
     final destination = Map<String, dynamic>.from(
       body['destination_location'] as Map,
+    );
+    final startLat = (start['latitude'] as num).toDouble();
+    final startLng = (start['longitude'] as num).toDouble();
+    final destLat = (destination['latitude'] as num).toDouble();
+    final destLng = (destination['longitude'] as num).toDouble();
+
+    final coordinates = List.generate(14, (index) {
+      final t = index / 13;
+      return [
+        startLng + (destLng - startLng) * t,
+        startLat + (destLat - startLat) * t,
+      ];
+    });
+    final distanceMeters = _polylineDistanceMeters(coordinates);
+
+    return {
+      'route': {
+        'geometry': {'type': 'LineString', 'coordinates': coordinates},
+        'distance': distanceMeters,
+        'duration': distanceMeters / 13.89,
+        'legs': const [
+          {'steps': []},
+        ],
+      },
+    };
+  }
+}
+
+class _StrictAvoidHighwaysInvoker implements RouteEdgeInvoker {
+  int callCount = 0;
+  final List<Map<String, dynamic>> bodies = [];
+
+  @override
+  Future<dynamic> invoke(Map<String, dynamic> body) async {
+    callCount += 1;
+    final captured = Map<String, dynamic>.from(body);
+    bodies.add(captured);
+
+    if (captured['avoid_highways'] == true) {
+      throw const FunctionException(
+        status: 404,
+        details: {'error': 'no route without highways'},
+        reasonPhrase: 'Not Found',
+      );
+    }
+
+    final start = Map<String, dynamic>.from(captured['startLocation'] as Map);
+    final destination = Map<String, dynamic>.from(
+      captured['destination_location'] as Map,
     );
     final startLat = (start['latitude'] as num).toDouble();
     final startLng = (start['longitude'] as num).toDouble();

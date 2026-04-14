@@ -139,6 +139,37 @@ function normalizeBearingDegrees(value: number): number {
   return normalized < 0 ? normalized + 360 : normalized;
 }
 
+function normalizeExcludeParams(exclude: string): string {
+  return [
+    ...new Set(
+      exclude.split(",").map((value) => value.trim()).filter((value) =>
+        value.length > 0
+      ),
+    ),
+  ].join(",");
+}
+
+function addExcludeParam(exclude: string, value: string): string {
+  return normalizeExcludeParams(`${exclude},${value}`);
+}
+
+function removeExcludeParam(exclude: string, value: string): string {
+  return normalizeExcludeParams(
+    exclude.split(",").map((entry) => entry.trim()).filter((entry) =>
+      entry.length > 0 && entry !== value
+    ).join(","),
+  );
+}
+
+function relaxStreetExcludes(exclude: string, avoidHighways: boolean): string {
+  const normalized = normalizeExcludeParams(exclude);
+  if (normalized === "") return "";
+  if (!avoidHighways) return "";
+  return normalized.split(",").some((entry) => entry === "motorway")
+    ? "motorway"
+    : normalized;
+}
+
 function seededBaseBearing(
   seed: number,
   preferredBearingDegrees?: number,
@@ -2217,6 +2248,7 @@ async function searchBestRoundTripRoute({
   variantHint,
   fingerprintHint,
   maxCandidateAttemptsHint,
+  avoidHighways,
   continueStraight,
 }: {
   startLocation: Coordinate;
@@ -2236,13 +2268,19 @@ async function searchBestRoundTripRoute({
   variantHint?: string;
   fingerprintHint?: string;
   maxCandidateAttemptsHint?: number;
+  avoidHighways: boolean;
   continueStraight: boolean;
 }): Promise<RoundTripSearchResult | null> {
   const highCostCurveSearch = mode === "Kurvenjagd" && targetDistanceKm >= 130;
   const extendedRoundTripSearch = targetDistanceKm >= 100 ||
     mode === "Entdecker";
   const shortCurvySearch = mode === "Kurvenjagd" && targetDistanceKm <= 60;
-  const constrainedRoundTripSearch = excludeParams.trim() !== "";
+  const normalizedExcludeParams = normalizeExcludeParams(excludeParams);
+  const relaxedSearchExcludes = relaxStreetExcludes(
+    normalizedExcludeParams,
+    avoidHighways,
+  );
+  const constrainedRoundTripSearch = normalizedExcludeParams.trim() !== "";
   const normalizedVariantHint = normalizeHint(variantHint);
   const normalizedFingerprintHint = normalizeHint(fingerprintHint);
   // Budget so kalibriert, dass alle 3 Phasen (strict / balanced / fallback)
@@ -2289,7 +2327,7 @@ async function searchBestRoundTripRoute({
       distanceConfig,
       seedOffset: 0,
       continueStraight,
-      exclude: excludeParams,
+      exclude: normalizedExcludeParams,
     },
     {
       name: "balanced",
@@ -2300,7 +2338,7 @@ async function searchBestRoundTripRoute({
       ),
       seedOffset: 911,
       continueStraight,
-      exclude: excludeParams,
+      exclude: normalizedExcludeParams,
     },
     {
       name: "fallback",
@@ -2311,7 +2349,7 @@ async function searchBestRoundTripRoute({
       ),
       seedOffset: 1777,
       continueStraight,
-      exclude: "",
+      exclude: relaxedSearchExcludes,
     },
   ];
 
@@ -2452,16 +2490,24 @@ async function searchBestRoundTripRoute({
       if (primaryFailureKind === "timeout") timeoutHits += 1;
       if (shouldAbortForProviderPressure()) break;
 
+      const relaxedPhaseExclude = relaxStreetExcludes(
+        phase.exclude,
+        avoidHighways,
+      );
+
       if (
         fetchResult.outcome === "no_route" &&
-        phase.exclude &&
-        phase.exclude.trim() !== ""
+        relaxedPhaseExclude !== phase.exclude
       ) {
-        console.log(`[RT] ${plan.label}: retry without excludes`);
+        console.log(
+          `[RT] ${plan.label}: retry with relaxed excludes "${
+            relaxedPhaseExclude || "none"
+          }"`,
+        );
         const relaxedFetch = await getMapboxRouteDetailed(
           plan.waypoints,
           mapboxProfile,
-          "",
+          relaxedPhaseExclude,
           plan.radiuses,
           accessToken,
           {
@@ -2505,19 +2551,18 @@ async function searchBestRoundTripRoute({
 
       if (
         quality.tier === "rejected" &&
-        phase.exclude &&
-        phase.exclude.trim() !== "" &&
+        relaxedPhaseExclude !== phase.exclude &&
         quality.reason.startsWith("overlap=") &&
         rateLimitHits === 0 &&
         timeoutHits < 2
       ) {
         console.log(
-          `[RT] ${plan.label}: rejected with excludes, trying relaxed street filter`,
+          `[RT] ${plan.label}: rejected with strict excludes, trying relaxed street filter`,
         );
         const relaxedFetch = await getMapboxRouteDetailed(
           plan.waypoints,
           mapboxProfile,
-          "",
+          relaxedPhaseExclude,
           plan.radiuses,
           accessToken,
           {
@@ -2587,15 +2632,20 @@ async function searchBestRoundTripRoute({
       }
 
       const shouldStopAfterGoodCandidate =
-        candidateAttempts >= (highCostCurveSearch ? 3 : 4) &&
+        quality.tier === "ideal" ||
         (
-          quality.tier === "ideal" ||
-          quality.tier === "good" ||
-          (
-            phase.name === "fallback" &&
-            phaseAcceptedCandidates >= 2 &&
-            quality.distanceDeltaKm <= targetDistanceKm * 0.18
-          )
+          quality.tier === "good" &&
+          candidateAttempts >=
+            (highCostCurveSearch || constrainedRoundTripSearch ||
+                shortCurvySearch
+              ? 3
+              : 2)
+        ) ||
+        (
+          candidateAttempts >= (highCostCurveSearch ? 3 : 4) &&
+          phase.name === "fallback" &&
+          phaseAcceptedCandidates >= 2 &&
+          quality.distanceDeltaKm <= targetDistanceKm * 0.18
         );
       const shouldStopAfterAcceptableCandidate =
         quality.tier === "acceptable" &&
@@ -2919,25 +2969,22 @@ Deno.serve(async (req) => {
     let radiusesParams = "";
 
     if (mode === "Kurvenjagd") {
-      // Bergstraßen & enge Kurven: Autobahn + Maut + Fähre ausschließen
-      // → zwingt Mapbox auf secondary/tertiary Landstraßen
+      // Der Autobahn-Toggle ist die Quelle der Wahrheit. Kurvenjagd schließt
+      // ohne Toggle keine Autobahnen hart aus, hält aber Maut/Fähren raus.
       mapboxProfile = "mapbox/driving";
-      excludeParams = "motorway,toll,ferry";
+      excludeParams = "toll,ferry";
     } else if (mode === "Sport Mode") {
-      // Schnelle Landstraßen mit breiten Kurven: nur Autobahn + Fähre vermeiden
-      // → Mapbox bevorzugt primary/secondary (schnellste Nicht-Autobahn-Route)
+      // Sport Mode hält Fähren draußen, Autobahnen steuert nur der Toggle.
       mapboxProfile = "mapbox/driving";
-      excludeParams = "motorway,ferry";
+      excludeParams = "ferry";
     } else if (mode === "Abendrunde") {
-      // Ruhige Nebenstraßen: Autobahn + Schnellstraßen + unbefestigt vermeiden
-      // → driving-traffic bevorzugt beleuchtete, befahrene Straßen
+      // Abendrunde vermeidet Fähren/Unpaved, Autobahnen nur auf Toggle.
       mapboxProfile = "mapbox/driving-traffic";
-      excludeParams = "motorway,ferry,unpaved";
+      excludeParams = "ferry,unpaved";
     } else if (mode === "Entdecker") {
-      // Abgelegene Strecken: nur Autobahn + Maut vermeiden, alles andere erlaubt
-      // → lässt auch unpaved/unclassified zu für echte Entdecker-Routen
+      // Entdecker hält nur Maut fern, Autobahnen nur auf Toggle.
       mapboxProfile = "mapbox/driving";
-      excludeParams = "motorway,toll";
+      excludeParams = "toll";
     } else {
       // Standard: minimal eingeschränkt
       mapboxProfile = "mapbox/driving";
@@ -2956,26 +3003,16 @@ Deno.serve(async (req) => {
 
     if (planning_type === "Zufall" && currentRouteType === "ROUND_TRIP") {
       if (mode === "Kurvenjagd") {
-        excludeParams = "motorway,ferry";
+        excludeParams = "ferry";
       } else if (mode === "Abendrunde") {
         mapboxProfile = "mapbox/driving";
-        excludeParams = "motorway,ferry";
+        excludeParams = "ferry";
       } else if (mode === "Entdecker") {
-        excludeParams = "motorway";
+        excludeParams = "";
       }
-      // Autobahn-Toggle für Rundkurse: erzwingt motorway-Ausschluss
-      // unabhängig vom Style. Sport Mode + Standard schließen Autobahnen
-      // sonst nicht aus → der UI-Toggle wäre dort wirkungslos.
-      if (avoidHighways) {
-        const hasMotorway = excludeParams.split(",").some((p) =>
-          p.trim() === "motorway"
-        );
-        if (!hasMotorway) {
-          excludeParams = excludeParams.trim() === ""
-            ? "motorway"
-            : `${excludeParams},motorway`;
-        }
-      }
+      excludeParams = avoidHighways
+        ? addExcludeParam(excludeParams, "motorway")
+        : removeExcludeParam(excludeParams, "motorway");
     }
 
     if (planning_type === "Zufall") {
@@ -3122,6 +3159,7 @@ Deno.serve(async (req) => {
         simplifyWaypoints: body.simplify_waypoints === true,
         maxWaypoints: body.max_waypoints,
         continueStraight: requestContinueStraight,
+        avoidHighways,
       });
       if (roundTripSearch?.route) {
         route = roundTripSearch.route;
@@ -3148,14 +3186,20 @@ Deno.serve(async (req) => {
         },
       );
 
-      if (!route && excludeParams && excludeParams.trim() !== "") {
+      const relaxedPointToPointExcludes = relaxStreetExcludes(
+        excludeParams,
+        avoidHighways,
+      );
+      if (!route && relaxedPointToPointExcludes !== excludeParams) {
         console.log(
-          `No route with excludes "${excludeParams}", retrying without...`,
+          `No route with excludes "${excludeParams}", retrying with relaxed excludes "${
+            relaxedPointToPointExcludes || "none"
+          }"...`,
         );
         route = await getMapboxRoute(
           finalWaypoints,
           mapboxProfile,
-          "",
+          relaxedPointToPointExcludes,
           radiusesParams,
           MAPBOX_ACCESS_TOKEN,
           {
@@ -3311,11 +3355,15 @@ Deno.serve(async (req) => {
             timeoutMs: pointToPointTimeoutMs(9000),
           },
         );
-        if (!route && excludeParams && excludeParams.trim() !== "") {
+        const relaxedRetryExcludes = relaxStreetExcludes(
+          excludeParams,
+          avoidHighways,
+        );
+        if (!route && relaxedRetryExcludes !== excludeParams) {
           route = await getMapboxRoute(
             retryWaypoints,
             mapboxProfile,
-            "",
+            relaxedRetryExcludes,
             retryRadiuses,
             MAPBOX_ACCESS_TOKEN,
             {
@@ -3444,11 +3492,15 @@ Deno.serve(async (req) => {
             timeoutMs: pointToPointTimeoutMs(7000),
           },
         );
-        if (!route && excludeParams && excludeParams.trim() !== "") {
+        const relaxedSafeFallbackExcludes = relaxStreetExcludes(
+          excludeParams,
+          avoidHighways,
+        );
+        if (!route && relaxedSafeFallbackExcludes !== excludeParams) {
           route = await getMapboxRoute(
             safeWaypoints,
             mapboxProfile,
-            "",
+            relaxedSafeFallbackExcludes,
             safeRadiuses,
             MAPBOX_ACCESS_TOKEN,
             {
@@ -3489,7 +3541,7 @@ Deno.serve(async (req) => {
       route = await getMapboxRoute(
         fallbackWaypoints,
         mapboxProfile,
-        "",
+        avoidHighways ? "motorway" : "",
         fallbackRadiuses,
         MAPBOX_ACCESS_TOKEN,
         {
@@ -3613,11 +3665,15 @@ Deno.serve(async (req) => {
           },
         );
 
-        if (!newRoute && excludeParams && excludeParams.trim() !== "") {
+        const relaxedScalingExcludes = relaxStreetExcludes(
+          excludeParams,
+          avoidHighways,
+        );
+        if (!newRoute && relaxedScalingExcludes !== excludeParams) {
           newRoute = await getMapboxRoute(
             scaledWaypoints,
             mapboxProfile,
-            "",
+            relaxedScalingExcludes,
             newRadiuses,
             MAPBOX_ACCESS_TOKEN,
             {

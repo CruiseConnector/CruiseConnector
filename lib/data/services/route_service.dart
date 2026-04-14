@@ -292,14 +292,17 @@ class RouteService {
           }
         }
 
-        final cached =
-            _shouldUsePersistentFallback(
-              lastError,
-              forceFreshVariant: forceFreshVariant,
-            )
-            ? await _loadRecentOrCachedRoute(scenarioKey: scenario.scenarioKey)
-            : null;
-        if (cached != null) {
+        final cached = forceFreshVariant
+            ? null
+            : await _loadRecentOrCachedRoute(scenarioKey: scenario.scenarioKey);
+        if (
+          cached != null &&
+          _shouldUseCachedFallbackRoute(
+            cached,
+            scenario: scenario,
+            lastError: lastError,
+          )
+        ) {
           lastRouteFromCache = true;
           markRouteAsSeen(scenario.scenarioKey, cached);
           return _finalizeRoute(cached, scenarioKey: scenario.scenarioKey);
@@ -555,14 +558,17 @@ class RouteService {
           }
         }
 
-        final cached =
-            _shouldUsePersistentFallback(
-              lastError,
-              forceFreshVariant: forceFreshVariant,
-            )
-            ? await _loadRecentOrCachedRoute(scenarioKey: scenario.scenarioKey)
-            : null;
-        if (cached != null) {
+        final cached = forceFreshVariant
+            ? null
+            : await _loadRecentOrCachedRoute(scenarioKey: scenario.scenarioKey);
+        if (
+          cached != null &&
+          _shouldUseCachedFallbackRoute(
+            cached,
+            scenario: scenario,
+            lastError: lastError,
+          )
+        ) {
           lastRouteFromCache = true;
           markRouteAsSeen(scenario.scenarioKey, cached);
           return _finalizeRoute(cached, scenarioKey: scenario.scenarioKey);
@@ -1087,17 +1093,12 @@ class RouteService {
       final snapped = _snapRouteToStartPosition(route, startPosition);
       return _filteredRouteResult(snapped);
     } on RouteServiceException catch (e) {
-      // Bei avoidHighways=true: relax retry ohne Excludes — der Access-Leg
-      // muss Vorrang vor Style-Wünschen haben, sonst gibt es gar keine Route.
-      if (!avoidHighways) rethrow;
-      debugPrint(
-        '[RouteService] Access-Leg fehlgeschlagen mit avoidHighways=true (${e.debugMessage}) — retry ohne Excludes',
-      );
-      final relaxRequest = Map<String, dynamic>.from(request);
-      relaxRequest['avoid_highways'] = false;
-      final relaxRoute = await _invoke(relaxRequest);
-      final snapped = _snapRouteToStartPosition(relaxRoute, startPosition);
-      return _filteredRouteResult(snapped);
+      if (avoidHighways) {
+        debugPrint(
+          '[RouteService] Access-Leg fehlgeschlagen mit aktivem avoidHighways (${e.debugMessage}) — kein Relax auf Autobahn',
+        );
+      }
+      rethrow;
     }
   }
 
@@ -1635,6 +1636,21 @@ class RouteService {
   ) {
     final liveBudget = _roundTripCandidateBudget(scenario, styleConfig);
     return (liveBudget - 2).clamp(4, 6).toInt();
+  }
+
+  static int _rescueRoundTripWaypointLimit(RouteScenario scenario) {
+    final targetKm = scenario.targetDistanceKm ?? 0.0;
+    if (scenario.avoidHighways || targetKm >= 90) return 4;
+    return 3;
+  }
+
+  static int _pointToPointFallbackWaypointLimit(
+    RouteScenario scenario, {
+    required bool avoidHighways,
+  }) {
+    if (avoidHighways && scenario.detourLevel >= 2) return 3;
+    if (scenario.detourLevel >= 3) return 2;
+    return 1;
   }
 
   /// Erzeugt einen Cache-Key aus den user-facing Request-Parametern.
@@ -2533,7 +2549,7 @@ class RouteService {
         mode: scenario.style,
         planningType: scenario.planningType,
         targetLocation: targetLocation,
-        avoidHighways: false,
+        avoidHighways: scenario.avoidHighways,
         candidateBudget: _roundTripFallbackCandidateBudget(
           scenario,
           spreadStyle,
@@ -2544,10 +2560,10 @@ class RouteService {
       if (sportSpread != null) return sportSpread;
     }
 
-    // Letzter kontrollierter Rescue-Schritt: Wenn ein harter Stilfilter oder
-    // Highway-Ausschluss normale Rundkurse blockiert, versuchen wir eine
-    // einfache Sport-Loop-Variante. Das verändert nicht den UI-Modus, sondern
-    // verhindert nur, dass normale Gegenden im No-Route-Endzustand landen.
+    // Letzter kontrollierter Rescue-Schritt: Wenn ein harter Stilfilter
+    // normale Rundkurse blockiert, versuchen wir eine einfache Sport-Loop-
+    // Variante. Der UI-Modus bleibt unverändert, und der Autobahn-Toggle wird
+    // strikt beibehalten.
     if (scenario.avoidHighways || styleConfig.profileKey != 'sport') {
       final sportStyle = RouteStyleConfig.forMode('Sport Mode');
       return _requestRoundTripRescueVariant(
@@ -2558,7 +2574,7 @@ class RouteService {
         requestMode: 'Sport Mode',
         planningType: scenario.planningType,
         targetLocation: targetLocation,
-        avoidHighways: false,
+        avoidHighways: scenario.avoidHighways,
         candidateBudget: _roundTripFallbackCandidateBudget(
           scenario,
           sportStyle,
@@ -2610,7 +2626,7 @@ class RouteService {
         avoidHighways: avoidHighways,
       );
       body['simplify_waypoints'] = true;
-      body['max_waypoints'] = 3;
+      body['max_waypoints'] = _rescueRoundTripWaypointLimit(scenario);
       body['rescue_round_trip'] = true;
       body['route_variant_hint'] = '${variant.variantHint}-rescue-$label';
 
@@ -2693,7 +2709,10 @@ class RouteService {
           candidateBudget: 2,
         );
         scenicBody['simplify_waypoints'] = true;
-        scenicBody['max_waypoints'] = scenario.detourLevel >= 3 ? 2 : 1;
+        scenicBody['max_waypoints'] = _pointToPointFallbackWaypointLimit(
+          scenario,
+          avoidHighways: avoidHighways,
+        );
         final scenicResult = await _invoke(scenicBody);
         final scenicSnapped = _snapRouteToStartPosition(
           scenicResult,
@@ -2988,21 +3007,82 @@ class RouteService {
     return _lastRandomSeed;
   }
 
-  bool _shouldUsePersistentFallback(
-    RouteServiceException? lastError, {
-    required bool forceFreshVariant,
+  bool _shouldUseCachedFallbackRoute(
+    RouteResult cached, {
+    required RouteScenario scenario,
+    RouteServiceException? lastError,
   }) {
-    if (forceFreshVariant) return false;
-    if (lastError == null) return true;
+    final actualDistanceKm =
+        cached.distanceKm ??
+        ((cached.distanceMeters ?? 0.0) > 0
+            ? (cached.distanceMeters! / 1000.0)
+            : 0.0);
+    if (actualDistanceKm <= 0 || cached.coordinates.length < 8) return false;
 
-    return lastError.type == RouteErrorType.network ||
+    final targetDistanceKm = scenario.isRoundTrip
+        ? (scenario.targetDistanceKm ?? actualDistanceKm)
+        : 0.0;
+    final quality = _qualityValidator.validateQuality(
+      coordinates: cached.coordinates,
+      isRoundTrip: scenario.isRoundTrip,
+      targetDistanceKm: targetDistanceKm,
+      actualDistanceKm: actualDistanceKm,
+    );
+    final classification = _qualityValidator.classifyGeneratedRoute(
+      quality: quality,
+      isRoundTrip: scenario.isRoundTrip,
+      coordinateCount: cached.coordinates.length,
+      actualDistanceKm: actualDistanceKm,
+      targetDistanceKm: targetDistanceKm,
+    );
+    if (classification.isRejected) return false;
+    if (classification.isGood) return true;
+
+    final transientProviderFailure =
+        lastError == null ||
+        lastError.type == RouteErrorType.network ||
         lastError.type == RouteErrorType.server ||
         lastError.type == RouteErrorType.rateLimit ||
         lastError.type == RouteErrorType.workerLimit ||
-        lastError.type == RouteErrorType.noRoute ||
-        lastError.type == RouteErrorType.quality ||
         lastError.type == RouteErrorType.emptyResponse ||
         lastError.type == RouteErrorType.unknown;
+
+    if (scenario.isRoundTrip) {
+      final strictAcceptable =
+          quality.isLoopClosed &&
+          quality.distanceInTolerance &&
+          quality.uturnPositions.isEmpty &&
+          quality.overlapPercent <= 22.0 &&
+          quality.shapePenalty <= 42.0 &&
+          quality.spurArmPercent <= 18.0 &&
+          quality.centerReentryCount <= 1 &&
+          quality.repeatedStartAreaPercent <= 18.0 &&
+          quality.microZigzagPercent <= 18.0;
+      if (strictAcceptable) return true;
+
+      return transientProviderFailure &&
+          quality.isLoopClosed &&
+          quality.uturnPositions.length <= 1 &&
+          quality.overlapPercent <= 30.0 &&
+          quality.shapePenalty <= 54.0 &&
+          quality.spurArmPercent <= 24.0 &&
+          quality.centerReentryCount <= 1 &&
+          quality.repeatedStartAreaPercent <= 26.0 &&
+          quality.microZigzagPercent <= 26.0;
+    }
+
+    final strictAcceptable =
+        quality.uturnPositions.isEmpty &&
+        quality.overlapPercent <= 14.0 &&
+        quality.shapePenalty <= 30.0 &&
+        quality.microZigzagPercent <= 18.0;
+    if (strictAcceptable) return true;
+
+    return transientProviderFailure &&
+        quality.uturnPositions.isEmpty &&
+        quality.overlapPercent <= 20.0 &&
+        quality.shapePenalty <= 36.0 &&
+        quality.microZigzagPercent <= 24.0;
   }
 
   // ─────────────────────── Persistent Route Cache ────────────────────────────

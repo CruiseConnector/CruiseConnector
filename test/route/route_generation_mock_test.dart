@@ -680,6 +680,47 @@ void main() {
         expect(curveRequest['zigzag_waypoints'], isTrue);
       },
     );
+
+    test(
+      'Rundkurs-Rescue behaelt avoidHighways auch in spaeten Fallbacks aktiv',
+      () async {
+        var callCount = 0;
+        when(mockInvoker.invoke(any)).thenAnswer((_) async {
+          callCount++;
+          if (callCount < 5) {
+            throw const FunctionException(
+              status: 404,
+              details: {'error': 'no route found'},
+              reasonPhrase: 'Not Found',
+            );
+          }
+          return _buildClosedLoopRouteResponse(
+            distanceMeters: 50000,
+            durationSeconds: 3600,
+          );
+        });
+
+        await service.generateRoundTrip(
+          startPosition: _munich(),
+          targetDistanceKm: 50,
+          mode: 'Abendrunde',
+          planningType: 'Zufall',
+          avoidHighways: true,
+        );
+
+        final captured = verify(
+          mockInvoker.invoke(captureAny),
+        ).captured.cast<Map<String, dynamic>>();
+
+        expect(captured.length, greaterThanOrEqualTo(5));
+        expect(
+          captured.every((request) => request['avoid_highways'] == true),
+          isTrue,
+        );
+        expect(captured.last['mode'], 'Sport Mode');
+        expect(captured.last['max_waypoints'], 4);
+      },
+    );
   });
 
   // ─────────────────────── generatePointToPoint ──────────────────────────────
@@ -893,6 +934,59 @@ void main() {
         expect(captured['targetDistance'], isNotNull);
         expect(captured['detour_level'], 3);
         expect(captured['detour_factor'], isNotNull);
+      },
+    );
+
+    test(
+      'A→B-Fallback behaelt avoidHighways aktiv und erweitert den Scenic-Rettungspfad',
+      () async {
+        var callCount = 0;
+        when(mockInvoker.invoke(any)).thenAnswer((_) async {
+          callCount++;
+          if (callCount <= 2) {
+            throw const FunctionException(
+              status: 404,
+              details: {'error': 'no route found'},
+              reasonPhrase: 'Not Found',
+            );
+          }
+          return _buildPointToPointResponse(
+            distanceMeters: 78000,
+            durationSeconds: 5200,
+            destinationLat: _feldkirchLat,
+            destinationLng: _feldkirchLng,
+          );
+        });
+
+        try {
+          await service.generatePointToPoint(
+            startPosition: _dornbirn(),
+            destinationLat: _feldkirchLat,
+            destinationLng: _feldkirchLng,
+            mode: 'Sport Mode',
+            scenic: true,
+            routeVariant: 2,
+            avoidHighways: true,
+          );
+        } on RouteServiceException {
+          // Fuer diese Regression zaehlt der Fallback-Request, nicht das
+          // mockbedingte Endergebnis der Geometrie.
+        }
+
+        final captured = verify(
+          mockInvoker.invoke(captureAny),
+        ).captured.cast<Map<String, dynamic>>();
+
+        expect(captured.length, greaterThanOrEqualTo(3));
+        expect(
+          captured.every((request) => request['avoid_highways'] == true),
+          isTrue,
+        );
+        final scenicFallback = captured.firstWhere(
+          (request) => request['simplify_waypoints'] == true,
+        );
+        expect(scenicFallback['max_waypoints'], 3);
+        expect(scenicFallback['detour_level'], 2);
       },
     );
 
