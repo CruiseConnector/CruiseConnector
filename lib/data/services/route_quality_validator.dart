@@ -468,12 +468,22 @@ class RouteQualityValidator {
         isRoundTrip &&
         ((quality.centerReentryCount >= 3) ||
             (quality.radialPeakCount >= 4 && quality.centerReentryCount >= 2) ||
-            (quality.spurArmPercent >= 80.0) ||
-            (quality.radialPeakCount >= 4 && quality.spurArmPercent >= 60.0) ||
+            (quality.spurArmPercent >= 68.0) ||
+            (quality.radialPeakCount >= 3 &&
+                quality.spurArmPercent >= 52.0 &&
+                quality.dominantLoopScore < 80.0 &&
+                (quality.middleCoverageRatio < 0.40 ||
+                    quality.repeatedStartAreaPercent >= 18.0 ||
+                    quality.centerReentryCount >= 1)) ||
+            (quality.radialPeakCount >= 4 && quality.spurArmPercent >= 56.0) ||
             (quality.centerRecrossPercent >= 55.0 &&
                 quality.spurArmPercent >= 40.0) ||
+            (quality.centerReentryCount >= 2 &&
+                quality.repeatedStartAreaPercent >= 30.0) ||
             (quality.spurArmPercent >= 58.0 &&
                 quality.repeatedStartAreaPercent >= 32.0) ||
+            (quality.middleCoverageRatio < 0.30 &&
+                quality.returnPathPercent >= 18.0) ||
             (quality.middleCoverageRatio < 0.22 &&
                 (quality.centerRecrossPercent >= 45.0 ||
                     quality.repeatedStartAreaPercent >= 45.0 ||
@@ -482,9 +492,20 @@ class RouteQualityValidator {
         !isRoundTrip &&
         (quality.corridorSwitchCount >= 4 ||
             quality.progressReversalCount >= 2);
+    final hardUturnFailure =
+        !isRoundTrip
+        ? quality.uturnPositions.isNotEmpty
+        : quality.uturnPositions.length >= 2 ||
+              (quality.uturnPositions.length == 1 &&
+                  (quality.overlapPercent > 22.0 ||
+                      quality.shapePenalty > 46.0 ||
+                      quality.foldedAreaPenalty > 76.0 ||
+                      quality.repeatedStartAreaPercent > 28.0 ||
+                      quality.centerRecrossPercent > 24.0 ||
+                      quality.spurArmPercent > 28.0));
 
     if (!quality.isLoopClosed ||
-        quality.uturnPositions.isNotEmpty ||
+        hardUturnFailure ||
         (isRoundTrip && quality.returnPathPercent > acceptableReturnPath) ||
         severeRoundTripShape ||
         severePointShape) {
@@ -497,10 +518,18 @@ class RouteQualityValidator {
     if (coordinateCount < acceptableMinCoordinates ||
         quality.overlapPercent > acceptableOverlap ||
         !acceptableDistanceOk ||
-        quality.foldedAreaPenalty > (isRoundTrip ? 74.0 : 88.0) ||
-        quality.repeatedStartAreaPercent > (isRoundTrip ? 56.0 : 72.0) ||
-        quality.microZigzagPercent > (isRoundTrip ? 44.0 : 54.0) ||
-        quality.shapePenalty > (isRoundTrip ? 58.0 : 42.0)) {
+        quality.foldedAreaPenalty > (isRoundTrip ? 82.0 : 88.0) ||
+        quality.repeatedStartAreaPercent > (isRoundTrip ? 48.0 : 72.0) ||
+        quality.microZigzagPercent > (isRoundTrip ? 38.0 : 54.0) ||
+        quality.shapePenalty > (isRoundTrip ? 56.0 : 42.0) ||
+        (isRoundTrip &&
+            ((quality.spurArmPercent > 36.0 &&
+                    quality.dominantLoopScore < 80.0 &&
+                    (quality.centerRecrossPercent > 20.0 ||
+                        quality.repeatedStartAreaPercent > 18.0 ||
+                        quality.middleCoverageRatio < 0.40)) ||
+                quality.centerRecrossPercent > 34.0 ||
+                quality.middleCoverageRatio < 0.32))) {
       final hasHardDistanceMiss =
           targetDistanceKm > 0 &&
           distanceDeltaPercent >
@@ -508,14 +537,22 @@ class RouteQualityValidator {
                   (isRoundTrip ? 0.18 : 0.12));
       final hasSevereSoftShape =
           quality.foldedAreaPenalty > (isRoundTrip ? 90.0 : 94.0) ||
-          quality.repeatedStartAreaPercent > (isRoundTrip ? 74.0 : 82.0) ||
-          quality.microZigzagPercent > (isRoundTrip ? 62.0 : 66.0) ||
-          quality.shapePenalty > (isRoundTrip ? 82.0 : 58.0);
+          quality.repeatedStartAreaPercent > (isRoundTrip ? 60.0 : 82.0) ||
+          quality.microZigzagPercent > (isRoundTrip ? 52.0 : 66.0) ||
+          quality.shapePenalty > (isRoundTrip ? 74.0 : 58.0) ||
+          (isRoundTrip &&
+              ((quality.spurArmPercent > 50.0 &&
+                      quality.dominantLoopScore < 80.0 &&
+                      (quality.centerRecrossPercent > 22.0 ||
+                          quality.repeatedStartAreaPercent > 20.0 ||
+                          quality.middleCoverageRatio < 0.38)) ||
+                  quality.centerRecrossPercent > 42.0 ||
+                  quality.middleCoverageRatio < 0.26));
       final hasInsufficientGeometry =
           coordinateCount <
           math.max(8, (acceptableMinCoordinates * 0.65).floor());
 
-      final hardOverlapLimit = isRoundTrip ? 52.0 : acceptableOverlap + 8.0;
+      final hardOverlapLimit = isRoundTrip ? 48.0 : acceptableOverlap + 8.0;
       if (hasInsufficientGeometry ||
           quality.overlapPercent > hardOverlapLimit ||
           hasHardDistanceMiss ||
@@ -537,15 +574,15 @@ class RouteQualityValidator {
         idealDistanceOk &&
         (!isRoundTrip || quality.returnPathPercent <= idealReturnPath) &&
         quality.shapePenalty <= (isRoundTrip ? 18.0 : 14.0) &&
-        quality.foldedAreaPenalty <= (isRoundTrip ? 36.0 : 50.0) &&
-        quality.repeatedStartAreaPercent <= (isRoundTrip ? 20.0 : 28.0) &&
+        quality.foldedAreaPenalty <= (isRoundTrip ? 40.0 : 50.0) &&
+        quality.repeatedStartAreaPercent <= (isRoundTrip ? 18.0 : 28.0) &&
         quality.microZigzagPercent <= 24.0 &&
-        quality.dominantLoopScore >= (isRoundTrip ? 62.0 : 48.0) &&
+        quality.dominantLoopScore >= (isRoundTrip ? 66.0 : 48.0) &&
         (isRoundTrip
             ? quality.centerReentryCount == 0 &&
-                  quality.centerRecrossPercent <= 16.0 &&
-                  quality.spurArmPercent <= 22.0 &&
-                  quality.middleCoverageRatio >= 0.58
+                  quality.centerRecrossPercent <= 14.0 &&
+                  quality.spurArmPercent <= 18.0 &&
+                  quality.middleCoverageRatio >= 0.60
             : quality.corridorSwitchCount <= 1 &&
                   quality.progressReversalCount == 0)) {
       return RouteQualityClassification(
@@ -562,11 +599,16 @@ class RouteQualityValidator {
         quality.overlapPercent <= idealOverlap + (isRoundTrip ? 6.0 : 4.0) &&
         goodDistanceOk &&
         (!isRoundTrip || quality.returnPathPercent <= idealReturnPath + 10.0) &&
-        quality.shapePenalty <= (isRoundTrip ? 34.0 : 26.0) &&
-        quality.foldedAreaPenalty <= (isRoundTrip ? 56.0 : 68.0) &&
-        quality.repeatedStartAreaPercent <= (isRoundTrip ? 38.0 : 46.0) &&
-        quality.microZigzagPercent <= 34.0 &&
-        quality.dominantLoopScore >= (isRoundTrip ? 46.0 : 36.0);
+        quality.shapePenalty <= (isRoundTrip ? 28.0 : 26.0) &&
+        quality.foldedAreaPenalty <= (isRoundTrip ? 60.0 : 68.0) &&
+        quality.repeatedStartAreaPercent <= (isRoundTrip ? 30.0 : 46.0) &&
+        quality.microZigzagPercent <= 28.0 &&
+        quality.dominantLoopScore >= (isRoundTrip ? 52.0 : 36.0) &&
+        (!isRoundTrip ||
+            (quality.centerReentryCount <= 1 &&
+                quality.centerRecrossPercent <= 24.0 &&
+                quality.spurArmPercent <= 26.0 &&
+                quality.middleCoverageRatio >= 0.42));
     if (coordinateCount >= acceptableMinCoordinates && goodShapeOk) {
       return RouteQualityClassification(
         tier: RouteQualityTier.good,
@@ -831,26 +873,27 @@ class RouteQualityValidator {
         maxDistance: maxDistance,
       );
       final shapePenalty =
-          centerRecrossPercent * 0.34 +
-          repeatedStartAreaPercent * 0.24 +
-          spurArmPercent * 0.40 +
-          foldedAreaPenalty * 0.30 +
-          math.max(0.0, 0.64 - middleCoverageRatio) * 88.0 +
-          microZigzagPercent * 0.34;
+          centerRecrossPercent * 0.38 +
+          repeatedStartAreaPercent * 0.30 +
+          spurArmPercent * 0.48 +
+          foldedAreaPenalty * 0.34 +
+          math.max(0.0, 0.66 - middleCoverageRatio) * 96.0 +
+          microZigzagPercent * 0.38;
       final scenicLoopScore =
           middleCoverageRatio * 40.0 +
           compactnessScore * 0.20 +
           (100.0 - foldedAreaPenalty) * 0.22 +
           (100.0 - repeatedStartAreaPercent) * 0.14 +
           (100.0 - centerRecrossPercent) * 0.14 -
-          spurArmPercent * 0.12 -
-          microZigzagPercent * 0.12;
+          spurArmPercent * 0.16 -
+          microZigzagPercent * 0.14;
       final dominantLoopScore =
           middleCoverageRatio * 34.0 +
           compactnessScore * 0.24 +
           (100.0 - foldedAreaPenalty) * 0.24 +
           (100.0 - repeatedStartAreaPercent) * 0.14 +
-          (100.0 - centerRecrossPercent) * 0.14;
+          (100.0 - centerRecrossPercent) * 0.14 -
+          spurArmPercent * 0.14;
 
       return _RouteShapeMetrics(
         centerReentryCount: centerRecrossClusters,

@@ -1273,12 +1273,12 @@ void main() {
             );
           }
           return _buildPointToPointResponse(
-            distanceMeters: 165000,
-            durationSeconds: 9800,
+            distanceMeters: 250000,
+            durationSeconds: 14800,
             destinationLat: 47.8095,
             destinationLng: 13.0550,
-            coordinateCount: 500,
-            bendScale: 0.36,
+            coordinateCount: 900,
+            bendScale: 0.82,
           );
         });
 
@@ -1293,12 +1293,12 @@ void main() {
 
         expect(callCount, inInclusiveRange(2, 3));
         expect(result.distanceKm, isNotNull);
-        expect(result.distanceKm!, lessThan(200));
+        expect(result.distanceKm!, lessThan(280));
       },
     );
 
     test(
-      'scenic A→B liefert notfalls direkte brauchbare Fallback-Route statt no-route',
+      'scenic A→B faellt bei Gross-Umweg nicht still auf Direkt-A→B zurueck',
       () async {
         when(mockInvoker.invoke(any)).thenAnswer((_) async {
           return _buildPointToPointResponse(
@@ -1313,20 +1313,30 @@ void main() {
           );
         });
 
-        final result = await service.generatePointToPoint(
-          startPosition: _dornbirn(),
-          destinationLat: _feldkirchLat,
-          destinationLng: _feldkirchLng,
-          mode: 'Sport Mode',
-          scenic: true,
-          routeVariant: 3,
+        await expectLater(
+          service.generatePointToPoint(
+            startPosition: _dornbirn(),
+            destinationLat: _feldkirchLat,
+            destinationLng: _feldkirchLng,
+            mode: 'Sport Mode',
+            scenic: true,
+            routeVariant: 3,
+          ),
+          throwsA(isA<RouteServiceException>()),
         );
 
-        expect(result.coordinates, isNotEmpty);
-        expect(result.distanceKm, isNotNull);
-        expect(result.distanceKm!, greaterThan(18));
-        expect(result.distanceKm!, lessThan(30));
-        verify(mockInvoker.invoke(any)).called(greaterThanOrEqualTo(1));
+        final captured = verify(
+          mockInvoker.invoke(captureAny),
+        ).captured.cast<Map<String, dynamic>>();
+        expect(
+          captured.every(
+            (request) =>
+                request['route_type'] != 'POINT_TO_POINT' ||
+                request['detour_level'] == null ||
+                request['detour_level'] == 3,
+          ),
+          isTrue,
+        );
       },
     );
 

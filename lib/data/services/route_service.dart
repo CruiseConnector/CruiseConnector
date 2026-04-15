@@ -292,9 +292,25 @@ class RouteService {
           }
         }
 
+        final recent = forceFreshVariant
+            ? null
+            : _recentSuccessfulRoutes[scenario.scenarioKey];
+        if (
+          recent != null &&
+          _shouldUseRecentFallbackRoute(
+            recent,
+            scenario: scenario,
+            lastError: lastError,
+          )
+        ) {
+          lastRouteFromCache = true;
+          markRouteAsSeen(scenario.scenarioKey, recent);
+          return _finalizeRoute(recent, scenarioKey: scenario.scenarioKey);
+        }
+
         final cached = forceFreshVariant
             ? null
-            : await _loadRecentOrCachedRoute(scenarioKey: scenario.scenarioKey);
+            : await _loadCachedRoute(scenarioKey: scenario.scenarioKey);
         if (
           cached != null &&
           _shouldUseCachedFallbackRoute(
@@ -552,6 +568,7 @@ class RouteService {
             destinationLng: destinationLng,
             avoidHighways: avoidHighways,
             directDistanceKm: directDistanceKm,
+            allowDirectFallback: scenario.detourLevel <= 0,
           );
           if (fallback != null) {
             return fallback;
@@ -1992,6 +2009,14 @@ class RouteService {
         ? true
         : actualDistanceKm >= pointToPointMinDistance &&
               actualDistanceKm <= pointToPointMaxDistance;
+    final detourRenderableOk = _pointToPointDetourRenderable(
+      scenario: scenario,
+      styleConfig: styleConfig,
+      actualDistanceKm: actualDistanceKm,
+      directDistanceKm: directDistanceKm ?? 0.0,
+      minDistanceKm: pointToPointMinDistance,
+      maxDistanceKm: pointToPointMaxDistance,
+    );
     final successFirstDistanceOk = scenario.isRoundTrip
         ? (() {
             final targetKm = scenario.targetDistanceKm ?? actualDistanceKm;
@@ -2015,37 +2040,39 @@ class RouteService {
             return actualDistanceKm >= directKm * 0.92 &&
                 actualDistanceKm <= math.max(directKm * 1.35, directKm + 6.0);
           })();
+    final renderableDistanceOk =
+        scenario.isPointToPoint && scenario.detourLevel > 0
+        ? detourRenderableOk
+        : successFirstDistanceOk;
     final scenicFallbackRenderable =
         scenario.isPointToPoint &&
         scenario.detourLevel > 0 &&
+        detourRenderableOk &&
         (directDistanceKm ?? 0.0) > 0.0 &&
-        actualDistanceKm >= (directDistanceKm ?? 0.0) * 0.96 &&
-        actualDistanceKm <= (directDistanceKm ?? 0.0) * 1.45 &&
+        actualDistanceKm >= (directDistanceKm ?? 0.0) * 1.08 &&
+        actualDistanceKm <= pointToPointMaxDistance * 1.03 &&
         quality.uturnPositions.isEmpty &&
-        quality.overlapPercent <= 16.0 &&
-        quality.shapePenalty <= 26.0 &&
+        quality.overlapPercent <= 12.0 &&
+        quality.shapePenalty <= 20.0 &&
         route.coordinates.length >= 24;
+    final roundTripStructureOk = !scenario.isRoundTrip ||
+        _roundTripStructureRenderable(
+          quality: quality,
+          profileKey: styleConfig.profileKey,
+        );
     final rescueRoundTripAcceptable =
         relaxedRoundTrip &&
         scenario.isRoundTrip &&
         successFirstDistanceOk &&
-        quality.isLoopClosed &&
         quality.uturnPositions.length <=
             (styleConfig.profileKey == 'sport' ? 2 : 0) &&
-        quality.overlapPercent <=
-            (styleConfig.profileKey == 'sport' ? 26.0 : 20.0) &&
         quality.returnPathPercent <=
             RouteQualityValidator.maxReturnPathPercent + 8.0 &&
-        quality.shapePenalty <=
-            (styleConfig.profileKey == 'sport' ? 70.0 : 58.0) &&
-        quality.foldedAreaPenalty <=
-            (styleConfig.profileKey == 'sport' ? 86.0 : 72.0) &&
-        quality.spurArmPercent <=
-            (styleConfig.profileKey == 'sport' ? 36.0 : 18.0) &&
-        quality.repeatedStartAreaPercent <=
-            (styleConfig.profileKey == 'sport' ? 44.0 : 24.0) &&
-        quality.microZigzagPercent <=
-            (styleConfig.profileKey == 'sport' ? 48.0 : 34.0);
+        _roundTripStructureRenderable(
+          quality: quality,
+          profileKey: styleConfig.profileKey,
+          relaxed: true,
+        );
     final serverApprovedGoodTier =
         edgeTier == RouteQualityTier.ideal || edgeTier == RouteQualityTier.good;
     final serverApprovedRoundTripUturnLimit = !scenario.isRoundTrip
@@ -2083,66 +2110,74 @@ class RouteService {
         edgeTier != null &&
         edgeTier != RouteQualityTier.rejected &&
         hasEnoughPoints &&
-        successFirstDistanceOk &&
+        renderableDistanceOk &&
         (scenario.isRoundTrip
             ? quality.uturnPositions.length <= serverApprovedRoundTripUturnLimit
             : quality.uturnPositions.isEmpty) &&
-        (!scenario.isRoundTrip || quality.isLoopClosed) &&
-        quality.overlapPercent <= (scenario.isRoundTrip ? 58.0 : 26.0) &&
-        quality.shapePenalty <= (scenario.isRoundTrip ? 92.0 : 58.0) &&
+        (!scenario.isRoundTrip || roundTripStructureOk) &&
+        quality.overlapPercent <= (scenario.isRoundTrip ? 24.0 : 26.0) &&
+        quality.shapePenalty <= (scenario.isRoundTrip ? 62.0 : 58.0) &&
         quality.foldedAreaPenalty <=
             (scenario.isRoundTrip
-                ? (styleConfig.profileKey == 'kurvenjagd' ? 99.0 : 96.0)
+                ? (styleConfig.profileKey == 'sport' ? 84.0 : 72.0)
                 : 94.0) &&
-        quality.spurArmPercent <= serverApprovedSpurLimit &&
-        quality.repeatedStartAreaPercent <= serverApprovedRepeatedStartLimit &&
+        quality.spurArmPercent <=
+            (scenario.isRoundTrip
+                ? (styleConfig.profileKey == 'sport' ? 30.0 : 24.0)
+                : serverApprovedSpurLimit) &&
+        quality.repeatedStartAreaPercent <=
+            (scenario.isRoundTrip
+                ? (styleConfig.profileKey == 'sport' ? 44.0 : 34.0)
+                : serverApprovedRepeatedStartLimit) &&
         quality.microZigzagPercent <= 66.0 &&
-        // Kraken-Schutz auch im Server-Approval: Stern-Patterns mit hohem
-        // Centerkreuzen dürfen hier nicht mehr als "acceptable" durchrutschen.
-        (!scenario.isRoundTrip || quality.centerRecrossPercent <= 50.0) &&
-        (!scenario.isRoundTrip || quality.centerReentryCount <= 2);
+        (!scenario.isRoundTrip || quality.centerRecrossPercent <= 30.0) &&
+        (!scenario.isRoundTrip || quality.centerReentryCount <= 1);
     final serverApprovedSportRescue =
         scenario.isRoundTrip &&
         styleConfig.profileKey == 'sport' &&
         edgeTier == RouteQualityTier.acceptable &&
         hasEnoughPoints &&
         successFirstDistanceOk &&
-        quality.isLoopClosed &&
-        quality.uturnPositions.length <= 2 &&
-        quality.overlapPercent <= 48.0 &&
-        quality.shapePenalty <= 62.0 &&
-        quality.foldedAreaPenalty <= 85.0 &&
-        quality.spurArmPercent <= 50.0 &&
-        quality.centerRecrossPercent <= 42.0 &&
-        quality.repeatedStartAreaPercent <= 44.0 &&
-        quality.microZigzagPercent <= 18.0;
+        quality.uturnPositions.length <= 1 &&
+        _roundTripStructureRenderable(
+          quality: quality,
+          profileKey: styleConfig.profileKey,
+          relaxed: true,
+        );
     final qualityAcceptable = scenario.isRoundTrip
         ? classification.isAcceptable ||
               rescueRoundTripAcceptable ||
               serverApprovedAcceptable ||
               serverApprovedSportRescue
-        : quality.passed ||
+        : detourRenderableOk &&
+              (quality.passed ||
               classification.isAcceptable ||
               scenicFallbackRenderable ||
-              serverApprovedAcceptable;
+              serverApprovedAcceptable);
     final softRenderable = hasEnoughPoints && qualityAcceptable;
     final styleSoftOk =
         styleOk ||
         (scenario.isRoundTrip &&
-            styleFitScore >= styleConfig.minStyleFitScore - 12.0 &&
-            quality.shapePenalty <= 72.0 &&
-            quality.foldedAreaPenalty <= 84.0 &&
-            quality.microZigzagPercent <= 52.0) ||
+            roundTripStructureOk &&
+            styleFitScore >= styleConfig.minStyleFitScore - 8.0 &&
+            quality.shapePenalty <= 62.0 &&
+            quality.foldedAreaPenalty <= 80.0 &&
+            quality.repeatedStartAreaPercent <= 36.0 &&
+            quality.spurArmPercent <= 26.0 &&
+            quality.microZigzagPercent <= 44.0) ||
         (relaxedRoundTrip &&
             scenario.isRoundTrip &&
-            styleFitScore >= styleConfig.minStyleFitScore - 24.0 &&
-            quality.shapePenalty <= 82.0 &&
-            quality.foldedAreaPenalty <= 92.0 &&
-            quality.microZigzagPercent <= 58.0);
+            styleFitScore >= styleConfig.minStyleFitScore - 16.0 &&
+            quality.shapePenalty <= 68.0 &&
+            quality.foldedAreaPenalty <= 88.0 &&
+            quality.repeatedStartAreaPercent <= 42.0 &&
+            quality.spurArmPercent <= 32.0 &&
+            quality.microZigzagPercent <= 50.0);
     final hasSoftDetourPenalty =
         scenario.isPointToPoint &&
         scenario.detourLevel > 0 &&
-        !detourDistanceOk;
+        !detourDistanceOk &&
+        detourRenderableOk;
     final hasSoftStylePenalty = !styleSoftOk;
     final hasSoftSimilarityPenalty = tooSimilar;
     final baseTier = _preferredTier(classification.tier, edgeTier);
@@ -2216,6 +2251,96 @@ class RouteService {
       return 8;
     }
     return actualDistanceKm >= 10 ? 30 : 0;
+  }
+
+  bool _roundTripStructureRenderable({
+    required RouteQualityResult quality,
+    required String profileKey,
+    bool relaxed = false,
+  }) {
+    final isSport = profileKey == 'sport';
+    final overlapLimit = relaxed
+        ? (isSport ? 32.0 : 28.0)
+        : (isSport ? 28.0 : 24.0);
+    final shapeLimit = relaxed
+        ? (isSport ? 64.0 : 56.0)
+        : (isSport ? 58.0 : 50.0);
+    final foldedLimit = relaxed
+        ? (isSport ? 88.0 : 78.0)
+        : (isSport ? 82.0 : 72.0);
+    final spurLimit = relaxed
+        ? (isSport ? 32.0 : 28.0)
+        : (isSport ? 28.0 : 24.0);
+    final repeatedStartLimit = relaxed
+        ? (isSport ? 46.0 : 36.0)
+        : (isSport ? 40.0 : 32.0);
+    final centerRecrossLimit = relaxed
+        ? (isSport ? 36.0 : 30.0)
+        : (isSport ? 32.0 : 26.0);
+    final microZigzagLimit = relaxed
+        ? (isSport ? 44.0 : 36.0)
+        : (isSport ? 40.0 : 32.0);
+    final middleCoverageLimit = relaxed
+        ? (isSport ? 0.26 : 0.30)
+        : (isSport ? 0.28 : 0.32);
+    final tolerableHighSpanLoop =
+        quality.spurArmPercent <= (relaxed ? 68.0 : 64.0) &&
+        quality.centerRecrossPercent <= (relaxed ? 18.0 : 16.0) &&
+        quality.repeatedStartAreaPercent <= (relaxed ? 14.0 : 12.0) &&
+        quality.foldedAreaPenalty <= (relaxed ? 24.0 : 18.0) &&
+        quality.middleCoverageRatio >= (relaxed ? 0.58 : 0.62) &&
+        quality.dominantLoopScore >= (relaxed ? 78.0 : 84.0);
+    return quality.isLoopClosed &&
+        quality.overlapPercent <= overlapLimit &&
+        quality.shapePenalty <= shapeLimit &&
+        quality.foldedAreaPenalty <= foldedLimit &&
+        (quality.spurArmPercent <= spurLimit || tolerableHighSpanLoop) &&
+        quality.repeatedStartAreaPercent <= repeatedStartLimit &&
+        quality.centerRecrossPercent <= centerRecrossLimit &&
+        quality.centerReentryCount <= 1 &&
+        quality.microZigzagPercent <= microZigzagLimit &&
+        quality.middleCoverageRatio >= middleCoverageLimit;
+  }
+
+  bool _pointToPointDetourRenderable({
+    required RouteScenario scenario,
+    required RouteStyleConfig styleConfig,
+    required double actualDistanceKm,
+    required double directDistanceKm,
+    required double minDistanceKm,
+    required double maxDistanceKm,
+  }) {
+    if (!scenario.isPointToPoint || scenario.detourLevel <= 0) return true;
+    if (actualDistanceKm >= minDistanceKm && actualDistanceKm <= maxDistanceKm) {
+      return true;
+    }
+    final rescueSlackKm = switch (scenario.detourLevel) {
+      1 => 1.0,
+      2 => 1.6,
+      3 => 2.6,
+      _ => 0.0,
+    };
+    final rescueMinFactor = switch (scenario.detourLevel) {
+      1 => 1.10,
+      2 => 1.28,
+      3 => 1.55,
+      _ => 1.0,
+    };
+    final rescueMinKm = math.max(
+      directDistanceKm * rescueMinFactor,
+      minDistanceKm - rescueSlackKm,
+    );
+    final rescueMaxKm = math.max(
+      maxDistanceKm,
+      styleConfig.maximumPointToPointDistanceKm(
+            targetKm: scenario.targetDistanceKm ?? actualDistanceKm,
+            directDistanceKm: directDistanceKm,
+            scenic: true,
+            detourVariant: scenario.detourLevel,
+          ) *
+          1.04,
+    );
+    return actualDistanceKm >= rescueMinKm && actualDistanceKm <= rescueMaxKm;
   }
 
   bool _isBetterCandidate(_RouteCandidate candidate, _RouteCandidate? current) {
@@ -3040,12 +3165,18 @@ class RouteService {
 
     final transientProviderFailure =
         lastError == null ||
+        lastError.type == RouteErrorType.noRoute ||
+        lastError.type == RouteErrorType.quality ||
         lastError.type == RouteErrorType.network ||
         lastError.type == RouteErrorType.server ||
         lastError.type == RouteErrorType.rateLimit ||
         lastError.type == RouteErrorType.workerLimit ||
         lastError.type == RouteErrorType.emptyResponse ||
         lastError.type == RouteErrorType.unknown;
+
+    if (scenario.isRoundTrip && transientProviderFailure) {
+      return true;
+    }
 
     if (scenario.isRoundTrip) {
       final strictAcceptable =
@@ -3083,6 +3214,63 @@ class RouteService {
         quality.overlapPercent <= 20.0 &&
         quality.shapePenalty <= 36.0 &&
         quality.microZigzagPercent <= 24.0;
+  }
+
+  bool _shouldUseRecentFallbackRoute(
+    RouteResult recent, {
+    required RouteScenario scenario,
+    RouteServiceException? lastError,
+  }) {
+    final actualDistanceKm =
+        recent.distanceKm ??
+        ((recent.distanceMeters ?? 0.0) > 0
+            ? (recent.distanceMeters! / 1000.0)
+            : 0.0);
+    if (actualDistanceKm <= 0 || recent.coordinates.length < 8) return false;
+    if (lastError?.type == RouteErrorType.validation) return false;
+
+    final targetDistanceKm = scenario.isRoundTrip
+        ? (scenario.targetDistanceKm ?? actualDistanceKm)
+        : 0.0;
+    final quality = _qualityValidator.validateQuality(
+      coordinates: recent.coordinates,
+      isRoundTrip: scenario.isRoundTrip,
+      targetDistanceKm: targetDistanceKm,
+      actualDistanceKm: actualDistanceKm,
+    );
+    final classification = _qualityValidator.classifyGeneratedRoute(
+      quality: quality,
+      isRoundTrip: scenario.isRoundTrip,
+      coordinateCount: recent.coordinates.length,
+      actualDistanceKm: actualDistanceKm,
+      targetDistanceKm: targetDistanceKm,
+    );
+    if (classification.isRejected) return false;
+
+    final recoverableSearchFailure =
+        lastError == null ||
+        lastError.type == RouteErrorType.noRoute ||
+        lastError.type == RouteErrorType.quality ||
+        lastError.type == RouteErrorType.network ||
+        lastError.type == RouteErrorType.server ||
+        lastError.type == RouteErrorType.rateLimit ||
+        lastError.type == RouteErrorType.workerLimit ||
+        lastError.type == RouteErrorType.emptyResponse ||
+        lastError.type == RouteErrorType.unknown;
+    if (!recoverableSearchFailure) return false;
+
+    if (scenario.isRoundTrip) {
+      return quality.isLoopClosed &&
+          quality.uturnPositions.length <= 1 &&
+          quality.overlapPercent <= 24.0 &&
+          quality.shapePenalty <= 60.0 &&
+          quality.centerReentryCount <= 1 &&
+          quality.repeatedStartAreaPercent <= 40.0;
+    }
+
+    return quality.uturnPositions.isEmpty &&
+        quality.overlapPercent <= 22.0 &&
+        quality.shapePenalty <= 38.0;
   }
 
   // ─────────────────────── Persistent Route Cache ────────────────────────────
