@@ -1044,6 +1044,7 @@ function prioritizeCandidatePlans(
   phaseName: string,
   variantHint?: string,
   fingerprintHint?: string,
+  options?: { shortCurvyRoundTripFallback?: boolean },
 ): RoundTripCandidatePlan[] {
   if (plans.length <= 1) return plans;
 
@@ -1079,10 +1080,18 @@ function prioritizeCandidatePlans(
   // Ohne echten Fingerprint starteten strict/balanced/fallback bisher alle
   // bei denselben ersten Plänen. Dadurch wurden z.B. Sport-Loops immer mit
   // denselben zwei Grundformen versucht und gute Fallback-Formen nie erreicht.
+  //
+  // Kurze Kurvenjagd-Roundtrips: Der 65%-Offset in "fallback" hat die Rotation
+  // oft genau auf fallback-cardinal / fallback-triangle-* gesetzt, obwohl die
+  // brauchbareren curve-*-Pläne (loop-scout, orbital-core, zigzag-core) schon
+  // früh in der Liste stehen. Dort bleibt offset 0 — Variation kommt weiter
+  // über rotationSeed (Fingerprint).
   const phaseOffset = phaseName === "balanced"
     ? Math.min(2, Math.max(0, orderedPool.length - 1))
     : phaseName === "fallback"
-    ? Math.max(0, Math.floor(orderedPool.length * 0.65))
+    ? (options?.shortCurvyRoundTripFallback
+      ? 0
+      : Math.max(0, Math.floor(orderedPool.length * 0.65)))
     : 0;
   const startIndex = (rotationSeed + phaseOffset) % orderedPool.length;
   const rotated = orderedPool.slice(startIndex).concat(
@@ -2458,6 +2467,9 @@ async function searchBestRoundTripRoute({
       phase.name,
       normalizedVariantHint,
       normalizedFingerprintHint,
+      phase.name === "fallback" && shortCurvySearch
+        ? { shortCurvyRoundTripFallback: true }
+        : undefined,
     );
     // Pro Phase 2-3 Versuche. WICHTIG: Fair-Share-Guard reserviert für
     // jede spätere Phase MINDESTENS 2 Versuche (vorher: 1), damit der
