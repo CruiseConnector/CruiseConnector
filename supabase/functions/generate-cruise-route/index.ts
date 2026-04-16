@@ -1923,37 +1923,55 @@ function evaluateRouteQuality(
   options?: {
     targetDistanceKm?: number;
     distanceConfig?: DistanceConfig;
+    mode?: RouteMode;
   },
 ): RouteQualityEvaluation {
   const coordinateCount = route?.geometry?.coordinates?.length ?? 0;
   const actualDistanceKm = getRouteDistanceKm(route);
   const hasUTurn = hasUTurnManeuver(route);
   const overlapPercent = calculateRouteOverlapPercent(route);
-  const overlapThreshold = routeType === "ROUND_TRIP" ? 18 : 14;
+  // Anti-Kraken: Kurvenjagd bekommt einen etwas schärferen Overlap-
+  // Threshold, damit echte Out-and-Back-/Ast-Formen (Sackgasse hin+zurück)
+  // konsequent als rejected markiert werden. Wert kalibriert auf reale
+  // Tal-Geometrie (Dornbirn/Bregenzerwald): 16 fängt Kraken, verschenkt aber
+  // keine gültigen Kurven-Loops.
+  const isCurveChase = options?.mode === "Kurvenjagd";
+  const overlapThreshold = routeType === "ROUND_TRIP"
+    ? (isCurveChase ? 16 : 18)
+    : (isCurveChase ? 12 : 14);
   const targetDistanceKm = options?.targetDistanceKm ?? 0;
   const distanceConfig = options?.distanceConfig;
   const distanceDeltaKm = targetDistanceKm > 0
     ? Math.abs(actualDistanceKm - targetDistanceKm)
     : 0;
   const shapeSignals = calculateRouteShapeSignals(route);
-  const severeHookCount = routeType === "ROUND_TRIP" ? 8 : 4;
+  // Kurvenjagd strenger bei Haken/Radial-Peaks — das sind die typischen
+  // „Äste/Kraken“ (Mapbox stolpert in Sackgasse, kehrt um, nächster Ast).
+  // 6 (statt 8) ist genug aggressiv für Anti-Kraken ohne valide Kurven-Loops
+  // zu zerschneiden.
+  const severeHookCount = routeType === "ROUND_TRIP"
+    ? (isCurveChase ? 6 : 8)
+    : 4;
+  // Kurvenjagd: Reentry/RadialPeaks etwas strenger werten, damit offene
+  // Stern-/Astformen früher als "severe" markiert werden, aber nicht so
+  // streng, dass normale enge Tal-Loops verworfen werden.
   const severeRoundTripShape = routeType === "ROUND_TRIP" &&
     (
       shapeSignals.centerReentryCount >= 4 ||
-      (shapeSignals.radialPeakCount >= 4 &&
+      (shapeSignals.radialPeakCount >= (isCurveChase ? 3 : 4) &&
         shapeSignals.middleCoverageRatio < 0.30) ||
       (shapeSignals.middleCoverageRatio < 0.18 &&
         shapeSignals.centralReturnPercent > 18)
     );
   const severeCentralReturn = routeType === "ROUND_TRIP"
     ? (
-      shapeSignals.centralReturnPercent > 36 ||
+      shapeSignals.centralReturnPercent > (isCurveChase ? 32 : 36) ||
       (
-        shapeSignals.centralReturnPercent > 24 &&
+        shapeSignals.centralReturnPercent > (isCurveChase ? 22 : 24) &&
         (
           shapeSignals.centerReentryCount >= 2 ||
-          shapeSignals.radialPeakCount >= 4 ||
-          shapeSignals.hookCount >= 4
+          shapeSignals.radialPeakCount >= (isCurveChase ? 3 : 4) ||
+          shapeSignals.hookCount >= (isCurveChase ? 3 : 4)
         )
       )
     )
@@ -2607,6 +2625,7 @@ async function searchBestRoundTripRoute({
       let quality = evaluateRouteQuality(route, "ROUND_TRIP", {
         targetDistanceKm,
         distanceConfig: phase.distanceConfig,
+        mode,
       });
 
       if (
@@ -2642,6 +2661,7 @@ async function searchBestRoundTripRoute({
             {
               targetDistanceKm,
               distanceConfig: phase.distanceConfig,
+              mode,
             },
           );
           console.log(
@@ -3049,9 +3069,11 @@ Deno.serve(async (req) => {
       mapboxProfile = "mapbox/driving";
       excludeParams = "toll,ferry";
     } else if (mode === "Sport Mode") {
-      // Sport Mode hält Fähren draußen, Autobahnen steuert nur der Toggle.
+      // Sport Mode = flüssig & schnell. Unpaved raus, damit Mapbox keine
+      // Forst-/Bergstraßen oder Schotter in die Strecke schmuggelt. Autobahn
+      // steuert ausschließlich der Toggle.
       mapboxProfile = "mapbox/driving";
-      excludeParams = "ferry";
+      excludeParams = "ferry,unpaved";
     } else if (mode === "Abendrunde") {
       // Abendrunde vermeidet Fähren/Unpaved, Autobahnen nur auf Toggle.
       mapboxProfile = "mapbox/driving-traffic";
@@ -3079,6 +3101,10 @@ Deno.serve(async (req) => {
     if (planning_type === "Zufall" && currentRouteType === "ROUND_TRIP") {
       if (mode === "Kurvenjagd") {
         excludeParams = "ferry";
+      } else if (mode === "Sport Mode") {
+        // Sport-Rundkurs: Unpaved bleibt draußen, sonst landen wir gerne
+        // auf Wald-/Bergwegen (Dornbirn-Bergpässe).
+        excludeParams = "ferry,unpaved";
       } else if (mode === "Abendrunde") {
         mapboxProfile = "mapbox/driving";
         excludeParams = "ferry";
@@ -3093,8 +3119,19 @@ Deno.serve(async (req) => {
     if (planning_type === "Zufall") {
       if (currentRouteType === "POINT_TO_POINT") {
         // A→B: direkte Straßenroute, optional ohne Autobahnen.
+        // Wir behalten Stil-Excludes (ferry/unpaved) bei, sodass der
+        // Autobahn-Toggle nicht versehentlich Schotter/Fähren freischaltet.
         mapboxProfile = "mapbox/driving";
-        excludeParams = avoidHighways ? "motorway" : "";
+        const stylePointToPointBase = mode === "Sport Mode"
+          ? "ferry,unpaved"
+          : mode === "Kurvenjagd"
+          ? "ferry"
+          : mode === "Abendrunde"
+          ? "ferry,unpaved"
+          : "ferry";
+        excludeParams = avoidHighways
+          ? addExcludeParam(stylePointToPointBase, "motorway")
+          : stylePointToPointBase;
         if (!body.destination_location) {
           throw new Error(
             "For 'POINT_TO_POINT' planning, a destination_location is required.",

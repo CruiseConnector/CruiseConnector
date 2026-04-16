@@ -2459,7 +2459,17 @@ class RouteService {
   }
 
   double _similarityThresholdForScenario(RouteScenario scenario) {
-    if (scenario.isRoundTrip) return 72.0;
+    if (scenario.isRoundTrip) {
+      // Deutlich strenger als vorher (72 %). Kurvenjagd besonders scharf,
+      // weil enge Tal-Loops mit gleichen Seeds sonst schnell wieder fast
+      // identische Routen ergeben. Der Duplikat-Schutz triggert bereits ab
+      // dieser Schwelle das Verwerfen und forciert einen neuen Seed/Winkel.
+      final style = scenario.style.toLowerCase();
+      if (style.contains('kurvenjagd') || style.contains('kurvenreich')) {
+        return 58.0;
+      }
+      return 64.0;
+    }
     if (scenario.detourLevel <= 0) {
       return scenario.avoidHighways ? 92.0 : 96.0;
     }
@@ -2469,7 +2479,13 @@ class RouteService {
   }
 
   double _similarityProximityMetersForScenario(RouteScenario scenario) {
-    if (scenario.isRoundTrip) return 145.0;
+    if (scenario.isRoundTrip) {
+      // Weitere Proximity → zwei Routen gelten schon dann als „in Deckung“,
+      // wenn sie geometrisch grob übereinander liegen, auch wenn sie auf
+      // parallelen Straßen verlaufen. Dadurch werden Fast-Duplikate
+      // zuverlässiger erkannt.
+      return 170.0;
+    }
     return 160.0;
   }
 

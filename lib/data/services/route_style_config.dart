@@ -56,8 +56,11 @@ class RouteStyleConfig {
 
   // ── Die 4 Fahrstil-Profile ───────────────────────────────────────────
 
-  /// SPORT: Autobahnen ERLAUBT, gestreckte Ellipse für lange Geraden,
-  /// bevorzugt flaches Terrain für hohe Geschwindigkeiten.
+  /// SPORT: Autobahnen werden über den Toggle gesteuert. Stil heißt hier
+  /// „flüssig & schnell“: gestreckte Ellipse, moderater Radius, sodass
+  /// Mapbox bevorzugt Landstraßen/Highways wählt und keine engen Bergstraßen
+  /// zwingend einbauen muss. Den eigentlichen Semantik-Hebel gegen
+  /// „Sport über Bergpass“ setzt die Edge Function (exclude=unpaved).
   static const sport = RouteStyleConfig._(
     name: 'Sport Mode',
     profileKey: 'sport',
