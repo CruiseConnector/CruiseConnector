@@ -1,4 +1,11 @@
 {
+  "extensions.ignoreRecommendations": false,
+  "dart.enableSdkFormatter": true,
+  "dart.runPubGetOnPubspecChanges": "always",
+  "[dart]": {
+    "editor.formatOnSave": true,
+    "editor.rulers": [80]
+  },
   "deno.enablePaths": [
     "supabase/functions"
   ],

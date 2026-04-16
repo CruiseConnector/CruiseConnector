@@ -64,6 +64,8 @@ interface RequestData {
   max_candidate_attempts?: number;
   simplify_waypoints?: boolean;
   max_waypoints?: number;
+  /** Debug: ausführliche Round-Trip-Suche loggen (nur Entwicklung). */
+  debug_roundtrip_search?: boolean;
 }
 
 interface DistanceConfig {
