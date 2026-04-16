@@ -107,6 +107,7 @@ interface RoundTripSearchResult {
   searchPhases: string[];
   variantHint?: string;
   fingerprintHint?: string;
+  terminalShortCircuit?: boolean;
   exhausted?: boolean;
 }
 
@@ -2368,6 +2369,8 @@ async function searchBestRoundTripRoute({
   let bestPlan: RoundTripCandidatePlan | null = null;
   let bestRoute: any = null;
   let bestQuality: RouteQualityEvaluation | null = null;
+  let balancedHasPresentableCandidate = false;
+  let balancedTerminalShortCircuit = false;
   const rejectReasons = new Map<string, number>();
   let rateLimitHits = 0;
   let timeoutHits = 0;
@@ -2403,6 +2406,24 @@ async function searchBestRoundTripRoute({
     }
     return false;
   };
+  const minBalancedPresentableCoords = targetDistanceKm <= 60
+    ? 22
+    : targetDistanceKm <= 100
+    ? 26
+    : 30;
+  const isBalancedPresentableCandidate = (
+    quality: RouteQualityEvaluation,
+  ): boolean =>
+    !quality.hasUTurn &&
+    quality.coordinateCount >= minBalancedPresentableCoords &&
+    (
+      quality.tier === "good" ||
+      (
+        quality.tier === "acceptable" &&
+        quality.overlapPercent <= 24 &&
+        quality.distanceDeltaKm <= targetDistanceKm * 0.22
+      )
+    );
 
   for (const phase of searchPhases) {
     if (stopSearchWithBestCandidate) break;
@@ -2639,6 +2660,12 @@ async function searchBestRoundTripRoute({
         bestRoute = route;
         bestQuality = quality;
       }
+      if (
+        phase.name === "balanced" &&
+        isBalancedPresentableCandidate(quality)
+      ) {
+        balancedHasPresentableCandidate = true;
+      }
 
       const shouldStopAfterGoodCandidate =
         quality.tier === "ideal" ||
@@ -2685,6 +2712,14 @@ async function searchBestRoundTripRoute({
       break;
     }
     if (phaseAcceptedCandidates > 0 && bestQuality?.tier === "good") {
+      break;
+    }
+    if (phase.name === "balanced" && balancedHasPresentableCandidate) {
+      console.log(
+        `[RT] Phase balanced: presentable candidate found, skipping fallback/rescue for this seed`,
+      );
+      balancedTerminalShortCircuit = true;
+      stopSearchWithBestCandidate = true;
       break;
     }
     if (
@@ -2742,6 +2777,7 @@ async function searchBestRoundTripRoute({
     searchPhases: searchPhases.map((phase) => phase.name),
     variantHint: normalizedVariantHint,
     fingerprintHint: normalizedFingerprintHint,
+    terminalShortCircuit: balancedTerminalShortCircuit,
   };
 }
 
@@ -3177,6 +3213,11 @@ Deno.serve(async (req) => {
         console.log(
           `[RT] Search summary: attempts=${roundTripSearch.candidateAttempts}, accepted=${roundTripSearch.acceptedCandidates}, rejected=${roundTripSearch.rejectedCandidates}, chosen=${roundTripSearch.quality?.tier}`,
         );
+        if (roundTripSearch.terminalShortCircuit === true) {
+          console.log(
+            "[RT] Balanced short-circuit selected terminal seed result; skipping post-search scaling/rescue.",
+          );
+        }
       }
     } else {
       route = await getMapboxRoute(
@@ -3625,6 +3666,8 @@ Deno.serve(async (req) => {
 
     // Mapbox returns distance in meters -> convert to kilometers for app output.
     let actualDistanceKm = (route.distance as number) / 1000;
+    const skipPostSearchScaling = currentRouteType === "ROUND_TRIP" &&
+      roundTripSearch?.terminalShortCircuit === true;
 
     // --- 4. Distance Band Retry & Scaling ---
     // Skaliert Waypoints näher/weiter zum Start bis die Route im ±10% Band liegt.
@@ -3632,7 +3675,8 @@ Deno.serve(async (req) => {
     if (
       planning_type === "Zufall" &&
       currentRouteType === "ROUND_TRIP" &&
-      distanceConfig
+      distanceConfig &&
+      !skipPostSearchScaling
     ) {
       let attempts = 0;
       const maxAttempts = avoidHighways ? 5 : 4;
