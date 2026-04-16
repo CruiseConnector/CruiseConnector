@@ -169,15 +169,10 @@ class RouteService {
         scenario,
         styleConfig,
       );
-      // Client-Schleife: 2 Versuche. Erster Versuch geht über die Edge
-      // Function (die selbst 7-9 Pläne testet), zweiter Versuch nutzt einen
-      // anderen Seed/Bearing für Diversifizierung. Wenn der erste Versuch
-      // eine Exception wirft (Mapbox-Hiccup, 429, Edge-Timeout), bleibt der
-      // zweite Versuch als echtes Recovery-Ventil — vorher (maxAttempts=1)
-      // hat das in Dornbirn jeden Hiccup zu einer User-sichtbaren Fehlermeldung
-      // gemacht, obwohl der Edge-Lauf prinzipiell hätte erfolgreich sein
-      // können.
-      const maxAttempts = 2;
+      // Client-Schleife: Normal 2 Versuche, in schwierigen Szenarien 3.
+      // Der zusätzliche Seed gilt nur dort, wo die Edge-Suche trotz
+      // strict/balanced/fallback häufiger an Tal-/Kurvengeometrie scheitert.
+      final maxAttempts = difficultScenario ? 3 : 2;
       _RouteCandidate? bestCandidate;
       _RouteCandidate? spareCandidate;
       RouteServiceException? lastError;
@@ -2724,8 +2719,8 @@ class RouteService {
     required geo.Position startPosition,
     Map<String, double>? targetLocation,
   }) async {
-    try {
-      for (var attempt = 0; attempt < 2; attempt++) {
+    for (var attempt = 0; attempt < 2; attempt++) {
+      try {
         final variant = await _nextRoundTripVariant(
           scenario,
           styleConfig: styleConfig,
@@ -2755,7 +2750,11 @@ class RouteService {
           route: snapped,
           variant: variant,
         );
-        if (!candidate.accepted) return null;
+        if (!candidate.accepted) {
+          // Nicht nach dem ersten Reject abbrechen: zweiter Seed kann noch
+          // eine brauchbare Fallback-Route liefern.
+          continue;
+        }
         if (!candidate.novelEnough) {
           debugPrint(
             '[RouteService] Rundkurs-Fallback Duplicate verworfen, retry=${attempt + 1}',
@@ -2768,12 +2767,14 @@ class RouteService {
           sampledCoordinates: candidate.sampledCoordinates,
           fingerprint: candidate.fingerprint,
         );
+      } catch (e) {
+        debugPrint(
+          '[RouteService] Rundkurs-Fallback Versuch ${attempt + 1}/2 fehlgeschlagen: $e',
+        );
+        continue;
       }
-      return null;
-    } catch (e) {
-      debugPrint('[RouteService] Rundkurs-Fallback fehlgeschlagen: $e');
-      return null;
     }
+    return null;
   }
 
   Future<RouteResult?> _tryRoundTripRescueFallback({
@@ -2860,8 +2861,8 @@ class RouteService {
     required String label,
     Map<String, double>? targetLocation,
   }) async {
-    try {
-      for (var attempt = 0; attempt < 2; attempt++) {
+    for (var attempt = 0; attempt < 2; attempt++) {
+      try {
         final variant = await _nextRoundTripVariant(
           scenario,
           styleConfig: requestStyleConfig,
@@ -2912,7 +2913,8 @@ class RouteService {
             'score=${candidate.score.toStringAsFixed(1)}, '
             'styleFit=${candidate.styleFitScore.toStringAsFixed(1)}',
           );
-          return null;
+          // Früher Abbruch erzeugte unnötige NO_ROUTE-Fälle.
+          continue;
         }
         if (!candidate.novelEnough) {
           debugPrint(
@@ -2927,12 +2929,14 @@ class RouteService {
           sampledCoordinates: candidate.sampledCoordinates,
           fingerprint: candidate.fingerprint,
         );
+      } catch (e) {
+        debugPrint(
+          '[RouteService] Rundkurs-Rescue $label Versuch ${attempt + 1}/2 fehlgeschlagen: $e',
+        );
+        continue;
       }
-      return null;
-    } catch (e) {
-      debugPrint('[RouteService] Rundkurs-Rescue $label fehlgeschlagen: $e');
-      return null;
     }
+    return null;
   }
 
   Future<RouteResult?> _tryPointToPointFallback({
