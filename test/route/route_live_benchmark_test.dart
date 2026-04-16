@@ -265,6 +265,18 @@ void main() {
   );
   const warm = bool.fromEnvironment('BENCHMARK_WARM', defaultValue: true);
   const smoke = bool.fromEnvironment('BENCHMARK_SMOKE', defaultValue: false);
+  const benchmarkLimit = int.fromEnvironment(
+    'BENCHMARK_LIMIT',
+    defaultValue: 0,
+  );
+  const benchmarkScenario = String.fromEnvironment(
+    'BENCHMARK_SCENARIO',
+    defaultValue: '',
+  );
+  const benchmarkRunsPerScenario = int.fromEnvironment(
+    'BENCHMARK_RUNS_PER_SCENARIO',
+    defaultValue: 0,
+  );
   const endpointValue = String.fromEnvironment(
     'BENCHMARK_ENDPOINT',
     defaultValue:
@@ -285,8 +297,26 @@ void main() {
       final endpoint = Uri.parse(endpointValue);
       final validator = const RouteQualityValidator();
       final scenarios = _buildScenarios();
-      final selectedScenarios = smoke ? scenarios.take(8).toList() : scenarios;
+      var selectedScenarios = (smoke ? scenarios.take(8) : scenarios).toList();
+      if (benchmarkScenario.isNotEmpty) {
+        selectedScenarios = selectedScenarios
+            .where((scenario) => scenario.name == benchmarkScenario)
+            .toList();
+      }
+      if (benchmarkRunsPerScenario > 0) {
+        final runsByScenario = <String, int>{};
+        selectedScenarios = selectedScenarios.where((scenario) {
+          final nextCount = (runsByScenario[scenario.name] ?? 0) + 1;
+          runsByScenario[scenario.name] = nextCount;
+          return nextCount <= benchmarkRunsPerScenario;
+        }).toList();
+      }
+      if (benchmarkLimit > 0) {
+        selectedScenarios = selectedScenarios.take(benchmarkLimit).toList();
+      }
       final results = <Map<String, dynamic>>[];
+      final previousSuccessfulRoundTripByScenario =
+          <String, List<List<double>>>{};
 
       var activeScenarioName = '';
       _LiveHttpInvoker? sharedInvoker;
@@ -314,8 +344,12 @@ void main() {
         String? errorCode;
         String? errorMessage;
         String? fingerprint;
+        double? similarityToPreviousPercent;
         bool? motorwayExcludeActive;
         bool? styleEffective;
+        bool? geometryDifferent = scenario.routeType == 'ROUND_TRIP'
+            ? true
+            : false;
 
         try {
           if (scenario.routeType == 'ROUND_TRIP') {
@@ -345,8 +379,9 @@ void main() {
               coordinateCount: result.coordinates.length,
               actualDistanceKm: result.distanceKm ?? 0.0,
               targetDistanceKm: scenario.targetDistanceKm!.toDouble(),
-              styleProfileKey:
-                  result.edgeMeta['style_profile']?.toString().toLowerCase(),
+              styleProfileKey: result.edgeMeta['style_profile']
+                  ?.toString()
+                  .toLowerCase(),
             );
             tier =
                 result.edgeMeta['quality_tier']?.toString() ??
@@ -357,12 +392,28 @@ void main() {
               candidateAttempts =
                   (searchSummary['candidate_attempts'] as num?)?.toInt() ?? 0;
             }
+            final previousCoordinates =
+                previousSuccessfulRoundTripByScenario[scenario.name];
+            if (previousCoordinates != null) {
+              similarityToPreviousPercent =
+                  RouteQualityValidator.calculateRouteSimilarityPercent(
+                    result.coordinates,
+                    previousCoordinates,
+                    sampleCount: 48,
+                    proximityMeters: 145.0,
+                  );
+              geometryDifferent = similarityToPreviousPercent < 72.0;
+            }
+            previousSuccessfulRoundTripByScenario[scenario.name] = result
+                .coordinates
+                .map((point) => [point[0], point[1]])
+                .toList();
             final excludes = result.edgeMeta['effective_excludes']?.toString();
             motorwayExcludeActive = scenario.avoidHighways
                 ? excludes?.contains('motorway') ?? false
                 : !(excludes?.contains('motorway') ?? false);
-            styleEffective = (result.edgeMeta['mode']?.toString() ?? '') ==
-                scenario.mode;
+            styleEffective =
+                (result.edgeMeta['mode']?.toString() ?? '') == scenario.mode;
           } else {
             final result = await service.generatePointToPoint(
               startPosition: scenario.start,
@@ -448,10 +499,11 @@ void main() {
           'mode': scenario.mode,
           'detourLevel': scenario.detourLevel,
           'fingerprint': fingerprint,
+          'similarityToPreviousPercent': similarityToPreviousPercent,
           'variantGroup': scenario.variantGroup,
           'motorwayExcludeActive': motorwayExcludeActive,
           'styleEffective': styleEffective,
-          'geometryDifferent': scenario.routeType == 'ROUND_TRIP' ? null : false,
+          'geometryDifferent': geometryDifferent,
         };
         results.add(row);
 
@@ -466,18 +518,23 @@ void main() {
       }
 
       final pointGroups = <String, List<Map<String, dynamic>>>{};
-      for (final row in results.where((row) => row['routeType'] == 'POINT_TO_POINT')) {
+      for (final row in results.where(
+        (row) => row['routeType'] == 'POINT_TO_POINT',
+      )) {
         final key = row['variantGroup']?.toString();
         if (key == null) continue;
         pointGroups.putIfAbsent(key, () => []).add(row);
       }
       for (final rows in pointGroups.values) {
         final successRows = rows
-            .where((row) => row['success'] == true && row['fingerprint'] != null)
+            .where(
+              (row) => row['success'] == true && row['fingerprint'] != null,
+            )
             .toList();
         for (final row in rows) {
           final ownFingerprint = row['fingerprint']?.toString();
-          row['geometryDifferent'] = ownFingerprint != null &&
+          row['geometryDifferent'] =
+              ownFingerprint != null &&
               successRows.any(
                 (other) =>
                     other != row &&
@@ -486,17 +543,23 @@ void main() {
         }
       }
 
-      final durations = results.map((entry) => entry['durationMs'] as int).toList()
-        ..sort();
+      final durations =
+          results.map((entry) => entry['durationMs'] as int).toList()..sort();
       final summary = <String, dynamic>{
         'totalRuns': results.length,
         'usableRoutes': results.where((entry) {
           final bucket = entry['bucket'];
           return bucket == 'good' || bucket == 'acceptable';
         }).length,
-        'weakRoutes': results.where((entry) => entry['bucket'] == 'weak').length,
-        'realErrors': results.where((entry) => entry['bucket'] == 'error').length,
-        'goodRoutes': results.where((entry) => entry['bucket'] == 'good').length,
+        'weakRoutes': results
+            .where((entry) => entry['bucket'] == 'weak')
+            .length,
+        'realErrors': results
+            .where((entry) => entry['bucket'] == 'error')
+            .length,
+        'goodRoutes': results
+            .where((entry) => entry['bucket'] == 'good')
+            .length,
         'acceptableRoutes': results
             .where((entry) => entry['bucket'] == 'acceptable')
             .length,
@@ -519,7 +582,8 @@ void main() {
             .every((entry) => entry['motorwayExcludeActive'] == true),
       };
       final byScenario = <String, dynamic>{};
-      for (final name in results.map((row) => row['scenario'] as String).toSet()) {
+      for (final name
+          in results.map((row) => row['scenario'] as String).toSet()) {
         byScenario[name] = _scenarioSummary(
           results.where((row) => row['scenario'] == name),
         );
@@ -530,9 +594,9 @@ void main() {
         'byScenario': byScenario,
         'results': results,
       };
-      await File(outputPath).writeAsString(
-        const JsonEncoder.withIndent('  ').convert(output),
-      );
+      await File(
+        outputPath,
+      ).writeAsString(const JsonEncoder.withIndent('  ').convert(output));
 
       // ignore: avoid_print
       print(const JsonEncoder.withIndent('  ').convert(summary));

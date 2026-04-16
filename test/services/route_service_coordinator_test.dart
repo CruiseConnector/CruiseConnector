@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:geolocator/geolocator.dart' as geo;
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:cruise_connect/data/services/route_quality_validator.dart';
 import 'package:cruise_connect/data/services/route_service.dart';
 
 geo.Position _start() => geo.Position(
@@ -214,8 +215,11 @@ void main() {
   );
 
   test(
-    'gleiche brauchbare Route darf nach Seen-Historie erneut geliefert werden',
+    'sichtbar andere Route darf nach Seen-Historie erneut geliefert werden',
     () async {
+      final varyingInvoker = _VaryingCountingInvoker();
+      service = RouteService(invoker: varyingInvoker);
+
       final first = await service.generateRoundTrip(
         startPosition: _start(),
         targetDistanceKm: 50,
@@ -234,8 +238,22 @@ void main() {
 
       expect(first.coordinates, isNotEmpty);
       expect(second.coordinates, isNotEmpty);
-      expect(second.distanceKm, closeTo(first.distanceKm!, 0.01));
-      expect(invoker.callCount, greaterThanOrEqualTo(2));
+      expect(second.distanceKm, closeTo(first.distanceKm!, 0.5));
+      expect(varyingInvoker.callCount, greaterThanOrEqualTo(2));
+      expect(
+        RouteQualityValidator.buildRouteFingerprint(
+          first.coordinates,
+          distanceKm: first.distanceKm,
+        ),
+        isNot(
+          equals(
+            RouteQualityValidator.buildRouteFingerprint(
+              second.coordinates,
+              distanceKm: second.distanceKm,
+            ),
+          ),
+        ),
+      );
     },
   );
 

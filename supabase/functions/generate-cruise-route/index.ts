@@ -881,6 +881,13 @@ function buildRoundTripWaypointCandidates({
     cardinal(1.00, 1499, waypointShapeFactor ?? 1.0),
     1.08,
   );
+  if (shortTarget && mode === "Kurvenjagd") {
+    addPlan(
+      "fallback-cardinal-ellipse",
+      cardinal(0.96, 1607, 1.18),
+      1.06,
+    );
+  }
   addPlan(
     "fallback-triangle-compact",
     triangle(shortTarget ? 0.88 : 0.84, 503),
@@ -923,11 +930,18 @@ function buildRoundTripWaypointCandidates({
     if (intermediateCount > maxIntermediateWaypoints) return false;
 
     const label = plan.label.toLowerCase();
+    const shortCurvyCompactPlan = mode === "Kurvenjagd" && shortTarget &&
+      (
+        label.includes("loop-scout") ||
+        label.includes("orbital-core") ||
+        label.includes("zigzag-core")
+      );
     return (
       label.includes("triangle") ||
       label.includes("cardinal") ||
       label.includes("loop-3") ||
-      (maxIntermediateWaypoints >= 4 && label.includes("loop-4"))
+      (maxIntermediateWaypoints >= 4 && label.includes("loop-4")) ||
+      shortCurvyCompactPlan
     );
   });
   if (simplifiedPreferred.length > 0) {
@@ -2454,7 +2468,9 @@ async function searchBestRoundTripRoute({
       ? 2
       : phase.name === "balanced"
       ? 2
-      : (constrainedRoundTripSearch || shortCurvySearch)
+      : shortCurvySearch
+      ? 4
+      : constrainedRoundTripSearch
       ? 3
       : 2;
     const phasesRemainingAfterThis = searchPhases.length - 1 -

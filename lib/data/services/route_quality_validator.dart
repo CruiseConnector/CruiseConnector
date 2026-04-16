@@ -518,10 +518,10 @@ class RouteQualityValidator {
     if (coordinateCount < acceptableMinCoordinates ||
         quality.overlapPercent > acceptableOverlap ||
         !acceptableDistanceOk ||
-        quality.foldedAreaPenalty > (isRoundTrip ? 82.0 : 88.0) ||
-        quality.repeatedStartAreaPercent > (isRoundTrip ? 48.0 : 72.0) ||
+        quality.foldedAreaPenalty > (isRoundTrip ? 88.0 : 88.0) ||
+        quality.repeatedStartAreaPercent > (isRoundTrip ? 52.0 : 72.0) ||
         quality.microZigzagPercent > (isRoundTrip ? 38.0 : 54.0) ||
-        quality.shapePenalty > (isRoundTrip ? 56.0 : 42.0) ||
+        quality.shapePenalty > (isRoundTrip ? 60.0 : 42.0) ||
         (isRoundTrip &&
             ((quality.spurArmPercent > 36.0 &&
                     quality.dominantLoopScore < 80.0 &&

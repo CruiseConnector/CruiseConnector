@@ -1,0 +1,37 @@
+---
+description: Flutter-Frontend-Regeln (Design respektieren, setState sauber, UI stabil).
+globs:
+  - "lib/main.dart"
+  - "lib/presentation/**"
+  - "lib/domain/models/**"
+  - "lib/core/**"
+---
+
+## Frontend-Regeln (Flutter / UI)
+
+### Designsprache respektieren
+- **Bestehende UI/UX beibehalten**: Farben, Abstände, Typografie, Interaktionsmuster nicht „vereinheitlichen“.
+- **Keine generischen Standardlayouts** einführen, nur weil sie schnell sind (kein „Material-Default-Overhaul“).
+- Änderungen an UI nur, wenn die Aufgabe es verlangt, und dann **zielgenau**.
+
+### Keine UI-Korruption
+- Keine unbeabsichtigten Layout-Sprünge, Overflows, abgeschnittene Inhalte oder zufällige Reflows.
+- Responsive Verhalten (iOS/Android/Web/macOS) mitdenken: keine hardcodierten Größen ohne Not.
+
+### Loading / Success / Error strikt trennen
+- UI-Zustände explizit modellieren und sauber rendern:
+  - **Loading**: klar erkennbar, nicht flackernd
+  - **Success**: stabile Darstellung, keine „halben“ States
+  - **Error**: hilfreiche Message, Wiederholen/Retry wenn sinnvoll
+- Keine stillen Fehler, die in einem „Success“-Layout verschwinden.
+
+### `setState()`-Disziplin
+- `setState()` **lokal** halten (nur das Widget, das wirklich betroffen ist).
+- Keine „globalen“ `setState()`-Kaskaden durch tief verschachtelte Bäume.
+- Asynchrone Updates robust machen (z.B. nur updaten, wenn Widget noch mounted ist).
+- Kein spontaner Wechsel zu Provider/BLoC/Riverpod, solange das Projekt bewusst `setState()` nutzt.
+
+### Dateipfade (häufig relevant)
+- `lib/presentation/pages/cruise_mode_page.dart`
+- `lib/presentation/widgets/cruise/`
+

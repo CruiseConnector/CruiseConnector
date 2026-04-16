@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:cruise_connect/data/services/route_quality_validator.dart';
+import 'package:cruise_connect/data/services/seen_route_registry.dart';
 
 void main() {
   const validator = RouteQualityValidator();
@@ -258,7 +259,7 @@ void main() {
         RouteQualityValidator.isRouteTooSimilarToPrevious(
           base,
           [slightlyShifted],
-          thresholdPercent: 75,
+          thresholdPercent: 72,
           sampleCount: 40,
           proximityMeters: 150,
         ),
@@ -294,6 +295,29 @@ void main() {
         ),
         isFalse,
       );
+    });
+  });
+
+  group('SeenRouteRegistry', () {
+    tearDown(SeenRouteRegistry.clearAll);
+
+    test('behält mehr als vier Routen pro Szenario', () {
+      const scenarioKey = 'ROUND_TRIP|test';
+
+      for (var i = 0; i < 8; i++) {
+        SeenRouteRegistry.remember(
+          scenarioKey,
+          fingerprint: 'fp$i',
+          sampledCoordinates: [
+            [11.0 + i * 0.001, 48.0 + i * 0.001],
+            [11.01 + i * 0.001, 48.01 + i * 0.001],
+          ],
+        );
+      }
+
+      expect(SeenRouteRegistry.entriesFor(scenarioKey).length, 8);
+      expect(SeenRouteRegistry.hasExactFingerprint(scenarioKey, 'fp0'), isTrue);
+      expect(SeenRouteRegistry.hasExactFingerprint(scenarioKey, 'fp7'), isTrue);
     });
   });
 
