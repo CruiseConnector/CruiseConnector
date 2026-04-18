@@ -631,10 +631,15 @@ void main() {
             .where((entry) => entry['routeType'] == 'POINT_TO_POINT')
             .where((entry) => entry['geometryDifferent'] == true)
             .length,
-        'motorwayToggleHonored': results
-            .where((entry) => entry['motorwayExcludeActive'] != null)
-            .every((entry) => entry['motorwayExcludeActive'] == true),
       };
+      final motorwayToggleCandidates = results
+          .where((entry) => entry['motorwayExcludeActive'] != null)
+          .toList();
+      summary['motorwayToggleHonored'] = motorwayToggleCandidates.isEmpty
+          ? null
+          : motorwayToggleCandidates.every(
+              (entry) => entry['motorwayExcludeActive'] == true,
+            );
       final byScenario = <String, dynamic>{};
       for (final name
           in results.map((row) => row['scenario'] as String).toSet()) {

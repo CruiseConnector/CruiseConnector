@@ -1199,6 +1199,7 @@ function buildPointToPointScenicWaypoints({
   randomSeed = 0,
   simplifyWaypoints = false,
   maxWaypoints,
+  robustFallback = false,
 }: {
   start: Coordinate;
   destination: Coordinate;
@@ -1212,6 +1213,7 @@ function buildPointToPointScenicWaypoints({
   randomSeed?: number;
   simplifyWaypoints?: boolean;
   maxWaypoints?: number;
+  robustFallback?: boolean;
 }): Coordinate[] {
   const directDistanceKm = calculateDistance(start, destination);
   if (directDistanceKm < 1.5) {
@@ -1240,10 +1242,17 @@ function buildPointToPointScenicWaypoints({
     : detourLevel >= 3
     ? 1.08
     : 0.0;
+  const fallbackScale = robustFallback
+    ? detourLevel >= 3
+      ? 0.82
+      : detourLevel === 2
+      ? 0.86
+      : 0.92
+    : 1.0;
 
   const effectiveFactor = Math.max(
     detourFactor ?? 1.0,
-    1.0 + scenicModeBoost + detourBoost,
+    1.0 + scenicModeBoost + detourBoost * fallbackScale,
   );
   const desiredDistanceKm = Math.max(
     targetDistance ?? 0,
@@ -1268,9 +1277,17 @@ function buildPointToPointScenicWaypoints({
   // Klein kann auf längeren Strecken 1 oder 2 Wegpunkte nutzen.
   let waypointCount: number;
   if (detourLevel >= 3) {
-    waypointCount = directDistanceKm >= 26 ? 3 : 2;
+    waypointCount = robustFallback
+      ? 2
+      : directDistanceKm >= 26
+      ? 3
+      : 2;
   } else if (detourLevel >= 2) {
-    waypointCount = directDistanceKm >= 32 ? 3 : 2;
+    waypointCount = robustFallback
+      ? directDistanceKm >= 22 ? 2 : 1
+      : directDistanceKm >= 32
+      ? 3
+      : 2;
   } else if (detourLevel >= 1) {
     const useTwoWaypoints = directDistanceKm >= 18 &&
       (mode === "Kurvenjagd" || mode === "Entdecker" ||
@@ -1320,9 +1337,9 @@ function buildPointToPointScenicWaypoints({
 
   const baseBearing = calculateBearing(start, destination);
   const corridorBearingBias = detourLevel >= 3
-    ? 32
+    ? robustFallback ? 18 : 32
     : detourLevel === 2
-    ? 22
+    ? robustFallback ? 14 : 22
     : detourLevel === 1
     ? 14
     : 0;
@@ -1359,8 +1376,16 @@ function buildPointToPointScenicWaypoints({
     ? Math.min(maxOffsetKm, Math.max(5.5, maxOffsetKm * 0.55))
     : Math.min(maxOffsetKm, Math.max(8.5, maxOffsetKm * 0.55));
   if (simplifyWaypoints) {
-    maxOffsetKm *= detourLevel >= 2 ? 0.74 : 0.80;
-    minOffsetKm *= detourLevel >= 2 ? 0.72 : 0.78;
+    maxOffsetKm *= robustFallback
+      ? detourLevel >= 2 ? 0.62 : 0.72
+      : detourLevel >= 2
+      ? 0.74
+      : 0.80;
+    minOffsetKm *= robustFallback
+      ? detourLevel >= 2 ? 0.60 : 0.70
+      : detourLevel >= 2
+      ? 0.72
+      : 0.78;
   }
 
   const scenicWaypoints = fractions.map((fraction, index) => {
@@ -1417,7 +1442,10 @@ function buildPointToPointScenicWaypoints({
       typeof waypointShapeFactor === "number" &&
       Number.isFinite(waypointShapeFactor)
     ) {
-      arcFactor *= Math.max(0.75, Math.min(2.0, waypointShapeFactor));
+      arcFactor *= Math.max(
+        robustFallback ? 0.7 : 0.75,
+        Math.min(2.0, waypointShapeFactor),
+      );
     }
 
     const offsetKm = Math.min(
@@ -1434,15 +1462,21 @@ function buildPointToPointScenicWaypoints({
 
   const corridorWaypoints = smoothWaypointChain(
     scenicWaypoints,
-    simplifyWaypoints ? 0.24 : 0.18,
+    simplifyWaypoints ? (robustFallback ? 0.16 : 0.24) : 0.18,
   );
   const minCorridorRadiusKm = Math.max(
-    directDistanceKm * (simplifyWaypoints ? 0.14 : 0.18),
+    directDistanceKm * (
+      simplifyWaypoints ? (robustFallback ? 0.12 : 0.14) : 0.18
+    ),
     0.9,
   );
   const maxCorridorRadiusKm = Math.max(
     minCorridorRadiusKm + 0.4,
-    directDistanceKm * (detourLevel >= 2 ? 0.92 : 0.84),
+    directDistanceKm * (
+      detourLevel >= 2
+        ? (robustFallback ? 0.86 : 0.92)
+        : 0.84
+    ),
   );
 
   return [
@@ -3494,6 +3528,8 @@ Deno.serve(async (req) => {
       pointToPointIsScenic
     ) {
       const scenicRetryCount = body.simplify_waypoints === true ? 3 : 2;
+      const robustNoRouteFallback =
+        avoidHighways && detourLevel >= 2 && body.simplify_waypoints !== true;
       for (
         let retry = 0;
         retry < scenicRetryCount &&
@@ -3504,17 +3540,23 @@ Deno.serve(async (req) => {
         console.log(`P2P scenic retry ${retry + 1}: regenerating waypoints...`);
         const retryDetourLevel = Math.max(detourLevel, 1);
         const retrySimplifyWaypoints = body.simplify_waypoints === true ||
-          retry > 0;
+          retry > 0 ||
+          robustNoRouteFallback;
         const retryMaxWaypoints = retrySimplifyWaypoints
-          ? Math.max(
-            retryDetourLevel >= 2 ? 2 : 1,
-            Math.min(
-              3,
-              retry >= 2
-                ? (retryDetourLevel >= 2 ? 2 : 1)
-                : body.max_waypoints ?? (retryDetourLevel >= 3 ? 2 : 1),
-            ),
-          )
+          ? robustNoRouteFallback
+            ? Math.min(
+              body.max_waypoints ?? (retryDetourLevel >= 3 ? 2 : 1),
+              retryDetourLevel >= 3 ? 2 : 1,
+            )
+            : Math.max(
+              retryDetourLevel >= 2 ? 2 : 1,
+              Math.min(
+                3,
+                retry >= 2
+                  ? (retryDetourLevel >= 2 ? 2 : 1)
+                  : body.max_waypoints ?? (retryDetourLevel >= 3 ? 2 : 1),
+              ),
+            )
           : undefined;
         const retryOffsetSide = offsetSide == null
           ? undefined
@@ -3523,14 +3565,16 @@ Deno.serve(async (req) => {
           : -offsetSide;
         const emergencyScenicTarget = Math.max(
           retryDetourLevel >= 3
-            ? pointToPointDirectDistanceKm * 1.72
+            ? pointToPointDirectDistanceKm *
+              (robustNoRouteFallback ? 1.52 : 1.72)
             : retryDetourLevel === 2
-            ? pointToPointDirectDistanceKm * 1.40
+            ? pointToPointDirectDistanceKm *
+              (robustNoRouteFallback ? 1.26 : 1.40)
             : pointToPointDirectDistanceKm * 1.18,
           retryDetourLevel >= 3
-            ? pointToPointDirectDistanceKm + 16.0
+            ? pointToPointDirectDistanceKm + (robustNoRouteFallback ? 11.0 : 16.0)
             : retryDetourLevel === 2
-            ? pointToPointDirectDistanceKm + 8.0
+            ? pointToPointDirectDistanceKm + (robustNoRouteFallback ? 5.5 : 8.0)
             : pointToPointDirectDistanceKm + 4.0,
         );
         const retryMinimumTarget = Math.max(
@@ -3562,16 +3606,29 @@ Deno.serve(async (req) => {
           randomSeed: (body.randomSeed ?? 0) + retry + 1,
           simplifyWaypoints: retrySimplifyWaypoints,
           maxWaypoints: retryMaxWaypoints,
+          robustFallback: robustNoRouteFallback,
         });
         const retryRadiusMeters = retryDetourLevel >= 3
           ? Math.min(
-            15500,
-            Math.max(7000, Math.round(pointToPointDirectDistanceKm * 330)),
+            robustNoRouteFallback ? 14000 : 15500,
+            Math.max(
+              robustNoRouteFallback ? 6200 : 7000,
+              Math.round(
+                pointToPointDirectDistanceKm *
+                  (robustNoRouteFallback ? 290 : 330),
+              ),
+            ),
           )
           : retryDetourLevel === 2
           ? Math.min(
-            12500,
-            Math.max(5600, Math.round(pointToPointDirectDistanceKm * 270)),
+            robustNoRouteFallback ? 10800 : 12500,
+            Math.max(
+              robustNoRouteFallback ? 4600 : 5600,
+              Math.round(
+                pointToPointDirectDistanceKm *
+                  (robustNoRouteFallback ? 220 : 270),
+              ),
+            ),
           )
           : retryDetourLevel === 1
           ? Math.min(
