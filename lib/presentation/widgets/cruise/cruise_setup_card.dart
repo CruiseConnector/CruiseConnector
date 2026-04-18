@@ -22,6 +22,7 @@ class CruiseSetupCard extends StatefulWidget {
     required this.onStyleChanged,
     required this.onDestinationSelected,
     required this.onDestinationCleared,
+    this.onDestinationInputChanged,
     required this.selectedDetour,
     required this.onDetourChanged,
     this.selectedAvoidHighways = false,
@@ -44,6 +45,7 @@ class CruiseSetupCard extends StatefulWidget {
   final ValueChanged<String> onDetourChanged;
   final ValueChanged<MapboxSuggestion> onDestinationSelected;
   final VoidCallback onDestinationCleared;
+  final ValueChanged<String>? onDestinationInputChanged;
   final bool selectedAvoidHighways;
   final ValueChanged<bool>? onAvoidHighwaysChanged;
 
@@ -327,16 +329,29 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
           ),
           child: TypeAheadField<MapboxSuggestion>(
             controller: widget.destinationController,
-            // Debounce: Mapbox-Geocoding nur 350ms NACH dem letzten Tastendruck
-            // anfragen — verhindert eine Anfrage pro Zeichen.
-            debounceDuration: const Duration(milliseconds: 350),
+            // Debounce: Geocoding erst ~450ms nach letztem Tastendruck (weniger
+            // Flattern, weniger parallele Requests).
+            debounceDuration: const Duration(milliseconds: 450),
             suggestionsCallback: (pattern) async {
               // Erst ab 2 Zeichen abfragen, sonst wenig sinnvolle Treffer.
               if (pattern.trim().length < 2) return const [];
-              return CruiseSetupCard._geocodingService.searchSuggestions(
-                pattern,
-              );
+              try {
+                return await CruiseSetupCard._geocodingService.searchSuggestions(
+                  pattern,
+                );
+              } catch (e, stack) {
+                debugPrint('[CruiseSetup] Vorschlags-Suche fehlgeschlagen: $e');
+                debugPrintStack(stackTrace: stack);
+                return const [];
+              }
             },
+            errorBuilder: (context, error) => Padding(
+              padding: const EdgeInsets.all(16),
+              child: Text(
+                'Suche gerade nicht möglich. Netz prüfen und erneut versuchen.',
+                style: TextStyle(color: Colors.red.shade200, fontSize: 13),
+              ),
+            ),
             itemBuilder: (context, suggestion) => ListTile(
               tileColor: const Color(0xFF1C1F26),
               leading: const Icon(Icons.location_on, color: Color(0xFFFF3B30)),
@@ -358,8 +373,8 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
             emptyBuilder: (context) => const Padding(
               padding: EdgeInsets.all(16),
               child: Text(
-                'Adresse eingeben...',
-                style: TextStyle(color: Colors.grey),
+                'Mindestens 2 Zeichen eingeben oder anderes Stichwort probieren.',
+                style: TextStyle(color: Colors.grey, fontSize: 13),
               ),
             ),
             loadingBuilder: (context) => const Padding(
@@ -372,6 +387,7 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
               controller: controller,
               focusNode: focusNode,
               style: const TextStyle(color: Colors.white),
+              onChanged: widget.onDestinationInputChanged,
               onTapOutside: (_) => FocusScope.of(context).unfocus(),
               decoration: const InputDecoration(
                 prefixIcon: Icon(Icons.search, color: Colors.white38),

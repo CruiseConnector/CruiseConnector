@@ -64,12 +64,12 @@ class RouteStyleConfig {
   static const sport = RouteStyleConfig._(
     name: 'Sport Mode',
     profileKey: 'sport',
-    waypointShapeFactor: 2.0,
-    radiusMultiplier: 1.0,
+    waypointShapeFactor: 2.05,
+    radiusMultiplier: 1.02,
     minRoundTripKm: 25,
     maxRoundTripKm: 280,
     retryAttempts: 4,
-    minStyleFitScore: 44.0,
+    minStyleFitScore: 47.0,
     preferFlatTerrain: true,
   );
 
@@ -79,13 +79,13 @@ class RouteStyleConfig {
   static const kurvenjagd = RouteStyleConfig._(
     name: 'Kurvenjagd',
     profileKey: 'kurvenjagd',
-    waypointShapeFactor: 1.0,
-    radiusMultiplier: 1.15,
+    waypointShapeFactor: 0.95,
+    radiusMultiplier: 1.18,
     minRoundTripKm: 20,
     maxRoundTripKm: 230,
     retryAttempts: 5,
-    minStyleFitScore: 48.0,
-    minCurvesPer50km: 16,
+    minStyleFitScore: 51.0,
+    minCurvesPer50km: 18,
     zigzagWaypoints: true,
   );
 
@@ -95,11 +95,11 @@ class RouteStyleConfig {
     name: 'Abendrunde',
     profileKey: 'abendrunde',
     waypointShapeFactor: 1.0,
-    radiusMultiplier: 0.7,
+    radiusMultiplier: 0.66,
     minRoundTripKm: 10,
     maxRoundTripKm: 130,
     retryAttempts: 3,
-    minStyleFitScore: 48.0,
+    minStyleFitScore: 51.0,
     maxAvgSpeedKmh: 70.0,
   );
 
@@ -108,12 +108,12 @@ class RouteStyleConfig {
   static const entdecker = RouteStyleConfig._(
     name: 'Entdecker',
     profileKey: 'entdecker',
-    waypointShapeFactor: 1.0,
-    radiusMultiplier: 1.2,
+    waypointShapeFactor: 1.08,
+    radiusMultiplier: 1.24,
     minRoundTripKm: 30,
     maxRoundTripKm: 320,
     retryAttempts: 5,
-    minStyleFitScore: 46.0,
+    minStyleFitScore: 49.0,
   );
 
   /// Gibt die passende Config für einen Stil-Namen zurück.
@@ -347,9 +347,9 @@ class RouteStyleConfig {
   // unterschiedlich anfühlen. Vorher überlappten die Bereiche so stark, dass
   // eine Route mit 1.85× direkter Distanz für alle drei Stufen gültig war.
   // Aktuelle Fenster:
-  //   Klein:  1.15×–1.65× direkt   (~Faktor 1.32×)
-  //   Mittel: 1.40×–2.10× direkt   (~Faktor 1.65×)
-  //   Groß:   1.75×–2.95× direkt   (~Faktor 2.10×)
+  //   Klein:  1.18×–1.65× direkt   (~Faktor 1.32×)
+  //   Mittel: 1.46×–2.10× direkt   (~Faktor 1.65×)
+  //   Groß:   1.84×–2.95× direkt   (~Faktor 2.10×)
   // Bewusst etwas weiter als zuvor, damit Mapbox bei Bergland (Dornbirn,
   // Bregenzerwald) das Fenster wirklich treffen kann. Eine schmale ~10%
   // Überlappung an den Rändern bleibt absichtlich erhalten, damit der
@@ -371,9 +371,9 @@ class RouteStyleConfig {
           )
         : directDistanceKm;
     final minByVariant = switch (detourVariant) {
-      1 => scenicReferenceKm * 1.15,
-      2 => scenicReferenceKm * 1.40,
-      3 => scenicReferenceKm * 1.75,
+      1 => scenicReferenceKm * 1.18,
+      2 => scenicReferenceKm * 1.46,
+      3 => scenicReferenceKm * 1.84,
       _ => scenicReferenceKm * 1.08,
     };
     final paddingKm = switch (detourVariant) {

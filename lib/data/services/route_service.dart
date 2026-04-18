@@ -154,204 +154,208 @@ class RouteService {
       PreparedRouteBuffer.clearScenario(scenario.scenarioKey);
     }
 
-    return RouteGenerationCoordinator.runSingleFlight(scenario.scenarioKey, () async {
-      final prepared = forceFreshVariant
-          ? null
-          : _takePreparedRoute(scenario: scenario, styleConfig: styleConfig);
-      if (prepared != null) {
-        return prepared;
-      }
+    return RouteGenerationCoordinator.runSingleFlight(
+      scenario.scenarioKey,
+      () async {
+        final prepared = forceFreshVariant
+            ? null
+            : _takePreparedRoute(scenario: scenario, styleConfig: styleConfig);
+        if (prepared != null) {
+          return prepared;
+        }
 
-      final hasSeenHistory = SeenRouteRegistry.entriesFor(
-        scenario.scenarioKey,
-      ).isNotEmpty;
-      final difficultScenario = _isDifficultRoundTripScenario(
-        scenario,
-        styleConfig,
-      );
-      // Client-Schleife: Normal 2 Versuche, in schwierigen Szenarien 3.
-      // Der zusätzliche Seed gilt nur dort, wo die Edge-Suche trotz
-      // strict/balanced/fallback häufiger an Tal-/Kurvengeometrie scheitert.
-      final maxAttempts = difficultScenario ? 3 : 2;
-      _RouteCandidate? bestCandidate;
-      _RouteCandidate? spareCandidate;
-      RouteServiceException? lastError;
-
-      for (var attempt = 0; attempt < maxAttempts; attempt++) {
-        if (_isInWorkerLimitCooldown()) break;
-        final variant = await _nextRoundTripVariant(
+        final hasSeenHistory = SeenRouteRegistry.entriesFor(
+          scenario.scenarioKey,
+        ).isNotEmpty;
+        final difficultScenario = _isDifficultRoundTripScenario(
           scenario,
-          styleConfig: styleConfig,
-          explicitIndex: attempt == 0 ? variantIndex : null,
+          styleConfig,
         );
-        try {
-          final candidate = await _requestRoundTripVariant(
+        // Client-Schleife: Normal 2 Versuche, in schwierigen Szenarien 3.
+        // Der zusätzliche Seed gilt nur dort, wo die Edge-Suche trotz
+        // strict/balanced/fallback häufiger an Tal-/Kurvengeometrie scheitert.
+        final maxAttempts = difficultScenario ? 3 : 2;
+        _RouteCandidate? bestCandidate;
+        _RouteCandidate? spareCandidate;
+        RouteServiceException? lastError;
+
+        for (var attempt = 0; attempt < maxAttempts; attempt++) {
+          if (_isInWorkerLimitCooldown()) break;
+          final variant = await _nextRoundTripVariant(
+            scenario,
+            styleConfig: styleConfig,
+            explicitIndex: attempt == 0 ? variantIndex : null,
+          );
+          try {
+            final candidate = await _requestRoundTripVariant(
+              scenario: scenario,
+              styleConfig: styleConfig,
+              startPosition: startPosition,
+              targetLocation: targetLocation,
+              variant: variant,
+              // Hint an Edge Function: gibt strict/balanced/fallback je 2-3
+              // Pläne (siehe declaredMaxPerPhase und reservedForLaterPhases
+              // in der Edge Function). Constrained Suchen (Autobahn vermeiden,
+              // Kurvenjagd in engen Tälern) bekommen +1 Plan, weil sie pro
+              // Versuch ggf. einen relax-retry brauchen.
+              candidateBudget: _roundTripCandidateBudget(scenario, styleConfig),
+            );
+            if (candidate.accepted) {
+              if (!candidate.novelEnough) {
+                debugPrint(
+                  '[RouteService] RoundTrip candidate ${attempt + 1}/$maxAttempts verworfen: zu ähnlich zur letzten Route.',
+                );
+                continue;
+              }
+              if (_isBetterCandidate(candidate, bestCandidate)) {
+                if (bestCandidate != null &&
+                    _isBetterCandidate(bestCandidate, spareCandidate)) {
+                  spareCandidate = bestCandidate;
+                }
+                bestCandidate = candidate;
+              } else if (_isBetterCandidate(candidate, spareCandidate)) {
+                spareCandidate = candidate;
+              }
+            }
+            if (candidate.accepted &&
+                candidate.novelEnough &&
+                (candidate.isIdeal ||
+                    candidate.isGood ||
+                    (candidate.tier == RouteQualityTier.acceptable &&
+                        !difficultScenario))) {
+              break;
+            }
+          } catch (e, stack) {
+            final mapped = e is RouteServiceException
+                ? e
+                : _mapInvokeException(
+                    error: e,
+                    stack: stack,
+                    routeType: scenario.routeType,
+                  );
+            lastError = mapped;
+            if (_isWorkerLimitError(mapped)) {
+              _setWorkerLimitCooldown();
+            }
+            debugPrint(
+              '[RouteService] RoundTrip candidate ${attempt + 1}/$maxAttempts fehlgeschlagen: ${mapped.debugMessage}',
+            );
+            if (_isFatalStructuredError(mapped)) {
+              break;
+            }
+          }
+        }
+
+        if (bestCandidate?.accepted == true) {
+          final finalized = _finalizeAndRemember(
+            scenario: scenario,
+            route: bestCandidate!.route,
+            sampledCoordinates: bestCandidate.sampledCoordinates,
+            fingerprint: bestCandidate.fingerprint,
+          );
+          if (spareCandidate != null && spareCandidate.novelEnough) {
+            PreparedRouteBuffer.store(
+              scenario.scenarioKey,
+              PreparedRouteEntry(
+                route: spareCandidate.route,
+                variant: spareCandidate.variant,
+                preparedAt: DateTime.now(),
+              ),
+            );
+          } else if (!hasSeenHistory && !forceFreshVariant) {
+            _schedulePreparedRoundTripRoute(
+              scenario: scenario,
+              styleConfig: styleConfig,
+              startPosition: startPosition,
+            );
+          }
+          return finalized;
+        }
+
+        final recent = forceFreshVariant
+            ? null
+            : _recentSuccessfulRoutes[scenario.scenarioKey];
+        if (scenario.isRoundTrip &&
+            recent != null &&
+            _shouldUseRecentFallbackRoute(
+              recent,
+              scenario: scenario,
+              lastError: lastError,
+            )) {
+          lastRouteFromCache = true;
+          markRouteAsSeen(scenario.scenarioKey, recent);
+          return _finalizeRoute(recent, scenarioKey: scenario.scenarioKey);
+        }
+
+        final cached = forceFreshVariant
+            ? null
+            : await _loadCachedRoute(scenarioKey: scenario.scenarioKey);
+        if (scenario.isRoundTrip &&
+            cached != null &&
+            _shouldUseCachedFallbackRoute(
+              cached,
+              scenario: scenario,
+              lastError: lastError,
+            )) {
+          lastRouteFromCache = true;
+          markRouteAsSeen(scenario.scenarioKey, cached);
+          return _finalizeRoute(cached, scenarioKey: scenario.scenarioKey);
+        }
+
+        if (_canUseStructuredFallback(lastError)) {
+          final fallback = await _tryRoundTripFallback(
             scenario: scenario,
             styleConfig: styleConfig,
             startPosition: startPosition,
             targetLocation: targetLocation,
-            variant: variant,
-            // Hint an Edge Function: gibt strict/balanced/fallback je 2-3
-            // Pläne (siehe declaredMaxPerPhase und reservedForLaterPhases
-            // in der Edge Function). Constrained Suchen (Autobahn vermeiden,
-            // Kurvenjagd in engen Tälern) bekommen +1 Plan, weil sie pro
-            // Versuch ggf. einen relax-retry brauchen.
-            candidateBudget: _roundTripCandidateBudget(scenario, styleConfig),
           );
-          if (candidate.accepted) {
-            if (!candidate.novelEnough) {
-              debugPrint(
-                '[RouteService] RoundTrip candidate ${attempt + 1}/$maxAttempts verworfen: zu ähnlich zur letzten Route.',
-              );
-              continue;
-            }
-            if (_isBetterCandidate(candidate, bestCandidate)) {
-              if (bestCandidate != null &&
-                  _isBetterCandidate(bestCandidate, spareCandidate)) {
-                spareCandidate = bestCandidate;
-              }
-              bestCandidate = candidate;
-            } else if (_isBetterCandidate(candidate, spareCandidate)) {
-              spareCandidate = candidate;
-            }
+          if (fallback != null) {
+            return fallback;
           }
-          if (candidate.accepted &&
-              candidate.novelEnough &&
-              (candidate.isIdeal ||
-                  candidate.isGood ||
-                  (candidate.tier == RouteQualityTier.acceptable &&
-                      !difficultScenario))) {
-            break;
-          }
-        } catch (e, stack) {
-          final mapped = e is RouteServiceException
-              ? e
-              : _mapInvokeException(
-                  error: e,
-                  stack: stack,
-                  routeType: scenario.routeType,
-                );
-          lastError = mapped;
-          if (_isWorkerLimitError(mapped)) {
-            _setWorkerLimitCooldown();
-          }
-          debugPrint(
-            '[RouteService] RoundTrip candidate ${attempt + 1}/$maxAttempts fehlgeschlagen: ${mapped.debugMessage}',
-          );
-          if (_isFatalStructuredError(mapped)) {
-            break;
-          }
-        }
-      }
 
-      if (bestCandidate?.accepted == true) {
-        final finalized = _finalizeAndRemember(
-          scenario: scenario,
-          route: bestCandidate!.route,
-          sampledCoordinates: bestCandidate.sampledCoordinates,
-          fingerprint: bestCandidate.fingerprint,
-        );
-        if (spareCandidate != null && spareCandidate.novelEnough) {
-          PreparedRouteBuffer.store(
-            scenario.scenarioKey,
-            PreparedRouteEntry(
-              route: spareCandidate.route,
-              variant: spareCandidate.variant,
-              preparedAt: DateTime.now(),
-            ),
-          );
-        } else if (!hasSeenHistory && !forceFreshVariant) {
-          _schedulePreparedRoundTripRoute(
+          final rescueFallback = await _tryRoundTripRescueFallback(
             scenario: scenario,
             styleConfig: styleConfig,
             startPosition: startPosition,
+            targetLocation: targetLocation,
           );
-        }
-        return finalized;
-      }
-
-      final recent = forceFreshVariant
-          ? null
-          : _recentSuccessfulRoutes[scenario.scenarioKey];
-      if (scenario.isRoundTrip &&
-          recent != null &&
-          _shouldUseRecentFallbackRoute(
-            recent,
-            scenario: scenario,
-            lastError: lastError,
-          )) {
-        lastRouteFromCache = true;
-        markRouteAsSeen(scenario.scenarioKey, recent);
-        return _finalizeRoute(recent, scenarioKey: scenario.scenarioKey);
-      }
-
-      final cached = forceFreshVariant
-          ? null
-          : await _loadCachedRoute(scenarioKey: scenario.scenarioKey);
-      if (scenario.isRoundTrip &&
-          cached != null &&
-          _shouldUseCachedFallbackRoute(
-            cached,
-            scenario: scenario,
-            lastError: lastError,
-          )) {
-        lastRouteFromCache = true;
-        markRouteAsSeen(scenario.scenarioKey, cached);
-        return _finalizeRoute(cached, scenarioKey: scenario.scenarioKey);
-      }
-
-      if (_canUseStructuredFallback(lastError)) {
-        final fallback = await _tryRoundTripFallback(
-          scenario: scenario,
-          styleConfig: styleConfig,
-          startPosition: startPosition,
-          targetLocation: targetLocation,
-        );
-        if (fallback != null) {
-          return fallback;
+          if (rescueFallback != null) {
+            return rescueFallback;
+          }
         }
 
-        final rescueFallback = await _tryRoundTripRescueFallback(
-          scenario: scenario,
-          styleConfig: styleConfig,
-          startPosition: startPosition,
-          targetLocation: targetLocation,
-        );
-        if (rescueFallback != null) {
-          return rescueFallback;
+        if (recent != null &&
+            _shouldUseRecentFallbackRoute(
+              recent,
+              scenario: scenario,
+              lastError: lastError,
+            )) {
+          lastRouteFromCache = true;
+          markRouteAsSeen(scenario.scenarioKey, recent);
+          return _finalizeRoute(recent, scenarioKey: scenario.scenarioKey);
         }
-      }
 
-      if (recent != null &&
-          _shouldUseRecentFallbackRoute(
-            recent,
-            scenario: scenario,
-            lastError: lastError,
-          )) {
-        lastRouteFromCache = true;
-        markRouteAsSeen(scenario.scenarioKey, recent);
-        return _finalizeRoute(recent, scenarioKey: scenario.scenarioKey);
-      }
+        if (cached != null &&
+            _shouldUseCachedFallbackRoute(
+              cached,
+              scenario: scenario,
+              lastError: lastError,
+            )) {
+          lastRouteFromCache = true;
+          markRouteAsSeen(scenario.scenarioKey, cached);
+          return _finalizeRoute(cached, scenarioKey: scenario.scenarioKey);
+        }
 
-      if (cached != null &&
-          _shouldUseCachedFallbackRoute(
-            cached,
-            scenario: scenario,
-            lastError: lastError,
-          )) {
-        lastRouteFromCache = true;
-        markRouteAsSeen(scenario.scenarioKey, cached);
-        return _finalizeRoute(cached, scenarioKey: scenario.scenarioKey);
-      }
-
-      throw lastError ??
-          const RouteServiceException(
-            type: RouteErrorType.quality,
-            userMessage:
-                'Kein passender Rundkurs gefunden. Bitte versuche es erneut.',
-            debugMessage: 'RoundTrip generation failed without usable result.',
-          );
-    });
+        throw lastError ??
+            const RouteServiceException(
+              type: RouteErrorType.quality,
+              userMessage:
+                  'Kein passender Rundkurs gefunden. Bitte versuche es erneut.',
+              debugMessage:
+                  'RoundTrip generation failed without usable result.',
+            );
+      },
+    );
   }
 
   /// Berechnet eine Route von A nach B (direkt oder scenic).
@@ -1585,6 +1589,21 @@ class RouteService {
         ? Map<String, dynamic>.from(data['meta'] as Map)
         : const <String, dynamic>{};
 
+    if (routeType == 'ROUND_TRIP') {
+      debugPrint(
+        '[RouteService] RoundTrip Edge-Meta: avoid_highways_requested='
+        '${edgeMeta['avoid_highways_requested']}, '
+        'effective_excludes=${edgeMeta['effective_excludes']}',
+      );
+    } else if (routeType == 'POINT_TO_POINT') {
+      debugPrint(
+        '[RouteService] A→B Edge-Meta: avoid_highways_requested='
+        '${edgeMeta['avoid_highways_requested']}, '
+        'detour_level=${edgeMeta['detour_level']}, '
+        'effective_excludes=${edgeMeta['effective_excludes']}',
+      );
+    }
+
     final routeResult = RouteResult(
       geoJson: json.encode(geometry),
       geometry: geometry,
@@ -1798,7 +1817,8 @@ class RouteService {
       variantIndex: index,
     );
     final radiusJitter = 1.0 + ((rng.nextDouble() - 0.5) * 0.24);
-    final angleOffset = (baseDirection + (index * 43.0)) % 360;
+    final angleOffset =
+        (baseDirection + index * 47.0 + (index % 5) * 23.0) % 360;
     return RouteVariant(
       index: index,
       seed: seed,
@@ -1824,16 +1844,18 @@ class RouteService {
     final seed = _nextRandomSeed() + index * 53;
     final rng = math.Random(seed);
     final offsetBearingBase = switch (normalizedVariant) {
-      1 => 28.0,
-      2 => 52.0,
-      3 => 76.0,
-      _ => 16.0,
+      1 => 34.0,
+      2 => 60.0,
+      3 => 88.0,
+      _ => 14.0,
     };
-    final offsetBearing = offsetBearingBase + ((rng.nextDouble() - 0.5) * 18.0);
+    final bearingSpread = 18.0 + normalizedVariant * 5.0;
+    final offsetBearing =
+        offsetBearingBase + ((rng.nextDouble() - 0.5) * bearingSpread);
     final radiusJitter = switch (normalizedVariant) {
-      1 => 1.04 + rng.nextDouble() * 0.08,
-      2 => 1.10 + rng.nextDouble() * 0.12,
-      3 => 1.18 + rng.nextDouble() * 0.16,
+      1 => 1.06 + rng.nextDouble() * 0.10,
+      2 => 1.14 + rng.nextDouble() * 0.14,
+      3 => 1.22 + rng.nextDouble() * 0.18,
       _ => 0.98 + rng.nextDouble() * 0.05,
     };
     final offsetSide = shouldDiversify ? (index.isEven ? 1 : -1) : null;
@@ -2013,7 +2035,8 @@ class RouteService {
           proximityMeters: similarityProximityMeters,
         ) ||
         recentRouteTooSimilar;
-    final novelEnough = !scenario.isRoundTrip || !tooSimilar;
+    final noveltyRequired = scenario.isRoundTrip || scenario.detourLevel > 0;
+    final novelEnough = !noveltyRequired || !tooSimilar;
     final minPoints = _minimumPointsForScenario(
       scenario,
       actualDistanceKm: actualDistanceKm,
@@ -2053,8 +2076,36 @@ class RouteService {
         ? (() {
             final targetKm = scenario.targetDistanceKm ?? actualDistanceKm;
             if (targetKm <= 0) return true;
-            final minFactor = scenario.avoidHighways ? 0.66 : 0.70;
-            final maxFactor = scenario.avoidHighways ? 1.48 : 1.44;
+            final minFactor = scenario.avoidHighways
+                ? (targetKm <= 55
+                      ? 0.66
+                      : targetKm <= 85
+                      ? 0.67
+                      : targetKm <= 115
+                      ? 0.68
+                      : 0.69)
+                : (targetKm <= 55
+                      ? 0.70
+                      : targetKm <= 85
+                      ? 0.71
+                      : targetKm <= 115
+                      ? 0.72
+                      : 0.73);
+            final maxFactor = scenario.avoidHighways
+                ? (targetKm <= 55
+                      ? 1.48
+                      : targetKm <= 85
+                      ? 1.46
+                      : targetKm <= 115
+                      ? 1.44
+                      : 1.42)
+                : (targetKm <= 55
+                      ? 1.44
+                      : targetKm <= 85
+                      ? 1.42
+                      : targetKm <= 115
+                      ? 1.40
+                      : 1.38);
             return actualDistanceKm >= targetKm * minFactor &&
                 actualDistanceKm <= targetKm * maxFactor;
           })()
@@ -2118,8 +2169,8 @@ class RouteService {
     final serverApprovedRepeatedStartLimit = !scenario.isRoundTrip
         ? 72.0
         : styleConfig.profileKey == 'sport' && serverApprovedGoodTier
-        ? 62.0
-        : 48.0;
+        ? 58.0
+        : 44.0;
     // Kraken-Schutz: spurArmPercent-Obergrenzen für serverApproved-Pfad
     // deutlich gesenkt (war 70/40), damit offene Stern-Formen nicht mehr
     // via Edge-Approval durchrutschen.
@@ -2149,21 +2200,18 @@ class RouteService {
             : quality.uturnPositions.isEmpty) &&
         (!scenario.isRoundTrip || roundTripStructureOk) &&
         quality.overlapPercent <= (scenario.isRoundTrip ? 24.0 : 26.0) &&
-        quality.shapePenalty <= (scenario.isRoundTrip ? 62.0 : 58.0) &&
+        quality.shapePenalty <= (scenario.isRoundTrip ? 60.0 : 58.0) &&
         quality.foldedAreaPenalty <=
             (scenario.isRoundTrip
                 ? (styleConfig.profileKey == 'sport' ? 84.0 : 72.0)
                 : 94.0) &&
-        quality.spurArmPercent <=
-            (scenario.isRoundTrip
-                ? (styleConfig.profileKey == 'sport' ? 30.0 : 24.0)
-                : serverApprovedSpurLimit) &&
+        quality.spurArmPercent <= serverApprovedSpurLimit &&
         quality.repeatedStartAreaPercent <=
             (scenario.isRoundTrip
-                ? (styleConfig.profileKey == 'sport' ? 44.0 : 34.0)
+                ? (styleConfig.profileKey == 'sport' ? 42.0 : 34.0)
                 : serverApprovedRepeatedStartLimit) &&
-        quality.microZigzagPercent <= 66.0 &&
-        (!scenario.isRoundTrip || quality.centerRecrossPercent <= 30.0) &&
+        quality.microZigzagPercent <= (scenario.isRoundTrip ? 62.0 : 66.0) &&
+        (!scenario.isRoundTrip || quality.centerRecrossPercent <= 28.0) &&
         (!scenario.isRoundTrip || quality.centerReentryCount <= 1);
     final sportRescueLoopShape =
         _roundTripStructureRenderable(
@@ -2207,19 +2255,19 @@ class RouteService {
         (scenario.isRoundTrip &&
             roundTripStructureOk &&
             styleFitScore >= styleConfig.minStyleFitScore - 8.0 &&
-            quality.shapePenalty <= 62.0 &&
+            quality.shapePenalty <= 60.0 &&
             quality.foldedAreaPenalty <= 80.0 &&
-            quality.repeatedStartAreaPercent <= 36.0 &&
+            quality.repeatedStartAreaPercent <= 34.0 &&
             quality.spurArmPercent <= 26.0 &&
-            quality.microZigzagPercent <= 44.0) ||
+            quality.microZigzagPercent <= 42.0) ||
         (relaxedRoundTrip &&
             scenario.isRoundTrip &&
             styleFitScore >= styleConfig.minStyleFitScore - 16.0 &&
-            quality.shapePenalty <= 68.0 &&
+            quality.shapePenalty <= 66.0 &&
             quality.foldedAreaPenalty <= 88.0 &&
-            quality.repeatedStartAreaPercent <= 42.0 &&
+            quality.repeatedStartAreaPercent <= 40.0 &&
             quality.spurArmPercent <= 32.0 &&
-            quality.microZigzagPercent <= 50.0);
+            quality.microZigzagPercent <= 48.0);
     final hasSoftDetourPenalty =
         scenario.isPointToPoint &&
         scenario.detourLevel > 0 &&
@@ -2334,12 +2382,12 @@ class RouteService {
         ? (isSport ? 0.26 : 0.30)
         : (isSport ? 0.28 : 0.32);
     final tolerableHighSpanLoop =
-        quality.spurArmPercent <= (relaxed ? 68.0 : 64.0) &&
+        quality.spurArmPercent <= (relaxed ? 66.0 : 62.0) &&
         quality.centerRecrossPercent <= (relaxed ? 18.0 : 16.0) &&
         quality.repeatedStartAreaPercent <= (relaxed ? 14.0 : 12.0) &&
         quality.foldedAreaPenalty <= (relaxed ? 24.0 : 18.0) &&
         quality.middleCoverageRatio >= (relaxed ? 0.58 : 0.62) &&
-        quality.dominantLoopScore >= (relaxed ? 78.0 : 84.0);
+        quality.dominantLoopScore >= (relaxed ? 80.0 : 84.0);
     final presentableFoldedLoop =
         quality.spurArmCount <= 1 &&
         quality.spurArmPercent <= (relaxed ? 40.0 : 36.0) &&
@@ -2466,16 +2514,18 @@ class RouteService {
       // dieser Schwelle das Verwerfen und forciert einen neuen Seed/Winkel.
       final style = scenario.style.toLowerCase();
       if (style.contains('kurvenjagd') || style.contains('kurvenreich')) {
-        return 58.0;
+        return 56.0;
       }
-      return 64.0;
+      return 61.0;
     }
     if (scenario.detourLevel <= 0) {
       return scenario.avoidHighways ? 92.0 : 96.0;
     }
-    if (scenario.detourLevel == 1) return 76.0;
-    if (scenario.detourLevel == 2) return 74.0;
-    return 72.0;
+    // A→B-Umwege: strenger als zuvor — parallele „Fast-Duplikate“ zwischen
+    // Klein/Mittel/Groß sollen eher verworfen und neu gesucht werden.
+    if (scenario.detourLevel == 1) return 70.0;
+    if (scenario.detourLevel == 2) return 68.0;
+    return 66.0;
   }
 
   double _similarityProximityMetersForScenario(RouteScenario scenario) {
@@ -2486,11 +2536,14 @@ class RouteService {
       // zuverlässiger erkannt.
       return 170.0;
     }
+    if (!scenario.isRoundTrip && scenario.detourLevel > 0) {
+      return 135.0;
+    }
     return 160.0;
   }
 
   bool _isNovelRouteForScenario(RouteScenario scenario, RouteResult route) {
-    if (!scenario.isRoundTrip) return true;
+    if (!scenario.isRoundTrip && scenario.detourLevel <= 0) return true;
 
     final sampledCoordinates = _sampleRouteForSimilarity(route.coordinates);
     final fingerprint = RouteQualityValidator.buildRouteFingerprint(
@@ -2694,7 +2747,7 @@ class RouteService {
                 variant: variant,
                 candidateBudget: scenario.detourLevel >= 2 ? 3 : 2,
               );
-              if (!candidate.accepted) return;
+              if (!candidate.accepted || !candidate.novelEnough) return;
               PreparedRouteBuffer.store(
                 scenario.scenarioKey,
                 PreparedRouteEntry(
@@ -2771,6 +2824,18 @@ class RouteService {
           // eine brauchbare Fallback-Route liefern.
           continue;
         }
+        final fallbackStyleFloor = styleConfig.profileKey == 'sport'
+            ? styleConfig.minStyleFitScore - 8.0
+            : styleConfig.minStyleFitScore;
+        if (scenario.isRoundTrip &&
+            candidate.styleFitScore < fallbackStyleFloor) {
+          debugPrint(
+            '[RouteService] Rundkurs-Fallback stilistisch verworfen: '
+            'styleFit=${candidate.styleFitScore.toStringAsFixed(1)} '
+            '< ${fallbackStyleFloor.toStringAsFixed(1)}',
+          );
+          continue;
+        }
         if (!candidate.novelEnough) {
           debugPrint(
             '[RouteService] Rundkurs-Fallback Duplicate verworfen, retry=${attempt + 1}',
@@ -2801,21 +2866,28 @@ class RouteService {
   }) async {
     if (_isInWorkerLimitCooldown()) return null;
 
-    final sameStyle = await _requestRoundTripRescueVariant(
-      scenario: scenario,
-      requestStyleConfig: styleConfig,
-      startPosition: startPosition,
-      mode: scenario.style,
-      planningType: scenario.planningType,
-      targetLocation: targetLocation,
-      avoidHighways: scenario.avoidHighways,
-      candidateBudget: _roundTripFallbackCandidateBudget(scenario, styleConfig),
-      targetFactor: 0.96,
-      label: 'same-style',
-    );
-    if (sameStyle != null) return sameStyle;
+    if (!(scenario.avoidHighways && styleConfig.profileKey != 'sport')) {
+      final sameStyle = await _requestRoundTripRescueVariant(
+        scenario: scenario,
+        requestStyleConfig: styleConfig,
+        startPosition: startPosition,
+        mode: scenario.style,
+        planningType: scenario.planningType,
+        targetLocation: targetLocation,
+        avoidHighways: scenario.avoidHighways,
+        candidateBudget: _roundTripFallbackCandidateBudget(
+          scenario,
+          styleConfig,
+        ),
+        targetFactor: 0.96,
+        label: 'same-style',
+      );
+      if (sameStyle != null) return sameStyle;
+    }
 
-    if (!scenario.avoidHighways && styleConfig.profileKey == 'sport') {
+    if (!scenario.avoidHighways &&
+        styleConfig.profileKey == 'sport' &&
+        (scenario.targetDistanceKm ?? 0.0) >= 70.0) {
       final spreadStyle = RouteStyleConfig.forMode('Entdecker');
       final sportSpread = await _requestRoundTripRescueVariant(
         scenario: scenario,
@@ -2932,6 +3004,18 @@ class RouteService {
           // Früher Abbruch erzeugte unnötige NO_ROUTE-Fälle.
           continue;
         }
+        final rescueStyleFloor =
+            (evaluationStyleConfig ?? requestStyleConfig).minStyleFitScore -
+            (label == 'sport-relaxed' ? 18.0 : 6.0);
+        if (scenario.isRoundTrip &&
+            candidate.styleFitScore < rescueStyleFloor) {
+          debugPrint(
+            '[RouteService] Rundkurs-Rescue $label stilistisch verworfen: '
+            'styleFit=${candidate.styleFitScore.toStringAsFixed(1)} '
+            '< ${rescueStyleFloor.toStringAsFixed(1)}',
+          );
+          continue;
+        }
         if (!candidate.novelEnough) {
           debugPrint(
             '[RouteService] Rundkurs-Rescue $label Duplicate verworfen, retry=${attempt + 1}',
@@ -3013,7 +3097,7 @@ class RouteService {
           variant: scenicVariant,
           directDistanceKm: directDistanceKm,
         );
-        if (scenicCandidate.accepted) {
+        if (scenicCandidate.accepted && scenicCandidate.novelEnough) {
           return _finalizeAndRemember(
             scenario: scenario,
             route: scenicCandidate.route,
@@ -3060,7 +3144,9 @@ class RouteService {
         variant: variant,
         directDistanceKm: directDistanceKm,
       );
-      if (!directCandidate.accepted) return null;
+      if (!directCandidate.accepted || !directCandidate.novelEnough) {
+        return null;
+      }
       return _finalizeAndRemember(
         scenario: scenario,
         route: directCandidate.route,

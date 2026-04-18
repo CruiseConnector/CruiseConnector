@@ -337,6 +337,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       );
     }
     CruiseModePage.pendingRoute.addListener(_onPendingRoute);
+    _destinationController.addListener(_onDestinationTextChanged);
   }
 
   void _onPendingRoute() {
@@ -359,8 +360,21 @@ class _CruiseModePageState extends State<CruiseModePage>
     _socketPositionSubscription?.cancel();
     _stopIdlePositionStream();
     unawaited(_navigationSocketService.dispose());
+    _destinationController.removeListener(_onDestinationTextChanged);
     _destinationController.dispose();
     super.dispose();
+  }
+
+  void _onDestinationTextChanged() {
+    final selected = _selectedDestination;
+    if (selected == null) return;
+    final currentText = _destinationController.text.trim();
+    if (currentText == selected.placeName.trim()) return;
+    if (!mounted || _disposed) {
+      _selectedDestination = null;
+      return;
+    }
+    setState(() => _selectedDestination = null);
   }
 
   // ── Smooth Kamera-Animation (60fps zwischen GPS-Updates) ───────────────
@@ -720,6 +734,8 @@ class _CruiseModePageState extends State<CruiseModePage>
                         onAvoidHighwaysChanged: (value) =>
                             setState(() => _avoidHighways = value),
                         onDestinationSelected: _onDestinationSelected,
+                        onDestinationInputChanged:
+                            _handleDestinationInputChanged,
                         onDestinationCleared: () => setState(() {
                           _selectedDestination = null;
                           _destinationController.clear();
@@ -1446,6 +1462,7 @@ class _CruiseModePageState extends State<CruiseModePage>
 
       final digits = _selectedLength.replaceAll(RegExp(r'[^0-9]'), '');
       final distance = digits.isNotEmpty ? int.parse(digits) : 50;
+      final forceFreshVariant = previousUiState.lastRouteResult != null;
       double? destLat;
       double? destLng;
       var detourVariant = 0;
@@ -1453,6 +1470,7 @@ class _CruiseModePageState extends State<CruiseModePage>
 
       Map<String, double>? targetLocation;
       if (_requiresDestination(_isRoundTrip) &&
+          _selectedDestination == null &&
           _destinationController.text.isNotEmpty) {
         try {
           targetLocation = await _geocodingService.getCoordinatesFromAddress(
@@ -1503,6 +1521,13 @@ class _CruiseModePageState extends State<CruiseModePage>
         _activePointToPointMode = scenicMode ? _selectedStyle : 'Standard';
         _activeAvoidHighways = _avoidHighways;
         _recentDestinationDistances = [];
+        final p2pDiversitySeed = Object.hash(
+          destLat.round(),
+          destLng.round(),
+          detourVariant,
+          _avoidHighways,
+          forceFreshVariant,
+        );
         result = await _routeService.generatePointToPoint(
           startPosition: startPosition,
           destinationLat: destLat,
@@ -1511,6 +1536,8 @@ class _CruiseModePageState extends State<CruiseModePage>
           scenic: scenicMode,
           routeVariant: detourVariant,
           avoidHighways: _avoidHighways,
+          diversitySeed: p2pDiversitySeed,
+          forceFreshVariant: forceFreshVariant,
         );
       } else {
         _activeDestinationCoordinate = null;
@@ -1525,6 +1552,7 @@ class _CruiseModePageState extends State<CruiseModePage>
           mode: _selectedStyle,
           planningType: _planningType,
           avoidHighways: _avoidHighways,
+          forceFreshVariant: forceFreshVariant,
         );
       }
 
@@ -1630,6 +1658,15 @@ class _CruiseModePageState extends State<CruiseModePage>
     setState(() {
       _selectedDestination = suggestion;
       _destinationController.text = suggestion.placeName;
+    });
+  }
+
+  void _handleDestinationInputChanged(String value) {
+    final selected = _selectedDestination;
+    if (selected == null) return;
+    if (value.trim() == selected.placeName.trim()) return;
+    setState(() {
+      _selectedDestination = null;
     });
   }
 
@@ -2830,6 +2867,13 @@ class _CruiseModePageState extends State<CruiseModePage>
 
       final destination = _activeDestinationCoordinate;
       if (!_isRoundTrip && destination != null && !accessLegMode) {
+        final destinationRerouteSeed = Object.hash(
+          destination[0].round(),
+          destination[1].round(),
+          _activeDetourVariant,
+          _activeAvoidHighways,
+          0x44525252,
+        );
         final destinationResult = await _routeService.generatePointToPoint(
           startPosition: position,
           destinationLat: destination[1],
@@ -2840,6 +2884,7 @@ class _CruiseModePageState extends State<CruiseModePage>
           scenic: _activePointToPointScenic,
           routeVariant: _activeDetourVariant,
           avoidHighways: _activeAvoidHighways,
+          diversitySeed: destinationRerouteSeed,
         );
 
         if (destinationResult.coordinates.length >= 2) {
@@ -2940,6 +2985,13 @@ class _CruiseModePageState extends State<CruiseModePage>
 
         final scenicReroute = !mergeWithOriginal && _activePointToPointScenic;
 
+        final joinRerouteSeed = Object.hash(
+          rejoinPoint[0].round(),
+          rejoinPoint[1].round(),
+          _activeDetourVariant,
+          _activeAvoidHighways,
+          attempt,
+        );
         final candidate = await _routeService.generatePointToPoint(
           startPosition: position,
           destinationLat: rejoinPoint[1],
@@ -2948,6 +3000,7 @@ class _CruiseModePageState extends State<CruiseModePage>
           scenic: scenicReroute,
           routeVariant: _rerouteVariant(mergeWithOriginal: mergeWithOriginal),
           avoidHighways: _activeAvoidHighways,
+          diversitySeed: joinRerouteSeed,
         );
 
         if (candidate.coordinates.length < 2) {

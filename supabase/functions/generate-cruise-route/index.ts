@@ -164,13 +164,37 @@ function removeExcludeParam(exclude: string, value: string): string {
   );
 }
 
+function applyAvoidHighwaysExcludes(
+  exclude: string,
+  avoidHighways: boolean,
+): string {
+  let next = exclude;
+  // Autobahn AUS: komplette Autobahn-Klasse inkl. Auffahrten (Mapbox road_class).
+  // Autobahn AN: beide explizit entfernen, damit nichts „hängen“ bleibt.
+  for (const value of ["motorway", "motorway_link"]) {
+    next = avoidHighways
+      ? addExcludeParam(next, value)
+      : removeExcludeParam(next, value);
+  }
+  return normalizeExcludeParams(next);
+}
+
+function isStreetClassExclude(value: string): boolean {
+  return value === "motorway" || value === "motorway_link" ||
+    value === "trunk" || value === "trunk_link";
+}
+
 function relaxStreetExcludes(exclude: string, avoidHighways: boolean): string {
   const normalized = normalizeExcludeParams(exclude);
   if (normalized === "") return "";
-  if (!avoidHighways) return "";
-  return normalized.split(",").some((entry) => entry === "motorway")
-    ? "motorway"
-    : normalized;
+  const preserved = normalized.split(",").filter((entry) =>
+    entry.length > 0 &&
+    (
+      !isStreetClassExclude(entry) ||
+      (avoidHighways && isStreetClassExclude(entry))
+    )
+  );
+  return normalizeExcludeParams(preserved.join(","));
 }
 
 function seededBaseBearing(
@@ -221,17 +245,24 @@ function getDistanceConfig(
   mode?: string,
 ): DistanceConfig {
   // Erfolgsquote vor Perfektion: idealer Zielkorridor plus breiterer
-  // akzeptabler Bereich, damit brauchbare Rundkurse nicht zu früh scheitern.
-  const idealTolerance = targetDistance <= 60
-    ? 0.16
-    : targetDistance <= 100
-    ? 0.14
-    : 0.12;
-  const acceptableTolerance = targetDistance <= 60
-    ? 0.32
-    : targetDistance <= 100
-    ? 0.28
-    : 0.24;
+  // akzeptabler Bereich. 50 / 75 / 100 / 150 km bewusst unterschiedlich
+  // staffeln (nicht nur zwei Buckets), damit längere Ziele sichtbar weiter
+  // „ausgreifen“ müssen als kurze 50er-Runden.
+  let idealTolerance: number;
+  let acceptableTolerance: number;
+  if (targetDistance <= 55) {
+    idealTolerance = 0.12;
+    acceptableTolerance = 0.19;
+  } else if (targetDistance <= 85) {
+    idealTolerance = 0.11;
+    acceptableTolerance = 0.175;
+  } else if (targetDistance <= 115) {
+    idealTolerance = 0.10;
+    acceptableTolerance = 0.155;
+  } else {
+    idealTolerance = 0.09;
+    acceptableTolerance = 0.14;
+  }
   const minKm = Math.round(targetDistance * (1 - idealTolerance));
   const maxKm = Math.round(targetDistance * (1 + idealTolerance));
   const acceptableMinKm = Math.round(
@@ -248,16 +279,20 @@ function getDistanceConfig(
   switch (mode) {
     case "Kurvenjagd":
       roadFactor = targetDistance > 110
-        ? 1.56
+        ? 1.60
         : targetDistance <= 60
-        ? 1.62
-        : 1.66; // Mehr Raum für saubere Berg-/Loopformen statt gefalteter Äste
+        ? 1.68
+        : targetDistance <= 90
+        ? 1.73
+        : 1.70; // Mehr Raum für saubere Berg-/Loopformen statt gefalteter Äste
       break;
     case "Entdecker":
       roadFactor = targetDistance > 110
         ? 1.50
         : targetDistance <= 60
         ? 1.54
+        : targetDistance <= 90
+        ? 1.60
         : 1.58; // Etwas weiter greifen, damit Entdecker nicht zu eng faltet
       break;
     case "Abendrunde":
@@ -265,26 +300,32 @@ function getDistanceConfig(
       break;
     case "Sport Mode":
       roadFactor = targetDistance > 110
-        ? 1.20
+        ? 1.22
         : targetDistance <= 60
-        ? 1.52
+        ? 1.46
+        : targetDistance <= 90
+        ? 1.30
         : 1.26; // Gestreckterer Suchraum für flüssige Sport-Loops
       break;
     default:
       roadFactor = 1.25;
   }
-  const shortDistanceBoost = targetDistance <= 60
+  const shortDistanceBoost = targetDistance <= 55
     ? 0.80
-    : targetDistance <= 100
-    ? 0.89
-    : 0.96;
+    : targetDistance <= 85
+    ? 0.87
+    : targetDistance <= 115
+    ? 0.93
+    : 0.98;
   const radiusKm = targetDistance /
     (2 * Math.PI * roadFactor * shortDistanceBoost);
-  let waypointRadiusMeters = targetDistance <= 60
+  let waypointRadiusMeters = targetDistance <= 55
     ? 3200
-    : targetDistance <= 100
-    ? 4200
-    : 5200;
+    : targetDistance <= 85
+    ? 4000
+    : targetDistance <= 115
+    ? 4600
+    : 5400;
   if (mode === "Kurvenjagd") waypointRadiusMeters += 500;
   if (mode === "Entdecker") waypointRadiusMeters += 700;
   if (mode === "Abendrunde") {
@@ -1046,7 +1087,7 @@ function prioritizeCandidatePlans(
   phaseName: string,
   variantHint?: string,
   fingerprintHint?: string,
-  options?: { shortCurvyRoundTripFallback?: boolean },
+  options?: { shortCurvyRoundTripFallback?: boolean; mode?: string },
 ): RoundTripCandidatePlan[] {
   if (plans.length <= 1) return plans;
 
@@ -1066,6 +1107,49 @@ function prioritizeCandidatePlans(
 
   if (remaining.length <= 1) {
     return [...preferred, ...remaining];
+  }
+
+  const normalizedMode = options?.mode?.trim().toLowerCase();
+  const styleOrderTokens = normalizedMode === "kurvenjagd"
+    ? [
+      "curve-zigzag-core",
+      "curve-loop-scout",
+      "curve-orbital-core",
+      "curve-loop-tight",
+      "curve-loop-wide",
+      "curve-triangle",
+    ]
+    : normalizedMode === "sport mode" || normalizedMode === "sport"
+    ? [
+      "sport-cardinal-ellipse",
+      "sport-loop-flow",
+      "sport-orbital-flow",
+      "sport-loop-wide",
+      "sport-loop-extended",
+      "sport-loop-scout",
+    ]
+    : normalizedMode === "abendrunde"
+    ? [
+      "evening-cardinal-soft",
+      "evening-triangle-compact",
+      "evening-orbital-soft",
+      "evening-loop-soft",
+    ]
+    : normalizedMode === "entdecker"
+    ? [
+      "explore-loop-scout",
+      "explore-orbital-wide",
+      "explore-loop-wide",
+      "explore-loop-far",
+    ]
+    : [];
+  const styleRank = (label: string): number => {
+    const lower = label.toLowerCase();
+    const index = styleOrderTokens.findIndex((token) => lower.includes(token));
+    return index >= 0 ? index : styleOrderTokens.length;
+  };
+  if (styleOrderTokens.length > 0) {
+    remaining.sort((a, b) => styleRank(a.label) - styleRank(b.label));
   }
 
   const safer = remaining.filter((plan) => {
@@ -1150,11 +1234,11 @@ function buildPointToPointScenicWaypoints({
   // Klein zielt auf 1.32× direkt, Mittel auf 1.65×, Groß auf 2.10×.
   // (Vorher 1.26 / 1.40 / 1.70 → Groß war zu nah an Mittel.)
   const detourBoost = detourLevel === 1
-    ? 0.32
+    ? 0.36
     : detourLevel === 2
-    ? 0.55
+    ? 0.62
     : detourLevel >= 3
-    ? 0.95
+    ? 1.08
     : 0.0;
 
   const effectiveFactor = Math.max(
@@ -1166,11 +1250,11 @@ function buildPointToPointScenicWaypoints({
     directDistanceKm * effectiveFactor,
   );
   const minimumExtraDistanceKm = detourLevel === 1
-    ? 6.5
+    ? 7.0
     : detourLevel === 2
-    ? 12.0
+    ? 13.5
     : detourLevel >= 3
-    ? 22.0
+    ? 24.0
     : 3.0;
   let extraDistanceKm = Math.max(
     minimumExtraDistanceKm,
@@ -1236,11 +1320,11 @@ function buildPointToPointScenicWaypoints({
 
   const baseBearing = calculateBearing(start, destination);
   const corridorBearingBias = detourLevel >= 3
-    ? 26
+    ? 32
     : detourLevel === 2
-    ? 18
+    ? 22
     : detourLevel === 1
-    ? 10
+    ? 14
     : 0;
   // Seite determiniert durch Seed — aber bei Entdecker wechselnd pro WP
   const requestedOffsetSide = offsetSide === -1
@@ -1936,8 +2020,9 @@ function evaluateRouteQuality(
   // Tal-Geometrie (Dornbirn/Bregenzerwald): 16 fängt Kraken, verschenkt aber
   // keine gültigen Kurven-Loops.
   const isCurveChase = options?.mode === "Kurvenjagd";
+  const isSportMode = options?.mode === "Sport Mode";
   const overlapThreshold = routeType === "ROUND_TRIP"
-    ? (isCurveChase ? 16 : 18)
+    ? (isCurveChase ? 15 : 16)
     : (isCurveChase ? 12 : 14);
   const targetDistanceKm = options?.targetDistanceKm ?? 0;
   const distanceConfig = options?.distanceConfig;
@@ -1959,13 +2044,19 @@ function evaluateRouteQuality(
     (
       shapeSignals.centerReentryCount >= 4 ||
       (shapeSignals.radialPeakCount >= (isCurveChase ? 3 : 4) &&
-        shapeSignals.middleCoverageRatio < 0.30) ||
+        shapeSignals.middleCoverageRatio < 0.34) ||
       (shapeSignals.middleCoverageRatio < 0.18 &&
-        shapeSignals.centralReturnPercent > 18)
+        shapeSignals.centralReturnPercent > 18) ||
+      (shapeSignals.centralReturnPercent > 28 &&
+        shapeSignals.middleCoverageRatio < 0.26) ||
+      // Sport: offene Stern-/Vielarm-Formen ohne ausreichende Loop-Fläche
+      (isSportMode === true &&
+        shapeSignals.radialPeakCount >= 4 &&
+        shapeSignals.middleCoverageRatio < 0.33)
     );
   const severeCentralReturn = routeType === "ROUND_TRIP"
     ? (
-      shapeSignals.centralReturnPercent > (isCurveChase ? 32 : 36) ||
+      shapeSignals.centralReturnPercent > (isCurveChase ? 30 : 35) ||
       (
         shapeSignals.centralReturnPercent > (isCurveChase ? 22 : 24) &&
         (
@@ -2057,28 +2148,28 @@ function evaluateRouteQuality(
     (actualDistanceKm >= distanceConfig.acceptableMinKm &&
       actualDistanceKm <= distanceConfig.acceptableMaxKm);
   const severeOverlap = overlapPercent > 52;
-  const acceptableOverlap = overlapPercent <= 36;
+  const goodTierOverlapOk = overlapPercent <= (isCurveChase ? 26 : 28);
   const idealOverlap = overlapPercent <= overlapThreshold;
   const severeCoordinateThreshold = targetDistanceKm <= 60
-    ? 16
+    ? 17
     : targetDistanceKm <= 100
-    ? 18
-    : 22;
+    ? 19
+    : 23;
   const weakGeometryThreshold = targetDistanceKm <= 60
-    ? 22
+    ? 23
     : targetDistanceKm <= 100
-    ? 26
-    : 30;
+    ? 27
+    : 31;
   const severeCoordinateShortage =
     coordinateCount < severeCoordinateThreshold && actualDistanceKm > 8;
   const weakGeometry = coordinateCount < weakGeometryThreshold &&
     actualDistanceKm > 15;
   const hardDistanceMin = targetDistanceKm <= 0 ? 0 : targetDistanceKm *
-    (targetDistanceKm <= 60 ? 0.68 : targetDistanceKm <= 100 ? 0.72 : 0.68);
+    (targetDistanceKm <= 60 ? 0.70 : targetDistanceKm <= 100 ? 0.74 : 0.76);
   const hardDistanceMax = targetDistanceKm <= 0
     ? Number.POSITIVE_INFINITY
     : targetDistanceKm *
-      (targetDistanceKm <= 60 ? 1.40 : targetDistanceKm <= 100 ? 1.42 : 1.40);
+      (targetDistanceKm <= 60 ? 1.36 : targetDistanceKm <= 100 ? 1.34 : 1.30);
   const severeDistanceMiss = targetDistanceKm > 0 &&
     (actualDistanceKm < hardDistanceMin || actualDistanceKm > hardDistanceMax);
 
@@ -2147,9 +2238,9 @@ function evaluateRouteQuality(
       distanceDeltaKm,
     };
   }
-  const branchPenalty = shapeSignals.centerReentryCount * 16 +
-    Math.max(0, shapeSignals.radialPeakCount - 1) * 8 +
-    Math.max(0, 0.48 - shapeSignals.middleCoverageRatio) * 80;
+  const branchPenalty = shapeSignals.centerReentryCount * 17 +
+    Math.max(0, shapeSignals.radialPeakCount - 1) * 9 +
+    Math.max(0, 0.50 - shapeSignals.middleCoverageRatio) * 86;
   if (severeRoundTripShape) {
     return {
       passed: false,
@@ -2189,24 +2280,24 @@ function evaluateRouteQuality(
     coordinateCount >= 38 &&
     shapeSignals.angularRoughness <= 62 &&
     shapeSignals.sharpTurnRate <= 34 &&
-    shapeSignals.centralReturnPercent <= 12 &&
+    shapeSignals.centralReturnPercent <= 10 &&
     shapeSignals.hookCount <= 1 &&
     shapeSignals.centerReentryCount <= 1 &&
-    shapeSignals.radialPeakCount <= 3 &&
-    shapeSignals.middleCoverageRatio >= 0.46
+    shapeSignals.radialPeakCount <= 2 &&
+    shapeSignals.middleCoverageRatio >= 0.48
   ) {
     tier = "ideal";
   } else if (
     withinAcceptableDistance &&
-    acceptableOverlap &&
+    goodTierOverlapOk &&
     !weakGeometry &&
     shapeSignals.angularRoughness <= 74 &&
     shapeSignals.sharpTurnRate <= 44 &&
-    shapeSignals.centralReturnPercent <= 18 &&
+    shapeSignals.centralReturnPercent <= 17 &&
     shapeSignals.hookCount <= 3 &&
     shapeSignals.centerReentryCount <= 2 &&
     shapeSignals.radialPeakCount <= 4 &&
-    shapeSignals.middleCoverageRatio >= 0.34
+    shapeSignals.middleCoverageRatio >= 0.36
   ) {
     tier = "good";
   }
@@ -2248,10 +2339,10 @@ function widenDistanceConfigForRoundTripSearch(
   targetDistanceKm: number,
   phase: "balanced" | "fallback",
 ): DistanceConfig {
-  const minFactor = phase === "fallback" ? 0.76 : 0.82;
-  const maxFactor = phase === "fallback" ? 1.26 : 1.20;
-  const radiusMultiplier = phase === "fallback" ? 1.14 : 1.08;
-  const snapMultiplier = phase === "fallback" ? 1.20 : 1.14;
+  const minFactor = phase === "fallback" ? 0.80 : 0.84;
+  const maxFactor = phase === "fallback" ? 1.22 : 1.16;
+  const radiusMultiplier = phase === "fallback" ? 1.12 : 1.06;
+  const snapMultiplier = phase === "fallback" ? 1.16 : 1.10;
 
   return {
     radiusKm: base.radiusKm * radiusMultiplier,
@@ -2487,9 +2578,11 @@ async function searchBestRoundTripRoute({
       phase.name,
       normalizedVariantHint,
       normalizedFingerprintHint,
-      phase.name === "fallback" && shortCurvySearch
-        ? { shortCurvyRoundTripFallback: true }
-        : undefined,
+      {
+        mode,
+        shortCurvyRoundTripFallback: phase.name === "fallback" &&
+          shortCurvySearch,
+      },
     );
     // Pro Phase 2-3 Versuche. WICHTIG: Fair-Share-Guard reserviert für
     // jede spätere Phase MINDESTENS 2 Versuche (vorher: 1), damit der
@@ -2717,8 +2810,7 @@ async function searchBestRoundTripRoute({
         balancedHasPresentableCandidate = true;
       }
 
-      const shouldStopAfterGoodCandidate =
-        quality.tier === "ideal" ||
+      const shouldStopAfterGoodCandidate = quality.tier === "ideal" ||
         (
           quality.tier === "good" &&
           candidateAttempts >=
@@ -3111,27 +3203,33 @@ Deno.serve(async (req) => {
       } else if (mode === "Entdecker") {
         excludeParams = "";
       }
-      excludeParams = avoidHighways
-        ? addExcludeParam(excludeParams, "motorway")
-        : removeExcludeParam(excludeParams, "motorway");
+      excludeParams = applyAvoidHighwaysExcludes(
+        excludeParams,
+        avoidHighways,
+      );
     }
 
     if (planning_type === "Zufall") {
       if (currentRouteType === "POINT_TO_POINT") {
         // A→B: direkte Straßenroute, optional ohne Autobahnen.
-        // Wir behalten Stil-Excludes (ferry/unpaved) bei, sodass der
-        // Autobahn-Toggle nicht versehentlich Schotter/Fähren freischaltet.
-        mapboxProfile = "mapbox/driving";
+        // Stil-Excludes wie beim Rundkurs, damit Kurvenjagd/Sport/Entdecker
+        // technisch spürbar auseinanderlaufen (nicht nur Waypoint-Form).
+        mapboxProfile = mode === "Abendrunde"
+          ? "mapbox/driving-traffic"
+          : "mapbox/driving";
         const stylePointToPointBase = mode === "Sport Mode"
           ? "ferry,unpaved"
           : mode === "Kurvenjagd"
           ? "ferry"
+          : mode === "Entdecker"
+          ? "toll"
           : mode === "Abendrunde"
           ? "ferry,unpaved"
           : "ferry";
-        excludeParams = avoidHighways
-          ? addExcludeParam(stylePointToPointBase, "motorway")
-          : stylePointToPointBase;
+        excludeParams = applyAvoidHighwaysExcludes(
+          stylePointToPointBase,
+          avoidHighways,
+        );
         if (!body.destination_location) {
           throw new Error(
             "For 'POINT_TO_POINT' planning, a destination_location is required.",
@@ -3211,6 +3309,23 @@ Deno.serve(async (req) => {
         "Invalid planning_type. Must be 'Zufall' or 'Wegpunkte'.",
       );
     }
+
+    console.log(
+      "[RoutingResolvedConfig]",
+      JSON.stringify({
+        routeType: currentRouteType,
+        mode: mode ?? "Standard",
+        planningType: planning_type,
+        styleProfile: body.style_profile ?? null,
+        avoidHighwaysRequested: avoidHighways,
+        mapboxProfile,
+        effectiveExcludes: excludeParams || "none",
+        simplifyWaypoints: body.simplify_waypoints === true,
+        maxWaypoints: body.max_waypoints ?? null,
+        targetDistance: targetDistance ?? null,
+        effectiveTargetDistanceKm,
+      }),
+    );
 
     // Radiuses: Start/Ende unlimited (echte GPS-Position), Zwischenpunkte max 1000m
     // Kleiner Radius = Waypoints müssen nahe einer Straße liegen → verhindert "Abkürzungen"
@@ -3677,7 +3792,7 @@ Deno.serve(async (req) => {
       route = await getMapboxRoute(
         fallbackWaypoints,
         mapboxProfile,
-        avoidHighways ? "motorway" : "",
+        applyAvoidHighwaysExcludes(excludeParams, avoidHighways),
         fallbackRadiuses,
         MAPBOX_ACCESS_TOKEN,
         {
@@ -3745,6 +3860,25 @@ Deno.serve(async (req) => {
       distanceConfig &&
       !skipPostSearchScaling
     ) {
+      const scalingTargetKm = effectiveTargetDistanceKm ?? targetDistance!;
+      const isWithinPreferredScalingBand = (distanceKm: number): boolean => {
+        const preferredMinKm = avoidHighways
+          ? Math.min(
+            distanceConfig.acceptableMinKm,
+            Math.round(scalingTargetKm * 0.64),
+          )
+          : Math.max(0, distanceConfig.acceptableMinKm - 1);
+        const preferredMaxKm = avoidHighways
+          ? Math.max(
+            distanceConfig.acceptableMaxKm,
+            Math.round(scalingTargetKm * 1.38),
+          )
+          : distanceConfig.acceptableMaxKm + 2;
+        return distanceKm >= preferredMinKm && distanceKm <= preferredMaxKm;
+      };
+      let bestScaledRoute = route;
+      let bestScaledWaypoints = finalWaypoints;
+      let bestScaledDistanceKm = actualDistanceKm;
       let attempts = 0;
       const maxAttempts = avoidHighways ? 5 : 4;
       while (
@@ -3834,6 +3968,7 @@ Deno.serve(async (req) => {
         const scaledQuality = evaluateRouteQuality(newRoute, currentRouteType, {
           targetDistanceKm: effectiveTargetDistanceKm ?? targetDistance,
           distanceConfig,
+          mode,
         });
         if (!scaledQuality.passed) {
           console.log(
@@ -3844,11 +3979,31 @@ Deno.serve(async (req) => {
           break;
         }
 
+        actualDistanceKm = (newRoute.distance as number) / 1000;
+        const bestDeltaKm = Math.abs(bestScaledDistanceKm - scalingTargetKm);
+        const candidateDeltaKm = Math.abs(actualDistanceKm - scalingTargetKm);
+        const bestInPreferredBand = isWithinPreferredScalingBand(
+          bestScaledDistanceKm,
+        );
+        const candidateInPreferredBand = isWithinPreferredScalingBand(
+          actualDistanceKm,
+        );
+        if (
+          (candidateInPreferredBand && !bestInPreferredBand) ||
+          candidateDeltaKm + 0.25 < bestDeltaKm
+        ) {
+          bestScaledRoute = newRoute;
+          bestScaledWaypoints = scaledWaypoints;
+          bestScaledDistanceKm = actualDistanceKm;
+        }
+
         route = newRoute;
         finalWaypoints = scaledWaypoints;
-        actualDistanceKm = (newRoute.distance as number) / 1000;
         attempts += 1;
       }
+      route = bestScaledRoute;
+      finalWaypoints = bestScaledWaypoints;
+      actualDistanceKm = bestScaledDistanceKm;
       console.log(
         `Distance scaling done after ${attempts} attempts: ${
           actualDistanceKm.toFixed(1)
@@ -3909,6 +4064,7 @@ Deno.serve(async (req) => {
       distanceConfig: currentRouteType === "ROUND_TRIP"
         ? distanceConfig ?? undefined
         : undefined,
+      mode: currentRouteType === "ROUND_TRIP" ? mode : undefined,
     });
     if (!finalQuality.passed) {
       console.error(`Route quality too low: ${finalQuality.reason}`);
@@ -3940,6 +4096,7 @@ Deno.serve(async (req) => {
           duration_min: route.duration / 60,
           profile: mapboxProfile.replace("mapbox/", ""),
           mode: mode,
+          style_profile: body.style_profile ?? null,
           route_type: currentRouteType,
           detour_level: detourLevel,
           avoid_highways_requested: avoidHighways,
