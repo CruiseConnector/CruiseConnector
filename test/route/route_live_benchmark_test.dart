@@ -125,54 +125,87 @@ List<_Scenario> _buildScenarios() {
   final bregenz = _position(47.5031, 9.7471);
 
   final scenarios = <_Scenario>[];
-  for (var i = 0; i < 20; i++) {
-    scenarios.add(
-      _Scenario(
-        name: 'RT Dornbirn 50 Sport',
-        routeType: 'ROUND_TRIP',
-        run: i + 1,
-        start: dornbirn,
-        targetDistanceKm: 50,
-        mode: 'Sport Mode',
-      ),
-    );
+  void addRoundTripScenario({
+    required String name,
+    required geo.Position start,
+    required int targetDistanceKm,
+    required String mode,
+    required int runs,
+    bool avoidHighways = false,
+  }) {
+    for (var i = 0; i < runs; i++) {
+      scenarios.add(
+        _Scenario(
+          name: name,
+          routeType: 'ROUND_TRIP',
+          run: i + 1,
+          start: start,
+          targetDistanceKm: targetDistanceKm,
+          mode: mode,
+          avoidHighways: avoidHighways,
+        ),
+      );
+    }
   }
-  for (var i = 0; i < 20; i++) {
-    scenarios.add(
-      _Scenario(
-        name: 'RT Dornbirn 50 Kurvenjagd',
-        routeType: 'ROUND_TRIP',
-        run: i + 1,
-        start: dornbirn,
-        targetDistanceKm: 50,
-        mode: 'Kurvenjagd',
-      ),
-    );
-  }
-  for (var i = 0; i < 15; i++) {
-    scenarios.add(
-      _Scenario(
-        name: 'RT Feldkirch 50 Sport',
-        routeType: 'ROUND_TRIP',
-        run: i + 1,
-        start: feldkirch,
-        targetDistanceKm: 50,
-        mode: 'Sport Mode',
-      ),
-    );
-  }
-  for (var i = 0; i < 15; i++) {
-    scenarios.add(
-      _Scenario(
-        name: 'RT Bregenz 50 Sport',
-        routeType: 'ROUND_TRIP',
-        run: i + 1,
-        start: bregenz,
-        targetDistanceKm: 50,
-        mode: 'Sport Mode',
-      ),
-    );
-  }
+
+  addRoundTripScenario(
+    name: 'RT Dornbirn 50 Sport mit Autobahn',
+    start: dornbirn,
+    targetDistanceKm: 50,
+    mode: 'Sport Mode',
+    runs: 5,
+    avoidHighways: false,
+  );
+  addRoundTripScenario(
+    name: 'RT Dornbirn 50 Sport ohne Autobahn',
+    start: dornbirn,
+    targetDistanceKm: 50,
+    mode: 'Sport Mode',
+    runs: 5,
+    avoidHighways: true,
+  );
+  addRoundTripScenario(
+    name: 'RT Dornbirn 50 Kurvenjagd',
+    start: dornbirn,
+    targetDistanceKm: 50,
+    mode: 'Kurvenjagd',
+    runs: 5,
+  );
+  addRoundTripScenario(
+    name: 'RT Dornbirn 75 Sport',
+    start: dornbirn,
+    targetDistanceKm: 75,
+    mode: 'Sport Mode',
+    runs: 5,
+  );
+  addRoundTripScenario(
+    name: 'RT Dornbirn 100 Sport',
+    start: dornbirn,
+    targetDistanceKm: 100,
+    mode: 'Sport Mode',
+    runs: 3,
+  );
+  addRoundTripScenario(
+    name: 'RT Dornbirn 150 Sport',
+    start: dornbirn,
+    targetDistanceKm: 150,
+    mode: 'Sport Mode',
+    runs: 3,
+  );
+  addRoundTripScenario(
+    name: 'RT Feldkirch 50 Sport',
+    start: feldkirch,
+    targetDistanceKm: 50,
+    mode: 'Sport Mode',
+    runs: 5,
+  );
+  addRoundTripScenario(
+    name: 'RT Bregenz 50 Sport',
+    start: bregenz,
+    targetDistanceKm: 50,
+    mode: 'Sport Mode',
+    runs: 5,
+  );
 
   final pairs = [
     ('AB Dornbirn->Feldkirch', dornbirn, feldkirch),
@@ -286,6 +319,11 @@ void main() {
     'BENCHMARK_OUTPUT',
     defaultValue: '/tmp/route-benchmark-live.json',
   );
+  /// Nur A→B-Szenarien (Check-Matrix Dornbirn→Feldkirch/Bregenz), ohne Rundkurs.
+  const benchmarkP2pOnly = bool.fromEnvironment(
+    'BENCHMARK_P2P_ONLY',
+    defaultValue: false,
+  );
 
   test(
     'live routing benchmark matrix',
@@ -297,7 +335,15 @@ void main() {
       final endpoint = Uri.parse(endpointValue);
       final validator = const RouteQualityValidator();
       final scenarios = _buildScenarios();
-      var selectedScenarios = (smoke ? scenarios.take(8) : scenarios).toList();
+      var selectedScenarios = scenarios.toList();
+      if (benchmarkP2pOnly) {
+        selectedScenarios = selectedScenarios
+            .where((s) => s.routeType == 'POINT_TO_POINT')
+            .toList();
+      }
+      if (smoke) {
+        selectedScenarios = selectedScenarios.take(8).toList();
+      }
       if (benchmarkScenario.isNotEmpty) {
         selectedScenarios = selectedScenarios
             .where((scenario) => scenario.name == benchmarkScenario)
@@ -345,6 +391,7 @@ void main() {
         String? errorMessage;
         String? fingerprint;
         double? similarityToPreviousPercent;
+        bool? distanceOkay;
         bool? motorwayExcludeActive;
         bool? styleEffective;
         bool? geometryDifferent = scenario.routeType == 'ROUND_TRIP'
@@ -373,6 +420,7 @@ void main() {
               actualDistanceKm: result.distanceKm ?? 0.0,
             );
             overlapPercent = quality.overlapPercent;
+            distanceOkay = quality.distanceInTolerance;
             final classification = validator.classifyGeneratedRoute(
               quality: quality,
               isRoundTrip: true,
@@ -410,8 +458,10 @@ void main() {
                 .toList();
             final excludes = result.edgeMeta['effective_excludes']?.toString();
             motorwayExcludeActive = scenario.avoidHighways
-                ? excludes?.contains('motorway') ?? false
-                : !(excludes?.contains('motorway') ?? false);
+                ? (excludes?.contains('motorway') ?? false) ||
+                      (excludes?.contains('motorway_link') ?? false)
+                : !(excludes?.contains('motorway') ?? false) &&
+                      !(excludes?.contains('motorway_link') ?? false);
             styleEffective =
                 (result.edgeMeta['mode']?.toString() ?? '') == scenario.mode;
           } else {
@@ -436,6 +486,7 @@ void main() {
               actualDistanceKm: result.distanceKm ?? 0.0,
             );
             overlapPercent = quality.overlapPercent;
+            distanceOkay = quality.distanceInTolerance;
             final classification = validator.classifyGeneratedRoute(
               quality: quality,
               isRoundTrip: false,
@@ -453,8 +504,10 @@ void main() {
             }
             final excludes = result.edgeMeta['effective_excludes']?.toString();
             motorwayExcludeActive = scenario.avoidHighways
-                ? excludes?.contains('motorway') ?? false
-                : !(excludes?.contains('motorway') ?? false);
+                ? (excludes?.contains('motorway') ?? false) ||
+                      (excludes?.contains('motorway_link') ?? false)
+                : !(excludes?.contains('motorway') ?? false) &&
+                      !(excludes?.contains('motorway_link') ?? false);
             styleEffective = scenario.detourLevel <= 0
                 ? (result.edgeMeta['mode']?.toString() ?? '') == 'Standard'
                 : (result.edgeMeta['mode']?.toString() ?? '') == scenario.mode;
@@ -501,6 +554,7 @@ void main() {
           'fingerprint': fingerprint,
           'similarityToPreviousPercent': similarityToPreviousPercent,
           'variantGroup': scenario.variantGroup,
+          'distanceOkay': distanceOkay,
           'motorwayExcludeActive': motorwayExcludeActive,
           'styleEffective': styleEffective,
           'geometryDifferent': geometryDifferent,
