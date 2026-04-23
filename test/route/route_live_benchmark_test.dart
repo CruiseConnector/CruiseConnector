@@ -5,10 +5,16 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:functions_client/functions_client.dart';
 import 'package:geolocator/geolocator.dart' as geo;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:cruise_connect/core/constants.dart';
 import 'package:cruise_connect/data/services/route_quality_validator.dart';
+import 'package:cruise_connect/data/services/route_pool_service.dart';
+import 'package:cruise_connect/data/services/route_scenario.dart';
 import 'package:cruise_connect/data/services/route_service.dart';
+import 'package:cruise_connect/domain/models/route_pool_entry.dart';
+import 'package:cruise_connect/domain/models/route_region.dart';
+import 'package:cruise_connect/domain/models/route_result.dart';
 
 class _LiveHttpInvoker implements RouteEdgeInvoker {
   _LiveHttpInvoker(this.endpoint);
@@ -16,6 +22,7 @@ class _LiveHttpInvoker implements RouteEdgeInvoker {
   final Uri endpoint;
   int _callCount = 0;
   bool _printedSampleBody = false;
+  final List<Map<String, dynamic>> _requestBodies = [];
 
   int takeCallCount() {
     final count = _callCount;
@@ -23,9 +30,18 @@ class _LiveHttpInvoker implements RouteEdgeInvoker {
     return count;
   }
 
+  List<Map<String, dynamic>> takeRequestBodies() {
+    final bodies = List<Map<String, dynamic>>.from(_requestBodies);
+    _requestBodies.clear();
+    return bodies;
+  }
+
+  String get debugEndpoint => endpoint.toString();
+
   @override
   Future<dynamic> invoke(Map<String, dynamic> body) async {
     _callCount += 1;
+    _requestBodies.add(Map<String, dynamic>.from(body));
     if (!_printedSampleBody) {
       _printedSampleBody = true;
       // ignore: avoid_print
@@ -119,10 +135,80 @@ geo.Position _position(double lat, double lng) => geo.Position(
   speedAccuracy: 0,
 );
 
+RoutePoolService _seededRoutePoolServiceForBenchmark() {
+  final seedFile = File('supabase/seed/route_pool_vorarlberg.json');
+  if (!seedFile.existsSync()) return RoutePoolService();
+
+  final seed = jsonDecode(seedFile.readAsStringSync()) as Map<String, dynamic>;
+  final routes = (seed['routes'] as List? ?? const [])
+      .cast<Map>()
+      .map((route) {
+        final json = Map<String, dynamic>.from(route);
+        json['id'] ??= json['route_fingerprint'];
+        return RoutePoolEntry.fromJson(json);
+      })
+      .toList(growable: false);
+  if (routes.isEmpty) return RoutePoolService();
+
+  return RoutePoolService(
+    inMemoryRoutes: routes,
+    inMemoryRegions: const [
+      RouteRegion(
+        countryCode: 'AT',
+        admin1Name: 'Vorarlberg',
+        admin2Name: 'Bregenz',
+        cityCluster: 'Bregenz',
+        centerLat: 47.5031,
+        centerLng: 9.7471,
+        fallbackRadiusKm: 30,
+      ),
+      RouteRegion(
+        countryCode: 'AT',
+        admin1Name: 'Vorarlberg',
+        admin2Name: 'Dornbirn',
+        cityCluster: 'Dornbirn',
+        centerLat: 47.4125,
+        centerLng: 9.7414,
+        fallbackRadiusKm: 30,
+      ),
+      RouteRegion(
+        countryCode: 'AT',
+        admin1Name: 'Vorarlberg',
+        admin2Name: 'Feldkirch',
+        cityCluster: 'Feldkirch',
+        centerLat: 47.2386,
+        centerLng: 9.5986,
+        fallbackRadiusKm: 30,
+      ),
+      RouteRegion(
+        countryCode: 'AT',
+        admin1Name: 'Vorarlberg',
+        admin2Name: 'Bludenz',
+        cityCluster: 'Bludenz',
+        centerLat: 47.1548,
+        centerLng: 9.8220,
+        fallbackRadiusKm: 35,
+      ),
+      RouteRegion(
+        countryCode: 'AT',
+        admin1Name: 'Vorarlberg',
+        admin2Name: 'Rheintal-Sued',
+        cityCluster: 'Rheintal-Sued',
+        centerLat: 47.3499,
+        centerLng: 9.6584,
+        fallbackRadiusKm: 12,
+      ),
+    ],
+  );
+}
+
 List<_Scenario> _buildScenarios() {
   final dornbirn = _position(47.4125, 9.7414);
+  final goetzis = _position(47.3331, 9.6336);
+  final hohenems = _position(47.3667, 9.6831);
   final feldkirch = _position(47.2413, 9.5986);
   final bregenz = _position(47.5031, 9.7471);
+  final bludenz = _position(47.1548, 9.8220);
 
   final scenarios = <_Scenario>[];
   void addRoundTripScenario({
@@ -149,6 +235,30 @@ List<_Scenario> _buildScenarios() {
   }
 
   addRoundTripScenario(
+    name: 'RT Goetzis 50 Kurvenjagd ohne Autobahn',
+    start: goetzis,
+    targetDistanceKm: 50,
+    mode: 'Kurvenjagd',
+    runs: 5,
+    avoidHighways: true,
+  );
+  addRoundTripScenario(
+    name: 'RT Goetzis 50 Sport ohne Autobahn',
+    start: goetzis,
+    targetDistanceKm: 50,
+    mode: 'Sport Mode',
+    runs: 5,
+    avoidHighways: true,
+  );
+  addRoundTripScenario(
+    name: 'RT Hohenems 50 Sport ohne Autobahn',
+    start: hohenems,
+    targetDistanceKm: 50,
+    mode: 'Sport Mode',
+    runs: 5,
+    avoidHighways: true,
+  );
+  addRoundTripScenario(
     name: 'RT Dornbirn 50 Sport mit Autobahn',
     start: dornbirn,
     targetDistanceKm: 50,
@@ -165,46 +275,100 @@ List<_Scenario> _buildScenarios() {
     avoidHighways: true,
   );
   addRoundTripScenario(
-    name: 'RT Dornbirn 50 Kurvenjagd',
+    name: 'RT Dornbirn 50 Kurvenjagd ohne Autobahn',
     start: dornbirn,
     targetDistanceKm: 50,
     mode: 'Kurvenjagd',
     runs: 5,
+    avoidHighways: true,
   );
   addRoundTripScenario(
-    name: 'RT Dornbirn 75 Sport',
+    name: 'RT Dornbirn 75 Sport ohne Autobahn',
     start: dornbirn,
     targetDistanceKm: 75,
     mode: 'Sport Mode',
     runs: 5,
+    avoidHighways: true,
   );
   addRoundTripScenario(
-    name: 'RT Dornbirn 100 Sport',
+    name: 'RT Dornbirn 75 Kurvenjagd ohne Autobahn',
+    start: dornbirn,
+    targetDistanceKm: 75,
+    mode: 'Kurvenjagd',
+    runs: 5,
+    avoidHighways: true,
+  );
+  addRoundTripScenario(
+    name: 'RT Dornbirn 100 Sport ohne Autobahn',
     start: dornbirn,
     targetDistanceKm: 100,
     mode: 'Sport Mode',
-    runs: 3,
-  );
-  addRoundTripScenario(
-    name: 'RT Dornbirn 150 Sport',
-    start: dornbirn,
-    targetDistanceKm: 150,
-    mode: 'Sport Mode',
-    runs: 3,
-  );
-  addRoundTripScenario(
-    name: 'RT Feldkirch 50 Sport',
-    start: feldkirch,
-    targetDistanceKm: 50,
-    mode: 'Sport Mode',
     runs: 5,
+    avoidHighways: true,
   );
   addRoundTripScenario(
-    name: 'RT Bregenz 50 Sport',
+    name: 'RT Dornbirn 100 Kurvenjagd ohne Autobahn',
+    start: dornbirn,
+    targetDistanceKm: 100,
+    mode: 'Kurvenjagd',
+    runs: 5,
+    avoidHighways: true,
+  );
+  addRoundTripScenario(
+    name: 'RT Bregenz 50 Sport ohne Autobahn',
     start: bregenz,
     targetDistanceKm: 50,
     mode: 'Sport Mode',
+    runs: 3,
+    avoidHighways: true,
+  );
+  addRoundTripScenario(
+    name: 'RT Bregenz 75 Kurvenjagd ohne Autobahn',
+    start: bregenz,
+    targetDistanceKm: 75,
+    mode: 'Kurvenjagd',
     runs: 5,
+    avoidHighways: true,
+  );
+  addRoundTripScenario(
+    name: 'RT Feldkirch 50 Sport ohne Autobahn',
+    start: feldkirch,
+    targetDistanceKm: 50,
+    mode: 'Sport Mode',
+    runs: 3,
+    avoidHighways: true,
+  );
+  addRoundTripScenario(
+    name: 'RT Feldkirch 75 Sport ohne Autobahn',
+    start: feldkirch,
+    targetDistanceKm: 75,
+    mode: 'Sport Mode',
+    runs: 5,
+    avoidHighways: true,
+  );
+  addRoundTripScenario(
+    name: 'RT Bludenz 50 Sport ohne Autobahn',
+    start: bludenz,
+    targetDistanceKm: 50,
+    mode: 'Sport Mode',
+    runs: 5,
+    avoidHighways: true,
+  );
+  addRoundTripScenario(
+    name: 'RT Bludenz 75 Sport ohne Autobahn',
+    start: bludenz,
+    targetDistanceKm: 75,
+    mode: 'Sport Mode',
+    runs: 5,
+    avoidHighways: true,
+  );
+  addRoundTripScenario(
+    name: 'RT Bludenz 100 Sport ohne Autobahn',
+    start: bludenz,
+    targetDistanceKm: 100,
+    mode: 'Sport Mode',
+    runs: 3,
+    avoidHighways: true,
   );
 
   final pairs = [
@@ -319,9 +483,14 @@ void main() {
     'BENCHMARK_OUTPUT',
     defaultValue: '/tmp/route-benchmark-live.json',
   );
+
   /// Nur A→B-Szenarien (Check-Matrix Dornbirn→Feldkirch/Bregenz), ohne Rundkurs.
   const benchmarkP2pOnly = bool.fromEnvironment(
     'BENCHMARK_P2P_ONLY',
+    defaultValue: false,
+  );
+  const benchmarkUiSequence = bool.fromEnvironment(
+    'BENCHMARK_UI_SEQUENCE',
     defaultValue: false,
   );
 
@@ -331,9 +500,280 @@ void main() {
     () async {
       RouteService.disableBackgroundPreparation = !warm;
       SharedPreferences.setMockInitialValues({});
+      await Supabase.initialize(
+        url: AppConstants.supabaseUrl,
+        anonKey: AppConstants.supabaseAnonKey,
+        debug: false,
+      );
       RouteService.resetForTests();
       final endpoint = Uri.parse(endpointValue);
-      final validator = const RouteQualityValidator();
+      const validator = RouteQualityValidator();
+      if (benchmarkUiSequence) {
+        final dornbirn = _position(47.4125, 9.7414);
+        final invoker = _LiveHttpInvoker(endpoint);
+        final service = RouteService(
+          invoker: invoker,
+          routePoolService: _seededRoutePoolServiceForBenchmark(),
+        );
+        const sequence = <({String label, int km, String mode, bool avoid})>[
+          (
+            label: '1 50 Sport Autobahn AN',
+            km: 50,
+            mode: 'Sport Mode',
+            avoid: false,
+          ),
+          (label: '2 nochmal suchen', km: 50, mode: 'Sport Mode', avoid: false),
+          (label: '3 Autobahn AUS', km: 50, mode: 'Sport Mode', avoid: true),
+          (label: '4 Kurvenjagd AUS', km: 50, mode: 'Kurvenjagd', avoid: true),
+          (label: '5 Abendrunde AUS', km: 50, mode: 'Abendrunde', avoid: true),
+          (
+            label: '6 100 Kurvenjagd AUS',
+            km: 100,
+            mode: 'Kurvenjagd',
+            avoid: true,
+          ),
+        ];
+        final rows = <Map<String, dynamic>>[];
+        RouteResult? previous;
+        String? previousScenarioKey;
+        String? previousVariantHint;
+        String? previousFingerprintHint;
+        int? previousKm;
+        String? previousStyle;
+        bool? previousAvoidHighways;
+
+        for (var index = 0; index < sequence.length; index++) {
+          final step = sequence[index];
+          final forceFreshVariant = previous != null;
+          final settingsChanged =
+              previous != null &&
+              (previousKm != step.km ||
+                  previousStyle != step.mode ||
+                  previousAvoidHighways != step.avoid);
+          final trigger = previous == null
+              ? 'firstSearch'
+              : settingsChanged
+              ? 'settingsChanged'
+              : 'searchAgain';
+          final scenario = RouteScenario(
+            routeType: 'ROUND_TRIP',
+            startLatitude: dornbirn.latitude,
+            startLongitude: dornbirn.longitude,
+            style: step.mode,
+            planningType: 'Zufall',
+            targetDistanceKm: step.km.toDouble(),
+            avoidHighways: step.avoid,
+          );
+          final stopwatch = Stopwatch()..start();
+          var success = false;
+          String? errorCode;
+          String? errorMessage;
+          double? distanceKm;
+          double? similarityToPreviousPercent;
+          String? fingerprint;
+          String? effectiveExcludes;
+          String? edgeRoutingBuildId;
+          bool? avoidHighwaysRequested;
+          String? variantHint;
+          String? fingerprintHint;
+          String routeSource = 'error';
+          bool poolFallbackUsed = false;
+          String? poolMatchId;
+          String? poolMatchTier;
+          double? poolStartDistanceKm;
+
+          try {
+            final result = await service.generateRoundTrip(
+              startPosition: dornbirn,
+              targetDistanceKm: step.km,
+              mode: step.mode,
+              planningType: 'Zufall',
+              avoidHighways: step.avoid,
+              forceFreshVariant: forceFreshVariant,
+              debugTrigger: trigger,
+            );
+            success = true;
+            distanceKm = result.distanceKm;
+            fingerprint =
+                RouteService.lastRouteDebugFingerprint ??
+                RouteQualityValidator.buildRouteFingerprint(
+                  result.coordinates,
+                  distanceKm: result.distanceKm,
+                );
+            if (previous != null) {
+              similarityToPreviousPercent =
+                  RouteQualityValidator.calculateRouteSimilarityPercent(
+                    result.coordinates,
+                    previous.coordinates,
+                    sampleCount: 48,
+                    proximityMeters: 145.0,
+                  );
+            }
+            effectiveExcludes = result.edgeMeta['effective_excludes']
+                ?.toString();
+            edgeRoutingBuildId = result.edgeMeta['routing_build_id']
+                ?.toString();
+            avoidHighwaysRequested =
+                result.edgeMeta['avoid_highways_requested'] == true;
+            routeSource =
+                result.edgeMeta['route_source']?.toString() ??
+                result.edgeMeta['source']?.toString() ??
+                'mapbox';
+            poolFallbackUsed =
+                RouteService.lastRoutePoolFallbackUsed || routeSource == 'pool';
+            poolMatchId = result.edgeMeta['pool_match_id']?.toString();
+            poolMatchTier = result.edgeMeta['pool_match_tier']?.toString();
+            poolStartDistanceKm =
+                (result.edgeMeta['pool_start_distance_km'] as num?)?.toDouble();
+            final searchSummary = result.edgeMeta['search_summary'];
+            if (searchSummary is Map<String, dynamic>) {
+              variantHint = searchSummary['variant_hint']?.toString();
+              fingerprintHint = searchSummary['fingerprint_hint']?.toString();
+            }
+            previous = result;
+            previousKm = step.km;
+            previousStyle = step.mode;
+            previousAvoidHighways = step.avoid;
+          } catch (error) {
+            if (error is RouteServiceException) {
+              errorCode = error.type.name;
+              errorMessage = error.userMessage;
+              effectiveExcludes = error.edgeMeta['effective_excludes']
+                  ?.toString();
+              edgeRoutingBuildId = error.edgeMeta['routing_build_id']
+                  ?.toString();
+              avoidHighwaysRequested =
+                  error.edgeMeta['avoid_highways_requested'] == true;
+              variantHint = error.edgeMeta['variant_hint']?.toString();
+              fingerprintHint = error.edgeMeta['fingerprint_hint']?.toString();
+            } else {
+              errorCode = error.runtimeType.toString();
+              errorMessage = error.toString();
+            }
+          }
+
+          stopwatch.stop();
+          final edgeRequests = invoker.takeCallCount();
+          final requestBodies = invoker.takeRequestBodies();
+          final requestVariantHints = requestBodies
+              .map((body) => body['route_variant_hint']?.toString())
+              .whereType<String>()
+              .toList();
+          final requestFingerprintHints = requestBodies
+              .map((body) => body['route_fingerprint_hint']?.toString())
+              .whereType<String>()
+              .toList();
+          final requestAvoidHighwaysValues = requestBodies
+              .map((body) => body['avoid_highways'] == true)
+              .toSet()
+              .toList();
+          final scenarioKeyChanged =
+              previousScenarioKey == null ||
+              previousScenarioKey != scenario.scenarioKey;
+          final variantPathChanged =
+              previousVariantHint == null ||
+              previousVariantHint != variantHint ||
+              previousFingerprintHint != fingerprintHint;
+          final row = <String, dynamic>{
+            'step': step.label,
+            'endpoint': endpoint.toString(),
+            'success': success,
+            'source': routeSource,
+            'routeSource': routeSource,
+            'durationMs': stopwatch.elapsedMilliseconds,
+            'edgeRequests': edgeRequests,
+            'selectedKm': step.km,
+            'selectedStyle': step.mode,
+            'avoidHighways': step.avoid,
+            'forceFreshVariant': forceFreshVariant,
+            'trigger': trigger,
+            'scenarioKey': scenario.scenarioKey,
+            'scenarioKeyChanged': scenarioKeyChanged,
+            'variantPathChanged': variantPathChanged,
+            'routeVariantHint': variantHint,
+            'fingerprintHint': fingerprintHint,
+            'requestAvoidHighwaysValues': requestAvoidHighwaysValues,
+            'requestVariantHints': requestVariantHints,
+            'requestFingerprintHints': requestFingerprintHints,
+            'requestBodies': requestBodies,
+            'cacheHit': RouteService.lastRouteSessionCacheHit,
+            'poolFallbackUsed': poolFallbackUsed,
+            'poolRouteId': poolMatchId,
+            'poolMatchTier': poolMatchTier,
+            'poolStartDistanceKm': poolStartDistanceKm,
+            'apiCallCount': RouteService.lastRouteApiCallCount,
+            'preparedBufferHit': RouteService.lastRoutePreparedBufferHit,
+            'preparedBufferUsed': RouteService.lastRoutePreparedBufferUsed,
+            'recentFallbackUsed': RouteService.lastRouteRecentFallbackUsed,
+            'cachedFallbackUsed':
+                RouteService.lastRoutePersistentCacheFallbackUsed,
+            'persistentCacheFallbackUsed':
+                RouteService.lastRoutePersistentCacheFallbackUsed,
+            'duplicateFallbackUsed':
+                RouteService.lastRouteDuplicateFallbackUsed,
+            'emergencyFallbackUsed':
+                RouteService.lastRouteEmergencyFallbackUsed,
+            'edgeAvoidHighwaysRequested': avoidHighwaysRequested,
+            'edgeEffectiveExcludes': effectiveExcludes,
+            'edgeRoutingBuildId': edgeRoutingBuildId,
+            'routeFingerprint': fingerprint,
+            'similarityToLastRoute': similarityToPreviousPercent,
+            'visibleDifferent':
+                similarityToPreviousPercent == null ||
+                similarityToPreviousPercent < 72.0,
+            'motorwayExcludeOk': step.avoid
+                ? (effectiveExcludes?.contains('motorway') ?? false)
+                : !(effectiveExcludes?.contains('motorway') ?? false),
+            'oldRouteFallbackUsed':
+                RouteService.lastRouteSessionCacheHit ||
+                RouteService.lastRouteRecentFallbackUsed ||
+                RouteService.lastRoutePersistentCacheFallbackUsed,
+            'fallbackUsed':
+                RouteService.lastRouteRecentFallbackUsed ||
+                RouteService.lastRoutePersistentCacheFallbackUsed ||
+                RouteService.lastRouteDuplicateFallbackUsed ||
+                poolFallbackUsed,
+            'errorBannerWouldBeVisible': !success && previous == null,
+            'errorCode': errorCode,
+            'errorMessage': errorMessage,
+            'distanceKm': distanceKm,
+          };
+          rows.add(row);
+          // ignore: avoid_print
+          print('UI_SEQUENCE ${jsonEncode(row)}');
+
+          previousScenarioKey = scenario.scenarioKey;
+          previousVariantHint = variantHint;
+          previousFingerprintHint = fingerprintHint;
+        }
+
+        await File(
+          outputPath,
+        ).writeAsString(const JsonEncoder.withIndent('  ').convert(rows));
+
+        expect(rows, hasLength(sequence.length));
+        for (final row in rows) {
+          expect(row['edgeRequests'], greaterThan(0), reason: row.toString());
+          expect(row['cacheHit'], false, reason: row.toString());
+        }
+        for (final row in rows.skip(2)) {
+          expect(row['motorwayExcludeOk'], true, reason: row.toString());
+          expect(row['oldRouteFallbackUsed'], false, reason: row.toString());
+        }
+        expect(rows[1]['variantPathChanged'], true, reason: rows[1].toString());
+        expect(rows[1]['trigger'], 'searchAgain', reason: rows[1].toString());
+        for (final row in rows.skip(2)) {
+          expect(row['trigger'], 'settingsChanged', reason: row.toString());
+        }
+        expect(
+          (rows[1]['similarityToLastRoute'] as double?) == null ||
+              (rows[1]['similarityToLastRoute'] as double) < 72.0 ||
+              rows[1]['duplicateFallbackUsed'] == true,
+          true,
+          reason: rows[1].toString(),
+        );
+        return;
+      }
       final scenarios = _buildScenarios();
       var selectedScenarios = scenarios.toList();
       if (benchmarkP2pOnly) {
@@ -374,7 +814,10 @@ void main() {
         if (!reuseWarmState) {
           RouteService.resetForTests();
           sharedInvoker = _LiveHttpInvoker(endpoint);
-          sharedService = RouteService(invoker: sharedInvoker);
+          sharedService = RouteService(
+            invoker: sharedInvoker,
+            routePoolService: _seededRoutePoolServiceForBenchmark(),
+          );
           activeScenarioName = scenario.name;
         }
         final invoker = sharedInvoker!;
@@ -393,19 +836,34 @@ void main() {
         double? similarityToPreviousPercent;
         bool? distanceOkay;
         bool? motorwayExcludeActive;
+        String? edgeRoutingBuildId;
         bool? styleEffective;
+        String routeSource = 'error';
+        bool poolFallbackUsed = false;
+        String? poolMatchId;
+        String? poolMatchTier;
+        double? poolStartDistanceKm;
+        bool? poolDistanceRuleApplied;
+        bool? poolRejectedTooFar;
+        bool? accessLegUsed;
+        double? accessLegDistanceKm;
+        bool? deadEndSpikeDetected;
         bool? geometryDifferent = scenario.routeType == 'ROUND_TRIP'
             ? true
             : false;
 
         try {
           if (scenario.routeType == 'ROUND_TRIP') {
+            final forceFreshVariant =
+                previousSuccessfulRoundTripByScenario[scenario.name] != null;
             final result = await service.generateRoundTrip(
               startPosition: scenario.start,
               targetDistanceKm: scenario.targetDistanceKm!,
               mode: scenario.mode,
               planningType: 'Zufall',
               avoidHighways: scenario.avoidHighways,
+              forceFreshVariant: forceFreshVariant,
+              debugTrigger: forceFreshVariant ? 'searchAgain' : 'firstSearch',
             );
             success = true;
             distanceKm = result.distanceKm;
@@ -457,11 +915,38 @@ void main() {
                 .map((point) => [point[0], point[1]])
                 .toList();
             final excludes = result.edgeMeta['effective_excludes']?.toString();
-            motorwayExcludeActive = scenario.avoidHighways
-                ? (excludes?.contains('motorway') ?? false) ||
-                      (excludes?.contains('motorway_link') ?? false)
-                : !(excludes?.contains('motorway') ?? false) &&
-                      !(excludes?.contains('motorway_link') ?? false);
+            edgeRoutingBuildId = result.edgeMeta['routing_build_id']
+                ?.toString();
+            routeSource =
+                result.edgeMeta['route_source']?.toString() ??
+                result.edgeMeta['source']?.toString() ??
+                'mapbox';
+            poolFallbackUsed =
+                RouteService.lastRoutePoolFallbackUsed || routeSource == 'pool';
+            poolMatchId = result.edgeMeta['pool_match_id']?.toString();
+            poolMatchTier = result.edgeMeta['pool_match_tier']?.toString();
+            poolStartDistanceKm =
+                (result.edgeMeta['pool_start_distance_km'] as num?)?.toDouble();
+            poolDistanceRuleApplied =
+                result.edgeMeta['pool_distance_rule_applied'] == true;
+            poolRejectedTooFar =
+                result.edgeMeta['pool_rejected_too_far'] == true;
+            accessLegUsed = result.edgeMeta['access_leg_used'] == true;
+            accessLegDistanceKm =
+                (result.edgeMeta['access_leg_distance_km'] as num?)?.toDouble();
+            deadEndSpikeDetected =
+                result.edgeMeta['dead_end_spike_detected'] == true;
+            if (routeSource == 'pool') {
+              final hasHighway = result.edgeMeta['has_highway'] == true;
+              final avoidsHighway = result.edgeMeta['avoids_highway'] == true;
+              motorwayExcludeActive = scenario.avoidHighways
+                  ? avoidsHighway && !hasHighway
+                  : true;
+            } else {
+              motorwayExcludeActive = scenario.avoidHighways
+                  ? (excludes?.contains('motorway') ?? false)
+                  : !(excludes?.contains('motorway') ?? false);
+            }
             styleEffective =
                 (result.edgeMeta['mode']?.toString() ?? '') == scenario.mode;
           } else {
@@ -503,11 +988,38 @@ void main() {
                   (searchSummary['candidate_attempts'] as num?)?.toInt() ?? 0;
             }
             final excludes = result.edgeMeta['effective_excludes']?.toString();
-            motorwayExcludeActive = scenario.avoidHighways
-                ? (excludes?.contains('motorway') ?? false) ||
-                      (excludes?.contains('motorway_link') ?? false)
-                : !(excludes?.contains('motorway') ?? false) &&
-                      !(excludes?.contains('motorway_link') ?? false);
+            edgeRoutingBuildId = result.edgeMeta['routing_build_id']
+                ?.toString();
+            routeSource =
+                result.edgeMeta['route_source']?.toString() ??
+                result.edgeMeta['source']?.toString() ??
+                'mapbox';
+            poolFallbackUsed =
+                RouteService.lastRoutePoolFallbackUsed || routeSource == 'pool';
+            poolMatchId = result.edgeMeta['pool_match_id']?.toString();
+            poolMatchTier = result.edgeMeta['pool_match_tier']?.toString();
+            poolStartDistanceKm =
+                (result.edgeMeta['pool_start_distance_km'] as num?)?.toDouble();
+            poolDistanceRuleApplied =
+                result.edgeMeta['pool_distance_rule_applied'] == true;
+            poolRejectedTooFar =
+                result.edgeMeta['pool_rejected_too_far'] == true;
+            accessLegUsed = result.edgeMeta['access_leg_used'] == true;
+            accessLegDistanceKm =
+                (result.edgeMeta['access_leg_distance_km'] as num?)?.toDouble();
+            deadEndSpikeDetected =
+                result.edgeMeta['dead_end_spike_detected'] == true;
+            if (routeSource == 'pool') {
+              final hasHighway = result.edgeMeta['has_highway'] == true;
+              final avoidsHighway = result.edgeMeta['avoids_highway'] == true;
+              motorwayExcludeActive = scenario.avoidHighways
+                  ? avoidsHighway && !hasHighway
+                  : true;
+            } else {
+              motorwayExcludeActive = scenario.avoidHighways
+                  ? (excludes?.contains('motorway') ?? false)
+                  : !(excludes?.contains('motorway') ?? false);
+            }
             styleEffective = scenario.detourLevel <= 0
                 ? (result.edgeMeta['mode']?.toString() ?? '') == 'Standard'
                 : (result.edgeMeta['mode']?.toString() ?? '') == scenario.mode;
@@ -516,6 +1028,7 @@ void main() {
           if (error is RouteServiceException) {
             errorCode = error.type.name;
             errorMessage = error.userMessage;
+            edgeRoutingBuildId = error.edgeMeta['routing_build_id']?.toString();
           } else {
             errorCode = error.runtimeType.toString();
             errorMessage = error.toString();
@@ -524,6 +1037,11 @@ void main() {
 
         stopwatch.stop();
         final edgeRequests = invoker.takeCallCount();
+        final requestBodies = invoker.takeRequestBodies();
+        final requestVariantHints = requestBodies
+            .map((body) => body['route_variant_hint']?.toString())
+            .whereType<String>()
+            .toList();
         final bucket = _bucketFor(
           tier: success ? tier : 'error',
           routeType: scenario.routeType,
@@ -533,12 +1051,18 @@ void main() {
         final row = <String, dynamic>{
           'index': index + 1,
           'scenario': scenario.name,
+          'endpoint': endpoint.toString(),
           'run': scenario.run,
           'routeType': scenario.routeType,
           'success': success,
+          'source': routeSource,
+          'routeSource': routeSource,
           'bucket': bucket,
           'tier': success ? tier : 'error',
           'edgeRequests': edgeRequests,
+          'apiCallCount': RouteService.lastRouteApiCallCount,
+          'requestVariantHints': requestVariantHints,
+          'requestBodies': requestBodies,
           'candidateAttempts': candidateAttempts,
           'durationMs': stopwatch.elapsedMilliseconds,
           'distanceKm': distanceKm,
@@ -556,8 +1080,31 @@ void main() {
           'variantGroup': scenario.variantGroup,
           'distanceOkay': distanceOkay,
           'motorwayExcludeActive': motorwayExcludeActive,
+          'edgeRoutingBuildId': edgeRoutingBuildId,
           'styleEffective': styleEffective,
           'geometryDifferent': geometryDifferent,
+          'preparedBufferHit': RouteService.lastRoutePreparedBufferHit,
+          'preparedBufferUsed': RouteService.lastRoutePreparedBufferUsed,
+          'cacheHit': RouteService.lastRouteSessionCacheHit,
+          'poolFallbackUsed': poolFallbackUsed,
+          'poolRouteId': poolMatchId,
+          'poolMatchTier': poolMatchTier,
+          'poolStartDistanceKm': poolStartDistanceKm,
+          'poolDistanceRuleApplied': poolDistanceRuleApplied,
+          'poolRejectedTooFar': poolRejectedTooFar,
+          'accessLegUsed': accessLegUsed,
+          'accessLegDistanceKm': accessLegDistanceKm,
+          'deadEndSpikeDetected': deadEndSpikeDetected,
+          'recentFallbackUsed': RouteService.lastRouteRecentFallbackUsed,
+          'cachedFallbackUsed':
+              RouteService.lastRoutePersistentCacheFallbackUsed,
+          'duplicateFallbackUsed': RouteService.lastRouteDuplicateFallbackUsed,
+          'emergencyFallbackUsed': RouteService.lastRouteEmergencyFallbackUsed,
+          'fallbackUsed':
+              RouteService.lastRouteRecentFallbackUsed ||
+              RouteService.lastRoutePersistentCacheFallbackUsed ||
+              RouteService.lastRouteDuplicateFallbackUsed ||
+              poolFallbackUsed,
         };
         results.add(row);
 
@@ -565,6 +1112,7 @@ void main() {
         print(
           '${row['index'].toString().padLeft(3, '0')}/${selectedScenarios.length} | '
           '${row['scenario']} | ${row['bucket']} | tier=${row['tier']} | '
+          'source=${row['source']} | '
           'edgeReq=${row['edgeRequests']} | dur=${row['durationMs']}ms | '
           'dist=${row['distanceKm'] == null ? 'n/a' : (row['distanceKm'] as double).toStringAsFixed(1)}km | '
           'motorway=${row['motorwayExcludeActive']} | style=${row['styleEffective']}',
@@ -631,6 +1179,15 @@ void main() {
             .where((entry) => entry['routeType'] == 'POINT_TO_POINT')
             .where((entry) => entry['geometryDifferent'] == true)
             .length,
+        'mapboxRoutes': results
+            .where((entry) => entry['source'] == 'mapbox')
+            .length,
+        'poolFallbackRoutes': results
+            .where((entry) => entry['source'] == 'pool')
+            .length,
+        'cacheRoutes': results
+            .where((entry) => entry['source'] == 'cache')
+            .length,
       };
       final motorwayToggleCandidates = results
           .where((entry) => entry['motorwayExcludeActive'] != null)
@@ -649,6 +1206,7 @@ void main() {
       }
 
       final output = <String, dynamic>{
+        'endpoint': endpoint.toString(),
         'summary': summary,
         'byScenario': byScenario,
         'results': results,
