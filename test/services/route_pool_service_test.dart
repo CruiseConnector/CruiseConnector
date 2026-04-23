@@ -1,8 +1,11 @@
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:cruise_connect/data/services/route_pool_service.dart';
+import 'package:cruise_connect/domain/models/route_pool_candidate.dart';
+import 'package:cruise_connect/domain/models/route_pool_coverage.dart';
 import 'package:cruise_connect/domain/models/route_pool_entry.dart';
 import 'package:cruise_connect/domain/models/route_region.dart';
+import 'package:cruise_connect/domain/models/route_seed_job.dart';
 
 void main() {
   group('RoutePoolService DACH matching', () {
@@ -795,6 +798,180 @@ void main() {
 
       expect(match?.route.id, 'same-distance-high-quality');
     });
+
+    test(
+      'User zwischen zwei Clustern wird bestehendem Cluster zugeordnet ohne neuen Orts-Pool',
+      () async {
+        final service = RoutePoolService(
+          inMemoryRegions: [
+            _region(
+              countryCode: 'AT',
+              admin1Name: 'Vorarlberg',
+              cityCluster: 'Feldkirch',
+              centerLat: 47.2386,
+              centerLng: 9.5986,
+            ),
+            _region(
+              countryCode: 'AT',
+              admin1Name: 'Vorarlberg',
+              cityCluster: 'Bludenz',
+              centerLat: 47.1548,
+              centerLng: 9.8220,
+            ),
+          ],
+        );
+
+        final assignment = await service.resolveRegionAssignment(
+          userLat: 47.2050,
+          userLng: 9.6750,
+          preferredCountryCode: 'AT',
+          preferredAdmin1Name: 'Vorarlberg',
+        );
+
+        expect(assignment, isNotNull);
+        expect(assignment!.region.cityCluster, 'Feldkirch');
+        expect(assignment.newClusterCreated, isFalse);
+      },
+    );
+
+    test(
+      'Free-User in leerer Region erzeugt genau einen Bootstrap-Job und warming_up',
+      () async {
+        final coverages = <RoutePoolCoverage>[];
+        final jobs = <RouteSeedJob>[];
+        final service = RoutePoolService(
+          inMemoryRegions: [
+            _region(
+              countryCode: 'DE',
+              admin1Name: 'Baden-Württemberg',
+              admin2Name: 'Stuttgart',
+              cityCluster: 'Stuttgart',
+              centerLat: 48.7758,
+              centerLng: 9.1829,
+            ),
+          ],
+          inMemoryCoverage: coverages,
+          inMemorySeedJobs: jobs,
+          inMemoryCandidates: <RoutePoolCandidate>[],
+          inMemoryRoutes: const [],
+        );
+
+        final first = await service.ensureCoverageForRequest(
+          userLat: 48.7800,
+          userLng: 9.1800,
+          distanceBucket: 50,
+          style: 'Sport Mode',
+          avoidHighways: true,
+          routeType: 'ROUND_TRIP',
+          subscriptionTier: 'free',
+          createSeedJob: true,
+          preferredCountryCode: 'DE',
+          preferredAdmin1Name: 'Baden-Württemberg',
+        );
+        final second = await service.ensureCoverageForRequest(
+          userLat: 48.7800,
+          userLng: 9.1800,
+          distanceBucket: 50,
+          style: 'Sport Mode',
+          avoidHighways: true,
+          routeType: 'ROUND_TRIP',
+          subscriptionTier: 'free',
+          createSeedJob: true,
+          preferredCountryCode: 'DE',
+          preferredAdmin1Name: 'Baden-Württemberg',
+        );
+
+        expect(first.coverageStatus, 'warming_up');
+        expect(first.seedJobCreated, isTrue);
+        expect(first.duplicateJobPrevented, isFalse);
+        expect(second.coverageStatus, 'warming_up');
+        expect(second.seedJobCreated, isFalse);
+        expect(second.duplicateJobPrevented, isTrue);
+        expect(jobs, hasLength(1));
+        expect(jobs.single.status, 'queued');
+        expect(coverages, hasLength(1));
+      },
+    );
+
+    test(
+      'Max-Pool-Groesse leitet neue gute Route in Candidate-Staging statt Verified-Overflow',
+      () async {
+        final coverages = <RoutePoolCoverage>[
+          const RoutePoolCoverage(
+            countryCode: 'DE',
+            admin1Name: 'Bayern',
+            admin2Name: 'München',
+            cityCluster: 'München',
+            routeType: 'ROUND_TRIP',
+            distanceBucket: 50,
+            styleKey: 'sport_mode',
+            avoidHighways: true,
+            coverageStatus: 'healthy',
+            targetPoolSize: 15,
+            maxPoolSize: 20,
+            currentVerifiedCount: 20,
+            currentCandidateCount: 0,
+          ),
+        ];
+        final candidates = <RoutePoolCandidate>[];
+        final service = RoutePoolService(
+          inMemoryRegions: [
+            _region(
+              countryCode: 'DE',
+              admin1Name: 'Bayern',
+              admin2Name: 'München',
+              cityCluster: 'München',
+              centerLat: 48.1372,
+              centerLng: 11.5755,
+            ),
+          ],
+          inMemoryRoutes: List.generate(
+            20,
+            (index) => _route(
+              id: 'munich-verified-$index',
+              countryCode: 'DE',
+              admin1Name: 'Bayern',
+              admin2Name: 'München',
+              cityCluster: 'München',
+              startLat: 48.1372 + (index * 0.0001),
+              startLng: 11.5755 + (index * 0.0001),
+              distanceBucket: 50,
+              styleTags: const ['Sport Mode'],
+            ),
+          ),
+          inMemoryCoverage: coverages,
+          inMemorySeedJobs: <RouteSeedJob>[],
+          inMemoryCandidates: candidates,
+        );
+
+        final result = await service.recordCandidateRoute(
+          userLat: 48.1372,
+          userLng: 11.5755,
+          distanceBucket: 50,
+          style: 'Sport Mode',
+          avoidHighways: true,
+          routeType: 'ROUND_TRIP',
+          candidateSource: 'basic_live',
+          routeFingerprint: 'candidate-muc-50-sport-1',
+          geometry: const {
+            'type': 'LineString',
+            'coordinates': [
+              [11.5755, 48.1372],
+              [11.62, 48.18],
+              [11.5755, 48.1372],
+            ],
+          },
+          distanceKm: 52,
+          qualityScore: 88,
+        );
+
+        expect(result.saved, isTrue);
+        expect(result.poolFull, isTrue);
+        expect(candidates, hasLength(1));
+        expect(candidates.single.isCandidate, isTrue);
+        expect(candidates.single.isVerifiedPool, isFalse);
+      },
+    );
   });
 }
 

@@ -13,6 +13,7 @@ import 'package:cruise_connect/data/services/prepared_route_buffer.dart';
 import 'package:cruise_connect/data/services/route_access_plan.dart';
 import 'package:cruise_connect/data/services/route_cache_service.dart';
 import 'package:cruise_connect/data/services/route_generation_coordinator.dart';
+import 'package:cruise_connect/data/services/route_pool_service.dart';
 import 'package:cruise_connect/data/services/route_quality_validator.dart';
 import 'package:cruise_connect/data/services/route_scenario.dart';
 import 'package:cruise_connect/domain/models/route_maneuver.dart';
@@ -36,6 +37,9 @@ abstract class RouteEdgeInvoker {
 class SupabaseRouteInvoker implements RouteEdgeInvoker {
   const SupabaseRouteInvoker();
 
+  String get debugEndpoint =>
+      '${AppConstants.supabaseUrl}/functions/v1/${RouteService.edgeFunction}';
+
   @override
   Future<dynamic> invoke(Map<String, dynamic> body) async {
     final response = await Supabase.instance.client.functions.invoke(
@@ -50,19 +54,55 @@ class SupabaseRouteInvoker implements RouteEdgeInvoker {
 
 /// Service für die Routenberechnung via Supabase Edge Function.
 class RouteService {
-  RouteService({RouteEdgeInvoker? invoker})
-    : _invoker = invoker ?? const SupabaseRouteInvoker();
+  RouteService({RouteEdgeInvoker? invoker, RoutePoolService? routePoolService})
+    : _invoker = invoker ?? const SupabaseRouteInvoker(),
+      _routePoolService = routePoolService ?? RoutePoolService();
 
   static const String edgeFunction = 'generate-cruise-route';
+  static const String clientRoutingBuildId = String.fromEnvironment(
+    'ROUTING_CLIENT_BUILD_ID',
+    defaultValue: 'local-dev',
+  );
+  static const String clientRoutingBuildTime = String.fromEnvironment(
+    'ROUTING_CLIENT_BUILD_TIME',
+    defaultValue: 'local-dev',
+  );
   static int _lastRandomSeed = 0;
   static const String _explorerBearingPrefsKey =
       'route_service_recent_explorer_bearings';
   static const String _lastSuccessfulRouteKey =
       'route_service_last_successful_route';
   static final Map<String, RouteResult> _recentSuccessfulRoutes = {};
+  static final Map<String, RouteResult> _recentDisplayedRoutes = {};
 
   /// Flag: letzte Route kam aus dem Offline-Cache
   static bool lastRouteFromCache = false;
+  static bool lastRouteSessionCacheHit = false;
+  static bool lastRouteRecentFallbackUsed = false;
+  static bool lastRoutePersistentCacheFallbackUsed = false;
+  static bool lastRoutePreparedBufferHit = false;
+  static bool lastRoutePreparedBufferUsed = false;
+  static bool lastRouteDuplicateFallbackUsed = false;
+  static bool lastRouteEmergencyFallbackUsed = false;
+  static bool lastRoutePoolFallbackUsed = false;
+  static bool lastRoutePoolDistanceRuleApplied = false;
+  static bool lastRoutePoolRejectedTooFar = false;
+  static bool lastRouteAccessLegUsed = false;
+  static double? lastRouteAccessLegDistanceKm;
+  static String lastRouteGenerationSource = 'mapbox';
+  static String lastRouteSubscriptionTier = 'premium';
+  static String? lastRoutePoolMatchId;
+  static String? lastRoutePoolMatchTier;
+  static double? lastRoutePoolStartDistanceKm;
+  static bool lastRouteDeadEndSpikeDetected = false;
+  static int lastRouteApiCallCount = 0;
+  static String? lastRouteDebugFingerprint;
+  static double? lastRouteSimilarityToPreviousPercent;
+  static String? lastRouteDebugTrigger;
+  static String? lastRouteCoverageStatus;
+  static bool lastRouteSeedJobCreated = false;
+  static bool lastRouteDuplicateSeedJobPrevented = false;
+  static bool lastRoutePoolBootstrapPending = false;
 
   /// Letzte 3 Entdecker-Richtungen (in Grad) für Diversifizierung.
   // TODO: In SharedPreferences persistieren für Session-übergreifende Diversifizierung
@@ -83,6 +123,10 @@ class RouteService {
   static DateTime? _workerLimitCooldownUntil;
 
   final RouteEdgeInvoker _invoker;
+  final RoutePoolService _routePoolService;
+  String? _activeScenarioKeyForDebug;
+  bool _activeForceFreshVariantForDebug = false;
+  String _activeTriggerForDebug = 'unknown';
 
   // ─────────────────────────── Public API ────────────────────────────────────
 
@@ -97,14 +141,68 @@ class RouteService {
   static void resetForTests() {
     _sessionCache.clear();
     _recentSuccessfulRoutes.clear();
+    _recentDisplayedRoutes.clear();
     _scenarioVariantCounters.clear();
     _globalDiversityIndex = 0;
     _workerLimitCooldownUntil = null;
+    _resetRouteDebugState();
     RouteGenerationCoordinator.resetForTests();
     RouteCacheService.resetForTests();
     SeenRouteRegistry.clearAll();
     PreparedRouteBuffer.clearAll();
   }
+
+  static void _resetRouteDebugState() {
+    lastRouteFromCache = false;
+    lastRouteSessionCacheHit = false;
+    lastRouteRecentFallbackUsed = false;
+    lastRoutePersistentCacheFallbackUsed = false;
+    lastRoutePreparedBufferHit = false;
+    lastRoutePreparedBufferUsed = false;
+    lastRouteDuplicateFallbackUsed = false;
+    lastRouteEmergencyFallbackUsed = false;
+    lastRoutePoolFallbackUsed = false;
+    lastRoutePoolDistanceRuleApplied = false;
+    lastRoutePoolRejectedTooFar = false;
+    lastRouteAccessLegUsed = false;
+    lastRouteAccessLegDistanceKm = null;
+    lastRouteGenerationSource = 'mapbox';
+    lastRouteSubscriptionTier = 'premium';
+    lastRoutePoolMatchId = null;
+    lastRoutePoolMatchTier = null;
+    lastRoutePoolStartDistanceKm = null;
+    lastRouteDeadEndSpikeDetected = false;
+    lastRouteApiCallCount = 0;
+    lastRouteDebugFingerprint = null;
+    lastRouteSimilarityToPreviousPercent = null;
+    lastRouteDebugTrigger = null;
+    lastRouteCoverageStatus = null;
+    lastRouteSeedJobCreated = false;
+    lastRouteDuplicateSeedJobPrevented = false;
+    lastRoutePoolBootstrapPending = false;
+  }
+
+  static void _debugRouteSearch(String message) {
+    debugPrint('[RouteDebug] $message');
+  }
+
+  static String _normalizeSubscriptionTier(String value) {
+    switch (value.trim().toLowerCase()) {
+      case 'free':
+        return 'free';
+      case 'basic':
+        return 'basic';
+      case 'premium':
+      default:
+        return 'premium';
+    }
+  }
+
+  static bool _isFreeTier(String value) =>
+      _normalizeSubscriptionTier(value) == 'free';
+
+  static bool _isBasicTier(String value) =>
+      _normalizeSubscriptionTier(value) == 'basic';
 
   /// Berechnet eine Rundkurs-Route von der aktuellen Position.
   ///
@@ -134,6 +232,8 @@ class RouteService {
     int? variantIndex,
     bool avoidHighways = false,
     bool forceFreshVariant = false,
+    String debugTrigger = 'unknown',
+    String subscriptionTier = 'premium',
   }) async {
     final styleConfig = RouteStyleConfig.forMode(mode);
     final normalizedTargetKm = styleConfig.clampRoundTripDistanceKm(
@@ -148,214 +248,396 @@ class RouteService {
       targetDistanceKm: normalizedTargetKm.toDouble(),
       avoidHighways: avoidHighways,
     );
+    _resetRouteDebugState();
+    lastRouteDebugTrigger = debugTrigger;
+    lastRouteSubscriptionTier = _normalizeSubscriptionTier(subscriptionTier);
+    _debugRouteSearch(
+      '[ServiceStart] routeType=ROUND_TRIP selectedKm=$normalizedTargetKm '
+      'selectedStyle=$mode avoidHighways=$avoidHighways '
+      'forceFreshVariant=$forceFreshVariant trigger=$debugTrigger '
+      'subscriptionTier=$lastRouteSubscriptionTier '
+      'scenarioKey=${scenario.scenarioKey} noveltyKey=${scenario.noveltyKey}',
+    );
+    _activeScenarioKeyForDebug = scenario.scenarioKey;
+    _activeForceFreshVariantForDebug = forceFreshVariant;
+    _activeTriggerForDebug = debugTrigger;
 
     if (forceFreshVariant) {
       RouteGenerationCoordinator.suspendBackgroundPreparation();
       PreparedRouteBuffer.clearScenario(scenario.scenarioKey);
+      _debugRouteSearch(
+        '[Prepared] clearedForForceFresh=true scenarioKey=${scenario.scenarioKey}',
+      );
     }
 
-    return RouteGenerationCoordinator.runSingleFlight(
-      scenario.scenarioKey,
-      () async {
-        final prepared = forceFreshVariant
-            ? null
-            : _takePreparedRoute(scenario: scenario, styleConfig: styleConfig);
-        if (prepared != null) {
-          return prepared;
-        }
-
-        final hasSeenHistory = SeenRouteRegistry.entriesFor(
-          scenario.scenarioKey,
-        ).isNotEmpty;
-        final difficultScenario = _isDifficultRoundTripScenario(
-          scenario,
-          styleConfig,
+    final singleFlightKey = forceFreshVariant
+        ? '${scenario.scenarioKey}|fresh|${DateTime.now().microsecondsSinceEpoch}'
+        : scenario.scenarioKey;
+    return RouteGenerationCoordinator.runSingleFlight(singleFlightKey, () async {
+      if (_isFreeTier(lastRouteSubscriptionTier)) {
+        final freePoolRoute = await _tryRoutePoolFallback(
+          scenario: scenario,
+          styleConfig: styleConfig,
+          userLat: startPosition.latitude,
+          userLng: startPosition.longitude,
+          fallbackReason: 'free_pool_only',
         );
-        // Client-Schleife: Normal 2 Versuche, in schwierigen Szenarien 3.
-        // Der zusätzliche Seed gilt nur dort, wo die Edge-Suche trotz
-        // strict/balanced/fallback häufiger an Tal-/Kurvengeometrie scheitert.
-        final maxAttempts = difficultScenario ? 3 : 2;
-        _RouteCandidate? bestCandidate;
-        _RouteCandidate? spareCandidate;
-        RouteServiceException? lastError;
+        if (freePoolRoute != null) {
+          return freePoolRoute;
+        }
+        throw await _buildCoverageWarmupException(
+          scenario: scenario,
+          userLat: startPosition.latitude,
+          userLng: startPosition.longitude,
+          subscriptionTier: lastRouteSubscriptionTier,
+          lastError: null,
+          createSeedJob: true,
+        );
+      }
 
-        for (var attempt = 0; attempt < maxAttempts; attempt++) {
-          if (_isInWorkerLimitCooldown()) break;
-          final variant = await _nextRoundTripVariant(
-            scenario,
+      if (_isBasicTier(lastRouteSubscriptionTier)) {
+        final basicPoolRoute = await _tryRoutePoolFallback(
+          scenario: scenario,
+          styleConfig: styleConfig,
+          userLat: startPosition.latitude,
+          userLng: startPosition.longitude,
+          fallbackReason: 'pool_first_basic',
+        );
+        if (basicPoolRoute != null) {
+          return basicPoolRoute;
+        }
+        await _ensureCoverageBootstrapStatus(
+          scenario: scenario,
+          userLat: startPosition.latitude,
+          userLng: startPosition.longitude,
+          subscriptionTier: lastRouteSubscriptionTier,
+          createSeedJob: true,
+        );
+      }
+
+      final prepared = forceFreshVariant
+          ? null
+          : _takePreparedRoute(scenario: scenario, styleConfig: styleConfig);
+      if (prepared != null) {
+        return prepared;
+      }
+
+      final hasSeenHistory = SeenRouteRegistry.entriesForAny(
+        _seenHistoryKeysForScenario(scenario),
+      ).isNotEmpty;
+      final difficultScenario = _isDifficultRoundTripScenario(
+        scenario,
+        styleConfig,
+      );
+      // Client-Schleife: Erstsuche darf in schwierigen Szenarien mehr Seeds
+      // testen. Sobald es aber bereits eine gute Route für dieselben Settings
+      // gibt, reicht ein frischer Versuch; danach fällt die App schnell auf
+      // die geprüfte Route zurück statt 30-45s in NO_ROUTE-Tails zu laufen.
+      final maxAttempts = forceFreshVariant
+          ? (difficultScenario ? 3 : 2)
+          : difficultScenario
+          ? (hasSeenHistory ? 1 : 3)
+          : (hasSeenHistory ? 1 : 2);
+      _RouteCandidate? bestCandidate;
+      _RouteCandidate? spareCandidate;
+      _RouteCandidate? bestDuplicateCandidate;
+      RouteServiceException? lastError;
+
+      for (var attempt = 0; attempt < maxAttempts; attempt++) {
+        if (_isInWorkerLimitCooldown()) break;
+        final variant = await _nextRoundTripVariant(
+          scenario,
+          styleConfig: styleConfig,
+          explicitIndex: attempt == 0 ? variantIndex : null,
+        );
+        _debugRouteSearch(
+          '[Attempt] attempt=${attempt + 1}/$maxAttempts '
+          'scenarioKey=${scenario.scenarioKey} '
+          'routeVariantHint=${variant.variantHint} '
+          'fingerprintHint=${variant.fingerprintHint} '
+          'forceFreshVariant=$forceFreshVariant',
+        );
+        try {
+          final candidate = await _requestRoundTripVariant(
+            scenario: scenario,
             styleConfig: styleConfig,
-            explicitIndex: attempt == 0 ? variantIndex : null,
+            startPosition: startPosition,
+            targetLocation: targetLocation,
+            variant: variant,
+            forceFreshVariant: forceFreshVariant,
+            debugTrigger: debugTrigger,
+            // Hint an Edge Function: gibt strict/balanced/fallback je 2-3
+            // Pläne (siehe declaredMaxPerPhase und reservedForLaterPhases
+            // in der Edge Function). Constrained Suchen (Autobahn vermeiden,
+            // Kurvenjagd in engen Tälern) bekommen +1 Plan, weil sie pro
+            // Versuch ggf. einen relax-retry brauchen.
+            candidateBudget: _roundTripCandidateBudget(scenario, styleConfig),
           );
-          try {
-            final candidate = await _requestRoundTripVariant(
-              scenario: scenario,
-              styleConfig: styleConfig,
-              startPosition: startPosition,
-              targetLocation: targetLocation,
-              variant: variant,
-              // Hint an Edge Function: gibt strict/balanced/fallback je 2-3
-              // Pläne (siehe declaredMaxPerPhase und reservedForLaterPhases
-              // in der Edge Function). Constrained Suchen (Autobahn vermeiden,
-              // Kurvenjagd in engen Tälern) bekommen +1 Plan, weil sie pro
-              // Versuch ggf. einen relax-retry brauchen.
-              candidateBudget: _roundTripCandidateBudget(scenario, styleConfig),
-            );
-            if (candidate.accepted) {
-              if (!candidate.novelEnough) {
-                debugPrint(
-                  '[RouteService] RoundTrip candidate ${attempt + 1}/$maxAttempts verworfen: zu ähnlich zur letzten Route.',
+          if (candidate.accepted) {
+            if (!candidate.novelEnough) {
+              debugPrint(
+                '[RouteService] RoundTrip candidate ${attempt + 1}/$maxAttempts ist brauchbar, aber zu ähnlich zur letzten Route.',
+              );
+              if (_isBetterCandidate(candidate, bestDuplicateCandidate)) {
+                bestDuplicateCandidate = candidate;
+              }
+              continue;
+            }
+            if (_isBetterCandidate(candidate, bestCandidate)) {
+              if (bestCandidate != null &&
+                  _isBetterCandidate(bestCandidate, spareCandidate)) {
+                spareCandidate = bestCandidate;
+              }
+              bestCandidate = candidate;
+            } else if (_isBetterCandidate(candidate, spareCandidate)) {
+              spareCandidate = candidate;
+            }
+          }
+          if (candidate.accepted &&
+              candidate.novelEnough &&
+              (candidate.isIdeal ||
+                  candidate.isGood ||
+                  (candidate.tier == RouteQualityTier.acceptable &&
+                      !difficultScenario))) {
+            break;
+          }
+        } catch (e, stack) {
+          final mapped = e is RouteServiceException
+              ? e
+              : _mapInvokeException(
+                  error: e,
+                  stack: stack,
+                  routeType: scenario.routeType,
                 );
-                continue;
-              }
-              if (_isBetterCandidate(candidate, bestCandidate)) {
-                if (bestCandidate != null &&
-                    _isBetterCandidate(bestCandidate, spareCandidate)) {
-                  spareCandidate = bestCandidate;
-                }
-                bestCandidate = candidate;
-              } else if (_isBetterCandidate(candidate, spareCandidate)) {
-                spareCandidate = candidate;
-              }
-            }
-            if (candidate.accepted &&
-                candidate.novelEnough &&
-                (candidate.isIdeal ||
-                    candidate.isGood ||
-                    (candidate.tier == RouteQualityTier.acceptable &&
-                        !difficultScenario))) {
-              break;
-            }
-          } catch (e, stack) {
-            final mapped = e is RouteServiceException
-                ? e
-                : _mapInvokeException(
-                    error: e,
-                    stack: stack,
-                    routeType: scenario.routeType,
-                  );
-            lastError = mapped;
-            if (_isWorkerLimitError(mapped)) {
-              _setWorkerLimitCooldown();
-            }
-            debugPrint(
-              '[RouteService] RoundTrip candidate ${attempt + 1}/$maxAttempts fehlgeschlagen: ${mapped.debugMessage}',
-            );
-            if (_isFatalStructuredError(mapped)) {
-              break;
-            }
+          lastError = mapped;
+          if (_isWorkerLimitError(mapped)) {
+            _setWorkerLimitCooldown();
           }
-        }
-
-        if (bestCandidate?.accepted == true) {
-          final finalized = _finalizeAndRemember(
-            scenario: scenario,
-            route: bestCandidate!.route,
-            sampledCoordinates: bestCandidate.sampledCoordinates,
-            fingerprint: bestCandidate.fingerprint,
+          debugPrint(
+            '[RouteService] RoundTrip candidate ${attempt + 1}/$maxAttempts fehlgeschlagen: ${mapped.debugMessage}',
           );
-          if (spareCandidate != null && spareCandidate.novelEnough) {
-            PreparedRouteBuffer.store(
-              scenario.scenarioKey,
-              PreparedRouteEntry(
-                route: spareCandidate.route,
-                variant: spareCandidate.variant,
-                preparedAt: DateTime.now(),
-              ),
-            );
-          } else if (!hasSeenHistory && !forceFreshVariant) {
-            _schedulePreparedRoundTripRoute(
-              scenario: scenario,
-              styleConfig: styleConfig,
-              startPosition: startPosition,
-            );
+          if (_isFatalStructuredError(mapped)) {
+            break;
           }
-          return finalized;
         }
+      }
 
-        final recent = forceFreshVariant
-            ? null
-            : _recentSuccessfulRoutes[scenario.scenarioKey];
-        if (scenario.isRoundTrip &&
-            recent != null &&
-            _shouldUseRecentFallbackRoute(
-              recent,
-              scenario: scenario,
-              lastError: lastError,
-            )) {
-          lastRouteFromCache = true;
-          markRouteAsSeen(scenario.scenarioKey, recent);
-          return _finalizeRoute(recent, scenarioKey: scenario.scenarioKey);
-        }
-
-        final cached = forceFreshVariant
-            ? null
-            : await _loadCachedRoute(scenarioKey: scenario.scenarioKey);
-        if (scenario.isRoundTrip &&
-            cached != null &&
-            _shouldUseCachedFallbackRoute(
-              cached,
-              scenario: scenario,
-              lastError: lastError,
-            )) {
-          lastRouteFromCache = true;
-          markRouteAsSeen(scenario.scenarioKey, cached);
-          return _finalizeRoute(cached, scenarioKey: scenario.scenarioKey);
-        }
-
-        if (_canUseStructuredFallback(lastError)) {
-          final fallback = await _tryRoundTripFallback(
+      if (bestCandidate?.accepted == true) {
+        final acceptedMapboxCandidate = bestCandidate!;
+        lastRouteGenerationSource = 'mapbox';
+        final finalized = _finalizeAndRemember(
+          scenario: scenario,
+          route: acceptedMapboxCandidate.route,
+          sampledCoordinates: acceptedMapboxCandidate.sampledCoordinates,
+          fingerprint: acceptedMapboxCandidate.fingerprint,
+        );
+        await _maybeRecordRoutePoolCandidate(
+          scenario: scenario,
+          route: acceptedMapboxCandidate.route,
+          fingerprint: acceptedMapboxCandidate.fingerprint,
+          tier: acceptedMapboxCandidate.tier,
+          qualityScore: acceptedMapboxCandidate.score,
+          subscriptionTier: lastRouteSubscriptionTier,
+        );
+        if (spareCandidate != null && spareCandidate.novelEnough) {
+          PreparedRouteBuffer.store(
+            scenario.scenarioKey,
+            PreparedRouteEntry(
+              route: spareCandidate.route,
+              variant: spareCandidate.variant,
+              preparedAt: DateTime.now(),
+            ),
+          );
+        } else if (!hasSeenHistory && !forceFreshVariant) {
+          _schedulePreparedRoundTripRoute(
             scenario: scenario,
             styleConfig: styleConfig,
             startPosition: startPosition,
-            targetLocation: targetLocation,
           );
-          if (fallback != null) {
-            return fallback;
-          }
+        }
+        return finalized;
+      }
 
-          final rescueFallback = await _tryRoundTripRescueFallback(
+      final poolFallback = await _tryRoutePoolFallback(
+        scenario: scenario,
+        styleConfig: styleConfig,
+        userLat: startPosition.latitude,
+        userLng: startPosition.longitude,
+        fallbackReason: lastError?.type.name ?? 'no_accepted_mapbox_route',
+      );
+      if (poolFallback != null) {
+        return poolFallback;
+      }
+
+      // Availability beats diversity: if every fresh attempt only failed the
+      // novelty gate, return the best clean duplicate instead of surfacing a
+      // no-route error. The route still passed the same quality gates.
+      final allowDuplicateEmergencyFallback = debugTrigger != 'settingsChanged';
+      if (bestDuplicateCandidate?.accepted == true &&
+          allowDuplicateEmergencyFallback) {
+        final duplicate = bestDuplicateCandidate!;
+        lastRouteDuplicateFallbackUsed = true;
+        lastRouteEmergencyFallbackUsed = true;
+        debugPrint(
+          '[RouteService] RoundTrip: keine neue Variante gefunden, nutze beste brauchbare Wiederholung statt Fehler.',
+        );
+        _debugRouteSearch(
+          '[Fallback] duplicateFallbackUsed=true recentFallbackUsed=false '
+          'emergencyFallbackUsed=true trigger=$debugTrigger '
+          'scenarioKey=${scenario.scenarioKey} routeVariantHint=${duplicate.variant.variantHint} '
+          'fingerprintHint=${duplicate.variant.fingerprintHint}',
+        );
+        return _finalizeAndRemember(
+          scenario: scenario,
+          route: duplicate.route,
+          sampledCoordinates: duplicate.sampledCoordinates,
+          fingerprint: duplicate.fingerprint,
+        );
+      }
+      if (bestDuplicateCandidate?.accepted == true) {
+        _debugRouteSearch(
+          '[Fallback] duplicateFallbackSkipped=true trigger=$debugTrigger '
+          'scenarioKey=${scenario.scenarioKey} reason=settingsChangedRequiresFreshRoute',
+        );
+      }
+
+      final recent = forceFreshVariant
+          ? null
+          : _recentSuccessfulRoutes[scenario.scenarioKey];
+      if (scenario.isRoundTrip &&
+          recent != null &&
+          _shouldUseRecentFallbackRoute(
+            recent,
             scenario: scenario,
-            styleConfig: styleConfig,
-            startPosition: startPosition,
-            targetLocation: targetLocation,
+            lastError: lastError,
+            requireNovelty: !difficultScenario,
+          )) {
+        lastRouteFromCache = true;
+        lastRouteRecentFallbackUsed = true;
+        lastRouteEmergencyFallbackUsed = true;
+        _debugRouteSearch(
+          '[Fallback] recentFallbackUsed=true cacheHit=false '
+          'emergencyFallbackUsed=true scenarioKey=${scenario.scenarioKey} '
+          'forceFreshVariant=$forceFreshVariant trigger=$debugTrigger',
+        );
+        return _finalizeAndRememberRoute(
+          scenario: scenario,
+          route: recent,
+          fromCache: true,
+        );
+      }
+
+      final cached = forceFreshVariant
+          ? null
+          : await _loadCachedRoute(scenarioKey: scenario.scenarioKey);
+      if (scenario.isRoundTrip &&
+          cached != null &&
+          _shouldUseCachedFallbackRoute(
+            cached,
+            scenario: scenario,
+            lastError: lastError,
+            requireNovelty: !difficultScenario,
+          )) {
+        lastRouteFromCache = true;
+        lastRoutePersistentCacheFallbackUsed = true;
+        lastRouteEmergencyFallbackUsed = true;
+        _debugRouteSearch(
+          '[Fallback] persistentCacheFallbackUsed=true recentFallbackUsed=false '
+          'emergencyFallbackUsed=true scenarioKey=${scenario.scenarioKey} '
+          'forceFreshVariant=$forceFreshVariant trigger=$debugTrigger',
+        );
+        return _finalizeAndRememberRoute(
+          scenario: scenario,
+          route: cached,
+          fromCache: true,
+        );
+      }
+
+      if (_canUseStructuredFallback(lastError)) {
+        final fallback = await _tryRoundTripFallback(
+          scenario: scenario,
+          styleConfig: styleConfig,
+          startPosition: startPosition,
+          targetLocation: targetLocation,
+        );
+        if (fallback != null) {
+          return fallback;
+        }
+
+        final rescueFallback = await _tryRoundTripRescueFallback(
+          scenario: scenario,
+          styleConfig: styleConfig,
+          startPosition: startPosition,
+          targetLocation: targetLocation,
+        );
+        if (rescueFallback != null) {
+          return rescueFallback;
+        }
+      }
+
+      if (recent != null &&
+          _shouldUseRecentFallbackRoute(
+            recent,
+            scenario: scenario,
+            lastError: lastError,
+            requireNovelty: false,
+          )) {
+        lastRouteFromCache = true;
+        lastRouteRecentFallbackUsed = true;
+        lastRouteEmergencyFallbackUsed = true;
+        _debugRouteSearch(
+          '[Fallback] recentFallbackUsed=true afterStructuredFallback=true '
+          'emergencyFallbackUsed=true scenarioKey=${scenario.scenarioKey} '
+          'forceFreshVariant=$forceFreshVariant trigger=$debugTrigger',
+        );
+        return _finalizeAndRememberRoute(
+          scenario: scenario,
+          route: recent,
+          fromCache: true,
+        );
+      }
+
+      if (cached != null &&
+          _shouldUseCachedFallbackRoute(
+            cached,
+            scenario: scenario,
+            lastError: lastError,
+            requireNovelty: false,
+          )) {
+        lastRouteFromCache = true;
+        lastRoutePersistentCacheFallbackUsed = true;
+        lastRouteEmergencyFallbackUsed = true;
+        _debugRouteSearch(
+          '[Fallback] persistentCacheFallbackUsed=true afterStructuredFallback=true '
+          'recentFallbackUsed=false emergencyFallbackUsed=true '
+          'scenarioKey=${scenario.scenarioKey} '
+          'forceFreshVariant=$forceFreshVariant trigger=$debugTrigger',
+        );
+        return _finalizeAndRememberRoute(
+          scenario: scenario,
+          route: cached,
+          fromCache: true,
+        );
+      }
+
+      final warmupError = await _maybeBuildCoverageWarmupError(
+        scenario: scenario,
+        userLat: startPosition.latitude,
+        userLng: startPosition.longitude,
+        lastError: lastError,
+      );
+      if (warmupError != null) {
+        throw warmupError;
+      }
+
+      throw lastError ??
+          const RouteServiceException(
+            type: RouteErrorType.quality,
+            userMessage:
+                'Kein passender Rundkurs gefunden. Bitte versuche es erneut.',
+            debugMessage: 'RoundTrip generation failed without usable result.',
           );
-          if (rescueFallback != null) {
-            return rescueFallback;
-          }
-        }
-
-        if (recent != null &&
-            _shouldUseRecentFallbackRoute(
-              recent,
-              scenario: scenario,
-              lastError: lastError,
-            )) {
-          lastRouteFromCache = true;
-          markRouteAsSeen(scenario.scenarioKey, recent);
-          return _finalizeRoute(recent, scenarioKey: scenario.scenarioKey);
-        }
-
-        if (cached != null &&
-            _shouldUseCachedFallbackRoute(
-              cached,
-              scenario: scenario,
-              lastError: lastError,
-            )) {
-          lastRouteFromCache = true;
-          markRouteAsSeen(scenario.scenarioKey, cached);
-          return _finalizeRoute(cached, scenarioKey: scenario.scenarioKey);
-        }
-
-        throw lastError ??
-            const RouteServiceException(
-              type: RouteErrorType.quality,
-              userMessage:
-                  'Kein passender Rundkurs gefunden. Bitte versuche es erneut.',
-              debugMessage:
-                  'RoundTrip generation failed without usable result.',
-            );
-      },
-    );
+    });
   }
 
   /// Berechnet eine Route von A nach B (direkt oder scenic).
@@ -373,6 +655,7 @@ class RouteService {
     bool avoidHighways = false,
     int diversitySeed = 0,
     bool forceFreshVariant = false,
+    String subscriptionTier = 'premium',
   }) async {
     final styleConfig = RouteStyleConfig.forMode(mode);
     final normalizedVariant = routeVariant.clamp(0, 3);
@@ -432,194 +715,276 @@ class RouteService {
       detourLevel: normalizedVariant,
       avoidHighways: avoidHighways,
     );
+    _resetRouteDebugState();
+    lastRouteDebugTrigger = 'unknown';
+    lastRouteSubscriptionTier = _normalizeSubscriptionTier(subscriptionTier);
+    _activeScenarioKeyForDebug = scenario.scenarioKey;
+    _activeForceFreshVariantForDebug = forceFreshVariant;
+    _activeTriggerForDebug = 'unknown';
 
     if (forceFreshVariant) {
       RouteGenerationCoordinator.suspendBackgroundPreparation();
       PreparedRouteBuffer.clearScenario(scenario.scenarioKey);
     }
 
-    return RouteGenerationCoordinator.runSingleFlight(
-      scenario.scenarioKey,
-      () async {
-        final prepared = forceFreshVariant
-            ? null
-            : _takePreparedRoute(
-                scenario: scenario,
-                styleConfig: styleConfig,
-                directDistanceKm: directDistanceKm,
-              );
-        if (prepared != null) {
-          return prepared;
+    final singleFlightKey = forceFreshVariant
+        ? '${scenario.scenarioKey}|fresh|${DateTime.now().microsecondsSinceEpoch}'
+        : scenario.scenarioKey;
+    return RouteGenerationCoordinator.runSingleFlight(singleFlightKey, () async {
+      if (_isFreeTier(lastRouteSubscriptionTier)) {
+        final freePoolRoute = await _tryRoutePoolFallback(
+          scenario: scenario,
+          styleConfig: styleConfig,
+          userLat: startPosition.latitude,
+          userLng: startPosition.longitude,
+          fallbackReason: 'free_pool_only',
+          directDistanceKm: directDistanceKm,
+        );
+        if (freePoolRoute != null) {
+          return freePoolRoute;
         }
+        throw await _buildCoverageWarmupException(
+          scenario: scenario,
+          userLat: startPosition.latitude,
+          userLng: startPosition.longitude,
+          subscriptionTier: lastRouteSubscriptionTier,
+          lastError: null,
+          createSeedJob: true,
+        );
+      }
 
-        final hasSeenHistory = SeenRouteRegistry.entriesFor(
-          scenario.scenarioKey,
-        ).isNotEmpty;
-        final shouldUseTwoLiveAttempts = shouldDiversify;
-        // Client-Schleife: direkte A→B-Routen bekommen nur einen Live-Versuch,
-        // Scenic-/Detour-Varianten behalten einen zweiten Versuch für echte
-        // Diversifikation und transienten Provider-Pressure.
-        final maxAttempts = shouldUseTwoLiveAttempts ? 2 : 1;
-        _RouteCandidate? bestCandidate;
-        _RouteCandidate? spareCandidate;
-        RouteServiceException? lastError;
+      if (_isBasicTier(lastRouteSubscriptionTier)) {
+        final basicPoolRoute = await _tryRoutePoolFallback(
+          scenario: scenario,
+          styleConfig: styleConfig,
+          userLat: startPosition.latitude,
+          userLng: startPosition.longitude,
+          fallbackReason: 'pool_first_basic',
+          directDistanceKm: directDistanceKm,
+        );
+        if (basicPoolRoute != null) {
+          return basicPoolRoute;
+        }
+        await _ensureCoverageBootstrapStatus(
+          scenario: scenario,
+          userLat: startPosition.latitude,
+          userLng: startPosition.longitude,
+          subscriptionTier: lastRouteSubscriptionTier,
+          createSeedJob: true,
+        );
+      }
 
-        for (var attempt = 0; attempt < maxAttempts; attempt++) {
-          if (_isInWorkerLimitCooldown()) break;
-          final variant = _nextPointToPointVariant(
-            scenario,
-            normalizedVariant: normalizedVariant,
-            diversitySeed: diversitySeed + attempt,
-            shouldDiversify: shouldDiversify,
-          );
-          try {
-            final candidate = await _requestPointToPointVariant(
+      final prepared = forceFreshVariant
+          ? null
+          : _takePreparedRoute(
               scenario: scenario,
               styleConfig: styleConfig,
-              startPosition: startPosition,
-              destinationLat: destinationLat,
-              destinationLng: destinationLng,
-              scenic: scenic,
-              normalizedVariant: normalizedVariant,
-              avoidHighways: avoidHighways,
               directDistanceKm: directDistanceKm,
-              targetDistanceKm: targetDistanceKm,
-              detourFactor: detourFactor,
-              variant: variant,
-              // 4-5 Pläne pro Versuch — A→B braucht Spielraum, damit
-              // Klein/Mittel/Groß ihre Detour-Fenster wirklich treffen können.
-              candidateBudget: normalizedVariant >= 2
-                  ? 5
-                  : (hasSeenHistory ? 3 : 4),
             );
-            if (candidate.accepted) {
-              if (_isBetterCandidate(candidate, bestCandidate)) {
-                if (bestCandidate != null &&
-                    _isBetterCandidate(bestCandidate, spareCandidate)) {
-                  spareCandidate = bestCandidate;
-                }
-                bestCandidate = candidate;
-              } else if (_isBetterCandidate(candidate, spareCandidate)) {
-                spareCandidate = candidate;
-              }
-            }
-            if (candidate.accepted &&
-                (candidate.isIdeal ||
-                    candidate.isGood ||
-                    (candidate.tier == RouteQualityTier.acceptable &&
-                        !shouldUseTwoLiveAttempts))) {
-              break;
-            }
-          } catch (e, stack) {
-            final mapped = e is RouteServiceException
-                ? e
-                : _mapInvokeException(
-                    error: e,
-                    stack: stack,
-                    routeType: scenario.routeType,
-                  );
-            lastError = mapped;
-            if (_isWorkerLimitError(mapped)) {
-              _setWorkerLimitCooldown();
-            }
-            debugPrint(
-              '[RouteService] A→B candidate ${attempt + 1}/$maxAttempts fehlgeschlagen: ${mapped.debugMessage}',
-            );
-            if (_isFatalStructuredError(mapped)) {
-              break;
-            }
-          }
-        }
+      if (prepared != null) {
+        return prepared;
+      }
 
-        final acceptedCandidate = bestCandidate;
-        if (acceptedCandidate != null && acceptedCandidate.accepted) {
-          if (_needsStrongerPointToPointDetour(
+      final hasSeenHistory = SeenRouteRegistry.entriesForAny(
+        _seenHistoryKeysForScenario(scenario),
+      ).isNotEmpty;
+      final shouldUseTwoLiveAttempts = shouldDiversify;
+      // Client-Schleife: direkte A→B-Routen bekommen nur einen Live-Versuch,
+      // Scenic-/Detour-Varianten behalten einen zweiten Versuch für echte
+      // Diversifikation und transienten Provider-Pressure.
+      final maxAttempts = shouldUseTwoLiveAttempts ? 2 : 1;
+      _RouteCandidate? bestCandidate;
+      _RouteCandidate? spareCandidate;
+      RouteServiceException? lastError;
+
+      for (var attempt = 0; attempt < maxAttempts; attempt++) {
+        if (_isInWorkerLimitCooldown()) break;
+        final variant = _nextPointToPointVariant(
+          scenario,
+          normalizedVariant: normalizedVariant,
+          diversitySeed: diversitySeed + attempt,
+          shouldDiversify: shouldDiversify,
+        );
+        try {
+          final candidate = await _requestPointToPointVariant(
             scenario: scenario,
             styleConfig: styleConfig,
-            candidate: acceptedCandidate,
+            startPosition: startPosition,
+            destinationLat: destinationLat,
+            destinationLng: destinationLng,
+            scenic: scenic,
+            normalizedVariant: normalizedVariant,
+            avoidHighways: avoidHighways,
             directDistanceKm: directDistanceKm,
-          )) {
-            final scenicUpgrade = await _tryPointToPointFallback(
-              scenario: scenario,
-              startPosition: startPosition,
-              destinationLat: destinationLat,
-              destinationLng: destinationLng,
-              avoidHighways: avoidHighways,
-              directDistanceKm: directDistanceKm,
-              allowDirectFallback: false,
-            );
-            if (scenicUpgrade != null) {
-              return scenicUpgrade;
+            targetDistanceKm: targetDistanceKm,
+            detourFactor: detourFactor,
+            variant: variant,
+            // 4-5 Pläne pro Versuch — A→B braucht Spielraum, damit
+            // Klein/Mittel/Groß ihre Detour-Fenster wirklich treffen können.
+            candidateBudget: normalizedVariant >= 2
+                ? 5
+                : (hasSeenHistory ? 3 : 4),
+          );
+          if (candidate.accepted) {
+            if (_isBetterCandidate(candidate, bestCandidate)) {
+              if (bestCandidate != null &&
+                  _isBetterCandidate(bestCandidate, spareCandidate)) {
+                spareCandidate = bestCandidate;
+              }
+              bestCandidate = candidate;
+            } else if (_isBetterCandidate(candidate, spareCandidate)) {
+              spareCandidate = candidate;
             }
           }
-
-          final finalized = _finalizeAndRemember(
-            scenario: scenario,
-            route: acceptedCandidate.route,
-            sampledCoordinates: acceptedCandidate.sampledCoordinates,
-            fingerprint: acceptedCandidate.fingerprint,
-          );
-          if (spareCandidate != null) {
-            PreparedRouteBuffer.store(
-              scenario.scenarioKey,
-              PreparedRouteEntry(
-                route: spareCandidate.route,
-                variant: spareCandidate.variant,
-                preparedAt: DateTime.now(),
-              ),
-            );
-          } else if (shouldDiversify && !forceFreshVariant) {
-            _schedulePreparedPointToPointRoute(
-              scenario: scenario,
-              styleConfig: styleConfig,
-              startPosition: startPosition,
-              destinationLat: destinationLat,
-              destinationLng: destinationLng,
-              avoidHighways: avoidHighways,
-              directDistanceKm: directDistanceKm,
-            );
+          if (candidate.accepted &&
+              (candidate.isIdeal ||
+                  candidate.isGood ||
+                  (candidate.tier == RouteQualityTier.acceptable &&
+                      !shouldUseTwoLiveAttempts))) {
+            break;
           }
-          return finalized;
+        } catch (e, stack) {
+          final mapped = e is RouteServiceException
+              ? e
+              : _mapInvokeException(
+                  error: e,
+                  stack: stack,
+                  routeType: scenario.routeType,
+                );
+          lastError = mapped;
+          if (_isWorkerLimitError(mapped)) {
+            _setWorkerLimitCooldown();
+          }
+          debugPrint(
+            '[RouteService] A→B candidate ${attempt + 1}/$maxAttempts fehlgeschlagen: ${mapped.debugMessage}',
+          );
+          if (_isFatalStructuredError(mapped)) {
+            break;
+          }
         }
+      }
 
-        if (_canUseStructuredFallback(lastError)) {
-          final fallback = await _tryPointToPointFallback(
+      final acceptedCandidate = bestCandidate;
+      if (acceptedCandidate != null && acceptedCandidate.accepted) {
+        if (_needsStrongerPointToPointDetour(
+          scenario: scenario,
+          styleConfig: styleConfig,
+          candidate: acceptedCandidate,
+          directDistanceKm: directDistanceKm,
+        )) {
+          final scenicUpgrade = await _tryPointToPointFallback(
             scenario: scenario,
             startPosition: startPosition,
             destinationLat: destinationLat,
             destinationLng: destinationLng,
             avoidHighways: avoidHighways,
             directDistanceKm: directDistanceKm,
-            allowDirectFallback: scenario.detourLevel <= 0,
+            allowDirectFallback: false,
           );
-          if (fallback != null) {
-            return fallback;
+          if (scenicUpgrade != null) {
+            return scenicUpgrade;
           }
         }
-
-        final cached = forceFreshVariant
-            ? null
-            : await _loadRecentOrCachedRoute(scenarioKey: scenario.scenarioKey);
-        if (cached != null &&
-            _shouldUseCachedFallbackRoute(
-              cached,
-              scenario: scenario,
-              lastError: lastError,
-            )) {
-          lastRouteFromCache = true;
-          markRouteAsSeen(scenario.scenarioKey, cached);
-          return _finalizeRoute(cached, scenarioKey: scenario.scenarioKey);
+        lastRouteGenerationSource = 'mapbox';
+        final finalized = _finalizeAndRemember(
+          scenario: scenario,
+          route: acceptedCandidate.route,
+          sampledCoordinates: acceptedCandidate.sampledCoordinates,
+          fingerprint: acceptedCandidate.fingerprint,
+        );
+        await _maybeRecordRoutePoolCandidate(
+          scenario: scenario,
+          route: acceptedCandidate.route,
+          fingerprint: acceptedCandidate.fingerprint,
+          tier: acceptedCandidate.tier,
+          qualityScore: acceptedCandidate.score,
+          subscriptionTier: lastRouteSubscriptionTier,
+        );
+        if (spareCandidate != null) {
+          PreparedRouteBuffer.store(
+            scenario.scenarioKey,
+            PreparedRouteEntry(
+              route: spareCandidate.route,
+              variant: spareCandidate.variant,
+              preparedAt: DateTime.now(),
+            ),
+          );
+        } else if (shouldDiversify && !forceFreshVariant) {
+          _schedulePreparedPointToPointRoute(
+            scenario: scenario,
+            styleConfig: styleConfig,
+            startPosition: startPosition,
+            destinationLat: destinationLat,
+            destinationLng: destinationLng,
+            avoidHighways: avoidHighways,
+            directDistanceKm: directDistanceKm,
+          );
         }
+        return finalized;
+      }
 
-        throw lastError ??
-            const RouteServiceException(
-              type: RouteErrorType.noRoute,
-              userMessage:
-                  'Keine passende Route gefunden. Bitte versuche es erneut.',
-              debugMessage: 'Point-to-point generation failed without result.',
-            );
-      },
-    );
+      final poolFallback = await _tryRoutePoolFallback(
+        scenario: scenario,
+        styleConfig: styleConfig,
+        userLat: startPosition.latitude,
+        userLng: startPosition.longitude,
+        fallbackReason: lastError?.type.name ?? 'no_accepted_mapbox_route',
+        directDistanceKm: directDistanceKm,
+      );
+      if (poolFallback != null) {
+        return poolFallback;
+      }
+
+      if (_canUseStructuredFallback(lastError)) {
+        final fallback = await _tryPointToPointFallback(
+          scenario: scenario,
+          startPosition: startPosition,
+          destinationLat: destinationLat,
+          destinationLng: destinationLng,
+          avoidHighways: avoidHighways,
+          directDistanceKm: directDistanceKm,
+          allowDirectFallback: scenario.detourLevel <= 0,
+        );
+        if (fallback != null) {
+          return fallback;
+        }
+      }
+
+      final cached = forceFreshVariant
+          ? null
+          : await _loadRecentOrCachedRoute(scenarioKey: scenario.scenarioKey);
+      if (cached != null &&
+          _shouldUseCachedFallbackRoute(
+            cached,
+            scenario: scenario,
+            lastError: lastError,
+          )) {
+        lastRouteFromCache = true;
+        return _finalizeAndRememberRoute(
+          scenario: scenario,
+          route: cached,
+          fromCache: true,
+        );
+      }
+
+      final warmupError = await _maybeBuildCoverageWarmupError(
+        scenario: scenario,
+        userLat: startPosition.latitude,
+        userLng: startPosition.longitude,
+        lastError: lastError,
+      );
+      if (warmupError != null) {
+        throw warmupError;
+      }
+
+      throw lastError ??
+          const RouteServiceException(
+            type: RouteErrorType.noRoute,
+            userMessage:
+                'Keine passende Route gefunden. Bitte versuche es erneut.',
+            debugMessage: 'Point-to-point generation failed without result.',
+          );
+    });
   }
 
   /// Baut einen direkten Zugang zu einer bestehenden Route, ohne deren
@@ -869,6 +1234,17 @@ class RouteService {
       fingerprint: fingerprint,
       sampledCoordinates: sampledCoordinates,
     );
+  }
+
+  static Iterable<String> _seenHistoryKeysForScenario(RouteScenario scenario) {
+    if (!scenario.isRoundTrip) {
+      return <String>{scenario.scenarioKey};
+    }
+    return <String>{scenario.scenarioKey, scenario.noveltyKey};
+  }
+
+  static String _recentDisplayedKeyForScenario(RouteScenario scenario) {
+    return scenario.scenarioKey;
   }
 
   /// Löscht die "gesehen"-Historie für ein Szenario.
@@ -1169,9 +1545,16 @@ class RouteService {
       'type': 'LineString',
       'coordinates': slicedCoordinates,
     };
-    final distanceMeters = _distanceAlongCoordinates(slicedCoordinates);
+    final sourceGeometryDistanceMeters = _distanceAlongCoordinates(
+      route.coordinates,
+    );
     final sourceDistanceMeters =
-        route.distanceMeters ?? _distanceAlongCoordinates(route.coordinates);
+        route.distanceMeters ?? sourceGeometryDistanceMeters;
+    final sourceDistanceScale = sourceGeometryDistanceMeters > 0
+        ? sourceDistanceMeters / sourceGeometryDistanceMeters
+        : 1.0;
+    final distanceMeters =
+        _distanceAlongCoordinates(slicedCoordinates) * sourceDistanceScale;
     final durationSeconds =
         route.durationSeconds != null && sourceDistanceMeters > 0
         ? route.durationSeconds! * (distanceMeters / sourceDistanceMeters)
@@ -1343,6 +1726,25 @@ class RouteService {
     );
   }
 
+  RouteResult _routeWithEdgeMeta(
+    RouteResult result,
+    Map<String, dynamic> edgeMeta,
+  ) {
+    return RouteResult(
+      geoJson: result.geoJson,
+      geometry: result.geometry,
+      coordinates: result.coordinates
+          .map(_copyCoordinate)
+          .toList(growable: false),
+      maneuvers: filterManeuvers(result.maneuvers),
+      distanceMeters: result.distanceMeters,
+      durationSeconds: result.durationSeconds,
+      distanceKm: result.distanceKm,
+      speedLimits: result.speedLimits,
+      edgeMeta: edgeMeta,
+    );
+  }
+
   RouteManeuver _copyManeuver(
     RouteManeuver maneuver, {
     required int routeIndex,
@@ -1385,10 +1787,24 @@ class RouteService {
   }
 
   Future<RouteResult> _invoke(Map<String, dynamic> body) async {
-    final requestUrl = '${AppConstants.supabaseUrl}/functions/v1/$edgeFunction';
+    final requestUrl =
+        _debugEndpointForInvoker(_invoker) ??
+        '${AppConstants.supabaseUrl}/functions/v1/$edgeFunction';
     final routeType = body['route_type']?.toString() ?? 'ROUND_TRIP';
     final mode = body['mode'];
     final planningType = body['planning_type'];
+    body['client_scenario_key'] ??=
+        _activeScenarioKeyForDebug ?? scenarioKey(body);
+    body['client_force_fresh_variant'] ??= _activeForceFreshVariantForDebug;
+    body['client_trigger'] ??= _activeTriggerForDebug;
+    final clientScenarioKey =
+        body['client_scenario_key']?.toString() ?? scenarioKey(body);
+    final routeVariantHint =
+        body['route_variant_hint'] ?? body['variant_hint'] ?? '';
+    final fingerprintHint =
+        body['route_fingerprint_hint'] ?? body['fingerprint_hint'] ?? '';
+    final clientForceFreshVariant = body['client_force_fresh_variant'] == true;
+    final clientTrigger = body['client_trigger']?.toString() ?? 'unknown';
     final hasDestination = requiresDestination(routeType)
         ? body['destination_location'] != null
         : false;
@@ -1405,6 +1821,13 @@ class RouteService {
     final cacheKey = _cacheKey(body);
     final cached = _sessionCache[cacheKey];
     if (cached != null) {
+      lastRouteSessionCacheHit = true;
+      _debugRouteSearch(
+        '[Request] cacheHit=true recentFallbackUsed=$lastRouteRecentFallbackUsed '
+        'scenarioKey=$clientScenarioKey routeVariantHint=$routeVariantHint '
+        'fingerprintHint=$fingerprintHint forceFreshVariant=$clientForceFreshVariant '
+        'trigger=$clientTrigger apiCallCount=$lastRouteApiCallCount',
+      );
       debugPrint('[RouteService] 📦 Cache-Hit — kein neuer API-Call nötig');
       return cached;
     }
@@ -1412,6 +1835,22 @@ class RouteService {
     // Request-ID für Monitoring
     final requestTimestamp = DateTime.now().millisecondsSinceEpoch;
     body['request_id'] = 'cruiseconnect_$requestTimestamp';
+    lastRouteApiCallCount += 1;
+    _debugRouteSearch(
+      '[Build] clientRoutingBuildId=$clientRoutingBuildId '
+      'clientRoutingBuildTime=$clientRoutingBuildTime endpoint=$requestUrl '
+      'requestTimestamp=$requestTimestamp requestId=${body['request_id']}',
+    );
+    _debugRouteSearch(
+      '[RequestBody] ${jsonEncode(_debugRequestSnapshot(body))}',
+    );
+    _debugRouteSearch(
+      '[Request] cacheHit=false recentFallbackUsed=$lastRouteRecentFallbackUsed '
+      'scenarioKey=$clientScenarioKey routeVariantHint=$routeVariantHint '
+      'fingerprintHint=$fingerprintHint forceFreshVariant=$clientForceFreshVariant '
+      'trigger=$clientTrigger apiCallCount=$lastRouteApiCallCount '
+      'requestId=${body['request_id']}',
+    );
     debugPrint('[RouteService] 🗺️ Mapbox Request #$requestTimestamp gesendet');
     final stopwatch = Stopwatch()..start();
 
@@ -1518,6 +1957,16 @@ class RouteService {
 
     if (data['error'] != null) {
       final errorMessage = data['error'].toString();
+      if (data['meta'] is Map) {
+        final edgeMeta = Map<String, dynamic>.from(data['meta'] as Map);
+        _debugRouteSearch(
+          '[EdgeMeta] scenarioKey=$clientScenarioKey '
+          'routing_build_id=${edgeMeta['routing_build_id']} '
+          'avoid_highways_requested=${edgeMeta['avoid_highways_requested']} '
+          'effective_excludes=${edgeMeta['effective_excludes']} '
+          'requestId=${body['request_id']} error=${data['code']}',
+        );
+      }
       throw _mapServiceError(
         errorMessage: errorMessage,
         statusCode: statusCode,
@@ -1595,6 +2044,13 @@ class RouteService {
         '${edgeMeta['avoid_highways_requested']}, '
         'effective_excludes=${edgeMeta['effective_excludes']}',
       );
+      _debugRouteSearch(
+        '[EdgeMeta] scenarioKey=$clientScenarioKey '
+        'routing_build_id=${edgeMeta['routing_build_id']} '
+        'avoid_highways_requested=${edgeMeta['avoid_highways_requested']} '
+        'effective_excludes=${edgeMeta['effective_excludes']} '
+        'requestId=${body['request_id']}',
+      );
     } else if (routeType == 'POINT_TO_POINT') {
       debugPrint(
         '[RouteService] A→B Edge-Meta: avoid_highways_requested='
@@ -1617,6 +2073,58 @@ class RouteService {
     );
     _sessionCache[cacheKey] = routeResult;
     return routeResult;
+  }
+
+  static String? _debugEndpointForInvoker(RouteEdgeInvoker invoker) {
+    if (invoker is SupabaseRouteInvoker) return invoker.debugEndpoint;
+    try {
+      final endpoint = (invoker as dynamic).debugEndpoint;
+      return endpoint is String && endpoint.isNotEmpty ? endpoint : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static Map<String, dynamic> _debugRequestSnapshot(Map<String, dynamic> body) {
+    final start = body['startLocation'] as Map?;
+    final destination = body['destination_location'] as Map?;
+    return <String, dynamic>{
+      'request_id': body['request_id'],
+      'client_scenario_key': body['client_scenario_key'],
+      'client_force_fresh_variant': body['client_force_fresh_variant'],
+      'client_trigger': body['client_trigger'],
+      'route_type': body['route_type'],
+      'planning_type': body['planning_type'],
+      'mode': body['mode'],
+      'targetDistance': body['targetDistance'],
+      'avoid_highways': body['avoid_highways'],
+      'startLocation': start == null
+          ? null
+          : <String, dynamic>{
+              'latitude': _roundDebugCoord(start['latitude']),
+              'longitude': _roundDebugCoord(start['longitude']),
+            },
+      'destination_location': destination == null
+          ? null
+          : <String, dynamic>{
+              'latitude': _roundDebugCoord(destination['latitude']),
+              'longitude': _roundDebugCoord(destination['longitude']),
+            },
+      'direction_hint': body['direction_hint'],
+      'route_variant_hint': body['route_variant_hint'],
+      'route_fingerprint_hint': body['route_fingerprint_hint'],
+      'max_candidate_attempts': body['max_candidate_attempts'],
+      'style_profile': body['style_profile'],
+      'waypoint_shape_factor': body['waypoint_shape_factor'],
+      'radius_multiplier': body['radius_multiplier'],
+      'zigzag_waypoints': body['zigzag_waypoints'],
+    };
+  }
+
+  static double? _roundDebugCoord(Object? value) {
+    final number = value is num ? value.toDouble() : null;
+    if (number == null || !number.isFinite) return null;
+    return (number * 100000).roundToDouble() / 100000;
   }
 
   static bool _isRetryable(RouteServiceException error) {
@@ -1828,7 +2336,9 @@ class RouteService {
       fingerprintHint:
           '${scenario.scenarioKey}|rt|$index|${angleOffset.round()}|${(radiusJitter * 100).round()}',
       variantHint:
-          'rt-${styleConfig.profileKey}-$index-${(angleOffset / 45).round()}',
+          'rt-${styleConfig.profileKey}-h${scenario.avoidHighways ? 1 : 0}'
+          '-k${(scenario.targetDistanceKm ?? 0).round()}-$index'
+          '-${(angleOffset / 45).round()}',
       styleBias: styleConfig.profileKey,
     );
   }
@@ -1880,6 +2390,8 @@ class RouteService {
     required geo.Position startPosition,
     required RouteVariant variant,
     required int candidateBudget,
+    bool forceFreshVariant = false,
+    String debugTrigger = 'unknown',
     Map<String, double>? targetLocation,
   }) async {
     final adjustedTargetKm = styleConfig.clampRoundTripDistanceKm(
@@ -1900,6 +2412,9 @@ class RouteService {
       candidateBudget: candidateBudget,
       avoidHighways: scenario.avoidHighways,
     );
+    body['client_scenario_key'] = scenario.scenarioKey;
+    body['client_force_fresh_variant'] = forceFreshVariant;
+    body['client_trigger'] = debugTrigger;
     final result = await _invoke(body);
     final snapped = _snapRouteToStartPosition(result, startPosition);
     return _evaluateCandidate(
@@ -1988,6 +2503,13 @@ class RouteService {
       targetDistanceKm: qualityTargetDistanceKm,
       actualDistanceKm: actualDistanceKm,
     );
+    final deadEndSpikes = RouteQualityValidator.detectDeadEndSpikes(
+      route.coordinates,
+    );
+    final deadEndSpikeDetected = deadEndSpikes.isNotEmpty;
+    if (deadEndSpikeDetected) {
+      lastRouteDeadEndSpikeDetected = true;
+    }
     final styleFitScore = styleConfig.scoreStyleFit(
       coordinates: route.coordinates,
       distanceKm: actualDistanceKm,
@@ -2012,24 +2534,33 @@ class RouteService {
     final similarityProximityMeters = _similarityProximityMetersForScenario(
       scenario,
     );
+    final recentSimilarityThreshold = _lastShownSimilarityThresholdForScenario(
+      scenario,
+    );
+    final recentSimilarityProximityMeters =
+        _lastShownSimilarityProximityMetersForScenario(scenario);
     final recentRoute = scenario.isRoundTrip
-        ? _recentSuccessfulRoutes[scenario.scenarioKey]
+        ? (_recentDisplayedRoutes[_recentDisplayedKeyForScenario(scenario)] ??
+              _recentSuccessfulRoutes[scenario.scenarioKey])
         : null;
+    final recentRouteSamples = recentRoute == null
+        ? null
+        : _sampleRouteForSimilarity(recentRoute.coordinates);
     final recentRouteTooSimilar =
-        recentRoute != null &&
+        recentRouteSamples != null &&
         RouteQualityValidator.isRouteTooSimilarToPrevious(
           sampledCoordinates,
-          [recentRoute.coordinates],
-          thresholdPercent: similarityThreshold,
-          proximityMeters: similarityProximityMeters,
+          [recentRouteSamples],
+          thresholdPercent: recentSimilarityThreshold,
+          proximityMeters: recentSimilarityProximityMeters,
         );
     final tooSimilar =
-        SeenRouteRegistry.hasExactFingerprint(
-          scenario.scenarioKey,
+        SeenRouteRegistry.hasExactFingerprintInAny(
+          _seenHistoryKeysForScenario(scenario),
           fingerprint,
         ) ||
-        SeenRouteRegistry.hasSimilarRoute(
-          scenario.scenarioKey,
+        SeenRouteRegistry.hasSimilarRouteInAny(
+          _seenHistoryKeysForScenario(scenario),
           sampledCoordinates,
           thresholdPercent: similarityThreshold,
           proximityMeters: similarityProximityMeters,
@@ -2193,6 +2724,7 @@ class RouteService {
     final serverApprovedAcceptable =
         edgeTier != null &&
         edgeTier != RouteQualityTier.rejected &&
+        !deadEndSpikeDetected &&
         hasEnoughPoints &&
         renderableDistanceOk &&
         (scenario.isRoundTrip
@@ -2235,6 +2767,7 @@ class RouteService {
         scenario.isRoundTrip &&
         styleConfig.profileKey == 'sport' &&
         edgeTier == RouteQualityTier.acceptable &&
+        !deadEndSpikeDetected &&
         hasEnoughPoints &&
         successFirstDistanceOk &&
         quality.uturnPositions.length <= 1 &&
@@ -2249,7 +2782,8 @@ class RouteService {
                   classification.isAcceptable ||
                   scenicFallbackRenderable ||
                   serverApprovedAcceptable);
-    final softRenderable = hasEnoughPoints && qualityAcceptable;
+    final softRenderable =
+        hasEnoughPoints && qualityAcceptable && !deadEndSpikeDetected;
     final styleSoftOk =
         styleOk ||
         (scenario.isRoundTrip &&
@@ -2292,6 +2826,7 @@ class RouteService {
             : 0.0) +
         (styleOk ? 0.0 : 18.0) +
         (styleSoftOk ? 0.0 : 30.0) +
+        (deadEndSpikeDetected ? 90.0 : 0.0) +
         (tooSimilar ? 45.0 : 0.0) +
         (detourDistanceOk ? 0.0 : 135.0) +
         (hasEnoughPoints ? 0.0 : 24.0) -
@@ -2307,6 +2842,7 @@ class RouteService {
       'styleFit=${styleFitScore.toStringAsFixed(1)}, '
       'styleOk=$styleOk/$styleSoftOk, '
       'uturns=${quality.uturnPositions.length}, '
+      'deadEndSpikes=${deadEndSpikes.length}, '
       'tooSimilar=$tooSimilar, novelEnough=$novelEnough, '
       'edgeTier=${edgeTier?.name ?? 'none'}, '
       'detourOk=$detourDistanceOk, '
@@ -2528,6 +3064,17 @@ class RouteService {
     return 66.0;
   }
 
+  double _lastShownSimilarityThresholdForScenario(RouteScenario scenario) {
+    if (!scenario.isRoundTrip) {
+      return _similarityThresholdForScenario(scenario);
+    }
+    final style = scenario.style.toLowerCase();
+    if (style.contains('kurvenjagd') || style.contains('kurvenreich')) {
+      return 52.0;
+    }
+    return 56.0;
+  }
+
   double _similarityProximityMetersForScenario(RouteScenario scenario) {
     if (scenario.isRoundTrip) {
       // Weitere Proximity → zwei Routen gelten schon dann als „in Deckung“,
@@ -2540,6 +3087,15 @@ class RouteService {
       return 135.0;
     }
     return 160.0;
+  }
+
+  double _lastShownSimilarityProximityMetersForScenario(
+    RouteScenario scenario,
+  ) {
+    if (!scenario.isRoundTrip) {
+      return _similarityProximityMetersForScenario(scenario);
+    }
+    return 200.0;
   }
 
   bool _isNovelRouteForScenario(RouteScenario scenario, RouteResult route) {
@@ -2555,14 +3111,20 @@ class RouteService {
     final similarityProximityMeters = _similarityProximityMetersForScenario(
       scenario,
     );
-    final recentRoute = _recentSuccessfulRoutes[scenario.scenarioKey];
+    final recentRoute =
+        _recentDisplayedRoutes[_recentDisplayedKeyForScenario(scenario)] ??
+        _recentSuccessfulRoutes[scenario.scenarioKey];
     if (recentRoute != null) {
       final recentSamples = _sampleRouteForSimilarity(recentRoute.coordinates);
       if (RouteQualityValidator.isRouteTooSimilarToPrevious(
             sampledCoordinates,
             [recentSamples],
-            thresholdPercent: similarityThreshold,
-            proximityMeters: similarityProximityMeters,
+            thresholdPercent: _lastShownSimilarityThresholdForScenario(
+              scenario,
+            ),
+            proximityMeters: _lastShownSimilarityProximityMetersForScenario(
+              scenario,
+            ),
           ) ||
           RouteQualityValidator.buildRouteFingerprint(
                 recentSamples,
@@ -2574,14 +3136,18 @@ class RouteService {
       }
     }
 
-    if (SeenRouteRegistry.entriesFor(scenario.scenarioKey).isEmpty) return true;
+    if (SeenRouteRegistry.entriesForAny(
+      _seenHistoryKeysForScenario(scenario),
+    ).isEmpty) {
+      return true;
+    }
 
-    return !SeenRouteRegistry.hasExactFingerprint(
-          scenario.scenarioKey,
+    return !SeenRouteRegistry.hasExactFingerprintInAny(
+          _seenHistoryKeysForScenario(scenario),
           fingerprint,
         ) &&
-        !SeenRouteRegistry.hasSimilarRoute(
-          scenario.scenarioKey,
+        !SeenRouteRegistry.hasSimilarRouteInAny(
+          _seenHistoryKeysForScenario(scenario),
           sampledCoordinates,
           thresholdPercent: similarityThreshold,
           proximityMeters: similarityProximityMeters,
@@ -2615,7 +3181,18 @@ class RouteService {
     double? directDistanceKm,
   }) {
     final entry = PreparedRouteBuffer.take(scenario.scenarioKey);
-    if (entry == null) return null;
+    if (entry == null) {
+      _debugRouteSearch(
+        '[Prepared] preparedHit=false scenarioKey=${scenario.scenarioKey}',
+      );
+      return null;
+    }
+    _debugRouteSearch(
+      '[Prepared] preparedHit=true scenarioKey=${scenario.scenarioKey} '
+      'routeVariantHint=${entry.variant.variantHint} '
+      'fingerprintHint=${entry.variant.fingerprintHint}',
+    );
+    lastRoutePreparedBufferHit = true;
     final candidate = _evaluateCandidate(
       scenario: scenario,
       styleConfig: styleConfig,
@@ -2624,8 +3201,17 @@ class RouteService {
       directDistanceKm: directDistanceKm,
     );
     if (!candidate.accepted || !candidate.novelEnough) {
+      _debugRouteSearch(
+        '[Prepared] rejected scenarioKey=${scenario.scenarioKey} '
+        'accepted=${candidate.accepted} novelEnough=${candidate.novelEnough}',
+      );
       return null;
     }
+    lastRoutePreparedBufferUsed = true;
+    lastRouteGenerationSource = 'prepared_buffer';
+    _debugRouteSearch(
+      '[Prepared] accepted scenarioKey=${scenario.scenarioKey}',
+    );
     return _finalizeAndRemember(
       scenario: scenario,
       route: candidate.route,
@@ -2770,16 +3356,925 @@ class RouteService {
     required RouteResult route,
     required List<List<double>> sampledCoordinates,
     required String fingerprint,
+    bool fromCache = false,
   }) {
+    final previousDisplayed =
+        _recentDisplayedRoutes[_recentDisplayedKeyForScenario(scenario)] ??
+        _recentSuccessfulRoutes[scenario.scenarioKey];
+    double? similarityToPrevious;
+    if (previousDisplayed != null) {
+      similarityToPrevious =
+          RouteQualityValidator.calculateRouteSimilarityPercent(
+            sampledCoordinates,
+            _sampleRouteForSimilarity(previousDisplayed.coordinates),
+            proximityMeters: _lastShownSimilarityProximityMetersForScenario(
+              scenario,
+            ),
+          );
+    }
     final finalized = _finalizeRoute(route, scenarioKey: scenario.scenarioKey);
+    if (fromCache && lastRouteGenerationSource == 'mapbox') {
+      lastRouteGenerationSource = 'cache';
+    }
     _recentSuccessfulRoutes[scenario.scenarioKey] = finalized;
-    SeenRouteRegistry.remember(
-      scenario.scenarioKey,
+    _recentDisplayedRoutes[_recentDisplayedKeyForScenario(scenario)] =
+        finalized;
+    SeenRouteRegistry.rememberAll(
+      _seenHistoryKeysForScenario(scenario),
       fingerprint: fingerprint,
       sampledCoordinates: sampledCoordinates,
     );
-    lastRouteFromCache = false;
+    lastRouteFromCache = fromCache;
+    lastRouteDebugFingerprint = fingerprint;
+    lastRouteSimilarityToPreviousPercent = similarityToPrevious;
+    _debugRouteSearch(
+      '[Result] scenarioKey=${scenario.scenarioKey} '
+      'routeFingerprint=$fingerprint '
+      'similarityToLastRoute=${similarityToPrevious == null ? 'none' : '${similarityToPrevious.toStringAsFixed(1)}%'} '
+      'cacheHit=$lastRouteSessionCacheHit '
+      'apiCallCount=$lastRouteApiCallCount '
+      'recentFallbackUsed=$lastRouteRecentFallbackUsed '
+      'persistentCacheFallbackUsed=$lastRoutePersistentCacheFallbackUsed '
+      'preparedBufferHit=$lastRoutePreparedBufferHit '
+      'preparedBufferUsed=$lastRoutePreparedBufferUsed '
+      'duplicateFallbackUsed=$lastRouteDuplicateFallbackUsed '
+      'poolFallbackUsed=$lastRoutePoolFallbackUsed '
+      'routeGenerationSource=$lastRouteGenerationSource '
+      'poolMatchId=$lastRoutePoolMatchId '
+      'poolMatchTier=$lastRoutePoolMatchTier '
+      'poolStartDistanceKm=${lastRoutePoolStartDistanceKm?.toStringAsFixed(1)} '
+      'emergencyFallbackUsed=$lastRouteEmergencyFallbackUsed '
+      'fallbackUsed=${lastRouteRecentFallbackUsed || lastRoutePersistentCacheFallbackUsed || lastRouteDuplicateFallbackUsed || lastRoutePoolFallbackUsed} '
+      'trigger=${lastRouteDebugTrigger ?? 'unknown'} '
+      'fromCache=$fromCache',
+    );
     return finalized;
+  }
+
+  RouteResult _finalizeAndRememberRoute({
+    required RouteScenario scenario,
+    required RouteResult route,
+    bool fromCache = false,
+  }) {
+    final sampledCoordinates = _sampleRouteForSimilarity(route.coordinates);
+    final fingerprint = RouteQualityValidator.buildRouteFingerprint(
+      sampledCoordinates,
+      distanceKm: route.distanceKm,
+      precision: 4,
+    );
+    return _finalizeAndRemember(
+      scenario: scenario,
+      route: route,
+      sampledCoordinates: sampledCoordinates,
+      fingerprint: fingerprint,
+      fromCache: fromCache,
+    );
+  }
+
+  Future<RouteResult?> _tryRoutePoolFallback({
+    required RouteScenario scenario,
+    required RouteStyleConfig styleConfig,
+    required double userLat,
+    required double userLng,
+    required String fallbackReason,
+    double? directDistanceKm,
+  }) async {
+    final bucket = _distanceBucketForPool(scenario.targetDistanceKm);
+    if (bucket == null) {
+      _debugRouteSearch(
+        '[PoolFallback] skipped=true reason=unsupported_distance '
+        'targetKm=${scenario.targetDistanceKm}',
+      );
+      return null;
+    }
+
+    lastRoutePoolDistanceRuleApplied = scenario.isRoundTrip;
+    lastRoutePoolRejectedTooFar = false;
+    lastRouteAccessLegUsed = false;
+    lastRouteAccessLegDistanceKm = null;
+
+    final matches = await _routePoolService.findCandidateRoutesNear(
+      userLat: userLat,
+      userLng: userLng,
+      distanceBucket: bucket,
+      style: scenario.style,
+      avoidHighways: scenario.avoidHighways,
+      routeType: scenario.routeType,
+    );
+    if (matches.isEmpty) {
+      _debugRouteSearch(
+        '[PoolFallback] poolHit=false reason=pool_density_missing '
+        'scenarioKey=${scenario.scenarioKey} bucket=$bucket',
+      );
+      return null;
+    }
+
+    for (final match in matches) {
+      final actualPoolStartDistanceKm = RoutePoolService.haversineDistanceKm(
+        userLat,
+        userLng,
+        match.route.startLat,
+        match.route.startLng,
+      );
+      if (scenario.isRoundTrip &&
+          actualPoolStartDistanceKm > RoutePoolService.roundTripHardStartMaxKm) {
+        lastRoutePoolRejectedTooFar = true;
+        _debugRouteSearch(
+          '[PoolFallback] poolHit=true poolUsed=false reason=too_far '
+          'poolMatchId=${match.route.id} '
+          'poolStartDistanceKm=${actualPoolStartDistanceKm.toStringAsFixed(1)} '
+          'poolDistanceRuleApplied=true',
+        );
+        continue;
+      }
+
+      final route = _routePoolEntryToRouteResult(
+        match,
+        scenario: scenario,
+        fallbackReason: fallbackReason,
+      );
+      if (route == null) {
+        _debugRouteSearch(
+          '[PoolFallback] poolHit=true poolUsed=false reason=invalid_geometry '
+          'poolMatchId=${match.route.id}',
+        );
+        continue;
+      }
+
+      lastRouteAccessLegUsed = false;
+      lastRouteAccessLegDistanceKm = null;
+      var candidateRoute = route;
+      if (scenario.isRoundTrip && actualPoolStartDistanceKm > 0.06) {
+        final rebasedRoute = await _buildRoundTripPoolAccessRoute(
+          scenario: scenario,
+          styleConfig: styleConfig,
+          fallbackReason: fallbackReason,
+          userLat: userLat,
+          userLng: userLng,
+          match: match,
+          poolRoute: route,
+        );
+        if (rebasedRoute == null) {
+          _debugRouteSearch(
+            '[PoolFallback] poolHit=true poolUsed=false reason=access_leg_unusable '
+            'poolMatchId=${match.route.id} '
+            'poolStartDistanceKm=${match.startDistanceKm.toStringAsFixed(1)}',
+          );
+          continue;
+        }
+        candidateRoute = rebasedRoute;
+      }
+
+      final candidate = _evaluateCandidate(
+        scenario: scenario,
+        styleConfig: styleConfig,
+        route: candidateRoute,
+        variant: _poolRouteVariant(scenario, match),
+        relaxedRoundTrip: true,
+        directDistanceKm: directDistanceKm,
+      );
+      if (!candidate.accepted || candidate.hardRejected) {
+        _debugRouteSearch(
+          '[PoolFallback] poolHit=true poolUsed=false reason=quality_rejected '
+          'poolMatchId=${match.route.id} tier=${candidate.tier.name}',
+        );
+        continue;
+      }
+      if (!candidate.novelEnough) {
+        _debugRouteSearch(
+          '[PoolFallback] poolHit=true poolUsed=false reason=too_similar '
+          'poolMatchId=${match.route.id}',
+        );
+        continue;
+      }
+
+      lastRoutePoolFallbackUsed = true;
+      lastRouteEmergencyFallbackUsed = true;
+      lastRouteGenerationSource = 'pool';
+      lastRoutePoolMatchId = match.route.id;
+      lastRoutePoolMatchTier = match.radiusScope;
+      lastRoutePoolStartDistanceKm = actualPoolStartDistanceKm;
+      _debugRouteSearch(
+        '[PoolFallback] poolHit=true poolUsed=true '
+        'poolMatchId=${match.route.id} poolMatchTier=${match.radiusScope} '
+        'poolStartDistanceKm=${actualPoolStartDistanceKm.toStringAsFixed(1)} '
+        'poolCandidateCount=${matches.length} fallbackReason=$fallbackReason',
+      );
+
+      return _finalizeAndRemember(
+        scenario: scenario,
+        route: candidate.route,
+        sampledCoordinates: candidate.sampledCoordinates,
+        fingerprint: candidate.fingerprint,
+      );
+    }
+
+    _debugRouteSearch(
+      '[PoolFallback] poolHit=true poolUsed=false reason=no_usable_candidate '
+      'scenarioKey=${scenario.scenarioKey} bucket=$bucket '
+      'poolCandidateCount=${matches.length}',
+    );
+    return null;
+  }
+
+  Future<RoutePoolCoverageCheck?> _ensureCoverageBootstrapStatus({
+    required RouteScenario scenario,
+    required double userLat,
+    required double userLng,
+    required String subscriptionTier,
+    required bool createSeedJob,
+  }) async {
+    final bucket = _distanceBucketForPool(scenario.targetDistanceKm);
+    if (bucket == null) return null;
+    try {
+      final coverage = await _routePoolService.ensureCoverageForRequest(
+        userLat: userLat,
+        userLng: userLng,
+        distanceBucket: bucket,
+        style: scenario.style,
+        avoidHighways: scenario.avoidHighways,
+        routeType: scenario.routeType,
+        subscriptionTier: subscriptionTier,
+        createSeedJob: createSeedJob,
+      );
+      lastRouteCoverageStatus = coverage.coverageStatus;
+      lastRouteSeedJobCreated = coverage.seedJobCreated;
+      lastRouteDuplicateSeedJobPrevented = coverage.duplicateJobPrevented;
+      lastRoutePoolBootstrapPending = coverage.bootstrapPending;
+      return coverage;
+    } catch (_) {
+      // Coverage/bootstrap metadata must never replace the original routing
+      // error when the backing Supabase store is unavailable in unit tests or
+      // degraded environments.
+      return null;
+    }
+  }
+
+  Future<RouteServiceException> _buildCoverageWarmupException({
+    required RouteScenario scenario,
+    required double userLat,
+    required double userLng,
+    required String subscriptionTier,
+    required RouteServiceException? lastError,
+    required bool createSeedJob,
+  }) async {
+    final coverage = await _ensureCoverageBootstrapStatus(
+      scenario: scenario,
+      userLat: userLat,
+      userLng: userLng,
+      subscriptionTier: subscriptionTier,
+      createSeedJob: createSeedJob,
+    );
+    if (coverage == null) {
+      return lastError ??
+          const RouteServiceException(
+            type: RouteErrorType.noRoute,
+            userMessage:
+                'Keine passende Route gefunden. Bitte versuche es erneut.',
+            debugMessage: 'No route and no pool coverage bucket available.',
+          );
+    }
+
+    final cluster = coverage.assignment?.region.cityCluster;
+    final warmupMessage = cluster == null
+        ? 'In deiner Umgebung wurde noch keine Route berechnet. Wir erstellen gerade erste Routen. Das dauert einige Minuten.'
+        : 'In deiner Umgebung wurde noch keine Route fuer $cluster berechnet. Wir erstellen gerade erste Routen. Das dauert einige Minuten.';
+    final meta = <String, dynamic>{
+      ...coverage.toMeta(),
+      'route_source': 'pool',
+      'source': 'pool',
+      'fallback_reason': lastError?.type.name ?? 'region_warming_up',
+    };
+    return RouteServiceException(
+      type: RouteErrorType.noRoute,
+      userMessage: warmupMessage,
+      debugMessage:
+          'Pool coverage warming up for ${scenario.routeType}/${scenario.style}/${scenario.targetDistanceKm}km status=${coverage.coverageStatus}',
+      edgeMeta: meta,
+      statusCode: lastError?.statusCode,
+      stackTrace: lastError?.stackTrace,
+    );
+  }
+
+  Future<RouteServiceException?> _maybeBuildCoverageWarmupError({
+    required RouteScenario scenario,
+    required double userLat,
+    required double userLng,
+    required RouteServiceException? lastError,
+  }) async {
+    final normalizedTier = lastRouteSubscriptionTier;
+    if (!_isFreeTier(normalizedTier) &&
+        !_isBasicTier(normalizedTier) &&
+        normalizedTier != 'premium') {
+      return null;
+    }
+
+    final coverage = await _ensureCoverageBootstrapStatus(
+      scenario: scenario,
+      userLat: userLat,
+      userLng: userLng,
+      subscriptionTier: normalizedTier,
+      createSeedJob: true,
+    );
+    if (coverage == null) return null;
+
+    if (_isFreeTier(normalizedTier)) {
+      return _buildCoverageWarmupException(
+        scenario: scenario,
+        userLat: userLat,
+        userLng: userLng,
+        subscriptionTier: normalizedTier,
+        lastError: lastError,
+        createSeedJob: true,
+      );
+    }
+
+    if (coverage.shouldSurfaceWarmup &&
+        (lastError == null ||
+            lastError.type == RouteErrorType.noRoute ||
+            lastError.type == RouteErrorType.quality)) {
+      return _buildCoverageWarmupException(
+        scenario: scenario,
+        userLat: userLat,
+        userLng: userLng,
+        subscriptionTier: normalizedTier,
+        lastError: lastError,
+        createSeedJob: true,
+      );
+    }
+    return null;
+  }
+
+  Future<void> _maybeRecordRoutePoolCandidate({
+    required RouteScenario scenario,
+    required RouteResult route,
+    required String fingerprint,
+    required RouteQualityTier tier,
+    required double qualityScore,
+    required String subscriptionTier,
+  }) async {
+    final normalizedTier = _normalizeSubscriptionTier(subscriptionTier);
+    if (_isFreeTier(normalizedTier)) return;
+    if (lastRouteGenerationSource != 'mapbox') return;
+    final bucket = _distanceBucketForPool(scenario.targetDistanceKm);
+    if (bucket == null) return;
+
+    final source = normalizedTier == 'basic' ? 'basic_live' : 'premium_live';
+    final score = switch (tier) {
+      RouteQualityTier.ideal => 95.0,
+      RouteQualityTier.good => 85.0,
+      RouteQualityTier.acceptable => 72.0,
+      RouteQualityTier.rejected => 40.0,
+    };
+    final routePayload = <String, dynamic>{
+      ...route.edgeMeta,
+      'candidate_fingerprint': fingerprint,
+      'candidate_subscription_tier': normalizedTier,
+    };
+    final geometry = route.geometry.isNotEmpty
+        ? route.geometry
+        : <String, dynamic>{
+            'type': 'LineString',
+            'coordinates': route.coordinates,
+          };
+    try {
+      await _routePoolService.recordCandidateRoute(
+        userLat: scenario.startLatitude,
+        userLng: scenario.startLongitude,
+        distanceBucket: bucket,
+        style: scenario.style,
+        avoidHighways: scenario.avoidHighways,
+        routeType: scenario.routeType,
+        candidateSource: source,
+        routeFingerprint: fingerprint,
+        geometry: geometry,
+        routePayload: routePayload,
+        qualityScore: math.min(100.0, math.max(score, qualityScore)),
+        shapeScore: (route.edgeMeta['shape_score'] as num?)?.toDouble() ?? 0.0,
+        distanceKm: route.distanceKm,
+        hasHighway: (route.edgeMeta['has_highway'] as bool?) ?? false,
+      );
+    } catch (_) {
+      // Candidate staging must never block route delivery.
+    }
+  }
+
+  Future<RouteResult?> _buildRoundTripPoolAccessRoute({
+    required RouteScenario scenario,
+    required RouteStyleConfig styleConfig,
+    required String fallbackReason,
+    required double userLat,
+    required double userLng,
+    required RoutePoolMatch match,
+    required RouteResult poolRoute,
+  }) async {
+    final poolRouteDeadEndSpikes = RouteQualityValidator.detectDeadEndSpikes(
+      poolRoute.coordinates,
+    );
+    if (poolRouteDeadEndSpikes.isNotEmpty) {
+      lastRouteDeadEndSpikeDetected = true;
+      _debugRouteSearch(
+        '[PoolFallback] poolHit=true poolUsed=false reason=dead_end_spike '
+        'poolMatchId=${match.route.id} '
+        'deadEndSpikeCount=${poolRouteDeadEndSpikes.length}',
+      );
+      return null;
+    }
+
+    final currentPosition = _positionFromCoordinate([userLng, userLat]);
+    final sessionOrigin = [userLng, userLat];
+    final joinPoints = _accessPlanner.suggestJoinPoints(
+      currentPosition: currentPosition,
+      existingRoute: poolRoute,
+      maxCandidates: 3,
+      rebaseClosedLoop: true,
+    );
+    _ScoredPoolAccessRoute? bestRoute;
+    final targetDistanceKm =
+        scenario.targetDistanceKm ??
+        poolRoute.distanceKm ??
+        ((poolRoute.distanceMeters ?? 0.0) / 1000.0);
+
+    for (final joinPoint in joinPoints) {
+      try {
+        final rotatedLoop = _sliceRouteFromIndex(
+          poolRoute,
+          joinPoint.index,
+          wrapClosedLoop: true,
+        );
+        if (rotatedLoop.coordinates.length < 4) continue;
+
+        final accessLeg = joinPoint.distanceFromCurrentMeters <= 60.0
+            ? null
+            : await _requestAccessLegToJoin(
+                currentPosition: currentPosition,
+                joinPoint: joinPoint,
+                mode: scenario.style,
+                avoidHighways: scenario.avoidHighways,
+              );
+        final accessDistanceKm =
+            accessLeg?.distanceKm ??
+            ((accessLeg?.distanceMeters ?? 0.0) / 1000.0);
+        final exitIndices = _suggestRoundTripPoolExitIndices(
+          route: rotatedLoop,
+          targetDistanceKm: targetDistanceKm,
+          accessLegDistanceKm: accessDistanceKm,
+          sessionOrigin: sessionOrigin,
+          maxCandidates: 2,
+        );
+
+        for (final exitIndex in exitIndices) {
+          final loopSegment = _sliceRouteRange(rotatedLoop, 0, exitIndex);
+          if (loopSegment.coordinates.length < 4) continue;
+          final returnLeg = await _buildReturnLegIfNeeded(
+            sessionOrigin: sessionOrigin,
+            followOnRoute: loopSegment,
+            mode: scenario.style,
+            avoidHighways: scenario.avoidHighways,
+            enabled: true,
+          );
+          final sessionRoute = returnLeg == null
+              ? loopSegment
+              : _mergeRouteSegments([loopSegment, returnLeg]);
+          final activeRoute = accessLeg == null
+              ? sessionRoute
+              : _mergeAccessAndFollowOnRoutes(
+                  accessLeg: accessLeg,
+                  followOnRoute: sessionRoute,
+                );
+          final accessLegDistanceKm =
+              accessDistanceKm +
+              (returnLeg?.distanceKm ??
+                  ((returnLeg?.distanceMeters ?? 0.0) / 1000.0));
+          final accessLegSimilarityPercent =
+              accessLeg != null && returnLeg != null
+              ? RouteQualityValidator.calculateRouteSimilarityPercent(
+                  accessLeg.coordinates,
+                  returnLeg.coordinates,
+                  sampleCount: 24,
+                  proximityMeters: 65.0,
+                )
+              : 0.0;
+          final roundedAccessLegDistanceKm = accessLegDistanceKm > 0
+              ? double.parse(accessLegDistanceKm.toStringAsFixed(2))
+              : null;
+          final activeDistanceKm =
+              activeRoute.distanceKm ??
+              ((activeRoute.distanceMeters ?? 0.0) / 1000.0);
+          final loopSegmentDistanceKm =
+              loopSegment.distanceKm ??
+              ((loopSegment.distanceMeters ?? 0.0) / 1000.0);
+          final accessPlanScore = _scoreRoundTripPoolAccessPlan(
+            targetDistanceKm: targetDistanceKm,
+            activeDistanceKm: activeDistanceKm,
+            accessLegDistanceKm: accessLegDistanceKm,
+            accessLegSimilarityPercent: accessLegSimilarityPercent,
+            joinProgress: joinPoint.progressRatio,
+            joinScore: joinPoint.score,
+            loopCompletionRatio:
+                loopSegmentDistanceKm <= 0 || (poolRoute.distanceKm ?? 0) <= 0
+                ? 1.0
+                : (loopSegmentDistanceKm /
+                          (poolRoute.distanceKm ?? loopSegmentDistanceKm))
+                      .clamp(0.0, 1.0),
+          );
+          final routedPlan = _routeWithEdgeMeta(activeRoute, {
+            ...poolRoute.edgeMeta,
+            'fallbackUsed': true,
+            'fallback_reason': fallbackReason,
+            'pool_match_id': match.route.id,
+            'pool_match_tier': match.radiusScope,
+            'pool_start_distance_km': match.startDistanceKm,
+            'pool_allowed_radius_km': match.allowedRadiusKm,
+            'pool_distance_rule_applied': true,
+            'pool_rejected_too_far': false,
+            'access_leg_used': accessLeg != null || returnLeg != null,
+            'access_leg_distance_km': roundedAccessLegDistanceKm,
+            'access_leg_similarity_percent': double.parse(
+              accessLegSimilarityPercent.toStringAsFixed(1),
+            ),
+            'access_plan_score': double.parse(
+              accessPlanScore.toStringAsFixed(2),
+            ),
+            'access_join_index': joinPoint.index,
+            'access_join_progress_ratio': joinPoint.progressRatio,
+            'access_exit_index': exitIndex,
+            'pool_loop_distance_km': double.parse(
+              loopSegmentDistanceKm.toStringAsFixed(2),
+            ),
+            'pool_loop_completion_ratio': double.parse(
+              ((loopSegmentDistanceKm <= 0 || (poolRoute.distanceKm ?? 0) <= 0
+                          ? 1.0
+                          : (loopSegmentDistanceKm /
+                                (poolRoute.distanceKm ??
+                                    loopSegmentDistanceKm)))
+                      .clamp(0.0, 1.0))
+                  .toStringAsFixed(3),
+            ),
+            'route_source': 'pool',
+            'source': 'pool',
+          });
+          if (!_isPreliminarilyUsablePoolAccessRoute(
+            scenario: scenario,
+            styleConfig: styleConfig,
+            route: routedPlan,
+          )) {
+            _debugRouteSearch(
+              '[PoolFallback] poolHit=true poolUsed=false reason=access_leg_preview_rejected '
+              'poolMatchId=${match.route.id} joinIndex=${joinPoint.index} '
+              'exitIndex=$exitIndex',
+            );
+            continue;
+          }
+          if (bestRoute == null || accessPlanScore < bestRoute.score) {
+            bestRoute = _ScoredPoolAccessRoute(
+              route: routedPlan,
+              score: accessPlanScore,
+              accessLegUsed: accessLeg != null || returnLeg != null,
+              accessLegDistanceKm: roundedAccessLegDistanceKm,
+            );
+          }
+        }
+      } catch (error) {
+        _debugRouteSearch(
+          '[PoolFallback] poolHit=true poolUsed=false reason=access_leg_error '
+          'poolMatchId=${match.route.id} joinIndex=${joinPoint.index} '
+          'message=$error',
+        );
+      }
+    }
+
+    if (bestRoute == null) return null;
+    lastRouteAccessLegUsed = bestRoute.accessLegUsed;
+    lastRouteAccessLegDistanceKm = bestRoute.accessLegDistanceKm;
+    return bestRoute.route;
+  }
+
+  double _scoreRoundTripPoolAccessPlan({
+    required double targetDistanceKm,
+    required double activeDistanceKm,
+    required double accessLegDistanceKm,
+    required double accessLegSimilarityPercent,
+    required double joinProgress,
+    required double joinScore,
+    required double loopCompletionRatio,
+  }) {
+    final earlyPenalty = joinProgress < 0.05
+        ? (0.05 - joinProgress) * 22.0
+        : 0.0;
+    final latePenalty = joinProgress > 0.88
+        ? (joinProgress - 0.88) * 18.0
+        : 0.0;
+    final distanceFitPenalty = targetDistanceKm > 0
+        ? (activeDistanceKm - targetDistanceKm).abs() * 5.5
+        : 0.0;
+    final joinScorePenalty = joinScore / 1000.0;
+    final incompleteLoopPenalty = loopCompletionRatio < 0.58
+        ? (0.58 - loopCompletionRatio) * 70.0
+        : 0.0;
+    return distanceFitPenalty +
+        accessLegDistanceKm * 6.5 +
+        accessLegSimilarityPercent * 0.35 +
+        incompleteLoopPenalty +
+        earlyPenalty +
+        latePenalty +
+        joinScorePenalty;
+  }
+
+  List<int> _suggestRoundTripPoolExitIndices({
+    required RouteResult route,
+    required double targetDistanceKm,
+    required double accessLegDistanceKm,
+    required List<double> sessionOrigin,
+    int maxCandidates = 2,
+  }) {
+    if (route.coordinates.length < 4) {
+      return const [1];
+    }
+
+    final cumulativeDistances = _buildCoordinateCumulativeDistances(
+      route.coordinates,
+    );
+    final sourceGeometryDistanceMeters = cumulativeDistances.last;
+    final sourceDistanceMeters =
+        route.distanceMeters ?? sourceGeometryDistanceMeters;
+    final distanceScale = sourceGeometryDistanceMeters > 0
+        ? sourceDistanceMeters / sourceGeometryDistanceMeters
+        : 1.0;
+    final totalDistanceKm = route.distanceKm ?? (sourceDistanceMeters / 1000.0);
+    final deadEndSpikes = RouteQualityValidator.detectDeadEndSpikes(
+      route.coordinates,
+    );
+    final minIndex = math.max(2, route.coordinates.length ~/ 6);
+    final maxIndex = math.max(minIndex, route.coordinates.length - 3);
+    final step = math.max(1, route.coordinates.length ~/ 32);
+    final desiredLoopDistanceKm = targetDistanceKm > 0
+        ? math.max(
+            targetDistanceKm * 0.42,
+            targetDistanceKm - (accessLegDistanceKm * 2.15) - 1.5,
+          )
+        : math.max(6.0, totalDistanceKm * 0.72);
+    final clampedTargetLoopDistanceKm = desiredLoopDistanceKm.clamp(
+      totalDistanceKm * 0.35,
+      totalDistanceKm * 0.88,
+    );
+    final candidateIndices = <int>[];
+    final targetBandsKm = <double>[
+      clampedTargetLoopDistanceKm,
+      math.max(totalDistanceKm * 0.35, clampedTargetLoopDistanceKm - 3.0),
+      math.min(totalDistanceKm * 0.88, clampedTargetLoopDistanceKm + 3.0),
+    ];
+
+    for (final targetBandKm in targetBandsKm) {
+      int? bestIndex;
+      double? bestDelta;
+      double? bestSessionDistanceKm;
+      for (var index = minIndex; index <= maxIndex; index += step) {
+        if (deadEndSpikes.any((spike) => spike.containsIndex(index))) continue;
+        final loopDistanceKm =
+            (cumulativeDistances[index] * distanceScale) / 1000.0;
+        final completionRatio = totalDistanceKm > 0
+            ? (loopDistanceKm / totalDistanceKm).clamp(0.0, 1.0)
+            : 1.0;
+        if (completionRatio < 0.35 || completionRatio > 0.92) continue;
+
+        final delta = (loopDistanceKm - targetBandKm).abs();
+        final exitCoordinate = route.coordinates[index];
+        final sessionDistanceKm = _distanceBetweenCoordinates(
+              exitCoordinate,
+              sessionOrigin,
+            ) /
+            1000.0;
+        final currentBestDelta = bestDelta ?? double.infinity;
+        final currentBestSessionDistanceKm =
+            bestSessionDistanceKm ?? double.infinity;
+        final isBetter = bestIndex == null ||
+            delta < currentBestDelta - 0.25 ||
+            ((delta - currentBestDelta).abs() <= 0.25 &&
+                sessionDistanceKm < currentBestSessionDistanceKm);
+        if (isBetter) {
+          bestIndex = index;
+          bestDelta = delta;
+          bestSessionDistanceKm = sessionDistanceKm;
+        }
+      }
+      if (bestIndex != null) {
+        candidateIndices.add(bestIndex);
+      }
+    }
+
+    int? nearestToSessionIndex;
+    double? nearestToSessionDistanceKm;
+    for (var index = minIndex; index <= maxIndex; index += step) {
+      if (deadEndSpikes.any((spike) => spike.containsIndex(index))) continue;
+      final loopDistanceKm = (cumulativeDistances[index] * distanceScale) / 1000.0;
+      final completionRatio = totalDistanceKm > 0
+          ? (loopDistanceKm / totalDistanceKm).clamp(0.0, 1.0)
+          : 1.0;
+      if (completionRatio < 0.35 || completionRatio > 0.92) continue;
+      final sessionDistanceKm =
+          _distanceBetweenCoordinates(route.coordinates[index], sessionOrigin) /
+          1000.0;
+      if (nearestToSessionIndex == null ||
+          sessionDistanceKm < nearestToSessionDistanceKm!) {
+        nearestToSessionIndex = index;
+        nearestToSessionDistanceKm = sessionDistanceKm;
+      }
+    }
+    if (nearestToSessionIndex != null) {
+      candidateIndices.add(nearestToSessionIndex);
+    }
+
+    final chosen = <int>[];
+    final minSeparation = math.max(8, route.coordinates.length ~/ 12);
+    for (final candidate in candidateIndices) {
+      if (chosen.any((value) => (value - candidate).abs() < minSeparation)) {
+        continue;
+      }
+      chosen.add(candidate);
+      if (chosen.length >= maxCandidates) break;
+    }
+
+    if (chosen.isEmpty) {
+      chosen.add(math.max(2, route.coordinates.length - 3));
+    }
+    return chosen;
+  }
+
+  List<double> _buildCoordinateCumulativeDistances(
+    List<List<double>> coordinates,
+  ) {
+    final cumulative = List<double>.filled(coordinates.length, 0.0);
+    for (var index = 1; index < coordinates.length; index++) {
+      cumulative[index] =
+          cumulative[index - 1] +
+          _distanceBetweenCoordinates(
+            coordinates[index - 1],
+            coordinates[index],
+          );
+    }
+    return cumulative;
+  }
+
+  RouteResult _sliceRouteRange(
+    RouteResult route,
+    int startIndex,
+    int endIndex,
+  ) {
+    final safeStart = startIndex
+        .clamp(0, math.max(0, route.coordinates.length - 2))
+        .toInt();
+    final safeEnd = endIndex
+        .clamp(
+          safeStart + 1,
+          math.max(safeStart + 1, route.coordinates.length - 1),
+        )
+        .toInt();
+    final slicedCoordinates = route.coordinates
+        .sublist(safeStart, safeEnd + 1)
+        .map(_copyCoordinate)
+        .toList(growable: false);
+    final geometry = <String, dynamic>{
+      'type': 'LineString',
+      'coordinates': slicedCoordinates,
+    };
+    final sourceGeometryDistanceMeters = _distanceAlongCoordinates(
+      route.coordinates,
+    );
+    final sourceDistanceMeters =
+        route.distanceMeters ?? sourceGeometryDistanceMeters;
+    final sourceDistanceScale = sourceGeometryDistanceMeters > 0
+        ? sourceDistanceMeters / sourceGeometryDistanceMeters
+        : 1.0;
+    final distanceMeters =
+        _distanceAlongCoordinates(slicedCoordinates) * sourceDistanceScale;
+    final durationSeconds =
+        route.durationSeconds != null && sourceDistanceMeters > 0
+        ? route.durationSeconds! * (distanceMeters / sourceDistanceMeters)
+        : route.durationSeconds;
+
+    return _filteredRouteResult(
+      RouteResult(
+        geoJson: json.encode(geometry),
+        geometry: geometry,
+        coordinates: slicedCoordinates,
+        maneuvers: const <RouteManeuver>[],
+        distanceMeters: distanceMeters,
+        durationSeconds: durationSeconds,
+        distanceKm: distanceMeters / 1000.0,
+        speedLimits: const <SpeedLimitSegment>[],
+      ),
+    );
+  }
+
+  bool _isPreliminarilyUsablePoolAccessRoute({
+    required RouteScenario scenario,
+    required RouteStyleConfig styleConfig,
+    required RouteResult route,
+  }) {
+    final actualDistanceKm =
+        route.distanceKm ??
+        (route.distanceMeters != null ? route.distanceMeters! / 1000.0 : 0.0);
+    final targetDistanceKm = scenario.targetDistanceKm ?? actualDistanceKm;
+    final quality = _qualityValidator.validateQuality(
+      coordinates: route.coordinates,
+      isRoundTrip: scenario.isRoundTrip,
+      targetDistanceKm: targetDistanceKm,
+      actualDistanceKm: actualDistanceKm,
+    );
+    final styleFitScore = styleConfig.scoreStyleFit(
+      coordinates: route.coordinates,
+      distanceKm: actualDistanceKm,
+      durationSeconds: route.durationSeconds,
+    );
+    final classification = _qualityValidator.classifyGeneratedRoute(
+      quality: quality,
+      isRoundTrip: scenario.isRoundTrip,
+      coordinateCount: route.coordinates.length,
+      actualDistanceKm: actualDistanceKm,
+      targetDistanceKm: targetDistanceKm,
+      styleProfileKey: styleConfig.profileKey,
+      styleFitScore: styleFitScore,
+    );
+    final deadEndSpikes = RouteQualityValidator.detectDeadEndSpikes(
+      route.coordinates,
+    );
+    if (deadEndSpikes.isNotEmpty) {
+      lastRouteDeadEndSpikeDetected = true;
+      return false;
+    }
+    return !classification.isRejected;
+  }
+
+  static int? _distanceBucketForPool(double? targetDistanceKm) {
+    if (targetDistanceKm == null || !targetDistanceKm.isFinite) return null;
+    if (targetDistanceKm <= 62.5) return 50;
+    if (targetDistanceKm <= 87.5) return 75;
+    if (targetDistanceKm <= 112.5) return 100;
+    return null;
+  }
+
+  RouteResult? _routePoolEntryToRouteResult(
+    RoutePoolMatch match, {
+    required RouteScenario scenario,
+    required String fallbackReason,
+  }) {
+    final geometry = Map<String, dynamic>.from(match.route.geometry);
+    if (geometry['type'] != 'LineString') return null;
+    final coordinates = extractCoordinates(geometry);
+    if (coordinates.length < 2) return null;
+    final meta = <String, dynamic>{
+      ...match.route.routePayload,
+      'route_source': 'pool',
+      'source': 'pool',
+      'fallbackUsed': true,
+      'fallback_reason': fallbackReason,
+      'pool_match_id': match.route.id,
+      'pool_match_tier': match.radiusScope,
+      'pool_start_distance_km': match.startDistanceKm,
+      'pool_allowed_radius_km': match.allowedRadiusKm,
+      'quality_tier': 'good',
+      'quality_reason': 'verified_route_pool',
+      'avoid_highways_requested': scenario.avoidHighways,
+      'has_highway': match.route.hasHighway,
+      'avoids_highway': match.route.avoidsHighway,
+      'distance_bucket': match.route.distanceBucket,
+      'mode': scenario.style,
+      'orchestration': {
+        'source': 'route_pool',
+        'pool_hit': true,
+        'pool_used': true,
+        'pool_match_id': match.route.id,
+        'pool_radius_scope': match.radiusScope,
+        'mapbox_attempt_count': lastRouteApiCallCount,
+        'fallback_reason': fallbackReason,
+      },
+    };
+    return RouteResult(
+      geoJson: json.encode(geometry),
+      geometry: geometry,
+      coordinates: coordinates,
+      maneuvers: const [],
+      distanceMeters: match.route.distanceKm * 1000.0,
+      durationSeconds: match.route.durationSeconds,
+      distanceKm: match.route.distanceKm,
+      speedLimits: const [],
+      edgeMeta: meta,
+    );
+  }
+
+  RouteVariant _poolRouteVariant(RouteScenario scenario, RoutePoolMatch match) {
+    final bucket = match.route.distanceBucket;
+    return RouteVariant(
+      index: 0,
+      seed: 0,
+      angleOffset: 0,
+      radiusJitter: 1,
+      offsetBearing: 0,
+      fingerprintHint: '${scenario.scenarioKey}|pool|${match.route.id}',
+      variantHint: 'pool-${match.route.id}-$bucket',
+      styleBias: scenario.style,
+    );
   }
 
   Future<RouteResult?> _tryRoundTripFallback({
@@ -3244,6 +4739,9 @@ class RouteService {
         : null;
     final errorCode = detailsMap?['code']?.toString().toUpperCase();
     final retryAfterSec = (detailsMap?['retry_after_sec'] as num?)?.toInt();
+    final edgeMeta = detailsMap?['meta'] is Map
+        ? Map<String, dynamic>.from(detailsMap!['meta'] as Map)
+        : const <String, dynamic>{};
 
     if (statusCode == 401 || statusCode == 403 || lower.contains('jwt')) {
       return RouteServiceException(
@@ -3327,6 +4825,7 @@ class RouteService {
             'No-route error (status=$statusCode, reason=$reasonPhrase): $errorMessage, details=$details',
         statusCode: statusCode,
         stackTrace: stackTrace,
+        edgeMeta: edgeMeta,
       );
     }
 
@@ -3385,6 +4884,7 @@ class RouteService {
     RouteResult cached, {
     required RouteScenario scenario,
     RouteServiceException? lastError,
+    bool requireNovelty = true,
   }) {
     final actualDistanceKm =
         cached.distanceKm ??
@@ -3402,7 +4902,9 @@ class RouteService {
       targetDistanceKm: targetDistanceKm,
       actualDistanceKm: actualDistanceKm,
     );
-    if (!_isNovelRouteForScenario(scenario, cached)) return false;
+    if (requireNovelty && !_isNovelRouteForScenario(scenario, cached)) {
+      return false;
+    }
     final classification = _qualityValidator.classifyGeneratedRoute(
       quality: quality,
       isRoundTrip: scenario.isRoundTrip,
@@ -3466,6 +4968,7 @@ class RouteService {
     RouteResult recent, {
     required RouteScenario scenario,
     RouteServiceException? lastError,
+    bool requireNovelty = true,
   }) {
     final actualDistanceKm =
         recent.distanceKm ??
@@ -3484,7 +4987,9 @@ class RouteService {
       targetDistanceKm: targetDistanceKm,
       actualDistanceKm: actualDistanceKm,
     );
-    if (!_isNovelRouteForScenario(scenario, recent)) return false;
+    if (requireNovelty && !_isNovelRouteForScenario(scenario, recent)) {
+      return false;
+    }
     final classification = _qualityValidator.classifyGeneratedRoute(
       quality: quality,
       isRoundTrip: scenario.isRoundTrip,
@@ -3812,10 +5317,74 @@ class RouteService {
   /// Wird am Ende von generateRoundTrip/generatePointToPoint aufgerufen.
   /// Speichert die Route auch im Offline-Cache für Stufe-4-Fallback.
   RouteResult _finalizeRoute(RouteResult result, {String? scenarioKey}) {
-    final finalized = _filteredRouteResult(result);
+    final filtered = _filteredRouteResult(result);
+    final finalized = _withOrchestrationMeta(filtered);
     // Asynchron cachen ohne auf Ergebnis zu warten
     _cacheSuccessfulRoute(finalized, scenarioKey: scenarioKey);
     return finalized;
+  }
+
+  RouteResult _withOrchestrationMeta(RouteResult result) {
+    final meta = Map<String, dynamic>.from(result.edgeMeta);
+    meta['route_source'] = lastRouteGenerationSource;
+    meta['source'] = lastRouteGenerationSource;
+    meta['fallbackUsed'] =
+        lastRouteRecentFallbackUsed ||
+        lastRoutePersistentCacheFallbackUsed ||
+        lastRouteDuplicateFallbackUsed ||
+        lastRoutePoolFallbackUsed;
+    meta['pool_distance_rule_applied'] = lastRoutePoolDistanceRuleApplied;
+    meta['pool_rejected_too_far'] = lastRoutePoolRejectedTooFar;
+    meta['access_leg_used'] = lastRouteAccessLegUsed;
+    meta['access_leg_distance_km'] = lastRouteAccessLegDistanceKm;
+    meta['dead_end_spike_detected'] = RouteQualityValidator.detectDeadEndSpikes(
+      result.coordinates,
+    ).isNotEmpty;
+    meta['mapboxCallCount'] = lastRouteApiCallCount;
+    meta['liveGenerationCostUnits'] = lastRouteApiCallCount;
+    meta['subscriptionTier'] = lastRouteSubscriptionTier;
+    meta['coverage_status'] = lastRouteCoverageStatus;
+    meta['seed_job_created'] = lastRouteSeedJobCreated;
+    meta['duplicate_job_prevented'] = lastRouteDuplicateSeedJobPrevented;
+    meta['pool_bootstrap_pending'] = lastRoutePoolBootstrapPending;
+    final existingOrchestration = meta['orchestration'] is Map
+        ? Map<String, dynamic>.from(meta['orchestration'] as Map)
+        : <String, dynamic>{};
+    meta['orchestration'] = {
+      ...existingOrchestration,
+      'source': lastRouteGenerationSource,
+      'prepared_buffer_hit': lastRoutePreparedBufferHit,
+      'prepared_buffer_used': lastRoutePreparedBufferUsed,
+      'session_cache_hit': lastRouteSessionCacheHit,
+      'pool_hit': lastRoutePoolFallbackUsed,
+      'pool_used': lastRoutePoolFallbackUsed,
+      'pool_match_id': lastRoutePoolMatchId,
+      'pool_radius_scope': lastRoutePoolMatchTier,
+      'pool_start_distance_km': lastRoutePoolStartDistanceKm,
+      'pool_distance_rule_applied': lastRoutePoolDistanceRuleApplied,
+      'pool_rejected_too_far': lastRoutePoolRejectedTooFar,
+      'access_leg_used': lastRouteAccessLegUsed,
+      'access_leg_distance_km': lastRouteAccessLegDistanceKm,
+      'dead_end_spike_detected': meta['dead_end_spike_detected'],
+      'mapbox_attempt_count': lastRouteApiCallCount,
+      'subscription_tier': lastRouteSubscriptionTier,
+      'coverage_status': lastRouteCoverageStatus,
+      'seed_job_created': lastRouteSeedJobCreated,
+      'duplicate_job_prevented': lastRouteDuplicateSeedJobPrevented,
+      'pool_bootstrap_pending': lastRoutePoolBootstrapPending,
+      'fallback_reason': lastRoutePoolFallbackUsed ? 'mapbox_failed' : null,
+    };
+    return RouteResult(
+      geoJson: result.geoJson,
+      geometry: result.geometry,
+      coordinates: result.coordinates,
+      maneuvers: result.maneuvers,
+      distanceMeters: result.distanceMeters,
+      durationSeconds: result.durationSeconds,
+      distanceKm: result.distanceKm,
+      speedLimits: result.speedLimits,
+      edgeMeta: meta,
+    );
   }
 
   /// Wählt eine Entdecker-Richtung die sich von den letzten 3 unterscheidet.
@@ -4591,6 +6160,20 @@ class _RouteCandidate {
   final bool novelEnough;
 }
 
+class _ScoredPoolAccessRoute {
+  const _ScoredPoolAccessRoute({
+    required this.route,
+    required this.score,
+    required this.accessLegUsed,
+    required this.accessLegDistanceKm,
+  });
+
+  final RouteResult route;
+  final double score;
+  final bool accessLegUsed;
+  final double? accessLegDistanceKm;
+}
+
 enum RouteErrorType {
   network,
   auth,
@@ -4612,6 +6195,7 @@ class RouteServiceException implements Exception {
     required this.debugMessage,
     this.statusCode,
     this.stackTrace,
+    this.edgeMeta = const {},
   });
 
   final RouteErrorType type;
@@ -4619,6 +6203,7 @@ class RouteServiceException implements Exception {
   final String debugMessage;
   final int? statusCode;
   final StackTrace? stackTrace;
+  final Map<String, dynamic> edgeMeta;
 
   @override
   String toString() {
