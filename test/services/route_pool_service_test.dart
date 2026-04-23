@@ -835,6 +835,197 @@ void main() {
     );
 
     test(
+      'Hard-Region Bludenz meldet curated_needed und startet keinen endlosen Bootstrap',
+      () async {
+        final coverages = <RoutePoolCoverage>[];
+        final jobs = <RouteSeedJob>[];
+        final service = RoutePoolService(
+          inMemoryRegions: [
+            _region(
+              countryCode: 'AT',
+              admin1Name: 'Vorarlberg',
+              admin2Name: 'Bludenz',
+              cityCluster: 'Bludenz',
+              centerLat: 47.1548,
+              centerLng: 9.8220,
+              fallbackRadiusKm: 35,
+              difficultyLevel: 'hard',
+              hardRegionStatus: 'curated_needed',
+              bootstrapEnabled: false,
+              curatedSeedPreferred: true,
+              defaultTargetPoolSize: 8,
+              defaultMaxPoolSize: 10,
+              healthyThreshold: 4,
+              thinThreshold: 1,
+              seedBudgetUnits: 0,
+              seedCooldownMinutes: 180,
+            ),
+          ],
+          inMemoryCoverage: coverages,
+          inMemorySeedJobs: jobs,
+          inMemoryCandidates: <RoutePoolCandidate>[],
+          inMemoryRoutes: const [],
+        );
+
+        final first = await service.ensureCoverageForRequest(
+          userLat: 47.1548,
+          userLng: 9.8220,
+          distanceBucket: 50,
+          style: 'Sport Mode',
+          avoidHighways: true,
+          routeType: 'ROUND_TRIP',
+          subscriptionTier: 'free',
+          createSeedJob: true,
+          preferredCountryCode: 'AT',
+          preferredAdmin1Name: 'Vorarlberg',
+          preferredAdmin2Name: 'Bludenz',
+          preferredCityCluster: 'Bludenz',
+        );
+        final second = await service.ensureCoverageForRequest(
+          userLat: 47.1548,
+          userLng: 9.8220,
+          distanceBucket: 50,
+          style: 'Sport Mode',
+          avoidHighways: true,
+          routeType: 'ROUND_TRIP',
+          subscriptionTier: 'free',
+          createSeedJob: true,
+          preferredCountryCode: 'AT',
+          preferredAdmin1Name: 'Vorarlberg',
+          preferredAdmin2Name: 'Bludenz',
+          preferredCityCluster: 'Bludenz',
+        );
+
+        expect(first.assignment, isNotNull);
+        expect(first.assignment!.region.cityCluster, 'Bludenz');
+        expect(first.assignment!.newClusterCreated, isFalse);
+        expect(first.coverageStatus, 'hard_region_curated_needed');
+        expect(first.coverage?.coverageStatus, 'hard_region_curated_needed');
+        expect(first.regionDifficulty, 'hard');
+        expect(first.hardRegionStatus, 'curated_needed');
+        expect(first.toMeta()['chosen_cluster'], 'Bludenz');
+        expect(first.toMeta()['region_warming_up'], true);
+        expect(first.toMeta()['local_pool_unavailable'], true);
+        expect(first.seedJobCreated, isFalse);
+        expect(first.duplicateJobPrevented, isFalse);
+        expect(first.bootstrapPending, isFalse);
+        expect(second.coverageStatus, 'hard_region_curated_needed');
+        expect(second.seedJobCreated, isFalse);
+        expect(second.duplicateJobPrevented, isFalse);
+        expect(second.bootstrapPending, isFalse);
+        expect(jobs, isEmpty);
+      },
+    );
+
+    test(
+      'Hard-Region Bludenz mit wenig Bestand bleibt hard_region_thin statt healthy',
+      () async {
+        final service = RoutePoolService(
+          inMemoryRegions: [
+            _region(
+              countryCode: 'AT',
+              admin1Name: 'Vorarlberg',
+              admin2Name: 'Bludenz',
+              cityCluster: 'Bludenz',
+              centerLat: 47.1548,
+              centerLng: 9.8220,
+              fallbackRadiusKm: 35,
+              difficultyLevel: 'hard',
+              hardRegionStatus: 'curated_needed',
+              bootstrapEnabled: false,
+              curatedSeedPreferred: true,
+              defaultTargetPoolSize: 8,
+              defaultMaxPoolSize: 10,
+              healthyThreshold: 4,
+              thinThreshold: 1,
+              seedBudgetUnits: 0,
+              seedCooldownMinutes: 180,
+            ),
+          ],
+          inMemoryRoutes: [
+            _route(
+              id: 'bludenz-single-route',
+              countryCode: 'AT',
+              admin1Name: 'Vorarlberg',
+              admin2Name: 'Bludenz',
+              cityCluster: 'Bludenz',
+              startLat: 47.1549,
+              startLng: 9.8223,
+              distanceBucket: 50,
+              styleTags: const ['Sport Mode'],
+            ),
+          ],
+          inMemoryCoverage: <RoutePoolCoverage>[],
+          inMemorySeedJobs: <RouteSeedJob>[],
+          inMemoryCandidates: <RoutePoolCandidate>[],
+        );
+
+        final check = await service.ensureCoverageForRequest(
+          userLat: 47.1548,
+          userLng: 9.8220,
+          distanceBucket: 50,
+          style: 'Sport Mode',
+          avoidHighways: true,
+          routeType: 'ROUND_TRIP',
+          subscriptionTier: 'premium',
+          createSeedJob: false,
+          preferredCountryCode: 'AT',
+          preferredAdmin1Name: 'Vorarlberg',
+          preferredAdmin2Name: 'Bludenz',
+          preferredCityCluster: 'Bludenz',
+        );
+
+        expect(check.coverageStatus, 'hard_region_thin');
+        expect(check.coverage?.coverageStatus, 'hard_region_thin');
+        expect(check.regionDifficulty, 'hard');
+        expect(check.currentVerifiedCount, 1);
+        expect(check.poolHealthy, isFalse);
+        expect(check.bootstrapPending, isFalse);
+        expect(check.shouldSurfaceWarmup, isTrue);
+        expect(check.toMeta()['region_warming_up'], true);
+        expect(check.toMeta()['retry_recommended'], true);
+      },
+    );
+
+    test(
+      'Zwischen Nueziders und Bludenz entsteht kein Mikro-Cluster ausserhalb des bestehenden Hard-Region-Pools',
+      () async {
+        final service = RoutePoolService(
+          inMemoryRegions: [
+            _region(
+              countryCode: 'AT',
+              admin1Name: 'Vorarlberg',
+              admin2Name: 'Bludenz',
+              cityCluster: 'Bludenz',
+              centerLat: 47.1548,
+              centerLng: 9.8220,
+              fallbackRadiusKm: 35,
+            ),
+            _region(
+              countryCode: 'AT',
+              admin1Name: 'Vorarlberg',
+              admin2Name: 'Feldkirch',
+              cityCluster: 'Feldkirch',
+              centerLat: 47.2386,
+              centerLng: 9.5986,
+            ),
+          ],
+        );
+
+        final assignment = await service.resolveRegionAssignment(
+          userLat: 47.1712,
+          userLng: 9.8028,
+          preferredCountryCode: 'AT',
+          preferredAdmin1Name: 'Vorarlberg',
+        );
+
+        expect(assignment, isNotNull);
+        expect(assignment!.region.cityCluster, 'Bludenz');
+        expect(assignment.newClusterCreated, isFalse);
+      },
+    );
+
+    test(
       'Free-User in leerer Region erzeugt genau einen Bootstrap-Job und warming_up',
       () async {
         final coverages = <RoutePoolCoverage>[];
@@ -983,6 +1174,16 @@ RouteRegion _region({
   required double centerLat,
   required double centerLng,
   double fallbackRadiusKm = 30,
+  String difficultyLevel = 'normal',
+  String hardRegionStatus = 'normal',
+  bool bootstrapEnabled = true,
+  bool curatedSeedPreferred = false,
+  int defaultTargetPoolSize = 15,
+  int defaultMaxPoolSize = 20,
+  int healthyThreshold = 15,
+  int thinThreshold = 1,
+  int seedBudgetUnits = 1,
+  int seedCooldownMinutes = 20,
 }) {
   return RouteRegion(
     countryCode: countryCode,
@@ -992,6 +1193,16 @@ RouteRegion _region({
     centerLat: centerLat,
     centerLng: centerLng,
     fallbackRadiusKm: fallbackRadiusKm,
+    difficultyLevel: difficultyLevel,
+    hardRegionStatus: hardRegionStatus,
+    bootstrapEnabled: bootstrapEnabled,
+    curatedSeedPreferred: curatedSeedPreferred,
+    defaultTargetPoolSize: defaultTargetPoolSize,
+    defaultMaxPoolSize: defaultMaxPoolSize,
+    healthyThreshold: healthyThreshold,
+    thinThreshold: thinThreshold,
+    seedBudgetUnits: seedBudgetUnits,
+    seedCooldownMinutes: seedCooldownMinutes,
   );
 }
 

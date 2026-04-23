@@ -11,10 +11,18 @@ class RoutePoolCoverage {
     required this.styleKey,
     required this.avoidHighways,
     required this.coverageStatus,
+    this.difficultyLevel = 'normal',
+    this.hardRegionStatus = 'normal',
+    this.bootstrapEnabled = true,
+    this.curatedSeedPreferred = false,
     this.targetPoolSize = 15,
     this.maxPoolSize = 20,
+    this.healthyThreshold = 15,
+    this.thinThreshold = 1,
     this.currentVerifiedCount = 0,
     this.currentCandidateCount = 0,
+    this.seedBudgetUnits = 1,
+    this.seedCooldownMinutes = 20,
     this.lastCountedAt,
     this.lastBootstrapRequestedAt,
     this.lastSeedCompletedAt,
@@ -33,10 +41,18 @@ class RoutePoolCoverage {
   final String styleKey;
   final bool avoidHighways;
   final String coverageStatus;
+  final String difficultyLevel;
+  final String hardRegionStatus;
+  final bool bootstrapEnabled;
+  final bool curatedSeedPreferred;
   final int targetPoolSize;
   final int maxPoolSize;
+  final int healthyThreshold;
+  final int thinThreshold;
   final int currentVerifiedCount;
   final int currentCandidateCount;
+  final int seedBudgetUnits;
+  final int seedCooldownMinutes;
   final DateTime? lastCountedAt;
   final DateTime? lastBootstrapRequestedAt;
   final DateTime? lastSeedCompletedAt;
@@ -48,6 +64,10 @@ class RoutePoolCoverage {
   bool get isEmpty => coverageStatus == 'empty';
   bool get isWarmingUp => coverageStatus == 'warming_up';
   bool get isCooldown => coverageStatus == 'cooldown';
+  bool get isHardRegionThin => coverageStatus == 'hard_region_thin';
+  bool get isHardRegionCuratedNeeded =>
+      coverageStatus == 'hard_region_curated_needed';
+  bool get isBootstrapLimited => coverageStatus == 'bootstrap_limited';
   bool get isPoolFull => currentVerifiedCount >= maxPoolSize;
 
   RoutePoolCoverage copyWith({
@@ -62,10 +82,18 @@ class RoutePoolCoverage {
     String? styleKey,
     bool? avoidHighways,
     String? coverageStatus,
+    String? difficultyLevel,
+    String? hardRegionStatus,
+    bool? bootstrapEnabled,
+    bool? curatedSeedPreferred,
     int? targetPoolSize,
     int? maxPoolSize,
+    int? healthyThreshold,
+    int? thinThreshold,
     int? currentVerifiedCount,
     int? currentCandidateCount,
+    int? seedBudgetUnits,
+    int? seedCooldownMinutes,
     DateTime? lastCountedAt,
     DateTime? lastBootstrapRequestedAt,
     DateTime? lastSeedCompletedAt,
@@ -84,11 +112,20 @@ class RoutePoolCoverage {
       styleKey: styleKey ?? this.styleKey,
       avoidHighways: avoidHighways ?? this.avoidHighways,
       coverageStatus: coverageStatus ?? this.coverageStatus,
+      difficultyLevel: difficultyLevel ?? this.difficultyLevel,
+      hardRegionStatus: hardRegionStatus ?? this.hardRegionStatus,
+      bootstrapEnabled: bootstrapEnabled ?? this.bootstrapEnabled,
+      curatedSeedPreferred:
+          curatedSeedPreferred ?? this.curatedSeedPreferred,
       targetPoolSize: targetPoolSize ?? this.targetPoolSize,
       maxPoolSize: maxPoolSize ?? this.maxPoolSize,
+      healthyThreshold: healthyThreshold ?? this.healthyThreshold,
+      thinThreshold: thinThreshold ?? this.thinThreshold,
       currentVerifiedCount: currentVerifiedCount ?? this.currentVerifiedCount,
       currentCandidateCount:
           currentCandidateCount ?? this.currentCandidateCount,
+      seedBudgetUnits: seedBudgetUnits ?? this.seedBudgetUnits,
+      seedCooldownMinutes: seedCooldownMinutes ?? this.seedCooldownMinutes,
       lastCountedAt: lastCountedAt ?? this.lastCountedAt,
       lastBootstrapRequestedAt:
           lastBootstrapRequestedAt ?? this.lastBootstrapRequestedAt,
@@ -112,12 +149,22 @@ class RoutePoolCoverage {
       styleKey: (json['style_key'] as String?) ?? 'standard',
       avoidHighways: (json['avoid_highways'] as bool?) ?? false,
       coverageStatus: (json['coverage_status'] as String?) ?? 'empty',
+      difficultyLevel: (json['difficulty_level'] as String?) ?? 'normal',
+      hardRegionStatus: (json['hard_region_status'] as String?) ?? 'normal',
+      bootstrapEnabled: (json['bootstrap_enabled'] as bool?) ?? true,
+      curatedSeedPreferred:
+          (json['curated_seed_preferred'] as bool?) ?? false,
       targetPoolSize: (json['target_pool_size'] as num?)?.toInt() ?? 15,
       maxPoolSize: (json['max_pool_size'] as num?)?.toInt() ?? 20,
+      healthyThreshold: (json['healthy_threshold'] as num?)?.toInt() ?? 15,
+      thinThreshold: (json['thin_threshold'] as num?)?.toInt() ?? 1,
       currentVerifiedCount:
           (json['current_verified_count'] as num?)?.toInt() ?? 0,
       currentCandidateCount:
           (json['current_candidate_count'] as num?)?.toInt() ?? 0,
+      seedBudgetUnits: (json['seed_budget_units'] as num?)?.toInt() ?? 1,
+      seedCooldownMinutes:
+          (json['seed_cooldown_minutes'] as num?)?.toInt() ?? 20,
       lastCountedAt: _readDateTime(json['last_counted_at']),
       lastBootstrapRequestedAt: _readDateTime(
         json['last_bootstrap_requested_at'],
@@ -141,13 +188,21 @@ class RoutePoolCoverage {
       'style_key': styleKey,
       'avoid_highways': avoidHighways,
       'coverage_status': coverageStatus,
+      'difficulty_level': difficultyLevel,
+      'hard_region_status': hardRegionStatus,
+      'bootstrap_enabled': bootstrapEnabled,
+      'curated_seed_preferred': curatedSeedPreferred,
       'target_pool_size': targetPoolSize,
       'max_pool_size': maxPoolSize,
+      'healthy_threshold': healthyThreshold,
+      'thin_threshold': thinThreshold,
       'current_verified_count': currentVerifiedCount,
       'current_candidate_count': currentCandidateCount,
+      'seed_budget_units': seedBudgetUnits,
+      'seed_cooldown_minutes': seedCooldownMinutes,
       'last_counted_at': lastCountedAt?.toIso8601String(),
-      'last_bootstrap_requested_at':
-          lastBootstrapRequestedAt?.toIso8601String(),
+      'last_bootstrap_requested_at': lastBootstrapRequestedAt
+          ?.toIso8601String(),
       'last_seed_completed_at': lastSeedCompletedAt?.toIso8601String(),
       'bootstrap_cooldown_until': bootstrapCooldownUntil?.toIso8601String(),
       'last_error': lastError,

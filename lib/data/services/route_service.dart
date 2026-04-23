@@ -103,6 +103,11 @@ class RouteService {
   static bool lastRouteSeedJobCreated = false;
   static bool lastRouteDuplicateSeedJobPrevented = false;
   static bool lastRoutePoolBootstrapPending = false;
+  static String? lastRouteRegionDifficulty;
+  static String? lastRouteHardRegionStatus;
+  static String? lastRouteChosenCluster;
+  static bool lastRouteCandidateInserted = false;
+  static bool lastRouteVerifiedInserted = false;
 
   /// Letzte 3 Entdecker-Richtungen (in Grad) für Diversifizierung.
   // TODO: In SharedPreferences persistieren für Session-übergreifende Diversifizierung
@@ -180,6 +185,11 @@ class RouteService {
     lastRouteSeedJobCreated = false;
     lastRouteDuplicateSeedJobPrevented = false;
     lastRoutePoolBootstrapPending = false;
+    lastRouteRegionDifficulty = null;
+    lastRouteHardRegionStatus = null;
+    lastRouteChosenCluster = null;
+    lastRouteCandidateInserted = false;
+    lastRouteVerifiedInserted = false;
   }
 
   static void _debugRouteSearch(String message) {
@@ -285,13 +295,25 @@ class RouteService {
         if (freePoolRoute != null) {
           return freePoolRoute;
         }
-        throw await _buildCoverageWarmupException(
+        final coverage = await _ensureCoverageBootstrapStatus(
           scenario: scenario,
           userLat: startPosition.latitude,
           userLng: startPosition.longitude,
           subscriptionTier: lastRouteSubscriptionTier,
-          lastError: null,
           createSeedJob: true,
+        );
+        if (coverage == null) {
+          throw const RouteServiceException(
+            type: RouteErrorType.noRoute,
+            userMessage:
+                'Keine passende Route gefunden. Bitte versuche es erneut.',
+            debugMessage: 'No route and no pool coverage bucket available.',
+          );
+        }
+        throw await _buildCoverageWarmupException(
+          scenario: scenario,
+          coverage: coverage,
+          lastError: null,
         );
       }
 
@@ -743,13 +765,25 @@ class RouteService {
         if (freePoolRoute != null) {
           return freePoolRoute;
         }
-        throw await _buildCoverageWarmupException(
+        final coverage = await _ensureCoverageBootstrapStatus(
           scenario: scenario,
           userLat: startPosition.latitude,
           userLng: startPosition.longitude,
           subscriptionTier: lastRouteSubscriptionTier,
-          lastError: null,
           createSeedJob: true,
+        );
+        if (coverage == null) {
+          throw const RouteServiceException(
+            type: RouteErrorType.noRoute,
+            userMessage:
+                'Keine passende Route gefunden. Bitte versuche es erneut.',
+            debugMessage: 'No route and no pool coverage bucket available.',
+          );
+        }
+        throw await _buildCoverageWarmupException(
+          scenario: scenario,
+          coverage: coverage,
+          lastError: null,
         );
       }
 
@@ -3601,6 +3635,9 @@ class RouteService {
       lastRouteSeedJobCreated = coverage.seedJobCreated;
       lastRouteDuplicateSeedJobPrevented = coverage.duplicateJobPrevented;
       lastRoutePoolBootstrapPending = coverage.bootstrapPending;
+      lastRouteRegionDifficulty = coverage.regionDifficulty;
+      lastRouteHardRegionStatus = coverage.hardRegionStatus;
+      lastRouteChosenCluster = coverage.assignment?.region.cityCluster;
       return coverage;
     } catch (_) {
       // Coverage/bootstrap metadata must never replace the original routing
@@ -3612,33 +3649,14 @@ class RouteService {
 
   Future<RouteServiceException> _buildCoverageWarmupException({
     required RouteScenario scenario,
-    required double userLat,
-    required double userLng,
-    required String subscriptionTier,
+    required RoutePoolCoverageCheck coverage,
     required RouteServiceException? lastError,
-    required bool createSeedJob,
   }) async {
-    final coverage = await _ensureCoverageBootstrapStatus(
-      scenario: scenario,
-      userLat: userLat,
-      userLng: userLng,
-      subscriptionTier: subscriptionTier,
-      createSeedJob: createSeedJob,
-    );
-    if (coverage == null) {
-      return lastError ??
-          const RouteServiceException(
-            type: RouteErrorType.noRoute,
-            userMessage:
-                'Keine passende Route gefunden. Bitte versuche es erneut.',
-            debugMessage: 'No route and no pool coverage bucket available.',
-          );
-    }
-
     final cluster = coverage.assignment?.region.cityCluster;
-    final warmupMessage = cluster == null
-        ? 'In deiner Umgebung wurde noch keine Route berechnet. Wir erstellen gerade erste Routen. Das dauert einige Minuten.'
-        : 'In deiner Umgebung wurde noch keine Route fuer $cluster berechnet. Wir erstellen gerade erste Routen. Das dauert einige Minuten.';
+    final warmupMessage = _coverageStatusUserMessage(
+      coverage: coverage,
+      cluster: cluster,
+    );
     final meta = <String, dynamic>{
       ...coverage.toMeta(),
       'route_source': 'pool',
@@ -3656,11 +3674,35 @@ class RouteService {
     );
   }
 
+  String _coverageStatusUserMessage({
+    required RoutePoolCoverageCheck coverage,
+    required String? cluster,
+  }) {
+    final clusterText = cluster ?? 'deiner Umgebung';
+    switch (coverage.coverageStatus) {
+      case 'hard_region_curated_needed':
+        return 'In $clusterText gibt es noch keine lokal verifizierten Routen. Diese Region braucht kuratierte Strecken. Wir sammeln passende Fahrten.';
+      case 'hard_region_thin':
+        return 'In $clusterText gibt es erst wenige lokal verifizierte Routen. Wir erweitern den Pool noch.';
+      case 'bootstrap_limited':
+        return 'In $clusterText sind die automatischen Aufbauversuche aktuell begrenzt. Bitte versuche es spaeter erneut.';
+      case 'cooldown':
+        return 'In $clusterText bauen wir gerade erste Routen auf. Bitte versuche es in einigen Minuten erneut.';
+      case 'warming_up':
+      case 'empty':
+      default:
+        return cluster == null
+            ? 'In deiner Umgebung wurde noch keine Route berechnet. Wir erstellen gerade erste Routen. Das dauert einige Minuten.'
+            : 'In deiner Umgebung wurde noch keine Route fuer $cluster berechnet. Wir erstellen gerade erste Routen. Das dauert einige Minuten.';
+    }
+  }
+
   Future<RouteServiceException?> _maybeBuildCoverageWarmupError({
     required RouteScenario scenario,
     required double userLat,
     required double userLng,
     required RouteServiceException? lastError,
+    RoutePoolCoverageCheck? coverage,
   }) async {
     final normalizedTier = lastRouteSubscriptionTier;
     if (!_isFreeTier(normalizedTier) &&
@@ -3669,7 +3711,7 @@ class RouteService {
       return null;
     }
 
-    final coverage = await _ensureCoverageBootstrapStatus(
+    coverage ??= await _ensureCoverageBootstrapStatus(
       scenario: scenario,
       userLat: userLat,
       userLng: userLng,
@@ -3681,25 +3723,25 @@ class RouteService {
     if (_isFreeTier(normalizedTier)) {
       return _buildCoverageWarmupException(
         scenario: scenario,
-        userLat: userLat,
-        userLng: userLng,
-        subscriptionTier: normalizedTier,
+        coverage: coverage,
         lastError: lastError,
-        createSeedJob: true,
       );
     }
 
     if (coverage.shouldSurfaceWarmup &&
         (lastError == null ||
             lastError.type == RouteErrorType.noRoute ||
-            lastError.type == RouteErrorType.quality)) {
+            lastError.type == RouteErrorType.quality ||
+            lastError.type == RouteErrorType.network ||
+            lastError.type == RouteErrorType.server ||
+            lastError.type == RouteErrorType.rateLimit ||
+            lastError.type == RouteErrorType.workerLimit ||
+            lastError.type == RouteErrorType.emptyResponse ||
+            lastError.type == RouteErrorType.unknown)) {
       return _buildCoverageWarmupException(
         scenario: scenario,
-        userLat: userLat,
-        userLng: userLng,
-        subscriptionTier: normalizedTier,
+        coverage: coverage,
         lastError: lastError,
-        createSeedJob: true,
       );
     }
     return null;
@@ -3738,7 +3780,7 @@ class RouteService {
             'coordinates': route.coordinates,
           };
     try {
-      await _routePoolService.recordCandidateRoute(
+      final candidateSaveResult = await _routePoolService.recordCandidateRoute(
         userLat: scenario.startLatitude,
         userLng: scenario.startLongitude,
         distanceBucket: bucket,
@@ -3754,6 +3796,8 @@ class RouteService {
         distanceKm: route.distanceKm,
         hasHighway: (route.edgeMeta['has_highway'] as bool?) ?? false,
       );
+      lastRouteCandidateInserted = candidateSaveResult.saved;
+      lastRouteVerifiedInserted = false;
     } catch (_) {
       // Candidate staging must never block route delivery.
     }
@@ -5347,6 +5391,11 @@ class RouteService {
     meta['seed_job_created'] = lastRouteSeedJobCreated;
     meta['duplicate_job_prevented'] = lastRouteDuplicateSeedJobPrevented;
     meta['pool_bootstrap_pending'] = lastRoutePoolBootstrapPending;
+    meta['region_difficulty'] = lastRouteRegionDifficulty;
+    meta['hard_region_status'] = lastRouteHardRegionStatus;
+    meta['chosen_cluster'] = lastRouteChosenCluster;
+    meta['candidate_inserted'] = lastRouteCandidateInserted;
+    meta['verified_inserted'] = lastRouteVerifiedInserted;
     final existingOrchestration = meta['orchestration'] is Map
         ? Map<String, dynamic>.from(meta['orchestration'] as Map)
         : <String, dynamic>{};
@@ -5372,6 +5421,11 @@ class RouteService {
       'seed_job_created': lastRouteSeedJobCreated,
       'duplicate_job_prevented': lastRouteDuplicateSeedJobPrevented,
       'pool_bootstrap_pending': lastRoutePoolBootstrapPending,
+      'region_difficulty': lastRouteRegionDifficulty,
+      'hard_region_status': lastRouteHardRegionStatus,
+      'chosen_cluster': lastRouteChosenCluster,
+      'candidate_inserted': lastRouteCandidateInserted,
+      'verified_inserted': lastRouteVerifiedInserted,
       'fallback_reason': lastRoutePoolFallbackUsed ? 'mapbox_failed' : null,
     };
     return RouteResult(

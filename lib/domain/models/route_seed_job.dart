@@ -11,10 +11,16 @@ class RouteSeedJob {
     required this.styleKey,
     required this.avoidHighways,
     required this.status,
+    this.difficultyLevel = 'normal',
+    this.hardRegionStatus = 'normal',
     this.priority = 0,
     this.maxAttempts = 3,
     this.attemptCount = 0,
+    this.failureCount = 0,
+    this.seedBudgetUnits = 1,
+    this.seedCooldownMinutes = 20,
     this.lastError,
+    this.lastFailureReason,
     this.cooldownUntil,
     this.lastRequestedAt,
     this.startedAt,
@@ -33,10 +39,16 @@ class RouteSeedJob {
   final String styleKey;
   final bool avoidHighways;
   final String status;
+  final String difficultyLevel;
+  final String hardRegionStatus;
   final int priority;
   final int maxAttempts;
   final int attemptCount;
+  final int failureCount;
+  final int seedBudgetUnits;
+  final int seedCooldownMinutes;
   final String? lastError;
+  final String? lastFailureReason;
   final DateTime? cooldownUntil;
   final DateTime? lastRequestedAt;
   final DateTime? startedAt;
@@ -61,10 +73,16 @@ class RouteSeedJob {
     String? styleKey,
     bool? avoidHighways,
     String? status,
+    String? difficultyLevel,
+    String? hardRegionStatus,
     int? priority,
     int? maxAttempts,
     int? attemptCount,
+    int? failureCount,
+    int? seedBudgetUnits,
+    int? seedCooldownMinutes,
     String? lastError,
+    String? lastFailureReason,
     DateTime? cooldownUntil,
     DateTime? lastRequestedAt,
     DateTime? startedAt,
@@ -83,10 +101,16 @@ class RouteSeedJob {
       styleKey: styleKey ?? this.styleKey,
       avoidHighways: avoidHighways ?? this.avoidHighways,
       status: status ?? this.status,
+      difficultyLevel: difficultyLevel ?? this.difficultyLevel,
+      hardRegionStatus: hardRegionStatus ?? this.hardRegionStatus,
       priority: priority ?? this.priority,
       maxAttempts: maxAttempts ?? this.maxAttempts,
       attemptCount: attemptCount ?? this.attemptCount,
+      failureCount: failureCount ?? this.failureCount,
+      seedBudgetUnits: seedBudgetUnits ?? this.seedBudgetUnits,
+      seedCooldownMinutes: seedCooldownMinutes ?? this.seedCooldownMinutes,
       lastError: lastError ?? this.lastError,
+      lastFailureReason: lastFailureReason ?? this.lastFailureReason,
       cooldownUntil: cooldownUntil ?? this.cooldownUntil,
       lastRequestedAt: lastRequestedAt ?? this.lastRequestedAt,
       startedAt: startedAt ?? this.startedAt,
@@ -108,10 +132,17 @@ class RouteSeedJob {
       styleKey: (json['style_key'] as String?) ?? 'standard',
       avoidHighways: (json['avoid_highways'] as bool?) ?? false,
       status: (json['status'] as String?) ?? 'queued',
+      difficultyLevel: (json['difficulty_level'] as String?) ?? 'normal',
+      hardRegionStatus: (json['hard_region_status'] as String?) ?? 'normal',
       priority: (json['priority'] as num?)?.toInt() ?? 0,
       maxAttempts: (json['max_attempts'] as num?)?.toInt() ?? 3,
       attemptCount: (json['attempt_count'] as num?)?.toInt() ?? 0,
+      failureCount: (json['failure_count'] as num?)?.toInt() ?? 0,
+      seedBudgetUnits: (json['seed_budget_units'] as num?)?.toInt() ?? 1,
+      seedCooldownMinutes:
+          (json['seed_cooldown_minutes'] as num?)?.toInt() ?? 20,
       lastError: json['last_error'] as String?,
+      lastFailureReason: json['last_failure_reason'] as String?,
       cooldownUntil: _readSeedJobDateTime(json['cooldown_until']),
       lastRequestedAt: _readSeedJobDateTime(json['last_requested_at']),
       startedAt: _readSeedJobDateTime(json['started_at']),
@@ -133,10 +164,16 @@ class RouteSeedJob {
       'style_key': styleKey,
       'avoid_highways': avoidHighways,
       'status': status,
+      'difficulty_level': difficultyLevel,
+      'hard_region_status': hardRegionStatus,
       'priority': priority,
       'max_attempts': maxAttempts,
       'attempt_count': attemptCount,
+      'failure_count': failureCount,
+      'seed_budget_units': seedBudgetUnits,
+      'seed_cooldown_minutes': seedCooldownMinutes,
       'last_error': lastError,
+      'last_failure_reason': lastFailureReason,
       'cooldown_until': cooldownUntil?.toIso8601String(),
       'last_requested_at': lastRequestedAt?.toIso8601String(),
       'started_at': startedAt?.toIso8601String(),

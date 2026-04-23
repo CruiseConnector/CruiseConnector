@@ -19,6 +19,10 @@ class RoutePoolCandidate {
     required this.qualityScore,
     required this.shapeScore,
     required this.candidateSource,
+    this.difficultyLevel = 'normal',
+    this.hardRegionStatus = 'normal',
+    this.candidateLocalityScore,
+    this.repeatedSuccessCount = 0,
     this.averageRating,
     this.ratingCount = 0,
     this.completionRate,
@@ -52,6 +56,10 @@ class RoutePoolCandidate {
   final double qualityScore;
   final double shapeScore;
   final String candidateSource;
+  final String difficultyLevel;
+  final String hardRegionStatus;
+  final double? candidateLocalityScore;
+  final int repeatedSuccessCount;
   final double? averageRating;
   final int ratingCount;
   final double? completionRate;
@@ -86,6 +94,15 @@ class RoutePoolCandidate {
       qualityScore: (json['quality_score'] as num?)?.toDouble() ?? 0.0,
       shapeScore: (json['shape_score'] as num?)?.toDouble() ?? 0.0,
       candidateSource: (json['candidate_source'] as String?) ?? 'basic_live',
+      difficultyLevel:
+          (json['candidate_region_difficulty'] as String?) ??
+          (json['difficulty_level'] as String?) ??
+          'normal',
+      hardRegionStatus: (json['hard_region_status'] as String?) ?? 'normal',
+      candidateLocalityScore:
+          (json['candidate_locality_score'] as num?)?.toDouble(),
+      repeatedSuccessCount:
+          (json['repeated_success_count'] as num?)?.toInt() ?? 0,
       averageRating: (json['average_rating'] as num?)?.toDouble(),
       ratingCount: (json['rating_count'] as num?)?.toInt() ?? 0,
       completionRate: (json['completion_rate'] as num?)?.toDouble(),
@@ -126,6 +143,11 @@ class RoutePoolCandidate {
       'quality_score': qualityScore,
       'shape_score': shapeScore,
       'candidate_source': candidateSource,
+      'difficulty_level': difficultyLevel,
+      'candidate_region_difficulty': difficultyLevel,
+      'hard_region_status': hardRegionStatus,
+      'candidate_locality_score': candidateLocalityScore,
+      'repeated_success_count': repeatedSuccessCount,
       'average_rating': averageRating,
       'rating_count': ratingCount,
       'completion_rate': completionRate,

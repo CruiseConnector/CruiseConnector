@@ -12,9 +12,12 @@ import 'package:cruise_connect/data/services/route_quality_validator.dart';
 import 'package:cruise_connect/data/services/route_pool_service.dart';
 import 'package:cruise_connect/data/services/route_scenario.dart';
 import 'package:cruise_connect/data/services/route_service.dart';
+import 'package:cruise_connect/domain/models/route_pool_candidate.dart';
+import 'package:cruise_connect/domain/models/route_pool_coverage.dart';
 import 'package:cruise_connect/domain/models/route_pool_entry.dart';
 import 'package:cruise_connect/domain/models/route_region.dart';
 import 'package:cruise_connect/domain/models/route_result.dart';
+import 'package:cruise_connect/domain/models/route_seed_job.dart';
 
 class _LiveHttpInvoker implements RouteEdgeInvoker {
   _LiveHttpInvoker(this.endpoint);
@@ -107,6 +110,7 @@ class _Scenario {
     this.mode = 'Sport Mode',
     this.detourLevel = 0,
     this.avoidHighways = false,
+    this.subscriptionTier = 'premium',
     this.variantGroup,
   });
 
@@ -119,6 +123,7 @@ class _Scenario {
   final String mode;
   final int detourLevel;
   final bool avoidHighways;
+  final String subscriptionTier;
   final String? variantGroup;
 }
 
@@ -134,6 +139,121 @@ geo.Position _position(double lat, double lng) => geo.Position(
   speed: 0,
   speedAccuracy: 0,
 );
+
+const List<RouteRegion> _benchmarkRegions = [
+  RouteRegion(
+    countryCode: 'AT',
+    admin1Name: 'Vorarlberg',
+    admin2Name: 'Bregenz',
+    cityCluster: 'Bregenz',
+    centerLat: 47.5031,
+    centerLng: 9.7471,
+    fallbackRadiusKm: 30,
+  ),
+  RouteRegion(
+    countryCode: 'AT',
+    admin1Name: 'Vorarlberg',
+    admin2Name: 'Dornbirn',
+    cityCluster: 'Dornbirn',
+    centerLat: 47.4125,
+    centerLng: 9.7414,
+    fallbackRadiusKm: 30,
+  ),
+  RouteRegion(
+    countryCode: 'AT',
+    admin1Name: 'Vorarlberg',
+    admin2Name: 'Feldkirch',
+    cityCluster: 'Feldkirch',
+    centerLat: 47.2386,
+    centerLng: 9.5986,
+    fallbackRadiusKm: 30,
+  ),
+  RouteRegion(
+    countryCode: 'AT',
+    admin1Name: 'Vorarlberg',
+    admin2Name: 'Bludenz',
+    cityCluster: 'Bludenz',
+    centerLat: 47.1548,
+    centerLng: 9.8220,
+    fallbackRadiusKm: 30,
+    difficultyLevel: 'hard',
+    hardRegionStatus: 'curated_needed',
+    bootstrapEnabled: false,
+    curatedSeedPreferred: true,
+    defaultTargetPoolSize: 8,
+    defaultMaxPoolSize: 10,
+    healthyThreshold: 4,
+    thinThreshold: 1,
+    seedBudgetUnits: 0,
+    seedCooldownMinutes: 180,
+  ),
+  RouteRegion(
+    countryCode: 'AT',
+    admin1Name: 'Vorarlberg',
+    admin2Name: 'Rheintal-Sued',
+    cityCluster: 'Rheintal-Sued',
+    centerLat: 47.3499,
+    centerLng: 9.6584,
+    fallbackRadiusKm: 12,
+    difficultyLevel: 'normal',
+  ),
+  RouteRegion(
+    countryCode: 'DE',
+    admin1Name: 'Baden-Württemberg',
+    admin2Name: 'Stuttgart',
+    cityCluster: 'Stuttgart',
+    centerLat: 48.7758,
+    centerLng: 9.1829,
+    fallbackRadiusKm: 30,
+    clusterKind: 'metro_cluster',
+    difficultyLevel: 'normal',
+  ),
+  RouteRegion(
+    countryCode: 'DE',
+    admin1Name: 'Bayern',
+    admin2Name: 'München',
+    cityCluster: 'München',
+    centerLat: 48.1372,
+    centerLng: 11.5755,
+    fallbackRadiusKm: 30,
+    clusterKind: 'metro_cluster',
+    difficultyLevel: 'normal',
+  ),
+  RouteRegion(
+    countryCode: 'CH',
+    admin1Name: 'Zürich',
+    admin2Name: 'Zürich',
+    cityCluster: 'Zürich',
+    centerLat: 47.3769,
+    centerLng: 8.5417,
+    fallbackRadiusKm: 30,
+    clusterKind: 'metro_cluster',
+    difficultyLevel: 'normal',
+  ),
+];
+
+RouteRegion? _nearestBenchmarkRegion(geo.Position position) {
+  RouteRegion? best;
+  var bestDistanceKm = double.infinity;
+  for (final region in _benchmarkRegions) {
+    final distanceKm = RoutePoolService.haversineDistanceKm(
+      position.latitude,
+      position.longitude,
+      region.centerLat,
+      region.centerLng,
+    );
+    if (distanceKm < bestDistanceKm) {
+      bestDistanceKm = distanceKm;
+      best = region;
+    }
+  }
+  return best;
+}
+
+String _difficultyForRegion(RouteRegion? region) {
+  if (region == null) return 'unknown';
+  return region.difficultyLevel;
+}
 
 RoutePoolService _seededRoutePoolServiceForBenchmark() {
   final seedFile = File('supabase/seed/route_pool_vorarlberg.json');
@@ -152,54 +272,16 @@ RoutePoolService _seededRoutePoolServiceForBenchmark() {
 
   return RoutePoolService(
     inMemoryRoutes: routes,
-    inMemoryRegions: const [
-      RouteRegion(
-        countryCode: 'AT',
-        admin1Name: 'Vorarlberg',
-        admin2Name: 'Bregenz',
-        cityCluster: 'Bregenz',
-        centerLat: 47.5031,
-        centerLng: 9.7471,
-        fallbackRadiusKm: 30,
-      ),
-      RouteRegion(
-        countryCode: 'AT',
-        admin1Name: 'Vorarlberg',
-        admin2Name: 'Dornbirn',
-        cityCluster: 'Dornbirn',
-        centerLat: 47.4125,
-        centerLng: 9.7414,
-        fallbackRadiusKm: 30,
-      ),
-      RouteRegion(
-        countryCode: 'AT',
-        admin1Name: 'Vorarlberg',
-        admin2Name: 'Feldkirch',
-        cityCluster: 'Feldkirch',
-        centerLat: 47.2386,
-        centerLng: 9.5986,
-        fallbackRadiusKm: 30,
-      ),
-      RouteRegion(
-        countryCode: 'AT',
-        admin1Name: 'Vorarlberg',
-        admin2Name: 'Bludenz',
-        cityCluster: 'Bludenz',
-        centerLat: 47.1548,
-        centerLng: 9.8220,
-        fallbackRadiusKm: 35,
-      ),
-      RouteRegion(
-        countryCode: 'AT',
-        admin1Name: 'Vorarlberg',
-        admin2Name: 'Rheintal-Sued',
-        cityCluster: 'Rheintal-Sued',
-        centerLat: 47.3499,
-        centerLng: 9.6584,
-        fallbackRadiusKm: 12,
-      ),
-    ],
+    inMemoryRegions: _benchmarkRegions,
+    inMemoryCoverage: <RoutePoolCoverage>[],
+    inMemorySeedJobs: <RouteSeedJob>[],
+    inMemoryCandidates: <RoutePoolCandidate>[],
   );
+}
+
+RoutePoolService _benchmarkRoutePoolService({required bool remotePool}) {
+  if (remotePool) return RoutePoolService();
+  return _seededRoutePoolServiceForBenchmark();
 }
 
 List<_Scenario> _buildScenarios() {
@@ -209,6 +291,8 @@ List<_Scenario> _buildScenarios() {
   final feldkirch = _position(47.2413, 9.5986);
   final bregenz = _position(47.5031, 9.7471);
   final bludenz = _position(47.1548, 9.8220);
+  final stuttgart = _position(48.7758, 9.1829);
+  final muenchen = _position(48.1372, 11.5755);
 
   final scenarios = <_Scenario>[];
   void addRoundTripScenario({
@@ -218,6 +302,7 @@ List<_Scenario> _buildScenarios() {
     required String mode,
     required int runs,
     bool avoidHighways = false,
+    String subscriptionTier = 'premium',
   }) {
     for (var i = 0; i < runs; i++) {
       scenarios.add(
@@ -229,6 +314,7 @@ List<_Scenario> _buildScenarios() {
           targetDistanceKm: targetDistanceKm,
           mode: mode,
           avoidHighways: avoidHighways,
+          subscriptionTier: subscriptionTier,
         ),
       );
     }
@@ -355,6 +441,24 @@ List<_Scenario> _buildScenarios() {
     avoidHighways: true,
   );
   addRoundTripScenario(
+    name: 'RT Bludenz 50 Sport ohne Autobahn Basic',
+    start: bludenz,
+    targetDistanceKm: 50,
+    mode: 'Sport Mode',
+    runs: 3,
+    avoidHighways: true,
+    subscriptionTier: 'basic',
+  );
+  addRoundTripScenario(
+    name: 'RT Bludenz 50 Sport ohne Autobahn Free',
+    start: bludenz,
+    targetDistanceKm: 50,
+    mode: 'Sport Mode',
+    runs: 2,
+    avoidHighways: true,
+    subscriptionTier: 'free',
+  );
+  addRoundTripScenario(
     name: 'RT Bludenz 75 Sport ohne Autobahn',
     start: bludenz,
     targetDistanceKm: 75,
@@ -369,6 +473,24 @@ List<_Scenario> _buildScenarios() {
     mode: 'Sport Mode',
     runs: 3,
     avoidHighways: true,
+  );
+  addRoundTripScenario(
+    name: 'RT Stuttgart 50 Sport ohne Autobahn Free',
+    start: stuttgart,
+    targetDistanceKm: 50,
+    mode: 'Sport Mode',
+    runs: 1,
+    avoidHighways: true,
+    subscriptionTier: 'free',
+  );
+  addRoundTripScenario(
+    name: 'RT Muenchen 50 Sport ohne Autobahn Free',
+    start: muenchen,
+    targetDistanceKm: 50,
+    mode: 'Sport Mode',
+    runs: 1,
+    avoidHighways: true,
+    subscriptionTier: 'free',
   );
 
   final pairs = [
@@ -397,6 +519,7 @@ List<_Scenario> _buildScenarios() {
               mode: detour.$3,
               detourLevel: detour.$2,
               avoidHighways: avoidHighways,
+              subscriptionTier: 'premium',
               variantGroup:
                   '${pair.$1}|run=${repeat + 1}|h=${avoidHighways ? 1 : 0}',
             ),
@@ -493,6 +616,10 @@ void main() {
     'BENCHMARK_UI_SEQUENCE',
     defaultValue: false,
   );
+  const benchmarkRemotePool = bool.fromEnvironment(
+    'BENCHMARK_REMOTE_POOL',
+    defaultValue: false,
+  );
 
   test(
     'live routing benchmark matrix',
@@ -513,7 +640,9 @@ void main() {
         final invoker = _LiveHttpInvoker(endpoint);
         final service = RouteService(
           invoker: invoker,
-          routePoolService: _seededRoutePoolServiceForBenchmark(),
+          routePoolService: _benchmarkRoutePoolService(
+            remotePool: benchmarkRemotePool,
+          ),
         );
         const sequence = <({String label, int km, String mode, bool avoid})>[
           (
@@ -564,6 +693,9 @@ void main() {
             targetDistanceKm: step.km.toDouble(),
             avoidHighways: step.avoid,
           );
+          const requestedSubscriptionTier = 'premium';
+          final benchmarkRegion = _nearestBenchmarkRegion(dornbirn);
+          final regionDifficulty = _difficultyForRegion(benchmarkRegion);
           final stopwatch = Stopwatch()..start();
           var success = false;
           String? errorCode;
@@ -581,6 +713,11 @@ void main() {
           String? poolMatchId;
           String? poolMatchTier;
           double? poolStartDistanceKm;
+          String? reportedSubscriptionTier;
+          String? coverageStatus;
+          bool? seedJobCreated;
+          bool? duplicateJobPrevented;
+          bool? poolBootstrapPending;
 
           try {
             final result = await service.generateRoundTrip(
@@ -591,6 +728,7 @@ void main() {
               avoidHighways: step.avoid,
               forceFreshVariant: forceFreshVariant,
               debugTrigger: trigger,
+              subscriptionTier: requestedSubscriptionTier,
             );
             success = true;
             distanceKm = result.distanceKm;
@@ -625,6 +763,21 @@ void main() {
             poolMatchTier = result.edgeMeta['pool_match_tier']?.toString();
             poolStartDistanceKm =
                 (result.edgeMeta['pool_start_distance_km'] as num?)?.toDouble();
+            reportedSubscriptionTier =
+                result.edgeMeta['subscriptionTier']?.toString() ??
+                RouteService.lastRouteSubscriptionTier;
+            coverageStatus =
+                result.edgeMeta['coverage_status']?.toString() ??
+                RouteService.lastRouteCoverageStatus;
+            seedJobCreated =
+                result.edgeMeta['seed_job_created'] == true ||
+                RouteService.lastRouteSeedJobCreated;
+            duplicateJobPrevented =
+                result.edgeMeta['duplicate_job_prevented'] == true ||
+                RouteService.lastRouteDuplicateSeedJobPrevented;
+            poolBootstrapPending =
+                result.edgeMeta['pool_bootstrap_pending'] == true ||
+                RouteService.lastRoutePoolBootstrapPending;
             final searchSummary = result.edgeMeta['search_summary'];
             if (searchSummary is Map<String, dynamic>) {
               variantHint = searchSummary['variant_hint']?.toString();
@@ -646,6 +799,21 @@ void main() {
                   error.edgeMeta['avoid_highways_requested'] == true;
               variantHint = error.edgeMeta['variant_hint']?.toString();
               fingerprintHint = error.edgeMeta['fingerprint_hint']?.toString();
+              reportedSubscriptionTier =
+                  error.edgeMeta['subscriptionTier']?.toString() ??
+                  RouteService.lastRouteSubscriptionTier;
+              coverageStatus =
+                  error.edgeMeta['coverage_status']?.toString() ??
+                  RouteService.lastRouteCoverageStatus;
+              seedJobCreated =
+                  error.edgeMeta['seed_job_created'] == true ||
+                  RouteService.lastRouteSeedJobCreated;
+              duplicateJobPrevented =
+                  error.edgeMeta['duplicate_job_prevented'] == true ||
+                  RouteService.lastRouteDuplicateSeedJobPrevented;
+              poolBootstrapPending =
+                  error.edgeMeta['pool_bootstrap_pending'] == true ||
+                  RouteService.lastRoutePoolBootstrapPending;
             } else {
               errorCode = error.runtimeType.toString();
               errorMessage = error.toString();
@@ -685,9 +853,19 @@ void main() {
             'selectedKm': step.km,
             'selectedStyle': step.mode,
             'avoidHighways': step.avoid,
+            'subscriptionTier': requestedSubscriptionTier,
+            'reportedSubscriptionTier': reportedSubscriptionTier,
             'forceFreshVariant': forceFreshVariant,
             'trigger': trigger,
             'scenarioKey': scenario.scenarioKey,
+            'benchmarkRegion': benchmarkRegion?.cityCluster,
+            'regionDifficulty': regionDifficulty,
+            'chosenCluster':
+                RouteService.lastRouteChosenCluster ??
+                previous?.edgeMeta['chosen_cluster']?.toString(),
+            'hardRegionStatus':
+                RouteService.lastRouteHardRegionStatus ??
+                previous?.edgeMeta['hard_region_status']?.toString(),
             'scenarioKeyChanged': scenarioKeyChanged,
             'variantPathChanged': variantPathChanged,
             'routeVariantHint': variantHint,
@@ -701,6 +879,12 @@ void main() {
             'poolRouteId': poolMatchId,
             'poolMatchTier': poolMatchTier,
             'poolStartDistanceKm': poolStartDistanceKm,
+            'coverageStatus': coverageStatus,
+            'seedJobCreated': seedJobCreated,
+            'duplicateJobPrevented': duplicateJobPrevented,
+            'poolBootstrapPending': poolBootstrapPending,
+            'candidateInserted': RouteService.lastRouteCandidateInserted,
+            'verifiedInserted': RouteService.lastRouteVerifiedInserted,
             'apiCallCount': RouteService.lastRouteApiCallCount,
             'preparedBufferHit': RouteService.lastRoutePreparedBufferHit,
             'preparedBufferUsed': RouteService.lastRoutePreparedBufferUsed,
@@ -816,13 +1000,17 @@ void main() {
           sharedInvoker = _LiveHttpInvoker(endpoint);
           sharedService = RouteService(
             invoker: sharedInvoker,
-            routePoolService: _seededRoutePoolServiceForBenchmark(),
+            routePoolService: _benchmarkRoutePoolService(
+              remotePool: benchmarkRemotePool,
+            ),
           );
           activeScenarioName = scenario.name;
         }
         final invoker = sharedInvoker!;
         final service = sharedService!;
         final stopwatch = Stopwatch()..start();
+        final benchmarkRegion = _nearestBenchmarkRegion(scenario.start);
+        final regionDifficulty = _difficultyForRegion(benchmarkRegion);
 
         var success = false;
         var tier = 'error';
@@ -851,6 +1039,11 @@ void main() {
         bool? geometryDifferent = scenario.routeType == 'ROUND_TRIP'
             ? true
             : false;
+        String? reportedSubscriptionTier;
+        String? coverageStatus;
+        bool? seedJobCreated;
+        bool? duplicateJobPrevented;
+        bool? poolBootstrapPending;
 
         try {
           if (scenario.routeType == 'ROUND_TRIP') {
@@ -864,6 +1057,7 @@ void main() {
               avoidHighways: scenario.avoidHighways,
               forceFreshVariant: forceFreshVariant,
               debugTrigger: forceFreshVariant ? 'searchAgain' : 'firstSearch',
+              subscriptionTier: scenario.subscriptionTier,
             );
             success = true;
             distanceKm = result.distanceKm;
@@ -936,6 +1130,21 @@ void main() {
                 (result.edgeMeta['access_leg_distance_km'] as num?)?.toDouble();
             deadEndSpikeDetected =
                 result.edgeMeta['dead_end_spike_detected'] == true;
+            reportedSubscriptionTier =
+                result.edgeMeta['subscriptionTier']?.toString() ??
+                RouteService.lastRouteSubscriptionTier;
+            coverageStatus =
+                result.edgeMeta['coverage_status']?.toString() ??
+                RouteService.lastRouteCoverageStatus;
+            seedJobCreated =
+                result.edgeMeta['seed_job_created'] == true ||
+                RouteService.lastRouteSeedJobCreated;
+            duplicateJobPrevented =
+                result.edgeMeta['duplicate_job_prevented'] == true ||
+                RouteService.lastRouteDuplicateSeedJobPrevented;
+            poolBootstrapPending =
+                result.edgeMeta['pool_bootstrap_pending'] == true ||
+                RouteService.lastRoutePoolBootstrapPending;
             if (routeSource == 'pool') {
               final hasHighway = result.edgeMeta['has_highway'] == true;
               final avoidsHighway = result.edgeMeta['avoids_highway'] == true;
@@ -958,6 +1167,7 @@ void main() {
               scenic: scenario.detourLevel > 0,
               routeVariant: scenario.detourLevel,
               avoidHighways: scenario.avoidHighways,
+              subscriptionTier: scenario.subscriptionTier,
             );
             success = true;
             distanceKm = result.distanceKm;
@@ -1009,6 +1219,21 @@ void main() {
                 (result.edgeMeta['access_leg_distance_km'] as num?)?.toDouble();
             deadEndSpikeDetected =
                 result.edgeMeta['dead_end_spike_detected'] == true;
+            reportedSubscriptionTier =
+                result.edgeMeta['subscriptionTier']?.toString() ??
+                RouteService.lastRouteSubscriptionTier;
+            coverageStatus =
+                result.edgeMeta['coverage_status']?.toString() ??
+                RouteService.lastRouteCoverageStatus;
+            seedJobCreated =
+                result.edgeMeta['seed_job_created'] == true ||
+                RouteService.lastRouteSeedJobCreated;
+            duplicateJobPrevented =
+                result.edgeMeta['duplicate_job_prevented'] == true ||
+                RouteService.lastRouteDuplicateSeedJobPrevented;
+            poolBootstrapPending =
+                result.edgeMeta['pool_bootstrap_pending'] == true ||
+                RouteService.lastRoutePoolBootstrapPending;
             if (routeSource == 'pool') {
               final hasHighway = result.edgeMeta['has_highway'] == true;
               final avoidsHighway = result.edgeMeta['avoids_highway'] == true;
@@ -1029,6 +1254,21 @@ void main() {
             errorCode = error.type.name;
             errorMessage = error.userMessage;
             edgeRoutingBuildId = error.edgeMeta['routing_build_id']?.toString();
+            reportedSubscriptionTier =
+                error.edgeMeta['subscriptionTier']?.toString() ??
+                RouteService.lastRouteSubscriptionTier;
+            coverageStatus =
+                error.edgeMeta['coverage_status']?.toString() ??
+                RouteService.lastRouteCoverageStatus;
+            seedJobCreated =
+                error.edgeMeta['seed_job_created'] == true ||
+                RouteService.lastRouteSeedJobCreated;
+            duplicateJobPrevented =
+                error.edgeMeta['duplicate_job_prevented'] == true ||
+                RouteService.lastRouteDuplicateSeedJobPrevented;
+            poolBootstrapPending =
+                error.edgeMeta['pool_bootstrap_pending'] == true ||
+                RouteService.lastRoutePoolBootstrapPending;
           } else {
             errorCode = error.runtimeType.toString();
             errorMessage = error.toString();
@@ -1057,6 +1297,12 @@ void main() {
           'success': success,
           'source': routeSource,
           'routeSource': routeSource,
+          'subscriptionTier': scenario.subscriptionTier,
+          'reportedSubscriptionTier': reportedSubscriptionTier,
+          'benchmarkRegion': benchmarkRegion?.cityCluster,
+          'regionDifficulty': regionDifficulty,
+          'chosenCluster': RouteService.lastRouteChosenCluster,
+          'hardRegionStatus': RouteService.lastRouteHardRegionStatus,
           'bucket': bucket,
           'tier': success ? tier : 'error',
           'edgeRequests': edgeRequests,
@@ -1090,6 +1336,12 @@ void main() {
           'poolRouteId': poolMatchId,
           'poolMatchTier': poolMatchTier,
           'poolStartDistanceKm': poolStartDistanceKm,
+          'coverageStatus': coverageStatus,
+          'seedJobCreated': seedJobCreated,
+          'duplicateJobPrevented': duplicateJobPrevented,
+          'poolBootstrapPending': poolBootstrapPending,
+          'candidateInserted': RouteService.lastRouteCandidateInserted,
+          'verifiedInserted': RouteService.lastRouteVerifiedInserted,
           'poolDistanceRuleApplied': poolDistanceRuleApplied,
           'poolRejectedTooFar': poolRejectedTooFar,
           'accessLegUsed': accessLegUsed,
@@ -1113,6 +1365,7 @@ void main() {
           '${row['index'].toString().padLeft(3, '0')}/${selectedScenarios.length} | '
           '${row['scenario']} | ${row['bucket']} | tier=${row['tier']} | '
           'source=${row['source']} | '
+          'sub=${row['subscriptionTier']} | diff=${row['regionDifficulty']} | '
           'edgeReq=${row['edgeRequests']} | dur=${row['durationMs']}ms | '
           'dist=${row['distanceKm'] == null ? 'n/a' : (row['distanceKm'] as double).toStringAsFixed(1)}km | '
           'motorway=${row['motorwayExcludeActive']} | style=${row['styleEffective']}',

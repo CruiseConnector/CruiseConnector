@@ -209,10 +209,16 @@ class _SequenceInvoker implements RouteEdgeInvoker {
 }
 
 class _FakeRoutePoolService extends RoutePoolService {
-  _FakeRoutePoolService(this.match);
+  _FakeRoutePoolService(
+    this.match, {
+    List<RoutePoolCoverageCheck>? coverageResponses,
+  }) : _coverageResponses = coverageResponses ?? const [];
 
   final RoutePoolMatch? match;
+  final List<RoutePoolCoverageCheck> _coverageResponses;
   final calls = <Map<String, dynamic>>[];
+  final coverageCalls = <Map<String, dynamic>>[];
+  int ensureCoverageCallCount = 0;
 
   @override
   Future<RoutePoolMatch?> findBestRouteNear({
@@ -294,10 +300,37 @@ class _FakeRoutePoolService extends RoutePoolService {
     String? preferredAdmin2Name,
     String? preferredCityCluster,
   }) async {
+    coverageCalls.add({
+      'userLat': userLat,
+      'userLng': userLng,
+      'distanceBucket': distanceBucket,
+      'style': style,
+      'avoidHighways': avoidHighways,
+      'routeType': routeType,
+      'subscriptionTier': subscriptionTier,
+      'createSeedJob': createSeedJob,
+      'crossBorderAllowed': crossBorderAllowed,
+      'preferredCountryCode': preferredCountryCode,
+      'preferredAdmin1Name': preferredAdmin1Name,
+      'preferredAdmin2Name': preferredAdmin2Name,
+      'preferredCityCluster': preferredCityCluster,
+    });
+    final responseIndex = ensureCoverageCallCount;
+    ensureCoverageCallCount += 1;
+    if (_coverageResponses.isNotEmpty) {
+      return _coverageResponses[math.min(
+        responseIndex,
+        _coverageResponses.length - 1,
+      )];
+    }
     return const RoutePoolCoverageCheck(
       assignment: null,
       coverage: null,
       coverageStatus: 'healthy',
+      regionDifficulty: 'normal',
+      hardRegionStatus: 'normal',
+      bootstrapEnabled: true,
+      curatedSeedPreferred: false,
       targetPoolSize: 15,
       maxPoolSize: 20,
       currentVerifiedCount: 15,
@@ -357,6 +390,92 @@ RoutePoolMatch _poolMatch() {
     id: 'pool-dornbirn-50-sport-nohighway',
     cityCluster: 'Dornbirn',
     startDistanceKm: 0.4,
+  );
+}
+
+RoutePoolCoverageCheck _coverageCheck({
+  required String cityCluster,
+  String admin1Name = 'Vorarlberg',
+  String? admin2Name,
+  String coverageStatus = 'warming_up',
+  String regionDifficulty = 'normal',
+  String hardRegionStatus = 'normal',
+  bool bootstrapEnabled = true,
+  bool curatedSeedPreferred = false,
+  int targetPoolSize = 15,
+  int maxPoolSize = 20,
+  int healthyThreshold = 15,
+  int thinThreshold = 1,
+  int currentVerifiedCount = 0,
+  int currentCandidateCount = 0,
+  bool seedJobCreated = false,
+  bool duplicateJobPrevented = false,
+  bool poolHealthy = false,
+  bool poolFull = false,
+  bool bootstrapPending = false,
+  double centerLat = 47.1548,
+  double centerLng = 9.8220,
+  double fallbackRadiusKm = 35,
+}) {
+  final region = _benchmarkRegion(
+    countryCode: 'AT',
+    admin1Name: admin1Name,
+    admin2Name: admin2Name ?? cityCluster,
+    cityCluster: cityCluster,
+    centerLat: centerLat,
+    centerLng: centerLng,
+    fallbackRadiusKm: fallbackRadiusKm,
+    difficultyLevel: regionDifficulty,
+    hardRegionStatus: hardRegionStatus,
+    bootstrapEnabled: bootstrapEnabled,
+    curatedSeedPreferred: curatedSeedPreferred,
+    defaultTargetPoolSize: targetPoolSize,
+    defaultMaxPoolSize: maxPoolSize,
+    healthyThreshold: healthyThreshold,
+    thinThreshold: thinThreshold,
+  );
+  final coverage = RoutePoolCoverage(
+    countryCode: region.countryCode,
+    admin1Name: region.admin1Name,
+    admin2Name: region.admin2Name,
+    cityCluster: region.cityCluster,
+    routeType: 'ROUND_TRIP',
+    distanceBucket: 50,
+    styleKey: 'sport_mode',
+    avoidHighways: true,
+    coverageStatus: coverageStatus,
+    difficultyLevel: regionDifficulty,
+    hardRegionStatus: hardRegionStatus,
+    bootstrapEnabled: bootstrapEnabled,
+    curatedSeedPreferred: curatedSeedPreferred,
+    targetPoolSize: targetPoolSize,
+    maxPoolSize: maxPoolSize,
+    healthyThreshold: healthyThreshold,
+    thinThreshold: thinThreshold,
+    currentVerifiedCount: currentVerifiedCount,
+    currentCandidateCount: currentCandidateCount,
+  );
+  return RoutePoolCoverageCheck(
+    assignment: RoutePoolRegionAssignment(
+      region: region,
+      distanceToCenterKm: 0.6,
+    ),
+    coverage: coverage,
+    coverageStatus: coverageStatus,
+    regionDifficulty: regionDifficulty,
+    hardRegionStatus: hardRegionStatus,
+    bootstrapEnabled: bootstrapEnabled,
+    curatedSeedPreferred: curatedSeedPreferred,
+    targetPoolSize: targetPoolSize,
+    maxPoolSize: maxPoolSize,
+    currentVerifiedCount: currentVerifiedCount,
+    currentCandidateCount: currentCandidateCount,
+    seedJobCreated: seedJobCreated,
+    duplicateJobPrevented: duplicateJobPrevented,
+    poolHealthy: poolHealthy,
+    poolFull: poolFull,
+    bootstrapPending: bootstrapPending,
+    seedJobStatus: bootstrapPending ? 'queued' : null,
   );
 }
 
@@ -437,6 +556,16 @@ RouteRegion _benchmarkRegion({
   required double centerLat,
   required double centerLng,
   double fallbackRadiusKm = 30,
+  String difficultyLevel = 'normal',
+  String hardRegionStatus = 'normal',
+  bool bootstrapEnabled = true,
+  bool curatedSeedPreferred = false,
+  int defaultTargetPoolSize = 15,
+  int defaultMaxPoolSize = 20,
+  int healthyThreshold = 15,
+  int thinThreshold = 1,
+  int seedBudgetUnits = 1,
+  int seedCooldownMinutes = 20,
 }) {
   return RouteRegion(
     countryCode: countryCode,
@@ -446,6 +575,16 @@ RouteRegion _benchmarkRegion({
     centerLat: centerLat,
     centerLng: centerLng,
     fallbackRadiusKm: fallbackRadiusKm,
+    difficultyLevel: difficultyLevel,
+    hardRegionStatus: hardRegionStatus,
+    bootstrapEnabled: bootstrapEnabled,
+    curatedSeedPreferred: curatedSeedPreferred,
+    defaultTargetPoolSize: defaultTargetPoolSize,
+    defaultMaxPoolSize: defaultMaxPoolSize,
+    healthyThreshold: healthyThreshold,
+    thinThreshold: thinThreshold,
+    seedBudgetUnits: seedBudgetUnits,
+    seedCooldownMinutes: seedCooldownMinutes,
   );
 }
 
@@ -988,6 +1127,134 @@ void main() {
       expect(secondError.edgeMeta['duplicate_job_prevented'], true);
       expect(invoker.callCount, 0);
       expect(jobs, hasLength(1));
+    },
+  );
+
+  test(
+    'Free-User in harter Region bekommt keine versteckte Live-Route und ehrliches curated-needed Meta',
+    () async {
+      final jobs = <RouteSeedJob>[];
+      service = RouteService(
+        invoker: invoker,
+        routePoolService: RoutePoolService(
+          inMemoryRegions: [
+            _benchmarkRegion(
+              countryCode: 'AT',
+              admin1Name: 'Vorarlberg',
+              admin2Name: 'Bludenz',
+              cityCluster: 'Bludenz',
+              centerLat: 47.1548,
+              centerLng: 9.8220,
+              fallbackRadiusKm: 35,
+              difficultyLevel: 'hard',
+              hardRegionStatus: 'curated_needed',
+              bootstrapEnabled: false,
+              curatedSeedPreferred: true,
+              defaultTargetPoolSize: 8,
+              defaultMaxPoolSize: 10,
+              healthyThreshold: 4,
+              thinThreshold: 1,
+              seedBudgetUnits: 0,
+              seedCooldownMinutes: 180,
+            ),
+          ],
+          inMemoryRoutes: const [],
+          inMemoryCoverage: <RoutePoolCoverage>[],
+          inMemorySeedJobs: jobs,
+          inMemoryCandidates: <RoutePoolCandidate>[],
+        ),
+      );
+
+      late RouteServiceException error;
+      try {
+        await service.generateRoundTrip(
+          startPosition: _position(47.1548, 9.8220),
+          targetDistanceKm: 50,
+          mode: 'Sport Mode',
+          planningType: 'Zufall',
+          avoidHighways: true,
+          forceFreshVariant: true,
+          subscriptionTier: 'free',
+        );
+      } on RouteServiceException catch (caught) {
+        error = caught;
+      }
+
+      expect(invoker.callCount, 0);
+      expect(jobs, isEmpty);
+      expect(error.userMessage, contains('Bludenz'));
+      expect(error.edgeMeta['route_source'], 'pool');
+      expect(error.edgeMeta['coverage_status'], 'hard_region_curated_needed');
+      expect(error.edgeMeta['region_difficulty'], 'hard');
+      expect(error.edgeMeta['hard_region_status'], 'curated_needed');
+      expect(error.edgeMeta['seed_job_created'], false);
+      expect(error.edgeMeta['duplicate_job_prevented'], false);
+      expect(error.edgeMeta['pool_bootstrap_pending'], false);
+      expect(error.edgeMeta['chosen_cluster'], 'Bludenz');
+      expect(error.edgeMeta['target_pool_size'], isA<int>());
+    },
+  );
+
+  test(
+    'Premium-Hard-Region-Status spiegelt erstes Coverage-Snapshot ohne Zweitabruf',
+    () async {
+      final failingInvoker = _AlwaysFailingInvoker();
+      final poolService = _FakeRoutePoolService(
+        null,
+        coverageResponses: [
+          _coverageCheck(
+            cityCluster: 'Bludenz',
+            coverageStatus: 'hard_region_curated_needed',
+            regionDifficulty: 'hard',
+            hardRegionStatus: 'curated_needed',
+            bootstrapEnabled: false,
+            curatedSeedPreferred: true,
+            targetPoolSize: 8,
+            maxPoolSize: 10,
+            seedJobCreated: false,
+            duplicateJobPrevented: false,
+            bootstrapPending: false,
+          ),
+          _coverageCheck(
+            cityCluster: 'Bludenz',
+            coverageStatus: 'hard_region_curated_needed',
+            regionDifficulty: 'hard',
+            hardRegionStatus: 'curated_needed',
+            bootstrapEnabled: false,
+            curatedSeedPreferred: true,
+            targetPoolSize: 8,
+            maxPoolSize: 10,
+            seedJobCreated: false,
+            duplicateJobPrevented: false,
+            bootstrapPending: false,
+          ),
+        ],
+      );
+      service = RouteService(
+        invoker: failingInvoker,
+        routePoolService: poolService,
+      );
+
+      late RouteServiceException error;
+      try {
+        await service.generateRoundTrip(
+          startPosition: _position(47.1548, 9.8220),
+          targetDistanceKm: 50,
+          mode: 'Sport Mode',
+          planningType: 'Zufall',
+          avoidHighways: true,
+          forceFreshVariant: true,
+          subscriptionTier: 'premium',
+        );
+      } on RouteServiceException catch (caught) {
+        error = caught;
+      }
+
+      expect(error.edgeMeta['coverage_status'], 'hard_region_curated_needed');
+      expect(error.edgeMeta['region_difficulty'], 'hard');
+      expect(error.edgeMeta['seed_job_created'], false);
+      expect(error.edgeMeta['duplicate_job_prevented'], false);
+      expect(poolService.ensureCoverageCallCount, 1);
     },
   );
 

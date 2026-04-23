@@ -69,6 +69,10 @@ class RoutePoolCoverageCheck {
     required this.assignment,
     required this.coverage,
     required this.coverageStatus,
+    required this.regionDifficulty,
+    required this.hardRegionStatus,
+    required this.bootstrapEnabled,
+    required this.curatedSeedPreferred,
     required this.targetPoolSize,
     required this.maxPoolSize,
     required this.currentVerifiedCount,
@@ -85,6 +89,10 @@ class RoutePoolCoverageCheck {
   final RoutePoolRegionAssignment? assignment;
   final RoutePoolCoverage? coverage;
   final String coverageStatus;
+  final String regionDifficulty;
+  final String hardRegionStatus;
+  final bool bootstrapEnabled;
+  final bool curatedSeedPreferred;
   final int targetPoolSize;
   final int maxPoolSize;
   final int currentVerifiedCount;
@@ -100,11 +108,18 @@ class RoutePoolCoverageCheck {
   bool get shouldSurfaceWarmup =>
       coverageStatus == 'warming_up' ||
       coverageStatus == 'cooldown' ||
-      coverageStatus == 'empty';
+      coverageStatus == 'empty' ||
+      coverageStatus == 'hard_region_thin' ||
+      coverageStatus == 'hard_region_curated_needed' ||
+      coverageStatus == 'bootstrap_limited';
 
   Map<String, dynamic> toMeta() {
     return {
       'coverage_status': coverageStatus,
+      'region_difficulty': regionDifficulty,
+      'hard_region_status': hardRegionStatus,
+      'bootstrap_enabled': bootstrapEnabled,
+      'curated_seed_preferred': curatedSeedPreferred,
       'pool_bootstrap_pending': bootstrapPending,
       'seed_job_created': seedJobCreated,
       'duplicate_job_prevented': duplicateJobPrevented,
@@ -124,10 +139,41 @@ class RoutePoolCoverageCheck {
       'current_candidate_count': currentCandidateCount,
       'pool_healthy': poolHealthy,
       'pool_full': poolFull,
+      'local_pool_unavailable':
+          coverageStatus == 'hard_region_curated_needed' ||
+          coverageStatus == 'bootstrap_limited',
       'retry_recommended': shouldSurfaceWarmup,
       'region_warming_up': shouldSurfaceWarmup,
     };
   }
+}
+
+class _CoveragePolicy {
+  const _CoveragePolicy({
+    required this.difficultyLevel,
+    required this.hardRegionStatus,
+    required this.bootstrapEnabled,
+    required this.curatedSeedPreferred,
+    required this.targetPoolSize,
+    required this.maxPoolSize,
+    required this.healthyThreshold,
+    required this.thinThreshold,
+    required this.seedBudgetUnits,
+    required this.seedCooldownMinutes,
+  });
+
+  final String difficultyLevel;
+  final String hardRegionStatus;
+  final bool bootstrapEnabled;
+  final bool curatedSeedPreferred;
+  final int targetPoolSize;
+  final int maxPoolSize;
+  final int healthyThreshold;
+  final int thinThreshold;
+  final int seedBudgetUnits;
+  final int seedCooldownMinutes;
+
+  bool get isHard => difficultyLevel == 'hard';
 }
 
 class RoutePoolCandidateSaveResult {
@@ -245,6 +291,10 @@ class RoutePoolService {
         assignment: null,
         coverage: null,
         coverageStatus: 'empty',
+        regionDifficulty: 'normal',
+        hardRegionStatus: 'normal',
+        bootstrapEnabled: false,
+        curatedSeedPreferred: false,
         targetPoolSize: defaultTargetPoolSize,
         maxPoolSize: defaultMaxPoolSize,
         currentVerifiedCount: 0,
@@ -272,6 +322,10 @@ class RoutePoolService {
         assignment: null,
         coverage: null,
         coverageStatus: 'empty',
+        regionDifficulty: 'normal',
+        hardRegionStatus: 'normal',
+        bootstrapEnabled: false,
+        curatedSeedPreferred: false,
         targetPoolSize: defaultTargetPoolSize,
         maxPoolSize: defaultMaxPoolSize,
         currentVerifiedCount: 0,
@@ -292,13 +346,34 @@ class RoutePoolService {
       avoidHighways: avoidHighways,
       routeType: routeType,
     );
+    final policy = _coveragePolicyFor(
+      region: assignment.region,
+      coverage: coverage,
+    );
 
     var seedJobCreated = false;
     var duplicateJobPrevented = false;
-    RouteSeedJob? seedJob;
-    if (createSeedJob && coverage.currentVerifiedCount < coverage.targetPoolSize) {
+    var seedJob = await _loadSeedJob(
+      assignment: assignment,
+      distanceBucket: distanceBucket,
+      styleKey: styleKey,
+      avoidHighways: avoidHighways,
+      routeType: routeType,
+    );
+    if (createSeedJob && seedJob != null && (seedJob.isActive || seedJob.isCoolingDown)) {
+      duplicateJobPrevented = true;
+    }
+    final shouldCreateSeedJob =
+        createSeedJob &&
+        _shouldCreateSeedJob(
+          policy: policy,
+          coverage: coverage,
+          existingSeedJob: seedJob,
+        );
+    if (shouldCreateSeedJob) {
       final jobResult = await _ensureSeedJob(
         assignment: assignment,
+        policy: policy,
         distanceBucket: distanceBucket,
         styleKey: styleKey,
         avoidHighways: avoidHighways,
@@ -311,8 +386,8 @@ class RoutePoolService {
       coverage = await _upsertCoverage(
         coverage.copyWith(
           coverageStatus: _deriveCoverageStatus(
+            policy: policy,
             currentVerifiedCount: coverage.currentVerifiedCount,
-            targetPoolSize: coverage.targetPoolSize,
             hasBootstrapPending: true,
             isCooldown: seedJob.isCoolingDown,
           ),
@@ -322,21 +397,13 @@ class RoutePoolService {
           lastError: seedJob.lastError,
         ),
       );
-    } else {
-      seedJob = await _loadSeedJob(
-        assignment: assignment,
-        distanceBucket: distanceBucket,
-        styleKey: styleKey,
-        avoidHighways: avoidHighways,
-        routeType: routeType,
-      );
     }
 
     final hasBootstrapPending =
         seedJob != null && (seedJob.isActive || seedJob.isCoolingDown);
     final coverageStatus = _deriveCoverageStatus(
+      policy: policy,
       currentVerifiedCount: coverage.currentVerifiedCount,
-      targetPoolSize: coverage.targetPoolSize,
       hasBootstrapPending: hasBootstrapPending,
       isCooldown: seedJob?.isCoolingDown ?? false,
     );
@@ -354,14 +421,18 @@ class RoutePoolService {
       assignment: assignment,
       coverage: syncedCoverage,
       coverageStatus: coverageStatus,
+      regionDifficulty: policy.difficultyLevel,
+      hardRegionStatus: policy.hardRegionStatus,
+      bootstrapEnabled: policy.bootstrapEnabled,
+      curatedSeedPreferred: policy.curatedSeedPreferred,
       targetPoolSize: syncedCoverage.targetPoolSize,
       maxPoolSize: syncedCoverage.maxPoolSize,
       currentVerifiedCount: syncedCoverage.currentVerifiedCount,
       currentCandidateCount: syncedCoverage.currentCandidateCount,
       seedJobCreated: seedJobCreated,
       duplicateJobPrevented: duplicateJobPrevented,
-      poolHealthy: syncedCoverage.currentVerifiedCount >=
-          syncedCoverage.targetPoolSize,
+      poolHealthy:
+          syncedCoverage.currentVerifiedCount >= policy.healthyThreshold,
       poolFull:
           syncedCoverage.currentVerifiedCount >= syncedCoverage.maxPoolSize,
       bootstrapPending: hasBootstrapPending,
@@ -424,6 +495,10 @@ class RoutePoolService {
       avoidHighways: avoidHighways,
       routeType: routeType,
     );
+    final policy = _coveragePolicyFor(
+      region: assignment.region,
+      coverage: coverage,
+    );
     final poolFull = coverage.currentVerifiedCount >= coverage.maxPoolSize;
     final candidate = RoutePoolCandidate(
       routeRegionId: assignment.region.id,
@@ -444,6 +519,12 @@ class RoutePoolService {
       qualityScore: qualityScore.clamp(0, 100).toDouble(),
       shapeScore: shapeScore.clamp(0, 100).toDouble(),
       candidateSource: candidateSource,
+      difficultyLevel: policy.difficultyLevel,
+      hardRegionStatus: policy.hardRegionStatus,
+      candidateLocalityScore: _candidateLocalityScore(
+        distanceToCenterKm: assignment.distanceToCenterKm,
+      ),
+      repeatedSuccessCount: 1,
       isCandidate: true,
       isVerifiedPool: false,
       geometry: geometry,
@@ -1167,12 +1248,21 @@ class RoutePoolService {
       avoidHighways: avoidHighways,
       routeType: routeType,
     );
+    final policy = _coveragePolicyFor(region: assignment.region, coverage: coverage);
+    final policyAlignedCoverage = coverage == null
+        ? null
+        : _applyCoveragePolicySnapshot(coverage, policy: policy);
     final shouldRefresh = coverage == null ||
         forceRefresh ||
-        coverage.lastCountedAt == null ||
-        DateTime.now().toUtc().difference(coverage.lastCountedAt!) >
+        policyAlignedCoverage!.lastCountedAt == null ||
+        DateTime.now().toUtc().difference(policyAlignedCoverage.lastCountedAt!) >
             coverageRefreshTtl;
-    if (!shouldRefresh) return coverage;
+    if (!shouldRefresh) {
+      if (_coveragePolicyChanged(coverage, policyAlignedCoverage)) {
+        return _upsertCoverage(policyAlignedCoverage);
+      }
+      return policyAlignedCoverage;
+    }
 
     final verifiedCount = await _countMatchingVerifiedRoutes(
       assignment: assignment,
@@ -1188,7 +1278,7 @@ class RoutePoolService {
       avoidHighways: avoidHighways,
       routeType: routeType,
     );
-    final base = coverage ??
+    final base = policyAlignedCoverage ??
         RoutePoolCoverage(
           routeRegionId: assignment.region.id,
           countryCode: assignment.region.countryCode,
@@ -1200,15 +1290,23 @@ class RoutePoolService {
           styleKey: styleKey,
           avoidHighways: avoidHighways,
           coverageStatus: 'empty',
-          targetPoolSize: defaultTargetPoolSize,
-          maxPoolSize: defaultMaxPoolSize,
+          difficultyLevel: policy.difficultyLevel,
+          hardRegionStatus: policy.hardRegionStatus,
+          bootstrapEnabled: policy.bootstrapEnabled,
+          curatedSeedPreferred: policy.curatedSeedPreferred,
+          targetPoolSize: policy.targetPoolSize,
+          maxPoolSize: policy.maxPoolSize,
+          healthyThreshold: policy.healthyThreshold,
+          thinThreshold: policy.thinThreshold,
+          seedBudgetUnits: policy.seedBudgetUnits,
+          seedCooldownMinutes: policy.seedCooldownMinutes,
         );
     final refreshed = base.copyWith(
       currentVerifiedCount: verifiedCount,
       currentCandidateCount: candidateCount,
       coverageStatus: _deriveCoverageStatus(
+        policy: policy,
         currentVerifiedCount: verifiedCount,
-        targetPoolSize: base.targetPoolSize,
         hasBootstrapPending: false,
         isCooldown: false,
       ),
@@ -1429,6 +1527,7 @@ class RoutePoolService {
 
   Future<_SeedJobUpsertResult> _ensureSeedJob({
     required RoutePoolRegionAssignment assignment,
+    required _CoveragePolicy policy,
     required int distanceBucket,
     required String styleKey,
     required bool avoidHighways,
@@ -1453,7 +1552,11 @@ class RoutePoolService {
       }
       final restarted = existing.copyWith(
         status: 'queued',
+        difficultyLevel: policy.difficultyLevel,
+        hardRegionStatus: policy.hardRegionStatus,
         lastRequestedAt: now,
+        seedBudgetUnits: policy.seedBudgetUnits,
+        seedCooldownMinutes: policy.seedCooldownMinutes,
         triggeredByTier: subscriptionTier,
       );
       return _SeedJobUpsertResult(
@@ -1474,8 +1577,12 @@ class RoutePoolService {
       styleKey: styleKey,
       avoidHighways: avoidHighways,
       status: 'queued',
+      difficultyLevel: policy.difficultyLevel,
+      hardRegionStatus: policy.hardRegionStatus,
       priority: _priorityForTier(subscriptionTier),
       lastRequestedAt: now,
+      seedBudgetUnits: policy.seedBudgetUnits,
+      seedCooldownMinutes: policy.seedCooldownMinutes,
       triggeredByTier: subscriptionTier,
     );
     return _SeedJobUpsertResult(
@@ -1677,17 +1784,141 @@ class RoutePoolService {
         job.avoidHighways == avoidHighways;
   }
 
+  static _CoveragePolicy _coveragePolicyFor({
+    required RouteRegion region,
+    RoutePoolCoverage? coverage,
+  }) {
+    final targetPoolSize = math.max(
+      1,
+      region.defaultTargetPoolSize > 0
+          ? region.defaultTargetPoolSize
+          : (coverage?.targetPoolSize ?? defaultTargetPoolSize),
+    );
+    final maxPoolSize = math.max(
+      targetPoolSize,
+      region.defaultMaxPoolSize > 0
+          ? region.defaultMaxPoolSize
+          : (coverage?.maxPoolSize ?? defaultMaxPoolSize),
+    );
+    final healthyThreshold = math.max(
+      1,
+      math.min(
+        maxPoolSize,
+        region.healthyThreshold > 0
+            ? region.healthyThreshold
+            : (coverage?.healthyThreshold ?? targetPoolSize),
+      ),
+    );
+    final thinThreshold = math.max(
+      0,
+      math.min(
+        healthyThreshold - 1,
+        region.thinThreshold >= 0
+            ? region.thinThreshold
+            : (coverage?.thinThreshold ?? 1),
+      ),
+    );
+    return _CoveragePolicy(
+      difficultyLevel: region.difficultyLevel,
+      hardRegionStatus: region.hardRegionStatus,
+      bootstrapEnabled: region.bootstrapEnabled,
+      curatedSeedPreferred: region.curatedSeedPreferred,
+      targetPoolSize: targetPoolSize,
+      maxPoolSize: maxPoolSize,
+      healthyThreshold: healthyThreshold,
+      thinThreshold: thinThreshold,
+      seedBudgetUnits: math.max(
+        0,
+        region.seedBudgetUnits > 0 || region.difficultyLevel == 'hard'
+            ? region.seedBudgetUnits
+            : (coverage?.seedBudgetUnits ?? 1),
+      ),
+      seedCooldownMinutes: math.max(
+        1,
+        region.seedCooldownMinutes > 0
+            ? region.seedCooldownMinutes
+            : (coverage?.seedCooldownMinutes ?? 20),
+      ),
+    );
+  }
+
+  static RoutePoolCoverage _applyCoveragePolicySnapshot(
+    RoutePoolCoverage coverage, {
+    required _CoveragePolicy policy,
+  }) {
+    return coverage.copyWith(
+      difficultyLevel: policy.difficultyLevel,
+      hardRegionStatus: policy.hardRegionStatus,
+      bootstrapEnabled: policy.bootstrapEnabled,
+      curatedSeedPreferred: policy.curatedSeedPreferred,
+      targetPoolSize: policy.targetPoolSize,
+      maxPoolSize: policy.maxPoolSize,
+      healthyThreshold: policy.healthyThreshold,
+      thinThreshold: policy.thinThreshold,
+      seedBudgetUnits: policy.seedBudgetUnits,
+      seedCooldownMinutes: policy.seedCooldownMinutes,
+    );
+  }
+
+  static bool _coveragePolicyChanged(
+    RoutePoolCoverage current,
+    RoutePoolCoverage next,
+  ) {
+    return current.difficultyLevel != next.difficultyLevel ||
+        current.hardRegionStatus != next.hardRegionStatus ||
+        current.bootstrapEnabled != next.bootstrapEnabled ||
+        current.curatedSeedPreferred != next.curatedSeedPreferred ||
+        current.targetPoolSize != next.targetPoolSize ||
+        current.maxPoolSize != next.maxPoolSize ||
+        current.healthyThreshold != next.healthyThreshold ||
+        current.thinThreshold != next.thinThreshold ||
+        current.seedBudgetUnits != next.seedBudgetUnits ||
+        current.seedCooldownMinutes != next.seedCooldownMinutes;
+  }
+
+  static bool _shouldCreateSeedJob({
+    required _CoveragePolicy policy,
+    required RoutePoolCoverage coverage,
+    required RouteSeedJob? existingSeedJob,
+  }) {
+    if (coverage.currentVerifiedCount >= policy.targetPoolSize) return false;
+    if (!policy.bootstrapEnabled) return false;
+    if (policy.isHard && policy.curatedSeedPreferred) return false;
+    if (existingSeedJob == null) return true;
+    if (existingSeedJob.isActive || existingSeedJob.isCoolingDown) return false;
+    if (policy.seedBudgetUnits <= 0) return false;
+    if (existingSeedJob.failureCount >= policy.seedBudgetUnits) return false;
+    if (existingSeedJob.attemptCount >= existingSeedJob.maxAttempts) {
+      return false;
+    }
+    return true;
+  }
+
   static String _deriveCoverageStatus({
+    required _CoveragePolicy policy,
     required int currentVerifiedCount,
-    required int targetPoolSize,
     required bool hasBootstrapPending,
     required bool isCooldown,
   }) {
+    if (currentVerifiedCount >= policy.healthyThreshold) return 'healthy';
+    if (policy.isHard) {
+      if (hasBootstrapPending || isCooldown) return 'bootstrap_limited';
+      if (currentVerifiedCount > 0) return 'hard_region_thin';
+      if (!policy.bootstrapEnabled ||
+          policy.curatedSeedPreferred ||
+          policy.hardRegionStatus == 'curated_needed') {
+        return 'hard_region_curated_needed';
+      }
+      return 'empty';
+    }
     if (isCooldown) return 'cooldown';
-    if (currentVerifiedCount >= targetPoolSize) return 'healthy';
     if (hasBootstrapPending) return 'warming_up';
     if (currentVerifiedCount > 0) return 'thin';
     return 'empty';
+  }
+
+  static double _candidateLocalityScore({required double distanceToCenterKm}) {
+    return math.max(0.0, 100.0 - (distanceToCenterKm * 5.0));
   }
 
   static int _priorityForTier(String subscriptionTier) {
