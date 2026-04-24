@@ -87,6 +87,10 @@ class RouteService {
   static bool lastRoutePoolFallbackUsed = false;
   static bool lastRoutePoolDistanceRuleApplied = false;
   static bool lastRoutePoolRejectedTooFar = false;
+  static bool lastRoutePoolExactBucketMissing = false;
+  static bool lastRouteAlternativeDistanceOffered = false;
+  static int? lastRouteRequestedDistanceBucket;
+  static int? lastRouteReturnedDistanceBucket;
   static bool lastRouteAccessLegUsed = false;
   static double? lastRouteAccessLegDistanceKm;
   static String lastRouteGenerationSource = 'mapbox';
@@ -171,6 +175,10 @@ class RouteService {
     lastRoutePoolFallbackUsed = false;
     lastRoutePoolDistanceRuleApplied = false;
     lastRoutePoolRejectedTooFar = false;
+    lastRoutePoolExactBucketMissing = false;
+    lastRouteAlternativeDistanceOffered = false;
+    lastRouteRequestedDistanceBucket = null;
+    lastRouteReturnedDistanceBucket = null;
     lastRouteAccessLegUsed = false;
     lastRouteAccessLegDistanceKm = null;
     lastRouteGenerationSource = 'mapbox';
@@ -3620,6 +3628,10 @@ class RouteService {
 
     lastRoutePoolDistanceRuleApplied = scenario.isRoundTrip;
     lastRoutePoolRejectedTooFar = false;
+    lastRoutePoolExactBucketMissing = false;
+    lastRouteAlternativeDistanceOffered = false;
+    lastRouteRequestedDistanceBucket = bucket;
+    lastRouteReturnedDistanceBucket = null;
     lastRouteAccessLegUsed = false;
     lastRouteAccessLegDistanceKm = null;
 
@@ -3632,14 +3644,31 @@ class RouteService {
       routeType: scenario.routeType,
     );
     if (matches.isEmpty) {
+      lastRoutePoolExactBucketMissing = true;
       _debugRouteSearch(
         '[PoolFallback] poolHit=false reason=pool_density_missing '
         'scenarioKey=${scenario.scenarioKey} bucket=$bucket',
       );
       return null;
     }
+    final hasExactBucketMatch = matches.any(
+      (match) => match.route.distanceBucket == bucket,
+    );
+    if (!hasExactBucketMatch) {
+      lastRoutePoolExactBucketMissing = true;
+    }
 
     for (final match in matches) {
+      if (scenario.isRoundTrip && match.route.distanceBucket != bucket) {
+        lastRouteAlternativeDistanceOffered = true;
+        lastRouteReturnedDistanceBucket = match.route.distanceBucket;
+        _debugRouteSearch(
+          '[PoolFallback] poolHit=true poolUsed=false reason=bucket_mismatch '
+          'requestedBucket=$bucket returnedBucket=${match.route.distanceBucket} '
+          'alternative_distance_offered=true poolMatchId=${match.route.id}',
+        );
+        continue;
+      }
       final actualPoolStartDistanceKm = RoutePoolService.haversineDistanceKm(
         userLat,
         userLng,
@@ -3777,10 +3806,13 @@ class RouteService {
       lastRouteHardRegionStatus = coverage.hardRegionStatus;
       lastRouteChosenCluster = coverage.assignment?.region.cityCluster;
       return coverage;
-    } catch (_) {
+    } catch (error) {
       // Coverage/bootstrap metadata must never replace the original routing
       // error when the backing Supabase store is unavailable in unit tests or
       // degraded environments.
+      debugPrint(
+        '[RouteService] Coverage bootstrap failed: ${error.runtimeType}: $error',
+      );
       return null;
     }
   }
@@ -3800,6 +3832,20 @@ class RouteService {
       'route_source': 'pool',
       'source': 'pool',
       'fallback_reason': lastError?.type.name ?? 'region_warming_up',
+      'code': 'pool_bootstrap_pending',
+      'response_code': 'pool_bootstrap_pending',
+      'requested_distance_bucket': _distanceBucketForPool(
+        scenario.targetDistanceKm,
+      ),
+      'requested_style': scenario.style,
+      'avoid_highways': scenario.avoidHighways,
+      'pool_exact_bucket_missing': lastRoutePoolExactBucketMissing,
+      'alternative_distance_offered': lastRouteAlternativeDistanceOffered,
+      'returned_distance_bucket': lastRouteReturnedDistanceBucket,
+      'user_message_required': true,
+      'seed_job_queued': coverage.seedJobCreated || coverage.bootstrapPending,
+      'retry_recommended': true,
+      'estimated_wait_minutes': 5,
     };
     return RouteServiceException(
       type: RouteErrorType.noRoute,
@@ -3826,12 +3872,11 @@ class RouteService {
         return 'In $clusterText sind die automatischen Aufbauversuche aktuell begrenzt. Bitte versuche es spaeter erneut.';
       case 'cooldown':
         return 'In $clusterText bauen wir gerade erste Routen auf. Bitte versuche es in einigen Minuten erneut.';
+      case 'thin':
       case 'warming_up':
       case 'empty':
       default:
-        return cluster == null
-            ? 'In deiner Umgebung wurde noch keine Route berechnet. Wir erstellen gerade erste Routen. Das dauert einige Minuten.'
-            : 'In deiner Umgebung wurde noch keine Route fuer $cluster berechnet. Wir erstellen gerade erste Routen. Das dauert einige Minuten.';
+        return 'Fuer diese Laenge und diesen Stil gibt es in deiner Umgebung noch zu wenige gepruefte Routen. Wir erstellen gerade neue Vorschlaege. Bitte versuche es in ein paar Minuten erneut.';
     }
   }
 
@@ -4438,6 +4483,12 @@ class RouteService {
       'avoid_highways_requested': scenario.avoidHighways,
       'has_highway': match.route.hasHighway,
       'avoids_highway': match.route.avoidsHighway,
+      'requested_distance_bucket': _distanceBucketForPool(
+        scenario.targetDistanceKm,
+      ),
+      'returned_distance_bucket': match.route.distanceBucket,
+      'pool_exact_bucket_missing': false,
+      'alternative_distance_offered': false,
       'distance_bucket': match.route.distanceBucket,
       'mode': scenario.style,
       'orchestration': {
@@ -5571,6 +5622,10 @@ class RouteService {
         lastRoutePoolFallbackUsed;
     meta['pool_distance_rule_applied'] = lastRoutePoolDistanceRuleApplied;
     meta['pool_rejected_too_far'] = lastRoutePoolRejectedTooFar;
+    meta['pool_exact_bucket_missing'] = lastRoutePoolExactBucketMissing;
+    meta['alternative_distance_offered'] = lastRouteAlternativeDistanceOffered;
+    meta['requested_distance_bucket'] = lastRouteRequestedDistanceBucket;
+    meta['returned_distance_bucket'] = lastRouteReturnedDistanceBucket;
     meta['access_leg_used'] = lastRouteAccessLegUsed;
     meta['access_leg_distance_km'] = lastRouteAccessLegDistanceKm;
     meta['dead_end_spike_detected'] = RouteQualityValidator.detectDeadEndSpikes(
@@ -5616,6 +5671,10 @@ class RouteService {
       'pool_start_distance_km': lastRoutePoolStartDistanceKm,
       'pool_distance_rule_applied': lastRoutePoolDistanceRuleApplied,
       'pool_rejected_too_far': lastRoutePoolRejectedTooFar,
+      'pool_exact_bucket_missing': lastRoutePoolExactBucketMissing,
+      'alternative_distance_offered': lastRouteAlternativeDistanceOffered,
+      'requested_distance_bucket': lastRouteRequestedDistanceBucket,
+      'returned_distance_bucket': lastRouteReturnedDistanceBucket,
       'access_leg_used': lastRouteAccessLegUsed,
       'access_leg_distance_km': lastRouteAccessLegDistanceKm,
       'dead_end_spike_detected': meta['dead_end_spike_detected'],

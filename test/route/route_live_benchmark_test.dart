@@ -707,6 +707,7 @@ void main() {
           final stopwatch = Stopwatch()..start();
           var success = false;
           String? errorCode;
+          String? responseCode;
           String? errorMessage;
           double? distanceKm;
           double? similarityToPreviousPercent;
@@ -759,6 +760,9 @@ void main() {
                 ?.toString();
             edgeRoutingBuildId = result.edgeMeta['routing_build_id']
                 ?.toString();
+            responseCode =
+                result.edgeMeta['response_code']?.toString() ??
+                result.edgeMeta['code']?.toString();
             avoidHighwaysRequested =
                 result.edgeMeta['avoid_highways_requested'] == true;
             routeSource =
@@ -803,6 +807,9 @@ void main() {
                   ?.toString();
               edgeRoutingBuildId = error.edgeMeta['routing_build_id']
                   ?.toString();
+              responseCode =
+                  error.edgeMeta['response_code']?.toString() ??
+                  error.edgeMeta['code']?.toString();
               avoidHighwaysRequested =
                   error.edgeMeta['avoid_highways_requested'] == true;
               variantHint = error.edgeMeta['variant_hint']?.toString();
@@ -927,6 +934,7 @@ void main() {
                 poolFallbackUsed,
             'errorBannerWouldBeVisible': !success && previous == null,
             'errorCode': errorCode,
+            'responseCode': responseCode,
             'errorMessage': errorMessage,
             'distanceKm': distanceKm,
           };
@@ -1027,6 +1035,7 @@ void main() {
         int candidateAttempts = 0;
         String? qualityReason;
         String? errorCode;
+        String? responseCode;
         String? errorMessage;
         String? fingerprint;
         double? similarityToPreviousPercent;
@@ -1046,6 +1055,10 @@ void main() {
         double? poolStartDistanceKm;
         bool? poolDistanceRuleApplied;
         bool? poolRejectedTooFar;
+        bool? poolExactBucketMissing;
+        bool? alternativeDistanceOffered;
+        int? requestedDistanceBucket;
+        int? returnedDistanceBucket;
         bool? accessLegUsed;
         double? accessLegDistanceKm;
         bool? deadEndSpikeDetected;
@@ -1133,6 +1146,9 @@ void main() {
             final excludes = result.edgeMeta['effective_excludes']?.toString();
             edgeRoutingBuildId = result.edgeMeta['routing_build_id']
                 ?.toString();
+            responseCode =
+                result.edgeMeta['response_code']?.toString() ??
+                result.edgeMeta['code']?.toString();
             routeSource =
                 result.edgeMeta['route_source']?.toString() ??
                 result.edgeMeta['source']?.toString() ??
@@ -1147,6 +1163,14 @@ void main() {
                 result.edgeMeta['pool_distance_rule_applied'] == true;
             poolRejectedTooFar =
                 result.edgeMeta['pool_rejected_too_far'] == true;
+            poolExactBucketMissing =
+                result.edgeMeta['pool_exact_bucket_missing'] == true;
+            alternativeDistanceOffered =
+                result.edgeMeta['alternative_distance_offered'] == true;
+            requestedDistanceBucket =
+                (result.edgeMeta['requested_distance_bucket'] as num?)?.toInt();
+            returnedDistanceBucket =
+                (result.edgeMeta['returned_distance_bucket'] as num?)?.toInt();
             accessLegUsed = result.edgeMeta['access_leg_used'] == true;
             accessLegDistanceKm =
                 (result.edgeMeta['access_leg_distance_km'] as num?)?.toDouble();
@@ -1231,6 +1255,9 @@ void main() {
             final excludes = result.edgeMeta['effective_excludes']?.toString();
             edgeRoutingBuildId = result.edgeMeta['routing_build_id']
                 ?.toString();
+            responseCode =
+                result.edgeMeta['response_code']?.toString() ??
+                result.edgeMeta['code']?.toString();
             routeSource =
                 result.edgeMeta['route_source']?.toString() ??
                 result.edgeMeta['source']?.toString() ??
@@ -1245,6 +1272,14 @@ void main() {
                 result.edgeMeta['pool_distance_rule_applied'] == true;
             poolRejectedTooFar =
                 result.edgeMeta['pool_rejected_too_far'] == true;
+            poolExactBucketMissing =
+                result.edgeMeta['pool_exact_bucket_missing'] == true;
+            alternativeDistanceOffered =
+                result.edgeMeta['alternative_distance_offered'] == true;
+            requestedDistanceBucket =
+                (result.edgeMeta['requested_distance_bucket'] as num?)?.toInt();
+            returnedDistanceBucket =
+                (result.edgeMeta['returned_distance_bucket'] as num?)?.toInt();
             accessLegUsed = result.edgeMeta['access_leg_used'] == true;
             accessLegDistanceKm =
                 (result.edgeMeta['access_leg_distance_km'] as num?)?.toDouble();
@@ -1283,6 +1318,9 @@ void main() {
         } catch (error) {
           if (error is RouteServiceException) {
             errorCode = error.type.name;
+            responseCode =
+                error.edgeMeta['response_code']?.toString() ??
+                error.edgeMeta['code']?.toString();
             errorMessage = error.userMessage;
             edgeRoutingBuildId = error.edgeMeta['routing_build_id']?.toString();
             reportedSubscriptionTier =
@@ -1300,6 +1338,19 @@ void main() {
             poolBootstrapPending =
                 error.edgeMeta['pool_bootstrap_pending'] == true ||
                 RouteService.lastRoutePoolBootstrapPending;
+            poolExactBucketMissing =
+                error.edgeMeta['pool_exact_bucket_missing'] == true ||
+                RouteService.lastRoutePoolExactBucketMissing;
+            alternativeDistanceOffered =
+                error.edgeMeta['alternative_distance_offered'] == true ||
+                RouteService.lastRouteAlternativeDistanceOffered;
+            requestedDistanceBucket =
+                (error.edgeMeta['requested_distance_bucket'] as num?)
+                    ?.toInt() ??
+                RouteService.lastRouteRequestedDistanceBucket;
+            returnedDistanceBucket =
+                (error.edgeMeta['returned_distance_bucket'] as num?)?.toInt() ??
+                RouteService.lastRouteReturnedDistanceBucket;
           } else {
             errorCode = error.runtimeType.toString();
             errorMessage = error.toString();
@@ -1348,6 +1399,7 @@ void main() {
           'errorBanner': !success,
           'qualityReason': qualityReason,
           'errorCode': errorCode,
+          'responseCode': responseCode,
           'errorMessage': errorMessage,
           'avoidHighways': scenario.avoidHighways,
           'mode': scenario.mode,
@@ -1380,6 +1432,10 @@ void main() {
           'verifiedInserted': RouteService.lastRouteVerifiedInserted,
           'poolDistanceRuleApplied': poolDistanceRuleApplied,
           'poolRejectedTooFar': poolRejectedTooFar,
+          'poolExactBucketMissing': poolExactBucketMissing,
+          'alternativeDistanceOffered': alternativeDistanceOffered,
+          'requestedDistanceBucket': requestedDistanceBucket,
+          'returnedDistanceBucket': returnedDistanceBucket,
           'accessLegUsed': accessLegUsed,
           'accessLegDistanceKm': accessLegDistanceKm,
           'deadEndSpikeDetected': deadEndSpikeDetected,

@@ -628,7 +628,7 @@ void main() {
     );
 
     test(
-      'ROUND_TRIP: gleiches Distanz-Bucket mit relaxed style kommt vor exact fallback bucket',
+      'ROUND_TRIP: relaxed style bleibt im exakten Distanz-Bucket',
       () async {
         final service = RoutePoolService(
           inMemoryRegions: [
@@ -680,14 +680,102 @@ void main() {
           routeType: 'ROUND_TRIP',
         );
 
-        expect(matches, hasLength(2));
-        expect(matches.first.route.id, 'feldkirch-50-abend');
-        expect(matches.last.route.id, 'feldkirch-100-sport');
+        expect(matches.map((match) => match.route.id), ['feldkirch-50-abend']);
       },
     );
 
     test(
-      'ROUND_TRIP: inkompatible Kurvenjagd-Poolroute erfüllt Sport nicht relaxed',
+      'ROUND_TRIP: 75-km Anfrage nutzt keine 50/100-km Poolroute als normalen Erfolg',
+      () async {
+        final service = RoutePoolService(
+          inMemoryRegions: [
+            _region(
+              countryCode: 'AT',
+              admin1Name: 'Vorarlberg',
+              cityCluster: 'Dornbirn',
+              centerLat: 47.4125,
+              centerLng: 9.7414,
+            ),
+          ],
+          inMemoryRoutes: [
+            _route(
+              id: 'dornbirn-50-sport',
+              countryCode: 'AT',
+              admin1Name: 'Vorarlberg',
+              cityCluster: 'Dornbirn',
+              startLat: 47.4125,
+              startLng: 9.7414,
+              distanceBucket: 50,
+              styleTags: const ['Sport Mode'],
+            ),
+            _route(
+              id: 'dornbirn-100-sport',
+              countryCode: 'AT',
+              admin1Name: 'Vorarlberg',
+              cityCluster: 'Dornbirn',
+              startLat: 47.4126,
+              startLng: 9.7415,
+              distanceBucket: 100,
+              styleTags: const ['Sport Mode'],
+            ),
+          ],
+        );
+
+        final matches = await service.findCandidateRoutesNear(
+          userLat: 47.4125,
+          userLng: 9.7414,
+          distanceBucket: 75,
+          style: 'Sport Mode',
+          avoidHighways: true,
+          routeType: 'ROUND_TRIP',
+        );
+
+        expect(matches, isEmpty);
+      },
+    );
+
+    test(
+      'ROUND_TRIP: 100-km Anfrage nutzt keine 75-km Poolroute als normalen Erfolg',
+      () async {
+        final service = RoutePoolService(
+          inMemoryRegions: [
+            _region(
+              countryCode: 'AT',
+              admin1Name: 'Vorarlberg',
+              cityCluster: 'Dornbirn',
+              centerLat: 47.4125,
+              centerLng: 9.7414,
+            ),
+          ],
+          inMemoryRoutes: [
+            _route(
+              id: 'dornbirn-75-kurven',
+              countryCode: 'AT',
+              admin1Name: 'Vorarlberg',
+              cityCluster: 'Dornbirn',
+              startLat: 47.4125,
+              startLng: 9.7414,
+              distanceBucket: 75,
+              styleTags: const ['Kurvenjagd'],
+            ),
+          ],
+        );
+
+        final matches = await service.findCandidateRoutesNear(
+          userLat: 47.4125,
+          userLng: 9.7414,
+          distanceBucket: 100,
+          style: 'Kurvenjagd',
+          avoidHighways: true,
+          routeType: 'ROUND_TRIP',
+        );
+
+        expect(matches, isEmpty);
+      },
+    );
+
+    test(
+      'ROUND_TRIP: inkompatible Style-Route wird nicht durch fremdes Bucket ersetzt',
       () async {
         final service = RoutePoolService(
           inMemoryRegions: [
@@ -739,7 +827,7 @@ void main() {
           routeType: 'ROUND_TRIP',
         );
 
-        expect(matches.map((match) => match.route.id), ['feldkirch-100-sport']);
+        expect(matches, isEmpty);
       },
     );
 

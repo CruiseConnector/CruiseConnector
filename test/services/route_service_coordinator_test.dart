@@ -1121,12 +1121,145 @@ void main() {
         secondError = error;
       }
 
-      expect(firstError.userMessage, contains('erste Routen'));
+      expect(firstError.userMessage, contains('neue Vorschlaege'));
       expect(firstError.edgeMeta['region_warming_up'], true);
       expect(firstError.edgeMeta['seed_job_created'], true);
       expect(secondError.edgeMeta['duplicate_job_prevented'], true);
       expect(invoker.callCount, 0);
       expect(jobs, hasLength(1));
+    },
+  );
+
+  test(
+    '75-km Free-Anfrage nutzt keine 50-km Poolroute und queued exakten Seed-Job',
+    () async {
+      final jobs = <RouteSeedJob>[];
+      final wrongBucketRoute = _poolMatchWithResponse(
+        response: _closedLoopResponse(),
+        id: 'pool-dornbirn-50-sport-nohighway',
+        cityCluster: 'Dornbirn',
+        startDistanceKm: 0.2,
+      ).route;
+      service = RouteService(
+        invoker: invoker,
+        routePoolService: RoutePoolService(
+          inMemoryRegions: [
+            _benchmarkRegion(
+              countryCode: 'AT',
+              admin1Name: 'Vorarlberg',
+              admin2Name: 'Dornbirn',
+              cityCluster: 'Dornbirn',
+              centerLat: 47.5162,
+              centerLng: 9.7471,
+            ),
+          ],
+          inMemoryRoutes: [wrongBucketRoute],
+          inMemoryCoverage: <RoutePoolCoverage>[],
+          inMemorySeedJobs: jobs,
+          inMemoryCandidates: <RoutePoolCandidate>[],
+        ),
+      );
+
+      late RouteServiceException error;
+      try {
+        await service.generateRoundTrip(
+          startPosition: _start(),
+          targetDistanceKm: 75,
+          mode: 'Sport Mode',
+          planningType: 'Zufall',
+          avoidHighways: true,
+          forceFreshVariant: true,
+          subscriptionTier: 'free',
+        );
+      } on RouteServiceException catch (caught) {
+        error = caught;
+      }
+
+      expect(invoker.callCount, 0);
+      expect(error.userMessage, contains('neue Vorschlaege'));
+      expect(error.edgeMeta['code'], 'pool_bootstrap_pending');
+      expect(error.edgeMeta['response_code'], 'pool_bootstrap_pending');
+      expect(error.edgeMeta['requested_distance_bucket'], 75);
+      expect(error.edgeMeta['pool_exact_bucket_missing'], true);
+      expect(error.edgeMeta['seed_job_created'], true);
+      expect(jobs, hasLength(1));
+      expect(jobs.single.distanceBucket, 75);
+      expect(jobs.single.styleKey, 'sport_mode');
+    },
+  );
+
+  test(
+    '100-km Premium-NoRoute nutzt keine 75-km Poolroute und queued exakten Seed-Job',
+    () async {
+      final jobs = <RouteSeedJob>[];
+      final baseWrongBucketRoute = _poolMatchWithResponse(
+        response: _closedLoopResponse(),
+        id: 'pool-dornbirn-75-kurven-nohighway',
+        cityCluster: 'Dornbirn',
+        startDistanceKm: 0.2,
+      ).route;
+      final wrongBucketRoute = RoutePoolEntry(
+        id: baseWrongBucketRoute.id,
+        countryCode: baseWrongBucketRoute.countryCode,
+        admin1Name: baseWrongBucketRoute.admin1Name,
+        admin2Name: baseWrongBucketRoute.admin2Name,
+        cityCluster: baseWrongBucketRoute.cityCluster,
+        startLat: baseWrongBucketRoute.startLat,
+        startLng: baseWrongBucketRoute.startLng,
+        distanceKm: 75,
+        distanceBucket: 75,
+        routeType: baseWrongBucketRoute.routeType,
+        styleTags: const ['Kurvenjagd'],
+        avoidsHighway: baseWrongBucketRoute.avoidsHighway,
+        hasHighway: baseWrongBucketRoute.hasHighway,
+        qualityScore: baseWrongBucketRoute.qualityScore,
+        verified: baseWrongBucketRoute.verified,
+        geometry: baseWrongBucketRoute.geometry,
+        durationSeconds: baseWrongBucketRoute.durationSeconds,
+      );
+      service = RouteService(
+        invoker: _AlwaysFailingInvoker(),
+        routePoolService: RoutePoolService(
+          inMemoryRegions: [
+            _benchmarkRegion(
+              countryCode: 'AT',
+              admin1Name: 'Vorarlberg',
+              admin2Name: 'Dornbirn',
+              cityCluster: 'Dornbirn',
+              centerLat: 47.5162,
+              centerLng: 9.7471,
+            ),
+          ],
+          inMemoryRoutes: [wrongBucketRoute],
+          inMemoryCoverage: <RoutePoolCoverage>[],
+          inMemorySeedJobs: jobs,
+          inMemoryCandidates: <RoutePoolCandidate>[],
+        ),
+      );
+
+      late RouteServiceException error;
+      try {
+        await service.generateRoundTrip(
+          startPosition: _start(),
+          targetDistanceKm: 100,
+          mode: 'Kurvenjagd',
+          planningType: 'Zufall',
+          avoidHighways: true,
+          forceFreshVariant: true,
+          subscriptionTier: 'premium',
+        );
+      } on RouteServiceException catch (caught) {
+        error = caught;
+      }
+
+      expect(error.edgeMeta['code'], 'pool_bootstrap_pending');
+      expect(error.edgeMeta['requested_distance_bucket'], 100);
+      expect(error.edgeMeta['pool_exact_bucket_missing'], true);
+      expect(error.edgeMeta['seed_job_created'], true);
+      expect(RouteService.lastRoutePoolFallbackUsed, false);
+      expect(jobs, hasLength(1));
+      expect(jobs.single.distanceBucket, 100);
+      expect(jobs.single.styleKey, 'kurvenjagd');
     },
   );
 

@@ -110,6 +110,7 @@ class RoutePoolCoverageCheck {
       coverageStatus == 'warming_up' ||
       coverageStatus == 'cooldown' ||
       coverageStatus == 'empty' ||
+      coverageStatus == 'thin' ||
       coverageStatus == 'hard_region_thin' ||
       coverageStatus == 'hard_region_curated_needed' ||
       coverageStatus == 'bootstrap_limited';
@@ -141,6 +142,11 @@ class RoutePoolCoverageCheck {
       'pool_healthy': poolHealthy,
       'pool_full': poolFull,
       'local_pool_unavailable':
+          coverageStatus == 'empty' ||
+          coverageStatus == 'thin' ||
+          coverageStatus == 'warming_up' ||
+          coverageStatus == 'cooldown' ||
+          coverageStatus == 'hard_region_thin' ||
           coverageStatus == 'hard_region_curated_needed' ||
           coverageStatus == 'bootstrap_limited',
       'retry_recommended': shouldSurfaceWarmup,
@@ -771,8 +777,8 @@ class RoutePoolService {
           ? <int>[distanceBucket]
           : bucketOrder;
       final fallbackBucketOrder = preferSingleBucketRoundTrip
-          ? bucketOrder.skip(1)
-          : const Iterable<int>.empty();
+          ? const Iterable<int>.empty()
+          : bucketOrder.skip(1);
       void addMatches(
         List<RoutePoolMatch> target,
         Set<String> seenRouteIds,
@@ -947,8 +953,8 @@ class RoutePoolService {
         ? <int>[distanceBucket]
         : bucketOrder;
     final fallbackBucketOrder = preferSingleBucketRoundTrip
-        ? bucketOrder.skip(1)
-        : const Iterable<int>.empty();
+        ? const Iterable<int>.empty()
+        : bucketOrder.skip(1);
     void addMatches(
       List<RoutePoolMatch> target,
       Set<String> seenRouteIds,
