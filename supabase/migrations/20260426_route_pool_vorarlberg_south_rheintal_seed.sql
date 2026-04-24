@@ -80,7 +80,6 @@ ON CONFLICT (route_fingerprint) DO UPDATE SET
   shape_score = EXCLUDED.shape_score,
   source = EXCLUDED.source,
   verified = EXCLUDED.verified,
-  is_active = EXCLUDED.is_active,
   geometry = EXCLUDED.geometry,
   route_payload = EXCLUDED.route_payload,
   is_active = true,

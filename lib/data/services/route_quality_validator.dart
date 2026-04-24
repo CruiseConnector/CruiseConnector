@@ -103,6 +103,26 @@ class RouteQualityClassification {
   bool get isRejected => tier == RouteQualityTier.rejected;
 }
 
+class RouteDeadEndSpike {
+  const RouteDeadEndSpike({
+    required this.startIndex,
+    required this.endIndex,
+    required this.pathDistanceMeters,
+    required this.rejoinDistanceMeters,
+    required this.backtrackSimilarityPercent,
+    required this.maxOutwardRadiusMeters,
+  });
+
+  final int startIndex;
+  final int endIndex;
+  final double pathDistanceMeters;
+  final double rejoinDistanceMeters;
+  final double backtrackSimilarityPercent;
+  final double maxOutwardRadiusMeters;
+
+  bool containsIndex(int index) => index >= startIndex && index <= endIndex;
+}
+
 /// Prüft die Qualität einer generierten Route.
 ///
 /// Erkennt Backtracking, Wendemanöver, nicht geschlossene Schleifen
@@ -492,8 +512,7 @@ class RouteQualityValidator {
         !isRoundTrip &&
         (quality.corridorSwitchCount >= 4 ||
             quality.progressReversalCount >= 2);
-    final hardUturnFailure =
-        !isRoundTrip
+    final hardUturnFailure = !isRoundTrip
         ? quality.uturnPositions.isNotEmpty
         : quality.uturnPositions.length >= 2 ||
               (quality.uturnPositions.length == 1 &&
@@ -711,6 +730,127 @@ class RouteQualityValidator {
     return false;
   }
 
+  static List<RouteDeadEndSpike> detectDeadEndSpikes(
+    List<List<double>> coordinates, {
+    double minPathMeters = 80.0,
+    double maxPathMeters = 600.0,
+    double rejoinToleranceMeters = 35.0,
+    double backtrackSimilarityThresholdPercent = 74.0,
+    double minOutwardRadiusMeters = 35.0,
+    double maxOutwardRadiusMeters = 320.0,
+    double corridorRejoinMaxDistanceMeters = 120.0,
+    double corridorHeadingToleranceDegrees = 40.0,
+  }) {
+    if (coordinates.length < 8) return const [];
+
+    final spikes = <RouteDeadEndSpike>[];
+    final maxWindowSize = math.min(32, coordinates.length - 1);
+    var startIndex = 0;
+
+    while (startIndex < coordinates.length - 4) {
+      RouteDeadEndSpike? detected;
+      var pathDistanceMeters = 0.0;
+
+      for (
+        var endIndex = startIndex + 1;
+        endIndex < coordinates.length && endIndex <= startIndex + maxWindowSize;
+        endIndex++
+      ) {
+        pathDistanceMeters += geo.Geolocator.distanceBetween(
+          coordinates[endIndex - 1][1],
+          coordinates[endIndex - 1][0],
+          coordinates[endIndex][1],
+          coordinates[endIndex][0],
+        );
+        if (pathDistanceMeters > maxPathMeters) break;
+        if (pathDistanceMeters < minPathMeters || endIndex - startIndex < 4) {
+          continue;
+        }
+
+        final rejoinDistanceMeters = geo.Geolocator.distanceBetween(
+          coordinates[startIndex][1],
+          coordinates[startIndex][0],
+          coordinates[endIndex][1],
+          coordinates[endIndex][0],
+        );
+        if (rejoinDistanceMeters > rejoinToleranceMeters) continue;
+
+        final subSegment = coordinates.sublist(startIndex, endIndex + 1);
+        final midpoint = subSegment.length ~/ 2;
+        final outgoing = subSegment.sublist(0, midpoint + 1);
+        final incoming = subSegment.sublist(midpoint).reversed.toList();
+        if (outgoing.length < 3 || incoming.length < 3) continue;
+
+        final similarity = calculateRouteSimilarityPercent(
+          outgoing,
+          incoming,
+          sampleCount: math.min(12, math.min(outgoing.length, incoming.length)),
+          proximityMeters: 35.0,
+        );
+        if (similarity < backtrackSimilarityThresholdPercent) continue;
+
+        final outwardRadiusMeters = _maxDistanceFromAnchorMeters(
+          subSegment,
+          subSegment.first,
+        );
+        if (outwardRadiusMeters < minOutwardRadiusMeters ||
+            outwardRadiusMeters > maxOutwardRadiusMeters) {
+          continue;
+        }
+        if (startIndex == 0 || endIndex >= coordinates.length - 1) continue;
+
+        final corridorRejoinDistanceMeters = geo.Geolocator.distanceBetween(
+          coordinates[startIndex - 1][1],
+          coordinates[startIndex - 1][0],
+          coordinates[endIndex + 1][1],
+          coordinates[endIndex + 1][0],
+        );
+        if (corridorRejoinDistanceMeters > corridorRejoinMaxDistanceMeters) {
+          continue;
+        }
+
+        final headingBefore = _bearing(
+          coordinates[startIndex - 1][1],
+          coordinates[startIndex - 1][0],
+          coordinates[startIndex][1],
+          coordinates[startIndex][0],
+        );
+        final headingAfter = _bearing(
+          coordinates[endIndex][1],
+          coordinates[endIndex][0],
+          coordinates[endIndex + 1][1],
+          coordinates[endIndex + 1][0],
+        );
+        final corridorHeadingDelta = _angleDiff(
+          headingBefore,
+          headingAfter,
+        ).abs();
+        if (corridorHeadingDelta > corridorHeadingToleranceDegrees) {
+          continue;
+        }
+
+        detected = RouteDeadEndSpike(
+          startIndex: startIndex,
+          endIndex: endIndex,
+          pathDistanceMeters: pathDistanceMeters,
+          rejoinDistanceMeters: rejoinDistanceMeters,
+          backtrackSimilarityPercent: similarity,
+          maxOutwardRadiusMeters: outwardRadiusMeters,
+        );
+        break;
+      }
+
+      if (detected != null) {
+        spikes.add(detected);
+        startIndex = detected.endIndex;
+      } else {
+        startIndex += 1;
+      }
+    }
+
+    return spikes;
+  }
+
   static List<List<double>> _sampleRoute(
     List<List<double>> coordinates, {
     required int sampleCount,
@@ -761,6 +901,26 @@ class RouteQualityValidator {
       }
     }
     return (nearCount / source.length) * 100.0;
+  }
+
+  static double _maxDistanceFromAnchorMeters(
+    List<List<double>> coordinates,
+    List<double> anchor,
+  ) {
+    var maxDistance = 0.0;
+    for (final point in coordinates) {
+      if (point.length < 2 || anchor.length < 2) continue;
+      final distance = geo.Geolocator.distanceBetween(
+        anchor[1],
+        anchor[0],
+        point[1],
+        point[0],
+      );
+      if (distance > maxDistance) {
+        maxDistance = distance;
+      }
+    }
+    return maxDistance;
   }
 
   // ── Helper ─────────────────────────────────────────────────────────────

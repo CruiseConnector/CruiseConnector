@@ -91,11 +91,13 @@ class RouteService {
   static double? lastRouteAccessLegDistanceKm;
   static String lastRouteGenerationSource = 'mapbox';
   static String lastRouteSubscriptionTier = 'premium';
+  static String? lastRouteRequestedStyle;
   static String? lastRoutePoolMatchId;
   static String? lastRoutePoolMatchTier;
   static double? lastRoutePoolStartDistanceKm;
   static bool lastRouteDeadEndSpikeDetected = false;
   static int lastRouteApiCallCount = 0;
+  static int? lastRouteGenerationStartedAtMs;
   static String? lastRouteDebugFingerprint;
   static double? lastRouteSimilarityToPreviousPercent;
   static String? lastRouteDebugTrigger;
@@ -173,11 +175,13 @@ class RouteService {
     lastRouteAccessLegDistanceKm = null;
     lastRouteGenerationSource = 'mapbox';
     lastRouteSubscriptionTier = 'premium';
+    lastRouteRequestedStyle = null;
     lastRoutePoolMatchId = null;
     lastRoutePoolMatchTier = null;
     lastRoutePoolStartDistanceKm = null;
     lastRouteDeadEndSpikeDetected = false;
     lastRouteApiCallCount = 0;
+    lastRouteGenerationStartedAtMs = null;
     lastRouteDebugFingerprint = null;
     lastRouteSimilarityToPreviousPercent = null;
     lastRouteDebugTrigger = null;
@@ -206,6 +210,23 @@ class RouteService {
       default:
         return 'premium';
     }
+  }
+
+  /// TestFlight/Beta policy: during the closed test phase every beta user is
+  /// treated as premium, but the switch remains explicit and removable.
+  static const bool treatBetaUsersAsPremiumForTesting = bool.fromEnvironment(
+    'CRUISECONNECT_TREAT_BETA_USERS_AS_PREMIUM',
+    defaultValue: true,
+  );
+
+  static String resolveEffectiveSubscriptionTier({
+    String requestedTier = 'free',
+    bool isTesterOrBeta = false,
+  }) {
+    if (treatBetaUsersAsPremiumForTesting && isTesterOrBeta) {
+      return 'premium';
+    }
+    return _normalizeSubscriptionTier(requestedTier);
   }
 
   static bool _isFreeTier(String value) =>
@@ -259,8 +280,10 @@ class RouteService {
       avoidHighways: avoidHighways,
     );
     _resetRouteDebugState();
+    lastRouteGenerationStartedAtMs = DateTime.now().millisecondsSinceEpoch;
     lastRouteDebugTrigger = debugTrigger;
     lastRouteSubscriptionTier = _normalizeSubscriptionTier(subscriptionTier);
+    lastRouteRequestedStyle = mode;
     _debugRouteSearch(
       '[ServiceStart] routeType=ROUND_TRIP selectedKm=$normalizedTargetKm '
       'selectedStyle=$mode avoidHighways=$avoidHighways '
@@ -738,8 +761,10 @@ class RouteService {
       avoidHighways: avoidHighways,
     );
     _resetRouteDebugState();
+    lastRouteGenerationStartedAtMs = DateTime.now().millisecondsSinceEpoch;
     lastRouteDebugTrigger = 'unknown';
     lastRouteSubscriptionTier = _normalizeSubscriptionTier(subscriptionTier);
+    lastRouteRequestedStyle = shouldDiversify ? mode : 'Standard';
     _activeScenarioKeyForDebug = scenario.scenarioKey;
     _activeForceFreshVariantForDebug = forceFreshVariant;
     _activeTriggerForDebug = 'unknown';
@@ -1037,6 +1062,7 @@ class RouteService {
     bool avoidHighways = false,
     int? preferredJoinIndex,
     bool returnToSessionOrigin = false,
+    bool rebaseClosedLoop = false,
   }) async {
     if (existingRoute.coordinates.length < 2) {
       throw const RouteServiceException(
@@ -1050,6 +1076,7 @@ class RouteService {
       currentPosition: currentPosition,
       existingRoute: existingRoute,
       preferredJoinIndex: preferredJoinIndex,
+      rebaseClosedLoop: rebaseClosedLoop,
     );
     final accessKey = _accessSingleFlightKey(
       currentPosition: currentPosition,
@@ -1069,8 +1096,35 @@ class RouteService {
         currentPosition.longitude,
         currentPosition.latitude,
       ];
+      final routeStartDistanceMeters = _distanceBetweenCoordinates(
+        sessionOrigin,
+        existingRoute.coordinates.first,
+      );
+      final routePassesNearUser =
+          joinPoint.distanceFromCurrentMeters <=
+          RouteAccessPlanner.nearbyPassJoinDistanceMeters;
+      final routeRebasedToUser = rebaseClosedLoop && joinPoint.index > 0;
+      final joinPointType = _classifyAccessJoinPointType(
+        preferredJoinIndex: preferredJoinIndex,
+        joinPoint: joinPoint,
+        rebaseClosedLoop: rebaseClosedLoop,
+        routePassesNearUser: routePassesNearUser,
+      );
+      final metaBase = _buildAccessRouteMeta(
+        existingRoute: existingRoute,
+        joinPoint: joinPoint,
+        joinPointType: joinPointType,
+        routeStartDistanceMeters: routeStartDistanceMeters,
+        routePassesNearUser: routePassesNearUser,
+        routeRebasedToUser: routeRebasedToUser,
+      );
+      final followOnRouteWithMeta = _routeWithEdgeMeta(followOnRoute, {
+        ...metaBase,
+        'return_leg_used': false,
+      });
 
-      if (joinPoint.distanceFromCurrentMeters <= 60.0) {
+      if (joinPoint.distanceFromCurrentMeters <=
+          RouteAccessPlanner.directJoinDistanceMeters) {
         final returnLeg = await _buildReturnLegIfNeeded(
           sessionOrigin: sessionOrigin,
           followOnRoute: followOnRoute,
@@ -1079,12 +1133,15 @@ class RouteService {
           enabled: returnToSessionOrigin,
         );
         final sessionRoute = returnLeg == null
-            ? followOnRoute
-            : _mergeRouteSegments([followOnRoute, returnLeg]);
+            ? followOnRouteWithMeta
+            : _routeWithEdgeMeta(
+                _mergeRouteSegments([followOnRoute, returnLeg]),
+                {...metaBase, 'return_leg_used': true},
+              );
         return RouteAccessPlan(
           originalRoute: existingRoute,
           activeRoute: sessionRoute,
-          followOnRoute: followOnRoute,
+          followOnRoute: followOnRouteWithMeta,
           sessionRoute: sessionRoute,
           joinPoint: joinPoint,
           returnLeg: returnLeg,
@@ -1092,6 +1149,10 @@ class RouteService {
           logicalEnd: logicalEnd,
           sessionOrigin: sessionOrigin,
           sessionEnd: _copyCoordinate(sessionRoute.coordinates.last),
+          joinPointType: joinPointType,
+          routeStartDistanceMeters: routeStartDistanceMeters,
+          routePassesNearUser: routePassesNearUser,
+          routeRebasedToUser: routeRebasedToUser,
         );
       }
 
@@ -1109,17 +1170,34 @@ class RouteService {
         enabled: returnToSessionOrigin,
       );
       final sessionRoute = returnLeg == null
-          ? followOnRoute
-          : _mergeRouteSegments([followOnRoute, returnLeg]);
-      final activeRoute = _mergeAccessAndFollowOnRoutes(
-        accessLeg: accessLeg,
-        followOnRoute: sessionRoute,
+          ? followOnRouteWithMeta
+          : _routeWithEdgeMeta(
+              _mergeRouteSegments([followOnRoute, returnLeg]),
+              {...metaBase, 'return_leg_used': true},
+            );
+      final accessLegDistanceKm =
+          (accessLeg.distanceMeters ??
+              _distanceAlongCoordinates(accessLeg.coordinates)) /
+          1000.0;
+      final activeRoute = _routeWithEdgeMeta(
+        _mergeAccessAndFollowOnRoutes(
+          accessLeg: accessLeg,
+          followOnRoute: sessionRoute,
+        ),
+        {
+          ...metaBase,
+          'access_leg_used': true,
+          'access_leg_distance_km': double.parse(
+            accessLegDistanceKm.toStringAsFixed(2),
+          ),
+          'return_leg_used': returnLeg != null,
+        },
       );
 
       return RouteAccessPlan(
         originalRoute: existingRoute,
         activeRoute: activeRoute,
-        followOnRoute: followOnRoute,
+        followOnRoute: followOnRouteWithMeta,
         sessionRoute: sessionRoute,
         accessLeg: accessLeg,
         returnLeg: returnLeg,
@@ -1128,8 +1206,54 @@ class RouteService {
         logicalEnd: logicalEnd,
         sessionOrigin: sessionOrigin,
         sessionEnd: _copyCoordinate(activeRoute.coordinates.last),
+        joinPointType: joinPointType,
+        routeStartDistanceMeters: routeStartDistanceMeters,
+        routePassesNearUser: routePassesNearUser,
+        routeRebasedToUser: routeRebasedToUser,
       );
     });
+  }
+
+  String _classifyAccessJoinPointType({
+    required int? preferredJoinIndex,
+    required RouteJoinPoint joinPoint,
+    required bool rebaseClosedLoop,
+    required bool routePassesNearUser,
+  }) {
+    if (preferredJoinIndex != null) return 'preferred_join';
+    if (joinPoint.index == 0) return 'route_start';
+    if (rebaseClosedLoop && routePassesNearUser) return 'nearby_pass';
+    if (rebaseClosedLoop) return 'rebased_loop_join';
+    return 'forward_join';
+  }
+
+  Map<String, dynamic> _buildAccessRouteMeta({
+    required RouteResult existingRoute,
+    required RouteJoinPoint joinPoint,
+    required String joinPointType,
+    required double routeStartDistanceMeters,
+    required bool routePassesNearUser,
+    required bool routeRebasedToUser,
+  }) {
+    return {
+      ...existingRoute.edgeMeta,
+      'access_leg_used': false,
+      'access_leg_distance_km': null,
+      'join_point_type': joinPointType,
+      'route_start_distance_km': double.parse(
+        (routeStartDistanceMeters / 1000.0).toStringAsFixed(2),
+      ),
+      'route_passes_near_user': routePassesNearUser,
+      'route_rebased_to_user': routeRebasedToUser,
+      'access_join_index': joinPoint.index,
+      'access_join_progress_ratio': double.parse(
+        joinPoint.progressRatio.toStringAsFixed(3),
+      ),
+      'access_join_distance_km': double.parse(
+        (joinPoint.distanceFromCurrentMeters / 1000.0).toStringAsFixed(2),
+      ),
+      'return_leg_used': false,
+    };
   }
 
   /// Generiert sequentiell Rundkurse mit Early-Exit bei guter Qualität.
@@ -2063,14 +2187,15 @@ class RouteService {
       '[RouteService] Route OK: ${coordinates.length} Punkte, ${distanceKmActual?.toStringAsFixed(1)} km (Mapbox: ${distanceRaw?.toStringAsFixed(0)} m)',
     );
 
+    final edgeMeta = data['meta'] is Map
+        ? Map<String, dynamic>.from(data['meta'] as Map)
+        : <String, dynamic>{};
     stopwatch.stop();
+    edgeMeta['edge_request_duration_ms'] = stopwatch.elapsedMilliseconds;
+    edgeMeta['request_id'] ??= body['request_id'];
     debugPrint(
       '[RouteService] ✅ Route erhalten nach ${stopwatch.elapsedMilliseconds}ms',
     );
-
-    final edgeMeta = data['meta'] is Map
-        ? Map<String, dynamic>.from(data['meta'] as Map)
-        : const <String, dynamic>{};
 
     if (routeType == 'ROUND_TRIP') {
       debugPrint(
@@ -2549,6 +2674,12 @@ class RouteService {
       distanceKm: actualDistanceKm,
       durationSeconds: route.durationSeconds,
     );
+    final styleMetrics = styleConfig.calculateStyleMetrics(
+      coordinates: route.coordinates,
+      distanceKm: actualDistanceKm,
+      durationSeconds: route.durationSeconds,
+    );
+    final styleFitReasons = styleConfig.styleFitReasons(styleMetrics);
     final classification = _qualityValidator.classifyGeneratedRoute(
       quality: quality,
       isRoundTrip: scenario.isRoundTrip,
@@ -2874,6 +3005,11 @@ class RouteService {
       'shape=${quality.shapePenalty.toStringAsFixed(1)}, '
       'tier=${classification.tier.name}, '
       'styleFit=${styleFitScore.toStringAsFixed(1)}, '
+      'curveDensity=${styleMetrics.curveDensityPer50Km.toStringAsFixed(1)}/50km, '
+      'smooth=${styleMetrics.smoothnessScore.toStringAsFixed(1)}, '
+      'zigzag=${styleMetrics.microZigzagPercent.toStringAsFixed(1)}, '
+      'sharp=${styleMetrics.sharpCurveDensityPer50Km.toStringAsFixed(1)}/50km, '
+      'styleReasons=${styleFitReasons.join('|')}, '
       'styleOk=$styleOk/$styleSoftOk, '
       'uturns=${quality.uturnPositions.length}, '
       'deadEndSpikes=${deadEndSpikes.length}, '
@@ -3406,10 +3542,13 @@ class RouteService {
             ),
           );
     }
-    final finalized = _finalizeRoute(route, scenarioKey: scenario.scenarioKey);
     if (fromCache && lastRouteGenerationSource == 'mapbox') {
       lastRouteGenerationSource = 'cache';
     }
+    lastRouteFromCache = fromCache;
+    lastRouteDebugFingerprint = fingerprint;
+    lastRouteSimilarityToPreviousPercent = similarityToPrevious;
+    final finalized = _finalizeRoute(route, scenarioKey: scenario.scenarioKey);
     _recentSuccessfulRoutes[scenario.scenarioKey] = finalized;
     _recentDisplayedRoutes[_recentDisplayedKeyForScenario(scenario)] =
         finalized;
@@ -3418,9 +3557,6 @@ class RouteService {
       fingerprint: fingerprint,
       sampledCoordinates: sampledCoordinates,
     );
-    lastRouteFromCache = fromCache;
-    lastRouteDebugFingerprint = fingerprint;
-    lastRouteSimilarityToPreviousPercent = similarityToPrevious;
     _debugRouteSearch(
       '[Result] scenarioKey=${scenario.scenarioKey} '
       'routeFingerprint=$fingerprint '
@@ -3511,7 +3647,8 @@ class RouteService {
         match.route.startLng,
       );
       if (scenario.isRoundTrip &&
-          actualPoolStartDistanceKm > RoutePoolService.roundTripHardStartMaxKm) {
+          actualPoolStartDistanceKm >
+              RoutePoolService.roundTripHardStartMaxKm) {
         lastRoutePoolRejectedTooFar = true;
         _debugRouteSearch(
           '[PoolFallback] poolHit=true poolUsed=false reason=too_far '
@@ -3525,6 +3662,7 @@ class RouteService {
       final route = _routePoolEntryToRouteResult(
         match,
         scenario: scenario,
+        styleConfig: styleConfig,
         fallbackReason: fallbackReason,
       );
       if (route == null) {
@@ -4084,15 +4222,13 @@ class RouteService {
 
         final delta = (loopDistanceKm - targetBandKm).abs();
         final exitCoordinate = route.coordinates[index];
-        final sessionDistanceKm = _distanceBetweenCoordinates(
-              exitCoordinate,
-              sessionOrigin,
-            ) /
-            1000.0;
+        final sessionDistanceKm =
+            _distanceBetweenCoordinates(exitCoordinate, sessionOrigin) / 1000.0;
         final currentBestDelta = bestDelta ?? double.infinity;
         final currentBestSessionDistanceKm =
             bestSessionDistanceKm ?? double.infinity;
-        final isBetter = bestIndex == null ||
+        final isBetter =
+            bestIndex == null ||
             delta < currentBestDelta - 0.25 ||
             ((delta - currentBestDelta).abs() <= 0.25 &&
                 sessionDistanceKm < currentBestSessionDistanceKm);
@@ -4111,7 +4247,8 @@ class RouteService {
     double? nearestToSessionDistanceKm;
     for (var index = minIndex; index <= maxIndex; index += step) {
       if (deadEndSpikes.any((spike) => spike.containsIndex(index))) continue;
-      final loopDistanceKm = (cumulativeDistances[index] * distanceScale) / 1000.0;
+      final loopDistanceKm =
+          (cumulativeDistances[index] * distanceScale) / 1000.0;
       final completionRatio = totalDistanceKm > 0
           ? (loopDistanceKm / totalDistanceKm).clamp(0.0, 1.0)
           : 1.0;
@@ -4261,12 +4398,23 @@ class RouteService {
   RouteResult? _routePoolEntryToRouteResult(
     RoutePoolMatch match, {
     required RouteScenario scenario,
+    required RouteStyleConfig styleConfig,
     required String fallbackReason,
   }) {
     final geometry = Map<String, dynamic>.from(match.route.geometry);
     if (geometry['type'] != 'LineString') return null;
     final coordinates = extractCoordinates(geometry);
     if (coordinates.length < 2) return null;
+    final styleMetrics = styleConfig.calculateStyleMetrics(
+      coordinates: coordinates,
+      distanceKm: match.route.distanceKm,
+      durationSeconds: match.route.durationSeconds,
+    );
+    final styleFitScore = styleConfig.scoreStyleFit(
+      coordinates: coordinates,
+      distanceKm: match.route.distanceKm,
+      durationSeconds: match.route.durationSeconds,
+    );
     final meta = <String, dynamic>{
       ...match.route.routePayload,
       'route_source': 'pool',
@@ -4279,6 +4427,14 @@ class RouteService {
       'pool_allowed_radius_km': match.allowedRadiusKm,
       'quality_tier': 'good',
       'quality_reason': 'verified_route_pool',
+      'selected_style': scenario.style,
+      'style_fit_score': double.parse(styleFitScore.toStringAsFixed(1)),
+      'style_fit_reasons': styleConfig.styleFitReasons(styleMetrics),
+      'style_metrics': styleMetrics.toJson(),
+      'curve_density_per_km': styleMetrics.toJson()['curve_density_per_km'],
+      'smoothness_score': styleMetrics.smoothnessScore,
+      'zigzag_score': styleMetrics.microZigzagPercent,
+      'sharp_turn_count': styleMetrics.sharpCurveDensityPer50Km,
       'avoid_highways_requested': scenario.avoidHighways,
       'has_highway': match.route.hasHighway,
       'avoids_highway': match.route.avoidsHighway,
@@ -5370,8 +5526,44 @@ class RouteService {
 
   RouteResult _withOrchestrationMeta(RouteResult result) {
     final meta = Map<String, dynamic>.from(result.edgeMeta);
+    final startedAtMs = lastRouteGenerationStartedAtMs;
+    final generationDurationMs = startedAtMs == null
+        ? null
+        : math.max(0, DateTime.now().millisecondsSinceEpoch - startedAtMs);
     meta['route_source'] = lastRouteGenerationSource;
     meta['source'] = lastRouteGenerationSource;
+    meta['quality_tier'] ??= 'acceptable';
+    meta['quality_reason'] ??= meta['quality_reason'] ?? 'client_accepted';
+    final selectedStyle =
+        lastRouteRequestedStyle ?? meta['mode']?.toString() ?? 'Sport Mode';
+    final styleConfig = RouteStyleConfig.forMode(selectedStyle);
+    final styleDistanceKm =
+        result.distanceKm ??
+        (result.distanceMeters != null ? result.distanceMeters! / 1000.0 : 0.0);
+    if (styleDistanceKm > 0 && result.coordinates.length >= 6) {
+      final styleMetrics = styleConfig.calculateStyleMetrics(
+        coordinates: result.coordinates,
+        distanceKm: styleDistanceKm,
+        durationSeconds: result.durationSeconds,
+      );
+      final styleFitScore = styleConfig.scoreStyleFit(
+        coordinates: result.coordinates,
+        distanceKm: styleDistanceKm,
+        durationSeconds: result.durationSeconds,
+      );
+      meta['selected_style'] = selectedStyle;
+      meta['style_fit_score'] = double.parse(styleFitScore.toStringAsFixed(1));
+      meta['style_fit_reasons'] = styleConfig.styleFitReasons(styleMetrics);
+      meta['style_metrics'] = styleMetrics.toJson();
+      meta['curve_density_per_km'] = styleMetrics
+          .toJson()['curve_density_per_km'];
+      meta['smoothness_score'] = styleMetrics.smoothnessScore;
+      meta['zigzag_score'] = styleMetrics.microZigzagPercent;
+      meta['sharp_turn_count'] = styleMetrics.sharpCurveDensityPer50Km;
+    }
+    if (generationDurationMs != null) {
+      meta['generation_duration_ms'] = generationDurationMs;
+    }
     meta['fallbackUsed'] =
         lastRouteRecentFallbackUsed ||
         lastRoutePersistentCacheFallbackUsed ||
@@ -5385,8 +5577,13 @@ class RouteService {
       result.coordinates,
     ).isNotEmpty;
     meta['mapboxCallCount'] = lastRouteApiCallCount;
+    meta['mapbox_call_count'] = lastRouteApiCallCount;
     meta['liveGenerationCostUnits'] = lastRouteApiCallCount;
     meta['subscriptionTier'] = lastRouteSubscriptionTier;
+    meta['route_fingerprint'] = lastRouteDebugFingerprint;
+    meta['similarity_to_previous_percent'] =
+        lastRouteSimilarityToPreviousPercent;
+    meta['pool_route_id'] = lastRoutePoolMatchId;
     meta['coverage_status'] = lastRouteCoverageStatus;
     meta['seed_job_created'] = lastRouteSeedJobCreated;
     meta['duplicate_job_prevented'] = lastRouteDuplicateSeedJobPrevented;
@@ -5402,12 +5599,19 @@ class RouteService {
     meta['orchestration'] = {
       ...existingOrchestration,
       'source': lastRouteGenerationSource,
+      'generation_duration_ms': generationDurationMs,
+      'quality_tier': meta['quality_tier'],
+      'selected_style': meta['selected_style'],
+      'style_fit_score': meta['style_fit_score'],
+      'style_fit_reasons': meta['style_fit_reasons'],
+      'style_metrics': meta['style_metrics'],
       'prepared_buffer_hit': lastRoutePreparedBufferHit,
       'prepared_buffer_used': lastRoutePreparedBufferUsed,
       'session_cache_hit': lastRouteSessionCacheHit,
       'pool_hit': lastRoutePoolFallbackUsed,
       'pool_used': lastRoutePoolFallbackUsed,
       'pool_match_id': lastRoutePoolMatchId,
+      'pool_route_id': lastRoutePoolMatchId,
       'pool_radius_scope': lastRoutePoolMatchTier,
       'pool_start_distance_km': lastRoutePoolStartDistanceKm,
       'pool_distance_rule_applied': lastRoutePoolDistanceRuleApplied,
@@ -5416,6 +5620,9 @@ class RouteService {
       'access_leg_distance_km': lastRouteAccessLegDistanceKm,
       'dead_end_spike_detected': meta['dead_end_spike_detected'],
       'mapbox_attempt_count': lastRouteApiCallCount,
+      'mapbox_call_count': lastRouteApiCallCount,
+      'route_fingerprint': lastRouteDebugFingerprint,
+      'similarity_to_previous_percent': lastRouteSimilarityToPreviousPercent,
       'subscription_tier': lastRouteSubscriptionTier,
       'coverage_status': lastRouteCoverageStatus,
       'seed_job_created': lastRouteSeedJobCreated,

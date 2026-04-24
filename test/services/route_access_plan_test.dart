@@ -45,6 +45,52 @@ void main() {
 
       expect(joinPoint.index, 14);
     });
+
+    test('meidet Join-Punkte auf kurzem Sackgassen-Spike', () {
+      final route = _buildLoopRouteWithDeadEndSpike();
+      const planner = RouteAccessPlanner();
+
+      final joinPoint = planner.chooseJoinPoint(
+        currentPosition: _position(latitude: 47.422, longitude: 9.755),
+        existingRoute: route,
+      );
+
+      expect(joinPoint.index, isNot(inInclusiveRange(8, 14)));
+    });
+
+    test(
+      'closed-loop rebase darf spaeten lokalen Einstieg statt fruehem Originalstart waehlen',
+      () {
+        final route = _buildLoopRoute();
+        final latePoint = route.coordinates[62];
+        const planner = RouteAccessPlanner();
+
+        final defaultJoin = planner.chooseJoinPoint(
+          currentPosition: _position(
+            latitude: latePoint[1] + 0.0022,
+            longitude: latePoint[0] + 0.0022,
+          ),
+          existingRoute: route,
+        );
+        final rebasedJoin = planner
+            .suggestJoinPoints(
+              currentPosition: _position(
+                latitude: latePoint[1] + 0.0022,
+                longitude: latePoint[0] + 0.0022,
+              ),
+              existingRoute: route,
+              maxCandidates: 1,
+              rebaseClosedLoop: true,
+            )
+            .first;
+
+        expect(rebasedJoin.progressRatio, greaterThan(0.55));
+        expect(
+          rebasedJoin.distanceFromCurrentMeters,
+          lessThan(defaultJoin.distanceFromCurrentMeters),
+        );
+      },
+    );
   });
 
   group('RouteService.buildAccessRouteToExistingRoute', () {
@@ -191,6 +237,71 @@ void main() {
         );
       },
     );
+
+    test(
+      'rebased geschlossener Rundkurs joint lokal statt unnoetig zum Originalstart zu fahren',
+      () async {
+        final invoker = _AccessInvoker();
+        final service = RouteService(invoker: invoker);
+        final existingRoute = _buildLoopRoute();
+        final localLatePoint = existingRoute.coordinates[62];
+        final sessionStart = _position(
+          latitude: localLatePoint[1] + 0.0009,
+          longitude: localLatePoint[0] + 0.0009,
+        );
+
+        final plan = await service.buildAccessRouteToExistingRoute(
+          currentPosition: sessionStart,
+          existingRoute: existingRoute,
+          returnToSessionOrigin: true,
+          rebaseClosedLoop: true,
+        );
+
+        expect(plan.joinPoint.index, greaterThan(40));
+        expect(plan.joinPoint.progressRatio, greaterThan(0.55));
+        expect(plan.hasAccessLeg, isTrue);
+        expect(plan.routeRebasedToUser, isTrue);
+        expect(plan.routePassesNearUser, isTrue);
+        expect(plan.joinPointType, 'nearby_pass');
+        expect(
+          plan.joinPoint.distanceFromCurrentMeters,
+          lessThan(plan.routeStartDistanceMeters),
+        );
+        expect(plan.activeRoute.edgeMeta['join_point_type'], 'nearby_pass');
+        expect(plan.activeRoute.edgeMeta['route_rebased_to_user'], isTrue);
+        expect(plan.activeRoute.edgeMeta['route_passes_near_user'], isTrue);
+        expect(invoker.callCount, 2);
+      },
+    );
+
+    test(
+      'tritt direkt spaet in den Loop ein wenn der Nutzer bereits am lokalen Durchgangspunkt steht',
+      () async {
+        final invoker = _AccessInvoker();
+        final service = RouteService(invoker: invoker);
+        final existingRoute = _buildLoopRoute();
+        final localLatePoint = existingRoute.coordinates[58];
+
+        final plan = await service.buildAccessRouteToExistingRoute(
+          currentPosition: _position(
+            latitude: localLatePoint[1],
+            longitude: localLatePoint[0],
+          ),
+          existingRoute: existingRoute,
+          returnToSessionOrigin: true,
+          rebaseClosedLoop: true,
+        );
+
+        expect(plan.hasAccessLeg, isFalse);
+        expect(plan.joinPoint.index, greaterThan(40));
+        expect(plan.joinPointType, 'nearby_pass');
+        expect(plan.routeRebasedToUser, isTrue);
+        expect(plan.activeRoute.edgeMeta['access_leg_used'], isFalse);
+        expect(plan.activeRoute.edgeMeta['join_point_type'], 'nearby_pass');
+        expect(plan.activeRoute.edgeMeta['route_start_distance_km'], isNotNull);
+        expect(invoker.callCount, 0);
+      },
+    );
   });
 }
 
@@ -292,6 +403,32 @@ RouteResult _buildLoopRoute() {
   });
   coordinates[0] = [9.74, 47.41];
   coordinates[coordinates.length - 1] = [...coordinates.first];
+  final geometry = {'type': 'LineString', 'coordinates': coordinates};
+  final distanceMeters = _polylineDistanceMeters(coordinates);
+
+  return RouteResult(
+    geoJson: json.encode(geometry),
+    geometry: geometry,
+    coordinates: coordinates,
+    maneuvers: const [],
+    distanceMeters: distanceMeters,
+    durationSeconds: distanceMeters / 16.0,
+    distanceKm: distanceMeters / 1000.0,
+  );
+}
+
+RouteResult _buildLoopRouteWithDeadEndSpike() {
+  final base = _buildLoopRoute();
+  final coordinates = base.coordinates
+      .map((point) => [point[0], point[1]])
+      .toList(growable: true);
+  final anchor = coordinates[10];
+  coordinates.insertAll(11, [
+    [anchor[0] + 0.0012, anchor[1] + 0.0004],
+    [anchor[0] + 0.0018, anchor[1] + 0.0008],
+    [anchor[0] + 0.0012, anchor[1] + 0.0004],
+    [anchor[0], anchor[1]],
+  ]);
   final geometry = {'type': 'LineString', 'coordinates': coordinates};
   final distanceMeters = _polylineDistanceMeters(coordinates);
 

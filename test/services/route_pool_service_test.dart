@@ -687,6 +687,63 @@ void main() {
     );
 
     test(
+      'ROUND_TRIP: inkompatible Kurvenjagd-Poolroute erfüllt Sport nicht relaxed',
+      () async {
+        final service = RoutePoolService(
+          inMemoryRegions: [
+            _region(
+              countryCode: 'AT',
+              admin1Name: 'Vorarlberg',
+              cityCluster: 'Götzis',
+              centerLat: 47.3331,
+              centerLng: 9.6336,
+            ),
+            _region(
+              countryCode: 'AT',
+              admin1Name: 'Vorarlberg',
+              cityCluster: 'Feldkirch',
+              centerLat: 47.2386,
+              centerLng: 9.5986,
+            ),
+          ],
+          inMemoryRoutes: [
+            _route(
+              id: 'feldkirch-100-sport',
+              countryCode: 'AT',
+              admin1Name: 'Vorarlberg',
+              cityCluster: 'Feldkirch',
+              startLat: 47.3304,
+              startLng: 9.6012,
+              distanceBucket: 100,
+              styleTags: const ['Sport Mode'],
+            ),
+            _route(
+              id: 'feldkirch-50-kurvenjagd',
+              countryCode: 'AT',
+              admin1Name: 'Vorarlberg',
+              cityCluster: 'Feldkirch',
+              startLat: 47.3305,
+              startLng: 9.6011,
+              distanceBucket: 50,
+              styleTags: const ['Kurvenjagd'],
+            ),
+          ],
+        );
+
+        final matches = await service.findCandidateRoutesNear(
+          userLat: 47.3331,
+          userLng: 9.6336,
+          distanceBucket: 50,
+          style: 'Sport Mode',
+          avoidHighways: true,
+          routeType: 'ROUND_TRIP',
+        );
+
+        expect(matches.map((match) => match.route.id), ['feldkirch-100-sport']);
+      },
+    );
+
+    test(
       'ROUND_TRIP: Rheintal-Sued gewinnt lokal vor Feldkirch, wenn Goetzis nah startet',
       () async {
         final service = RoutePoolService(

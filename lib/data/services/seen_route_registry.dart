@@ -19,10 +19,35 @@ class SeenRouteRegistry {
   static List<SeenRouteEntry> entriesFor(String scenarioKey) =>
       List.unmodifiable(_entries[scenarioKey] ?? const []);
 
+  static List<SeenRouteEntry> entriesForAny(Iterable<String> scenarioKeys) {
+    final combined = <SeenRouteEntry>[];
+    final seenFingerprints = <String>{};
+    for (final scenarioKey in scenarioKeys) {
+      for (final entry in _entries[scenarioKey] ?? const <SeenRouteEntry>[]) {
+        if (seenFingerprints.add(entry.fingerprint)) {
+          combined.add(entry);
+        }
+      }
+    }
+    return List.unmodifiable(combined);
+  }
+
   static bool hasExactFingerprint(String scenarioKey, String fingerprint) {
     return (_entries[scenarioKey] ?? const []).any(
       (entry) => entry.fingerprint == fingerprint,
     );
+  }
+
+  static bool hasExactFingerprintInAny(
+    Iterable<String> scenarioKeys,
+    String fingerprint,
+  ) {
+    for (final scenarioKey in scenarioKeys) {
+      if (hasExactFingerprint(scenarioKey, fingerprint)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   static bool hasSimilarRoute(
@@ -40,6 +65,25 @@ class SeenRouteRegistry {
       thresholdPercent: thresholdPercent,
       proximityMeters: proximityMeters,
     );
+  }
+
+  static bool hasSimilarRouteInAny(
+    Iterable<String> scenarioKeys,
+    List<List<double>> sampledCoordinates, {
+    required double thresholdPercent,
+    required double proximityMeters,
+  }) {
+    for (final scenarioKey in scenarioKeys) {
+      if (hasSimilarRoute(
+        scenarioKey,
+        sampledCoordinates,
+        thresholdPercent: thresholdPercent,
+        proximityMeters: proximityMeters,
+      )) {
+        return true;
+      }
+    }
+    return false;
   }
 
   static void remember(
@@ -61,6 +105,20 @@ class SeenRouteRegistry {
       list.removeRange(0, list.length - _maxEntriesPerScenario);
     }
     _entries[scenarioKey] = list;
+  }
+
+  static void rememberAll(
+    Iterable<String> scenarioKeys, {
+    required String fingerprint,
+    required List<List<double>> sampledCoordinates,
+  }) {
+    for (final scenarioKey in scenarioKeys) {
+      remember(
+        scenarioKey,
+        fingerprint: fingerprint,
+        sampledCoordinates: sampledCoordinates,
+      );
+    }
   }
 
   static void clearScenario(String scenarioKey) {

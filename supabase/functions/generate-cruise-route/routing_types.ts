@@ -26,8 +26,6 @@ export interface RequestData {
   offset_side?: number;
   style_profile?: string;
   waypoint_shape_factor?: number;
-  radius_multiplier?: number;
-  prefer_flat_terrain?: boolean;
   zigzag_waypoints?: boolean;
   continue_straight?: boolean;
   route_variant_hint?: string;
@@ -37,8 +35,6 @@ export interface RequestData {
   max_candidate_attempts?: number;
   simplify_waypoints?: boolean;
   max_waypoints?: number;
-  /** Debug: ausführliche Round-Trip-Suche loggen (nur Entwicklung). */
-  debug_roundtrip_search?: boolean;
 }
 
 export interface DistanceConfig {
@@ -59,9 +55,39 @@ export interface RouteQualityEvaluation {
   hasUTurn: boolean;
   tier: RouteQualityTier;
   score: number;
+  baseScore?: number;
+  styleFitScore?: number;
+  styleFitReasons?: string[];
+  styleMetrics?: RouteStyleMetrics;
   coordinateCount: number;
   actualDistanceKm: number;
   distanceDeltaKm: number;
+}
+
+export interface RouteStyleMetrics {
+  curveDensityPerKm: number;
+  curveDensityPer50Km: number;
+  averageSegmentLengthMeters: number;
+  sharpTurnCount: number;
+  sharpTurnRate: number;
+  smoothnessScore: number;
+  headingChangeTotal: number;
+  headingChangePerKm: number;
+  zigzagScore: number;
+  stubPenalty: number;
+  sectorDiversityScore: number;
+}
+
+export interface RouteCleanupEvaluation {
+  passed: boolean;
+  reason: string;
+  removedPointPercent: number;
+  distanceRetentionRatio: number;
+  removedLoops: number;
+  cleanedDistanceKm: number;
+  cleanedGeometricUTurnCount: number;
+  fingerprint: string;
+  cleanedCoordinates?: Coordinate[];
 }
 
 export interface RoundTripCandidatePlan {
@@ -80,14 +106,18 @@ export interface RoundTripSearchResult {
   rejectedCandidates: number;
   rejectReasons: Record<string, number>;
   searchPhases: string[];
+  lastPlanLabels?: string[];
   variantHint?: string;
   fingerprintHint?: string;
+  duplicateSkips: number;
+  emergencyDuplicateUsed?: boolean;
   terminalShortCircuit?: boolean;
   exhausted?: boolean;
 }
 
 export interface MapboxRouteFetchResult {
   route: any | null;
+  routes?: any[];
   outcome: "ok" | "no_route" | "http_error" | "network_error" | "timeout";
   statusCode?: number;
   details?: string;

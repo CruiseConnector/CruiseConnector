@@ -7,6 +7,7 @@ import 'package:cruise_connect/domain/models/route_pool_coverage.dart';
 import 'package:cruise_connect/domain/models/route_pool_entry.dart';
 import 'package:cruise_connect/domain/models/route_region.dart';
 import 'package:cruise_connect/domain/models/route_seed_job.dart';
+import 'package:cruise_connect/data/services/route_style_config.dart';
 
 class RoutePoolQuery {
   const RoutePoolQuery({
@@ -360,7 +361,9 @@ class RoutePoolService {
       avoidHighways: avoidHighways,
       routeType: routeType,
     );
-    if (createSeedJob && seedJob != null && (seedJob.isActive || seedJob.isCoolingDown)) {
+    if (createSeedJob &&
+        seedJob != null &&
+        (seedJob.isActive || seedJob.isCoolingDown)) {
       duplicateJobPrevented = true;
     }
     final shouldCreateSeedJob =
@@ -814,18 +817,25 @@ class RoutePoolService {
           );
         }
       }
-      _sortCandidateMatches(exactPrimaryMatches, requestedBucket: distanceBucket);
+      _sortCandidateMatches(
+        exactPrimaryMatches,
+        requestedBucket: distanceBucket,
+        requestedStyle: style,
+      );
       _sortCandidateMatches(
         exactFallbackMatches,
         requestedBucket: distanceBucket,
+        requestedStyle: style,
       );
       _sortCandidateMatches(
         relaxedPrimaryMatches,
         requestedBucket: distanceBucket,
+        requestedStyle: style,
       );
       _sortCandidateMatches(
         relaxedFallbackMatches,
         requestedBucket: distanceBucket,
+        requestedStyle: style,
       );
 
       final orderedMatches = preferSingleBucketRoundTrip
@@ -1051,18 +1061,25 @@ class RoutePoolService {
         );
       }
     }
-    _sortCandidateMatches(exactPrimaryMatches, requestedBucket: distanceBucket);
+    _sortCandidateMatches(
+      exactPrimaryMatches,
+      requestedBucket: distanceBucket,
+      requestedStyle: style,
+    );
     _sortCandidateMatches(
       exactFallbackMatches,
       requestedBucket: distanceBucket,
+      requestedStyle: style,
     );
     _sortCandidateMatches(
       relaxedPrimaryMatches,
       requestedBucket: distanceBucket,
+      requestedStyle: style,
     );
     _sortCandidateMatches(
       relaxedFallbackMatches,
       requestedBucket: distanceBucket,
+      requestedStyle: style,
     );
     final orderedMatches = preferSingleBucketRoundTrip
         ? <RoutePoolMatch>[
@@ -1099,7 +1116,13 @@ class RoutePoolService {
       if (candidate.routeType != query.routeType) continue;
       if (!validDistanceBuckets.contains(candidate.distanceBucket)) continue;
       if (candidate.distanceBucket != query.distanceBucket) continue;
-      if (!relaxStyle && !_styleMatches(candidate, query.style)) continue;
+      final exactStyleMatch = _styleMatches(candidate, query.style);
+      if (!relaxStyle && !exactStyleMatch) continue;
+      if (relaxStyle &&
+          !exactStyleMatch &&
+          !_relaxedStyleCompatible(candidate, query.style)) {
+        continue;
+      }
       if (!_highwayMatches(candidate, query.avoidHighways)) continue;
       if (!_locationScopeMatches(query, candidate)) continue;
 
@@ -1148,10 +1171,16 @@ class RoutePoolService {
   static void _sortCandidateMatches(
     List<RoutePoolMatch> matches, {
     required int requestedBucket,
+    required String requestedStyle,
   }) {
     matches.sort((a, b) {
       final byStartDistance = a.startDistanceKm.compareTo(b.startDistanceKm);
       if (byStartDistance != 0) return byStartDistance;
+
+      final byExactStyle = _boolScore(
+        _styleMatches(a.route, requestedStyle),
+      ).compareTo(_boolScore(_styleMatches(b.route, requestedStyle)));
+      if (byExactStyle != 0) return -byExactStyle;
 
       final byBucketFit = (a.route.distanceBucket - requestedBucket)
           .abs()
@@ -1162,6 +1191,12 @@ class RoutePoolService {
           .abs()
           .compareTo((b.route.distanceKm - requestedBucket).abs());
       if (byActualDistanceFit != 0) return byActualDistanceFit;
+
+      final byStyleFit = _poolStyleFitScore(
+        b.route,
+        requestedStyle,
+      ).compareTo(_poolStyleFitScore(a.route, requestedStyle));
+      if (byStyleFit != 0) return byStyleFit;
 
       return b.route.qualityScore.compareTo(a.route.qualityScore);
     });
@@ -1178,33 +1213,35 @@ class RoutePoolService {
   }) async {
     final inMemoryRegions = _inMemoryRegions;
     if (inMemoryRegions != null) {
-      return inMemoryRegions.where((region) {
-        if (!region.isActive) return false;
-        final distanceKm = haversineDistanceKm(
-          userLat,
-          userLng,
-          region.centerLat,
-          region.centerLng,
-        );
-        final allowedKm = math.min(
-          math.max(regionalMaxKm, region.fallbackRadiusKm),
-          maxExtendedRegionalKm,
-        );
-        if (distanceKm > allowedKm) return false;
-        if (!crossBorderAllowed &&
-            preferredCountryCode != null &&
-            preferredCountryCode.trim().isNotEmpty &&
-            !_sameText(preferredCountryCode, region.countryCode)) {
-          return false;
-        }
-        if (!crossBorderAllowed &&
-            preferredAdmin1Name != null &&
-            preferredAdmin1Name.trim().isNotEmpty &&
-            !_sameText(preferredAdmin1Name, region.admin1Name)) {
-          return false;
-        }
-        return true;
-      }).toList(growable: false);
+      return inMemoryRegions
+          .where((region) {
+            if (!region.isActive) return false;
+            final distanceKm = haversineDistanceKm(
+              userLat,
+              userLng,
+              region.centerLat,
+              region.centerLng,
+            );
+            final allowedKm = math.min(
+              math.max(regionalMaxKm, region.fallbackRadiusKm),
+              maxExtendedRegionalKm,
+            );
+            if (distanceKm > allowedKm) return false;
+            if (!crossBorderAllowed &&
+                preferredCountryCode != null &&
+                preferredCountryCode.trim().isNotEmpty &&
+                !_sameText(preferredCountryCode, region.countryCode)) {
+              return false;
+            }
+            if (!crossBorderAllowed &&
+                preferredAdmin1Name != null &&
+                preferredAdmin1Name.trim().isNotEmpty &&
+                !_sameText(preferredAdmin1Name, region.admin1Name)) {
+              return false;
+            }
+            return true;
+          })
+          .toList(growable: false);
     }
 
     final bounds = _boundingBoxFor(userLat, userLng, maxExtendedRegionalKm);
@@ -1219,7 +1256,10 @@ class RoutePoolService {
     if (!crossBorderAllowed &&
         preferredCountryCode != null &&
         preferredCountryCode.trim().isNotEmpty) {
-      query = query.eq('country_code', preferredCountryCode.trim().toUpperCase());
+      query = query.eq(
+        'country_code',
+        preferredCountryCode.trim().toUpperCase(),
+      );
     }
     if (!crossBorderAllowed &&
         preferredAdmin1Name != null &&
@@ -1248,14 +1288,20 @@ class RoutePoolService {
       avoidHighways: avoidHighways,
       routeType: routeType,
     );
-    final policy = _coveragePolicyFor(region: assignment.region, coverage: coverage);
+    final policy = _coveragePolicyFor(
+      region: assignment.region,
+      coverage: coverage,
+    );
     final policyAlignedCoverage = coverage == null
         ? null
         : _applyCoveragePolicySnapshot(coverage, policy: policy);
-    final shouldRefresh = coverage == null ||
+    final shouldRefresh =
+        coverage == null ||
         forceRefresh ||
         policyAlignedCoverage!.lastCountedAt == null ||
-        DateTime.now().toUtc().difference(policyAlignedCoverage.lastCountedAt!) >
+        DateTime.now().toUtc().difference(
+              policyAlignedCoverage.lastCountedAt!,
+            ) >
             coverageRefreshTtl;
     if (!shouldRefresh) {
       if (_coveragePolicyChanged(coverage, policyAlignedCoverage)) {
@@ -1278,7 +1324,8 @@ class RoutePoolService {
       avoidHighways: avoidHighways,
       routeType: routeType,
     );
-    final base = policyAlignedCoverage ??
+    final base =
+        policyAlignedCoverage ??
         RoutePoolCoverage(
           routeRegionId: assignment.region.id,
           countryCode: assignment.region.countryCode,
@@ -1351,7 +1398,10 @@ class RoutePoolService {
         .eq('avoid_highways', avoidHighways);
     for (final row in rows as List) {
       final coverage = RoutePoolCoverage.fromJson(row as Map<String, dynamic>);
-      if (_nullableSameText(coverage.admin2Name, assignment.region.admin2Name)) {
+      if (_nullableSameText(
+        coverage.admin2Name,
+        assignment.region.admin2Name,
+      )) {
         return coverage;
       }
     }
@@ -1436,7 +1486,10 @@ class RoutePoolService {
         if (!_sameText(route.admin1Name, assignment.region.admin1Name)) {
           return false;
         }
-        if (!_nullableSameText(route.admin2Name, assignment.region.admin2Name)) {
+        if (!_nullableSameText(
+          route.admin2Name,
+          assignment.region.admin2Name,
+        )) {
           return false;
         }
         if (!_sameText(route.cityCluster, assignment.region.cityCluster)) {
@@ -1444,7 +1497,8 @@ class RoutePoolService {
         }
         if (!_sameText(route.routeType, routeType)) return false;
         if (route.distanceBucket != distanceBucket) return false;
-        if (_normalizeStyleKeyList(route.styleTags).contains(styleKey) == false) {
+        if (_normalizeStyleKeyList(route.styleTags).contains(styleKey) ==
+            false) {
           return false;
         }
         if (avoidHighways && (!route.avoidsHighway || route.hasHighway)) {
@@ -1467,7 +1521,10 @@ class RoutePoolService {
     var count = 0;
     for (final row in rows as List) {
       final map = Map<String, dynamic>.from(row as Map);
-      if (!_nullableSameText(map['admin2_name'] as String?, assignment.region.admin2Name)) {
+      if (!_nullableSameText(
+        map['admin2_name'] as String?,
+        assignment.region.admin2Name,
+      )) {
         continue;
       }
       final tags = _normalizeStyleKeyList(_styleTagsFromRaw(map['style_tags']));
@@ -1495,7 +1552,10 @@ class RoutePoolService {
         return candidate.isCandidate &&
             _sameText(candidate.countryCode, assignment.region.countryCode) &&
             _sameText(candidate.admin1Name, assignment.region.admin1Name) &&
-            _nullableSameText(candidate.admin2Name, assignment.region.admin2Name) &&
+            _nullableSameText(
+              candidate.admin2Name,
+              assignment.region.admin2Name,
+            ) &&
             _sameText(candidate.cityCluster, assignment.region.cityCluster) &&
             _sameText(candidate.routeType, routeType) &&
             candidate.distanceBucket == distanceBucket &&
@@ -1518,7 +1578,10 @@ class RoutePoolService {
     var count = 0;
     for (final row in rows as List) {
       final map = Map<String, dynamic>.from(row as Map);
-      if (_nullableSameText(map['admin2_name'] as String?, assignment.region.admin2Name)) {
+      if (_nullableSameText(
+        map['admin2_name'] as String?,
+        assignment.region.admin2Name,
+      )) {
         count += 1;
       }
     }
@@ -1982,6 +2045,55 @@ class RoutePoolService {
 
   static bool _styleMatches(RoutePoolEntry candidate, String style) {
     return candidate.styleTags.any((tag) => _sameText(tag, style));
+  }
+
+  static bool _relaxedStyleCompatible(RoutePoolEntry candidate, String style) {
+    final requested = _normalizeStyleKey(style);
+    final candidateKeys = _normalizeStyleKeyList(candidate.styleTags);
+    if (candidateKeys.contains(requested)) return true;
+
+    final allowed = switch (requested) {
+      'sport_mode' || 'sport' => const {'entdecker', 'abendrunde'},
+      'kurvenjagd' || 'kurvenreich' || 'alpenstrassen' => const {'entdecker'},
+      'abendrunde' || 'panorama' => const {'sport_mode', 'sport'},
+      'entdecker' ||
+      'zufall' => const {'sport_mode', 'sport', 'kurvenjagd', 'abendrunde'},
+      _ => const <String>{},
+    };
+    return candidateKeys.any(allowed.contains);
+  }
+
+  static double _poolStyleFitScore(RoutePoolEntry candidate, String style) {
+    final coordinates = _coordinatesFromGeometry(candidate.geometry);
+    if (coordinates.length < 6) {
+      return _styleMatches(candidate, style) ? 62.0 : 38.0;
+    }
+    final styleConfig = RouteStyleConfig.forMode(style);
+    return styleConfig.scoreStyleFit(
+      coordinates: coordinates,
+      distanceKm: candidate.distanceKm,
+      durationSeconds: candidate.durationSeconds,
+    );
+  }
+
+  static List<List<double>> _coordinatesFromGeometry(
+    Map<String, dynamic> geometry,
+  ) {
+    final rawCoordinates = geometry['coordinates'];
+    if (geometry['type'] != 'LineString' || rawCoordinates is! List) {
+      return const [];
+    }
+    final coordinates = <List<double>>[];
+    for (final point in rawCoordinates) {
+      if (point is List && point.length >= 2) {
+        final lng = point[0];
+        final lat = point[1];
+        if (lng is num && lat is num) {
+          coordinates.add([lng.toDouble(), lat.toDouble()]);
+        }
+      }
+    }
+    return coordinates;
   }
 
   static bool _highwayMatches(RoutePoolEntry candidate, bool avoidHighways) {

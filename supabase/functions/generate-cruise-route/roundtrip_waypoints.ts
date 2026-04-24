@@ -12,13 +12,14 @@ import {
   seededBaseBearing,
   seededUnit,
 } from "./routing_utils.ts";
+import { debugLog } from "./routing_debug.ts";
 
 export function getDistanceConfig(
   targetDistance: number,
   mode?: string,
 ): DistanceConfig {
   // Erfolgsquote vor Perfektion: idealer Zielkorridor plus breiterer
-  // akzeptabler Bereich. 50 / 75 / 100 / 150 km bewusst unterschiedlich
+  // akzeptabler Bereich. 50 / 75 / 100 km bewusst unterschiedlich
   // staffeln (nicht nur zwei Buckets), damit längere Ziele sichtbar weiter
   // „ausgreifen“ müssen als kurze 50er-Runden.
   let idealTolerance: number;
@@ -105,7 +106,7 @@ export function getDistanceConfig(
     waypointRadiusMeters = Math.max(2800, waypointRadiusMeters - 200);
   }
 
-  console.log(
+  debugLog(
     `Distance config: target=${targetDistance}km, radius=${
       radiusKm.toFixed(1)
     }km, ` +
@@ -321,16 +322,29 @@ function calculateLoopWithReturnWaypoints(
   return [...outbound, ...returnWaypoints];
 }
 
-function calculateAnchoredLoopWaypoints(
+/**
+ * Generates 4 (or more) waypoints arranged as an orbital ring around the
+ * start position. Unlike `calculatePairedLoopWaypoints` which places three
+ * waypoints along a single axis (which tends to produce U-turn forced
+ * routes when Mapbox has to backtrack), this generator spreads the
+ * waypoints across a wide sweep (default 220°) so Mapbox can drive them
+ * as a real round ring without reversing direction.
+ *
+ * The generator is fully deterministic (seeded) and supports asymmetric
+ * distance factors per waypoint so the ring can be narrower on one side
+ * (typical valley geometry, e.g. Dornbirn where the mountains to the
+ * east are inaccessible without highways).
+ */
+function calculateOrbitalRingWaypoints(
   start: Coordinate,
   searchRadiusKm: number,
-  bearingOffsets: number[],
-  distanceFactors: number[],
+  corridorBearingDegrees: number,
+  numWaypoints: number = 4,
+  sweepDegrees: number = 220,
   seed?: number,
-  preferredBearingDegrees?: number,
   options?: {
+    distanceFactors?: number[];
     bearingJitterDegrees?: number;
-    pointBearingJitterDegrees?: number;
     radialJitter?: number;
     smoothing?: number;
     minRadiusFactor?: number;
@@ -339,34 +353,37 @@ function calculateAnchoredLoopWaypoints(
 ): Coordinate[] {
   const s = seed ?? Math.floor(Math.random() * 100000);
   const rng = (offset: number) => seededUnit(s + offset);
-  const baseBearing = seededBaseBearing(
-    s + 463,
-    preferredBearingDegrees,
-    options?.bearingJitterDegrees ?? 26,
-  );
-  const pointBearingJitterDegrees = options?.pointBearingJitterDegrees ?? 8;
-  const radialJitter = options?.radialJitter ?? 0.10;
+  const count = Math.max(3, Math.floor(numWaypoints));
+  const sweep = Math.max(90, Math.min(300, sweepDegrees));
+  const start3rd = sweep / (count - 1);
+  const bearingJitterDegrees = options?.bearingJitterDegrees ?? 0;
+  const radialJitter = options?.radialJitter ?? 0;
+  const factors = options?.distanceFactors;
 
-  const waypoints = bearingOffsets.map((bearingOffset, index) => {
-    const rawDistanceFactor = distanceFactors[index] ??
-      distanceFactors.at(-1) ??
-      1.0;
+  const waypoints: Coordinate[] = [];
+  for (let index = 0; index < count; index++) {
+    const offsetFromCorridor = -sweep / 2 + start3rd * index;
+    const bearing = corridorBearingDegrees + offsetFromCorridor +
+      (rng(400 + index * 17) - 0.5) * bearingJitterDegrees;
+    const factor = factors != null
+      ? factors[index] ?? factors[factors.length - 1]
+      : 1.0;
     const distanceVariation = 1 +
-      (rng(91 + index * 7) - 0.5) * radialJitter;
-    const bearingJitter = (rng(92 + index * 7) - 0.5) *
-      pointBearingJitterDegrees;
-    return calculateDestination(
-      start,
-      searchRadiusKm * rawDistanceFactor * distanceVariation,
-      baseBearing + bearingOffset + bearingJitter,
+      (rng(401 + index * 17) - 0.5) * radialJitter;
+    waypoints.push(
+      calculateDestination(
+        start,
+        searchRadiusKm * factor * distanceVariation,
+        bearing,
+      ),
     );
-  });
+  }
 
   return enforceWaypointRadiusBand(
     start,
-    smoothWaypointChain(waypoints, options?.smoothing ?? 0.16),
-    searchRadiusKm * (options?.minRadiusFactor ?? 0.68),
-    searchRadiusKm * (options?.maxRadiusFactor ?? 1.18),
+    smoothWaypointChain(waypoints, options?.smoothing ?? 0.06),
+    searchRadiusKm * (options?.minRadiusFactor ?? 0.84),
+    searchRadiusKm * (options?.maxRadiusFactor ?? 1.24),
   );
 }
 
@@ -497,7 +514,6 @@ export function buildRoundTripWaypointCandidates({
   randomSeed,
   preferredBearingDegrees,
   waypointShapeFactor,
-  radiusMultiplier = 1,
   zigzagWaypoints = false,
   simplifyWaypoints = false,
   maxWaypoints,
@@ -510,7 +526,6 @@ export function buildRoundTripWaypointCandidates({
   randomSeed: number;
   preferredBearingDegrees?: number;
   waypointShapeFactor?: number;
-  radiusMultiplier?: number;
   zigzagWaypoints?: boolean;
   simplifyWaypoints?: boolean;
   maxWaypoints?: number;
@@ -520,11 +535,11 @@ export function buildRoundTripWaypointCandidates({
   const shortTarget = targetDistanceKm <= 60;
   const mediumTarget = targetDistanceKm > 60 && targetDistanceKm <= 110;
   const longTarget = targetDistanceKm > 110;
-  const baseRadius = distanceConfig.radiusKm * Math.max(0.7, radiusMultiplier);
+  const baseRadius = distanceConfig.radiusKm;
   const baseSnapRadius = distanceConfig.waypointRadiusMeters;
-  const avoidHighwaysShortSportSearch = avoidHighways &&
-    mode === "Sport Mode" &&
-    shortTarget;
+  const avoidHighwaysRoundTripSearch = avoidHighways;
+  const noHighwayMediumTarget = targetDistanceKm > 60 &&
+    targetDistanceKm <= 85;
 
   const addPlan = (
     label: string,
@@ -541,79 +556,6 @@ export function buildRoundTripWaypointCandidates({
       ),
     });
   };
-
-  if (avoidHighwaysShortSportSearch) {
-    const pairedLoop = (
-      multiplier: number,
-      corridorBearingDegrees: number,
-      seedOffset: number,
-      spreadDegrees: number,
-      distanceFactors: [number, number, number],
-    ) =>
-      calculatePairedLoopWaypoints(
-        start,
-        baseRadius * multiplier,
-        corridorBearingDegrees,
-        randomSeed + seedOffset,
-        {
-          spreadDegrees,
-          distanceFactors,
-          bearingJitterDegrees: 4,
-          radialJitter: 0.035,
-          smoothing: 0.06,
-          minRadiusFactor: 0.90,
-          maxRadiusFactor: 1.22,
-        },
-      );
-
-    addPlan(
-      "sport-paired-west",
-      pairedLoop(1.24, 272, 1901, 60, [1.03, 1.20, 1.05]),
-      1.02,
-    );
-    addPlan(
-      "sport-paired-northwest",
-      pairedLoop(1.31, 306, 1907, 56, [1.04, 1.22, 1.06]),
-      1.02,
-    );
-    addPlan(
-      "sport-paired-southwest",
-      pairedLoop(1.24, 238, 1913, 56, [1.02, 1.19, 1.03]),
-      1.02,
-    );
-    addPlan(
-      "sport-paired-northwest-wide",
-      pairedLoop(1.33, 304, 1919, 62, [1.04, 1.22, 1.06]),
-      1.06,
-    );
-    addPlan(
-      "sport-paired-west-wide",
-      pairedLoop(1.29, 274, 1927, 64, [1.04, 1.20, 1.05]),
-      1.06,
-    );
-    addPlan(
-      "sport-paired-southwest-wide",
-      pairedLoop(1.25, 236, 1933, 62, [1.02, 1.18, 1.03]),
-      1.06,
-    );
-    addPlan(
-      "sport-paired-northwest-long",
-      pairedLoop(1.29, 306, 1939, 60, [1.04, 1.20, 1.05]),
-      1.08,
-    );
-    addPlan(
-      "sport-paired-east",
-      pairedLoop(1.20, 74, 1957, 56, [1.02, 1.17, 1.03]),
-      1.04,
-    );
-    addPlan(
-      "sport-paired-west-long",
-      pairedLoop(1.23, 272, 1949, 66, [1.03, 1.18, 1.04]),
-      1.08,
-    );
-
-    return dedupeRoundTripPlans(plans);
-  }
 
   const triangle = (multiplier: number, seedOffset: number) =>
     calculateTriangleWaypoints(
@@ -661,60 +603,6 @@ export function buildRoundTripWaypointCandidates({
       preferredBearingDegrees,
       bearingJitterDegrees,
     );
-  const directionalLoop = (
-    multiplier: number,
-    waypointCount: number,
-    seedOffset: number,
-    preferredBearingDegrees: number,
-    bearingJitterDegrees: number = 24,
-  ) =>
-    calculateLoopWaypoints(
-      start,
-      baseRadius * multiplier,
-      waypointCount,
-      randomSeed + seedOffset,
-      preferredBearingDegrees,
-      bearingJitterDegrees,
-    );
-  const directionalCardinal = (
-    multiplier: number,
-    seedOffset: number,
-    preferredBearingDegrees: number,
-    ellipseFactor: number = 1.0,
-    bearingJitterDegrees: number = 24,
-  ) =>
-    calculateCardinalLoopWaypoints(
-      start,
-      baseRadius * multiplier,
-      randomSeed + seedOffset,
-      preferredBearingDegrees,
-      ellipseFactor,
-      bearingJitterDegrees,
-    );
-  const anchoredLoop = (
-    multiplier: number,
-    preferredBearingDegrees: number,
-    bearingOffsets: number[],
-    distanceFactors: number[],
-    seedOffset: number,
-    options?: {
-      bearingJitterDegrees?: number;
-      pointBearingJitterDegrees?: number;
-      radialJitter?: number;
-      smoothing?: number;
-      minRadiusFactor?: number;
-      maxRadiusFactor?: number;
-    },
-  ) =>
-    calculateAnchoredLoopWaypoints(
-      start,
-      baseRadius * multiplier,
-      bearingOffsets,
-      distanceFactors,
-      randomSeed + seedOffset,
-      preferredBearingDegrees,
-      options,
-    );
   const zigzag = (multiplier: number, seedOffset: number) =>
     calculateZigZagWaypoints(
       start,
@@ -722,6 +610,405 @@ export function buildRoundTripWaypointCandidates({
       randomSeed + seedOffset,
       preferredBearingDegrees,
     );
+
+  const pairedLoop = (
+    multiplier: number,
+    corridorBearingDegrees: number,
+    seedOffset: number,
+    spreadDegrees: number,
+    distanceFactors: [number, number, number],
+    options?: {
+      bearingJitterDegrees?: number;
+      radialJitter?: number;
+      smoothing?: number;
+      minRadiusFactor?: number;
+      maxRadiusFactor?: number;
+    },
+  ) =>
+    calculatePairedLoopWaypoints(
+      start,
+      baseRadius * multiplier,
+      corridorBearingDegrees,
+      randomSeed + seedOffset,
+      {
+        spreadDegrees,
+        distanceFactors,
+        bearingJitterDegrees: options?.bearingJitterDegrees ?? 5,
+        radialJitter: options?.radialJitter ?? 0.045,
+        smoothing: options?.smoothing ?? 0.08,
+        minRadiusFactor: options?.minRadiusFactor ?? 0.86,
+        maxRadiusFactor: options?.maxRadiusFactor ?? 1.26,
+      },
+    );
+
+  const fixedBearingLoop = (
+    bearings: number[],
+    distancesKm: number[],
+  ) =>
+    bearings.map((bearing, index) =>
+      calculateDestination(start, distancesKm[index] ?? distancesKm[0], bearing)
+    );
+  const orbitalRing = (
+    multiplier: number,
+    corridorBearingDegrees: number,
+    seedOffset: number,
+    numWaypoints: number,
+    sweepDegrees: number,
+    distanceFactors: number[],
+    options?: {
+      bearingJitterDegrees?: number;
+      radialJitter?: number;
+      smoothing?: number;
+      minRadiusFactor?: number;
+      maxRadiusFactor?: number;
+    },
+  ) =>
+    calculateOrbitalRingWaypoints(
+      start,
+      baseRadius * multiplier,
+      corridorBearingDegrees,
+      numWaypoints,
+      sweepDegrees,
+      randomSeed + seedOffset,
+      {
+        distanceFactors,
+        bearingJitterDegrees: options?.bearingJitterDegrees ?? 0,
+        radialJitter: options?.radialJitter ?? 0,
+        smoothing: options?.smoothing ?? 0.06,
+        minRadiusFactor: options?.minRadiusFactor ?? 0.84,
+        maxRadiusFactor: options?.maxRadiusFactor ?? 1.24,
+      },
+    );
+  const longNoHighwayCurveRescue = () =>
+    pairedLoop(
+      targetDistanceKm >= 95 ? 1.74 : 1.58,
+      58,
+      2447,
+      72,
+      [1.04, 1.22, 1.06],
+      {
+        smoothing: 0.06,
+        minRadiusFactor: 0.86,
+        maxRadiusFactor: 1.32,
+      },
+    );
+
+  if (avoidHighwaysRoundTripSearch) {
+    if (shortTarget && mode === "Sport Mode") {
+      addPlan(
+        "sport-paired-west",
+        pairedLoop(1.12, 280, 1901, 58, [1.00, 1.14, 1.00], {
+          bearingJitterDegrees: 0,
+          radialJitter: 0,
+          smoothing: 0,
+          minRadiusFactor: 0.88,
+          maxRadiusFactor: 1.24,
+        }),
+        1.08,
+      );
+      addPlan(
+        "sport-paired-northwest",
+        pairedLoop(1.32, 304, 1907, 78, [1.00, 1.14, 1.00], {
+          bearingJitterDegrees: 0,
+          radialJitter: 0,
+          smoothing: 0,
+          minRadiusFactor: 0.88,
+          maxRadiusFactor: 1.25,
+        }),
+        1.08,
+      );
+      addPlan(
+        "sport-paired-southwest",
+        pairedLoop(1.40, 292, 1913, 66, [1.00, 1.14, 1.00], {
+          bearingJitterDegrees: 0,
+          radialJitter: 0,
+          smoothing: 0,
+          minRadiusFactor: 0.88,
+          maxRadiusFactor: 1.24,
+        }),
+        1.08,
+      );
+      addPlan(
+        "sport-paired-west-wide",
+        pairedLoop(1.12, 304, 1927, 82, [1.00, 1.14, 1.00], {
+          bearingJitterDegrees: 0,
+          radialJitter: 0,
+          smoothing: 0,
+          minRadiusFactor: 0.88,
+          maxRadiusFactor: 1.26,
+        }),
+        1.12,
+      );
+
+      return dedupeRoundTripPlans(plans);
+    }
+
+    if (shortTarget) {
+      addPlan(
+        "nohw-short-curve-oval-west",
+        pairedLoop(1.00, 280, 2201, 58, [1.00, 1.14, 1.00], {
+          bearingJitterDegrees: 0,
+          radialJitter: 0,
+          smoothing: 0,
+          minRadiusFactor: 0.86,
+          maxRadiusFactor: 1.20,
+        }),
+        1.10,
+      );
+      addPlan(
+        "nohw-short-curve-oval-northwest",
+        pairedLoop(1.16, 304, 2211, 78, [1.00, 1.14, 1.00], {
+          bearingJitterDegrees: 0,
+          radialJitter: 0,
+          smoothing: 0,
+          minRadiusFactor: 0.86,
+          maxRadiusFactor: 1.22,
+        }),
+        1.12,
+      );
+      addPlan(
+        "nohw-short-curve-oval-southwest",
+        pairedLoop(1.20, 304, 2221, 78, [1.00, 1.14, 1.00], {
+          bearingJitterDegrees: 0,
+          radialJitter: 0,
+          smoothing: 0,
+          minRadiusFactor: 0.86,
+          maxRadiusFactor: 1.22,
+        }),
+        1.10,
+      );
+
+      return dedupeRoundTripPlans(plans);
+    }
+
+    if (noHighwayMediumTarget) {
+      if (mode === "Sport Mode") {
+        // 4-WP orbital ring families aimed at the FLAT Rhine valley
+        // north of Dornbirn (Bregenz → Höchst → Lustenau → swiss
+        // border). These corridors have straight B-roads without the
+        // hairpin switchbacks of the Bregenzerwald so Mapbox does not
+        // need to insert u-turn maneuvers. Corridor bearings are all
+        // in the northern/western semicircle; eastern bearings would
+        // drag the route up into the mountains.
+        addPlan(
+          "nohw-medium-sport-orbital-rheintal-north",
+          orbitalRing(
+            0.90,
+            338,
+            2301,
+            4,
+            215,
+            [0.90, 1.02, 1.00, 0.88],
+            {
+              bearingJitterDegrees: 0,
+              radialJitter: 0,
+              smoothing: 0.04,
+              minRadiusFactor: 0.72,
+              maxRadiusFactor: 1.12,
+            },
+          ),
+          1.08,
+        );
+        addPlan(
+          "nohw-medium-sport-orbital-rheintal-northwest",
+          orbitalRing(
+            0.92,
+            322,
+            2321,
+            4,
+            220,
+            [0.92, 1.02, 0.98, 0.88],
+            {
+              bearingJitterDegrees: 0,
+              radialJitter: 0,
+              smoothing: 0.04,
+              minRadiusFactor: 0.72,
+              maxRadiusFactor: 1.12,
+            },
+          ),
+          1.08,
+        );
+        addPlan(
+          "nohw-medium-sport-orbital-rheintal-west",
+          orbitalRing(
+            0.90,
+            302,
+            2335,
+            4,
+            228,
+            [0.94, 1.00, 0.96, 0.90],
+            {
+              bearingJitterDegrees: 0,
+              radialJitter: 0,
+              smoothing: 0.04,
+              minRadiusFactor: 0.72,
+              maxRadiusFactor: 1.10,
+            },
+          ),
+          1.06,
+        );
+        addPlan(
+          "nohw-medium-sport-orbital-6soft",
+          orbitalRing(
+            0.84,
+            314,
+            2338,
+            6,
+            200,
+            [0.94, 0.98, 1.0, 0.98, 0.96, 0.92],
+            {
+              bearingJitterDegrees: 0,
+              radialJitter: 0,
+              smoothing: 0.04,
+              minRadiusFactor: 0.70,
+              maxRadiusFactor: 1.10,
+            },
+          ),
+          1.08,
+        );
+        addPlan(
+          "nohw-medium-sport-orbital-broad-west",
+          orbitalRing(
+            0.88,
+            308,
+            2340,
+            4,
+            235,
+            [0.96, 0.99, 0.96, 0.94],
+            {
+              bearingJitterDegrees: 0,
+              radialJitter: 0,
+              smoothing: 0.05,
+              minRadiusFactor: 0.72,
+              maxRadiusFactor: 1.12,
+            },
+          ),
+          1.10,
+        );
+        addPlan(
+          "nohw-medium-sport-orbital-rheintal-loop",
+          orbitalRing(
+            0.88,
+            328,
+            2345,
+            5,
+            215,
+            [0.88, 0.98, 1.02, 0.98, 0.86],
+            {
+              bearingJitterDegrees: 0,
+              radialJitter: 0,
+              smoothing: 0.04,
+              minRadiusFactor: 0.70,
+              maxRadiusFactor: 1.14,
+            },
+          ),
+          1.10,
+        );
+        addPlan(
+          "nohw-medium-sport-cardinal-rheintal",
+          cardinal(0.94, 2361, 1.08),
+          1.08,
+        );
+        return dedupeRoundTripPlans(plans);
+      }
+      addPlan(
+        "nohw-medium-oval-west",
+        pairedLoop(1.30, 260, 2301, 50, [1.00, 1.00, 1.00], {
+          bearingJitterDegrees: 0,
+          radialJitter: 0,
+          smoothing: 0,
+          minRadiusFactor: 0.84,
+          maxRadiusFactor: 1.26,
+        }),
+        1.10,
+      );
+      addPlan(
+        "nohw-medium-rhine-south",
+        fixedBearingLoop(
+          [178, 220, 262],
+          [17.2, 17.2, 17.2],
+        ),
+        1.06,
+      );
+      addPlan(
+        "nohw-medium-oval-northwest",
+        pairedLoop(1.30, 260, 2311, 50, [1.00, 1.00, 1.00], {
+          bearingJitterDegrees: 0,
+          radialJitter: 0,
+          smoothing: 0,
+          minRadiusFactor: 0.84,
+          maxRadiusFactor: 1.26,
+        }),
+        1.12,
+      );
+      addPlan(
+        "nohw-medium-oval-southwest",
+        pairedLoop(1.24, 236, 2321, 56, [1.00, 1.14, 1.00], {
+          bearingJitterDegrees: 0,
+          radialJitter: 0,
+          smoothing: 0,
+          minRadiusFactor: 0.84,
+          maxRadiusFactor: 1.24,
+        }),
+        1.12,
+      );
+      if (mode === "Kurvenjagd" && targetDistanceKm >= 75) {
+        addPlan(
+          "nohw-curve-rescue-northeast",
+          longNoHighwayCurveRescue(),
+          1.14,
+        );
+      }
+
+      return dedupeRoundTripPlans(plans);
+    }
+
+    addPlan(
+      "nohw-long-oval-west",
+      pairedLoop(1.42, 280, 2401, 58, [1.04, 1.18, 1.04], {
+        smoothing: 0.06,
+        minRadiusFactor: 0.86,
+        maxRadiusFactor: 1.28,
+      }),
+      1.12,
+    );
+    addPlan(
+      "nohw-long-oval-northwest",
+      pairedLoop(1.46, 304, 2411, 68, [1.02, 1.20, 1.04], {
+        smoothing: 0.06,
+        minRadiusFactor: 0.86,
+        maxRadiusFactor: 1.30,
+      }),
+      1.14,
+    );
+    addPlan(
+      "nohw-long-oval-southwest",
+      pairedLoop(1.44, 236, 2421, 62, [1.02, 1.18, 1.04], {
+        smoothing: 0.06,
+        minRadiusFactor: 0.86,
+        maxRadiusFactor: 1.28,
+      }),
+      1.14,
+    );
+    addPlan(
+      "nohw-long-oval-west-wide",
+      pairedLoop(1.52, 286, 2431, 72, [1.00, 1.22, 1.04], {
+        smoothing: 0.06,
+        minRadiusFactor: 0.86,
+        maxRadiusFactor: 1.32,
+      }),
+      1.16,
+    );
+    if (mode === "Kurvenjagd" && targetDistanceKm >= 75) {
+      addPlan(
+        "nohw-curve-rescue-northeast",
+        longNoHighwayCurveRescue(),
+        1.16,
+      );
+    }
+
+    return dedupeRoundTripPlans(plans);
+  }
 
   switch (mode) {
     case "Kurvenjagd":
@@ -805,125 +1092,158 @@ export function buildRoundTripWaypointCandidates({
       break;
     case "Sport Mode":
     default:
-      if (avoidHighwaysShortSportSearch) {
+      if (shortTarget) {
+        // Highway short Sport: try loop/cardinal before orbitals so strict-phase
+        // slices (first N candidates) hit Mapbox-friendly shapes even if sort
+        // ties fall back to insertion order.
         addPlan(
-          "sport-rheintal-west",
-          anchoredLoop(
+          "sport-loop-flow",
+          loop(1.10, 3, 29),
+          1.0,
+        );
+        addPlan(
+          "sport-loop-wide",
+          loop(1.14, 3, 173),
+          1.12,
+        );
+        addPlan(
+          "sport-cardinal-ellipse",
+          cardinal(1.04, 59, waypointShapeFactor ?? 2.0),
+          1.02,
+        );
+        addPlan(
+          "sport-hw-zigzag-rheintal",
+          zigzag(1.02, 2517),
+          1.06,
+        );
+        // 4–5 WP orbital rings + last-resort 3-WP corridor.
+        addPlan(
+          "sport-hw-orbital-rheintal-north",
+          orbitalRing(
+            0.92,
+            340,
+            1901,
+            4,
+            170,
+            [0.92, 1.02, 1.00, 0.88],
+            {
+              bearingJitterDegrees: 0,
+              radialJitter: 0,
+              smoothing: 0.04,
+              minRadiusFactor: 0.74,
+              maxRadiusFactor: 1.14,
+            },
+          ),
+          1.10,
+        );
+        addPlan(
+          "sport-hw-orbital-rheintal-northwest",
+          orbitalRing(
             0.96,
-            282,
-            [-10, 62],
-            [0.94, 0.98],
-            59,
+            320,
+            1911,
+            4,
+            160,
+            [0.90, 1.00, 1.02, 0.88],
             {
-              bearingJitterDegrees: 12,
-              pointBearingJitterDegrees: 5,
-              radialJitter: 0.05,
-              smoothing: 0.12,
-              minRadiusFactor: 0.78,
-              maxRadiusFactor: 1.04,
+              bearingJitterDegrees: 0,
+              radialJitter: 0,
+              smoothing: 0.04,
+              minRadiusFactor: 0.74,
+              maxRadiusFactor: 1.16,
             },
           ),
-          0.98,
+          1.10,
         );
         addPlan(
-          "sport-compact-oval-southwest",
-          anchoredLoop(
-            0.94,
-            244,
-            [-12, 58],
-            [0.90, 0.96],
-            271,
-            {
-              bearingJitterDegrees: 12,
-              pointBearingJitterDegrees: 5,
-              radialJitter: 0.05,
-              smoothing: 0.12,
-              minRadiusFactor: 0.78,
-              maxRadiusFactor: 1.04,
-            },
-          ),
-          0.98,
-        );
-        addPlan(
-          "sport-offset-loop-north",
-          anchoredLoop(
-            0.98,
-            326,
-            [-18, 56],
-            [0.92, 0.98],
-            443,
-            {
-              bearingJitterDegrees: 12,
-              pointBearingJitterDegrees: 5,
-              radialJitter: 0.05,
-              smoothing: 0.12,
-              minRadiusFactor: 0.80,
-              maxRadiusFactor: 1.06,
-            },
-          ),
-          1.00,
-        );
-        addPlan(
-          "sport-loop-flow-west",
-          anchoredLoop(
+          "sport-hw-orbital-rheintal-west",
+          orbitalRing(
             1.02,
-            292,
-            [-14, 60],
-            [0.94, 1.00],
-            29,
+            304,
+            1921,
+            4,
+            220,
+            [0.96, 1.04, 1.00, 0.92],
             {
-              bearingJitterDegrees: 12,
-              pointBearingJitterDegrees: 5,
-              radialJitter: 0.05,
-              smoothing: 0.12,
-              minRadiusFactor: 0.80,
-              maxRadiusFactor: 1.06,
-            },
-          ),
-          1.00,
-        );
-        addPlan(
-          "sport-loop-scout-southwest",
-          anchoredLoop(
-            0.90,
-            230,
-            [-8, 54],
-            [0.88, 0.94],
-            1031,
-            {
-              bearingJitterDegrees: 12,
-              pointBearingJitterDegrees: 5,
-              radialJitter: 0.05,
-              smoothing: 0.12,
+              bearingJitterDegrees: 0,
+              radialJitter: 0,
+              smoothing: 0.04,
               minRadiusFactor: 0.76,
-              maxRadiusFactor: 1.02,
+              maxRadiusFactor: 1.16,
             },
           ),
-          0.96,
+          1.10,
         );
         addPlan(
-          "sport-cardinal-northwest",
-          directionalCardinal(0.84, 173, 304, 1.06, 14),
-          0.98,
+          "sport-hw-orbital-equal-sweep",
+          orbitalRing(
+            1.04,
+            316,
+            1931,
+            4,
+            235,
+            [1.0, 1.0, 1.0, 1.0],
+            {
+              bearingJitterDegrees: 0,
+              radialJitter: 0,
+              smoothing: 0.05,
+              minRadiusFactor: 0.78,
+              maxRadiusFactor: 1.18,
+            },
+          ),
+          1.12,
         );
         addPlan(
-          "sport-valley-safe-west",
-          directionalCardinal(0.80, 611, 270, 1.04, 14),
-          0.96,
+          "sport-hw-orbital-soft-5",
+          orbitalRing(
+            0.96,
+            312,
+            1941,
+            5,
+            200,
+            [0.92, 0.98, 1.02, 1.0, 0.90],
+            {
+              bearingJitterDegrees: 0,
+              radialJitter: 0,
+              smoothing: 0.04,
+              minRadiusFactor: 0.74,
+              maxRadiusFactor: 1.16,
+            },
+          ),
+          1.12,
         );
-        break;
+        addPlan(
+          "sport-hw-cardinal-rheintal",
+          cardinal(1.00, 1951, 1.10),
+          1.06,
+        );
+        // Last-resort 3-WP corridor (paired): often rejected, but improves
+        // NO_ROUTE rate when orbitals/loops fail a seed batch.
+        addPlan(
+          "sport-paired-hw-corridor",
+          pairedLoop(1.12, 292, 1961, 52, [1.00, 1.08, 1.00], {
+            bearingJitterDegrees: 0,
+            radialJitter: 0,
+            smoothing: 0,
+            minRadiusFactor: 0.88,
+            maxRadiusFactor: 1.22,
+          }),
+          1.08,
+        );
       }
-      addPlan(
-        "sport-cardinal-ellipse",
-        cardinal(1.04, 59, waypointShapeFactor ?? 2.0),
-        1.02,
-      );
-      addPlan("sport-loop-flow", loop(1.10, shortTarget ? 3 : 4, 29), 1.0);
-      addPlan(
-        "sport-loop-wide",
-        loop(longTarget ? 1.22 : 1.14, mediumTarget ? 4 : 3, 173),
-        1.12,
-      );
+      if (!shortTarget) {
+        addPlan(
+          "sport-cardinal-ellipse",
+          cardinal(1.04, 59, waypointShapeFactor ?? 2.0),
+          1.02,
+        );
+        addPlan("sport-loop-flow", loop(1.10, 4, 29), 1.0);
+        addPlan(
+          "sport-loop-wide",
+          loop(longTarget ? 1.22 : 1.14, mediumTarget ? 4 : 3, 173),
+          1.12,
+        );
+      }
       addPlan(
         "sport-loop-extended",
         loop(longTarget ? 1.30 : 1.18, mediumTarget ? 4 : 3, 611),
@@ -948,137 +1268,48 @@ export function buildRoundTripWaypointCandidates({
       break;
   }
 
-  if (avoidHighwaysShortSportSearch) {
+  addPlan(
+    "fallback-cardinal",
+    cardinal(1.00, 1499, waypointShapeFactor ?? 1.0),
+    1.08,
+  );
+  if (shortTarget && mode === "Kurvenjagd") {
     addPlan(
-      "fallback-valley-safe-southwest",
-      directionalCardinal(0.80, 1499, 236, 1.06, 14),
-      0.98,
+      "fallback-cardinal-ellipse",
+      cardinal(0.96, 1607, 1.18),
+      1.06,
     );
+  }
+  addPlan(
+    "fallback-triangle-compact",
+    triangle(shortTarget ? 0.88 : 0.84, 503),
+    1.0,
+  );
+  addPlan(
+    "fallback-triangle-balanced",
+    triangle(shortTarget ? 0.96 : 1.00, 619),
+    1.05,
+  );
+  addPlan(
+    "fallback-triangle-wide",
+    triangle(shortTarget ? 1.06 : 1.12, 1181),
+    1.08,
+  );
+  if (!shortTarget) {
     addPlan(
-      "fallback-rheintal-west",
-      anchoredLoop(
-        0.92,
-        288,
-        [-8, 58],
-        [0.90, 0.96],
-        1607,
-        {
-          bearingJitterDegrees: 12,
-          pointBearingJitterDegrees: 5,
-          radialJitter: 0.05,
-          smoothing: 0.12,
-          minRadiusFactor: 0.78,
-          maxRadiusFactor: 1.04,
-        },
-      ),
-      0.98,
+      "fallback-triangle-very-wide",
+      triangle(mediumTarget ? 1.18 : 1.28, 1571),
+      1.14,
     );
+  }
+  addPlan("fallback-loop-3", loop(shortTarget ? 0.98 : 1.02, 3, 733), 1.08);
+  addPlan("fallback-loop-4", loop(shortTarget ? 1.06 : 1.12, 4, 857), 1.12);
+  if (!shortTarget) {
     addPlan(
-      "fallback-compact-oval-north",
-      anchoredLoop(
-        0.94,
-        342,
-        [-10, 56],
-        [0.90, 0.96],
-        503,
-        {
-          bearingJitterDegrees: 12,
-          pointBearingJitterDegrees: 5,
-          radialJitter: 0.05,
-          smoothing: 0.12,
-          minRadiusFactor: 0.78,
-          maxRadiusFactor: 1.04,
-        },
-      ),
-      0.98,
+      "fallback-loop-5",
+      loop(mediumTarget ? 1.10 : 1.16, 4, 1093),
+      1.14,
     );
-    addPlan(
-      "fallback-cardinal-west",
-      directionalCardinal(0.84, 619, 272, 1.04, 14),
-      0.98,
-    );
-    addPlan(
-      "fallback-offset-loop-west",
-      anchoredLoop(
-        0.92,
-        252,
-        [-10, 54],
-        [0.90, 0.96],
-        733,
-        {
-          bearingJitterDegrees: 12,
-          pointBearingJitterDegrees: 5,
-          radialJitter: 0.05,
-          smoothing: 0.12,
-          minRadiusFactor: 0.78,
-          maxRadiusFactor: 1.04,
-        },
-      ),
-      0.98,
-    );
-    addPlan(
-      "fallback-loop-rheintal",
-      anchoredLoop(
-        0.96,
-        296,
-        [-14, 58],
-        [0.92, 0.98],
-        857,
-        {
-          bearingJitterDegrees: 12,
-          pointBearingJitterDegrees: 5,
-          radialJitter: 0.05,
-          smoothing: 0.12,
-          minRadiusFactor: 0.80,
-          maxRadiusFactor: 1.06,
-        },
-      ),
-      1.00,
-    );
-  } else {
-    addPlan(
-      "fallback-cardinal",
-      cardinal(1.00, 1499, waypointShapeFactor ?? 1.0),
-      1.08,
-    );
-    if (shortTarget && mode === "Kurvenjagd") {
-      addPlan(
-        "fallback-cardinal-ellipse",
-        cardinal(0.96, 1607, 1.18),
-        1.06,
-      );
-    }
-    addPlan(
-      "fallback-triangle-compact",
-      triangle(shortTarget ? 0.88 : 0.84, 503),
-      1.0,
-    );
-    addPlan(
-      "fallback-triangle-balanced",
-      triangle(shortTarget ? 0.96 : 1.00, 619),
-      1.05,
-    );
-    addPlan(
-      "fallback-triangle-wide",
-      triangle(shortTarget ? 1.06 : 1.12, 1181),
-      1.08,
-    );
-    if (!shortTarget) {
-      addPlan(
-        "fallback-triangle-very-wide",
-        triangle(mediumTarget ? 1.18 : 1.28, 1571),
-        1.14,
-      );
-    }
-    addPlan("fallback-loop-3", loop(shortTarget ? 0.98 : 1.02, 3, 733), 1.08);
-    addPlan("fallback-loop-4", loop(shortTarget ? 1.06 : 1.12, 4, 857), 1.12);
-    if (!shortTarget) {
-      addPlan(
-        "fallback-loop-5",
-        loop(mediumTarget ? 1.10 : 1.16, 4, 1093),
-        1.14,
-      );
-    }
   }
 
   const dedupedPlans = dedupeRoundTripPlans(plans);
@@ -1086,32 +1317,34 @@ export function buildRoundTripWaypointCandidates({
     return dedupedPlans;
   }
 
+  // Allow up to 5 intermediate waypoints so the new orbital-ring
+  // families can survive the simplify filter when the client asks for
+  // simplified waypoints (rescue passes in the route service).
   const maxIntermediateWaypoints = Math.max(
     1,
-    Math.min(4, maxWaypoints ?? 3),
+    Math.min(5, maxWaypoints ?? 5),
   );
-  const stableShortSportLoopLabels = [
-    "sport-rheintal-west",
-    "sport-compact-oval-southwest",
-    "sport-offset-loop-north",
-    "sport-loop-flow-west",
-    "sport-loop-scout-southwest",
-    "sport-cardinal-northwest",
-    "sport-valley-safe-west",
-    "fallback-rheintal-west",
-    "fallback-compact-oval-north",
-    "fallback-offset-loop-west",
-    "fallback-loop-rheintal",
-    "fallback-cardinal-west",
-    "fallback-valley-safe-southwest",
-  ];
   const simplifiedPreferred = dedupedPlans.filter((plan) => {
     const intermediateCount = Math.max(0, plan.waypoints.length - 2);
-    if (intermediateCount > maxIntermediateWaypoints) return false;
-
     const label = plan.label.toLowerCase();
-    if (avoidHighwaysShortSportSearch) {
-      return stableShortSportLoopLabels.some((token) => label.includes(token));
+    const shortSportPairedPlan = mode === "Sport Mode" && shortTarget &&
+      label.includes("sport-paired-");
+    const sportOrbitalPlan = mode === "Sport Mode" &&
+      (
+        label.includes("sport-hw-orbital-") ||
+        label.includes("sport-hw-cardinal-") ||
+        label.includes("nohw-medium-sport-orbital-") ||
+        label.includes("nohw-medium-sport-orbital-rheintal-") ||
+        label.includes("nohw-medium-sport-cardinal-")
+      );
+    // Orbital plans must survive the rescue pass even when the client
+    // asks for simplifyWaypoints (maxWaypoints=3). The whole point of
+    // the orbital families is to carry 4–5 waypoints — if we drop them
+    // here, the rescue falls back to triangles and u-turn rejects.
+    const orbitalWaypointsOk = sportOrbitalPlan &&
+      intermediateCount <= 5;
+    if (!orbitalWaypointsOk && intermediateCount > maxIntermediateWaypoints) {
+      return false;
     }
     const shortCurvyCompactPlan = mode === "Kurvenjagd" && shortTarget &&
       (
@@ -1119,10 +1352,19 @@ export function buildRoundTripWaypointCandidates({
         label.includes("orbital-core") ||
         label.includes("zigzag-core")
       );
+    const shortSportLoopCore = mode === "Sport Mode" && shortTarget &&
+      (
+        label.includes("sport-loop-flow") ||
+        label.includes("sport-loop-wide")
+      );
     return (
       label.includes("triangle") ||
       label.includes("cardinal") ||
       label.includes("loop-3") ||
+      shortSportPairedPlan ||
+      sportOrbitalPlan ||
+      shortSportLoopCore ||
+      (mode === "Sport Mode" && shortTarget && label.includes("zigzag")) ||
       (maxIntermediateWaypoints >= 4 && label.includes("loop-4")) ||
       shortCurvyCompactPlan
     );

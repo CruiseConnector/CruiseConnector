@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:cruise_connect/data/services/route_quality_validator.dart';
+import 'package:cruise_connect/data/services/route_style_config.dart';
 import 'package:cruise_connect/data/services/seen_route_registry.dart';
 
 void main() {
@@ -152,8 +153,8 @@ void main() {
           closeTo(0.16, 0.001),
         );
         expect(
-          validator.roundTripDistanceTolerance(150.0),
-          closeTo(0.14, 0.001),
+          validator.roundTripDistanceTolerance(100.0),
+          closeTo(0.16, 0.001),
         );
       },
     );
@@ -607,6 +608,47 @@ void main() {
 
       // Sport sollte Zigzag stärker bestrafen als Entdecker
       expect(sportScore, greaterThan(entdeckerScore));
+    });
+
+    test('StyleFit trennt flüssigen Sport von Kurvenjagd-Geometrie', () {
+      final flow = <List<double>>[];
+      for (var i = 0; i < 96; i++) {
+        final t = i / 95.0;
+        flow.add([9.60 + t * 0.30, 47.20 + 0.012 * sin(t * 2 * 3.14159)]);
+      }
+
+      final curvy = <List<double>>[];
+      for (var i = 0; i < 140; i++) {
+        final t = i / 139.0;
+        curvy.add([9.60 + t * 0.22, 47.20 + 0.020 * sin(t * 12 * 3.14159)]);
+      }
+
+      final sport = RouteStyleConfig.forMode('Sport Mode');
+      final curves = RouteStyleConfig.forMode('Kurvenjagd');
+
+      final sportFlowScore = sport.scoreStyleFit(
+        coordinates: flow,
+        distanceKm: 50,
+        durationSeconds: 48 * 60,
+      );
+      final sportCurvyScore = sport.scoreStyleFit(
+        coordinates: curvy,
+        distanceKm: 50,
+        durationSeconds: 58 * 60,
+      );
+      final curveFlowScore = curves.scoreStyleFit(
+        coordinates: flow,
+        distanceKm: 50,
+        durationSeconds: 48 * 60,
+      );
+      final curveCurvyScore = curves.scoreStyleFit(
+        coordinates: curvy,
+        distanceKm: 50,
+        durationSeconds: 58 * 60,
+      );
+
+      expect(sportFlowScore, greaterThan(sportCurvyScore));
+      expect(curveCurvyScore, greaterThan(curveFlowScore));
     });
   });
 }

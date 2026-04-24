@@ -17,11 +17,9 @@ import {
   calculateDistance,
   interpolateCoordinate,
   normalizeBearingDegrees,
-  normalizeExcludeParams,
   normalizeHint,
   relaxStreetExcludes,
   scaleWaypoint,
-  seededUnit,
   stableStringHash,
 } from "./routing_utils.ts";
 import { getDistanceConfig } from "./roundtrip_waypoints.ts";
@@ -33,24 +31,74 @@ import {
   getRouteDistanceKm,
   isPointToPointDetourAcceptable,
 } from "./point_to_point.ts";
-import { evaluateRouteQuality } from "./route_quality.ts";
+import {
+  evaluateRouteCleanupGate,
+  evaluateRouteQuality,
+} from "./route_quality.ts";
 import { searchBestRoundTripRoute } from "./roundtrip_search.ts";
 import { classifyRoutingError } from "./routing_request_utils.ts";
+import { debugError, debugLog } from "./routing_debug.ts";
 
 // Environment variables
 const MAPBOX_ACCESS_TOKEN = Deno.env.get("MAPBOX_ACCESS_TOKEN");
+const ROUTING_BUILD_ID = Deno.env.get("ROUTING_BUILD_ID") ??
+  "local-debug-meta";
+const ROUTING_BUILD_TIME = Deno.env.get("ROUTING_BUILD_TIME") ??
+  "local-debug-meta";
 
-// Erlaubte Origins — eigene App, Supabase-Domain und GitHub Pages
-const ALLOWED_ORIGINS = [
-  "https://tlcfaxvvqzobmzwvfnvb.supabase.co",
-  "https://cruiseconnector.github.io",
-];
+function parseRoundTripTargetHintKm(value?: string): number | null {
+  if (!value) return null;
+  const match = value.match(/(?:^|[-_|])k(\d{2,3})(?:[-_|]|$)/i);
+  if (!match) return null;
+  const parsed = Number.parseInt(match[1], 10);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function buildNoRouteSearchMeta(
+  roundTripSearch: RoundTripSearchResult | null,
+  extraRejectReason?: string,
+): Record<string, unknown> | null {
+  if (roundTripSearch == null && extraRejectReason == null) {
+    return null;
+  }
+
+  const rejectReasons = { ...(roundTripSearch?.rejectReasons ?? {}) };
+  if (extraRejectReason != null) {
+    rejectReasons[extraRejectReason] = (rejectReasons[extraRejectReason] ?? 0) +
+      1;
+  }
+  const topRejectReasons = Object.fromEntries(
+    Object.entries(rejectReasons)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5),
+  );
+
+  return {
+    search_summary: {
+      candidate_attempts: roundTripSearch?.candidateAttempts ?? 0,
+      accepted_candidates: roundTripSearch?.acceptedCandidates ?? 0,
+      rejected_candidates: roundTripSearch?.rejectedCandidates ?? 0,
+      duplicate_skips: roundTripSearch?.duplicateSkips ?? 0,
+      emergency_duplicate_used:
+        roundTripSearch?.emergencyDuplicateUsed === true,
+      reject_reasons: topRejectReasons,
+      search_phases: roundTripSearch?.searchPhases ?? [],
+      last_plan_labels: roundTripSearch?.lastPlanLabels ?? [],
+      exhausted: roundTripSearch?.exhausted == true,
+    },
+  };
+}
+
+const ALLOWED_ORIGINS = (Deno.env.get("ALLOWED_ORIGINS") ?? "")
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter((origin) => origin.length > 0);
 
 function getCorsHeaders(req?: Request) {
   const origin = req?.headers.get("origin") ?? "";
   const allowedOrigin = ALLOWED_ORIGINS.includes(origin)
     ? origin
-    : ALLOWED_ORIGINS[0];
+    : ALLOWED_ORIGINS[0] ?? "null";
   return {
     "Access-Control-Allow-Origin": allowedOrigin,
     "Access-Control-Allow-Headers":
@@ -94,10 +142,6 @@ Deno.serve(async (req) => {
         Number.isFinite(body.waypoint_shape_factor)
         ? body.waypoint_shape_factor
         : undefined;
-    const radiusMultiplier = typeof body.radius_multiplier === "number" &&
-        Number.isFinite(body.radius_multiplier)
-      ? body.radius_multiplier
-      : undefined;
     const zigzagWaypoints = body.zigzag_waypoints === true;
     const variantHint = normalizeHint(
       body.route_variant_hint ?? body.variant_hint ?? body.style_profile,
@@ -112,10 +156,12 @@ Deno.serve(async (req) => {
         : undefined;
     const hintSeedOffset =
       stableStringHash(`${variantHint ?? ""}|${fingerprintHint ?? ""}`) % 9973;
-    console.log(
+    debugLog(
       "[RoutingRequest]",
       JSON.stringify({
         requestId: debugBody.request_id ?? null,
+        routingBuildId: ROUTING_BUILD_ID,
+        routingBuildTime: ROUTING_BUILD_TIME,
         clientScenarioKey: debugBody.client_scenario_key ?? null,
         clientForceFreshVariant: debugBody.client_force_fresh_variant === true,
         clientTrigger: debugBody.client_trigger ?? null,
@@ -130,7 +176,6 @@ Deno.serve(async (req) => {
         offsetSide: offsetSide ?? null,
         styleProfile: body.style_profile ?? null,
         waypointShapeFactor: waypointShapeFactor ?? null,
-        radiusMultiplier: radiusMultiplier ?? null,
         zigzagWaypoints,
         avoidHighways: body.avoid_highways === true,
         variantHint: variantHint ?? null,
@@ -203,13 +248,6 @@ Deno.serve(async (req) => {
         !Number.isFinite(body.waypoint_shape_factor))
     ) {
       throw new Error("Invalid waypoint_shape_factor: must be a finite number");
-    }
-    if (
-      body.radius_multiplier != null &&
-      (typeof body.radius_multiplier !== "number" ||
-        !Number.isFinite(body.radius_multiplier))
-    ) {
-      throw new Error("Invalid radius_multiplier: must be a finite number");
     }
     if (
       body.max_candidate_attempts != null &&
@@ -372,8 +410,21 @@ Deno.serve(async (req) => {
           );
         }
 
-        // >100 km is capped to 150 km maximum route target
-        const effectiveDistance = Math.min(targetDistance, 150);
+        const hintedTargetDistance = avoidHighways && targetDistance > 60
+          ? parseRoundTripTargetHintKm(variantHint)
+          : null;
+        const stableNoHighwayTarget = hintedTargetDistance != null &&
+            hintedTargetDistance >= 60 &&
+            hintedTargetDistance <= 115 &&
+            Math.abs(hintedTargetDistance - targetDistance) <=
+              Math.max(8, hintedTargetDistance * 0.18)
+          ? hintedTargetDistance
+          : targetDistance;
+        // Product distances are capped at 100 km. No-highway
+        // medium/long force-fresh variants may intentionally send a shifted
+        // target (e.g. k75 -> 69/82) for diversity; server-side geometry
+        // gates must still evaluate against the selected distance bucket.
+        const effectiveDistance = Math.min(stableNoHighwayTarget, 100);
         distanceConfig = getDistanceConfig(effectiveDistance, mode);
         effectiveTargetDistanceKm = effectiveDistance;
       }
@@ -390,32 +441,12 @@ Deno.serve(async (req) => {
       );
     }
 
-    requestDebugMeta = {
-      request_id: debugBody.request_id ?? null,
-      client_scenario_key: debugBody.client_scenario_key ?? null,
-      client_force_fresh_variant: debugBody.client_force_fresh_variant === true,
-      client_trigger: debugBody.client_trigger ?? null,
-      route_type: currentRouteType,
-      mode: mode ?? "Standard",
-      planning_type,
-      targetDistance: targetDistance ?? null,
-      requested_target_distance_km: currentRouteType === "ROUND_TRIP"
-        ? targetDistance ?? null
-        : null,
-      effective_target_distance_km: currentRouteType === "ROUND_TRIP"
-        ? effectiveTargetDistanceKm ?? targetDistance ?? null
-        : null,
-      avoid_highways_requested: avoidHighways,
-      effective_excludes: excludeParams || "none",
-      variant_hint: variantHint ?? null,
-      fingerprint_hint: fingerprintHint ?? null,
-      max_candidate_attempts: maxCandidateAttemptsHint ?? null,
-    };
-
-    console.log(
+    debugLog(
       "[RoutingResolvedConfig]",
       JSON.stringify({
         requestId: debugBody.request_id ?? null,
+        routingBuildId: ROUTING_BUILD_ID,
+        routingBuildTime: ROUTING_BUILD_TIME,
         clientScenarioKey: debugBody.client_scenario_key ?? null,
         clientTrigger: debugBody.client_trigger ?? null,
         routeType: currentRouteType,
@@ -480,7 +511,6 @@ Deno.serve(async (req) => {
         randomSeed,
         directionHintDegrees: directionHint,
         waypointShapeFactor,
-        radiusMultiplier,
         zigzagWaypoints,
         mapboxProfile,
         excludeParams,
@@ -497,11 +527,11 @@ Deno.serve(async (req) => {
         route = roundTripSearch.route;
         finalWaypoints = roundTripSearch.waypoints;
         radiusesParams = roundTripSearch.radiuses;
-        console.log(
+        debugLog(
           `[RT] Search summary: attempts=${roundTripSearch.candidateAttempts}, accepted=${roundTripSearch.acceptedCandidates}, rejected=${roundTripSearch.rejectedCandidates}, chosen=${roundTripSearch.quality?.tier}`,
         );
         if (roundTripSearch.terminalShortCircuit === true) {
-          console.log(
+          debugLog(
             "[RT] Balanced short-circuit selected terminal seed result; skipping post-search scaling/rescue.",
           );
         }
@@ -528,7 +558,7 @@ Deno.serve(async (req) => {
         avoidHighways,
       );
       if (!route && relaxedPointToPointExcludes !== excludeParams) {
-        console.log(
+        debugLog(
           `No route with excludes "${excludeParams}", retrying with relaxed excludes "${
             relaxedPointToPointExcludes || "none"
           }"...`,
@@ -550,7 +580,7 @@ Deno.serve(async (req) => {
       if (route) {
         const initialQuality = evaluateRouteQuality(route, currentRouteType);
         if (!initialQuality.passed) {
-          console.log(`Initial route rejected: ${initialQuality.reason}`);
+          debugLog(`Initial route rejected: ${initialQuality.reason}`);
           route = null;
         }
       }
@@ -582,7 +612,7 @@ Deno.serve(async (req) => {
           detourLevel,
           body.simplify_waypoints === true,
         );
-        console.log(
+        debugLog(
           `Initial P2P scenic route rejected: ${
             routeDistanceKm.toFixed(1)
           }km outside ${minimumDistanceKm.toFixed(1)}-${
@@ -608,7 +638,7 @@ Deno.serve(async (req) => {
         hasPointToPointBudgetLeft(2200);
         retry++
       ) {
-        console.log(`P2P scenic retry ${retry + 1}: regenerating waypoints...`);
+        debugLog(`P2P scenic retry ${retry + 1}: regenerating waypoints...`);
         const retryDetourLevel = Math.max(detourLevel, 1);
         const retrySimplifyWaypoints = body.simplify_waypoints === true ||
           retry > 0 ||
@@ -750,7 +780,7 @@ Deno.serve(async (req) => {
         if (route) {
           const retryQuality = evaluateRouteQuality(route, currentRouteType);
           if (!retryQuality.passed) {
-            console.log(
+            debugLog(
               `P2P scenic retry ${
                 retry + 1
               }: route rejected because of ${retryQuality.reason}`,
@@ -782,7 +812,7 @@ Deno.serve(async (req) => {
               retryDetourLevel,
               retrySimplifyWaypoints,
             );
-            console.log(
+            debugLog(
               `P2P scenic retry ${retry + 1}: route rejected because ${
                 routeDistanceKm.toFixed(1)
               }km is outside ${minimumDistanceKm.toFixed(1)}-${
@@ -806,7 +836,7 @@ Deno.serve(async (req) => {
       pointToPointIsScenic &&
       hasPointToPointBudgetLeft(1600)
     ) {
-      console.log("P2P scenic safe fallback: trying single-corridor midpoint");
+      debugLog("P2P scenic safe fallback: trying single-corridor midpoint");
       const directBearing = calculateBearing(
         startLocation,
         body.destination_location,
@@ -911,7 +941,7 @@ Deno.serve(async (req) => {
       body.destination_location &&
       !pointToPointIsScenic
     ) {
-      console.log(
+      debugLog(
         pointToPointIsScenic
           ? "P2P scenic fallback exhausted: using direct A->B route"
           : "P2P direct fallback: using direct A->B route",
@@ -937,42 +967,10 @@ Deno.serve(async (req) => {
     }
 
     if (!route) {
-      const debugRoundTripSearch = body.debug_roundtrip_search === true;
       const noRouteMessage = useRoundTripSearch
         ? "No route found with current constraints after exhausting round-trip search."
         : "No route found with current constraints.";
-      if (debugRoundTripSearch) {
-        return new Response(
-          JSON.stringify({
-            error: noRouteMessage,
-            code: "NO_ROUTE",
-            retryable: false,
-            retry_after_sec: null,
-            meta: requestDebugMeta,
-            debug: roundTripSearch != null
-              ? {
-                search_summary: {
-                  candidate_attempts: roundTripSearch.candidateAttempts,
-                  accepted_candidates: roundTripSearch.acceptedCandidates,
-                  rejected_candidates: roundTripSearch.rejectedCandidates,
-                  reject_reasons: roundTripSearch.rejectReasons,
-                  search_phases: roundTripSearch.searchPhases,
-                  variant_hint: roundTripSearch.variantHint ?? null,
-                  fingerprint_hint: roundTripSearch.fingerprintHint ?? null,
-                  exhausted: roundTripSearch.exhausted == true,
-                },
-              }
-              : null,
-          }),
-          {
-            status: 404,
-            headers: {
-              ...getCorsHeaders(req),
-              "Content-Type": "application/json",
-            },
-          },
-        );
-      }
+      requestDebugMeta = buildNoRouteSearchMeta(roundTripSearch);
       throw new Error(noRouteMessage);
     }
 
@@ -982,40 +980,27 @@ Deno.serve(async (req) => {
       roundTripSearch?.terminalShortCircuit === true;
 
     // --- 4. Distance Band Retry & Scaling ---
-    // Skaliert Waypoints näher/weiter zum Start bis die Route im ±10% Band liegt.
-    // Aggressive Korrektur bei großem Fehler, sanfter bei Annäherung.
+    // Accept clean roundtrips within ±15%; only scale clear distance misses.
     if (
       planning_type === "Zufall" &&
       currentRouteType === "ROUND_TRIP" &&
       distanceConfig &&
-      !skipPostSearchScaling
+      !skipPostSearchScaling &&
+      !avoidHighways
     ) {
       const scalingTargetKm = effectiveTargetDistanceKm ?? targetDistance!;
-      const isWithinPreferredScalingBand = (distanceKm: number): boolean => {
-        const preferredMinKm = avoidHighways
-          ? Math.min(
-            distanceConfig.acceptableMinKm,
-            Math.round(scalingTargetKm * 0.64),
-          )
-          : Math.max(0, distanceConfig.acceptableMinKm - 1);
-        const preferredMaxKm = avoidHighways
-          ? Math.max(
-            distanceConfig.acceptableMaxKm,
-            Math.round(scalingTargetKm * 1.38),
-          )
-          : distanceConfig.acceptableMaxKm + 2;
-        return distanceKm >= preferredMinKm && distanceKm <= preferredMaxKm;
-      };
+      const distanceBandMinKm = scalingTargetKm * 0.85;
+      const distanceBandMaxKm = scalingTargetKm * 1.15;
       let bestScaledRoute = route;
       let bestScaledWaypoints = finalWaypoints;
       let bestScaledDistanceKm = actualDistanceKm;
       let attempts = 0;
-      const maxAttempts = avoidHighways ? 5 : 4;
+      const maxAttempts = avoidHighways ? 2 : 3;
       while (
         attempts < maxAttempts &&
         Date.now() - requestStartedAt < 22000 &&
-        (actualDistanceKm > distanceConfig.maxKm ||
-          actualDistanceKm < distanceConfig.minKm)
+        (actualDistanceKm > distanceBandMaxKm ||
+          actualDistanceKm < distanceBandMinKm)
       ) {
         const ratio = (effectiveTargetDistanceKm ?? targetDistance!) /
           actualDistanceKm;
@@ -1031,7 +1016,7 @@ Deno.serve(async (req) => {
           : 0.50;
         const scaleFactor = 1 + (ratio - 1) * correctionStrength;
 
-        console.log(
+        debugLog(
           `Scaling attempt ${attempts + 1}: ${
             actualDistanceKm.toFixed(1)
           }km → target ${(effectiveTargetDistanceKm ??
@@ -1089,7 +1074,7 @@ Deno.serve(async (req) => {
         }
 
         if (!newRoute) {
-          console.log(
+          debugLog(
             `Scaling attempt ${attempts + 1}: No route found, stopping`,
           );
           break;
@@ -1101,11 +1086,22 @@ Deno.serve(async (req) => {
           mode,
           avoidHighways,
         });
-        if (!scaledQuality.passed) {
-          console.log(
-            `Scaling attempt ${
-              attempts + 1
-            }: Route rejected (${scaledQuality.reason})`,
+        const scaledCleanup = currentRouteType === "ROUND_TRIP"
+          ? evaluateRouteCleanupGate(newRoute, currentRouteType, {
+            targetDistanceKm: effectiveTargetDistanceKm ?? targetDistance,
+            distanceConfig,
+            mode,
+            avoidHighways,
+            startLocation,
+          })
+          : null;
+        if (!scaledQuality.passed || scaledCleanup?.passed === false) {
+          debugLog(
+            `Scaling attempt ${attempts + 1}: Route rejected (${
+              scaledCleanup?.passed === false
+                ? scaledCleanup.reason
+                : scaledQuality.reason
+            })`,
           );
           break;
         }
@@ -1113,12 +1109,11 @@ Deno.serve(async (req) => {
         actualDistanceKm = (newRoute.distance as number) / 1000;
         const bestDeltaKm = Math.abs(bestScaledDistanceKm - scalingTargetKm);
         const candidateDeltaKm = Math.abs(actualDistanceKm - scalingTargetKm);
-        const bestInPreferredBand = isWithinPreferredScalingBand(
-          bestScaledDistanceKm,
-        );
-        const candidateInPreferredBand = isWithinPreferredScalingBand(
-          actualDistanceKm,
-        );
+        const bestInPreferredBand = bestScaledDistanceKm >= distanceBandMinKm &&
+          bestScaledDistanceKm <= distanceBandMaxKm;
+        const candidateInPreferredBand =
+          actualDistanceKm >= distanceBandMinKm &&
+          actualDistanceKm <= distanceBandMaxKm;
         if (
           (candidateInPreferredBand && !bestInPreferredBand) ||
           candidateDeltaKm + 0.25 < bestDeltaKm
@@ -1135,54 +1130,27 @@ Deno.serve(async (req) => {
       route = bestScaledRoute;
       finalWaypoints = bestScaledWaypoints;
       actualDistanceKm = bestScaledDistanceKm;
-      console.log(
+      debugLog(
         `Distance scaling done after ${attempts} attempts: ${
           actualDistanceKm.toFixed(1)
         } km (target: ${(effectiveTargetDistanceKm ??
-          targetDistance)} km, band: ${distanceConfig.minKm}-${distanceConfig.maxKm} km)`,
+          targetDistance)} km, band: ${distanceBandMinKm.toFixed(1)}-${
+          distanceBandMaxKm.toFixed(1)
+        } km)`,
       );
-      const finalAcceptableMinKm = avoidHighways
-        ? Math.min(
-          distanceConfig.acceptableMinKm,
-          Math.round((effectiveTargetDistanceKm ?? targetDistance!) * 0.64),
-        )
-        : Math.max(0, distanceConfig.acceptableMinKm - 1);
-      const finalAcceptableMaxKm = avoidHighways
-        ? Math.max(
-          distanceConfig.acceptableMaxKm,
-          Math.round((effectiveTargetDistanceKm ?? targetDistance!) * 1.38),
-        )
-        : distanceConfig.acceptableMaxKm + 2;
-      const successFirstHardMinKm = Math.max(
-        0,
-        Math.round(
-          (effectiveTargetDistanceKm ?? targetDistance!) *
-            (avoidHighways ? 0.60 : 0.64),
-        ),
-      );
-      const successFirstHardMaxKm = Math.round(
-        (effectiveTargetDistanceKm ?? targetDistance!) *
-          (avoidHighways ? 1.44 : 1.40),
-      );
-      const withinPreferredBand = actualDistanceKm >= finalAcceptableMinKm &&
-        actualDistanceKm <= finalAcceptableMaxKm;
-      const withinSuccessFirstHardBand =
-        actualDistanceKm >= successFirstHardMinKm &&
-        actualDistanceKm <= successFirstHardMaxKm;
-      if (!withinPreferredBand && !withinSuccessFirstHardBand) {
+      const withinPreferredBand = actualDistanceKm >= distanceBandMinKm &&
+        actualDistanceKm <= distanceBandMaxKm;
+      if (!withinPreferredBand) {
+        requestDebugMeta = buildNoRouteSearchMeta(
+          roundTripSearch,
+          `distance=${actualDistanceKm.toFixed(1)}km`,
+        );
         throw new Error(
           `No route found with current constraints after exhausting round-trip search. Final distance ${
             actualDistanceKm.toFixed(1)
-          }km is outside acceptable band ${finalAcceptableMinKm}-${finalAcceptableMaxKm}km.`,
-        );
-      }
-      if (!withinPreferredBand && withinSuccessFirstHardBand) {
-        console.log(
-          `[RT] Success-first keep: final distance ${
-            actualDistanceKm.toFixed(1)
-          }km outside preferred band ` +
-            `${finalAcceptableMinKm}-${finalAcceptableMaxKm}km but inside hard band ` +
-            `${successFirstHardMinKm}-${successFirstHardMaxKm}km`,
+          }km is outside acceptable band ${distanceBandMinKm.toFixed(1)}-${
+            distanceBandMaxKm.toFixed(1)
+          }km.`,
         );
       }
     }
@@ -1198,10 +1166,33 @@ Deno.serve(async (req) => {
       mode: currentRouteType === "ROUND_TRIP" ? mode : undefined,
       avoidHighways: currentRouteType === "ROUND_TRIP" ? avoidHighways : false,
     });
+    const finalCleanup = currentRouteType === "ROUND_TRIP"
+      ? evaluateRouteCleanupGate(route, currentRouteType, {
+        targetDistanceKm: effectiveTargetDistanceKm ?? targetDistance,
+        distanceConfig: distanceConfig ?? undefined,
+        mode,
+        avoidHighways,
+        startLocation,
+      })
+      : null;
     if (!finalQuality.passed) {
-      console.error(`Route quality too low: ${finalQuality.reason}`);
+      requestDebugMeta = buildNoRouteSearchMeta(
+        roundTripSearch,
+        finalQuality.reason,
+      );
+      debugError(`Route quality too low: ${finalQuality.reason}`);
       throw new Error(
         `Route-Qualität zu niedrig (${finalQuality.reason}). Bitte erneut versuchen.`,
+      );
+    }
+    if (finalCleanup?.passed === false) {
+      requestDebugMeta = buildNoRouteSearchMeta(
+        roundTripSearch,
+        finalCleanup.reason,
+      );
+      debugError(`Route cleanup too low: ${finalCleanup.reason}`);
+      throw new Error(
+        `Route-Qualität zu niedrig (${finalCleanup.reason}). Bitte erneut versuchen.`,
       );
     }
 
@@ -1212,11 +1203,39 @@ Deno.serve(async (req) => {
     // Die App speichert via SavedRoutesService.saveRoute() MIT user_id.
     // (Edge Function hat keinen Auth-Context → konnte vorher kein user_id setzen)
 
-    const routeForFrontend = {
-      ...route,
-      distance: route.distance, // Mapbox-Originalwert in METERN beibehalten
-      legs: route.legs ?? [],
-    };
+    // If the cleanup gate trimmed hooks/loops from the route, rebuild
+    // the GeoJSON geometry with the cleaned coordinates so the client
+    // sees the same cleaned polyline we evaluated. Without this the
+    // client's own U-turn detector fires on raw Mapbox switchbacks
+    // (alpine serpentines) and rejects the route even though the edge
+    // already accepted it.
+    const cleanedCoords = finalCleanup?.cleanedCoordinates;
+    const applyCleanupToRoute = currentRouteType === "ROUND_TRIP" &&
+      Array.isArray(cleanedCoords) && cleanedCoords.length >= 2 &&
+      (finalCleanup?.removedPointPercent ?? 0) > 0.01;
+    const cleanedGeometryCoords = applyCleanupToRoute
+      ? cleanedCoords!.map((c) => [c.longitude, c.latitude])
+      : null;
+    const routeForFrontend = applyCleanupToRoute
+      ? {
+        ...route,
+        distance: (finalCleanup?.cleanedDistanceKm ?? finalDistanceKm) * 1000,
+        geometry: cleanedGeometryCoords
+          ? {
+            type: "LineString",
+            coordinates: cleanedGeometryCoords,
+          }
+          : route.geometry,
+        legs: route.legs ?? [],
+      }
+      : {
+        ...route,
+        distance: route.distance, // Mapbox-Originalwert in METERN beibehalten
+        legs: route.legs ?? [],
+      };
+    const responseDistanceKm = applyCleanupToRoute
+      ? (finalCleanup?.cleanedDistanceKm ?? finalDistanceKm)
+      : finalDistanceKm;
 
     // Construct response
     return new Response(
@@ -1224,46 +1243,27 @@ Deno.serve(async (req) => {
         route: routeForFrontend,
         waypoints: finalWaypoints,
         meta: {
-          distance_km: finalDistanceKm,
+          distance_km: responseDistanceKm,
           duration_min: route.duration / 60,
           profile: mapboxProfile.replace("mapbox/", ""),
-          mode: mode,
+          mode: mode ?? null,
           style_profile: body.style_profile ?? null,
           route_type: currentRouteType,
-          detour_level: detourLevel,
           avoid_highways_requested: avoidHighways,
           effective_excludes: excludeParams,
-          request_id: debugBody.request_id ?? null,
-          client_scenario_key: debugBody.client_scenario_key ?? null,
-          client_force_fresh_variant:
-            debugBody.client_force_fresh_variant === true,
-          client_trigger: debugBody.client_trigger ?? null,
-          variant_hint: variantHint ?? null,
-          fingerprint_hint: fingerprintHint ?? null,
-          max_candidate_attempts: maxCandidateAttemptsHint ?? null,
-          waypoint_count: finalWaypoints.length,
           quality_tier: finalQuality.tier,
           quality_reason: finalQuality.reason,
-          quality_overlap_percent: finalQuality.overlapPercent,
-          quality_coordinate_count: finalQuality.coordinateCount,
-          requested_target_distance_km: currentRouteType === "ROUND_TRIP"
-            ? targetDistance ?? null
-            : null,
-          effective_target_distance_km: currentRouteType === "ROUND_TRIP"
-            ? effectiveTargetDistanceKm ?? targetDistance ?? null
-            : null,
-          ...(roundTripSearch?.route != null
-            ? {
-              search_summary: {
-                candidate_attempts: roundTripSearch.candidateAttempts,
-                accepted_candidates: roundTripSearch.acceptedCandidates,
-                rejected_candidates: roundTripSearch.rejectedCandidates,
-                reject_reasons: roundTripSearch.rejectReasons,
-                search_phases: roundTripSearch.searchPhases,
-                variant_hint: roundTripSearch.variantHint ?? null,
-                fingerprint_hint: roundTripSearch.fingerprintHint ?? null,
-              },
-            }
+          selected_style: mode ?? null,
+          style_fit_score: finalQuality.styleFitScore ?? null,
+          style_fit_reasons: finalQuality.styleFitReasons ?? [],
+          style_metrics: finalQuality.styleMetrics ?? null,
+          curve_density_per_km: finalQuality.styleMetrics?.curveDensityPerKm ??
+            null,
+          smoothness_score: finalQuality.styleMetrics?.smoothnessScore ?? null,
+          zigzag_score: finalQuality.styleMetrics?.zigzagScore ?? null,
+          sharp_turn_count: finalQuality.styleMetrics?.sharpTurnCount ?? null,
+          ...(roundTripSearch != null
+            ? buildNoRouteSearchMeta(roundTripSearch)
             : {}),
         },
       }),
@@ -1275,7 +1275,7 @@ Deno.serve(async (req) => {
     const message = error?.message ??
       "Unbekannter Fehler in generate-cruise-route";
     const classification = classifyRoutingError(message);
-    console.error(
+    debugError(
       "Error in generate-cruise-route:",
       message,
       error?.stack ?? "",

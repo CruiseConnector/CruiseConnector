@@ -18,7 +18,11 @@ void main() {
       'supabase/migrations/20260425_route_pool_regions_south_rheintal.sql',
     );
     final southSeedSql = File(
-      'supabase/migrations/20260425_route_pool_vorarlberg_south_rheintal_seed.sql',
+      File(
+            'supabase/migrations/20260426_route_pool_vorarlberg_south_rheintal_seed.sql',
+          ).existsSync()
+          ? 'supabase/migrations/20260426_route_pool_vorarlberg_south_rheintal_seed.sql'
+          : 'supabase/migrations/20260425_route_pool_vorarlberg_south_rheintal_seed.sql',
     );
 
     test('route_regions seed contains the MVP Vorarlberg clusters', () {

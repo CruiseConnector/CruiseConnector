@@ -312,7 +312,7 @@ export function getRouteDistanceKm(route: any): number {
 
 export function getPointToPointMinimumDistanceKm(
   directDistanceKm: number,
-  targetDistance: number | undefined,
+  _targetDistance: number | undefined,
   detourLevel: number,
   relaxed = false,
 ): number {

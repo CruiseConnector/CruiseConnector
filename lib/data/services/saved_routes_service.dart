@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'package:cruise_connect/data/services/route_quality_validator.dart';
 import 'package:cruise_connect/domain/models/route_result.dart';
 import 'package:cruise_connect/domain/models/saved_route.dart';
 
@@ -228,6 +229,18 @@ class SavedRoutesService {
       'duration_seconds': result.durationSeconds?.round(),
       'geometry': result.geometry,
       'driven_km': effectiveDrivenKm,
+      'route_source':
+          result.edgeMeta['route_source']?.toString() ??
+          result.edgeMeta['source']?.toString(),
+      'route_fingerprint':
+          result.edgeMeta['route_fingerprint']?.toString() ??
+          RouteQualityValidator.buildRouteFingerprint(
+            _sampleCoordinatesForFingerprint(result.coordinates),
+            distanceKm: result.distanceKm,
+            precision: 4,
+          ),
+      'quality_tier': result.edgeMeta['quality_tier']?.toString(),
+      'route_meta': result.edgeMeta,
     };
     if (rating != null && rating > 0) row['rating'] = rating;
 
@@ -241,10 +254,36 @@ class SavedRoutesService {
         row.remove('name');
         await _db.from('routes').insert(row);
         invalidateWeeklyTopRouteCache();
+      } else if (e.code == 'PGRST204') {
+        debugPrint(
+          '[SavedRoutes] Route-Meta-Spalten fehlen, speichere ohne Meta: ${e.message}',
+        );
+        row
+          ..remove('route_source')
+          ..remove('route_fingerprint')
+          ..remove('quality_tier')
+          ..remove('route_meta');
+        await _db.from('routes').insert(row);
+        invalidateWeeklyTopRouteCache();
       } else {
         rethrow;
       }
     }
+  }
+
+  static List<List<double>> _sampleCoordinatesForFingerprint(
+    List<List<double>> coordinates,
+  ) {
+    if (coordinates.length <= 32) {
+      return coordinates.map((point) => [point[0], point[1]]).toList();
+    }
+    final step = (coordinates.length / 32).ceil();
+    final sampled = <List<double>>[];
+    for (var i = 0; i < coordinates.length; i += step) {
+      sampled.add([coordinates[i][0], coordinates[i][1]]);
+    }
+    sampled.add([coordinates.last[0], coordinates.last[1]]);
+    return sampled;
   }
 
   /// Speichert eine bestehende Route (z.B. empfohlene Route) für den aktuellen User.

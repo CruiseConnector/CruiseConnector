@@ -29,11 +29,17 @@ class RouteScenario {
   bool get isRoundTrip => routeType == 'ROUND_TRIP';
   bool get isPointToPoint => routeType == 'POINT_TO_POINT';
 
+  String get noveltyKey {
+    if (!isRoundTrip) return scenarioKey;
+    final startLat = startLatitude.toStringAsFixed(3);
+    final startLng = startLongitude.toStringAsFixed(3);
+    return [routeType, startLat, startLng, 'novelty'].join('|');
+  }
+
   String get scenarioKey {
     final startLat = startLatitude.toStringAsFixed(3);
     final startLng = startLongitude.toStringAsFixed(3);
-    final destKey =
-        destinationLatitude != null && destinationLongitude != null
+    final destKey = destinationLatitude != null && destinationLongitude != null
         ? '${destinationLatitude!.toStringAsFixed(3)},${destinationLongitude!.toStringAsFixed(3)}'
         : 'none';
     final distanceKey = targetDistanceKm != null

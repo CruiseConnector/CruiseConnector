@@ -425,6 +425,14 @@ List<_Scenario> _buildScenarios() {
     avoidHighways: true,
   );
   addRoundTripScenario(
+    name: 'RT Feldkirch 50 Kurvenjagd ohne Autobahn',
+    start: feldkirch,
+    targetDistanceKm: 50,
+    mode: 'Kurvenjagd',
+    runs: 3,
+    avoidHighways: true,
+  );
+  addRoundTripScenario(
     name: 'RT Feldkirch 75 Sport ohne Autobahn',
     start: feldkirch,
     targetDistanceKm: 75,
@@ -1026,6 +1034,11 @@ void main() {
         bool? motorwayExcludeActive;
         String? edgeRoutingBuildId;
         bool? styleEffective;
+        double? styleFitScore;
+        double? curveDensityPerKm;
+        double? smoothnessScore;
+        double? zigzagScore;
+        double? sharpTurnCount;
         String routeSource = 'error';
         bool poolFallbackUsed = false;
         String? poolMatchId;
@@ -1087,6 +1100,15 @@ void main() {
                 result.edgeMeta['quality_tier']?.toString() ??
                 classification.tier.name;
             qualityReason = result.edgeMeta['quality_reason']?.toString();
+            styleFitScore = (result.edgeMeta['style_fit_score'] as num?)
+                ?.toDouble();
+            curveDensityPerKm =
+                (result.edgeMeta['curve_density_per_km'] as num?)?.toDouble();
+            smoothnessScore = (result.edgeMeta['smoothness_score'] as num?)
+                ?.toDouble();
+            zigzagScore = (result.edgeMeta['zigzag_score'] as num?)?.toDouble();
+            sharpTurnCount = (result.edgeMeta['sharp_turn_count'] as num?)
+                ?.toDouble();
             final searchSummary = result.edgeMeta['search_summary'];
             if (searchSummary is Map<String, dynamic>) {
               candidateAttempts =
@@ -1192,6 +1214,15 @@ void main() {
                 result.edgeMeta['quality_tier']?.toString() ??
                 classification.tier.name;
             qualityReason = result.edgeMeta['quality_reason']?.toString();
+            styleFitScore = (result.edgeMeta['style_fit_score'] as num?)
+                ?.toDouble();
+            curveDensityPerKm =
+                (result.edgeMeta['curve_density_per_km'] as num?)?.toDouble();
+            smoothnessScore = (result.edgeMeta['smoothness_score'] as num?)
+                ?.toDouble();
+            zigzagScore = (result.edgeMeta['zigzag_score'] as num?)?.toDouble();
+            sharpTurnCount = (result.edgeMeta['sharp_turn_count'] as num?)
+                ?.toDouble();
             final searchSummary = result.edgeMeta['search_summary'];
             if (searchSummary is Map<String, dynamic>) {
               candidateAttempts =
@@ -1328,6 +1359,11 @@ void main() {
           'motorwayExcludeActive': motorwayExcludeActive,
           'edgeRoutingBuildId': edgeRoutingBuildId,
           'styleEffective': styleEffective,
+          'styleFitScore': styleFitScore,
+          'curveDensityPerKm': curveDensityPerKm,
+          'smoothnessScore': smoothnessScore,
+          'zigzagScore': zigzagScore,
+          'sharpTurnCount': sharpTurnCount,
           'geometryDifferent': geometryDifferent,
           'preparedBufferHit': RouteService.lastRoutePreparedBufferHit,
           'preparedBufferUsed': RouteService.lastRoutePreparedBufferUsed,

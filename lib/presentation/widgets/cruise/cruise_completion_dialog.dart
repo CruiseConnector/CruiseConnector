@@ -22,17 +22,12 @@ Future<T?> showCruiseCompletionSheet<T>({
             Positioned.fill(
               child: BackdropFilter(
                 filter: ui.ImageFilter.blur(sigmaX: 20, sigmaY: 20),
-                child: Container(
-                  color: Colors.black.withValues(alpha: 0.08),
-                ),
+                child: Container(color: Colors.black.withValues(alpha: 0.08)),
               ),
             ),
             SafeArea(
               top: false,
-              child: Align(
-                alignment: Alignment.bottomCenter,
-                child: child,
-              ),
+              child: Align(alignment: Alignment.bottomCenter, child: child),
             ),
           ],
         ),
@@ -93,7 +88,11 @@ class CruiseCompletionDialog extends StatefulWidget {
   final int curves;
   final int xpEarned;
   final List<List<double>> routeCoordinates;
-  final Future<CruiseCompletionActionResult> Function() onSave;
+  final Future<CruiseCompletionActionResult> Function(
+    int? rating,
+    List<String> tags,
+  )
+  onSave;
   final Future<void> Function() onDiscard;
   final bool isEarlyStop;
   final bool belowMinimum;
@@ -111,6 +110,8 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
   bool _isExportMode = false;
   bool _isSaving = false;
   bool _isSharing = false;
+  int _selectedRating = 0;
+  final Set<String> _selectedTags = <String>{};
   CruiseCompletionActionResult? _celebration;
 
   @override
@@ -120,10 +121,9 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
       vsync: this,
       duration: const Duration(milliseconds: 600),
     );
-    _xpAnimation = IntTween(
-      begin: 0,
-      end: widget.xpEarned,
-    ).animate(CurvedAnimation(parent: _xpController, curve: Curves.easeOutCubic));
+    _xpAnimation = IntTween(begin: 0, end: widget.xpEarned).animate(
+      CurvedAnimation(parent: _xpController, curve: Curves.easeOutCubic),
+    );
     _xpController.forward();
 
     _celebrationController = AnimationController(
@@ -142,7 +142,10 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
   Future<void> _handleSave() async {
     if (_isSaving || _isSharing) return;
     setState(() => _isSaving = true);
-    final result = await widget.onSave();
+    final result = await widget.onSave(
+      _selectedRating > 0 ? _selectedRating : null,
+      _selectedTags.toList(growable: false),
+    );
     if (!mounted) return;
     setState(() => _isSaving = false);
     if (!result.success) return;
@@ -197,10 +200,9 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
         setState(() => _isExportMode = false);
       }
 
-      await Share.shareXFiles(
-        [shareFile],
-        text: 'Meine Fahrt mit CruiseConnect',
-      );
+      await Share.shareXFiles([
+        shareFile,
+      ], text: 'Meine Fahrt mit CruiseConnect');
     } catch (e) {
       if (mounted) {
         setState(() => _isExportMode = false);
@@ -260,6 +262,10 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
                     exportMode: _isExportMode,
                   ),
                   const SizedBox(height: 18),
+                  if (!_isExportMode) ...[
+                    _buildRatingPanel(),
+                    const SizedBox(height: 18),
+                  ],
                   const _CruiseRedDivider(),
                   if (!_isExportMode) ...[
                     const SizedBox(height: 16),
@@ -267,7 +273,7 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
                     if (widget.belowMinimum) ...[
                       const SizedBox(height: 12),
                       const Text(
-                        'Unter 10% Fahranteil: gespeichert ohne XP-Gutschrift.',
+                        'Unter 10% Fahranteil: Route kann gespeichert werden, XP wird fairerweise nicht gutgeschrieben.',
                         style: TextStyle(
                           color: Color(0xFFA8AFBC),
                           fontSize: 11,
@@ -336,7 +342,7 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
             const SizedBox(width: 12),
             Expanded(
               child: _StatTile(
-                label: widget.belowMinimum ? 'XP gesperrt' : 'XP earned',
+                label: widget.belowMinimum ? 'XP nicht aktiv' : 'XP',
                 exportMode: _isExportMode,
                 animatedValue: _xpAnimation,
               ),
@@ -392,8 +398,9 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
         animation: _celebrationController,
         builder: (context, child) {
           final t = Curves.easeOutBack.transform(_celebrationController.value);
-          final fade = (1 - (_celebrationController.value - 0.7).clamp(0.0, 0.3) / 0.3)
-              .clamp(0.0, 1.0);
+          final fade =
+              (1 - (_celebrationController.value - 0.7).clamp(0.0, 0.3) / 0.3)
+                  .clamp(0.0, 1.0);
           const bursts = <Offset>[
             Offset(-84, -26),
             Offset(-54, -74),
@@ -457,10 +464,7 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
                           ),
                           if (emojis.isNotEmpty) ...[
                             const SizedBox(height: 8),
-                            Text(
-                              emojis,
-                              style: const TextStyle(fontSize: 26),
-                            ),
+                            Text(emojis, style: const TextStyle(fontSize: 26)),
                           ],
                         ],
                       ),
@@ -471,6 +475,78 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
             ),
           );
         },
+      ),
+    );
+  }
+
+  Widget _buildRatingPanel() {
+    const tags = <String>[
+      'schön',
+      'langweilig',
+      'zu weit weg',
+      'Sackgasse',
+      'gute Kurven',
+      'falscher Start',
+    ];
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Route bewerten',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 13,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: List.generate(5, (index) {
+              final value = index + 1;
+              final selected = value <= _selectedRating;
+              return GestureDetector(
+                onTap: () => setState(() => _selectedRating = value),
+                child: Padding(
+                  padding: const EdgeInsets.only(right: 4),
+                  child: Icon(
+                    selected ? Icons.star_rounded : Icons.star_border_rounded,
+                    color: selected
+                        ? const Color(0xFFFFD76A)
+                        : Colors.white.withValues(alpha: 0.38),
+                    size: 28,
+                  ),
+                ),
+              );
+            }),
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (final tag in tags)
+                _RatingTagChip(
+                  label: tag,
+                  selected: _selectedTags.contains(tag),
+                  onTap: () {
+                    setState(() {
+                      if (!_selectedTags.add(tag)) {
+                        _selectedTags.remove(tag);
+                      }
+                    });
+                  },
+                ),
+            ],
+          ),
+        ],
       ),
     );
   }
@@ -510,7 +586,9 @@ class _StatTile extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
       decoration: BoxDecoration(
-        color: exportMode ? Colors.transparent : Colors.black.withValues(alpha: 0.16),
+        color: exportMode
+            ? Colors.transparent
+            : Colors.black.withValues(alpha: 0.16),
         borderRadius: BorderRadius.circular(18),
         border: exportMode
             ? null
@@ -612,6 +690,48 @@ class _ActionButton extends StatelessWidget {
   }
 }
 
+class _RatingTagChip extends StatelessWidget {
+  const _RatingTagChip({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+        decoration: BoxDecoration(
+          color: selected
+              ? const Color(0xFFFF3B30).withValues(alpha: 0.24)
+              : Colors.white.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(
+            color: selected
+                ? const Color(0xFFFF3B30)
+                : Colors.white.withValues(alpha: 0.12),
+          ),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: selected ? Colors.white : const Color(0xFFA8AFBC),
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _RoutePreviewCard extends StatelessWidget {
   const _RoutePreviewCard({
     required this.coordinates,
@@ -638,9 +758,7 @@ class _RoutePreviewCard extends StatelessWidget {
           children: [
             Positioned.fill(
               child: CustomPaint(
-                painter: _RoutePreviewPainter(
-                  coordinates: coordinates,
-                ),
+                painter: _RoutePreviewPainter(coordinates: coordinates),
               ),
             ),
             Positioned(
@@ -653,7 +771,7 @@ class _RoutePreviewCard extends StatelessWidget {
                   borderRadius: BorderRadius.circular(999),
                 ),
                 child: const Text(
-                  'Read only',
+                  'CruiseConnect Route',
                   style: TextStyle(
                     color: Colors.white,
                     fontSize: 10,
@@ -707,7 +825,8 @@ class _RoutePreviewPainter extends CustomPainter {
 
     for (var i = 0; i < coordinates.length; i++) {
       final point = coordinates[i];
-      final dx = padding + ((point[0] - minLng) / width) * (size.width - padding * 2);
+      final dx =
+          padding + ((point[0] - minLng) / width) * (size.width - padding * 2);
       final dy =
           size.height -
           padding -
@@ -738,20 +857,14 @@ class _RoutePreviewPainter extends CustomPainter {
     final metrics = routePath.computeMetrics().toList();
     if (metrics.isNotEmpty) {
       final start = metrics.first.getTangentForOffset(0)?.position;
-      final end = metrics.last.getTangentForOffset(metrics.last.length)?.position;
+      final end = metrics.last
+          .getTangentForOffset(metrics.last.length)
+          ?.position;
       if (start != null) {
-        canvas.drawCircle(
-          start,
-          5,
-          Paint()..color = const Color(0xFFFFFFFF),
-        );
+        canvas.drawCircle(start, 5, Paint()..color = const Color(0xFFFFFFFF));
       }
       if (end != null) {
-        canvas.drawCircle(
-          end,
-          5,
-          Paint()..color = const Color(0xFFFF3B30),
-        );
+        canvas.drawCircle(end, 5, Paint()..color = const Color(0xFFFF3B30));
       }
     }
   }

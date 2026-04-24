@@ -74,6 +74,7 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
 
   void _setAvoidHighways(bool value) {
     setState(() => _avoidHighways = value);
+    debugPrint('[RouteDebug][SetupCard] avoidHighways=$value');
     widget.onAvoidHighwaysChanged?.call(value);
   }
 
@@ -142,7 +143,7 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
           if (isRoundTrip) ...[
             _SelectionRow(
               title: 'Länge',
-              options: const ['50 Km', '75 Km', '100 Km', '150 Km'],
+              options: const ['50 Km', '75 Km', '100 Km'],
               selectedValue: widget.selectedLength,
               onSelect: widget.onLengthChanged,
             ),
@@ -336,9 +337,8 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
               // Erst ab 2 Zeichen abfragen, sonst wenig sinnvolle Treffer.
               if (pattern.trim().length < 2) return const [];
               try {
-                return await CruiseSetupCard._geocodingService.searchSuggestions(
-                  pattern,
-                );
+                return await CruiseSetupCard._geocodingService
+                    .searchSuggestions(pattern);
               } catch (e, stack) {
                 debugPrint('[CruiseSetup] Vorschlags-Suche fehlgeschlagen: $e');
                 debugPrintStack(stackTrace: stack);

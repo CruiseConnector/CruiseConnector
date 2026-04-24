@@ -23,6 +23,8 @@ import 'package:cruise_connect/data/services/offline_map_service.dart';
 import 'package:cruise_connect/data/services/route_access_plan.dart';
 import 'package:cruise_connect/data/services/route_service.dart';
 import 'package:cruise_connect/data/services/route_cache_service.dart';
+import 'package:cruise_connect/data/services/route_pool_service.dart';
+import 'package:cruise_connect/data/services/route_rating_service.dart';
 import 'package:cruise_connect/data/services/smart_reroute_engine.dart';
 import 'package:cruise_connect/data/services/saved_routes_service.dart';
 import 'package:cruise_connect/domain/models/mapbox_suggestion.dart';
@@ -179,6 +181,10 @@ class _CruiseModePageState extends State<CruiseModePage>
   int _activeDetourVariant = 0;
   bool _activePointToPointScenic = false;
   bool _activeAvoidHighways = false;
+  bool? _lastGeneratedWasRoundTrip;
+  int? _lastGeneratedSelectedKm;
+  String? _lastGeneratedSelectedStyle;
+  bool? _lastGeneratedAvoidHighways;
   List<double> _recentDestinationDistances = [];
   List<SpeedLimitSegment> _activeSpeedLimits = const [];
 
@@ -188,6 +194,8 @@ class _CruiseModePageState extends State<CruiseModePage>
   bool _mapReady = false;
   // Route als LatLng-Liste für PolylineLayer
   List<LatLng> _routeLatLngs = [];
+  Timer? _routeDrawAnimationTimer;
+  int _routeDrawAnimationToken = 0;
   // Aktuelle User-Position als Marker
   LatLng? _userPosition;
   double _userHeading = 0.0; // GPS-Heading in Grad (0=Nord, 90=Ost)
@@ -351,6 +359,8 @@ class _CruiseModePageState extends State<CruiseModePage>
   @override
   void dispose() {
     _disposed = true;
+    _routeDrawAnimationToken++;
+    _routeDrawAnimationTimer?.cancel();
     _cameraAnimController?.removeListener(_onCameraAnimationTick);
     _cameraAnimController?.dispose();
     CruiseModePage.isFullscreen.value = false;
@@ -722,17 +732,25 @@ class _CruiseModePageState extends State<CruiseModePage>
                         onRoundTripChanged: _handleRouteModeChanged,
                         onPlanningTypeChanged: (v) =>
                             setState(() => _planningType = 'Zufall'),
-                        onLengthChanged: (v) =>
-                            setState(() => _selectedLength = v),
+                        onLengthChanged: (v) {
+                          debugPrint('[RouteDebug][UIState] selectedKm=$v');
+                          setState(() => _selectedLength = v);
+                        },
                         onLocationChanged: (v) =>
                             setState(() => _selectedLocation = v),
-                        onStyleChanged: (v) =>
-                            setState(() => _selectedStyle = v),
+                        onStyleChanged: (v) {
+                          debugPrint('[RouteDebug][UIState] selectedStyle=$v');
+                          setState(() => _selectedStyle = v);
+                        },
                         selectedDetour: _selectedDetour,
                         onDetourChanged: _handleDetourChanged,
                         selectedAvoidHighways: _avoidHighways,
-                        onAvoidHighwaysChanged: (value) =>
-                            setState(() => _avoidHighways = value),
+                        onAvoidHighwaysChanged: (value) {
+                          debugPrint(
+                            '[RouteDebug][UIState] avoidHighways=$value',
+                          );
+                          setState(() => _avoidHighways = value);
+                        },
                         onDestinationSelected: _onDestinationSelected,
                         onDestinationInputChanged:
                             _handleDestinationInputChanged,
@@ -1463,6 +1481,34 @@ class _CruiseModePageState extends State<CruiseModePage>
       final digits = _selectedLength.replaceAll(RegExp(r'[^0-9]'), '');
       final distance = digits.isNotEmpty ? int.parse(digits) : 50;
       final forceFreshVariant = previousUiState.lastRouteResult != null;
+      final settingsChanged =
+          previousUiState.lastRouteResult != null &&
+          (_lastGeneratedWasRoundTrip != _isRoundTrip ||
+              (_isRoundTrip &&
+                  (_lastGeneratedSelectedKm != distance ||
+                      _lastGeneratedSelectedStyle != _selectedStyle ||
+                      _lastGeneratedAvoidHighways != _avoidHighways)) ||
+              (!_isRoundTrip &&
+                  (_lastGeneratedSelectedStyle != _selectedStyle ||
+                      _lastGeneratedAvoidHighways != _avoidHighways)));
+      final routeDebugTrigger = previousUiState.lastRouteResult == null
+          ? 'firstSearch'
+          : settingsChanged
+          ? 'settingsChanged'
+          : 'searchAgain';
+      debugPrint(
+        '[RouteDebug][UI] selectedKm=$distance selectedStyle=$_selectedStyle '
+        'avoidHighways=$_avoidHighways forceFreshVariant=$forceFreshVariant '
+        'trigger=$routeDebugTrigger '
+        'routeType=${_isRoundTrip ? 'ROUND_TRIP' : 'POINT_TO_POINT'} '
+        'planningType=$_planningType selectedLength=$_selectedLength '
+        'selectedLocation=$_selectedLocation '
+        'useCurrentLocation=${_selectedLocation == 'Aktueller Standort'} '
+        'startLat=${startPosition.latitude.toStringAsFixed(5)} '
+        'startLng=${startPosition.longitude.toStringAsFixed(5)} '
+        'clientRoutingBuildId=${RouteService.clientRoutingBuildId} '
+        'clientRoutingBuildTime=${RouteService.clientRoutingBuildTime}',
+      );
       double? destLat;
       double? destLng;
       var detourVariant = 0;
@@ -1528,6 +1574,9 @@ class _CruiseModePageState extends State<CruiseModePage>
           _avoidHighways,
           forceFreshVariant,
         );
+        final subscriptionTier = RouteService.resolveEffectiveSubscriptionTier(
+          isTesterOrBeta: true,
+        );
         result = await _routeService.generatePointToPoint(
           startPosition: startPosition,
           destinationLat: destLat,
@@ -1538,6 +1587,7 @@ class _CruiseModePageState extends State<CruiseModePage>
           avoidHighways: _avoidHighways,
           diversitySeed: p2pDiversitySeed,
           forceFreshVariant: forceFreshVariant,
+          subscriptionTier: subscriptionTier,
         );
       } else {
         _activeDestinationCoordinate = null;
@@ -1546,6 +1596,9 @@ class _CruiseModePageState extends State<CruiseModePage>
         _activePointToPointMode = 'Standard';
         _activeAvoidHighways = _avoidHighways;
         _recentDestinationDistances = [];
+        final subscriptionTier = RouteService.resolveEffectiveSubscriptionTier(
+          isTesterOrBeta: true,
+        );
         result = await _routeService.generateRoundTrip(
           startPosition: startPosition,
           targetDistanceKm: distance,
@@ -1553,10 +1606,18 @@ class _CruiseModePageState extends State<CruiseModePage>
           planningType: _planningType,
           avoidHighways: _avoidHighways,
           forceFreshVariant: forceFreshVariant,
+          debugTrigger: routeDebugTrigger,
+          subscriptionTier: subscriptionTier,
         );
       }
 
       if (!mounted || _disposed) return;
+      result = await _prepareRouteForPreviewStart(
+        result: result,
+        startPosition: startPosition,
+        isRoundTrip: _isRoundTrip,
+        avoidHighways: _avoidHighways,
+      );
 
       const validator = RouteQualityValidator();
       final actualKm = result.distanceKm ?? 0.0;
@@ -1587,9 +1648,13 @@ class _CruiseModePageState extends State<CruiseModePage>
         '[CruiseMode] Applying route result: ${result.coordinates.length} coords',
       );
       _applyRouteResult(result);
+      _lastGeneratedWasRoundTrip = _isRoundTrip;
+      _lastGeneratedSelectedKm = _isRoundTrip ? distance : null;
+      _lastGeneratedSelectedStyle = _selectedStyle;
+      _lastGeneratedAvoidHighways = _avoidHighways;
 
       debugPrint('[CruiseMode] Drawing route...');
-      await _drawRoute(result.geometry);
+      await _drawRoute(result.geometry, animateRouteDraw: true);
 
       // Config einklappen + Info-Banner anzeigen damit man die Route sieht
       if (mounted) {
@@ -1618,6 +1683,19 @@ class _CruiseModePageState extends State<CruiseModePage>
   }
 
   void _applyRouteResult(RouteResult result) {
+    if (result.edgeMeta.isNotEmpty) {
+      debugPrint(
+        '[RouteDebug][ResultMeta] route_source=${result.edgeMeta['route_source'] ?? result.edgeMeta['source']} '
+        'quality_tier=${result.edgeMeta['quality_tier']} '
+        'generation_duration_ms=${result.edgeMeta['generation_duration_ms']} '
+        'mapbox_call_count=${result.edgeMeta['mapbox_call_count'] ?? result.edgeMeta['mapboxCallCount']} '
+        'pool_route_id=${result.edgeMeta['pool_route_id'] ?? result.edgeMeta['pool_match_id']} '
+        'pool_match_tier=${result.edgeMeta['pool_match_tier']} '
+        'access_leg_used=${result.edgeMeta['access_leg_used']} '
+        'route_rebased_to_user=${result.edgeMeta['route_rebased_to_user']} '
+        'route_start_distance_km=${result.edgeMeta['route_start_distance_km']}',
+      );
+    }
     _lastRouteResult = result;
     _sessionRouteResult = result;
     _activeSpeedLimits = result.speedLimits;
@@ -1652,6 +1730,91 @@ class _CruiseModePageState extends State<CruiseModePage>
     GamificationService.countCurvesAsync(result.coordinates).then((count) {
       if (mounted) setState(() => _cachedCurveCount = count);
     });
+  }
+
+  Future<RouteResult> _prepareRouteForPreviewStart({
+    required RouteResult result,
+    required geo.Position startPosition,
+    required bool isRoundTrip,
+    required bool avoidHighways,
+  }) async {
+    if (!isRoundTrip || result.coordinates.length < 2) return result;
+    if (result.edgeMeta['route_rebased_to_user'] == true &&
+        result.edgeMeta['access_leg_used'] != null) {
+      return result;
+    }
+
+    final first = result.coordinates.first;
+    final distanceToRouteStartMeters = geo.Geolocator.distanceBetween(
+      startPosition.latitude,
+      startPosition.longitude,
+      first[1],
+      first[0],
+    );
+    final globalMatch = findNearestInWindow(
+      position: startPosition,
+      coordinates: result.coordinates,
+      currentIndex: 0,
+      windowSize: result.coordinates.length,
+      maxJumpMeters: double.infinity,
+    );
+    const onStartCorridor = _offRouteThresholdMeters + 20;
+    final matchesRouteStartIndex =
+        globalMatch.index <= 24 ||
+        globalMatch.index >= math.max(0, result.coordinates.length - 25);
+    if (distanceToRouteStartMeters <= onStartCorridor &&
+        matchesRouteStartIndex &&
+        globalMatch.distanceMeters <= onStartCorridor) {
+      return _withMergedRouteMeta(result, {
+        'route_start_distance_km': double.parse(
+          (distanceToRouteStartMeters / 1000).toStringAsFixed(2),
+        ),
+        'route_passes_near_user': true,
+        'route_rebased_to_user': false,
+        'access_leg_used': false,
+      });
+    }
+
+    final nearestDistanceKm = globalMatch.distanceMeters / 1000.0;
+    final routeStartDistanceKm = distanceToRouteStartMeters / 1000.0;
+    if (routeStartDistanceKm > RoutePoolService.roundTripHardStartMaxKm &&
+        nearestDistanceKm > RoutePoolService.roundTripHardStartMaxKm) {
+      throw RouteServiceException(
+        type: RouteErrorType.noRoute,
+        userMessage:
+            'Diese Route startet zu weit entfernt. Bitte wähle eine lokale Route.',
+        debugMessage:
+            'Preview route rejected before display: routeStart=${routeStartDistanceKm.toStringAsFixed(1)}km nearest=${nearestDistanceKm.toStringAsFixed(1)}km.',
+      );
+    }
+
+    final accessPlan = await _routeService.buildAccessRouteToExistingRoute(
+      currentPosition: startPosition,
+      existingRoute: result,
+      mode: _selectedStyle,
+      avoidHighways: avoidHighways,
+      returnToSessionOrigin: true,
+      rebaseClosedLoop: true,
+    );
+    _logAccessLegMeta(accessPlan);
+    final prepared = _withMergedRouteMeta(accessPlan.activeRoute, {
+      'route_source':
+          result.edgeMeta['route_source'] ?? result.edgeMeta['source'],
+      'source': result.edgeMeta['source'] ?? result.edgeMeta['route_source'],
+      'preview_access_prepared': true,
+      'route_rebased_to_user': accessPlan.routeRebasedToUser,
+      'route_passes_near_user': accessPlan.routePassesNearUser,
+      'route_start_distance_km': double.parse(
+        (accessPlan.routeStartDistanceMeters / 1000).toStringAsFixed(2),
+      ),
+    });
+    debugPrint(
+      '[CruiseMode] Preview-Rebase fertig: '
+      'access_leg_used=${prepared.edgeMeta['access_leg_used']} '
+      'route_rebased_to_user=${prepared.edgeMeta['route_rebased_to_user']} '
+      'route_start_distance_km=${prepared.edgeMeta['route_start_distance_km']}',
+    );
+    return prepared;
   }
 
   void _onDestinationSelected(MapboxSuggestion suggestion) {
@@ -1887,6 +2050,10 @@ class _CruiseModePageState extends State<CruiseModePage>
     _activePointToPointScenic = false;
     _activePointToPointMode = 'Standard';
     _activeAvoidHighways = false;
+    _lastGeneratedWasRoundTrip = null;
+    _lastGeneratedSelectedKm = null;
+    _lastGeneratedSelectedStyle = null;
+    _lastGeneratedAvoidHighways = null;
     _recentDestinationDistances = [];
     _activeSpeedLimits = const [];
     _announcedManeuverIndices.clear();
@@ -2032,7 +2199,9 @@ class _CruiseModePageState extends State<CruiseModePage>
         mode: 'Standard',
         avoidHighways: _activeAvoidHighways,
         returnToSessionOrigin: _isRoundTrip,
+        rebaseClosedLoop: _isRoundTrip,
       );
+      _logAccessLegMeta(accessPlan);
     } catch (e) {
       // Access-Leg konnte nicht geroutet werden — KEIN Luftlinien-Fallback.
       // Lieber dem User klar sagen, dass er erst zum Routenstart muss, als
@@ -2180,6 +2349,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     required double? distanceMeters,
     required double? durationSeconds,
     required List<SpeedLimitSegment> speedLimits,
+    Map<String, dynamic> edgeMeta = const {},
   }) {
     final geometry = <String, dynamic>{
       'type': 'LineString',
@@ -2194,7 +2364,101 @@ class _CruiseModePageState extends State<CruiseModePage>
       durationSeconds: durationSeconds,
       distanceKm: distanceMeters != null ? distanceMeters / 1000 : null,
       speedLimits: speedLimits,
+      edgeMeta: edgeMeta,
     );
+  }
+
+  RouteResult _withMergedRouteMeta(
+    RouteResult result,
+    Map<String, dynamic> edgeMeta,
+  ) {
+    return RouteResult(
+      geoJson: result.geoJson,
+      geometry: result.geometry,
+      coordinates: result.coordinates,
+      maneuvers: result.maneuvers,
+      distanceMeters: result.distanceMeters,
+      durationSeconds: result.durationSeconds,
+      distanceKm: result.distanceKm,
+      speedLimits: result.speedLimits,
+      edgeMeta: {...result.edgeMeta, ...edgeMeta},
+    );
+  }
+
+  void _logAccessLegMeta(RouteAccessPlan plan) {
+    final meta = plan.activeRoute.edgeMeta;
+    debugPrint(
+      '[CruiseMode] Access-Leg meta: '
+      'access_leg_used=${meta['access_leg_used']} '
+      'access_leg_distance_km=${meta['access_leg_distance_km']} '
+      'join_point_type=${meta['join_point_type']} '
+      'route_start_distance_km=${meta['route_start_distance_km']} '
+      'route_passes_near_user=${meta['route_passes_near_user']} '
+      'route_rebased_to_user=${meta['route_rebased_to_user']}',
+    );
+  }
+
+  void _logRerouteMeta(Map<String, dynamic> meta) {
+    debugPrint(
+      '[CruiseMode] Reroute meta: '
+      'triggered=${meta['reroute_triggered']} '
+      'failed=${meta['reroute_failed']} '
+      'reason=${meta['reroute_reason']} '
+      'mode=${meta['reroute_mode']} '
+      'reroute_distance_km=${meta['reroute_distance_km']} '
+      'rejoin_point_distance_km=${meta['rejoin_point_distance_km']} '
+      'remaining_distance_before=${meta['remaining_distance_before']} '
+      'remaining_distance_after=${meta['remaining_distance_after']} '
+      'eta_before=${meta['eta_before']} '
+      'eta_after=${meta['eta_after']}',
+    );
+  }
+
+  void _markCurrentRouteWithRerouteMeta(Map<String, dynamic> meta) {
+    final last = _lastRouteResult;
+    if (last != null) {
+      _lastRouteResult = _withMergedRouteMeta(last, meta);
+    }
+    final session = _sessionRouteResult;
+    if (session != null) {
+      _sessionRouteResult = _withMergedRouteMeta(session, meta);
+    }
+  }
+
+  void _publishRerouteFailure({
+    required String rerouteReason,
+    required String rerouteMode,
+    required double? remainingDistanceBeforeMeters,
+    required double? etaBeforeSeconds,
+    double? rerouteDistanceMeters,
+    double? rejoinPointDistanceMeters,
+  }) {
+    final meta = buildRerouteTelemetry(
+      rerouteReason: rerouteReason,
+      rerouteMode: rerouteMode,
+      remainingDistanceBeforeMeters: remainingDistanceBeforeMeters,
+      remainingDistanceAfterMeters: remainingDistanceBeforeMeters,
+      etaBeforeSeconds: etaBeforeSeconds,
+      etaAfterSeconds: etaBeforeSeconds,
+      rerouteDistanceMeters: rerouteDistanceMeters,
+      rejoinPointDistanceMeters: rejoinPointDistanceMeters,
+      rerouteFailed: true,
+    );
+    _markCurrentRouteWithRerouteMeta(meta);
+    _logRerouteMeta(meta);
+    if (mounted) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Straßen-Reroute nicht möglich. Bitte zur Route zurückfahren.',
+            ),
+            backgroundColor: Color(0xFFFF9500),
+            duration: Duration(seconds: 2),
+          ),
+        );
+    }
   }
 
   double _calculatePolylineDistanceMeters(List<List<double>> coordinates) {
@@ -2231,6 +2495,15 @@ class _CruiseModePageState extends State<CruiseModePage>
     required geo.Position position,
     RouteResult? sessionRouteResult,
   }) async {
+    if (result.edgeMeta.isNotEmpty) {
+      debugPrint(
+        '[CruiseMode] Commit route meta: '
+        'access_leg_used=${result.edgeMeta['access_leg_used']} '
+        'join_point_type=${result.edgeMeta['join_point_type']} '
+        'reroute_mode=${result.edgeMeta['reroute_mode']} '
+        'reroute_failed=${result.edgeMeta['reroute_failed']}',
+      );
+    }
     _lastRouteResult = result;
     _sessionRouteResult = sessionRouteResult ?? result;
     _activeSpeedLimits = result.speedLimits;
@@ -2319,10 +2592,28 @@ class _CruiseModePageState extends State<CruiseModePage>
         distanceMeters: route.distanceKm * 1000,
         durationSeconds: route.durationSeconds,
         distanceKm: route.distanceKm,
+        edgeMeta: {
+          'route_source': 'saved',
+          'source': 'saved',
+          'quality_tier': route.rating != null && route.rating! >= 4
+              ? 'good'
+              : 'acceptable',
+        },
       );
 
-      _applyRouteResult(previewResult);
-      final lastCoordinate = coordinates.last;
+      final startPosition =
+          await _resolveCurrentPositionForNavigationStart() ??
+          await _getStartCoordinates();
+      final preparedPreviewResult = await _prepareRouteForPreviewStart(
+        result: previewResult,
+        startPosition: startPosition,
+        isRoundTrip: route.isRoundTrip,
+        avoidHighways: false,
+      );
+
+      _applyRouteResult(preparedPreviewResult);
+      final preparedCoordinates = preparedPreviewResult.coordinates;
+      final lastCoordinate = preparedCoordinates.last;
       setState(() {
         _isExistingRouteSession = true;
         _isRoundTrip = route.isRoundTrip;
@@ -2346,7 +2637,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       });
       CruiseModePage.isFullscreen.value = false;
 
-      await _drawRoute(geometry);
+      await _drawRoute(preparedPreviewResult.geometry, animateRouteDraw: true);
     } catch (e) {
       _restoreGeneratedRouteFailureUi(
         previousUiState,
@@ -2409,6 +2700,7 @@ class _CruiseModePageState extends State<CruiseModePage>
   Future<void> _drawRoute(
     Map<String, dynamic> geometry, {
     bool animateCamera = true,
+    bool animateRouteDraw = false,
   }) async {
     final coordinatesRaw = (geometry['coordinates'] as List?) ?? const [];
     final activeCoordinates = coordinatesRaw
@@ -2419,7 +2711,7 @@ class _CruiseModePageState extends State<CruiseModePage>
 
     debugPrint(
       '[CruiseMode] _drawRoute: ${activeCoordinates.length} Koordinaten, '
-      'mapReady=$_mapReady, animateCamera=$animateCamera',
+      'mapReady=$_mapReady, animateCamera=$animateCamera animateRouteDraw=$animateRouteDraw',
     );
 
     if (activeCoordinates.length < 2) {
@@ -2443,9 +2735,15 @@ class _CruiseModePageState extends State<CruiseModePage>
       debugPrint(
         '[CruiseMode] _drawRoute: setState für ${routeLatLngs.length} Punkte (initial=$isInitialRoute)',
       );
-      _safeSetState(() {
-        _routeLatLngs = routeLatLngs;
-      });
+      if (animateRouteDraw && _shouldAnimateRouteDraw(routeLatLngs)) {
+        _startRouteDrawAnimation(routeLatLngs);
+      } else {
+        _routeDrawAnimationToken++;
+        _routeDrawAnimationTimer?.cancel();
+        _safeSetState(() {
+          _routeLatLngs = routeLatLngs;
+        });
+      }
     }
 
     if (animateCamera && _mapReady && routeLatLngs.isNotEmpty && mounted) {
@@ -2479,6 +2777,51 @@ class _CruiseModePageState extends State<CruiseModePage>
         '[CruiseMode] _drawRoute: Map nicht ready, Route wird bei onMapReady gezeichnet',
       );
     }
+  }
+
+  bool _shouldAnimateRouteDraw(List<LatLng> routeLatLngs) {
+    if (_isRouteConfirmed || routeLatLngs.length < 12) return false;
+    final media = MediaQuery.maybeOf(context);
+    if (media == null) return true;
+    return !media.disableAnimations && !media.accessibleNavigation;
+  }
+
+  void _startRouteDrawAnimation(List<LatLng> targetLatLngs) {
+    _routeDrawAnimationToken++;
+    _routeDrawAnimationTimer?.cancel();
+    final token = _routeDrawAnimationToken;
+    final start = DateTime.now();
+    const duration = Duration(milliseconds: 3600);
+    _safeSetState(() {
+      _routeLatLngs = targetLatLngs.take(2).toList(growable: false);
+    });
+    _routeDrawAnimationTimer = Timer.periodic(
+      const Duration(milliseconds: 33),
+      (timer) {
+        if (!mounted || _disposed || token != _routeDrawAnimationToken) {
+          timer.cancel();
+          return;
+        }
+        final elapsed = DateTime.now().difference(start).inMilliseconds;
+        final rawT = (elapsed / duration.inMilliseconds).clamp(0.0, 1.0);
+        final easedT = Curves.easeInOutCubic.transform(rawT);
+        final visibleCount = math
+            .max(2, (targetLatLngs.length * easedT).ceil())
+            .clamp(2, targetLatLngs.length)
+            .toInt();
+        _safeSetState(() {
+          _routeLatLngs = targetLatLngs
+              .take(visibleCount)
+              .toList(growable: false);
+        });
+        if (rawT >= 1.0) {
+          timer.cancel();
+          _safeSetState(() {
+            _routeLatLngs = List<LatLng>.from(targetLatLngs);
+          });
+        }
+      },
+    );
   }
 
   // ═══════════════════════ OVERLAP DETECTION ════════════════════════════════
@@ -2806,6 +3149,8 @@ class _CruiseModePageState extends State<CruiseModePage>
   Future<void> _rerouteToOriginalRoute(geo.Position position) async {
     if (_isRerouting) return;
     _isRerouting = true;
+    final remainingDistanceBeforeMeters = _remainingDistance ?? _routeDistance;
+    final etaBeforeSeconds = _remainingDuration ?? _routeDuration;
 
     if (mounted) {
       ScaffoldMessenger.of(context)
@@ -2907,6 +3252,23 @@ class _CruiseModePageState extends State<CruiseModePage>
             final durationSeconds =
                 destinationResult.durationSeconds ??
                 _estimateDurationSecondsForDistance(distanceMeters);
+            final rerouteMeta = buildRerouteTelemetry(
+              rerouteReason: accessLegMode
+                  ? 'access_leg_destination_reconnect'
+                  : 'destination_reconnect',
+              rerouteMode: 'full_rebuild',
+              remainingDistanceBeforeMeters: remainingDistanceBeforeMeters,
+              remainingDistanceAfterMeters: distanceMeters,
+              etaBeforeSeconds: etaBeforeSeconds,
+              etaAfterSeconds: durationSeconds,
+              rerouteDistanceMeters: distanceMeters,
+              rejoinPointDistanceMeters: geo.Geolocator.distanceBetween(
+                position.latitude,
+                position.longitude,
+                destination[1],
+                destination[0],
+              ),
+            );
 
             await _commitRerouteResult(
               result: _buildRouteResultFromCoordinates(
@@ -2915,9 +3277,11 @@ class _CruiseModePageState extends State<CruiseModePage>
                 distanceMeters: distanceMeters,
                 durationSeconds: durationSeconds,
                 speedLimits: destinationResult.speedLimits,
+                edgeMeta: {...destinationResult.edgeMeta, ...rerouteMeta},
               ),
               position: position,
             );
+            _logRerouteMeta(rerouteMeta);
             _clearAccessLegState();
             _sessionRouteStartIndexInActiveRoute = 0;
 
@@ -3064,6 +3428,14 @@ class _CruiseModePageState extends State<CruiseModePage>
           acceptedPlan == null ||
           !mounted ||
           _disposed) {
+        _publishRerouteFailure(
+          rerouteReason: rerouteResult == null
+              ? 'no_candidate'
+              : 'ui_unmounted',
+          rerouteMode: accessLegMode ? 'rejoin' : 'partial_rebuild',
+          remainingDistanceBeforeMeters: remainingDistanceBeforeMeters,
+          etaBeforeSeconds: etaBeforeSeconds,
+        );
         return;
       }
 
@@ -3077,6 +3449,17 @@ class _CruiseModePageState extends State<CruiseModePage>
           resolvedPlan.rejoinIndex < mergeBaseCoordinates.length - 1;
       late final RouteResult finalResult;
       RouteResult? sessionRouteResult;
+      late final Map<String, dynamic> rerouteMeta;
+      final rejoinPointDistanceMeters = geo.Geolocator.distanceBetween(
+        position.latitude,
+        position.longitude,
+        mergeWithOriginal
+            ? mergeBaseCoordinates[resolvedPlan.rejoinIndex][1]
+            : resolvedPlan.anchorCoordinate[1],
+        mergeWithOriginal
+            ? mergeBaseCoordinates[resolvedPlan.rejoinIndex][0]
+            : resolvedPlan.anchorCoordinate[0],
+      );
 
       if (mergeWithOriginal) {
         final remainingOriginal = mergeBaseCoordinates.sublist(
@@ -3183,6 +3566,17 @@ class _CruiseModePageState extends State<CruiseModePage>
           durationSeconds: remainingDurationSeconds,
           speedLimits: sessionSpeedLimits,
         );
+        rerouteMeta = buildRerouteTelemetry(
+          rerouteReason: accessLegMode ? 'access_leg_off_route' : 'off_route',
+          rerouteMode: 'rejoin',
+          remainingDistanceBeforeMeters: remainingDistanceBeforeMeters,
+          remainingDistanceAfterMeters:
+              rerouteDistanceMeters + remainingDistanceMeters,
+          etaBeforeSeconds: etaBeforeSeconds,
+          etaAfterSeconds: rerouteDurationSeconds + remainingDurationSeconds,
+          rerouteDistanceMeters: rerouteDistanceMeters,
+          rejoinPointDistanceMeters: rejoinPointDistanceMeters,
+        );
 
         finalResult = _buildRouteResultFromCoordinates(
           coordinates: mergedCoordinates,
@@ -3193,11 +3587,28 @@ class _CruiseModePageState extends State<CruiseModePage>
           distanceMeters: rerouteDistanceMeters + remainingDistanceMeters,
           durationSeconds: rerouteDurationSeconds + remainingDurationSeconds,
           speedLimits: mergedSpeedLimits,
+          edgeMeta: {...resolvedRerouteResult.edgeMeta, ...rerouteMeta},
+        );
+        sessionRouteResult = _withMergedRouteMeta(
+          sessionRouteResult,
+          rerouteMeta,
         );
       } else {
         final distanceMeters =
             resolvedRerouteResult.distanceMeters ??
             _calculatePolylineDistanceMeters(resolvedRerouteResult.coordinates);
+        rerouteMeta = buildRerouteTelemetry(
+          rerouteReason: accessLegMode ? 'access_leg_rebuild' : 'off_route',
+          rerouteMode: 'full_rebuild',
+          remainingDistanceBeforeMeters: remainingDistanceBeforeMeters,
+          remainingDistanceAfterMeters: distanceMeters,
+          etaBeforeSeconds: etaBeforeSeconds,
+          etaAfterSeconds:
+              resolvedRerouteResult.durationSeconds ??
+              _estimateDurationSecondsForDistance(distanceMeters),
+          rerouteDistanceMeters: distanceMeters,
+          rejoinPointDistanceMeters: rejoinPointDistanceMeters,
+        );
         finalResult = _buildRouteResultFromCoordinates(
           coordinates: resolvedRerouteResult.coordinates,
           maneuvers: resolvedRerouteResult.maneuvers,
@@ -3206,6 +3617,7 @@ class _CruiseModePageState extends State<CruiseModePage>
               resolvedRerouteResult.durationSeconds ??
               _estimateDurationSecondsForDistance(distanceMeters),
           speedLimits: resolvedRerouteResult.speedLimits,
+          edgeMeta: {...resolvedRerouteResult.edgeMeta, ...rerouteMeta},
         );
         sessionRouteResult = finalResult;
       }
@@ -3215,6 +3627,7 @@ class _CruiseModePageState extends State<CruiseModePage>
         sessionRouteResult: sessionRouteResult,
         position: position,
       );
+      _logRerouteMeta(rerouteMeta);
       if (accessLegMode) {
         final joinIndexInMergedRoute = resolvedRerouteResult.coordinates.length
             .clamp(1, math.max(1, finalResult.coordinates.length - 1))
@@ -3249,10 +3662,11 @@ class _CruiseModePageState extends State<CruiseModePage>
         label: '[CruiseMode] Rerouting stacktrace',
         stackTrace: stack,
       );
-      // SILENT FALLBACK: Keine rote Fehlermeldung beim Rerouting
-      // Der User bleibt einfach auf der aktuellen Route
-      debugPrint(
-        '[CruiseMode] Rerouting silent fail — Route bleibt unverändert',
+      _publishRerouteFailure(
+        rerouteReason: 'exception',
+        rerouteMode: _isAccessLegActive ? 'rejoin' : 'partial_rebuild',
+        remainingDistanceBeforeMeters: remainingDistanceBeforeMeters,
+        etaBeforeSeconds: etaBeforeSeconds,
       );
     } finally {
       _isRerouting = false;
@@ -3592,6 +4006,7 @@ class _CruiseModePageState extends State<CruiseModePage>
           ? drivenDistanceMeters / 1000
           : null,
       speedLimits: result.speedLimits,
+      edgeMeta: result.edgeMeta,
     );
   }
 
@@ -3614,10 +4029,8 @@ class _CruiseModePageState extends State<CruiseModePage>
         ? DateTime.now().difference(_navigationStartTime!).inSeconds.toDouble()
         : null;
 
-    if (proportionalDuration != null && elapsedSeconds != null) {
-      return proportionalDuration < elapsedSeconds
-          ? proportionalDuration
-          : elapsedSeconds;
+    if (elapsedSeconds != null && elapsedSeconds > 0) {
+      return elapsedSeconds;
     }
     return proportionalDuration ?? elapsedSeconds;
   }
@@ -3660,7 +4073,7 @@ class _CruiseModePageState extends State<CruiseModePage>
 
   String _formatCompletionDuration(double? durationSeconds) {
     if (durationSeconds == null || durationSeconds <= 0) return '--';
-    final minutes = (durationSeconds / 60).round();
+    final minutes = math.max(1, (durationSeconds / 60).ceil());
     if (minutes < 60) return '$minutes min';
     final hours = minutes ~/ 60;
     final restMinutes = minutes % 60;
@@ -3716,8 +4129,11 @@ class _CruiseModePageState extends State<CruiseModePage>
         curves: snapshot.curves,
         xpEarned: snapshot.xpEarned,
         routeCoordinates: snapshot.coordinates,
-        onSave: () async {
-          final result = await _saveRouteAndSyncXp();
+        onSave: (rating, tags) async {
+          final result = await _saveRouteAndSyncXp(
+            rating: rating,
+            ratingTags: tags,
+          );
           _resetAfterCompletion();
           return result;
         },
@@ -3761,8 +4177,12 @@ class _CruiseModePageState extends State<CruiseModePage>
         routeCoordinates: snapshot.coordinates,
         isEarlyStop: snapshot.isEarlyStop,
         belowMinimum: snapshot.belowMinimum,
-        onSave: () async {
-          final result = await _saveRouteAndSyncXp(skipXpSync: belowMinimum);
+        onSave: (rating, tags) async {
+          final result = await _saveRouteAndSyncXp(
+            rating: rating,
+            ratingTags: tags,
+            skipXpSync: belowMinimum,
+          );
           _resetAfterCompletion();
           return result;
         },
@@ -3777,6 +4197,7 @@ class _CruiseModePageState extends State<CruiseModePage>
   /// [skipXpSync] = true → Route wird gespeichert, aber keine XP vergeben (< 10% gefahren).
   Future<CruiseCompletionActionResult> _saveRouteAndSyncXp({
     int? rating,
+    List<String> ratingTags = const [],
     bool skipXpSync = false,
   }) async {
     int? previousLevel;
@@ -3819,6 +4240,15 @@ class _CruiseModePageState extends State<CruiseModePage>
           plannedDistanceKm: _completionRouteResult?.distanceMeters != null
               ? _completionRouteResult!.distanceMeters! / 1000
               : adjustedResult.distanceKm,
+        );
+        await RouteRatingService.saveRating(
+          result: adjustedResult,
+          rating: rating,
+          tags: ratingTags,
+          completionPercent: progressFraction * 100,
+          distanceKm: adjustedResult.distanceKm,
+          durationSeconds: adjustedResult.durationSeconds,
+          qualityTier: adjustedResult.edgeMeta['quality_tier']?.toString(),
         );
         debugPrint('[CruiseMode] Route saved successfully!');
       }

@@ -144,3 +144,35 @@ bool isApproachingDestination(
 
   return improvement >= dynamicThreshold;
 }
+
+/// Baut kompakte Telemetrie für einen echten Straßen-Reroute.
+Map<String, dynamic> buildRerouteTelemetry({
+  required String rerouteReason,
+  required String rerouteMode,
+  required double? remainingDistanceBeforeMeters,
+  required double? remainingDistanceAfterMeters,
+  required double? etaBeforeSeconds,
+  required double? etaAfterSeconds,
+  double? rerouteDistanceMeters,
+  double? rejoinPointDistanceMeters,
+  bool rerouteFailed = false,
+}) {
+  double? roundKm(double? meters) => meters == null
+      ? null
+      : double.parse((meters / 1000.0).toStringAsFixed(2));
+  double? roundSeconds(double? seconds) =>
+      seconds == null ? null : double.parse(seconds.toStringAsFixed(1));
+
+  return {
+    'reroute_triggered': true,
+    'reroute_reason': rerouteReason,
+    'reroute_mode': rerouteMode,
+    'reroute_distance_km': roundKm(rerouteDistanceMeters),
+    'rejoin_point_distance_km': roundKm(rejoinPointDistanceMeters),
+    'remaining_distance_before': roundKm(remainingDistanceBeforeMeters),
+    'remaining_distance_after': roundKm(remainingDistanceAfterMeters),
+    'eta_before': roundSeconds(etaBeforeSeconds),
+    'eta_after': roundSeconds(etaAfterSeconds),
+    'reroute_failed': rerouteFailed,
+  };
+}

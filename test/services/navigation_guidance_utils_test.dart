@@ -156,6 +156,51 @@ void main() {
       expect(isApproachingDestination([1200, 1100]), isFalse);
     });
   });
+
+  group('buildRerouteTelemetry', () {
+    test('liefert saubere Erfolgstelemetrie fuer echten Rejoin', () {
+      final meta = buildRerouteTelemetry(
+        rerouteReason: 'off_route',
+        rerouteMode: 'rejoin',
+        remainingDistanceBeforeMeters: 12840,
+        remainingDistanceAfterMeters: 10420,
+        etaBeforeSeconds: 930,
+        etaAfterSeconds: 780,
+        rerouteDistanceMeters: 1850,
+        rejoinPointDistanceMeters: 620,
+      );
+
+      expect(meta['reroute_triggered'], isTrue);
+      expect(meta['reroute_failed'], isFalse);
+      expect(meta['reroute_reason'], 'off_route');
+      expect(meta['reroute_mode'], 'rejoin');
+      expect(meta['reroute_distance_km'], 1.85);
+      expect(meta['rejoin_point_distance_km'], 0.62);
+      expect(meta['remaining_distance_before'], 12.84);
+      expect(meta['remaining_distance_after'], 10.42);
+      expect(meta['eta_before'], 930.0);
+      expect(meta['eta_after'], 780.0);
+    });
+
+    test('markiert fehlgeschlagenen Straßen-Reroute explizit', () {
+      final meta = buildRerouteTelemetry(
+        rerouteReason: 'no_candidate',
+        rerouteMode: 'partial_rebuild',
+        remainingDistanceBeforeMeters: 8400,
+        remainingDistanceAfterMeters: 8400,
+        etaBeforeSeconds: 640,
+        etaAfterSeconds: 640,
+        rerouteFailed: true,
+      );
+
+      expect(meta['reroute_triggered'], isTrue);
+      expect(meta['reroute_failed'], isTrue);
+      expect(meta['reroute_reason'], 'no_candidate');
+      expect(meta['reroute_mode'], 'partial_rebuild');
+      expect(meta['reroute_distance_km'], isNull);
+      expect(meta['rejoin_point_distance_km'], isNull);
+    });
+  });
 }
 
 geo.Position _position({required double latitude, required double longitude}) {

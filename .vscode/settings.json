@@ -1,5 +1,5 @@
 {
-  "extensions.ignoreRecommendations": false,
+  "extensions.ignoreRecommendations": true,
   "dart.enableSdkFormatter": true,
   "dart.runPubGetOnPubspecChanges": "always",
   "[dart]": {

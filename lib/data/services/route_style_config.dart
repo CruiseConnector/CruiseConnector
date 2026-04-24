@@ -67,9 +67,9 @@ class RouteStyleConfig {
     waypointShapeFactor: 2.05,
     radiusMultiplier: 1.02,
     minRoundTripKm: 25,
-    maxRoundTripKm: 280,
+    maxRoundTripKm: 100,
     retryAttempts: 4,
-    minStyleFitScore: 47.0,
+    minStyleFitScore: 49.0,
     preferFlatTerrain: true,
   );
 
@@ -82,10 +82,10 @@ class RouteStyleConfig {
     waypointShapeFactor: 0.95,
     radiusMultiplier: 1.18,
     minRoundTripKm: 20,
-    maxRoundTripKm: 230,
+    maxRoundTripKm: 100,
     retryAttempts: 5,
-    minStyleFitScore: 51.0,
-    minCurvesPer50km: 18,
+    minStyleFitScore: 52.0,
+    minCurvesPer50km: 22,
     zigzagWaypoints: true,
   );
 
@@ -97,10 +97,10 @@ class RouteStyleConfig {
     waypointShapeFactor: 1.0,
     radiusMultiplier: 0.66,
     minRoundTripKm: 10,
-    maxRoundTripKm: 130,
+    maxRoundTripKm: 100,
     retryAttempts: 3,
     minStyleFitScore: 51.0,
-    maxAvgSpeedKmh: 70.0,
+    maxAvgSpeedKmh: 64.0,
   );
 
   /// ENTDECKER: Zufällige Richtung die sich von den letzten 3 unterscheidet,
@@ -111,7 +111,7 @@ class RouteStyleConfig {
     waypointShapeFactor: 1.08,
     radiusMultiplier: 1.24,
     minRoundTripKm: 30,
-    maxRoundTripKm: 320,
+    maxRoundTripKm: 100,
     retryAttempts: 5,
     minStyleFitScore: 49.0,
   );
@@ -176,106 +176,153 @@ class RouteStyleConfig {
     required double distanceKm,
     double? durationSeconds,
   }) {
-    if (coordinates.length < 6 || distanceKm <= 0) {
+    final metrics = calculateStyleMetrics(
+      coordinates: coordinates,
+      distanceKm: distanceKm,
+      durationSeconds: durationSeconds,
+    );
+    if (!metrics.isUsable) {
       return 0.0;
     }
 
-    final curveCount = _countBearingChanges(coordinates, thresholdDegrees: 15);
-    final sharpCurveCount = _countBearingChanges(
-      coordinates,
-      thresholdDegrees: 32,
+    final smoothnessScore = metrics.smoothnessScore / 100.0;
+    final averageSpeedKmh = metrics.averageSpeedKmh;
+    final segmentFlowScore = _scoreRamp(
+      metrics.averageSegmentLengthMeters,
+      softMin: 120.0,
+      idealMin: 260.0,
     );
-    final curveDensityPer50Km = (curveCount / distanceKm) * 50.0;
-    final sharpCurveDensityPer50Km = (sharpCurveCount / distanceKm) * 50.0;
-    final spreadRatio = _estimateSpreadRatio(coordinates, distanceKm);
-    final compactnessScore = _estimateCompactnessScore(coordinates);
-    final microZigzagPercent = _estimateMicroZigzagPercent(coordinates);
-    final smoothnessScore = 1.0 - (microZigzagPercent / 100.0);
-    final averageSpeedKmh = durationSeconds != null && durationSeconds > 0
-        ? distanceKm / (durationSeconds / 3600.0)
-        : null;
 
     final normalizedScore = switch (profileKey) {
       'sport' => _weightedAverage([
         _weighted(
-          _scoreAround(curveDensityPer50Km, center: 12.0, tolerance: 16.0),
-          0.24,
+          _scoreAround(
+            metrics.curveDensityPer50Km,
+            center: 10.0,
+            tolerance: 12.0,
+          ),
+          0.18,
         ),
         _weighted(
-          _scoreAround(sharpCurveDensityPer50Km, center: 5.0, tolerance: 7.0),
-          0.12,
+          _scoreAround(
+            metrics.sharpCurveDensityPer50Km,
+            center: 3.0,
+            tolerance: 5.0,
+          ),
+          0.14,
         ),
-        _weighted(_scoreRamp(spreadRatio, softMin: 0.16, idealMin: 0.28), 0.24),
         _weighted(
-          _scoreAround(compactnessScore, center: 46.0, tolerance: 28.0),
-          0.16,
+          _scoreRamp(metrics.spreadRatio, softMin: 0.16, idealMin: 0.30),
+          0.14,
         ),
-        _weighted(smoothnessScore, 0.24),
+        _weighted(segmentFlowScore, 0.14),
+        _weighted(smoothnessScore, 0.30),
+        _weighted(
+          averageSpeedKmh == null
+              ? 0.65
+              : _scoreAround(averageSpeedKmh, center: 70.0, tolerance: 24.0),
+          0.10,
+        ),
       ]),
       'kurvenjagd' => _weightedAverage([
         _weighted(
-          _scoreRamp(curveDensityPer50Km, softMin: 18.0, idealMin: 30.0),
-          0.30,
+          _scoreRamp(
+            metrics.curveDensityPer50Km,
+            softMin: 22.0,
+            idealMin: 36.0,
+          ),
+          0.34,
         ),
         _weighted(
-          _scoreRamp(sharpCurveDensityPer50Km, softMin: 7.0, idealMin: 15.0),
-          0.20,
+          _scoreRamp(
+            metrics.sharpCurveDensityPer50Km,
+            softMin: 8.0,
+            idealMin: 16.0,
+          ),
+          0.22,
         ),
         _weighted(
-          _scoreAround(spreadRatio, center: 0.24, tolerance: 0.16),
+          _scoreRamp(
+            metrics.headingChangePerKm,
+            softMin: 95.0,
+            idealMin: 150.0,
+          ),
+          0.12,
+        ),
+        _weighted(
+          _scoreAround(metrics.spreadRatio, center: 0.24, tolerance: 0.16),
           0.10,
         ),
         _weighted(
-          _scoreAround(compactnessScore, center: 52.0, tolerance: 26.0),
-          0.16,
+          _scoreRamp(smoothnessScore, softMin: 0.45, idealMin: 0.72),
+          0.10,
         ),
         _weighted(
-          _scoreRamp(smoothnessScore, softMin: 0.55, idealMin: 0.8),
-          0.24,
+          _scoreAround(metrics.compactnessScore, center: 50.0, tolerance: 30.0),
+          0.12,
         ),
       ]),
       'abendrunde' => _weightedAverage([
         _weighted(
-          _scoreAround(compactnessScore, center: 62.0, tolerance: 24.0),
+          _scoreAround(metrics.compactnessScore, center: 64.0, tolerance: 22.0),
           0.30,
-        ),
-        _weighted(
-          _scoreAround(curveDensityPer50Km, center: 15.0, tolerance: 13.0),
-          0.16,
-        ),
-        _weighted(
-          _scoreAround(spreadRatio, center: 0.18, tolerance: 0.10),
-          0.12,
         ),
         _weighted(smoothnessScore, 0.24),
         _weighted(
           averageSpeedKmh == null
               ? 0.65
-              : _scoreAround(averageSpeedKmh, center: 48.0, tolerance: 24.0),
-          0.18,
+              : _scoreAround(averageSpeedKmh, center: 44.0, tolerance: 18.0),
+          0.24,
+        ),
+        _weighted(
+          _scoreAround(
+            metrics.curveDensityPer50Km,
+            center: 10.0,
+            tolerance: 12.0,
+          ),
+          0.12,
+        ),
+        _weighted(
+          _scoreAround(metrics.spreadRatio, center: 0.14, tolerance: 0.10),
+          0.10,
         ),
       ]),
       'entdecker' => _weightedAverage([
-        _weighted(_scoreRamp(spreadRatio, softMin: 0.18, idealMin: 0.32), 0.28),
+        _weighted(metrics.sectorDiversityScore / 100.0, 0.30),
         _weighted(
-          _scoreAround(curveDensityPer50Km, center: 18.0, tolerance: 14.0),
-          0.18,
+          _scoreRamp(metrics.spreadRatio, softMin: 0.20, idealMin: 0.36),
+          0.28,
         ),
         _weighted(
-          _scoreAround(compactnessScore, center: 42.0, tolerance: 24.0),
-          0.18,
+          _scoreAround(metrics.compactnessScore, center: 38.0, tolerance: 30.0),
+          0.10,
         ),
-        _weighted(smoothnessScore, 0.20),
-        _weighted(_scoreRamp(distanceKm, softMin: 35.0, idealMin: 70.0), 0.16),
+        _weighted(
+          _scoreAround(
+            metrics.curveDensityPer50Km,
+            center: 16.0,
+            tolerance: 20.0,
+          ),
+          0.10,
+        ),
+        _weighted(_scoreRamp(distanceKm, softMin: 35.0, idealMin: 70.0), 0.12),
+        _weighted(smoothnessScore, 0.10),
       ]),
       _ => _weightedAverage([
         _weighted(
-          _scoreAround(curveDensityPer50Km, center: 16.0, tolerance: 14.0),
+          _scoreAround(
+            metrics.curveDensityPer50Km,
+            center: 16.0,
+            tolerance: 14.0,
+          ),
           0.30,
         ),
-        _weighted(_scoreRamp(spreadRatio, softMin: 0.16, idealMin: 0.26), 0.24),
         _weighted(
-          _scoreAround(compactnessScore, center: 50.0, tolerance: 24.0),
+          _scoreRamp(metrics.spreadRatio, softMin: 0.16, idealMin: 0.26),
+          0.24,
+        ),
+        _weighted(
+          _scoreAround(metrics.compactnessScore, center: 50.0, tolerance: 24.0),
           0.22,
         ),
         _weighted(smoothnessScore, 0.24),
@@ -283,6 +330,83 @@ class RouteStyleConfig {
     };
 
     return (normalizedScore * 100.0).clamp(0.0, 100.0);
+  }
+
+  RouteStyleMetrics calculateStyleMetrics({
+    required List<List<double>> coordinates,
+    required double distanceKm,
+    double? durationSeconds,
+  }) {
+    if (coordinates.length < 6 || distanceKm <= 0) {
+      return RouteStyleMetrics.empty;
+    }
+
+    final turnStats = _calculateTurnStats(coordinates);
+    final curveDensityPer50Km = (turnStats.curveCount / distanceKm) * 50.0;
+    final sharpCurveDensityPer50Km =
+        (turnStats.sharpCurveCount / distanceKm) * 50.0;
+    final spreadRatio = _estimateSpreadRatio(coordinates, distanceKm);
+    final compactnessScore = _estimateCompactnessScore(coordinates);
+    final microZigzagPercent = _estimateMicroZigzagPercent(coordinates);
+    final smoothnessScore = (100.0 - microZigzagPercent).clamp(0.0, 100.0);
+    final headingChangePerKm = turnStats.totalHeadingChange / distanceKm;
+    final averageSegmentLengthMeters = _estimateAverageSegmentLengthMeters(
+      coordinates,
+    );
+    final averageSpeedKmh = durationSeconds != null && durationSeconds > 0
+        ? distanceKm / (durationSeconds / 3600.0)
+        : null;
+    final sectorDiversityScore = _estimateSectorDiversityScore(coordinates);
+
+    return RouteStyleMetrics(
+      curveDensityPer50Km: curveDensityPer50Km,
+      sharpCurveDensityPer50Km: sharpCurveDensityPer50Km,
+      averageSegmentLengthMeters: averageSegmentLengthMeters,
+      headingChangePerKm: headingChangePerKm,
+      smoothnessScore: smoothnessScore,
+      microZigzagPercent: microZigzagPercent,
+      spreadRatio: spreadRatio,
+      compactnessScore: compactnessScore,
+      sectorDiversityScore: sectorDiversityScore,
+      averageSpeedKmh: averageSpeedKmh,
+    );
+  }
+
+  List<String> styleFitReasons(RouteStyleMetrics metrics) {
+    final reasons = <String>[];
+    switch (profileKey) {
+      case 'sport':
+        if (metrics.smoothnessScore >= 78) reasons.add('smooth_flow');
+        if (metrics.averageSegmentLengthMeters >= 180) {
+          reasons.add('longer_segments');
+        }
+        if (metrics.sharpCurveDensityPer50Km >= 10) {
+          reasons.add('too_many_sharp_turns');
+        }
+        if (metrics.microZigzagPercent >= 30) reasons.add('zigzag_penalty');
+        break;
+      case 'kurvenjagd':
+        if (metrics.curveDensityPer50Km >= 28) {
+          reasons.add('high_curve_density');
+        }
+        if (metrics.headingChangePerKm >= 130) reasons.add('continuous_bends');
+        if (metrics.microZigzagPercent >= 42) reasons.add('zigzag_penalty');
+        break;
+      case 'abendrunde':
+        if (metrics.averageSpeedKmh != null && metrics.averageSpeedKmh! <= 58) {
+          reasons.add('calm_speed');
+        }
+        if (metrics.compactnessScore >= 52) reasons.add('clean_return');
+        if (metrics.sharpCurveDensityPer50Km >= 9) {
+          reasons.add('too_aggressive');
+        }
+        break;
+      case 'entdecker':
+        if (metrics.sectorDiversityScore >= 55) reasons.add('sector_diverse');
+        if (metrics.spreadRatio >= 0.26) reasons.add('regional_spread');
+        break;
+    }
+    return reasons;
   }
 
   int clampRoundTripDistanceKm(int requestedKm) {
@@ -469,6 +593,41 @@ class RouteStyleConfig {
     return count;
   }
 
+  static _TurnStats _calculateTurnStats(List<List<double>> coordinates) {
+    if (coordinates.length < 4) return const _TurnStats();
+
+    var curveCount = 0;
+    var sharpCurveCount = 0;
+    var totalHeadingChange = 0.0;
+    const sampleStep = 5;
+
+    for (
+      var i = sampleStep;
+      i < coordinates.length - sampleStep;
+      i += sampleStep
+    ) {
+      final prev = coordinates[i - sampleStep];
+      final curr = coordinates[i];
+      final next =
+          coordinates[math.min(i + sampleStep, coordinates.length - 1)];
+
+      if (prev.length < 2 || curr.length < 2 || next.length < 2) continue;
+
+      final bearing1 = _bearing(prev[1], prev[0], curr[1], curr[0]);
+      final bearing2 = _bearing(curr[1], curr[0], next[1], next[0]);
+      final delta = _angleDiff(bearing1, bearing2).abs();
+      totalHeadingChange += delta;
+      if (delta > 15) curveCount++;
+      if (delta > 32) sharpCurveCount++;
+    }
+
+    return _TurnStats(
+      curveCount: curveCount,
+      sharpCurveCount: sharpCurveCount,
+      totalHeadingChange: totalHeadingChange,
+    );
+  }
+
   static double _bearing(double lat1, double lng1, double lat2, double lng2) {
     final lat1R = lat1 * math.pi / 180;
     final lat2R = lat2 * math.pi / 180;
@@ -607,6 +766,54 @@ class RouteStyleConfig {
     return ((zigzagCount / windowCount) * 100.0).clamp(0.0, 100.0);
   }
 
+  static double _estimateAverageSegmentLengthMeters(
+    List<List<double>> coordinates,
+  ) {
+    final projected = _projectToMeters(
+      _sampleCoordinates(coordinates, sampleCount: 88),
+    );
+    if (projected.length < 2) return 0.0;
+    var totalMeters = 0.0;
+    var segmentCount = 0;
+    for (var i = 1; i < projected.length; i++) {
+      final distance = projected[i - 1].distanceTo(projected[i]);
+      if (distance <= 1) continue;
+      totalMeters += distance;
+      segmentCount++;
+    }
+    return segmentCount == 0 ? 0.0 : totalMeters / segmentCount;
+  }
+
+  static double _estimateSectorDiversityScore(List<List<double>> coordinates) {
+    if (coordinates.length < 8) return 0.0;
+    final origin = coordinates.first;
+    if (origin.length < 2) return 0.0;
+    final sectors = <int>{};
+    for (final point in _sampleCoordinates(coordinates, sampleCount: 48)) {
+      if (point.length < 2) continue;
+      final distanceMeters = _haversineMeters(origin, point);
+      if (distanceMeters < 500) continue;
+      final bearing = _bearing(origin[1], origin[0], point[1], point[0]);
+      sectors.add((bearing / 45.0).floor().clamp(0, 7));
+    }
+    return ((sectors.length / 6.0) * 100.0).clamp(0.0, 100.0);
+  }
+
+  static double _haversineMeters(List<double> a, List<double> b) {
+    const earthRadiusMeters = 6371000.0;
+    final lat1 = a[1] * math.pi / 180.0;
+    final lat2 = b[1] * math.pi / 180.0;
+    final dLat = (b[1] - a[1]) * math.pi / 180.0;
+    final dLng = (b[0] - a[0]) * math.pi / 180.0;
+    final h =
+        math.sin(dLat / 2) * math.sin(dLat / 2) +
+        math.cos(lat1) *
+            math.cos(lat2) *
+            math.sin(dLng / 2) *
+            math.sin(dLng / 2);
+    return earthRadiusMeters * 2 * math.atan2(math.sqrt(h), math.sqrt(1 - h));
+  }
+
   static List<List<double>> _sampleCoordinates(
     List<List<double>> coordinates, {
     required int sampleCount,
@@ -686,6 +893,89 @@ class _StyleProjectedPoint {
   double distanceTo(_StyleProjectedPoint other) {
     return math.sqrt(math.pow(other.x - x, 2) + math.pow(other.y - y, 2));
   }
+}
+
+class RouteStyleMetrics {
+  const RouteStyleMetrics({
+    required this.curveDensityPer50Km,
+    required this.sharpCurveDensityPer50Km,
+    required this.averageSegmentLengthMeters,
+    required this.headingChangePerKm,
+    required this.smoothnessScore,
+    required this.microZigzagPercent,
+    required this.spreadRatio,
+    required this.compactnessScore,
+    required this.sectorDiversityScore,
+    required this.averageSpeedKmh,
+  });
+
+  static const empty = RouteStyleMetrics(
+    curveDensityPer50Km: 0,
+    sharpCurveDensityPer50Km: 0,
+    averageSegmentLengthMeters: 0,
+    headingChangePerKm: 0,
+    smoothnessScore: 0,
+    microZigzagPercent: 0,
+    spreadRatio: 0,
+    compactnessScore: 0,
+    sectorDiversityScore: 0,
+    averageSpeedKmh: null,
+  );
+
+  final double curveDensityPer50Km;
+  final double sharpCurveDensityPer50Km;
+  final double averageSegmentLengthMeters;
+  final double headingChangePerKm;
+  final double smoothnessScore;
+  final double microZigzagPercent;
+  final double spreadRatio;
+  final double compactnessScore;
+  final double sectorDiversityScore;
+  final double? averageSpeedKmh;
+
+  bool get isUsable => curveDensityPer50Km.isFinite && smoothnessScore > 0;
+
+  Map<String, dynamic> toJson() {
+    return {
+      'curve_density_per_50km': double.parse(
+        curveDensityPer50Km.toStringAsFixed(2),
+      ),
+      'curve_density_per_km': double.parse(
+        (curveDensityPer50Km / 50.0).toStringAsFixed(3),
+      ),
+      'sharp_turn_count_per_50km': double.parse(
+        sharpCurveDensityPer50Km.toStringAsFixed(2),
+      ),
+      'average_segment_length_m': double.parse(
+        averageSegmentLengthMeters.toStringAsFixed(1),
+      ),
+      'heading_change_per_km': double.parse(
+        headingChangePerKm.toStringAsFixed(1),
+      ),
+      'smoothness_score': double.parse(smoothnessScore.toStringAsFixed(1)),
+      'zigzag_score': double.parse(microZigzagPercent.toStringAsFixed(1)),
+      'spread_ratio': double.parse(spreadRatio.toStringAsFixed(3)),
+      'compactness_score': double.parse(compactnessScore.toStringAsFixed(1)),
+      'sector_diversity_score': double.parse(
+        sectorDiversityScore.toStringAsFixed(1),
+      ),
+      'average_speed_kmh': averageSpeedKmh == null
+          ? null
+          : double.parse(averageSpeedKmh!.toStringAsFixed(1)),
+    };
+  }
+}
+
+class _TurnStats {
+  const _TurnStats({
+    this.curveCount = 0,
+    this.sharpCurveCount = 0,
+    this.totalHeadingChange = 0.0,
+  });
+
+  final int curveCount;
+  final int sharpCurveCount;
+  final double totalHeadingChange;
 }
 
 class _WeightedScore {

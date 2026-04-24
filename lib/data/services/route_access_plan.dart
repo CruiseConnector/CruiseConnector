@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:geolocator/geolocator.dart' as geo;
 
 import 'package:cruise_connect/domain/models/route_result.dart';
+import 'package:cruise_connect/data/services/route_quality_validator.dart';
 
 class RouteJoinPoint {
   const RouteJoinPoint({
@@ -35,6 +36,10 @@ class RouteAccessPlan {
     required this.logicalEnd,
     required this.sessionOrigin,
     required this.sessionEnd,
+    required this.joinPointType,
+    required this.routeStartDistanceMeters,
+    required this.routePassesNearUser,
+    required this.routeRebasedToUser,
     this.accessLeg,
     this.returnLeg,
   });
@@ -50,6 +55,10 @@ class RouteAccessPlan {
   final List<double> logicalEnd;
   final List<double> sessionOrigin;
   final List<double> sessionEnd;
+  final String joinPointType;
+  final double routeStartDistanceMeters;
+  final bool routePassesNearUser;
+  final bool routeRebasedToUser;
 
   bool get hasAccessLeg => accessLeg != null;
   bool get hasReturnLeg => returnLeg != null;
@@ -58,13 +67,35 @@ class RouteAccessPlan {
 class RouteAccessPlanner {
   const RouteAccessPlanner();
 
-  static const double _onRouteJoinDistanceMeters = 60.0;
-  static const double _closedLoopEndpointDistanceMeters = 80.0;
+  static const double directJoinDistanceMeters = 60.0;
+  static const double nearbyPassJoinDistanceMeters = 160.0;
+  static const double closedLoopEndpointDistanceMeters = 80.0;
+  static const double _onRouteJoinDistanceMeters = directJoinDistanceMeters;
+  static const double _closedLoopEndpointDistanceMeters =
+      closedLoopEndpointDistanceMeters;
+  static const int _maxSuggestedJoinPoints = 4;
 
   RouteJoinPoint chooseJoinPoint({
     required geo.Position currentPosition,
     required RouteResult existingRoute,
     int? preferredJoinIndex,
+    bool rebaseClosedLoop = false,
+  }) {
+    return suggestJoinPoints(
+      currentPosition: currentPosition,
+      existingRoute: existingRoute,
+      preferredJoinIndex: preferredJoinIndex,
+      maxCandidates: 1,
+      rebaseClosedLoop: rebaseClosedLoop,
+    ).first;
+  }
+
+  List<RouteJoinPoint> suggestJoinPoints({
+    required geo.Position currentPosition,
+    required RouteResult existingRoute,
+    int? preferredJoinIndex,
+    int maxCandidates = _maxSuggestedJoinPoints,
+    bool rebaseClosedLoop = false,
   }) {
     final coordinates = existingRoute.coordinates;
     if (coordinates.length < 2) {
@@ -73,32 +104,57 @@ class RouteAccessPlanner {
 
     final cumulativeDistances = _buildCumulativeDistances(coordinates);
     final totalDistanceMeters = cumulativeDistances.last;
+    final deadEndSpikes = RouteQualityValidator.detectDeadEndSpikes(
+      coordinates,
+    );
+    final closedLoop = _isClosedLoop(coordinates);
+    final rebaseClosedLoopMode = rebaseClosedLoop && closedLoop;
     final cappedPreferred = preferredJoinIndex?.clamp(
       0,
       coordinates.length - 1,
     );
     if (cappedPreferred != null) {
-      return _buildJoinPoint(
-        currentPosition: currentPosition,
-        coordinates: coordinates,
-        cumulativeDistances: cumulativeDistances,
-        totalDistanceMeters: totalDistanceMeters,
-        index: cappedPreferred,
-      );
+      return [
+        _buildJoinPoint(
+          currentPosition: currentPosition,
+          coordinates: coordinates,
+          cumulativeDistances: cumulativeDistances,
+          totalDistanceMeters: totalDistanceMeters,
+          deadEndSpikes: deadEndSpikes,
+          closedLoop: closedLoop,
+          rebaseClosedLoop: rebaseClosedLoopMode,
+          index: cappedPreferred,
+        ),
+      ];
     }
 
-    final closedLoop = _isClosedLoop(coordinates);
-    if (closedLoop) {
+    final suggestions = <RouteJoinPoint>[];
+    void addSuggestion(RouteJoinPoint candidate) {
+      final alreadyCovered = suggestions.any(
+        (existing) => (existing.index - candidate.index).abs() <= 2,
+      );
+      if (alreadyCovered) return;
+      suggestions.add(candidate);
+      suggestions.sort((left, right) => left.score.compareTo(right.score));
+      if (suggestions.length > maxCandidates) {
+        suggestions.removeRange(maxCandidates, suggestions.length);
+      }
+    }
+
+    if (closedLoop && !rebaseClosedLoopMode) {
       final startJoinPoint = _buildJoinPoint(
         currentPosition: currentPosition,
         coordinates: coordinates,
         cumulativeDistances: cumulativeDistances,
         totalDistanceMeters: totalDistanceMeters,
+        deadEndSpikes: deadEndSpikes,
+        closedLoop: closedLoop,
+        rebaseClosedLoop: rebaseClosedLoopMode,
         index: 0,
       );
       if (startJoinPoint.distanceFromCurrentMeters <=
           _closedLoopEndpointDistanceMeters) {
-        return startJoinPoint;
+        addSuggestion(startJoinPoint);
       }
     }
 
@@ -108,17 +164,56 @@ class RouteAccessPlanner {
       cumulativeDistances: cumulativeDistances,
       totalDistanceMeters: totalDistanceMeters,
       closedLoop: closedLoop,
+      deadEndSpikes: deadEndSpikes,
+      rebaseClosedLoop: rebaseClosedLoopMode,
     );
     if (onRouteJoinPoint != null) {
-      return onRouteJoinPoint;
+      addSuggestion(onRouteJoinPoint);
     }
 
-    final minRemainingMeters = math.max(900.0, totalDistanceMeters * 0.14);
+    final minRemainingMeters = rebaseClosedLoopMode
+        ? math.max(900.0, totalDistanceMeters * 0.22)
+        : math.max(900.0, totalDistanceMeters * 0.14);
     final maxJoinIndex = _maxJoinIndexForRemainingDistance(
       cumulativeDistances: cumulativeDistances,
       totalDistanceMeters: totalDistanceMeters,
       minRemainingMeters: minRemainingMeters,
     );
+    if (rebaseClosedLoopMode) {
+      final step = math.max(1, coordinates.length ~/ 30);
+      for (
+        var index = 0;
+        index < math.max(1, coordinates.length - 1);
+        index += step
+      ) {
+        final candidate = _buildJoinPoint(
+          currentPosition: currentPosition,
+          coordinates: coordinates,
+          cumulativeDistances: cumulativeDistances,
+          totalDistanceMeters: totalDistanceMeters,
+          deadEndSpikes: deadEndSpikes,
+          closedLoop: closedLoop,
+          rebaseClosedLoop: rebaseClosedLoopMode,
+          index: index,
+        );
+        addSuggestion(candidate);
+      }
+      if (suggestions.isEmpty) {
+        suggestions.add(
+          _buildJoinPoint(
+            currentPosition: currentPosition,
+            coordinates: coordinates,
+            cumulativeDistances: cumulativeDistances,
+            totalDistanceMeters: totalDistanceMeters,
+            deadEndSpikes: deadEndSpikes,
+            closedLoop: closedLoop,
+            rebaseClosedLoop: rebaseClosedLoopMode,
+            index: 0,
+          ),
+        );
+      }
+      return suggestions.take(maxCandidates).toList(growable: false);
+    }
     final primaryMaxIndex = _maxJoinIndexForProgress(
       cumulativeDistances: cumulativeDistances,
       totalDistanceMeters: totalDistanceMeters,
@@ -130,27 +225,28 @@ class RouteAccessPlanner {
       maxProgressRatio: 0.45,
     );
     final step = math.max(1, coordinates.length ~/ 26);
-    RouteJoinPoint? best;
-
-    for (final upperBound in <int>[
+    final upperBounds = <int>[
       math.min(primaryMaxIndex, maxJoinIndex),
       math.min(expandedMaxIndex, maxJoinIndex),
       maxJoinIndex,
-    ]) {
-      if (best != null) break;
+    ];
+
+    for (final upperBound in upperBounds) {
       for (var index = 0; index <= upperBound; index += step) {
         final candidate = _buildJoinPoint(
           currentPosition: currentPosition,
           coordinates: coordinates,
           cumulativeDistances: cumulativeDistances,
           totalDistanceMeters: totalDistanceMeters,
+          deadEndSpikes: deadEndSpikes,
+          closedLoop: closedLoop,
+          rebaseClosedLoop: rebaseClosedLoopMode,
           index: index,
         );
         if (candidate.remainingDistanceMeters < minRemainingMeters) continue;
-        if (best == null || candidate.score < best.score) {
-          best = candidate;
-        }
+        addSuggestion(candidate);
       }
+      if (suggestions.isNotEmpty) break;
     }
 
     if (maxJoinIndex != coordinates.length - 1) {
@@ -159,21 +255,30 @@ class RouteAccessPlanner {
         coordinates: coordinates,
         cumulativeDistances: cumulativeDistances,
         totalDistanceMeters: totalDistanceMeters,
+        deadEndSpikes: deadEndSpikes,
+        closedLoop: closedLoop,
+        rebaseClosedLoop: rebaseClosedLoopMode,
         index: maxJoinIndex,
       );
-      if (best == null || boundaryCandidate.score < best.score) {
-        best = boundaryCandidate;
-      }
+      addSuggestion(boundaryCandidate);
     }
 
-    return best ??
+    if (suggestions.isEmpty) {
+      suggestions.add(
         _buildJoinPoint(
           currentPosition: currentPosition,
           coordinates: coordinates,
           cumulativeDistances: cumulativeDistances,
           totalDistanceMeters: totalDistanceMeters,
+          deadEndSpikes: deadEndSpikes,
+          closedLoop: closedLoop,
+          rebaseClosedLoop: rebaseClosedLoopMode,
           index: 0,
-        );
+        ),
+      );
+    }
+
+    return suggestions.take(maxCandidates).toList(growable: false);
   }
 
   RouteJoinPoint _buildJoinPoint({
@@ -181,6 +286,9 @@ class RouteAccessPlanner {
     required List<List<double>> coordinates,
     required List<double> cumulativeDistances,
     required double totalDistanceMeters,
+    required List<RouteDeadEndSpike> deadEndSpikes,
+    required bool closedLoop,
+    required bool rebaseClosedLoop,
     required int index,
   }) {
     final point = coordinates[index];
@@ -190,10 +298,13 @@ class RouteAccessPlanner {
       point[1],
       point[0],
     );
-    final remainingDistanceMeters = math.max(
+    final routeRemainingDistanceMeters = math.max(
       0.0,
       totalDistanceMeters - cumulativeDistances[index],
     );
+    final remainingDistanceMeters = rebaseClosedLoop && closedLoop
+        ? totalDistanceMeters
+        : routeRemainingDistanceMeters;
     final progressRatio = totalDistanceMeters <= 0
         ? 0.0
         : (cumulativeDistances[index] / totalDistanceMeters).clamp(0.0, 1.0);
@@ -206,30 +317,40 @@ class RouteAccessPlanner {
     );
     final headingDeltaDegrees = _angleDiff(approachHeading, localHeading).abs();
 
-    const idealLowerBound = 0.06;
-    const idealUpperBound = 0.30;
-    const softUpperBound = 0.40;
-    final progressPenalty = progressRatio < idealLowerBound
-        ? (idealLowerBound - progressRatio) * 1800.0
-        : progressRatio > softUpperBound
-        ? (progressRatio - softUpperBound) * 4200.0
-        : progressRatio > idealUpperBound
-        ? (progressRatio - idealUpperBound) * 1200.0
-        : 0.0;
-    final remainingPenalty = remainingDistanceMeters < 900.0
+    final progressPenalty = rebaseClosedLoop && closedLoop
+        ? (progressRatio < 0.04
+              ? (0.04 - progressRatio) * 3200.0
+              : progressRatio > 0.96
+              ? (progressRatio - 0.96) * 3200.0
+              : 0.0)
+        : (progressRatio < 0.06
+              ? (0.06 - progressRatio) * 1800.0
+              : progressRatio > 0.40
+              ? (progressRatio - 0.40) * 4200.0
+              : progressRatio > 0.30
+              ? (progressRatio - 0.30) * 1200.0
+              : 0.0);
+    final remainingPenalty = rebaseClosedLoop && closedLoop
+        ? 0.0
+        : remainingDistanceMeters < 900.0
         ? (900.0 - remainingDistanceMeters) * 1.8
         : 0.0;
     final headingPenalty = headingDeltaDegrees * 4.5;
     final reachabilityPenalty =
-        distanceFromCurrentMeters < 140.0 && progressRatio > 0.22
+        !rebaseClosedLoop &&
+            distanceFromCurrentMeters < 140.0 &&
+            progressRatio > 0.22
         ? (0.22 - progressRatio).abs() * 200.0
         : 0.0;
+    final deadEndPenalty =
+        deadEndSpikes.any((spike) => spike.containsIndex(index)) ? 2600.0 : 0.0;
     final score =
         distanceFromCurrentMeters +
         headingPenalty +
         progressPenalty +
         remainingPenalty +
-        reachabilityPenalty;
+        reachabilityPenalty +
+        deadEndPenalty;
 
     return RouteJoinPoint(
       index: index,
@@ -248,8 +369,13 @@ class RouteAccessPlanner {
     required List<double> cumulativeDistances,
     required double totalDistanceMeters,
     required bool closedLoop,
+    required List<RouteDeadEndSpike> deadEndSpikes,
+    required bool rebaseClosedLoop,
   }) {
     RouteJoinPoint? nearest;
+    final joinDistanceThreshold = rebaseClosedLoop
+        ? nearbyPassJoinDistanceMeters
+        : _onRouteJoinDistanceMeters;
     for (var index = 0; index < coordinates.length; index++) {
       if (closedLoop && index == coordinates.length - 1) continue;
       final candidate = _buildJoinPoint(
@@ -257,9 +383,12 @@ class RouteAccessPlanner {
         coordinates: coordinates,
         cumulativeDistances: cumulativeDistances,
         totalDistanceMeters: totalDistanceMeters,
+        deadEndSpikes: deadEndSpikes,
+        closedLoop: closedLoop,
+        rebaseClosedLoop: rebaseClosedLoop,
         index: index,
       );
-      if (candidate.distanceFromCurrentMeters > _onRouteJoinDistanceMeters) {
+      if (candidate.distanceFromCurrentMeters > joinDistanceThreshold) {
         continue;
       }
       if (nearest == null ||
