@@ -22,13 +22,14 @@ class _HomePageState extends State<HomePage> {
   // damit die Zielseite ihre Daten automatisch neu lädt.
   int _refreshCounter = 0;
 
+  final List<bool> _isTabLoaded = [true, false, false, false, false];
+
   @override
   void initState() {
     super.initState();
     CruiseModePage.isFullscreen.addListener(_onFullscreenChanged);
     CruiseModePage.pendingRoute.addListener(_onPendingRoute);
     _requestLocationPermission();
-    // Dark-Style für Offline-Nutzung im Hintergrund cachen
     Future.delayed(const Duration(seconds: 2), () {
       OfflineMapService.instance.ensureStyleCached();
     });
@@ -66,6 +67,7 @@ class _HomePageState extends State<HomePage> {
     if (CruiseModePage.pendingRoute.value != null && mounted) {
       setState(() {
         _selectedIndex = 2;
+        _isTabLoaded[2] = true;
         _refreshCounter++;
       });
     }
@@ -83,6 +85,7 @@ class _HomePageState extends State<HomePage> {
   void _onNavItemTapped(int index) {
     setState(() {
       _selectedIndex = index;
+      _isTabLoaded[index] = true;
       _refreshCounter++;
     });
   }
@@ -100,11 +103,11 @@ class _HomePageState extends State<HomePage> {
         child: IndexedStack(
           index: _selectedIndex,
           children: [
-            HomeContentPage(onTabChange: _onNavItemTapped, refreshKey: _selectedIndex == 0 ? _refreshCounter : 0),
-            CommunityPage(refreshKey: _selectedIndex == 1 ? _refreshCounter : 0),
-            const CruiseModePage(),
-            AnalyticsPage(refreshKey: _selectedIndex == 3 ? _refreshCounter : 0),
-            ProfilePage(refreshKey: _selectedIndex == 4 ? _refreshCounter : 0),
+            _isTabLoaded[0] ? HomeContentPage(onTabChange: _onNavItemTapped, refreshKey: _selectedIndex == 0 ? _refreshCounter : 0) : const SizedBox(),
+            _isTabLoaded[1] ? CommunityPage(refreshKey: _selectedIndex == 1 ? _refreshCounter : 0) : const SizedBox(),
+            _isTabLoaded[2] ? const CruiseModePage() : const SizedBox(),
+            _isTabLoaded[3] ? AnalyticsPage(refreshKey: _selectedIndex == 3 ? _refreshCounter : 0) : const SizedBox(),
+            _isTabLoaded[4] ? ProfilePage(refreshKey: _selectedIndex == 4 ? _refreshCounter : 0) : const SizedBox(),
           ],
         ),
       ),

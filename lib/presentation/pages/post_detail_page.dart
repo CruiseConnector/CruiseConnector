@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
+import 'package:cruise_connect/presentation/widgets/mentions.dart';
+import 'package:cruise_connect/presentation/widgets/route_chip.dart';
+import 'package:cruise_connect/presentation/widgets/user_avatar.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class PostDetailPage extends StatefulWidget {
@@ -8,6 +11,8 @@ class PostDetailPage extends StatefulWidget {
   final String handle;
   final String content;
   final String time;
+  final String? sharedRouteId;
+  final String? avatarUrl;
 
   const PostDetailPage({
     super.key,
@@ -16,6 +21,8 @@ class PostDetailPage extends StatefulWidget {
     required this.handle,
     required this.content,
     required this.time,
+    this.sharedRouteId,
+    this.avatarUrl,
   });
 
   @override
@@ -89,13 +96,10 @@ class _PostDetailPageState extends State<PostDetailPage> {
                   // Original Post
                   Row(
                     children: [
-                      CircleAvatar(
+                      UserAvatar(
+                        name: widget.name,
+                        avatarUrl: widget.avatarUrl,
                         radius: 24,
-                        backgroundColor: Colors.grey[800],
-                        child: Text(
-                          widget.name.isNotEmpty ? widget.name[0].toUpperCase() : 'U',
-                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-                        ),
                       ),
                       const SizedBox(width: 12),
                       Column(
@@ -108,7 +112,23 @@ class _PostDetailPageState extends State<PostDetailPage> {
                     ],
                   ),
                   const SizedBox(height: 20),
-                  Text(widget.content, style: const TextStyle(color: Colors.white, fontSize: 20, height: 1.4)),
+                  Text.rich(
+                    TextSpan(
+                      style: const TextStyle(color: Colors.white, fontSize: 20, height: 1.4),
+                      children: buildMentionSpans(
+                        context: context,
+                        text: widget.content,
+                        baseStyle: const TextStyle(color: Colors.white, fontSize: 20, height: 1.4),
+                      ),
+                    ),
+                  ),
+                  if (widget.sharedRouteId != null) ...[
+                    const SizedBox(height: 16),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: RouteChip(routeId: widget.sharedRouteId!),
+                    ),
+                  ],
                   const SizedBox(height: 20),
                   Text(
                     '${widget.time} · CruiseConnect',
@@ -143,6 +163,7 @@ class _PostDetailPageState extends State<PostDetailPage> {
                         comment['content'] ?? '',
                         commentId: comment['id'],
                         isOwn: isOwn,
+                        profile: profile,
                       );
                     }),
                 ],
@@ -199,16 +220,22 @@ class _PostDetailPageState extends State<PostDetailPage> {
     );
   }
 
-  Widget _buildComment(String user, String text, {String? commentId, bool isOwn = false}) {
+  Widget _buildComment(
+    String user,
+    String text, {
+    String? commentId,
+    bool isOwn = false,
+    Map<String, dynamic>? profile,
+  }) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 16),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          CircleAvatar(
+          UserAvatar.fromProfile(
+            profile,
+            fallbackName: user,
             radius: 16,
-            backgroundColor: Colors.grey[800],
-            child: Text(user.isNotEmpty ? user[0].toUpperCase() : 'U', style: const TextStyle(color: Colors.white, fontSize: 12)),
           ),
           const SizedBox(width: 12),
           Expanded(

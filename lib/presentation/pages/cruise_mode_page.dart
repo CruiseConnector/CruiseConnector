@@ -28,12 +28,20 @@ import 'package:cruise_connect/presentation/widgets/cruise/cruise_navigation_inf
 import 'package:cruise_connect/presentation/widgets/cruise/cruise_setup_card.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/drive_control_panel.dart';
 import 'package:cruise_connect/data/services/gamification_service.dart';
+import 'package:cruise_connect/data/services/cruise_group_service.dart';
+import 'package:cruise_connect/domain/models/group_member.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 class CruiseModePage extends StatefulWidget {
-  const CruiseModePage({super.key, this.initialRoute});
+  const CruiseModePage({super.key, this.initialRoute, this.groupId});
 
   /// Wenn gesetzt, wird diese Route direkt geladen und bestätigt.
   final SavedRoute? initialRoute;
+
+  /// Wenn gesetzt, läuft die Navigation als Teil einer Cruise-Gruppe:
+  /// lädt Route aus Supabase, sendet eigene Position regelmäßig,
+  /// hört auf Positionen der anderen Mitglieder.
+  final String? groupId;
 
   /// Signalisiert dem Parent (HomePage), dass die Navigation im Fullscreen-Modus ist.
   /// Wenn true, soll die BottomNavigationBar ausgeblendet werden.
@@ -131,6 +139,11 @@ class _CruiseModePageState extends State<CruiseModePage> {
 
   bool _disposed = false;
 
+  // ─────────────────────── Group / Live Tracking ────────────────────────────
+  RealtimeChannel? _groupMembersCh;
+  Timer? _positionUploadTimer;
+  final Map<String, GroupMember> _groupMembers = {};
+
   // ──────────────────────────────────────────────────────────────────────────
 
   void _safeSetState(VoidCallback fn) {
@@ -145,7 +158,103 @@ class _CruiseModePageState extends State<CruiseModePage> {
         (_) => _loadSavedRoute(widget.initialRoute!),
       );
     }
+    if (widget.groupId != null) {
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => _bootstrapGroupSession(widget.groupId!),
+      );
+    }
     CruiseModePage.pendingRoute.addListener(_onPendingRoute);
+  }
+
+  // ═══════════════════════ GROUP / LIVE TRACKING ═══════════════════════════
+
+  Future<void> _bootstrapGroupSession(String groupId) async {
+    final g = await CruiseGroupService.fetch(groupId);
+    if (g == null || !mounted) return;
+
+    // Mitglieder initial einlesen (ohne mich selbst)
+    final meId = Supabase.instance.client.auth.currentUser?.id;
+    for (final m in g.members) {
+      if (m.userId != meId) _groupMembers[m.userId] = m;
+    }
+    _safeSetState(() {});
+
+    // Route aus routeData laden und bestätigen
+    final rd = g.routeData;
+    if (rd != null && rd['geoJson'] is String) {
+      final geometry =
+          jsonDecode(rd['geoJson'] as String) as Map<String, dynamic>;
+      final coordsRaw = (geometry['coordinates'] as List?) ?? const [];
+      final coordinates = coordsRaw
+          .whereType<List>()
+          .where((c) => c.length >= 2)
+          .map((c) => [(c[0] as num).toDouble(), (c[1] as num).toDouble()])
+          .toList();
+      if (coordinates.length >= 2) {
+        setState(() {
+          _routeGeoJson = rd['geoJson'] as String;
+          _routeDistance = (rd['distance_meters'] as num?)?.toDouble();
+          _routeDuration = (rd['duration_seconds'] as num?)?.toDouble();
+          _isRouteConfirmed = false;
+          _fullRouteCoordinates = coordinates;
+          _remainingRouteCoordinates = coordinates;
+          _maneuvers = const [];
+        });
+        await _drawRoute(geometry);
+        await _confirmRoute();
+      }
+    }
+
+    // Realtime: andere Mitglieder
+    _groupMembersCh = CruiseGroupService.subscribeMembers(groupId, (row) {
+      if (row.isEmpty) return;
+      final uid = row['user_id'] as String?;
+      if (uid == null || uid == meId) return;
+      try {
+        final gm = GroupMember.fromMap(row);
+        _groupMembers[uid] = gm;
+        _safeSetState(() {});
+      } catch (_) {}
+    });
+
+    // Timer: eigene Position regelmäßig hochschieben
+    _positionUploadTimer =
+        Timer.periodic(const Duration(seconds: 7), (_) => _uploadMyPosition());
+  }
+
+  Widget _buildGroupMemberMarker(GroupMember m) {
+    final isDriver = m.role == MemberRole.driver;
+    final color = isDriver ? const Color(0xFFFF3B30) : const Color(0xFF4FC3F7);
+    return Container(
+      decoration: BoxDecoration(
+        color: color,
+        shape: BoxShape.circle,
+        border: Border.all(color: Colors.white, width: 2),
+        boxShadow: [
+          BoxShadow(color: color.withValues(alpha: 0.6), blurRadius: 8),
+        ],
+      ),
+      child: Center(
+        child: Icon(
+          isDriver ? Icons.directions_car : Icons.person,
+          color: Colors.white,
+          size: 18,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _uploadMyPosition() async {
+    if (widget.groupId == null) return;
+    final pos = _userPosition;
+    if (pos == null) return;
+    try {
+      await CruiseGroupService.updateMyPosition(
+        groupId: widget.groupId!,
+        lat: pos.latitude,
+        lng: pos.longitude,
+      );
+    } catch (_) {}
   }
 
   void _onPendingRoute() {
@@ -164,6 +273,8 @@ class _CruiseModePageState extends State<CruiseModePage> {
     _stopSimulation(restartLiveTracking: false);
     _positionSubscription?.cancel();
     _socketPositionSubscription?.cancel();
+    _positionUploadTimer?.cancel();
+    _groupMembersCh?.unsubscribe();
     unawaited(_navigationSocketService.dispose());
     _destinationController.dispose();
     super.dispose();
@@ -183,7 +294,56 @@ class _CruiseModePageState extends State<CruiseModePage> {
           // Config-Overlay ODER Navigation-Overlay
           if (!_isRouteConfirmed) _buildConfigOverlay(),
           if (_isRouteConfirmed) _buildNavigationOverlay(),
+
+          // Exit-Button wenn wir als Gruppen-Session gestartet wurden
+          // (sonst ist man in der Fullscreen-Navigation gefangen).
+          if (widget.groupId != null && Navigator.canPop(context))
+            Positioned(
+              top: MediaQuery.of(context).padding.top + 12,
+              left: 12,
+              child: _buildExitButton(),
+            ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildExitButton() {
+    return Material(
+      color: Colors.black.withValues(alpha: 0.55),
+      shape: const CircleBorder(),
+      child: InkWell(
+        customBorder: const CircleBorder(),
+        onTap: () async {
+          final leave = await showDialog<bool>(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              backgroundColor: const Color(0xFF1C1F26),
+              title: const Text('Gruppenfahrt verlassen?',
+                  style: TextStyle(color: Colors.white)),
+              content: const Text(
+                'Du verlässt die Navigation. Die Gruppe läuft für andere weiter.',
+                style: TextStyle(color: Colors.grey),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx, false),
+                  child: const Text('Abbrechen'),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx, true),
+                  child: const Text('Verlassen',
+                      style: TextStyle(color: Color(0xFFFF3B30))),
+                ),
+              ],
+            ),
+          );
+          if (leave == true && mounted) Navigator.of(context).pop();
+        },
+        child: const Padding(
+          padding: EdgeInsets.all(10),
+          child: Icon(Icons.arrow_back, color: Colors.white, size: 22),
+        ),
       ),
     );
   }
@@ -679,6 +839,21 @@ class _CruiseModePageState extends State<CruiseModePage> {
                 child: _buildAppleLocationDot(_userHeading, isNavigating: true),
               ),
             ],
+          ),
+        // ── Gruppen-Mitglieder (Live-Positionen) ────────────────────────────
+        if (widget.groupId != null && _groupMembers.isNotEmpty)
+          MarkerLayer(
+            markers: _groupMembers.values
+                .where((m) => m.currentLat != null && m.currentLng != null)
+                .map(
+                  (m) => Marker(
+                    point: LatLng(m.currentLat!, m.currentLng!),
+                    width: 40,
+                    height: 40,
+                    child: _buildGroupMemberMarker(m),
+                  ),
+                )
+                .toList(),
           ),
         // ── Simulations-Puck (blauer Kreis mit weißem Ring) ──────────────────
         if (_simulationPuckPosition != null)

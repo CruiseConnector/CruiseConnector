@@ -1,12 +1,28 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'package:cruise_connect/application/providers/community_provider.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
+import 'package:cruise_connect/presentation/pages/post_detail_page.dart';
+import 'package:cruise_connect/presentation/widgets/mentions.dart';
+import 'package:cruise_connect/presentation/widgets/route_chip.dart';
+import 'package:cruise_connect/presentation/widgets/user_avatar.dart';
 
 /// Profil-Seite eines anderen Users (oder des eigenen).
+///
+/// Wird der Username schon vom Aufrufer bekannt (z.B. aus einem Mention-Tap
+/// oder einem Repost-Header), kann er als [initialUsername] übergeben werden.
+/// Die AppBar zeigt ihn dann sofort, statt den Default-Fallback "@user"
+/// einzublenden, bis das Profil aus der DB geladen ist.
 class UserProfilePage extends StatefulWidget {
   final String userId;
-  const UserProfilePage({super.key, required this.userId});
+  final String? initialUsername;
+  const UserProfilePage({
+    super.key,
+    required this.userId,
+    this.initialUsername,
+  });
 
   @override
   State<UserProfilePage> createState() => _UserProfilePageState();
@@ -19,6 +35,7 @@ class _UserProfilePageState extends State<UserProfilePage> with SingleTickerProv
   List<Map<String, dynamic>> _posts = [];
   List<Map<String, dynamic>> _reposts = [];
   bool _isFollowing = false;
+  bool _isMutual = false;
   bool _isOwnProfile = false;
   bool _isPrivate = false;
 
@@ -43,6 +60,7 @@ class _UserProfilePageState extends State<UserProfilePage> with SingleTickerProv
         SocialService.getUserPosts(widget.userId),
         SocialService.getUserReposts(widget.userId),
         if (!_isOwnProfile) SocialService.isFollowing(widget.userId),
+        if (!_isOwnProfile) SocialService.isMutualFollow(widget.userId),
       ]);
       if (mounted) {
         setState(() {
@@ -50,7 +68,10 @@ class _UserProfilePageState extends State<UserProfilePage> with SingleTickerProv
           _isPrivate = _stats['is_private'] == true;
           _posts = results[1] as List<Map<String, dynamic>>;
           _reposts = results[2] as List<Map<String, dynamic>>;
-          if (!_isOwnProfile) _isFollowing = results[3] as bool;
+          if (!_isOwnProfile) {
+            _isFollowing = results[3] as bool;
+            _isMutual = results[4] as bool;
+          }
           _loading = false;
         });
       }
@@ -62,12 +83,17 @@ class _UserProfilePageState extends State<UserProfilePage> with SingleTickerProv
 
   @override
   Widget build(BuildContext context) {
-    final name = _stats['username'] ?? 'User';
+    // Stats > vom Aufrufer mitgegebener Username > leer.
+    // Vermeidet "@user"-Default während des Loadings, wenn der Caller den
+    // tatsächlichen Username schon kennt (z.B. aus einem Mention-Tap).
+    final loadedName = _stats['username'] as String?;
+    final displayName = loadedName ?? widget.initialUsername ?? '';
     final level = _stats['level'] ?? 1;
     final totalKm = (_stats['total_km'] as num?)?.toDouble() ?? 0;
     final totalRoutes = _stats['total_routes'] ?? 0;
     final followers = _stats['follower_count'] ?? 0;
     final following = _stats['following_count'] ?? 0;
+    final headerName = displayName.isEmpty ? 'User' : displayName;
 
     return Scaffold(
       backgroundColor: const Color(0xFF0B0E14),
@@ -77,7 +103,10 @@ class _UserProfilePageState extends State<UserProfilePage> with SingleTickerProv
           icon: const Icon(Icons.arrow_back, color: Colors.white),
           onPressed: () => Navigator.pop(context),
         ),
-        title: Text('@${name.toString().toLowerCase()}', style: const TextStyle(color: Colors.white, fontSize: 16)),
+        title: Text(
+          displayName.isEmpty ? '' : '@${displayName.toLowerCase()}',
+          style: const TextStyle(color: Colors.white, fontSize: 16),
+        ),
         elevation: 0,
       ),
       body: _loading
@@ -92,16 +121,13 @@ class _UserProfilePageState extends State<UserProfilePage> with SingleTickerProv
                       padding: const EdgeInsets.all(20),
                       child: Column(
                         children: [
-                          CircleAvatar(
+                          UserAvatar(
+                            name: headerName,
+                            avatarUrl: _stats['avatar_url'] as String?,
                             radius: 40,
-                            backgroundColor: const Color(0xFFFF3B30),
-                            child: Text(
-                              name.toString().isNotEmpty ? name.toString()[0].toUpperCase() : 'U',
-                              style: const TextStyle(color: Colors.white, fontSize: 32, fontWeight: FontWeight.bold),
-                            ),
                           ),
                           const SizedBox(height: 12),
-                          Text(name.toString(), style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold)),
+                          Text(headerName, style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold)),
                           const SizedBox(height: 4),
                           Text('Level $level', style: const TextStyle(color: Color(0xFFFF3B30), fontSize: 14, fontWeight: FontWeight.w600)),
                           const SizedBox(height: 16),
@@ -130,6 +156,8 @@ class _UserProfilePageState extends State<UserProfilePage> with SingleTickerProv
                               child: ElevatedButton(
                                 onPressed: () async {
                                   final wasFollowing = _isFollowing;
+                                  final provider =
+                                      context.read<CommunityProvider>();
                                   setState(() {
                                     _isFollowing = !wasFollowing;
                                     // Optimistisch Follower-Count aktualisieren
@@ -138,9 +166,9 @@ class _UserProfilePageState extends State<UserProfilePage> with SingleTickerProv
                                   });
                                   try {
                                     if (wasFollowing) {
-                                      await SocialService.unfollowUser(widget.userId);
+                                      await provider.unfollowUser(widget.userId);
                                     } else {
-                                      await SocialService.followUser(widget.userId);
+                                      await provider.followUser(widget.userId);
                                     }
                                   } catch (e) {
                                     debugPrint('[UserProfile] Follow/Unfollow fehlgeschlagen: $e');
@@ -197,7 +225,7 @@ class _UserProfilePageState extends State<UserProfilePage> with SingleTickerProv
                   controller: _tabController,
                   children: [
                     // Posts Tab
-                    (_isPrivate && !_isFollowing && !_isOwnProfile)
+                    (_isPrivate && !_isMutual && !_isOwnProfile)
                         ? _buildPrivateMessage()
                         : _posts.isEmpty
                             ? const Center(child: Text('Noch keine Posts', style: TextStyle(color: Colors.grey)))
@@ -207,7 +235,7 @@ class _UserProfilePageState extends State<UserProfilePage> with SingleTickerProv
                                 itemBuilder: (context, index) => _buildPostItem(_posts[index]),
                               ),
                     // Reposts Tab
-                    (_isPrivate && !_isFollowing && !_isOwnProfile)
+                    (_isPrivate && !_isMutual && !_isOwnProfile)
                         ? _buildPrivateMessage()
                         : _reposts.isEmpty
                             ? const Center(child: Text('Noch keine Reposts', style: TextStyle(color: Colors.grey)))
@@ -239,34 +267,66 @@ class _UserProfilePageState extends State<UserProfilePage> with SingleTickerProv
     final likes = post['likes_count'] ?? 0;
     final comments = post['comments_count'] ?? 0;
     final reposts = post['reposts_count'] ?? 0;
+    final profile = post['profiles'] as Map<String, dynamic>?;
+    final authorName = (profile?['username'] ?? _stats['username'] ?? 'User').toString();
+    final authorEmail = profile?['email'] as String?;
+    final authorHandle = '@${(authorEmail ?? authorName).split('@').first.toLowerCase()}';
 
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(content, style: const TextStyle(color: Colors.white, fontSize: 15, height: 1.3)),
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              Icon(Icons.favorite_border, size: 14, color: Colors.white.withValues(alpha: 0.4)),
-              const SizedBox(width: 4),
-              Text('$likes', style: TextStyle(color: Colors.white.withValues(alpha: 0.4), fontSize: 12)),
-              const SizedBox(width: 16),
-              Icon(Icons.comment_outlined, size: 14, color: Colors.white.withValues(alpha: 0.4)),
-              const SizedBox(width: 4),
-              Text('$comments', style: TextStyle(color: Colors.white.withValues(alpha: 0.4), fontSize: 12)),
-              const SizedBox(width: 16),
-              Icon(Icons.repeat, size: 14, color: Colors.white.withValues(alpha: 0.4)),
-              const SizedBox(width: 4),
-              Text('$reposts', style: TextStyle(color: Colors.white.withValues(alpha: 0.4), fontSize: 12)),
-              const Spacer(),
-              Text(time, style: const TextStyle(color: Colors.grey, fontSize: 12)),
+    return InkWell(
+      onTap: () => _openPostDetail(
+        postId: post['id'] as String,
+        name: authorName,
+        handle: authorHandle,
+        content: content.toString(),
+        time: time,
+        sharedRouteId: post['shared_route_id'] as String?,
+        avatarUrl: profile?['avatar_url'] as String? ??
+            _stats['avatar_url'] as String?,
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text.rich(
+              TextSpan(
+                style: const TextStyle(color: Colors.white, fontSize: 15, height: 1.3),
+                children: buildMentionSpans(
+                  context: context,
+                  text: content.toString(),
+                  baseStyle: const TextStyle(color: Colors.white, fontSize: 15, height: 1.3),
+                ),
+              ),
+            ),
+            if (post['shared_route_id'] != null) ...[
+              const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: RouteChip(routeId: post['shared_route_id'] as String),
+              ),
             ],
-          ),
-          const SizedBox(height: 8),
-          Container(height: 1, color: Colors.white.withValues(alpha: 0.05)),
-        ],
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Icon(Icons.favorite_border, size: 14, color: Colors.white.withValues(alpha: 0.4)),
+                const SizedBox(width: 4),
+                Text('$likes', style: TextStyle(color: Colors.white.withValues(alpha: 0.4), fontSize: 12)),
+                const SizedBox(width: 16),
+                Icon(Icons.comment_outlined, size: 14, color: Colors.white.withValues(alpha: 0.4)),
+                const SizedBox(width: 4),
+                Text('$comments', style: TextStyle(color: Colors.white.withValues(alpha: 0.4), fontSize: 12)),
+                const SizedBox(width: 16),
+                Icon(Icons.repeat, size: 14, color: Colors.white.withValues(alpha: 0.4)),
+                const SizedBox(width: 4),
+                Text('$reposts', style: TextStyle(color: Colors.white.withValues(alpha: 0.4), fontSize: 12)),
+                const Spacer(),
+                Text(time, style: const TextStyle(color: Colors.grey, fontSize: 12)),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Container(height: 1, color: Colors.white.withValues(alpha: 0.05)),
+          ],
+        ),
       ),
     );
   }
@@ -278,40 +338,115 @@ class _UserProfilePageState extends State<UserProfilePage> with SingleTickerProv
     final content = post['content'] ?? '';
     final time = _formatTimeAgo(repost['created_at']);
     final author = post['profiles'] as Map<String, dynamic>?;
-    final authorName = author?['username'] ?? 'User';
+    final authorName = (author?['username'] ?? 'User').toString();
+    final authorId = author?['id'] as String?;
+    final authorEmail = author?['email'] as String?;
+    final authorHandle = '@${(authorEmail ?? authorName).split('@').first.toLowerCase()}';
 
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              const Icon(Icons.repeat, size: 14, color: Color(0xFF34C759)),
-              const SizedBox(width: 6),
-              Text('Repost von @$authorName', style: const TextStyle(color: Color(0xFF34C759), fontSize: 12)),
-            ],
-          ),
-          const SizedBox(height: 6),
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.04),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+    return InkWell(
+      onTap: () => _openPostDetail(
+        postId: post['id'] as String,
+        name: authorName,
+        handle: authorHandle,
+        content: content.toString(),
+        time: _formatTimeAgo(post['created_at']),
+        sharedRouteId: post['shared_route_id'] as String?,
+        avatarUrl: author?['avatar_url'] as String?,
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
               children: [
-                Text(content, style: const TextStyle(color: Colors.white, fontSize: 14, height: 1.3)),
-                const SizedBox(height: 6),
-                Text(time, style: const TextStyle(color: Colors.grey, fontSize: 11)),
+                const Icon(Icons.repeat, size: 14, color: Color(0xFF34C759)),
+                const SizedBox(width: 6),
+                GestureDetector(
+                  onTap: authorId == null
+                      ? null
+                      : () => Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => UserProfilePage(
+                                userId: authorId,
+                                initialUsername: authorName,
+                              ),
+                            ),
+                          ),
+                  child: Text(
+                    'Repost von @$authorName',
+                    style: const TextStyle(
+                      color: Color(0xFF34C759),
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
               ],
             ),
-          ),
-          const SizedBox(height: 8),
-          Container(height: 1, color: Colors.white.withValues(alpha: 0.05)),
-        ],
+            const SizedBox(height: 6),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.04),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text.rich(
+                    TextSpan(
+                      style: const TextStyle(color: Colors.white, fontSize: 14, height: 1.3),
+                      children: buildMentionSpans(
+                        context: context,
+                        text: content.toString(),
+                        baseStyle: const TextStyle(color: Colors.white, fontSize: 14, height: 1.3),
+                      ),
+                    ),
+                  ),
+                  if (post['shared_route_id'] != null) ...[
+                    const SizedBox(height: 8),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: RouteChip(routeId: post['shared_route_id'] as String),
+                    ),
+                  ],
+                  const SizedBox(height: 6),
+                  Text(time, style: const TextStyle(color: Colors.grey, fontSize: 11)),
+                ],
+              ),
+            ),
+            const SizedBox(height: 8),
+            Container(height: 1, color: Colors.white.withValues(alpha: 0.05)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _openPostDetail({
+    required String postId,
+    required String name,
+    required String handle,
+    required String content,
+    required String time,
+    String? sharedRouteId,
+    String? avatarUrl,
+  }) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => PostDetailPage(
+          postId: postId,
+          name: name,
+          handle: handle,
+          content: content,
+          time: time,
+          sharedRouteId: sharedRouteId,
+          avatarUrl: avatarUrl,
+        ),
       ),
     );
   }
@@ -328,7 +463,7 @@ class _UserProfilePageState extends State<UserProfilePage> with SingleTickerProv
             Text('Dieses Konto ist privat', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
             SizedBox(height: 8),
             Text(
-              'Folge diesem Konto um die Posts und Reposts zu sehen.',
+              'Posts und Reposts sind nur sichtbar, wenn ihr euch gegenseitig folgt.',
               style: TextStyle(color: Colors.grey, fontSize: 14),
               textAlign: TextAlign.center,
             ),
@@ -396,21 +531,23 @@ class _UserProfilePageState extends State<UserProfilePage> with SingleTickerProv
                             final userId = profile?['id'] as String?;
 
                             return ListTile(
-                              leading: CircleAvatar(
-                                backgroundColor: const Color(0xFFFF3B30),
-                                child: Text(
-                                  username.toString().isNotEmpty ? username.toString()[0].toUpperCase() : 'U',
-                                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-                                ),
+                              leading: UserAvatar.fromProfile(
+                                profile,
+                                fallbackName: username.toString(),
+                                radius: 20,
                               ),
                               title: Text(username.toString(), style: const TextStyle(color: Colors.white)),
                               onTap: () {
                                 Navigator.pop(sheetContext);
                                 if (userId != null) {
+                                  final usernameStr = username.toString();
                                   Future.delayed(const Duration(milliseconds: 150), () {
                                     if (!context.mounted) return;
                                     Navigator.push(context, MaterialPageRoute(
-                                      builder: (_) => UserProfilePage(userId: userId),
+                                      builder: (_) => UserProfilePage(
+                                        userId: userId,
+                                        initialUsername: usernameStr,
+                                      ),
                                     ));
                                   });
                                 }

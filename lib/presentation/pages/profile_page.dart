@@ -11,6 +11,10 @@ import 'package:cruise_connect/presentation/pages/edit_profile_page.dart';
 import 'package:cruise_connect/presentation/pages/settings_page.dart';
 import 'package:cruise_connect/presentation/pages/cruise_mode_page.dart';
 import 'package:cruise_connect/presentation/pages/user_profile_page.dart';
+import 'package:cruise_connect/presentation/widgets/mentions.dart';
+import 'package:cruise_connect/presentation/widgets/route_chip.dart';
+import 'package:cruise_connect/presentation/widgets/user_avatar.dart';
+import 'package:cruise_connect/presentation/pages/group_lobby_page.dart';
 
 class ProfilePage extends StatefulWidget {
   final int refreshKey;
@@ -66,7 +70,7 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
         SocialService.getFollowingCount(uid),
         SocialService.getUserPosts(uid),
         SocialService.getUserReposts(uid),
-        SocialService.getMyGroups(),
+        SocialService.getMyAllGroups(),
         SavedRoutesService.getUserRoutes(),
         SocialService.getUserProfile(uid),
       ]);
@@ -90,14 +94,91 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
     }
   }
 
-  Future<void> _pickAndUploadAvatar() async {
-    final picker = ImagePicker();
-    final image = await picker.pickImage(
-      source: ImageSource.gallery,
-      maxWidth: 512,
-      maxHeight: 512,
-      imageQuality: 80,
+  /// Fragt den User in einem BottomSheet, ob er Kamera oder Galerie nutzen
+  /// will. Gibt null zurück, wenn der Sheet abgebrochen wurde.
+  Future<ImageSource?> _chooseImageSource() async {
+    return showModalBottomSheet<ImageSource>(
+      context: context,
+      backgroundColor: const Color(0xFF1C1F26),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (sheetContext) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                margin: const EdgeInsets.symmetric(vertical: 12),
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.grey[600],
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 8),
+                child: Text(
+                  'Profilbild ändern',
+                  style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold),
+                ),
+              ),
+              ListTile(
+                leading: const Icon(Icons.photo_camera,
+                    color: Color(0xFFFF3B30)),
+                title: const Text('Kamera',
+                    style: TextStyle(color: Colors.white)),
+                onTap: () =>
+                    Navigator.pop(sheetContext, ImageSource.camera),
+              ),
+              ListTile(
+                leading: const Icon(Icons.photo_library,
+                    color: Color(0xFFFF3B30)),
+                title: const Text('Galerie',
+                    style: TextStyle(color: Colors.white)),
+                onTap: () =>
+                    Navigator.pop(sheetContext, ImageSource.gallery),
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
     );
+  }
+
+  Future<void> _pickAndUploadAvatar() async {
+    final source = await _chooseImageSource();
+    if (source == null) return;
+
+    final picker = ImagePicker();
+    final XFile? image;
+    try {
+      image = await picker.pickImage(
+        source: source,
+        maxWidth: 512,
+        maxHeight: 512,
+        imageQuality: 80,
+      );
+    } catch (e) {
+      // Häufigster Fall: User hat Kamera-/Galerie-Berechtigung verweigert.
+      debugPrint('[Profile] Bild-Auswahl fehlgeschlagen: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(source == ImageSource.camera
+                ? 'Kein Kamera-Zugriff. Berechtigung in den Einstellungen erlauben.'
+                : 'Kein Galerie-Zugriff. Berechtigung in den Einstellungen erlauben.'),
+            backgroundColor: const Color(0xFF1C1F26),
+          ),
+        );
+      }
+      return;
+    }
     if (image == null) return;
 
     final uid = Supabase.instance.client.auth.currentUser?.id;
@@ -398,6 +479,7 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
                               likesCount: post['likes_count'] ?? 0,
                               commentsCount: post['comments_count'] ?? 0,
                               repostsCount: post['reposts_count'] ?? 0,
+                              sharedRouteId: post['shared_route_id'] as String?,
                             );
                           },
                         ),
@@ -414,6 +496,7 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
                             if (post == null) return const SizedBox.shrink();
                             final author = post['profiles'] as Map<String, dynamic>?;
                             final authorName = author?['username'] ?? 'User';
+                            final authorId = author?['id'] as String?;
                             final originalPostId = post['id'] as String?;
                             return Container(
                               margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -429,7 +512,27 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
                                     children: [
                                       const Icon(Icons.repeat, size: 14, color: Color(0xFF34C759)),
                                       const SizedBox(width: 6),
-                                      Text('Repost von @$authorName', style: const TextStyle(color: Color(0xFF34C759), fontSize: 12)),
+                                      GestureDetector(
+                                        onTap: authorId == null
+                                            ? null
+                                            : () => Navigator.push(
+                                                  context,
+                                                  MaterialPageRoute(
+                                                    builder: (_) => UserProfilePage(
+                                                      userId: authorId,
+                                                      initialUsername: authorName,
+                                                    ),
+                                                  ),
+                                                ),
+                                        child: Text(
+                                          'Repost von @$authorName',
+                                          style: const TextStyle(
+                                            color: Color(0xFF34C759),
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
+                                      ),
                                       const Spacer(),
                                       Text(_formatTimeAgo(repost['created_at']), style: const TextStyle(color: Colors.grey, fontSize: 11)),
                                       if (originalPostId != null)
@@ -460,7 +563,24 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
                                     ],
                                   ),
                                   const SizedBox(height: 10),
-                                  Text(post['content'] ?? '', style: const TextStyle(color: Colors.white, fontSize: 15, height: 1.3)),
+                                  Text.rich(
+                                    TextSpan(
+                                      style: const TextStyle(color: Colors.white, fontSize: 15, height: 1.3),
+                                      children: buildMentionSpans(
+                                        context: context,
+                                        text: (post['content'] ?? '').toString(),
+                                        baseStyle: const TextStyle(color: Colors.white, fontSize: 15, height: 1.3),
+                                      ),
+                                    ),
+                                  ),
+                                  if (post['shared_route_id'] != null) ...[
+                                    const SizedBox(height: 10),
+                                    Align(
+                                      alignment: Alignment.centerLeft,
+                                      child: RouteChip(
+                                          routeId: post['shared_route_id'] as String),
+                                    ),
+                                  ],
                                 ],
                               ),
                             );
@@ -500,14 +620,7 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
                             final group = _groups[index];
                             return Padding(
                               padding: const EdgeInsets.only(bottom: 16),
-                              child: _buildGroupCard(
-                                group['name'] ?? 'Gruppe',
-                                group['route_name'] ?? '',
-                                group['stats'] ?? '',
-                                (group['group_members'] as List?)?.length ?? 0,
-                                group['time_location'] ?? '',
-                                true,
-                              ),
+                              child: _buildProfileGroupCard(group),
                             );
                           },
                         ),
@@ -526,6 +639,7 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
     required int likesCount,
     required int commentsCount,
     required int repostsCount,
+    String? sharedRouteId,
   }) {
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -539,10 +653,10 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
         children: [
           Row(
             children: [
-              CircleAvatar(
+              UserAvatar(
+                name: name,
+                avatarUrl: _avatarUrl,
                 radius: 18,
-                backgroundColor: const Color(0xFFFF3B30),
-                child: Text(name.isNotEmpty ? name[0].toUpperCase() : 'U', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
               ),
               const SizedBox(width: 10),
               Expanded(
@@ -582,7 +696,26 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
             ],
           ),
           const SizedBox(height: 12),
-          Text(content, style: const TextStyle(color: Colors.white, fontSize: 15, height: 1.4)),
+          Builder(builder: (ctx) {
+            const baseStyle = TextStyle(color: Colors.white, fontSize: 15, height: 1.4);
+            return Text.rich(
+              TextSpan(
+                style: baseStyle,
+                children: buildMentionSpans(
+                  context: ctx,
+                  text: content,
+                  baseStyle: baseStyle,
+                ),
+              ),
+            );
+          }),
+          if (sharedRouteId != null) ...[
+            const SizedBox(height: 10),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: RouteChip(routeId: sharedRouteId),
+            ),
+          ],
           const SizedBox(height: 16),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceAround,
@@ -901,54 +1034,266 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
     );
   }
 
-  Widget _buildGroupCard(String title, String routeName, String stats, int drivers, String timeLoc, bool isJoined) {
-    return Container(
-      decoration: BoxDecoration(
-        color: const Color(0xFF1C1F26),
-        borderRadius: BorderRadius.circular(16),
-        border: isJoined ? Border.all(color: Colors.greenAccent.withValues(alpha: 0.5)) : null,
-      ),
-      child: Padding(
+  Widget _buildProfileGroupCard(Map<String, dynamic> group) {
+    final uid = Supabase.instance.client.auth.currentUser?.id;
+    final groupId = group['id'] as String;
+    final title = (group['name'] as String?) ?? 'Gruppe';
+    final isPublic = group['is_public'] == true;
+    final isOwner = group['created_by'] == uid;
+    final members = (group['group_members'] as List?) ?? const [];
+    final count = members.length;
+    final startTime = DateTime.tryParse(group['start_time'] as String? ?? '');
+
+    return InkWell(
+      borderRadius: BorderRadius.circular(16),
+      onTap: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => GroupLobbyPage(groupId: groupId)),
+        ).then((_) => _loadData());
+      },
+      child: Container(
+        decoration: BoxDecoration(
+          color: const Color(0xFF1C1F26),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: isOwner
+                ? const Color(0xFFFF3B30).withValues(alpha: 0.5)
+                : Colors.greenAccent.withValues(alpha: 0.3),
+          ),
+        ),
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text(title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
-                if (isJoined)
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: Colors.greenAccent.withValues(alpha: 0.2),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: const Text('Dabei', style: TextStyle(color: Colors.greenAccent, fontSize: 10, fontWeight: FontWeight.bold)),
+                Expanded(
+                  child: Text(
+                    title,
+                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
+                    overflow: TextOverflow.ellipsis,
                   ),
+                ),
+                _groupBadge(isPublic ? 'Öffentlich' : 'Privat',
+                    isPublic ? Colors.greenAccent : Colors.orangeAccent),
+                const SizedBox(width: 6),
+                if (isOwner) _groupBadge('Owner', const Color(0xFFFF3B30)),
+                PopupMenuButton<String>(
+                  icon: const Icon(Icons.more_vert, color: Colors.grey),
+                  color: const Color(0xFF1C1F26),
+                  onSelected: (v) async {
+                    if (v == 'leave') await _leaveOrDeleteGroup(group);
+                  },
+                  itemBuilder: (_) => [
+                    const PopupMenuItem(
+                      value: 'leave',
+                      // Ob am Ende gelöscht wird (letzter Owner) entscheidet
+                      // der Confirm-Dialog anhand der tatsächlichen Owner-Anzahl.
+                      child: Text(
+                        'Gruppe verlassen',
+                        style: TextStyle(color: Color(0xFFFF3B30)),
+                      ),
+                    ),
+                  ],
+                ),
               ],
             ),
-            if (routeName.isNotEmpty) ...[
-              const SizedBox(height: 8),
+            if (startTime != null) ...[
+              const SizedBox(height: 6),
               Row(children: [
-                const Icon(Icons.terrain, color: Colors.white70, size: 14),
+                const Icon(Icons.event, color: Colors.white70, size: 14),
                 const SizedBox(width: 6),
-                Text(routeName, style: const TextStyle(color: Colors.white, fontSize: 14)),
+                Text(
+                  '${startTime.day.toString().padLeft(2, '0')}.${startTime.month.toString().padLeft(2, '0')}. '
+                  '${startTime.hour.toString().padLeft(2, '0')}:${startTime.minute.toString().padLeft(2, '0')}',
+                  style: const TextStyle(color: Colors.white70, fontSize: 12),
+                ),
               ]),
             ],
-            if (stats.isNotEmpty) ...[
-              const SizedBox(height: 4),
-              Text(stats, style: const TextStyle(color: Colors.grey, fontSize: 11)),
-            ],
-            const SizedBox(height: 8),
+            const SizedBox(height: 6),
             Row(children: [
               const Icon(Icons.local_fire_department, color: Colors.orange, size: 14),
               const SizedBox(width: 6),
-              Text('$drivers Fahrer', style: const TextStyle(color: Colors.white70, fontSize: 12)),
+              Text('$count Fahrer', style: const TextStyle(color: Colors.white70, fontSize: 12)),
             ]),
           ],
         ),
       ),
+    );
+  }
+
+  Widget _groupBadge(String label, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.15),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Text(label,
+          style: TextStyle(color: color, fontSize: 10, fontWeight: FontWeight.bold)),
+    );
+  }
+
+  Future<void> _leaveOrDeleteGroup(Map<String, dynamic> group) async {
+    final uid = Supabase.instance.client.auth.currentUser?.id;
+    if (uid == null) return;
+    final groupId = group['id'] as String;
+
+    // Owner-Rolle über group_members prüfen (mehrere Owner möglich,
+    // da ein Owner die Rolle weitergeben kann).
+    final iAmOwner = await SocialService.isOwner(groupId);
+    final otherOwners =
+        iAmOwner ? await SocialService.countOtherOwners(groupId, uid) : 0;
+    // Gruppe nur löschen, wenn ich Owner bin UND es keinen weiteren Owner gibt.
+    final willDelete = iAmOwner && otherOwners == 0;
+
+    if (!mounted) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => _LeaveGroupDialog(
+        willDelete: willDelete,
+        iAmOwner: iAmOwner,
+        onConfirm: () async {
+          if (willDelete) {
+            await SocialService.deleteGroup(groupId);
+          } else {
+            await SocialService.leaveGroup(groupId);
+          }
+        },
+      ),
+    );
+    if (confirmed != true) return;
+
+    if (mounted) await _loadData();
+  }
+}
+
+/// Bestätigungsdialog für „Gruppe verlassen". Letzter Admin sieht eine
+/// destruktive Variante mit Warntext + roter Lösch-Aktion und Inline-Spinner
+/// während das Backend läuft.
+class _LeaveGroupDialog extends StatefulWidget {
+  final bool willDelete;
+  final bool iAmOwner;
+  final Future<void> Function() onConfirm;
+
+  const _LeaveGroupDialog({
+    required this.willDelete,
+    required this.iAmOwner,
+    required this.onConfirm,
+  });
+
+  @override
+  State<_LeaveGroupDialog> createState() => _LeaveGroupDialogState();
+}
+
+class _LeaveGroupDialogState extends State<_LeaveGroupDialog> {
+  bool _busy = false;
+  String? _error;
+
+  Future<void> _handleConfirm() async {
+    if (_busy) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      await widget.onConfirm();
+      if (mounted) Navigator.pop(context, true);
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _error = 'Aktion fehlgeschlagen: $e';
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final destructive = widget.willDelete;
+    final title = destructive ? 'Gruppe löschen?' : 'Gruppe verlassen?';
+    final body = destructive
+        ? 'Achtung: Du bist der einzige Admin. Wenn du die Gruppe verlässt, '
+            'wird sie vollständig gelöscht. Ernenne vorher einen neuen Admin, '
+            'wenn die Gruppe bestehen bleiben soll.'
+        : widget.iAmOwner
+            ? 'Es gibt weitere Owner – die Gruppe bleibt bestehen, du '
+                'verlierst nur deine Mitgliedschaft.'
+            : 'Du verlässt diese Gruppe. Beitritt später wieder möglich, '
+                'solange sie öffentlich ist.';
+    final confirmLabel = destructive ? 'Gruppe löschen' : 'Verlassen';
+
+    return AlertDialog(
+      backgroundColor: const Color(0xFF1C1F26),
+      title: Row(
+        children: [
+          if (destructive)
+            const Padding(
+              padding: EdgeInsets.only(right: 8),
+              child: Icon(Icons.warning_amber_rounded,
+                  color: Color(0xFFFF3B30), size: 22),
+            ),
+          Expanded(
+            child: Text(title,
+                style: const TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(body, style: const TextStyle(color: Colors.white70)),
+          if (_error != null) ...[
+            const SizedBox(height: 12),
+            Text(_error!,
+                style:
+                    const TextStyle(color: Color(0xFFFF3B30), fontSize: 12)),
+          ],
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: _busy ? null : () => Navigator.pop(context, false),
+          child: const Text('Abbrechen',
+              style: TextStyle(color: Colors.grey)),
+        ),
+        if (destructive)
+          ElevatedButton(
+            onPressed: _busy ? null : _handleConfirm,
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFFF3B30),
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+            ),
+            child: _busy
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(
+                        color: Colors.white, strokeWidth: 2))
+                : Text(confirmLabel,
+                    style:
+                        const TextStyle(fontWeight: FontWeight.bold)),
+          )
+        else
+          TextButton(
+            onPressed: _busy ? null : _handleConfirm,
+            child: _busy
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(
+                        color: Color(0xFFFF3B30), strokeWidth: 2))
+                : Text(confirmLabel,
+                    style: const TextStyle(color: Color(0xFFFF3B30))),
+          ),
+      ],
     );
   }
 }

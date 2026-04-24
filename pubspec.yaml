@@ -52,6 +52,10 @@ dependencies:
   shared_preferences: ^2.3.5
   # Netzwerk-Status für Offline-Modus
   connectivity_plus: ^6.1.4
+  # Nativer Share-Dialog für Posts & Invite-Links
+  share_plus: ^10.1.2
+  # Deep Links (universal / app links)
+  app_links: ^6.3.2
 
 dev_dependencies:
   flutter_test:

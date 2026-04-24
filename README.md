@@ -48,6 +48,15 @@ flutter pub get
 
 ### 4. App starten
 
+**App auf einem Android Emulator starten:**
+1. Öffne Android Studio und starte im **Device Manager** einen Emulator (z.B. Pixel).
+   Alternativ kannst du im Terminal verfügbare Emulatoren auflisten und starten:
+   ```bash
+   flutter emulators
+   flutter emulators --launch <emulator_id>
+   ```
+2. Sobald der Emulator läuft (oder ein echtes Gerät verbunden ist), starte die App mit:
+
 ```bash
 flutter run
 ```

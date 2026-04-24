@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
+import 'package:cruise_connect/presentation/widgets/mentions.dart';
 
 class CreatePostPage extends StatefulWidget {
   final String? initialText;
@@ -21,12 +22,19 @@ class _CreatePostPageState extends State<CreatePostPage> {
     if (widget.initialText != null) {
       _controller.text = widget.initialText!;
     }
+    // Posten-Button reagiert auf Inhalt — bei jeder Änderung rebuilden.
+    _controller.addListener(_onTextChanged);
   }
 
   @override
   void dispose() {
+    _controller.removeListener(_onTextChanged);
     _controller.dispose();
     super.dispose();
+  }
+
+  void _onTextChanged() {
+    if (mounted) setState(() {});
   }
 
   Future<void> _submitPost() async {
@@ -35,7 +43,11 @@ class _CreatePostPageState extends State<CreatePostPage> {
 
     setState(() => _posting = true);
     try {
-      await SocialService.createPost(content, visibility: _visibility, sharedRouteId: widget.sharedRouteId);
+      await SocialService.createPost(
+        content,
+        visibility: _visibility,
+        sharedRouteId: widget.sharedRouteId,
+      );
       if (mounted) Navigator.pop(context, true);
     } catch (e) {
       if (mounted) {
@@ -115,9 +127,9 @@ class _CreatePostPageState extends State<CreatePostPage> {
             padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
             child: Row(
               children: [
-                _buildVisibilityChip('public', Icons.public, 'Alle'),
+                _buildVisibilityChip('public', Icons.public, 'Öffentlich'),
                 const SizedBox(width: 8),
-                _buildVisibilityChip('followers', Icons.group, 'Follower'),
+                _buildVisibilityChip('followers', Icons.group, 'Nur Kontakte'),
               ],
             ),
           ),
@@ -136,14 +148,14 @@ class _CreatePostPageState extends State<CreatePostPage> {
                   ),
                   const SizedBox(width: 12),
                   Expanded(
-                    child: TextField(
+                    child: MentionTextField(
                       controller: _controller,
                       autofocus: true,
                       style: const TextStyle(color: Colors.white, fontSize: 18),
-                      maxLines: null,
-                      onChanged: (_) => setState(() {}),
+                      maxLines: 8,
+                      minLines: 1,
                       decoration: const InputDecoration(
-                        hintText: "Was gibt's Neues?",
+                        hintText: "Was gibt's Neues? Nutze @ um Follower zu erwähnen.",
                         hintStyle: TextStyle(color: Colors.grey, fontSize: 18),
                         border: InputBorder.none,
                       ),
