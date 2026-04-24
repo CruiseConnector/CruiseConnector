@@ -635,6 +635,12 @@ void main() {
     () async {
       RouteService.disableBackgroundPreparation = !warm;
       SharedPreferences.setMockInitialValues({});
+      if (benchmarkRemotePool) {
+        // Live remote-pool benchmarks intentionally use real Supabase HTTP.
+        // TestWidgetsFlutterBinding installs a fake HttpClient that returns
+        // 400 for all requests, so reset it for this opt-in benchmark mode.
+        HttpOverrides.global = null;
+      }
       await Supabase.initialize(
         url: AppConstants.supabaseUrl,
         anonKey: AppConstants.supabaseAnonKey,
