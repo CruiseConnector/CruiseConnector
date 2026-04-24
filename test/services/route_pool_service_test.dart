@@ -1308,6 +1308,234 @@ void main() {
         expect(candidates.single.isVerifiedPool, isFalse);
       },
     );
+
+    test(
+      'Cluster mit vielen falschen Routen ist ohne Pflicht-Kombis nicht healthy_minimum',
+      () async {
+        final service = RoutePoolService(
+          inMemoryRegions: [
+            _region(
+              countryCode: 'DE',
+              admin1Name: 'Bayern',
+              admin2Name: 'München',
+              cityCluster: 'München',
+              centerLat: 48.1372,
+              centerLng: 11.5755,
+            ),
+          ],
+          inMemoryRoutes: List.generate(
+            20,
+            (index) => _route(
+              id: 'munich-evening-$index',
+              countryCode: 'DE',
+              admin1Name: 'Bayern',
+              admin2Name: 'München',
+              cityCluster: 'München',
+              startLat: 48.1372 + (index * 0.0001),
+              startLng: 11.5755 + (index * 0.0001),
+              distanceBucket: 50,
+              styleTags: const ['Abendrunde'],
+            ),
+          ),
+          inMemoryCoverage: <RoutePoolCoverage>[],
+          inMemorySeedJobs: <RouteSeedJob>[],
+          inMemoryCandidates: <RoutePoolCandidate>[],
+        );
+
+        final report = await service.buildClusterCoverageReport(
+          countryCode: 'DE',
+          admin1Name: 'Bayern',
+          admin2Name: 'München',
+          cityCluster: 'München',
+        );
+
+        expect(report, isNotNull);
+        expect(report!.totalVerifiedCount, 20);
+        expect(report.fulfilledCombinationCount, 0);
+        expect(report.coverageStatus, 'thin');
+        expect(report.isHealthyMinimum, isFalse);
+        expect(report.missingCombinations, hasLength(6));
+      },
+    );
+
+    test(
+      'Dornbirn 75 Kurvenjagd AUS fehlend erzeugt priorisierten Seed-Job',
+      () async {
+        final routes = <RoutePoolEntry>[];
+        var id = 0;
+        for (final requirement in RoutePoolService.mvpRequiredCombinations) {
+          if (requirement.distanceBucket == 75 &&
+              requirement.styleKey == 'kurvenjagd') {
+            continue;
+          }
+          for (var i = 0; i < requirement.requiredVerifiedCount; i += 1) {
+            routes.add(
+              _route(
+                id: 'dornbirn-covered-${id++}',
+                countryCode: 'AT',
+                admin1Name: 'Vorarlberg',
+                admin2Name: 'Dornbirn',
+                cityCluster: 'Dornbirn',
+                startLat: 47.4125 + (id * 0.0001),
+                startLng: 9.7414 + (id * 0.0001),
+                distanceBucket: requirement.distanceBucket,
+                styleTags: [requirement.styleLabel],
+              ),
+            );
+          }
+        }
+        final jobs = <RouteSeedJob>[];
+        final service = RoutePoolService(
+          inMemoryRegions: [
+            _region(
+              countryCode: 'AT',
+              admin1Name: 'Vorarlberg',
+              admin2Name: 'Dornbirn',
+              cityCluster: 'Dornbirn',
+              centerLat: 47.4125,
+              centerLng: 9.7414,
+              difficultyLevel: 'easy',
+              defaultTargetPoolSize: 18,
+              defaultMaxPoolSize: 20,
+              healthyThreshold: 12,
+              thinThreshold: 4,
+              seedBudgetUnits: 2,
+            ),
+          ],
+          inMemoryRoutes: routes,
+          inMemoryCoverage: <RoutePoolCoverage>[],
+          inMemorySeedJobs: jobs,
+          inMemoryCandidates: <RoutePoolCandidate>[],
+        );
+
+        final report = await service.buildClusterCoverageReport(
+          countryCode: 'AT',
+          admin1Name: 'Vorarlberg',
+          admin2Name: 'Dornbirn',
+          cityCluster: 'Dornbirn',
+          createSeedJobs: true,
+          subscriptionTier: 'premium',
+        );
+
+        expect(report, isNotNull);
+        expect(report!.coverageStatus, 'thin');
+        expect(report.fulfilledCombinationCount, 5);
+        expect(report.seedJobsQueuedCount, 1);
+        expect(jobs, hasLength(1));
+        expect(jobs.single.distanceBucket, 75);
+        expect(jobs.single.styleKey, 'kurvenjagd');
+        expect(jobs.single.priority, greaterThanOrEqualTo(90));
+      },
+    );
+
+    test(
+      'Bludenz hard region bekommt curated_needed statt endloser Seed-Jobs',
+      () async {
+        final jobs = <RouteSeedJob>[];
+        final service = RoutePoolService(
+          inMemoryRegions: [
+            _region(
+              countryCode: 'AT',
+              admin1Name: 'Vorarlberg',
+              admin2Name: 'Bludenz',
+              cityCluster: 'Bludenz',
+              centerLat: 47.1548,
+              centerLng: 9.8220,
+              difficultyLevel: 'hard',
+              hardRegionStatus: 'curated_needed',
+              bootstrapEnabled: false,
+              curatedSeedPreferred: true,
+              seedBudgetUnits: 0,
+              seedCooldownMinutes: 180,
+            ),
+          ],
+          inMemoryRoutes: const [],
+          inMemoryCoverage: <RoutePoolCoverage>[],
+          inMemorySeedJobs: jobs,
+          inMemoryCandidates: <RoutePoolCandidate>[],
+        );
+
+        final report = await service.buildClusterCoverageReport(
+          countryCode: 'AT',
+          admin1Name: 'Vorarlberg',
+          admin2Name: 'Bludenz',
+          cityCluster: 'Bludenz',
+          createSeedJobs: true,
+          subscriptionTier: 'premium',
+        );
+
+        expect(report, isNotNull);
+        expect(report!.coverageStatus, 'hard_region_curated_needed');
+        expect(report.hardRegion, isTrue);
+        expect(report.seedJobsQueuedCount, 0);
+        expect(jobs, isEmpty);
+      },
+    );
+
+    test(
+      'Stuttgart Muenchen und Zuerich erhalten Coverage-Zellen ohne Massenseeding',
+      () async {
+        final coverages = <RoutePoolCoverage>[];
+        final jobs = <RouteSeedJob>[];
+        final service = RoutePoolService(
+          inMemoryRegions: [
+            _region(
+              countryCode: 'DE',
+              admin1Name: 'Baden-Württemberg',
+              admin2Name: 'Stuttgart',
+              cityCluster: 'Stuttgart',
+              centerLat: 48.7758,
+              centerLng: 9.1829,
+            ),
+            _region(
+              countryCode: 'DE',
+              admin1Name: 'Bayern',
+              admin2Name: 'München',
+              cityCluster: 'München',
+              centerLat: 48.1372,
+              centerLng: 11.5755,
+            ),
+            _region(
+              countryCode: 'CH',
+              admin1Name: 'Zürich',
+              admin2Name: 'Zürich',
+              cityCluster: 'Zürich',
+              centerLat: 47.3769,
+              centerLng: 8.5417,
+            ),
+          ],
+          inMemoryRoutes: const [],
+          inMemoryCoverage: coverages,
+          inMemorySeedJobs: jobs,
+          inMemoryCandidates: <RoutePoolCandidate>[],
+        );
+
+        final stuttgart = await service.buildClusterCoverageReport(
+          countryCode: 'DE',
+          admin1Name: 'Baden-Württemberg',
+          admin2Name: 'Stuttgart',
+          cityCluster: 'Stuttgart',
+        );
+        final munich = await service.buildClusterCoverageReport(
+          countryCode: 'DE',
+          admin1Name: 'Bayern',
+          admin2Name: 'München',
+          cityCluster: 'München',
+        );
+        final zurich = await service.buildClusterCoverageReport(
+          countryCode: 'CH',
+          admin1Name: 'Zürich',
+          admin2Name: 'Zürich',
+          cityCluster: 'Zürich',
+        );
+
+        expect(stuttgart?.coverageStatus, 'empty');
+        expect(munich?.coverageStatus, 'empty');
+        expect(zurich?.coverageStatus, 'empty');
+        expect(coverages, hasLength(18));
+        expect(jobs, isEmpty);
+      },
+    );
   });
 }
 

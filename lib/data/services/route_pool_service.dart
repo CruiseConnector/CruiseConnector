@@ -157,6 +157,7 @@ class RoutePoolCoverageCheck {
 
 class _CoveragePolicy {
   const _CoveragePolicy({
+    required this.requiredVerifiedCount,
     required this.difficultyLevel,
     required this.hardRegionStatus,
     required this.bootstrapEnabled,
@@ -169,6 +170,7 @@ class _CoveragePolicy {
     required this.seedCooldownMinutes,
   });
 
+  final int? requiredVerifiedCount;
   final String difficultyLevel;
   final String hardRegionStatus;
   final bool bootstrapEnabled;
@@ -181,6 +183,83 @@ class _CoveragePolicy {
   final int seedCooldownMinutes;
 
   bool get isHard => difficultyLevel == 'hard';
+}
+
+class RoutePoolRequiredCombination {
+  const RoutePoolRequiredCombination({
+    required this.distanceBucket,
+    required this.styleLabel,
+    required this.styleKey,
+    required this.avoidHighways,
+    required this.requiredVerifiedCount,
+  });
+
+  final int distanceBucket;
+  final String styleLabel;
+  final String styleKey;
+  final bool avoidHighways;
+  final int requiredVerifiedCount;
+}
+
+class RoutePoolCombinationCoverage {
+  const RoutePoolCombinationCoverage({
+    required this.requirement,
+    required this.coverageStatus,
+    required this.currentVerifiedCount,
+    required this.currentCandidateCount,
+    required this.seedJobQueued,
+    required this.duplicateJobPrevented,
+    required this.seedJobPriority,
+    required this.seedJobStatus,
+    required this.missingVerifiedCount,
+  });
+
+  final RoutePoolRequiredCombination requirement;
+  final String coverageStatus;
+  final int currentVerifiedCount;
+  final int currentCandidateCount;
+  final bool seedJobQueued;
+  final bool duplicateJobPrevented;
+  final int? seedJobPriority;
+  final String? seedJobStatus;
+  final int missingVerifiedCount;
+
+  bool get isFulfilled => missingVerifiedCount <= 0;
+  String get label =>
+      '${requirement.distanceBucket} ${requirement.styleLabel} '
+      '${requirement.avoidHighways ? 'AUS' : 'AN'}';
+}
+
+class RoutePoolClusterCoverageReport {
+  const RoutePoolClusterCoverageReport({
+    required this.region,
+    required this.coverageStatus,
+    required this.requiredCombinationCount,
+    required this.fulfilledCombinationCount,
+    required this.totalVerifiedCount,
+    required this.totalCandidateCount,
+    required this.seedJobsQueuedCount,
+    required this.duplicateJobsPreventedCount,
+    required this.hardRegion,
+    required this.combinations,
+  });
+
+  final RouteRegion region;
+  final String coverageStatus;
+  final int requiredCombinationCount;
+  final int fulfilledCombinationCount;
+  final int totalVerifiedCount;
+  final int totalCandidateCount;
+  final int seedJobsQueuedCount;
+  final int duplicateJobsPreventedCount;
+  final bool hardRegion;
+  final List<RoutePoolCombinationCoverage> combinations;
+
+  bool get isHealthyMinimum =>
+      coverageStatus == 'healthy_minimum' || coverageStatus == 'healthy_full';
+
+  List<RoutePoolCombinationCoverage> get missingCombinations =>
+      combinations.where((combo) => !combo.isFulfilled).toList(growable: false);
 }
 
 class RoutePoolCandidateSaveResult {
@@ -225,6 +304,50 @@ class RoutePoolService {
   static const int defaultMaxPoolSize = 20;
   static const Duration coverageRefreshTtl = Duration(minutes: 15);
   static const Duration defaultSeedJobCooldown = Duration(minutes: 20);
+  static const List<RoutePoolRequiredCombination> mvpRequiredCombinations = [
+    RoutePoolRequiredCombination(
+      distanceBucket: 50,
+      styleLabel: 'Sport Mode',
+      styleKey: 'sport_mode',
+      avoidHighways: true,
+      requiredVerifiedCount: 3,
+    ),
+    RoutePoolRequiredCombination(
+      distanceBucket: 50,
+      styleLabel: 'Kurvenjagd',
+      styleKey: 'kurvenjagd',
+      avoidHighways: true,
+      requiredVerifiedCount: 3,
+    ),
+    RoutePoolRequiredCombination(
+      distanceBucket: 75,
+      styleLabel: 'Sport Mode',
+      styleKey: 'sport_mode',
+      avoidHighways: true,
+      requiredVerifiedCount: 3,
+    ),
+    RoutePoolRequiredCombination(
+      distanceBucket: 75,
+      styleLabel: 'Kurvenjagd',
+      styleKey: 'kurvenjagd',
+      avoidHighways: true,
+      requiredVerifiedCount: 3,
+    ),
+    RoutePoolRequiredCombination(
+      distanceBucket: 100,
+      styleLabel: 'Sport Mode',
+      styleKey: 'sport_mode',
+      avoidHighways: true,
+      requiredVerifiedCount: 2,
+    ),
+    RoutePoolRequiredCombination(
+      distanceBucket: 100,
+      styleLabel: 'Kurvenjagd',
+      styleKey: 'kurvenjagd',
+      avoidHighways: true,
+      requiredVerifiedCount: 2,
+    ),
+  ];
 
   final SupabaseClient? _client;
   final List<RoutePoolEntry>? _inMemoryRoutes;
@@ -346,6 +469,11 @@ class RoutePoolService {
     }
 
     final styleKey = _normalizeStyleKey(style);
+    final requiredCombination = _requiredCombinationFor(
+      distanceBucket: distanceBucket,
+      styleKey: styleKey,
+      avoidHighways: avoidHighways,
+    );
     var coverage = await _loadOrRefreshCoverage(
       assignment: assignment,
       distanceBucket: distanceBucket,
@@ -356,6 +484,7 @@ class RoutePoolService {
     final policy = _coveragePolicyFor(
       region: assignment.region,
       coverage: coverage,
+      requiredCombination: requiredCombination,
     );
 
     var seedJobCreated = false;
@@ -388,6 +517,11 @@ class RoutePoolService {
         avoidHighways: avoidHighways,
         routeType: routeType,
         subscriptionTier: subscriptionTier,
+        priority: _seedJobPriority(
+          subscriptionTier: subscriptionTier,
+          requiredCombination: requiredCombination,
+          currentVerifiedCount: coverage.currentVerifiedCount,
+        ),
       );
       seedJob = jobResult.job;
       seedJobCreated = jobResult.created;
@@ -450,6 +584,176 @@ class RoutePoolService {
     );
   }
 
+  Future<RoutePoolClusterCoverageReport?> buildClusterCoverageReport({
+    required String countryCode,
+    required String admin1Name,
+    required String cityCluster,
+    String? admin2Name,
+    String routeType = 'ROUND_TRIP',
+    bool createSeedJobs = false,
+    String subscriptionTier = 'free',
+    List<RoutePoolRequiredCombination>? requiredCombinations,
+  }) async {
+    final region = await _loadRegionByClusterKey(
+      countryCode: countryCode,
+      admin1Name: admin1Name,
+      admin2Name: admin2Name,
+      cityCluster: cityCluster,
+    );
+    if (region == null) return null;
+
+    final assignment = RoutePoolRegionAssignment(
+      region: region,
+      distanceToCenterKm: 0,
+    );
+    final combinations =
+        requiredCombinations ?? RoutePoolService.mvpRequiredCombinations;
+    final coverageRows = <RoutePoolCombinationCoverage>[];
+    var queuedCount = 0;
+    var duplicateCount = 0;
+
+    for (final requirement in combinations) {
+      var coverage = await _loadOrRefreshCoverage(
+        assignment: assignment,
+        distanceBucket: requirement.distanceBucket,
+        styleKey: requirement.styleKey,
+        avoidHighways: requirement.avoidHighways,
+        routeType: routeType,
+      );
+      final policy = _coveragePolicyFor(
+        region: region,
+        coverage: coverage,
+        requiredCombination: requirement,
+      );
+      var seedJob = await _loadSeedJob(
+        assignment: assignment,
+        distanceBucket: requirement.distanceBucket,
+        styleKey: requirement.styleKey,
+        avoidHighways: requirement.avoidHighways,
+        routeType: routeType,
+      );
+      var seedJobQueued = false;
+      var duplicatePrevented = false;
+      final missingVerifiedCount = math.max(
+        0,
+        requirement.requiredVerifiedCount - coverage.currentVerifiedCount,
+      );
+      if (createSeedJobs &&
+          missingVerifiedCount > 0 &&
+          seedJob != null &&
+          (seedJob.isActive || seedJob.isCoolingDown)) {
+        duplicatePrevented = true;
+        duplicateCount += 1;
+      }
+      if (createSeedJobs &&
+          missingVerifiedCount > 0 &&
+          _shouldCreateSeedJob(
+            policy: policy,
+            coverage: coverage,
+            existingSeedJob: seedJob,
+          )) {
+        final result = await _ensureSeedJob(
+          assignment: assignment,
+          policy: policy,
+          distanceBucket: requirement.distanceBucket,
+          styleKey: requirement.styleKey,
+          avoidHighways: requirement.avoidHighways,
+          routeType: routeType,
+          subscriptionTier: subscriptionTier,
+          priority: _seedJobPriority(
+            subscriptionTier: subscriptionTier,
+            requiredCombination: requirement,
+            currentVerifiedCount: coverage.currentVerifiedCount,
+          ),
+        );
+        seedJob = result.job;
+        seedJobQueued = result.created;
+        duplicatePrevented = result.duplicatePrevented;
+        if (seedJobQueued) queuedCount += 1;
+        if (duplicatePrevented) duplicateCount += 1;
+        coverage = await _upsertCoverage(
+          coverage.copyWith(
+            coverageStatus: _deriveCoverageStatus(
+              policy: policy,
+              currentVerifiedCount: coverage.currentVerifiedCount,
+              hasBootstrapPending: true,
+              isCooldown: seedJob.isCoolingDown,
+            ),
+            lastBootstrapRequestedAt:
+                seedJob.lastRequestedAt ?? DateTime.now().toUtc(),
+            bootstrapCooldownUntil: seedJob.cooldownUntil,
+            lastError: seedJob.lastError,
+          ),
+        );
+      }
+
+      final hasBootstrapPending =
+          seedJob != null && (seedJob.isActive || seedJob.isCoolingDown);
+      final coverageStatus = _deriveCoverageStatus(
+        policy: policy,
+        currentVerifiedCount: coverage.currentVerifiedCount,
+        hasBootstrapPending: hasBootstrapPending,
+        isCooldown: seedJob?.isCoolingDown ?? false,
+      );
+      if (coverage.coverageStatus != coverageStatus) {
+        coverage = await _upsertCoverage(
+          coverage.copyWith(
+            coverageStatus: coverageStatus,
+            bootstrapCooldownUntil: seedJob?.cooldownUntil,
+            lastError: seedJob?.lastError,
+          ),
+        );
+      }
+      coverageRows.add(
+        RoutePoolCombinationCoverage(
+          requirement: requirement,
+          coverageStatus: coverageStatus,
+          currentVerifiedCount: coverage.currentVerifiedCount,
+          currentCandidateCount: coverage.currentCandidateCount,
+          seedJobQueued: seedJobQueued,
+          duplicateJobPrevented: duplicatePrevented,
+          seedJobPriority: seedJob?.priority,
+          seedJobStatus: seedJob?.status,
+          missingVerifiedCount: math.max(
+            0,
+            requirement.requiredVerifiedCount - coverage.currentVerifiedCount,
+          ),
+        ),
+      );
+    }
+
+    final totalVerifiedCount = await _countClusterVerifiedRoutes(
+      assignment: assignment,
+      routeType: routeType,
+    );
+    final totalCandidateCount = await _countClusterCandidates(
+      assignment: assignment,
+      routeType: routeType,
+    );
+    final fulfilledCount = coverageRows
+        .where((combo) => combo.isFulfilled)
+        .length;
+    final status = _deriveClusterCoverageStatus(
+      region: region,
+      fulfilledCombinationCount: fulfilledCount,
+      requiredCombinationCount: coverageRows.length,
+      totalVerifiedCount: totalVerifiedCount,
+    );
+
+    return RoutePoolClusterCoverageReport(
+      region: region,
+      coverageStatus: status,
+      requiredCombinationCount: coverageRows.length,
+      fulfilledCombinationCount: fulfilledCount,
+      totalVerifiedCount: totalVerifiedCount,
+      totalCandidateCount: totalCandidateCount,
+      seedJobsQueuedCount: queuedCount,
+      duplicateJobsPreventedCount: duplicateCount,
+      hardRegion: region.difficultyLevel == 'hard',
+      combinations: coverageRows,
+    );
+  }
+
   Future<RoutePoolCandidateSaveResult> recordCandidateRoute({
     required double userLat,
     required double userLng,
@@ -507,6 +811,11 @@ class RoutePoolService {
     final policy = _coveragePolicyFor(
       region: assignment.region,
       coverage: coverage,
+      requiredCombination: _requiredCombinationFor(
+        distanceBucket: distanceBucket,
+        styleKey: styleKey,
+        avoidHighways: avoidHighways,
+      ),
     );
     final poolFull = coverage.currentVerifiedCount >= coverage.maxPoolSize;
     final candidate = RoutePoolCandidate(
@@ -1279,6 +1588,41 @@ class RoutePoolService {
         .toList(growable: false);
   }
 
+  Future<RouteRegion?> _loadRegionByClusterKey({
+    required String countryCode,
+    required String admin1Name,
+    String? admin2Name,
+    required String cityCluster,
+  }) async {
+    final inMemoryRegions = _inMemoryRegions;
+    if (inMemoryRegions != null) {
+      for (final region in inMemoryRegions) {
+        if (!region.isActive) continue;
+        if (_sameText(region.countryCode, countryCode) &&
+            _sameText(region.admin1Name, admin1Name) &&
+            _nullableSameText(region.admin2Name, admin2Name) &&
+            _sameText(region.cityCluster, cityCluster)) {
+          return region;
+        }
+      }
+      return null;
+    }
+
+    var query = _db
+        .from('route_regions')
+        .select()
+        .eq('is_active', true)
+        .eq('country_code', countryCode.trim().toUpperCase())
+        .eq('admin1_name', admin1Name.trim())
+        .eq('city_cluster', cityCluster.trim());
+    if (admin2Name != null && admin2Name.trim().isNotEmpty) {
+      query = query.eq('admin2_name', admin2Name.trim());
+    }
+    final rows = await query.limit(1);
+    if ((rows as List).isEmpty) return null;
+    return RouteRegion.fromJson(Map<String, dynamic>.from(rows.first as Map));
+  }
+
   Future<RoutePoolCoverage> _loadOrRefreshCoverage({
     required RoutePoolRegionAssignment assignment,
     required int distanceBucket,
@@ -1297,6 +1641,11 @@ class RoutePoolService {
     final policy = _coveragePolicyFor(
       region: assignment.region,
       coverage: coverage,
+      requiredCombination: _requiredCombinationFor(
+        distanceBucket: distanceBucket,
+        styleKey: styleKey,
+        avoidHighways: avoidHighways,
+      ),
     );
     final policyAlignedCoverage = coverage == null
         ? null
@@ -1594,6 +1943,85 @@ class RoutePoolService {
     return count;
   }
 
+  Future<int> _countClusterVerifiedRoutes({
+    required RoutePoolRegionAssignment assignment,
+    required String routeType,
+  }) async {
+    final inMemoryRoutes = _inMemoryRoutes;
+    if (inMemoryRoutes != null) {
+      return inMemoryRoutes.where((route) {
+        return route.verified &&
+            route.isActive &&
+            _sameText(route.countryCode, assignment.region.countryCode) &&
+            _sameText(route.admin1Name, assignment.region.admin1Name) &&
+            _nullableSameText(route.admin2Name, assignment.region.admin2Name) &&
+            _sameText(route.cityCluster, assignment.region.cityCluster) &&
+            _sameText(route.routeType, routeType);
+      }).length;
+    }
+
+    final rows = await _db
+        .from('route_pool')
+        .select('id, admin2_name')
+        .eq('verified', true)
+        .eq('is_active', true)
+        .eq('country_code', assignment.region.countryCode)
+        .eq('admin1_name', assignment.region.admin1Name)
+        .eq('city_cluster', assignment.region.cityCluster)
+        .eq('route_type', routeType);
+    var count = 0;
+    for (final row in rows as List) {
+      final map = Map<String, dynamic>.from(row as Map);
+      if (_nullableSameText(
+        map['admin2_name'] as String?,
+        assignment.region.admin2Name,
+      )) {
+        count += 1;
+      }
+    }
+    return count;
+  }
+
+  Future<int> _countClusterCandidates({
+    required RoutePoolRegionAssignment assignment,
+    required String routeType,
+  }) async {
+    final inMemoryCandidates = _inMemoryCandidates;
+    if (inMemoryCandidates != null) {
+      return inMemoryCandidates.where((candidate) {
+        return candidate.isCandidate &&
+            _sameText(candidate.countryCode, assignment.region.countryCode) &&
+            _sameText(candidate.admin1Name, assignment.region.admin1Name) &&
+            _nullableSameText(
+              candidate.admin2Name,
+              assignment.region.admin2Name,
+            ) &&
+            _sameText(candidate.cityCluster, assignment.region.cityCluster) &&
+            _sameText(candidate.routeType, routeType);
+      }).length;
+    }
+
+    final rows = await _db
+        .from('route_pool_candidates')
+        .select('id, admin2_name')
+        .eq('country_code', assignment.region.countryCode)
+        .eq('admin1_name', assignment.region.admin1Name)
+        .eq('city_cluster', assignment.region.cityCluster)
+        .eq('route_type', routeType)
+        .eq('is_candidate', true);
+    var count = 0;
+    for (final row in rows as List) {
+      final map = Map<String, dynamic>.from(row as Map);
+      if (_nullableSameText(
+        map['admin2_name'] as String?,
+        assignment.region.admin2Name,
+      )) {
+        count += 1;
+      }
+    }
+    return count;
+  }
+
   Future<_SeedJobUpsertResult> _ensureSeedJob({
     required RoutePoolRegionAssignment assignment,
     required _CoveragePolicy policy,
@@ -1602,6 +2030,7 @@ class RoutePoolService {
     required bool avoidHighways,
     required String routeType,
     required String subscriptionTier,
+    int? priority,
   }) async {
     final now = DateTime.now().toUtc();
     final existing = await _loadSeedJob(
@@ -1626,6 +2055,8 @@ class RoutePoolService {
         lastRequestedAt: now,
         seedBudgetUnits: policy.seedBudgetUnits,
         seedCooldownMinutes: policy.seedCooldownMinutes,
+        priority: priority ?? existing.priority,
+        maxAttempts: policy.isHard ? 1 : existing.maxAttempts,
         triggeredByTier: subscriptionTier,
       );
       return _SeedJobUpsertResult(
@@ -1648,7 +2079,8 @@ class RoutePoolService {
       status: 'queued',
       difficultyLevel: policy.difficultyLevel,
       hardRegionStatus: policy.hardRegionStatus,
-      priority: _priorityForTier(subscriptionTier),
+      priority: priority ?? _priorityForTier(subscriptionTier),
+      maxAttempts: policy.isHard ? 1 : 3,
       lastRequestedAt: now,
       seedBudgetUnits: policy.seedBudgetUnits,
       seedCooldownMinutes: policy.seedCooldownMinutes,
@@ -1853,12 +2285,29 @@ class RoutePoolService {
         job.avoidHighways == avoidHighways;
   }
 
+  static RoutePoolRequiredCombination? _requiredCombinationFor({
+    required int distanceBucket,
+    required String styleKey,
+    required bool avoidHighways,
+  }) {
+    for (final combination in mvpRequiredCombinations) {
+      if (combination.distanceBucket == distanceBucket &&
+          combination.styleKey == styleKey &&
+          combination.avoidHighways == avoidHighways) {
+        return combination;
+      }
+    }
+    return null;
+  }
+
   static _CoveragePolicy _coveragePolicyFor({
     required RouteRegion region,
     RoutePoolCoverage? coverage,
+    RoutePoolRequiredCombination? requiredCombination,
   }) {
+    final requiredVerifiedCount = requiredCombination?.requiredVerifiedCount;
     final targetPoolSize = math.max(
-      1,
+      requiredVerifiedCount ?? 1,
       region.defaultTargetPoolSize > 0
           ? region.defaultTargetPoolSize
           : (coverage?.targetPoolSize ?? defaultTargetPoolSize),
@@ -1873,9 +2322,10 @@ class RoutePoolService {
       1,
       math.min(
         maxPoolSize,
-        region.healthyThreshold > 0
-            ? region.healthyThreshold
-            : (coverage?.healthyThreshold ?? targetPoolSize),
+        requiredVerifiedCount ??
+            (region.healthyThreshold > 0
+                ? region.healthyThreshold
+                : (coverage?.healthyThreshold ?? targetPoolSize)),
       ),
     );
     final thinThreshold = math.max(
@@ -1888,6 +2338,7 @@ class RoutePoolService {
       ),
     );
     return _CoveragePolicy(
+      requiredVerifiedCount: requiredVerifiedCount,
       difficultyLevel: region.difficultyLevel,
       hardRegionStatus: region.hardRegionStatus,
       bootstrapEnabled: region.bootstrapEnabled,
@@ -1909,6 +2360,29 @@ class RoutePoolService {
             : (coverage?.seedCooldownMinutes ?? 20),
       ),
     );
+  }
+
+  static String _deriveClusterCoverageStatus({
+    required RouteRegion region,
+    required int fulfilledCombinationCount,
+    required int requiredCombinationCount,
+    required int totalVerifiedCount,
+  }) {
+    if (requiredCombinationCount > 0 &&
+        fulfilledCombinationCount >= requiredCombinationCount) {
+      return totalVerifiedCount >= region.defaultTargetPoolSize
+          ? 'healthy_full'
+          : 'healthy_minimum';
+    }
+    if (region.difficultyLevel == 'hard') {
+      if (region.curatedSeedPreferred ||
+          region.hardRegionStatus == 'curated_needed' ||
+          !region.bootstrapEnabled) {
+        return 'hard_region_curated_needed';
+      }
+      return totalVerifiedCount > 0 ? 'hard_region_thin' : 'empty';
+    }
+    return totalVerifiedCount > 0 ? 'thin' : 'empty';
   }
 
   static RoutePoolCoverage _applyCoveragePolicySnapshot(
@@ -1950,7 +2424,7 @@ class RoutePoolService {
     required RoutePoolCoverage coverage,
     required RouteSeedJob? existingSeedJob,
   }) {
-    if (coverage.currentVerifiedCount >= policy.targetPoolSize) return false;
+    if (coverage.currentVerifiedCount >= policy.healthyThreshold) return false;
     if (!policy.bootstrapEnabled) return false;
     if (policy.isHard && policy.curatedSeedPreferred) return false;
     if (existingSeedJob == null) return true;
@@ -2000,6 +2474,32 @@ class RoutePoolService {
       default:
         return 10;
     }
+  }
+
+  static int _seedJobPriority({
+    required String subscriptionTier,
+    required RoutePoolRequiredCombination? requiredCombination,
+    required int currentVerifiedCount,
+  }) {
+    final tierPriority = _priorityForTier(subscriptionTier);
+    if (requiredCombination == null) return tierPriority;
+
+    final missingCount = math.max(
+      0,
+      requiredCombination.requiredVerifiedCount - currentVerifiedCount,
+    );
+    final bucketPriority = switch (requiredCombination.distanceBucket) {
+      50 => 40,
+      75 => 35,
+      100 => 25,
+      _ => 10,
+    };
+    final stylePriority = switch (requiredCombination.styleKey) {
+      'sport_mode' => 30,
+      'kurvenjagd' => 30,
+      _ => 10,
+    };
+    return tierPriority + bucketPriority + stylePriority + (missingCount * 10);
   }
 
   static String _normalizeStyleKey(String style) {
