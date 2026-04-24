@@ -22,7 +22,9 @@ class _HomePageState extends State<HomePage> {
   // damit die Zielseite ihre Daten automatisch neu lädt.
   int _refreshCounter = 0;
 
-  final List<bool> _isTabLoaded = [true, false, false, false, false];
+  // Web-only: Lazy-Loading — Tabs werden erst beim ersten Besuch erstellt.
+  // Auf Native bleibt IndexedStack unverändert (schnell genug).
+  final Set<int> _visitedTabs = {0}; // Tab 0 (Home) ist immer besucht
 
   @override
   void initState() {
@@ -30,6 +32,7 @@ class _HomePageState extends State<HomePage> {
     CruiseModePage.isFullscreen.addListener(_onFullscreenChanged);
     CruiseModePage.pendingRoute.addListener(_onPendingRoute);
     _requestLocationPermission();
+    // Dark-Style für Offline-Nutzung im Hintergrund cachen
     Future.delayed(const Duration(seconds: 2), () {
       OfflineMapService.instance.ensureStyleCached();
     });
@@ -67,8 +70,8 @@ class _HomePageState extends State<HomePage> {
     if (CruiseModePage.pendingRoute.value != null && mounted) {
       setState(() {
         _selectedIndex = 2;
-        _isTabLoaded[2] = true;
         _refreshCounter++;
+        _visitedTabs.add(2);
       });
     }
   }
@@ -85,8 +88,8 @@ class _HomePageState extends State<HomePage> {
   void _onNavItemTapped(int index) {
     setState(() {
       _selectedIndex = index;
-      _isTabLoaded[index] = true;
       _refreshCounter++;
+      _visitedTabs.add(index);
     });
   }
 
@@ -100,18 +103,54 @@ class _HomePageState extends State<HomePage> {
         bottom: !_isFullscreen,
         left: !_isFullscreen,
         right: !_isFullscreen,
-        child: IndexedStack(
-          index: _selectedIndex,
-          children: [
-            _isTabLoaded[0] ? HomeContentPage(onTabChange: _onNavItemTapped, refreshKey: _selectedIndex == 0 ? _refreshCounter : 0) : const SizedBox(),
-            _isTabLoaded[1] ? CommunityPage(refreshKey: _selectedIndex == 1 ? _refreshCounter : 0) : const SizedBox(),
-            _isTabLoaded[2] ? const CruiseModePage() : const SizedBox(),
-            _isTabLoaded[3] ? AnalyticsPage(refreshKey: _selectedIndex == 3 ? _refreshCounter : 0) : const SizedBox(),
-            _isTabLoaded[4] ? ProfilePage(refreshKey: _selectedIndex == 4 ? _refreshCounter : 0) : const SizedBox(),
-          ],
-        ),
+        child: kIsWeb ? _buildWebTabs() : _buildNativeTabs(),
       ),
       bottomNavigationBar: _isFullscreen ? null : _buildBottomNav(),
+    );
+  }
+
+  /// Native: IndexedStack wie bisher — alle Tabs live, GPU-beschleunigt.
+  Widget _buildNativeTabs() {
+    return IndexedStack(
+      index: _selectedIndex,
+      children: [
+        HomeContentPage(
+          onTabChange: _onNavItemTapped,
+          refreshKey: _selectedIndex == 0 ? _refreshCounter : 0,
+        ),
+        CommunityPage(refreshKey: _selectedIndex == 1 ? _refreshCounter : 0),
+        const CruiseModePage(),
+        AnalyticsPage(refreshKey: _selectedIndex == 3 ? _refreshCounter : 0),
+        ProfilePage(refreshKey: _selectedIndex == 4 ? _refreshCounter : 0),
+      ],
+    );
+  }
+
+  /// Web: Lazy-Loading + TickerMode für nicht-aktive Tabs.
+  /// Tabs werden erst beim ersten Besuch erstellt (spart initiale Ladezeit).
+  /// Nicht-aktive Tabs werden mit TickerMode(enabled: false) pausiert,
+  /// sodass Animationen keine CPU verbrauchen.
+  Widget _buildWebTabs() {
+    final tabs = <Widget>[
+      HomeContentPage(
+        onTabChange: _onNavItemTapped,
+        refreshKey: _selectedIndex == 0 ? _refreshCounter : 0,
+      ),
+      CommunityPage(refreshKey: _selectedIndex == 1 ? _refreshCounter : 0),
+      const CruiseModePage(),
+      AnalyticsPage(refreshKey: _selectedIndex == 3 ? _refreshCounter : 0),
+      ProfilePage(refreshKey: _selectedIndex == 4 ? _refreshCounter : 0),
+    ];
+
+    return Stack(
+      children: [
+        for (var i = 0; i < tabs.length; i++)
+          if (_visitedTabs.contains(i))
+            Offstage(
+              offstage: _selectedIndex != i,
+              child: TickerMode(enabled: _selectedIndex == i, child: tabs[i]),
+            ),
+      ],
     );
   }
 
@@ -128,7 +167,7 @@ class _HomePageState extends State<HomePage> {
             color: Colors.black.withValues(alpha: 0.08),
             blurRadius: 20,
             offset: const Offset(0, -5),
-          )
+          ),
         ],
       ),
       child: Stack(
@@ -161,7 +200,7 @@ class _HomePageState extends State<HomePage> {
                     shape: BoxShape.circle,
                     // Angepasster Gradient für den exakten Figma-Look
                     gradient: const LinearGradient(
-                      colors: [Color(0xFFFF453A), Color(0xFFD32F2F)], 
+                      colors: [Color(0xFFFF453A), Color(0xFFD32F2F)],
                       begin: Alignment.topCenter,
                       end: Alignment.bottomCenter,
                     ),
@@ -179,7 +218,11 @@ class _HomePageState extends State<HomePage> {
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
                       // Vergrößertes Icon in der Mitte (34 statt 28)
-                      const Icon(Icons.directions_car_outlined, color: Colors.white, size: 34),
+                      const Icon(
+                        Icons.directions_car_outlined,
+                        color: Colors.white,
+                        size: 34,
+                      ),
                       const SizedBox(height: 2),
                       // Leicht vergrößerte Straßen-Linien
                       Row(
@@ -187,14 +230,22 @@ class _HomePageState extends State<HomePage> {
                         children: [
                           Transform(
                             transform: Matrix4.skewX(-0.5),
-                            child: Container(width: 3, height: 7, color: Colors.white),
+                            child: Container(
+                              width: 3,
+                              height: 7,
+                              color: Colors.white,
+                            ),
                           ),
                           const SizedBox(width: 4),
                           Container(width: 3, height: 7, color: Colors.white),
                           const SizedBox(width: 4),
                           Transform(
                             transform: Matrix4.skewX(0.5),
-                            child: Container(width: 3, height: 7, color: Colors.white),
+                            child: Container(
+                              width: 3,
+                              height: 7,
+                              color: Colors.white,
+                            ),
                           ),
                         ],
                       ),
@@ -211,7 +262,7 @@ class _HomePageState extends State<HomePage> {
 
   Widget _buildNavItem(IconData icon, int index) {
     final isSelected = _selectedIndex == index;
-    
+
     return GestureDetector(
       onTap: () => _onNavItemTapped(index),
       behavior: HitTestBehavior.opaque,
@@ -221,24 +272,22 @@ class _HomePageState extends State<HomePage> {
         child: Center(
           // 1. Weiche Skalierungs-Animation (15% größer, wenn ausgewählt)
           child: AnimatedScale(
-            scale: isSelected ? 1.15 : 1.0, 
+            scale: isSelected ? 1.15 : 1.0,
             duration: const Duration(milliseconds: 300),
-            curve: Curves.easeOutCubic, // Sehr weiche, natürliche Kurve ohne extremes Bouncen
-            
+            curve: Curves
+                .easeOutCubic, // Sehr weiche, natürliche Kurve ohne extremes Bouncen
             // 2. Weiche Farbüberblendung (Fade) von Grau zu Rot
             child: TweenAnimationBuilder<Color?>(
               tween: ColorTween(
                 begin: const Color(0xFF9E9E9E),
-                end: isSelected ? const Color(0xFFFF3B30) : const Color(0xFF9E9E9E),
+                end: isSelected
+                    ? const Color(0xFFFF3B30)
+                    : const Color(0xFF9E9E9E),
               ),
               duration: const Duration(milliseconds: 300),
               curve: Curves.easeOutCubic,
               builder: (context, color, child) {
-                return Icon(
-                  icon,
-                  size: 34,
-                  color: color, 
-                );
+                return Icon(icon, size: 34, color: color);
               },
             ),
           ),

@@ -1,183 +1,69 @@
-import 'dart:async';
 import 'package:flutter/foundation.dart';
-import 'package:geolocator/geolocator.dart' as geo;
-import 'package:cruise_connect/data/services/route_service.dart';
+
+import 'package:cruise_connect/data/services/prepared_route_buffer.dart';
+import 'package:cruise_connect/data/services/route_scenario.dart';
 import 'package:cruise_connect/domain/models/route_result.dart';
 
-/// Intelligente Routen-Queue mit 5 Plätzen.
+/// Kleiner Szenario-Puffer für vorbereitete Ersatzrouten.
 ///
-/// - Beim App-Start werden Routen **sequentiell** (nicht parallel) generiert,
-///   um CPU/Netzwerk nicht zu überlasten.
-/// - Wenn eine Route verbraucht wird, wird der freie Platz im Hintergrund
-///   automatisch nachgefüllt.
-/// - Qualitätsprüfung: Nur Routen mit ≥50 Koordinatenpunkten (echte
-///   Straßengeometrie) werden in die Queue aufgenommen.
+/// Der alte globale Queue-Cache wurde bewusst entfernt, weil er
+/// identische oder fachlich falsche Routen in neue User-Intents tragen konnte.
+/// Es gibt jetzt maximal eine vorbereitete Route pro Szenario.
 class RouteCacheService {
   RouteCacheService._();
   static final RouteCacheService instance = RouteCacheService._();
 
-  final RouteService _routeService = RouteService();
+  /// User-initiierte Generierung pausiert optionale Hintergrundarbeit.
+  static bool userGenerationActive = false;
+  static DateTime? _lastUserGenerationAt;
 
-  static const int _queueSize = 5;
+  static void beginUserGeneration() {
+    userGenerationActive = true;
+    _lastUserGenerationAt = DateTime.now();
+  }
 
-  /// Die Queue: Liste von fertigen Routen.
-  final List<_CachedRoute> _queue = [];
+  static void endUserGeneration() {
+    userGenerationActive = false;
+    _lastUserGenerationAt = DateTime.now();
+  }
 
-  /// Letzter bekannter Standort für die Vorberechnung.
-  geo.Position? _lastPosition;
+  static bool get shouldPausePreparation {
+    if (userGenerationActive) return true;
+    final lastGeneration = _lastUserGenerationAt;
+    if (lastGeneration == null) return false;
+    return DateTime.now().difference(lastGeneration) <
+        const Duration(seconds: 2);
+  }
 
-  bool _isGenerating = false;
-  int _generationErrors = 0;
+  static void resetForTests() {
+    userGenerationActive = false;
+    _lastUserGenerationAt = null;
+  }
 
-  /// Verschiedene Stile rotieren, damit Abwechslung entsteht.
-  static const _styles = ['Kurvenjagd', 'Sport Mode', 'Entdecker', 'Abendrunde', 'Sport Mode'];
-  int _styleIndex = 0;
-
-  /// Startet die Hintergrund-Vorberechnung.
-  /// Generiert Routen **nacheinander** (nicht parallel) → schont das Gerät.
   Future<void> preloadRoutes() async {
-    if (_isGenerating) return;
-    _isGenerating = true;
-    _generationErrors = 0;
-
-    try {
-      _lastPosition = await _getCurrentPosition();
-      if (_lastPosition == null) {
-        debugPrint('[RouteCache] Kein GPS — Vorberechnung übersprungen');
-        return;
-      }
-
-      // Sequentiell auffüllen bis die Queue voll ist
-      while (_queue.length < _queueSize && _generationErrors < 3) {
-        await _generateOne();
-        // Kurze Pause zwischen Generierungen → CPU-Last verteilen
-        await Future.delayed(const Duration(milliseconds: 500));
-      }
-
-      debugPrint('[RouteCache] Queue gefüllt: ${_queue.length}/$_queueSize Routen');
-    } catch (e) {
-      debugPrint('[RouteCache] Vorberechnung fehlgeschlagen: $e');
-    } finally {
-      _isGenerating = false;
-    }
+    debugPrint(
+      '[RouteCache] Globales Vorladen ist deaktiviert. '
+      'Vorbereitung passiert nur noch szenariobezogen im PreparedRouteBuffer.',
+    );
   }
 
-  /// Holt die nächste Route aus der Queue und startet Nachfüllung.
-  /// Gibt null zurück wenn keine gecachte Route verfügbar ist.
-  RouteResult? getNextRoute() {
-    if (_queue.isEmpty) return null;
+  RouteResult? getNextRoute() => null;
 
-    final cached = _queue.removeAt(0);
-    debugPrint('[RouteCache] Route aus Queue genommen (${cached.result.distanceKm?.toStringAsFixed(1)} km, ${cached.style}) — ${_queue.length}/$_queueSize verbleibend');
+  int get availableCount => PreparedRouteBuffer.count;
 
-    // Im Hintergrund nachfüllen
-    _refillInBackground();
-
-    return cached.result;
+  RouteResult? takePreparedRoute(RouteScenario scenario) {
+    return PreparedRouteBuffer.take(scenario.scenarioKey)?.route;
   }
 
-  /// Gibt die Anzahl gecachter Routen zurück.
-  int get availableCount => _queue.length;
+  void storePreparedRoute(RouteScenario scenario, PreparedRouteEntry entry) {
+    PreparedRouteBuffer.store(scenario.scenarioKey, entry);
+  }
 
-  /// Cache leeren (z.B. bei Standortwechsel).
+  void clearScenario(RouteScenario scenario) {
+    PreparedRouteBuffer.clearScenario(scenario.scenarioKey);
+  }
+
   void clearCache() {
-    _queue.clear();
-    _lastPosition = null;
+    PreparedRouteBuffer.clearAll();
   }
-
-  /// Füllt einen freien Platz im Hintergrund nach.
-  void _refillInBackground() {
-    if (_isGenerating || _queue.length >= _queueSize) return;
-    // Flag sofort setzen um Race Condition zu verhindern
-    _isGenerating = true;
-
-    // Fire-and-forget: Generiert im Hintergrund ohne zu blockieren
-    Future(() async {
-      if (_queue.length >= _queueSize) {
-        _isGenerating = false;
-        return;
-      }
-      try {
-        // Position aktualisieren falls verfügbar
-        _lastPosition = await _getCurrentPosition() ?? _lastPosition;
-        if (_lastPosition == null) return;
-
-        await _generateOne();
-        debugPrint('[RouteCache] Queue nachgefüllt: ${_queue.length}/$_queueSize');
-      } catch (e) {
-        debugPrint('[RouteCache] Nachfüllung fehlgeschlagen: $e');
-      } finally {
-        _isGenerating = false;
-      }
-    });
-  }
-
-  /// Generiert eine einzelne Route und fügt sie zur Queue hinzu.
-  Future<void> _generateOne() async {
-    if (_lastPosition == null) return;
-
-    final style = _styles[_styleIndex % _styles.length];
-    _styleIndex++;
-
-    try {
-      final result = await _routeService.generateRoundTrip(
-        startPosition: _lastPosition!,
-        targetDistanceKm: 50, // Standard-Distanz für Vorberechnung
-        mode: style,
-        planningType: 'Zufall',
-      );
-
-      // Qualitätsprüfung: Echte Straßenroute hat hunderte Punkte
-      // UND Distanz muss im 50km-Band liegen (±40% Toleranz für Cache)
-      final actualKm = result.distanceKm ?? 0;
-      final hasGoodGeometry = result.coordinates.length >= 50;
-      final hasGoodDistance = actualKm >= 25 && actualKm <= 80; // 50km ±30km
-      if (hasGoodGeometry && hasGoodDistance) {
-        _queue.add(_CachedRoute(result: result, style: style));
-        _generationErrors = 0;
-        debugPrint('[RouteCache] Route gecached: ${actualKm.toStringAsFixed(1)} km, ${result.coordinates.length} Punkte ($style)');
-      } else {
-        debugPrint('[RouteCache] Route verworfen: ${result.coordinates.length} Punkte, ${actualKm.toStringAsFixed(1)} km (brauche ≥50 Punkte, 25-80 km)');
-        _generationErrors++;
-      }
-    } catch (e) {
-      debugPrint('[RouteCache] Generierung fehlgeschlagen ($style): $e');
-      _generationErrors++;
-    }
-  }
-
-  Future<geo.Position?> _getCurrentPosition() async {
-    try {
-      // Auf Web: checkPermission/isLocationServiceEnabled werden unterstützt,
-      // aber wir überspringen den Service-Check da Browser keinen "GPS aus"-Status hat
-      if (!kIsWeb) {
-        final serviceEnabled =
-            await geo.Geolocator.isLocationServiceEnabled();
-        if (!serviceEnabled) return null;
-      }
-
-      var permission = await geo.Geolocator.checkPermission();
-      if (permission == geo.LocationPermission.denied) {
-        permission = await geo.Geolocator.requestPermission();
-        if (permission == geo.LocationPermission.denied) return null;
-      }
-      if (permission == geo.LocationPermission.deniedForever) return null;
-
-      return await geo.Geolocator.getCurrentPosition(
-        locationSettings: const geo.LocationSettings(
-          accuracy: geo.LocationAccuracy.medium,
-          timeLimit: Duration(seconds: 10),
-        ),
-      );
-    } catch (e) {
-      debugPrint('[RouteCache] GPS-Position fehlgeschlagen: $e');
-      return null;
-    }
-  }
-}
-
-class _CachedRoute {
-  const _CachedRoute({required this.result, required this.style});
-  final RouteResult result;
-  final String style;
 }

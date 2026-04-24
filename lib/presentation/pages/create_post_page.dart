@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
-import 'package:cruise_connect/presentation/widgets/mentions.dart';
+import 'package:cruise_connect/presentation/widgets/social/route_attachment_card.dart';
 
 class CreatePostPage extends StatefulWidget {
   final String? initialText;
@@ -22,19 +22,12 @@ class _CreatePostPageState extends State<CreatePostPage> {
     if (widget.initialText != null) {
       _controller.text = widget.initialText!;
     }
-    // Posten-Button reagiert auf Inhalt — bei jeder Änderung rebuilden.
-    _controller.addListener(_onTextChanged);
   }
 
   @override
   void dispose() {
-    _controller.removeListener(_onTextChanged);
     _controller.dispose();
     super.dispose();
-  }
-
-  void _onTextChanged() {
-    if (mounted) setState(() {});
   }
 
   Future<void> _submitPost() async {
@@ -53,7 +46,10 @@ class _CreatePostPageState extends State<CreatePostPage> {
       if (mounted) {
         setState(() => _posting = false);
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Fehler beim Erstellen des Posts'), backgroundColor: Color(0xFF1C1F26)),
+          const SnackBar(
+            content: Text('Fehler beim Erstellen des Posts'),
+            backgroundColor: Color(0xFF1C1F26),
+          ),
         );
       }
     }
@@ -77,11 +73,14 @@ class _CreatePostPageState extends State<CreatePostPage> {
           children: [
             Icon(icon, size: 16, color: selected ? Colors.white : Colors.grey),
             const SizedBox(width: 6),
-            Text(label, style: TextStyle(
-              color: selected ? Colors.white : Colors.grey,
-              fontSize: 14,
-              fontWeight: selected ? FontWeight.bold : FontWeight.normal,
-            )),
+            Text(
+              label,
+              style: TextStyle(
+                color: selected ? Colors.white : Colors.grey,
+                fontSize: 14,
+                fontWeight: selected ? FontWeight.bold : FontWeight.normal,
+              ),
+            ),
           ],
         ),
       ),
@@ -100,7 +99,10 @@ class _CreatePostPageState extends State<CreatePostPage> {
         leadingWidth: 100,
         leading: TextButton(
           onPressed: () => Navigator.pop(context),
-          child: const Text('Abbrechen', style: TextStyle(color: Colors.white, fontSize: 16)),
+          child: const Text(
+            'Abbrechen',
+            style: TextStyle(color: Colors.white, fontSize: 16),
+          ),
         ),
         actions: [
           Padding(
@@ -109,13 +111,30 @@ class _CreatePostPageState extends State<CreatePostPage> {
               onPressed: _posting || !hasContent ? null : _submitPost,
               style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFFFF3B30),
-                disabledBackgroundColor: const Color(0xFFFF3B30).withValues(alpha: 0.3),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                disabledBackgroundColor: const Color(
+                  0xFFFF3B30,
+                ).withValues(alpha: 0.3),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(20),
+                ),
                 padding: const EdgeInsets.symmetric(horizontal: 20),
               ),
               child: _posting
-                  ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                  : const Text('Posten', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    )
+                  : const Text(
+                      'Posten',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
             ),
           ),
         ],
@@ -124,15 +143,28 @@ class _CreatePostPageState extends State<CreatePostPage> {
         children: [
           // Sichtbarkeits-Toggle
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+            padding: const EdgeInsets.symmetric(
+              horizontal: 16.0,
+              vertical: 8.0,
+            ),
             child: Row(
               children: [
-                _buildVisibilityChip('public', Icons.public, 'Öffentlich'),
+                _buildVisibilityChip('public', Icons.public, 'Alle'),
                 const SizedBox(width: 8),
-                _buildVisibilityChip('followers', Icons.group, 'Nur Kontakte'),
+                _buildVisibilityChip('followers', Icons.group, 'Follower'),
               ],
             ),
           ),
+          if (widget.sharedRouteId != null) ...[
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+              child: RouteAttachmentCard(
+                routeId: widget.sharedRouteId!,
+                compact: true,
+                showRideButton: false,
+              ),
+            ),
+          ],
           const Divider(color: Color(0xFF1C1F26), height: 1),
           // Post-Eingabe
           Expanded(
@@ -148,14 +180,14 @@ class _CreatePostPageState extends State<CreatePostPage> {
                   ),
                   const SizedBox(width: 12),
                   Expanded(
-                    child: MentionTextField(
+                    child: TextField(
                       controller: _controller,
                       autofocus: true,
                       style: const TextStyle(color: Colors.white, fontSize: 18),
-                      maxLines: 8,
-                      minLines: 1,
+                      maxLines: null,
+                      onChanged: (_) => setState(() {}),
                       decoration: const InputDecoration(
-                        hintText: "Was gibt's Neues? Nutze @ um Follower zu erwähnen.",
+                        hintText: "Was gibt's Neues?",
                         hintStyle: TextStyle(color: Colors.grey, fontSize: 18),
                         border: InputBorder.none,
                       ),

@@ -1,4 +1,8 @@
 {
+  "compilerOptions": {
+    "noUnusedLocals": true,
+    "noUnusedParameters": true
+  },
   "imports": {
     "@supabase/functions-js": "jsr:@supabase/functions-js@^2"
   }

@@ -34,19 +34,22 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
 
   bool get _amOwner =>
       _group?.members.any(
-          (m) => m.userId == _myId && m.role == MemberRole.owner) ??
+        (m) => m.userId == _myId && m.role == MemberRole.owner,
+      ) ??
       false;
 
   MemberRole get _myRole =>
       _group?.members
-          .firstWhere((m) => m.userId == _myId,
-              orElse: () => GroupMember(
-                    id: '',
-                    groupId: widget.groupId,
-                    userId: _myId,
-                    role: MemberRole.passenger,
-                    createdAt: DateTime.now(),
-                  ))
+          .firstWhere(
+            (m) => m.userId == _myId,
+            orElse: () => GroupMember(
+              id: '',
+              groupId: widget.groupId,
+              userId: _myId,
+              role: MemberRole.passenger,
+              createdAt: DateTime.now(),
+            ),
+          )
           .role ??
       MemberRole.passenger;
 
@@ -75,16 +78,18 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
       if (g != null && g.isActive) _enterNavigation();
       // Pending-Requests nur laden, wenn ich Owner bin (RLS sorgt für Rest).
       if (g != null && g.isOwner(_myId)) {
-        final pending =
-            await SocialService.listPendingJoinRequests(widget.groupId);
+        final pending = await SocialService.listPendingJoinRequests(
+          widget.groupId,
+        );
         if (!mounted) return;
         setState(() => _pendingRequests = pending);
       }
     } catch (e) {
       if (mounted) {
         setState(() => _loading = false);
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Fehler: $e')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Fehler: $e')));
       }
     }
   }
@@ -94,8 +99,10 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
       if (row['is_active'] == true) _enterNavigation();
       _load();
     });
-    _membersCh =
-        CruiseGroupService.subscribeMembers(widget.groupId, (_) => _load());
+    _membersCh = CruiseGroupService.subscribeMembers(
+      widget.groupId,
+      (_) => _load(),
+    );
   }
 
   void _enterNavigation() {
@@ -115,8 +122,9 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
       // Eigener Realtime-Handler bringt uns in die Navigation.
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Start fehlgeschlagen: $e')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Start fehlgeschlagen: $e')));
       }
     } finally {
       if (mounted) setState(() => _starting = false);
@@ -133,8 +141,9 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
       await _load();
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Fehler: $e')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Fehler: $e')));
       }
     }
   }
@@ -157,16 +166,21 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
         backgroundColor: const Color(0xFF0B0E14),
         elevation: 0,
         iconTheme: const IconThemeData(color: Colors.white),
-        title: Text(_group?.name ?? 'Lobby',
-            style: const TextStyle(color: Colors.white)),
+        title: Text(
+          _group?.name ?? 'Lobby',
+          style: const TextStyle(color: Colors.white),
+        ),
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : _group == null
-              ? const Center(
-                  child: Text('Gruppe nicht gefunden',
-                      style: TextStyle(color: Colors.white)))
-              : _buildBody(),
+          ? const Center(
+              child: Text(
+                'Gruppe nicht gefunden',
+                style: TextStyle(color: Colors.white),
+              ),
+            )
+          : _buildBody(),
       bottomNavigationBar: _loading || _group == null ? null : _buildBottom(),
     );
   }
@@ -189,22 +203,36 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
               if (g.description != null && g.description!.isNotEmpty)
                 Padding(
                   padding: const EdgeInsets.only(bottom: 12),
-                  child: Text(g.description!,
-                      style: const TextStyle(color: Colors.grey)),
+                  child: Text(
+                    g.description!,
+                    style: const TextStyle(color: Colors.grey),
+                  ),
                 ),
-              Row(children: [
-                const Icon(Icons.straighten,
-                    color: Color(0xFFFF3B30), size: 18),
-                const SizedBox(width: 8),
-                Text('${km.toStringAsFixed(1)} km',
-                    style: const TextStyle(color: Colors.white)),
-                const SizedBox(width: 20),
-                Icon(g.isPublic ? Icons.public : Icons.lock,
-                    color: const Color(0xFFFF3B30), size: 18),
-                const SizedBox(width: 8),
-                Text(g.isPublic ? 'Öffentlich' : 'Privat',
-                    style: const TextStyle(color: Colors.white)),
-              ]),
+              Row(
+                children: [
+                  const Icon(
+                    Icons.straighten,
+                    color: Color(0xFFFF3B30),
+                    size: 18,
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    '${km.toStringAsFixed(1)} km',
+                    style: const TextStyle(color: Colors.white),
+                  ),
+                  const SizedBox(width: 20),
+                  Icon(
+                    g.isPublic ? Icons.public : Icons.lock,
+                    color: const Color(0xFFFF3B30),
+                    size: 18,
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    g.isPublic ? 'Öffentlich' : 'Privat',
+                    style: const TextStyle(color: Colors.white),
+                  ),
+                ],
+              ),
             ],
           ),
         ),
@@ -220,23 +248,27 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Text('Mitglieder (${g.members.length}/${g.maxPeople})',
-                style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold)),
+            Text(
+              'Mitglieder (${g.members.length}/${g.maxPeople})',
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
             IconButton(
               icon: const Icon(Icons.person_add, color: Color(0xFFFF3B30)),
-              onPressed: () =>
-                  _showInviteDialog(), // Phase 3b — Friend-Picker
+              onPressed: () => _showInviteDialog(), // Phase 3b — Friend-Picker
             ),
           ],
         ),
         const SizedBox(height: 8),
         ...g.members.map(_buildMemberTile),
         const SizedBox(height: 24),
-        const Text('Meine Rolle',
-            style: TextStyle(color: Colors.grey, fontSize: 14)),
+        const Text(
+          'Meine Rolle',
+          style: TextStyle(color: Colors.grey, fontSize: 14),
+        ),
         const SizedBox(height: 8),
         _buildRoleSelector(),
       ],
@@ -247,7 +279,9 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
   /// Private Gruppen: Code nur für Owner sichtbar.
   bool _shouldShowInviteCode() {
     final g = _group;
-    if (g == null || g.inviteCode == null || g.inviteCode!.isEmpty) return false;
+    if (g == null || g.inviteCode == null || g.inviteCode!.isEmpty) {
+      return false;
+    }
     if (g.isPublic) return true;
     return _amOwner;
   }
@@ -259,7 +293,9 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
       decoration: BoxDecoration(
         color: const Color(0xFF1C1F26),
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0xFFFF3B30).withOpacity(0.35)),
+        border: Border.all(
+          color: const Color(0xFFFF3B30).withValues(alpha: 0.35),
+        ),
       ),
       child: Row(
         children: [
@@ -269,8 +305,10 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('Gruppen-Code',
-                    style: TextStyle(color: Colors.grey, fontSize: 12)),
+                const Text(
+                  'Gruppen-Code',
+                  style: TextStyle(color: Colors.grey, fontSize: 12),
+                ),
                 const SizedBox(height: 2),
                 Text(
                   code,
@@ -291,9 +329,9 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
             onPressed: () async {
               await Clipboard.setData(ClipboardData(text: code));
               if (!mounted) return;
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text('$code kopiert')),
-              );
+              ScaffoldMessenger.of(
+                context,
+              ).showSnackBar(SnackBar(content: Text('$code kopiert')));
             },
           ),
         ],
@@ -307,22 +345,24 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
       decoration: BoxDecoration(
         color: const Color(0xFF1C1F26),
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: Colors.orange.withOpacity(0.4)),
+        border: Border.all(color: Colors.orange.withValues(alpha: 0.4)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(children: [
-            const Icon(Icons.how_to_reg, color: Colors.orange, size: 20),
-            const SizedBox(width: 8),
-            Text(
-              'Offene Beitritts-Anfragen (${_pendingRequests.length})',
-              style: const TextStyle(
-                color: Colors.white,
-                fontWeight: FontWeight.bold,
+          Row(
+            children: [
+              const Icon(Icons.how_to_reg, color: Colors.orange, size: 20),
+              const SizedBox(width: 8),
+              Text(
+                'Offene Beitritts-Anfragen (${_pendingRequests.length})',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
-            ),
-          ]),
+            ],
+          ),
           const SizedBox(height: 10),
           ..._pendingRequests.map(_buildPendingRequestTile),
         ],
@@ -332,7 +372,8 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
 
   Widget _buildPendingRequestTile(Map<String, dynamic> req) {
     final profile = req['profiles'] as Map<String, dynamic>?;
-    final username = profile?['username'] ??
+    final username =
+        profile?['username'] ??
         profile?['email']?.toString().split('@').first ??
         'User';
     final message = (req['message'] as String?)?.trim();
@@ -357,14 +398,17 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(username.toString(),
-                    style: const TextStyle(color: Colors.white)),
+                Text(
+                  username.toString(),
+                  style: const TextStyle(color: Colors.white),
+                ),
                 if (message != null && message.isNotEmpty)
-                  Text(message,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                          color: Colors.grey, fontSize: 12)),
+                  Text(
+                    message,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: Colors.grey, fontSize: 12),
+                  ),
               ],
             ),
           ),
@@ -376,15 +420,15 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
           IconButton(
             tooltip: 'Ablehnen',
             icon: const Icon(Icons.close, color: Colors.redAccent),
-            onPressed: () => _respondRequest(req['id'] as String, accept: false),
+            onPressed: () =>
+                _respondRequest(req['id'] as String, accept: false),
           ),
         ],
       ),
     );
   }
 
-  Future<void> _respondRequest(String requestId,
-      {required bool accept}) async {
+  Future<void> _respondRequest(String requestId, {required bool accept}) async {
     try {
       if (accept) {
         await SocialService.acceptJoinRequest(requestId);
@@ -393,8 +437,9 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
       }
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Fehler: $e')));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Fehler: $e')));
       return;
     }
     if (!mounted) return;
@@ -409,8 +454,8 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
     final roleLabel = m.role == MemberRole.owner
         ? 'Owner'
         : m.role == MemberRole.driver
-            ? 'Fahrer'
-            : 'Mitfahrer';
+        ? 'Fahrer'
+        : 'Mitfahrer';
     final roleColor = m.role == MemberRole.owner
         ? const Color(0xFFFF3B30)
         : Colors.grey;
@@ -421,47 +466,54 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
         color: const Color(0xFF1C1F26),
         borderRadius: BorderRadius.circular(12),
       ),
-      child: Row(children: [
-        CircleAvatar(
-          radius: 18,
-          backgroundColor: const Color(0xFF0B0E14),
-          backgroundImage:
-              m.avatarUrl != null ? NetworkImage(m.avatarUrl!) : null,
-          child: m.avatarUrl == null
-              ? Text(
-                  (m.displayName ?? '?').characters.first.toUpperCase(),
-                  style: const TextStyle(color: Colors.white),
-                )
-              : null,
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Text(
-            '${m.displayName ?? 'User'}${isMe ? ' (Du)' : ''}',
-            style: const TextStyle(color: Colors.white),
+      child: Row(
+        children: [
+          CircleAvatar(
+            radius: 18,
+            backgroundColor: const Color(0xFF0B0E14),
+            backgroundImage: m.avatarUrl != null
+                ? NetworkImage(m.avatarUrl!)
+                : null,
+            child: m.avatarUrl == null
+                ? Text(
+                    (m.displayName ?? '?').characters.first.toUpperCase(),
+                    style: const TextStyle(color: Colors.white),
+                  )
+                : null,
           ),
-        ),
-        Text(roleLabel, style: TextStyle(color: roleColor)),
-        if (_amOwner && !isMe && m.role != MemberRole.owner)
-          IconButton(
-            tooltip: 'Zum Owner befördern',
-            icon: const Icon(Icons.star_border, color: Colors.grey),
-            onPressed: () => _promoteToOwner(m),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              '${m.displayName ?? 'User'}${isMe ? ' (Du)' : ''}',
+              style: const TextStyle(color: Colors.white),
+            ),
           ),
-      ]),
+          Text(roleLabel, style: TextStyle(color: roleColor)),
+          if (_amOwner && !isMe && m.role != MemberRole.owner)
+            IconButton(
+              tooltip: 'Zum Owner befördern',
+              icon: const Icon(Icons.star_border, color: Colors.grey),
+              onPressed: () => _promoteToOwner(m),
+            ),
+        ],
+      ),
     );
   }
 
   Widget _buildRoleSelector() {
     if (_myRole == MemberRole.owner) {
-      return const Text('Du bist Owner',
-          style: TextStyle(color: Color(0xFFFF3B30)));
+      return const Text(
+        'Du bist Owner',
+        style: TextStyle(color: Color(0xFFFF3B30)),
+      );
     }
-    return Row(children: [
-      _roleChip('Fahrer', MemberRole.driver),
-      const SizedBox(width: 12),
-      _roleChip('Mitfahrer', MemberRole.passenger),
-    ]);
+    return Row(
+      children: [
+        _roleChip('Fahrer', MemberRole.driver),
+        const SizedBox(width: 12),
+        _roleChip('Mitfahrer', MemberRole.passenger),
+      ],
+    );
   }
 
   Widget _roleChip(String label, MemberRole role) {
@@ -474,11 +526,13 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
           color: selected ? const Color(0xFFFF3B30) : const Color(0xFF1C1F26),
           borderRadius: BorderRadius.circular(20),
         ),
-        child: Text(label,
-            style: TextStyle(
-              color: selected ? Colors.white : Colors.grey,
-              fontWeight: selected ? FontWeight.bold : FontWeight.w500,
-            )),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: selected ? Colors.white : Colors.grey,
+            fontWeight: selected ? FontWeight.bold : FontWeight.w500,
+          ),
+        ),
       ),
     );
   }
@@ -493,20 +547,23 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
             onPressed: _amOwner && !_starting ? _startRoute : null,
             style: ElevatedButton.styleFrom(
               backgroundColor: const Color(0xFFFF3B30),
-              disabledBackgroundColor:
-                  const Color(0xFF1C1F26),
+              disabledBackgroundColor: const Color(0xFF1C1F26),
               shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16)),
+                borderRadius: BorderRadius.circular(16),
+              ),
             ),
             child: _starting
                 ? const CircularProgressIndicator(
-                    color: Colors.white, strokeWidth: 2)
+                    color: Colors.white,
+                    strokeWidth: 2,
+                  )
                 : Text(
                     _amOwner ? 'Route starten' : 'Warten auf Host...',
                     style: const TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 16),
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16,
+                    ),
                   ),
           ),
         ),
@@ -563,25 +620,37 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
             return ListTile(
               leading: CircleAvatar(
                 backgroundColor: const Color(0xFF0B0E14),
-                child: Text(username.characters.first.toUpperCase(),
-                    style: const TextStyle(color: Colors.white)),
+                child: Text(
+                  username.characters.first.toUpperCase(),
+                  style: const TextStyle(color: Colors.white),
+                ),
               ),
-              title: Text(username,
-                  style: const TextStyle(color: Colors.white)),
+              title: Text(
+                username,
+                style: const TextStyle(color: Colors.white),
+              ),
               trailing: isMember
-                  ? const Text('Dabei',
-                      style: TextStyle(color: Colors.greenAccent))
+                  ? const Text(
+                      'Dabei',
+                      style: TextStyle(color: Colors.greenAccent),
+                    )
                   : didInvite
-                      ? const Text('Eingeladen',
-                          style: TextStyle(color: Colors.grey))
-                      : !isMutual
-                          ? const Text('Kein Kontakt',
-                              style: TextStyle(color: Colors.grey))
-                          : TextButton(
-                              onPressed: () => doInvite(id),
-                              child: const Text('Einladen',
-                                  style: TextStyle(color: Color(0xFFFF3B30))),
-                            ),
+                  ? const Text(
+                      'Eingeladen',
+                      style: TextStyle(color: Colors.grey),
+                    )
+                  : !isMutual
+                  ? const Text(
+                      'Kein Kontakt',
+                      style: TextStyle(color: Colors.grey),
+                    )
+                  : TextButton(
+                      onPressed: () => doInvite(id),
+                      child: const Text(
+                        'Einladen',
+                        style: TextStyle(color: Color(0xFFFF3B30)),
+                      ),
+                    ),
             );
           }
 
@@ -604,11 +673,14 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
                   ),
                   const Padding(
                     padding: EdgeInsets.all(16),
-                    child: Text('Freunde einladen',
-                        style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold)),
+                    child: Text(
+                      'Freunde einladen',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
                   ),
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -620,8 +692,10 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
                         hintStyle: TextStyle(color: Colors.grey[600]),
                         filled: true,
                         fillColor: const Color(0xFF0B0E14),
-                        prefixIcon:
-                            const Icon(Icons.search, color: Colors.grey),
+                        prefixIcon: const Icon(
+                          Icons.search,
+                          color: Colors.grey,
+                        ),
                         border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(12),
                           borderSide: BorderSide.none,
@@ -633,8 +707,11 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
                           return;
                         }
                         final res = await SocialService.searchUsers(q);
-                        setSheet(() => searchResults =
-                            res.where((u) => u['id'] != myUid).toList());
+                        setSheet(
+                          () => searchResults = res
+                              .where((u) => u['id'] != myUid)
+                              .toList(),
+                        );
                       },
                     ),
                   ),
@@ -645,19 +722,19 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
                             children: searchResults.map(tileFor).toList(),
                           )
                         : invitable.isEmpty
-                            ? const Center(
-                                child: Text(
-                                    'Du folgst noch niemandem.\nNutze die Suche.',
-                                    textAlign: TextAlign.center,
-                                    style: TextStyle(color: Colors.grey)),
-                              )
-                            : ListView(
-                                children: invitable.map((f) {
-                                  final p =
-                                      f['profiles'] as Map<String, dynamic>;
-                                  return tileFor(p);
-                                }).toList(),
-                              ),
+                        ? const Center(
+                            child: Text(
+                              'Du folgst noch niemandem.\nNutze die Suche.',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(color: Colors.grey),
+                            ),
+                          )
+                        : ListView(
+                            children: invitable.map((f) {
+                              final p = f['profiles'] as Map<String, dynamic>;
+                              return tileFor(p);
+                            }).toList(),
+                          ),
                   ),
                 ],
               ),

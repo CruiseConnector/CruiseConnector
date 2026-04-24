@@ -24,7 +24,7 @@ class CreateGroupPage extends StatefulWidget {
 class _CreateGroupPageState extends State<CreateGroupPage> {
   // ignore: prefer_const_constructors
   final _routeService = RouteService();
-  final _geocodingService = GeocodingService();
+  final _geocodingService = const GeocodingService();
   final _mapController = MapController();
 
   // Form
@@ -190,12 +190,15 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
         'duration_seconds': _lastRoute!.durationSeconds,
         'style': _selectedStyle,
         'length_km_target':
-            int.tryParse(_selectedLength.replaceAll(RegExp(r'[^0-9]'), '')) ?? 50,
+            int.tryParse(_selectedLength.replaceAll(RegExp(r'[^0-9]'), '')) ??
+            50,
       };
 
       final groupId = await CruiseGroupService.create(
         name: _nameCtrl.text.trim(),
-        description: _descCtrl.text.trim().isEmpty ? null : _descCtrl.text.trim(),
+        description: _descCtrl.text.trim().isEmpty
+            ? null
+            : _descCtrl.text.trim(),
         isPublic: _selectedVisibility == 'Öffentlich (Für jeden)',
         maxPeople: _maxPeople.round(),
         startTime: startDt,
@@ -252,17 +255,23 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
               ),
               SliverToBoxAdapter(
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 20,
+                    vertical: 24,
+                  ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       if (_lastRoute != null) _buildRouteStats(),
 
-                      const Text('Strecken-Setup',
-                          style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 18,
-                              fontWeight: FontWeight.bold)),
+                      const Text(
+                        'Strecken-Setup',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
                       const SizedBox(height: 20),
                       _buildSelectionRow(
                         'Länge',
@@ -292,21 +301,27 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
                         (v) => setState(() => _selectedStyle = v),
                       ),
                       const SizedBox(height: 40),
-                      const Text('Gruppen-Details',
-                          style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 18,
-                              fontWeight: FontWeight.bold)),
+                      const Text(
+                        'Gruppen-Details',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
                       const SizedBox(height: 16),
                       _buildGroupDetailsCard(),
                       const SizedBox(height: 24),
                       _buildNameField(),
                       const SizedBox(height: 20),
-                      const Text('Beschreibung',
-                          style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 16,
-                              fontWeight: FontWeight.bold)),
+                      const Text(
+                        'Beschreibung',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
                       const SizedBox(height: 12),
                       _buildDescriptionField(),
                       const SizedBox(height: 120),
@@ -341,23 +356,30 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
           retinaMode: true,
         ),
         if (_routeLatLngs.isNotEmpty)
-          PolylineLayer(polylines: [
-            Polyline(
-              points: _routeLatLngs,
-              color: const Color(0xFFFF3B30),
-              strokeWidth: 5,
-            ),
-          ]),
+          PolylineLayer(
+            polylines: [
+              Polyline(
+                points: _routeLatLngs,
+                color: const Color(0xFFFF3B30),
+                strokeWidth: 5,
+              ),
+            ],
+          ),
         if (_startPoint != null)
-          MarkerLayer(markers: [
-            Marker(
-              point: _startPoint!,
-              width: 36,
-              height: 36,
-              child: const Icon(Icons.location_on,
-                  color: Color(0xFFFF3B30), size: 36),
-            ),
-          ]),
+          MarkerLayer(
+            markers: [
+              Marker(
+                point: _startPoint!,
+                width: 36,
+                height: 36,
+                child: const Icon(
+                  Icons.location_on,
+                  color: Color(0xFFFF3B30),
+                  size: 36,
+                ),
+              ),
+            ],
+          ),
       ],
     );
   }
@@ -374,28 +396,37 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
         color: const Color(0xFFFF3B30).withValues(alpha: 0.1),
         borderRadius: BorderRadius.circular(16),
         border: Border.all(
-            color: const Color(0xFFFF3B30).withValues(alpha: 0.3)),
+          color: const Color(0xFFFF3B30).withValues(alpha: 0.3),
+        ),
       ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceEvenly,
         children: [
           _buildRouteStat(Icons.straighten, '$km km'),
           _buildRouteStat(Icons.timer, '${h}h ${m}m'),
-          _buildRouteStat(Icons.route, '${_lastRoute!.coordinates.length} Punkte'),
+          _buildRouteStat(
+            Icons.route,
+            '${_lastRoute!.coordinates.length} Punkte',
+          ),
         ],
       ),
     );
   }
 
-  Widget _buildRouteStat(IconData icon, String text) => Row(children: [
-        Icon(icon, color: const Color(0xFFFF3B30), size: 16),
-        const SizedBox(width: 6),
-        Text(text,
-            style: const TextStyle(
-                color: Colors.grey,
-                fontSize: 14,
-                fontWeight: FontWeight.w500)),
-      ]);
+  Widget _buildRouteStat(IconData icon, String text) => Row(
+    children: [
+      Icon(icon, color: const Color(0xFFFF3B30), size: 16),
+      const SizedBox(width: 6),
+      Text(
+        text,
+        style: const TextStyle(
+          color: Colors.grey,
+          fontSize: 14,
+          fontWeight: FontWeight.w500,
+        ),
+      ),
+    ],
+  );
 
   Widget _buildAddressField() {
     return Container(
@@ -478,47 +509,60 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
           InkWell(
             onTap: _selectTime,
             child: Padding(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-              child: Row(children: [
-                const Icon(Icons.access_time, color: Colors.white, size: 20),
-                const SizedBox(width: 12),
-                const Text('Startuhrzeit *',
-                    style: TextStyle(color: Colors.white, fontSize: 16)),
-                const Spacer(),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 12, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF0B0E14),
-                    borderRadius: BorderRadius.circular(8),
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+              child: Row(
+                children: [
+                  const Icon(Icons.access_time, color: Colors.white, size: 20),
+                  const SizedBox(width: 12),
+                  const Text(
+                    'Startuhrzeit *',
+                    style: TextStyle(color: Colors.white, fontSize: 16),
                   ),
-                  child: Text(
-                    _selectedDateTime != null
-                        ? _formatDateTime(_selectedDateTime!)
-                        : 'Wählen',
-                    style: TextStyle(
-                      color: _selectedDateTime != null
-                          ? Colors.white
-                          : const Color(0xFFFF3B30),
-                      fontWeight: FontWeight.bold,
+                  const Spacer(),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 8,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF0B0E14),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      _selectedDateTime != null
+                          ? _formatDateTime(_selectedDateTime!)
+                          : 'Wählen',
+                      style: TextStyle(
+                        color: _selectedDateTime != null
+                            ? Colors.white
+                            : const Color(0xFFFF3B30),
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
                   ),
-                ),
-              ]),
+                ],
+              ),
             ),
           ),
           const Divider(
-              color: Colors.white10, height: 1, indent: 20, endIndent: 20),
+            color: Colors.white10,
+            height: 1,
+            indent: 20,
+            endIndent: 20,
+          ),
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 10, 20, 0),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                const Text('Max. Personen',
-                    style: TextStyle(color: Colors.white, fontSize: 16)),
-                Text('${_maxPeople.round()}',
-                    style: const TextStyle(color: Colors.grey, fontSize: 16)),
+                const Text(
+                  'Max. Personen',
+                  style: TextStyle(color: Colors.white, fontSize: 16),
+                ),
+                Text(
+                  '${_maxPeople.round()}',
+                  style: const TextStyle(color: Colors.grey, fontSize: 16),
+                ),
               ],
             ),
           ),
@@ -527,8 +571,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
               activeTrackColor: const Color(0xFFFF3B30),
               inactiveTrackColor: Colors.grey[800],
               thumbColor: Colors.white,
-              overlayColor:
-                  const Color(0xFFFF3B30).withValues(alpha: 0.2),
+              overlayColor: const Color(0xFFFF3B30).withValues(alpha: 0.2),
               trackHeight: 4,
             ),
             child: Slider(
@@ -540,28 +583,36 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
             ),
           ),
           const Divider(
-              color: Colors.white10, height: 1, indent: 20, endIndent: 20),
+            color: Colors.white10,
+            height: 1,
+            indent: 20,
+            endIndent: 20,
+          ),
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 16, 20, 10),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('Zugänglichkeit',
-                    style: TextStyle(color: Colors.white, fontSize: 16)),
+                const Text(
+                  'Zugänglichkeit',
+                  style: TextStyle(color: Colors.white, fontSize: 16),
+                ),
                 const SizedBox(height: 12),
                 Wrap(
                   spacing: 12,
                   runSpacing: 12,
-                  children: ['Nur Kontakte', 'Öffentlich (Für jeden)']
-                      .map((option) {
+                  children: ['Nur Kontakte', 'Öffentlich (Für jeden)'].map((
+                    option,
+                  ) {
                     final isSelected = option == _selectedVisibility;
                     return GestureDetector(
-                      onTap: () =>
-                          setState(() => _selectedVisibility = option),
+                      onTap: () => setState(() => _selectedVisibility = option),
                       child: AnimatedContainer(
                         duration: const Duration(milliseconds: 200),
                         padding: const EdgeInsets.symmetric(
-                            horizontal: 16, vertical: 10),
+                          horizontal: 16,
+                          vertical: 10,
+                        ),
                         decoration: BoxDecoration(
                           color: isSelected
                               ? const Color(0xFFFF3B30)
@@ -571,9 +622,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
                         child: Text(
                           option,
                           style: TextStyle(
-                            color: isSelected
-                                ? Colors.white
-                                : Colors.grey[400],
+                            color: isSelected ? Colors.white : Colors.grey[400],
                             fontWeight: isSelected
                                 ? FontWeight.bold
                                 : FontWeight.w500,
@@ -592,16 +641,23 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
     );
   }
 
-  Widget _buildSelectionRow(String title, List<String> options,
-      String selectedValue, Function(String) onSelect) {
+  Widget _buildSelectionRow(
+    String title,
+    List<String> options,
+    String selectedValue,
+    Function(String) onSelect,
+  ) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(title,
-            style: const TextStyle(
-                color: Colors.grey,
-                fontSize: 14,
-                fontWeight: FontWeight.w500)),
+        Text(
+          title,
+          style: const TextStyle(
+            color: Colors.grey,
+            fontSize: 14,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
         const SizedBox(height: 12),
         Wrap(
           spacing: 12,
@@ -612,8 +668,10 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
               onTap: () => onSelect(option),
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 200),
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 10,
+                ),
                 decoration: BoxDecoration(
                   color: isSelected
                       ? const Color(0xFFFF3B30)
@@ -624,8 +682,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
                   option,
                   style: TextStyle(
                     color: isSelected ? Colors.white : Colors.grey[400],
-                    fontWeight:
-                        isSelected ? FontWeight.bold : FontWeight.w500,
+                    fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
                     fontSize: 14,
                   ),
                 ),
@@ -647,77 +704,92 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
           gradient: LinearGradient(
             begin: Alignment.bottomCenter,
             end: Alignment.topCenter,
-            colors: [
-              Colors.black.withValues(alpha: 0.9),
-              Colors.transparent,
-            ],
+            colors: [Colors.black.withValues(alpha: 0.9), Colors.transparent],
             stops: const [0.6, 1.0],
           ),
         ),
         padding: const EdgeInsets.fromLTRB(20, 20, 20, 40),
-        child: Row(children: [
-          Expanded(
-            child: SizedBox(
-              height: 56,
-              child: ElevatedButton(
-                onPressed: _isGenerating ? null : _generateRoute,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF1C1F26),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(16)),
-                  elevation: 0,
-                ),
-                child: _isGenerating
-                    ? const SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(
-                            color: Colors.white, strokeWidth: 2))
-                    : const Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(Icons.refresh, color: Colors.white, size: 20),
-                          SizedBox(width: 8),
-                          Text('Generieren',
+        child: Row(
+          children: [
+            Expanded(
+              child: SizedBox(
+                height: 56,
+                child: ElevatedButton(
+                  onPressed: _isGenerating ? null : _generateRoute,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF1C1F26),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    elevation: 0,
+                  ),
+                  child: _isGenerating
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(
+                            color: Colors.white,
+                            strokeWidth: 2,
+                          ),
+                        )
+                      : const Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(Icons.refresh, color: Colors.white, size: 20),
+                            SizedBox(width: 8),
+                            Text(
+                              'Generieren',
                               style: TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 16)),
-                        ],
-                      ),
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 16,
+                              ),
+                            ),
+                          ],
+                        ),
+                ),
               ),
             ),
-          ),
-          const SizedBox(width: 16),
-          Expanded(
-            child: SizedBox(
-              height: 56,
-              child: ElevatedButton(
-                onPressed:
-                    (_isCreating || _lastRoute == null) ? null : _createGroup,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFFFF3B30),
-                  disabledBackgroundColor:
-                      const Color(0xFFFF3B30).withValues(alpha: 0.3),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(16)),
-                  elevation: 8,
-                ),
-                child: _isCreating
-                    ? const SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(
-                            color: Colors.white, strokeWidth: 2))
-                    : const Text('Erstellen',
-                        style: TextStyle(
+            const SizedBox(width: 16),
+            Expanded(
+              child: SizedBox(
+                height: 56,
+                child: ElevatedButton(
+                  onPressed: (_isCreating || _lastRoute == null)
+                      ? null
+                      : _createGroup,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFFFF3B30),
+                    disabledBackgroundColor: const Color(
+                      0xFFFF3B30,
+                    ).withValues(alpha: 0.3),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    elevation: 8,
+                  ),
+                  child: _isCreating
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(
+                            color: Colors.white,
+                            strokeWidth: 2,
+                          ),
+                        )
+                      : const Text(
+                          'Erstellen',
+                          style: TextStyle(
                             color: Colors.white,
                             fontWeight: FontWeight.bold,
-                            fontSize: 16)),
+                            fontSize: 16,
+                          ),
+                        ),
+                ),
               ),
             ),
-          ),
-        ]),
+          ],
+        ),
       ),
     );
   }
@@ -725,17 +797,16 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
   Future<void> _selectTime() async {
     final now = DateTime.now();
     Widget theme(BuildContext ctx, Widget? child) => Theme(
-          data: Theme.of(ctx).copyWith(
-            colorScheme: const ColorScheme.dark(
-              primary: Color(0xFFFF3B30),
-              surface: Color(0xFF1C1F26),
-              onSurface: Colors.white,
-            ),
-            dialogTheme:
-                const DialogThemeData(backgroundColor: Color(0xFF1C1F26)),
-          ),
-          child: child!,
-        );
+      data: Theme.of(ctx).copyWith(
+        colorScheme: const ColorScheme.dark(
+          primary: Color(0xFFFF3B30),
+          surface: Color(0xFF1C1F26),
+          onSurface: Colors.white,
+        ),
+        dialogTheme: const DialogThemeData(backgroundColor: Color(0xFF1C1F26)),
+      ),
+      child: child!,
+    );
 
     final date = await showDatePicker(
       context: context,
@@ -756,14 +827,21 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
     if (time == null) return;
 
     setState(() {
-      _selectedDateTime =
-          DateTime(date.year, date.month, date.day, time.hour, time.minute);
+      _selectedDateTime = DateTime(
+        date.year,
+        date.month,
+        date.day,
+        time.hour,
+        time.minute,
+      );
     });
   }
 
   String _formatDateTime(DateTime dt) {
-    final d = '${dt.day.toString().padLeft(2, '0')}.${dt.month.toString().padLeft(2, '0')}.';
-    final t = '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+    final d =
+        '${dt.day.toString().padLeft(2, '0')}.${dt.month.toString().padLeft(2, '0')}.';
+    final t =
+        '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
     return '$d $t';
   }
 }

@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show debugPrint, kDebugMode, kIsWeb;
 import 'package:geolocator/geolocator.dart' as geo;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -45,10 +46,9 @@ class NavigationProgressSocketService {
           status == RealtimeSubscribeStatus.timedOut) {
         _isSubscribed = false;
         if (error != null) {
-          // Kein throw: Navigation darf bei Socketfehlern weiterlaufen.
-          // Fehler wird nur geloggt.
-          // ignore: avoid_print
-          print('[NavigationSocket] Realtime status $status: $error');
+          if (kDebugMode) {
+            debugPrint('[NavigationSocket] Realtime status $status');
+          }
         }
       }
     });
@@ -57,6 +57,14 @@ class NavigationProgressSocketService {
   }
 
   Future<void> publishPosition(geo.Position position) async {
+    // Web: Supabase Realtime-Roundtrip (WebSocket → Server → zurück) ist zu
+    // langsam für Echtzeit-Navigation (~50–500ms Latenz pro Update).
+    // Auf Web direkt emittieren — kein Netzwerk-Roundtrip.
+    if (kIsWeb) {
+      _emit(position);
+      return;
+    }
+
     final payload = _positionToPayload(position);
     final channel = _channel;
     if (channel == null || !_isSubscribed) {
@@ -116,15 +124,18 @@ class NavigationProgressSocketService {
 
   void _emit(geo.Position position) {
     final last = _lastEmittedPosition;
-    if (last != null) {
+
+    // Native: Zwischenpunkte für flüssige Routenlinie (bis zu 3 Steps).
+    // Web: KEINE Interpolation hier — der WebPositionSmoother (Kalman-Filter)
+    // + Kamera-Animation übernehmen die Glättung. Zusätzliche Events würden
+    // nur unnötige _onLocationUpdate-Durchläufe verursachen.
+    if (!kIsWeb && last != null) {
       final distance = geo.Geolocator.distanceBetween(
         last.latitude,
         last.longitude,
         position.latitude,
         position.longitude,
       );
-
-      // Zwischenpunkte glätten sichtbare Sprünge der Routenlinie.
       final interpolationSteps = (distance / 4.0).floor().clamp(0, 3);
       if (interpolationSteps > 0) {
         for (var i = 1; i <= interpolationSteps; i++) {

@@ -4,6 +4,7 @@
 // Mit Mocks: dart run build_runner build → flutter test
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:cruise_connect/data/services/social_service.dart';
 
 void main() {
   group('SocialService – Feed Tests', () {
@@ -28,11 +29,14 @@ void main() {
       expect(mockPosts.length, equals(2));
     });
 
-    test('getFeedPosts bei Netzwerkfehler → leere Liste (kein Crash)', () async {
-      // SocialService fängt Exceptions ab und gibt [] zurück
-      // Erwartung: leere Liste, kein unhandled exception
-      expect([], isEmpty);
-    });
+    test(
+      'getFeedPosts bei Netzwerkfehler → leere Liste (kein Crash)',
+      () async {
+        // SocialService fängt Exceptions ab und gibt [] zurück
+        // Erwartung: leere Liste, kein unhandled exception
+        expect([], isEmpty);
+      },
+    );
 
     test('getUserPosts gibt nur Posts des angegebenen Users zurück', () async {
       // userId = 'user-1' → nur Posts von user-1
@@ -73,20 +77,61 @@ void main() {
   });
 
   group('SocialService – Post erstellen', () {
-    test('createPost mit leerem Content → Fehler oder wird abgelehnt', () async {
-      final content = '';
-      expect(content.trim().isEmpty, isTrue);
-      // In der App sollte leerer Content vor dem Abschicken validiert werden
-    });
+    test(
+      'createPost mit leerem Content → Fehler oder wird abgelehnt',
+      () async {
+        const content = '';
+        expect(content.trim().isEmpty, isTrue);
+        // In der App sollte leerer Content vor dem Abschicken validiert werden
+      },
+    );
 
     test('createPost mit gültigem Content → Post erscheint im Feed', () async {
-      final content = 'Heute eine tolle Runde gefahren!';
+      const content = 'Heute eine tolle Runde gefahren!';
       expect(content.trim().isNotEmpty, isTrue);
     });
 
     test('Post-Content wird getrimmt', () async {
-      final raw = '  Hallo Welt  ';
+      const raw = '  Hallo Welt  ';
       expect(raw.trim(), equals('Hallo Welt'));
+    });
+  });
+
+  group('SocialService – Öffentliche Profilinfos', () {
+    test('publicDisplayName nutzt Username statt privater Mail-Fallbacks', () {
+      expect(
+        SocialService.publicDisplayName({
+          'username': 'CruiserMax',
+          'email': 'max@example.com',
+        }),
+        equals('CruiserMax'),
+      );
+    });
+
+    test('publicDisplayName fällt kontrolliert auf User-ID zurück', () {
+      expect(
+        SocialService.publicDisplayName(
+          const {},
+          fallbackUserId: '12345678-abcd',
+        ),
+        equals('Cruiser 123456'),
+      );
+    });
+
+    test('publicHandle erzeugt slug aus Username', () {
+      expect(
+        SocialService.publicHandle({'username': 'Max Power'}),
+        equals('@max_power'),
+      );
+    });
+
+    test('publicHandle verwendet nie E-Mail als Fallback', () {
+      expect(
+        SocialService.publicHandle({
+          'email': 'secret@example.com',
+        }, fallbackUserId: 'abcdef12-3456'),
+        equals('@user_abcdef'),
+      );
     });
   });
 }

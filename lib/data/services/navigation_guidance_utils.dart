@@ -1,5 +1,7 @@
 import 'dart:math' as math;
 
+import 'package:geolocator/geolocator.dart' as geo;
+
 /// Kleinstmöglicher Winkelunterschied zweier Himmelsrichtungen in Grad (0..180).
 double headingDeltaDegrees(double headingA, double headingB) {
   final normalizedA = headingA % 360;
@@ -112,4 +114,65 @@ bool isUTurnJoin({
     originalHeading,
     thresholdDegrees: thresholdDegrees,
   );
+}
+
+/// Distanz in Metern von einer Position zu einem [lng, lat]-Zielpunkt.
+double distanceToCoordinateMeters({
+  required geo.Position position,
+  required List<double> coordinate,
+}) {
+  if (coordinate.length < 2) return double.infinity;
+  return geo.Geolocator.distanceBetween(
+    position.latitude,
+    position.longitude,
+    coordinate[1],
+    coordinate[0],
+  );
+}
+
+/// Erkennt, ob die letzten Samples eine sinnvolle Annäherung an das Ziel zeigen.
+bool isApproachingDestination(
+  List<double> recentDistancesMeters, {
+  double minImprovementMeters = 12.0,
+}) {
+  if (recentDistancesMeters.length < 3) return false;
+
+  final oldest = recentDistancesMeters.first;
+  final newest = recentDistancesMeters.last;
+  final improvement = oldest - newest;
+  final dynamicThreshold = math.max(minImprovementMeters, oldest * 0.015);
+
+  return improvement >= dynamicThreshold;
+}
+
+/// Baut kompakte Telemetrie für einen echten Straßen-Reroute.
+Map<String, dynamic> buildRerouteTelemetry({
+  required String rerouteReason,
+  required String rerouteMode,
+  required double? remainingDistanceBeforeMeters,
+  required double? remainingDistanceAfterMeters,
+  required double? etaBeforeSeconds,
+  required double? etaAfterSeconds,
+  double? rerouteDistanceMeters,
+  double? rejoinPointDistanceMeters,
+  bool rerouteFailed = false,
+}) {
+  double? roundKm(double? meters) => meters == null
+      ? null
+      : double.parse((meters / 1000.0).toStringAsFixed(2));
+  double? roundSeconds(double? seconds) =>
+      seconds == null ? null : double.parse(seconds.toStringAsFixed(1));
+
+  return {
+    'reroute_triggered': true,
+    'reroute_reason': rerouteReason,
+    'reroute_mode': rerouteMode,
+    'reroute_distance_km': roundKm(rerouteDistanceMeters),
+    'rejoin_point_distance_km': roundKm(rejoinPointDistanceMeters),
+    'remaining_distance_before': roundKm(remainingDistanceBeforeMeters),
+    'remaining_distance_after': roundKm(remainingDistanceAfterMeters),
+    'eta_before': roundSeconds(etaBeforeSeconds),
+    'eta_after': roundSeconds(etaAfterSeconds),
+    'reroute_failed': rerouteFailed,
+  };
 }

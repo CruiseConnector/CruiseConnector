@@ -1,3 +1,13 @@
 {
-  "recommendations": ["denoland.vscode-deno"]
+  "recommendations": [
+    "DartCode.dart-code",
+    "DartCode.flutter",
+    "denoland.vscode-deno",
+    "eamodio.gitlens",
+    "usernamehw.errorlens",
+    "tamasfe.even-better-toml",
+    "redhat.vscode-yaml",
+    "yzhang.markdown-all-in-one"
+  ],
+  "unwantedRecommendations": []
 }

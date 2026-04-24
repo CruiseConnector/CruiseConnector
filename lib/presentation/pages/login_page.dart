@@ -12,10 +12,10 @@ class LoginPage extends StatefulWidget {
 }
 
 class _LoginPageState extends State<LoginPage> {
-  final _emailController    = TextEditingController();
+  final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   bool _isLoading = false;
-  bool _obscure   = true;
+  bool _obscure = true;
   String? _errorMsg;
 
   @override
@@ -26,7 +26,7 @@ class _LoginPageState extends State<LoginPage> {
   }
 
   Future<void> _signIn() async {
-    final email    = _emailController.text.trim();
+    final email = _emailController.text.trim();
     final password = _passwordController.text;
 
     if (email.isEmpty || password.isEmpty) {
@@ -34,7 +34,10 @@ class _LoginPageState extends State<LoginPage> {
       return;
     }
 
-    setState(() { _isLoading = true; _errorMsg = null; });
+    setState(() {
+      _isLoading = true;
+      _errorMsg = null;
+    });
 
     try {
       await AuthService.signIn(email: email, password: password);
@@ -47,7 +50,9 @@ class _LoginPageState extends State<LoginPage> {
       setState(() => _errorMsg = _translateError(e.message));
     } catch (e) {
       debugPrint('[Login] Unerwarteter Fehler: $e');
-      setState(() => _errorMsg = 'Login fehlgeschlagen. Bitte erneut versuchen.');
+      setState(
+        () => _errorMsg = 'Login fehlgeschlagen. Bitte erneut versuchen.',
+      );
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -64,14 +69,14 @@ class _LoginPageState extends State<LoginPage> {
     if (m.contains('too many requests')) {
       return 'Zu viele Versuche. Bitte kurz warten.';
     }
-    return 'Login fehlgeschlagen: $msg';
+    return 'Login fehlgeschlagen. Bitte erneut versuchen.';
   }
 
   @override
   Widget build(BuildContext context) {
-    final size    = MediaQuery.of(context).size;
+    final size = MediaQuery.of(context).size;
     final padding = MediaQuery.of(context).padding;
-    const brand   = Color(0xFFEF4F4F);
+    const brand = Color(0xFFEF4F4F);
     final headerH = size.height * 0.35;
 
     return Scaffold(
@@ -82,7 +87,10 @@ class _LoginPageState extends State<LoginPage> {
 
           // Weißer unterer Bereich
           Positioned(
-            top: headerH, bottom: 0, left: 0, right: 0,
+            top: headerH,
+            bottom: 0,
+            left: 0,
+            right: 0,
             child: Container(
               decoration: const BoxDecoration(
                 color: Colors.white,
@@ -108,13 +116,20 @@ class _LoginPageState extends State<LoginPage> {
                           child: Row(
                             children: [
                               IconButton(
-                                icon: const Icon(Icons.arrow_back_ios, color: Colors.white),
+                                icon: const Icon(
+                                  Icons.arrow_back_ios,
+                                  color: Colors.white,
+                                ),
                                 onPressed: () => Navigator.pop(context),
                               ),
                               const Spacer(),
                               const Text(
                                 'CruiseConnect',
-                                style: TextStyle(color: Colors.white70, fontSize: 16, fontWeight: FontWeight.w500),
+                                style: TextStyle(
+                                  color: Colors.white70,
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w500,
+                                ),
                               ),
                               const Spacer(),
                               const SizedBox(width: 50),
@@ -123,13 +138,24 @@ class _LoginPageState extends State<LoginPage> {
                         ),
                         const SizedBox(height: 22),
                         Container(
-                          height: 120, width: 200,
+                          height: 120,
+                          width: 200,
                           decoration: BoxDecoration(
                             color: Colors.black26,
                             borderRadius: BorderRadius.circular(15),
-                            boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.2), blurRadius: 15, offset: const Offset(0, 8))],
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withValues(alpha: 0.2),
+                                blurRadius: 15,
+                                offset: const Offset(0, 8),
+                              ),
+                            ],
                           ),
-                          child: const Icon(Icons.directions_car, size: 60, color: Colors.white),
+                          child: const Icon(
+                            Icons.directions_car,
+                            size: 60,
+                            color: Colors.white,
+                          ),
                         ),
                       ],
                     ),
@@ -141,7 +167,9 @@ class _LoginPageState extends State<LoginPage> {
                   width: double.infinity,
                   decoration: const BoxDecoration(
                     color: Colors.white,
-                    borderRadius: BorderRadius.vertical(top: Radius.circular(40)),
+                    borderRadius: BorderRadius.vertical(
+                      top: Radius.circular(40),
+                    ),
                   ),
                   padding: const EdgeInsets.symmetric(horizontal: 30),
                   child: Column(
@@ -151,12 +179,19 @@ class _LoginPageState extends State<LoginPage> {
                       const Center(
                         child: Text(
                           'Willkommen zurück',
-                          style: TextStyle(fontSize: 26, fontWeight: FontWeight.w900, color: Colors.black87),
+                          style: TextStyle(
+                            fontSize: 26,
+                            fontWeight: FontWeight.w900,
+                            color: Colors.black87,
+                          ),
                         ),
                       ),
                       const SizedBox(height: 5),
                       const Center(
-                        child: Text('Melde dich an, um fortzufahren', style: TextStyle(fontSize: 15, color: Colors.grey)),
+                        child: Text(
+                          'Melde dich an, um fortzufahren',
+                          style: TextStyle(fontSize: 15, color: Colors.grey),
+                        ),
                       ),
                       const SizedBox(height: 30),
 
@@ -176,7 +211,10 @@ class _LoginPageState extends State<LoginPage> {
                         hint: '••••••••',
                         obscure: _obscure,
                         suffixIcon: IconButton(
-                          icon: Icon(_obscure ? Icons.visibility_off : Icons.visibility, color: Colors.grey),
+                          icon: Icon(
+                            _obscure ? Icons.visibility_off : Icons.visibility,
+                            color: Colors.grey,
+                          ),
                           onPressed: () => setState(() => _obscure = !_obscure),
                         ),
                       ),
@@ -186,7 +224,10 @@ class _LoginPageState extends State<LoginPage> {
                         Padding(
                           padding: const EdgeInsets.only(top: 10),
                           child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 14,
+                              vertical: 10,
+                            ),
                             decoration: BoxDecoration(
                               color: Colors.red.shade50,
                               borderRadius: BorderRadius.circular(10),
@@ -194,9 +235,21 @@ class _LoginPageState extends State<LoginPage> {
                             ),
                             child: Row(
                               children: [
-                                const Icon(Icons.error_outline, color: Colors.red, size: 18),
+                                const Icon(
+                                  Icons.error_outline,
+                                  color: Colors.red,
+                                  size: 18,
+                                ),
                                 const SizedBox(width: 8),
-                                Expanded(child: Text(_errorMsg!, style: const TextStyle(color: Colors.red, fontSize: 13))),
+                                Expanded(
+                                  child: Text(
+                                    _errorMsg!,
+                                    style: const TextStyle(
+                                      color: Colors.red,
+                                      fontSize: 13,
+                                    ),
+                                  ),
+                                ),
                               ],
                             ),
                           ),
@@ -206,7 +259,8 @@ class _LoginPageState extends State<LoginPage> {
 
                       // Anmelden Button
                       SizedBox(
-                        width: double.infinity, height: 58,
+                        width: double.infinity,
+                        height: 58,
                         child: ElevatedButton(
                           onPressed: _isLoading ? null : _signIn,
                           style: ElevatedButton.styleFrom(
@@ -218,10 +272,20 @@ class _LoginPageState extends State<LoginPage> {
                           ),
                           child: _isLoading
                               ? const SizedBox(
-                                  width: 22, height: 22,
-                                  child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2.5),
+                                  width: 22,
+                                  height: 22,
+                                  child: CircularProgressIndicator(
+                                    color: Colors.white,
+                                    strokeWidth: 2.5,
+                                  ),
                                 )
-                              : const Text('Anmelden', style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
+                              : const Text(
+                                  'Anmelden',
+                                  style: TextStyle(
+                                    fontSize: 17,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
                         ),
                       ),
 
@@ -259,7 +323,14 @@ class _LoginPageState extends State<LoginPage> {
 
   Widget _label(String text) => Padding(
     padding: const EdgeInsets.only(bottom: 6, left: 4),
-    child: Text(text, style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.black87, fontSize: 14)),
+    child: Text(
+      text,
+      style: const TextStyle(
+        fontWeight: FontWeight.bold,
+        color: Colors.black87,
+        fontSize: 14,
+      ),
+    ),
   );
 
   Widget _inputField({
@@ -271,7 +342,10 @@ class _LoginPageState extends State<LoginPage> {
     Widget? suffixIcon,
   }) {
     return Container(
-      decoration: BoxDecoration(color: Colors.grey[100], borderRadius: BorderRadius.circular(15)),
+      decoration: BoxDecoration(
+        color: Colors.grey[100],
+        borderRadius: BorderRadius.circular(15),
+      ),
       child: TextField(
         controller: controller,
         obscureText: obscure,
@@ -282,7 +356,10 @@ class _LoginPageState extends State<LoginPage> {
           hintText: hint,
           hintStyle: TextStyle(color: Colors.grey[400]),
           border: InputBorder.none,
-          contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 20,
+            vertical: 16,
+          ),
         ),
       ),
     );

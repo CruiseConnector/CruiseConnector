@@ -1,0 +1,38 @@
+---
+description: Backend-Regeln (Supabase, Edge Functions, backendnahe Services).
+globs:
+  - "supabase/**"
+  - "lib/data/services/**"
+  - "tool/**"
+  - "test/services/**"
+---
+
+## Backend-Regeln (Supabase / Edge Functions / backendnahe Logik)
+
+### Kleine, sichere Änderungen
+- Änderungen **klein schneiden**: lieber 2–3 kleine PRs/Commits (wenn überhaupt) statt ein großer Umbau.
+- Keine „Aufräum“-Refactors parallel zu funktionalen Fixes.
+
+### Keine Request-Lawinen
+- Pro User-Aktion **keine Kaskaden** aus Folge-Requests starten, wenn ein Batch/Single-Call möglich ist.
+- Wiederholungen sauber begrenzen (Timeouts, Retries, Backoff), keine Endlosschleifen.
+
+### Fehler erst spät surfacen (aber sauber)
+- Kandidaten/Antworten nicht unnötig früh wegwerfen: erst sammeln, dann bewerten.
+- Fehler im Backend so handhaben, dass der Client **aussagekräftige** Infos bekommt (ohne Secrets/Interna zu leaken).
+- „Hard fails“ nur, wenn wirklich keine sinnvolle Fallback-Strategie bleibt.
+
+### Kandidaten nicht zu früh verwerfen
+- Heuristiken/Validatoren so bauen, dass sie **zuverlässig** schlechte Kandidaten erkennen, aber nicht gute Kandidaten fälschlich eliminieren.
+- Wenn Filter scharf sind: Messbar begründen (Benchmarks, Vergleichsrouten, Latenz/Qualität).
+
+### Vor Deploy: Risiko & Benchmarks benennen
+- Vor Edge-Function Deploys (oder Schema-/Policy-Änderungen) immer:
+  - **Risiko** (Breakage, Rate Limits, Kosten, Latenz)
+  - **Messung** (Benchmarks, reale Requests)
+  - **Rollback** (wie zurück, wenn es schiefgeht)
+
+### Routing-relevante Backend-Pfade
+- `supabase/functions/generate-cruise-route/index.ts`
+- `lib/data/services/route_service.dart`
+

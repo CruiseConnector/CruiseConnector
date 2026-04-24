@@ -53,7 +53,7 @@ dependencies:
   # Netzwerk-Status für Offline-Modus
   connectivity_plus: ^6.1.4
   # Nativer Share-Dialog für Posts & Invite-Links
-  share_plus: ^10.1.2
+  share_plus: ^10.1.4
   # Deep Links (universal / app links)
   app_links: ^6.3.2
 

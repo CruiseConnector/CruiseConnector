@@ -1,0 +1,66 @@
+export function classifyRoutingError(message: string): {
+  status: number;
+  code:
+    | "INVALID_REQUEST"
+    | "NO_ROUTE"
+    | "UNAUTHORIZED"
+    | "RATE_LIMIT"
+    | "TIMEOUT"
+    | "WORKER_LIMIT"
+    | "INTERNAL_ERROR";
+  retryable: boolean;
+  retryAfterSec?: number;
+} {
+  const lower = message.toLowerCase();
+  if (
+    lower.includes("invalid") ||
+    lower.includes("missing") ||
+    lower.includes("out of bounds") ||
+    lower.includes("required")
+  ) {
+    return { status: 422, code: "INVALID_REQUEST", retryable: false };
+  }
+  if (lower.includes("no route found") || lower.includes("keine route")) {
+    return { status: 404, code: "NO_ROUTE", retryable: false };
+  }
+  if (
+    lower.includes("unauthorized") || lower.includes("forbidden") ||
+    lower.includes("jwt")
+  ) {
+    return { status: 401, code: "UNAUTHORIZED", retryable: false };
+  }
+  if (
+    lower.includes("worker limit") ||
+    lower.includes("cpu time limit") ||
+    lower.includes("memory limit") ||
+    lower.includes("wall clock") ||
+    lower.includes("resource limit")
+  ) {
+    return {
+      status: 503,
+      code: "WORKER_LIMIT",
+      retryable: true,
+      retryAfterSec: 2,
+    };
+  }
+  if (
+    lower.includes("rate limit") || lower.includes("too many requests") ||
+    lower.includes("mapbox_http_429")
+  ) {
+    return {
+      status: 429,
+      code: "RATE_LIMIT",
+      retryable: true,
+      retryAfterSec: 8,
+    };
+  }
+  if (
+    lower.includes("timeout") ||
+    lower.includes("timed out") ||
+    lower.includes("aborterror") ||
+    lower.includes("mapbox_timeout")
+  ) {
+    return { status: 504, code: "TIMEOUT", retryable: true, retryAfterSec: 5 };
+  }
+  return { status: 500, code: "INTERNAL_ERROR", retryable: false };
+}

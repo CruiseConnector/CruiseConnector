@@ -1,0 +1,45 @@
+---
+alwaysApply: true
+description: Globale Regeln für CruiseConnect (Deutsch, minimalinvasiv, stabil).
+globs:
+  - "**/*"
+---
+
+## Global (CruiseConnect) — Arbeitsregeln
+
+### Sprache & Stil
+- **Deutsch** in Antworten, Status, PR-/Commit-Texten und Doku.
+- Code bleibt wie im Projekt üblich: **deutsche UI-Texte**, **englische Variablennamen**.
+
+### Minimalinvasiv arbeiten
+- **Keine unnötigen Refactors** (Formatierungen, Umbenennungen, Struktur-Umbauten) ohne klaren Nutzen.
+- **Kleine, sichere Änderungen** bevorzugen (ein klarer Zweck, begrenzter Scope).
+- **Keine unrelated Dateien** anfassen.
+- Vor dem Editieren: relevante Dateien **lesen**, erst dann ändern.
+
+### Realität schlägt Theorie
+- Bei Routing/Navigation gilt: **reales Verhalten wichtiger als nur grüne Tests**.
+- Wo sinnvoll: Benchmarks, Live-Simulation oder realistische Testdaten nutzen (statt ausschließlich Mocks).
+
+### Sicherheit / Secrets
+- **Nie** API-Keys/Tokens ausgeben oder in Diffs/Logs schreiben (insb. `lib/core/constants.dart`).
+- Keine sensiblen Daten in neue Doku kopieren.
+
+### Projekt-Konventionen, die nicht verletzt werden dürfen
+- **Koordinatenformat (Mapbox)**: immer **`[longitude, latitude]`**.
+- State Management: **lokal via `setState()`**; kein spontaner Wechsel zu Provider/BLoC/Riverpod.
+
+### Statusformat (bei längeren Aufgaben verpflichtend)
+Erledigt:
+- …
+
+Offen:
+- …
+
+Nächster Schritt:
+- …
+
+### Commit / Push / Deploy
+- Nur wenn **explizit** vom User gefordert.
+- Nur wenn Erfolgskriterien klar erfüllt und Risiken (bei Backend/Deploy) benannt sind.
+

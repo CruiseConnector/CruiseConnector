@@ -1,6 +1,11 @@
+import 'dart:async';
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart' as geo;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:cruise_connect/data/services/gamification_service.dart';
+import 'package:cruise_connect/data/services/route_elevation_service.dart';
 import 'package:cruise_connect/data/services/saved_routes_service.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/domain/models/saved_route.dart';
@@ -15,11 +20,14 @@ class HomeContentPage extends StatefulWidget {
   State<HomeContentPage> createState() => _HomeContentPageState();
 }
 
-class _HomeContentPageState extends State<HomeContentPage> {
+class _HomeContentPageState extends State<HomeContentPage>
+    with SingleTickerProviderStateMixin {
   @override
   void didUpdateWidget(HomeContentPage old) {
     super.didUpdateWidget(old);
-    if (widget.refreshKey != old.refreshKey && widget.refreshKey > 0) _loadStats();
+    if (widget.refreshKey != old.refreshKey && widget.refreshKey > 0) {
+      _loadStats();
+    }
   }
 
   int userLevel = 1;
@@ -34,28 +42,54 @@ class _HomeContentPageState extends State<HomeContentPage> {
   List<double> _weeklyChartData = List.filled(7, 0);
   int _followerCount = 0;
   int _streakDays = 0;
-  List<SavedRoute> _recommendedRoutes = [];
+  SavedRoute? _weeklyTopRoute;
+  bool _isRouteSaved = false;
+  final Map<String, _HeroRouteInsights> _heroInsightsByRouteId = {};
+  final Set<String> _heroInsightsLoading = <String>{};
+  late final AnimationController _shimmerController;
 
   @override
   void initState() {
     super.initState();
+    _shimmerController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1400),
+    )..repeat();
     _loadStats();
+  }
+
+  @override
+  void dispose() {
+    _shimmerController.dispose();
+    super.dispose();
   }
 
   Future<void> _loadStats() async {
     try {
       final result = await GamificationService.calculateAndSync();
       final routes = await SavedRoutesService.getUserRoutes();
+      final rideRoutes = routes
+          .where((route) => route.isDrivenSession)
+          .toList();
 
       // Wöchentliche Daten berechnen
       final now = DateTime.now();
-      final weekStart = now.subtract(Duration(days: now.weekday - 1));
+      final todayStart = DateTime(now.year, now.month, now.day);
+      final weekStart = todayStart.subtract(
+        Duration(days: todayStart.weekday - 1),
+      );
       final weeklyKm = List<double>.filled(7, 0);
-      for (final r in routes) {
-        if (r.createdAt.isAfter(weekStart)) {
-          final dayIndex = r.createdAt.weekday - 1;
+      for (final r in rideRoutes) {
+        final localCreatedAt = r.createdAt.toLocal();
+        final routeDay = DateTime(
+          localCreatedAt.year,
+          localCreatedAt.month,
+          localCreatedAt.day,
+        );
+        if (!routeDay.isBefore(weekStart)) {
+          final dayIndex = routeDay.weekday - 1;
           if (dayIndex >= 0 && dayIndex < 7) {
-            weeklyKm[dayIndex] += r.distanceKm;
+            weeklyKm[dayIndex] += r.actualDistanceKm;
           }
         }
       }
@@ -66,16 +100,20 @@ class _HomeContentPageState extends State<HomeContentPage> {
 
       // Streak berechnen (Tage in Folge gefahren)
       int streak = 0;
-      if (routes.isNotEmpty) {
+      if (rideRoutes.isNotEmpty) {
         final today = DateTime(now.year, now.month, now.day);
-        // Alle Fahrtage sammeln
         final driveDays = <DateTime>{};
-        for (final r in routes) {
-          driveDays.add(DateTime(r.createdAt.year, r.createdAt.month, r.createdAt.day));
+        for (final r in rideRoutes) {
+          final localCreatedAt = r.createdAt.toLocal();
+          driveDays.add(
+            DateTime(
+              localCreatedAt.year,
+              localCreatedAt.month,
+              localCreatedAt.day,
+            ),
+          );
         }
-        // Von heute rückwärts zählen
         var checkDay = today;
-        // Wenn heute noch nicht gefahren, starte ab gestern
         if (!driveDays.contains(checkDay)) {
           checkDay = checkDay.subtract(const Duration(days: 1));
         }
@@ -85,12 +123,47 @@ class _HomeContentPageState extends State<HomeContentPage> {
         }
       }
 
-      // Empfohlene Routen laden (beliebte Routen anderer Nutzer)
-      List<SavedRoute> recommended = [];
+      // Wöchentliche Top-Route laden
+      SavedRoute? topRoute;
+      bool routeSaved = false;
       try {
-        recommended = await SavedRoutesService.getPopularRoutes(limit: 5);
+        // Standort ermitteln
+        double userLat = 50.1109; // Fallback: Frankfurt
+        double userLng = 8.6821;
+        try {
+          final permission = await geo.Geolocator.checkPermission();
+          final hasPermission =
+              permission == geo.LocationPermission.always ||
+              permission == geo.LocationPermission.whileInUse;
+          if (!hasPermission) {
+            await geo.Geolocator.requestPermission();
+          }
+          final pos = await geo.Geolocator.getCurrentPosition(
+            locationSettings: const geo.LocationSettings(
+              accuracy: geo.LocationAccuracy.low,
+              timeLimit: Duration(seconds: 5),
+            ),
+          );
+          userLat = pos.latitude;
+          userLng = pos.longitude;
+        } catch (e) {
+          debugPrint('[Home] Standort nicht verfügbar, nutze Fallback: $e');
+        }
+
+        topRoute = await SavedRoutesService.getWeeklyTopRoute(
+          userLat: userLat,
+          userLng: userLng,
+        );
+
+        // Prüfen ob Route bereits gespeichert
+        if (topRoute != null) {
+          routeSaved = SavedRoutesService.hasEquivalentSavedRoute(
+            topRoute,
+            routes,
+          );
+        }
       } catch (e) {
-        debugPrint('[Home] Empfohlene Routen fehlgeschlagen: $e');
+        debugPrint('[Home] Top-Route laden fehlgeschlagen: $e');
       }
 
       // Community stats
@@ -117,9 +190,14 @@ class _HomeContentPageState extends State<HomeContentPage> {
           _weeklyChartData = normalized;
           _followerCount = followers;
           _streakDays = streak;
-          _recommendedRoutes = recommended;
+          _weeklyTopRoute = topRoute;
+          _isRouteSaved = routeSaved;
           _loading = false;
         });
+      }
+
+      if (topRoute != null) {
+        unawaited(_ensureHeroRouteInsights(topRoute));
       }
     } catch (e) {
       debugPrint('[Home] Daten laden fehlgeschlagen: $e');
@@ -127,12 +205,80 @@ class _HomeContentPageState extends State<HomeContentPage> {
     }
   }
 
+  Future<void> _ensureHeroRouteInsights(SavedRoute route) async {
+    if (_heroInsightsByRouteId.containsKey(route.id) ||
+        _heroInsightsLoading.contains(route.id)) {
+      return;
+    }
+
+    final coordinates = _extractCoordinates(route.geometry);
+    if (coordinates.length < 2) return;
+
+    if (mounted) {
+      setState(() {
+        _heroInsightsLoading.add(route.id);
+      });
+    } else {
+      _heroInsightsLoading.add(route.id);
+    }
+
+    try {
+      final curves = await GamificationService.countCurvesAsync(coordinates);
+      final xp = GamificationService.calculateRouteXp(
+        distanceKm: route.distanceKm,
+        curves: curves,
+        style: route.style,
+      );
+      final elevationSummary = await const RouteElevationService().getSummary(
+        routeKey: route.id,
+        coordinates: coordinates,
+      );
+
+      if (!mounted) return;
+      setState(() {
+        _heroInsightsByRouteId[route.id] = _HeroRouteInsights(
+          curves: curves,
+          xp: xp,
+          elevation: elevationSummary,
+        );
+        _heroInsightsLoading.remove(route.id);
+      });
+    } catch (e) {
+      debugPrint('[Home] Hero-Insights fehlgeschlagen: $e');
+      if (!mounted) return;
+      setState(() {
+        _heroInsightsLoading.remove(route.id);
+      });
+    }
+  }
+
+  List<List<double>> _extractCoordinates(Map<String, dynamic> geometry) {
+    final extracted = <List<double>>[];
+    try {
+      final coords = geometry['coordinates'];
+      if (coords is List) {
+        for (final point in coords) {
+          if (point is List && point.length >= 2) {
+            extracted.add([
+              (point[0] as num).toDouble(),
+              (point[1] as num).toDouble(),
+            ]);
+          }
+        }
+      }
+    } catch (_) {
+      return const [];
+    }
+    return extracted;
+  }
+
   @override
   Widget build(BuildContext context) {
     final user = Supabase.instance.client.auth.currentUser;
-    final String userName = (user?.userMetadata?['username'] as String?)
-        ?? user?.email?.split('@')[0]
-        ?? 'User';
+    final String userName =
+        (user?.userMetadata?['username'] as String?) ??
+        user?.email?.split('@')[0] ??
+        'User';
 
     return SingleChildScrollView(
       physics: const BouncingScrollPhysics(),
@@ -207,30 +353,49 @@ class _HomeContentPageState extends State<HomeContentPage> {
               decoration: BoxDecoration(
                 color: const Color(0xFF1C1F26),
                 borderRadius: BorderRadius.circular(24),
-                border: Border.all(color: const Color(0xFFFFFFFF).withValues(alpha: 0.06), width: 1),
+                border: Border.all(
+                  color: const Color(0xFFFFFFFF).withValues(alpha: 0.06),
+                  width: 1,
+                ),
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const Text(
                     'Fortschritt',
-                    style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold),
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 15,
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
                   const SizedBox(height: 12),
                   _loading
-                    ? const Center(child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFFFF3B30))))
-                    : Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          _statRow('⚡', '$totalXp XP gesamt'),
-                          const SizedBox(height: 6),
-                          _statRow('🏎️', '${totalDistanceKm.toStringAsFixed(0)} Km gefahren'),
-                          const SizedBox(height: 6),
-                          _statRow('🛣️', '$totalRoutes Strecken'),
-                          const SizedBox(height: 6),
-                          _statRow('🏅', '$badgeCount Badges'),
-                        ],
-                      ),
+                      ? const Center(
+                          child: SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Color(0xFFFF3B30),
+                            ),
+                          ),
+                        )
+                      : Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            _statRow('⚡', '$totalXp XP gesamt'),
+                            const SizedBox(height: 6),
+                            _statRow(
+                              '🏎️',
+                              '${totalDistanceKm.toStringAsFixed(0)} Km gefahren',
+                            ),
+                            const SizedBox(height: 6),
+                            _statRow('🛣️', '$totalRoutes Strecken'),
+                            const SizedBox(height: 6),
+                            _statRow('🏅', '$badgeCount Badges'),
+                          ],
+                        ),
                   const SizedBox(height: 12),
                   Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -295,31 +460,10 @@ class _HomeContentPageState extends State<HomeContentPage> {
                 ],
               ),
             ),
-            const SizedBox(height: 10),
+            const SizedBox(height: 16),
 
-            // Empfohlene Routen Section (echte Daten aus DB)
-            const Text(
-              'Heute für dich',
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 20,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            const SizedBox(height: 10),
-            if (_recommendedRoutes.isEmpty && !_loading)
-              _buildEmptyRecommendation()
-            else if (_recommendedRoutes.isNotEmpty)
-              Column(
-                children: _recommendedRoutes
-                    .map((r) => Padding(
-                          padding: const EdgeInsets.only(bottom: 10),
-                          child: _buildRecommendedRouteCard(r),
-                        ))
-                    .toList(),
-              )
-            else
-              const SizedBox(height: 160, child: Center(child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFFFF3B30))))),
+            // Top-Strecke dieser Woche
+            _buildSuggestedRouteSection(),
             const SizedBox(height: 16),
 
             // Community + Chart Section
@@ -334,7 +478,12 @@ class _HomeContentPageState extends State<HomeContentPage> {
                       decoration: BoxDecoration(
                         color: const Color(0xFF1C1F26),
                         borderRadius: BorderRadius.circular(24),
-                        border: Border.all(color: const Color(0xFFFFFFFF).withValues(alpha: 0.06), width: 1),
+                        border: Border.all(
+                          color: const Color(
+                            0xFFFFFFFF,
+                          ).withValues(alpha: 0.06),
+                          width: 1,
+                        ),
                       ),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -350,21 +499,30 @@ class _HomeContentPageState extends State<HomeContentPage> {
                           const SizedBox(height: 10),
                           _buildCommunityItem('$_followerCount Follower', '👥'),
                           const SizedBox(height: 4),
-                          _buildCommunityItem('$totalRoutes Fahrten absolviert', '🔥'),
+                          _buildCommunityItem(
+                            '$totalRoutes Fahrten absolviert',
+                            '🔥',
+                          ),
                           const SizedBox(height: 4),
-                          _buildCommunityItem('Level $userLevel - $levelName', '📍'),
+                          _buildCommunityItem(
+                            'Level $userLevel - $levelName',
+                            '📍',
+                          ),
                           const Spacer(),
                           SizedBox(
                             width: double.infinity,
                             child: GestureDetector(
                               onTap: () {
-                                  widget.onTabChange?.call(1);
+                                widget.onTabChange?.call(1);
                               },
                               child: Container(
                                 height: 35.0,
                                 decoration: BoxDecoration(
                                   gradient: const LinearGradient(
-                                    colors: [Color(0xFFFF5252), Color(0xFFD32F2F)],
+                                    colors: [
+                                      Color(0xFFFF5252),
+                                      Color(0xFFD32F2F),
+                                    ],
                                     begin: Alignment.topLeft,
                                     end: Alignment.bottomRight,
                                   ),
@@ -393,7 +551,12 @@ class _HomeContentPageState extends State<HomeContentPage> {
                       decoration: BoxDecoration(
                         color: const Color(0xFF1C1F26),
                         borderRadius: BorderRadius.circular(24),
-                        border: Border.all(color: const Color(0xFFFFFFFF).withValues(alpha: 0.06), width: 1),
+                        border: Border.all(
+                          color: const Color(
+                            0xFFFFFFFF,
+                          ).withValues(alpha: 0.06),
+                          width: 1,
+                        ),
                       ),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -422,7 +585,8 @@ class _HomeContentPageState extends State<HomeContentPage> {
                                 ),
                                 Expanded(
                                   child: Row(
-                                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                                    mainAxisAlignment:
+                                        MainAxisAlignment.spaceEvenly,
                                     crossAxisAlignment: CrossAxisAlignment.end,
                                     children: [
                                       _buildChartBar('Mo', _weeklyChartData[0]),
@@ -455,95 +619,391 @@ class _HomeContentPageState extends State<HomeContentPage> {
     );
   }
 
-  // ── Empfohlene Route Card (echte Daten) ──────────────────────────────────
+  Widget _buildSuggestedRouteSection() {
+    if (_weeklyTopRoute != null) {
+      return _buildSuggestedRouteCard(_weeklyTopRoute!);
+    }
 
-  Widget _buildRecommendedRouteCard(SavedRoute route) {
-    // Farbschema basierend auf Stil
-    final colors = switch (route.style) {
-      'Kurvenjagd' => [const Color(0xFF1B5E20), const Color(0xFF388E3C)],
-      'Sport Mode' => [const Color(0xFFB71C1C), const Color(0xFFD32F2F)],
-      'Abendrunde' => [const Color(0xFF1A237E), const Color(0xFF3949AB)],
-      'Entdecker'  => [const Color(0xFFE65100), const Color(0xFFFB8C00)],
-      _            => [const Color(0xFF37474F), const Color(0xFF546E7A)],
-    };
+    if (_loading) {
+      return _buildSuggestedRouteSkeleton();
+    }
 
-    return GestureDetector(
-      onTap: () {
-        CruiseModePage.pendingRoute.value = route;
-        widget.onTabChange?.call(2);
+    return _buildEmptyRecommendation();
+  }
+
+  Widget _buildSuggestedRouteCard(SavedRoute route) {
+    final coordinates = _extractCoordinates(route.geometry);
+    final heroInsights = _heroInsightsByRouteId[route.id];
+    final isLoadingInsights = _heroInsightsLoading.contains(route.id);
+    final ratingValue = route.rating?.toDouble();
+    final title = (route.name?.trim().isNotEmpty ?? false)
+        ? route.name!.trim()
+        : '${route.styleEmoji} ${route.style}';
+    final climbMeters = heroInsights?.elevation?.ascentMeters;
+    final routeTypeLabel = route.isRoundTrip ? 'Rundkurs' : 'A nach B';
+    final curvesLabel = heroInsights != null
+        ? '${heroInsights.curves} Kurven'
+        : isLoadingInsights
+        ? 'Kurven ...'
+        : 'Kurven --';
+    final durationLabel = route.formattedDuration;
+    final distanceLabel = route.formattedDistance;
+    final tertiaryLabel = heroInsights != null
+        ? '${heroInsights.xp} XP'
+        : climbMeters != null
+        ? '↑ $climbMeters m'
+        : routeTypeLabel;
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isCompact = constraints.maxWidth < 680;
+        final previewSize = isCompact ? 148.0 : 232.0;
+
+        return Container(
+          width: double.infinity,
+          decoration: BoxDecoration(
+            color: const Color(0xFF2A313C),
+            borderRadius: BorderRadius.circular(34),
+            boxShadow: [
+              BoxShadow(
+                color: const Color(0xFFFF3B30).withValues(alpha: 0.12),
+                blurRadius: 28,
+                offset: const Offset(0, 14),
+              ),
+            ],
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(18),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.only(right: 16, top: 4, bottom: 4),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Heute für dich',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 17,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 0.2,
+                          ),
+                        ),
+                        const SizedBox(height: 18),
+                        Text(
+                          '${route.styleEmoji} – $title',
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: isCompact ? 21 : 25,
+                            fontWeight: FontWeight.w800,
+                            height: 1.05,
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        Text(
+                          '$distanceLabel • $curvesLabel • $durationLabel',
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: Colors.white.withValues(alpha: 0.92),
+                            fontSize: isCompact ? 14 : 17,
+                            fontWeight: FontWeight.w600,
+                            height: 1.2,
+                          ),
+                        ),
+                        const SizedBox(height: 24),
+                        if (ratingValue != null && ratingValue > 0)
+                          _buildSuggestedInfoRow(
+                            icon: Icons.star_rounded,
+                            label:
+                                '${ratingValue.toStringAsFixed(1)} Bewertung',
+                            tint: const Color(0xFFFFD76A),
+                          ),
+                        const SizedBox(height: 14),
+                        _buildSuggestedInfoRow(
+                          icon: Icons.local_fire_department_rounded,
+                          label: tertiaryLabel,
+                          tint: const Color(0xFFFF6B3D),
+                        ),
+                        const SizedBox(height: 18),
+                        Wrap(
+                          spacing: 10,
+                          runSpacing: 10,
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          children: [
+                            _buildStyleChip(route),
+                            _buildSaveChip(route),
+                            GestureDetector(
+                              onTap: () {
+                                CruiseModePage.pendingRoute.value = route;
+                                widget.onTabChange?.call(2);
+                              },
+                              child: Container(
+                                height: 42,
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 16,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFFF3B30),
+                                  borderRadius: BorderRadius.circular(16),
+                                ),
+                                alignment: Alignment.center,
+                                child: const Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(
+                                      Icons.directions_car_rounded,
+                                      color: Colors.white,
+                                      size: 18,
+                                    ),
+                                    SizedBox(width: 8),
+                                    Text(
+                                      'Fahren',
+                                      style: TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                _buildSuggestedRoutePreview(
+                  route,
+                  coordinates,
+                  size: previewSize,
+                ),
+              ],
+            ),
+          ),
+        );
       },
-      child: Container(
-        width: double.infinity,   // volle Breite wie Fortschritt-Widget
-        padding: const EdgeInsets.all(16),
+    );
+  }
+
+  Widget _buildSuggestedInfoRow({
+    required IconData icon,
+    required String label,
+    required Color tint,
+  }) {
+    return Row(
+      children: [
+        Icon(icon, size: 22, color: tint),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 16,
+              fontWeight: FontWeight.w600,
+              height: 1.1,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildSuggestedRoutePreview(
+    SavedRoute route,
+    List<List<double>> coordinates,
+    {required double size}
+  ) {
+    return SizedBox(
+      width: size,
+      height: size,
+      child: DecoratedBox(
         decoration: BoxDecoration(
-          gradient: LinearGradient(
+          borderRadius: BorderRadius.circular(30),
+          gradient: const LinearGradient(
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
-            colors: colors,
+            colors: [Color(0xFFFF5A5A), Color(0xFFC70000)],
           ),
-          borderRadius: BorderRadius.circular(20),
+          boxShadow: [
+            BoxShadow(
+              color: const Color(0xFFFF3B30).withValues(alpha: 0.28),
+              blurRadius: 28,
+              offset: const Offset(0, 10),
+            ),
+          ],
         ),
+        child: Padding(
+          padding: const EdgeInsets.all(10),
+          child: Container(
+            decoration: BoxDecoration(
+              color: const Color(0xFF171C24),
+              borderRadius: BorderRadius.circular(24),
+            ),
+            child: Stack(
+              children: [
+                Positioned.fill(
+                  child: Container(
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(24),
+                      gradient: LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors: [
+                          Colors.white.withValues(alpha: 0.06),
+                          Colors.transparent,
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+                Positioned.fill(
+                  child: Padding(
+                    padding: const EdgeInsets.all(18),
+                    child: coordinates.length >= 2
+                        ? CustomPaint(
+                            painter: _RoutePolylinePainter(
+                              coordinates: coordinates,
+                            ),
+                          )
+                        : Center(
+                            child: Text(
+                              route.styleEmoji,
+                              style: const TextStyle(fontSize: 46),
+                            ),
+                          ),
+                  ),
+                ),
+                Positioned(
+                  left: 14,
+                  top: 14,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 5,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.28),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Text(
+                      route.styleEmoji,
+                      style: const TextStyle(fontSize: 13),
+                    ),
+                  ),
+                ),
+                Positioned(
+                  right: 14,
+                  bottom: 14,
+                  child: Container(
+                    width: 28,
+                    height: 28,
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.28),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      Icons.map_outlined,
+                      color: Colors.white,
+                      size: 14,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildEmptyRecommendation() {
+    return Container(
+      width: double.infinity,
+      decoration: BoxDecoration(
+        color: const Color(0xFF2A313C),
+        borderRadius: BorderRadius.circular(34),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFFFF3B30).withValues(alpha: 0.1),
+            blurRadius: 24,
+            offset: const Offset(0, 12),
+          ),
+        ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(18),
         child: Row(
           children: [
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisAlignment: MainAxisAlignment.center,
+                mainAxisSize: MainAxisSize.min,
                 children: [
-                  Text(
-                    route.name ?? '${route.styleEmoji} ${route.style}',
-                    style: const TextStyle(
+                  const Text(
+                    'Heute für dich',
+                    style: TextStyle(
                       color: Colors.white,
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
+                      fontSize: 17,
+                      fontWeight: FontWeight.w700,
                     ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
                   ),
-                  const SizedBox(height: 6),
+                  const SizedBox(height: 18),
+                  const Text(
+                    'Starte deine erste Route',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 24,
+                      fontWeight: FontWeight.w800,
+                      height: 1.05,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
                   Text(
-                    '${route.formattedDistance} · ${route.formattedDuration}',
-                    style: const TextStyle(color: Colors.white70, fontSize: 13),
-                  ),
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      if (route.rating != null) ...[
-                        const Icon(Icons.star, color: Colors.amber, size: 14),
-                        const SizedBox(width: 4),
-                        Text(
-                          '${route.rating}',
-                          style: const TextStyle(color: Colors.white70, fontSize: 12),
-                        ),
-                        const SizedBox(width: 12),
-                      ],
-                      Icon(
-                        route.isRoundTrip ? Icons.loop : Icons.arrow_forward,
-                        color: Colors.white54,
-                        size: 14,
-                      ),
-                      const SizedBox(width: 4),
-                      Text(
-                        route.isRoundTrip ? 'Rundkurs' : 'A nach B',
-                        style: const TextStyle(color: Colors.white54, fontSize: 12),
-                      ),
-                    ],
+                    'Sobald eine Empfehlung verfügbar ist, erscheint sie hier als kompakte Featured-Route.',
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.68),
+                      fontSize: 14,
+                      height: 1.3,
+                    ),
                   ),
                 ],
               ),
             ),
-            const SizedBox(width: 12),
-            Container(
-              width: 56,
-              height: 56,
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.15),
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: Center(
-                child: Text(
-                  route.styleEmoji,
-                  style: const TextStyle(fontSize: 28),
+            const SizedBox(width: 16),
+            SizedBox(
+              width: 132,
+              height: 132,
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(28),
+                  gradient: const LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [Color(0xFFFF5A5A), Color(0xFFC70000)],
+                  ),
+                ),
+                child: Container(
+                  margin: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF171C24),
+                    borderRadius: BorderRadius.circular(22),
+                  ),
+                  child: const Icon(
+                    Icons.explore_outlined,
+                    color: Color(0xFFFF3B30),
+                    size: 40,
+                  ),
                 ),
               ),
             ),
@@ -553,33 +1013,193 @@ class _HomeContentPageState extends State<HomeContentPage> {
     );
   }
 
-  Widget _buildEmptyRecommendation() {
-    return GestureDetector(
-      onTap: () => widget.onTabChange?.call(2),
-      child: Container(
-        height: 160,
-        width: double.infinity,
-        padding: const EdgeInsets.all(20),
-        decoration: BoxDecoration(
-          color: const Color(0xFF1C1F26),
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: const Color(0xFFFFFFFF).withValues(alpha: 0.06)),
+  Widget _buildSuggestedRouteSkeleton() {
+    return Container(
+      width: double.infinity,
+      decoration: BoxDecoration(
+        color: const Color(0xFF2A313C),
+        borderRadius: BorderRadius.circular(34),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFFFF3B30).withValues(alpha: 0.08),
+            blurRadius: 24,
+            offset: const Offset(0, 12),
+          ),
+        ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(18),
+        child: Container(
+          constraints: const BoxConstraints(minHeight: 208),
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    _shimmerBar(width: 150, height: 18),
+                    const SizedBox(height: 20),
+                    _shimmerBar(width: 250, height: 28),
+                    const SizedBox(height: 12),
+                    _shimmerBar(width: 260, height: 18),
+                    const SizedBox(height: 28),
+                    _shimmerBar(width: 220, height: 18),
+                    const SizedBox(height: 14),
+                    _shimmerBar(width: 180, height: 18),
+                    const SizedBox(height: 20),
+                    Row(
+                      children: [
+                        _shimmerPill(width: 92),
+                        const SizedBox(width: 10),
+                        _shimmerPill(width: 42),
+                        const SizedBox(width: 10),
+                        _shimmerPill(width: 90),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 16),
+              _shimmerRoutePreview(),
+            ],
+          ),
         ),
-        child: const Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.explore, color: Color(0xFFFF3B30), size: 32),
-            SizedBox(height: 10),
-            Text(
-              'Starte deine erste Fahrt!',
-              style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+      ),
+    );
+  }
+
+  Widget _buildSaveChip(SavedRoute route) {
+    return GestureDetector(
+      onTap: () async {
+        if (_isRouteSaved) return;
+        try {
+          await SavedRoutesService.saveExistingRoute(route);
+          if (mounted) {
+            setState(() => _isRouteSaved = true);
+          }
+        } catch (e) {
+          debugPrint('[Home] Route speichern fehlgeschlagen: $e');
+        }
+      },
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        width: 44,
+        height: 44,
+        decoration: BoxDecoration(
+          color: _isRouteSaved
+              ? const Color(0xFFFFE2A8).withValues(alpha: 0.16)
+              : Colors.black.withValues(alpha: 0.14),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: _isRouteSaved
+                ? const Color(0xFFFFE2A8).withValues(alpha: 0.45)
+                : Colors.white.withValues(alpha: 0.10),
+          ),
+        ),
+        child: Icon(
+          _isRouteSaved
+              ? Icons.bookmark_rounded
+              : Icons.bookmark_border_rounded,
+          color: _isRouteSaved ? const Color(0xFFFFE2A8) : Colors.white,
+          size: 20,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStyleChip(SavedRoute route) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
+      ),
+      child: Text(
+        '${route.styleEmoji} ${route.style}',
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 12,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+  }
+
+  Widget _shimmerBar({
+    required double width,
+    required double height,
+    double radius = 12,
+  }) {
+    return AnimatedBuilder(
+      animation: _shimmerController,
+      builder: (context, child) {
+        final phase = _shimmerController.value;
+        return Container(
+          width: width.isFinite ? width : double.infinity,
+          height: height,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(radius),
+            gradient: LinearGradient(
+              begin: Alignment(-1.0 + phase * 2, -0.2),
+              end: Alignment(1.0 + phase * 2, 0.2),
+              colors: const [
+                Color(0xFF22262F),
+                Color(0xFF323844),
+                Color(0xFF22262F),
+              ],
+              stops: const [0.2, 0.5, 0.8],
             ),
-            SizedBox(height: 4),
-            Text(
-              'Empfohlene Routen erscheinen hier',
-              style: TextStyle(color: Color(0xFFA0AEC0), fontSize: 12),
-            ),
-          ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _shimmerPill({required double width}) {
+    return _shimmerBar(width: width, height: 28, radius: 999);
+  }
+
+  Widget _shimmerRoutePreview() {
+    return SizedBox(
+      width: 188,
+      height: 188,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(30),
+          gradient: const LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [Color(0xFFFF5A5A), Color(0xFFC70000)],
+          ),
+        ),
+        child: Container(
+          margin: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: const Color(0xFF171C24),
+            borderRadius: BorderRadius.circular(24),
+          ),
+          child: AnimatedBuilder(
+            animation: _shimmerController,
+            builder: (context, child) {
+              return Padding(
+                padding: const EdgeInsets.all(18),
+                child: CustomPaint(
+                  painter: _RoutePolylinePainter(
+                    coordinates: const [
+                      [0.12, 0.78],
+                      [0.26, 0.52],
+                      [0.42, 0.60],
+                      [0.58, 0.30],
+                      [0.76, 0.44],
+                      [0.88, 0.18],
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
         ),
       ),
     );
@@ -625,7 +1245,9 @@ class _HomeContentPageState extends State<HomeContentPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  hasStreak ? '$_streakDays Tage Streak' : 'Kein aktiver Streak',
+                  hasStreak
+                      ? '$_streakDays Tage Streak'
+                      : 'Kein aktiver Streak',
                   style: const TextStyle(
                     color: Colors.white,
                     fontSize: 16,
@@ -637,7 +1259,10 @@ class _HomeContentPageState extends State<HomeContentPage> {
                   hasStreak
                       ? 'Weiter so! Fahre heute um den Streak zu halten.'
                       : 'Starte eine Fahrt und beginne deinen Streak!',
-                  style: const TextStyle(color: Color(0xFFA0AEC0), fontSize: 12),
+                  style: const TextStyle(
+                    color: Color(0xFFA0AEC0),
+                    fontSize: 12,
+                  ),
                 ),
               ],
             ),
@@ -668,17 +1293,19 @@ class _HomeContentPageState extends State<HomeContentPage> {
   // ── Helper Widgets ───────────────────────────────────────────────────────
 
   Widget _statRow(String emoji, String text) {
-    return Row(children: [
-      Text(emoji, style: const TextStyle(fontSize: 14)),
-      const SizedBox(width: 8),
-      Flexible(
-        child: Text(
-          text,
-          style: const TextStyle(color: Colors.white70, fontSize: 12),
-          overflow: TextOverflow.ellipsis,
+    return Row(
+      children: [
+        Text(emoji, style: const TextStyle(fontSize: 14)),
+        const SizedBox(width: 8),
+        Flexible(
+          child: Text(
+            text,
+            style: const TextStyle(color: Colors.white70, fontSize: 12),
+            overflow: TextOverflow.ellipsis,
+          ),
         ),
-      ),
-    ]);
+      ],
+    );
   }
 
   Widget _buildCommunityItem(String text, String emoji) {
@@ -689,10 +1316,7 @@ class _HomeContentPageState extends State<HomeContentPage> {
         Expanded(
           child: Text(
             text,
-            style: const TextStyle(
-              color: Color(0xFFA0AEC0),
-              fontSize: 11,
-            ),
+            style: const TextStyle(color: Color(0xFFA0AEC0), fontSize: 11),
             overflow: TextOverflow.ellipsis,
           ),
         ),
@@ -744,5 +1368,104 @@ class _HomeContentPageState extends State<HomeContentPage> {
         ],
       ),
     );
+  }
+}
+
+// ── CustomPainter für Route-Polyline auf dem Gradient-Hintergrund ──────────
+
+class _HeroRouteInsights {
+  const _HeroRouteInsights({
+    required this.curves,
+    required this.xp,
+    required this.elevation,
+  });
+
+  final int curves;
+  final int xp;
+  final RouteElevationSummary? elevation;
+}
+
+class _RoutePolylinePainter extends CustomPainter {
+  final List<List<double>> coordinates;
+
+  _RoutePolylinePainter({required this.coordinates});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (coordinates.length < 2) return;
+
+    // Bounding Box berechnen
+    double minLon = double.infinity, maxLon = -double.infinity;
+    double minLat = double.infinity, maxLat = -double.infinity;
+    for (final c in coordinates) {
+      if (c[0] < minLon) minLon = c[0];
+      if (c[0] > maxLon) maxLon = c[0];
+      if (c[1] < minLat) minLat = c[1];
+      if (c[1] > maxLat) maxLat = c[1];
+    }
+
+    final lonRange = maxLon - minLon;
+    final latRange = maxLat - minLat;
+    if (lonRange == 0 && latRange == 0) return;
+
+    // Padding
+    const padding = 24.0;
+    final drawWidth = size.width - padding * 2;
+    final drawHeight = size.height - padding * 2;
+
+    // Skalierung mit Aspect Ratio beibehalten
+    final scaleX = lonRange > 0 ? drawWidth / lonRange : 1.0;
+    final scaleY = latRange > 0 ? drawHeight / latRange : 1.0;
+    final scale = math.min(scaleX, scaleY);
+
+    final offsetX = padding + (drawWidth - lonRange * scale) / 2;
+    final offsetY = padding + (drawHeight - latRange * scale) / 2;
+
+    // Punkte normalisieren
+    final points = coordinates.map((c) {
+      final x = offsetX + (c[0] - minLon) * scale;
+      // Y invertieren (Lat steigt nach oben, Canvas nach unten)
+      final y = offsetY + (maxLat - c[1]) * scale;
+      return Offset(x, y);
+    }).toList();
+
+    // Glow-Effekt zeichnen
+    final glowPaint = Paint()
+      ..color = const Color(0xFFFF5252).withValues(alpha: 0.3)
+      ..strokeWidth = 8
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round
+      ..style = PaintingStyle.stroke
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6);
+
+    final path = Path();
+    path.moveTo(points[0].dx, points[0].dy);
+    for (int i = 1; i < points.length; i++) {
+      path.lineTo(points[i].dx, points[i].dy);
+    }
+    canvas.drawPath(path, glowPaint);
+
+    // Haupt-Linie zeichnen
+    final linePaint = Paint()
+      ..color = Colors.white.withValues(alpha: 0.9)
+      ..strokeWidth = 3
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round
+      ..style = PaintingStyle.stroke;
+
+    canvas.drawPath(path, linePaint);
+
+    // Start-Punkt
+    final startDotPaint = Paint()..color = Colors.white;
+    canvas.drawCircle(points.first, 5, startDotPaint);
+
+    // End-Punkt
+    final endDotPaint = Paint()..color = const Color(0xFFFFD700);
+    canvas.drawCircle(points.last, 5, endDotPaint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _RoutePolylinePainter oldDelegate) {
+    return oldDelegate.coordinates != coordinates;
   }
 }

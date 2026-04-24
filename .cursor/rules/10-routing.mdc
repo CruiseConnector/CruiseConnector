@@ -1,0 +1,51 @@
+---
+description: Routing-spezifische Regeln (Rundkurs, A→B, Qualität, Diversität, Benchmarks).
+globs:
+  - "lib/data/services/route_service.dart"
+  - "lib/data/services/route_quality_validator.dart"
+  - "lib/data/services/seen_route_registry.dart"
+  - "test/route/**"
+  - "test/services/route_service_coordinator_test.dart"
+  - "tool/route_service_local_benchmark.dart"
+  - "supabase/functions/generate-cruise-route/**"
+---
+
+## Routing-Regeln (CruiseConnect)
+
+### Grundsatz
+- **Keine „no-route“ Antworten**, außer im echten Worst Case (z.B. Mapbox liefert nichts, harte Constraints unvereinbar).
+- **Reales Ergebnis wichtiger als elegante Theorie**: Benchmarks/Live-Calls schlagen reine Mock-Unit-Tests.
+- **Keine Kraken-/Astformen**: Routen dürfen nicht in viele Äste ausfransen oder ständig zum gleichen Knoten zurückkehren.
+
+### Rundkurs (Loop) — Anforderungen
+- **Geschlossene Runde**: Start ≈ Ziel (innerhalb plausibler Toleranz), ohne sofortige Start-Schleife.
+- **Plausible Geometrie**: keine starken Selbstüberschneidungen; kein „Spaghetti“-Verlauf.
+- **Qualität vor Distanz**: lieber leicht abweichende Distanz als offensichtliche Manöver-/Geometrie-Probleme.
+- **Diversität**: Bei gleicher Konfiguration sollen mehrere Vorschläge **sichtbar unterschiedlich** sein (nicht nur minimal versetzt).
+- **Stabilität**: Kleine Parameteränderungen sollen nicht komplett chaotische Routen erzeugen (aber Variation ist erwünscht).
+
+### A→B — Anforderungen
+- **Umwege sind gestuft**: „kurz / mittel / lang“ (oder ähnliche Stufen) müssen **klar unterscheidbar** sein.
+- **Keine absurden Umwege**: Umweg darf nicht zur faktisch anderen Reise werden, außer der Nutzer wählt explizit „lang“.
+- **Stil/avoidHighways respektieren**: Wenn Highway-Avoid aktiv ist, nicht „durch die Hintertür“ doch primär Autobahn nutzen.
+
+### Qualität & Filterregeln (Manöver/Geometrie)
+- **U-Turns** nur wenn sie real nötig sind; sonst konsequent entfernen/umgehen.
+- **Arrive-/Zwischenziele** nicht als „Manöver-Spam“ zeigen: Zwischen-Arrives reduzieren, letztes Arrive behalten.
+- Start-/End-Artefakte (Loops, unnötige Kehrtwenden, Mikro-Schleifen) als Priorität behandeln.
+
+### Latenz & Robustheit
+- **Latenz budgetieren**: Keine aufeinanderfolgenden Request-Kaskaden („Request-Lawinen“) für einen einzigen Routenvorschlag.
+- **Kandidaten-Strategie**: Kandidaten nicht zu früh verwerfen; zuerst sammeln, dann bewerten.
+- **Fallbacks**: Wenn eine Strategie scheitert, sauber auf nächste Strategie wechseln (ohne sofort „no-route“).
+
+### Benchmarks & Tests
+- **Echte Benchmarks** (z.B. `tool/route_service_local_benchmark.dart`, Live-Calls) sind bei Routing entscheidend.
+- Unit-Tests sind wichtig, aber ersetzen keine Qualitätsmessung am Ergebnis (Geometrie/Diversität/Latenz).
+
+### Betroffene Kernpfade (häufig)
+- `lib/data/services/route_service.dart`
+- `lib/data/services/route_quality_validator.dart`
+- `lib/data/services/seen_route_registry.dart`
+- `supabase/functions/generate-cruise-route/index.ts`
+

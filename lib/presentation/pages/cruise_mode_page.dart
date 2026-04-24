@@ -3,19 +3,29 @@ import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
+import 'dart:io' show Platform;
+
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show HapticFeedback;
 import 'package:geolocator/geolocator.dart' as geo;
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:cruise_connect/core/constants.dart';
 
+import 'package:cruise_connect/data/services/web_position_smoother.dart';
+import 'package:cruise_connect/data/services/native_position_smoother.dart';
 import 'package:cruise_connect/data/services/geocoding_service.dart';
 import 'package:cruise_connect/data/services/navigation_guidance_utils.dart';
 import 'package:cruise_connect/data/services/navigation_progress_socket_service.dart';
 import 'package:cruise_connect/data/services/offline_map_service.dart';
+import 'package:cruise_connect/data/services/route_access_plan.dart';
 import 'package:cruise_connect/data/services/route_service.dart';
+import 'package:cruise_connect/data/services/route_cache_service.dart';
+import 'package:cruise_connect/data/services/route_pool_service.dart';
+import 'package:cruise_connect/data/services/route_rating_service.dart';
+import 'package:cruise_connect/data/services/smart_reroute_engine.dart';
 import 'package:cruise_connect/data/services/saved_routes_service.dart';
 import 'package:cruise_connect/domain/models/mapbox_suggestion.dart';
 import 'package:cruise_connect/domain/models/route_maneuver.dart'
@@ -29,8 +39,8 @@ import 'package:cruise_connect/presentation/widgets/cruise/cruise_setup_card.dar
 import 'package:cruise_connect/presentation/widgets/cruise/drive_control_panel.dart';
 import 'package:cruise_connect/data/services/gamification_service.dart';
 import 'package:cruise_connect/data/services/cruise_group_service.dart';
+import 'package:cruise_connect/data/services/route_quality_validator.dart';
 import 'package:cruise_connect/domain/models/group_member.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 
 class CruiseModePage extends StatefulWidget {
   const CruiseModePage({super.key, this.initialRoute, this.groupId});
@@ -56,10 +66,98 @@ class CruiseModePage extends StatefulWidget {
   State<CruiseModePage> createState() => _CruiseModePageState();
 }
 
-class _CruiseModePageState extends State<CruiseModePage> {
+class _GeneratedRouteUiStateSnapshot {
+  const _GeneratedRouteUiStateSnapshot({
+    required this.lastRouteResult,
+    required this.sessionRouteResult,
+    required this.accessLegMainRouteResult,
+    required this.activeSpeedLimits,
+    required this.activeDestinationCoordinate,
+    required this.activeDetourVariant,
+    required this.activePointToPointScenic,
+    required this.activePointToPointMode,
+    required this.activeAvoidHighways,
+    required this.recentDestinationDistances,
+    required this.isAccessLegActive,
+    required this.accessLegJoinIndex,
+    required this.routeGeoJson,
+    required this.routeDistance,
+    required this.routeDuration,
+    required this.routeLatLngs,
+    required this.fullRouteCoordinates,
+    required this.remainingRouteCoordinates,
+    required this.maneuvers,
+    required this.activeManeuverIndex,
+    required this.currentRouteIndex,
+    required this.lastDrawnRouteIndex,
+    required this.distanceSinceLastRedraw,
+    required this.showRouteInfoBanner,
+    required this.isRouteConfirmed,
+    required this.isExistingRouteSession,
+    required this.cachedCurveCount,
+    required this.remainingDistance,
+    required this.remainingDuration,
+    required this.sessionRouteStartIndexInActiveRoute,
+    required this.navigationStartTime,
+    required this.offRouteCount,
+    required this.lastRerouteTime,
+    required this.isRerouting,
+    required this.originalRouteDistance,
+    required this.originalRouteDuration,
+    required this.totalDistanceDriven,
+    required this.isCameraLocked,
+    required this.configCollapsed,
+    required this.announcedManeuverIndices,
+  });
+
+  final RouteResult? lastRouteResult;
+  final RouteResult? sessionRouteResult;
+  final RouteResult? accessLegMainRouteResult;
+  final List<SpeedLimitSegment> activeSpeedLimits;
+  final List<double>? activeDestinationCoordinate;
+  final int activeDetourVariant;
+  final bool activePointToPointScenic;
+  final String activePointToPointMode;
+  final bool activeAvoidHighways;
+  final List<double> recentDestinationDistances;
+  final bool isAccessLegActive;
+  final int? accessLegJoinIndex;
+  final String? routeGeoJson;
+  final double? routeDistance;
+  final double? routeDuration;
+  final List<LatLng> routeLatLngs;
+  final List<List<double>> fullRouteCoordinates;
+  final List<List<double>> remainingRouteCoordinates;
+  final List<RouteManeuver> maneuvers;
+  final int activeManeuverIndex;
+  final int currentRouteIndex;
+  final int lastDrawnRouteIndex;
+  final double distanceSinceLastRedraw;
+  final bool showRouteInfoBanner;
+  final bool isRouteConfirmed;
+  final bool isExistingRouteSession;
+  final int cachedCurveCount;
+  final double? remainingDistance;
+  final double? remainingDuration;
+  final int sessionRouteStartIndexInActiveRoute;
+  final DateTime? navigationStartTime;
+  final int offRouteCount;
+  final DateTime? lastRerouteTime;
+  final bool isRerouting;
+  final double? originalRouteDistance;
+  final double? originalRouteDuration;
+  final double totalDistanceDriven;
+  final bool isCameraLocked;
+  final bool configCollapsed;
+  final Set<int> announcedManeuverIndices;
+}
+
+class _CruiseModePageState extends State<CruiseModePage>
+    with TickerProviderStateMixin {
   // ─────────────────────── Services ──────────────────────────────────────────
   final _geocodingService = const GeocodingService();
   final _routeService = RouteService();
+  final _smartRerouteEngine = const SmartRerouteEngine();
   final _navigationSocketService = NavigationProgressSocketService();
 
   // ─────────────────────── Route Setup State ─────────────────────────────────
@@ -68,6 +166,8 @@ class _CruiseModePageState extends State<CruiseModePage> {
   String _selectedLength = '50 Km';
   String _selectedLocation = 'Aktueller Standort';
   String _selectedStyle = 'Sport Mode';
+  String _selectedDetour = 'Direkt';
+  bool _avoidHighways = false;
   final TextEditingController _destinationController = TextEditingController();
 
   // ─────────────────────── A-to-B Route Selection State ──────────────────────
@@ -79,9 +179,21 @@ class _CruiseModePageState extends State<CruiseModePage> {
   double? _routeDistance;
   double? _routeDuration;
   RouteResult? _lastRouteResult;
+  RouteResult? _sessionRouteResult;
   bool _configCollapsed = false; // Config-Panel ein-/ausgeklappt
   bool _showRouteInfoBanner = false; // Route-Info Banner nach Generation
   int _cachedCurveCount = 0; // Vorab im Isolate berechnet
+  List<double>? _activeDestinationCoordinate;
+  String _activePointToPointMode = 'Standard';
+  int _activeDetourVariant = 0;
+  bool _activePointToPointScenic = false;
+  bool _activeAvoidHighways = false;
+  bool? _lastGeneratedWasRoundTrip;
+  int? _lastGeneratedSelectedKm;
+  String? _lastGeneratedSelectedStyle;
+  bool? _lastGeneratedAvoidHighways;
+  List<double> _recentDestinationDistances = [];
+  List<SpeedLimitSegment> _activeSpeedLimits = const [];
 
   // ─────────────────────── Map State (flutter_map) ───────────────────────────
   bool _isLoading = false;
@@ -89,11 +201,14 @@ class _CruiseModePageState extends State<CruiseModePage> {
   bool _mapReady = false;
   // Route als LatLng-Liste für PolylineLayer
   List<LatLng> _routeLatLngs = [];
+  Timer? _routeDrawAnimationTimer;
+  int _routeDrawAnimationToken = 0;
   // Aktuelle User-Position als Marker
   LatLng? _userPosition;
   double _userHeading = 0.0; // GPS-Heading in Grad (0=Nord, 90=Ost)
-  // Simulation-Puck-Position als Marker
-  LatLng? _simulationPuckPosition;
+
+  /// Marker-Größe: iOS-Puck ist kompakter (44px) als Default (80px).
+  double get _puckSize => !kIsWeb && Platform.isIOS ? 44.0 : 80.0;
 
   // ─────────────────────── Navigation State ─────────────────────────────────
   geo.Position? _userLocation;
@@ -105,13 +220,15 @@ class _CruiseModePageState extends State<CruiseModePage> {
   final Set<int> _announcedManeuverIndices = <int>{};
   StreamSubscription<geo.Position>? _positionSubscription;
   StreamSubscription<geo.Position>? _socketPositionSubscription;
+  StreamSubscription<geo.Position>?
+  _idlePositionSubscription; // Standort-Stream für Heading im Idle
 
   // ─────────────────────── Simulation State ─────────────────────────────────
   Timer? _simulationTimer;
   bool _isSimulationRunning = false;
   bool _isSimulationStepRunning = false;
   int _simulationIndex = 0;
-  final bool _isSimulationEnabled = true; // Simulation für Testing
+  final bool _isSimulationEnabled = false; // Simulation deaktiviert
   double _simulationSpeedKmh = 60; // Aktuelle Simulationsgeschwindigkeit
 
   bool _isCameraLocked =
@@ -121,6 +238,14 @@ class _CruiseModePageState extends State<CruiseModePage> {
   bool _isRerouting = false; // Verhindert mehrfaches gleichzeitiges Rerouting
   DateTime? _lastRerouteTime; // Cooldown zwischen Reroutes
   int _offRouteCount = 0; // Zählt aufeinanderfolgende Off-Route-Updates
+  bool _isExistingRouteSession =
+      false; // Route aus gespeicherter Vorlage gestartet
+  bool _isAccessLegActive = false; // Nutzer fährt aktuell Zufahrts-Abschnitt
+  int?
+  _accessLegJoinIndex; // Index in _fullRouteCoordinates, ab dem Main-Route aktiv ist
+  int _sessionRouteStartIndexInActiveRoute =
+      0; // Index ab dem die logische Hauptroute im aktiven Track beginnt
+  RouteResult? _accessLegMainRouteResult;
   static const double _offRouteThresholdMeters =
       50.0; // Ab wann Off-Route erkannt wird (wie Apple/Google Maps)
   static const int _offRouteCountThreshold =
@@ -129,10 +254,16 @@ class _CruiseModePageState extends State<CruiseModePage> {
       5; // Häufigere Teil-Redraws für flüssige Linie
   static const double _routeRedrawDistanceMeters = 30.0;
   double _totalDistanceDriven = 0.0; // Gesamte gefahrene Strecke in Metern
+  DateTime? _navigationStartTime; // Zeitpunkt des Navigations-Starts
   double?
   _originalRouteDistance; // Ursprüngliche Gesamtdistanz (für Zeitberechnung)
   double?
   _originalRouteDuration; // Ursprüngliche Gesamtdauer (für Zeitberechnung)
+
+  // Schwellenwerte für anteilige Gutschrift
+  static const double _minProgressForCredit = 0.10; // 10% Minimum
+  static const double _minProgressForFullCredit =
+      0.95; // 95% = volle Gutschrift
   int _lastDrawnRouteIndex =
       0; // Letzter Index bei dem die Route neu gezeichnet wurde
   double _distanceSinceLastRedraw = 0.0;
@@ -144,15 +275,82 @@ class _CruiseModePageState extends State<CruiseModePage> {
   Timer? _positionUploadTimer;
   final Map<String, GroupMember> _groupMembers = {};
 
+  // Web-only: Letzte setState-Zeit für Throttling (max. 1 Rebuild / 16ms auf Web)
+  DateTime? _lastWebRebuildTime;
+
+  // Web-only: GPS-Smoother für flüssige Positionsdarstellung (Kalman-Filter)
+  final WebPositionSmoother _webSmoother = WebPositionSmoother();
+
+  // iOS/Android: Native GPS-Smoother mit Heading-Fusion (Kalman-Filter)
+  final NativePositionSmoother _nativeSmoother = NativePositionSmoother(
+    minMovementMeters: 1.5,
+    maxJumpMeters: 500.0,
+    minHeadingDistanceMeters: 3.0,
+    headingSmoothingFactor: 0.45, // iOS-optimiert: reaktiv aber nicht nervös
+    processNoise: 1.8,
+    stationaryNoiseMeters: 4.0,
+    headingNoiseThresholdDegrees: 12.0,
+    lowSpeedThresholdMs: 2.5, // Unter 9 km/h: Bewegungs-Heading priorisieren
+    highSpeedThresholdMs: 8.0, // Über 29 km/h: GPS-Heading priorisieren
+  );
+
+  // Animierte Kamera-Bewegung zwischen GPS-Updates (alle Plattformen)
+  AnimationController? _cameraAnimController;
+  double _camFromLat = 0.0;
+  double _camFromLng = 0.0;
+  double _camToLat = 0.0;
+  double _camToLng = 0.0;
+  double _camFromHeading = 0.0;
+  double _camToHeading = 0.0;
+  double _lastCameraHeading = 0.0; // Für Bearing-Dead-Zone (< 5° ignorieren)
+
   // ──────────────────────────────────────────────────────────────────────────
 
   void _safeSetState(VoidCallback fn) {
     if (mounted && !_disposed) setState(fn);
   }
 
+  void _dismissTransientRouteUi() {
+    if (!mounted || _disposed) return;
+    FocusManager.instance.primaryFocus?.unfocus();
+    ScaffoldMessenger.maybeOf(context)?.clearSnackBars();
+  }
+
+  bool _hasMeaningfulRouteChange(List<LatLng> previous, List<LatLng> next) {
+    if (previous.length != next.length) return true;
+    if (previous.isEmpty) return false;
+
+    final sampleCount = math.min(16, previous.length);
+    final lastIndex = previous.length - 1;
+    for (var i = 0; i < sampleCount; i++) {
+      final ratio = sampleCount == 1 ? 0.0 : i / (sampleCount - 1);
+      final index = (lastIndex * ratio).round();
+      final prevPoint = previous[index];
+      final nextPoint = next[index];
+      final distance = geo.Geolocator.distanceBetween(
+        prevPoint.latitude,
+        prevPoint.longitude,
+        nextPoint.latitude,
+        nextPoint.longitude,
+      );
+      if (distance > 1.0) return true;
+    }
+    return false;
+  }
+
   @override
   void initState() {
     super.initState();
+    // Animierte Kamera-Bewegung zwischen GPS-Updates (alle Plattformen, 60fps)
+    // iOS: Kürzere Animation (200ms) für reaktiveres Apple-Maps-artiges Gefühl
+    // Web: Längere Animation (250ms) für smoothere Darstellung trotz unzuverlässiger GPS-Updates
+    final animDuration = (!kIsWeb && Platform.isIOS)
+        ? const Duration(milliseconds: 200)
+        : const Duration(milliseconds: 250);
+    _cameraAnimController = AnimationController(
+      vsync: this,
+      duration: animDuration,
+    )..addListener(_onCameraAnimationTick);
     if (widget.initialRoute != null) {
       WidgetsBinding.instance.addPostFrameCallback(
         (_) => _loadSavedRoute(widget.initialRoute!),
@@ -164,6 +362,7 @@ class _CruiseModePageState extends State<CruiseModePage> {
       );
     }
     CruiseModePage.pendingRoute.addListener(_onPendingRoute);
+    _destinationController.addListener(_onDestinationTextChanged);
   }
 
   // ═══════════════════════ GROUP / LIVE TRACKING ═══════════════════════════
@@ -218,8 +417,10 @@ class _CruiseModePageState extends State<CruiseModePage> {
     });
 
     // Timer: eigene Position regelmäßig hochschieben
-    _positionUploadTimer =
-        Timer.periodic(const Duration(seconds: 7), (_) => _uploadMyPosition());
+    _positionUploadTimer = Timer.periodic(
+      const Duration(seconds: 7),
+      (_) => _uploadMyPosition(),
+    );
   }
 
   Widget _buildGroupMemberMarker(GroupMember m) {
@@ -268,6 +469,10 @@ class _CruiseModePageState extends State<CruiseModePage> {
   @override
   void dispose() {
     _disposed = true;
+    _routeDrawAnimationToken++;
+    _routeDrawAnimationTimer?.cancel();
+    _cameraAnimController?.removeListener(_onCameraAnimationTick);
+    _cameraAnimController?.dispose();
     CruiseModePage.isFullscreen.value = false;
     CruiseModePage.pendingRoute.removeListener(_onPendingRoute);
     _stopSimulation(restartLiveTracking: false);
@@ -275,10 +480,173 @@ class _CruiseModePageState extends State<CruiseModePage> {
     _socketPositionSubscription?.cancel();
     _positionUploadTimer?.cancel();
     _groupMembersCh?.unsubscribe();
+    _stopIdlePositionStream();
     unawaited(_navigationSocketService.dispose());
+    _destinationController.removeListener(_onDestinationTextChanged);
     _destinationController.dispose();
     super.dispose();
   }
+
+  void _onDestinationTextChanged() {
+    final selected = _selectedDestination;
+    if (selected == null) return;
+    final currentText = _destinationController.text.trim();
+    if (currentText == selected.placeName.trim()) return;
+    if (!mounted || _disposed) {
+      _selectedDestination = null;
+      return;
+    }
+    setState(() => _selectedDestination = null);
+  }
+
+  // ── Smooth Kamera-Animation (60fps zwischen GPS-Updates) ───────────────
+  void _onCameraAnimationTick() {
+    final controller = _cameraAnimController;
+    if (controller == null || !_isCameraLocked || !_mapReady) return;
+
+    final t = Curves.easeOutCubic.transform(controller.value);
+    var lat = _camFromLat + (_camToLat - _camFromLat) * t;
+    var lng = _camFromLng + (_camToLng - _camFromLng) * t;
+    var heading = _lerpAngleDeg(_camFromHeading, _camToHeading, t);
+
+    // Plattformspezifische Vorhersage für flüssigere Animation
+    if (kIsWeb && _webSmoother.current != null) {
+      final prediction = _webSmoother.predict(DateTime.now());
+      lat = lat + (prediction.lat - lat) * 0.35;
+      lng = lng + (prediction.lng - lng) * 0.35;
+      heading = _lerpAngleDeg(heading, prediction.heading, 0.35);
+    } else if (!kIsWeb && _nativeSmoother.hasValidHeading) {
+      // iOS/Android: Native Smoother für Heading-Prediction
+      final prediction = _nativeSmoother.predict(DateTime.now());
+      // Position sanft mischen (Kalman-geglättet)
+      lat = lat + (prediction.lat - lat) * 0.30;
+      lng = lng + (prediction.lng - lng) * 0.30;
+      // Heading stärker gewichten für reaktive Drehung (Apple-Maps-artig)
+      heading = _lerpAngleDeg(heading, prediction.heading, 0.45);
+    }
+
+    // Forward-Offset: Kartenzentrum ~100m in Fahrtrichtung verschieben,
+    // damit der Fahrer mehr Straße vor sich sieht (Marker im unteren Drittel).
+    final offsetLat = lat + _forwardOffsetLat(heading);
+    final offsetLng = lng + _forwardOffsetLng(heading);
+
+    try {
+      _mapController.moveAndRotate(
+        LatLng(offsetLat, offsetLng),
+        16.5,
+        -heading,
+      );
+    } catch (_) {}
+  }
+
+  /// Startet eine animierte Kamera-Bewegung von der aktuellen zur neuen Position.
+  void _animateCameraTo(double lat, double lng, double heading) {
+    final controller = _cameraAnimController;
+    if (controller == null) return;
+
+    // iOS: Kleinere Dead-Zone (1.5°) für reaktiveres Heading
+    // Andere Plattformen: 2° Standard
+    final deadZoneDegrees = (!kIsWeb && Platform.isIOS) ? 1.5 : 2.0;
+
+    // Bearing-Dead-Zone: Sehr kleine Heading-Änderungen ignorieren (GPS-Rauschen)
+    var effectiveHeading = heading;
+    final headingDelta = _angleDiff(_lastCameraHeading, heading).abs();
+    if (headingDelta < deadZoneDegrees) {
+      effectiveHeading = _lastCameraHeading;
+    } else {
+      _lastCameraHeading = heading;
+    }
+
+    // Fließender Übergang: aktuelle interpolierte Position als neuen Startpunkt nehmen
+    // (statt vom letzten Ziel zu starten → verhindert Ruckeln bei schnellen Updates)
+    if (controller.isAnimating) {
+      final t = Curves.easeOutCubic.transform(controller.value);
+      _camFromLat = _camFromLat + (_camToLat - _camFromLat) * t;
+      _camFromLng = _camFromLng + (_camToLng - _camFromLng) * t;
+      _camFromHeading = _lerpAngleDeg(_camFromHeading, _camToHeading, t);
+    } else {
+      _camFromLat = _camToLat;
+      _camFromLng = _camToLng;
+      _camFromHeading = _camToHeading;
+    }
+    _camToLat = lat;
+    _camToLng = lng;
+    _camToHeading = effectiveHeading;
+
+    // Wenn erste Animation: From = To (kein Sprung)
+    if (_camFromLat == 0.0 && _camFromLng == 0.0) {
+      _camFromLat = lat;
+      _camFromLng = lng;
+      _camFromHeading = effectiveHeading;
+    }
+
+    controller.forward(from: 0.0);
+  }
+
+  /// Zirkuläre Interpolation für Heading (0–360°).
+  static double _lerpAngleDeg(double from, double to, double t) {
+    var diff = (to - from) % 360;
+    if (diff > 180) diff -= 360;
+    if (diff < -180) diff += 360;
+    return (from + diff * t) % 360;
+  }
+
+  /// Kleinster Winkelunterschied (mit Vorzeichen, -180..+180).
+  static double _angleDiff(double from, double to) {
+    var diff = (to - from) % 360;
+    if (diff > 180) diff -= 360;
+    if (diff < -180) diff += 360;
+    return diff;
+  }
+
+  /// Forward-Offset: ~100m nach Norden in Breitengrad-Grad.
+  static double _forwardOffsetLat(double headingDeg) {
+    return math.cos(headingDeg * math.pi / 180) * 0.0009; // ~100m
+  }
+
+  /// Forward-Offset: ~100m nach Osten in Längengrad-Grad.
+  static double _forwardOffsetLng(double headingDeg) {
+    return math.sin(headingDeg * math.pi / 180) *
+        0.0012; // ~100m (breitenabhängig)
+  }
+
+  void _handleRouteModeChanged(bool isRoundTrip) {
+    const roundTripStyles = {
+      'Kurvenjagd',
+      'Sport Mode',
+      'Abendrunde',
+      'Entdecker',
+    };
+    const pointToPointStyles = {
+      'Kurvenjagd',
+      'Sport Mode',
+      'Abendrunde',
+      'Entdecker',
+    };
+
+    setState(() {
+      _isRoundTrip = isRoundTrip;
+      _selectedStyle = isRoundTrip
+          ? (roundTripStyles.contains(_selectedStyle)
+                ? _selectedStyle
+                : 'Sport Mode')
+          : (pointToPointStyles.contains(_selectedStyle)
+                ? _selectedStyle
+                : 'Abendrunde');
+      if (isRoundTrip) {
+        _selectedDetour = 'Direkt';
+        _avoidHighways = false;
+        _selectedDestination = null;
+        _destinationController.clear();
+      } else if (!pointToPointStyles.contains(_selectedStyle)) {
+        _selectedStyle = 'Abendrunde';
+      }
+    });
+    _dismissTransientRouteUi();
+    _resetGeneratedRouteUiState();
+  }
+
+  bool _requiresDestination(bool isRoundTrip) => !isRoundTrip;
 
   // ═══════════════════════ BUILD ════════════════════════════════════════════
 
@@ -289,11 +657,14 @@ class _CruiseModePageState extends State<CruiseModePage> {
       body: Stack(
         children: [
           // Map IMMER an gleicher Stelle im Widget-Tree (verhindert Neu-Erstellung)
-          Positioned.fill(child: _buildMapWidget()),
+          // RepaintBoundary isoliert Canvas-Repaints vom Rest der UI (Web-Performance).
+          Positioned.fill(child: RepaintBoundary(child: _buildMapWidget())),
 
           // Config-Overlay ODER Navigation-Overlay
-          if (!_isRouteConfirmed) _buildConfigOverlay(),
-          if (_isRouteConfirmed) _buildNavigationOverlay(),
+          // RepaintBoundary trennt UI-Overlays vom Karten-Repaint (Web-Performance).
+          if (!_isRouteConfirmed) RepaintBoundary(child: _buildConfigOverlay()),
+          if (_isRouteConfirmed)
+            RepaintBoundary(child: _buildNavigationOverlay()),
 
           // Exit-Button wenn wir als Gruppen-Session gestartet wurden
           // (sonst ist man in der Fullscreen-Navigation gefangen).
@@ -319,8 +690,10 @@ class _CruiseModePageState extends State<CruiseModePage> {
             context: context,
             builder: (ctx) => AlertDialog(
               backgroundColor: const Color(0xFF1C1F26),
-              title: const Text('Gruppenfahrt verlassen?',
-                  style: TextStyle(color: Colors.white)),
+              title: const Text(
+                'Gruppenfahrt verlassen?',
+                style: TextStyle(color: Colors.white),
+              ),
               content: const Text(
                 'Du verlässt die Navigation. Die Gruppe läuft für andere weiter.',
                 style: TextStyle(color: Colors.grey),
@@ -332,8 +705,10 @@ class _CruiseModePageState extends State<CruiseModePage> {
                 ),
                 TextButton(
                   onPressed: () => Navigator.pop(ctx, true),
-                  child: const Text('Verlassen',
-                      style: TextStyle(color: Color(0xFFFF3B30))),
+                  child: const Text(
+                    'Verlassen',
+                    style: TextStyle(color: Color(0xFFFF3B30)),
+                  ),
                 ),
               ],
             ),
@@ -519,17 +894,31 @@ class _CruiseModePageState extends State<CruiseModePage> {
                         selectedStyle: _selectedStyle,
                         selectedDestination: _selectedDestination,
                         destinationController: _destinationController,
-                        onRoundTripChanged: (v) =>
-                            setState(() => _isRoundTrip = v),
+                        onRoundTripChanged: _handleRouteModeChanged,
                         onPlanningTypeChanged: (v) =>
-                            setState(() => _planningType = v),
-                        onLengthChanged: (v) =>
-                            setState(() => _selectedLength = v),
+                            setState(() => _planningType = 'Zufall'),
+                        onLengthChanged: (v) {
+                          debugPrint('[RouteDebug][UIState] selectedKm=$v');
+                          setState(() => _selectedLength = v);
+                        },
                         onLocationChanged: (v) =>
                             setState(() => _selectedLocation = v),
-                        onStyleChanged: (v) =>
-                            setState(() => _selectedStyle = v),
+                        onStyleChanged: (v) {
+                          debugPrint('[RouteDebug][UIState] selectedStyle=$v');
+                          setState(() => _selectedStyle = v);
+                        },
+                        selectedDetour: _selectedDetour,
+                        onDetourChanged: _handleDetourChanged,
+                        selectedAvoidHighways: _avoidHighways,
+                        onAvoidHighwaysChanged: (value) {
+                          debugPrint(
+                            '[RouteDebug][UIState] avoidHighways=$value',
+                          );
+                          setState(() => _avoidHighways = value);
+                        },
                         onDestinationSelected: _onDestinationSelected,
+                        onDestinationInputChanged:
+                            _handleDestinationInputChanged,
                         onDestinationCleared: () => setState(() {
                           _selectedDestination = null;
                           _destinationController.clear();
@@ -735,22 +1124,7 @@ class _CruiseModePageState extends State<CruiseModePage> {
                 const SizedBox(height: 4),
                 DriveControlPanel(
                   onStart: () async {
-                    _startNavigationTracking();
-                    _isCameraLocked = true;
-                    _activateNavigationCamera();
-
-                    final windowEnd = _findLookAheadIndex(
-                      _currentRouteIndex,
-                      3000,
-                    );
-                    setState(() {
-                      _remainingRouteCoordinates = _fullRouteCoordinates
-                          .sublist(_currentRouteIndex, windowEnd);
-                    });
-                    await _drawRoute({
-                      'type': 'LineString',
-                      'coordinates': _remainingRouteCoordinates,
-                    }, animateCamera: false);
+                    await _startNavigationFlow();
                   },
                   onPause: () {
                     _stopNavigationTracking();
@@ -788,32 +1162,35 @@ class _CruiseModePageState extends State<CruiseModePage> {
       ),
       children: [
         // ── Mapbox Dark-Style als Raster-Tile-Layer ──────────────────────────
+        // Web: Retina deaktiviert — halbiert Tile-Downloads, weniger Speicher/GPU-Last.
         TileLayer(
           urlTemplate:
               'https://api.mapbox.com/styles/v1/mapbox/dark-v11/tiles/256/{z}/{x}/{y}?access_token={accessToken}',
           additionalOptions: {'accessToken': AppConstants.mapboxPublicToken},
           userAgentPackageName: 'com.cruise_connect.app',
-          retinaMode: true,
+          retinaMode: !kIsWeb,
         ),
-        // ── Route (Glow + Hauptlinie + Überlappungen) ────────────────────────
+        // ── Route (Glow + Hauptlinie) ────────────────────────────────────────
+        // Web: Glow-Effekt entfernt — spart eine komplette Polyline-Layer-Berechnung.
         if (_routeLatLngs.length >= 2)
           PolylineLayer(
             polylines: [
-              // Glow-Effekt (breiter, halbtransparent)
-              Polyline(
-                points: _routeLatLngs,
-                color: const Color(0x4DFF5722),
-                strokeWidth: 12,
-              ),
+              if (!kIsWeb)
+                // Glow-Effekt (nur native — auf Web zu teuer für CanvasKit)
+                Polyline(
+                  points: _routeLatLngs,
+                  color: const Color(0x4DFF5722),
+                  strokeWidth: 12,
+                ),
               // Haupt-Routenlinie
               Polyline(
                 points: _routeLatLngs,
                 color: const Color(0xFFFF5722),
-                strokeWidth: 5,
+                strokeWidth: kIsWeb ? 4 : 5,
               ),
             ],
           ),
-        // ── Standort-Marker (Apple-Style, immer sichtbar) ──────────────────
+        // ── Standort-Marker ──────────────────────────────────────────────
         if (_userLocation != null && !_isRouteConfirmed)
           MarkerLayer(
             markers: [
@@ -822,21 +1199,21 @@ class _CruiseModePageState extends State<CruiseModePage> {
                   _userLocation!.latitude,
                   _userLocation!.longitude,
                 ),
-                width: 60,
-                height: 60,
-                child: _buildAppleLocationDot(_userHeading),
+                width: _puckSize,
+                height: _puckSize,
+                child: _buildLocationPuck(_userHeading),
               ),
             ],
           ),
-        // ── User-Position Marker (Apple-Style, Live-Navigation) ─────────────
+        // ── User-Position Marker (Live-Navigation) ─────────────────────────
         if (_userPosition != null && _isRouteConfirmed)
           MarkerLayer(
             markers: [
               Marker(
                 point: _userPosition!,
-                width: 44,
-                height: 44,
-                child: _buildAppleLocationDot(_userHeading, isNavigating: true),
+                width: _puckSize,
+                height: _puckSize,
+                child: _buildLocationPuck(_userHeading),
               ),
             ],
           ),
@@ -855,38 +1232,6 @@ class _CruiseModePageState extends State<CruiseModePage> {
                 )
                 .toList(),
           ),
-        // ── Simulations-Puck (blauer Kreis mit weißem Ring) ──────────────────
-        if (_simulationPuckPosition != null)
-          MarkerLayer(
-            markers: [
-              Marker(
-                point: _simulationPuckPosition!,
-                width: 28,
-                height: 28,
-                child: Stack(
-                  alignment: Alignment.center,
-                  children: [
-                    Container(
-                      width: 28,
-                      height: 28,
-                      decoration: BoxDecoration(
-                        color: Colors.white.withValues(alpha: 0.9),
-                        shape: BoxShape.circle,
-                      ),
-                    ),
-                    Container(
-                      width: 18,
-                      height: 18,
-                      decoration: const BoxDecoration(
-                        color: Color(0xFF007AFF),
-                        shape: BoxShape.circle,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
       ],
     );
   }
@@ -895,13 +1240,24 @@ class _CruiseModePageState extends State<CruiseModePage> {
 
   /// Wird von flutter_map aufgerufen wenn die Karte bereit ist.
   void _onMapReady() {
+    debugPrint(
+      '[CruiseMode] _onMapReady called, routeGeoJson=${_routeGeoJson != null}, routeLatLngs=${_routeLatLngs.length}',
+    );
     _mapReady = true;
     // Route zeichnen falls schon vorhanden, sonst GPS-Position holen
     if (_routeGeoJson != null) {
       final geometry = Map<String, dynamic>.from(
         json.decode(_routeGeoJson!) as Map,
       );
+      debugPrint('[CruiseMode] _onMapReady: Zeichne vorhandene Route');
       _drawRoute(geometry);
+      if (_isRouteConfirmed) _activateNavigationCamera();
+    } else if (_routeLatLngs.isNotEmpty) {
+      // Fallback: Route-LatLngs sind bereits gesetzt aber routeGeoJson fehlt
+      debugPrint(
+        '[CruiseMode] _onMapReady: routeLatLngs bereits vorhanden (${_routeLatLngs.length} Punkte)',
+      );
+      // Kein _drawRoute nötig da _routeLatLngs bereits im State ist
       if (_isRouteConfirmed) _activateNavigationCamera();
     } else {
       _initializeMapLocation();
@@ -1003,55 +1359,89 @@ class _CruiseModePageState extends State<CruiseModePage> {
     );
   }
 
-  /// Apple-Style Standort-Punkt: blauer Pfeil der in Fahrtrichtung zeigt.
-  Widget _buildAppleLocationDot(double headingDegrees, {bool isNavigating = false}) {
-    if (isNavigating) {
-      // Navigation: Blauer Pfeil wie Apple Maps
-      return Transform.rotate(
-        angle: headingDegrees * (math.pi / 180.0),
-        child: SizedBox(
-          width: 44,
-          height: 44,
-          child: CustomPaint(
-            painter: _AppleNavArrowPainter(),
-          ),
-        ),
-      );
+  Widget _buildLocationPuck(double headingDegrees) {
+    if (!kIsWeb && Platform.isIOS) {
+      return _buildiOSLocationPuck(headingDegrees);
     }
-    // Idle: Blauer Punkt mit Heading-Kegel wie Apple Maps
-    return Stack(
-      alignment: Alignment.center,
-      children: [
-        // Heading-Kegel
-        Transform.rotate(
-          angle: headingDegrees * (math.pi / 180.0),
-          child: CustomPaint(
-            size: const Size(60, 60),
-            painter: _HeadingConePainter(),
-          ),
+    return _buildDefaultLocationPuck(headingDegrees);
+  }
+
+  /// iOS Apple-Maps-Style Puck: Kompakter blauer Punkt mit kleinem
+  /// Richtungskeil — exakt wie in Apple Karten (Foto 2+3).
+  Widget _buildiOSLocationPuck(double headingDegrees) {
+    return SizedBox(
+      width: 44,
+      height: 44,
+      child: AnimatedRotation(
+        turns: headingDegrees / 360.0,
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeOutCubic,
+        child: CustomPaint(
+          size: const Size(44, 44),
+          painter: _AppleMapsPuckPainter(),
         ),
-        // Weißer Ring
-        Container(
-          width: 20,
-          height: 20,
-          decoration: const BoxDecoration(
-            color: Colors.white,
-            shape: BoxShape.circle,
-            boxShadow: [
-              BoxShadow(color: Color(0x40000000), blurRadius: 4, spreadRadius: 1),
-            ],
+      ),
+    );
+  }
+
+  /// Standard-Puck für Web / Android / macOS (bisheriges Design).
+  Widget _buildDefaultLocationPuck(double headingDegrees) {
+    return SizedBox(
+      width: 80,
+      height: 80,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          // Äußerer Genauigkeits-Pulse (halbtransparenter Ring)
+          Container(
+            width: 52,
+            height: 52,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: const Color(0xFF007AFF).withValues(alpha: 0.12),
+              border: Border.all(
+                color: const Color(0xFF007AFF).withValues(alpha: 0.25),
+                width: 1.5,
+              ),
+            ),
           ),
-        ),
-        // Blauer Kern
-        Container(
-          width: 14,
-          height: 14,
-          decoration: const BoxDecoration(
-            color: Color(0xFF007AFF),
-            shape: BoxShape.circle,
+          // Richtungspfeil (dreht sich smooth mit Heading)
+          AnimatedRotation(
+            turns: headingDegrees / 360.0,
+            duration: const Duration(milliseconds: 150),
+            curve: Curves.easeOutCubic,
+            child: CustomPaint(
+              size: const Size(80, 80),
+              painter: _NavigationArrowPainter(),
+            ),
           ),
-        ),
-      ],
+          // Weißer Ring mit Schatten
+          Container(
+            width: 22,
+            height: 22,
+            decoration: const BoxDecoration(
+              color: Colors.white,
+              shape: BoxShape.circle,
+              boxShadow: [
+                BoxShadow(
+                  color: Color(0x50000000),
+                  blurRadius: 6,
+                  spreadRadius: 1,
+                ),
+              ],
+            ),
+          ),
+          // Blauer Kern
+          Container(
+            width: 15,
+            height: 15,
+            decoration: const BoxDecoration(
+              color: Color(0xFF007AFF),
+              shape: BoxShape.circle,
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -1092,14 +1482,83 @@ class _CruiseModePageState extends State<CruiseModePage> {
           ),
         );
         _userLocation = freshPosition;
+        if (freshPosition.heading.isFinite &&
+            freshPosition.heading >= 0 &&
+            freshPosition.heading <= 360) {
+          _userHeading = freshPosition.heading;
+        }
         _setCameraToPosition(freshPosition);
         _safeSetState(() {}); // Marker-Refresh
       } catch (e) {
         debugPrint('[CruiseMode] Frische GPS-Position nicht verfügbar: $e');
       }
+
+      // Idle-Positions-Stream starten für Heading-Updates (stoppt wenn Navigation startet)
+      _startIdlePositionStream();
     } catch (e) {
       debugPrint('Konnte Karten-Position nicht setzen: $e');
     }
+  }
+
+  void _startIdlePositionStream() {
+    _idlePositionSubscription?.cancel();
+    // distanceFilter=0 auf allen Plattformen: auch reine Heading-Änderungen
+    // (Kompass-Drehung ohne Bewegung) sollen durchkommen.
+    const settings = kIsWeb
+        ? geo.LocationSettings(
+            accuracy: geo.LocationAccuracy.best,
+            distanceFilter: 0,
+          )
+        : geo.LocationSettings(
+            accuracy: geo.LocationAccuracy.bestForNavigation,
+            distanceFilter: 0,
+          );
+    _idlePositionSubscription =
+        geo.Geolocator.getPositionStream(locationSettings: settings).listen(
+          (position) {
+            if (!mounted || _disposed) return;
+            // Plattformspezifisches Smoothing
+            if (kIsWeb) {
+              // Web: Smoother anwenden für flüssige Darstellung
+              final smoothed = _webSmoother.update(position);
+              // Heading trotzdem immer aktualisieren (auch ohne Positions-Rebuild)
+              _userHeading = _webSmoother.heading;
+              if (smoothed != null) {
+                _userLocation = smoothed;
+              }
+            } else {
+              // iOS/Android: Native Smoother mit Heading-Fusion
+              final smoothed = _nativeSmoother.update(position);
+              // Geglättetes Heading verwenden (fusioniert GPS + Bewegung)
+              if (_nativeSmoother.hasValidHeading) {
+                _userHeading = _nativeSmoother.heading;
+              }
+              // Position aktualisieren
+              if (smoothed != null) {
+                _userLocation = smoothed;
+              } else {
+                // Auch bei Stillstand: Heading-Updates zulassen
+                _userLocation = position;
+              }
+            }
+            // Idle-Rebuilds auf 16ms throttlen: max. ein Rebuild pro Frame.
+            final now = DateTime.now();
+            if (_lastWebRebuildTime != null &&
+                now.difference(_lastWebRebuildTime!).inMilliseconds < 16) {
+              return;
+            }
+            _lastWebRebuildTime = now;
+            _safeSetState(() {});
+          },
+          onError: (Object e) {
+            debugPrint('[CruiseMode] Idle-Positionsstream Fehler: $e');
+          },
+        );
+  }
+
+  void _stopIdlePositionStream() {
+    _idlePositionSubscription?.cancel();
+    _idlePositionSubscription = null;
   }
 
   void _setCameraToPosition(geo.Position position) {
@@ -1183,31 +1642,87 @@ class _CruiseModePageState extends State<CruiseModePage> {
   Future<void> _generateRoute() async {
     // Doppelklick-Schutz: Wenn bereits generiert wird, ignorieren
     if (_isLoading) return;
-    setState(() => _isLoading = true);
+    final previousUiState = _captureGeneratedRouteUiState();
+    _dismissTransientRouteUi();
+    setState(() {
+      _isLoading = true;
+      _showRouteInfoBanner = false;
+    });
+
+    // Hintergrund-Generierung pausieren während User aktiv generiert
+    RouteCacheService.beginUserGeneration();
+
     try {
+      if (_isRoundTrip && _planningType != 'Zufall') {
+        _planningType = 'Zufall';
+      }
       final startPosition = await _getStartCoordinates();
 
       final digits = _selectedLength.replaceAll(RegExp(r'[^0-9]'), '');
       final distance = digits.isNotEmpty ? int.parse(digits) : 50;
+      final forceFreshVariant = previousUiState.lastRouteResult != null;
+      final settingsChanged =
+          previousUiState.lastRouteResult != null &&
+          (_lastGeneratedWasRoundTrip != _isRoundTrip ||
+              (_isRoundTrip &&
+                  (_lastGeneratedSelectedKm != distance ||
+                      _lastGeneratedSelectedStyle != _selectedStyle ||
+                      _lastGeneratedAvoidHighways != _avoidHighways)) ||
+              (!_isRoundTrip &&
+                  (_lastGeneratedSelectedStyle != _selectedStyle ||
+                      _lastGeneratedAvoidHighways != _avoidHighways)));
+      final routeDebugTrigger = previousUiState.lastRouteResult == null
+          ? 'firstSearch'
+          : settingsChanged
+          ? 'settingsChanged'
+          : 'searchAgain';
+      debugPrint(
+        '[RouteDebug][UI] selectedKm=$distance selectedStyle=$_selectedStyle '
+        'avoidHighways=$_avoidHighways forceFreshVariant=$forceFreshVariant '
+        'trigger=$routeDebugTrigger '
+        'routeType=${_isRoundTrip ? 'ROUND_TRIP' : 'POINT_TO_POINT'} '
+        'planningType=$_planningType selectedLength=$_selectedLength '
+        'selectedLocation=$_selectedLocation '
+        'useCurrentLocation=${_selectedLocation == 'Aktueller Standort'} '
+        'startLat=${startPosition.latitude.toStringAsFixed(5)} '
+        'startLng=${startPosition.longitude.toStringAsFixed(5)} '
+        'clientRoutingBuildId=${RouteService.clientRoutingBuildId} '
+        'clientRoutingBuildTime=${RouteService.clientRoutingBuildTime}',
+      );
+      double? destLat;
+      double? destLng;
+      var detourVariant = 0;
+      var scenicMode = false;
 
       Map<String, double>? targetLocation;
-      if (!_isRoundTrip && _destinationController.text.isNotEmpty) {
-        targetLocation = await _geocodingService.getCoordinatesFromAddress(
-          _destinationController.text,
-        );
-        if (targetLocation == null && mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Konnte Zieladresse nicht finden.')),
+      if (_requiresDestination(_isRoundTrip) &&
+          _selectedDestination == null &&
+          _destinationController.text.isNotEmpty) {
+        try {
+          targetLocation = await _geocodingService.getCoordinatesFromAddress(
+            _destinationController.text,
           );
-          setState(() => _isLoading = false);
+        } on GeocodingException catch (e) {
+          debugPrint('[CruiseMode] Geocoding failed: ${e.debugMessage}');
+          _restoreGeneratedRouteFailureUi(
+            previousUiState,
+            e.userMessage,
+            error: e,
+          );
+          return;
+        }
+        if (targetLocation == null && mounted) {
+          _restoreGeneratedRouteFailureUi(
+            previousUiState,
+            'Konnte Zieladresse nicht finden.',
+          );
           return;
         }
       }
 
       // Eine Route generieren — kein Warmup/Skip mehr (spart Mapbox Tokens)
       RouteResult result;
-      if (!_isRoundTrip) {
-        double? destLat, destLng;
+      if (_requiresDestination(_isRoundTrip)) {
         if (_selectedDestination != null) {
           destLat = _selectedDestination!.latitude;
           destLng = _selectedDestination!.longitude;
@@ -1218,76 +1733,154 @@ class _CruiseModePageState extends State<CruiseModePage> {
         if (destLat == null || destLng == null) {
           throw Exception('Bitte wähle ein Ziel aus.');
         }
+        // Umweg-Variante bestimmen (0 = direkt, 1-3 = Umwege)
+        detourVariant = switch (_selectedDetour) {
+          'Kleiner Umweg' => 1,
+          'Mittlerer Umweg' => 2,
+          'Großer Umweg' => 3,
+          _ => 0,
+        };
+        scenicMode = _selectedDetour != 'Direkt';
+        _activeDestinationCoordinate = [destLng, destLat];
+        _activeDetourVariant = detourVariant;
+        _activePointToPointScenic = scenicMode;
+        _activePointToPointMode = scenicMode ? _selectedStyle : 'Standard';
+        _activeAvoidHighways = _avoidHighways;
+        _recentDestinationDistances = [];
+        final p2pDiversitySeed = Object.hash(
+          destLat.round(),
+          destLng.round(),
+          detourVariant,
+          _avoidHighways,
+          forceFreshVariant,
+        );
+        final subscriptionTier = RouteService.resolveEffectiveSubscriptionTier(
+          isTesterOrBeta: true,
+        );
         result = await _routeService.generatePointToPoint(
           startPosition: startPosition,
           destinationLat: destLat,
           destinationLng: destLng,
-          mode: _selectedStyle,
-          scenic: _selectedStyle != 'Standard',
+          mode: scenicMode ? _selectedStyle : 'Standard',
+          scenic: scenicMode,
+          routeVariant: detourVariant,
+          avoidHighways: _avoidHighways,
+          diversitySeed: p2pDiversitySeed,
+          forceFreshVariant: forceFreshVariant,
+          subscriptionTier: subscriptionTier,
         );
       } else {
+        _activeDestinationCoordinate = null;
+        _activeDetourVariant = 0;
+        _activePointToPointScenic = false;
+        _activePointToPointMode = 'Standard';
+        _activeAvoidHighways = _avoidHighways;
+        _recentDestinationDistances = [];
+        final subscriptionTier = RouteService.resolveEffectiveSubscriptionTier(
+          isTesterOrBeta: true,
+        );
         result = await _routeService.generateRoundTrip(
           startPosition: startPosition,
           targetDistanceKm: distance,
           mode: _selectedStyle,
           planningType: _planningType,
-          targetLocation: targetLocation,
+          avoidHighways: _avoidHighways,
+          forceFreshVariant: forceFreshVariant,
+          debugTrigger: routeDebugTrigger,
+          subscriptionTier: subscriptionTier,
         );
       }
 
-      // Qualitätsprüfung: Route muss echte Straßengeometrie haben UND
-      // innerhalb des Distanzbandes liegen (±30% als Client-Toleranz)
-      final actualKm = result.distanceKm ?? 0;
-      final tooFewPoints = result.coordinates.length < 50 && distance >= 20;
-      final distanceTooFar =
-          actualKm > distance * 1.5 || actualKm < distance * 0.3;
+      if (!mounted || _disposed) return;
+      result = await _prepareRouteForPreviewStart(
+        result: result,
+        startPosition: startPosition,
+        isRoundTrip: _isRoundTrip,
+        avoidHighways: _avoidHighways,
+      );
 
-      if ((tooFewPoints || distanceTooFar) && _isRoundTrip) {
-        debugPrint(
-          '[CruiseMode] Route-Qualität schlecht: ${result.coordinates.length} Punkte, ${actualKm.toStringAsFixed(1)} km (Ziel: $distance km) — bis zu 2 Retries',
-        );
-        for (var retry = 0; retry < 2; retry++) {
-          result = await _routeService.generateRoundTrip(
-            startPosition: startPosition,
-            targetDistanceKm: distance,
-            mode: _selectedStyle,
-            planningType: _planningType,
-            targetLocation: targetLocation,
-          );
-          final retryKm = result.distanceKm ?? 0;
-          if (result.coordinates.length >= 50 &&
-              retryKm <= distance * 1.5 &&
-              retryKm >= distance * 0.3) {
-            debugPrint(
-              '[CruiseMode] Retry ${retry + 1} erfolgreich: ${result.coordinates.length} Punkte, ${retryKm.toStringAsFixed(1)} km',
-            );
-            break;
-          }
-          debugPrint(
-            '[CruiseMode] Retry ${retry + 1} auch schlecht: ${result.coordinates.length} Punkte, ${retryKm.toStringAsFixed(1)} km',
-          );
-        }
-      }
+      const validator = RouteQualityValidator();
+      final actualKm = result.distanceKm ?? 0.0;
+      final targetKm = _isRoundTrip ? distance.toDouble() : 0.0;
+      final quality = validator.validateQuality(
+        coordinates: result.coordinates,
+        isRoundTrip: _isRoundTrip,
+        targetDistanceKm: targetKm,
+        actualDistanceKm: actualKm,
+      );
+      final routeClassification = validator.classifyGeneratedRoute(
+        quality: quality,
+        isRoundTrip: _isRoundTrip,
+        coordinateCount: result.coordinates.length,
+        actualDistanceKm: actualKm,
+        targetDistanceKm: targetKm,
+      );
+      debugPrint(
+        '[CruiseMode] Route erhalten: '
+        'tier=${routeClassification.tier}, '
+        'score=${routeClassification.score.toStringAsFixed(1)}, '
+        'distance=${actualKm.toStringAsFixed(1)}km, '
+        'overlap=${quality.overlapPercent.toStringAsFixed(1)}%, '
+        'uturns=${quality.uturnPositions.length}',
+      );
 
+      debugPrint(
+        '[CruiseMode] Applying route result: ${result.coordinates.length} coords',
+      );
       _applyRouteResult(result);
-      await _drawRoute(result.geometry);
+      _lastGeneratedWasRoundTrip = _isRoundTrip;
+      _lastGeneratedSelectedKm = _isRoundTrip ? distance : null;
+      _lastGeneratedSelectedStyle = _selectedStyle;
+      _lastGeneratedAvoidHighways = _avoidHighways;
+
+      debugPrint('[CruiseMode] Drawing route...');
+      await _drawRoute(result.geometry, animateRouteDraw: true);
 
       // Config einklappen + Info-Banner anzeigen damit man die Route sieht
       if (mounted) {
+        debugPrint('[CruiseMode] Collapsing config, showing banner');
         setState(() {
           _configCollapsed = true;
           _showRouteInfoBanner = true;
         });
       }
-    } catch (e) {
-      _showError(e.toString());
+      debugPrint('[CruiseMode] Route generation SUCCESS');
+    } catch (e, stack) {
+      debugPrint('[CruiseMode] Route generation failed: $e');
+      debugPrintStack(
+        label: '[CruiseMode] Route generation stacktrace',
+        stackTrace: stack,
+      );
+      final errorMessage = e is RouteServiceException
+          ? e.userMessage
+          : 'Route konnte nicht generiert werden. Bitte versuche es erneut.';
+      _restoreGeneratedRouteFailureUi(previousUiState, errorMessage, error: e);
     } finally {
+      // Hintergrund-Generierung wieder erlauben
+      RouteCacheService.endUserGeneration();
       _safeSetState(() => _isLoading = false);
     }
   }
 
   void _applyRouteResult(RouteResult result) {
+    if (result.edgeMeta.isNotEmpty) {
+      debugPrint(
+        '[RouteDebug][ResultMeta] route_source=${result.edgeMeta['route_source'] ?? result.edgeMeta['source']} '
+        'quality_tier=${result.edgeMeta['quality_tier']} '
+        'generation_duration_ms=${result.edgeMeta['generation_duration_ms']} '
+        'mapbox_call_count=${result.edgeMeta['mapbox_call_count'] ?? result.edgeMeta['mapboxCallCount']} '
+        'pool_route_id=${result.edgeMeta['pool_route_id'] ?? result.edgeMeta['pool_match_id']} '
+        'pool_match_tier=${result.edgeMeta['pool_match_tier']} '
+        'access_leg_used=${result.edgeMeta['access_leg_used']} '
+        'route_rebased_to_user=${result.edgeMeta['route_rebased_to_user']} '
+        'route_start_distance_km=${result.edgeMeta['route_start_distance_km']}',
+      );
+    }
     _lastRouteResult = result;
+    _sessionRouteResult = result;
+    _activeSpeedLimits = result.speedLimits;
+    _recentDestinationDistances = [];
+    _clearAccessLegState();
     setState(() {
       _routeGeoJson = result.geoJson;
       _routeDistance = result.distanceMeters;
@@ -1304,16 +1897,104 @@ class _CruiseModePageState extends State<CruiseModePage> {
       _distanceSinceLastRedraw = 0.0;
       _announcedManeuverIndices.clear();
       _totalDistanceDriven = 0.0;
+      _sessionRouteStartIndexInActiveRoute = 0;
+      _navigationStartTime = null;
       _offRouteCount = 0;
       _lastRerouteTime = null;
       _remainingDistance = null;
       _remainingDuration = null;
       _cachedCurveCount = 0;
+      _isExistingRouteSession = false;
     });
     // Kurven async im Isolate berechnen (blockiert UI nicht)
     GamificationService.countCurvesAsync(result.coordinates).then((count) {
       if (mounted) setState(() => _cachedCurveCount = count);
     });
+  }
+
+  Future<RouteResult> _prepareRouteForPreviewStart({
+    required RouteResult result,
+    required geo.Position startPosition,
+    required bool isRoundTrip,
+    required bool avoidHighways,
+  }) async {
+    if (!isRoundTrip || result.coordinates.length < 2) return result;
+    if (result.edgeMeta['route_rebased_to_user'] == true &&
+        result.edgeMeta['access_leg_used'] != null) {
+      return result;
+    }
+
+    final first = result.coordinates.first;
+    final distanceToRouteStartMeters = geo.Geolocator.distanceBetween(
+      startPosition.latitude,
+      startPosition.longitude,
+      first[1],
+      first[0],
+    );
+    final globalMatch = findNearestInWindow(
+      position: startPosition,
+      coordinates: result.coordinates,
+      currentIndex: 0,
+      windowSize: result.coordinates.length,
+      maxJumpMeters: double.infinity,
+    );
+    const onStartCorridor = _offRouteThresholdMeters + 20;
+    final matchesRouteStartIndex =
+        globalMatch.index <= 24 ||
+        globalMatch.index >= math.max(0, result.coordinates.length - 25);
+    if (distanceToRouteStartMeters <= onStartCorridor &&
+        matchesRouteStartIndex &&
+        globalMatch.distanceMeters <= onStartCorridor) {
+      return _withMergedRouteMeta(result, {
+        'route_start_distance_km': double.parse(
+          (distanceToRouteStartMeters / 1000).toStringAsFixed(2),
+        ),
+        'route_passes_near_user': true,
+        'route_rebased_to_user': false,
+        'access_leg_used': false,
+      });
+    }
+
+    final nearestDistanceKm = globalMatch.distanceMeters / 1000.0;
+    final routeStartDistanceKm = distanceToRouteStartMeters / 1000.0;
+    if (routeStartDistanceKm > RoutePoolService.roundTripHardStartMaxKm &&
+        nearestDistanceKm > RoutePoolService.roundTripHardStartMaxKm) {
+      throw RouteServiceException(
+        type: RouteErrorType.noRoute,
+        userMessage:
+            'Diese Route startet zu weit entfernt. Bitte wähle eine lokale Route.',
+        debugMessage:
+            'Preview route rejected before display: routeStart=${routeStartDistanceKm.toStringAsFixed(1)}km nearest=${nearestDistanceKm.toStringAsFixed(1)}km.',
+      );
+    }
+
+    final accessPlan = await _routeService.buildAccessRouteToExistingRoute(
+      currentPosition: startPosition,
+      existingRoute: result,
+      mode: _selectedStyle,
+      avoidHighways: avoidHighways,
+      returnToSessionOrigin: true,
+      rebaseClosedLoop: true,
+    );
+    _logAccessLegMeta(accessPlan);
+    final prepared = _withMergedRouteMeta(accessPlan.activeRoute, {
+      'route_source':
+          result.edgeMeta['route_source'] ?? result.edgeMeta['source'],
+      'source': result.edgeMeta['source'] ?? result.edgeMeta['route_source'],
+      'preview_access_prepared': true,
+      'route_rebased_to_user': accessPlan.routeRebasedToUser,
+      'route_passes_near_user': accessPlan.routePassesNearUser,
+      'route_start_distance_km': double.parse(
+        (accessPlan.routeStartDistanceMeters / 1000).toStringAsFixed(2),
+      ),
+    });
+    debugPrint(
+      '[CruiseMode] Preview-Rebase fertig: '
+      'access_leg_used=${prepared.edgeMeta['access_leg_used']} '
+      'route_rebased_to_user=${prepared.edgeMeta['route_rebased_to_user']} '
+      'route_start_distance_km=${prepared.edgeMeta['route_start_distance_km']}',
+    );
+    return prepared;
   }
 
   void _onDestinationSelected(MapboxSuggestion suggestion) {
@@ -1323,43 +2004,827 @@ class _CruiseModePageState extends State<CruiseModePage> {
     });
   }
 
-  // ═══════════════════════ LOAD SAVED ROUTE ══════════════════════════════════
+  void _handleDestinationInputChanged(String value) {
+    final selected = _selectedDestination;
+    if (selected == null) return;
+    if (value.trim() == selected.placeName.trim()) return;
+    setState(() {
+      _selectedDestination = null;
+    });
+  }
 
-  Future<void> _loadSavedRoute(SavedRoute route) async {
-    final geometry = route.geometry;
-    final coordsRaw = (geometry['coordinates'] as List?) ?? const [];
-    final coordinates = coordsRaw
-        .whereType<List>()
-        .where((c) => c.length >= 2)
-        .map((c) => [(c[0] as num).toDouble(), (c[1] as num).toDouble()])
-        .toList();
+  void _handleDetourChanged(String detour) {
+    setState(() {
+      _selectedDetour = detour;
+      if (detour == 'Direkt') {
+        return;
+      }
+      const allowedStyles = {
+        'Kurvenjagd',
+        'Sport Mode',
+        'Abendrunde',
+        'Entdecker',
+      };
+      if (!allowedStyles.contains(_selectedStyle) ||
+          _selectedStyle == 'Direkt') {
+        _selectedStyle = 'Abendrunde';
+      }
+    });
+  }
 
-    if (coordinates.length < 2) {
-      _showError('Route hat nicht genug Koordinaten.');
+  double _currentPointToPointCorridorMeters() {
+    if (_activeDetourVariant >= 2) {
+      return 800;
+    }
+    if (_activeDetourVariant == 1) {
+      return 500;
+    }
+    return 300;
+  }
+
+  bool _isApproachingCurrentDestination(geo.Position position) {
+    final destination = _activeDestinationCoordinate;
+    if (destination == null) return false;
+
+    final distance = distanceToCoordinateMeters(
+      position: position,
+      coordinate: destination,
+    );
+    _recentDestinationDistances = [..._recentDestinationDistances, distance];
+    if (_recentDestinationDistances.length > 5) {
+      _recentDestinationDistances = _recentDestinationDistances.sublist(
+        _recentDestinationDistances.length - 5,
+      );
+    }
+
+    return isApproachingDestination(_recentDestinationDistances);
+  }
+
+  List<List<double>> _sampleCoordinatesForSimilarity(
+    List<List<double>> coordinates, {
+    int maxSamples = 80,
+  }) {
+    if (coordinates.length <= maxSamples) {
+      return coordinates
+          .where((point) => point.length >= 2)
+          .map((point) => [point[0], point[1]])
+          .toList();
+    }
+    final sampled = <List<double>>[];
+    for (var i = 0; i < maxSamples; i++) {
+      final ratio = maxSamples == 1 ? 0.0 : i / (maxSamples - 1);
+      final index = ((coordinates.length - 1) * ratio).round();
+      final point = coordinates[index];
+      if (point.length < 2) continue;
+      sampled.add([point[0], point[1]]);
+    }
+    return sampled;
+  }
+
+  void _clearAccessLegState() {
+    _isAccessLegActive = false;
+    _accessLegJoinIndex = null;
+    _accessLegMainRouteResult = null;
+  }
+
+  _GeneratedRouteUiStateSnapshot _captureGeneratedRouteUiState() {
+    return _GeneratedRouteUiStateSnapshot(
+      lastRouteResult: _lastRouteResult,
+      sessionRouteResult: _sessionRouteResult,
+      accessLegMainRouteResult: _accessLegMainRouteResult,
+      activeSpeedLimits: List<SpeedLimitSegment>.from(_activeSpeedLimits),
+      activeDestinationCoordinate: _activeDestinationCoordinate == null
+          ? null
+          : List<double>.from(_activeDestinationCoordinate!),
+      activeDetourVariant: _activeDetourVariant,
+      activePointToPointScenic: _activePointToPointScenic,
+      activePointToPointMode: _activePointToPointMode,
+      activeAvoidHighways: _activeAvoidHighways,
+      recentDestinationDistances: List<double>.from(
+        _recentDestinationDistances,
+      ),
+      isAccessLegActive: _isAccessLegActive,
+      accessLegJoinIndex: _accessLegJoinIndex,
+      routeGeoJson: _routeGeoJson,
+      routeDistance: _routeDistance,
+      routeDuration: _routeDuration,
+      routeLatLngs: List<LatLng>.from(_routeLatLngs),
+      fullRouteCoordinates: _fullRouteCoordinates
+          .map((point) => List<double>.from(point))
+          .toList(growable: false),
+      remainingRouteCoordinates: _remainingRouteCoordinates
+          .map((point) => List<double>.from(point))
+          .toList(growable: false),
+      maneuvers: List<RouteManeuver>.from(_maneuvers),
+      activeManeuverIndex: _activeManeuverIndex,
+      currentRouteIndex: _currentRouteIndex,
+      lastDrawnRouteIndex: _lastDrawnRouteIndex,
+      distanceSinceLastRedraw: _distanceSinceLastRedraw,
+      showRouteInfoBanner: _showRouteInfoBanner,
+      isRouteConfirmed: _isRouteConfirmed,
+      isExistingRouteSession: _isExistingRouteSession,
+      cachedCurveCount: _cachedCurveCount,
+      remainingDistance: _remainingDistance,
+      remainingDuration: _remainingDuration,
+      sessionRouteStartIndexInActiveRoute: _sessionRouteStartIndexInActiveRoute,
+      navigationStartTime: _navigationStartTime,
+      offRouteCount: _offRouteCount,
+      lastRerouteTime: _lastRerouteTime,
+      isRerouting: _isRerouting,
+      originalRouteDistance: _originalRouteDistance,
+      originalRouteDuration: _originalRouteDuration,
+      totalDistanceDriven: _totalDistanceDriven,
+      isCameraLocked: _isCameraLocked,
+      configCollapsed: _configCollapsed,
+      announcedManeuverIndices: Set<int>.from(_announcedManeuverIndices),
+    );
+  }
+
+  void _restoreGeneratedRouteUiState(_GeneratedRouteUiStateSnapshot snapshot) {
+    _lastRouteResult = snapshot.lastRouteResult;
+    _sessionRouteResult = snapshot.sessionRouteResult;
+    _accessLegMainRouteResult = snapshot.accessLegMainRouteResult;
+    _activeSpeedLimits = List<SpeedLimitSegment>.from(
+      snapshot.activeSpeedLimits,
+    );
+    _activeDestinationCoordinate = snapshot.activeDestinationCoordinate == null
+        ? null
+        : List<double>.from(snapshot.activeDestinationCoordinate!);
+    _activeDetourVariant = snapshot.activeDetourVariant;
+    _activePointToPointScenic = snapshot.activePointToPointScenic;
+    _activePointToPointMode = snapshot.activePointToPointMode;
+    _activeAvoidHighways = snapshot.activeAvoidHighways;
+    _recentDestinationDistances = List<double>.from(
+      snapshot.recentDestinationDistances,
+    );
+    _isAccessLegActive = snapshot.isAccessLegActive;
+    _accessLegJoinIndex = snapshot.accessLegJoinIndex;
+    _announcedManeuverIndices
+      ..clear()
+      ..addAll(snapshot.announcedManeuverIndices);
+    _safeSetState(() {
+      _routeGeoJson = snapshot.routeGeoJson;
+      _routeDistance = snapshot.routeDistance;
+      _routeDuration = snapshot.routeDuration;
+      _routeLatLngs = List<LatLng>.from(snapshot.routeLatLngs);
+      _fullRouteCoordinates = snapshot.fullRouteCoordinates
+          .map((point) => List<double>.from(point))
+          .toList(growable: false);
+      _remainingRouteCoordinates = snapshot.remainingRouteCoordinates
+          .map((point) => List<double>.from(point))
+          .toList(growable: false);
+      _maneuvers = List<RouteManeuver>.from(snapshot.maneuvers);
+      _activeManeuverIndex = snapshot.activeManeuverIndex;
+      _currentRouteIndex = snapshot.currentRouteIndex;
+      _lastDrawnRouteIndex = snapshot.lastDrawnRouteIndex;
+      _distanceSinceLastRedraw = snapshot.distanceSinceLastRedraw;
+      _showRouteInfoBanner = snapshot.showRouteInfoBanner;
+      _isRouteConfirmed = snapshot.isRouteConfirmed;
+      _isExistingRouteSession = snapshot.isExistingRouteSession;
+      _cachedCurveCount = snapshot.cachedCurveCount;
+      _remainingDistance = snapshot.remainingDistance;
+      _remainingDuration = snapshot.remainingDuration;
+      _sessionRouteStartIndexInActiveRoute =
+          snapshot.sessionRouteStartIndexInActiveRoute;
+      _navigationStartTime = snapshot.navigationStartTime;
+      _offRouteCount = snapshot.offRouteCount;
+      _lastRerouteTime = snapshot.lastRerouteTime;
+      _isRerouting = snapshot.isRerouting;
+      _originalRouteDistance = snapshot.originalRouteDistance;
+      _originalRouteDuration = snapshot.originalRouteDuration;
+      _totalDistanceDriven = snapshot.totalDistanceDriven;
+      _isCameraLocked = snapshot.isCameraLocked;
+      _configCollapsed = snapshot.configCollapsed;
+    });
+  }
+
+  bool _snapshotHasVisibleRoute(_GeneratedRouteUiStateSnapshot snapshot) {
+    return snapshot.lastRouteResult != null ||
+        snapshot.routeLatLngs.length >= 2;
+  }
+
+  void _restoreGeneratedRouteFailureUi(
+    _GeneratedRouteUiStateSnapshot previousUiState,
+    String message, {
+    Object? error,
+  }) {
+    _restoreGeneratedRouteUiState(previousUiState);
+
+    if (_snapshotHasVisibleRoute(previousUiState)) {
+      debugPrint(
+        '[CruiseMode] Route attempt failed but previous route stayed visible: '
+        '$message${error == null ? "" : " ($error)"}',
+      );
       return;
     }
 
-    setState(() {
-      _routeGeoJson = json.encode(geometry);
-      _routeDistance = route.distanceKm * 1000; // km → m
-      _routeDuration = route.durationSeconds;
-      _isRouteConfirmed = false;
-      _fullRouteCoordinates = coordinates;
-      _remainingRouteCoordinates = coordinates;
+    _showError(message, isCritical: true);
+  }
+
+  void _resetGeneratedRouteUiState() {
+    _clearAccessLegState();
+    _lastRouteResult = null;
+    _sessionRouteResult = null;
+    _activeDestinationCoordinate = null;
+    _activeDetourVariant = 0;
+    _activePointToPointScenic = false;
+    _activePointToPointMode = 'Standard';
+    _activeAvoidHighways = false;
+    _lastGeneratedWasRoundTrip = null;
+    _lastGeneratedSelectedKm = null;
+    _lastGeneratedSelectedStyle = null;
+    _lastGeneratedAvoidHighways = null;
+    _recentDestinationDistances = [];
+    _activeSpeedLimits = const [];
+    _announcedManeuverIndices.clear();
+    _safeSetState(() {
+      _routeGeoJson = null;
+      _routeDistance = null;
+      _routeDuration = null;
+      _routeLatLngs = [];
+      _fullRouteCoordinates = const [];
+      _remainingRouteCoordinates = const [];
       _maneuvers = const [];
       _activeManeuverIndex = 0;
       _currentRouteIndex = 0;
       _lastDrawnRouteIndex = 0;
       _distanceSinceLastRedraw = 0.0;
-      _announcedManeuverIndices.clear();
-      _isRoundTrip = route.isRoundTrip;
-      _selectedStyle = route.style;
+      _showRouteInfoBanner = false;
+      _isRouteConfirmed = false;
+      _isExistingRouteSession = false;
+      _cachedCurveCount = 0;
+      _remainingDistance = null;
+      _remainingDuration = null;
+      _sessionRouteStartIndexInActiveRoute = 0;
+      _navigationStartTime = null;
+      _offRouteCount = 0;
+      _lastRerouteTime = null;
+      _isRerouting = false;
+      _originalRouteDistance = null;
+      _originalRouteDuration = null;
+      _totalDistanceDriven = 0.0;
+      _isCameraLocked = false;
+      _configCollapsed = false;
+    });
+  }
+
+  void _maybeFinalizeAccessLegPhase() {
+    if (!_isAccessLegActive) return;
+    final joinIndex = _accessLegJoinIndex;
+    if (joinIndex == null) return;
+    if (_currentRouteIndex < joinIndex) return;
+
+    _safeSetState(() {
+      _clearAccessLegState();
+    });
+    if (mounted) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Hauptroute erreicht. Navigation läuft normal weiter.',
+            ),
+            backgroundColor: Colors.green,
+            duration: Duration(seconds: 2),
+          ),
+        );
+    }
+  }
+
+  Future<geo.Position?> _resolveCurrentPositionForNavigationStart() async {
+    final fallback = _userLocation;
+    try {
+      final current = await geo.Geolocator.getCurrentPosition(
+        locationSettings: const geo.LocationSettings(
+          accuracy: geo.LocationAccuracy.best,
+          timeLimit: Duration(seconds: 8),
+        ),
+      );
+      _userLocation = current;
+      return current;
+    } catch (_) {
+      if (fallback != null) return fallback;
+      try {
+        final resolved = await _getStartCoordinates();
+        _userLocation = resolved;
+        return resolved;
+      } catch (_) {
+        return null;
+      }
+    }
+  }
+
+  Future<void> _startNavigationFlow() async {
+    await _prepareAccessLegForOffRouteStart();
+    _startNavigationTracking();
+    _isCameraLocked = true;
+    await _activateNavigationCamera();
+
+    final windowEnd = _findLookAheadIndex(_currentRouteIndex, 3000);
+    _safeSetState(() {
+      _remainingRouteCoordinates = _fullRouteCoordinates.sublist(
+        _currentRouteIndex,
+        windowEnd,
+      );
+    });
+    await _drawRoute({
+      'type': 'LineString',
+      'coordinates': _remainingRouteCoordinates,
+    }, animateCamera: false);
+  }
+
+  Future<void> _prepareAccessLegForOffRouteStart() async {
+    if (!_isExistingRouteSession || _fullRouteCoordinates.length < 2) return;
+    if (_isAccessLegActive) return;
+
+    final position = await _resolveCurrentPositionForNavigationStart();
+    if (position == null) return;
+    final sourceRoute = _sessionRouteResult ?? _lastRouteResult;
+    if (sourceRoute == null || sourceRoute.coordinates.length < 2) return;
+
+    final startCoordinate = _fullRouteCoordinates.first;
+    final distanceToRouteStart = geo.Geolocator.distanceBetween(
+      position.latitude,
+      position.longitude,
+      startCoordinate[1],
+      startCoordinate[0],
+    );
+    final globalMatch = findNearestInWindow(
+      position: position,
+      coordinates: _fullRouteCoordinates,
+      currentIndex: 0,
+      windowSize: _fullRouteCoordinates.length,
+      maxJumpMeters: double.infinity,
+    );
+    final onStartCorridor = _isRoundTrip
+        ? _offRouteThresholdMeters + 20
+        : _currentPointToPointCorridorMeters() + 40;
+    final matchesRouteStartIndex =
+        globalMatch.index <= 24 ||
+        (_isRoundTrip &&
+            globalMatch.index >=
+                math.max(0, _fullRouteCoordinates.length - 25));
+    if (distanceToRouteStart <= onStartCorridor &&
+        matchesRouteStartIndex &&
+        globalMatch.distanceMeters <= onStartCorridor) {
+      return;
+    }
+
+    RouteAccessPlan accessPlan;
+    try {
+      accessPlan = await _routeService.buildAccessRouteToExistingRoute(
+        currentPosition: position,
+        existingRoute: sourceRoute,
+        mode: 'Standard',
+        avoidHighways: _activeAvoidHighways,
+        returnToSessionOrigin: _isRoundTrip,
+        rebaseClosedLoop: _isRoundTrip,
+      );
+      _logAccessLegMeta(accessPlan);
+    } catch (e) {
+      // Access-Leg konnte nicht geroutet werden — KEIN Luftlinien-Fallback.
+      // Lieber dem User klar sagen, dass er erst zum Routenstart muss, als
+      // eine sichtbar kaputte Route mit Luftlinien-Sprung anzuzeigen.
+      debugPrint('[CruiseMode] Access-Leg konnte nicht generiert werden: $e');
+      // Die gespeicherte Route bleibt sichtbar; kein harter Fehler-Banner.
+      return;
+    }
+
+    if (!accessPlan.hasAccessLeg) {
+      if (accessPlan.joinPoint.index > 0) {
+        await _commitRerouteResult(
+          result: accessPlan.sessionRoute,
+          sessionRouteResult: accessPlan.sessionRoute,
+          position: position,
+        );
+        _safeSetState(() {
+          _clearAccessLegState();
+          _sessionRouteStartIndexInActiveRoute = 0;
+          _totalDistanceDriven = 0.0;
+        });
+      }
+      return;
+    }
+
+    await _commitRerouteResult(
+      result: accessPlan.activeRoute,
+      sessionRouteResult: accessPlan.activeRoute,
+      position: position,
+    );
+
+    final joinIndexInMergedRoute = math
+        .max(
+          1,
+          accessPlan.activeRoute.coordinates.length -
+              accessPlan.sessionRoute.coordinates.length,
+        )
+        .clamp(1, math.max(1, accessPlan.activeRoute.coordinates.length - 1))
+        .toInt();
+    _safeSetState(() {
+      _isAccessLegActive = true;
+      _accessLegJoinIndex = joinIndexInMergedRoute;
+      _sessionRouteStartIndexInActiveRoute = 0;
+      _accessLegMainRouteResult = accessPlan.sessionRoute;
+      _totalDistanceDriven = 0.0;
     });
 
-    await _drawRoute(geometry);
+    if (mounted) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Anfahrts-Abschnitt aktiv. Danach geht es auf die gespeicherte Route.',
+            ),
+            backgroundColor: Color(0xFF0A84FF),
+            duration: Duration(seconds: 2),
+          ),
+        );
+    }
+  }
 
-    // Automatisch bestätigen und Navigation starten
-    await _confirmRoute();
+  String _rerouteMode({required bool mergeWithOriginal}) {
+    if (!_activePointToPointScenic || mergeWithOriginal) {
+      return 'Standard';
+    }
+    return _activePointToPointMode;
+  }
+
+  int _rerouteVariant({required bool mergeWithOriginal}) {
+    if (!_activePointToPointScenic || mergeWithOriginal) {
+      return 0;
+    }
+    return _activeDetourVariant;
+  }
+
+  List<SpeedLimitSegment> _mergeSpeedLimits(
+    List<SpeedLimitSegment> rerouteSpeedLimits,
+    int rejoinIndex,
+    int rerouteCoordinateCount, {
+    int skippedOriginalCoordinates = 0,
+    List<SpeedLimitSegment>? originalSpeedLimits,
+  }) {
+    final baseSpeedLimits = originalSpeedLimits ?? _activeSpeedLimits;
+    final remaining = baseSpeedLimits
+        .where(
+          (segment) =>
+              segment.endIndex >= rejoinIndex + skippedOriginalCoordinates,
+        )
+        .map((segment) {
+          final startIndex =
+              math.max(
+                0,
+                segment.startIndex - rejoinIndex - skippedOriginalCoordinates,
+              ) +
+              rerouteCoordinateCount;
+          final endIndex =
+              math.max(
+                0,
+                segment.endIndex - rejoinIndex - skippedOriginalCoordinates,
+              ) +
+              rerouteCoordinateCount;
+          return SpeedLimitSegment(
+            startIndex: startIndex,
+            endIndex: endIndex,
+            speedKmh: segment.speedKmh,
+          );
+        })
+        .toList();
+
+    return [...rerouteSpeedLimits, ...remaining];
+  }
+
+  List<SpeedLimitSegment> _sliceSpeedLimits(
+    List<SpeedLimitSegment> baseSpeedLimits,
+    int startIndex, {
+    int skippedOriginalCoordinates = 0,
+  }) {
+    return baseSpeedLimits
+        .where(
+          (segment) =>
+              segment.endIndex >= startIndex + skippedOriginalCoordinates,
+        )
+        .map((segment) {
+          final shiftedStart = math.max(
+            0,
+            segment.startIndex - startIndex - skippedOriginalCoordinates,
+          );
+          final shiftedEnd = math.max(
+            shiftedStart,
+            segment.endIndex - startIndex - skippedOriginalCoordinates,
+          );
+          return SpeedLimitSegment(
+            startIndex: shiftedStart,
+            endIndex: shiftedEnd,
+            speedKmh: segment.speedKmh,
+          );
+        })
+        .toList();
+  }
+
+  RouteResult _buildRouteResultFromCoordinates({
+    required List<List<double>> coordinates,
+    required List<RouteManeuver> maneuvers,
+    required double? distanceMeters,
+    required double? durationSeconds,
+    required List<SpeedLimitSegment> speedLimits,
+    Map<String, dynamic> edgeMeta = const {},
+  }) {
+    final geometry = <String, dynamic>{
+      'type': 'LineString',
+      'coordinates': coordinates,
+    };
+    return RouteResult(
+      geoJson: json.encode(geometry),
+      geometry: geometry,
+      coordinates: coordinates,
+      maneuvers: maneuvers,
+      distanceMeters: distanceMeters,
+      durationSeconds: durationSeconds,
+      distanceKm: distanceMeters != null ? distanceMeters / 1000 : null,
+      speedLimits: speedLimits,
+      edgeMeta: edgeMeta,
+    );
+  }
+
+  RouteResult _withMergedRouteMeta(
+    RouteResult result,
+    Map<String, dynamic> edgeMeta,
+  ) {
+    return RouteResult(
+      geoJson: result.geoJson,
+      geometry: result.geometry,
+      coordinates: result.coordinates,
+      maneuvers: result.maneuvers,
+      distanceMeters: result.distanceMeters,
+      durationSeconds: result.durationSeconds,
+      distanceKm: result.distanceKm,
+      speedLimits: result.speedLimits,
+      edgeMeta: {...result.edgeMeta, ...edgeMeta},
+    );
+  }
+
+  void _logAccessLegMeta(RouteAccessPlan plan) {
+    final meta = plan.activeRoute.edgeMeta;
+    debugPrint(
+      '[CruiseMode] Access-Leg meta: '
+      'access_leg_used=${meta['access_leg_used']} '
+      'access_leg_distance_km=${meta['access_leg_distance_km']} '
+      'join_point_type=${meta['join_point_type']} '
+      'route_start_distance_km=${meta['route_start_distance_km']} '
+      'route_passes_near_user=${meta['route_passes_near_user']} '
+      'route_rebased_to_user=${meta['route_rebased_to_user']}',
+    );
+  }
+
+  void _logRerouteMeta(Map<String, dynamic> meta) {
+    debugPrint(
+      '[CruiseMode] Reroute meta: '
+      'triggered=${meta['reroute_triggered']} '
+      'failed=${meta['reroute_failed']} '
+      'reason=${meta['reroute_reason']} '
+      'mode=${meta['reroute_mode']} '
+      'reroute_distance_km=${meta['reroute_distance_km']} '
+      'rejoin_point_distance_km=${meta['rejoin_point_distance_km']} '
+      'remaining_distance_before=${meta['remaining_distance_before']} '
+      'remaining_distance_after=${meta['remaining_distance_after']} '
+      'eta_before=${meta['eta_before']} '
+      'eta_after=${meta['eta_after']}',
+    );
+  }
+
+  void _markCurrentRouteWithRerouteMeta(Map<String, dynamic> meta) {
+    final last = _lastRouteResult;
+    if (last != null) {
+      _lastRouteResult = _withMergedRouteMeta(last, meta);
+    }
+    final session = _sessionRouteResult;
+    if (session != null) {
+      _sessionRouteResult = _withMergedRouteMeta(session, meta);
+    }
+  }
+
+  void _publishRerouteFailure({
+    required String rerouteReason,
+    required String rerouteMode,
+    required double? remainingDistanceBeforeMeters,
+    required double? etaBeforeSeconds,
+    double? rerouteDistanceMeters,
+    double? rejoinPointDistanceMeters,
+  }) {
+    final meta = buildRerouteTelemetry(
+      rerouteReason: rerouteReason,
+      rerouteMode: rerouteMode,
+      remainingDistanceBeforeMeters: remainingDistanceBeforeMeters,
+      remainingDistanceAfterMeters: remainingDistanceBeforeMeters,
+      etaBeforeSeconds: etaBeforeSeconds,
+      etaAfterSeconds: etaBeforeSeconds,
+      rerouteDistanceMeters: rerouteDistanceMeters,
+      rejoinPointDistanceMeters: rejoinPointDistanceMeters,
+      rerouteFailed: true,
+    );
+    _markCurrentRouteWithRerouteMeta(meta);
+    _logRerouteMeta(meta);
+    if (mounted) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Straßen-Reroute nicht möglich. Bitte zur Route zurückfahren.',
+            ),
+            backgroundColor: Color(0xFFFF9500),
+            duration: Duration(seconds: 2),
+          ),
+        );
+    }
+  }
+
+  double _calculatePolylineDistanceMeters(List<List<double>> coordinates) {
+    if (coordinates.length < 2) return 0;
+
+    var distance = 0.0;
+    for (var i = 0; i < coordinates.length - 1; i++) {
+      final from = coordinates[i];
+      final to = coordinates[i + 1];
+      distance += geo.Geolocator.distanceBetween(
+        from[1],
+        from[0],
+        to[1],
+        to[0],
+      );
+    }
+    return distance;
+  }
+
+  double _estimateDurationSecondsForDistance(double distanceMeters) {
+    final referenceDuration = _originalRouteDuration ?? _routeDuration;
+    final referenceDistance = _originalRouteDistance ?? _routeDistance;
+    if (referenceDuration != null &&
+        referenceDistance != null &&
+        referenceDuration > 0 &&
+        referenceDistance > 0) {
+      return referenceDuration * (distanceMeters / referenceDistance);
+    }
+    return distanceMeters / 13.89;
+  }
+
+  Future<void> _commitRerouteResult({
+    required RouteResult result,
+    required geo.Position position,
+    RouteResult? sessionRouteResult,
+  }) async {
+    if (result.edgeMeta.isNotEmpty) {
+      debugPrint(
+        '[CruiseMode] Commit route meta: '
+        'access_leg_used=${result.edgeMeta['access_leg_used']} '
+        'join_point_type=${result.edgeMeta['join_point_type']} '
+        'reroute_mode=${result.edgeMeta['reroute_mode']} '
+        'reroute_failed=${result.edgeMeta['reroute_failed']}',
+      );
+    }
+    _lastRouteResult = result;
+    _sessionRouteResult = sessionRouteResult ?? result;
+    _activeSpeedLimits = result.speedLimits;
+    _recentDestinationDistances = [];
+
+    _safeSetState(() {
+      _routeGeoJson = result.geoJson;
+      _routeDistance = result.distanceMeters;
+      _routeDuration = result.durationSeconds;
+      _originalRouteDistance = result.distanceMeters;
+      _originalRouteDuration = result.durationSeconds;
+      _fullRouteCoordinates = result.coordinates;
+      _remainingRouteCoordinates = result.coordinates;
+      _currentRouteIndex = 0;
+      _lastDrawnRouteIndex = 0;
+      _distanceSinceLastRedraw = 0.0;
+      _maneuvers = result.maneuvers;
+      _activeManeuverIndex = 0;
+      _announcedManeuverIndices.clear();
+      _offRouteCount = 0;
+      _lastRerouteTime = DateTime.now();
+      _remainingDistance = result.distanceMeters;
+      _remainingDuration = result.durationSeconds;
+    });
+
+    GamificationService.countCurvesAsync(result.coordinates).then((count) {
+      if (mounted) {
+        setState(() => _cachedCurveCount = count);
+      }
+    });
+
+    final windowEnd = _findLookAheadIndex(0, 3000);
+    final routeSlice = result.coordinates.sublist(
+      0,
+      math.min(windowEnd, result.coordinates.length),
+    );
+    if (routeSlice.isNotEmpty) {
+      final first = routeSlice.first;
+      final distanceToFirst = geo.Geolocator.distanceBetween(
+        position.latitude,
+        position.longitude,
+        first[1],
+        first[0],
+      );
+      if (distanceToFirst <= 35.0) {
+        routeSlice[0] = [position.longitude, position.latitude];
+      }
+    }
+
+    _remainingRouteCoordinates = routeSlice;
+    final clipped = {
+      'type': 'LineString',
+      'coordinates': _remainingRouteCoordinates,
+    };
+    _routeGeoJson = json.encode(clipped);
+    await _drawRoute(clipped, animateCamera: false);
+  }
+
+  // ═══════════════════════ LOAD SAVED ROUTE ══════════════════════════════════
+
+  Future<void> _loadSavedRoute(SavedRoute route) async {
+    final previousUiState = _captureGeneratedRouteUiState();
+    final geometry = route.geometry;
+
+    try {
+      final coordsRaw = (geometry['coordinates'] as List?) ?? const [];
+      final coordinates = coordsRaw
+          .whereType<List>()
+          .where((c) => c.length >= 2)
+          .map((c) => [(c[0] as num).toDouble(), (c[1] as num).toDouble()])
+          .toList();
+
+      if (coordinates.length < 2) {
+        _restoreGeneratedRouteFailureUi(
+          previousUiState,
+          'Route hat nicht genug Koordinaten.',
+        );
+        return;
+      }
+
+      final previewResult = RouteResult(
+        geoJson: json.encode(geometry),
+        geometry: geometry,
+        coordinates: coordinates,
+        maneuvers: const [],
+        distanceMeters: route.distanceKm * 1000,
+        durationSeconds: route.durationSeconds,
+        distanceKm: route.distanceKm,
+        edgeMeta: {
+          'route_source': 'saved',
+          'source': 'saved',
+          'quality_tier': route.rating != null && route.rating! >= 4
+              ? 'good'
+              : 'acceptable',
+        },
+      );
+
+      final startPosition =
+          await _resolveCurrentPositionForNavigationStart() ??
+          await _getStartCoordinates();
+      final preparedPreviewResult = await _prepareRouteForPreviewStart(
+        result: previewResult,
+        startPosition: startPosition,
+        isRoundTrip: route.isRoundTrip,
+        avoidHighways: false,
+      );
+
+      _applyRouteResult(preparedPreviewResult);
+      final preparedCoordinates = preparedPreviewResult.coordinates;
+      final lastCoordinate = preparedCoordinates.last;
+      setState(() {
+        _isExistingRouteSession = true;
+        _isRoundTrip = route.isRoundTrip;
+        _selectedStyle = route.style;
+        _selectedDetour = 'Direkt';
+        _avoidHighways = false;
+        _selectedDestination = null;
+        _destinationController.clear();
+        _isCameraLocked = false;
+        _configCollapsed = true;
+        _showRouteInfoBanner = true;
+        _activeDestinationCoordinate = route.isRoundTrip
+            ? null
+            : lastCoordinate;
+        _activeDetourVariant = 0;
+        _activePointToPointScenic =
+            !route.isRoundTrip && route.style != 'Standard';
+        _activePointToPointMode = route.style;
+        _activeAvoidHighways = false;
+        _recentDestinationDistances = [];
+      });
+      CruiseModePage.isFullscreen.value = false;
+
+      await _drawRoute(preparedPreviewResult.geometry, animateRouteDraw: true);
+    } catch (e) {
+      _restoreGeneratedRouteFailureUi(
+        previousUiState,
+        'Route konnte nicht geladen werden.',
+        error: e,
+      );
+    }
   }
 
   // ═══════════════════════ ROUTE CONFIRM ═════════════════════════════════════
@@ -1375,6 +2840,7 @@ class _CruiseModePageState extends State<CruiseModePage> {
       _remainingRouteCoordinates = _fullRouteCoordinates;
       // Kein _viewportState mehr (flutter_map nutzt MapController)
     });
+    _recentDestinationDistances = [];
     CruiseModePage.isFullscreen.value = true;
 
     // Kartenkacheln entlang der Route im Hintergrund cachen
@@ -1414,6 +2880,7 @@ class _CruiseModePageState extends State<CruiseModePage> {
   Future<void> _drawRoute(
     Map<String, dynamic> geometry, {
     bool animateCamera = true,
+    bool animateRouteDraw = false,
   }) async {
     final coordinatesRaw = (geometry['coordinates'] as List?) ?? const [];
     final activeCoordinates = coordinatesRaw
@@ -1421,16 +2888,43 @@ class _CruiseModePageState extends State<CruiseModePage> {
         .where((c) => c.length >= 2)
         .map((c) => [(c[0] as num).toDouble(), (c[1] as num).toDouble()])
         .toList();
-    if (activeCoordinates.length < 2) return;
+
+    debugPrint(
+      '[CruiseMode] _drawRoute: ${activeCoordinates.length} Koordinaten, '
+      'mapReady=$_mapReady, animateCamera=$animateCamera animateRouteDraw=$animateRouteDraw',
+    );
+
+    if (activeCoordinates.length < 2) {
+      debugPrint(
+        '[CruiseMode] _drawRoute: Unzureichende Koordinaten, Route wird nicht gezeichnet',
+      );
+      return;
+    }
 
     // KRITISCH: Mapbox liefert [longitude, latitude], flutter_map braucht LatLng(lat, lng)
     final routeLatLngs = activeCoordinates
         .map((c) => LatLng(c[1], c[0])) // [lng, lat] → LatLng(lat, lng)
         .toList();
 
-    _safeSetState(() {
-      _routeLatLngs = routeLatLngs;
-    });
+    // Immer setState aufrufen wenn neue Route, nicht nur bei "meaningful change"
+    // (verhindert Race Condition auf Web wo initiales Rendern fehlen könnte)
+    final hasChange = _hasMeaningfulRouteChange(_routeLatLngs, routeLatLngs);
+    final isInitialRoute = _routeLatLngs.isEmpty && routeLatLngs.isNotEmpty;
+
+    if (hasChange || isInitialRoute) {
+      debugPrint(
+        '[CruiseMode] _drawRoute: setState für ${routeLatLngs.length} Punkte (initial=$isInitialRoute)',
+      );
+      if (animateRouteDraw && _shouldAnimateRouteDraw(routeLatLngs)) {
+        _startRouteDrawAnimation(routeLatLngs);
+      } else {
+        _routeDrawAnimationToken++;
+        _routeDrawAnimationTimer?.cancel();
+        _safeSetState(() {
+          _routeLatLngs = routeLatLngs;
+        });
+      }
+    }
 
     if (animateCamera && _mapReady && routeLatLngs.isNotEmpty && mounted) {
       // Kurze Verzögerung damit setState durchgelaufen ist
@@ -1451,10 +2945,63 @@ class _CruiseModePageState extends State<CruiseModePage> {
             padding: EdgeInsets.fromLTRB(24, safeTop + 18, 24, bottomPad),
           ),
         );
+        debugPrint(
+          '[CruiseMode] _drawRoute: Kamera auf Route-Bounds angepasst',
+        );
       } catch (e) {
         debugPrint('[CruiseMode] Camera fit fehlgeschlagen: $e');
       }
+    } else if (!_mapReady) {
+      // Web-spezifisch: Map noch nicht ready, Route wird später gezeichnet via _onMapReady
+      debugPrint(
+        '[CruiseMode] _drawRoute: Map nicht ready, Route wird bei onMapReady gezeichnet',
+      );
     }
+  }
+
+  bool _shouldAnimateRouteDraw(List<LatLng> routeLatLngs) {
+    if (_isRouteConfirmed || routeLatLngs.length < 12) return false;
+    final media = MediaQuery.maybeOf(context);
+    if (media == null) return true;
+    return !media.disableAnimations && !media.accessibleNavigation;
+  }
+
+  void _startRouteDrawAnimation(List<LatLng> targetLatLngs) {
+    _routeDrawAnimationToken++;
+    _routeDrawAnimationTimer?.cancel();
+    final token = _routeDrawAnimationToken;
+    final start = DateTime.now();
+    const duration = Duration(milliseconds: 3600);
+    _safeSetState(() {
+      _routeLatLngs = targetLatLngs.take(2).toList(growable: false);
+    });
+    _routeDrawAnimationTimer = Timer.periodic(
+      const Duration(milliseconds: 33),
+      (timer) {
+        if (!mounted || _disposed || token != _routeDrawAnimationToken) {
+          timer.cancel();
+          return;
+        }
+        final elapsed = DateTime.now().difference(start).inMilliseconds;
+        final rawT = (elapsed / duration.inMilliseconds).clamp(0.0, 1.0);
+        final easedT = Curves.easeInOutCubic.transform(rawT);
+        final visibleCount = math
+            .max(2, (targetLatLngs.length * easedT).ceil())
+            .clamp(2, targetLatLngs.length)
+            .toInt();
+        _safeSetState(() {
+          _routeLatLngs = targetLatLngs
+              .take(visibleCount)
+              .toList(growable: false);
+        });
+        if (rawT >= 1.0) {
+          timer.cancel();
+          _safeSetState(() {
+            _routeLatLngs = List<LatLng>.from(targetLatLngs);
+          });
+        }
+      },
+    );
   }
 
   // ═══════════════════════ OVERLAP DETECTION ════════════════════════════════
@@ -1462,8 +3009,19 @@ class _CruiseModePageState extends State<CruiseModePage> {
   // ═══════════════════════ NAVIGATION TRACKING ══════════════════════════════
 
   void _startNavigationTracking() {
+    _stopIdlePositionStream(); // Idle-Stream stoppen, Navigation übernimmt
     _positionSubscription?.cancel();
     _socketPositionSubscription?.cancel();
+
+    // Navigations-Startzeit setzen (nur beim ersten Start, nicht bei Resume)
+    _navigationStartTime ??= DateTime.now();
+
+    // Smoother resetten für frischen Start
+    if (kIsWeb) {
+      _webSmoother.reset();
+    } else {
+      _nativeSmoother.reset();
+    }
 
     _distanceSinceLastRedraw = 0.0;
     _lastDrawnRouteIndex = _currentRouteIndex;
@@ -1486,15 +3044,16 @@ class _CruiseModePageState extends State<CruiseModePage> {
       }),
     );
 
-    // Web unterstützt kein bestForNavigation → fallback auf best
+    // Web: distanceFilter=0 (Browser-API unterstützt kein natives Distanz-Filtern).
+    // iOS/Android: 1m Filter für hochfrequente Updates (Apple-Maps-Feeling).
     const locationSettings = kIsWeb
         ? geo.LocationSettings(
             accuracy: geo.LocationAccuracy.best,
-            distanceFilter: 3,
+            distanceFilter: 0,
           )
         : geo.LocationSettings(
             accuracy: geo.LocationAccuracy.bestForNavigation,
-            distanceFilter: 3,
+            distanceFilter: 1,
           );
     _positionSubscription =
         geo.Geolocator.getPositionStream(
@@ -1514,40 +3073,79 @@ class _CruiseModePageState extends State<CruiseModePage> {
     _socketPositionSubscription?.cancel();
     _socketPositionSubscription = null;
     unawaited(_navigationSocketService.close());
+    _startIdlePositionStream(); // Idle-Stream wieder starten
   }
 
   Future<void> _onLocationUpdate(geo.Position position) async {
     if (!mounted || _disposed) return;
-    _userLocation = position;
 
-    // Heading tracken (nur wenn valide)
-    if (position.heading.isFinite && position.heading >= 0 && position.heading <= 360) {
-      _userHeading = position.heading;
+    // Plattformspezifisches GPS-Smoothing und Heading-Fusion
+    geo.Position effectivePosition;
+    if (kIsWeb) {
+      // Web: Smoother berechnet Heading aus Positionsverlauf
+      // (Browser liefert kein zuverlässiges heading, oft 0 oder NaN)
+      final smoothed = _webSmoother.update(position);
+      effectivePosition = smoothed ?? _webSmoother.current ?? position;
+      _userLocation = effectivePosition;
+      _userHeading = _webSmoother.heading;
+    } else {
+      // iOS/Android: Native Smoother mit Kalman-Filter und Heading-Fusion
+      // Kombiniert GPS-Heading mit Bewegungsrichtung für flüssige Rotation
+      final smoothed = _nativeSmoother.update(position);
+      effectivePosition = smoothed ?? _nativeSmoother.current ?? position;
+      _userLocation = effectivePosition;
+      // Geglättetes Heading verwenden (Apple-Maps-artiges Verhalten)
+      if (_nativeSmoother.hasValidHeading) {
+        _userHeading = _nativeSmoother.heading;
+      }
     }
 
-    // User-Position als Marker rendern (MarkerLayer in _buildMapWidget)
-    _safeSetState(() {
-      _userPosition = LatLng(position.latitude, position.longitude);
-      if (_routeLatLngs.isNotEmpty) {
-        _routeLatLngs[0] = LatLng(position.latitude, position.longitude);
-      }
-    });
-
-    // Kamera folgt User-Position + Rotation wenn Camera-Lock aktiv
+    // ── Kamera-Bewegung ──────────────────────────────────────────────────────
+    // Alle Plattformen: Animierte Interpolation (60fps smooth)
     if (_isCameraLocked && _mapReady) {
-      try {
-        _mapController.moveAndRotate(
-          LatLng(position.latitude, position.longitude),
-          16.0,
-          -_userHeading, // Karte dreht sich mit der Fahrtrichtung (Norden = oben wenn heading=0)
+      if (kIsWeb) {
+        final predicted = _webSmoother.predict(
+          DateTime.now().add(const Duration(milliseconds: 180)),
         );
-      } catch (e) {
-        debugPrint('[CruiseMode] Kamera-Folgen fehlgeschlagen: $e');
+        _animateCameraTo(predicted.lat, predicted.lng, predicted.heading);
+      } else {
+        // iOS/Android: Vorhersage für noch flüssigere Animation
+        final predicted = _nativeSmoother.predict(
+          DateTime.now().add(const Duration(milliseconds: 150)),
+        );
+        _animateCameraTo(
+          predicted.lat != 0 ? predicted.lat : effectivePosition.latitude,
+          predicted.lng != 0 ? predicted.lng : effectivePosition.longitude,
+          _nativeSmoother.hasValidHeading ? predicted.heading : _userHeading,
+        );
       }
+    }
+
+    // ── UI-Rebuild Throttling ───────────────────────────────────────────────
+    // Marker-Position intern aktualisieren, Route-Geometrie aber stabil lassen.
+    // setState nur wenn genug Zeit vergangen (Web: 16ms, Native: sofort).
+    _userPosition = LatLng(
+      effectivePosition.latitude,
+      effectivePosition.longitude,
+    );
+    // Wichtig: Die kanonische Route hier nicht auf die aktuelle GPS-Position
+    // ziehen. Bei Off-Route-/Access-Leg-Starts erzeugt das sonst eine
+    // sichtbare Luftlinie vom Fahrer zur Route. Route-Slices werden nur nach
+    // einem echten Route-Match oder einer berechneten Access-/Reroute gesetzt.
+
+    final now = DateTime.now();
+    final skipRebuild =
+        kIsWeb &&
+        _lastWebRebuildTime != null &&
+        now.difference(_lastWebRebuildTime!).inMilliseconds < 16;
+    if (!skipRebuild) {
+      _lastWebRebuildTime = now;
+      _safeSetState(() {});
     }
 
     if (!_isRouteConfirmed || _fullRouteCoordinates.length < 2) return;
 
+    // Für Route-Matching die rohe Position verwenden (genauer für Snap-to-Route)
     final match = findNearestInWindow(
       position: position,
       coordinates: _fullRouteCoordinates,
@@ -1555,23 +3153,40 @@ class _CruiseModePageState extends State<CruiseModePage> {
       windowSize: 40,
     );
 
-    // Rerouting: Wenn zu weit von der Route entfernt → erst zählen, dann neu berechnen
-    if (match.distanceMeters > _offRouteThresholdMeters) {
-      _offRouteCount++;
-      if (_offRouteCount >= _offRouteCountThreshold && !_isRerouting) {
-        final now = DateTime.now();
-        final cooldownOk =
-            _lastRerouteTime == null ||
-            now.difference(_lastRerouteTime!).inSeconds >= 30;
-        if (cooldownOk) {
-          _lastRerouteTime = now;
-          _offRouteCount = 0;
-          _rerouteToOriginalRoute(position);
-          return;
+    final offRouteCorridor = _isAccessLegActive
+        ? 85.0
+        : _isRoundTrip
+        ? _offRouteThresholdMeters
+        : _currentPointToPointCorridorMeters();
+    final isOutsideCorridor = match.distanceMeters > offRouteCorridor;
+    final approachingDestination =
+        !_isRoundTrip &&
+        _activeDestinationCoordinate != null &&
+        _isApproachingCurrentDestination(position);
+
+    if (isOutsideCorridor) {
+      if (approachingDestination) {
+        _offRouteCount = 0;
+        debugPrint(
+          '[CruiseMode] Alternative Route akzeptiert: ${match.distanceMeters.toStringAsFixed(0)}m neben Original, Zielentfernung sinkt weiter.',
+        );
+      } else {
+        _offRouteCount++;
+        if (_offRouteCount >= _offRouteCountThreshold && !_isRerouting) {
+          final now = DateTime.now();
+          final cooldownOk =
+              _lastRerouteTime == null ||
+              now.difference(_lastRerouteTime!).inSeconds >= 30;
+          if (cooldownOk) {
+            _lastRerouteTime = now;
+            _offRouteCount = 0;
+            _rerouteToOriginalRoute(position);
+            return;
+          }
         }
       }
     } else {
-      _offRouteCount = 0; // Wieder auf der Route → Counter zurücksetzen
+      _offRouteCount = 0;
     }
 
     var needsRebuild = false;
@@ -1587,22 +3202,29 @@ class _CruiseModePageState extends State<CruiseModePage> {
           c2[1],
           c2[0],
         );
-        _totalDistanceDriven += segmentMeters;
+        if (i >= _sessionRouteStartIndexInActiveRoute) {
+          _totalDistanceDriven += segmentMeters;
+        }
         _distanceSinceLastRedraw += segmentMeters;
       }
       _currentRouteIndex = match.index;
       needsRebuild = true;
+      _maybeFinalizeAccessLegPhase();
 
       // Verbleibende Distanz und Zeit live berechnen
       _updateRemainingDistanceAndDuration();
 
-      // Route häufiger in kleineren Schritten neu zeichnen (flüssigere Orange-Linie)
-      // WICHTIG: Immer nur 3km voraus zeigen (Sliding Window)
+      // Route in Schritten neu zeichnen (Sliding Window, 3km voraus)
+      // Web: größere Schwellen um teure CanvasKit-Repaints zu reduzieren
+      const indexThreshold = kIsWeb
+          ? _routeRedrawIndexThreshold * 2
+          : _routeRedrawIndexThreshold;
+      const distThreshold = kIsWeb
+          ? _routeRedrawDistanceMeters * 2
+          : _routeRedrawDistanceMeters;
       final redrawByIndex =
-          _currentRouteIndex - _lastDrawnRouteIndex >=
-          _routeRedrawIndexThreshold;
-      final redrawByDistance =
-          _distanceSinceLastRedraw >= _routeRedrawDistanceMeters;
+          _currentRouteIndex - _lastDrawnRouteIndex >= indexThreshold;
+      final redrawByDistance = _distanceSinceLastRedraw >= distThreshold;
       if (redrawByIndex || redrawByDistance) {
         _lastDrawnRouteIndex = _currentRouteIndex;
         _distanceSinceLastRedraw = 0.0;
@@ -1707,6 +3329,8 @@ class _CruiseModePageState extends State<CruiseModePage> {
   Future<void> _rerouteToOriginalRoute(geo.Position position) async {
     if (_isRerouting) return;
     _isRerouting = true;
+    final remainingDistanceBeforeMeters = _remainingDistance ?? _routeDistance;
+    final etaBeforeSeconds = _remainingDuration ?? _routeDuration;
 
     if (mounted) {
       ScaffoldMessenger.of(context)
@@ -1721,43 +3345,206 @@ class _CruiseModePageState extends State<CruiseModePage> {
     }
 
     try {
+      const validator = RouteQualityValidator();
+      final accessLegMode =
+          _isAccessLegActive &&
+          _accessLegMainRouteResult != null &&
+          _accessLegMainRouteResult!.coordinates.length >= 2;
+      final planningCoordinates = accessLegMode
+          ? _accessLegMainRouteResult!.coordinates
+          : _fullRouteCoordinates;
+      final planningManeuvers = accessLegMode
+          ? _accessLegMainRouteResult!.maneuvers
+          : _maneuvers;
+      final planningSpeedLimits = accessLegMode
+          ? _accessLegMainRouteResult!.speedLimits
+          : _activeSpeedLimits;
+
       // Suche den nächsten Punkt auf der GESAMTEN verbleibenden Route (großes Fenster)
       final globalMatch = findNearestInWindow(
         position: position,
-        coordinates: _fullRouteCoordinates,
-        currentIndex: _currentRouteIndex,
-        windowSize: _fullRouteCoordinates.length - _currentRouteIndex,
+        coordinates: planningCoordinates,
+        currentIndex: accessLegMode ? 0 : _currentRouteIndex,
+        windowSize: planningCoordinates.length,
         maxJumpMeters: double.infinity,
       );
 
       var heading = position.heading;
       if (!heading.isFinite || heading < 0 || heading > 360) {
-        heading = routeHeadingAt(_fullRouteCoordinates, _currentRouteIndex);
+        heading = routeHeadingAt(
+          planningCoordinates,
+          globalMatch.index.clamp(0, planningCoordinates.length - 1),
+        );
       }
 
-      final maxRejoinIndex = math.max(0, _fullRouteCoordinates.length - 2);
-      var rejoinIndex = selectForwardRejoinIndex(
-        coordinates: _fullRouteCoordinates,
+      final smartPlan = _smartRerouteEngine.createPlan(
+        currentPosition: position,
+        coordinates: planningCoordinates,
+        maneuvers: planningManeuvers,
+        nearestIndex: globalMatch.index,
+        currentHeadingDegrees: heading,
+        speedLimits: planningSpeedLimits,
+      );
+
+      debugPrint(
+        '[CruiseMode] Smart reroute plan: ${smartPlan.debugLabel}, strategy=${smartPlan.strategy.name}, rejoin=${smartPlan.rejoinIndex}',
+      );
+
+      final destination = _activeDestinationCoordinate;
+      if (!_isRoundTrip && destination != null && !accessLegMode) {
+        final destinationRerouteSeed = Object.hash(
+          destination[0].round(),
+          destination[1].round(),
+          _activeDetourVariant,
+          _activeAvoidHighways,
+          0x44525252,
+        );
+        final destinationResult = await _routeService.generatePointToPoint(
+          startPosition: position,
+          destinationLat: destination[1],
+          destinationLng: destination[0],
+          mode: _activePointToPointScenic
+              ? _activePointToPointMode
+              : 'Standard',
+          scenic: _activePointToPointScenic,
+          routeVariant: _activeDetourVariant,
+          avoidHighways: _activeAvoidHighways,
+          diversitySeed: destinationRerouteSeed,
+        );
+
+        if (destinationResult.coordinates.length >= 2) {
+          final destinationQuality = validator.validateQuality(
+            coordinates: destinationResult.coordinates,
+            isRoundTrip: false,
+            actualDistanceKm: destinationResult.distanceKm ?? 0,
+          );
+          final destinationTooFewPoints =
+              destinationResult.coordinates.length < 30 &&
+              (destinationResult.distanceKm ?? 0) >= 10;
+          if (!destinationQuality.passed || destinationTooFewPoints) {
+            debugPrint(
+              '[CruiseMode] Direkter Ziel-Reroute verworfen: Qualität unzureichend.',
+            );
+          } else {
+            final distanceMeters =
+                destinationResult.distanceMeters ??
+                _calculatePolylineDistanceMeters(destinationResult.coordinates);
+            final durationSeconds =
+                destinationResult.durationSeconds ??
+                _estimateDurationSecondsForDistance(distanceMeters);
+            final rerouteMeta = buildRerouteTelemetry(
+              rerouteReason: accessLegMode
+                  ? 'access_leg_destination_reconnect'
+                  : 'destination_reconnect',
+              rerouteMode: 'full_rebuild',
+              remainingDistanceBeforeMeters: remainingDistanceBeforeMeters,
+              remainingDistanceAfterMeters: distanceMeters,
+              etaBeforeSeconds: etaBeforeSeconds,
+              etaAfterSeconds: durationSeconds,
+              rerouteDistanceMeters: distanceMeters,
+              rejoinPointDistanceMeters: geo.Geolocator.distanceBetween(
+                position.latitude,
+                position.longitude,
+                destination[1],
+                destination[0],
+              ),
+            );
+
+            await _commitRerouteResult(
+              result: _buildRouteResultFromCoordinates(
+                coordinates: destinationResult.coordinates,
+                maneuvers: destinationResult.maneuvers,
+                distanceMeters: distanceMeters,
+                durationSeconds: durationSeconds,
+                speedLimits: destinationResult.speedLimits,
+                edgeMeta: {...destinationResult.edgeMeta, ...rerouteMeta},
+              ),
+              position: position,
+            );
+            _logRerouteMeta(rerouteMeta);
+            _clearAccessLegState();
+            _sessionRouteStartIndexInActiveRoute = 0;
+
+            if (mounted) {
+              ScaffoldMessenger.of(context)
+                ..hideCurrentSnackBar()
+                ..showSnackBar(
+                  const SnackBar(
+                    content: Text('Neue Strecke zum Ziel wurde übernommen.'),
+                    backgroundColor: Colors.green,
+                    duration: Duration(seconds: 2),
+                  ),
+                );
+            }
+            return;
+          }
+        }
+      }
+
+      final maxRejoinIndex = math.max(0, planningCoordinates.length - 2);
+      final fallbackRejoinIndex = selectForwardRejoinIndex(
+        coordinates: planningCoordinates,
         nearestIndex: globalMatch.index,
         currentHeadingDegrees: heading,
       ).clamp(0, maxRejoinIndex).toInt();
 
       RouteResult? rerouteResult;
-      for (var attempt = 0; attempt < 3; attempt++) {
-        final rejoinPoint = _fullRouteCoordinates[rejoinIndex];
+      SmartReroutePlan? acceptedPlan;
+      var rejoinIndex = smartPlan.rejoinIndex.clamp(0, maxRejoinIndex).toInt();
+
+      for (var attempt = 0; attempt < 4; attempt++) {
+        final useFallbackPlan = attempt > 0;
+        rejoinIndex = useFallbackPlan
+            ? math
+                  .min(
+                    fallbackRejoinIndex + ((attempt - 1) * 60),
+                    maxRejoinIndex,
+                  )
+                  .toInt()
+            : rejoinIndex;
+        final activePlan = useFallbackPlan
+            ? SmartReroutePlan(
+                anchorCoordinate: planningCoordinates[rejoinIndex],
+                rejoinIndex: rejoinIndex,
+                strategy: SmartRerouteStrategy.forwardRejoin,
+                debugLabel: 'fallback_forward_rejoin_$attempt',
+              )
+            : smartPlan;
+        final mergeWithOriginal =
+            (accessLegMode || activePlan.mergeWithOriginal) &&
+            rejoinIndex < maxRejoinIndex;
+        final rejoinPoint = mergeWithOriginal
+            ? planningCoordinates[rejoinIndex]
+            : activePlan.anchorCoordinate;
         final distToRejoin = geo.Geolocator.distanceBetween(
           position.latitude,
           position.longitude,
           rejoinPoint[1],
           rejoinPoint[0],
         );
-        if (distToRejoin < 200) return;
+        if (distToRejoin < 160 && rejoinIndex < maxRejoinIndex) {
+          rejoinIndex = math.min(rejoinIndex + 60, maxRejoinIndex).toInt();
+          continue;
+        }
 
+        final scenicReroute = !mergeWithOriginal && _activePointToPointScenic;
+
+        final joinRerouteSeed = Object.hash(
+          rejoinPoint[0].round(),
+          rejoinPoint[1].round(),
+          _activeDetourVariant,
+          _activeAvoidHighways,
+          attempt,
+        );
         final candidate = await _routeService.generatePointToPoint(
           startPosition: position,
           destinationLat: rejoinPoint[1],
           destinationLng: rejoinPoint[0],
-          mode: 'Standard',
+          mode: _rerouteMode(mergeWithOriginal: mergeWithOriginal),
+          scenic: scenicReroute,
+          routeVariant: _rerouteVariant(mergeWithOriginal: mergeWithOriginal),
+          avoidHighways: _activeAvoidHighways,
+          diversitySeed: joinRerouteSeed,
         );
 
         if (candidate.coordinates.length < 2) {
@@ -1765,77 +3552,278 @@ class _CruiseModePageState extends State<CruiseModePage> {
           continue;
         }
 
-        final producesUTurn = isUTurnJoin(
-          rerouteCoordinates: candidate.coordinates,
-          originalCoordinates: _fullRouteCoordinates,
-          rejoinIndex: rejoinIndex,
+        final candidateQuality = validator.validateQuality(
+          coordinates: candidate.coordinates,
+          isRoundTrip: false,
+          actualDistanceKm: candidate.distanceKm ?? 0,
         );
-        if (producesUTurn && rejoinIndex < maxRejoinIndex) {
+        final candidateTooFewPoints =
+            candidate.coordinates.length < 30 &&
+            (candidate.distanceKm ?? 0) >= 10;
+        if (!candidateQuality.passed || candidateTooFewPoints) {
           rejoinIndex = math.min(rejoinIndex + 80, maxRejoinIndex).toInt();
           debugPrint(
-            '[CruiseMode] Reroute-Attempt ${attempt + 1}: Join-U-Turn erkannt, rejoinIndex=$rejoinIndex',
+            '[CruiseMode] Reroute-Attempt ${attempt + 1}: Kandidat verworfen (Qualität)',
           );
           continue;
         }
 
+        if (mergeWithOriginal) {
+          final candidateEnd = candidate.coordinates.last;
+          final originalJoinPoint = planningCoordinates[rejoinIndex];
+          final joinDistance = geo.Geolocator.distanceBetween(
+            candidateEnd[1],
+            candidateEnd[0],
+            originalJoinPoint[1],
+            originalJoinPoint[0],
+          );
+          if (joinDistance > 45.0 && rejoinIndex < maxRejoinIndex) {
+            rejoinIndex = math.min(rejoinIndex + 80, maxRejoinIndex).toInt();
+            debugPrint(
+              '[CruiseMode] Reroute-Attempt ${attempt + 1}: Join-Gap ${joinDistance.toStringAsFixed(0)}m, rejoinIndex=$rejoinIndex',
+            );
+            continue;
+          }
+
+          final producesUTurn = isUTurnJoin(
+            rerouteCoordinates: candidate.coordinates,
+            originalCoordinates: planningCoordinates,
+            rejoinIndex: rejoinIndex,
+          );
+          if (producesUTurn && rejoinIndex < maxRejoinIndex) {
+            rejoinIndex = math.min(rejoinIndex + 80, maxRejoinIndex).toInt();
+            debugPrint(
+              '[CruiseMode] Reroute-Attempt ${attempt + 1}: Join-U-Turn erkannt, rejoinIndex=$rejoinIndex',
+            );
+            continue;
+          }
+        }
+
         rerouteResult = candidate;
+        acceptedPlan = activePlan;
         break;
       }
 
-      if (rerouteResult == null || !mounted || _disposed) return;
-
-      // Neue Route mit dem Rest der Originalroute zusammenführen
-      final rerouteCoords = rerouteResult.coordinates;
-      final remainingOriginal = _fullRouteCoordinates.sublist(rejoinIndex);
-      final mergedCoordinates = [...rerouteCoords, ...remainingOriginal];
-
-      // Maneuvers für den neuen Abschnitt + verbleibende originale Maneuvers
-      final remainingManeuvers = _maneuvers
-          .where((m) => m.routeIndex >= rejoinIndex)
-          .map(
-            (m) => RouteManeuver(
-              latitude: m.latitude,
-              longitude: m.longitude,
-              routeIndex: m.routeIndex - rejoinIndex + rerouteCoords.length,
-              icon: m.icon,
-              announcement: m.announcement,
-              instruction: m.instruction,
-            ),
-          )
-          .toList();
-
-      final rerouteManeuvers = rerouteResult.maneuvers;
-      final allManeuvers = [...rerouteManeuvers, ...remainingManeuvers];
-
-      // Route wird über _drawRoute() automatisch aktualisiert (GeoJSON Source Update)
-
-      _safeSetState(() {
-        _fullRouteCoordinates = mergedCoordinates;
-        _currentRouteIndex = 0;
-        _lastDrawnRouteIndex = 0; // Reset damit Route sofort gezeichnet wird
-        _distanceSinceLastRedraw = 0.0;
-        _maneuvers = allManeuvers;
-        _activeManeuverIndex = 0;
-        _announcedManeuverIndices.clear();
-        // Speed-History entfernt — Zeit wird über Mapbox-Proportion berechnet
-      });
-
-      // Verbleibende Distanz/Zeit neu berechnen (ohne originale Werte zu überschreiben)
-      _updateRemainingDistanceAndDuration();
-
-      // Route auf der Karte neu zeichnen — Start bei User-Position
-      final windowEnd = _findLookAheadIndex(0, 3000);
-      final routeSlice = mergedCoordinates.sublist(0, windowEnd);
-      if (routeSlice.isNotEmpty) {
-        routeSlice[0] = [position.longitude, position.latitude];
+      if (rerouteResult == null ||
+          acceptedPlan == null ||
+          !mounted ||
+          _disposed) {
+        _publishRerouteFailure(
+          rerouteReason: rerouteResult == null
+              ? 'no_candidate'
+              : 'ui_unmounted',
+          rerouteMode: accessLegMode ? 'rejoin' : 'partial_rebuild',
+          remainingDistanceBeforeMeters: remainingDistanceBeforeMeters,
+          etaBeforeSeconds: etaBeforeSeconds,
+        );
+        return;
       }
-      _remainingRouteCoordinates = routeSlice;
-      final clipped = {
-        'type': 'LineString',
-        'coordinates': _remainingRouteCoordinates,
-      };
-      _routeGeoJson = json.encode(clipped);
-      await _drawRoute(clipped, animateCamera: false);
+
+      final resolvedRerouteResult = rerouteResult;
+      final resolvedPlan = acceptedPlan;
+      final mergeBaseCoordinates = planningCoordinates;
+      final mergeBaseManeuvers = planningManeuvers;
+      final mergeBaseSpeedLimits = planningSpeedLimits;
+      final mergeWithOriginal =
+          (accessLegMode || resolvedPlan.mergeWithOriginal) &&
+          resolvedPlan.rejoinIndex < mergeBaseCoordinates.length - 1;
+      late final RouteResult finalResult;
+      RouteResult? sessionRouteResult;
+      late final Map<String, dynamic> rerouteMeta;
+      final rejoinPointDistanceMeters = geo.Geolocator.distanceBetween(
+        position.latitude,
+        position.longitude,
+        mergeWithOriginal
+            ? mergeBaseCoordinates[resolvedPlan.rejoinIndex][1]
+            : resolvedPlan.anchorCoordinate[1],
+        mergeWithOriginal
+            ? mergeBaseCoordinates[resolvedPlan.rejoinIndex][0]
+            : resolvedPlan.anchorCoordinate[0],
+      );
+
+      if (mergeWithOriginal) {
+        final remainingOriginal = mergeBaseCoordinates.sublist(
+          resolvedPlan.rejoinIndex,
+        );
+        var skippedOriginalCoordinates = 0;
+        if (resolvedRerouteResult.coordinates.isNotEmpty &&
+            remainingOriginal.isNotEmpty) {
+          final rerouteEnd = resolvedRerouteResult.coordinates.last;
+          final originalStart = remainingOriginal.first;
+          final joinDistance = geo.Geolocator.distanceBetween(
+            rerouteEnd[1],
+            rerouteEnd[0],
+            originalStart[1],
+            originalStart[0],
+          );
+          if (joinDistance <= 20) {
+            skippedOriginalCoordinates = 1;
+          }
+        }
+
+        final originalTail = skippedOriginalCoordinates == 1
+            ? remainingOriginal.skip(1).toList()
+            : remainingOriginal;
+        final mergedCoordinates = [
+          ...rerouteResult.coordinates,
+          ...originalTail,
+        ];
+
+        final remainingManeuvers = mergeBaseManeuvers
+            .where(
+              (m) =>
+                  m.routeIndex >=
+                  resolvedPlan.rejoinIndex + skippedOriginalCoordinates,
+            )
+            .map(
+              (m) => RouteManeuver(
+                latitude: m.latitude,
+                longitude: m.longitude,
+                routeIndex:
+                    m.routeIndex -
+                    resolvedPlan.rejoinIndex -
+                    skippedOriginalCoordinates +
+                    resolvedRerouteResult.coordinates.length,
+                icon: m.icon,
+                announcement: m.announcement,
+                instruction: m.instruction,
+                maneuverType: m.maneuverType,
+                roundaboutExitNumber: m.roundaboutExitNumber,
+              ),
+            )
+            .toList();
+
+        final mergedSpeedLimits = _mergeSpeedLimits(
+          resolvedRerouteResult.speedLimits,
+          resolvedPlan.rejoinIndex,
+          resolvedRerouteResult.coordinates.length,
+          skippedOriginalCoordinates: skippedOriginalCoordinates,
+          originalSpeedLimits: mergeBaseSpeedLimits,
+        );
+        final rerouteDistanceMeters =
+            resolvedRerouteResult.distanceMeters ??
+            _calculatePolylineDistanceMeters(resolvedRerouteResult.coordinates);
+        final remainingDistanceMeters = _calculatePolylineDistanceMeters(
+          originalTail,
+        );
+        final rerouteDurationSeconds =
+            resolvedRerouteResult.durationSeconds ??
+            _estimateDurationSecondsForDistance(rerouteDistanceMeters);
+        final remainingDurationSeconds = _estimateDurationSecondsForDistance(
+          remainingDistanceMeters,
+        );
+        final sessionManeuvers = mergeBaseManeuvers
+            .where(
+              (m) =>
+                  m.routeIndex >=
+                  resolvedPlan.rejoinIndex + skippedOriginalCoordinates,
+            )
+            .map(
+              (m) => RouteManeuver(
+                latitude: m.latitude,
+                longitude: m.longitude,
+                routeIndex:
+                    m.routeIndex -
+                    resolvedPlan.rejoinIndex -
+                    skippedOriginalCoordinates,
+                icon: m.icon,
+                announcement: m.announcement,
+                instruction: m.instruction,
+                maneuverType: m.maneuverType,
+                roundaboutExitNumber: m.roundaboutExitNumber,
+              ),
+            )
+            .toList();
+        final sessionSpeedLimits = _sliceSpeedLimits(
+          mergeBaseSpeedLimits,
+          resolvedPlan.rejoinIndex,
+          skippedOriginalCoordinates: skippedOriginalCoordinates,
+        );
+        sessionRouteResult = _buildRouteResultFromCoordinates(
+          coordinates: originalTail,
+          maneuvers: sessionManeuvers,
+          distanceMeters: remainingDistanceMeters,
+          durationSeconds: remainingDurationSeconds,
+          speedLimits: sessionSpeedLimits,
+        );
+        rerouteMeta = buildRerouteTelemetry(
+          rerouteReason: accessLegMode ? 'access_leg_off_route' : 'off_route',
+          rerouteMode: 'rejoin',
+          remainingDistanceBeforeMeters: remainingDistanceBeforeMeters,
+          remainingDistanceAfterMeters:
+              rerouteDistanceMeters + remainingDistanceMeters,
+          etaBeforeSeconds: etaBeforeSeconds,
+          etaAfterSeconds: rerouteDurationSeconds + remainingDurationSeconds,
+          rerouteDistanceMeters: rerouteDistanceMeters,
+          rejoinPointDistanceMeters: rejoinPointDistanceMeters,
+        );
+
+        finalResult = _buildRouteResultFromCoordinates(
+          coordinates: mergedCoordinates,
+          maneuvers: [
+            ...resolvedRerouteResult.maneuvers,
+            ...remainingManeuvers,
+          ],
+          distanceMeters: rerouteDistanceMeters + remainingDistanceMeters,
+          durationSeconds: rerouteDurationSeconds + remainingDurationSeconds,
+          speedLimits: mergedSpeedLimits,
+          edgeMeta: {...resolvedRerouteResult.edgeMeta, ...rerouteMeta},
+        );
+        sessionRouteResult = _withMergedRouteMeta(
+          sessionRouteResult,
+          rerouteMeta,
+        );
+      } else {
+        final distanceMeters =
+            resolvedRerouteResult.distanceMeters ??
+            _calculatePolylineDistanceMeters(resolvedRerouteResult.coordinates);
+        rerouteMeta = buildRerouteTelemetry(
+          rerouteReason: accessLegMode ? 'access_leg_rebuild' : 'off_route',
+          rerouteMode: 'full_rebuild',
+          remainingDistanceBeforeMeters: remainingDistanceBeforeMeters,
+          remainingDistanceAfterMeters: distanceMeters,
+          etaBeforeSeconds: etaBeforeSeconds,
+          etaAfterSeconds:
+              resolvedRerouteResult.durationSeconds ??
+              _estimateDurationSecondsForDistance(distanceMeters),
+          rerouteDistanceMeters: distanceMeters,
+          rejoinPointDistanceMeters: rejoinPointDistanceMeters,
+        );
+        finalResult = _buildRouteResultFromCoordinates(
+          coordinates: resolvedRerouteResult.coordinates,
+          maneuvers: resolvedRerouteResult.maneuvers,
+          distanceMeters: distanceMeters,
+          durationSeconds:
+              resolvedRerouteResult.durationSeconds ??
+              _estimateDurationSecondsForDistance(distanceMeters),
+          speedLimits: resolvedRerouteResult.speedLimits,
+          edgeMeta: {...resolvedRerouteResult.edgeMeta, ...rerouteMeta},
+        );
+        sessionRouteResult = finalResult;
+      }
+
+      await _commitRerouteResult(
+        result: finalResult,
+        sessionRouteResult: sessionRouteResult,
+        position: position,
+      );
+      _logRerouteMeta(rerouteMeta);
+      if (accessLegMode) {
+        final joinIndexInMergedRoute = resolvedRerouteResult.coordinates.length
+            .clamp(1, math.max(1, finalResult.coordinates.length - 1))
+            .toInt();
+        _safeSetState(() {
+          _isAccessLegActive = true;
+          _accessLegJoinIndex = joinIndexInMergedRoute;
+          _sessionRouteStartIndexInActiveRoute = 0;
+          _sessionRouteResult = finalResult;
+          _accessLegMainRouteResult = sessionRouteResult;
+          _totalDistanceDriven = 0.0;
+        });
+      } else {
+        _clearAccessLegState();
+        _sessionRouteStartIndexInActiveRoute = 0;
+      }
 
       if (mounted) {
         ScaffoldMessenger.of(context)
@@ -1848,18 +3836,18 @@ class _CruiseModePageState extends State<CruiseModePage> {
             ),
           );
       }
-    } catch (e) {
+    } catch (e, stack) {
       debugPrint('Rerouting fehlgeschlagen: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context)
-          ..hideCurrentSnackBar()
-          ..showSnackBar(
-            SnackBar(
-              content: Text('Rerouting fehlgeschlagen: $e'),
-              backgroundColor: Colors.red,
-            ),
-          );
-      }
+      debugPrintStack(
+        label: '[CruiseMode] Rerouting stacktrace',
+        stackTrace: stack,
+      );
+      _publishRerouteFailure(
+        rerouteReason: 'exception',
+        rerouteMode: _isAccessLegActive ? 'rejoin' : 'partial_rebuild',
+        remainingDistanceBeforeMeters: remainingDistanceBeforeMeters,
+        etaBeforeSeconds: etaBeforeSeconds,
+      );
     } finally {
       _isRerouting = false;
     }
@@ -2001,6 +3989,7 @@ class _CruiseModePageState extends State<CruiseModePage> {
     _lastDrawnRouteIndex = 0;
     _distanceSinceLastRedraw = 0.0;
     _totalDistanceDriven = 0;
+    _navigationStartTime = DateTime.now();
     _announcedManeuverIndices.clear();
     _activeManeuverIndex = 0;
     // Speed-History entfernt
@@ -2127,19 +4116,12 @@ class _CruiseModePageState extends State<CruiseModePage> {
     if (_isSimulationRunning) _scheduleNextSimulationStep();
   }
 
-  /// Zeigt den Simulations-Puck (blauer Kreis mit weißem Ring) als MarkerLayer.
-  /// Kein Mapbox AnnotationManager mehr — flutter_map rendert via State.
   Future<void> _updateSimulationPuck(double lng, double lat) async {
-    _safeSetState(() {
-      _simulationPuckPosition = LatLng(lat, lng); // lng,lat → LatLng(lat,lng)
-    });
+    // Simulation deaktiviert — Puck nicht mehr anzeigen
   }
 
-  /// Entfernt den Simulations-Puck (State auf null setzen).
   Future<void> _removeSimulationPuck() async {
-    _safeSetState(() {
-      _simulationPuckPosition = null;
-    });
+    // Simulation deaktiviert
   }
 
   geo.Position _buildSimulatedPosition(
@@ -2164,24 +4146,178 @@ class _CruiseModePageState extends State<CruiseModePage> {
 
   // ═══════════════════════ ROUTE COMPLETION ═════════════════════════════════
 
+  RouteResult? get _completionRouteResult =>
+      _sessionRouteResult ?? _lastRouteResult;
+
+  int _logicalCurrentRouteIndex(int coordinateLength) {
+    if (coordinateLength <= 0) return 0;
+    final adjustedIndex =
+        _currentRouteIndex - _sessionRouteStartIndexInActiveRoute;
+    return adjustedIndex.clamp(0, coordinateLength - 1).toInt();
+  }
+
+  RouteResult? _buildAdjustedCompletionResult() {
+    final result = _completionRouteResult;
+    if (result == null) return null;
+
+    final drivenDistanceMeters = _totalDistanceDriven > 0
+        ? _totalDistanceDriven
+        : (result.distanceMeters ?? _routeDistance);
+    final progressFraction = _calculateCompletionProgressFraction(
+      drivenDistanceMeters,
+    );
+    final adjustedDuration = _calculateAdjustedCompletionDuration(
+      progressFraction,
+    );
+    final completionCoordinates = _buildCompletionCoordinates(progressFraction);
+    final geometry = <String, dynamic>{
+      'type': 'LineString',
+      'coordinates': completionCoordinates,
+    };
+
+    return RouteResult(
+      geoJson: json.encode(geometry),
+      geometry: geometry,
+      coordinates: completionCoordinates,
+      maneuvers: result.maneuvers,
+      distanceMeters: drivenDistanceMeters,
+      durationSeconds: adjustedDuration,
+      distanceKm: drivenDistanceMeters != null
+          ? drivenDistanceMeters / 1000
+          : null,
+      speedLimits: result.speedLimits,
+      edgeMeta: result.edgeMeta,
+    );
+  }
+
+  double _calculateCompletionProgressFraction(double? drivenDistanceMeters) {
+    final plannedDistanceMeters =
+        _completionRouteResult?.distanceMeters ?? _originalRouteDistance;
+    if (drivenDistanceMeters == null ||
+        plannedDistanceMeters == null ||
+        plannedDistanceMeters <= 0) {
+      return 1.0;
+    }
+    return (drivenDistanceMeters / plannedDistanceMeters).clamp(0.0, 1.0);
+  }
+
+  double? _calculateAdjustedCompletionDuration(double progressFraction) {
+    final proportionalDuration = _completionRouteResult?.durationSeconds != null
+        ? _completionRouteResult!.durationSeconds! * progressFraction
+        : null;
+    final elapsedSeconds = _navigationStartTime != null
+        ? DateTime.now().difference(_navigationStartTime!).inSeconds.toDouble()
+        : null;
+
+    if (elapsedSeconds != null && elapsedSeconds > 0) {
+      return elapsedSeconds;
+    }
+    return proportionalDuration ?? elapsedSeconds;
+  }
+
+  List<List<double>> _buildCompletionCoordinates(double progressFraction) {
+    final sourceCoordinates =
+        _completionRouteResult?.coordinates ?? const <List<double>>[];
+    if (sourceCoordinates.length < 2) return sourceCoordinates;
+
+    final logicalRouteIndex = _logicalCurrentRouteIndex(
+      sourceCoordinates.length,
+    );
+    final routeIndexLength = logicalRouteIndex > 1
+        ? math.min(logicalRouteIndex + 1, sourceCoordinates.length)
+        : 0;
+    final sampledLength = math.max(
+      2,
+      (sourceCoordinates.length * progressFraction).round(),
+    );
+    final targetLength = math.max(routeIndexLength, sampledLength);
+    return List<List<double>>.from(
+      sourceCoordinates.take(math.min(targetLength, sourceCoordinates.length)),
+    );
+  }
+
+  int _estimateCompletionCurves(
+    List<List<double>> coordinates,
+    double progressFraction,
+  ) {
+    if (coordinates.length >= 6) {
+      final sampled = _sampleCoordinatesForSimilarity(
+        coordinates,
+        maxSamples: 120,
+      );
+      final counted = GamificationService.countCurves(sampled);
+      if (counted > 0) return counted;
+    }
+    return math.max(0, (_cachedCurveCount * progressFraction).round());
+  }
+
+  String _formatCompletionDuration(double? durationSeconds) {
+    if (durationSeconds == null || durationSeconds <= 0) return '--';
+    final minutes = math.max(1, (durationSeconds / 60).ceil());
+    if (minutes < 60) return '$minutes min';
+    final hours = minutes ~/ 60;
+    final restMinutes = minutes % 60;
+    if (restMinutes == 0) return '${hours}h';
+    return '${hours}h ${restMinutes}min';
+  }
+
+  _CruiseCompletionSnapshot _buildCompletionSnapshot({
+    required bool isEarlyStop,
+    required bool belowMinimum,
+  }) {
+    final adjustedResult = _buildAdjustedCompletionResult();
+    final drivenKm = adjustedResult?.distanceKm ?? 0;
+    final progressFraction = _calculateCompletionProgressFraction(
+      adjustedResult?.distanceMeters,
+    );
+    final previewCoordinates =
+        adjustedResult?.coordinates ?? const <List<double>>[];
+    final curves = _estimateCompletionCurves(
+      previewCoordinates,
+      progressFraction,
+    );
+    final xpEarned = belowMinimum
+        ? 0
+        : GamificationService.calculateRouteXp(
+            distanceKm: drivenKm,
+            curves: curves,
+            style: _selectedStyle,
+          );
+
+    return _CruiseCompletionSnapshot(
+      distanceKm: drivenKm,
+      durationText: _formatCompletionDuration(adjustedResult?.durationSeconds),
+      curves: curves,
+      xpEarned: xpEarned,
+      coordinates: previewCoordinates,
+      isEarlyStop: isEarlyStop,
+      belowMinimum: belowMinimum,
+    );
+  }
+
   void _onRouteCompleted() {
     if (!mounted || _disposed) return;
-    final drivenKm = _totalDistanceDriven > 0
-        ? _totalDistanceDriven / 1000
-        : (_routeDistance != null ? _routeDistance! / 1000 : null);
-    showDialog(
+    final snapshot = _buildCompletionSnapshot(
+      isEarlyStop: false,
+      belowMinimum: false,
+    );
+    showCruiseCompletionSheet(
       context: context,
-      barrierDismissible: false,
-      builder: (ctx) => CruiseCompletionDialog(
-        distanceKm: drivenKm,
-        onSave: (rating) async {
-          Navigator.pop(ctx);
-          await _saveRouteAndSyncXp(rating: rating);
+      child: CruiseCompletionDialog(
+        distanceKm: snapshot.distanceKm,
+        durationText: snapshot.durationText,
+        curves: snapshot.curves,
+        xpEarned: snapshot.xpEarned,
+        routeCoordinates: snapshot.coordinates,
+        onSave: (rating, tags) async {
+          final result = await _saveRouteAndSyncXp(
+            rating: rating,
+            ratingTags: tags,
+          );
           _resetAfterCompletion();
+          return result;
         },
         onDiscard: () async {
-          Navigator.pop(ctx);
-          await _saveRouteAndSyncXp();
           _resetAfterCompletion();
         },
       ),
@@ -2191,24 +4327,46 @@ class _CruiseModePageState extends State<CruiseModePage> {
   void _onRouteEarlyStopped() {
     if (!mounted || _disposed) return;
     final drivenKm = _totalDistanceDriven / 1000;
-    final totalKm = _originalRouteDistance != null
-        ? _originalRouteDistance! / 1000
-        : null;
-    showDialog(
+    final totalKm = _completionRouteResult?.distanceMeters != null
+        ? _completionRouteResult!.distanceMeters! / 1000
+        : 0.0;
+    final progressFraction = totalKm > 0
+        ? (drivenKm / totalKm).clamp(0.0, 1.0)
+        : 0.0;
+
+    // Fast fertig → als volle Completion behandeln
+    if (progressFraction >= _minProgressForFullCredit) {
+      _onRouteCompleted();
+      return;
+    }
+
+    final belowMinimum = progressFraction < _minProgressForCredit;
+
+    final snapshot = _buildCompletionSnapshot(
+      isEarlyStop: true,
+      belowMinimum: belowMinimum,
+    );
+
+    showCruiseCompletionSheet(
       context: context,
-      barrierDismissible: false,
-      builder: (ctx) => CruiseCompletionDialog(
-        distanceKm: drivenKm,
-        totalRouteKm: totalKm,
-        isEarlyStop: true,
-        onSave: (rating) async {
-          Navigator.pop(ctx);
-          await _saveRouteAndSyncXp(rating: rating);
+      child: CruiseCompletionDialog(
+        distanceKm: snapshot.distanceKm,
+        durationText: snapshot.durationText,
+        curves: snapshot.curves,
+        xpEarned: snapshot.xpEarned,
+        routeCoordinates: snapshot.coordinates,
+        isEarlyStop: snapshot.isEarlyStop,
+        belowMinimum: snapshot.belowMinimum,
+        onSave: (rating, tags) async {
+          final result = await _saveRouteAndSyncXp(
+            rating: rating,
+            ratingTags: tags,
+            skipXpSync: belowMinimum,
+          );
           _resetAfterCompletion();
+          return result;
         },
         onDiscard: () async {
-          Navigator.pop(ctx);
-          await _saveRouteAndSyncXp();
           _resetAfterCompletion();
         },
       ),
@@ -2216,142 +4374,229 @@ class _CruiseModePageState extends State<CruiseModePage> {
   }
 
   /// Speichert die gefahrene Route und synchronisiert XP/Level/Badges.
-  Future<void> _saveRouteAndSyncXp({int? rating}) async {
+  /// [skipXpSync] = true → Route wird gespeichert, aber keine XP vergeben (< 10% gefahren).
+  Future<CruiseCompletionActionResult> _saveRouteAndSyncXp({
+    int? rating,
+    List<String> ratingTags = const [],
+    bool skipXpSync = false,
+  }) async {
+    int? previousLevel;
+    if (!skipXpSync) {
+      final userId = Supabase.instance.client.auth.currentUser?.id;
+      if (userId != null) {
+        try {
+          final profile = await Supabase.instance.client
+              .from('profiles')
+              .select('level')
+              .eq('id', userId)
+              .maybeSingle();
+          previousLevel = (profile?['level'] as num?)?.toInt();
+        } catch (e) {
+          debugPrint('[CruiseMode] Vorheriges Level nicht lesbar: $e');
+        }
+      }
+    }
+
     try {
       debugPrint(
-        '[CruiseMode] _saveRouteAndSyncXp: _lastRouteResult=${_lastRouteResult != null}, rating=$rating',
+        '[CruiseMode] _saveRouteAndSyncXp: _lastRouteResult=${_lastRouteResult != null}, rating=$rating, skipXp=$skipXpSync',
       );
-      if (_lastRouteResult != null) {
-        // Route mit tatsächlich gefahrener Distanz speichern
-        final drivenDistanceMeters = _totalDistanceDriven > 0
-            ? _totalDistanceDriven
-            : _routeDistance;
-        final adjustedResult = RouteResult(
-          geoJson: _lastRouteResult!.geoJson,
-          geometry: _lastRouteResult!.geometry,
-          coordinates: _lastRouteResult!.coordinates,
-          maneuvers: _lastRouteResult!.maneuvers,
-          distanceMeters: drivenDistanceMeters,
-          durationSeconds: _lastRouteResult!.durationSeconds,
-          distanceKm: drivenDistanceMeters != null
-              ? drivenDistanceMeters / 1000
-              : null,
+      final adjustedResult = _buildAdjustedCompletionResult();
+      if (adjustedResult != null) {
+        final progressFraction = _calculateCompletionProgressFraction(
+          adjustedResult.distanceMeters,
         );
         debugPrint(
-          '[CruiseMode] Saving route: style=$_selectedStyle, roundTrip=$_isRoundTrip, distKm=${adjustedResult.distanceKm}',
+          '[CruiseMode] Saving route: style=$_selectedStyle, roundTrip=$_isRoundTrip, '
+          'distKm=${adjustedResult.distanceKm}, durationSec=${adjustedResult.durationSeconds?.round()}, '
+          'progress=${(progressFraction * 100).round()}%',
         );
         await SavedRoutesService.saveRoute(
           result: adjustedResult,
           style: _selectedStyle,
           isRoundTrip: _isRoundTrip,
           rating: rating,
-          drivenKm: _totalDistanceDriven > 0
-              ? _totalDistanceDriven / 1000
-              : null,
+          drivenKm: adjustedResult.distanceKm,
+          plannedDistanceKm: _completionRouteResult?.distanceMeters != null
+              ? _completionRouteResult!.distanceMeters! / 1000
+              : adjustedResult.distanceKm,
+        );
+        await RouteRatingService.saveRating(
+          result: adjustedResult,
+          rating: rating,
+          tags: ratingTags,
+          completionPercent: progressFraction * 100,
+          distanceKm: adjustedResult.distanceKm,
+          durationSeconds: adjustedResult.durationSeconds,
+          qualityTier: adjustedResult.edgeMeta['quality_tier']?.toString(),
         );
         debugPrint('[CruiseMode] Route saved successfully!');
       }
-      // XP/Level/Badges synchronisieren
-      final gamResult = await GamificationService.calculateAndSync();
-      if (mounted && gamResult.newBadgeIds.isNotEmpty) {
-        final badgeNames = gamResult.newBadges.map((b) => b.emoji).join(' ');
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Neues Badge: $badgeNames'),
-            backgroundColor: const Color(0xFFFFD700),
-            duration: const Duration(seconds: 3),
-          ),
+      // XP/Level/Badges synchronisieren (nur wenn über Minimum-Schwelle)
+      if (!skipXpSync) {
+        final gamResult = await GamificationService.calculateAndSync();
+        return CruiseCompletionActionResult(
+          success: true,
+          newBadgeEmojis: gamResult.newBadges
+              .map((badge) => badge.emoji)
+              .toList(),
+          levelUp:
+              previousLevel != null && gamResult.level.level > previousLevel,
+          newLevel: gamResult.level.level,
+        );
+      } else {
+        debugPrint(
+          '[CruiseMode] XP-Sync übersprungen (unter Minimum-Schwelle)',
         );
       }
+      return const CruiseCompletionActionResult(success: true);
     } catch (e, stack) {
       debugPrint('Route speichern / XP sync fehlgeschlagen: $e');
       debugPrint('Stack: $stack');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Fehler beim Speichern: $e'),
+          const SnackBar(
+            content: Text('Fehler beim Speichern. Bitte erneut versuchen.'),
             backgroundColor: Colors.red,
           ),
         );
       }
+      return const CruiseCompletionActionResult(success: false);
     }
   }
 
   void _resetAfterCompletion() {
     CruiseModePage.isFullscreen.value = false;
+    _clearAccessLegState();
     _safeSetState(() {
       _isRouteConfirmed = false;
       _isCameraLocked = false;
       _totalDistanceDriven = 0.0;
+      _sessionRouteStartIndexInActiveRoute = 0;
+      _navigationStartTime = null;
+      _isExistingRouteSession = false;
     });
   }
 
   // ═══════════════════════ DIALOGS ══════════════════════════════════════════
 
-  void _showError(String message) {
+  void _showError(String message, {bool isCritical = false}) {
     if (!mounted || _disposed) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Fehler: $message'), backgroundColor: Colors.red),
-    );
+    debugPrint('[CruiseMode] Error: $message (critical=$isCritical)');
+
+    // Für kritische Fehler (Route konnte nicht generiert werden): Snackbar zeigen
+    if (isCritical) {
+      final messenger = ScaffoldMessenger.of(context);
+      messenger.clearSnackBars();
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(message, style: const TextStyle(color: Colors.white)),
+          backgroundColor: const Color(0xFFFF3B30),
+          behavior: SnackBarBehavior.floating,
+          margin: const EdgeInsets.all(16),
+          duration: const Duration(seconds: 4),
+          action: SnackBarAction(
+            label: 'OK',
+            textColor: Colors.white,
+            onPressed: () {},
+          ),
+        ),
+      );
+    }
   }
 }
 
-/// Apple-Style Heading-Kegel (Idle-Marker): halbtransparenter blauer Fächer.
-class _HeadingConePainter extends CustomPainter {
+class _CruiseCompletionSnapshot {
+  const _CruiseCompletionSnapshot({
+    required this.distanceKm,
+    required this.durationText,
+    required this.curves,
+    required this.xpEarned,
+    required this.coordinates,
+    required this.isEarlyStop,
+    required this.belowMinimum,
+  });
+
+  final double distanceKm;
+  final String durationText;
+  final int curves;
+  final int xpEarned;
+  final List<List<double>> coordinates;
+  final bool isEarlyStop;
+  final bool belowMinimum;
+}
+
+/// iOS Apple-Maps Puck: Kompakter blauer Punkt + dezenter Richtungskeil.
+/// Exakt wie Apple Karten — der Pfeil ist ein kleines spitzes Dreieck
+/// unterhalb des Punkts, alles auf 44×44 Canvas zentriert.
+class _AppleMapsPuckPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = const Color(0xFF007AFF).withValues(alpha: 0.18)
-      ..style = PaintingStyle.fill;
-
     final cx = size.width / 2;
     final cy = size.height / 2;
+    const blue = Color(0xFF007AFF);
 
-    final p = ui.Path()
-      ..moveTo(cx, cy)
-      ..lineTo(cx - 12, cy - 26)
-      ..quadraticBezierTo(cx, cy - 32, cx + 12, cy - 26)
+    // ── 1. Richtungskeil (kleines Dreieck, zeigt nach oben = Fahrtrichtung) ──
+    final conePaint = Paint()
+      ..color = blue.withValues(alpha: 0.55)
+      ..style = PaintingStyle.fill;
+    final cone = ui.Path()
+      ..moveTo(cx, cy - 18) // Spitze
+      ..lineTo(cx - 5.5, cy - 7) // Links
+      ..lineTo(cx + 5.5, cy - 7) // Rechts
       ..close();
+    canvas.drawPath(cone, conePaint);
 
-    canvas.drawPath(p, paint);
+    // ── 2. Weißer Ring (Schatten + Rand) ──
+    final shadowPaint = Paint()
+      ..color = const Color(0x40000000)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2.5);
+    canvas.drawCircle(Offset(cx, cy), 10.5, shadowPaint);
+
+    final whitePaint = Paint()
+      ..color = const Color(0xFFFFFFFF)
+      ..style = PaintingStyle.fill;
+    canvas.drawCircle(Offset(cx, cy), 10.5, whitePaint);
+
+    // ── 3. Blauer Kern ──
+    final corePaint = Paint()
+      ..color = blue
+      ..style = PaintingStyle.fill;
+    canvas.drawCircle(Offset(cx, cy), 7.5, corePaint);
   }
 
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
-/// Apple-Maps-Style Navigations-Pfeil (blaues Dreieck mit weißem Rand).
-class _AppleNavArrowPainter extends CustomPainter {
+/// Standard Navigations-Pfeil für Web/Android/macOS (bisheriges Design).
+class _NavigationArrowPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final cx = size.width / 2;
     final cy = size.height / 2;
 
-    // Weißer Rand (Shadow)
-    final borderPaint = Paint()
-      ..color = Colors.white
-      ..style = PaintingStyle.fill;
-
-    final borderPath = ui.Path()
-      ..moveTo(cx, cy - 20)
-      ..lineTo(cx + 13, cy + 14)
-      ..lineTo(cx, cy + 7)
-      ..lineTo(cx - 13, cy + 14)
-      ..close();
-    canvas.drawPath(borderPath, borderPaint);
-
-    // Blauer Kern
-    final fillPaint = Paint()
+    // Pfeil-Spitze (zeigt nach oben = Fahrtrichtung)
+    final arrowPaint = Paint()
       ..color = const Color(0xFF007AFF)
       ..style = PaintingStyle.fill;
 
-    final fillPath = ui.Path()
-      ..moveTo(cx, cy - 17)
-      ..lineTo(cx + 10, cy + 12)
-      ..lineTo(cx, cy + 6)
-      ..lineTo(cx - 10, cy + 12)
+    final arrow = ui.Path()
+      ..moveTo(cx, cy - 32) // Spitze oben
+      ..lineTo(cx - 10, cy - 12) // Links unten
+      ..quadraticBezierTo(cx, cy - 16, cx + 10, cy - 12) // Kurve unten
       ..close();
-    canvas.drawPath(fillPath, fillPaint);
+
+    // Schatten für den Pfeil
+    canvas.drawShadow(arrow, const Color(0x60000000), 3.0, false);
+    canvas.drawPath(arrow, arrowPaint);
+
+    // Weißer Rand um den Pfeil für bessere Sichtbarkeit
+    final borderPaint = Paint()
+      ..color = const Color(0xCCFFFFFF)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.5;
+    canvas.drawPath(arrow, borderPaint);
   }
 
   @override

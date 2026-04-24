@@ -13,11 +13,14 @@ class AnalyticsPage extends StatefulWidget {
   State<AnalyticsPage> createState() => _AnalyticsPageState();
 }
 
-class _AnalyticsPageState extends State<AnalyticsPage> with SingleTickerProviderStateMixin {
+class _AnalyticsPageState extends State<AnalyticsPage>
+    with SingleTickerProviderStateMixin {
   @override
   void didUpdateWidget(AnalyticsPage old) {
     super.didUpdateWidget(old);
-    if (widget.refreshKey != old.refreshKey && widget.refreshKey > 0) _loadData();
+    if (widget.refreshKey != old.refreshKey && widget.refreshKey > 0) {
+      _loadData();
+    }
   }
 
   late TabController _tabController;
@@ -32,8 +35,6 @@ class _AnalyticsPageState extends State<AnalyticsPage> with SingleTickerProvider
   List<SavedRoute> _allRoutes = [];
 
   List<double> _weeklyChartData = List.filled(7, 0);
-  List<double> _weeklyRawKm = List.filled(7, 0);
-  List<double> _weeklyRawXp = List.filled(7, 0);
   final List<String> _weeklyLabels = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
 
   // Streak
@@ -43,19 +44,32 @@ class _AnalyticsPageState extends State<AnalyticsPage> with SingleTickerProvider
   double _thisMonthKm = 0;
   double _lastMonthKm = 0;
   int _thisMonthRoutes = 0;
-  int _lastMonthRoutes = 0;
-  double _thisYearKm = 0;
-  double _lastYearKm = 0;
-  int _thisYearRoutes = 0;
-  int _lastYearRoutes = 0;
+  // Wochendaten (neu)
+  double _weeklyTotalKm = 0;
+  double _weeklyTotalXp = 0;
+  int _weeklyRouteCount = 0;
+  double _weeklyTotalTime = 0; // Sekunden
+  double _lastWeekTotalKm = 0;
+  double _lastWeekTotalXp = 0;
+  double _lastWeekTotalTime = 0; // Sekunden
+
+  // Monatsdaten (neu)
+  double _thisMonthXp = 0;
+  double _lastMonthXp = 0;
+  double _thisMonthTime = 0; // Sekunden
+  double _lastMonthTime = 0; // Sekunden
 
   // Monatliche Chart-Daten (12 Monate)
   List<double> _monthlyChartData = List.filled(12, 0);
-
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 4, vsync: this);
+    _tabController.addListener(() {
+      if (mounted && !_tabController.indexIsChanging) {
+        setState(() {});
+      }
+    });
     _loadData();
   }
 
@@ -70,9 +84,15 @@ class _AnalyticsPageState extends State<AnalyticsPage> with SingleTickerProvider
     try {
       final gamResult = await GamificationService.calculateAndSync();
       final routes = await SavedRoutesService.getUserRoutes();
+      final rideRoutes = routes
+          .where((route) => route.isDrivenSession)
+          .toList();
 
       final now = DateTime.now();
-      final weekStart = now.subtract(Duration(days: now.weekday - 1));
+      final todayStart = DateTime(now.year, now.month, now.day);
+      final weekStart = todayStart.subtract(
+        Duration(days: todayStart.weekday - 1),
+      );
       final weeklyKm = List<double>.filled(7, 0);
       final weeklyXp = List<double>.filled(7, 0);
 
@@ -80,13 +100,17 @@ class _AnalyticsPageState extends State<AnalyticsPage> with SingleTickerProvider
       final thisMonthStart = DateTime(now.year, now.month);
       final lastMonthStart = DateTime(now.year, now.month - 1);
       final thisYearStart = DateTime(now.year);
-      final lastYearStart = DateTime(now.year - 1);
-      final lastYearEnd = DateTime(now.year);
 
       double thisMonthKm = 0, lastMonthKm = 0;
-      int thisMonthRoutes = 0, lastMonthRoutes = 0;
-      double thisYearKm = 0, lastYearKm = 0;
-      int thisYearRoutes = 0, lastYearRoutes = 0;
+      int thisMonthRoutes = 0;
+
+      // Neue Tracking-Variablen
+      double weeklyTotalTime = 0, lastWeekTotalTime = 0;
+      double lastWeekKm = 0, lastWeekXp = 0;
+      int weekRouteCount = 0;
+      double thisMonthXp = 0, lastMonthXp = 0;
+      double thisMonthTime = 0, lastMonthTime = 0;
+      final lastWeekStart = weekStart.subtract(const Duration(days: 7));
 
       // Monatliche km (dieses Jahr)
       final monthlyKm = List<double>.filled(12, 0);
@@ -94,42 +118,61 @@ class _AnalyticsPageState extends State<AnalyticsPage> with SingleTickerProvider
       // Streak-Berechnung
       final driveDays = <DateTime>{};
 
-      for (final r in routes) {
+      for (final r in rideRoutes) {
+        final createdAt = r.createdAt.toLocal();
+        final routeDay = DateTime(
+          createdAt.year,
+          createdAt.month,
+          createdAt.day,
+        );
+        final actualDistanceKm = r.actualDistanceKm;
+
+        final routeDuration = r.durationSeconds ?? 0.0;
+        final routeXp = r.qualifiesForXpCredit
+            ? GamificationService.calculateRouteXp(
+                distanceKm: actualDistanceKm,
+                curves: (actualDistanceKm / 5).round(),
+                style: r.style,
+              )
+            : 0;
+
         // Wöchentliche Daten
-        if (r.createdAt.isAfter(weekStart)) {
-          final dayIndex = r.createdAt.weekday - 1;
+        if (!routeDay.isBefore(weekStart)) {
+          final dayIndex = createdAt.weekday - 1;
           if (dayIndex >= 0 && dayIndex < 7) {
-            weeklyKm[dayIndex] += r.distanceKm;
-            final estCurves = (r.distanceKm / 5).round();
-            weeklyXp[dayIndex] += GamificationService.calculateRouteXp(
-              distanceKm: r.distanceKm, curves: estCurves, style: r.style,
-            );
+            weeklyKm[dayIndex] += actualDistanceKm;
+            weeklyXp[dayIndex] += routeXp;
           }
+          weekRouteCount++;
+          weeklyTotalTime += routeDuration;
+        } else if (!routeDay.isBefore(lastWeekStart) &&
+            routeDay.isBefore(weekStart)) {
+          lastWeekKm += actualDistanceKm;
+          lastWeekXp += routeXp;
+          lastWeekTotalTime += routeDuration;
         }
 
         // Monatsdaten
-        if (!r.createdAt.isBefore(thisMonthStart)) {
-          thisMonthKm += r.distanceKm;
+        if (!createdAt.isBefore(thisMonthStart)) {
+          thisMonthKm += actualDistanceKm;
           thisMonthRoutes++;
-        } else if (!r.createdAt.isBefore(lastMonthStart) && r.createdAt.isBefore(thisMonthStart)) {
-          lastMonthKm += r.distanceKm;
-          lastMonthRoutes++;
+          thisMonthXp += routeXp;
+          thisMonthTime += routeDuration;
+        } else if (!createdAt.isBefore(lastMonthStart) &&
+            createdAt.isBefore(thisMonthStart)) {
+          lastMonthKm += actualDistanceKm;
+          lastMonthXp += routeXp;
+          lastMonthTime += routeDuration;
         }
 
-        // Jahresdaten
-        if (!r.createdAt.isBefore(thisYearStart)) {
-          thisYearKm += r.distanceKm;
-          thisYearRoutes++;
-          // Monatliche Aufschlüsselung
-          final monthIndex = r.createdAt.month - 1;
-          monthlyKm[monthIndex] += r.distanceKm;
-        } else if (!r.createdAt.isBefore(lastYearStart) && r.createdAt.isBefore(lastYearEnd)) {
-          lastYearKm += r.distanceKm;
-          lastYearRoutes++;
+        // Monatliche Aufschlüsselung (dieses Jahr, für Chart)
+        if (!createdAt.isBefore(thisYearStart)) {
+          final monthIndex = createdAt.month - 1;
+          monthlyKm[monthIndex] += actualDistanceKm;
         }
 
         // Streaktage
-        driveDays.add(DateTime(r.createdAt.year, r.createdAt.month, r.createdAt.day));
+        driveDays.add(routeDay);
       }
 
       // Streak zählen
@@ -145,14 +188,24 @@ class _AnalyticsPageState extends State<AnalyticsPage> with SingleTickerProvider
       }
 
       // Normalisierung
-      final maxXp = weeklyXp.reduce((a, b) => a > b ? a : b);
-      final normalizedWeekly = weeklyXp
-          .map((xp) => maxXp > 0 ? (xp / maxXp).clamp(0.0, 1.0) : 0.0)
+      final weeklyBarSource = weeklyKm.any((km) => km > 0)
+          ? weeklyKm
+          : weeklyXp;
+      final maxWeeklyValue = weeklyBarSource.reduce((a, b) => a > b ? a : b);
+      final normalizedWeekly = weeklyBarSource
+          .map(
+            (value) => maxWeeklyValue > 0
+                ? (value / maxWeeklyValue).clamp(0.0, 1.0)
+                : 0.0,
+          )
           .toList();
 
       final maxMonthlyKm = monthlyKm.reduce((a, b) => a > b ? a : b);
       final normalizedMonthly = monthlyKm
-          .map((km) => maxMonthlyKm > 0 ? (km / maxMonthlyKm).clamp(0.0, 1.0) : 0.0)
+          .map(
+            (km) =>
+                maxMonthlyKm > 0 ? (km / maxMonthlyKm).clamp(0.0, 1.0) : 0.0,
+          )
           .toList();
 
       if (mounted) {
@@ -163,20 +216,24 @@ class _AnalyticsPageState extends State<AnalyticsPage> with SingleTickerProvider
           _totalXp = gamResult.totalXp;
           _level = gamResult.level;
           _earnedBadges = gamResult.earnedBadges;
-          _allRoutes = routes;
+          _allRoutes = rideRoutes;
           _weeklyChartData = normalizedWeekly;
-          _weeklyRawKm = weeklyKm;
-          _weeklyRawXp = weeklyXp;
           _streakDays = streak;
           _thisMonthKm = thisMonthKm;
           _lastMonthKm = lastMonthKm;
           _thisMonthRoutes = thisMonthRoutes;
-          _lastMonthRoutes = lastMonthRoutes;
-          _thisYearKm = thisYearKm;
-          _lastYearKm = lastYearKm;
-          _thisYearRoutes = thisYearRoutes;
-          _lastYearRoutes = lastYearRoutes;
           _monthlyChartData = normalizedMonthly;
+          _weeklyTotalKm = weeklyKm.fold(0.0, (a, b) => a + b);
+          _weeklyTotalXp = weeklyXp.fold(0.0, (a, b) => a + b);
+          _weeklyRouteCount = weekRouteCount;
+          _weeklyTotalTime = weeklyTotalTime;
+          _lastWeekTotalKm = lastWeekKm;
+          _lastWeekTotalXp = lastWeekXp;
+          _lastWeekTotalTime = lastWeekTotalTime;
+          _thisMonthXp = thisMonthXp;
+          _lastMonthXp = lastMonthXp;
+          _thisMonthTime = thisMonthTime;
+          _lastMonthTime = lastMonthTime;
           _loading = false;
         });
       }
@@ -192,14 +249,19 @@ class _AnalyticsPageState extends State<AnalyticsPage> with SingleTickerProvider
       backgroundColor: const Color(0xFF0B0E14),
       body: SafeArea(
         child: _loading
-            ? const Center(child: CircularProgressIndicator(color: Color(0xFFFF3B30)))
+            ? const Center(
+                child: CircularProgressIndicator(color: Color(0xFFFF3B30)),
+              )
             : RefreshIndicator(
                 onRefresh: _loadData,
                 color: const Color(0xFFFF3B30),
                 child: SingleChildScrollView(
                   physics: const AlwaysScrollableScrollPhysics(),
                   child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 10.0),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 20.0,
+                      vertical: 10.0,
+                    ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
@@ -230,9 +292,19 @@ class _AnalyticsPageState extends State<AnalyticsPage> with SingleTickerProvider
     return const Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('Analytics', style: TextStyle(fontSize: 32, fontWeight: FontWeight.bold, color: Colors.white)),
+        Text(
+          'Analytics',
+          style: TextStyle(
+            fontSize: 32,
+            fontWeight: FontWeight.bold,
+            color: Colors.white,
+          ),
+        ),
         SizedBox(height: 4),
-        Text('Deine Fahr-Statistiken', style: TextStyle(fontSize: 14, color: Color(0xFFA0AEC0))),
+        Text(
+          'Deine Fahr-Statistiken',
+          style: TextStyle(fontSize: 14, color: Color(0xFFA0AEC0)),
+        ),
       ],
     );
   }
@@ -254,11 +326,20 @@ class _AnalyticsPageState extends State<AnalyticsPage> with SingleTickerProvider
                 width: 42,
                 height: 42,
                 decoration: BoxDecoration(
-                  gradient: const LinearGradient(colors: [Color(0xFFFF5252), Color(0xFFD32F2F)]),
+                  gradient: const LinearGradient(
+                    colors: [Color(0xFFFF5252), Color(0xFFD32F2F)],
+                  ),
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: Center(
-                  child: Text('${_level.level}', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18)),
+                  child: Text(
+                    '${_level.level}',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 18,
+                    ),
+                  ),
                 ),
               ),
               const SizedBox(width: 12),
@@ -266,14 +347,31 @@ class _AnalyticsPageState extends State<AnalyticsPage> with SingleTickerProvider
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(_level.name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
-                    Text('$_totalXp XP gesamt', style: const TextStyle(color: Color(0xFFA0AEC0), fontSize: 12)),
+                    Text(
+                      _level.name,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                      ),
+                    ),
+                    Text(
+                      '$_totalXp XP gesamt',
+                      style: const TextStyle(
+                        color: Color(0xFFA0AEC0),
+                        fontSize: 12,
+                      ),
+                    ),
                   ],
                 ),
               ),
               Text(
                 '${(_level.progress * 100).toStringAsFixed(0)}%',
-                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 20),
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 20,
+                ),
               ),
             ],
           ),
@@ -283,7 +381,9 @@ class _AnalyticsPageState extends State<AnalyticsPage> with SingleTickerProvider
             child: LinearProgressIndicator(
               value: _level.progress,
               backgroundColor: Colors.grey[800],
-              valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFFFF3B30)),
+              valueColor: const AlwaysStoppedAnimation<Color>(
+                Color(0xFFFF3B30),
+              ),
               minHeight: 6,
             ),
           ),
@@ -324,7 +424,10 @@ class _AnalyticsPageState extends State<AnalyticsPage> with SingleTickerProvider
               borderRadius: BorderRadius.circular(12),
             ),
             child: Center(
-              child: Text(hasStreak ? '🔥' : '❄️', style: const TextStyle(fontSize: 22)),
+              child: Text(
+                hasStreak ? '🔥' : '❄️',
+                style: const TextStyle(fontSize: 22),
+              ),
             ),
           ),
           const SizedBox(width: 12),
@@ -333,14 +436,23 @@ class _AnalyticsPageState extends State<AnalyticsPage> with SingleTickerProvider
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  hasStreak ? '$_streakDays Tage Streak' : 'Kein aktiver Streak',
-                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15),
+                  hasStreak
+                      ? '$_streakDays Tage Streak'
+                      : 'Kein aktiver Streak',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 15,
+                  ),
                 ),
                 Text(
                   hasStreak
                       ? 'Fahre heute um den Streak zu halten!'
                       : 'Starte eine Fahrt für deinen Streak',
-                  style: const TextStyle(color: Color(0xFFA0AEC0), fontSize: 11),
+                  style: const TextStyle(
+                    color: Color(0xFFA0AEC0),
+                    fontSize: 11,
+                  ),
                 ),
               ],
             ),
@@ -349,12 +461,18 @@ class _AnalyticsPageState extends State<AnalyticsPage> with SingleTickerProvider
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
               decoration: BoxDecoration(
-                gradient: const LinearGradient(colors: [Color(0xFFFF5252), Color(0xFFD32F2F)]),
+                gradient: const LinearGradient(
+                  colors: [Color(0xFFFF5252), Color(0xFFD32F2F)],
+                ),
                 borderRadius: BorderRadius.circular(12),
               ),
               child: Text(
                 '${_streakDays}d',
-                style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
             ),
         ],
@@ -377,8 +495,18 @@ class _AnalyticsPageState extends State<AnalyticsPage> with SingleTickerProvider
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Text('Letzte Fahrten', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
-              Text('${recentRoutes.length} von $_totalRoutes', style: const TextStyle(color: Color(0xFFA0AEC0), fontSize: 12)),
+              const Text(
+                'Letzte Fahrten',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              Text(
+                '${recentRoutes.length} von $_totalRoutes',
+                style: const TextStyle(color: Color(0xFFA0AEC0), fontSize: 12),
+              ),
             ],
           ),
           const SizedBox(height: 12),
@@ -388,36 +516,68 @@ class _AnalyticsPageState extends State<AnalyticsPage> with SingleTickerProvider
               child: Row(
                 children: [
                   Container(
-                    width: 36, height: 36,
+                    width: 36,
+                    height: 36,
                     decoration: BoxDecoration(
                       color: const Color(0xFFFF3B30).withValues(alpha: 0.15),
                       borderRadius: BorderRadius.circular(10),
                     ),
-                    child: Center(child: Text(route.styleEmoji, style: const TextStyle(fontSize: 16))),
+                    child: Center(
+                      child: Text(
+                        route.styleEmoji,
+                        style: const TextStyle(fontSize: 16),
+                      ),
+                    ),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(route.name ?? route.style, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 13), overflow: TextOverflow.ellipsis),
+                        Text(
+                          route.name ?? route.style,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w600,
+                            fontSize: 13,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
                         Text(
                           '${route.formattedDistance} · ${route.formattedDuration}',
-                          style: const TextStyle(color: Color(0xFFA0AEC0), fontSize: 11),
+                          style: const TextStyle(
+                            color: Color(0xFFA0AEC0),
+                            fontSize: 11,
+                          ),
                         ),
                       ],
                     ),
                   ),
                   Text(
                     _formatDateShort(route.createdAt),
-                    style: const TextStyle(color: Color(0xFFA0AEC0), fontSize: 11),
+                    style: const TextStyle(
+                      color: Color(0xFFA0AEC0),
+                      fontSize: 11,
+                    ),
                   ),
                   if (route.rating != null) ...[
                     const SizedBox(width: 8),
-                    Row(children: [
-                      const Icon(Icons.star, color: Color(0xFFFFD700), size: 14),
-                      Text('${route.rating}', style: const TextStyle(color: Colors.white, fontSize: 12)),
-                    ]),
+                    Row(
+                      children: [
+                        const Icon(
+                          Icons.star,
+                          color: Color(0xFFFFD700),
+                          size: 14,
+                        ),
+                        Text(
+                          '${route.rating}',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
+                    ),
                   ],
                 ],
               ),
@@ -444,10 +604,34 @@ class _AnalyticsPageState extends State<AnalyticsPage> with SingleTickerProvider
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
       children: [
-        _buildAnalyticsCard('Fahrten', '$_totalRoutes', Icons.directions_car, const Color(0xFFFF3B30)),
-        _buildAnalyticsCard('Distanz', _totalDistanceKm < 1 ? '0 km' : '${_totalDistanceKm.toStringAsFixed(0)} km', Icons.map, const Color(0xFF00E5FF)),
-        _buildAnalyticsCard('Fahrzeit', _totalHours < 1 ? '${(_totalHours * 60).toStringAsFixed(0)} min' : '${_totalHours.toStringAsFixed(1)} h', Icons.timer, const Color(0xFFFFD700)),
-        _buildAnalyticsCard('XP', '$_totalXp', Icons.bolt, const Color(0xFFB026FF)),
+        _buildAnalyticsCard(
+          'Fahrten',
+          '$_totalRoutes',
+          Icons.directions_car,
+          const Color(0xFFFF3B30),
+        ),
+        _buildAnalyticsCard(
+          'Distanz',
+          _totalDistanceKm < 1
+              ? '0 km'
+              : '${_totalDistanceKm.toStringAsFixed(0)} km',
+          Icons.map,
+          const Color(0xFF00E5FF),
+        ),
+        _buildAnalyticsCard(
+          'Fahrzeit',
+          _totalHours < 1
+              ? '${(_totalHours * 60).toStringAsFixed(0)} min'
+              : '${_totalHours.toStringAsFixed(1)} h',
+          Icons.timer,
+          const Color(0xFFFFD700),
+        ),
+        _buildAnalyticsCard(
+          'XP',
+          '$_totalXp',
+          Icons.bolt,
+          const Color(0xFFB026FF),
+        ),
       ],
     );
   }
@@ -456,14 +640,23 @@ class _AnalyticsPageState extends State<AnalyticsPage> with SingleTickerProvider
     return Column(
       children: [
         Container(
-          decoration: BoxDecoration(color: const Color(0xFF1C1F26), borderRadius: BorderRadius.circular(16)),
+          decoration: BoxDecoration(
+            color: const Color(0xFF1C1F26),
+            borderRadius: BorderRadius.circular(16),
+          ),
           child: TabBar(
             controller: _tabController,
-            indicator: BoxDecoration(color: const Color(0xFFFF3B30), borderRadius: BorderRadius.circular(12)),
+            indicator: BoxDecoration(
+              color: const Color(0xFFFF3B30),
+              borderRadius: BorderRadius.circular(12),
+            ),
             indicatorSize: TabBarIndicatorSize.tab,
             labelColor: Colors.white,
             unselectedLabelColor: const Color(0xFFA0AEC0),
-            labelStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 11),
+            labelStyle: const TextStyle(
+              fontWeight: FontWeight.bold,
+              fontSize: 11,
+            ),
             isScrollable: false,
             tabs: const [
               Tab(icon: Icon(Icons.insights, size: 16), text: 'Woche'),
@@ -474,51 +667,206 @@ class _AnalyticsPageState extends State<AnalyticsPage> with SingleTickerProvider
           ),
         ),
         const SizedBox(height: 16),
-        SizedBox(
-          height: MediaQuery.of(context).size.height * 0.5,
-          child: TabBarView(
-            controller: _tabController,
-            children: [_buildOverviewTab(), _buildMonthlyTab(), _buildRoutesTab(), _buildBadgesTab()],
-          ),
-        ),
+        _buildSelectedTabContent(),
       ],
     );
   }
 
+  Widget _buildSelectedTabContent() {
+    switch (_tabController.index) {
+      case 0:
+        return _buildOverviewTab();
+      case 1:
+        return _buildMonthlyTab();
+      case 2:
+        return _buildRoutesTab();
+      case 3:
+      default:
+        return _buildBadgesTab();
+    }
+  }
+
   Widget _buildOverviewTab() {
-    final totalWeekKm = _weeklyRawKm.fold<double>(0, (a, b) => a + b);
-    final totalWeekXp = _weeklyRawXp.fold<double>(0, (a, b) => a + b);
-    final weekRoutes = _allRoutes.where((r) {
-      final weekStart = DateTime.now().subtract(Duration(days: DateTime.now().weekday - 1));
-      return r.createdAt.isAfter(weekStart);
-    }).length;
+    final now = DateTime.now();
+    final kmDelta = _weeklyTotalKm - _lastWeekTotalKm;
+    final xpDelta = _weeklyTotalXp - _lastWeekTotalXp;
+    final timeDelta = _weeklyTotalTime - _lastWeekTotalTime;
 
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
         color: const Color(0xFF1C1F26),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('Fahraktivität diese Woche', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
-          const SizedBox(height: 24),
-          Expanded(
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: List.generate(7, (i) => _buildChartBar(_weeklyLabels[i], _weeklyChartData[i], i == DateTime.now().weekday - 1)),
-            ),
+          // Header
+          const Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'Diese Woche',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              Text(
+                'vs. letzte',
+                style: TextStyle(color: Color(0xFF8A94A6), fontSize: 12),
+              ),
+            ],
           ),
           const SizedBox(height: 16),
+          // KPI Cards
           Row(
-            mainAxisAlignment: MainAxisAlignment.spaceAround,
             children: [
-              _buildSummaryItem('Routen', '$weekRoutes', Icons.route),
-              _buildSummaryItem('Km', totalWeekKm.toStringAsFixed(0), Icons.straighten),
-              _buildSummaryItem('XP', totalWeekXp.toStringAsFixed(0), Icons.bolt),
+              Expanded(
+                child: _buildKpiCard(
+                  value: _weeklyTotalKm < 10
+                      ? '${_weeklyTotalKm.toStringAsFixed(1)} km'
+                      : '${_weeklyTotalKm.toStringAsFixed(0)} km',
+                  label: 'Distanz',
+                  delta: _formatKpiDelta(kmDelta, suffix: ''),
+                  deltaPositive: kmDelta >= 0,
+                  deltaZero: kmDelta == 0,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _buildKpiCard(
+                  value: _formatDurationShort(_weeklyTotalTime),
+                  label: 'Fahrzeit',
+                  delta: _formatTimeDelta(timeDelta),
+                  deltaPositive: timeDelta >= 0,
+                  deltaZero: timeDelta == 0,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _buildKpiCard(
+                  value: _weeklyTotalXp.toStringAsFixed(0),
+                  label: 'XP',
+                  delta: _formatKpiDelta(xpDelta, suffix: ''),
+                  deltaPositive: xpDelta >= 0,
+                  deltaZero: xpDelta == 0,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 18),
+          // Mini bar chart + route count
+          Row(
+            children: [
+              Expanded(
+                child: SizedBox(
+                  height: 60,
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: List.generate(7, (i) {
+                      final isToday = i == now.weekday - 1;
+                      final barValue = _weeklyChartData[i].clamp(0.0, 1.0);
+                      return Expanded(
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 3),
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.end,
+                            children: [
+                              Expanded(
+                                child: Align(
+                                  alignment: Alignment.bottomCenter,
+                                  child: FractionallySizedBox(
+                                    heightFactor: barValue > 0
+                                        ? barValue
+                                        : 0.06,
+                                    child: Container(
+                                      decoration: BoxDecoration(
+                                        gradient: isToday
+                                            ? const LinearGradient(
+                                                colors: [
+                                                  Color(0xFFFF3B30),
+                                                  Color(0xFFFF6B35),
+                                                ],
+                                                begin: Alignment.topCenter,
+                                                end: Alignment.bottomCenter,
+                                              )
+                                            : null,
+                                        color: isToday
+                                            ? null
+                                            : const Color(0xFF2A2F3A),
+                                        borderRadius: BorderRadius.circular(4),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                _weeklyLabels[i],
+                                style: TextStyle(
+                                  color: isToday
+                                      ? Colors.white
+                                      : const Color(0xFF8A94A6),
+                                  fontSize: 9,
+                                  fontWeight: isToday
+                                      ? FontWeight.bold
+                                      : FontWeight.normal,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    }),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 14),
+              Text(
+                '$_weeklyRouteCount Fahrten',
+                style: const TextStyle(
+                  color: Color(0xFF8A94A6),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          // Streak line
+          Row(
+            children: [
+              Expanded(
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(2),
+                  child: LinearProgressIndicator(
+                    value: _streakDays > 0
+                        ? (_streakDays / 7).clamp(0.0, 1.0)
+                        : 0.0,
+                    backgroundColor: const Color(0xFF2A2F3A),
+                    valueColor: const AlwaysStoppedAnimation<Color>(
+                      Color(0xFFFF3B30),
+                    ),
+                    minHeight: 3,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Text(
+                _streakDays > 0
+                    ? '\u{1F525} $_streakDays Tage Streak'
+                    : 'Kein Streak',
+                style: TextStyle(
+                  color: _streakDays > 0
+                      ? Colors.white
+                      : const Color(0xFF8A94A6),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
             ],
           ),
         ],
@@ -529,55 +877,175 @@ class _AnalyticsPageState extends State<AnalyticsPage> with SingleTickerProvider
   // ── Monats-/Jahresübersicht Tab ──────────────────────────────────────
 
   Widget _buildMonthlyTab() {
-    final monthNames = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dez'];
+    const monthLabels = [
+      'J',
+      'F',
+      'M',
+      'A',
+      'M',
+      'J',
+      'J',
+      'A',
+      'S',
+      'O',
+      'N',
+      'D',
+    ];
     final now = DateTime.now();
-    final currentMonthName = monthNames[now.month - 1];
+    final kmDelta = _thisMonthKm - _lastMonthKm;
+    final xpDelta = _thisMonthXp - _lastMonthXp;
+    final timeDelta = _thisMonthTime - _lastMonthTime;
+    final avgKmPerRoute = _thisMonthRoutes > 0
+        ? _thisMonthKm / _thisMonthRoutes
+        : 0.0;
 
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
         color: const Color(0xFF1C1F26),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('Monats- & Jahresübersicht', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
-          const SizedBox(height: 16),
-
-          // Monatsvergleich
-          _buildComparisonRow(
-            title: '$currentMonthName vs. Vormonat',
-            icon: Icons.calendar_today,
-            currentKm: _thisMonthKm,
-            previousKm: _lastMonthKm,
-            currentRoutes: _thisMonthRoutes,
-            previousRoutes: _lastMonthRoutes,
-          ),
-          const SizedBox(height: 12),
-
-          // Jahresvergleich
-          _buildComparisonRow(
-            title: '${now.year} vs. ${now.year - 1}',
-            icon: Icons.date_range,
-            currentKm: _thisYearKm,
-            previousKm: _lastYearKm,
-            currentRoutes: _thisYearRoutes,
-            previousRoutes: _lastYearRoutes,
+          // Header
+          const Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'Dieser Monat',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              Text(
+                'vs. letzter',
+                style: TextStyle(color: Color(0xFF8A94A6), fontSize: 12),
+              ),
+            ],
           ),
           const SizedBox(height: 16),
-
-          // Monatliches Balkendiagramm
-          const Text('Km pro Monat (${2026})', style: TextStyle(color: Color(0xFFA0AEC0), fontSize: 12)),
-          const SizedBox(height: 12),
-          Expanded(
+          // KPI Cards
+          Row(
+            children: [
+              Expanded(
+                child: _buildKpiCard(
+                  value: _thisMonthKm < 10
+                      ? '${_thisMonthKm.toStringAsFixed(1)} km'
+                      : '${_thisMonthKm.toStringAsFixed(0)} km',
+                  label: 'Distanz',
+                  delta: _formatKpiDelta(kmDelta, suffix: ''),
+                  deltaPositive: kmDelta >= 0,
+                  deltaZero: kmDelta == 0,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _buildKpiCard(
+                  value: _formatDurationShort(_thisMonthTime),
+                  label: 'Fahrzeit',
+                  delta: _formatTimeDelta(timeDelta),
+                  deltaPositive: timeDelta >= 0,
+                  deltaZero: timeDelta == 0,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _buildKpiCard(
+                  value: _thisMonthXp >= 1000
+                      ? '${(_thisMonthXp / 1000).toStringAsFixed(1)}k'
+                      : _thisMonthXp.toStringAsFixed(0),
+                  label: 'XP',
+                  delta: _formatKpiDelta(xpDelta, suffix: ''),
+                  deltaPositive: xpDelta >= 0,
+                  deltaZero: xpDelta == 0,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          // Summary line
+          Row(
+            children: [
+              Text(
+                '$_thisMonthRoutes Fahrten',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const Text(
+                '  \u00b7  ',
+                style: TextStyle(color: Color(0xFF8A94A6), fontSize: 13),
+              ),
+              Text(
+                '\u00d8 ${avgKmPerRoute.toStringAsFixed(1)} km/Fahrt',
+                style: const TextStyle(color: Color(0xFF8A94A6), fontSize: 13),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          // Yearly mini chart (12 bars)
+          SizedBox(
+            height: 50,
             child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
               crossAxisAlignment: CrossAxisAlignment.end,
               children: List.generate(12, (i) {
                 final isCurrentMonth = i == now.month - 1;
-                return _buildChartBar(monthNames[i], _monthlyChartData[i], isCurrentMonth);
+                final barValue = _monthlyChartData[i].clamp(0.0, 1.0);
+                return Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 2),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        Expanded(
+                          child: Align(
+                            alignment: Alignment.bottomCenter,
+                            child: FractionallySizedBox(
+                              heightFactor: barValue > 0 ? barValue : 0.06,
+                              child: Container(
+                                decoration: BoxDecoration(
+                                  gradient: isCurrentMonth
+                                      ? const LinearGradient(
+                                          colors: [
+                                            Color(0xFFFF3B30),
+                                            Color(0xFFFF6B35),
+                                          ],
+                                          begin: Alignment.topCenter,
+                                          end: Alignment.bottomCenter,
+                                        )
+                                      : null,
+                                  color: isCurrentMonth
+                                      ? null
+                                      : const Color(0xFF2A2F3A),
+                                  borderRadius: BorderRadius.circular(3),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          monthLabels[i],
+                          style: TextStyle(
+                            color: isCurrentMonth
+                                ? Colors.white
+                                : const Color(0xFF8A94A6),
+                            fontSize: 8,
+                            fontWeight: isCurrentMonth
+                                ? FontWeight.bold
+                                : FontWeight.normal,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
               }),
             ),
           ),
@@ -586,262 +1054,382 @@ class _AnalyticsPageState extends State<AnalyticsPage> with SingleTickerProvider
     );
   }
 
-  Widget _buildComparisonRow({
-    required String title,
-    required IconData icon,
-    required double currentKm,
-    required double previousKm,
-    required int currentRoutes,
-    required int previousRoutes,
+  // ── KPI Card (shared by Week + Month) ──────────────────────────────
+
+  Widget _buildKpiCard({
+    required String value,
+    required String label,
+    required String delta,
+    required bool deltaPositive,
+    required bool deltaZero,
   }) {
-    final kmDiff = previousKm > 0 ? ((currentKm - previousKm) / previousKm * 100) : (currentKm > 0 ? 100 : 0);
-    final routeDiff = previousRoutes > 0 ? ((currentRoutes - previousRoutes) / previousRoutes * 100) : (currentRoutes > 0 ? 100 : 0);
-    final kmUp = kmDiff >= 0;
-    final routeUp = routeDiff >= 0;
+    final deltaColor = deltaZero
+        ? const Color(0xFF8A94A6)
+        : deltaPositive
+        ? const Color(0xFF4ADE80)
+        : const Color(0xFFFF6B6B);
 
     return Container(
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: const Color(0xFF0B0E14),
+        color: const Color(0xFF252A33),
         borderRadius: BorderRadius.circular(14),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              Icon(icon, color: const Color(0xFFFF3B30), size: 16),
-              const SizedBox(width: 8),
-              Text(title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
-            ],
+          Text(
+            value,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 22,
+              fontWeight: FontWeight.bold,
+            ),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
           ),
-          const SizedBox(height: 10),
-          Row(
-            children: [
-              Expanded(
-                child: _buildComparisonStat(
-                  label: 'Kilometer',
-                  current: '${currentKm.toStringAsFixed(0)} km',
-                  diff: '${kmUp ? '+' : ''}${kmDiff.toStringAsFixed(0)}%',
-                  isPositive: kmUp,
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: _buildComparisonStat(
-                  label: 'Fahrten',
-                  current: '$currentRoutes',
-                  diff: '${routeUp ? '+' : ''}${routeDiff.toStringAsFixed(0)}%',
-                  isPositive: routeUp,
-                ),
-              ),
-            ],
+          const SizedBox(height: 4),
+          Text(
+            label,
+            style: const TextStyle(color: Color(0xFF8A94A6), fontSize: 12),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            delta,
+            style: TextStyle(
+              color: deltaColor,
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+            ),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildComparisonStat({
-    required String label,
-    required String current,
-    required String diff,
-    required bool isPositive,
-  }) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(label, style: const TextStyle(color: Color(0xFFA0AEC0), fontSize: 10)),
-        const SizedBox(height: 2),
-        Row(
-          children: [
-            Text(current, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
-            const SizedBox(width: 6),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-              decoration: BoxDecoration(
-                color: (isPositive ? Colors.green : Colors.red).withValues(alpha: 0.15),
-                borderRadius: BorderRadius.circular(6),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(
-                    isPositive ? Icons.arrow_upward : Icons.arrow_downward,
-                    color: isPositive ? Colors.green : Colors.red,
-                    size: 10,
-                  ),
-                  Text(
-                    diff,
-                    style: TextStyle(
-                      color: isPositive ? Colors.green : Colors.red,
-                      fontSize: 10,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ],
-    );
+  // ── Format helpers ─────────────────────────────────────────────────
+
+  String _formatDurationShort(double seconds) {
+    final totalMinutes = (seconds / 60).round();
+    if (totalMinutes < 60) return '${totalMinutes}m';
+    final h = totalMinutes ~/ 60;
+    final m = totalMinutes % 60;
+    return '${h}h ${m.toString().padLeft(2, '0')}m';
   }
 
-  Widget _buildSummaryItem(String label, String value, IconData icon) {
-    return Column(children: [
-      Icon(icon, color: const Color(0xFFFF3B30), size: 18),
-      const SizedBox(height: 4),
-      Text(value, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
-      Text(label, style: const TextStyle(color: Color(0xFFA0AEC0), fontSize: 11)),
-    ]);
+  String _formatKpiDelta(double delta, {String suffix = ''}) {
+    if (delta == 0) return '\u00b10$suffix';
+    final prefix = delta > 0 ? '+' : '';
+    return '$prefix${delta.toStringAsFixed(delta.abs() >= 10 ? 0 : 1)}$suffix';
+  }
+
+  String _formatTimeDelta(double deltaSeconds) {
+    if (deltaSeconds == 0) return '\u00b10:00';
+    final prefix = deltaSeconds > 0 ? '+' : '-';
+    final abs = deltaSeconds.abs();
+    final totalMinutes = (abs / 60).round();
+    final h = totalMinutes ~/ 60;
+    final m = totalMinutes % 60;
+    return '$prefix$h:${m.toString().padLeft(2, '0')}';
+  }
+
+  Widget _buildSectionCard({
+    required String title,
+    required String subtitle,
+    required Color accentColor,
+    required Widget child,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1C1F26),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: accentColor.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Container(
+                  width: 18,
+                  height: 18,
+                  decoration: BoxDecoration(
+                    border: Border.all(color: accentColor, width: 2),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      subtitle,
+                      style: const TextStyle(
+                        color: Color(0xFFA0AEC0),
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 20),
+          child,
+        ],
+      ),
+    );
   }
 
   Widget _buildRoutesTab() {
     if (_allRoutes.isEmpty) {
-      return Container(
-        decoration: BoxDecoration(color: const Color(0xFF1C1F26), borderRadius: BorderRadius.circular(20), border: Border.all(color: Colors.white.withValues(alpha: 0.05))),
-        child: const Center(child: Text('Noch keine Routen gefahren', style: TextStyle(color: Colors.grey))),
+      return _buildSectionCard(
+        title: 'Routen',
+        subtitle: 'Noch keine Routen gefahren.',
+        accentColor: const Color(0xFFFF3B30),
+        child: const Text(
+          'Sobald du Routen fährst, erscheinen sie hier in einer kompakten Übersicht.',
+          style: TextStyle(color: Color(0xFFA0AEC0), fontSize: 13),
+        ),
       );
     }
 
-    return Container(
-      decoration: BoxDecoration(color: const Color(0xFF1C1F26), borderRadius: BorderRadius.circular(20), border: Border.all(color: Colors.white.withValues(alpha: 0.05))),
-      child: ListView.builder(
-        padding: const EdgeInsets.all(12),
-        itemCount: _allRoutes.length.clamp(0, 15),
-        itemBuilder: (context, index) {
-          final route = _allRoutes[index];
-          final estimatedCurves = (route.distanceKm / 5).round();
-          final routeXp = GamificationService.calculateRouteXp(
-            distanceKm: route.distanceKm,
-            curves: estimatedCurves,
-            style: route.style,
-          );
-
-          return Container(
-            margin: const EdgeInsets.only(bottom: 8),
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(color: const Color(0xFF0B0E14), borderRadius: BorderRadius.circular(12)),
-            child: Row(children: [
-              Container(
-                width: 36, height: 36,
-                decoration: BoxDecoration(color: const Color(0xFFFF3B30).withValues(alpha: 0.2), borderRadius: BorderRadius.circular(10)),
-                child: Center(child: Text(route.styleEmoji, style: const TextStyle(fontSize: 16))),
-              ),
-              const SizedBox(width: 12),
-              Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text(route.name ?? route.style, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13), overflow: TextOverflow.ellipsis),
-                const SizedBox(height: 2),
-                Text('${route.formattedDistance} · ${route.formattedDuration} · $routeXp XP', style: const TextStyle(color: Colors.grey, fontSize: 11)),
-              ])),
-              if (route.rating != null)
-                Row(children: [
-                  const Icon(Icons.star, color: Color(0xFFFFD700), size: 14),
-                  const SizedBox(width: 2),
-                  Text('${route.rating}', style: const TextStyle(color: Colors.white, fontSize: 12)),
-                ]),
-            ]),
-          );
-        },
+    return _buildSectionCard(
+      title: 'Routen',
+      subtitle: 'Die letzten gefahrenen Routen als kompakte Liste.',
+      accentColor: const Color(0xFFFF3B30),
+      child: Column(
+        children: [
+          for (var i = 0; i < _allRoutes.take(10).length; i++) ...[
+            _buildRouteSummaryRow(_allRoutes[i]),
+            if (i < _allRoutes.take(10).length - 1) const SizedBox(height: 8),
+          ],
+        ],
       ),
     );
   }
 
   Widget _buildBadgesTab() {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(color: const Color(0xFF1C1F26), borderRadius: BorderRadius.circular(20), border: Border.all(color: Colors.white.withValues(alpha: 0.05))),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-          const Text('Badge Sammlung', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
-          Text('${_earnedBadges.length}/${app.Badge.all.length}', style: const TextStyle(color: Color(0xFFA0AEC0), fontSize: 13)),
-        ]),
-        const SizedBox(height: 4),
-        ClipRRect(
-          borderRadius: BorderRadius.circular(4),
-          child: LinearProgressIndicator(
-            value: app.Badge.all.isEmpty ? 0 : _earnedBadges.length / app.Badge.all.length,
-            backgroundColor: Colors.grey[800],
-            valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFFFF3B30)),
-            minHeight: 4,
+    return _buildSectionCard(
+      title: 'Badge Sammlung',
+      subtitle:
+          '${_earnedBadges.length}/${app.Badge.all.length} freigeschaltet.',
+      accentColor: const Color(0xFFFFD700),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: LinearProgressIndicator(
+              value: app.Badge.all.isEmpty
+                  ? 0
+                  : _earnedBadges.length / app.Badge.all.length,
+              backgroundColor: Colors.grey[800],
+              valueColor: const AlwaysStoppedAnimation<Color>(
+                Color(0xFFFF3B30),
+              ),
+              minHeight: 4,
+            ),
           ),
-        ),
-        const SizedBox(height: 16),
-        Expanded(
-          child: GridView.builder(
-            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 4, crossAxisSpacing: 8, mainAxisSpacing: 8, childAspectRatio: 0.8),
-            itemCount: app.Badge.all.length,
-            itemBuilder: (context, index) {
-              final badge = app.Badge.all[index];
-              final earned = _earnedBadges.any((b) => b.id == badge.id);
-              return Container(
-                decoration: BoxDecoration(
-                  color: earned ? const Color(0xFF2A2F3A) : const Color(0xFF14171C),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: earned ? const Color(0xFFFF3B30).withValues(alpha: 0.4) : Colors.white.withValues(alpha: 0.05)),
-                ),
-                child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-                  Text(badge.emoji, style: TextStyle(fontSize: 24, color: earned ? null : Colors.white.withValues(alpha: 0.15))),
-                  const SizedBox(height: 4),
-                  Text(badge.name, style: TextStyle(color: earned ? Colors.white : Colors.white.withValues(alpha: 0.2), fontSize: 8, fontWeight: FontWeight.w500), textAlign: TextAlign.center, maxLines: 2, overflow: TextOverflow.ellipsis),
-                ]),
+          const SizedBox(height: 16),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final crossAxisCount = constraints.maxWidth >= 700
+                  ? 4
+                  : constraints.maxWidth >= 500
+                  ? 3
+                  : 2;
+              final cardWidth =
+                  (constraints.maxWidth - (crossAxisCount - 1) * 8) /
+                  crossAxisCount;
+              return Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  for (final badge in app.Badge.all)
+                    SizedBox(width: cardWidth, child: _buildBadgeTile(badge)),
+                ],
               );
             },
           ),
-        ),
-      ]),
+        ],
+      ),
     );
   }
 
-  Widget _buildAnalyticsCard(String title, String value, IconData icon, Color color) {
+  Widget _buildRouteSummaryRow(SavedRoute route) {
+    final estimatedCurves = (route.distanceKm / 5).round();
+    final routeXp = GamificationService.calculateRouteXp(
+      distanceKm: route.distanceKm,
+      curves: estimatedCurves,
+      style: route.style,
+    );
+
     return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(color: const Color(0xFF1C1F26), borderRadius: BorderRadius.circular(16), border: Border.all(color: Colors.white.withValues(alpha: 0.05))),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Container(
-          padding: const EdgeInsets.all(10),
-          decoration: BoxDecoration(color: color.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(12)),
-          child: Icon(icon, color: color, size: 24),
-        ),
-        const Spacer(),
-        Text(value, style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
-        const SizedBox(height: 4),
-        Text(title, style: const TextStyle(color: Color(0xFFA0AEC0), fontSize: 13, fontWeight: FontWeight.w500)),
-      ]),
-    );
-  }
-
-  Widget _buildChartBar(String label, double value, bool isHighlighted) {
-    return Expanded(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 1),
-        child: Column(mainAxisAlignment: MainAxisAlignment.end, children: [
-          Expanded(
-            child: Container(
-              width: 10,
-              decoration: BoxDecoration(color: const Color(0xFF2D3748), borderRadius: BorderRadius.circular(6)),
-              child: Align(
-                alignment: Alignment.bottomCenter,
-                child: FractionallySizedBox(
-                  heightFactor: value.clamp(0.0, 1.0),
-                  child: Container(
-                    width: 10,
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        colors: isHighlighted ? [const Color(0xFFFF3B30), const Color(0xFFFF6B5B)] : [const Color(0xFF525252), const Color(0xFF3D3D3D)],
-                        begin: Alignment.topCenter, end: Alignment.bottomCenter,
-                      ),
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                  ),
-                ),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0B0E14),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(
+              color: const Color(0xFFFF3B30).withValues(alpha: 0.2),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Center(
+              child: Text(
+                route.styleEmoji,
+                style: const TextStyle(fontSize: 16),
               ),
             ),
           ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  route.name ?? route.style,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 13,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  '${route.formattedDistance} · ${route.formattedDuration} · $routeXp XP',
+                  style: const TextStyle(color: Colors.grey, fontSize: 11),
+                ),
+              ],
+            ),
+          ),
+          if (route.rating != null)
+            Row(
+              children: [
+                const Icon(Icons.star, color: Color(0xFFFFD700), size: 14),
+                const SizedBox(width: 2),
+                Text(
+                  '${route.rating}',
+                  style: const TextStyle(color: Colors.white, fontSize: 12),
+                ),
+              ],
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBadgeTile(app.Badge badge) {
+    final earned = _earnedBadges.any((b) => b.id == badge.id);
+    return Container(
+      decoration: BoxDecoration(
+        color: earned ? const Color(0xFF2A2F3A) : const Color(0xFF14171C),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: earned
+              ? const Color(0xFFFF3B30).withValues(alpha: 0.4)
+              : Colors.white.withValues(alpha: 0.05),
+        ),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Text(
+              badge.emoji,
+              style: TextStyle(
+                fontSize: 24,
+                color: earned ? null : Colors.white.withValues(alpha: 0.15),
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              badge.name,
+              style: TextStyle(
+                color: earned
+                    ? Colors.white
+                    : Colors.white.withValues(alpha: 0.2),
+                fontSize: 9,
+                fontWeight: FontWeight.w500,
+              ),
+              textAlign: TextAlign.center,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAnalyticsCard(
+    String title,
+    String value,
+    IconData icon,
+    Color color,
+  ) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1C1F26),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.15),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Icon(icon, color: color, size: 24),
+          ),
+          const Spacer(),
+          Text(
+            value,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 24,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
           const SizedBox(height: 4),
-          Text(label, style: TextStyle(color: isHighlighted ? const Color(0xFFFF3B30) : const Color(0xFFA0AEC0), fontSize: 9, fontWeight: isHighlighted ? FontWeight.bold : FontWeight.normal)),
-        ]),
+          Text(
+            title,
+            style: const TextStyle(
+              color: Color(0xFFA0AEC0),
+              fontSize: 13,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ],
       ),
     );
   }
