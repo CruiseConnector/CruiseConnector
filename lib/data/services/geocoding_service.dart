@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
@@ -13,6 +14,8 @@ enum GeocodingErrorType {
   rateLimit,
   server,
   invalidRequest,
+  notFound,
+  ambiguous,
   unknown,
 }
 
@@ -38,9 +41,6 @@ class GeocodingException implements Exception {
 class GeocodingService {
   const GeocodingService();
 
-  static const String _baseUrl =
-      'https://api.mapbox.com/geocoding/v5/mapbox.places';
-
   static void _debugLog(String message) {
     if (kDebugMode) {
       debugPrint(message);
@@ -50,14 +50,37 @@ class GeocodingService {
   static String _sanitizeUri(Uri uri) => '${uri.origin}${uri.path}';
 
   /// Gibt Autocomplete-Vorschläge für eine Suchanfrage zurück.
-  Future<List<MapboxSuggestion>> searchSuggestions(String query) async {
+  Future<List<MapboxSuggestion>> searchSuggestions(
+    String query, {
+    double? proximityLatitude,
+    double? proximityLongitude,
+    String countryCodes = 'at,de,ch',
+    int limit = 7,
+  }) async {
     // KEIN Zeichenlimit - sofort suchen ab 1 Zeichen
     if (query.isEmpty) return const [];
 
-    final uri = Uri.parse(
-      '$_baseUrl/${Uri.encodeComponent(query)}.json'
-      '?access_token=${AppConstants.mapboxPublicToken}'
-      '&autocomplete=true&limit=5&language=de',
+    final queryParameters = <String, String>{
+      'access_token': AppConstants.mapboxPublicToken,
+      'autocomplete': 'true',
+      'limit': limit.clamp(1, 10).toString(),
+      'language': 'de',
+      'country': countryCodes,
+      'types': 'address,poi,place,locality,neighborhood',
+    };
+    final hasProximity =
+        proximityLatitude != null &&
+        proximityLongitude != null &&
+        proximityLatitude.isFinite &&
+        proximityLongitude.isFinite;
+    if (hasProximity) {
+      queryParameters['proximity'] =
+          '${proximityLongitude.toStringAsFixed(5)},${proximityLatitude.toStringAsFixed(5)}';
+    }
+    final uri = Uri.https(
+      'api.mapbox.com',
+      '/geocoding/v5/mapbox.places/${_sanitizeSearchPath(query)}.json',
+      queryParameters,
     );
     _debugLog(
       '[Geocoding] Autocomplete request: queryLength=${query.length}, endpoint=${_sanitizeUri(uri)}',
@@ -88,6 +111,14 @@ class GeocodingService {
 
               final center = f['center'] as List?;
               if (center == null || center.length < 2) return null;
+              final distanceMeters = hasProximity
+                  ? _distanceMeters(
+                      proximityLatitude,
+                      proximityLongitude,
+                      (center[1] as num).toDouble(),
+                      (center[0] as num).toDouble(),
+                    )
+                  : null;
               return MapboxSuggestion(
                 placeName: (f['place_name'] as String?) ?? '',
                 coordinates: [
@@ -95,6 +126,7 @@ class GeocodingService {
                   (center[1] as num).toDouble(),
                 ],
                 context: contextText,
+                distanceMeters: distanceMeters,
               );
             })
             .whereType<MapboxSuggestion>()
@@ -111,10 +143,30 @@ class GeocodingService {
   }
 
   /// Geocodiert eine Adresse und gibt Koordinaten zurück.
-  Future<Map<String, double>?> getCoordinatesFromAddress(String address) async {
-    final uri = Uri.parse(
-      '$_baseUrl/${Uri.encodeComponent(address)}.json'
-      '?access_token=${AppConstants.mapboxPublicToken}&limit=1',
+  Future<Map<String, double>?> getCoordinatesFromAddress(
+    String address, {
+    double? proximityLatitude,
+    double? proximityLongitude,
+    bool requireUnambiguous = false,
+  }) async {
+    final queryParameters = <String, String>{
+      'access_token': AppConstants.mapboxPublicToken,
+      'limit': requireUnambiguous ? '3' : '1',
+      'language': 'de',
+      'country': 'at,de,ch',
+      'types': 'address,poi,place,locality,neighborhood',
+    };
+    if (proximityLatitude != null &&
+        proximityLongitude != null &&
+        proximityLatitude.isFinite &&
+        proximityLongitude.isFinite) {
+      queryParameters['proximity'] =
+          '${proximityLongitude.toStringAsFixed(5)},${proximityLatitude.toStringAsFixed(5)}';
+    }
+    final uri = Uri.https(
+      'api.mapbox.com',
+      '/geocoding/v5/mapbox.places/${_sanitizeSearchPath(address)}.json',
+      queryParameters,
     );
 
     try {
@@ -126,6 +178,28 @@ class GeocodingService {
       final data = json.decode(response.body) as Map<String, dynamic>;
       final features = data['features'] as List?;
       if (features != null && features.isNotEmpty) {
+        if (requireUnambiguous && features.length > 1) {
+          final topRelevance =
+              (features[0]['relevance'] as num?)?.toDouble() ?? 0.0;
+          final secondRelevance =
+              (features[1]['relevance'] as num?)?.toDouble() ?? 0.0;
+          final topText = (features[0]['place_name'] as String?) ?? '';
+          final queryNormalized = _normalizeAddressText(address);
+          final topNormalized = _normalizeAddressText(topText);
+          final clearlyExact =
+              topRelevance >= 0.96 && topNormalized.contains(queryNormalized);
+          final ambiguous =
+              !clearlyExact && (topRelevance - secondRelevance).abs() < 0.12;
+          if (ambiguous) {
+            throw GeocodingException(
+              type: GeocodingErrorType.ambiguous,
+              userMessage:
+                  'Bitte wähle einen eindeutigen Treffer aus der Vorschlagsliste.',
+              debugMessage:
+                  'Ambiguous geocoding result for queryLength=${address.length} at ${_sanitizeUri(uri)}',
+            );
+          }
+        }
         final center = features[0]['center'] as List?;
         if (center != null && center.length >= 2) {
           return {
@@ -159,8 +233,47 @@ class GeocodingService {
             'Unexpected geocoding error: $e (endpoint: ${_sanitizeUri(uri)})',
       );
     }
+    if (requireUnambiguous) {
+      throw GeocodingException(
+        type: GeocodingErrorType.notFound,
+        userMessage: 'Adresse konnte nicht gefunden werden.',
+        debugMessage:
+            'No geocoding results for queryLength=${address.length} at ${_sanitizeUri(uri)}',
+      );
+    }
     return null;
   }
+
+  static String _normalizeAddressText(String value) => value
+      .trim()
+      .toLowerCase()
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .replaceAll(RegExp(r'[^a-z0-9äöüß ]'), '');
+
+  static String _sanitizeSearchPath(String value) =>
+      value.trim().replaceAll(RegExp(r'[/#?]+'), ' ');
+
+  static double _distanceMeters(
+    double lat1,
+    double lon1,
+    double lat2,
+    double lon2,
+  ) {
+    const earthRadiusMeters = 6371000.0;
+    final dLat = _degreesToRadians(lat2 - lat1);
+    final dLon = _degreesToRadians(lon2 - lon1);
+    final a =
+        (math.sin(dLat / 2) * math.sin(dLat / 2)) +
+        math.cos(_degreesToRadians(lat1)) *
+            math.cos(_degreesToRadians(lat2)) *
+            math.sin(dLon / 2) *
+            math.sin(dLon / 2);
+    final c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a));
+    return earthRadiusMeters * c;
+  }
+
+  static double _degreesToRadians(double degrees) =>
+      degrees * 0.017453292519943295;
 
   GeocodingException _mapHttpError({
     required int statusCode,

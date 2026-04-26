@@ -302,11 +302,19 @@ Deno.serve(async (req) => {
     let finalWaypoints: Coordinate[] = [];
     let distanceConfig: DistanceConfig | null = null;
     let effectiveTargetDistanceKm: number | null = null;
+    let route = null;
     let pointToPointIsScenic = false;
     let pointToPointDirectDistanceKm = 0;
+    let pointToPointDirectDurationMin: number | null = null;
+    let pointToPointEffectiveTargetDistanceKm: number | undefined;
+    let pointToPointDestinationDistanceMeters: number | null = null;
     // Default to ROUND_TRIP if not specified, for backward compatibility or default 'Zufall' behavior
     const currentRouteType = body.route_type || "ROUND_TRIP";
     const detourLevel = Math.max(0, Math.min(3, body.detour_level ?? 0));
+    let pointToPointDeliveredDetourLevel = detourLevel;
+    let pointToPointDetourDowngraded = false;
+    let pointToPointDetourFallbackStage: string | null = null;
+    let pointToPointDeliveredTargetDistanceKm: number | undefined;
 
     if (planning_type === "Zufall" && currentRouteType === "ROUND_TRIP") {
       if (mode === "Kurvenjagd") {
@@ -353,21 +361,87 @@ Deno.serve(async (req) => {
             "For 'POINT_TO_POINT' planning, a destination_location is required.",
           );
         }
-        pointToPointDirectDistanceKm = calculateDistance(
+        const straightLineDistanceKm = calculateDistance(
           startLocation,
           body.destination_location,
         );
-        pointToPointIsScenic = detourLevel > 0 ||
+        if (straightLineDistanceKm < 0.25) {
+          throw new Error(
+            "Start and destination are too close for POINT_TO_POINT planning.",
+          );
+        }
+        pointToPointDirectDistanceKm = straightLineDistanceKm;
+        const requestedPointToPointScenic = detourLevel > 0 ||
           (mode != null && mode !== "Standard") ||
           (targetDistance != null &&
             targetDistance > pointToPointDirectDistanceKm * 1.05);
+        const directWaypoints = [startLocation, body.destination_location];
+        const directRadiuses = "unlimited;unlimited";
+        let directRoute = await getMapboxRoute(
+          directWaypoints,
+          mapboxProfile,
+          excludeParams,
+          directRadiuses,
+          MAPBOX_ACCESS_TOKEN,
+          {
+            continueStraight: requestContinueStraight,
+            maxAttempts: 1,
+            timeoutMs: 6500,
+          },
+        );
+        const relaxedDirectExcludes = relaxStreetExcludes(
+          excludeParams,
+          avoidHighways,
+        );
+        if (!directRoute && relaxedDirectExcludes !== excludeParams) {
+          directRoute = await getMapboxRoute(
+            directWaypoints,
+            mapboxProfile,
+            relaxedDirectExcludes,
+            directRadiuses,
+            MAPBOX_ACCESS_TOKEN,
+            {
+              continueStraight: requestContinueStraight,
+              maxAttempts: 1,
+              timeoutMs: 6000,
+            },
+          );
+        }
+        if (!directRoute) {
+          throw new Error(
+            "Direct A->B route not found with current constraints.",
+          );
+        }
+        const directRouteDistanceKm = getRouteDistanceKm(directRoute);
+        if (directRouteDistanceKm > 0) {
+          pointToPointDirectDistanceKm = directRouteDistanceKm;
+        }
+        pointToPointDirectDurationMin = typeof directRoute.duration === "number"
+          ? directRoute.duration / 60
+          : null;
+        pointToPointIsScenic = requestedPointToPointScenic;
+        const detourTargetMultiplier = detourLevel === 1
+          ? 1.32
+          : detourLevel === 2
+          ? 1.65
+          : detourLevel >= 3
+          ? 2.10
+          : 1.0;
+        pointToPointEffectiveTargetDistanceKm = pointToPointIsScenic
+          ? Math.max(
+            targetDistance ?? 0,
+            pointToPointDirectDistanceKm * detourTargetMultiplier,
+          )
+          : pointToPointDirectDistanceKm;
+        pointToPointDeliveredTargetDistanceKm =
+          pointToPointEffectiveTargetDistanceKm;
 
         finalWaypoints = pointToPointIsScenic
           ? buildPointToPointScenicWaypoints({
             start: startLocation,
             destination: body.destination_location,
             mode,
-            targetDistance,
+            targetDistance: pointToPointEffectiveTargetDistanceKm,
             detourLevel,
             detourFactor: body.detour_factor,
             offsetSide,
@@ -377,7 +451,11 @@ Deno.serve(async (req) => {
             simplifyWaypoints: body.simplify_waypoints === true,
             maxWaypoints: body.max_waypoints,
           })
-          : [startLocation, body.destination_location];
+          : directWaypoints;
+        if (!pointToPointIsScenic) {
+          route = directRoute;
+          radiusesParams = directRadiuses;
+        }
         const scenicRadiusMeters = detourLevel >= 3
           ? Math.min(
             15000,
@@ -475,7 +553,6 @@ Deno.serve(async (req) => {
     }
 
     // --- Execute Route Request (with retries) ---
-    let route = null;
     let roundTripSearch: RoundTripSearchResult | null = null;
     const useRoundTripSearch = planning_type === "Zufall" &&
       currentRouteType === "ROUND_TRIP" &&
@@ -536,7 +613,7 @@ Deno.serve(async (req) => {
           );
         }
       }
-    } else {
+    } else if (!route) {
       route = await getMapboxRoute(
         finalWaypoints,
         mapboxProfile,
@@ -628,7 +705,11 @@ Deno.serve(async (req) => {
       currentRouteType === "POINT_TO_POINT" && body.destination_location &&
       pointToPointIsScenic
     ) {
-      const scenicRetryCount = body.simplify_waypoints === true ? 3 : 2;
+      const scenicRetryCount = body.simplify_waypoints === true
+        ? 3
+        : detourLevel >= 2
+        ? 3
+        : 2;
       const robustNoRouteFallback = avoidHighways && detourLevel >= 2 &&
         body.simplify_waypoints !== true;
       for (
@@ -639,7 +720,12 @@ Deno.serve(async (req) => {
         retry++
       ) {
         debugLog(`P2P scenic retry ${retry + 1}: regenerating waypoints...`);
-        const retryDetourLevel = Math.max(detourLevel, 1);
+        const retryDetourLevel = detourLevel >= 3
+          ? retry === 0 ? 3 : 2
+          : detourLevel === 2
+          ? retry === 0 ? 2 : 1
+          : Math.max(detourLevel, 1);
+        const retryDowngraded = retryDetourLevel < detourLevel;
         const retrySimplifyWaypoints = body.simplify_waypoints === true ||
           retry > 0 ||
           robustNoRouteFallback;
@@ -677,7 +763,8 @@ Deno.serve(async (req) => {
               (robustNoRouteFallback ? 11.0 : 16.0)
             : retryDetourLevel === 2
             ? pointToPointDirectDistanceKm + (robustNoRouteFallback ? 5.5 : 8.0)
-            : pointToPointDirectDistanceKm + 4.0,
+            : pointToPointDirectDistanceKm +
+              (pointToPointDirectDistanceKm < 18 ? 2.8 : 4.0),
         );
         const retryMinimumTarget = Math.max(
           emergencyScenicTarget,
@@ -688,10 +775,13 @@ Deno.serve(async (req) => {
             true,
           ),
         );
-        const softenedTarget = targetDistance != null
+        const sameLevelTarget = !retryDowngraded && targetDistance != null
+          ? targetDistance
+          : null;
+        const softenedTarget = sameLevelTarget != null
           ? retry >= 2 ? retryMinimumTarget : Math.max(
             retryMinimumTarget,
-            targetDistance *
+            sameLevelTarget *
               (retrySimplifyWaypoints ? 0.92 : 0.97),
           )
           : retryMinimumTarget;
@@ -824,6 +914,12 @@ Deno.serve(async (req) => {
           }
           finalWaypoints = retryWaypoints;
           radiusesParams = retryRadiuses;
+          pointToPointDeliveredDetourLevel = retryDetourLevel;
+          pointToPointDetourDowngraded = retryDowngraded;
+          pointToPointDetourFallbackStage = retryDowngraded
+            ? `downgraded_to_${retryDetourLevel}`
+            : `retry_${retry + 1}`;
+          pointToPointDeliveredTargetDistanceKm = softenedTarget;
         }
       }
     }
@@ -837,6 +933,20 @@ Deno.serve(async (req) => {
       hasPointToPointBudgetLeft(1600)
     ) {
       debugLog("P2P scenic safe fallback: trying single-corridor midpoint");
+      const safeDetourLevel = detourLevel >= 3
+        ? 2
+        : detourLevel === 2
+        ? 1
+        : Math.max(detourLevel, 1);
+      const safeTargetDistanceKm = Math.max(
+        getPointToPointMinimumDistanceKm(
+          pointToPointDirectDistanceKm,
+          undefined,
+          safeDetourLevel,
+          true,
+        ),
+        pointToPointDirectDistanceKm * (safeDetourLevel >= 2 ? 1.34 : 1.14),
+      );
       const directBearing = calculateBearing(
         startLocation,
         body.destination_location,
@@ -846,20 +956,21 @@ Deno.serve(async (req) => {
         body.destination_location,
         0.5,
       );
-      const fallbackOffsetCapKm = detourLevel >= 3
-        ? 11.0
-        : detourLevel === 2
-        ? 8.0
+      const shortCorridor = pointToPointDirectDistanceKm < 18;
+      const fallbackOffsetCapKm = safeDetourLevel >= 2
+        ? shortCorridor ? 7.0 : 10.0
+        : shortCorridor
+        ? 4.0
         : 6.0;
-      const fallbackOffsetMinKm = detourLevel >= 3
-        ? 5.0
-        : detourLevel === 2
-        ? 3.5
+      const fallbackOffsetMinKm = safeDetourLevel >= 2
+        ? shortCorridor ? 3.0 : 4.5
+        : shortCorridor
+        ? 1.6
         : 2.2;
-      const fallbackOffsetFactor = detourLevel >= 3
-        ? 0.42
-        : detourLevel === 2
-        ? 0.34
+      const fallbackOffsetFactor = safeDetourLevel >= 2
+        ? shortCorridor ? 0.32 : 0.40
+        : shortCorridor
+        ? 0.20
         : 0.28;
       const fallbackOffsetKm = Math.min(
         fallbackOffsetCapKm,
@@ -921,13 +1032,19 @@ Deno.serve(async (req) => {
           isPointToPointDetourAcceptable(
             route,
             pointToPointDirectDistanceKm,
-            targetDistance,
-            detourLevel,
+            safeTargetDistanceKm,
+            safeDetourLevel,
             true,
           )
         ) {
           finalWaypoints = safeWaypoints;
           radiusesParams = safeRadiuses;
+          pointToPointDeliveredDetourLevel = safeDetourLevel;
+          pointToPointDetourDowngraded = safeDetourLevel < detourLevel;
+          pointToPointDetourFallbackStage = pointToPointDetourDowngraded
+            ? `safe_downgraded_to_${safeDetourLevel}`
+            : "safe_corridor";
+          pointToPointDeliveredTargetDistanceKm = safeTargetDistanceKm;
           break;
         }
         route = null;
@@ -1175,6 +1292,37 @@ Deno.serve(async (req) => {
         startLocation,
       })
       : null;
+    if (currentRouteType === "POINT_TO_POINT" && body.destination_location) {
+      const rawCoordinates = route?.geometry?.coordinates;
+      const lastCoordinate = Array.isArray(rawCoordinates) &&
+          rawCoordinates.length > 0
+        ? rawCoordinates[rawCoordinates.length - 1]
+        : null;
+      if (Array.isArray(lastCoordinate) && lastCoordinate.length >= 2) {
+        pointToPointDestinationDistanceMeters = calculateDistance(
+          { longitude: lastCoordinate[0], latitude: lastCoordinate[1] },
+          body.destination_location,
+        ) * 1000;
+      }
+      if (
+        pointToPointDestinationDistanceMeters == null ||
+        pointToPointDestinationDistanceMeters > 750
+      ) {
+        requestDebugMeta = {
+          point_to_point: {
+            destination_snap_distance_m: pointToPointDestinationDistanceMeters,
+            destination_reached: false,
+            direct_distance_km: pointToPointDirectDistanceKm,
+            detour_level: detourLevel,
+          },
+        };
+        throw new Error(
+          `POINT_TO_POINT destination not reached (snap ${
+            pointToPointDestinationDistanceMeters?.toFixed(0) ?? "unknown"
+          }m).`,
+        );
+      }
+    }
     if (!finalQuality.passed) {
       requestDebugMeta = buildNoRouteSearchMeta(
         roundTripSearch,
@@ -1249,6 +1397,63 @@ Deno.serve(async (req) => {
           mode: mode ?? null,
           style_profile: body.style_profile ?? null,
           route_type: currentRouteType,
+          detour_level: currentRouteType === "POINT_TO_POINT"
+            ? detourLevel
+            : null,
+          requested_detour_level: currentRouteType === "POINT_TO_POINT"
+            ? detourLevel
+            : null,
+          delivered_detour_level: currentRouteType === "POINT_TO_POINT"
+            ? pointToPointDeliveredDetourLevel
+            : null,
+          detour_downgraded: currentRouteType === "POINT_TO_POINT"
+            ? pointToPointDetourDowngraded
+            : null,
+          detour_fallback_stage: currentRouteType === "POINT_TO_POINT"
+            ? pointToPointDetourFallbackStage
+            : null,
+          detour_ratio: currentRouteType === "POINT_TO_POINT" &&
+              pointToPointDirectDistanceKm > 0
+            ? responseDistanceKm / pointToPointDirectDistanceKm
+            : null,
+          direct_distance_km: currentRouteType === "POINT_TO_POINT"
+            ? pointToPointDirectDistanceKm
+            : null,
+          direct_duration_min: currentRouteType === "POINT_TO_POINT"
+            ? pointToPointDirectDurationMin
+            : null,
+          detour_target_distance_km: currentRouteType === "POINT_TO_POINT"
+            ? pointToPointDeliveredTargetDistanceKm ??
+              pointToPointEffectiveTargetDistanceKm ?? null
+            : null,
+          detour_min_distance_km:
+            currentRouteType === "POINT_TO_POINT" && pointToPointIsScenic
+              ? getPointToPointMinimumDistanceKm(
+                pointToPointDirectDistanceKm,
+                pointToPointDeliveredTargetDistanceKm ??
+                  pointToPointEffectiveTargetDistanceKm,
+                pointToPointDeliveredDetourLevel,
+                body.simplify_waypoints === true,
+              )
+              : null,
+          detour_max_distance_km:
+            currentRouteType === "POINT_TO_POINT" && pointToPointIsScenic
+              ? getPointToPointMaximumDistanceKm(
+                pointToPointDirectDistanceKm,
+                pointToPointDeliveredTargetDistanceKm ??
+                  pointToPointEffectiveTargetDistanceKm,
+                pointToPointDeliveredDetourLevel,
+                body.simplify_waypoints === true,
+              )
+              : null,
+          destination_snap_distance_m: currentRouteType === "POINT_TO_POINT"
+            ? pointToPointDestinationDistanceMeters
+            : null,
+          destination_reached: currentRouteType === "POINT_TO_POINT"
+            ? pointToPointDestinationDistanceMeters != null &&
+              pointToPointDestinationDistanceMeters <= 750
+            : null,
+          waypoint_count: finalWaypoints.length,
           avoid_highways_requested: avoidHighways,
           effective_excludes: excludeParams,
           quality_tier: finalQuality.tier,

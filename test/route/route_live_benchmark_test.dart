@@ -1076,6 +1076,10 @@ void main() {
         bool? seedJobCreated;
         bool? duplicateJobPrevented;
         bool? poolBootstrapPending;
+        int? deliveredDetourLevel;
+        bool? detourDowngraded;
+        double? detourRatio;
+        String? detourFallbackStage;
 
         try {
           if (scenario.routeType == 'ROUND_TRIP') {
@@ -1320,6 +1324,12 @@ void main() {
             styleEffective = scenario.detourLevel <= 0
                 ? (result.edgeMeta['mode']?.toString() ?? '') == 'Standard'
                 : (result.edgeMeta['mode']?.toString() ?? '') == scenario.mode;
+            deliveredDetourLevel =
+                (result.edgeMeta['delivered_detour_level'] as num?)?.toInt();
+            detourDowngraded = result.edgeMeta['detour_downgraded'] == true;
+            detourRatio = (result.edgeMeta['detour_ratio'] as num?)?.toDouble();
+            detourFallbackStage = result.edgeMeta['detour_fallback_stage']
+                ?.toString();
           }
         } catch (error) {
           if (error is RouteServiceException) {
@@ -1357,6 +1367,12 @@ void main() {
             returnedDistanceBucket =
                 (error.edgeMeta['returned_distance_bucket'] as num?)?.toInt() ??
                 RouteService.lastRouteReturnedDistanceBucket;
+            deliveredDetourLevel =
+                (error.edgeMeta['delivered_detour_level'] as num?)?.toInt();
+            detourDowngraded = error.edgeMeta['detour_downgraded'] == true;
+            detourRatio = (error.edgeMeta['detour_ratio'] as num?)?.toDouble();
+            detourFallbackStage = error.edgeMeta['detour_fallback_stage']
+                ?.toString();
           } else {
             errorCode = error.runtimeType.toString();
             errorMessage = error.toString();
@@ -1410,6 +1426,11 @@ void main() {
           'avoidHighways': scenario.avoidHighways,
           'mode': scenario.mode,
           'detourLevel': scenario.detourLevel,
+          'requestedDetourLevel': scenario.detourLevel,
+          'deliveredDetourLevel': deliveredDetourLevel,
+          'detourDowngraded': detourDowngraded,
+          'detourRatio': detourRatio,
+          'detourFallbackStage': detourFallbackStage,
           'fingerprint': fingerprint,
           'similarityToPreviousPercent': similarityToPreviousPercent,
           'variantGroup': scenario.variantGroup,
@@ -1466,6 +1487,7 @@ void main() {
           'sub=${row['subscriptionTier']} | diff=${row['regionDifficulty']} | '
           'edgeReq=${row['edgeRequests']} | dur=${row['durationMs']}ms | '
           'dist=${row['distanceKm'] == null ? 'n/a' : (row['distanceKm'] as double).toStringAsFixed(1)}km | '
+          'delivered=${row['deliveredDetourLevel'] ?? '-'} down=${row['detourDowngraded'] ?? false} | '
           'motorway=${row['motorwayExcludeActive']} | style=${row['styleEffective']}',
         );
       }

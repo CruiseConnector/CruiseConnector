@@ -27,6 +27,8 @@ class CruiseSetupCard extends StatefulWidget {
     required this.onDetourChanged,
     this.selectedAvoidHighways = false,
     this.onAvoidHighwaysChanged,
+    this.proximityLatitude,
+    this.proximityLongitude,
   });
 
   final bool isRoundTrip;
@@ -48,6 +50,8 @@ class CruiseSetupCard extends StatefulWidget {
   final ValueChanged<String>? onDestinationInputChanged;
   final bool selectedAvoidHighways;
   final ValueChanged<bool>? onAvoidHighwaysChanged;
+  final double? proximityLatitude;
+  final double? proximityLongitude;
 
   static const _geocodingService = GeocodingService();
 
@@ -338,7 +342,11 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
               if (pattern.trim().length < 2) return const [];
               try {
                 return await CruiseSetupCard._geocodingService
-                    .searchSuggestions(pattern);
+                    .searchSuggestions(
+                      pattern,
+                      proximityLatitude: widget.proximityLatitude,
+                      proximityLongitude: widget.proximityLongitude,
+                    );
               } catch (e, stack) {
                 debugPrint('[CruiseSetup] Vorschlags-Suche fehlgeschlagen: $e');
                 debugPrintStack(stackTrace: stack);
@@ -359,9 +367,15 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
                 suggestion.placeName,
                 style: const TextStyle(color: Colors.white, fontSize: 14),
               ),
-              subtitle: suggestion.context != null
+              subtitle:
+                  suggestion.context != null ||
+                      suggestion.distanceMeters != null
                   ? Text(
-                      suggestion.context!,
+                      [
+                        if (suggestion.context != null) suggestion.context!,
+                        if (suggestion.distanceMeters != null)
+                          _formatSuggestionDistance(suggestion.distanceMeters!),
+                      ].join(' · '),
                       style: const TextStyle(color: Colors.grey, fontSize: 12),
                     )
                   : null,
@@ -404,6 +418,11 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
         ),
       ],
     );
+  }
+
+  String _formatSuggestionDistance(double meters) {
+    if (meters < 1000) return '${meters.round()} m entfernt';
+    return '${(meters / 1000).toStringAsFixed(1)} km entfernt';
   }
 }
 

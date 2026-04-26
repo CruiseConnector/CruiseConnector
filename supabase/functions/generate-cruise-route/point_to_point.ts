@@ -41,7 +41,7 @@ export function buildPointToPointScenicWaypoints({
   robustFallback?: boolean;
 }): Coordinate[] {
   const directDistanceKm = calculateDistance(start, destination);
-  if (directDistanceKm < 1.5) {
+  if (directDistanceKm < 1.5 || detourLevel <= 0) {
     return [start, destination];
   }
 
@@ -70,6 +70,8 @@ export function buildPointToPointScenicWaypoints({
   const fallbackScale = robustFallback
     ? detourLevel >= 3 ? 0.82 : detourLevel === 2 ? 0.86 : 0.92
     : 1.0;
+  const isVeryShortCorridor = directDistanceKm < 12;
+  const isShortCorridor = directDistanceKm < 18;
 
   const effectiveFactor = Math.max(
     detourFactor ?? 1.0,
@@ -80,11 +82,11 @@ export function buildPointToPointScenicWaypoints({
     directDistanceKm * effectiveFactor,
   );
   const minimumExtraDistanceKm = detourLevel === 1
-    ? 7.0
+    ? isShortCorridor ? 3.8 : 7.0
     : detourLevel === 2
-    ? 13.5
+    ? isVeryShortCorridor ? 7.0 : isShortCorridor ? 9.0 : 13.5
     : detourLevel >= 3
-    ? 24.0
+    ? isVeryShortCorridor ? 12.0 : isShortCorridor ? 16.0 : 24.0
     : 3.0;
   let extraDistanceKm = Math.max(
     minimumExtraDistanceKm,
@@ -116,6 +118,9 @@ export function buildPointToPointScenicWaypoints({
   }
   if (directDistanceKm < 12) waypointCount = Math.min(waypointCount, 2);
   if (directDistanceKm < 6) waypointCount = Math.min(waypointCount, 1);
+  if (isShortCorridor && detourLevel === 2 && robustFallback) {
+    waypointCount = Math.min(waypointCount, 1);
+  }
   if (simplifyWaypoints) {
     const minimumWaypoints = detourLevel >= 2 ? 2 : 1;
     const cappedWaypoints = Math.max(
@@ -173,7 +178,22 @@ export function buildPointToPointScenicWaypoints({
 
   // Offset-Limits — drastischer gespreizt zwischen Klein/Mittel/Groß,
   // damit Mapbox tatsächlich verschiedene Korridore zurückliefert.
-  let maxOffsetKm = detourLevel === 1
+  let maxOffsetKm = isShortCorridor
+    ? detourLevel === 1
+      ? Math.max(
+        2.6,
+        Math.min(directDistanceKm * 0.34, extraDistanceKm * 0.58 + 1.2),
+      )
+      : detourLevel === 2
+      ? Math.max(
+        4.2,
+        Math.min(directDistanceKm * 0.52, extraDistanceKm * 0.68 + 1.8),
+      )
+      : Math.max(
+        6.2,
+        Math.min(directDistanceKm * 0.72, extraDistanceKm * 0.78 + 2.4),
+      )
+    : detourLevel === 1
     ? Math.max(
       4.5,
       Math.min(directDistanceKm * 0.36, extraDistanceKm * 0.85 + 3.0),
@@ -187,7 +207,13 @@ export function buildPointToPointScenicWaypoints({
       12.0,
       Math.min(directDistanceKm * 0.88, extraDistanceKm * 1.10 + 8.0),
     );
-  let minOffsetKm = detourLevel === 1
+  let minOffsetKm = isShortCorridor
+    ? detourLevel === 1
+      ? Math.min(maxOffsetKm, Math.max(1.5, maxOffsetKm * 0.42))
+      : detourLevel === 2
+      ? Math.min(maxOffsetKm, Math.max(2.4, maxOffsetKm * 0.45))
+      : Math.min(maxOffsetKm, Math.max(3.6, maxOffsetKm * 0.48))
+    : detourLevel === 1
     ? Math.min(maxOffsetKm, Math.max(3.0, maxOffsetKm * 0.55))
     : detourLevel === 2
     ? Math.min(maxOffsetKm, Math.max(5.5, maxOffsetKm * 0.55))

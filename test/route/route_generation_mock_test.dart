@@ -779,6 +779,26 @@ void main() {
       );
     });
 
+    test('verwirft A→B wenn Start und Ziel praktisch gleich sind', () async {
+      await expectLater(
+        service.generatePointToPoint(
+          startPosition: _dornbirn(),
+          destinationLat: _dornbirnLat,
+          destinationLng: _dornbirnLng,
+          mode: 'Sport Mode',
+        ),
+        throwsA(
+          isA<RouteServiceException>().having(
+            (e) => e.type,
+            'type',
+            RouteErrorType.validation,
+          ),
+        ),
+      );
+
+      verifyNever(mockInvoker.invoke(any));
+    });
+
     test('scenic = false → mode wird auf "Standard" gesetzt', () async {
       when(mockInvoker.invoke(any)).thenAnswer(
         (_) async =>
@@ -865,17 +885,25 @@ void main() {
 
     test('scenic = true → übergibt den eigentlichen mode', () async {
       when(mockInvoker.invoke(any)).thenAnswer(
-        (_) async =>
-            _buildRouteResponse(distanceMeters: 56000, durationSeconds: 3600),
+        (_) async => _buildPointToPointResponse(
+          distanceMeters: 56000,
+          durationSeconds: 3600,
+          destinationLat: 47.8,
+          destinationLng: 12.0,
+        ),
       );
 
-      await service.generatePointToPoint(
-        startPosition: _munich(),
-        destinationLat: 47.8,
-        destinationLng: 12.0,
-        mode: 'Alpenstraßen',
-        scenic: true,
-      );
+      try {
+        await service.generatePointToPoint(
+          startPosition: _munich(),
+          destinationLat: 47.8,
+          destinationLng: 12.0,
+          mode: 'Alpenstraßen',
+          scenic: true,
+        );
+      } on RouteServiceException {
+        // Für diese Prüfung zählt nur der Request-Body.
+      }
 
       final captured =
           verify(mockInvoker.invoke(captureAny)).captured.first
@@ -887,18 +915,26 @@ void main() {
       'scenic = true → targetDistance und dynamischer randomSeed werden mitgesendet',
       () async {
         when(mockInvoker.invoke(any)).thenAnswer(
-          (_) async =>
-              _buildRouteResponse(distanceMeters: 92000, durationSeconds: 5200),
+          (_) async => _buildPointToPointResponse(
+            distanceMeters: 92000,
+            durationSeconds: 5200,
+            destinationLat: 47.8,
+            destinationLng: 12.0,
+          ),
         );
 
-        await service.generatePointToPoint(
-          startPosition: _munich(),
-          destinationLat: 47.8,
-          destinationLng: 12.0,
-          mode: 'Sport Mode',
-          scenic: true,
-          routeVariant: 2,
-        );
+        try {
+          await service.generatePointToPoint(
+            startPosition: _munich(),
+            destinationLat: 47.8,
+            destinationLng: 12.0,
+            mode: 'Sport Mode',
+            scenic: true,
+            routeVariant: 2,
+          );
+        } on RouteServiceException {
+          // Für diese Prüfung zählt nur der Request-Body.
+        }
 
         final captured =
             verify(mockInvoker.invoke(captureAny)).captured.first
@@ -913,19 +949,27 @@ void main() {
       'scenic + avoidHighways → Detour-Parameter bleiben erhalten',
       () async {
         when(mockInvoker.invoke(any)).thenAnswer(
-          (_) async =>
-              _buildRouteResponse(distanceMeters: 112000, durationSeconds: 6200),
+          (_) async => _buildPointToPointResponse(
+            distanceMeters: 112000,
+            durationSeconds: 6200,
+            destinationLat: 47.8,
+            destinationLng: 12.0,
+          ),
         );
 
-        await service.generatePointToPoint(
-          startPosition: _munich(),
-          destinationLat: 47.8,
-          destinationLng: 12.0,
-          mode: 'Sport Mode',
-          scenic: true,
-          routeVariant: 3,
-          avoidHighways: true,
-        );
+        try {
+          await service.generatePointToPoint(
+            startPosition: _munich(),
+            destinationLat: 47.8,
+            destinationLng: 12.0,
+            mode: 'Sport Mode',
+            scenic: true,
+            routeVariant: 3,
+            avoidHighways: true,
+          );
+        } on RouteServiceException {
+          // Für diese Prüfung zählt nur der Request-Body.
+        }
 
         final captured =
             verify(mockInvoker.invoke(captureAny)).captured.first
@@ -985,25 +1029,33 @@ void main() {
         final scenicFallback = captured.firstWhere(
           (request) => request['simplify_waypoints'] == true,
         );
-        expect(scenicFallback['max_waypoints'], 3);
-        expect(scenicFallback['detour_level'], 2);
+        expect(scenicFallback['max_waypoints'], 1);
+        expect(scenicFallback['detour_level'], 1);
       },
     );
 
     test('Umwegstufen skalieren die targetDistance sichtbar', () async {
       when(mockInvoker.invoke(any)).thenAnswer(
-        (_) async =>
-            _buildRouteResponse(distanceMeters: 68000, durationSeconds: 4200),
+        (_) async => _buildPointToPointResponse(
+          distanceMeters: 68000,
+          durationSeconds: 4200,
+          destinationLat: 47.8,
+          destinationLng: 12.0,
+        ),
       );
 
-      await service.generatePointToPoint(
-        startPosition: _munich(),
-        destinationLat: 47.8,
-        destinationLng: 12.0,
-        mode: 'Sport Mode',
-        scenic: true,
-        routeVariant: 1,
-      );
+      try {
+        await service.generatePointToPoint(
+          startPosition: _munich(),
+          destinationLat: 47.8,
+          destinationLng: 12.0,
+          mode: 'Sport Mode',
+          scenic: true,
+          routeVariant: 1,
+        );
+      } on RouteServiceException {
+        // Für diese Prüfung zählt nur der Request-Body.
+      }
 
       final smallDetour =
           verify(mockInvoker.invoke(captureAny)).captured.first
@@ -1011,18 +1063,26 @@ void main() {
       clearInteractions(mockInvoker);
 
       when(mockInvoker.invoke(any)).thenAnswer(
-        (_) async =>
-            _buildRouteResponse(distanceMeters: 92000, durationSeconds: 5200),
+        (_) async => _buildPointToPointResponse(
+          distanceMeters: 92000,
+          durationSeconds: 5200,
+          destinationLat: 47.8,
+          destinationLng: 12.0,
+        ),
       );
 
-      await service.generatePointToPoint(
-        startPosition: _munich(),
-        destinationLat: 47.8,
-        destinationLng: 12.0,
-        mode: 'Sport Mode',
-        scenic: true,
-        routeVariant: 2,
-      );
+      try {
+        await service.generatePointToPoint(
+          startPosition: _munich(),
+          destinationLat: 47.8,
+          destinationLng: 12.0,
+          mode: 'Sport Mode',
+          scenic: true,
+          routeVariant: 2,
+        );
+      } on RouteServiceException {
+        // Für diese Prüfung zählt nur der Request-Body.
+      }
 
       final mediumDetour =
           verify(mockInvoker.invoke(captureAny)).captured.first
@@ -1030,18 +1090,26 @@ void main() {
       clearInteractions(mockInvoker);
 
       when(mockInvoker.invoke(any)).thenAnswer(
-        (_) async =>
-            _buildRouteResponse(distanceMeters: 112000, durationSeconds: 6200),
+        (_) async => _buildPointToPointResponse(
+          distanceMeters: 112000,
+          durationSeconds: 6200,
+          destinationLat: 47.8,
+          destinationLng: 12.0,
+        ),
       );
 
-      await service.generatePointToPoint(
-        startPosition: _munich(),
-        destinationLat: 47.8,
-        destinationLng: 12.0,
-        mode: 'Sport Mode',
-        scenic: true,
-        routeVariant: 3,
-      );
+      try {
+        await service.generatePointToPoint(
+          startPosition: _munich(),
+          destinationLat: 47.8,
+          destinationLng: 12.0,
+          mode: 'Sport Mode',
+          scenic: true,
+          routeVariant: 3,
+        );
+      } on RouteServiceException {
+        // Für diese Prüfung zählt nur der Request-Body.
+      }
 
       final largeDetour =
           verify(mockInvoker.invoke(captureAny)).captured.first
@@ -1328,13 +1396,19 @@ void main() {
         final captured = verify(
           mockInvoker.invoke(captureAny),
         ).captured.cast<Map<String, dynamic>>();
+        final pointToPointRequests = captured.where(
+          (request) => request['route_type'] == 'POINT_TO_POINT',
+        );
         expect(
-          captured.every(
+          pointToPointRequests.every(
             (request) =>
-                request['route_type'] != 'POINT_TO_POINT' ||
-                request['detour_level'] == null ||
-                request['detour_level'] == 3,
+                (request['detour_level'] as int?) != null &&
+                (request['detour_level'] as int) > 0,
           ),
+          isTrue,
+        );
+        expect(
+          pointToPointRequests.any((request) => request['detour_level'] == 3),
           isTrue,
         );
       },

@@ -710,6 +710,20 @@ class RouteService {
     bool forceFreshVariant = false,
     String subscriptionTier = 'premium',
   }) async {
+    final startToDestinationMeters = geo.Geolocator.distanceBetween(
+      startPosition.latitude,
+      startPosition.longitude,
+      destinationLat,
+      destinationLng,
+    );
+    if (startToDestinationMeters < 250) {
+      throw const RouteServiceException(
+        type: RouteErrorType.validation,
+        userMessage: 'Start und Ziel liegen zu nah beieinander.',
+        debugMessage:
+            'POINT_TO_POINT rejected because start and destination are too close.',
+      );
+    }
     final styleConfig = RouteStyleConfig.forMode(mode);
     final normalizedVariant = routeVariant.clamp(0, 3);
     // Detour-Multiplier in Mitte der Fenster (siehe RouteStyleConfig).
@@ -2223,6 +2237,8 @@ class RouteService {
         '[RouteService] A→B Edge-Meta: avoid_highways_requested='
         '${edgeMeta['avoid_highways_requested']}, '
         'detour_level=${edgeMeta['detour_level']}, '
+        'delivered_detour_level=${edgeMeta['delivered_detour_level']}, '
+        'detour_downgraded=${edgeMeta['detour_downgraded']}, '
         'effective_excludes=${edgeMeta['effective_excludes']}',
       );
     }
@@ -2369,15 +2385,6 @@ class RouteService {
     final targetKm = scenario.targetDistanceKm ?? 0.0;
     if (scenario.avoidHighways || targetKm >= 90) return 4;
     return 3;
-  }
-
-  static int _pointToPointFallbackWaypointLimit(
-    RouteScenario scenario, {
-    required bool avoidHighways,
-  }) {
-    if (avoidHighways && scenario.detourLevel >= 2) return 3;
-    if (scenario.detourLevel >= 3) return 2;
-    return 1;
   }
 
   /// Erzeugt einen Cache-Key aus den user-facing Request-Parametern.
@@ -2645,6 +2652,25 @@ class RouteService {
     );
   }
 
+  int _effectivePointToPointDetourLevel(
+    RouteScenario scenario,
+    RouteResult route,
+  ) {
+    if (!scenario.isPointToPoint) return scenario.detourLevel;
+    final rawDelivered = route.edgeMeta['delivered_detour_level'];
+    final delivered = rawDelivered is num
+        ? rawDelivered.toInt()
+        : int.tryParse(rawDelivered?.toString() ?? '');
+    if (delivered == null) return scenario.detourLevel;
+    return delivered.clamp(0, scenario.detourLevel).toInt();
+  }
+
+  double? _edgeMetaDouble(RouteResult route, String key) {
+    final raw = route.edgeMeta[key];
+    if (raw is num) return raw.toDouble();
+    return double.tryParse(raw?.toString() ?? '');
+  }
+
   _RouteCandidate _evaluateCandidate({
     required RouteScenario scenario,
     required RouteStyleConfig styleConfig,
@@ -2654,8 +2680,12 @@ class RouteService {
     bool relaxedRoundTrip = false,
   }) {
     final actualDistanceKm = route.distanceKm ?? 0.0;
+    final pointToPointEvaluationDetourLevel = _effectivePointToPointDetourLevel(
+      scenario,
+      route,
+    );
     final qualityTargetDistanceKm =
-        scenario.isPointToPoint && scenario.detourLevel <= 0
+        scenario.isPointToPoint && pointToPointEvaluationDetourLevel <= 0
         ? 0.0
         : scenario.targetDistanceKm ?? 0.0;
     final sampledCoordinates = _sampleRouteForSimilarity(route.coordinates);
@@ -2677,6 +2707,7 @@ class RouteService {
     if (deadEndSpikeDetected) {
       lastRouteDeadEndSpikeDetected = true;
     }
+    final destinationReached = _pointToPointDestinationReached(scenario, route);
     final styleFitScore = styleConfig.scoreStyleFit(
       coordinates: route.coordinates,
       distanceKm: actualDistanceKm,
@@ -2747,24 +2778,26 @@ class RouteService {
     );
     final hasEnoughPoints = route.coordinates.length >= minPoints;
     final pointToPointMinDistance =
-        !scenario.isPointToPoint || scenario.detourLevel <= 0
+        !scenario.isPointToPoint || pointToPointEvaluationDetourLevel <= 0
         ? 0.0
-        : styleConfig.minimumPointToPointDistanceKm(
-            directDistanceKm: directDistanceKm ?? 0.0,
-            scenic: true,
-            detourVariant: scenario.detourLevel,
-          );
+        : _edgeMetaDouble(route, 'detour_min_distance_km') ??
+              styleConfig.minimumPointToPointDistanceKm(
+                directDistanceKm: directDistanceKm ?? 0.0,
+                scenic: true,
+                detourVariant: pointToPointEvaluationDetourLevel,
+              );
     final pointToPointMaxDistance =
-        !scenario.isPointToPoint || scenario.detourLevel <= 0
+        !scenario.isPointToPoint || pointToPointEvaluationDetourLevel <= 0
         ? double.infinity
-        : styleConfig.maximumPointToPointDistanceKm(
-            targetKm: scenario.targetDistanceKm ?? actualDistanceKm,
-            directDistanceKm: directDistanceKm ?? 0.0,
-            scenic: true,
-            detourVariant: scenario.detourLevel,
-          );
+        : _edgeMetaDouble(route, 'detour_max_distance_km') ??
+              styleConfig.maximumPointToPointDistanceKm(
+                targetKm: scenario.targetDistanceKm ?? actualDistanceKm,
+                directDistanceKm: directDistanceKm ?? 0.0,
+                scenic: true,
+                detourVariant: pointToPointEvaluationDetourLevel,
+              );
     final detourDistanceOk =
-        !scenario.isPointToPoint || scenario.detourLevel <= 0
+        !scenario.isPointToPoint || pointToPointEvaluationDetourLevel <= 0
         ? true
         : actualDistanceKm >= pointToPointMinDistance &&
               actualDistanceKm <= pointToPointMaxDistance;
@@ -2773,6 +2806,7 @@ class RouteService {
       styleConfig: styleConfig,
       actualDistanceKm: actualDistanceKm,
       directDistanceKm: directDistanceKm ?? 0.0,
+      detourLevel: pointToPointEvaluationDetourLevel,
       minDistanceKm: pointToPointMinDistance,
       maxDistanceKm: pointToPointMaxDistance,
     );
@@ -2816,7 +2850,7 @@ class RouteService {
         : (() {
             final directKm = directDistanceKm ?? 0.0;
             if (directKm <= 0) return true;
-            if (scenario.detourLevel > 0) {
+            if (pointToPointEvaluationDetourLevel > 0) {
               final maxKm = math.max(
                 pointToPointMaxDistance * 1.08,
                 directKm * 1.45,
@@ -2828,12 +2862,12 @@ class RouteService {
                 actualDistanceKm <= math.max(directKm * 1.35, directKm + 6.0);
           })();
     final renderableDistanceOk =
-        scenario.isPointToPoint && scenario.detourLevel > 0
+        scenario.isPointToPoint && pointToPointEvaluationDetourLevel > 0
         ? detourRenderableOk
         : successFirstDistanceOk;
     final scenicFallbackRenderable =
         scenario.isPointToPoint &&
-        scenario.detourLevel > 0 &&
+        pointToPointEvaluationDetourLevel > 0 &&
         detourRenderableOk &&
         (directDistanceKm ?? 0.0) > 0.0 &&
         actualDistanceKm >= (directDistanceKm ?? 0.0) * 1.08 &&
@@ -2950,7 +2984,8 @@ class RouteService {
               rescueRoundTripAcceptable ||
               serverApprovedAcceptable ||
               serverApprovedSportRescue
-        : detourRenderableOk &&
+        : destinationReached &&
+              detourRenderableOk &&
               (quality.passed ||
                   classification.isAcceptable ||
                   scenicFallbackRenderable ||
@@ -2977,7 +3012,7 @@ class RouteService {
             quality.microZigzagPercent <= 48.0);
     final hasSoftDetourPenalty =
         scenario.isPointToPoint &&
-        scenario.detourLevel > 0 &&
+        pointToPointEvaluationDetourLevel > 0 &&
         !detourDistanceOk &&
         detourRenderableOk;
     final hasSoftStylePenalty = !styleSoftOk;
@@ -3002,6 +3037,7 @@ class RouteService {
         (deadEndSpikeDetected ? 90.0 : 0.0) +
         (tooSimilar ? 45.0 : 0.0) +
         (detourDistanceOk ? 0.0 : 135.0) +
+        (destinationReached ? 0.0 : 500.0) +
         (hasEnoughPoints ? 0.0 : 24.0) -
         styleFitScore * 0.18;
 
@@ -3023,7 +3059,8 @@ class RouteService {
       'deadEndSpikes=${deadEndSpikes.length}, '
       'tooSimilar=$tooSimilar, novelEnough=$novelEnough, '
       'edgeTier=${edgeTier?.name ?? 'none'}, '
-      'detourOk=$detourDistanceOk, '
+      'detourOk=$detourDistanceOk, deliveredDetour=$pointToPointEvaluationDetourLevel, '
+      'destinationReached=$destinationReached, '
       'distanceWindow=${pointToPointMinDistance.toStringAsFixed(1)}-${pointToPointMaxDistance.isFinite ? pointToPointMaxDistance.toStringAsFixed(1) : 'inf'}',
     );
 
@@ -3133,21 +3170,22 @@ class RouteService {
     required RouteStyleConfig styleConfig,
     required double actualDistanceKm,
     required double directDistanceKm,
+    required int detourLevel,
     required double minDistanceKm,
     required double maxDistanceKm,
   }) {
-    if (!scenario.isPointToPoint || scenario.detourLevel <= 0) return true;
+    if (!scenario.isPointToPoint || detourLevel <= 0) return true;
     if (actualDistanceKm >= minDistanceKm &&
         actualDistanceKm <= maxDistanceKm) {
       return true;
     }
-    final rescueSlackKm = switch (scenario.detourLevel) {
+    final rescueSlackKm = switch (detourLevel) {
       1 => 1.0,
       2 => 1.6,
       3 => 2.6,
       _ => 0.0,
     };
-    final rescueMinFactor = switch (scenario.detourLevel) {
+    final rescueMinFactor = switch (detourLevel) {
       1 => 1.10,
       2 => 1.28,
       3 => 1.55,
@@ -3163,11 +3201,32 @@ class RouteService {
             targetKm: scenario.targetDistanceKm ?? actualDistanceKm,
             directDistanceKm: directDistanceKm,
             scenic: true,
-            detourVariant: scenario.detourLevel,
+            detourVariant: detourLevel,
           ) *
           1.04,
     );
     return actualDistanceKm >= rescueMinKm && actualDistanceKm <= rescueMaxKm;
+  }
+
+  bool _pointToPointDestinationReached(
+    RouteScenario scenario,
+    RouteResult route,
+  ) {
+    if (!scenario.isPointToPoint) return true;
+    if (scenario.destinationLatitude == null ||
+        scenario.destinationLongitude == null ||
+        route.coordinates.isEmpty) {
+      return false;
+    }
+    final end = route.coordinates.last;
+    if (end.length < 2) return false;
+    final distanceMeters = geo.Geolocator.distanceBetween(
+      end[1],
+      end[0],
+      scenario.destinationLatitude!,
+      scenario.destinationLongitude!,
+    );
+    return distanceMeters <= 750.0;
   }
 
   bool _isBetterCandidate(_RouteCandidate candidate, _RouteCandidate? current) {
@@ -4796,64 +4855,100 @@ class RouteService {
   }) async {
     try {
       if (scenario.detourLevel > 0) {
-        final scenicVariant = _nextPointToPointVariant(
-          scenario,
-          normalizedVariant: scenario.detourLevel,
-          diversitySeed: 97,
-          shouldDiversify: true,
-        );
-        final scenicMode = scenario.style == 'Standard'
-            ? 'Sport Mode'
-            : scenario.style;
-        final scenicStyleConfig = RouteStyleConfig.forMode(scenicMode);
-        final scenicDetourFactor = switch (scenario.detourLevel) {
-          1 => 1.32,
-          2 => 1.65,
-          3 => 2.10,
-          _ => 1.15,
-        };
-        final scenicBody = _buildPointToPointRequest(
-          startPosition: startPosition,
-          destinationLat: destinationLat,
-          destinationLng: destinationLng,
-          mode: scenicMode,
-          scenic: true,
-          normalizedVariant: scenario.detourLevel,
-          avoidHighways: avoidHighways,
-          styleConfig: scenicStyleConfig,
-          targetDistanceKm: scenario.targetDistanceKm ?? directDistanceKm,
-          detourFactor: scenicDetourFactor,
-          variant: scenicVariant,
-          candidateBudget: 2,
-        );
-        scenicBody['simplify_waypoints'] = true;
-        scenicBody['max_waypoints'] = _pointToPointFallbackWaypointLimit(
-          scenario,
-          avoidHighways: avoidHighways,
-        );
-        final scenicResult = await _invoke(scenicBody);
-        final scenicSnapped = _snapRouteToStartPosition(
-          scenicResult,
-          startPosition,
-        );
-        final scenicCandidate = _evaluateCandidate(
-          scenario: scenario,
-          styleConfig: scenicStyleConfig,
-          route: scenicSnapped,
-          variant: scenicVariant,
-          directDistanceKm: directDistanceKm,
-        );
-        if (scenicCandidate.accepted && scenicCandidate.novelEnough) {
-          return _finalizeAndRemember(
+        final fallbackLevels = scenario.detourLevel >= 3
+            ? <int>[2, 1]
+            : scenario.detourLevel == 2
+            ? <int>[1]
+            : <int>[1];
+        for (
+          var fallbackIndex = 0;
+          fallbackIndex < fallbackLevels.length;
+          fallbackIndex++
+        ) {
+          final fallbackDetourLevel = fallbackLevels[fallbackIndex];
+          final scenicVariant = _nextPointToPointVariant(
+            scenario,
+            normalizedVariant: fallbackDetourLevel,
+            diversitySeed: 97 + fallbackIndex,
+            shouldDiversify: true,
+          );
+          final scenicMode = scenario.style == 'Standard'
+              ? 'Sport Mode'
+              : scenario.style;
+          final scenicStyleConfig = RouteStyleConfig.forMode(scenicMode);
+          final scenicDetourFactor = switch (fallbackDetourLevel) {
+            1 => 1.32,
+            2 => 1.65,
+            3 => 2.10,
+            _ => 1.15,
+          };
+          final scenicMinimumExtraKm = switch (fallbackDetourLevel) {
+            1 => 3.0,
+            2 => 7.0,
+            3 => 14.0,
+            _ => 2.0,
+          };
+          final scenicTargetKm = scenicStyleConfig.clampPointToPointTargetKm(
+            math.max(
+              directDistanceKm * scenicDetourFactor,
+              directDistanceKm + scenicMinimumExtraKm,
+            ),
+            directDistanceKm: directDistanceKm,
+            scenic: true,
+            detourVariant: fallbackDetourLevel,
+          );
+          final scenicBody = _buildPointToPointRequest(
+            startPosition: startPosition,
+            destinationLat: destinationLat,
+            destinationLng: destinationLng,
+            mode: scenicMode,
+            scenic: true,
+            normalizedVariant: fallbackDetourLevel,
+            avoidHighways: avoidHighways,
+            styleConfig: scenicStyleConfig,
+            targetDistanceKm: scenicTargetKm,
+            detourFactor: scenicDetourFactor,
+            variant: scenicVariant,
+            candidateBudget: 2,
+          );
+          scenicBody['simplify_waypoints'] = true;
+          scenicBody['max_waypoints'] = fallbackDetourLevel >= 2
+              ? (avoidHighways ? 2 : 2)
+              : 1;
+          final scenicResult = await _invoke(scenicBody);
+          final scenicSnapped = _snapRouteToStartPosition(
+            scenicResult,
+            startPosition,
+          );
+          scenicSnapped.edgeMeta['requested_detour_level'] =
+              scenario.detourLevel;
+          scenicSnapped.edgeMeta['delivered_detour_level'] =
+              fallbackDetourLevel;
+          scenicSnapped.edgeMeta['detour_downgraded'] =
+              fallbackDetourLevel < scenario.detourLevel;
+          scenicSnapped.edgeMeta['detour_fallback_stage'] =
+              fallbackDetourLevel < scenario.detourLevel
+              ? 'client_downgraded_to_$fallbackDetourLevel'
+              : 'client_scenic_fallback';
+          final scenicCandidate = _evaluateCandidate(
             scenario: scenario,
-            route: scenicCandidate.route,
-            sampledCoordinates: scenicCandidate.sampledCoordinates,
-            fingerprint: scenicCandidate.fingerprint,
+            styleConfig: scenicStyleConfig,
+            route: scenicSnapped,
+            variant: scenicVariant,
+            directDistanceKm: directDistanceKm,
+          );
+          if (scenicCandidate.accepted && scenicCandidate.novelEnough) {
+            return _finalizeAndRemember(
+              scenario: scenario,
+              route: scenicCandidate.route,
+              sampledCoordinates: scenicCandidate.sampledCoordinates,
+              fingerprint: scenicCandidate.fingerprint,
+            );
+          }
+          debugPrint(
+            '[RouteService] Vereinfachter Scenic-Fallback level=$fallbackDetourLevel verworfen: ${scenicCandidate.route.distanceKm?.toStringAsFixed(1)}km',
           );
         }
-        debugPrint(
-          '[RouteService] Vereinfachter Scenic-Fallback verworfen: ${scenicCandidate.route.distanceKm?.toStringAsFixed(1)}km',
-        );
         if (!allowDirectFallback) return null;
       }
 
@@ -4912,14 +5007,19 @@ class RouteService {
     required double directDistanceKm,
   }) {
     if (!scenario.isPointToPoint || scenario.detourLevel <= 0) return false;
+    final deliveredDetourLevel = _effectivePointToPointDetourLevel(
+      scenario,
+      candidate.route,
+    );
+    if (deliveredDetourLevel < scenario.detourLevel) return false;
 
     final actualDistanceKm = candidate.route.distanceKm ?? 0.0;
     final minimumRenderableKm = styleConfig.minimumPointToPointDistanceKm(
       directDistanceKm: directDistanceKm,
       scenic: true,
-      detourVariant: scenario.detourLevel,
+      detourVariant: deliveredDetourLevel,
     );
-    final preferredSlackKm = switch (scenario.detourLevel) {
+    final preferredSlackKm = switch (deliveredDetourLevel) {
       1 => 0.0,
       2 => 1.5,
       3 => 3.0,

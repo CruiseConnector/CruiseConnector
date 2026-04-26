@@ -910,6 +910,8 @@ class _CruiseModePageState extends State<CruiseModePage>
                         selectedDetour: _selectedDetour,
                         onDetourChanged: _handleDetourChanged,
                         selectedAvoidHighways: _avoidHighways,
+                        proximityLatitude: _userLocation?.latitude,
+                        proximityLongitude: _userLocation?.longitude,
                         onAvoidHighwaysChanged: (value) {
                           debugPrint(
                             '[RouteDebug][UIState] avoidHighways=$value',
@@ -1701,6 +1703,9 @@ class _CruiseModePageState extends State<CruiseModePage>
         try {
           targetLocation = await _geocodingService.getCoordinatesFromAddress(
             _destinationController.text,
+            proximityLatitude: startPosition.latitude,
+            proximityLongitude: startPosition.longitude,
+            requireUnambiguous: true,
           );
         } on GeocodingException catch (e) {
           debugPrint('[CruiseMode] Geocoding failed: ${e.debugMessage}');
@@ -1732,6 +1737,19 @@ class _CruiseModePageState extends State<CruiseModePage>
         }
         if (destLat == null || destLng == null) {
           throw Exception('Bitte wähle ein Ziel aus.');
+        }
+        final destinationDistanceMeters = geo.Geolocator.distanceBetween(
+          startPosition.latitude,
+          startPosition.longitude,
+          destLat,
+          destLng,
+        );
+        if (destinationDistanceMeters < 250) {
+          _restoreGeneratedRouteFailureUi(
+            previousUiState,
+            'Start und Ziel liegen zu nah beieinander.',
+          );
+          return;
         }
         // Umweg-Variante bestimmen (0 = direkt, 1-3 = Umwege)
         detourVariant = switch (_selectedDetour) {
