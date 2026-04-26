@@ -996,12 +996,28 @@ void main() {
             .toList();
       }
       if (benchmarkRunsPerScenario > 0) {
-        final runsByScenario = <String, int>{};
-        selectedScenarios = selectedScenarios.where((scenario) {
-          final nextCount = (runsByScenario[scenario.name] ?? 0) + 1;
-          runsByScenario[scenario.name] = nextCount;
-          return nextCount <= benchmarkRunsPerScenario;
-        }).toList();
+        final firstByScenario = <String, _Scenario>{};
+        for (final scenario in selectedScenarios) {
+          firstByScenario.putIfAbsent(scenario.name, () => scenario);
+        }
+        selectedScenarios = [
+          for (final scenario in firstByScenario.values)
+            for (var run = 1; run <= benchmarkRunsPerScenario; run++)
+              _Scenario(
+                name: scenario.name,
+                routeType: scenario.routeType,
+                run: run,
+                start: scenario.start,
+                targetDistanceKm: scenario.targetDistanceKm,
+                destination: scenario.destination,
+                mode: scenario.mode,
+                detourLevel: scenario.detourLevel,
+                avoidHighways: scenario.avoidHighways,
+                subscriptionTier: scenario.subscriptionTier,
+                variantGroup:
+                    '${scenario.variantGroup ?? scenario.name}|run=$run',
+              ),
+        ];
       }
       if (benchmarkLimit > 0) {
         selectedScenarios = selectedScenarios.take(benchmarkLimit).toList();
@@ -1418,7 +1434,18 @@ void main() {
           'distanceKm': distanceKm,
           'overlapPercent': overlapPercent,
           'formOkay': success && bucket != 'weak',
-          'errorBanner': !success,
+          'errorBanner':
+              !success &&
+              responseCode != 'pool_bootstrap_pending' &&
+              responseCode != 'region_warming_up' &&
+              responseCode != 'route_quality_too_low' &&
+              responseCode != 'detour_not_available',
+          'warmupPopupWouldBeVisible':
+              !success &&
+              (responseCode == 'pool_bootstrap_pending' ||
+                  responseCode == 'region_warming_up' ||
+                  responseCode == 'route_quality_too_low' ||
+                  responseCode == 'detour_not_available'),
           'qualityReason': qualityReason,
           'errorCode': errorCode,
           'responseCode': responseCode,

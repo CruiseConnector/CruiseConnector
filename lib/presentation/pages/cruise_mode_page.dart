@@ -182,6 +182,7 @@ class _CruiseModePageState extends State<CruiseModePage>
   RouteResult? _sessionRouteResult;
   bool _configCollapsed = false; // Config-Panel ein-/ausgeklappt
   bool _showRouteInfoBanner = false; // Route-Info Banner nach Generation
+  bool _routeWarmupDialogOpen = false;
   int _cachedCurveCount = 0; // Vorab im Isolate berechnet
   List<double>? _activeDestinationCoordinate;
   String _activePointToPointMode = 'Standard';
@@ -2228,6 +2229,11 @@ class _CruiseModePageState extends State<CruiseModePage>
   }) {
     _restoreGeneratedRouteUiState(previousUiState);
 
+    if (_isRouteWarmupError(error)) {
+      unawaited(_showRouteWarmupDialog(error as RouteServiceException));
+      return;
+    }
+
     if (_snapshotHasVisibleRoute(previousUiState)) {
       debugPrint(
         '[CruiseMode] Route attempt failed but previous route stayed visible: '
@@ -2237,6 +2243,65 @@ class _CruiseModePageState extends State<CruiseModePage>
     }
 
     _showError(message, isCritical: true);
+  }
+
+  bool _isRouteWarmupError(Object? error) {
+    if (error is! RouteServiceException) return false;
+    final code =
+        error.edgeMeta['response_code']?.toString() ??
+        error.edgeMeta['code']?.toString();
+    return code == 'pool_bootstrap_pending' ||
+        code == 'region_warming_up' ||
+        code == 'route_quality_too_low' ||
+        code == 'detour_not_available' ||
+        error.edgeMeta['retry_search_started'] == true;
+  }
+
+  Future<void> _showRouteWarmupDialog(RouteServiceException error) async {
+    if (!mounted || _disposed || _routeWarmupDialogOpen) return;
+    _routeWarmupDialogOpen = true;
+    try {
+      final action = await showDialog<String>(
+        context: context,
+        builder: (context) {
+          return AlertDialog(
+            title: const Text('Wir suchen weiter'),
+            content: const Text(
+              'Wir suchen noch nach einer besseren Route. Für diese Strecke und Einstellung gibt es gerade noch keine geprüfte Variante. Bitte warte kurz oder versuche es erneut.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop('settings'),
+                child: const Text('Einstellungen ändern'),
+              ),
+              if (!_isRoundTrip)
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop('direct'),
+                  child: const Text('Direkte Route nehmen'),
+                ),
+              FilledButton(
+                onPressed: () => Navigator.of(context).pop('retry'),
+                child: const Text('Nochmal suchen'),
+              ),
+            ],
+          );
+        },
+      );
+      if (!mounted || _disposed) return;
+      debugPrint(
+        '[CruiseMode] Warmup dialog action=$action '
+        'code=${error.edgeMeta['response_code'] ?? error.edgeMeta['code']} '
+        'retry_reason=${error.edgeMeta['retry_reason']}',
+      );
+      if (action == 'direct') {
+        setState(() => _selectedDetour = 'Direkt');
+        unawaited(Future<void>.delayed(Duration.zero, _generateRoute));
+      } else if (action == 'retry') {
+        unawaited(Future<void>.delayed(Duration.zero, _generateRoute));
+      }
+    } finally {
+      _routeWarmupDialogOpen = false;
+    }
   }
 
   void _resetGeneratedRouteUiState() {

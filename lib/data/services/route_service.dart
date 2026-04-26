@@ -876,6 +876,7 @@ class RouteService {
       final maxAttempts = shouldUseTwoLiveAttempts ? 2 : 1;
       _RouteCandidate? bestCandidate;
       _RouteCandidate? spareCandidate;
+      _RouteCandidate? bestRejectedCandidate;
       RouteServiceException? lastError;
 
       for (var attempt = 0; attempt < maxAttempts; attempt++) {
@@ -916,6 +917,9 @@ class RouteService {
             } else if (_isBetterCandidate(candidate, spareCandidate)) {
               spareCandidate = candidate;
             }
+          } else if (bestRejectedCandidate == null ||
+              candidate.score < bestRejectedCandidate.score) {
+            bestRejectedCandidate = candidate;
           }
           if (candidate.accepted &&
               (candidate.isIdeal ||
@@ -1002,6 +1006,13 @@ class RouteService {
           );
         }
         return finalized;
+      }
+
+      if (bestRejectedCandidate != null && lastError == null) {
+        lastError = _buildPointToPointQualityTooLowException(
+          scenario: scenario,
+          candidate: bestRejectedCandidate,
+        );
       }
 
       final poolFallback = await _tryRoutePoolFallback(
@@ -3882,17 +3893,27 @@ class RouteService {
     required RouteServiceException? lastError,
   }) async {
     final cluster = coverage.assignment?.region.cityCluster;
-    final warmupMessage = _coverageStatusUserMessage(
-      coverage: coverage,
-      cluster: cluster,
-    );
+    final qualityTooLow =
+        lastError?.edgeMeta['route_quality_too_low'] == true ||
+        lastError?.edgeMeta['code'] == 'route_quality_too_low';
+    final warmupMessage = qualityTooLow
+        ? 'Wir suchen noch nach einer besseren Route. Für diese Strecke und Einstellung gibt es gerade noch keine geprüfte Variante. Bitte warte kurz oder versuche es erneut.'
+        : _coverageStatusUserMessage(coverage: coverage, cluster: cluster);
+    final responseCode = qualityTooLow
+        ? 'route_quality_too_low'
+        : 'pool_bootstrap_pending';
+    final poolBootstrapPending =
+        qualityTooLow || coverage.seedJobCreated || coverage.bootstrapPending;
     final meta = <String, dynamic>{
       ...coverage.toMeta(),
+      if (lastError != null) ...lastError.edgeMeta,
       'route_source': 'pool',
       'source': 'pool',
       'fallback_reason': lastError?.type.name ?? 'region_warming_up',
-      'code': 'pool_bootstrap_pending',
-      'response_code': 'pool_bootstrap_pending',
+      'code': responseCode,
+      'response_code': responseCode,
+      'pool_bootstrap_pending': poolBootstrapPending,
+      'route_quality_too_low': qualityTooLow,
       'requested_distance_bucket': _distanceBucketForPool(
         scenario.targetDistanceKm,
       ),
@@ -3904,7 +3925,9 @@ class RouteService {
       'user_message_required': true,
       'seed_job_queued': coverage.seedJobCreated || coverage.bootstrapPending,
       'retry_recommended': true,
+      'retry_available': true,
       'estimated_wait_minutes': 5,
+      'next_action': qualityTooLow ? 'retry_or_bootstrap' : 'bootstrap',
     };
     return RouteServiceException(
       type: RouteErrorType.noRoute,
@@ -3914,6 +3937,38 @@ class RouteService {
       edgeMeta: meta,
       statusCode: lastError?.statusCode,
       stackTrace: lastError?.stackTrace,
+    );
+  }
+
+  RouteServiceException _buildPointToPointQualityTooLowException({
+    required RouteScenario scenario,
+    required _RouteCandidate candidate,
+  }) {
+    return RouteServiceException(
+      type: RouteErrorType.quality,
+      userMessage:
+          'Wir suchen noch nach einer besseren Route. Für diese Strecke und Einstellung gibt es gerade noch keine geprüfte Variante.',
+      debugMessage:
+          'POINT_TO_POINT candidates were returned by Mapbox but rejected by quality gates. '
+          'bestTier=${candidate.tier.name}, distance=${candidate.route.distanceKm?.toStringAsFixed(1)}km',
+      edgeMeta: <String, dynamic>{
+        'code': 'route_quality_too_low',
+        'response_code': 'route_quality_too_low',
+        'route_quality_too_low': true,
+        'retry_available': true,
+        'retry_search_started': true,
+        'retry_attempted': scenario.detourLevel > 0,
+        'retry_reason': 'quality_gates_rejected_candidates',
+        'rejected_reason_summary': 'quality_gates_rejected_candidates',
+        'best_candidate_quality_tier': candidate.tier.name,
+        'next_action': 'retry_or_bootstrap',
+        'requested_detour_level': scenario.detourLevel,
+        'delivered_detour_level':
+            candidate.route.edgeMeta['delivered_detour_level'],
+        'detour_downgraded': candidate.route.edgeMeta['detour_downgraded'],
+        'detour_fallback_stage':
+            candidate.route.edgeMeta['detour_fallback_stage'],
+      },
     );
   }
 
@@ -4858,7 +4913,7 @@ class RouteService {
         final fallbackLevels = scenario.detourLevel >= 3
             ? <int>[2, 1]
             : scenario.detourLevel == 2
-            ? <int>[1]
+            ? <int>[2, 2, 1]
             : <int>[1];
         for (
           var fallbackIndex = 0;
@@ -4869,7 +4924,7 @@ class RouteService {
           final scenicVariant = _nextPointToPointVariant(
             scenario,
             normalizedVariant: fallbackDetourLevel,
-            diversitySeed: 97 + fallbackIndex,
+            diversitySeed: 97 + fallbackIndex * 11,
             shouldDiversify: true,
           );
           final scenicMode = scenario.style == 'Standard'
@@ -4909,6 +4964,9 @@ class RouteService {
             targetDistanceKm: scenicTargetKm,
             detourFactor: scenicDetourFactor,
             variant: scenicVariant,
+            offsetSide: scenario.detourLevel == 2 && fallbackDetourLevel == 2
+                ? -1
+                : scenicVariant.offsetSide,
             candidateBudget: 2,
           );
           scenicBody['simplify_waypoints'] = true;
@@ -4920,15 +4978,18 @@ class RouteService {
             scenicResult,
             startPosition,
           );
+          final edgeDeliveredLevel =
+              (scenicSnapped.edgeMeta['delivered_detour_level'] as num?)
+                  ?.toInt() ??
+              fallbackDetourLevel;
           scenicSnapped.edgeMeta['requested_detour_level'] =
               scenario.detourLevel;
-          scenicSnapped.edgeMeta['delivered_detour_level'] =
-              fallbackDetourLevel;
+          scenicSnapped.edgeMeta['delivered_detour_level'] = edgeDeliveredLevel;
           scenicSnapped.edgeMeta['detour_downgraded'] =
-              fallbackDetourLevel < scenario.detourLevel;
+              edgeDeliveredLevel < scenario.detourLevel;
           scenicSnapped.edgeMeta['detour_fallback_stage'] =
-              fallbackDetourLevel < scenario.detourLevel
-              ? 'client_downgraded_to_$fallbackDetourLevel'
+              edgeDeliveredLevel < scenario.detourLevel
+              ? 'client_downgraded_to_$edgeDeliveredLevel'
               : 'client_scenic_fallback';
           final scenicCandidate = _evaluateCandidate(
             scenario: scenario,

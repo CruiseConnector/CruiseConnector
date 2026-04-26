@@ -1029,8 +1029,8 @@ void main() {
         final scenicFallback = captured.firstWhere(
           (request) => request['simplify_waypoints'] == true,
         );
-        expect(scenicFallback['max_waypoints'], 1);
-        expect(scenicFallback['detour_level'], 1);
+        expect(scenicFallback['max_waypoints'], 2);
+        expect(scenicFallback['detour_level'], 2);
       },
     );
 
