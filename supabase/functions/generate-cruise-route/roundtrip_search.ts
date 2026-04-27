@@ -406,6 +406,7 @@ export async function searchBestRoundTripRoute({
     mode === "Kurvenjagd" &&
     targetDistanceKm > 70;
   const useMapboxAlternatives = !avoidHighways || targetDistanceKm <= 85;
+  const maxEvaluatedAlternatives = 3;
   const shortSportHighwayRoundTrip = !avoidHighwaysRoundTripSearch &&
     mode === "Sport Mode" &&
     targetDistanceKm <= 60;
@@ -414,7 +415,7 @@ export async function searchBestRoundTripRoute({
   const requestedAttemptBudget = Math.round(
     maxCandidateAttemptsHint ??
       (avoidHighwaysRoundTripSearch
-        ? 10
+        ? 6
         : shortSportHighwayRoundTrip
         ? 14
         : highCostCurveSearch
@@ -425,7 +426,18 @@ export async function searchBestRoundTripRoute({
         ? 8
         : 7),
   );
-  const globalAttemptBudget = avoidHighwaysRoundTripSearch ? 6 : Math.max(
+  const explicitAttemptCap =
+    typeof maxCandidateAttemptsHint === "number" &&
+      Number.isFinite(maxCandidateAttemptsHint)
+      ? Math.max(
+        1,
+        Math.min(
+          avoidHighwaysRoundTripSearch ? 6 : 10,
+          Math.round(maxCandidateAttemptsHint),
+        ),
+      )
+      : null;
+  const uncappedGlobalAttemptBudget = avoidHighwaysRoundTripSearch ? 6 : Math.max(
     shortSportHighwayRoundTrip ? 14 : 7,
     Math.min(
       highCostCurveSearch
@@ -440,6 +452,9 @@ export async function searchBestRoundTripRoute({
       requestedAttemptBudget,
     ),
   );
+  const globalAttemptBudget = explicitAttemptCap == null
+    ? uncappedGlobalAttemptBudget
+    : Math.max(1, Math.min(uncappedGlobalAttemptBudget, explicitAttemptCap));
   const searchStartTs = Date.now();
   // Time Budget: jeder Mapbox-Call kostet ~1.5–3 s; mit 7–9 Plänen + relax
   // brauchen wir ≥18 s, sonst killt das Time-Budget den Fallback bevor er
@@ -460,6 +475,17 @@ export async function searchBestRoundTripRoute({
   const mapboxRelaxedTimeoutMs = avoidHighwaysRoundTripSearch
     ? targetDistanceKm >= 95 ? 7500 : 8500
     : 10500;
+  const remainingSearchMs = (reserveMs = 0): number =>
+    roundTripTimeBudgetMs - (Date.now() - searchStartTs) - reserveMs;
+  const boundedMapboxTimeoutMs = (
+    preferredMs: number,
+    minimumMs = 2500,
+  ): number => Math.max(
+    minimumMs,
+    Math.min(preferredMs, remainingSearchMs(900)),
+  );
+  const hasMapboxCallBudget = (minimumMs = 3000): boolean =>
+    remainingSearchMs(900) >= minimumMs;
 
   const tuneDistanceConfigForAvoidHighways = (
     config: DistanceConfig,
@@ -791,7 +817,7 @@ export async function searchBestRoundTripRoute({
       if (
         phaseAttempts >= maxPhaseAttempts ||
         candidateAttempts >= globalAttemptBudget ||
-        Date.now() - searchStartTs >= roundTripTimeBudgetMs
+        !hasMapboxCallBudget()
       ) {
         debugLog(
           `[RT] Phase ${phase.name}: stopping early after ${phaseAttempts} attempts (global=${candidateAttempts})`,
@@ -817,8 +843,10 @@ export async function searchBestRoundTripRoute({
         {
           continueStraight: phase.continueStraight,
           alternatives: useMapboxAlternatives,
-          maxAttempts: mapboxCandidateMaxAttempts,
-          timeoutMs: mapboxCandidateTimeoutMs,
+          maxAttempts: candidateAttempts >= 2 || !hasMapboxCallBudget(8000)
+            ? 1
+            : mapboxCandidateMaxAttempts,
+          timeoutMs: boundedMapboxTimeoutMs(mapboxCandidateTimeoutMs),
           retryDelayBaseMs: 220,
         },
       );
@@ -834,7 +862,8 @@ export async function searchBestRoundTripRoute({
 
       if (
         fetchResult.outcome === "no_route" &&
-        relaxedPhaseExclude !== phase.exclude
+        relaxedPhaseExclude !== phase.exclude &&
+        hasMapboxCallBudget(3500)
       ) {
         debugLog(
           `[RT] ${plan.label}: retry with relaxed excludes "${
@@ -851,7 +880,7 @@ export async function searchBestRoundTripRoute({
             continueStraight: phase.continueStraight,
             alternatives: useMapboxAlternatives,
             maxAttempts: 1,
-            timeoutMs: mapboxRelaxedTimeoutMs,
+            timeoutMs: boundedMapboxTimeoutMs(mapboxRelaxedTimeoutMs),
           },
         );
         const relaxedFailureKind = getRetryKindFromMapboxFailure(relaxedFetch);
@@ -882,7 +911,7 @@ export async function searchBestRoundTripRoute({
       }
 
       const primaryRoutes = fetchResult.routes?.length
-        ? fetchResult.routes
+        ? fetchResult.routes.slice(0, maxEvaluatedAlternatives)
         : fetchResult.route
         ? [fetchResult.route]
         : [];
@@ -903,7 +932,8 @@ export async function searchBestRoundTripRoute({
         relaxedPhaseExclude !== phase.exclude &&
         quality.reason.startsWith("overlap=") &&
         rateLimitHits === 0 &&
-        timeoutHits < 2
+        timeoutHits < 2 &&
+        hasMapboxCallBudget(3500)
       ) {
         debugLog(
           `[RT] ${plan.label}: rejected with strict excludes, trying relaxed street filter`,
@@ -918,7 +948,7 @@ export async function searchBestRoundTripRoute({
             continueStraight: phase.continueStraight,
             alternatives: useMapboxAlternatives,
             maxAttempts: 1,
-            timeoutMs: mapboxRelaxedTimeoutMs,
+            timeoutMs: boundedMapboxTimeoutMs(mapboxRelaxedTimeoutMs),
           },
         );
         const relaxedFailureKind = getRetryKindFromMapboxFailure(relaxedFetch);
@@ -926,7 +956,7 @@ export async function searchBestRoundTripRoute({
         if (relaxedFailureKind === "timeout") timeoutHits += 1;
         if (shouldAbortForProviderPressure()) break;
         const relaxedRoutes = relaxedFetch.routes?.length
-          ? relaxedFetch.routes
+          ? relaxedFetch.routes.slice(0, maxEvaluatedAlternatives)
           : relaxedFetch.route
           ? [relaxedFetch.route]
           : [];

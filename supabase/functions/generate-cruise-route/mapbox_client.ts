@@ -15,7 +15,7 @@ const RETRYABLE_MAPBOX_STATUS_CODES = new Set([
 const MAX_MAPBOX_FETCH_ATTEMPTS = 3;
 const MAPBOX_FETCH_TIMEOUT_MS = 15000;
 const DEFAULT_MAPBOX_RATE_PER_MINUTE = 250;
-const MAPBOX_ROUTE_CACHE_MAX_ENTRIES = 64;
+const MAPBOX_ROUTE_CACHE_MAX_ENTRIES = 12;
 
 interface MapboxTokenBucket {
   ratePerMinute: number;
@@ -131,8 +131,13 @@ function getCachedMapboxRoute(
 function cacheMapboxRoute(
   cacheKey: string,
   result: MapboxRouteFetchResult,
+  options?: { alternatives?: boolean },
 ): void {
   if (result.outcome !== "ok" && result.outcome !== "no_route") return;
+  // Alternative responses carry multiple full geometries, steps and
+  // instructions. Random roundtrip candidates rarely repeat, so caching those
+  // payloads costs memory without materially improving hit rate.
+  if (result.outcome === "ok" && options?.alternatives === true) return;
 
   if (mapboxRouteCache.has(cacheKey)) {
     mapboxRouteCache.delete(cacheKey);
@@ -272,7 +277,7 @@ export async function getMapboxRouteDetailed(
           outcome: "no_route",
           details: JSON.stringify(data).slice(0, 500),
         };
-        cacheMapboxRoute(cacheKey, noRouteResult);
+        cacheMapboxRoute(cacheKey, noRouteResult, { alternatives });
         return noRouteResult;
       }
 
@@ -282,7 +287,7 @@ export async function getMapboxRouteDetailed(
         routes: data.routes,
         outcome: "ok",
       };
-      cacheMapboxRoute(cacheKey, successResult);
+      cacheMapboxRoute(cacheKey, successResult, { alternatives });
       return successResult;
     } catch (error) {
       const details = error instanceof Error ? error.message : String(error);

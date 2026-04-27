@@ -1031,12 +1031,12 @@ function evaluateRouteQualityCore(
 ): RouteQualityEvaluation {
   const coordinateCount = route?.geometry?.coordinates?.length ?? 0;
   const actualDistanceKm = getRouteDistanceKm(route);
-  const overlapPercent = calculateRouteOverlapPercent(route);
-  const shapeSignals = calculateRouteShapeSignals(route);
-  const hasManeuverUTurn = hasUTurnManeuver(route);
-  const hasGeometricUTurn = routeType === "ROUND_TRIP" &&
-    shapeSignals.geometricUTurnCount > 0;
-  const hasUTurn = hasManeuverUTurn || hasGeometricUTurn;
+  const targetDistanceKm = options?.targetDistanceKm ?? 0;
+  const distanceConfig = options?.distanceConfig;
+  const avoidHighways = options?.avoidHighways === true;
+  const distanceDeltaKm = targetDistanceKm > 0
+    ? Math.abs(actualDistanceKm - targetDistanceKm)
+    : 0;
   // Anti-Kraken: Kurvenjagd bekommt einen etwas schärferen Overlap-
   // Threshold, damit echte Out-and-Back-/Ast-Formen (Sackgasse hin+zurück)
   // konsequent als rejected markiert werden. Wert kalibriert auf reale
@@ -1060,15 +1060,69 @@ function evaluateRouteQualityCore(
     isSportMode &&
     options?.avoidHighways === false &&
     (options?.targetDistanceKm ?? Number.POSITIVE_INFINITY) <= 60;
+  const hardDistanceMin = targetDistanceKm <= 0 ? 0 : targetDistanceKm *
+    (targetDistanceKm <= 60
+      ? avoidHighways ? 0.64 : 0.70
+      : targetDistanceKm <= 100
+      ? 0.74
+      : 0.76);
+  const hardDistanceMax = targetDistanceKm <= 0
+    ? Number.POSITIVE_INFINITY
+    : targetDistanceKm *
+      (targetDistanceKm <= 60
+        ? avoidHighways ? isShortNoHighwaySportRoundTrip ? 1.30 : 1.44 : 1.36
+        : targetDistanceKm <= 100
+        ? 1.34
+        : 1.30);
+  const severeDistanceMiss = targetDistanceKm > 0 &&
+    (actualDistanceKm < hardDistanceMin || actualDistanceKm > hardDistanceMax);
+  const shortSportPresentationMinKm = 44.8;
+  const shortSportPresentationMaxKm = 55.2;
+  const shortSportRawDistanceMiss = isShortNoHighwaySportRoundTrip &&
+    (actualDistanceKm < shortSportPresentationMinKm - 1.0 ||
+      actualDistanceKm > shortSportPresentationMaxKm + 1.2);
+  if (routeType === "ROUND_TRIP" && severeDistanceMiss) {
+    return {
+      passed: false,
+      reason: `distance=${actualDistanceKm.toFixed(1)}km`,
+      overlapPercent: 0,
+      hasUTurn: false,
+      tier: "rejected",
+      score: 910 +
+        distanceDeltaKm * 7 +
+        Math.max(0, Math.abs(actualDistanceKm - targetDistanceKm)) * 2.5,
+      coordinateCount,
+      actualDistanceKm,
+      distanceDeltaKm,
+    };
+  }
+  if (routeType === "ROUND_TRIP" && shortSportRawDistanceMiss) {
+    return {
+      passed: false,
+      reason: `short_sport_distance=${actualDistanceKm.toFixed(1)}km`,
+      overlapPercent: 0,
+      hasUTurn: false,
+      tier: "rejected",
+      score: 940 +
+        Math.abs(
+            actualDistanceKm < shortSportPresentationMinKm
+              ? shortSportPresentationMinKm - actualDistanceKm
+              : actualDistanceKm - shortSportPresentationMaxKm,
+          ) * 18,
+      coordinateCount,
+      actualDistanceKm,
+      distanceDeltaKm,
+    };
+  }
+  const overlapPercent = calculateRouteOverlapPercent(route);
+  const shapeSignals = calculateRouteShapeSignals(route);
+  const hasManeuverUTurn = hasUTurnManeuver(route);
+  const hasGeometricUTurn = routeType === "ROUND_TRIP" &&
+    shapeSignals.geometricUTurnCount > 0;
+  const hasUTurn = hasManeuverUTurn || hasGeometricUTurn;
   const overlapThreshold = routeType === "ROUND_TRIP"
     ? (isCurveChase ? 15 : 16)
     : (isCurveChase ? 12 : 14);
-  const targetDistanceKm = options?.targetDistanceKm ?? 0;
-  const distanceConfig = options?.distanceConfig;
-  const avoidHighways = options?.avoidHighways === true;
-  const distanceDeltaKm = targetDistanceKm > 0
-    ? Math.abs(actualDistanceKm - targetDistanceKm)
-    : 0;
   // Kurvenjagd strenger bei Haken/Radial-Peaks — das sind die typischen
   // „Äste/Kraken“ (Mapbox stolpert in Sackgasse, kehrt um, nächster Ast).
   // 6 (statt 8) ist genug aggressiv für Anti-Kraken ohne valide Kurven-Loops
@@ -1252,27 +1306,6 @@ function evaluateRouteQualityCore(
     coordinateCount < severeCoordinateThreshold && actualDistanceKm > 8;
   const weakGeometry = coordinateCount < weakGeometryThreshold &&
     actualDistanceKm > 15;
-  const hardDistanceMin = targetDistanceKm <= 0 ? 0 : targetDistanceKm *
-    (targetDistanceKm <= 60
-      ? avoidHighways ? 0.64 : 0.70
-      : targetDistanceKm <= 100
-      ? 0.74
-      : 0.76);
-  const hardDistanceMax = targetDistanceKm <= 0
-    ? Number.POSITIVE_INFINITY
-    : targetDistanceKm *
-      (targetDistanceKm <= 60
-        ? avoidHighways ? isShortNoHighwaySportRoundTrip ? 1.30 : 1.44 : 1.36
-        : targetDistanceKm <= 100
-        ? 1.34
-        : 1.30);
-  const severeDistanceMiss = targetDistanceKm > 0 &&
-    (actualDistanceKm < hardDistanceMin || actualDistanceKm > hardDistanceMax);
-  const shortSportPresentationMinKm = 44.8;
-  const shortSportPresentationMaxKm = 55.2;
-  const shortSportRawDistanceMiss = isShortNoHighwaySportRoundTrip &&
-    (actualDistanceKm < shortSportPresentationMinKm - 1.0 ||
-      actualDistanceKm > shortSportPresentationMaxKm + 1.2);
   const shortSportOverlapMiss = isShortNoHighwaySportRoundTrip &&
     overlapPercent > 22;
   const noHighwayLoopCleanup = isNoHighwayHairpinEligibleRoundTrip
@@ -1744,16 +1777,6 @@ export function evaluateRouteCleanupGate(
       : measureCoordinatePathMeters(coordinates),
     options?.startLocation,
   );
-  const cleanedRoute = cloneRouteWithCoordinates(
-    route,
-    cleanup.coordinates,
-    cleanup.cleanedDistanceKm,
-  );
-  const cleanedQuality = evaluateRouteQualityCore(
-    cleanedRoute,
-    routeType,
-    options,
-  );
   const distanceConfig = options?.distanceConfig;
   const targetDistanceKm = options?.targetDistanceKm ?? 0;
   // Medium/long no-highway Sport rides run through alpine serpentines
@@ -1798,6 +1821,29 @@ export function evaluateRouteCleanupGate(
       reason: `cleanup_distance=${cleanup.cleanedDistanceKm.toFixed(1)}km`,
     };
   }
+
+  if (
+    !cleanup.startTrimApplied &&
+    !cleanup.loopRemovalApplied &&
+    cleanup.removedPointPercent <= 0.1 &&
+    cleanup.cleanedGeometricUTurnCount === 0
+  ) {
+    return {
+      ...cleanup,
+      cleanedCoordinates: cleanup.coordinates,
+    };
+  }
+
+  const cleanedRoute = cloneRouteWithCoordinates(
+    route,
+    cleanup.coordinates,
+    cleanup.cleanedDistanceKm,
+  );
+  const cleanedQuality = evaluateRouteQualityCore(
+    cleanedRoute,
+    routeType,
+    options,
+  );
 
   if (
     !mediumLongNoHighwaySportGate && hasFoldLoop(cleanedQuality.reason, cleanup)
