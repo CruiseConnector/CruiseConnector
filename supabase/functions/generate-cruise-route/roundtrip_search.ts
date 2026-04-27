@@ -408,7 +408,7 @@ export async function searchBestRoundTripRoute({
   const useMapboxAlternatives = !avoidHighways;
   const maxEvaluatedAlternatives = 3;
   const noHighwayAttemptBudget = targetDistanceKm <= 60
-    ? 4
+    ? 6
     : targetDistanceKm <= 85
     ? 4
     : 5;
