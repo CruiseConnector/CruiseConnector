@@ -497,6 +497,148 @@ void main() {
       expect(captured['language'], 'de');
     });
 
+    test('Zufall-Rundkurs sendet keine Wegpunkte-Felder', () async {
+      when(mockInvoker.invoke(any)).thenAnswer(
+        (_) async =>
+            _buildRouteResponse(distanceMeters: 50000, durationSeconds: 3600),
+      );
+
+      await service.generateRoundTrip(
+        startPosition: _munich(),
+        targetDistanceKm: 50,
+        mode: 'Sport Mode',
+        planningType: 'Zufall',
+      );
+
+      final captured =
+          verify(mockInvoker.invoke(captureAny)).captured.first
+              as Map<String, dynamic>;
+      expect(captured.containsKey('user_waypoints'), isFalse);
+      expect(captured.containsKey('manual_waypoints'), isFalse);
+      expect(captured.containsKey('close_loop'), isFalse);
+      expect(captured.containsKey('allow_seed_generation'), isFalse);
+    });
+
+    test('sendet User-Wegpunkte für Wegpunkte-Rundkurs', () async {
+      when(mockInvoker.invoke(any)).thenAnswer(
+        (_) async =>
+            _buildRouteResponse(distanceMeters: 42000, durationSeconds: 3200),
+      );
+
+      await service.generateRoundTrip(
+        startPosition: _munich(),
+        targetDistanceKm: 50,
+        mode: 'Sport Mode',
+        planningType: 'Wegpunkte',
+        userWaypoints: const [
+          {'latitude': 48.1501, 'longitude': 11.6201},
+          {'latitude': 48.1151, 'longitude': 11.6502},
+        ],
+      );
+
+      final captured =
+          verify(mockInvoker.invoke(captureAny)).captured.first
+              as Map<String, dynamic>;
+      expect(captured['planning_type'], 'Wegpunkte');
+      expect(captured['route_type'], 'ROUND_TRIP');
+      expect(captured['close_loop'], isTrue);
+      expect(captured['waypoint_order'], 'fixed');
+      expect(captured['allow_seed_generation'], isFalse);
+      expect(captured['user_waypoints'], hasLength(2));
+      expect(captured['manual_waypoints'], hasLength(2));
+      expect(captured['user_waypoints'][0]['latitude'], 48.1501);
+      expect(captured['user_waypoints'][0]['longitude'], 11.6201);
+      expect(captured['user_waypoints'][1]['latitude'], 48.1151);
+      expect(captured['user_waypoints'][1]['longitude'], 11.6502);
+      expect(
+        captured['client_scenario_key'].toString(),
+        contains('wp48.15010,11.62010;48.11510,11.65020'),
+      );
+    });
+
+    test('Wegpunkte-Rundkurs braucht mindestens einen User-Wegpunkt', () async {
+      await expectLater(
+        service.generateRoundTrip(
+          startPosition: _munich(),
+          targetDistanceKm: 50,
+          mode: 'Sport Mode',
+          planningType: 'Wegpunkte',
+        ),
+        throwsA(isA<RouteServiceException>()),
+      );
+      verifyNever(mockInvoker.invoke(any));
+    });
+
+    test('Wegpunkte-Rundkurs lehnt mehr als 8 Wegpunkte ab', () async {
+      await expectLater(
+        service.generateRoundTrip(
+          startPosition: _munich(),
+          targetDistanceKm: 50,
+          mode: 'Sport Mode',
+          planningType: 'Wegpunkte',
+          userWaypoints: List.generate(
+            9,
+            (index) => {
+              'latitude': 48.15 + index * 0.01,
+              'longitude': 11.62 + index * 0.01,
+            },
+          ),
+        ),
+        throwsA(
+          isA<RouteServiceException>().having(
+            (error) => error.edgeMeta['response_code'],
+            'response_code',
+            'too_many_waypoints',
+          ),
+        ),
+      );
+      verifyNever(mockInvoker.invoke(any));
+    });
+
+    test('Wegpunkte-Rundkurs lehnt zu nahe Wegpunkte ab', () async {
+      await expectLater(
+        service.generateRoundTrip(
+          startPosition: _munich(),
+          targetDistanceKm: 50,
+          mode: 'Sport Mode',
+          planningType: 'Wegpunkte',
+          userWaypoints: const [
+            {'latitude': 48.1360, 'longitude': 11.5825},
+          ],
+        ),
+        throwsA(
+          isA<RouteServiceException>().having(
+            (error) => error.edgeMeta['response_code'],
+            'response_code',
+            'waypoint_duplicate_or_too_close',
+          ),
+        ),
+      );
+      verifyNever(mockInvoker.invoke(any));
+    });
+
+    test('Wegpunkte-Rundkurs lehnt zu entfernte Wegpunkte ab', () async {
+      await expectLater(
+        service.generateRoundTrip(
+          startPosition: _munich(),
+          targetDistanceKm: 50,
+          mode: 'Sport Mode',
+          planningType: 'Wegpunkte',
+          userWaypoints: const [
+            {'latitude': 49.0000, 'longitude': 12.6000},
+          ],
+        ),
+        throwsA(
+          isA<RouteServiceException>().having(
+            (error) => error.edgeMeta['response_code'],
+            'response_code',
+            'waypoint_too_far',
+          ),
+        ),
+      );
+      verifyNever(mockInvoker.invoke(any));
+    });
+
     test(
       'wiederholte Rundkurs-Generierung nutzt unterschiedliche Seeds',
       () async {

@@ -29,6 +29,11 @@ class CruiseSetupCard extends StatefulWidget {
     this.onAvoidHighwaysChanged,
     this.proximityLatitude,
     this.proximityLongitude,
+    this.roundTripWaypointCount = 0,
+    this.waypointActionsEnabled = true,
+    this.onGenerateWaypointSeed,
+    this.onRemoveLastWaypoint,
+    this.onClearWaypoints,
   });
 
   final bool isRoundTrip;
@@ -52,6 +57,11 @@ class CruiseSetupCard extends StatefulWidget {
   final ValueChanged<bool>? onAvoidHighwaysChanged;
   final double? proximityLatitude;
   final double? proximityLongitude;
+  final int roundTripWaypointCount;
+  final bool waypointActionsEnabled;
+  final VoidCallback? onGenerateWaypointSeed;
+  final VoidCallback? onRemoveLastWaypoint;
+  final VoidCallback? onClearWaypoints;
 
   static const _geocodingService = GeocodingService();
 
@@ -224,17 +234,85 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
                 onTap: () => widget.onPlanningTypeChanged('Zufall'),
               ),
             ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _ChoiceButton(
+                label: 'Wegpunkte',
+                isSelected: widget.planningType == 'Wegpunkte',
+                onTap: () => widget.onPlanningTypeChanged('Wegpunkte'),
+              ),
+            ),
           ],
         ),
-        const SizedBox(height: 10),
-        const Text(
-          'Wegpunkt-Planung folgt in einer separaten Ausbaustufe.',
-          style: TextStyle(
-            color: Colors.white38,
-            fontSize: 12,
-            fontWeight: FontWeight.w400,
+        if (widget.planningType == 'Wegpunkte') ...[
+          const SizedBox(height: 12),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: const Color(0xFF0B0E14),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: Colors.white10),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  widget.roundTripWaypointCount == 0
+                      ? 'Tippe auf die Karte, um 1-8 Wegpunkte zu setzen.'
+                      : '${widget.roundTripWaypointCount} Wegpunkt${widget.roundTripWaypointCount == 1 ? '' : 'e'} gesetzt. Reihenfolge: Start -> Punkte -> Start.',
+                  style: const TextStyle(
+                    color: Colors.white70,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    _SmallActionButton(
+                      label: 'Seed generieren',
+                      icon: Icons.auto_awesome,
+                      onTap: widget.waypointActionsEnabled
+                          ? widget.onGenerateWaypointSeed
+                          : null,
+                    ),
+                    _SmallActionButton(
+                      label: 'Letzten löschen',
+                      icon: Icons.undo,
+                      onTap:
+                          widget.waypointActionsEnabled &&
+                              widget.roundTripWaypointCount > 0
+                          ? widget.onRemoveLastWaypoint
+                          : null,
+                    ),
+                    _SmallActionButton(
+                      label: 'Alle löschen',
+                      icon: Icons.clear,
+                      onTap:
+                          widget.waypointActionsEnabled &&
+                              widget.roundTripWaypointCount > 0
+                          ? widget.onClearWaypoints
+                          : null,
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
-        ),
+        ] else ...[
+          const SizedBox(height: 10),
+          const Text(
+            'Die App erzeugt automatisch eine geprüfte Rundkursroute.',
+            style: TextStyle(
+              color: Colors.white38,
+              fontSize: 12,
+              fontWeight: FontWeight.w400,
+            ),
+          ),
+        ],
       ],
     );
   }
@@ -704,6 +782,60 @@ class _HighwayToggleSwitch extends StatelessWidget {
               ],
             ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SmallActionButton extends StatelessWidget {
+  const _SmallActionButton({
+    required this.label,
+    required this.icon,
+    required this.onTap,
+  });
+
+  final String label;
+  final IconData icon;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = onTap != null;
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: enabled
+              ? const Color(0xFFFF3B30).withValues(alpha: 0.16)
+              : Colors.white.withValues(alpha: 0.05),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(
+            color: enabled
+                ? const Color(0xFFFF3B30).withValues(alpha: 0.35)
+                : Colors.white10,
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              icon,
+              size: 15,
+              color: enabled ? const Color(0xFFFF3B30) : Colors.white30,
+            ),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: TextStyle(
+                color: enabled ? Colors.white70 : Colors.white30,
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
         ),
       ),
     );

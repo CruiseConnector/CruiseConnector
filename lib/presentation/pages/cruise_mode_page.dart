@@ -193,6 +193,7 @@ class _CruiseModePageState extends State<CruiseModePage>
   int? _lastGeneratedSelectedKm;
   String? _lastGeneratedSelectedStyle;
   bool? _lastGeneratedAvoidHighways;
+  String? _lastGeneratedWaypointSignature;
   List<double> _recentDestinationDistances = [];
   List<SpeedLimitSegment> _activeSpeedLimits = const [];
 
@@ -200,6 +201,8 @@ class _CruiseModePageState extends State<CruiseModePage>
   bool _isLoading = false;
   final MapController _mapController = MapController();
   bool _mapReady = false;
+  final List<LatLng> _roundTripWaypoints = [];
+  int _waypointSeedCounter = 0;
   // Route als LatLng-Liste für PolylineLayer
   List<LatLng> _routeLatLngs = [];
   Timer? _routeDrawAnimationTimer;
@@ -642,12 +645,228 @@ class _CruiseModePageState extends State<CruiseModePage>
       } else if (!pointToPointStyles.contains(_selectedStyle)) {
         _selectedStyle = 'Abendrunde';
       }
+      if (!isRoundTrip) {
+        _planningType = 'Zufall';
+        _roundTripWaypoints.clear();
+      }
     });
     _dismissTransientRouteUi();
     _resetGeneratedRouteUiState();
   }
 
   bool _requiresDestination(bool isRoundTrip) => !isRoundTrip;
+
+  bool get _isWaypointPlanning => _isRoundTrip && _planningType == 'Wegpunkte';
+
+  void _handlePlanningTypeChanged(String planningType) {
+    if (_isLoading) return;
+    setState(() {
+      _planningType = planningType;
+      if (planningType == 'Zufall') {
+        _roundTripWaypoints.clear();
+      }
+    });
+    _dismissTransientRouteUi();
+    _resetGeneratedRouteUiState();
+  }
+
+  String _roundTripWaypointSignature([List<LatLng>? waypoints]) {
+    final points = waypoints ?? _roundTripWaypoints;
+    if (points.isEmpty) return 'none';
+    return points
+        .map(
+          (point) =>
+              '${point.latitude.toStringAsFixed(5)},${point.longitude.toStringAsFixed(5)}',
+        )
+        .join(';');
+  }
+
+  void _invalidateWaypointPreview() {
+    _dismissTransientRouteUi();
+    _resetGeneratedRouteUiState();
+  }
+
+  void _handleMapTap(TapPosition tapPosition, LatLng point) {
+    if (!_isWaypointPlanning || _isLoading || _isRouteConfirmed) return;
+    if (_roundTripWaypoints.length >= 8) {
+      _showError('Maximal 8 Wegpunkte möglich.', isCritical: true);
+      return;
+    }
+    setState(() => _roundTripWaypoints.add(point));
+    _invalidateWaypointPreview();
+    HapticFeedback.selectionClick();
+  }
+
+  void _removeLastRoundTripWaypoint() {
+    if (_isLoading || _roundTripWaypoints.isEmpty) return;
+    setState(() => _roundTripWaypoints.removeLast());
+    _invalidateWaypointPreview();
+  }
+
+  void _clearRoundTripWaypoints() {
+    if (_isLoading || _roundTripWaypoints.isEmpty) return;
+    setState(_roundTripWaypoints.clear);
+    _invalidateWaypointPreview();
+  }
+
+  void _generateRoundTripWaypointSeed() {
+    if (_isLoading) return;
+    unawaited(_generateRoundTripWaypointSeedAsync());
+  }
+
+  Future<void> _generateRoundTripWaypointSeedAsync() async {
+    geo.Position startPosition;
+    try {
+      startPosition = await _getStartCoordinates();
+    } catch (_) {
+      _showError('Aktueller Standort noch nicht verfügbar.', isCritical: true);
+      return;
+    }
+    final center = LatLng(startPosition.latitude, startPosition.longitude);
+    final digits = _selectedLength.replaceAll(RegExp(r'[^0-9]'), '');
+    final targetKm = digits.isNotEmpty ? int.parse(digits) : 50;
+    final nextSeed = _waypointSeedCounter + 1;
+    var points = <LatLng>[];
+    for (var attempt = 0; attempt < 4; attempt += 1) {
+      points = _buildRoundTripWaypointSeed(
+        center: center,
+        targetKm: targetKm,
+        style: _selectedStyle,
+        variant: nextSeed + attempt,
+      );
+      if (_waypointLayoutLooksStable(center, points, targetKm)) break;
+    }
+    setState(() {
+      _waypointSeedCounter = nextSeed;
+      _planningType = 'Wegpunkte';
+      _roundTripWaypoints
+        ..clear()
+        ..addAll(points);
+    });
+    _invalidateWaypointPreview();
+  }
+
+  List<LatLng> _buildRoundTripWaypointSeed({
+    required LatLng center,
+    required int targetKm,
+    required String style,
+    required int variant,
+  }) {
+    final count = style == 'Entdecker'
+        ? 4
+        : style == 'Abendrunde'
+        ? 2
+        : 3;
+    final baseRadiusKm = math.min(
+      18.0,
+      math.max(4.0, targetKm / (style == 'Abendrunde' ? 8.5 : 6.0)),
+    );
+    final styleBaseBearing = switch (style) {
+      'Kurvenjagd' => 120.0,
+      'Entdecker' => 35.0,
+      'Abendrunde' => 250.0,
+      _ => 75.0,
+    };
+    final baseBearing = (styleBaseBearing + variant * 47.0) % 360.0;
+    final offsets = switch (style) {
+      'Kurvenjagd' => const [-82.0, 4.0, 112.0],
+      'Entdecker' => const [-92.0, -24.0, 48.0, 128.0],
+      'Abendrunde' => const [-48.0, 62.0],
+      _ => const [-54.0, 12.0, 84.0],
+    };
+    final factors = switch (style) {
+      'Kurvenjagd' => const [0.90, 1.16, 0.98],
+      'Entdecker' => const [0.88, 1.12, 0.98, 1.06],
+      'Abendrunde' => const [0.78, 0.90],
+      _ => const [0.94, 1.08, 0.92],
+    };
+    final highwayScale = _avoidHighways ? 0.95 : 1.0;
+    return List.generate(count, (index) {
+      final bearing = (baseBearing + offsets[index]) % 360.0;
+      final distanceKm = baseRadiusKm * factors[index] * highwayScale;
+      return _offsetLatLng(center, distanceKm, bearing);
+    }, growable: false);
+  }
+
+  bool _waypointLayoutLooksStable(
+    LatLng center,
+    List<LatLng> points,
+    int targetKm,
+  ) {
+    if (points.isEmpty || points.length > 8) return false;
+    final maxDistanceKm = math.max(12.0, math.min(80.0, targetKm * 0.75));
+    final bearings = <double>[];
+    for (var i = 0; i < points.length; i += 1) {
+      final point = points[i];
+      final fromStartKm =
+          geo.Geolocator.distanceBetween(
+            center.latitude,
+            center.longitude,
+            point.latitude,
+            point.longitude,
+          ) /
+          1000.0;
+      if (fromStartKm < 0.35 || fromStartKm > maxDistanceKm) return false;
+      for (var j = 0; j < i; j += 1) {
+        final pairKm =
+            geo.Geolocator.distanceBetween(
+              point.latitude,
+              point.longitude,
+              points[j].latitude,
+              points[j].longitude,
+            ) /
+            1000.0;
+        if (pairKm < 0.35) return false;
+      }
+      bearings.add(
+        calculateBearing(
+          center.latitude,
+          center.longitude,
+          point.latitude,
+          point.longitude,
+        ),
+      );
+    }
+    return _bearingSpreadDegrees(bearings) >= 22.0;
+  }
+
+  double _bearingSpreadDegrees(List<double> bearings) {
+    if (bearings.isEmpty) return 0.0;
+    final normalized =
+        bearings
+            .map((bearing) => bearing % 360)
+            .map((bearing) => bearing < 0 ? bearing + 360 : bearing)
+            .toList()
+          ..sort();
+    var largestGap = 0.0;
+    for (var i = 0; i < normalized.length; i += 1) {
+      final current = normalized[i];
+      final next =
+          normalized[(i + 1) % normalized.length] +
+          (i == normalized.length - 1 ? 360.0 : 0.0);
+      largestGap = math.max(largestGap, next - current);
+    }
+    return 360.0 - largestGap;
+  }
+
+  LatLng _offsetLatLng(LatLng origin, double distanceKm, double bearingDeg) {
+    const earthRadiusKm = 6371.0;
+    final angularDistance = distanceKm / earthRadiusKm;
+    final bearing = bearingDeg * math.pi / 180.0;
+    final lat1 = origin.latitude * math.pi / 180.0;
+    final lng1 = origin.longitude * math.pi / 180.0;
+    final lat2 = math.asin(
+      math.sin(lat1) * math.cos(angularDistance) +
+          math.cos(lat1) * math.sin(angularDistance) * math.cos(bearing),
+    );
+    final lng2 =
+        lng1 +
+        math.atan2(
+          math.sin(bearing) * math.sin(angularDistance) * math.cos(lat1),
+          math.cos(angularDistance) - math.sin(lat1) * math.sin(lat2),
+        );
+    return LatLng(lat2 * 180.0 / math.pi, lng2 * 180.0 / math.pi);
+  }
 
   // ═══════════════════════ BUILD ════════════════════════════════════════════
 
@@ -896,8 +1115,7 @@ class _CruiseModePageState extends State<CruiseModePage>
                         selectedDestination: _selectedDestination,
                         destinationController: _destinationController,
                         onRoundTripChanged: _handleRouteModeChanged,
-                        onPlanningTypeChanged: (v) =>
-                            setState(() => _planningType = 'Zufall'),
+                        onPlanningTypeChanged: _handlePlanningTypeChanged,
                         onLengthChanged: (v) {
                           debugPrint('[RouteDebug][UIState] selectedKm=$v');
                           setState(() => _selectedLength = v);
@@ -922,6 +1140,11 @@ class _CruiseModePageState extends State<CruiseModePage>
                         onDestinationSelected: _onDestinationSelected,
                         onDestinationInputChanged:
                             _handleDestinationInputChanged,
+                        roundTripWaypointCount: _roundTripWaypoints.length,
+                        waypointActionsEnabled: !_isLoading,
+                        onGenerateWaypointSeed: _generateRoundTripWaypointSeed,
+                        onRemoveLastWaypoint: _removeLastRoundTripWaypoint,
+                        onClearWaypoints: _clearRoundTripWaypoints,
                         onDestinationCleared: () => setState(() {
                           _selectedDestination = null;
                           _destinationController.clear();
@@ -1156,6 +1379,7 @@ class _CruiseModePageState extends State<CruiseModePage>
         initialCenter: const LatLng(51.165691, 10.451526),
         initialZoom: 6.0,
         onMapReady: _onMapReady,
+        onTap: _handleMapTap,
         // Bei Berührung der Karte: Kamera-Lock deaktivieren (war Listener-Widget)
         onPointerDown: (event, point) {
           if (_isCameraLocked && _isRouteConfirmed) {
@@ -1206,6 +1430,26 @@ class _CruiseModePageState extends State<CruiseModePage>
                 height: _puckSize,
                 child: _buildLocationPuck(_userHeading),
               ),
+            ],
+          ),
+        if (_isWaypointPlanning && _roundTripWaypoints.isNotEmpty)
+          MarkerLayer(
+            markers: [
+              for (var i = 0; i < _roundTripWaypoints.length; i++)
+                Marker(
+                  point: _roundTripWaypoints[i],
+                  width: 44,
+                  height: 44,
+                  child: GestureDetector(
+                    onTap: _isLoading
+                        ? null
+                        : () {
+                            setState(() => _roundTripWaypoints.removeAt(i));
+                            _invalidateWaypointPreview();
+                          },
+                    child: _buildWaypointMarker(i + 1),
+                  ),
+                ),
             ],
           ),
         // ── User-Position Marker (Live-Navigation) ─────────────────────────
@@ -1357,6 +1601,32 @@ class _CruiseModePageState extends State<CruiseModePage>
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildWaypointMarker(int index) {
+    return Container(
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: const Color(0xFFFF3B30),
+        border: Border.all(color: Colors.white, width: 2),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.35),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      alignment: Alignment.center,
+      child: Text(
+        '$index',
+        style: const TextStyle(
+          color: Colors.white,
+          fontWeight: FontWeight.w900,
+          fontSize: 14,
         ),
       ),
     );
@@ -1656,13 +1926,37 @@ class _CruiseModePageState extends State<CruiseModePage>
     RouteCacheService.beginUserGeneration();
 
     try {
-      if (_isRoundTrip && _planningType != 'Zufall') {
-        _planningType = 'Zufall';
-      }
       final startPosition = await _getStartCoordinates();
 
       final digits = _selectedLength.replaceAll(RegExp(r'[^0-9]'), '');
       final distance = digits.isNotEmpty ? int.parse(digits) : 50;
+      final waypointSnapshot = List<LatLng>.unmodifiable(_roundTripWaypoints);
+      final waypointSignature = _isWaypointPlanning
+          ? _roundTripWaypointSignature(waypointSnapshot)
+          : null;
+      if (_isWaypointPlanning &&
+          (waypointSnapshot.isEmpty || waypointSnapshot.length > 8)) {
+        _restoreGeneratedRouteFailureUi(
+          previousUiState,
+          waypointSnapshot.isEmpty
+              ? 'Setze mindestens einen Wegpunkt oder lass Seed-Punkte erzeugen.'
+              : 'Bitte nutze maximal 8 Wegpunkte.',
+          error: RouteServiceException(
+            type: RouteErrorType.validation,
+            userMessage: waypointSnapshot.isEmpty
+                ? 'Setze mindestens einen Wegpunkt oder lass Seed-Punkte erzeugen.'
+                : 'Bitte nutze maximal 8 Wegpunkte.',
+            debugMessage:
+                'Invalid UI waypoint count=${waypointSnapshot.length}.',
+            edgeMeta: {
+              'response_code': waypointSnapshot.isEmpty
+                  ? 'too_few_waypoints'
+                  : 'too_many_waypoints',
+            },
+          ),
+        );
+        return;
+      }
       final forceFreshVariant = previousUiState.lastRouteResult != null;
       final settingsChanged =
           previousUiState.lastRouteResult != null &&
@@ -1670,7 +1964,8 @@ class _CruiseModePageState extends State<CruiseModePage>
               (_isRoundTrip &&
                   (_lastGeneratedSelectedKm != distance ||
                       _lastGeneratedSelectedStyle != _selectedStyle ||
-                      _lastGeneratedAvoidHighways != _avoidHighways)) ||
+                      _lastGeneratedAvoidHighways != _avoidHighways ||
+                      _lastGeneratedWaypointSignature != waypointSignature)) ||
               (!_isRoundTrip &&
                   (_lastGeneratedSelectedStyle != _selectedStyle ||
                       _lastGeneratedAvoidHighways != _avoidHighways)));
@@ -1685,6 +1980,8 @@ class _CruiseModePageState extends State<CruiseModePage>
         'trigger=$routeDebugTrigger '
         'routeType=${_isRoundTrip ? 'ROUND_TRIP' : 'POINT_TO_POINT'} '
         'planningType=$_planningType selectedLength=$_selectedLength '
+        'waypointCount=${waypointSnapshot.length} '
+        'waypointSignature=${waypointSignature ?? 'none'} '
         'selectedLocation=$_selectedLocation '
         'useCurrentLocation=${_selectedLocation == 'Aktueller Standort'} '
         'startLat=${startPosition.latitude.toStringAsFixed(5)} '
@@ -1803,6 +2100,14 @@ class _CruiseModePageState extends State<CruiseModePage>
           targetDistanceKm: distance,
           mode: _selectedStyle,
           planningType: _planningType,
+          userWaypoints: waypointSnapshot
+              .map(
+                (point) => <String, double>{
+                  'latitude': point.latitude,
+                  'longitude': point.longitude,
+                },
+              )
+              .toList(growable: false),
           avoidHighways: _avoidHighways,
           forceFreshVariant: forceFreshVariant,
           debugTrigger: routeDebugTrigger,
@@ -1820,7 +2125,11 @@ class _CruiseModePageState extends State<CruiseModePage>
 
       const validator = RouteQualityValidator();
       final actualKm = result.distanceKm ?? 0.0;
-      final targetKm = _isRoundTrip ? distance.toDouble() : 0.0;
+      final targetKm = _isWaypointPlanning
+          ? actualKm
+          : _isRoundTrip
+          ? distance.toDouble()
+          : 0.0;
       final quality = validator.validateQuality(
         coordinates: result.coordinates,
         isRoundTrip: _isRoundTrip,
@@ -1851,6 +2160,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       _lastGeneratedSelectedKm = _isRoundTrip ? distance : null;
       _lastGeneratedSelectedStyle = _selectedStyle;
       _lastGeneratedAvoidHighways = _avoidHighways;
+      _lastGeneratedWaypointSignature = waypointSignature;
 
       debugPrint('[CruiseMode] Drawing route...');
       await _drawRoute(result.geometry, animateRouteDraw: true);
@@ -2229,6 +2539,11 @@ class _CruiseModePageState extends State<CruiseModePage>
   }) {
     _restoreGeneratedRouteUiState(previousUiState);
 
+    if (_isWaypointRouteError(error)) {
+      unawaited(_showWaypointRouteDialog());
+      return;
+    }
+
     if (_isRouteWarmupError(error)) {
       unawaited(_showRouteWarmupDialog(error as RouteServiceException));
       return;
@@ -2255,6 +2570,64 @@ class _CruiseModePageState extends State<CruiseModePage>
         code == 'route_quality_too_low' ||
         code == 'detour_not_available' ||
         error.edgeMeta['retry_search_started'] == true;
+  }
+
+  bool _isWaypointRouteError(Object? error) {
+    if (error is! RouteServiceException) return false;
+    final code =
+        error.edgeMeta['response_code']?.toString() ??
+        error.edgeMeta['code']?.toString();
+    return code == 'waypoint_quality_too_low' ||
+        code == 'waypoint_route_not_possible' ||
+        code == 'waypoint_layout_unstable' ||
+        code == 'waypoint_duplicate_or_too_close' ||
+        code == 'waypoint_too_far' ||
+        code == 'too_few_waypoints' ||
+        code == 'too_many_waypoints';
+  }
+
+  Future<void> _showWaypointRouteDialog() async {
+    if (!mounted || _disposed || _routeWarmupDialogOpen) return;
+    _routeWarmupDialogOpen = true;
+    try {
+      final action = await showDialog<String>(
+        context: context,
+        builder: (context) {
+          return AlertDialog(
+            title: const Text('Wegpunkte anpassen'),
+            content: const Text(
+              'Diese Wegpunkte ergeben noch keine saubere Route. Verschiebe einen Punkt oder lass neue Vorschläge erzeugen.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop('edit'),
+                child: const Text('Punkte bearbeiten'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.of(context).pop('random'),
+                child: const Text('Zufall verwenden'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(context).pop('seed'),
+                child: const Text('Seed neu generieren'),
+              ),
+            ],
+          );
+        },
+      );
+      if (!mounted || _disposed) return;
+      if (action == 'seed') {
+        _generateRoundTripWaypointSeed();
+      } else if (action == 'random') {
+        setState(() {
+          _planningType = 'Zufall';
+          _roundTripWaypoints.clear();
+        });
+        _invalidateWaypointPreview();
+      }
+    } finally {
+      _routeWarmupDialogOpen = false;
+    }
   }
 
   Future<void> _showRouteWarmupDialog(RouteServiceException error) async {
@@ -2317,6 +2690,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     _lastGeneratedSelectedKm = null;
     _lastGeneratedSelectedStyle = null;
     _lastGeneratedAvoidHighways = null;
+    _lastGeneratedWaypointSignature = null;
     _recentDestinationDistances = [];
     _activeSpeedLimits = const [];
     _announcedManeuverIndices.clear();

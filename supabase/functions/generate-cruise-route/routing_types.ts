@@ -13,7 +13,11 @@ export type RouteMode =
 export interface RequestData {
   planning_type: "Zufall" | "Wegpunkte";
   route_type?: "ROUND_TRIP" | "POINT_TO_POINT";
+  user_waypoints?: Coordinate[];
   manual_waypoints?: Coordinate[];
+  waypoint_order?: "fixed";
+  close_loop?: boolean;
+  allow_seed_generation?: boolean;
   targetDistance?: number; // in km
   startLocation: Coordinate;
   destination_location?: Coordinate;

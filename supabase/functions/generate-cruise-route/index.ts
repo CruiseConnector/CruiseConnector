@@ -127,9 +127,26 @@ Deno.serve(async (req) => {
       planning_type,
       startLocation,
       targetDistance,
+      user_waypoints,
       manual_waypoints,
       mode,
     } = body;
+    const userWaypointArray = Array.isArray(user_waypoints)
+      ? user_waypoints
+      : undefined;
+    const manualWaypointArray = Array.isArray(manual_waypoints)
+      ? manual_waypoints
+      : undefined;
+    const suppliedUserWaypoints =
+      userWaypointArray != null && userWaypointArray.length > 0
+        ? userWaypointArray
+        : manualWaypointArray;
+    const waypointSource =
+      userWaypointArray != null && userWaypointArray.length > 0
+        ? "user_waypoints"
+        : manualWaypointArray != null
+        ? "manual_waypoints"
+        : "none";
     const directionHint = typeof body.direction_hint === "number" &&
         Number.isFinite(body.direction_hint)
       ? normalizeBearingDegrees(Math.round(body.direction_hint))
@@ -170,6 +187,8 @@ Deno.serve(async (req) => {
         mode: mode ?? "Standard",
         hasDestination: body.destination_location != null,
         manualWaypointCount: manual_waypoints?.length ?? 0,
+        userWaypointCount: user_waypoints?.length ?? 0,
+        waypointSource,
         targetDistance: targetDistance ?? null,
         detourLevel: body.detour_level ?? 0,
         directionHint: directionHint ?? null,
@@ -211,9 +230,9 @@ Deno.serve(async (req) => {
         "Invalid destination_location: coordinates out of bounds or not a number",
       );
     }
-    if (manual_waypoints) {
-      for (let i = 0; i < manual_waypoints.length; i++) {
-        if (!isValidCoord(manual_waypoints[i])) {
+    if (suppliedUserWaypoints) {
+      for (let i = 0; i < suppliedUserWaypoints.length; i++) {
+        if (!isValidCoord(suppliedUserWaypoints[i])) {
           throw new Error(
             `Invalid waypoint at index ${i}: coordinates out of bounds or not a number`,
           );
@@ -258,6 +277,65 @@ Deno.serve(async (req) => {
         "Invalid max_candidate_attempts: must be a finite number",
       );
     }
+
+    const normalizeRoundTripUserWaypoints = (
+      waypoints: Coordinate[],
+    ): Coordinate[] => {
+      const normalized = [...waypoints];
+      if (
+        normalized.length > 0 &&
+        calculateDistance(normalized[0], startLocation) <= 0.15
+      ) {
+        normalized.shift();
+      }
+      if (
+        normalized.length > 0 &&
+        calculateDistance(normalized[normalized.length - 1], startLocation) <=
+          0.15
+      ) {
+        normalized.pop();
+      }
+      return normalized;
+    };
+
+    const bearingSpreadDegrees = (bearings: number[]): number => {
+      if (bearings.length === 0) return 0;
+      const normalized = bearings
+        .map((bearing) => ((bearing % 360) + 360) % 360)
+        .sort((a, b) => a - b);
+      let largestGap = 0;
+      for (let i = 0; i < normalized.length; i++) {
+        const current = normalized[i];
+        const next = normalized[(i + 1) % normalized.length] +
+          (i === normalized.length - 1 ? 360 : 0);
+        largestGap = Math.max(largestGap, next - current);
+      }
+      return 360 - largestGap;
+    };
+
+    const waypointReachDistancesMeters = (
+      coordinates: unknown,
+      waypoints: Coordinate[],
+    ): number[] => {
+      if (!Array.isArray(coordinates)) {
+        return waypoints.map(() => Number.POSITIVE_INFINITY);
+      }
+      return waypoints.map((waypoint) => {
+        let bestMeters = Number.POSITIVE_INFINITY;
+        for (const raw of coordinates) {
+          if (!Array.isArray(raw) || raw.length < 2) continue;
+          const lng = Number(raw[0]);
+          const lat = Number(raw[1]);
+          if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+          const meters = calculateDistance(
+            { latitude: lat, longitude: lng },
+            waypoint,
+          ) * 1000;
+          if (meters < bestMeters) bestMeters = meters;
+        }
+        return Math.round(bestMeters);
+      });
+    };
 
     const avoidHighways = body.avoid_highways === true;
     const requestContinueStraight = body.continue_straight !== false;
@@ -315,6 +393,15 @@ Deno.serve(async (req) => {
     let pointToPointDetourDowngraded = false;
     let pointToPointDetourFallbackStage: string | null = null;
     let pointToPointDeliveredTargetDistanceKm: number | undefined;
+    let normalizedUserWaypointsForMeta: Coordinate[] = [];
+    let waypointLayoutScore: number | null = null;
+    let waypointReachMeta: {
+      userWaypointCount: number;
+      reachedCount: number;
+      allReached: boolean;
+      reachDistancesMeters: number[];
+      thresholdMeters: number;
+    } | null = null;
 
     if (planning_type === "Zufall" && currentRouteType === "ROUND_TRIP") {
       if (mode === "Kurvenjagd") {
@@ -507,12 +594,103 @@ Deno.serve(async (req) => {
         effectiveTargetDistanceKm = effectiveDistance;
       }
     } else if (planning_type === "Wegpunkte") {
-      if (!manual_waypoints || manual_waypoints.length < 3) {
+      if (currentRouteType !== "ROUND_TRIP") {
         throw new Error(
-          "For 'Wegpunkte', provide at least 3 points (including start/end implies a loop or A->B->C).",
+          "waypoint_route_not_possible: Wegpunkte planning currently supports ROUND_TRIP only.",
         );
       }
-      finalWaypoints = manual_waypoints;
+      if (body.close_loop === false) {
+        throw new Error(
+          "waypoint_route_not_possible: close_loop must be true for waypoint roundtrip planning.",
+        );
+      }
+      const normalizedUserWaypoints = normalizeRoundTripUserWaypoints(
+        suppliedUserWaypoints ?? [],
+      );
+      normalizedUserWaypointsForMeta = normalizedUserWaypoints;
+      if (normalizedUserWaypoints.length < 1) {
+        throw new Error(
+          "too_few_waypoints: Set at least one waypoint for waypoint roundtrip planning.",
+        );
+      }
+      if (normalizedUserWaypoints.length > 8) {
+        throw new Error(
+          "too_many_waypoints: Waypoint roundtrip planning supports at most 8 user waypoints.",
+        );
+      }
+      const maxWaypointDistanceKm = targetDistance != null
+        ? Math.max(12, Math.min(80, targetDistance * 0.75))
+        : 50;
+      const maxLegDistanceKm = targetDistance != null
+        ? Math.max(20, targetDistance * 0.85)
+        : 45;
+      const bearingsFromStart: number[] = [];
+      let previousWaypoint = startLocation;
+      for (let i = 0; i < normalizedUserWaypoints.length; i++) {
+        const waypoint = normalizedUserWaypoints[i];
+        const distanceFromStartKm = calculateDistance(startLocation, waypoint);
+        if (distanceFromStartKm < 0.20) {
+          throw new Error(
+            `waypoint_duplicate_or_too_close: waypoint ${i} is too close to start.`,
+          );
+        }
+        if (distanceFromStartKm > maxWaypointDistanceKm) {
+          throw new Error(
+            `waypoint_too_far: waypoint ${i} is ${
+              distanceFromStartKm.toFixed(1)
+            }km from start and exceeds local limit ${
+              maxWaypointDistanceKm.toFixed(1)
+            }km.`,
+          );
+        }
+        const legDistanceKm = calculateDistance(previousWaypoint, waypoint);
+        if (legDistanceKm > maxLegDistanceKm) {
+          throw new Error(
+            `waypoint_layout_unstable: waypoint leg ${i} is ${
+              legDistanceKm.toFixed(1)
+            }km and too long for this roundtrip.`,
+          );
+        }
+        for (let j = 0; j < i; j++) {
+          const pairDistanceKm = calculateDistance(
+            normalizedUserWaypoints[j],
+            waypoint,
+          );
+          if (pairDistanceKm < 0.20) {
+            throw new Error(
+              `waypoint_duplicate_or_too_close: waypoints ${j} and ${i} are too close.`,
+            );
+          }
+        }
+        bearingsFromStart.push(calculateBearing(startLocation, waypoint));
+        previousWaypoint = waypoint;
+      }
+      const closingLegDistanceKm = calculateDistance(
+        previousWaypoint,
+        startLocation,
+      );
+      if (closingLegDistanceKm > maxLegDistanceKm) {
+        throw new Error(
+          `waypoint_layout_unstable: closing leg is ${
+            closingLegDistanceKm.toFixed(1)
+          }km and too long for this roundtrip.`,
+        );
+      }
+      const bearingSpread = bearingSpreadDegrees(bearingsFromStart);
+      waypointLayoutScore = Math.min(1, Math.max(0, bearingSpread / 180));
+      if (bearingsFromStart.length >= 2 && bearingSpread < 18) {
+        throw new Error(
+          `waypoint_layout_unstable: waypoint bearing spread ${
+            bearingSpread.toFixed(1)
+          }deg is too narrow.`,
+        );
+      }
+      excludeParams = applyAvoidHighwaysExcludes(excludeParams, avoidHighways);
+      finalWaypoints = [
+        startLocation,
+        ...normalizedUserWaypoints,
+        startLocation,
+      ];
     } else {
       throw new Error(
         "Invalid planning_type. Must be 'Zufall' or 'Wegpunkte'.",
@@ -654,7 +832,7 @@ Deno.serve(async (req) => {
         );
       }
 
-      if (route) {
+      if (route && planning_type !== "Wegpunkte") {
         const initialQuality = evaluateRouteQuality(route, currentRouteType);
         if (!initialQuality.passed) {
           debugLog(`Initial route rejected: ${initialQuality.reason}`);
@@ -1088,6 +1266,18 @@ Deno.serve(async (req) => {
         ? "No route found with current constraints after exhausting round-trip search."
         : "No route found with current constraints.";
       requestDebugMeta = buildNoRouteSearchMeta(roundTripSearch);
+      if (planning_type === "Wegpunkte") {
+        requestDebugMeta = {
+          response_code: "waypoint_route_not_possible",
+          waypoint_source: waypointSource,
+          requested_close_loop: body.close_loop !== false,
+          normalized_user_waypoint_count: normalizedUserWaypointsForMeta.length,
+          waypoint_layout_score: waypointLayoutScore,
+        };
+        throw new Error(
+          "waypoint_route_not_possible: Mapbox could not route the supplied waypoint loop.",
+        );
+      }
       throw new Error(noRouteMessage);
     }
 
@@ -1275,18 +1465,26 @@ Deno.serve(async (req) => {
     // ── Quality gate: Route muss echte Straßengeometrie haben ──
     const finalQuality = evaluateRouteQuality(route, currentRouteType, {
       targetDistanceKm: currentRouteType === "ROUND_TRIP"
-        ? (effectiveTargetDistanceKm ?? targetDistance)
+        ? planning_type === "Wegpunkte"
+          ? undefined
+          : (effectiveTargetDistanceKm ?? targetDistance)
         : undefined,
       distanceConfig: currentRouteType === "ROUND_TRIP"
-        ? distanceConfig ?? undefined
+        ? planning_type === "Wegpunkte"
+          ? undefined
+          : distanceConfig ?? undefined
         : undefined,
       mode: currentRouteType === "ROUND_TRIP" ? mode : undefined,
       avoidHighways: currentRouteType === "ROUND_TRIP" ? avoidHighways : false,
     });
     const finalCleanup = currentRouteType === "ROUND_TRIP"
       ? evaluateRouteCleanupGate(route, currentRouteType, {
-        targetDistanceKm: effectiveTargetDistanceKm ?? targetDistance,
-        distanceConfig: distanceConfig ?? undefined,
+        targetDistanceKm: planning_type === "Wegpunkte"
+          ? undefined
+          : effectiveTargetDistanceKm ?? targetDistance,
+        distanceConfig: planning_type === "Wegpunkte"
+          ? undefined
+          : distanceConfig ?? undefined,
         mode,
         avoidHighways,
         startLocation,
@@ -1328,9 +1526,22 @@ Deno.serve(async (req) => {
         roundTripSearch,
         finalQuality.reason,
       );
+      if (planning_type === "Wegpunkte") {
+        requestDebugMeta = {
+          ...(requestDebugMeta ?? {}),
+          response_code: "waypoint_quality_too_low",
+          route_quality_too_low: true,
+          waypoint_source: waypointSource,
+          normalized_user_waypoint_count: normalizedUserWaypointsForMeta.length,
+          waypoint_layout_score: waypointLayoutScore,
+          waypoint_route_quality: finalQuality.tier,
+        };
+      }
       debugError(`Route quality too low: ${finalQuality.reason}`);
       throw new Error(
-        `Route-Qualität zu niedrig (${finalQuality.reason}). Bitte erneut versuchen.`,
+        planning_type === "Wegpunkte"
+          ? `waypoint_quality_too_low: ${finalQuality.reason}`
+          : `Route-Qualität zu niedrig (${finalQuality.reason}). Bitte erneut versuchen.`,
       );
     }
     if (finalCleanup?.passed === false) {
@@ -1338,9 +1549,22 @@ Deno.serve(async (req) => {
         roundTripSearch,
         finalCleanup.reason,
       );
+      if (planning_type === "Wegpunkte") {
+        requestDebugMeta = {
+          ...(requestDebugMeta ?? {}),
+          response_code: "waypoint_quality_too_low",
+          route_quality_too_low: true,
+          waypoint_source: waypointSource,
+          normalized_user_waypoint_count: normalizedUserWaypointsForMeta.length,
+          waypoint_layout_score: waypointLayoutScore,
+          waypoint_route_quality: finalQuality.tier,
+        };
+      }
       debugError(`Route cleanup too low: ${finalCleanup.reason}`);
       throw new Error(
-        `Route-Qualität zu niedrig (${finalCleanup.reason}). Bitte erneut versuchen.`,
+        planning_type === "Wegpunkte"
+          ? `waypoint_quality_too_low: ${finalCleanup.reason}`
+          : `Route-Qualität zu niedrig (${finalCleanup.reason}). Bitte erneut versuchen.`,
       );
     }
 
@@ -1384,6 +1608,37 @@ Deno.serve(async (req) => {
     const responseDistanceKm = applyCleanupToRoute
       ? (finalCleanup?.cleanedDistanceKm ?? finalDistanceKm)
       : finalDistanceKm;
+    if (planning_type === "Wegpunkte" && currentRouteType === "ROUND_TRIP") {
+      const reachThresholdMeters = 500;
+      const routeCoordinates = routeForFrontend?.geometry?.coordinates;
+      const reachDistances = waypointReachDistancesMeters(
+        routeCoordinates,
+        normalizedUserWaypointsForMeta,
+      );
+      const reachedCount = reachDistances.filter((distance) =>
+        distance <= reachThresholdMeters
+      ).length;
+      waypointReachMeta = {
+        userWaypointCount: normalizedUserWaypointsForMeta.length,
+        reachedCount,
+        allReached: reachedCount === normalizedUserWaypointsForMeta.length,
+        reachDistancesMeters: reachDistances,
+        thresholdMeters: reachThresholdMeters,
+      };
+      if (!waypointReachMeta.allReached) {
+        requestDebugMeta = {
+          response_code: "waypoint_route_not_possible",
+          waypoint_source: waypointSource,
+          requested_close_loop: body.close_loop !== false,
+          normalized_user_waypoint_count: normalizedUserWaypointsForMeta.length,
+          waypoint_layout_score: waypointLayoutScore,
+          waypoint_route: waypointReachMeta,
+        };
+        throw new Error(
+          `waypoint_route_not_possible: reached ${reachedCount}/${normalizedUserWaypointsForMeta.length} user waypoints.`,
+        );
+      }
+    }
 
     // Construct response
     return new Response(
@@ -1454,6 +1709,25 @@ Deno.serve(async (req) => {
               pointToPointDestinationDistanceMeters <= 750
             : null,
           waypoint_count: finalWaypoints.length,
+          planning_type,
+          user_waypoint_count: waypointReachMeta?.userWaypointCount ?? 0,
+          waypoints_reached: waypointReachMeta?.allReached ?? null,
+          waypoints_reached_count: waypointReachMeta?.reachedCount ?? null,
+          waypoint_reach_distances_m: waypointReachMeta?.reachDistancesMeters ??
+            null,
+          waypoint_reach_threshold_m: waypointReachMeta?.thresholdMeters ??
+            null,
+          waypoint_source: waypointSource,
+          requested_close_loop: body.close_loop !== false,
+          close_loop: planning_type === "Wegpunkte" &&
+            currentRouteType === "ROUND_TRIP",
+          normalized_user_waypoint_count: normalizedUserWaypointsForMeta.length,
+          waypoint_layout_score: waypointLayoutScore,
+          waypoint_route_quality: planning_type === "Wegpunkte"
+            ? finalQuality.tier
+            : null,
+          target_distance_km: targetDistance ?? null,
+          route_distance_km: responseDistanceKm,
           avoid_highways_requested: avoidHighways,
           effective_excludes: excludeParams,
           quality_tier: finalQuality.tier,

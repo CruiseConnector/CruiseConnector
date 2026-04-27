@@ -13,6 +13,19 @@ export function classifyRoutingError(message: string): {
 } {
   const lower = message.toLowerCase();
   if (
+    lower.includes("too_few_waypoints") ||
+    lower.includes("too_many_waypoints") ||
+    lower.includes("waypoint_duplicate_or_too_close") ||
+    lower.includes("waypoint_too_far") ||
+    lower.includes("waypoint_layout_unstable") ||
+    lower.includes("waypoint_route_not_possible")
+  ) {
+    return { status: 422, code: "INVALID_REQUEST", retryable: false };
+  }
+  if (lower.includes("waypoint_quality_too_low")) {
+    return { status: 404, code: "NO_ROUTE", retryable: false };
+  }
+  if (
     lower.includes("invalid") ||
     lower.includes("missing") ||
     lower.includes("out of bounds") ||
