@@ -405,8 +405,13 @@ export async function searchBestRoundTripRoute({
   const longNoHighwayCurveRescueSearch = avoidHighways &&
     mode === "Kurvenjagd" &&
     targetDistanceKm > 70;
-  const useMapboxAlternatives = !avoidHighways || targetDistanceKm <= 85;
+  const useMapboxAlternatives = !avoidHighways;
   const maxEvaluatedAlternatives = 3;
+  const noHighwayAttemptBudget = targetDistanceKm <= 60
+    ? 3
+    : targetDistanceKm <= 85
+    ? 4
+    : 5;
   const shortSportHighwayRoundTrip = !avoidHighwaysRoundTripSearch &&
     mode === "Sport Mode" &&
     targetDistanceKm <= 60;
@@ -415,7 +420,7 @@ export async function searchBestRoundTripRoute({
   const requestedAttemptBudget = Math.round(
     maxCandidateAttemptsHint ??
       (avoidHighwaysRoundTripSearch
-        ? 6
+        ? noHighwayAttemptBudget
         : shortSportHighwayRoundTrip
         ? 14
         : highCostCurveSearch
@@ -432,12 +437,14 @@ export async function searchBestRoundTripRoute({
       ? Math.max(
         1,
         Math.min(
-          avoidHighwaysRoundTripSearch ? 6 : 10,
+          avoidHighwaysRoundTripSearch ? noHighwayAttemptBudget : 10,
           Math.round(maxCandidateAttemptsHint),
         ),
       )
       : null;
-  const uncappedGlobalAttemptBudget = avoidHighwaysRoundTripSearch ? 6 : Math.max(
+  const uncappedGlobalAttemptBudget = avoidHighwaysRoundTripSearch
+    ? noHighwayAttemptBudget
+    : Math.max(
     shortSportHighwayRoundTrip ? 14 : 7,
     Math.min(
       highCostCurveSearch
