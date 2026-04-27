@@ -569,6 +569,11 @@ export async function searchBestRoundTripRoute({
   let bestPlan: RoundTripCandidatePlan | null = null;
   let bestRoute: any = null;
   let bestQuality: RouteQualityEvaluation | null = null;
+  let bestContext: {
+    exclude: string;
+    continueStraight: boolean;
+    distanceConfig: DistanceConfig;
+  } | null = null;
   let balancedHasPresentableCandidate = false;
   let balancedTerminalShortCircuit = false;
   const rejectReasons = new Map<string, number>();
@@ -582,6 +587,11 @@ export async function searchBestRoundTripRoute({
     route: any;
     quality: RouteQualityEvaluation;
     fingerprint: string;
+    context: {
+      exclude: string;
+      continueStraight: boolean;
+      distanceConfig: DistanceConfig;
+    };
   } | null = null;
   let rateLimitHits = 0;
   let timeoutHits = 0;
@@ -718,6 +728,51 @@ export async function searchBestRoundTripRoute({
       ? { route: selectedRoute, quality: selectedQuality }
       : null;
   };
+  const hydrateGuidanceRoute = async (
+    plan: RoundTripCandidatePlan,
+    context: {
+      exclude: string;
+      continueStraight: boolean;
+      distanceConfig: DistanceConfig;
+    },
+  ): Promise<{ route: any; quality: RouteQualityEvaluation } | null> => {
+    const fetchResult = await getMapboxRouteDetailed(
+      plan.waypoints,
+      mapboxProfile,
+      context.exclude,
+      plan.radiuses,
+      accessToken,
+      {
+        continueStraight: context.continueStraight,
+        alternatives: false,
+        maxAttempts: 1,
+        timeoutMs: boundedMapboxTimeoutMs(mapboxCandidateTimeoutMs, 3000),
+        retryDelayBaseMs: 220,
+        includeGuidance: true,
+      },
+    );
+    if (!fetchResult.route) {
+      registerReject(
+        fetchResult.outcome === "http_error"
+          ? `guidance_mapbox_http_${fetchResult.statusCode ?? "unknown"}`
+          : `guidance_mapbox_${fetchResult.outcome}`,
+      );
+      return null;
+    }
+    const selection = chooseBestRouteAlternative(
+      [fetchResult.route],
+      context.distanceConfig,
+    );
+    if (selection == null || selection.quality.tier === "rejected") {
+      registerReject(
+        selection?.quality.reason != null
+          ? `guidance_${selection.quality.reason}`
+          : "guidance_quality_rejected",
+      );
+      return null;
+    }
+    return selection;
+  };
 
   for (const phase of searchPhases) {
     if (stopSearchWithBestCandidate) break;
@@ -848,6 +903,7 @@ export async function searchBestRoundTripRoute({
             : mapboxCandidateMaxAttempts,
           timeoutMs: boundedMapboxTimeoutMs(mapboxCandidateTimeoutMs),
           retryDelayBaseMs: 220,
+          includeGuidance: false,
         },
       );
       const primaryFailureKind = getRetryKindFromMapboxFailure(fetchResult);
@@ -881,6 +937,7 @@ export async function searchBestRoundTripRoute({
             alternatives: useMapboxAlternatives,
             maxAttempts: 1,
             timeoutMs: boundedMapboxTimeoutMs(mapboxRelaxedTimeoutMs),
+            includeGuidance: false,
           },
         );
         const relaxedFailureKind = getRetryKindFromMapboxFailure(relaxedFetch);
@@ -926,6 +983,9 @@ export async function searchBestRoundTripRoute({
       }
       let route = primarySelection.route;
       let quality = primarySelection.quality;
+      let selectedExclude = phase.exclude;
+      let selectedContinueStraight = phase.continueStraight;
+      let selectedDistanceConfig = phase.distanceConfig;
 
       if (
         quality.tier === "rejected" &&
@@ -949,6 +1009,7 @@ export async function searchBestRoundTripRoute({
             alternatives: useMapboxAlternatives,
             maxAttempts: 1,
             timeoutMs: boundedMapboxTimeoutMs(mapboxRelaxedTimeoutMs),
+            includeGuidance: false,
           },
         );
         const relaxedFailureKind = getRetryKindFromMapboxFailure(relaxedFetch);
@@ -982,6 +1043,8 @@ export async function searchBestRoundTripRoute({
           ) {
             route = relaxedSelection.route;
             quality = relaxedQuality;
+            selectedExclude = relaxedPhaseExclude;
+            selectedDistanceConfig = phase.distanceConfig;
           }
         }
       }
@@ -1036,6 +1099,11 @@ export async function searchBestRoundTripRoute({
             route,
             quality,
             fingerprint: routeFingerprint,
+            context: {
+              exclude: selectedExclude,
+              continueStraight: selectedContinueStraight,
+              distanceConfig: selectedDistanceConfig,
+            },
           };
         }
         continue;
@@ -1048,6 +1116,11 @@ export async function searchBestRoundTripRoute({
         bestPlan = plan;
         bestRoute = route;
         bestQuality = quality;
+        bestContext = {
+          exclude: selectedExclude,
+          continueStraight: selectedContinueStraight,
+          distanceConfig: selectedDistanceConfig,
+        };
       }
       if (
         phase.name === "balanced" &&
@@ -1166,6 +1239,19 @@ export async function searchBestRoundTripRoute({
 
   if (!bestPlan || !bestRoute || !bestQuality) {
     if (bestEmergencyDuplicate != null) {
+      const hydratedDuplicate = await hydrateGuidanceRoute(
+        bestEmergencyDuplicate.plan,
+        bestEmergencyDuplicate.context,
+      );
+      if (hydratedDuplicate == null) {
+        registerReject("guidance_fetch_failed");
+        bestEmergencyDuplicate = null;
+      } else {
+        bestEmergencyDuplicate.route = hydratedDuplicate.route;
+        bestEmergencyDuplicate.quality = hydratedDuplicate.quality;
+      }
+    }
+    if (bestEmergencyDuplicate != null) {
       debugWarn(
         `[RT] Emergency duplicate fallback: ${bestEmergencyDuplicate.plan.label} (${
           bestEmergencyDuplicate.fingerprint.slice(0, 24)
@@ -1209,6 +1295,36 @@ export async function searchBestRoundTripRoute({
       duplicateSkips,
       exhausted: true,
     };
+  }
+
+  if (bestContext != null) {
+    const hydratedBest = await hydrateGuidanceRoute(bestPlan, bestContext);
+    if (hydratedBest == null) {
+      registerReject("guidance_fetch_failed");
+      debugLog(
+        `[RT] Search exhausted after selected candidate because guidance hydration failed. Reject summary=${
+          JSON.stringify(Object.fromEntries(rejectReasons))
+        }`,
+      );
+      return {
+        route: null,
+        waypoints: [],
+        radiuses: "",
+        quality: null,
+        candidateAttempts,
+        acceptedCandidates,
+        rejectedCandidates,
+        rejectReasons: Object.fromEntries(rejectReasons),
+        searchPhases: searchPhases.map((phase) => phase.name),
+        lastPlanLabels,
+        variantHint: normalizedVariantHint,
+        fingerprintHint: normalizedFingerprintHint,
+        duplicateSkips,
+        exhausted: true,
+      };
+    }
+    bestRoute = hydratedBest.route;
+    bestQuality = hydratedBest.quality;
   }
 
   debugLog(

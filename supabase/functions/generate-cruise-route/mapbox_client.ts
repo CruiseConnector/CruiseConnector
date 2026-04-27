@@ -95,6 +95,7 @@ function getMapboxRouteCacheKey(
   continueStraight: boolean,
   alternatives: boolean,
   bearings: string,
+  includeGuidance: boolean,
 ): string {
   return [
     profile,
@@ -104,6 +105,7 @@ function getMapboxRouteCacheKey(
     continueStraight ? "continue" : "allow_reverse",
     alternatives ? "alts" : "single",
     bearings,
+    includeGuidance ? "guidance" : "geometry",
   ].join("|");
 }
 
@@ -185,6 +187,7 @@ export async function getMapboxRouteDetailed(
     maxAttempts?: number;
     timeoutMs?: number;
     retryDelayBaseMs?: number;
+    includeGuidance?: boolean;
   },
 ): Promise<MapboxRouteFetchResult> {
   // Format coordinates: "lon,lat;lon,lat;..."
@@ -196,11 +199,17 @@ export async function getMapboxRouteDetailed(
   // We use geometries=geojson to get the path geometry
   const continueStraight = options?.continueStraight ?? true;
   const alternatives = options?.alternatives === true;
+  const includeGuidance = options?.includeGuidance !== false;
   const bearings = options?.bearings?.trim() ?? "";
   let url =
-    `https://api.mapbox.com/directions/v5/${profile}/${coordinatesStr}?access_token=${accessToken}&geometries=geojson&overview=full&steps=true&voice_instructions=true&banner_instructions=true&language=de&continue_straight=${
+    `https://api.mapbox.com/directions/v5/${profile}/${coordinatesStr}?access_token=${accessToken}&geometries=geojson&overview=full&steps=${
+      includeGuidance ? "true" : "false"
+    }&language=de&continue_straight=${
       continueStraight ? "true" : "false"
-    }&alternatives=${alternatives ? "true" : "false"}&annotations=maxspeed`;
+    }&alternatives=${alternatives ? "true" : "false"}`;
+  if (includeGuidance) {
+    url += "&voice_instructions=true&banner_instructions=true&annotations=maxspeed";
+  }
 
   // Append optional parameters if they exist
   if (exclude && exclude.trim() !== "") {
@@ -221,6 +230,7 @@ export async function getMapboxRouteDetailed(
     continueStraight,
     alternatives,
     bearings,
+    includeGuidance,
   );
   const cachedResult = getCachedMapboxRoute(cacheKey);
   if (cachedResult) {
@@ -335,6 +345,7 @@ export async function getMapboxRoute(
     maxAttempts?: number;
     timeoutMs?: number;
     retryDelayBaseMs?: number;
+    includeGuidance?: boolean;
   },
 ) {
   const result = await getMapboxRouteDetailed(
