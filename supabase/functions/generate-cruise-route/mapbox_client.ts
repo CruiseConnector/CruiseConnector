@@ -201,8 +201,9 @@ export async function getMapboxRouteDetailed(
   const alternatives = options?.alternatives === true;
   const includeGuidance = options?.includeGuidance !== false;
   const bearings = options?.bearings?.trim() ?? "";
+  const overview = includeGuidance ? "full" : "simplified";
   let url =
-    `https://api.mapbox.com/directions/v5/${profile}/${coordinatesStr}?access_token=${accessToken}&geometries=geojson&overview=full&steps=${
+    `https://api.mapbox.com/directions/v5/${profile}/${coordinatesStr}?access_token=${accessToken}&geometries=geojson&overview=${overview}&steps=${
       includeGuidance ? "true" : "false"
     }&language=de&continue_straight=${
       continueStraight ? "true" : "false"
