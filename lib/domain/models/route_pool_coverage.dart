@@ -23,6 +23,18 @@ class RoutePoolCoverage {
     this.currentCandidateCount = 0,
     this.seedBudgetUnits = 1,
     this.seedCooldownMinutes = 20,
+    this.healingStatus = 'idle',
+    this.healingPriority = 0,
+    this.healingAttemptCount = 0,
+    this.healingFailureCount = 0,
+    this.dailyAttemptBudget = 12,
+    this.monthlyAttemptBudget = 120,
+    this.healingCallsToday = 0,
+    this.healingCallsMonth = 0,
+    this.healingBudgetWindowDate,
+    this.healingBudgetWindowMonth,
+    this.nextHealingAt,
+    this.lastHealingJobId,
     this.lastCountedAt,
     this.lastBootstrapRequestedAt,
     this.lastSeedCompletedAt,
@@ -53,6 +65,18 @@ class RoutePoolCoverage {
   final int currentCandidateCount;
   final int seedBudgetUnits;
   final int seedCooldownMinutes;
+  final String healingStatus;
+  final int healingPriority;
+  final int healingAttemptCount;
+  final int healingFailureCount;
+  final int dailyAttemptBudget;
+  final int monthlyAttemptBudget;
+  final int healingCallsToday;
+  final int healingCallsMonth;
+  final DateTime? healingBudgetWindowDate;
+  final DateTime? healingBudgetWindowMonth;
+  final DateTime? nextHealingAt;
+  final String? lastHealingJobId;
   final DateTime? lastCountedAt;
   final DateTime? lastBootstrapRequestedAt;
   final DateTime? lastSeedCompletedAt;
@@ -69,6 +93,9 @@ class RoutePoolCoverage {
       coverageStatus == 'hard_region_curated_needed';
   bool get isBootstrapLimited => coverageStatus == 'bootstrap_limited';
   bool get isPoolFull => currentVerifiedCount >= maxPoolSize;
+  bool get healingQueued => healingStatus == 'healing_queued';
+  bool get healingRunning => healingStatus == 'healing_running';
+  bool get healingPausedBudget => healingStatus == 'healing_paused_budget';
 
   RoutePoolCoverage copyWith({
     String? id,
@@ -94,6 +121,18 @@ class RoutePoolCoverage {
     int? currentCandidateCount,
     int? seedBudgetUnits,
     int? seedCooldownMinutes,
+    String? healingStatus,
+    int? healingPriority,
+    int? healingAttemptCount,
+    int? healingFailureCount,
+    int? dailyAttemptBudget,
+    int? monthlyAttemptBudget,
+    int? healingCallsToday,
+    int? healingCallsMonth,
+    DateTime? healingBudgetWindowDate,
+    DateTime? healingBudgetWindowMonth,
+    DateTime? nextHealingAt,
+    String? lastHealingJobId,
     DateTime? lastCountedAt,
     DateTime? lastBootstrapRequestedAt,
     DateTime? lastSeedCompletedAt,
@@ -115,8 +154,7 @@ class RoutePoolCoverage {
       difficultyLevel: difficultyLevel ?? this.difficultyLevel,
       hardRegionStatus: hardRegionStatus ?? this.hardRegionStatus,
       bootstrapEnabled: bootstrapEnabled ?? this.bootstrapEnabled,
-      curatedSeedPreferred:
-          curatedSeedPreferred ?? this.curatedSeedPreferred,
+      curatedSeedPreferred: curatedSeedPreferred ?? this.curatedSeedPreferred,
       targetPoolSize: targetPoolSize ?? this.targetPoolSize,
       maxPoolSize: maxPoolSize ?? this.maxPoolSize,
       healthyThreshold: healthyThreshold ?? this.healthyThreshold,
@@ -126,6 +164,20 @@ class RoutePoolCoverage {
           currentCandidateCount ?? this.currentCandidateCount,
       seedBudgetUnits: seedBudgetUnits ?? this.seedBudgetUnits,
       seedCooldownMinutes: seedCooldownMinutes ?? this.seedCooldownMinutes,
+      healingStatus: healingStatus ?? this.healingStatus,
+      healingPriority: healingPriority ?? this.healingPriority,
+      healingAttemptCount: healingAttemptCount ?? this.healingAttemptCount,
+      healingFailureCount: healingFailureCount ?? this.healingFailureCount,
+      dailyAttemptBudget: dailyAttemptBudget ?? this.dailyAttemptBudget,
+      monthlyAttemptBudget: monthlyAttemptBudget ?? this.monthlyAttemptBudget,
+      healingCallsToday: healingCallsToday ?? this.healingCallsToday,
+      healingCallsMonth: healingCallsMonth ?? this.healingCallsMonth,
+      healingBudgetWindowDate:
+          healingBudgetWindowDate ?? this.healingBudgetWindowDate,
+      healingBudgetWindowMonth:
+          healingBudgetWindowMonth ?? this.healingBudgetWindowMonth,
+      nextHealingAt: nextHealingAt ?? this.nextHealingAt,
+      lastHealingJobId: lastHealingJobId ?? this.lastHealingJobId,
       lastCountedAt: lastCountedAt ?? this.lastCountedAt,
       lastBootstrapRequestedAt:
           lastBootstrapRequestedAt ?? this.lastBootstrapRequestedAt,
@@ -152,8 +204,7 @@ class RoutePoolCoverage {
       difficultyLevel: (json['difficulty_level'] as String?) ?? 'normal',
       hardRegionStatus: (json['hard_region_status'] as String?) ?? 'normal',
       bootstrapEnabled: (json['bootstrap_enabled'] as bool?) ?? true,
-      curatedSeedPreferred:
-          (json['curated_seed_preferred'] as bool?) ?? false,
+      curatedSeedPreferred: (json['curated_seed_preferred'] as bool?) ?? false,
       targetPoolSize: (json['target_pool_size'] as num?)?.toInt() ?? 15,
       maxPoolSize: (json['max_pool_size'] as num?)?.toInt() ?? 20,
       healthyThreshold: (json['healthy_threshold'] as num?)?.toInt() ?? 15,
@@ -165,6 +216,25 @@ class RoutePoolCoverage {
       seedBudgetUnits: (json['seed_budget_units'] as num?)?.toInt() ?? 1,
       seedCooldownMinutes:
           (json['seed_cooldown_minutes'] as num?)?.toInt() ?? 20,
+      healingStatus: (json['healing_status'] as String?) ?? 'idle',
+      healingPriority: (json['healing_priority'] as num?)?.toInt() ?? 0,
+      healingAttemptCount:
+          (json['healing_attempt_count'] as num?)?.toInt() ?? 0,
+      healingFailureCount:
+          (json['healing_failure_count'] as num?)?.toInt() ?? 0,
+      dailyAttemptBudget: (json['daily_attempt_budget'] as num?)?.toInt() ?? 12,
+      monthlyAttemptBudget:
+          (json['monthly_attempt_budget'] as num?)?.toInt() ?? 120,
+      healingCallsToday: (json['healing_calls_today'] as num?)?.toInt() ?? 0,
+      healingCallsMonth: (json['healing_calls_month'] as num?)?.toInt() ?? 0,
+      healingBudgetWindowDate: _readDateTime(
+        json['healing_budget_window_date'],
+      ),
+      healingBudgetWindowMonth: _readDateTime(
+        json['healing_budget_window_month'],
+      ),
+      nextHealingAt: _readDateTime(json['next_healing_at']),
+      lastHealingJobId: json['last_healing_job_id'] as String?,
       lastCountedAt: _readDateTime(json['last_counted_at']),
       lastBootstrapRequestedAt: _readDateTime(
         json['last_bootstrap_requested_at'],
@@ -200,6 +270,18 @@ class RoutePoolCoverage {
       'current_candidate_count': currentCandidateCount,
       'seed_budget_units': seedBudgetUnits,
       'seed_cooldown_minutes': seedCooldownMinutes,
+      'healing_status': healingStatus,
+      'healing_priority': healingPriority,
+      'healing_attempt_count': healingAttemptCount,
+      'healing_failure_count': healingFailureCount,
+      'daily_attempt_budget': dailyAttemptBudget,
+      'monthly_attempt_budget': monthlyAttemptBudget,
+      'healing_calls_today': healingCallsToday,
+      'healing_calls_month': healingCallsMonth,
+      'healing_budget_window_date': _dateOnlyString(healingBudgetWindowDate),
+      'healing_budget_window_month': _dateOnlyString(healingBudgetWindowMonth),
+      'next_healing_at': nextHealingAt?.toIso8601String(),
+      'last_healing_job_id': lastHealingJobId,
       'last_counted_at': lastCountedAt?.toIso8601String(),
       'last_bootstrap_requested_at': lastBootstrapRequestedAt
           ?.toIso8601String(),
@@ -215,4 +297,9 @@ DateTime? _readDateTime(Object? raw) {
     return DateTime.tryParse(raw)?.toUtc();
   }
   return null;
+}
+
+String? _dateOnlyString(DateTime? value) {
+  if (value == null) return null;
+  return value.toUtc().toIso8601String().split('T').first;
 }

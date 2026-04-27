@@ -85,6 +85,8 @@ class RoutePoolCoverageCheck {
     required this.bootstrapPending,
     this.seedJobStatus,
     this.seedJobError,
+    this.seedJobId,
+    this.nextRetryAt,
   });
 
   final RoutePoolRegionAssignment? assignment;
@@ -105,6 +107,8 @@ class RoutePoolCoverageCheck {
   final bool bootstrapPending;
   final String? seedJobStatus;
   final String? seedJobError;
+  final String? seedJobId;
+  final DateTime? nextRetryAt;
 
   bool get shouldSurfaceWarmup =>
       coverageStatus == 'warming_up' ||
@@ -115,9 +119,35 @@ class RoutePoolCoverageCheck {
       coverageStatus == 'hard_region_curated_needed' ||
       coverageStatus == 'bootstrap_limited';
 
+  String get healingStatus {
+    if (coverageStatus == 'hard_region_curated_needed') {
+      return 'hard_region_curated_needed';
+    }
+    final coverageHealingStatus = coverage?.healingStatus;
+    if (coverageHealingStatus != null && coverageHealingStatus != 'idle') {
+      return coverageHealingStatus;
+    }
+    if (seedJobStatus == 'running') return 'healing_running';
+    if (seedJobStatus == 'queued') return 'healing_queued';
+    if (seedJobStatus == 'cooldown') return 'healing_failed_cooldown';
+    if (seedJobStatus == 'paused_budget') return 'healing_paused_budget';
+    return 'idle';
+  }
+
+  int? get estimatedWaitMinutes {
+    final retryAt = nextRetryAt;
+    if (retryAt == null) return shouldSurfaceWarmup ? 5 : null;
+    final minutes = retryAt.difference(DateTime.now().toUtc()).inMinutes;
+    return minutes <= 0 ? 1 : minutes;
+  }
+
   Map<String, dynamic> toMeta() {
     return {
       'coverage_status': coverageStatus,
+      'healing_status': healingStatus,
+      'healing_job_id': seedJobId,
+      'next_retry_at': nextRetryAt?.toIso8601String(),
+      'estimated_wait_minutes': estimatedWaitMinutes,
       'region_difficulty': regionDifficulty,
       'hard_region_status': hardRegionStatus,
       'bootstrap_enabled': bootstrapEnabled,
@@ -496,9 +526,7 @@ class RoutePoolService {
       avoidHighways: avoidHighways,
       routeType: routeType,
     );
-    if (createSeedJob &&
-        seedJob != null &&
-        (seedJob.isActive || seedJob.isCoolingDown)) {
+    if (createSeedJob && seedJob != null && _seedJobBlocksNewJob(seedJob)) {
       duplicateJobPrevented = true;
     }
     final shouldCreateSeedJob =
@@ -534,6 +562,10 @@ class RoutePoolService {
             hasBootstrapPending: true,
             isCooldown: seedJob.isCoolingDown,
           ),
+          healingStatus: _healingStatusForSeedJob(seedJob),
+          healingPriority: seedJob.priority,
+          lastHealingJobId: seedJob.id,
+          nextHealingAt: seedJob.nextRetryAt ?? seedJob.cooldownUntil,
           lastBootstrapRequestedAt:
               seedJob.lastRequestedAt ?? DateTime.now().toUtc(),
           bootstrapCooldownUntil: seedJob.cooldownUntil,
@@ -555,6 +587,12 @@ class RoutePoolService {
         : await _upsertCoverage(
             coverage.copyWith(
               coverageStatus: coverageStatus,
+              healingStatus: seedJob == null
+                  ? coverage.healingStatus
+                  : _healingStatusForSeedJob(seedJob),
+              healingPriority: seedJob?.priority,
+              lastHealingJobId: seedJob?.id,
+              nextHealingAt: seedJob?.nextRetryAt ?? seedJob?.cooldownUntil,
               bootstrapCooldownUntil: seedJob?.cooldownUntil,
               lastError: seedJob?.lastError,
             ),
@@ -581,6 +619,8 @@ class RoutePoolService {
       bootstrapPending: hasBootstrapPending,
       seedJobStatus: seedJob?.status,
       seedJobError: seedJob?.lastError,
+      seedJobId: seedJob?.id,
+      nextRetryAt: seedJob?.nextRetryAt ?? seedJob?.cooldownUntil,
     );
   }
 
@@ -641,7 +681,7 @@ class RoutePoolService {
       if (createSeedJobs &&
           missingVerifiedCount > 0 &&
           seedJob != null &&
-          (seedJob.isActive || seedJob.isCoolingDown)) {
+          _seedJobBlocksNewJob(seedJob)) {
         duplicatePrevented = true;
         duplicateCount += 1;
       }
@@ -679,6 +719,10 @@ class RoutePoolService {
               hasBootstrapPending: true,
               isCooldown: seedJob.isCoolingDown,
             ),
+            healingStatus: _healingStatusForSeedJob(seedJob),
+            healingPriority: seedJob.priority,
+            lastHealingJobId: seedJob.id,
+            nextHealingAt: seedJob.nextRetryAt ?? seedJob.cooldownUntil,
             lastBootstrapRequestedAt:
                 seedJob.lastRequestedAt ?? DateTime.now().toUtc(),
             bootstrapCooldownUntil: seedJob.cooldownUntil,
@@ -699,6 +743,12 @@ class RoutePoolService {
         coverage = await _upsertCoverage(
           coverage.copyWith(
             coverageStatus: coverageStatus,
+            healingStatus: seedJob == null
+                ? coverage.healingStatus
+                : _healingStatusForSeedJob(seedJob),
+            healingPriority: seedJob?.priority,
+            lastHealingJobId: seedJob?.id,
+            nextHealingAt: seedJob?.nextRetryAt ?? seedJob?.cooldownUntil,
             bootstrapCooldownUntil: seedJob?.cooldownUntil,
             lastError: seedJob?.lastError,
           ),
@@ -2428,13 +2478,59 @@ class RoutePoolService {
     if (!policy.bootstrapEnabled) return false;
     if (policy.isHard && policy.curatedSeedPreferred) return false;
     if (existingSeedJob == null) return true;
-    if (existingSeedJob.isActive || existingSeedJob.isCoolingDown) return false;
+    if (_seedJobBlocksNewJob(existingSeedJob)) return false;
     if (policy.seedBudgetUnits <= 0) return false;
     if (existingSeedJob.failureCount >= policy.seedBudgetUnits) return false;
     if (existingSeedJob.attemptCount >= existingSeedJob.maxAttempts) {
       return false;
     }
     return true;
+  }
+
+  static bool _seedJobBlocksNewJob(RouteSeedJob seedJob) {
+    return seedJob.isActive ||
+        seedJob.isCoolingDown ||
+        seedJob.isBudgetPaused ||
+        _seedJobAttemptBudgetExceeded(seedJob);
+  }
+
+  static bool _seedJobAttemptBudgetExceeded(RouteSeedJob seedJob) {
+    if (seedJob.dailyAttemptBudget <= 0 || seedJob.monthlyAttemptBudget <= 0) {
+      return true;
+    }
+    final now = DateTime.now().toUtc();
+    final today = _dateOnlyKey(now);
+    final month = _monthOnlyKey(now);
+    final dailyCount = _dateOnlyKey(seedJob.budgetWindowDate) == today
+        ? seedJob.dailyAttemptCount
+        : 0;
+    final monthlyCount = _monthOnlyKey(seedJob.budgetWindowMonth) == month
+        ? seedJob.monthlyAttemptCount
+        : 0;
+    return dailyCount >= seedJob.dailyAttemptBudget ||
+        monthlyCount >= seedJob.monthlyAttemptBudget;
+  }
+
+  static String _healingStatusForSeedJob(RouteSeedJob seedJob) {
+    if (seedJob.status == 'running') return 'healing_running';
+    if (seedJob.status == 'queued') return 'healing_queued';
+    if (seedJob.status == 'cooldown') return 'healing_failed_cooldown';
+    if (seedJob.status == 'paused_budget') return 'healing_paused_budget';
+    if (seedJob.hardRegionStatus == 'curated_needed') {
+      return 'hard_region_curated_needed';
+    }
+    return 'idle';
+  }
+
+  static String? _dateOnlyKey(DateTime? value) {
+    if (value == null) return null;
+    return value.toUtc().toIso8601String().split('T').first;
+  }
+
+  static String? _monthOnlyKey(DateTime? value) {
+    final date = _dateOnlyKey(value);
+    if (date == null || date.length < 8) return null;
+    return '${date.substring(0, 8)}01';
   }
 
   static String _deriveCoverageStatus({

@@ -1536,6 +1536,86 @@ void main() {
         expect(jobs, isEmpty);
       },
     );
+
+    test('Coverage-Meta mappt Seed-Job-Status auf Healing-Status', () {
+      final queued = _coverageCheck(seedJobStatus: 'queued');
+      final running = _coverageCheck(seedJobStatus: 'running');
+      final cooldown = _coverageCheck(seedJobStatus: 'cooldown');
+      final budget = _coverageCheck(seedJobStatus: 'paused_budget');
+      final curated = _coverageCheck(
+        coverageStatus: 'hard_region_curated_needed',
+      );
+
+      expect(queued.toMeta()['healing_status'], 'healing_queued');
+      expect(running.toMeta()['healing_status'], 'healing_running');
+      expect(cooldown.toMeta()['healing_status'], 'healing_failed_cooldown');
+      expect(budget.toMeta()['healing_status'], 'healing_paused_budget');
+      expect(curated.toMeta()['healing_status'], 'hard_region_curated_needed');
+    });
+
+    test('Budget-pausierter Healing-Job wird nicht dupliziert', () async {
+      final now = DateTime.utc(2026, 4, 27);
+      final jobs = <RouteSeedJob>[
+        RouteSeedJob(
+          id: 'existing-budget-paused',
+          countryCode: 'DE',
+          admin1Name: 'Baden-Württemberg',
+          admin2Name: 'Stuttgart',
+          cityCluster: 'Stuttgart',
+          routeType: 'ROUND_TRIP',
+          distanceBucket: 50,
+          styleKey: 'sport_mode',
+          avoidHighways: true,
+          status: 'paused_budget',
+          dailyAttemptBudget: 1,
+          monthlyAttemptBudget: 1,
+          dailyAttemptCount: 1,
+          monthlyAttemptCount: 1,
+          budgetWindowDate: now,
+          budgetWindowMonth: DateTime.utc(2026, 4),
+          lastError: 'request_budget_exhausted',
+          nextRetryAt: DateTime.utc(2026, 4, 28),
+        ),
+      ];
+      final service = RoutePoolService(
+        inMemoryRegions: [
+          _region(
+            countryCode: 'DE',
+            admin1Name: 'Baden-Württemberg',
+            admin2Name: 'Stuttgart',
+            cityCluster: 'Stuttgart',
+            centerLat: 48.7758,
+            centerLng: 9.1829,
+          ),
+        ],
+        inMemoryRoutes: const [],
+        inMemoryCoverage: <RoutePoolCoverage>[],
+        inMemorySeedJobs: jobs,
+        inMemoryCandidates: <RoutePoolCandidate>[],
+      );
+
+      final check = await service.ensureCoverageForRequest(
+        userLat: 48.7758,
+        userLng: 9.1829,
+        distanceBucket: 50,
+        style: 'Sport Mode',
+        avoidHighways: true,
+        routeType: 'ROUND_TRIP',
+        subscriptionTier: 'free',
+        createSeedJob: true,
+        preferredCountryCode: 'DE',
+        preferredAdmin1Name: 'Baden-Württemberg',
+        preferredAdmin2Name: 'Stuttgart',
+        preferredCityCluster: 'Stuttgart',
+      );
+
+      expect(check.seedJobCreated, isFalse);
+      expect(check.duplicateJobPrevented, isTrue);
+      expect(check.seedJobStatus, 'paused_budget');
+      expect(check.toMeta()['healing_status'], 'healing_paused_budget');
+      expect(check.toMeta()['healing_job_id'], 'existing-budget-paused');
+      expect(jobs, hasLength(1));
+    });
   });
 }
 
@@ -1576,6 +1656,44 @@ RouteRegion _region({
     thinThreshold: thinThreshold,
     seedBudgetUnits: seedBudgetUnits,
     seedCooldownMinutes: seedCooldownMinutes,
+  );
+}
+
+RoutePoolCoverageCheck _coverageCheck({
+  String coverageStatus = 'warming_up',
+  String? seedJobStatus,
+}) {
+  return RoutePoolCoverageCheck(
+    assignment: RoutePoolRegionAssignment(
+      region: _region(
+        countryCode: 'AT',
+        admin1Name: 'Vorarlberg',
+        cityCluster: 'Feldkirch',
+        centerLat: 47.2386,
+        centerLng: 9.5986,
+      ),
+      distanceToCenterKm: 0,
+    ),
+    coverage: null,
+    coverageStatus: coverageStatus,
+    regionDifficulty: coverageStatus == 'hard_region_curated_needed'
+        ? 'hard'
+        : 'normal',
+    hardRegionStatus: coverageStatus == 'hard_region_curated_needed'
+        ? 'curated_needed'
+        : 'normal',
+    bootstrapEnabled: coverageStatus != 'hard_region_curated_needed',
+    curatedSeedPreferred: coverageStatus == 'hard_region_curated_needed',
+    targetPoolSize: 15,
+    maxPoolSize: 20,
+    currentVerifiedCount: 0,
+    currentCandidateCount: 0,
+    seedJobCreated: seedJobStatus == 'queued',
+    duplicateJobPrevented: false,
+    poolHealthy: false,
+    poolFull: false,
+    bootstrapPending: seedJobStatus == 'queued' || seedJobStatus == 'running',
+    seedJobStatus: seedJobStatus,
   );
 }
 

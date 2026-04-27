@@ -19,12 +19,25 @@ class RouteSeedJob {
     this.failureCount = 0,
     this.seedBudgetUnits = 1,
     this.seedCooldownMinutes = 20,
+    this.jobKind = 'seed_healing',
+    this.maxMapboxCalls = 8,
+    this.mapboxCallsUsed = 0,
+    this.verifiedInsertedCount = 0,
+    this.candidateInsertedCount = 0,
+    this.dailyAttemptBudget = 12,
+    this.monthlyAttemptBudget = 120,
+    this.dailyAttemptCount = 0,
+    this.monthlyAttemptCount = 0,
+    this.budgetWindowDate,
+    this.budgetWindowMonth,
     this.lastError,
     this.lastFailureReason,
     this.cooldownUntil,
+    this.nextRetryAt,
     this.lastRequestedAt,
     this.startedAt,
     this.completedAt,
+    this.completedReason,
     this.triggeredByTier,
   });
 
@@ -47,19 +60,35 @@ class RouteSeedJob {
   final int failureCount;
   final int seedBudgetUnits;
   final int seedCooldownMinutes;
+  final String jobKind;
+  final int maxMapboxCalls;
+  final int mapboxCallsUsed;
+  final int verifiedInsertedCount;
+  final int candidateInsertedCount;
+  final int dailyAttemptBudget;
+  final int monthlyAttemptBudget;
+  final int dailyAttemptCount;
+  final int monthlyAttemptCount;
+  final DateTime? budgetWindowDate;
+  final DateTime? budgetWindowMonth;
   final String? lastError;
   final String? lastFailureReason;
   final DateTime? cooldownUntil;
+  final DateTime? nextRetryAt;
   final DateTime? lastRequestedAt;
   final DateTime? startedAt;
   final DateTime? completedAt;
+  final String? completedReason;
   final String? triggeredByTier;
 
   bool get isQueued => status == 'queued';
   bool get isRunning => status == 'running';
   bool get isActive => isQueued || isRunning;
+  bool get isBudgetPaused => status == 'paused_budget';
   bool get isCoolingDown =>
-      cooldownUntil != null && cooldownUntil!.isAfter(DateTime.now().toUtc());
+      (cooldownUntil != null &&
+          cooldownUntil!.isAfter(DateTime.now().toUtc())) ||
+      (nextRetryAt != null && nextRetryAt!.isAfter(DateTime.now().toUtc()));
 
   RouteSeedJob copyWith({
     String? id,
@@ -81,12 +110,25 @@ class RouteSeedJob {
     int? failureCount,
     int? seedBudgetUnits,
     int? seedCooldownMinutes,
+    String? jobKind,
+    int? maxMapboxCalls,
+    int? mapboxCallsUsed,
+    int? verifiedInsertedCount,
+    int? candidateInsertedCount,
+    int? dailyAttemptBudget,
+    int? monthlyAttemptBudget,
+    int? dailyAttemptCount,
+    int? monthlyAttemptCount,
+    DateTime? budgetWindowDate,
+    DateTime? budgetWindowMonth,
     String? lastError,
     String? lastFailureReason,
     DateTime? cooldownUntil,
+    DateTime? nextRetryAt,
     DateTime? lastRequestedAt,
     DateTime? startedAt,
     DateTime? completedAt,
+    String? completedReason,
     String? triggeredByTier,
   }) {
     return RouteSeedJob(
@@ -109,12 +151,27 @@ class RouteSeedJob {
       failureCount: failureCount ?? this.failureCount,
       seedBudgetUnits: seedBudgetUnits ?? this.seedBudgetUnits,
       seedCooldownMinutes: seedCooldownMinutes ?? this.seedCooldownMinutes,
+      jobKind: jobKind ?? this.jobKind,
+      maxMapboxCalls: maxMapboxCalls ?? this.maxMapboxCalls,
+      mapboxCallsUsed: mapboxCallsUsed ?? this.mapboxCallsUsed,
+      verifiedInsertedCount:
+          verifiedInsertedCount ?? this.verifiedInsertedCount,
+      candidateInsertedCount:
+          candidateInsertedCount ?? this.candidateInsertedCount,
+      dailyAttemptBudget: dailyAttemptBudget ?? this.dailyAttemptBudget,
+      monthlyAttemptBudget: monthlyAttemptBudget ?? this.monthlyAttemptBudget,
+      dailyAttemptCount: dailyAttemptCount ?? this.dailyAttemptCount,
+      monthlyAttemptCount: monthlyAttemptCount ?? this.monthlyAttemptCount,
+      budgetWindowDate: budgetWindowDate ?? this.budgetWindowDate,
+      budgetWindowMonth: budgetWindowMonth ?? this.budgetWindowMonth,
       lastError: lastError ?? this.lastError,
       lastFailureReason: lastFailureReason ?? this.lastFailureReason,
       cooldownUntil: cooldownUntil ?? this.cooldownUntil,
+      nextRetryAt: nextRetryAt ?? this.nextRetryAt,
       lastRequestedAt: lastRequestedAt ?? this.lastRequestedAt,
       startedAt: startedAt ?? this.startedAt,
       completedAt: completedAt ?? this.completedAt,
+      completedReason: completedReason ?? this.completedReason,
       triggeredByTier: triggeredByTier ?? this.triggeredByTier,
     );
   }
@@ -141,12 +198,29 @@ class RouteSeedJob {
       seedBudgetUnits: (json['seed_budget_units'] as num?)?.toInt() ?? 1,
       seedCooldownMinutes:
           (json['seed_cooldown_minutes'] as num?)?.toInt() ?? 20,
+      jobKind: (json['job_kind'] as String?) ?? 'seed_healing',
+      maxMapboxCalls: (json['max_mapbox_calls'] as num?)?.toInt() ?? 8,
+      mapboxCallsUsed: (json['mapbox_calls_used'] as num?)?.toInt() ?? 0,
+      verifiedInsertedCount:
+          (json['verified_inserted_count'] as num?)?.toInt() ?? 0,
+      candidateInsertedCount:
+          (json['candidate_inserted_count'] as num?)?.toInt() ?? 0,
+      dailyAttemptBudget: (json['daily_attempt_budget'] as num?)?.toInt() ?? 12,
+      monthlyAttemptBudget:
+          (json['monthly_attempt_budget'] as num?)?.toInt() ?? 120,
+      dailyAttemptCount: (json['daily_attempt_count'] as num?)?.toInt() ?? 0,
+      monthlyAttemptCount:
+          (json['monthly_attempt_count'] as num?)?.toInt() ?? 0,
+      budgetWindowDate: _readSeedJobDateTime(json['budget_window_date']),
+      budgetWindowMonth: _readSeedJobDateTime(json['budget_window_month']),
       lastError: json['last_error'] as String?,
       lastFailureReason: json['last_failure_reason'] as String?,
       cooldownUntil: _readSeedJobDateTime(json['cooldown_until']),
+      nextRetryAt: _readSeedJobDateTime(json['next_retry_at']),
       lastRequestedAt: _readSeedJobDateTime(json['last_requested_at']),
       startedAt: _readSeedJobDateTime(json['started_at']),
       completedAt: _readSeedJobDateTime(json['completed_at']),
+      completedReason: json['completed_reason'] as String?,
       triggeredByTier: json['triggered_by_tier'] as String?,
     );
   }
@@ -172,12 +246,25 @@ class RouteSeedJob {
       'failure_count': failureCount,
       'seed_budget_units': seedBudgetUnits,
       'seed_cooldown_minutes': seedCooldownMinutes,
+      'job_kind': jobKind,
+      'max_mapbox_calls': maxMapboxCalls,
+      'mapbox_calls_used': mapboxCallsUsed,
+      'verified_inserted_count': verifiedInsertedCount,
+      'candidate_inserted_count': candidateInsertedCount,
+      'daily_attempt_budget': dailyAttemptBudget,
+      'monthly_attempt_budget': monthlyAttemptBudget,
+      'daily_attempt_count': dailyAttemptCount,
+      'monthly_attempt_count': monthlyAttemptCount,
+      'budget_window_date': _dateOnlyString(budgetWindowDate),
+      'budget_window_month': _dateOnlyString(budgetWindowMonth),
       'last_error': lastError,
       'last_failure_reason': lastFailureReason,
       'cooldown_until': cooldownUntil?.toIso8601String(),
+      'next_retry_at': nextRetryAt?.toIso8601String(),
       'last_requested_at': lastRequestedAt?.toIso8601String(),
       'started_at': startedAt?.toIso8601String(),
       'completed_at': completedAt?.toIso8601String(),
+      'completed_reason': completedReason,
       'triggered_by_tier': triggeredByTier,
     };
   }
@@ -188,4 +275,9 @@ DateTime? _readSeedJobDateTime(Object? raw) {
     return DateTime.tryParse(raw)?.toUtc();
   }
   return null;
+}
+
+String? _dateOnlyString(DateTime? value) {
+  if (value == null) return null;
+  return value.toUtc().toIso8601String().split('T').first;
 }

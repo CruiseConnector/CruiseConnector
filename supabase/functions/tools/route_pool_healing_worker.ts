@@ -1,0 +1,1045 @@
+import {
+  buildRouteFingerprintFromRoute,
+  evaluateRouteCleanupGate,
+  evaluateRouteQuality,
+} from "../generate-cruise-route/route_quality.ts";
+import type {
+  Coordinate,
+  RouteMode,
+} from "../generate-cruise-route/routing_types.ts";
+
+type JsonMap = Record<string, unknown>;
+
+interface SeedJob {
+  id: string;
+  route_region_id?: string | null;
+  country_code: string;
+  admin1_name: string;
+  admin2_name?: string | null;
+  city_cluster: string;
+  route_type: "ROUND_TRIP" | "POINT_TO_POINT";
+  distance_bucket: 50 | 75 | 100;
+  style_key: string;
+  avoid_highways: boolean;
+  status: string;
+  difficulty_level?: string;
+  hard_region_status?: string;
+  priority?: number;
+  max_attempts?: number;
+  attempt_count?: number;
+  failure_count?: number;
+  seed_budget_units?: number;
+  seed_cooldown_minutes?: number;
+  max_mapbox_calls?: number;
+  mapbox_calls_used?: number;
+  verified_inserted_count?: number;
+  candidate_inserted_count?: number;
+  daily_attempt_budget?: number;
+  monthly_attempt_budget?: number;
+  daily_attempt_count?: number;
+  monthly_attempt_count?: number;
+  budget_window_date?: string;
+  budget_window_month?: string;
+  cooldown_until?: string | null;
+  next_retry_at?: string | null;
+  last_error?: string | null;
+}
+
+interface RouteRegion {
+  id?: string;
+  country_code: string;
+  admin1_name: string;
+  admin2_name?: string | null;
+  city_cluster: string;
+  center_lat: number;
+  center_lng: number;
+  difficulty_level?: string;
+  hard_region_status?: string;
+  bootstrap_enabled?: boolean;
+  curated_seed_preferred?: boolean;
+  default_target_pool_size?: number;
+  default_max_pool_size?: number;
+  healthy_threshold?: number;
+  thin_threshold?: number;
+  seed_budget_units?: number;
+  seed_cooldown_minutes?: number;
+}
+
+interface HealingStats {
+  processed: number;
+  claimed: number;
+  completed: number;
+  failed: number;
+  pausedBudget: number;
+  mapboxCallsUsed: number;
+  verifiedInserted: number;
+  candidatesInserted: number;
+}
+
+const supabaseUrl = env("SUPABASE_URL");
+const serviceKey = env("SUPABASE_SERVICE_ROLE_KEY") || env("SUPABASE_ANON_KEY");
+const edgeEndpoint = arg("--endpoint=") ??
+  `${supabaseUrl}/functions/v1/generate-cruise-route`;
+const functionKey = env("SUPABASE_FUNCTION_KEY") || serviceKey;
+const dryRun = Deno.args.includes("--dry-run");
+const jobLimit = intArg("--limit=", 3);
+const maxGlobalMapboxCalls = intArg("--max-mapbox-calls=", 18);
+const maxVerifiedPerClusterPerRun = intArg("--max-verified-per-cluster=", 3);
+const targetVerifiedPerJob = intArg("--target-verified-per-job=", 2);
+const maxJobsToFetch = Math.max(jobLimit * 3, jobLimit);
+
+if (!supabaseUrl || !serviceKey || !functionKey) {
+  throw new Error(
+    "Missing SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY/SUPABASE_ANON_KEY.",
+  );
+}
+
+const stats: HealingStats = {
+  processed: 0,
+  claimed: 0,
+  completed: 0,
+  failed: 0,
+  pausedBudget: 0,
+  mapboxCallsUsed: 0,
+  verifiedInserted: 0,
+  candidatesInserted: 0,
+};
+
+const jobs = await loadClaimableJobs();
+for (const job of jobs) {
+  if (stats.processed >= jobLimit) break;
+  if (stats.mapboxCallsUsed >= maxGlobalMapboxCalls) break;
+  if (!isJobRunnable(job)) continue;
+
+  const claimed = await claimJob(job);
+  if (!claimed) continue;
+  stats.claimed += 1;
+  stats.processed += 1;
+
+  try {
+    await processJob(claimed);
+  } catch (error) {
+    await failJob(claimed, errorMessage(error), true);
+  }
+}
+
+console.log(JSON.stringify({ dryRun, stats }, null, 2));
+
+async function processJob(job: SeedJob): Promise<void> {
+  if (job.route_type !== "ROUND_TRIP") {
+    await failJob(job, "unsupported_route_type_for_region_healing", false);
+    return;
+  }
+
+  const region = await loadRegionForJob(job);
+  if (!region) {
+    await failJob(job, "route_region_missing", false);
+    return;
+  }
+  if (region.bootstrap_enabled === false) {
+    await markCuratedNeeded(job, region, "bootstrap_disabled");
+    return;
+  }
+  if (
+    region.difficulty_level === "hard" &&
+    (region.curated_seed_preferred === true ||
+      region.hard_region_status === "curated_needed")
+  ) {
+    await markCuratedNeeded(job, region, "hard_region_curated_needed");
+    return;
+  }
+
+  const remainingBudget = remainingMapboxBudget(job);
+  if (remainingBudget <= 0) {
+    await pauseJobForBudget(job, "job_budget_exhausted");
+    return;
+  }
+
+  const maxCallsForJob = Math.min(
+    remainingBudget,
+    Math.max(0, job.max_mapbox_calls ?? 8) -
+      Math.max(0, job.mapbox_calls_used ?? 0),
+    maxGlobalMapboxCalls - stats.mapboxCallsUsed,
+  );
+  if (maxCallsForJob <= 0) {
+    await pauseJobForBudget(job, "global_budget_exhausted");
+    return;
+  }
+
+  let verifiedInserted = 0;
+  let candidatesInserted = 0;
+  let callsUsed = 0;
+  let lastFailure = "no_candidate_generated";
+  const start = {
+    latitude: region.center_lat,
+    longitude: region.center_lng,
+  };
+
+  for (let attempt = 0; attempt < maxCallsForJob; attempt += 1) {
+    if (verifiedInserted >= targetVerifiedPerJob) break;
+    if (stats.verifiedInserted >= maxVerifiedPerClusterPerRun) break;
+    if (callsUsed >= maxCallsForJob) break;
+
+    const response = await callRouteGenerator(job, region, start, attempt);
+    if (!response.ok) {
+      callsUsed += 1;
+      stats.mapboxCallsUsed += 1;
+      lastFailure = response.reason;
+      continue;
+    }
+    const callCost = mapboxCallsFromMeta(response.meta);
+    callsUsed += callCost;
+    stats.mapboxCallsUsed += callCost;
+
+    const route = response.route;
+    const decision = evaluateGeneratedRoute(job, route, start);
+    if (!decision.acceptable) {
+      lastFailure = decision.reason;
+      continue;
+    }
+
+    const fingerprint = `healing_${shortHash(decision.fingerprint)}`;
+    const existingPoolRoute = await routeExists("route_pool", fingerprint);
+    const existingCandidate = await routeExists(
+      "route_pool_candidates",
+      fingerprint,
+    );
+    if (existingPoolRoute || existingCandidate) {
+      lastFailure = "duplicate_fingerprint";
+      continue;
+    }
+
+    if (decision.verified) {
+      const inserted = await upsertVerifiedRoute({
+        job,
+        region,
+        route,
+        fingerprint,
+        decision,
+      });
+      if (inserted) {
+        verifiedInserted += 1;
+        stats.verifiedInserted += 1;
+      }
+    } else {
+      const inserted = await upsertCandidateRoute({
+        job,
+        region,
+        route,
+        fingerprint,
+        decision,
+      });
+      if (inserted) {
+        candidatesInserted += 1;
+        stats.candidatesInserted += 1;
+      }
+    }
+  }
+
+  await refreshCoverage(job, region);
+  if (verifiedInserted > 0 || candidatesInserted > 0) {
+    await completeJob(job, {
+      callsUsed,
+      verifiedInserted,
+      candidatesInserted,
+      reason: verifiedInserted > 0 ? "verified_inserted" : "candidate_inserted",
+    });
+    return;
+  }
+  await failJob(job, lastFailure, true, callsUsed);
+}
+
+async function callRouteGenerator(
+  job: SeedJob,
+  region: RouteRegion,
+  start: Coordinate,
+  attempt: number,
+): Promise<
+  { ok: true; route: any; meta: JsonMap } | {
+    ok: false;
+    reason: string;
+  }
+> {
+  const style = styleLabel(job.style_key);
+  const randomSeed = stableNumber(`${job.id}|${attempt}|${Date.now()}`);
+  const styleProfile = styleProfileFor(job.style_key);
+  const body = {
+    request_id: `route_pool_healing_${job.id}_${attempt + 1}`,
+    route_type: job.route_type,
+    planning_type: "Zufall",
+    startLocation: start,
+    targetDistance: targetDistanceFor(job.distance_bucket, attempt),
+    mode: style,
+    randomSeed,
+    avoid_highways: job.avoid_highways,
+    continue_straight: true,
+    direction_hint: randomSeed % 360,
+    route_variant_hint: `healing-${job.id}-${attempt}`,
+    route_fingerprint_hint: `healing-${job.id}-${attempt}-${randomSeed}`,
+    max_candidate_attempts: job.distance_bucket === 50 ? 5 : 6,
+    style_profile: styleProfile,
+    waypoint_shape_factor: job.style_key === "kurvenjagd" ? 0.95 : 1.85,
+    zigzag_waypoints: job.style_key === "kurvenjagd",
+  };
+  const response = await fetch(edgeEndpoint, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      accept: "application/json",
+      apikey: functionKey,
+      authorization: `Bearer ${functionKey}`,
+    },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    let reason = `http_${response.status}`;
+    try {
+      const error = await response.json();
+      reason = String(error?.code ?? error?.error ?? reason);
+    } catch {
+      // Keep status reason.
+    }
+    return { ok: false, reason };
+  }
+  const data = await response.json();
+  if (!data?.route?.geometry?.coordinates?.length) {
+    return { ok: false, reason: String(data?.code ?? "missing_geometry") };
+  }
+  return { ok: true, route: data.route, meta: data.meta ?? {} };
+}
+
+function evaluateGeneratedRoute(
+  job: SeedJob,
+  route: any,
+  start: Coordinate,
+): {
+  acceptable: boolean;
+  verified: boolean;
+  reason: string;
+  fingerprint: string;
+  qualityTier: string;
+  qualityScore: number;
+  shapeScore: number;
+  distanceKm: number;
+} {
+  const style = styleLabel(job.style_key);
+  const quality = evaluateRouteQuality(route, job.route_type, {
+    targetDistanceKm: job.distance_bucket,
+    mode: style,
+    avoidHighways: job.avoid_highways,
+  });
+  const cleanup = evaluateRouteCleanupGate(route, job.route_type, {
+    targetDistanceKm: job.distance_bucket,
+    mode: style,
+    avoidHighways: job.avoid_highways,
+    startLocation: start,
+  });
+  if (!quality.passed || quality.tier === "rejected") {
+    return rejectDecision(`quality_${quality.reason}`);
+  }
+  if (quality.hasUTurn) {
+    return rejectDecision("u_turn");
+  }
+  if (!cleanup.passed) {
+    return rejectDecision(`cleanup_${cleanup.reason}`);
+  }
+  const distanceKm = distanceKmFromRoute(route);
+  if (!distanceInBucket(distanceKm, job.distance_bucket)) {
+    return rejectDecision(`distance_outside_bucket_${distanceKm.toFixed(1)}`);
+  }
+  if (job.avoid_highways && routeHasMotorway(route)) {
+    return rejectDecision("motorway_violation");
+  }
+
+  const verified = quality.tier === "ideal" || quality.tier === "good";
+  return {
+    acceptable: true,
+    verified,
+    reason: quality.reason,
+    fingerprint: buildRouteFingerprintFromRoute(route),
+    qualityTier: quality.tier,
+    qualityScore: qualityScoreForTier(quality.tier),
+    shapeScore: Math.max(0, Math.min(100, 100 - cleanup.removedPointPercent)),
+    distanceKm,
+  };
+}
+
+function rejectDecision(reason: string) {
+  return {
+    acceptable: false,
+    verified: false,
+    reason,
+    fingerprint: "",
+    qualityTier: "rejected",
+    qualityScore: 0,
+    shapeScore: 0,
+    distanceKm: 0,
+  };
+}
+
+async function upsertVerifiedRoute(args: {
+  job: SeedJob;
+  region: RouteRegion;
+  route: any;
+  fingerprint: string;
+  decision: ReturnType<typeof evaluateGeneratedRoute>;
+}): Promise<boolean> {
+  const coords = args.route.geometry.coordinates as number[][];
+  const first = coords[0];
+  const last = coords[coords.length - 1];
+  const row = {
+    route_fingerprint: args.fingerprint,
+    title: `${args.region.city_cluster} ${args.job.distance_bucket} ${
+      styleLabel(args.job.style_key)
+    } Healing`,
+    route_region_id: args.region.id ?? args.job.route_region_id,
+    country_code: args.region.country_code,
+    admin1_name: args.region.admin1_name,
+    admin2_name: args.region.admin2_name ?? args.job.admin2_name ?? null,
+    city_cluster: args.region.city_cluster,
+    start_lat: first[1],
+    start_lng: first[0],
+    end_lat: last[1],
+    end_lng: last[0],
+    distance_km: args.decision.distanceKm,
+    distance_bucket: args.job.distance_bucket,
+    route_type: args.job.route_type,
+    style_tags: [styleLabel(args.job.style_key)],
+    avoids_highway: args.job.avoid_highways,
+    has_highway: false,
+    quality_score: args.decision.qualityScore,
+    shape_score: args.decision.shapeScore,
+    source: "mapbox_healing",
+    verified: true,
+    is_active: true,
+    geometry: args.route.geometry,
+    route_payload: {
+      source: "route_pool_healing_worker",
+      quality_tier: args.decision.qualityTier,
+      seed_job_id: args.job.id,
+      generated_at: new Date().toISOString(),
+    },
+  };
+  if (dryRun) return true;
+  await rest("route_pool", {
+    method: "POST",
+    query: "on_conflict=route_fingerprint",
+    headers: { Prefer: "resolution=merge-duplicates" },
+    body: row,
+  });
+  return true;
+}
+
+async function upsertCandidateRoute(args: {
+  job: SeedJob;
+  region: RouteRegion;
+  route: any;
+  fingerprint: string;
+  decision: ReturnType<typeof evaluateGeneratedRoute>;
+}): Promise<boolean> {
+  const coords = args.route.geometry.coordinates as number[][];
+  const first = coords[0];
+  const row = {
+    route_region_id: args.region.id ?? args.job.route_region_id,
+    route_fingerprint: args.fingerprint,
+    country_code: args.region.country_code,
+    admin1_name: args.region.admin1_name,
+    admin2_name: args.region.admin2_name ?? args.job.admin2_name ?? null,
+    city_cluster: args.region.city_cluster,
+    start_lat: first[1],
+    start_lng: first[0],
+    distance_km: args.decision.distanceKm,
+    route_type: args.job.route_type,
+    distance_bucket: args.job.distance_bucket,
+    style_key: args.job.style_key,
+    style_tags: [styleLabel(args.job.style_key)],
+    avoid_highways: args.job.avoid_highways,
+    has_highway: false,
+    quality_score: args.decision.qualityScore,
+    shape_score: args.decision.shapeScore,
+    candidate_source: "bootstrap",
+    candidate_region_difficulty: args.region.difficulty_level ?? "normal",
+    hard_region_status: args.region.hard_region_status ?? "normal",
+    candidate_locality_score: 100,
+    repeated_success_count: 1,
+    is_candidate: true,
+    is_verified_pool: false,
+    candidate_score: args.decision.qualityScore,
+    geometry: args.route.geometry,
+    route_payload: {
+      source: "route_pool_healing_worker",
+      quality_tier: args.decision.qualityTier,
+      seed_job_id: args.job.id,
+      generated_at: new Date().toISOString(),
+    },
+  };
+  if (dryRun) return true;
+  await rest("route_pool_candidates", {
+    method: "POST",
+    query: "on_conflict=route_fingerprint",
+    headers: { Prefer: "resolution=merge-duplicates" },
+    body: row,
+  });
+  return true;
+}
+
+async function loadClaimableJobs(): Promise<SeedJob[]> {
+  const query = new URLSearchParams({
+    select: "*",
+    order: "priority.desc,updated_at.asc",
+    limit: String(maxJobsToFetch),
+  });
+  query.append("status", "in.(queued,cooldown)");
+  const rows = await rest<SeedJob[]>("route_seed_jobs", { query });
+  return rows.filter(isJobRunnable);
+}
+
+async function claimJob(job: SeedJob): Promise<SeedJob | null> {
+  const today = new Date().toISOString().slice(0, 10);
+  const month = `${today.slice(0, 8)}01`;
+  const dailyCount = job.budget_window_date === today
+    ? (job.daily_attempt_count ?? 0) + 1
+    : 1;
+  const monthlyCount = job.budget_window_month === month
+    ? (job.monthly_attempt_count ?? 0) + 1
+    : 1;
+  if (
+    dailyCount > (job.daily_attempt_budget ?? 12) ||
+    monthlyCount > (job.monthly_attempt_budget ?? 120)
+  ) {
+    await pauseJobForBudget(job, "request_budget_exhausted");
+    return null;
+  }
+
+  const payload = {
+    status: "running",
+    started_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    attempt_count: (job.attempt_count ?? 0) + 1,
+    daily_attempt_count: dailyCount,
+    monthly_attempt_count: monthlyCount,
+    budget_window_date: today,
+    budget_window_month: month,
+    last_error: null,
+  };
+  if (dryRun) return { ...job, ...payload } as SeedJob;
+  const rows = await rest<SeedJob[]>("route_seed_jobs", {
+    method: "PATCH",
+    query: `id=eq.${
+      encodeURIComponent(job.id)
+    }&status=in.(queued,cooldown)&select=*`,
+    headers: { Prefer: "return=representation" },
+    body: payload,
+  });
+  return rows[0] ?? null;
+}
+
+async function completeJob(
+  job: SeedJob,
+  result: {
+    callsUsed: number;
+    verifiedInserted: number;
+    candidatesInserted: number;
+    reason: string;
+  },
+): Promise<void> {
+  stats.completed += 1;
+  if (dryRun) return;
+  await rest("route_seed_jobs", {
+    method: "PATCH",
+    query: `id=eq.${encodeURIComponent(job.id)}`,
+    body: {
+      status: "completed",
+      completed_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      mapbox_calls_used: (job.mapbox_calls_used ?? 0) + result.callsUsed,
+      verified_inserted_count: (job.verified_inserted_count ?? 0) +
+        result.verifiedInserted,
+      candidate_inserted_count: (job.candidate_inserted_count ?? 0) +
+        result.candidatesInserted,
+      completed_reason: result.reason,
+      last_error: null,
+      cooldown_until: null,
+      next_retry_at: null,
+    },
+  });
+}
+
+async function failJob(
+  job: SeedJob,
+  reason: string,
+  cooldown: boolean,
+  callsUsed = 0,
+): Promise<void> {
+  stats.failed += 1;
+  const failureCount = (job.failure_count ?? 0) + 1;
+  const maxAttempts = Math.max(1, job.max_attempts ?? 3);
+  const shouldCurate = job.difficulty_level === "hard" ||
+    failureCount >= Math.max(1, job.seed_budget_units ?? maxAttempts);
+  const cooldownUntil = new Date(
+    Date.now() + Math.max(1, job.seed_cooldown_minutes ?? 20) * 60_000,
+  ).toISOString();
+  const status = shouldCurate ? "failed" : cooldown ? "cooldown" : "failed";
+  if (dryRun) return;
+  await rest("route_seed_jobs", {
+    method: "PATCH",
+    query: `id=eq.${encodeURIComponent(job.id)}`,
+    body: {
+      status,
+      updated_at: new Date().toISOString(),
+      completed_at: status === "failed" ? new Date().toISOString() : null,
+      failure_count: failureCount,
+      last_failure_reason: reason,
+      last_error: reason,
+      cooldown_until: status === "cooldown" ? cooldownUntil : null,
+      next_retry_at: status === "cooldown" ? cooldownUntil : null,
+      mapbox_calls_used: (job.mapbox_calls_used ?? 0) + callsUsed,
+    },
+  });
+  await updateCoverageHealingStatus(job, {
+    healingStatus: shouldCurate
+      ? "hard_region_curated_needed"
+      : "healing_failed_cooldown",
+    failureReason: reason,
+    nextHealingAt: status === "cooldown" ? cooldownUntil : null,
+  });
+}
+
+async function pauseJobForBudget(job: SeedJob, reason: string): Promise<void> {
+  stats.pausedBudget += 1;
+  if (dryRun) return;
+  await rest("route_seed_jobs", {
+    method: "PATCH",
+    query: `id=eq.${encodeURIComponent(job.id)}`,
+    body: {
+      status: "paused_budget",
+      updated_at: new Date().toISOString(),
+      last_error: reason,
+      last_failure_reason: reason,
+      next_retry_at: nextUtcMidnight().toISOString(),
+    },
+  });
+  await updateCoverageHealingStatus(job, {
+    healingStatus: "healing_paused_budget",
+    failureReason: reason,
+    nextHealingAt: nextUtcMidnight().toISOString(),
+  });
+}
+
+async function markCuratedNeeded(
+  job: SeedJob,
+  region: RouteRegion,
+  reason: string,
+): Promise<void> {
+  if (!dryRun) {
+    await rest("route_seed_jobs", {
+      method: "PATCH",
+      query: `id=eq.${encodeURIComponent(job.id)}`,
+      body: {
+        status: "failed",
+        completed_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        last_error: reason,
+        last_failure_reason: reason,
+        hard_region_status: region.hard_region_status ?? "curated_needed",
+      },
+    });
+    await updateCoverageHealingStatus(job, {
+      healingStatus: "hard_region_curated_needed",
+      failureReason: reason,
+      nextHealingAt: null,
+    });
+  }
+  stats.failed += 1;
+}
+
+async function refreshCoverage(job: SeedJob, region: RouteRegion) {
+  if (dryRun) return;
+  const verifiedRows = await rest<JsonMap[]>("route_pool", {
+    query: new URLSearchParams({
+      select:
+        "route_fingerprint,style_tags,admin2_name,avoids_highway,has_highway",
+      verified: "eq.true",
+      is_active: "eq.true",
+      country_code: `eq.${region.country_code}`,
+      admin1_name: `eq.${region.admin1_name}`,
+      city_cluster: `eq.${region.city_cluster}`,
+      route_type: `eq.${job.route_type}`,
+      distance_bucket: `eq.${job.distance_bucket}`,
+    }),
+  });
+  const verifiedCount =
+    verifiedRows.filter((row) =>
+      nullableSame(row.admin2_name, region.admin2_name) &&
+      styleTags(row.style_tags).map(normalizeStyleKey).includes(
+        job.style_key,
+      ) &&
+      (!job.avoid_highways ||
+        (row.avoids_highway === true && row.has_highway !== true))
+    ).length;
+  const candidateRows = await rest<JsonMap[]>("route_pool_candidates", {
+    query: new URLSearchParams({
+      select: "id,admin2_name",
+      country_code: `eq.${region.country_code}`,
+      admin1_name: `eq.${region.admin1_name}`,
+      city_cluster: `eq.${region.city_cluster}`,
+      route_type: `eq.${job.route_type}`,
+      distance_bucket: `eq.${job.distance_bucket}`,
+      style_key: `eq.${job.style_key}`,
+      avoid_highways: `eq.${job.avoid_highways}`,
+      is_candidate: "eq.true",
+    }),
+  });
+  const candidateCount =
+    candidateRows.filter((row) =>
+      nullableSame(row.admin2_name, region.admin2_name)
+    ).length;
+  const threshold = healthyThreshold(region, job);
+  const coverageStatus = verifiedCount >= threshold
+    ? "healthy"
+    : verifiedCount > 0
+    ? (region.difficulty_level === "hard" ? "hard_region_thin" : "thin")
+    : "warming_up";
+  const healingStatus = verifiedCount >= threshold ? "idle" : "healing_queued";
+  await upsertCoverage(job, region, {
+    verifiedCount,
+    candidateCount,
+    coverageStatus,
+    healingStatus,
+  });
+}
+
+async function upsertCoverage(
+  job: SeedJob,
+  region: RouteRegion,
+  data: {
+    verifiedCount: number;
+    candidateCount: number;
+    coverageStatus: string;
+    healingStatus: string;
+  },
+) {
+  const existing = await loadCoverage(job, region);
+  const payload = {
+    route_region_id: region.id ?? job.route_region_id ?? null,
+    country_code: region.country_code,
+    admin1_name: region.admin1_name,
+    admin2_name: region.admin2_name ?? job.admin2_name ?? null,
+    city_cluster: region.city_cluster,
+    route_type: job.route_type,
+    distance_bucket: job.distance_bucket,
+    style_key: job.style_key,
+    avoid_highways: job.avoid_highways,
+    coverage_status: data.coverageStatus,
+    healing_status: data.healingStatus,
+    healing_priority: job.priority ?? 0,
+    current_verified_count: data.verifiedCount,
+    current_candidate_count: data.candidateCount,
+    difficulty_level: region.difficulty_level ?? job.difficulty_level ??
+      "normal",
+    hard_region_status: region.hard_region_status ??
+      job.hard_region_status ?? "normal",
+    last_counted_at: new Date().toISOString(),
+    last_seed_completed_at: new Date().toISOString(),
+    last_healing_job_id: job.id,
+    updated_at: new Date().toISOString(),
+  };
+  if (existing?.id) {
+    await rest("route_pool_coverage", {
+      method: "PATCH",
+      query: `id=eq.${encodeURIComponent(String(existing.id))}`,
+      body: payload,
+    });
+  } else {
+    await rest("route_pool_coverage", { method: "POST", body: payload });
+  }
+}
+
+async function updateCoverageHealingStatus(
+  job: SeedJob,
+  options: {
+    healingStatus: string;
+    failureReason: string;
+    nextHealingAt: string | null;
+  },
+) {
+  const region = await loadRegionForJob(job);
+  if (!region) return;
+  const existing = await loadCoverage(job, region);
+  if (!existing?.id) return;
+  await rest("route_pool_coverage", {
+    method: "PATCH",
+    query: `id=eq.${encodeURIComponent(String(existing.id))}`,
+    body: {
+      healing_status: options.healingStatus,
+      healing_failure_count: Number(existing.healing_failure_count ?? 0) + 1,
+      last_error: options.failureReason,
+      next_healing_at: options.nextHealingAt,
+      last_healing_job_id: job.id,
+      updated_at: new Date().toISOString(),
+    },
+  });
+}
+
+async function loadCoverage(job: SeedJob, region: RouteRegion) {
+  const params = new URLSearchParams({
+    select: "*",
+    country_code: `eq.${region.country_code}`,
+    admin1_name: `eq.${region.admin1_name}`,
+    city_cluster: `eq.${region.city_cluster}`,
+    route_type: `eq.${job.route_type}`,
+    distance_bucket: `eq.${job.distance_bucket}`,
+    style_key: `eq.${job.style_key}`,
+    avoid_highways: `eq.${job.avoid_highways}`,
+    limit: "1",
+  });
+  const rows = await rest<JsonMap[]>("route_pool_coverage", { query: params });
+  return rows.find((row) => nullableSame(row.admin2_name, region.admin2_name));
+}
+
+async function loadRegionForJob(job: SeedJob): Promise<RouteRegion | null> {
+  if (job.route_region_id) {
+    const rows = await rest<RouteRegion[]>("route_regions", {
+      query: new URLSearchParams({
+        select: "*",
+        id: `eq.${job.route_region_id}`,
+        limit: "1",
+      }),
+    });
+    if (rows[0]) return rows[0];
+  }
+  const rows = await rest<RouteRegion[]>("route_regions", {
+    query: new URLSearchParams({
+      select: "*",
+      country_code: `eq.${job.country_code}`,
+      admin1_name: `eq.${job.admin1_name}`,
+      city_cluster: `eq.${job.city_cluster}`,
+      limit: "10",
+    }),
+  });
+  return rows.find((region) =>
+    nullableSame(region.admin2_name, job.admin2_name)
+  ) ??
+    rows[0] ?? null;
+}
+
+async function routeExists(
+  table: "route_pool" | "route_pool_candidates",
+  fingerprint: string,
+) {
+  const rows = await rest<JsonMap[]>(table, {
+    query: new URLSearchParams({
+      select: table === "route_pool" ? "route_fingerprint" : "id",
+      route_fingerprint: `eq.${fingerprint}`,
+      limit: "1",
+    }),
+  });
+  return rows.length > 0;
+}
+
+async function rest<T = unknown>(
+  table: string,
+  options: {
+    method?: "GET" | "POST" | "PATCH";
+    query?: URLSearchParams | string;
+    headers?: Record<string, string>;
+    body?: unknown;
+  } = {},
+): Promise<T> {
+  const query = options.query
+    ? typeof options.query === "string"
+      ? options.query
+      : options.query.toString()
+    : "";
+  const url = `${supabaseUrl}/rest/v1/${table}${query ? `?${query}` : ""}`;
+  const response = await fetch(url, {
+    method: options.method ?? "GET",
+    headers: {
+      apikey: serviceKey,
+      authorization: `Bearer ${serviceKey}`,
+      "content-type": "application/json",
+      accept: "application/json",
+      ...(options.headers ?? {}),
+    },
+    body: options.body == null ? undefined : JSON.stringify(options.body),
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`rest_${table}_${response.status}:${text.slice(0, 240)}`);
+  }
+  if (response.status === 204) return undefined as T;
+  const text = await response.text();
+  return (text.trim().length === 0 ? undefined : JSON.parse(text)) as T;
+}
+
+function isJobRunnable(job: SeedJob): boolean {
+  if (job.status === "queued") return true;
+  if (job.status !== "cooldown") return false;
+  const retryAt = job.next_retry_at ?? job.cooldown_until;
+  return retryAt == null || Date.parse(retryAt) <= Date.now();
+}
+
+function remainingMapboxBudget(job: SeedJob): number {
+  const today = new Date().toISOString().slice(0, 10);
+  const month = `${today.slice(0, 8)}01`;
+  const dailyCount = job.budget_window_date === today
+    ? (job.daily_attempt_count ?? 0)
+    : 0;
+  const monthlyCount = job.budget_window_month === month
+    ? (job.monthly_attempt_count ?? 0)
+    : 0;
+  const dailyRemaining = Math.max(
+    0,
+    (job.daily_attempt_budget ?? 12) - dailyCount,
+  );
+  const monthlyRemaining = Math.max(
+    0,
+    (job.monthly_attempt_budget ?? 120) - monthlyCount,
+  );
+  return Math.min(dailyRemaining, monthlyRemaining);
+}
+
+function mapboxCallsFromMeta(meta: JsonMap): number {
+  const raw = meta.mapbox_call_count ?? meta.mapboxCallCount ??
+    meta.mapbox_calls_used;
+  if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
+    return Math.max(1, Math.ceil(raw));
+  }
+  return 1;
+}
+
+function distanceKmFromRoute(route: any): number {
+  const raw = typeof route?.distance === "number" ? route.distance : 0;
+  return raw > 1000 ? raw / 1000 : raw;
+}
+
+function distanceInBucket(distanceKm: number, bucket: 50 | 75 | 100): boolean {
+  if (bucket === 50) return distanceKm >= 40 && distanceKm <= 60;
+  if (bucket === 75) return distanceKm >= 60 && distanceKm <= 90;
+  return distanceKm >= 80 && distanceKm <= 120;
+}
+
+function routeHasMotorway(route: any): boolean {
+  const text = JSON.stringify(route?.legs ?? []).toLowerCase();
+  return text.includes("motorway") || text.includes("autobahn");
+}
+
+function healthyThreshold(region: RouteRegion, job: SeedJob): number {
+  if (
+    typeof region.healthy_threshold === "number" && region.healthy_threshold > 0
+  ) {
+    return region.healthy_threshold;
+  }
+  if (job.distance_bucket === 100) return 2;
+  return 3;
+}
+
+function targetDistanceFor(bucket: 50 | 75 | 100, attempt: number): number {
+  const variants = bucket === 50
+    ? [46, 50, 54]
+    : bucket === 75
+    ? [68, 75, 82, 72]
+    : [90, 100, 108, 96];
+  return variants[attempt % variants.length] ?? bucket;
+}
+
+function styleLabel(styleKey: string): RouteMode {
+  switch (styleKey) {
+    case "kurvenjagd":
+      return "Kurvenjagd";
+    case "abendrunde":
+      return "Abendrunde";
+    case "entdecker":
+      return "Entdecker";
+    case "sport_mode":
+    default:
+      return "Sport Mode";
+  }
+}
+
+function styleProfileFor(styleKey: string): string {
+  switch (styleKey) {
+    case "kurvenjagd":
+      return "kurvenjagd";
+    case "abendrunde":
+      return "evening";
+    case "entdecker":
+      return "explorer";
+    case "sport_mode":
+    default:
+      return "sport";
+  }
+}
+
+function normalizeStyleKey(style: string): string {
+  const cleaned = style.trim().toLowerCase()
+    .replaceAll(/[^a-z0-9]+/g, "_")
+    .replaceAll(/_+/g, "_")
+    .replaceAll(/^_|_$/g, "");
+  return cleaned || "standard";
+}
+
+function styleTags(raw: unknown): string[] {
+  if (Array.isArray(raw)) return raw.map(String);
+  if (typeof raw === "string" && raw.trim().length > 0) {
+    return raw.split(",").map((item) => item.trim()).filter(Boolean);
+  }
+  return [];
+}
+
+function nullableSame(left: unknown, right: unknown): boolean {
+  return String(left ?? "").trim().toLowerCase() ===
+    String(right ?? "").trim().toLowerCase();
+}
+
+function qualityScoreForTier(tier: string): number {
+  if (tier === "ideal") return 96;
+  if (tier === "good") return 88;
+  if (tier === "acceptable") return 78;
+  return 0;
+}
+
+function stableNumber(input: string): number {
+  let hash = 2166136261;
+  for (let i = 0; i < input.length; i += 1) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return Math.abs(hash >>> 0);
+}
+
+function shortHash(input: string): string {
+  return stableNumber(input).toString(16).padStart(8, "0").slice(0, 8);
+}
+
+function nextUtcMidnight(): Date {
+  const now = new Date();
+  return new Date(Date.UTC(
+    now.getUTCFullYear(),
+    now.getUTCMonth(),
+    now.getUTCDate() + 1,
+    0,
+    0,
+    0,
+  ));
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function intArg(prefix: string, fallback: number): number {
+  const raw = arg(prefix);
+  const value = raw == null ? NaN : Number(raw);
+  return Number.isFinite(value) ? Math.max(0, Math.floor(value)) : fallback;
+}
+
+function arg(prefix: string): string | undefined {
+  return Deno.args.find((item) => item.startsWith(prefix))?.slice(
+    prefix.length,
+  );
+}
+
+function env(name: string): string {
+  return Deno.env.get(name)?.trim() ?? "";
+}
