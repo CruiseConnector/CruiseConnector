@@ -287,6 +287,7 @@ class RouteService {
       targetDistanceKm: normalizedTargetKm.toDouble(),
       avoidHighways: avoidHighways,
     );
+    var poolHealingFirstPolicy = _usePoolHealingFirstForRoundTrip(scenario);
     _resetRouteDebugState();
     lastRouteGenerationStartedAtMs = DateTime.now().millisecondsSinceEpoch;
     lastRouteDebugTrigger = debugTrigger;
@@ -297,6 +298,7 @@ class RouteService {
       'selectedStyle=$mode avoidHighways=$avoidHighways '
       'forceFreshVariant=$forceFreshVariant trigger=$debugTrigger '
       'subscriptionTier=$lastRouteSubscriptionTier '
+      'poolHealingFirst=$poolHealingFirstPolicy '
       'scenarioKey=${scenario.scenarioKey} noveltyKey=${scenario.noveltyKey}',
     );
     _activeScenarioKeyForDebug = scenario.scenarioKey;
@@ -315,6 +317,8 @@ class RouteService {
         ? '${scenario.scenarioKey}|fresh|${DateTime.now().microsecondsSinceEpoch}'
         : scenario.scenarioKey;
     return RouteGenerationCoordinator.runSingleFlight(singleFlightKey, () async {
+      RoutePoolCoverageCheck? poolHealingCoverage;
+
       if (_isFreeTier(lastRouteSubscriptionTier)) {
         final freePoolRoute = await _tryRoutePoolFallback(
           scenario: scenario,
@@ -359,13 +363,58 @@ class RouteService {
         if (basicPoolRoute != null) {
           return basicPoolRoute;
         }
-        await _ensureCoverageBootstrapStatus(
+        poolHealingCoverage = await _ensureCoverageBootstrapStatus(
           scenario: scenario,
           userLat: startPosition.latitude,
           userLng: startPosition.longitude,
           subscriptionTier: lastRouteSubscriptionTier,
           createSeedJob: true,
         );
+        if (poolHealingCoverage == null) {
+          poolHealingFirstPolicy = false;
+        }
+        if (poolHealingFirstPolicy &&
+            poolHealingCoverage != null &&
+            _shouldStopLiveForPoolHealingCoverage(poolHealingCoverage)) {
+          throw await _buildCoverageWarmupException(
+            scenario: scenario,
+            coverage: poolHealingCoverage,
+            lastError: null,
+          );
+        }
+      }
+
+      if (poolHealingFirstPolicy &&
+          !_isFreeTier(lastRouteSubscriptionTier) &&
+          !_isBasicTier(lastRouteSubscriptionTier)) {
+        final poolFirstRoute = await _tryRoutePoolFallback(
+          scenario: scenario,
+          styleConfig: styleConfig,
+          userLat: startPosition.latitude,
+          userLng: startPosition.longitude,
+          fallbackReason: 'pool_first_short_no_highway',
+        );
+        if (poolFirstRoute != null) {
+          return poolFirstRoute;
+        }
+        poolHealingCoverage = await _ensureCoverageBootstrapStatus(
+          scenario: scenario,
+          userLat: startPosition.latitude,
+          userLng: startPosition.longitude,
+          subscriptionTier: lastRouteSubscriptionTier,
+          createSeedJob: true,
+        );
+        if (poolHealingCoverage == null) {
+          poolHealingFirstPolicy = false;
+        }
+        if (poolHealingCoverage != null &&
+            _shouldStopLiveForPoolHealingCoverage(poolHealingCoverage)) {
+          throw await _buildCoverageWarmupException(
+            scenario: scenario,
+            coverage: poolHealingCoverage,
+            lastError: null,
+          );
+        }
       }
 
       final prepared = forceFreshVariant
@@ -386,7 +435,9 @@ class RouteService {
       // testen. Sobald es aber bereits eine gute Route für dieselben Settings
       // gibt, reicht ein frischer Versuch; danach fällt die App schnell auf
       // die geprüfte Route zurück statt 30-45s in NO_ROUTE-Tails zu laufen.
-      final maxAttempts = forceFreshVariant
+      final maxAttempts = poolHealingFirstPolicy
+          ? 1
+          : forceFreshVariant
           ? (difficultScenario ? 3 : 2)
           : difficultScenario
           ? (hasSeenHistory ? 1 : 3)
@@ -424,7 +475,9 @@ class RouteService {
             // in der Edge Function). Constrained Suchen (Autobahn vermeiden,
             // Kurvenjagd in engen Tälern) bekommen +1 Plan, weil sie pro
             // Versuch ggf. einen relax-retry brauchen.
-            candidateBudget: _roundTripCandidateBudget(scenario, styleConfig),
+            candidateBudget: poolHealingFirstPolicy
+                ? _poolHealingFirstCandidateBudget(scenario)
+                : _roundTripCandidateBudget(scenario, styleConfig),
           );
           if (candidate.accepted) {
             if (!candidate.novelEnough) {
@@ -606,7 +659,7 @@ class RouteService {
         );
       }
 
-      if (_canUseStructuredFallback(lastError)) {
+      if (!poolHealingFirstPolicy && _canUseStructuredFallback(lastError)) {
         final fallback = await _tryRoundTripFallback(
           scenario: scenario,
           styleConfig: styleConfig,
@@ -678,6 +731,7 @@ class RouteService {
         userLat: startPosition.latitude,
         userLng: startPosition.longitude,
         lastError: lastError,
+        coverage: poolHealingCoverage,
       );
       if (warmupError != null) {
         throw warmupError;
@@ -2360,6 +2414,35 @@ class RouteService {
         styleConfig.profileKey == 'entdecker';
   }
 
+  static bool _usePoolHealingFirstForRoundTrip(RouteScenario scenario) {
+    return scenario.isRoundTrip &&
+        scenario.planningType == 'Zufall' &&
+        scenario.avoidHighways &&
+        _distanceBucketForPool(scenario.targetDistanceKm) == 50;
+  }
+
+  static bool _shouldStopLiveForPoolHealingCoverage(
+    RoutePoolCoverageCheck coverage,
+  ) {
+    if (coverage.poolHealthy) return false;
+    if (!coverage.bootstrapEnabled) return true;
+    if (coverage.regionDifficulty == 'hard') return true;
+    if (coverage.coverageStatus == 'hard_region_curated_needed' ||
+        coverage.coverageStatus == 'bootstrap_limited' ||
+        coverage.coverageStatus == 'cooldown') {
+      return true;
+    }
+    final healingStatus = coverage.healingStatus;
+    return healingStatus == 'healing_failed_cooldown' ||
+        healingStatus == 'healing_paused_budget' ||
+        healingStatus == 'hard_region_curated_needed';
+  }
+
+  static int _poolHealingFirstCandidateBudget(RouteScenario scenario) {
+    final bucket = _distanceBucketForPool(scenario.targetDistanceKm);
+    return bucket == 50 ? 3 : 4;
+  }
+
   static int _roundTripCandidateBudget(
     RouteScenario scenario,
     RouteStyleConfig styleConfig,
@@ -3928,6 +4011,17 @@ class RouteService {
       'retry_available': true,
       'estimated_wait_minutes': 5,
       'next_action': qualityTooLow ? 'retry_or_bootstrap' : 'bootstrap',
+      'live_attempted': lastRouteApiCallCount > 0,
+      'live_attempt_reason': lastRouteApiCallCount > 0
+          ? 'single_bounded_short_no_highway_attempt'
+          : 'pool_healing_status',
+      'live_attempt_result': lastError == null
+          ? 'not_attempted'
+          : lastError.edgeMeta['response_code'] ??
+                lastError.edgeMeta['code'] ??
+                lastError.type.name,
+      'pool_verified_count': coverage.currentVerifiedCount,
+      'pool_candidate_count': coverage.currentCandidateCount,
     };
     return RouteServiceException(
       type: RouteErrorType.noRoute,
@@ -5795,6 +5889,13 @@ class RouteService {
     meta['mapboxCallCount'] = lastRouteApiCallCount;
     meta['mapbox_call_count'] = lastRouteApiCallCount;
     meta['liveGenerationCostUnits'] = lastRouteApiCallCount;
+    meta['live_attempted'] = lastRouteApiCallCount > 0;
+    meta['live_attempt_reason'] = lastRouteApiCallCount > 0
+        ? 'route_generation'
+        : (lastRouteGenerationSource == 'pool' ? 'pool_first' : 'not_needed');
+    meta['live_attempt_result'] = lastRouteApiCallCount > 0
+        ? (lastRouteGenerationSource == 'mapbox' ? 'success' : 'not_selected')
+        : 'not_attempted';
     meta['subscriptionTier'] = lastRouteSubscriptionTier;
     meta['route_fingerprint'] = lastRouteDebugFingerprint;
     meta['similarity_to_previous_percent'] =
@@ -5841,6 +5942,9 @@ class RouteService {
       'dead_end_spike_detected': meta['dead_end_spike_detected'],
       'mapbox_attempt_count': lastRouteApiCallCount,
       'mapbox_call_count': lastRouteApiCallCount,
+      'live_attempted': meta['live_attempted'],
+      'live_attempt_reason': meta['live_attempt_reason'],
+      'live_attempt_result': meta['live_attempt_result'],
       'route_fingerprint': lastRouteDebugFingerprint,
       'similarity_to_previous_percent': lastRouteSimilarityToPreviousPercent,
       'subscription_tier': lastRouteSubscriptionTier,

@@ -846,7 +846,7 @@ void main() {
   });
 
   test(
-    'Mapbox-Fehler nutzt geprüfte Pool-Route statt Fehler, wenn Match vorhanden ist',
+    'Pool-first nutzt geprüfte Pool-Route ohne Live-Mapbox, wenn Match vorhanden ist',
     () async {
       final failingInvoker = _AlwaysFailingInvoker();
       final poolService = _FakeRoutePoolService(_poolMatch());
@@ -865,13 +865,13 @@ void main() {
       );
 
       expect(route.coordinates, isNotEmpty);
-      expect(failingInvoker.callCount, greaterThan(0));
+      expect(failingInvoker.callCount, 0);
       expect(poolService.calls, hasLength(1));
       expect(poolService.calls.single['distanceBucket'], 50);
       expect(poolService.calls.single['avoidHighways'], true);
       expect(route.edgeMeta['route_source'], 'pool');
       expect(route.edgeMeta['fallbackUsed'], true);
-      expect(route.edgeMeta['mapboxCallCount'], failingInvoker.callCount);
+      expect(route.edgeMeta['mapboxCallCount'], 0);
       expect(
         route.edgeMeta['pool_match_id'],
         'pool-dornbirn-50-sport-nohighway',
@@ -1069,6 +1069,54 @@ void main() {
   );
 
   test(
+    'Premium short no-highway Rundkurs nutzt healthy Pool vor Live-Mapbox',
+    () async {
+      final jobs = <RouteSeedJob>[];
+      service = RouteService(
+        invoker: invoker,
+        routePoolService: RoutePoolService(
+          inMemoryRegions: [
+            _benchmarkRegion(
+              countryCode: 'AT',
+              admin1Name: 'Vorarlberg',
+              admin2Name: 'Dornbirn',
+              cityCluster: 'Dornbirn',
+              centerLat: 47.5162,
+              centerLng: 9.7471,
+            ),
+          ],
+          inMemoryRoutes: [
+            _inMemoryPoolEntry(
+              id: 'premium-dornbirn-pool',
+              cityCluster: 'Dornbirn',
+              response: _closedLoopResponse(),
+              admin2Name: 'Dornbirn',
+            ),
+          ],
+          inMemoryCoverage: <RoutePoolCoverage>[],
+          inMemorySeedJobs: jobs,
+          inMemoryCandidates: <RoutePoolCandidate>[],
+        ),
+      );
+
+      final route = await service.generateRoundTrip(
+        startPosition: _start(),
+        targetDistanceKm: 50,
+        mode: 'Sport Mode',
+        planningType: 'Zufall',
+        avoidHighways: true,
+        forceFreshVariant: true,
+        subscriptionTier: 'premium',
+      );
+
+      expect(route.edgeMeta['route_source'], 'pool');
+      expect(route.edgeMeta['live_attempted'], false);
+      expect(invoker.callCount, 0);
+      expect(jobs, isEmpty);
+    },
+  );
+
+  test(
     'Free-User in leerer Region bekommt warming_up statt generischem Fehler und keinen Job-Duplikatsturm',
     () async {
       final jobs = <RouteSeedJob>[];
@@ -1127,6 +1175,71 @@ void main() {
       expect(secondError.edgeMeta['duplicate_job_prevented'], true);
       expect(invoker.callCount, 0);
       expect(jobs, hasLength(1));
+    },
+  );
+
+  test(
+    'Premium short no-highway Pool-Luecke queued Healing und begrenzt Live auf einen Versuch',
+    () async {
+      final jobs = <RouteSeedJob>[];
+      final failingInvoker = _AlwaysFailingInvoker();
+      service = RouteService(
+        invoker: failingInvoker,
+        routePoolService: RoutePoolService(
+          inMemoryRegions: [
+            _benchmarkRegion(
+              countryCode: 'AT',
+              admin1Name: 'Vorarlberg',
+              admin2Name: 'Feldkirch',
+              cityCluster: 'Feldkirch',
+              centerLat: 47.2383,
+              centerLng: 9.5985,
+            ),
+          ],
+          inMemoryRoutes: const [],
+          inMemoryCoverage: <RoutePoolCoverage>[],
+          inMemorySeedJobs: jobs,
+          inMemoryCandidates: <RoutePoolCandidate>[],
+        ),
+      );
+
+      late RouteServiceException firstError;
+      late RouteServiceException secondError;
+      try {
+        await service.generateRoundTrip(
+          startPosition: _position(47.2383, 9.5985),
+          targetDistanceKm: 50,
+          mode: 'Sport Mode',
+          planningType: 'Zufall',
+          avoidHighways: true,
+          forceFreshVariant: true,
+          subscriptionTier: 'premium',
+        );
+      } on RouteServiceException catch (error) {
+        firstError = error;
+      }
+      try {
+        await service.generateRoundTrip(
+          startPosition: _position(47.2383, 9.5985),
+          targetDistanceKm: 50,
+          mode: 'Sport Mode',
+          planningType: 'Zufall',
+          avoidHighways: true,
+          forceFreshVariant: true,
+          subscriptionTier: 'premium',
+        );
+      } on RouteServiceException catch (error) {
+        secondError = error;
+      }
+
+      expect(failingInvoker.callCount, 2);
+      expect(jobs, hasLength(1));
+      expect(firstError.edgeMeta['code'], 'pool_bootstrap_pending');
+      expect(firstError.edgeMeta['seed_job_created'], true);
+      expect(firstError.edgeMeta['live_attempted'], true);
+      expect(firstError.edgeMeta['live_attempt_result'], isNot('success'));
+      expect(secondError.edgeMeta['duplicate_job_prevented'], true);
+      expect(secondError.edgeMeta['live_attempted'], true);
     },
   );
 
@@ -1387,6 +1500,7 @@ void main() {
       expect(error.edgeMeta['region_difficulty'], 'hard');
       expect(error.edgeMeta['seed_job_created'], false);
       expect(error.edgeMeta['duplicate_job_prevented'], false);
+      expect(failingInvoker.callCount, 0);
       expect(poolService.ensureCoverageCallCount, 1);
     },
   );
