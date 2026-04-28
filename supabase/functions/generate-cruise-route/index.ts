@@ -141,6 +141,16 @@ Deno.serve(async (req) => {
       userWaypointArray != null && userWaypointArray.length > 0
         ? userWaypointArray
         : manualWaypointArray;
+    const preferenceAreas = Array.isArray(body.preference_areas)
+      ? body.preference_areas
+      : undefined;
+    const isWaypointPreferenceRequest =
+      body.generation_mode === "random_with_preferences" ||
+      body.original_planning_type === "waypoints" ||
+      body.original_planning_type === "Wegpunkte" ||
+      (preferenceAreas != null && preferenceAreas.length > 0);
+    const preferenceAreaCount = preferenceAreas?.length ??
+      body.preference_area_count ?? 0;
     const waypointSource =
       userWaypointArray != null && userWaypointArray.length > 0
         ? "user_waypoints"
@@ -186,6 +196,11 @@ Deno.serve(async (req) => {
         routeType: body.route_type ?? "ROUND_TRIP",
         mode: mode ?? "Standard",
         hasDestination: body.destination_location != null,
+        originalPlanningType: body.original_planning_type ?? null,
+        effectivePlanningType: body.effective_planning_type ?? null,
+        generationMode: body.generation_mode ?? null,
+        preferenceAreaCount,
+        preferenceApplied: body.preference_applied === true,
         manualWaypointCount: manual_waypoints?.length ?? 0,
         userWaypointCount: user_waypoints?.length ?? 0,
         waypointSource,
@@ -402,6 +417,57 @@ Deno.serve(async (req) => {
       reachDistancesMeters: number[];
       thresholdMeters: number;
     } | null = null;
+
+    if (isWaypointPreferenceRequest) {
+      if (currentRouteType !== "ROUND_TRIP") {
+        throw new Error(
+          "Invalid preference_areas: waypoint preferences are only supported for round trips.",
+        );
+      }
+      if (!preferenceAreas || preferenceAreas.length === 0) {
+        throw new Error(
+          "too_few_waypoints: Set at least one preference area.",
+        );
+      }
+      if (preferenceAreas.length > 3) {
+        throw new Error(
+          "too_many_waypoints: Waypoint preference mode supports at most 3 areas.",
+        );
+      }
+
+      const maxPreferenceDistanceKm = Math.max(
+        12,
+        Math.min(80, (targetDistance ?? 50) * 0.75),
+      );
+      for (let i = 0; i < preferenceAreas.length; i++) {
+        const area = preferenceAreas[i];
+        if (!isValidCoord(area)) {
+          throw new Error(
+            `Invalid preference_area at index ${i}: coordinates out of bounds or not a number`,
+          );
+        }
+        const distanceFromStartKm = calculateDistance(startLocation, area);
+        if (distanceFromStartKm <= 0.2) {
+          throw new Error(
+            `waypoint_duplicate_or_too_close: preference area ${i} is too close to start.`,
+          );
+        }
+        if (distanceFromStartKm > maxPreferenceDistanceKm) {
+          throw new Error(
+            `waypoint_too_far: preference area ${i} is ${
+              distanceFromStartKm.toFixed(1)
+            }km from start.`,
+          );
+        }
+        for (let j = 0; j < i; j++) {
+          if (calculateDistance(preferenceAreas[j], area) <= 0.2) {
+            throw new Error(
+              `waypoint_duplicate_or_too_close: preference areas ${j} and ${i} are too close.`,
+            );
+          }
+        }
+      }
+    }
 
     if (planning_type === "Zufall" && currentRouteType === "ROUND_TRIP") {
       if (mode === "Kurvenjagd") {
@@ -708,6 +774,11 @@ Deno.serve(async (req) => {
         routeType: currentRouteType,
         mode: mode ?? "Standard",
         planningType: planning_type,
+        originalPlanningType: body.original_planning_type ?? null,
+        effectivePlanningType: body.effective_planning_type ?? null,
+        generationMode: body.generation_mode ?? null,
+        preferenceAreaCount,
+        preferenceApplied: body.preference_applied === true,
         styleProfile: body.style_profile ?? null,
         avoidHighwaysRequested: avoidHighways,
         mapboxProfile,
@@ -1728,6 +1799,12 @@ Deno.serve(async (req) => {
             : null,
           target_distance_km: targetDistance ?? null,
           route_distance_km: responseDistanceKm,
+          original_planning_type: body.original_planning_type ?? null,
+          effective_planning_type: body.effective_planning_type ?? null,
+          generation_mode: body.generation_mode ?? null,
+          preference_area_count: preferenceAreaCount,
+          preference_applied: body.preference_applied === true,
+          preference_match_score: null,
           avoid_highways_requested: avoidHighways,
           effective_excludes: excludeParams,
           quality_tier: finalQuality.tier,

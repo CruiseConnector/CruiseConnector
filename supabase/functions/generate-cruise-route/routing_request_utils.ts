@@ -2,6 +2,10 @@ export function classifyRoutingError(message: string): {
   status: number;
   code:
     | "INVALID_REQUEST"
+    | "too_few_waypoints"
+    | "too_many_waypoints"
+    | "waypoint_duplicate_or_too_close"
+    | "waypoint_too_far"
     | "NO_ROUTE"
     | "UNAUTHORIZED"
     | "RATE_LIMIT"
@@ -12,11 +16,23 @@ export function classifyRoutingError(message: string): {
   retryAfterSec?: number;
 } {
   const lower = message.toLowerCase();
+  if (lower.includes("too_few_waypoints")) {
+    return { status: 422, code: "too_few_waypoints", retryable: false };
+  }
+  if (lower.includes("too_many_waypoints")) {
+    return { status: 422, code: "too_many_waypoints", retryable: false };
+  }
+  if (lower.includes("waypoint_duplicate_or_too_close")) {
+    return {
+      status: 422,
+      code: "waypoint_duplicate_or_too_close",
+      retryable: false,
+    };
+  }
+  if (lower.includes("waypoint_too_far")) {
+    return { status: 422, code: "waypoint_too_far", retryable: false };
+  }
   if (
-    lower.includes("too_few_waypoints") ||
-    lower.includes("too_many_waypoints") ||
-    lower.includes("waypoint_duplicate_or_too_close") ||
-    lower.includes("waypoint_too_far") ||
     lower.includes("waypoint_layout_unstable") ||
     lower.includes("waypoint_route_not_possible")
   ) {

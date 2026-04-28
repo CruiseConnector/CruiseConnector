@@ -259,8 +259,8 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
               children: [
                 Text(
                   widget.roundTripWaypointCount == 0
-                      ? 'Tippe auf die Karte, um 1-8 Wegpunkte zu setzen.'
-                      : '${widget.roundTripWaypointCount} Wegpunkt${widget.roundTripWaypointCount == 1 ? '' : 'e'} gesetzt. Reihenfolge: Start -> Punkte -> Start.',
+                      ? 'Setze bis zu 3 Bereiche, die deine Rundroute bevorzugen soll.'
+                      : '${widget.roundTripWaypointCount} Bereich${widget.roundTripWaypointCount == 1 ? '' : 'e'} gesetzt. Die Rundroute bevorzugt diese Gegend.',
                   style: const TextStyle(
                     color: Colors.white70,
                     fontSize: 12,
@@ -273,7 +273,7 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
                   runSpacing: 8,
                   children: [
                     _SmallActionButton(
-                      label: 'Seed generieren',
+                      label: 'Bereiche vorschlagen',
                       icon: Icons.auto_awesome,
                       onTap: widget.waypointActionsEnabled
                           ? widget.onGenerateWaypointSeed

@@ -497,29 +497,7 @@ void main() {
       expect(captured['language'], 'de');
     });
 
-    test('Zufall-Rundkurs sendet keine Wegpunkte-Felder', () async {
-      when(mockInvoker.invoke(any)).thenAnswer(
-        (_) async =>
-            _buildRouteResponse(distanceMeters: 50000, durationSeconds: 3600),
-      );
-
-      await service.generateRoundTrip(
-        startPosition: _munich(),
-        targetDistanceKm: 50,
-        mode: 'Sport Mode',
-        planningType: 'Zufall',
-      );
-
-      final captured =
-          verify(mockInvoker.invoke(captureAny)).captured.first
-              as Map<String, dynamic>;
-      expect(captured.containsKey('user_waypoints'), isFalse);
-      expect(captured.containsKey('manual_waypoints'), isFalse);
-      expect(captured.containsKey('close_loop'), isFalse);
-      expect(captured.containsKey('allow_seed_generation'), isFalse);
-    });
-
-    test('sendet User-Wegpunkte für Wegpunkte-Rundkurs', () async {
+    test('sendet Bereiche als Präferenzen für Wegpunkte-Rundkurs', () async {
       when(mockInvoker.invoke(any)).thenAnswer(
         (_) async =>
             _buildRouteResponse(distanceMeters: 42000, durationSeconds: 3200),
@@ -539,17 +517,25 @@ void main() {
       final captured =
           verify(mockInvoker.invoke(captureAny)).captured.first
               as Map<String, dynamic>;
-      expect(captured['planning_type'], 'Wegpunkte');
+      expect(captured['planning_type'], 'Zufall');
       expect(captured['route_type'], 'ROUND_TRIP');
-      expect(captured['close_loop'], isTrue);
-      expect(captured['waypoint_order'], 'fixed');
-      expect(captured['allow_seed_generation'], isFalse);
-      expect(captured['user_waypoints'], hasLength(2));
-      expect(captured['manual_waypoints'], hasLength(2));
-      expect(captured['user_waypoints'][0]['latitude'], 48.1501);
-      expect(captured['user_waypoints'][0]['longitude'], 11.6201);
-      expect(captured['user_waypoints'][1]['latitude'], 48.1151);
-      expect(captured['user_waypoints'][1]['longitude'], 11.6502);
+      expect(captured['original_planning_type'], 'waypoints');
+      expect(captured['effective_planning_type'], 'random');
+      expect(captured['generation_mode'], 'random_with_preferences');
+      expect(captured['preference_area_count'], 2);
+      expect(captured['preference_applied'], isTrue);
+      expect(captured.containsKey('user_waypoints'), isFalse);
+      expect(captured.containsKey('manual_waypoints'), isFalse);
+      expect(captured.containsKey('close_loop'), isFalse);
+      final waypointPayload = (captured['preference_areas'] as List)
+          .cast<Map<String, dynamic>>();
+      expect(waypointPayload[0]['latitude'], 48.1501);
+      expect(waypointPayload[0]['longitude'], 11.6201);
+      expect(waypointPayload[0]['radius_m'], 2000);
+      expect(waypointPayload[0]['bearing_from_start'], isA<int>());
+      expect(waypointPayload[0]['distance_from_start_km'], isA<double>());
+      expect(waypointPayload[1]['latitude'], 48.1151);
+      expect(waypointPayload[1]['longitude'], 11.6502);
       expect(
         captured['client_scenario_key'].toString(),
         contains('wp48.15010,11.62010;48.11510,11.65020'),
@@ -564,12 +550,18 @@ void main() {
           mode: 'Sport Mode',
           planningType: 'Wegpunkte',
         ),
-        throwsA(isA<RouteServiceException>()),
+        throwsA(
+          isA<RouteServiceException>().having(
+            (error) => error.edgeMeta['response_code'],
+            'response_code',
+            'too_few_waypoints',
+          ),
+        ),
       );
       verifyNever(mockInvoker.invoke(any));
     });
 
-    test('Wegpunkte-Rundkurs lehnt mehr als 8 Wegpunkte ab', () async {
+    test('Wegpunkte-Rundkurs erlaubt maximal 3 Anker', () async {
       await expectLater(
         service.generateRoundTrip(
           startPosition: _munich(),
@@ -577,25 +569,31 @@ void main() {
           mode: 'Sport Mode',
           planningType: 'Wegpunkte',
           userWaypoints: List.generate(
-            9,
+            4,
             (index) => {
-              'latitude': 48.15 + index * 0.01,
-              'longitude': 11.62 + index * 0.01,
+              'latitude': 48.14 + index * 0.005,
+              'longitude': 11.59 + index * 0.005,
             },
           ),
         ),
         throwsA(
-          isA<RouteServiceException>().having(
-            (error) => error.edgeMeta['response_code'],
-            'response_code',
-            'too_many_waypoints',
-          ),
+          isA<RouteServiceException>()
+              .having(
+                (error) => error.edgeMeta['response_code'],
+                'response_code',
+                'too_many_waypoints',
+              )
+              .having(
+                (error) => error.edgeMeta['max_waypoints'],
+                'max_waypoints',
+                3,
+              ),
         ),
       );
       verifyNever(mockInvoker.invoke(any));
     });
 
-    test('Wegpunkte-Rundkurs lehnt zu nahe Wegpunkte ab', () async {
+    test('Wegpunkte-Rundkurs lehnt zu weit entfernten Bereich ab', () async {
       await expectLater(
         service.generateRoundTrip(
           startPosition: _munich(),
@@ -603,7 +601,30 @@ void main() {
           mode: 'Sport Mode',
           planningType: 'Wegpunkte',
           userWaypoints: const [
-            {'latitude': 48.1360, 'longitude': 11.5825},
+            {'latitude': 53.5511, 'longitude': 9.9937},
+          ],
+        ),
+        throwsA(
+          isA<RouteServiceException>().having(
+            (error) => error.edgeMeta['response_code'],
+            'response_code',
+            'waypoint_too_far',
+          ),
+        ),
+      );
+      verifyNever(mockInvoker.invoke(any));
+    });
+
+    test('Wegpunkte-Rundkurs lehnt doppelte Bereiche ab', () async {
+      await expectLater(
+        service.generateRoundTrip(
+          startPosition: _munich(),
+          targetDistanceKm: 50,
+          mode: 'Sport Mode',
+          planningType: 'Wegpunkte',
+          userWaypoints: const [
+            {'latitude': 48.1501, 'longitude': 11.6201},
+            {'latitude': 48.1502, 'longitude': 11.6202},
           ],
         ),
         throwsA(
@@ -617,26 +638,33 @@ void main() {
       verifyNever(mockInvoker.invoke(any));
     });
 
-    test('Wegpunkte-Rundkurs lehnt zu entfernte Wegpunkte ab', () async {
-      await expectLater(
-        service.generateRoundTrip(
-          startPosition: _munich(),
-          targetDistanceKm: 50,
-          mode: 'Sport Mode',
-          planningType: 'Wegpunkte',
-          userWaypoints: const [
-            {'latitude': 49.0000, 'longitude': 12.6000},
-          ],
-        ),
-        throwsA(
-          isA<RouteServiceException>().having(
-            (error) => error.edgeMeta['response_code'],
-            'response_code',
-            'waypoint_too_far',
-          ),
-        ),
+    test('Zufall-Rundkurs sendet keine Wegpunkte-Anker-Felder', () async {
+      when(mockInvoker.invoke(any)).thenAnswer(
+        (_) async =>
+            _buildRouteResponse(distanceMeters: 50000, durationSeconds: 3600),
       );
-      verifyNever(mockInvoker.invoke(any));
+
+      await service.generateRoundTrip(
+        startPosition: _munich(),
+        targetDistanceKm: 50,
+        mode: 'Sport Mode',
+        planningType: 'Zufall',
+      );
+
+      final captured =
+          verify(mockInvoker.invoke(captureAny)).captured.first
+              as Map<String, dynamic>;
+      expect(captured['planning_type'], 'Zufall');
+      expect(captured.containsKey('user_waypoints'), isFalse);
+      expect(captured.containsKey('manual_waypoints'), isFalse);
+      expect(captured.containsKey('waypoint_mode'), isFalse);
+      expect(captured.containsKey('waypoint_order'), isFalse);
+      expect(captured.containsKey('anchor_visit_radius_m'), isFalse);
+      expect(captured.containsKey('preference_areas'), isFalse);
+      expect(captured.containsKey('original_planning_type'), isFalse);
+      expect(captured.containsKey('effective_planning_type'), isFalse);
+      expect(captured.containsKey('close_loop'), isFalse);
+      expect(captured.containsKey('allow_seed_generation'), isFalse);
     });
 
     test(

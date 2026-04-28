@@ -688,8 +688,8 @@ class _CruiseModePageState extends State<CruiseModePage>
 
   void _handleMapTap(TapPosition tapPosition, LatLng point) {
     if (!_isWaypointPlanning || _isLoading || _isRouteConfirmed) return;
-    if (_roundTripWaypoints.length >= 8) {
-      _showError('Maximal 8 Wegpunkte möglich.', isCritical: true);
+    if (_roundTripWaypoints.length >= 3) {
+      _showError('Maximal 3 Bereiche möglich.', isCritical: false);
       return;
     }
     setState(() => _roundTripWaypoints.add(point));
@@ -752,11 +752,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     required String style,
     required int variant,
   }) {
-    final count = style == 'Entdecker'
-        ? 4
-        : style == 'Abendrunde'
-        ? 2
-        : 3;
+    final count = style == 'Abendrunde' ? 2 : 3;
     final baseRadiusKm = math.min(
       18.0,
       math.max(4.0, targetKm / (style == 'Abendrunde' ? 8.5 : 6.0)),
@@ -770,13 +766,13 @@ class _CruiseModePageState extends State<CruiseModePage>
     final baseBearing = (styleBaseBearing + variant * 47.0) % 360.0;
     final offsets = switch (style) {
       'Kurvenjagd' => const [-82.0, 4.0, 112.0],
-      'Entdecker' => const [-92.0, -24.0, 48.0, 128.0],
+      'Entdecker' => const [-82.0, -8.0, 76.0],
       'Abendrunde' => const [-48.0, 62.0],
       _ => const [-54.0, 12.0, 84.0],
     };
     final factors = switch (style) {
       'Kurvenjagd' => const [0.90, 1.16, 0.98],
-      'Entdecker' => const [0.88, 1.12, 0.98, 1.06],
+      'Entdecker' => const [0.90, 1.06, 0.96],
       'Abendrunde' => const [0.78, 0.90],
       _ => const [0.94, 1.08, 0.92],
     };
@@ -793,7 +789,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     List<LatLng> points,
     int targetKm,
   ) {
-    if (points.isEmpty || points.length > 8) return false;
+    if (points.isEmpty || points.length > 3) return false;
     final maxDistanceKm = math.max(12.0, math.min(80.0, targetKm * 0.75));
     final bearings = <double>[];
     for (var i = 0; i < points.length; i += 1) {
@@ -1935,17 +1931,17 @@ class _CruiseModePageState extends State<CruiseModePage>
           ? _roundTripWaypointSignature(waypointSnapshot)
           : null;
       if (_isWaypointPlanning &&
-          (waypointSnapshot.isEmpty || waypointSnapshot.length > 8)) {
+          (waypointSnapshot.isEmpty || waypointSnapshot.length > 3)) {
         _restoreGeneratedRouteFailureUi(
           previousUiState,
           waypointSnapshot.isEmpty
-              ? 'Setze mindestens einen Wegpunkt oder lass Seed-Punkte erzeugen.'
-              : 'Bitte nutze maximal 8 Wegpunkte.',
+              ? 'Setze mindestens einen Bereich oder lass Vorschläge erzeugen.'
+              : 'Bitte nutze maximal 3 Bereiche.',
           error: RouteServiceException(
             type: RouteErrorType.validation,
             userMessage: waypointSnapshot.isEmpty
-                ? 'Setze mindestens einen Wegpunkt oder lass Seed-Punkte erzeugen.'
-                : 'Bitte nutze maximal 8 Wegpunkte.',
+                ? 'Setze mindestens einen Bereich oder lass Vorschläge erzeugen.'
+                : 'Bitte nutze maximal 3 Bereiche.',
             debugMessage:
                 'Invalid UI waypoint count=${waypointSnapshot.length}.',
             edgeMeta: {

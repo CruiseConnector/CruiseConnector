@@ -16,6 +16,18 @@ export interface RequestData {
   user_waypoints?: Coordinate[];
   manual_waypoints?: Coordinate[];
   waypoint_order?: "fixed";
+  original_planning_type?: "waypoints" | "Wegpunkte";
+  effective_planning_type?: "random" | "Zufall";
+  generation_mode?: "random_with_preferences";
+  preference_areas?: Array<
+    Coordinate & {
+      radius_m?: number;
+      bearing_from_start?: number;
+      distance_from_start_km?: number;
+    }
+  >;
+  preference_area_count?: number;
+  preference_applied?: boolean;
   close_loop?: boolean;
   allow_seed_generation?: boolean;
   targetDistance?: number; // in km
