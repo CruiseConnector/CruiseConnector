@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:image_cropper/image_cropper.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/presentation/widgets/car_card.dart';
 import 'package:cruise_connect/presentation/widgets/user_avatar.dart';
+
+enum _ImageCropPreset { avatar, banner, car }
 
 /// Profil-Editor: Banner + Avatar Upload, Username/Bio/Link, Auto-Stammdaten
 /// im Ferrari-Verkaufsanzeigen-Stil.
@@ -93,15 +96,15 @@ class _EditProfilePageState extends State<EditProfilePage> {
         _linkController.text = (profile?['link'] as String?) ?? '';
         _avatarUrl = profile?['avatar_url'] as String?;
         _bannerUrl = profile?['banner_url'] as String?;
-        _nextUsernameChange =
-            usernameCheck.canChange ? null : usernameCheck.nextChange;
+        _nextUsernameChange = usernameCheck.canChange
+            ? null
+            : usernameCheck.nextChange;
 
         _carBrandController.text = (profile?['car_brand'] as String?) ?? '';
         _carNameController.text = (profile?['car_name'] as String?) ?? '';
         _carFirstRegController.text =
             (profile?['car_first_reg'] as String?) ?? '';
-        _carMileageController.text =
-            profile?['car_mileage']?.toString() ?? '';
+        _carMileageController.text = profile?['car_mileage']?.toString() ?? '';
         _carHorsepowerController.text =
             profile?['car_horsepower']?.toString() ?? '';
         _carTopSpeedController.text =
@@ -142,13 +145,25 @@ class _EditProfilePageState extends State<EditProfilePage> {
                 ),
               ),
               ListTile(
-                leading: const Icon(Icons.photo_camera, color: Color(0xFFFF3B30)),
-                title: const Text('Kamera', style: TextStyle(color: Colors.white)),
+                leading: const Icon(
+                  Icons.photo_camera,
+                  color: Color(0xFFFF3B30),
+                ),
+                title: const Text(
+                  'Kamera',
+                  style: TextStyle(color: Colors.white),
+                ),
                 onTap: () => Navigator.pop(sheetContext, ImageSource.camera),
               ),
               ListTile(
-                leading: const Icon(Icons.photo_library, color: Color(0xFFFF3B30)),
-                title: const Text('Galerie', style: TextStyle(color: Colors.white)),
+                leading: const Icon(
+                  Icons.photo_library,
+                  color: Color(0xFFFF3B30),
+                ),
+                title: const Text(
+                  'Galerie',
+                  style: TextStyle(color: Colors.white),
+                ),
                 onTap: () => Navigator.pop(sheetContext, ImageSource.gallery),
               ),
               const SizedBox(height: 8),
@@ -164,6 +179,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
     required String column,
     required int maxWidth,
     required int maxHeight,
+    required _ImageCropPreset cropPreset,
     required void Function(bool busy) onBusy,
     required void Function(String url) onSuccess,
   }) async {
@@ -184,9 +200,11 @@ class _EditProfilePageState extends State<EditProfilePage> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(source == ImageSource.camera
-                ? 'Kein Kamera-Zugriff. Berechtigung in den Einstellungen erlauben.'
-                : 'Kein Galerie-Zugriff. Berechtigung in den Einstellungen erlauben.'),
+            content: Text(
+              source == ImageSource.camera
+                  ? 'Kein Kamera-Zugriff. Berechtigung in den Einstellungen erlauben.'
+                  : 'Kein Galerie-Zugriff. Berechtigung in den Einstellungen erlauben.',
+            ),
             backgroundColor: const Color(0xFF1C1F26),
           ),
         );
@@ -197,19 +215,24 @@ class _EditProfilePageState extends State<EditProfilePage> {
 
     onBusy(true);
     try {
-      final bytes = await image.readAsBytes();
-      final ext = image.path.split('.').last.toLowerCase();
-      final fileName = '${column.replaceAll('_url', '')}.$ext';
+      final cropped = await _cropImage(
+        image,
+        preset: cropPreset,
+        maxWidth: maxWidth,
+        maxHeight: maxHeight,
+      );
+      if (cropped == null) return;
+
+      final bytes = await cropped.readAsBytes();
+      final fileName = '${column.replaceAll('_url', '')}.jpg';
       final url = await SocialService.uploadUserAsset(
         bucket: bucket,
         bytes: bytes,
         fileName: fileName,
+        contentType: 'image/jpeg',
       );
       if (url == null) throw Exception('Upload fehlgeschlagen');
-      await SocialService.updateProfileImageUrl(
-        column: column,
-        publicUrl: url,
-      );
+      await SocialService.updateProfileImageUrl(column: column, publicUrl: url);
       if (mounted) onSuccess(url);
     } catch (e) {
       debugPrint('[EditProfile] Upload fehlgeschlagen: $e');
@@ -246,12 +269,20 @@ class _EditProfilePageState extends State<EditProfilePage> {
 
     setState(() => _uploadingCarImage = true);
     try {
-      final bytes = await image.readAsBytes();
-      final ext = image.path.split('.').last.toLowerCase();
+      final cropped = await _cropImage(
+        image,
+        preset: _ImageCropPreset.car,
+        maxWidth: 1280,
+        maxHeight: 720,
+      );
+      if (cropped == null) return;
+
+      final bytes = await cropped.readAsBytes();
       final url = await SocialService.uploadUserAsset(
-        bucket: 'avatars',
+        bucket: 'car_images',
         bytes: bytes,
-        fileName: 'car.$ext',
+        fileName: 'car.jpg',
+        contentType: 'image/jpeg',
       );
       if (url == null) throw Exception('Upload fehlgeschlagen');
       if (mounted) setState(() => _carImageUrl = url);
@@ -260,6 +291,75 @@ class _EditProfilePageState extends State<EditProfilePage> {
     } finally {
       if (mounted) setState(() => _uploadingCarImage = false);
     }
+  }
+
+  Future<CroppedFile?> _cropImage(
+    XFile image, {
+    required _ImageCropPreset preset,
+    required int maxWidth,
+    required int maxHeight,
+  }) {
+    final aspectRatio = switch (preset) {
+      _ImageCropPreset.avatar => const CropAspectRatio(ratioX: 1, ratioY: 1),
+      _ImageCropPreset.banner => const CropAspectRatio(ratioX: 8, ratioY: 3),
+      _ImageCropPreset.car => const CropAspectRatio(ratioX: 16, ratioY: 9),
+    };
+    final initPreset = switch (preset) {
+      _ImageCropPreset.avatar => CropAspectRatioPreset.square,
+      _ImageCropPreset.banner => CropAspectRatioPreset.ratio16x9,
+      _ImageCropPreset.car => CropAspectRatioPreset.ratio16x9,
+    };
+    final cropStyle = preset == _ImageCropPreset.avatar
+        ? CropStyle.circle
+        : CropStyle.rectangle;
+    final title = switch (preset) {
+      _ImageCropPreset.avatar => 'Profilbild zuschneiden',
+      _ImageCropPreset.banner => 'Banner zuschneiden',
+      _ImageCropPreset.car => 'Auto-Foto zuschneiden',
+    };
+
+    return ImageCropper().cropImage(
+      sourcePath: image.path,
+      maxWidth: maxWidth,
+      maxHeight: maxHeight,
+      compressFormat: ImageCompressFormat.jpg,
+      compressQuality: 88,
+      aspectRatio: aspectRatio,
+      uiSettings: [
+        AndroidUiSettings(
+          toolbarTitle: title,
+          toolbarColor: const Color(0xFF0B0E14),
+          toolbarWidgetColor: Colors.white,
+          activeControlsWidgetColor: const Color(0xFFFF3B30),
+          backgroundColor: const Color(0xFF0B0E14),
+          cropStyle: cropStyle,
+          lockAspectRatio: true,
+          hideBottomControls: false,
+          initAspectRatio: initPreset,
+          aspectRatioPresets: [initPreset],
+        ),
+        IOSUiSettings(
+          title: title,
+          aspectRatioLockEnabled: true,
+          resetAspectRatioEnabled: false,
+          rotateButtonsHidden: false,
+          rotateClockwiseButtonHidden: false,
+          cropStyle: cropStyle,
+          aspectRatioPresets: [initPreset],
+        ),
+        WebUiSettings(
+          context: context,
+          presentStyle: WebPresentStyle.dialog,
+          size: const CropperSize(width: 520, height: 520),
+          dragMode: WebDragMode.move,
+          viewwMode: WebViewMode.mode_1,
+          movable: true,
+          zoomable: true,
+          cropBoxMovable: true,
+          cropBoxResizable: false,
+        ),
+      ],
+    );
   }
 
   /// Vor dem Speichern: prüft, ob der Username geändert wurde und triggert
@@ -277,8 +377,10 @@ class _EditProfilePageState extends State<EditProfilePage> {
           context: context,
           builder: (ctx) => AlertDialog(
             backgroundColor: const Color(0xFF1C1F26),
-            title: const Text('Username noch gesperrt',
-                style: TextStyle(color: Colors.white)),
+            title: const Text(
+              'Username noch gesperrt',
+              style: TextStyle(color: Colors.white),
+            ),
             content: Text(
               'Du hast deinen Benutzernamen kürzlich geändert. Du kannst ihn '
               'erst wieder ab dem $formatted ändern.',
@@ -287,8 +389,10 @@ class _EditProfilePageState extends State<EditProfilePage> {
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(ctx),
-                child: const Text('OK',
-                    style: TextStyle(color: Color(0xFFFF3B30))),
+                child: const Text(
+                  'OK',
+                  style: TextStyle(color: Color(0xFFFF3B30)),
+                ),
               ),
             ],
           ),
@@ -303,8 +407,10 @@ class _EditProfilePageState extends State<EditProfilePage> {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: const Color(0xFF1C1F26),
-        title: const Text('Username ändern?',
-            style: TextStyle(color: Colors.white)),
+        title: const Text(
+          'Username ändern?',
+          style: TextStyle(color: Colors.white),
+        ),
         content: const Text(
           'Bist du sicher, dass du deinen Benutzernamen ändern möchtest?\n\n'
           'Du kannst deinen Benutzernamen nur einmal pro Monat ändern.',
@@ -313,13 +419,17 @@ class _EditProfilePageState extends State<EditProfilePage> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Abbrechen',
-                style: TextStyle(color: Colors.grey)),
+            child: const Text(
+              'Abbrechen',
+              style: TextStyle(color: Colors.grey),
+            ),
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Ja, ändern',
-                style: TextStyle(color: Color(0xFFFF3B30))),
+            child: const Text(
+              'Ja, ändern',
+              style: TextStyle(color: Color(0xFFFF3B30)),
+            ),
           ),
         ],
       ),
@@ -385,8 +495,10 @@ class _EditProfilePageState extends State<EditProfilePage> {
           icon: const Icon(Icons.arrow_back, color: Colors.white),
           onPressed: () => Navigator.pop(context),
         ),
-        title: const Text('Profil bearbeiten',
-            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+        title: const Text(
+          'Profil bearbeiten',
+          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+        ),
         actions: [
           TextButton(
             onPressed: _saving ? null : _save,
@@ -395,19 +507,25 @@ class _EditProfilePageState extends State<EditProfilePage> {
                     width: 16,
                     height: 16,
                     child: CircularProgressIndicator(
-                        color: Color(0xFFFF3B30), strokeWidth: 2),
+                      color: Color(0xFFFF3B30),
+                      strokeWidth: 2,
+                    ),
                   )
-                : const Text('Speichern',
+                : const Text(
+                    'Speichern',
                     style: TextStyle(
-                        color: Color(0xFFFF3B30),
-                        fontWeight: FontWeight.bold,
-                        fontSize: 16)),
+                      color: Color(0xFFFF3B30),
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16,
+                    ),
+                  ),
           ),
         ],
       ),
       body: _loading
           ? const Center(
-              child: CircularProgressIndicator(color: Color(0xFFFF3B30)))
+              child: CircularProgressIndicator(color: Color(0xFFFF3B30)),
+            )
           : ListView(
               padding: const EdgeInsets.only(bottom: 32),
               children: [
@@ -424,11 +542,14 @@ class _EditProfilePageState extends State<EditProfilePage> {
                       Text(
                         _nextUsernameChange != null
                             ? 'Du kannst deinen Benutzernamen erst wieder ab dem '
-                                '${_nextUsernameChange!.day.toString().padLeft(2, '0')}.'
-                                '${_nextUsernameChange!.month.toString().padLeft(2, '0')}.'
-                                '${_nextUsernameChange!.year} ändern.'
+                                  '${_nextUsernameChange!.day.toString().padLeft(2, '0')}.'
+                                  '${_nextUsernameChange!.month.toString().padLeft(2, '0')}.'
+                                  '${_nextUsernameChange!.year} ändern.'
                             : 'Du kannst deinen Benutzernamen nur einmal pro Monat ändern.',
-                        style: const TextStyle(color: Colors.grey, fontSize: 12),
+                        style: const TextStyle(
+                          color: Colors.grey,
+                          fontSize: 12,
+                        ),
                       ),
 
                       const SizedBox(height: 20),
@@ -466,7 +587,9 @@ class _EditProfilePageState extends State<EditProfilePage> {
                       const SizedBox(height: 32),
 
                       _buildSectionHeader(
-                          'Mein Auto', Icons.directions_car_filled),
+                        'Mein Auto',
+                        Icons.directions_car_filled,
+                      ),
                       const SizedBox(height: 8),
                       const Text(
                         'Stammdaten zu deinem Auto. Felder die du leer lässt erscheinen nicht auf der Karte.',
@@ -494,13 +617,14 @@ class _EditProfilePageState extends State<EditProfilePage> {
               onTap: _uploadingBanner
                   ? null
                   : () => _pickAndUpload(
-                        bucket: 'banners',
-                        column: 'banner_url',
-                        maxWidth: 1600,
-                        maxHeight: 600,
-                        onBusy: (b) => setState(() => _uploadingBanner = b),
-                        onSuccess: (url) => setState(() => _bannerUrl = url),
-                      ),
+                      bucket: 'banners',
+                      column: 'banner_url',
+                      maxWidth: 1600,
+                      maxHeight: 600,
+                      cropPreset: _ImageCropPreset.banner,
+                      onBusy: (b) => setState(() => _uploadingBanner = b),
+                      onSuccess: (url) => setState(() => _bannerUrl = url),
+                    ),
               child: Container(
                 decoration: BoxDecoration(
                   color: const Color(0xFF1C1F26),
@@ -515,9 +639,11 @@ class _EditProfilePageState extends State<EditProfilePage> {
                   children: [
                     if (_bannerUrl == null || _bannerUrl!.isEmpty)
                       Center(
-                        child: Icon(Icons.image_outlined,
-                            size: 48,
-                            color: Colors.white.withValues(alpha: 0.2)),
+                        child: Icon(
+                          Icons.image_outlined,
+                          size: 48,
+                          color: Colors.white.withValues(alpha: 0.2),
+                        ),
                       ),
                     Positioned(
                       right: 12,
@@ -533,10 +659,15 @@ class _EditProfilePageState extends State<EditProfilePage> {
                                 width: 16,
                                 height: 16,
                                 child: CircularProgressIndicator(
-                                    strokeWidth: 2, color: Colors.white),
+                                  strokeWidth: 2,
+                                  color: Colors.white,
+                                ),
                               )
-                            : const Icon(Icons.camera_alt,
-                                color: Colors.white, size: 16),
+                            : const Icon(
+                                Icons.camera_alt,
+                                color: Colors.white,
+                                size: 16,
+                              ),
                       ),
                     ),
                   ],
@@ -551,13 +682,14 @@ class _EditProfilePageState extends State<EditProfilePage> {
               onTap: _uploadingAvatar
                   ? null
                   : () => _pickAndUpload(
-                        bucket: 'avatars',
-                        column: 'avatar_url',
-                        maxWidth: 512,
-                        maxHeight: 512,
-                        onBusy: (b) => setState(() => _uploadingAvatar = b),
-                        onSuccess: (url) => setState(() => _avatarUrl = url),
-                      ),
+                      bucket: 'avatars',
+                      column: 'avatar_url',
+                      maxWidth: 512,
+                      maxHeight: 512,
+                      cropPreset: _ImageCropPreset.avatar,
+                      onBusy: (b) => setState(() => _uploadingAvatar = b),
+                      onSuccess: (url) => setState(() => _avatarUrl = url),
+                    ),
               child: Container(
                 padding: const EdgeInsets.all(4),
                 decoration: const BoxDecoration(
@@ -580,7 +712,9 @@ class _EditProfilePageState extends State<EditProfilePage> {
                             width: 24,
                             height: 24,
                             child: CircularProgressIndicator(
-                                strokeWidth: 2, color: Colors.white),
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
                           ),
                         ),
                       ),
@@ -594,10 +728,15 @@ class _EditProfilePageState extends State<EditProfilePage> {
                           color: const Color(0xFFFF3B30),
                           shape: BoxShape.circle,
                           border: Border.all(
-                              color: const Color(0xFF0B0E14), width: 2),
+                            color: const Color(0xFF0B0E14),
+                            width: 2,
+                          ),
                         ),
-                        child: const Icon(Icons.camera_alt,
-                            color: Colors.white, size: 16),
+                        child: const Icon(
+                          Icons.camera_alt,
+                          color: Colors.white,
+                          size: 16,
+                        ),
                       ),
                     ),
                   ],
@@ -619,8 +758,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
       'car_horsepower': int.tryParse(_carHorsepowerController.text.trim()),
       'car_top_speed': int.tryParse(_carTopSpeedController.text.trim()),
       'car_cylinders': int.tryParse(_carCylindersController.text.trim()),
-      'car_displacement':
-          int.tryParse(_carDisplacementController.text.trim()),
+      'car_displacement': int.tryParse(_carDisplacementController.text.trim()),
       'car_year': int.tryParse(_carYearController.text.trim()),
       'car_image_url': _carImageUrl,
     };
@@ -630,10 +768,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
       children: [
         // Live-Vorschau
         Center(
-          child: SizedBox(
-            width: 320,
-            child: CarCard(profile: liveProfile),
-          ),
+          child: SizedBox(width: 320, child: CarCard(profile: liveProfile)),
         ),
         const SizedBox(height: 20),
 
@@ -656,18 +791,25 @@ class _EditProfilePageState extends State<EditProfilePage> {
                     width: 16,
                     height: 16,
                     child: CircularProgressIndicator(
-                        strokeWidth: 2, color: Color(0xFFFF3B30)),
+                      strokeWidth: 2,
+                      color: Color(0xFFFF3B30),
+                    ),
                   )
                 else
-                  const Icon(Icons.camera_alt,
-                      color: Color(0xFFFF3B30), size: 18),
+                  const Icon(
+                    Icons.camera_alt,
+                    color: Color(0xFFFF3B30),
+                    size: 18,
+                  ),
                 const SizedBox(width: 8),
                 Text(
                   _carImageUrl != null && _carImageUrl!.isNotEmpty
                       ? 'Foto ändern'
                       : 'Auto-Foto hinzufügen',
                   style: const TextStyle(
-                      color: Color(0xFFFF3B30), fontWeight: FontWeight.w600),
+                    color: Color(0xFFFF3B30),
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
               ],
             ),
@@ -856,11 +998,14 @@ class _EditProfilePageState extends State<EditProfilePage> {
       children: [
         Icon(icon, color: const Color(0xFFFF3B30), size: 22),
         const SizedBox(width: 8),
-        Text(text,
-            style: const TextStyle(
-                color: Colors.white,
-                fontSize: 18,
-                fontWeight: FontWeight.bold)),
+        Text(
+          text,
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 18,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
       ],
     );
   }
@@ -871,9 +1016,10 @@ class _EditProfilePageState extends State<EditProfilePage> {
       child: Text(
         text,
         style: const TextStyle(
-            color: Colors.grey,
-            fontSize: 13,
-            fontWeight: FontWeight.w500),
+          color: Colors.grey,
+          fontSize: 13,
+          fontWeight: FontWeight.w500,
+        ),
       ),
     );
   }
@@ -906,8 +1052,10 @@ class _EditProfilePageState extends State<EditProfilePage> {
           hintText: hint,
           hintStyle: TextStyle(color: Colors.grey.withValues(alpha: 0.5)),
           border: InputBorder.none,
-          contentPadding:
-              const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 14,
+            vertical: 12,
+          ),
         ),
       ),
     );

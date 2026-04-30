@@ -29,7 +29,7 @@ class SocialService {
       return '@${slug.isEmpty ? 'user' : slug}';
     }
     final shortId = _shortUserId(fallbackUserId);
-    return shortId == null ? '@user' : '@user_$shortId';
+    return shortId == null ? '@cruiser' : '@cruiser_$shortId';
   }
 
   static String? _shortUserId(String? userId) {
@@ -62,8 +62,9 @@ class SocialService {
 
       // Blockierte User in beide Richtungen ausfiltern.
       final blocked = await getBlockedAndBlockerIds();
-      final allowedFollowing =
-          following.where((id) => !blocked.contains(id)).toList();
+      final allowedFollowing = following
+          .where((id) => !blocked.contains(id))
+          .toList();
       if (allowedFollowing.isEmpty) return [];
 
       // Mutual = Subset von following, die mir zurück folgen.
@@ -696,8 +697,10 @@ class SocialService {
     if (uid == null) return [];
     final rows = await _db
         .from('follows')
-        .select('follower_id, created_at, '
-            'profiles!follows_follower_id_profiles_fkey(id, username, email, avatar_url)')
+        .select(
+          'follower_id, created_at, '
+          'profiles!follows_follower_id_profiles_fkey(id, username, email, avatar_url)',
+        )
         .eq('following_id', uid)
         .eq('status', 'pending')
         .order('created_at', ascending: false);
@@ -1315,7 +1318,7 @@ class SocialService {
   /// darf. Ist das `username_changed_at`-Feld weniger als 30 Tage her,
   /// ist `canChange == false` und `nextChange` zeigt das Datum.
   static Future<({bool canChange, DateTime? nextChange})>
-      canChangeUsername() async {
+  canChangeUsername() async {
     final uid = _userId;
     if (uid == null) return (canChange: false, nextChange: null);
     try {
@@ -1329,10 +1332,7 @@ class SocialService {
       final last = DateTime.tryParse(raw);
       if (last == null) return (canChange: true, nextChange: null);
       final next = last.add(usernameChangeCooldown);
-      return (
-        canChange: DateTime.now().isAfter(next),
-        nextChange: next,
-      );
+      return (canChange: DateTime.now().isAfter(next), nextChange: next);
     } catch (e) {
       debugPrint('[Social] canChangeUsername Fehler: $e');
       // Optimistisch: bei Fehler erlauben — Server-side RLS sollte schützen.
@@ -1367,7 +1367,8 @@ class SocialService {
         if (patch.isEmpty) return;
         await _db.from('profiles').update(patch).eq('id', uid);
         debugPrint(
-            '[Social] updateProfile: link-Spalte fehlt, übersprungen. Migration ausführen!');
+          '[Social] updateProfile: link-Spalte fehlt, übersprungen. Migration ausführen!',
+        );
       } else {
         rethrow;
       }
@@ -1386,12 +1387,16 @@ class SocialService {
     final check = await canChangeUsername();
     if (!check.canChange) {
       throw StateError(
-          'Username kann erst wieder geändert werden ab ${check.nextChange}');
+        'Username kann erst wieder geändert werden ab ${check.nextChange}',
+      );
     }
-    await _db.from('profiles').update({
-      'username': cleaned,
-      'username_changed_at': DateTime.now().toUtc().toIso8601String(),
-    }).eq('id', uid);
+    await _db
+        .from('profiles')
+        .update({
+          'username': cleaned,
+          'username_changed_at': DateTime.now().toUtc().toIso8601String(),
+        })
+        .eq('id', uid);
   }
 
   /// Speichert das Auto-Profil (Stammdaten) auf den eingeloggten User.
@@ -1441,14 +1446,17 @@ class SocialService {
     required String bucket,
     required Uint8List bytes,
     required String fileName,
+    String? contentType,
   }) async {
     final uid = _userId;
     if (uid == null) return null;
     final path = '$uid/$fileName';
-    await _db.storage.from(bucket).uploadBinary(
+    await _db.storage
+        .from(bucket)
+        .uploadBinary(
           path,
           bytes,
-          fileOptions: const FileOptions(upsert: true),
+          fileOptions: FileOptions(upsert: true, contentType: contentType),
         );
     final publicUrl = _db.storage.from(bucket).getPublicUrl(path);
     return '$publicUrl?t=${DateTime.now().millisecondsSinceEpoch}';
@@ -1478,14 +1486,27 @@ class SocialService {
       'follower_count': followers,
       'following_count': following,
       'username': profile?['username'],
-      'email': profile?['email'],
       'avatar_url': profile?['avatar_url'],
+      'banner_url': profile?['banner_url'],
+      'bio': profile?['bio'],
+      'link': profile?['link'],
       'created_at': profile?['created_at'],
       'level': profile?['level'] ?? 1,
       'total_km': profile?['total_km'] ?? 0,
       'total_routes': profile?['total_routes'] ?? 0,
       'badges': profile?['badges'] ?? [],
       'is_private': profile?['is_private'] ?? false,
+      'car_brand': profile?['car_brand'],
+      'car_name': profile?['car_name'],
+      'car_top_speed': profile?['car_top_speed'],
+      'car_engine_size': profile?['car_engine_size'],
+      'car_displacement': profile?['car_displacement'],
+      'car_cylinders': profile?['car_cylinders'],
+      'car_horsepower': profile?['car_horsepower'],
+      'car_year': profile?['car_year'],
+      'car_first_reg': profile?['car_first_reg'],
+      'car_mileage': profile?['car_mileage'],
+      'car_image_url': profile?['car_image_url'],
     };
   }
 
@@ -1551,7 +1572,8 @@ class SocialService {
       final rows = await _db
           .from('user_blocks')
           .select(
-              'blocked_id, created_at, profiles!user_blocks_blocked_id_fkey(id, username, email, avatar_url)')
+            'blocked_id, created_at, profiles!user_blocks_blocked_id_fkey(id, username, email, avatar_url)',
+          )
           .eq('blocker_id', uid)
           .order('created_at', ascending: false);
       return List<Map<String, dynamic>>.from(rows as List);
@@ -1592,12 +1614,15 @@ class SocialService {
     String? commentId,
     String? details,
   }) async {
-    await _db.rpc('submit_content_report', params: {
-      'p_reason': reason,
-      'p_reported_user_id': reportedUserId,
-      'p_post_id': postId,
-      'p_comment_id': commentId,
-      'p_details': details,
-    });
+    await _db.rpc(
+      'submit_content_report',
+      params: {
+        'p_reason': reason,
+        'p_reported_user_id': reportedUserId,
+        'p_post_id': postId,
+        'p_comment_id': commentId,
+        'p_details': details,
+      },
+    );
   }
 }

@@ -49,6 +49,10 @@
                 <data android:scheme="https" android:host="cruiseconnector.at"/>
             </intent-filter>
         </activity>
+        <activity
+            android:name="com.yalantis.ucrop.UCropActivity"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.AppCompat.Light.NoActionBar" />
         <!-- Mapbox public access token -->
         <meta-data
             android:name="MAPBOX_ACCESS_TOKEN"

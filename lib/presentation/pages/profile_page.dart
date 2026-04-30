@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/data/services/saved_routes_service.dart';
 import 'package:cruise_connect/domain/models/saved_route.dart';
@@ -12,6 +13,7 @@ import 'package:cruise_connect/presentation/pages/settings_page.dart';
 import 'package:cruise_connect/presentation/pages/follow_requests_page.dart';
 import 'package:cruise_connect/presentation/pages/blocked_users_page.dart';
 import 'package:cruise_connect/presentation/pages/cruise_mode_page.dart';
+import 'package:cruise_connect/presentation/pages/post_detail_page.dart';
 import 'package:cruise_connect/presentation/pages/saved_route_bookmarks_page.dart';
 import 'package:cruise_connect/presentation/pages/user_profile_page.dart';
 import 'package:cruise_connect/presentation/widgets/mentions.dart';
@@ -282,18 +284,29 @@ class _ProfilePageState extends State<ProfilePage>
     return '${(diff.inDays / 30).floor()} Mon.';
   }
 
+  Future<void> _openExternalLink(String rawLink) async {
+    final normalized = rawLink.startsWith(RegExp(r'https?://'))
+        ? rawLink
+        : 'https://$rawLink';
+    final uri = Uri.tryParse(normalized);
+    if (uri == null) return;
+    await launchUrl(uri, mode: LaunchMode.externalApplication);
+  }
+
   @override
   Widget build(BuildContext context) {
     final user = Supabase.instance.client.auth.currentUser;
-    final String userEmail = user?.email ?? 'user@cruiseconnect.com';
     // Username & Bio kommen jetzt aus dem `profiles`-Table — Edits aus
     // EditProfilePage werden so direkt sichtbar. user.userMetadata ist
     // unzuverlässig, weil sie nicht synchron zum profiles-Update ist.
     final dbUsername = (_profile['username'] as String?)?.trim();
     final String userName = (dbUsername != null && dbUsername.isNotEmpty)
         ? dbUsername
-        : userEmail.split('@')[0];
-    final String userHandle = "@${userEmail.split('@')[0]}";
+        : 'Cruiser';
+    final String userHandle = SocialService.publicHandle(
+      _profile,
+      fallbackUserId: user?.id,
+    );
     final String? userBio = (_profile['bio'] as String?)?.trim();
     final String? userLink = (_profile['link'] as String?)?.trim();
 
@@ -323,7 +336,7 @@ class _ProfilePageState extends State<ProfilePage>
                 statusBarIconBrightness: Brightness.light,
               ),
               stretch: true,
-              expandedHeight: 150,
+              expandedHeight: 190,
               pinned: true,
               backgroundColor: Colors.transparent,
               elevation: 0,
@@ -387,13 +400,13 @@ class _ProfilePageState extends State<ProfilePage>
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: [
-                        Transform.translate(
-                          offset: const Offset(0, -40),
-                          child: GestureDetector(
+                    Padding(
+                      padding: const EdgeInsets.only(top: 12),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          GestureDetector(
                             onTap: _pickAndUploadAvatar,
                             child: Container(
                               padding: const EdgeInsets.all(5),
@@ -462,72 +475,73 @@ class _ProfilePageState extends State<ProfilePage>
                               ),
                             ),
                           ),
-                        ),
-                        Padding(
-                          padding: const EdgeInsets.only(bottom: 10),
-                          child: GestureDetector(
-                            onTap: () async {
-                              final changed = await Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                  builder: (_) => const EditProfilePage(),
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 10),
+                            child: GestureDetector(
+                              onTap: () async {
+                                final changed = await Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => const EditProfilePage(),
+                                  ),
+                                );
+                                // EditProfilePage liefert `true` zurück, wenn
+                                // Speichern erfolgreich war — dann frische Daten
+                                // ziehen, damit Banner/Avatar/Auto-Karte aktuell sind.
+                                if (changed == true) _loadData();
+                              },
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 16,
+                                  vertical: 8,
                                 ),
-                              );
-                              // EditProfilePage liefert `true` zurück, wenn
-                              // Speichern erfolgreich war — dann frische Daten
-                              // ziehen, damit Banner/Avatar/Auto-Karte aktuell sind.
-                              if (changed == true) _loadData();
-                            },
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 16,
-                                vertical: 8,
-                              ),
-                              decoration: BoxDecoration(
-                                borderRadius: BorderRadius.circular(20),
-                                border: Border.all(color: Colors.white30),
-                              ),
-                              child: const Text(
-                                'Profil bearbeiten',
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 14,
+                                decoration: BoxDecoration(
+                                  borderRadius: BorderRadius.circular(20),
+                                  border: Border.all(color: Colors.white30),
+                                ),
+                                child: const Text(
+                                  'Profil bearbeiten',
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 14,
+                                  ),
                                 ),
                               ),
                             ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
-                    Transform.translate(
-                      offset: const Offset(0, -30),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            userName,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 24,
-                              fontWeight: FontWeight.bold,
-                            ),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          userName,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 24,
+                            fontWeight: FontWeight.bold,
                           ),
-                          const SizedBox(height: 4),
-                          Text(
-                            userHandle,
-                            style: const TextStyle(
-                              color: Colors.grey,
-                              fontSize: 15,
-                            ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          userHandle,
+                          style: const TextStyle(
+                            color: Colors.grey,
+                            fontSize: 15,
                           ),
-                          if (userBio != null && userBio.isNotEmpty) ...[
-                            const SizedBox(height: 10),
-                            _buildBio(userBio),
-                          ],
-                          if (userLink != null && userLink.isNotEmpty) ...[
-                            const SizedBox(height: 8),
-                            Row(
+                        ),
+                        if (userBio != null && userBio.isNotEmpty) ...[
+                          const SizedBox(height: 10),
+                          _buildBio(userBio),
+                        ],
+                        if (userLink != null && userLink.isNotEmpty) ...[
+                          const SizedBox(height: 8),
+                          InkWell(
+                            onTap: () => _openExternalLink(userLink),
+                            borderRadius: BorderRadius.circular(8),
+                            child: Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
                                 const Icon(
@@ -549,29 +563,29 @@ class _ProfilePageState extends State<ProfilePage>
                                 ),
                               ],
                             ),
-                          ],
-                          const SizedBox(height: 12),
-                          Row(
-                            children: [
-                              GestureDetector(
-                                onTap: () => _showFollowList('following'),
-                                child: _buildFollowStat(
-                                  '$_followingCount',
-                                  'Folge ich',
-                                ),
-                              ),
-                              const SizedBox(width: 16),
-                              GestureDetector(
-                                onTap: () => _showFollowList('followers'),
-                                child: _buildFollowStat(
-                                  '$_followerCount',
-                                  'Follower',
-                                ),
-                              ),
-                            ],
                           ),
                         ],
-                      ),
+                        const SizedBox(height: 12),
+                        Row(
+                          children: [
+                            GestureDetector(
+                              onTap: () => _showFollowList('following'),
+                              child: _buildFollowStat(
+                                '$_followingCount',
+                                'Folge ich',
+                              ),
+                            ),
+                            const SizedBox(width: 16),
+                            GestureDetector(
+                              onTap: () => _showFollowList('followers'),
+                              child: _buildFollowStat(
+                                '$_followerCount',
+                                'Follower',
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
                     ),
                   ],
                 ),
@@ -667,134 +681,143 @@ class _ProfilePageState extends State<ProfilePage>
                             if (post == null) return const SizedBox.shrink();
                             final author =
                                 post['profiles'] as Map<String, dynamic>?;
-                            final authorName = author?['username'] ?? 'User';
+                            final authorName = SocialService.publicDisplayName(
+                              author,
+                              fallbackUserId: post['user_id'] as String?,
+                            );
                             final authorId = author?['id'] as String?;
                             final originalPostId = post['id'] as String?;
-                            return Container(
-                              margin: const EdgeInsets.symmetric(
-                                horizontal: 16,
-                                vertical: 8,
-                              ),
-                              padding: const EdgeInsets.all(16),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFF1C1F26),
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Row(
-                                    children: [
-                                      const Icon(
-                                        Icons.repeat,
-                                        size: 14,
-                                        color: Color(0xFF34C759),
-                                      ),
-                                      const SizedBox(width: 6),
-                                      GestureDetector(
-                                        onTap: authorId == null
-                                            ? null
-                                            : () => Navigator.push(
-                                                context,
-                                                MaterialPageRoute(
-                                                  builder: (_) =>
-                                                      UserProfilePage(
-                                                        userId: authorId,
-                                                        initialUsername:
-                                                            authorName,
+                            return InkWell(
+                              borderRadius: BorderRadius.circular(16),
+                              onTap: originalPostId == null
+                                  ? null
+                                  : () => _openPostDetail(post),
+                              child: Container(
+                                margin: const EdgeInsets.symmetric(
+                                  horizontal: 16,
+                                  vertical: 8,
+                                ),
+                                padding: const EdgeInsets.all(16),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF1C1F26),
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(
+                                      children: [
+                                        const Icon(
+                                          Icons.repeat,
+                                          size: 14,
+                                          color: Color(0xFF34C759),
+                                        ),
+                                        const SizedBox(width: 6),
+                                        GestureDetector(
+                                          onTap: authorId == null
+                                              ? null
+                                              : () => Navigator.push(
+                                                  context,
+                                                  MaterialPageRoute(
+                                                    builder: (_) =>
+                                                        UserProfilePage(
+                                                          userId: authorId,
+                                                          initialUsername:
+                                                              authorName,
+                                                        ),
+                                                  ),
+                                                ),
+                                          child: Text(
+                                            'Repost von @$authorName',
+                                            style: const TextStyle(
+                                              color: Color(0xFF34C759),
+                                              fontSize: 12,
+                                              fontWeight: FontWeight.w600,
+                                            ),
+                                          ),
+                                        ),
+                                        const Spacer(),
+                                        Text(
+                                          _formatTimeAgo(repost['created_at']),
+                                          style: const TextStyle(
+                                            color: Colors.grey,
+                                            fontSize: 11,
+                                          ),
+                                        ),
+                                        if (originalPostId != null)
+                                          PopupMenuButton<String>(
+                                            icon: const Icon(
+                                              Icons.more_horiz,
+                                              color: Colors.grey,
+                                              size: 18,
+                                            ),
+                                            color: const Color(0xFF1C1F26),
+                                            padding: EdgeInsets.zero,
+                                            constraints: const BoxConstraints(),
+                                            onSelected: (value) async {
+                                              if (value == 'unrepost') {
+                                                await SocialService.toggleRepost(
+                                                  originalPostId,
+                                                );
+                                                _loadData();
+                                              }
+                                            },
+                                            itemBuilder: (_) => [
+                                              const PopupMenuItem(
+                                                value: 'unrepost',
+                                                child: Row(
+                                                  children: [
+                                                    Icon(
+                                                      Icons.repeat,
+                                                      color: Color(0xFF34C759),
+                                                      size: 18,
+                                                    ),
+                                                    SizedBox(width: 8),
+                                                    Text(
+                                                      'Repost entfernen',
+                                                      style: TextStyle(
+                                                        color: Colors.white,
                                                       ),
+                                                    ),
+                                                  ],
                                                 ),
                                               ),
-                                        child: Text(
-                                          'Repost von @$authorName',
-                                          style: const TextStyle(
-                                            color: Color(0xFF34C759),
-                                            fontSize: 12,
-                                            fontWeight: FontWeight.w600,
+                                            ],
                                           ),
-                                        ),
-                                      ),
-                                      const Spacer(),
-                                      Text(
-                                        _formatTimeAgo(repost['created_at']),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 10),
+                                    Text.rich(
+                                      TextSpan(
                                         style: const TextStyle(
-                                          color: Colors.grey,
-                                          fontSize: 11,
-                                        ),
-                                      ),
-                                      if (originalPostId != null)
-                                        PopupMenuButton<String>(
-                                          icon: const Icon(
-                                            Icons.more_horiz,
-                                            color: Colors.grey,
-                                            size: 18,
-                                          ),
-                                          color: const Color(0xFF1C1F26),
-                                          padding: EdgeInsets.zero,
-                                          constraints: const BoxConstraints(),
-                                          onSelected: (value) async {
-                                            if (value == 'unrepost') {
-                                              await SocialService.toggleRepost(
-                                                originalPostId,
-                                              );
-                                              _loadData();
-                                            }
-                                          },
-                                          itemBuilder: (_) => [
-                                            const PopupMenuItem(
-                                              value: 'unrepost',
-                                              child: Row(
-                                                children: [
-                                                  Icon(
-                                                    Icons.repeat,
-                                                    color: Color(0xFF34C759),
-                                                    size: 18,
-                                                  ),
-                                                  SizedBox(width: 8),
-                                                  Text(
-                                                    'Repost entfernen',
-                                                    style: TextStyle(
-                                                      color: Colors.white,
-                                                    ),
-                                                  ),
-                                                ],
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 10),
-                                  Text.rich(
-                                    TextSpan(
-                                      style: const TextStyle(
-                                        color: Colors.white,
-                                        fontSize: 15,
-                                        height: 1.3,
-                                      ),
-                                      children: buildMentionSpans(
-                                        context: context,
-                                        text: (post['content'] ?? '')
-                                            .toString(),
-                                        baseStyle: const TextStyle(
                                           color: Colors.white,
                                           fontSize: 15,
                                           height: 1.3,
                                         ),
+                                        children: buildMentionSpans(
+                                          context: context,
+                                          text: (post['content'] ?? '')
+                                              .toString(),
+                                          baseStyle: const TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 15,
+                                            height: 1.3,
+                                          ),
+                                        ),
                                       ),
                                     ),
-                                  ),
-                                  if (post['shared_route_id'] != null) ...[
-                                    const SizedBox(height: 10),
-                                    Align(
-                                      alignment: Alignment.centerLeft,
-                                      child: RouteChip(
-                                        routeId:
-                                            post['shared_route_id'] as String,
+                                    if (post['shared_route_id'] != null) ...[
+                                      const SizedBox(height: 10),
+                                      Align(
+                                        alignment: Alignment.centerLeft,
+                                        child: RouteChip(
+                                          routeId:
+                                              post['shared_route_id'] as String,
+                                        ),
                                       ),
-                                    ),
+                                    ],
                                   ],
-                                ],
+                                ),
                               ),
                             );
                           },
@@ -980,55 +1003,40 @@ class _ProfilePageState extends State<ProfilePage>
             ),
           ],
           const SizedBox(height: 16),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceAround,
-            children: [
-              Row(
-                children: [
-                  const Icon(
-                    Icons.chat_bubble_outline,
-                    color: Colors.grey,
-                    size: 18,
-                  ),
-                  if (commentsCount > 0) ...[
-                    const SizedBox(width: 4),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: InkWell(
+              borderRadius: BorderRadius.circular(18),
+              onTap: () => _openPostDetailByValues(
+                postId: postId,
+                name: name,
+                handle: handle,
+                content: content,
+                time: time,
+                sharedRouteId: sharedRouteId,
+                avatarUrl: _avatarUrl,
+              ),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(
+                      Icons.chat_bubble_outline,
+                      color: Colors.grey,
+                      size: 18,
+                    ),
+                    const SizedBox(width: 6),
                     Text(
-                      '$commentsCount',
-                      style: const TextStyle(color: Colors.grey, fontSize: 12),
+                      commentsCount > 0
+                          ? '$commentsCount Kommentare'
+                          : 'Kommentieren',
+                      style: const TextStyle(color: Colors.grey, fontSize: 13),
                     ),
                   ],
-                ],
+                ),
               ),
-              Row(
-                children: [
-                  const Icon(Icons.repeat, color: Colors.grey, size: 18),
-                  if (repostsCount > 0) ...[
-                    const SizedBox(width: 4),
-                    Text(
-                      '$repostsCount',
-                      style: const TextStyle(color: Colors.grey, fontSize: 12),
-                    ),
-                  ],
-                ],
-              ),
-              Row(
-                children: [
-                  const Icon(
-                    Icons.favorite_border,
-                    color: Colors.grey,
-                    size: 18,
-                  ),
-                  if (likesCount > 0) ...[
-                    const SizedBox(width: 4),
-                    Text(
-                      '$likesCount',
-                      style: const TextStyle(color: Colors.grey, fontSize: 12),
-                    ),
-                  ],
-                ],
-              ),
-              const Icon(Icons.share_outlined, color: Colors.grey, size: 18),
-            ],
+            ),
           ),
         ],
       ),
@@ -1154,10 +1162,14 @@ class _ProfilePageState extends State<ProfilePage>
                                 : 'profiles';
                             final profile =
                                 item[profileKey] as Map<String, dynamic>?;
-                            final username =
-                                profile?['username'] ??
-                                profile?['email']?.split('@')[0] ??
-                                'User';
+                            final username = SocialService.publicDisplayName(
+                              profile,
+                              fallbackUserId: profile?['id'] as String?,
+                            );
+                            final handle = SocialService.publicHandle(
+                              profile,
+                              fallbackUserId: profile?['id'] as String?,
+                            );
                             final userId = profile?['id'] as String?;
 
                             return ListTile(
@@ -1194,7 +1206,7 @@ class _ProfilePageState extends State<ProfilePage>
                                 style: const TextStyle(color: Colors.white),
                               ),
                               subtitle: Text(
-                                '@${profile?['email']?.split('@')[0] ?? ''}',
+                                handle,
                                 style: const TextStyle(
                                   color: Colors.grey,
                                   fontSize: 13,
@@ -1211,6 +1223,50 @@ class _ProfilePageState extends State<ProfilePage>
           },
         );
       },
+    );
+  }
+
+  void _openPostDetail(Map<String, dynamic> post) {
+    final profile = post['profiles'] as Map<String, dynamic>?;
+    _openPostDetailByValues(
+      postId: post['id'] as String,
+      name: SocialService.publicDisplayName(
+        profile,
+        fallbackUserId: post['user_id'] as String?,
+      ),
+      handle: SocialService.publicHandle(
+        profile,
+        fallbackUserId: post['user_id'] as String?,
+      ),
+      content: (post['content'] ?? '').toString(),
+      time: _formatTimeAgo(post['created_at']),
+      sharedRouteId: post['shared_route_id'] as String?,
+      avatarUrl: profile?['avatar_url'] as String?,
+    );
+  }
+
+  void _openPostDetailByValues({
+    required String postId,
+    required String name,
+    required String handle,
+    required String content,
+    required String time,
+    String? sharedRouteId,
+    String? avatarUrl,
+  }) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => PostDetailPage(
+          postId: postId,
+          name: name,
+          handle: handle,
+          content: content,
+          time: time,
+          sharedRouteId: sharedRouteId,
+          avatarUrl: avatarUrl,
+        ),
+      ),
     );
   }
 
@@ -1316,6 +1372,15 @@ class _ProfilePageState extends State<ProfilePage>
                   },
                 ),
                 _buildOptionTile(
+                  Icons.edit_outlined,
+                  'Route umbenennen',
+                  const Color(0xFFFFD166),
+                  () {
+                    Navigator.pop(ctx);
+                    _renameRoute(route);
+                  },
+                ),
+                _buildOptionTile(
                   Icons.share,
                   'Als Post teilen',
                   const Color(0xFF00E5FF),
@@ -1372,6 +1437,61 @@ class _ProfilePageState extends State<ProfilePage>
         );
       },
     );
+  }
+
+  Future<void> _renameRoute(SavedRoute route) async {
+    final controller = TextEditingController(text: route.name ?? route.style);
+    final newName = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF1C1F26),
+          title: const Text(
+            'Route umbenennen',
+            style: TextStyle(color: Colors.white),
+          ),
+          content: TextField(
+            controller: controller,
+            autofocus: true,
+            maxLength: 60,
+            style: const TextStyle(color: Colors.white),
+            decoration: InputDecoration(
+              counterStyle: const TextStyle(color: Colors.grey),
+              hintText: 'Name der Route',
+              hintStyle: TextStyle(color: Colors.grey[600]),
+              enabledBorder: const UnderlineInputBorder(
+                borderSide: BorderSide(color: Colors.white24),
+              ),
+              focusedBorder: const UnderlineInputBorder(
+                borderSide: BorderSide(color: Color(0xFFFF3B30)),
+              ),
+            ),
+            onSubmitted: (value) => Navigator.pop(dialogContext, value),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text(
+                'Abbrechen',
+                style: TextStyle(color: Colors.grey),
+              ),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, controller.text),
+              child: const Text(
+                'Speichern',
+                style: TextStyle(color: Color(0xFFFF3B30)),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+    controller.dispose();
+    if (newName == null || newName.trim().isEmpty) return;
+
+    await SavedRoutesService.renameRoute(route.id, newName);
+    await _loadData();
   }
 
   Widget _buildOptionTile(
