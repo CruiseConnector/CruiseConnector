@@ -170,6 +170,10 @@ async function processJob(job: SeedJob): Promise<void> {
   let candidatesInserted = 0;
   let callsUsed = 0;
   let lastFailure = "no_candidate_generated";
+  let verifiedCapacityRemaining = await verifiedCapacityRemainingForCell(
+    job,
+    region,
+  );
   const start = {
     latitude: region.center_lat,
     longitude: region.center_lng,
@@ -209,7 +213,7 @@ async function processJob(job: SeedJob): Promise<void> {
       continue;
     }
 
-    if (decision.verified) {
+    if (decision.verified && verifiedCapacityRemaining > 0) {
       const inserted = await upsertVerifiedRoute({
         job,
         region,
@@ -219,9 +223,13 @@ async function processJob(job: SeedJob): Promise<void> {
       });
       if (inserted) {
         verifiedInserted += 1;
+        verifiedCapacityRemaining -= 1;
         stats.verifiedInserted += 1;
       }
     } else {
+      if (decision.verified) {
+        lastFailure = "max_pool_size_reached_candidate_staged";
+      }
       const inserted = await upsertCandidateRoute({
         job,
         region,
@@ -707,6 +715,25 @@ async function refreshCoverage(job: SeedJob, region: RouteRegion) {
     coverageStatus,
     healingStatus,
   });
+}
+
+async function verifiedCapacityRemainingForCell(
+  job: SeedJob,
+  region: RouteRegion,
+): Promise<number> {
+  if (dryRun) return Number.POSITIVE_INFINITY;
+  const coverage = await loadCoverage(job, region);
+  const maxPoolSize = Math.max(
+    0,
+    Number(
+      coverage?.max_pool_size ?? region.default_max_pool_size ?? 20,
+    ),
+  );
+  const currentVerifiedCount = Math.max(
+    0,
+    Number(coverage?.current_verified_count ?? 0),
+  );
+  return Math.max(0, maxPoolSize - currentVerifiedCount);
 }
 
 async function upsertCoverage(

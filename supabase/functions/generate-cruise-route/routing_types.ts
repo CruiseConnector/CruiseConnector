@@ -82,6 +82,7 @@ export interface RouteQualityEvaluation {
   matchedPreferenceCount?: number;
   preferenceAreaDistancesMeters?: number[];
   preferenceIgnoredReason?: string | null;
+  shapeMetrics?: RouteShapeMetrics;
 }
 
 export interface PreferenceMatchSummary {
@@ -103,6 +104,32 @@ export interface RouteStyleMetrics {
   zigzagScore: number;
   stubPenalty: number;
   sectorDiversityScore: number;
+  loopnessScore: number;
+  spurScore: number;
+  deadEndArmScore: number;
+  outAndBackScore: number;
+  overlapScore: number;
+}
+
+export interface RouteShapeMetrics {
+  loopnessScore: number;
+  spurScore: number;
+  deadEndArmScore: number;
+  outAndBackScore: number;
+  overlapScore: number;
+  centralReturnPercent: number;
+  centerReentryCount: number;
+  radialPeakCount: number;
+  middleCoverageRatio: number;
+  geometricUTurnCount: number;
+  oppositeOverlapPercent: number;
+  foldedLoopPenalty: number;
+  repeatedStartAreaPercent: number;
+  spurArmPercent: number;
+  cleanupRemovedPercent: number;
+  cleanupDistanceRetentionRatio: number;
+  cleanupLoopCount: number;
+  cleanupUTurnCount: number;
 }
 
 export interface RouteCleanupEvaluation {

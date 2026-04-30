@@ -1856,11 +1856,23 @@ Deno.serve(async (req) => {
           style_fit_score: finalQuality.styleFitScore ?? null,
           style_fit_reasons: finalQuality.styleFitReasons ?? [],
           style_metrics: finalQuality.styleMetrics ?? null,
+          shape_metrics: finalQuality.shapeMetrics ?? null,
           curve_density_per_km: finalQuality.styleMetrics?.curveDensityPerKm ??
             null,
+          curve_density_per_50km:
+            finalQuality.styleMetrics?.curveDensityPer50Km ?? null,
           smoothness_score: finalQuality.styleMetrics?.smoothnessScore ?? null,
           zigzag_score: finalQuality.styleMetrics?.zigzagScore ?? null,
           sharp_turn_count: finalQuality.styleMetrics?.sharpTurnCount ?? null,
+          loopness_score: finalQuality.shapeMetrics?.loopnessScore ?? null,
+          spur_score: finalQuality.shapeMetrics?.spurScore ?? null,
+          dead_end_arm_score:
+            finalQuality.shapeMetrics?.deadEndArmScore ?? null,
+          out_and_back_score:
+            finalQuality.shapeMetrics?.outAndBackScore ?? null,
+          overlap_score: finalQuality.shapeMetrics?.overlapScore ?? null,
+          geometric_uturn_count:
+            finalQuality.shapeMetrics?.geometricUTurnCount ?? null,
           ...(roundTripSearch != null
             ? buildNoRouteSearchMeta(roundTripSearch)
             : {}),

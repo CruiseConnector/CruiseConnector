@@ -15,6 +15,7 @@ class RoutePoolCoverage {
     this.hardRegionStatus = 'normal',
     this.bootstrapEnabled = true,
     this.curatedSeedPreferred = false,
+    this.minVerifiedCount = 3,
     this.targetPoolSize = 15,
     this.maxPoolSize = 20,
     this.healthyThreshold = 15,
@@ -57,6 +58,7 @@ class RoutePoolCoverage {
   final String hardRegionStatus;
   final bool bootstrapEnabled;
   final bool curatedSeedPreferred;
+  final int minVerifiedCount;
   final int targetPoolSize;
   final int maxPoolSize;
   final int healthyThreshold;
@@ -113,6 +115,7 @@ class RoutePoolCoverage {
     String? hardRegionStatus,
     bool? bootstrapEnabled,
     bool? curatedSeedPreferred,
+    int? minVerifiedCount,
     int? targetPoolSize,
     int? maxPoolSize,
     int? healthyThreshold,
@@ -155,6 +158,7 @@ class RoutePoolCoverage {
       hardRegionStatus: hardRegionStatus ?? this.hardRegionStatus,
       bootstrapEnabled: bootstrapEnabled ?? this.bootstrapEnabled,
       curatedSeedPreferred: curatedSeedPreferred ?? this.curatedSeedPreferred,
+      minVerifiedCount: minVerifiedCount ?? this.minVerifiedCount,
       targetPoolSize: targetPoolSize ?? this.targetPoolSize,
       maxPoolSize: maxPoolSize ?? this.maxPoolSize,
       healthyThreshold: healthyThreshold ?? this.healthyThreshold,
@@ -205,6 +209,7 @@ class RoutePoolCoverage {
       hardRegionStatus: (json['hard_region_status'] as String?) ?? 'normal',
       bootstrapEnabled: (json['bootstrap_enabled'] as bool?) ?? true,
       curatedSeedPreferred: (json['curated_seed_preferred'] as bool?) ?? false,
+      minVerifiedCount: (json['min_verified_count'] as num?)?.toInt() ?? 3,
       targetPoolSize: (json['target_pool_size'] as num?)?.toInt() ?? 15,
       maxPoolSize: (json['max_pool_size'] as num?)?.toInt() ?? 20,
       healthyThreshold: (json['healthy_threshold'] as num?)?.toInt() ?? 15,
@@ -262,6 +267,7 @@ class RoutePoolCoverage {
       'hard_region_status': hardRegionStatus,
       'bootstrap_enabled': bootstrapEnabled,
       'curated_seed_preferred': curatedSeedPreferred,
+      'min_verified_count': minVerifiedCount,
       'target_pool_size': targetPoolSize,
       'max_pool_size': maxPoolSize,
       'healthy_threshold': healthyThreshold,

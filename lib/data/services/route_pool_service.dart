@@ -74,6 +74,7 @@ class RoutePoolCoverageCheck {
     required this.hardRegionStatus,
     required this.bootstrapEnabled,
     required this.curatedSeedPreferred,
+    required this.minVerifiedCount,
     required this.targetPoolSize,
     required this.maxPoolSize,
     required this.currentVerifiedCount,
@@ -96,6 +97,7 @@ class RoutePoolCoverageCheck {
   final String hardRegionStatus;
   final bool bootstrapEnabled;
   final bool curatedSeedPreferred;
+  final int minVerifiedCount;
   final int targetPoolSize;
   final int maxPoolSize;
   final int currentVerifiedCount;
@@ -165,6 +167,7 @@ class RoutePoolCoverageCheck {
       'chosen_cluster_distance_km': assignment == null
           ? null
           : double.parse(assignment!.distanceToCenterKm.toStringAsFixed(2)),
+      'min_verified_count': minVerifiedCount,
       'target_pool_size': targetPoolSize,
       'max_pool_size': maxPoolSize,
       'current_verified_count': currentVerifiedCount,
@@ -192,6 +195,7 @@ class _CoveragePolicy {
     required this.hardRegionStatus,
     required this.bootstrapEnabled,
     required this.curatedSeedPreferred,
+    required this.minVerifiedCount,
     required this.targetPoolSize,
     required this.maxPoolSize,
     required this.healthyThreshold,
@@ -205,6 +209,7 @@ class _CoveragePolicy {
   final String hardRegionStatus;
   final bool bootstrapEnabled;
   final bool curatedSeedPreferred;
+  final int minVerifiedCount;
   final int targetPoolSize;
   final int maxPoolSize;
   final int healthyThreshold;
@@ -455,6 +460,7 @@ class RoutePoolService {
         hardRegionStatus: 'normal',
         bootstrapEnabled: false,
         curatedSeedPreferred: false,
+        minVerifiedCount: 3,
         targetPoolSize: defaultTargetPoolSize,
         maxPoolSize: defaultMaxPoolSize,
         currentVerifiedCount: 0,
@@ -486,6 +492,7 @@ class RoutePoolService {
         hardRegionStatus: 'normal',
         bootstrapEnabled: false,
         curatedSeedPreferred: false,
+        minVerifiedCount: 3,
         targetPoolSize: defaultTargetPoolSize,
         maxPoolSize: defaultMaxPoolSize,
         currentVerifiedCount: 0,
@@ -606,6 +613,7 @@ class RoutePoolService {
       hardRegionStatus: policy.hardRegionStatus,
       bootstrapEnabled: policy.bootstrapEnabled,
       curatedSeedPreferred: policy.curatedSeedPreferred,
+      minVerifiedCount: syncedCoverage.minVerifiedCount,
       targetPoolSize: syncedCoverage.targetPoolSize,
       maxPoolSize: syncedCoverage.maxPoolSize,
       currentVerifiedCount: syncedCoverage.currentVerifiedCount,
@@ -2356,8 +2364,18 @@ class RoutePoolService {
     RoutePoolRequiredCombination? requiredCombination,
   }) {
     final requiredVerifiedCount = requiredCombination?.requiredVerifiedCount;
+    final minVerifiedCount = math.max(
+      0,
+      math.min(
+        defaultMaxPoolSize,
+        requiredVerifiedCount ??
+            (region.defaultMinVerifiedCount > 0
+                ? region.defaultMinVerifiedCount
+                : (coverage?.minVerifiedCount ?? 3)),
+      ),
+    );
     final targetPoolSize = math.max(
-      requiredVerifiedCount ?? 1,
+      math.max(minVerifiedCount, requiredVerifiedCount ?? 1),
       region.defaultTargetPoolSize > 0
           ? region.defaultTargetPoolSize
           : (coverage?.targetPoolSize ?? defaultTargetPoolSize),
@@ -2393,13 +2411,14 @@ class RoutePoolService {
       hardRegionStatus: region.hardRegionStatus,
       bootstrapEnabled: region.bootstrapEnabled,
       curatedSeedPreferred: region.curatedSeedPreferred,
+      minVerifiedCount: minVerifiedCount,
       targetPoolSize: targetPoolSize,
       maxPoolSize: maxPoolSize,
       healthyThreshold: healthyThreshold,
       thinThreshold: thinThreshold,
       seedBudgetUnits: math.max(
         0,
-        region.seedBudgetUnits > 0 || region.difficultyLevel == 'hard'
+        region.seedBudgetUnits >= 0
             ? region.seedBudgetUnits
             : (coverage?.seedBudgetUnits ?? 1),
       ),
@@ -2444,6 +2463,7 @@ class RoutePoolService {
       hardRegionStatus: policy.hardRegionStatus,
       bootstrapEnabled: policy.bootstrapEnabled,
       curatedSeedPreferred: policy.curatedSeedPreferred,
+      minVerifiedCount: policy.minVerifiedCount,
       targetPoolSize: policy.targetPoolSize,
       maxPoolSize: policy.maxPoolSize,
       healthyThreshold: policy.healthyThreshold,
@@ -2461,6 +2481,7 @@ class RoutePoolService {
         current.hardRegionStatus != next.hardRegionStatus ||
         current.bootstrapEnabled != next.bootstrapEnabled ||
         current.curatedSeedPreferred != next.curatedSeedPreferred ||
+        current.minVerifiedCount != next.minVerifiedCount ||
         current.targetPoolSize != next.targetPoolSize ||
         current.maxPoolSize != next.maxPoolSize ||
         current.healthyThreshold != next.healthyThreshold ||
@@ -2475,11 +2496,12 @@ class RoutePoolService {
     required RouteSeedJob? existingSeedJob,
   }) {
     if (coverage.currentVerifiedCount >= policy.healthyThreshold) return false;
+    if (coverage.currentVerifiedCount >= policy.maxPoolSize) return false;
     if (!policy.bootstrapEnabled) return false;
     if (policy.isHard && policy.curatedSeedPreferred) return false;
+    if (policy.seedBudgetUnits <= 0) return false;
     if (existingSeedJob == null) return true;
     if (_seedJobBlocksNewJob(existingSeedJob)) return false;
-    if (policy.seedBudgetUnits <= 0) return false;
     if (existingSeedJob.failureCount >= policy.seedBudgetUnits) return false;
     if (existingSeedJob.attemptCount >= existingSeedJob.maxAttempts) {
       return false;

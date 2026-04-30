@@ -5,6 +5,7 @@ import type {
   RouteMode,
   RouteQualityEvaluation,
   RouteQualityTier,
+  RouteShapeMetrics,
   RouteStyleMetrics,
 } from "./routing_types.ts";
 import {
@@ -758,6 +759,73 @@ function calculateRouteShapeSignals(route: any): {
   };
 }
 
+function shapeMetricsFromSignals(
+  signals: ReturnType<typeof calculateRouteShapeSignals>,
+  overlapPercent: number,
+): RouteShapeMetrics {
+  const outAndBackScore = clampNumber(
+    signals.oppositeOverlapPercent * 2.2 +
+      overlapPercent * 0.45 +
+      signals.foldedLoopPenalty * 0.22,
+    0,
+    100,
+  );
+  const spurScore = clampNumber(
+    signals.spurArmPercent +
+      signals.repeatedStartAreaPercent * 0.35 +
+      signals.loopCleanupRemovedPercent * 0.55,
+    0,
+    100,
+  );
+  const deadEndArmScore = clampNumber(
+    signals.hookCount * 8 +
+      signals.spurArmPercent * 0.85 +
+      Math.max(0, signals.radialPeakCount - 1) * 12,
+    0,
+    100,
+  );
+  const loopnessScore = clampNumber(
+    100 -
+      signals.foldedLoopPenalty * 0.62 -
+      spurScore * 0.34 -
+      outAndBackScore * 0.30 -
+      Math.max(0, 0.48 - signals.middleCoverageRatio) * 95 -
+      Math.max(0, signals.centerReentryCount - 1) * 8,
+    0,
+    100,
+  );
+  return {
+    loopnessScore,
+    spurScore,
+    deadEndArmScore,
+    outAndBackScore,
+    overlapScore: clampNumber(overlapPercent, 0, 100),
+    centralReturnPercent: signals.centralReturnPercent,
+    centerReentryCount: signals.centerReentryCount,
+    radialPeakCount: signals.radialPeakCount,
+    middleCoverageRatio: signals.middleCoverageRatio,
+    geometricUTurnCount: signals.geometricUTurnCount,
+    oppositeOverlapPercent: signals.oppositeOverlapPercent,
+    foldedLoopPenalty: signals.foldedLoopPenalty,
+    repeatedStartAreaPercent: signals.repeatedStartAreaPercent,
+    spurArmPercent: signals.spurArmPercent,
+    cleanupRemovedPercent: signals.loopCleanupRemovedPercent,
+    cleanupDistanceRetentionRatio: signals.loopCleanupDistanceRetentionRatio,
+    cleanupLoopCount: signals.loopCleanupCount,
+    cleanupUTurnCount: signals.loopCleanupUTurnCount,
+  };
+}
+
+function calculateRouteShapeMetrics(
+  route: any,
+  overlapPercent?: number,
+): RouteShapeMetrics {
+  return shapeMetricsFromSignals(
+    calculateRouteShapeSignals(route),
+    overlapPercent ?? calculateRouteOverlapPercent(route),
+  );
+}
+
 function clampNumber(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
@@ -820,8 +888,14 @@ export function calculateRouteStyleMetrics(route: any): RouteStyleMetrics {
       zigzagScore: 0,
       stubPenalty: 0,
       sectorDiversityScore: 0,
+      loopnessScore: 0,
+      spurScore: 100,
+      deadEndArmScore: 100,
+      outAndBackScore: 100,
+      overlapScore: 100,
     };
   }
+  const shapeMetrics = shapeMetricsFromSignals(shapeSignals, 0);
 
   const sampleStep = 5;
   let curveCount = 0;
@@ -890,6 +964,11 @@ export function calculateRouteStyleMetrics(route: any): RouteStyleMetrics {
     zigzagScore,
     stubPenalty,
     sectorDiversityScore: estimateRouteSectorDiversity(coordinates),
+    loopnessScore: shapeMetrics.loopnessScore,
+    spurScore: shapeMetrics.spurScore,
+    deadEndArmScore: shapeMetrics.deadEndArmScore,
+    outAndBackScore: shapeMetrics.outAndBackScore,
+    overlapScore: shapeMetrics.overlapScore,
   };
 }
 
@@ -910,18 +989,22 @@ export function scoreRouteStyleFit(
         }
         if (metrics.zigzagScore >= 30) reasons.push("zigzag_penalty");
         if (metrics.sharpTurnRate >= 22) reasons.push("too_many_sharp_turns");
+        if (metrics.spurScore >= 24) reasons.push("spur_penalty");
         return weightedAverage([
           {
             value: scoreAround(metrics.curveDensityPer50Km, 10, 12),
-            weight: 0.18,
+            weight: 0.12,
           },
           { value: scoreAround(metrics.sharpTurnRate, 8, 10), weight: 0.14 },
           {
             value: scoreRamp(metrics.averageSegmentLengthMeters, 120, 260),
-            weight: 0.16,
+            weight: 0.18,
           },
-          { value: smoothness, weight: 0.34 },
-          { value: scoreAround(metrics.zigzagScore, 8, 24), weight: 0.18 },
+          { value: smoothness, weight: 0.30 },
+          { value: scoreAround(metrics.zigzagScore, 8, 24), weight: 0.10 },
+          { value: 1 - metrics.spurScore / 100, weight: 0.10 },
+          { value: 1 - metrics.outAndBackScore / 100, weight: 0.08 },
+          { value: metrics.loopnessScore / 100, weight: 0.08 },
         ]) * 100;
       case "Kurvenjagd":
         if (metrics.curveDensityPer50Km >= 28) {
@@ -931,50 +1014,57 @@ export function scoreRouteStyleFit(
           reasons.push("continuous_bends");
         }
         if (metrics.stubPenalty >= 28) reasons.push("stub_penalty");
+        if (metrics.loopnessScore >= 72) reasons.push("clean_loop");
         return weightedAverage([
           {
             value: scoreRamp(metrics.curveDensityPer50Km, 22, 36),
-            weight: 0.34,
+            weight: 0.30,
           },
-          { value: scoreRamp(metrics.sharpTurnRate, 8, 18), weight: 0.20 },
+          { value: scoreRamp(metrics.sharpTurnRate, 8, 18), weight: 0.17 },
           {
             value: scoreRamp(metrics.headingChangePerKm, 95, 150),
-            weight: 0.16,
+            weight: 0.15,
           },
-          { value: scoreAround(metrics.stubPenalty, 8, 24), weight: 0.14 },
-          { value: scoreRamp(smoothness, 0.45, 0.72), weight: 0.16 },
+          { value: metrics.loopnessScore / 100, weight: 0.14 },
+          { value: 1 - metrics.spurScore / 100, weight: 0.11 },
+          { value: 1 - metrics.outAndBackScore / 100, weight: 0.08 },
+          { value: scoreRamp(smoothness, 0.45, 0.72), weight: 0.05 },
         ]) * 100;
       case "Abendrunde":
         if (metrics.smoothnessScore >= 72) reasons.push("calm_flow");
         return weightedAverage([
-          { value: smoothness, weight: 0.30 },
+          { value: smoothness, weight: 0.28 },
           {
             value: scoreAround(metrics.curveDensityPer50Km, 10, 12),
-            weight: 0.18,
+            weight: 0.14,
           },
-          { value: scoreAround(metrics.zigzagScore, 6, 18), weight: 0.22 },
-          { value: scoreAround(metrics.stubPenalty, 4, 16), weight: 0.18 },
-          { value: scoreAround(metrics.sharpTurnRate, 6, 8), weight: 0.12 },
+          { value: scoreAround(metrics.zigzagScore, 6, 18), weight: 0.16 },
+          { value: 1 - metrics.spurScore / 100, weight: 0.14 },
+          { value: 1 - metrics.outAndBackScore / 100, weight: 0.10 },
+          { value: metrics.loopnessScore / 100, weight: 0.12 },
+          { value: scoreAround(metrics.sharpTurnRate, 6, 8), weight: 0.06 },
         ]) * 100;
       case "Entdecker":
         if (metrics.sectorDiversityScore >= 55) {
           reasons.push("sector_diverse");
         }
         return weightedAverage([
-          { value: metrics.sectorDiversityScore / 100, weight: 0.38 },
+          { value: metrics.sectorDiversityScore / 100, weight: 0.34 },
           {
             value: scoreRamp(metrics.headingChangePerKm, 45, 105),
-            weight: 0.18,
+            weight: 0.16,
           },
           {
             value: scoreRamp(metrics.averageSegmentLengthMeters, 95, 210),
-            weight: 0.12,
+            weight: 0.10,
           },
           {
             value: scoreAround(metrics.curveDensityPer50Km, 16, 20),
-            weight: 0.14,
+            weight: 0.12,
           },
-          { value: smoothness, weight: 0.18 },
+          { value: metrics.loopnessScore / 100, weight: 0.16 },
+          { value: 1 - metrics.outAndBackScore / 100, weight: 0.08 },
+          { value: smoothness, weight: 0.04 },
         ]) * 100;
       default:
         return weightedAverage([
@@ -997,6 +1087,7 @@ function applyStyleFitToQuality(
   mode?: RouteMode,
 ): RouteQualityEvaluation {
   const styleFit = scoreRouteStyleFit(route, mode);
+  const shapeMetrics = calculateRouteShapeMetrics(route, quality.overlapPercent);
   const baseScore = quality.score;
   if (quality.tier === "rejected") {
     return {
@@ -1005,10 +1096,11 @@ function applyStyleFitToQuality(
       styleFitScore: styleFit.score,
       styleFitReasons: styleFit.reasons,
       styleMetrics: styleFit.metrics,
+      shapeMetrics,
     };
   }
-  const stylePenalty = (100 - styleFit.score) * 0.42;
-  const styleBonus = styleFit.score * 0.12;
+  const stylePenalty = (100 - styleFit.score) * 0.55;
+  const styleBonus = styleFit.score * 0.08;
   return {
     ...quality,
     baseScore,
@@ -1016,6 +1108,7 @@ function applyStyleFitToQuality(
     styleFitScore: styleFit.score,
     styleFitReasons: styleFit.reasons,
     styleMetrics: styleFit.metrics,
+    shapeMetrics,
   };
 }
 

@@ -138,12 +138,12 @@ function prioritizeCandidatePlans(
     ? noHighwayOrderTokens
     : normalizedMode === "kurvenjagd"
     ? [
-      "curve-zigzag-core",
       "curve-loop-scout",
       "curve-orbital-core",
       "curve-loop-tight",
       "curve-loop-wide",
       "curve-triangle",
+      "curve-zigzag-core",
     ]
     : preferWideSportAvoidHighways
     ? (preferStableShortSportAvoidHighways
@@ -207,7 +207,10 @@ function prioritizeCandidatePlans(
     ]
     : normalizedMode === "entdecker"
     ? [
+      "explore-cardinal-wide",
       "explore-loop-scout",
+      "explore-loop-offset",
+      "explore-triangle",
       "explore-orbital-wide",
       "explore-loop-wide",
       "explore-loop-far",
@@ -766,6 +769,23 @@ export async function searchBestRoundTripRoute({
         quality.distanceDeltaKm <= targetDistanceKm * 0.22
       )
     );
+  const styleFitThresholdForEarlyStop = (() => {
+    if (mode === "Kurvenjagd") return 58;
+    if (mode === "Sport Mode") return 54;
+    if (mode === "Entdecker") return 52;
+    if (mode === "Abendrunde") return 52;
+    return 0;
+  })();
+  const styleGoodEnoughForEarlyStop = (
+    quality: RouteQualityEvaluation,
+  ): boolean => {
+    if (styleFitThresholdForEarlyStop <= 0) return true;
+    const styleFit = quality.styleFitScore ?? 0;
+    if (styleFit >= styleFitThresholdForEarlyStop) return true;
+    // Keep searching for style-specific routes, but do not turn a valid route
+    // into a reject solely because style fit is weak.
+    return candidateAttempts >= Math.max(3, globalAttemptBudget - 1);
+  };
   const applyCleanupGate = (
     route: any,
     quality: RouteQualityEvaluation,
@@ -1337,6 +1357,7 @@ export async function searchBestRoundTripRoute({
 
       if (
         (shouldStopAfterGoodCandidate || shouldStopAfterAcceptableCandidate) &&
+        styleGoodEnoughForEarlyStop(quality) &&
         preferenceGoodEnough(quality)
       ) {
         debugLog(
@@ -1362,13 +1383,18 @@ export async function searchBestRoundTripRoute({
     ) {
       break;
     }
-    if (bestQuality?.tier === "ideal" && preferenceGoodEnough(bestQuality)) {
+    if (
+      bestQuality?.tier === "ideal" &&
+      styleGoodEnoughForEarlyStop(bestQuality) &&
+      preferenceGoodEnough(bestQuality)
+    ) {
       break;
     }
     if (
       phaseAcceptedCandidates > 0 &&
       bestQuality?.tier === "good" &&
       !avoidHighwaysTightRoundTripSearch &&
+      styleGoodEnoughForEarlyStop(bestQuality) &&
       preferenceGoodEnough(bestQuality)
     ) {
       break;
@@ -1389,6 +1415,7 @@ export async function searchBestRoundTripRoute({
       phaseAcceptedCandidates > 0 &&
       bestQuality?.tier === "acceptable" &&
       !avoidHighwaysTightRoundTripSearch &&
+      styleGoodEnoughForEarlyStop(bestQuality) &&
       preferenceGoodEnough(bestQuality) &&
       (
         phase.name === "fallback" ||
