@@ -10,6 +10,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:cruise_connect/application/providers/auth_provider.dart';
 import 'package:cruise_connect/application/providers/community_provider.dart';
+import 'package:cruise_connect/application/providers/route_bookmark_provider.dart';
 import 'package:cruise_connect/application/providers/route_provider.dart';
 import 'package:cruise_connect/application/providers/saved_routes_provider.dart';
 import 'package:cruise_connect/core/constants.dart';
@@ -109,6 +110,7 @@ class _MyAppState extends State<MyApp> {
         ChangeNotifierProvider(create: (_) => RouteProvider()),
         ChangeNotifierProvider(create: (_) => CommunityProvider()),
         ChangeNotifierProvider(create: (_) => SavedRoutesProvider()),
+        ChangeNotifierProvider(create: (_) => RouteBookmarkProvider()),
       ],
       child: MaterialApp(
         navigatorKey: rootNavigatorKey,

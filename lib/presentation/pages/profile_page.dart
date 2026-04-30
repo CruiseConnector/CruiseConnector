@@ -9,11 +9,15 @@ import 'package:cruise_connect/presentation/pages/welcome_page.dart';
 import 'package:cruise_connect/presentation/pages/create_post_page.dart';
 import 'package:cruise_connect/presentation/pages/edit_profile_page.dart';
 import 'package:cruise_connect/presentation/pages/settings_page.dart';
+import 'package:cruise_connect/presentation/pages/follow_requests_page.dart';
+import 'package:cruise_connect/presentation/pages/blocked_users_page.dart';
 import 'package:cruise_connect/presentation/pages/cruise_mode_page.dart';
+import 'package:cruise_connect/presentation/pages/saved_route_bookmarks_page.dart';
 import 'package:cruise_connect/presentation/pages/user_profile_page.dart';
 import 'package:cruise_connect/presentation/widgets/mentions.dart';
 import 'package:cruise_connect/presentation/widgets/route_chip.dart';
 import 'package:cruise_connect/presentation/widgets/user_avatar.dart';
+import 'package:cruise_connect/presentation/widgets/car_card.dart';
 import 'package:cruise_connect/presentation/pages/group_lobby_page.dart';
 
 class ProfilePage extends StatefulWidget {
@@ -24,11 +28,13 @@ class ProfilePage extends StatefulWidget {
   State<ProfilePage> createState() => _ProfilePageState();
 }
 
-class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStateMixin {
+class _ProfilePageState extends State<ProfilePage>
+    with SingleTickerProviderStateMixin {
   @override
   void didUpdateWidget(ProfilePage old) {
     super.didUpdateWidget(old);
-    if (widget.refreshKey != old.refreshKey && widget.refreshKey > 0) _loadData();
+    if (widget.refreshKey != old.refreshKey && widget.refreshKey > 0)
+      _loadData();
   }
 
   late TabController _tabController;
@@ -42,7 +48,17 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
   List<Map<String, dynamic>> _groups = [];
   List<SavedRoute> _savedRoutes = [];
   String? _avatarUrl;
+  String? _bannerUrl;
+
+  /// Komplettes Profil-Map — wird an `CarCard` durchgereicht.
+  Map<String, dynamic> _profile = {};
   bool _uploadingAvatar = false;
+
+  /// UI-State: Bio + CarCard sind standardmäßig kompakt; lange Bio wird
+  /// erst bei "mehr" voll ausgeklappt, CarCard erst bei Tap.
+  bool _bioExpanded = false;
+  bool _carCardExpanded = false;
+  static const int _bioCollapseAt = 20;
 
   @override
   void initState() {
@@ -84,7 +100,9 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
           _reposts = results[3] as List<Map<String, dynamic>>;
           _groups = results[4] as List<Map<String, dynamic>>;
           _savedRoutes = results[5] as List<SavedRoute>;
+          _profile = profile ?? <String, dynamic>{};
           _avatarUrl = profile?['avatar_url'] as String?;
+          _bannerUrl = profile?['banner_url'] as String?;
           _loading = false;
         });
       }
@@ -122,26 +140,33 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
                 child: Text(
                   'Profilbild ändern',
                   style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold),
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
               ),
               ListTile(
-                leading: const Icon(Icons.photo_camera,
-                    color: Color(0xFFFF3B30)),
-                title: const Text('Kamera',
-                    style: TextStyle(color: Colors.white)),
-                onTap: () =>
-                    Navigator.pop(sheetContext, ImageSource.camera),
+                leading: const Icon(
+                  Icons.photo_camera,
+                  color: Color(0xFFFF3B30),
+                ),
+                title: const Text(
+                  'Kamera',
+                  style: TextStyle(color: Colors.white),
+                ),
+                onTap: () => Navigator.pop(sheetContext, ImageSource.camera),
               ),
               ListTile(
-                leading: const Icon(Icons.photo_library,
-                    color: Color(0xFFFF3B30)),
-                title: const Text('Galerie',
-                    style: TextStyle(color: Colors.white)),
-                onTap: () =>
-                    Navigator.pop(sheetContext, ImageSource.gallery),
+                leading: const Icon(
+                  Icons.photo_library,
+                  color: Color(0xFFFF3B30),
+                ),
+                title: const Text(
+                  'Galerie',
+                  style: TextStyle(color: Colors.white),
+                ),
+                onTap: () => Navigator.pop(sheetContext, ImageSource.gallery),
               ),
               const SizedBox(height: 8),
             ],
@@ -170,9 +195,11 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(source == ImageSource.camera
-                ? 'Kein Kamera-Zugriff. Berechtigung in den Einstellungen erlauben.'
-                : 'Kein Galerie-Zugriff. Berechtigung in den Einstellungen erlauben.'),
+            content: Text(
+              source == ImageSource.camera
+                  ? 'Kein Kamera-Zugriff. Berechtigung in den Einstellungen erlauben.'
+                  : 'Kein Galerie-Zugriff. Berechtigung in den Einstellungen erlauben.',
+            ),
             backgroundColor: const Color(0xFF1C1F26),
           ),
         );
@@ -193,14 +220,19 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
 
       await Supabase.instance.client.storage
           .from('avatars')
-          .uploadBinary(path, bytes, fileOptions: const FileOptions(upsert: true));
+          .uploadBinary(
+            path,
+            bytes,
+            fileOptions: const FileOptions(upsert: true),
+          );
 
       final publicUrl = Supabase.instance.client.storage
           .from('avatars')
           .getPublicUrl(path);
 
       // URL mit Cache-Buster damit das neue Bild geladen wird
-      final urlWithCacheBuster = '$publicUrl?t=${DateTime.now().millisecondsSinceEpoch}';
+      final urlWithCacheBuster =
+          '$publicUrl?t=${DateTime.now().millisecondsSinceEpoch}';
 
       await Supabase.instance.client
           .from('profiles')
@@ -253,8 +285,16 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
   Widget build(BuildContext context) {
     final user = Supabase.instance.client.auth.currentUser;
     final String userEmail = user?.email ?? 'user@cruiseconnect.com';
-    final String userName = (user?.userMetadata?['username'] as String?) ?? userEmail.split('@')[0];
+    // Username & Bio kommen jetzt aus dem `profiles`-Table — Edits aus
+    // EditProfilePage werden so direkt sichtbar. user.userMetadata ist
+    // unzuverlässig, weil sie nicht synchron zum profiles-Update ist.
+    final dbUsername = (_profile['username'] as String?)?.trim();
+    final String userName = (dbUsername != null && dbUsername.isNotEmpty)
+        ? dbUsername
+        : userEmail.split('@')[0];
     final String userHandle = "@${userEmail.split('@')[0]}";
+    final String? userBio = (_profile['bio'] as String?)?.trim();
+    final String? userLink = (_profile['link'] as String?)?.trim();
 
     return Scaffold(
       key: _scaffoldKey,
@@ -266,7 +306,10 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         child: const Icon(Icons.add, color: Colors.white),
         onPressed: () async {
-          await Navigator.push(context, MaterialPageRoute(builder: (_) => const CreatePostPage()));
+          await Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const CreatePostPage()),
+          );
           _loadData();
         },
       ),
@@ -296,17 +339,29 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
                   },
                   blendMode: BlendMode.dstIn,
                   child: Container(
-                    decoration: const BoxDecoration(
-                      gradient: LinearGradient(
+                    decoration: BoxDecoration(
+                      gradient: const LinearGradient(
                         begin: Alignment.topCenter,
                         end: Alignment.bottomCenter,
                         colors: [Color(0xFF1C1F26), Color(0xFF0B0E14)],
                         stops: [0.3, 1.0],
                       ),
+                      image: _bannerUrl != null && _bannerUrl!.isNotEmpty
+                          ? DecorationImage(
+                              image: NetworkImage(_bannerUrl!),
+                              fit: BoxFit.cover,
+                            )
+                          : null,
                     ),
-                    child: Center(
-                      child: Icon(Icons.camera_alt_outlined, size: 80, color: Colors.white.withValues(alpha: 0.05)),
-                    ),
+                    child: _bannerUrl != null && _bannerUrl!.isNotEmpty
+                        ? null
+                        : Center(
+                            child: Icon(
+                              Icons.camera_alt_outlined,
+                              size: 80,
+                              color: Colors.white.withValues(alpha: 0.05),
+                            ),
+                          ),
                   ),
                 ),
               ),
@@ -350,11 +405,19 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
                                   CircleAvatar(
                                     radius: 40,
                                     backgroundColor: const Color(0xFFFF3B30),
-                                    backgroundImage: _avatarUrl != null ? NetworkImage(_avatarUrl!) : null,
+                                    backgroundImage: _avatarUrl != null
+                                        ? NetworkImage(_avatarUrl!)
+                                        : null,
                                     child: _avatarUrl == null
                                         ? Text(
-                                            userName.isNotEmpty ? userName[0].toUpperCase() : 'U',
-                                            style: const TextStyle(color: Colors.white, fontSize: 32, fontWeight: FontWeight.bold),
+                                            userName.isNotEmpty
+                                                ? userName[0].toUpperCase()
+                                                : 'U',
+                                            style: const TextStyle(
+                                              color: Colors.white,
+                                              fontSize: 32,
+                                              fontWeight: FontWeight.bold,
+                                            ),
                                           )
                                         : null,
                                   ),
@@ -364,8 +427,12 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
                                         radius: 40,
                                         backgroundColor: Colors.black54,
                                         child: SizedBox(
-                                          width: 24, height: 24,
-                                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                                          width: 24,
+                                          height: 24,
+                                          child: CircularProgressIndicator(
+                                            strokeWidth: 2,
+                                            color: Colors.white,
+                                          ),
                                         ),
                                       ),
                                     ),
@@ -378,9 +445,16 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
                                       decoration: BoxDecoration(
                                         color: const Color(0xFFFF3B30),
                                         shape: BoxShape.circle,
-                                        border: Border.all(color: const Color(0xFF0B0E14), width: 2),
+                                        border: Border.all(
+                                          color: const Color(0xFF0B0E14),
+                                          width: 2,
+                                        ),
                                       ),
-                                      child: const Icon(Icons.camera_alt, color: Colors.white, size: 14),
+                                      child: const Icon(
+                                        Icons.camera_alt,
+                                        color: Colors.white,
+                                        size: 14,
+                                      ),
                                     ),
                                   ),
                                 ],
@@ -391,14 +465,35 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
                         Padding(
                           padding: const EdgeInsets.only(bottom: 10),
                           child: GestureDetector(
-                            onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const EditProfilePage())),
+                            onTap: () async {
+                              final changed = await Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => const EditProfilePage(),
+                                ),
+                              );
+                              // EditProfilePage liefert `true` zurück, wenn
+                              // Speichern erfolgreich war — dann frische Daten
+                              // ziehen, damit Banner/Avatar/Auto-Karte aktuell sind.
+                              if (changed == true) _loadData();
+                            },
                             child: Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 16,
+                                vertical: 8,
+                              ),
                               decoration: BoxDecoration(
                                 borderRadius: BorderRadius.circular(20),
                                 border: Border.all(color: Colors.white30),
                               ),
-                              child: const Text('Profil bearbeiten', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
+                              child: const Text(
+                                'Profil bearbeiten',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 14,
+                                ),
+                              ),
                             ),
                           ),
                         ),
@@ -409,20 +504,68 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(userName, style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
+                          Text(
+                            userName,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 24,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
                           const SizedBox(height: 4),
-                          Text(userHandle, style: const TextStyle(color: Colors.grey, fontSize: 15)),
+                          Text(
+                            userHandle,
+                            style: const TextStyle(
+                              color: Colors.grey,
+                              fontSize: 15,
+                            ),
+                          ),
+                          if (userBio != null && userBio.isNotEmpty) ...[
+                            const SizedBox(height: 10),
+                            _buildBio(userBio),
+                          ],
+                          if (userLink != null && userLink.isNotEmpty) ...[
+                            const SizedBox(height: 8),
+                            Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Icon(
+                                  Icons.link,
+                                  size: 14,
+                                  color: Color(0xFFFF3B30),
+                                ),
+                                const SizedBox(width: 4),
+                                Flexible(
+                                  child: Text(
+                                    userLink,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      color: Color(0xFFFF3B30),
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
                           const SizedBox(height: 12),
                           Row(
                             children: [
                               GestureDetector(
                                 onTap: () => _showFollowList('following'),
-                                child: _buildFollowStat('$_followingCount', 'Folge ich'),
+                                child: _buildFollowStat(
+                                  '$_followingCount',
+                                  'Folge ich',
+                                ),
                               ),
                               const SizedBox(width: 16),
                               GestureDetector(
                                 onTap: () => _showFollowList('followers'),
-                                child: _buildFollowStat('$_followerCount', 'Follower'),
+                                child: _buildFollowStat(
+                                  '$_followerCount',
+                                  'Follower',
+                                ),
                               ),
                             ],
                           ),
@@ -434,6 +577,16 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
               ),
             ),
 
+            // Auto-Card — nur wenn das Profil Auto-Daten hat. Standardmäßig
+            // collapsed, Tap auf den Header klappt sie auf/zu.
+            if (!CarCard.isEmpty(_profile))
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
+                  child: _buildCarSection(),
+                ),
+              ),
+
             // Tabs (scrollt mit)
             SliverToBoxAdapter(
               child: Container(
@@ -444,7 +597,10 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
                   indicatorSize: TabBarIndicatorSize.tab,
                   labelColor: Colors.white,
                   unselectedLabelColor: Colors.grey,
-                  labelStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                  labelStyle: const TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 14,
+                  ),
                   tabs: const [
                     Tab(text: 'Posts'),
                     Tab(text: 'Reposts'),
@@ -457,19 +613,27 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
           ];
         },
         body: _loading
-            ? const Center(child: CircularProgressIndicator(color: Color(0xFFFF3B30)))
+            ? const Center(
+                child: CircularProgressIndicator(color: Color(0xFFFF3B30)),
+              )
             : TabBarView(
                 controller: _tabController,
                 children: [
                   // Tab 1: Posts (mit Lösch-Option)
                   _posts.isEmpty
-                      ? const Center(child: Text('Noch keine Posts', style: TextStyle(color: Colors.grey)))
+                      ? const Center(
+                          child: Text(
+                            'Noch keine Posts',
+                            style: TextStyle(color: Colors.grey),
+                          ),
+                        )
                       : ListView.builder(
                           padding: const EdgeInsets.only(top: 10, bottom: 80),
                           itemCount: _posts.length,
                           itemBuilder: (context, index) {
                             final post = _posts[index];
-                            final profile = post['profiles'] as Map<String, dynamic>?;
+                            final profile =
+                                post['profiles'] as Map<String, dynamic>?;
                             return _buildOwnPostCard(
                               postId: post['id'],
                               name: profile?['username'] ?? userName,
@@ -486,20 +650,30 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
 
                   // Tab 2: Reposts
                   _reposts.isEmpty
-                      ? const Center(child: Text('Noch keine Reposts', style: TextStyle(color: Colors.grey)))
+                      ? const Center(
+                          child: Text(
+                            'Noch keine Reposts',
+                            style: TextStyle(color: Colors.grey),
+                          ),
+                        )
                       : ListView.builder(
                           padding: const EdgeInsets.only(top: 10, bottom: 80),
                           itemCount: _reposts.length,
                           itemBuilder: (context, index) {
                             final repost = _reposts[index];
-                            final post = repost['posts'] as Map<String, dynamic>?;
+                            final post =
+                                repost['posts'] as Map<String, dynamic>?;
                             if (post == null) return const SizedBox.shrink();
-                            final author = post['profiles'] as Map<String, dynamic>?;
+                            final author =
+                                post['profiles'] as Map<String, dynamic>?;
                             final authorName = author?['username'] ?? 'User';
                             final authorId = author?['id'] as String?;
                             final originalPostId = post['id'] as String?;
                             return Container(
-                              margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                              margin: const EdgeInsets.symmetric(
+                                horizontal: 16,
+                                vertical: 8,
+                              ),
                               padding: const EdgeInsets.all(16),
                               decoration: BoxDecoration(
                                 color: const Color(0xFF1C1F26),
@@ -510,20 +684,26 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
                                 children: [
                                   Row(
                                     children: [
-                                      const Icon(Icons.repeat, size: 14, color: Color(0xFF34C759)),
+                                      const Icon(
+                                        Icons.repeat,
+                                        size: 14,
+                                        color: Color(0xFF34C759),
+                                      ),
                                       const SizedBox(width: 6),
                                       GestureDetector(
                                         onTap: authorId == null
                                             ? null
                                             : () => Navigator.push(
-                                                  context,
-                                                  MaterialPageRoute(
-                                                    builder: (_) => UserProfilePage(
-                                                      userId: authorId,
-                                                      initialUsername: authorName,
-                                                    ),
-                                                  ),
+                                                context,
+                                                MaterialPageRoute(
+                                                  builder: (_) =>
+                                                      UserProfilePage(
+                                                        userId: authorId,
+                                                        initialUsername:
+                                                            authorName,
+                                                      ),
                                                 ),
+                                              ),
                                         child: Text(
                                           'Repost von @$authorName',
                                           style: const TextStyle(
@@ -534,16 +714,28 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
                                         ),
                                       ),
                                       const Spacer(),
-                                      Text(_formatTimeAgo(repost['created_at']), style: const TextStyle(color: Colors.grey, fontSize: 11)),
+                                      Text(
+                                        _formatTimeAgo(repost['created_at']),
+                                        style: const TextStyle(
+                                          color: Colors.grey,
+                                          fontSize: 11,
+                                        ),
+                                      ),
                                       if (originalPostId != null)
                                         PopupMenuButton<String>(
-                                          icon: const Icon(Icons.more_horiz, color: Colors.grey, size: 18),
+                                          icon: const Icon(
+                                            Icons.more_horiz,
+                                            color: Colors.grey,
+                                            size: 18,
+                                          ),
                                           color: const Color(0xFF1C1F26),
                                           padding: EdgeInsets.zero,
                                           constraints: const BoxConstraints(),
                                           onSelected: (value) async {
                                             if (value == 'unrepost') {
-                                              await SocialService.toggleRepost(originalPostId);
+                                              await SocialService.toggleRepost(
+                                                originalPostId,
+                                              );
                                               _loadData();
                                             }
                                           },
@@ -552,9 +744,18 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
                                               value: 'unrepost',
                                               child: Row(
                                                 children: [
-                                                  Icon(Icons.repeat, color: Color(0xFF34C759), size: 18),
+                                                  Icon(
+                                                    Icons.repeat,
+                                                    color: Color(0xFF34C759),
+                                                    size: 18,
+                                                  ),
                                                   SizedBox(width: 8),
-                                                  Text('Repost entfernen', style: TextStyle(color: Colors.white)),
+                                                  Text(
+                                                    'Repost entfernen',
+                                                    style: TextStyle(
+                                                      color: Colors.white,
+                                                    ),
+                                                  ),
                                                 ],
                                               ),
                                             ),
@@ -565,11 +766,20 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
                                   const SizedBox(height: 10),
                                   Text.rich(
                                     TextSpan(
-                                      style: const TextStyle(color: Colors.white, fontSize: 15, height: 1.3),
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 15,
+                                        height: 1.3,
+                                      ),
                                       children: buildMentionSpans(
                                         context: context,
-                                        text: (post['content'] ?? '').toString(),
-                                        baseStyle: const TextStyle(color: Colors.white, fontSize: 15, height: 1.3),
+                                        text: (post['content'] ?? '')
+                                            .toString(),
+                                        baseStyle: const TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 15,
+                                          height: 1.3,
+                                        ),
                                       ),
                                     ),
                                   ),
@@ -578,7 +788,9 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
                                     Align(
                                       alignment: Alignment.centerLeft,
                                       child: RouteChip(
-                                          routeId: post['shared_route_id'] as String),
+                                        routeId:
+                                            post['shared_route_id'] as String,
+                                      ),
                                     ),
                                   ],
                                 ],
@@ -593,11 +805,24 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
                           child: Column(
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
-                              Icon(Icons.route, color: Colors.grey[700], size: 48),
+                              Icon(
+                                Icons.route,
+                                color: Colors.grey[700],
+                                size: 48,
+                              ),
                               const SizedBox(height: 12),
-                              const Text('Noch keine Routen gespeichert', style: TextStyle(color: Colors.grey)),
+                              const Text(
+                                'Noch keine Routen gespeichert',
+                                style: TextStyle(color: Colors.grey),
+                              ),
                               const SizedBox(height: 4),
-                              const Text('Fahre los und bestätige deine erste Route!', style: TextStyle(color: Colors.grey, fontSize: 12)),
+                              const Text(
+                                'Fahre los und bestätige deine erste Route!',
+                                style: TextStyle(
+                                  color: Colors.grey,
+                                  fontSize: 12,
+                                ),
+                              ),
                             ],
                           ),
                         )
@@ -612,7 +837,12 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
 
                   // Tab 3: Gruppen
                   _groups.isEmpty
-                      ? const Center(child: Text('Noch keiner Gruppe beigetreten', style: TextStyle(color: Colors.grey)))
+                      ? const Center(
+                          child: Text(
+                            'Noch keiner Gruppe beigetreten',
+                            style: TextStyle(color: Colors.grey),
+                          ),
+                        )
                       : ListView.builder(
                           padding: const EdgeInsets.all(16),
                           itemCount: _groups.length,
@@ -653,29 +883,48 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
         children: [
           Row(
             children: [
-              UserAvatar(
-                name: name,
-                avatarUrl: _avatarUrl,
-                radius: 18,
-              ),
+              UserAvatar(name: name, avatarUrl: _avatarUrl, radius: 18),
               const SizedBox(width: 10),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
+                    Text(
+                      name,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 15,
+                      ),
+                    ),
                     Row(
                       children: [
-                        Text(handle, style: const TextStyle(color: Colors.grey, fontSize: 13)),
+                        Text(
+                          handle,
+                          style: const TextStyle(
+                            color: Colors.grey,
+                            fontSize: 13,
+                          ),
+                        ),
                         const SizedBox(width: 5),
-                        Text('· $time', style: const TextStyle(color: Colors.grey, fontSize: 13)),
+                        Text(
+                          '· $time',
+                          style: const TextStyle(
+                            color: Colors.grey,
+                            fontSize: 13,
+                          ),
+                        ),
                       ],
                     ),
                   ],
                 ),
               ),
               PopupMenuButton<String>(
-                icon: const Icon(Icons.more_horiz, color: Colors.grey, size: 20),
+                icon: const Icon(
+                  Icons.more_horiz,
+                  color: Colors.grey,
+                  size: 20,
+                ),
                 color: const Color(0xFF1C1F26),
                 onSelected: (value) {
                   if (value == 'delete') _deletePost(postId);
@@ -685,9 +934,16 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
                     value: 'delete',
                     child: Row(
                       children: [
-                        Icon(Icons.delete_outline, color: Color(0xFFFF3B30), size: 18),
+                        Icon(
+                          Icons.delete_outline,
+                          color: Color(0xFFFF3B30),
+                          size: 18,
+                        ),
                         SizedBox(width: 8),
-                        Text('Post löschen', style: TextStyle(color: Color(0xFFFF3B30))),
+                        Text(
+                          'Post löschen',
+                          style: TextStyle(color: Color(0xFFFF3B30)),
+                        ),
                       ],
                     ),
                   ),
@@ -696,19 +952,25 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
             ],
           ),
           const SizedBox(height: 12),
-          Builder(builder: (ctx) {
-            const baseStyle = TextStyle(color: Colors.white, fontSize: 15, height: 1.4);
-            return Text.rich(
-              TextSpan(
-                style: baseStyle,
-                children: buildMentionSpans(
-                  context: ctx,
-                  text: content,
-                  baseStyle: baseStyle,
+          Builder(
+            builder: (ctx) {
+              const baseStyle = TextStyle(
+                color: Colors.white,
+                fontSize: 15,
+                height: 1.4,
+              );
+              return Text.rich(
+                TextSpan(
+                  style: baseStyle,
+                  children: buildMentionSpans(
+                    context: ctx,
+                    text: content,
+                    baseStyle: baseStyle,
+                  ),
                 ),
-              ),
-            );
-          }),
+              );
+            },
+          ),
           if (sharedRouteId != null) ...[
             const SizedBox(height: 10),
             Align(
@@ -720,18 +982,50 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceAround,
             children: [
-              Row(children: [
-                const Icon(Icons.chat_bubble_outline, color: Colors.grey, size: 18),
-                if (commentsCount > 0) ...[const SizedBox(width: 4), Text('$commentsCount', style: const TextStyle(color: Colors.grey, fontSize: 12))],
-              ]),
-              Row(children: [
-                const Icon(Icons.repeat, color: Colors.grey, size: 18),
-                if (repostsCount > 0) ...[const SizedBox(width: 4), Text('$repostsCount', style: const TextStyle(color: Colors.grey, fontSize: 12))],
-              ]),
-              Row(children: [
-                const Icon(Icons.favorite_border, color: Colors.grey, size: 18),
-                if (likesCount > 0) ...[const SizedBox(width: 4), Text('$likesCount', style: const TextStyle(color: Colors.grey, fontSize: 12))],
-              ]),
+              Row(
+                children: [
+                  const Icon(
+                    Icons.chat_bubble_outline,
+                    color: Colors.grey,
+                    size: 18,
+                  ),
+                  if (commentsCount > 0) ...[
+                    const SizedBox(width: 4),
+                    Text(
+                      '$commentsCount',
+                      style: const TextStyle(color: Colors.grey, fontSize: 12),
+                    ),
+                  ],
+                ],
+              ),
+              Row(
+                children: [
+                  const Icon(Icons.repeat, color: Colors.grey, size: 18),
+                  if (repostsCount > 0) ...[
+                    const SizedBox(width: 4),
+                    Text(
+                      '$repostsCount',
+                      style: const TextStyle(color: Colors.grey, fontSize: 12),
+                    ),
+                  ],
+                ],
+              ),
+              Row(
+                children: [
+                  const Icon(
+                    Icons.favorite_border,
+                    color: Colors.grey,
+                    size: 18,
+                  ),
+                  if (likesCount > 0) ...[
+                    const SizedBox(width: 4),
+                    Text(
+                      '$likesCount',
+                      style: const TextStyle(color: Colors.grey, fontSize: 12),
+                    ),
+                  ],
+                ],
+              ),
               const Icon(Icons.share_outlined, color: Colors.grey, size: 18),
             ],
           ),
@@ -745,11 +1039,29 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
       context: context,
       builder: (context) => AlertDialog(
         backgroundColor: const Color(0xFF1C1F26),
-        title: const Text('Post löschen?', style: TextStyle(color: Colors.white)),
-        content: const Text('Dieser Post wird unwiderruflich gelöscht.', style: TextStyle(color: Colors.grey)),
+        title: const Text(
+          'Post löschen?',
+          style: TextStyle(color: Colors.white),
+        ),
+        content: const Text(
+          'Dieser Post wird unwiderruflich gelöscht.',
+          style: TextStyle(color: Colors.grey),
+        ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Abbrechen', style: TextStyle(color: Colors.grey))),
-          TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('Löschen', style: TextStyle(color: Color(0xFFFF3B30)))),
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text(
+              'Abbrechen',
+              style: TextStyle(color: Colors.grey),
+            ),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text(
+              'Löschen',
+              style: TextStyle(color: Color(0xFFFF3B30)),
+            ),
+          ),
         ],
       ),
     );
@@ -767,7 +1079,9 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
       context: context,
       isScrollControlled: true,
       backgroundColor: const Color(0xFF0B0E14),
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
       builder: (sheetContext) {
         return DraggableScrollableSheet(
           initialChildSize: 0.6,
@@ -786,24 +1100,43 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
                     Center(
                       child: Container(
                         margin: const EdgeInsets.symmetric(vertical: 12),
-                        width: 40, height: 4,
-                        decoration: BoxDecoration(color: Colors.grey[600], borderRadius: BorderRadius.circular(2)),
+                        width: 40,
+                        height: 4,
+                        decoration: BoxDecoration(
+                          color: Colors.grey[600],
+                          borderRadius: BorderRadius.circular(2),
+                        ),
                       ),
                     ),
                     Padding(
                       padding: const EdgeInsets.all(16),
                       child: Align(
                         alignment: Alignment.centerLeft,
-                        child: Text(title, style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+                        child: Text(
+                          title,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
                       ),
                     ),
                     if (snapshot.connectionState == ConnectionState.waiting)
-                      const Expanded(child: Center(child: CircularProgressIndicator(color: Color(0xFFFF3B30))))
+                      const Expanded(
+                        child: Center(
+                          child: CircularProgressIndicator(
+                            color: Color(0xFFFF3B30),
+                          ),
+                        ),
+                      )
                     else if (!snapshot.hasData || snapshot.data!.isEmpty)
                       Expanded(
                         child: Center(
                           child: Text(
-                            type == 'followers' ? 'Noch keine Follower' : 'Du folgst noch niemandem',
+                            type == 'followers'
+                                ? 'Noch keine Follower'
+                                : 'Du folgst noch niemandem',
                             style: const TextStyle(color: Colors.grey),
                           ),
                         ),
@@ -815,27 +1148,57 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
                           itemCount: snapshot.data!.length,
                           itemBuilder: (context, index) {
                             final item = snapshot.data![index];
-                            final profileKey = type == 'followers' ? 'profiles' : 'profiles';
-                            final profile = item[profileKey] as Map<String, dynamic>?;
-                            final username = profile?['username'] ?? profile?['email']?.split('@')[0] ?? 'User';
+                            final profileKey = type == 'followers'
+                                ? 'profiles'
+                                : 'profiles';
+                            final profile =
+                                item[profileKey] as Map<String, dynamic>?;
+                            final username =
+                                profile?['username'] ??
+                                profile?['email']?.split('@')[0] ??
+                                'User';
                             final userId = profile?['id'] as String?;
 
                             return ListTile(
                               onTap: () {
                                 Navigator.pop(sheetContext);
                                 if (userId != null) {
-                                  Future.delayed(const Duration(milliseconds: 150), () {
-                                    if (!context.mounted) return;
-                                    Navigator.push(context, MaterialPageRoute(builder: (_) => UserProfilePage(userId: userId)));
-                                  });
+                                  Future.delayed(
+                                    const Duration(milliseconds: 150),
+                                    () {
+                                      if (!context.mounted) return;
+                                      Navigator.push(
+                                        context,
+                                        MaterialPageRoute(
+                                          builder: (_) =>
+                                              UserProfilePage(userId: userId),
+                                        ),
+                                      );
+                                    },
+                                  );
                                 }
                               },
                               leading: CircleAvatar(
                                 backgroundColor: const Color(0xFFFF3B30),
-                                child: Text(username[0].toUpperCase(), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                                child: Text(
+                                  username[0].toUpperCase(),
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
                               ),
-                              title: Text(username, style: const TextStyle(color: Colors.white)),
-                              subtitle: Text('@${profile?['email']?.split('@')[0] ?? ''}', style: const TextStyle(color: Colors.grey, fontSize: 13)),
+                              title: Text(
+                                username,
+                                style: const TextStyle(color: Colors.white),
+                              ),
+                              subtitle: Text(
+                                '@${profile?['email']?.split('@')[0] ?? ''}',
+                                style: const TextStyle(
+                                  color: Colors.grey,
+                                  fontSize: 13,
+                                ),
+                              ),
                             );
                           },
                         ),
@@ -870,14 +1233,26 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
                 color: const Color(0xFFFF3B30).withValues(alpha: 0.15),
                 borderRadius: BorderRadius.circular(12),
               ),
-              child: Center(child: Text(route.styleEmoji, style: const TextStyle(fontSize: 20))),
+              child: Center(
+                child: Text(
+                  route.styleEmoji,
+                  style: const TextStyle(fontSize: 20),
+                ),
+              ),
             ),
             const SizedBox(width: 12),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(route.name ?? route.style, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
+                  Text(
+                    route.name ?? route.style,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 14,
+                    ),
+                  ),
                   const SizedBox(height: 4),
                   Text(
                     '${route.formattedDistance} · ${route.formattedDuration}',
@@ -897,7 +1272,9 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
     showModalBottomSheet(
       context: context,
       backgroundColor: const Color(0xFF1C1F26),
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
       builder: (ctx) {
         return SafeArea(
           child: Padding(
@@ -906,41 +1283,88 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
               mainAxisSize: MainAxisSize.min,
               children: [
                 Container(
-                  width: 40, height: 4,
-                  decoration: BoxDecoration(color: Colors.grey[600], borderRadius: BorderRadius.circular(2)),
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.grey[600],
+                    borderRadius: BorderRadius.circular(2),
+                  ),
                 ),
                 const SizedBox(height: 16),
-                Text(route.name ?? route.style, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18)),
+                Text(
+                  route.name ?? route.style,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 18,
+                  ),
+                ),
                 const SizedBox(height: 4),
-                Text('${route.formattedDistance} · ${route.formattedDuration}', style: const TextStyle(color: Colors.grey, fontSize: 13)),
+                Text(
+                  '${route.formattedDistance} · ${route.formattedDuration}',
+                  style: const TextStyle(color: Colors.grey, fontSize: 13),
+                ),
                 const SizedBox(height: 20),
-                _buildOptionTile(Icons.play_circle_fill, 'Nochmal fahren', const Color(0xFFFF3B30), () {
-                  Navigator.pop(ctx);
-                  CruiseModePage.pendingRoute.value = route;
-                }),
-                _buildOptionTile(Icons.share, 'Als Post teilen', const Color(0xFF00E5FF), () {
-                  Navigator.pop(ctx);
-                  _shareRouteAsPost(route);
-                }),
-                _buildOptionTile(Icons.delete_outline, 'Route löschen', Colors.grey, () async {
-                  Navigator.pop(ctx);
-                  final confirmed = await showDialog<bool>(
-                    context: context,
-                    builder: (c) => AlertDialog(
-                      backgroundColor: const Color(0xFF1C1F26),
-                      title: const Text('Route löschen?', style: TextStyle(color: Colors.white)),
-                      content: const Text('Diese Route wird unwiderruflich gelöscht.', style: TextStyle(color: Colors.grey)),
-                      actions: [
-                        TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Abbrechen', style: TextStyle(color: Colors.grey))),
-                        TextButton(onPressed: () => Navigator.pop(c, true), child: const Text('Löschen', style: TextStyle(color: Color(0xFFFF3B30)))),
-                      ],
-                    ),
-                  );
-                  if (confirmed == true) {
-                    await SavedRoutesService.deleteRoute(route.id);
-                    _loadData();
-                  }
-                }),
+                _buildOptionTile(
+                  Icons.play_circle_fill,
+                  'Nochmal fahren',
+                  const Color(0xFFFF3B30),
+                  () {
+                    Navigator.pop(ctx);
+                    CruiseModePage.pendingRoute.value = route;
+                  },
+                ),
+                _buildOptionTile(
+                  Icons.share,
+                  'Als Post teilen',
+                  const Color(0xFF00E5FF),
+                  () {
+                    Navigator.pop(ctx);
+                    _shareRouteAsPost(route);
+                  },
+                ),
+                _buildOptionTile(
+                  Icons.delete_outline,
+                  'Route löschen',
+                  Colors.grey,
+                  () async {
+                    Navigator.pop(ctx);
+                    final confirmed = await showDialog<bool>(
+                      context: context,
+                      builder: (c) => AlertDialog(
+                        backgroundColor: const Color(0xFF1C1F26),
+                        title: const Text(
+                          'Route löschen?',
+                          style: TextStyle(color: Colors.white),
+                        ),
+                        content: const Text(
+                          'Diese Route wird unwiderruflich gelöscht.',
+                          style: TextStyle(color: Colors.grey),
+                        ),
+                        actions: [
+                          TextButton(
+                            onPressed: () => Navigator.pop(c, false),
+                            child: const Text(
+                              'Abbrechen',
+                              style: TextStyle(color: Colors.grey),
+                            ),
+                          ),
+                          TextButton(
+                            onPressed: () => Navigator.pop(c, true),
+                            child: const Text(
+                              'Löschen',
+                              style: TextStyle(color: Color(0xFFFF3B30)),
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                    if (confirmed == true) {
+                      await SavedRoutesService.deleteRoute(route.id);
+                      _loadData();
+                    }
+                  },
+                ),
               ],
             ),
           ),
@@ -949,20 +1373,32 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
     );
   }
 
-  Widget _buildOptionTile(IconData icon, String label, Color color, VoidCallback onTap) {
+  Widget _buildOptionTile(
+    IconData icon,
+    String label,
+    Color color,
+    VoidCallback onTap,
+  ) {
     return ListTile(
       leading: Icon(icon, color: color),
-      title: Text(label, style: const TextStyle(color: Colors.white, fontSize: 16)),
+      title: Text(
+        label,
+        style: const TextStyle(color: Colors.white, fontSize: 16),
+      ),
       onTap: onTap,
     );
   }
 
   void _shareRouteAsPost(SavedRoute route) {
-    final routeText = '${route.styleEmoji} ${route.name ?? route.style}\n'
+    final routeText =
+        '${route.styleEmoji} ${route.name ?? route.style}\n'
         '${route.formattedDistance} · ${route.formattedDuration}\n\n';
     Navigator.push(
       context,
-      MaterialPageRoute(builder: (_) => CreatePostPage(initialText: routeText, sharedRouteId: route.id)),
+      MaterialPageRoute(
+        builder: (_) =>
+            CreatePostPage(initialText: routeText, sharedRouteId: route.id),
+      ),
     ).then((_) => _loadData());
   }
 
@@ -977,15 +1413,64 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
               padding: EdgeInsets.symmetric(horizontal: 20),
               child: Align(
                 alignment: Alignment.centerLeft,
-                child: Text('Menü', style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold)),
+                child: Text(
+                  'Menü',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 22,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
               ),
             ),
             const SizedBox(height: 20),
-            _buildMenuItem(Icons.settings, 'Einstellungen',
-                onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const SettingsPage()))),
-            _buildMenuItem(Icons.bookmark, 'Gespeicherte Routen', onTap: () {
-              _tabController.animateTo(2);
-            }),
+            _buildMenuItem(
+              Icons.settings,
+              'Einstellungen',
+              onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const SettingsPage()),
+              ),
+            ),
+            _buildMenuItem(
+              Icons.person_add_alt_1,
+              'Freundschaftsanfragen',
+              onTap: () {
+                // Drawer explizit über den ScaffoldKey schließen — sonst
+                // kann Navigator.pop versehentlich die Profile-Page poppen,
+                // und der Back-Button auf der nächsten Page findet keinen
+                // gültigen Stack mehr.
+                _scaffoldKey.currentState?.closeEndDrawer();
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const FollowRequestsPage()),
+                );
+              },
+            ),
+            _buildMenuItem(
+              Icons.block,
+              'Blockierte Nutzer',
+              onTap: () {
+                _scaffoldKey.currentState?.closeEndDrawer();
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const BlockedUsersPage()),
+                );
+              },
+            ),
+            _buildMenuItem(
+              Icons.bookmark,
+              'Gespeicherte Routen',
+              onTap: () {
+                _scaffoldKey.currentState?.closeEndDrawer();
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => const SavedRouteBookmarksPage(),
+                  ),
+                );
+              },
+            ),
             _buildMenuItem(Icons.help_outline, 'Hilfe & Support'),
             const Spacer(),
             Padding(
@@ -995,7 +1480,9 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
                 child: ElevatedButton(
                   onPressed: signUserOut,
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFFFF3B30).withValues(alpha: 0.1),
+                    backgroundColor: const Color(
+                      0xFFFF3B30,
+                    ).withValues(alpha: 0.1),
                     foregroundColor: const Color(0xFFFF3B30),
                     padding: const EdgeInsets.symmetric(vertical: 16),
                     shape: RoundedRectangleBorder(
@@ -1003,7 +1490,10 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
                       side: const BorderSide(color: Color(0xFFFF3B30)),
                     ),
                   ),
-                  child: const Text('Ausloggen', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                  child: const Text(
+                    'Ausloggen',
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                  ),
                 ),
               ),
             ),
@@ -1016,7 +1506,10 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
   Widget _buildMenuItem(IconData icon, String title, {VoidCallback? onTap}) {
     return ListTile(
       leading: Icon(icon, color: Colors.white70),
-      title: Text(title, style: const TextStyle(color: Colors.white, fontSize: 16)),
+      title: Text(
+        title,
+        style: const TextStyle(color: Colors.white, fontSize: 16),
+      ),
       onTap: () {
         Navigator.pop(context);
         onTap?.call();
@@ -1027,9 +1520,117 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
   Widget _buildFollowStat(String count, String label) {
     return Row(
       children: [
-        Text(count, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
+        Text(
+          count,
+          style: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.bold,
+            fontSize: 15,
+          ),
+        ),
         const SizedBox(width: 4),
         Text(label, style: const TextStyle(color: Colors.grey, fontSize: 15)),
+      ],
+    );
+  }
+
+  /// Bio: bei mehr als [_bioCollapseAt] Zeichen wird sie standardmäßig
+  /// abgeschnitten und über "mehr" / "weniger" auf-/zugeklappt.
+  Widget _buildBio(String bio) {
+    const baseStyle = TextStyle(color: Colors.white, fontSize: 14, height: 1.4);
+    if (bio.length <= _bioCollapseAt) {
+      return Text(bio, style: baseStyle);
+    }
+    final collapsed = '${bio.substring(0, _bioCollapseAt).trimRight()}…';
+    return GestureDetector(
+      onTap: () => setState(() => _bioExpanded = !_bioExpanded),
+      behavior: HitTestBehavior.opaque,
+      child: Text.rich(
+        TextSpan(
+          style: baseStyle,
+          children: [
+            TextSpan(text: _bioExpanded ? bio : collapsed),
+            TextSpan(
+              text: _bioExpanded ? '  weniger' : '  mehr',
+              style: const TextStyle(
+                color: Color(0xFFFF3B30),
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Auto-Bereich: standardmäßig collapsed (nur Header-Zeile mit Marke +
+  /// Pfeil), Tap klappt die volle [CarCard] auf.
+  Widget _buildCarSection() {
+    final brand = (_profile['car_brand'] as String?)?.trim();
+    final model = (_profile['car_name'] as String?)?.trim();
+    final summary = [
+      if (brand != null && brand.isNotEmpty) brand,
+      if (model != null && model.isNotEmpty) model,
+    ].join(' ');
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: () => setState(() => _carCardExpanded = !_carCardExpanded),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.directions_car_filled,
+                  color: Color(0xFFFF3B30),
+                  size: 18,
+                ),
+                const SizedBox(width: 6),
+                const Text(
+                  'Mein Auto',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 15,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 0.4,
+                  ),
+                ),
+                if (summary.isNotEmpty) ...[
+                  const SizedBox(width: 8),
+                  Flexible(
+                    child: Text(
+                      '· $summary',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(color: Colors.grey, fontSize: 13),
+                    ),
+                  ),
+                ],
+                const Spacer(),
+                Icon(
+                  _carCardExpanded
+                      ? Icons.keyboard_arrow_up
+                      : Icons.keyboard_arrow_down,
+                  color: Colors.white70,
+                  size: 22,
+                ),
+              ],
+            ),
+          ),
+        ),
+        AnimatedSize(
+          duration: const Duration(milliseconds: 200),
+          curve: Curves.easeOut,
+          child: _carCardExpanded
+              ? Padding(
+                  padding: const EdgeInsets.only(top: 12),
+                  child: CarCard(profile: _profile),
+                )
+              : const SizedBox(width: double.infinity),
+        ),
       ],
     );
   }
@@ -1071,12 +1672,18 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
                 Expanded(
                   child: Text(
                     title,
-                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16,
+                    ),
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
-                _groupBadge(isPublic ? 'Öffentlich' : 'Privat',
-                    isPublic ? Colors.greenAccent : Colors.orangeAccent),
+                _groupBadge(
+                  isPublic ? 'Öffentlich' : 'Privat',
+                  isPublic ? Colors.greenAccent : Colors.orangeAccent,
+                ),
                 const SizedBox(width: 6),
                 if (isOwner) _groupBadge('Owner', const Color(0xFFFF3B30)),
                 PopupMenuButton<String>(
@@ -1101,22 +1708,33 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
             ),
             if (startTime != null) ...[
               const SizedBox(height: 6),
-              Row(children: [
-                const Icon(Icons.event, color: Colors.white70, size: 14),
-                const SizedBox(width: 6),
-                Text(
-                  '${startTime.day.toString().padLeft(2, '0')}.${startTime.month.toString().padLeft(2, '0')}. '
-                  '${startTime.hour.toString().padLeft(2, '0')}:${startTime.minute.toString().padLeft(2, '0')}',
-                  style: const TextStyle(color: Colors.white70, fontSize: 12),
-                ),
-              ]),
+              Row(
+                children: [
+                  const Icon(Icons.event, color: Colors.white70, size: 14),
+                  const SizedBox(width: 6),
+                  Text(
+                    '${startTime.day.toString().padLeft(2, '0')}.${startTime.month.toString().padLeft(2, '0')}. '
+                    '${startTime.hour.toString().padLeft(2, '0')}:${startTime.minute.toString().padLeft(2, '0')}',
+                    style: const TextStyle(color: Colors.white70, fontSize: 12),
+                  ),
+                ],
+              ),
             ],
             const SizedBox(height: 6),
-            Row(children: [
-              const Icon(Icons.local_fire_department, color: Colors.orange, size: 14),
-              const SizedBox(width: 6),
-              Text('$count Fahrer', style: const TextStyle(color: Colors.white70, fontSize: 12)),
-            ]),
+            Row(
+              children: [
+                const Icon(
+                  Icons.local_fire_department,
+                  color: Colors.orange,
+                  size: 14,
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  '$count Fahrer',
+                  style: const TextStyle(color: Colors.white70, fontSize: 12),
+                ),
+              ],
+            ),
           ],
         ),
       ),
@@ -1130,8 +1748,14 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
         color: color.withValues(alpha: 0.15),
         borderRadius: BorderRadius.circular(8),
       ),
-      child: Text(label,
-          style: TextStyle(color: color, fontSize: 10, fontWeight: FontWeight.bold)),
+      child: Text(
+        label,
+        style: TextStyle(
+          color: color,
+          fontSize: 10,
+          fontWeight: FontWeight.bold,
+        ),
+      ),
     );
   }
 
@@ -1143,8 +1767,9 @@ class _ProfilePageState extends State<ProfilePage> with SingleTickerProviderStat
     // Owner-Rolle über group_members prüfen (mehrere Owner möglich,
     // da ein Owner die Rolle weitergeben kann).
     final iAmOwner = await SocialService.isOwner(groupId);
-    final otherOwners =
-        iAmOwner ? await SocialService.countOtherOwners(groupId, uid) : 0;
+    final otherOwners = iAmOwner
+        ? await SocialService.countOtherOwners(groupId, uid)
+        : 0;
     // Gruppe nur löschen, wenn ich Owner bin UND es keinen weiteren Owner gibt.
     final willDelete = iAmOwner && otherOwners == 0;
 
@@ -1217,13 +1842,13 @@ class _LeaveGroupDialogState extends State<_LeaveGroupDialog> {
     final title = destructive ? 'Gruppe löschen?' : 'Gruppe verlassen?';
     final body = destructive
         ? 'Achtung: Du bist der einzige Admin. Wenn du die Gruppe verlässt, '
-            'wird sie vollständig gelöscht. Ernenne vorher einen neuen Admin, '
-            'wenn die Gruppe bestehen bleiben soll.'
+              'wird sie vollständig gelöscht. Ernenne vorher einen neuen Admin, '
+              'wenn die Gruppe bestehen bleiben soll.'
         : widget.iAmOwner
-            ? 'Es gibt weitere Owner – die Gruppe bleibt bestehen, du '
-                'verlierst nur deine Mitgliedschaft.'
-            : 'Du verlässt diese Gruppe. Beitritt später wieder möglich, '
-                'solange sie öffentlich ist.';
+        ? 'Es gibt weitere Owner – die Gruppe bleibt bestehen, du '
+              'verlierst nur deine Mitgliedschaft.'
+        : 'Du verlässt diese Gruppe. Beitritt später wieder möglich, '
+              'solange sie öffentlich ist.';
     final confirmLabel = destructive ? 'Gruppe löschen' : 'Verlassen';
 
     return AlertDialog(
@@ -1233,12 +1858,14 @@ class _LeaveGroupDialogState extends State<_LeaveGroupDialog> {
           if (destructive)
             const Padding(
               padding: EdgeInsets.only(right: 8),
-              child: Icon(Icons.warning_amber_rounded,
-                  color: Color(0xFFFF3B30), size: 22),
+              child: Icon(
+                Icons.warning_amber_rounded,
+                color: Color(0xFFFF3B30),
+                size: 22,
+              ),
             ),
           Expanded(
-            child: Text(title,
-                style: const TextStyle(color: Colors.white)),
+            child: Text(title, style: const TextStyle(color: Colors.white)),
           ),
         ],
       ),
@@ -1249,17 +1876,17 @@ class _LeaveGroupDialogState extends State<_LeaveGroupDialog> {
           Text(body, style: const TextStyle(color: Colors.white70)),
           if (_error != null) ...[
             const SizedBox(height: 12),
-            Text(_error!,
-                style:
-                    const TextStyle(color: Color(0xFFFF3B30), fontSize: 12)),
+            Text(
+              _error!,
+              style: const TextStyle(color: Color(0xFFFF3B30), fontSize: 12),
+            ),
           ],
         ],
       ),
       actions: [
         TextButton(
           onPressed: _busy ? null : () => Navigator.pop(context, false),
-          child: const Text('Abbrechen',
-              style: TextStyle(color: Colors.grey)),
+          child: const Text('Abbrechen', style: TextStyle(color: Colors.grey)),
         ),
         if (destructive)
           ElevatedButton(
@@ -1276,10 +1903,14 @@ class _LeaveGroupDialogState extends State<_LeaveGroupDialog> {
                     width: 16,
                     height: 16,
                     child: CircularProgressIndicator(
-                        color: Colors.white, strokeWidth: 2))
-                : Text(confirmLabel,
-                    style:
-                        const TextStyle(fontWeight: FontWeight.bold)),
+                      color: Colors.white,
+                      strokeWidth: 2,
+                    ),
+                  )
+                : Text(
+                    confirmLabel,
+                    style: const TextStyle(fontWeight: FontWeight.bold),
+                  ),
           )
         else
           TextButton(
@@ -1289,9 +1920,14 @@ class _LeaveGroupDialogState extends State<_LeaveGroupDialog> {
                     width: 16,
                     height: 16,
                     child: CircularProgressIndicator(
-                        color: Color(0xFFFF3B30), strokeWidth: 2))
-                : Text(confirmLabel,
-                    style: const TextStyle(color: Color(0xFFFF3B30))),
+                      color: Color(0xFFFF3B30),
+                      strokeWidth: 2,
+                    ),
+                  )
+                : Text(
+                    confirmLabel,
+                    style: const TextStyle(color: Color(0xFFFF3B30)),
+                  ),
           ),
       ],
     );
