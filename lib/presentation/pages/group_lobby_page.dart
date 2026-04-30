@@ -26,6 +26,9 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
   bool _starting = false;
 
   List<Map<String, dynamic>> _pendingRequests = [];
+  /// Mitglieder, die ich blockiert habe oder die mich blockiert haben —
+  /// werden in der Mitglieder-Liste ausgegraut dargestellt.
+  Set<String> _blockedIds = {};
 
   RealtimeChannel? _groupCh;
   RealtimeChannel? _membersCh;
@@ -69,10 +72,16 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
 
   Future<void> _load() async {
     try {
-      final g = await CruiseGroupService.fetch(widget.groupId);
+      final results = await Future.wait([
+        CruiseGroupService.fetch(widget.groupId),
+        SocialService.getBlockedAndBlockerIds(),
+      ]);
+      final g = results[0] as CruiseGroup?;
+      final blocked = results[1] as Set<String>;
       if (!mounted) return;
       setState(() {
         _group = g;
+        _blockedIds = blocked;
         _loading = false;
       });
       if (g != null && g.isActive) _enterNavigation();
@@ -451,6 +460,7 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
 
   Widget _buildMemberTile(GroupMember m) {
     final isMe = m.userId == _myId;
+    final isBlocked = _blockedIds.contains(m.userId);
     final roleLabel = m.role == MemberRole.owner
         ? 'Owner'
         : m.role == MemberRole.driver
@@ -459,43 +469,67 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
     final roleColor = m.role == MemberRole.owner
         ? const Color(0xFFFF3B30)
         : Colors.grey;
-    return Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      decoration: BoxDecoration(
-        color: const Color(0xFF1C1F26),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Row(
-        children: [
-          CircleAvatar(
-            radius: 18,
-            backgroundColor: const Color(0xFF0B0E14),
-            backgroundImage: m.avatarUrl != null
-                ? NetworkImage(m.avatarUrl!)
-                : null,
-            child: m.avatarUrl == null
-                ? Text(
-                    (m.displayName ?? '?').characters.first.toUpperCase(),
+    return Opacity(
+      // Blockierte User werden ausgegraut, damit klar ist, dass weder
+      // sie meinen Content sehen noch ich ihren — sie bleiben aber sichtbar
+      // damit die Mitglieder-Liste vollständig bleibt (Group-Logik).
+      opacity: isBlocked ? 0.45 : 1.0,
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        decoration: BoxDecoration(
+          color: const Color(0xFF1C1F26),
+          borderRadius: BorderRadius.circular(12),
+          border: isBlocked
+              ? Border.all(color: Colors.white.withValues(alpha: 0.05))
+              : null,
+        ),
+        child: Row(
+          children: [
+            CircleAvatar(
+              radius: 18,
+              backgroundColor: const Color(0xFF0B0E14),
+              backgroundImage: m.avatarUrl != null
+                  ? NetworkImage(m.avatarUrl!)
+                  : null,
+              child: m.avatarUrl == null
+                  ? Text(
+                      (m.displayName ?? '?').characters.first.toUpperCase(),
+                      style: const TextStyle(color: Colors.white),
+                    )
+                  : null,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    '${m.displayName ?? 'User'}${isMe ? ' (Du)' : ''}',
                     style: const TextStyle(color: Colors.white),
-                  )
-                : null,
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Text(
-              '${m.displayName ?? 'User'}${isMe ? ' (Du)' : ''}',
-              style: const TextStyle(color: Colors.white),
+                  ),
+                  if (isBlocked)
+                    const Text(
+                      'Blockiert',
+                      style: TextStyle(
+                        color: Color(0xFFFF3B30),
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                ],
+              ),
             ),
-          ),
-          Text(roleLabel, style: TextStyle(color: roleColor)),
-          if (_amOwner && !isMe && m.role != MemberRole.owner)
-            IconButton(
-              tooltip: 'Zum Owner befördern',
-              icon: const Icon(Icons.star_border, color: Colors.grey),
-              onPressed: () => _promoteToOwner(m),
-            ),
-        ],
+            Text(roleLabel, style: TextStyle(color: roleColor)),
+            if (_amOwner && !isMe && m.role != MemberRole.owner && !isBlocked)
+              IconButton(
+                tooltip: 'Zum Owner befördern',
+                icon: const Icon(Icons.star_border, color: Colors.grey),
+                onPressed: () => _promoteToOwner(m),
+              ),
+          ],
+        ),
       ),
     );
   }

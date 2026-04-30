@@ -8,6 +8,7 @@ import 'package:cruise_connect/presentation/pages/post_detail_page.dart';
 import 'package:cruise_connect/presentation/widgets/mentions.dart';
 import 'package:cruise_connect/presentation/widgets/route_chip.dart';
 import 'package:cruise_connect/presentation/widgets/user_avatar.dart';
+import 'package:cruise_connect/presentation/widgets/moderation_actions.dart';
 
 /// Profil-Seite eines anderen Users (oder des eigenen).
 ///
@@ -35,9 +36,11 @@ class _UserProfilePageState extends State<UserProfilePage> with SingleTickerProv
   List<Map<String, dynamic>> _posts = [];
   List<Map<String, dynamic>> _reposts = [];
   bool _isFollowing = false;
-  bool _isMutual = false;
   bool _isOwnProfile = false;
   bool _isPrivate = false;
+  /// Status meiner Follow-Beziehung zu diesem Profil:
+  /// `'accepted'` (folge), `'pending'` (Anfrage gesendet), `'none'`.
+  String _followStatus = 'none';
 
   @override
   void initState() {
@@ -59,8 +62,7 @@ class _UserProfilePageState extends State<UserProfilePage> with SingleTickerProv
         SocialService.getProfileStats(widget.userId),
         SocialService.getUserPosts(widget.userId),
         SocialService.getUserReposts(widget.userId),
-        if (!_isOwnProfile) SocialService.isFollowing(widget.userId),
-        if (!_isOwnProfile) SocialService.isMutualFollow(widget.userId),
+        if (!_isOwnProfile) SocialService.getFollowStatus(widget.userId),
       ]);
       if (mounted) {
         setState(() {
@@ -69,8 +71,8 @@ class _UserProfilePageState extends State<UserProfilePage> with SingleTickerProv
           _posts = results[1] as List<Map<String, dynamic>>;
           _reposts = results[2] as List<Map<String, dynamic>>;
           if (!_isOwnProfile) {
-            _isFollowing = results[3] as bool;
-            _isMutual = results[4] as bool;
+            _followStatus = results[3] as String;
+            _isFollowing = _followStatus == 'accepted';
           }
           _loading = false;
         });
@@ -108,6 +110,42 @@ class _UserProfilePageState extends State<UserProfilePage> with SingleTickerProv
           style: const TextStyle(color: Colors.white, fontSize: 16),
         ),
         elevation: 0,
+        actions: [
+          // 3-Punkte-Menü nur auf fremden Profilen — Melden + Blockieren.
+          if (!_isOwnProfile)
+            PopupMenuButton<String>(
+              icon: const Icon(Icons.more_vert, color: Colors.white),
+              color: const Color(0xFF1C1F26),
+              onSelected: (value) =>
+                  _handleProfileMenu(value, displayName),
+              itemBuilder: (_) => const [
+                PopupMenuItem(
+                  value: 'report',
+                  child: Row(
+                    children: [
+                      Icon(Icons.flag_outlined,
+                          color: Color(0xFFFF3B30), size: 18),
+                      SizedBox(width: 8),
+                      Text('Benutzer melden',
+                          style: TextStyle(color: Colors.white)),
+                    ],
+                  ),
+                ),
+                PopupMenuItem(
+                  value: 'block',
+                  child: Row(
+                    children: [
+                      Icon(Icons.block,
+                          color: Color(0xFFFF3B30), size: 18),
+                      SizedBox(width: 8),
+                      Text('Blockieren',
+                          style: TextStyle(color: Color(0xFFFF3B30))),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+        ],
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator(color: Color(0xFFFF3B30)))
@@ -149,54 +187,15 @@ class _UserProfilePageState extends State<UserProfilePage> with SingleTickerProv
                             ],
                           ),
                           const SizedBox(height: 16),
-                          // Follow Button
+                          // Follow Button: 3 Zustände
+                          //   accepted → "Folgst du" (grau, Tap = unfollow)
+                          //   pending  → "Anfrage gesendet" (grau, Tap = zurückziehen)
+                          //   none     → bei privatem Konto "Anfrage senden",
+                          //              sonst "Folgen" (rot)
                           if (!_isOwnProfile)
                             SizedBox(
                               width: double.infinity,
-                              child: ElevatedButton(
-                                onPressed: () async {
-                                  final wasFollowing = _isFollowing;
-                                  final provider =
-                                      context.read<CommunityProvider>();
-                                  setState(() {
-                                    _isFollowing = !wasFollowing;
-                                    // Optimistisch Follower-Count aktualisieren
-                                    final currentCount = (_stats['follower_count'] as int?) ?? 0;
-                                    _stats['follower_count'] = wasFollowing ? currentCount - 1 : currentCount + 1;
-                                  });
-                                  try {
-                                    if (wasFollowing) {
-                                      await provider.unfollowUser(widget.userId);
-                                    } else {
-                                      await provider.followUser(widget.userId);
-                                    }
-                                  } catch (e) {
-                                    debugPrint('[UserProfile] Follow/Unfollow fehlgeschlagen: $e');
-                                    if (mounted) {
-                                      setState(() {
-                                        _isFollowing = wasFollowing;
-                                        final currentCount = (_stats['follower_count'] as int?) ?? 0;
-                                        _stats['follower_count'] = wasFollowing ? currentCount + 1 : currentCount - 1;
-                                      });
-                                    }
-                                  }
-                                },
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: _isFollowing ? Colors.transparent : const Color(0xFFFF3B30),
-                                  side: _isFollowing ? const BorderSide(color: Colors.grey) : null,
-                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                                  padding: const EdgeInsets.symmetric(vertical: 12),
-                                  elevation: 0,
-                                ),
-                                child: Text(
-                                  _isFollowing ? 'Folgst du' : 'Folgen',
-                                  style: TextStyle(
-                                    color: _isFollowing ? Colors.grey : Colors.white,
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 15,
-                                  ),
-                                ),
-                              ),
+                              child: _buildFollowButton(),
                             ),
                         ],
                       ),
@@ -225,7 +224,7 @@ class _UserProfilePageState extends State<UserProfilePage> with SingleTickerProv
                   controller: _tabController,
                   children: [
                     // Posts Tab
-                    (_isPrivate && !_isMutual && !_isOwnProfile)
+                    (_isPrivate && !_isFollowing && !_isOwnProfile)
                         ? _buildPrivateMessage()
                         : _posts.isEmpty
                             ? const Center(child: Text('Noch keine Posts', style: TextStyle(color: Colors.grey)))
@@ -235,7 +234,7 @@ class _UserProfilePageState extends State<UserProfilePage> with SingleTickerProv
                                 itemBuilder: (context, index) => _buildPostItem(_posts[index]),
                               ),
                     // Reposts Tab
-                    (_isPrivate && !_isMutual && !_isOwnProfile)
+                    (_isPrivate && !_isFollowing && !_isOwnProfile)
                         ? _buildPrivateMessage()
                         : _reposts.isEmpty
                             ? const Center(child: Text('Noch keine Reposts', style: TextStyle(color: Colors.grey)))
@@ -248,6 +247,95 @@ class _UserProfilePageState extends State<UserProfilePage> with SingleTickerProv
                 ),
               ),
             ),
+    );
+  }
+
+  Widget _buildFollowButton() {
+    final isAccepted = _followStatus == 'accepted';
+    final isPending = _followStatus == 'pending';
+    final label = isAccepted
+        ? 'Folgst du'
+        : isPending
+            ? 'Anfrage gesendet'
+            : (_isPrivate ? 'Anfrage senden' : 'Folgen');
+    final isFilled = !isAccepted && !isPending;
+    return ElevatedButton(
+      onPressed: () async {
+        final previousStatus = _followStatus;
+        final previousIsFollowing = _isFollowing;
+        final previousFollowers =
+            (_stats['follower_count'] as int?) ?? 0;
+        final provider = context.read<CommunityProvider>();
+
+        try {
+          if (isAccepted || isPending) {
+            // Unfollow oder Pending-Anfrage zurückziehen — beide löschen
+            // den follows-Eintrag.
+            setState(() {
+              _followStatus = 'none';
+              _isFollowing = false;
+              if (isAccepted) {
+                _stats['follower_count'] = previousFollowers - 1;
+              }
+            });
+            await provider.unfollowUser(widget.userId);
+          } else {
+            setState(() {
+              // Optimistisch: bei privatem Konto pending, sonst accepted.
+              _followStatus = _isPrivate ? 'pending' : 'accepted';
+              _isFollowing = !_isPrivate;
+              if (!_isPrivate) {
+                _stats['follower_count'] = previousFollowers + 1;
+              }
+            });
+            final status = await provider.followUser(widget.userId);
+            // Server hat Source-of-Truth — Status angleichen.
+            if (mounted) {
+              setState(() {
+                _followStatus = status;
+                _isFollowing = status == 'accepted';
+                if (status != 'accepted') {
+                  _stats['follower_count'] = previousFollowers;
+                }
+              });
+              if (status == 'pending') {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Anfrage gesendet'),
+                    backgroundColor: Color(0xFF1C1F26),
+                  ),
+                );
+              }
+            }
+          }
+        } catch (e) {
+          debugPrint('[UserProfile] Follow/Unfollow fehlgeschlagen: $e');
+          if (mounted) {
+            setState(() {
+              _followStatus = previousStatus;
+              _isFollowing = previousIsFollowing;
+              _stats['follower_count'] = previousFollowers;
+            });
+          }
+        }
+      },
+      style: ElevatedButton.styleFrom(
+        backgroundColor:
+            isFilled ? const Color(0xFFFF3B30) : Colors.transparent,
+        side: isFilled ? null : const BorderSide(color: Colors.grey),
+        shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12)),
+        padding: const EdgeInsets.symmetric(vertical: 12),
+        elevation: 0,
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          color: isFilled ? Colors.white : Colors.grey,
+          fontWeight: FontWeight.bold,
+          fontSize: 15,
+        ),
+      ),
     );
   }
 
@@ -426,6 +514,30 @@ class _UserProfilePageState extends State<UserProfilePage> with SingleTickerProv
     );
   }
 
+  /// 3-Punkte-Menü im AppBar (nur bei fremden Profilen): Melden / Blockieren.
+  /// Nach erfolgreichem Block geht's zurück zur vorherigen Seite, weil das
+  /// Profil dann ohnehin verschwunden ist (Posts gefiltert, Follow weg).
+  Future<void> _handleProfileMenu(String value, String displayName) async {
+    final username =
+        displayName.isEmpty ? 'User' : displayName.toLowerCase();
+    if (value == 'report') {
+      await ModerationActions.showReportSheet(
+        context,
+        userId: widget.userId,
+        targetLabel: '@$username',
+      );
+      return;
+    }
+    if (value == 'block') {
+      final blocked = await ModerationActions.confirmAndBlock(
+        context,
+        userId: widget.userId,
+        username: username,
+      );
+      if (blocked && mounted) Navigator.pop(context);
+    }
+  }
+
   void _openPostDetail({
     required String postId,
     required String name,
@@ -463,7 +575,7 @@ class _UserProfilePageState extends State<UserProfilePage> with SingleTickerProv
             Text('Dieses Konto ist privat', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
             SizedBox(height: 8),
             Text(
-              'Posts und Reposts sind nur sichtbar, wenn ihr euch gegenseitig folgt.',
+              'Sende eine Anfrage und warte, bis sie angenommen wird, um Posts und Reposts zu sehen.',
               style: TextStyle(color: Colors.grey, fontSize: 14),
               textAlign: TextAlign.center,
             ),

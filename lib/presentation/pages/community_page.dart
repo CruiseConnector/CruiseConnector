@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:cruise_connect/application/providers/community_provider.dart';
+import 'package:cruise_connect/application/providers/route_bookmark_provider.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/presentation/pages/create_post_page.dart';
 import 'package:cruise_connect/presentation/pages/create_group_page.dart';
@@ -13,6 +14,7 @@ import 'package:cruise_connect/presentation/pages/user_profile_page.dart';
 import 'package:cruise_connect/presentation/widgets/mentions.dart';
 import 'package:cruise_connect/presentation/widgets/route_chip.dart';
 import 'package:cruise_connect/presentation/widgets/user_avatar.dart';
+import 'package:cruise_connect/presentation/widgets/moderation_actions.dart';
 
 class CommunityPage extends StatefulWidget {
   final int refreshKey;
@@ -1165,58 +1167,21 @@ class _CommunityPageState extends State<CommunityPage>
                       _buildInlineFollowButton(postUserId, name),
                     ],
                     const Spacer(),
-                    // 3-Punkte-Menü für eigene Posts
-                    if (isOwnPost)
-                      PopupMenuButton<String>(
-                        icon: const Icon(
-                          Icons.more_horiz,
-                          color: Colors.grey,
-                          size: 18,
-                        ),
-                        color: const Color(0xFF1C1F26),
-                        padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(),
-                        onSelected: (value) async {
-                          if (value == 'delete') {
-                            final confirmed = await showDialog<bool>(
-                              context: context,
-                              builder: (ctx) => AlertDialog(
-                                backgroundColor: const Color(0xFF1C1F26),
-                                title: const Text(
-                                  'Post löschen?',
-                                  style: TextStyle(color: Colors.white),
-                                ),
-                                content: const Text(
-                                  'Dieser Post wird unwiderruflich gelöscht.',
-                                  style: TextStyle(color: Colors.grey),
-                                ),
-                                actions: [
-                                  TextButton(
-                                    onPressed: () => Navigator.pop(ctx, false),
-                                    child: const Text(
-                                      'Abbrechen',
-                                      style: TextStyle(color: Colors.grey),
-                                    ),
-                                  ),
-                                  TextButton(
-                                    onPressed: () => Navigator.pop(ctx, true),
-                                    child: const Text(
-                                      'Löschen',
-                                      style: TextStyle(
-                                        color: Color(0xFFFF3B30),
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            );
-                            if (confirmed == true) {
-                              await SocialService.deletePost(post['id']);
-                              _loadData();
-                            }
-                          }
-                        },
-                        itemBuilder: (_) => [
+                    // 3-Punkte-Menü: Owner sieht "Löschen", andere sehen
+                    // "Beitrag melden" + "Benutzer melden" + "Benutzer blockieren".
+                    PopupMenuButton<String>(
+                      icon: const Icon(
+                        Icons.more_horiz,
+                        color: Colors.grey,
+                        size: 18,
+                      ),
+                      color: const Color(0xFF1C1F26),
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(),
+                      onSelected: (value) =>
+                          _handlePostMenu(value, post, isOwnPost: isOwnPost),
+                      itemBuilder: (_) => [
+                        if (isOwnPost)
                           const PopupMenuItem(
                             value: 'delete',
                             child: Row(
@@ -1233,9 +1198,62 @@ class _CommunityPageState extends State<CommunityPage>
                                 ),
                               ],
                             ),
+                          )
+                        else ...[
+                          const PopupMenuItem(
+                            value: 'report_post',
+                            child: Row(
+                              children: [
+                                Icon(
+                                  Icons.flag_outlined,
+                                  color: Color(0xFFFF3B30),
+                                  size: 18,
+                                ),
+                                SizedBox(width: 8),
+                                Text(
+                                  'Beitrag melden',
+                                  style: TextStyle(color: Colors.white),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const PopupMenuItem(
+                            value: 'report_user',
+                            child: Row(
+                              children: [
+                                Icon(
+                                  Icons.person_off_outlined,
+                                  color: Color(0xFFFF3B30),
+                                  size: 18,
+                                ),
+                                SizedBox(width: 8),
+                                Text(
+                                  'Benutzer melden',
+                                  style: TextStyle(color: Colors.white),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const PopupMenuItem(
+                            value: 'block',
+                            child: Row(
+                              children: [
+                                Icon(
+                                  Icons.block,
+                                  color: Color(0xFFFF3B30),
+                                  size: 18,
+                                ),
+                                SizedBox(width: 8),
+                                Text(
+                                  'Benutzer blockieren',
+                                  style: TextStyle(color: Color(0xFFFF3B30)),
+                                ),
+                              ],
+                            ),
                           ),
                         ],
-                      ),
+                      ],
+                    ),
                   ],
                 ),
                 const SizedBox(height: 4),
@@ -1297,6 +1315,10 @@ class _CommunityPageState extends State<CommunityPage>
                       postId: post['id'],
                       initialCount: post['likes_count'] ?? 0,
                     ),
+                    if (post['shared_route_id'] != null)
+                      _RouteBookmarkButton(
+                        routeId: post['shared_route_id'] as String,
+                      ),
                     // Share
                     GestureDetector(
                       onTap: () => _sharePost(post),
@@ -1314,6 +1336,90 @@ class _CommunityPageState extends State<CommunityPage>
         ],
       ),
     );
+  }
+
+  /// Reaktion auf das 3-Punkte-Menü an einem Post:
+  /// - `delete`        → eigenen Post löschen
+  /// - `report_post`   → Beitrag-Meldung
+  /// - `report_user`   → User-Meldung
+  /// - `block`         → User blockieren (Confirm + Provider)
+  Future<void> _handlePostMenu(
+    String value,
+    Map<String, dynamic> post, {
+    required bool isOwnPost,
+  }) async {
+    final postId = post['id'] as String?;
+    final postUserId = post['user_id'] as String?;
+    final profile = post['profiles'] as Map<String, dynamic>?;
+    final username =
+        (profile?['username'] as String?) ??
+        (profile?['email'] as String?)?.split('@').first ??
+        'User';
+
+    if (value == 'delete' && isOwnPost && postId != null) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: const Color(0xFF1C1F26),
+          title: const Text(
+            'Post löschen?',
+            style: TextStyle(color: Colors.white),
+          ),
+          content: const Text(
+            'Dieser Post wird unwiderruflich gelöscht.',
+            style: TextStyle(color: Colors.grey),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text(
+                'Abbrechen',
+                style: TextStyle(color: Colors.grey),
+              ),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text(
+                'Löschen',
+                style: TextStyle(color: Color(0xFFFF3B30)),
+              ),
+            ),
+          ],
+        ),
+      );
+      if (confirmed == true) {
+        await SocialService.deletePost(postId);
+        _loadData();
+      }
+      return;
+    }
+
+    if (value == 'report_post' && postId != null) {
+      await ModerationActions.showReportSheet(
+        context,
+        postId: postId,
+        targetLabel: 'Beitrag',
+      );
+      return;
+    }
+
+    if (value == 'report_user' && postUserId != null) {
+      await ModerationActions.showReportSheet(
+        context,
+        userId: postUserId,
+        targetLabel: '@$username',
+      );
+      return;
+    }
+
+    if (value == 'block' && postUserId != null) {
+      await ModerationActions.confirmAndBlock(
+        context,
+        userId: postUserId,
+        username: username,
+      );
+      return;
+    }
   }
 
   Widget _buildInlineFollowButton(String targetUserId, String name) {
@@ -2332,6 +2438,15 @@ class _CommunityPageState extends State<CommunityPage>
                               message = '$fromName folgt dir jetzt';
                               icon = Icons.person_add;
                               break;
+                            case 'follow_request':
+                              message = '$fromName möchte dir folgen';
+                              icon = Icons.person_add_alt_1;
+                              break;
+                            case 'follow_accepted':
+                              message =
+                                  '$fromName hat deine Anfrage angenommen';
+                              icon = Icons.check_circle;
+                              break;
                             case 'like':
                               message = '$fromName hat deinen Post geliked';
                               icon = Icons.favorite;
@@ -2341,11 +2456,13 @@ class _CommunityPageState extends State<CommunityPage>
                               icon = Icons.comment;
                               break;
                             case 'comment_reply':
-                              message = '$fromName hat auf deinen Kommentar geantwortet';
+                              message =
+                                  '$fromName hat auf deinen Kommentar geantwortet';
                               icon = Icons.reply;
                               break;
                             case 'comment_like':
-                              message = '$fromName hat deinen Kommentar geliked';
+                              message =
+                                  '$fromName hat deinen Kommentar geliked';
                               icon = Icons.favorite;
                               break;
                             case 'repost':
@@ -2353,7 +2470,8 @@ class _CommunityPageState extends State<CommunityPage>
                               icon = Icons.repeat;
                               break;
                             case 'group_invite':
-                              message = '$fromName hat dich in eine Gruppe eingeladen';
+                              message =
+                                  '$fromName hat dich in eine Gruppe eingeladen';
                               icon = Icons.group_add;
                               break;
                             case 'mention':
@@ -2366,84 +2484,70 @@ class _CommunityPageState extends State<CommunityPage>
                           }
 
                           return ListTile(
-                  onTap: () {
-                    Navigator.pop(sheetContext);
-                    if (fromId != null) {
-                      Future.delayed(const Duration(milliseconds: 150), () {
-                        if (mounted) _openUserProfile(fromId, fromName);
-                      });
-                    }
-                  },
-                  leading: Stack(
-                    clipBehavior: Clip.none,
-                    children: [
-                      UserAvatar.fromProfile(
-                        from,
-                        fallbackName: fromName.toString(),
-                        radius: 18,
-                      ),
-                      Positioned(
-                        right: -2,
-                        bottom: -2,
-                        child: Container(
-                          padding: const EdgeInsets.all(3),
-                          decoration: const BoxDecoration(
-                            color: Color(0xFF0B0E14),
-                            shape: BoxShape.circle,
-                          ),
-                          child: Icon(
-                            icon,
-                            color: const Color(0xFFFF3B30),
-                            size: 12,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                  title: Text(
-                    message,
-                    style: const TextStyle(color: Colors.white, fontSize: 14),
-                  ),
-                  subtitle: Text(
-                    _formatTimeAgo(n['created_at']),
-                    style: const TextStyle(color: Colors.grey, fontSize: 12),
-                  ),
-                  trailing: type == 'group_invite' && n['reference_id'] != null
-                      ? GestureDetector(
-                          onTap: () async {
-                            await SocialService.joinGroup(n['reference_id']);
-                            if (!context.mounted) return;
-                            Navigator.pop(sheetContext);
-                            if (mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                  content: Text('Gruppe beigetreten!'),
-                                  backgroundColor: Color(0xFF1C1F26),
+                            onTap: () {
+                              Navigator.pop(sheetContext);
+                              if (fromId != null) {
+                                Future.delayed(
+                                  const Duration(milliseconds: 150),
+                                  () {
+                                    if (mounted)
+                                      _openUserProfile(fromId, fromName);
+                                  },
+                                );
+                              }
+                            },
+                            leading: Stack(
+                              clipBehavior: Clip.none,
+                              children: [
+                                UserAvatar.fromProfile(
+                                  from,
+                                  fallbackName: fromName.toString(),
+                                  radius: 18,
                                 ),
-                              );
-                              _loadData();
-                            }
-                          },
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 12,
-                              vertical: 6,
-                            ),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFFFF3B30),
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                                  child: const Text(
-                                    'Beitreten',
-                                    style: TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.bold,
+                                Positioned(
+                                  right: -2,
+                                  bottom: -2,
+                                  child: Container(
+                                    padding: const EdgeInsets.all(3),
+                                    decoration: const BoxDecoration(
+                                      color: Color(0xFF0B0E14),
+                                      shape: BoxShape.circle,
+                                    ),
+                                    child: Icon(
+                                      icon,
+                                      color: const Color(0xFFFF3B30),
+                                      size: 12,
                                     ),
                                   ),
                                 ),
-                              )
-                            : null,
+                              ],
+                            ),
+                            title: Text(
+                              message,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 14,
+                              ),
+                            ),
+                            subtitle: Text(
+                              _formatTimeAgo(n['created_at']),
+                              style: const TextStyle(
+                                color: Colors.grey,
+                                fontSize: 12,
+                              ),
+                            ),
+                            trailing: _buildNotificationTrailing(
+                              type: type as String?,
+                              referenceId: n['reference_id'] as String?,
+                              fromId: fromId,
+                              sheetContext: sheetContext,
+                              setSheetState: () {
+                                // Mark as handled lokal: type→null verhindert dass die
+                                // Buttons zweimal feuern. Reicht als optisches Feedback;
+                                // beim nächsten _loadData ist der DB-State eh aktuell.
+                                n['type'] = '_handled';
+                              },
+                            ),
                           );
                         },
                       ),
@@ -2453,6 +2557,116 @@ class _CommunityPageState extends State<CommunityPage>
         );
       },
     );
+  }
+
+  Widget? _buildNotificationTrailing({
+    required String? type,
+    required String? referenceId,
+    required String? fromId,
+    required BuildContext sheetContext,
+    required VoidCallback setSheetState,
+  }) {
+    if (type == 'group_invite' && referenceId != null) {
+      return GestureDetector(
+        onTap: () async {
+          await SocialService.joinGroup(referenceId);
+          if (!sheetContext.mounted) return;
+          Navigator.pop(sheetContext);
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Gruppe beigetreten!'),
+                backgroundColor: Color(0xFF1C1F26),
+              ),
+            );
+            _loadData();
+          }
+        },
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            color: const Color(0xFFFF3B30),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: const Text(
+            'Beitreten',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 12,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ),
+      );
+    }
+
+    if (type == 'follow_request' && fromId != null) {
+      final provider = context.read<CommunityProvider>();
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          GestureDetector(
+            onTap: () async {
+              setSheetState();
+              await provider.acceptFollowRequest(fromId);
+              if (!mounted) return;
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('Anfrage angenommen'),
+                  backgroundColor: Color(0xFF1C1F26),
+                ),
+              );
+            },
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFF3B30),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Text(
+                'Annehmen',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 6),
+          GestureDetector(
+            onTap: () async {
+              setSheetState();
+              await provider.rejectFollowRequest(fromId);
+              if (!mounted) return;
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('Anfrage abgelehnt'),
+                  backgroundColor: Color(0xFF1C1F26),
+                ),
+              );
+            },
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                border: Border.all(color: Colors.grey),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Text(
+                'Ablehnen',
+                style: TextStyle(
+                  color: Colors.grey,
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ),
+        ],
+      );
+    }
+
+    return null;
   }
 }
 
@@ -2534,6 +2748,49 @@ class _FollowButtonState extends State<_FollowButton> {
 }
 
 // ── Post Like Button ──────────────────────────────────────────────────
+
+class _RouteBookmarkButton extends StatefulWidget {
+  const _RouteBookmarkButton({required this.routeId});
+
+  final String routeId;
+
+  @override
+  State<_RouteBookmarkButton> createState() => _RouteBookmarkButtonState();
+}
+
+class _RouteBookmarkButtonState extends State<_RouteBookmarkButton> {
+  @override
+  void initState() {
+    super.initState();
+    final provider = context.read<RouteBookmarkProvider>();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) provider.ensureChecked(widget.routeId);
+    });
+  }
+
+  @override
+  void didUpdateWidget(covariant _RouteBookmarkButton oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.routeId != widget.routeId) {
+      context.read<RouteBookmarkProvider>().ensureChecked(widget.routeId);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final provider = context.watch<RouteBookmarkProvider>();
+    final saved = provider.isSaved(widget.routeId);
+
+    return GestureDetector(
+      onTap: () => context.read<RouteBookmarkProvider>().toggle(widget.routeId),
+      child: Icon(
+        saved ? Icons.bookmark : Icons.bookmark_border,
+        color: saved ? const Color(0xFFFFD166) : Colors.grey,
+        size: 18,
+      ),
+    );
+  }
+}
 
 class _PostLikeButton extends StatefulWidget {
   final String postId;
