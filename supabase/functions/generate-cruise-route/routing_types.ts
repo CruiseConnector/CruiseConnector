@@ -3,6 +3,12 @@ export interface Coordinate {
   longitude: number;
 }
 
+export interface PreferenceArea extends Coordinate {
+  radius_m?: number;
+  bearing_from_start?: number;
+  distance_from_start_km?: number;
+}
+
 export type RouteMode =
   | "Kurvenjagd"
   | "Sport Mode"
@@ -19,13 +25,7 @@ export interface RequestData {
   original_planning_type?: "waypoints" | "Wegpunkte";
   effective_planning_type?: "random" | "Zufall";
   generation_mode?: "random_with_preferences";
-  preference_areas?: Array<
-    Coordinate & {
-      radius_m?: number;
-      bearing_from_start?: number;
-      distance_from_start_km?: number;
-    }
-  >;
+  preference_areas?: PreferenceArea[];
   preference_area_count?: number;
   preference_applied?: boolean;
   close_loop?: boolean;
@@ -78,6 +78,18 @@ export interface RouteQualityEvaluation {
   coordinateCount: number;
   actualDistanceKm: number;
   distanceDeltaKm: number;
+  preferenceMatchScore?: number;
+  matchedPreferenceCount?: number;
+  preferenceAreaDistancesMeters?: number[];
+  preferenceIgnoredReason?: string | null;
+  shapeMetrics?: RouteShapeMetrics;
+}
+
+export interface PreferenceMatchSummary {
+  matchedPreferenceCount: number;
+  preferenceMatchScore: number;
+  preferenceAreaDistancesMeters: number[];
+  preferenceIgnoredReason?: string | null;
 }
 
 export interface RouteStyleMetrics {
@@ -92,6 +104,32 @@ export interface RouteStyleMetrics {
   zigzagScore: number;
   stubPenalty: number;
   sectorDiversityScore: number;
+  loopnessScore: number;
+  spurScore: number;
+  deadEndArmScore: number;
+  outAndBackScore: number;
+  overlapScore: number;
+}
+
+export interface RouteShapeMetrics {
+  loopnessScore: number;
+  spurScore: number;
+  deadEndArmScore: number;
+  outAndBackScore: number;
+  overlapScore: number;
+  centralReturnPercent: number;
+  centerReentryCount: number;
+  radialPeakCount: number;
+  middleCoverageRatio: number;
+  geometricUTurnCount: number;
+  oppositeOverlapPercent: number;
+  foldedLoopPenalty: number;
+  repeatedStartAreaPercent: number;
+  spurArmPercent: number;
+  cleanupRemovedPercent: number;
+  cleanupDistanceRetentionRatio: number;
+  cleanupLoopCount: number;
+  cleanupUTurnCount: number;
 }
 
 export interface RouteCleanupEvaluation {
@@ -129,6 +167,7 @@ export interface RoundTripSearchResult {
   emergencyDuplicateUsed?: boolean;
   terminalShortCircuit?: boolean;
   exhausted?: boolean;
+  preferenceMatch?: PreferenceMatchSummary | null;
 }
 
 export interface MapboxRouteFetchResult {

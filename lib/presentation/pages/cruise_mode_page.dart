@@ -202,6 +202,8 @@ class _CruiseModePageState extends State<CruiseModePage>
   final MapController _mapController = MapController();
   bool _mapReady = false;
   final List<LatLng> _roundTripWaypoints = [];
+  int? _selectedRoundTripWaypointIndex;
+  int? _replaceRoundTripWaypointIndex;
   int _waypointSeedCounter = 0;
   // Route als LatLng-Liste für PolylineLayer
   List<LatLng> _routeLatLngs = [];
@@ -648,6 +650,8 @@ class _CruiseModePageState extends State<CruiseModePage>
       if (!isRoundTrip) {
         _planningType = 'Zufall';
         _roundTripWaypoints.clear();
+        _selectedRoundTripWaypointIndex = null;
+        _replaceRoundTripWaypointIndex = null;
       }
     });
     _dismissTransientRouteUi();
@@ -664,6 +668,8 @@ class _CruiseModePageState extends State<CruiseModePage>
       _planningType = planningType;
       if (planningType == 'Zufall') {
         _roundTripWaypoints.clear();
+        _selectedRoundTripWaypointIndex = null;
+        _replaceRoundTripWaypointIndex = null;
       }
     });
     _dismissTransientRouteUi();
@@ -688,25 +694,116 @@ class _CruiseModePageState extends State<CruiseModePage>
 
   void _handleMapTap(TapPosition tapPosition, LatLng point) {
     if (!_isWaypointPlanning || _isLoading || _isRouteConfirmed) return;
+    final replaceIndex = _replaceRoundTripWaypointIndex;
+    if (replaceIndex != null &&
+        replaceIndex >= 0 &&
+        replaceIndex < _roundTripWaypoints.length) {
+      setState(() {
+        _roundTripWaypoints[replaceIndex] = point;
+        _selectedRoundTripWaypointIndex = replaceIndex;
+        _replaceRoundTripWaypointIndex = null;
+      });
+      _invalidateWaypointPreview();
+      HapticFeedback.selectionClick();
+      return;
+    }
     if (_roundTripWaypoints.length >= 3) {
       _showError('Maximal 3 Bereiche möglich.', isCritical: false);
       return;
     }
-    setState(() => _roundTripWaypoints.add(point));
+    setState(() {
+      _roundTripWaypoints.add(point);
+      _selectedRoundTripWaypointIndex = _roundTripWaypoints.length - 1;
+      _replaceRoundTripWaypointIndex = null;
+    });
     _invalidateWaypointPreview();
     HapticFeedback.selectionClick();
   }
 
   void _removeLastRoundTripWaypoint() {
     if (_isLoading || _roundTripWaypoints.isEmpty) return;
-    setState(() => _roundTripWaypoints.removeLast());
+    setState(() {
+      _roundTripWaypoints.removeLast();
+      if (_roundTripWaypoints.isEmpty) {
+        _selectedRoundTripWaypointIndex = null;
+        _replaceRoundTripWaypointIndex = null;
+      } else {
+        final selected = _selectedRoundTripWaypointIndex;
+        if (selected == null || selected >= _roundTripWaypoints.length) {
+          _selectedRoundTripWaypointIndex = _roundTripWaypoints.length - 1;
+        }
+        final replacing = _replaceRoundTripWaypointIndex;
+        if (replacing != null && replacing >= _roundTripWaypoints.length) {
+          _replaceRoundTripWaypointIndex = null;
+        }
+      }
+    });
     _invalidateWaypointPreview();
   }
 
   void _clearRoundTripWaypoints() {
     if (_isLoading || _roundTripWaypoints.isEmpty) return;
-    setState(_roundTripWaypoints.clear);
+    setState(() {
+      _roundTripWaypoints.clear();
+      _selectedRoundTripWaypointIndex = null;
+      _replaceRoundTripWaypointIndex = null;
+    });
     _invalidateWaypointPreview();
+  }
+
+  void _selectRoundTripWaypoint(int index) {
+    if (_isLoading || index < 0 || index >= _roundTripWaypoints.length) return;
+    setState(() {
+      _selectedRoundTripWaypointIndex = index;
+      _replaceRoundTripWaypointIndex = null;
+    });
+    HapticFeedback.selectionClick();
+  }
+
+  void _deleteRoundTripWaypoint(int index) {
+    if (_isLoading || index < 0 || index >= _roundTripWaypoints.length) return;
+    setState(() {
+      _roundTripWaypoints.removeAt(index);
+      final selected = _selectedRoundTripWaypointIndex;
+      if (_roundTripWaypoints.isEmpty) {
+        _selectedRoundTripWaypointIndex = null;
+      } else if (selected == null) {
+        _selectedRoundTripWaypointIndex = null;
+      } else if (selected == index) {
+        _selectedRoundTripWaypointIndex = math.min(
+          index,
+          _roundTripWaypoints.length - 1,
+        );
+      } else if (selected > index) {
+        _selectedRoundTripWaypointIndex = selected - 1;
+      }
+      final replacing = _replaceRoundTripWaypointIndex;
+      if (replacing == null || replacing == index) {
+        _replaceRoundTripWaypointIndex = null;
+      } else if (replacing > index) {
+        _replaceRoundTripWaypointIndex = replacing - 1;
+      }
+    });
+    _invalidateWaypointPreview();
+    HapticFeedback.selectionClick();
+  }
+
+  void _removeSelectedRoundTripWaypoint() {
+    final selected = _selectedRoundTripWaypointIndex;
+    if (selected == null) return;
+    _deleteRoundTripWaypoint(selected);
+  }
+
+  void _replaceSelectedRoundTripWaypoint() {
+    final selected = _selectedRoundTripWaypointIndex;
+    if (_isLoading || selected == null) return;
+    if (selected < 0 || selected >= _roundTripWaypoints.length) return;
+    setState(() => _replaceRoundTripWaypointIndex = selected);
+    _showError(
+      'Tippe auf die Karte, um Bereich ${selected + 1} neu zu setzen.',
+      isCritical: false,
+    );
+    HapticFeedback.selectionClick();
   }
 
   void _generateRoundTripWaypointSeed() {
@@ -742,6 +839,8 @@ class _CruiseModePageState extends State<CruiseModePage>
       _roundTripWaypoints
         ..clear()
         ..addAll(points);
+      _selectedRoundTripWaypointIndex = points.isEmpty ? null : 0;
+      _replaceRoundTripWaypointIndex = null;
     });
     _invalidateWaypointPreview();
   }
@@ -1137,9 +1236,19 @@ class _CruiseModePageState extends State<CruiseModePage>
                         onDestinationInputChanged:
                             _handleDestinationInputChanged,
                         roundTripWaypointCount: _roundTripWaypoints.length,
+                        selectedWaypointIndex: _selectedRoundTripWaypointIndex,
+                        replacingWaypointIndex: _replaceRoundTripWaypointIndex,
                         waypointActionsEnabled: !_isLoading,
                         onGenerateWaypointSeed: _generateRoundTripWaypointSeed,
                         onRemoveLastWaypoint: _removeLastRoundTripWaypoint,
+                        onDeleteSelectedWaypoint:
+                            _selectedRoundTripWaypointIndex == null
+                            ? null
+                            : _removeSelectedRoundTripWaypoint,
+                        onReplaceSelectedWaypoint:
+                            _selectedRoundTripWaypointIndex == null
+                            ? null
+                            : _replaceSelectedRoundTripWaypoint,
                         onClearWaypoints: _clearRoundTripWaypoints,
                         onDestinationCleared: () => setState(() {
                           _selectedDestination = null;
@@ -1439,11 +1548,15 @@ class _CruiseModePageState extends State<CruiseModePage>
                   child: GestureDetector(
                     onTap: _isLoading
                         ? null
-                        : () {
-                            setState(() => _roundTripWaypoints.removeAt(i));
-                            _invalidateWaypointPreview();
-                          },
-                    child: _buildWaypointMarker(i + 1),
+                        : () => _selectRoundTripWaypoint(i),
+                    onLongPress: _isLoading
+                        ? null
+                        : () => _deleteRoundTripWaypoint(i),
+                    child: _buildWaypointMarker(
+                      i + 1,
+                      selected: _selectedRoundTripWaypointIndex == i,
+                      replacing: _replaceRoundTripWaypointIndex == i,
+                    ),
                   ),
                 ),
             ],
@@ -1602,27 +1715,43 @@ class _CruiseModePageState extends State<CruiseModePage>
     );
   }
 
-  Widget _buildWaypointMarker(int index) {
-    return Container(
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        color: const Color(0xFFFF3B30),
-        border: Border.all(color: Colors.white, width: 2),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.35),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
+  Widget _buildWaypointMarker(
+    int index, {
+    bool selected = false,
+    bool replacing = false,
+  }) {
+    final color = replacing
+        ? const Color(0xFFFFC107)
+        : selected
+        ? const Color(0xFF00E5FF)
+        : const Color(0xFFFF3B30);
+    return AnimatedScale(
+      duration: const Duration(milliseconds: 160),
+      scale: selected || replacing ? 1.12 : 1.0,
+      child: Container(
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: color,
+          border: Border.all(
+            color: replacing ? Colors.black87 : Colors.white,
+            width: selected || replacing ? 3 : 2,
           ),
-        ],
-      ),
-      alignment: Alignment.center,
-      child: Text(
-        '$index',
-        style: const TextStyle(
-          color: Colors.white,
-          fontWeight: FontWeight.w900,
-          fontSize: 14,
+          boxShadow: [
+            BoxShadow(
+              color: color.withValues(alpha: 0.45),
+              blurRadius: selected || replacing ? 16 : 10,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        alignment: Alignment.center,
+        child: Text(
+          '$index',
+          style: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.w900,
+            fontSize: 14,
+          ),
         ),
       ),
     );
@@ -2168,6 +2297,7 @@ class _CruiseModePageState extends State<CruiseModePage>
           _configCollapsed = true;
           _showRouteInfoBanner = true;
         });
+        _maybeShowWaypointPreferenceNotice(result);
       }
       debugPrint('[CruiseMode] Route generation SUCCESS');
     } catch (e, stack) {
@@ -2235,6 +2365,35 @@ class _CruiseModePageState extends State<CruiseModePage>
     GamificationService.countCurvesAsync(result.coordinates).then((count) {
       if (mounted) setState(() => _cachedCurveCount = count);
     });
+  }
+
+  void _maybeShowWaypointPreferenceNotice(RouteResult result) {
+    if (!_isWaypointPlanning || !mounted || _disposed) return;
+    final meta = result.edgeMeta;
+    final areaCount = meta['preference_area_count'];
+    if (areaCount is! num || areaCount <= 0) return;
+    final matched = meta['matched_preference_count'];
+    final reason = meta['preference_ignored_reason']?.toString();
+    final ignored = reason == 'all_preference_areas_far';
+    final partial =
+        reason == 'partial_preference_match' ||
+        (matched is num && matched < areaCount);
+    if (!ignored && !partial) return;
+
+    final message = ignored
+        ? 'Wir haben eine saubere Route gefunden, aber deine Bereiche konnten kaum berücksichtigt werden.'
+        : 'Wir haben eine saubere Route gefunden, aber deine Bereiche wurden nur teilweise berücksichtigt.';
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(message, style: const TextStyle(color: Colors.white)),
+          backgroundColor: const Color(0xFF2A2F3A),
+          behavior: SnackBarBehavior.floating,
+          margin: const EdgeInsets.all(16),
+          duration: const Duration(seconds: 5),
+        ),
+      );
   }
 
   Future<RouteResult> _prepareRouteForPreviewStart({
@@ -4937,25 +5096,26 @@ class _CruiseModePageState extends State<CruiseModePage>
     if (!mounted || _disposed) return;
     debugPrint('[CruiseMode] Error: $message (critical=$isCritical)');
 
-    // Für kritische Fehler (Route konnte nicht generiert werden): Snackbar zeigen
-    if (isCritical) {
-      final messenger = ScaffoldMessenger.of(context);
-      messenger.clearSnackBars();
-      messenger.showSnackBar(
-        SnackBar(
-          content: Text(message, style: const TextStyle(color: Colors.white)),
-          backgroundColor: const Color(0xFFFF3B30),
-          behavior: SnackBarBehavior.floating,
-          margin: const EdgeInsets.all(16),
-          duration: const Duration(seconds: 4),
-          action: SnackBarAction(
-            label: 'OK',
-            textColor: Colors.white,
-            onPressed: () {},
-          ),
-        ),
-      );
-    }
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.clearSnackBars();
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(message, style: const TextStyle(color: Colors.white)),
+        backgroundColor: isCritical
+            ? const Color(0xFFFF3B30)
+            : const Color(0xFF2A2F3A),
+        behavior: SnackBarBehavior.floating,
+        margin: const EdgeInsets.all(16),
+        duration: Duration(seconds: isCritical ? 4 : 3),
+        action: isCritical
+            ? SnackBarAction(
+                label: 'OK',
+                textColor: Colors.white,
+                onPressed: () {},
+              )
+            : null,
+      ),
+    );
   }
 }
 

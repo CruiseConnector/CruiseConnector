@@ -89,6 +89,13 @@ class RouteService {
   static bool lastRoutePoolRejectedTooFar = false;
   static bool lastRoutePoolExactBucketMissing = false;
   static bool lastRouteAlternativeDistanceOffered = false;
+  static int lastRoutePoolCandidateCount = 0;
+  static int lastRoutePoolSeenCandidateCount = 0;
+  static bool lastRouteDuplicateSkipped = false;
+  static String? lastRouteSourceDecision;
+  static String? lastRouteLiveAttemptReason;
+  static String? lastRoutePoolUsedReason;
+  static List<String> lastRoutePreviousFingerprints = const [];
   static int? lastRouteRequestedDistanceBucket;
   static int? lastRouteReturnedDistanceBucket;
   static bool lastRouteAccessLegUsed = false;
@@ -177,6 +184,13 @@ class RouteService {
     lastRoutePoolRejectedTooFar = false;
     lastRoutePoolExactBucketMissing = false;
     lastRouteAlternativeDistanceOffered = false;
+    lastRoutePoolCandidateCount = 0;
+    lastRoutePoolSeenCandidateCount = 0;
+    lastRouteDuplicateSkipped = false;
+    lastRouteSourceDecision = null;
+    lastRouteLiveAttemptReason = null;
+    lastRoutePoolUsedReason = null;
+    lastRoutePreviousFingerprints = const [];
     lastRouteRequestedDistanceBucket = null;
     lastRouteReturnedDistanceBucket = null;
     lastRouteAccessLegUsed = false;
@@ -327,6 +341,12 @@ class RouteService {
     _activeScenarioKeyForDebug = scenario.scenarioKey;
     _activeForceFreshVariantForDebug = forceFreshVariant;
     _activeTriggerForDebug = debugTrigger;
+    lastRouteSourceDecision = poolHealingFirstPolicy
+        ? 'hybrid_short_no_highway'
+        : 'live_first';
+    lastRouteLiveAttemptReason = forceFreshVariant
+        ? 'search_again_force_fresh'
+        : 'initial_search';
 
     if (forceFreshVariant) {
       RouteGenerationCoordinator.suspendBackgroundPreparation();
@@ -343,12 +363,14 @@ class RouteService {
       RoutePoolCoverageCheck? poolHealingCoverage;
 
       if (_isFreeTier(lastRouteSubscriptionTier)) {
+        lastRouteSourceDecision = 'pool_only_free';
         final freePoolRoute = await _tryRoutePoolFallback(
           scenario: scenario,
           styleConfig: styleConfig,
           userLat: startPosition.latitude,
           userLng: startPosition.longitude,
           fallbackReason: 'free_pool_only',
+          allowDuplicateFallback: forceFreshVariant,
         );
         if (freePoolRoute != null) {
           return freePoolRoute;
@@ -376,12 +398,14 @@ class RouteService {
       }
 
       if (_isBasicTier(lastRouteSubscriptionTier)) {
+        lastRouteSourceDecision = 'pool_first_basic';
         final basicPoolRoute = await _tryRoutePoolFallback(
           scenario: scenario,
           styleConfig: styleConfig,
           userLat: startPosition.latitude,
           userLng: startPosition.longitude,
           fallbackReason: 'pool_first_basic',
+          allowDuplicateFallback: forceFreshVariant,
         );
         if (basicPoolRoute != null) {
           return basicPoolRoute;
@@ -410,16 +434,6 @@ class RouteService {
       if (poolHealingFirstPolicy &&
           !_isFreeTier(lastRouteSubscriptionTier) &&
           !_isBasicTier(lastRouteSubscriptionTier)) {
-        final poolFirstRoute = await _tryRoutePoolFallback(
-          scenario: scenario,
-          styleConfig: styleConfig,
-          userLat: startPosition.latitude,
-          userLng: startPosition.longitude,
-          fallbackReason: 'pool_first_short_no_highway',
-        );
-        if (poolFirstRoute != null) {
-          return poolFirstRoute;
-        }
         poolHealingCoverage = await _ensureCoverageBootstrapStatus(
           scenario: scenario,
           userLat: startPosition.latitude,
@@ -432,12 +446,44 @@ class RouteService {
         }
         if (poolHealingCoverage != null &&
             _shouldStopLiveForPoolHealingCoverage(poolHealingCoverage)) {
+          lastRouteSourceDecision = 'pool_or_warmup_live_blocked';
+          lastRouteLiveAttemptReason = 'blocked_by_coverage_status';
+          final poolBlockedRoute = await _tryRoutePoolFallback(
+            scenario: scenario,
+            styleConfig: styleConfig,
+            userLat: startPosition.latitude,
+            userLng: startPosition.longitude,
+            fallbackReason: 'live_blocked_by_coverage_status',
+            allowDuplicateFallback: forceFreshVariant,
+          );
+          if (poolBlockedRoute != null) {
+            return poolBlockedRoute;
+          }
           throw await _buildCoverageWarmupException(
             scenario: scenario,
             coverage: poolHealingCoverage,
             lastError: null,
           );
         }
+        if (!forceFreshVariant && poolHealingCoverage?.poolHealthy == true) {
+          lastRouteSourceDecision = 'healthy_pool_first';
+          final healthyPoolRoute = await _tryRoutePoolFallback(
+            scenario: scenario,
+            styleConfig: styleConfig,
+            userLat: startPosition.latitude,
+            userLng: startPosition.longitude,
+            fallbackReason: 'healthy_pool_first',
+          );
+          if (healthyPoolRoute != null) {
+            return healthyPoolRoute;
+          }
+        }
+        lastRouteSourceDecision = forceFreshVariant
+            ? 'search_again_live_first'
+            : 'live_first_pool_thin_or_unavailable';
+        lastRouteLiveAttemptReason = forceFreshVariant
+            ? 'search_again_force_fresh'
+            : 'pool_not_healthy_enough';
       }
 
       final prepared = forceFreshVariant
@@ -508,6 +554,7 @@ class RouteService {
           );
           if (candidate.accepted) {
             if (!candidate.novelEnough) {
+              lastRouteDuplicateSkipped = true;
               debugPrint(
                 '[RouteService] RoundTrip candidate ${attempt + 1}/$maxAttempts ist brauchbar, aber zu ähnlich zur letzten Route.',
               );
@@ -597,6 +644,7 @@ class RouteService {
         userLat: startPosition.latitude,
         userLng: startPosition.longitude,
         fallbackReason: lastError?.type.name ?? 'no_accepted_mapbox_route',
+        allowDuplicateFallback: forceFreshVariant,
       );
       if (poolFallback != null) {
         return poolFallback;
@@ -4019,6 +4067,9 @@ class RouteService {
     lastRouteFromCache = fromCache;
     lastRouteDebugFingerprint = fingerprint;
     lastRouteSimilarityToPreviousPercent = similarityToPrevious;
+    lastRoutePreviousFingerprints = SeenRouteRegistry.entriesForAny(
+      _seenHistoryKeysForScenario(scenario),
+    ).map((entry) => entry.fingerprint).toList(growable: false);
     final finalized = _finalizeRoute(route, scenarioKey: scenario.scenarioKey);
     _recentSuccessfulRoutes[scenario.scenarioKey] = finalized;
     _recentDisplayedRoutes[_recentDisplayedKeyForScenario(scenario)] =
@@ -4079,6 +4130,7 @@ class RouteService {
     required double userLng,
     required String fallbackReason,
     double? directDistanceKm,
+    bool allowDuplicateFallback = false,
   }) async {
     final bucket = _distanceBucketForPool(scenario.targetDistanceKm);
     if (bucket == null) {
@@ -4106,6 +4158,7 @@ class RouteService {
       avoidHighways: scenario.avoidHighways,
       routeType: scenario.routeType,
     );
+    lastRoutePoolCandidateCount = matches.length;
     if (matches.isEmpty) {
       lastRoutePoolExactBucketMissing = true;
       _debugRouteSearch(
@@ -4120,6 +4173,10 @@ class RouteService {
     if (!hasExactBucketMatch) {
       lastRoutePoolExactBucketMissing = true;
     }
+
+    _RouteCandidate? bestSeenCandidate;
+    RoutePoolMatch? bestSeenMatch;
+    double? bestSeenStartDistanceKm;
 
     for (final match in matches) {
       if (scenario.isRoundTrip && match.route.distanceBucket != bucket) {
@@ -4205,10 +4262,17 @@ class RouteService {
         continue;
       }
       if (!candidate.novelEnough) {
+        lastRouteDuplicateSkipped = true;
+        lastRoutePoolSeenCandidateCount += 1;
         _debugRouteSearch(
           '[PoolFallback] poolHit=true poolUsed=false reason=too_similar '
           'poolMatchId=${match.route.id}',
         );
+        if (_isBetterCandidate(candidate, bestSeenCandidate)) {
+          bestSeenCandidate = candidate;
+          bestSeenMatch = match;
+          bestSeenStartDistanceKm = actualPoolStartDistanceKm;
+        }
         continue;
       }
 
@@ -4218,13 +4282,45 @@ class RouteService {
       lastRoutePoolMatchId = match.route.id;
       lastRoutePoolMatchTier = match.radiusScope;
       lastRoutePoolStartDistanceKm = actualPoolStartDistanceKm;
+      lastRoutePoolUsedReason = fallbackReason;
       _debugRouteSearch(
         '[PoolFallback] poolHit=true poolUsed=true '
         'poolMatchId=${match.route.id} poolMatchTier=${match.radiusScope} '
         'poolStartDistanceKm=${actualPoolStartDistanceKm.toStringAsFixed(1)} '
-        'poolCandidateCount=${matches.length} fallbackReason=$fallbackReason',
+        'poolCandidateCount=${matches.length} '
+        'poolSeenCandidateCount=$lastRoutePoolSeenCandidateCount '
+        'fallbackReason=$fallbackReason',
       );
 
+      return _finalizeAndRemember(
+        scenario: scenario,
+        route: candidate.route,
+        sampledCoordinates: candidate.sampledCoordinates,
+        fingerprint: candidate.fingerprint,
+      );
+    }
+
+    if (allowDuplicateFallback &&
+        bestSeenCandidate != null &&
+        bestSeenMatch != null) {
+      final match = bestSeenMatch;
+      final candidate = bestSeenCandidate;
+      lastRouteDuplicateFallbackUsed = true;
+      lastRoutePoolFallbackUsed = true;
+      lastRouteEmergencyFallbackUsed = true;
+      lastRouteGenerationSource = 'pool';
+      lastRoutePoolMatchId = match.route.id;
+      lastRoutePoolMatchTier = match.radiusScope;
+      lastRoutePoolStartDistanceKm = bestSeenStartDistanceKm;
+      lastRoutePoolUsedReason = 'duplicate_pool_fallback:$fallbackReason';
+      _debugRouteSearch(
+        '[PoolFallback] poolHit=true poolUsed=true duplicateFallbackUsed=true '
+        'poolMatchId=${match.route.id} poolMatchTier=${match.radiusScope} '
+        'poolStartDistanceKm=${bestSeenStartDistanceKm?.toStringAsFixed(1)} '
+        'poolCandidateCount=${matches.length} '
+        'poolSeenCandidateCount=$lastRoutePoolSeenCandidateCount '
+        'fallbackReason=$fallbackReason',
+      );
       return _finalizeAndRemember(
         scenario: scenario,
         route: candidate.route,
@@ -4236,7 +4332,8 @@ class RouteService {
     _debugRouteSearch(
       '[PoolFallback] poolHit=true poolUsed=false reason=no_usable_candidate '
       'scenarioKey=${scenario.scenarioKey} bucket=$bucket '
-      'poolCandidateCount=${matches.length}',
+      'poolCandidateCount=${matches.length} '
+      'poolSeenCandidateCount=$lastRoutePoolSeenCandidateCount',
     );
     return null;
   }
@@ -6241,13 +6338,21 @@ class RouteService {
     meta['mapboxCallCount'] = lastRouteApiCallCount;
     meta['mapbox_call_count'] = lastRouteApiCallCount;
     meta['liveGenerationCostUnits'] = lastRouteApiCallCount;
+    meta['source_decision'] = lastRouteSourceDecision;
     meta['live_attempted'] = lastRouteApiCallCount > 0;
     meta['live_attempt_reason'] = lastRouteApiCallCount > 0
-        ? 'route_generation'
+        ? (lastRouteLiveAttemptReason ?? 'route_generation')
         : (lastRouteGenerationSource == 'pool' ? 'pool_first' : 'not_needed');
     meta['live_attempt_result'] = lastRouteApiCallCount > 0
         ? (lastRouteGenerationSource == 'mapbox' ? 'success' : 'not_selected')
         : 'not_attempted';
+    meta['pool_candidate_count'] = lastRoutePoolCandidateCount;
+    meta['pool_seen_candidate_count'] = lastRoutePoolSeenCandidateCount;
+    meta['pool_used_reason'] = lastRoutePoolUsedReason;
+    meta['duplicate_skipped'] = lastRouteDuplicateSkipped;
+    meta['duplicateFallbackUsed'] = lastRouteDuplicateFallbackUsed;
+    meta['duplicate_fallback_used'] = lastRouteDuplicateFallbackUsed;
+    meta['previous_route_fingerprints'] = lastRoutePreviousFingerprints;
     meta['subscriptionTier'] = lastRouteSubscriptionTier;
     meta['route_fingerprint'] = lastRouteDebugFingerprint;
     meta['similarity_to_previous_percent'] =
@@ -6297,8 +6402,15 @@ class RouteService {
       'live_attempted': meta['live_attempted'],
       'live_attempt_reason': meta['live_attempt_reason'],
       'live_attempt_result': meta['live_attempt_result'],
+      'source_decision': meta['source_decision'],
       'route_fingerprint': lastRouteDebugFingerprint,
+      'previous_fingerprints': lastRoutePreviousFingerprints,
       'similarity_to_previous_percent': lastRouteSimilarityToPreviousPercent,
+      'duplicate_skipped': lastRouteDuplicateSkipped,
+      'duplicate_fallback_used': lastRouteDuplicateFallbackUsed,
+      'pool_candidate_count': lastRoutePoolCandidateCount,
+      'pool_seen_candidate_count': lastRoutePoolSeenCandidateCount,
+      'pool_used_reason': lastRoutePoolUsedReason,
       'subscription_tier': lastRouteSubscriptionTier,
       'coverage_status': lastRouteCoverageStatus,
       'seed_job_created': lastRouteSeedJobCreated,

@@ -58,6 +58,7 @@ Map<String, dynamic> _buildRouteResponse({
   String mode = 'Sport Mode',
   double centerLat = 48.140,
   double centerLng = 11.592,
+  Map<String, dynamic> meta = const {},
 }) {
   final distanceKm = distanceMeters / 1000.0;
   final params = _profiledLoopParams(distanceKm: distanceKm, mode: mode);
@@ -77,6 +78,7 @@ Map<String, dynamic> _buildRouteResponse({
   coords[coords.length - 1] = [...coords.first];
 
   return {
+    if (meta.isNotEmpty) 'meta': meta,
     'route': {
       'geometry': {'type': 'LineString', 'coordinates': coords},
       'distance': distanceMeters,
@@ -539,6 +541,45 @@ void main() {
       expect(
         captured['client_scenario_key'].toString(),
         contains('wp48.15010,11.62010;48.11510,11.65020'),
+      );
+    });
+
+    test('übernimmt Preference-Match-Meta aus der Edge-Antwort', () async {
+      when(mockInvoker.invoke(any)).thenAnswer(
+        (_) async => _buildRouteResponse(
+          distanceMeters: 42000,
+          durationSeconds: 3200,
+          meta: const {
+            'original_planning_type': 'waypoints',
+            'effective_planning_type': 'random',
+            'preference_area_count': 2,
+            'preference_applied': true,
+            'matched_preference_count': 1,
+            'preference_match_score': 62,
+            'preference_area_distances_m': [420, 1800],
+            'preference_ignored_reason': 'partial_preference_match',
+          },
+        ),
+      );
+
+      final result = await service.generateRoundTrip(
+        startPosition: _munich(),
+        targetDistanceKm: 50,
+        mode: 'Sport Mode',
+        planningType: 'Wegpunkte',
+        userWaypoints: const [
+          {'latitude': 48.1501, 'longitude': 11.6201},
+          {'latitude': 48.1151, 'longitude': 11.6502},
+        ],
+      );
+
+      expect(result.edgeMeta['preference_area_count'], 2);
+      expect(result.edgeMeta['matched_preference_count'], 1);
+      expect(result.edgeMeta['preference_match_score'], 62);
+      expect(result.edgeMeta['preference_area_distances_m'], [420, 1800]);
+      expect(
+        result.edgeMeta['preference_ignored_reason'],
+        'partial_preference_match',
       );
     });
 

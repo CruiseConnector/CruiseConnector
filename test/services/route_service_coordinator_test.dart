@@ -331,6 +331,7 @@ class _FakeRoutePoolService extends RoutePoolService {
       hardRegionStatus: 'normal',
       bootstrapEnabled: true,
       curatedSeedPreferred: false,
+      minVerifiedCount: 3,
       targetPoolSize: 15,
       maxPoolSize: 20,
       currentVerifiedCount: 15,
@@ -448,6 +449,7 @@ RoutePoolCoverageCheck _coverageCheck({
     hardRegionStatus: hardRegionStatus,
     bootstrapEnabled: bootstrapEnabled,
     curatedSeedPreferred: curatedSeedPreferred,
+    minVerifiedCount: 3,
     targetPoolSize: targetPoolSize,
     maxPoolSize: maxPoolSize,
     healthyThreshold: healthyThreshold,
@@ -466,6 +468,7 @@ RoutePoolCoverageCheck _coverageCheck({
     hardRegionStatus: hardRegionStatus,
     bootstrapEnabled: bootstrapEnabled,
     curatedSeedPreferred: curatedSeedPreferred,
+    minVerifiedCount: coverage.minVerifiedCount,
     targetPoolSize: targetPoolSize,
     maxPoolSize: maxPoolSize,
     currentVerifiedCount: currentVerifiedCount,
@@ -846,7 +849,7 @@ void main() {
   });
 
   test(
-    'Pool-first nutzt geprüfte Pool-Route ohne Live-Mapbox, wenn Match vorhanden ist',
+    'Search-Again versucht Live zuerst und nutzt Pool erst nach Live-Fehlschlag',
     () async {
       final failingInvoker = _AlwaysFailingInvoker();
       final poolService = _FakeRoutePoolService(_poolMatch());
@@ -865,18 +868,60 @@ void main() {
       );
 
       expect(route.coordinates, isNotEmpty);
-      expect(failingInvoker.callCount, 0);
+      expect(failingInvoker.callCount, 1);
       expect(poolService.calls, hasLength(1));
       expect(poolService.calls.single['distanceBucket'], 50);
       expect(poolService.calls.single['avoidHighways'], true);
       expect(route.edgeMeta['route_source'], 'pool');
       expect(route.edgeMeta['fallbackUsed'], true);
-      expect(route.edgeMeta['mapboxCallCount'], 0);
+      expect(route.edgeMeta['mapboxCallCount'], 1);
+      expect(route.edgeMeta['source_decision'], 'search_again_live_first');
+      expect(route.edgeMeta['live_attempted'], true);
+      expect(route.edgeMeta['live_attempt_reason'], 'search_again_force_fresh');
+      expect(route.edgeMeta['pool_used_reason'], 'network');
       expect(
         route.edgeMeta['pool_match_id'],
         'pool-dornbirn-50-sport-nohighway',
       );
       expect(RouteService.lastRoutePoolFallbackUsed, true);
+    },
+  );
+
+  test(
+    'Search-Again markiert Pool-Duplikat nur als Fallback, wenn keine Alternative bleibt',
+    () async {
+      final poolService = _FakeRoutePoolService(_poolMatch());
+      service = RouteService(
+        invoker: _AlwaysFailingInvoker(),
+        routePoolService: poolService,
+      );
+
+      final first = await service.generateRoundTrip(
+        startPosition: _start(),
+        targetDistanceKm: 50,
+        mode: 'Sport Mode',
+        planningType: 'Zufall',
+        avoidHighways: true,
+      );
+      expect(first.coordinates, isNotEmpty);
+      expect(first.edgeMeta['route_source'], 'pool');
+      expect(first.edgeMeta['duplicateFallbackUsed'], isFalse);
+
+      final second = await service.generateRoundTrip(
+        startPosition: _start(),
+        targetDistanceKm: 50,
+        mode: 'Sport Mode',
+        planningType: 'Zufall',
+        avoidHighways: true,
+        forceFreshVariant: true,
+      );
+
+      expect(second.coordinates, isNotEmpty);
+      expect(second.edgeMeta['route_source'], 'pool');
+      expect(second.edgeMeta['duplicateFallbackUsed'], isTrue);
+      expect(second.edgeMeta['duplicate_skipped'], isTrue);
+      expect(second.edgeMeta['pool_seen_candidate_count'], 1);
+      expect(second.edgeMeta['previous_route_fingerprints'], isNotEmpty);
     },
   );
 
@@ -1069,9 +1114,18 @@ void main() {
   );
 
   test(
-    'Premium short no-highway Rundkurs nutzt healthy Pool vor Live-Mapbox',
+    'Premium Search-Again versucht Live vor healthy Pool-Fallback',
     () async {
       final jobs = <RouteSeedJob>[];
+      final coverage = _coverageCheck(
+        cityCluster: 'Dornbirn',
+        admin2Name: 'Dornbirn',
+        coverageStatus: 'healthy',
+        currentVerifiedCount: 15,
+        poolHealthy: true,
+        centerLat: 47.5162,
+        centerLng: 9.7471,
+      ).coverage!.copyWith(lastCountedAt: DateTime.now().toUtc());
       service = RouteService(
         invoker: invoker,
         routePoolService: RoutePoolService(
@@ -1093,7 +1147,7 @@ void main() {
               admin2Name: 'Dornbirn',
             ),
           ],
-          inMemoryCoverage: <RoutePoolCoverage>[],
+          inMemoryCoverage: [coverage],
           inMemorySeedJobs: jobs,
           inMemoryCandidates: <RoutePoolCandidate>[],
         ),
@@ -1109,9 +1163,11 @@ void main() {
         subscriptionTier: 'premium',
       );
 
-      expect(route.edgeMeta['route_source'], 'pool');
-      expect(route.edgeMeta['live_attempted'], false);
-      expect(invoker.callCount, 0);
+      expect(route.edgeMeta['route_source'], 'mapbox');
+      expect(route.edgeMeta['source_decision'], 'search_again_live_first');
+      expect(route.edgeMeta['live_attempted'], true);
+      expect(route.edgeMeta['live_attempt_reason'], 'search_again_force_fresh');
+      expect(invoker.callCount, 1);
       expect(jobs, isEmpty);
     },
   );

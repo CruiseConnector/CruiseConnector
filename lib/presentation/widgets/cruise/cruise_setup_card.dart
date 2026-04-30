@@ -30,9 +30,13 @@ class CruiseSetupCard extends StatefulWidget {
     this.proximityLatitude,
     this.proximityLongitude,
     this.roundTripWaypointCount = 0,
+    this.selectedWaypointIndex,
+    this.replacingWaypointIndex,
     this.waypointActionsEnabled = true,
     this.onGenerateWaypointSeed,
     this.onRemoveLastWaypoint,
+    this.onDeleteSelectedWaypoint,
+    this.onReplaceSelectedWaypoint,
     this.onClearWaypoints,
   });
 
@@ -58,9 +62,13 @@ class CruiseSetupCard extends StatefulWidget {
   final double? proximityLatitude;
   final double? proximityLongitude;
   final int roundTripWaypointCount;
+  final int? selectedWaypointIndex;
+  final int? replacingWaypointIndex;
   final bool waypointActionsEnabled;
   final VoidCallback? onGenerateWaypointSeed;
   final VoidCallback? onRemoveLastWaypoint;
+  final VoidCallback? onDeleteSelectedWaypoint;
+  final VoidCallback? onReplaceSelectedWaypoint;
   final VoidCallback? onClearWaypoints;
 
   static const _geocodingService = GeocodingService();
@@ -258,9 +266,7 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  widget.roundTripWaypointCount == 0
-                      ? 'Setze bis zu 3 Bereiche, die deine Rundroute bevorzugen soll.'
-                      : '${widget.roundTripWaypointCount} Bereich${widget.roundTripWaypointCount == 1 ? '' : 'e'} gesetzt. Die Rundroute bevorzugt diese Gegend.',
+                  _waypointHintText(),
                   style: const TextStyle(
                     color: Colors.white70,
                     fontSize: 12,
@@ -286,6 +292,24 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
                           widget.waypointActionsEnabled &&
                               widget.roundTripWaypointCount > 0
                           ? widget.onRemoveLastWaypoint
+                          : null,
+                    ),
+                    _SmallActionButton(
+                      label: 'Auswahl löschen',
+                      icon: Icons.delete_outline,
+                      onTap:
+                          widget.waypointActionsEnabled &&
+                              widget.selectedWaypointIndex != null
+                          ? widget.onDeleteSelectedWaypoint
+                          : null,
+                    ),
+                    _SmallActionButton(
+                      label: 'Auswahl neu setzen',
+                      icon: Icons.edit_location_alt_outlined,
+                      onTap:
+                          widget.waypointActionsEnabled &&
+                              widget.selectedWaypointIndex != null
+                          ? widget.onReplaceSelectedWaypoint
                           : null,
                     ),
                     _SmallActionButton(
@@ -501,6 +525,22 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
   String _formatSuggestionDistance(double meters) {
     if (meters < 1000) return '${meters.round()} m entfernt';
     return '${(meters / 1000).toStringAsFixed(1)} km entfernt';
+  }
+
+  String _waypointHintText() {
+    if (widget.roundTripWaypointCount == 0) {
+      return 'Setze bis zu 3 Bereiche, die deine Rundroute bevorzugen soll.';
+    }
+    final replacing = widget.replacingWaypointIndex;
+    if (replacing != null && replacing >= 0) {
+      return 'Tippe auf die Karte, um Bereich ${replacing + 1} neu zu setzen.';
+    }
+    final selected = widget.selectedWaypointIndex;
+    if (selected != null && selected >= 0) {
+      return 'Bereich ${selected + 1} ausgewählt. Du kannst ihn löschen oder neu setzen.';
+    }
+    final pluralSuffix = widget.roundTripWaypointCount == 1 ? '' : 'e';
+    return '${widget.roundTripWaypointCount} Bereich$pluralSuffix gesetzt. Die Route sucht bevorzugt in diese Richtungen.';
   }
 }
 

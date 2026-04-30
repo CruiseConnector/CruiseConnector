@@ -1,12 +1,15 @@
 import type {
   Coordinate,
   DistanceConfig,
+  PreferenceArea,
+  PreferenceMatchSummary,
   RoundTripCandidatePlan,
   RoundTripSearchResult,
   RouteMode,
   RouteQualityEvaluation,
 } from "./routing_types.ts";
 import {
+  calculateDistance,
   normalizeExcludeParams,
   normalizeHint,
   relaxStreetExcludes,
@@ -135,12 +138,12 @@ function prioritizeCandidatePlans(
     ? noHighwayOrderTokens
     : normalizedMode === "kurvenjagd"
     ? [
-      "curve-zigzag-core",
       "curve-loop-scout",
       "curve-orbital-core",
       "curve-loop-tight",
       "curve-loop-wide",
       "curve-triangle",
+      "curve-zigzag-core",
     ]
     : preferWideSportAvoidHighways
     ? (preferStableShortSportAvoidHighways
@@ -204,7 +207,10 @@ function prioritizeCandidatePlans(
     ]
     : normalizedMode === "entdecker"
     ? [
+      "explore-cardinal-wide",
       "explore-loop-scout",
+      "explore-loop-offset",
+      "explore-triangle",
       "explore-orbital-wide",
       "explore-loop-wide",
       "explore-loop-far",
@@ -366,6 +372,7 @@ export async function searchBestRoundTripRoute({
   maxCandidateAttemptsHint,
   avoidHighways,
   continueStraight,
+  preferenceAreas,
 }: {
   startLocation: Coordinate;
   targetDistanceKm: number;
@@ -385,6 +392,7 @@ export async function searchBestRoundTripRoute({
   maxCandidateAttemptsHint?: number;
   avoidHighways: boolean;
   continueStraight: boolean;
+  preferenceAreas?: PreferenceArea[];
 }): Promise<RoundTripSearchResult | null> {
   const highCostCurveSearch = mode === "Kurvenjagd" && targetDistanceKm >= 130;
   const extendedRoundTripSearch = targetDistanceKm >= 100 ||
@@ -493,6 +501,115 @@ export async function searchBestRoundTripRoute({
   );
   const hasMapboxCallBudget = (minimumMs = 3000): boolean =>
     remainingSearchMs(900) >= minimumMs;
+  const activePreferenceAreas = (preferenceAreas ?? []).filter((area) =>
+    Number.isFinite(area.latitude) &&
+    Number.isFinite(area.longitude) &&
+    area.latitude >= -90 &&
+    area.latitude <= 90 &&
+    area.longitude >= -180 &&
+    area.longitude <= 180
+  ).slice(0, 3);
+  const hasPreferenceAreas = activePreferenceAreas.length > 0;
+  const preferenceRadiusMeters = (area: PreferenceArea): number =>
+    Math.max(500, Math.min(4000, area.radius_m ?? 2200));
+  const routeCoordinates = (route: any): Coordinate[] => {
+    const coordinates = route?.geometry?.coordinates;
+    if (!Array.isArray(coordinates)) return [];
+    return coordinates
+      .map((point: unknown) => {
+        if (!Array.isArray(point) || point.length < 2) return null;
+        const longitude = Number(point[0]);
+        const latitude = Number(point[1]);
+        if (
+          !Number.isFinite(latitude) ||
+          !Number.isFinite(longitude) ||
+          latitude < -90 ||
+          latitude > 90 ||
+          longitude < -180 ||
+          longitude > 180
+        ) {
+          return null;
+        }
+        return { latitude, longitude };
+      })
+      .filter((point): point is Coordinate => point != null);
+  };
+  const closestDistanceMeters = (
+    coordinates: Coordinate[],
+    area: PreferenceArea,
+  ): number => {
+    if (coordinates.length === 0) return Number.POSITIVE_INFINITY;
+    let closest = Number.POSITIVE_INFINITY;
+    for (const coordinate of coordinates) {
+      closest = Math.min(closest, calculateDistance(coordinate, area) * 1000);
+    }
+    return closest;
+  };
+  const evaluatePreferenceMatch = (
+    route: any,
+  ): PreferenceMatchSummary | null => {
+    if (!hasPreferenceAreas) return null;
+    const coordinates = routeCoordinates(route);
+    const distances = activePreferenceAreas.map((area) =>
+      Math.round(closestDistanceMeters(coordinates, area))
+    );
+    const matchScores = distances.map((distance, index) => {
+      const radius = preferenceRadiusMeters(activePreferenceAreas[index]);
+      return Math.max(0, Math.min(1, 1 - distance / (radius * 2.5)));
+    });
+    const matchedPreferenceCount = distances.filter((distance, index) =>
+      distance <= preferenceRadiusMeters(activePreferenceAreas[index])
+    ).length;
+    const averageScore = matchScores.length === 0
+      ? 0
+      : matchScores.reduce((sum, score) => sum + score, 0) /
+        matchScores.length;
+    const preferenceMatchScore = Math.round(averageScore * 100);
+    const preferenceIgnoredReason = matchedPreferenceCount === 0 &&
+        preferenceMatchScore < 25
+      ? "all_preference_areas_far"
+      : matchedPreferenceCount < activePreferenceAreas.length
+      ? "partial_preference_match"
+      : null;
+    return {
+      matchedPreferenceCount,
+      preferenceMatchScore,
+      preferenceAreaDistancesMeters: distances,
+      preferenceIgnoredReason,
+    };
+  };
+  const preferenceGoodEnough = (
+    quality: RouteQualityEvaluation | null,
+  ): boolean => {
+    if (!hasPreferenceAreas || quality == null) return true;
+    return (quality.matchedPreferenceCount ?? 0) > 0 ||
+      (quality.preferenceMatchScore ?? 0) >= 35;
+  };
+  const rankCandidatePlansByPreference = (
+    plans: RoundTripCandidatePlan[],
+  ): RoundTripCandidatePlan[] => {
+    if (!hasPreferenceAreas || plans.length <= 1) return plans;
+    const scorePlan = (plan: RoundTripCandidatePlan): number => {
+      const interiorWaypoints = plan.waypoints.slice(1, -1);
+      if (interiorWaypoints.length === 0) return Number.POSITIVE_INFINITY;
+      const distancePenalty = activePreferenceAreas.reduce((sum, area) => {
+        const closest = interiorWaypoints.reduce(
+          (best, waypoint) =>
+            Math.min(best, calculateDistance(waypoint, area) * 1000),
+          Number.POSITIVE_INFINITY,
+        );
+        return sum + closest;
+      }, 0);
+      const matched = activePreferenceAreas.filter((area) =>
+        interiorWaypoints.some((waypoint) =>
+          calculateDistance(waypoint, area) * 1000 <=
+            preferenceRadiusMeters(area) * 2.2
+        )
+      ).length;
+      return distancePenalty - matched * 2500;
+    };
+    return [...plans].sort((a, b) => scorePlan(a) - scorePlan(b));
+  };
 
   const tuneDistanceConfigForAvoidHighways = (
     config: DistanceConfig,
@@ -652,6 +769,23 @@ export async function searchBestRoundTripRoute({
         quality.distanceDeltaKm <= targetDistanceKm * 0.22
       )
     );
+  const styleFitThresholdForEarlyStop = (() => {
+    if (mode === "Kurvenjagd") return 58;
+    if (mode === "Sport Mode") return 54;
+    if (mode === "Entdecker") return 52;
+    if (mode === "Abendrunde") return 52;
+    return 0;
+  })();
+  const styleGoodEnoughForEarlyStop = (
+    quality: RouteQualityEvaluation,
+  ): boolean => {
+    if (styleFitThresholdForEarlyStop <= 0) return true;
+    const styleFit = quality.styleFitScore ?? 0;
+    if (styleFit >= styleFitThresholdForEarlyStop) return true;
+    // Keep searching for style-specific routes, but do not turn a valid route
+    // into a reject solely because style fit is weak.
+    return candidateAttempts >= Math.max(3, globalAttemptBudget - 1);
+  };
   const applyCleanupGate = (
     route: any,
     quality: RouteQualityEvaluation,
@@ -688,19 +822,52 @@ export async function searchBestRoundTripRoute({
         : quality.distanceDeltaKm,
     };
   };
+  const applyPreferenceScoring = (
+    route: any,
+    quality: RouteQualityEvaluation,
+  ): RouteQualityEvaluation => {
+    const match = evaluatePreferenceMatch(route);
+    if (match == null) return quality;
+    const preferenceMeta = {
+      preferenceMatchScore: match.preferenceMatchScore,
+      matchedPreferenceCount: match.matchedPreferenceCount,
+      preferenceAreaDistancesMeters: match.preferenceAreaDistancesMeters,
+      preferenceIgnoredReason: match.preferenceIgnoredReason,
+    };
+    if (quality.tier === "rejected") {
+      return { ...quality, ...preferenceMeta };
+    }
+    const missingPreferenceCount = Math.max(
+      0,
+      activePreferenceAreas.length - match.matchedPreferenceCount,
+    );
+    const ignorePenalty = missingPreferenceCount * 28 +
+      Math.max(0, 45 - match.preferenceMatchScore) * 0.65;
+    const preferenceReward = match.preferenceMatchScore * 0.55 +
+      match.matchedPreferenceCount * 18;
+    return {
+      ...quality,
+      ...preferenceMeta,
+      baseScore: quality.baseScore ?? quality.score,
+      score: Math.max(0, quality.score + ignorePenalty - preferenceReward),
+    };
+  };
   const evaluateRouteAlternative = (
     route: any,
     qualityDistanceConfig: DistanceConfig,
   ): RouteQualityEvaluation =>
-    applyCleanupGate(
+    applyPreferenceScoring(
       route,
-      evaluateRouteQuality(route, "ROUND_TRIP", {
-        targetDistanceKm,
-        distanceConfig: qualityDistanceConfig,
-        mode,
-        avoidHighways,
-      }),
-      qualityDistanceConfig,
+      applyCleanupGate(
+        route,
+        evaluateRouteQuality(route, "ROUND_TRIP", {
+          targetDistanceKm,
+          distanceConfig: qualityDistanceConfig,
+          mode,
+          avoidHighways,
+        }),
+        qualityDistanceConfig,
+      ),
     );
   const chooseBestRouteAlternative = (
     routes: any[],
@@ -783,30 +950,32 @@ export async function searchBestRoundTripRoute({
 
   for (const phase of searchPhases) {
     if (stopSearchWithBestCandidate) break;
-    const orderedCandidates = prioritizeCandidatePlans(
-      buildRoundTripWaypointCandidates({
-        start: startLocation,
-        distanceConfig: phase.distanceConfig,
-        targetDistanceKm,
-        mode,
-        randomSeed: randomSeed + phase.seedOffset,
-        preferredBearingDegrees: directionHintDegrees,
-        waypointShapeFactor,
-        zigzagWaypoints,
-        simplifyWaypoints,
-        maxWaypoints,
-        avoidHighways,
-      }),
-      phase.name,
-      normalizedVariantHint,
-      normalizedFingerprintHint,
-      {
-        mode,
-        avoidHighways,
-        targetDistanceKm,
-        shortCurvyRoundTripFallback: phase.name === "fallback" &&
-          shortCurvySearch,
-      },
+    const orderedCandidates = rankCandidatePlansByPreference(
+      prioritizeCandidatePlans(
+        buildRoundTripWaypointCandidates({
+          start: startLocation,
+          distanceConfig: phase.distanceConfig,
+          targetDistanceKm,
+          mode,
+          randomSeed: randomSeed + phase.seedOffset,
+          preferredBearingDegrees: directionHintDegrees,
+          waypointShapeFactor,
+          zigzagWaypoints,
+          simplifyWaypoints,
+          maxWaypoints,
+          avoidHighways,
+        }),
+        phase.name,
+        normalizedVariantHint,
+        normalizedFingerprintHint,
+        {
+          mode,
+          avoidHighways,
+          targetDistanceKm,
+          shortCurvyRoundTripFallback: phase.name === "fallback" &&
+            shortCurvySearch,
+        },
+      ),
     );
     // Pro Phase 2-3 Versuche. WICHTIG: Fair-Share-Guard reserviert für
     // jede spätere Phase MINDESTENS 2 Versuche (vorher: 1), damit der
@@ -1131,7 +1300,8 @@ export async function searchBestRoundTripRoute({
       }
       if (
         phase.name === "balanced" &&
-        isBalancedPresentableCandidate(quality)
+        isBalancedPresentableCandidate(quality) &&
+        preferenceGoodEnough(quality)
       ) {
         balancedHasPresentableCandidate = true;
       }
@@ -1185,7 +1355,11 @@ export async function searchBestRoundTripRoute({
           candidateAttempts >= (constrainedRoundTripSearch ? 3 : 2)
         );
 
-      if (shouldStopAfterGoodCandidate || shouldStopAfterAcceptableCandidate) {
+      if (
+        (shouldStopAfterGoodCandidate || shouldStopAfterAcceptableCandidate) &&
+        styleGoodEnoughForEarlyStop(quality) &&
+        preferenceGoodEnough(quality)
+      ) {
         debugLog(
           `[RT] Phase ${phase.name}: usable candidate found, stopping early after ${phaseAttempts} attempts`,
         );
@@ -1209,13 +1383,19 @@ export async function searchBestRoundTripRoute({
     ) {
       break;
     }
-    if (bestQuality?.tier === "ideal") {
+    if (
+      bestQuality?.tier === "ideal" &&
+      styleGoodEnoughForEarlyStop(bestQuality) &&
+      preferenceGoodEnough(bestQuality)
+    ) {
       break;
     }
     if (
       phaseAcceptedCandidates > 0 &&
       bestQuality?.tier === "good" &&
-      !avoidHighwaysTightRoundTripSearch
+      !avoidHighwaysTightRoundTripSearch &&
+      styleGoodEnoughForEarlyStop(bestQuality) &&
+      preferenceGoodEnough(bestQuality)
     ) {
       break;
     }
@@ -1235,6 +1415,8 @@ export async function searchBestRoundTripRoute({
       phaseAcceptedCandidates > 0 &&
       bestQuality?.tier === "acceptable" &&
       !avoidHighwaysTightRoundTripSearch &&
+      styleGoodEnoughForEarlyStop(bestQuality) &&
+      preferenceGoodEnough(bestQuality) &&
       (
         phase.name === "fallback" ||
         candidateAttempts >= (constrainedRoundTripSearch ? 3 : 2)
@@ -1279,6 +1461,18 @@ export async function searchBestRoundTripRoute({
         fingerprintHint: normalizedFingerprintHint,
         duplicateSkips,
         emergencyDuplicateUsed: true,
+        preferenceMatch: bestEmergencyDuplicate.quality == null
+          ? null
+          : {
+            matchedPreferenceCount:
+              bestEmergencyDuplicate.quality.matchedPreferenceCount ?? 0,
+            preferenceMatchScore:
+              bestEmergencyDuplicate.quality.preferenceMatchScore ?? 0,
+            preferenceAreaDistancesMeters:
+              bestEmergencyDuplicate.quality.preferenceAreaDistancesMeters ?? [],
+            preferenceIgnoredReason:
+              bestEmergencyDuplicate.quality.preferenceIgnoredReason ?? null,
+          },
       };
     }
     debugLog(
@@ -1366,5 +1560,14 @@ export async function searchBestRoundTripRoute({
     duplicateSkips,
     emergencyDuplicateUsed: false,
     terminalShortCircuit: balancedTerminalShortCircuit,
+    preferenceMatch: hasPreferenceAreas
+      ? {
+        matchedPreferenceCount: bestQuality.matchedPreferenceCount ?? 0,
+        preferenceMatchScore: bestQuality.preferenceMatchScore ?? 0,
+        preferenceAreaDistancesMeters:
+          bestQuality.preferenceAreaDistancesMeters ?? [],
+        preferenceIgnoredReason: bestQuality.preferenceIgnoredReason ?? null,
+      }
+      : null,
   };
 }

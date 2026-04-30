@@ -1616,6 +1616,46 @@ void main() {
       expect(check.toMeta()['healing_job_id'], 'existing-budget-paused');
       expect(jobs, hasLength(1));
     });
+
+    test('Budget 0 verhindert auch den ersten Healing-Job', () async {
+      final jobs = <RouteSeedJob>[];
+      final service = RoutePoolService(
+        inMemoryRegions: [
+          _region(
+            countryCode: 'DE',
+            admin1Name: 'Baden-Württemberg',
+            admin2Name: 'Stuttgart',
+            cityCluster: 'Stuttgart',
+            centerLat: 48.7758,
+            centerLng: 9.1829,
+            seedBudgetUnits: 0,
+          ),
+        ],
+        inMemoryRoutes: const [],
+        inMemoryCoverage: <RoutePoolCoverage>[],
+        inMemorySeedJobs: jobs,
+        inMemoryCandidates: <RoutePoolCandidate>[],
+      );
+
+      final check = await service.ensureCoverageForRequest(
+        userLat: 48.7758,
+        userLng: 9.1829,
+        distanceBucket: 50,
+        style: 'Sport Mode',
+        avoidHighways: true,
+        routeType: 'ROUND_TRIP',
+        subscriptionTier: 'premium',
+        createSeedJob: true,
+        preferredCountryCode: 'DE',
+        preferredAdmin1Name: 'Baden-Württemberg',
+        preferredAdmin2Name: 'Stuttgart',
+        preferredCityCluster: 'Stuttgart',
+      );
+
+      expect(check.seedJobCreated, isFalse);
+      expect(check.duplicateJobPrevented, isFalse);
+      expect(jobs, isEmpty);
+    });
   });
 }
 
@@ -1684,6 +1724,7 @@ RoutePoolCoverageCheck _coverageCheck({
         : 'normal',
     bootstrapEnabled: coverageStatus != 'hard_region_curated_needed',
     curatedSeedPreferred: coverageStatus == 'hard_region_curated_needed',
+    minVerifiedCount: 3,
     targetPoolSize: 15,
     maxPoolSize: 20,
     currentVerifiedCount: 0,
