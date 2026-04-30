@@ -33,8 +33,9 @@ class _ProfilePageState extends State<ProfilePage>
   @override
   void didUpdateWidget(ProfilePage old) {
     super.didUpdateWidget(old);
-    if (widget.refreshKey != old.refreshKey && widget.refreshKey > 0)
+    if (widget.refreshKey != old.refreshKey && widget.refreshKey > 0) {
       _loadData();
+    }
   }
 
   late TabController _tabController;
