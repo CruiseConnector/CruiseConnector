@@ -3,6 +3,12 @@ export interface Coordinate {
   longitude: number;
 }
 
+export interface PreferenceArea extends Coordinate {
+  radius_m?: number;
+  bearing_from_start?: number;
+  distance_from_start_km?: number;
+}
+
 export type RouteMode =
   | "Kurvenjagd"
   | "Sport Mode"
@@ -19,13 +25,7 @@ export interface RequestData {
   original_planning_type?: "waypoints" | "Wegpunkte";
   effective_planning_type?: "random" | "Zufall";
   generation_mode?: "random_with_preferences";
-  preference_areas?: Array<
-    Coordinate & {
-      radius_m?: number;
-      bearing_from_start?: number;
-      distance_from_start_km?: number;
-    }
-  >;
+  preference_areas?: PreferenceArea[];
   preference_area_count?: number;
   preference_applied?: boolean;
   close_loop?: boolean;
@@ -78,6 +78,17 @@ export interface RouteQualityEvaluation {
   coordinateCount: number;
   actualDistanceKm: number;
   distanceDeltaKm: number;
+  preferenceMatchScore?: number;
+  matchedPreferenceCount?: number;
+  preferenceAreaDistancesMeters?: number[];
+  preferenceIgnoredReason?: string | null;
+}
+
+export interface PreferenceMatchSummary {
+  matchedPreferenceCount: number;
+  preferenceMatchScore: number;
+  preferenceAreaDistancesMeters: number[];
+  preferenceIgnoredReason?: string | null;
 }
 
 export interface RouteStyleMetrics {
@@ -129,6 +140,7 @@ export interface RoundTripSearchResult {
   emergencyDuplicateUsed?: boolean;
   terminalShortCircuit?: boolean;
   exhausted?: boolean;
+  preferenceMatch?: PreferenceMatchSummary | null;
 }
 
 export interface MapboxRouteFetchResult {

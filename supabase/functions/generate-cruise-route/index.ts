@@ -468,6 +468,19 @@ Deno.serve(async (req) => {
         }
       }
     }
+    const buildPreferenceNotMatchableMeta = (
+      baseMeta: Record<string, unknown> | null,
+      reason: string,
+    ): Record<string, unknown> => ({
+      ...(baseMeta ?? {}),
+      response_code: "preference_areas_not_matchable",
+      original_planning_type: body.original_planning_type ?? null,
+      effective_planning_type: body.effective_planning_type ?? null,
+      generation_mode: body.generation_mode ?? null,
+      preference_area_count: preferenceAreaCount,
+      preference_applied: body.preference_applied === true,
+      preference_ignored_reason: reason,
+    });
 
     if (planning_type === "Zufall" && currentRouteType === "ROUND_TRIP") {
       if (mode === "Kurvenjagd") {
@@ -848,6 +861,7 @@ Deno.serve(async (req) => {
         maxWaypoints: body.max_waypoints,
         continueStraight: requestContinueStraight,
         avoidHighways,
+        preferenceAreas,
       });
       if (roundTripSearch?.route) {
         route = roundTripSearch.route;
@@ -1337,6 +1351,15 @@ Deno.serve(async (req) => {
         ? "No route found with current constraints after exhausting round-trip search."
         : "No route found with current constraints.";
       requestDebugMeta = buildNoRouteSearchMeta(roundTripSearch);
+      if (isWaypointPreferenceRequest && planning_type !== "Wegpunkte") {
+        requestDebugMeta = buildPreferenceNotMatchableMeta(
+          requestDebugMeta,
+          "no_usable_route_for_preferences",
+        );
+        throw new Error(
+          `${noRouteMessage} preference_areas_not_matchable.`,
+        );
+      }
       if (planning_type === "Wegpunkte") {
         requestDebugMeta = {
           response_code: "waypoint_route_not_possible",
@@ -1523,6 +1546,12 @@ Deno.serve(async (req) => {
           roundTripSearch,
           `distance=${actualDistanceKm.toFixed(1)}km`,
         );
+        if (isWaypointPreferenceRequest) {
+          requestDebugMeta = buildPreferenceNotMatchableMeta(
+            requestDebugMeta,
+            "route_outside_distance_band",
+          );
+        }
         throw new Error(
           `No route found with current constraints after exhausting round-trip search. Final distance ${
             actualDistanceKm.toFixed(1)
@@ -1597,6 +1626,12 @@ Deno.serve(async (req) => {
         roundTripSearch,
         finalQuality.reason,
       );
+      if (isWaypointPreferenceRequest && planning_type !== "Wegpunkte") {
+        requestDebugMeta = buildPreferenceNotMatchableMeta(
+          requestDebugMeta,
+          finalQuality.reason,
+        );
+      }
       if (planning_type === "Wegpunkte") {
         requestDebugMeta = {
           ...(requestDebugMeta ?? {}),
@@ -1804,7 +1839,15 @@ Deno.serve(async (req) => {
           generation_mode: body.generation_mode ?? null,
           preference_area_count: preferenceAreaCount,
           preference_applied: body.preference_applied === true,
-          preference_match_score: null,
+          matched_preference_count:
+            roundTripSearch?.preferenceMatch?.matchedPreferenceCount ?? null,
+          preference_match_score:
+            roundTripSearch?.preferenceMatch?.preferenceMatchScore ?? null,
+          preference_area_distances_m:
+            roundTripSearch?.preferenceMatch?.preferenceAreaDistancesMeters ??
+              null,
+          preference_ignored_reason:
+            roundTripSearch?.preferenceMatch?.preferenceIgnoredReason ?? null,
           avoid_highways_requested: avoidHighways,
           effective_excludes: excludeParams,
           quality_tier: finalQuality.tier,
