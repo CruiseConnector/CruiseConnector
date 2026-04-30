@@ -628,7 +628,7 @@ void main() {
     );
 
     test(
-      'ROUND_TRIP: relaxed style bleibt im exakten Distanz-Bucket',
+      'ROUND_TRIP: falscher Style wird nicht als passende Zellroute verkauft',
       () async {
         final service = RoutePoolService(
           inMemoryRegions: [
@@ -680,9 +680,310 @@ void main() {
           routeType: 'ROUND_TRIP',
         );
 
-        expect(matches.map((match) => match.route.id), ['feldkirch-50-abend']);
+        expect(matches, isEmpty);
       },
     );
+
+    test(
+      'Coverage-Zellen trennen Style Distanz und Autobahnstatus hart',
+      () async {
+        final routes = <RoutePoolEntry>[
+          for (var i = 0; i < 12; i += 1)
+            _route(
+              id: 'bregenz-50-sport-$i',
+              countryCode: 'AT',
+              admin1Name: 'Vorarlberg',
+              admin2Name: 'Bregenz',
+              cityCluster: 'Bregenz',
+              startLat: 47.5031 + (i * 0.0001),
+              startLng: 9.7471 + (i * 0.0001),
+              distanceBucket: 50,
+              styleTags: const ['Sport Mode'],
+              qualityScore: 88,
+            ),
+        ];
+        final service = RoutePoolService(
+          inMemoryRegions: [
+            _region(
+              countryCode: 'AT',
+              admin1Name: 'Vorarlberg',
+              admin2Name: 'Bregenz',
+              cityCluster: 'Bregenz',
+              centerLat: 47.5031,
+              centerLng: 9.7471,
+            ),
+          ],
+          inMemoryRoutes: routes,
+          inMemoryCoverage: <RoutePoolCoverage>[],
+          inMemorySeedJobs: <RouteSeedJob>[],
+          inMemoryCandidates: <RoutePoolCandidate>[],
+        );
+
+        final report = await service.buildClusterCoverageReport(
+          countryCode: 'AT',
+          admin1Name: 'Vorarlberg',
+          admin2Name: 'Bregenz',
+          cityCluster: 'Bregenz',
+        );
+
+        expect(report, isNotNull);
+        final sport50 = report!.combinations.singleWhere(
+          (combo) =>
+              combo.requirement.distanceBucket == 50 &&
+              combo.requirement.styleKey == 'sport_mode' &&
+              combo.requirement.avoidHighways,
+        );
+        final curvy50 = report.combinations.singleWhere(
+          (combo) =>
+              combo.requirement.distanceBucket == 50 &&
+              combo.requirement.styleKey == 'kurvenjagd' &&
+              combo.requirement.avoidHighways,
+        );
+        final sport75 = report.combinations.singleWhere(
+          (combo) =>
+              combo.requirement.distanceBucket == 75 &&
+              combo.requirement.styleKey == 'sport_mode' &&
+              combo.requirement.avoidHighways,
+        );
+        final sport50HighwayAllowed = report.combinations.singleWhere(
+          (combo) =>
+              combo.requirement.distanceBucket == 50 &&
+              combo.requirement.styleKey == 'sport_mode' &&
+              !combo.requirement.avoidHighways,
+        );
+
+        expect(sport50.coverageStatus, 'target_met');
+        expect(sport50.distinctFingerprintCount, 12);
+        expect(curvy50.currentVerifiedCount, 0);
+        expect(curvy50.coverageStatus, 'empty');
+        expect(sport75.currentVerifiedCount, 0);
+        expect(sport75.coverageStatus, 'empty');
+        expect(sport50HighwayAllowed.currentVerifiedCount, 0);
+        expect(sport50HighwayAllowed.coverageStatus, 'empty');
+      },
+    );
+
+    test(
+      'Bregenz Coverage Report markiert fehlende Stil Distanz Zellen',
+      () async {
+        final service = RoutePoolService(
+          inMemoryRegions: [
+            _region(
+              countryCode: 'AT',
+              admin1Name: 'Vorarlberg',
+              admin2Name: 'Bregenz',
+              cityCluster: 'Bregenz',
+              centerLat: 47.5031,
+              centerLng: 9.7471,
+            ),
+          ],
+          inMemoryRoutes: [
+            for (var i = 0; i < 3; i += 1)
+              _route(
+                id: 'bregenz-50-sport-$i',
+                countryCode: 'AT',
+                admin1Name: 'Vorarlberg',
+                admin2Name: 'Bregenz',
+                cityCluster: 'Bregenz',
+                startLat: 47.5031 + (i * 0.0001),
+                startLng: 9.7471 + (i * 0.0001),
+                distanceBucket: 50,
+                styleTags: const ['Sport Mode'],
+                qualityScore: 88,
+              ),
+            for (var i = 0; i < 3; i += 1)
+              _route(
+                id: 'bregenz-100-entdecker-$i',
+                countryCode: 'AT',
+                admin1Name: 'Vorarlberg',
+                admin2Name: 'Bregenz',
+                cityCluster: 'Bregenz',
+                startLat: 47.5041 + (i * 0.0001),
+                startLng: 9.7481 + (i * 0.0001),
+                distanceBucket: 100,
+                styleTags: const ['Entdecker'],
+                qualityScore: 88,
+              ),
+          ],
+          inMemoryCoverage: <RoutePoolCoverage>[],
+          inMemorySeedJobs: <RouteSeedJob>[],
+          inMemoryCandidates: <RoutePoolCandidate>[],
+        );
+
+        final report = await service.buildClusterCoverageReport(
+          countryCode: 'AT',
+          admin1Name: 'Vorarlberg',
+          admin2Name: 'Bregenz',
+          cityCluster: 'Bregenz',
+        );
+
+        expect(report, isNotNull);
+        Map<String, RoutePoolCombinationCoverage> combosByKey() => {
+          for (final combo in report!.combinations)
+            '${combo.requirement.distanceBucket}|${combo.requirement.styleKey}|${combo.requirement.avoidHighways}':
+                combo,
+        };
+        final combos = combosByKey();
+
+        expect(combos['50|sport_mode|true']?.coverageStatus, 'healthy');
+        expect(combos['50|kurvenjagd|true']?.healingJobNeeded, isTrue);
+        expect(combos['50|entdecker|true']?.healingJobNeeded, isTrue);
+        expect(combos['75|sport_mode|true']?.healingJobNeeded, isTrue);
+        expect(combos['75|kurvenjagd|true']?.healingJobNeeded, isTrue);
+        expect(combos['100|sport_mode|true']?.healingJobNeeded, isTrue);
+        expect(combos['100|kurvenjagd|true']?.healingJobNeeded, isTrue);
+        expect(combos['100|entdecker|true']?.coverageStatus, 'healthy');
+        expect(report!.isHealthyMinimum, isFalse);
+      },
+    );
+
+    test('ROUND_TRIP Pool-Ranking bevorzugt nur die exakte Zelle', () async {
+      final service = RoutePoolService(
+        inMemoryRegions: [
+          _region(
+            countryCode: 'AT',
+            admin1Name: 'Vorarlberg',
+            admin2Name: 'Bregenz',
+            cityCluster: 'Bregenz',
+            centerLat: 47.5031,
+            centerLng: 9.7471,
+          ),
+        ],
+        inMemoryRoutes: [
+          _route(
+            id: 'bregenz-sport-closer',
+            countryCode: 'AT',
+            admin1Name: 'Vorarlberg',
+            admin2Name: 'Bregenz',
+            cityCluster: 'Bregenz',
+            startLat: 47.5031,
+            startLng: 9.7471,
+            distanceBucket: 50,
+            styleTags: const ['Sport Mode'],
+            qualityScore: 100,
+          ),
+          _route(
+            id: 'bregenz-curvy-exact',
+            countryCode: 'AT',
+            admin1Name: 'Vorarlberg',
+            admin2Name: 'Bregenz',
+            cityCluster: 'Bregenz',
+            startLat: 47.5033,
+            startLng: 9.7473,
+            distanceBucket: 50,
+            styleTags: const ['Kurvenjagd'],
+            qualityScore: 88,
+          ),
+        ],
+      );
+
+      final matches = await service.findCandidateRoutesNear(
+        userLat: 47.5031,
+        userLng: 9.7471,
+        distanceBucket: 50,
+        style: 'Kurvenjagd',
+        avoidHighways: true,
+        routeType: 'ROUND_TRIP',
+      );
+
+      expect(matches.map((match) => match.route.id), ['bregenz-curvy-exact']);
+    });
+
+    test('avoidHighways false nutzt keine no-highway Zellroute', () async {
+      final service = RoutePoolService(
+        inMemoryRegions: [
+          _region(
+            countryCode: 'AT',
+            admin1Name: 'Vorarlberg',
+            cityCluster: 'Bregenz',
+            centerLat: 47.5031,
+            centerLng: 9.7471,
+          ),
+        ],
+        inMemoryRoutes: [
+          _route(
+            id: 'bregenz-no-highway',
+            countryCode: 'AT',
+            admin1Name: 'Vorarlberg',
+            cityCluster: 'Bregenz',
+            startLat: 47.5031,
+            startLng: 9.7471,
+            avoidsHighway: true,
+            hasHighway: false,
+            qualityScore: 88,
+          ),
+        ],
+      );
+
+      final matches = await service.findCandidateRoutesNear(
+        userLat: 47.5031,
+        userLng: 9.7471,
+        distanceBucket: 50,
+        style: 'Sport Mode',
+        avoidHighways: false,
+        routeType: 'ROUND_TRIP',
+      );
+
+      expect(matches, isEmpty);
+    });
+
+    test('Acceptable-Reserve macht eine Zelle quality_thin', () async {
+      final jobs = <RouteSeedJob>[];
+      final service = RoutePoolService(
+        inMemoryRegions: [
+          _region(
+            countryCode: 'AT',
+            admin1Name: 'Vorarlberg',
+            admin2Name: 'Bregenz',
+            cityCluster: 'Bregenz',
+            centerLat: 47.5031,
+            centerLng: 9.7471,
+          ),
+        ],
+        inMemoryRoutes: [
+          for (var i = 0; i < 3; i += 1)
+            _route(
+              id: 'bregenz-acceptable-$i',
+              countryCode: 'AT',
+              admin1Name: 'Vorarlberg',
+              admin2Name: 'Bregenz',
+              cityCluster: 'Bregenz',
+              startLat: 47.5031 + (i * 0.0001),
+              startLng: 9.7471 + (i * 0.0001),
+              distanceBucket: 50,
+              styleTags: const ['Kurvenjagd'],
+              qualityScore: 78,
+              routePayload: const {'quality_tier': 'acceptable'},
+            ),
+        ],
+        inMemoryCoverage: <RoutePoolCoverage>[],
+        inMemorySeedJobs: jobs,
+        inMemoryCandidates: <RoutePoolCandidate>[],
+      );
+
+      final check = await service.ensureCoverageForRequest(
+        userLat: 47.5031,
+        userLng: 9.7471,
+        distanceBucket: 50,
+        style: 'Kurvenjagd',
+        avoidHighways: true,
+        routeType: 'ROUND_TRIP',
+        subscriptionTier: 'premium',
+        createSeedJob: true,
+        preferredCountryCode: 'AT',
+        preferredAdmin1Name: 'Vorarlberg',
+        preferredAdmin2Name: 'Bregenz',
+        preferredCityCluster: 'Bregenz',
+      );
+
+      expect(check.coverageStatus, 'quality_thin');
+      expect(check.currentVerifiedCount, 3);
+      expect(check.acceptableCount, 3);
+      expect(check.goodCount + check.idealCount, 0);
+      expect(check.seedJobCreated, isTrue);
+      expect(jobs, hasLength(1));
+      expect(jobs.single.styleKey, 'kurvenjagd');
+    });
 
     test(
       'ROUND_TRIP: 75-km Anfrage nutzt keine 50/100-km Poolroute als normalen Erfolg',
@@ -1310,7 +1611,7 @@ void main() {
     );
 
     test(
-      'Cluster mit vielen falschen Routen ist ohne Pflicht-Kombis nicht healthy_minimum',
+      'Cluster mit vielen falschen Routen ist ohne passende Zellen nicht healthy_minimum',
       () async {
         final service = RoutePoolService(
           inMemoryRegions: [
@@ -1334,7 +1635,8 @@ void main() {
               startLat: 48.1372 + (index * 0.0001),
               startLng: 11.5755 + (index * 0.0001),
               distanceBucket: 50,
-              styleTags: const ['Abendrunde'],
+              styleTags: const ['Custom'],
+              qualityScore: 88,
             ),
           ),
           inMemoryCoverage: <RoutePoolCoverage>[],
@@ -1354,7 +1656,7 @@ void main() {
         expect(report.fulfilledCombinationCount, 0);
         expect(report.coverageStatus, 'thin');
         expect(report.isHealthyMinimum, isFalse);
-        expect(report.missingCombinations, hasLength(6));
+        expect(report.missingCombinations, hasLength(24));
       },
     );
 
@@ -1365,7 +1667,8 @@ void main() {
         var id = 0;
         for (final requirement in RoutePoolService.mvpRequiredCombinations) {
           if (requirement.distanceBucket == 75 &&
-              requirement.styleKey == 'kurvenjagd') {
+              requirement.styleKey == 'kurvenjagd' &&
+              requirement.avoidHighways) {
             continue;
           }
           for (var i = 0; i < requirement.requiredVerifiedCount; i += 1) {
@@ -1380,6 +1683,9 @@ void main() {
                 startLng: 9.7414 + (id * 0.0001),
                 distanceBucket: requirement.distanceBucket,
                 styleTags: [requirement.styleLabel],
+                avoidsHighway: requirement.avoidHighways,
+                hasHighway: !requirement.avoidHighways,
+                qualityScore: 88,
               ),
             );
           }
@@ -1419,7 +1725,7 @@ void main() {
 
         expect(report, isNotNull);
         expect(report!.coverageStatus, 'thin');
-        expect(report.fulfilledCombinationCount, 5);
+        expect(report.fulfilledCombinationCount, 23);
         expect(report.seedJobsQueuedCount, 1);
         expect(jobs, hasLength(1));
         expect(jobs.single.distanceBucket, 75);
@@ -1532,7 +1838,7 @@ void main() {
         expect(stuttgart?.coverageStatus, 'empty');
         expect(munich?.coverageStatus, 'empty');
         expect(zurich?.coverageStatus, 'empty');
-        expect(coverages, hasLength(18));
+        expect(coverages, hasLength(72));
         expect(jobs, isEmpty);
       },
     );
@@ -1725,10 +2031,17 @@ RoutePoolCoverageCheck _coverageCheck({
     bootstrapEnabled: coverageStatus != 'hard_region_curated_needed',
     curatedSeedPreferred: coverageStatus == 'hard_region_curated_needed',
     minVerifiedCount: 3,
-    targetPoolSize: 15,
+    targetPoolSize: 8,
     maxPoolSize: 20,
+    candidateBufferLimit: 30,
+    acceptableReserveLimitPercent: 25,
     currentVerifiedCount: 0,
     currentCandidateCount: 0,
+    idealCount: 0,
+    goodCount: 0,
+    acceptableCount: 0,
+    rejectedCount: 0,
+    distinctFingerprintCount: 0,
     seedJobCreated: seedJobStatus == 'queued',
     duplicateJobPrevented: false,
     poolHealthy: false,
@@ -1752,6 +2065,7 @@ RoutePoolEntry _route({
   bool avoidsHighway = true,
   bool hasHighway = false,
   double qualityScore = 80,
+  Map<String, dynamic> routePayload = const {},
 }) {
   return RoutePoolEntry(
     id: id,
@@ -1769,6 +2083,7 @@ RoutePoolEntry _route({
     hasHighway: hasHighway,
     qualityScore: qualityScore,
     verified: true,
+    routePayload: routePayload,
     geometry: {
       'type': 'LineString',
       'coordinates': [

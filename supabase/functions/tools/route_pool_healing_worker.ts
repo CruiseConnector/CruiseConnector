@@ -57,6 +57,7 @@ interface RouteRegion {
   hard_region_status?: string;
   bootstrap_enabled?: boolean;
   curated_seed_preferred?: boolean;
+  default_min_verified_count?: number;
   default_target_pool_size?: number;
   default_max_pool_size?: number;
   healthy_threshold?: number;
@@ -666,7 +667,7 @@ async function refreshCoverage(job: SeedJob, region: RouteRegion) {
   const verifiedRows = await rest<JsonMap[]>("route_pool", {
     query: new URLSearchParams({
       select:
-        "route_fingerprint,style_tags,admin2_name,avoids_highway,has_highway",
+        "id,route_fingerprint,style_tags,admin2_name,avoids_highway,has_highway,quality_score,route_payload",
       verified: "eq.true",
       is_active: "eq.true",
       country_code: `eq.${region.country_code}`,
@@ -676,15 +677,7 @@ async function refreshCoverage(job: SeedJob, region: RouteRegion) {
       distance_bucket: `eq.${job.distance_bucket}`,
     }),
   });
-  const verifiedCount =
-    verifiedRows.filter((row) =>
-      nullableSame(row.admin2_name, region.admin2_name) &&
-      styleTags(row.style_tags).map(normalizeStyleKey).includes(
-        job.style_key,
-      ) &&
-      (!job.avoid_highways ||
-        (row.avoids_highway === true && row.has_highway !== true))
-    ).length;
+  const verifiedSummary = summarizeVerifiedRows(verifiedRows, job, region);
   const candidateRows = await rest<JsonMap[]>("route_pool_candidates", {
     query: new URLSearchParams({
       select: "id,admin2_name",
@@ -702,15 +695,17 @@ async function refreshCoverage(job: SeedJob, region: RouteRegion) {
     candidateRows.filter((row) =>
       nullableSame(row.admin2_name, region.admin2_name)
     ).length;
-  const threshold = healthyThreshold(region, job);
-  const coverageStatus = verifiedCount >= threshold
-    ? "healthy"
-    : verifiedCount > 0
-    ? (region.difficulty_level === "hard" ? "hard_region_thin" : "thin")
-    : "warming_up";
-  const healingStatus = verifiedCount >= threshold ? "idle" : "healing_queued";
+  const policy = coveragePolicy(region);
+  const coverageStatus = coverageStatusForSummary(
+    verifiedSummary,
+    policy,
+    region,
+  );
+  const healingStatus = coverageMeetsMinimum(verifiedSummary, policy)
+    ? "idle"
+    : "healing_queued";
   await upsertCoverage(job, region, {
-    verifiedCount,
+    verifiedSummary,
     candidateCount,
     coverageStatus,
     healingStatus,
@@ -740,7 +735,7 @@ async function upsertCoverage(
   job: SeedJob,
   region: RouteRegion,
   data: {
-    verifiedCount: number;
+    verifiedSummary: CoverageQualitySummary;
     candidateCount: number;
     coverageStatus: string;
     healingStatus: string;
@@ -757,11 +752,21 @@ async function upsertCoverage(
     distance_bucket: job.distance_bucket,
     style_key: job.style_key,
     avoid_highways: job.avoid_highways,
+    min_verified_count: 3,
+    target_pool_size: 8,
+    max_pool_size: 20,
+    candidate_buffer_limit: 30,
+    acceptable_reserve_limit_percent: 25,
     coverage_status: data.coverageStatus,
     healing_status: data.healingStatus,
     healing_priority: job.priority ?? 0,
-    current_verified_count: data.verifiedCount,
+    current_verified_count: data.verifiedSummary.verifiedCount,
     current_candidate_count: data.candidateCount,
+    ideal_count: data.verifiedSummary.idealCount,
+    good_count: data.verifiedSummary.goodCount,
+    acceptable_count: data.verifiedSummary.acceptableCount,
+    rejected_count: data.verifiedSummary.rejectedCount,
+    distinct_fingerprint_count: data.verifiedSummary.distinctFingerprintCount,
     difficulty_level: region.difficulty_level ?? job.difficulty_level ??
       "normal",
     hard_region_status: region.hard_region_status ??
@@ -1012,6 +1017,142 @@ function styleTags(raw: unknown): string[] {
     return raw.split(",").map((item) => item.trim()).filter(Boolean);
   }
   return [];
+}
+
+interface CoveragePolicy {
+  minVerifiedCount: number;
+  targetPoolSize: number;
+  maxPoolSize: number;
+  acceptableReserveLimitPercent: number;
+  minDistinctFingerprints: number;
+}
+
+interface CoverageQualitySummary {
+  verifiedCount: number;
+  idealCount: number;
+  goodCount: number;
+  acceptableCount: number;
+  rejectedCount: number;
+  distinctFingerprintCount: number;
+}
+
+function coveragePolicy(region: RouteRegion): CoveragePolicy {
+  return {
+    minVerifiedCount: 3,
+    targetPoolSize: 8,
+    maxPoolSize: Math.max(8, region.default_max_pool_size ?? 20),
+    acceptableReserveLimitPercent: 25,
+    minDistinctFingerprints: 3,
+  };
+}
+
+function summarizeVerifiedRows(
+  rows: JsonMap[],
+  job: SeedJob,
+  region: RouteRegion,
+): CoverageQualitySummary {
+  const fingerprints = new Set<string>();
+  const summary = {
+    verifiedCount: 0,
+    idealCount: 0,
+    goodCount: 0,
+    acceptableCount: 0,
+    rejectedCount: 0,
+    distinctFingerprintCount: 0,
+  };
+  for (const row of rows) {
+    if (!nullableSame(row.admin2_name, region.admin2_name)) continue;
+    if (!styleTags(row.style_tags).map(normalizeStyleKey).includes(job.style_key)) {
+      continue;
+    }
+    if (!highwayMatches(row, job.avoid_highways)) continue;
+
+    summary.verifiedCount += 1;
+    const fingerprint = String(
+      row.route_fingerprint ?? routePayload(row).route_fingerprint ??
+        routePayload(row).fingerprint ?? routePayload(row).seed_key ??
+        row.id ?? "",
+    );
+    if (fingerprint.trim().length > 0) fingerprints.add(fingerprint.trim());
+    switch (qualityTierForRow(row)) {
+      case "ideal":
+        summary.idealCount += 1;
+        break;
+      case "good":
+        summary.goodCount += 1;
+        break;
+      case "acceptable":
+        summary.acceptableCount += 1;
+        break;
+      default:
+        summary.rejectedCount += 1;
+        break;
+    }
+  }
+  summary.distinctFingerprintCount = fingerprints.size;
+  return summary;
+}
+
+function highwayMatches(row: JsonMap, avoidHighways: boolean): boolean {
+  if (avoidHighways) {
+    return row.avoids_highway === true && row.has_highway !== true;
+  }
+  return row.avoids_highway !== true;
+}
+
+function qualityTierForRow(row: JsonMap): string {
+  const payloadTier = String(routePayload(row).quality_tier ?? "")
+    .trim()
+    .toLowerCase();
+  if (
+    payloadTier === "ideal" ||
+    payloadTier === "good" ||
+    payloadTier === "acceptable" ||
+    payloadTier === "rejected"
+  ) {
+    return payloadTier;
+  }
+  const qualityScore = Number(row.quality_score ?? 0);
+  if (qualityScore >= 92) return "ideal";
+  if (qualityScore >= 82) return "good";
+  if (qualityScore >= 70) return "acceptable";
+  return "rejected";
+}
+
+function routePayload(row: JsonMap): JsonMap {
+  return typeof row.route_payload === "object" && row.route_payload !== null
+    ? row.route_payload as JsonMap
+    : {};
+}
+
+function coverageMeetsMinimum(
+  summary: CoverageQualitySummary,
+  policy: CoveragePolicy,
+): boolean {
+  const goodEnoughCount = summary.idealCount + summary.goodCount;
+  const acceptableLimit = Math.floor(
+    summary.verifiedCount * (policy.acceptableReserveLimitPercent / 100),
+  );
+  return summary.verifiedCount >= policy.minVerifiedCount &&
+    summary.distinctFingerprintCount >= policy.minDistinctFingerprints &&
+    goodEnoughCount >= policy.minVerifiedCount &&
+    summary.acceptableCount <= acceptableLimit;
+}
+
+function coverageStatusForSummary(
+  summary: CoverageQualitySummary,
+  policy: CoveragePolicy,
+  region: RouteRegion,
+): string {
+  if (summary.verifiedCount > policy.maxPoolSize) return "overfull";
+  if (coverageMeetsMinimum(summary, policy)) {
+    return summary.verifiedCount >= policy.targetPoolSize ? "target_met" : "healthy";
+  }
+  if (summary.verifiedCount >= policy.minVerifiedCount) return "quality_thin";
+  if (summary.verifiedCount > 0) {
+    return region.difficulty_level === "hard" ? "hard_region_thin" : "thin";
+  }
+  return "warming_up";
 }
 
 function nullableSame(left: unknown, right: unknown): boolean {

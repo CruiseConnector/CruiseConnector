@@ -77,8 +77,15 @@ class RoutePoolCoverageCheck {
     required this.minVerifiedCount,
     required this.targetPoolSize,
     required this.maxPoolSize,
+    required this.candidateBufferLimit,
+    required this.acceptableReserveLimitPercent,
     required this.currentVerifiedCount,
     required this.currentCandidateCount,
+    required this.idealCount,
+    required this.goodCount,
+    required this.acceptableCount,
+    required this.rejectedCount,
+    required this.distinctFingerprintCount,
     required this.seedJobCreated,
     required this.duplicateJobPrevented,
     required this.poolHealthy,
@@ -100,8 +107,15 @@ class RoutePoolCoverageCheck {
   final int minVerifiedCount;
   final int targetPoolSize;
   final int maxPoolSize;
+  final int candidateBufferLimit;
+  final int acceptableReserveLimitPercent;
   final int currentVerifiedCount;
   final int currentCandidateCount;
+  final int idealCount;
+  final int goodCount;
+  final int acceptableCount;
+  final int rejectedCount;
+  final int distinctFingerprintCount;
   final bool seedJobCreated;
   final bool duplicateJobPrevented;
   final bool poolHealthy;
@@ -117,6 +131,7 @@ class RoutePoolCoverageCheck {
       coverageStatus == 'cooldown' ||
       coverageStatus == 'empty' ||
       coverageStatus == 'thin' ||
+      coverageStatus == 'quality_thin' ||
       coverageStatus == 'hard_region_thin' ||
       coverageStatus == 'hard_region_curated_needed' ||
       coverageStatus == 'bootstrap_limited';
@@ -163,6 +178,18 @@ class RoutePoolCoverageCheck {
       'country_code': assignment?.region.countryCode,
       'admin1_name': assignment?.region.admin1Name,
       'admin2_name': assignment?.region.admin2Name,
+      'coverage_cell_key': coverage == null
+          ? null
+          : RoutePoolService.coverageCellKey(
+              countryCode: coverage!.countryCode,
+              admin1Name: coverage!.admin1Name,
+              admin2Name: coverage!.admin2Name,
+              cityCluster: coverage!.cityCluster,
+              routeType: coverage!.routeType,
+              distanceBucket: coverage!.distanceBucket,
+              styleKey: coverage!.styleKey,
+              avoidHighways: coverage!.avoidHighways,
+            ),
       'new_cluster_created': assignment?.newClusterCreated ?? false,
       'chosen_cluster_distance_km': assignment == null
           ? null
@@ -170,13 +197,21 @@ class RoutePoolCoverageCheck {
       'min_verified_count': minVerifiedCount,
       'target_pool_size': targetPoolSize,
       'max_pool_size': maxPoolSize,
+      'candidate_buffer_limit': candidateBufferLimit,
+      'acceptable_reserve_limit_percent': acceptableReserveLimitPercent,
       'current_verified_count': currentVerifiedCount,
       'current_candidate_count': currentCandidateCount,
+      'ideal_count': idealCount,
+      'good_count': goodCount,
+      'acceptable_count': acceptableCount,
+      'rejected_count': rejectedCount,
+      'distinct_fingerprint_count': distinctFingerprintCount,
       'pool_healthy': poolHealthy,
       'pool_full': poolFull,
       'local_pool_unavailable':
           coverageStatus == 'empty' ||
           coverageStatus == 'thin' ||
+          coverageStatus == 'quality_thin' ||
           coverageStatus == 'warming_up' ||
           coverageStatus == 'cooldown' ||
           coverageStatus == 'hard_region_thin' ||
@@ -198,6 +233,9 @@ class _CoveragePolicy {
     required this.minVerifiedCount,
     required this.targetPoolSize,
     required this.maxPoolSize,
+    required this.candidateBufferLimit,
+    required this.acceptableReserveLimitPercent,
+    required this.minDistinctFingerprints,
     required this.healthyThreshold,
     required this.thinThreshold,
     required this.seedBudgetUnits,
@@ -212,6 +250,9 @@ class _CoveragePolicy {
   final int minVerifiedCount;
   final int targetPoolSize;
   final int maxPoolSize;
+  final int candidateBufferLimit;
+  final int acceptableReserveLimitPercent;
+  final int minDistinctFingerprints;
   final int healthyThreshold;
   final int thinThreshold;
   final int seedBudgetUnits;
@@ -236,12 +277,31 @@ class RoutePoolRequiredCombination {
   final int requiredVerifiedCount;
 }
 
+class _RequiredCoverageStyle {
+  const _RequiredCoverageStyle(this.label, this.key);
+
+  final String label;
+  final String key;
+}
+
+const List<_RequiredCoverageStyle> _requiredCoverageStyles = [
+  _RequiredCoverageStyle('Sport Mode', 'sport_mode'),
+  _RequiredCoverageStyle('Kurvenjagd', 'kurvenjagd'),
+  _RequiredCoverageStyle('Abendrunde', 'abendrunde'),
+  _RequiredCoverageStyle('Entdecker', 'entdecker'),
+];
+
 class RoutePoolCombinationCoverage {
   const RoutePoolCombinationCoverage({
     required this.requirement,
     required this.coverageStatus,
     required this.currentVerifiedCount,
     required this.currentCandidateCount,
+    required this.idealCount,
+    required this.goodCount,
+    required this.acceptableCount,
+    required this.rejectedCount,
+    required this.distinctFingerprintCount,
     required this.seedJobQueued,
     required this.duplicateJobPrevented,
     required this.seedJobPriority,
@@ -253,6 +313,11 @@ class RoutePoolCombinationCoverage {
   final String coverageStatus;
   final int currentVerifiedCount;
   final int currentCandidateCount;
+  final int idealCount;
+  final int goodCount;
+  final int acceptableCount;
+  final int rejectedCount;
+  final int distinctFingerprintCount;
   final bool seedJobQueued;
   final bool duplicateJobPrevented;
   final int? seedJobPriority;
@@ -260,6 +325,7 @@ class RoutePoolCombinationCoverage {
   final int missingVerifiedCount;
 
   bool get isFulfilled => missingVerifiedCount <= 0;
+  bool get healingJobNeeded => missingVerifiedCount > 0;
   String get label =>
       '${requirement.distanceBucket} ${requirement.styleLabel} '
       '${requirement.avoidHighways ? 'AUS' : 'AN'}';
@@ -291,7 +357,9 @@ class RoutePoolClusterCoverageReport {
   final List<RoutePoolCombinationCoverage> combinations;
 
   bool get isHealthyMinimum =>
-      coverageStatus == 'healthy_minimum' || coverageStatus == 'healthy_full';
+      coverageStatus == 'healthy_minimum' ||
+      coverageStatus == 'healthy_full' ||
+      coverageStatus == 'target_met';
 
   List<RoutePoolCombinationCoverage> get missingCombinations =>
       combinations.where((combo) => !combo.isFulfilled).toList(growable: false);
@@ -335,53 +403,25 @@ class RoutePoolService {
   static const double roundTripIdealStartMaxKm = 5.0;
   static const double roundTripHardStartMaxKm = 10.0;
   static const Set<int> validDistanceBuckets = {50, 75, 100};
-  static const int defaultTargetPoolSize = 15;
+  static const int defaultMinVerifiedPerCell = 3;
+  static const int defaultTargetPoolSize = 8;
   static const int defaultMaxPoolSize = 20;
+  static const int defaultCandidateBufferLimit = 30;
+  static const int defaultAcceptableReserveLimitPercent = 25;
+  static const int defaultMinDistinctFingerprints = 3;
   static const Duration coverageRefreshTtl = Duration(minutes: 15);
   static const Duration defaultSeedJobCooldown = Duration(minutes: 20);
-  static const List<RoutePoolRequiredCombination> mvpRequiredCombinations = [
-    RoutePoolRequiredCombination(
-      distanceBucket: 50,
-      styleLabel: 'Sport Mode',
-      styleKey: 'sport_mode',
-      avoidHighways: true,
-      requiredVerifiedCount: 3,
-    ),
-    RoutePoolRequiredCombination(
-      distanceBucket: 50,
-      styleLabel: 'Kurvenjagd',
-      styleKey: 'kurvenjagd',
-      avoidHighways: true,
-      requiredVerifiedCount: 3,
-    ),
-    RoutePoolRequiredCombination(
-      distanceBucket: 75,
-      styleLabel: 'Sport Mode',
-      styleKey: 'sport_mode',
-      avoidHighways: true,
-      requiredVerifiedCount: 3,
-    ),
-    RoutePoolRequiredCombination(
-      distanceBucket: 75,
-      styleLabel: 'Kurvenjagd',
-      styleKey: 'kurvenjagd',
-      avoidHighways: true,
-      requiredVerifiedCount: 3,
-    ),
-    RoutePoolRequiredCombination(
-      distanceBucket: 100,
-      styleLabel: 'Sport Mode',
-      styleKey: 'sport_mode',
-      avoidHighways: true,
-      requiredVerifiedCount: 2,
-    ),
-    RoutePoolRequiredCombination(
-      distanceBucket: 100,
-      styleLabel: 'Kurvenjagd',
-      styleKey: 'kurvenjagd',
-      avoidHighways: true,
-      requiredVerifiedCount: 2,
-    ),
+  static final List<RoutePoolRequiredCombination> mvpRequiredCombinations = [
+    for (final bucket in validDistanceBuckets)
+      for (final style in _requiredCoverageStyles)
+        for (final avoidHighways in [true, false])
+          RoutePoolRequiredCombination(
+            distanceBucket: bucket,
+            styleLabel: style.label,
+            styleKey: style.key,
+            avoidHighways: avoidHighways,
+            requiredVerifiedCount: defaultMinVerifiedPerCell,
+          ),
   ];
 
   final SupabaseClient? _client;
@@ -392,6 +432,28 @@ class RoutePoolService {
   final List<RoutePoolCandidate>? _inMemoryCandidates;
 
   SupabaseClient get _db => _client ?? Supabase.instance.client;
+
+  static String coverageCellKey({
+    required String countryCode,
+    required String admin1Name,
+    String? admin2Name,
+    required String cityCluster,
+    required String routeType,
+    required int distanceBucket,
+    required String styleKey,
+    required bool avoidHighways,
+  }) {
+    return [
+      countryCode.trim().toUpperCase(),
+      _cellKeyPart(admin1Name),
+      _cellKeyPart(admin2Name),
+      _cellKeyPart(cityCluster),
+      routeType.trim().toUpperCase(),
+      distanceBucket.toString(),
+      _normalizeStyleKey(styleKey),
+      avoidHighways ? 'avoid_highways' : 'allow_highways',
+    ].join('|');
+  }
 
   Future<RoutePoolRegionAssignment?> resolveRegionAssignment({
     required double userLat,
@@ -463,8 +525,15 @@ class RoutePoolService {
         minVerifiedCount: 3,
         targetPoolSize: defaultTargetPoolSize,
         maxPoolSize: defaultMaxPoolSize,
+        candidateBufferLimit: defaultCandidateBufferLimit,
+        acceptableReserveLimitPercent: defaultAcceptableReserveLimitPercent,
         currentVerifiedCount: 0,
         currentCandidateCount: 0,
+        idealCount: 0,
+        goodCount: 0,
+        acceptableCount: 0,
+        rejectedCount: 0,
+        distinctFingerprintCount: 0,
         seedJobCreated: false,
         duplicateJobPrevented: false,
         poolHealthy: false,
@@ -495,8 +564,15 @@ class RoutePoolService {
         minVerifiedCount: 3,
         targetPoolSize: defaultTargetPoolSize,
         maxPoolSize: defaultMaxPoolSize,
+        candidateBufferLimit: defaultCandidateBufferLimit,
+        acceptableReserveLimitPercent: defaultAcceptableReserveLimitPercent,
         currentVerifiedCount: 0,
         currentCandidateCount: 0,
+        idealCount: 0,
+        goodCount: 0,
+        acceptableCount: 0,
+        rejectedCount: 0,
+        distinctFingerprintCount: 0,
         seedJobCreated: false,
         duplicateJobPrevented: false,
         poolHealthy: false,
@@ -566,6 +642,10 @@ class RoutePoolService {
           coverageStatus: _deriveCoverageStatus(
             policy: policy,
             currentVerifiedCount: coverage.currentVerifiedCount,
+            idealCount: coverage.idealCount,
+            goodCount: coverage.goodCount,
+            acceptableCount: coverage.acceptableCount,
+            distinctFingerprintCount: coverage.distinctFingerprintCount,
             hasBootstrapPending: true,
             isCooldown: seedJob.isCoolingDown,
           ),
@@ -586,6 +666,10 @@ class RoutePoolService {
     final coverageStatus = _deriveCoverageStatus(
       policy: policy,
       currentVerifiedCount: coverage.currentVerifiedCount,
+      idealCount: coverage.idealCount,
+      goodCount: coverage.goodCount,
+      acceptableCount: coverage.acceptableCount,
+      distinctFingerprintCount: coverage.distinctFingerprintCount,
       hasBootstrapPending: hasBootstrapPending,
       isCooldown: seedJob?.isCoolingDown ?? false,
     );
@@ -616,12 +700,22 @@ class RoutePoolService {
       minVerifiedCount: syncedCoverage.minVerifiedCount,
       targetPoolSize: syncedCoverage.targetPoolSize,
       maxPoolSize: syncedCoverage.maxPoolSize,
+      candidateBufferLimit: syncedCoverage.candidateBufferLimit,
+      acceptableReserveLimitPercent:
+          syncedCoverage.acceptableReserveLimitPercent,
       currentVerifiedCount: syncedCoverage.currentVerifiedCount,
       currentCandidateCount: syncedCoverage.currentCandidateCount,
+      idealCount: syncedCoverage.idealCount,
+      goodCount: syncedCoverage.goodCount,
+      acceptableCount: syncedCoverage.acceptableCount,
+      rejectedCount: syncedCoverage.rejectedCount,
+      distinctFingerprintCount: syncedCoverage.distinctFingerprintCount,
       seedJobCreated: seedJobCreated,
       duplicateJobPrevented: duplicateJobPrevented,
-      poolHealthy:
-          syncedCoverage.currentVerifiedCount >= policy.healthyThreshold,
+      poolHealthy: _coverageMeetsMinimum(
+        policy: policy,
+        coverage: syncedCoverage,
+      ),
       poolFull:
           syncedCoverage.currentVerifiedCount >= syncedCoverage.maxPoolSize,
       bootstrapPending: hasBootstrapPending,
@@ -682,9 +776,9 @@ class RoutePoolService {
       );
       var seedJobQueued = false;
       var duplicatePrevented = false;
-      final missingVerifiedCount = math.max(
-        0,
-        requirement.requiredVerifiedCount - coverage.currentVerifiedCount,
+      final missingVerifiedCount = _missingMinimumCoverageCount(
+        policy: policy,
+        coverage: coverage,
       );
       if (createSeedJobs &&
           missingVerifiedCount > 0 &&
@@ -724,6 +818,10 @@ class RoutePoolService {
             coverageStatus: _deriveCoverageStatus(
               policy: policy,
               currentVerifiedCount: coverage.currentVerifiedCount,
+              idealCount: coverage.idealCount,
+              goodCount: coverage.goodCount,
+              acceptableCount: coverage.acceptableCount,
+              distinctFingerprintCount: coverage.distinctFingerprintCount,
               hasBootstrapPending: true,
               isCooldown: seedJob.isCoolingDown,
             ),
@@ -744,6 +842,10 @@ class RoutePoolService {
       final coverageStatus = _deriveCoverageStatus(
         policy: policy,
         currentVerifiedCount: coverage.currentVerifiedCount,
+        idealCount: coverage.idealCount,
+        goodCount: coverage.goodCount,
+        acceptableCount: coverage.acceptableCount,
+        distinctFingerprintCount: coverage.distinctFingerprintCount,
         hasBootstrapPending: hasBootstrapPending,
         isCooldown: seedJob?.isCoolingDown ?? false,
       );
@@ -768,13 +870,18 @@ class RoutePoolService {
           coverageStatus: coverageStatus,
           currentVerifiedCount: coverage.currentVerifiedCount,
           currentCandidateCount: coverage.currentCandidateCount,
+          idealCount: coverage.idealCount,
+          goodCount: coverage.goodCount,
+          acceptableCount: coverage.acceptableCount,
+          rejectedCount: coverage.rejectedCount,
+          distinctFingerprintCount: coverage.distinctFingerprintCount,
           seedJobQueued: seedJobQueued,
           duplicateJobPrevented: duplicatePrevented,
           seedJobPriority: seedJob?.priority,
           seedJobStatus: seedJob?.status,
           missingVerifiedCount: math.max(
             0,
-            requirement.requiredVerifiedCount - coverage.currentVerifiedCount,
+            _missingMinimumCoverageCount(policy: policy, coverage: coverage),
           ),
         ),
       );
@@ -1090,6 +1197,8 @@ class RoutePoolService {
           routeQuery = routeQuery
               .eq('avoids_highway', true)
               .eq('has_highway', false);
+        } else {
+          routeQuery = routeQuery.eq('avoids_highway', false);
         }
 
         final routeRows = await routeQuery
@@ -1212,12 +1321,7 @@ class RoutePoolService {
       );
 
       final orderedMatches = preferSingleBucketRoundTrip
-          ? <RoutePoolMatch>[
-              ...exactPrimaryMatches,
-              ...relaxedPrimaryMatches,
-              ...exactFallbackMatches,
-              ...relaxedFallbackMatches,
-            ]
+          ? <RoutePoolMatch>[...exactPrimaryMatches]
           : <RoutePoolMatch>[
               ...exactPrimaryMatches,
               ...exactFallbackMatches,
@@ -1455,12 +1559,7 @@ class RoutePoolService {
       requestedStyle: style,
     );
     final orderedMatches = preferSingleBucketRoundTrip
-        ? <RoutePoolMatch>[
-            ...exactPrimaryMatches,
-            ...relaxedPrimaryMatches,
-            ...exactFallbackMatches,
-            ...relaxedFallbackMatches,
-          ]
+        ? <RoutePoolMatch>[...exactPrimaryMatches]
         : <RoutePoolMatch>[
             ...exactPrimaryMatches,
             ...exactFallbackMatches,
@@ -1708,22 +1807,23 @@ class RoutePoolService {
     final policyAlignedCoverage = coverage == null
         ? null
         : _applyCoveragePolicySnapshot(coverage, policy: policy);
+    final policyChanged =
+        coverage != null &&
+        _coveragePolicyChanged(coverage, policyAlignedCoverage!);
     final shouldRefresh =
         coverage == null ||
         forceRefresh ||
+        policyChanged ||
         policyAlignedCoverage!.lastCountedAt == null ||
         DateTime.now().toUtc().difference(
               policyAlignedCoverage.lastCountedAt!,
             ) >
             coverageRefreshTtl;
     if (!shouldRefresh) {
-      if (_coveragePolicyChanged(coverage, policyAlignedCoverage)) {
-        return _upsertCoverage(policyAlignedCoverage);
-      }
       return policyAlignedCoverage;
     }
 
-    final verifiedCount = await _countMatchingVerifiedRoutes(
+    final verifiedSummary = await _summarizeMatchingVerifiedRoutes(
       assignment: assignment,
       distanceBucket: distanceBucket,
       styleKey: styleKey,
@@ -1754,19 +1854,31 @@ class RoutePoolService {
           hardRegionStatus: policy.hardRegionStatus,
           bootstrapEnabled: policy.bootstrapEnabled,
           curatedSeedPreferred: policy.curatedSeedPreferred,
+          minVerifiedCount: policy.minVerifiedCount,
           targetPoolSize: policy.targetPoolSize,
           maxPoolSize: policy.maxPoolSize,
+          candidateBufferLimit: policy.candidateBufferLimit,
+          acceptableReserveLimitPercent: policy.acceptableReserveLimitPercent,
           healthyThreshold: policy.healthyThreshold,
           thinThreshold: policy.thinThreshold,
           seedBudgetUnits: policy.seedBudgetUnits,
           seedCooldownMinutes: policy.seedCooldownMinutes,
         );
     final refreshed = base.copyWith(
-      currentVerifiedCount: verifiedCount,
+      currentVerifiedCount: verifiedSummary.verifiedCount,
       currentCandidateCount: candidateCount,
+      idealCount: verifiedSummary.idealCount,
+      goodCount: verifiedSummary.goodCount,
+      acceptableCount: verifiedSummary.acceptableCount,
+      rejectedCount: verifiedSummary.rejectedCount,
+      distinctFingerprintCount: verifiedSummary.distinctFingerprintCount,
       coverageStatus: _deriveCoverageStatus(
         policy: policy,
-        currentVerifiedCount: verifiedCount,
+        currentVerifiedCount: verifiedSummary.verifiedCount,
+        idealCount: verifiedSummary.idealCount,
+        goodCount: verifiedSummary.goodCount,
+        acceptableCount: verifiedSummary.acceptableCount,
+        distinctFingerprintCount: verifiedSummary.distinctFingerprintCount,
         hasBootstrapPending: false,
         isCooldown: false,
       ),
@@ -1882,48 +1994,56 @@ class RoutePoolService {
     );
   }
 
-  Future<int> _countMatchingVerifiedRoutes({
+  Future<_CoverageQualitySummary> _summarizeMatchingVerifiedRoutes({
     required RoutePoolRegionAssignment assignment,
     required int distanceBucket,
     required String styleKey,
     required bool avoidHighways,
     required String routeType,
   }) async {
+    final summary = _CoverageQualitySummary();
     final inMemoryRoutes = _inMemoryRoutes;
     if (inMemoryRoutes != null) {
-      return inMemoryRoutes.where((route) {
-        if (!route.verified || !route.isActive) return false;
+      for (final route in inMemoryRoutes) {
+        if (!route.verified || !route.isActive) continue;
         if (!_sameText(route.countryCode, assignment.region.countryCode)) {
-          return false;
+          continue;
         }
         if (!_sameText(route.admin1Name, assignment.region.admin1Name)) {
-          return false;
+          continue;
         }
         if (!_nullableSameText(
           route.admin2Name,
           assignment.region.admin2Name,
         )) {
-          return false;
+          continue;
         }
         if (!_sameText(route.cityCluster, assignment.region.cityCluster)) {
-          return false;
+          continue;
         }
-        if (!_sameText(route.routeType, routeType)) return false;
-        if (route.distanceBucket != distanceBucket) return false;
+        if (!_sameText(route.routeType, routeType)) continue;
+        if (route.distanceBucket != distanceBucket) continue;
         if (_normalizeStyleKeyList(route.styleTags).contains(styleKey) ==
             false) {
-          return false;
+          continue;
         }
-        if (avoidHighways && (!route.avoidsHighway || route.hasHighway)) {
-          return false;
+        if (!_highwayMatches(route, avoidHighways)) {
+          continue;
         }
-        return true;
-      }).length;
+        summary.add(
+          qualityTier: _qualityTierForRoute(route),
+          fingerprint: _fingerprintForRoute(route),
+        );
+      }
+      return summary;
     }
 
     final rows = await _db
         .from('route_pool')
-        .select('style_tags, avoids_highway, has_highway, admin2_name')
+        .select(
+          'id, style_tags, avoids_highway, has_highway, admin2_name, '
+          'quality_score, route_payload',
+        )
         .eq('verified', true)
         .eq('is_active', true)
         .eq('country_code', assignment.region.countryCode)
@@ -1931,7 +2051,6 @@ class RoutePoolService {
         .eq('city_cluster', assignment.region.cityCluster)
         .eq('route_type', routeType)
         .eq('distance_bucket', distanceBucket);
-    var count = 0;
     for (final row in rows as List) {
       final map = Map<String, dynamic>.from(row as Map);
       if (!_nullableSameText(
@@ -1942,14 +2061,20 @@ class RoutePoolService {
       }
       final tags = _normalizeStyleKeyList(_styleTagsFromRaw(map['style_tags']));
       if (!tags.contains(styleKey)) continue;
-      if (avoidHighways &&
-          (((map['avoids_highway'] as bool?) ?? false) == false ||
-              ((map['has_highway'] as bool?) ?? false) == true)) {
+      final avoidsHighway = (map['avoids_highway'] as bool?) ?? false;
+      final hasHighway = (map['has_highway'] as bool?) ?? false;
+      if (avoidHighways && (!avoidsHighway || hasHighway)) {
         continue;
       }
-      count += 1;
+      if (!avoidHighways && avoidsHighway) {
+        continue;
+      }
+      summary.add(
+        qualityTier: _qualityTierForRawRoute(map),
+        fingerprint: _fingerprintForRawRoute(map),
+      );
     }
-    return count;
+    return summary;
   }
 
   Future<int> _countMatchingCandidates({
@@ -2368,33 +2493,26 @@ class RoutePoolService {
       0,
       math.min(
         defaultMaxPoolSize,
-        requiredVerifiedCount ??
-            (region.defaultMinVerifiedCount > 0
-                ? region.defaultMinVerifiedCount
-                : (coverage?.minVerifiedCount ?? 3)),
+        requiredVerifiedCount ?? defaultMinVerifiedPerCell,
       ),
     );
-    final targetPoolSize = math.max(
-      math.max(minVerifiedCount, requiredVerifiedCount ?? 1),
-      region.defaultTargetPoolSize > 0
-          ? region.defaultTargetPoolSize
-          : (coverage?.targetPoolSize ?? defaultTargetPoolSize),
+    final targetPoolSize = math.max(minVerifiedCount, defaultTargetPoolSize);
+    final maxPoolSize = math.max(targetPoolSize, defaultMaxPoolSize);
+    final candidateBufferLimit = math.max(
+      0,
+      coverage?.candidateBufferLimit ?? defaultCandidateBufferLimit,
     );
-    final maxPoolSize = math.max(
-      targetPoolSize,
-      region.defaultMaxPoolSize > 0
-          ? region.defaultMaxPoolSize
-          : (coverage?.maxPoolSize ?? defaultMaxPoolSize),
+    final acceptableReserveLimitPercent = math.max(
+      0,
+      math.min(
+        100,
+        coverage?.acceptableReserveLimitPercent ??
+            defaultAcceptableReserveLimitPercent,
+      ),
     );
     final healthyThreshold = math.max(
       1,
-      math.min(
-        maxPoolSize,
-        requiredVerifiedCount ??
-            (region.healthyThreshold > 0
-                ? region.healthyThreshold
-                : (coverage?.healthyThreshold ?? targetPoolSize)),
-      ),
+      math.min(maxPoolSize, minVerifiedCount),
     );
     final thinThreshold = math.max(
       0,
@@ -2414,6 +2532,9 @@ class RoutePoolService {
       minVerifiedCount: minVerifiedCount,
       targetPoolSize: targetPoolSize,
       maxPoolSize: maxPoolSize,
+      candidateBufferLimit: candidateBufferLimit,
+      acceptableReserveLimitPercent: acceptableReserveLimitPercent,
+      minDistinctFingerprints: defaultMinDistinctFingerprints,
       healthyThreshold: healthyThreshold,
       thinThreshold: thinThreshold,
       seedBudgetUnits: math.max(
@@ -2466,6 +2587,8 @@ class RoutePoolService {
       minVerifiedCount: policy.minVerifiedCount,
       targetPoolSize: policy.targetPoolSize,
       maxPoolSize: policy.maxPoolSize,
+      candidateBufferLimit: policy.candidateBufferLimit,
+      acceptableReserveLimitPercent: policy.acceptableReserveLimitPercent,
       healthyThreshold: policy.healthyThreshold,
       thinThreshold: policy.thinThreshold,
       seedBudgetUnits: policy.seedBudgetUnits,
@@ -2484,6 +2607,9 @@ class RoutePoolService {
         current.minVerifiedCount != next.minVerifiedCount ||
         current.targetPoolSize != next.targetPoolSize ||
         current.maxPoolSize != next.maxPoolSize ||
+        current.candidateBufferLimit != next.candidateBufferLimit ||
+        current.acceptableReserveLimitPercent !=
+            next.acceptableReserveLimitPercent ||
         current.healthyThreshold != next.healthyThreshold ||
         current.thinThreshold != next.thinThreshold ||
         current.seedBudgetUnits != next.seedBudgetUnits ||
@@ -2495,8 +2621,13 @@ class RoutePoolService {
     required RoutePoolCoverage coverage,
     required RouteSeedJob? existingSeedJob,
   }) {
-    if (coverage.currentVerifiedCount >= policy.healthyThreshold) return false;
+    if (_coverageMeetsMinimum(policy: policy, coverage: coverage)) {
+      return false;
+    }
     if (coverage.currentVerifiedCount >= policy.maxPoolSize) return false;
+    if (coverage.currentCandidateCount >= policy.candidateBufferLimit) {
+      return false;
+    }
     if (!policy.bootstrapEnabled) return false;
     if (policy.isHard && policy.curatedSeedPreferred) return false;
     if (policy.seedBudgetUnits <= 0) return false;
@@ -2558,10 +2689,34 @@ class RoutePoolService {
   static String _deriveCoverageStatus({
     required _CoveragePolicy policy,
     required int currentVerifiedCount,
+    required int idealCount,
+    required int goodCount,
+    required int acceptableCount,
+    required int distinctFingerprintCount,
     required bool hasBootstrapPending,
     required bool isCooldown,
   }) {
-    if (currentVerifiedCount >= policy.healthyThreshold) return 'healthy';
+    if (currentVerifiedCount > policy.maxPoolSize) return 'overfull';
+    final goodEnoughCount = idealCount + goodCount;
+    final acceptableLimit = _acceptableReserveLimit(
+      currentVerifiedCount: currentVerifiedCount,
+      acceptableReserveLimitPercent: policy.acceptableReserveLimitPercent,
+    );
+    final acceptableOverLimit =
+        currentVerifiedCount > 0 && acceptableCount > acceptableLimit;
+    final minimumMet =
+        currentVerifiedCount >= policy.minVerifiedCount &&
+        distinctFingerprintCount >= policy.minDistinctFingerprints &&
+        goodEnoughCount >= policy.minVerifiedCount &&
+        !acceptableOverLimit;
+    if (minimumMet && currentVerifiedCount >= policy.targetPoolSize) {
+      return 'target_met';
+    }
+    if (minimumMet) return 'healthy';
+    if (currentVerifiedCount >= policy.minVerifiedCount &&
+        (goodEnoughCount < policy.minVerifiedCount || acceptableOverLimit)) {
+      return 'quality_thin';
+    }
     if (policy.isHard) {
       if (hasBootstrapPending || isCooldown) return 'bootstrap_limited';
       if (currentVerifiedCount > 0) return 'hard_region_thin';
@@ -2576,6 +2731,55 @@ class RoutePoolService {
     if (hasBootstrapPending) return 'warming_up';
     if (currentVerifiedCount > 0) return 'thin';
     return 'empty';
+  }
+
+  static bool _coverageMeetsMinimum({
+    required _CoveragePolicy policy,
+    required RoutePoolCoverage coverage,
+  }) {
+    final goodEnoughCount = coverage.idealCount + coverage.goodCount;
+    final acceptableLimit = _acceptableReserveLimit(
+      currentVerifiedCount: coverage.currentVerifiedCount,
+      acceptableReserveLimitPercent: policy.acceptableReserveLimitPercent,
+    );
+    return coverage.currentVerifiedCount >= policy.minVerifiedCount &&
+        coverage.distinctFingerprintCount >= policy.minDistinctFingerprints &&
+        goodEnoughCount >= policy.minVerifiedCount &&
+        coverage.acceptableCount <= acceptableLimit;
+  }
+
+  static int _missingMinimumCoverageCount({
+    required _CoveragePolicy policy,
+    required RoutePoolCoverage coverage,
+  }) {
+    if (_coverageMeetsMinimum(policy: policy, coverage: coverage)) return 0;
+    final missingVerified = math.max(
+      0,
+      policy.minVerifiedCount - coverage.currentVerifiedCount,
+    );
+    final missingDistinct = math.max(
+      0,
+      policy.minDistinctFingerprints - coverage.distinctFingerprintCount,
+    );
+    final missingGoodEnough = math.max(
+      0,
+      policy.minVerifiedCount - (coverage.idealCount + coverage.goodCount),
+    );
+    return math.max(
+      missingVerified,
+      math.max(missingDistinct, missingGoodEnough),
+    );
+  }
+
+  static int _acceptableReserveLimit({
+    required int currentVerifiedCount,
+    required int acceptableReserveLimitPercent,
+  }) {
+    if (currentVerifiedCount <= 0 || acceptableReserveLimitPercent <= 0) {
+      return 0;
+    }
+    return (currentVerifiedCount * (acceptableReserveLimitPercent / 100))
+        .floor();
   }
 
   static double _candidateLocalityScore({required double distanceToCenterKm}) {
@@ -2615,6 +2819,8 @@ class RoutePoolService {
     final stylePriority = switch (requiredCombination.styleKey) {
       'sport_mode' => 30,
       'kurvenjagd' => 30,
+      'entdecker' => 24,
+      'abendrunde' => 18,
       _ => 10,
     };
     return tierPriority + bucketPriority + stylePriority + (missingCount * 10);
@@ -2628,6 +2834,10 @@ class RoutePoolService {
         .replaceAll(RegExp(r'_+'), '_')
         .replaceAll(RegExp(r'^_|_$'), '');
     return cleaned.isEmpty ? 'standard' : cleaned;
+  }
+
+  static String _cellKeyPart(String? value) {
+    return (value ?? '').trim().toLowerCase().replaceAll(RegExp(r'\s+'), '_');
   }
 
   static List<String> _normalizeStyleKeyList(List<String> styles) {
@@ -2646,6 +2856,55 @@ class RoutePoolService {
           .toList(growable: false);
     }
     return const [];
+  }
+
+  static String _qualityTierForRoute(RoutePoolEntry route) {
+    final payloadTier = route.routePayload['quality_tier']?.toString();
+    return _normalizeQualityTier(payloadTier, route.qualityScore);
+  }
+
+  static String _qualityTierForRawRoute(Map<String, dynamic> route) {
+    final payload = route['route_payload'];
+    final payloadTier = payload is Map
+        ? payload['quality_tier']?.toString()
+        : null;
+    final qualityScore = (route['quality_score'] as num?)?.toDouble() ?? 0.0;
+    return _normalizeQualityTier(payloadTier, qualityScore);
+  }
+
+  static String _normalizeQualityTier(String? rawTier, double qualityScore) {
+    final tier = (rawTier ?? '').trim().toLowerCase();
+    if (tier == 'ideal' ||
+        tier == 'good' ||
+        tier == 'acceptable' ||
+        tier == 'rejected') {
+      return tier;
+    }
+    if (qualityScore >= 92) return 'ideal';
+    if (qualityScore >= 82) return 'good';
+    if (qualityScore >= 70) return 'acceptable';
+    return 'rejected';
+  }
+
+  static String _fingerprintForRoute(RoutePoolEntry route) {
+    final payload = route.routePayload;
+    return (payload['route_fingerprint'] ??
+            payload['fingerprint'] ??
+            payload['seed_key'] ??
+            route.id)
+        .toString();
+  }
+
+  static String _fingerprintForRawRoute(Map<String, dynamic> route) {
+    final payload = route['route_payload'];
+    if (payload is Map) {
+      final fingerprint =
+          payload['route_fingerprint'] ??
+          payload['fingerprint'] ??
+          payload['seed_key'];
+      if (fingerprint != null) return fingerprint.toString();
+    }
+    return route['id']?.toString() ?? '';
   }
 
   static double haversineDistanceKm(
@@ -2721,8 +2980,8 @@ class RoutePoolService {
   }
 
   static bool _highwayMatches(RoutePoolEntry candidate, bool avoidHighways) {
-    if (!avoidHighways) return true;
-    return candidate.avoidsHighway && !candidate.hasHighway;
+    if (avoidHighways) return candidate.avoidsHighway && !candidate.hasHighway;
+    return !candidate.avoidsHighway;
   }
 
   static bool _locationScopeMatches(
@@ -2963,6 +3222,34 @@ class _Bounds {
   final double maxLat;
   final double minLng;
   final double maxLng;
+}
+
+class _CoverageQualitySummary {
+  int verifiedCount = 0;
+  int idealCount = 0;
+  int goodCount = 0;
+  int acceptableCount = 0;
+  int rejectedCount = 0;
+
+  final Set<String> _fingerprints = <String>{};
+
+  int get distinctFingerprintCount => _fingerprints.length;
+
+  void add({required String qualityTier, required String fingerprint}) {
+    verifiedCount += 1;
+    if (fingerprint.trim().isNotEmpty) {
+      _fingerprints.add(fingerprint.trim());
+    }
+    if (qualityTier == 'ideal') {
+      idealCount += 1;
+    } else if (qualityTier == 'good') {
+      goodCount += 1;
+    } else if (qualityTier == 'acceptable') {
+      acceptableCount += 1;
+    } else {
+      rejectedCount += 1;
+    }
+  }
 }
 
 class _SeedJobUpsertResult {

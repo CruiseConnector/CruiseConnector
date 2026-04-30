@@ -16,12 +16,19 @@ class RoutePoolCoverage {
     this.bootstrapEnabled = true,
     this.curatedSeedPreferred = false,
     this.minVerifiedCount = 3,
-    this.targetPoolSize = 15,
+    this.targetPoolSize = 8,
     this.maxPoolSize = 20,
-    this.healthyThreshold = 15,
+    this.candidateBufferLimit = 30,
+    this.acceptableReserveLimitPercent = 25,
+    this.healthyThreshold = 3,
     this.thinThreshold = 1,
     this.currentVerifiedCount = 0,
     this.currentCandidateCount = 0,
+    this.idealCount = 0,
+    this.goodCount = 0,
+    this.acceptableCount = 0,
+    this.rejectedCount = 0,
+    this.distinctFingerprintCount = 0,
     this.seedBudgetUnits = 1,
     this.seedCooldownMinutes = 20,
     this.healingStatus = 'idle',
@@ -61,10 +68,17 @@ class RoutePoolCoverage {
   final int minVerifiedCount;
   final int targetPoolSize;
   final int maxPoolSize;
+  final int candidateBufferLimit;
+  final int acceptableReserveLimitPercent;
   final int healthyThreshold;
   final int thinThreshold;
   final int currentVerifiedCount;
   final int currentCandidateCount;
+  final int idealCount;
+  final int goodCount;
+  final int acceptableCount;
+  final int rejectedCount;
+  final int distinctFingerprintCount;
   final int seedBudgetUnits;
   final int seedCooldownMinutes;
   final String healingStatus;
@@ -85,7 +99,11 @@ class RoutePoolCoverage {
   final DateTime? bootstrapCooldownUntil;
   final String? lastError;
 
-  bool get isHealthy => coverageStatus == 'healthy';
+  bool get isHealthy =>
+      coverageStatus == 'healthy' || coverageStatus == 'target_met';
+  bool get isTargetMet => coverageStatus == 'target_met';
+  bool get isOverfull => coverageStatus == 'overfull';
+  bool get isQualityThin => coverageStatus == 'quality_thin';
   bool get isThin => coverageStatus == 'thin';
   bool get isEmpty => coverageStatus == 'empty';
   bool get isWarmingUp => coverageStatus == 'warming_up';
@@ -118,10 +136,17 @@ class RoutePoolCoverage {
     int? minVerifiedCount,
     int? targetPoolSize,
     int? maxPoolSize,
+    int? candidateBufferLimit,
+    int? acceptableReserveLimitPercent,
     int? healthyThreshold,
     int? thinThreshold,
     int? currentVerifiedCount,
     int? currentCandidateCount,
+    int? idealCount,
+    int? goodCount,
+    int? acceptableCount,
+    int? rejectedCount,
+    int? distinctFingerprintCount,
     int? seedBudgetUnits,
     int? seedCooldownMinutes,
     String? healingStatus,
@@ -161,11 +186,20 @@ class RoutePoolCoverage {
       minVerifiedCount: minVerifiedCount ?? this.minVerifiedCount,
       targetPoolSize: targetPoolSize ?? this.targetPoolSize,
       maxPoolSize: maxPoolSize ?? this.maxPoolSize,
+      candidateBufferLimit: candidateBufferLimit ?? this.candidateBufferLimit,
+      acceptableReserveLimitPercent:
+          acceptableReserveLimitPercent ?? this.acceptableReserveLimitPercent,
       healthyThreshold: healthyThreshold ?? this.healthyThreshold,
       thinThreshold: thinThreshold ?? this.thinThreshold,
       currentVerifiedCount: currentVerifiedCount ?? this.currentVerifiedCount,
       currentCandidateCount:
           currentCandidateCount ?? this.currentCandidateCount,
+      idealCount: idealCount ?? this.idealCount,
+      goodCount: goodCount ?? this.goodCount,
+      acceptableCount: acceptableCount ?? this.acceptableCount,
+      rejectedCount: rejectedCount ?? this.rejectedCount,
+      distinctFingerprintCount:
+          distinctFingerprintCount ?? this.distinctFingerprintCount,
       seedBudgetUnits: seedBudgetUnits ?? this.seedBudgetUnits,
       seedCooldownMinutes: seedCooldownMinutes ?? this.seedCooldownMinutes,
       healingStatus: healingStatus ?? this.healingStatus,
@@ -210,14 +244,24 @@ class RoutePoolCoverage {
       bootstrapEnabled: (json['bootstrap_enabled'] as bool?) ?? true,
       curatedSeedPreferred: (json['curated_seed_preferred'] as bool?) ?? false,
       minVerifiedCount: (json['min_verified_count'] as num?)?.toInt() ?? 3,
-      targetPoolSize: (json['target_pool_size'] as num?)?.toInt() ?? 15,
+      targetPoolSize: (json['target_pool_size'] as num?)?.toInt() ?? 8,
       maxPoolSize: (json['max_pool_size'] as num?)?.toInt() ?? 20,
-      healthyThreshold: (json['healthy_threshold'] as num?)?.toInt() ?? 15,
+      candidateBufferLimit:
+          (json['candidate_buffer_limit'] as num?)?.toInt() ?? 30,
+      acceptableReserveLimitPercent:
+          (json['acceptable_reserve_limit_percent'] as num?)?.toInt() ?? 25,
+      healthyThreshold: (json['healthy_threshold'] as num?)?.toInt() ?? 3,
       thinThreshold: (json['thin_threshold'] as num?)?.toInt() ?? 1,
       currentVerifiedCount:
           (json['current_verified_count'] as num?)?.toInt() ?? 0,
       currentCandidateCount:
           (json['current_candidate_count'] as num?)?.toInt() ?? 0,
+      idealCount: (json['ideal_count'] as num?)?.toInt() ?? 0,
+      goodCount: (json['good_count'] as num?)?.toInt() ?? 0,
+      acceptableCount: (json['acceptable_count'] as num?)?.toInt() ?? 0,
+      rejectedCount: (json['rejected_count'] as num?)?.toInt() ?? 0,
+      distinctFingerprintCount:
+          (json['distinct_fingerprint_count'] as num?)?.toInt() ?? 0,
       seedBudgetUnits: (json['seed_budget_units'] as num?)?.toInt() ?? 1,
       seedCooldownMinutes:
           (json['seed_cooldown_minutes'] as num?)?.toInt() ?? 20,
@@ -270,10 +314,17 @@ class RoutePoolCoverage {
       'min_verified_count': minVerifiedCount,
       'target_pool_size': targetPoolSize,
       'max_pool_size': maxPoolSize,
+      'candidate_buffer_limit': candidateBufferLimit,
+      'acceptable_reserve_limit_percent': acceptableReserveLimitPercent,
       'healthy_threshold': healthyThreshold,
       'thin_threshold': thinThreshold,
       'current_verified_count': currentVerifiedCount,
       'current_candidate_count': currentCandidateCount,
+      'ideal_count': idealCount,
+      'good_count': goodCount,
+      'acceptable_count': acceptableCount,
+      'rejected_count': rejectedCount,
+      'distinct_fingerprint_count': distinctFingerprintCount,
       'seed_budget_units': seedBudgetUnits,
       'seed_cooldown_minutes': seedCooldownMinutes,
       'healing_status': healingStatus,
