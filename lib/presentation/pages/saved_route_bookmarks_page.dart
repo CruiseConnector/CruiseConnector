@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import 'package:cruise_connect/application/providers/route_bookmark_provider.dart';
+import 'package:cruise_connect/data/services/saved_routes_service.dart';
 import 'package:cruise_connect/domain/models/saved_route.dart';
 import 'package:cruise_connect/presentation/pages/cruise_mode_page.dart';
 
@@ -14,16 +15,32 @@ class SavedRouteBookmarksPage extends StatefulWidget {
 }
 
 class _SavedRouteBookmarksPageState extends State<SavedRouteBookmarksPage> {
+  List<SavedRoute> _ownRoutes = [];
+  bool _loadingOwnRoutes = true;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) context.read<RouteBookmarkProvider>().loadSavedRoutes();
+      if (mounted) _loadRoutes();
+    });
+  }
+
+  Future<void> _loadRoutes() async {
+    setState(() => _loadingOwnRoutes = true);
+    final results = await Future.wait([
+      SavedRoutesService.getUserRoutes(),
+      context.read<RouteBookmarkProvider>().loadSavedRoutes(),
+    ]);
+    if (!mounted) return;
+    setState(() {
+      _ownRoutes = results[0] as List<SavedRoute>;
+      _loadingOwnRoutes = false;
     });
   }
 
   Future<void> _refresh() {
-    return context.read<RouteBookmarkProvider>().loadSavedRoutes();
+    return _loadRoutes();
   }
 
   void _startRoute(SavedRoute route) {
@@ -34,7 +51,13 @@ class _SavedRouteBookmarksPageState extends State<SavedRouteBookmarksPage> {
   @override
   Widget build(BuildContext context) {
     final provider = context.watch<RouteBookmarkProvider>();
-    final routes = provider.savedRoutes;
+    final ownIds = _ownRoutes.map((route) => route.id).toSet();
+    final routes = [
+      ..._ownRoutes,
+      ...provider.savedRoutes.where((route) => !ownIds.contains(route.id)),
+    ];
+    final isLoading =
+        (provider.isLoadingList || _loadingOwnRoutes) && routes.isEmpty;
 
     return Scaffold(
       backgroundColor: const Color(0xFF0B0E14),
@@ -47,7 +70,7 @@ class _SavedRouteBookmarksPageState extends State<SavedRouteBookmarksPage> {
           style: TextStyle(fontWeight: FontWeight.bold),
         ),
       ),
-      body: provider.isLoadingList && routes.isEmpty
+      body: isLoading
           ? const Center(
               child: CircularProgressIndicator(color: Color(0xFFFF3B30)),
             )
@@ -91,16 +114,80 @@ class _SavedRouteBookmarksPageState extends State<SavedRouteBookmarksPage> {
                         return _SavedRouteCard(
                           route: route,
                           onStart: () => _startRoute(route),
+                          isOwnRoute: _ownRoutes.any(
+                            (own) => own.id == route.id,
+                          ),
+                          onRename: () => _renameRoute(route),
                           onRemove: () async {
-                            await context.read<RouteBookmarkProvider>().toggle(
-                              route.id,
-                            );
+                            if (_ownRoutes.any((own) => own.id == route.id)) {
+                              await SavedRoutesService.deleteRoute(route.id);
+                              await _refresh();
+                            } else {
+                              await context
+                                  .read<RouteBookmarkProvider>()
+                                  .toggle(route.id);
+                            }
                           },
                         );
                       },
                     ),
             ),
     );
+  }
+
+  Future<void> _renameRoute(SavedRoute route) async {
+    final controller = TextEditingController(text: route.name ?? route.style);
+    final newName = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF1C1F26),
+          title: const Text(
+            'Route umbenennen',
+            style: TextStyle(color: Colors.white),
+          ),
+          content: TextField(
+            controller: controller,
+            autofocus: true,
+            maxLength: 60,
+            style: const TextStyle(color: Colors.white),
+            decoration: InputDecoration(
+              counterStyle: const TextStyle(color: Colors.grey),
+              hintText: 'Name der Route',
+              hintStyle: TextStyle(color: Colors.grey[600]),
+              enabledBorder: const UnderlineInputBorder(
+                borderSide: BorderSide(color: Colors.white24),
+              ),
+              focusedBorder: const UnderlineInputBorder(
+                borderSide: BorderSide(color: Color(0xFFFF3B30)),
+              ),
+            ),
+            onSubmitted: (value) => Navigator.pop(dialogContext, value),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text(
+                'Abbrechen',
+                style: TextStyle(color: Colors.grey),
+              ),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, controller.text),
+              child: const Text(
+                'Speichern',
+                style: TextStyle(color: Color(0xFFFF3B30)),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+    controller.dispose();
+    if (newName == null || newName.trim().isEmpty) return;
+
+    await SavedRoutesService.renameRoute(route.id, newName);
+    await _refresh();
   }
 }
 
@@ -109,11 +196,15 @@ class _SavedRouteCard extends StatelessWidget {
     required this.route,
     required this.onStart,
     required this.onRemove,
+    required this.onRename,
+    required this.isOwnRoute,
   });
 
   final SavedRoute route;
   final VoidCallback onStart;
   final VoidCallback onRemove;
+  final VoidCallback onRename;
+  final bool isOwnRoute;
 
   @override
   Widget build(BuildContext context) {
@@ -169,10 +260,19 @@ class _SavedRouteCard extends StatelessWidget {
             onPressed: onStart,
             icon: const Icon(Icons.play_circle_fill, color: Color(0xFFFF3B30)),
           ),
+          if (isOwnRoute)
+            IconButton(
+              tooltip: 'Route umbenennen',
+              onPressed: onRename,
+              icon: const Icon(Icons.edit_outlined, color: Color(0xFFFFD166)),
+            ),
           IconButton(
-            tooltip: 'Lesezeichen entfernen',
+            tooltip: isOwnRoute ? 'Route loeschen' : 'Lesezeichen entfernen',
             onPressed: onRemove,
-            icon: const Icon(Icons.bookmark, color: Color(0xFFFFD166)),
+            icon: Icon(
+              isOwnRoute ? Icons.delete_outline : Icons.bookmark,
+              color: isOwnRoute ? Colors.grey : const Color(0xFFFFD166),
+            ),
           ),
         ],
       ),

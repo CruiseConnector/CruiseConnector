@@ -408,6 +408,28 @@ class SavedRoutesService {
   // ─── Löschen ─────────────────────────────────────────────────────────────
 
   /// Löscht eine Route anhand ihrer ID.
+  /// Benennt eine eigene gespeicherte Route um.
+  ///
+  /// Posts und Bookmarks referenzieren dieselbe `routes.id`, deshalb ist der
+  /// neue Name danach überall sichtbar, wo diese Route geladen wird.
+  static Future<void> renameRoute(String id, String name) async {
+    final userId = _db.auth.currentUser?.id;
+    final cleaned = name.trim();
+    if (userId == null || cleaned.isEmpty) return;
+
+    try {
+      await _db
+          .from('routes')
+          .update({'name': cleaned})
+          .eq('id', id)
+          .eq('user_id', userId);
+      invalidateWeeklyTopRouteCache();
+    } catch (e) {
+      debugPrint('[SavedRoutes] renameRoute Fehler: $e');
+      rethrow;
+    }
+  }
+
   static Future<void> deleteRoute(String id) async {
     try {
       await _db.from('routes').delete().eq('id', id);

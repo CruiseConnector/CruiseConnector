@@ -1,25 +1,14 @@
 import 'package:flutter/material.dart';
 
-/// Auto-Profil-Karte im Ferrari-F8-Spider-Verkaufsanzeigen-Stil.
-/// Schwarzer Hintergrund, gelb-rot Akzente, große Bild-Sektion oben,
-/// klare Stammdaten-Tabelle unten mit Trenn-Linien.
-///
-/// Akzeptiert ein `profile`-Map mit den `car_*`-Feldern (siehe DB-Migration
-/// `db_migrations/2026_04_27_profile_banner_and_car.sql`).
 class CarCard extends StatelessWidget {
+  const CarCard({super.key, required this.profile, this.onTap});
+
   final Map<String, dynamic> profile;
   final VoidCallback? onTap;
 
-  /// CruiseConnect-Markenrot — wird als Akzentfarbe verwendet.
   static const Color accent = Color(0xFFFF3B30);
+  static const Color surface = Color(0xFF171A22);
 
-  const CarCard({
-    super.key,
-    required this.profile,
-    this.onTap,
-  });
-
-  /// True, wenn keinerlei Auto-Daten gesetzt sind.
   static bool isEmpty(Map<String, dynamic> profile) {
     return _str(profile['car_brand']) == null &&
         _str(profile['car_name']) == null &&
@@ -34,15 +23,15 @@ class CarCard extends StatelessWidget {
         _str(profile['car_image_url']) == null;
   }
 
-  static String? _str(dynamic v) {
-    final s = (v as String?)?.trim();
-    return (s == null || s.isEmpty) ? null : s;
+  static String? _str(dynamic value) {
+    final text = (value as String?)?.trim();
+    return text == null || text.isEmpty ? null : text;
   }
 
   @override
   Widget build(BuildContext context) {
-    final brand = _str(profile['car_brand'])?.toUpperCase();
-    final name = _str(profile['car_name']);
+    final brand = _str(profile['car_brand']);
+    final model = _str(profile['car_name']);
     final imageUrl = _str(profile['car_image_url']);
     final topSpeed = (profile['car_top_speed'] as num?)?.toInt();
     final engineSize = (profile['car_engine_size'] as num?)?.toDouble();
@@ -53,196 +42,247 @@ class CarCard extends StatelessWidget {
     final firstReg = _str(profile['car_first_reg']);
     final mileage = (profile['car_mileage'] as num?)?.toInt();
 
-    final stats = <_Stat>[
+    final stats = <_CarStat>[
+      if (horsepower != null)
+        _CarStat(Icons.bolt, 'Leistung', '$horsepower PS'),
+      if (topSpeed != null)
+        _CarStat(Icons.speed, 'Top Speed', '$topSpeed km/h'),
+      if (mileage != null)
+        _CarStat(
+          Icons.timeline,
+          'Kilometer',
+          '${_formatThousands(mileage)} km',
+        ),
       if (firstReg != null || year != null)
-        _Stat('ERSTZULASSUNG', firstReg ?? '$year'),
-      if (mileage != null) _Stat('KILOMETERSTAND', '${_formatThousands(mileage)} km'),
-      if (horsepower != null) _Stat('LEISTUNG', '$horsepower PS'),
-      if (topSpeed != null) _Stat('TOP SPEED', '$topSpeed km/h'),
-      if (cylinders != null) _Stat('ZYLINDER', '$cylinders'),
+        _CarStat(Icons.event, 'Erstzulassung', firstReg ?? '$year'),
+      if (cylinders != null) _CarStat(Icons.settings, 'Zylinder', '$cylinders'),
       if (displacement != null)
-        _Stat('HUBRAUM', '${_formatThousands(displacement)} cm³')
+        _CarStat(
+          Icons.local_gas_station,
+          'Hubraum',
+          '${_formatThousands(displacement)} ccm',
+        )
       else if (engineSize != null)
-        _Stat('HUBRAUM',
-            '${engineSize.toStringAsFixed(1).replaceAll('.', ',')} L'),
+        _CarStat(
+          Icons.local_gas_station,
+          'Hubraum',
+          '${engineSize.toStringAsFixed(1).replaceAll('.', ',')} L',
+        ),
     ];
 
-    final card = Container(
+    final child = Container(
+      clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
-        color: const Color(0xFF0F0F12),
+        color: surface,
         borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: accent.withValues(alpha: 0.7), width: 1.5),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
         boxShadow: [
           BoxShadow(
-            color: accent.withValues(alpha: 0.15),
+            color: Colors.black.withValues(alpha: 0.28),
             blurRadius: 18,
-            spreadRadius: 1,
+            offset: const Offset(0, 10),
           ),
         ],
       ),
-      clipBehavior: Clip.antiAlias,
       child: Column(
         mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // ─── Header: Marke + Modell ─────────────────────────────────────
-          Container(
-            color: const Color(0xFF1A1A1F),
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-            child: Row(
+          AspectRatio(
+            aspectRatio: 16 / 9,
+            child: Stack(
+              fit: StackFit.expand,
               children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        brand ?? 'MEINE MARKE',
-                        style: TextStyle(
-                          color: brand != null ? Colors.white : Colors.white38,
-                          fontSize: 22,
-                          fontWeight: FontWeight.w900,
-                          letterSpacing: 2.5,
-                          height: 1.0,
-                          fontStyle: FontStyle.italic,
-                        ),
-                      ),
-                      if (name != null) ...[
-                        const SizedBox(height: 2),
-                        Text(
-                          name,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            color: Colors.white70,
-                            fontSize: 14,
-                            fontWeight: FontWeight.w500,
-                            letterSpacing: 0.5,
-                          ),
-                        ),
-                      ],
-                    ],
+                if (imageUrl != null)
+                  Image.network(
+                    imageUrl,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, _, _) => const _CarImagePlaceholder(),
+                  )
+                else
+                  const _CarImagePlaceholder(),
+                const DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [Colors.transparent, Color(0xCC000000)],
+                    ),
                   ),
                 ),
-                // Marken-Badge — kleiner Auto-Icon-Wappen
-                Container(
-                  width: 36,
-                  height: 36,
-                  decoration: BoxDecoration(
-                    color: accent.withValues(alpha: 0.15),
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: accent, width: 1.5),
-                  ),
-                  child: const Icon(
-                    Icons.directions_car_filled,
-                    color: accent,
-                    size: 20,
+                Positioned(
+                  left: 18,
+                  right: 18,
+                  bottom: 16,
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              brand ?? 'Mein Auto',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 22,
+                                fontWeight: FontWeight.w800,
+                                height: 1.05,
+                              ),
+                            ),
+                            if (model != null) ...[
+                              const SizedBox(height: 3),
+                              Text(
+                                model,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: Colors.white.withValues(alpha: 0.76),
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                      Container(
+                        width: 42,
+                        height: 42,
+                        decoration: BoxDecoration(
+                          color: accent,
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        child: const Icon(
+                          Icons.directions_car_filled,
+                          color: Colors.white,
+                          size: 22,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ],
             ),
           ),
-
-          // ─── Bild ───────────────────────────────────────────────────────
-          AspectRatio(
-            aspectRatio: 16 / 10,
-            child: Container(
-              color: Colors.black,
-              child: imageUrl != null
-                  ? Image.network(
-                      imageUrl,
-                      fit: BoxFit.cover,
-                      width: double.infinity,
-                      errorBuilder: (_, _, _) => _placeholder(),
-                    )
-                  : _placeholder(),
-            ),
-          ),
-
-          // ─── Stat-Tabelle mit Trenn-Linien ──────────────────────────────
           if (stats.isNotEmpty)
-            Container(
-              color: const Color(0xFF0F0F12),
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-              child: Column(
-                children: [
-                  for (var i = 0; i < stats.length; i++) ...[
-                    _StatRow(stat: stats[i]),
-                    if (i < stats.length - 1)
-                      Divider(
-                        height: 1,
-                        thickness: 1,
-                        color: Colors.white.withValues(alpha: 0.08),
-                      ),
-                  ],
-                ],
+            Padding(
+              padding: const EdgeInsets.all(14),
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final columns = constraints.maxWidth < 330 ? 1 : 2;
+                  return Wrap(
+                    spacing: 10,
+                    runSpacing: 10,
+                    children: [
+                      for (final stat in stats)
+                        SizedBox(
+                          width: columns == 1
+                              ? constraints.maxWidth
+                              : (constraints.maxWidth - 10) / 2,
+                          child: _StatTile(stat: stat),
+                        ),
+                    ],
+                  );
+                },
               ),
             ),
-          const SizedBox(height: 8),
         ],
       ),
     );
 
-    if (onTap == null) return card;
-    return GestureDetector(
+    if (onTap == null) return child;
+    return InkWell(
       onTap: onTap,
-      behavior: HitTestBehavior.opaque,
-      child: card,
+      borderRadius: BorderRadius.circular(18),
+      child: child,
     );
   }
 
-  static String _formatThousands(int n) {
-    final s = n.toString();
-    final buf = StringBuffer();
-    for (var i = 0; i < s.length; i++) {
-      if (i > 0 && (s.length - i) % 3 == 0) buf.write('.');
-      buf.write(s[i]);
+  static String _formatThousands(int value) {
+    final text = value.toString();
+    final buffer = StringBuffer();
+    for (var i = 0; i < text.length; i++) {
+      if (i > 0 && (text.length - i) % 3 == 0) buffer.write('.');
+      buffer.write(text[i]);
     }
-    return buf.toString();
-  }
-
-  Widget _placeholder() {
-    return const Center(
-      child: Icon(Icons.directions_car_outlined,
-          color: Colors.white24, size: 72),
-    );
+    return buffer.toString();
   }
 }
 
-class _Stat {
-  final String label;
-  final String value;
-  const _Stat(this.label, this.value);
-}
-
-class _StatRow extends StatelessWidget {
-  final _Stat stat;
-  const _StatRow({required this.stat});
+class _CarImagePlaceholder extends StatelessWidget {
+  const _CarImagePlaceholder();
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 10),
+    return Container(
+      color: const Color(0xFF10131A),
+      child: Center(
+        child: Icon(
+          Icons.directions_car_outlined,
+          color: Colors.white.withValues(alpha: 0.18),
+          size: 64,
+        ),
+      ),
+    );
+  }
+}
+
+class _CarStat {
+  const _CarStat(this.icon, this.label, this.value);
+
+  final IconData icon;
+  final String label;
+  final String value;
+}
+
+class _StatTile extends StatelessWidget {
+  const _StatTile({required this.stat});
+
+  final _CarStat stat;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.045),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.055)),
+      ),
       child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
+          Icon(stat.icon, color: CarCard.accent, size: 18),
+          const SizedBox(width: 10),
           Expanded(
-            child: Text(
-              stat.label,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 13,
-                fontWeight: FontWeight.w900,
-                letterSpacing: 1.1,
-                fontStyle: FontStyle.italic,
-              ),
-            ),
-          ),
-          Text(
-            stat.value,
-            style: const TextStyle(
-              color: CarCard.accent,
-              fontSize: 14,
-              fontWeight: FontWeight.w900,
-              fontStyle: FontStyle.italic,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  stat.label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.55),
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  stat.value,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ],
             ),
           ),
         ],

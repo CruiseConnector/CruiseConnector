@@ -108,10 +108,9 @@ class _CommunityPageState extends State<CommunityPage>
       if (query.isNotEmpty) {
         final name = (g['name'] as String? ?? '').toLowerCase();
         final ownerProfile = g['profiles'] as Map<String, dynamic>?;
-        final ownerName =
-            (ownerProfile?['username'] ?? ownerProfile?['email'] ?? '')
-                .toString()
-                .toLowerCase();
+        final ownerName = (ownerProfile?['username'] ?? '')
+            .toString()
+            .toLowerCase();
         final matches = name.contains(query) || ownerName.contains(query);
         if (!matches) return false;
       }
@@ -923,10 +922,10 @@ class _CommunityPageState extends State<CommunityPage>
   void _sharePost(Map<String, dynamic> post) {
     final postId = post['id'];
     final profile = post['profiles'] as Map<String, dynamic>?;
-    final name =
-        profile?['username'] ??
-        profile?['email']?.split('@')[0] ??
-        'CruiseConnect';
+    final name = SocialService.publicDisplayName(
+      profile,
+      fallbackUserId: post['user_id'] as String?,
+    );
     final link = 'https://cruiseconnector.at/post/$postId';
     Share.share(
       'Post von @$name auf CruiseConnect: $link',
@@ -1029,7 +1028,10 @@ class _CommunityPageState extends State<CommunityPage>
 
   Widget _buildSuggestedUserCard(Map<String, dynamic> user) {
     final id = user['id'] as String;
-    final name = (user['username'] ?? user['email'] ?? 'User') as String;
+    final name = SocialService.publicDisplayName(
+      user,
+      fallbackUserId: user['id'] as String?,
+    );
     final avatar = user['avatar_url'] as String?;
     return Container(
       width: 140,
@@ -1103,9 +1105,14 @@ class _CommunityPageState extends State<CommunityPage>
 
   Widget _buildPostItem(Map<String, dynamic> post, {bool showFollow = false}) {
     final profile = post['profiles'] as Map<String, dynamic>?;
-    final name =
-        profile?['username'] ?? profile?['email']?.split('@')[0] ?? 'User';
-    final handle = '@${profile?['email']?.split('@')[0] ?? 'user'}';
+    final name = SocialService.publicDisplayName(
+      profile,
+      fallbackUserId: post['user_id'] as String?,
+    );
+    final handle = SocialService.publicHandle(
+      profile,
+      fallbackUserId: post['user_id'] as String?,
+    );
     final time = _formatTimeAgo(post['created_at']);
     final content = post['content'] ?? '';
     final postUserId = post['user_id'] as String?;
@@ -1351,10 +1358,10 @@ class _CommunityPageState extends State<CommunityPage>
     final postId = post['id'] as String?;
     final postUserId = post['user_id'] as String?;
     final profile = post['profiles'] as Map<String, dynamic>?;
-    final username =
-        (profile?['username'] as String?) ??
-        (profile?['email'] as String?)?.split('@').first ??
-        'User';
+    final username = SocialService.publicDisplayName(
+      profile,
+      fallbackUserId: postUserId,
+    );
 
     if (value == 'delete' && isOwnPost && postId != null) {
       final confirmed = await showDialog<bool>(
@@ -1587,12 +1594,14 @@ class _CommunityPageState extends State<CommunityPage>
                                     final cProfile =
                                         cm['profiles'] as Map<String, dynamic>?;
                                     final cName =
-                                        cProfile?['username'] ??
-                                        cProfile?['email']?.split('@')[0] ??
-                                        'User';
+                                        SocialService.publicDisplayName(
+                                          cProfile,
+                                          fallbackUserId:
+                                              cm['user_id'] as String?,
+                                        );
                                     setSheetState(() {
                                       replyToId = cm['id'] as String;
-                                      replyToName = cName as String;
+                                      replyToName = cName;
                                     });
                                   },
                                 );
@@ -1709,8 +1718,10 @@ class _CommunityPageState extends State<CommunityPage>
     required VoidCallback onReply,
   }) {
     final cProfile = comment['profiles'] as Map<String, dynamic>?;
-    final cName =
-        cProfile?['username'] ?? cProfile?['email']?.split('@')[0] ?? 'User';
+    final cName = SocialService.publicDisplayName(
+      cProfile,
+      fallbackUserId: comment['user_id'] as String?,
+    );
     final cTime = _formatTimeAgo(comment['created_at']);
     final liked = comment['is_liked'] == true;
     final likesCount = (comment['likes_count'] as int?) ?? 0;
@@ -2134,9 +2145,14 @@ class _CommunityPageState extends State<CommunityPage>
                                   _buildSearchGroupResult(_searchedGroup!),
                                 ..._searchResults.map((user) {
                                   final username =
-                                      user['username'] ??
-                                      user['email']?.split('@')[0] ??
-                                      'User';
+                                      SocialService.publicDisplayName(
+                                        user,
+                                        fallbackUserId: user['id'] as String?,
+                                      );
+                                  final handle = SocialService.publicHandle(
+                                    user,
+                                    fallbackUserId: user['id'] as String?,
+                                  );
                                   return ListTile(
                                     onTap: () {
                                       Navigator.pop(context);
@@ -2154,7 +2170,7 @@ class _CommunityPageState extends State<CommunityPage>
                                       ),
                                     ),
                                     subtitle: Text(
-                                      '@${user['email']?.split('@')[0] ?? ''}',
+                                      handle,
                                       style: const TextStyle(
                                         color: Colors.grey,
                                         fontSize: 13,
@@ -2182,10 +2198,10 @@ class _CommunityPageState extends State<CommunityPage>
   Widget _buildSearchGroupResult(Map<String, dynamic> group) {
     final isPublic = group['is_public'] == true;
     final creator = group['profiles'] as Map<String, dynamic>?;
-    final creatorName =
-        creator?['username'] ??
-        creator?['email']?.toString().split('@').first ??
-        'User';
+    final creatorName = SocialService.publicDisplayName(
+      creator,
+      fallbackUserId: group['created_by'] as String?,
+    );
     final code = group['invite_code'] as String? ?? '';
 
     return Container(
@@ -2425,10 +2441,10 @@ class _CommunityPageState extends State<CommunityPage>
                         itemBuilder: (context, index) {
                           final n = items[index];
                           final from = n['profiles'] as Map<String, dynamic>?;
-                          final fromName =
-                              from?['username'] ??
-                              from?['email']?.split('@')[0] ??
-                              'User';
+                          final fromName = SocialService.publicDisplayName(
+                            from,
+                            fallbackUserId: n['from_user_id'] as String?,
+                          );
                           final fromId = from?['id'] as String?;
                           final type = n['type'];
                           String message;
@@ -2490,8 +2506,9 @@ class _CommunityPageState extends State<CommunityPage>
                                 Future.delayed(
                                   const Duration(milliseconds: 150),
                                   () {
-                                    if (mounted)
+                                    if (mounted) {
                                       _openUserProfile(fromId, fromName);
+                                    }
                                   },
                                 );
                               }
