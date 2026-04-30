@@ -171,7 +171,6 @@ class _CommunityPageState extends State<CommunityPage>
 
   Future<void> _loadData() async {
     try {
-      final uid = Supabase.instance.client.auth.currentUser?.id;
       final provider = context.read<CommunityProvider>();
       final results = await Future.wait([
         provider.loadAll(),
@@ -189,6 +188,7 @@ class _CommunityPageState extends State<CommunityPage>
           _suggestedUsers = results[4] as List<Map<String, dynamic>>;
           _loading = false;
         });
+<<<<<<< HEAD
         // DEBUG: zeigt Zahlen als Snackbar in der App
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -203,6 +203,8 @@ class _CommunityPageState extends State<CommunityPage>
             ),
           ),
         );
+=======
+>>>>>>> aktive-gruppen
       }
     } catch (e) {
       debugPrint('[Community] Daten laden fehlgeschlagen: $e');
@@ -2279,6 +2281,7 @@ class _CommunityPageState extends State<CommunityPage>
     showModalBottomSheet(
       context: context,
       backgroundColor: const Color(0xFF0B0E14),
+<<<<<<< HEAD
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
@@ -2367,8 +2370,90 @@ class _CommunityPageState extends State<CommunityPage>
                     message = '$fromName hat interagiert';
                     icon = Icons.notifications;
                 }
+=======
+      // Sheet darf bis zu ~75% Screen-Höhe einnehmen, damit lange
+      // Listen scrollbar sind statt zu overflowen.
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.of(context).size.height * 0.75,
+      ),
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (sheetContext) {
+        // ListView braucht immer mind. 1 Item für die Empty-Zelle, sonst die
+        // vollen notifications.
+        final items = notifications.take(50).toList();
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Center(
+                child: Container(
+                  margin: const EdgeInsets.symmetric(vertical: 12),
+                  width: 40, height: 4,
+                  decoration: BoxDecoration(color: Colors.grey[600], borderRadius: BorderRadius.circular(2)),
+                ),
+              ),
+              const Padding(
+                padding: EdgeInsets.all(16),
+                child: Align(alignment: Alignment.centerLeft, child: Text('Benachrichtigungen', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold))),
+              ),
+              Flexible(
+                child: items.isEmpty
+                    ? const Padding(
+                        padding: EdgeInsets.all(32),
+                        child: Text('Keine Benachrichtigungen', style: TextStyle(color: Colors.grey)),
+                      )
+                    : ListView.builder(
+                        shrinkWrap: true,
+                        padding: const EdgeInsets.only(bottom: 12),
+                        itemCount: items.length,
+                        itemBuilder: (context, index) {
+                          final n = items[index];
+                          final from = n['profiles'] as Map<String, dynamic>?;
+                          final fromName = from?['username'] ?? from?['email']?.split('@')[0] ?? 'User';
+                          final fromId = from?['id'] as String?;
+                          final type = n['type'];
+                          String message;
+                          IconData icon;
+                          switch (type) {
+                            case 'follow':
+                              message = '$fromName folgt dir jetzt';
+                              icon = Icons.person_add;
+                              break;
+                            case 'like':
+                              message = '$fromName hat deinen Post geliked';
+                              icon = Icons.favorite;
+                              break;
+                            case 'comment':
+                              message = '$fromName hat deinen Post kommentiert';
+                              icon = Icons.comment;
+                              break;
+                            case 'comment_reply':
+                              message = '$fromName hat auf deinen Kommentar geantwortet';
+                              icon = Icons.reply;
+                              break;
+                            case 'comment_like':
+                              message = '$fromName hat deinen Kommentar geliked';
+                              icon = Icons.favorite;
+                              break;
+                            case 'repost':
+                              message = '$fromName hat deinen Post geteilt';
+                              icon = Icons.repeat;
+                              break;
+                            case 'group_invite':
+                              message = '$fromName hat dich in eine Gruppe eingeladen';
+                              icon = Icons.group_add;
+                              break;
+                            case 'mention':
+                              message = '$fromName hat dich erwähnt';
+                              icon = Icons.alternate_email;
+                              break;
+                            default:
+                              message = '$fromName hat interagiert';
+                              icon = Icons.notifications;
+                          }
+>>>>>>> aktive-gruppen
 
-                return ListTile(
+                          return ListTile(
                   onTap: () {
                     Navigator.pop(sheetContext);
                     if (fromId != null) {
@@ -2436,6 +2521,7 @@ class _CommunityPageState extends State<CommunityPage>
                               color: const Color(0xFFFF3B30),
                               borderRadius: BorderRadius.circular(12),
                             ),
+<<<<<<< HEAD
                             child: const Text(
                               'Beitreten',
                               style: TextStyle(
@@ -2451,6 +2537,18 @@ class _CommunityPageState extends State<CommunityPage>
               }),
             const SizedBox(height: 20),
           ],
+=======
+                                child: const Text('Beitreten', style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
+                                ),
+                              )
+                            : null,
+                          );
+                        },
+                      ),
+              ),
+            ],
+          ),
+>>>>>>> aktive-gruppen
         );
       },
     );
