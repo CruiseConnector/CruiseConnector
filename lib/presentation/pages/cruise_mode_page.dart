@@ -2722,8 +2722,14 @@ class _CruiseModePageState extends State<CruiseModePage>
         error.edgeMeta['code']?.toString();
     return code == 'pool_bootstrap_pending' ||
         code == 'region_warming_up' ||
+        code == 'route_generation_limited' ||
         code == 'route_quality_too_low' ||
         code == 'detour_not_available' ||
+        error.edgeMeta['coverage_status'] == 'empty' ||
+        error.edgeMeta['coverage_status'] == 'thin' ||
+        error.edgeMeta['coverage_status'] == 'warming_up' ||
+        error.edgeMeta['pool_bootstrap_pending'] == true ||
+        error.edgeMeta['seed_job_created'] == true ||
         error.edgeMeta['retry_search_started'] == true;
   }
 
@@ -2794,9 +2800,7 @@ class _CruiseModePageState extends State<CruiseModePage>
         builder: (context) {
           return AlertDialog(
             title: const Text('Wir suchen weiter'),
-            content: const Text(
-              'Wir suchen noch nach einer besseren Route. Für diese Strecke und Einstellung gibt es gerade noch keine geprüfte Variante. Bitte warte kurz oder versuche es erneut.',
-            ),
+            content: Text(error.userMessage),
             actions: [
               TextButton(
                 onPressed: () => Navigator.of(context).pop('settings'),

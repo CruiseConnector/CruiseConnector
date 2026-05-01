@@ -1240,9 +1240,32 @@ function evaluateRouteQualityCore(
     avoidHighways === true && isSportMode &&
     !isShortNoHighwaySportRoundTrip && targetDistanceKm > 60 &&
     targetDistanceKm <= 115;
+  const longNoHighwaySportSpurShape = mediumLongNoHighwaySportShape &&
+    targetDistanceKm >= 90 &&
+    (
+      (
+        shapeSignals.spurArmPercent >= 42 &&
+        (
+          shapeSignals.middleCoverageRatio < 0.34 ||
+          shapeSignals.repeatedStartAreaPercent >= 18 ||
+          shapeSignals.oppositeOverlapPercent >= 22 ||
+          shapeSignals.radialPeakCount >= 3
+        )
+      ) ||
+      (
+        shapeSignals.oppositeOverlapPercent > 22 &&
+        shapeSignals.middleCoverageRatio < 0.34 &&
+        shapeSignals.foldedLoopPenalty > 68
+      ) ||
+      (
+        shapeSignals.loopCleanupRemovedPercent > 24 &&
+        shapeSignals.hookCount >= 6
+      )
+    );
   const severeRoundTripShape = routeType === "ROUND_TRIP" &&
     (
       shapeSignals.centerReentryCount >= 4 ||
+      longNoHighwaySportSpurShape ||
       (shapeSignals.radialPeakCount >= (isCurveChase ? 3 : 4) &&
         shapeSignals.middleCoverageRatio < 0.34) ||
       (shapeSignals.middleCoverageRatio < 0.18 &&

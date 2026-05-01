@@ -417,6 +417,22 @@ List<_Scenario> _buildScenarios() {
     avoidHighways: true,
   );
   addRoundTripScenario(
+    name: 'RT Bregenz 100 Sport ohne Autobahn',
+    start: bregenz,
+    targetDistanceKm: 100,
+    mode: 'Sport Mode',
+    runs: 3,
+    avoidHighways: true,
+  );
+  addRoundTripScenario(
+    name: 'RT Bregenz 100 Kurvenjagd ohne Autobahn',
+    start: bregenz,
+    targetDistanceKm: 100,
+    mode: 'Kurvenjagd',
+    runs: 5,
+    avoidHighways: true,
+  );
+  addRoundTripScenario(
     name: 'RT Feldkirch 50 Sport ohne Autobahn',
     start: feldkirch,
     targetDistanceKm: 50,

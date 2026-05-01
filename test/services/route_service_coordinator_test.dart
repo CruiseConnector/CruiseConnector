@@ -506,6 +506,9 @@ RoutePoolMatch _poolMatchWithResponse({
   required String id,
   required String cityCluster,
   required double startDistanceKm,
+  double distanceKm = 52,
+  int distanceBucket = 50,
+  List<String> styleTags = const ['Sport Mode'],
 }) {
   final route = response['route'] as Map<String, dynamic>;
   final geometry = Map<String, dynamic>.from(route['geometry'] as Map);
@@ -520,10 +523,10 @@ RoutePoolMatch _poolMatchWithResponse({
       cityCluster: cityCluster,
       startLat: (first[1] as num).toDouble(),
       startLng: (first[0] as num).toDouble(),
-      distanceKm: 52,
-      distanceBucket: 50,
+      distanceKm: distanceKm,
+      distanceBucket: distanceBucket,
       routeType: 'ROUND_TRIP',
-      styleTags: const ['Sport Mode'],
+      styleTags: styleTags,
       avoidsHighway: true,
       hasHighway: false,
       qualityScore: 92,
@@ -1032,6 +1035,122 @@ void main() {
       expect(RouteService.lastRoutePoolFallbackUsed, isFalse);
       expect(RouteService.lastRouteGenerationSource, isNot('pool'));
       expect(poolService.calls, isNotEmpty);
+    },
+  );
+
+  test('100-km Sport-Pool-Fallback verwirft out-and-back Astroute', () async {
+    final poolService = _FakeRoutePoolService(
+      _poolMatchWithResponse(
+        response: _outAndBackPoolResponse(),
+        id: 'pool-dornbirn-100-sport-out-and-back',
+        cityCluster: 'Dornbirn',
+        startDistanceKm: 0.2,
+        distanceKm: 100,
+        distanceBucket: 100,
+      ),
+    );
+    service = RouteService(
+      invoker: _AlwaysFailingInvoker(),
+      routePoolService: poolService,
+    );
+
+    await expectLater(
+      service.generateRoundTrip(
+        startPosition: _start(),
+        targetDistanceKm: 100,
+        mode: 'Sport Mode',
+        planningType: 'Zufall',
+        avoidHighways: true,
+        forceFreshVariant: true,
+      ),
+      throwsA(isA<RouteServiceException>()),
+    );
+
+    expect(RouteService.lastRoutePoolFallbackUsed, isFalse);
+    expect(RouteService.lastRouteGenerationSource, isNot('pool'));
+  });
+
+  test(
+    '100-km Kurvenjagd ohne Route zeigt spezifischen Availability-Status',
+    () async {
+      final noRouteInvoker = _CountingInvoker({
+        'route': null,
+        'meta': {
+          'requested_style': 'Kurvenjagd',
+          'requested_distance_bucket': 100,
+        },
+      });
+      service = RouteService(
+        invoker: noRouteInvoker,
+        routePoolService: RoutePoolService(
+          inMemoryRegions: const <RouteRegion>[],
+          inMemoryRoutes: const <RoutePoolEntry>[],
+          inMemoryCoverage: const <RoutePoolCoverage>[],
+          inMemorySeedJobs: <RouteSeedJob>[],
+          inMemoryCandidates: const <RoutePoolCandidate>[],
+        ),
+      );
+
+      late RouteServiceException error;
+      try {
+        await service.generateRoundTrip(
+          startPosition: _start(),
+          targetDistanceKm: 100,
+          mode: 'Kurvenjagd',
+          planningType: 'Zufall',
+          avoidHighways: true,
+          forceFreshVariant: true,
+        );
+      } on RouteServiceException catch (caught) {
+        error = caught;
+      }
+
+      expect(error.userMessage, contains('Kurvenjagd'));
+      expect(error.userMessage, isNot(contains('Bitte ändere Stil')));
+      expect(error.edgeMeta['requested_distance_bucket'], 100);
+      expect(noRouteInvoker.bodies, isNotEmpty);
+      expect(
+        noRouteInvoker.bodies.any((body) => body['mode'] == 'Sport Mode'),
+        isFalse,
+      );
+    },
+  );
+
+  test(
+    'ROUND_TRIP-NoRoute ohne Edge-Meta nutzt Request-Cell für User-Status',
+    () async {
+      final noRouteInvoker = _CountingInvoker({'route': null});
+      service = RouteService(
+        invoker: noRouteInvoker,
+        routePoolService: RoutePoolService(
+          inMemoryRegions: const <RouteRegion>[],
+          inMemoryRoutes: const <RoutePoolEntry>[],
+          inMemoryCoverage: const <RoutePoolCoverage>[],
+          inMemorySeedJobs: <RouteSeedJob>[],
+          inMemoryCandidates: const <RoutePoolCandidate>[],
+        ),
+      );
+
+      late RouteServiceException error;
+      try {
+        await service.generateRoundTrip(
+          startPosition: _start(),
+          targetDistanceKm: 100,
+          mode: 'Kurvenjagd',
+          planningType: 'Zufall',
+          avoidHighways: true,
+          forceFreshVariant: true,
+        );
+      } on RouteServiceException catch (caught) {
+        error = caught;
+      }
+
+      expect(error.userMessage, contains('Kurvenjagd'));
+      expect(error.edgeMeta['requested_route_type'], 'ROUND_TRIP');
+      expect(error.edgeMeta['requested_style_key'], 'kurvenjagd');
+      expect(error.edgeMeta['requested_distance_bucket'], 100);
+      expect(error.edgeMeta['avoid_highways'], isTrue);
+      expect(error.edgeMeta['exact_cell_required'], isTrue);
     },
   );
 

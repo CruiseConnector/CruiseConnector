@@ -1323,11 +1323,24 @@ export async function searchBestRoundTripRoute({
         (plan.label.startsWith("nohw-medium-sport-orbital-") ||
           plan.label.startsWith("nohw-medium-sport-orbital-rheintal-") ||
           plan.label.startsWith("nohw-medium-sport-cardinal-"));
+      const noHighwayMediumSportShapeCleanForEarlyStop =
+        !noHighwayMediumSportAcceptableEarly ||
+        (
+          (quality.shapeMetrics?.loopnessScore ?? 0) >=
+            (targetDistanceKm >= 90 ? 58 : 52) &&
+          (quality.shapeMetrics?.spurScore ?? 100) <=
+            (targetDistanceKm >= 90 ? 32 : 38) &&
+          (quality.shapeMetrics?.outAndBackScore ?? 100) <=
+            (targetDistanceKm >= 90 ? 30 : 36) &&
+          (quality.shapeMetrics?.deadEndArmScore ?? 100) <=
+            (targetDistanceKm >= 90 ? 28 : 34)
+        );
       const noHighwayMediumRescueCandidate = avoidHighwaysRoundTripSearch &&
         targetDistanceKm > 60 &&
         targetDistanceKm <= 85 &&
         (plan.label === "nohw-medium-rhine-south" ||
-          noHighwayMediumSportAcceptableEarly);
+          (noHighwayMediumSportAcceptableEarly &&
+            noHighwayMediumSportShapeCleanForEarlyStop));
       const shouldStopAfterGoodCandidate = quality.tier === "ideal" ||
         noHighwayMediumLongGoodEnough ||
         noHighwayMediumRescueCandidate ||
@@ -1349,6 +1362,7 @@ export async function searchBestRoundTripRoute({
       const shouldStopAfterAcceptableCandidate =
         quality.tier === "acceptable" &&
         !avoidHighwaysTightRoundTripSearch &&
+        noHighwayMediumSportShapeCleanForEarlyStop &&
         (
           phase.name === "fallback" ||
           phaseAcceptedCandidates >= 2 ||
