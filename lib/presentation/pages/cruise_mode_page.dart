@@ -1645,7 +1645,7 @@ class _CruiseModePageState extends State<CruiseModePage>
                   width: double.infinity,
                   height: 50,
                   child: OutlinedButton(
-                    onPressed: _confirmRoute,
+                    onPressed: _isLoading ? null : _confirmRoute,
                     style: OutlinedButton.styleFrom(
                       side: const BorderSide(
                         color: Color(0xFFFF3B30),
@@ -3442,6 +3442,7 @@ class _CruiseModePageState extends State<CruiseModePage>
   // ═══════════════════════ ROUTE CONFIRM ═════════════════════════════════════
 
   Future<void> _confirmRoute() async {
+    if (_isLoading || _fullRouteCoordinates.isEmpty) return;
     setState(() {
       _isRouteConfirmed = true;
       _currentRouteIndex = 0;

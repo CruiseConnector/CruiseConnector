@@ -557,6 +557,28 @@ Map<String, dynamic> _spikyClosedLoopResponse() {
   return response;
 }
 
+Map<String, dynamic> _outAndBackPoolResponse() {
+  final start = [9.7471, 47.5162];
+  final outbound = List.generate(28, (index) {
+    final t = index / 27.0;
+    return [start[0] - 0.18 * t, start[1] + 0.04 * t];
+  });
+  final coordinates = [...outbound, ...outbound.reversed.skip(1)];
+  coordinates[0] = start;
+  coordinates[coordinates.length - 1] = [...start];
+
+  return {
+    'route': {
+      'geometry': {'type': 'LineString', 'coordinates': coordinates},
+      'distance': 50000.0,
+      'duration': 4100.0,
+      'legs': const [
+        {'steps': []},
+      ],
+    },
+  };
+}
+
 double _polylineDistanceMeters(List<List<double>> coordinates) {
   var total = 0.0;
   for (var index = 1; index < coordinates.length; index++) {
@@ -976,6 +998,40 @@ void main() {
       expect(RouteService.lastRoutePoolFallbackUsed, isFalse);
       expect(RouteService.lastRoutePoolRejectedTooFar, isTrue);
       expect(RouteService.lastRoutePoolDistanceRuleApplied, isTrue);
+    },
+  );
+
+  test(
+    'ROUND_TRIP-Pool-Fallback verwirft lokal kaputte verified Pool-Route',
+    () async {
+      final poolService = _FakeRoutePoolService(
+        _poolMatchWithResponse(
+          response: _outAndBackPoolResponse(),
+          id: 'pool-bregenz-out-and-back',
+          cityCluster: 'Bregenz',
+          startDistanceKm: 0.2,
+        ),
+      );
+      service = RouteService(
+        invoker: _AlwaysFailingInvoker(),
+        routePoolService: poolService,
+      );
+
+      await expectLater(
+        service.generateRoundTrip(
+          startPosition: _start(),
+          targetDistanceKm: 50,
+          mode: 'Sport Mode',
+          planningType: 'Zufall',
+          avoidHighways: true,
+          forceFreshVariant: true,
+        ),
+        throwsA(isA<RouteServiceException>()),
+      );
+
+      expect(RouteService.lastRoutePoolFallbackUsed, isFalse);
+      expect(RouteService.lastRouteGenerationSource, isNot('pool'));
+      expect(poolService.calls, isNotEmpty);
     },
   );
 

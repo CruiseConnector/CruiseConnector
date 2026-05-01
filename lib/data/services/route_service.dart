@@ -3442,8 +3442,16 @@ class RouteService {
                   classification.isAcceptable ||
                   scenicFallbackRenderable ||
                   serverApprovedAcceptable);
+    final isPoolFallbackRoute =
+        scenario.isRoundTrip && variant.variantHint.startsWith('pool-');
+    final poolShapeQualityOk =
+        !isPoolFallbackRoute ||
+        (quality.passed && renderableDistanceOk);
     final softRenderable =
-        hasEnoughPoints && qualityAcceptable && !deadEndSpikeDetected;
+        hasEnoughPoints &&
+        qualityAcceptable &&
+        poolShapeQualityOk &&
+        !deadEndSpikeDetected;
     final styleSoftOk =
         styleOk ||
         (scenario.isRoundTrip &&
@@ -3509,6 +3517,7 @@ class RouteService {
       'styleOk=$styleOk/$styleSoftOk, '
       'uturns=${quality.uturnPositions.length}, '
       'deadEndSpikes=${deadEndSpikes.length}, '
+      'poolShapeOk=$poolShapeQualityOk, '
       'tooSimilar=$tooSimilar, novelEnough=$novelEnough, '
       'edgeTier=${edgeTier?.name ?? 'none'}, '
       'detourOk=$detourDistanceOk, deliveredDetour=$pointToPointEvaluationDetourLevel, '

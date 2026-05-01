@@ -1973,7 +1973,7 @@ class RoutePoolService {
       routeType: coverage.routeType,
     );
     if (existing?.id != null) {
-      final payload = coverage.toJson()..remove('id');
+      final payload = _coveragePayloadForDb(coverage)..remove('id');
       final rows = await _db
           .from('route_pool_coverage')
           .update(payload)
@@ -1986,7 +1986,7 @@ class RoutePoolService {
     }
     final rows = await _db
         .from('route_pool_coverage')
-        .insert(coverage.toJson())
+        .insert(_coveragePayloadForDb(coverage))
         .select()
         .limit(1);
     return RoutePoolCoverage.fromJson(
@@ -2360,7 +2360,7 @@ class RoutePoolService {
       routeType: job.routeType,
     );
     if (existing?.id != null) {
-      final payload = job.toJson()..remove('id');
+      final payload = _seedJobPayloadForDb(job)..remove('id');
       final rows = await _db
           .from('route_seed_jobs')
           .update(payload)
@@ -2373,7 +2373,7 @@ class RoutePoolService {
     }
     final rows = await _db
         .from('route_seed_jobs')
-        .insert(job.toJson())
+        .insert(_seedJobPayloadForDb(job))
         .select()
         .limit(1);
     return RouteSeedJob.fromJson(
@@ -2684,6 +2684,24 @@ class RoutePoolService {
     final date = _dateOnlyKey(value);
     if (date == null || date.length < 8) return null;
     return '${date.substring(0, 8)}01';
+  }
+
+  static Map<String, dynamic> _coveragePayloadForDb(
+    RoutePoolCoverage coverage,
+  ) {
+    final payload = coverage.toJson();
+    final now = DateTime.now().toUtc();
+    payload['healing_budget_window_date'] ??= _dateOnlyKey(now);
+    payload['healing_budget_window_month'] ??= _monthOnlyKey(now);
+    return payload;
+  }
+
+  static Map<String, dynamic> _seedJobPayloadForDb(RouteSeedJob job) {
+    final payload = job.toJson();
+    final now = DateTime.now().toUtc();
+    payload['budget_window_date'] ??= _dateOnlyKey(now);
+    payload['budget_window_month'] ??= _monthOnlyKey(now);
+    return payload;
   }
 
   static String _deriveCoverageStatus({
