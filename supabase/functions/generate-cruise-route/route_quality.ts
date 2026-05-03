@@ -1145,6 +1145,7 @@ function evaluateRouteQualityCore(
     distanceConfig?: DistanceConfig;
     mode?: RouteMode;
     avoidHighways?: boolean;
+    requiredStops?: boolean;
   },
 ): RouteQualityEvaluation {
   const coordinateCount = route?.geometry?.coordinates?.length ?? 0;
@@ -1152,6 +1153,7 @@ function evaluateRouteQualityCore(
   const targetDistanceKm = options?.targetDistanceKm ?? 0;
   const distanceConfig = options?.distanceConfig;
   const avoidHighways = options?.avoidHighways === true;
+  const requiredStops = options?.requiredStops === true;
   const distanceDeltaKm = targetDistanceKm > 0
     ? Math.abs(actualDistanceKm - targetDistanceKm)
     : 0;
@@ -1534,13 +1536,25 @@ function evaluateRouteQualityCore(
     shapeSignals.loopCleanupDistanceRetentionRatio >=
       (mediumLongNoHighwaySport ? 0.70 : 0.88) &&
     (distanceConfig == null ||
-      shapeSignals.loopCleanupDistanceKm >=
-        (isShortNoHighwaySportRoundTrip
-          ? shortSportPresentationMinKm - 1.0
-          : distanceConfig.acceptableMinKm - 1.0))) ||
+    shapeSignals.loopCleanupDistanceKm >=
+      (isShortNoHighwaySportRoundTrip
+        ? shortSportPresentationMinKm - 1.0
+        : distanceConfig.acceptableMinKm - 1.0))) ||
     cleanShortSportHairpin;
+  const cleanRequiredStopHairpin = requiredStops &&
+    !hasManeuverUTurn &&
+    shapeSignals.geometricUTurnCount <= (isCurveChase ? 5 : 4) &&
+    overlapPercent <= (isCurveChase ? 28 : 30) &&
+    shapeSignals.oppositeOverlapPercent <= (isCurveChase ? 24 : 26) &&
+    shapeSignals.foldedLoopPenalty <= 88 &&
+    shapeSignals.middleCoverageRatio >= 0.22 &&
+    shapeSignals.centerReentryCount <= 2 &&
+    shapeSignals.repeatedStartAreaPercent <= 42 &&
+    shapeSignals.spurArmPercent <= 36 &&
+    shapeSignals.centralReturnPercent <= 28 &&
+    shapeSignals.hookCount <= (isCurveChase ? 14 : 16);
 
-  if (hasUTurn && !cleanNoHighwayHairpin) {
+  if (hasUTurn && !cleanNoHighwayHairpin && !cleanRequiredStopHairpin) {
     if (isNoHighwayHairpinEligibleRoundTrip && hasGeometricUTurn) {
       debugLog(
         `[RT-QA] hairpin-reject uTurn=${shapeSignals.geometricUTurnCount}` +
@@ -1864,6 +1878,7 @@ export function evaluateRouteQuality(
     distanceConfig?: DistanceConfig;
     mode?: RouteMode;
     avoidHighways?: boolean;
+    requiredStops?: boolean;
   },
 ): RouteQualityEvaluation {
   const quality = evaluateRouteQualityCore(route, routeType, options);
@@ -1880,6 +1895,7 @@ export function evaluateRouteCleanupGate(
     mode?: RouteMode;
     avoidHighways?: boolean;
     startLocation?: Coordinate;
+    requiredStops?: boolean;
   },
 ): RouteCleanupEvaluation {
   if (routeType !== "ROUND_TRIP") {
@@ -1927,10 +1943,15 @@ export function evaluateRouteCleanupGate(
     options?.avoidHighways === true &&
     options?.mode === "Sport Mode" &&
     targetDistanceKm > 60 && targetDistanceKm <= 115;
+  const requiredStopsGate = options?.requiredStops === true;
   const maneuverUTurnAllowance = mediumLongNoHighwaySportGate ? 6 : 0;
   const maneuverUTurnCount = countUTurnManeuvers(route);
   const manualUTurnBreach = maneuverUTurnCount > maneuverUTurnAllowance;
-  const geometricUTurnAllowance = mediumLongNoHighwaySportGate ? 6 : 0;
+  const geometricUTurnAllowance = requiredStopsGate
+    ? 4
+    : mediumLongNoHighwaySportGate
+    ? 6
+    : 0;
   const cleanedGeometricUTurnBreach = cleanup.cleanedGeometricUTurnCount >
     geometricUTurnAllowance;
   const cleanedHasUTurn = manualUTurnBreach || cleanedGeometricUTurnBreach;

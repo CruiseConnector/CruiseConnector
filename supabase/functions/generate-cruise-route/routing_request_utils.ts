@@ -6,6 +6,10 @@ export function classifyRoutingError(message: string): {
     | "too_many_waypoints"
     | "waypoint_duplicate_or_too_close"
     | "waypoint_too_far"
+    | "waypoint_layout_unstable"
+    | "waypoint_route_not_possible"
+    | "waypoint_not_reached"
+    | "waypoint_quality_too_low"
     | "NO_ROUTE"
     | "UNAUTHORIZED"
     | "RATE_LIMIT"
@@ -32,14 +36,29 @@ export function classifyRoutingError(message: string): {
   if (lower.includes("waypoint_too_far")) {
     return { status: 422, code: "waypoint_too_far", retryable: false };
   }
-  if (
-    lower.includes("waypoint_layout_unstable") ||
-    lower.includes("waypoint_route_not_possible")
-  ) {
-    return { status: 422, code: "INVALID_REQUEST", retryable: false };
+  if (lower.includes("waypoint_layout_unstable")) {
+    return {
+      status: 422,
+      code: "waypoint_layout_unstable",
+      retryable: false,
+    };
+  }
+  if (lower.includes("waypoint_not_reached")) {
+    return { status: 404, code: "waypoint_not_reached", retryable: false };
+  }
+  if (lower.includes("waypoint_route_not_possible")) {
+    return {
+      status: 404,
+      code: "waypoint_route_not_possible",
+      retryable: false,
+    };
   }
   if (lower.includes("waypoint_quality_too_low")) {
-    return { status: 404, code: "NO_ROUTE", retryable: false };
+    return {
+      status: 404,
+      code: "waypoint_quality_too_low",
+      retryable: false,
+    };
   }
   if (
     lower.includes("invalid") ||

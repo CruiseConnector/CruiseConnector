@@ -279,7 +279,7 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
                   runSpacing: 8,
                   children: [
                     _SmallActionButton(
-                      label: 'Bereiche vorschlagen',
+                      label: 'Stopps vorschlagen',
                       icon: Icons.auto_awesome,
                       onTap: widget.waypointActionsEnabled
                           ? widget.onGenerateWaypointSeed
@@ -529,18 +529,18 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
 
   String _waypointHintText() {
     if (widget.roundTripWaypointCount == 0) {
-      return 'Setze bis zu 3 Bereiche, die deine Rundroute bevorzugen soll.';
+      return 'Setze bis zu 3 Stopps, die deine Rundroute wirklich anfahren soll.';
     }
     final replacing = widget.replacingWaypointIndex;
     if (replacing != null && replacing >= 0) {
-      return 'Tippe auf die Karte, um Bereich ${replacing + 1} neu zu setzen.';
+      return 'Tippe auf die Karte, um Stopp ${replacing + 1} neu zu setzen.';
     }
     final selected = widget.selectedWaypointIndex;
     if (selected != null && selected >= 0) {
-      return 'Bereich ${selected + 1} ausgewählt. Du kannst ihn löschen oder neu setzen.';
+      return 'Stopp ${selected + 1} ausgewählt. Du kannst ihn löschen oder neu setzen.';
     }
-    final pluralSuffix = widget.roundTripWaypointCount == 1 ? '' : 'e';
-    return '${widget.roundTripWaypointCount} Bereich$pluralSuffix gesetzt. Die Route sucht bevorzugt in diese Richtungen.';
+    final pluralSuffix = widget.roundTripWaypointCount == 1 ? '' : 's';
+    return '${widget.roundTripWaypointCount} Stopp$pluralSuffix gesetzt. Die Route fährt diese Punkte an.';
   }
 }
 

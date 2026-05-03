@@ -292,16 +292,14 @@ class RouteService {
     String subscriptionTier = 'premium',
   }) async {
     final styleConfig = RouteStyleConfig.forMode(mode);
-    final isWaypointPreferenceRoundTrip = planningType == 'Wegpunkte';
-    final effectivePlanningType = isWaypointPreferenceRoundTrip
-        ? 'Zufall'
-        : planningType;
+    final isWaypointRequiredRoundTrip = planningType == 'Wegpunkte';
+    final effectivePlanningType = planningType;
     final normalizedUserWaypoints = _normalizeUserWaypoints(userWaypoints);
     final normalizedTargetKm = styleConfig.clampRoundTripDistanceKm(
       targetDistanceKm,
     );
-    final waypointValidationError = isWaypointPreferenceRoundTrip
-        ? _validatePreferenceAreas(
+    final waypointValidationError = isWaypointRequiredRoundTrip
+        ? _validateRequiredWaypoints(
             startPosition: startPosition,
             waypoints: normalizedUserWaypoints,
             targetDistanceKm: normalizedTargetKm,
@@ -310,7 +308,7 @@ class RouteService {
     if (waypointValidationError != null) {
       throw waypointValidationError;
     }
-    final waypointSignature = isWaypointPreferenceRoundTrip
+    final waypointSignature = isWaypointRequiredRoundTrip
         ? _buildWaypointSignature(normalizedUserWaypoints)
         : null;
     final scenario = RouteScenario(
@@ -322,9 +320,11 @@ class RouteService {
       targetDistanceKm: normalizedTargetKm.toDouble(),
       avoidHighways: avoidHighways,
       waypointSignature: waypointSignature,
-      closeLoop: isWaypointPreferenceRoundTrip,
+      closeLoop: isWaypointRequiredRoundTrip,
     );
-    var poolHealingFirstPolicy = _usePoolHealingFirstForRoundTrip(scenario);
+    var poolHealingFirstPolicy = isWaypointRequiredRoundTrip
+        ? false
+        : _usePoolHealingFirstForRoundTrip(scenario);
     _resetRouteDebugState();
     lastRouteGenerationStartedAtMs = DateTime.now().millisecondsSinceEpoch;
     lastRouteDebugTrigger = debugTrigger;
@@ -362,6 +362,19 @@ class RouteService {
         ? '${scenario.scenarioKey}|fresh|${DateTime.now().microsecondsSinceEpoch}'
         : scenario.scenarioKey;
     return RouteGenerationCoordinator.runSingleFlight(singleFlightKey, () async {
+      if (isWaypointRequiredRoundTrip) {
+        return _generateRequiredWaypointRoundTrip(
+          scenario: scenario,
+          styleConfig: styleConfig,
+          startPosition: startPosition,
+          targetLocation: targetLocation,
+          userWaypoints: normalizedUserWaypoints,
+          variantIndex: variantIndex,
+          forceFreshVariant: forceFreshVariant,
+          debugTrigger: debugTrigger,
+        );
+      }
+
       RoutePoolCoverageCheck? poolHealingCoverage;
       var onDemandLiveFill = false;
 
@@ -565,9 +578,6 @@ class RouteService {
             startPosition: startPosition,
             targetLocation: targetLocation,
             userWaypoints: normalizedUserWaypoints,
-            originalPlanningType: isWaypointPreferenceRoundTrip
-                ? planningType
-                : null,
             variant: variant,
             forceFreshVariant: forceFreshVariant,
             debugTrigger: debugTrigger,
@@ -866,6 +876,116 @@ class RouteService {
             debugMessage: 'RoundTrip generation failed without usable result.',
           );
     });
+  }
+
+  Future<RouteResult> _generateRequiredWaypointRoundTrip({
+    required RouteScenario scenario,
+    required RouteStyleConfig styleConfig,
+    required geo.Position startPosition,
+    required List<Map<String, double>> userWaypoints,
+    int? variantIndex,
+    bool forceFreshVariant = false,
+    String debugTrigger = 'unknown',
+    Map<String, double>? targetLocation,
+  }) async {
+    lastRouteSourceDecision = forceFreshVariant
+        ? 'waypoint_required_stops_search_again'
+        : 'waypoint_required_stops';
+    lastRouteLiveAttemptReason = 'required_waypoint_route';
+
+    final maxAttempts = forceFreshVariant ? 2 : 1;
+    _RouteCandidate? bestCandidate;
+    _RouteCandidate? bestDuplicateCandidate;
+    RouteServiceException? lastError;
+
+    for (var attempt = 0; attempt < maxAttempts; attempt++) {
+      if (_isInWorkerLimitCooldown()) break;
+      final variant = await _nextRoundTripVariant(
+        scenario,
+        styleConfig: styleConfig,
+        explicitIndex: attempt == 0 ? variantIndex : null,
+      );
+      _debugRouteSearch(
+        '[WaypointRequired] attempt=${attempt + 1}/$maxAttempts '
+        'scenarioKey=${scenario.scenarioKey} routeVariantHint=${variant.variantHint} '
+        'fingerprintHint=${variant.fingerprintHint} forceFreshVariant=$forceFreshVariant',
+      );
+      try {
+        final candidate = await _requestRoundTripVariant(
+          scenario: scenario,
+          styleConfig: styleConfig,
+          startPosition: startPosition,
+          targetLocation: targetLocation,
+          userWaypoints: userWaypoints,
+          originalPlanningType: 'Wegpunkte',
+          variant: variant,
+          forceFreshVariant: forceFreshVariant,
+          debugTrigger: debugTrigger,
+          candidateBudget: math.min(6, math.max(3, userWaypoints.length * 2)),
+        );
+        if (!candidate.accepted) {
+          continue;
+        }
+        if (!candidate.novelEnough) {
+          lastRouteDuplicateSkipped = true;
+          if (_isBetterCandidate(candidate, bestDuplicateCandidate)) {
+            bestDuplicateCandidate = candidate;
+          }
+          continue;
+        }
+        if (_isBetterCandidate(candidate, bestCandidate)) {
+          bestCandidate = candidate;
+        }
+        if (candidate.isIdeal || candidate.isGood) break;
+      } catch (e, stack) {
+        final mapped = e is RouteServiceException
+            ? e
+            : _mapInvokeException(
+                error: e,
+                stack: stack,
+                routeType: scenario.routeType,
+              );
+        lastError = mapped;
+        if (_isWorkerLimitError(mapped)) {
+          _setWorkerLimitCooldown();
+        }
+        debugPrint(
+          '[RouteService] Required-waypoint candidate ${attempt + 1}/$maxAttempts fehlgeschlagen: ${mapped.debugMessage}',
+        );
+        if (_isFatalStructuredError(mapped)) {
+          break;
+        }
+      }
+    }
+
+    final accepted = bestCandidate ?? bestDuplicateCandidate;
+    if (accepted?.accepted == true) {
+      if (identical(accepted, bestDuplicateCandidate) &&
+          bestCandidate == null) {
+        lastRouteDuplicateFallbackUsed = true;
+      }
+      lastRouteGenerationSource = 'mapbox';
+      return _finalizeAndRemember(
+        scenario: scenario,
+        route: accepted!.route,
+        sampledCoordinates: accepted.sampledCoordinates,
+        fingerprint: accepted.fingerprint,
+      );
+    }
+
+    throw lastError ??
+        const RouteServiceException(
+          type: RouteErrorType.quality,
+          userMessage:
+              'Diese Wegpunkte lassen sich nicht zu einer sauberen Route verbinden. Verschiebe einen Punkt oder entferne ihn.',
+          debugMessage:
+              'Required waypoint roundtrip failed without accepted candidate.',
+          edgeMeta: {
+            'response_code': 'waypoint_quality_too_low',
+            'planning_type': 'Wegpunkte',
+            'waypoint_mode': 'required_stops',
+          },
+        );
   }
 
   /// Berechnet eine Route von A nach B (direkt oder scenic).
@@ -1713,7 +1833,7 @@ class RouteService {
         .join(';');
   }
 
-  static RouteServiceException? _validatePreferenceAreas({
+  static RouteServiceException? _validateRequiredWaypoints({
     required geo.Position startPosition,
     required List<Map<String, double>> waypoints,
     required int targetDistanceKm,
@@ -1732,9 +1852,9 @@ class RouteService {
           'response_code': code,
           'code': code,
           'planning_type': 'Wegpunkte',
-          'original_planning_type': 'waypoints',
-          'effective_planning_type': 'random',
-          'preference_area_count': waypoints.length,
+          'waypoint_mode': 'required_stops',
+          'waypoint_route_mode': 'required_stops',
+          'required_waypoint_count': waypoints.length,
           'max_waypoints': 3,
           ...meta,
         },
@@ -1744,15 +1864,15 @@ class RouteService {
     if (waypoints.isEmpty) {
       return failure(
         'too_few_waypoints',
-        'Setze mindestens einen Bereich für diese Rundkurs-Planung.',
-        'Waypoint preference mode requires at least one preference area.',
+        'Setze mindestens einen Stopp für diese Rundkurs-Planung.',
+        'Waypoint required-stops mode requires at least one waypoint.',
       );
     }
     if (waypoints.length > 3) {
       return failure(
         'too_many_waypoints',
-        'Bitte nutze maximal 3 Bereiche.',
-        'Waypoint preference mode supports at most 3 preference areas.',
+        'Bitte nutze maximal 3 Stopps.',
+        'Waypoint required-stops mode supports at most 3 waypoints.',
       );
     }
 
@@ -1776,16 +1896,16 @@ class RouteService {
       if (fromStartKm < minPointDistanceKm) {
         return failure(
           'waypoint_duplicate_or_too_close',
-          'Ein Bereich liegt zu nah am Start. Verschiebe ihn ein Stück weiter.',
-          'Preference area $i is ${fromStartKm.toStringAsFixed(2)}km from start.',
+          'Ein Stopp liegt zu nah am Start. Verschiebe ihn ein Stück weiter.',
+          'Required waypoint $i is ${fromStartKm.toStringAsFixed(2)}km from start.',
           meta: {'failed_waypoint_index': i},
         );
       }
       if (fromStartKm > maxWaypointDistanceKm) {
         return failure(
           'waypoint_too_far',
-          'Ein Bereich liegt zu weit weg für diesen Rundkurs.',
-          'Preference area $i is ${fromStartKm.toStringAsFixed(1)}km from start.',
+          'Ein Stopp liegt zu weit weg für diesen Rundkurs.',
+          'Required waypoint $i is ${fromStartKm.toStringAsFixed(1)}km from start.',
           meta: {
             'failed_waypoint_index': i,
             'max_waypoint_distance_km': maxWaypointDistanceKm,
@@ -1805,80 +1925,14 @@ class RouteService {
         if (pairKm < minPointDistanceKm) {
           return failure(
             'waypoint_duplicate_or_too_close',
-            'Zwei Bereiche liegen zu nah beieinander. Verschiebe oder lösche einen Punkt.',
-            'Preference areas $j and $i are ${pairKm.toStringAsFixed(2)}km apart.',
+            'Zwei Stopps liegen zu nah beieinander. Verschiebe oder lösche einen Punkt.',
+            'Required waypoints $j and $i are ${pairKm.toStringAsFixed(2)}km apart.',
             meta: {'failed_waypoint_index': i, 'duplicate_waypoint_index': j},
           );
         }
       }
     }
     return null;
-  }
-
-  static int _preferenceRadiusMetersForMode(String mode) {
-    return switch (mode) {
-      'Kurvenjagd' || 'Entdecker' => 2500,
-      'Abendrunde' => 1500,
-      _ => 2000,
-    };
-  }
-
-  static List<Map<String, dynamic>> _buildPreferenceAreas({
-    required geo.Position startPosition,
-    required List<Map<String, double>> waypoints,
-    required String mode,
-  }) {
-    final radiusMeters = _preferenceRadiusMetersForMode(mode);
-    return List<Map<String, dynamic>>.generate(waypoints.length, (index) {
-      final point = waypoints[index];
-      final lat = point['latitude']!;
-      final lng = point['longitude']!;
-      final distanceKm =
-          geo.Geolocator.distanceBetween(
-            startPosition.latitude,
-            startPosition.longitude,
-            lat,
-            lng,
-          ) /
-          1000.0;
-      return <String, dynamic>{
-        'latitude': lat,
-        'longitude': lng,
-        'radius_m': radiusMeters,
-        'bearing_from_start': calculateBearing(
-          startPosition.latitude,
-          startPosition.longitude,
-          lat,
-          lng,
-        ).round(),
-        'distance_from_start_km': (distanceKm * 10).roundToDouble() / 10.0,
-      };
-    }, growable: false);
-  }
-
-  static double? _preferredBearingFromPreferenceAreas(
-    geo.Position startPosition,
-    List<Map<String, double>> waypoints,
-  ) {
-    if (waypoints.isEmpty) return null;
-    var x = 0.0;
-    var y = 0.0;
-    for (final point in waypoints) {
-      final bearingRad =
-          calculateBearing(
-            startPosition.latitude,
-            startPosition.longitude,
-            point['latitude']!,
-            point['longitude']!,
-          ) *
-          math.pi /
-          180.0;
-      x += math.cos(bearingRad);
-      y += math.sin(bearingRad);
-    }
-    if (x.abs() < 0.0001 && y.abs() < 0.0001) return null;
-    final degrees = math.atan2(y, x) * 180.0 / math.pi;
-    return degrees < 0 ? degrees + 360.0 : degrees;
   }
 
   Map<String, dynamic> _buildRoundTripRequest({
@@ -1895,15 +1949,8 @@ class RouteService {
     bool avoidHighways = false,
     String? originalPlanningType,
   }) {
-    final isPreferenceRoundTrip =
+    final isRequiredWaypointRoundTrip =
         originalPlanningType == 'Wegpunkte' && userWaypoints.isNotEmpty;
-    final preferenceAreas = isPreferenceRoundTrip
-        ? _buildPreferenceAreas(
-            startPosition: startPosition,
-            waypoints: userWaypoints,
-            mode: mode,
-          )
-        : const <Map<String, dynamic>>[];
     return <String, dynamic>{
       'startLocation': {
         'latitude': startPosition.latitude,
@@ -1913,13 +1960,13 @@ class RouteService {
       'mode': mode,
       'route_type': 'ROUND_TRIP',
       'planning_type': planningType,
-      if (isPreferenceRoundTrip) ...{
-        'original_planning_type': 'waypoints',
-        'effective_planning_type': 'random',
-        'generation_mode': 'random_with_preferences',
-        'preference_areas': preferenceAreas,
-        'preference_area_count': preferenceAreas.length,
-        'preference_applied': true,
+      if (isRequiredWaypointRoundTrip) ...{
+        'waypoint_mode': 'required_stops',
+        'required_waypoints': userWaypoints,
+        'waypoint_order': 'auto_optimize',
+        'close_loop': true,
+        'max_search_ms': 25000,
+        'required_waypoint_count': userWaypoints.length,
       },
       'language': 'de',
       'randomSeed': variant.seed,
@@ -1932,7 +1979,8 @@ class RouteService {
       if (targetLocation != null) 'targetLocation': targetLocation,
       // Richtungshinweis für die Edge Function: bestimmt die Hauptrichtung
       // der Waypoint-Verteilung (0-359°). Wird als baseBearing verwendet.
-      if (directionHint != null) 'direction_hint': directionHint.round() % 360,
+      if (!isRequiredWaypointRoundTrip && directionHint != null)
+        'direction_hint': directionHint.round() % 360,
     };
   }
 
@@ -2728,6 +2776,9 @@ class RouteService {
             },
       'user_waypoint_count': waypointCount,
       'user_waypoint_signature': waypointSignature,
+      'waypoint_mode': body['waypoint_mode'],
+      'waypoint_order': body['waypoint_order'],
+      'required_waypoint_count': body['required_waypoint_count'],
       'original_planning_type': body['original_planning_type'],
       'effective_planning_type': body['effective_planning_type'],
       'generation_mode': body['generation_mode'],
@@ -2787,6 +2838,7 @@ class RouteService {
 
   static int _requestWaypointCount(Map<String, dynamic> body) {
     final waypoints =
+        body['required_waypoints'] ??
         body['preference_areas'] ??
         body['user_waypoints'] ??
         body['manual_waypoints'];
@@ -2795,6 +2847,7 @@ class RouteService {
 
   static String _requestWaypointSignature(Map<String, dynamic> body) {
     final waypoints =
+        body['required_waypoints'] ??
         body['preference_areas'] ??
         body['user_waypoints'] ??
         body['manual_waypoints'];
@@ -3128,9 +3181,6 @@ class RouteService {
           : ((scenario.targetDistanceKm ?? 50.0) * variant.radiusJitter)
                 .round(),
     );
-    final preferredDirectionHint = originalPlanningType == 'Wegpunkte'
-        ? _preferredBearingFromPreferenceAreas(startPosition, userWaypoints)
-        : null;
     final body = _buildRoundTripRequest(
       startPosition: startPosition,
       targetDistanceKm: adjustedTargetKm,
@@ -3140,7 +3190,7 @@ class RouteService {
       variant: variant,
       targetLocation: targetLocation,
       userWaypoints: userWaypoints,
-      directionHint: preferredDirectionHint ?? variant.angleOffset,
+      directionHint: variant.angleOffset,
       candidateBudget: candidateBudget,
       avoidHighways: scenario.avoidHighways,
       originalPlanningType: originalPlanningType,
@@ -3151,11 +3201,9 @@ class RouteService {
     final result = await _invoke(body);
     final snapped = _snapRouteToStartPosition(result, startPosition);
     if (originalPlanningType == 'Wegpunkte') {
-      snapped.edgeMeta['original_planning_type'] = 'waypoints';
-      snapped.edgeMeta['effective_planning_type'] = 'random';
-      snapped.edgeMeta['generation_mode'] = 'random_with_preferences';
-      snapped.edgeMeta['preference_area_count'] = userWaypoints.length;
-      snapped.edgeMeta['preference_applied'] = true;
+      snapped.edgeMeta['waypoint_mode'] ??= 'required_stops';
+      snapped.edgeMeta['waypoint_route_mode'] ??= 'required_stops';
+      snapped.edgeMeta['required_waypoint_count'] ??= userWaypoints.length;
       snapped.edgeMeta['route_source'] ??= 'mapbox';
     }
     return _evaluateCandidate(
@@ -3247,6 +3295,8 @@ class RouteService {
     bool relaxedRoundTrip = false,
   }) {
     final actualDistanceKm = route.distanceKm ?? 0.0;
+    final isRequiredWaypointRoundTrip =
+        scenario.isRoundTrip && scenario.planningType == 'Wegpunkte';
     final pointToPointEvaluationDetourLevel = _effectivePointToPointDetourLevel(
       scenario,
       route,
@@ -3379,7 +3429,9 @@ class RouteService {
       minDistanceKm: pointToPointMinDistance,
       maxDistanceKm: pointToPointMaxDistance,
     );
-    final successFirstDistanceOk = scenario.isRoundTrip
+    final successFirstDistanceOk = isRequiredWaypointRoundTrip
+        ? true
+        : scenario.isRoundTrip
         ? (() {
             final targetKm = scenario.targetDistanceKm ?? actualDistanceKm;
             if (targetKm <= 0) return true;
@@ -5962,16 +6014,18 @@ class RouteService {
         lower.contains('waypoint_too_far') ||
         lower.contains('waypoint_layout_unstable') ||
         lower.contains('waypoint_route_not_possible') ||
+        lower.contains('waypoint_not_reached') ||
         responseCode == 'too_few_waypoints' ||
         responseCode == 'too_many_waypoints' ||
         responseCode == 'waypoint_duplicate_or_too_close' ||
         responseCode == 'waypoint_too_far' ||
         responseCode == 'waypoint_layout_unstable' ||
-        responseCode == 'waypoint_route_not_possible') {
+        responseCode == 'waypoint_route_not_possible' ||
+        responseCode == 'waypoint_not_reached') {
       return RouteServiceException(
         type: RouteErrorType.validation,
         userMessage:
-            'Diese Wegpunkte ergeben noch keine saubere Route. Verschiebe einen Punkt oder lass neue Vorschläge erzeugen.',
+            'Diese Wegpunkte lassen sich nicht zu einer sauberen Route verbinden. Verschiebe einen Punkt oder entferne ihn.',
         debugMessage:
             'Waypoint validation error (status=$statusCode, reason=$reasonPhrase): $errorMessage, details=$details',
         statusCode: statusCode,
@@ -5985,7 +6039,7 @@ class RouteService {
       return RouteServiceException(
         type: RouteErrorType.quality,
         userMessage:
-            'Diese Wegpunkte ergeben noch keine saubere Route. Verschiebe einen Punkt oder lass neue Vorschläge erzeugen.',
+            'Diese Wegpunkte lassen sich nicht zu einer sauberen Route verbinden. Verschiebe einen Punkt oder entferne ihn.',
         debugMessage:
             'Waypoint quality error (status=$statusCode, reason=$reasonPhrase): $errorMessage, details=$details',
         statusCode: statusCode,

@@ -19,9 +19,12 @@ export type RouteMode =
 export interface RequestData {
   planning_type: "Zufall" | "Wegpunkte";
   route_type?: "ROUND_TRIP" | "POINT_TO_POINT";
+  required_waypoints?: Coordinate[];
   user_waypoints?: Coordinate[];
   manual_waypoints?: Coordinate[];
-  waypoint_order?: "fixed";
+  waypoint_mode?: "required_stops";
+  waypoint_order?: "fixed" | "auto_optimize";
+  max_search_ms?: number;
   original_planning_type?: "waypoints" | "Wegpunkte";
   effective_planning_type?: "random" | "Zufall";
   generation_mode?: "random_with_preferences";

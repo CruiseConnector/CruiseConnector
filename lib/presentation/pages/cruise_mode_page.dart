@@ -708,7 +708,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       return;
     }
     if (_roundTripWaypoints.length >= 3) {
-      _showError('Maximal 3 Bereiche möglich.', isCritical: false);
+      _showError('Maximal 3 Stopps möglich.', isCritical: false);
       return;
     }
     setState(() {
@@ -800,7 +800,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     if (selected < 0 || selected >= _roundTripWaypoints.length) return;
     setState(() => _replaceRoundTripWaypointIndex = selected);
     _showError(
-      'Tippe auf die Karte, um Bereich ${selected + 1} neu zu setzen.',
+      'Tippe auf die Karte, um Stopp ${selected + 1} neu zu setzen.',
       isCritical: false,
     );
     HapticFeedback.selectionClick();
@@ -1670,11 +1670,13 @@ class _CruiseModePageState extends State<CruiseModePage>
                 ),
               ),
             if (_isLoading)
-              const Padding(
-                padding: EdgeInsets.only(bottom: 10),
+              Padding(
+                padding: const EdgeInsets.only(bottom: 10),
                 child: Text(
-                  'Route wird gesucht...',
-                  style: TextStyle(
+                  _isWaypointPlanning
+                      ? 'Route über deine Wegpunkte wird berechnet...'
+                      : 'Route wird gesucht...',
+                  style: const TextStyle(
                     color: Colors.white,
                     fontSize: 14,
                     fontWeight: FontWeight.w600,
@@ -1704,10 +1706,10 @@ class _CruiseModePageState extends State<CruiseModePage>
                   elevation: 0,
                 ),
                 child: _isLoading
-                    ? const Row(
+                    ? Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          SizedBox(
+                          const SizedBox(
                             width: 22,
                             height: 22,
                             child: CircularProgressIndicator(
@@ -1715,10 +1717,12 @@ class _CruiseModePageState extends State<CruiseModePage>
                               strokeWidth: 2,
                             ),
                           ),
-                          SizedBox(width: 12),
+                          const SizedBox(width: 12),
                           Text(
-                            'Route wird gesucht',
-                            style: TextStyle(
+                            _isWaypointPlanning
+                                ? 'Wegpunkte werden berechnet'
+                                : 'Route wird gesucht',
+                            style: const TextStyle(
                               color: Colors.white,
                               fontSize: 16,
                               fontWeight: FontWeight.bold,
@@ -2092,13 +2096,13 @@ class _CruiseModePageState extends State<CruiseModePage>
         _restoreGeneratedRouteFailureUi(
           previousUiState,
           waypointSnapshot.isEmpty
-              ? 'Setze mindestens einen Bereich oder lass Vorschläge erzeugen.'
-              : 'Bitte nutze maximal 3 Bereiche.',
+              ? 'Setze mindestens einen Stopp oder lass Vorschläge erzeugen.'
+              : 'Bitte nutze maximal 3 Stopps.',
           error: RouteServiceException(
             type: RouteErrorType.validation,
             userMessage: waypointSnapshot.isEmpty
-                ? 'Setze mindestens einen Bereich oder lass Vorschläge erzeugen.'
-                : 'Bitte nutze maximal 3 Bereiche.',
+                ? 'Setze mindestens einen Stopp oder lass Vorschläge erzeugen.'
+                : 'Bitte nutze maximal 3 Stopps.',
             debugMessage:
                 'Invalid UI waypoint count=${waypointSnapshot.length}.',
             edgeMeta: {
@@ -2325,7 +2329,6 @@ class _CruiseModePageState extends State<CruiseModePage>
           _configCollapsed = true;
           _showRouteInfoBanner = true;
         });
-        _maybeShowWaypointPreferenceNotice(result);
       }
       debugPrint('[CruiseMode] Route generation SUCCESS');
     } catch (e, stack) {
@@ -2393,35 +2396,6 @@ class _CruiseModePageState extends State<CruiseModePage>
     GamificationService.countCurvesAsync(result.coordinates).then((count) {
       if (mounted) setState(() => _cachedCurveCount = count);
     });
-  }
-
-  void _maybeShowWaypointPreferenceNotice(RouteResult result) {
-    if (!_isWaypointPlanning || !mounted || _disposed) return;
-    final meta = result.edgeMeta;
-    final areaCount = meta['preference_area_count'];
-    if (areaCount is! num || areaCount <= 0) return;
-    final matched = meta['matched_preference_count'];
-    final reason = meta['preference_ignored_reason']?.toString();
-    final ignored = reason == 'all_preference_areas_far';
-    final partial =
-        reason == 'partial_preference_match' ||
-        (matched is num && matched < areaCount);
-    if (!ignored && !partial) return;
-
-    final message = ignored
-        ? 'Wir haben eine saubere Route gefunden, aber deine Bereiche konnten kaum berücksichtigt werden.'
-        : 'Wir haben eine saubere Route gefunden, aber deine Bereiche wurden nur teilweise berücksichtigt.';
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          content: Text(message, style: const TextStyle(color: Colors.white)),
-          backgroundColor: const Color(0xFF2A2F3A),
-          behavior: SnackBarBehavior.floating,
-          margin: const EdgeInsets.all(16),
-          duration: const Duration(seconds: 5),
-        ),
-      );
   }
 
   Future<RouteResult> _prepareRouteForPreviewStart({
@@ -2785,6 +2759,7 @@ class _CruiseModePageState extends State<CruiseModePage>
         error.edgeMeta['code']?.toString();
     return code == 'waypoint_quality_too_low' ||
         code == 'waypoint_route_not_possible' ||
+        code == 'waypoint_not_reached' ||
         code == 'waypoint_layout_unstable' ||
         code == 'waypoint_duplicate_or_too_close' ||
         code == 'waypoint_too_far' ||
@@ -2802,7 +2777,7 @@ class _CruiseModePageState extends State<CruiseModePage>
           return AlertDialog(
             title: const Text('Wegpunkte anpassen'),
             content: const Text(
-              'Diese Wegpunkte ergeben noch keine saubere Route. Verschiebe einen Punkt oder lass neue Vorschläge erzeugen.',
+              'Diese Wegpunkte lassen sich nicht zu einer sauberen Route verbinden. Verschiebe einen Punkt oder entferne ihn.',
             ),
             actions: [
               TextButton(
@@ -2815,7 +2790,7 @@ class _CruiseModePageState extends State<CruiseModePage>
               ),
               FilledButton(
                 onPressed: () => Navigator.of(context).pop('seed'),
-                child: const Text('Seed neu generieren'),
+                child: const Text('Neue Stopps vorschlagen'),
               ),
             ],
           );

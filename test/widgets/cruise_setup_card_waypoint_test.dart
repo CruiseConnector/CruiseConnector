@@ -55,7 +55,7 @@ void main() {
     );
   }
 
-  testWidgets('zeigt Auswahl-Aktionen nur bei ausgewähltem Bereich', (
+  testWidgets('zeigt Auswahl-Aktionen nur bei ausgewähltem Stopp', (
     tester,
   ) async {
     var deleted = false;
@@ -70,7 +70,7 @@ void main() {
     );
 
     expect(
-      find.text('Bereich 2 ausgewählt. Du kannst ihn löschen oder neu setzen.'),
+      find.text('Stopp 2 ausgewählt. Du kannst ihn löschen oder neu setzen.'),
       findsOneWidget,
     );
 
@@ -89,7 +89,7 @@ void main() {
     );
 
     expect(
-      find.text('Tippe auf die Karte, um Bereich 1 neu zu setzen.'),
+      find.text('Tippe auf die Karte, um Stopp 1 neu zu setzen.'),
       findsOneWidget,
     );
   });

@@ -499,7 +499,7 @@ void main() {
       expect(captured['language'], 'de');
     });
 
-    test('sendet Bereiche als Präferenzen für Wegpunkte-Rundkurs', () async {
+    test('sendet Pflichtstopps für Wegpunkte-Rundkurs', () async {
       when(mockInvoker.invoke(any)).thenAnswer(
         (_) async =>
             _buildRouteResponse(distanceMeters: 42000, durationSeconds: 3200),
@@ -519,23 +519,22 @@ void main() {
       final captured =
           verify(mockInvoker.invoke(captureAny)).captured.first
               as Map<String, dynamic>;
-      expect(captured['planning_type'], 'Zufall');
+      expect(captured['planning_type'], 'Wegpunkte');
       expect(captured['route_type'], 'ROUND_TRIP');
-      expect(captured['original_planning_type'], 'waypoints');
-      expect(captured['effective_planning_type'], 'random');
-      expect(captured['generation_mode'], 'random_with_preferences');
-      expect(captured['preference_area_count'], 2);
-      expect(captured['preference_applied'], isTrue);
-      expect(captured.containsKey('user_waypoints'), isFalse);
+      expect(captured['waypoint_mode'], 'required_stops');
+      expect(captured['waypoint_order'], 'auto_optimize');
+      expect(captured['close_loop'], isTrue);
+      expect(captured['max_search_ms'], 25000);
+      expect(captured['required_waypoint_count'], 2);
+      expect(captured.containsKey('preference_areas'), isFalse);
       expect(captured.containsKey('manual_waypoints'), isFalse);
-      expect(captured.containsKey('close_loop'), isFalse);
-      final waypointPayload = (captured['preference_areas'] as List)
+      expect(captured.containsKey('original_planning_type'), isFalse);
+      expect(captured.containsKey('effective_planning_type'), isFalse);
+      expect(captured.containsKey('generation_mode'), isFalse);
+      final waypointPayload = (captured['required_waypoints'] as List)
           .cast<Map<String, dynamic>>();
       expect(waypointPayload[0]['latitude'], 48.1501);
       expect(waypointPayload[0]['longitude'], 11.6201);
-      expect(waypointPayload[0]['radius_m'], 2000);
-      expect(waypointPayload[0]['bearing_from_start'], isA<int>());
-      expect(waypointPayload[0]['distance_from_start_km'], isA<double>());
       expect(waypointPayload[1]['latitude'], 48.1151);
       expect(waypointPayload[1]['longitude'], 11.6502);
       expect(
@@ -544,20 +543,20 @@ void main() {
       );
     });
 
-    test('übernimmt Preference-Match-Meta aus der Edge-Antwort', () async {
+    test('übernimmt Required-Stop-Meta aus der Edge-Antwort', () async {
       when(mockInvoker.invoke(any)).thenAnswer(
         (_) async => _buildRouteResponse(
           distanceMeters: 42000,
           durationSeconds: 3200,
           meta: const {
-            'original_planning_type': 'waypoints',
-            'effective_planning_type': 'random',
-            'preference_area_count': 2,
-            'preference_applied': true,
-            'matched_preference_count': 1,
-            'preference_match_score': 62,
-            'preference_area_distances_m': [420, 1800],
-            'preference_ignored_reason': 'partial_preference_match',
+            'waypoint_mode': 'required_stops',
+            'waypoint_route_mode': 'required_stops',
+            'required_waypoint_count': 2,
+            'required_waypoints_reached': 2,
+            'waypoint_order_requested': 'auto_optimize',
+            'waypoint_order_used': [1, 0],
+            'waypoint_reach_distances_m': [18, 41],
+            'waypoint_reach_threshold_m': 150,
           },
         ),
       );
@@ -573,14 +572,14 @@ void main() {
         ],
       );
 
-      expect(result.edgeMeta['preference_area_count'], 2);
-      expect(result.edgeMeta['matched_preference_count'], 1);
-      expect(result.edgeMeta['preference_match_score'], 62);
-      expect(result.edgeMeta['preference_area_distances_m'], [420, 1800]);
-      expect(
-        result.edgeMeta['preference_ignored_reason'],
-        'partial_preference_match',
-      );
+      expect(result.edgeMeta['waypoint_mode'], 'required_stops');
+      expect(result.edgeMeta['waypoint_route_mode'], 'required_stops');
+      expect(result.edgeMeta['required_waypoint_count'], 2);
+      expect(result.edgeMeta['required_waypoints_reached'], 2);
+      expect(result.edgeMeta['waypoint_order_requested'], 'auto_optimize');
+      expect(result.edgeMeta['waypoint_order_used'], [1, 0]);
+      expect(result.edgeMeta['waypoint_reach_distances_m'], [18, 41]);
+      expect(result.edgeMeta['waypoint_reach_threshold_m'], 150);
     });
 
     test('Wegpunkte-Rundkurs braucht mindestens einen User-Wegpunkt', () async {
@@ -634,7 +633,7 @@ void main() {
       verifyNever(mockInvoker.invoke(any));
     });
 
-    test('Wegpunkte-Rundkurs lehnt zu weit entfernten Bereich ab', () async {
+    test('Wegpunkte-Rundkurs lehnt zu weit entfernten Stopp ab', () async {
       await expectLater(
         service.generateRoundTrip(
           startPosition: _munich(),
@@ -656,7 +655,7 @@ void main() {
       verifyNever(mockInvoker.invoke(any));
     });
 
-    test('Wegpunkte-Rundkurs lehnt doppelte Bereiche ab', () async {
+    test('Wegpunkte-Rundkurs lehnt doppelte Stopps ab', () async {
       await expectLater(
         service.generateRoundTrip(
           startPosition: _munich(),
@@ -696,6 +695,7 @@ void main() {
           verify(mockInvoker.invoke(captureAny)).captured.first
               as Map<String, dynamic>;
       expect(captured['planning_type'], 'Zufall');
+      expect(captured.containsKey('required_waypoints'), isFalse);
       expect(captured.containsKey('user_waypoints'), isFalse);
       expect(captured.containsKey('manual_waypoints'), isFalse);
       expect(captured.containsKey('waypoint_mode'), isFalse);
