@@ -74,6 +74,18 @@ function buildNoRouteSearchMeta(
   );
 
   return {
+    live_fill_attempted: (roundTripSearch?.candidateAttempts ?? 0) > 0,
+    live_fill_attempt_count: roundTripSearch?.candidateAttempts ?? 0,
+    live_fill_success: (roundTripSearch?.acceptedCandidates ?? 0) > 0,
+    live_fill_accepted_candidates: roundTripSearch?.acceptedCandidates ?? 0,
+    live_fill_rejected_candidates: roundTripSearch?.rejectedCandidates ?? 0,
+    live_fill_duplicate_skips: roundTripSearch?.duplicateSkips ?? 0,
+    live_fill_exhausted: roundTripSearch?.exhausted == true,
+    live_fill_emergency_duplicate_used:
+      roundTripSearch?.emergencyDuplicateUsed === true,
+    live_fill_reject_reasons: topRejectReasons,
+    live_fill_search_phases: roundTripSearch?.searchPhases ?? [],
+    live_fill_last_plan_labels: roundTripSearch?.lastPlanLabels ?? [],
     search_summary: {
       candidate_attempts: roundTripSearch?.candidateAttempts ?? 0,
       accepted_candidates: roundTripSearch?.acceptedCandidates ?? 0,
@@ -1866,10 +1878,10 @@ Deno.serve(async (req) => {
           sharp_turn_count: finalQuality.styleMetrics?.sharpTurnCount ?? null,
           loopness_score: finalQuality.shapeMetrics?.loopnessScore ?? null,
           spur_score: finalQuality.shapeMetrics?.spurScore ?? null,
-          dead_end_arm_score:
-            finalQuality.shapeMetrics?.deadEndArmScore ?? null,
-          out_and_back_score:
-            finalQuality.shapeMetrics?.outAndBackScore ?? null,
+          dead_end_arm_score: finalQuality.shapeMetrics?.deadEndArmScore ??
+            null,
+          out_and_back_score: finalQuality.shapeMetrics?.outAndBackScore ??
+            null,
           overlap_score: finalQuality.shapeMetrics?.overlapScore ?? null,
           geometric_uturn_count:
             finalQuality.shapeMetrics?.geometricUTurnCount ?? null,

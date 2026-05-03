@@ -142,6 +142,35 @@ class _AlwaysFailingInvoker implements RouteEdgeInvoker {
   }
 }
 
+class _ThrowingCandidateRoutePoolService extends RoutePoolService {
+  _ThrowingCandidateRoutePoolService() : super();
+
+  @override
+  Future<RoutePoolCandidateSaveResult> recordCandidateRoute({
+    required double userLat,
+    required double userLng,
+    required int distanceBucket,
+    required String style,
+    required bool avoidHighways,
+    required String routeType,
+    required String candidateSource,
+    required String routeFingerprint,
+    required Map<String, dynamic> geometry,
+    Map<String, dynamic> routePayload = const {},
+    double qualityScore = 0,
+    double shapeScore = 0,
+    double? distanceKm,
+    bool hasHighway = false,
+    bool crossBorderAllowed = false,
+    String? preferredCountryCode,
+    String? preferredAdmin1Name,
+    String? preferredAdmin2Name,
+    String? preferredCityCluster,
+  }) {
+    throw StateError('simulated candidate save failure');
+  }
+}
+
 class _PoolFallbackAccessInvoker implements RouteEdgeInvoker {
   int callCount = 0;
   final bodies = <Map<String, dynamic>>[];
@@ -1429,7 +1458,7 @@ void main() {
   );
 
   test(
-    'Premium short no-highway Pool-Luecke queued Healing und begrenzt Live auf einen Versuch',
+    'Premium short no-highway Pool-Luecke nutzt On-Demand-Fill bevor Warmup',
     () async {
       final jobs = <RouteSeedJob>[];
       final failingInvoker = _AlwaysFailingInvoker();
@@ -1482,16 +1511,100 @@ void main() {
         secondError = error;
       }
 
-      expect(failingInvoker.callCount, 2);
+      expect(failingInvoker.callCount, 6);
+      expect(
+        failingInvoker.bodies.every(
+          (body) => body['max_candidate_attempts'] == 8,
+        ),
+        true,
+      );
       expect(jobs, hasLength(1));
       expect(firstError.edgeMeta['code'], 'pool_bootstrap_pending');
       expect(firstError.edgeMeta['seed_job_created'], true);
       expect(firstError.edgeMeta['live_attempted'], true);
+      expect(firstError.edgeMeta['live_fill_attempted'], true);
+      expect(firstError.edgeMeta['live_fill_attempt_count'], 3);
+      expect(
+        firstError.edgeMeta['source_decision'],
+        'search_again_on_demand_live_fill',
+      );
       expect(firstError.edgeMeta['live_attempt_result'], isNot('success'));
       expect(secondError.edgeMeta['duplicate_job_prevented'], true);
       expect(secondError.edgeMeta['live_attempted'], true);
     },
   );
+
+  test(
+    'Premium On-Demand-Fill returned dritte gute Live-Route und staged Candidate',
+    () async {
+      final jobs = <RouteSeedJob>[];
+      final candidates = <RoutePoolCandidate>[];
+      final flakyInvoker = _FlakyCountingInvoker(
+        _closedLoopResponse(),
+        failuresBeforeSuccess: 2,
+      );
+      service = RouteService(
+        invoker: flakyInvoker,
+        routePoolService: RoutePoolService(
+          inMemoryRegions: [
+            _benchmarkRegion(
+              countryCode: 'AT',
+              admin1Name: 'Vorarlberg',
+              admin2Name: 'Bregenz',
+              cityCluster: 'Bregenz',
+              centerLat: 47.5031,
+              centerLng: 9.7471,
+            ),
+          ],
+          inMemoryRoutes: const [],
+          inMemoryCoverage: <RoutePoolCoverage>[],
+          inMemorySeedJobs: jobs,
+          inMemoryCandidates: candidates,
+        ),
+      );
+
+      final route = await service.generateRoundTrip(
+        startPosition: _position(47.5031, 9.7471),
+        targetDistanceKm: 50,
+        mode: 'Sport Mode',
+        planningType: 'Zufall',
+        avoidHighways: true,
+        forceFreshVariant: true,
+        subscriptionTier: 'premium',
+      );
+
+      expect(flakyInvoker.callCount, 3);
+      expect(route.edgeMeta['route_source'], 'mapbox');
+      expect(route.edgeMeta['live_fill_attempted'], true);
+      expect(route.edgeMeta['live_fill_attempt_count'], 3);
+      expect(route.edgeMeta['live_fill_success'], true);
+      expect(route.edgeMeta['candidate_inserted'], true);
+      expect(jobs, hasLength(1));
+      expect(candidates, hasLength(1));
+      expect(candidates.single.candidateSource, 'premium_live');
+    },
+  );
+
+  test('Candidate-Save-Fehler blockiert gute On-Demand-Route nicht', () async {
+    service = RouteService(
+      invoker: invoker,
+      routePoolService: _ThrowingCandidateRoutePoolService(),
+    );
+
+    final route = await service.generateRoundTrip(
+      startPosition: _position(47.5031, 9.7471),
+      targetDistanceKm: 50,
+      mode: 'Sport Mode',
+      planningType: 'Zufall',
+      avoidHighways: false,
+      forceFreshVariant: true,
+      subscriptionTier: 'premium',
+    );
+
+    expect(route.edgeMeta['route_source'], 'mapbox');
+    expect(route.edgeMeta['candidate_inserted'], false);
+    expect(route.edgeMeta['candidate_save_failed'], true);
+  });
 
   test(
     '75-km Free-Anfrage nutzt keine 50-km Poolroute und queued exakten Seed-Job',

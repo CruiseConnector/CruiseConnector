@@ -1623,6 +1623,8 @@ class _CruiseModePageState extends State<CruiseModePage>
   // ═══════════════════════ BOTTOM ACTIONS ═══════════════════════════════════
 
   Widget _buildBottomActions() {
+    final hasConfirmableRoute =
+        _routeGeoJson != null && _fullRouteCoordinates.isNotEmpty;
     return Container(
       height: 160,
       padding: const EdgeInsets.symmetric(horizontal: 24),
@@ -1638,7 +1640,7 @@ class _CruiseModePageState extends State<CruiseModePage>
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (_routeGeoJson != null)
+            if (hasConfirmableRoute)
               Padding(
                 padding: const EdgeInsets.only(bottom: 12),
                 child: SizedBox(
@@ -1667,6 +1669,18 @@ class _CruiseModePageState extends State<CruiseModePage>
                   ),
                 ),
               ),
+            if (_isLoading)
+              const Padding(
+                padding: EdgeInsets.only(bottom: 10),
+                child: Text(
+                  'Route wird gesucht...',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
             Container(
               height: 60,
               width: double.infinity,
@@ -1690,13 +1704,27 @@ class _CruiseModePageState extends State<CruiseModePage>
                   elevation: 0,
                 ),
                 child: _isLoading
-                    ? const SizedBox(
-                        width: 24,
-                        height: 24,
-                        child: CircularProgressIndicator(
-                          color: Colors.white,
-                          strokeWidth: 2,
-                        ),
+                    ? const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          SizedBox(
+                            width: 22,
+                            height: 22,
+                            child: CircularProgressIndicator(
+                              color: Colors.white,
+                              strokeWidth: 2,
+                            ),
+                          ),
+                          SizedBox(width: 12),
+                          Text(
+                            'Route wird gesucht',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
                       )
                     : Text(
                         _isRoundTrip ? 'Rundkurs suchen' : 'Route berechnen',
@@ -2693,6 +2721,11 @@ class _CruiseModePageState extends State<CruiseModePage>
     Object? error,
   }) {
     _restoreGeneratedRouteUiState(previousUiState);
+    if (!_snapshotHasVisibleRoute(previousUiState) && mounted && !_disposed) {
+      setState(() {
+        _configCollapsed = false;
+      });
+    }
 
     if (_isWaypointRouteError(error)) {
       unawaited(_showWaypointRouteDialog());
@@ -2811,7 +2844,7 @@ class _CruiseModePageState extends State<CruiseModePage>
         context: context,
         builder: (context) {
           return AlertDialog(
-            title: const Text('Wir suchen weiter'),
+            title: const Text('Route noch nicht verfügbar'),
             content: Text(error.userMessage),
             actions: [
               TextButton(

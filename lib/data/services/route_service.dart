@@ -121,6 +121,7 @@ class RouteService {
   static String? lastRouteChosenCluster;
   static bool lastRouteCandidateInserted = false;
   static bool lastRouteVerifiedInserted = false;
+  static bool lastRouteCandidateSaveFailed = false;
 
   /// Letzte 3 Entdecker-Richtungen (in Grad) für Diversifizierung.
   // TODO: In SharedPreferences persistieren für Session-übergreifende Diversifizierung
@@ -216,6 +217,7 @@ class RouteService {
     lastRouteChosenCluster = null;
     lastRouteCandidateInserted = false;
     lastRouteVerifiedInserted = false;
+    lastRouteCandidateSaveFailed = false;
   }
 
   static void _debugRouteSearch(String message) {
@@ -361,6 +363,7 @@ class RouteService {
         : scenario.scenarioKey;
     return RouteGenerationCoordinator.runSingleFlight(singleFlightKey, () async {
       RoutePoolCoverageCheck? poolHealingCoverage;
+      var onDemandLiveFill = false;
 
       if (_isFreeTier(lastRouteSubscriptionTier)) {
         lastRouteSourceDecision = 'pool_only_free';
@@ -429,6 +432,18 @@ class RouteService {
             lastError: null,
           );
         }
+        if (poolHealingFirstPolicy &&
+            poolHealingCoverage != null &&
+            _shouldUseOnDemandLiveFill(poolHealingCoverage)) {
+          poolHealingFirstPolicy = false;
+          onDemandLiveFill = true;
+          lastRouteSourceDecision = forceFreshVariant
+              ? 'search_again_on_demand_live_fill'
+              : 'on_demand_live_fill';
+          lastRouteLiveAttemptReason = forceFreshVariant
+              ? 'search_again_force_fresh'
+              : 'thin_pool_on_demand_live_fill';
+        }
       }
 
       if (poolHealingFirstPolicy &&
@@ -465,6 +480,17 @@ class RouteService {
             lastError: null,
           );
         }
+        if (poolHealingCoverage != null &&
+            _shouldUseOnDemandLiveFill(poolHealingCoverage)) {
+          poolHealingFirstPolicy = false;
+          onDemandLiveFill = true;
+          lastRouteSourceDecision = forceFreshVariant
+              ? 'search_again_on_demand_live_fill'
+              : 'on_demand_live_fill';
+          lastRouteLiveAttemptReason = forceFreshVariant
+              ? 'search_again_force_fresh'
+              : 'thin_pool_on_demand_live_fill';
+        }
         if (!forceFreshVariant && poolHealingCoverage?.poolHealthy == true) {
           lastRouteSourceDecision = 'healthy_pool_first';
           final healthyPoolRoute = await _tryRoutePoolFallback(
@@ -478,12 +504,14 @@ class RouteService {
             return healthyPoolRoute;
           }
         }
-        lastRouteSourceDecision = forceFreshVariant
-            ? 'search_again_live_first'
-            : 'live_first_pool_thin_or_unavailable';
-        lastRouteLiveAttemptReason = forceFreshVariant
-            ? 'search_again_force_fresh'
-            : 'pool_not_healthy_enough';
+        if (!onDemandLiveFill) {
+          lastRouteSourceDecision = forceFreshVariant
+              ? 'search_again_live_first'
+              : 'live_first_pool_thin_or_unavailable';
+          lastRouteLiveAttemptReason = forceFreshVariant
+              ? 'search_again_force_fresh'
+              : 'pool_not_healthy_enough';
+        }
       }
 
       final prepared = forceFreshVariant
@@ -605,12 +633,6 @@ class RouteService {
       if (bestCandidate?.accepted == true) {
         final acceptedMapboxCandidate = bestCandidate!;
         lastRouteGenerationSource = 'mapbox';
-        final finalized = _finalizeAndRemember(
-          scenario: scenario,
-          route: acceptedMapboxCandidate.route,
-          sampledCoordinates: acceptedMapboxCandidate.sampledCoordinates,
-          fingerprint: acceptedMapboxCandidate.fingerprint,
-        );
         await _maybeRecordRoutePoolCandidate(
           scenario: scenario,
           route: acceptedMapboxCandidate.route,
@@ -618,6 +640,12 @@ class RouteService {
           tier: acceptedMapboxCandidate.tier,
           qualityScore: acceptedMapboxCandidate.score,
           subscriptionTier: lastRouteSubscriptionTier,
+        );
+        final finalized = _finalizeAndRemember(
+          scenario: scenario,
+          route: acceptedMapboxCandidate.route,
+          sampledCoordinates: acceptedMapboxCandidate.sampledCoordinates,
+          fingerprint: acceptedMapboxCandidate.fingerprint,
         );
         if (spareCandidate != null && spareCandidate.novelEnough) {
           PreparedRouteBuffer.store(
@@ -739,6 +767,7 @@ class RouteService {
         styleConfig,
       );
       if (!poolHealingFirstPolicy &&
+          !onDemandLiveFill &&
           _canUseStructuredFallback(lastError) &&
           !skipExtraRoundTripFallback) {
         final fallback = await _tryRoundTripFallback(
@@ -764,6 +793,12 @@ class RouteService {
         _debugRouteSearch(
           '[Fallback] extraLiveFallbackSkipped=true '
           'reason=long_no_highway_curvy scenarioKey=${scenario.scenarioKey}',
+        );
+      } else if (onDemandLiveFill) {
+        _debugRouteSearch(
+          '[Fallback] extraLiveFallbackSkipped=true '
+          'reason=on_demand_live_fill_exhausted '
+          'scenarioKey=${scenario.scenarioKey}',
         );
       }
 
@@ -2837,6 +2872,11 @@ class RouteService {
         healingStatus == 'hard_region_curated_needed';
   }
 
+  static bool _shouldUseOnDemandLiveFill(RoutePoolCoverageCheck coverage) {
+    return !coverage.poolHealthy &&
+        !_shouldStopLiveForPoolHealingCoverage(coverage);
+  }
+
   static int _poolHealingFirstCandidateBudget(RouteScenario scenario) {
     final bucket = _distanceBucketForPool(scenario.targetDistanceKm);
     return bucket == 50 ? 3 : 4;
@@ -4555,8 +4595,13 @@ class RouteService {
       'next_action': nextAction,
       'live_attempted': lastRouteApiCallCount > 0,
       'live_attempt_reason': lastRouteApiCallCount > 0
-          ? 'single_bounded_short_no_highway_attempt'
+          ? (lastRouteLiveAttemptReason ?? 'route_generation')
           : 'pool_healing_status',
+      'live_fill_attempted': lastRouteApiCallCount > 0,
+      'live_fill_attempt_count': lastRouteApiCallCount,
+      'live_fill_success': false,
+      'source_decision': lastRouteSourceDecision,
+      'mapbox_call_count': lastRouteApiCallCount,
       'live_attempt_result': lastError == null
           ? 'not_attempted'
           : lastError.edgeMeta['response_code'] ??
@@ -4762,9 +4807,12 @@ class RouteService {
         hasHighway: (route.edgeMeta['has_highway'] as bool?) ?? false,
       );
       lastRouteCandidateInserted = candidateSaveResult.saved;
+      lastRouteCandidateSaveFailed = false;
       lastRouteVerifiedInserted = false;
     } catch (_) {
       // Candidate staging must never block route delivery.
+      lastRouteCandidateInserted = false;
+      lastRouteCandidateSaveFailed = true;
     }
   }
 
@@ -6568,6 +6616,9 @@ class RouteService {
     meta['live_attempt_result'] = lastRouteApiCallCount > 0
         ? (lastRouteGenerationSource == 'mapbox' ? 'success' : 'not_selected')
         : 'not_attempted';
+    meta['live_fill_attempted'] = lastRouteApiCallCount > 0;
+    meta['live_fill_attempt_count'] = lastRouteApiCallCount;
+    meta['live_fill_success'] = lastRouteGenerationSource == 'mapbox';
     meta['pool_candidate_count'] = lastRoutePoolCandidateCount;
     meta['pool_seen_candidate_count'] = lastRoutePoolSeenCandidateCount;
     meta['pool_used_reason'] = lastRoutePoolUsedReason;
@@ -6588,6 +6639,8 @@ class RouteService {
     meta['hard_region_status'] = lastRouteHardRegionStatus;
     meta['chosen_cluster'] = lastRouteChosenCluster;
     meta['candidate_inserted'] = lastRouteCandidateInserted;
+    meta['candidate_saved'] = lastRouteCandidateInserted;
+    meta['candidate_save_failed'] = lastRouteCandidateSaveFailed;
     meta['verified_inserted'] = lastRouteVerifiedInserted;
     final existingOrchestration = meta['orchestration'] is Map
         ? Map<String, dynamic>.from(meta['orchestration'] as Map)
@@ -6624,6 +6677,9 @@ class RouteService {
       'live_attempted': meta['live_attempted'],
       'live_attempt_reason': meta['live_attempt_reason'],
       'live_attempt_result': meta['live_attempt_result'],
+      'live_fill_attempted': meta['live_fill_attempted'],
+      'live_fill_attempt_count': meta['live_fill_attempt_count'],
+      'live_fill_success': meta['live_fill_success'],
       'source_decision': meta['source_decision'],
       'route_fingerprint': lastRouteDebugFingerprint,
       'previous_fingerprints': lastRoutePreviousFingerprints,
@@ -6642,6 +6698,8 @@ class RouteService {
       'hard_region_status': lastRouteHardRegionStatus,
       'chosen_cluster': lastRouteChosenCluster,
       'candidate_inserted': lastRouteCandidateInserted,
+      'candidate_saved': lastRouteCandidateInserted,
+      'candidate_save_failed': lastRouteCandidateSaveFailed,
       'verified_inserted': lastRouteVerifiedInserted,
       'fallback_reason': lastRoutePoolFallbackUsed ? 'mapbox_failed' : null,
     };
