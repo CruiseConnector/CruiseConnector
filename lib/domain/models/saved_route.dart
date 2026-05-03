@@ -13,6 +13,13 @@ class SavedRoute {
     this.distanceTargetKm,
     this.drivenKm,
     this.sourceRouteId,
+    this.xpDistance,
+    this.xpCurveBonus,
+    this.xpStyleBonus,
+    this.xpBase,
+    this.xpMultiplier,
+    this.xpStreakDays,
+    this.xpAwarded,
   });
 
   final String id;
@@ -27,6 +34,13 @@ class SavedRoute {
   final double? distanceTargetKm;
   final double? drivenKm;
   final String? sourceRouteId;
+  final int? xpDistance;
+  final int? xpCurveBonus;
+  final int? xpStyleBonus;
+  final int? xpBase;
+  final double? xpMultiplier;
+  final int? xpStreakDays;
+  final int? xpAwarded;
 
   factory SavedRoute.fromJson(Map<String, dynamic> json) {
     return SavedRoute(
@@ -44,6 +58,13 @@ class SavedRoute {
       distanceTargetKm: (json['distance_target'] as num?)?.toDouble(),
       drivenKm: (json['driven_km'] as num?)?.toDouble(),
       sourceRouteId: json['source_route_id'] as String?,
+      xpDistance: (json['xp_distance'] as num?)?.toInt(),
+      xpCurveBonus: (json['xp_curve_bonus'] as num?)?.toInt(),
+      xpStyleBonus: (json['xp_style_bonus'] as num?)?.toInt(),
+      xpBase: (json['xp_base'] as num?)?.toInt(),
+      xpMultiplier: (json['xp_multiplier'] as num?)?.toDouble(),
+      xpStreakDays: (json['xp_streak_days'] as num?)?.toInt(),
+      xpAwarded: (json['xp_awarded'] as num?)?.toInt(),
     );
   }
 
@@ -114,6 +135,13 @@ class SavedRoute {
       'distance_target': distanceTargetKm,
       'driven_km': drivenKm,
       'source_route_id': sourceRouteId,
+      'xp_distance': xpDistance,
+      'xp_curve_bonus': xpCurveBonus,
+      'xp_style_bonus': xpStyleBonus,
+      'xp_base': xpBase,
+      'xp_multiplier': xpMultiplier,
+      'xp_streak_days': xpStreakDays,
+      'xp_awarded': xpAwarded,
     };
   }
 

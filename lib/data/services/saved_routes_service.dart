@@ -204,6 +204,13 @@ class SavedRoutesService {
     int? rating,
     double? drivenKm,
     double? plannedDistanceKm,
+    int? xpDistance,
+    int? xpCurveBonus,
+    int? xpStyleBonus,
+    int? xpBase,
+    double? xpMultiplier,
+    int? xpStreakDays,
+    int? xpAwarded,
   }) async {
     final userId = _db.auth.currentUser?.id;
     if (userId == null) return;
@@ -241,6 +248,13 @@ class SavedRoutesService {
           ),
       'quality_tier': result.edgeMeta['quality_tier']?.toString(),
       'route_meta': result.edgeMeta,
+      if (xpDistance != null) 'xp_distance': xpDistance,
+      if (xpCurveBonus != null) 'xp_curve_bonus': xpCurveBonus,
+      if (xpStyleBonus != null) 'xp_style_bonus': xpStyleBonus,
+      if (xpBase != null) 'xp_base': xpBase,
+      if (xpMultiplier != null) 'xp_multiplier': xpMultiplier,
+      if (xpStreakDays != null) 'xp_streak_days': xpStreakDays,
+      if (xpAwarded != null) 'xp_awarded': xpAwarded,
     };
     if (rating != null && rating > 0) row['rating'] = rating;
 
@@ -262,7 +276,14 @@ class SavedRoutesService {
           ..remove('route_source')
           ..remove('route_fingerprint')
           ..remove('quality_tier')
-          ..remove('route_meta');
+          ..remove('route_meta')
+          ..remove('xp_distance')
+          ..remove('xp_curve_bonus')
+          ..remove('xp_style_bonus')
+          ..remove('xp_base')
+          ..remove('xp_multiplier')
+          ..remove('xp_streak_days')
+          ..remove('xp_awarded');
         await _db.from('routes').insert(row);
         invalidateWeeklyTopRouteCache();
       } else {

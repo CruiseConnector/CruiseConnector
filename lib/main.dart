@@ -20,22 +20,27 @@ import 'package:cruise_connect/presentation/pages/post_detail_page.dart';
 
 final GlobalKey<NavigatorState> rootNavigatorKey = GlobalKey<NavigatorState>();
 
-void main() async {
-  WidgetsFlutterBinding.ensureInitialized();
-  if (kIsWeb) {
-    usePathUrlStrategy();
-  }
+void main() {
+  runZonedGuarded(
+    () async {
+      WidgetsFlutterBinding.ensureInitialized();
+      if (kIsWeb) {
+        usePathUrlStrategy();
+      }
 
-  await Supabase.initialize(
-    url: AppConstants.supabaseUrl,
-    anonKey: AppConstants.supabaseAnonKey,
+      await Supabase.initialize(
+        url: AppConstants.supabaseUrl,
+        anonKey: AppConstants.supabaseAnonKey,
+      );
+
+      runApp(const MyApp());
+    },
+    (error, stack) {
+      FlutterError.reportError(
+        FlutterErrorDetails(exception: error, stack: stack),
+      );
+    },
   );
-
-  runZonedGuarded(() => runApp(const MyApp()), (error, stack) {
-    FlutterError.reportError(
-      FlutterErrorDetails(exception: error, stack: stack),
-    );
-  });
 }
 
 class MyApp extends StatefulWidget {

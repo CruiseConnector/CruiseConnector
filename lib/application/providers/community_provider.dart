@@ -13,6 +13,7 @@ class CommunityProvider extends ChangeNotifier {
   List<Map<String, dynamic>> _feedPosts = [];
   List<Map<String, dynamic>> _discoverPosts = [];
   Set<String> _followingIds = {};
+
   /// IDs aller User, die ich blockiert habe ODER die mich blockiert haben —
   /// werden überall aus Listen herausgefiltert.
   Set<String> _blockedIds = {};
@@ -50,21 +51,32 @@ class CommunityProvider extends ChangeNotifier {
   bool isFollowing(String userId) => _followingIds.contains(userId);
 
   /// Ruft jede Seite (Feed, Entdecken, Profil) auf, bevor sie Posts rendert.
-  /// Seedet den zentralen State, falls der Post noch nicht bekannt ist;
-  /// überschreibt keine bereits vorhandenen Werte (optimistic wins).
+  /// Seedet den zentralen State mit Serverwerten, solange kein Toggle läuft.
   void registerPost(Map<String, dynamic> post) {
     final id = post['id'] as String?;
     if (id == null) return;
-    _likeCounts.putIfAbsent(id, () => (post['likes_count'] as num?)?.toInt() ?? 0);
-    _repostCounts.putIfAbsent(id, () => (post['reposts_count'] as num?)?.toInt() ?? 0);
+    final serverLikeCount = (post['likes_count'] as num?)?.toInt();
+    if (serverLikeCount != null && !_busyLike.contains(id)) {
+      _likeCounts[id] = serverLikeCount < 0 ? 0 : serverLikeCount;
+    } else {
+      _likeCounts.putIfAbsent(id, () => 0);
+    }
+
+    final serverRepostCount = (post['reposts_count'] as num?)?.toInt();
+    if (serverRepostCount != null && !_busyRepost.contains(id)) {
+      _repostCounts[id] = serverRepostCount < 0 ? 0 : serverRepostCount;
+    } else {
+      _repostCounts.putIfAbsent(id, () => 0);
+    }
+
     final liked = post['is_liked_by_me'];
-    if (liked is bool) {
-      _likedPosts.putIfAbsent(id, () => liked);
+    if (liked is bool && !_busyLike.contains(id)) {
+      _likedPosts[id] = liked;
       _checkedLike.add(id);
     }
     final reposted = post['is_reposted_by_me'];
-    if (reposted is bool) {
-      _repostedPosts.putIfAbsent(id, () => reposted);
+    if (reposted is bool && !_busyRepost.contains(id)) {
+      _repostedPosts[id] = reposted;
       _checkedRepost.add(id);
     }
   }
@@ -216,15 +228,15 @@ class CommunityProvider extends ChangeNotifier {
   /// Feed + Discover entfernt, und der User aus `_followingIds` raus.
   Future<void> blockUser(String targetUserId) async {
     final wasFollowing = _followingIds.contains(targetUserId);
-    final removedFromFeed =
-        _feedPosts.where((p) => p['user_id'] == targetUserId).toList();
-    final removedFromDiscover =
-        _discoverPosts.where((p) => p['user_id'] == targetUserId).toList();
+    final removedFromFeed = _feedPosts
+        .where((p) => p['user_id'] == targetUserId)
+        .toList();
+    final removedFromDiscover = _discoverPosts
+        .where((p) => p['user_id'] == targetUserId)
+        .toList();
 
     _blockedIds = {..._blockedIds, targetUserId};
-    _feedPosts = _feedPosts
-        .where((p) => p['user_id'] != targetUserId)
-        .toList();
+    _feedPosts = _feedPosts.where((p) => p['user_id'] != targetUserId).toList();
     _discoverPosts = _discoverPosts
         .where((p) => p['user_id'] != targetUserId)
         .toList();
@@ -283,9 +295,7 @@ class CommunityProvider extends ChangeNotifier {
     final removedFromFeed = _feedPosts
         .where((p) => p['user_id'] == targetUserId)
         .toList();
-    _feedPosts = _feedPosts
-        .where((p) => p['user_id'] != targetUserId)
-        .toList();
+    _feedPosts = _feedPosts.where((p) => p['user_id'] != targetUserId).toList();
     _followingIds = {..._followingIds}..remove(targetUserId);
     notifyListeners();
 
@@ -337,16 +347,13 @@ class CommunityProvider extends ChangeNotifier {
 
     _likedPosts[postId] = !wasLiked;
     _likeCounts[postId] = wasLiked ? oldCount - 1 : oldCount + 1;
+    if (_likeCounts[postId]! < 0) _likeCounts[postId] = 0;
     notifyListeners();
 
     try {
-      final nowLiked = await SocialService.toggleLike(postId);
-      // Server ist Source of Truth: Zustand angleichen, Count aus Baseline
-      // neu ableiten, damit -1 / +2 nicht möglich sind.
-      _likedPosts[postId] = nowLiked;
-      final baseline = wasLiked ? oldCount - 1 : oldCount;
-      _likeCounts[postId] = baseline + (nowLiked ? 1 : 0);
-      if (_likeCounts[postId]! < 0) _likeCounts[postId] = 0;
+      final result = await SocialService.toggleLikeWithCount(postId);
+      _likedPosts[postId] = result.isActive;
+      _likeCounts[postId] = result.count < 0 ? 0 : result.count;
     } catch (e) {
       _likedPosts[postId] = wasLiked;
       _likeCounts[postId] = oldCount;
@@ -366,14 +373,13 @@ class CommunityProvider extends ChangeNotifier {
 
     _repostedPosts[postId] = !wasReposted;
     _repostCounts[postId] = wasReposted ? oldCount - 1 : oldCount + 1;
+    if (_repostCounts[postId]! < 0) _repostCounts[postId] = 0;
     notifyListeners();
 
     try {
-      final nowReposted = await SocialService.toggleRepost(postId);
-      _repostedPosts[postId] = nowReposted;
-      final baseline = wasReposted ? oldCount - 1 : oldCount;
-      _repostCounts[postId] = baseline + (nowReposted ? 1 : 0);
-      if (_repostCounts[postId]! < 0) _repostCounts[postId] = 0;
+      final result = await SocialService.toggleRepostWithCount(postId);
+      _repostedPosts[postId] = result.isActive;
+      _repostCounts[postId] = result.count < 0 ? 0 : result.count;
     } catch (e) {
       _repostedPosts[postId] = wasReposted;
       _repostCounts[postId] = oldCount;

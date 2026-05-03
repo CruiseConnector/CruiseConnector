@@ -30,7 +30,7 @@ class _CommunityPageState extends State<CommunityPage>
   void didUpdateWidget(CommunityPage old) {
     super.didUpdateWidget(old);
     if (widget.refreshKey != old.refreshKey && widget.refreshKey > 0) {
-      _loadData();
+      _scheduleLoadData();
     }
   }
 
@@ -60,8 +60,14 @@ class _CommunityPageState extends State<CommunityPage>
     _tabController.addListener(() {
       if (!_tabController.indexIsChanging) setState(() {});
     });
-    _loadData();
+    _scheduleLoadData();
     _setupRealtime();
+  }
+
+  void _scheduleLoadData() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _loadData();
+    });
   }
 
   @override
