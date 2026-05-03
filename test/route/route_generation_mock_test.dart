@@ -524,7 +524,8 @@ void main() {
       expect(captured['waypoint_mode'], 'required_stops');
       expect(captured['waypoint_order'], 'auto_optimize');
       expect(captured['close_loop'], isTrue);
-      expect(captured['max_search_ms'], 25000);
+      expect(captured['max_search_ms'], 33000);
+      expect(captured['max_candidate_attempts'], 18);
       expect(captured['required_waypoint_count'], 2);
       expect(captured.containsKey('preference_areas'), isFalse);
       expect(captured.containsKey('manual_waypoints'), isFalse);
