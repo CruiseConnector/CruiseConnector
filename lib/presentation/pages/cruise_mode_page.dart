@@ -261,6 +261,7 @@ class _CruiseModePageState extends State<CruiseModePage>
   static const double _routeRedrawDistanceMeters = 30.0;
   double _totalDistanceDriven = 0.0; // Gesamte gefahrene Strecke in Metern
   DateTime? _navigationStartTime; // Zeitpunkt des Navigations-Starts
+  int _xpStreakDays = 1;
   double?
   _originalRouteDistance; // Ursprüngliche Gesamtdistanz (für Zeitberechnung)
   double?
@@ -2953,6 +2954,7 @@ class _CruiseModePageState extends State<CruiseModePage>
 
   Future<void> _startNavigationFlow() async {
     await _prepareAccessLegForOffRouteStart();
+    await _prepareXpStreakContext();
     _startNavigationTracking();
     _isCameraLocked = true;
     await _activateNavigationCamera();
@@ -2968,6 +2970,14 @@ class _CruiseModePageState extends State<CruiseModePage>
       'type': 'LineString',
       'coordinates': _remainingRouteCoordinates,
     }, animateCamera: false);
+  }
+
+  Future<void> _prepareXpStreakContext() async {
+    final streakDays = await GamificationService.getStreakDaysForNextRide(
+      rideDate: DateTime.now(),
+    );
+    if (!mounted || _disposed) return;
+    _xpStreakDays = streakDays;
   }
 
   Future<void> _prepareAccessLegForOffRouteStart() async {
@@ -4888,6 +4898,18 @@ class _CruiseModePageState extends State<CruiseModePage>
     return math.max(0, (_cachedCurveCount * progressFraction).round());
   }
 
+  RouteXpBreakdown _calculateCompletionXpBreakdown({
+    required double drivenKm,
+    required int curves,
+  }) {
+    return GamificationService.calculateRouteXpBreakdown(
+      distanceKm: drivenKm,
+      curves: curves,
+      style: _selectedStyle,
+      streakDays: _xpStreakDays,
+    );
+  }
+
   String _formatCompletionDuration(double? durationSeconds) {
     if (durationSeconds == null || durationSeconds <= 0) return '--';
     final minutes = math.max(1, (durationSeconds / 60).ceil());
@@ -4913,19 +4935,18 @@ class _CruiseModePageState extends State<CruiseModePage>
       previewCoordinates,
       progressFraction,
     );
-    final xpEarned = belowMinimum
-        ? 0
-        : GamificationService.calculateRouteXp(
-            distanceKm: drivenKm,
-            curves: curves,
-            style: _selectedStyle,
-          );
+    final xpBreakdown = _calculateCompletionXpBreakdown(
+      drivenKm: drivenKm,
+      curves: curves,
+    );
+    final xpEarned = belowMinimum ? 0 : xpBreakdown.totalXp;
 
     return _CruiseCompletionSnapshot(
       distanceKm: drivenKm,
       durationText: _formatCompletionDuration(adjustedResult?.durationSeconds),
       curves: curves,
       xpEarned: xpEarned,
+      xpBreakdown: xpBreakdown,
       coordinates: previewCoordinates,
       isEarlyStop: isEarlyStop,
       belowMinimum: belowMinimum,
@@ -4945,6 +4966,9 @@ class _CruiseModePageState extends State<CruiseModePage>
         durationText: snapshot.durationText,
         curves: snapshot.curves,
         xpEarned: snapshot.xpEarned,
+        baseXp: snapshot.xpBreakdown.baseXp,
+        streakDays: snapshot.xpBreakdown.streakDays,
+        xpMultiplier: snapshot.xpBreakdown.multiplier,
         routeCoordinates: snapshot.coordinates,
         onSave: (rating, tags) async {
           final result = await _saveRouteAndSyncXp(
@@ -4991,6 +5015,9 @@ class _CruiseModePageState extends State<CruiseModePage>
         durationText: snapshot.durationText,
         curves: snapshot.curves,
         xpEarned: snapshot.xpEarned,
+        baseXp: snapshot.xpBreakdown.baseXp,
+        streakDays: snapshot.xpBreakdown.streakDays,
+        xpMultiplier: snapshot.xpBreakdown.multiplier,
         routeCoordinates: snapshot.coordinates,
         isEarlyStop: snapshot.isEarlyStop,
         belowMinimum: snapshot.belowMinimum,
@@ -5043,10 +5070,20 @@ class _CruiseModePageState extends State<CruiseModePage>
         final progressFraction = _calculateCompletionProgressFraction(
           adjustedResult.distanceMeters,
         );
+        final completionCurves = _estimateCompletionCurves(
+          adjustedResult.coordinates,
+          progressFraction,
+        );
+        final xpBreakdown = skipXpSync
+            ? null
+            : _calculateCompletionXpBreakdown(
+                drivenKm: adjustedResult.distanceKm ?? 0,
+                curves: completionCurves,
+              );
         debugPrint(
           '[CruiseMode] Saving route: style=$_selectedStyle, roundTrip=$_isRoundTrip, '
           'distKm=${adjustedResult.distanceKm}, durationSec=${adjustedResult.durationSeconds?.round()}, '
-          'progress=${(progressFraction * 100).round()}%',
+          'progress=${(progressFraction * 100).round()}%, xp=${xpBreakdown?.totalXp}',
         );
         await SavedRoutesService.saveRoute(
           result: adjustedResult,
@@ -5057,6 +5094,13 @@ class _CruiseModePageState extends State<CruiseModePage>
           plannedDistanceKm: _completionRouteResult?.distanceMeters != null
               ? _completionRouteResult!.distanceMeters! / 1000
               : adjustedResult.distanceKm,
+          xpDistance: xpBreakdown?.distanceXp,
+          xpCurveBonus: xpBreakdown?.curveXp,
+          xpStyleBonus: xpBreakdown?.styleBonus,
+          xpBase: xpBreakdown?.baseXp,
+          xpMultiplier: xpBreakdown?.multiplier,
+          xpStreakDays: xpBreakdown?.streakDays,
+          xpAwarded: xpBreakdown?.totalXp,
         );
         await RouteRatingService.saveRating(
           result: adjustedResult,
@@ -5109,6 +5153,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       _isRouteConfirmed = false;
       _isCameraLocked = false;
       _totalDistanceDriven = 0.0;
+      _xpStreakDays = 1;
       _sessionRouteStartIndexInActiveRoute = 0;
       _navigationStartTime = null;
       _isExistingRouteSession = false;
@@ -5150,6 +5195,7 @@ class _CruiseCompletionSnapshot {
     required this.durationText,
     required this.curves,
     required this.xpEarned,
+    required this.xpBreakdown,
     required this.coordinates,
     required this.isEarlyStop,
     required this.belowMinimum,
@@ -5159,6 +5205,7 @@ class _CruiseCompletionSnapshot {
   final String durationText;
   final int curves;
   final int xpEarned;
+  final RouteXpBreakdown xpBreakdown;
   final List<List<double>> coordinates;
   final bool isEarlyStop;
   final bool belowMinimum;

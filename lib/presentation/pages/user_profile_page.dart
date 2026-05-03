@@ -10,7 +10,7 @@ import 'package:cruise_connect/presentation/widgets/mentions.dart';
 import 'package:cruise_connect/presentation/widgets/route_chip.dart';
 import 'package:cruise_connect/presentation/widgets/user_avatar.dart';
 import 'package:cruise_connect/presentation/widgets/moderation_actions.dart';
-import 'package:cruise_connect/presentation/widgets/car_card.dart';
+import 'package:cruise_connect/presentation/widgets/vehicle_garage_carousel.dart';
 
 /// Profil-Seite eines anderen Users (oder des eigenen).
 ///
@@ -38,9 +38,11 @@ class _UserProfilePageState extends State<UserProfilePage>
   Map<String, dynamic> _stats = {};
   List<Map<String, dynamic>> _posts = [];
   List<Map<String, dynamic>> _reposts = [];
+  List<Map<String, dynamic>> _vehicles = [];
   bool _isFollowing = false;
   bool _isOwnProfile = false;
   bool _isPrivate = false;
+  bool _carCardExpanded = false;
 
   /// Status meiner Follow-Beziehung zu diesem Profil:
   /// `'accepted'` (folge), `'pending'` (Anfrage gesendet), `'none'`.
@@ -67,6 +69,7 @@ class _UserProfilePageState extends State<UserProfilePage>
         SocialService.getProfileStats(widget.userId),
         SocialService.getUserPosts(widget.userId),
         SocialService.getUserReposts(widget.userId),
+        SocialService.getUserVehicles(widget.userId),
         if (!_isOwnProfile) SocialService.getFollowStatus(widget.userId),
       ]);
       if (mounted) {
@@ -75,8 +78,9 @@ class _UserProfilePageState extends State<UserProfilePage>
           _isPrivate = _stats['is_private'] == true;
           _posts = results[1] as List<Map<String, dynamic>>;
           _reposts = results[2] as List<Map<String, dynamic>>;
+          _vehicles = results[3] as List<Map<String, dynamic>>;
           if (!_isOwnProfile) {
-            _followStatus = results[3] as String;
+            _followStatus = results[4] as String;
             _isFollowing = _followStatus == 'accepted';
           }
           _loading = false;
@@ -186,12 +190,33 @@ class _UserProfilePageState extends State<UserProfilePage>
                             radius: 40,
                           ),
                           const SizedBox(height: 12),
-                          Text(
-                            headerName,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 22,
-                              fontWeight: FontWeight.bold,
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 12),
+                            child: Wrap(
+                              alignment: WrapAlignment.center,
+                              crossAxisAlignment: WrapCrossAlignment.center,
+                              spacing: 10,
+                              runSpacing: 8,
+                              children: [
+                                ConstrainedBox(
+                                  constraints: const BoxConstraints(
+                                    maxWidth: 190,
+                                  ),
+                                  child: Text(
+                                    headerName,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    textAlign: TextAlign.center,
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 22,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                ),
+                                if (!_isOwnProfile)
+                                  _buildFollowButton(compact: true),
+                              ],
                             ),
                           ),
                           const SizedBox(height: 4),
@@ -231,6 +256,23 @@ class _UserProfilePageState extends State<UserProfilePage>
                           if ((_stats['bio'] as String?)?.trim().isNotEmpty ==
                               true) ...[
                             const SizedBox(height: 16),
+                            if ((_stats['bio_title'] as String?)
+                                    ?.trim()
+                                    .isNotEmpty ==
+                                true) ...[
+                              Align(
+                                alignment: Alignment.centerLeft,
+                                child: Text(
+                                  (_stats['bio_title'] as String).trim(),
+                                  style: const TextStyle(
+                                    color: Color(0xFFFF3B30),
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w900,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(height: 5),
+                            ],
                             Align(
                               alignment: Alignment.centerLeft,
                               child: Text(
@@ -279,21 +321,11 @@ class _UserProfilePageState extends State<UserProfilePage>
                               ),
                             ),
                           ],
-                          if (!CarCard.isEmpty(_stats)) ...[
+                          if (_vehicles.isNotEmpty) ...[
                             const SizedBox(height: 16),
-                            CarCard(profile: _stats),
+                            _buildCarSection(),
                           ],
                           const SizedBox(height: 16),
-                          // Follow Button: 3 Zustände
-                          //   accepted → "Folgst du" (grau, Tap = unfollow)
-                          //   pending  → "Anfrage gesendet" (grau, Tap = zurückziehen)
-                          //   none     → bei privatem Konto "Anfrage senden",
-                          //              sonst "Folgen" (rot)
-                          if (!_isOwnProfile)
-                            SizedBox(
-                              width: double.infinity,
-                              child: _buildFollowButton(),
-                            ),
                         ],
                       ),
                     ),
@@ -362,7 +394,7 @@ class _UserProfilePageState extends State<UserProfilePage>
     );
   }
 
-  Widget _buildFollowButton() {
+  Widget _buildFollowButton({bool compact = false}) {
     final isAccepted = _followStatus == 'accepted';
     final isPending = _followStatus == 'pending';
     final label = isAccepted
@@ -370,6 +402,7 @@ class _UserProfilePageState extends State<UserProfilePage>
         : isPending
         ? 'Anfrage gesendet'
         : (_isPrivate ? 'Anfrage senden' : 'Folgen');
+    final displayLabel = compact && isPending ? 'Angefragt' : label;
     final isFilled = !isAccepted && !isPending;
     return ElevatedButton(
       onPressed: () async {
@@ -435,18 +468,100 @@ class _UserProfilePageState extends State<UserProfilePage>
             ? const Color(0xFFFF3B30)
             : Colors.transparent,
         side: isFilled ? null : const BorderSide(color: Colors.grey),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        padding: const EdgeInsets.symmetric(vertical: 12),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(compact ? 999 : 12),
+        ),
+        padding: compact
+            ? const EdgeInsets.symmetric(horizontal: 12, vertical: 8)
+            : const EdgeInsets.symmetric(vertical: 12),
+        minimumSize: compact ? const Size(0, 32) : null,
+        tapTargetSize: compact
+            ? MaterialTapTargetSize.shrinkWrap
+            : MaterialTapTargetSize.padded,
         elevation: 0,
       ),
       child: Text(
-        label,
+        displayLabel,
         style: TextStyle(
           color: isFilled ? Colors.white : Colors.grey,
           fontWeight: FontWeight.bold,
-          fontSize: 15,
+          fontSize: compact ? 12 : 15,
         ),
       ),
+    );
+  }
+
+  Widget _buildCarSection() {
+    final firstVehicle = _vehicles.isNotEmpty ? _vehicles.first : _stats;
+    final brand =
+        ((firstVehicle['brand'] ?? firstVehicle['car_brand']) as String?)
+            ?.trim();
+    final model =
+        ((firstVehicle['model'] ?? firstVehicle['car_name']) as String?)
+            ?.trim();
+    final summary = [
+      if (brand != null && brand.isNotEmpty) brand,
+      if (model != null && model.isNotEmpty) model,
+    ].join(' ');
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: () => setState(() => _carCardExpanded = !_carCardExpanded),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.garage_rounded,
+                  color: Color(0xFFFF3B30),
+                  size: 18,
+                ),
+                const SizedBox(width: 6),
+                const Text(
+                  'Garage',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 15,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                if (summary.isNotEmpty) ...[
+                  const SizedBox(width: 8),
+                  Flexible(
+                    child: Text(
+                      '· $summary',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(color: Colors.grey, fontSize: 13),
+                    ),
+                  ),
+                ],
+                const Spacer(),
+                Icon(
+                  _carCardExpanded
+                      ? Icons.keyboard_arrow_up
+                      : Icons.keyboard_arrow_down,
+                  color: Colors.white70,
+                  size: 22,
+                ),
+              ],
+            ),
+          ),
+        ),
+        AnimatedSize(
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOut,
+          child: _carCardExpanded
+              ? Padding(
+                  padding: const EdgeInsets.only(top: 12),
+                  child: VehicleGarageCarousel(vehicles: _vehicles),
+                )
+              : const SizedBox(width: double.infinity),
+        ),
+      ],
     );
   }
 

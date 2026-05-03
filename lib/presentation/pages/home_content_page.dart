@@ -7,9 +7,9 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:cruise_connect/data/services/gamification_service.dart';
 import 'package:cruise_connect/data/services/route_elevation_service.dart';
 import 'package:cruise_connect/data/services/saved_routes_service.dart';
-import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/domain/models/saved_route.dart';
 import 'package:cruise_connect/presentation/pages/cruise_mode_page.dart';
+import 'package:cruise_connect/presentation/widgets/community_carousel_card.dart';
 
 class HomeContentPage extends StatefulWidget {
   final Function(int)? onTabChange;
@@ -40,7 +40,6 @@ class _HomeContentPageState extends State<HomeContentPage>
   int badgeCount = 0;
   bool _loading = true;
   List<double> _weeklyChartData = List.filled(7, 0);
-  int _followerCount = 0;
   int _streakDays = 0;
   SavedRoute? _weeklyTopRoute;
   bool _isRouteSaved = false;
@@ -98,30 +97,7 @@ class _HomeContentPageState extends State<HomeContentPage>
           .map((km) => maxKm > 0 ? (km / maxKm).clamp(0.0, 1.0) : 0.0)
           .toList();
 
-      // Streak berechnen (Tage in Folge gefahren)
-      int streak = 0;
-      if (rideRoutes.isNotEmpty) {
-        final today = DateTime(now.year, now.month, now.day);
-        final driveDays = <DateTime>{};
-        for (final r in rideRoutes) {
-          final localCreatedAt = r.createdAt.toLocal();
-          driveDays.add(
-            DateTime(
-              localCreatedAt.year,
-              localCreatedAt.month,
-              localCreatedAt.day,
-            ),
-          );
-        }
-        var checkDay = today;
-        if (!driveDays.contains(checkDay)) {
-          checkDay = checkDay.subtract(const Duration(days: 1));
-        }
-        while (driveDays.contains(checkDay)) {
-          streak++;
-          checkDay = checkDay.subtract(const Duration(days: 1));
-        }
-      }
+      final streak = GamificationService.calculateDrivingStreakDays(rideRoutes);
 
       // Wöchentliche Top-Route laden
       SavedRoute? topRoute;
@@ -166,17 +142,6 @@ class _HomeContentPageState extends State<HomeContentPage>
         debugPrint('[Home] Top-Route laden fehlgeschlagen: $e');
       }
 
-      // Community stats
-      final uid = Supabase.instance.client.auth.currentUser?.id;
-      int followers = 0;
-      if (uid != null) {
-        try {
-          followers = await SocialService.getFollowerCount(uid);
-        } catch (e) {
-          debugPrint('[Home] Follower-Count fehlgeschlagen: $e');
-        }
-      }
-
       if (mounted) {
         setState(() {
           userLevel = result.level.level;
@@ -188,7 +153,6 @@ class _HomeContentPageState extends State<HomeContentPage>
           totalDistanceKm = result.totalDistanceKm;
           badgeCount = result.earnedBadgeIds.length;
           _weeklyChartData = normalized;
-          _followerCount = followers;
           _streakDays = streak;
           _weeklyTopRoute = topRoute;
           _isRouteSaved = routeSaved;
@@ -473,75 +437,8 @@ class _HomeContentPageState extends State<HomeContentPage>
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Expanded(
-                    child: Container(
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF1C1F26),
-                        borderRadius: BorderRadius.circular(24),
-                        border: Border.all(
-                          color: const Color(
-                            0xFFFFFFFF,
-                          ).withValues(alpha: 0.06),
-                          width: 1,
-                        ),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text(
-                            'Community',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 16,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          const SizedBox(height: 10),
-                          _buildCommunityItem('$_followerCount Follower', '👥'),
-                          const SizedBox(height: 4),
-                          _buildCommunityItem(
-                            '$totalRoutes Fahrten absolviert',
-                            '🔥',
-                          ),
-                          const SizedBox(height: 4),
-                          _buildCommunityItem(
-                            'Level $userLevel - $levelName',
-                            '📍',
-                          ),
-                          const Spacer(),
-                          SizedBox(
-                            width: double.infinity,
-                            child: GestureDetector(
-                              onTap: () {
-                                widget.onTabChange?.call(1);
-                              },
-                              child: Container(
-                                height: 35.0,
-                                decoration: BoxDecoration(
-                                  gradient: const LinearGradient(
-                                    colors: [
-                                      Color(0xFFFF5252),
-                                      Color(0xFFD32F2F),
-                                    ],
-                                    begin: Alignment.topLeft,
-                                    end: Alignment.bottomRight,
-                                  ),
-                                  borderRadius: BorderRadius.circular(30.0),
-                                ),
-                                alignment: Alignment.center,
-                                child: const Text(
-                                  'Beitreten',
-                                  style: TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
+                    child: CommunityCarouselCard(
+                      onOpenCommunity: () => widget.onTabChange?.call(1),
                     ),
                   ),
                   const SizedBox(width: 12),
@@ -679,7 +576,11 @@ class _HomeContentPageState extends State<HomeContentPage>
               children: [
                 Expanded(
                   child: Padding(
-                    padding: const EdgeInsets.only(right: 16, top: 4, bottom: 4),
+                    padding: const EdgeInsets.only(
+                      right: 16,
+                      top: 4,
+                      bottom: 4,
+                    ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
@@ -821,9 +722,9 @@ class _HomeContentPageState extends State<HomeContentPage>
 
   Widget _buildSuggestedRoutePreview(
     SavedRoute route,
-    List<List<double>> coordinates,
-    {required double size}
-  ) {
+    List<List<double>> coordinates, {
+    required double size,
+  }) {
     return SizedBox(
       width: size,
       height: size,
@@ -1209,6 +1110,10 @@ class _HomeContentPageState extends State<HomeContentPage>
 
   Widget _buildStreakWidget() {
     final hasStreak = _streakDays > 0;
+    final nextStreakDays = hasStreak ? _streakDays + 1 : 1;
+    final nextMultiplier = GamificationService.streakMultiplierForDays(
+      nextStreakDays,
+    );
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(16),
@@ -1257,8 +1162,8 @@ class _HomeContentPageState extends State<HomeContentPage>
                 const SizedBox(height: 2),
                 Text(
                   hasStreak
-                      ? 'Weiter so! Fahre heute um den Streak zu halten.'
-                      : 'Starte eine Fahrt und beginne deinen Streak!',
+                      ? 'Fahre heute für ${nextMultiplier.toStringAsFixed(2)}x XP.'
+                      : 'Starte eine Fahrt und beginne deinen XP-Streak.',
                   style: const TextStyle(
                     color: Color(0xFFA0AEC0),
                     fontSize: 12,
@@ -1277,7 +1182,7 @@ class _HomeContentPageState extends State<HomeContentPage>
                 borderRadius: BorderRadius.circular(12),
               ),
               child: Text(
-                '${_streakDays}d',
+                '${nextMultiplier.toStringAsFixed(2)}x',
                 style: const TextStyle(
                   color: Colors.white,
                   fontSize: 14,
@@ -1301,22 +1206,6 @@ class _HomeContentPageState extends State<HomeContentPage>
           child: Text(
             text,
             style: const TextStyle(color: Colors.white70, fontSize: 12),
-            overflow: TextOverflow.ellipsis,
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildCommunityItem(String text, String emoji) {
-    return Row(
-      children: [
-        Text(emoji, style: const TextStyle(fontSize: 13)),
-        const SizedBox(width: 8),
-        Expanded(
-          child: Text(
-            text,
-            style: const TextStyle(color: Color(0xFFA0AEC0), fontSize: 11),
             overflow: TextOverflow.ellipsis,
           ),
         ),

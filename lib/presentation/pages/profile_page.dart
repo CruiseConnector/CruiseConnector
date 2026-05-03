@@ -19,7 +19,7 @@ import 'package:cruise_connect/presentation/pages/user_profile_page.dart';
 import 'package:cruise_connect/presentation/widgets/mentions.dart';
 import 'package:cruise_connect/presentation/widgets/route_chip.dart';
 import 'package:cruise_connect/presentation/widgets/user_avatar.dart';
-import 'package:cruise_connect/presentation/widgets/car_card.dart';
+import 'package:cruise_connect/presentation/widgets/vehicle_garage_carousel.dart';
 import 'package:cruise_connect/presentation/pages/group_lobby_page.dart';
 
 class ProfilePage extends StatefulWidget {
@@ -49,6 +49,7 @@ class _ProfilePageState extends State<ProfilePage>
   List<Map<String, dynamic>> _posts = [];
   List<Map<String, dynamic>> _reposts = [];
   List<Map<String, dynamic>> _groups = [];
+  List<Map<String, dynamic>> _vehicles = [];
   List<SavedRoute> _savedRoutes = [];
   String? _avatarUrl;
   String? _bannerUrl;
@@ -92,6 +93,7 @@ class _ProfilePageState extends State<ProfilePage>
         SocialService.getMyAllGroups(),
         SavedRoutesService.getUserRoutes(),
         SocialService.getUserProfile(uid),
+        SocialService.getUserVehicles(uid),
       ]);
 
       if (mounted) {
@@ -104,6 +106,7 @@ class _ProfilePageState extends State<ProfilePage>
           _groups = results[4] as List<Map<String, dynamic>>;
           _savedRoutes = results[5] as List<SavedRoute>;
           _profile = profile ?? <String, dynamic>{};
+          _vehicles = results[7] as List<Map<String, dynamic>>;
           _avatarUrl = profile?['avatar_url'] as String?;
           _bannerUrl = profile?['banner_url'] as String?;
           _loading = false;
@@ -308,6 +311,7 @@ class _ProfilePageState extends State<ProfilePage>
       fallbackUserId: user?.id,
     );
     final String? userBio = (_profile['bio'] as String?)?.trim();
+    final String? userBioTitle = (_profile['bio_title'] as String?)?.trim();
     final String? userLink = (_profile['link'] as String?)?.trim();
 
     return Scaffold(
@@ -534,6 +538,21 @@ class _ProfilePageState extends State<ProfilePage>
                         ),
                         if (userBio != null && userBio.isNotEmpty) ...[
                           const SizedBox(height: 10),
+                          if (userBioTitle != null &&
+                              userBioTitle.isNotEmpty) ...[
+                            Align(
+                              alignment: Alignment.centerLeft,
+                              child: Text(
+                                userBioTitle,
+                                style: const TextStyle(
+                                  color: Color(0xFFFF3B30),
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w900,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                          ],
                           _buildBio(userBio),
                         ],
                         if (userLink != null && userLink.isNotEmpty) ...[
@@ -592,9 +611,8 @@ class _ProfilePageState extends State<ProfilePage>
               ),
             ),
 
-            // Auto-Card — nur wenn das Profil Auto-Daten hat. Standardmäßig
-            // collapsed, Tap auf den Header klappt sie auf/zu.
-            if (!CarCard.isEmpty(_profile))
+            // Garage — mehrere Autos/Motorräder, horizontal swipebar.
+            if (_vehicles.isNotEmpty)
               SliverToBoxAdapter(
                 child: Padding(
                   padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
@@ -1684,11 +1702,14 @@ class _ProfilePageState extends State<ProfilePage>
     );
   }
 
-  /// Auto-Bereich: standardmäßig collapsed (nur Header-Zeile mit Marke +
-  /// Pfeil), Tap klappt die volle [CarCard] auf.
   Widget _buildCarSection() {
-    final brand = (_profile['car_brand'] as String?)?.trim();
-    final model = (_profile['car_name'] as String?)?.trim();
+    final firstVehicle = _vehicles.isNotEmpty ? _vehicles.first : _profile;
+    final brand =
+        ((firstVehicle['brand'] ?? firstVehicle['car_brand']) as String?)
+            ?.trim();
+    final model =
+        ((firstVehicle['model'] ?? firstVehicle['car_name']) as String?)
+            ?.trim();
     final summary = [
       if (brand != null && brand.isNotEmpty) brand,
       if (model != null && model.isNotEmpty) model,
@@ -1705,13 +1726,13 @@ class _ProfilePageState extends State<ProfilePage>
             child: Row(
               children: [
                 const Icon(
-                  Icons.directions_car_filled,
+                  Icons.garage_rounded,
                   color: Color(0xFFFF3B30),
                   size: 18,
                 ),
                 const SizedBox(width: 6),
                 const Text(
-                  'Mein Auto',
+                  'Meine Garage',
                   style: TextStyle(
                     color: Colors.white,
                     fontSize: 15,
@@ -1748,7 +1769,18 @@ class _ProfilePageState extends State<ProfilePage>
           child: _carCardExpanded
               ? Padding(
                   padding: const EdgeInsets.only(top: 12),
-                  child: CarCard(profile: _profile),
+                  child: VehicleGarageCarousel(
+                    vehicles: _vehicles,
+                    onAddVehicle: () async {
+                      final changed = await Navigator.push<bool>(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => const EditProfilePage(),
+                        ),
+                      );
+                      if (changed == true) _loadData();
+                    },
+                  ),
                 )
               : const SizedBox(width: double.infinity),
         ),

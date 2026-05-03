@@ -79,6 +79,9 @@ class CruiseCompletionDialog extends StatefulWidget {
     required this.routeCoordinates,
     required this.onSave,
     required this.onDiscard,
+    this.baseXp,
+    this.streakDays = 1,
+    this.xpMultiplier = 1.0,
     this.isEarlyStop = false,
     this.belowMinimum = false,
   });
@@ -88,6 +91,9 @@ class CruiseCompletionDialog extends StatefulWidget {
   final int curves;
   final int xpEarned;
   final List<List<double>> routeCoordinates;
+  final int? baseXp;
+  final int streakDays;
+  final double xpMultiplier;
   final Future<CruiseCompletionActionResult> Function(
     int? rating,
     List<String> tags,
@@ -256,6 +262,10 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
                   const _CruiseRedDivider(),
                   const SizedBox(height: 16),
                   _buildStatsGrid(),
+                  if (!_isExportMode && _showStreakBonus) ...[
+                    const SizedBox(height: 10),
+                    _buildStreakBonusNote(),
+                  ],
                   const SizedBox(height: 18),
                   _RoutePreviewCard(
                     coordinates: widget.routeCoordinates,
@@ -308,6 +318,11 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
   }
 
   Widget _buildStatsGrid() {
+    final xpLabel = widget.belowMinimum
+        ? 'XP nicht aktiv'
+        : widget.xpMultiplier > 1
+        ? 'XP x${widget.xpMultiplier.toStringAsFixed(2)}'
+        : 'XP';
     return Column(
       children: [
         Row(
@@ -342,7 +357,7 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
             const SizedBox(width: 12),
             Expanded(
               child: _StatTile(
-                label: widget.belowMinimum ? 'XP nicht aktiv' : 'XP',
+                label: xpLabel,
                 exportMode: _isExportMode,
                 animatedValue: _xpAnimation,
               ),
@@ -350,6 +365,32 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
           ],
         ),
       ],
+    );
+  }
+
+  bool get _showStreakBonus =>
+      !widget.belowMinimum && widget.xpMultiplier > 1 && widget.baseXp != null;
+
+  Widget _buildStreakBonusNote() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFF3B30).withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: const Color(0xFFFF3B30).withValues(alpha: 0.25),
+        ),
+      ),
+      child: Text(
+        '${widget.streakDays} Tage Streak: ${widget.baseXp} Basis-XP x ${widget.xpMultiplier.toStringAsFixed(2)}',
+        textAlign: TextAlign.center,
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 11,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
     );
   }
 

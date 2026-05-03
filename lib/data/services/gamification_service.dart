@@ -33,9 +33,37 @@ class GamificationResult {
       newBadgeIds.map(Badge.getById).whereType<Badge>().toList();
 }
 
+class RouteXpBreakdown {
+  const RouteXpBreakdown({
+    required this.distanceXp,
+    required this.curveXp,
+    required this.styleBonus,
+    required this.baseXp,
+    required this.streakDays,
+    required this.multiplier,
+    required this.totalXp,
+  });
+
+  final int distanceXp;
+  final int curveXp;
+  final int styleBonus;
+  final int baseXp;
+  final int streakDays;
+  final double multiplier;
+  final int totalXp;
+
+  String get multiplierLabel => 'x${multiplier.toStringAsFixed(2)}';
+}
+
 /// Service für XP-, Level- und Badge-System mit Supabase-Backend.
 class GamificationService {
   static SupabaseClient get _db => Supabase.instance.client;
+
+  static const int xpPerDrivenKm = 10;
+  static const int xpPerCurve = 2;
+  static const int maxCurveXp = 80;
+  static const double streakStep = 0.05;
+  static const double maxStreakMultiplier = 1.30;
 
   /// Berechnet XP für eine einzelne Route.
   /// 10 XP/km + 5 XP/Kurve + Stil-Bonus.
@@ -43,22 +71,128 @@ class GamificationService {
     required double distanceKm,
     required int curves,
     required String style,
+    int streakDays = 1,
   }) {
-    final baseXp = (distanceKm * 10).round();
-    final curveXp = curves * 5;
+    return calculateRouteXpBreakdown(
+      distanceKm: distanceKm,
+      curves: curves,
+      style: style,
+      streakDays: streakDays,
+    ).totalXp;
+  }
+
+  static RouteXpBreakdown calculateRouteXpBreakdown({
+    required double distanceKm,
+    required int curves,
+    required String style,
+    int streakDays = 1,
+  }) {
+    final distanceXp = (math.max(0, distanceKm) * xpPerDrivenKm).round();
+    final curveXp = math.min(math.max(0, curves) * xpPerCurve, maxCurveXp);
     int styleBonus = 0;
     switch (style) {
       case 'Kurvenjagd':
-        styleBonus = 20;
+        styleBonus = 15;
         break;
       case 'Entdecker':
-        styleBonus = 15;
+        styleBonus = 12;
         break;
       case 'Sport Mode':
         styleBonus = 10;
         break;
+      case 'Abendrunde':
+        styleBonus = 8;
+        break;
     }
-    return baseXp + curveXp + styleBonus;
+    final baseXp = distanceXp + curveXp + styleBonus;
+    final safeStreakDays = math.max(1, streakDays);
+    final multiplier = streakMultiplierForDays(safeStreakDays);
+    return RouteXpBreakdown(
+      distanceXp: distanceXp,
+      curveXp: curveXp,
+      styleBonus: styleBonus,
+      baseXp: baseXp,
+      streakDays: safeStreakDays,
+      multiplier: multiplier,
+      totalXp: (baseXp * multiplier).round(),
+    );
+  }
+
+  static double streakMultiplierForDays(int streakDays) {
+    final safeDays = math.max(1, streakDays);
+    final bonus = math.min(
+      (safeDays - 1) * streakStep,
+      maxStreakMultiplier - 1,
+    );
+    return double.parse((1 + bonus).toStringAsFixed(2));
+  }
+
+  static int calculateDrivingStreakDays(
+    Iterable<SavedRoute> routes, {
+    DateTime? now,
+  }) {
+    final today = _dateOnly((now ?? DateTime.now()).toLocal());
+    final driveDays = _driveDays(routes);
+    if (driveDays.isEmpty) return 0;
+
+    var checkDay = today;
+    if (!driveDays.contains(checkDay)) {
+      checkDay = checkDay.subtract(const Duration(days: 1));
+    }
+
+    var streak = 0;
+    while (driveDays.contains(checkDay)) {
+      streak++;
+      checkDay = checkDay.subtract(const Duration(days: 1));
+    }
+    return streak;
+  }
+
+  static int calculateStreakDaysForRide(
+    Iterable<SavedRoute> existingRoutes, {
+    DateTime? rideDate,
+  }) {
+    final rideDay = _dateOnly((rideDate ?? DateTime.now()).toLocal());
+    final driveDays = _driveDays(existingRoutes)..add(rideDay);
+
+    var streak = 0;
+    var checkDay = rideDay;
+    while (driveDays.contains(checkDay)) {
+      streak++;
+      checkDay = checkDay.subtract(const Duration(days: 1));
+    }
+    return math.max(1, streak);
+  }
+
+  static Future<int> getStreakDaysForNextRide({DateTime? rideDate}) async {
+    final userId = _db.auth.currentUser?.id;
+    if (userId == null) return 1;
+
+    try {
+      final data = await _db
+          .from('routes')
+          .select()
+          .eq('user_id', userId)
+          .order('created_at', ascending: false);
+      final routes = (data as List)
+          .map((row) => SavedRoute.fromJson(row as Map<String, dynamic>))
+          .toList();
+      return calculateStreakDaysForRide(routes, rideDate: rideDate);
+    } catch (e) {
+      debugPrint('[Gamification] Streak-Abfrage fehlgeschlagen: $e');
+      return 1;
+    }
+  }
+
+  static Set<DateTime> _driveDays(Iterable<SavedRoute> routes) {
+    return routes
+        .where((route) => route.isDrivenSession)
+        .map((route) => _dateOnly(route.createdAt.toLocal()))
+        .toSet();
+  }
+
+  static DateTime _dateOnly(DateTime date) {
+    return DateTime(date.year, date.month, date.day);
   }
 
   /// Zählt echte Kurven anhand von Richtungswechseln > 30° in Koordinaten.
@@ -147,17 +281,24 @@ class GamificationService {
       totalSecs += r.durationSeconds ?? 0;
     }
 
-    for (final r in xpEligibleRoutes) {
+    final sortedXpRoutes = xpEligibleRoutes.toList()
+      ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+
+    for (final r in sortedXpRoutes) {
       if (r.isRoundTrip) roundTrips++;
       styleCounts[r.style] = (styleCounts[r.style] ?? 0) + 1;
       if (r.actualDistanceKm >= 100) hasLongRoute = true;
 
-      final estimatedCurves = (r.actualDistanceKm / 5).round();
-      totalXp += calculateRouteXp(
-        distanceKm: r.actualDistanceKm,
-        curves: estimatedCurves,
-        style: r.style,
-      );
+      if (r.xpAwarded != null) {
+        totalXp += r.xpAwarded!;
+      } else {
+        final estimatedCurves = (r.actualDistanceKm / 5).round();
+        totalXp += calculateRouteXp(
+          distanceKm: r.actualDistanceKm,
+          curves: estimatedCurves,
+          style: r.style,
+        );
+      }
     }
 
     // 3. Level aus XP berechnen
