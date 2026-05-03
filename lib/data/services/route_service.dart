@@ -893,7 +893,7 @@ class RouteService {
         : 'waypoint_required_stops';
     lastRouteLiveAttemptReason = 'required_waypoint_route';
 
-    final maxAttempts = forceFreshVariant ? 2 : 1;
+    final maxAttempts = forceFreshVariant ? 3 : 2;
     _RouteCandidate? bestCandidate;
     _RouteCandidate? bestDuplicateCandidate;
     RouteServiceException? lastError;
@@ -921,7 +921,7 @@ class RouteService {
           variant: variant,
           forceFreshVariant: forceFreshVariant,
           debugTrigger: debugTrigger,
-          candidateBudget: math.min(6, math.max(3, userWaypoints.length * 2)),
+          candidateBudget: 18,
         );
         if (!candidate.accepted) {
           continue;
@@ -1965,7 +1965,7 @@ class RouteService {
         'required_waypoints': userWaypoints,
         'waypoint_order': 'auto_optimize',
         'close_loop': true,
-        'max_search_ms': 25000,
+        'max_search_ms': 33000,
         'required_waypoint_count': userWaypoints.length,
       },
       'language': 'de',
@@ -2496,16 +2496,20 @@ class RouteService {
     int? statusCode;
     RouteServiceException? lastMappedError;
     // Exponential Backoff: nur bei HTTP 429/5xx, max 2 Retries.
-    // Timeout muss das Edge-Time-Budget (16-22 s) plus Serialisierungs-Reserve
-    // abdecken, sonst killt der Client bei tough cases (Dornbirn-Tal etc.)
-    // die Generierung mitten im Lauf. Edge-Floor: 16 s, Worst Case: 22 s.
+    // Timeout muss das Edge-Time-Budget plus Serialisierungs-Reserve abdecken,
+    // sonst killt der Client bei tough cases die Generierung mitten im Lauf.
+    final requestedMaxSearchMs = body['max_search_ms'];
+    final requestTimeoutSeconds =
+        body['planning_type'] == 'Wegpunkte' && requestedMaxSearchMs is num
+        ? math.max(26, math.min(40, (requestedMaxSearchMs / 1000).ceil() + 6))
+        : 26;
     const maxRetries = 2;
     final retryRng = math.Random();
     for (var attempt = 1; attempt <= maxRetries; attempt++) {
       try {
         final rawResponse = await _invoker
             .invoke(body)
-            .timeout(const Duration(seconds: 26));
+            .timeout(Duration(seconds: requestTimeoutSeconds));
         if (rawResponse is FunctionResponse) {
           statusCode = rawResponse.status;
           data = rawResponse.data;

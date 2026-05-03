@@ -34,21 +34,54 @@ export function countUTurnManeuvers(route: any): number {
     if (!Array.isArray(steps)) continue;
 
     for (const step of steps) {
-      const maneuver = step?.maneuver ?? {};
-      const modifier = String(maneuver?.modifier ?? "").toLowerCase();
-      const type = String(maneuver?.type ?? "").toLowerCase();
-      const instruction = String(maneuver?.instruction ?? "").toLowerCase();
-
-      if (
-        modifier.includes("uturn") ||
-        modifier.includes("u-turn") ||
-        type === "uturn" ||
-        type === "u-turn" ||
-        instruction.includes("wenden") ||
-        instruction.includes("u-turn")
-      ) {
+      if (isUTurnManeuverStep(step)) {
         count += 1;
       }
+    }
+  }
+  return count;
+}
+
+function isUTurnManeuverStep(step: any): boolean {
+  const maneuver = step?.maneuver ?? {};
+  const modifier = String(maneuver?.modifier ?? "").toLowerCase();
+  const type = String(maneuver?.type ?? "").toLowerCase();
+  const instruction = String(maneuver?.instruction ?? "").toLowerCase();
+
+  return (
+    modifier.includes("uturn") ||
+    modifier.includes("u-turn") ||
+    type === "uturn" ||
+    type === "u-turn" ||
+    instruction.includes("wenden") ||
+    instruction.includes("u-turn")
+  );
+}
+
+function countRequiredStopUTurnManeuvers(
+  route: any,
+  requiredStopCoordinates: Coordinate[] | undefined,
+  thresholdMeters = 180,
+): number {
+  if (!requiredStopCoordinates?.length) return 0;
+  const legs = route?.legs;
+  if (!Array.isArray(legs)) return 0;
+
+  let count = 0;
+  for (const leg of legs) {
+    const steps = leg?.steps;
+    if (!Array.isArray(steps)) continue;
+
+    for (const step of steps) {
+      if (!isUTurnManeuverStep(step)) continue;
+      const location = step?.maneuver?.location;
+      if (!Array.isArray(location) || location.length < 2) continue;
+      const maneuverPoint = pointToCoordinate(location);
+      if (!maneuverPoint) continue;
+      const nearRequiredStop = requiredStopCoordinates.some((stop) =>
+        calculateDistance(maneuverPoint, stop) * 1000 <= thresholdMeters
+      );
+      if (nearRequiredStop) count += 1;
     }
   }
   return count;
@@ -1146,6 +1179,7 @@ function evaluateRouteQualityCore(
     mode?: RouteMode;
     avoidHighways?: boolean;
     requiredStops?: boolean;
+    requiredStopCoordinates?: Coordinate[];
   },
 ): RouteQualityEvaluation {
   const coordinateCount = route?.geometry?.coordinates?.length ?? 0;
@@ -1477,6 +1511,12 @@ function evaluateRouteQualityCore(
   // we tolerate a handful of those as long as the geometric signals stay
   // within the (loosened) hairpin gate thresholds.
   const uTurnManeuverCount = hasManeuverUTurn ? countUTurnManeuvers(route) : 0;
+  const requiredStopUTurnManeuverCount = requiredStops
+    ? countRequiredStopUTurnManeuvers(route, options?.requiredStopCoordinates)
+    : 0;
+  const requiredStopManeuverUTurnsOnly = requiredStops &&
+    uTurnManeuverCount > 0 &&
+    requiredStopUTurnManeuverCount === uTurnManeuverCount;
   const tolerantShortSportHairpin = isShortSportWithHighwayRoundTrip;
   const cleanShortSportHairpin = tolerantShortSportHairpin &&
     !hasManeuverUTurn && shapeSignals.geometricUTurnCount <= 3 &&
@@ -1542,7 +1582,7 @@ function evaluateRouteQualityCore(
           : distanceConfig.acceptableMinKm - 1.0))) ||
     cleanShortSportHairpin;
   const cleanRequiredStopHairpin = requiredStops &&
-    !hasManeuverUTurn &&
+    (!hasManeuverUTurn || requiredStopManeuverUTurnsOnly) &&
     shapeSignals.geometricUTurnCount <= (isCurveChase ? 5 : 4) &&
     overlapPercent <= (isCurveChase ? 28 : 30) &&
     shapeSignals.oppositeOverlapPercent <= (isCurveChase ? 24 : 26) &&
@@ -1879,6 +1919,7 @@ export function evaluateRouteQuality(
     mode?: RouteMode;
     avoidHighways?: boolean;
     requiredStops?: boolean;
+    requiredStopCoordinates?: Coordinate[];
   },
 ): RouteQualityEvaluation {
   const quality = evaluateRouteQualityCore(route, routeType, options);
@@ -1896,6 +1937,7 @@ export function evaluateRouteCleanupGate(
     avoidHighways?: boolean;
     startLocation?: Coordinate;
     requiredStops?: boolean;
+    requiredStopCoordinates?: Coordinate[];
   },
 ): RouteCleanupEvaluation {
   if (routeType !== "ROUND_TRIP") {

@@ -23,7 +23,7 @@ import {
   stableStringHash,
 } from "./routing_utils.ts";
 import { getDistanceConfig } from "./roundtrip_waypoints.ts";
-import { getMapboxRoute, getMapboxRouteDetailed } from "./mapbox_client.ts";
+import { getMapboxRoute } from "./mapbox_client.ts";
 import {
   buildPointToPointScenicWaypoints,
   getPointToPointMaximumDistanceKm,
@@ -36,6 +36,7 @@ import {
   evaluateRouteQuality,
 } from "./route_quality.ts";
 import { searchBestRoundTripRoute } from "./roundtrip_search.ts";
+import { routeRequiredWaypointRoundTrip } from "./waypoint_roundtrip.ts";
 import { classifyRoutingError } from "./routing_request_utils.ts";
 import { debugError, debugLog } from "./routing_debug.ts";
 
@@ -363,51 +364,6 @@ Deno.serve(async (req) => {
       return 360 - largestGap;
     };
 
-    const permuteWaypoints = (waypoints: Coordinate[]): Coordinate[][] => {
-      if (waypoints.length <= 1) return [waypoints];
-      const result: Coordinate[][] = [];
-      const used = new Array<boolean>(waypoints.length).fill(false);
-      const current: Coordinate[] = [];
-      const walk = () => {
-        if (current.length === waypoints.length) {
-          result.push([...current]);
-          return;
-        }
-        for (let i = 0; i < waypoints.length; i++) {
-          if (used[i]) continue;
-          used[i] = true;
-          current.push(waypoints[i]);
-          walk();
-          current.pop();
-          used[i] = false;
-        }
-      };
-      walk();
-      return result.slice(0, 6);
-    };
-
-    const waypointOrderIndices = (
-      ordered: Coordinate[],
-      original: Coordinate[],
-    ): number[] =>
-      ordered.map((point) => {
-        const index = original.findIndex((candidate) =>
-          Math.abs(candidate.latitude - point.latitude) < 1e-9 &&
-          Math.abs(candidate.longitude - point.longitude) < 1e-9
-        );
-        return index < 0 ? -1 : index;
-      });
-
-    type RequiredWaypointPlan = {
-      label: string;
-      requiredOrder: Coordinate[];
-      waypoints: Coordinate[];
-      radiuses: string;
-    };
-
-    const clamp = (value: number, min: number, max: number): number =>
-      Math.max(min, Math.min(max, value));
-
     const waypointRadiusesForPlan = (
       waypoints: Coordinate[],
       requiredStops: Coordinate[],
@@ -422,82 +378,6 @@ Deno.serve(async (req) => {
           return required ? "150" : "4500";
         })
         .join(";");
-
-    const buildRequiredWaypointPlans = (
-      orders: Coordinate[][],
-      targetKm: number,
-    ): RequiredWaypointPlan[] => {
-      const plans: RequiredWaypointPlan[] = [];
-      const addPlan = (
-        label: string,
-        requiredOrder: Coordinate[],
-        waypoints: Coordinate[],
-      ) => {
-        plans.push({
-          label,
-          requiredOrder,
-          waypoints,
-          radiuses: waypointRadiusesForPlan(waypoints, requiredOrder),
-        });
-      };
-
-      for (let orderIndex = 0; orderIndex < orders.length; orderIndex++) {
-        const order = orders[orderIndex];
-        addPlan(`order_${orderIndex}_direct`, order, [
-          startLocation,
-          ...order,
-          startLocation,
-        ]);
-
-        const firstStop = order[0];
-        const lastStop = order[order.length - 1] ?? firstStop;
-        const outboundBearing = calculateBearing(startLocation, firstStop);
-        const inboundBearing = calculateBearing(lastStop, startLocation);
-        const firstDistanceKm = calculateDistance(startLocation, firstStop);
-        const lastDistanceKm = calculateDistance(lastStop, startLocation);
-        const loopRadiusKm = clamp(
-          Math.max(firstDistanceKm, lastDistanceKm, targetKm * 0.18),
-          3.5,
-          13.0,
-        );
-        const sideBase = (randomSeed + orderIndex) % 2 === 0 ? 1 : -1;
-        for (const side of [sideBase, -sideBase]) {
-          const outboundShape = calculateDestination(
-            startLocation,
-            outboundBearing + side * 58,
-            loopRadiusKm,
-          );
-          const inboundShape = calculateDestination(
-            lastStop,
-            inboundBearing + side * 58,
-            loopRadiusKm * 0.78,
-          );
-          addPlan(`order_${orderIndex}_loop_side_${side}`, order, [
-            startLocation,
-            outboundShape,
-            ...order,
-            inboundShape,
-            startLocation,
-          ]);
-
-          if (order.length === 1) {
-            const farShape = calculateDestination(
-              firstStop,
-              outboundBearing + 180 + side * 68,
-              loopRadiusKm * 0.9,
-            );
-            addPlan(`order_${orderIndex}_single_loop_${side}`, order, [
-              startLocation,
-              outboundShape,
-              firstStop,
-              farShape,
-              startLocation,
-            ]);
-          }
-        }
-      }
-      return plans.slice(0, 18);
-    };
 
     const waypointReachDistancesMeters = (
       coordinates: unknown,
@@ -581,10 +461,10 @@ Deno.serve(async (req) => {
     let pointToPointDeliveredTargetDistanceKm: number | undefined;
     let normalizedUserWaypointsForMeta: Coordinate[] = [];
     let waypointLayoutScore: number | null = null;
-    let requiredWaypointCandidatePlans: RequiredWaypointPlan[] | null = null;
     let waypointOrderDelivered: number[] | null = null;
     let waypointAutoOptimizeAttemptCount = 0;
     let waypointAutoOptimizeSelectedIndex: number | null = null;
+    let waypointRoutingMeta: Record<string, unknown> | null = null;
     let waypointReachMeta: {
       userWaypointCount: number;
       reachedCount: number;
@@ -933,16 +813,15 @@ Deno.serve(async (req) => {
       const bearingSpread = bearingSpreadDegrees(bearingsFromStart);
       waypointLayoutScore = Math.min(1, Math.max(0, bearingSpread / 180));
       excludeParams = applyAvoidHighwaysExcludes(excludeParams, avoidHighways);
-      const orderedCandidates = waypointOrder === "auto_optimize"
-        ? permuteWaypoints(normalizedUserWaypoints)
-        : [normalizedUserWaypoints];
-      requiredWaypointCandidatePlans = buildRequiredWaypointPlans(
-        orderedCandidates,
-        targetDistance ?? 50,
+      finalWaypoints = [
+        startLocation,
+        ...normalizedUserWaypoints,
+        startLocation,
+      ];
+      radiusesParams = waypointRadiusesForPlan(
+        finalWaypoints,
+        normalizedUserWaypoints,
       );
-      waypointAutoOptimizeAttemptCount = requiredWaypointCandidatePlans.length;
-      finalWaypoints = requiredWaypointCandidatePlans[0].waypoints;
-      radiusesParams = requiredWaypointCandidatePlans[0].radiuses;
     } else {
       throw new Error(
         "Invalid planning_type. Must be 'Zufall' or 'Wegpunkte'.",
@@ -1003,7 +882,7 @@ Deno.serve(async (req) => {
       : 0;
     const waypointTimeBudgetMs =
       planning_type === "Wegpunkte" && currentRouteType === "ROUND_TRIP"
-        ? Math.max(8000, Math.min(25000, body.max_search_ms ?? 25000))
+        ? Math.max(12000, Math.min(35000, body.max_search_ms ?? 33000))
         : 0;
     const pointToPointTimeRemainingMs = () =>
       pointToPointTimeBudgetMs <= 0
@@ -1065,123 +944,61 @@ Deno.serve(async (req) => {
         }
       }
     } else if (!route) {
-      if (planning_type === "Wegpunkte" && requiredWaypointCandidatePlans) {
-        let bestWaypointRoute: any | null = null;
-        let bestWaypointWaypoints: Coordinate[] | null = null;
-        let bestWaypointRadiuses = "";
-        let bestWaypointScore = Number.POSITIVE_INFINITY;
-        let bestWaypointIndex: number | null = null;
-        let bestWaypointOrder: Coordinate[] | null = null;
-        let waypointQualityRejectReason: string | null = null;
-
-        for (let i = 0; i < requiredWaypointCandidatePlans.length; i++) {
-          if (
-            waypointTimeBudgetMs > 0 &&
-            Date.now() - requestStartedAt > waypointTimeBudgetMs - 1600
-          ) {
-            break;
-          }
-          const plan = requiredWaypointCandidatePlans[i];
-          const candidateFetch = await getMapboxRouteDetailed(
-            plan.waypoints,
-            mapboxProfile,
-            excludeParams,
-            plan.radiuses,
-            MAPBOX_ACCESS_TOKEN,
-            {
-              continueStraight: requestContinueStraight,
-              alternatives: true,
-              maxAttempts: 1,
-              timeoutMs: waypointTimeoutMs(4500),
-              retryDelayBaseMs: 180,
-            },
-          );
-          const candidateRoutes = candidateFetch.routes?.length
-            ? candidateFetch.routes
-            : candidateFetch.route
-            ? [candidateFetch.route]
-            : [];
-          if (candidateRoutes.length === 0) continue;
-
-          for (
-            let alternativeIndex = 0;
-            alternativeIndex < candidateRoutes.length;
-            alternativeIndex++
-          ) {
-            const candidateRoute = candidateRoutes[alternativeIndex];
-            const candidateDistanceKm = getRouteDistanceKm(candidateRoute);
-            const candidateDuration =
-              typeof candidateRoute.duration === "number"
-                ? candidateRoute.duration / 60
-                : candidateDistanceKm * 1.7;
-            const reachDistances = waypointReachDistancesMeters(
-              candidateRoute?.geometry?.coordinates,
-              normalizedUserWaypointsForMeta,
-            );
-            const reachedCount = reachDistances.filter((distance) =>
-              distance <= 150
-            ).length;
-            if (reachedCount < normalizedUserWaypointsForMeta.length) {
-              debugLog(
-                `[Waypoint] plan ${plan.label} alt ${alternativeIndex} missed required stops: ${reachedCount}/${normalizedUserWaypointsForMeta.length}`,
-              );
-              continue;
-            }
-            const candidateQuality = evaluateRouteQuality(
-              candidateRoute,
-              currentRouteType,
-              { mode, avoidHighways, requiredStops: true },
-            );
-            if (!candidateQuality.passed) {
-              waypointQualityRejectReason = candidateQuality.reason;
-              debugLog(
-                `[Waypoint] plan ${plan.label} alt ${alternativeIndex} rejected: ${candidateQuality.reason}`,
-              );
-              continue;
-            }
-            const score = candidateDuration + candidateDistanceKm * 0.35 +
-              candidateQuality.score * 0.45 + alternativeIndex * 4;
-            if (score < bestWaypointScore) {
-              bestWaypointRoute = candidateRoute;
-              bestWaypointWaypoints = plan.waypoints;
-              bestWaypointRadiuses = plan.radiuses;
-              bestWaypointScore = score;
-              bestWaypointIndex = i;
-              bestWaypointOrder = plan.requiredOrder;
-            }
-          }
-        }
-
-        if (bestWaypointRoute && bestWaypointWaypoints) {
-          route = bestWaypointRoute;
-          finalWaypoints = bestWaypointWaypoints;
-          radiusesParams = bestWaypointRadiuses;
-          waypointAutoOptimizeSelectedIndex = bestWaypointIndex;
-          waypointOrderDelivered = waypointOrderIndices(
-            bestWaypointOrder ?? finalWaypoints.slice(1, -1),
-            normalizedUserWaypointsForMeta,
-          );
-        }
-
-        if (!route) {
+      if (planning_type === "Wegpunkte") {
+        const waypointSearch = await routeRequiredWaypointRoundTrip({
+          startLocation,
+          requiredWaypoints: normalizedUserWaypointsForMeta,
+          waypointOrder: waypointOrder === "fixed" ? "fixed" : "auto_optimize",
+          targetDistanceKm: targetDistance ?? undefined,
+          mode,
+          avoidHighways,
+          mapboxProfile,
+          excludeParams,
+          accessToken: MAPBOX_ACCESS_TOKEN,
+          randomSeed,
+          variantHint,
+          fingerprintHint,
+          maxSearchMs: waypointTimeBudgetMs || 30000,
+        });
+        waypointRoutingMeta = waypointSearch.meta;
+        waypointAutoOptimizeAttemptCount = Number(
+          waypointSearch.meta.waypoint_candidate_plan_count ?? 0,
+        );
+        if (waypointSearch.route && waypointSearch.waypoints.length > 0) {
+          route = waypointSearch.route;
+          finalWaypoints = waypointSearch.waypoints;
+          radiusesParams = waypointSearch.radiuses;
+          waypointOrderDelivered = waypointSearch.deliveredOrder;
+        } else {
+          const rejectReason = waypointSearch.rejectReason;
+          const responseCode = rejectReason === "waypoint_not_reached"
+            ? "waypoint_not_reached"
+            : rejectReason == null ||
+                rejectReason === "no_route" ||
+                rejectReason === "timeout" ||
+                rejectReason === "http_error" ||
+                rejectReason === "network_error"
+            ? "waypoint_route_not_possible"
+            : "waypoint_quality_too_low";
           requestDebugMeta = {
-            response_code: waypointQualityRejectReason == null
-              ? "waypoint_route_not_possible"
-              : "waypoint_quality_too_low",
-            route_quality_too_low: waypointQualityRejectReason != null,
+            response_code: responseCode,
+            route_quality_too_low: responseCode === "waypoint_quality_too_low",
             waypoint_source: waypointSource,
             waypoint_mode: waypointMode ?? null,
             waypoint_order_requested: waypointOrder,
             requested_close_loop: body.close_loop !== false,
-            normalized_user_waypoint_count: normalizedUserWaypointsForMeta
-              .length,
+            normalized_user_waypoint_count:
+              normalizedUserWaypointsForMeta.length,
             auto_optimize_attempt_count: waypointAutoOptimizeAttemptCount,
-            reject_reason: waypointQualityRejectReason,
+            reject_reason: rejectReason,
+            ...(waypointRoutingMeta ?? {}),
           };
           throw new Error(
-            waypointQualityRejectReason == null
+            responseCode === "waypoint_route_not_possible"
               ? "waypoint_route_not_possible: Mapbox could not connect all required stops."
-              : `waypoint_quality_too_low: ${waypointQualityRejectReason}`,
+              : responseCode === "waypoint_not_reached"
+              ? "waypoint_not_reached: Directions route did not reach every required waypoint."
+              : `waypoint_quality_too_low: ${rejectReason}`,
           );
         }
       } else {
@@ -1886,6 +1703,9 @@ Deno.serve(async (req) => {
       mode: currentRouteType === "ROUND_TRIP" ? mode : undefined,
       avoidHighways: currentRouteType === "ROUND_TRIP" ? avoidHighways : false,
       requiredStops: planning_type === "Wegpunkte",
+      requiredStopCoordinates: planning_type === "Wegpunkte"
+        ? normalizedUserWaypointsForMeta
+        : undefined,
     });
     const finalCleanup = currentRouteType === "ROUND_TRIP" &&
         planning_type !== "Wegpunkte"
@@ -2189,6 +2009,9 @@ Deno.serve(async (req) => {
           waypoint_route_quality: planning_type === "Wegpunkte"
             ? finalQuality.tier
             : null,
+          ...(planning_type === "Wegpunkte" && waypointRoutingMeta != null
+            ? waypointRoutingMeta
+            : {}),
           target_distance_km: targetDistance ?? null,
           route_distance_km: responseDistanceKm,
           original_planning_type: body.original_planning_type ?? null,
