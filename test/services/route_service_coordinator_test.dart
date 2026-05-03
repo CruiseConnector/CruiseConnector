@@ -1514,7 +1514,7 @@ void main() {
       expect(failingInvoker.callCount, 6);
       expect(
         failingInvoker.bodies.every(
-          (body) => body['max_candidate_attempts'] == 8,
+          (body) => body['max_candidate_attempts'] == 12,
         ),
         true,
       );
@@ -1805,7 +1805,7 @@ void main() {
   );
 
   test(
-    'Premium-Hard-Region-Status spiegelt erstes Coverage-Snapshot ohne Zweitabruf',
+    'Premium-Hard-Region versucht Live vor Warmup und behält Coverage-Meta',
     () async {
       final failingInvoker = _AlwaysFailingInvoker();
       final poolService = _FakeRoutePoolService(
@@ -1863,7 +1863,10 @@ void main() {
       expect(error.edgeMeta['region_difficulty'], 'hard');
       expect(error.edgeMeta['seed_job_created'], false);
       expect(error.edgeMeta['duplicate_job_prevented'], false);
-      expect(failingInvoker.callCount, 0);
+      expect(failingInvoker.callCount, greaterThan(0));
+      expect(error.edgeMeta['live_attempted'], true);
+      expect(error.edgeMeta['live_attempt_count'], failingInvoker.callCount);
+      expect(error.edgeMeta['pool_checked'], true);
       expect(poolService.ensureCoverageCallCount, 1);
     },
   );

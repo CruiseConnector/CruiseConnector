@@ -93,19 +93,37 @@ function prioritizeCandidatePlans(
   const noHighwayOrderTokens = noHighwayTargetKm <= 60
     ? normalizedMode === "kurvenjagd"
       ? [
+        "nohw-sector-curvy",
         "nohw-short-curve-oval-west",
         "nohw-short-curve-oval-northwest",
         "nohw-short-curve-oval-southwest",
+      ]
+      : normalizedMode === "entdecker"
+      ? [
+        "nohw-sector-explore",
+        "sport-paired-west",
+        "sport-paired-northwest",
+        "sport-paired-southwest",
+      ]
+      : normalizedMode === "abendrunde"
+      ? [
+        "nohw-sector-evening",
+        "sport-paired-west",
+        "sport-paired-northwest",
+        "sport-paired-southwest",
       ]
       : [
         "sport-paired-west",
         "sport-paired-northwest",
         "sport-paired-southwest",
         "sport-paired-west-wide",
+        "sport-flow-regional",
+        "nohw-sector-sport",
       ]
     : noHighwayTargetKm <= 85
     ? normalizedMode === "sport mode" || normalizedMode === "sport"
       ? [
+        "nohw-sector-sport",
         "nohw-medium-sport-cardinal-rheintal",
         "nohw-medium-sport-orbital-rheintal-north",
         "nohw-medium-sport-orbital-rheintal-northwest",
@@ -115,6 +133,11 @@ function prioritizeCandidatePlans(
         "nohw-medium-sport-orbital-broad-west",
       ]
       : [
+        normalizedMode === "kurvenjagd"
+          ? "nohw-sector-curvy"
+          : normalizedMode === "entdecker"
+          ? "nohw-sector-explore"
+          : "nohw-sector-evening",
         "nohw-medium-oval-west",
         "nohw-medium-rhine-south",
         "nohw-medium-oval-northwest",
@@ -122,13 +145,31 @@ function prioritizeCandidatePlans(
       ]
     : normalizedMode === "kurvenjagd"
     ? [
+      "nohw-sector-curvy",
       "nohw-curve-rescue-northeast",
       "nohw-long-oval-northwest",
       "nohw-long-oval-west",
       "nohw-long-oval-southwest",
       "nohw-long-oval-west-wide",
     ]
+    : normalizedMode === "entdecker"
+    ? [
+      "nohw-sector-explore",
+      "nohw-long-oval-west",
+      "nohw-long-oval-northwest",
+      "nohw-long-oval-southwest",
+      "nohw-long-oval-west-wide",
+    ]
+    : normalizedMode === "abendrunde"
+    ? [
+      "nohw-sector-evening",
+      "nohw-long-oval-west",
+      "nohw-long-oval-northwest",
+      "nohw-long-oval-southwest",
+      "nohw-long-oval-west-wide",
+    ]
     : [
+      "nohw-sector-sport",
       "nohw-long-oval-west",
       "nohw-long-oval-northwest",
       "nohw-long-oval-southwest",
@@ -248,13 +289,13 @@ function prioritizeCandidatePlans(
         ? stableStringHash(`${phaseName}:${normalizedFingerprint}`)
         : 0;
       const phaseShift = preferNoHighwayRoundTrip
-        ? phaseName === "balanced" ? 3 : phaseName === "fallback" ? 6 : 0
+        ? phaseName === "balanced" ? 4 : phaseName === "fallback" ? 8 : 0
         : 0;
       const noHighwayMediumVariantIndex = normalizedVariant?.match(
         /-k\d{2,3}-(\d+)-/i,
       )?.[1];
       const noHighwayRotationLimit = preferNoHighwayRoundTrip
-        ? Math.max(1, Math.min(4, prioritized.length))
+        ? Math.max(1, Math.min(12, prioritized.length))
         : 1;
       const rotationLimit = preferNoHighwayRoundTrip
         ? noHighwayRotationLimit
@@ -413,18 +454,21 @@ export async function searchBestRoundTripRoute({
   const longNoHighwayCurveRescueSearch = avoidHighways &&
     mode === "Kurvenjagd" &&
     targetDistanceKm > 70;
-  const useMapboxAlternatives = !avoidHighways;
-  const maxEvaluatedAlternatives = 3;
+  const useMapboxAlternatives = true;
+  const maxEvaluatedAlternatives = avoidHighways ? 2 : 3;
   const noHighwayAttemptBudget = targetDistanceKm <= 60
-    ? 6
+    ? mode === "Kurvenjagd" ? 14 : 12
     : targetDistanceKm <= 85
-    ? 4
-    : 5;
+    ? mode === "Kurvenjagd" ? 14 : 12
+    : mode === "Kurvenjagd"
+    ? 16
+    : 14;
   const shortSportHighwayRoundTrip = !avoidHighwaysRoundTripSearch &&
     mode === "Sport Mode" &&
     targetDistanceKm <= 60;
-  // No-highway roundtrips use a fixed small plan set; keep the provider budget
-  // bounded and let strict/balanced/fallback each test up to two candidates.
+  // No-highway roundtrips still stay bounded, but they must attempt enough
+  // live sectors before surfacing warmup. Pool thinness is support metadata,
+  // not a reason to skip Mapbox entirely.
   const requestedAttemptBudget = Math.round(
     maxCandidateAttemptsHint ??
       (avoidHighwaysRoundTripSearch
@@ -476,19 +520,15 @@ export async function searchBestRoundTripRoute({
   const roundTripTimeBudgetMs = highCostCurveSearch
     ? 16000
     : avoidHighwaysRoundTripSearch
-    ? targetDistanceKm >= 95 ? 21000 : 23000
+    ? 25000
     : shortSportHighwayRoundTrip
     ? 28000
     : (constrainedRoundTripSearch || shortCurvySearch)
     ? 22000
     : 19000;
   const mapboxCandidateMaxAttempts = avoidHighwaysRoundTripSearch ? 1 : 2;
-  const mapboxCandidateTimeoutMs = avoidHighwaysRoundTripSearch
-    ? targetDistanceKm >= 95 ? 8500 : 9500
-    : 12000;
-  const mapboxRelaxedTimeoutMs = avoidHighwaysRoundTripSearch
-    ? targetDistanceKm >= 95 ? 7500 : 8500
-    : 10500;
+  const mapboxCandidateTimeoutMs = avoidHighwaysRoundTripSearch ? 5200 : 12000;
+  const mapboxRelaxedTimeoutMs = avoidHighwaysRoundTripSearch ? 4500 : 10500;
   const remainingSearchMs = (reserveMs = 0): number =>
     roundTripTimeBudgetMs - (Date.now() - searchStartTs) - reserveMs;
   const boundedMapboxTimeoutMs = (
@@ -700,6 +740,16 @@ export async function searchBestRoundTripRoute({
     continueStraight: boolean;
     distanceConfig: DistanceConfig;
   } | null = null;
+  const acceptedRouteCandidates: Array<{
+    plan: RoundTripCandidatePlan;
+    route: any;
+    quality: RouteQualityEvaluation;
+    context: {
+      exclude: string;
+      continueStraight: boolean;
+      distanceConfig: DistanceConfig;
+    };
+  }> = [];
   let balancedHasPresentableCandidate = false;
   let balancedTerminalShortCircuit = false;
   const rejectReasons = new Map<string, number>();
@@ -985,11 +1035,19 @@ export async function searchBestRoundTripRoute({
     // 3 ausschöpfen, falls die Geometrie es zulässt; balanced/fallback
     // bekommen je 2-3.
     const declaredMaxPerPhase = phase.name === "strict"
-      ? shortSportHighwayRoundTrip ? 4 : 2
+      ? avoidHighwaysRoundTripSearch
+        ? targetDistanceKm <= 60 ? 5 : 5
+        : shortSportHighwayRoundTrip
+        ? 4
+        : 2
       : phase.name === "balanced"
-      ? shortSportHighwayRoundTrip ? 4 : 2
+      ? avoidHighwaysRoundTripSearch
+        ? targetDistanceKm <= 60 ? 5 : 5
+        : shortSportHighwayRoundTrip
+        ? 4
+        : 2
       : avoidHighwaysRoundTripSearch
-      ? 2
+      ? targetDistanceKm <= 60 ? 5 : targetDistanceKm <= 85 ? 5 : 6
       : shortSportHighwayRoundTrip
       ? 4
       : shortCurvySearch
@@ -1290,15 +1348,22 @@ export async function searchBestRoundTripRoute({
 
       acceptedCandidates += 1;
       phaseAcceptedCandidates += 1;
+      const acceptedContext = {
+        exclude: selectedExclude,
+        continueStraight: selectedContinueStraight,
+        distanceConfig: selectedDistanceConfig,
+      };
+      acceptedRouteCandidates.push({
+        plan,
+        route,
+        quality,
+        context: acceptedContext,
+      });
       if (!bestQuality || quality.score < bestQuality.score) {
         bestPlan = plan;
         bestRoute = route;
         bestQuality = quality;
-        bestContext = {
-          exclude: selectedExclude,
-          continueStraight: selectedContinueStraight,
-          distanceConfig: selectedDistanceConfig,
-        };
+        bestContext = acceptedContext;
       }
       if (
         phase.name === "balanced" &&
@@ -1523,11 +1588,31 @@ export async function searchBestRoundTripRoute({
   }
 
   if (bestContext != null) {
-    const hydratedBest = await hydrateGuidanceRoute(bestPlan, bestContext);
-    if (hydratedBest == null) {
+    let hydratedSelection: {
+      plan: RoundTripCandidatePlan;
+      route: any;
+      quality: RouteQualityEvaluation;
+    } | null = null;
+    const hydrationQueue = acceptedRouteCandidates
+      .slice()
+      .sort((a, b) => a.quality.score - b.quality.score);
+    for (const candidate of hydrationQueue) {
+      const hydratedCandidate = await hydrateGuidanceRoute(
+        candidate.plan,
+        candidate.context,
+      );
+      if (hydratedCandidate == null) continue;
+      hydratedSelection = {
+        plan: candidate.plan,
+        route: hydratedCandidate.route,
+        quality: hydratedCandidate.quality,
+      };
+      break;
+    }
+    if (hydratedSelection == null) {
       registerReject("guidance_fetch_failed");
       debugLog(
-        `[RT] Search exhausted after selected candidate because guidance hydration failed. Reject summary=${
+        `[RT] Search exhausted after accepted candidates because guidance hydration failed. Reject summary=${
           JSON.stringify(Object.fromEntries(rejectReasons))
         }`,
       );
@@ -1548,8 +1633,9 @@ export async function searchBestRoundTripRoute({
         exhausted: true,
       };
     }
-    bestRoute = hydratedBest.route;
-    bestQuality = hydratedBest.quality;
+    bestPlan = hydratedSelection.plan;
+    bestRoute = hydratedSelection.route;
+    bestQuality = hydratedSelection.quality;
   }
 
   debugLog(

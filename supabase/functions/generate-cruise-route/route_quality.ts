@@ -999,18 +999,18 @@ export function scoreRouteStyleFit(
             { value: scoreAround(metrics.sharpTurnRate, 6, 8), weight: 0.08 },
             {
               value: scoreRamp(metrics.averageSegmentLengthMeters, 130, 280),
-              weight: 0.20,
+              weight: 0.24,
             },
-            { value: smoothness, weight: 0.34 },
+            { value: smoothness, weight: 0.38 },
             { value: scoreAround(metrics.zigzagScore, 8, 24), weight: 0.08 },
             { value: 1 - metrics.spurScore / 100, weight: 0.09 },
             { value: 1 - metrics.outAndBackScore / 100, weight: 0.08 },
-            { value: metrics.loopnessScore / 100, weight: 0.16 },
+            { value: metrics.loopnessScore / 100, weight: 0.08 },
           ]) * 100;
           const curvePenalty =
-            scoreRamp(metrics.curveDensityPer50Km, 22, 34) * 12 +
-            scoreRamp(metrics.sharpTurnRate, 14, 24) * 8 +
-            scoreRamp(metrics.headingChangePerKm, 115, 165) * 6;
+            scoreRamp(metrics.curveDensityPer50Km, 22, 34) * 16 +
+            scoreRamp(metrics.sharpTurnRate, 14, 24) * 10 +
+            scoreRamp(metrics.headingChangePerKm, 115, 165) * 8;
           return rawScore - curvePenalty;
         }
       case "Kurvenjagd":
@@ -1032,20 +1032,20 @@ export function scoreRouteStyleFit(
           const rawScore = weightedAverage([
             {
               value: scoreRamp(metrics.curveDensityPer50Km, 22, 36),
-              weight: 0.28,
+              weight: 0.34,
             },
-            { value: scoreRamp(metrics.sharpTurnRate, 8, 18), weight: 0.15 },
+            { value: scoreRamp(metrics.sharpTurnRate, 8, 18), weight: 0.16 },
             {
               value: scoreRamp(metrics.headingChangePerKm, 95, 150),
-              weight: 0.14,
+              weight: 0.18,
             },
-            { value: metrics.loopnessScore / 100, weight: 0.18 },
-            { value: 1 - metrics.spurScore / 100, weight: 0.12 },
-            { value: 1 - metrics.outAndBackScore / 100, weight: 0.08 },
-            { value: scoreRamp(smoothness, 0.45, 0.72), weight: 0.05 },
+            { value: metrics.loopnessScore / 100, weight: 0.14 },
+            { value: 1 - metrics.spurScore / 100, weight: 0.08 },
+            { value: 1 - metrics.outAndBackScore / 100, weight: 0.06 },
+            { value: scoreRamp(smoothness, 0.45, 0.72), weight: 0.04 },
           ]) * 100;
-          const loopPenalty = loopSupport < 0.58
-            ? (0.58 - loopSupport) * 22
+          const loopPenalty = loopSupport < 0.62
+            ? (0.62 - loopSupport) * 22
             : 0;
           return rawScore - loopPenalty;
         }
@@ -1124,8 +1124,8 @@ function applyStyleFitToQuality(
       shapeMetrics,
     };
   }
-  const stylePenalty = (100 - styleFit.score) * 0.55;
-  const styleBonus = styleFit.score * 0.08;
+  const stylePenalty = (100 - styleFit.score) * 0.70;
+  const styleBonus = styleFit.score * 0.10;
   return {
     ...quality,
     baseScore,
@@ -1536,10 +1536,10 @@ function evaluateRouteQualityCore(
     shapeSignals.loopCleanupDistanceRetentionRatio >=
       (mediumLongNoHighwaySport ? 0.70 : 0.88) &&
     (distanceConfig == null ||
-    shapeSignals.loopCleanupDistanceKm >=
-      (isShortNoHighwaySportRoundTrip
-        ? shortSportPresentationMinKm - 1.0
-        : distanceConfig.acceptableMinKm - 1.0))) ||
+      shapeSignals.loopCleanupDistanceKm >=
+        (isShortNoHighwaySportRoundTrip
+          ? shortSportPresentationMinKm - 1.0
+          : distanceConfig.acceptableMinKm - 1.0))) ||
     cleanShortSportHairpin;
   const cleanRequiredStopHairpin = requiredStops &&
     !hasManeuverUTurn &&

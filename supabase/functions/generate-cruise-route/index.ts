@@ -76,7 +76,7 @@ function buildNoRouteSearchMeta(
   return {
     live_fill_attempted: (roundTripSearch?.candidateAttempts ?? 0) > 0,
     live_fill_attempt_count: roundTripSearch?.candidateAttempts ?? 0,
-    live_fill_success: (roundTripSearch?.acceptedCandidates ?? 0) > 0,
+    live_fill_success: roundTripSearch?.route != null,
     live_fill_accepted_candidates: roundTripSearch?.acceptedCandidates ?? 0,
     live_fill_rejected_candidates: roundTripSearch?.rejectedCandidates ?? 0,
     live_fill_duplicate_skips: roundTripSearch?.duplicateSkips ?? 0,
@@ -319,8 +319,10 @@ Deno.serve(async (req) => {
         "Invalid max_candidate_attempts: must be a finite number",
       );
     }
-    if (body.waypoint_order != null && waypointOrder !== "fixed" &&
-      waypointOrder !== "auto_optimize") {
+    if (
+      body.waypoint_order != null && waypointOrder !== "fixed" &&
+      waypointOrder !== "auto_optimize"
+    ) {
       throw new Error(
         "Invalid waypoint_order: must be fixed or auto_optimize.",
       );

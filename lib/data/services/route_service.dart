@@ -474,8 +474,8 @@ class RouteService {
         }
         if (poolHealingCoverage != null &&
             _shouldStopLiveForPoolHealingCoverage(poolHealingCoverage)) {
-          lastRouteSourceDecision = 'pool_or_warmup_live_blocked';
-          lastRouteLiveAttemptReason = 'blocked_by_coverage_status';
+          lastRouteSourceDecision = 'coverage_block_pool_then_live';
+          lastRouteLiveAttemptReason = 'coverage_status_requires_live_check';
           final poolBlockedRoute = await _tryRoutePoolFallback(
             scenario: scenario,
             styleConfig: styleConfig,
@@ -487,11 +487,11 @@ class RouteService {
           if (poolBlockedRoute != null) {
             return poolBlockedRoute;
           }
-          throw await _buildCoverageWarmupException(
-            scenario: scenario,
-            coverage: poolHealingCoverage,
-            lastError: null,
-          );
+          // Premium/Test: Coverage darf Warmup nicht vor den Live-Versuch
+          // ziehen. Erst wenn Live und Pool scheitern, wird unten ein
+          // Warmup/Healing-Status gebaut.
+          poolHealingFirstPolicy = false;
+          onDemandLiveFill = true;
         }
         if (poolHealingCoverage != null &&
             _shouldUseOnDemandLiveFill(poolHealingCoverage)) {
@@ -2942,9 +2942,18 @@ class RouteService {
     final targetKm = scenario.targetDistanceKm ?? 0.0;
     final highCostCurve =
         styleConfig.profileKey == 'kurvenjagd' && targetKm >= 120;
+    if (scenario.avoidHighways) {
+      final baseBudget = targetKm <= 60
+          ? 12
+          : targetKm <= 85
+          ? 12
+          : 14;
+      return styleConfig.profileKey == 'kurvenjagd'
+          ? math.min(16, baseBudget + 2)
+          : baseBudget;
+    }
     final constrained =
-        scenario.avoidHighways ||
-        (styleConfig.profileKey == 'kurvenjagd' && targetKm <= 60);
+        styleConfig.profileKey == 'kurvenjagd' && targetKm <= 60;
 
     if (highCostCurve) return 9;
     if (constrained || targetKm >= 100) return 8;
@@ -4646,12 +4655,17 @@ class RouteService {
       'estimated_wait_minutes': coverage.estimatedWaitMinutes,
       'next_action': nextAction,
       'live_attempted': lastRouteApiCallCount > 0,
+      'live_attempt_count': lastRouteApiCallCount,
+      'live_blocked_reason': lastRouteApiCallCount == 0
+          ? (lastRouteLiveAttemptReason ?? coverage.coverageStatus)
+          : null,
       'live_attempt_reason': lastRouteApiCallCount > 0
           ? (lastRouteLiveAttemptReason ?? 'route_generation')
           : 'pool_healing_status',
       'live_fill_attempted': lastRouteApiCallCount > 0,
       'live_fill_attempt_count': lastRouteApiCallCount,
       'live_fill_success': false,
+      'pool_checked': true,
       'source_decision': lastRouteSourceDecision,
       'mapbox_call_count': lastRouteApiCallCount,
       'live_attempt_result': lastError == null
@@ -4659,6 +4673,12 @@ class RouteService {
           : lastError.edgeMeta['response_code'] ??
                 lastError.edgeMeta['code'] ??
                 lastError.type.name,
+      'final_no_route_reason': lastError == null
+          ? coverage.coverageStatus
+          : lastError.edgeMeta['response_code'] ??
+                lastError.edgeMeta['code'] ??
+                lastError.type.name,
+      'healing_job_created': coverage.seedJobCreated,
       'pool_verified_count': coverage.currentVerifiedCount,
       'pool_candidate_count': coverage.currentCandidateCount,
     };

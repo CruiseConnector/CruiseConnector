@@ -694,6 +694,87 @@ export function buildRoundTripWaypointCandidates({
     );
 
   if (avoidHighwaysRoundTripSearch) {
+    const styleKey = mode === "Kurvenjagd"
+      ? "curvy"
+      : mode === "Entdecker"
+      ? "explore"
+      : mode === "Abendrunde"
+      ? "evening"
+      : "sport";
+    const regionSeed = randomSeed +
+      Math.round(start.latitude * 10) * 37 +
+      Math.round(start.longitude * 10) * 53;
+    const sectorOffsets = [-135, -90, -45, 0, 45, 90, 135, 180];
+    const sectorRotation = Math.abs(Math.round(regionSeed)) %
+      sectorOffsets.length;
+    const baseBearing = seededBaseBearing(
+      regionSeed,
+      preferredBearingDegrees,
+      preferredBearingDegrees === undefined ? 360 : 70,
+    );
+    const sectorBearings = sectorOffsets.map((_, index) =>
+      normalizeBearingDegrees(
+        baseBearing +
+          sectorOffsets[(index + sectorRotation) % sectorOffsets.length],
+      )
+    );
+    const compactMultiplier = shortTarget
+      ? 1.02
+      : noHighwayMediumTarget
+      ? 1.08
+      : 1.18;
+    const wideMultiplier = shortTarget
+      ? 1.16
+      : noHighwayMediumTarget
+      ? 1.20
+      : 1.34;
+    const isCurvy = styleKey === "curvy";
+    const isSport = styleKey === "sport";
+    sectorBearings.forEach((bearing, index) => {
+      const sectorLabel = Math.round(bearing).toString().padStart(3, "0");
+      addPlan(
+        `nohw-sector-${styleKey}-${index}-${sectorLabel}-paired`,
+        pairedLoop(
+          compactMultiplier,
+          bearing,
+          3100 + index * 23,
+          isCurvy ? 86 : isSport ? 58 : 72,
+          isSport ? [0.98, 1.08, 0.98] : [0.94, 1.12, 0.96],
+          {
+            bearingJitterDegrees: isCurvy ? 7 : 3,
+            radialJitter: isCurvy ? 0.05 : 0.025,
+            smoothing: isSport ? 0.08 : 0.05,
+            minRadiusFactor: shortTarget ? 0.76 : 0.80,
+            maxRadiusFactor: longTarget ? 1.34 : 1.22,
+          },
+        ),
+        isCurvy ? 1.16 : 1.10,
+      );
+      addPlan(
+        `nohw-regional-${styleKey}-${index}-${sectorLabel}-ring`,
+        orbitalRing(
+          wideMultiplier,
+          bearing,
+          4100 + index * 29,
+          isCurvy ? 5 : 4,
+          isCurvy ? 245 : isSport ? 190 : 220,
+          isCurvy
+            ? [0.90, 1.04, 1.12, 1.02, 0.92]
+            : isSport
+            ? [0.88, 1.00, 1.02, 0.88]
+            : [0.90, 1.04, 1.06, 0.92],
+          {
+            bearingJitterDegrees: isCurvy ? 10 : 4,
+            radialJitter: isCurvy ? 0.06 : 0.03,
+            smoothing: isSport ? 0.07 : 0.045,
+            minRadiusFactor: shortTarget ? 0.72 : 0.78,
+            maxRadiusFactor: longTarget ? 1.36 : 1.24,
+          },
+        ),
+        isCurvy ? 1.18 : 1.12,
+      );
+    });
+
     if (shortTarget && mode === "Sport Mode") {
       addPlan(
         "sport-paired-west",
@@ -739,6 +820,26 @@ export function buildRoundTripWaypointCandidates({
         }),
         1.12,
       );
+      sectorBearings.slice(0, 4).forEach((bearing, index) => {
+        addPlan(
+          `sport-flow-regional-${index}`,
+          pairedLoop(
+            index % 2 === 0 ? 1.04 : 1.08,
+            bearing,
+            1960 + index * 17,
+            52,
+            [0.98, 1.06, 0.98],
+            {
+              bearingJitterDegrees: 2,
+              radialJitter: 0.02,
+              smoothing: 0.10,
+              minRadiusFactor: 0.84,
+              maxRadiusFactor: 1.16,
+            },
+          ),
+          1.06,
+        );
+      });
 
       return dedupeRoundTripPlans(plans);
     }
