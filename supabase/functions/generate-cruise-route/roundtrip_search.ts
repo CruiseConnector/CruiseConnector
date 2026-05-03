@@ -439,34 +439,33 @@ export async function searchBestRoundTripRoute({
         ? 8
         : 7),
   );
-  const explicitAttemptCap =
-    typeof maxCandidateAttemptsHint === "number" &&
+  const explicitAttemptCap = typeof maxCandidateAttemptsHint === "number" &&
       Number.isFinite(maxCandidateAttemptsHint)
-      ? Math.max(
-        1,
-        Math.min(
-          avoidHighwaysRoundTripSearch ? noHighwayAttemptBudget : 10,
-          Math.round(maxCandidateAttemptsHint),
-        ),
-      )
-      : null;
+    ? Math.max(
+      1,
+      Math.min(
+        avoidHighwaysRoundTripSearch ? noHighwayAttemptBudget : 10,
+        Math.round(maxCandidateAttemptsHint),
+      ),
+    )
+    : null;
   const uncappedGlobalAttemptBudget = avoidHighwaysRoundTripSearch
     ? noHighwayAttemptBudget
     : Math.max(
-    shortSportHighwayRoundTrip ? 14 : 7,
-    Math.min(
-      highCostCurveSearch
-        ? 7
-        : extendedRoundTripSearch
-        ? 8
-        : (constrainedRoundTripSearch || shortCurvySearch)
-        ? 9
-        : shortSportHighwayRoundTrip
-        ? 15
-        : 8,
-      requestedAttemptBudget,
-    ),
-  );
+      shortSportHighwayRoundTrip ? 14 : 7,
+      Math.min(
+        highCostCurveSearch
+          ? 7
+          : extendedRoundTripSearch
+          ? 8
+          : (constrainedRoundTripSearch || shortCurvySearch)
+          ? 9
+          : shortSportHighwayRoundTrip
+          ? 15
+          : 8,
+        requestedAttemptBudget,
+      ),
+    );
   const globalAttemptBudget = explicitAttemptCap == null
     ? uncappedGlobalAttemptBudget
     : Math.max(1, Math.min(uncappedGlobalAttemptBudget, explicitAttemptCap));
@@ -495,10 +494,11 @@ export async function searchBestRoundTripRoute({
   const boundedMapboxTimeoutMs = (
     preferredMs: number,
     minimumMs = 2500,
-  ): number => Math.max(
-    minimumMs,
-    Math.min(preferredMs, remainingSearchMs(900)),
-  );
+  ): number =>
+    Math.max(
+      minimumMs,
+      Math.min(preferredMs, remainingSearchMs(900)),
+    );
   const hasMapboxCallBudget = (minimumMs = 3000): boolean =>
     remainingSearchMs(900) >= minimumMs;
   const activePreferenceAreas = (preferenceAreas ?? []).filter((area) =>
@@ -557,9 +557,10 @@ export async function searchBestRoundTripRoute({
       const radius = preferenceRadiusMeters(activePreferenceAreas[index]);
       return Math.max(0, Math.min(1, 1 - distance / (radius * 2.5)));
     });
-    const matchedPreferenceCount = distances.filter((distance, index) =>
-      distance <= preferenceRadiusMeters(activePreferenceAreas[index])
-    ).length;
+    const matchedPreferenceCount =
+      distances.filter((distance, index) =>
+        distance <= preferenceRadiusMeters(activePreferenceAreas[index])
+      ).length;
     const averageScore = matchScores.length === 0
       ? 0
       : matchScores.reduce((sum, score) => sum + score, 0) /
@@ -600,12 +601,13 @@ export async function searchBestRoundTripRoute({
         );
         return sum + closest;
       }, 0);
-      const matched = activePreferenceAreas.filter((area) =>
-        interiorWaypoints.some((waypoint) =>
-          calculateDistance(waypoint, area) * 1000 <=
-            preferenceRadiusMeters(area) * 2.2
-        )
-      ).length;
+      const matched =
+        activePreferenceAreas.filter((area) =>
+          interiorWaypoints.some((waypoint) =>
+            calculateDistance(waypoint, area) * 1000 <=
+              preferenceRadiusMeters(area) * 2.2
+          )
+        ).length;
       return distancePenalty - matched * 2500;
     };
     return [...plans].sort((a, b) => scorePlan(a) - scorePlan(b));
@@ -1306,11 +1308,21 @@ export async function searchBestRoundTripRoute({
         balancedHasPresentableCandidate = true;
       }
 
+      const noHighwayMediumLongShapeClean =
+        (quality.shapeMetrics?.loopnessScore ?? 0) >=
+          (targetDistanceKm >= 90 ? 62 : 54) &&
+        (quality.shapeMetrics?.spurScore ?? 100) <=
+          (targetDistanceKm >= 90 ? 28 : 34) &&
+        (quality.shapeMetrics?.outAndBackScore ?? 100) <=
+          (targetDistanceKm >= 90 ? 28 : 34) &&
+        (quality.shapeMetrics?.deadEndArmScore ?? 100) <=
+          (targetDistanceKm >= 90 ? 24 : 30);
       const noHighwayMediumLongGoodEnough = avoidHighwaysRoundTripSearch &&
         targetDistanceKm > 60 &&
         (quality.tier === "ideal" || quality.tier === "good") &&
         quality.distanceDeltaKm <= targetDistanceKm * 0.15 &&
-        quality.overlapPercent <= (mode === "Kurvenjagd" ? 18 : 22);
+        quality.overlapPercent <= (mode === "Kurvenjagd" ? 18 : 22) &&
+        noHighwayMediumLongShapeClean;
       // Stop aggressively for medium no-highway Sport acceptable hits:
       // alpine geometry means retrying will not improve quality, and
       // running all 6 Mapbox candidates costs >26s (client timeout).
@@ -1475,18 +1487,16 @@ export async function searchBestRoundTripRoute({
         fingerprintHint: normalizedFingerprintHint,
         duplicateSkips,
         emergencyDuplicateUsed: true,
-        preferenceMatch: bestEmergencyDuplicate.quality == null
-          ? null
-          : {
-            matchedPreferenceCount:
-              bestEmergencyDuplicate.quality.matchedPreferenceCount ?? 0,
-            preferenceMatchScore:
-              bestEmergencyDuplicate.quality.preferenceMatchScore ?? 0,
-            preferenceAreaDistancesMeters:
-              bestEmergencyDuplicate.quality.preferenceAreaDistancesMeters ?? [],
-            preferenceIgnoredReason:
-              bestEmergencyDuplicate.quality.preferenceIgnoredReason ?? null,
-          },
+        preferenceMatch: bestEmergencyDuplicate.quality == null ? null : {
+          matchedPreferenceCount:
+            bestEmergencyDuplicate.quality.matchedPreferenceCount ?? 0,
+          preferenceMatchScore:
+            bestEmergencyDuplicate.quality.preferenceMatchScore ?? 0,
+          preferenceAreaDistancesMeters:
+            bestEmergencyDuplicate.quality.preferenceAreaDistancesMeters ?? [],
+          preferenceIgnoredReason:
+            bestEmergencyDuplicate.quality.preferenceIgnoredReason ?? null,
+        },
       };
     }
     debugLog(

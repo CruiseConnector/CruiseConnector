@@ -990,22 +990,29 @@ export function scoreRouteStyleFit(
         if (metrics.zigzagScore >= 30) reasons.push("zigzag_penalty");
         if (metrics.sharpTurnRate >= 22) reasons.push("too_many_sharp_turns");
         if (metrics.spurScore >= 24) reasons.push("spur_penalty");
-        return weightedAverage([
-          {
-            value: scoreAround(metrics.curveDensityPer50Km, 10, 12),
-            weight: 0.12,
-          },
-          { value: scoreAround(metrics.sharpTurnRate, 8, 10), weight: 0.14 },
-          {
-            value: scoreRamp(metrics.averageSegmentLengthMeters, 120, 260),
-            weight: 0.18,
-          },
-          { value: smoothness, weight: 0.30 },
-          { value: scoreAround(metrics.zigzagScore, 8, 24), weight: 0.10 },
-          { value: 1 - metrics.spurScore / 100, weight: 0.10 },
-          { value: 1 - metrics.outAndBackScore / 100, weight: 0.08 },
-          { value: metrics.loopnessScore / 100, weight: 0.08 },
-        ]) * 100;
+        {
+          const rawScore = weightedAverage([
+            {
+              value: scoreAround(metrics.curveDensityPer50Km, 8, 9),
+              weight: 0.07,
+            },
+            { value: scoreAround(metrics.sharpTurnRate, 6, 8), weight: 0.08 },
+            {
+              value: scoreRamp(metrics.averageSegmentLengthMeters, 130, 280),
+              weight: 0.20,
+            },
+            { value: smoothness, weight: 0.34 },
+            { value: scoreAround(metrics.zigzagScore, 8, 24), weight: 0.08 },
+            { value: 1 - metrics.spurScore / 100, weight: 0.09 },
+            { value: 1 - metrics.outAndBackScore / 100, weight: 0.08 },
+            { value: metrics.loopnessScore / 100, weight: 0.16 },
+          ]) * 100;
+          const curvePenalty =
+            scoreRamp(metrics.curveDensityPer50Km, 22, 34) * 12 +
+            scoreRamp(metrics.sharpTurnRate, 14, 24) * 8 +
+            scoreRamp(metrics.headingChangePerKm, 115, 165) * 6;
+          return rawScore - curvePenalty;
+        }
       case "Kurvenjagd":
         if (metrics.curveDensityPer50Km >= 28) {
           reasons.push("high_curve_density");
@@ -1015,25 +1022,40 @@ export function scoreRouteStyleFit(
         }
         if (metrics.stubPenalty >= 28) reasons.push("stub_penalty");
         if (metrics.loopnessScore >= 72) reasons.push("clean_loop");
-        return weightedAverage([
-          {
-            value: scoreRamp(metrics.curveDensityPer50Km, 22, 36),
-            weight: 0.30,
-          },
-          { value: scoreRamp(metrics.sharpTurnRate, 8, 18), weight: 0.17 },
-          {
-            value: scoreRamp(metrics.headingChangePerKm, 95, 150),
-            weight: 0.15,
-          },
-          { value: metrics.loopnessScore / 100, weight: 0.14 },
-          { value: 1 - metrics.spurScore / 100, weight: 0.11 },
-          { value: 1 - metrics.outAndBackScore / 100, weight: 0.08 },
-          { value: scoreRamp(smoothness, 0.45, 0.72), weight: 0.05 },
-        ]) * 100;
+        {
+          const loopSupport = weightedAverage([
+            { value: metrics.loopnessScore / 100, weight: 0.44 },
+            { value: 1 - metrics.spurScore / 100, weight: 0.24 },
+            { value: 1 - metrics.outAndBackScore / 100, weight: 0.20 },
+            { value: smoothness, weight: 0.12 },
+          ]);
+          const rawScore = weightedAverage([
+            {
+              value: scoreRamp(metrics.curveDensityPer50Km, 22, 36),
+              weight: 0.28,
+            },
+            { value: scoreRamp(metrics.sharpTurnRate, 8, 18), weight: 0.15 },
+            {
+              value: scoreRamp(metrics.headingChangePerKm, 95, 150),
+              weight: 0.14,
+            },
+            { value: metrics.loopnessScore / 100, weight: 0.18 },
+            { value: 1 - metrics.spurScore / 100, weight: 0.12 },
+            { value: 1 - metrics.outAndBackScore / 100, weight: 0.08 },
+            { value: scoreRamp(smoothness, 0.45, 0.72), weight: 0.05 },
+          ]) * 100;
+          const loopPenalty = loopSupport < 0.58
+            ? (0.58 - loopSupport) * 22
+            : 0;
+          return rawScore - loopPenalty;
+        }
       case "Abendrunde":
         if (metrics.smoothnessScore >= 72) reasons.push("calm_flow");
         return weightedAverage([
-          { value: smoothness, weight: 0.28 },
+          {
+            value: smoothness,
+            weight: 0.28,
+          },
           {
             value: scoreAround(metrics.curveDensityPer50Km, 10, 12),
             weight: 0.14,
@@ -1087,7 +1109,10 @@ function applyStyleFitToQuality(
   mode?: RouteMode,
 ): RouteQualityEvaluation {
   const styleFit = scoreRouteStyleFit(route, mode);
-  const shapeMetrics = calculateRouteShapeMetrics(route, quality.overlapPercent);
+  const shapeMetrics = calculateRouteShapeMetrics(
+    route,
+    quality.overlapPercent,
+  );
   const baseScore = quality.score;
   if (quality.tier === "rejected") {
     return {

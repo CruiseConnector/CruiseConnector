@@ -983,6 +983,23 @@ class RoutePoolService {
       ),
     );
     final poolFull = coverage.currentVerifiedCount >= coverage.maxPoolSize;
+    final qualityTier = routePayload['quality_tier']?.toString().toLowerCase();
+    final distanceFitsBucket =
+        distanceKm == null ||
+        (distanceKm >= distanceBucket * 0.65 &&
+            distanceKm <= distanceBucket * 1.35);
+    if ((avoidHighways && hasHighway) ||
+        qualityTier == 'rejected' ||
+        qualityScore < 60 ||
+        !distanceFitsBucket ||
+        coverage.currentCandidateCount >= policy.candidateBufferLimit) {
+      return RoutePoolCandidateSaveResult(
+        saved: false,
+        duplicate: false,
+        poolFull: poolFull,
+        assignment: assignment,
+      );
+    }
     final candidate = RoutePoolCandidate(
       routeRegionId: assignment.region.id,
       routeFingerprint: routeFingerprint,
@@ -1015,6 +1032,16 @@ class RoutePoolService {
     );
     final saveResult = await _upsertCandidate(candidate);
     if (!saveResult.saved) {
+      if (saveResult.duplicate) {
+        await _loadOrRefreshCoverage(
+          assignment: assignment,
+          distanceBucket: distanceBucket,
+          styleKey: styleKey,
+          avoidHighways: avoidHighways,
+          routeType: routeType,
+          forceRefresh: true,
+        );
+      }
       return RoutePoolCandidateSaveResult(
         saved: false,
         duplicate: saveResult.duplicate,
@@ -1646,9 +1673,6 @@ class RoutePoolService {
     required String requestedStyle,
   }) {
     matches.sort((a, b) {
-      final byStartDistance = a.startDistanceKm.compareTo(b.startDistanceKm);
-      if (byStartDistance != 0) return byStartDistance;
-
       final byExactStyle = _boolScore(
         _styleMatches(a.route, requestedStyle),
       ).compareTo(_boolScore(_styleMatches(b.route, requestedStyle)));
@@ -1669,6 +1693,9 @@ class RoutePoolService {
         requestedStyle,
       ).compareTo(_poolStyleFitScore(a.route, requestedStyle));
       if (byStyleFit != 0) return byStyleFit;
+
+      final byStartDistance = a.startDistanceKm.compareTo(b.startDistanceKm);
+      if (byStartDistance != 0) return byStartDistance;
 
       return b.route.qualityScore.compareTo(a.route.qualityScore);
     });
@@ -2633,7 +2660,9 @@ class RoutePoolService {
     if (policy.seedBudgetUnits <= 0) return false;
     if (existingSeedJob == null) return true;
     if (_seedJobBlocksNewJob(existingSeedJob)) return false;
-    if (existingSeedJob.failureCount >= policy.seedBudgetUnits) return false;
+    if (existingSeedJob.failureCount >= existingSeedJob.maxAttempts) {
+      return false;
+    }
     if (existingSeedJob.attemptCount >= existingSeedJob.maxAttempts) {
       return false;
     }

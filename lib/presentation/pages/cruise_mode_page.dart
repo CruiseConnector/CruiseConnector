@@ -2720,14 +2720,26 @@ class _CruiseModePageState extends State<CruiseModePage>
     final code =
         error.edgeMeta['response_code']?.toString() ??
         error.edgeMeta['code']?.toString();
+    final coverageStatus = error.edgeMeta['coverage_status']?.toString();
+    final healingStatus = error.edgeMeta['healing_status']?.toString();
     return code == 'pool_bootstrap_pending' ||
         code == 'region_warming_up' ||
         code == 'route_generation_limited' ||
         code == 'route_quality_too_low' ||
         code == 'detour_not_available' ||
-        error.edgeMeta['coverage_status'] == 'empty' ||
-        error.edgeMeta['coverage_status'] == 'thin' ||
-        error.edgeMeta['coverage_status'] == 'warming_up' ||
+        coverageStatus == 'empty' ||
+        coverageStatus == 'thin' ||
+        coverageStatus == 'quality_thin' ||
+        coverageStatus == 'warming_up' ||
+        coverageStatus == 'cooldown' ||
+        coverageStatus == 'hard_region_thin' ||
+        coverageStatus == 'hard_region_curated_needed' ||
+        coverageStatus == 'bootstrap_limited' ||
+        healingStatus == 'healing_queued' ||
+        healingStatus == 'healing_running' ||
+        healingStatus == 'healing_failed_cooldown' ||
+        healingStatus == 'healing_paused_budget' ||
+        healingStatus == 'hard_region_curated_needed' ||
         error.edgeMeta['pool_bootstrap_pending'] == true ||
         error.edgeMeta['seed_job_created'] == true ||
         error.edgeMeta['retry_search_started'] == true;

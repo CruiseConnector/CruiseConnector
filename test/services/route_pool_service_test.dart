@@ -1610,6 +1610,73 @@ void main() {
       },
     );
 
+    test('schlechte Live-Candidates werden nicht gespeichert', () async {
+      final candidates = <RoutePoolCandidate>[];
+      final service = RoutePoolService(
+        inMemoryRegions: [
+          _region(
+            countryCode: 'DE',
+            admin1Name: 'Bayern',
+            admin2Name: 'München',
+            cityCluster: 'München',
+            centerLat: 48.1372,
+            centerLng: 11.5755,
+          ),
+        ],
+        inMemoryRoutes: const [],
+        inMemoryCoverage: <RoutePoolCoverage>[],
+        inMemorySeedJobs: <RouteSeedJob>[],
+        inMemoryCandidates: candidates,
+      );
+
+      final rejected = await service.recordCandidateRoute(
+        userLat: 48.1372,
+        userLng: 11.5755,
+        distanceBucket: 50,
+        style: 'Sport Mode',
+        avoidHighways: true,
+        routeType: 'ROUND_TRIP',
+        candidateSource: 'premium_live',
+        routeFingerprint: 'rejected-muc-50-sport',
+        geometry: const {
+          'type': 'LineString',
+          'coordinates': [
+            [11.5755, 48.1372],
+            [11.62, 48.18],
+            [11.5755, 48.1372],
+          ],
+        },
+        routePayload: const {'quality_tier': 'rejected'},
+        distanceKm: 52,
+        qualityScore: 90,
+      );
+      final highway = await service.recordCandidateRoute(
+        userLat: 48.1372,
+        userLng: 11.5755,
+        distanceBucket: 50,
+        style: 'Sport Mode',
+        avoidHighways: true,
+        routeType: 'ROUND_TRIP',
+        candidateSource: 'premium_live',
+        routeFingerprint: 'highway-muc-50-sport',
+        geometry: const {
+          'type': 'LineString',
+          'coordinates': [
+            [11.5755, 48.1372],
+            [11.62, 48.18],
+            [11.5755, 48.1372],
+          ],
+        },
+        distanceKm: 52,
+        qualityScore: 90,
+        hasHighway: true,
+      );
+
+      expect(rejected.saved, isFalse);
+      expect(highway.saved, isFalse);
+      expect(candidates, isEmpty);
+    });
+
     test(
       'Cluster mit vielen falschen Routen ist ohne passende Zellen nicht healthy_minimum',
       () async {
@@ -1922,6 +1989,67 @@ void main() {
       expect(check.toMeta()['healing_job_id'], 'existing-budget-paused');
       expect(jobs, hasLength(1));
     });
+
+    test(
+      'Ein fehlgeschlagener Healing-Versuch blockiert Retry nicht dauerhaft',
+      () async {
+        final jobs = <RouteSeedJob>[
+          const RouteSeedJob(
+            id: 'failed-once',
+            countryCode: 'DE',
+            admin1Name: 'Baden-Württemberg',
+            admin2Name: 'Stuttgart',
+            cityCluster: 'Stuttgart',
+            routeType: 'ROUND_TRIP',
+            distanceBucket: 50,
+            styleKey: 'sport_mode',
+            avoidHighways: true,
+            status: 'failed',
+            attemptCount: 1,
+            failureCount: 1,
+            maxAttempts: 3,
+            seedBudgetUnits: 1,
+            lastError: 'no_candidate_generated',
+          ),
+        ];
+        final service = RoutePoolService(
+          inMemoryRegions: [
+            _region(
+              countryCode: 'DE',
+              admin1Name: 'Baden-Württemberg',
+              admin2Name: 'Stuttgart',
+              cityCluster: 'Stuttgart',
+              centerLat: 48.7758,
+              centerLng: 9.1829,
+            ),
+          ],
+          inMemoryRoutes: const [],
+          inMemoryCoverage: <RoutePoolCoverage>[],
+          inMemorySeedJobs: jobs,
+          inMemoryCandidates: <RoutePoolCandidate>[],
+        );
+
+        final check = await service.ensureCoverageForRequest(
+          userLat: 48.7758,
+          userLng: 9.1829,
+          distanceBucket: 50,
+          style: 'Sport Mode',
+          avoidHighways: true,
+          routeType: 'ROUND_TRIP',
+          subscriptionTier: 'premium',
+          createSeedJob: true,
+          preferredCountryCode: 'DE',
+          preferredAdmin1Name: 'Baden-Württemberg',
+          preferredAdmin2Name: 'Stuttgart',
+          preferredCityCluster: 'Stuttgart',
+        );
+
+        expect(check.seedJobCreated, isTrue);
+        expect(check.duplicateJobPrevented, isFalse);
+        expect(jobs.single.status, 'queued');
+        expect(jobs.single.failureCount, 1);
+      },
+    );
 
     test('Budget 0 verhindert auch den ersten Healing-Job', () async {
       final jobs = <RouteSeedJob>[];

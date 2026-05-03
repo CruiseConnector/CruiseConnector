@@ -4511,18 +4511,23 @@ class RouteService {
         lastError?.edgeMeta['route_quality_too_low'] == true ||
         lastError?.edgeMeta['code'] == 'route_quality_too_low';
     final bucket = _distanceBucketForPool(scenario.targetDistanceKm);
-    final longCurvyUnavailable =
-        scenario.style.toLowerCase().contains('kurven') && (bucket ?? 0) >= 75;
     final warmupMessage = qualityTooLow
         ? 'Wir suchen noch nach einer besseren Route. Für diese Strecke und Einstellung gibt es gerade noch keine geprüfte Variante. Bitte warte kurz oder versuche es erneut.'
-        : longCurvyUnavailable
-        ? 'Kurvenjagd ist hier gerade schwer verfügbar. Wir bauen neue Vorschläge für diese Länge auf.'
-        : _coverageStatusUserMessage(coverage: coverage, cluster: cluster);
+        : _coverageStatusUserMessage(
+            coverage: coverage,
+            cluster: cluster,
+            requestedStyle: scenario.style,
+            requestedDistanceBucket: bucket,
+          );
     final responseCode = qualityTooLow
         ? 'route_quality_too_low'
         : 'pool_bootstrap_pending';
     final poolBootstrapPending =
         qualityTooLow || coverage.seedJobCreated || coverage.bootstrapPending;
+    final healingStatus = coverage.healingStatus;
+    final nextAction = qualityTooLow
+        ? 'retry_or_bootstrap'
+        : _coverageNextAction(healingStatus);
     final meta = <String, dynamic>{
       ...coverage.toMeta(),
       if (lastError != null) ...lastError.edgeMeta,
@@ -4540,11 +4545,14 @@ class RouteService {
       'alternative_distance_offered': lastRouteAlternativeDistanceOffered,
       'returned_distance_bucket': lastRouteReturnedDistanceBucket,
       'user_message_required': true,
-      'seed_job_queued': coverage.seedJobCreated || coverage.bootstrapPending,
+      'seed_job_queued':
+          coverage.seedJobCreated ||
+          coverage.seedJobStatus == 'queued' ||
+          coverage.seedJobStatus == 'running',
       'retry_recommended': true,
-      'retry_available': true,
-      'estimated_wait_minutes': 5,
-      'next_action': qualityTooLow ? 'retry_or_bootstrap' : 'bootstrap',
+      'retry_available': healingStatus != 'healing_paused_budget',
+      'estimated_wait_minutes': coverage.estimatedWaitMinutes,
+      'next_action': nextAction,
       'live_attempted': lastRouteApiCallCount > 0,
       'live_attempt_reason': lastRouteApiCallCount > 0
           ? 'single_bounded_short_no_highway_attempt'
@@ -4603,8 +4611,29 @@ class RouteService {
   String _coverageStatusUserMessage({
     required RoutePoolCoverageCheck coverage,
     required String? cluster,
+    String? requestedStyle,
+    int? requestedDistanceBucket,
   }) {
     final clusterText = cluster ?? 'deiner Umgebung';
+    final healingStatus = coverage.healingStatus;
+    if (healingStatus == 'healing_running') {
+      return 'Wir erstellen gerade neue Vorschläge für diese Einstellung. Bitte versuche es gleich erneut.';
+    }
+    if (healingStatus == 'healing_queued') {
+      return 'Neue Vorschläge für diese Einstellung sind eingeplant. Wir starten den Aufbau automatisch.';
+    }
+    if (healingStatus == 'healing_failed_cooldown') {
+      return 'Für diese Einstellung war gerade keine gute Route möglich. Wir versuchen es später automatisch erneut.';
+    }
+    if (healingStatus == 'healing_paused_budget') {
+      return 'Heute wurden viele Routenvorschläge berechnet. Wir begrenzen neue Suchen kurzzeitig.';
+    }
+    final longCurvy =
+        (requestedStyle ?? '').toLowerCase().contains('kurven') &&
+        (requestedDistanceBucket ?? 0) >= 75;
+    if (longCurvy) {
+      return 'Kurvenjagd ist hier gerade schwer verfügbar. Wir bauen neue Vorschläge für diese Länge auf.';
+    }
     switch (coverage.coverageStatus) {
       case 'hard_region_curated_needed':
         return 'In $clusterText gibt es noch keine lokal verifizierten Routen. Diese Region braucht kuratierte Strecken. Wir sammeln passende Fahrten.';
@@ -4620,6 +4649,17 @@ class RouteService {
       default:
         return 'Fuer diese Laenge und diesen Stil gibt es in deiner Umgebung noch zu wenige gepruefte Routen. Wir erstellen gerade neue Vorschlaege. Bitte versuche es in ein paar Minuten erneut.';
     }
+  }
+
+  static String _coverageNextAction(String healingStatus) {
+    return switch (healingStatus) {
+      'healing_running' => 'wait_for_healing',
+      'healing_queued' => 'queued_for_healing',
+      'healing_failed_cooldown' => 'wait_for_cooldown',
+      'healing_paused_budget' => 'wait_for_budget',
+      'hard_region_curated_needed' => 'change_settings_or_curated',
+      _ => 'bootstrap',
+    };
   }
 
   Future<RouteServiceException?> _maybeBuildCoverageWarmupError({
@@ -5976,6 +6016,19 @@ class RouteService {
         ? bucketValue.toInt()
         : int.tryParse(bucketValue?.toString() ?? '');
     final coverageStatus = edgeMeta['coverage_status']?.toString();
+    final healingStatus = edgeMeta['healing_status']?.toString();
+    if (healingStatus == 'healing_running') {
+      return 'Wir erstellen gerade neue Vorschläge für diese Einstellung. Bitte versuche es gleich erneut.';
+    }
+    if (healingStatus == 'healing_failed_cooldown') {
+      return 'Für diese Einstellung war gerade keine gute Route möglich. Wir versuchen es später automatisch erneut.';
+    }
+    if (healingStatus == 'healing_paused_budget') {
+      return 'Heute wurden viele Routenvorschläge berechnet. Wir begrenzen neue Suchen kurzzeitig.';
+    }
+    if (healingStatus == 'hard_region_curated_needed') {
+      return 'Diese Kombination ist in deiner Umgebung schwierig. Versuche eine andere Länge oder einen anderen Stil.';
+    }
     final bootstrapPending =
         edgeMeta['pool_bootstrap_pending'] == true ||
         edgeMeta['seed_job_created'] == true ||

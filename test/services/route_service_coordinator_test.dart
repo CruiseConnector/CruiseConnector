@@ -1419,7 +1419,7 @@ void main() {
         secondError = error;
       }
 
-      expect(firstError.userMessage, contains('neue Vorschlaege'));
+      expect(firstError.userMessage, contains('Neue Vorschläge'));
       expect(firstError.edgeMeta['region_warming_up'], true);
       expect(firstError.edgeMeta['seed_job_created'], true);
       expect(secondError.edgeMeta['duplicate_job_prevented'], true);
@@ -1539,7 +1539,7 @@ void main() {
       }
 
       expect(invoker.callCount, 0);
-      expect(error.userMessage, contains('neue Vorschlaege'));
+      expect(error.userMessage, contains('Neue Vorschläge'));
       expect(error.edgeMeta['code'], 'pool_bootstrap_pending');
       expect(error.edgeMeta['response_code'], 'pool_bootstrap_pending');
       expect(error.edgeMeta['requested_distance_bucket'], 75);

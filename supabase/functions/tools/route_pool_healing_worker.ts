@@ -246,12 +246,20 @@ async function processJob(job: SeedJob): Promise<void> {
   }
 
   await refreshCoverage(job, region);
-  if (verifiedInserted > 0 || candidatesInserted > 0) {
+  if (verifiedInserted > 0) {
     await completeJob(job, {
       callsUsed,
       verifiedInserted,
       candidatesInserted,
-      reason: verifiedInserted > 0 ? "verified_inserted" : "candidate_inserted",
+      reason: "verified_inserted",
+    });
+    return;
+  }
+  if (candidatesInserted > 0) {
+    await cooldownJobAfterCandidateOnly(job, {
+      callsUsed,
+      candidatesInserted,
+      reason: "candidate_inserted_no_verified",
     });
     return;
   }
@@ -498,7 +506,7 @@ async function loadClaimableJobs(): Promise<SeedJob[]> {
     order: "priority.desc,updated_at.asc",
     limit: String(maxJobsToFetch),
   });
-  query.append("status", "in.(queued,cooldown)");
+  query.append("status", "in.(queued,cooldown,paused_budget)");
   const rows = await rest<SeedJob[]>("route_seed_jobs", { query });
   return rows.filter(isJobRunnable);
 }
@@ -536,7 +544,7 @@ async function claimJob(job: SeedJob): Promise<SeedJob | null> {
     method: "PATCH",
     query: `id=eq.${
       encodeURIComponent(job.id)
-    }&status=in.(queued,cooldown)&select=*`,
+    }&status=in.(queued,cooldown,paused_budget)&select=*`,
     headers: { Prefer: "return=representation" },
     body: payload,
   });
@@ -574,6 +582,41 @@ async function completeJob(
   });
 }
 
+async function cooldownJobAfterCandidateOnly(
+  job: SeedJob,
+  result: {
+    callsUsed: number;
+    candidatesInserted: number;
+    reason: string;
+  },
+): Promise<void> {
+  const cooldownUntil = new Date(
+    Date.now() + Math.max(1, job.seed_cooldown_minutes ?? 20) * 60_000,
+  ).toISOString();
+  if (dryRun) return;
+  await rest("route_seed_jobs", {
+    method: "PATCH",
+    query: `id=eq.${encodeURIComponent(job.id)}`,
+    body: {
+      status: "cooldown",
+      updated_at: new Date().toISOString(),
+      mapbox_calls_used: (job.mapbox_calls_used ?? 0) + result.callsUsed,
+      candidate_inserted_count: (job.candidate_inserted_count ?? 0) +
+        result.candidatesInserted,
+      completed_reason: result.reason,
+      last_failure_reason: result.reason,
+      last_error: result.reason,
+      cooldown_until: cooldownUntil,
+      next_retry_at: cooldownUntil,
+    },
+  });
+  await updateCoverageHealingStatus(job, {
+    healingStatus: "healing_failed_cooldown",
+    failureReason: result.reason,
+    nextHealingAt: cooldownUntil,
+  });
+}
+
 async function failJob(
   job: SeedJob,
   reason: string,
@@ -584,7 +627,7 @@ async function failJob(
   const failureCount = (job.failure_count ?? 0) + 1;
   const maxAttempts = Math.max(1, job.max_attempts ?? 3);
   const shouldCurate = job.difficulty_level === "hard" ||
-    failureCount >= Math.max(1, job.seed_budget_units ?? maxAttempts);
+    failureCount >= maxAttempts;
   const cooldownUntil = new Date(
     Date.now() + Math.max(1, job.seed_cooldown_minutes ?? 20) * 60_000,
   ).toISOString();
@@ -906,7 +949,9 @@ async function rest<T = unknown>(
 
 function isJobRunnable(job: SeedJob): boolean {
   if (job.status === "queued") return true;
-  if (job.status !== "cooldown") return false;
+  if (job.status !== "cooldown" && job.status !== "paused_budget") {
+    return false;
+  }
   const retryAt = job.next_retry_at ?? job.cooldown_until;
   return retryAt == null || Date.parse(retryAt) <= Date.now();
 }
@@ -1062,7 +1107,9 @@ function summarizeVerifiedRows(
   };
   for (const row of rows) {
     if (!nullableSame(row.admin2_name, region.admin2_name)) continue;
-    if (!styleTags(row.style_tags).map(normalizeStyleKey).includes(job.style_key)) {
+    if (
+      !styleTags(row.style_tags).map(normalizeStyleKey).includes(job.style_key)
+    ) {
       continue;
     }
     if (!highwayMatches(row, job.avoid_highways)) continue;
@@ -1146,7 +1193,9 @@ function coverageStatusForSummary(
 ): string {
   if (summary.verifiedCount > policy.maxPoolSize) return "overfull";
   if (coverageMeetsMinimum(summary, policy)) {
-    return summary.verifiedCount >= policy.targetPoolSize ? "target_met" : "healthy";
+    return summary.verifiedCount >= policy.targetPoolSize
+      ? "target_met"
+      : "healthy";
   }
   if (summary.verifiedCount >= policy.minVerifiedCount) return "quality_thin";
   if (summary.verifiedCount > 0) {
