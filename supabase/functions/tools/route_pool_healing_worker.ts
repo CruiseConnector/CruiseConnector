@@ -7,6 +7,11 @@ import type {
   Coordinate,
   RouteMode,
 } from "../generate-cruise-route/routing_types.ts";
+import {
+  applyAvoidHighwaysExcludes,
+  calculateDestination,
+  normalizeBearingDegrees,
+} from "../generate-cruise-route/routing_utils.ts";
 
 type JsonMap = Record<string, unknown>;
 
@@ -40,8 +45,15 @@ interface SeedJob {
   monthly_attempt_count?: number;
   budget_window_date?: string;
   budget_window_month?: string;
+  daily_mapbox_budget?: number;
+  monthly_mapbox_budget?: number;
+  daily_mapbox_count?: number;
+  monthly_mapbox_count?: number;
+  mapbox_budget_window_date?: string;
+  mapbox_budget_window_month?: string;
   cooldown_until?: string | null;
   next_retry_at?: string | null;
+  started_at?: string | null;
   last_error?: string | null;
 }
 
@@ -66,7 +78,24 @@ interface RouteRegion {
   seed_cooldown_minutes?: number;
 }
 
-interface HealingStats {
+interface HealingCandidatePlan {
+  family: string;
+  label: string;
+  targetDistanceKm: number;
+  waypoints: Coordinate[];
+  radiuses: string;
+  continueStraight: boolean;
+}
+
+interface HealingMapboxFetchResult {
+  route: any | null;
+  routes?: any[];
+  outcome: "ok" | "no_route" | "http_error" | "network_error" | "timeout";
+  statusCode?: number;
+  details?: string;
+}
+
+export interface HealingStats {
   processed: number;
   claimed: number;
   completed: number;
@@ -75,56 +104,141 @@ interface HealingStats {
   mapboxCallsUsed: number;
   verifiedInserted: number;
   candidatesInserted: number;
+  stoppedForRuntime: boolean;
 }
 
-const supabaseUrl = env("SUPABASE_URL");
-const serviceKey = env("SUPABASE_SERVICE_ROLE_KEY") || env("SUPABASE_ANON_KEY");
-const edgeEndpoint = arg("--endpoint=") ??
-  `${supabaseUrl}/functions/v1/generate-cruise-route`;
-const functionKey = env("SUPABASE_FUNCTION_KEY") || serviceKey;
-const dryRun = Deno.args.includes("--dry-run");
-const jobLimit = intArg("--limit=", 3);
-const maxGlobalMapboxCalls = intArg("--max-mapbox-calls=", 18);
-const maxVerifiedPerClusterPerRun = intArg("--max-verified-per-cluster=", 3);
-const targetVerifiedPerJob = intArg("--target-verified-per-job=", 2);
-const maxJobsToFetch = Math.max(jobLimit * 3, jobLimit);
+export interface RoutePoolHealingWorkerOptions {
+  supabaseUrl?: string;
+  serviceKey?: string;
+  edgeEndpoint?: string;
+  functionKey?: string;
+  dryRun?: boolean;
+  jobLimit?: number;
+  maxGlobalMapboxCalls?: number;
+  maxVerifiedPerClusterPerRun?: number;
+  targetVerifiedPerJob?: number;
+  maxRuntimeSeconds?: number;
+}
 
-if (!supabaseUrl || !serviceKey || !functionKey) {
-  throw new Error(
-    "Missing SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY/SUPABASE_ANON_KEY.",
+export interface RoutePoolHealingWorkerResult {
+  dryRun: boolean;
+  limits: {
+    jobLimit: number;
+    maxGlobalMapboxCalls: number;
+    maxVerifiedPerClusterPerRun: number;
+    targetVerifiedPerJob: number;
+    maxRuntimeSeconds: number;
+  };
+  stats: HealingStats;
+}
+
+let supabaseUrl = "";
+let serviceKey = "";
+let edgeEndpoint = "";
+let functionKey = "";
+let dryRun = false;
+let jobLimit = 3;
+let maxGlobalMapboxCalls = 18;
+let maxVerifiedPerClusterPerRun = 3;
+let targetVerifiedPerJob = 2;
+let maxJobsToFetch = 9;
+let maxRuntimeMs = 90_000;
+let runStartedAt = 0;
+let stats = createHealingStats();
+
+export async function processRouteSeedJobs(
+  options: RoutePoolHealingWorkerOptions = {},
+): Promise<RoutePoolHealingWorkerResult> {
+  supabaseUrl = options.supabaseUrl ?? env("SUPABASE_URL");
+  serviceKey = options.serviceKey ??
+    (env("SUPABASE_SERVICE_ROLE_KEY") || env("SUPABASE_ANON_KEY"));
+  edgeEndpoint = options.edgeEndpoint ??
+    `${supabaseUrl}/functions/v1/generate-cruise-route`;
+  functionKey = options.functionKey ?? (env("SUPABASE_FUNCTION_KEY") ||
+    serviceKey);
+  dryRun = options.dryRun ?? false;
+  jobLimit = clampInt(options.jobLimit, 3, 1, 3);
+  maxGlobalMapboxCalls = clampInt(options.maxGlobalMapboxCalls, 18, 1, 20);
+  maxVerifiedPerClusterPerRun = clampInt(
+    options.maxVerifiedPerClusterPerRun,
+    3,
+    1,
+    5,
   );
-}
+  targetVerifiedPerJob = clampInt(options.targetVerifiedPerJob, 2, 1, 3);
+  const maxRuntimeSeconds = clampInt(options.maxRuntimeSeconds, 90, 30, 120);
+  maxRuntimeMs = maxRuntimeSeconds * 1000;
+  maxJobsToFetch = Math.max(jobLimit * 3, jobLimit);
+  runStartedAt = Date.now();
+  stats = createHealingStats();
 
-const stats: HealingStats = {
-  processed: 0,
-  claimed: 0,
-  completed: 0,
-  failed: 0,
-  pausedBudget: 0,
-  mapboxCallsUsed: 0,
-  verifiedInserted: 0,
-  candidatesInserted: 0,
-};
-
-const jobs = await loadClaimableJobs();
-for (const job of jobs) {
-  if (stats.processed >= jobLimit) break;
-  if (stats.mapboxCallsUsed >= maxGlobalMapboxCalls) break;
-  if (!isJobRunnable(job)) continue;
-
-  const claimed = await claimJob(job);
-  if (!claimed) continue;
-  stats.claimed += 1;
-  stats.processed += 1;
-
-  try {
-    await processJob(claimed);
-  } catch (error) {
-    await failJob(claimed, errorMessage(error), true);
+  if (!supabaseUrl || !serviceKey || !functionKey) {
+    throw new Error(
+      "Missing SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY/SUPABASE_ANON_KEY.",
+    );
   }
+
+  const jobs = await loadClaimableJobs();
+  for (const job of jobs) {
+    if (stats.processed >= jobLimit) break;
+    if (stats.mapboxCallsUsed >= maxGlobalMapboxCalls) break;
+    if (runtimeExceeded()) {
+      stats.stoppedForRuntime = true;
+      break;
+    }
+    if (!isJobRunnable(job)) continue;
+
+    const claimed = await claimJob(job);
+    if (!claimed) continue;
+    stats.claimed += 1;
+    stats.processed += 1;
+
+    try {
+      await processJob(claimed);
+    } catch (error) {
+      await failJob(claimed, errorMessage(error), true);
+    }
+  }
+
+  return {
+    dryRun,
+    limits: {
+      jobLimit,
+      maxGlobalMapboxCalls,
+      maxVerifiedPerClusterPerRun,
+      targetVerifiedPerJob,
+      maxRuntimeSeconds,
+    },
+    stats,
+  };
 }
 
-console.log(JSON.stringify({ dryRun, stats }, null, 2));
+if (import.meta.main) {
+  const result = await processRouteSeedJobs({
+    dryRun: Deno.args.includes("--dry-run"),
+    jobLimit: intArg("--limit=", 3),
+    maxGlobalMapboxCalls: intArg("--max-mapbox-calls=", 18),
+    maxVerifiedPerClusterPerRun: intArg("--max-verified-per-cluster=", 3),
+    targetVerifiedPerJob: intArg("--target-verified-per-job=", 2),
+    maxRuntimeSeconds: intArg("--max-runtime-seconds=", 90),
+    edgeEndpoint: arg("--endpoint="),
+  });
+  console.log(JSON.stringify(result, null, 2));
+}
+
+function createHealingStats(): HealingStats {
+  return {
+    processed: 0,
+    claimed: 0,
+    completed: 0,
+    failed: 0,
+    pausedBudget: 0,
+    mapboxCallsUsed: 0,
+    verifiedInserted: 0,
+    candidatesInserted: 0,
+    stoppedForRuntime: false,
+  };
+}
 
 async function processJob(job: SeedJob): Promise<void> {
   if (job.route_type !== "ROUND_TRIP") {
@@ -184,8 +298,18 @@ async function processJob(job: SeedJob): Promise<void> {
     if (verifiedInserted >= targetVerifiedPerJob) break;
     if (stats.verifiedInserted >= maxVerifiedPerClusterPerRun) break;
     if (callsUsed >= maxCallsForJob) break;
+    if (runtimeExceeded()) {
+      stats.stoppedForRuntime = true;
+      break;
+    }
 
-    const response = await callRouteGenerator(job, region, start, attempt);
+    const planAttempt = Math.max(0, job.mapbox_calls_used ?? 0) + attempt;
+    const response = await callHealingCandidateGenerator(
+      job,
+      region,
+      start,
+      planAttempt,
+    );
     if (!response.ok) {
       callsUsed += 1;
       stats.mapboxCallsUsed += 1;
@@ -199,7 +323,10 @@ async function processJob(job: SeedJob): Promise<void> {
     const route = response.route;
     const decision = evaluateGeneratedRoute(job, route, start);
     if (!decision.acceptable) {
-      lastFailure = decision.reason;
+      const family = typeof response.meta.healing_family === "string"
+        ? `${response.meta.healing_family}_`
+        : "";
+      lastFailure = `${family}${decision.reason}`;
       continue;
     }
 
@@ -325,6 +452,370 @@ async function callRouteGenerator(
   return { ok: true, route: data.route, meta: data.meta ?? {} };
 }
 
+async function callHealingCandidateGenerator(
+  job: SeedJob,
+  region: RouteRegion,
+  start: Coordinate,
+  attempt: number,
+): Promise<
+  { ok: true; route: any; meta: JsonMap } | {
+    ok: false;
+    reason: string;
+  }
+> {
+  const accessToken = env("MAPBOX_ACCESS_TOKEN");
+  if (!accessToken) {
+    return await callRouteGenerator(job, region, start, attempt);
+  }
+
+  const plan = healingPlanForAttempt(job, start, attempt);
+  const exclude = applyAvoidHighwaysExcludes("", job.avoid_highways);
+  const fetchResult = await fetchHealingMapboxRoute(
+    plan,
+    exclude,
+    accessToken,
+    { timeoutMs: 3_800 },
+  );
+
+  const routeOptions = fetchResult.routes?.length
+    ? fetchResult.routes
+    : fetchResult.route
+    ? [fetchResult.route]
+    : [];
+  if (routeOptions.length === 0) {
+    return {
+      ok: false,
+      reason: fetchResult.outcome === "http_error"
+        ? `mapbox_http_${fetchResult.statusCode ?? "unknown"}`
+        : `mapbox_${fetchResult.outcome}`,
+    };
+  }
+
+  return {
+    ok: true,
+    route: routeOptions[0],
+    meta: {
+      mapbox_call_count: 1,
+      healing_strategy: "direct_mapbox_loop",
+      healing_family: plan.family,
+      healing_plan: plan.label,
+      healing_target_distance_km: plan.targetDistanceKm,
+      healing_route_options: routeOptions.length,
+    },
+  };
+}
+
+async function fetchHealingMapboxRoute(
+  plan: HealingCandidatePlan,
+  exclude: string,
+  accessToken: string,
+  options: { timeoutMs: number },
+): Promise<HealingMapboxFetchResult> {
+  const coordinatesStr = plan.waypoints
+    .map((point) => `${point.longitude},${point.latitude}`)
+    .join(";");
+  const params = new URLSearchParams({
+    access_token: accessToken,
+    geometries: "geojson",
+    overview: "simplified",
+    steps: "false",
+    language: "de",
+    continue_straight: plan.continueStraight ? "true" : "false",
+    alternatives: "false",
+  });
+  if (exclude.trim().length > 0) params.set("exclude", exclude);
+  if (plan.radiuses.trim().length > 0) params.set("radiuses", plan.radiuses);
+
+  const url =
+    `https://api.mapbox.com/directions/v5/mapbox/driving/${coordinatesStr}?${params}`;
+  const controller = new AbortController();
+  let timeoutId: number | undefined;
+  const timeoutResult = new Promise<HealingMapboxFetchResult>((resolve) => {
+    timeoutId = setTimeout(() => {
+      controller.abort();
+      resolve({
+        route: null,
+        outcome: "timeout",
+        details: "healing_mapbox_timeout",
+      });
+    }, options.timeoutMs);
+  });
+  const request = (async (): Promise<HealingMapboxFetchResult> => {
+    const response = await fetch(url, { signal: controller.signal });
+    if (!response.ok) {
+      return {
+        route: null,
+        outcome: "http_error",
+        statusCode: response.status,
+        details: (await response.text()).slice(0, 300),
+      };
+    }
+    const data = await response.json();
+    const routes = Array.isArray(data?.routes) ? data.routes : [];
+    if (routes.length === 0) {
+      return {
+        route: null,
+        outcome: "no_route",
+        details: JSON.stringify(data).slice(0, 300),
+      };
+    }
+    const boundedRoutes = routes.map(boundHealingRouteGeometry);
+    return { route: boundedRoutes[0], routes: boundedRoutes, outcome: "ok" };
+  })();
+
+  try {
+    return await Promise.race([request, timeoutResult]);
+  } catch (error) {
+    const details = error instanceof Error ? error.message : String(error);
+    const timeout = details.toLowerCase().includes("abort") ||
+      (error instanceof DOMException && error.name === "AbortError");
+    return {
+      route: null,
+      outcome: timeout ? "timeout" : "network_error",
+      details,
+    };
+  } finally {
+    if (timeoutId != null) clearTimeout(timeoutId);
+  }
+}
+
+function boundHealingRouteGeometry(route: any): any {
+  const coordinates = route?.geometry?.coordinates;
+  if (!Array.isArray(coordinates) || coordinates.length <= 650) return route;
+
+  const bounded: unknown[] = [];
+  const lastIndex = coordinates.length - 1;
+  for (let index = 0; index < 650; index += 1) {
+    const ratio = index / 649;
+    bounded.push(coordinates[Math.round(lastIndex * ratio)]);
+  }
+  return {
+    ...route,
+    geometry: {
+      ...route.geometry,
+      coordinates: bounded,
+    },
+  };
+}
+
+function healingPlanForAttempt(
+  job: SeedJob,
+  start: Coordinate,
+  attempt: number,
+): HealingCandidatePlan {
+  const plans = buildHealingCandidatePlans(job, start);
+  return plans[attempt % plans.length];
+}
+
+function buildHealingCandidatePlans(
+  job: SeedJob,
+  start: Coordinate,
+): HealingCandidatePlan[] {
+  const targetVariants = healingTargetDistances(job.distance_bucket);
+  const sectorSeed = stableNumber(
+    `${job.country_code}|${job.admin1_name}|${
+      job.admin2_name ?? ""
+    }|${job.city_cluster}|${job.style_key}|${job.avoid_highways}`,
+  );
+  const sectorOffset = sectorSeed % 45;
+  const hashedSectors = [0, 45, 90, 135, 180, 225, 270, 315].map((bearing) =>
+    normalizeBearingDegrees(bearing + sectorOffset)
+  );
+  const sectors = uniqueBearings([
+    ...preferredHealingSectors(job),
+    ...hashedSectors,
+  ]);
+  const plans: HealingCandidatePlan[] = [];
+  for (const targetDistanceKm of targetVariants) {
+    for (const sector of sectors) {
+      plans.push(...healingFamilyPlans(job, start, targetDistanceKm, sector));
+    }
+  }
+  return plans;
+}
+
+function preferredHealingSectors(job: SeedJob): number[] {
+  const country = job.country_code.trim().toUpperCase();
+  const admin1 = job.admin1_name.trim().toLowerCase();
+  const city = job.city_cluster.trim().toLowerCase();
+  if (country === "AT" && admin1.includes("vorarlberg")) {
+    if (city.includes("bregenz")) {
+      return [125, 160, 205, 95, 235, 70, 260, 35];
+    }
+    if (city.includes("dornbirn")) {
+      return [120, 170, 220, 90, 260, 45, 315, 0];
+    }
+    if (city.includes("götzis") || city.includes("goetzis")) {
+      return [90, 140, 190, 230, 45, 280, 320, 0];
+    }
+  }
+  return [];
+}
+
+function uniqueBearings(values: number[]): number[] {
+  const seen = new Set<number>();
+  const result: number[] = [];
+  for (const value of values) {
+    const normalized = Math.round(normalizeBearingDegrees(value));
+    if (seen.has(normalized)) continue;
+    seen.add(normalized);
+    result.push(normalized);
+  }
+  return result;
+}
+
+function healingFamilyPlans(
+  job: SeedJob,
+  start: Coordinate,
+  targetDistanceKm: number,
+  sectorBearing: number,
+): HealingCandidatePlan[] {
+  const curvy = job.style_key === "kurvenjagd";
+  const explorer = job.style_key === "entdecker";
+  const sport = job.style_key === "sport_mode";
+  const compactScale = healingRadiusScale(
+    job,
+    job.avoid_highways ? 0.19 : 0.21,
+  );
+  const wideScale = healingRadiusScale(job, job.avoid_highways ? 0.26 : 0.29);
+  const curvyScale = healingRadiusScale(job, curvy ? 0.24 : 0.21);
+  return [
+    makeHealingLoopPlan({
+      family: "compact_loop",
+      start,
+      targetDistanceKm,
+      sectorBearing,
+      bearings: [0, 105, 215],
+      radiusFactors: [compactScale, compactScale * 1.08, compactScale],
+      minRadiusKm: healingMinRadiusKm(job),
+    }),
+    makeHealingLoopPlan({
+      family: "wide_loop",
+      start,
+      targetDistanceKm,
+      sectorBearing,
+      bearings: [10, 90, 185, 275],
+      radiusFactors: [wideScale, wideScale * 0.78, wideScale, wideScale * 0.78],
+      minRadiusKm: healingMinRadiusKm(job),
+    }),
+    makeHealingLoopPlan({
+      family: "valley_loop",
+      start,
+      targetDistanceKm,
+      sectorBearing,
+      bearings: [-20, 55, 125, 205, 285],
+      radiusFactors: healingRadiusScales(job, [0.18, 0.24, 0.20, 0.24, 0.18]),
+      minRadiusKm: healingMinRadiusKm(job),
+    }),
+    makeHealingLoopPlan({
+      family: "hill_loop",
+      start,
+      targetDistanceKm,
+      sectorBearing,
+      bearings: [30, 120, 210, 300],
+      radiusFactors: healingRadiusScales(job, [0.20, 0.28, 0.24, 0.20]),
+      minRadiusKm: healingMinRadiusKm(job),
+    }),
+    makeHealingLoopPlan({
+      family: "smooth_sport_loop",
+      start,
+      targetDistanceKm,
+      sectorBearing,
+      bearings: sport ? [15, 95, 185, 275] : [20, 110, 200, 290],
+      radiusFactors: healingRadiusScales(job, [0.22, 0.24, 0.22, 0.20]),
+      minRadiusKm: healingMinRadiusKm(job),
+    }),
+    makeHealingLoopPlan({
+      family: "curvy_distributed_loop",
+      start,
+      targetDistanceKm,
+      sectorBearing,
+      bearings: [-25, 45, 115, 190, 265],
+      radiusFactors: [
+        curvyScale,
+        curvyScale * 0.85,
+        curvyScale * 1.12,
+        curvyScale,
+        curvyScale * 0.88,
+      ],
+      minRadiusKm: healingMinRadiusKm(job),
+    }),
+    makeHealingLoopPlan({
+      family: "explorer_sector_loop",
+      start,
+      targetDistanceKm,
+      sectorBearing,
+      bearings: explorer ? [-10, 55, 145, 235] : [0, 65, 150, 240],
+      radiusFactors: healingRadiusScales(
+        job,
+        explorer ? [0.22, 0.30, 0.26, 0.20] : [0.20, 0.27, 0.23, 0.18],
+      ),
+      minRadiusKm: healingMinRadiusKm(job),
+    }),
+  ];
+}
+
+function healingRadiusScales(job: SeedJob, scales: number[]): number[] {
+  return scales.map((scale) => healingRadiusScale(job, scale));
+}
+
+function healingRadiusScale(job: SeedJob, scale: number): number {
+  if (job.distance_bucket === 50) return scale * 0.24;
+  if (job.distance_bucket === 75) return scale * 0.50;
+  return scale * 0.70;
+}
+
+function healingMinRadiusKm(job: SeedJob): number {
+  if (job.distance_bucket === 50) return 1.2;
+  if (job.distance_bucket === 75) return 2.5;
+  return 5;
+}
+
+function makeHealingLoopPlan(args: {
+  family: string;
+  start: Coordinate;
+  targetDistanceKm: number;
+  sectorBearing: number;
+  bearings: number[];
+  radiusFactors: number[];
+  minRadiusKm: number;
+}): HealingCandidatePlan {
+  const innerWaypoints = args.bearings.map((bearingOffset, index) => {
+    const radiusFactor = args.radiusFactors[index] ??
+      args.radiusFactors[args.radiusFactors.length - 1] ?? 0.22;
+    return calculateDestination(
+      args.start,
+      Math.max(args.minRadiusKm, args.targetDistanceKm * radiusFactor),
+      normalizeBearingDegrees(args.sectorBearing + bearingOffset),
+    );
+  });
+  const waypoints = [args.start, ...innerWaypoints, args.start];
+  const snapRadiusMeters = Math.round(
+    Math.max(2200, Math.min(8500, args.targetDistanceKm * 95)),
+  );
+  const radiuses = waypoints.map((_, index) =>
+    index === 0 || index === waypoints.length - 1
+      ? "1200"
+      : String(snapRadiusMeters)
+  ).join(";");
+  return {
+    family: args.family,
+    label: `${args.family}_${Math.round(args.targetDistanceKm)}_${
+      Math.round(args.sectorBearing)
+    }`,
+    targetDistanceKm: args.targetDistanceKm,
+    waypoints,
+    radiuses,
+    continueStraight: true,
+  };
+}
+
+function healingTargetDistances(bucket: 50 | 75 | 100): number[] {
+  if (bucket === 50) return [48, 52, 55, 45, 58, 50];
+  if (bucket === 75) return [68, 74, 80, 86, 64];
+  return [90, 98, 106, 114, 118];
+}
+
 function evaluateGeneratedRoute(
   job: SeedJob,
   route: any,
@@ -353,9 +844,6 @@ function evaluateGeneratedRoute(
   });
   if (!quality.passed || quality.tier === "rejected") {
     return rejectDecision(`quality_${quality.reason}`);
-  }
-  if (quality.hasUTurn) {
-    return rejectDecision("u_turn");
   }
   if (!cleanup.passed) {
     return rejectDecision(`cleanup_${cleanup.reason}`);
@@ -476,7 +964,6 @@ async function upsertCandidateRoute(args: {
     shape_score: args.decision.shapeScore,
     candidate_source: "bootstrap",
     candidate_region_difficulty: args.region.difficulty_level ?? "normal",
-    hard_region_status: args.region.hard_region_status ?? "normal",
     candidate_locality_score: 100,
     repeated_success_count: 1,
     is_candidate: true,
@@ -506,7 +993,8 @@ async function loadClaimableJobs(): Promise<SeedJob[]> {
     order: "priority.desc,updated_at.asc",
     limit: String(maxJobsToFetch),
   });
-  query.append("status", "in.(queued,cooldown,paused_budget)");
+  query.append("status", "in.(queued,cooldown,paused_budget,running)");
+  query.append("route_type", "eq.ROUND_TRIP");
   const rows = await rest<SeedJob[]>("route_seed_jobs", { query });
   return rows.filter(isJobRunnable);
 }
@@ -544,7 +1032,7 @@ async function claimJob(job: SeedJob): Promise<SeedJob | null> {
     method: "PATCH",
     query: `id=eq.${
       encodeURIComponent(job.id)
-    }&status=in.(queued,cooldown,paused_budget)&select=*`,
+    }&status=in.(queued,cooldown,paused_budget,running)&select=*`,
     headers: { Prefer: "return=representation" },
     body: payload,
   });
@@ -574,6 +1062,7 @@ async function completeJob(
         result.verifiedInserted,
       candidate_inserted_count: (job.candidate_inserted_count ?? 0) +
         result.candidatesInserted,
+      ...mapboxBudgetPatch(job, result.callsUsed),
       completed_reason: result.reason,
       last_error: null,
       cooldown_until: null,
@@ -603,6 +1092,7 @@ async function cooldownJobAfterCandidateOnly(
       mapbox_calls_used: (job.mapbox_calls_used ?? 0) + result.callsUsed,
       candidate_inserted_count: (job.candidate_inserted_count ?? 0) +
         result.candidatesInserted,
+      ...mapboxBudgetPatch(job, result.callsUsed),
       completed_reason: result.reason,
       last_failure_reason: result.reason,
       last_error: result.reason,
@@ -646,6 +1136,7 @@ async function failJob(
       cooldown_until: status === "cooldown" ? cooldownUntil : null,
       next_retry_at: status === "cooldown" ? cooldownUntil : null,
       mapbox_calls_used: (job.mapbox_calls_used ?? 0) + callsUsed,
+      ...mapboxBudgetPatch(job, callsUsed),
     },
   });
   await updateCoverageHealingStatus(job, {
@@ -949,6 +1440,10 @@ async function rest<T = unknown>(
 
 function isJobRunnable(job: SeedJob): boolean {
   if (job.status === "queued") return true;
+  if (job.status === "running") {
+    const startedAt = Date.parse(job.started_at ?? "");
+    return Number.isFinite(startedAt) && Date.now() - startedAt > 5 * 60_000;
+  }
   if (job.status !== "cooldown" && job.status !== "paused_budget") {
     return false;
   }
@@ -959,21 +1454,58 @@ function isJobRunnable(job: SeedJob): boolean {
 function remainingMapboxBudget(job: SeedJob): number {
   const today = new Date().toISOString().slice(0, 10);
   const month = `${today.slice(0, 8)}01`;
-  const dailyCount = job.budget_window_date === today
+  const dailyAttemptCount = job.budget_window_date === today
     ? (job.daily_attempt_count ?? 0)
     : 0;
-  const monthlyCount = job.budget_window_month === month
+  const monthlyAttemptCount = job.budget_window_month === month
     ? (job.monthly_attempt_count ?? 0)
     : 0;
-  const dailyRemaining = Math.max(
+  const dailyAttemptRemaining = Math.max(
     0,
-    (job.daily_attempt_budget ?? 12) - dailyCount,
+    (job.daily_attempt_budget ?? 12) - dailyAttemptCount,
   );
-  const monthlyRemaining = Math.max(
+  const monthlyAttemptRemaining = Math.max(
     0,
-    (job.monthly_attempt_budget ?? 120) - monthlyCount,
+    (job.monthly_attempt_budget ?? 120) - monthlyAttemptCount,
   );
-  return Math.min(dailyRemaining, monthlyRemaining);
+  const dailyMapboxCount = job.mapbox_budget_window_date === today
+    ? (job.daily_mapbox_count ?? 0)
+    : 0;
+  const monthlyMapboxCount = job.mapbox_budget_window_month === month
+    ? (job.monthly_mapbox_count ?? 0)
+    : 0;
+  const dailyMapboxRemaining = Math.max(
+    0,
+    (job.daily_mapbox_budget ?? 12) - dailyMapboxCount,
+  );
+  const monthlyMapboxRemaining = Math.max(
+    0,
+    (job.monthly_mapbox_budget ?? 120) - monthlyMapboxCount,
+  );
+  return Math.min(
+    dailyAttemptRemaining,
+    monthlyAttemptRemaining,
+    dailyMapboxRemaining,
+    monthlyMapboxRemaining,
+  );
+}
+
+function mapboxBudgetPatch(job: SeedJob, callsUsed: number): JsonMap {
+  if (!Number.isFinite(callsUsed) || callsUsed <= 0) return {};
+  const today = new Date().toISOString().slice(0, 10);
+  const month = `${today.slice(0, 8)}01`;
+  const dailyCount = job.mapbox_budget_window_date === today
+    ? (job.daily_mapbox_count ?? 0)
+    : 0;
+  const monthlyCount = job.mapbox_budget_window_month === month
+    ? (job.monthly_mapbox_count ?? 0)
+    : 0;
+  return {
+    daily_mapbox_count: dailyCount + callsUsed,
+    monthly_mapbox_count: monthlyCount + callsUsed,
+    mapbox_budget_window_date: today,
+    mapbox_budget_window_month: month,
+  };
 }
 
 function mapboxCallsFromMeta(meta: JsonMap): number {
@@ -991,9 +1523,9 @@ function distanceKmFromRoute(route: any): number {
 }
 
 function distanceInBucket(distanceKm: number, bucket: 50 | 75 | 100): boolean {
-  if (bucket === 50) return distanceKm >= 40 && distanceKm <= 60;
-  if (bucket === 75) return distanceKm >= 60 && distanceKm <= 90;
-  return distanceKm >= 80 && distanceKm <= 120;
+  if (bucket === 50) return distanceKm >= 45 && distanceKm <= 58;
+  if (bucket === 75) return distanceKm >= 62 && distanceKm <= 88;
+  return distanceKm >= 85 && distanceKm <= 118;
 }
 
 function routeHasMotorway(route: any): boolean {
@@ -1243,6 +1775,21 @@ function nextUtcMidnight(): Date {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function runtimeExceeded(): boolean {
+  return runStartedAt > 0 && Date.now() - runStartedAt >= maxRuntimeMs;
+}
+
+function clampInt(
+  value: number | undefined,
+  fallback: number,
+  min: number,
+  max: number,
+): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(min, Math.min(max, Math.floor(parsed)));
 }
 
 function intArg(prefix: string, fallback: number): number {
