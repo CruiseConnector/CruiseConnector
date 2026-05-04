@@ -1169,8 +1169,12 @@ class RouteService {
       // Scenic-/Detour-Varianten behalten einen zweiten Versuch für echte
       // Diversifikation und transienten Provider-Pressure.
       final maxAttempts = shouldUseTwoLiveAttempts ? 2 : 1;
+      final previousFingerprints = SeenRouteRegistry.entriesForAny(
+        _seenHistoryKeysForScenario(scenario),
+      ).map((entry) => entry.fingerprint).toList(growable: false);
       _RouteCandidate? bestCandidate;
       _RouteCandidate? spareCandidate;
+      _RouteCandidate? duplicateFallbackCandidate;
       _RouteCandidate? bestRejectedCandidate;
       RouteServiceException? lastError;
 
@@ -1196,13 +1200,19 @@ class RouteService {
             targetDistanceKm: targetDistanceKm,
             detourFactor: detourFactor,
             variant: variant,
-            // 4-5 Pläne pro Versuch — A→B braucht Spielraum, damit
-            // Klein/Mittel/Groß ihre Detour-Fenster wirklich treffen können.
+            // Scenic A→B darf 15-25s suchen; mehrere Korridor-Familien
+            // sind nötig, damit Klein/Mittel/Groß unterscheidbar bleiben.
             candidateBudget: normalizedVariant >= 2
-                ? 5
-                : (hasSeenHistory ? 3 : 4),
+                ? 9
+                : (hasSeenHistory ? 5 : 6),
+            previousFingerprints: previousFingerprints,
           );
-          if (candidate.accepted) {
+          if (candidate.accepted && !candidate.novelEnough) {
+            lastRouteDuplicateSkipped = true;
+            if (_isBetterCandidate(candidate, duplicateFallbackCandidate)) {
+              duplicateFallbackCandidate = candidate;
+            }
+          } else if (candidate.accepted) {
             if (_isBetterCandidate(candidate, bestCandidate)) {
               if (bestCandidate != null &&
                   _isBetterCandidate(bestCandidate, spareCandidate)) {
@@ -1244,8 +1254,11 @@ class RouteService {
         }
       }
 
-      final acceptedCandidate = bestCandidate;
+      final acceptedCandidate = bestCandidate ?? duplicateFallbackCandidate;
       if (acceptedCandidate != null && acceptedCandidate.accepted) {
+        if (bestCandidate == null && duplicateFallbackCandidate != null) {
+          lastRouteDuplicateFallbackUsed = true;
+        }
         if (_needsStrongerPointToPointDetour(
           scenario: scenario,
           styleConfig: styleConfig,
@@ -1998,6 +2011,7 @@ class RouteService {
     required RouteVariant variant,
     int? offsetSide,
     int candidateBudget = 5,
+    List<String> previousFingerprints = const [],
   }) {
     return <String, dynamic>{
       'startLocation': {
@@ -2018,9 +2032,12 @@ class RouteService {
       'route_variant_hint': variant.variantHint,
       'route_fingerprint_hint': variant.fingerprintHint,
       'max_candidate_attempts': candidateBudget,
+      if (previousFingerprints.isNotEmpty)
+        'previous_route_fingerprints': previousFingerprints.take(8).toList(),
+      if (scenic || normalizedVariant > 0) 'max_search_ms': 25000,
       if (scenic || normalizedVariant > 0) ...styleConfig.toRequestHints(),
       if (scenic || normalizedVariant > 0) ...{
-        'targetDistance': double.parse(targetDistanceKm.toStringAsFixed(1)),
+        'targetDistance': targetDistanceKm,
         'detour_level': normalizedVariant,
         'detour_factor': detourFactor,
       },
@@ -2499,8 +2516,7 @@ class RouteService {
     // Timeout muss das Edge-Time-Budget plus Serialisierungs-Reserve abdecken,
     // sonst killt der Client bei tough cases die Generierung mitten im Lauf.
     final requestedMaxSearchMs = body['max_search_ms'];
-    final requestTimeoutSeconds =
-        body['planning_type'] == 'Wegpunkte' && requestedMaxSearchMs is num
+    final requestTimeoutSeconds = requestedMaxSearchMs is num
         ? math.max(26, math.min(40, (requestedMaxSearchMs / 1000).ceil() + 6))
         : 26;
     const maxRetries = 2;
@@ -3241,6 +3257,7 @@ class RouteService {
     required double detourFactor,
     required RouteVariant variant,
     required int candidateBudget,
+    List<String> previousFingerprints = const [],
   }) async {
     final jitteredTargetKm = styleConfig.clampPointToPointTargetKm(
       targetDistanceKm * variant.radiusJitter,
@@ -3268,6 +3285,7 @@ class RouteService {
       variant: variant,
       offsetSide: variant.offsetSide,
       candidateBudget: candidateBudget,
+      previousFingerprints: previousFingerprints,
     );
     final result = await _invoke(body);
     final snapped = _snapRouteToStartPosition(result, startPosition);
@@ -4249,7 +4267,7 @@ class RouteService {
                 targetDistanceKm: targetDistanceKm,
                 detourFactor: detourFactor,
                 variant: variant,
-                candidateBudget: scenario.detourLevel >= 2 ? 3 : 2,
+                candidateBudget: scenario.detourLevel >= 2 ? 6 : 4,
               );
               if (!candidate.accepted || !candidate.novelEnough) return;
               PreparedRouteBuffer.store(

@@ -11,6 +11,103 @@ import {
   smoothWaypointChain,
 } from "./roundtrip_waypoints.ts";
 
+export type PointToPointCorridorFamily =
+  | "direct_valley"
+  | "west_flat"
+  | "east_valley"
+  | "mountain_curvy"
+  | "wide_scenic"
+  | "smooth_sport"
+  | "explorer_alternate_sector";
+
+function stableStringHash(value: string): number {
+  let hash = 2166136261;
+  for (let i = 0; i < value.length; i++) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+function uniqueCorridorFamilies(
+  families: PointToPointCorridorFamily[],
+): PointToPointCorridorFamily[] {
+  return [...new Set(families)];
+}
+
+export function selectPointToPointCorridorFamilies({
+  mode,
+  detourLevel,
+  randomSeed = 0,
+  variantHint,
+  maxCandidateAttempts = 6,
+}: {
+  mode?: RouteMode;
+  detourLevel: number;
+  randomSeed?: number;
+  variantHint?: string;
+  maxCandidateAttempts?: number;
+}): PointToPointCorridorFamily[] {
+  const baseOrder: PointToPointCorridorFamily[] = mode === "Kurvenjagd"
+    ? [
+      "mountain_curvy",
+      "east_valley",
+      "west_flat",
+      "wide_scenic",
+      "explorer_alternate_sector",
+      "smooth_sport",
+      "direct_valley",
+    ]
+    : mode === "Entdecker"
+    ? [
+      "explorer_alternate_sector",
+      "wide_scenic",
+      "west_flat",
+      "east_valley",
+      "mountain_curvy",
+      "smooth_sport",
+      "direct_valley",
+    ]
+    : mode === "Abendrunde"
+    ? [
+      "direct_valley",
+      "smooth_sport",
+      "east_valley",
+      "west_flat",
+      "explorer_alternate_sector",
+      "wide_scenic",
+      "mountain_curvy",
+    ]
+    : [
+      "smooth_sport",
+      "east_valley",
+      "west_flat",
+      "direct_valley",
+      "wide_scenic",
+      "explorer_alternate_sector",
+      "mountain_curvy",
+    ];
+  const largeOrder = detourLevel >= 3
+    ? uniqueCorridorFamilies([
+      "wide_scenic",
+      "mountain_curvy",
+      ...baseOrder,
+      "explorer_alternate_sector",
+    ])
+    : baseOrder;
+  const hash = stableStringHash(`${variantHint ?? ""}|${randomSeed}`);
+  const offset = largeOrder.length === 0 ? 0 : hash % largeOrder.length;
+  const rotated = [
+    ...largeOrder.slice(offset),
+    ...largeOrder.slice(0, offset),
+  ];
+  const limit = Math.max(
+    1,
+    Math.min(rotated.length, Math.max(3, maxCandidateAttempts)),
+  );
+  return rotated.slice(0, limit);
+}
+
 export function buildPointToPointScenicWaypoints({
   start,
   destination,
@@ -18,6 +115,8 @@ export function buildPointToPointScenicWaypoints({
   targetDistance,
   detourLevel,
   detourFactor,
+  directReferenceDistanceKm,
+  corridorFamily,
   offsetSide,
   waypointShapeFactor,
   zigzagWaypoints = false,
@@ -32,6 +131,8 @@ export function buildPointToPointScenicWaypoints({
   targetDistance?: number;
   detourLevel: number;
   detourFactor?: number;
+  directReferenceDistanceKm?: number;
+  corridorFamily?: PointToPointCorridorFamily;
   offsetSide?: number;
   waypointShapeFactor?: number;
   zigzagWaypoints?: boolean;
@@ -40,10 +141,22 @@ export function buildPointToPointScenicWaypoints({
   maxWaypoints?: number;
   robustFallback?: boolean;
 }): Coordinate[] {
-  const directDistanceKm = calculateDistance(start, destination);
-  if (directDistanceKm < 1.5 || detourLevel <= 0) {
+  const directLineDistanceKm = calculateDistance(start, destination);
+  const directDistanceKm = Math.max(
+    directLineDistanceKm,
+    directReferenceDistanceKm ?? 0,
+  );
+  if (directLineDistanceKm < 1.5 || detourLevel <= 0) {
     return [start, destination];
   }
+  const family = corridorFamily ??
+    (mode === "Kurvenjagd"
+      ? "mountain_curvy"
+      : mode === "Entdecker"
+      ? "explorer_alternate_sector"
+      : mode === "Abendrunde"
+      ? "direct_valley"
+      : "smooth_sport");
 
   // Stil-Boost: wie viel Extra-Distanz der Stil zur Route hinzufügt
   // Kurvenjagd braucht mehr Umweg (enge Straßen = längere Wege)
@@ -135,15 +248,25 @@ export function buildPointToPointScenicWaypoints({
   const twoPointTemplate = seededUnit(randomSeed + 307) >= 0.5
     ? [0.28, 0.72]
     : [0.35, 0.67];
-  const rawFractions = waypointCount === 1
-    ? [onePointFraction]
-    : waypointCount === 2
-    ? twoPointTemplate
-    : waypointCount === 3
-    ? [0.2, 0.5, 0.8]
-    : waypointCount === 4
-    ? [0.15, 0.38, 0.62, 0.85]
-    : [0.12, 0.3, 0.5, 0.7, 0.88];
+  const familyFractions = family === "direct_valley" && waypointCount >= 2
+    ? [0.34, 0.66]
+    : family === "mountain_curvy" && waypointCount >= 3
+    ? [0.24, 0.52, 0.78]
+    : family === "wide_scenic" && waypointCount >= 3
+    ? [0.18, 0.50, 0.82]
+    : family === "explorer_alternate_sector" && waypointCount >= 2
+    ? waypointCount >= 3 ? [0.22, 0.52, 0.80] : [0.30, 0.72]
+    : null;
+  const rawFractions = familyFractions ??
+    (waypointCount === 1
+      ? [onePointFraction]
+      : waypointCount === 2
+      ? twoPointTemplate
+      : waypointCount === 3
+      ? [0.2, 0.5, 0.8]
+      : waypointCount === 4
+      ? [0.15, 0.38, 0.62, 0.85]
+      : [0.12, 0.3, 0.5, 0.7, 0.88]);
   const fractionJitter = detourLevel === 1
     ? 0.08
     : detourLevel === 2
@@ -158,6 +281,15 @@ export function buildPointToPointScenicWaypoints({
     .sort((a, b) => a - b);
 
   const baseBearing = calculateBearing(start, destination);
+  const familyBearingBoost = family === "wide_scenic"
+    ? 10
+    : family === "mountain_curvy"
+    ? 14
+    : family === "explorer_alternate_sector"
+    ? 8
+    : family === "direct_valley"
+    ? -8
+    : 0;
   const corridorBearingBias = detourLevel >= 3
     ? robustFallback ? 18 : 32
     : detourLevel === 2
@@ -171,7 +303,13 @@ export function buildPointToPointScenicWaypoints({
     : offsetSide === 1
     ? 1
     : null;
+  const familySideOverride = family === "west_flat"
+    ? -1
+    : family === "east_valley"
+    ? 1
+    : null;
   const baseSide = requestedOffsetSide ??
+    familySideOverride ??
     (seededUnit(randomSeed + detourLevel + Math.round(directDistanceKm)) >= 0.5
       ? 1
       : -1);
@@ -230,6 +368,19 @@ export function buildPointToPointScenicWaypoints({
       ? 0.72
       : 0.78;
   }
+  const familyOffsetScale = family === "direct_valley"
+    ? 0.58
+    : family === "smooth_sport"
+    ? 0.78
+    : family === "mountain_curvy"
+    ? 1.16
+    : family === "wide_scenic"
+    ? 1.28
+    : family === "explorer_alternate_sector"
+    ? 1.08
+    : 0.96;
+  maxOffsetKm *= familyOffsetScale;
+  minOffsetKm *= Math.max(0.52, Math.min(1.15, familyOffsetScale * 0.84));
 
   const scenicWaypoints = fractions.map((fraction, index) => {
     const basePoint = interpolateCoordinate(start, destination, fraction);
@@ -275,6 +426,29 @@ export function buildPointToPointScenicWaypoints({
         side = baseSide;
     }
 
+    if (family === "direct_valley") {
+      arcFactor *= 0.64;
+      angleDrift *= 0.45;
+      side = baseSide;
+    } else if (family === "smooth_sport") {
+      arcFactor *= 0.82;
+      angleDrift *= 0.62;
+      side = baseSide;
+    } else if (family === "mountain_curvy") {
+      arcFactor *= 1.18;
+      angleDrift += (index % 2 === 0 ? 1 : -1) * 8;
+      side = waypointCount >= 3 && index === waypointCount - 1
+        ? -baseSide
+        : baseSide;
+    } else if (family === "wide_scenic") {
+      arcFactor *= 1.28;
+      angleDrift += index % 2 === 0 ? 6 : -6;
+      side = baseSide;
+    } else if (family === "explorer_alternate_sector") {
+      arcFactor *= 1.08;
+      side = index % 2 === 1 ? -baseSide : baseSide;
+    }
+
     if (zigzagWaypoints) {
       side = waypointCount >= 3 && index == waypointCount - 1
         ? -baseSide
@@ -299,7 +473,8 @@ export function buildPointToPointScenicWaypoints({
     return calculateDestination(
       basePoint,
       offsetKm,
-      baseBearing + side * (90 + corridorBearingBias + angleDrift),
+      baseBearing +
+        side * (90 + corridorBearingBias + familyBearingBoost + angleDrift),
     );
   });
 
@@ -308,14 +483,14 @@ export function buildPointToPointScenicWaypoints({
     simplifyWaypoints ? (robustFallback ? 0.16 : 0.24) : 0.18,
   );
   const minCorridorRadiusKm = Math.max(
-    directDistanceKm * (
+    directLineDistanceKm * (
       simplifyWaypoints ? (robustFallback ? 0.12 : 0.14) : 0.18
     ),
     0.9,
   );
   const maxCorridorRadiusKm = Math.max(
     minCorridorRadiusKm + 0.4,
-    directDistanceKm * (
+    directLineDistanceKm * (
       detourLevel >= 2 ? (robustFallback ? 0.86 : 0.92) : 0.84
     ),
   );
@@ -344,18 +519,18 @@ export function getPointToPointMinimumDistanceKm(
 ): number {
   const minByVariant = relaxed
     ? detourLevel === 1
-      ? directDistanceKm * 1.12
+      ? directDistanceKm * 1.16
       : detourLevel === 2
-      ? directDistanceKm * 1.32
+      ? directDistanceKm * 1.42
       : detourLevel >= 3
-      ? directDistanceKm * 1.60
+      ? directDistanceKm * 1.72
       : directDistanceKm * 1.04
     : detourLevel === 1
-    ? directDistanceKm * 1.15
+    ? directDistanceKm * 1.20
     : detourLevel === 2
-    ? directDistanceKm * 1.40
+    ? directDistanceKm * 1.50
     : detourLevel >= 3
-    ? directDistanceKm * 1.75
+    ? directDistanceKm * 1.90
     : directDistanceKm * 1.08;
   const paddingKm = relaxed
     ? detourLevel === 1
@@ -388,33 +563,33 @@ export function getPointToPointMaximumDistanceKm(
   );
   const targetMultiplier = relaxed
     ? detourLevel === 1
-      ? 1.34
+      ? 1.16
       : detourLevel === 2
-      ? 1.44
+      ? 1.18
       : detourLevel >= 3
-      ? 1.56
+      ? 1.20
       : 1.24
     : detourLevel === 1
-    ? 1.28
+    ? 1.12
     : detourLevel === 2
-    ? 1.38
+    ? 1.14
     : detourLevel >= 3
-    ? 1.50
+    ? 1.18
     : 1.20;
   const directMultiplier = relaxed
     ? detourLevel === 1
-      ? 1.78
+      ? 1.56
       : detourLevel === 2
-      ? 2.25
+      ? 2.04
       : detourLevel >= 3
-      ? 3.10
+      ? 3.00
       : 1.48
     : detourLevel === 1
-    ? 1.65
+    ? 1.48
     : detourLevel === 2
-    ? 2.10
+    ? 1.95
     : detourLevel >= 3
-    ? 2.95
+    ? 2.85
     : 1.40;
   const slackKm = relaxed
     ? detourLevel === 1
@@ -438,9 +613,11 @@ export function getPointToPointMaximumDistanceKm(
     relaxed,
   );
 
+  const targetBound = targetKm * targetMultiplier;
+  const directBound = directDistanceKm * directMultiplier + slackKm;
   return Math.max(
     minimumDistanceKm + slackKm,
-    Math.max(targetKm * targetMultiplier, directDistanceKm * directMultiplier),
+    Math.min(directBound, Math.max(targetBound, directDistanceKm)),
   );
 }
 

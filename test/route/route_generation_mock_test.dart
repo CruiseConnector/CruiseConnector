@@ -1424,8 +1424,9 @@ void main() {
           expect(request['mode'], 'Sport Mode');
           expect(request['style_profile'], 'sport');
           expect(request['continue_straight'], isTrue);
-          // Variants 1-3 sind alle scenic — Klein bekommt 4, Mittel/Groß 5.
-          expect(request['max_candidate_attempts'], variant == 1 ? 4 : 5);
+          // Scenic A→B testet mehrere Korridor-Familien; Mittel/Groß brauchen
+          // mehr Budget, damit sie nicht still auf kleine Umwege zurückfallen.
+          expect(request['max_candidate_attempts'], variant == 1 ? 6 : 9);
           expect(request['detour_factor'], isA<double>());
         }
 
@@ -1553,12 +1554,12 @@ void main() {
             );
           }
           return _buildPointToPointResponse(
-            distanceMeters: 250000,
-            durationSeconds: 14800,
+            distanceMeters: 190000,
+            durationSeconds: 11200,
             destinationLat: 47.8095,
             destinationLng: 13.0550,
             coordinateCount: 900,
-            bendScale: 0.82,
+            bendScale: 0.50,
           );
         });
 

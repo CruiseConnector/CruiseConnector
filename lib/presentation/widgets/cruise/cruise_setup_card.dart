@@ -507,7 +507,7 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
               onTapOutside: (_) => FocusScope.of(context).unfocus(),
               decoration: const InputDecoration(
                 prefixIcon: Icon(Icons.search, color: Colors.white38),
-                hintText: 'Adresse suchen...',
+                hintText: 'Ziel suchen...',
                 hintStyle: TextStyle(color: Colors.white38),
                 border: InputBorder.none,
                 contentPadding: EdgeInsets.symmetric(

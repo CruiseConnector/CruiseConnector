@@ -1676,6 +1676,8 @@ class _CruiseModePageState extends State<CruiseModePage>
                 child: Text(
                   _isWaypointPlanning
                       ? 'Route über deine Wegpunkte wird berechnet...'
+                      : !_isRoundTrip
+                      ? 'Wir prüfen Alternativen zum Ziel...'
                       : 'Route wird gesucht...',
                   style: const TextStyle(
                     color: Colors.white,
@@ -1722,6 +1724,8 @@ class _CruiseModePageState extends State<CruiseModePage>
                           Text(
                             _isWaypointPlanning
                                 ? 'Wegpunkte werden berechnet'
+                                : !_isRoundTrip
+                                ? 'Alternativen werden geprüft'
                                 : 'Route wird gesucht',
                             style: const TextStyle(
                               color: Colors.white,
@@ -2192,7 +2196,11 @@ class _CruiseModePageState extends State<CruiseModePage>
           destLng = targetLocation['longitude'];
         }
         if (destLat == null || destLng == null) {
-          throw Exception('Bitte wähle ein Ziel aus.');
+          _restoreGeneratedRouteFailureUi(
+            previousUiState,
+            'Bitte wähle ein Ziel aus der Vorschlagsliste aus.',
+          );
+          return;
         }
         final destinationDistanceMeters = geo.Geolocator.distanceBetween(
           startPosition.latitude,

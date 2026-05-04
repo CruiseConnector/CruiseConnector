@@ -59,6 +59,7 @@ class GeocodingService {
   }) async {
     // KEIN Zeichenlimit - sofort suchen ab 1 Zeichen
     if (query.isEmpty) return const [];
+    final searchQuery = _normalizePoiSearchAlias(query);
 
     final queryParameters = <String, String>{
       'access_token': AppConstants.mapboxPublicToken,
@@ -79,7 +80,7 @@ class GeocodingService {
     }
     final uri = Uri.https(
       'api.mapbox.com',
-      '/geocoding/v5/mapbox.places/${_sanitizeSearchPath(query)}.json',
+      '/geocoding/v5/mapbox.places/${_sanitizeSearchPath(searchQuery)}.json',
       queryParameters,
     );
     _debugLog(
@@ -95,7 +96,7 @@ class GeocodingService {
         final features = data['features'] as List? ?? const [];
         _debugLog('[Geocoding] Autocomplete results: count=${features.length}');
 
-        return features
+        final geocodingSuggestions = features
             .map((f) {
               // Context ist eine Liste, nicht ein Objekt!
               String? contextText;
@@ -131,6 +132,17 @@ class GeocodingService {
             })
             .whereType<MapboxSuggestion>()
             .toList();
+        if (_shouldPreferSearchBoxPoi(query, geocodingSuggestions)) {
+          final searchBox = await _searchBoxSuggestions(
+            searchQuery,
+            proximityLatitude: proximityLatitude,
+            proximityLongitude: proximityLongitude,
+            countryCodes: countryCodes,
+            limit: limit,
+          );
+          if (searchBox.isNotEmpty) return searchBox;
+        }
+        return geocodingSuggestions;
       } else {
         _debugLog(
           '[Geocoding] Autocomplete failed: status=${response.statusCode}',
@@ -142,6 +154,111 @@ class GeocodingService {
     return const [];
   }
 
+  Future<List<MapboxSuggestion>> _searchBoxSuggestions(
+    String query, {
+    double? proximityLatitude,
+    double? proximityLongitude,
+    required String countryCodes,
+    required int limit,
+  }) async {
+    final sessionToken =
+        'cc-${DateTime.now().microsecondsSinceEpoch}-${query.hashCode.abs()}';
+    final queryParameters = <String, String>{
+      'access_token': AppConstants.mapboxPublicToken,
+      'q': query,
+      'limit': limit.clamp(1, 6).toString(),
+      'language': 'de',
+      'country': countryCodes.toUpperCase(),
+      'types': 'poi,address,place',
+      'session_token': sessionToken,
+    };
+    final hasProximity =
+        proximityLatitude != null &&
+        proximityLongitude != null &&
+        proximityLatitude.isFinite &&
+        proximityLongitude.isFinite;
+    if (hasProximity) {
+      queryParameters['proximity'] =
+          '${proximityLongitude.toStringAsFixed(5)},${proximityLatitude.toStringAsFixed(5)}';
+    }
+    final suggestUri = Uri.https(
+      'api.mapbox.com',
+      '/search/searchbox/v1/suggest',
+      queryParameters,
+    );
+    try {
+      final response = await http.get(suggestUri);
+      if (response.statusCode != 200) return const [];
+      final data = json.decode(response.body) as Map<String, dynamic>;
+      final suggestions = data['suggestions'] as List? ?? const [];
+      final results = <MapboxSuggestion>[];
+      for (final suggestion in suggestions.take(limit.clamp(1, 6))) {
+        if (suggestion is! Map<String, dynamic>) continue;
+        final id = suggestion['mapbox_id'] as String?;
+        if (id == null || id.isEmpty) continue;
+        final retrieved = await _retrieveSearchBoxSuggestion(
+          id,
+          sessionToken: sessionToken,
+          proximityLatitude: proximityLatitude,
+          proximityLongitude: proximityLongitude,
+        );
+        if (retrieved != null) results.add(retrieved);
+      }
+      return results;
+    } catch (e) {
+      _debugLog('[Geocoding] Search Box fallback failed: ${e.runtimeType}');
+      return const [];
+    }
+  }
+
+  Future<MapboxSuggestion?> _retrieveSearchBoxSuggestion(
+    String mapboxId, {
+    required String sessionToken,
+    double? proximityLatitude,
+    double? proximityLongitude,
+  }) async {
+    final retrieveUri = Uri.https(
+      'api.mapbox.com',
+      '/search/searchbox/v1/retrieve/${Uri.encodeComponent(mapboxId)}',
+      {
+        'access_token': AppConstants.mapboxPublicToken,
+        'language': 'de',
+        'session_token': sessionToken,
+      },
+    );
+    final response = await http.get(retrieveUri);
+    if (response.statusCode != 200) return null;
+    final data = json.decode(response.body) as Map<String, dynamic>;
+    final features = data['features'] as List? ?? const [];
+    if (features.isEmpty || features.first is! Map<String, dynamic>) {
+      return null;
+    }
+    final feature = features.first as Map<String, dynamic>;
+    final geometry = feature['geometry'] as Map<String, dynamic>?;
+    final coordinates = geometry?['coordinates'] as List?;
+    if (coordinates == null || coordinates.length < 2) return null;
+    final properties = feature['properties'] as Map<String, dynamic>? ?? {};
+    final name = (properties['name'] as String?) ?? '';
+    final place = (properties['place_formatted'] as String?) ?? '';
+    final lng = (coordinates[0] as num).toDouble();
+    final lat = (coordinates[1] as num).toDouble();
+    return MapboxSuggestion(
+      placeName: [
+        if (name.isNotEmpty) name,
+        if (place.isNotEmpty) place,
+      ].join(', '),
+      coordinates: [lng, lat],
+      context: place.isEmpty ? null : place,
+      distanceMeters:
+          proximityLatitude != null &&
+              proximityLongitude != null &&
+              proximityLatitude.isFinite &&
+              proximityLongitude.isFinite
+          ? _distanceMeters(proximityLatitude, proximityLongitude, lat, lng)
+          : null,
+    );
+  }
+
   /// Geocodiert eine Adresse und gibt Koordinaten zurück.
   Future<Map<String, double>?> getCoordinatesFromAddress(
     String address, {
@@ -149,6 +266,7 @@ class GeocodingService {
     double? proximityLongitude,
     bool requireUnambiguous = false,
   }) async {
+    final searchAddress = _normalizePoiSearchAlias(address);
     final queryParameters = <String, String>{
       'access_token': AppConstants.mapboxPublicToken,
       'limit': requireUnambiguous ? '3' : '1',
@@ -165,7 +283,7 @@ class GeocodingService {
     }
     final uri = Uri.https(
       'api.mapbox.com',
-      '/geocoding/v5/mapbox.places/${_sanitizeSearchPath(address)}.json',
+      '/geocoding/v5/mapbox.places/${_sanitizeSearchPath(searchAddress)}.json',
       queryParameters,
     );
 
@@ -249,6 +367,30 @@ class GeocodingService {
       .toLowerCase()
       .replaceAll(RegExp(r'\s+'), ' ')
       .replaceAll(RegExp(r'[^a-z0-9äöüß ]'), '');
+
+  static String _normalizePoiSearchAlias(String value) {
+    final trimmed = value.trim();
+    if (trimmed.isEmpty) return trimmed;
+    return trimmed
+        .replaceFirst(RegExp(r'\bmci\b', caseSensitive: false), 'McDonalds')
+        .replaceFirst(
+          RegExp(r'\bmc\s*donalds\b', caseSensitive: false),
+          "McDonald's",
+        );
+  }
+
+  static bool _shouldPreferSearchBoxPoi(
+    String query,
+    List<MapboxSuggestion> geocodingSuggestions,
+  ) {
+    final normalizedQuery = _normalizeAddressText(
+      _normalizePoiSearchAlias(query),
+    );
+    if (!normalizedQuery.contains('mcdonald')) return false;
+    if (geocodingSuggestions.isEmpty) return true;
+    final top = _normalizeAddressText(geocodingSuggestions.first.placeName);
+    return !top.contains('mcdonald');
+  }
 
   static String _sanitizeSearchPath(String value) =>
       value.trim().replaceAll(RegExp(r'[/#?]+'), ' ');

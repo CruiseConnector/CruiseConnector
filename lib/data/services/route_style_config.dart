@@ -528,9 +528,9 @@ class RouteStyleConfig {
   // unterschiedlich anfühlen. Vorher überlappten die Bereiche so stark, dass
   // eine Route mit 1.85× direkter Distanz für alle drei Stufen gültig war.
   // Aktuelle Fenster:
-  //   Klein:  1.18×–1.65× direkt   (~Faktor 1.32×)
-  //   Mittel: 1.46×–2.10× direkt   (~Faktor 1.65×)
-  //   Groß:   1.84×–2.95× direkt   (~Faktor 2.10×)
+  //   Klein:  1.20×–1.45× direkt   (~Faktor 1.32×)
+  //   Mittel: 1.50×–1.90× direkt   (~Faktor 1.65×)
+  //   Groß:   1.90×–2.80× direkt   (~Faktor 2.10×)
   // Bewusst etwas weiter als zuvor, damit Mapbox bei Bergland (Dornbirn,
   // Bregenzerwald) das Fenster wirklich treffen kann. Eine schmale ~10%
   // Überlappung an den Rändern bleibt absichtlich erhalten, damit der
@@ -552,9 +552,9 @@ class RouteStyleConfig {
           )
         : directDistanceKm;
     final minByVariant = switch (detourVariant) {
-      1 => scenicReferenceKm * 1.18,
-      2 => scenicReferenceKm * 1.46,
-      3 => scenicReferenceKm * 1.84,
+      1 => scenicReferenceKm * 1.20,
+      2 => scenicReferenceKm * 1.50,
+      3 => scenicReferenceKm * 1.90,
       _ => scenicReferenceKm * 1.08,
     };
     final paddingKm = switch (detourVariant) {
@@ -582,15 +582,15 @@ class RouteStyleConfig {
           )
         : directDistanceKm;
     final maxByTarget = switch (detourVariant) {
-      1 => targetKm * 1.28,
-      2 => targetKm * 1.38,
-      3 => targetKm * 1.50,
+      1 => targetKm * 1.12,
+      2 => targetKm * 1.14,
+      3 => targetKm * 1.18,
       _ => targetKm * 1.20,
     };
     final maxByDirect = switch (detourVariant) {
-      1 => scenicReferenceKm * 1.65,
-      2 => scenicReferenceKm * 2.10,
-      3 => scenicReferenceKm * 2.95,
+      1 => scenicReferenceKm * 1.45,
+      2 => scenicReferenceKm * 1.90,
+      3 => scenicReferenceKm * 2.80,
       _ => scenicReferenceKm * 1.40,
     };
     final slackKm = switch (detourVariant) {
@@ -604,7 +604,7 @@ class RouteStyleConfig {
       scenic: scenic,
       detourVariant: detourVariant,
     );
-    return math.max(lowerBound + slackKm, math.max(maxByTarget, maxByDirect));
+    return math.max(lowerBound + slackKm, math.min(maxByDirect, maxByTarget));
   }
 
   Map<String, dynamic> toRequestHints() {

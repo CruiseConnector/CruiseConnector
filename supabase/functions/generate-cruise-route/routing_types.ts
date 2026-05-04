@@ -51,6 +51,7 @@ export interface RequestData {
   variant_hint?: string;
   route_fingerprint_hint?: string;
   fingerprint_hint?: string;
+  previous_route_fingerprints?: string[];
   max_candidate_attempts?: number;
   simplify_waypoints?: boolean;
   max_waypoints?: number;

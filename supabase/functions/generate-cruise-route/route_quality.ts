@@ -1923,7 +1923,34 @@ export function evaluateRouteQuality(
   },
 ): RouteQualityEvaluation {
   const quality = evaluateRouteQualityCore(route, routeType, options);
-  if (routeType !== "ROUND_TRIP") return quality;
+  if (routeType !== "ROUND_TRIP") {
+    const styleFit = scoreRouteStyleFit(route, options?.mode);
+    const shapeMetrics = calculateRouteShapeMetrics(
+      route,
+      quality.overlapPercent,
+    );
+    if (quality.tier === "rejected") {
+      return {
+        ...quality,
+        baseScore: quality.score,
+        styleFitScore: styleFit.score,
+        styleFitReasons: styleFit.reasons,
+        styleMetrics: styleFit.metrics,
+        shapeMetrics,
+      };
+    }
+    const stylePenalty = (100 - styleFit.score) * 0.30;
+    const styleBonus = styleFit.score * 0.035;
+    return {
+      ...quality,
+      baseScore: quality.score,
+      score: quality.score + stylePenalty - styleBonus,
+      styleFitScore: styleFit.score,
+      styleFitReasons: styleFit.reasons,
+      styleMetrics: styleFit.metrics,
+      shapeMetrics,
+    };
+  }
   return applyStyleFitToQuality(quality, route, options?.mode);
 }
 
