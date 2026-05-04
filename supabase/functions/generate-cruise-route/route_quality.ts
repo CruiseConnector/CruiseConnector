@@ -446,6 +446,106 @@ function countGeometricUTurns(coordinates: Coordinate[]): number {
   return count;
 }
 
+type UTurnShapeClassification =
+  | "none"
+  | "maneuver_u_turn"
+  | "true_out_and_back"
+  | "dead_end_spike"
+  | "route_stub"
+  | "start_reentry"
+  | "mountain_switchback"
+  | "local_hairpin"
+  | "u_turn_geometry";
+
+function classifyUTurnShape(
+  signals: ReturnType<typeof calculateRouteShapeSignals>,
+  {
+    overlapPercent,
+    hasManeuverUTurn,
+    hasGeometricUTurn,
+    isNoHighwayHairpinEligibleRoundTrip,
+    isCurveChase,
+    isSportMode,
+    targetDistanceKm,
+  }: {
+    overlapPercent: number;
+    hasManeuverUTurn: boolean;
+    hasGeometricUTurn: boolean;
+    isNoHighwayHairpinEligibleRoundTrip: boolean;
+    isCurveChase: boolean;
+    isSportMode: boolean;
+    targetDistanceKm: number;
+  },
+): UTurnShapeClassification {
+  if (!hasManeuverUTurn && !hasGeometricUTurn) return "none";
+  if (hasManeuverUTurn) return "maneuver_u_turn";
+
+  const sustainedBacktracking = overlapPercent > 28 ||
+    signals.oppositeOverlapPercent > (isCurveChase ? 18 : 20) ||
+    (
+      signals.oppositeOverlapPercent > (isCurveChase ? 12 : 14) &&
+      signals.repeatedStartAreaPercent > 24
+    );
+  if (sustainedBacktracking) return "true_out_and_back";
+
+  const deadEndSpike = signals.spurArmPercent > 40 ||
+    (
+      signals.radialPeakCount >= (isCurveChase ? 3 : 4) &&
+      signals.middleCoverageRatio < 0.40
+    ) ||
+    (
+      signals.loopCleanupRemovedPercent > 22 &&
+      signals.loopCleanupDistanceRetentionRatio < 0.84
+    );
+  if (deadEndSpike) return "dead_end_spike";
+
+  const routeStub = signals.middleCoverageRatio < 0.30 ||
+    (
+      signals.loopCleanupRemovedPercent > 16 &&
+      signals.loopCleanupDistanceRetentionRatio < 0.88
+    );
+  if (routeStub) return "route_stub";
+
+  if (
+    signals.centerReentryCount >= 3 ||
+    signals.repeatedStartAreaPercent > 34 ||
+    signals.centralReturnPercent > (isCurveChase ? 26 : 30)
+  ) {
+    return "start_reentry";
+  }
+
+  if (!isNoHighwayHairpinEligibleRoundTrip) return "u_turn_geometry";
+
+  const maxLocalHairpins = isCurveChase
+    ? targetDistanceKm > 85 ? 8 : 7
+    : isSportMode
+    ? targetDistanceKm > 85 ? 5 : 4
+    : 5;
+  const structurallyCleanForHairpins =
+    signals.geometricUTurnCount <= maxLocalHairpins &&
+    overlapPercent <= (isCurveChase ? 30 : 28) &&
+    signals.oppositeOverlapPercent <= (isCurveChase ? 18 : 16) &&
+    signals.middleCoverageRatio >= (isCurveChase ? 0.48 : 0.54) &&
+    signals.centerReentryCount <= 2 &&
+    signals.radialPeakCount <= 3 &&
+    signals.repeatedStartAreaPercent <= (isCurveChase ? 30 : 24) &&
+    signals.spurArmPercent <= (isCurveChase ? 28 : 22) &&
+    signals.loopCleanupRemovedPercent <= (isCurveChase ? 18 : 12) &&
+    signals.loopCleanupDistanceRetentionRatio >= (isCurveChase ? 0.84 : 0.88);
+
+  if (!structurallyCleanForHairpins) return "u_turn_geometry";
+  return isCurveChase && signals.geometricUTurnCount >= 3
+    ? "mountain_switchback"
+    : "local_hairpin";
+}
+
+function isAllowedHairpinClassification(
+  classification: UTurnShapeClassification,
+): boolean {
+  return classification === "local_hairpin" ||
+    classification === "mountain_switchback";
+}
+
 function removeClientStyleLocalLoops(coordinates: Coordinate[]): {
   coordinates: Coordinate[];
   removedLoops: number;
@@ -1323,7 +1423,15 @@ function evaluateRouteQualityCore(
         shapeSignals.hookCount >= 6
       )
     );
-  const severeRoundTripShape = routeType === "ROUND_TRIP" &&
+  const severeFoldedLoopGate =
+    // foldedLoopPenalty is clamped at 100, which naturally hits for
+    // alpine serpentines. Keep the gate, but allow a later local-hairpin
+    // classification to prevent foldedLoopPenalty alone from rejecting
+    // a clean no-highway Kurvenjagd switchback route.
+    !mediumLongNoHighwaySportShape &&
+    shapeSignals.foldedLoopPenalty >
+      (isShortNoHighwaySportRoundTrip ? 56 : 74);
+  const severeRoundTripShapeWithoutFoldGate = routeType === "ROUND_TRIP" &&
     (
       shapeSignals.centerReentryCount >= 4 ||
       longNoHighwaySportSpurShape ||
@@ -1360,17 +1468,10 @@ function evaluateRouteQualityCore(
           (isShortNoHighwaySportRoundTrip
             ? 0.46
             : (mediumLongNoHighwaySportShape ? 0.25 : 0.36))
-      ) ||
-      (
-        // foldedLoopPenalty is clamped at 100, which naturally hits for
-        // alpine serpentines. Disable the gate entirely for medium/long
-        // no-highway Sport and rely on oppositeOverlap + coverage above
-        // to catch real kraken shapes.
-        !mediumLongNoHighwaySportShape &&
-        shapeSignals.foldedLoopPenalty >
-          (isShortNoHighwaySportRoundTrip ? 56 : 74)
       )
     );
+  let severeRoundTripShape = severeRoundTripShapeWithoutFoldGate ||
+    (routeType === "ROUND_TRIP" && severeFoldedLoopGate);
   const severeCentralReturn = routeType === "ROUND_TRIP"
     ? (
       shapeSignals.centralReturnPercent > (isCurveChase ? 30 : 35) ||
@@ -1498,6 +1599,25 @@ function evaluateRouteQualityCore(
     shapeSignals.loopCleanupUTurnCount =
       noHighwayLoopCleanup.cleanedGeometricUTurnCount;
   }
+  const uTurnClassification = classifyUTurnShape(shapeSignals, {
+    overlapPercent,
+    hasManeuverUTurn,
+    hasGeometricUTurn,
+    isNoHighwayHairpinEligibleRoundTrip,
+    isCurveChase,
+    isSportMode,
+    targetDistanceKm,
+  });
+  const allowedGeometryHairpin = isAllowedHairpinClassification(
+    uTurnClassification,
+  );
+  if (
+    allowedGeometryHairpin &&
+    severeFoldedLoopGate &&
+    !severeRoundTripShapeWithoutFoldGate
+  ) {
+    severeRoundTripShape = false;
+  }
   // Real mountain valleys (Dornbirn/Bregenzerwald) naturally contain
   // hairpin bends on no-highway roads. The short-distance path stays
   // strict, but medium/long no-highway Sport routes need much more
@@ -1594,10 +1714,16 @@ function evaluateRouteQualityCore(
     shapeSignals.centralReturnPercent <= 28 &&
     shapeSignals.hookCount <= (isCurveChase ? 14 : 16);
 
-  if (hasUTurn && !cleanNoHighwayHairpin && !cleanRequiredStopHairpin) {
+  if (
+    hasUTurn &&
+    !allowedGeometryHairpin &&
+    !cleanNoHighwayHairpin &&
+    !cleanRequiredStopHairpin
+  ) {
     if (isNoHighwayHairpinEligibleRoundTrip && hasGeometricUTurn) {
       debugLog(
         `[RT-QA] hairpin-reject uTurn=${shapeSignals.geometricUTurnCount}` +
+          ` class=${uTurnClassification}` +
           ` manUT=${hasManeuverUTurn}(${uTurnManeuverCount}) clean=${cleanNoHighwayHairpin}` +
           ` dist=${actualDistanceKm.toFixed(1)} ovl=${
             overlapPercent.toFixed(1)
@@ -1618,7 +1744,15 @@ function evaluateRouteQualityCore(
     }
     return {
       passed: false,
-      reason: hasGeometricUTurn
+      reason: uTurnClassification === "true_out_and_back"
+        ? "u_turn_true_out_and_back"
+        : uTurnClassification === "dead_end_spike"
+        ? "u_turn_dead_end_spike"
+        : uTurnClassification === "route_stub"
+        ? "u_turn_route_stub"
+        : uTurnClassification === "start_reentry"
+        ? "u_turn_start_reentry"
+        : hasGeometricUTurn
         ? `u_turn_geometry=${shapeSignals.geometricUTurnCount}`
         : "u_turn",
       overlapPercent,
@@ -2012,6 +2146,10 @@ export function evaluateRouteCleanupGate(
     options?.avoidHighways === true &&
     options?.mode === "Sport Mode" &&
     targetDistanceKm > 60 && targetDistanceKm <= 115;
+  const noHighwayCurveChaseHairpinGate = routeType === "ROUND_TRIP" &&
+    options?.avoidHighways === true &&
+    options?.mode === "Kurvenjagd" &&
+    targetDistanceKm <= 115;
   const requiredStopsGate = options?.requiredStops === true;
   const maneuverUTurnAllowance = mediumLongNoHighwaySportGate ? 6 : 0;
   const maneuverUTurnCount = countUTurnManeuvers(route);
@@ -2020,6 +2158,8 @@ export function evaluateRouteCleanupGate(
     ? 4
     : mediumLongNoHighwaySportGate
     ? 6
+    : noHighwayCurveChaseHairpinGate
+    ? targetDistanceKm > 85 ? 8 : 7
     : 0;
   const cleanedGeometricUTurnBreach = cleanup.cleanedGeometricUTurnCount >
     geometricUTurnAllowance;
