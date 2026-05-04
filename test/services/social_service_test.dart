@@ -130,7 +130,7 @@ void main() {
         SocialService.publicHandle({
           'email': 'secret@example.com',
         }, fallbackUserId: 'abcdef12-3456'),
-        equals('@cruiser_abcdef'),
+        equals('@user_abcdef'),
       );
     });
   });

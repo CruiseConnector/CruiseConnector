@@ -1004,15 +1004,6 @@ Deno.serve(async (req) => {
       }
       return null;
     };
-    const waypointTimeoutMs = (preferredMs: number, minimumMs = 2200) =>
-      waypointTimeBudgetMs <= 0 ? preferredMs : Math.max(
-        minimumMs,
-        Math.min(
-          preferredMs,
-          waypointTimeBudgetMs - (Date.now() - requestStartedAt) - 350,
-        ),
-      );
-
     if (useRoundTripSearch) {
       roundTripSearch = await searchBestRoundTripRoute({
         startLocation,
