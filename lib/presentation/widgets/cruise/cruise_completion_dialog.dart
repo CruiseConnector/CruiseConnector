@@ -525,13 +525,18 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
   }
 
   Widget _buildRatingPanel() {
-    final tags = <String>[
-      'schön',
-      'langweilig',
-      'zu weit weg',
+    const positiveTags = <String>[
+      'schöne Kurven',
+      'guter Flow',
+      'schöne Gegend',
+      'passende Länge',
+    ];
+    const negativeTags = <String>[
       'Sackgasse',
-      'gute Kurven',
-      'falscher Start',
+      'zu künstlich',
+      'zu kurz/lang',
+      'Autobahn trotz AUS',
+      'wiederholt',
     ];
     return Container(
       width: double.infinity,
@@ -544,15 +549,80 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            'Route bewerten',
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: 13,
-              fontWeight: FontWeight.w800,
-            ),
+          Row(
+            children: [
+              Container(
+                width: 34,
+                height: 34,
+                decoration: BoxDecoration(
+                  color: AppAccentColors.accent.withValues(alpha: 0.16),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: AppAccentColors.accent.withValues(alpha: 0.26),
+                  ),
+                ),
+                child: Icon(
+                  Icons.route_rounded,
+                  color: AppAccentColors.accent,
+                  size: 18,
+                ),
+              ),
+              const SizedBox(width: 10),
+              const Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Wie war diese Route?',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    SizedBox(height: 2),
+                    Text(
+                      'Dein Feedback verbessert zukünftige Vorschläge.',
+                      style: TextStyle(
+                        color: Color(0xFFA8AFBC),
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 14),
+          Row(
+            children: [
+              Expanded(
+                child: _QualityChoiceButton(
+                  label: 'Top',
+                  selected: _selectedRating >= 5,
+                  onTap: () => setState(() => _selectedRating = 5),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _QualityChoiceButton(
+                  label: 'Okay',
+                  selected: _selectedRating >= 3 && _selectedRating < 5,
+                  onTap: () => setState(() => _selectedRating = 3),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _QualityChoiceButton(
+                  label: 'Schlecht',
+                  selected: _selectedRating > 0 && _selectedRating < 3,
+                  onTap: () => setState(() => _selectedRating = 1),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
           Row(
             children: List.generate(5, (index) {
               final value = index + 1;
@@ -572,15 +642,54 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
               );
             }),
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 14),
+          const Text(
+            'Was war gut?',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 12,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 8),
           Wrap(
             spacing: 8,
             runSpacing: 8,
             children: [
-              for (final tag in tags)
+              for (final tag in positiveTags)
                 _RatingTagChip(
                   label: tag,
                   selected: _selectedTags.contains(tag),
+                  positive: true,
+                  onTap: () {
+                    setState(() {
+                      if (!_selectedTags.add(tag)) {
+                        _selectedTags.remove(tag);
+                      }
+                    });
+                  },
+                ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          const Text(
+            'Was sollen wir vermeiden?',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 12,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (final tag in negativeTags)
+                _RatingTagChip(
+                  label: tag,
+                  selected: _selectedTags.contains(tag),
+                  positive: false,
                   onTap: () {
                     setState(() {
                       if (!_selectedTags.add(tag)) {
@@ -719,12 +828,16 @@ class _ActionButton extends StatelessWidget {
             children: [
               Icon(icon, color: Colors.white, size: 18),
               const SizedBox(width: 8),
-              Text(
-                label,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w700,
+              Flexible(
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
               ),
             ],
@@ -740,6 +853,49 @@ class _RatingTagChip extends StatelessWidget {
     required this.label,
     required this.selected,
     required this.onTap,
+    required this.positive,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+  final bool positive;
+
+  @override
+  Widget build(BuildContext context) {
+    final accent = positive ? AppAccentColors.accent : const Color(0xFFFF6B6B);
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+        decoration: BoxDecoration(
+          color: selected
+              ? accent.withValues(alpha: 0.20)
+              : Colors.white.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(
+            color: selected ? accent : Colors.white.withValues(alpha: 0.12),
+          ),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: selected ? Colors.white : const Color(0xFFA8AFBC),
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _QualityChoiceButton extends StatelessWidget {
+  const _QualityChoiceButton({
+    required this.label,
+    required this.selected,
+    required this.onTap,
   });
 
   final String label;
@@ -752,24 +908,26 @@ class _RatingTagChip extends StatelessWidget {
       onTap: onTap,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 160),
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+        height: 38,
         decoration: BoxDecoration(
           color: selected
-              ? AppAccentColors.accent.withValues(alpha: 0.24)
-              : Colors.white.withValues(alpha: 0.08),
-          borderRadius: BorderRadius.circular(999),
+              ? AppAccentColors.accent.withValues(alpha: 0.22)
+              : Colors.white.withValues(alpha: 0.07),
+          borderRadius: BorderRadius.circular(14),
           border: Border.all(
             color: selected
                 ? AppAccentColors.accent
-                : Colors.white.withValues(alpha: 0.12),
+                : Colors.white.withValues(alpha: 0.10),
           ),
         ),
-        child: Text(
-          label,
-          style: TextStyle(
-            color: selected ? Colors.white : const Color(0xFFA8AFBC),
-            fontSize: 11,
-            fontWeight: FontWeight.w700,
+        child: Center(
+          child: Text(
+            label,
+            style: TextStyle(
+              color: selected ? Colors.white : const Color(0xFFA8AFBC),
+              fontSize: 12,
+              fontWeight: FontWeight.w800,
+            ),
           ),
         ),
       ),

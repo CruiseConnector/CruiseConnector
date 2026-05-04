@@ -180,6 +180,8 @@ class _RouteAttachmentCardState extends State<RouteAttachmentCard> {
                           fontSize: isCompact ? 11 : 12,
                         ),
                       ),
+                      const SizedBox(height: 8),
+                      _RouteTrustBadges(route: route, compact: isCompact),
                     ],
                   ),
                 ),
@@ -218,6 +220,85 @@ class _RouteAttachmentCardState extends State<RouteAttachmentCard> {
                 ],
               ],
             ),
+    );
+  }
+}
+
+class _RouteTrustBadges extends StatelessWidget {
+  const _RouteTrustBadges({required this.route, required this.compact});
+
+  final SavedRoute route;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    final badges = <Widget>[
+      if (route.ratingSummaryLabel != null)
+        _RouteTrustBadge(
+          icon: Icons.star_rounded,
+          label: route.ratingSummaryLabel!,
+          compact: compact,
+          accent: const Color(0xFFFFD76A),
+        ),
+      if (route.qualityBadgeLabel != null)
+        _RouteTrustBadge(
+          icon: Icons.verified_rounded,
+          label: route.qualityBadgeLabel!,
+          compact: compact,
+          accent: AppAccentColors.accent,
+        ),
+      _RouteTrustBadge(
+        icon: Icons.tune_rounded,
+        label: route.displayStyleLabel,
+        compact: compact,
+        accent: const Color(0xFF7DD3FC),
+      ),
+    ];
+
+    return Wrap(spacing: 6, runSpacing: 6, children: badges);
+  }
+}
+
+class _RouteTrustBadge extends StatelessWidget {
+  const _RouteTrustBadge({
+    required this.icon,
+    required this.label,
+    required this.compact,
+    required this.accent,
+  });
+
+  final IconData icon;
+  final String label;
+  final bool compact;
+  final Color accent;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: EdgeInsets.symmetric(
+        horizontal: compact ? 7 : 8,
+        vertical: compact ? 4 : 5,
+      ),
+      decoration: BoxDecoration(
+        color: accent.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: accent.withValues(alpha: 0.24)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, color: accent, size: compact ? 12 : 13),
+          const SizedBox(width: 4),
+          Text(
+            label,
+            style: TextStyle(
+              color: Colors.white.withValues(alpha: 0.88),
+              fontSize: compact ? 10 : 11,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

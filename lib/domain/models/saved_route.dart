@@ -20,6 +20,13 @@ class SavedRoute {
     this.xpMultiplier,
     this.xpStreakDays,
     this.xpAwarded,
+    this.routeSource,
+    this.routeFingerprint,
+    this.qualityTier,
+    this.routeMeta = const {},
+    this.averageRating,
+    this.ratingCount = 0,
+    this.completionRate,
   });
 
   final String id;
@@ -41,6 +48,13 @@ class SavedRoute {
   final double? xpMultiplier;
   final int? xpStreakDays;
   final int? xpAwarded;
+  final String? routeSource;
+  final String? routeFingerprint;
+  final String? qualityTier;
+  final Map<String, dynamic> routeMeta;
+  final double? averageRating;
+  final int ratingCount;
+  final double? completionRate;
 
   factory SavedRoute.fromJson(Map<String, dynamic> json) {
     return SavedRoute(
@@ -65,6 +79,15 @@ class SavedRoute {
       xpMultiplier: (json['xp_multiplier'] as num?)?.toDouble(),
       xpStreakDays: (json['xp_streak_days'] as num?)?.toInt(),
       xpAwarded: (json['xp_awarded'] as num?)?.toInt(),
+      routeSource: json['route_source'] as String?,
+      routeFingerprint: json['route_fingerprint'] as String?,
+      qualityTier: json['quality_tier'] as String?,
+      routeMeta: json['route_meta'] is Map
+          ? Map<String, dynamic>.from(json['route_meta'] as Map)
+          : const {},
+      averageRating: (json['average_rating'] as num?)?.toDouble(),
+      ratingCount: (json['rating_count'] as num?)?.toInt() ?? 0,
+      completionRate: (json['completion_rate'] as num?)?.toDouble(),
     );
   }
 
@@ -142,6 +165,13 @@ class SavedRoute {
       'xp_multiplier': xpMultiplier,
       'xp_streak_days': xpStreakDays,
       'xp_awarded': xpAwarded,
+      'route_source': routeSource,
+      'route_fingerprint': routeFingerprint,
+      'quality_tier': qualityTier,
+      'route_meta': routeMeta,
+      'average_rating': averageRating,
+      'rating_count': ratingCount,
+      'completion_rate': completionRate,
     };
   }
 
@@ -173,5 +203,51 @@ class SavedRoute {
       default:
         return '🛣️';
     }
+  }
+
+  String get displayStyleLabel {
+    switch (style) {
+      case 'Sport Mode':
+        return 'Sport';
+      case 'Kurvenjagd':
+      case 'Abendrunde':
+      case 'Entdecker':
+        return style;
+      default:
+        return style.trim().isEmpty ? 'Route' : style;
+    }
+  }
+
+  String? get qualityBadgeLabel {
+    final tier = (qualityTier ?? routeMeta['quality_tier']?.toString())
+        ?.trim()
+        .toLowerCase();
+    switch (tier) {
+      case 'ideal':
+        return 'Ideal';
+      case 'good':
+        return 'Gut';
+      case 'acceptable':
+        return 'Reserve';
+      default:
+        return null;
+    }
+  }
+
+  double? get displayRating {
+    if (averageRating != null && averageRating! > 0) return averageRating;
+    if (rating != null && rating! > 0) return rating!.toDouble();
+    return null;
+  }
+
+  String? get ratingSummaryLabel {
+    final score = displayRating;
+    if (score == null) return null;
+    final scoreText = score.toStringAsFixed(1).replaceAll('.', ',');
+    if (ratingCount > 0) {
+      final suffix = ratingCount == 1 ? 'Bewertung' : 'Bewertungen';
+      return '$scoreText · $ratingCount $suffix';
+    }
+    return '$scoreText Route-Score';
   }
 }

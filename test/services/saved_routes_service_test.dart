@@ -21,6 +21,13 @@ void main() {
         'duration_seconds': 3600.0,
         'route_type': 'ROUND_TRIP',
         'rating': 5,
+        'route_source': 'pool',
+        'route_fingerprint': 'fp-route-123',
+        'quality_tier': 'good',
+        'route_meta': {'style_fit_score': 82.5},
+        'average_rating': 4.6,
+        'rating_count': 3,
+        'completion_rate': 0.91,
       };
 
       final route = SavedRoute.fromJson(json);
@@ -34,6 +41,11 @@ void main() {
       expect(route.isDrivenSession, isTrue);
       expect(route.completionRatio, closeTo(0.85, 0.001));
       expect(route.qualifiesForXpCredit, isTrue);
+      expect(route.routeSource, equals('pool'));
+      expect(route.routeFingerprint, equals('fp-route-123'));
+      expect(route.qualityBadgeLabel, equals('Gut'));
+      expect(route.ratingSummaryLabel, equals('4,6 · 3 Bewertungen'));
+      expect(route.completionRate, equals(0.91));
     });
 
     test('SavedRoute.fromJson mit fehlenden optionalen Feldern → Defaults', () {
