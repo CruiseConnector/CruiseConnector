@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/data/services/auth_service.dart';
 import 'package:cruise_connect/presentation/pages/home_page.dart';
 
@@ -76,14 +77,14 @@ class _LoginPageState extends State<LoginPage> {
   Widget build(BuildContext context) {
     final size = MediaQuery.of(context).size;
     final padding = MediaQuery.of(context).padding;
-    const brand = Color(0xFFEF4F4F);
+    final brand = AppAccentColors.accent;
     final headerH = size.height * 0.35;
 
     return Scaffold(
       backgroundColor: brand,
       body: Stack(
         children: [
-          const ColoredBox(color: brand, child: SizedBox.expand()),
+          ColoredBox(color: brand, child: const SizedBox.expand()),
 
           // Weißer unterer Bereich
           Positioned(

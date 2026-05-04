@@ -115,8 +115,7 @@ class RoutePoolCoverage {
       difficultyLevel: difficultyLevel ?? this.difficultyLevel,
       hardRegionStatus: hardRegionStatus ?? this.hardRegionStatus,
       bootstrapEnabled: bootstrapEnabled ?? this.bootstrapEnabled,
-      curatedSeedPreferred:
-          curatedSeedPreferred ?? this.curatedSeedPreferred,
+      curatedSeedPreferred: curatedSeedPreferred ?? this.curatedSeedPreferred,
       targetPoolSize: targetPoolSize ?? this.targetPoolSize,
       maxPoolSize: maxPoolSize ?? this.maxPoolSize,
       healthyThreshold: healthyThreshold ?? this.healthyThreshold,
@@ -152,8 +151,7 @@ class RoutePoolCoverage {
       difficultyLevel: (json['difficulty_level'] as String?) ?? 'normal',
       hardRegionStatus: (json['hard_region_status'] as String?) ?? 'normal',
       bootstrapEnabled: (json['bootstrap_enabled'] as bool?) ?? true,
-      curatedSeedPreferred:
-          (json['curated_seed_preferred'] as bool?) ?? false,
+      curatedSeedPreferred: (json['curated_seed_preferred'] as bool?) ?? false,
       targetPoolSize: (json['target_pool_size'] as num?)?.toInt() ?? 15,
       maxPoolSize: (json['max_pool_size'] as num?)?.toInt() ?? 20,
       healthyThreshold: (json['healthy_threshold'] as num?)?.toInt() ?? 15,

@@ -8,6 +8,7 @@ import 'package:provider/provider.dart';
 import 'package:flutter_web_plugins/url_strategy.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/application/providers/auth_provider.dart';
 import 'package:cruise_connect/application/providers/community_provider.dart';
 import 'package:cruise_connect/application/providers/route_bookmark_provider.dart';
@@ -116,12 +117,43 @@ class _MyAppState extends State<MyApp> {
         ChangeNotifierProvider(create: (_) => CommunityProvider()),
         ChangeNotifierProvider(create: (_) => SavedRoutesProvider()),
         ChangeNotifierProvider(create: (_) => RouteBookmarkProvider()),
+        ChangeNotifierProvider(create: (_) => AppAccentProvider()..load()),
       ],
-      child: MaterialApp(
-        navigatorKey: rootNavigatorKey,
-        debugShowCheckedModeBanner: false,
-        title: 'CruiseConnect',
-        home: const AuthPage(),
+      child: Consumer<AppAccentProvider>(
+        builder: (context, accentProvider, _) {
+          final accent = accentProvider.color;
+          return MaterialApp(
+            navigatorKey: rootNavigatorKey,
+            debugShowCheckedModeBanner: false,
+            title: 'CruiseConnect',
+            theme: ThemeData.dark().copyWith(
+              colorScheme: ColorScheme.fromSeed(
+                seedColor: accent,
+                brightness: Brightness.dark,
+                primary: accent,
+                secondary: accent,
+              ),
+              progressIndicatorTheme: ProgressIndicatorThemeData(color: accent),
+              switchTheme: SwitchThemeData(
+                thumbColor: WidgetStateProperty.resolveWith((states) {
+                  return states.contains(WidgetState.selected)
+                      ? accent
+                      : Colors.grey;
+                }),
+                trackColor: WidgetStateProperty.resolveWith((states) {
+                  return states.contains(WidgetState.selected)
+                      ? accent.withValues(alpha: 0.3)
+                      : Colors.grey.withValues(alpha: 0.3);
+                }),
+              ),
+              floatingActionButtonTheme: FloatingActionButtonThemeData(
+                backgroundColor: accent,
+                foregroundColor: Colors.white,
+              ),
+            ),
+            home: const AuthPage(),
+          );
+        },
       ),
     );
   }

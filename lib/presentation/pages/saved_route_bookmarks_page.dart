@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:provider/provider.dart';
 
 import 'package:cruise_connect/application/providers/route_bookmark_provider.dart';
@@ -71,11 +72,11 @@ class _SavedRouteBookmarksPageState extends State<SavedRouteBookmarksPage> {
         ),
       ),
       body: isLoading
-          ? const Center(
-              child: CircularProgressIndicator(color: Color(0xFFFF3B30)),
+          ? Center(
+              child: CircularProgressIndicator(color: AppAccentColors.accent),
             )
           : RefreshIndicator(
-              color: const Color(0xFFFF3B30),
+              color: AppAccentColors.accent,
               backgroundColor: const Color(0xFF1C1F26),
               onRefresh: _refresh,
               child: routes.isEmpty
@@ -158,8 +159,8 @@ class _SavedRouteBookmarksPageState extends State<SavedRouteBookmarksPage> {
               enabledBorder: const UnderlineInputBorder(
                 borderSide: BorderSide(color: Colors.white24),
               ),
-              focusedBorder: const UnderlineInputBorder(
-                borderSide: BorderSide(color: Color(0xFFFF3B30)),
+              focusedBorder: UnderlineInputBorder(
+                borderSide: BorderSide(color: AppAccentColors.accent),
               ),
             ),
             onSubmitted: (value) => Navigator.pop(dialogContext, value),
@@ -174,9 +175,9 @@ class _SavedRouteBookmarksPageState extends State<SavedRouteBookmarksPage> {
             ),
             TextButton(
               onPressed: () => Navigator.pop(dialogContext, controller.text),
-              child: const Text(
+              child: Text(
                 'Speichern',
-                style: TextStyle(color: Color(0xFFFF3B30)),
+                style: TextStyle(color: AppAccentColors.accent),
               ),
             ),
           ],
@@ -222,7 +223,7 @@ class _SavedRouteCard extends StatelessWidget {
             width: 44,
             height: 44,
             decoration: BoxDecoration(
-              color: const Color(0xFFFF3B30).withValues(alpha: 0.15),
+              color: AppAccentColors.accent.withValues(alpha: 0.15),
               borderRadius: BorderRadius.circular(12),
             ),
             child: Center(
@@ -258,7 +259,7 @@ class _SavedRouteCard extends StatelessWidget {
           IconButton(
             tooltip: 'Route fahren',
             onPressed: onStart,
-            icon: const Icon(Icons.play_circle_fill, color: Color(0xFFFF3B30)),
+            icon: Icon(Icons.play_circle_fill, color: AppAccentColors.accent),
           ),
           if (isOwnRoute)
             IconButton(

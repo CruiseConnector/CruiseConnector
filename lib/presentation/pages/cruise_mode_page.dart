@@ -7,6 +7,7 @@ import 'dart:io' show Platform;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:flutter/services.dart' show HapticFeedback;
 import 'package:geolocator/geolocator.dart' as geo;
 import 'package:flutter_map/flutter_map.dart';
@@ -67,7 +68,7 @@ class CruiseModePage extends StatefulWidget {
 }
 
 class _GeneratedRouteUiStateSnapshot {
-  const _GeneratedRouteUiStateSnapshot({
+  _GeneratedRouteUiStateSnapshot({
     required this.lastRouteResult,
     required this.sessionRouteResult,
     required this.accessLegMainRouteResult,
@@ -193,7 +194,7 @@ class _CruiseModePageState extends State<CruiseModePage>
   String? _lastGeneratedSelectedStyle;
   bool? _lastGeneratedAvoidHighways;
   List<double> _recentDestinationDistances = [];
-  List<SpeedLimitSegment> _activeSpeedLimits = const [];
+  List<SpeedLimitSegment> _activeSpeedLimits = [];
 
   // ─────────────────────── Map State (flutter_map) ───────────────────────────
   bool _isLoading = false;
@@ -214,7 +215,7 @@ class _CruiseModePageState extends State<CruiseModePage>
   geo.Position? _userLocation;
   List<List<double>> _fullRouteCoordinates = [];
   List<List<double>> _remainingRouteCoordinates = [];
-  List<RouteManeuver> _maneuvers = const [];
+  List<RouteManeuver> _maneuvers = [];
   int _activeManeuverIndex = 0;
   int _currentRouteIndex = 0;
   final Set<int> _announcedManeuverIndices = <int>{};
@@ -384,7 +385,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     if (rd != null && rd['geoJson'] is String) {
       final geometry =
           jsonDecode(rd['geoJson'] as String) as Map<String, dynamic>;
-      final coordsRaw = (geometry['coordinates'] as List?) ?? const [];
+      final coordsRaw = (geometry['coordinates'] as List?) ?? [];
       final coordinates = coordsRaw
           .whereType<List>()
           .where((c) => c.length >= 2)
@@ -398,7 +399,7 @@ class _CruiseModePageState extends State<CruiseModePage>
           _isRouteConfirmed = false;
           _fullRouteCoordinates = coordinates;
           _remainingRouteCoordinates = coordinates;
-          _maneuvers = const [];
+          _maneuvers = [];
         });
         await _drawRoute(geometry);
         await _confirmRoute();
@@ -411,37 +412,57 @@ class _CruiseModePageState extends State<CruiseModePage>
       final uid = row['user_id'] as String?;
       if (uid == null || uid == meId) return;
       try {
-        final gm = GroupMember.fromMap(row);
-        _groupMembers[uid] = gm;
+        final incoming = GroupMember.fromMap(row);
+        final existing = _groupMembers[uid];
+        _groupMembers[uid] = GroupMember(
+          id: incoming.id,
+          groupId: incoming.groupId,
+          userId: incoming.userId,
+          role: incoming.role,
+          rideRole: incoming.rideRole,
+          currentLat: incoming.currentLat,
+          currentLng: incoming.currentLng,
+          lastUpdatedAt: incoming.lastUpdatedAt,
+          createdAt: incoming.createdAt,
+          displayName: incoming.displayName ?? existing?.displayName,
+          avatarUrl: incoming.avatarUrl ?? existing?.avatarUrl,
+        );
         _safeSetState(() {});
       } catch (_) {}
     });
 
     // Timer: eigene Position regelmäßig hochschieben
     _positionUploadTimer = Timer.periodic(
-      const Duration(seconds: 7),
+      const Duration(seconds: 2),
       (_) => _uploadMyPosition(),
     );
   }
 
   Widget _buildGroupMemberMarker(GroupMember m) {
-    final isDriver = m.role == MemberRole.driver;
-    final color = isDriver ? const Color(0xFFFF3B30) : const Color(0xFF4FC3F7);
+    final isDriver = m.rideRole == RideRole.driver;
+    final color = isDriver ? AppAccentColors.accent : const Color(0xFF4FC3F7);
     return Container(
+      padding: const EdgeInsets.all(2),
       decoration: BoxDecoration(
-        color: color,
+        color: const Color(0xFF0B0E14),
         shape: BoxShape.circle,
-        border: Border.all(color: Colors.white, width: 2),
+        border: Border.all(color: color, width: 3),
         boxShadow: [
           BoxShadow(color: color.withValues(alpha: 0.6), blurRadius: 8),
         ],
       ),
-      child: Center(
-        child: Icon(
-          isDriver ? Icons.directions_car : Icons.person,
-          color: Colors.white,
-          size: 18,
-        ),
+      child: CircleAvatar(
+        backgroundColor: color,
+        backgroundImage: m.avatarUrl != null
+            ? NetworkImage(m.avatarUrl!)
+            : null,
+        child: m.avatarUrl == null
+            ? Icon(
+                isDriver ? Icons.directions_car : Icons.person,
+                color: Colors.white,
+                size: 17,
+              )
+            : null,
       ),
     );
   }
@@ -612,13 +633,13 @@ class _CruiseModePageState extends State<CruiseModePage>
   }
 
   void _handleRouteModeChanged(bool isRoundTrip) {
-    const roundTripStyles = {
+    final roundTripStyles = {
       'Kurvenjagd',
       'Sport Mode',
       'Abendrunde',
       'Entdecker',
     };
-    const pointToPointStyles = {
+    final pointToPointStyles = {
       'Kurvenjagd',
       'Sport Mode',
       'Abendrunde',
@@ -706,9 +727,9 @@ class _CruiseModePageState extends State<CruiseModePage>
                 ),
                 TextButton(
                   onPressed: () => Navigator.pop(ctx, true),
-                  child: const Text(
+                  child: Text(
                     'Verlassen',
-                    style: TextStyle(color: Color(0xFFFF3B30)),
+                    style: TextStyle(color: AppAccentColors.accent),
                   ),
                 ),
               ],
@@ -966,7 +987,7 @@ class _CruiseModePageState extends State<CruiseModePage>
         color: const Color(0xFF1C1F26),
         borderRadius: BorderRadius.circular(16),
         border: Border.all(
-          color: const Color(0xFFFF5722).withValues(alpha: 0.25),
+          color: AppAccentColors.accent.withValues(alpha: 0.25),
         ),
         boxShadow: [
           BoxShadow(color: Colors.black.withValues(alpha: 0.4), blurRadius: 12),
@@ -974,10 +995,10 @@ class _CruiseModePageState extends State<CruiseModePage>
       ),
       child: Column(
         children: [
-          const Text(
+          Text(
             'Route berechnet',
             style: TextStyle(
-              color: Color(0xFFFF3B30),
+              color: AppAccentColors.accent,
               fontSize: 14,
               fontWeight: FontWeight.bold,
             ),
@@ -1014,7 +1035,7 @@ class _CruiseModePageState extends State<CruiseModePage>
   Widget _buildInfoItem(IconData icon, String value, String label) {
     return Column(
       children: [
-        Icon(icon, color: const Color(0xFFFF3B30), size: 20),
+        Icon(icon, color: AppAccentColors.accent, size: 20),
         const SizedBox(height: 4),
         Text(
           value,
@@ -1095,7 +1116,7 @@ class _CruiseModePageState extends State<CruiseModePage>
               FloatingActionButton(
                 heroTag: 'recenter_map_fab',
                 backgroundColor: _isCameraLocked
-                    ? const Color(0xFFFF5722)
+                    ? AppAccentColors.accent
                     : const Color(0xFF2D3138),
                 foregroundColor: Colors.white,
                 onPressed: _toggleCameraLock,
@@ -1180,13 +1201,13 @@ class _CruiseModePageState extends State<CruiseModePage>
                 // Glow-Effekt (nur native — auf Web zu teuer für CanvasKit)
                 Polyline(
                   points: _routeLatLngs,
-                  color: const Color(0x4DFF5722),
+                  color: AppAccentColors.accent.withValues(alpha: 0.30),
                   strokeWidth: 12,
                 ),
               // Haupt-Routenlinie
               Polyline(
                 points: _routeLatLngs,
-                color: const Color(0xFFFF5722),
+                color: AppAccentColors.accent,
                 strokeWidth: kIsWeb ? 4 : 5,
               ),
             ],
@@ -1292,8 +1313,8 @@ class _CruiseModePageState extends State<CruiseModePage>
                   child: OutlinedButton(
                     onPressed: _confirmRoute,
                     style: OutlinedButton.styleFrom(
-                      side: const BorderSide(
-                        color: Color(0xFFFF3B30),
+                      side: BorderSide(
+                        color: AppAccentColors.accent,
                         width: 1.5,
                       ),
                       backgroundColor: const Color(0xFF1C1F26),
@@ -1319,7 +1340,7 @@ class _CruiseModePageState extends State<CruiseModePage>
                 borderRadius: BorderRadius.circular(30),
                 boxShadow: [
                   BoxShadow(
-                    color: const Color(0xFFFF3B30).withValues(alpha: 0.3),
+                    color: AppAccentColors.accent.withValues(alpha: 0.3),
                     blurRadius: 12,
                     offset: const Offset(0, 4),
                   ),
@@ -1328,7 +1349,7 @@ class _CruiseModePageState extends State<CruiseModePage>
               child: ElevatedButton(
                 onPressed: _isLoading ? null : _generateRoute,
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFFFF3B30),
+                  backgroundColor: AppAccentColors.accent,
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(30),
                   ),
@@ -1569,6 +1590,155 @@ class _CruiseModePageState extends State<CruiseModePage>
     } catch (e) {
       debugPrint('[CruiseMode] setCamera fehlgeschlagen: $e');
     }
+  }
+
+  bool _hasUsableLocationPermission(geo.LocationPermission permission) {
+    return permission == geo.LocationPermission.whileInUse ||
+        permission == geo.LocationPermission.always;
+  }
+
+  void _showNavigationPermissionSnack(String message, Color backgroundColor) {
+    if (!mounted || _disposed) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(message),
+          backgroundColor: backgroundColor,
+          duration: const Duration(seconds: 3),
+        ),
+      );
+  }
+
+  Future<bool> _showLocationPermissionDialog({
+    required String title,
+    required String message,
+    required String confirmLabel,
+    String cancelLabel = 'Abbrechen',
+  }) async {
+    if (!mounted || _disposed) return false;
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1C1F26),
+        title: Text(title, style: const TextStyle(color: Colors.white)),
+        content: Text(message, style: const TextStyle(color: Colors.grey)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(cancelLabel),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(confirmLabel),
+          ),
+        ],
+      ),
+    );
+    return result ?? false;
+  }
+
+  Future<bool> _ensureNavigationLocationPermission() async {
+    if (kIsWeb) return true;
+
+    final serviceEnabled = await geo.Geolocator.isLocationServiceEnabled();
+    if (!mounted || _disposed) return false;
+    if (!serviceEnabled) {
+      final openSettings = await _showLocationPermissionDialog(
+        title: 'Standort aktivieren',
+        message: 'Für die Navigation muss GPS auf deinem Gerät aktiviert sein.',
+        confirmLabel: 'Standort öffnen',
+      );
+      if (openSettings) {
+        unawaited(geo.Geolocator.openLocationSettings());
+      }
+      return false;
+    }
+
+    var permission = await geo.Geolocator.checkPermission();
+    if (!mounted || _disposed) return false;
+    if (permission == geo.LocationPermission.denied) {
+      permission = await geo.Geolocator.requestPermission();
+      if (!mounted || _disposed) return false;
+    }
+
+    if (permission == geo.LocationPermission.deniedForever) {
+      final openSettings = await _showLocationPermissionDialog(
+        title: 'Standort blockiert',
+        message:
+            'Bitte erlaube CruiseConnect den Standortzugriff in den App-Einstellungen.',
+        confirmLabel: 'Einstellungen öffnen',
+      );
+      if (openSettings) {
+        unawaited(geo.Geolocator.openAppSettings());
+      }
+      return false;
+    }
+
+    if (!_hasUsableLocationPermission(permission)) {
+      _showNavigationPermissionSnack(
+        'Standortberechtigung wurde nicht erteilt.',
+        AppAccentColors.accent,
+      );
+      return false;
+    }
+
+    if (widget.groupId == null) return true;
+    return _ensureBackgroundLocationPermission(permission);
+  }
+
+  Future<bool> _ensureBackgroundLocationPermission(
+    geo.LocationPermission currentPermission,
+  ) async {
+    if (currentPermission == geo.LocationPermission.always) return true;
+
+    final shouldAskForBackground = await _showLocationPermissionDialog(
+      title: 'Standort im Hintergrund?',
+      message:
+          'Damit deine Gruppenfahrt weiterläuft, wenn du z. B. zu Spotify wechselst, braucht CruiseConnect die Freigabe "Immer erlauben".',
+      confirmLabel: Platform.isIOS || Platform.isMacOS
+          ? 'Einstellungen öffnen'
+          : 'Jetzt erlauben',
+      cancelLabel: 'Nur in App',
+    );
+    if (!mounted || _disposed) return false;
+
+    if (!shouldAskForBackground) {
+      _showNavigationPermissionSnack(
+        'Gruppenfahrt startet. Im Hintergrund läuft Tracking erst mit "Immer erlauben".',
+        const Color(0xFFFF9500),
+      );
+      return true;
+    }
+
+    if (Platform.isIOS || Platform.isMacOS) {
+      unawaited(geo.Geolocator.openAppSettings());
+      return false;
+    }
+
+    var permission = await geo.Geolocator.requestPermission();
+    if (!mounted || _disposed) return false;
+    if (permission == geo.LocationPermission.always) return true;
+
+    final openSettings = await _showLocationPermissionDialog(
+      title: '"Immer erlauben" fehlt noch',
+      message:
+          'Falls Android keinen passenden Dialog gezeigt hat, setze den Standortzugriff in den App-Einstellungen auf "Immer erlauben".',
+      confirmLabel: 'Einstellungen öffnen',
+      cancelLabel: 'Nur in App',
+    );
+    if (!mounted || _disposed) return false;
+
+    if (openSettings) {
+      unawaited(geo.Geolocator.openAppSettings());
+      return false;
+    }
+
+    _showNavigationPermissionSnack(
+      'Gruppenfahrt startet. Im Hintergrund läuft Tracking erst mit "Immer erlauben".',
+      const Color(0xFFFF9500),
+    );
+    return true;
   }
 
   Future<geo.Position> _getStartCoordinates() async {
@@ -2020,7 +2190,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       if (detour == 'Direkt') {
         return;
       }
-      const allowedStyles = {
+      final allowedStyles = {
         'Kurvenjagd',
         'Sport Mode',
         'Abendrunde',
@@ -2236,16 +2406,16 @@ class _CruiseModePageState extends State<CruiseModePage>
     _lastGeneratedSelectedStyle = null;
     _lastGeneratedAvoidHighways = null;
     _recentDestinationDistances = [];
-    _activeSpeedLimits = const [];
+    _activeSpeedLimits = [];
     _announcedManeuverIndices.clear();
     _safeSetState(() {
       _routeGeoJson = null;
       _routeDistance = null;
       _routeDuration = null;
       _routeLatLngs = [];
-      _fullRouteCoordinates = const [];
-      _remainingRouteCoordinates = const [];
-      _maneuvers = const [];
+      _fullRouteCoordinates = [];
+      _remainingRouteCoordinates = [];
+      _maneuvers = [];
       _activeManeuverIndex = 0;
       _currentRouteIndex = 0;
       _lastDrawnRouteIndex = 0;
@@ -2317,6 +2487,9 @@ class _CruiseModePageState extends State<CruiseModePage>
   }
 
   Future<void> _startNavigationFlow() async {
+    final hasLocationPermission = await _ensureNavigationLocationPermission();
+    if (!hasLocationPermission) return;
+
     await _prepareAccessLegForOffRouteStart();
     await _prepareXpStreakContext();
     _startNavigationTracking();
@@ -2759,7 +2932,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     final geometry = route.geometry;
 
     try {
-      final coordsRaw = (geometry['coordinates'] as List?) ?? const [];
+      final coordsRaw = (geometry['coordinates'] as List?) ?? [];
       final coordinates = coordsRaw
           .whereType<List>()
           .where((c) => c.length >= 2)
@@ -2778,7 +2951,7 @@ class _CruiseModePageState extends State<CruiseModePage>
         geoJson: json.encode(geometry),
         geometry: geometry,
         coordinates: coordinates,
-        maneuvers: const [],
+        maneuvers: [],
         distanceMeters: route.distanceKm * 1000,
         durationSeconds: route.durationSeconds,
         distanceKm: route.distanceKm,
@@ -2892,7 +3065,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     bool animateCamera = true,
     bool animateRouteDraw = false,
   }) async {
-    final coordinatesRaw = (geometry['coordinates'] as List?) ?? const [];
+    final coordinatesRaw = (geometry['coordinates'] as List?) ?? [];
     final activeCoordinates = coordinatesRaw
         .whereType<List>()
         .where((c) => c.length >= 2)
@@ -3018,6 +3191,49 @@ class _CruiseModePageState extends State<CruiseModePage>
 
   // ═══════════════════════ NAVIGATION TRACKING ══════════════════════════════
 
+  geo.LocationSettings _navigationLocationSettings() {
+    if (kIsWeb) {
+      return const geo.LocationSettings(
+        accuracy: geo.LocationAccuracy.best,
+        distanceFilter: 0,
+      );
+    }
+
+    if (Platform.isAndroid) {
+      final notificationText = widget.groupId == null
+          ? 'Navigation läuft - dein Standort bleibt für die Route aktiv.'
+          : 'Navigation läuft - dein Standort wird mit der Gruppe geteilt.';
+      return geo.AndroidSettings(
+        accuracy: geo.LocationAccuracy.bestForNavigation,
+        distanceFilter: 1,
+        intervalDuration: const Duration(seconds: 2),
+        foregroundNotificationConfig: geo.ForegroundNotificationConfig(
+          notificationTitle: 'CruiseConnect Navigation',
+          notificationText: notificationText,
+          notificationChannelName: 'CruiseConnect Navigation',
+          enableWakeLock: true,
+          setOngoing: true,
+        ),
+      );
+    }
+
+    if (Platform.isIOS || Platform.isMacOS) {
+      return geo.AppleSettings(
+        accuracy: geo.LocationAccuracy.bestForNavigation,
+        distanceFilter: 1,
+        activityType: geo.ActivityType.automotiveNavigation,
+        pauseLocationUpdatesAutomatically: false,
+        showBackgroundLocationIndicator: true,
+        allowBackgroundLocationUpdates: true,
+      );
+    }
+
+    return const geo.LocationSettings(
+      accuracy: geo.LocationAccuracy.bestForNavigation,
+      distanceFilter: 1,
+    );
+  }
+
   void _startNavigationTracking() {
     _stopIdlePositionStream(); // Idle-Stream stoppen, Navigation übernimmt
     _positionSubscription?.cancel();
@@ -3056,15 +3272,7 @@ class _CruiseModePageState extends State<CruiseModePage>
 
     // Web: distanceFilter=0 (Browser-API unterstützt kein natives Distanz-Filtern).
     // iOS/Android: 1m Filter für hochfrequente Updates (Apple-Maps-Feeling).
-    const locationSettings = kIsWeb
-        ? geo.LocationSettings(
-            accuracy: geo.LocationAccuracy.best,
-            distanceFilter: 0,
-          )
-        : geo.LocationSettings(
-            accuracy: geo.LocationAccuracy.bestForNavigation,
-            distanceFilter: 1,
-          );
+    final locationSettings = _navigationLocationSettings();
     _positionSubscription =
         geo.Geolocator.getPositionStream(
           locationSettings: locationSettings,
@@ -4227,7 +4435,7 @@ class _CruiseModePageState extends State<CruiseModePage>
 
   List<List<double>> _buildCompletionCoordinates(double progressFraction) {
     final sourceCoordinates =
-        _completionRouteResult?.coordinates ?? const <List<double>>[];
+        _completionRouteResult?.coordinates ?? <List<double>>[];
     if (sourceCoordinates.length < 2) return sourceCoordinates;
 
     final logicalRouteIndex = _logicalCurrentRouteIndex(
@@ -4292,8 +4500,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     final progressFraction = _calculateCompletionProgressFraction(
       adjustedResult?.distanceMeters,
     );
-    final previewCoordinates =
-        adjustedResult?.coordinates ?? const <List<double>>[];
+    final previewCoordinates = adjustedResult?.coordinates ?? <List<double>>[];
     final curves = _estimateCompletionCurves(
       previewCoordinates,
       progressFraction,
@@ -4493,7 +4700,7 @@ class _CruiseModePageState extends State<CruiseModePage>
           '[CruiseMode] XP-Sync übersprungen (unter Minimum-Schwelle)',
         );
       }
-      return const CruiseCompletionActionResult(success: true);
+      return CruiseCompletionActionResult(success: true);
     } catch (e, stack) {
       debugPrint('Route speichern / XP sync fehlgeschlagen: $e');
       debugPrint('Stack: $stack');
@@ -4505,7 +4712,7 @@ class _CruiseModePageState extends State<CruiseModePage>
           ),
         );
       }
-      return const CruiseCompletionActionResult(success: false);
+      return CruiseCompletionActionResult(success: false);
     }
   }
 
@@ -4536,7 +4743,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       messenger.showSnackBar(
         SnackBar(
           content: Text(message, style: const TextStyle(color: Colors.white)),
-          backgroundColor: const Color(0xFFFF3B30),
+          backgroundColor: AppAccentColors.accent,
           behavior: SnackBarBehavior.floating,
           margin: const EdgeInsets.all(16),
           duration: const Duration(seconds: 4),
@@ -4552,7 +4759,7 @@ class _CruiseModePageState extends State<CruiseModePage>
 }
 
 class _CruiseCompletionSnapshot {
-  const _CruiseCompletionSnapshot({
+  _CruiseCompletionSnapshot({
     required this.distanceKm,
     required this.durationText,
     required this.curves,

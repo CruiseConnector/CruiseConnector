@@ -1,6 +1,8 @@
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:provider/provider.dart';
+import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/data/services/offline_map_service.dart';
 import 'package:cruise_connect/presentation/pages/home_content_page.dart';
 import 'package:cruise_connect/presentation/pages/community_page.dart';
@@ -156,6 +158,7 @@ class _HomePageState extends State<HomePage> {
 
   Widget _buildBottomNav() {
     final bottomPadding = MediaQuery.of(context).padding.bottom;
+    final accent = context.watch<AppAccentProvider>().color;
     return Container(
       height: 60 + bottomPadding,
       padding: EdgeInsets.only(bottom: bottomPadding),
@@ -199,15 +202,11 @@ class _HomePageState extends State<HomePage> {
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
                     // Angepasster Gradient für den exakten Figma-Look
-                    gradient: const LinearGradient(
-                      colors: [Color(0xFFFF453A), Color(0xFFD32F2F)],
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                    ),
+                    gradient: AppAccentColors.primaryGradient,
                     // Der neue "Mini-Schatten" (subtiler)
                     boxShadow: [
                       BoxShadow(
-                        color: const Color(0xFFFF3B30).withValues(alpha: 0.3),
+                        color: accent.withValues(alpha: 0.3),
                         blurRadius: 10,
                         spreadRadius: 0,
                         offset: const Offset(0, 4),
@@ -262,6 +261,7 @@ class _HomePageState extends State<HomePage> {
 
   Widget _buildNavItem(IconData icon, int index) {
     final isSelected = _selectedIndex == index;
+    final accent = context.watch<AppAccentProvider>().color;
 
     return GestureDetector(
       onTap: () => _onNavItemTapped(index),
@@ -280,9 +280,7 @@ class _HomePageState extends State<HomePage> {
             child: TweenAnimationBuilder<Color?>(
               tween: ColorTween(
                 begin: const Color(0xFF9E9E9E),
-                end: isSelected
-                    ? const Color(0xFFFF3B30)
-                    : const Color(0xFF9E9E9E),
+                end: isSelected ? accent : const Color(0xFF9E9E9E),
               ),
               duration: const Duration(milliseconds: 300),
               curve: Curves.easeOutCubic,

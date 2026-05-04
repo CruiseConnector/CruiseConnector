@@ -4,6 +4,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/application/providers/community_provider.dart';
 import 'package:cruise_connect/application/providers/route_bookmark_provider.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
@@ -52,6 +53,7 @@ class _CommunityPageState extends State<CommunityPage>
   Position? _userPosition;
   RealtimeChannel? _postsChannel;
   RealtimeChannel? _notificationsChannel;
+  final Set<String> _expandedGroupNames = {};
 
   @override
   void initState() {
@@ -244,7 +246,7 @@ class _CommunityPageState extends State<CommunityPage>
     } else if (diffDays == 1) {
       prefix = 'Morgen';
     } else if (diffDays > 1 && diffDays < 7) {
-      const wds = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
+      final wds = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
       prefix = wds[dt.weekday - 1];
     } else {
       final d = dt.day.toString().padLeft(2, '0');
@@ -267,6 +269,8 @@ class _CommunityPageState extends State<CommunityPage>
 
   @override
   Widget build(BuildContext context) {
+    final accent = context.watch<AppAccentProvider>().color;
+
     return Scaffold(
       backgroundColor: const Color(0xFF0B0E14),
       appBar: AppBar(
@@ -292,8 +296,8 @@ class _CommunityPageState extends State<CommunityPage>
                   top: 8,
                   child: Container(
                     padding: const EdgeInsets.all(4),
-                    decoration: const BoxDecoration(
-                      color: Color(0xFFFF3B30),
+                    decoration: BoxDecoration(
+                      color: accent,
                       shape: BoxShape.circle,
                     ),
                     child: Text(
@@ -311,10 +315,23 @@ class _CommunityPageState extends State<CommunityPage>
         ],
         bottom: TabBar(
           controller: _tabController,
-          indicatorColor: const Color(0xFFFF3B30),
+          isScrollable: false,
+          labelPadding: EdgeInsets.zero,
+          indicator: UnderlineTabIndicator(
+            borderSide: BorderSide(color: accent, width: 2.5),
+          ),
+          indicatorSize: TabBarIndicatorSize.tab,
+          dividerColor: const Color(0xFF3A3A45),
           labelColor: Colors.white,
           unselectedLabelColor: Colors.grey,
-          labelStyle: const TextStyle(fontWeight: FontWeight.bold),
+          labelStyle: const TextStyle(
+            fontWeight: FontWeight.bold,
+            fontSize: 13.5,
+          ),
+          unselectedLabelStyle: const TextStyle(
+            fontWeight: FontWeight.w600,
+            fontSize: 12,
+          ),
           tabs: const [
             Tab(text: 'Feed'),
             Tab(text: 'Aktive Gruppen'),
@@ -325,7 +342,7 @@ class _CommunityPageState extends State<CommunityPage>
       ),
       floatingActionButton: FloatingActionButton(
         heroTag: 'community_fab',
-        backgroundColor: const Color(0xFFFF3B30),
+        backgroundColor: accent,
         child: Icon(
           _tabController.index == 1 ? Icons.group_add : Icons.add,
           color: Colors.white,
@@ -346,9 +363,7 @@ class _CommunityPageState extends State<CommunityPage>
         },
       ),
       body: _loading
-          ? const Center(
-              child: CircularProgressIndicator(color: Color(0xFFFF3B30)),
-            )
+          ? Center(child: CircularProgressIndicator(color: accent))
           : TabBarView(
               controller: _tabController,
               children: [
@@ -401,7 +416,7 @@ class _CommunityPageState extends State<CommunityPage>
                     ),
                   ),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFFFF3B30),
+                    backgroundColor: AppAccentColors.accent,
                     padding: const EdgeInsets.symmetric(vertical: 14),
                   ),
                 ),
@@ -425,7 +440,7 @@ class _CommunityPageState extends State<CommunityPage>
                     ),
                   ),
                   style: OutlinedButton.styleFrom(
-                    side: const BorderSide(color: Color(0xFFFF3B30)),
+                    side: BorderSide(color: AppAccentColors.accent),
                     padding: const EdgeInsets.symmetric(vertical: 14),
                   ),
                 ),
@@ -438,7 +453,7 @@ class _CommunityPageState extends State<CommunityPage>
 
     return RefreshIndicator(
       onRefresh: _loadData,
-      color: const Color(0xFFFF3B30),
+      color: AppAccentColors.accent,
       child: ListView.separated(
         padding: const EdgeInsets.only(bottom: 80),
         itemCount: feedPosts.length,
@@ -457,7 +472,7 @@ class _CommunityPageState extends State<CommunityPage>
 
     return RefreshIndicator(
       onRefresh: _loadData,
-      color: const Color(0xFFFF3B30),
+      color: AppAccentColors.accent,
       child: ListView(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 80),
         children: [
@@ -587,7 +602,7 @@ class _CommunityPageState extends State<CommunityPage>
           children: [
             Checkbox(
               value: _groupRadiusEnabled,
-              activeColor: const Color(0xFFFF3B30),
+              activeColor: AppAccentColors.accent,
               onChanged: (v) async {
                 setState(() => _groupRadiusEnabled = v ?? false);
                 if (_groupRadiusEnabled) await _ensureUserPosition();
@@ -607,10 +622,10 @@ class _CommunityPageState extends State<CommunityPage>
         if (_groupRadiusEnabled)
           SliderTheme(
             data: SliderTheme.of(context).copyWith(
-              activeTrackColor: const Color(0xFFFF3B30),
+              activeTrackColor: AppAccentColors.accent,
               inactiveTrackColor: Colors.white.withValues(alpha: 0.1),
-              thumbColor: const Color(0xFFFF3B30),
-              overlayColor: const Color(0x33FF3B30),
+              thumbColor: AppAccentColors.accent,
+              overlayColor: AppAccentColors.accent.withValues(alpha: 0.2),
             ),
             child: Slider(
               value: _groupRadiusKm,
@@ -732,7 +747,7 @@ class _CommunityPageState extends State<CommunityPage>
 
     return RefreshIndicator(
       onRefresh: _loadData,
-      color: const Color(0xFFFF3B30),
+      color: AppAccentColors.accent,
       child: ListView(
         padding: const EdgeInsets.only(bottom: 80),
         children: children,
@@ -807,17 +822,17 @@ class _CommunityPageState extends State<CommunityPage>
         color: const Color(0xFF12151C),
         borderRadius: BorderRadius.circular(16),
         border: Border.all(
-          color: const Color(0xFFFF3B30).withValues(alpha: 0.4),
+          color: AppAccentColors.accent.withValues(alpha: 0.4),
         ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Row(
+          Row(
             children: [
-              Icon(Icons.group_add, color: Color(0xFFFF3B30), size: 22),
-              SizedBox(width: 8),
-              Text(
+              Icon(Icons.group_add, color: AppAccentColors.accent, size: 22),
+              const SizedBox(width: 8),
+              const Text(
                 'Keine aktiven Gruppen in der Nähe',
                 style: TextStyle(
                   color: Colors.white,
@@ -844,7 +859,7 @@ class _CommunityPageState extends State<CommunityPage>
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
               decoration: BoxDecoration(
-                color: const Color(0xFFFF3B30),
+                color: AppAccentColors.accent,
                 borderRadius: BorderRadius.circular(12),
               ),
               child: const Text(
@@ -874,11 +889,15 @@ class _CommunityPageState extends State<CommunityPage>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Row(
+          Row(
             children: [
-              Icon(Icons.person_add_alt_1, color: Color(0xFFFF3B30), size: 22),
-              SizedBox(width: 8),
-              Text(
+              Icon(
+                Icons.person_add_alt_1,
+                color: AppAccentColors.accent,
+                size: 22,
+              ),
+              const SizedBox(width: 8),
+              const Text(
                 'Freunde einladen',
                 style: TextStyle(
                   color: Colors.white,
@@ -899,7 +918,7 @@ class _CommunityPageState extends State<CommunityPage>
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
               decoration: BoxDecoration(
-                color: const Color(0xFFFF3B30),
+                color: AppAccentColors.accent,
                 borderRadius: BorderRadius.circular(12),
               ),
               child: const Text(
@@ -960,6 +979,8 @@ class _CommunityPageState extends State<CommunityPage>
       itemWidth: 220,
       itemBuilder: (ctx, i) {
         final group = _discoverGroups[i];
+        final groupId = group['id'] as String;
+        final nameExpanded = _expandedGroupNames.contains(groupId);
         final memberCount = (group['group_members'] as List?)?.length ?? 0;
         return Padding(
           padding: const EdgeInsets.symmetric(horizontal: 6),
@@ -974,23 +995,37 @@ class _CommunityPageState extends State<CommunityPage>
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text(
-                  group['name'] ?? '',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 14,
+                GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () {
+                    setState(() {
+                      if (nameExpanded) {
+                        _expandedGroupNames.remove(groupId);
+                      } else {
+                        _expandedGroupNames.add(groupId);
+                      }
+                    });
+                  },
+                  child: AnimatedSize(
+                    duration: const Duration(milliseconds: 180),
+                    curve: Curves.easeOut,
+                    child: Text(
+                      group['name'] ?? '',
+                      maxLines: nameExpanded ? 3 : 1,
+                      overflow: nameExpanded
+                          ? TextOverflow.visible
+                          : TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 14,
+                      ),
+                    ),
                   ),
                 ),
                 Row(
                   children: [
-                    const Icon(
-                      Icons.people,
-                      color: Color(0xFFFF3B30),
-                      size: 14,
-                    ),
+                    Icon(Icons.people, color: AppAccentColors.accent, size: 14),
                     const SizedBox(width: 4),
                     Text(
                       '$memberCount',
@@ -1009,7 +1044,7 @@ class _CommunityPageState extends State<CommunityPage>
                       vertical: 6,
                     ),
                     decoration: BoxDecoration(
-                      color: const Color(0xFFFF3B30),
+                      color: AppAccentColors.accent,
                       borderRadius: BorderRadius.circular(12),
                     ),
                     child: const Text(
@@ -1081,7 +1116,7 @@ class _CommunityPageState extends State<CommunityPage>
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
               decoration: BoxDecoration(
-                color: const Color(0xFFFF3B30),
+                color: AppAccentColors.accent,
                 borderRadius: BorderRadius.circular(12),
               ),
               child: const Text(
@@ -1195,71 +1230,75 @@ class _CommunityPageState extends State<CommunityPage>
                           _handlePostMenu(value, post, isOwnPost: isOwnPost),
                       itemBuilder: (_) => [
                         if (isOwnPost)
-                          const PopupMenuItem(
+                          PopupMenuItem(
                             value: 'delete',
                             child: Row(
                               children: [
                                 Icon(
                                   Icons.delete_outline,
-                                  color: Color(0xFFFF3B30),
+                                  color: AppAccentColors.accent,
                                   size: 18,
                                 ),
-                                SizedBox(width: 8),
+                                const SizedBox(width: 8),
                                 Text(
                                   'Löschen',
-                                  style: TextStyle(color: Color(0xFFFF3B30)),
+                                  style: TextStyle(
+                                    color: AppAccentColors.accent,
+                                  ),
                                 ),
                               ],
                             ),
                           )
                         else ...[
-                          const PopupMenuItem(
+                          PopupMenuItem(
                             value: 'report_post',
                             child: Row(
                               children: [
                                 Icon(
                                   Icons.flag_outlined,
-                                  color: Color(0xFFFF3B30),
+                                  color: AppAccentColors.accent,
                                   size: 18,
                                 ),
-                                SizedBox(width: 8),
-                                Text(
+                                const SizedBox(width: 8),
+                                const Text(
                                   'Beitrag melden',
                                   style: TextStyle(color: Colors.white),
                                 ),
                               ],
                             ),
                           ),
-                          const PopupMenuItem(
+                          PopupMenuItem(
                             value: 'report_user',
                             child: Row(
                               children: [
                                 Icon(
                                   Icons.person_off_outlined,
-                                  color: Color(0xFFFF3B30),
+                                  color: AppAccentColors.accent,
                                   size: 18,
                                 ),
-                                SizedBox(width: 8),
-                                Text(
+                                const SizedBox(width: 8),
+                                const Text(
                                   'Benutzer melden',
                                   style: TextStyle(color: Colors.white),
                                 ),
                               ],
                             ),
                           ),
-                          const PopupMenuItem(
+                          PopupMenuItem(
                             value: 'block',
                             child: Row(
                               children: [
                                 Icon(
                                   Icons.block,
-                                  color: Color(0xFFFF3B30),
+                                  color: AppAccentColors.accent,
                                   size: 18,
                                 ),
-                                SizedBox(width: 8),
+                                const SizedBox(width: 8),
                                 Text(
                                   'Benutzer blockieren',
-                                  style: TextStyle(color: Color(0xFFFF3B30)),
+                                  style: TextStyle(
+                                    color: AppAccentColors.accent,
+                                  ),
                                 ),
                               ],
                             ),
@@ -1392,9 +1431,9 @@ class _CommunityPageState extends State<CommunityPage>
             ),
             TextButton(
               onPressed: () => Navigator.pop(ctx, true),
-              child: const Text(
+              child: Text(
                 'Löschen',
-                style: TextStyle(color: Color(0xFFFF3B30)),
+                style: TextStyle(color: AppAccentColors.accent),
               ),
             ),
           ],
@@ -1438,7 +1477,7 @@ class _CommunityPageState extends State<CommunityPage>
   Widget _buildInlineFollowButton(String targetUserId, String name) {
     final provider = context.watch<CommunityProvider>();
     final isFollowing = provider.isFollowing(targetUserId);
-    final color = isFollowing ? Colors.grey : const Color(0xFFFF3B30);
+    final color = isFollowing ? Colors.grey : AppAccentColors.accent;
     return GestureDetector(
       onTap: () async {
         if (isFollowing) {
@@ -1528,7 +1567,7 @@ class _CommunityPageState extends State<CommunityPage>
                 void walk(Map<String, dynamic> node, int depth) {
                   flat.add((c: node, depth: depth));
                   if (depth >= maxDepth) return;
-                  final kids = replyMap[node['id']] ?? const [];
+                  final kids = replyMap[node['id']] ?? [];
                   for (final k in kids) {
                     walk(k, depth + 1);
                   }
@@ -1567,9 +1606,9 @@ class _CommunityPageState extends State<CommunityPage>
                     ),
                     Expanded(
                       child: loading
-                          ? const Center(
+                          ? Center(
                               child: CircularProgressIndicator(
-                                color: Color(0xFFFF3B30),
+                                color: AppAccentColors.accent,
                               ),
                             )
                           : topLevel.isEmpty
@@ -1682,9 +1721,9 @@ class _CommunityPageState extends State<CommunityPage>
                             ),
                           ),
                           IconButton(
-                            icon: const Icon(
+                            icon: Icon(
                               Icons.send,
-                              color: Color(0xFFFF3B30),
+                              color: AppAccentColors.accent,
                             ),
                             onPressed: () async {
                               final text = commentController.text.trim();
@@ -1731,7 +1770,7 @@ class _CommunityPageState extends State<CommunityPage>
     final cTime = _formatTimeAgo(comment['created_at']);
     final liked = comment['is_liked'] == true;
     final likesCount = (comment['likes_count'] as int?) ?? 0;
-    const double indentStep = 20.0;
+    double indentStep = 20.0;
     final leftPad = 16.0 + depth * indentStep;
     return Container(
       padding: EdgeInsets.only(left: leftPad, right: 16, top: 8, bottom: 8),
@@ -1817,9 +1856,7 @@ class _CommunityPageState extends State<CommunityPage>
                         children: [
                           Icon(
                             liked ? Icons.favorite : Icons.favorite_border,
-                            color: liked
-                                ? const Color(0xFFFF3B30)
-                                : Colors.grey,
+                            color: liked ? AppAccentColors.accent : Colors.grey,
                             size: 14,
                           ),
                           const SizedBox(width: 3),
@@ -1827,7 +1864,7 @@ class _CommunityPageState extends State<CommunityPage>
                             '$likesCount',
                             style: TextStyle(
                               color: liked
-                                  ? const Color(0xFFFF3B30)
+                                  ? AppAccentColors.accent
                                   : Colors.grey,
                               fontSize: 11,
                             ),
@@ -1857,9 +1894,13 @@ class _CommunityPageState extends State<CommunityPage>
   // ── Group Card ────────────────────────────────────────────────────────
 
   Widget _buildGroupCard(Map<String, dynamic> group, bool isJoined) {
+    final groupId = group['id'] as String;
+    final title = group['name']?.toString() ?? '';
+    final nameExpanded = _expandedGroupNames.contains(groupId);
     final memberCount = (group['group_members'] as List?)?.length ?? 0;
     final currentUserId = Supabase.instance.client.auth.currentUser?.id;
     final isOwner = group['created_by'] == currentUserId;
+    final isActive = group['is_active'] == true;
     final startTimeStr = group['start_time'] as String?;
     final startDt = startTimeStr != null
         ? DateTime.tryParse(startTimeStr)
@@ -1869,9 +1910,13 @@ class _CommunityPageState extends State<CommunityPage>
       decoration: BoxDecoration(
         color: const Color(0xFF1C1F26),
         borderRadius: BorderRadius.circular(16),
-        border: isJoined
-            ? Border.all(color: Colors.greenAccent.withValues(alpha: 0.5))
-            : null,
+        border: Border.all(
+          color: isActive
+              ? AppAccentColors.accent.withValues(alpha: 0.75)
+              : isJoined
+              ? AppAccentColors.accent.withValues(alpha: 0.5)
+              : Colors.white.withValues(alpha: 0.05),
+        ),
       ),
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -1882,15 +1927,56 @@ class _CommunityPageState extends State<CommunityPage>
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Expanded(
-                  child: Text(
-                    group['name'] ?? '',
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 16,
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () {
+                      setState(() {
+                        if (nameExpanded) {
+                          _expandedGroupNames.remove(groupId);
+                        } else {
+                          _expandedGroupNames.add(groupId);
+                        }
+                      });
+                    },
+                    child: AnimatedSize(
+                      duration: const Duration(milliseconds: 180),
+                      curve: Curves.easeOut,
+                      child: Text(
+                        title,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 16,
+                        ),
+                        maxLines: nameExpanded ? 3 : 1,
+                        overflow: nameExpanded
+                            ? TextOverflow.visible
+                            : TextOverflow.ellipsis,
+                      ),
                     ),
                   ),
                 ),
+                if (isActive) ...[
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 4,
+                    ),
+                    decoration: BoxDecoration(
+                      color: AppAccentColors.accent.withValues(alpha: 0.18),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      'Live',
+                      style: TextStyle(
+                        color: AppAccentColors.accent,
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ],
                 if (isOwner)
                   PopupMenuButton<String>(
                     icon: const Icon(
@@ -1924,9 +2010,11 @@ class _CommunityPageState extends State<CommunityPage>
                               ),
                               TextButton(
                                 onPressed: () => Navigator.pop(ctx, true),
-                                child: const Text(
+                                child: Text(
                                   'Löschen',
-                                  style: TextStyle(color: Color(0xFFFF3B30)),
+                                  style: TextStyle(
+                                    color: AppAccentColors.accent,
+                                  ),
                                 ),
                               ),
                             ],
@@ -1938,20 +2026,20 @@ class _CommunityPageState extends State<CommunityPage>
                         }
                       }
                     },
-                    itemBuilder: (_) => const [
+                    itemBuilder: (_) => [
                       PopupMenuItem(
                         value: 'delete',
                         child: Row(
                           children: [
                             Icon(
                               Icons.delete_outline,
-                              color: Color(0xFFFF3B30),
+                              color: AppAccentColors.accent,
                               size: 18,
                             ),
-                            SizedBox(width: 8),
+                            const SizedBox(width: 8),
                             Text(
                               'Löschen',
-                              style: TextStyle(color: Color(0xFFFF3B30)),
+                              style: TextStyle(color: AppAccentColors.accent),
                             ),
                           ],
                         ),
@@ -1965,13 +2053,13 @@ class _CommunityPageState extends State<CommunityPage>
                       vertical: 4,
                     ),
                     decoration: BoxDecoration(
-                      color: Colors.greenAccent.withValues(alpha: 0.2),
+                      color: AppAccentColors.accent.withValues(alpha: 0.2),
                       borderRadius: BorderRadius.circular(8),
                     ),
-                    child: const Text(
+                    child: Text(
                       'Dabei',
                       style: TextStyle(
-                        color: Colors.greenAccent,
+                        color: AppAccentColors.accent,
                         fontSize: 10,
                         fontWeight: FontWeight.bold,
                       ),
@@ -1989,7 +2077,7 @@ class _CommunityPageState extends State<CommunityPage>
                         vertical: 6,
                       ),
                       decoration: BoxDecoration(
-                        color: const Color(0xFFFF3B30),
+                        color: AppAccentColors.accent,
                         borderRadius: BorderRadius.circular(12),
                       ),
                       child: const Text(
@@ -2008,7 +2096,7 @@ class _CommunityPageState extends State<CommunityPage>
               const SizedBox(height: 8),
               Row(
                 children: [
-                  const Icon(Icons.event, color: Color(0xFFFF3B30), size: 14),
+                  Icon(Icons.event, color: AppAccentColors.accent, size: 14),
                   const SizedBox(width: 6),
                   Text(
                     _formatGroupDate(startDt),
@@ -2044,9 +2132,9 @@ class _CommunityPageState extends State<CommunityPage>
             const SizedBox(height: 8),
             Row(
               children: [
-                const Icon(
+                Icon(
                   Icons.local_fire_department,
-                  color: Colors.orange,
+                  color: AppAccentColors.accent,
                   size: 14,
                 ),
                 const SizedBox(width: 6),
@@ -2217,12 +2305,12 @@ class _CommunityPageState extends State<CommunityPage>
         color: const Color(0xFF1C1F26),
         borderRadius: BorderRadius.circular(14),
         border: Border.all(
-          color: const Color(0xFFFF3B30).withValues(alpha: 0.4),
+          color: AppAccentColors.accent.withValues(alpha: 0.4),
         ),
       ),
       child: Row(
         children: [
-          const Icon(Icons.groups, color: Color(0xFFFF3B30), size: 28),
+          Icon(Icons.groups, color: AppAccentColors.accent, size: 28),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
@@ -2308,7 +2396,7 @@ class _CommunityPageState extends State<CommunityPage>
                     );
                   },
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFFFF3B30),
+                    backgroundColor: AppAccentColors.accent,
                     foregroundColor: Colors.white,
                   ),
                   child: const Text('Öffnen'),
@@ -2331,7 +2419,7 @@ class _CommunityPageState extends State<CommunityPage>
                     );
                   },
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFFFF3B30),
+                    backgroundColor: AppAccentColors.accent,
                     foregroundColor: Colors.white,
                   ),
                   child: const Text('Beitreten'),
@@ -2496,6 +2584,21 @@ class _CommunityPageState extends State<CommunityPage>
                                   '$fromName hat dich in eine Gruppe eingeladen';
                               icon = Icons.group_add;
                               break;
+                            case 'group_public_created':
+                              message =
+                                  '$fromName hat eine neue öffentliche Gruppe erstellt';
+                              icon = Icons.groups_2;
+                              break;
+                            case 'group_joined':
+                              message =
+                                  '$fromName ist deiner Gruppe beigetreten';
+                              icon = Icons.group;
+                              break;
+                            case 'group_ride_started':
+                              message =
+                                  '$fromName hat die Gruppenfahrt gestartet';
+                              icon = Icons.navigation;
+                              break;
                             case 'mention':
                               message = '$fromName hat dich erwähnt';
                               icon = Icons.alternate_email;
@@ -2508,7 +2611,28 @@ class _CommunityPageState extends State<CommunityPage>
                           return ListTile(
                             onTap: () {
                               Navigator.pop(sheetContext);
-                              if (fromId != null) {
+                              final referenceId = n['reference_id'] as String?;
+                              final isGroupNotification =
+                                  type == 'group_invite' ||
+                                  type == 'group_public_created' ||
+                                  type == 'group_joined' ||
+                                  type == 'group_ride_started';
+                              if (isGroupNotification && referenceId != null) {
+                                Future.delayed(
+                                  const Duration(milliseconds: 150),
+                                  () {
+                                    if (!mounted) return;
+                                    Navigator.push(
+                                      this.context,
+                                      MaterialPageRoute(
+                                        builder: (_) => GroupLobbyPage(
+                                          groupId: referenceId,
+                                        ),
+                                      ),
+                                    ).then((_) => _loadData());
+                                  },
+                                );
+                              } else if (fromId != null) {
                                 Future.delayed(
                                   const Duration(milliseconds: 150),
                                   () {
@@ -2538,7 +2662,7 @@ class _CommunityPageState extends State<CommunityPage>
                                     ),
                                     child: Icon(
                                       icon,
-                                      color: const Color(0xFFFF3B30),
+                                      color: AppAccentColors.accent,
                                       size: 12,
                                     ),
                                   ),
@@ -2608,13 +2732,45 @@ class _CommunityPageState extends State<CommunityPage>
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
           decoration: BoxDecoration(
-            color: const Color(0xFFFF3B30),
+            color: AppAccentColors.accent,
             borderRadius: BorderRadius.circular(12),
           ),
           child: const Text(
             'Beitreten',
             style: TextStyle(
               color: Colors.white,
+              fontSize: 12,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ),
+      );
+    }
+
+    if ((type == 'group_public_created' ||
+            type == 'group_joined' ||
+            type == 'group_ride_started') &&
+        referenceId != null) {
+      return GestureDetector(
+        onTap: () {
+          Navigator.pop(sheetContext);
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => GroupLobbyPage(groupId: referenceId),
+            ),
+          ).then((_) => _loadData());
+        },
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            border: Border.all(color: AppAccentColors.accent),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Text(
+            'Öffnen',
+            style: TextStyle(
+              color: AppAccentColors.accent,
               fontSize: 12,
               fontWeight: FontWeight.bold,
             ),
@@ -2643,7 +2799,7 @@ class _CommunityPageState extends State<CommunityPage>
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
               decoration: BoxDecoration(
-                color: const Color(0xFFFF3B30),
+                color: AppAccentColors.accent,
                 borderRadius: BorderRadius.circular(10),
               ),
               child: const Text(
@@ -2705,7 +2861,7 @@ class _FollowButton extends StatefulWidget {
 }
 
 class _FollowButtonState extends State<_FollowButton> {
-  bool _following = false;
+  String _status = 'none';
   bool _loading = true;
 
   @override
@@ -2715,10 +2871,10 @@ class _FollowButtonState extends State<_FollowButton> {
   }
 
   Future<void> _checkFollow() async {
-    final result = await SocialService.isFollowing(widget.userId);
+    final result = await SocialService.getFollowStatus(widget.userId);
     if (mounted) {
       setState(() {
-        _following = result;
+        _status = result;
         _loading = false;
       });
     }
@@ -2727,12 +2883,12 @@ class _FollowButtonState extends State<_FollowButton> {
   @override
   Widget build(BuildContext context) {
     if (_loading) {
-      return const SizedBox(
+      return SizedBox(
         width: 24,
         height: 24,
         child: CircularProgressIndicator(
           strokeWidth: 2,
-          color: Color(0xFFFF3B30),
+          color: AppAccentColors.accent,
         ),
       );
     }
@@ -2742,25 +2898,34 @@ class _FollowButtonState extends State<_FollowButton> {
 
     return GestureDetector(
       onTap: () async {
-        if (_following) {
+        if (_status == 'accepted' || _status == 'pending') {
           await SocialService.unfollowUser(widget.userId);
+          if (!mounted) return;
+          setState(() => _status = 'none');
         } else {
-          await SocialService.followUser(widget.userId);
+          final next = await SocialService.followUser(widget.userId);
+          if (!mounted) return;
+          setState(() => _status = next);
         }
-        setState(() => _following = !_following);
         widget.onChanged();
       },
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         decoration: BoxDecoration(
-          color: _following ? Colors.transparent : const Color(0xFFFF3B30),
+          color: _status == 'none'
+              ? AppAccentColors.accent
+              : Colors.transparent,
           borderRadius: BorderRadius.circular(20),
-          border: _following ? Border.all(color: Colors.grey) : null,
+          border: _status == 'none' ? null : Border.all(color: Colors.grey),
         ),
         child: Text(
-          _following ? 'Folgst du' : 'Folgen',
+          _status == 'accepted'
+              ? 'Folge ich'
+              : _status == 'pending'
+              ? 'Angefragt'
+              : 'Folgen',
           style: TextStyle(
-            color: _following ? Colors.grey : Colors.white,
+            color: _status == 'none' ? Colors.white : Colors.grey,
             fontSize: 13,
             fontWeight: FontWeight.bold,
           ),
@@ -2849,14 +3014,14 @@ class _PostLikeButtonState extends State<_PostLikeButton> {
         children: [
           Icon(
             liked ? Icons.favorite : Icons.favorite_border,
-            color: liked ? const Color(0xFFFF3B30) : Colors.grey,
+            color: liked ? AppAccentColors.accent : Colors.grey,
             size: 18,
           ),
           const SizedBox(width: 4),
           Text(
             '$count',
             style: TextStyle(
-              color: liked ? const Color(0xFFFF3B30) : Colors.grey,
+              color: liked ? AppAccentColors.accent : Colors.grey,
               fontSize: 12,
             ),
           ),

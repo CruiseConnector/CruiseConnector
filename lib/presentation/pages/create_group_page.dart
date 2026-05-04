@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:geolocator/geolocator.dart' as geo;
 import 'package:latlong2/latlong.dart';
@@ -41,7 +42,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
 
   // Map-State
   LatLng? _startPoint;
-  List<LatLng> _routeLatLngs = const [];
+  List<LatLng> _routeLatLngs = [];
   RouteResult? _lastRoute;
 
   bool _isGenerating = false;
@@ -360,7 +361,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
             polylines: [
               Polyline(
                 points: _routeLatLngs,
-                color: const Color(0xFFFF3B30),
+                color: AppAccentColors.accent,
                 strokeWidth: 5,
               ),
             ],
@@ -372,9 +373,9 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
                 point: _startPoint!,
                 width: 36,
                 height: 36,
-                child: const Icon(
+                child: Icon(
                   Icons.location_on,
-                  color: Color(0xFFFF3B30),
+                  color: AppAccentColors.accent,
                   size: 36,
                 ),
               ),
@@ -393,10 +394,10 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
       margin: const EdgeInsets.only(bottom: 24),
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: const Color(0xFFFF3B30).withValues(alpha: 0.1),
+        color: AppAccentColors.accent.withValues(alpha: 0.1),
         borderRadius: BorderRadius.circular(16),
         border: Border.all(
-          color: const Color(0xFFFF3B30).withValues(alpha: 0.3),
+          color: AppAccentColors.accent.withValues(alpha: 0.3),
         ),
       ),
       child: Row(
@@ -415,7 +416,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
 
   Widget _buildRouteStat(IconData icon, String text) => Row(
     children: [
-      Icon(icon, color: const Color(0xFFFF3B30), size: 16),
+      Icon(icon, color: AppAccentColors.accent, size: 16),
       const SizedBox(width: 6),
       Text(
         text,
@@ -450,7 +451,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
             ),
           ),
           IconButton(
-            icon: const Icon(Icons.search, color: Color(0xFFFF3B30)),
+            icon: Icon(Icons.search, color: AppAccentColors.accent),
             onPressed: _geocodeAddress,
           ),
         ],
@@ -535,7 +536,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
                       style: TextStyle(
                         color: _selectedDateTime != null
                             ? Colors.white
-                            : const Color(0xFFFF3B30),
+                            : AppAccentColors.accent,
                         fontWeight: FontWeight.bold,
                       ),
                     ),
@@ -568,10 +569,10 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
           ),
           SliderTheme(
             data: SliderTheme.of(context).copyWith(
-              activeTrackColor: const Color(0xFFFF3B30),
+              activeTrackColor: AppAccentColors.accent,
               inactiveTrackColor: Colors.grey[800],
               thumbColor: Colors.white,
-              overlayColor: const Color(0xFFFF3B30).withValues(alpha: 0.2),
+              overlayColor: AppAccentColors.accent.withValues(alpha: 0.2),
               trackHeight: 4,
             ),
             child: Slider(
@@ -615,7 +616,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
                         ),
                         decoration: BoxDecoration(
                           color: isSelected
-                              ? const Color(0xFFFF3B30)
+                              ? AppAccentColors.accent
                               : const Color(0xFF1A1D24),
                           borderRadius: BorderRadius.circular(20),
                         ),
@@ -674,7 +675,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
                 ),
                 decoration: BoxDecoration(
                   color: isSelected
-                      ? const Color(0xFFFF3B30)
+                      ? AppAccentColors.accent
                       : const Color(0xFF0B0E14),
                   borderRadius: BorderRadius.circular(20),
                 ),
@@ -759,10 +760,10 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
                       ? null
                       : _createGroup,
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFFFF3B30),
-                    disabledBackgroundColor: const Color(
-                      0xFFFF3B30,
-                    ).withValues(alpha: 0.3),
+                    backgroundColor: AppAccentColors.accent,
+                    disabledBackgroundColor: AppAccentColors.accent.withValues(
+                      alpha: 0.3,
+                    ),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(16),
                     ),
@@ -798,9 +799,9 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
     final now = DateTime.now();
     Widget theme(BuildContext ctx, Widget? child) => Theme(
       data: Theme.of(ctx).copyWith(
-        colorScheme: const ColorScheme.dark(
-          primary: Color(0xFFFF3B30),
-          surface: Color(0xFF1C1F26),
+        colorScheme: ColorScheme.dark(
+          primary: AppAccentColors.accent,
+          surface: const Color(0xFF1C1F26),
           onSurface: Colors.white,
         ),
         dialogTheme: const DialogThemeData(backgroundColor: Color(0xFF1C1F26)),

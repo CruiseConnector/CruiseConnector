@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 
 import 'package:cruise_connect/domain/models/mapbox_suggestion.dart';
 
@@ -7,7 +8,12 @@ void showRouteTypeDialog({
   required BuildContext context,
   required MapboxSuggestion suggestion,
   required String selectedStyle,
-  required void Function(MapboxSuggestion suggestion, {required bool scenic, int routeVariant}) onRouteSelected,
+  required void Function(
+    MapboxSuggestion suggestion, {
+    required bool scenic,
+    int routeVariant,
+  })
+  onRouteSelected,
 }) {
   showModalBottomSheet(
     context: context,
@@ -23,25 +29,34 @@ void showRouteTypeDialog({
         children: [
           Center(
             child: Container(
-              width: 40, height: 4,
-              decoration: BoxDecoration(color: Colors.grey[600], borderRadius: BorderRadius.circular(2)),
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: Colors.grey[600],
+                borderRadius: BorderRadius.circular(2),
+              ),
             ),
           ),
           const SizedBox(height: 20),
           const Text(
             'Routen auswählen',
-            style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 20,
+              fontWeight: FontWeight.bold,
+            ),
           ),
           const SizedBox(height: 8),
           Text(
             'Ziel: ${suggestion.placeName}',
             style: const TextStyle(color: Colors.grey, fontSize: 14),
-            maxLines: 2, overflow: TextOverflow.ellipsis,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
           ),
           const SizedBox(height: 24),
           _RouteOption(
             icon: Icons.speed,
-            color: const Color(0xFFFF3B30),
+            color: AppAccentColors.accent,
             title: 'Schnellste Route',
             subtitle: 'Direkter Weg zum Ziel',
             onTap: () {
@@ -76,8 +91,13 @@ void showRouteTypeDialog({
             width: double.infinity,
             child: TextButton(
               onPressed: () => Navigator.pop(ctx),
-              style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 16)),
-              child: const Text('Abbrechen', style: TextStyle(color: Colors.grey, fontSize: 16)),
+              style: TextButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 16),
+              ),
+              child: const Text(
+                'Abbrechen',
+                style: TextStyle(color: Colors.grey, fontSize: 16),
+              ),
             ),
           ),
         ],
@@ -127,9 +147,19 @@ class _RouteOption extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(title, style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+                  Text(
+                    title,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
                   const SizedBox(height: 4),
-                  Text(subtitle, style: const TextStyle(color: Colors.grey, fontSize: 13)),
+                  Text(
+                    subtitle,
+                    style: const TextStyle(color: Colors.grey, fontSize: 13),
+                  ),
                 ],
               ),
             ),

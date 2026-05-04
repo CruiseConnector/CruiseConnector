@@ -1,4 +1,7 @@
+import 'package:cruise_connect/application/providers/app_accent_provider.dart';
+import 'package:cruise_connect/presentation/widgets/accent_color_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class SettingsPage extends StatefulWidget {
@@ -53,20 +56,26 @@ class _SettingsPageState extends State<SettingsPage> {
         content: Text(
           newValue
               ? 'Wenn dein Konto privat ist, können nur deine Follower deine Posts sehen. '
-                'Deine Posts erscheinen nicht mehr im Entdecken-Bereich für andere User.'
+                    'Deine Posts erscheinen nicht mehr im Entdecken-Bereich für andere User.'
               : 'Wenn dein Konto öffentlich ist, kann jeder deine Posts im Entdecken-Bereich sehen.',
           style: const TextStyle(color: Colors.grey, height: 1.4),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Abbrechen', style: TextStyle(color: Colors.grey)),
+            child: const Text(
+              'Abbrechen',
+              style: TextStyle(color: Colors.grey),
+            ),
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
             child: Text(
               newValue ? 'Privat machen' : 'Öffentlich machen',
-              style: const TextStyle(color: Color(0xFFFF3B30), fontWeight: FontWeight.bold),
+              style: TextStyle(
+                color: AppAccentColors.accent,
+                fontWeight: FontWeight.bold,
+              ),
             ),
           ),
         ],
@@ -87,7 +96,11 @@ class _SettingsPageState extends State<SettingsPage> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(newValue ? 'Dein Konto ist jetzt privat' : 'Dein Konto ist jetzt öffentlich'),
+            content: Text(
+              newValue
+                  ? 'Dein Konto ist jetzt privat'
+                  : 'Dein Konto ist jetzt öffentlich',
+            ),
             backgroundColor: const Color(0xFF1C1F26),
           ),
         );
@@ -98,7 +111,10 @@ class _SettingsPageState extends State<SettingsPage> {
       if (mounted) {
         setState(() => _isPrivateAccount = !newValue);
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Fehler beim Speichern'), backgroundColor: Colors.red),
+          const SnackBar(
+            content: Text('Fehler beim Speichern'),
+            backgroundColor: Colors.red,
+          ),
         );
       }
     }
@@ -106,6 +122,9 @@ class _SettingsPageState extends State<SettingsPage> {
 
   @override
   Widget build(BuildContext context) {
+    final accentProvider = context.watch<AppAccentProvider>();
+    final accent = accentProvider.color;
+
     return Scaffold(
       backgroundColor: const Color(0xFF0B0E14),
       appBar: AppBar(
@@ -115,10 +134,13 @@ class _SettingsPageState extends State<SettingsPage> {
           icon: const Icon(Icons.arrow_back, color: Colors.white),
           onPressed: () => Navigator.pop(context),
         ),
-        title: const Text('Einstellungen', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+        title: const Text(
+          'Einstellungen',
+          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+        ),
       ),
       body: _loading
-          ? const Center(child: CircularProgressIndicator(color: Color(0xFFFF3B30)))
+          ? Center(child: CircularProgressIndicator(color: accent))
           : ListView(
               padding: const EdgeInsets.all(16),
               children: [
@@ -140,6 +162,30 @@ class _SettingsPageState extends State<SettingsPage> {
 
                 _buildSectionHeader('APP-EINSTELLUNGEN'),
                 _buildSectionContainer([
+                  ListTile(
+                    leading: Container(
+                      width: 28,
+                      height: 28,
+                      decoration: BoxDecoration(
+                        color: accent,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    title: const Text(
+                      'Akzentfarbe',
+                      style: TextStyle(color: Colors.white, fontSize: 16),
+                    ),
+                    subtitle: Text(
+                      accentProvider.option.label,
+                      style: const TextStyle(color: Colors.grey, fontSize: 12),
+                    ),
+                    trailing: const Icon(
+                      Icons.chevron_right,
+                      color: Colors.grey,
+                    ),
+                    onTap: () => showAccentColorPicker(context),
+                  ),
+                  const Divider(color: Colors.white10, height: 1),
                   _buildSwitchTile(
                     'Push-Benachrichtigungen',
                     _pushNotifications,
@@ -158,10 +204,16 @@ class _SettingsPageState extends State<SettingsPage> {
                 _buildSectionHeader('GEFAHRENZONE'),
                 _buildSectionContainer([
                   ListTile(
-                    leading: const Icon(Icons.delete_outline, color: Color(0xFFFF3B30)),
-                    title: const Text(
+                    leading: Icon(
+                      Icons.delete_outline,
+                      color: AppAccentColors.accent,
+                    ),
+                    title: Text(
                       'Konto löschen',
-                      style: TextStyle(color: Color(0xFFFF3B30), fontWeight: FontWeight.bold),
+                      style: TextStyle(
+                        color: AppAccentColors.accent,
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
                     onTap: () {
                       // Delete logic
@@ -178,7 +230,12 @@ class _SettingsPageState extends State<SettingsPage> {
       padding: const EdgeInsets.only(left: 12, bottom: 8),
       child: Text(
         title,
-        style: const TextStyle(color: Colors.grey, fontSize: 12, fontWeight: FontWeight.bold, letterSpacing: 1.0),
+        style: const TextStyle(
+          color: Colors.grey,
+          fontSize: 12,
+          fontWeight: FontWeight.bold,
+          letterSpacing: 1.0,
+        ),
       ),
     );
   }
@@ -189,23 +246,34 @@ class _SettingsPageState extends State<SettingsPage> {
         color: const Color(0xFF1C1F26),
         borderRadius: BorderRadius.circular(16),
       ),
-      child: Column(
-        children: children,
-      ),
+      child: Column(children: children),
     );
   }
 
-  Widget _buildSwitchTile(String title, bool value, Function(bool) onChanged, {String? subtitle}) {
+  Widget _buildSwitchTile(
+    String title,
+    bool value,
+    Function(bool) onChanged, {
+    String? subtitle,
+  }) {
+    final accent = context.watch<AppAccentProvider>().color;
+
     return ListTile(
-      title: Text(title, style: const TextStyle(color: Colors.white, fontSize: 16)),
+      title: Text(
+        title,
+        style: const TextStyle(color: Colors.white, fontSize: 16),
+      ),
       subtitle: subtitle != null
-          ? Text(subtitle, style: const TextStyle(color: Colors.grey, fontSize: 12))
+          ? Text(
+              subtitle,
+              style: const TextStyle(color: Colors.grey, fontSize: 12),
+            )
           : null,
       trailing: Switch(
         value: value,
         onChanged: onChanged,
-        activeThumbColor: const Color(0xFFFF3B30),
-        activeTrackColor: const Color(0xFFFF3B30).withValues(alpha: 0.3),
+        activeThumbColor: accent,
+        activeTrackColor: accent.withValues(alpha: 0.3),
         inactiveThumbColor: Colors.grey,
         inactiveTrackColor: Colors.grey.withValues(alpha: 0.3),
       ),
@@ -214,7 +282,10 @@ class _SettingsPageState extends State<SettingsPage> {
 
   Widget _buildNavTile(String title, IconData icon) {
     return ListTile(
-      title: Text(title, style: const TextStyle(color: Colors.white, fontSize: 16)),
+      title: Text(
+        title,
+        style: const TextStyle(color: Colors.white, fontSize: 16),
+      ),
       trailing: const Icon(Icons.chevron_right, color: Colors.grey),
       onTap: () {
         // Navigation logic

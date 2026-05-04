@@ -155,7 +155,7 @@ class _AddVehicleCard extends StatelessWidget {
                     color: CarCard.accent.withValues(alpha: 0.14),
                     shape: BoxShape.circle,
                   ),
-                  child: const Icon(
+                  child: Icon(
                     Icons.add_rounded,
                     color: CarCard.accent,
                     size: 34,

@@ -45,7 +45,7 @@ class SocialService {
       return '@${slug.isEmpty ? 'user' : slug}';
     }
     final shortId = _shortUserId(fallbackUserId);
-    return shortId == null ? '@cruiser' : '@cruiser_$shortId';
+    return shortId == null ? '@user' : '@user_$shortId';
   }
 
   static String? _shortUserId(String? userId) {
@@ -472,6 +472,36 @@ class SocialService {
     return existing != null;
   }
 
+  /// Alle Posts, die ein User geliket hat (für "Gefällt mir" im Profil-Menü).
+  static Future<List<Map<String, dynamic>>> getUserLikes(String userId) async {
+    final likes = await _db
+        .from('post_likes')
+        .select('*, posts(*, profiles(id, username, email, avatar_url))')
+        .eq('user_id', userId)
+        .order('created_at', ascending: false);
+
+    final list = List<Map<String, dynamic>>.from(likes);
+    final nestedPosts = <String, Map<String, dynamic>>{};
+    for (final like in list) {
+      final post = like['posts'];
+      if (post is! Map) continue;
+      final postMap = Map<String, dynamic>.from(post);
+      final postId = postMap['id'] as String?;
+      if (postId != null) nestedPosts[postId] = postMap;
+    }
+
+    await _hydratePostReactionState(nestedPosts.values.toList());
+    for (final like in list) {
+      final post = like['posts'];
+      if (post is! Map) continue;
+      final postId = post['id'] as String?;
+      final hydrated = postId == null ? null : nestedPosts[postId];
+      if (hydrated != null) like['posts'] = hydrated;
+    }
+
+    return list;
+  }
+
   // ── Comments ─────────────────────────────────────────────────────────
 
   static Future<List<Map<String, dynamic>>> getComments(String postId) async {
@@ -774,6 +804,18 @@ class SocialService {
         .eq('following_id', targetUserId);
   }
 
+  /// Entfernt einen Follower von meinem Profil.
+  static Future<void> removeFollower(String followerId) async {
+    final uid = _userId;
+    if (uid == null) return;
+
+    await _db
+        .from('follows')
+        .delete()
+        .eq('follower_id', followerId)
+        .eq('following_id', uid);
+  }
+
   /// Gibt den Status der Follow-Beziehung zurück:
   /// `'accepted'` | `'pending'` | `'none'`.
   static Future<String> getFollowStatus(String targetUserId) async {
@@ -787,6 +829,19 @@ class SocialService {
         .maybeSingle();
     final status = (row as Map?)?['status'] as String?;
     return status ?? 'none';
+  }
+
+  static Future<bool> isBlockedEither(String targetUserId) async {
+    final uid = _userId;
+    if (uid == null) return false;
+    final row = await _db
+        .from('user_blocks')
+        .select('blocker_id')
+        .or(
+          'and(blocker_id.eq.$uid,blocked_id.eq.$targetUserId),and(blocker_id.eq.$targetUserId,blocked_id.eq.$uid)',
+        )
+        .maybeSingle();
+    return row != null;
   }
 
   static Future<bool> isFollowing(String targetUserId) async {
@@ -924,9 +979,12 @@ class SocialService {
 
     final profiles = <Map<String, dynamic>>[];
     final p = prefix.trim().toLowerCase();
+    final blocked = await getBlockedAndBlockerIds();
     for (final row in rows as List) {
       final profile = (row as Map)['profiles'] as Map<String, dynamic>?;
       if (profile == null) continue;
+      final targetId = profile['id'] as String?;
+      if (targetId == null || blocked.contains(targetId)) continue;
       final username = (profile['username'] as String? ?? '').toLowerCase();
       if (username.isEmpty) continue;
       if (p.isNotEmpty && !username.startsWith(p)) continue;
@@ -951,6 +1009,7 @@ class SocialService {
         .where((u) => u.isNotEmpty)
         .toSet();
     if (cleaned.isEmpty) return [];
+    final blocked = await getBlockedAndBlockerIds();
 
     // Auflösen Username → user_id, beschränkt auf eigene Follower.
     final rows = await _db
@@ -967,6 +1026,7 @@ class SocialService {
       final username = (profile?['username'] as String? ?? '').toLowerCase();
       final targetId = profile?['id'] as String?;
       if (targetId == null || targetId == uid) continue;
+      if (blocked.contains(targetId)) continue;
       if (!cleaned.contains(username)) continue;
       try {
         await _db.from('notifications').insert({
@@ -1015,13 +1075,19 @@ class SocialService {
     final sanitized = query.trim().replaceAll(RegExp(r'[%_\\,\.\(\)]'), '');
     if (sanitized.isEmpty) return [];
 
+    final blocked = await getBlockedAndBlockerIds();
     final results = await _db
         .from('profiles')
         .select('id, username, email, avatar_url')
         .or('username.ilike.%$sanitized%,email.ilike.%$sanitized%')
         .limit(20);
 
-    return List<Map<String, dynamic>>.from(results);
+    return List<Map<String, dynamic>>.from(
+      (results as List).where((row) {
+        final id = (row as Map)['id'] as String?;
+        return id != null && !blocked.contains(id);
+      }),
+    );
   }
 
   /// Nutzer-Vorschläge: Freunde-von-Freunden, fallback neueste Nutzer.
@@ -1161,6 +1227,7 @@ class SocialService {
   /// Sortiert nach `start_time` (nächstes Event zuerst).
   static Future<List<Map<String, dynamic>>> getDiscoverGroups() async {
     final uid = _userId;
+    final blocked = await getBlockedAndBlockerIds();
 
     final groups = await _db
         .from('groups')
@@ -1172,6 +1239,7 @@ class SocialService {
         .limit(80);
 
     final list = List<Map<String, dynamic>>.from(groups);
+    list.removeWhere((g) => blocked.contains(g['created_by']));
     if (uid == null) {
       _sortByStartTime(list);
       return list.take(40).toList();
@@ -1249,10 +1317,26 @@ class SocialService {
     final uid = _userId;
     if (uid == null) return;
 
+    final group = await _db
+        .from('groups')
+        .select('created_by')
+        .eq('id', groupId)
+        .maybeSingle();
+    final creatorId = (group as Map?)?['created_by'] as String?;
+    final blocked = await getBlockedAndBlockerIds();
+    if (creatorId != null && blocked.contains(creatorId)) {
+      throw Exception('Diese Gruppe ist nicht verfuegbar.');
+    }
+
+    final wasMember = await isMember(groupId);
     await _db.from('group_members').upsert({
       'group_id': groupId,
       'user_id': uid,
+      'ride_role': 'passenger',
     });
+    if (!wasMember) {
+      await _notifyGroupOwners(groupId, type: 'group_joined', fromUserId: uid);
+    }
   }
 
   static Future<void> leaveGroup(String groupId) async {
@@ -1264,6 +1348,14 @@ class SocialService {
         .delete()
         .eq('group_id', groupId)
         .eq('user_id', uid);
+  }
+
+  static Future<void> removeGroupMember(String groupId, String userId) async {
+    await _db
+        .from('group_members')
+        .delete()
+        .eq('group_id', groupId)
+        .eq('user_id', userId);
   }
 
   /// Prüft, ob der aktuelle User in der Gruppe die Rolle 'owner' hat.
@@ -1328,7 +1420,12 @@ class SocialService {
           .select('*, profiles:created_by(id, username, email)')
           .eq('invite_code', code)
           .maybeSingle();
-      return row;
+      if (row == null) return null;
+      final map = Map<String, dynamic>.from(row as Map);
+      final creatorId = map['created_by'] as String?;
+      final blocked = await getBlockedAndBlockerIds();
+      if (creatorId != null && blocked.contains(creatorId)) return null;
+      return map;
     } catch (e) {
       debugPrint('[SocialService] findGroupByCode Fehler: $e');
       return null;
@@ -1917,6 +2014,51 @@ class SocialService {
       'type': 'group_invite',
       'reference_id': groupId,
     });
+  }
+
+  static Future<Map<String, dynamic>?> getProfilePreview(String userId) async {
+    try {
+      final profile = await _db
+          .from('profiles')
+          .select('id, username, avatar_url, is_private')
+          .eq('id', userId)
+          .maybeSingle();
+      return profile;
+    } catch (e) {
+      debugPrint('[Social] Profil-Preview fehlgeschlagen: $e');
+      return null;
+    }
+  }
+
+  static Future<void> _notifyGroupOwners(
+    String groupId, {
+    required String type,
+    required String fromUserId,
+  }) async {
+    try {
+      final owners = await _db
+          .from('group_members')
+          .select('user_id')
+          .eq('group_id', groupId)
+          .eq('role', 'owner');
+      final targets = (owners as List)
+          .map((r) => (r as Map)['user_id'] as String?)
+          .whereType<String>()
+          .where((id) => id != fromUserId)
+          .toSet();
+      if (targets.isEmpty) return;
+      await _db.from('notifications').insert([
+        for (final target in targets)
+          {
+            'user_id': target,
+            'from_user_id': fromUserId,
+            'type': type,
+            'reference_id': groupId,
+          },
+      ]);
+    } catch (e) {
+      debugPrint('[Social] Group-Owner-Notification fehlgeschlagen: $e');
+    }
   }
 
   // ── Blocking & Reporting ─────────────────────────────────────────────────

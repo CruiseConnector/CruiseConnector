@@ -1,6 +1,7 @@
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:flutter/rendering.dart';
 import 'package:share_plus/share_plus.dart';
 
@@ -54,7 +55,7 @@ Future<T?> showCruiseCompletionSheet<T>({
 }
 
 class CruiseCompletionActionResult {
-  const CruiseCompletionActionResult({
+  CruiseCompletionActionResult({
     this.success = true,
     this.newBadgeEmojis = const [],
     this.levelUp = false,
@@ -376,10 +377,10 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
       width: double.infinity,
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
       decoration: BoxDecoration(
-        color: const Color(0xFFFF3B30).withValues(alpha: 0.12),
+        color: AppAccentColors.accent.withValues(alpha: 0.12),
         borderRadius: BorderRadius.circular(14),
         border: Border.all(
-          color: const Color(0xFFFF3B30).withValues(alpha: 0.25),
+          color: AppAccentColors.accent.withValues(alpha: 0.25),
         ),
       ),
       child: Text(
@@ -442,14 +443,14 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
           final fade =
               (1 - (_celebrationController.value - 0.7).clamp(0.0, 0.3) / 0.3)
                   .clamp(0.0, 1.0);
-          const bursts = <Offset>[
-            Offset(-84, -26),
-            Offset(-54, -74),
-            Offset(0, -92),
-            Offset(54, -74),
-            Offset(84, -26),
-            Offset(-68, 40),
-            Offset(68, 40),
+          final bursts = <Offset>[
+            const Offset(-84, -26),
+            const Offset(-54, -74),
+            const Offset(0, -92),
+            const Offset(54, -74),
+            const Offset(84, -26),
+            const Offset(-68, 40),
+            const Offset(68, 40),
           ];
 
           return Opacity(
@@ -461,10 +462,13 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
                   Container(
                     width: 180,
                     height: 180,
-                    decoration: const BoxDecoration(
+                    decoration: BoxDecoration(
                       shape: BoxShape.circle,
                       gradient: RadialGradient(
-                        colors: [Color(0x44FF3B30), Colors.transparent],
+                        colors: [
+                          AppAccentColors.accent.withValues(alpha: 0.27),
+                          Colors.transparent,
+                        ],
                       ),
                     ),
                   ),
@@ -521,7 +525,7 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
   }
 
   Widget _buildRatingPanel() {
-    const tags = <String>[
+    final tags = <String>[
       'schön',
       'langweilig',
       'zu weit weg',
@@ -602,7 +606,7 @@ class _CruiseRedDivider extends StatelessWidget {
       width: double.infinity,
       height: 2,
       decoration: BoxDecoration(
-        color: const Color(0xFFFF3B30),
+        color: AppAccentColors.accent,
         borderRadius: BorderRadius.circular(999),
       ),
     );
@@ -703,7 +707,7 @@ class _ActionButton extends StatelessWidget {
           height: 48,
           decoration: BoxDecoration(
             color: filled
-                ? const Color(0xFFFF3B30)
+                ? AppAccentColors.accent
                 : Colors.black.withValues(alpha: 0.16),
             borderRadius: BorderRadius.circular(16),
             border: Border.all(
@@ -751,12 +755,12 @@ class _RatingTagChip extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
         decoration: BoxDecoration(
           color: selected
-              ? const Color(0xFFFF3B30).withValues(alpha: 0.24)
+              ? AppAccentColors.accent.withValues(alpha: 0.24)
               : Colors.white.withValues(alpha: 0.08),
           borderRadius: BorderRadius.circular(999),
           border: Border.all(
             color: selected
-                ? const Color(0xFFFF3B30)
+                ? AppAccentColors.accent
                 : Colors.white.withValues(alpha: 0.12),
           ),
         ),
@@ -829,7 +833,7 @@ class _RoutePreviewCard extends StatelessWidget {
 }
 
 class _RoutePreviewPainter extends CustomPainter {
-  const _RoutePreviewPainter({required this.coordinates});
+  _RoutePreviewPainter({required this.coordinates});
 
   final List<List<double>> coordinates;
 
@@ -880,13 +884,13 @@ class _RoutePreviewPainter extends CustomPainter {
     }
 
     final glowPaint = Paint()
-      ..color = const Color(0x66FF6A5B)
+      ..color = AppAccentColors.accent.withValues(alpha: 0.40)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 12
       ..strokeCap = StrokeCap.round
       ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 12);
     final routePaint = Paint()
-      ..color = const Color(0xFFFF5A5A)
+      ..color = Color.lerp(AppAccentColors.accent, Colors.white, 0.10)!
       ..style = PaintingStyle.stroke
       ..strokeWidth = 4
       ..strokeCap = StrokeCap.round
@@ -905,7 +909,7 @@ class _RoutePreviewPainter extends CustomPainter {
         canvas.drawCircle(start, 5, Paint()..color = const Color(0xFFFFFFFF));
       }
       if (end != null) {
-        canvas.drawCircle(end, 5, Paint()..color = const Color(0xFFFF3B30));
+        canvas.drawCircle(end, 5, Paint()..color = AppAccentColors.accent);
       }
     }
   }

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:flutter_typeahead/flutter_typeahead.dart';
 
 import 'package:cruise_connect/data/services/geocoding_service.dart';
@@ -256,14 +257,14 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
               color: const Color(0xFF0B0E14),
               borderRadius: BorderRadius.circular(16),
               border: Border.all(
-                color: const Color(0xFFFF3B30).withValues(alpha: 0.5),
+                color: AppAccentColors.accent.withValues(alpha: 0.5),
               ),
             ),
             child: Row(
               children: [
-                const Icon(
+                Icon(
                   Icons.location_on,
-                  color: Color(0xFFFF3B30),
+                  color: AppAccentColors.accent,
                   size: 24,
                 ),
                 const SizedBox(width: 12),
@@ -335,14 +336,14 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
             debounceDuration: const Duration(milliseconds: 450),
             suggestionsCallback: (pattern) async {
               // Erst ab 2 Zeichen abfragen, sonst wenig sinnvolle Treffer.
-              if (pattern.trim().length < 2) return const [];
+              if (pattern.trim().length < 2) return [];
               try {
                 return await CruiseSetupCard._geocodingService
                     .searchSuggestions(pattern);
               } catch (e, stack) {
                 debugPrint('[CruiseSetup] Vorschlags-Suche fehlgeschlagen: $e');
                 debugPrintStack(stackTrace: stack);
-                return const [];
+                return [];
               }
             },
             errorBuilder: (context, error) => Padding(
@@ -354,7 +355,7 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
             ),
             itemBuilder: (context, suggestion) => ListTile(
               tileColor: const Color(0xFF1C1F26),
-              leading: const Icon(Icons.location_on, color: Color(0xFFFF3B30)),
+              leading: Icon(Icons.location_on, color: AppAccentColors.accent),
               title: Text(
                 suggestion.placeName,
                 style: const TextStyle(color: Colors.white, fontSize: 14),
@@ -377,10 +378,10 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
                 style: TextStyle(color: Colors.grey, fontSize: 13),
               ),
             ),
-            loadingBuilder: (context) => const Padding(
-              padding: EdgeInsets.all(16),
+            loadingBuilder: (context) => Padding(
+              padding: const EdgeInsets.all(16),
               child: Center(
-                child: CircularProgressIndicator(color: Color(0xFFFF3B30)),
+                child: CircularProgressIndicator(color: AppAccentColors.accent),
               ),
             ),
             builder: (context, controller, focusNode) => TextField(
@@ -433,13 +434,13 @@ class _LargeModeButton extends StatelessWidget {
           color: isActive ? const Color(0xFF1C1F26) : const Color(0xFF0B0E14),
           borderRadius: BorderRadius.circular(20),
           border: Border.all(
-            color: isActive ? const Color(0xFFFF3B30) : Colors.white12,
+            color: isActive ? AppAccentColors.accent : Colors.white12,
             width: isActive ? 2 : 1,
           ),
           boxShadow: isActive
               ? [
                   BoxShadow(
-                    color: const Color(0xFFFF3B30).withValues(alpha: 0.3),
+                    color: AppAccentColors.accent.withValues(alpha: 0.3),
                     blurRadius: 15,
                     spreadRadius: 1,
                   ),
@@ -451,7 +452,7 @@ class _LargeModeButton extends StatelessWidget {
           children: [
             Icon(
               icon,
-              color: isActive ? const Color(0xFFFF3B30) : Colors.white38,
+              color: isActive ? AppAccentColors.accent : Colors.white38,
               size: 32,
             ),
             const SizedBox(height: 10),
@@ -490,11 +491,11 @@ class _ChoiceButton extends StatelessWidget {
         padding: const EdgeInsets.symmetric(vertical: 20),
         decoration: BoxDecoration(
           color: isSelected
-              ? const Color(0xFFFF3B30).withValues(alpha: 0.15)
+              ? AppAccentColors.accent.withValues(alpha: 0.15)
               : const Color(0xFF0B0E14),
           borderRadius: BorderRadius.circular(16),
           border: Border.all(
-            color: isSelected ? const Color(0xFFFF3B30) : Colors.transparent,
+            color: isSelected ? AppAccentColors.accent : Colors.transparent,
             width: 1.5,
           ),
         ),
@@ -502,7 +503,7 @@ class _ChoiceButton extends StatelessWidget {
         child: Text(
           label,
           style: TextStyle(
-            color: isSelected ? const Color(0xFFFF3B30) : Colors.white60,
+            color: isSelected ? AppAccentColors.accent : Colors.white60,
             fontWeight: FontWeight.bold,
             fontSize: 15,
           ),
@@ -524,9 +525,7 @@ class _HighwayToggleSwitch extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final highwaysIncluded = !isEnabled;
-    final accentColor = highwaysIncluded
-        ? const Color(0xFFFF5A36)
-        : const Color(0xFFFF3B30);
+    final accentColor = AppAccentColors.accent;
     final backgroundColor = highwaysIncluded
         ? accentColor.withValues(alpha: 0.12)
         : const Color(0xFF0B0E14);
@@ -733,15 +732,15 @@ class _SelectionRow extends StatelessWidget {
                 ),
                 decoration: BoxDecoration(
                   color: isSelected
-                      ? const Color(0xFFFF3B30)
+                      ? AppAccentColors.accent
                       : const Color(0xFF0B0E14),
                   borderRadius: BorderRadius.circular(20),
                   boxShadow: isSelected
                       ? [
                           BoxShadow(
-                            color: const Color(
-                              0xFFFF3B30,
-                            ).withValues(alpha: 0.4),
+                            color: AppAccentColors.accent.withValues(
+                              alpha: 0.4,
+                            ),
                             blurRadius: 8,
                             offset: const Offset(0, 2),
                           ),

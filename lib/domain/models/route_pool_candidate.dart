@@ -99,8 +99,8 @@ class RoutePoolCandidate {
           (json['difficulty_level'] as String?) ??
           'normal',
       hardRegionStatus: (json['hard_region_status'] as String?) ?? 'normal',
-      candidateLocalityScore:
-          (json['candidate_locality_score'] as num?)?.toDouble(),
+      candidateLocalityScore: (json['candidate_locality_score'] as num?)
+          ?.toDouble(),
       repeatedSuccessCount:
           (json['repeated_success_count'] as num?)?.toInt() ?? 0,
       averageRating: (json['average_rating'] as num?)?.toDouble(),

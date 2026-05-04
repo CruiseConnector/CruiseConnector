@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 
 /// Zeigt verbleibende Zeit und Streckendistanz am unteren Rand der Karte.
 class CruiseNavigationInfoPanel extends StatelessWidget {
@@ -37,10 +38,14 @@ class CruiseNavigationInfoPanel extends StatelessWidget {
                   Container(
                     padding: const EdgeInsets.all(7),
                     decoration: BoxDecoration(
-                      color: const Color(0xFFFF3B30).withValues(alpha: 0.12),
+                      color: AppAccentColors.accent.withValues(alpha: 0.12),
                       borderRadius: BorderRadius.circular(10),
                     ),
-                    child: const Icon(Icons.schedule_rounded, color: Color(0xFFFF3B30), size: 16),
+                    child: Icon(
+                      Icons.schedule_rounded,
+                      color: AppAccentColors.accent,
+                      size: 16,
+                    ),
                   ),
                   const SizedBox(width: 8),
                   Flexible(
@@ -75,7 +80,11 @@ class CruiseNavigationInfoPanel extends StatelessWidget {
                 ],
               ),
             ),
-            Container(width: 1, height: 32, color: Colors.white.withValues(alpha: 0.08)),
+            Container(
+              width: 1,
+              height: 32,
+              color: Colors.white.withValues(alpha: 0.08),
+            ),
             const SizedBox(width: 12),
             // Verbleibende Strecke
             Expanded(
@@ -117,7 +126,11 @@ class CruiseNavigationInfoPanel extends StatelessWidget {
                       color: Colors.white.withValues(alpha: 0.08),
                       borderRadius: BorderRadius.circular(10),
                     ),
-                    child: Icon(Icons.straighten_rounded, color: Colors.white.withValues(alpha: 0.7), size: 16),
+                    child: Icon(
+                      Icons.straighten_rounded,
+                      color: Colors.white.withValues(alpha: 0.7),
+                      size: 16,
+                    ),
                   ),
                 ],
               ),

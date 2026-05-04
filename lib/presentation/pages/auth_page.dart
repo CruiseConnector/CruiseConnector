@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:cruise_connect/presentation/pages/home_page.dart';
@@ -16,16 +17,17 @@ class AuthPage extends StatelessWidget {
       builder: (context, snapshot) {
         // Während des ersten Ladens kurz warten
         if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Scaffold(
-            backgroundColor: Color(0xFF0B0E14),
+          return Scaffold(
+            backgroundColor: const Color(0xFF0B0E14),
             body: Center(
-              child: CircularProgressIndicator(color: Color(0xFFFF3B30)),
+              child: CircularProgressIndicator(color: AppAccentColors.accent),
             ),
           );
         }
 
-        final session = snapshot.data?.session
-            ?? Supabase.instance.client.auth.currentSession;
+        final session =
+            snapshot.data?.session ??
+            Supabase.instance.client.auth.currentSession;
 
         if (session != null) {
           return const HomePage();

@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:provider/provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:cruise_connect/application/providers/app_accent_provider.dart';
+import 'package:cruise_connect/application/providers/community_provider.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/data/services/saved_routes_service.dart';
 import 'package:cruise_connect/domain/models/saved_route.dart';
@@ -13,10 +16,12 @@ import 'package:cruise_connect/presentation/pages/settings_page.dart';
 import 'package:cruise_connect/presentation/pages/follow_requests_page.dart';
 import 'package:cruise_connect/presentation/pages/blocked_users_page.dart';
 import 'package:cruise_connect/presentation/pages/cruise_mode_page.dart';
+import 'package:cruise_connect/presentation/pages/liked_posts_page.dart';
 import 'package:cruise_connect/presentation/pages/post_detail_page.dart';
 import 'package:cruise_connect/presentation/pages/saved_route_bookmarks_page.dart';
 import 'package:cruise_connect/presentation/pages/user_profile_page.dart';
 import 'package:cruise_connect/presentation/widgets/mentions.dart';
+import 'package:cruise_connect/presentation/widgets/accent_color_picker.dart';
 import 'package:cruise_connect/presentation/widgets/route_chip.dart';
 import 'package:cruise_connect/presentation/widgets/user_avatar.dart';
 import 'package:cruise_connect/presentation/widgets/vehicle_garage_carousel.dart';
@@ -57,6 +62,7 @@ class _ProfilePageState extends State<ProfilePage>
   /// Komplettes Profil-Map — wird an `CarCard` durchgereicht.
   Map<String, dynamic> _profile = {};
   bool _uploadingAvatar = false;
+  final Set<String> _expandedGroupNames = {};
 
   /// UI-State: Bio + CarCard sind standardmäßig kompakt; lange Bio wird
   /// erst bei "mehr" voll ausgeklappt, CarCard erst bei Tap.
@@ -153,9 +159,9 @@ class _ProfilePageState extends State<ProfilePage>
                 ),
               ),
               ListTile(
-                leading: const Icon(
+                leading: Icon(
                   Icons.photo_camera,
-                  color: Color(0xFFFF3B30),
+                  color: AppAccentColors.accent,
                 ),
                 title: const Text(
                   'Kamera',
@@ -164,9 +170,9 @@ class _ProfilePageState extends State<ProfilePage>
                 onTap: () => Navigator.pop(sheetContext, ImageSource.camera),
               ),
               ListTile(
-                leading: const Icon(
+                leading: Icon(
                   Icons.photo_library,
-                  color: Color(0xFFFF3B30),
+                  color: AppAccentColors.accent,
                 ),
                 title: const Text(
                   'Galerie',
@@ -221,29 +227,27 @@ class _ProfilePageState extends State<ProfilePage>
 
     try {
       final bytes = await image.readAsBytes();
-      final ext = image.path.split('.').last.toLowerCase();
-      final path = 'avatars/$uid.$ext';
+      final rawExt = image.path.split('.').last.toLowerCase();
+      final ext = RegExp(r'^[a-z0-9]{2,5}$').hasMatch(rawExt) ? rawExt : 'jpg';
+      final contentType = switch (ext) {
+        'png' => 'image/png',
+        'webp' => 'image/webp',
+        _ => 'image/jpeg',
+      };
+      final urlWithCacheBuster = await SocialService.uploadUserAsset(
+        bucket: 'avatars',
+        bytes: bytes,
+        fileName: 'avatar.$ext',
+        contentType: contentType,
+      );
+      if (urlWithCacheBuster == null) {
+        throw Exception('Upload fehlgeschlagen');
+      }
 
-      await Supabase.instance.client.storage
-          .from('avatars')
-          .uploadBinary(
-            path,
-            bytes,
-            fileOptions: const FileOptions(upsert: true),
-          );
-
-      final publicUrl = Supabase.instance.client.storage
-          .from('avatars')
-          .getPublicUrl(path);
-
-      // URL mit Cache-Buster damit das neue Bild geladen wird
-      final urlWithCacheBuster =
-          '$publicUrl?t=${DateTime.now().millisecondsSinceEpoch}';
-
-      await Supabase.instance.client
-          .from('profiles')
-          .update({'avatar_url': publicUrl})
-          .eq('id', uid);
+      await SocialService.updateProfileImageUrl(
+        column: 'avatar_url',
+        publicUrl: urlWithCacheBuster,
+      );
 
       if (mounted) {
         setState(() {
@@ -298,6 +302,7 @@ class _ProfilePageState extends State<ProfilePage>
 
   @override
   Widget build(BuildContext context) {
+    final accent = context.watch<AppAccentProvider>().color;
     final user = Supabase.instance.client.auth.currentUser;
     // Username & Bio kommen jetzt aus dem `profiles`-Table — Edits aus
     // EditProfilePage werden so direkt sichtbar. user.userMetadata ist
@@ -320,7 +325,7 @@ class _ProfilePageState extends State<ProfilePage>
       endDrawer: _buildBurgerMenu(),
       floatingActionButton: FloatingActionButton(
         heroTag: 'profile_fab',
-        backgroundColor: const Color(0xFFFF3B30),
+        backgroundColor: accent,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         child: const Icon(Icons.add, color: Colors.white),
         onPressed: () async {
@@ -422,7 +427,7 @@ class _ProfilePageState extends State<ProfilePage>
                                 children: [
                                   CircleAvatar(
                                     radius: 40,
-                                    backgroundColor: const Color(0xFFFF3B30),
+                                    backgroundColor: accent,
                                     backgroundImage: _avatarUrl != null
                                         ? NetworkImage(_avatarUrl!)
                                         : null,
@@ -461,7 +466,7 @@ class _ProfilePageState extends State<ProfilePage>
                                       width: 28,
                                       height: 28,
                                       decoration: BoxDecoration(
-                                        color: const Color(0xFFFF3B30),
+                                        color: accent,
                                         shape: BoxShape.circle,
                                         border: Border.all(
                                           color: const Color(0xFF0B0E14),
@@ -544,8 +549,8 @@ class _ProfilePageState extends State<ProfilePage>
                               alignment: Alignment.centerLeft,
                               child: Text(
                                 userBioTitle,
-                                style: const TextStyle(
-                                  color: Color(0xFFFF3B30),
+                                style: TextStyle(
+                                  color: accent,
                                   fontSize: 13,
                                   fontWeight: FontWeight.w900,
                                 ),
@@ -563,18 +568,14 @@ class _ProfilePageState extends State<ProfilePage>
                             child: Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                const Icon(
-                                  Icons.link,
-                                  size: 14,
-                                  color: Color(0xFFFF3B30),
-                                ),
+                                Icon(Icons.link, size: 14, color: accent),
                                 const SizedBox(width: 4),
                                 Flexible(
                                   child: Text(
                                     userLink,
                                     overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(
-                                      color: Color(0xFFFF3B30),
+                                    style: TextStyle(
+                                      color: accent,
                                       fontSize: 13,
                                       fontWeight: FontWeight.w500,
                                     ),
@@ -626,13 +627,22 @@ class _ProfilePageState extends State<ProfilePage>
                 color: const Color(0xFF0B0E14),
                 child: TabBar(
                   controller: _tabController,
-                  indicatorColor: const Color(0xFFFF3B30),
+                  isScrollable: false,
+                  labelPadding: EdgeInsets.zero,
+                  indicator: UnderlineTabIndicator(
+                    borderSide: BorderSide(color: accent, width: 2.5),
+                  ),
                   indicatorSize: TabBarIndicatorSize.tab,
+                  dividerColor: const Color(0xFF3A3A45),
                   labelColor: Colors.white,
                   unselectedLabelColor: Colors.grey,
                   labelStyle: const TextStyle(
                     fontWeight: FontWeight.bold,
                     fontSize: 14,
+                  ),
+                  unselectedLabelStyle: const TextStyle(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 12,
                   ),
                   tabs: const [
                     Tab(text: 'Posts'),
@@ -646,9 +656,7 @@ class _ProfilePageState extends State<ProfilePage>
           ];
         },
         body: _loading
-            ? const Center(
-                child: CircularProgressIndicator(color: Color(0xFFFF3B30)),
-              )
+            ? Center(child: CircularProgressIndicator(color: accent))
             : TabBarView(
                 controller: _tabController,
                 children: [
@@ -972,19 +980,19 @@ class _ProfilePageState extends State<ProfilePage>
                   if (value == 'delete') _deletePost(postId);
                 },
                 itemBuilder: (_) => [
-                  const PopupMenuItem(
+                  PopupMenuItem(
                     value: 'delete',
                     child: Row(
                       children: [
                         Icon(
                           Icons.delete_outline,
-                          color: Color(0xFFFF3B30),
+                          color: AppAccentColors.accent,
                           size: 18,
                         ),
-                        SizedBox(width: 8),
+                        const SizedBox(width: 8),
                         Text(
                           'Post löschen',
-                          style: TextStyle(color: Color(0xFFFF3B30)),
+                          style: TextStyle(color: AppAccentColors.accent),
                         ),
                       ],
                     ),
@@ -1084,9 +1092,9 @@ class _ProfilePageState extends State<ProfilePage>
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text(
+            child: Text(
               'Löschen',
-              style: TextStyle(color: Color(0xFFFF3B30)),
+              style: TextStyle(color: AppAccentColors.accent),
             ),
           ),
         ],
@@ -1150,10 +1158,10 @@ class _ProfilePageState extends State<ProfilePage>
                       ),
                     ),
                     if (snapshot.connectionState == ConnectionState.waiting)
-                      const Expanded(
+                      Expanded(
                         child: Center(
                           child: CircularProgressIndicator(
-                            color: Color(0xFFFF3B30),
+                            color: AppAccentColors.accent,
                           ),
                         ),
                       )
@@ -1209,15 +1217,10 @@ class _ProfilePageState extends State<ProfilePage>
                                   );
                                 }
                               },
-                              leading: CircleAvatar(
-                                backgroundColor: const Color(0xFFFF3B30),
-                                child: Text(
-                                  username[0].toUpperCase(),
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
+                              leading: UserAvatar.fromProfile(
+                                profile,
+                                fallbackName: username,
+                                radius: 20,
                               ),
                               title: Text(
                                 username,
@@ -1230,6 +1233,51 @@ class _ProfilePageState extends State<ProfilePage>
                                   fontSize: 13,
                                 ),
                               ),
+                              trailing: type == 'followers' && userId != null
+                                  ? PopupMenuButton<String>(
+                                      icon: const Icon(
+                                        Icons.more_vert,
+                                        color: Colors.grey,
+                                      ),
+                                      color: const Color(0xFF1C1F26),
+                                      onSelected: (value) async {
+                                        final provider = this.context
+                                            .read<CommunityProvider>();
+                                        Navigator.pop(sheetContext);
+                                        if (value == 'remove') {
+                                          await SocialService.removeFollower(
+                                            userId,
+                                          );
+                                          if (mounted) _loadData();
+                                          return;
+                                        }
+                                        if (value == 'block') {
+                                          await provider.blockUser(userId);
+                                          if (mounted) _loadData();
+                                        }
+                                      },
+                                      itemBuilder: (_) => [
+                                        const PopupMenuItem(
+                                          value: 'remove',
+                                          child: Text(
+                                            'Follower entfernen',
+                                            style: TextStyle(
+                                              color: Colors.white,
+                                            ),
+                                          ),
+                                        ),
+                                        PopupMenuItem(
+                                          value: 'block',
+                                          child: Text(
+                                            'Blockieren',
+                                            style: TextStyle(
+                                              color: AppAccentColors.accent,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    )
+                                  : null,
                             );
                           },
                         ),
@@ -1305,7 +1353,7 @@ class _ProfilePageState extends State<ProfilePage>
               width: 44,
               height: 44,
               decoration: BoxDecoration(
-                color: const Color(0xFFFF3B30).withValues(alpha: 0.15),
+                color: AppAccentColors.accent.withValues(alpha: 0.15),
                 borderRadius: BorderRadius.circular(12),
               ),
               child: Center(
@@ -1383,7 +1431,7 @@ class _ProfilePageState extends State<ProfilePage>
                 _buildOptionTile(
                   Icons.play_circle_fill,
                   'Nochmal fahren',
-                  const Color(0xFFFF3B30),
+                  AppAccentColors.accent,
                   () {
                     Navigator.pop(ctx);
                     CruiseModePage.pendingRoute.value = route;
@@ -1435,9 +1483,9 @@ class _ProfilePageState extends State<ProfilePage>
                           ),
                           TextButton(
                             onPressed: () => Navigator.pop(c, true),
-                            child: const Text(
+                            child: Text(
                               'Löschen',
-                              style: TextStyle(color: Color(0xFFFF3B30)),
+                              style: TextStyle(color: AppAccentColors.accent),
                             ),
                           ),
                         ],
@@ -1480,8 +1528,8 @@ class _ProfilePageState extends State<ProfilePage>
               enabledBorder: const UnderlineInputBorder(
                 borderSide: BorderSide(color: Colors.white24),
               ),
-              focusedBorder: const UnderlineInputBorder(
-                borderSide: BorderSide(color: Color(0xFFFF3B30)),
+              focusedBorder: UnderlineInputBorder(
+                borderSide: BorderSide(color: AppAccentColors.accent),
               ),
             ),
             onSubmitted: (value) => Navigator.pop(dialogContext, value),
@@ -1496,9 +1544,9 @@ class _ProfilePageState extends State<ProfilePage>
             ),
             TextButton(
               onPressed: () => Navigator.pop(dialogContext, controller.text),
-              child: const Text(
+              child: Text(
                 'Speichern',
-                style: TextStyle(color: Color(0xFFFF3B30)),
+                style: TextStyle(color: AppAccentColors.accent),
               ),
             ),
           ],
@@ -1542,6 +1590,8 @@ class _ProfilePageState extends State<ProfilePage>
   }
 
   Widget _buildBurgerMenu() {
+    final accent = context.watch<AppAccentProvider>().color;
+
     return Drawer(
       backgroundColor: const Color(0xFF1C1F26),
       child: SafeArea(
@@ -1570,6 +1620,15 @@ class _ProfilePageState extends State<ProfilePage>
                 context,
                 MaterialPageRoute(builder: (_) => const SettingsPage()),
               ),
+            ),
+            _buildMenuItem(
+              Icons.palette_outlined,
+              'Akzentfarbe',
+              onTap: () {
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  if (mounted) showAccentColorPicker(context);
+                });
+              },
             ),
             _buildMenuItem(
               Icons.person_add_alt_1,
@@ -1610,6 +1669,17 @@ class _ProfilePageState extends State<ProfilePage>
                 );
               },
             ),
+            _buildMenuItem(
+              Icons.favorite_border,
+              'Gefällt mir',
+              onTap: () {
+                _scaffoldKey.currentState?.closeEndDrawer();
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const LikedPostsPage()),
+                ).then((_) => _loadData());
+              },
+            ),
             _buildMenuItem(Icons.help_outline, 'Hilfe & Support'),
             const Spacer(),
             Padding(
@@ -1619,14 +1689,12 @@ class _ProfilePageState extends State<ProfilePage>
                 child: ElevatedButton(
                   onPressed: signUserOut,
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(
-                      0xFFFF3B30,
-                    ).withValues(alpha: 0.1),
-                    foregroundColor: const Color(0xFFFF3B30),
+                    backgroundColor: accent.withValues(alpha: 0.1),
+                    foregroundColor: accent,
                     padding: const EdgeInsets.symmetric(vertical: 16),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12),
-                      side: const BorderSide(color: Color(0xFFFF3B30)),
+                      side: BorderSide(color: accent),
                     ),
                   ),
                   child: const Text(
@@ -1691,8 +1759,8 @@ class _ProfilePageState extends State<ProfilePage>
             TextSpan(text: _bioExpanded ? bio : collapsed),
             TextSpan(
               text: _bioExpanded ? '  weniger' : '  mehr',
-              style: const TextStyle(
-                color: Color(0xFFFF3B30),
+              style: TextStyle(
+                color: AppAccentColors.accent,
                 fontWeight: FontWeight.w600,
               ),
             ),
@@ -1725,9 +1793,9 @@ class _ProfilePageState extends State<ProfilePage>
             padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
             child: Row(
               children: [
-                const Icon(
+                Icon(
                   Icons.garage_rounded,
-                  color: Color(0xFFFF3B30),
+                  color: AppAccentColors.accent,
                   size: 18,
                 ),
                 const SizedBox(width: 6),
@@ -1794,9 +1862,11 @@ class _ProfilePageState extends State<ProfilePage>
     final title = (group['name'] as String?) ?? 'Gruppe';
     final isPublic = group['is_public'] == true;
     final isOwner = group['created_by'] == uid;
-    final members = (group['group_members'] as List?) ?? const [];
+    final isActive = group['is_active'] == true;
+    final members = (group['group_members'] as List?) ?? [];
     final count = members.length;
     final startTime = DateTime.tryParse(group['start_time'] as String? ?? '');
+    final nameExpanded = _expandedGroupNames.contains(groupId);
 
     return InkWell(
       borderRadius: BorderRadius.circular(16),
@@ -1812,8 +1882,10 @@ class _ProfilePageState extends State<ProfilePage>
           borderRadius: BorderRadius.circular(16),
           border: Border.all(
             color: isOwner
-                ? const Color(0xFFFF3B30).withValues(alpha: 0.5)
-                : Colors.greenAccent.withValues(alpha: 0.3),
+                ? AppAccentColors.accent.withValues(alpha: 0.5)
+                : isActive
+                ? AppAccentColors.accent.withValues(alpha: 0.75)
+                : AppAccentColors.accent.withValues(alpha: 0.3),
           ),
         ),
         padding: const EdgeInsets.all(16),
@@ -1823,14 +1895,33 @@ class _ProfilePageState extends State<ProfilePage>
             Row(
               children: [
                 Expanded(
-                  child: Text(
-                    title,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 16,
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () {
+                      setState(() {
+                        if (nameExpanded) {
+                          _expandedGroupNames.remove(groupId);
+                        } else {
+                          _expandedGroupNames.add(groupId);
+                        }
+                      });
+                    },
+                    child: AnimatedSize(
+                      duration: const Duration(milliseconds: 180),
+                      curve: Curves.easeOut,
+                      child: Text(
+                        title,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 16,
+                        ),
+                        maxLines: nameExpanded ? 3 : 1,
+                        overflow: nameExpanded
+                            ? TextOverflow.visible
+                            : TextOverflow.ellipsis,
+                      ),
                     ),
-                    overflow: TextOverflow.ellipsis,
                   ),
                 ),
                 _groupBadge(
@@ -1838,7 +1929,11 @@ class _ProfilePageState extends State<ProfilePage>
                   isPublic ? Colors.greenAccent : Colors.orangeAccent,
                 ),
                 const SizedBox(width: 6),
-                if (isOwner) _groupBadge('Owner', const Color(0xFFFF3B30)),
+                if (isActive) ...[
+                  _groupBadge('Live', AppAccentColors.accent),
+                  const SizedBox(width: 6),
+                ],
+                if (isOwner) _groupBadge('Owner', AppAccentColors.accent),
                 PopupMenuButton<String>(
                   icon: const Icon(Icons.more_vert, color: Colors.grey),
                   color: const Color(0xFF1C1F26),
@@ -1846,13 +1941,13 @@ class _ProfilePageState extends State<ProfilePage>
                     if (v == 'leave') await _leaveOrDeleteGroup(group);
                   },
                   itemBuilder: (_) => [
-                    const PopupMenuItem(
+                    PopupMenuItem(
                       value: 'leave',
                       // Ob am Ende gelöscht wird (letzter Owner) entscheidet
                       // der Confirm-Dialog anhand der tatsächlichen Owner-Anzahl.
                       child: Text(
                         'Gruppe verlassen',
-                        style: TextStyle(color: Color(0xFFFF3B30)),
+                        style: TextStyle(color: AppAccentColors.accent),
                       ),
                     ),
                   ],
@@ -1876,9 +1971,9 @@ class _ProfilePageState extends State<ProfilePage>
             const SizedBox(height: 6),
             Row(
               children: [
-                const Icon(
+                Icon(
                   Icons.local_fire_department,
-                  color: Colors.orange,
+                  color: AppAccentColors.accent,
                   size: 14,
                 ),
                 const SizedBox(width: 6),
@@ -2009,11 +2104,11 @@ class _LeaveGroupDialogState extends State<_LeaveGroupDialog> {
       title: Row(
         children: [
           if (destructive)
-            const Padding(
-              padding: EdgeInsets.only(right: 8),
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
               child: Icon(
                 Icons.warning_amber_rounded,
-                color: Color(0xFFFF3B30),
+                color: AppAccentColors.accent,
                 size: 22,
               ),
             ),
@@ -2031,7 +2126,7 @@ class _LeaveGroupDialogState extends State<_LeaveGroupDialog> {
             const SizedBox(height: 12),
             Text(
               _error!,
-              style: const TextStyle(color: Color(0xFFFF3B30), fontSize: 12),
+              style: TextStyle(color: AppAccentColors.accent, fontSize: 12),
             ),
           ],
         ],
@@ -2045,7 +2140,7 @@ class _LeaveGroupDialogState extends State<_LeaveGroupDialog> {
           ElevatedButton(
             onPressed: _busy ? null : _handleConfirm,
             style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFFFF3B30),
+              backgroundColor: AppAccentColors.accent,
               foregroundColor: Colors.white,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(8),
@@ -2069,17 +2164,17 @@ class _LeaveGroupDialogState extends State<_LeaveGroupDialog> {
           TextButton(
             onPressed: _busy ? null : _handleConfirm,
             child: _busy
-                ? const SizedBox(
+                ? SizedBox(
                     width: 16,
                     height: 16,
                     child: CircularProgressIndicator(
-                      color: Color(0xFFFF3B30),
+                      color: AppAccentColors.accent,
                       strokeWidth: 2,
                     ),
                   )
                 : Text(
                     confirmLabel,
-                    style: const TextStyle(color: Color(0xFFFF3B30)),
+                    style: TextStyle(color: AppAccentColors.accent),
                   ),
           ),
       ],

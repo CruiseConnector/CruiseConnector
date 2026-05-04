@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/presentation/widgets/mentions.dart';
 import 'package:cruise_connect/presentation/widgets/route_chip.dart';
@@ -50,7 +51,12 @@ class _PostDetailPageState extends State<PostDetailPage> {
   Future<void> _loadComments() async {
     try {
       final comments = await SocialService.getComments(widget.postId);
-      if (mounted) setState(() { _comments = comments; _loading = false; });
+      if (mounted) {
+        setState(() {
+          _comments = comments;
+          _loading = false;
+        });
+      }
     } catch (e) {
       debugPrint('[PostDetail] Kommentare laden fehlgeschlagen: $e');
       if (mounted) setState(() => _loading = false);
@@ -105,8 +111,21 @@ class _PostDetailPageState extends State<PostDetailPage> {
                       Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(widget.name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
-                          Text(widget.handle, style: const TextStyle(color: Colors.grey, fontSize: 14)),
+                          Text(
+                            widget.name,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 16,
+                            ),
+                          ),
+                          Text(
+                            widget.handle,
+                            style: const TextStyle(
+                              color: Colors.grey,
+                              fontSize: 14,
+                            ),
+                          ),
                         ],
                       ),
                     ],
@@ -114,11 +133,19 @@ class _PostDetailPageState extends State<PostDetailPage> {
                   const SizedBox(height: 20),
                   Text.rich(
                     TextSpan(
-                      style: const TextStyle(color: Colors.white, fontSize: 20, height: 1.4),
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 20,
+                        height: 1.4,
+                      ),
                       children: buildMentionSpans(
                         context: context,
                         text: widget.content,
-                        baseStyle: const TextStyle(color: Colors.white, fontSize: 20, height: 1.4),
+                        baseStyle: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 20,
+                          height: 1.4,
+                        ),
                       ),
                     ),
                   ),
@@ -138,22 +165,34 @@ class _PostDetailPageState extends State<PostDetailPage> {
                   const SizedBox(height: 10),
                   Text(
                     'Kommentare (${_comments.length})',
-                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18),
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 18,
+                    ),
                   ),
                   const SizedBox(height: 16),
 
                   if (_loading)
-                    const Center(child: CircularProgressIndicator(color: Color(0xFFFF3B30)))
+                    Center(
+                      child: CircularProgressIndicator(
+                        color: AppAccentColors.accent,
+                      ),
+                    )
                   else if (_comments.isEmpty)
                     const Center(
                       child: Padding(
                         padding: EdgeInsets.symmetric(vertical: 32),
-                        child: Text('Noch keine Kommentare', style: TextStyle(color: Colors.grey)),
+                        child: Text(
+                          'Noch keine Kommentare',
+                          style: TextStyle(color: Colors.grey),
+                        ),
                       ),
                     )
                   else
                     ..._comments.map((comment) {
-                      final profile = comment['profiles'] as Map<String, dynamic>?;
+                      final profile =
+                          comment['profiles'] as Map<String, dynamic>?;
                       final username = profile?['username'] ?? 'User';
                       final commentUserId = comment['user_id'] as String?;
                       final isOwn = commentUserId == currentUserId;
@@ -204,11 +243,24 @@ class _PostDetailPageState extends State<PostDetailPage> {
                   GestureDetector(
                     onTap: _sendComment,
                     child: CircleAvatar(
-                      backgroundColor: _sending ? Colors.grey : const Color(0xFFFF3B30),
+                      backgroundColor: _sending
+                          ? Colors.grey
+                          : AppAccentColors.accent,
                       radius: 22,
                       child: _sending
-                          ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                          : const Icon(Icons.send, color: Colors.white, size: 20),
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(
+                                color: Colors.white,
+                                strokeWidth: 2,
+                              ),
+                            )
+                          : const Icon(
+                              Icons.send,
+                              color: Colors.white,
+                              size: 20,
+                            ),
                     ),
                   ),
                 ],
@@ -232,11 +284,7 @@ class _PostDetailPageState extends State<PostDetailPage> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          UserAvatar.fromProfile(
-            profile,
-            fallbackName: user,
-            radius: 16,
-          ),
+          UserAvatar.fromProfile(profile, fallbackName: user, radius: 16),
           const SizedBox(width: 12),
           Expanded(
             child: Container(
@@ -248,7 +296,14 @@ class _PostDetailPageState extends State<PostDetailPage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(user, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+                  Text(
+                    user,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 13,
+                    ),
+                  ),
                   const SizedBox(height: 4),
                   Text(text, style: const TextStyle(color: Colors.white70)),
                 ],
@@ -257,7 +312,11 @@ class _PostDetailPageState extends State<PostDetailPage> {
           ),
           if (isOwn && commentId != null)
             IconButton(
-              icon: Icon(Icons.delete_outline, color: Colors.grey[600], size: 18),
+              icon: Icon(
+                Icons.delete_outline,
+                color: Colors.grey[600],
+                size: 18,
+              ),
               onPressed: () async {
                 await SocialService.deleteComment(commentId, widget.postId);
                 _loadComments();

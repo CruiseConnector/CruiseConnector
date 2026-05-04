@@ -61,8 +61,7 @@ class RouteRegion {
       bootstrapEnabled: (json['bootstrap_enabled'] as bool?) ?? true,
       difficultyLevel: (json['difficulty_level'] as String?) ?? 'normal',
       hardRegionStatus: (json['hard_region_status'] as String?) ?? 'normal',
-      curatedSeedPreferred:
-          (json['curated_seed_preferred'] as bool?) ?? false,
+      curatedSeedPreferred: (json['curated_seed_preferred'] as bool?) ?? false,
       defaultTargetPoolSize:
           (json['default_target_pool_size'] as num?)?.toInt() ?? 15,
       defaultMaxPoolSize:

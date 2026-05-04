@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/data/services/saved_routes_service.dart';
 import 'package:cruise_connect/domain/models/saved_route.dart';
 import 'package:cruise_connect/presentation/pages/cruise_mode_page.dart';
@@ -79,7 +80,7 @@ class _RouteAttachmentCardState extends State<RouteAttachmentCard> {
         color: const Color(0xFF1C1F26),
         borderRadius: BorderRadius.circular(isCompact ? 14 : 16),
         border: Border.all(
-          color: const Color(0xFFFF3B30).withValues(alpha: 0.25),
+          color: AppAccentColors.accent.withValues(alpha: 0.25),
         ),
       ),
       child: _loading
@@ -89,12 +90,12 @@ class _RouteAttachmentCardState extends State<RouteAttachmentCard> {
                   width: isCompact ? 36 : 44,
                   height: isCompact ? 36 : 44,
                   decoration: BoxDecoration(
-                    color: const Color(0xFFFF3B30).withValues(alpha: 0.15),
+                    color: AppAccentColors.accent.withValues(alpha: 0.15),
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  child: const Icon(
+                  child: Icon(
                     Icons.route,
-                    color: Color(0xFFFF3B30),
+                    color: AppAccentColors.accent,
                     size: 20,
                   ),
                 ),
@@ -144,12 +145,12 @@ class _RouteAttachmentCardState extends State<RouteAttachmentCard> {
                   width: isCompact ? 36 : 44,
                   height: isCompact ? 36 : 44,
                   decoration: BoxDecoration(
-                    color: const Color(0xFFFF3B30).withValues(alpha: 0.15),
+                    color: AppAccentColors.accent.withValues(alpha: 0.15),
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Icon(
                     Icons.route,
-                    color: const Color(0xFFFF3B30),
+                    color: AppAccentColors.accent,
                     size: isCompact ? 18 : 22,
                   ),
                 ),
@@ -192,7 +193,7 @@ class _RouteAttachmentCardState extends State<RouteAttachmentCard> {
                         vertical: isCompact ? 8 : 10,
                       ),
                       decoration: BoxDecoration(
-                        color: const Color(0xFFFF3B30),
+                        color: AppAccentColors.accent,
                         borderRadius: BorderRadius.circular(12),
                       ),
                       child: _opening

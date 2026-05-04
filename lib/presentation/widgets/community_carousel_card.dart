@@ -1,3 +1,4 @@
+import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/application/providers/community_provider.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/presentation/pages/user_profile_page.dart';
@@ -110,9 +111,9 @@ class _CommunityCarouselCardState extends State<CommunityCarouselCard> {
         children: [
           Row(
             children: [
-              const Icon(
+              Icon(
                 Icons.groups_2_outlined,
-                color: Color(0xFFFF3B30),
+                color: AppAccentColors.accent,
                 size: 18,
               ),
               const SizedBox(width: 8),
@@ -345,13 +346,13 @@ class EventsComingSoonSlide extends StatelessWidget {
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(
-                  color: const Color(0xFFFF3B30).withValues(alpha: 0.16),
+                  color: AppAccentColors.accent.withValues(alpha: 0.16),
                   borderRadius: BorderRadius.circular(999),
                 ),
-                child: const Text(
+                child: Text(
                   'Coming Soon',
                   style: TextStyle(
-                    color: Color(0xFFFF6B61),
+                    color: AppAccentColors.accent,
                     fontSize: 10,
                     fontWeight: FontWeight.w800,
                   ),
@@ -475,12 +476,12 @@ class _GroupPreviewRow extends StatelessWidget {
           width: 34,
           height: 34,
           decoration: BoxDecoration(
-            color: const Color(0xFFFF3B30).withValues(alpha: 0.12),
+            color: AppAccentColors.accent.withValues(alpha: 0.12),
             borderRadius: BorderRadius.circular(10),
           ),
-          child: const Icon(
+          child: Icon(
             Icons.groups_2_outlined,
-            color: Color(0xFFFF3B30),
+            color: AppAccentColors.accent,
             size: 19,
           ),
         ),
@@ -558,7 +559,7 @@ class _MiniActionButton extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 9),
         decoration: BoxDecoration(
           color: enabled
-              ? const Color(0xFFFF3B30)
+              ? AppAccentColors.accent
               : Colors.white.withValues(alpha: 0.08),
           borderRadius: BorderRadius.circular(999),
         ),
@@ -621,7 +622,7 @@ class _EmptySlide extends StatelessWidget {
         children: [
           Row(
             children: [
-              Icon(icon, color: const Color(0xFFFF3B30), size: 22),
+              Icon(icon, color: AppAccentColors.accent, size: 22),
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
@@ -702,7 +703,7 @@ class _CommunityDots extends StatelessWidget {
           height: 6,
           decoration: BoxDecoration(
             color: active
-                ? const Color(0xFFFF3B30)
+                ? AppAccentColors.accent
                 : Colors.white.withValues(alpha: 0.18),
             borderRadius: BorderRadius.circular(999),
           ),
