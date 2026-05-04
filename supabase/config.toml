@@ -402,3 +402,8 @@ entrypoint = "./functions/generate-cruise-route/index.ts"
 enabled = true
 verify_jwt = false
 entrypoint = "./functions/process-route-seed-jobs/index.ts"
+
+[functions.curate-route-pool]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/curate-route-pool/index.ts"

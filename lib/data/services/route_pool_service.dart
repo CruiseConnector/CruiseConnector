@@ -1683,6 +1683,11 @@ class RoutePoolService {
       ).compareTo(_boolScore(_sameAdmin2(query, b.route)));
       if (byAdmin2 != 0) return -byAdmin2;
 
+      final byRotation = b.route.weeklyRotationScore.compareTo(
+        a.route.weeklyRotationScore,
+      );
+      if (byRotation != 0) return byRotation;
+
       return b.route.qualityScore.compareTo(a.route.qualityScore);
     });
 
@@ -1718,6 +1723,11 @@ class RoutePoolService {
 
       final byStartDistance = a.startDistanceKm.compareTo(b.startDistanceKm);
       if (byStartDistance != 0) return byStartDistance;
+
+      final byRotation = b.route.weeklyRotationScore.compareTo(
+        a.route.weeklyRotationScore,
+      );
+      if (byRotation != 0) return byRotation;
 
       return b.route.qualityScore.compareTo(a.route.qualityScore);
     });

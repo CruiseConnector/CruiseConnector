@@ -1245,6 +1245,88 @@ void main() {
       expect(match?.route.id, 'same-distance-high-quality');
     });
 
+    test('Weekly-Rotation-Score beeinflusst Pool-Tiebreaker', () {
+      final match = RoutePoolService.findBestMatch(
+        query: const RoutePoolQuery(
+          userLat: 47.4125,
+          userLng: 9.7414,
+          countryCode: 'AT',
+          admin1Name: 'Vorarlberg',
+          cityCluster: 'Dornbirn',
+          distanceBucket: 50,
+          style: 'Kurvenjagd',
+          avoidHighways: true,
+        ),
+        regions: [
+          _region(
+            countryCode: 'AT',
+            admin1Name: 'Vorarlberg',
+            cityCluster: 'Dornbirn',
+            centerLat: 47.4125,
+            centerLng: 9.7414,
+          ),
+        ],
+        candidates: [
+          _route(
+            id: 'same-distance-low-rotation',
+            countryCode: 'AT',
+            admin1Name: 'Vorarlberg',
+            cityCluster: 'Dornbirn',
+            startLat: 47.4125,
+            startLng: 9.7414,
+            styleTags: const ['Kurvenjagd'],
+            qualityScore: 95,
+            weeklyRotationScore: 20,
+          ),
+          _route(
+            id: 'same-distance-high-rotation',
+            countryCode: 'AT',
+            admin1Name: 'Vorarlberg',
+            cityCluster: 'Dornbirn',
+            startLat: 47.4125,
+            startLng: 9.7414,
+            styleTags: const ['Kurvenjagd'],
+            qualityScore: 80,
+            weeklyRotationScore: 85,
+          ),
+        ],
+      );
+
+      expect(match?.route.id, 'same-distance-high-rotation');
+    });
+
+    test('RoutePoolEntry liest Curation-Felder aus Supabase-Zeile', () {
+      final entry = RoutePoolEntry.fromJson({
+        'id': 'pool-curated',
+        'country_code': 'AT',
+        'admin1_name': 'Vorarlberg',
+        'admin2_name': 'Dornbirn',
+        'city_cluster': 'Dornbirn',
+        'start_lat': 47.4125,
+        'start_lng': 9.7414,
+        'distance_km': 50.2,
+        'distance_bucket': 50,
+        'route_type': 'ROUND_TRIP',
+        'style_tags': ['Kurvenjagd'],
+        'avoids_highway': true,
+        'has_highway': false,
+        'quality_score': 88,
+        'verified': true,
+        'geometry': {'type': 'LineString', 'coordinates': []},
+        'average_rating': 4.6,
+        'rating_count': 3,
+        'completion_rate': 0.82,
+        'weekly_rotation_score': 91.4,
+        'deprecated_at': '2026-05-04T10:00:00Z',
+      });
+
+      expect(entry.averageRating, 4.6);
+      expect(entry.ratingCount, 3);
+      expect(entry.completionRate, 0.82);
+      expect(entry.weeklyRotationScore, 91.4);
+      expect(entry.deprecatedAt, isNotNull);
+    });
+
     test(
       'User zwischen zwei Clustern wird bestehendem Cluster zugeordnet ohne neuen Orts-Pool',
       () async {
@@ -2417,6 +2499,7 @@ RoutePoolEntry _route({
   bool avoidsHighway = true,
   bool hasHighway = false,
   double qualityScore = 80,
+  double weeklyRotationScore = 0,
   Map<String, dynamic> routePayload = const {},
 }) {
   return RoutePoolEntry(
@@ -2434,6 +2517,7 @@ RoutePoolEntry _route({
     avoidsHighway: avoidsHighway,
     hasHighway: hasHighway,
     qualityScore: qualityScore,
+    weeklyRotationScore: weeklyRotationScore,
     verified: true,
     routePayload: routePayload,
     geometry: {
