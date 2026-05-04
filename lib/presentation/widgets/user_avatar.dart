@@ -1,3 +1,4 @@
+import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:flutter/material.dart';
 
 /// Wiederverwendbarer Avatar mit Bild-Fallback auf Initiale.
@@ -7,7 +8,7 @@ class UserAvatar extends StatelessWidget {
   final String? avatarUrl;
   final String name;
   final double radius;
-  final Color backgroundColor;
+  final Color? backgroundColor;
   final VoidCallback? onTap;
 
   const UserAvatar({
@@ -15,7 +16,7 @@ class UserAvatar extends StatelessWidget {
     required this.name,
     this.avatarUrl,
     this.radius = 20,
-    this.backgroundColor = const Color(0xFFFF3B30),
+    this.backgroundColor,
     this.onTap,
   });
 
@@ -27,7 +28,7 @@ class UserAvatar extends StatelessWidget {
     Key? key,
     String? fallbackName,
     double radius = 20,
-    Color backgroundColor = const Color(0xFFFF3B30),
+    Color? backgroundColor,
     VoidCallback? onTap,
   }) {
     final username = profile?['username'] as String?;
@@ -52,7 +53,7 @@ class UserAvatar extends StatelessWidget {
 
     final avatar = CircleAvatar(
       radius: radius,
-      backgroundColor: backgroundColor,
+      backgroundColor: backgroundColor ?? AppAccentColors.accent,
       backgroundImage: hasUrl ? NetworkImage(avatarUrl!) : null,
       child: hasUrl
           ? null

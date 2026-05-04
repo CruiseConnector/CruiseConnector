@@ -288,7 +288,14 @@ class CommunityProvider extends ChangeNotifier {
 
     final wasFollowing = _followingIds.contains(targetUserId);
     if (!wasFollowing) {
-      _busyFollow.remove(targetUserId);
+      try {
+        await SocialService.unfollowUser(targetUserId);
+        _refreshDiscoverSilently();
+      } catch (e) {
+        debugPrint('[CommunityProvider] pending unfollow Fehler: $e');
+      } finally {
+        _busyFollow.remove(targetUserId);
+      }
       return;
     }
 

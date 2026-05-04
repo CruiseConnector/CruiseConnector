@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:provider/provider.dart';
 
 import 'package:cruise_connect/application/providers/community_provider.dart';
@@ -82,38 +83,37 @@ class _FollowRequestsPageState extends State<FollowRequestsPage> {
         elevation: 0,
       ),
       body: _loading
-          ? const Center(
-              child: CircularProgressIndicator(color: Color(0xFFFF3B30)))
+          ? Center(
+              child: CircularProgressIndicator(color: AppAccentColors.accent),
+            )
           : _requests.isEmpty
-              ? const Center(
-                  child: Padding(
-                    padding: EdgeInsets.all(32),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.inbox_outlined,
-                            color: Colors.grey, size: 48),
-                        SizedBox(height: 12),
-                        Text(
-                          'Keine offenen Anfragen',
-                          style: TextStyle(color: Colors.grey, fontSize: 14),
-                        ),
-                      ],
+          ? const Center(
+              child: Padding(
+                padding: EdgeInsets.all(32),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.inbox_outlined, color: Colors.grey, size: 48),
+                    SizedBox(height: 12),
+                    Text(
+                      'Keine offenen Anfragen',
+                      style: TextStyle(color: Colors.grey, fontSize: 14),
                     ),
-                  ),
-                )
-              : RefreshIndicator(
-                  onRefresh: _load,
-                  color: const Color(0xFFFF3B30),
-                  child: ListView.separated(
-                    padding: const EdgeInsets.symmetric(vertical: 8),
-                    itemCount: _requests.length,
-                    separatorBuilder: (_, _) =>
-                        const Divider(color: Colors.white10, height: 1),
-                    itemBuilder: (context, i) =>
-                        _buildRequestTile(_requests[i]),
-                  ),
+                  ],
                 ),
+              ),
+            )
+          : RefreshIndicator(
+              onRefresh: _load,
+              color: AppAccentColors.accent,
+              child: ListView.separated(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                itemCount: _requests.length,
+                separatorBuilder: (_, _) =>
+                    const Divider(color: Colors.white10, height: 1),
+                itemBuilder: (context, i) => _buildRequestTile(_requests[i]),
+              ),
+            ),
     );
   }
 
@@ -129,36 +129,39 @@ class _FollowRequestsPageState extends State<FollowRequestsPage> {
       onTap: fromId == null
           ? null
           : () => Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => UserProfilePage(
-                    userId: fromId,
-                    initialUsername: username,
-                  ),
-                ),
+              context,
+              MaterialPageRoute(
+                builder: (_) =>
+                    UserProfilePage(userId: fromId, initialUsername: username),
               ),
+            ),
       leading: UserAvatar.fromProfile(
         profile,
         fallbackName: username,
         radius: 22,
       ),
-      title: Text(username,
-          style: const TextStyle(
-              color: Colors.white, fontWeight: FontWeight.w600)),
-      subtitle: const Text('möchte dir folgen',
-          style: TextStyle(color: Colors.grey, fontSize: 12)),
+      title: Text(
+        username,
+        style: const TextStyle(
+          color: Colors.white,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+      subtitle: const Text(
+        'möchte dir folgen',
+        style: TextStyle(color: Colors.grey, fontSize: 12),
+      ),
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           GestureDetector(
             onTap: isBusy ? null : () => _handle(request, true),
             child: Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
               decoration: BoxDecoration(
                 color: isBusy
-                    ? const Color(0xFFFF3B30).withValues(alpha: 0.4)
-                    : const Color(0xFFFF3B30),
+                    ? AppAccentColors.accent.withValues(alpha: 0.4)
+                    : AppAccentColors.accent,
                 borderRadius: BorderRadius.circular(10),
               ),
               child: const Text(
@@ -175,8 +178,7 @@ class _FollowRequestsPageState extends State<FollowRequestsPage> {
           GestureDetector(
             onTap: isBusy ? null : () => _handle(request, false),
             child: Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
               decoration: BoxDecoration(
                 border: Border.all(color: Colors.grey),
                 borderRadius: BorderRadius.circular(10),

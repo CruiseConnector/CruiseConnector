@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 
 /// Der Zustand der Fahrtsteuerung.
 enum DriveState { stopped, started, paused }
@@ -76,12 +77,18 @@ class _DriveControlPanelState extends State<DriveControlPanel> {
             icon: const Icon(Icons.navigation_rounded, size: 22),
             label: const Text(
               'Fahrt starten',
-              style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: Colors.white),
+              style: TextStyle(
+                fontSize: 17,
+                fontWeight: FontWeight.w700,
+                color: Colors.white,
+              ),
             ),
             style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFFFF3B30),
+              backgroundColor: AppAccentColors.accent,
               foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
               elevation: 0,
             ),
           ),
@@ -95,19 +102,28 @@ class _DriveControlPanelState extends State<DriveControlPanel> {
               child: SizedBox(
                 height: 50,
                 child: ElevatedButton.icon(
-                  onPressed: _driveState == DriveState.started ? _handlePause : _handleStart,
+                  onPressed: _driveState == DriveState.started
+                      ? _handlePause
+                      : _handleStart,
                   icon: Icon(
-                    _driveState == DriveState.started ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                    _driveState == DriveState.started
+                        ? Icons.pause_rounded
+                        : Icons.play_arrow_rounded,
                     size: 22,
                   ),
                   label: Text(
                     _driveState == DriveState.started ? 'Pause' : 'Weiter',
-                    style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+                    style: const TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.white.withValues(alpha: 0.1),
                     foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                    ),
                     elevation: 0,
                   ),
                 ),
@@ -125,9 +141,11 @@ class _DriveControlPanelState extends State<DriveControlPanel> {
                     style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
                   ),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFFFF3B30),
+                    backgroundColor: AppAccentColors.accent,
                     foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                    ),
                     elevation: 0,
                   ),
                 ),

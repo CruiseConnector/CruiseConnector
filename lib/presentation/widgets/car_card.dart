@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 
 class CarCard extends StatelessWidget {
   const CarCard({super.key, required this.profile, this.onTap});
@@ -6,7 +7,7 @@ class CarCard extends StatelessWidget {
   final Map<String, dynamic> profile;
   final VoidCallback? onTap;
 
-  static const Color accent = Color(0xFFFF3B30);
+  static Color get accent => AppAccentColors.accent;
   static const Color surface = Color(0xFF1C1F26);
   static const Color pageBg = Color(0xFF0B0E14);
   static const double baseHeight = 470;
@@ -407,7 +408,7 @@ class _VehicleImagePlaceholder extends StatelessWidget {
 }
 
 class _VehicleStat {
-  const _VehicleStat(this.label, this.value);
+  _VehicleStat(this.label, this.value);
 
   final String label;
   final String value;

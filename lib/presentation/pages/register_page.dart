@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/data/services/auth_service.dart';
 import 'package:cruise_connect/presentation/pages/login_page.dart';
 
@@ -68,11 +69,14 @@ class _RegisterPageState extends State<RegisterPage> {
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(20),
           ),
-          title: const Row(
+          title: Row(
             children: [
-              Icon(Icons.mark_email_unread_outlined, color: Color(0xFFEF4F4F)),
-              SizedBox(width: 10),
-              Text('E-Mail bestätigen'),
+              Icon(
+                Icons.mark_email_unread_outlined,
+                color: AppAccentColors.accent,
+              ),
+              const SizedBox(width: 10),
+              const Text('E-Mail bestätigen'),
             ],
           ),
           content: Text(
@@ -81,10 +85,10 @@ class _RegisterPageState extends State<RegisterPage> {
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context),
-              child: const Text(
+              child: Text(
                 'Zur Anmeldung',
                 style: TextStyle(
-                  color: Color(0xFFEF4F4F),
+                  color: AppAccentColors.accent,
                   fontWeight: FontWeight.bold,
                 ),
               ),
@@ -128,14 +132,14 @@ class _RegisterPageState extends State<RegisterPage> {
   Widget build(BuildContext context) {
     final size = MediaQuery.of(context).size;
     final padding = MediaQuery.of(context).padding;
-    const brand = Color(0xFFEF4F4F);
+    final brand = AppAccentColors.accent;
     final headerH = size.height * 0.28;
 
     return Scaffold(
       backgroundColor: brand,
       body: Stack(
         children: [
-          const ColoredBox(color: brand, child: SizedBox.expand()),
+          ColoredBox(color: brand, child: const SizedBox.expand()),
 
           Positioned(
             top: headerH,
@@ -375,9 +379,9 @@ class _RegisterPageState extends State<RegisterPage> {
                             ),
                           ),
                           child: RichText(
-                            text: const TextSpan(
+                            text: TextSpan(
                               text: 'Bereits ein Konto? ',
-                              style: TextStyle(
+                              style: const TextStyle(
                                 color: Colors.grey,
                                 fontSize: 14,
                               ),

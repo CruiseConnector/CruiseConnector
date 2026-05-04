@@ -27,18 +27,18 @@ class UserLevel {
   final double progress; // 0.0 - 1.0
 
   static const _names = [
-    'Street Rookie',     // 1  —   0 XP
-    'City Cruiser',      // 2  — 100 XP  (~1 kurze Route)
-    'Road Explorer',     // 3  — 350 XP  (~3-4 Routen)
-    'Highway Hero',      // 4  — 800 XP  (~8 Routen)
-    'Mountain Rider',    // 5  — 1500 XP (~15 Routen)
-    'Canyon Racer',      // 6  — 2500 XP (~25 Routen)
-    'Alpine Master',     // 7  — 4000 XP (~40 Routen)
-    'Storm Chaser',      // 8  — 6000 XP (~60 Routen)
-    'Night Legend',      // 9  — 9000 XP (~90 Routen)
-    'Road King',         // 10 — 13000 XP (~130 Routen)
-    'Cruise Titan',      // 11 — 18000 XP (~180 Routen)
-    'Eternal Driver',    // 12 — 25000 XP (~250 Routen)
+    'Street Rookie', // 1  —   0 XP
+    'City Cruiser', // 2  — 100 XP  (~1 kurze Route)
+    'Road Explorer', // 3  — 350 XP  (~3-4 Routen)
+    'Highway Hero', // 4  — 800 XP  (~8 Routen)
+    'Mountain Rider', // 5  — 1500 XP (~15 Routen)
+    'Canyon Racer', // 6  — 2500 XP (~25 Routen)
+    'Alpine Master', // 7  — 4000 XP (~40 Routen)
+    'Storm Chaser', // 8  — 6000 XP (~60 Routen)
+    'Night Legend', // 9  — 9000 XP (~90 Routen)
+    'Road King', // 10 — 13000 XP (~130 Routen)
+    'Cruise Titan', // 11 — 18000 XP (~180 Routen)
+    'Eternal Driver', // 12 — 25000 XP (~250 Routen)
   ];
 
   /// XP-Schwellenwerte pro Level.
@@ -48,18 +48,18 @@ class UserLevel {
     if (level <= 1) return 0;
     // Vordefinierte Werte für exakte Kontrolle über die Kurve
     const thresholds = [
-      0,      // Level 1
-      100,    // Level 2
-      350,    // Level 3
-      800,    // Level 4
-      1500,   // Level 5
-      2500,   // Level 6
-      4000,   // Level 7
-      6000,   // Level 8
-      9000,   // Level 9
-      13000,  // Level 10
-      18000,  // Level 11
-      25000,  // Level 12
+      0, // Level 1
+      100, // Level 2
+      350, // Level 3
+      800, // Level 4
+      1500, // Level 5
+      2500, // Level 6
+      4000, // Level 7
+      6000, // Level 8
+      9000, // Level 9
+      13000, // Level 10
+      18000, // Level 11
+      25000, // Level 12
     ];
     if (level - 1 < thresholds.length) return thresholds[level - 1].toDouble();
     // Über Level 12: Exponentiell weiterwachsen
@@ -77,7 +77,9 @@ class UserLevel {
     final nextLevelXp = xpForLevel(level + 1);
     final xpInLevel = totalXp - currentLevelXp;
     final xpNeeded = nextLevelXp - currentLevelXp;
-    final progress = xpNeeded > 0 ? (xpInLevel / xpNeeded).clamp(0.0, 1.0) : 1.0;
+    final progress = xpNeeded > 0
+        ? (xpInLevel / xpNeeded).clamp(0.0, 1.0)
+        : 1.0;
     final xpToNext = max(0, (nextLevelXp - totalXp).ceil());
 
     final nameIndex = (level - 1).clamp(0, _names.length - 1);

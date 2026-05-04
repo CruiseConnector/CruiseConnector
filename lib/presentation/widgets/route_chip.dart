@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/data/services/saved_routes_service.dart';
 import 'package:cruise_connect/presentation/pages/cruise_mode_page.dart';
 
@@ -49,31 +50,38 @@ class _RouteChipState extends State<RouteChip> {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
         decoration: BoxDecoration(
-          color: const Color(0xFFFF3B30).withValues(alpha: 0.12),
+          color: AppAccentColors.accent.withValues(alpha: 0.12),
           borderRadius: BorderRadius.circular(20),
           border: Border.all(
-              color: const Color(0xFFFF3B30).withValues(alpha: 0.4)),
+            color: AppAccentColors.accent.withValues(alpha: 0.4),
+          ),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
             if (_loading)
-              const SizedBox(
+              SizedBox(
                 width: 14,
                 height: 14,
                 child: CircularProgressIndicator(
-                    strokeWidth: 2, color: Color(0xFFFF3B30)),
+                  strokeWidth: 2,
+                  color: AppAccentColors.accent,
+                ),
               )
             else
-              const Icon(Icons.play_circle_outline,
-                  color: Color(0xFFFF3B30), size: 16),
+              Icon(
+                Icons.play_circle_outline,
+                color: AppAccentColors.accent,
+                size: 16,
+              ),
             const SizedBox(width: 6),
-            const Text(
+            Text(
               'Route fahren',
               style: TextStyle(
-                  color: Color(0xFFFF3B30),
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600),
+                color: AppAccentColors.accent,
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              ),
             ),
           ],
         ),

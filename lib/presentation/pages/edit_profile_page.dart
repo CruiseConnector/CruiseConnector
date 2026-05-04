@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_typeahead/flutter_typeahead.dart';
 import 'package:image_cropper/image_cropper.dart';
@@ -12,9 +13,9 @@ import 'package:cruise_connect/presentation/widgets/vehicle_garage_carousel.dart
 
 enum _ImageCropPreset { avatar, banner, car }
 
-const _vehicleDescriptionMaxLength = 500;
+const int _vehicleDescriptionMaxLength = 500;
 
-const _countryOptions = <_CountryOption>[
+final List<_CountryOption> _countryOptions = <_CountryOption>[
   _CountryOption('AT', 'AT - Austria'),
   _CountryOption('DE', 'DE - Germany'),
   _CountryOption('GB', 'GB - United Kingdom'),
@@ -34,7 +35,7 @@ const _countryOptions = <_CountryOption>[
   _CountryOption('RU', 'RU - Russia'),
 ];
 
-const _brandCountryCodes = <String, String>{
+const Map<String, String> _brandCountryCodes = <String, String>{
   'abarth': 'IT',
   'acura': 'JP',
   'alfa romeo': 'IT',
@@ -104,7 +105,7 @@ const _brandCountryCodes = <String, String>{
 };
 
 class _CountryOption {
-  const _CountryOption(this.code, this.label);
+  _CountryOption(this.code, this.label);
 
   final String code;
   final String label;
@@ -255,9 +256,9 @@ class _EditProfilePageState extends State<EditProfilePage> {
                 ),
               ),
               ListTile(
-                leading: const Icon(
+                leading: Icon(
                   Icons.photo_camera,
-                  color: Color(0xFFFF3B30),
+                  color: AppAccentColors.accent,
                 ),
                 title: const Text(
                   'Kamera',
@@ -266,9 +267,9 @@ class _EditProfilePageState extends State<EditProfilePage> {
                 onTap: () => Navigator.pop(sheetContext, ImageSource.camera),
               ),
               ListTile(
-                leading: const Icon(
+                leading: Icon(
                   Icons.photo_library,
-                  color: Color(0xFFFF3B30),
+                  color: AppAccentColors.accent,
                 ),
                 title: const Text(
                   'Galerie',
@@ -440,7 +441,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
           toolbarTitle: title,
           toolbarColor: const Color(0xFF0B0E14),
           toolbarWidgetColor: Colors.white,
-          activeControlsWidgetColor: const Color(0xFFFF3B30),
+          activeControlsWidgetColor: AppAccentColors.accent,
           backgroundColor: const Color(0xFF0B0E14),
           cropStyle: cropStyle,
           lockAspectRatio: true,
@@ -499,9 +500,9 @@ class _EditProfilePageState extends State<EditProfilePage> {
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(ctx),
-                child: const Text(
+                child: Text(
                   'OK',
-                  style: TextStyle(color: Color(0xFFFF3B30)),
+                  style: TextStyle(color: AppAccentColors.accent),
                 ),
               ),
             ],
@@ -536,9 +537,9 @@ class _EditProfilePageState extends State<EditProfilePage> {
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text(
+            child: Text(
               'Ja, ändern',
-              style: TextStyle(color: Color(0xFFFF3B30)),
+              style: TextStyle(color: AppAccentColors.accent),
             ),
           ),
         ],
@@ -735,18 +736,18 @@ class _EditProfilePageState extends State<EditProfilePage> {
           TextButton(
             onPressed: _saving ? null : _save,
             child: _saving
-                ? const SizedBox(
+                ? SizedBox(
                     width: 16,
                     height: 16,
                     child: CircularProgressIndicator(
-                      color: Color(0xFFFF3B30),
+                      color: AppAccentColors.accent,
                       strokeWidth: 2,
                     ),
                   )
-                : const Text(
+                : Text(
                     'Speichern',
                     style: TextStyle(
-                      color: Color(0xFFFF3B30),
+                      color: AppAccentColors.accent,
                       fontWeight: FontWeight.bold,
                       fontSize: 16,
                     ),
@@ -755,8 +756,8 @@ class _EditProfilePageState extends State<EditProfilePage> {
         ],
       ),
       body: _loading
-          ? const Center(
-              child: CircularProgressIndicator(color: Color(0xFFFF3B30)),
+          ? Center(
+              child: CircularProgressIndicator(color: AppAccentColors.accent),
             )
           : ListView(
               padding: const EdgeInsets.only(bottom: 32),
@@ -811,7 +812,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
                             '${_bioController.text.length}/500',
                             style: TextStyle(
                               color: _bioController.text.length >= 500
-                                  ? const Color(0xFFFF3B30)
+                                  ? AppAccentColors.accent
                                   : Colors.grey,
                               fontSize: 11,
                             ),
@@ -957,7 +958,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
                         width: 32,
                         height: 32,
                         decoration: BoxDecoration(
-                          color: const Color(0xFFFF3B30),
+                          color: AppAccentColors.accent,
                           shape: BoxShape.circle,
                           border: Border.all(
                             color: const Color(0xFF0B0E14),
@@ -1035,18 +1036,18 @@ class _EditProfilePageState extends State<EditProfilePage> {
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 if (_uploadingCarImage)
-                  const SizedBox(
+                  SizedBox(
                     width: 16,
                     height: 16,
                     child: CircularProgressIndicator(
                       strokeWidth: 2,
-                      color: Color(0xFFFF3B30),
+                      color: AppAccentColors.accent,
                     ),
                   )
                 else
-                  const Icon(
+                  Icon(
                     Icons.camera_alt,
-                    color: Color(0xFFFF3B30),
+                    color: AppAccentColors.accent,
                     size: 18,
                   ),
                 const SizedBox(width: 8),
@@ -1054,8 +1055,8 @@ class _EditProfilePageState extends State<EditProfilePage> {
                   _carImageUrl != null && _carImageUrl!.isNotEmpty
                       ? 'Fahrzeug-Foto ändern'
                       : 'Fahrzeug-Foto hinzufügen',
-                  style: const TextStyle(
-                    color: Color(0xFFFF3B30),
+                  style: TextStyle(
+                    color: AppAccentColors.accent,
                     fontWeight: FontWeight.w600,
                   ),
                 ),
@@ -1102,7 +1103,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
                 color:
                     _vehicleDescriptionController.text.length >=
                         _vehicleDescriptionMaxLength
-                    ? const Color(0xFFFF3B30)
+                    ? AppAccentColors.accent
                     : Colors.grey,
                 fontSize: 11,
               ),
@@ -1169,7 +1170,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
                     inputFormatters: [
                       FilteringTextInputFormatter.digitsOnly,
                       LengthLimitingTextInputFormatter(6),
-                      const _MaxIntFormatter(999999),
+                      _MaxIntFormatter(999999),
                     ],
                   ),
                 ],
@@ -1188,7 +1189,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
                     inputFormatters: [
                       FilteringTextInputFormatter.digitsOnly,
                       LengthLimitingTextInputFormatter(4),
-                      const _MaxIntFormatter(1999),
+                      _MaxIntFormatter(1999),
                     ],
                   ),
                 ],
@@ -1213,7 +1214,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
                     inputFormatters: [
                       FilteringTextInputFormatter.digitsOnly,
                       LengthLimitingTextInputFormatter(3),
-                      const _MaxIntFormatter(999),
+                      _MaxIntFormatter(999),
                     ],
                   ),
                 ],
@@ -1233,7 +1234,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
                     ),
                     inputFormatters: [
                       LengthLimitingTextInputFormatter(4),
-                      const _DecimalSecondsFormatter(),
+                      _DecimalSecondsFormatter(),
                     ],
                   ),
                 ],
@@ -1258,7 +1259,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
                     inputFormatters: [
                       FilteringTextInputFormatter.digitsOnly,
                       LengthLimitingTextInputFormatter(2),
-                      const _MaxIntFormatter(24),
+                      _MaxIntFormatter(24),
                     ],
                   ),
                 ],
@@ -1277,7 +1278,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
                     inputFormatters: [
                       FilteringTextInputFormatter.digitsOnly,
                       LengthLimitingTextInputFormatter(5),
-                      const _MaxIntFormatter(99999),
+                      _MaxIntFormatter(99999),
                     ],
                   ),
                 ],
@@ -1305,12 +1306,12 @@ class _EditProfilePageState extends State<EditProfilePage> {
             padding: const EdgeInsets.symmetric(vertical: 12),
             decoration: BoxDecoration(
               color: selected
-                  ? const Color(0xFFFF3B30)
+                  ? AppAccentColors.accent
                   : const Color(0xFF1C1F26),
               borderRadius: BorderRadius.circular(12),
               border: Border.all(
                 color: selected
-                    ? const Color(0xFFFF3B30)
+                    ? AppAccentColors.accent
                     : Colors.white.withValues(alpha: 0.06),
               ),
             ),
@@ -1356,17 +1357,20 @@ class _EditProfilePageState extends State<EditProfilePage> {
         key: ValueKey(_carCountryCode),
         initialValue: _carCountryCode,
         dropdownColor: const Color(0xFF1C1F26),
-        iconEnabledColor: const Color(0xFFFF3B30),
+        iconEnabledColor: AppAccentColors.accent,
         style: const TextStyle(color: Colors.white),
-        decoration: const InputDecoration(
+        decoration: InputDecoration(
           border: InputBorder.none,
-          contentPadding: EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 14,
+            vertical: 4,
+          ),
           prefixIcon: Icon(
             Icons.flag_outlined,
-            color: Color(0xFFFF3B30),
+            color: AppAccentColors.accent,
             size: 19,
           ),
-          prefixIconConstraints: BoxConstraints(minWidth: 42),
+          prefixIconConstraints: const BoxConstraints(minWidth: 42),
         ),
         items: [
           for (final option in _countryOptions)
@@ -1451,8 +1455,8 @@ class _EditProfilePageState extends State<EditProfilePage> {
           ),
         );
       },
-      loadingBuilder: (context) => const Padding(
-        padding: EdgeInsets.all(14),
+      loadingBuilder: (context) => Padding(
+        padding: const EdgeInsets.all(14),
         child: Row(
           children: [
             SizedBox(
@@ -1460,11 +1464,14 @@ class _EditProfilePageState extends State<EditProfilePage> {
               height: 16,
               child: CircularProgressIndicator(
                 strokeWidth: 2,
-                color: Color(0xFFFF3B30),
+                color: AppAccentColors.accent,
               ),
             ),
-            SizedBox(width: 10),
-            Text('Lade Fahrzeugdaten...', style: TextStyle(color: Colors.grey)),
+            const SizedBox(width: 10),
+            const Text(
+              'Lade Fahrzeugdaten...',
+              style: TextStyle(color: Colors.grey),
+            ),
           ],
         ),
       ),
@@ -1517,9 +1524,9 @@ class _EditProfilePageState extends State<EditProfilePage> {
               counterText: '',
               hintText: hint,
               hintStyle: TextStyle(color: Colors.grey.withValues(alpha: 0.5)),
-              suffixIcon: const Icon(
+              suffixIcon: Icon(
                 Icons.search_rounded,
-                color: Color(0xFFFF3B30),
+                color: AppAccentColors.accent,
                 size: 20,
               ),
               border: InputBorder.none,
@@ -1537,7 +1544,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
   Widget _buildSectionHeader(String text, IconData icon) {
     return Row(
       children: [
-        Icon(icon, color: const Color(0xFFFF3B30), size: 22),
+        Icon(icon, color: AppAccentColors.accent, size: 22),
         const SizedBox(width: 8),
         Text(
           text,
@@ -1611,7 +1618,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
 /// wird zusätzlich via [LengthLimitingTextInputFormatter] gesetzt.
 class _MaxIntFormatter extends TextInputFormatter {
   final int max;
-  const _MaxIntFormatter(this.max);
+  _MaxIntFormatter(this.max);
 
   @override
   TextEditingValue formatEditUpdate(
@@ -1631,7 +1638,7 @@ class _MaxIntFormatter extends TextInputFormatter {
 /// inkl. `/`). Verhindert auch unmögliche Monate (>12) und führt dabei
 /// trotzdem die Eingabe sinnvoll fort.
 class _DecimalSecondsFormatter extends TextInputFormatter {
-  const _DecimalSecondsFormatter();
+  _DecimalSecondsFormatter();
 
   @override
   TextEditingValue formatEditUpdate(
@@ -1651,7 +1658,7 @@ class _DecimalSecondsFormatter extends TextInputFormatter {
 }
 
 class MonthYearFormatter extends TextInputFormatter {
-  const MonthYearFormatter();
+  MonthYearFormatter();
 
   @override
   TextEditingValue formatEditUpdate(

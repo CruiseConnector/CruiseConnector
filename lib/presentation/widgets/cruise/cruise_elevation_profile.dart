@@ -1,4 +1,5 @@
 import 'dart:math' as math;
+import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart' as geo;
 
@@ -58,7 +59,7 @@ class CruiseElevationProfile extends StatelessWidget {
               ),
               _StatChip(
                 icon: Icons.arrow_downward_rounded,
-                color: const Color(0xFFFF6B6B),
+                color: AppAccentColors.accent,
                 label: '-${totalDescent.round()} m',
               ),
             ],
@@ -109,11 +110,15 @@ class CruiseElevationProfile extends StatelessWidget {
     // Strecke in gleichmäßige Segmente teilen
     final cumDist = <double>[0];
     for (var i = 1; i < coords.length; i++) {
-      cumDist.add(cumDist.last +
-          geo.Geolocator.distanceBetween(
-            coords[i - 1][1], coords[i - 1][0],
-            coords[i][1], coords[i][0],
-          ));
+      cumDist.add(
+        cumDist.last +
+            geo.Geolocator.distanceBetween(
+              coords[i - 1][1],
+              coords[i - 1][0],
+              coords[i][1],
+              coords[i][0],
+            ),
+      );
     }
     final totalDist = cumDist.last;
     if (totalDist < 100) return const [];
@@ -124,7 +129,9 @@ class CruiseElevationProfile extends StatelessWidget {
 
     // Basis-Höhe mit sanftem Rauschen simulieren
     // Wir nutzen Bearing-Änderungen als Proxy für Terrain-Variation
-    final rng = math.Random(coords.first[0].hashCode ^ coords.first[1].hashCode);
+    final rng = math.Random(
+      coords.first[0].hashCode ^ coords.first[1].hashCode,
+    );
     double altitude = 400 + rng.nextDouble() * 200; // Starthoehe ~400-600m
     double momentum = 0;
 
@@ -133,7 +140,8 @@ class CruiseElevationProfile extends StatelessWidget {
       final targetDist = s * step;
 
       // Finde das passende Koordinaten-Segment
-      while (coordIdx < cumDist.length - 1 && cumDist[coordIdx + 1] < targetDist) {
+      while (coordIdx < cumDist.length - 1 &&
+          cumDist[coordIdx + 1] < targetDist) {
         coordIdx++;
       }
 
@@ -151,7 +159,9 @@ class CruiseElevationProfile extends StatelessWidget {
           coords[lookAhead][1] - coords[coordIdx][1],
         );
         bearingChange = (b2 - b1).abs();
-        if (bearingChange > math.pi) bearingChange = 2 * math.pi - bearingChange;
+        if (bearingChange > math.pi) {
+          bearingChange = 2 * math.pi - bearingChange;
+        }
       }
 
       // Höhenänderung: Kurven = tendenziell Hügel/Täler
@@ -169,7 +179,11 @@ class CruiseElevationProfile extends StatelessWidget {
 }
 
 class _StatChip extends StatelessWidget {
-  const _StatChip({required this.icon, required this.color, required this.label});
+  const _StatChip({
+    required this.icon,
+    required this.color,
+    required this.label,
+  });
   final IconData icon;
   final Color color;
   final String label;
@@ -183,7 +197,11 @@ class _StatChip extends StatelessWidget {
         const SizedBox(width: 3),
         Text(
           label,
-          style: TextStyle(color: color, fontSize: 9, fontWeight: FontWeight.w600),
+          style: TextStyle(
+            color: color,
+            fontSize: 9,
+            fontWeight: FontWeight.w600,
+          ),
         ),
       ],
     );
@@ -247,8 +265,8 @@ class _ElevationPainter extends CustomPainter {
         begin: Alignment.topCenter,
         end: Alignment.bottomCenter,
         colors: [
-          const Color(0xFFFF5722).withValues(alpha: 0.35),
-          const Color(0xFFFF5722).withValues(alpha: 0.05),
+          AppAccentColors.accent.withValues(alpha: 0.35),
+          AppAccentColors.accent.withValues(alpha: 0.05),
         ],
       );
       canvas.drawPath(
@@ -273,7 +291,7 @@ class _ElevationPainter extends CustomPainter {
       canvas.drawPath(
         profilePath,
         Paint()
-          ..color = const Color(0xFFFF5722)
+          ..color = AppAccentColors.accent
           ..style = PaintingStyle.stroke
           ..strokeWidth = 2.0
           ..isAntiAlias = true,
@@ -283,12 +301,15 @@ class _ElevationPainter extends CustomPainter {
 
     // Positions-Marker
     if (progress > 0 && progress < 1) {
-      final idx = (progress * (elevations.length - 1)).round().clamp(0, elevations.length - 1);
+      final idx = (progress * (elevations.length - 1)).round().clamp(
+        0,
+        elevations.length - 1,
+      );
       final markerY = h - ((elevations[idx] - minE) / range) * h;
       canvas.drawCircle(
         Offset(progressX, markerY),
         4,
-        Paint()..color = const Color(0xFFFF5722),
+        Paint()..color = AppAccentColors.accent,
       );
       canvas.drawCircle(
         Offset(progressX, markerY),

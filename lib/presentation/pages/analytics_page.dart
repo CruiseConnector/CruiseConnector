@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/data/services/gamification_service.dart';
 import 'package:cruise_connect/data/services/saved_routes_service.dart';
 import 'package:cruise_connect/domain/models/badge.dart' as app;
@@ -249,12 +250,12 @@ class _AnalyticsPageState extends State<AnalyticsPage>
       backgroundColor: const Color(0xFF0B0E14),
       body: SafeArea(
         child: _loading
-            ? const Center(
-                child: CircularProgressIndicator(color: Color(0xFFFF3B30)),
+            ? Center(
+                child: CircularProgressIndicator(color: AppAccentColors.accent),
               )
             : RefreshIndicator(
                 onRefresh: _loadData,
-                color: const Color(0xFFFF3B30),
+                color: AppAccentColors.accent,
                 child: SingleChildScrollView(
                   physics: const AlwaysScrollableScrollPhysics(),
                   child: Padding(
@@ -326,8 +327,11 @@ class _AnalyticsPageState extends State<AnalyticsPage>
                 width: 42,
                 height: 42,
                 decoration: BoxDecoration(
-                  gradient: const LinearGradient(
-                    colors: [Color(0xFFFF5252), Color(0xFFD32F2F)],
+                  gradient: LinearGradient(
+                    colors: [
+                      AppAccentColors.accent,
+                      AppAccentColors.accentStrong,
+                    ],
                   ),
                   borderRadius: BorderRadius.circular(12),
                 ),
@@ -381,9 +385,7 @@ class _AnalyticsPageState extends State<AnalyticsPage>
             child: LinearProgressIndicator(
               value: _level.progress,
               backgroundColor: Colors.grey[800],
-              valueColor: const AlwaysStoppedAnimation<Color>(
-                Color(0xFFFF3B30),
-              ),
+              valueColor: AlwaysStoppedAnimation<Color>(AppAccentColors.accent),
               minHeight: 6,
             ),
           ),
@@ -408,7 +410,7 @@ class _AnalyticsPageState extends State<AnalyticsPage>
         borderRadius: BorderRadius.circular(16),
         border: Border.all(
           color: hasStreak
-              ? const Color(0xFFFF3B30).withValues(alpha: 0.3)
+              ? AppAccentColors.accent.withValues(alpha: 0.3)
               : Colors.white.withValues(alpha: 0.05),
         ),
       ),
@@ -419,7 +421,7 @@ class _AnalyticsPageState extends State<AnalyticsPage>
             height: 42,
             decoration: BoxDecoration(
               color: hasStreak
-                  ? const Color(0xFFFF3B30).withValues(alpha: 0.15)
+                  ? AppAccentColors.accent.withValues(alpha: 0.15)
                   : const Color(0xFF2D3748),
               borderRadius: BorderRadius.circular(12),
             ),
@@ -461,8 +463,11 @@ class _AnalyticsPageState extends State<AnalyticsPage>
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
               decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  colors: [Color(0xFFFF5252), Color(0xFFD32F2F)],
+                gradient: LinearGradient(
+                  colors: [
+                    AppAccentColors.accent,
+                    AppAccentColors.accentStrong,
+                  ],
                 ),
                 borderRadius: BorderRadius.circular(12),
               ),
@@ -519,7 +524,7 @@ class _AnalyticsPageState extends State<AnalyticsPage>
                     width: 36,
                     height: 36,
                     decoration: BoxDecoration(
-                      color: const Color(0xFFFF3B30).withValues(alpha: 0.15),
+                      color: AppAccentColors.accent.withValues(alpha: 0.15),
                       borderRadius: BorderRadius.circular(10),
                     ),
                     child: Center(
@@ -608,7 +613,7 @@ class _AnalyticsPageState extends State<AnalyticsPage>
           'Fahrten',
           '$_totalRoutes',
           Icons.directions_car,
-          const Color(0xFFFF3B30),
+          AppAccentColors.accent,
         ),
         _buildAnalyticsCard(
           'Distanz',
@@ -646,18 +651,22 @@ class _AnalyticsPageState extends State<AnalyticsPage>
           ),
           child: TabBar(
             controller: _tabController,
-            indicator: BoxDecoration(
-              color: const Color(0xFFFF3B30),
-              borderRadius: BorderRadius.circular(12),
+            indicator: UnderlineTabIndicator(
+              borderSide: BorderSide(color: AppAccentColors.accent, width: 2.5),
             ),
             indicatorSize: TabBarIndicatorSize.tab,
             labelColor: Colors.white,
             unselectedLabelColor: const Color(0xFFA0AEC0),
             labelStyle: const TextStyle(
               fontWeight: FontWeight.bold,
-              fontSize: 11,
+              fontSize: 12,
+            ),
+            unselectedLabelStyle: const TextStyle(
+              fontWeight: FontWeight.w600,
+              fontSize: 10.5,
             ),
             isScrollable: false,
+            labelPadding: EdgeInsets.zero,
             tabs: const [
               Tab(icon: Icon(Icons.insights, size: 16), text: 'Woche'),
               Tab(icon: Icon(Icons.calendar_month, size: 16), text: 'Monat'),
@@ -785,10 +794,10 @@ class _AnalyticsPageState extends State<AnalyticsPage>
                                     child: Container(
                                       decoration: BoxDecoration(
                                         gradient: isToday
-                                            ? const LinearGradient(
+                                            ? LinearGradient(
                                                 colors: [
-                                                  Color(0xFFFF3B30),
-                                                  Color(0xFFFF6B35),
+                                                  AppAccentColors.accent,
+                                                  AppAccentColors.accentStrong,
                                                 ],
                                                 begin: Alignment.topCenter,
                                                 end: Alignment.bottomCenter,
@@ -847,8 +856,8 @@ class _AnalyticsPageState extends State<AnalyticsPage>
                         ? (_streakDays / 7).clamp(0.0, 1.0)
                         : 0.0,
                     backgroundColor: const Color(0xFF2A2F3A),
-                    valueColor: const AlwaysStoppedAnimation<Color>(
-                      Color(0xFFFF3B30),
+                    valueColor: AlwaysStoppedAnimation<Color>(
+                      AppAccentColors.accent,
                     ),
                     minHeight: 3,
                   ),
@@ -877,7 +886,7 @@ class _AnalyticsPageState extends State<AnalyticsPage>
   // ── Monats-/Jahresübersicht Tab ──────────────────────────────────────
 
   Widget _buildMonthlyTab() {
-    const monthLabels = [
+    final monthLabels = [
       'J',
       'F',
       'M',
@@ -1011,10 +1020,10 @@ class _AnalyticsPageState extends State<AnalyticsPage>
                               child: Container(
                                 decoration: BoxDecoration(
                                   gradient: isCurrentMonth
-                                      ? const LinearGradient(
+                                      ? LinearGradient(
                                           colors: [
-                                            Color(0xFFFF3B30),
-                                            Color(0xFFFF6B35),
+                                            AppAccentColors.accent,
+                                            AppAccentColors.accentStrong,
                                           ],
                                           begin: Alignment.topCenter,
                                           end: Alignment.bottomCenter,
@@ -1067,7 +1076,7 @@ class _AnalyticsPageState extends State<AnalyticsPage>
         ? const Color(0xFF8A94A6)
         : deltaPositive
         ? const Color(0xFF4ADE80)
-        : const Color(0xFFFF6B6B);
+        : AppAccentColors.accent;
 
     return Container(
       padding: const EdgeInsets.all(14),
@@ -1204,7 +1213,7 @@ class _AnalyticsPageState extends State<AnalyticsPage>
       return _buildSectionCard(
         title: 'Routen',
         subtitle: 'Noch keine Routen gefahren.',
-        accentColor: const Color(0xFFFF3B30),
+        accentColor: AppAccentColors.accent,
         child: const Text(
           'Sobald du Routen fährst, erscheinen sie hier in einer kompakten Übersicht.',
           style: TextStyle(color: Color(0xFFA0AEC0), fontSize: 13),
@@ -1215,7 +1224,7 @@ class _AnalyticsPageState extends State<AnalyticsPage>
     return _buildSectionCard(
       title: 'Routen',
       subtitle: 'Die letzten gefahrenen Routen als kompakte Liste.',
-      accentColor: const Color(0xFFFF3B30),
+      accentColor: AppAccentColors.accent,
       child: Column(
         children: [
           for (var i = 0; i < _allRoutes.take(10).length; i++) ...[
@@ -1243,9 +1252,7 @@ class _AnalyticsPageState extends State<AnalyticsPage>
                   ? 0
                   : _earnedBadges.length / app.Badge.all.length,
               backgroundColor: Colors.grey[800],
-              valueColor: const AlwaysStoppedAnimation<Color>(
-                Color(0xFFFF3B30),
-              ),
+              valueColor: AlwaysStoppedAnimation<Color>(AppAccentColors.accent),
               minHeight: 4,
             ),
           ),
@@ -1295,7 +1302,7 @@ class _AnalyticsPageState extends State<AnalyticsPage>
             width: 36,
             height: 36,
             decoration: BoxDecoration(
-              color: const Color(0xFFFF3B30).withValues(alpha: 0.2),
+              color: AppAccentColors.accent.withValues(alpha: 0.2),
               borderRadius: BorderRadius.circular(10),
             ),
             child: Center(
@@ -1351,7 +1358,7 @@ class _AnalyticsPageState extends State<AnalyticsPage>
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
           color: earned
-              ? const Color(0xFFFF3B30).withValues(alpha: 0.4)
+              ? AppAccentColors.accent.withValues(alpha: 0.4)
               : Colors.white.withValues(alpha: 0.05),
         ),
       ),

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:provider/provider.dart';
 
 import 'package:cruise_connect/application/providers/community_provider.dart';
@@ -48,8 +49,7 @@ class _BlockedUsersPageState extends State<BlockedUsersPage> {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: const Color(0xFF1C1F26),
-        title: const Text('Entblocken?',
-            style: TextStyle(color: Colors.white)),
+        title: const Text('Entblocken?', style: TextStyle(color: Colors.white)),
         content: const Text(
           'Der Nutzer kann dann wieder deine Inhalte sehen und du seine.',
           style: TextStyle(color: Colors.white70),
@@ -57,14 +57,20 @@ class _BlockedUsersPageState extends State<BlockedUsersPage> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child:
-                const Text('Abbrechen', style: TextStyle(color: Colors.grey)),
+            child: const Text(
+              'Abbrechen',
+              style: TextStyle(color: Colors.grey),
+            ),
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Entblocken',
-                style: TextStyle(
-                    color: Color(0xFFFF3B30), fontWeight: FontWeight.bold)),
+            child: Text(
+              'Entblocken',
+              style: TextStyle(
+                color: AppAccentColors.accent,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
           ),
         ],
       ),
@@ -105,41 +111,44 @@ class _BlockedUsersPageState extends State<BlockedUsersPage> {
           icon: const Icon(Icons.arrow_back, color: Colors.white),
           onPressed: () => Navigator.pop(context),
         ),
-        title: const Text('Blockierte Nutzer',
-            style: TextStyle(color: Colors.white, fontSize: 16)),
+        title: const Text(
+          'Blockierte Nutzer',
+          style: TextStyle(color: Colors.white, fontSize: 16),
+        ),
         elevation: 0,
       ),
       body: _loading
-          ? const Center(
-              child: CircularProgressIndicator(color: Color(0xFFFF3B30)))
+          ? Center(
+              child: CircularProgressIndicator(color: AppAccentColors.accent),
+            )
           : _blocked.isEmpty
-              ? const Center(
-                  child: Padding(
-                    padding: EdgeInsets.all(32),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.block, color: Colors.grey, size: 48),
-                        SizedBox(height: 12),
-                        Text(
-                          'Du hast niemanden blockiert.',
-                          style: TextStyle(color: Colors.grey, fontSize: 14),
-                        ),
-                      ],
+          ? const Center(
+              child: Padding(
+                padding: EdgeInsets.all(32),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.block, color: Colors.grey, size: 48),
+                    SizedBox(height: 12),
+                    Text(
+                      'Du hast niemanden blockiert.',
+                      style: TextStyle(color: Colors.grey, fontSize: 14),
                     ),
-                  ),
-                )
-              : RefreshIndicator(
-                  onRefresh: _load,
-                  color: const Color(0xFFFF3B30),
-                  child: ListView.separated(
-                    padding: const EdgeInsets.symmetric(vertical: 8),
-                    itemCount: _blocked.length,
-                    separatorBuilder: (_, _) =>
-                        const Divider(color: Colors.white10, height: 1),
-                    itemBuilder: (context, i) => _buildTile(_blocked[i]),
-                  ),
+                  ],
                 ),
+              ),
+            )
+          : RefreshIndicator(
+              onRefresh: _load,
+              color: AppAccentColors.accent,
+              child: ListView.separated(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                itemCount: _blocked.length,
+                separatorBuilder: (_, _) =>
+                    const Divider(color: Colors.white10, height: 1),
+                itemBuilder: (context, i) => _buildTile(_blocked[i]),
+              ),
+            ),
     );
   }
 
@@ -160,28 +169,35 @@ class _BlockedUsersPageState extends State<BlockedUsersPage> {
       title: Text(
         '@$username',
         style: const TextStyle(
-            color: Colors.white, fontWeight: FontWeight.w600),
+          color: Colors.white,
+          fontWeight: FontWeight.w600,
+        ),
       ),
-      subtitle: const Text('blockiert',
-          style: TextStyle(color: Colors.grey, fontSize: 12)),
+      subtitle: const Text(
+        'blockiert',
+        style: TextStyle(color: Colors.grey, fontSize: 12),
+      ),
       trailing: GestureDetector(
         onTap: isBusy ? null : () => _unblock(entry),
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
           decoration: BoxDecoration(
-            border: Border.all(color: const Color(0xFFFF3B30)),
+            border: Border.all(color: AppAccentColors.accent),
             borderRadius: BorderRadius.circular(10),
           ),
           child: isBusy
-              ? const SizedBox(
+              ? SizedBox(
                   width: 14,
                   height: 14,
                   child: CircularProgressIndicator(
-                      strokeWidth: 2, color: Color(0xFFFF3B30)))
-              : const Text(
+                    strokeWidth: 2,
+                    color: AppAccentColors.accent,
+                  ),
+                )
+              : Text(
                   'Entblocken',
                   style: TextStyle(
-                    color: Color(0xFFFF3B30),
+                    color: AppAccentColors.accent,
                     fontSize: 12,
                     fontWeight: FontWeight.bold,
                   ),

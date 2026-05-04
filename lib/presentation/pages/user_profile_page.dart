@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/application/providers/community_provider.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/presentation/pages/post_detail_page.dart';
@@ -43,6 +44,9 @@ class _UserProfilePageState extends State<UserProfilePage>
   bool _isOwnProfile = false;
   bool _isPrivate = false;
   bool _carCardExpanded = false;
+  bool _bioExpanded = false;
+  bool _blockedProfile = false;
+  static const int _bioCollapseAt = 20;
 
   /// Status meiner Follow-Beziehung zu diesem Profil:
   /// `'accepted'` (folge), `'pending'` (Anfrage gesendet), `'none'`.
@@ -65,6 +69,53 @@ class _UserProfilePageState extends State<UserProfilePage>
 
   Future<void> _load() async {
     try {
+      if (mounted) {
+        setState(() {
+          _loading = true;
+          _blockedProfile = false;
+        });
+      }
+      if (!_isOwnProfile &&
+          await SocialService.isBlockedEither(widget.userId)) {
+        if (!mounted) return;
+        setState(() {
+          _stats = {};
+          _posts = [];
+          _reposts = [];
+          _vehicles = [];
+          _followStatus = 'none';
+          _isFollowing = false;
+          _isPrivate = false;
+          _blockedProfile = true;
+          _loading = false;
+        });
+        return;
+      }
+
+      if (!_isOwnProfile) {
+        final preview = await SocialService.getProfilePreview(widget.userId);
+        final status = await SocialService.getFollowStatus(widget.userId);
+        final private = preview?['is_private'] == true;
+        if (private && status != 'accepted') {
+          if (!mounted) return;
+          setState(() {
+            _stats = {
+              'username': preview?['username'],
+              'avatar_url': preview?['avatar_url'],
+              'is_private': true,
+            };
+            _posts = [];
+            _reposts = [];
+            _vehicles = [];
+            _followStatus = status;
+            _isFollowing = false;
+            _isPrivate = true;
+            _loading = false;
+          });
+          return;
+        }
+      }
+
       final results = await Future.wait([
         SocialService.getProfileStats(widget.userId),
         SocialService.getUserPosts(widget.userId),
@@ -103,6 +154,8 @@ class _UserProfilePageState extends State<UserProfilePage>
 
   @override
   Widget build(BuildContext context) {
+    final accent = context.watch<AppAccentProvider>().color;
+
     // Stats > vom Aufrufer mitgegebener Username > leer.
     // Vermeidet "@user"-Default während des Loadings, wenn der Caller den
     // tatsächlichen Username schon kennt (z.B. aus einem Mention-Tap).
@@ -114,6 +167,12 @@ class _UserProfilePageState extends State<UserProfilePage>
     final followers = _stats['follower_count'] ?? 0;
     final following = _stats['following_count'] ?? 0;
     final headerName = displayName.isEmpty ? 'User' : displayName;
+    final privateLocked = _isPrivate && !_isFollowing && !_isOwnProfile;
+    final bannerUrl = (_stats['banner_url'] as String?)?.trim();
+    final handle = SocialService.publicHandle(
+      _stats,
+      fallbackUserId: widget.userId,
+    );
 
     return Scaffold(
       backgroundColor: const Color(0xFF0B0E14),
@@ -124,8 +183,12 @@ class _UserProfilePageState extends State<UserProfilePage>
           onPressed: () => Navigator.pop(context),
         ),
         title: Text(
-          displayName.isEmpty ? '' : '@${displayName.toLowerCase()}',
-          style: const TextStyle(color: Colors.white, fontSize: 16),
+          headerName,
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 18,
+            fontWeight: FontWeight.w800,
+          ),
         ),
         elevation: 0,
         actions: [
@@ -135,18 +198,18 @@ class _UserProfilePageState extends State<UserProfilePage>
               icon: const Icon(Icons.more_vert, color: Colors.white),
               color: const Color(0xFF1C1F26),
               onSelected: (value) => _handleProfileMenu(value, displayName),
-              itemBuilder: (_) => const [
+              itemBuilder: (_) => [
                 PopupMenuItem(
                   value: 'report',
                   child: Row(
                     children: [
                       Icon(
                         Icons.flag_outlined,
-                        color: Color(0xFFFF3B30),
+                        color: AppAccentColors.accent,
                         size: 18,
                       ),
-                      SizedBox(width: 8),
-                      Text(
+                      const SizedBox(width: 8),
+                      const Text(
                         'Benutzer melden',
                         style: TextStyle(color: Colors.white),
                       ),
@@ -157,11 +220,15 @@ class _UserProfilePageState extends State<UserProfilePage>
                   value: 'block',
                   child: Row(
                     children: [
-                      Icon(Icons.block, color: Color(0xFFFF3B30), size: 18),
-                      SizedBox(width: 8),
+                      Icon(
+                        Icons.block,
+                        color: AppAccentColors.accent,
+                        size: 18,
+                      ),
+                      const SizedBox(width: 8),
                       Text(
                         'Blockieren',
-                        style: TextStyle(color: Color(0xFFFF3B30)),
+                        style: TextStyle(color: AppAccentColors.accent),
                       ),
                     ],
                   ),
@@ -171,224 +238,98 @@ class _UserProfilePageState extends State<UserProfilePage>
         ],
       ),
       body: _loading
-          ? const Center(
-              child: CircularProgressIndicator(color: Color(0xFFFF3B30)),
-            )
+          ? Center(child: CircularProgressIndicator(color: accent))
+          : _blockedProfile
+          ? _buildBlockedProfileBody()
           : RefreshIndicator(
               onRefresh: _load,
-              color: const Color(0xFFFF3B30),
+              color: accent,
               child: NestedScrollView(
                 headerSliverBuilder: (context, innerBoxIsScrolled) => [
                   SliverToBoxAdapter(
-                    child: Padding(
-                      padding: const EdgeInsets.all(20),
-                      child: Column(
-                        children: [
-                          UserAvatar(
-                            name: headerName,
-                            avatarUrl: _stats['avatar_url'] as String?,
-                            radius: 40,
-                          ),
-                          const SizedBox(height: 12),
-                          Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 12),
-                            child: Wrap(
-                              alignment: WrapAlignment.center,
-                              crossAxisAlignment: WrapCrossAlignment.center,
-                              spacing: 10,
-                              runSpacing: 8,
-                              children: [
-                                ConstrainedBox(
-                                  constraints: const BoxConstraints(
-                                    maxWidth: 190,
-                                  ),
-                                  child: Text(
-                                    headerName,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    textAlign: TextAlign.center,
-                                    style: const TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 22,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                ),
-                                if (!_isOwnProfile)
-                                  _buildFollowButton(compact: true),
-                              ],
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            'Level $level',
-                            style: const TextStyle(
-                              color: Color(0xFFFF3B30),
-                              fontSize: 14,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                          const SizedBox(height: 16),
-                          // Stats Row
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                            children: [
-                              _buildStat('$totalRoutes', 'Fahrten'),
-                              _buildStat(
-                                '${totalKm.toStringAsFixed(0)} km',
-                                'Gefahren',
-                              ),
-                              // Follower/Following-Liste nur anklickbar wenn man folgt oder eigenes Profil
-                              GestureDetector(
-                                onTap: (_isFollowing || _isOwnProfile)
-                                    ? () => _showFollowList('followers')
-                                    : null,
-                                child: _buildStat('$followers', 'Follower'),
-                              ),
-                              GestureDetector(
-                                onTap: (_isFollowing || _isOwnProfile)
-                                    ? () => _showFollowList('following')
-                                    : null,
-                                child: _buildStat('$following', 'Folgt'),
-                              ),
-                            ],
-                          ),
-                          if ((_stats['bio'] as String?)?.trim().isNotEmpty ==
-                              true) ...[
-                            const SizedBox(height: 16),
-                            if ((_stats['bio_title'] as String?)
-                                    ?.trim()
-                                    .isNotEmpty ==
-                                true) ...[
-                              Align(
-                                alignment: Alignment.centerLeft,
-                                child: Text(
-                                  (_stats['bio_title'] as String).trim(),
-                                  style: const TextStyle(
-                                    color: Color(0xFFFF3B30),
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w900,
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(height: 5),
-                            ],
-                            Align(
-                              alignment: Alignment.centerLeft,
-                              child: Text(
-                                (_stats['bio'] as String).trim(),
-                                style: const TextStyle(
-                                  color: Colors.white70,
-                                  fontSize: 14,
-                                  height: 1.35,
-                                ),
-                              ),
-                            ),
-                          ],
-                          if ((_stats['link'] as String?)?.trim().isNotEmpty ==
-                              true) ...[
-                            const SizedBox(height: 10),
-                            Align(
-                              alignment: Alignment.centerLeft,
-                              child: InkWell(
-                                onTap: () => _openExternalLink(
-                                  (_stats['link'] as String).trim(),
-                                ),
-                                borderRadius: BorderRadius.circular(8),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    const Icon(
-                                      Icons.link,
-                                      size: 14,
-                                      color: Color(0xFFFF3B30),
-                                    ),
-                                    const SizedBox(width: 5),
-                                    Flexible(
-                                      child: Text(
-                                        (_stats['link'] as String).trim(),
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: const TextStyle(
-                                          color: Color(0xFFFF3B30),
-                                          fontSize: 13,
-                                          fontWeight: FontWeight.w600,
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          ],
-                          if (_vehicles.isNotEmpty) ...[
-                            const SizedBox(height: 16),
-                            _buildCarSection(),
-                          ],
-                          const SizedBox(height: 16),
-                        ],
-                      ),
+                    child: _buildTwitterProfileHeader(
+                      bannerUrl: privateLocked ? null : bannerUrl,
+                      avatarUrl: _stats['avatar_url'] as String?,
+                      name: headerName,
+                      handle: handle,
+                      level: level,
+                      totalRoutes: totalRoutes,
+                      totalKm: totalKm,
+                      followers: followers,
+                      following: following,
+                      privateLocked: privateLocked,
                     ),
                   ),
-                  // Tab Bar
-                  SliverPersistentHeader(
-                    pinned: true,
-                    delegate: _TabBarDelegate(
-                      TabBar(
-                        controller: _tabController,
-                        indicator: const UnderlineTabIndicator(
-                          borderSide: BorderSide(
-                            color: Color(0xFFFF3B30),
-                            width: 2,
+                  if (!privateLocked)
+                    SliverPersistentHeader(
+                      pinned: true,
+                      delegate: _TabBarDelegate(
+                        TabBar(
+                          controller: _tabController,
+                          isScrollable: false,
+                          labelPadding: EdgeInsets.zero,
+                          indicator: UnderlineTabIndicator(
+                            borderSide: BorderSide(color: accent, width: 2.5),
                           ),
+                          indicatorSize: TabBarIndicatorSize.tab,
+                          dividerColor: const Color(0xFF3A3A45),
+                          labelColor: Colors.white,
+                          unselectedLabelColor: Colors.grey,
+                          labelStyle: const TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 14,
+                          ),
+                          unselectedLabelStyle: const TextStyle(
+                            fontWeight: FontWeight.w600,
+                            fontSize: 12.5,
+                          ),
+                          tabs: [
+                            Tab(text: 'Posts (${_posts.length})'),
+                            Tab(text: 'Reposts (${_reposts.length})'),
+                          ],
                         ),
-                        labelColor: Colors.white,
-                        unselectedLabelColor: Colors.grey,
-                        tabs: [
-                          Tab(text: 'Posts (${_posts.length})'),
-                          Tab(text: 'Reposts (${_reposts.length})'),
-                        ],
                       ),
                     ),
-                  ),
                 ],
-                body: TabBarView(
-                  controller: _tabController,
-                  children: [
-                    // Posts Tab
-                    (_isPrivate && !_isFollowing && !_isOwnProfile)
-                        ? _buildPrivateMessage()
-                        : _posts.isEmpty
-                        ? const Center(
-                            child: Text(
-                              'Noch keine Posts',
-                              style: TextStyle(color: Colors.grey),
-                            ),
-                          )
-                        : ListView.builder(
-                            itemCount: _posts.length,
-                            padding: EdgeInsets.zero,
-                            itemBuilder: (context, index) =>
-                                _buildPostItem(_posts[index]),
-                          ),
-                    // Reposts Tab
-                    (_isPrivate && !_isFollowing && !_isOwnProfile)
-                        ? _buildPrivateMessage()
-                        : _reposts.isEmpty
-                        ? const Center(
-                            child: Text(
-                              'Noch keine Reposts',
-                              style: TextStyle(color: Colors.grey),
-                            ),
-                          )
-                        : ListView.builder(
-                            itemCount: _reposts.length,
-                            padding: EdgeInsets.zero,
-                            itemBuilder: (context, index) =>
-                                _buildRepostItem(_reposts[index]),
-                          ),
-                  ],
-                ),
+                body: privateLocked
+                    ? _buildPrivateMessage()
+                    : TabBarView(
+                        controller: _tabController,
+                        children: [
+                          // Posts Tab
+                          (_isPrivate && !_isFollowing && !_isOwnProfile)
+                              ? _buildPrivateMessage()
+                              : _posts.isEmpty
+                              ? const Center(
+                                  child: Text(
+                                    'Noch keine Posts',
+                                    style: TextStyle(color: Colors.grey),
+                                  ),
+                                )
+                              : ListView.builder(
+                                  itemCount: _posts.length,
+                                  padding: EdgeInsets.zero,
+                                  itemBuilder: (context, index) =>
+                                      _buildPostItem(_posts[index]),
+                                ),
+                          // Reposts Tab
+                          (_isPrivate && !_isFollowing && !_isOwnProfile)
+                              ? _buildPrivateMessage()
+                              : _reposts.isEmpty
+                              ? const Center(
+                                  child: Text(
+                                    'Noch keine Reposts',
+                                    style: TextStyle(color: Colors.grey),
+                                  ),
+                                )
+                              : ListView.builder(
+                                  itemCount: _reposts.length,
+                                  padding: EdgeInsets.zero,
+                                  itemBuilder: (context, index) =>
+                                      _buildRepostItem(_reposts[index]),
+                                ),
+                        ],
+                      ),
               ),
             ),
     );
@@ -400,9 +341,9 @@ class _UserProfilePageState extends State<UserProfilePage>
     final label = isAccepted
         ? 'Folgst du'
         : isPending
-        ? 'Anfrage gesendet'
-        : (_isPrivate ? 'Anfrage senden' : 'Folgen');
-    final displayLabel = compact && isPending ? 'Angefragt' : label;
+        ? 'Angefragt'
+        : 'Folgen';
+    final displayLabel = label;
     final isFilled = !isAccepted && !isPending;
     return ElevatedButton(
       onPressed: () async {
@@ -464,9 +405,7 @@ class _UserProfilePageState extends State<UserProfilePage>
         }
       },
       style: ElevatedButton.styleFrom(
-        backgroundColor: isFilled
-            ? const Color(0xFFFF3B30)
-            : Colors.transparent,
+        backgroundColor: isFilled ? Colors.white : Colors.transparent,
         side: isFilled ? null : const BorderSide(color: Colors.grey),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(compact ? 999 : 12),
@@ -483,10 +422,229 @@ class _UserProfilePageState extends State<UserProfilePage>
       child: Text(
         displayLabel,
         style: TextStyle(
-          color: isFilled ? Colors.white : Colors.grey,
+          color: isFilled ? Colors.black : Colors.grey,
           fontWeight: FontWeight.bold,
           fontSize: compact ? 12 : 15,
         ),
+      ),
+    );
+  }
+
+  Widget _buildTwitterProfileHeader({
+    required String? bannerUrl,
+    required String? avatarUrl,
+    required String name,
+    required String handle,
+    required int level,
+    required int totalRoutes,
+    required double totalKm,
+    required int followers,
+    required int following,
+    required bool privateLocked,
+  }) {
+    final bio = (_stats['bio'] as String?)?.trim();
+    final bioTitle = (_stats['bio_title'] as String?)?.trim();
+    final link = (_stats['link'] as String?)?.trim();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Stack(
+          clipBehavior: Clip.none,
+          children: [
+            _buildProfileBanner(bannerUrl),
+            Positioned(
+              left: 16,
+              bottom: -50,
+              child: _buildProfileAvatar(name: name, avatarUrl: avatarUrl),
+            ),
+            if (!_isOwnProfile)
+              Positioned(
+                right: 16,
+                bottom: -42,
+                child: _buildFollowButton(compact: true),
+              ),
+          ],
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 58, 16, 16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 24,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                handle,
+                style: const TextStyle(color: Colors.grey, fontSize: 15),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                'Level $level',
+                style: TextStyle(
+                  color: AppAccentColors.accent,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              if (!privateLocked && bio != null && bio.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                if (bioTitle != null && bioTitle.isNotEmpty) ...[
+                  Text(
+                    bioTitle,
+                    style: TextStyle(
+                      color: AppAccentColors.accent,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  const SizedBox(height: 5),
+                ],
+                _buildBio(bio),
+              ],
+              if (!privateLocked && link != null && link.isNotEmpty) ...[
+                const SizedBox(height: 10),
+                _buildProfileLink(link),
+              ],
+              if (!privateLocked) ...[
+                const SizedBox(height: 14),
+                Wrap(
+                  spacing: 16,
+                  runSpacing: 8,
+                  children: [
+                    _buildInlineStat('$totalRoutes', 'Fahrten'),
+                    _buildInlineStat(
+                      '${totalKm.toStringAsFixed(0)} km',
+                      'Gefahren',
+                    ),
+                    _buildInlineStat(
+                      '$following',
+                      'Folgt',
+                      onTap: (_isFollowing || _isOwnProfile)
+                          ? () => _showFollowList('following')
+                          : null,
+                    ),
+                    _buildInlineStat(
+                      '$followers',
+                      'Follower',
+                      onTap: (_isFollowing || _isOwnProfile)
+                          ? () => _showFollowList('followers')
+                          : null,
+                    ),
+                  ],
+                ),
+              ],
+              if (!privateLocked && _vehicles.isNotEmpty) ...[
+                const SizedBox(height: 16),
+                _buildCarSection(),
+              ],
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildProfileBanner(String? bannerUrl) {
+    return SizedBox(
+      height: 178,
+      width: double.infinity,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [Color(0xFF242834), Color(0xFF10131B)],
+          ),
+          image: bannerUrl != null && bannerUrl.isNotEmpty
+              ? DecorationImage(
+                  image: NetworkImage(bannerUrl),
+                  fit: BoxFit.cover,
+                )
+              : null,
+        ),
+        child: bannerUrl != null && bannerUrl.isNotEmpty
+            ? const SizedBox.shrink()
+            : Center(
+                child: Icon(
+                  Icons.camera_alt_outlined,
+                  size: 74,
+                  color: Colors.white.withValues(alpha: 0.05),
+                ),
+              ),
+      ),
+    );
+  }
+
+  Widget _buildProfileAvatar({
+    required String name,
+    required String? avatarUrl,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(4),
+      decoration: const BoxDecoration(
+        color: Color(0xFF0B0E14),
+        shape: BoxShape.circle,
+      ),
+      child: UserAvatar(name: name, avatarUrl: avatarUrl, radius: 50),
+    );
+  }
+
+  Widget _buildProfileLink(String link) {
+    return InkWell(
+      onTap: () => _openExternalLink(link),
+      borderRadius: BorderRadius.circular(8),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.link, size: 14, color: AppAccentColors.accent),
+          const SizedBox(width: 5),
+          Flexible(
+            child: Text(
+              link,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: AppAccentColors.accent,
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildInlineStat(String value, String label, {VoidCallback? onTap}) {
+    return GestureDetector(
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: Text.rich(
+        TextSpan(
+          children: [
+            TextSpan(
+              text: value,
+              style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            TextSpan(
+              text: ' $label',
+              style: TextStyle(color: Colors.white.withValues(alpha: 0.55)),
+            ),
+          ],
+        ),
+        style: const TextStyle(fontSize: 14),
       ),
     );
   }
@@ -514,9 +672,9 @@ class _UserProfilePageState extends State<UserProfilePage>
             padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
             child: Row(
               children: [
-                const Icon(
+                Icon(
                   Icons.garage_rounded,
-                  color: Color(0xFFFF3B30),
+                  color: AppAccentColors.accent,
                   size: 18,
                 ),
                 const SizedBox(width: 6),
@@ -565,26 +723,30 @@ class _UserProfilePageState extends State<UserProfilePage>
     );
   }
 
-  Widget _buildStat(String value, String label) {
-    return Column(
-      children: [
-        Text(
-          value,
-          style: const TextStyle(
-            color: Colors.white,
-            fontSize: 18,
-            fontWeight: FontWeight.bold,
-          ),
+  Widget _buildBio(String bio) {
+    const baseStyle = TextStyle(color: Colors.white, fontSize: 14, height: 1.4);
+    if (bio.length <= _bioCollapseAt) {
+      return Text(bio, style: baseStyle);
+    }
+    final collapsed = '${bio.substring(0, _bioCollapseAt).trimRight()}...';
+    return GestureDetector(
+      onTap: () => setState(() => _bioExpanded = !_bioExpanded),
+      behavior: HitTestBehavior.opaque,
+      child: Text.rich(
+        TextSpan(
+          style: baseStyle,
+          children: [
+            TextSpan(text: _bioExpanded ? bio : collapsed),
+            TextSpan(
+              text: _bioExpanded ? '  weniger' : '  mehr',
+              style: TextStyle(
+                color: AppAccentColors.accent,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
         ),
-        const SizedBox(height: 2),
-        Text(
-          label,
-          style: TextStyle(
-            color: Colors.white.withValues(alpha: 0.5),
-            fontSize: 12,
-          ),
-        ),
-      ],
+      ),
     );
   }
 
@@ -895,6 +1057,40 @@ class _UserProfilePageState extends State<UserProfilePage>
     );
   }
 
+  Widget _buildBlockedProfileBody() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            CircleAvatar(
+              radius: 42,
+              backgroundColor: const Color(0xFF1C1F26),
+              child: Icon(Icons.block, color: AppAccentColors.accent, size: 34),
+            ),
+            const SizedBox(height: 18),
+            const Text(
+              'Dieser Nutzer hat Sie blockiert',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Profilinhalte, Garage und Statistiken sind nicht sichtbar.',
+              style: TextStyle(color: Colors.grey, fontSize: 14),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   void _showFollowList(String type) {
     showModalBottomSheet(
       context: context,
@@ -944,10 +1140,10 @@ class _UserProfilePageState extends State<UserProfilePage>
                       ),
                     ),
                     if (snapshot.connectionState == ConnectionState.waiting)
-                      const Expanded(
+                      Expanded(
                         child: Center(
                           child: CircularProgressIndicator(
-                            color: Color(0xFFFF3B30),
+                            color: AppAccentColors.accent,
                           ),
                         ),
                       )

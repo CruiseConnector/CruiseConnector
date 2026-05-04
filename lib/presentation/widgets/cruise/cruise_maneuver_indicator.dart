@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 
 import 'package:cruise_connect/domain/models/route_maneuver.dart';
 
@@ -13,6 +14,7 @@ class CruiseManeuverIndicator extends StatelessWidget {
   });
 
   final RouteManeuver maneuver;
+
   /// Distanz entlang der Route zum nächsten Manöver (in Metern).
   final double? distanceToManeuverMeters;
 
@@ -57,10 +59,14 @@ class CruiseManeuverIndicator extends StatelessWidget {
               width: 48,
               height: 48,
               decoration: BoxDecoration(
-                color: const Color(0xFFFF3B30).withValues(alpha: 0.15),
+                color: AppAccentColors.accent.withValues(alpha: 0.15),
                 borderRadius: BorderRadius.circular(14),
               ),
-              child: Icon(maneuver.icon, color: const Color(0xFFFF3B30), size: 28),
+              child: Icon(
+                maneuver.icon,
+                color: AppAccentColors.accent,
+                size: 28,
+              ),
             ),
           const SizedBox(width: 14),
           Expanded(
@@ -131,7 +137,9 @@ class _RoundaboutPainter extends CustomPainter {
 
       final isActive = i == exitNumber;
       final exitPaint = Paint()
-        ..color = isActive ? const Color(0xFFFF3B30) : Colors.white.withValues(alpha: 0.35)
+        ..color = isActive
+            ? AppAccentColors.accent
+            : Colors.white.withValues(alpha: 0.35)
         ..style = PaintingStyle.stroke
         ..strokeWidth = isActive ? 3.5 : 2.0
         ..strokeCap = StrokeCap.round;
@@ -141,7 +149,7 @@ class _RoundaboutPainter extends CustomPainter {
       // Pfeilspitze für aktive Ausfahrt
       if (isActive) {
         final arrowPaint = Paint()
-          ..color = const Color(0xFFFF3B30)
+          ..color = AppAccentColors.accent
           ..style = PaintingStyle.fill;
         const arrowSize = 5.0;
         final tip = Offset(exitX, exitY);
@@ -154,7 +162,11 @@ class _RoundaboutPainter extends CustomPainter {
           tip.dy - arrowSize * math.sin(angle + 0.5),
         );
         canvas.drawPath(
-          Path()..moveTo(tip.dx, tip.dy)..lineTo(left.dx, left.dy)..lineTo(right.dx, right.dy)..close(),
+          Path()
+            ..moveTo(tip.dx, tip.dy)
+            ..lineTo(left.dx, left.dy)
+            ..lineTo(right.dx, right.dy)
+            ..close(),
           arrowPaint,
         );
       }

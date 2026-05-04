@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/presentation/widgets/social/route_attachment_card.dart';
 
@@ -62,10 +63,10 @@ class _CreatePostPageState extends State<CreatePostPage> {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
         decoration: BoxDecoration(
-          color: selected ? const Color(0xFFFF3B30) : const Color(0xFF1C1F26),
+          color: selected ? AppAccentColors.accent : const Color(0xFF1C1F26),
           borderRadius: BorderRadius.circular(20),
           border: Border.all(
-            color: selected ? const Color(0xFFFF3B30) : Colors.grey[700]!,
+            color: selected ? AppAccentColors.accent : Colors.grey[700]!,
           ),
         ),
         child: Row(
@@ -110,10 +111,10 @@ class _CreatePostPageState extends State<CreatePostPage> {
             child: ElevatedButton(
               onPressed: _posting || !hasContent ? null : _submitPost,
               style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFFFF3B30),
-                disabledBackgroundColor: const Color(
-                  0xFFFF3B30,
-                ).withValues(alpha: 0.3),
+                backgroundColor: AppAccentColors.accent,
+                disabledBackgroundColor: AppAccentColors.accent.withValues(
+                  alpha: 0.3,
+                ),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(20),
                 ),

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -7,6 +8,7 @@ import '../../data/services/social_service.dart';
 import '../../domain/models/cruise_group.dart';
 import '../../domain/models/group_member.dart';
 import 'cruise_mode_page.dart';
+import 'user_profile_page.dart';
 
 /// Lobby vor dem gemeinsamen Start: zeigt Mitglieder, Rollen, Startbutton
 /// für Owner — andere sehen "Warten auf Host...".
@@ -26,6 +28,7 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
   bool _starting = false;
 
   List<Map<String, dynamic>> _pendingRequests = [];
+
   /// Mitglieder, die ich blockiert habe oder die mich blockiert haben —
   /// werden in der Mitglieder-Liste ausgegraut dargestellt.
   Set<String> _blockedIds = {};
@@ -41,7 +44,9 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
       ) ??
       false;
 
-  MemberRole get _myRole =>
+  bool get _amCreator => _group?.ownerId == _myId;
+
+  RideRole get _myRideRole =>
       _group?.members
           .firstWhere(
             (m) => m.userId == _myId,
@@ -50,11 +55,12 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
               groupId: widget.groupId,
               userId: _myId,
               role: MemberRole.passenger,
+              rideRole: RideRole.passenger,
               createdAt: DateTime.now(),
             ),
           )
-          .role ??
-      MemberRole.passenger;
+          .rideRole ??
+      RideRole.passenger;
 
   @override
   void initState() {
@@ -140,12 +146,12 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
     }
   }
 
-  Future<void> _changeMyRole(MemberRole role) async {
+  Future<void> _changeMyRideRole(RideRole role) async {
     try {
-      await CruiseGroupService.updateMemberRole(
+      await CruiseGroupService.updateRideRole(
         groupId: widget.groupId,
         userId: _myId,
-        role: role,
+        rideRole: role,
       );
       await _load();
     } catch (e) {
@@ -163,6 +169,37 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
       groupId: widget.groupId,
       userId: m.userId,
       role: MemberRole.owner,
+    );
+    await _load();
+  }
+
+  Future<void> _demoteOwner(GroupMember m) async {
+    if (!_amCreator || m.userId == _group?.ownerId) return;
+    await CruiseGroupService.updateMemberRole(
+      groupId: widget.groupId,
+      userId: m.userId,
+      role: m.rideRole == RideRole.driver
+          ? MemberRole.driver
+          : MemberRole.passenger,
+    );
+    await _load();
+  }
+
+  Future<void> _changeMemberRideRole(GroupMember m, RideRole role) async {
+    if (!_amOwner && m.userId != _myId) return;
+    await CruiseGroupService.updateRideRole(
+      groupId: widget.groupId,
+      userId: m.userId,
+      rideRole: role,
+    );
+    await _load();
+  }
+
+  Future<void> _removeMember(GroupMember m) async {
+    if (!_amOwner || m.userId == _myId || m.userId == _group?.ownerId) return;
+    await CruiseGroupService.removeMember(
+      groupId: widget.groupId,
+      userId: m.userId,
     );
     await _load();
   }
@@ -219,9 +256,9 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
                 ),
               Row(
                 children: [
-                  const Icon(
+                  Icon(
                     Icons.straighten,
-                    color: Color(0xFFFF3B30),
+                    color: AppAccentColors.accent,
                     size: 18,
                   ),
                   const SizedBox(width: 8),
@@ -232,7 +269,7 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
                   const SizedBox(width: 20),
                   Icon(
                     g.isPublic ? Icons.public : Icons.lock,
-                    color: const Color(0xFFFF3B30),
+                    color: AppAccentColors.accent,
                     size: 18,
                   ),
                   const SizedBox(width: 8),
@@ -266,7 +303,7 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
               ),
             ),
             IconButton(
-              icon: const Icon(Icons.person_add, color: Color(0xFFFF3B30)),
+              icon: Icon(Icons.person_add, color: AppAccentColors.accent),
               onPressed: () => _showInviteDialog(), // Phase 3b — Friend-Picker
             ),
           ],
@@ -303,12 +340,12 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
         color: const Color(0xFF1C1F26),
         borderRadius: BorderRadius.circular(14),
         border: Border.all(
-          color: const Color(0xFFFF3B30).withValues(alpha: 0.35),
+          color: AppAccentColors.accent.withValues(alpha: 0.35),
         ),
       ),
       child: Row(
         children: [
-          const Icon(Icons.qr_code_2, color: Color(0xFFFF3B30), size: 22),
+          Icon(Icons.qr_code_2, color: AppAccentColors.accent, size: 22),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
@@ -334,7 +371,7 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
           ),
           IconButton(
             tooltip: 'Code kopieren',
-            icon: const Icon(Icons.copy, color: Color(0xFFFF3B30)),
+            icon: Icon(Icons.copy, color: AppAccentColors.accent),
             onPressed: () async {
               await Clipboard.setData(ClipboardData(text: code));
               if (!mounted) return;
@@ -393,7 +430,7 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
         children: [
           CircleAvatar(
             radius: 16,
-            backgroundColor: const Color(0xFFFF3B30),
+            backgroundColor: AppAccentColors.accent,
             child: Text(
               username.toString().substring(0, 1).toUpperCase(),
               style: const TextStyle(
@@ -461,14 +498,13 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
   Widget _buildMemberTile(GroupMember m) {
     final isMe = m.userId == _myId;
     final isBlocked = _blockedIds.contains(m.userId);
-    final roleLabel = m.role == MemberRole.owner
+    final isCreator = m.userId == _group?.ownerId;
+    final authorityLabel = isCreator
+        ? 'Ersteller'
+        : m.role == MemberRole.owner
         ? 'Owner'
-        : m.role == MemberRole.driver
-        ? 'Fahrer'
-        : 'Mitfahrer';
-    final roleColor = m.role == MemberRole.owner
-        ? const Color(0xFFFF3B30)
-        : Colors.grey;
+        : null;
+    final rideLabel = m.rideRole == RideRole.driver ? 'Fahrer' : 'Mitfahrer';
     return Opacity(
       // Blockierte User werden ausgegraut, damit klar ist, dass weder
       // sie meinen Content sehen noch ich ihren — sie bleiben aber sichtbar
@@ -486,18 +522,31 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
         ),
         child: Row(
           children: [
-            CircleAvatar(
-              radius: 18,
-              backgroundColor: const Color(0xFF0B0E14),
-              backgroundImage: m.avatarUrl != null
-                  ? NetworkImage(m.avatarUrl!)
-                  : null,
-              child: m.avatarUrl == null
-                  ? Text(
-                      (m.displayName ?? '?').characters.first.toUpperCase(),
-                      style: const TextStyle(color: Colors.white),
-                    )
-                  : null,
+            GestureDetector(
+              onTap: isBlocked
+                  ? null
+                  : () => Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => UserProfilePage(
+                          userId: m.userId,
+                          initialUsername: m.displayName,
+                        ),
+                      ),
+                    ),
+              child: CircleAvatar(
+                radius: 18,
+                backgroundColor: const Color(0xFF0B0E14),
+                backgroundImage: m.avatarUrl != null
+                    ? NetworkImage(m.avatarUrl!)
+                    : null,
+                child: m.avatarUrl == null
+                    ? Text(
+                        (m.displayName ?? '?').characters.first.toUpperCase(),
+                        style: const TextStyle(color: Colors.white),
+                      )
+                    : null,
+              ),
             ),
             const SizedBox(width: 12),
             Expanded(
@@ -509,11 +558,31 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
                     '${m.displayName ?? 'User'}${isMe ? ' (Du)' : ''}',
                     style: const TextStyle(color: Colors.white),
                   ),
+                  const SizedBox(height: 4),
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 4,
+                    children: [
+                      if (authorityLabel != null)
+                        _memberBadge(
+                          authorityLabel,
+                          isCreator
+                              ? Colors.amberAccent
+                              : AppAccentColors.accent,
+                        ),
+                      _memberBadge(
+                        rideLabel,
+                        m.rideRole == RideRole.driver
+                            ? Colors.lightBlueAccent
+                            : Colors.white54,
+                      ),
+                    ],
+                  ),
                   if (isBlocked)
-                    const Text(
+                    Text(
                       'Blockiert',
                       style: TextStyle(
-                        color: Color(0xFFFF3B30),
+                        color: AppAccentColors.accent,
                         fontSize: 11,
                         fontWeight: FontWeight.w600,
                       ),
@@ -521,13 +590,8 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
                 ],
               ),
             ),
-            Text(roleLabel, style: TextStyle(color: roleColor)),
-            if (_amOwner && !isMe && m.role != MemberRole.owner && !isBlocked)
-              IconButton(
-                tooltip: 'Zum Owner befördern',
-                icon: const Icon(Icons.star_border, color: Colors.grey),
-                onPressed: () => _promoteToOwner(m),
-              ),
+            if (!isBlocked && (_amOwner || isMe))
+              _buildMemberMenu(m, isMe: isMe, isCreator: isCreator),
           ],
         ),
       ),
@@ -535,29 +599,154 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
   }
 
   Widget _buildRoleSelector() {
-    if (_myRole == MemberRole.owner) {
-      return const Text(
-        'Du bist Owner',
-        style: TextStyle(color: Color(0xFFFF3B30)),
-      );
-    }
     return Row(
       children: [
-        _roleChip('Fahrer', MemberRole.driver),
+        _roleChip('Fahrer', RideRole.driver),
         const SizedBox(width: 12),
-        _roleChip('Mitfahrer', MemberRole.passenger),
+        _roleChip('Mitfahrer', RideRole.passenger),
       ],
     );
   }
 
-  Widget _roleChip(String label, MemberRole role) {
-    final selected = _myRole == role;
+  Widget _buildMemberMenu(
+    GroupMember m, {
+    required bool isMe,
+    required bool isCreator,
+  }) {
+    return PopupMenuButton<String>(
+      icon: const Icon(Icons.more_vert, color: Colors.grey),
+      color: const Color(0xFF1C1F26),
+      onSelected: (value) => _handleMemberAction(value, m),
+      itemBuilder: (_) => [
+        const PopupMenuItem(
+          value: 'ride_role',
+          child: Text('Rolle aendern', style: TextStyle(color: Colors.white)),
+        ),
+        if (_amOwner && !isMe && m.role != MemberRole.owner)
+          const PopupMenuItem(
+            value: 'owner_add',
+            child: Text('Owner geben', style: TextStyle(color: Colors.white)),
+          ),
+        if (_amCreator && !isMe && m.role == MemberRole.owner && !isCreator)
+          const PopupMenuItem(
+            value: 'owner_remove',
+            child: Text(
+              'Owner wegnehmen',
+              style: TextStyle(color: Colors.white),
+            ),
+          ),
+        if (_amOwner && !isMe && !isCreator)
+          PopupMenuItem(
+            value: 'kick',
+            child: Text(
+              'Aus Gruppe entfernen',
+              style: TextStyle(color: AppAccentColors.accent),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _memberBadge(String label, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.15),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          color: color,
+          fontSize: 10,
+          fontWeight: FontWeight.bold,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _handleMemberAction(String value, GroupMember m) async {
+    try {
+      switch (value) {
+        case 'ride_role':
+          await _showRideRoleSheet(m);
+          break;
+        case 'owner_add':
+          await _promoteToOwner(m);
+          break;
+        case 'owner_remove':
+          await _demoteOwner(m);
+          break;
+        case 'kick':
+          await _removeMember(m);
+          break;
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Aktion fehlgeschlagen: $e')));
+    }
+  }
+
+  Future<void> _showRideRoleSheet(GroupMember m) async {
+    final selected = await showModalBottomSheet<RideRole>(
+      context: context,
+      backgroundColor: const Color(0xFF1C1F26),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 12),
+            Container(
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: Colors.grey[700],
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const SizedBox(height: 8),
+            _rideRoleOption(ctx, m.rideRole, RideRole.driver, 'Fahrer'),
+            _rideRoleOption(ctx, m.rideRole, RideRole.passenger, 'Mitfahrer'),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+    if (selected != null) {
+      await _changeMemberRideRole(m, selected);
+    }
+  }
+
+  Widget _rideRoleOption(
+    BuildContext ctx,
+    RideRole current,
+    RideRole value,
+    String label,
+  ) {
+    final selected = current == value;
+    return ListTile(
+      onTap: () => Navigator.pop(ctx, value),
+      leading: Icon(
+        selected ? Icons.radio_button_checked : Icons.radio_button_unchecked,
+        color: selected ? AppAccentColors.accent : Colors.grey,
+      ),
+      title: Text(label, style: const TextStyle(color: Colors.white)),
+    );
+  }
+
+  Widget _roleChip(String label, RideRole role) {
+    final selected = _myRideRole == role;
     return GestureDetector(
-      onTap: () => _changeMyRole(role),
+      onTap: () => _changeMyRideRole(role),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
         decoration: BoxDecoration(
-          color: selected ? const Color(0xFFFF3B30) : const Color(0xFF1C1F26),
+          color: selected ? AppAccentColors.accent : const Color(0xFF1C1F26),
           borderRadius: BorderRadius.circular(20),
         ),
         child: Text(
@@ -580,7 +769,7 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
           child: ElevatedButton(
             onPressed: _amOwner && !_starting ? _startRoute : null,
             style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFFFF3B30),
+              backgroundColor: AppAccentColors.accent,
               disabledBackgroundColor: const Color(0xFF1C1F26),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(16),
@@ -680,9 +869,9 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
                     )
                   : TextButton(
                       onPressed: () => doInvite(id),
-                      child: const Text(
+                      child: Text(
                         'Einladen',
-                        style: TextStyle(color: Color(0xFFFF3B30)),
+                        style: TextStyle(color: AppAccentColors.accent),
                       ),
                     ),
             );

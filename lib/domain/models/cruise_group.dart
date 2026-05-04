@@ -38,32 +38,32 @@ class CruiseGroup {
   });
 
   factory CruiseGroup.fromMap(Map<String, dynamic> m) => CruiseGroup(
-        id: m['id'] as String,
-        name: (m['name'] ?? '') as String,
-        description: m['description'] as String?,
-        ownerId: (m['created_by'] ?? m['owner_id']) as String,
-        isPublic: (m['is_public'] ?? true) as bool,
-        isActive: (m['is_active'] ?? false) as bool,
-        maxPeople: (m['max_people'] ?? 10) as int,
-        startTime: m['start_time'] != null
-            ? DateTime.parse(m['start_time'] as String)
-            : null,
-        activatedAt: m['activated_at'] != null
-            ? DateTime.parse(m['activated_at'] as String)
-            : null,
-        createdAt: DateTime.parse(m['created_at'] as String),
-        inviteCode: m['invite_code'] as String?,
-        routeData: m['route_data'] as Map<String, dynamic>?,
-        startLocation: m['start_location'] as Map<String, dynamic>?,
-        members: (m['group_members'] is List)
-            ? (m['group_members'] as List)
-                .whereType<Map<String, dynamic>>()
-                .map<GroupMember>(GroupMember.fromMap)
-                .toList()
-            : const <GroupMember>[],
-      );
+    id: m['id'] as String,
+    name: (m['name'] ?? '') as String,
+    description: m['description'] as String?,
+    ownerId: (m['created_by'] ?? m['owner_id']) as String,
+    isPublic: (m['is_public'] ?? true) as bool,
+    isActive: (m['is_active'] ?? false) as bool,
+    maxPeople: (m['max_people'] ?? 10) as int,
+    startTime: m['start_time'] != null
+        ? DateTime.parse(m['start_time'] as String)
+        : null,
+    activatedAt: m['activated_at'] != null
+        ? DateTime.parse(m['activated_at'] as String)
+        : null,
+    createdAt: DateTime.parse(m['created_at'] as String),
+    inviteCode: m['invite_code'] as String?,
+    routeData: m['route_data'] as Map<String, dynamic>?,
+    startLocation: m['start_location'] as Map<String, dynamic>?,
+    members: (m['group_members'] is List)
+        ? (m['group_members'] as List)
+              .whereType<Map<String, dynamic>>()
+              .map<GroupMember>(GroupMember.fromMap)
+              .toList()
+        : const <GroupMember>[],
+  );
 
   bool isOwner(String userId) => members.any(
-        (mem) => mem.userId == userId && mem.role == MemberRole.owner,
-      );
+    (mem) => mem.userId == userId && mem.role == MemberRole.owner,
+  );
 }

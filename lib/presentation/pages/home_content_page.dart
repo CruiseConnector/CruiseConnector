@@ -4,6 +4,8 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart' as geo;
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:provider/provider.dart';
+import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/data/services/gamification_service.dart';
 import 'package:cruise_connect/data/services/route_elevation_service.dart';
 import 'package:cruise_connect/data/services/saved_routes_service.dart';
@@ -231,13 +233,14 @@ class _HomeContentPageState extends State<HomeContentPage>
         }
       }
     } catch (_) {
-      return const [];
+      return [];
     }
     return extracted;
   }
 
   @override
   Widget build(BuildContext context) {
+    final accent = context.watch<AppAccentProvider>().color;
     final user = Supabase.instance.client.auth.currentUser;
     final String userName =
         (user?.userMetadata?['username'] as String?) ??
@@ -281,10 +284,14 @@ class _HomeContentPageState extends State<HomeContentPage>
                 Stack(
                   alignment: Alignment.topRight,
                   children: [
-                    const CircleAvatar(
+                    CircleAvatar(
                       radius: 28,
-                      backgroundColor: Color(0xFFFF3B30),
-                      child: Icon(Icons.person, color: Colors.white, size: 32),
+                      backgroundColor: accent,
+                      child: const Icon(
+                        Icons.person,
+                        color: Colors.white,
+                        size: 32,
+                      ),
                     ),
                     Container(
                       width: 24,
@@ -335,13 +342,13 @@ class _HomeContentPageState extends State<HomeContentPage>
                   ),
                   const SizedBox(height: 12),
                   _loading
-                      ? const Center(
+                      ? Center(
                           child: SizedBox(
                             width: 20,
                             height: 20,
                             child: CircularProgressIndicator(
                               strokeWidth: 2,
-                              color: Color(0xFFFF3B30),
+                              color: accent,
                             ),
                           ),
                         )
@@ -402,8 +409,8 @@ class _HomeContentPageState extends State<HomeContentPage>
                           child: Container(
                             decoration: BoxDecoration(
                               borderRadius: BorderRadius.circular(4),
-                              gradient: const LinearGradient(
-                                colors: [Color(0xFFFF5252), Color(0xFFD32F2F)],
+                              gradient: LinearGradient(
+                                colors: [accent, AppAccentColors.accentStrong],
                                 begin: Alignment.centerLeft,
                                 end: Alignment.centerRight,
                               ),
@@ -563,7 +570,7 @@ class _HomeContentPageState extends State<HomeContentPage>
             borderRadius: BorderRadius.circular(34),
             boxShadow: [
               BoxShadow(
-                color: const Color(0xFFFF3B30).withValues(alpha: 0.12),
+                color: AppAccentColors.accent.withValues(alpha: 0.12),
                 blurRadius: 28,
                 offset: const Offset(0, 14),
               ),
@@ -629,7 +636,7 @@ class _HomeContentPageState extends State<HomeContentPage>
                         _buildSuggestedInfoRow(
                           icon: Icons.local_fire_department_rounded,
                           label: tertiaryLabel,
-                          tint: const Color(0xFFFF6B3D),
+                          tint: AppAccentColors.accent,
                         ),
                         const SizedBox(height: 18),
                         Wrap(
@@ -650,7 +657,7 @@ class _HomeContentPageState extends State<HomeContentPage>
                                   horizontal: 16,
                                 ),
                                 decoration: BoxDecoration(
-                                  color: const Color(0xFFFF3B30),
+                                  color: AppAccentColors.accent,
                                   borderRadius: BorderRadius.circular(16),
                                 ),
                                 alignment: Alignment.center,
@@ -731,14 +738,17 @@ class _HomeContentPageState extends State<HomeContentPage>
       child: DecoratedBox(
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(30),
-          gradient: const LinearGradient(
+          gradient: LinearGradient(
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
-            colors: [Color(0xFFFF5A5A), Color(0xFFC70000)],
+            colors: [
+              Color.lerp(AppAccentColors.accent, Colors.white, 0.10)!,
+              AppAccentColors.accentStrong,
+            ],
           ),
           boxShadow: [
             BoxShadow(
-              color: const Color(0xFFFF3B30).withValues(alpha: 0.28),
+              color: AppAccentColors.accent.withValues(alpha: 0.28),
               blurRadius: 28,
               offset: const Offset(0, 10),
             ),
@@ -836,7 +846,7 @@ class _HomeContentPageState extends State<HomeContentPage>
         borderRadius: BorderRadius.circular(34),
         boxShadow: [
           BoxShadow(
-            color: const Color(0xFFFF3B30).withValues(alpha: 0.1),
+            color: AppAccentColors.accent.withValues(alpha: 0.1),
             blurRadius: 24,
             offset: const Offset(0, 12),
           ),
@@ -888,10 +898,13 @@ class _HomeContentPageState extends State<HomeContentPage>
               child: DecoratedBox(
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(28),
-                  gradient: const LinearGradient(
+                  gradient: LinearGradient(
                     begin: Alignment.topLeft,
                     end: Alignment.bottomRight,
-                    colors: [Color(0xFFFF5A5A), Color(0xFFC70000)],
+                    colors: [
+                      Color.lerp(AppAccentColors.accent, Colors.white, 0.10)!,
+                      AppAccentColors.accentStrong,
+                    ],
                   ),
                 ),
                 child: Container(
@@ -900,9 +913,9 @@ class _HomeContentPageState extends State<HomeContentPage>
                     color: const Color(0xFF171C24),
                     borderRadius: BorderRadius.circular(22),
                   ),
-                  child: const Icon(
+                  child: Icon(
                     Icons.explore_outlined,
-                    color: Color(0xFFFF3B30),
+                    color: AppAccentColors.accent,
                     size: 40,
                   ),
                 ),
@@ -915,58 +928,75 @@ class _HomeContentPageState extends State<HomeContentPage>
   }
 
   Widget _buildSuggestedRouteSkeleton() {
-    return Container(
-      width: double.infinity,
-      decoration: BoxDecoration(
-        color: const Color(0xFF2A313C),
-        borderRadius: BorderRadius.circular(34),
-        boxShadow: [
-          BoxShadow(
-            color: const Color(0xFFFF3B30).withValues(alpha: 0.08),
-            blurRadius: 24,
-            offset: const Offset(0, 12),
-          ),
-        ],
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(18),
-        child: Container(
-          constraints: const BoxConstraints(minHeight: 208),
-          child: Row(
+    Widget shimmerCopy(double maxWidth) {
+      double capped(double width) => math.min(width, maxWidth);
+
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          _shimmerBar(width: capped(150), height: 18),
+          const SizedBox(height: 20),
+          _shimmerBar(width: capped(250), height: 28),
+          const SizedBox(height: 12),
+          _shimmerBar(width: capped(260), height: 18),
+          const SizedBox(height: 28),
+          _shimmerBar(width: capped(220), height: 18),
+          const SizedBox(height: 14),
+          _shimmerBar(width: capped(180), height: 18),
+          const SizedBox(height: 20),
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
             children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    _shimmerBar(width: 150, height: 18),
-                    const SizedBox(height: 20),
-                    _shimmerBar(width: 250, height: 28),
-                    const SizedBox(height: 12),
-                    _shimmerBar(width: 260, height: 18),
-                    const SizedBox(height: 28),
-                    _shimmerBar(width: 220, height: 18),
-                    const SizedBox(height: 14),
-                    _shimmerBar(width: 180, height: 18),
-                    const SizedBox(height: 20),
-                    Row(
-                      children: [
-                        _shimmerPill(width: 92),
-                        const SizedBox(width: 10),
-                        _shimmerPill(width: 42),
-                        const SizedBox(width: 10),
-                        _shimmerPill(width: 90),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 16),
-              _shimmerRoutePreview(),
+              _shimmerPill(width: capped(92)),
+              _shimmerPill(width: capped(42)),
+              _shimmerPill(width: capped(90)),
             ],
           ),
-        ),
-      ),
+        ],
+      );
+    }
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isCompact = constraints.maxWidth < 420;
+        final previewSize = isCompact ? 132.0 : 188.0;
+
+        return Container(
+          width: double.infinity,
+          decoration: BoxDecoration(
+            color: const Color(0xFF2A313C),
+            borderRadius: BorderRadius.circular(34),
+            boxShadow: [
+              BoxShadow(
+                color: AppAccentColors.accent.withValues(alpha: 0.08),
+                blurRadius: 24,
+                offset: const Offset(0, 12),
+              ),
+            ],
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(18),
+            child: Container(
+              constraints: const BoxConstraints(minHeight: 208),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: LayoutBuilder(
+                      builder: (context, copyConstraints) {
+                        return shimmerCopy(copyConstraints.maxWidth);
+                      },
+                    ),
+                  ),
+                  const SizedBox(width: 16),
+                  _shimmerRoutePreview(size: previewSize),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -1062,17 +1092,20 @@ class _HomeContentPageState extends State<HomeContentPage>
     return _shimmerBar(width: width, height: 28, radius: 999);
   }
 
-  Widget _shimmerRoutePreview() {
+  Widget _shimmerRoutePreview({double size = 188}) {
     return SizedBox(
-      width: 188,
-      height: 188,
+      width: size,
+      height: size,
       child: DecoratedBox(
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(30),
-          gradient: const LinearGradient(
+          gradient: LinearGradient(
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
-            colors: [Color(0xFFFF5A5A), Color(0xFFC70000)],
+            colors: [
+              Color.lerp(AppAccentColors.accent, Colors.white, 0.10)!,
+              AppAccentColors.accentStrong,
+            ],
           ),
         ),
         child: Container(
@@ -1088,7 +1121,7 @@ class _HomeContentPageState extends State<HomeContentPage>
                 padding: const EdgeInsets.all(18),
                 child: CustomPaint(
                   painter: _RoutePolylinePainter(
-                    coordinates: const [
+                    coordinates: [
                       [0.12, 0.78],
                       [0.26, 0.52],
                       [0.42, 0.60],
@@ -1122,7 +1155,7 @@ class _HomeContentPageState extends State<HomeContentPage>
         borderRadius: BorderRadius.circular(20),
         border: Border.all(
           color: hasStreak
-              ? const Color(0xFFFF3B30).withValues(alpha: 0.3)
+              ? AppAccentColors.accent.withValues(alpha: 0.3)
               : const Color(0xFFFFFFFF).withValues(alpha: 0.06),
         ),
       ),
@@ -1133,7 +1166,7 @@ class _HomeContentPageState extends State<HomeContentPage>
             height: 48,
             decoration: BoxDecoration(
               color: hasStreak
-                  ? const Color(0xFFFF3B30).withValues(alpha: 0.15)
+                  ? AppAccentColors.accent.withValues(alpha: 0.15)
                   : const Color(0xFF2D3748),
               borderRadius: BorderRadius.circular(14),
             ),
@@ -1176,9 +1209,7 @@ class _HomeContentPageState extends State<HomeContentPage>
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
               decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  colors: [Color(0xFFFF5252), Color(0xFFD32F2F)],
-                ),
+                gradient: AppAccentColors.primaryGradient,
                 borderRadius: BorderRadius.circular(12),
               ),
               child: Text(
@@ -1233,8 +1264,11 @@ class _HomeContentPageState extends State<HomeContentPage>
                   child: Container(
                     width: 8,
                     decoration: BoxDecoration(
-                      gradient: const LinearGradient(
-                        colors: [Color(0xFFFF5252), Color(0xFFD32F2F)],
+                      gradient: LinearGradient(
+                        colors: [
+                          AppAccentColors.accent,
+                          AppAccentColors.accentStrong,
+                        ],
                         begin: Alignment.topCenter,
                         end: Alignment.bottomCenter,
                       ),
@@ -1263,7 +1297,7 @@ class _HomeContentPageState extends State<HomeContentPage>
 // ── CustomPainter für Route-Polyline auf dem Gradient-Hintergrund ──────────
 
 class _HeroRouteInsights {
-  const _HeroRouteInsights({
+  _HeroRouteInsights({
     required this.curves,
     required this.xp,
     required this.elevation,
@@ -1320,7 +1354,7 @@ class _RoutePolylinePainter extends CustomPainter {
 
     // Glow-Effekt zeichnen
     final glowPaint = Paint()
-      ..color = const Color(0xFFFF5252).withValues(alpha: 0.3)
+      ..color = AppAccentColors.accent.withValues(alpha: 0.3)
       ..strokeWidth = 8
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round

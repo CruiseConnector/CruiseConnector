@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:provider/provider.dart';
 
 import 'package:cruise_connect/application/providers/community_provider.dart';
@@ -75,28 +76,20 @@ class ModerationActions {
                       style: TextStyle(color: Colors.grey, fontSize: 13),
                     ),
                   ),
-                  RadioGroup<String>(
-                    groupValue: selected,
-                    onChanged: (v) {
-                      if (submitting) return;
-                      setSheetState(() => selected = v);
-                    },
-                    child: Column(
-                      children: SocialService.reportReasons.entries
-                          .map(
-                            (e) => RadioListTile<String>(
-                              value: e.key,
-                              enabled: !submitting,
-                              title: Text(
-                                e.value,
-                                style: const TextStyle(color: Colors.white),
-                              ),
-                              activeColor: const Color(0xFFFF3B30),
-                              dense: true,
-                              contentPadding: EdgeInsets.zero,
-                            ),
-                          )
-                          .toList(),
+                  ...SocialService.reportReasons.entries.map(
+                    (e) => RadioListTile<String>(
+                      value: e.key,
+                      groupValue: selected,
+                      onChanged: submitting
+                          ? null
+                          : (v) => setSheetState(() => selected = v),
+                      title: Text(
+                        e.value,
+                        style: const TextStyle(color: Colors.white),
+                      ),
+                      activeColor: AppAccentColors.accent,
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
                     ),
                   ),
                   const SizedBox(height: 8),
@@ -168,7 +161,7 @@ class ModerationActions {
                               }
                             },
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFFFF3B30),
+                        backgroundColor: AppAccentColors.accent,
                         padding: const EdgeInsets.symmetric(vertical: 14),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(12),
@@ -232,10 +225,10 @@ class ModerationActions {
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text(
+            child: Text(
               'Blockieren',
               style: TextStyle(
-                color: Color(0xFFFF3B30),
+                color: AppAccentColors.accent,
                 fontWeight: FontWeight.bold,
               ),
             ),
