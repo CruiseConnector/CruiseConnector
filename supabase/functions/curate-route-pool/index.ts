@@ -230,7 +230,6 @@ async function startRun(runId?: string) {
           query: `id=eq.${encodeURIComponent(runId)}`,
           body: {
             status: "running",
-            started_at: new Date().toISOString(),
             updated_at: new Date().toISOString(),
           },
         });
@@ -243,12 +242,11 @@ async function startRun(runId?: string) {
   }
   const inserted = await rest("route_pool_curation_runs", {
     method: "POST",
-    query: "select=id,status,stats",
+    query: "select=id,status",
     headers: { Prefer: "return=representation" },
     body: {
       status: "running",
       requested_at: new Date().toISOString(),
-      started_at: new Date().toISOString(),
       notes: "Trusted route-pool curation run.",
     },
   }) as JsonMap[];
@@ -502,11 +500,9 @@ async function finishRun(
       status,
       promoted_count: stats.promoted,
       demoted_count: stats.demoted,
-      completed_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
-      stats,
       notes:
-        `Promoted ${stats.promoted}, demoted ${stats.demoted}; no hard deletes.`,
+        `Promoted ${stats.promoted}, demoted ${stats.demoted}; no hard deletes. Stats=${JSON.stringify(stats).slice(0, 900)}`,
     },
   });
 }
@@ -518,9 +514,8 @@ async function failRun(runId: string, message: string): Promise<void> {
     query: `id=eq.${encodeURIComponent(runId)}`,
     body: {
       status: "failed",
-      error_message: message.slice(0, 500),
-      completed_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
+      notes: `Curation failed: ${message.slice(0, 700)}`,
     },
   });
 }

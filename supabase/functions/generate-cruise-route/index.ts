@@ -83,23 +83,33 @@ function buildNoRouteSearchMeta(
     live_fill_success: roundTripSearch?.route != null,
     live_fill_accepted_candidates: roundTripSearch?.acceptedCandidates ?? 0,
     live_fill_rejected_candidates: roundTripSearch?.rejectedCandidates ?? 0,
+    live_fill_mapbox_calls: roundTripSearch?.mapboxCallCount ?? 0,
+    live_fill_evaluated_routes: roundTripSearch?.evaluatedRouteCount ?? 0,
+    live_fill_guidance_hydrations: roundTripSearch?.guidanceHydrationCount ??
+      0,
     live_fill_duplicate_skips: roundTripSearch?.duplicateSkips ?? 0,
     live_fill_exhausted: roundTripSearch?.exhausted == true,
     live_fill_emergency_duplicate_used:
       roundTripSearch?.emergencyDuplicateUsed === true,
     live_fill_reject_reasons: topRejectReasons,
     live_fill_search_phases: roundTripSearch?.searchPhases ?? [],
-    live_fill_last_plan_labels: roundTripSearch?.lastPlanLabels ?? [],
+    live_fill_last_plan_labels: (roundTripSearch?.lastPlanLabels ?? []).slice(
+      0,
+      12,
+    ),
     search_summary: {
       candidate_attempts: roundTripSearch?.candidateAttempts ?? 0,
       accepted_candidates: roundTripSearch?.acceptedCandidates ?? 0,
       rejected_candidates: roundTripSearch?.rejectedCandidates ?? 0,
+      mapbox_calls: roundTripSearch?.mapboxCallCount ?? 0,
+      evaluated_routes: roundTripSearch?.evaluatedRouteCount ?? 0,
+      guidance_hydrations: roundTripSearch?.guidanceHydrationCount ?? 0,
       duplicate_skips: roundTripSearch?.duplicateSkips ?? 0,
       emergency_duplicate_used:
         roundTripSearch?.emergencyDuplicateUsed === true,
       reject_reasons: topRejectReasons,
       search_phases: roundTripSearch?.searchPhases ?? [],
-      last_plan_labels: roundTripSearch?.lastPlanLabels ?? [],
+      last_plan_labels: (roundTripSearch?.lastPlanLabels ?? []).slice(0, 12),
       exhausted: roundTripSearch?.exhausted == true,
     },
   };

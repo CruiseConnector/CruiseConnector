@@ -409,6 +409,14 @@ List<_Scenario> _buildScenarios() {
     avoidHighways: true,
   );
   addRoundTripScenario(
+    name: 'RT Bregenz 75 Sport ohne Autobahn',
+    start: bregenz,
+    targetDistanceKm: 75,
+    mode: 'Sport Mode',
+    runs: 3,
+    avoidHighways: true,
+  );
+  addRoundTripScenario(
     name: 'RT Bregenz 75 Kurvenjagd ohne Autobahn',
     start: bregenz,
     targetDistanceKm: 75,
@@ -1071,6 +1079,9 @@ void main() {
         double? overlapPercent;
         double? distanceKm;
         int candidateAttempts = 0;
+        int mapboxCalls = 0;
+        int evaluatedRoutes = 0;
+        int guidanceHydrations = 0;
         String? qualityReason;
         String? errorCode;
         String? responseCode;
@@ -1168,6 +1179,12 @@ void main() {
             if (searchSummary is Map<String, dynamic>) {
               candidateAttempts =
                   (searchSummary['candidate_attempts'] as num?)?.toInt() ?? 0;
+              mapboxCalls =
+                  (searchSummary['mapbox_calls'] as num?)?.toInt() ?? 0;
+              evaluatedRoutes =
+                  (searchSummary['evaluated_routes'] as num?)?.toInt() ?? 0;
+              guidanceHydrations =
+                  (searchSummary['guidance_hydrations'] as num?)?.toInt() ?? 0;
             }
             final previousCoordinates =
                 previousSuccessfulRoundTripByScenario[scenario.name];
@@ -1293,6 +1310,12 @@ void main() {
             if (searchSummary is Map<String, dynamic>) {
               candidateAttempts =
                   (searchSummary['candidate_attempts'] as num?)?.toInt() ?? 0;
+              mapboxCalls =
+                  (searchSummary['mapbox_calls'] as num?)?.toInt() ?? 0;
+              evaluatedRoutes =
+                  (searchSummary['evaluated_routes'] as num?)?.toInt() ?? 0;
+              guidanceHydrations =
+                  (searchSummary['guidance_hydrations'] as num?)?.toInt() ?? 0;
             }
             final excludes = result.edgeMeta['effective_excludes']?.toString();
             edgeRoutingBuildId = result.edgeMeta['routing_build_id']
@@ -1405,6 +1428,17 @@ void main() {
             detourRatio = (error.edgeMeta['detour_ratio'] as num?)?.toDouble();
             detourFallbackStage = error.edgeMeta['detour_fallback_stage']
                 ?.toString();
+            final searchSummary = error.edgeMeta['search_summary'];
+            if (searchSummary is Map<String, dynamic>) {
+              candidateAttempts =
+                  (searchSummary['candidate_attempts'] as num?)?.toInt() ?? 0;
+              mapboxCalls =
+                  (searchSummary['mapbox_calls'] as num?)?.toInt() ?? 0;
+              evaluatedRoutes =
+                  (searchSummary['evaluated_routes'] as num?)?.toInt() ?? 0;
+              guidanceHydrations =
+                  (searchSummary['guidance_hydrations'] as num?)?.toInt() ?? 0;
+            }
           } else {
             errorCode = error.runtimeType.toString();
             errorMessage = error.toString();
@@ -1446,6 +1480,9 @@ void main() {
           'requestVariantHints': requestVariantHints,
           'requestBodies': requestBodies,
           'candidateAttempts': candidateAttempts,
+          'mapboxCalls': mapboxCalls,
+          'evaluatedRoutes': evaluatedRoutes,
+          'guidanceHydrations': guidanceHydrations,
           'durationMs': stopwatch.elapsedMilliseconds,
           'distanceKm': distanceKm,
           'overlapPercent': overlapPercent,
@@ -1563,7 +1600,23 @@ void main() {
 
       final durations =
           results.map((entry) => entry['durationMs'] as int).toList()..sort();
-      final summary = <String, dynamic>{
+      final summary = results.isEmpty
+          ? <String, dynamic>{
+              'totalRuns': 0,
+              'usableRoutes': 0,
+              'weakRoutes': 0,
+              'realErrors': 0,
+              'goodRoutes': 0,
+              'acceptableRoutes': 0,
+              'averageDurationMs': 0,
+              'p95DurationMs': 0,
+              'pointToPointDistinctRuns': 0,
+              'mapboxRoutes': 0,
+              'poolFallbackRoutes': 0,
+              'cacheRoutes': 0,
+              'motorwayToggleHonored': null,
+            }
+          : <String, dynamic>{
         'totalRuns': results.length,
         'usableRoutes': results.where((entry) {
           final bucket = entry['bucket'];

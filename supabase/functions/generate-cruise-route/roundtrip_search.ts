@@ -454,15 +454,15 @@ export async function searchBestRoundTripRoute({
   const longNoHighwayCurveRescueSearch = avoidHighways &&
     mode === "Kurvenjagd" &&
     targetDistanceKm > 70;
-  const useMapboxAlternatives = true;
-  const maxEvaluatedAlternatives = avoidHighways ? 2 : 3;
+  const useSearchAlternatives = !avoidHighwaysRoundTripSearch;
+  const maxEvaluatedAlternatives = useSearchAlternatives ? 3 : 1;
   const noHighwayAttemptBudget = targetDistanceKm <= 60
     ? mode === "Kurvenjagd" ? 14 : 12
     : targetDistanceKm <= 85
-    ? mode === "Kurvenjagd" ? 14 : 12
+    ? mode === "Kurvenjagd" ? 8 : 6
     : mode === "Kurvenjagd"
-    ? 16
-    : 14;
+    ? 10
+    : 8;
   const shortSportHighwayRoundTrip = !avoidHighwaysRoundTripSearch &&
     mode === "Sport Mode" &&
     targetDistanceKm <= 60;
@@ -529,6 +529,9 @@ export async function searchBestRoundTripRoute({
   const mapboxCandidateMaxAttempts = avoidHighwaysRoundTripSearch ? 1 : 2;
   const mapboxCandidateTimeoutMs = avoidHighwaysRoundTripSearch ? 5200 : 12000;
   const mapboxRelaxedTimeoutMs = avoidHighwaysRoundTripSearch ? 4500 : 10500;
+  const maxSearchRouteCoordinates = avoidHighwaysRoundTripSearch
+    ? targetDistanceKm > 60 ? 900 : 1200
+    : 1800;
   const remainingSearchMs = (reserveMs = 0): number =>
     roundTripTimeBudgetMs - (Date.now() - searchStartTs) - reserveMs;
   const boundedMapboxTimeoutMs = (
@@ -742,7 +745,6 @@ export async function searchBestRoundTripRoute({
   } | null = null;
   const acceptedRouteCandidates: Array<{
     plan: RoundTripCandidatePlan;
-    route: any;
     quality: RouteQualityEvaluation;
     context: {
       exclude: string;
@@ -772,6 +774,9 @@ export async function searchBestRoundTripRoute({
   let rateLimitHits = 0;
   let timeoutHits = 0;
   let stopSearchWithBestCandidate = false;
+  let mapboxCallCount = 0;
+  let evaluatedRouteCount = 0;
+  let guidanceHydrationCount = 0;
 
   const registerReject = (reason: string) => {
     const normalized = normalizeRoundTripRejectReason(reason);
@@ -928,6 +933,16 @@ export async function searchBestRoundTripRoute({
     let selectedRoute: any = null;
     let selectedQuality: RouteQualityEvaluation | null = null;
     for (const routeOption of routes) {
+      const routeCoordinateCount = Array.isArray(
+          routeOption?.geometry?.coordinates,
+        )
+        ? routeOption.geometry.coordinates.length
+        : 0;
+      if (routeCoordinateCount > maxSearchRouteCoordinates) {
+        registerReject("geometry_too_large");
+        continue;
+      }
+      evaluatedRouteCount += 1;
       const optionQuality = evaluateRouteAlternative(
         routeOption,
         qualityDistanceConfig,
@@ -977,6 +992,8 @@ export async function searchBestRoundTripRoute({
         includeGuidance: true,
       },
     );
+    mapboxCallCount += 1;
+    guidanceHydrationCount += 1;
     if (!fetchResult.route) {
       registerReject(
         fetchResult.outcome === "http_error"
@@ -1118,7 +1135,9 @@ export async function searchBestRoundTripRoute({
 
       phaseAttempts += 1;
       candidateAttempts += 1;
-      lastPlanLabels.push(`${phase.name}/${plan.label}`);
+      if (lastPlanLabels.length < 12) {
+        lastPlanLabels.push(`${phase.name}/${plan.label}`);
+      }
       debugLog(
         `[RT] Candidate ${candidateAttempts}: ${phase.name}/${plan.label} (${
           plan.waypoints.length - 2
@@ -1133,7 +1152,7 @@ export async function searchBestRoundTripRoute({
         accessToken,
         {
           continueStraight: phase.continueStraight,
-          alternatives: useMapboxAlternatives,
+          alternatives: useSearchAlternatives && phase.name !== "strict",
           maxAttempts: candidateAttempts >= 2 || !hasMapboxCallBudget(8000)
             ? 1
             : mapboxCandidateMaxAttempts,
@@ -1142,6 +1161,7 @@ export async function searchBestRoundTripRoute({
           includeGuidance: false,
         },
       );
+      mapboxCallCount += 1;
       const primaryFailureKind = getRetryKindFromMapboxFailure(fetchResult);
       if (primaryFailureKind === "rate_limit") rateLimitHits += 1;
       if (primaryFailureKind === "timeout") timeoutHits += 1;
@@ -1170,12 +1190,13 @@ export async function searchBestRoundTripRoute({
           accessToken,
           {
             continueStraight: phase.continueStraight,
-            alternatives: useMapboxAlternatives,
+            alternatives: false,
             maxAttempts: 1,
             timeoutMs: boundedMapboxTimeoutMs(mapboxRelaxedTimeoutMs),
             includeGuidance: false,
           },
         );
+        mapboxCallCount += 1;
         const relaxedFailureKind = getRetryKindFromMapboxFailure(relaxedFetch);
         if (relaxedFailureKind === "rate_limit") rateLimitHits += 1;
         if (relaxedFailureKind === "timeout") timeoutHits += 1;
@@ -1242,12 +1263,13 @@ export async function searchBestRoundTripRoute({
           accessToken,
           {
             continueStraight: phase.continueStraight,
-            alternatives: useMapboxAlternatives,
+            alternatives: false,
             maxAttempts: 1,
             timeoutMs: boundedMapboxTimeoutMs(mapboxRelaxedTimeoutMs),
             includeGuidance: false,
           },
         );
+        mapboxCallCount += 1;
         const relaxedFailureKind = getRetryKindFromMapboxFailure(relaxedFetch);
         if (relaxedFailureKind === "rate_limit") rateLimitHits += 1;
         if (relaxedFailureKind === "timeout") timeoutHits += 1;
@@ -1355,7 +1377,6 @@ export async function searchBestRoundTripRoute({
       };
       acceptedRouteCandidates.push({
         plan,
-        route,
         quality,
         context: acceptedContext,
       });
@@ -1545,6 +1566,9 @@ export async function searchBestRoundTripRoute({
         candidateAttempts,
         acceptedCandidates,
         rejectedCandidates,
+        mapboxCallCount,
+        evaluatedRouteCount,
+        guidanceHydrationCount,
         rejectReasons: Object.fromEntries(rejectReasons),
         searchPhases: searchPhases.map((phase) => phase.name),
         lastPlanLabels,
@@ -1577,6 +1601,9 @@ export async function searchBestRoundTripRoute({
       candidateAttempts,
       acceptedCandidates,
       rejectedCandidates,
+      mapboxCallCount,
+      evaluatedRouteCount,
+      guidanceHydrationCount,
       rejectReasons: Object.fromEntries(rejectReasons),
       searchPhases: searchPhases.map((phase) => phase.name),
       lastPlanLabels,
@@ -1595,7 +1622,8 @@ export async function searchBestRoundTripRoute({
     } | null = null;
     const hydrationQueue = acceptedRouteCandidates
       .slice()
-      .sort((a, b) => a.quality.score - b.quality.score);
+      .sort((a, b) => a.quality.score - b.quality.score)
+      .slice(0, 2);
     for (const candidate of hydrationQueue) {
       const hydratedCandidate = await hydrateGuidanceRoute(
         candidate.plan,
@@ -1624,6 +1652,9 @@ export async function searchBestRoundTripRoute({
         candidateAttempts,
         acceptedCandidates,
         rejectedCandidates,
+        mapboxCallCount,
+        evaluatedRouteCount,
+        guidanceHydrationCount,
         rejectReasons: Object.fromEntries(rejectReasons),
         searchPhases: searchPhases.map((phase) => phase.name),
         lastPlanLabels,
@@ -1662,6 +1693,9 @@ export async function searchBestRoundTripRoute({
     candidateAttempts,
     acceptedCandidates,
     rejectedCandidates,
+    mapboxCallCount,
+    evaluatedRouteCount,
+    guidanceHydrationCount,
     rejectReasons: Object.fromEntries(rejectReasons),
     searchPhases: searchPhases.map((phase) => phase.name),
     lastPlanLabels,

@@ -162,6 +162,9 @@ export interface RoundTripSearchResult {
   candidateAttempts: number;
   acceptedCandidates: number;
   rejectedCandidates: number;
+  mapboxCallCount?: number;
+  evaluatedRouteCount?: number;
+  guidanceHydrationCount?: number;
   rejectReasons: Record<string, number>;
   searchPhases: string[];
   lastPlanLabels?: string[];
