@@ -1610,6 +1610,188 @@ void main() {
       },
     );
 
+    test('Candidate-Payload enthaelt nur route_pool_candidates-Spalten', () {
+      final payload = RoutePoolCandidate(
+        routeFingerprint: 'payload-schema-check',
+        countryCode: 'DE',
+        admin1Name: 'Bayern',
+        cityCluster: 'München',
+        startLat: 48.1372,
+        startLng: 11.5755,
+        distanceKm: 52,
+        routeType: 'ROUND_TRIP',
+        distanceBucket: 50,
+        styleKey: 'sport_mode',
+        styleTags: const ['Sport Mode'],
+        avoidHighways: true,
+        hasHighway: false,
+        qualityScore: 88,
+        shapeScore: 12,
+        candidateSource: 'basic_live',
+        difficultyLevel: 'hard',
+        hardRegionStatus: 'curated_needed',
+        geometry: const {'type': 'LineString', 'coordinates': []},
+      ).toJson();
+
+      const allowed = {
+        'id',
+        'route_region_id',
+        'route_fingerprint',
+        'country_code',
+        'admin1_name',
+        'admin2_name',
+        'city_cluster',
+        'start_lat',
+        'start_lng',
+        'distance_km',
+        'route_type',
+        'distance_bucket',
+        'style_key',
+        'style_tags',
+        'avoid_highways',
+        'has_highway',
+        'quality_score',
+        'shape_score',
+        'candidate_source',
+        'average_rating',
+        'rating_count',
+        'completion_rate',
+        'times_selected',
+        'last_selected_at',
+        'promoted_to_pool_at',
+        'demoted_at',
+        'is_candidate',
+        'is_verified_pool',
+        'candidate_score',
+        'candidate_region_difficulty',
+        'candidate_locality_score',
+        'repeated_success_count',
+        'geometry',
+        'route_payload',
+      };
+
+      expect(payload.keys.where((key) => !allowed.contains(key)), isEmpty);
+      expect(payload, isNot(contains('difficulty_level')));
+      expect(payload, isNot(contains('hard_region_status')));
+      expect(payload['candidate_region_difficulty'], 'hard');
+      expect(
+        (payload['route_payload'] as Map)['hard_region_status'],
+        'curated_needed',
+      );
+    });
+
+    test(
+      'Duplicate-Fingerprint wird nicht doppelt als Candidate gespeichert',
+      () async {
+        final candidates = <RoutePoolCandidate>[];
+        final service = RoutePoolService(
+          inMemoryRegions: [
+            _region(
+              countryCode: 'DE',
+              admin1Name: 'Bayern',
+              admin2Name: 'München',
+              cityCluster: 'München',
+              centerLat: 48.1372,
+              centerLng: 11.5755,
+            ),
+          ],
+          inMemoryRoutes: const [],
+          inMemoryCoverage: <RoutePoolCoverage>[],
+          inMemorySeedJobs: <RouteSeedJob>[],
+          inMemoryCandidates: candidates,
+        );
+
+        Future<RoutePoolCandidateSaveResult> save() =>
+            service.recordCandidateRoute(
+              userLat: 48.1372,
+              userLng: 11.5755,
+              distanceBucket: 50,
+              style: 'Sport Mode',
+              avoidHighways: true,
+              routeType: 'ROUND_TRIP',
+              candidateSource: 'basic_live',
+              routeFingerprint: 'candidate-muc-duplicate',
+              geometry: const {
+                'type': 'LineString',
+                'coordinates': [
+                  [11.5755, 48.1372],
+                  [11.62, 48.18],
+                  [11.5755, 48.1372],
+                ],
+              },
+              distanceKm: 52,
+              qualityScore: 88,
+            );
+
+        final first = await save();
+        final second = await save();
+
+        expect(first.saved, isTrue);
+        expect(first.duplicate, isFalse);
+        expect(second.saved, isFalse);
+        expect(second.duplicate, isTrue);
+        expect(second.duplicateSource, 'candidate');
+        expect(candidates, hasLength(1));
+      },
+    );
+
+    test('Verified-Pool-Fingerprint blockiert Candidate-Duplikat', () async {
+      final candidates = <RoutePoolCandidate>[];
+      final service = RoutePoolService(
+        inMemoryRegions: [
+          _region(
+            countryCode: 'DE',
+            admin1Name: 'Bayern',
+            admin2Name: 'München',
+            cityCluster: 'München',
+            centerLat: 48.1372,
+            centerLng: 11.5755,
+          ),
+        ],
+        inMemoryRoutes: [
+          _route(
+            id: 'verified-muc-fingerprint',
+            countryCode: 'DE',
+            admin1Name: 'Bayern',
+            admin2Name: 'München',
+            cityCluster: 'München',
+            startLat: 48.1372,
+            startLng: 11.5755,
+            routePayload: const {'route_fingerprint': 'already-verified'},
+          ),
+        ],
+        inMemoryCoverage: <RoutePoolCoverage>[],
+        inMemorySeedJobs: <RouteSeedJob>[],
+        inMemoryCandidates: candidates,
+      );
+
+      final result = await service.recordCandidateRoute(
+        userLat: 48.1372,
+        userLng: 11.5755,
+        distanceBucket: 50,
+        style: 'Sport Mode',
+        avoidHighways: true,
+        routeType: 'ROUND_TRIP',
+        candidateSource: 'premium_live',
+        routeFingerprint: 'already-verified',
+        geometry: const {
+          'type': 'LineString',
+          'coordinates': [
+            [11.5755, 48.1372],
+            [11.62, 48.18],
+            [11.5755, 48.1372],
+          ],
+        },
+        distanceKm: 52,
+        qualityScore: 88,
+      );
+
+      expect(result.saved, isFalse);
+      expect(result.duplicate, isTrue);
+      expect(result.duplicateSource, 'pool');
+      expect(candidates, isEmpty);
+    });
+
     test('schlechte Live-Candidates werden nicht gespeichert', () async {
       final candidates = <RoutePoolCandidate>[];
       final service = RoutePoolService(
@@ -1671,9 +1853,51 @@ void main() {
         qualityScore: 90,
         hasHighway: true,
       );
+      final lowScore = await service.recordCandidateRoute(
+        userLat: 48.1372,
+        userLng: 11.5755,
+        distanceBucket: 50,
+        style: 'Sport Mode',
+        avoidHighways: true,
+        routeType: 'ROUND_TRIP',
+        candidateSource: 'premium_live',
+        routeFingerprint: 'low-score-muc-50-sport',
+        geometry: const {
+          'type': 'LineString',
+          'coordinates': [
+            [11.5755, 48.1372],
+            [11.62, 48.18],
+            [11.5755, 48.1372],
+          ],
+        },
+        distanceKm: 52,
+        qualityScore: 59,
+      );
+      final distanceMismatch = await service.recordCandidateRoute(
+        userLat: 48.1372,
+        userLng: 11.5755,
+        distanceBucket: 50,
+        style: 'Sport Mode',
+        avoidHighways: true,
+        routeType: 'ROUND_TRIP',
+        candidateSource: 'premium_live',
+        routeFingerprint: 'distance-mismatch-muc-50-sport',
+        geometry: const {
+          'type': 'LineString',
+          'coordinates': [
+            [11.5755, 48.1372],
+            [11.62, 48.18],
+            [11.5755, 48.1372],
+          ],
+        },
+        distanceKm: 120,
+        qualityScore: 90,
+      );
 
       expect(rejected.saved, isFalse);
       expect(highway.saved, isFalse);
+      expect(lowScore.saved, isFalse);
+      expect(distanceMismatch.saved, isFalse);
       expect(candidates, isEmpty);
     });
 

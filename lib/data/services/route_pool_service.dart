@@ -372,6 +372,11 @@ class RoutePoolCandidateSaveResult {
     required this.poolFull,
     this.assignment,
     this.candidate,
+    this.duplicateSource,
+    this.coverageRefreshFailed = false,
+    this.saveErrorType,
+    this.saveErrorCode,
+    this.saveErrorReason,
   });
 
   final bool saved;
@@ -379,6 +384,11 @@ class RoutePoolCandidateSaveResult {
   final bool poolFull;
   final RoutePoolRegionAssignment? assignment;
   final RoutePoolCandidate? candidate;
+  final String? duplicateSource;
+  final bool coverageRefreshFailed;
+  final String? saveErrorType;
+  final String? saveErrorCode;
+  final String? saveErrorReason;
 }
 
 class RoutePoolService {
@@ -1048,23 +1058,35 @@ class RoutePoolService {
         poolFull: poolFull,
         assignment: assignment,
         candidate: saveResult.candidate,
+        duplicateSource: saveResult.duplicateSource,
+        saveErrorType: saveResult.saveErrorType,
+        saveErrorCode: saveResult.saveErrorCode,
+        saveErrorReason: saveResult.saveErrorReason,
       );
     }
 
-    await _loadOrRefreshCoverage(
-      assignment: assignment,
-      distanceBucket: distanceBucket,
-      styleKey: styleKey,
-      avoidHighways: avoidHighways,
-      routeType: routeType,
-      forceRefresh: true,
-    );
+    var coverageRefreshFailed = false;
+    try {
+      await _loadOrRefreshCoverage(
+        assignment: assignment,
+        distanceBucket: distanceBucket,
+        styleKey: styleKey,
+        avoidHighways: avoidHighways,
+        routeType: routeType,
+        forceRefresh: true,
+      );
+    } catch (_) {
+      // Candidate staging succeeded; coverage can be recomputed by the next
+      // request or worker run, so do not report the save itself as failed.
+      coverageRefreshFailed = true;
+    }
     return RoutePoolCandidateSaveResult(
       saved: true,
       duplicate: false,
       poolFull: poolFull,
       assignment: assignment,
       candidate: saveResult.candidate,
+      coverageRefreshFailed: coverageRefreshFailed,
     );
   }
 
@@ -2413,6 +2435,22 @@ class RoutePoolService {
   ) async {
     final inMemoryCandidates = _inMemoryCandidates;
     if (inMemoryCandidates != null) {
+      final existingPoolRoute =
+          _inMemoryRoutes?.any(
+            (route) => _sameText(
+              _fingerprintForRoute(route),
+              candidate.routeFingerprint,
+            ),
+          ) ??
+          false;
+      if (existingPoolRoute) {
+        return _CandidateUpsertResult(
+          saved: false,
+          duplicate: true,
+          candidate: candidate,
+          duplicateSource: 'pool',
+        );
+      }
       final existingIndex = inMemoryCandidates.indexWhere(
         (item) => _sameText(item.routeFingerprint, candidate.routeFingerprint),
       );
@@ -2421,6 +2459,7 @@ class RoutePoolService {
           saved: false,
           duplicate: true,
           candidate: inMemoryCandidates[existingIndex],
+          duplicateSource: 'candidate',
         );
       }
       inMemoryCandidates.add(candidate);
@@ -2428,6 +2467,20 @@ class RoutePoolService {
         saved: true,
         duplicate: false,
         candidate: candidate,
+      );
+    }
+
+    final poolRows = await _db
+        .from('route_pool')
+        .select('route_fingerprint')
+        .eq('route_fingerprint', candidate.routeFingerprint)
+        .limit(1);
+    if ((poolRows as List).isNotEmpty) {
+      return _CandidateUpsertResult(
+        saved: false,
+        duplicate: true,
+        candidate: candidate,
+        duplicateSource: 'pool',
       );
     }
 
@@ -2443,20 +2496,64 @@ class RoutePoolService {
         candidate: RoutePoolCandidate.fromJson(
           Map<String, dynamic>.from(rows.first as Map),
         ),
+        duplicateSource: 'candidate',
       );
     }
-    final inserted = await _db
-        .from('route_pool_candidates')
-        .insert(candidate.toJson())
-        .select()
-        .limit(1);
-    return _CandidateUpsertResult(
-      saved: true,
-      duplicate: false,
-      candidate: RoutePoolCandidate.fromJson(
-        Map<String, dynamic>.from((inserted as List).first as Map),
-      ),
-    );
+    try {
+      final inserted = await _db
+          .from('route_pool_candidates')
+          .insert(candidate.toJson())
+          .select()
+          .limit(1);
+      return _CandidateUpsertResult(
+        saved: true,
+        duplicate: false,
+        candidate: RoutePoolCandidate.fromJson(
+          Map<String, dynamic>.from((inserted as List).first as Map),
+        ),
+      );
+    } on PostgrestException catch (error) {
+      if (_isDuplicateFingerprintError(error)) {
+        final existing = await _db
+            .from('route_pool_candidates')
+            .select()
+            .eq('route_fingerprint', candidate.routeFingerprint)
+            .limit(1);
+        if ((existing as List).isNotEmpty) {
+          return _CandidateUpsertResult(
+            saved: false,
+            duplicate: true,
+            candidate: RoutePoolCandidate.fromJson(
+              Map<String, dynamic>.from(existing.first as Map),
+            ),
+            duplicateSource: 'candidate',
+          );
+        }
+        return _CandidateUpsertResult(
+          saved: false,
+          duplicate: true,
+          candidate: candidate,
+          duplicateSource: 'unknown',
+        );
+      }
+      return _CandidateUpsertResult(
+        saved: false,
+        duplicate: false,
+        candidate: candidate,
+        saveErrorType: error.runtimeType.toString(),
+        saveErrorCode: error.code,
+        saveErrorReason: error.message,
+      );
+    }
+  }
+
+  static bool _isDuplicateFingerprintError(PostgrestException error) {
+    final code = error.code?.toLowerCase();
+    if (code == '23505') return true;
+    final message = error.message.toLowerCase();
+    return message.contains('duplicate') ||
+        message.contains('unique') ||
+        message.contains('route_fingerprint');
   }
 
   static bool _coverageKeyMatches(
@@ -3316,9 +3413,17 @@ class _CandidateUpsertResult {
     required this.saved,
     required this.duplicate,
     required this.candidate,
+    this.duplicateSource,
+    this.saveErrorType,
+    this.saveErrorCode,
+    this.saveErrorReason,
   });
 
   final bool saved;
   final bool duplicate;
   final RoutePoolCandidate candidate;
+  final String? duplicateSource;
+  final String? saveErrorType;
+  final String? saveErrorCode;
+  final String? saveErrorReason;
 }

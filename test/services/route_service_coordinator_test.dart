@@ -1579,9 +1579,19 @@ void main() {
       expect(route.edgeMeta['live_fill_attempt_count'], 3);
       expect(route.edgeMeta['live_fill_success'], true);
       expect(route.edgeMeta['candidate_inserted'], true);
+      expect(route.edgeMeta['candidate_saved'], true);
+      expect(route.edgeMeta['candidate_save_failed'], false);
       expect(jobs, hasLength(1));
       expect(candidates, hasLength(1));
       expect(candidates.single.candidateSource, 'premium_live');
+      expect(
+        candidates.single.routeFingerprint,
+        route.edgeMeta['route_fingerprint'],
+      );
+      expect(
+        candidates.single.routePayload['candidate_subscription_tier'],
+        'premium',
+      );
     },
   );
 
@@ -1603,7 +1613,19 @@ void main() {
 
     expect(route.edgeMeta['route_source'], 'mapbox');
     expect(route.edgeMeta['candidate_inserted'], false);
+    expect(route.edgeMeta['candidate_saved'], false);
     expect(route.edgeMeta['candidate_save_failed'], true);
+    expect(route.edgeMeta['candidate_save_error_type'], 'StateError');
+    expect(
+      route.edgeMeta['candidate_save_error_reason'],
+      contains('simulated candidate save failure'),
+    );
+    final orchestration = Map<String, dynamic>.from(
+      route.edgeMeta['orchestration'] as Map,
+    );
+    expect(orchestration['candidate_saved'], false);
+    expect(orchestration['candidate_save_failed'], true);
+    expect(orchestration['candidate_save_error_type'], 'StateError');
   });
 
   test(

@@ -122,6 +122,12 @@ class RouteService {
   static bool lastRouteCandidateInserted = false;
   static bool lastRouteVerifiedInserted = false;
   static bool lastRouteCandidateSaveFailed = false;
+  static bool lastRouteCandidateDuplicateFingerprint = false;
+  static String? lastRouteCandidateDuplicateSource;
+  static bool lastRouteCandidateCoverageRefreshFailed = false;
+  static String? lastRouteCandidateSaveErrorType;
+  static String? lastRouteCandidateSaveErrorCode;
+  static String? lastRouteCandidateSaveErrorReason;
 
   /// Letzte 3 Entdecker-Richtungen (in Grad) für Diversifizierung.
   // TODO: In SharedPreferences persistieren für Session-übergreifende Diversifizierung
@@ -218,6 +224,12 @@ class RouteService {
     lastRouteCandidateInserted = false;
     lastRouteVerifiedInserted = false;
     lastRouteCandidateSaveFailed = false;
+    lastRouteCandidateDuplicateFingerprint = false;
+    lastRouteCandidateDuplicateSource = null;
+    lastRouteCandidateCoverageRefreshFailed = false;
+    lastRouteCandidateSaveErrorType = null;
+    lastRouteCandidateSaveErrorCode = null;
+    lastRouteCandidateSaveErrorReason = null;
   }
 
   static void _debugRouteSearch(String message) {
@@ -4901,13 +4913,45 @@ class RouteService {
         hasHighway: (route.edgeMeta['has_highway'] as bool?) ?? false,
       );
       lastRouteCandidateInserted = candidateSaveResult.saved;
-      lastRouteCandidateSaveFailed = false;
+      lastRouteCandidateDuplicateFingerprint = candidateSaveResult.duplicate;
+      lastRouteCandidateDuplicateSource = candidateSaveResult.duplicateSource;
+      lastRouteCandidateCoverageRefreshFailed =
+          candidateSaveResult.coverageRefreshFailed;
+      lastRouteCandidateSaveErrorType = candidateSaveResult.saveErrorType;
+      lastRouteCandidateSaveErrorCode = candidateSaveResult.saveErrorCode;
+      lastRouteCandidateSaveErrorReason = _sanitizeCandidateSaveError(
+        candidateSaveResult.saveErrorReason,
+      );
+      lastRouteCandidateSaveFailed =
+          candidateSaveResult.saveErrorType != null ||
+          candidateSaveResult.saveErrorCode != null ||
+          candidateSaveResult.saveErrorReason != null;
       lastRouteVerifiedInserted = false;
-    } catch (_) {
+    } catch (error) {
       // Candidate staging must never block route delivery.
       lastRouteCandidateInserted = false;
       lastRouteCandidateSaveFailed = true;
+      lastRouteCandidateDuplicateFingerprint = false;
+      lastRouteCandidateDuplicateSource = null;
+      lastRouteCandidateCoverageRefreshFailed = false;
+      lastRouteCandidateSaveErrorType = error.runtimeType.toString();
+      lastRouteCandidateSaveErrorCode = error is PostgrestException
+          ? error.code
+          : null;
+      lastRouteCandidateSaveErrorReason = _sanitizeCandidateSaveError(
+        error is PostgrestException ? error.message : error.toString(),
+      );
     }
+  }
+
+  static String? _sanitizeCandidateSaveError(String? error) {
+    if (error == null) return null;
+    final compact = error
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .replaceAll(RegExp(r'(pk\.eyJ)[A-Za-z0-9_\-.]+'), r'$1[redacted]')
+        .trim();
+    if (compact.isEmpty) return null;
+    return compact.length <= 180 ? compact : '${compact.substring(0, 180)}...';
   }
 
   Future<RouteResult?> _buildRoundTripPoolAccessRoute({
@@ -6737,6 +6781,14 @@ class RouteService {
     meta['candidate_inserted'] = lastRouteCandidateInserted;
     meta['candidate_saved'] = lastRouteCandidateInserted;
     meta['candidate_save_failed'] = lastRouteCandidateSaveFailed;
+    meta['candidate_duplicate_fingerprint'] =
+        lastRouteCandidateDuplicateFingerprint;
+    meta['candidate_duplicate_source'] = lastRouteCandidateDuplicateSource;
+    meta['candidate_coverage_refresh_failed'] =
+        lastRouteCandidateCoverageRefreshFailed;
+    meta['candidate_save_error_type'] = lastRouteCandidateSaveErrorType;
+    meta['candidate_save_error_code'] = lastRouteCandidateSaveErrorCode;
+    meta['candidate_save_error_reason'] = lastRouteCandidateSaveErrorReason;
     meta['verified_inserted'] = lastRouteVerifiedInserted;
     final existingOrchestration = meta['orchestration'] is Map
         ? Map<String, dynamic>.from(meta['orchestration'] as Map)
@@ -6796,6 +6848,13 @@ class RouteService {
       'candidate_inserted': lastRouteCandidateInserted,
       'candidate_saved': lastRouteCandidateInserted,
       'candidate_save_failed': lastRouteCandidateSaveFailed,
+      'candidate_duplicate_fingerprint': lastRouteCandidateDuplicateFingerprint,
+      'candidate_duplicate_source': lastRouteCandidateDuplicateSource,
+      'candidate_coverage_refresh_failed':
+          lastRouteCandidateCoverageRefreshFailed,
+      'candidate_save_error_type': lastRouteCandidateSaveErrorType,
+      'candidate_save_error_code': lastRouteCandidateSaveErrorCode,
+      'candidate_save_error_reason': lastRouteCandidateSaveErrorReason,
       'verified_inserted': lastRouteVerifiedInserted,
       'fallback_reason': lastRoutePoolFallbackUsed ? 'mapbox_failed' : null,
     };
