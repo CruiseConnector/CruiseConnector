@@ -15,6 +15,8 @@ class CreatePostPage extends StatefulWidget {
 class _CreatePostPageState extends State<CreatePostPage> {
   final _controller = TextEditingController();
   bool _posting = false;
+  bool _checkingRoutePost = false;
+  bool _routeAlreadyPosted = false;
   String _visibility = 'public'; // 'public' oder 'followers'
 
   @override
@@ -23,6 +25,7 @@ class _CreatePostPageState extends State<CreatePostPage> {
     if (widget.initialText != null) {
       _controller.text = widget.initialText!;
     }
+    _checkRoutePostAvailability();
   }
 
   @override
@@ -33,7 +36,7 @@ class _CreatePostPageState extends State<CreatePostPage> {
 
   Future<void> _submitPost() async {
     final content = _controller.text.trim();
-    if (content.isEmpty) return;
+    if (content.isEmpty || _routeAlreadyPosted) return;
 
     setState(() => _posting = true);
     try {
@@ -43,6 +46,19 @@ class _CreatePostPageState extends State<CreatePostPage> {
         sharedRouteId: widget.sharedRouteId,
       );
       if (mounted) Navigator.pop(context, true);
+    } on DuplicateSharedRoutePostException catch (e) {
+      if (mounted) {
+        setState(() {
+          _posting = false;
+          _routeAlreadyPosted = true;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(e.message),
+            backgroundColor: const Color(0xFF1C1F26),
+          ),
+        );
+      }
     } catch (e) {
       if (mounted) {
         setState(() => _posting = false);
@@ -53,6 +69,26 @@ class _CreatePostPageState extends State<CreatePostPage> {
           ),
         );
       }
+    }
+  }
+
+  Future<void> _checkRoutePostAvailability() async {
+    final routeId = widget.sharedRouteId;
+    if (routeId == null || routeId.trim().isEmpty) return;
+
+    setState(() => _checkingRoutePost = true);
+    try {
+      final alreadyPosted = await SocialService.hasOwnPostForSharedRoute(
+        routeId,
+      );
+      if (!mounted) return;
+      setState(() {
+        _routeAlreadyPosted = alreadyPosted;
+        _checkingRoutePost = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _checkingRoutePost = false);
     }
   }
 
@@ -91,6 +127,8 @@ class _CreatePostPageState extends State<CreatePostPage> {
   @override
   Widget build(BuildContext context) {
     final hasContent = _controller.text.trim().isNotEmpty;
+    final canPost =
+        hasContent && !_posting && !_checkingRoutePost && !_routeAlreadyPosted;
 
     return Scaffold(
       backgroundColor: const Color(0xFF0B0E14),
@@ -109,7 +147,7 @@ class _CreatePostPageState extends State<CreatePostPage> {
           Padding(
             padding: const EdgeInsets.only(right: 16.0, top: 10, bottom: 10),
             child: ElevatedButton(
-              onPressed: _posting || !hasContent ? null : _submitPost,
+              onPressed: canPost ? _submitPost : null,
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppAccentColors.accent,
                 disabledBackgroundColor: AppAccentColors.accent.withValues(
@@ -165,6 +203,26 @@ class _CreatePostPageState extends State<CreatePostPage> {
                 showRideButton: false,
               ),
             ),
+            if (_routeAlreadyPosted)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                child: Row(
+                  children: [
+                    const Icon(
+                      Icons.info_outline,
+                      color: Color(0xFFFFD166),
+                      size: 18,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        SocialService.duplicateSharedRoutePostMessage,
+                        style: TextStyle(color: Colors.grey[400], fontSize: 13),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
           ],
           const Divider(color: Color(0xFF1C1F26), height: 1),
           // Post-Eingabe

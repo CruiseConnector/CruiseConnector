@@ -1,10 +1,23 @@
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+class DuplicateSharedRoutePostException implements Exception {
+  const DuplicateSharedRoutePostException();
+
+  String get message => SocialService.duplicateSharedRoutePostMessage;
+
+  @override
+  String toString() => message;
+}
+
 /// Service für soziale Features: Posts, Follows, Gruppen, Notifications.
 class SocialService {
   static SupabaseClient get _db => Supabase.instance.client;
   static String? get _userId => _db.auth.currentUser?.id;
+
+  static const String duplicateSharedRoutePostMessage =
+      'Du hast diese Strecke bereits gepostet. Loesche zuerst den alten Post, '
+      'danach kannst du die Strecke erneut posten.';
 
   static const String _profileSelect =
       'id, username, email, created_at, level, total_km, total_routes, '
@@ -130,6 +143,17 @@ class SocialService {
         map['is_active'] == true || map['is_active']?.toString() == 'true';
     final count = (map['count'] as num?)?.toInt() ?? 0;
     return (isActive: isActive, count: count);
+  }
+
+  static bool isDuplicateSharedRoutePostError(Object error) {
+    if (error is DuplicateSharedRoutePostException) return true;
+    if (error is PostgrestException) {
+      final text = '${error.message} ${error.details ?? ''}'.toLowerCase();
+      return error.code == '23505' &&
+          (text.contains('posts_user_shared_route_unique_idx') ||
+              text.contains('shared_route_id'));
+    }
+    return false;
   }
 
   static Future<int> _countPostReactions(String table, String postId) async {
@@ -357,15 +381,33 @@ class SocialService {
   }) async {
     final uid = _userId;
     if (uid == null) return null;
+    final cleanedSharedRouteId = sharedRouteId?.trim();
+
+    if (cleanedSharedRouteId != null && cleanedSharedRouteId.isNotEmpty) {
+      final alreadyPosted = await hasOwnPostForSharedRoute(
+        cleanedSharedRouteId,
+      );
+      if (alreadyPosted) throw const DuplicateSharedRoutePostException();
+    }
 
     final row = <String, dynamic>{
       'user_id': uid,
       'content': content,
       'visibility': visibility,
     };
-    if (sharedRouteId != null) row['shared_route_id'] = sharedRouteId;
+    if (cleanedSharedRouteId != null && cleanedSharedRouteId.isNotEmpty) {
+      row['shared_route_id'] = cleanedSharedRouteId;
+    }
 
-    final result = await _db.from('posts').insert(row).select('id').single();
+    late final dynamic result;
+    try {
+      result = await _db.from('posts').insert(row).select('id').single();
+    } on PostgrestException catch (e) {
+      if (isDuplicateSharedRoutePostError(e)) {
+        throw const DuplicateSharedRoutePostException();
+      }
+      rethrow;
+    }
     final postId = (result as Map?)?['id'] as String?;
 
     // Mentions im Content auflösen — Anti-Spam: nur eigene Follower werden
@@ -377,6 +419,20 @@ class SocialService {
       }
     }
     return postId;
+  }
+
+  static Future<bool> hasOwnPostForSharedRoute(String routeId) async {
+    final uid = _userId;
+    final cleanedRouteId = routeId.trim();
+    if (uid == null || cleanedRouteId.isEmpty) return false;
+
+    final row = await _db
+        .from('posts')
+        .select('id')
+        .eq('user_id', uid)
+        .eq('shared_route_id', cleanedRouteId)
+        .maybeSingle();
+    return row != null;
   }
 
   static Future<void> deletePost(String postId) async {
