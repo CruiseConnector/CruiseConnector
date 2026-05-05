@@ -61,6 +61,10 @@ function parseRoundTripTargetHintKm(value?: string): number | null {
 function buildNoRouteSearchMeta(
   roundTripSearch: RoundTripSearchResult | null,
   extraRejectReason?: string,
+  options: {
+    avoidHighways?: boolean;
+    excludeParams?: string;
+  } = {},
 ): Record<string, unknown> | null {
   if (roundTripSearch == null && extraRejectReason == null) {
     return null;
@@ -78,6 +82,12 @@ function buildNoRouteSearchMeta(
   );
 
   return {
+    avoid_highways_requested: options.avoidHighways === true,
+    effective_excludes: options.excludeParams ?? null,
+    highway_allowed: options.avoidHighways !== true,
+    motorway_policy: options.avoidHighways === true
+      ? "exclude_motorway"
+      : "allowed_not_required",
     live_fill_attempted: (roundTripSearch?.candidateAttempts ?? 0) > 0,
     live_fill_attempt_count: roundTripSearch?.candidateAttempts ?? 0,
     live_fill_success: roundTripSearch?.route != null,
@@ -1602,7 +1612,10 @@ Deno.serve(async (req) => {
       const noRouteMessage = useRoundTripSearch
         ? "No route found with current constraints after exhausting round-trip search."
         : "No route found with current constraints.";
-      requestDebugMeta = buildNoRouteSearchMeta(roundTripSearch);
+      requestDebugMeta = buildNoRouteSearchMeta(roundTripSearch, undefined, {
+        avoidHighways,
+        excludeParams,
+      });
       if (isWaypointPreferenceRequest && planning_type !== "Wegpunkte") {
         requestDebugMeta = buildPreferenceNotMatchableMeta(
           requestDebugMeta,
@@ -1797,6 +1810,7 @@ Deno.serve(async (req) => {
         requestDebugMeta = buildNoRouteSearchMeta(
           roundTripSearch,
           `distance=${actualDistanceKm.toFixed(1)}km`,
+          { avoidHighways, excludeParams },
         );
         if (isWaypointPreferenceRequest) {
           requestDebugMeta = buildPreferenceNotMatchableMeta(
@@ -1881,6 +1895,7 @@ Deno.serve(async (req) => {
       requestDebugMeta = buildNoRouteSearchMeta(
         roundTripSearch,
         finalQuality.reason,
+        { avoidHighways, excludeParams },
       );
       if (isWaypointPreferenceRequest && planning_type !== "Wegpunkte") {
         requestDebugMeta = buildPreferenceNotMatchableMeta(
@@ -1915,6 +1930,7 @@ Deno.serve(async (req) => {
       requestDebugMeta = buildNoRouteSearchMeta(
         roundTripSearch,
         finalCleanup.reason,
+        { avoidHighways, excludeParams },
       );
       if (planning_type === "Wegpunkte") {
         requestDebugMeta = {
@@ -2258,7 +2274,10 @@ Deno.serve(async (req) => {
           geometric_uturn_count:
             finalQuality.shapeMetrics?.geometricUTurnCount ?? null,
           ...(roundTripSearch != null
-            ? buildNoRouteSearchMeta(roundTripSearch)
+            ? buildNoRouteSearchMeta(roundTripSearch, undefined, {
+              avoidHighways,
+              excludeParams,
+            })
             : {}),
         },
       }),
