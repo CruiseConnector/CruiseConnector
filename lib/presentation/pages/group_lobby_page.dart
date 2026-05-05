@@ -48,6 +48,8 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
 
   bool get _amCreator => _group?.ownerId == _myId;
 
+  bool get _hasOwnerPower => _amOwner || _amCreator;
+
   RideRole get _myRideRole =>
       _group?.members
           .firstWhere(
@@ -93,7 +95,7 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
         _loading = false;
       });
       // Pending-Requests nur laden, wenn ich Owner bin (RLS sorgt für Rest).
-      if (g != null && g.isOwner(_myId)) {
+      if (g != null && (g.isOwner(_myId) || g.ownerId == _myId)) {
         final pending = await SocialService.listPendingJoinRequests(
           widget.groupId,
         );
@@ -166,7 +168,7 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
   }
 
   Future<void> _promoteToOwner(GroupMember m) async {
-    if (!_amOwner) return;
+    if (!_hasOwnerPower) return;
     await CruiseGroupService.updateMemberRole(
       groupId: widget.groupId,
       userId: m.userId,
@@ -188,7 +190,7 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
   }
 
   Future<void> _changeMemberRideRole(GroupMember m, RideRole role) async {
-    if (!_amOwner && m.userId != _myId) return;
+    if (!_hasOwnerPower && m.userId != _myId) return;
     await CruiseGroupService.updateRideRole(
       groupId: widget.groupId,
       userId: m.userId,
@@ -198,7 +200,9 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
   }
 
   Future<void> _removeMember(GroupMember m) async {
-    if (!_amOwner || m.userId == _myId || m.userId == _group?.ownerId) return;
+    if (!_hasOwnerPower || m.userId == _myId || m.userId == _group?.ownerId) {
+      return;
+    }
     await CruiseGroupService.removeMember(
       groupId: widget.groupId,
       userId: m.userId,
@@ -288,7 +292,7 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
           const SizedBox(height: 16),
           _buildInviteCodeCard(),
         ],
-        if (_amOwner && _pendingRequests.isNotEmpty) ...[
+        if (_hasOwnerPower && _pendingRequests.isNotEmpty) ...[
           const SizedBox(height: 16),
           _buildPendingRequestsCard(),
         ],
@@ -331,7 +335,7 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
       return false;
     }
     if (g.isPublic) return true;
-    return _amOwner;
+    return _hasOwnerPower;
   }
 
   Widget _buildInviteCodeCard() {
@@ -501,11 +505,7 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
     final isMe = m.userId == _myId;
     final isBlocked = _blockedIds.contains(m.userId);
     final isCreator = m.userId == _group?.ownerId;
-    final authorityLabel = isCreator
-        ? 'Ersteller'
-        : m.role == MemberRole.owner
-        ? 'Owner'
-        : null;
+    final isOwner = isCreator || m.role == MemberRole.owner;
     final rideLabel = m.rideRole == RideRole.driver ? 'Fahrer' : 'Mitfahrer';
     return Opacity(
       // Blockierte User werden ausgegraut, damit klar ist, dass weder
@@ -565,13 +565,10 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
                     spacing: 6,
                     runSpacing: 4,
                     children: [
-                      if (authorityLabel != null)
-                        _memberBadge(
-                          authorityLabel,
-                          isCreator
-                              ? Colors.amberAccent
-                              : AppAccentColors.accent,
-                        ),
+                      if (isCreator)
+                        _memberBadge('Ersteller', Colors.amberAccent),
+                      if (isOwner)
+                        _memberBadge('Owner', AppAccentColors.accent),
                       _memberBadge(
                         rideLabel,
                         m.rideRole == RideRole.driver
@@ -592,7 +589,7 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
                 ],
               ),
             ),
-            if (!isBlocked && (_amOwner || isMe))
+            if (!isBlocked && (_hasOwnerPower || isMe))
               _buildMemberMenu(m, isMe: isMe, isCreator: isCreator),
           ],
         ),
@@ -615,37 +612,112 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
     required bool isMe,
     required bool isCreator,
   }) {
-    return PopupMenuButton<String>(
-      icon: const Icon(Icons.more_vert, color: Colors.grey),
-      color: const Color(0xFF1C1F26),
-      onSelected: (value) => _handleMemberAction(value, m),
-      itemBuilder: (_) => [
-        const PopupMenuItem(
-          value: 'ride_role',
-          child: Text('Rolle aendern', style: TextStyle(color: Colors.white)),
+    return IconButton(
+      tooltip: 'Mitglied verwalten',
+      icon: const Icon(Icons.more_horiz, color: Colors.grey),
+      onPressed: () =>
+          _showMemberActionsSheet(m, isMe: isMe, isCreator: isCreator),
+    );
+  }
+
+  Future<void> _showMemberActionsSheet(
+    GroupMember m, {
+    required bool isMe,
+    required bool isCreator,
+  }) async {
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: const Color(0xFF1C1F26),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 12),
+            Container(
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: Colors.grey[700],
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+              child: Row(
+                children: [
+                  UserAvatar(
+                    name: m.displayName ?? 'User',
+                    avatarUrl: m.avatarUrl,
+                    radius: 18,
+                    backgroundColor: const Color(0xFF0B0E14),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      m.displayName ?? 'User',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            _memberActionTile(
+              ctx,
+              value: 'ride_role',
+              icon: Icons.swap_horiz,
+              label: isMe ? 'Meine Fahrrolle ändern' : 'Fahrrolle ändern',
+            ),
+            if (_hasOwnerPower && !isMe && m.role != MemberRole.owner)
+              _memberActionTile(
+                ctx,
+                value: 'owner_add',
+                icon: Icons.admin_panel_settings_outlined,
+                label: 'Owner geben',
+              ),
+            if (_amCreator && !isMe && m.role == MemberRole.owner && !isCreator)
+              _memberActionTile(
+                ctx,
+                value: 'owner_remove',
+                icon: Icons.remove_moderator_outlined,
+                label: 'Owner wegnehmen',
+              ),
+            if (_hasOwnerPower && !isMe && !isCreator)
+              _memberActionTile(
+                ctx,
+                value: 'kick',
+                icon: Icons.person_remove_outlined,
+                label: 'Aus Gruppe entfernen',
+                destructive: true,
+              ),
+            const SizedBox(height: 8),
+          ],
         ),
-        if (_amOwner && !isMe && m.role != MemberRole.owner)
-          const PopupMenuItem(
-            value: 'owner_add',
-            child: Text('Owner geben', style: TextStyle(color: Colors.white)),
-          ),
-        if (_amCreator && !isMe && m.role == MemberRole.owner && !isCreator)
-          const PopupMenuItem(
-            value: 'owner_remove',
-            child: Text(
-              'Owner wegnehmen',
-              style: TextStyle(color: Colors.white),
-            ),
-          ),
-        if (_amOwner && !isMe && !isCreator)
-          PopupMenuItem(
-            value: 'kick',
-            child: Text(
-              'Aus Gruppe entfernen',
-              style: TextStyle(color: AppAccentColors.accent),
-            ),
-          ),
-      ],
+      ),
+    );
+    if (action != null) await _handleMemberAction(action, m);
+  }
+
+  Widget _memberActionTile(
+    BuildContext context, {
+    required String value,
+    required IconData icon,
+    required String label,
+    bool destructive = false,
+  }) {
+    final color = destructive ? AppAccentColors.accent : Colors.white;
+    return ListTile(
+      minLeadingWidth: 24,
+      leading: Icon(icon, color: color),
+      title: Text(label, style: TextStyle(color: color)),
+      onTap: () => Navigator.pop(context, value),
     );
   }
 
@@ -772,7 +844,7 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
           child: ElevatedButton(
             onPressed: isActive
                 ? _enterNavigation
-                : _amOwner && !_starting
+                : _hasOwnerPower && !_starting
                 ? _startRoute
                 : null,
             style: ElevatedButton.styleFrom(
@@ -790,9 +862,9 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
                 : Text(
                     isActive
                         ? 'Zur laufenden Route'
-                        : _amOwner
+                        : _hasOwnerPower
                         ? 'Route starten'
-                        : 'Warten auf Host...',
+                        : 'Warten auf Owner...',
                     style: const TextStyle(
                       color: Colors.white,
                       fontWeight: FontWeight.bold,

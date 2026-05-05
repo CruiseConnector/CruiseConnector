@@ -2,7 +2,6 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:provider/provider.dart';
-import 'package:share_plus/share_plus.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/application/providers/community_provider.dart';
@@ -17,6 +16,7 @@ import 'package:cruise_connect/presentation/widgets/mentions.dart';
 import 'package:cruise_connect/presentation/widgets/route_chip.dart';
 import 'package:cruise_connect/presentation/widgets/user_avatar.dart';
 import 'package:cruise_connect/presentation/widgets/moderation_actions.dart';
+import 'package:cruise_connect/presentation/utils/share_helper.dart';
 
 class CommunityPage extends StatefulWidget {
   final int refreshKey;
@@ -427,7 +427,7 @@ class _CommunityPageState extends State<CommunityPage>
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton.icon(
-                  onPressed: _shareInviteLink,
+                  onPressed: () => _shareInviteLink(context),
                   icon: const Icon(Icons.person_add_alt_1, color: Colors.white),
                   label: const Text(
                     'Freunde einladen',
@@ -935,7 +935,7 @@ class _CommunityPageState extends State<CommunityPage>
           ),
           const SizedBox(height: 12),
           GestureDetector(
-            onTap: _shareInviteLink,
+            onTap: () => _shareInviteLink(context),
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
               decoration: BoxDecoration(
@@ -957,15 +957,20 @@ class _CommunityPageState extends State<CommunityPage>
     );
   }
 
-  void _shareInviteLink() {
+  Future<void> _shareInviteLink(BuildContext context) async {
     const link = 'https://cruiseconnector.at/invite';
-    Share.share(
-      'Komm mit auf CruiseConnect — Routen planen, cruisen & sharen. $link',
+    await shareText(
+      context,
+      text:
+          'Komm mit auf CruiseConnect — Routen planen, cruisen & sharen. $link',
       subject: 'Join CruiseConnect',
     );
   }
 
-  void _sharePost(Map<String, dynamic> post) {
+  Future<void> _sharePost(
+    BuildContext context,
+    Map<String, dynamic> post,
+  ) async {
     final postId = post['id'];
     final profile = post['profiles'] as Map<String, dynamic>?;
     final name = SocialService.publicDisplayName(
@@ -973,8 +978,9 @@ class _CommunityPageState extends State<CommunityPage>
       fallbackUserId: post['user_id'] as String?,
     );
     final link = CruiseDeepLinks.postUri(postId.toString()).toString();
-    Share.share(
-      'Post von @$name auf CruiseConnect: $link',
+    await shareText(
+      context,
+      text: 'Post von @$name auf CruiseConnect: $link',
       subject: 'CruiseConnect Post',
     );
   }
@@ -1383,11 +1389,18 @@ class _CommunityPageState extends State<CommunityPage>
                       ),
                     // Share
                     GestureDetector(
-                      onTap: () => _sharePost(post),
-                      child: const Icon(
-                        Icons.share_outlined,
-                        color: Colors.grey,
-                        size: 18,
+                      behavior: HitTestBehavior.opaque,
+                      onTap: () => _sharePost(context, post),
+                      child: const SizedBox(
+                        width: 44,
+                        height: 44,
+                        child: Center(
+                          child: Icon(
+                            Icons.share_outlined,
+                            color: Colors.grey,
+                            size: 18,
+                          ),
+                        ),
                       ),
                     ),
                   ],
@@ -1861,25 +1874,38 @@ class _CommunityPageState extends State<CommunityPage>
                 Row(
                   children: [
                     GestureDetector(
+                      behavior: HitTestBehavior.opaque,
                       onTap: onLike,
-                      child: Row(
-                        children: [
-                          Icon(
-                            liked ? Icons.favorite : Icons.favorite_border,
-                            color: liked ? AppAccentColors.accent : Colors.grey,
-                            size: 14,
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(
+                          minWidth: 44,
+                          minHeight: 40,
+                        ),
+                        child: Align(
+                          alignment: Alignment.centerLeft,
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                liked ? Icons.favorite : Icons.favorite_border,
+                                color: liked
+                                    ? AppAccentColors.accent
+                                    : Colors.grey,
+                                size: 14,
+                              ),
+                              const SizedBox(width: 3),
+                              Text(
+                                '$likesCount',
+                                style: TextStyle(
+                                  color: liked
+                                      ? AppAccentColors.accent
+                                      : Colors.grey,
+                                  fontSize: 11,
+                                ),
+                              ),
+                            ],
                           ),
-                          const SizedBox(width: 3),
-                          Text(
-                            '$likesCount',
-                            style: TextStyle(
-                              color: liked
-                                  ? AppAccentColors.accent
-                                  : Colors.grey,
-                              fontSize: 11,
-                            ),
-                          ),
-                        ],
+                        ),
                       ),
                     ),
                     const SizedBox(width: 16),
@@ -2306,6 +2332,7 @@ class _CommunityPageState extends State<CommunityPage>
       fallbackUserId: group['created_by'] as String?,
     );
     final code = group['invite_code'] as String? ?? '';
+    final joinCode = group['_join_code'] as String? ?? code;
 
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -2411,6 +2438,27 @@ class _CommunityPageState extends State<CommunityPage>
                   child: const Text('Öffnen'),
                 );
               }
+              if (joinCode.isNotEmpty) {
+                return ElevatedButton(
+                  onPressed: () async {
+                    final groupId = await _joinGroupByCode(joinCode);
+                    if (groupId == null || !context.mounted) return;
+                    Navigator.pop(context);
+                    if (!context.mounted) return;
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => GroupLobbyPage(groupId: groupId),
+                      ),
+                    );
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppAccentColors.accent,
+                    foregroundColor: Colors.white,
+                  ),
+                  child: const Text('Beitreten'),
+                );
+              }
               if (isPublic) {
                 return ElevatedButton(
                   onPressed: () async {
@@ -2495,6 +2543,25 @@ class _CommunityPageState extends State<CommunityPage>
   }
 
   // ── Notifications ─────────────────────────────────────────────────────
+
+  Future<String?> _joinGroupByCode(String code) async {
+    try {
+      final groupId = await SocialService.joinGroupWithCode(code);
+      await _loadData();
+      return groupId;
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Beitreten nicht moeglich: $e'),
+            backgroundColor: const Color(0xFF1C1F26),
+          ),
+        );
+        await _loadData();
+      }
+      return null;
+    }
+  }
 
   void _showNotifications() async {
     await SocialService.markAllRead();
@@ -3000,11 +3067,18 @@ class _RouteBookmarkButtonState extends State<_RouteBookmarkButton> {
     final saved = provider.isSaved(widget.routeId);
 
     return GestureDetector(
+      behavior: HitTestBehavior.opaque,
       onTap: () => context.read<RouteBookmarkProvider>().toggle(widget.routeId),
-      child: Icon(
-        saved ? Icons.bookmark : Icons.bookmark_border,
-        color: saved ? const Color(0xFFFFD166) : Colors.grey,
-        size: 18,
+      child: SizedBox(
+        width: 44,
+        height: 44,
+        child: Center(
+          child: Icon(
+            saved ? Icons.bookmark : Icons.bookmark_border,
+            color: saved ? const Color(0xFFFFD166) : Colors.grey,
+            size: 18,
+          ),
+        ),
       ),
     );
   }
@@ -3039,23 +3113,30 @@ class _PostLikeButtonState extends State<_PostLikeButton> {
     final liked = provider.isLiked(widget.postId);
     final count = provider.likeCount(widget.postId);
     return GestureDetector(
+      behavior: HitTestBehavior.opaque,
       onTap: () => context.read<CommunityProvider>().toggleLike(widget.postId),
-      child: Row(
-        children: [
-          Icon(
-            liked ? Icons.favorite : Icons.favorite_border,
-            color: liked ? AppAccentColors.accent : Colors.grey,
-            size: 18,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minWidth: 48, minHeight: 44),
+        child: Center(
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                liked ? Icons.favorite : Icons.favorite_border,
+                color: liked ? AppAccentColors.accent : Colors.grey,
+                size: 18,
+              ),
+              const SizedBox(width: 4),
+              Text(
+                '$count',
+                style: TextStyle(
+                  color: liked ? AppAccentColors.accent : Colors.grey,
+                  fontSize: 12,
+                ),
+              ),
+            ],
           ),
-          const SizedBox(width: 4),
-          Text(
-            '$count',
-            style: TextStyle(
-              color: liked ? AppAccentColors.accent : Colors.grey,
-              fontSize: 12,
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }
@@ -3092,24 +3173,31 @@ class _PostRepostButtonState extends State<_PostRepostButton> {
     final reposted = provider.isReposted(widget.postId);
     final count = provider.repostCount(widget.postId);
     return GestureDetector(
+      behavior: HitTestBehavior.opaque,
       onTap: () =>
           context.read<CommunityProvider>().toggleRepost(widget.postId),
-      child: Row(
-        children: [
-          Icon(
-            Icons.repeat,
-            color: reposted ? const Color(0xFF34C759) : Colors.grey,
-            size: 18,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minWidth: 48, minHeight: 44),
+        child: Center(
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.repeat,
+                color: reposted ? const Color(0xFF34C759) : Colors.grey,
+                size: 18,
+              ),
+              const SizedBox(width: 4),
+              Text(
+                '$count',
+                style: TextStyle(
+                  color: reposted ? const Color(0xFF34C759) : Colors.grey,
+                  fontSize: 12,
+                ),
+              ),
+            ],
           ),
-          const SizedBox(width: 4),
-          Text(
-            '$count',
-            style: TextStyle(
-              color: reposted ? const Color(0xFF34C759) : Colors.grey,
-              fontSize: 12,
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }

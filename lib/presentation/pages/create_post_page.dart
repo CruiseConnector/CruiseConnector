@@ -135,12 +135,25 @@ class _CreatePostPageState extends State<CreatePostPage> {
       appBar: AppBar(
         backgroundColor: const Color(0xFF0B0E14),
         elevation: 0,
-        leadingWidth: 100,
-        leading: TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text(
-            'Abbrechen',
-            style: TextStyle(color: Colors.white, fontSize: 16),
+        leadingWidth: 132,
+        leading: Align(
+          alignment: Alignment.centerLeft,
+          child: TextButton(
+            onPressed: () => Navigator.pop(context),
+            style: TextButton.styleFrom(
+              minimumSize: const Size(112, 48),
+              padding: const EdgeInsets.only(left: 6, right: 10),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            child: const FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Text(
+                'Abbrechen',
+                maxLines: 1,
+                softWrap: false,
+                style: TextStyle(color: Colors.white, fontSize: 16),
+              ),
+            ),
           ),
         ),
         actions: [

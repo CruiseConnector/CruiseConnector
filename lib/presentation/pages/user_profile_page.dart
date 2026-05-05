@@ -602,13 +602,76 @@ class _UserProfilePageState extends State<UserProfilePage>
     required String name,
     required String? avatarUrl,
   }) {
-    return Container(
+    final cleanAvatarUrl = avatarUrl?.trim();
+    final canOpenAvatar =
+        !_isOwnProfile && cleanAvatarUrl != null && cleanAvatarUrl.isNotEmpty;
+    final heroTag = 'user-profile-avatar-${widget.userId}';
+    final avatar = Container(
       padding: const EdgeInsets.all(4),
       decoration: const BoxDecoration(
         color: Color(0xFF0B0E14),
         shape: BoxShape.circle,
       ),
-      child: UserAvatar(name: name, avatarUrl: avatarUrl, radius: 50),
+      child: Hero(
+        tag: heroTag,
+        child: UserAvatar(name: name, avatarUrl: avatarUrl, radius: 50),
+      ),
+    );
+    if (!canOpenAvatar) return avatar;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () => _showAvatarPreview(
+        name: name,
+        avatarUrl: cleanAvatarUrl,
+        heroTag: heroTag,
+      ),
+      child: avatar,
+    );
+  }
+
+  void _showAvatarPreview({
+    required String name,
+    required String avatarUrl,
+    required String heroTag,
+  }) {
+    showDialog(
+      context: context,
+      barrierColor: Colors.black.withValues(alpha: 0.92),
+      builder: (dialogContext) {
+        return GestureDetector(
+          onTap: () => Navigator.pop(dialogContext),
+          child: Material(
+            color: Colors.transparent,
+            child: Stack(
+              children: [
+                Center(
+                  child: InteractiveViewer(
+                    minScale: 1,
+                    maxScale: 4,
+                    child: Hero(
+                      tag: heroTag,
+                      child: Image.network(
+                        avatarUrl,
+                        fit: BoxFit.contain,
+                        errorBuilder: (_, _, _) =>
+                            UserAvatar(name: name, avatarUrl: null, radius: 80),
+                      ),
+                    ),
+                  ),
+                ),
+                Positioned(
+                  top: MediaQuery.paddingOf(dialogContext).top + 12,
+                  right: 12,
+                  child: IconButton(
+                    onPressed: () => Navigator.pop(dialogContext),
+                    icon: const Icon(Icons.close, color: Colors.white),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 

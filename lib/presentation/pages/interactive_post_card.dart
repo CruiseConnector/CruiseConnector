@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:share_plus/share_plus.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/application/providers/community_provider.dart';
 import 'package:cruise_connect/core/deep_links.dart';
 import 'package:cruise_connect/presentation/pages/post_detail_page.dart';
+import 'package:cruise_connect/presentation/utils/share_helper.dart';
 
 class InteractivePostCard extends StatefulWidget {
   final String postId;
@@ -53,10 +53,11 @@ class _InteractivePostCardState extends State<InteractivePostCard> {
       context.read<CommunityProvider>().toggleLike(widget.postId);
   void _toggleRepost() =>
       context.read<CommunityProvider>().toggleRepost(widget.postId);
-  void _sharePost() {
+  Future<void> _sharePost() async {
     final link = CruiseDeepLinks.postUri(widget.postId).toString();
-    Share.share(
-      'Post von ${widget.handle} auf CruiseConnect: $link',
+    await shareText(
+      context,
+      text: 'Post von ${widget.handle} auf CruiseConnect: $link',
       subject: 'CruiseConnect Post',
     );
   }
@@ -206,17 +207,20 @@ class _InteractivePostCardState extends State<InteractivePostCard> {
   }) {
     return InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(20),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-        child: Row(
-          children: [
-            Icon(icon, color: color, size: 20),
-            if (count.isNotEmpty && count != '0') ...[
-              const SizedBox(width: 6),
-              Text(count, style: TextStyle(color: color, fontSize: 13)),
+      borderRadius: BorderRadius.circular(24),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minWidth: 48, minHeight: 44),
+        child: Center(
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, color: color, size: 20),
+              if (count.isNotEmpty && count != '0') ...[
+                const SizedBox(width: 6),
+                Text(count, style: TextStyle(color: color, fontSize: 13)),
+              ],
             ],
-          ],
+          ),
         ),
       ),
     );

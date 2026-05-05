@@ -1,6 +1,15 @@
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+class SocialServiceException implements Exception {
+  const SocialServiceException(this.message);
+
+  final String message;
+
+  @override
+  String toString() => message;
+}
+
 class DuplicateSharedRoutePostException implements Exception {
   const DuplicateSharedRoutePostException();
 
@@ -1336,7 +1345,7 @@ class SocialService {
     final uid = _userId;
     if (uid == null) return;
 
-    final result = await _db
+    await _db
         .from('groups')
         .insert({
           'created_by': uid,
@@ -1348,12 +1357,6 @@ class SocialService {
         })
         .select('id')
         .single();
-
-    // Creator automatisch als Mitglied
-    await _db.from('group_members').insert({
-      'group_id': result['id'],
-      'user_id': uid,
-    });
   }
 
   static Future<void> joinGroup(String groupId) async {
@@ -1371,17 +1374,28 @@ class SocialService {
     final isAlreadyMember = members.any((m) => (m as Map)['user_id'] == uid);
     final blocked = await getBlockedAndBlockerIds();
     if (creatorId != null && blocked.contains(creatorId)) {
-      throw Exception('Diese Gruppe ist nicht verfuegbar.');
+      throw const SocialServiceException('Diese Gruppe ist nicht verfuegbar.');
     }
     if (isActive && !isAlreadyMember) {
-      throw Exception('Diese Fahrt laeuft bereits.');
+      throw const SocialServiceException(
+        'Die Session laeuft bereits oder wurde schon beendet.',
+      );
     }
 
-    await _db.from('group_members').upsert({
-      'group_id': groupId,
-      'user_id': uid,
-      'ride_role': 'passenger',
-    });
+    try {
+      await _db.from('group_members').upsert({
+        'group_id': groupId,
+        'user_id': uid,
+        'ride_role': 'passenger',
+      });
+    } on PostgrestException catch (e) {
+      if (e.code == '42501') {
+        throw const SocialServiceException(
+          'Die Session laeuft bereits oder wurde schon beendet.',
+        );
+      }
+      throw SocialServiceException(e.message);
+    }
     if (!isAlreadyMember) {
       await _notifyGroupOwners(groupId, type: 'group_joined', fromUserId: uid);
     }
@@ -1463,6 +1477,23 @@ class SocialService {
     final code = _normalizeInviteCode(rawCode);
     if (code == null) return null;
     try {
+      final rpcRow = await _db.rpc(
+        'find_group_by_code',
+        params: {'p_code': code},
+      );
+      if (rpcRow is Map) {
+        final map = Map<String, dynamic>.from(rpcRow);
+        final creatorId = map['created_by'] as String?;
+        final blocked = await getBlockedAndBlockerIds();
+        if (creatorId != null && blocked.contains(creatorId)) return null;
+        map['_join_code'] = code;
+        return map;
+      }
+    } catch (e) {
+      debugPrint('[SocialService] find_group_by_code RPC fallback: $e');
+    }
+
+    try {
       final row = await _db
           .from('groups')
           .select(
@@ -1475,17 +1506,28 @@ class SocialService {
       final creatorId = map['created_by'] as String?;
       final blocked = await getBlockedAndBlockerIds();
       if (creatorId != null && blocked.contains(creatorId)) return null;
-      if (map['is_active'] == true) {
-        final uid = _userId;
-        final members = (map['group_members'] as List?) ?? const [];
-        final isMember =
-            uid != null && members.any((m) => (m as Map)['user_id'] == uid);
-        if (!isMember) return null;
-      }
+      map['_join_code'] = code;
       return map;
     } catch (e) {
       debugPrint('[SocialService] findGroupByCode Fehler: $e');
       return null;
+    }
+  }
+
+  static Future<String> joinGroupWithCode(String rawCode) async {
+    final code = _normalizeInviteCode(rawCode);
+    if (code == null) {
+      throw const SocialServiceException('Code ungueltig.');
+    }
+
+    try {
+      final result = await _db.rpc(
+        'join_group_with_code',
+        params: {'p_code': code},
+      );
+      return result as String;
+    } on PostgrestException catch (e) {
+      throw SocialServiceException(e.message);
     }
   }
 
@@ -2017,7 +2059,7 @@ class SocialService {
     return '$publicUrl?t=${DateTime.now().millisecondsSinceEpoch}';
   }
 
-  /// Persistiert die rohe Public-URL (ohne Cache-Buster) im jeweiligen
+  /// Persistiert die Public-URL mit Cache-Buster im jeweiligen
   /// Profil-Feld — für Avatar oder Banner.
   static Future<void> updateProfileImageUrl({
     required String column,
@@ -2025,10 +2067,7 @@ class SocialService {
   }) async {
     final uid = _userId;
     if (uid == null) return;
-    // Cache-Buster aus URL strippen, damit alle Clients konsistente URLs
-    // bekommen (DB ist der "kanonische" Stand).
-    final clean = publicUrl.split('?').first;
-    await _db.from('profiles').update({column: clean}).eq('id', uid);
+    await _db.from('profiles').update({column: publicUrl}).eq('id', uid);
   }
 
   static Future<Map<String, dynamic>> getProfileStats(String userId) async {

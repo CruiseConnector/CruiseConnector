@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:flutter/rendering.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:cruise_connect/presentation/utils/share_helper.dart';
 
 Future<T?> showCruiseCompletionSheet<T>({
   required BuildContext context,
@@ -207,9 +208,13 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
         setState(() => _isExportMode = false);
       }
 
-      await Share.shareXFiles([
-        shareFile,
-      ], text: 'Meine Fahrt mit CruiseConnect');
+      if (!mounted) return;
+      await shareFiles(
+        context,
+        [shareFile],
+        text: 'Meine Fahrt mit CruiseConnect',
+        fileNameOverrides: const ['cruiseconnect-ride.png'],
+      );
     } catch (e) {
       if (mounted) {
         setState(() => _isExportMode = false);

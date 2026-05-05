@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:image_cropper/image_cropper.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -226,19 +227,18 @@ class _ProfilePageState extends State<ProfilePage>
     setState(() => _uploadingAvatar = true);
 
     try {
-      final bytes = await image.readAsBytes();
-      final rawExt = image.path.split('.').last.toLowerCase();
-      final ext = RegExp(r'^[a-z0-9]{2,5}$').hasMatch(rawExt) ? rawExt : 'jpg';
-      final contentType = switch (ext) {
-        'png' => 'image/png',
-        'webp' => 'image/webp',
-        _ => 'image/jpeg',
-      };
+      final cropped = await _cropAvatarImage(image);
+      if (cropped == null) {
+        if (mounted) setState(() => _uploadingAvatar = false);
+        return;
+      }
+
+      final bytes = await cropped.readAsBytes();
       final urlWithCacheBuster = await SocialService.uploadUserAsset(
         bucket: 'avatars',
         bytes: bytes,
-        fileName: 'avatar.$ext',
-        contentType: contentType,
+        fileName: 'avatar.jpg',
+        contentType: 'image/jpeg',
       );
       if (urlWithCacheBuster == null) {
         throw Exception('Upload fehlgeschlagen');
@@ -267,6 +267,49 @@ class _ProfilePageState extends State<ProfilePage>
         );
       }
     }
+  }
+
+  Future<CroppedFile?> _cropAvatarImage(XFile image) {
+    return ImageCropper().cropImage(
+      sourcePath: image.path,
+      maxWidth: 512,
+      maxHeight: 512,
+      compressFormat: ImageCompressFormat.jpg,
+      compressQuality: 88,
+      aspectRatio: const CropAspectRatio(ratioX: 1, ratioY: 1),
+      uiSettings: [
+        AndroidUiSettings(
+          toolbarTitle: 'Profilbild zuschneiden',
+          toolbarColor: const Color(0xFF0B0E14),
+          toolbarWidgetColor: Colors.white,
+          activeControlsWidgetColor: AppAccentColors.accent,
+          backgroundColor: const Color(0xFF0B0E14),
+          cropStyle: CropStyle.circle,
+          lockAspectRatio: true,
+          hideBottomControls: false,
+          initAspectRatio: CropAspectRatioPreset.square,
+          aspectRatioPresets: [CropAspectRatioPreset.square],
+        ),
+        IOSUiSettings(
+          title: 'Profilbild zuschneiden',
+          aspectRatioLockEnabled: true,
+          resetAspectRatioEnabled: false,
+          cropStyle: CropStyle.circle,
+          aspectRatioPresets: [CropAspectRatioPreset.square],
+        ),
+        WebUiSettings(
+          context: context,
+          presentStyle: WebPresentStyle.dialog,
+          size: const CropperSize(width: 520, height: 520),
+          dragMode: WebDragMode.move,
+          viewwMode: WebViewMode.mode_1,
+          movable: true,
+          zoomable: true,
+          cropBoxMovable: true,
+          cropBoxResizable: false,
+        ),
+      ],
+    );
   }
 
   void signUserOut() async {

@@ -63,7 +63,9 @@ class CruiseGroup {
         : const <GroupMember>[],
   );
 
-  bool isOwner(String userId) => members.any(
-    (mem) => mem.userId == userId && mem.role == MemberRole.owner,
-  );
+  bool isOwner(String userId) =>
+      ownerId == userId ||
+      members.any(
+        (mem) => mem.userId == userId && mem.role == MemberRole.owner,
+      );
 }
