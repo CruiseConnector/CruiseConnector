@@ -646,6 +646,9 @@ class RouteService {
           debugPrint(
             '[RouteService] RoundTrip candidate ${attempt + 1}/$maxAttempts fehlgeschlagen: ${mapped.debugMessage}',
           );
+          if (_edgeLiveFillExhausted(mapped)) {
+            break;
+          }
           if (_isFatalStructuredError(mapped)) {
             break;
           }
@@ -788,10 +791,12 @@ class RouteService {
         scenario,
         styleConfig,
       );
+      final edgeLiveFillExhausted = _edgeLiveFillExhausted(lastError);
       if (!poolHealingFirstPolicy &&
           !onDemandLiveFill &&
           _canUseStructuredFallback(lastError) &&
-          !skipExtraRoundTripFallback) {
+          !skipExtraRoundTripFallback &&
+          !edgeLiveFillExhausted) {
         final fallback = await _tryRoundTripFallback(
           scenario: scenario,
           styleConfig: styleConfig,
@@ -815,6 +820,12 @@ class RouteService {
         _debugRouteSearch(
           '[Fallback] extraLiveFallbackSkipped=true '
           'reason=long_no_highway_curvy scenarioKey=${scenario.scenarioKey}',
+        );
+      } else if (edgeLiveFillExhausted) {
+        _debugRouteSearch(
+          '[Fallback] extraLiveFallbackSkipped=true '
+          'reason=edge_live_fill_exhausted '
+          'scenarioKey=${scenario.scenarioKey}',
         );
       } else if (onDemandLiveFill) {
         _debugRouteSearch(
@@ -2920,6 +2931,20 @@ class RouteService {
   static bool _canUseStructuredFallback(RouteServiceException? error) {
     if (error == null) return true;
     return _isStructuredFallbackError(error);
+  }
+
+  static bool _edgeLiveFillExhausted(RouteServiceException? error) {
+    if (error == null || error.type != RouteErrorType.noRoute) return false;
+    final meta = error.edgeMeta;
+    final attempted = meta['live_fill_attempted'] == true;
+    final exhausted = meta['live_fill_exhausted'] == true;
+    final attempts = (meta['live_fill_attempt_count'] as num?)?.toInt() ??
+        ((meta['search_summary'] is Map)
+            ? ((meta['search_summary'] as Map)['candidate_attempts'] as num?)
+                    ?.toInt() ??
+                0
+            : 0);
+    return attempted && exhausted && attempts >= 5;
   }
 
   static bool _isDifficultRoundTripScenario(

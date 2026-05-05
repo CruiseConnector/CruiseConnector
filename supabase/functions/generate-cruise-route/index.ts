@@ -87,6 +87,11 @@ function buildNoRouteSearchMeta(
     live_fill_evaluated_routes: roundTripSearch?.evaluatedRouteCount ?? 0,
     live_fill_guidance_hydrations: roundTripSearch?.guidanceHydrationCount ??
       0,
+    live_fill_search_stage_success: roundTripSearch?.searchStageSuccess ??
+      null,
+    live_fill_candidate_family: roundTripSearch?.selectedCandidateFamily ??
+      null,
+    live_fill_distance_fit_tier: roundTripSearch?.distanceFitTier ?? null,
     live_fill_duplicate_skips: roundTripSearch?.duplicateSkips ?? 0,
     live_fill_exhausted: roundTripSearch?.exhausted == true,
     live_fill_emergency_duplicate_used:
@@ -104,6 +109,9 @@ function buildNoRouteSearchMeta(
       mapbox_calls: roundTripSearch?.mapboxCallCount ?? 0,
       evaluated_routes: roundTripSearch?.evaluatedRouteCount ?? 0,
       guidance_hydrations: roundTripSearch?.guidanceHydrationCount ?? 0,
+      search_stage_success: roundTripSearch?.searchStageSuccess ?? null,
+      candidate_family: roundTripSearch?.selectedCandidateFamily ?? null,
+      distance_fit_tier: roundTripSearch?.distanceFitTier ?? null,
       duplicate_skips: roundTripSearch?.duplicateSkips ?? 0,
       emergency_duplicate_used:
         roundTripSearch?.emergencyDuplicateUsed === true,

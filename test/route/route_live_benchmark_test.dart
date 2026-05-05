@@ -1082,6 +1082,9 @@ void main() {
         int mapboxCalls = 0;
         int evaluatedRoutes = 0;
         int guidanceHydrations = 0;
+        String? searchStageSuccess;
+        String? candidateFamily;
+        String? distanceFitTier;
         String? qualityReason;
         String? errorCode;
         String? responseCode;
@@ -1185,6 +1188,10 @@ void main() {
                   (searchSummary['evaluated_routes'] as num?)?.toInt() ?? 0;
               guidanceHydrations =
                   (searchSummary['guidance_hydrations'] as num?)?.toInt() ?? 0;
+              searchStageSuccess = searchSummary['search_stage_success']
+                  ?.toString();
+              candidateFamily = searchSummary['candidate_family']?.toString();
+              distanceFitTier = searchSummary['distance_fit_tier']?.toString();
             }
             final previousCoordinates =
                 previousSuccessfulRoundTripByScenario[scenario.name];
@@ -1316,6 +1323,10 @@ void main() {
                   (searchSummary['evaluated_routes'] as num?)?.toInt() ?? 0;
               guidanceHydrations =
                   (searchSummary['guidance_hydrations'] as num?)?.toInt() ?? 0;
+              searchStageSuccess = searchSummary['search_stage_success']
+                  ?.toString();
+              candidateFamily = searchSummary['candidate_family']?.toString();
+              distanceFitTier = searchSummary['distance_fit_tier']?.toString();
             }
             final excludes = result.edgeMeta['effective_excludes']?.toString();
             edgeRoutingBuildId = result.edgeMeta['routing_build_id']
@@ -1438,6 +1449,10 @@ void main() {
                   (searchSummary['evaluated_routes'] as num?)?.toInt() ?? 0;
               guidanceHydrations =
                   (searchSummary['guidance_hydrations'] as num?)?.toInt() ?? 0;
+              searchStageSuccess = searchSummary['search_stage_success']
+                  ?.toString();
+              candidateFamily = searchSummary['candidate_family']?.toString();
+              distanceFitTier = searchSummary['distance_fit_tier']?.toString();
             }
           } else {
             errorCode = error.runtimeType.toString();
@@ -1483,6 +1498,9 @@ void main() {
           'mapboxCalls': mapboxCalls,
           'evaluatedRoutes': evaluatedRoutes,
           'guidanceHydrations': guidanceHydrations,
+          'searchStageSuccess': searchStageSuccess,
+          'candidateFamily': candidateFamily,
+          'distanceFitTier': distanceFitTier,
           'durationMs': stopwatch.elapsedMilliseconds,
           'distanceKm': distanceKm,
           'overlapPercent': overlapPercent,

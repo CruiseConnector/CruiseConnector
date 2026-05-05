@@ -884,6 +884,41 @@ export function buildRoundTripWaypointCandidates({
 
     if (noHighwayMediumTarget) {
       if (mode === "Sport Mode") {
+        addPlan(
+          "nohw-medium-sport-compact-clean",
+          orbitalRing(
+            0.76,
+            baseBearing,
+            2251,
+            4,
+            205,
+            [0.92, 1.00, 0.96, 0.90],
+            {
+              bearingJitterDegrees: 5,
+              radialJitter: 0.025,
+              smoothing: 0.08,
+              minRadiusFactor: 0.68,
+              maxRadiusFactor: 1.06,
+            },
+          ),
+          0.96,
+        );
+        addPlan(
+          "nohw-medium-sport-asymmetric-loop",
+          pairedLoop(0.82, baseBearing + 38, 2261, 76, [0.92, 1.04, 0.88], {
+            bearingJitterDegrees: 4,
+            radialJitter: 0.025,
+            smoothing: 0.08,
+            minRadiusFactor: 0.68,
+            maxRadiusFactor: 1.10,
+          }),
+          0.98,
+        );
+        addPlan(
+          "nohw-medium-sport-cardinal-compact",
+          cardinal(0.82, 2269, 1.02),
+          0.98,
+        );
         // 4-WP orbital ring families aimed at the FLAT Rhine valley
         // north of Dornbirn (Bregenz → Höchst → Lustenau → swiss
         // border). These corridors have straight B-roads without the
@@ -1011,6 +1046,57 @@ export function buildRoundTripWaypointCandidates({
           1.08,
         );
         return dedupeRoundTripPlans(plans);
+      }
+      if (mode === "Kurvenjagd") {
+        addPlan(
+          "nohw-medium-curvy-distributed-loop",
+          orbitalRing(
+            0.86,
+            baseBearing + 28,
+            2281,
+            4,
+            230,
+            [0.88, 1.02, 1.08, 0.92],
+            {
+              bearingJitterDegrees: 8,
+              radialJitter: 0.04,
+              smoothing: 0.045,
+              minRadiusFactor: 0.70,
+              maxRadiusFactor: 1.16,
+            },
+          ),
+          1.04,
+        );
+        addPlan(
+          "nohw-medium-curvy-hillside-loop",
+          pairedLoop(0.92, baseBearing + 62, 2289, 92, [0.88, 1.08, 0.92], {
+            bearingJitterDegrees: 7,
+            radialJitter: 0.035,
+            smoothing: 0.05,
+            minRadiusFactor: 0.70,
+            maxRadiusFactor: 1.18,
+          }),
+          1.06,
+        );
+        addPlan(
+          "nohw-medium-curvy-two-lobe-loop",
+          orbitalRing(
+            0.82,
+            baseBearing - 34,
+            2297,
+            5,
+            255,
+            [0.86, 0.98, 1.08, 1.00, 0.88],
+            {
+              bearingJitterDegrees: 6,
+              radialJitter: 0.035,
+              smoothing: 0.04,
+              minRadiusFactor: 0.68,
+              maxRadiusFactor: 1.16,
+            },
+          ),
+          1.06,
+        );
       }
       addPlan(
         "nohw-medium-oval-west",

@@ -108,22 +108,28 @@ function prioritizeCandidatePlans(
       : normalizedMode === "abendrunde"
       ? [
         "nohw-sector-evening",
+        "nohw-regional-evening",
         "sport-paired-west",
         "sport-paired-northwest",
         "sport-paired-southwest",
       ]
       : [
+        "sport-flow-regional",
+        "nohw-sector-sport",
+        "nohw-regional-sport",
         "sport-paired-west",
         "sport-paired-northwest",
         "sport-paired-southwest",
         "sport-paired-west-wide",
-        "sport-flow-regional",
-        "nohw-sector-sport",
       ]
     : noHighwayTargetKm <= 85
     ? normalizedMode === "sport mode" || normalizedMode === "sport"
       ? [
+        "nohw-medium-sport-compact",
+        "nohw-medium-sport-asymmetric",
+        "nohw-medium-sport-cardinal-compact",
         "nohw-sector-sport",
+        "nohw-regional-sport",
         "nohw-medium-sport-cardinal-rheintal",
         "nohw-medium-sport-orbital-rheintal-north",
         "nohw-medium-sport-orbital-rheintal-northwest",
@@ -134,10 +140,17 @@ function prioritizeCandidatePlans(
       ]
       : [
         normalizedMode === "kurvenjagd"
-          ? "nohw-sector-curvy"
+          ? "nohw-medium-curvy-distributed"
           : normalizedMode === "entdecker"
           ? "nohw-sector-explore"
           : "nohw-sector-evening",
+        normalizedMode === "kurvenjagd"
+          ? "nohw-medium-curvy-hillside"
+          : "nohw-sector-curvy",
+        normalizedMode === "kurvenjagd"
+          ? "nohw-medium-curvy-two-lobe"
+          : "nohw-regional-curvy",
+        "nohw-sector-curvy",
         "nohw-medium-oval-west",
         "nohw-medium-rhine-south",
         "nohw-medium-oval-northwest",
@@ -455,11 +468,12 @@ export async function searchBestRoundTripRoute({
     mode === "Kurvenjagd" &&
     targetDistanceKm > 70;
   const useSearchAlternatives = !avoidHighwaysRoundTripSearch;
-  const maxEvaluatedAlternatives = useSearchAlternatives ? 3 : 1;
+  const useSelectiveNoHighwayAlternatives = avoidHighwaysRoundTripSearch &&
+    targetDistanceKm <= 115;
   const noHighwayAttemptBudget = targetDistanceKm <= 60
     ? mode === "Kurvenjagd" ? 14 : 12
     : targetDistanceKm <= 85
-    ? mode === "Kurvenjagd" ? 8 : 6
+    ? mode === "Kurvenjagd" ? 10 : 8
     : mode === "Kurvenjagd"
     ? 10
     : 8;
@@ -530,8 +544,11 @@ export async function searchBestRoundTripRoute({
   const mapboxCandidateTimeoutMs = avoidHighwaysRoundTripSearch ? 5200 : 12000;
   const mapboxRelaxedTimeoutMs = avoidHighwaysRoundTripSearch ? 4500 : 10500;
   const maxSearchRouteCoordinates = avoidHighwaysRoundTripSearch
-    ? targetDistanceKm > 60 ? 900 : 1200
+    ? targetDistanceKm <= 60 ? 1600 : targetDistanceKm <= 85 ? 1400 : 1200
     : 1800;
+  const maxHydratedRouteCoordinates = avoidHighwaysRoundTripSearch
+    ? targetDistanceKm <= 85 ? 2200 : 2000
+    : 3200;
   const remainingSearchMs = (reserveMs = 0): number =>
     roundTripTimeBudgetMs - (Date.now() - searchStartTs) - reserveMs;
   const boundedMapboxTimeoutMs = (
@@ -745,6 +762,8 @@ export async function searchBestRoundTripRoute({
   } | null = null;
   const acceptedRouteCandidates: Array<{
     plan: RoundTripCandidatePlan;
+    phaseName: string;
+    distanceFitTier: string;
     quality: RouteQualityEvaluation;
     context: {
       exclude: string;
@@ -777,6 +796,9 @@ export async function searchBestRoundTripRoute({
   let mapboxCallCount = 0;
   let evaluatedRouteCount = 0;
   let guidanceHydrationCount = 0;
+  let bestPhaseName: string | null = null;
+  let bestCandidateFamily: string | null = null;
+  let bestDistanceFitTier: string | null = null;
 
   const registerReject = (reason: string) => {
     const normalized = normalizeRoundTripRejectReason(reason);
@@ -842,6 +864,44 @@ export async function searchBestRoundTripRoute({
     // Keep searching for style-specific routes, but do not turn a valid route
     // into a reject solely because style fit is weak.
     return candidateAttempts >= Math.max(3, globalAttemptBudget - 1);
+  };
+  const distanceFitTierForQuality = (
+    quality: RouteQualityEvaluation,
+    qualityDistanceConfig: DistanceConfig,
+  ): string => {
+    const distanceKm = quality.actualDistanceKm;
+    if (
+      distanceKm >= qualityDistanceConfig.minKm &&
+      distanceKm <= qualityDistanceConfig.maxKm
+    ) {
+      return "ideal";
+    }
+    if (
+      distanceKm >= qualityDistanceConfig.acceptableMinKm &&
+      distanceKm <= qualityDistanceConfig.acceptableMaxKm
+    ) {
+      return "acceptable";
+    }
+    return "outside_bucket";
+  };
+  const shouldRequestSearchAlternatives = (
+    phaseName: string,
+    planLabel: string,
+    phaseAttemptIndex: number,
+  ): boolean => {
+    if (useSearchAlternatives) return phaseName !== "strict";
+    if (!useSelectiveNoHighwayAlternatives) return false;
+    if (phaseName === "strict") return false;
+    if (phaseAttemptIndex > 2) return false;
+
+    const label = planLabel.toLowerCase();
+    return label.includes("compact") ||
+      label.includes("asymmetric") ||
+      label.includes("cardinal") ||
+      label.includes("distributed") ||
+      label.includes("hillside") ||
+      label.includes("two-lobe") ||
+      label.includes("regional");
   };
   const applyCleanupGate = (
     route: any,
@@ -929,17 +989,25 @@ export async function searchBestRoundTripRoute({
   const chooseBestRouteAlternative = (
     routes: any[],
     qualityDistanceConfig: DistanceConfig,
+    options?: {
+      maxCoordinateCount?: number;
+      geometryRejectReason?: string;
+    },
   ): { route: any; quality: RouteQualityEvaluation } | null => {
     let selectedRoute: any = null;
     let selectedQuality: RouteQualityEvaluation | null = null;
+    const maxCoordinateCount = options?.maxCoordinateCount ??
+      maxSearchRouteCoordinates;
+    const geometryRejectReason = options?.geometryRejectReason ??
+      "geometry_too_large";
     for (const routeOption of routes) {
       const routeCoordinateCount = Array.isArray(
           routeOption?.geometry?.coordinates,
         )
         ? routeOption.geometry.coordinates.length
         : 0;
-      if (routeCoordinateCount > maxSearchRouteCoordinates) {
-        registerReject("geometry_too_large");
+      if (routeCoordinateCount > maxCoordinateCount) {
+        registerReject(geometryRejectReason);
         continue;
       }
       evaluatedRouteCount += 1;
@@ -990,6 +1058,7 @@ export async function searchBestRoundTripRoute({
         timeoutMs: boundedMapboxTimeoutMs(mapboxCandidateTimeoutMs, 3000),
         retryDelayBaseMs: 220,
         includeGuidance: true,
+        overview: avoidHighwaysRoundTripSearch ? "simplified" : "full",
       },
     );
     mapboxCallCount += 1;
@@ -1005,6 +1074,10 @@ export async function searchBestRoundTripRoute({
     const selection = chooseBestRouteAlternative(
       [fetchResult.route],
       context.distanceConfig,
+      {
+        maxCoordinateCount: maxHydratedRouteCoordinates,
+        geometryRejectReason: "guidance_geometry_too_large",
+      },
     );
     if (selection == null || selection.quality.tier === "rejected") {
       registerReject(
@@ -1143,6 +1216,14 @@ export async function searchBestRoundTripRoute({
           plan.waypoints.length - 2
         } WPs)`,
       );
+      const requestAlternatives = shouldRequestSearchAlternatives(
+        phase.name,
+        plan.label,
+        phaseAttempts,
+      );
+      const maxEvaluatedAlternatives = requestAlternatives
+        ? (avoidHighwaysRoundTripSearch ? 2 : 3)
+        : 1;
 
       let fetchResult = await getMapboxRouteDetailed(
         plan.waypoints,
@@ -1152,7 +1233,7 @@ export async function searchBestRoundTripRoute({
         accessToken,
         {
           continueStraight: phase.continueStraight,
-          alternatives: useSearchAlternatives && phase.name !== "strict",
+          alternatives: requestAlternatives,
           maxAttempts: candidateAttempts >= 2 || !hasMapboxCallBudget(8000)
             ? 1
             : mapboxCandidateMaxAttempts,
@@ -1370,6 +1451,10 @@ export async function searchBestRoundTripRoute({
 
       acceptedCandidates += 1;
       phaseAcceptedCandidates += 1;
+      const distanceFitTier = distanceFitTierForQuality(
+        quality,
+        selectedDistanceConfig,
+      );
       const acceptedContext = {
         exclude: selectedExclude,
         continueStraight: selectedContinueStraight,
@@ -1377,6 +1462,8 @@ export async function searchBestRoundTripRoute({
       };
       acceptedRouteCandidates.push({
         plan,
+        phaseName: phase.name,
+        distanceFitTier,
         quality,
         context: acceptedContext,
       });
@@ -1385,6 +1472,9 @@ export async function searchBestRoundTripRoute({
         bestRoute = route;
         bestQuality = quality;
         bestContext = acceptedContext;
+        bestPhaseName = phase.name;
+        bestCandidateFamily = plan.label;
+        bestDistanceFitTier = distanceFitTier;
       }
       if (
         phase.name === "balanced" &&
@@ -1569,6 +1659,12 @@ export async function searchBestRoundTripRoute({
         mapboxCallCount,
         evaluatedRouteCount,
         guidanceHydrationCount,
+        searchStageSuccess: "duplicate_fallback",
+        selectedCandidateFamily: bestEmergencyDuplicate.plan.label,
+        distanceFitTier: distanceFitTierForQuality(
+          bestEmergencyDuplicate.quality,
+          bestEmergencyDuplicate.context.distanceConfig,
+        ),
         rejectReasons: Object.fromEntries(rejectReasons),
         searchPhases: searchPhases.map((phase) => phase.name),
         lastPlanLabels,
@@ -1604,6 +1700,9 @@ export async function searchBestRoundTripRoute({
       mapboxCallCount,
       evaluatedRouteCount,
       guidanceHydrationCount,
+      searchStageSuccess: null,
+      selectedCandidateFamily: null,
+      distanceFitTier: null,
       rejectReasons: Object.fromEntries(rejectReasons),
       searchPhases: searchPhases.map((phase) => phase.name),
       lastPlanLabels,
@@ -1617,13 +1716,15 @@ export async function searchBestRoundTripRoute({
   if (bestContext != null) {
     let hydratedSelection: {
       plan: RoundTripCandidatePlan;
+      phaseName: string;
+      distanceFitTier: string;
       route: any;
       quality: RouteQualityEvaluation;
     } | null = null;
     const hydrationQueue = acceptedRouteCandidates
       .slice()
       .sort((a, b) => a.quality.score - b.quality.score)
-      .slice(0, 2);
+      .slice(0, avoidHighwaysRoundTripSearch ? 2 : 2);
     for (const candidate of hydrationQueue) {
       const hydratedCandidate = await hydrateGuidanceRoute(
         candidate.plan,
@@ -1632,6 +1733,11 @@ export async function searchBestRoundTripRoute({
       if (hydratedCandidate == null) continue;
       hydratedSelection = {
         plan: candidate.plan,
+        phaseName: candidate.phaseName,
+        distanceFitTier: distanceFitTierForQuality(
+          hydratedCandidate.quality,
+          candidate.context.distanceConfig,
+        ),
         route: hydratedCandidate.route,
         quality: hydratedCandidate.quality,
       };
@@ -1655,6 +1761,9 @@ export async function searchBestRoundTripRoute({
         mapboxCallCount,
         evaluatedRouteCount,
         guidanceHydrationCount,
+        searchStageSuccess: null,
+        selectedCandidateFamily: null,
+        distanceFitTier: null,
         rejectReasons: Object.fromEntries(rejectReasons),
         searchPhases: searchPhases.map((phase) => phase.name),
         lastPlanLabels,
@@ -1667,6 +1776,9 @@ export async function searchBestRoundTripRoute({
     bestPlan = hydratedSelection.plan;
     bestRoute = hydratedSelection.route;
     bestQuality = hydratedSelection.quality;
+    bestPhaseName = hydratedSelection.phaseName;
+    bestCandidateFamily = hydratedSelection.plan.label;
+    bestDistanceFitTier = hydratedSelection.distanceFitTier;
   }
 
   debugLog(
@@ -1696,6 +1808,9 @@ export async function searchBestRoundTripRoute({
     mapboxCallCount,
     evaluatedRouteCount,
     guidanceHydrationCount,
+    searchStageSuccess: bestPhaseName,
+    selectedCandidateFamily: bestCandidateFamily,
+    distanceFitTier: bestDistanceFitTier,
     rejectReasons: Object.fromEntries(rejectReasons),
     searchPhases: searchPhases.map((phase) => phase.name),
     lastPlanLabels,

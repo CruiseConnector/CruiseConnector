@@ -96,6 +96,7 @@ function getMapboxRouteCacheKey(
   alternatives: boolean,
   bearings: string,
   includeGuidance: boolean,
+  overview: "full" | "simplified",
 ): string {
   return [
     profile,
@@ -106,6 +107,7 @@ function getMapboxRouteCacheKey(
     alternatives ? "alts" : "single",
     bearings,
     includeGuidance ? "guidance" : "geometry",
+    overview,
   ].join("|");
 }
 
@@ -188,6 +190,7 @@ export async function getMapboxRouteDetailed(
     timeoutMs?: number;
     retryDelayBaseMs?: number;
     includeGuidance?: boolean;
+    overview?: "full" | "simplified";
   },
 ): Promise<MapboxRouteFetchResult> {
   // Format coordinates: "lon,lat;lon,lat;..."
@@ -201,16 +204,18 @@ export async function getMapboxRouteDetailed(
   const alternatives = options?.alternatives === true;
   const includeGuidance = options?.includeGuidance !== false;
   const bearings = options?.bearings?.trim() ?? "";
-  const overview = includeGuidance ? "full" : "simplified";
+  const overview = options?.overview ?? (includeGuidance ? "full" : "simplified");
   let url =
     `https://api.mapbox.com/directions/v5/${profile}/${coordinatesStr}?access_token=${accessToken}&geometries=geojson&overview=${overview}&steps=${
       includeGuidance ? "true" : "false"
     }&language=de&continue_straight=${
       continueStraight ? "true" : "false"
     }&alternatives=${alternatives ? "true" : "false"}`;
-  if (includeGuidance) {
+  if (includeGuidance && overview === "full") {
     url +=
       "&voice_instructions=true&banner_instructions=true&annotations=maxspeed";
+  } else if (includeGuidance) {
+    url += "&voice_instructions=true&banner_instructions=true";
   }
 
   // Append optional parameters if they exist
@@ -233,6 +238,7 @@ export async function getMapboxRouteDetailed(
     alternatives,
     bearings,
     includeGuidance,
+    overview,
   );
   const cachedResult = getCachedMapboxRoute(cacheKey);
   if (cachedResult) {

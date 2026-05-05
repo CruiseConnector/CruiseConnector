@@ -165,6 +165,9 @@ export interface RoundTripSearchResult {
   mapboxCallCount?: number;
   evaluatedRouteCount?: number;
   guidanceHydrationCount?: number;
+  searchStageSuccess?: string | null;
+  selectedCandidateFamily?: string | null;
+  distanceFitTier?: string | null;
   rejectReasons: Record<string, number>;
   searchPhases: string[];
   lastPlanLabels?: string[];

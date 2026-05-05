@@ -17,7 +17,6 @@ import {
   headingDeltaDegrees,
   measureCoordinatePathMeters,
   pointToCoordinate,
-  routeHeadingAt,
   smoothDistanceSeries,
   stableStringHash,
 } from "./routing_utils.ts";
@@ -120,7 +119,9 @@ export function hasUTurnManeuver(route: any): boolean {
 }
 
 function calculateRouteOverlapPercent(route: any): number {
-  const coordinates = route?.geometry?.coordinates;
+  const coordinates = normalizeCoordinatesForShapeAnalysis(
+    extractRouteCoordinates(route),
+  );
   if (!Array.isArray(coordinates) || coordinates.length < 25) {
     return 0;
   }
@@ -132,21 +133,25 @@ function calculateRouteOverlapPercent(route: any): number {
   let overlapCount = 0;
 
   for (let i = 0; i < coordinates.length; i += sampleStep) {
-    const current = pointToCoordinate(coordinates[i]);
-    if (!current) continue;
+    const current = coordinates[i];
 
     sampleCount += 1;
-    const headingI = routeHeadingAt(coordinates, i);
+    const headingI = calculateBearing(
+      current,
+      coordinates[Math.min(i + 1, coordinates.length - 1)],
+    );
     let foundOverlap = false;
 
     for (let j = i + minIndexGap; j < coordinates.length; j += sampleStep) {
-      const candidate = pointToCoordinate(coordinates[j]);
-      if (!candidate) continue;
+      const candidate = coordinates[j];
 
       const distanceMeters = calculateDistance(current, candidate) * 1000;
       if (distanceMeters >= overlapDistanceMeters) continue;
 
-      const headingJ = routeHeadingAt(coordinates, j);
+      const headingJ = calculateBearing(
+        candidate,
+        coordinates[Math.min(j + 1, coordinates.length - 1)],
+      );
       const headingDelta = headingDeltaDegrees(headingI, headingJ);
       const sameDirection = headingDelta <= 35;
       const oppositeDirection = headingDelta >= 145;
@@ -193,6 +198,46 @@ function sampleCoordinates(
     samples.push(coordinates[index]);
   }
   return samples;
+}
+
+function normalizeCoordinatesForShapeAnalysis(
+  coordinates: Coordinate[],
+): Coordinate[] {
+  if (coordinates.length < 16) return coordinates;
+
+  const pathMeters = measureCoordinatePathMeters(coordinates);
+  if (!Number.isFinite(pathMeters) || pathMeters <= 0) return coordinates;
+
+  // Mapbox returns very different point densities for simplified search
+  // geometries and final guidance geometries. Shape gates must evaluate the
+  // road form, not the encoding density, so dense routes are reduced to a
+  // distance-based sample before hook/u-turn/overlap detection.
+  const targetSpacingMeters = clampNumber(pathMeters / 850, 45, 80);
+  const result: Coordinate[] = [coordinates[0]];
+  let distanceSinceLastSample = 0;
+
+  for (let i = 1; i < coordinates.length; i += 1) {
+    const segmentMeters = calculateDistance(
+      coordinates[i - 1],
+      coordinates[i],
+    ) * 1000;
+    distanceSinceLastSample += segmentMeters;
+    if (distanceSinceLastSample >= targetSpacingMeters) {
+      result.push(coordinates[i]);
+      distanceSinceLastSample = 0;
+    }
+  }
+
+  const last = coordinates[coordinates.length - 1];
+  const sampledLast = result[result.length - 1];
+  if (
+    sampledLast == null ||
+    calculateDistance(sampledLast, last) * 1000 > 5
+  ) {
+    result.push(last);
+  }
+
+  return result.length >= 12 ? result : coordinates;
 }
 
 export function buildRouteFingerprint(
@@ -698,7 +743,9 @@ function calculateRouteShapeSignals(route: any): {
   loopCleanupDistanceKm: number;
   loopCleanupUTurnCount: number;
 } {
-  const coordinates = extractRouteCoordinates(route);
+  const coordinates = normalizeCoordinatesForShapeAnalysis(
+    extractRouteCoordinates(route),
+  );
   if (coordinates.length < 12) {
     return {
       angularRoughness: 0,
@@ -1587,7 +1634,9 @@ function evaluateRouteQualityCore(
   const shortSportOverlapMiss = isShortNoHighwaySportRoundTrip &&
     overlapPercent > 22;
   const noHighwayLoopCleanup = isNoHighwayHairpinEligibleRoundTrip
-    ? estimateClientLoopCleanupImpact(extractRouteCoordinates(route))
+    ? estimateClientLoopCleanupImpact(
+      normalizeCoordinatesForShapeAnalysis(extractRouteCoordinates(route)),
+    )
     : null;
   if (noHighwayLoopCleanup != null) {
     shapeSignals.loopCleanupRemovedPercent =
