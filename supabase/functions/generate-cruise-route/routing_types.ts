@@ -65,6 +65,8 @@ export interface RequestData {
   start_on_motorway?: boolean;
   simplify_waypoints?: boolean;
   max_waypoints?: number;
+  debug_reject_candidates?: boolean;
+  max_debug_reject_candidates?: number;
 }
 
 export interface DistanceConfig {
@@ -201,9 +203,16 @@ export interface RoundTripSearchResult {
   mapboxLegCount?: number | null;
   arriveManeuverCount?: number | null;
   silentViaFallbackUsed?: boolean;
+  guidanceDegraded?: boolean;
+  hydrationFallbackUsed?: boolean;
+  finalGeometrySource?: "hydrated" | "pre_hydration_fallback" | "duplicate_fallback";
+  postHydrationRejectReason?: string | null;
+  preHydrationQualityTier?: string | null;
+  hydrationDiagnostics?: Record<string, unknown>[];
   terminalShortCircuit?: boolean;
   exhausted?: boolean;
   preferenceMatch?: PreferenceMatchSummary | null;
+  rejectSamples?: Record<string, unknown>[];
 }
 
 export interface MapboxRouteFetchResult {

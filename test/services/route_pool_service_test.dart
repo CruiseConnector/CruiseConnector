@@ -1513,7 +1513,10 @@ void main() {
         expect(jobs, hasLength(1));
         expect(jobs.single.jobKind, 'user_demand_learning');
         expect(jobs.single.maxAttempts, 1);
-        expect(jobs.single.maxMapboxCalls, lessThanOrEqualTo(6));
+        expect(
+          jobs.single.maxMapboxCalls,
+          lessThanOrEqualTo(RoutePoolService.userDemandSeedMaxMapboxCalls),
+        );
         expect(jobs.single.seedBudgetUnits, greaterThanOrEqualTo(1));
         expect(second.seedJobCreated, isFalse);
         expect(second.duplicateJobPrevented, isTrue);

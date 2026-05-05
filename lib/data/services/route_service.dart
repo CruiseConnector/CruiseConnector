@@ -776,6 +776,35 @@ class RouteService {
         );
       }
 
+      final recentDuplicate = forceFreshVariant
+          ? (_recentDisplayedRoutes[_recentDisplayedKeyForScenario(scenario)] ??
+                _recentSuccessfulRoutes[scenario.scenarioKey])
+          : null;
+      if (scenario.isRoundTrip &&
+          recentDuplicate != null &&
+          _shouldUseRecentFallbackRoute(
+            recentDuplicate,
+            scenario: scenario,
+            lastError: lastError,
+            requireNovelty: false,
+          )) {
+        lastRouteFromCache = true;
+        lastRouteRecentFallbackUsed = true;
+        lastRouteDuplicateFallbackUsed = true;
+        lastRouteEmergencyFallbackUsed = true;
+        lastRouteGenerationSource = 'cache';
+        _debugRouteSearch(
+          '[Fallback] duplicateFallbackUsed=true recentFallbackUsed=true '
+          'emergencyFallbackUsed=true scenarioKey=${scenario.scenarioKey} '
+          'forceFreshVariant=$forceFreshVariant trigger=$debugTrigger',
+        );
+        return _finalizeAndRememberRoute(
+          scenario: scenario,
+          route: recentDuplicate,
+          fromCache: true,
+        );
+      }
+
       final recent = forceFreshVariant
           ? null
           : _recentSuccessfulRoutes[scenario.scenarioKey];
@@ -3131,7 +3160,9 @@ class RouteService {
         styleConfig.profileKey == 'kurvenjagd' && targetKm >= 120;
     if (scenario.avoidHighways) {
       final baseBudget = targetKm <= 60
-          ? 12
+          ? styleConfig.profileKey == 'sport'
+                ? 15
+                : 12
           : targetKm <= 85
           ? 12
           : 14;
@@ -4852,9 +4883,16 @@ class RouteService {
           coverage.seedJobStatus == 'queued' ||
           coverage.seedJobStatus == 'running',
       'retry_recommended': true,
-      'retry_available': healingStatus != 'healing_paused_budget',
+      'retry_available':
+          healingStatus != 'healing_paused_budget' || !realBudgetPaused,
       'estimated_wait_minutes': coverage.estimatedWaitMinutes,
       'next_action': nextAction,
+      'real_budget_limited': realBudgetPaused,
+      'no_candidate_found': !qualityTooLow && !realBudgetPaused,
+      'background_learning_queued':
+          coverage.seedJobCreated ||
+          coverage.seedJobStatus == 'queued' ||
+          coverage.seedJobStatus == 'running',
       'live_attempted': lastRouteApiCallCount > 0,
       'live_attempt_count': lastRouteApiCallCount,
       'live_blocked_reason': lastRouteApiCallCount == 0
@@ -4977,19 +5015,33 @@ class RouteService {
     RoutePoolCoverageCheck coverage,
     RouteServiceException? lastError,
   ) {
+    if (lastError?.type == RouteErrorType.rateLimit ||
+        lastError?.statusCode == 429) {
+      return true;
+    }
     if (_edgeMetaIndicatesRealBudgetPause(lastError?.edgeMeta ?? const {})) {
       return true;
     }
-    return _isBudgetPauseCode(coverage.seedJobError);
+    // Seed-job budget states are internal worker bookkeeping. During test and
+    // premium flows they must not surface as provider/global budget limits.
+    return _isRealBudgetLimitCode(coverage.seedJobError);
   }
 
   static bool _edgeMetaIndicatesRealBudgetPause(Map<String, dynamic> edgeMeta) {
-    if (edgeMeta['route_budget_paused'] == true ||
-        edgeMeta['budget_paused'] == true ||
+    if (edgeMeta['real_budget_limited'] == true ||
+        edgeMeta['provider_rate_limited'] == true ||
+        edgeMeta['mapbox_429'] == true ||
         edgeMeta['global_cap_reached'] == true ||
         edgeMeta['budget_limited_global'] == true) {
       return true;
     }
+    final status = edgeMeta['status'] is num
+        ? (edgeMeta['status'] as num).toInt()
+        : int.tryParse(edgeMeta['status']?.toString() ?? '');
+    final httpStatus = edgeMeta['http_status'] is num
+        ? (edgeMeta['http_status'] as num).toInt()
+        : int.tryParse(edgeMeta['http_status']?.toString() ?? '');
+    if (status == 429 || httpStatus == 429) return true;
     for (final key in const [
       'code',
       'response_code',
@@ -4998,21 +5050,25 @@ class RouteService {
       'seed_job_error',
       'last_failure_reason',
     ]) {
-      if (_isBudgetPauseCode(edgeMeta[key]?.toString())) return true;
+      if (_isRealBudgetLimitCode(edgeMeta[key]?.toString())) return true;
     }
     return false;
   }
 
-  static bool _isBudgetPauseCode(String? value) {
+  static bool _isRealBudgetLimitCode(String? value) {
     final lower = value?.trim().toLowerCase();
     if (lower == null || lower.isEmpty) return false;
-    return lower == 'route_budget_paused' ||
+    return lower == 'provider_rate_limited' ||
+        lower == 'mapbox_rate_limited' ||
+        lower == 'mapbox_http_429' ||
+        lower == 'http_429' ||
+        lower == 'rate_limited' ||
+        lower == 'too_many_requests' ||
         lower == 'budget_limited_global' ||
-        lower == 'global_budget_exhausted' ||
-        lower == 'request_budget_exhausted' ||
-        lower == 'job_budget_exhausted' ||
-        lower.contains('budget_exhausted') ||
-        lower.contains('global_budget');
+        lower == 'global_cap_reached' ||
+        lower == 'global_safety_cap_reached' ||
+        lower == 'supabase_function_limit' ||
+        lower == 'function_resource_limit';
   }
 
   static String _coverageNextAction(

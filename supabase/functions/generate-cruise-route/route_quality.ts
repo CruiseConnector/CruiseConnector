@@ -1708,6 +1708,8 @@ function evaluateRouteQualityCore(
     shapeSignals.geometricUTurnCount <=
       (mediumLongNoHighwaySport
         ? (targetDistanceKm > 85 ? 6 : 5)
+        : isShortNoHighwaySportRoundTrip && isSportMode
+        ? 0
         : (targetDistanceKm > 85 ? 2 : 1)) &&
     (distanceConfig == null ||
       (
@@ -2195,6 +2197,14 @@ export function evaluateRouteCleanupGate(
     options?.avoidHighways === true &&
     options?.mode === "Sport Mode" &&
     targetDistanceKm > 60 && targetDistanceKm <= 115;
+  const shortNoHighwaySportGate = routeType === "ROUND_TRIP" &&
+    options?.avoidHighways === true &&
+    options?.mode === "Sport Mode" &&
+    targetDistanceKm > 0 && targetDistanceKm <= 60;
+  const gentleNoHighwayStyleHairpinGate = routeType === "ROUND_TRIP" &&
+    options?.avoidHighways === true &&
+    (options?.mode === "Abendrunde" || options?.mode === "Entdecker") &&
+    targetDistanceKm > 0 && targetDistanceKm <= 85;
   const noHighwayCurveChaseHairpinGate = routeType === "ROUND_TRIP" &&
     options?.avoidHighways === true &&
     options?.mode === "Kurvenjagd" &&
@@ -2207,8 +2217,12 @@ export function evaluateRouteCleanupGate(
     ? 4
     : mediumLongNoHighwaySportGate
     ? 6
+    : shortNoHighwaySportGate
+    ? 2
     : noHighwayCurveChaseHairpinGate
     ? targetDistanceKm > 85 ? 8 : 7
+    : gentleNoHighwayStyleHairpinGate
+    ? 2
     : 0;
   const cleanedGeometricUTurnBreach = cleanup.cleanedGeometricUTurnCount >
     geometricUTurnAllowance;

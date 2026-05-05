@@ -39,7 +39,7 @@ Deno.serve(async (req) => {
       maxGlobalMapboxCalls: intOption(
         body.max_mapbox_calls_per_run,
         "ROUTE_POOL_HEALING_MAX_MAPBOX_CALLS_PER_RUN",
-        12,
+        48,
       ),
       maxVerifiedPerClusterPerRun: intOption(
         body.max_verified_per_cluster_per_run,

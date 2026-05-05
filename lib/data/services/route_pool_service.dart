@@ -421,6 +421,16 @@ class RoutePoolService {
   static const int defaultCandidateBufferLimit = 30;
   static const int defaultAcceptableReserveLimitPercent = 25;
   static const int defaultMinDistinctFingerprints = 3;
+  static const int defaultSeedDailyAttemptBudget = 120;
+  static const int defaultSeedMonthlyAttemptBudget = 2000;
+  static const int defaultSeedDailyMapboxBudget = 200;
+  static const int defaultSeedMonthlyMapboxBudget = 2000;
+  static const int defaultSeedMaxMapboxCalls = 24;
+  static const int userDemandSeedDailyAttemptBudget = 200;
+  static const int userDemandSeedMonthlyAttemptBudget = 2000;
+  static const int userDemandSeedDailyMapboxBudget = 200;
+  static const int userDemandSeedMonthlyMapboxBudget = 2000;
+  static const int userDemandSeedMaxMapboxCalls = 32;
   static const Duration coverageRefreshTtl = Duration(minutes: 15);
   static const Duration defaultSeedJobCooldown = Duration(minutes: 20);
   static final List<RoutePoolRequiredCombination> mvpRequiredCombinations = [
@@ -2173,20 +2183,19 @@ class RoutePoolService {
             _sameText(candidate.routeType, routeType) &&
             candidate.distanceBucket == distanceBucket &&
             _sameText(candidate.styleKey, styleKey) &&
-            candidate.avoidHighways == avoidHighways;
+            _candidateHighwayCompatible(candidate, avoidHighways);
       }).length;
     }
 
     final rows = await _db
         .from('route_pool_candidates')
-        .select('admin2_name')
+        .select('admin2_name, avoid_highways, has_highway')
         .eq('country_code', assignment.region.countryCode)
         .eq('admin1_name', assignment.region.admin1Name)
         .eq('city_cluster', assignment.region.cityCluster)
         .eq('route_type', routeType)
         .eq('distance_bucket', distanceBucket)
         .eq('style_key', styleKey)
-        .eq('avoid_highways', avoidHighways)
         .eq('is_candidate', true);
     var count = 0;
     for (final row in rows as List) {
@@ -2195,6 +2204,13 @@ class RoutePoolService {
         map['admin2_name'] as String?,
         assignment.region.admin2Name,
       )) {
+        final candidateAvoidsHighways =
+            (map['avoid_highways'] as bool?) ?? false;
+        final candidateHasHighway = (map['has_highway'] as bool?) ?? false;
+        if (avoidHighways &&
+            (!candidateAvoidsHighways || candidateHasHighway)) {
+          continue;
+        }
         count += 1;
       }
     }
@@ -2300,7 +2316,10 @@ class RoutePoolService {
       routeType: routeType,
     );
     if (existing != null) {
-      if (existing.isActive || existing.isCoolingDown) {
+      final resumeBudgetPausedJob =
+          userDemandLearningJob && _isSeedJobLocalBudgetPause(existing);
+      if ((existing.isActive || existing.isCoolingDown) &&
+          !resumeBudgetPausedJob) {
         return _SeedJobUpsertResult(
           job: existing,
           created: false,
@@ -2323,8 +2342,8 @@ class RoutePoolService {
             ? 1
             : existing.maxAttempts,
         maxMapboxCalls: userDemandLearningJob
-            ? math.min(6, math.max(4, existing.maxMapboxCalls))
-            : existing.maxMapboxCalls,
+            ? math.max(userDemandSeedMaxMapboxCalls, existing.maxMapboxCalls)
+            : math.max(defaultSeedMaxMapboxCalls, existing.maxMapboxCalls),
         triggeredByTier: subscriptionTier,
         jobKind: userDemandLearningJob
             ? 'user_demand_learning'
@@ -2361,7 +2380,9 @@ class RoutePoolService {
           ? math.max(1, policy.seedBudgetUnits)
           : policy.seedBudgetUnits,
       seedCooldownMinutes: policy.seedCooldownMinutes,
-      maxMapboxCalls: userDemandLearningJob ? 6 : 8,
+      maxMapboxCalls: userDemandLearningJob
+          ? userDemandSeedMaxMapboxCalls
+          : defaultSeedMaxMapboxCalls,
       triggeredByTier: subscriptionTier,
       jobKind: userDemandLearningJob ? 'user_demand_learning' : 'seed_healing',
     );
@@ -2601,6 +2622,18 @@ class RoutePoolService {
     return message.contains('duplicate') ||
         message.contains('unique') ||
         message.contains('route_fingerprint');
+  }
+
+  static bool _isSeedJobLocalBudgetPause(RouteSeedJob job) {
+    if (!job.isBudgetPaused) return false;
+    final code = (job.lastError ?? job.lastFailureReason ?? '')
+        .trim()
+        .toLowerCase();
+    return code.isEmpty ||
+        code == 'request_budget_exhausted' ||
+        code == 'job_budget_exhausted' ||
+        code == 'global_budget_exhausted' ||
+        code == 'budget_defaults_increased_requeued';
   }
 
   static bool _coverageKeyMatches(
@@ -2893,6 +2926,37 @@ class RoutePoolService {
     final now = DateTime.now().toUtc();
     payload['budget_window_date'] ??= _dateOnlyKey(now);
     payload['budget_window_month'] ??= _monthOnlyKey(now);
+    final userDemand = job.jobKind == 'user_demand_learning';
+    payload['daily_attempt_budget'] = math.max(
+      (payload['daily_attempt_budget'] as num?)?.toInt() ?? 0,
+      userDemand
+          ? userDemandSeedDailyAttemptBudget
+          : defaultSeedDailyAttemptBudget,
+    );
+    payload['monthly_attempt_budget'] = math.max(
+      (payload['monthly_attempt_budget'] as num?)?.toInt() ?? 0,
+      userDemand
+          ? userDemandSeedMonthlyAttemptBudget
+          : defaultSeedMonthlyAttemptBudget,
+    );
+    payload['daily_mapbox_budget'] = math.max(
+      (payload['daily_mapbox_budget'] as num?)?.toInt() ?? 0,
+      userDemand
+          ? userDemandSeedDailyMapboxBudget
+          : defaultSeedDailyMapboxBudget,
+    );
+    payload['monthly_mapbox_budget'] = math.max(
+      (payload['monthly_mapbox_budget'] as num?)?.toInt() ?? 0,
+      userDemand
+          ? userDemandSeedMonthlyMapboxBudget
+          : defaultSeedMonthlyMapboxBudget,
+    );
+    payload['mapbox_budget_window_date'] ??= _dateOnlyKey(now);
+    payload['mapbox_budget_window_month'] ??= _monthOnlyKey(now);
+    payload['max_mapbox_calls'] = math.max(
+      (payload['max_mapbox_calls'] as num?)?.toInt() ?? 0,
+      userDemand ? userDemandSeedMaxMapboxCalls : defaultSeedMaxMapboxCalls,
+    );
     return payload;
   }
 
@@ -3192,6 +3256,14 @@ class RoutePoolService {
   static bool _highwayMatches(RoutePoolEntry candidate, bool avoidHighways) {
     if (avoidHighways) return candidate.avoidsHighway && !candidate.hasHighway;
     return true;
+  }
+
+  static bool _candidateHighwayCompatible(
+    RoutePoolCandidate candidate,
+    bool avoidHighways,
+  ) {
+    if (!avoidHighways) return true;
+    return candidate.avoidHighways && !candidate.hasHighway;
   }
 
   static bool _locationScopeMatches(

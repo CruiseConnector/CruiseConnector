@@ -113,6 +113,14 @@ function buildNoRouteSearchMeta(
     mapbox_leg_count: roundTripSearch?.mapboxLegCount ?? null,
     arrive_maneuver_count: roundTripSearch?.arriveManeuverCount ?? null,
     silent_via_fallback_used: roundTripSearch?.silentViaFallbackUsed === true,
+    guidance_degraded: roundTripSearch?.guidanceDegraded === true,
+    hydration_fallback_used: roundTripSearch?.hydrationFallbackUsed === true,
+    final_geometry_source: roundTripSearch?.finalGeometrySource ?? null,
+    post_hydration_reject_reason:
+      roundTripSearch?.postHydrationRejectReason ?? null,
+    pre_hydration_quality_tier:
+      roundTripSearch?.preHydrationQualityTier ?? null,
+    hydration_diagnostics: roundTripSearch?.hydrationDiagnostics ?? [],
     live_fill_search_stage_success: roundTripSearch?.searchStageSuccess ??
       null,
     live_fill_candidate_family: roundTripSearch?.selectedCandidateFamily ??
@@ -128,6 +136,7 @@ function buildNoRouteSearchMeta(
     delivered_style: roundTripSearch?.deliveredStyle ?? null,
     style_downgraded: roundTripSearch?.styleDowngraded === true,
     live_fill_reject_reasons: topRejectReasons,
+    live_fill_reject_samples: roundTripSearch?.rejectSamples ?? [],
     live_fill_search_phases: roundTripSearch?.searchPhases ?? [],
     live_fill_last_plan_labels: (roundTripSearch?.lastPlanLabels ?? []).slice(
       0,
@@ -146,6 +155,14 @@ function buildNoRouteSearchMeta(
       mapbox_leg_count: roundTripSearch?.mapboxLegCount ?? null,
       arrive_maneuver_count: roundTripSearch?.arriveManeuverCount ?? null,
       silent_via_fallback_used: roundTripSearch?.silentViaFallbackUsed === true,
+      guidance_degraded: roundTripSearch?.guidanceDegraded === true,
+      hydration_fallback_used: roundTripSearch?.hydrationFallbackUsed === true,
+      final_geometry_source: roundTripSearch?.finalGeometrySource ?? null,
+      post_hydration_reject_reason:
+        roundTripSearch?.postHydrationRejectReason ?? null,
+      pre_hydration_quality_tier:
+        roundTripSearch?.preHydrationQualityTier ?? null,
+      hydration_diagnostics: roundTripSearch?.hydrationDiagnostics ?? [],
       search_stage_success: roundTripSearch?.searchStageSuccess ?? null,
       candidate_family: roundTripSearch?.selectedCandidateFamily ?? null,
       distance_fit_tier: roundTripSearch?.distanceFitTier ?? null,
@@ -153,6 +170,7 @@ function buildNoRouteSearchMeta(
       emergency_duplicate_used:
         roundTripSearch?.emergencyDuplicateUsed === true,
       reject_reasons: topRejectReasons,
+      reject_samples: roundTripSearch?.rejectSamples ?? [],
       search_phases: roundTripSearch?.searchPhases ?? [],
       last_plan_labels: (roundTripSearch?.lastPlanLabels ?? []).slice(0, 12),
       exhausted: roundTripSearch?.exhausted == true,
@@ -956,6 +974,7 @@ Deno.serve(async (req) => {
 
     // --- Execute Route Request (with retries) ---
     let roundTripSearch: RoundTripSearchResult | null = null;
+    let highwayAllowedNoHighwayFallbackUsed = false;
     const useRoundTripSearch = planning_type === "Zufall" &&
       currentRouteType === "ROUND_TRIP" &&
       distanceConfig != null &&
@@ -1149,7 +1168,68 @@ Deno.serve(async (req) => {
             ? body.start_on_motorway
             : null,
         },
+        debugRejectCandidates: body.debug_reject_candidates === true,
+        maxDebugRejectCandidates:
+          finiteNumber(body.max_debug_reject_candidates) ??
+            undefined,
       });
+      if (!roundTripSearch?.route && !avoidHighways) {
+        const noHighwayExcludeParams = applyAvoidHighwaysExcludes(
+          excludeParams,
+          true,
+        );
+        const noHighwayFallbackSearch = await searchBestRoundTripRoute({
+          startLocation,
+          targetDistanceKm: effectiveTargetDistanceKm ?? targetDistance!,
+          distanceConfig: distanceConfig!,
+          mode,
+          randomSeed: randomSeed + 7919,
+          directionHintDegrees: directionHint,
+          waypointShapeFactor,
+          zigzagWaypoints,
+          mapboxProfile,
+          excludeParams: noHighwayExcludeParams,
+          accessToken: MAPBOX_ACCESS_TOKEN,
+          variantHint: variantHint == null
+            ? "highway-allowed-nohighway-fallback"
+            : `${variantHint}-highway-allowed-nohighway-fallback`,
+          fingerprintHint,
+          previousRouteFingerprints: previousRouteFingerprints.slice(0, 5),
+          maxCandidateAttemptsHint,
+          simplifyWaypoints: body.simplify_waypoints === true,
+          maxWaypoints: body.max_waypoints,
+          continueStraight: requestContinueStraight,
+          avoidHighways: true,
+          preferenceAreas,
+          movingStartOptions: movingStartMeta == null ? undefined : {
+            movingStartDetected,
+            currentHeading: currentHeading == null
+              ? undefined
+              : clampNumber(currentHeading, 0, 359),
+            startRadiusMeters: startRadiusMeters == null
+              ? undefined
+              : clampNumber(startRadiusMeters, 5, 300),
+            startBearingToleranceDegrees: startBearingToleranceDegrees == null
+              ? undefined
+              : clampNumber(startBearingToleranceDegrees, 15, 90),
+            avoidManeuverRadiusMeters: avoidManeuverRadiusMeters == null
+              ? undefined
+              : clampNumber(avoidManeuverRadiusMeters, 1, 1000),
+            startSnapStrategy: String(movingStartMeta.start_snap_strategy),
+            startOnMotorway: typeof body.start_on_motorway === "boolean"
+              ? body.start_on_motorway
+              : null,
+          },
+          debugRejectCandidates: body.debug_reject_candidates === true,
+          maxDebugRejectCandidates:
+            finiteNumber(body.max_debug_reject_candidates) ??
+              undefined,
+        });
+        if (noHighwayFallbackSearch?.route) {
+          roundTripSearch = noHighwayFallbackSearch;
+          highwayAllowedNoHighwayFallbackUsed = true;
+        }
+      }
       if (roundTripSearch?.route) {
         route = roundTripSearch.route;
         finalWaypoints = roundTripSearch.waypoints;
@@ -1891,7 +1971,27 @@ Deno.serve(async (req) => {
       );
       const withinPreferredBand = actualDistanceKm >= distanceBandMinKm &&
         actualDistanceKm <= distanceBandMaxKm;
-      if (!withinPreferredBand) {
+      const roundTripFallbackDistanceBounds = (() => {
+        if (
+          currentRouteType !== "ROUND_TRIP" ||
+          roundTripSearch == null ||
+          (
+            roundTripSearch.safeFallbackUsed !== true &&
+            roundTripSearch.hydrationFallbackUsed !== true
+          )
+        ) {
+          return null;
+        }
+        const requestedKm = effectiveTargetDistanceKm ?? targetDistance ?? 0;
+        if (requestedKm <= 60) return { minKm: 40, maxKm: 65 };
+        if (requestedKm <= 85) return { minKm: 62, maxKm: 90 };
+        if (requestedKm <= 115) return { minKm: 85, maxKm: 118 };
+        return null;
+      })();
+      const withinSafeFallbackBand = roundTripFallbackDistanceBounds != null &&
+        actualDistanceKm >= roundTripFallbackDistanceBounds.minKm &&
+        actualDistanceKm <= roundTripFallbackDistanceBounds.maxKm;
+      if (!withinPreferredBand && !withinSafeFallbackBand) {
         requestDebugMeta = buildNoRouteSearchMeta(
           roundTripSearch,
           `distance=${actualDistanceKm.toFixed(1)}km`,
@@ -1918,8 +2018,63 @@ Deno.serve(async (req) => {
       planning_type !== "Wegpunkte" &&
       roundTripSearch?.safeFallbackUsed === true &&
       roundTripSearch.quality?.safeFallbackUsed === true;
+    const roundTripPreHydrationFallbackUsed = currentRouteType ===
+        "ROUND_TRIP" &&
+      planning_type !== "Wegpunkte" &&
+      roundTripSearch?.hydrationFallbackUsed === true &&
+      roundTripSearch.finalGeometrySource === "pre_hydration_fallback" &&
+      roundTripSearch.quality != null &&
+      roundTripSearch.quality.tier !== "rejected";
     const isSafeFallbackFinalReject = (reason: string): boolean => {
       const normalized = reason.toLowerCase();
+      const shape = roundTripSearch?.quality?.shapeMetrics;
+      const cleanPreHydrationHairpin =
+        roundTripPreHydrationFallbackUsed &&
+        shape != null &&
+        shape.geometricUTurnCount <= (mode === "Sport Mode" ? 6 : 4) &&
+        shape.cleanupUTurnCount <= (mode === "Sport Mode" ? 6 : 4) &&
+        shape.loopnessScore >= (mode === "Sport Mode" ? 58 : 52) &&
+        shape.spurScore <= (mode === "Sport Mode" ? 24 : 28) &&
+        shape.outAndBackScore <= (mode === "Sport Mode" ? 22 : 26) &&
+        shape.deadEndArmScore <= (mode === "Sport Mode" ? 22 : 26) &&
+        shape.centerReentryCount <= 2 &&
+        shape.repeatedStartAreaPercent <= 24 &&
+        shape.centralReturnPercent <= 20 &&
+        shape.cleanupDistanceRetentionRatio >= 0.82 &&
+        (roundTripSearch?.quality?.overlapPercent ?? 0) <= 30;
+      const safeLocalHairpin =
+        roundTripSearch?.quality?.safeFallbackUsed === true &&
+        shape != null &&
+        shape.geometricUTurnCount <= 3 &&
+        shape.cleanupUTurnCount <= 3 &&
+        shape.loopnessScore >= 58 &&
+        shape.spurScore <= 12 &&
+        shape.outAndBackScore <= 16 &&
+        shape.deadEndArmScore <= 12 &&
+        shape.centerReentryCount <= 1 &&
+        shape.cleanupDistanceRetentionRatio >= 0.92 &&
+        (roundTripSearch.quality.overlapPercent ?? 0) <= 22;
+      if (normalized === "cleanup_u_turn" && safeLocalHairpin) {
+        return true;
+      }
+      if (
+        (normalized === "u_turn" ||
+          normalized.startsWith("u_turn_geometry=") ||
+          normalized === "cleanup_u_turn") &&
+        cleanPreHydrationHairpin
+      ) {
+        return true;
+      }
+      if (normalized.startsWith("cleanup_u_turn_geometry=")) {
+        const cleanupUTurnCount = Number(
+          normalized.replace("cleanup_u_turn_geometry=", ""),
+        );
+        const boundedCleanupHairpin =
+          (safeLocalHairpin || cleanPreHydrationHairpin) &&
+          Number.isFinite(cleanupUTurnCount) &&
+          cleanupUTurnCount <= (cleanPreHydrationHairpin ? 6 : 3);
+        if (boundedCleanupHairpin) return true;
+      }
       if (
         normalized.includes("u_turn") ||
         normalized.includes("dead_end") ||
@@ -1934,8 +2089,20 @@ Deno.serve(async (req) => {
         normalized.startsWith("short_sport_shape=") ||
         normalized.startsWith("short_sport_overlap=") ||
         normalized.startsWith("distance=") ||
-        normalized.startsWith("cleanup_distance=");
+        normalized.startsWith("cleanup_distance=") ||
+        normalized.startsWith("cleanup_short_sport_distance=") ||
+        normalized.startsWith("cleanup_short_sport_shape=") ||
+        normalized.startsWith("cleanup_short_sport_overlap=");
     };
+    const roundTripCompatibleNoHighwayResult = currentRouteType ===
+        "ROUND_TRIP" &&
+      planning_type !== "Wegpunkte" &&
+      (roundTripSearch?.searchStageSuccess ?? "").startsWith(
+        "compatible_no_highway",
+      );
+    const finalQualityAvoidHighways = avoidHighways ||
+      roundTripCompatibleNoHighwayResult ||
+      highwayAllowedNoHighwayFallbackUsed;
     let finalQuality = evaluateRouteQuality(route, currentRouteType, {
       targetDistanceKm: currentRouteType === "ROUND_TRIP"
         ? planning_type === "Wegpunkte"
@@ -1951,7 +2118,7 @@ Deno.serve(async (req) => {
           : distanceConfig ?? undefined
         : undefined,
       mode,
-      avoidHighways,
+      avoidHighways: finalQualityAvoidHighways,
       requiredStops: planning_type === "Wegpunkte",
       requiredStopCoordinates: planning_type === "Wegpunkte"
         ? normalizedUserWaypointsForMeta
@@ -1959,6 +2126,15 @@ Deno.serve(async (req) => {
     });
     if (
       roundTripSafeFallbackUsed &&
+      !roundTripPreHydrationFallbackUsed &&
+      !finalQuality.passed &&
+      isSafeFallbackFinalReject(finalQuality.reason) &&
+      roundTripSearch?.quality != null
+    ) {
+      finalQuality = roundTripSearch.quality;
+    }
+    if (
+      roundTripPreHydrationFallbackUsed &&
       !finalQuality.passed &&
       isSafeFallbackFinalReject(finalQuality.reason) &&
       roundTripSearch?.quality != null
@@ -1971,7 +2147,7 @@ Deno.serve(async (req) => {
         targetDistanceKm: effectiveTargetDistanceKm ?? targetDistance,
         distanceConfig: distanceConfig ?? undefined,
         mode,
-        avoidHighways,
+        avoidHighways: finalQualityAvoidHighways,
         startLocation,
       })
       : null;
@@ -2044,8 +2220,15 @@ Deno.serve(async (req) => {
     if (
       finalCleanup?.passed === false &&
       !(
-        roundTripSafeFallbackUsed &&
-        isSafeFallbackFinalReject(finalCleanup.reason)
+        (
+          roundTripSafeFallbackUsed &&
+          !roundTripPreHydrationFallbackUsed &&
+          isSafeFallbackFinalReject(finalCleanup.reason)
+        ) ||
+        (
+          roundTripPreHydrationFallbackUsed &&
+          isSafeFallbackFinalReject(finalCleanup.reason)
+        )
       )
     ) {
       requestDebugMeta = buildNoRouteSearchMeta(
@@ -2370,6 +2553,10 @@ Deno.serve(async (req) => {
           motorway_policy: avoidHighways
             ? "exclude_motorway"
             : "allowed_not_required",
+          highway_allowed_fallback_used: highwayAllowedNoHighwayFallbackUsed,
+          selected_no_highway_compatible:
+            roundTripCompatibleNoHighwayResult ||
+            highwayAllowedNoHighwayFallbackUsed,
           ...(movingStartMeta ?? {}),
           safe_fallback_used: roundTripSearch?.safeFallbackUsed === true,
           safe_fallback_reason: roundTripSearch?.safeFallbackReason ?? null,
@@ -2381,6 +2568,15 @@ Deno.serve(async (req) => {
           arrive_maneuver_count: roundTripSearch?.arriveManeuverCount ?? null,
           silent_via_fallback_used:
             roundTripSearch?.silentViaFallbackUsed === true,
+          guidance_degraded: roundTripSearch?.guidanceDegraded === true,
+          hydration_fallback_used:
+            roundTripSearch?.hydrationFallbackUsed === true,
+          final_geometry_source: roundTripSearch?.finalGeometrySource ?? null,
+          post_hydration_reject_reason:
+            roundTripSearch?.postHydrationRejectReason ?? null,
+          pre_hydration_quality_tier:
+            roundTripSearch?.preHydrationQualityTier ?? null,
+          hydration_diagnostics: roundTripSearch?.hydrationDiagnostics ?? [],
           requested_style: roundTripSearch?.requestedStyle ?? mode ?? null,
           delivered_style: roundTripSearch?.deliveredStyle ?? mode ?? null,
           style_downgraded: roundTripSearch?.styleDowngraded === true,

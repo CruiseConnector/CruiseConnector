@@ -148,6 +148,17 @@ let maxRuntimeMs = 90_000;
 let runStartedAt = 0;
 let stats = createHealingStats();
 
+const DEFAULT_DAILY_ATTEMPT_BUDGET = 120;
+const DEFAULT_MONTHLY_ATTEMPT_BUDGET = 2000;
+const DEFAULT_DAILY_MAPBOX_BUDGET = 200;
+const DEFAULT_MONTHLY_MAPBOX_BUDGET = 2000;
+const DEFAULT_MAX_MAPBOX_CALLS_PER_JOB = 24;
+const USER_DEMAND_DAILY_ATTEMPT_BUDGET = 200;
+const USER_DEMAND_MONTHLY_ATTEMPT_BUDGET = 2000;
+const USER_DEMAND_DAILY_MAPBOX_BUDGET = 200;
+const USER_DEMAND_MONTHLY_MAPBOX_BUDGET = 2000;
+const USER_DEMAND_MAX_MAPBOX_CALLS_PER_JOB = 32;
+
 export async function processRouteSeedJobs(
   options: RoutePoolHealingWorkerOptions = {},
 ): Promise<RoutePoolHealingWorkerResult> {
@@ -160,7 +171,7 @@ export async function processRouteSeedJobs(
     serviceKey);
   dryRun = options.dryRun ?? false;
   jobLimit = clampInt(options.jobLimit, 3, 1, 3);
-  maxGlobalMapboxCalls = clampInt(options.maxGlobalMapboxCalls, 18, 1, 20);
+  maxGlobalMapboxCalls = clampInt(options.maxGlobalMapboxCalls, 48, 1, 80);
   maxVerifiedPerClusterPerRun = clampInt(
     options.maxVerifiedPerClusterPerRun,
     3,
@@ -219,7 +230,7 @@ if (import.meta.main) {
   const result = await processRouteSeedJobs({
     dryRun: Deno.args.includes("--dry-run"),
     jobLimit: intArg("--limit=", 3),
-    maxGlobalMapboxCalls: intArg("--max-mapbox-calls=", 18),
+    maxGlobalMapboxCalls: intArg("--max-mapbox-calls=", 48),
     maxVerifiedPerClusterPerRun: intArg("--max-verified-per-cluster=", 3),
     targetVerifiedPerJob: intArg("--target-verified-per-job=", 2),
     maxRuntimeSeconds: intArg("--max-runtime-seconds=", 90),
@@ -276,12 +287,12 @@ async function processJob(job: SeedJob): Promise<void> {
 
   const maxCallsForJob = Math.min(
     remainingBudget,
-    Math.max(0, job.max_mapbox_calls ?? 8) -
+    maxMapboxCallsForJob(job) -
       Math.max(0, job.mapbox_calls_used ?? 0),
     maxGlobalMapboxCalls - stats.mapboxCallsUsed,
   );
   if (maxCallsForJob <= 0) {
-    await pauseJobForBudget(job, "global_budget_exhausted");
+    await deferJobForRunCap(job, "worker_run_call_cap_reached");
     return;
   }
 
@@ -426,7 +437,13 @@ async function callRouteGenerator(
     route_fingerprint_hint: `healing-${job.id}-${attempt}-${randomSeed}`,
     max_candidate_attempts: job.distance_bucket === 50 ? 5 : 6,
     style_profile: styleProfile,
-    waypoint_shape_factor: job.style_key === "kurvenjagd" ? 0.95 : 1.85,
+    waypoint_shape_factor: job.style_key === "kurvenjagd"
+      ? 0.95
+      : job.style_key === "abendrunde"
+      ? 1.0
+      : job.style_key === "entdecker"
+      ? 1.08
+      : 2.05,
     zigzag_waypoints: job.style_key === "kurvenjagd",
   };
   const response = await fetch(edgeEndpoint, {
@@ -709,6 +726,7 @@ function healingFamilyPlans(
 ): HealingCandidatePlan[] {
   const curvy = job.style_key === "kurvenjagd";
   const explorer = job.style_key === "entdecker";
+  const evening = job.style_key === "abendrunde";
   const sport = job.style_key === "sport_mode";
   const compactScale = healingRadiusScale(
     job,
@@ -763,6 +781,32 @@ function healingFamilyPlans(
       minRadiusKm: healingMinRadiusKm(job),
     }),
     makeHealingLoopPlan({
+      family: "evening_calm_loop",
+      start,
+      targetDistanceKm,
+      sectorBearing,
+      bearings: evening ? [12, 96, 188, 278] : [10, 100, 190, 280],
+      radiusFactors: healingRadiusScales(
+        job,
+        evening ? [0.18, 0.20, 0.18, 0.16] : [0.19, 0.21, 0.19, 0.17],
+      ),
+      minRadiusKm: healingMinRadiusKm(job),
+    }),
+    makeHealingLoopPlan({
+      family: "evening_soft_orbital",
+      start,
+      targetDistanceKm,
+      sectorBearing,
+      bearings: evening ? [-8, 58, 138, 218, 298] : [0, 70, 145, 220, 295],
+      radiusFactors: healingRadiusScales(
+        job,
+        evening
+          ? [0.16, 0.20, 0.20, 0.18, 0.15]
+          : [0.18, 0.22, 0.21, 0.18, 0.16],
+      ),
+      minRadiusKm: healingMinRadiusKm(job),
+    }),
+    makeHealingLoopPlan({
       family: "curvy_distributed_loop",
       start,
       targetDistanceKm,
@@ -786,6 +830,20 @@ function healingFamilyPlans(
       radiusFactors: healingRadiusScales(
         job,
         explorer ? [0.22, 0.30, 0.26, 0.20] : [0.20, 0.27, 0.23, 0.18],
+      ),
+      minRadiusKm: healingMinRadiusKm(job),
+    }),
+    makeHealingLoopPlan({
+      family: "explorer_wide_sector_loop",
+      start,
+      targetDistanceKm,
+      sectorBearing,
+      bearings: explorer ? [-28, 42, 132, 222, 312] : [-20, 50, 140, 230, 310],
+      radiusFactors: healingRadiusScales(
+        job,
+        explorer
+          ? [0.18, 0.31, 0.28, 0.24, 0.20]
+          : [0.18, 0.27, 0.24, 0.21, 0.18],
       ),
       minRadiusKm: healingMinRadiusKm(job),
     }),
@@ -1048,8 +1106,8 @@ async function claimJob(job: SeedJob): Promise<SeedJob | null> {
     ? (job.monthly_attempt_count ?? 0) + 1
     : 1;
   if (
-    dailyCount > (job.daily_attempt_budget ?? 12) ||
-    monthlyCount > (job.monthly_attempt_budget ?? 120)
+    dailyCount > dailyAttemptBudgetForJob(job) ||
+    monthlyCount > monthlyAttemptBudgetForJob(job)
   ) {
     await pauseJobForBudget(job, "request_budget_exhausted");
     return null;
@@ -1206,6 +1264,29 @@ async function pauseJobForBudget(job: SeedJob, reason: string): Promise<void> {
     failureReason: reason,
     nextHealingAt: nextUtcMidnight().toISOString(),
   });
+}
+
+async function deferJobForRunCap(job: SeedJob, reason: string): Promise<void> {
+  const retryAt = new Date(Date.now() + 5 * 60_000).toISOString();
+  if (!dryRun) {
+    await rest("route_seed_jobs", {
+      method: "PATCH",
+      query: `id=eq.${encodeURIComponent(job.id)}`,
+      body: {
+        status: "cooldown",
+        updated_at: new Date().toISOString(),
+        last_error: reason,
+        last_failure_reason: reason,
+        cooldown_until: retryAt,
+        next_retry_at: retryAt,
+      },
+    });
+    await updateCoverageHealingStatus(job, {
+      healingStatus: "healing_failed_cooldown",
+      failureReason: reason,
+      nextHealingAt: retryAt,
+    });
+  }
 }
 
 async function markCuratedNeeded(
@@ -1501,11 +1582,11 @@ function remainingMapboxBudget(job: SeedJob): number {
     : 0;
   const dailyAttemptRemaining = Math.max(
     0,
-    (job.daily_attempt_budget ?? 12) - dailyAttemptCount,
+    dailyAttemptBudgetForJob(job) - dailyAttemptCount,
   );
   const monthlyAttemptRemaining = Math.max(
     0,
-    (job.monthly_attempt_budget ?? 120) - monthlyAttemptCount,
+    monthlyAttemptBudgetForJob(job) - monthlyAttemptCount,
   );
   const dailyMapboxCount = job.mapbox_budget_window_date === today
     ? (job.daily_mapbox_count ?? 0)
@@ -1515,11 +1596,11 @@ function remainingMapboxBudget(job: SeedJob): number {
     : 0;
   const dailyMapboxRemaining = Math.max(
     0,
-    (job.daily_mapbox_budget ?? 12) - dailyMapboxCount,
+    dailyMapboxBudgetForJob(job) - dailyMapboxCount,
   );
   const monthlyMapboxRemaining = Math.max(
     0,
-    (job.monthly_mapbox_budget ?? 120) - monthlyMapboxCount,
+    monthlyMapboxBudgetForJob(job) - monthlyMapboxCount,
   );
   return Math.min(
     dailyAttemptRemaining,
@@ -1527,6 +1608,45 @@ function remainingMapboxBudget(job: SeedJob): number {
     dailyMapboxRemaining,
     monthlyMapboxRemaining,
   );
+}
+
+function isUserDemandLearningJob(job: SeedJob): boolean {
+  return job.job_kind === "user_demand_learning";
+}
+
+function dailyAttemptBudgetForJob(job: SeedJob): number {
+  const fallback = isUserDemandLearningJob(job)
+    ? USER_DEMAND_DAILY_ATTEMPT_BUDGET
+    : DEFAULT_DAILY_ATTEMPT_BUDGET;
+  return Math.max(job.daily_attempt_budget ?? 0, fallback);
+}
+
+function monthlyAttemptBudgetForJob(job: SeedJob): number {
+  const fallback = isUserDemandLearningJob(job)
+    ? USER_DEMAND_MONTHLY_ATTEMPT_BUDGET
+    : DEFAULT_MONTHLY_ATTEMPT_BUDGET;
+  return Math.max(job.monthly_attempt_budget ?? 0, fallback);
+}
+
+function dailyMapboxBudgetForJob(job: SeedJob): number {
+  const fallback = isUserDemandLearningJob(job)
+    ? USER_DEMAND_DAILY_MAPBOX_BUDGET
+    : DEFAULT_DAILY_MAPBOX_BUDGET;
+  return Math.max(job.daily_mapbox_budget ?? 0, fallback);
+}
+
+function monthlyMapboxBudgetForJob(job: SeedJob): number {
+  const fallback = isUserDemandLearningJob(job)
+    ? USER_DEMAND_MONTHLY_MAPBOX_BUDGET
+    : DEFAULT_MONTHLY_MAPBOX_BUDGET;
+  return Math.max(job.monthly_mapbox_budget ?? 0, fallback);
+}
+
+function maxMapboxCallsForJob(job: SeedJob): number {
+  const fallback = isUserDemandLearningJob(job)
+    ? USER_DEMAND_MAX_MAPBOX_CALLS_PER_JOB
+    : DEFAULT_MAX_MAPBOX_CALLS_PER_JOB;
+  return Math.max(job.max_mapbox_calls ?? 0, fallback);
 }
 
 function mapboxBudgetPatch(job: SeedJob, callsUsed: number): JsonMap {

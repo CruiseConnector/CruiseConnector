@@ -1599,7 +1599,7 @@ void main() {
       expect(failingInvoker.callCount, 6);
       expect(
         failingInvoker.bodies.every(
-          (body) => body['max_candidate_attempts'] == 12,
+          (body) => body['max_candidate_attempts'] == 15,
         ),
         true,
       );
@@ -2074,7 +2074,10 @@ void main() {
       expect(jobs, hasLength(1));
       expect(jobs.single.jobKind, 'user_demand_learning');
       expect(jobs.single.maxAttempts, 1);
-      expect(jobs.single.maxMapboxCalls, lessThanOrEqualTo(6));
+      expect(
+        jobs.single.maxMapboxCalls,
+        lessThanOrEqualTo(RoutePoolService.userDemandSeedMaxMapboxCalls),
+      );
       expect(jobs.single.seedBudgetUnits, greaterThanOrEqualTo(1));
       expect(candidates, hasLength(1));
       expect(candidates.single.candidateSource, 'basic_live');

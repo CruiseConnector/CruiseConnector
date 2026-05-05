@@ -777,6 +777,68 @@ export function buildRoundTripWaypointCandidates({
 
     if (shortTarget && mode === "Sport Mode") {
       addPlan(
+        "nohw-short-sport-compact-local",
+        pairedLoop(0.78, baseBearing + 24, 2071, 46, [0.92, 1.00, 0.92], {
+          bearingJitterDegrees: 2,
+          radialJitter: 0.015,
+          smoothing: 0.12,
+          minRadiusFactor: 0.70,
+          maxRadiusFactor: 1.08,
+        }),
+        0.96,
+      );
+      addPlan(
+        "nohw-short-sport-compact-orbital",
+        orbitalRing(0.70, baseBearing + 58, 2077, 4, 175, [
+          0.90,
+          0.98,
+          0.96,
+          0.88,
+        ], {
+          bearingJitterDegrees: 2,
+          radialJitter: 0.012,
+          smoothing: 0.12,
+          minRadiusFactor: 0.66,
+          maxRadiusFactor: 1.04,
+        }),
+        0.98,
+      );
+      addPlan(
+        "nohw-short-sport-compact-asymmetric",
+        pairedLoop(0.86, baseBearing - 42, 2083, 54, [0.88, 1.04, 0.90], {
+          bearingJitterDegrees: 3,
+          radialJitter: 0.018,
+          smoothing: 0.10,
+          minRadiusFactor: 0.70,
+          maxRadiusFactor: 1.10,
+        }),
+        1.00,
+      );
+      addPlan(
+        "nohw-short-sport-valley-clean-west",
+        fixedBearingLoop(
+          [220, 300, 20],
+          [baseRadius * 0.97, baseRadius * 0.97, baseRadius * 0.97],
+        ),
+        1.02,
+      );
+      addPlan(
+        "nohw-short-sport-valley-clean-wide",
+        fixedBearingLoop(
+          [230, 305, 35],
+          [baseRadius * 1.02, baseRadius * 1.04, baseRadius * 1.00],
+        ),
+        1.04,
+      );
+      addPlan(
+        "nohw-short-sport-valley-clean-soft",
+        fixedBearingLoop(
+          [205, 285, 20],
+          [baseRadius * 0.94, baseRadius * 0.98, baseRadius * 0.94],
+        ),
+        1.02,
+      );
+      addPlan(
         "sport-paired-west",
         pairedLoop(1.12, 280, 1901, 58, [1.00, 1.14, 1.00], {
           bearingJitterDegrees: 0,
@@ -845,6 +907,86 @@ export function buildRoundTripWaypointCandidates({
     }
 
     if (shortTarget) {
+      if (mode === "Abendrunde") {
+        addPlan(
+          "nohw-short-evening-compact-local",
+          pairedLoop(0.70, baseBearing + 24, 2173, 42, [0.90, 0.98, 0.90], {
+            bearingJitterDegrees: 2,
+            radialJitter: 0.012,
+            smoothing: 0.14,
+            minRadiusFactor: 0.66,
+            maxRadiusFactor: 1.04,
+          }),
+          0.94,
+        );
+        addPlan(
+          "nohw-short-evening-compact",
+          pairedLoop(0.88, baseBearing + 18, 2181, 46, [0.92, 1.00, 0.92], {
+            bearingJitterDegrees: 2,
+            radialJitter: 0.015,
+            smoothing: 0.12,
+            minRadiusFactor: 0.76,
+            maxRadiusFactor: 1.12,
+          }),
+          0.98,
+        );
+        addPlan(
+          "nohw-short-evening-soft",
+          orbitalRing(0.78, baseBearing + 42, 2187, 4, 190, [
+            0.92,
+            1.00,
+            0.96,
+            0.90,
+          ], {
+            bearingJitterDegrees: 3,
+            radialJitter: 0.015,
+            smoothing: 0.12,
+            minRadiusFactor: 0.72,
+            maxRadiusFactor: 1.12,
+          }),
+          1.02,
+        );
+      }
+      if (mode === "Entdecker") {
+        addPlan(
+          "nohw-short-explore-compact-sector",
+          pairedLoop(0.82, baseBearing + 74, 2189, 58, [0.90, 1.04, 0.92], {
+            bearingJitterDegrees: 5,
+            radialJitter: 0.025,
+            smoothing: 0.08,
+            minRadiusFactor: 0.68,
+            maxRadiusFactor: 1.12,
+          }),
+          1.02,
+        );
+        addPlan(
+          "nohw-short-explore-sector-wide",
+          pairedLoop(1.10, baseBearing + 84, 2191, 72, [0.94, 1.16, 0.98], {
+            bearingJitterDegrees: 6,
+            radialJitter: 0.04,
+            smoothing: 0.06,
+            minRadiusFactor: 0.78,
+            maxRadiusFactor: 1.26,
+          }),
+          1.12,
+        );
+        addPlan(
+          "nohw-short-explore-alt-sector",
+          orbitalRing(0.92, baseBearing + 126, 2197, 4, 235, [
+            0.90,
+            1.08,
+            1.00,
+            0.88,
+          ], {
+            bearingJitterDegrees: 8,
+            radialJitter: 0.05,
+            smoothing: 0.045,
+            minRadiusFactor: 0.74,
+            maxRadiusFactor: 1.24,
+          }),
+          1.12,
+        );
+      }
       addPlan(
         "nohw-short-curve-oval-west",
         pairedLoop(1.00, 280, 2201, 58, [1.00, 1.14, 1.00], {
@@ -1098,6 +1240,65 @@ export function buildRoundTripWaypointCandidates({
           1.06,
         );
       }
+      if (mode === "Abendrunde") {
+        addPlan(
+          "nohw-medium-evening-calm-loop",
+          orbitalRing(0.70, baseBearing + 30, 2291, 4, 205, [
+            0.90,
+            0.98,
+            0.94,
+            0.88,
+          ], {
+            bearingJitterDegrees: 3,
+            radialJitter: 0.02,
+            smoothing: 0.12,
+            minRadiusFactor: 0.68,
+            maxRadiusFactor: 1.10,
+          }),
+          1.02,
+        );
+        addPlan(
+          "nohw-medium-evening-soft-orbital",
+          pairedLoop(0.86, baseBearing + 58, 2293, 64, [0.92, 1.02, 0.92], {
+            bearingJitterDegrees: 4,
+            radialJitter: 0.02,
+            smoothing: 0.11,
+            minRadiusFactor: 0.70,
+            maxRadiusFactor: 1.14,
+          }),
+          1.04,
+        );
+      }
+      if (mode === "Entdecker") {
+        addPlan(
+          "nohw-medium-explore-wide-sector",
+          orbitalRing(0.84, baseBearing + 76, 2295, 5, 245, [
+            0.84,
+            1.08,
+            1.12,
+            0.98,
+            0.86,
+          ], {
+            bearingJitterDegrees: 8,
+            radialJitter: 0.045,
+            smoothing: 0.05,
+            minRadiusFactor: 0.68,
+            maxRadiusFactor: 1.22,
+          }),
+          1.10,
+        );
+        addPlan(
+          "nohw-medium-explore-orbital",
+          pairedLoop(1.02, baseBearing + 118, 2299, 86, [0.88, 1.16, 0.94], {
+            bearingJitterDegrees: 8,
+            radialJitter: 0.045,
+            smoothing: 0.045,
+            minRadiusFactor: 0.70,
+            maxRadiusFactor: 1.24,
+          }),
+          1.12,
+        );
+      }
       addPlan(
         "nohw-medium-oval-west",
         pairedLoop(1.30, 260, 2301, 50, [1.00, 1.00, 1.00], {
@@ -1150,6 +1351,66 @@ export function buildRoundTripWaypointCandidates({
       return dedupeRoundTripPlans(plans);
     }
 
+    if (mode === "Abendrunde") {
+      addPlan(
+        "nohw-long-evening-calm-loop",
+        pairedLoop(1.18, baseBearing + 36, 2381, 58, [0.94, 1.08, 0.96], {
+          smoothing: 0.11,
+          bearingJitterDegrees: 3,
+          radialJitter: 0.02,
+          minRadiusFactor: 0.76,
+          maxRadiusFactor: 1.18,
+        }),
+        1.08,
+      );
+      addPlan(
+        "nohw-long-evening-soft-orbital",
+        orbitalRing(1.00, baseBearing + 72, 2387, 5, 215, [
+          0.88,
+          1.02,
+          1.04,
+          0.98,
+          0.86,
+        ], {
+          smoothing: 0.10,
+          bearingJitterDegrees: 4,
+          radialJitter: 0.025,
+          minRadiusFactor: 0.74,
+          maxRadiusFactor: 1.18,
+        }),
+        1.10,
+      );
+    }
+    if (mode === "Entdecker") {
+      addPlan(
+        "nohw-long-explore-wide-sector",
+        orbitalRing(1.10, baseBearing + 86, 2391, 5, 250, [
+          0.86,
+          1.12,
+          1.18,
+          1.02,
+          0.88,
+        ], {
+          smoothing: 0.05,
+          bearingJitterDegrees: 8,
+          radialJitter: 0.045,
+          minRadiusFactor: 0.74,
+          maxRadiusFactor: 1.28,
+        }),
+        1.16,
+      );
+      addPlan(
+        "nohw-long-explore-orbital",
+        pairedLoop(1.28, baseBearing + 126, 2397, 84, [0.90, 1.20, 0.96], {
+          smoothing: 0.05,
+          bearingJitterDegrees: 8,
+          radialJitter: 0.045,
+          minRadiusFactor: 0.76,
+          maxRadiusFactor: 1.30,
+        }),
+        1.18,
+      );
+    }
     addPlan(
       "nohw-long-oval-west",
       pairedLoop(1.42, 280, 2401, 58, [1.04, 1.18, 1.04], {
