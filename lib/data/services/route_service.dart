@@ -128,6 +128,13 @@ class RouteService {
   static String? lastRouteCandidateSaveErrorType;
   static String? lastRouteCandidateSaveErrorCode;
   static String? lastRouteCandidateSaveErrorReason;
+  static String? lastRouteCandidateSaveSkippedReason;
+  static bool lastRouteTemporaryCandidate = false;
+  static bool lastRouteHardRegionExplorationUsed = false;
+  static bool lastRouteMovingStartDetected = false;
+  static String? lastRouteStartSnapStrategy;
+  static bool? lastRouteStartOnMotorway;
+  static double? lastRouteAvoidManeuverRadiusUsed;
 
   /// Letzte 3 Entdecker-Richtungen (in Grad) für Diversifizierung.
   // TODO: In SharedPreferences persistieren für Session-übergreifende Diversifizierung
@@ -230,6 +237,13 @@ class RouteService {
     lastRouteCandidateSaveErrorType = null;
     lastRouteCandidateSaveErrorCode = null;
     lastRouteCandidateSaveErrorReason = null;
+    lastRouteCandidateSaveSkippedReason = null;
+    lastRouteTemporaryCandidate = false;
+    lastRouteHardRegionExplorationUsed = false;
+    lastRouteMovingStartDetected = false;
+    lastRouteStartSnapStrategy = null;
+    lastRouteStartOnMotorway = null;
+    lastRouteAvoidManeuverRadiusUsed = null;
   }
 
   static void _debugRouteSearch(String message) {
@@ -451,11 +465,26 @@ class RouteService {
         if (poolHealingFirstPolicy &&
             poolHealingCoverage != null &&
             _shouldStopLiveForPoolHealingCoverage(poolHealingCoverage)) {
-          throw await _buildCoverageWarmupException(
-            scenario: scenario,
-            coverage: poolHealingCoverage,
-            lastError: null,
-          );
+          if (_shouldAllowHardRegionLiveExploration(
+            poolHealingCoverage,
+            lastRouteSubscriptionTier,
+          )) {
+            poolHealingFirstPolicy = false;
+            onDemandLiveFill = true;
+            lastRouteHardRegionExplorationUsed = true;
+            lastRouteSourceDecision = forceFreshVariant
+                ? 'search_again_hard_region_live_exploration'
+                : 'hard_region_live_exploration';
+            lastRouteLiveAttemptReason = forceFreshVariant
+                ? 'search_again_force_fresh'
+                : 'hard_region_live_exploration';
+          } else {
+            throw await _buildCoverageWarmupException(
+              scenario: scenario,
+              coverage: poolHealingCoverage,
+              lastError: null,
+            );
+          }
         }
         if (poolHealingFirstPolicy &&
             poolHealingCoverage != null &&
@@ -488,6 +517,18 @@ class RouteService {
             _shouldStopLiveForPoolHealingCoverage(poolHealingCoverage)) {
           lastRouteSourceDecision = 'coverage_block_pool_then_live';
           lastRouteLiveAttemptReason = 'coverage_status_requires_live_check';
+          if (_shouldAllowHardRegionLiveExploration(
+            poolHealingCoverage,
+            lastRouteSubscriptionTier,
+          )) {
+            lastRouteHardRegionExplorationUsed = true;
+            lastRouteSourceDecision = forceFreshVariant
+                ? 'search_again_hard_region_live_exploration'
+                : 'hard_region_live_exploration';
+            lastRouteLiveAttemptReason = forceFreshVariant
+                ? 'search_again_force_fresh'
+                : 'hard_region_live_exploration';
+          }
           final poolBlockedRoute = await _tryRoutePoolFallback(
             scenario: scenario,
             styleConfig: styleConfig,
@@ -1765,6 +1806,11 @@ class RouteService {
     return <String>{scenario.scenarioKey, scenario.noveltyKey};
   }
 
+  static List<String> _recentFingerprintsForScenario(RouteScenario scenario) =>
+      SeenRouteRegistry.entriesForAny(
+        _seenHistoryKeysForScenario(scenario),
+      ).map((entry) => entry.fingerprint).take(5).toList(growable: false);
+
   static String _recentDisplayedKeyForScenario(RouteScenario scenario) {
     return scenario.scenarioKey;
   }
@@ -1971,6 +2017,36 @@ class RouteService {
     return null;
   }
 
+  static bool _isMovingStart(geo.Position position) {
+    return position.speed.isFinite && position.speed >= 2.5;
+  }
+
+  static double? _usableHeading(geo.Position position) {
+    final heading = position.heading;
+    if (!heading.isFinite || heading < 0) return null;
+    final accuracy = position.headingAccuracy;
+    if (accuracy.isFinite && accuracy > 45) return null;
+    return heading % 360;
+  }
+
+  static double? _safeFiniteDouble(double value) =>
+      value.isFinite ? value : null;
+
+  static double _movingStartRadiusMeters(geo.Position position) {
+    final accuracy = position.accuracy.isFinite ? position.accuracy : 25.0;
+    return math.max(20.0, math.min(120.0, accuracy * 2.5));
+  }
+
+  static double _avoidManeuverRadiusMeters(
+    geo.Position position, {
+    required bool avoidHighways,
+  }) {
+    final speed = position.speed.isFinite ? position.speed : 0.0;
+    final speedScaled = math.max(80.0, speed * 12.0);
+    final base = avoidHighways ? 180.0 : 120.0;
+    return math.max(base, math.min(500.0, speedScaled));
+  }
+
   Map<String, dynamic> _buildRoundTripRequest({
     required geo.Position startPosition,
     required int targetDistanceKm,
@@ -1988,6 +2064,28 @@ class RouteService {
   }) {
     final isRequiredWaypointRoundTrip =
         originalPlanningType == 'Wegpunkte' && userWaypoints.isNotEmpty;
+    final movingStart =
+        !isRequiredWaypointRoundTrip && _isMovingStart(startPosition);
+    final usableHeading = movingStart ? _usableHeading(startPosition) : null;
+    final startRadiusMeters = movingStart
+        ? _movingStartRadiusMeters(startPosition)
+        : null;
+    final avoidManeuverRadiusMeters = movingStart
+        ? _avoidManeuverRadiusMeters(
+            startPosition,
+            avoidHighways: avoidHighways,
+          )
+        : null;
+    if (!isRequiredWaypointRoundTrip) {
+      lastRouteMovingStartDetected = movingStart;
+      lastRouteStartSnapStrategy = movingStart
+          ? (usableHeading == null
+                ? 'moving_radius_snap'
+                : 'moving_bearing_radius_snap')
+          : 'default_roundtrip_snap';
+      lastRouteStartOnMotorway = null;
+      lastRouteAvoidManeuverRadiusUsed = avoidManeuverRadiusMeters;
+    }
     return <String, dynamic>{
       'startLocation': {
         'latitude': startPosition.latitude,
@@ -2012,7 +2110,7 @@ class RouteService {
       'route_variant_hint': variant.variantHint,
       'route_fingerprint_hint': variant.fingerprintHint,
       if (previousFingerprints.isNotEmpty)
-        'previous_route_fingerprints': previousFingerprints.take(8).toList(),
+        'previous_route_fingerprints': previousFingerprints.take(5).toList(),
       'max_candidate_attempts': candidateBudget,
       ...styleConfig.toRequestHints(),
       if (targetLocation != null) 'targetLocation': targetLocation,
@@ -2020,6 +2118,21 @@ class RouteService {
       // der Waypoint-Verteilung (0-359°). Wird als baseBearing verwendet.
       if (!isRequiredWaypointRoundTrip && directionHint != null)
         'direction_hint': directionHint.round() % 360,
+      if (movingStart) ...{
+        'moving_start': true,
+        'current_speed_mps': startPosition.speed,
+        if (usableHeading != null) 'current_heading': usableHeading,
+        if (_safeFiniteDouble(startPosition.accuracy) != null)
+          'location_accuracy_m': startPosition.accuracy,
+        if (_safeFiniteDouble(startPosition.headingAccuracy) != null)
+          'heading_accuracy_deg': startPosition.headingAccuracy,
+        if (_safeFiniteDouble(startPosition.speedAccuracy) != null)
+          'speed_accuracy_mps': startPosition.speedAccuracy,
+        if (startRadiusMeters != null) 'start_radius_m': startRadiusMeters,
+        if (usableHeading != null) 'start_bearing_tolerance_deg': 45.0,
+        if (avoidManeuverRadiusMeters != null)
+          'avoid_maneuver_radius_m': avoidManeuverRadiusMeters,
+      },
     };
   }
 
@@ -2941,11 +3054,12 @@ class RouteService {
     final meta = error.edgeMeta;
     final attempted = meta['live_fill_attempted'] == true;
     final exhausted = meta['live_fill_exhausted'] == true;
-    final attempts = (meta['live_fill_attempt_count'] as num?)?.toInt() ??
+    final attempts =
+        (meta['live_fill_attempt_count'] as num?)?.toInt() ??
         ((meta['search_summary'] is Map)
             ? ((meta['search_summary'] as Map)['candidate_attempts'] as num?)
-                    ?.toInt() ??
-                0
+                      ?.toInt() ??
+                  0
             : 0);
     return attempted && exhausted && attempts >= 5;
   }
@@ -2983,6 +3097,19 @@ class RouteService {
     return healingStatus == 'healing_failed_cooldown' ||
         healingStatus == 'healing_paused_budget' ||
         healingStatus == 'hard_region_curated_needed';
+  }
+
+  static bool _shouldAllowHardRegionLiveExploration(
+    RoutePoolCoverageCheck coverage,
+    String subscriptionTier,
+  ) {
+    if (_isFreeTier(subscriptionTier) || coverage.poolHealthy) return false;
+    return !coverage.bootstrapEnabled ||
+        coverage.regionDifficulty == 'hard' ||
+        coverage.hardRegionStatus == 'curated_needed' ||
+        coverage.curatedSeedPreferred ||
+        coverage.coverageStatus == 'hard_region_curated_needed' ||
+        coverage.coverageStatus == 'bootstrap_limited';
   }
 
   static bool _shouldUseOnDemandLiveFill(RoutePoolCoverageCheck coverage) {
@@ -3250,9 +3377,7 @@ class RouteService {
           : ((scenario.targetDistanceKm ?? 50.0) * variant.radiusJitter)
                 .round(),
     );
-    final previousFingerprints = SeenRouteRegistry.entriesForAny(
-      _seenHistoryKeysForScenario(scenario),
-    ).map((entry) => entry.fingerprint).toList(growable: false);
+    final previousFingerprints = _recentFingerprintsForScenario(scenario);
     final body = _buildRoundTripRequest(
       startPosition: startPosition,
       targetDistanceKm: adjustedTargetKm,
@@ -4358,9 +4483,7 @@ class RouteService {
     lastRouteFromCache = fromCache;
     lastRouteDebugFingerprint = fingerprint;
     lastRouteSimilarityToPreviousPercent = similarityToPrevious;
-    lastRoutePreviousFingerprints = SeenRouteRegistry.entriesForAny(
-      _seenHistoryKeysForScenario(scenario),
-    ).map((entry) => entry.fingerprint).toList(growable: false);
+    lastRoutePreviousFingerprints = _recentFingerprintsForScenario(scenario);
     final finalized = _finalizeRoute(route, scenarioKey: scenario.scenarioKey);
     _recentSuccessfulRoutes[scenario.scenarioKey] = finalized;
     _recentDisplayedRoutes[_recentDisplayedKeyForScenario(scenario)] =
@@ -4835,7 +4958,7 @@ class RouteService {
     }
     switch (coverage.coverageStatus) {
       case 'hard_region_curated_needed':
-        return 'In $clusterText gibt es noch keine lokal verifizierten Routen. Diese Region braucht kuratierte Strecken. Wir sammeln passende Fahrten.';
+        return 'In $clusterText ist diese Einstellung noch schwierig. Wir suchen passende Strecken und sammeln geprüfte Fahrten.';
       case 'hard_region_thin':
         return 'In $clusterText gibt es erst wenige lokal verifizierte Routen. Wir erweitern den Pool noch.';
       case 'bootstrap_limited':
@@ -4900,9 +5023,8 @@ class RouteService {
       'healing_running' => 'wait_for_healing',
       'healing_queued' => 'queued_for_healing',
       'healing_failed_cooldown' => 'wait_for_cooldown',
-      'healing_paused_budget' => realBudgetPaused
-          ? 'wait_for_budget'
-          : 'queued_for_healing',
+      'healing_paused_budget' =>
+        realBudgetPaused ? 'wait_for_budget' : 'queued_for_healing',
       'hard_region_curated_needed' => 'change_settings_or_curated',
       _ => 'bootstrap',
     };
@@ -4979,10 +5101,17 @@ class RouteService {
       RouteQualityTier.acceptable => 72.0,
       RouteQualityTier.rejected => 40.0,
     };
+    final temporaryCandidate = tier == RouteQualityTier.acceptable;
+    lastRouteTemporaryCandidate = temporaryCandidate;
     final routePayload = <String, dynamic>{
       ...route.edgeMeta,
       'candidate_fingerprint': fingerprint,
       'candidate_subscription_tier': normalizedTier,
+      'temporary_candidate': temporaryCandidate,
+      'safe_acceptable_candidate': temporaryCandidate,
+      'candidate_policy': temporaryCandidate
+          ? 'safe_acceptable_candidate'
+          : 'quality_candidate',
     };
     final geometry = route.geometry.isNotEmpty
         ? route.geometry
@@ -5017,6 +5146,7 @@ class RouteService {
       lastRouteCandidateSaveErrorReason = _sanitizeCandidateSaveError(
         candidateSaveResult.saveErrorReason,
       );
+      lastRouteCandidateSaveSkippedReason = candidateSaveResult.skippedReason;
       lastRouteCandidateSaveFailed =
           candidateSaveResult.saveErrorType != null ||
           candidateSaveResult.saveErrorCode != null ||
@@ -5036,6 +5166,7 @@ class RouteService {
       lastRouteCandidateSaveErrorReason = _sanitizeCandidateSaveError(
         error is PostgrestException ? error.message : error.toString(),
       );
+      lastRouteCandidateSaveSkippedReason = null;
     }
   }
 
@@ -6884,6 +7015,10 @@ class RouteService {
     meta['duplicateFallbackUsed'] = lastRouteDuplicateFallbackUsed;
     meta['duplicate_fallback_used'] = lastRouteDuplicateFallbackUsed;
     meta['previous_route_fingerprints'] = lastRoutePreviousFingerprints;
+    meta['last_5_route_fingerprints'] = lastRoutePreviousFingerprints
+        .take(5)
+        .toList(growable: false);
+    meta['last5_excluded_count'] = lastRoutePreviousFingerprints.length;
     meta['subscriptionTier'] = lastRouteSubscriptionTier;
     meta['route_fingerprint'] = lastRouteDebugFingerprint;
     meta['similarity_to_previous_percent'] =
@@ -6907,7 +7042,15 @@ class RouteService {
     meta['candidate_save_error_type'] = lastRouteCandidateSaveErrorType;
     meta['candidate_save_error_code'] = lastRouteCandidateSaveErrorCode;
     meta['candidate_save_error_reason'] = lastRouteCandidateSaveErrorReason;
+    meta['candidate_save_skipped_reason'] = lastRouteCandidateSaveSkippedReason;
+    meta['temporary_candidate'] = lastRouteTemporaryCandidate;
+    meta['safe_acceptable_candidate'] = lastRouteTemporaryCandidate;
     meta['verified_inserted'] = lastRouteVerifiedInserted;
+    meta['hard_region_exploration_used'] = lastRouteHardRegionExplorationUsed;
+    meta['moving_start_detected'] = lastRouteMovingStartDetected;
+    meta['start_snap_strategy'] = lastRouteStartSnapStrategy;
+    meta['start_on_motorway'] = lastRouteStartOnMotorway;
+    meta['avoid_maneuver_radius_used'] = lastRouteAvoidManeuverRadiusUsed;
     final existingOrchestration = meta['orchestration'] is Map
         ? Map<String, dynamic>.from(meta['orchestration'] as Map)
         : <String, dynamic>{};
@@ -6949,6 +7092,8 @@ class RouteService {
       'source_decision': meta['source_decision'],
       'route_fingerprint': lastRouteDebugFingerprint,
       'previous_fingerprints': lastRoutePreviousFingerprints,
+      'last_5_route_fingerprints': meta['last_5_route_fingerprints'],
+      'last5_excluded_count': meta['last5_excluded_count'],
       'similarity_to_previous_percent': lastRouteSimilarityToPreviousPercent,
       'duplicate_skipped': lastRouteDuplicateSkipped,
       'duplicate_fallback_used': lastRouteDuplicateFallbackUsed,
@@ -6973,7 +7118,15 @@ class RouteService {
       'candidate_save_error_type': lastRouteCandidateSaveErrorType,
       'candidate_save_error_code': lastRouteCandidateSaveErrorCode,
       'candidate_save_error_reason': lastRouteCandidateSaveErrorReason,
+      'candidate_save_skipped_reason': lastRouteCandidateSaveSkippedReason,
+      'temporary_candidate': lastRouteTemporaryCandidate,
+      'safe_acceptable_candidate': lastRouteTemporaryCandidate,
       'verified_inserted': lastRouteVerifiedInserted,
+      'hard_region_exploration_used': lastRouteHardRegionExplorationUsed,
+      'moving_start_detected': lastRouteMovingStartDetected,
+      'start_snap_strategy': lastRouteStartSnapStrategy,
+      'start_on_motorway': lastRouteStartOnMotorway,
+      'avoid_maneuver_radius_used': lastRouteAvoidManeuverRadiusUsed,
       'fallback_reason': lastRoutePoolFallbackUsed ? 'mapbox_failed' : null,
     };
     return RouteResult(

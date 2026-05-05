@@ -14,7 +14,7 @@ class SeenRouteRegistry {
   SeenRouteRegistry._();
 
   static final Map<String, List<SeenRouteEntry>> _entries = {};
-  static const int _maxEntriesPerScenario = 8;
+  static const int _maxEntriesPerScenario = 5;
 
   static List<SeenRouteEntry> entriesFor(String scenarioKey) =>
       List.unmodifiable(_entries[scenarioKey] ?? const []);

@@ -58,12 +58,21 @@ function parseRoundTripTargetHintKm(value?: string): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function finiteNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
 function buildNoRouteSearchMeta(
   roundTripSearch: RoundTripSearchResult | null,
   extraRejectReason?: string,
   options: {
     avoidHighways?: boolean;
     excludeParams?: string;
+    movingStartMeta?: Record<string, unknown> | null;
   } = {},
 ): Record<string, unknown> | null {
   if (roundTripSearch == null && extraRejectReason == null) {
@@ -88,6 +97,7 @@ function buildNoRouteSearchMeta(
     motorway_policy: options.avoidHighways === true
       ? "exclude_motorway"
       : "allowed_not_required",
+    ...(options.movingStartMeta ?? {}),
     live_fill_attempted: (roundTripSearch?.candidateAttempts ?? 0) > 0,
     live_fill_attempt_count: roundTripSearch?.candidateAttempts ?? 0,
     live_fill_success: roundTripSearch?.route != null,
@@ -933,6 +943,44 @@ Deno.serve(async (req) => {
       currentRouteType === "ROUND_TRIP" &&
       distanceConfig != null &&
       targetDistance != null;
+    const movingStartDetected = useRoundTripSearch &&
+      body.moving_start === true &&
+      (finiteNumber(body.current_speed_mps) ?? 0) >= 2.5;
+    const currentHeading = finiteNumber(body.current_heading);
+    const startRadiusMeters = finiteNumber(body.start_radius_m);
+    const startBearingToleranceDegrees = finiteNumber(
+      body.start_bearing_tolerance_deg,
+    );
+    const avoidManeuverRadiusMeters = finiteNumber(
+      body.avoid_maneuver_radius_m,
+    );
+    const movingStartMeta = useRoundTripSearch
+      ? {
+        moving_start_detected: movingStartDetected,
+        start_snap_strategy: movingStartDetected
+          ? currentHeading == null
+            ? "moving_radius_snap"
+            : "moving_bearing_radius_snap"
+          : "default_roundtrip_snap",
+        start_on_motorway: typeof body.start_on_motorway === "boolean"
+          ? body.start_on_motorway
+          : null,
+        current_heading_used: movingStartDetected && currentHeading != null
+          ? Math.round(clampNumber(currentHeading, 0, 359))
+          : null,
+        start_radius_m_used: movingStartDetected && startRadiusMeters != null
+          ? Math.round(clampNumber(startRadiusMeters, 5, 300))
+          : null,
+        start_bearing_tolerance_deg_used:
+          movingStartDetected && startBearingToleranceDegrees != null
+            ? Math.round(clampNumber(startBearingToleranceDegrees, 15, 90))
+            : null,
+        avoid_maneuver_radius_used:
+          movingStartDetected && avoidManeuverRadiusMeters != null
+            ? Math.round(clampNumber(avoidManeuverRadiusMeters, 1, 1000))
+            : null,
+      }
+      : null;
     const pointToPointTimeBudgetMs = currentRouteType === "POINT_TO_POINT"
       ? Math.max(
         pointToPointIsScenic
@@ -1058,13 +1106,32 @@ Deno.serve(async (req) => {
         accessToken: MAPBOX_ACCESS_TOKEN,
         variantHint,
         fingerprintHint,
-        previousRouteFingerprints,
+        previousRouteFingerprints: previousRouteFingerprints.slice(0, 5),
         maxCandidateAttemptsHint,
         simplifyWaypoints: body.simplify_waypoints === true,
         maxWaypoints: body.max_waypoints,
         continueStraight: requestContinueStraight,
         avoidHighways,
         preferenceAreas,
+        movingStartOptions: movingStartMeta == null ? undefined : {
+          movingStartDetected,
+          currentHeading: currentHeading == null
+            ? undefined
+            : clampNumber(currentHeading, 0, 359),
+          startRadiusMeters: startRadiusMeters == null
+            ? undefined
+            : clampNumber(startRadiusMeters, 5, 300),
+          startBearingToleranceDegrees: startBearingToleranceDegrees == null
+            ? undefined
+            : clampNumber(startBearingToleranceDegrees, 15, 90),
+          avoidManeuverRadiusMeters: avoidManeuverRadiusMeters == null
+            ? undefined
+            : clampNumber(avoidManeuverRadiusMeters, 1, 1000),
+          startSnapStrategy: String(movingStartMeta.start_snap_strategy),
+          startOnMotorway: typeof body.start_on_motorway === "boolean"
+            ? body.start_on_motorway
+            : null,
+        },
       });
       if (roundTripSearch?.route) {
         route = roundTripSearch.route;
@@ -1615,6 +1682,7 @@ Deno.serve(async (req) => {
       requestDebugMeta = buildNoRouteSearchMeta(roundTripSearch, undefined, {
         avoidHighways,
         excludeParams,
+        movingStartMeta,
       });
       if (isWaypointPreferenceRequest && planning_type !== "Wegpunkte") {
         requestDebugMeta = buildPreferenceNotMatchableMeta(
@@ -1810,7 +1878,7 @@ Deno.serve(async (req) => {
         requestDebugMeta = buildNoRouteSearchMeta(
           roundTripSearch,
           `distance=${actualDistanceKm.toFixed(1)}km`,
-          { avoidHighways, excludeParams },
+          { avoidHighways, excludeParams, movingStartMeta },
         );
         if (isWaypointPreferenceRequest) {
           requestDebugMeta = buildPreferenceNotMatchableMeta(
@@ -1895,7 +1963,7 @@ Deno.serve(async (req) => {
       requestDebugMeta = buildNoRouteSearchMeta(
         roundTripSearch,
         finalQuality.reason,
-        { avoidHighways, excludeParams },
+        { avoidHighways, excludeParams, movingStartMeta },
       );
       if (isWaypointPreferenceRequest && planning_type !== "Wegpunkte") {
         requestDebugMeta = buildPreferenceNotMatchableMeta(
@@ -1930,7 +1998,7 @@ Deno.serve(async (req) => {
       requestDebugMeta = buildNoRouteSearchMeta(
         roundTripSearch,
         finalCleanup.reason,
-        { avoidHighways, excludeParams },
+        { avoidHighways, excludeParams, movingStartMeta },
       );
       if (planning_type === "Wegpunkte") {
         requestDebugMeta = {
@@ -2165,12 +2233,11 @@ Deno.serve(async (req) => {
           duplicateSkipped: currentRouteType === "POINT_TO_POINT"
             ? pointToPointDuplicateSkipped
             : null,
-          excluded_fingerprint_count:
-            currentRouteType === "POINT_TO_POINT" ||
+          excluded_fingerprint_count: currentRouteType === "POINT_TO_POINT" ||
               currentRouteType === "ROUND_TRIP"
-              ? previousRouteFingerprints.length +
-                (body.route_fingerprint_hint != null ? 1 : 0)
-              : null,
+            ? previousRouteFingerprints.length +
+              (body.route_fingerprint_hint != null ? 1 : 0)
+            : null,
           destination_snap_distance_m: currentRouteType === "POINT_TO_POINT"
             ? pointToPointDestinationDistanceMeters
             : null,
@@ -2250,6 +2317,7 @@ Deno.serve(async (req) => {
           motorway_policy: avoidHighways
             ? "exclude_motorway"
             : "allowed_not_required",
+          ...(movingStartMeta ?? {}),
           quality_tier: finalQuality.tier,
           quality_reason: finalQuality.reason,
           selected_style: mode ?? null,
@@ -2277,6 +2345,7 @@ Deno.serve(async (req) => {
             ? buildNoRouteSearchMeta(roundTripSearch, undefined, {
               avoidHighways,
               excludeParams,
+              movingStartMeta,
             })
             : {}),
         },

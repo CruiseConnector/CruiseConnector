@@ -428,6 +428,7 @@ export async function searchBestRoundTripRoute({
   avoidHighways,
   continueStraight,
   preferenceAreas,
+  movingStartOptions,
 }: {
   startLocation: Coordinate;
   targetDistanceKm: number;
@@ -449,6 +450,15 @@ export async function searchBestRoundTripRoute({
   avoidHighways: boolean;
   continueStraight: boolean;
   preferenceAreas?: PreferenceArea[];
+  movingStartOptions?: {
+    movingStartDetected: boolean;
+    currentHeading?: number;
+    startRadiusMeters?: number;
+    startBearingToleranceDegrees?: number;
+    avoidManeuverRadiusMeters?: number;
+    startSnapStrategy?: string;
+    startOnMotorway?: boolean | null;
+  };
 }): Promise<RoundTripSearchResult | null> {
   const highCostCurveSearch = mode === "Kurvenjagd" && targetDistanceKm >= 130;
   const extendedRoundTripSearch = targetDistanceKm >= 100 ||
@@ -467,7 +477,61 @@ export async function searchBestRoundTripRoute({
   const normalizedFingerprintHint = normalizeHint(fingerprintHint);
   const normalizedPreviousRouteFingerprints = (previousRouteFingerprints ?? [])
     .map((value) => normalizeHint(value))
-    .filter((value): value is string => value != null);
+    .filter((value): value is string => value != null)
+    .slice(0, 5);
+  const movingStartDetected = movingStartOptions?.movingStartDetected === true;
+  const effectivePlanRadiuses = (plan: RoundTripCandidatePlan): string => {
+    if (
+      !movingStartDetected ||
+      typeof movingStartOptions?.startRadiusMeters !== "number" ||
+      !Number.isFinite(movingStartOptions.startRadiusMeters)
+    ) {
+      return plan.radiuses;
+    }
+    const parts = plan.radiuses.split(";");
+    if (parts.length === 0) return plan.radiuses;
+    parts[0] = String(
+      Math.max(
+        5,
+        Math.min(300, Math.round(movingStartOptions.startRadiusMeters)),
+      ),
+    );
+    return parts.join(";");
+  };
+  const effectivePlanBearings = (plan: RoundTripCandidatePlan): string => {
+    if (
+      !movingStartDetected ||
+      typeof movingStartOptions?.currentHeading !== "number" ||
+      !Number.isFinite(movingStartOptions.currentHeading)
+    ) {
+      return "";
+    }
+    const tolerance = typeof movingStartOptions.startBearingToleranceDegrees ===
+          "number" &&
+        Number.isFinite(movingStartOptions.startBearingToleranceDegrees)
+      ? Math.max(
+        15,
+        Math.min(
+          90,
+          Math.round(movingStartOptions.startBearingToleranceDegrees),
+        ),
+      )
+      : 45;
+    const heading =
+      ((Math.round(movingStartOptions.currentHeading) % 360) + 360) %
+      360;
+    return plan.waypoints
+      .map((_, index) => index === 0 ? `${heading},${tolerance}` : "")
+      .join(";");
+  };
+  const effectiveAvoidManeuverRadius = movingStartDetected &&
+      typeof movingStartOptions?.avoidManeuverRadiusMeters === "number" &&
+      Number.isFinite(movingStartOptions.avoidManeuverRadiusMeters)
+    ? Math.max(
+      1,
+      Math.min(1000, Math.round(movingStartOptions.avoidManeuverRadiusMeters)),
+    )
+    : undefined;
   const longNoHighwayCurveRescueLabel = "nohw-curve-rescue-northeast";
   const longNoHighwayCurveRescueSearch = avoidHighways &&
     mode === "Kurvenjagd" &&
@@ -1055,11 +1119,13 @@ export async function searchBestRoundTripRoute({
       plan.waypoints,
       mapboxProfile,
       context.exclude,
-      plan.radiuses,
+      effectivePlanRadiuses(plan),
       accessToken,
       {
         continueStraight: context.continueStraight,
         alternatives: false,
+        bearings: effectivePlanBearings(plan),
+        avoidManeuverRadiusMeters: effectiveAvoidManeuverRadius,
         maxAttempts: 1,
         timeoutMs: boundedMapboxTimeoutMs(mapboxCandidateTimeoutMs, 3000),
         retryDelayBaseMs: 220,
@@ -1235,11 +1301,13 @@ export async function searchBestRoundTripRoute({
         plan.waypoints,
         mapboxProfile,
         phase.exclude,
-        plan.radiuses,
+        effectivePlanRadiuses(plan),
         accessToken,
         {
           continueStraight: phase.continueStraight,
           alternatives: requestAlternatives,
+          bearings: effectivePlanBearings(plan),
+          avoidManeuverRadiusMeters: effectiveAvoidManeuverRadius,
           maxAttempts: candidateAttempts >= 2 || !hasMapboxCallBudget(8000)
             ? 1
             : mapboxCandidateMaxAttempts,
@@ -1273,11 +1341,13 @@ export async function searchBestRoundTripRoute({
           plan.waypoints,
           mapboxProfile,
           relaxedPhaseExclude,
-          plan.radiuses,
+          effectivePlanRadiuses(plan),
           accessToken,
           {
             continueStraight: phase.continueStraight,
             alternatives: false,
+            bearings: effectivePlanBearings(plan),
+            avoidManeuverRadiusMeters: effectiveAvoidManeuverRadius,
             maxAttempts: 1,
             timeoutMs: boundedMapboxTimeoutMs(mapboxRelaxedTimeoutMs),
             includeGuidance: false,
@@ -1346,11 +1416,13 @@ export async function searchBestRoundTripRoute({
           plan.waypoints,
           mapboxProfile,
           relaxedPhaseExclude,
-          plan.radiuses,
+          effectivePlanRadiuses(plan),
           accessToken,
           {
             continueStraight: phase.continueStraight,
             alternatives: false,
+            bearings: effectivePlanBearings(plan),
+            avoidManeuverRadiusMeters: effectiveAvoidManeuverRadius,
             maxAttempts: 1,
             timeoutMs: boundedMapboxTimeoutMs(mapboxRelaxedTimeoutMs),
             includeGuidance: false,
@@ -1662,7 +1734,7 @@ export async function searchBestRoundTripRoute({
       return {
         route: bestEmergencyDuplicate.route,
         waypoints: bestEmergencyDuplicate.plan.waypoints,
-        radiuses: bestEmergencyDuplicate.plan.radiuses,
+        radiuses: effectivePlanRadiuses(bestEmergencyDuplicate.plan),
         quality: bestEmergencyDuplicate.quality,
         candidateAttempts,
         acceptedCandidates,
@@ -1811,7 +1883,7 @@ export async function searchBestRoundTripRoute({
   return {
     route: bestRoute,
     waypoints: bestPlan.waypoints,
-    radiuses: bestPlan.radiuses,
+    radiuses: effectivePlanRadiuses(bestPlan),
     quality: bestQuality,
     candidateAttempts,
     acceptedCandidates,

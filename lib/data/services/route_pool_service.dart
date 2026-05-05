@@ -377,6 +377,7 @@ class RoutePoolCandidateSaveResult {
     this.saveErrorType,
     this.saveErrorCode,
     this.saveErrorReason,
+    this.skippedReason,
   });
 
   final bool saved;
@@ -389,6 +390,7 @@ class RoutePoolCandidateSaveResult {
   final String? saveErrorType;
   final String? saveErrorCode;
   final String? saveErrorReason;
+  final String? skippedReason;
 }
 
 class RoutePoolService {
@@ -955,6 +957,7 @@ class RoutePoolService {
         saved: false,
         duplicate: false,
         poolFull: false,
+        skippedReason: 'unsupported_distance_bucket',
       );
     }
 
@@ -972,6 +975,7 @@ class RoutePoolService {
         saved: false,
         duplicate: false,
         poolFull: false,
+        skippedReason: 'region_assignment_missing',
       );
     }
 
@@ -998,16 +1002,24 @@ class RoutePoolService {
         distanceKm == null ||
         (distanceKm >= distanceBucket * 0.65 &&
             distanceKm <= distanceBucket * 1.35);
-    if ((avoidHighways && hasHighway) ||
-        qualityTier == 'rejected' ||
-        qualityScore < 60 ||
-        !distanceFitsBucket ||
-        coverage.currentCandidateCount >= policy.candidateBufferLimit) {
+    final skippedReason = avoidHighways && hasHighway
+        ? 'motorway_violation'
+        : qualityTier == 'rejected'
+        ? 'quality_rejected'
+        : qualityScore < 60
+        ? 'quality_score_low'
+        : !distanceFitsBucket
+        ? 'distance_mismatch'
+        : coverage.currentCandidateCount >= policy.candidateBufferLimit
+        ? 'candidate_buffer_full'
+        : null;
+    if (skippedReason != null) {
       return RoutePoolCandidateSaveResult(
         saved: false,
         duplicate: false,
         poolFull: poolFull,
         assignment: assignment,
+        skippedReason: skippedReason,
       );
     }
     final candidate = RoutePoolCandidate(
@@ -1062,6 +1074,7 @@ class RoutePoolService {
         saveErrorType: saveResult.saveErrorType,
         saveErrorCode: saveResult.saveErrorCode,
         saveErrorReason: saveResult.saveErrorReason,
+        skippedReason: saveResult.duplicate ? 'duplicate_fingerprint' : null,
       );
     }
 

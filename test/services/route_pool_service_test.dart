@@ -1977,9 +1977,13 @@ void main() {
       );
 
       expect(rejected.saved, isFalse);
+      expect(rejected.skippedReason, 'quality_rejected');
       expect(highway.saved, isFalse);
+      expect(highway.skippedReason, 'motorway_violation');
       expect(lowScore.saved, isFalse);
+      expect(lowScore.skippedReason, 'quality_score_low');
       expect(distanceMismatch.saved, isFalse);
+      expect(distanceMismatch.skippedReason, 'distance_mismatch');
       expect(candidates, isEmpty);
     });
 

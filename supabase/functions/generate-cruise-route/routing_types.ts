@@ -53,6 +53,16 @@ export interface RequestData {
   fingerprint_hint?: string;
   previous_route_fingerprints?: string[];
   max_candidate_attempts?: number;
+  moving_start?: boolean;
+  current_heading?: number;
+  current_speed_mps?: number;
+  location_accuracy_m?: number;
+  heading_accuracy_deg?: number;
+  speed_accuracy_mps?: number;
+  start_radius_m?: number;
+  start_bearing_tolerance_deg?: number;
+  avoid_maneuver_radius_m?: number;
+  start_on_motorway?: boolean;
   simplify_waypoints?: boolean;
   max_waypoints?: number;
 }

@@ -302,7 +302,7 @@ void main() {
   group('SeenRouteRegistry', () {
     tearDown(SeenRouteRegistry.clearAll);
 
-    test('behält mehr als vier Routen pro Szenario', () {
+    test('behält die letzten fünf Routen pro Szenario', () {
       const scenarioKey = 'ROUND_TRIP|test';
 
       for (var i = 0; i < 8; i++) {
@@ -316,8 +316,12 @@ void main() {
         );
       }
 
-      expect(SeenRouteRegistry.entriesFor(scenarioKey).length, 8);
-      expect(SeenRouteRegistry.hasExactFingerprint(scenarioKey, 'fp0'), isTrue);
+      expect(SeenRouteRegistry.entriesFor(scenarioKey).length, 5);
+      expect(
+        SeenRouteRegistry.hasExactFingerprint(scenarioKey, 'fp0'),
+        isFalse,
+      );
+      expect(SeenRouteRegistry.hasExactFingerprint(scenarioKey, 'fp3'), isTrue);
       expect(SeenRouteRegistry.hasExactFingerprint(scenarioKey, 'fp7'), isTrue);
     });
   });

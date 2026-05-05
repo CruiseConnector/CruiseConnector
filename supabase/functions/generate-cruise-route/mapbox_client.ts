@@ -97,6 +97,7 @@ function getMapboxRouteCacheKey(
   bearings: string,
   includeGuidance: boolean,
   overview: "full" | "simplified",
+  avoidManeuverRadiusMeters: number | null,
 ): string {
   return [
     profile,
@@ -108,6 +109,9 @@ function getMapboxRouteCacheKey(
     bearings,
     includeGuidance ? "guidance" : "geometry",
     overview,
+    avoidManeuverRadiusMeters == null
+      ? "avoid_maneuver_radius=none"
+      : `avoid_maneuver_radius=${avoidManeuverRadiusMeters.toFixed(0)}`,
   ].join("|");
 }
 
@@ -191,6 +195,7 @@ export async function getMapboxRouteDetailed(
     retryDelayBaseMs?: number;
     includeGuidance?: boolean;
     overview?: "full" | "simplified";
+    avoidManeuverRadiusMeters?: number;
   },
 ): Promise<MapboxRouteFetchResult> {
   // Format coordinates: "lon,lat;lon,lat;..."
@@ -204,7 +209,14 @@ export async function getMapboxRouteDetailed(
   const alternatives = options?.alternatives === true;
   const includeGuidance = options?.includeGuidance !== false;
   const bearings = options?.bearings?.trim() ?? "";
-  const overview = options?.overview ?? (includeGuidance ? "full" : "simplified");
+  const overview = options?.overview ??
+    (includeGuidance ? "full" : "simplified");
+  const avoidManeuverRadiusMeters =
+    typeof options?.avoidManeuverRadiusMeters === "number" &&
+      Number.isFinite(options.avoidManeuverRadiusMeters) &&
+      options.avoidManeuverRadiusMeters > 0
+      ? Math.round(options.avoidManeuverRadiusMeters)
+      : null;
   let url =
     `https://api.mapbox.com/directions/v5/${profile}/${coordinatesStr}?access_token=${accessToken}&geometries=geojson&overview=${overview}&steps=${
       includeGuidance ? "true" : "false"
@@ -228,6 +240,9 @@ export async function getMapboxRouteDetailed(
   if (bearings !== "") {
     url += `&bearings=${bearings}`;
   }
+  if (avoidManeuverRadiusMeters != null) {
+    url += `&avoid_maneuver_radius=${avoidManeuverRadiusMeters}`;
+  }
 
   const cacheKey = getMapboxRouteCacheKey(
     coordinatesStr,
@@ -239,6 +254,7 @@ export async function getMapboxRouteDetailed(
     bearings,
     includeGuidance,
     overview,
+    avoidManeuverRadiusMeters,
   );
   const cachedResult = getCachedMapboxRoute(cacheKey);
   if (cachedResult) {

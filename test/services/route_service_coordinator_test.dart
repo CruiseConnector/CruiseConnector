@@ -785,6 +785,60 @@ void main() {
     },
   );
 
+  test('Search Again sendet maximal die letzten 5 Fingerprints', () async {
+    final varyingInvoker = _VaryingCountingInvoker();
+    service = RouteService(invoker: varyingInvoker);
+
+    for (var i = 0; i < 6; i += 1) {
+      await service.generateRoundTrip(
+        startPosition: _start(),
+        targetDistanceKm: 50,
+        mode: 'Sport Mode',
+        planningType: 'Zufall',
+        forceFreshVariant: true,
+        debugTrigger: 'searchAgain',
+      );
+    }
+
+    final lastPrevious =
+        varyingInvoker.bodies.last['previous_route_fingerprints'] as List?;
+    expect(lastPrevious, isNotNull);
+    expect(lastPrevious, hasLength(5));
+    expect(RouteService.lastRoutePreviousFingerprints, hasLength(5));
+  });
+
+  test('bewegter Rundkurs-Start sendet Snap- und Bearing-Meta', () async {
+    final movingStart = geo.Position(
+      latitude: 47.5162,
+      longitude: 9.7471,
+      timestamp: DateTime.now(),
+      accuracy: 12,
+      altitude: 410,
+      altitudeAccuracy: 8,
+      heading: 92,
+      headingAccuracy: 8,
+      speed: 18,
+      speedAccuracy: 1,
+    );
+
+    final route = await service.generateRoundTrip(
+      startPosition: movingStart,
+      targetDistanceKm: 50,
+      mode: 'Sport Mode',
+      planningType: 'Zufall',
+      forceFreshVariant: true,
+    );
+
+    final body = invoker.bodies.first;
+    expect(body['moving_start'], true);
+    expect(body['current_heading'], 92);
+    expect(body['start_radius_m'], isA<double>());
+    expect(body['avoid_maneuver_radius_m'], isA<double>());
+    expect(route.edgeMeta['moving_start_detected'], true);
+    expect(route.edgeMeta['start_snap_strategy'], 'moving_bearing_radius_snap');
+    expect(route.edgeMeta['avoid_maneuver_radius_used'], isA<double>());
+  });
+
   test(
     'sichtbar andere Route darf nach Seen-Historie erneut geliefert werden',
     () async {
@@ -1966,6 +2020,66 @@ void main() {
       expect(candidates, hasLength(1));
       expect(candidates.single.candidateSource, 'basic_live');
       expect(candidates.single.isVerifiedPool, isFalse);
+    },
+  );
+
+  test(
+    'Basic-User in Hard-Region darf kontrolliert live explorieren und Candidate stagen',
+    () async {
+      final jobs = <RouteSeedJob>[];
+      final candidates = <RoutePoolCandidate>[];
+      final hardInvoker = _CountingInvoker(_closedLoopResponse());
+      service = RouteService(
+        invoker: hardInvoker,
+        routePoolService: RoutePoolService(
+          inMemoryRegions: [
+            _benchmarkRegion(
+              countryCode: 'AT',
+              admin1Name: 'Vorarlberg',
+              admin2Name: 'Bludenz',
+              cityCluster: 'Bludenz',
+              centerLat: 47.1548,
+              centerLng: 9.8220,
+              fallbackRadiusKm: 35,
+              difficultyLevel: 'hard',
+              hardRegionStatus: 'curated_needed',
+              bootstrapEnabled: false,
+              curatedSeedPreferred: true,
+              defaultTargetPoolSize: 8,
+              defaultMaxPoolSize: 10,
+              healthyThreshold: 4,
+              thinThreshold: 1,
+              seedBudgetUnits: 0,
+              seedCooldownMinutes: 180,
+            ),
+          ],
+          inMemoryRoutes: const [],
+          inMemoryCoverage: <RoutePoolCoverage>[],
+          inMemorySeedJobs: jobs,
+          inMemoryCandidates: candidates,
+        ),
+      );
+
+      final route = await service.generateRoundTrip(
+        startPosition: _position(47.1548, 9.8220),
+        targetDistanceKm: 50,
+        mode: 'Sport Mode',
+        planningType: 'Zufall',
+        avoidHighways: true,
+        forceFreshVariant: true,
+        subscriptionTier: 'basic',
+      );
+
+      expect(hardInvoker.callCount, greaterThan(0));
+      expect(jobs, isEmpty);
+      expect(candidates, hasLength(1));
+      expect(candidates.single.candidateSource, 'basic_live');
+      expect(route.edgeMeta['hard_region_exploration_used'], true);
+      expect(
+        route.edgeMeta['source_decision']?.toString(),
+        contains('hard_region_live_exploration'),
+      );
+      expect(route.edgeMeta['candidate_saved'], true);
     },
   );
 }
