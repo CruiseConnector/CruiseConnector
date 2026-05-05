@@ -95,9 +95,11 @@ function getMapboxRouteCacheKey(
   continueStraight: boolean,
   alternatives: boolean,
   bearings: string,
+  steps: boolean,
   includeGuidance: boolean,
   overview: "full" | "simplified",
   avoidManeuverRadiusMeters: number | null,
+  routeLegWaypointIndexes: string,
 ): string {
   return [
     profile,
@@ -107,11 +109,15 @@ function getMapboxRouteCacheKey(
     continueStraight ? "continue" : "allow_reverse",
     alternatives ? "alts" : "single",
     bearings,
+    steps ? "steps" : "no_steps",
     includeGuidance ? "guidance" : "geometry",
     overview,
     avoidManeuverRadiusMeters == null
       ? "avoid_maneuver_radius=none"
       : `avoid_maneuver_radius=${avoidManeuverRadiusMeters.toFixed(0)}`,
+    routeLegWaypointIndexes === ""
+      ? "route_waypoints=all"
+      : `route_waypoints=${routeLegWaypointIndexes}`,
   ].join("|");
 }
 
@@ -159,6 +165,85 @@ function cacheMapboxRoute(
   }
 }
 
+function normalizeRouteLegWaypointIndexes(
+  indexes: number[] | undefined,
+  coordinateCount: number,
+): string {
+  if (!Array.isArray(indexes) || indexes.length === 0) return "";
+  const normalized = indexes
+    .map((index) => Math.trunc(index))
+    .filter((index) => index >= 0 && index < coordinateCount);
+  const unique = [...new Set(normalized)].sort((a, b) => a - b);
+  return unique.length >= 2 ? unique.join(";") : "";
+}
+
+export function buildMapboxDirectionsRequestUrl(
+  waypoints: Coordinate[],
+  profile: string,
+  exclude: string,
+  radiuses: string,
+  accessToken: string,
+  options?: {
+    continueStraight?: boolean;
+    alternatives?: boolean;
+    bearings?: string;
+    includeGuidance?: boolean;
+    steps?: boolean;
+    overview?: "full" | "simplified";
+    avoidManeuverRadiusMeters?: number;
+    routeLegWaypointIndexes?: number[];
+  },
+): string {
+  const coordinatesStr = waypoints
+    .map((p) => `${p.longitude},${p.latitude}`)
+    .join(";");
+  const continueStraight = options?.continueStraight ?? true;
+  const alternatives = options?.alternatives === true;
+  const includeGuidance = options?.includeGuidance !== false;
+  const steps = options?.steps ?? includeGuidance;
+  const bearings = options?.bearings?.trim() ?? "";
+  const overview = options?.overview ??
+    (includeGuidance ? "full" : "simplified");
+  const routeLegWaypointIndexes = normalizeRouteLegWaypointIndexes(
+    options?.routeLegWaypointIndexes,
+    waypoints.length,
+  );
+  const avoidManeuverRadiusMeters =
+    typeof options?.avoidManeuverRadiusMeters === "number" &&
+      Number.isFinite(options.avoidManeuverRadiusMeters) &&
+      options.avoidManeuverRadiusMeters > 0
+      ? Math.round(options.avoidManeuverRadiusMeters)
+      : null;
+  let url =
+    `https://api.mapbox.com/directions/v5/${profile}/${coordinatesStr}?access_token=${accessToken}&geometries=geojson&overview=${overview}&steps=${
+      steps ? "true" : "false"
+    }&language=de&continue_straight=${
+      continueStraight ? "true" : "false"
+    }&alternatives=${alternatives ? "true" : "false"}`;
+  if (includeGuidance && overview === "full") {
+    url +=
+      "&voice_instructions=true&banner_instructions=true&annotations=maxspeed";
+  } else if (includeGuidance) {
+    url += "&voice_instructions=true&banner_instructions=true";
+  }
+  if (exclude && exclude.trim() !== "") {
+    url += `&exclude=${exclude}`;
+  }
+  if (radiuses && radiuses.trim() !== "") {
+    url += `&radiuses=${radiuses}`;
+  }
+  if (bearings !== "") {
+    url += `&bearings=${bearings}`;
+  }
+  if (routeLegWaypointIndexes !== "") {
+    url += `&waypoints=${routeLegWaypointIndexes}`;
+  }
+  if (avoidManeuverRadiusMeters != null) {
+    url += `&avoid_maneuver_radius=${avoidManeuverRadiusMeters}`;
+  }
+  return url;
+}
+
 export function getRetryKindFromMapboxFailure(
   failure: Pick<MapboxRouteFetchResult, "outcome" | "statusCode" | "details">,
 ): "rate_limit" | "timeout" | "other" {
@@ -194,55 +279,49 @@ export async function getMapboxRouteDetailed(
     timeoutMs?: number;
     retryDelayBaseMs?: number;
     includeGuidance?: boolean;
+    steps?: boolean;
     overview?: "full" | "simplified";
     avoidManeuverRadiusMeters?: number;
+    routeLegWaypointIndexes?: number[];
   },
 ): Promise<MapboxRouteFetchResult> {
-  // Format coordinates: "lon,lat;lon,lat;..."
-  const coordinatesStr = waypoints
-    .map((p) => `${p.longitude},${p.latitude}`)
-    .join(";");
-
-  // Base URL
-  // We use geometries=geojson to get the path geometry
   const continueStraight = options?.continueStraight ?? true;
   const alternatives = options?.alternatives === true;
   const includeGuidance = options?.includeGuidance !== false;
+  const steps = options?.steps ?? includeGuidance;
   const bearings = options?.bearings?.trim() ?? "";
   const overview = options?.overview ??
     (includeGuidance ? "full" : "simplified");
+  const routeLegWaypointIndexes = normalizeRouteLegWaypointIndexes(
+    options?.routeLegWaypointIndexes,
+    waypoints.length,
+  );
   const avoidManeuverRadiusMeters =
     typeof options?.avoidManeuverRadiusMeters === "number" &&
       Number.isFinite(options.avoidManeuverRadiusMeters) &&
       options.avoidManeuverRadiusMeters > 0
       ? Math.round(options.avoidManeuverRadiusMeters)
       : null;
-  let url =
-    `https://api.mapbox.com/directions/v5/${profile}/${coordinatesStr}?access_token=${accessToken}&geometries=geojson&overview=${overview}&steps=${
-      includeGuidance ? "true" : "false"
-    }&language=de&continue_straight=${
-      continueStraight ? "true" : "false"
-    }&alternatives=${alternatives ? "true" : "false"}`;
-  if (includeGuidance && overview === "full") {
-    url +=
-      "&voice_instructions=true&banner_instructions=true&annotations=maxspeed";
-  } else if (includeGuidance) {
-    url += "&voice_instructions=true&banner_instructions=true";
-  }
-
-  // Append optional parameters if they exist
-  if (exclude && exclude.trim() !== "") {
-    url += `&exclude=${exclude}`;
-  }
-  if (radiuses && radiuses.trim() !== "") {
-    url += `&radiuses=${radiuses}`;
-  }
-  if (bearings !== "") {
-    url += `&bearings=${bearings}`;
-  }
-  if (avoidManeuverRadiusMeters != null) {
-    url += `&avoid_maneuver_radius=${avoidManeuverRadiusMeters}`;
-  }
+  const coordinatesStr = waypoints
+    .map((p) => `${p.longitude},${p.latitude}`)
+    .join(";");
+  const url = buildMapboxDirectionsRequestUrl(
+    waypoints,
+    profile,
+    exclude,
+    radiuses,
+    accessToken,
+    {
+      continueStraight,
+      alternatives,
+      bearings,
+      includeGuidance,
+      steps,
+      overview,
+      avoidManeuverRadiusMeters: avoidManeuverRadiusMeters ?? undefined,
+      routeLegWaypointIndexes: options?.routeLegWaypointIndexes,
+    },
+  );
 
   const cacheKey = getMapboxRouteCacheKey(
     coordinatesStr,
@@ -252,9 +331,11 @@ export async function getMapboxRouteDetailed(
     continueStraight,
     alternatives,
     bearings,
+    steps,
     includeGuidance,
     overview,
     avoidManeuverRadiusMeters,
+    routeLegWaypointIndexes,
   );
   const cachedResult = getCachedMapboxRoute(cacheKey);
   if (cachedResult) {
@@ -370,6 +451,10 @@ export async function getMapboxRoute(
     timeoutMs?: number;
     retryDelayBaseMs?: number;
     includeGuidance?: boolean;
+    steps?: boolean;
+    overview?: "full" | "simplified";
+    avoidManeuverRadiusMeters?: number;
+    routeLegWaypointIndexes?: number[];
   },
 ) {
   const result = await getMapboxRouteDetailed(

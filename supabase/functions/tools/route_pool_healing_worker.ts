@@ -94,6 +94,7 @@ interface HealingMapboxFetchResult {
   outcome: "ok" | "no_route" | "http_error" | "network_error" | "timeout";
   statusCode?: number;
   details?: string;
+  meta?: JsonMap;
 }
 
 export interface HealingStats {
@@ -504,6 +505,7 @@ async function callHealingCandidateGenerator(
       healing_plan: plan.label,
       healing_target_distance_km: plan.targetDistanceKm,
       healing_route_options: routeOptions.length,
+      ...(fetchResult.meta ?? {}),
     },
   };
 }
@@ -521,13 +523,16 @@ async function fetchHealingMapboxRoute(
     access_token: accessToken,
     geometries: "geojson",
     overview: "simplified",
-    steps: "false",
+    steps: "true",
     language: "de",
     continue_straight: plan.continueStraight ? "true" : "false",
     alternatives: "false",
   });
   if (exclude.trim().length > 0) params.set("exclude", exclude);
   if (plan.radiuses.trim().length > 0) params.set("radiuses", plan.radiuses);
+  if (plan.waypoints.length > 2) {
+    params.set("waypoints", `0;${plan.waypoints.length - 1}`);
+  }
 
   const url =
     `https://api.mapbox.com/directions/v5/mapbox/driving/${coordinatesStr}?${params}`;
@@ -563,7 +568,22 @@ async function fetchHealingMapboxRoute(
       };
     }
     const boundedRoutes = routes.map(boundHealingRouteGeometry);
-    return { route: boundedRoutes[0], routes: boundedRoutes, outcome: "ok" };
+    return {
+      route: boundedRoutes[0],
+      routes: boundedRoutes,
+      outcome: "ok",
+      meta: {
+        silent_via_used: plan.waypoints.length > 2,
+        silent_via_waypoints: plan.waypoints.length > 2
+          ? `0;${plan.waypoints.length - 1}`
+          : null,
+        shaping_point_count: Math.max(0, plan.waypoints.length - 2),
+        mapbox_leg_count: Array.isArray(boundedRoutes[0]?.legs)
+          ? boundedRoutes[0].legs.length
+          : null,
+        arrive_maneuver_count: countArriveManeuvers(boundedRoutes[0]),
+      },
+    };
   })();
 
   try {
@@ -580,6 +600,20 @@ async function fetchHealingMapboxRoute(
   } finally {
     if (timeoutId != null) clearTimeout(timeoutId);
   }
+}
+
+function countArriveManeuvers(route: any): number | null {
+  if (!Array.isArray(route?.legs)) return null;
+  let count = 0;
+  for (const leg of route.legs) {
+    if (!Array.isArray(leg?.steps)) continue;
+    for (const step of leg.steps) {
+      if (String(step?.maneuver?.type ?? "").toLowerCase() === "arrive") {
+        count += 1;
+      }
+    }
+  }
+  return count;
 }
 
 function boundHealingRouteGeometry(route: any): any {

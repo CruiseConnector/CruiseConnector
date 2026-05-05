@@ -195,6 +195,12 @@ export interface RoundTripSearchResult {
   requestedStyle?: string | null;
   deliveredStyle?: string | null;
   styleDowngraded?: boolean;
+  silentViaUsed?: boolean;
+  silentViaWaypoints?: string | null;
+  shapingPointCount?: number;
+  mapboxLegCount?: number | null;
+  arriveManeuverCount?: number | null;
+  silentViaFallbackUsed?: boolean;
   terminalShortCircuit?: boolean;
   exhausted?: boolean;
   preferenceMatch?: PreferenceMatchSummary | null;
