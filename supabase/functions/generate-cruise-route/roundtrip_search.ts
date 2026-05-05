@@ -890,6 +890,9 @@ export async function searchBestRoundTripRoute({
   let silentViaAttempted = false;
   let silentViaFallbackUsed = false;
   let lastSilentViaWaypoints: string | null = null;
+  let lastSilentViaShapingPointCount = 0;
+  let lastSilentViaMapboxLegCount: number | null = null;
+  let lastSilentViaArriveManeuverCount: number | null = null;
 
   const registerReject = (reason: string) => {
     const normalized = normalizeRoundTripRejectReason(reason);
@@ -1022,6 +1025,7 @@ export async function searchBestRoundTripRoute({
 
     silentViaAttempted = true;
     lastSilentViaWaypoints = silentViaWaypointString(plan);
+    lastSilentViaShapingPointCount = Math.max(0, plan.waypoints.length - 2);
     const silentFetch = await getMapboxRouteDetailed(
       plan.waypoints,
       mapboxProfile,
@@ -1045,6 +1049,12 @@ export async function searchBestRoundTripRoute({
       },
     );
     if (!shouldFallbackFromSilentViaFailure(silentFetch)) {
+      if (silentFetch.route != null) {
+        lastSilentViaMapboxLegCount = countRouteLegs(silentFetch.route);
+        lastSilentViaArriveManeuverCount = countArriveManeuvers(
+          silentFetch.route,
+        );
+      }
       return {
         fetchResult: silentFetch,
         callsUsed: 1,
@@ -2134,11 +2144,11 @@ export async function searchBestRoundTripRoute({
       fingerprintHint: normalizedFingerprintHint,
       duplicateSkips,
       exhausted: true,
-      silentViaUsed: false,
+      silentViaUsed: silentViaAttempted,
       silentViaWaypoints: lastSilentViaWaypoints,
-      shapingPointCount: 0,
-      mapboxLegCount: null,
-      arriveManeuverCount: null,
+      shapingPointCount: lastSilentViaShapingPointCount,
+      mapboxLegCount: lastSilentViaMapboxLegCount,
+      arriveManeuverCount: lastSilentViaArriveManeuverCount,
       silentViaFallbackUsed,
     };
   }
@@ -2203,11 +2213,11 @@ export async function searchBestRoundTripRoute({
         fingerprintHint: normalizedFingerprintHint,
         duplicateSkips,
         exhausted: true,
-        silentViaUsed: false,
+        silentViaUsed: silentViaAttempted,
         silentViaWaypoints: lastSilentViaWaypoints,
-        shapingPointCount: 0,
-        mapboxLegCount: null,
-        arriveManeuverCount: null,
+        shapingPointCount: lastSilentViaShapingPointCount,
+        mapboxLegCount: lastSilentViaMapboxLegCount,
+        arriveManeuverCount: lastSilentViaArriveManeuverCount,
         silentViaFallbackUsed,
       };
     }
