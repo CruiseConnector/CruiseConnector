@@ -423,6 +423,7 @@ export async function searchBestRoundTripRoute({
   accessToken,
   variantHint,
   fingerprintHint,
+  previousRouteFingerprints,
   maxCandidateAttemptsHint,
   avoidHighways,
   continueStraight,
@@ -443,6 +444,7 @@ export async function searchBestRoundTripRoute({
   accessToken: string;
   variantHint?: string;
   fingerprintHint?: string;
+  previousRouteFingerprints?: string[];
   maxCandidateAttemptsHint?: number;
   avoidHighways: boolean;
   continueStraight: boolean;
@@ -463,6 +465,9 @@ export async function searchBestRoundTripRoute({
   const constrainedRoundTripSearch = normalizedExcludeParams.trim() !== "";
   const normalizedVariantHint = normalizeHint(variantHint);
   const normalizedFingerprintHint = normalizeHint(fingerprintHint);
+  const normalizedPreviousRouteFingerprints = (previousRouteFingerprints ?? [])
+    .map((value) => normalizeHint(value))
+    .filter((value): value is string => value != null);
   const longNoHighwayCurveRescueLabel = "nohw-curve-rescue-northeast";
   const longNoHighwayCurveRescueSearch = avoidHighways &&
     mode === "Kurvenjagd" &&
@@ -473,7 +478,7 @@ export async function searchBestRoundTripRoute({
   const noHighwayAttemptBudget = targetDistanceKm <= 60
     ? mode === "Kurvenjagd" ? 14 : 12
     : targetDistanceKm <= 85
-    ? mode === "Kurvenjagd" ? 10 : 8
+    ? mode === "Kurvenjagd" ? 12 : 10
     : mode === "Kurvenjagd"
     ? 10
     : 8;
@@ -775,9 +780,10 @@ export async function searchBestRoundTripRoute({
   let balancedTerminalShortCircuit = false;
   const rejectReasons = new Map<string, number>();
   const lastPlanLabels: string[] = [];
-  const seenRouteFingerprints = new Set<string>(
-    normalizedFingerprintHint ? [normalizedFingerprintHint] : [],
-  );
+  const seenRouteFingerprints = new Set<string>([
+    ...normalizedPreviousRouteFingerprints,
+    ...(normalizedFingerprintHint ? [normalizedFingerprintHint] : []),
+  ]);
   let duplicateSkips = 0;
   let bestEmergencyDuplicate: {
     plan: RoundTripCandidatePlan;
@@ -1508,6 +1514,11 @@ export async function searchBestRoundTripRoute({
         mode === "Sport Mode" &&
         quality.tier === "acceptable" &&
         quality.distanceDeltaKm <= targetDistanceKm * 0.30 &&
+        quality.actualDistanceKm >=
+          Math.max(
+            selectedDistanceConfig.acceptableMinKm,
+            targetDistanceKm * 0.88,
+          ) &&
         (plan.label.startsWith("nohw-medium-sport-orbital-") ||
           plan.label.startsWith("nohw-medium-sport-orbital-rheintal-") ||
           plan.label.startsWith("nohw-medium-sport-cardinal-"));
@@ -1604,7 +1615,7 @@ export async function searchBestRoundTripRoute({
     if (
       phase.name === "balanced" &&
       balancedHasPresentableCandidate &&
-      !avoidHighwaysTightRoundTripSearch
+      !avoidHighwaysRoundTripSearch
     ) {
       debugLog(
         `[RT] Phase balanced: presentable candidate found, skipping fallback/rescue for this seed`,

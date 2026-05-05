@@ -1983,6 +1983,7 @@ class RouteService {
     double? directionHint,
     int candidateBudget = 3,
     bool avoidHighways = false,
+    List<String> previousFingerprints = const [],
     String? originalPlanningType,
   }) {
     final isRequiredWaypointRoundTrip =
@@ -2010,6 +2011,8 @@ class RouteService {
       'avoid_highways': avoidHighways,
       'route_variant_hint': variant.variantHint,
       'route_fingerprint_hint': variant.fingerprintHint,
+      if (previousFingerprints.isNotEmpty)
+        'previous_route_fingerprints': previousFingerprints.take(8).toList(),
       'max_candidate_attempts': candidateBudget,
       ...styleConfig.toRequestHints(),
       if (targetLocation != null) 'targetLocation': targetLocation,
@@ -3247,6 +3250,9 @@ class RouteService {
           : ((scenario.targetDistanceKm ?? 50.0) * variant.radiusJitter)
                 .round(),
     );
+    final previousFingerprints = SeenRouteRegistry.entriesForAny(
+      _seenHistoryKeysForScenario(scenario),
+    ).map((entry) => entry.fingerprint).toList(growable: false);
     final body = _buildRoundTripRequest(
       startPosition: startPosition,
       targetDistanceKm: adjustedTargetKm,
@@ -3259,6 +3265,7 @@ class RouteService {
       directionHint: variant.angleOffset,
       candidateBudget: candidateBudget,
       avoidHighways: scenario.avoidHighways,
+      previousFingerprints: previousFingerprints,
       originalPlanningType: originalPlanningType,
     );
     body['client_scenario_key'] = scenario.scenarioKey;
@@ -4671,6 +4678,10 @@ class RouteService {
         lastError?.edgeMeta['route_quality_too_low'] == true ||
         lastError?.edgeMeta['code'] == 'route_quality_too_low';
     final bucket = _distanceBucketForPool(scenario.targetDistanceKm);
+    final realBudgetPaused = _coverageIndicatesRealBudgetPause(
+      coverage,
+      lastError,
+    );
     final warmupMessage = qualityTooLow
         ? 'Wir suchen noch nach einer besseren Route. Für diese Strecke und Einstellung gibt es gerade noch keine geprüfte Variante. Bitte warte kurz oder versuche es erneut.'
         : _coverageStatusUserMessage(
@@ -4678,16 +4689,22 @@ class RouteService {
             cluster: cluster,
             requestedStyle: scenario.style,
             requestedDistanceBucket: bucket,
+            realBudgetPaused: realBudgetPaused,
           );
     final responseCode = qualityTooLow
         ? 'route_quality_too_low'
+        : realBudgetPaused
+        ? 'route_budget_paused'
         : 'pool_bootstrap_pending';
     final poolBootstrapPending =
         qualityTooLow || coverage.seedJobCreated || coverage.bootstrapPending;
     final healingStatus = coverage.healingStatus;
     final nextAction = qualityTooLow
         ? 'retry_or_bootstrap'
-        : _coverageNextAction(healingStatus);
+        : _coverageNextAction(
+            healingStatus,
+            realBudgetPaused: realBudgetPaused,
+          );
     final meta = <String, dynamic>{
       ...coverage.toMeta(),
       if (lastError != null) ...lastError.edgeMeta,
@@ -4698,6 +4715,8 @@ class RouteService {
       'response_code': responseCode,
       'pool_bootstrap_pending': poolBootstrapPending,
       'route_quality_too_low': qualityTooLow,
+      'route_budget_paused': realBudgetPaused,
+      'budget_paused': realBudgetPaused,
       'requested_distance_bucket': bucket,
       'requested_style': scenario.style,
       'avoid_highways': scenario.avoidHighways,
@@ -4789,6 +4808,7 @@ class RouteService {
     required String? cluster,
     String? requestedStyle,
     int? requestedDistanceBucket,
+    bool realBudgetPaused = false,
   }) {
     final clusterText = cluster ?? 'deiner Umgebung';
     final healingStatus = coverage.healingStatus;
@@ -4801,8 +4821,11 @@ class RouteService {
     if (healingStatus == 'healing_failed_cooldown') {
       return 'Für diese Einstellung war gerade keine gute Route möglich. Wir versuchen es später automatisch erneut.';
     }
-    if (healingStatus == 'healing_paused_budget') {
+    if (healingStatus == 'healing_paused_budget' && realBudgetPaused) {
       return 'Heute wurden viele Routenvorschläge berechnet. Wir begrenzen neue Suchen kurzzeitig.';
+    }
+    if (healingStatus == 'healing_paused_budget') {
+      return 'Neue Vorschläge für diese Einstellung sind eingeplant. Wir starten den Aufbau automatisch.';
     }
     final longCurvy =
         (requestedStyle ?? '').toLowerCase().contains('kurven') &&
@@ -4827,12 +4850,59 @@ class RouteService {
     }
   }
 
-  static String _coverageNextAction(String healingStatus) {
+  static bool _coverageIndicatesRealBudgetPause(
+    RoutePoolCoverageCheck coverage,
+    RouteServiceException? lastError,
+  ) {
+    if (_edgeMetaIndicatesRealBudgetPause(lastError?.edgeMeta ?? const {})) {
+      return true;
+    }
+    return _isBudgetPauseCode(coverage.seedJobError);
+  }
+
+  static bool _edgeMetaIndicatesRealBudgetPause(Map<String, dynamic> edgeMeta) {
+    if (edgeMeta['route_budget_paused'] == true ||
+        edgeMeta['budget_paused'] == true ||
+        edgeMeta['global_cap_reached'] == true ||
+        edgeMeta['budget_limited_global'] == true) {
+      return true;
+    }
+    for (final key in const [
+      'code',
+      'response_code',
+      'final_no_route_reason',
+      'live_attempt_result',
+      'seed_job_error',
+      'last_failure_reason',
+    ]) {
+      if (_isBudgetPauseCode(edgeMeta[key]?.toString())) return true;
+    }
+    return false;
+  }
+
+  static bool _isBudgetPauseCode(String? value) {
+    final lower = value?.trim().toLowerCase();
+    if (lower == null || lower.isEmpty) return false;
+    return lower == 'route_budget_paused' ||
+        lower == 'budget_limited_global' ||
+        lower == 'global_budget_exhausted' ||
+        lower == 'request_budget_exhausted' ||
+        lower == 'job_budget_exhausted' ||
+        lower.contains('budget_exhausted') ||
+        lower.contains('global_budget');
+  }
+
+  static String _coverageNextAction(
+    String healingStatus, {
+    bool realBudgetPaused = true,
+  }) {
     return switch (healingStatus) {
       'healing_running' => 'wait_for_healing',
       'healing_queued' => 'queued_for_healing',
       'healing_failed_cooldown' => 'wait_for_cooldown',
-      'healing_paused_budget' => 'wait_for_budget',
+      'healing_paused_budget' => realBudgetPaused
+          ? 'wait_for_budget'
+          : 'queued_for_healing',
       'hard_region_curated_needed' => 'change_settings_or_curated',
       _ => 'bootstrap',
     };
@@ -5474,8 +5544,16 @@ class RouteService {
       'zigzag_score': styleMetrics.microZigzagPercent,
       'sharp_turn_count': styleMetrics.sharpCurveDensityPer50Km,
       'avoid_highways_requested': scenario.avoidHighways,
+      'highway_allowed': !scenario.avoidHighways,
+      'motorway_policy': scenario.avoidHighways
+          ? 'exclude_motorway'
+          : 'allowed_not_required',
       'has_highway': match.route.hasHighway,
       'avoids_highway': match.route.avoidsHighway,
+      'actual_has_highway': match.route.hasHighway,
+      'actual_avoids_highway': match.route.avoidsHighway,
+      'cross_cell_highway_fallback':
+          !scenario.avoidHighways && match.route.avoidsHighway,
       'requested_distance_bucket': _distanceBucketForPool(
         scenario.targetDistanceKm,
       ),
@@ -6230,14 +6308,18 @@ class RouteService {
         : int.tryParse(bucketValue?.toString() ?? '');
     final coverageStatus = edgeMeta['coverage_status']?.toString();
     final healingStatus = edgeMeta['healing_status']?.toString();
+    final realBudgetPaused = _edgeMetaIndicatesRealBudgetPause(edgeMeta);
     if (healingStatus == 'healing_running') {
       return 'Wir erstellen gerade neue Vorschläge für diese Einstellung. Bitte versuche es gleich erneut.';
     }
     if (healingStatus == 'healing_failed_cooldown') {
       return 'Für diese Einstellung war gerade keine gute Route möglich. Wir versuchen es später automatisch erneut.';
     }
-    if (healingStatus == 'healing_paused_budget') {
+    if (healingStatus == 'healing_paused_budget' && realBudgetPaused) {
       return 'Heute wurden viele Routenvorschläge berechnet. Wir begrenzen neue Suchen kurzzeitig.';
+    }
+    if (healingStatus == 'healing_paused_budget') {
+      return 'Neue Vorschläge für diese Einstellung sind eingeplant. Wir starten den Aufbau automatisch.';
     }
     if (healingStatus == 'hard_region_curated_needed') {
       return 'Diese Kombination ist in deiner Umgebung schwierig. Versuche eine andere Länge oder einen anderen Stil.';
@@ -6773,6 +6855,17 @@ class RouteService {
     meta['mapboxCallCount'] = lastRouteApiCallCount;
     meta['mapbox_call_count'] = lastRouteApiCallCount;
     meta['liveGenerationCostUnits'] = lastRouteApiCallCount;
+    final avoidHighwaysRequested =
+        meta['avoid_highways_requested'] == true ||
+        meta['avoid_highways'] == true;
+    meta['highway_allowed'] = !avoidHighwaysRequested;
+    meta['motorway_policy'] = avoidHighwaysRequested
+        ? 'exclude_motorway'
+        : 'allowed_not_required';
+    meta['actual_has_highway'] ??= meta['has_highway'];
+    meta['actual_avoids_highway'] ??= meta['avoids_highway'];
+    meta['cross_cell_highway_fallback'] ??=
+        !avoidHighwaysRequested && meta['avoids_highway'] == true;
     meta['source_decision'] = lastRouteSourceDecision;
     meta['live_attempted'] = lastRouteApiCallCount > 0;
     meta['live_attempt_reason'] = lastRouteApiCallCount > 0

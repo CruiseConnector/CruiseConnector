@@ -685,7 +685,7 @@ void main() {
     );
 
     test(
-      'Coverage-Zellen trennen Style Distanz und Autobahnstatus hart',
+      'Coverage-Zellen trennen Style und Distanz, Autobahn AN akzeptiert No-Highway-Routen',
       () async {
         final routes = <RoutePoolEntry>[
           for (var i = 0; i < 12; i += 1)
@@ -758,8 +758,8 @@ void main() {
         expect(curvy50.coverageStatus, 'empty');
         expect(sport75.currentVerifiedCount, 0);
         expect(sport75.coverageStatus, 'empty');
-        expect(sport50HighwayAllowed.currentVerifiedCount, 0);
-        expect(sport50HighwayAllowed.coverageStatus, 'empty');
+        expect(sport50HighwayAllowed.currentVerifiedCount, 12);
+        expect(sport50HighwayAllowed.coverageStatus, 'target_met');
       },
     );
 
@@ -889,7 +889,7 @@ void main() {
       expect(matches.map((match) => match.route.id), ['bregenz-curvy-exact']);
     });
 
-    test('avoidHighways false nutzt keine no-highway Zellroute', () async {
+    test('avoidHighways false akzeptiert no-highway Zellroute', () async {
       final service = RoutePoolService(
         inMemoryRegions: [
           _region(
@@ -924,7 +924,7 @@ void main() {
         routeType: 'ROUND_TRIP',
       );
 
-      expect(matches, isEmpty);
+      expect(matches.map((match) => match.route.id), ['bregenz-no-highway']);
     });
 
     test('Acceptable-Reserve macht eine Zelle quality_thin', () async {

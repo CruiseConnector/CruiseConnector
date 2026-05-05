@@ -1246,8 +1246,6 @@ class RoutePoolService {
           routeQuery = routeQuery
               .eq('avoids_highway', true)
               .eq('has_highway', false);
-        } else {
-          routeQuery = routeQuery.eq('avoids_highway', false);
         }
 
         final routeRows = await routeQuery
@@ -2123,9 +2121,6 @@ class RoutePoolService {
       final avoidsHighway = (map['avoids_highway'] as bool?) ?? false;
       final hasHighway = (map['has_highway'] as bool?) ?? false;
       if (avoidHighways && (!avoidsHighway || hasHighway)) {
-        continue;
-      }
-      if (!avoidHighways && avoidsHighway) {
         continue;
       }
       summary.add(
@@ -3135,7 +3130,7 @@ class RoutePoolService {
 
   static bool _highwayMatches(RoutePoolEntry candidate, bool avoidHighways) {
     if (avoidHighways) return candidate.avoidsHighway && !candidate.hasHighway;
-    return !candidate.avoidsHighway;
+    return true;
   }
 
   static bool _locationScopeMatches(

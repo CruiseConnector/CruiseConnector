@@ -778,6 +778,10 @@ void main() {
         varyingInvoker.bodies.map((body) => body['route_variant_hint']).toSet(),
         hasLength(greaterThanOrEqualTo(2)),
       );
+      expect(
+        varyingInvoker.bodies.last['previous_route_fingerprints'],
+        isNotEmpty,
+      );
     },
   );
 
@@ -995,6 +999,33 @@ void main() {
       expect(second.edgeMeta['duplicate_skipped'], isTrue);
       expect(second.edgeMeta['pool_seen_candidate_count'], 1);
       expect(second.edgeMeta['previous_route_fingerprints'], isNotEmpty);
+    },
+  );
+
+  test(
+    'Autobahn AN darf gute No-Highway-Poolroute als legitimen Fallback nutzen',
+    () async {
+      final poolService = _FakeRoutePoolService(_poolMatch());
+      service = RouteService(
+        invoker: _AlwaysFailingInvoker(),
+        routePoolService: poolService,
+      );
+
+      final route = await service.generateRoundTrip(
+        startPosition: _start(),
+        targetDistanceKm: 50,
+        mode: 'Sport Mode',
+        planningType: 'Zufall',
+        avoidHighways: false,
+      );
+
+      expect(route.coordinates, isNotEmpty);
+      expect(route.edgeMeta['route_source'], 'pool');
+      expect(route.edgeMeta['highway_allowed'], isTrue);
+      expect(route.edgeMeta['motorway_policy'], 'allowed_not_required');
+      expect(route.edgeMeta['actual_has_highway'], isFalse);
+      expect(route.edgeMeta['actual_avoids_highway'], isTrue);
+      expect(route.edgeMeta['cross_cell_highway_fallback'], isTrue);
     },
   );
 

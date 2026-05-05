@@ -892,6 +892,7 @@ async function upsertVerifiedRoute(args: {
   const coords = args.route.geometry.coordinates as number[][];
   const first = coords[0];
   const last = coords[coords.length - 1];
+  const hasHighway = routeHasMotorway(args.route);
   const row = {
     route_fingerprint: args.fingerprint,
     title: `${args.region.city_cluster} ${args.job.distance_bucket} ${
@@ -911,7 +912,7 @@ async function upsertVerifiedRoute(args: {
     route_type: args.job.route_type,
     style_tags: [styleLabel(args.job.style_key)],
     avoids_highway: args.job.avoid_highways,
-    has_highway: false,
+    has_highway: hasHighway,
     quality_score: args.decision.qualityScore,
     shape_score: args.decision.shapeScore,
     source: "mapbox_healing",
@@ -944,6 +945,7 @@ async function upsertCandidateRoute(args: {
 }): Promise<boolean> {
   const coords = args.route.geometry.coordinates as number[][];
   const first = coords[0];
+  const hasHighway = routeHasMotorway(args.route);
   const row = {
     route_region_id: args.region.id ?? args.job.route_region_id,
     route_fingerprint: args.fingerprint,
@@ -959,7 +961,7 @@ async function upsertCandidateRoute(args: {
     style_key: args.job.style_key,
     style_tags: [styleLabel(args.job.style_key)],
     avoid_highways: args.job.avoid_highways,
-    has_highway: false,
+    has_highway: hasHighway,
     quality_score: args.decision.qualityScore,
     shape_score: args.decision.shapeScore,
     candidate_source: "bootstrap",
@@ -1676,7 +1678,7 @@ function highwayMatches(row: JsonMap, avoidHighways: boolean): boolean {
   if (avoidHighways) {
     return row.avoids_highway === true && row.has_highway !== true;
   }
-  return row.avoids_highway !== true;
+  return true;
 }
 
 function qualityTierForRow(row: JsonMap): string {

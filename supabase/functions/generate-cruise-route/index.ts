@@ -222,6 +222,16 @@ Deno.serve(async (req) => {
     const fingerprintHint = normalizeHint(
       body.route_fingerprint_hint ?? body.fingerprint_hint,
     );
+    const previousRouteFingerprints = Array.isArray(
+        body.previous_route_fingerprints,
+      )
+      ? body.previous_route_fingerprints
+        .map((value: unknown) =>
+          typeof value === "string" ? normalizeHint(value) : undefined
+        )
+        .filter((value: string | undefined): value is string => value != null)
+        .slice(0, 12)
+      : [];
     const maxCandidateAttemptsHint =
       typeof body.max_candidate_attempts === "number" &&
         Number.isFinite(body.max_candidate_attempts)
@@ -263,6 +273,7 @@ Deno.serve(async (req) => {
         avoidHighways: body.avoid_highways === true,
         variantHint: variantHint ?? null,
         fingerprintHint: fingerprintHint ?? null,
+        previousRouteFingerprintCount: previousRouteFingerprints.length,
         maxCandidateAttemptsHint: maxCandidateAttemptsHint ?? null,
       }),
     );
@@ -1037,6 +1048,7 @@ Deno.serve(async (req) => {
         accessToken: MAPBOX_ACCESS_TOKEN,
         variantHint,
         fingerprintHint,
+        previousRouteFingerprints,
         maxCandidateAttemptsHint,
         simplifyWaypoints: body.simplify_waypoints === true,
         maxWaypoints: body.max_waypoints,
@@ -2137,13 +2149,12 @@ Deno.serve(async (req) => {
           duplicateSkipped: currentRouteType === "POINT_TO_POINT"
             ? pointToPointDuplicateSkipped
             : null,
-          excluded_fingerprint_count: currentRouteType === "POINT_TO_POINT"
-            ? Array.isArray(body.previous_route_fingerprints)
-              ? body.previous_route_fingerprints.length
-              : body.route_fingerprint_hint != null
-              ? 1
-              : 0
-            : null,
+          excluded_fingerprint_count:
+            currentRouteType === "POINT_TO_POINT" ||
+              currentRouteType === "ROUND_TRIP"
+              ? previousRouteFingerprints.length +
+                (body.route_fingerprint_hint != null ? 1 : 0)
+              : null,
           destination_snap_distance_m: currentRouteType === "POINT_TO_POINT"
             ? pointToPointDestinationDistanceMeters
             : null,
@@ -2219,6 +2230,10 @@ Deno.serve(async (req) => {
             roundTripSearch?.preferenceMatch?.preferenceIgnoredReason ?? null,
           avoid_highways_requested: avoidHighways,
           effective_excludes: excludeParams,
+          highway_allowed: !avoidHighways,
+          motorway_policy: avoidHighways
+            ? "exclude_motorway"
+            : "allowed_not_required",
           quality_tier: finalQuality.tier,
           quality_reason: finalQuality.reason,
           selected_style: mode ?? null,
