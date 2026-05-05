@@ -97,6 +97,11 @@ export interface RouteQualityEvaluation {
   preferenceAreaDistancesMeters?: number[];
   preferenceIgnoredReason?: string | null;
   shapeMetrics?: RouteShapeMetrics;
+  safeFallbackUsed?: boolean;
+  safeFallbackReason?: string | null;
+  requestedStyle?: string | null;
+  deliveredStyle?: string | null;
+  styleDowngraded?: boolean;
 }
 
 export interface PreferenceMatchSummary {
@@ -185,6 +190,11 @@ export interface RoundTripSearchResult {
   fingerprintHint?: string;
   duplicateSkips: number;
   emergencyDuplicateUsed?: boolean;
+  safeFallbackUsed?: boolean;
+  safeFallbackReason?: string | null;
+  requestedStyle?: string | null;
+  deliveredStyle?: string | null;
+  styleDowngraded?: boolean;
   terminalShortCircuit?: boolean;
   exhausted?: boolean;
   preferenceMatch?: PreferenceMatchSummary | null;

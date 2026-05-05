@@ -1446,6 +1446,82 @@ void main() {
     );
 
     test(
+      'Hard-Region Bludenz erlaubt bezahlten User-Demand-Learning-Job',
+      () async {
+        final coverages = <RoutePoolCoverage>[];
+        final jobs = <RouteSeedJob>[];
+        final service = RoutePoolService(
+          inMemoryRegions: [
+            _region(
+              countryCode: 'AT',
+              admin1Name: 'Vorarlberg',
+              admin2Name: 'Bludenz',
+              cityCluster: 'Bludenz',
+              centerLat: 47.1548,
+              centerLng: 9.8220,
+              fallbackRadiusKm: 35,
+              difficultyLevel: 'hard',
+              hardRegionStatus: 'curated_needed',
+              bootstrapEnabled: false,
+              curatedSeedPreferred: true,
+              defaultTargetPoolSize: 8,
+              defaultMaxPoolSize: 10,
+              healthyThreshold: 4,
+              thinThreshold: 1,
+              seedBudgetUnits: 0,
+              seedCooldownMinutes: 180,
+            ),
+          ],
+          inMemoryCoverage: coverages,
+          inMemorySeedJobs: jobs,
+          inMemoryCandidates: <RoutePoolCandidate>[],
+          inMemoryRoutes: const [],
+        );
+
+        final first = await service.ensureCoverageForRequest(
+          userLat: 47.1548,
+          userLng: 9.8220,
+          distanceBucket: 50,
+          style: 'Sport Mode',
+          avoidHighways: true,
+          routeType: 'ROUND_TRIP',
+          subscriptionTier: 'basic',
+          createSeedJob: true,
+          preferredCountryCode: 'AT',
+          preferredAdmin1Name: 'Vorarlberg',
+          preferredAdmin2Name: 'Bludenz',
+          preferredCityCluster: 'Bludenz',
+        );
+        final second = await service.ensureCoverageForRequest(
+          userLat: 47.1548,
+          userLng: 9.8220,
+          distanceBucket: 50,
+          style: 'Sport Mode',
+          avoidHighways: true,
+          routeType: 'ROUND_TRIP',
+          subscriptionTier: 'basic',
+          createSeedJob: true,
+          preferredCountryCode: 'AT',
+          preferredAdmin1Name: 'Vorarlberg',
+          preferredAdmin2Name: 'Bludenz',
+          preferredCityCluster: 'Bludenz',
+        );
+
+        expect(first.seedJobCreated, isTrue);
+        expect(first.bootstrapPending, isTrue);
+        expect(first.seedJobStatus, 'queued');
+        expect(jobs, hasLength(1));
+        expect(jobs.single.jobKind, 'user_demand_learning');
+        expect(jobs.single.maxAttempts, 1);
+        expect(jobs.single.maxMapboxCalls, lessThanOrEqualTo(6));
+        expect(jobs.single.seedBudgetUnits, greaterThanOrEqualTo(1));
+        expect(second.seedJobCreated, isFalse);
+        expect(second.duplicateJobPrevented, isTrue);
+        expect(jobs, hasLength(1));
+      },
+    );
+
+    test(
       'Hard-Region Bludenz mit wenig Bestand bleibt hard_region_thin statt healthy',
       () async {
         final service = RoutePoolService(

@@ -37,6 +37,7 @@ interface SeedJob {
   seed_cooldown_minutes?: number;
   max_mapbox_calls?: number;
   mapbox_calls_used?: number;
+  job_kind?: string | null;
   verified_inserted_count?: number;
   candidate_inserted_count?: number;
   daily_attempt_budget?: number;
@@ -251,14 +252,16 @@ async function processJob(job: SeedJob): Promise<void> {
     await failJob(job, "route_region_missing", false);
     return;
   }
-  if (region.bootstrap_enabled === false) {
+  const userDemandLearningJob = job.job_kind === "user_demand_learning";
+  if (region.bootstrap_enabled === false && !userDemandLearningJob) {
     await markCuratedNeeded(job, region, "bootstrap_disabled");
     return;
   }
   if (
     region.difficulty_level === "hard" &&
     (region.curated_seed_preferred === true ||
-      region.hard_region_status === "curated_needed")
+      region.hard_region_status === "curated_needed") &&
+    !userDemandLearningJob
   ) {
     await markCuratedNeeded(job, region, "hard_region_curated_needed");
     return;

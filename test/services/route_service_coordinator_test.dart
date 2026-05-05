@@ -2071,10 +2071,15 @@ void main() {
       );
 
       expect(hardInvoker.callCount, greaterThan(0));
-      expect(jobs, isEmpty);
+      expect(jobs, hasLength(1));
+      expect(jobs.single.jobKind, 'user_demand_learning');
+      expect(jobs.single.maxAttempts, 1);
+      expect(jobs.single.maxMapboxCalls, lessThanOrEqualTo(6));
+      expect(jobs.single.seedBudgetUnits, greaterThanOrEqualTo(1));
       expect(candidates, hasLength(1));
       expect(candidates.single.candidateSource, 'basic_live');
       expect(route.edgeMeta['hard_region_exploration_used'], true);
+      expect(route.edgeMeta['seed_job_created'], true);
       expect(
         route.edgeMeta['source_decision']?.toString(),
         contains('hard_region_live_exploration'),

@@ -624,12 +624,19 @@ class RoutePoolService {
     if (createSeedJob && seedJob != null && _seedJobBlocksNewJob(seedJob)) {
       duplicateJobPrevented = true;
     }
+    final allowUserDemandLearningJob = _allowUserDemandLearningJob(
+      policy: policy,
+      routeType: routeType,
+      subscriptionTier: subscriptionTier,
+      createSeedJob: createSeedJob,
+    );
     final shouldCreateSeedJob =
         createSeedJob &&
         _shouldCreateSeedJob(
           policy: policy,
           coverage: coverage,
           existingSeedJob: seedJob,
+          allowUserDemandLearningJob: allowUserDemandLearningJob,
         );
     if (shouldCreateSeedJob) {
       final jobResult = await _ensureSeedJob(
@@ -645,6 +652,7 @@ class RoutePoolService {
           requiredCombination: requiredCombination,
           currentVerifiedCount: coverage.currentVerifiedCount,
         ),
+        userDemandLearningJob: allowUserDemandLearningJob,
       );
       seedJob = jobResult.job;
       seedJobCreated = jobResult.created;
@@ -2281,6 +2289,7 @@ class RoutePoolService {
     required String routeType,
     required String subscriptionTier,
     int? priority,
+    bool userDemandLearningJob = false,
   }) async {
     final now = DateTime.now().toUtc();
     final existing = await _loadSeedJob(
@@ -2303,11 +2312,23 @@ class RoutePoolService {
         difficultyLevel: policy.difficultyLevel,
         hardRegionStatus: policy.hardRegionStatus,
         lastRequestedAt: now,
-        seedBudgetUnits: policy.seedBudgetUnits,
+        seedBudgetUnits: userDemandLearningJob
+            ? math.max(1, policy.seedBudgetUnits)
+            : policy.seedBudgetUnits,
         seedCooldownMinutes: policy.seedCooldownMinutes,
         priority: priority ?? existing.priority,
-        maxAttempts: policy.isHard ? 1 : existing.maxAttempts,
+        maxAttempts: userDemandLearningJob
+            ? 1
+            : policy.isHard
+            ? 1
+            : existing.maxAttempts,
+        maxMapboxCalls: userDemandLearningJob
+            ? math.min(6, math.max(4, existing.maxMapboxCalls))
+            : existing.maxMapboxCalls,
         triggeredByTier: subscriptionTier,
+        jobKind: userDemandLearningJob
+            ? 'user_demand_learning'
+            : existing.jobKind,
       );
       return _SeedJobUpsertResult(
         job: await _saveSeedJob(restarted),
@@ -2330,11 +2351,19 @@ class RoutePoolService {
       difficultyLevel: policy.difficultyLevel,
       hardRegionStatus: policy.hardRegionStatus,
       priority: priority ?? _priorityForTier(subscriptionTier),
-      maxAttempts: policy.isHard ? 1 : 3,
+      maxAttempts: userDemandLearningJob
+          ? 1
+          : policy.isHard
+          ? 1
+          : 3,
       lastRequestedAt: now,
-      seedBudgetUnits: policy.seedBudgetUnits,
+      seedBudgetUnits: userDemandLearningJob
+          ? math.max(1, policy.seedBudgetUnits)
+          : policy.seedBudgetUnits,
       seedCooldownMinutes: policy.seedCooldownMinutes,
+      maxMapboxCalls: userDemandLearningJob ? 6 : 8,
       triggeredByTier: subscriptionTier,
+      jobKind: userDemandLearningJob ? 'user_demand_learning' : 'seed_healing',
     );
     return _SeedJobUpsertResult(
       job: await _saveSeedJob(job),
@@ -2762,6 +2791,7 @@ class RoutePoolService {
     required _CoveragePolicy policy,
     required RoutePoolCoverage coverage,
     required RouteSeedJob? existingSeedJob,
+    bool allowUserDemandLearningJob = false,
   }) {
     if (_coverageMeetsMinimum(policy: policy, coverage: coverage)) {
       return false;
@@ -2770,9 +2800,11 @@ class RoutePoolService {
     if (coverage.currentCandidateCount >= policy.candidateBufferLimit) {
       return false;
     }
-    if (!policy.bootstrapEnabled) return false;
-    if (policy.isHard && policy.curatedSeedPreferred) return false;
-    if (policy.seedBudgetUnits <= 0) return false;
+    if (!allowUserDemandLearningJob) {
+      if (!policy.bootstrapEnabled) return false;
+      if (policy.isHard && policy.curatedSeedPreferred) return false;
+      if (policy.seedBudgetUnits <= 0) return false;
+    }
     if (existingSeedJob == null) return true;
     if (_seedJobBlocksNewJob(existingSeedJob)) return false;
     if (existingSeedJob.failureCount >= existingSeedJob.maxAttempts) {
@@ -2782,6 +2814,22 @@ class RoutePoolService {
       return false;
     }
     return true;
+  }
+
+  static bool _allowUserDemandLearningJob({
+    required _CoveragePolicy policy,
+    required String routeType,
+    required String subscriptionTier,
+    required bool createSeedJob,
+  }) {
+    if (!createSeedJob) return false;
+    if (routeType != 'ROUND_TRIP') return false;
+    final normalizedTier = subscriptionTier.trim().toLowerCase();
+    if (normalizedTier == 'free' || normalizedTier.isEmpty) return false;
+    return !policy.bootstrapEnabled ||
+        policy.isHard ||
+        policy.curatedSeedPreferred ||
+        policy.hardRegionStatus == 'curated_needed';
   }
 
   static bool _seedJobBlocksNewJob(RouteSeedJob seedJob) {

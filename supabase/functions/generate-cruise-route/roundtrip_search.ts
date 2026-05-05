@@ -995,6 +995,7 @@ export async function searchBestRoundTripRoute({
       ? cleanup.cleanedDistanceKm
       : quality.actualDistanceKm;
     return {
+      ...quality,
       passed: false,
       reason: cleanup.reason,
       overlapPercent: quality.overlapPercent,
@@ -1039,26 +1040,117 @@ export async function searchBestRoundTripRoute({
       score: Math.max(0, quality.score + ignorePenalty - preferenceReward),
     };
   };
+  const requestedStyleLabel = mode ?? "Standard";
+  const deliveredStyleForSafeFallback = (
+    quality: RouteQualityEvaluation,
+  ): string => {
+    if (mode !== "Kurvenjagd") return requestedStyleLabel;
+    const curveDensity = quality.styleMetrics?.curveDensityPer50Km ?? 0;
+    return curveDensity >= 80 ? "relaxed_curvy" : "sport_like";
+  };
+  const safeFallbackBounds = (): { minKm: number; maxKm: number } | null => {
+    if (targetDistanceKm <= 60) return { minKm: 40, maxKm: 65 };
+    if (targetDistanceKm <= 85) return { minKm: 62, maxKm: 90 };
+    if (targetDistanceKm <= 115) return { minKm: 85, maxKm: 118 };
+    return null;
+  };
+  const isHardRejectReason = (reason: string): boolean => {
+    const normalized = reason.toLowerCase();
+    return normalized.includes("u_turn") ||
+      normalized.includes("dead_end") ||
+      normalized.includes("route_stub") ||
+      normalized.includes("out_and_back") ||
+      normalized.startsWith("hooks=") ||
+      normalized.startsWith("center_return=") ||
+      normalized.startsWith("cleanup_u_turn");
+  };
+  const isSoftFallbackReason = (reason: string): boolean => {
+    const normalized = reason.toLowerCase();
+    return normalized.startsWith("short_sport_distance=") ||
+      normalized.startsWith("short_sport_shape=") ||
+      normalized.startsWith("short_sport_overlap=") ||
+      normalized.startsWith("distance=") ||
+      normalized.startsWith("cleanup_distance=");
+  };
+  const applySafeFallbackTier = (
+    quality: RouteQualityEvaluation,
+    selectedExclude: string,
+  ): RouteQualityEvaluation => {
+    if (quality.tier !== "rejected") return quality;
+    const bounds = safeFallbackBounds();
+    if (bounds == null) return quality;
+    if (
+      avoidHighways &&
+      !normalizeExcludeParams(selectedExclude).includes("motorway")
+    ) {
+      return quality;
+    }
+    if (quality.hasUTurn || isHardRejectReason(quality.reason)) return quality;
+    if (!isSoftFallbackReason(quality.reason)) return quality;
+    const shape = quality.shapeMetrics;
+    if (shape == null) return quality;
+    if (
+      quality.actualDistanceKm < bounds.minKm ||
+      quality.actualDistanceKm > bounds.maxKm
+    ) {
+      return quality;
+    }
+    const loopnessMin = mode === "Kurvenjagd" ? 52 : 56;
+    const spurMax = mode === "Kurvenjagd" ? 30 : 26;
+    const outAndBackMax = mode === "Kurvenjagd" ? 28 : 24;
+    const deadEndMax = mode === "Kurvenjagd" ? 28 : 24;
+    const cleanEnough =
+      shape.loopnessScore >= loopnessMin &&
+      shape.spurScore <= spurMax &&
+      shape.outAndBackScore <= outAndBackMax &&
+      shape.deadEndArmScore <= deadEndMax &&
+      shape.geometricUTurnCount <= 0 &&
+      shape.cleanupUTurnCount <= 0 &&
+      shape.centerReentryCount <= 1 &&
+      shape.oppositeOverlapPercent <= 12 &&
+      shape.cleanupRemovedPercent <= 18 &&
+      shape.cleanupDistanceRetentionRatio >= 0.84 &&
+      quality.overlapPercent <= 28;
+    if (!cleanEnough) return quality;
+    const deliveredStyle = deliveredStyleForSafeFallback(quality);
+    return {
+      ...quality,
+      passed: true,
+      reason: `safe_fallback:${quality.reason}`,
+      tier: "acceptable",
+      score: Math.min(quality.score, 390),
+      safeFallbackUsed: true,
+      safeFallbackReason: quality.reason,
+      requestedStyle: requestedStyleLabel,
+      deliveredStyle,
+      styleDowngraded: deliveredStyle !== requestedStyleLabel,
+    };
+  };
   const evaluateRouteAlternative = (
     route: any,
     qualityDistanceConfig: DistanceConfig,
+    selectedExclude: string,
   ): RouteQualityEvaluation =>
-    applyPreferenceScoring(
-      route,
-      applyCleanupGate(
+    applySafeFallbackTier(
+      applyPreferenceScoring(
         route,
-        evaluateRouteQuality(route, "ROUND_TRIP", {
-          targetDistanceKm,
-          distanceConfig: qualityDistanceConfig,
-          mode,
-          avoidHighways,
-        }),
-        qualityDistanceConfig,
+        applyCleanupGate(
+          route,
+          evaluateRouteQuality(route, "ROUND_TRIP", {
+            targetDistanceKm,
+            distanceConfig: qualityDistanceConfig,
+            mode,
+            avoidHighways,
+          }),
+          qualityDistanceConfig,
+        ),
       ),
+      selectedExclude,
     );
   const chooseBestRouteAlternative = (
     routes: any[],
     qualityDistanceConfig: DistanceConfig,
+    selectedExclude: string,
     options?: {
       maxCoordinateCount?: number;
       geometryRejectReason?: string;
@@ -1084,6 +1176,7 @@ export async function searchBestRoundTripRoute({
       const optionQuality = evaluateRouteAlternative(
         routeOption,
         qualityDistanceConfig,
+        selectedExclude,
       );
       if (
         selectedQuality == null ||
@@ -1146,6 +1239,7 @@ export async function searchBestRoundTripRoute({
     const selection = chooseBestRouteAlternative(
       [fetchResult.route],
       context.distanceConfig,
+      context.exclude,
       {
         maxCoordinateCount: maxHydratedRouteCoordinates,
         geometryRejectReason: "guidance_geometry_too_large",
@@ -1389,6 +1483,7 @@ export async function searchBestRoundTripRoute({
       const primarySelection = chooseBestRouteAlternative(
         primaryRoutes,
         phase.distanceConfig,
+        phase.exclude,
       );
       if (primarySelection == null) {
         rejectedCandidates += 1;
@@ -1441,6 +1536,7 @@ export async function searchBestRoundTripRoute({
         const relaxedSelection = chooseBestRouteAlternative(
           relaxedRoutes,
           phase.distanceConfig,
+          relaxedPhaseExclude,
         );
         if (relaxedSelection != null) {
           const relaxedQuality = relaxedSelection.quality;
@@ -1755,6 +1851,14 @@ export async function searchBestRoundTripRoute({
         fingerprintHint: normalizedFingerprintHint,
         duplicateSkips,
         emergencyDuplicateUsed: true,
+        safeFallbackUsed:
+          bestEmergencyDuplicate.quality.safeFallbackUsed === true,
+        safeFallbackReason:
+          bestEmergencyDuplicate.quality.safeFallbackReason ?? null,
+        requestedStyle: bestEmergencyDuplicate.quality.requestedStyle ?? null,
+        deliveredStyle: bestEmergencyDuplicate.quality.deliveredStyle ?? null,
+        styleDowngraded:
+          bestEmergencyDuplicate.quality.styleDowngraded === true,
         preferenceMatch: bestEmergencyDuplicate.quality == null ? null : {
           matchedPreferenceCount:
             bestEmergencyDuplicate.quality.matchedPreferenceCount ?? 0,
@@ -1804,10 +1908,10 @@ export async function searchBestRoundTripRoute({
       route: any;
       quality: RouteQualityEvaluation;
     } | null = null;
-    const hydrationQueue = acceptedRouteCandidates
+      const hydrationQueue = acceptedRouteCandidates
       .slice()
       .sort((a, b) => a.quality.score - b.quality.score)
-      .slice(0, avoidHighwaysRoundTripSearch ? 2 : 2);
+      .slice(0, avoidHighwaysRoundTripSearch ? 4 : 2);
     for (const candidate of hydrationQueue) {
       const hydratedCandidate = await hydrateGuidanceRoute(
         candidate.plan,
@@ -1901,6 +2005,11 @@ export async function searchBestRoundTripRoute({
     fingerprintHint: normalizedFingerprintHint,
     duplicateSkips,
     emergencyDuplicateUsed: false,
+    safeFallbackUsed: bestQuality.safeFallbackUsed === true,
+    safeFallbackReason: bestQuality.safeFallbackReason ?? null,
+    requestedStyle: bestQuality.requestedStyle ?? null,
+    deliveredStyle: bestQuality.deliveredStyle ?? null,
+    styleDowngraded: bestQuality.styleDowngraded === true,
     terminalShortCircuit: balancedTerminalShortCircuit,
     preferenceMatch: hasPreferenceAreas
       ? {

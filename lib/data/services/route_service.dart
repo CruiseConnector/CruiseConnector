@@ -5101,7 +5101,10 @@ class RouteService {
       RouteQualityTier.acceptable => 72.0,
       RouteQualityTier.rejected => 40.0,
     };
-    final temporaryCandidate = tier == RouteQualityTier.acceptable;
+    final temporaryCandidate =
+        tier == RouteQualityTier.acceptable ||
+        route.edgeMeta['safe_fallback_used'] == true ||
+        route.edgeMeta['temporary_candidate'] == true;
     lastRouteTemporaryCandidate = temporaryCandidate;
     final routePayload = <String, dynamic>{
       ...route.edgeMeta,

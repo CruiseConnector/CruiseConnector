@@ -116,6 +116,11 @@ function buildNoRouteSearchMeta(
     live_fill_exhausted: roundTripSearch?.exhausted == true,
     live_fill_emergency_duplicate_used:
       roundTripSearch?.emergencyDuplicateUsed === true,
+    safe_fallback_used: roundTripSearch?.safeFallbackUsed === true,
+    safe_fallback_reason: roundTripSearch?.safeFallbackReason ?? null,
+    requested_style: roundTripSearch?.requestedStyle ?? null,
+    delivered_style: roundTripSearch?.deliveredStyle ?? null,
+    style_downgraded: roundTripSearch?.styleDowngraded === true,
     live_fill_reject_reasons: topRejectReasons,
     live_fill_search_phases: roundTripSearch?.searchPhases ?? [],
     live_fill_last_plan_labels: (roundTripSearch?.lastPlanLabels ?? []).slice(
@@ -1897,7 +1902,29 @@ Deno.serve(async (req) => {
     }
 
     // ── Quality gate: Route muss echte Straßengeometrie haben ──
-    const finalQuality = evaluateRouteQuality(route, currentRouteType, {
+    const roundTripSafeFallbackUsed = currentRouteType === "ROUND_TRIP" &&
+      planning_type !== "Wegpunkte" &&
+      roundTripSearch?.safeFallbackUsed === true &&
+      roundTripSearch.quality?.safeFallbackUsed === true;
+    const isSafeFallbackFinalReject = (reason: string): boolean => {
+      const normalized = reason.toLowerCase();
+      if (
+        normalized.includes("u_turn") ||
+        normalized.includes("dead_end") ||
+        normalized.includes("route_stub") ||
+        normalized.includes("out_and_back") ||
+        normalized.startsWith("hooks=") ||
+        normalized.startsWith("center_return=")
+      ) {
+        return false;
+      }
+      return normalized.startsWith("short_sport_distance=") ||
+        normalized.startsWith("short_sport_shape=") ||
+        normalized.startsWith("short_sport_overlap=") ||
+        normalized.startsWith("distance=") ||
+        normalized.startsWith("cleanup_distance=");
+    };
+    let finalQuality = evaluateRouteQuality(route, currentRouteType, {
       targetDistanceKm: currentRouteType === "ROUND_TRIP"
         ? planning_type === "Wegpunkte"
           ? undefined
@@ -1918,6 +1945,14 @@ Deno.serve(async (req) => {
         ? normalizedUserWaypointsForMeta
         : undefined,
     });
+    if (
+      roundTripSafeFallbackUsed &&
+      !finalQuality.passed &&
+      isSafeFallbackFinalReject(finalQuality.reason) &&
+      roundTripSearch?.quality != null
+    ) {
+      finalQuality = roundTripSearch.quality;
+    }
     const finalCleanup = currentRouteType === "ROUND_TRIP" &&
         planning_type !== "Wegpunkte"
       ? evaluateRouteCleanupGate(route, currentRouteType, {
@@ -1994,7 +2029,13 @@ Deno.serve(async (req) => {
           : `Route-Qualität zu niedrig (${finalQuality.reason}). Bitte erneut versuchen.`,
       );
     }
-    if (finalCleanup?.passed === false) {
+    if (
+      finalCleanup?.passed === false &&
+      !(
+        roundTripSafeFallbackUsed &&
+        isSafeFallbackFinalReject(finalCleanup.reason)
+      )
+    ) {
       requestDebugMeta = buildNoRouteSearchMeta(
         roundTripSearch,
         finalCleanup.reason,
@@ -2318,6 +2359,12 @@ Deno.serve(async (req) => {
             ? "exclude_motorway"
             : "allowed_not_required",
           ...(movingStartMeta ?? {}),
+          safe_fallback_used: roundTripSearch?.safeFallbackUsed === true,
+          safe_fallback_reason: roundTripSearch?.safeFallbackReason ?? null,
+          temporary_candidate: roundTripSearch?.safeFallbackUsed === true,
+          requested_style: roundTripSearch?.requestedStyle ?? mode ?? null,
+          delivered_style: roundTripSearch?.deliveredStyle ?? mode ?? null,
+          style_downgraded: roundTripSearch?.styleDowngraded === true,
           quality_tier: finalQuality.tier,
           quality_reason: finalQuality.reason,
           selected_style: mode ?? null,
