@@ -284,7 +284,7 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
                     if (widget.belowMinimum) ...[
                       const SizedBox(height: 12),
                       const Text(
-                        'Unter 10% Fahranteil: Route kann gespeichert werden, XP wird fairerweise nicht gutgeschrieben.',
+                        'Unter 20% Fahranteil: Route kann gespeichert werden, XP wird fairerweise nicht gutgeschrieben.',
                         style: TextStyle(
                           color: Color(0xFFA8AFBC),
                           fontSize: 11,

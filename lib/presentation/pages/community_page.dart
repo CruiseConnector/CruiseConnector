@@ -7,6 +7,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/application/providers/community_provider.dart';
 import 'package:cruise_connect/application/providers/route_bookmark_provider.dart';
+import 'package:cruise_connect/core/deep_links.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/presentation/pages/create_post_page.dart';
 import 'package:cruise_connect/presentation/pages/create_group_page.dart';
@@ -52,6 +53,7 @@ class _CommunityPageState extends State<CommunityPage>
   bool _groupRadiusEnabled = false;
   Position? _userPosition;
   RealtimeChannel? _postsChannel;
+  RealtimeChannel? _groupsChannel;
   RealtimeChannel? _notificationsChannel;
   final Set<String> _expandedGroupNames = {};
 
@@ -75,6 +77,7 @@ class _CommunityPageState extends State<CommunityPage>
   @override
   void dispose() {
     _postsChannel?.unsubscribe();
+    _groupsChannel?.unsubscribe();
     _notificationsChannel?.unsubscribe();
     _tabController.dispose();
     _searchController.dispose();
@@ -112,6 +115,7 @@ class _CommunityPageState extends State<CommunityPage>
   ) {
     final query = _groupSearchQuery.trim().toLowerCase();
     return groups.where((g) {
+      if (g['is_active'] == true) return false;
       // Textsuche: Gruppen-Name + Owner/Mitglieder-Username
       if (query.isNotEmpty) {
         final name = (g['name'] as String? ?? '').toLowerCase();
@@ -150,6 +154,23 @@ class _CommunityPageState extends State<CommunityPage>
             );
             _loadData();
           },
+        )
+        .subscribe();
+
+    // Echtzeit-Updates fuer Gruppen-Listen.
+    _groupsChannel = db
+        .channel('public:groups_overview')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'groups',
+          callback: (_) => _loadData(),
+        )
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'group_members',
+          callback: (_) => _loadData(),
         )
         .subscribe();
 
@@ -951,7 +972,7 @@ class _CommunityPageState extends State<CommunityPage>
       profile,
       fallbackUserId: post['user_id'] as String?,
     );
-    final link = 'https://cruiseconnector.at/post/$postId';
+    final link = CruiseDeepLinks.postUri(postId.toString()).toString();
     Share.share(
       'Post von @$name auf CruiseConnect: $link',
       subject: 'CruiseConnect Post',
@@ -973,7 +994,7 @@ class _CommunityPageState extends State<CommunityPage>
 
   Widget _buildGroupsCarousel() {
     return _buildCarouselSection(
-      title: 'Aktive Gruppen entdecken',
+      title: 'Gruppen entdecken',
       height: 140,
       itemCount: _discoverGroups.length,
       itemWidth: 220,
@@ -1035,8 +1056,7 @@ class _CommunityPageState extends State<CommunityPage>
                 ),
                 GestureDetector(
                   onTap: () async {
-                    await SocialService.joinGroup(group['id']);
-                    _loadData();
+                    await _joinVisibleGroup(group['id'] as String);
                   },
                   child: Container(
                     padding: const EdgeInsets.symmetric(
@@ -1086,22 +1106,12 @@ class _CommunityPageState extends State<CommunityPage>
       child: Column(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          GestureDetector(
+          UserAvatar(
+            name: name,
+            avatarUrl: avatar,
+            radius: 24,
+            backgroundColor: const Color(0xFF0B0E14),
             onTap: () => _openUserProfile(id, name),
-            child: CircleAvatar(
-              radius: 24,
-              backgroundColor: const Color(0xFF0B0E14),
-              backgroundImage: avatar != null ? NetworkImage(avatar) : null,
-              child: avatar == null
-                  ? Text(
-                      name.characters.first.toUpperCase(),
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    )
-                  : null,
-            ),
           ),
           Text(
             name,
@@ -2068,8 +2078,7 @@ class _CommunityPageState extends State<CommunityPage>
                 else
                   GestureDetector(
                     onTap: () async {
-                      await SocialService.joinGroup(group['id']);
-                      _loadData();
+                      await _joinVisibleGroup(group['id'] as String);
                     },
                     child: Container(
                       padding: const EdgeInsets.symmetric(
@@ -2405,10 +2414,11 @@ class _CommunityPageState extends State<CommunityPage>
               if (isPublic) {
                 return ElevatedButton(
                   onPressed: () async {
-                    await SocialService.joinGroup(group['id'] as String);
-                    if (!context.mounted) return;
+                    final joined = await _joinVisibleGroup(
+                      group['id'] as String,
+                    );
+                    if (!joined || !context.mounted) return;
                     Navigator.pop(context);
-                    await _loadData();
                     if (!context.mounted) return;
                     Navigator.push(
                       context,
@@ -2463,6 +2473,25 @@ class _CommunityPageState extends State<CommunityPage>
       SocialService.hasPendingJoinRequest(groupId),
     ]);
     return {'isMember': results[0], 'hasPending': results[1]};
+  }
+
+  Future<bool> _joinVisibleGroup(String groupId) async {
+    try {
+      await SocialService.joinGroup(groupId);
+      await _loadData();
+      return true;
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Beitreten nicht moeglich: $e'),
+            backgroundColor: const Color(0xFF1C1F26),
+          ),
+        );
+        await _loadData();
+      }
+      return false;
+    }
   }
 
   // ── Notifications ─────────────────────────────────────────────────────
@@ -2716,7 +2745,8 @@ class _CommunityPageState extends State<CommunityPage>
     if (type == 'group_invite' && referenceId != null) {
       return GestureDetector(
         onTap: () async {
-          await SocialService.joinGroup(referenceId);
+          final joined = await _joinVisibleGroup(referenceId);
+          if (!joined) return;
           if (!sheetContext.mounted) return;
           Navigator.pop(sheetContext);
           if (mounted) {

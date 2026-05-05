@@ -1165,15 +1165,6 @@ class SocialService {
     final groupIds = <String>{
       ...(memberships as List).map((m) => m['group_id'] as String),
     };
-
-    // Owner-Gruppen zusätzlich einsammeln — falls der Owner-Trigger
-    // (set_owner_on_group_insert) mal nicht gegriffen hat.
-    final ownGroups = await _db
-        .from('groups')
-        .select('id')
-        .eq('created_by', uid);
-    groupIds.addAll((ownGroups as List).map((g) => g['id'] as String));
-
     if (groupIds.isEmpty) return [];
 
     var q = _db
@@ -1206,11 +1197,6 @@ class SocialService {
     final groupIds = <String>{
       ...(memberships as List).map((m) => m['group_id'] as String),
     };
-    final ownGroups = await _db
-        .from('groups')
-        .select('id')
-        .eq('created_by', uid);
-    groupIds.addAll((ownGroups as List).map((g) => g['id'] as String));
     if (groupIds.isEmpty) return [];
 
     final groups = await _db
@@ -1247,6 +1233,7 @@ class SocialService {
 
     // Ausfiltern: Gruppen in denen ich Mitglied ODER Owner bin.
     final filtered = list.where((g) {
+      if (g['is_active'] == true) return false;
       if (g['created_by'] == uid) return false;
       final members = (g['group_members'] as List?) ?? const [];
       return !members.any((m) => (m as Map)['user_id'] == uid);
@@ -1319,22 +1306,27 @@ class SocialService {
 
     final group = await _db
         .from('groups')
-        .select('created_by')
+        .select('created_by, is_active, group_members(user_id)')
         .eq('id', groupId)
         .maybeSingle();
     final creatorId = (group as Map?)?['created_by'] as String?;
+    final isActive = (group as Map?)?['is_active'] == true;
+    final members = ((group as Map?)?['group_members'] as List?) ?? const [];
+    final isAlreadyMember = members.any((m) => (m as Map)['user_id'] == uid);
     final blocked = await getBlockedAndBlockerIds();
     if (creatorId != null && blocked.contains(creatorId)) {
       throw Exception('Diese Gruppe ist nicht verfuegbar.');
     }
+    if (isActive && !isAlreadyMember) {
+      throw Exception('Diese Fahrt laeuft bereits.');
+    }
 
-    final wasMember = await isMember(groupId);
     await _db.from('group_members').upsert({
       'group_id': groupId,
       'user_id': uid,
       'ride_role': 'passenger',
     });
-    if (!wasMember) {
+    if (!isAlreadyMember) {
       await _notifyGroupOwners(groupId, type: 'group_joined', fromUserId: uid);
     }
   }
@@ -1417,7 +1409,9 @@ class SocialService {
     try {
       final row = await _db
           .from('groups')
-          .select('*, profiles:created_by(id, username, email)')
+          .select(
+            '*, group_members(user_id), profiles:created_by(id, username, email)',
+          )
           .eq('invite_code', code)
           .maybeSingle();
       if (row == null) return null;
@@ -1425,6 +1419,13 @@ class SocialService {
       final creatorId = map['created_by'] as String?;
       final blocked = await getBlockedAndBlockerIds();
       if (creatorId != null && blocked.contains(creatorId)) return null;
+      if (map['is_active'] == true) {
+        final uid = _userId;
+        final members = (map['group_members'] as List?) ?? const [];
+        final isMember =
+            uid != null && members.any((m) => (m as Map)['user_id'] == uid);
+        if (!isMember) return null;
+      }
       return map;
     } catch (e) {
       debugPrint('[SocialService] findGroupByCode Fehler: $e');
@@ -1440,6 +1441,14 @@ class SocialService {
   }) async {
     final uid = _userId;
     if (uid == null) return;
+    final group = await _db
+        .from('groups')
+        .select('is_active')
+        .eq('id', groupId)
+        .maybeSingle();
+    if ((group as Map?)?['is_active'] == true) {
+      throw Exception('Diese Fahrt laeuft bereits.');
+    }
     await _db.from('group_join_requests').upsert({
       'group_id': groupId,
       'user_id': uid,

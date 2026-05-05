@@ -20,6 +20,7 @@ class SavedRoute {
     this.xpMultiplier,
     this.xpStreakDays,
     this.xpAwarded,
+    this.completedAtEnd = false,
   });
 
   final String id;
@@ -41,6 +42,7 @@ class SavedRoute {
   final double? xpMultiplier;
   final int? xpStreakDays;
   final int? xpAwarded;
+  final bool completedAtEnd;
 
   factory SavedRoute.fromJson(Map<String, dynamic> json) {
     return SavedRoute(
@@ -65,6 +67,7 @@ class SavedRoute {
       xpMultiplier: (json['xp_multiplier'] as num?)?.toDouble(),
       xpStreakDays: (json['xp_streak_days'] as num?)?.toInt(),
       xpAwarded: (json['xp_awarded'] as num?)?.toInt(),
+      completedAtEnd: json['completed_at_end'] == true,
     );
   }
 
@@ -85,7 +88,31 @@ class SavedRoute {
     final ratio = completionRatio;
     if (!isDrivenSession) return false;
     if (ratio == null) return true;
-    return ratio >= 0.10;
+    return ratio >= 0.20;
+  }
+
+  bool get isFullyCompleted {
+    if (!isDrivenSession) return false;
+    if (completedAtEnd) return true;
+    final ratio = completionRatio;
+    if (ratio == null) return true;
+    return ratio >= 1.0;
+  }
+
+  double get xpCreditProgressRatio {
+    final ratio = completionRatio;
+    if (!isDrivenSession) return 0.0;
+    if (ratio == null) return 1.0;
+    final safeRatio = ratio.clamp(0.0, 1.0);
+    final steps = ((safeRatio + 1e-9) / 0.20).floor().clamp(0, 5);
+    return steps / 5;
+  }
+
+  double get xpCreditedDistanceKm {
+    if (!isDrivenSession) return 0.0;
+    final planned = distanceTargetKm;
+    if (planned == null || planned <= 0) return actualDistanceKm;
+    return planned * xpCreditProgressRatio;
   }
 
   bool get isRecommendationEligible {
@@ -142,6 +169,7 @@ class SavedRoute {
       'xp_multiplier': xpMultiplier,
       'xp_streak_days': xpStreakDays,
       'xp_awarded': xpAwarded,
+      'completed_at_end': completedAtEnd,
     };
   }
 

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/presentation/pages/user_profile_page.dart';
+import 'package:cruise_connect/presentation/widgets/user_avatar.dart';
 
 /// Regex zum Parsen von `@username`-Tokens. Akzeptiert ASCII-Buchstaben,
 /// Ziffern, Unterstriche und Punkte (häufig in Usernames).
@@ -303,24 +304,11 @@ class _MentionTextFieldState extends State<MentionTextField> {
                           ),
                           child: Row(
                             children: [
-                              CircleAvatar(
+                              UserAvatar(
+                                name: username.isNotEmpty ? username : '?',
+                                avatarUrl: avatar,
                                 radius: 14,
                                 backgroundColor: AppAccentColors.accent,
-                                backgroundImage: avatar != null
-                                    ? NetworkImage(avatar)
-                                    : null,
-                                child: avatar == null
-                                    ? Text(
-                                        username.isNotEmpty
-                                            ? username[0].toUpperCase()
-                                            : '?',
-                                        style: const TextStyle(
-                                          color: Colors.white,
-                                          fontWeight: FontWeight.bold,
-                                          fontSize: 12,
-                                        ),
-                                      )
-                                    : null,
                               ),
                               const SizedBox(width: 10),
                               Expanded(

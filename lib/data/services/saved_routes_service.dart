@@ -211,6 +211,7 @@ class SavedRoutesService {
     double? xpMultiplier,
     int? xpStreakDays,
     int? xpAwarded,
+    bool completedAtEnd = false,
   }) async {
     final userId = _db.auth.currentUser?.id;
     if (userId == null) return;
@@ -248,6 +249,7 @@ class SavedRoutesService {
           ),
       'quality_tier': result.edgeMeta['quality_tier']?.toString(),
       'route_meta': result.edgeMeta,
+      'completed_at_end': completedAtEnd,
       if (xpDistance != null) 'xp_distance': xpDistance,
       if (xpCurveBonus != null) 'xp_curve_bonus': xpCurveBonus,
       if (xpStyleBonus != null) 'xp_style_bonus': xpStyleBonus,
@@ -268,6 +270,14 @@ class SavedRoutesService {
         row.remove('name');
         await _db.from('routes').insert(row);
         invalidateWeeklyTopRouteCache();
+      } else if (e.code == 'PGRST204' &&
+          e.message.contains('completed_at_end')) {
+        debugPrint(
+          '[SavedRoutes] completed_at_end-Spalte fehlt, speichere ohne Completion-Flag',
+        );
+        row.remove('completed_at_end');
+        await _db.from('routes').insert(row);
+        invalidateWeeklyTopRouteCache();
       } else if (e.code == 'PGRST204') {
         debugPrint(
           '[SavedRoutes] Route-Meta-Spalten fehlen, speichere ohne Meta: ${e.message}',
@@ -277,6 +287,7 @@ class SavedRoutesService {
           ..remove('route_fingerprint')
           ..remove('quality_tier')
           ..remove('route_meta')
+          ..remove('completed_at_end')
           ..remove('xp_distance')
           ..remove('xp_curve_bonus')
           ..remove('xp_style_bonus')

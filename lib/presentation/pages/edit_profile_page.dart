@@ -863,7 +863,13 @@ class _EditProfilePageState extends State<EditProfilePage> {
                   color: const Color(0xFF1C1F26),
                   image: _bannerUrl != null && _bannerUrl!.isNotEmpty
                       ? DecorationImage(
-                          image: NetworkImage(_bannerUrl!),
+                          image: UserAvatar.resizedNetworkImageProvider(
+                            context,
+                            _bannerUrl,
+                            width: MediaQuery.sizeOf(context).width,
+                            height: 220,
+                            maxCacheSize: 1600,
+                          )!,
                           fit: BoxFit.cover,
                         )
                       : null,

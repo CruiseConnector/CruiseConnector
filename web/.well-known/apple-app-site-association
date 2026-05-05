@@ -1,0 +1,22 @@
+{
+  "applinks": {
+    "details": [
+      {
+        "appIDs": [
+          "287J8RUYQA.com.vucko.cruiserconnect"
+        ],
+        "components": [
+          {
+            "/": "/",
+            "?": {
+              "post": "*"
+            }
+          },
+          {
+            "/": "/post/*"
+          }
+        ]
+      }
+    ]
+  }
+}

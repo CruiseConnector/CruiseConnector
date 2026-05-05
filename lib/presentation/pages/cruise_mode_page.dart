@@ -30,9 +30,10 @@ import 'package:cruise_connect/data/services/smart_reroute_engine.dart';
 import 'package:cruise_connect/data/services/saved_routes_service.dart';
 import 'package:cruise_connect/domain/models/mapbox_suggestion.dart';
 import 'package:cruise_connect/domain/models/route_maneuver.dart'
-    show RouteManeuver;
+    show RouteManeuver, RouteWindowMatch;
 import 'package:cruise_connect/domain/models/route_result.dart';
 import 'package:cruise_connect/domain/models/saved_route.dart';
+import 'package:cruise_connect/presentation/widgets/user_avatar.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/cruise_completion_dialog.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/cruise_maneuver_indicator.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/cruise_navigation_info_panel.dart';
@@ -263,9 +264,11 @@ class _CruiseModePageState extends State<CruiseModePage>
   _originalRouteDuration; // Ursprüngliche Gesamtdauer (für Zeitberechnung)
 
   // Schwellenwerte für anteilige Gutschrift
-  static const double _minProgressForCredit = 0.10; // 10% Minimum
+  static const double _minProgressForCredit = 0.20; // 20% Minimum
   static const double _minProgressForFullCredit =
-      0.95; // 95% = volle Gutschrift
+      1.0; // Nur echte Zielankunft bekommt volle Gutschrift
+  static const double _minProgressForAutomaticCompletion = 0.95;
+  static const double _roundTripFinishArmProgress = 0.80;
   int _lastDrawnRouteIndex =
       0; // Letzter Index bei dem die Route neu gezeichnet wurde
   double _distanceSinceLastRedraw = 0.0;
@@ -453,18 +456,26 @@ class _CruiseModePageState extends State<CruiseModePage>
       ),
       child: CircleAvatar(
         backgroundColor: color,
-        backgroundImage: m.avatarUrl != null
-            ? NetworkImage(m.avatarUrl!)
-            : null,
-        child: m.avatarUrl == null
-            ? Icon(
-                isDriver ? Icons.directions_car : Icons.person,
-                color: Colors.white,
-                size: 17,
-              )
-            : null,
+        foregroundImage: UserAvatar.avatarImageProvider(
+          context,
+          m.avatarUrl,
+          radius: 20,
+        ),
+        child: Icon(
+          isDriver ? Icons.directions_car : Icons.person,
+          color: Colors.white,
+          size: 17,
+        ),
       ),
     );
+  }
+
+  bool _hasFreshGroupMemberLocation(GroupMember m) {
+    if (m.currentLat == null || m.currentLng == null) return false;
+    final updatedAt = m.lastUpdatedAt;
+    if (updatedAt == null) return false;
+    return DateTime.now().toUtc().difference(updatedAt.toUtc()) <=
+        const Duration(seconds: 30);
   }
 
   Future<void> _uploadMyPosition() async {
@@ -1243,7 +1254,7 @@ class _CruiseModePageState extends State<CruiseModePage>
         if (widget.groupId != null && _groupMembers.isNotEmpty)
           MarkerLayer(
             markers: _groupMembers.values
-                .where((m) => m.currentLat != null && m.currentLng != null)
+                .where(_hasFreshGroupMemberLocation)
                 .map(
                   (m) => Marker(
                     point: LatLng(m.currentLat!, m.currentLng!),
@@ -3294,6 +3305,54 @@ class _CruiseModePageState extends State<CruiseModePage>
     _startIdlePositionStream(); // Idle-Stream wieder starten
   }
 
+  RouteWindowMatch _guardRoundTripFinishMatch(RouteWindowMatch match) {
+    if (!_isRoundTrip || _fullRouteCoordinates.length < 2) return match;
+
+    final lastIndex = _fullRouteCoordinates.length - 1;
+    final isFinishMatch = match.index >= lastIndex - 1;
+    if (!isFinishMatch) return match;
+
+    final currentProgress = _routeIndexProgress(
+      _currentRouteIndex,
+      _fullRouteCoordinates.length,
+    );
+    if (currentProgress >= _roundTripFinishArmProgress) return match;
+
+    debugPrint(
+      '[CruiseMode] Rundkurs-Zielmatch ignoriert: '
+      'currentProgress=${(currentProgress * 100).round()}%, '
+      'matchIndex=${match.index}/$lastIndex',
+    );
+    return RouteWindowMatch(
+      index: _currentRouteIndex,
+      distanceMeters: match.distanceMeters,
+    );
+  }
+
+  double _routeIndexProgress(int index, int coordinateLength) {
+    if (coordinateLength <= 1) return 1.0;
+    return (index / (coordinateLength - 1)).clamp(0.0, 1.0);
+  }
+
+  bool _hasDrivenEnoughForAutomaticCompletion() {
+    final plannedDistanceMeters =
+        _completionRouteResult?.distanceMeters ?? _originalRouteDistance;
+    if (plannedDistanceMeters == null || plannedDistanceMeters <= 0) {
+      return true;
+    }
+    final progress = (_totalDistanceDriven / plannedDistanceMeters).clamp(
+      0.0,
+      1.0,
+    );
+    if (progress >= _minProgressForAutomaticCompletion) return true;
+
+    debugPrint(
+      '[CruiseMode] Ziel erreicht, aber noch nicht genug Route gefahren: '
+      '${(progress * 100).round()}%',
+    );
+    return false;
+  }
+
   Future<void> _onLocationUpdate(geo.Position position) async {
     if (!mounted || _disposed) return;
 
@@ -3364,12 +3423,13 @@ class _CruiseModePageState extends State<CruiseModePage>
     if (!_isRouteConfirmed || _fullRouteCoordinates.length < 2) return;
 
     // Für Route-Matching die rohe Position verwenden (genauer für Snap-to-Route)
-    final match = findNearestInWindow(
+    final rawMatch = findNearestInWindow(
       position: position,
       coordinates: _fullRouteCoordinates,
       currentIndex: _currentRouteIndex,
       windowSize: 40,
     );
+    final match = _guardRoundTripFinishMatch(rawMatch);
 
     final offRouteCorridor = _isAccessLegActive
         ? 85.0
@@ -3474,7 +3534,7 @@ class _CruiseModePageState extends State<CruiseModePage>
         end[1],
         end[0],
       );
-      if (distToEnd <= 50.0) {
+      if (distToEnd <= 50.0 && _hasDrivenEnoughForAutomaticCompletion()) {
         _stopNavigationTracking();
         _stopSimulation(restartLiveTracking: false);
         _onRouteCompleted();
@@ -4374,15 +4434,22 @@ class _CruiseModePageState extends State<CruiseModePage>
     return adjustedIndex.clamp(0, coordinateLength - 1).toInt();
   }
 
-  RouteResult? _buildAdjustedCompletionResult() {
+  RouteResult? _buildAdjustedCompletionResult({bool completed = false}) {
     final result = _completionRouteResult;
     if (result == null) return null;
 
-    final drivenDistanceMeters = _totalDistanceDriven > 0
+    final plannedDistanceMeters =
+        _completionRouteResult?.distanceMeters ?? _originalRouteDistance;
+    final rawDrivenDistanceMeters = _totalDistanceDriven > 0
         ? _totalDistanceDriven
         : (result.distanceMeters ?? _routeDistance);
+    final drivenDistanceMeters =
+        completed && plannedDistanceMeters != null && plannedDistanceMeters > 0
+        ? plannedDistanceMeters
+        : rawDrivenDistanceMeters;
     final progressFraction = _calculateCompletionProgressFraction(
       drivenDistanceMeters,
+      completed: completed,
     );
     final adjustedDuration = _calculateAdjustedCompletionDuration(
       progressFraction,
@@ -4408,7 +4475,11 @@ class _CruiseModePageState extends State<CruiseModePage>
     );
   }
 
-  double _calculateCompletionProgressFraction(double? drivenDistanceMeters) {
+  double _calculateCompletionProgressFraction(
+    double? drivenDistanceMeters, {
+    bool completed = false,
+  }) {
+    if (completed) return 1.0;
     final plannedDistanceMeters =
         _completionRouteResult?.distanceMeters ?? _originalRouteDistance;
     if (drivenDistanceMeters == null ||
@@ -4470,11 +4541,11 @@ class _CruiseModePageState extends State<CruiseModePage>
   }
 
   RouteXpBreakdown _calculateCompletionXpBreakdown({
-    required double drivenKm,
+    required double creditedDistanceKm,
     required int curves,
   }) {
     return GamificationService.calculateRouteXpBreakdown(
-      distanceKm: drivenKm,
+      distanceKm: creditedDistanceKm,
       curves: curves,
       style: _selectedStyle,
       streakDays: _xpStreakDays,
@@ -4494,20 +4565,41 @@ class _CruiseModePageState extends State<CruiseModePage>
   _CruiseCompletionSnapshot _buildCompletionSnapshot({
     required bool isEarlyStop,
     required bool belowMinimum,
+    bool completed = false,
   }) {
-    final adjustedResult = _buildAdjustedCompletionResult();
+    final adjustedResult = _buildAdjustedCompletionResult(completed: completed);
     final drivenKm = adjustedResult?.distanceKm ?? 0;
     final progressFraction = _calculateCompletionProgressFraction(
       adjustedResult?.distanceMeters,
+      completed: completed,
     );
+    final plannedDistanceKm = _completionRouteResult?.distanceMeters != null
+        ? _completionRouteResult!.distanceMeters! / 1000
+        : drivenKm;
+    final creditProgressFraction =
+        GamificationService.completionCreditProgressStep(
+          progressFraction,
+          completed: completed,
+        );
+    final creditedDistanceKm =
+        GamificationService.creditedDistanceKmForProgress(
+          plannedDistanceKm: plannedDistanceKm,
+          progressRatio: progressFraction,
+          completed: completed,
+        );
     final previewCoordinates = adjustedResult?.coordinates ?? <List<double>>[];
+    final xpCoordinates = _buildCompletionCoordinates(creditProgressFraction);
     final curves = _estimateCompletionCurves(
       previewCoordinates,
       progressFraction,
     );
+    final xpCurves = _estimateCompletionCurves(
+      xpCoordinates,
+      creditProgressFraction,
+    );
     final xpBreakdown = _calculateCompletionXpBreakdown(
-      drivenKm: drivenKm,
-      curves: curves,
+      creditedDistanceKm: creditedDistanceKm,
+      curves: xpCurves,
     );
     final xpEarned = belowMinimum ? 0 : xpBreakdown.totalXp;
 
@@ -4528,6 +4620,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     final snapshot = _buildCompletionSnapshot(
       isEarlyStop: false,
       belowMinimum: false,
+      completed: true,
     );
     showCruiseCompletionSheet(
       context: context,
@@ -4544,6 +4637,7 @@ class _CruiseModePageState extends State<CruiseModePage>
           final result = await _saveRouteAndSyncXp(
             rating: rating,
             ratingTags: tags,
+            completed: true,
           );
           _resetAfterCompletion();
           return result;
@@ -4565,7 +4659,7 @@ class _CruiseModePageState extends State<CruiseModePage>
         ? (drivenKm / totalKm).clamp(0.0, 1.0)
         : 0.0;
 
-    // Fast fertig → als volle Completion behandeln
+    // Nur echte Zielankunft zählt als volle Completion.
     if (progressFraction >= _minProgressForFullCredit) {
       _onRouteCompleted();
       return;
@@ -4608,11 +4702,12 @@ class _CruiseModePageState extends State<CruiseModePage>
   }
 
   /// Speichert die gefahrene Route und synchronisiert XP/Level/Badges.
-  /// [skipXpSync] = true → Route wird gespeichert, aber keine XP vergeben (< 10% gefahren).
+  /// [skipXpSync] = true → Route wird gespeichert, aber keine XP vergeben (< 20% gefahren).
   Future<CruiseCompletionActionResult> _saveRouteAndSyncXp({
     int? rating,
     List<String> ratingTags = const [],
     bool skipXpSync = false,
+    bool completed = false,
   }) async {
     int? previousLevel;
     if (!skipXpSync) {
@@ -4635,25 +4730,46 @@ class _CruiseModePageState extends State<CruiseModePage>
       debugPrint(
         '[CruiseMode] _saveRouteAndSyncXp: _lastRouteResult=${_lastRouteResult != null}, rating=$rating, skipXp=$skipXpSync',
       );
-      final adjustedResult = _buildAdjustedCompletionResult();
+      final adjustedResult = _buildAdjustedCompletionResult(
+        completed: completed,
+      );
       if (adjustedResult != null) {
         final progressFraction = _calculateCompletionProgressFraction(
           adjustedResult.distanceMeters,
+          completed: completed,
         );
-        final completionCurves = _estimateCompletionCurves(
-          adjustedResult.coordinates,
-          progressFraction,
+        final plannedDistanceKm = _completionRouteResult?.distanceMeters != null
+            ? _completionRouteResult!.distanceMeters! / 1000
+            : adjustedResult.distanceKm ?? 0;
+        final creditProgressFraction =
+            GamificationService.completionCreditProgressStep(
+              progressFraction,
+              completed: completed,
+            );
+        final xpCoordinates = _buildCompletionCoordinates(
+          creditProgressFraction,
         );
+        final xpCurves = _estimateCompletionCurves(
+          xpCoordinates,
+          creditProgressFraction,
+        );
+        final creditedDistanceKm =
+            GamificationService.creditedDistanceKmForProgress(
+              plannedDistanceKm: plannedDistanceKm,
+              progressRatio: progressFraction,
+              completed: completed,
+            );
         final xpBreakdown = skipXpSync
             ? null
             : _calculateCompletionXpBreakdown(
-                drivenKm: adjustedResult.distanceKm ?? 0,
-                curves: completionCurves,
+                creditedDistanceKm: creditedDistanceKm,
+                curves: xpCurves,
               );
         debugPrint(
           '[CruiseMode] Saving route: style=$_selectedStyle, roundTrip=$_isRoundTrip, '
           'distKm=${adjustedResult.distanceKm}, durationSec=${adjustedResult.durationSeconds?.round()}, '
-          'progress=${(progressFraction * 100).round()}%, xp=${xpBreakdown?.totalXp}',
+          'progress=${(progressFraction * 100).round()}%, '
+          'xpStep=${(creditProgressFraction * 100).round()}%, xp=${xpBreakdown?.totalXp}',
         );
         await SavedRoutesService.saveRoute(
           result: adjustedResult,
@@ -4671,6 +4787,7 @@ class _CruiseModePageState extends State<CruiseModePage>
           xpMultiplier: xpBreakdown?.multiplier,
           xpStreakDays: xpBreakdown?.streakDays,
           xpAwarded: xpBreakdown?.totalXp,
+          completedAtEnd: completed,
         );
         await RouteRatingService.saveRating(
           result: adjustedResult,

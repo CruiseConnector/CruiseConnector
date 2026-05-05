@@ -49,22 +49,24 @@ class UserAvatar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final initial = name.trim().isNotEmpty ? name.trim()[0].toUpperCase() : 'U';
-    final hasUrl = avatarUrl != null && avatarUrl!.trim().isNotEmpty;
+    final imageProvider = avatarImageProvider(
+      context,
+      avatarUrl,
+      radius: radius,
+    );
 
     final avatar = CircleAvatar(
       radius: radius,
       backgroundColor: backgroundColor ?? AppAccentColors.accent,
-      backgroundImage: hasUrl ? NetworkImage(avatarUrl!) : null,
-      child: hasUrl
-          ? null
-          : Text(
-              initial,
-              style: TextStyle(
-                color: Colors.white,
-                fontWeight: FontWeight.bold,
-                fontSize: radius * 0.9,
-              ),
-            ),
+      foregroundImage: imageProvider,
+      child: Text(
+        initial,
+        style: TextStyle(
+          color: Colors.white,
+          fontWeight: FontWeight.bold,
+          fontSize: radius * 0.9,
+        ),
+      ),
     );
 
     if (onTap == null) return avatar;
@@ -72,6 +74,46 @@ class UserAvatar extends StatelessWidget {
       onTap: onTap,
       behavior: HitTestBehavior.opaque,
       child: avatar,
+    );
+  }
+
+  static ImageProvider<Object>? avatarImageProvider(
+    BuildContext context,
+    String? url, {
+    required double radius,
+  }) {
+    return resizedNetworkImageProvider(
+      context,
+      url,
+      width: radius * 2,
+      height: radius * 2,
+      maxCacheSize: 512,
+    );
+  }
+
+  static ImageProvider<Object>? resizedNetworkImageProvider(
+    BuildContext context,
+    String? url, {
+    required double width,
+    double? height,
+    int minCacheSize = 64,
+    int maxCacheSize = 2048,
+  }) {
+    final normalizedUrl = url?.trim();
+    if (normalizedUrl == null || normalizedUrl.isEmpty) return null;
+
+    final dpr = MediaQuery.maybeDevicePixelRatioOf(context) ?? 1.0;
+    final cacheWidth = (width * dpr)
+        .ceil()
+        .clamp(minCacheSize, maxCacheSize)
+        .toInt();
+    final cacheHeight = height == null
+        ? null
+        : (height * dpr).ceil().clamp(minCacheSize, maxCacheSize).toInt();
+    return ResizeImage.resizeIfNeeded(
+      cacheWidth,
+      cacheHeight,
+      NetworkImage(normalizedUrl),
     );
   }
 }

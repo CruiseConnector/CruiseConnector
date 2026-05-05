@@ -42,7 +42,7 @@
                 <category android:name="android.intent.category.BROWSABLE"/>
                 <data android:scheme="cruiseconnect"/>
             </intent-filter>
-            <!-- Universal Link: https://cruiseconnect.app/... -->
+            <!-- Android App Link: https://cruiseconnector.at?post=<id> -->
             <intent-filter android:autoVerify="true">
                 <action android:name="android.intent.action.VIEW"/>
                 <category android:name="android.intent.category.DEFAULT"/>

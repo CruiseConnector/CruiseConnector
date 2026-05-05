@@ -129,13 +129,16 @@ class _AnalyticsPageState extends State<AnalyticsPage>
         final actualDistanceKm = r.actualDistanceKm;
 
         final routeDuration = r.durationSeconds ?? 0.0;
-        final routeXp = r.qualifiesForXpCredit
-            ? GamificationService.calculateRouteXp(
-                distanceKm: actualDistanceKm,
-                curves: (actualDistanceKm / 5).round(),
-                style: r.style,
-              )
-            : 0;
+        final creditedDistanceKm = r.xpCreditedDistanceKm;
+        final routeXp =
+            r.xpAwarded ??
+            (r.qualifiesForXpCredit
+                ? GamificationService.calculateRouteXp(
+                    distanceKm: creditedDistanceKm,
+                    curves: (creditedDistanceKm / 5).round(),
+                    style: r.style,
+                  )
+                : 0);
 
         // Wöchentliche Daten
         if (!routeDay.isBefore(weekStart)) {
@@ -1283,12 +1286,17 @@ class _AnalyticsPageState extends State<AnalyticsPage>
   }
 
   Widget _buildRouteSummaryRow(SavedRoute route) {
-    final estimatedCurves = (route.distanceKm / 5).round();
-    final routeXp = GamificationService.calculateRouteXp(
-      distanceKm: route.distanceKm,
-      curves: estimatedCurves,
-      style: route.style,
-    );
+    final creditedDistanceKm = route.xpCreditedDistanceKm;
+    final estimatedCurves = (creditedDistanceKm / 5).round();
+    final routeXp =
+        route.xpAwarded ??
+        (route.qualifiesForXpCredit
+            ? GamificationService.calculateRouteXp(
+                distanceKm: creditedDistanceKm,
+                curves: estimatedCurves,
+                style: route.style,
+              )
+            : 0);
 
     return Container(
       padding: const EdgeInsets.all(12),
@@ -1367,13 +1375,24 @@ class _AnalyticsPageState extends State<AnalyticsPage>
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Text(
-              badge.emoji,
-              style: TextStyle(
-                fontSize: 24,
-                color: earned ? null : Colors.white.withValues(alpha: 0.15),
+            if (badge.assetPath != null)
+              Opacity(
+                opacity: earned ? 1 : 0.18,
+                child: Image.asset(
+                  badge.assetPath!,
+                  width: 34,
+                  height: 34,
+                  fit: BoxFit.contain,
+                ),
+              )
+            else
+              Text(
+                badge.emoji,
+                style: TextStyle(
+                  fontSize: 24,
+                  color: earned ? null : Colors.white.withValues(alpha: 0.15),
+                ),
               ),
-            ),
             const SizedBox(height: 4),
             Text(
               badge.name,

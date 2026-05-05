@@ -6,6 +6,7 @@ class Badge {
     required this.description,
     required this.emoji,
     required this.category,
+    this.assetPath,
   });
 
   final String id;
@@ -13,6 +14,7 @@ class Badge {
   final String description;
   final String emoji;
   final String category; // 'distance', 'routes', 'style', 'special'
+  final String? assetPath;
 
   /// Alle verfügbaren Badges im System.
   static const List<Badge> all = [
@@ -63,10 +65,11 @@ class Badge {
     // ── Routen-Badges ───────────────────────────────────────────────────────
     Badge(
       id: 'route_1',
-      name: 'Erster Start',
-      description: '1 Route abgeschlossen',
+      name: 'Erste Fahrt',
+      description: 'Erste Route komplett bis zum Ende gefahren',
       emoji: '\u{1F3C1}',
       category: 'routes',
+      assetPath: 'lib/images/badges/badge_01_first_drive.png',
     ),
     Badge(
       id: 'route_5',
