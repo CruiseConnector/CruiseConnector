@@ -64,6 +64,7 @@ class GamificationService {
   static const int maxCurveXp = 80;
   static const double streakStep = 0.05;
   static const double maxStreakMultiplier = 1.30;
+  static const double xpCreditStep = 0.20;
 
   /// Berechnet XP für eine einzelne Route.
   /// 10 XP/km + 5 XP/Kurve + Stil-Bonus.
@@ -116,6 +117,31 @@ class GamificationService {
       multiplier: multiplier,
       totalXp: (baseXp * multiplier).round(),
     );
+  }
+
+  static double completionCreditProgressStep(
+    double progressRatio, {
+    bool completed = false,
+  }) {
+    if (completed) return 1.0;
+    final safeProgress = progressRatio.clamp(0.0, 1.0);
+    final steps = ((safeProgress + 1e-9) / xpCreditStep).floor();
+    final maxSteps = (1 / xpCreditStep).round();
+    final boundedSteps = steps.clamp(0, maxSteps);
+    return boundedSteps / maxSteps;
+  }
+
+  static double creditedDistanceKmForProgress({
+    required double plannedDistanceKm,
+    required double progressRatio,
+    bool completed = false,
+  }) {
+    if (plannedDistanceKm <= 0) return 0;
+    final creditProgress = completionCreditProgressStep(
+      progressRatio,
+      completed: completed,
+    );
+    return plannedDistanceKm * creditProgress;
   }
 
   static double streakMultiplierForDays(int streakDays) {
@@ -267,14 +293,15 @@ class GamificationService {
     final xpEligibleRoutes = rideRoutes
         .where((route) => route.qualifiesForXpCredit)
         .toList();
+    final completedRoutes = rideRoutes
+        .where((route) => route.isFullyCompleted)
+        .toList();
 
     // 2. Statistiken berechnen
     double totalKm = 0;
     double totalSecs = 0;
     int totalXp = 0;
-    int roundTrips = 0;
     final styleCounts = <String, int>{};
-    bool hasLongRoute = false;
 
     for (final r in rideRoutes) {
       totalKm += r.actualDistanceKm;
@@ -285,20 +312,21 @@ class GamificationService {
       ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
 
     for (final r in sortedXpRoutes) {
-      if (r.isRoundTrip) roundTrips++;
-      styleCounts[r.style] = (styleCounts[r.style] ?? 0) + 1;
-      if (r.actualDistanceKm >= 100) hasLongRoute = true;
-
       if (r.xpAwarded != null) {
         totalXp += r.xpAwarded!;
       } else {
-        final estimatedCurves = (r.actualDistanceKm / 5).round();
+        final creditedDistanceKm = r.xpCreditedDistanceKm;
+        final estimatedCurves = (creditedDistanceKm / 5).round();
         totalXp += calculateRouteXp(
-          distanceKm: r.actualDistanceKm,
+          distanceKm: creditedDistanceKm,
           curves: estimatedCurves,
           style: r.style,
         );
       }
+    }
+
+    for (final r in completedRoutes) {
+      styleCounts[r.style] = (styleCounts[r.style] ?? 0) + 1;
     }
 
     // 3. Level aus XP berechnen
@@ -316,11 +344,11 @@ class GamificationService {
     if (totalKm >= 5000) earned.add('dist_5000');
 
     // Routen-Badges
-    if (xpEligibleRoutes.isNotEmpty) earned.add('route_1');
-    if (xpEligibleRoutes.length >= 5) earned.add('route_5');
-    if (xpEligibleRoutes.length >= 10) earned.add('route_10');
-    if (xpEligibleRoutes.length >= 25) earned.add('route_25');
-    if (xpEligibleRoutes.length >= 50) earned.add('route_50');
+    if (completedRoutes.isNotEmpty) earned.add('route_1');
+    if (completedRoutes.length >= 5) earned.add('route_5');
+    if (completedRoutes.length >= 10) earned.add('route_10');
+    if (completedRoutes.length >= 25) earned.add('route_25');
+    if (completedRoutes.length >= 50) earned.add('route_50');
 
     // Stil-Badges
     if ((styleCounts['Kurvenjagd'] ?? 0) >= 5) earned.add('style_kurven');
@@ -329,8 +357,11 @@ class GamificationService {
     if ((styleCounts['Entdecker'] ?? 0) >= 5) earned.add('style_entdecker');
 
     // Spezial-Badges
-    if (roundTrips >= 10) earned.add('special_roundtrip');
-    if (hasLongRoute) earned.add('special_long');
+    final completedRoundTrips = completedRoutes.where((r) => r.isRoundTrip);
+    if (completedRoundTrips.length >= 10) earned.add('special_roundtrip');
+    if (completedRoutes.any((r) => r.actualDistanceKm >= 100)) {
+      earned.add('special_long');
+    }
 
     // 5. Bisherige Badges laden und neue bestimmen
     List<String> previousBadges = [];
@@ -358,7 +389,7 @@ class GamificationService {
             'level': level.level,
             'total_km': totalKm,
             'total_xp': totalXp,
-            'total_routes': rideRoutes.length,
+            'total_routes': completedRoutes.length,
             'badges': earned,
           })
           .eq('id', userId);
@@ -370,7 +401,7 @@ class GamificationService {
       level: level,
       earnedBadgeIds: earned,
       newBadgeIds: newBadges,
-      totalRoutes: rideRoutes.length,
+      totalRoutes: completedRoutes.length,
       totalDistanceKm: totalKm,
       totalHours: totalSecs / 3600,
       totalXp: totalXp,

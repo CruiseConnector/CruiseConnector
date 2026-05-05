@@ -42,7 +42,7 @@ jobs:
         run: |
           flutter pub get
           flutter build web --release \
-            --base-href "/${{ github.event.repository.name }}/"
+            --base-href "/"
 
       - name: Upload Pages Artifact
         uses: actions/upload-pages-artifact@v3

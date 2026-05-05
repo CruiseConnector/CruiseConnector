@@ -1,10 +1,23 @@
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+class DuplicateSharedRoutePostException implements Exception {
+  const DuplicateSharedRoutePostException();
+
+  String get message => SocialService.duplicateSharedRoutePostMessage;
+
+  @override
+  String toString() => message;
+}
+
 /// Service für soziale Features: Posts, Follows, Gruppen, Notifications.
 class SocialService {
   static SupabaseClient get _db => Supabase.instance.client;
   static String? get _userId => _db.auth.currentUser?.id;
+
+  static const String duplicateSharedRoutePostMessage =
+      'Du hast diese Strecke bereits gepostet. Loesche zuerst den alten Post, '
+      'danach kannst du die Strecke erneut posten.';
 
   static const String _profileSelect =
       'id, username, email, created_at, level, total_km, total_routes, '
@@ -130,6 +143,17 @@ class SocialService {
         map['is_active'] == true || map['is_active']?.toString() == 'true';
     final count = (map['count'] as num?)?.toInt() ?? 0;
     return (isActive: isActive, count: count);
+  }
+
+  static bool isDuplicateSharedRoutePostError(Object error) {
+    if (error is DuplicateSharedRoutePostException) return true;
+    if (error is PostgrestException) {
+      final text = '${error.message} ${error.details ?? ''}'.toLowerCase();
+      return error.code == '23505' &&
+          (text.contains('posts_user_shared_route_unique_idx') ||
+              text.contains('shared_route_id'));
+    }
+    return false;
   }
 
   static Future<int> _countPostReactions(String table, String postId) async {
@@ -357,15 +381,33 @@ class SocialService {
   }) async {
     final uid = _userId;
     if (uid == null) return null;
+    final cleanedSharedRouteId = sharedRouteId?.trim();
+
+    if (cleanedSharedRouteId != null && cleanedSharedRouteId.isNotEmpty) {
+      final alreadyPosted = await hasOwnPostForSharedRoute(
+        cleanedSharedRouteId,
+      );
+      if (alreadyPosted) throw const DuplicateSharedRoutePostException();
+    }
 
     final row = <String, dynamic>{
       'user_id': uid,
       'content': content,
       'visibility': visibility,
     };
-    if (sharedRouteId != null) row['shared_route_id'] = sharedRouteId;
+    if (cleanedSharedRouteId != null && cleanedSharedRouteId.isNotEmpty) {
+      row['shared_route_id'] = cleanedSharedRouteId;
+    }
 
-    final result = await _db.from('posts').insert(row).select('id').single();
+    late final dynamic result;
+    try {
+      result = await _db.from('posts').insert(row).select('id').single();
+    } on PostgrestException catch (e) {
+      if (isDuplicateSharedRoutePostError(e)) {
+        throw const DuplicateSharedRoutePostException();
+      }
+      rethrow;
+    }
     final postId = (result as Map?)?['id'] as String?;
 
     // Mentions im Content auflösen — Anti-Spam: nur eigene Follower werden
@@ -377,6 +419,20 @@ class SocialService {
       }
     }
     return postId;
+  }
+
+  static Future<bool> hasOwnPostForSharedRoute(String routeId) async {
+    final uid = _userId;
+    final cleanedRouteId = routeId.trim();
+    if (uid == null || cleanedRouteId.isEmpty) return false;
+
+    final row = await _db
+        .from('posts')
+        .select('id')
+        .eq('user_id', uid)
+        .eq('shared_route_id', cleanedRouteId)
+        .maybeSingle();
+    return row != null;
   }
 
   static Future<void> deletePost(String postId) async {
@@ -1165,15 +1221,6 @@ class SocialService {
     final groupIds = <String>{
       ...(memberships as List).map((m) => m['group_id'] as String),
     };
-
-    // Owner-Gruppen zusätzlich einsammeln — falls der Owner-Trigger
-    // (set_owner_on_group_insert) mal nicht gegriffen hat.
-    final ownGroups = await _db
-        .from('groups')
-        .select('id')
-        .eq('created_by', uid);
-    groupIds.addAll((ownGroups as List).map((g) => g['id'] as String));
-
     if (groupIds.isEmpty) return [];
 
     var q = _db
@@ -1206,11 +1253,6 @@ class SocialService {
     final groupIds = <String>{
       ...(memberships as List).map((m) => m['group_id'] as String),
     };
-    final ownGroups = await _db
-        .from('groups')
-        .select('id')
-        .eq('created_by', uid);
-    groupIds.addAll((ownGroups as List).map((g) => g['id'] as String));
     if (groupIds.isEmpty) return [];
 
     final groups = await _db
@@ -1247,6 +1289,7 @@ class SocialService {
 
     // Ausfiltern: Gruppen in denen ich Mitglied ODER Owner bin.
     final filtered = list.where((g) {
+      if (g['is_active'] == true) return false;
       if (g['created_by'] == uid) return false;
       final members = (g['group_members'] as List?) ?? const [];
       return !members.any((m) => (m as Map)['user_id'] == uid);
@@ -1319,22 +1362,27 @@ class SocialService {
 
     final group = await _db
         .from('groups')
-        .select('created_by')
+        .select('created_by, is_active, group_members(user_id)')
         .eq('id', groupId)
         .maybeSingle();
     final creatorId = (group as Map?)?['created_by'] as String?;
+    final isActive = (group as Map?)?['is_active'] == true;
+    final members = ((group as Map?)?['group_members'] as List?) ?? const [];
+    final isAlreadyMember = members.any((m) => (m as Map)['user_id'] == uid);
     final blocked = await getBlockedAndBlockerIds();
     if (creatorId != null && blocked.contains(creatorId)) {
       throw Exception('Diese Gruppe ist nicht verfuegbar.');
     }
+    if (isActive && !isAlreadyMember) {
+      throw Exception('Diese Fahrt laeuft bereits.');
+    }
 
-    final wasMember = await isMember(groupId);
     await _db.from('group_members').upsert({
       'group_id': groupId,
       'user_id': uid,
       'ride_role': 'passenger',
     });
-    if (!wasMember) {
+    if (!isAlreadyMember) {
       await _notifyGroupOwners(groupId, type: 'group_joined', fromUserId: uid);
     }
   }
@@ -1417,7 +1465,9 @@ class SocialService {
     try {
       final row = await _db
           .from('groups')
-          .select('*, profiles:created_by(id, username, email)')
+          .select(
+            '*, group_members(user_id), profiles:created_by(id, username, email)',
+          )
           .eq('invite_code', code)
           .maybeSingle();
       if (row == null) return null;
@@ -1425,6 +1475,13 @@ class SocialService {
       final creatorId = map['created_by'] as String?;
       final blocked = await getBlockedAndBlockerIds();
       if (creatorId != null && blocked.contains(creatorId)) return null;
+      if (map['is_active'] == true) {
+        final uid = _userId;
+        final members = (map['group_members'] as List?) ?? const [];
+        final isMember =
+            uid != null && members.any((m) => (m as Map)['user_id'] == uid);
+        if (!isMember) return null;
+      }
       return map;
     } catch (e) {
       debugPrint('[SocialService] findGroupByCode Fehler: $e');
@@ -1440,6 +1497,14 @@ class SocialService {
   }) async {
     final uid = _userId;
     if (uid == null) return;
+    final group = await _db
+        .from('groups')
+        .select('is_active')
+        .eq('id', groupId)
+        .maybeSingle();
+    if ((group as Map?)?['is_active'] == true) {
+      throw Exception('Diese Fahrt laeuft bereits.');
+    }
     await _db.from('group_join_requests').upsert({
       'group_id': groupId,
       'user_id': uid,

@@ -3,6 +3,7 @@
 // Ausführen: flutter test test/services/saved_routes_service_test.dart
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:cruise_connect/data/services/gamification_service.dart';
 import 'package:cruise_connect/data/services/saved_routes_service.dart';
 import 'package:cruise_connect/domain/models/saved_route.dart';
 
@@ -28,6 +29,7 @@ void main() {
         'average_rating': 4.6,
         'rating_count': 3,
         'completion_rate': 0.91,
+        'completed_at_end': false,
       };
 
       final route = SavedRoute.fromJson(json);
@@ -46,6 +48,9 @@ void main() {
       expect(route.qualityBadgeLabel, equals('Gut'));
       expect(route.ratingSummaryLabel, equals('4,6 · 3 Bewertungen'));
       expect(route.completionRate, equals(0.91));
+      expect(route.isFullyCompleted, isFalse);
+      expect(route.xpCreditProgressRatio, closeTo(0.8, 0.001));
+      expect(route.xpCreditedDistanceKm, closeTo(40, 0.001));
     });
 
     test('SavedRoute.fromJson mit fehlenden optionalen Feldern → Defaults', () {
@@ -82,17 +87,74 @@ void main() {
         'id': 'route-early-stop',
         'created_at': '2025-01-15T10:00:00.000Z',
         'style': 'Sport Mode',
-        'distance_actual': 4.0,
+        'distance_actual': 11.0,
         'distance_target': 60,
-        'driven_km': 4.0,
+        'driven_km': 11.0,
         'geometry': {'type': 'LineString', 'coordinates': []},
       });
 
       expect(route.isDrivenSession, isTrue);
-      expect(route.completionRatio, lessThan(0.10));
+      expect(route.completionRatio, lessThan(0.20));
       expect(route.qualifiesForXpCredit, isFalse);
+      expect(route.xpCreditProgressRatio, 0);
+      expect(route.xpCreditedDistanceKm, 0);
       expect(route.isRecommendationEligible, isFalse);
     });
+
+    test('XP-Gutschrift wird auf 20-Prozent-Stufen abgerundet', () {
+      final route = SavedRoute.fromJson({
+        'id': 'route-stepped-xp',
+        'created_at': '2025-01-15T10:00:00.000Z',
+        'style': 'Sport Mode',
+        'distance_actual': 25.0,
+        'distance_target': 100,
+        'driven_km': 25.0,
+        'geometry': {'type': 'LineString', 'coordinates': []},
+      });
+
+      expect(route.completionRatio, closeTo(0.25, 0.001));
+      expect(route.qualifiesForXpCredit, isTrue);
+      expect(route.xpCreditProgressRatio, closeTo(0.20, 0.001));
+      expect(route.xpCreditedDistanceKm, closeTo(20, 0.001));
+      expect(route.isFullyCompleted, isFalse);
+    });
+
+    test('vollstaendig gefahrene Route gilt als komplette Fahrt', () {
+      final route = SavedRoute.fromJson({
+        'id': 'route-complete',
+        'created_at': '2025-01-15T10:00:00.000Z',
+        'style': 'Sport Mode',
+        'distance_actual': 100.0,
+        'distance_target': 100,
+        'driven_km': 100.0,
+        'completed_at_end': true,
+        'geometry': {'type': 'LineString', 'coordinates': []},
+      });
+
+      expect(route.completionRatio, 1.0);
+      expect(route.isFullyCompleted, isTrue);
+      expect(route.xpCreditProgressRatio, 1.0);
+      expect(route.xpCreditedDistanceKm, 100.0);
+    });
+
+    test(
+      'Completion-Flag zählt trotz gerundetem distance_target als fertig',
+      () {
+        final route = SavedRoute.fromJson({
+          'id': 'route-complete-rounded',
+          'created_at': '2025-01-15T10:00:00.000Z',
+          'style': 'Sport Mode',
+          'distance_actual': 49.6,
+          'distance_target': 50,
+          'driven_km': 49.6,
+          'completed_at_end': true,
+          'geometry': {'type': 'LineString', 'coordinates': []},
+        });
+
+        expect(route.completionRatio, lessThan(1.0));
+        expect(route.isFullyCompleted, isTrue);
+      },
+    );
 
     test('routeSignature bleibt für gleiche Geometrie stabil', () {
       final json = {
@@ -115,6 +177,45 @@ void main() {
       final second = SavedRoute.fromJson({...json, 'id': 'route-signature-2'});
 
       expect(first.routeSignature, equals(second.routeSignature));
+    });
+  });
+
+  group('Gamification XP-Stufen', () {
+    test('25 Prozent Fahrt gibt nur 20 Prozent Strecken-XP', () {
+      final creditedKm = GamificationService.creditedDistanceKmForProgress(
+        plannedDistanceKm: 100,
+        progressRatio: 0.25,
+      );
+
+      expect(creditedKm, 20);
+    });
+
+    test('60 Prozent Fahrt gibt 60 Prozent Strecken-XP', () {
+      final creditedKm = GamificationService.creditedDistanceKmForProgress(
+        plannedDistanceKm: 100,
+        progressRatio: 0.60,
+      );
+
+      expect(creditedKm, 60);
+    });
+
+    test('unter 20 Prozent Fahrt gibt 0 Kilometer XP-Credit', () {
+      final creditedKm = GamificationService.creditedDistanceKmForProgress(
+        plannedDistanceKm: 100,
+        progressRatio: 0.19,
+      );
+
+      expect(creditedKm, 0);
+    });
+
+    test('completed erzwingt 100 Prozent XP-Credit', () {
+      final creditedKm = GamificationService.creditedDistanceKmForProgress(
+        plannedDistanceKm: 100,
+        progressRatio: 0.96,
+        completed: true,
+      );
+
+      expect(creditedKm, 100);
     });
   });
 

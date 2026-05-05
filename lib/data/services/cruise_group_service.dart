@@ -71,6 +71,14 @@ class CruiseGroupService {
 
   static Future<void> activate(String groupId) async {
     await _db
+        .from('group_members')
+        .update({
+          'current_lat': null,
+          'current_lng': null,
+          'last_updated_at': null,
+        })
+        .eq('group_id', groupId);
+    await _db
         .from('groups')
         .update({
           'is_active': true,

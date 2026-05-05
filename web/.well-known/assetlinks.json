@@ -1,0 +1,14 @@
+[
+  {
+    "relation": [
+      "delegate_permission/common.handle_all_urls"
+    ],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.example.cruise_connect",
+      "sha256_cert_fingerprints": [
+        "81:7B:AD:FB:D8:97:2D:9F:B0:60:3D:CC:42:F0:44:67:82:E6:26:67:F7:09:85:01:92:F5:90:1B:51:B2:D3:24"
+      ]
+    }
+  }
+]

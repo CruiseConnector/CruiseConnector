@@ -445,29 +445,37 @@ class _UserProfilePageState extends State<UserProfilePage>
     final bio = (_stats['bio'] as String?)?.trim();
     final bioTitle = (_stats['bio_title'] as String?)?.trim();
     final link = (_stats['link'] as String?)?.trim();
+    const bannerHeight = 178.0;
+    const headerControlsSpace = 58.0;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Stack(
-          clipBehavior: Clip.none,
-          children: [
-            _buildProfileBanner(bannerUrl),
-            Positioned(
-              left: 16,
-              bottom: -50,
-              child: _buildProfileAvatar(name: name, avatarUrl: avatarUrl),
-            ),
-            if (!_isOwnProfile)
-              Positioned(
-                right: 16,
-                bottom: -42,
-                child: _buildFollowButton(compact: true),
+        SizedBox(
+          height: bannerHeight + headerControlsSpace,
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              Positioned.fill(
+                bottom: headerControlsSpace,
+                child: _buildProfileBanner(bannerUrl),
               ),
-          ],
+              Positioned(
+                left: 16,
+                bottom: 8,
+                child: _buildProfileAvatar(name: name, avatarUrl: avatarUrl),
+              ),
+              if (!_isOwnProfile)
+                Positioned(
+                  right: 16,
+                  bottom: 16,
+                  child: _buildFollowButton(compact: true),
+                ),
+            ],
+          ),
         ),
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 58, 16, 16),
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -566,7 +574,13 @@ class _UserProfilePageState extends State<UserProfilePage>
           ),
           image: bannerUrl != null && bannerUrl.isNotEmpty
               ? DecorationImage(
-                  image: NetworkImage(bannerUrl),
+                  image: UserAvatar.resizedNetworkImageProvider(
+                    context,
+                    bannerUrl,
+                    width: MediaQuery.sizeOf(context).width,
+                    height: 178,
+                    maxCacheSize: 1600,
+                  )!,
                   fit: BoxFit.cover,
                 )
               : null,

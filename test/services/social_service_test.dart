@@ -5,6 +5,7 @@
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 void main() {
   group('SocialService – Feed Tests', () {
@@ -94,6 +95,28 @@ void main() {
     test('Post-Content wird getrimmt', () async {
       const raw = '  Hallo Welt  ';
       expect(raw.trim(), equals('Hallo Welt'));
+    });
+
+    test('DuplicateSharedRoutePostException liefert User-Text', () {
+      const error = DuplicateSharedRoutePostException();
+
+      expect(
+        error.message,
+        equals(SocialService.duplicateSharedRoutePostMessage),
+      );
+      expect(error.toString(), contains('bereits gepostet'));
+    });
+
+    test('Unique-Index-Fehler fuer geteilte Route wird erkannt', () {
+      const error = PostgrestException(
+        message:
+            'duplicate key value violates unique constraint "posts_user_shared_route_unique_idx"',
+        code: '23505',
+        details:
+            'Key (user_id, shared_route_id)=(user-1, route-1) already exists.',
+      );
+
+      expect(SocialService.isDuplicateSharedRoutePostError(error), isTrue);
     });
   });
 

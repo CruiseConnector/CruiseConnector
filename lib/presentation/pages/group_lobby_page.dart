@@ -7,6 +7,7 @@ import '../../data/services/cruise_group_service.dart';
 import '../../data/services/social_service.dart';
 import '../../domain/models/cruise_group.dart';
 import '../../domain/models/group_member.dart';
+import '../widgets/user_avatar.dart';
 import 'cruise_mode_page.dart';
 import 'user_profile_page.dart';
 
@@ -26,6 +27,7 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
   CruiseGroup? _group;
   bool _loading = true;
   bool _starting = false;
+  bool _enteringNavigation = false;
 
   List<Map<String, dynamic>> _pendingRequests = [];
 
@@ -90,7 +92,6 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
         _blockedIds = blocked;
         _loading = false;
       });
-      if (g != null && g.isActive) _enterNavigation();
       // Pending-Requests nur laden, wenn ich Owner bin (RLS sorgt für Rest).
       if (g != null && g.isOwner(_myId)) {
         final pending = await SocialService.listPendingJoinRequests(
@@ -121,7 +122,8 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
   }
 
   void _enterNavigation() {
-    if (!mounted) return;
+    if (!mounted || _enteringNavigation) return;
+    _enteringNavigation = true;
     Navigator.of(context).pushReplacement(
       MaterialPageRoute(
         builder: (_) => CruiseModePage(groupId: widget.groupId),
@@ -537,15 +539,15 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
               child: CircleAvatar(
                 radius: 18,
                 backgroundColor: const Color(0xFF0B0E14),
-                backgroundImage: m.avatarUrl != null
-                    ? NetworkImage(m.avatarUrl!)
-                    : null,
-                child: m.avatarUrl == null
-                    ? Text(
-                        (m.displayName ?? '?').characters.first.toUpperCase(),
-                        style: const TextStyle(color: Colors.white),
-                      )
-                    : null,
+                foregroundImage: UserAvatar.avatarImageProvider(
+                  context,
+                  m.avatarUrl,
+                  radius: 18,
+                ),
+                child: Text(
+                  (m.displayName ?? '?').characters.first.toUpperCase(),
+                  style: const TextStyle(color: Colors.white),
+                ),
               ),
             ),
             const SizedBox(width: 12),
@@ -761,13 +763,18 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
   }
 
   Widget _buildBottom() {
+    final isActive = _group?.isActive == true;
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: SizedBox(
           height: 56,
           child: ElevatedButton(
-            onPressed: _amOwner && !_starting ? _startRoute : null,
+            onPressed: isActive
+                ? _enterNavigation
+                : _amOwner && !_starting
+                ? _startRoute
+                : null,
             style: ElevatedButton.styleFrom(
               backgroundColor: AppAccentColors.accent,
               disabledBackgroundColor: const Color(0xFF1C1F26),
@@ -781,7 +788,11 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
                     strokeWidth: 2,
                   )
                 : Text(
-                    _amOwner ? 'Route starten' : 'Warten auf Host...',
+                    isActive
+                        ? 'Zur laufenden Route'
+                        : _amOwner
+                        ? 'Route starten'
+                        : 'Warten auf Host...',
                     style: const TextStyle(
                       color: Colors.white,
                       fontWeight: FontWeight.bold,

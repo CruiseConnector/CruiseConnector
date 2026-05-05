@@ -284,7 +284,7 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
                     if (widget.belowMinimum) ...[
                       const SizedBox(height: 12),
                       const Text(
-                        'Unter 10% Fahranteil: Route kann gespeichert werden, XP wird fairerweise nicht gutgeschrieben.',
+                        'Unter 20% Fahranteil: Route kann gespeichert werden, XP wird fairerweise nicht gutgeschrieben.',
                         style: TextStyle(
                           color: Color(0xFFA8AFBC),
                           fontSize: 11,
@@ -911,13 +911,13 @@ class _QualityChoiceButton extends StatelessWidget {
         height: 38,
         decoration: BoxDecoration(
           color: selected
-              ? AppAccentColors.accent.withValues(alpha: 0.22)
-              : Colors.white.withValues(alpha: 0.07),
-          borderRadius: BorderRadius.circular(14),
+              ? AppAccentColors.accent.withValues(alpha: 0.24)
+              : Colors.white.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(999),
           border: Border.all(
             color: selected
                 ? AppAccentColors.accent
-                : Colors.white.withValues(alpha: 0.10),
+                : Colors.white.withValues(alpha: 0.12),
           ),
         ),
         child: Center(

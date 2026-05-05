@@ -371,7 +371,13 @@ class _ProfilePageState extends State<ProfilePage>
                       ),
                       image: _bannerUrl != null && _bannerUrl!.isNotEmpty
                           ? DecorationImage(
-                              image: NetworkImage(_bannerUrl!),
+                              image: UserAvatar.resizedNetworkImageProvider(
+                                context,
+                                _bannerUrl,
+                                width: MediaQuery.sizeOf(context).width,
+                                height: 220,
+                                maxCacheSize: 1600,
+                              )!,
                               fit: BoxFit.cover,
                             )
                           : null,
@@ -428,21 +434,22 @@ class _ProfilePageState extends State<ProfilePage>
                                   CircleAvatar(
                                     radius: 40,
                                     backgroundColor: accent,
-                                    backgroundImage: _avatarUrl != null
-                                        ? NetworkImage(_avatarUrl!)
-                                        : null,
-                                    child: _avatarUrl == null
-                                        ? Text(
-                                            userName.isNotEmpty
-                                                ? userName[0].toUpperCase()
-                                                : 'U',
-                                            style: const TextStyle(
-                                              color: Colors.white,
-                                              fontSize: 32,
-                                              fontWeight: FontWeight.bold,
-                                            ),
-                                          )
-                                        : null,
+                                    foregroundImage:
+                                        UserAvatar.avatarImageProvider(
+                                          context,
+                                          _avatarUrl,
+                                          radius: 40,
+                                        ),
+                                    child: Text(
+                                      userName.isNotEmpty
+                                          ? userName[0].toUpperCase()
+                                          : 'U',
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 32,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
                                   ),
                                   if (_uploadingAvatar)
                                     const Positioned.fill(

@@ -27,6 +27,7 @@ class SavedRoute {
     this.averageRating,
     this.ratingCount = 0,
     this.completionRate,
+    this.completedAtEnd = false,
   });
 
   final String id;
@@ -55,6 +56,7 @@ class SavedRoute {
   final double? averageRating;
   final int ratingCount;
   final double? completionRate;
+  final bool completedAtEnd;
 
   factory SavedRoute.fromJson(Map<String, dynamic> json) {
     return SavedRoute(
@@ -88,6 +90,7 @@ class SavedRoute {
       averageRating: (json['average_rating'] as num?)?.toDouble(),
       ratingCount: (json['rating_count'] as num?)?.toInt() ?? 0,
       completionRate: (json['completion_rate'] as num?)?.toDouble(),
+      completedAtEnd: json['completed_at_end'] == true,
     );
   }
 
@@ -108,7 +111,31 @@ class SavedRoute {
     final ratio = completionRatio;
     if (!isDrivenSession) return false;
     if (ratio == null) return true;
-    return ratio >= 0.10;
+    return ratio >= 0.20;
+  }
+
+  bool get isFullyCompleted {
+    if (!isDrivenSession) return false;
+    if (completedAtEnd) return true;
+    final ratio = completionRatio;
+    if (ratio == null) return true;
+    return ratio >= 1.0;
+  }
+
+  double get xpCreditProgressRatio {
+    final ratio = completionRatio;
+    if (!isDrivenSession) return 0.0;
+    if (ratio == null) return 1.0;
+    final safeRatio = ratio.clamp(0.0, 1.0);
+    final steps = ((safeRatio + 1e-9) / 0.20).floor().clamp(0, 5);
+    return steps / 5;
+  }
+
+  double get xpCreditedDistanceKm {
+    if (!isDrivenSession) return 0.0;
+    final planned = distanceTargetKm;
+    if (planned == null || planned <= 0) return actualDistanceKm;
+    return planned * xpCreditProgressRatio;
   }
 
   bool get isRecommendationEligible {
@@ -172,6 +199,7 @@ class SavedRoute {
       'average_rating': averageRating,
       'rating_count': ratingCount,
       'completion_rate': completionRate,
+      'completed_at_end': completedAtEnd,
     };
   }
 

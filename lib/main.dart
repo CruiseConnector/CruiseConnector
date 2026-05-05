@@ -15,6 +15,7 @@ import 'package:cruise_connect/application/providers/route_bookmark_provider.dar
 import 'package:cruise_connect/application/providers/route_provider.dart';
 import 'package:cruise_connect/application/providers/saved_routes_provider.dart';
 import 'package:cruise_connect/core/constants.dart';
+import 'package:cruise_connect/core/deep_links.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/presentation/pages/auth_page.dart';
 import 'package:cruise_connect/presentation/pages/post_detail_page.dart';
@@ -77,29 +78,61 @@ class _MyAppState extends State<MyApp> {
 
   Future<void> _handleDeepLink(Uri uri) async {
     debugPrint('[DeepLink] $uri');
-    final segments = uri.pathSegments;
-    if (segments.length >= 2 && segments[0] == 'post') {
-      final postId = segments[1];
+    final postId = _postIdFromDeepLink(uri);
+    if (postId != null) {
       await Future.delayed(const Duration(milliseconds: 400));
       final post = await SocialService.getPostById(postId);
       final nav = rootNavigatorKey.currentState;
       if (post == null || nav == null) return;
       final profile = post['profiles'] as Map<String, dynamic>?;
-      final name =
-          profile?['username'] ?? profile?['email']?.split('@')[0] ?? 'User';
-      final handle = '@${profile?['email']?.split('@')[0] ?? 'user'}';
+      final name = SocialService.publicDisplayName(
+        profile,
+        fallbackUserId: post['user_id'] as String?,
+      );
+      final handle = SocialService.publicHandle(
+        profile,
+        fallbackUserId: post['user_id'] as String?,
+      );
       nav.push(
         MaterialPageRoute(
           builder: (_) => PostDetailPage(
             postId: postId,
-            name: name as String,
+            name: name,
             handle: handle,
             content: (post['content'] ?? '') as String,
             time: '',
+            sharedRouteId: post['shared_route_id'] as String?,
+            avatarUrl: profile?['avatar_url'] as String?,
           ),
         ),
       );
     }
+  }
+
+  String? _postIdFromDeepLink(Uri uri) {
+    final queryPostId = uri.queryParameters['post'] ?? uri.queryParameters['p'];
+    if (queryPostId != null && queryPostId.trim().isNotEmpty) {
+      return queryPostId.trim();
+    }
+
+    final segments = uri.pathSegments;
+    if (segments.length >= 2 && segments[0] == 'post') {
+      return segments[1];
+    }
+
+    if (uri.scheme == 'cruiseconnect' &&
+        uri.host == 'post' &&
+        segments.isNotEmpty) {
+      return segments.first;
+    }
+
+    if (uri.host == CruiseDeepLinks.host &&
+        segments.length >= 2 &&
+        segments[0] == 'post') {
+      return segments[1];
+    }
+
+    return null;
   }
 
   @override

@@ -12,6 +12,7 @@ import 'package:cruise_connect/data/services/saved_routes_service.dart';
 import 'package:cruise_connect/domain/models/saved_route.dart';
 import 'package:cruise_connect/presentation/pages/cruise_mode_page.dart';
 import 'package:cruise_connect/presentation/widgets/community_carousel_card.dart';
+import 'package:cruise_connect/presentation/widgets/user_avatar.dart';
 
 class HomeContentPage extends StatefulWidget {
   final Function(int)? onTabChange;
@@ -40,6 +41,9 @@ class _HomeContentPageState extends State<HomeContentPage>
   int totalRoutes = 0;
   double totalDistanceKm = 0;
   int badgeCount = 0;
+  String? _profileUserId;
+  String? _avatarUrl;
+  String? _profileUsername;
   bool _loading = true;
   List<double> _weeklyChartData = List.filled(7, 0);
   int _streakDays = 0;
@@ -69,6 +73,19 @@ class _HomeContentPageState extends State<HomeContentPage>
     try {
       final result = await GamificationService.calculateAndSync();
       final routes = await SavedRoutesService.getUserRoutes();
+      Map<String, dynamic>? profile;
+      final userId = Supabase.instance.client.auth.currentUser?.id;
+      if (userId != null) {
+        try {
+          profile = await Supabase.instance.client
+              .from('profiles')
+              .select('id, username, avatar_url')
+              .eq('id', userId)
+              .maybeSingle();
+        } catch (e) {
+          debugPrint('[Home] Profil-Abfrage fehlgeschlagen: $e');
+        }
+      }
       final rideRoutes = routes
           .where((route) => route.isDrivenSession)
           .toList();
@@ -154,6 +171,9 @@ class _HomeContentPageState extends State<HomeContentPage>
           totalRoutes = result.totalRoutes;
           totalDistanceKm = result.totalDistanceKm;
           badgeCount = result.earnedBadgeIds.length;
+          _profileUserId = userId;
+          _profileUsername = (profile?['username'] as String?)?.trim();
+          _avatarUrl = profile?['avatar_url'] as String?;
           _weeklyChartData = normalized;
           _streakDays = streak;
           _weeklyTopRoute = topRoute;
@@ -242,10 +262,14 @@ class _HomeContentPageState extends State<HomeContentPage>
   Widget build(BuildContext context) {
     final accent = context.watch<AppAccentProvider>().color;
     final user = Supabase.instance.client.auth.currentUser;
-    final String userName =
-        (user?.userMetadata?['username'] as String?) ??
-        user?.email?.split('@')[0] ??
-        'User';
+    final profileBelongsToUser = _profileUserId == user?.id;
+    final profileUsername = profileBelongsToUser ? _profileUsername : null;
+    final avatarUrl = profileBelongsToUser ? _avatarUrl : null;
+    final String userName = (profileUsername?.isNotEmpty ?? false)
+        ? profileUsername!
+        : (user?.userMetadata?['username'] as String?) ??
+              user?.email?.split('@')[0] ??
+              'User';
 
     return SingleChildScrollView(
       physics: const BouncingScrollPhysics(),
@@ -284,13 +308,14 @@ class _HomeContentPageState extends State<HomeContentPage>
                 Stack(
                   alignment: Alignment.topRight,
                   children: [
-                    CircleAvatar(
-                      radius: 28,
-                      backgroundColor: accent,
-                      child: const Icon(
-                        Icons.person,
-                        color: Colors.white,
-                        size: 32,
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4, right: 2),
+                      child: UserAvatar(
+                        name: userName,
+                        avatarUrl: avatarUrl,
+                        radius: 28,
+                        backgroundColor: accent,
+                        onTap: () => widget.onTabChange?.call(4),
                       ),
                     ),
                     Container(

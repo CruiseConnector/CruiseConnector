@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/application/providers/community_provider.dart';
+import 'package:cruise_connect/core/deep_links.dart';
 import 'package:cruise_connect/presentation/pages/post_detail_page.dart';
 
 class InteractivePostCard extends StatefulWidget {
@@ -51,6 +53,13 @@ class _InteractivePostCardState extends State<InteractivePostCard> {
       context.read<CommunityProvider>().toggleLike(widget.postId);
   void _toggleRepost() =>
       context.read<CommunityProvider>().toggleRepost(widget.postId);
+  void _sharePost() {
+    final link = CruiseDeepLinks.postUri(widget.postId).toString();
+    Share.share(
+      'Post von ${widget.handle} auf CruiseConnect: $link',
+      subject: 'CruiseConnect Post',
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -180,7 +189,7 @@ class _InteractivePostCardState extends State<InteractivePostCard> {
                 icon: Icons.share_outlined,
                 color: Colors.grey,
                 count: '',
-                onTap: () {},
+                onTap: _sharePost,
               ),
             ],
           ),
