@@ -1130,23 +1130,54 @@ export async function searchBestRoundTripRoute({
     route: any,
     qualityDistanceConfig: DistanceConfig,
     selectedExclude: string,
-  ): RouteQualityEvaluation =>
-    applySafeFallbackTier(
-      applyPreferenceScoring(
+  ): RouteQualityEvaluation => {
+    const quality = applyPreferenceScoring(
+      route,
+      applyCleanupGate(
         route,
-        applyCleanupGate(
-          route,
-          evaluateRouteQuality(route, "ROUND_TRIP", {
-            targetDistanceKm,
-            distanceConfig: qualityDistanceConfig,
-            mode,
-            avoidHighways,
-          }),
-          qualityDistanceConfig,
-        ),
+        evaluateRouteQuality(route, "ROUND_TRIP", {
+          targetDistanceKm,
+          distanceConfig: qualityDistanceConfig,
+          mode,
+          avoidHighways,
+        }),
+        qualityDistanceConfig,
       ),
-      selectedExclude,
     );
+    const safeQuality = applySafeFallbackTier(quality, selectedExclude);
+    if (safeQuality.safeFallbackUsed === true || quality.shapeMetrics != null) {
+      return safeQuality;
+    }
+    if (!quality.reason.startsWith("short_sport_distance=")) {
+      return safeQuality;
+    }
+
+    // `short_sport_distance` can be emitted before expensive shape metrics are
+    // attached. Re-evaluate without the Sport-specific presentation gate to
+    // get diagnostics, then only rescue if the strict safe-fallback shape gate
+    // passes. This does not make U-turn/stub/out-and-back routes acceptable.
+    const diagnosticQuality = applyPreferenceScoring(
+      route,
+      applyCleanupGate(
+        route,
+        evaluateRouteQuality(route, "ROUND_TRIP", {
+          targetDistanceKm,
+          distanceConfig: qualityDistanceConfig,
+          avoidHighways,
+        }),
+        qualityDistanceConfig,
+      ),
+    );
+    return applySafeFallbackTier({
+      ...diagnosticQuality,
+      passed: false,
+      reason: quality.reason,
+      tier: "rejected",
+      score: quality.score,
+      actualDistanceKm: quality.actualDistanceKm,
+      distanceDeltaKm: quality.distanceDeltaKm,
+    }, selectedExclude);
+  };
   const chooseBestRouteAlternative = (
     routes: any[],
     qualityDistanceConfig: DistanceConfig,
