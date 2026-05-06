@@ -1688,6 +1688,53 @@ export async function searchBestRoundTripRoute({
     }
     return "outside_bucket";
   };
+  const safeFallbackDistanceFits = (
+    quality: RouteQualityEvaluation,
+  ): boolean => {
+    const bounds = safeFallbackBounds();
+    return quality.safeFallbackUsed === true &&
+      bounds != null &&
+      quality.actualDistanceKm >= bounds.minKm &&
+      quality.actualDistanceKm <= bounds.maxKm;
+  };
+  const sessionDistanceFitTierForQuality = (
+    quality: RouteQualityEvaluation,
+    qualityDistanceConfig: DistanceConfig,
+  ): string => {
+    const tier = distanceFitTierForQuality(quality, qualityDistanceConfig);
+    if (tier !== "outside_bucket") return tier;
+    return safeFallbackDistanceFits(quality) ? "acceptable" : tier;
+  };
+  const sessionDistanceBandForCandidate = (
+    quality: RouteQualityEvaluation,
+    qualityDistanceConfig: DistanceConfig,
+  ): {
+    acceptableMinKm: number;
+    acceptableMaxKm: number;
+  } => {
+    const bounds = safeFallbackBounds();
+    if (
+      quality.safeFallbackUsed === true &&
+      bounds != null &&
+      quality.actualDistanceKm >= bounds.minKm &&
+      quality.actualDistanceKm <= bounds.maxKm
+    ) {
+      return {
+        acceptableMinKm: Math.min(
+          qualityDistanceConfig.acceptableMinKm,
+          bounds.minKm,
+        ),
+        acceptableMaxKm: Math.max(
+          qualityDistanceConfig.acceptableMaxKm,
+          bounds.maxKm,
+        ),
+      };
+    }
+    return {
+      acceptableMinKm: qualityDistanceConfig.acceptableMinKm,
+      acceptableMaxKm: qualityDistanceConfig.acceptableMaxKm,
+    };
+  };
   const targetSessionCandidateQueueSize = batchingUsed && targetDistanceKm >= 70
     ? 3
     : 1;
@@ -1765,6 +1812,10 @@ export async function searchBestRoundTripRoute({
     index: number,
   ): RoundTripSessionCandidatePayload => {
     const distanceConfig = candidate.context.distanceConfig;
+    const sessionDistanceBand = sessionDistanceBandForCandidate(
+      candidate.quality,
+      distanceConfig,
+    );
     const waypointIndexes = candidate.routeRequestMeta.silentViaUsed &&
         candidate.plan.waypoints.length > 2
       ? [0, candidate.plan.waypoints.length - 1]
@@ -1792,8 +1843,8 @@ export async function searchBestRoundTripRoute({
       force_legacy_waypoints: candidate.context.forceLegacyWaypoints === true,
       target_distance_km: targetDistanceKm,
       distance_bucket: distanceBucketForSessionPayload(),
-      distance_band_min_km: distanceConfig.acceptableMinKm,
-      distance_band_max_km: distanceConfig.acceptableMaxKm,
+      distance_band_min_km: sessionDistanceBand.acceptableMinKm,
+      distance_band_max_km: sessionDistanceBand.acceptableMaxKm,
       ideal_distance_min_km: distanceConfig.minKm,
       ideal_distance_max_km: distanceConfig.maxKm,
       predicted_distance_km: roundNumber(candidate.quality.actualDistanceKm, 1),
@@ -2940,7 +2991,7 @@ export async function searchBestRoundTripRoute({
 
       acceptedCandidates += 1;
       phaseAcceptedCandidates += 1;
-      const distanceFitTier = distanceFitTierForQuality(
+      const distanceFitTier = sessionDistanceFitTierForQuality(
         quality,
         selectedDistanceConfig,
       );
@@ -3175,7 +3226,7 @@ export async function searchBestRoundTripRoute({
         guidanceHydrationCount,
         searchStageSuccess: "duplicate_fallback",
         selectedCandidateFamily: bestEmergencyDuplicate.plan.label,
-        distanceFitTier: distanceFitTierForQuality(
+        distanceFitTier: sessionDistanceFitTierForQuality(
           bestEmergencyDuplicate.quality,
           bestEmergencyDuplicate.context.distanceConfig,
         ),
@@ -3477,7 +3528,7 @@ export async function searchBestRoundTripRoute({
       hydratedSelection = {
         plan: candidate.plan,
         phaseName: candidate.phaseName,
-        distanceFitTier: distanceFitTierForQuality(
+        distanceFitTier: sessionDistanceFitTierForQuality(
           hydratedCandidate.quality,
           candidate.context.distanceConfig,
         ),

@@ -398,6 +398,9 @@ async function createRoundTripSearchSession(
   if (roundTripSearch?.batchExhausted !== true && bestCandidate == null) {
     return null;
   }
+  if (bestCandidate == null || candidateQueue.length === 0) {
+    return null;
+  }
 
   const row = {
     route_type: "ROUND_TRIP",
@@ -407,9 +410,7 @@ async function createRoundTripSearchSession(
     style_key: styleKeyForMode(body.mode),
     avoid_highways: body.avoid_highways === true,
     status: "queued",
-    progress_stage: bestCandidate == null
-      ? "queued_without_candidate_payload"
-      : "queued_worker_hydration",
+    progress_stage: "queued_worker_hydration",
     attempts_count: 0,
     mapbox_calls_used: roundTripSearch?.mapboxCallCount ?? 0,
     request_payload: {

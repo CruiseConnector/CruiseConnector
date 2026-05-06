@@ -21,6 +21,17 @@ interface SessionRow {
   locked_until?: string | null;
 }
 
+interface RouteRegion {
+  id?: string | null;
+  country_code: string;
+  admin1_name: string;
+  admin2_name?: string | null;
+  city_cluster: string;
+  center_lat: number;
+  center_lng: number;
+  difficulty_level?: string | null;
+}
+
 interface CandidatePayload {
   candidate_id: string;
   route_fingerprint: string;
@@ -39,6 +50,7 @@ interface CandidatePayload {
   distance_band_max_km?: number;
   predicted_distance_km?: number;
   pre_hydration_quality?: JsonMap;
+  shape_score?: number | null;
   style_key?: string;
   requested_style?: string | null;
   delivered_style?: string | null;
@@ -230,6 +242,18 @@ async function hydrateClaimedSession(session: SessionRow): Promise<JsonMap> {
   const fingerprint = candidate.route_fingerprint ||
     `session_${shortHash(JSON.stringify(route.geometry).slice(0, 12000))}`;
   const qualityTier = qualityTierFromCandidate(candidate);
+  const region = await nearestRegionForSession(session);
+  const saveResult = await persistFoundRoute({
+    session,
+    candidate,
+    route,
+    fingerprint,
+    region,
+    distanceKm,
+    qualityTier,
+    shapeScore: shapeScoreFromCandidate(candidate),
+    hasMotorway,
+  });
   const now = new Date().toISOString();
   const bestRoutePayload = {
     route,
@@ -265,6 +289,7 @@ async function hydrateClaimedSession(session: SessionRow): Promise<JsonMap> {
       actual_has_highway: hasMotorway,
       actual_avoids_highway: !hasMotorway,
       mapbox_calls_used: totalCalls,
+      mapbox_calls_used_worker: callsUsed,
       candidate_id: candidate.candidate_id,
       candidate_family: candidate.candidate_family,
       candidate_queue_index: attempt,
@@ -278,11 +303,39 @@ async function hydrateClaimedSession(session: SessionRow): Promise<JsonMap> {
       silent_via_waypoints: candidate.silent_via_waypoints ?? null,
       mapbox_leg_count: Array.isArray(route?.legs) ? route.legs.length : null,
       arrive_maneuver_count: countArriveManeuvers(route),
-      candidate_inserted: false,
-      verified_inserted: false,
+      candidate_inserted: saveResult.candidateInserted,
+      candidate_saved: saveResult.candidateInserted,
+      verified_inserted: saveResult.verifiedInserted,
+      pool_inserted: saveResult.verifiedInserted,
+      route_persisted: saveResult.candidateInserted ||
+        saveResult.verifiedInserted,
+      candidate_duplicate_fingerprint: saveResult.duplicate,
+      candidate_duplicate_source: saveResult.duplicateSource,
+      candidate_save_skipped_reason: saveResult.skippedReason,
+      candidate_save_failed: saveResult.failed,
+      candidate_save_error_reason: saveResult.errorReason,
+      route_region_id: region.id ?? null,
+      city_cluster: region.city_cluster,
+      country_code: region.country_code,
+      admin1_name: region.admin1_name,
+      admin2_name: region.admin2_name ?? null,
     },
   };
 
+  const rejectSummary: JsonMap = mergeReject(
+    session.reject_summary,
+    "found",
+    candidate,
+  );
+  rejectSummary.persistence = {
+    candidate_inserted: saveResult.candidateInserted,
+    verified_inserted: saveResult.verifiedInserted,
+    duplicate: saveResult.duplicate,
+    duplicate_source: saveResult.duplicateSource,
+    skipped_reason: saveResult.skippedReason,
+    failed: saveResult.failed,
+    error_reason: saveResult.errorReason,
+  };
   await patchSession(session.id, {
     status: "found",
     progress_stage: "found",
@@ -291,6 +344,7 @@ async function hydrateClaimedSession(session: SessionRow): Promise<JsonMap> {
     best_candidate_payload: candidate,
     best_route_fingerprint: fingerprint,
     best_route_payload: bestRoutePayload,
+    reject_summary: rejectSummary,
     last_error: null,
     locked_until: null,
     worker_last_seen_at: now,
@@ -308,6 +362,235 @@ async function hydrateClaimedSession(session: SessionRow): Promise<JsonMap> {
     final_coordinate_count: display.coordinateCount,
     max_display_segment_m: display.maxSegmentMeters,
     mapbox_calls_used: callsUsed,
+    candidate_inserted: saveResult.candidateInserted,
+    verified_inserted: saveResult.verifiedInserted,
+    candidate_save_skipped_reason: saveResult.skippedReason,
+  };
+}
+
+async function persistFoundRoute(args: {
+  session: SessionRow;
+  candidate: CandidatePayload;
+  route: any;
+  fingerprint: string;
+  region: RouteRegion;
+  distanceKm: number;
+  qualityTier: string;
+  shapeScore: number;
+  hasMotorway: boolean;
+}): Promise<{
+  candidateInserted: boolean;
+  verifiedInserted: boolean;
+  duplicate: boolean;
+  duplicateSource: string | null;
+  skippedReason: string | null;
+  failed: boolean;
+  errorReason: string | null;
+}> {
+  if (!["ideal", "good", "acceptable"].includes(args.qualityTier)) {
+    return skippedSave("quality_tier_not_persistable");
+  }
+  if (args.session.avoid_highways && args.hasMotorway) {
+    return skippedSave("motorway_violation");
+  }
+  const coordinates = routeCoordinates(args.route);
+  if (coordinates.length < minDisplayCoordinateCount(args.session.distance_bucket)) {
+    return skippedSave("display_geometry_too_sparse");
+  }
+
+  const duplicatePool = await routeExists("route_pool", args.fingerprint);
+  if (duplicatePool) {
+    return {
+      candidateInserted: false,
+      verifiedInserted: false,
+      duplicate: true,
+      duplicateSource: "pool",
+      skippedReason: "duplicate_fingerprint",
+      failed: false,
+      errorReason: null,
+    };
+  }
+  const duplicateCandidate = await routeExists(
+    "route_pool_candidates",
+    args.fingerprint,
+  );
+  if (duplicateCandidate) {
+    return {
+      candidateInserted: false,
+      verifiedInserted: false,
+      duplicate: true,
+      duplicateSource: "candidate",
+      skippedReason: "duplicate_fingerprint",
+      failed: false,
+      errorReason: null,
+    };
+  }
+
+  try {
+    if (args.qualityTier === "ideal" || args.qualityTier === "good") {
+      await upsertVerifiedRoute(args);
+      return {
+        candidateInserted: false,
+        verifiedInserted: true,
+        duplicate: false,
+        duplicateSource: null,
+        skippedReason: null,
+        failed: false,
+        errorReason: null,
+      };
+    }
+    await upsertCandidateRoute(args);
+    return {
+      candidateInserted: true,
+      verifiedInserted: false,
+      duplicate: false,
+      duplicateSource: null,
+      skippedReason: null,
+      failed: false,
+      errorReason: null,
+    };
+  } catch (error) {
+    return {
+      candidateInserted: false,
+      verifiedInserted: false,
+      duplicate: false,
+      duplicateSource: null,
+      skippedReason: "insert_failed",
+      failed: true,
+      errorReason: sanitizeError(error),
+    };
+  }
+}
+
+function skippedSave(reason: string) {
+  return {
+    candidateInserted: false,
+    verifiedInserted: false,
+    duplicate: false,
+    duplicateSource: null,
+    skippedReason: reason,
+    failed: false,
+    errorReason: null,
+  };
+}
+
+async function upsertVerifiedRoute(args: {
+  session: SessionRow;
+  candidate: CandidatePayload;
+  route: any;
+  fingerprint: string;
+  region: RouteRegion;
+  distanceKm: number;
+  qualityTier: string;
+  shapeScore: number;
+  hasMotorway: boolean;
+}): Promise<void> {
+  const coordinates = routeCoordinates(args.route);
+  const first = coordinates[0];
+  const last = coordinates[coordinates.length - 1] ?? first;
+  await rest("route_pool", {
+    method: "POST",
+    query: "on_conflict=route_fingerprint",
+    headers: { Prefer: "resolution=merge-duplicates" },
+    body: {
+      route_fingerprint: args.fingerprint,
+      title: `${args.region.city_cluster} ${args.session.distance_bucket} ${
+        styleLabel(args.session.style_key)
+      } Session`,
+      route_region_id: args.region.id ?? null,
+      country_code: args.region.country_code,
+      admin1_name: args.region.admin1_name,
+      admin2_name: args.region.admin2_name ?? null,
+      city_cluster: args.region.city_cluster,
+      start_lat: first[1],
+      start_lng: first[0],
+      end_lat: last[1],
+      end_lng: last[0],
+      distance_km: args.distanceKm,
+      distance_bucket: args.session.distance_bucket,
+      route_type: "ROUND_TRIP",
+      style_tags: [styleLabel(args.session.style_key)],
+      avoids_highway: !args.hasMotorway,
+      has_highway: args.hasMotorway,
+      quality_score: qualityScoreForTier(args.qualityTier),
+      shape_score: args.shapeScore,
+      source: "mapbox_healing",
+      verified: true,
+      is_active: true,
+      geometry: args.route.geometry,
+      route_payload: sessionRoutePayload(args),
+    },
+  });
+}
+
+async function upsertCandidateRoute(args: {
+  session: SessionRow;
+  candidate: CandidatePayload;
+  route: any;
+  fingerprint: string;
+  region: RouteRegion;
+  distanceKm: number;
+  qualityTier: string;
+  shapeScore: number;
+  hasMotorway: boolean;
+}): Promise<void> {
+  const coordinates = routeCoordinates(args.route);
+  const first = coordinates[0];
+  await rest("route_pool_candidates", {
+    method: "POST",
+    query: "on_conflict=route_fingerprint",
+    headers: { Prefer: "resolution=merge-duplicates" },
+    body: {
+      route_region_id: args.region.id ?? null,
+      route_fingerprint: args.fingerprint,
+      country_code: args.region.country_code,
+      admin1_name: args.region.admin1_name,
+      admin2_name: args.region.admin2_name ?? null,
+      city_cluster: args.region.city_cluster,
+      start_lat: first[1],
+      start_lng: first[0],
+      distance_km: args.distanceKm,
+      route_type: "ROUND_TRIP",
+      distance_bucket: args.session.distance_bucket,
+      style_key: args.session.style_key,
+      style_tags: [styleLabel(args.session.style_key)],
+      avoid_highways: !args.hasMotorway,
+      has_highway: args.hasMotorway,
+      quality_score: qualityScoreForTier(args.qualityTier),
+      shape_score: args.shapeScore,
+      candidate_source: "bootstrap",
+      candidate_region_difficulty: args.region.difficulty_level ?? "normal",
+      candidate_locality_score: 100,
+      repeated_success_count: 1,
+      is_candidate: true,
+      is_verified_pool: false,
+      candidate_score: qualityScoreForTier(args.qualityTier),
+      geometry: args.route.geometry,
+      route_payload: sessionRoutePayload(args),
+    },
+  });
+}
+
+function sessionRoutePayload(args: {
+  session: SessionRow;
+  candidate: CandidatePayload;
+  qualityTier: string;
+  distanceKm: number;
+  route: any;
+}) {
+  return {
+    source: "process_route_search_sessions",
+    route_source: "search_session",
+    final_geometry_source: "hydrated_worker",
+    geometry_source: "mapbox_full",
+    quality_tier: args.qualityTier,
+    search_session_id: args.session.id,
+    candidate_id: args.candidate.candidate_id,
+    candidate_family: args.candidate.candidate_family,
+    target_distance_km: args.candidate.target_distance_km ??
+      args.session.distance_bucket,
+    route_distance_km: args.distanceKm,
+    generated_at: new Date().toISOString(),
   };
 }
 
@@ -409,6 +692,10 @@ function candidateFromUnknown(value: unknown): CandidatePayload | null {
     pre_hydration_quality: isJsonMap(record.pre_hydration_quality)
       ? record.pre_hydration_quality
       : {},
+    shape_score: typeof record.shape_score === "number" &&
+        Number.isFinite(record.shape_score)
+      ? record.shape_score
+      : null,
     style_key: typeof record.style_key === "string" ? record.style_key : undefined,
     requested_style: typeof record.requested_style === "string"
       ? record.requested_style
@@ -727,6 +1014,100 @@ function styleLabel(styleKey: string): string {
   return "Sport Mode";
 }
 
+function routeCoordinates(route: any): number[][] {
+  return Array.isArray(route?.geometry?.coordinates)
+    ? route.geometry.coordinates.filter((point: unknown): point is number[] =>
+      Array.isArray(point) &&
+      point.length >= 2 &&
+      typeof point[0] === "number" &&
+      typeof point[1] === "number" &&
+      Number.isFinite(point[0]) &&
+      Number.isFinite(point[1])
+    )
+    : [];
+}
+
+function shapeScoreFromCandidate(candidate: CandidatePayload): number {
+  const direct = Number(candidate.shape_score);
+  if (Number.isFinite(direct)) return clampNumber(direct, 0, 100);
+  const shapeMetrics = isJsonMap(candidate.pre_hydration_quality?.shape_metrics)
+    ? candidate.pre_hydration_quality.shape_metrics
+    : {};
+  const loopness = Number(shapeMetrics.loopness_score);
+  if (Number.isFinite(loopness)) return clampNumber(loopness, 0, 100);
+  const score = Number(candidate.pre_hydration_quality?.score);
+  if (Number.isFinite(score)) return clampNumber(score, 0, 100);
+  return qualityScoreForTier(qualityTierFromCandidate(candidate));
+}
+
+function qualityScoreForTier(tier: string): number {
+  if (tier === "ideal") return 96;
+  if (tier === "good") return 88;
+  if (tier === "acceptable") return 78;
+  return 0;
+}
+
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+async function nearestRegionForSession(session: SessionRow): Promise<RouteRegion> {
+  const rows = await rest<RouteRegion[]>("route_regions", {
+    query: new URLSearchParams({
+      select: "id,country_code,admin1_name,admin2_name,city_cluster,center_lat,center_lng,difficulty_level",
+      limit: "200",
+    }),
+  });
+  const origin = {
+    latitude: session.origin_lat,
+    longitude: session.origin_lng,
+  };
+  const candidates = rows
+    .filter((region) =>
+      Number.isFinite(region.center_lat) && Number.isFinite(region.center_lng)
+    )
+    .map((region) => ({
+      region,
+      distanceKm: distanceMeters(origin, {
+        latitude: region.center_lat,
+        longitude: region.center_lng,
+      }) / 1000,
+    }))
+    .sort((a, b) => a.distanceKm - b.distanceKm);
+  return candidates[0]?.region ?? {
+    country_code: "AT",
+    admin1_name: "Vorarlberg",
+    admin2_name: null,
+    city_cluster: "interactive_roundtrip",
+    center_lat: session.origin_lat,
+    center_lng: session.origin_lng,
+    difficulty_level: "normal",
+  };
+}
+
+async function routeExists(
+  table: "route_pool" | "route_pool_candidates",
+  fingerprint: string,
+): Promise<boolean> {
+  if (!fingerprint.trim()) return false;
+  const rows = await rest<JsonMap[]>(table, {
+    query: new URLSearchParams({
+      select: "route_fingerprint",
+      route_fingerprint: `eq.${fingerprint}`,
+      limit: "1",
+    }),
+  });
+  return rows.length > 0;
+}
+
+function sanitizeError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message
+    .replace(/Bearer\s+[A-Za-z0-9._-]+/g, "Bearer <redacted>")
+    .replace(/access_token=[^&\s]+/g, "access_token=<redacted>")
+    .slice(0, 220);
+}
+
 async function patchSession(id: string, patch: JsonMap) {
   await rest("route_search_sessions", {
     method: "PATCH",
@@ -738,7 +1119,7 @@ async function patchSession(id: string, patch: JsonMap) {
 async function rest<T = unknown>(
   table: string,
   options: {
-    method?: "GET" | "PATCH";
+    method?: "GET" | "POST" | "PATCH";
     query?: URLSearchParams | string;
     body?: unknown;
     headers?: Record<string, string>;
