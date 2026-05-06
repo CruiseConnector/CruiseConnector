@@ -1001,7 +1001,9 @@ class RouteService {
     });
   }
 
-  Future<RouteResult?> pollRoundTripSearchSession(String searchSessionId) async {
+  Future<RouteResult?> pollRoundTripSearchSession(
+    String searchSessionId,
+  ) async {
     final id = searchSessionId.trim();
     if (id.isEmpty) return null;
     final body = <String, dynamic>{
@@ -5185,7 +5187,7 @@ class RouteService {
       case 'hard_region_curated_needed':
         return 'In $clusterText ist diese Einstellung noch schwierig. Wir suchen passende Strecken und sammeln geprüfte Fahrten.';
       case 'hard_region_thin':
-        return 'In $clusterText gibt es erst wenige lokal verifizierte Routen. Wir erweitern den Pool noch.';
+        return 'In $clusterText gibt es erst wenige lokal verifizierte Routen. Wir suchen weiter nach guten Varianten.';
       case 'bootstrap_limited':
         return 'In $clusterText sind die automatischen Aufbauversuche aktuell begrenzt. Bitte versuche es spaeter erneut.';
       case 'cooldown':
@@ -6850,7 +6852,7 @@ class RouteService {
         coverageStatus == 'thin' ||
         coverageStatus == 'warming_up';
     if (bootstrapPending) {
-      return 'Für diese Länge und diesen Stil gibt es hier noch keine geprüfte Route. Wir bauen neue Vorschläge auf.';
+      return 'Für diese Länge und diesen Stil gibt es hier gerade noch keine stabile Route. Wir suchen weiter nach passenden Varianten.';
     }
     if (style != null && style.contains('kurven')) {
       return 'Kurvenjagd ist hier gerade schwer verfügbar. Wir suchen weiter nach einer passenden kurvigen Route.';

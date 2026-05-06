@@ -8,8 +8,8 @@ import type {
   Coordinate,
   DistanceConfig,
   RequestData,
-  RoundTripSessionCandidatePayload,
   RoundTripSearchResult,
+  RoundTripSessionCandidatePayload,
 } from "./routing_types.ts";
 import {
   applyAvoidHighwaysExcludes,
@@ -79,6 +79,9 @@ interface RouteSearchSessionRow {
 function serviceKey(): string {
   const direct = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")?.trim();
   if (direct) return direct;
+  const cruiserConnectKey = Deno.env.get("CRUISERCONNECT_SERVICE_ROLE_KEY")
+    ?.trim();
+  if (cruiserConnectKey) return cruiserConnectKey;
   const modernKeys = [
     ...parseNamedSecretKeys(Deno.env.get("SUPABASE_SECRET_KEYS")),
     ...parseNamedSecretKeys(Deno.env.get("SUPABASE_SECRET_KEY")),
@@ -192,7 +195,10 @@ function candidatePayloadDistanceFits(value: unknown): boolean {
   const predicted = Number(record.predicted_distance_km);
   const minKm = Number(record.distance_band_min_km);
   const maxKm = Number(record.distance_band_max_km);
-  if (!Number.isFinite(predicted) || !Number.isFinite(minKm) || !Number.isFinite(maxKm)) {
+  if (
+    !Number.isFinite(predicted) || !Number.isFinite(minKm) ||
+    !Number.isFinite(maxKm)
+  ) {
     return String(record.distance_fit_tier ?? "") !== "outside_bucket";
   }
   return predicted >= minKm && predicted <= maxKm;
@@ -203,7 +209,9 @@ function roundTripSessionCandidateQueue(
 ): RoundTripSessionCandidatePayload[] {
   const seen = new Set<string>();
   const queue: RoundTripSessionCandidatePayload[] = [];
-  const addCandidate = (candidate: RoundTripSessionCandidatePayload | null | undefined) => {
+  const addCandidate = (
+    candidate: RoundTripSessionCandidatePayload | null | undefined,
+  ) => {
     if (candidate == null || !candidatePayloadDistanceFits(candidate)) return;
     const key = candidate.route_fingerprint || candidate.candidate_id;
     if (key && seen.has(key)) return;
@@ -251,22 +259,32 @@ function mergeRoundTripBatchResults(
     waypoints: first.waypoints.length > 0 ? first.waypoints : second.waypoints,
     radiuses: first.radiuses || second.radiuses,
     quality: first.quality ?? second.quality,
-    candidateAttempts:
-      (first.candidateAttempts ?? 0) + (second.candidateAttempts ?? 0),
-    acceptedCandidates:
-      (first.acceptedCandidates ?? 0) + (second.acceptedCandidates ?? 0),
-    rejectedCandidates:
-      (first.rejectedCandidates ?? 0) + (second.rejectedCandidates ?? 0),
-    mapboxCallCount:
-      (first.mapboxCallCount ?? 0) + (second.mapboxCallCount ?? 0),
-    evaluatedRouteCount:
-      (first.evaluatedRouteCount ?? 0) + (second.evaluatedRouteCount ?? 0),
-    guidanceHydrationCount:
-      (first.guidanceHydrationCount ?? 0) + (second.guidanceHydrationCount ?? 0),
-    batchExhausted: first.batchExhausted === true || second.batchExhausted === true,
-    searchPhases: [...(first.searchPhases ?? []), ...(second.searchPhases ?? [])],
-    lastPlanLabels: [...(first.lastPlanLabels ?? []), ...(second.lastPlanLabels ?? [])],
-    rejectReasons: mergeRoundTripRejectReasons(first.rejectReasons, second.rejectReasons),
+    candidateAttempts: (first.candidateAttempts ?? 0) +
+      (second.candidateAttempts ?? 0),
+    acceptedCandidates: (first.acceptedCandidates ?? 0) +
+      (second.acceptedCandidates ?? 0),
+    rejectedCandidates: (first.rejectedCandidates ?? 0) +
+      (second.rejectedCandidates ?? 0),
+    mapboxCallCount: (first.mapboxCallCount ?? 0) +
+      (second.mapboxCallCount ?? 0),
+    evaluatedRouteCount: (first.evaluatedRouteCount ?? 0) +
+      (second.evaluatedRouteCount ?? 0),
+    guidanceHydrationCount: (first.guidanceHydrationCount ?? 0) +
+      (second.guidanceHydrationCount ?? 0),
+    batchExhausted: first.batchExhausted === true ||
+      second.batchExhausted === true,
+    searchPhases: [
+      ...(first.searchPhases ?? []),
+      ...(second.searchPhases ?? []),
+    ],
+    lastPlanLabels: [
+      ...(first.lastPlanLabels ?? []),
+      ...(second.lastPlanLabels ?? []),
+    ],
+    rejectReasons: mergeRoundTripRejectReasons(
+      first.rejectReasons,
+      second.rejectReasons,
+    ),
     bestCandidatePayload: dedupedQueue[0] ?? first.bestCandidatePayload ??
       second.bestCandidatePayload ?? null,
     candidateQueuePayload: dedupedQueue,
@@ -307,7 +325,9 @@ function searchSessionMeta(row: RouteSearchSessionRow): JsonMap {
     expires_at: row.expires_at ?? null,
     estimated_wait_seconds: row.distance_bucket >= 75
       ? row.status === "queued" ? 60 : 30
-      : row.status === "queued" ? 45 : 20,
+      : row.status === "queued"
+      ? 45
+      : 20,
   };
 }
 
@@ -358,7 +378,10 @@ async function routeSearchSessionStatusResponse(
     });
   }
 
-  if (row.status === "no_route" || row.status === "failed" || row.status === "expired") {
+  if (
+    row.status === "no_route" || row.status === "failed" ||
+    row.status === "expired"
+  ) {
     return jsonResponse(req, {
       route: null,
       code: "no_route",
@@ -384,14 +407,15 @@ async function createRoundTripSearchSession(
   if ((body.route_type ?? "ROUND_TRIP") !== "ROUND_TRIP") return null;
   const bucket = distanceBucketForTarget(body.targetDistance);
   if (body.startLocation == null) return null;
+  const queueLimit = roundTripSearchSessionQueueLimit(body);
   const candidateQueue = Array.isArray(roundTripSearch?.candidateQueuePayload)
     ? roundTripSearch.candidateQueuePayload
       .filter(candidatePayloadDistanceFits)
-      .slice(0, 3)
+      .slice(0, queueLimit)
     : [];
   const searchBestCandidate = candidatePayloadDistanceFits(
-    roundTripSearch?.bestCandidatePayload,
-  )
+      roundTripSearch?.bestCandidatePayload,
+    )
     ? roundTripSearch?.bestCandidatePayload
     : null;
   const bestCandidate = searchBestCandidate ?? candidateQueue[0] ?? null;
@@ -443,6 +467,20 @@ async function createRoundTripSearchSession(
     },
   );
   return rows[0] ?? null;
+}
+
+function roundTripSearchSessionQueueLimit(body: RequestData): number {
+  const targetKm = finiteNumber(body.targetDistance) ??
+    parseRoundTripTargetHintKm(body.route_variant_hint) ??
+    50;
+  const styleKey = styleKeyForMode(body.mode);
+  const styleThin = styleKey === "abendrunde" || styleKey === "entdecker";
+  if (styleThin && targetKm >= 70) return 8;
+  if (styleThin) return 6;
+  if (targetKm >= 90) return 7;
+  if (targetKm >= 70) return 6;
+  if (body.avoid_highways === false) return 5;
+  return 4;
 }
 
 function parseRoundTripTargetHintKm(value?: string): number | null {
@@ -586,9 +624,9 @@ function buildNoRouteSearchMeta(
       0,
     search_session_id: roundTripSearch?.batchCount != null &&
         roundTripSearch.batchCount > 1
-      ? `roundtrip_batch:${roundTripSearch.batchIndex ?? 0}/${
-        roundTripSearch.batchCount
-      }`
+      ? `roundtrip_batch:${
+        roundTripSearch.batchIndex ?? 0
+      }/${roundTripSearch.batchCount}`
       : null,
     roundtrip_batch_index: roundTripSearch?.batchIndex ?? null,
     roundtrip_batch_count: roundTripSearch?.batchCount ?? null,
@@ -615,10 +653,10 @@ function buildNoRouteSearchMeta(
     average_segment_m: roundTripSearch?.finalAverageSegmentMeters ?? null,
     display_geometry_reject_reason:
       roundTripSearch?.finalDisplayGeometryRejectReason ?? null,
-    post_hydration_reject_reason:
-      roundTripSearch?.postHydrationRejectReason ?? null,
-    pre_hydration_quality_tier:
-      roundTripSearch?.preHydrationQualityTier ?? null,
+    post_hydration_reject_reason: roundTripSearch?.postHydrationRejectReason ??
+      null,
+    pre_hydration_quality_tier: roundTripSearch?.preHydrationQualityTier ??
+      null,
     hydration_diagnostics: roundTripSearch?.hydrationDiagnostics ?? [],
     live_fill_search_stage_success: roundTripSearch?.searchStageSuccess ??
       null,
@@ -669,8 +707,8 @@ function buildNoRouteSearchMeta(
         roundTripSearch?.finalDisplayGeometryRejectReason ?? null,
       post_hydration_reject_reason:
         roundTripSearch?.postHydrationRejectReason ?? null,
-      pre_hydration_quality_tier:
-        roundTripSearch?.preHydrationQualityTier ?? null,
+      pre_hydration_quality_tier: roundTripSearch?.preHydrationQualityTier ??
+        null,
       hydration_diagnostics: roundTripSearch?.hydrationDiagnostics ?? [],
       search_stage_success: roundTripSearch?.searchStageSuccess ?? null,
       candidate_family: roundTripSearch?.selectedCandidateFamily ?? null,
@@ -1559,8 +1597,7 @@ Deno.serve(async (req) => {
     const forceRoundTripSearchSession =
       body.force_roundtrip_search_session === true ||
       body.interactive_roundtrip_search === true;
-    const shortNoHighwayRoundTripNeedsSession =
-      useRoundTripSearch &&
+    const shortNoHighwayRoundTripNeedsSession = useRoundTripSearch &&
       planning_type === "Zufall" &&
       avoidHighways &&
       roundTripTargetForBatching >= 45;
@@ -1572,6 +1609,7 @@ Deno.serve(async (req) => {
           roundTripTargetForBatching >= 70 ||
           (avoidHighways && roundTripTargetForBatching >= 60) ||
           roundTripTargetForBatching >= 90 ||
+          mode === "Abendrunde" ||
           mode === "Entdecker"
         )
       ? 3
@@ -1579,7 +1617,10 @@ Deno.serve(async (req) => {
     const effectiveRoundTripBatchCount = useRoundTripSearch
       ? Math.max(
         1,
-        Math.min(4, requestedRoundTripBatchCount ?? inferredRoundTripBatchCount),
+        Math.min(
+          4,
+          requestedRoundTripBatchCount ?? inferredRoundTripBatchCount,
+        ),
       )
       : 1;
     const effectiveRoundTripBatchIndex = effectiveRoundTripBatchCount <= 1
@@ -2743,8 +2784,7 @@ Deno.serve(async (req) => {
     const isSafeFallbackFinalReject = (reason: string): boolean => {
       const normalized = reason.toLowerCase();
       const shape = roundTripSearch?.quality?.shapeMetrics;
-      const cleanPreHydrationHairpin =
-        roundTripPreHydrationFallbackUsed &&
+      const cleanPreHydrationHairpin = roundTripPreHydrationFallbackUsed &&
         shape != null &&
         shape.geometricUTurnCount <= (mode === "Sport Mode" ? 6 : 4) &&
         shape.cleanupUTurnCount <= (mode === "Sport Mode" ? 6 : 4) &&
@@ -3305,8 +3345,7 @@ Deno.serve(async (req) => {
             ? "exclude_motorway"
             : "allowed_not_required",
           highway_allowed_fallback_used: highwayAllowedNoHighwayFallbackUsed,
-          selected_no_highway_compatible:
-            roundTripCompatibleNoHighwayResult ||
+          selected_no_highway_compatible: roundTripCompatibleNoHighwayResult ||
             highwayAllowedNoHighwayFallbackUsed,
           ...(movingStartMeta ?? {}),
           safe_fallback_used: roundTripSearch?.safeFallbackUsed === true,

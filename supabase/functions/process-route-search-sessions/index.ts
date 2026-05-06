@@ -68,6 +68,8 @@ const corsHeaders = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
+const maxSessionCandidateQueueLength = 10;
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { status: 204, headers: corsHeaders });
@@ -159,7 +161,13 @@ async function hydrateClaimedSession(session: SessionRow): Promise<JsonMap> {
     };
   }
   if (!candidateIsValid(candidate)) {
-    await rejectOrRetry(session, "invalid_candidate_payload", 0, candidate, queue);
+    await rejectOrRetry(
+      session,
+      "invalid_candidate_payload",
+      0,
+      candidate,
+      queue,
+    );
     return {
       search_session_id: session.id,
       found: false,
@@ -182,7 +190,13 @@ async function hydrateClaimedSession(session: SessionRow): Promise<JsonMap> {
   const fetchResult = await fetchFullRoute(candidate, session, token);
   const callsUsed = 1;
   if (!fetchResult.route) {
-    await rejectOrRetry(session, fetchResult.reason, callsUsed, candidate, queue);
+    await rejectOrRetry(
+      session,
+      fetchResult.reason,
+      callsUsed,
+      candidate,
+      queue,
+    );
     return {
       search_session_id: session.id,
       found: false,
@@ -227,7 +241,13 @@ async function hydrateClaimedSession(session: SessionRow): Promise<JsonMap> {
 
   const hasMotorway = routeHasMotorway(route);
   if (session.avoid_highways && hasMotorway) {
-    await rejectOrRetry(session, "motorway_violation", callsUsed, candidate, queue);
+    await rejectOrRetry(
+      session,
+      "motorway_violation",
+      callsUsed,
+      candidate,
+      queue,
+    );
     return {
       search_session_id: session.id,
       found: false,
@@ -273,14 +293,18 @@ async function hydrateClaimedSession(session: SessionRow): Promise<JsonMap> {
       average_segment_m: display.averageSegmentMeters,
       road_snapped_geometry: true,
       quality_tier: qualityTier,
-      pre_hydration_quality_tier:
-        String(candidate.pre_hydration_quality?.tier ?? qualityTier),
+      pre_hydration_quality_tier: String(
+        candidate.pre_hydration_quality?.tier ?? qualityTier,
+      ),
       route_distance_km: distanceKm,
-      target_distance_km: candidate.target_distance_km ?? session.distance_bucket,
+      target_distance_km: candidate.target_distance_km ??
+        session.distance_bucket,
       requested_distance_bucket: session.distance_bucket,
       requested_style_key: session.style_key,
-      requested_style: candidate.requested_style ?? styleLabel(session.style_key),
-      delivered_style: candidate.delivered_style ?? styleLabel(session.style_key),
+      requested_style: candidate.requested_style ??
+        styleLabel(session.style_key),
+      delivered_style: candidate.delivered_style ??
+        styleLabel(session.style_key),
       style_downgraded: candidate.style_downgraded === true,
       avoid_highways_requested: session.avoid_highways,
       motorway_policy: session.avoid_highways
@@ -394,7 +418,9 @@ async function persistFoundRoute(args: {
     return skippedSave("motorway_violation");
   }
   const coordinates = routeCoordinates(args.route);
-  if (coordinates.length < minDisplayCoordinateCount(args.session.distance_bucket)) {
+  if (
+    coordinates.length < minDisplayCoordinateCount(args.session.distance_bucket)
+  ) {
     return skippedSave("display_geometry_too_sparse");
   }
 
@@ -626,7 +652,9 @@ async function claimSession(session: SessionRow): Promise<SessionRow | null> {
   const now = new Date().toISOString();
   const rows = await rest<SessionRow[]>("route_search_sessions", {
     method: "PATCH",
-    query: `id=eq.${encodeURIComponent(session.id)}&status=in.(queued,running,hydrating)&select=*`,
+    query: `id=eq.${
+      encodeURIComponent(session.id)
+    }&status=in.(queued,running,hydrating)&select=*`,
     headers: { Prefer: "return=representation" },
     body: {
       status: "hydrating",
@@ -645,7 +673,7 @@ function candidateQueue(session: SessionRow): CandidatePayload[] {
       .map(candidateFromUnknown)
       .filter((candidate): candidate is CandidatePayload => candidate != null)
     : [];
-  if (queue.length > 0) return queue.slice(0, 3);
+  if (queue.length > 0) return queue.slice(0, maxSessionCandidateQueueLength);
   const best = candidateFromUnknown(session.best_candidate_payload);
   return best == null ? [] : [best];
 }
@@ -696,7 +724,9 @@ function candidateFromUnknown(value: unknown): CandidatePayload | null {
         Number.isFinite(record.shape_score)
       ? record.shape_score
       : null,
-    style_key: typeof record.style_key === "string" ? record.style_key : undefined,
+    style_key: typeof record.style_key === "string"
+      ? record.style_key
+      : undefined,
     requested_style: typeof record.requested_style === "string"
       ? record.requested_style
       : null,
@@ -753,7 +783,8 @@ async function fetchFullRoute(
   params.set("radiuses", validRadiuses(candidate));
   if (
     candidate.bearings != null &&
-    candidate.bearings.split(";").length === candidate.planned_coordinates.length
+    candidate.bearings.split(";").length ===
+      candidate.planned_coordinates.length
   ) {
     params.set("bearings", candidate.bearings);
   }
@@ -810,7 +841,8 @@ async function fetchFullRoute(
 function validRadiuses(candidate: CandidatePayload): string {
   if (
     candidate.radiuses != null &&
-    candidate.radiuses.split(";").length === candidate.planned_coordinates.length
+    candidate.radiuses.split(";").length ===
+      candidate.planned_coordinates.length
   ) {
     return candidate.radiuses;
   }
@@ -823,7 +855,10 @@ function validRadiuses(candidate: CandidatePayload): string {
     .join(";");
 }
 
-function applyAvoidHighwaysExcludes(exclude: string, avoidHighways: boolean): string {
+function applyAvoidHighwaysExcludes(
+  exclude: string,
+  avoidHighways: boolean,
+): string {
   const parts = exclude
     .split(",")
     .map((part) => part.trim())
@@ -875,13 +910,22 @@ async function finish(
 function displayDecision(route: any, bucket: Bucket) {
   const stats = geometryStats(route?.geometry?.coordinates);
   if (stats.coordinateCount < minDisplayCoordinateCount(bucket)) {
-    return { ...stats, reason: `display_geometry_coords_${stats.coordinateCount}` };
+    return {
+      ...stats,
+      reason: `display_geometry_coords_${stats.coordinateCount}`,
+    };
   }
   if ((stats.maxSegmentMeters ?? 0) > (bucket === 100 ? 2500 : 2000)) {
-    return { ...stats, reason: `display_geometry_max_segment_${stats.maxSegmentMeters}` };
+    return {
+      ...stats,
+      reason: `display_geometry_max_segment_${stats.maxSegmentMeters}`,
+    };
   }
   if ((stats.averageSegmentMeters ?? 0) > 900) {
-    return { ...stats, reason: `display_geometry_avg_segment_${stats.averageSegmentMeters}` };
+    return {
+      ...stats,
+      reason: `display_geometry_avg_segment_${stats.averageSegmentMeters}`,
+    };
   }
   return { ...stats, reason: null };
 }
@@ -983,7 +1027,8 @@ function distanceMeters(
   const lat2 = b.latitude * Math.PI / 180;
   const sinDLat = Math.sin(dLat / 2);
   const sinDLon = Math.sin(dLon / 2);
-  const h = sinDLat * sinDLat + Math.cos(lat1) * Math.cos(lat2) * sinDLon * sinDLon;
+  const h = sinDLat * sinDLat +
+    Math.cos(lat1) * Math.cos(lat2) * sinDLon * sinDLon;
   return 2 * radius * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
 }
 
@@ -1002,7 +1047,8 @@ function mergeReject(
     reject_reasons: rejectReasons,
     last_candidate_id: candidate.candidate_id,
     last_candidate_family: candidate.candidate_family,
-    last_candidate_predicted_distance_km: candidate.predicted_distance_km ?? null,
+    last_candidate_predicted_distance_km: candidate.predicted_distance_km ??
+      null,
     updated_at: new Date().toISOString(),
   };
 }
@@ -1051,10 +1097,13 @@ function clampNumber(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
 
-async function nearestRegionForSession(session: SessionRow): Promise<RouteRegion> {
+async function nearestRegionForSession(
+  session: SessionRow,
+): Promise<RouteRegion> {
   const rows = await rest<RouteRegion[]>("route_regions", {
     query: new URLSearchParams({
-      select: "id,country_code,admin1_name,admin2_name,city_cluster,center_lat,center_lng,difficulty_level",
+      select:
+        "id,country_code,admin1_name,admin2_name,city_cluster,center_lat,center_lng,difficulty_level",
       limit: "200",
     }),
   });
@@ -1132,7 +1181,9 @@ async function rest<T = unknown>(
     : "";
   const key = serviceKey();
   const response = await fetch(
-    `${env("SUPABASE_URL").replace(/\/$/, "")}/rest/v1/${table}${query ? `?${query}` : ""}`,
+    `${env("SUPABASE_URL").replace(/\/$/, "")}/rest/v1/${table}${
+      query ? `?${query}` : ""
+    }`,
     {
       method: options.method ?? "GET",
       headers: {
@@ -1147,7 +1198,9 @@ async function rest<T = unknown>(
   );
   if (!response.ok) {
     throw new Error(
-      `rest_${table}_${response.status}:${(await response.text()).slice(0, 220)}`,
+      `rest_${table}_${response.status}:${
+        (await response.text()).slice(0, 220)
+      }`,
     );
   }
   if (response.status === 204) return undefined as T;
@@ -1185,14 +1238,19 @@ function isAuthorized(req: Request): boolean {
 function serviceKey(): string {
   const direct = env("SUPABASE_SERVICE_ROLE_KEY");
   if (direct) return direct;
+  const cruiserConnectKey = env("CRUISERCONNECT_SERVICE_ROLE_KEY");
+  if (cruiserConnectKey) return cruiserConnectKey;
   return secretApiKeys()[0] ?? "";
 }
 
 function secretApiKeys(): string[] {
   return [
+    ...parseNamedSecretKeys(Deno.env.get("CRUISERCONNECT_SERVICE_ROLE_KEY")),
     ...parseNamedSecretKeys(Deno.env.get("SUPABASE_SECRET_KEYS")),
     ...parseNamedSecretKeys(Deno.env.get("SUPABASE_SECRET_KEY")),
-  ].filter((value, index, all) => value.length > 0 && all.indexOf(value) === index);
+  ].filter((value, index, all) =>
+    value.length > 0 && all.indexOf(value) === index
+  );
 }
 
 function parseNamedSecretKeys(raw: string | undefined): string[] {
@@ -1243,7 +1301,10 @@ function constantEquals(left: string | null, right: string | null): boolean {
 function jsonResponse(body: unknown, status: number): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { ...corsHeaders, "content-type": "application/json; charset=utf-8" },
+    headers: {
+      ...corsHeaders,
+      "content-type": "application/json; charset=utf-8",
+    },
   });
 }
 
@@ -1280,7 +1341,9 @@ function clampInt(
   min: number,
   max: number,
 ): number {
-  const parsed = typeof value === "number" ? value : Number(String(value ?? ""));
+  const parsed = typeof value === "number"
+    ? value
+    : Number(String(value ?? ""));
   if (!Number.isFinite(parsed)) return fallback;
   return Math.max(min, Math.min(max, Math.floor(parsed)));
 }

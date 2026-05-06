@@ -15,6 +15,7 @@ import {
 } from "../generate-cruise-route/routing_utils.ts";
 
 type JsonMap = Record<string, unknown>;
+const maxSessionCandidateQueueLength = 10;
 
 interface SeedJob {
   id: string;
@@ -246,7 +247,9 @@ export async function processRouteSeedJobs(
 ): Promise<RoutePoolHealingWorkerResult> {
   supabaseUrl = options.supabaseUrl ?? env("SUPABASE_URL");
   serviceKey = options.serviceKey ??
-    (env("SUPABASE_SERVICE_ROLE_KEY") || env("SUPABASE_ANON_KEY"));
+    (env("SUPABASE_SERVICE_ROLE_KEY") ||
+      env("CRUISERCONNECT_SERVICE_ROLE_KEY") ||
+      env("SUPABASE_ANON_KEY"));
   edgeEndpoint = options.edgeEndpoint ??
     `${supabaseUrl}/functions/v1/generate-cruise-route`;
   functionKey = options.functionKey ?? (env("SUPABASE_FUNCTION_KEY") ||
@@ -315,7 +318,9 @@ export async function processRouteSearchSessions(
 ): Promise<RouteSearchSessionWorkerResult> {
   supabaseUrl = options.supabaseUrl ?? env("SUPABASE_URL");
   serviceKey = options.serviceKey ??
-    (env("SUPABASE_SERVICE_ROLE_KEY") || env("SUPABASE_ANON_KEY"));
+    (env("SUPABASE_SERVICE_ROLE_KEY") ||
+      env("CRUISERCONNECT_SERVICE_ROLE_KEY") ||
+      env("SUPABASE_ANON_KEY"));
   functionKey = options.functionKey ?? (env("SUPABASE_FUNCTION_KEY") ||
     serviceKey);
   dryRun = options.dryRun ?? false;
@@ -1291,7 +1296,9 @@ async function claimSearchSession(
   }
   const rows = await rest<RouteSearchSession[]>("route_search_sessions", {
     method: "PATCH",
-    query: `id=eq.${encodeURIComponent(session.id)}&status=in.(queued,running,hydrating)&select=*`,
+    query: `id=eq.${
+      encodeURIComponent(session.id)
+    }&status=in.(queued,running,hydrating)&select=*`,
     headers: { Prefer: "return=representation" },
     body: {
       status: "hydrating",
@@ -1304,7 +1311,9 @@ async function claimSearchSession(
   return rows[0] ?? null;
 }
 
-async function processSearchSession(session: RouteSearchSession): Promise<void> {
+async function processSearchSession(
+  session: RouteSearchSession,
+): Promise<void> {
   const accessToken = env("MAPBOX_ACCESS_TOKEN");
   if (!accessToken) {
     await updateSearchSession(session.id, {
@@ -1401,7 +1410,9 @@ async function processSearchSession(session: RouteSearchSession): Promise<void> 
   const routeDistanceKm = distanceKmFromRoute(route);
   const band = candidateDistanceBand(candidate, session.distance_bucket);
   if (routeDistanceKm < band.minKm || routeDistanceKm > band.maxKm) {
-    const reason = `distance_outside_candidate_band_${routeDistanceKm.toFixed(1)}`;
+    const reason = `distance_outside_candidate_band_${
+      routeDistanceKm.toFixed(1)
+    }`;
     await continueOrFinishSearchSession(session, {
       ...basePatch,
       last_error: reason,
@@ -1507,7 +1518,8 @@ async function processSearchSession(session: RouteSearchSession): Promise<void> 
         requested_style_key: session.style_key,
         delivered_style: candidate.delivered_style ??
           styleLabel(session.style_key),
-        requested_style: candidate.requested_style ?? styleLabel(session.style_key),
+        requested_style: candidate.requested_style ??
+          styleLabel(session.style_key),
         style_downgraded: candidate.style_downgraded === true,
         avoid_highways_requested: session.avoid_highways,
         motorway_policy: session.avoid_highways
@@ -1546,7 +1558,7 @@ function searchSessionCandidateQueue(
         candidate != null
       )
     : [];
-  if (queue.length > 0) return queue.slice(0, 3);
+  if (queue.length > 0) return queue.slice(0, maxSessionCandidateQueueLength);
   const best = searchSessionCandidateFromUnknown(
     session.best_candidate_payload,
   );
@@ -1600,7 +1612,9 @@ function searchSessionCandidateFromUnknown(
       ? record.pre_hydration_quality
       : undefined,
     shape_score: numberFromUnknown(record.shape_score) ?? null,
-    style_key: typeof record.style_key === "string" ? record.style_key : undefined,
+    style_key: typeof record.style_key === "string"
+      ? record.style_key
+      : undefined,
     requested_style: typeof record.requested_style === "string"
       ? record.requested_style
       : null,
@@ -1897,7 +1911,8 @@ function mergeRejectSummary(
 ): JsonMap {
   const rejectReasons = {
     ...(
-      current?.reject_reasons != null && typeof current.reject_reasons === "object"
+      current?.reject_reasons != null &&
+        typeof current.reject_reasons === "object"
         ? current.reject_reasons as Record<string, unknown>
         : {}
     ),
@@ -1923,14 +1938,23 @@ function displayGeometryDecision(
 } {
   const stats = routeDisplayGeometryStats(route?.geometry?.coordinates);
   if (stats.coordinateCount < minDisplayCoordinateCount(bucket)) {
-    return { ...stats, reason: `display_geometry_coords_${stats.coordinateCount}` };
+    return {
+      ...stats,
+      reason: `display_geometry_coords_${stats.coordinateCount}`,
+    };
   }
   const maxLimit = bucket === 100 ? 2500 : 2000;
   if ((stats.maxSegmentMeters ?? 0) > maxLimit) {
-    return { ...stats, reason: `display_geometry_max_segment_${stats.maxSegmentMeters}` };
+    return {
+      ...stats,
+      reason: `display_geometry_max_segment_${stats.maxSegmentMeters}`,
+    };
   }
   if ((stats.averageSegmentMeters ?? 0) > 900) {
-    return { ...stats, reason: `display_geometry_avg_segment_${stats.averageSegmentMeters}` };
+    return {
+      ...stats,
+      reason: `display_geometry_avg_segment_${stats.averageSegmentMeters}`,
+    };
   }
   return { ...stats, reason: null };
 }

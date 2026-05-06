@@ -185,6 +185,9 @@ class _CruiseModePageState extends State<CruiseModePage>
   bool _configCollapsed = false; // Config-Panel ein-/ausgeklappt
   bool _showRouteInfoBanner = false; // Route-Info Banner nach Generation
   bool _routeWarmupDialogOpen = false;
+  bool _routeSearchStatusMinimized = false;
+  String? _routeSearchNoticeTitle;
+  String? _routeSearchNoticeMessage;
   int _cachedCurveCount = 0; // Vorab im Isolate berechnet
   List<double>? _activeDestinationCoordinate;
   String _activePointToPointMode = 'Standard';
@@ -326,8 +329,8 @@ class _CruiseModePageState extends State<CruiseModePage>
   static const List<String> _roundTripLoadingPhases = [
     'Live-Routen prüfen',
     'Alternativen vergleichen',
-    'Route auf Straßen prüfen',
-    'Vorschläge im Pool aufbauen',
+    'Route verfeinern',
+    'Strecke final prüfen',
     'Fast fertig',
   ];
 
@@ -347,6 +350,9 @@ class _CruiseModePageState extends State<CruiseModePage>
       _isLoading = true;
       _showRouteInfoBanner = false;
       _routeLoadingPhaseIndex = 0;
+      _routeSearchStatusMinimized = false;
+      _routeSearchNoticeTitle = null;
+      _routeSearchNoticeMessage = null;
     });
     _routeLoadingPhaseTimer = Timer.periodic(const Duration(seconds: 18), (_) {
       if (!mounted || _disposed || !_isLoading) return;
@@ -1061,6 +1067,8 @@ class _CruiseModePageState extends State<CruiseModePage>
           if (!_isRouteConfirmed) RepaintBoundary(child: _buildConfigOverlay()),
           if (_isRouteConfirmed)
             RepaintBoundary(child: _buildNavigationOverlay()),
+          if (_shouldShowRoundTripSearchStatus)
+            RepaintBoundary(child: _buildRoundTripSearchStatusOverlay()),
 
           // Exit-Button wenn wir als Gruppen-Session gestartet wurden
           // (sonst ist man in der Fullscreen-Navigation gefangen).
@@ -1071,6 +1079,231 @@ class _CruiseModePageState extends State<CruiseModePage>
               child: _buildExitButton(),
             ),
         ],
+      ),
+    );
+  }
+
+  bool get _shouldShowRoundTripSearchStatus =>
+      _isRoundTrip &&
+      !_isWaypointPlanning &&
+      (_isLoading || _routeSearchNoticeTitle != null);
+
+  Widget _buildRoundTripSearchStatusOverlay() {
+    final media = MediaQuery.of(context);
+    final isNotice = !_isLoading && _routeSearchNoticeTitle != null;
+    final title = _isLoading
+        ? 'Wir suchen eine bessere Route'
+        : _routeSearchNoticeTitle!;
+    final status = _isLoading
+        ? _routeLoadingStatusText
+        : (_routeSearchNoticeMessage ??
+              'Gerade keine gute Route gefunden. Wir suchen weiter im Hintergrund.');
+    final progressValue = isNotice ? 1.0 : null;
+
+    return Positioned(
+      top: media.padding.top + 10,
+      left: 12,
+      right: 12,
+      child: Align(
+        alignment: Alignment.topCenter,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 440),
+          child: AnimatedSwitcher(
+            duration: const Duration(milliseconds: 180),
+            child: _routeSearchStatusMinimized
+                ? _buildMinimizedRoundTripSearchStatus(title)
+                : _buildExpandedRoundTripSearchStatus(
+                    title: title,
+                    status: status,
+                    progressValue: progressValue,
+                    isNotice: isNotice,
+                  ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMinimizedRoundTripSearchStatus(String title) {
+    return Material(
+      key: const ValueKey('roundtrip-search-minimized'),
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(999),
+        onTap: () => _safeSetState(() => _routeSearchStatusMinimized = false),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          decoration: BoxDecoration(
+            color: const Color(0xFF12151C).withValues(alpha: 0.92),
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.24),
+                blurRadius: 18,
+                offset: const Offset(0, 8),
+              ),
+            ],
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SizedBox(
+                width: 14,
+                height: 14,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: AppAccentColors.accent,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Flexible(
+                child: Text(
+                  title,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildExpandedRoundTripSearchStatus({
+    required String title,
+    required String status,
+    required double? progressValue,
+    required bool isNotice,
+  }) {
+    return Material(
+      key: const ValueKey('roundtrip-search-expanded'),
+      color: Colors.transparent,
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: const Color(0xFF12151C).withValues(alpha: 0.94),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.28),
+              blurRadius: 22,
+              offset: const Offset(0, 10),
+            ),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  width: 34,
+                  height: 34,
+                  decoration: BoxDecoration(
+                    color: AppAccentColors.accent.withValues(alpha: 0.16),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Icon(
+                    isNotice ? Icons.route_outlined : Icons.auto_awesome,
+                    color: AppAccentColors.accent,
+                    size: 19,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 15,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        status,
+                        style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.72),
+                          fontSize: 13,
+                          height: 1.25,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                IconButton(
+                  onPressed: () =>
+                      _safeSetState(() => _routeSearchStatusMinimized = true),
+                  icon: const Icon(Icons.expand_less),
+                  color: Colors.white.withValues(alpha: 0.76),
+                  tooltip: 'Karte ansehen',
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: LinearProgressIndicator(
+                minHeight: 4,
+                value: progressValue,
+                backgroundColor: Colors.white.withValues(alpha: 0.08),
+                valueColor: AlwaysStoppedAnimation<Color>(
+                  AppAccentColors.accent,
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                TextButton(
+                  onPressed: () =>
+                      _safeSetState(() => _routeSearchStatusMinimized = true),
+                  style: TextButton.styleFrom(
+                    foregroundColor: AppAccentColors.accent,
+                    padding: EdgeInsets.zero,
+                    minimumSize: const Size(0, 34),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                  child: const Text('Karte ansehen'),
+                ),
+                const Spacer(),
+                if (isNotice)
+                  TextButton(
+                    onPressed: () {
+                      _safeSetState(() {
+                        _routeSearchNoticeTitle = null;
+                        _routeSearchNoticeMessage = null;
+                        _routeSearchStatusMinimized = false;
+                      });
+                      unawaited(
+                        Future<void>.delayed(Duration.zero, _generateRoute),
+                      );
+                    },
+                    style: TextButton.styleFrom(
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                      minimumSize: const Size(0, 34),
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    child: const Text('Nochmal suchen'),
+                  ),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1750,84 +1983,6 @@ class _CruiseModePageState extends State<CruiseModePage>
                   ),
                 ),
               ),
-            if (_isLoading)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 10),
-                child: Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF12151C).withValues(alpha: 0.92),
-                    borderRadius: BorderRadius.circular(18),
-                    border: Border.all(
-                      color: Colors.white.withValues(alpha: 0.10),
-                    ),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'Wir berechnen bessere Vorschläge',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 14,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                      const SizedBox(height: 6),
-                      Text(
-                        _routeLoadingStatusText,
-                        style: TextStyle(
-                          color: Colors.white.withValues(alpha: 0.78),
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      if (_isRoundTrip && !_isWaypointPlanning) ...[
-                        const SizedBox(height: 4),
-                        Text(
-                          'Das kann bei dieser Region 1-2 Minuten dauern.',
-                          style: TextStyle(
-                            color: Colors.white.withValues(alpha: 0.58),
-                            fontSize: 12,
-                          ),
-                        ),
-                      ],
-                      const SizedBox(height: 10),
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(8),
-                        child: LinearProgressIndicator(
-                          minHeight: 4,
-                          value:
-                              (_routeLoadingPhaseIndex + 1) /
-                              _roundTripLoadingPhases.length,
-                          backgroundColor: Colors.white.withValues(alpha: 0.08),
-                          valueColor: AlwaysStoppedAnimation<Color>(
-                            AppAccentColors.accent,
-                          ),
-                        ),
-                      ),
-                      if (!_configCollapsed) ...[
-                        const SizedBox(height: 8),
-                        Align(
-                          alignment: Alignment.centerLeft,
-                          child: TextButton(
-                            onPressed: () =>
-                                _safeSetState(() => _configCollapsed = true),
-                            style: TextButton.styleFrom(
-                              foregroundColor: AppAccentColors.accent,
-                              padding: EdgeInsets.zero,
-                              minimumSize: const Size(0, 32),
-                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                            ),
-                            child: const Text('Karte ansehen'),
-                          ),
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
-              ),
             Container(
               height: 60,
               width: double.infinity,
@@ -1851,29 +2006,13 @@ class _CruiseModePageState extends State<CruiseModePage>
                   elevation: 0,
                 ),
                 child: _isLoading
-                    ? Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const SizedBox(
-                            width: 22,
-                            height: 22,
-                            child: CircularProgressIndicator(
-                              color: Colors.white,
-                              strokeWidth: 2,
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          Text(
-                            _isRoundTrip
-                                ? 'Berechnung läuft'
-                                : 'Route wird gesucht',
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 16,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ],
+                    ? Text(
+                        _isRoundTrip ? 'Suche läuft' : 'Route wird gesucht',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                        ),
                       )
                     : Text(
                         _isRoundTrip ? 'Rundkurs suchen' : 'Route berechnen',
@@ -2722,6 +2861,9 @@ class _CruiseModePageState extends State<CruiseModePage>
     _lastGeneratedSelectedStyle = _selectedStyle;
     _lastGeneratedAvoidHighways = _avoidHighways;
     _lastGeneratedWaypointSignature = waypointSignature;
+    _routeSearchNoticeTitle = null;
+    _routeSearchNoticeMessage = null;
+    _routeSearchStatusMinimized = false;
 
     debugPrint('[CruiseMode] Drawing route...');
     await _drawRoute(prepared.geometry, animateRouteDraw: true);
@@ -3094,6 +3236,11 @@ class _CruiseModePageState extends State<CruiseModePage>
       return;
     }
 
+    if (_isExpectedRoundTripRoutingStatus(error)) {
+      _showRoundTripRouteStatusNotice(error as RouteServiceException);
+      return;
+    }
+
     if (_isRouteWarmupError(error)) {
       unawaited(_showRouteWarmupDialog(error as RouteServiceException));
       return;
@@ -3108,6 +3255,65 @@ class _CruiseModePageState extends State<CruiseModePage>
     }
 
     _showError(message, isCritical: true);
+  }
+
+  bool _isExpectedRoundTripRoutingStatus(Object? error) {
+    if (!_isRoundTrip || _isWaypointPlanning) return false;
+    if (error is! RouteServiceException) return false;
+    if (_isRealRouteLimit(error)) return false;
+    final code =
+        error.edgeMeta['response_code']?.toString() ??
+        error.edgeMeta['code']?.toString();
+    return error.type == RouteErrorType.noRoute ||
+        error.type == RouteErrorType.quality ||
+        code == 'search_session_no_route' ||
+        code == 'search_session_timeout' ||
+        _isRouteWarmupError(error);
+  }
+
+  bool _isRealRouteLimit(RouteServiceException error) {
+    final meta = error.edgeMeta;
+    final code =
+        meta['response_code']?.toString().toLowerCase() ??
+        meta['code']?.toString().toLowerCase();
+    return error.type == RouteErrorType.rateLimit ||
+        error.type == RouteErrorType.workerLimit ||
+        error.statusCode == 429 ||
+        meta['real_budget_limited'] == true ||
+        meta['budget_limited_global'] == true ||
+        meta['mapbox_429'] == true ||
+        meta['provider_429'] == true ||
+        meta['WORKER_RESOURCE_LIMIT'] == true ||
+        meta['worker_resource_limit'] == true ||
+        code == 'rate_limit' ||
+        code == 'worker_resource_limit';
+  }
+
+  void _showRoundTripRouteStatusNotice(RouteServiceException error) {
+    if (!mounted || _disposed) return;
+    final code =
+        error.edgeMeta['response_code']?.toString() ??
+        error.edgeMeta['code']?.toString();
+    final title = code == 'search_session_timeout'
+        ? 'Wir suchen weiter'
+        : code == 'search_session_no_route'
+        ? 'Gerade keine gute Route gefunden'
+        : 'Wir suchen eine bessere Route';
+    final message = switch (code) {
+      'search_session_timeout' =>
+        'Die Suche dauert länger als üblich. Wir prüfen weitere Varianten im Hintergrund.',
+      'search_session_no_route' =>
+        'Wir haben mehrere Varianten geprüft. Gerade war keine sichere Route dabei, die Suche läuft aber weiter.',
+      'route_quality_too_low' =>
+        'Die gefundenen Varianten waren noch nicht sauber genug. Wir prüfen weiter.',
+      _ =>
+        'Gerade keine gute Route gefunden. Wir suchen weiter im Hintergrund.',
+    };
+    _safeSetState(() {
+      _routeSearchNoticeTitle = title;
+      _routeSearchNoticeMessage = message;
+      _routeSearchStatusMinimized = false;
+    });
   }
 
   bool _isRouteWarmupError(Object? error) {

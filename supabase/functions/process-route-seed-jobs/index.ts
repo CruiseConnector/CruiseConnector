@@ -18,7 +18,7 @@ Deno.serve(async (req) => {
   if (req.method !== "POST") {
     return jsonResponse({ error: "method_not_allowed" }, 405);
   }
-  if (!isAuthorized(req)) {
+  if (!(await isAuthorized(req))) {
     return jsonResponse({ error: "unauthorized" }, 401);
   }
 
@@ -68,7 +68,7 @@ Deno.serve(async (req) => {
   }
 });
 
-function isAuthorized(req: Request): boolean {
+async function isAuthorized(req: Request): Promise<boolean> {
   const bearer = bearerToken(req.headers.get("authorization"));
   const apiKey = req.headers.get("apikey")?.trim() ?? "";
   const cronSecret = Deno.env.get("ROUTE_POOL_HEALING_CRON_SECRET")?.trim();
@@ -92,7 +92,27 @@ function isAuthorized(req: Request): boolean {
   return secretApiKeys().some((secretKey) =>
     constantTimeEquals(apiKey, secretKey) ||
     constantTimeEquals(bearer, secretKey)
-  );
+  ) || await bearerDigestMatchesLegacyCronSecret(bearer);
+}
+
+async function bearerDigestMatchesLegacyCronSecret(
+  bearer: string,
+): Promise<boolean> {
+  if (!bearer) return false;
+  const allowedDigests = parseNamedSecretKeys(
+    Deno.env.get("ROUTE_POOL_HEALING_CRON_SECRET_SHA256"),
+  ).map((value) => value.toLowerCase());
+  if (allowedDigests.length === 0) return false;
+  const digest = await sha256Hex(bearer);
+  return allowedDigests.some((allowed) => constantTimeEquals(digest, allowed));
+}
+
+async function sha256Hex(value: string): Promise<string> {
+  const bytes = new TextEncoder().encode(value);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
 }
 
 function bearerToken(value: string | null): string {
@@ -120,9 +140,12 @@ function stringOption(value: unknown, envName: string): string | undefined {
 
 function secretApiKeys(): string[] {
   return [
+    ...parseNamedSecretKeys(Deno.env.get("CRUISERCONNECT_SERVICE_ROLE_KEY")),
     ...parseNamedSecretKeys(Deno.env.get("SUPABASE_SECRET_KEYS")),
     ...parseNamedSecretKeys(Deno.env.get("SUPABASE_SECRET_KEY")),
-  ].filter((value, index, all) => value.length > 0 && all.indexOf(value) === index);
+  ].filter((value, index, all) =>
+    value.length > 0 && all.indexOf(value) === index
+  );
 }
 
 function parseNamedSecretKeys(raw: string | undefined): string[] {
