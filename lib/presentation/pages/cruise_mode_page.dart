@@ -2779,12 +2779,31 @@ class _CruiseModePageState extends State<CruiseModePage>
 
   Future<RouteResult?> _pollRoundTripSearchSession(String sessionId) async {
     const maxPolls = 30;
+    DateTime? lastWorkerKickAt;
     for (var poll = 0; poll < maxPolls; poll += 1) {
       if (!mounted || _disposed || !_isLoading) return null;
       await Future.delayed(const Duration(seconds: 4));
       if (!mounted || _disposed || !_isLoading) return null;
       final result = await _routeService.pollRoundTripSearchSession(sessionId);
       if (result != null) return result;
+      final pollMeta = _routeService.lastRoundTripSearchSessionMeta;
+      final shouldKick = _shouldKickStaleRoundTripSearchSession(
+        pollMeta,
+        pollIndex: poll,
+      );
+      final now = DateTime.now();
+      if (shouldKick &&
+          (lastWorkerKickAt == null ||
+              now.difference(lastWorkerKickAt) >=
+                  const Duration(seconds: 12))) {
+        lastWorkerKickAt = now;
+        unawaited(
+          _routeService.kickRoundTripSearchSession(
+            sessionId,
+            reason: 'client_poll_stale',
+          ),
+        );
+      }
       if (mounted && !_disposed) {
         setState(() {
           _routeLoadingPhaseIndex = math.min(
@@ -2795,6 +2814,26 @@ class _CruiseModePageState extends State<CruiseModePage>
       }
     }
     return null;
+  }
+
+  bool _shouldKickStaleRoundTripSearchSession(
+    Map<String, dynamic>? meta, {
+    required int pollIndex,
+  }) {
+    if (pollIndex < 2 || meta == null) return false;
+    final status = meta['search_session_status']?.toString();
+    final workerLastSeen = meta['worker_last_seen_at']?.toString().trim();
+    final attemptsRaw = meta['attempts_count'];
+    final attempts = attemptsRaw is num
+        ? attemptsRaw.toInt()
+        : int.tryParse(attemptsRaw?.toString() ?? '') ?? 0;
+    final isWaitingStatus =
+        status == 'queued' || status == 'running' || status == 'hydrating';
+    return isWaitingStatus &&
+        attempts <= 0 &&
+        (workerLastSeen == null ||
+            workerLastSeen.isEmpty ||
+            workerLastSeen == 'null');
   }
 
   bool _isSearchInProgressError(RouteServiceException error) {

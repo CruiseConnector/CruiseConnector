@@ -90,16 +90,21 @@ Deno.serve(async (req) => {
 
   try {
     const result = await processSessions({
-      maxSessions: clampInt(body.max_sessions_per_run, 2, 1, 2),
+      maxSessions: clampInt(
+        body.max_sessions_per_run ?? body.max_sessions,
+        2,
+        1,
+        2,
+      ),
       maxHydrations: clampInt(
-        body.max_hydrations_per_run ?? body.max_mapbox_calls_per_run,
+        body.max_hydrations_per_run ?? body.max_candidates ??
+          body.max_mapbox_calls_per_run,
         1,
         1,
         2,
       ),
-      searchSessionId: typeof body.search_session_id === "string"
-        ? body.search_session_id
-        : null,
+      searchSessionId: stringValue(body.search_session_id) ??
+        stringValue(body.session_id),
     });
     return jsonResponse(result, 200);
   } catch (error) {
@@ -1333,6 +1338,12 @@ function bucketOrUndefined(value: unknown): Bucket | undefined {
 
 function isJsonMap(value: unknown): value is JsonMap {
   return value != null && typeof value === "object" && !Array.isArray(value);
+}
+
+function stringValue(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length === 0 ? null : trimmed;
 }
 
 function clampInt(

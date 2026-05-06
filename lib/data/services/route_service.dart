@@ -156,6 +156,12 @@ class RouteService {
 
   final RouteEdgeInvoker _invoker;
   final RoutePoolService _routePoolService;
+  Map<String, dynamic>? _lastRoundTripSearchSessionMeta;
+
+  Map<String, dynamic>? get lastRoundTripSearchSessionMeta =>
+      _lastRoundTripSearchSessionMeta == null
+      ? null
+      : Map<String, dynamic>.from(_lastRoundTripSearchSessionMeta!);
   String? _activeScenarioKeyForDebug;
   bool _activeForceFreshVariantForDebug = false;
   String _activeTriggerForDebug = 'unknown';
@@ -1018,10 +1024,53 @@ class RouteService {
       final result = await _invoke(body);
       result.edgeMeta['search_session_id'] ??= id;
       result.edgeMeta['route_source'] ??= 'search_session';
+      _lastRoundTripSearchSessionMeta = Map<String, dynamic>.from(
+        result.edgeMeta,
+      );
       return result;
     } on RouteServiceException catch (error) {
+      _lastRoundTripSearchSessionMeta = Map<String, dynamic>.from(
+        error.edgeMeta,
+      );
       if (_isSearchInProgressError(error)) return null;
       rethrow;
+    }
+  }
+
+  Future<bool> kickRoundTripSearchSession(
+    String searchSessionId, {
+    String reason = 'client_poll_stale',
+  }) async {
+    final id = searchSessionId.trim();
+    if (id.isEmpty) return false;
+    final body = <String, dynamic>{
+      'action': 'kick_search_session',
+      'search_session_id': id,
+      'route_type': 'ROUND_TRIP',
+      'planning_type': 'Zufall',
+      'client_trigger': reason,
+      'client_scenario_key': 'search_session_kick:$id',
+    };
+    try {
+      final raw = await _invoker
+          .invoke(body)
+          .timeout(const Duration(seconds: 8));
+      dynamic data = raw is FunctionResponse ? raw.data : raw;
+      if (data is String) {
+        data = json.decode(data);
+      }
+      if (data is Map) {
+        final scheduled = data['worker_invocation_scheduled'] == true;
+        final ok = data['worker_invocation_ok'] != false;
+        debugPrint(
+          '[RouteService] Search session kick id=$id scheduled=$scheduled ok=$ok',
+        );
+        return scheduled && ok;
+      }
+      return false;
+    } catch (error) {
+      debugPrint('[RouteService] Search session kick failed id=$id: $error');
+      return false;
     }
   }
 

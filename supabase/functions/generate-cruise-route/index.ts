@@ -331,6 +331,146 @@ function searchSessionMeta(row: RouteSearchSessionRow): JsonMap {
   };
 }
 
+type WorkerKickOptions = {
+  source: string;
+  awaitResponse?: boolean;
+};
+
+type WorkerKickResult = {
+  scheduled: boolean;
+  awaited: boolean;
+  ok?: boolean;
+  status?: number | null;
+  error?: string;
+  body?: unknown;
+};
+
+function searchSessionWorkerUrl(): string {
+  return `${SUPABASE_URL.replace(/\/$/, "")}/functions/v1/process-route-search-sessions`;
+}
+
+function searchSessionWorkerAuthToken(): string {
+  const searchSecret = Deno.env.get("ROUTE_SEARCH_SESSION_CRON_SECRET")
+    ?.trim();
+  if (searchSecret) return searchSecret;
+  const healingSecret = Deno.env.get("ROUTE_POOL_HEALING_CRON_SECRET")?.trim();
+  if (healingSecret) return healingSecret;
+  return serviceKey();
+}
+
+function sanitizeForMeta(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message
+    .replace(/Bearer\s+[A-Za-z0-9._-]+/g, "Bearer <redacted>")
+    .replace(/access_token=[^&\s]+/g, "access_token=<redacted>")
+    .replace(/apikey[=:][A-Za-z0-9._-]+/gi, "apikey=<redacted>")
+    .slice(0, 220);
+}
+
+async function invokeSearchSessionWorkerNow(
+  sessionId: string,
+  options: WorkerKickOptions,
+): Promise<WorkerKickResult> {
+  const token = searchSessionWorkerAuthToken();
+  if (!SUPABASE_URL || !token) {
+    return {
+      scheduled: false,
+      awaited: options.awaitResponse === true,
+      error: "worker_auth_not_configured",
+    };
+  }
+
+  const requestBody = {
+    search_session_id: sessionId,
+    session_id: sessionId,
+    max_sessions_per_run: 1,
+    max_hydrations_per_run: 1,
+    max_sessions: 1,
+    max_candidates: 1,
+    source: options.source,
+    on_demand: true,
+  };
+  const workerPromise = fetch(searchSessionWorkerUrl(), {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${token}`,
+      apikey: token,
+      "x-cron-secret": token,
+    },
+    body: JSON.stringify(requestBody),
+  }).then(async (response): Promise<WorkerKickResult> => {
+    const text = await response.text();
+    let parsed: unknown = null;
+    if (text.trim().length > 0) {
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        parsed = text.slice(0, 220);
+      }
+    }
+    return {
+      scheduled: true,
+      awaited: options.awaitResponse === true,
+      ok: response.ok,
+      status: response.status,
+      body: parsed,
+    };
+  }).catch((error): WorkerKickResult => ({
+    scheduled: false,
+    awaited: options.awaitResponse === true,
+    ok: false,
+    status: null,
+    error: sanitizeForMeta(error),
+  }));
+
+  if (options.awaitResponse === true) {
+    return await workerPromise;
+  }
+
+  const runtime = (globalThis as unknown as {
+    EdgeRuntime?: { waitUntil?: (promise: Promise<unknown>) => void };
+  }).EdgeRuntime;
+  if (runtime?.waitUntil != null) {
+    runtime.waitUntil(workerPromise.then(() => undefined));
+  } else {
+    workerPromise.then(() => undefined);
+  }
+
+  return {
+    scheduled: true,
+    awaited: false,
+  };
+}
+
+async function routeSearchSessionKickResponse(
+  req: Request,
+  sessionId: string | undefined,
+  awaitResponse: boolean,
+): Promise<Response> {
+  const cleanId = sessionId?.trim();
+  if (!cleanId) {
+    return jsonResponse(req, {
+      error: "missing_search_session_id",
+      code: "validation_error",
+    }, 400);
+  }
+  const result = await invokeSearchSessionWorkerNow(cleanId, {
+    source: "generate_cruise_route_kick_endpoint",
+    awaitResponse,
+  });
+  return jsonResponse(req, {
+    code: "search_session_worker_kicked",
+    search_session_id: cleanId,
+    worker_invocation_scheduled: result.scheduled,
+    worker_invocation_awaited: result.awaited,
+    worker_invocation_ok: result.ok ?? null,
+    worker_invocation_status: result.status ?? null,
+    worker_invocation_error: result.error ?? null,
+    worker_invocation_body: result.body ?? null,
+  }, result.scheduled ? 200 : 503);
+}
+
 async function routeSearchSessionStatusResponse(
   req: Request,
   sessionId: string | undefined,
@@ -408,15 +548,25 @@ async function createRoundTripSearchSession(
   const bucket = distanceBucketForTarget(body.targetDistance);
   if (body.startLocation == null) return null;
   const queueLimit = roundTripSearchSessionQueueLimit(body);
-  const candidateQueue = Array.isArray(roundTripSearch?.candidateQueuePayload)
-    ? roundTripSearch.candidateQueuePayload
-      .filter(candidatePayloadDistanceFits)
-      .slice(0, queueLimit)
+  const rawCandidateQueue = Array.isArray(roundTripSearch?.candidateQueuePayload)
+    ? roundTripSearch.candidateQueuePayload.slice(0, queueLimit)
     : [];
+  const fittingCandidateQueue = rawCandidateQueue.length > 0
+    ? rawCandidateQueue.filter(candidatePayloadDistanceFits)
+    : [];
+  const candidateQueue = fittingCandidateQueue.length > 0
+    ? fittingCandidateQueue
+    : roundTripSearch?.batchExhausted === true
+    ? rawCandidateQueue.slice(0, 1)
+    : [];
+  const diagnosticQueue = fittingCandidateQueue.length === 0 &&
+    candidateQueue.length > 0;
   const searchBestCandidate = candidatePayloadDistanceFits(
       roundTripSearch?.bestCandidatePayload,
     )
     ? roundTripSearch?.bestCandidatePayload
+    : diagnosticQueue && rawCandidateQueue.length > 0
+    ? rawCandidateQueue[0]
     : null;
   const bestCandidate = searchBestCandidate ?? candidateQueue[0] ?? null;
   if (roundTripSearch?.batchExhausted !== true && bestCandidate == null) {
@@ -425,6 +575,26 @@ async function createRoundTripSearchSession(
   if (bestCandidate == null || candidateQueue.length === 0) {
     return null;
   }
+  const candidateQueueForInsert = candidateQueue
+    .slice(0, queueLimit);
+  const candidateQueueForMeta = candidateQueueForInsert.length;
+  const acceptedCandidateCount = roundTripSearch?.acceptedCandidates ?? 0;
+  const rejectedCandidateCount = roundTripSearch?.rejectedCandidates ?? 0;
+  const mapboxCallCount = roundTripSearch?.mapboxCallCount ?? 0;
+  const evaluatedRouteCount = roundTripSearch?.evaluatedRouteCount ?? 0;
+  const rejectReasons = roundTripSearch?.rejectReasons ?? {};
+  const batchIndex = roundTripSearch?.batchIndex ?? null;
+  const batchCount = roundTripSearch?.batchCount ?? null;
+  const candidateAttempts = roundTripSearch?.candidateAttempts ?? 0;
+  const bestCandidateFamily = bestCandidate?.candidate_family ?? null;
+  const bestCandidatePredictedDistanceKm =
+    typeof bestCandidate?.predicted_distance_km === "number"
+      ? bestCandidate.predicted_distance_km
+      : null;
+  const bestCandidateDistanceFitTier =
+    typeof bestCandidate?.distance_fit_tier === "string"
+      ? bestCandidate.distance_fit_tier
+      : null;
 
   const row = {
     route_type: "ROUND_TRIP",
@@ -444,15 +614,21 @@ async function createRoundTripSearchSession(
       queued_at: new Date().toISOString(),
     },
     best_candidate_payload: bestCandidate,
-    candidate_queue_payload: candidateQueue,
+    candidate_queue_payload: candidateQueueForInsert,
     reject_summary: {
-      reject_reasons: roundTripSearch?.rejectReasons ?? {},
-      batch_index: roundTripSearch?.batchIndex ?? null,
-      batch_count: roundTripSearch?.batchCount ?? null,
-      candidate_attempts: roundTripSearch?.candidateAttempts ?? 0,
-      evaluated_routes: roundTripSearch?.evaluatedRouteCount ?? 0,
-      candidate_queue_count: candidateQueue.length,
-      best_candidate_family: bestCandidate?.candidate_family ?? null,
+      reject_reasons: rejectReasons,
+      batch_index: batchIndex,
+      batch_count: batchCount,
+      candidate_attempts: candidateAttempts,
+      evaluated_routes: evaluatedRouteCount,
+      accepted_candidates: acceptedCandidateCount,
+      rejected_candidates: rejectedCandidateCount,
+      mapbox_calls: mapboxCallCount,
+      candidate_queue_count: candidateQueueForMeta,
+      best_candidate_family: bestCandidateFamily,
+      best_candidate_predicted_distance_km: bestCandidatePredictedDistanceKm,
+      best_candidate_distance_fit_tier: bestCandidateDistanceFitTier,
+      diagnostic_candidate_queue: diagnosticQueue,
     },
     expires_at: new Date(Date.now() + 45 * 60_000).toISOString(),
   };
@@ -763,6 +939,13 @@ Deno.serve(async (req) => {
       return await routeSearchSessionStatusResponse(
         req,
         body.search_session_id,
+      );
+    }
+    if (body.action === "kick_search_session") {
+      return await routeSearchSessionKickResponse(
+        req,
+        body.search_session_id,
+        (body as unknown as JsonMap).await_worker_response === true,
       );
     }
     const {
@@ -2487,6 +2670,9 @@ Deno.serve(async (req) => {
           requestDebugMeta,
         );
         if (session != null) {
+          const workerKick = await invokeSearchSessionWorkerNow(session.id, {
+            source: "generate_cruise_route_session_created_no_route",
+          });
           return jsonResponse(req, {
             route: null,
             code: "search_in_progress",
@@ -2496,6 +2682,9 @@ Deno.serve(async (req) => {
               ...searchSessionMeta(session),
               background_learning_queued: true,
               progress_stage: "queued_worker_hydration",
+              on_demand_worker_triggered: workerKick.scheduled,
+              on_demand_worker_awaited: workerKick.awaited,
+              on_demand_worker_error: workerKick.error ?? null,
             },
           }, 202);
         }
@@ -2546,6 +2735,9 @@ Deno.serve(async (req) => {
         requestDebugMeta,
       );
       if (session != null) {
+        const workerKick = await invokeSearchSessionWorkerNow(session.id, {
+          source: "generate_cruise_route_session_created_deferred_hydration",
+        });
         return jsonResponse(req, {
           route: null,
           code: "search_in_progress",
@@ -2556,6 +2748,9 @@ Deno.serve(async (req) => {
             background_learning_queued: true,
             progress_stage: "queued_worker_hydration",
             long_roundtrip_hydration_deferred: true,
+            on_demand_worker_triggered: workerKick.scheduled,
+            on_demand_worker_awaited: workerKick.awaited,
+            on_demand_worker_error: workerKick.error ?? null,
           },
         }, 202);
       }
