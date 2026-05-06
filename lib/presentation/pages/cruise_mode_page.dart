@@ -5,6 +5,7 @@ import 'dart:ui' as ui;
 
 import 'dart:io' show Platform;
 
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
@@ -1125,50 +1126,53 @@ class _CruiseModePageState extends State<CruiseModePage>
   }
 
   Widget _buildMinimizedRoundTripSearchStatus(String title) {
+    const capsuleColor = Color(0xCC2B211B);
+    const borderColor = Color(0x40F3D9BC);
+    const textColor = Color(0xFFF8EADB);
     return Material(
       key: const ValueKey('roundtrip-search-minimized'),
       color: Colors.transparent,
       child: InkWell(
         borderRadius: BorderRadius.circular(999),
         onTap: () => _safeSetState(() => _routeSearchStatusMinimized = false),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-          decoration: BoxDecoration(
-            color: const Color(0xFF12151C).withValues(alpha: 0.92),
-            borderRadius: BorderRadius.circular(999),
-            border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.24),
-                blurRadius: 18,
-                offset: const Offset(0, 8),
-              ),
-            ],
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              SizedBox(
-                width: 14,
-                height: 14,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  color: AppAccentColors.accent,
-                ),
-              ),
-              const SizedBox(width: 10),
-              Flexible(
-                child: Text(
-                  title,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w800,
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(999),
+          child: BackdropFilter(
+            filter: ui.ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(
+                color: capsuleColor,
+                borderRadius: BorderRadius.circular(999),
+                border: Border.all(color: borderColor),
+                boxShadow: [
+                  BoxShadow(
+                    color: const Color(0xFF140D08).withValues(alpha: 0.28),
+                    blurRadius: 22,
+                    offset: const Offset(0, 10),
                   ),
-                ),
+                ],
               ),
-            ],
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const CupertinoActivityIndicator(radius: 7),
+                  const SizedBox(width: 10),
+                  Flexible(
+                    child: Text(
+                      title,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: textColor,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: -0.1,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ),
         ),
       ),
@@ -1181,128 +1185,161 @@ class _CruiseModePageState extends State<CruiseModePage>
     required double? progressValue,
     required bool isNotice,
   }) {
+    const cardColor = Color(0xE62A201A);
+    const topGlowColor = Color(0x66C89563);
+    const borderColor = Color(0x40F3D9BC);
+    const textColor = Color(0xFFF8EADB);
+    const secondaryTextColor = Color(0xCCDFC3A6);
+    const accentColor = Color(0xFFD6A66F);
     return Material(
       key: const ValueKey('roundtrip-search-expanded'),
       color: Colors.transparent,
-      child: Container(
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          color: const Color(0xFF12151C).withValues(alpha: 0.94),
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.28),
-              blurRadius: 22,
-              offset: const Offset(0, 10),
-            ),
-          ],
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Container(
-                  width: 34,
-                  height: 34,
-                  decoration: BoxDecoration(
-                    color: AppAccentColors.accent.withValues(alpha: 0.16),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Icon(
-                    isNotice ? Icons.route_outlined : Icons.auto_awesome,
-                    color: AppAccentColors.accent,
-                    size: 19,
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        title,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 15,
-                          fontWeight: FontWeight.w900,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        status,
-                        style: TextStyle(
-                          color: Colors.white.withValues(alpha: 0.72),
-                          fontSize: 13,
-                          height: 1.25,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                IconButton(
-                  onPressed: () =>
-                      _safeSetState(() => _routeSearchStatusMinimized = true),
-                  icon: const Icon(Icons.expand_less),
-                  color: Colors.white.withValues(alpha: 0.76),
-                  tooltip: 'Karte ansehen',
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            ClipRRect(
-              borderRadius: BorderRadius.circular(8),
-              child: LinearProgressIndicator(
-                minHeight: 4,
-                value: progressValue,
-                backgroundColor: Colors.white.withValues(alpha: 0.08),
-                valueColor: AlwaysStoppedAnimation<Color>(
-                  AppAccentColors.accent,
-                ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(26),
+        child: BackdropFilter(
+          filter: ui.ImageFilter.blur(sigmaX: 22, sigmaY: 22),
+          child: Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: cardColor,
+              borderRadius: BorderRadius.circular(26),
+              border: Border.all(color: borderColor),
+              gradient: const LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  Color(0xF03A2A20),
+                  Color(0xE6261B16),
+                  Color(0xE01B1512),
+                ],
               ),
-            ),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                TextButton(
-                  onPressed: () =>
-                      _safeSetState(() => _routeSearchStatusMinimized = true),
-                  style: TextButton.styleFrom(
-                    foregroundColor: AppAccentColors.accent,
-                    padding: EdgeInsets.zero,
-                    minimumSize: const Size(0, 34),
-                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  ),
-                  child: const Text('Karte ansehen'),
+              boxShadow: [
+                BoxShadow(
+                  color: const Color(0xFF120B07).withValues(alpha: 0.34),
+                  blurRadius: 28,
+                  offset: const Offset(0, 14),
                 ),
-                const Spacer(),
-                if (isNotice)
-                  TextButton(
-                    onPressed: () {
-                      _safeSetState(() {
-                        _routeSearchNoticeTitle = null;
-                        _routeSearchNoticeMessage = null;
-                        _routeSearchStatusMinimized = false;
-                      });
-                      unawaited(
-                        Future<void>.delayed(Duration.zero, _generateRoute),
-                      );
-                    },
-                    style: TextButton.styleFrom(
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(horizontal: 10),
-                      minimumSize: const Size(0, 34),
-                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    ),
-                    child: const Text('Nochmal suchen'),
-                  ),
+                BoxShadow(
+                  color: topGlowColor.withValues(alpha: 0.18),
+                  blurRadius: 18,
+                  offset: const Offset(0, -6),
+                ),
               ],
             ),
-          ],
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      width: 36,
+                      height: 36,
+                      decoration: BoxDecoration(
+                        color: const Color(0x33F1C38E),
+                        borderRadius: BorderRadius.circular(15),
+                        border: Border.all(color: const Color(0x26F3D9BC)),
+                      ),
+                      child: isNotice
+                          ? const Icon(
+                              Icons.route_outlined,
+                              color: accentColor,
+                              size: 19,
+                            )
+                          : const CupertinoActivityIndicator(radius: 9),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            title,
+                            style: const TextStyle(
+                              color: textColor,
+                              fontSize: 15,
+                              fontWeight: FontWeight.w900,
+                              letterSpacing: -0.2,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            status,
+                            style: const TextStyle(
+                              color: secondaryTextColor,
+                              fontSize: 13,
+                              height: 1.25,
+                              fontWeight: FontWeight.w600,
+                              letterSpacing: -0.05,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: () => _safeSetState(
+                        () => _routeSearchStatusMinimized = true,
+                      ),
+                      icon: const Icon(CupertinoIcons.chevron_up),
+                      color: secondaryTextColor,
+                      tooltip: 'Karte ansehen',
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(999),
+                  child: LinearProgressIndicator(
+                    minHeight: 4,
+                    value: progressValue,
+                    backgroundColor: Colors.white.withValues(alpha: 0.08),
+                    valueColor: const AlwaysStoppedAnimation<Color>(
+                      accentColor,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    TextButton(
+                      onPressed: () => _safeSetState(
+                        () => _routeSearchStatusMinimized = true,
+                      ),
+                      style: TextButton.styleFrom(
+                        foregroundColor: accentColor,
+                        padding: EdgeInsets.zero,
+                        minimumSize: const Size(0, 34),
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                      child: const Text('Karte ansehen'),
+                    ),
+                    const Spacer(),
+                    if (isNotice)
+                      TextButton(
+                        onPressed: () {
+                          _safeSetState(() {
+                            _routeSearchNoticeTitle = null;
+                            _routeSearchNoticeMessage = null;
+                            _routeSearchStatusMinimized = false;
+                          });
+                          unawaited(
+                            Future<void>.delayed(Duration.zero, _generateRoute),
+                          );
+                        },
+                        style: TextButton.styleFrom(
+                          foregroundColor: textColor,
+                          padding: const EdgeInsets.symmetric(horizontal: 10),
+                          minimumSize: const Size(0, 34),
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        ),
+                        child: const Text('Nochmal suchen'),
+                      ),
+                  ],
+                ),
+              ],
+            ),
+          ),
         ),
       ),
     );

@@ -511,7 +511,7 @@ export async function searchBestRoundTripRoute({
   const normalizedPreviousRouteFingerprints = (previousRouteFingerprints ?? [])
     .map((value) => normalizeHint(value))
     .filter((value): value is string => value != null)
-    .slice(0, 5);
+    .slice(0, 10);
   const normalizedBatchCount = typeof batchCount === "number" &&
       Number.isFinite(batchCount)
     ? Math.max(1, Math.min(4, Math.round(batchCount)))
@@ -1728,8 +1728,13 @@ export async function searchBestRoundTripRoute({
     };
   };
   const styleThinSessionSearch = mode === "Abendrunde" || mode === "Entdecker";
+  const lakeBorderShortSessionSearch = targetDistanceKm <= 60 &&
+    startLocation.latitude >= 47.43 && startLocation.latitude <= 47.58 &&
+    startLocation.longitude >= 9.58 && startLocation.longitude <= 9.86;
   const targetSessionCandidateQueueSize = batchingUsed
-    ? styleThinSessionSearch
+    ? lakeBorderShortSessionSearch
+      ? styleThinSessionSearch || !avoidHighways ? 10 : 8
+      : styleThinSessionSearch
       ? targetDistanceKm >= 70 ? 8 : 6
       : targetDistanceKm >= 90
       ? 7
@@ -1744,8 +1749,10 @@ export async function searchBestRoundTripRoute({
       candidate.distanceFitTier !== "outside_bucket"
     ).length;
   const shouldContinueForSessionCandidateQueue = (): boolean =>
-    (batchingUsed || styleThinSessionSearch) &&
-    (targetDistanceKm >= 70 || styleThinSessionSearch) &&
+    (batchingUsed || styleThinSessionSearch || lakeBorderShortSessionSearch) &&
+    (targetDistanceKm >= 70 ||
+      styleThinSessionSearch ||
+      lakeBorderShortSessionSearch) &&
     sessionCandidateQueueCount() <
       Math.min(targetSessionCandidateQueueSize, globalAttemptBudget) &&
     candidateAttempts < globalAttemptBudget &&
@@ -1827,6 +1834,7 @@ export async function searchBestRoundTripRoute({
         candidate.fingerprint.slice(0, 18)
       }`,
       route_fingerprint: candidate.fingerprint,
+      previous_route_fingerprints: normalizedPreviousRouteFingerprints,
       candidate_family: candidate.plan.label,
       planned_coordinates: candidate.plan.waypoints.map((point) => [
         roundNumber(point.longitude, 6),

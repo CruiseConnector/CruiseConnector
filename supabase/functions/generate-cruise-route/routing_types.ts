@@ -180,6 +180,7 @@ export interface RoundTripCandidatePlan {
 export interface RoundTripSessionCandidatePayload {
   candidate_id: string;
   route_fingerprint: string;
+  previous_route_fingerprints?: string[];
   candidate_family: string;
   planned_coordinates: number[][];
   silent_via_waypoints: string | null;
@@ -248,7 +249,10 @@ export interface RoundTripSearchResult {
   silentViaFallbackUsed?: boolean;
   guidanceDegraded?: boolean;
   hydrationFallbackUsed?: boolean;
-  finalGeometrySource?: "hydrated" | "pre_hydration_fallback" | "duplicate_fallback";
+  finalGeometrySource?:
+    | "hydrated"
+    | "pre_hydration_fallback"
+    | "duplicate_fallback";
   geometrySource?: string | null;
   finalOverview?: "full" | "simplified" | null;
   finalCoordinateCount?: number | null;

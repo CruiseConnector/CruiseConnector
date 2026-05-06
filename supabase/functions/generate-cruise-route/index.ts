@@ -346,7 +346,9 @@ type WorkerKickResult = {
 };
 
 function searchSessionWorkerUrl(): string {
-  return `${SUPABASE_URL.replace(/\/$/, "")}/functions/v1/process-route-search-sessions`;
+  return `${
+    SUPABASE_URL.replace(/\/$/, "")
+  }/functions/v1/process-route-search-sessions`;
 }
 
 function searchSessionWorkerAuthToken(): string {
@@ -548,9 +550,10 @@ async function createRoundTripSearchSession(
   const bucket = distanceBucketForTarget(body.targetDistance);
   if (body.startLocation == null) return null;
   const queueLimit = roundTripSearchSessionQueueLimit(body);
-  const rawCandidateQueue = Array.isArray(roundTripSearch?.candidateQueuePayload)
-    ? roundTripSearch.candidateQueuePayload.slice(0, queueLimit)
-    : [];
+  const rawCandidateQueue =
+    Array.isArray(roundTripSearch?.candidateQueuePayload)
+      ? roundTripSearch.candidateQueuePayload.slice(0, queueLimit)
+      : [];
   const fittingCandidateQueue = rawCandidateQueue.length > 0
     ? rawCandidateQueue.filter(candidatePayloadDistanceFits)
     : [];
@@ -651,6 +654,17 @@ function roundTripSearchSessionQueueLimit(body: RequestData): number {
     50;
   const styleKey = styleKeyForMode(body.mode);
   const styleThin = styleKey === "abendrunde" || styleKey === "entdecker";
+  const start = body.startLocation;
+  const startLat = finiteNumber(start?.latitude);
+  const startLng = finiteNumber(start?.longitude);
+  const lakeBorderShortLoop = targetKm <= 60 &&
+    startLat != null && startLng != null &&
+    startLat >= 47.43 && startLat <= 47.58 &&
+    startLng >= 9.58 && startLng <= 9.86;
+  if (lakeBorderShortLoop && (styleThin || body.avoid_highways === false)) {
+    return 10;
+  }
+  if (lakeBorderShortLoop) return 8;
   if (styleThin && targetKm >= 70) return 8;
   if (styleThin) return 6;
   if (targetKm >= 90) return 7;
@@ -1940,7 +1954,7 @@ Deno.serve(async (req) => {
         accessToken: MAPBOX_ACCESS_TOKEN,
         variantHint,
         fingerprintHint,
-        previousRouteFingerprints: previousRouteFingerprints.slice(0, 5),
+        previousRouteFingerprints: previousRouteFingerprints.slice(0, 10),
         maxCandidateAttemptsHint,
         batchIndex: effectiveRoundTripBatchIndex,
         batchCount: effectiveRoundTripBatchCount,
@@ -2005,7 +2019,7 @@ Deno.serve(async (req) => {
               ? `session-batch-${nextBatchIndex}`
               : `${variantHint}-session-batch-${nextBatchIndex}`,
             fingerprintHint,
-            previousRouteFingerprints: previousRouteFingerprints.slice(0, 5),
+            previousRouteFingerprints: previousRouteFingerprints.slice(0, 10),
             maxCandidateAttemptsHint,
             batchIndex: nextBatchIndex,
             batchCount: effectiveRoundTripBatchCount,
@@ -2069,7 +2083,7 @@ Deno.serve(async (req) => {
             ? "highway-allowed-nohighway-fallback"
             : `${variantHint}-highway-allowed-nohighway-fallback`,
           fingerprintHint,
-          previousRouteFingerprints: previousRouteFingerprints.slice(0, 5),
+          previousRouteFingerprints: previousRouteFingerprints.slice(0, 10),
           maxCandidateAttemptsHint,
           batchIndex: 0,
           batchCount: 1,

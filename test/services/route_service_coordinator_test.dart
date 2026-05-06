@@ -939,11 +939,11 @@ void main() {
     },
   );
 
-  test('Search Again sendet maximal die letzten 5 Fingerprints', () async {
+  test('Search Again sendet maximal die letzten 10 Fingerprints', () async {
     final varyingInvoker = _VaryingCountingInvoker();
     service = RouteService(invoker: varyingInvoker);
 
-    for (var i = 0; i < 6; i += 1) {
+    for (var i = 0; i < 11; i += 1) {
       await service.generateRoundTrip(
         startPosition: _start(),
         targetDistanceKm: 50,
@@ -957,8 +957,8 @@ void main() {
     final lastPrevious =
         varyingInvoker.bodies.last['previous_route_fingerprints'] as List?;
     expect(lastPrevious, isNotNull);
-    expect(lastPrevious, hasLength(5));
-    expect(RouteService.lastRoutePreviousFingerprints, hasLength(5));
+    expect(lastPrevious, hasLength(10));
+    expect(RouteService.lastRoutePreviousFingerprints, hasLength(10));
   });
 
   test('bewegter Rundkurs-Start sendet Snap- und Bearing-Meta', () async {

@@ -381,6 +381,11 @@ class RouteService {
     lastRouteLiveAttemptReason = forceFreshVariant
         ? 'search_again_force_fresh'
         : 'initial_search';
+    await SeenRouteRegistry.ensureLoaded();
+    final allowDuplicateFallbackForThisSearch =
+        forceFreshVariant &&
+        debugTrigger != 'searchAgain' &&
+        debugTrigger != 'settingsChanged';
 
     if (forceFreshVariant) {
       RouteGenerationCoordinator.suspendBackgroundPreparation();
@@ -418,7 +423,7 @@ class RouteService {
           userLat: startPosition.latitude,
           userLng: startPosition.longitude,
           fallbackReason: 'free_pool_only',
-          allowDuplicateFallback: forceFreshVariant,
+          allowDuplicateFallback: allowDuplicateFallbackForThisSearch,
         );
         if (freePoolRoute != null) {
           return freePoolRoute;
@@ -453,7 +458,7 @@ class RouteService {
           userLat: startPosition.latitude,
           userLng: startPosition.longitude,
           fallbackReason: 'pool_first_basic',
-          allowDuplicateFallback: forceFreshVariant,
+          allowDuplicateFallback: allowDuplicateFallbackForThisSearch,
         );
         if (basicPoolRoute != null) {
           return basicPoolRoute;
@@ -541,7 +546,7 @@ class RouteService {
             userLat: startPosition.latitude,
             userLng: startPosition.longitude,
             fallbackReason: 'live_blocked_by_coverage_status',
-            allowDuplicateFallback: forceFreshVariant,
+            allowDuplicateFallback: allowDuplicateFallbackForThisSearch,
           );
           if (poolBlockedRoute != null) {
             return poolBlockedRoute;
@@ -756,7 +761,7 @@ class RouteService {
         userLat: startPosition.latitude,
         userLng: startPosition.longitude,
         fallbackReason: lastError?.type.name ?? 'no_accepted_mapbox_route',
-        allowDuplicateFallback: forceFreshVariant,
+        allowDuplicateFallback: allowDuplicateFallbackForThisSearch,
       );
       if (poolFallback != null) {
         return poolFallback;
@@ -779,7 +784,8 @@ class RouteService {
       // Availability beats diversity: if every fresh attempt only failed the
       // novelty gate, return the best clean duplicate instead of surfacing a
       // no-route error. The route still passed the same quality gates.
-      final allowDuplicateEmergencyFallback = debugTrigger != 'settingsChanged';
+      final allowDuplicateEmergencyFallback =
+          allowDuplicateFallbackForThisSearch;
       if (bestDuplicateCandidate?.accepted == true &&
           allowDuplicateEmergencyFallback) {
         final duplicate = bestDuplicateCandidate!;
@@ -808,7 +814,7 @@ class RouteService {
         );
       }
 
-      final recentDuplicate = forceFreshVariant
+      final recentDuplicate = allowDuplicateFallbackForThisSearch
           ? (_recentDisplayedRoutes[_recentDisplayedKeyForScenario(scenario)] ??
                 _recentSuccessfulRoutes[scenario.scenarioKey])
           : null;
@@ -1963,7 +1969,7 @@ class RouteService {
   static List<String> _recentFingerprintsForScenario(RouteScenario scenario) =>
       SeenRouteRegistry.entriesForAny(
         _seenHistoryKeysForScenario(scenario),
-      ).map((entry) => entry.fingerprint).take(5).toList(growable: false);
+      ).map((entry) => entry.fingerprint).take(10).toList(growable: false);
 
   static String _recentDisplayedKeyForScenario(RouteScenario scenario) {
     return scenario.scenarioKey;
@@ -2266,7 +2272,7 @@ class RouteService {
       'route_variant_hint': variant.variantHint,
       'route_fingerprint_hint': variant.fingerprintHint,
       if (previousFingerprints.isNotEmpty)
-        'previous_route_fingerprints': previousFingerprints.take(5).toList(),
+        'previous_route_fingerprints': previousFingerprints.take(10).toList(),
       'max_candidate_attempts': candidateBudget,
       if (roundTripBatchCount > 1) ...{
         'roundtrip_batch_index': roundTripBatchIndex.clamp(
@@ -3472,9 +3478,19 @@ class RouteService {
   ) {
     if (!scenario.isRoundTrip || scenario.planningType != 'Zufall') return 1;
     final targetKm = scenario.targetDistanceKm ?? 0.0;
+    final lakeBorderShortLoop =
+        targetKm <= 60.0 &&
+        scenario.startLatitude >= 47.43 &&
+        scenario.startLatitude <= 47.58 &&
+        scenario.startLongitude >= 9.58 &&
+        scenario.startLongitude <= 9.86;
+    if (lakeBorderShortLoop) return 3;
     if (targetKm >= 70.0) return 3;
     if (scenario.avoidHighways && targetKm >= 60.0) return 3;
-    if (styleConfig.profileKey == 'entdecker') return 3;
+    if (styleConfig.profileKey == 'entdecker' ||
+        styleConfig.profileKey == 'abendrunde') {
+      return 3;
+    }
     return 1;
   }
 
@@ -7505,9 +7521,13 @@ class RouteService {
     meta['duplicateFallbackUsed'] = lastRouteDuplicateFallbackUsed;
     meta['duplicate_fallback_used'] = lastRouteDuplicateFallbackUsed;
     meta['previous_route_fingerprints'] = lastRoutePreviousFingerprints;
+    meta['last_10_route_fingerprints'] = lastRoutePreviousFingerprints
+        .take(10)
+        .toList(growable: false);
     meta['last_5_route_fingerprints'] = lastRoutePreviousFingerprints
         .take(5)
         .toList(growable: false);
+    meta['last10_excluded_count'] = lastRoutePreviousFingerprints.length;
     meta['last5_excluded_count'] = lastRoutePreviousFingerprints.length;
     meta['subscriptionTier'] = lastRouteSubscriptionTier;
     meta['route_fingerprint'] = lastRouteDebugFingerprint;
@@ -7582,7 +7602,9 @@ class RouteService {
       'source_decision': meta['source_decision'],
       'route_fingerprint': lastRouteDebugFingerprint,
       'previous_fingerprints': lastRoutePreviousFingerprints,
+      'last_10_route_fingerprints': meta['last_10_route_fingerprints'],
       'last_5_route_fingerprints': meta['last_5_route_fingerprints'],
+      'last10_excluded_count': meta['last10_excluded_count'],
       'last5_excluded_count': meta['last5_excluded_count'],
       'similarity_to_previous_percent': lastRouteSimilarityToPreviousPercent,
       'duplicate_skipped': lastRouteDuplicateSkipped,

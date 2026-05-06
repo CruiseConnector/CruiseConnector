@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:cruise_connect/data/services/route_quality_validator.dart';
 import 'package:cruise_connect/data/services/route_style_config.dart';
 import 'package:cruise_connect/data/services/seen_route_registry.dart';
@@ -300,12 +301,17 @@ void main() {
   });
 
   group('SeenRouteRegistry', () {
+    setUp(() {
+      SharedPreferences.setMockInitialValues({});
+      SeenRouteRegistry.clearAll();
+    });
+
     tearDown(SeenRouteRegistry.clearAll);
 
-    test('behält die letzten fünf Routen pro Szenario', () {
+    test('behält die letzten zehn Routen pro Szenario', () {
       const scenarioKey = 'ROUND_TRIP|test';
 
-      for (var i = 0; i < 8; i++) {
+      for (var i = 0; i < 12; i++) {
         SeenRouteRegistry.remember(
           scenarioKey,
           fingerprint: 'fp$i',
@@ -316,13 +322,42 @@ void main() {
         );
       }
 
-      expect(SeenRouteRegistry.entriesFor(scenarioKey).length, 5);
+      expect(SeenRouteRegistry.entriesFor(scenarioKey).length, 10);
       expect(
         SeenRouteRegistry.hasExactFingerprint(scenarioKey, 'fp0'),
         isFalse,
       );
-      expect(SeenRouteRegistry.hasExactFingerprint(scenarioKey, 'fp3'), isTrue);
-      expect(SeenRouteRegistry.hasExactFingerprint(scenarioKey, 'fp7'), isTrue);
+      expect(
+        SeenRouteRegistry.hasExactFingerprint(scenarioKey, 'fp1'),
+        isFalse,
+      );
+      expect(SeenRouteRegistry.hasExactFingerprint(scenarioKey, 'fp2'), isTrue);
+      expect(
+        SeenRouteRegistry.hasExactFingerprint(scenarioKey, 'fp11'),
+        isTrue,
+      );
+    });
+
+    test('lädt gesehene Routen persistent aus SharedPreferences', () async {
+      const scenarioKey = 'ROUND_TRIP|persistent';
+      await SeenRouteRegistry.ensureLoaded();
+      SeenRouteRegistry.remember(
+        scenarioKey,
+        fingerprint: 'persisted-fp',
+        sampledCoordinates: const [
+          [11.0, 48.0],
+          [11.01, 48.01],
+        ],
+      );
+      await SeenRouteRegistry.flushForTests();
+
+      SeenRouteRegistry.resetMemoryForTests();
+      await SeenRouteRegistry.ensureLoaded();
+
+      expect(
+        SeenRouteRegistry.hasExactFingerprint(scenarioKey, 'persisted-fp'),
+        isTrue,
+      );
     });
   });
 

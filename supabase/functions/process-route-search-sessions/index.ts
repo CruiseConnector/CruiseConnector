@@ -35,6 +35,7 @@ interface RouteRegion {
 interface CandidatePayload {
   candidate_id: string;
   route_fingerprint: string;
+  previous_route_fingerprints?: string[];
   candidate_family: string;
   planned_coordinates: number[][];
   silent_via_waypoints?: string | null;
@@ -178,6 +179,23 @@ async function hydrateClaimedSession(session: SessionRow): Promise<JsonMap> {
       found: false,
       finished: false,
       reason: "invalid_candidate_payload",
+    };
+  }
+  if (candidateWasRecentlyShown(candidate)) {
+    await rejectOrRetry(
+      session,
+      "duplicate_previous_fingerprint",
+      0,
+      candidate,
+      queue,
+    );
+    return {
+      search_session_id: session.id,
+      found: false,
+      finished: false,
+      reason: "duplicate_previous_fingerprint",
+      mapbox_calls_used: 0,
+      candidate_queue_index: attempt,
     };
   }
 
@@ -704,6 +722,13 @@ function candidateFromUnknown(value: unknown): CandidatePayload | null {
   return {
     candidate_id: String(record.candidate_id ?? ""),
     route_fingerprint: String(record.route_fingerprint ?? ""),
+    previous_route_fingerprints:
+      Array.isArray(record.previous_route_fingerprints)
+        ? record.previous_route_fingerprints
+          .map((value) => typeof value === "string" ? value.trim() : "")
+          .filter((value) => value.length > 0)
+          .slice(0, 10)
+        : [],
     candidate_family: String(record.candidate_family ?? "unknown"),
     planned_coordinates: planned,
     silent_via_waypoints: typeof record.silent_via_waypoints === "string"
@@ -750,6 +775,14 @@ function candidateFromUnknown(value: unknown): CandidatePayload | null {
       ? record.search_stage
       : undefined,
   };
+}
+
+function candidateWasRecentlyShown(candidate: CandidatePayload): boolean {
+  const fingerprint = candidate.route_fingerprint.trim().toLowerCase();
+  if (fingerprint.length === 0) return false;
+  return (candidate.previous_route_fingerprints ?? []).some((previous) =>
+    previous.trim().toLowerCase() === fingerprint
+  );
 }
 
 function candidateIsValid(candidate: CandidatePayload): boolean {
