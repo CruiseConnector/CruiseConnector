@@ -808,6 +808,91 @@ void main() {
   });
 
   test(
+    'Search-Session-Polling behandelt search_in_progress als pollfähig',
+    () async {
+      service = RouteService(
+        invoker: _CountingInvoker({
+          'route': null,
+          'code': 'search_in_progress',
+          'message': 'search_in_progress',
+          'meta': {
+            'response_code': 'search_in_progress',
+            'search_in_progress': true,
+            'search_session_id': 'session-queued',
+            'search_session_status': 'queued',
+            'attempts_count': 0,
+            'worker_last_seen_at': null,
+            'on_demand_worker_triggered': true,
+          },
+        }),
+      );
+
+      final result = await service.pollRoundTripSearchSession('session-queued');
+
+      expect(result, isNull);
+      expect(
+        service.lastRoundTripSearchSessionMeta?['search_session_id'],
+        'session-queued',
+      );
+      expect(
+        service.lastRoundTripSearchSessionMeta?['search_session_status'],
+        'queued',
+      );
+    },
+  );
+
+  test(
+    'Search-Session-Polling übernimmt found Route als RouteResult',
+    () async {
+      final response = _closedLoopResponse();
+      response['meta'] = {
+        'response_code': 'search_session_found',
+        'search_session_id': 'session-found',
+        'search_session_status': 'found',
+        'route_source': 'search_session',
+        'final_geometry_source': 'hydrated_worker',
+        'final_coordinate_count': 120,
+        'max_display_segment_m': 420,
+        'on_demand_worker_triggered': true,
+      };
+      service = RouteService(invoker: _CountingInvoker(response));
+
+      final result = await service.pollRoundTripSearchSession('session-found');
+
+      expect(result, isNotNull);
+      expect(result!.coordinates, hasLength(120));
+      expect(result.edgeMeta['search_session_id'], 'session-found');
+      expect(result.edgeMeta['route_source'], 'search_session');
+      expect(result.edgeMeta['final_geometry_source'], 'hydrated_worker');
+    },
+  );
+
+  test('Search-Session-Polling verwirft sparse found Geometry', () async {
+    final response = _sparseLongRoundTripResponse();
+    response['meta'] = {
+      'response_code': 'search_session_found',
+      'search_session_id': 'session-sparse',
+      'search_session_status': 'found',
+      'route_source': 'search_session',
+      'final_geometry_source': 'hydrated_worker',
+      'final_coordinate_count': 5,
+      'max_display_segment_m': 30000,
+    };
+    service = RouteService(invoker: _CountingInvoker(response));
+
+    await expectLater(
+      service.pollRoundTripSearchSession('session-sparse'),
+      throwsA(
+        isA<RouteServiceException>().having(
+          (error) => error.edgeMeta['response_code'],
+          'response_code',
+          'route_display_geometry_invalid',
+        ),
+      ),
+    );
+  });
+
+  test(
     'explizites Neu-Suchen startet frisch und löst keine Hintergrundroute aus',
     () async {
       final varyingInvoker = _VaryingCountingInvoker();

@@ -2726,9 +2726,19 @@ class _CruiseModePageState extends State<CruiseModePage>
       if (e is RouteServiceException && _isSearchInProgressError(e)) {
         final sessionId = e.edgeMeta['search_session_id']?.toString();
         if (sessionId != null && sessionId.isNotEmpty) {
+          _logRoundTripSearchUiDecision(
+            'poll_start',
+            error: e,
+            sessionId: sessionId,
+          );
           try {
             final polled = await _pollRoundTripSearchSession(sessionId);
             if (polled != null) {
+              _logRoundTripSearchUiDecision(
+                'route_accepted_from_poll',
+                sessionId: sessionId,
+                result: polled,
+              );
               await _acceptGeneratedRouteResult(
                 result: polled,
                 startPosition: await _getStartCoordinates(),
@@ -2737,6 +2747,11 @@ class _CruiseModePageState extends State<CruiseModePage>
               );
               return;
             }
+            _logRoundTripSearchUiDecision(
+              'poll_timeout_notice',
+              error: e,
+              sessionId: sessionId,
+            );
             errorForUi = RouteServiceException(
               type: RouteErrorType.noRoute,
               userMessage:
@@ -2778,15 +2793,33 @@ class _CruiseModePageState extends State<CruiseModePage>
   }
 
   Future<RouteResult?> _pollRoundTripSearchSession(String sessionId) async {
-    const maxPolls = 30;
+    const maxPolls = 45;
     DateTime? lastWorkerKickAt;
     for (var poll = 0; poll < maxPolls; poll += 1) {
-      if (!mounted || _disposed || !_isLoading) return null;
+      if (!mounted || _disposed) return null;
       await Future.delayed(const Duration(seconds: 4));
-      if (!mounted || _disposed || !_isLoading) return null;
+      if (!mounted || _disposed) return null;
+      _logRoundTripSearchUiDecision(
+        'poll_attempt',
+        sessionId: sessionId,
+        pollAttempt: poll + 1,
+      );
       final result = await _routeService.pollRoundTripSearchSession(sessionId);
-      if (result != null) return result;
+      if (result != null) {
+        _logRoundTripSearchUiDecision(
+          'poll_found',
+          sessionId: sessionId,
+          pollAttempt: poll + 1,
+          result: result,
+        );
+        return result;
+      }
       final pollMeta = _routeService.lastRoundTripSearchSessionMeta;
+      _logRoundTripSearchUiDecision(
+        'poll_pending',
+        sessionId: sessionId,
+        pollAttempt: poll + 1,
+      );
       final shouldKick = _shouldKickStaleRoundTripSearchSession(
         pollMeta,
         pollIndex: poll,
@@ -2797,6 +2830,11 @@ class _CruiseModePageState extends State<CruiseModePage>
               now.difference(lastWorkerKickAt) >=
                   const Duration(seconds: 12))) {
         lastWorkerKickAt = now;
+        _logRoundTripSearchUiDecision(
+          'worker_kick_scheduled',
+          sessionId: sessionId,
+          pollAttempt: poll + 1,
+        );
         unawaited(
           _routeService.kickRoundTripSearchSession(
             sessionId,
@@ -2813,7 +2851,37 @@ class _CruiseModePageState extends State<CruiseModePage>
         });
       }
     }
+    _logRoundTripSearchUiDecision('poll_exhausted', sessionId: sessionId);
     return null;
+  }
+
+  void _logRoundTripSearchUiDecision(
+    String decision, {
+    RouteServiceException? error,
+    String? sessionId,
+    int? pollAttempt,
+    RouteResult? result,
+  }) {
+    final meta =
+        result?.edgeMeta ??
+        error?.edgeMeta ??
+        _routeService.lastRoundTripSearchSessionMeta ??
+        const <String, dynamic>{};
+    debugPrint(
+      '[RouteDebug][UIHandoff] decision=$decision '
+      'clientRoutingBuildId=${RouteService.clientRoutingBuildId} '
+      'session_id=${sessionId ?? meta['search_session_id']} '
+      'poll_attempt=${pollAttempt ?? '-'} '
+      'response_code=${meta['response_code'] ?? meta['code']} '
+      'search_session_status=${meta['search_session_status']} '
+      'on_demand_worker_triggered=${meta['on_demand_worker_triggered']} '
+      'worker_last_seen_at=${meta['worker_last_seen_at']} '
+      'attempts=${meta['attempts_count']} '
+      'source=${meta['route_source'] ?? meta['source']} '
+      'final_geometry_source=${meta['final_geometry_source'] ?? meta['geometry_source']} '
+      'coordinate_count=${result?.coordinates.length ?? meta['final_coordinate_count'] ?? meta['coordinate_count']} '
+      'ui_loading=$_isLoading',
+    );
   }
 
   bool _shouldKickStaleRoundTripSearchSession(
@@ -3305,8 +3373,10 @@ class _CruiseModePageState extends State<CruiseModePage>
         error.edgeMeta['code']?.toString();
     return error.type == RouteErrorType.noRoute ||
         error.type == RouteErrorType.quality ||
+        code == 'search_in_progress' ||
         code == 'search_session_no_route' ||
         code == 'search_session_timeout' ||
+        error.edgeMeta['search_in_progress'] == true ||
         _isRouteWarmupError(error);
   }
 
@@ -3339,6 +3409,8 @@ class _CruiseModePageState extends State<CruiseModePage>
         ? 'Gerade keine gute Route gefunden'
         : 'Wir suchen eine bessere Route';
     final message = switch (code) {
+      'search_in_progress' =>
+        'Wir prüfen Live-Varianten und verfeinern die Strecke.',
       'search_session_timeout' =>
         'Die Suche dauert länger als üblich. Wir prüfen weitere Varianten im Hintergrund.',
       'search_session_no_route' =>

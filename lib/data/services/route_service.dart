@@ -46,7 +46,7 @@ class SupabaseRouteInvoker implements RouteEdgeInvoker {
       RouteService.edgeFunction,
       body: body,
     );
-    return response.data;
+    return response;
   }
 }
 
@@ -1021,16 +1021,38 @@ class RouteService {
       'client_scenario_key': 'search_session:$id',
     };
     try {
+      debugPrint(
+        '[RouteService][SearchSessionPoll] id=$id '
+        'clientRoutingBuildId=$clientRoutingBuildId '
+        'clientRoutingBuildTime=$clientRoutingBuildTime',
+      );
       final result = await _invoke(body);
       result.edgeMeta['search_session_id'] ??= id;
       result.edgeMeta['route_source'] ??= 'search_session';
       _lastRoundTripSearchSessionMeta = Map<String, dynamic>.from(
         result.edgeMeta,
       );
+      debugPrint(
+        '[RouteService][SearchSessionPoll] id=$id status=found '
+        'source=${result.edgeMeta['route_source'] ?? result.edgeMeta['source']} '
+        'final_geometry_source=${result.edgeMeta['final_geometry_source'] ?? result.edgeMeta['geometry_source']} '
+        'coordinate_count=${result.coordinates.length}',
+      );
       return result;
     } on RouteServiceException catch (error) {
       _lastRoundTripSearchSessionMeta = Map<String, dynamic>.from(
         error.edgeMeta,
+      );
+      final code =
+          error.edgeMeta['response_code']?.toString() ??
+          error.edgeMeta['code']?.toString();
+      final status = error.edgeMeta['search_session_status']?.toString();
+      debugPrint(
+        '[RouteService][SearchSessionPoll] id=$id route_pending=true '
+        'code=$code status=$status '
+        'attempts=${error.edgeMeta['attempts_count']} '
+        'worker_last_seen_at=${error.edgeMeta['worker_last_seen_at']} '
+        'message=${error.userMessage}',
       );
       if (_isSearchInProgressError(error)) return null;
       rethrow;
@@ -2963,6 +2985,35 @@ class RouteService {
             'Der Routing-Dienst hat ein ungültiges Antwortformat gesendet.',
         debugMessage: 'Unexpected response type: ${data.runtimeType}',
         statusCode: statusCode,
+      );
+    }
+
+    if (routeType == 'ROUND_TRIP') {
+      final responseMeta = data['meta'] is Map
+          ? Map<String, dynamic>.from(data['meta'] as Map)
+          : const <String, dynamic>{};
+      final routeMap = data['route'] is Map ? data['route'] as Map : null;
+      final geometryMap = routeMap?['geometry'] is Map
+          ? routeMap!['geometry'] as Map
+          : null;
+      final rawCoordinates = geometryMap?['coordinates'];
+      final responseCoordinateCount = rawCoordinates is List
+          ? rawCoordinates.length
+          : responseMeta['final_coordinate_count'] ??
+                responseMeta['coordinate_count'];
+      debugPrint(
+        '[RouteDebug][RoundTripResponse] '
+        'clientRoutingBuildId=$clientRoutingBuildId '
+        'requestId=${body['request_id']} '
+        'status=${statusCode ?? 200} '
+        'code=${data['code'] ?? responseMeta['response_code']} '
+        'search_session_id=${responseMeta['search_session_id']} '
+        'search_session_status=${responseMeta['search_session_status']} '
+        'on_demand_worker_triggered=${responseMeta['on_demand_worker_triggered']} '
+        'route_present=${data['route'] != null} '
+        'source=${responseMeta['route_source'] ?? responseMeta['source']} '
+        'final_geometry_source=${responseMeta['final_geometry_source'] ?? responseMeta['geometry_source']} '
+        'coordinate_count=$responseCoordinateCount',
       );
     }
 
