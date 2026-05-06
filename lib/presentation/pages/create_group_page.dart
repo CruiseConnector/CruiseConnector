@@ -8,9 +8,11 @@ import 'package:latlong2/latlong.dart';
 
 import '../../core/constants.dart';
 import '../../data/services/cruise_group_service.dart';
+import '../../data/services/gamification_service.dart';
 import '../../data/services/geocoding_service.dart';
 import '../../data/services/route_service.dart';
 import '../../domain/models/route_result.dart';
+import '../widgets/badge_unlock_popup.dart';
 import 'group_lobby_page.dart';
 
 /// Gruppenerstellung mit Live-Map: Startpunkt wählen (GPS / Karte / Adresse),
@@ -210,6 +212,15 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
         },
       );
 
+      if (!mounted) return;
+      final gamResult = await GamificationService.calculateAndSync();
+      if (!mounted) return;
+      if (gamResult.newBadges.isNotEmpty) {
+        await showBadgeUnlockPopup(
+          context: context,
+          badges: gamResult.newBadges,
+        );
+      }
       if (!mounted) return;
       Navigator.of(context).pushReplacement(
         MaterialPageRoute(builder: (_) => GroupLobbyPage(groupId: groupId)),

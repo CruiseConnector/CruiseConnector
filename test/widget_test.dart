@@ -11,14 +11,14 @@ import 'package:cruise_connect/presentation/widgets/textfeld.dart';
 
 void main() {
   group('MyButton', () {
-    testWidgets('rendert korrekt und reagiert auf Tap', (WidgetTester tester) async {
+    testWidgets('rendert korrekt und reagiert auf Tap', (
+      WidgetTester tester,
+    ) async {
       bool tapped = false;
 
       await tester.pumpWidget(
         MaterialApp(
-          home: Scaffold(
-            body: MyButton(onTap: () => tapped = true),
-          ),
+          home: Scaffold(body: MyButton(onTap: () => tapped = true)),
         ),
       );
 
@@ -30,13 +30,11 @@ void main() {
       expect(tapped, isTrue);
     });
 
-    testWidgets('onTap null ist sicher (kein Crash)', (WidgetTester tester) async {
+    testWidgets('onTap null ist sicher (kein Crash)', (
+      WidgetTester tester,
+    ) async {
       await tester.pumpWidget(
-        const MaterialApp(
-          home: Scaffold(
-            body: MyButton(onTap: null),
-          ),
-        ),
+        const MaterialApp(home: Scaffold(body: MyButton(onTap: null))),
       );
       expect(find.byType(MyButton), findsOneWidget);
       // Kein Crash erwartet beim Tap auf disabled Button

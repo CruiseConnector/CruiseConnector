@@ -65,6 +65,46 @@ class GamificationService {
   static const double streakStep = 0.05;
   static const double maxStreakMultiplier = 1.30;
   static const double xpCreditStep = 0.20;
+  static const Map<String, String> _legacyBadgeIds = {'route_1': 'badge_02'};
+
+  @visibleForTesting
+  static List<String> normalizeBadgeIds(Iterable<dynamic> badgeIds) {
+    final activeBadgeIds = Badge.all.map((badge) => badge.id).toSet();
+    final normalized = <String>{};
+
+    for (final raw in badgeIds) {
+      final id = raw?.toString().trim();
+      if (id == null || id.isEmpty) continue;
+      final mappedId = _legacyBadgeIds[id] ?? id;
+      if (activeBadgeIds.contains(mappedId)) {
+        normalized.add(mappedId);
+      }
+    }
+
+    return [
+      for (final badge in Badge.all)
+        if (normalized.contains(badge.id)) badge.id,
+    ];
+  }
+
+  @visibleForTesting
+  static List<String> mergeBadgeIds(
+    Iterable<dynamic> previousBadgeIds,
+    Iterable<dynamic> currentBadgeIds,
+  ) {
+    return normalizeBadgeIds([...previousBadgeIds, ...currentBadgeIds]);
+  }
+
+  @visibleForTesting
+  static List<String> newlyQualifiedBadgeIds(
+    Iterable<dynamic> previousBadgeIds,
+    Iterable<dynamic> currentBadgeIds,
+  ) {
+    final previousBadgeSet = normalizeBadgeIds(previousBadgeIds).toSet();
+    return normalizeBadgeIds(
+      currentBadgeIds,
+    ).where((badgeId) => !previousBadgeSet.contains(badgeId)).toList();
+  }
 
   /// Berechnet XP für eine einzelne Route.
   /// 10 XP/km + 5 XP/Kurve + Stil-Bonus.
@@ -296,12 +336,14 @@ class GamificationService {
     final completedRoutes = rideRoutes
         .where((route) => route.isFullyCompleted)
         .toList();
+    final completedGroupRoutes = completedRoutes
+        .where((route) => route.groupId?.trim().isNotEmpty == true)
+        .toList();
 
     // 2. Statistiken berechnen
     double totalKm = 0;
     double totalSecs = 0;
     int totalXp = 0;
-    final styleCounts = <String, int>{};
 
     for (final r in rideRoutes) {
       totalKm += r.actualDistanceKm;
@@ -325,43 +367,44 @@ class GamificationService {
       }
     }
 
-    for (final r in completedRoutes) {
-      styleCounts[r.style] = (styleCounts[r.style] ?? 0) + 1;
-    }
-
     // 3. Level aus XP berechnen
     final level = UserLevel.fromXp(totalXp.toDouble());
 
+    final extraCounts = await Future.wait<int>([
+      _countCreatedGroups(userId),
+      _countRoutePosts(userId),
+      _countSavedRouteReferences(userId, routes),
+    ]);
+    final createdGroupCount = extraCounts[0];
+    final routePostCount = extraCounts[1];
+    final savedRouteReferenceCount = extraCounts[2];
+
     // 4. Badges prüfen
-    final earned = <String>[];
+    final currentlyQualifiedBadges = <String>[];
+
+    // Level-Badges
+    if (level.level >= 10) currentlyQualifiedBadges.add('badge_01');
+    if (level.level >= 25) currentlyQualifiedBadges.add('badge_03');
+    if (level.level >= 50) currentlyQualifiedBadges.add('badge_08');
+    if (level.level >= UserLevel.maxLevel) {
+      currentlyQualifiedBadges.add('badge_14');
+    }
+
+    // Routen- und Gruppen-Badges
+    if (completedRoutes.isNotEmpty) currentlyQualifiedBadges.add('badge_02');
+    if (completedGroupRoutes.length >= 5) {
+      currentlyQualifiedBadges.add('badge_04');
+    }
+    if (routePostCount >= 1) currentlyQualifiedBadges.add('badge_05');
+    if (createdGroupCount >= 1) currentlyQualifiedBadges.add('badge_07');
+    if (savedRouteReferenceCount >= 5) {
+      currentlyQualifiedBadges.add('badge_09');
+    }
 
     // Distanz-Badges
-    if (totalKm >= 10) earned.add('dist_10');
-    if (totalKm >= 50) earned.add('dist_50');
-    if (totalKm >= 100) earned.add('dist_100');
-    if (totalKm >= 500) earned.add('dist_500');
-    if (totalKm >= 1000) earned.add('dist_1000');
-    if (totalKm >= 5000) earned.add('dist_5000');
-
-    // Routen-Badges
-    if (completedRoutes.isNotEmpty) earned.add('route_1');
-    if (completedRoutes.length >= 5) earned.add('route_5');
-    if (completedRoutes.length >= 10) earned.add('route_10');
-    if (completedRoutes.length >= 25) earned.add('route_25');
-    if (completedRoutes.length >= 50) earned.add('route_50');
-
-    // Stil-Badges
-    if ((styleCounts['Kurvenjagd'] ?? 0) >= 5) earned.add('style_kurven');
-    if ((styleCounts['Sport Mode'] ?? 0) >= 5) earned.add('style_sport');
-    if ((styleCounts['Abendrunde'] ?? 0) >= 5) earned.add('style_abend');
-    if ((styleCounts['Entdecker'] ?? 0) >= 5) earned.add('style_entdecker');
-
-    // Spezial-Badges
-    final completedRoundTrips = completedRoutes.where((r) => r.isRoundTrip);
-    if (completedRoundTrips.length >= 10) earned.add('special_roundtrip');
-    if (completedRoutes.any((r) => r.actualDistanceKm >= 100)) {
-      earned.add('special_long');
-    }
+    if (totalKm >= 500) currentlyQualifiedBadges.add('badge_06');
+    if (totalKm >= 2500) currentlyQualifiedBadges.add('badge_10');
+    if (totalKm >= 10000) currentlyQualifiedBadges.add('badge_13');
 
     // 5. Bisherige Badges laden und neue bestimmen
     List<String> previousBadges = [];
@@ -372,14 +415,17 @@ class GamificationService {
           .eq('id', userId)
           .maybeSingle();
 
-      if (profile != null && profile['badges'] != null) {
-        previousBadges = List<String>.from(profile['badges'] as List);
+      final rawBadges = profile?['badges'];
+      if (rawBadges is Iterable) {
+        previousBadges = normalizeBadgeIds(rawBadges);
       }
     } catch (e) {
       debugPrint('[Gamification] Badges-Abfrage fehlgeschlagen: $e');
     }
 
-    final newBadges = earned.where((b) => !previousBadges.contains(b)).toList();
+    final qualifiedBadges = normalizeBadgeIds(currentlyQualifiedBadges);
+    final unlockedBadges = mergeBadgeIds(previousBadges, qualifiedBadges);
+    final newBadges = newlyQualifiedBadgeIds(previousBadges, qualifiedBadges);
 
     // 6. Fortschritt im Backend speichern
     try {
@@ -390,7 +436,7 @@ class GamificationService {
             'total_km': totalKm,
             'total_xp': totalXp,
             'total_routes': completedRoutes.length,
-            'badges': earned,
+            'badges': unlockedBadges,
           })
           .eq('id', userId);
     } catch (e) {
@@ -399,12 +445,70 @@ class GamificationService {
 
     return GamificationResult(
       level: level,
-      earnedBadgeIds: earned,
+      earnedBadgeIds: unlockedBadges,
       newBadgeIds: newBadges,
       totalRoutes: completedRoutes.length,
       totalDistanceKm: totalKm,
       totalHours: totalSecs / 3600,
       totalXp: totalXp,
     );
+  }
+
+  static Future<int> _countCreatedGroups(String userId) async {
+    try {
+      final rows = await _db
+          .from('groups')
+          .select('id')
+          .eq('created_by', userId)
+          .limit(2);
+      return (rows as List).length;
+    } catch (e) {
+      debugPrint('[Gamification] Gruppen-Zaehler fehlgeschlagen: $e');
+      return 0;
+    }
+  }
+
+  static Future<int> _countRoutePosts(String userId) async {
+    try {
+      final rows = await _db
+          .from('posts')
+          .select('shared_route_id')
+          .eq('user_id', userId);
+      return (rows as List)
+          .whereType<Map>()
+          .where((row) => row['shared_route_id'] != null)
+          .length;
+    } catch (e) {
+      debugPrint('[Gamification] Routenpost-Zaehler fehlgeschlagen: $e');
+      return 0;
+    }
+  }
+
+  static Future<int> _countSavedRouteReferences(
+    String userId,
+    List<SavedRoute> routes,
+  ) async {
+    final routeIds = <String>{
+      for (final route in routes)
+        if (route.sourceRouteId?.trim().isNotEmpty == true)
+          route.sourceRouteId!.trim(),
+    };
+
+    try {
+      final rows = await _db
+          .from('route_bookmarks')
+          .select('route_id')
+          .eq('user_id', userId);
+      for (final row in (rows as List).whereType<Map>()) {
+        final routeId = row['route_id'] as String?;
+        if (routeId != null && routeId.trim().isNotEmpty) {
+          routeIds.add(routeId.trim());
+        }
+      }
+    } catch (e) {
+      debugPrint('[Gamification] Routen-Speicher-Zaehler fehlgeschlagen: $e');
+    }
+
+    return routeIds.length;
   }
 }

@@ -1,3 +1,5 @@
+// ignore_for_file: deprecated_member_use
+
 import 'package:flutter/material.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:provider/provider.dart';

@@ -1,3 +1,5 @@
+// ignore_for_file: prefer_interpolation_to_compose_strings
+
 import 'dart:math';
 import 'dart:convert';
 import 'dart:io';
@@ -29,7 +31,9 @@ void main() {
       final sql =
           regionsSql.readAsStringSync() +
           '\n' +
-          (southRegionsSql.existsSync() ? southRegionsSql.readAsStringSync() : '');
+          (southRegionsSql.existsSync()
+              ? southRegionsSql.readAsStringSync()
+              : '');
 
       expect(sql, contains("('AT', 'Vorarlberg', 'Bregenz'"));
       expect(sql, contains("('AT', 'Vorarlberg', 'Dornbirn'"));
@@ -102,15 +106,13 @@ void main() {
         expect(fingerprints.length, routes.length);
         expect(
           clusters,
-          containsAll(
-            <String>[
-              'Bregenz',
-              'Dornbirn',
-              'Feldkirch',
-              'Bludenz',
-              'Rheintal-Sued',
-            ],
-          ),
+          containsAll(<String>[
+            'Bregenz',
+            'Dornbirn',
+            'Feldkirch',
+            'Bludenz',
+            'Rheintal-Sued',
+          ]),
         );
         expect(buckets, containsAll(<int>[50, 75, 100]));
         expect(noHighwayCount, routes.length);
@@ -212,12 +214,7 @@ List<Map<String, dynamic>> _seedRoutes(File file) {
       .toList(growable: false);
 }
 
-double _haversineKm(
-  double lat1,
-  double lng1,
-  double lat2,
-  double lng2,
-) {
+double _haversineKm(double lat1, double lng1, double lat2, double lng2) {
   const earthRadiusKm = 6371.0;
   final dLat = _toRadians(lat2 - lat1);
   final dLng = _toRadians(lng2 - lng1);

@@ -32,8 +32,9 @@ class MockRouteEdgeInvoker extends _i1.Mock implements _i3.RouteEdgeInvoker {
   @override
   _i2.Future<dynamic> invoke(Map<String, dynamic>? body) =>
       (super.noSuchMethod(
-        Invocation.method(#invoke, [body]),
-        returnValue: _i2.Future<dynamic>.value(),
-        returnValueForMissingStub: _i2.Future<dynamic>.value(),
-      ) as _i2.Future<dynamic>);
+            Invocation.method(#invoke, [body]),
+            returnValue: _i2.Future<dynamic>.value(),
+            returnValueForMissingStub: _i2.Future<dynamic>.value(),
+          )
+          as _i2.Future<dynamic>);
 }

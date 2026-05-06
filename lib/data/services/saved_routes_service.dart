@@ -141,17 +141,42 @@ class SavedRoutesService {
     _weeklyTopRouteCacheKey = null;
   }
 
+  static bool areEquivalentRoutes(SavedRoute first, SavedRoute second) {
+    if (first.id == second.id) return true;
+
+    final firstSource = first.sourceRouteId?.trim();
+    final secondSource = second.sourceRouteId?.trim();
+    final firstIds = <String>{
+      first.id,
+      if (firstSource != null && firstSource.isNotEmpty) firstSource,
+    };
+    final secondIds = <String>{
+      second.id,
+      if (secondSource != null && secondSource.isNotEmpty) secondSource,
+    };
+
+    if (firstIds.intersection(secondIds).isNotEmpty) return true;
+    return first.routeSignature == second.routeSignature;
+  }
+
   static bool hasEquivalentSavedRoute(
     SavedRoute route,
     Iterable<SavedRoute> savedRoutes,
   ) {
-    final routeSignature = route.routeSignature;
     for (final savedRoute in savedRoutes) {
-      if (savedRoute.id == route.id) return true;
-      if (savedRoute.sourceRouteId == route.id) return true;
-      if (savedRoute.routeSignature == routeSignature) return true;
+      if (areEquivalentRoutes(route, savedRoute)) return true;
     }
     return false;
+  }
+
+  static List<SavedRoute> dedupeEquivalentRoutes(Iterable<SavedRoute> routes) {
+    final unique = <SavedRoute>[];
+    for (final route in routes) {
+      if (!hasEquivalentSavedRoute(route, unique)) {
+        unique.add(route);
+      }
+    }
+    return unique;
   }
 
   /// Findet die beste bewertete Route innerhalb eines Radius (in km).
@@ -212,6 +237,7 @@ class SavedRoutesService {
     int? xpStreakDays,
     int? xpAwarded,
     bool completedAtEnd = false,
+    String? groupId,
   }) async {
     final userId = _db.auth.currentUser?.id;
     if (userId == null) return;
@@ -250,6 +276,8 @@ class SavedRoutesService {
       'quality_tier': result.edgeMeta['quality_tier']?.toString(),
       'route_meta': result.edgeMeta,
       'completed_at_end': completedAtEnd,
+      if (groupId != null && groupId.trim().isNotEmpty)
+        'group_id': groupId.trim(),
       if (xpDistance != null) 'xp_distance': xpDistance,
       if (xpCurveBonus != null) 'xp_curve_bonus': xpCurveBonus,
       if (xpStyleBonus != null) 'xp_style_bonus': xpStyleBonus,
@@ -278,6 +306,13 @@ class SavedRoutesService {
         row.remove('completed_at_end');
         await _db.from('routes').insert(row);
         invalidateWeeklyTopRouteCache();
+      } else if (e.code == 'PGRST204' && e.message.contains('group_id')) {
+        debugPrint(
+          '[SavedRoutes] group_id-Spalte fehlt, speichere ohne Gruppenbezug',
+        );
+        row.remove('group_id');
+        await _db.from('routes').insert(row);
+        invalidateWeeklyTopRouteCache();
       } else if (e.code == 'PGRST204') {
         debugPrint(
           '[SavedRoutes] Route-Meta-Spalten fehlen, speichere ohne Meta: ${e.message}',
@@ -288,6 +323,7 @@ class SavedRoutesService {
           ..remove('quality_tier')
           ..remove('route_meta')
           ..remove('completed_at_end')
+          ..remove('group_id')
           ..remove('xp_distance')
           ..remove('xp_curve_bonus')
           ..remove('xp_style_bonus')
@@ -323,6 +359,12 @@ class SavedRoutesService {
     final userId = _db.auth.currentUser?.id;
     if (userId == null) return;
 
+    final savedRoutes = await getSavedRouteLibrary();
+    if (hasEquivalentSavedRoute(route, savedRoutes)) return;
+
+    final sourceRouteId = (route.sourceRouteId?.trim().isNotEmpty == true)
+        ? route.sourceRouteId!.trim()
+        : route.id;
     final row = <String, dynamic>{
       'user_id': userId,
       'name': route.name ?? '${route.styleEmoji} ${route.style}',
@@ -332,7 +374,7 @@ class SavedRoutesService {
       'distance_actual': route.distanceKm,
       'duration_seconds': route.durationSeconds?.round(),
       'geometry': route.geometry,
-      'source_route_id': route.id,
+      'source_route_id': sourceRouteId,
     };
 
     try {
@@ -346,6 +388,9 @@ class SavedRoutesService {
         row.remove('source_route_id');
         await _db.from('routes').insert(row);
         invalidateWeeklyTopRouteCache();
+      } else if (e.code == '23505') {
+        // Unique constraint: diese Route ist fuer den User bereits gespeichert.
+        return;
       } else {
         rethrow;
       }
@@ -399,6 +444,51 @@ class SavedRoutesService {
 
   /// Gibt beliebte Routen anderer Nutzer zurück (ähnlicher Stil, gute Bewertung).
   /// Kann als Vorschlag für neue Nutzer verwendet werden.
+  static Future<List<SavedRoute>> getSavedRouteCopies() async {
+    final routes = await getUserRoutes();
+    return dedupeEquivalentRoutes(
+      routes.where((route) => !route.isDrivenSession),
+    );
+  }
+
+  static Future<List<SavedRoute>> getBookmarkedRoutes() async {
+    final userId = _db.auth.currentUser?.id;
+    if (userId == null) return const [];
+
+    try {
+      final rows = await _db
+          .from('route_bookmarks')
+          .select('route_id, created_at, routes(*)')
+          .eq('user_id', userId)
+          .order('created_at', ascending: false);
+
+      return dedupeEquivalentRoutes(
+        (rows as List)
+            .map((row) => row as Map<String, dynamic>)
+            .map((row) => row['routes'])
+            .whereType<Map>()
+            .map(
+              (route) => SavedRoute.fromJson(Map<String, dynamic>.from(route)),
+            ),
+      );
+    } catch (e) {
+      debugPrint('[SavedRoutes] getBookmarkedRoutes Fehler: $e');
+      return const [];
+    }
+  }
+
+  static Future<List<SavedRoute>> getSavedRouteLibrary() async {
+    final results = await Future.wait([
+      getSavedRouteCopies(),
+      getBookmarkedRoutes(),
+    ]);
+    return dedupeEquivalentRoutes([...results[0], ...results[1]]);
+  }
+
+  static Future<bool> isRouteSaved(SavedRoute route) async {
+    return hasEquivalentSavedRoute(route, await getSavedRouteLibrary());
+  }
+
   static Future<List<SavedRoute>> getPopularRoutes({
     String? style,
     int limit = 10,
@@ -458,6 +548,50 @@ class SavedRoutesService {
       invalidateWeeklyTopRouteCache();
     } catch (e) {
       debugPrint('[SavedRoutes] renameRoute Fehler: $e');
+      rethrow;
+    }
+  }
+
+  static Future<void> unsaveRouteEverywhere(SavedRoute route) async {
+    final userId = _db.auth.currentUser?.id;
+    if (userId == null) return;
+
+    final sourceRouteId = route.sourceRouteId?.trim();
+    final routeIds = <String>{
+      route.id,
+      if (sourceRouteId != null && sourceRouteId.isNotEmpty) sourceRouteId,
+    };
+
+    try {
+      await _db
+          .from('route_bookmarks')
+          .delete()
+          .eq('user_id', userId)
+          .inFilter('route_id', routeIds.toList());
+    } catch (e) {
+      debugPrint('[SavedRoutes] Bookmark entfernen fehlgeschlagen: $e');
+    }
+
+    try {
+      final ownRoutes = await getUserRoutes();
+      final savedCopies = ownRoutes
+          .where((candidate) => !candidate.isDrivenSession)
+          .where((candidate) => areEquivalentRoutes(route, candidate))
+          .map((candidate) => candidate.id)
+          .toSet();
+
+      if (savedCopies.isNotEmpty) {
+        await _db
+            .from('routes')
+            .delete()
+            .eq('user_id', userId)
+            .inFilter('id', savedCopies.toList());
+        invalidateWeeklyTopRouteCache();
+      }
+    } catch (e) {
+      debugPrint(
+        '[SavedRoutes] Gespeicherte Kopie entfernen fehlgeschlagen: $e',
+      );
       rethrow;
     }
   }

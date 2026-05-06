@@ -1,4 +1,4 @@
-// ignore_for_file: avoid_print
+// ignore_for_file: avoid_print, prefer_const_declarations, unused_element, unused_element_parameter
 
 import 'dart:math' as math;
 import 'package:flutter_test/flutter_test.dart';
@@ -82,8 +82,10 @@ void main() {
       for (var i = 0; i < 200; i++) {
         // Sehr leichte Rechtskurve: <20° Gesamtänderung
         final angle = i * 0.001 * math.pi / 180; // extrem flach
-        coords.add([11.58 + i * 0.0001 * math.cos(angle),
-                    48.14 + i * 0.0001 * math.sin(angle)]);
+        coords.add([
+          11.58 + i * 0.0001 * math.cos(angle),
+          48.14 + i * 0.0001 * math.sin(angle),
+        ]);
       }
       final result = CruiseCurveWarning.detectNextCurve(
         coordinates: coords,
@@ -120,9 +122,11 @@ void main() {
       // Mit dieser Route soll gentle oder moderate erkannt werden
       if (result != null) {
         expect(
-          result.severity == CurveSeverity.gentle || result.severity == CurveSeverity.moderate,
+          result.severity == CurveSeverity.gentle ||
+              result.severity == CurveSeverity.moderate,
           isTrue,
-          reason: 'Erwartet gentle oder moderate, bekam ${result.severity} mit ${result.angleDegrees}°',
+          reason:
+              'Erwartet gentle oder moderate, bekam ${result.severity} mit ${result.angleDegrees}°',
         );
       }
     });
@@ -145,8 +149,8 @@ void main() {
       if (result != null) {
         expect(
           result.severity == CurveSeverity.sharp ||
-          result.severity == CurveSeverity.moderate ||
-          result.severity == CurveSeverity.hairpin,
+              result.severity == CurveSeverity.moderate ||
+              result.severity == CurveSeverity.hairpin,
           isTrue,
           reason: 'Erwartet sharp/moderate/hairpin, bekam ${result.severity}',
         );
@@ -171,8 +175,11 @@ void main() {
       );
       // Hairpin-Kurve oder sehr scharfe Kurve soll erkannt werden
       if (result != null) {
-        expect(result.angleDegrees, greaterThan(100.0),
-            reason: 'Erwarte Winkel >100° für Kehre');
+        expect(
+          result.angleDegrees,
+          greaterThan(100.0),
+          reason: 'Erwarte Winkel >100° für Kehre',
+        );
       }
     });
   });
@@ -272,11 +279,22 @@ void main() {
         CurveSeverity.sharp,
         CurveSeverity.hairpin,
       ];
-      final colors = severities.map((s) => DetectedCurve(
-        routeIndex: 0, angleDegrees: 0, severity: s,
-        distanceMeters: 100, direction: 'right',
-      ).color).toSet();
-      expect(colors.length, 4, reason: 'Jeder Schärfegrad soll eine andere Farbe haben');
+      final colors = severities
+          .map(
+            (s) => DetectedCurve(
+              routeIndex: 0,
+              angleDegrees: 0,
+              severity: s,
+              distanceMeters: 100,
+              direction: 'right',
+            ).color,
+          )
+          .toSet();
+      expect(
+        colors.length,
+        4,
+        reason: 'Jeder Schärfegrad soll eine andere Farbe haben',
+      );
     });
 
     test('Distanz ≥ 1km wird als "X,X km" angezeigt', () {
@@ -312,10 +330,10 @@ void main() {
       final severity = angle >= 130
           ? CurveSeverity.hairpin
           : angle >= 80
-              ? CurveSeverity.sharp
-              : angle >= 50
-                  ? CurveSeverity.moderate
-                  : CurveSeverity.gentle;
+          ? CurveSeverity.sharp
+          : angle >= 50
+          ? CurveSeverity.moderate
+          : CurveSeverity.gentle;
       expect(severity, CurveSeverity.gentle);
     });
 
@@ -324,10 +342,10 @@ void main() {
       final severity = angle >= 130
           ? CurveSeverity.hairpin
           : angle >= 80
-              ? CurveSeverity.sharp
-              : angle >= 50
-                  ? CurveSeverity.moderate
-                  : CurveSeverity.gentle;
+          ? CurveSeverity.sharp
+          : angle >= 50
+          ? CurveSeverity.moderate
+          : CurveSeverity.gentle;
       expect(severity, CurveSeverity.moderate);
     });
 
@@ -336,10 +354,10 @@ void main() {
       final severity = angle >= 130
           ? CurveSeverity.hairpin
           : angle >= 80
-              ? CurveSeverity.sharp
-              : angle >= 50
-                  ? CurveSeverity.moderate
-                  : CurveSeverity.gentle;
+          ? CurveSeverity.sharp
+          : angle >= 50
+          ? CurveSeverity.moderate
+          : CurveSeverity.gentle;
       expect(severity, CurveSeverity.sharp);
     });
 
@@ -348,10 +366,10 @@ void main() {
       final severity = angle >= 130
           ? CurveSeverity.hairpin
           : angle >= 80
-              ? CurveSeverity.sharp
-              : angle >= 50
-                  ? CurveSeverity.moderate
-                  : CurveSeverity.gentle;
+          ? CurveSeverity.sharp
+          : angle >= 50
+          ? CurveSeverity.moderate
+          : CurveSeverity.gentle;
       expect(severity, CurveSeverity.hairpin);
     });
 
@@ -360,10 +378,10 @@ void main() {
       final severity = angle >= 130
           ? CurveSeverity.hairpin
           : angle >= 80
-              ? CurveSeverity.sharp
-              : angle >= 50
-                  ? CurveSeverity.moderate
-                  : CurveSeverity.gentle;
+          ? CurveSeverity.sharp
+          : angle >= 50
+          ? CurveSeverity.moderate
+          : CurveSeverity.gentle;
       expect(severity, CurveSeverity.hairpin);
     });
 
@@ -372,10 +390,10 @@ void main() {
       final severity = angle >= 130
           ? CurveSeverity.hairpin
           : angle >= 80
-              ? CurveSeverity.sharp
-              : angle >= 50
-                  ? CurveSeverity.moderate
-                  : CurveSeverity.gentle;
+          ? CurveSeverity.sharp
+          : angle >= 50
+          ? CurveSeverity.moderate
+          : CurveSeverity.gentle;
       expect(severity, CurveSeverity.moderate);
     });
   });

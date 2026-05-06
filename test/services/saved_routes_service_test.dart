@@ -5,7 +5,9 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:cruise_connect/data/services/gamification_service.dart';
 import 'package:cruise_connect/data/services/saved_routes_service.dart';
+import 'package:cruise_connect/domain/models/badge.dart' as app;
 import 'package:cruise_connect/domain/models/saved_route.dart';
+import 'package:cruise_connect/domain/models/user_level.dart';
 
 void main() {
   group('SavedRoute Model Tests', () {
@@ -22,7 +24,10 @@ void main() {
         'duration_seconds': 3600.0,
         'route_type': 'ROUND_TRIP',
         'rating': 5,
+        'user_id': 'user-1',
+        'source_route_id': 'route-source',
         'completed_at_end': false,
+        'group_id': 'group-1',
       };
 
       final route = SavedRoute.fromJson(json);
@@ -32,7 +37,10 @@ void main() {
       expect(route.distanceKm, equals(42.5));
       expect(route.name, equals('Meine Lieblingsroute'));
       expect(route.rating, equals(5));
+      expect(route.userId, equals('user-1'));
+      expect(route.sourceRouteId, equals('route-source'));
       expect(route.isRoundTrip, isTrue);
+      expect(route.groupId, equals('group-1'));
       expect(route.isDrivenSession, isTrue);
       expect(route.completionRatio, closeTo(0.85, 0.001));
       expect(route.qualifiesForXpCredit, isTrue);
@@ -205,6 +213,40 @@ void main() {
 
       expect(creditedKm, 100);
     });
+
+    test('Level ist bei 100 gedeckelt', () {
+      final level = UserLevel.fromXp(UserLevel.xpForLevel(120));
+
+      expect(level.level, UserLevel.maxLevel);
+      expect(level.progress, 1.0);
+      expect(level.xpToNextLevel, 0);
+    });
+  });
+
+  group('Badge-Konfiguration', () {
+    test('enthaelt nur die aktive Badge-Auswahl', () {
+      final ids = app.Badge.all.map((badge) => badge.id).toList();
+
+      expect(
+        ids,
+        equals([
+          'badge_01',
+          'badge_02',
+          'badge_03',
+          'badge_04',
+          'badge_05',
+          'badge_06',
+          'badge_07',
+          'badge_08',
+          'badge_09',
+          'badge_10',
+          'badge_13',
+          'badge_14',
+        ]),
+      );
+      expect(app.Badge.getById('route_1'), isNull);
+      expect(app.Badge.getById('badge_02')?.name, equals('Erste Fahrt'));
+    });
   });
 
   group('SavedRoutesService Tests', () {
@@ -340,6 +382,49 @@ void main() {
 
       expect(
         SavedRoutesService.hasEquivalentSavedRoute(recommended, [savedCopy]),
+        isTrue,
+      );
+    });
+
+    test('dedupeEquivalentRoutes entfernt doppelte gespeicherte Kopien', () {
+      final original = SavedRoute.fromJson({
+        'id': 'route-original',
+        'created_at': '2025-01-15T10:00:00.000Z',
+        'style': 'Sport Mode',
+        'distance_actual': 50.0,
+        'geometry': {
+          'type': 'LineString',
+          'coordinates': [
+            [11.58, 48.13],
+            [11.62, 48.17],
+          ],
+        },
+      });
+      final firstCopy = SavedRoute.fromJson({
+        'id': 'route-copy-1',
+        'created_at': '2025-01-16T10:00:00.000Z',
+        'style': 'Sport Mode',
+        'distance_actual': 50.0,
+        'source_route_id': 'route-original',
+        'geometry': original.geometry,
+      });
+      final secondCopy = SavedRoute.fromJson({
+        'id': 'route-copy-2',
+        'created_at': '2025-01-17T10:00:00.000Z',
+        'style': 'Sport Mode',
+        'distance_actual': 50.0,
+        'source_route_id': 'route-original',
+        'geometry': original.geometry,
+      });
+
+      final deduped = SavedRoutesService.dedupeEquivalentRoutes([
+        firstCopy,
+        secondCopy,
+      ]);
+
+      expect(deduped, hasLength(1));
+      expect(
+        SavedRoutesService.hasEquivalentSavedRoute(original, deduped),
         isTrue,
       );
     });

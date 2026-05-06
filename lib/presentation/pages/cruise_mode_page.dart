@@ -4788,6 +4788,7 @@ class _CruiseModePageState extends State<CruiseModePage>
           xpStreakDays: xpBreakdown?.streakDays,
           xpAwarded: xpBreakdown?.totalXp,
           completedAtEnd: completed,
+          groupId: widget.groupId,
         );
         await RouteRatingService.saveRating(
           result: adjustedResult,
@@ -4805,9 +4806,7 @@ class _CruiseModePageState extends State<CruiseModePage>
         final gamResult = await GamificationService.calculateAndSync();
         return CruiseCompletionActionResult(
           success: true,
-          newBadgeEmojis: gamResult.newBadges
-              .map((badge) => badge.emoji)
-              .toList(),
+          newBadges: gamResult.newBadges,
           levelUp:
               previousLevel != null && gamResult.level.level > previousLevel,
           newLevel: gamResult.level.level,

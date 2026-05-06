@@ -26,6 +26,8 @@ class UserLevel {
   final int xpToNextLevel;
   final double progress; // 0.0 - 1.0
 
+  static const int maxLevel = 100;
+
   static const _names = [
     'Street Rookie', // 1  —   0 XP
     'City Cruiser', // 2  — 100 XP  (~1 kurze Route)
@@ -69,18 +71,24 @@ class UserLevel {
   /// Berechnet das Level und den Fortschritt aus den gesammelten XP.
   factory UserLevel.fromXp(double totalXp) {
     int level = 1;
-    while (level < 50 && xpForLevel(level + 1) <= totalXp) {
+    while (level < maxLevel && xpForLevel(level + 1) <= totalXp) {
       level++;
     }
 
     final currentLevelXp = xpForLevel(level);
-    final nextLevelXp = xpForLevel(level + 1);
+    final nextLevelXp = level >= maxLevel
+        ? currentLevelXp
+        : xpForLevel(level + 1);
     final xpInLevel = totalXp - currentLevelXp;
     final xpNeeded = nextLevelXp - currentLevelXp;
-    final progress = xpNeeded > 0
-        ? (xpInLevel / xpNeeded).clamp(0.0, 1.0)
+    final progress = level >= maxLevel
+        ? 1.0
+        : xpNeeded > 0
+        ? (xpInLevel / xpNeeded).clamp(0.0, 1.0).toDouble()
         : 1.0;
-    final xpToNext = max(0, (nextLevelXp - totalXp).ceil());
+    final xpToNext = level >= maxLevel
+        ? 0
+        : max(0, (nextLevelXp - totalXp).ceil());
 
     final nameIndex = (level - 1).clamp(0, _names.length - 1);
 

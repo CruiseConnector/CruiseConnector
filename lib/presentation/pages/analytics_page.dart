@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
+import 'package:cruise_connect/application/providers/route_bookmark_provider.dart';
 import 'package:cruise_connect/data/services/gamification_service.dart';
 import 'package:cruise_connect/data/services/saved_routes_service.dart';
 import 'package:cruise_connect/domain/models/badge.dart' as app;
 import 'package:cruise_connect/domain/models/saved_route.dart';
 import 'package:cruise_connect/domain/models/user_level.dart';
+import 'package:cruise_connect/presentation/widgets/badge_unlock_popup.dart';
+import 'package:provider/provider.dart';
 
 class AnalyticsPage extends StatefulWidget {
   final int refreshKey;
@@ -34,6 +37,8 @@ class _AnalyticsPageState extends State<AnalyticsPage>
   UserLevel _level = UserLevel.fromXp(0);
   List<app.Badge> _earnedBadges = [];
   List<SavedRoute> _allRoutes = [];
+  List<SavedRoute> _savedRoutes = [];
+  final Set<String> _savingRouteIds = {};
 
   List<double> _weeklyChartData = List.filled(7, 0);
   final List<String> _weeklyLabels = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
@@ -88,6 +93,7 @@ class _AnalyticsPageState extends State<AnalyticsPage>
       final rideRoutes = routes
           .where((route) => route.isDrivenSession)
           .toList();
+      final savedRoutes = await SavedRoutesService.getSavedRouteLibrary();
 
       final now = DateTime.now();
       final todayStart = DateTime(now.year, now.month, now.day);
@@ -221,6 +227,7 @@ class _AnalyticsPageState extends State<AnalyticsPage>
           _level = gamResult.level;
           _earnedBadges = gamResult.earnedBadges;
           _allRoutes = rideRoutes;
+          _savedRoutes = savedRoutes;
           _weeklyChartData = normalizedWeekly;
           _streakDays = streak;
           _thisMonthKm = thisMonthKm;
@@ -314,95 +321,402 @@ class _AnalyticsPageState extends State<AnalyticsPage>
   }
 
   Widget _buildLevelCard() {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: const Color(0xFF1C1F26),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                width: 42,
-                height: 42,
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [
-                      AppAccentColors.accent,
-                      AppAccentColors.accentStrong,
-                    ],
-                  ),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Center(
-                  child: Text(
-                    '${_level.level}',
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 18,
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: _showLevelDetailsSheet,
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: const Color(0xFF1C1F26),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Container(
+                  width: 42,
+                  height: 42,
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [
+                        AppAccentColors.accent,
+                        AppAccentColors.accentStrong,
+                      ],
                     ),
+                    borderRadius: BorderRadius.circular(12),
                   ),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      _level.name,
+                  child: Center(
+                    child: Text(
+                      '${_level.level}',
                       style: const TextStyle(
                         color: Colors.white,
                         fontWeight: FontWeight.bold,
-                        fontSize: 16,
+                        fontSize: 18,
                       ),
                     ),
-                    Text(
-                      '$_totalXp XP gesamt',
-                      style: const TextStyle(
-                        color: Color(0xFFA0AEC0),
-                        fontSize: 12,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        _level.name,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 16,
+                        ),
+                      ),
+                      Text(
+                        '$_totalXp XP gesamt',
+                        style: const TextStyle(
+                          color: Color(0xFFA0AEC0),
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Text(
+                  '${(_level.progress * 100).toStringAsFixed(0)}%',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 20,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(4),
+              child: LinearProgressIndicator(
+                value: _level.progress,
+                backgroundColor: Colors.grey[800],
+                valueColor: AlwaysStoppedAnimation<Color>(
+                  AppAccentColors.accent,
+                ),
+                minHeight: 6,
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              _level.level >= UserLevel.maxLevel
+                  ? 'Maximallevel erreicht'
+                  : 'Noch ${_level.xpToNextLevel} XP bis Level ${_level.level + 1}',
+              style: const TextStyle(color: Color(0xFFA0AEC0), fontSize: 11),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ── Streak Card ────────────────────────────────────────────────────────
+
+  void _showLevelDetailsSheet() {
+    final currentLevelXp = UserLevel.xpForLevel(_level.level).round();
+    final nextLevelXp = _level.level >= UserLevel.maxLevel
+        ? currentLevelXp
+        : UserLevel.xpForLevel(_level.level + 1).round();
+    final xpSpan = (nextLevelXp - currentLevelXp).clamp(0, 1 << 31);
+    final xpInLevel = (_totalXp - currentLevelXp).clamp(0, xpSpan).toInt();
+    final levelProgressLabel = _level.level >= UserLevel.maxLevel
+        ? 'Maximallevel'
+        : '$xpInLevel / $xpSpan XP in Level ${_level.level}';
+
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF1C1F26),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (sheetContext) {
+        return SafeArea(
+          child: SingleChildScrollView(
+            padding: EdgeInsets.fromLTRB(
+              20,
+              12,
+              20,
+              20 + MediaQuery.of(sheetContext).viewInsets.bottom,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(
+                  child: Container(
+                    width: 42,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: Colors.white24,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 18),
+                Row(
+                  children: [
+                    Container(
+                      width: 56,
+                      height: 56,
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          colors: [
+                            AppAccentColors.accent,
+                            AppAccentColors.accentStrong,
+                          ],
+                        ),
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      child: Center(
+                        child: Text(
+                          '${_level.level}',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 24,
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            _level.name,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 20,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(height: 3),
+                          Text(
+                            '$_totalXp XP gesamt',
+                            style: const TextStyle(
+                              color: Color(0xFFA0AEC0),
+                              fontSize: 13,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: () => Navigator.pop(sheetContext),
+                      icon: const Icon(Icons.close, color: Colors.white70),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 20),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(6),
+                  child: LinearProgressIndicator(
+                    value: _level.progress,
+                    backgroundColor: const Color(0xFF0B0E14),
+                    valueColor: AlwaysStoppedAnimation<Color>(
+                      AppAccentColors.accent,
+                    ),
+                    minHeight: 10,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  _level.level >= UserLevel.maxLevel
+                      ? levelProgressLabel
+                      : '$levelProgressLabel · noch ${_level.xpToNextLevel} XP bis Level ${_level.level + 1}',
+                  style: const TextStyle(
+                    color: Color(0xFFA0AEC0),
+                    fontSize: 12,
+                  ),
+                ),
+                const SizedBox(height: 18),
+                Row(
+                  children: [
+                    Expanded(
+                      child: _buildLevelDetailMetric(
+                        icon: Icons.bolt_rounded,
+                        label: 'Gesamt',
+                        value: '$_totalXp XP',
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: _buildLevelDetailMetric(
+                        icon: Icons.flag_rounded,
+                        label: 'Nächstes Level',
+                        value: _level.level >= UserLevel.maxLevel
+                            ? 'erreicht'
+                            : '${_level.xpToNextLevel} XP',
                       ),
                     ),
                   ],
                 ),
-              ),
-              Text(
-                '${(_level.progress * 100).toStringAsFixed(0)}%',
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 20,
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    Expanded(
+                      child: _buildLevelDetailMetric(
+                        icon: Icons.route_rounded,
+                        label: 'Routen',
+                        value: '$_totalRoutes',
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: _buildLevelDetailMetric(
+                        icon: Icons.social_distance_rounded,
+                        label: 'Distanz',
+                        value: '${_totalDistanceKm.toStringAsFixed(0)} km',
+                      ),
+                    ),
+                  ],
                 ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(4),
-            child: LinearProgressIndicator(
-              value: _level.progress,
-              backgroundColor: Colors.grey[800],
-              valueColor: AlwaysStoppedAnimation<Color>(AppAccentColors.accent),
-              minHeight: 6,
+                const SizedBox(height: 22),
+                const Text(
+                  'Badge-Meilensteine',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                _buildLevelBadgeMilestone(10, 'badge_01'),
+                const SizedBox(height: 8),
+                _buildLevelBadgeMilestone(25, 'badge_03'),
+                const SizedBox(height: 8),
+                _buildLevelBadgeMilestone(50, 'badge_08'),
+                const SizedBox(height: 8),
+                _buildLevelBadgeMilestone(100, 'badge_14'),
+                const SizedBox(height: 16),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF0B0E14),
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: const Text(
+                    'Tipp: Vollständig abgeschlossene Fahrten, lange Strecken und aktive Streaks bringen dich am schnellsten weiter.',
+                    style: TextStyle(color: Color(0xFFA0AEC0), fontSize: 12),
+                  ),
+                ),
+              ],
             ),
           ),
-          const SizedBox(height: 6),
+        );
+      },
+    );
+  }
+
+  Widget _buildLevelDetailMetric({
+    required IconData icon,
+    required String label,
+    required String value,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0B0E14),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, color: AppAccentColors.accent, size: 20),
+          const SizedBox(height: 10),
           Text(
-            'Noch ${_level.xpToNextLevel} XP bis Level ${_level.level + 1}',
-            style: const TextStyle(color: Color(0xFFA0AEC0), fontSize: 11),
+            value,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(height: 3),
+          Text(
+            label,
+            style: const TextStyle(color: Color(0xFFA0AEC0), fontSize: 12),
           ),
         ],
       ),
     );
   }
 
-  // ── Streak Card ────────────────────────────────────────────────────────
+  Widget _buildLevelBadgeMilestone(int level, String badgeId) {
+    final badge = app.Badge.getById(badgeId);
+    final earned = _level.level >= level;
+    final xpNeeded = earned
+        ? 0
+        : (UserLevel.xpForLevel(level).round() - _totalXp).clamp(0, 1 << 31);
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: earned
+            ? AppAccentColors.accent.withValues(alpha: 0.12)
+            : const Color(0xFF0B0E14),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: earned
+              ? AppAccentColors.accent.withValues(alpha: 0.35)
+              : Colors.white.withValues(alpha: 0.06),
+        ),
+      ),
+      child: Row(
+        children: [
+          if (badge?.assetPath != null)
+            Image.asset(badge!.assetPath!, width: 34, height: 34)
+          else
+            const Icon(Icons.emoji_events, color: Color(0xFFFFD166), size: 30),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  badge?.name ?? 'Level $level',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 13,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  earned
+                      ? 'Freigeschaltet'
+                      : level == 10
+                      ? 'Ab Level 10 bekommst du dieses Badge · noch $xpNeeded XP'
+                      : 'Noch $xpNeeded XP bis Level $level',
+                  style: const TextStyle(
+                    color: Color(0xFFA0AEC0),
+                    fontSize: 11,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Icon(
+            earned ? Icons.check_circle_rounded : Icons.lock_outline_rounded,
+            color: earned ? AppAccentColors.accent : Colors.white30,
+            size: 20,
+          ),
+        ],
+      ),
+    );
+  }
 
   Widget _buildStreakCard() {
     final hasStreak = _streakDays > 0;
@@ -587,6 +901,8 @@ class _AnalyticsPageState extends State<AnalyticsPage>
                       ],
                     ),
                   ],
+                  const SizedBox(width: 8),
+                  _buildAnalyticsSaveButton(route, compact: true),
                 ],
               ),
             ),
@@ -602,6 +918,63 @@ class _AnalyticsPageState extends State<AnalyticsPage>
     if (diff.inHours < 24) return '${diff.inHours} Std.';
     if (diff.inDays < 7) return '${diff.inDays} Tage';
     return '${date.day}.${date.month}.';
+  }
+
+  bool _isRouteSaved(SavedRoute route) =>
+      SavedRoutesService.hasEquivalentSavedRoute(route, _savedRoutes);
+
+  Future<void> _toggleRouteSaved(SavedRoute route) async {
+    if (_savingRouteIds.contains(route.id)) return;
+
+    setState(() => _savingRouteIds.add(route.id));
+    try {
+      final wasSaved = _isRouteSaved(route);
+      if (wasSaved) {
+        await SavedRoutesService.unsaveRouteEverywhere(route);
+      } else {
+        await SavedRoutesService.saveExistingRoute(route);
+      }
+      final savedRoutes = await SavedRoutesService.getSavedRouteLibrary();
+      if (!mounted) return;
+      await context.read<RouteBookmarkProvider>().loadSavedRoutes();
+      if (!mounted) return;
+
+      setState(() => _savedRoutes = savedRoutes);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            wasSaved
+                ? 'Route aus deinen gespeicherten Routen entfernt.'
+                : 'Route gespeichert. Du findest sie jetzt im Profil.',
+          ),
+          backgroundColor: const Color(0xFF1C1F26),
+        ),
+      );
+
+      if (!wasSaved) {
+        final gamResult = await GamificationService.calculateAndSync();
+        if (!mounted || gamResult.newBadges.isEmpty) return;
+        await showBadgeUnlockPopup(
+          context: context,
+          badges: gamResult.newBadges,
+        );
+      }
+    } catch (e) {
+      debugPrint('[Analytics] Route speichern fehlgeschlagen: $e');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Route konnte nicht gespeichert werden.'),
+          backgroundColor: Color(0xFF1C1F26),
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _savingRouteIds.remove(route.id));
+      } else {
+        _savingRouteIds.remove(route.id);
+      }
+    }
   }
 
   Widget _buildStatsGrid() {
@@ -1285,6 +1658,56 @@ class _AnalyticsPageState extends State<AnalyticsPage>
     );
   }
 
+  Widget _buildAnalyticsSaveButton(SavedRoute route, {bool compact = false}) {
+    final saved = _isRouteSaved(route);
+    final busy = _savingRouteIds.contains(route.id);
+    final size = compact ? 34.0 : 38.0;
+
+    return Tooltip(
+      message: saved
+          ? 'Gespeicherte Route entfernen'
+          : 'Route im Profil speichern',
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: busy ? null : () => _toggleRouteSaved(route),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 160),
+          width: size,
+          height: size,
+          decoration: BoxDecoration(
+            color: saved
+                ? const Color(0xFFFFD166).withValues(alpha: 0.18)
+                : const Color(0xFF20252D),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: saved
+                  ? const Color(0xFFFFD166).withValues(alpha: 0.42)
+                  : Colors.white.withValues(alpha: 0.08),
+            ),
+          ),
+          child: Center(
+            child: busy
+                ? SizedBox(
+                    width: compact ? 14 : 16,
+                    height: compact ? 14 : 16,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: AppAccentColors.accent,
+                    ),
+                  )
+                : Icon(
+                    saved
+                        ? Icons.bookmark_rounded
+                        : Icons.bookmark_add_outlined,
+                    color: saved ? const Color(0xFFFFD166) : Colors.white70,
+                    size: compact ? 17 : 19,
+                  ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildRouteSummaryRow(SavedRoute route) {
     final creditedDistanceKm = route.xpCreditedDistanceKm;
     final estimatedCurves = (creditedDistanceKm / 5).round();
@@ -1353,6 +1776,8 @@ class _AnalyticsPageState extends State<AnalyticsPage>
                 ),
               ],
             ),
+          const SizedBox(width: 8),
+          _buildAnalyticsSaveButton(route),
         ],
       ),
     );

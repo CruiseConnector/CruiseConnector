@@ -7,6 +7,7 @@ import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/application/providers/community_provider.dart';
 import 'package:cruise_connect/application/providers/route_bookmark_provider.dart';
 import 'package:cruise_connect/core/deep_links.dart';
+import 'package:cruise_connect/data/services/gamification_service.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/presentation/pages/create_post_page.dart';
 import 'package:cruise_connect/presentation/pages/create_group_page.dart';
@@ -16,6 +17,7 @@ import 'package:cruise_connect/presentation/widgets/mentions.dart';
 import 'package:cruise_connect/presentation/widgets/route_chip.dart';
 import 'package:cruise_connect/presentation/widgets/user_avatar.dart';
 import 'package:cruise_connect/presentation/widgets/moderation_actions.dart';
+import 'package:cruise_connect/presentation/widgets/badge_unlock_popup.dart';
 import 'package:cruise_connect/presentation/utils/share_helper.dart';
 
 class CommunityPage extends StatefulWidget {
@@ -3068,7 +3070,18 @@ class _RouteBookmarkButtonState extends State<_RouteBookmarkButton> {
 
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
-      onTap: () => context.read<RouteBookmarkProvider>().toggle(widget.routeId),
+      onTap: () async {
+        final saved = await context.read<RouteBookmarkProvider>().toggle(
+          widget.routeId,
+        );
+        if (!context.mounted || saved != true) return;
+        final gamResult = await GamificationService.calculateAndSync();
+        if (!context.mounted || gamResult.newBadges.isEmpty) return;
+        await showBadgeUnlockPopup(
+          context: context,
+          badges: gamResult.newBadges,
+        );
+      },
       child: SizedBox(
         width: 44,
         height: 44,

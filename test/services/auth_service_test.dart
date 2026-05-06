@@ -1,3 +1,5 @@
+// ignore_for_file: prefer_const_declarations
+
 // Tests für AuthService
 //
 // Da AuthService Supabase verwendet, wird hier mit Mockito gemockt.

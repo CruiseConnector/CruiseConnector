@@ -7,7 +7,11 @@ import 'package:cruise_connect/domain/models/route_maneuver.dart';
 
 // ─── Hilfsfunktionen ─────────────────────────────────────────────────────────
 
-RouteManeuver _maneuver(IconData icon, {int routeIndex = 0, String instruction = 'Test'}) {
+RouteManeuver _maneuver(
+  IconData icon, {
+  int routeIndex = 0,
+  String instruction = 'Test',
+}) {
   return RouteManeuver(
     latitude: 48.14,
     longitude: 11.58,
@@ -21,16 +25,25 @@ RouteManeuver _maneuver(IconData icon, {int routeIndex = 0, String instruction =
 RouteManeuver _uTurnLeft({int routeIndex = 5}) =>
     _maneuver(Icons.u_turn_left, routeIndex: routeIndex, instruction: 'Wenden');
 
-RouteManeuver _uTurnRight({int routeIndex = 5}) =>
-    _maneuver(Icons.u_turn_right, routeIndex: routeIndex, instruction: 'Wenden');
+RouteManeuver _uTurnRight({int routeIndex = 5}) => _maneuver(
+  Icons.u_turn_right,
+  routeIndex: routeIndex,
+  instruction: 'Wenden',
+);
 
 RouteManeuver _arrive({int routeIndex = 50}) =>
     _maneuver(Icons.flag, routeIndex: routeIndex, instruction: 'Ziel erreicht');
 
-RouteManeuver _turnLeft({int routeIndex = 10}) =>
-    _maneuver(Icons.turn_left, routeIndex: routeIndex, instruction: 'Links abbiegen');
+RouteManeuver _turnLeft({int routeIndex = 10}) => _maneuver(
+  Icons.turn_left,
+  routeIndex: routeIndex,
+  instruction: 'Links abbiegen',
+);
 
-RouteManeuver _straight({int routeIndex = 10, String instruction = 'Weiterfahren auf Musterstraße'}) =>
+RouteManeuver _straight({
+  int routeIndex = 10,
+  String instruction = 'Weiterfahren auf Musterstraße',
+}) =>
     _maneuver(Icons.straight, routeIndex: routeIndex, instruction: instruction);
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -154,34 +167,46 @@ void main() {
     });
 
     test('Liste bleibt stabil wenn nichts gefiltert wird', () {
-      final input = [
-        _turnLeft(routeIndex: 10),
-        _arrive(routeIndex: 40),
-      ];
+      final input = [_turnLeft(routeIndex: 10), _arrive(routeIndex: 40)];
       final result = service.filterManeuvers(input);
       expect(result.length, 2);
     });
   });
 
   group('filterManeuvers – Kombinationen', () {
-    test('U-Turn + Zwischenziel + geradeaus Weiterfahren werden alle gefiltert', () {
-      final result = service.filterManeuvers([
-        _turnLeft(routeIndex: 5),
-        _uTurnLeft(routeIndex: 10),
-        _arrive(routeIndex: 15),         // Zwischenziel
-        _straight(routeIndex: 20, instruction: 'Weiterfahren auf B12'),
-        _turnLeft(routeIndex: 25),
-        _arrive(routeIndex: 50),         // Echtes Ziel
-      ]);
+    test(
+      'U-Turn + Zwischenziel + geradeaus Weiterfahren werden alle gefiltert',
+      () {
+        final result = service.filterManeuvers([
+          _turnLeft(routeIndex: 5),
+          _uTurnLeft(routeIndex: 10),
+          _arrive(routeIndex: 15), // Zwischenziel
+          _straight(routeIndex: 20, instruction: 'Weiterfahren auf B12'),
+          _turnLeft(routeIndex: 25),
+          _arrive(routeIndex: 50), // Echtes Ziel
+        ]);
 
-      expect(result.any((m) => m.icon == Icons.u_turn_left), isFalse,
-          reason: 'U-Turn soll gefiltert sein');
-      expect(result.where((m) => m.icon == Icons.flag).length, 1,
-          reason: 'Nur ein Arrive soll übrig bleiben');
-      expect(result.any((m) => m.icon == Icons.straight), isFalse,
-          reason: 'Weiterfahren-Straight soll gefiltert sein');
-      expect(result.where((m) => m.icon == Icons.turn_left).length, 2,
-          reason: 'Beide turn_left bleiben');
-    });
+        expect(
+          result.any((m) => m.icon == Icons.u_turn_left),
+          isFalse,
+          reason: 'U-Turn soll gefiltert sein',
+        );
+        expect(
+          result.where((m) => m.icon == Icons.flag).length,
+          1,
+          reason: 'Nur ein Arrive soll übrig bleiben',
+        );
+        expect(
+          result.any((m) => m.icon == Icons.straight),
+          isFalse,
+          reason: 'Weiterfahren-Straight soll gefiltert sein',
+        );
+        expect(
+          result.where((m) => m.icon == Icons.turn_left).length,
+          2,
+          reason: 'Beide turn_left bleiben',
+        );
+      },
+    );
   });
 }

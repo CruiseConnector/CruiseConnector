@@ -11,7 +11,10 @@ void main() {
 
   group('iconForManeuver – Kreisverkehr', () {
     test('roundabout → roundabout_right', () {
-      expect(service.iconForManeuver('roundabout', 'right'), Icons.roundabout_right);
+      expect(
+        service.iconForManeuver('roundabout', 'right'),
+        Icons.roundabout_right,
+      );
     });
     test('rotary → roundabout_right', () {
       expect(service.iconForManeuver('rotary', ''), Icons.roundabout_right);
@@ -89,16 +92,28 @@ void main() {
       expect(service.iconForManeuver('turn', 'right'), Icons.turn_right);
     });
     test('sharp left → turn_sharp_left', () {
-      expect(service.iconForManeuver('turn', 'sharp left'), Icons.turn_sharp_left);
+      expect(
+        service.iconForManeuver('turn', 'sharp left'),
+        Icons.turn_sharp_left,
+      );
     });
     test('sharp right → turn_sharp_right', () {
-      expect(service.iconForManeuver('turn', 'sharp right'), Icons.turn_sharp_right);
+      expect(
+        service.iconForManeuver('turn', 'sharp right'),
+        Icons.turn_sharp_right,
+      );
     });
     test('slight left → turn_slight_left', () {
-      expect(service.iconForManeuver('turn', 'slight left'), Icons.turn_slight_left);
+      expect(
+        service.iconForManeuver('turn', 'slight left'),
+        Icons.turn_slight_left,
+      );
     });
     test('slight right → turn_slight_right', () {
-      expect(service.iconForManeuver('turn', 'slight right'), Icons.turn_slight_right);
+      expect(
+        service.iconForManeuver('turn', 'slight right'),
+        Icons.turn_slight_right,
+      );
     });
     test('uturn → u_turn_left', () {
       expect(service.iconForManeuver('turn', 'uturn'), Icons.u_turn_left);
@@ -107,7 +122,10 @@ void main() {
       expect(service.iconForManeuver('turn', 'uturn left'), Icons.u_turn_left);
     });
     test('uturn right → u_turn_right', () {
-      expect(service.iconForManeuver('turn', 'uturn right'), Icons.u_turn_right);
+      expect(
+        service.iconForManeuver('turn', 'uturn right'),
+        Icons.u_turn_right,
+      );
     });
     test('straight → straight', () {
       expect(service.iconForManeuver('turn', 'straight'), Icons.straight);
@@ -119,7 +137,10 @@ void main() {
 
   group('iconForManeuver – new name / continue', () {
     test('new name mit sharp left → turn_sharp_left', () {
-      expect(service.iconForManeuver('new name', 'sharp left'), Icons.turn_sharp_left);
+      expect(
+        service.iconForManeuver('new name', 'sharp left'),
+        Icons.turn_sharp_left,
+      );
     });
     test('new name mit right → turn_right', () {
       expect(service.iconForManeuver('new name', 'right'), Icons.turn_right);

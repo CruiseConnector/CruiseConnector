@@ -8,17 +8,17 @@ import 'package:cruise_connect/data/services/route_service.dart';
 
 /// Erstellt eine simulierte GPS-Position.
 geo.Position _position(double lat, double lng) => geo.Position(
-      latitude: lat,
-      longitude: lng,
-      timestamp: DateTime.now(),
-      accuracy: 5.0,
-      altitude: 500.0,
-      altitudeAccuracy: 10.0,
-      heading: 0.0,
-      headingAccuracy: 5.0,
-      speed: 0.0,
-      speedAccuracy: 1.0,
-    );
+  latitude: lat,
+  longitude: lng,
+  timestamp: DateTime.now(),
+  accuracy: 5.0,
+  altitude: 500.0,
+  altitudeAccuracy: 10.0,
+  heading: 0.0,
+  headingAccuracy: 5.0,
+  speed: 0.0,
+  speedAccuracy: 1.0,
+);
 
 /// Erzeugt eine gerade Nord-Süd Route (koordinaten: [lng, lat]).
 List<List<double>> _straightNorthRoute({
@@ -26,8 +26,7 @@ List<List<double>> _straightNorthRoute({
   double startLng = 11.58,
   int points = 100,
   double stepDegrees = 0.001, // ca. 111m pro Schritt
-}) =>
-    List.generate(points, (i) => [startLng, startLat + i * stepDegrees]);
+}) => List.generate(points, (i) => [startLng, startLat + i * stepDegrees]);
 
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -163,28 +162,34 @@ void main() {
       expect(match.distanceMeters, greaterThan(150.0));
     });
 
-    test('Simulation Off-Route Zähler: 5 aufeinanderfolgende Treffer nötig', () {
-      // Test der Logik-Schwelle
-      const offRouteThreshold = 150.0;
-      const offRouteCountThreshold = 5;
+    test(
+      'Simulation Off-Route Zähler: 5 aufeinanderfolgende Treffer nötig',
+      () {
+        // Test der Logik-Schwelle
+        const offRouteThreshold = 150.0;
+        const offRouteCountThreshold = 5;
 
-      final coords = _straightNorthRoute();
-      var offRouteCount = 0;
+        final coords = _straightNorthRoute();
+        var offRouteCount = 0;
 
-      // 5 aufeinanderfolgende off-route updates
-      for (var i = 0; i < offRouteCountThreshold; i++) {
-        final match = findNearestInWindow(
-          position: _position(48.05, 11.595), // weit daneben
-          coordinates: coords,
-          currentIndex: 0,
-          windowSize: coords.length,
+        // 5 aufeinanderfolgende off-route updates
+        for (var i = 0; i < offRouteCountThreshold; i++) {
+          final match = findNearestInWindow(
+            position: _position(48.05, 11.595), // weit daneben
+            coordinates: coords,
+            currentIndex: 0,
+            windowSize: coords.length,
+          );
+          if (match.distanceMeters > offRouteThreshold) offRouteCount++;
+        }
+
+        expect(
+          offRouteCount,
+          offRouteCountThreshold,
+          reason: 'Alle 5 Updates sollen off-route sein',
         );
-        if (match.distanceMeters > offRouteThreshold) offRouteCount++;
-      }
-
-      expect(offRouteCount, offRouteCountThreshold,
-          reason: 'Alle 5 Updates sollen off-route sein');
-    });
+      },
+    );
 
     test('Wenn wieder auf Route: Off-Route Zähler reset', () {
       const offRouteThreshold = 150.0;
@@ -211,7 +216,11 @@ void main() {
       );
       if (onRoute.distanceMeters <= offRouteThreshold) offRouteCount = 0;
 
-      expect(offRouteCount, 0, reason: 'Counter soll nach On-Route-Treffer resettet sein');
+      expect(
+        offRouteCount,
+        0,
+        reason: 'Counter soll nach On-Route-Treffer resettet sein',
+      );
     });
   });
 

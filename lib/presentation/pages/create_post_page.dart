@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
+import 'package:cruise_connect/data/services/gamification_service.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
+import 'package:cruise_connect/presentation/widgets/badge_unlock_popup.dart';
 import 'package:cruise_connect/presentation/widgets/social/route_attachment_card.dart';
 
 class CreatePostPage extends StatefulWidget {
@@ -45,6 +47,15 @@ class _CreatePostPageState extends State<CreatePostPage> {
         visibility: _visibility,
         sharedRouteId: widget.sharedRouteId,
       );
+      if (!mounted) return;
+      final gamResult = await GamificationService.calculateAndSync();
+      if (!mounted) return;
+      if (gamResult.newBadges.isNotEmpty) {
+        await showBadgeUnlockPopup(
+          context: context,
+          badges: gamResult.newBadges,
+        );
+      }
       if (mounted) Navigator.pop(context, true);
     } on DuplicateSharedRoutePostException catch (e) {
       if (mounted) {

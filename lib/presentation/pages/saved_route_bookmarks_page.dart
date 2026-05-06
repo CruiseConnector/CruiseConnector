@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:provider/provider.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:cruise_connect/application/providers/route_bookmark_provider.dart';
 import 'package:cruise_connect/data/services/saved_routes_service.dart';
@@ -16,8 +17,7 @@ class SavedRouteBookmarksPage extends StatefulWidget {
 }
 
 class _SavedRouteBookmarksPageState extends State<SavedRouteBookmarksPage> {
-  List<SavedRoute> _ownRoutes = [];
-  bool _loadingOwnRoutes = true;
+  bool _loadingRoutes = true;
 
   @override
   void initState() {
@@ -28,16 +28,10 @@ class _SavedRouteBookmarksPageState extends State<SavedRouteBookmarksPage> {
   }
 
   Future<void> _loadRoutes() async {
-    setState(() => _loadingOwnRoutes = true);
-    final results = await Future.wait([
-      SavedRoutesService.getUserRoutes(),
-      context.read<RouteBookmarkProvider>().loadSavedRoutes(),
-    ]);
+    setState(() => _loadingRoutes = true);
+    await context.read<RouteBookmarkProvider>().loadSavedRoutes();
     if (!mounted) return;
-    setState(() {
-      _ownRoutes = results[0] as List<SavedRoute>;
-      _loadingOwnRoutes = false;
-    });
+    setState(() => _loadingRoutes = false);
   }
 
   Future<void> _refresh() {
@@ -52,13 +46,10 @@ class _SavedRouteBookmarksPageState extends State<SavedRouteBookmarksPage> {
   @override
   Widget build(BuildContext context) {
     final provider = context.watch<RouteBookmarkProvider>();
-    final ownIds = _ownRoutes.map((route) => route.id).toSet();
-    final routes = [
-      ..._ownRoutes,
-      ...provider.savedRoutes.where((route) => !ownIds.contains(route.id)),
-    ];
+    final userId = Supabase.instance.client.auth.currentUser?.id;
+    final routes = provider.savedRoutes;
     final isLoading =
-        (provider.isLoadingList || _loadingOwnRoutes) && routes.isEmpty;
+        (provider.isLoadingList || _loadingRoutes) && routes.isEmpty;
 
     return Scaffold(
       backgroundColor: const Color(0xFF0B0E14),
@@ -101,7 +92,7 @@ class _SavedRouteBookmarksPageState extends State<SavedRouteBookmarksPage> {
                         ),
                         const SizedBox(height: 6),
                         Text(
-                          'Merke dir geteilte Strecken aus der Community fuer spaeter.',
+                          'Merke dir geteilte Strecken aus der Community für später.',
                           textAlign: TextAlign.center,
                           style: TextStyle(color: Colors.grey[500]),
                         ),
@@ -112,22 +103,17 @@ class _SavedRouteBookmarksPageState extends State<SavedRouteBookmarksPage> {
                       itemCount: routes.length,
                       itemBuilder: (context, index) {
                         final route = routes[index];
+                        final isOwnRoute = route.userId == userId;
                         return _SavedRouteCard(
                           route: route,
                           onStart: () => _startRoute(route),
-                          isOwnRoute: _ownRoutes.any(
-                            (own) => own.id == route.id,
-                          ),
+                          isOwnRoute: isOwnRoute,
                           onRename: () => _renameRoute(route),
                           onRemove: () async {
-                            if (_ownRoutes.any((own) => own.id == route.id)) {
-                              await SavedRoutesService.deleteRoute(route.id);
-                              await _refresh();
-                            } else {
-                              await context
-                                  .read<RouteBookmarkProvider>()
-                                  .toggle(route.id);
-                            }
+                            await SavedRoutesService.unsaveRouteEverywhere(
+                              route,
+                            );
+                            await _refresh();
                           },
                         );
                       },
@@ -268,11 +254,11 @@ class _SavedRouteCard extends StatelessWidget {
               icon: const Icon(Icons.edit_outlined, color: Color(0xFFFFD166)),
             ),
           IconButton(
-            tooltip: isOwnRoute ? 'Route loeschen' : 'Lesezeichen entfernen',
+            tooltip: 'Gespeicherte Route entfernen',
             onPressed: onRemove,
-            icon: Icon(
-              isOwnRoute ? Icons.delete_outline : Icons.bookmark,
-              color: isOwnRoute ? Colors.grey : const Color(0xFFFFD166),
+            icon: const Icon(
+              Icons.bookmark_remove_outlined,
+              color: Color(0xFFFFD166),
             ),
           ),
         ],

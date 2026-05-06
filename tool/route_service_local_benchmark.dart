@@ -1,3 +1,5 @@
+// ignore_for_file: depend_on_referenced_packages, invalid_use_of_visible_for_testing_member, prefer_const_declarations
+
 import 'dart:convert';
 import 'dart:io';
 

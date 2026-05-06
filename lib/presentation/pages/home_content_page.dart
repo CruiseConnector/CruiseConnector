@@ -6,11 +6,14 @@ import 'package:geolocator/geolocator.dart' as geo;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:provider/provider.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
+import 'package:cruise_connect/application/providers/route_bookmark_provider.dart';
 import 'package:cruise_connect/data/services/gamification_service.dart';
 import 'package:cruise_connect/data/services/route_elevation_service.dart';
 import 'package:cruise_connect/data/services/saved_routes_service.dart';
 import 'package:cruise_connect/domain/models/saved_route.dart';
+import 'package:cruise_connect/domain/models/user_level.dart';
 import 'package:cruise_connect/presentation/pages/cruise_mode_page.dart';
+import 'package:cruise_connect/presentation/widgets/badge_unlock_popup.dart';
 import 'package:cruise_connect/presentation/widgets/community_carousel_card.dart';
 import 'package:cruise_connect/presentation/widgets/user_avatar.dart';
 
@@ -152,9 +155,10 @@ class _HomeContentPageState extends State<HomeContentPage>
 
         // Prüfen ob Route bereits gespeichert
         if (topRoute != null) {
+          final savedRoutes = await SavedRoutesService.getSavedRouteLibrary();
           routeSaved = SavedRoutesService.hasEquivalentSavedRoute(
             topRoute,
-            routes,
+            savedRoutes,
           );
         }
       } catch (e) {
@@ -344,116 +348,136 @@ class _HomeContentPageState extends State<HomeContentPage>
             const SizedBox(height: 10),
 
             // Fortschritt Section
-            Container(
-              padding: const EdgeInsets.all(20),
-              decoration: BoxDecoration(
-                color: const Color(0xFF1C1F26),
-                borderRadius: BorderRadius.circular(24),
-                border: Border.all(
-                  color: const Color(0xFFFFFFFF).withValues(alpha: 0.06),
-                  width: 1,
-                ),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'Fortschritt',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 15,
-                      fontWeight: FontWeight.bold,
-                    ),
+            GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () => widget.onTabChange?.call(3),
+              child: Container(
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1C1F26),
+                  borderRadius: BorderRadius.circular(24),
+                  border: Border.all(
+                    color: const Color(0xFFFFFFFF).withValues(alpha: 0.06),
+                    width: 1,
                   ),
-                  const SizedBox(height: 12),
-                  _loading
-                      ? Center(
-                          child: SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: accent,
-                            ),
-                          ),
-                        )
-                      : Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            _statRow('⚡', '$totalXp XP gesamt'),
-                            const SizedBox(height: 6),
-                            _statRow(
-                              '🏎️',
-                              '${totalDistanceKm.toStringAsFixed(0)} Km gefahren',
-                            ),
-                            const SizedBox(height: 6),
-                            _statRow('🛣️', '$totalRoutes Strecken'),
-                            const SizedBox(height: 6),
-                            _statRow('🏅', '$badgeCount Badges'),
-                          ],
-                        ),
-                  const SizedBox(height: 12),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        crossAxisAlignment: CrossAxisAlignment.end,
-                        children: [
-                          Flexible(
-                            child: Text(
-                              'Level $userLevel - $levelName',
-                              style: const TextStyle(
-                                color: Color(0xFFA0AEC0),
-                                fontSize: 12,
-                              ),
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                          Text(
-                            '${(levelProgress * 100).toStringAsFixed(0)}%',
-                            style: const TextStyle(
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            'Fortschritt',
+                            style: TextStyle(
                               color: Colors.white,
-                              fontSize: 20,
+                              fontSize: 15,
                               fontWeight: FontWeight.bold,
                             ),
                           ),
-                        ],
-                      ),
-                      const SizedBox(height: 4),
-                      Container(
-                        height: 8,
-                        width: double.infinity,
-                        decoration: BoxDecoration(
-                          color: Colors.grey[800],
-                          borderRadius: BorderRadius.circular(4),
                         ),
-                        child: FractionallySizedBox(
-                          alignment: Alignment.centerLeft,
-                          widthFactor: levelProgress,
-                          child: Container(
-                            decoration: BoxDecoration(
-                              borderRadius: BorderRadius.circular(4),
-                              gradient: LinearGradient(
-                                colors: [accent, AppAccentColors.accentStrong],
-                                begin: Alignment.centerLeft,
-                                end: Alignment.centerRight,
+                        Icon(
+                          Icons.chevron_right_rounded,
+                          color: Color(0xFFA0AEC0),
+                          size: 22,
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    _loading
+                        ? Center(
+                            child: SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: accent,
+                              ),
+                            ),
+                          )
+                        : Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              _statRow('⚡', '$totalXp XP gesamt'),
+                              const SizedBox(height: 6),
+                              _statRow(
+                                '🏎️',
+                                '${totalDistanceKm.toStringAsFixed(0)} Km gefahren',
+                              ),
+                              const SizedBox(height: 6),
+                              _statRow('🛣️', '$totalRoutes Strecken'),
+                              const SizedBox(height: 6),
+                              _statRow('🏅', '$badgeCount Badges'),
+                            ],
+                          ),
+                    const SizedBox(height: 12),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          children: [
+                            Flexible(
+                              child: Text(
+                                'Level $userLevel - $levelName',
+                                style: const TextStyle(
+                                  color: Color(0xFFA0AEC0),
+                                  fontSize: 12,
+                                ),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                            Text(
+                              '${(levelProgress * 100).toStringAsFixed(0)}%',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 20,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 4),
+                        Container(
+                          height: 8,
+                          width: double.infinity,
+                          decoration: BoxDecoration(
+                            color: Colors.grey[800],
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: FractionallySizedBox(
+                            alignment: Alignment.centerLeft,
+                            widthFactor: levelProgress,
+                            child: Container(
+                              decoration: BoxDecoration(
+                                borderRadius: BorderRadius.circular(4),
+                                gradient: LinearGradient(
+                                  colors: [
+                                    accent,
+                                    AppAccentColors.accentStrong,
+                                  ],
+                                  begin: Alignment.centerLeft,
+                                  end: Alignment.centerRight,
+                                ),
                               ),
                             ),
                           ),
                         ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Noch $xpToNextLevel XP bis Level ${userLevel + 1}',
-                    style: const TextStyle(
-                      color: Color(0xFFA0AEC0),
-                      fontSize: 10,
+                      ],
                     ),
-                  ),
-                ],
+                    const SizedBox(height: 8),
+                    Text(
+                      userLevel >= UserLevel.maxLevel
+                          ? 'Maximallevel erreicht'
+                          : 'Noch $xpToNextLevel XP bis Level ${userLevel + 1}',
+                      style: const TextStyle(
+                        color: Color(0xFFA0AEC0),
+                        fontSize: 10,
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
             const SizedBox(height: 16),
@@ -1028,9 +1052,26 @@ class _HomeContentPageState extends State<HomeContentPage>
   Widget _buildSaveChip(SavedRoute route) {
     return GestureDetector(
       onTap: () async {
-        if (_isRouteSaved) return;
         try {
+          if (_isRouteSaved) {
+            await SavedRoutesService.unsaveRouteEverywhere(route);
+            if (!mounted) return;
+            unawaited(context.read<RouteBookmarkProvider>().loadSavedRoutes());
+            setState(() => _isRouteSaved = false);
+            return;
+          }
+
           await SavedRoutesService.saveExistingRoute(route);
+          if (!mounted) return;
+          unawaited(context.read<RouteBookmarkProvider>().loadSavedRoutes());
+          final gamResult = await GamificationService.calculateAndSync();
+          if (!mounted) return;
+          if (gamResult.newBadges.isNotEmpty) {
+            await showBadgeUnlockPopup(
+              context: context,
+              badges: gamResult.newBadges,
+            );
+          }
           if (mounted) {
             setState(() => _isRouteSaved = true);
           }

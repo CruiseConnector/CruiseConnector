@@ -1,16 +1,10 @@
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-import 'package:cruise_connect/data/repositories/supabase_route_bookmark_repository.dart';
+import 'package:cruise_connect/data/services/saved_routes_service.dart';
 import 'package:cruise_connect/domain/models/saved_route.dart';
-import 'package:cruise_connect/domain/repositories/route_bookmark_repository.dart';
 
 class RouteBookmarkProvider extends ChangeNotifier {
-  RouteBookmarkProvider({RouteBookmarkRepository? repository})
-    : _repository = repository ?? SupabaseRouteBookmarkRepository();
-
-  final RouteBookmarkRepository _repository;
-
   final Map<String, bool> _savedByRouteId = {};
   final Set<String> _checkedRouteIds = {};
   final Set<String> _busyRouteIds = {};
@@ -30,10 +24,11 @@ class RouteBookmarkProvider extends ChangeNotifier {
 
     _checkedRouteIds.add(routeId);
     try {
-      _savedByRouteId[routeId] = await _repository.checkIfRouteIsSaved(
-        userId,
-        routeId,
-      );
+      final route = await SavedRoutesService.getRouteById(routeId);
+      final saved =
+          route != null && await SavedRoutesService.isRouteSaved(route);
+      _savedByRouteId[routeId] = saved;
+      if (route != null) _markRouteState(route, saved);
       notifyListeners();
     } catch (e) {
       _checkedRouteIds.remove(routeId);
@@ -41,28 +36,38 @@ class RouteBookmarkProvider extends ChangeNotifier {
     }
   }
 
-  Future<void> toggle(String routeId) async {
+  Future<bool?> toggle(String routeId) async {
     final userId = _userId;
-    if (userId == null || _busyRouteIds.contains(routeId)) return;
+    if (userId == null || _busyRouteIds.contains(routeId)) return null;
 
     _busyRouteIds.add(routeId);
-    final wasSaved = _savedByRouteId[routeId] ?? false;
+    final route = await SavedRoutesService.getRouteById(routeId);
+    if (route == null) {
+      _busyRouteIds.remove(routeId);
+      notifyListeners();
+      return null;
+    }
+
+    final wasSaved = await SavedRoutesService.isRouteSaved(route);
     _savedByRouteId[routeId] = !wasSaved;
+    _markRouteState(route, !wasSaved);
     notifyListeners();
 
     try {
       if (wasSaved) {
-        await _repository.unsaveRoute(userId, routeId);
-        _savedRoutes = _savedRoutes
-            .where((route) => route.id != routeId)
-            .toList();
+        await SavedRoutesService.unsaveRouteEverywhere(route);
       } else {
-        await _repository.saveRoute(userId, routeId);
+        await SavedRoutesService.saveExistingRoute(route);
       }
+      _savedRoutes = await SavedRoutesService.getSavedRouteLibrary();
+      _syncSavedRouteMap(_savedRoutes);
       _checkedRouteIds.add(routeId);
+      return !wasSaved;
     } catch (e) {
       _savedByRouteId[routeId] = wasSaved;
+      _markRouteState(route, wasSaved);
       debugPrint('[RouteBookmarkProvider] toggle Fehler: $e');
+      return null;
     } finally {
       _busyRouteIds.remove(routeId);
       notifyListeners();
@@ -81,17 +86,30 @@ class RouteBookmarkProvider extends ChangeNotifier {
     notifyListeners();
 
     try {
-      final routes = await _repository.getSavedRoutes(userId);
+      final routes = await SavedRoutesService.getSavedRouteLibrary();
       _savedRoutes = routes;
-      for (final route in routes) {
-        _savedByRouteId[route.id] = true;
-        _checkedRouteIds.add(route.id);
-      }
+      _syncSavedRouteMap(routes);
     } catch (e) {
       debugPrint('[RouteBookmarkProvider] loadSavedRoutes Fehler: $e');
     } finally {
       _isLoadingList = false;
       notifyListeners();
+    }
+  }
+
+  void _syncSavedRouteMap(List<SavedRoute> routes) {
+    _savedByRouteId.clear();
+    for (final route in routes) {
+      _markRouteState(route, true);
+      _checkedRouteIds.add(route.id);
+    }
+  }
+
+  void _markRouteState(SavedRoute route, bool saved) {
+    _savedByRouteId[route.id] = saved;
+    final sourceRouteId = route.sourceRouteId?.trim();
+    if (sourceRouteId != null && sourceRouteId.isNotEmpty) {
+      _savedByRouteId[sourceRouteId] = saved;
     }
   }
 }

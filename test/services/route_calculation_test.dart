@@ -1,3 +1,5 @@
+// ignore_for_file: prefer_const_constructors
+
 // Tests für Routen-Berechnung und Route Cache Service
 //
 // Ausführen: flutter test test/services/route_calculation_test.dart

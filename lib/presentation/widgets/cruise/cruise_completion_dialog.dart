@@ -2,8 +2,10 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
+import 'package:cruise_connect/domain/models/badge.dart' as app;
 import 'package:flutter/rendering.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:cruise_connect/presentation/widgets/badge_unlock_popup.dart';
 import 'package:cruise_connect/presentation/utils/share_helper.dart';
 
 Future<T?> showCruiseCompletionSheet<T>({
@@ -58,17 +60,17 @@ Future<T?> showCruiseCompletionSheet<T>({
 class CruiseCompletionActionResult {
   CruiseCompletionActionResult({
     this.success = true,
-    this.newBadgeEmojis = const [],
+    this.newBadges = const [],
     this.levelUp = false,
     this.newLevel,
   });
 
   final bool success;
-  final List<String> newBadgeEmojis;
+  final List<app.Badge> newBadges;
   final bool levelUp;
   final int? newLevel;
 
-  bool get hasCelebration => newBadgeEmojis.isNotEmpty || levelUp;
+  bool get hasCelebration => newBadges.isNotEmpty || levelUp;
 }
 
 class CruiseCompletionDialog extends StatefulWidget {
@@ -158,7 +160,9 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
     setState(() => _isSaving = false);
     if (!result.success) return;
 
-    if (result.hasCelebration) {
+    if (result.newBadges.isNotEmpty) {
+      await showBadgeUnlockPopup(context: context, badges: result.newBadges);
+    } else if (result.hasCelebration) {
       setState(() => _celebration = result);
       await _celebrationController.forward(from: 0);
       await Future<void>.delayed(const Duration(milliseconds: 220));
@@ -435,7 +439,6 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
   }
 
   Widget _buildCelebrationOverlay() {
-    final emojis = _celebration!.newBadgeEmojis.join(' ');
     final label = _celebration!.levelUp
         ? 'Level ${_celebration!.newLevel} erreicht'
         : 'Neues Badge freigeschaltet';
@@ -512,10 +515,6 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
                               fontWeight: FontWeight.w800,
                             ),
                           ),
-                          if (emojis.isNotEmpty) ...[
-                            const SizedBox(height: 8),
-                            Text(emojis, style: const TextStyle(fontSize: 26)),
-                          ],
                         ],
                       ),
                     ),

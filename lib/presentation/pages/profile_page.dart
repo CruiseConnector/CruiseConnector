@@ -7,6 +7,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/application/providers/community_provider.dart';
+import 'package:cruise_connect/application/providers/route_bookmark_provider.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/data/services/saved_routes_service.dart';
 import 'package:cruise_connect/domain/models/saved_route.dart';
@@ -98,7 +99,7 @@ class _ProfilePageState extends State<ProfilePage>
         SocialService.getUserPosts(uid),
         SocialService.getUserReposts(uid),
         SocialService.getMyAllGroups(),
-        SavedRoutesService.getUserRoutes(),
+        SavedRoutesService.getSavedRouteLibrary(),
         SocialService.getUserProfile(uid),
         SocialService.getUserVehicles(uid),
       ]);
@@ -1442,6 +1443,8 @@ class _ProfilePageState extends State<ProfilePage>
   }
 
   void _showRouteOptions(SavedRoute route) {
+    final isOwnRoute =
+        route.userId == Supabase.instance.client.auth.currentUser?.id;
     showModalBottomSheet(
       context: context,
       backgroundColor: const Color(0xFF1C1F26),
@@ -1487,15 +1490,16 @@ class _ProfilePageState extends State<ProfilePage>
                     CruiseModePage.pendingRoute.value = route;
                   },
                 ),
-                _buildOptionTile(
-                  Icons.edit_outlined,
-                  'Route umbenennen',
-                  const Color(0xFFFFD166),
-                  () {
-                    Navigator.pop(ctx);
-                    _renameRoute(route);
-                  },
-                ),
+                if (isOwnRoute)
+                  _buildOptionTile(
+                    Icons.edit_outlined,
+                    'Route umbenennen',
+                    const Color(0xFFFFD166),
+                    () {
+                      Navigator.pop(ctx);
+                      _renameRoute(route);
+                    },
+                  ),
                 _buildOptionTile(
                   Icons.share,
                   'Als Post teilen',
@@ -1506,8 +1510,8 @@ class _ProfilePageState extends State<ProfilePage>
                   },
                 ),
                 _buildOptionTile(
-                  Icons.delete_outline,
-                  'Route löschen',
+                  Icons.bookmark_remove_outlined,
+                  'Gespeicherte Route entfernen',
                   Colors.grey,
                   () async {
                     Navigator.pop(ctx);
@@ -1516,11 +1520,11 @@ class _ProfilePageState extends State<ProfilePage>
                       builder: (c) => AlertDialog(
                         backgroundColor: const Color(0xFF1C1F26),
                         title: const Text(
-                          'Route löschen?',
+                          'Route entfernen?',
                           style: TextStyle(color: Colors.white),
                         ),
                         content: const Text(
-                          'Diese Route wird unwiderruflich gelöscht.',
+                          'Diese Route wird aus deinen gespeicherten Routen entfernt. Du kannst sie später wieder speichern.',
                           style: TextStyle(color: Colors.grey),
                         ),
                         actions: [
@@ -1534,7 +1538,7 @@ class _ProfilePageState extends State<ProfilePage>
                           TextButton(
                             onPressed: () => Navigator.pop(c, true),
                             child: Text(
-                              'Löschen',
+                              'Entfernen',
                               style: TextStyle(color: AppAccentColors.accent),
                             ),
                           ),
@@ -1542,7 +1546,11 @@ class _ProfilePageState extends State<ProfilePage>
                       ),
                     );
                     if (confirmed == true) {
-                      await SavedRoutesService.deleteRoute(route.id);
+                      await SavedRoutesService.unsaveRouteEverywhere(route);
+                      if (!mounted) return;
+                      await context
+                          .read<RouteBookmarkProvider>()
+                          .loadSavedRoutes();
                       _loadData();
                     }
                   },

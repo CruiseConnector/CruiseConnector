@@ -1,4 +1,4 @@
-// ignore_for_file: avoid_print
+// ignore_for_file: avoid_print, no_leading_underscores_for_local_identifiers, prefer_const_declarations
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:cruise_connect/data/services/navigation_guidance_utils.dart';
@@ -25,7 +25,9 @@ void main() {
 
     test('weniger als 2 Koordinaten → gibt 0 zurück', () {
       final result = selectForwardRejoinIndex(
-        coordinates: [[11.58, 48.14]],
+        coordinates: [
+          [11.58, 48.14],
+        ],
         nearestIndex: 0,
         currentHeadingDegrees: 0.0,
       );
@@ -153,9 +155,18 @@ void main() {
 
     test('Ergebnis immer in [0, 360]', () {
       final testPairs = [
-        [[0.0, 0.0], [1.0, 1.0]],
-        [[10.0, 50.0], [9.0, 49.0]],
-        [[-73.9, 40.7], [2.35, 48.85]], // NYC → Paris
+        [
+          [0.0, 0.0],
+          [1.0, 1.0],
+        ],
+        [
+          [10.0, 50.0],
+          [9.0, 49.0],
+        ],
+        [
+          [-73.9, 40.7],
+          [2.35, 48.85],
+        ], // NYC → Paris
       ];
       for (final pair in testPairs) {
         final b = bearingFromCoordinates(pair[0], pair[1]);
@@ -169,13 +180,13 @@ void main() {
   group('Navigation-Integration – Rerouting-Logik', () {
     test('Fahrzeug fährt in falsche Richtung (180° Abweichung) → isUTurn', () {
       // User fährt Norden, Route geht Süden → U-Turn nötig
-      final routeHeading = 0.0;   // Norden
+      final routeHeading = 0.0; // Norden
       final vehicleHeading = 180.0; // Süden
       expect(isUTurnHeadingChange(vehicleHeading, routeHeading), isTrue);
     });
 
     test('Fahrzeug biegt 90° ab → kein U-Turn, normales Rerouting', () {
-      final routeHeading = 0.0;   // Norden
+      final routeHeading = 0.0; // Norden
       final vehicleHeading = 90.0; // Osten (abgebogen)
       expect(isUTurnHeadingChange(vehicleHeading, routeHeading), isFalse);
     });
@@ -187,16 +198,16 @@ void main() {
 
     test('routeHeadingAt liefert konsistente Bearings für gerade Route', () {
       // Gerade nach Osten
-      final coords = List.generate(
-        10,
-        (i) => [11.58 + i * 0.001, 48.14],
-      );
+      final coords = List.generate(10, (i) => [11.58 + i * 0.001, 48.14]);
       for (var i = 0; i < coords.length - 2; i++) {
         final h1 = routeHeadingAt(coords, i);
         final h2 = routeHeadingAt(coords, i + 1);
         // Auf gerader Route soll Bearing konstant bleiben
-        expect(headingDeltaDegrees(h1, h2), lessThan(5.0),
-            reason: 'Bearing sollte auf gerader Route konstant sein');
+        expect(
+          headingDeltaDegrees(h1, h2),
+          lessThan(5.0),
+          reason: 'Bearing sollte auf gerader Route konstant sein',
+        );
       }
     });
   });

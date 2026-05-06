@@ -6,6 +6,7 @@ class SavedRoute {
     required this.style,
     required this.distanceKm,
     required this.geometry,
+    this.userId,
     this.name,
     this.durationSeconds,
     this.routeType,
@@ -13,6 +14,7 @@ class SavedRoute {
     this.distanceTargetKm,
     this.drivenKm,
     this.sourceRouteId,
+    this.groupId,
     this.xpDistance,
     this.xpCurveBonus,
     this.xpStyleBonus,
@@ -28,6 +30,7 @@ class SavedRoute {
   final String style;
   final double distanceKm;
   final Map<String, dynamic> geometry;
+  final String? userId;
   final String? name;
   final double? durationSeconds;
   final String? routeType;
@@ -35,6 +38,7 @@ class SavedRoute {
   final double? distanceTargetKm;
   final double? drivenKm;
   final String? sourceRouteId;
+  final String? groupId;
   final int? xpDistance;
   final int? xpCurveBonus;
   final int? xpStyleBonus;
@@ -47,6 +51,7 @@ class SavedRoute {
   factory SavedRoute.fromJson(Map<String, dynamic> json) {
     return SavedRoute(
       id: json['id'] as String,
+      userId: json['user_id'] as String?,
       createdAt: DateTime.parse(json['created_at'] as String),
       style: (json['style'] as String?) ?? 'Standard',
       distanceKm: (json['distance_actual'] as num?)?.toDouble() ?? 0.0,
@@ -60,6 +65,7 @@ class SavedRoute {
       distanceTargetKm: (json['distance_target'] as num?)?.toDouble(),
       drivenKm: (json['driven_km'] as num?)?.toDouble(),
       sourceRouteId: json['source_route_id'] as String?,
+      groupId: json['group_id'] as String?,
       xpDistance: (json['xp_distance'] as num?)?.toInt(),
       xpCurveBonus: (json['xp_curve_bonus'] as num?)?.toInt(),
       xpStyleBonus: (json['xp_style_bonus'] as num?)?.toInt(),
@@ -151,6 +157,7 @@ class SavedRoute {
   Map<String, dynamic> toJson() {
     return {
       'id': id,
+      'user_id': userId,
       'created_at': createdAt.toIso8601String(),
       'style': style,
       'distance_actual': distanceKm,
@@ -162,6 +169,7 @@ class SavedRoute {
       'distance_target': distanceTargetKm,
       'driven_km': drivenKm,
       'source_route_id': sourceRouteId,
+      'group_id': groupId,
       'xp_distance': xpDistance,
       'xp_curve_bonus': xpCurveBonus,
       'xp_style_bonus': xpStyleBonus,

@@ -913,8 +913,10 @@ void main() {
       'scenic + avoidHighways → Detour-Parameter bleiben erhalten',
       () async {
         when(mockInvoker.invoke(any)).thenAnswer(
-          (_) async =>
-              _buildRouteResponse(distanceMeters: 112000, durationSeconds: 6200),
+          (_) async => _buildRouteResponse(
+            distanceMeters: 112000,
+            durationSeconds: 6200,
+          ),
         );
 
         await service.generatePointToPoint(
