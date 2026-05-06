@@ -1,6 +1,7 @@
 # AGENTS.md — CruiseConnect (AI-Arbeitskontext)
 
 Dieses Dokument ist der **Startpunkt für Cursor AI / Claude Code / Codex** in diesem Repo.
+Vor jeder nicht-trivialen Aufgabe muss zusätzlich `codex.md` gelesen werden. `codex.md` ist die ausführliche Projekt- und Architekturquelle.
 
 ## Projektüberblick
 **CruiseConnect** ist eine Flutter-App für eine Autofahrer-Community mit Fokus auf:
@@ -30,7 +31,7 @@ Dieses Dokument ist der **Startpunkt für Cursor AI / Claude Code / Codex** in d
 - `lib/data/services/seen_route_registry.dart` — Duplikat-/Diversity-Tracking
 - `supabase/functions/generate-cruise-route/index.ts` — Edge Function (Mapbox Directions Wrapper)
 - `lib/presentation/pages/cruise_mode_page.dart` — **Kern-UI & Live-Navigation** (groß)
-- `CLAUDE.md` — Architektur-/Kontextguide (**immer zuerst lesen**)
+- `codex.md` — Architektur-/Arbeitskontextguide (**immer zuerst lesen**)
 
 ## Arbeitsstil der KI (verbindlich)
 - **Pragmatisch & minimalinvasiv**: Kleine, sichere Schritte statt großer Umbauten.
@@ -40,7 +41,7 @@ Dieses Dokument ist der **Startpunkt für Cursor AI / Claude Code / Codex** in d
 - **Secrets/Keys**: Niemals API-Keys/Tokens ausgeben oder in Logs/Diffs schreiben (insb. `lib/core/constants.dart`).
 
 ## Qualitäts- & Prozessregeln
-- **Vor Änderungen**: Kontext in `CLAUDE.md` prüfen, dann zielgerichtet suchen/lesen.
+- **Vor Änderungen**: Kontext in `codex.md` prüfen, dann zielgerichtet suchen/lesen.
 - **Refactors vermeiden**: Keine Format-/Naming-/Struktur-Refactors ohne klaren Nutzen für die Aufgabe.
 - **Koordinatenformat**: Mapbox nutzt **`[longitude, latitude]`** (nicht `lat/lng`).
 - **Verifikation**: Nach Codeänderungen bevorzugt `flutter analyze lib/` und passende Tests/Benchmarks (je nach Aufgabe).
@@ -48,4 +49,3 @@ Dieses Dokument ist der **Startpunkt für Cursor AI / Claude Code / Codex** in d
 ## Commit / Push / Deploy
 - **Nur wenn ausdrücklich gewünscht** (und nur wenn Erfolgskriterien erfüllt sind).
 - **Kein Deploy** (Supabase/Stores) ohne klar benannte Risiken, Benchmarks und Rollback-Plan.
-
