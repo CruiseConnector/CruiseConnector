@@ -271,9 +271,10 @@ class RoutePoolCoverage {
           (json['healing_attempt_count'] as num?)?.toInt() ?? 0,
       healingFailureCount:
           (json['healing_failure_count'] as num?)?.toInt() ?? 0,
-      dailyAttemptBudget: (json['daily_attempt_budget'] as num?)?.toInt() ?? 12,
+      dailyAttemptBudget:
+          (json['daily_attempt_budget'] as num?)?.toInt() ?? 120,
       monthlyAttemptBudget:
-          (json['monthly_attempt_budget'] as num?)?.toInt() ?? 120,
+          (json['monthly_attempt_budget'] as num?)?.toInt() ?? 2000,
       healingCallsToday: (json['healing_calls_today'] as num?)?.toInt() ?? 0,
       healingCallsMonth: (json['healing_calls_month'] as num?)?.toInt() ?? 0,
       healingBudgetWindowDate: _readDateTime(

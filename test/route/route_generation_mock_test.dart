@@ -405,7 +405,11 @@ void main() {
     });
 
     test('80 km Ziel → Route zwischen 64 km und 96 km', () async {
-      await testDistanceTolerance(targetKm: 80, responseDistanceM: 80000);
+      await testDistanceTolerance(
+        targetKm: 80,
+        responseDistanceM: 80000,
+        coordinateCount: 120,
+      );
     });
 
     test('100 km Ziel → Route zwischen 80 km und 120 km', () async {

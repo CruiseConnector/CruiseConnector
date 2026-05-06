@@ -8,6 +8,7 @@ import type {
   Coordinate,
   DistanceConfig,
   RequestData,
+  RoundTripSessionCandidatePayload,
   RoundTripSearchResult,
 } from "./routing_types.ts";
 import {
@@ -49,6 +50,399 @@ const ROUTING_BUILD_ID = Deno.env.get("ROUTING_BUILD_ID") ??
   "local-debug-meta";
 const ROUTING_BUILD_TIME = Deno.env.get("ROUTING_BUILD_TIME") ??
   "local-debug-meta";
+const SUPABASE_URL = Deno.env.get("SUPABASE_URL")?.replace(/\/$/, "") ?? "";
+
+type JsonMap = Record<string, unknown>;
+
+interface RouteSearchSessionRow {
+  id: string;
+  status: string;
+  progress_stage?: string | null;
+  distance_bucket: number;
+  style_key: string;
+  avoid_highways: boolean;
+  attempts_count?: number | null;
+  mapbox_calls_used?: number | null;
+  best_candidate_payload?: JsonMap | null;
+  candidate_queue_payload?: unknown[] | null;
+  best_route_payload?: JsonMap | null;
+  best_route_fingerprint?: string | null;
+  reject_summary?: JsonMap | null;
+  seed_job_id?: string | null;
+  worker_last_seen_at?: string | null;
+  last_error?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  expires_at?: string | null;
+}
+
+function serviceKey(): string {
+  const direct = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")?.trim();
+  if (direct) return direct;
+  const modernKeys = [
+    ...parseNamedSecretKeys(Deno.env.get("SUPABASE_SECRET_KEYS")),
+    ...parseNamedSecretKeys(Deno.env.get("SUPABASE_SECRET_KEY")),
+  ];
+  return modernKeys[0] ?? "";
+}
+
+function parseNamedSecretKeys(raw: string | undefined): string[] {
+  const trimmed = raw?.trim() ?? "";
+  if (!trimmed) return [];
+  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return [trimmed];
+  try {
+    const parsed = JSON.parse(trimmed);
+    return secretValuesFromJson(parsed).filter((value, index, all) =>
+      value.length > 0 && all.indexOf(value) === index
+    );
+  } catch {
+    return [];
+  }
+}
+
+function secretValuesFromJson(value: unknown): string[] {
+  if (typeof value === "string") return [value];
+  if (Array.isArray(value)) return value.flatMap(secretValuesFromJson);
+  if (value != null && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return [
+      record.value,
+      record.key,
+      record.api_key,
+      record.apiKey,
+      ...Object.values(record).filter((entry) =>
+        typeof entry === "string" && entry.startsWith("sb_" + "secret_")
+      ),
+    ].flatMap(secretValuesFromJson);
+  }
+  return [];
+}
+
+async function supabaseRest<T = unknown>(
+  table: string,
+  options: {
+    method?: "GET" | "POST" | "PATCH";
+    query?: URLSearchParams | string;
+    body?: unknown;
+    headers?: Record<string, string>;
+  } = {},
+): Promise<T> {
+  const key = serviceKey();
+  if (!SUPABASE_URL || !key) {
+    throw new Error("search_session_supabase_not_configured");
+  }
+  const query = options.query
+    ? typeof options.query === "string"
+      ? options.query
+      : options.query.toString()
+    : "";
+  const response = await fetch(
+    `${SUPABASE_URL}/rest/v1/${table}${query ? `?${query}` : ""}`,
+    {
+      method: options.method ?? "GET",
+      headers: {
+        apikey: key,
+        authorization: `Bearer ${key}`,
+        "content-type": "application/json",
+        accept: "application/json",
+        ...(options.headers ?? {}),
+      },
+      body: options.body == null ? undefined : JSON.stringify(options.body),
+    },
+  );
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`rest_${table}_${response.status}:${text.slice(0, 220)}`);
+  }
+  if (response.status === 204) return undefined as T;
+  const text = await response.text();
+  return (text.trim().length === 0 ? undefined : JSON.parse(text)) as T;
+}
+
+function jsonResponse(
+  req: Request,
+  body: unknown,
+  status = 200,
+): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...getCorsHeaders(req), "Content-Type": "application/json" },
+  });
+}
+
+function distanceBucketForTarget(targetDistance?: number): 50 | 75 | 100 {
+  const value = Number(targetDistance ?? 50);
+  if (value >= 88) return 100;
+  if (value >= 63) return 75;
+  return 50;
+}
+
+function styleKeyForMode(mode?: string): string {
+  const normalized = (mode ?? "Sport Mode").trim().toLowerCase();
+  if (normalized.includes("kurven")) return "kurvenjagd";
+  if (normalized.includes("abend")) return "abendrunde";
+  if (normalized.includes("entdeck")) return "entdecker";
+  if (normalized.includes("sport")) return "sport";
+  return "sport";
+}
+
+function candidatePayloadDistanceFits(value: unknown): boolean {
+  if (value == null || typeof value !== "object") return false;
+  const record = value as JsonMap;
+  const predicted = Number(record.predicted_distance_km);
+  const minKm = Number(record.distance_band_min_km);
+  const maxKm = Number(record.distance_band_max_km);
+  if (!Number.isFinite(predicted) || !Number.isFinite(minKm) || !Number.isFinite(maxKm)) {
+    return String(record.distance_fit_tier ?? "") !== "outside_bucket";
+  }
+  return predicted >= minKm && predicted <= maxKm;
+}
+
+function roundTripSessionCandidateQueue(
+  search: RoundTripSearchResult | null | undefined,
+): RoundTripSessionCandidatePayload[] {
+  const seen = new Set<string>();
+  const queue: RoundTripSessionCandidatePayload[] = [];
+  const addCandidate = (candidate: RoundTripSessionCandidatePayload | null | undefined) => {
+    if (candidate == null || !candidatePayloadDistanceFits(candidate)) return;
+    const key = candidate.route_fingerprint || candidate.candidate_id;
+    if (key && seen.has(key)) return;
+    if (key) seen.add(key);
+    queue.push(candidate);
+  };
+  addCandidate(search?.bestCandidatePayload ?? null);
+  for (const candidate of search?.candidateQueuePayload ?? []) {
+    addCandidate(candidate);
+  }
+  return queue;
+}
+
+function mergeRoundTripRejectReasons(
+  first: Record<string, number> | undefined,
+  second: Record<string, number> | undefined,
+): Record<string, number> {
+  const merged: Record<string, number> = { ...(first ?? {}) };
+  for (const [reason, count] of Object.entries(second ?? {})) {
+    merged[reason] = (merged[reason] ?? 0) + count;
+  }
+  return merged;
+}
+
+function mergeRoundTripBatchResults(
+  first: RoundTripSearchResult,
+  second: RoundTripSearchResult,
+): RoundTripSearchResult {
+  const queue = [
+    ...roundTripSessionCandidateQueue(first),
+    ...roundTripSessionCandidateQueue(second),
+  ];
+  const dedupedQueue: RoundTripSessionCandidatePayload[] = [];
+  const seen = new Set<string>();
+  for (const candidate of queue) {
+    const key = candidate.route_fingerprint || candidate.candidate_id;
+    if (key && seen.has(key)) continue;
+    if (key) seen.add(key);
+    dedupedQueue.push(candidate);
+    if (dedupedQueue.length >= 3) break;
+  }
+  return {
+    ...first,
+    route: first.route ?? second.route,
+    waypoints: first.waypoints.length > 0 ? first.waypoints : second.waypoints,
+    radiuses: first.radiuses || second.radiuses,
+    quality: first.quality ?? second.quality,
+    candidateAttempts:
+      (first.candidateAttempts ?? 0) + (second.candidateAttempts ?? 0),
+    acceptedCandidates:
+      (first.acceptedCandidates ?? 0) + (second.acceptedCandidates ?? 0),
+    rejectedCandidates:
+      (first.rejectedCandidates ?? 0) + (second.rejectedCandidates ?? 0),
+    mapboxCallCount:
+      (first.mapboxCallCount ?? 0) + (second.mapboxCallCount ?? 0),
+    evaluatedRouteCount:
+      (first.evaluatedRouteCount ?? 0) + (second.evaluatedRouteCount ?? 0),
+    guidanceHydrationCount:
+      (first.guidanceHydrationCount ?? 0) + (second.guidanceHydrationCount ?? 0),
+    batchExhausted: first.batchExhausted === true || second.batchExhausted === true,
+    searchPhases: [...(first.searchPhases ?? []), ...(second.searchPhases ?? [])],
+    lastPlanLabels: [...(first.lastPlanLabels ?? []), ...(second.lastPlanLabels ?? [])],
+    rejectReasons: mergeRoundTripRejectReasons(first.rejectReasons, second.rejectReasons),
+    bestCandidatePayload: dedupedQueue[0] ?? first.bestCandidatePayload ??
+      second.bestCandidatePayload ?? null,
+    candidateQueuePayload: dedupedQueue,
+  };
+}
+
+function searchSessionMeta(row: RouteSearchSessionRow): JsonMap {
+  return {
+    response_code: row.status === "found"
+      ? "search_session_found"
+      : row.status === "no_route" || row.status === "failed"
+      ? "search_session_no_route"
+      : "search_in_progress",
+    search_in_progress: !["found", "no_route", "failed", "expired"].includes(
+      row.status,
+    ),
+    search_session_id: row.id,
+    search_session_status: row.status,
+    progress_stage: row.progress_stage ?? row.status,
+    requested_distance_bucket: row.distance_bucket,
+    requested_style_key: row.style_key,
+    avoid_highways_requested: row.avoid_highways,
+    motorway_policy: row.avoid_highways
+      ? "exclude_motorway"
+      : "allowed_not_required",
+    mapbox_calls_used: row.mapbox_calls_used ?? 0,
+    attempts_count: row.attempts_count ?? 0,
+    seed_job_id: row.seed_job_id ?? null,
+    worker_last_seen_at: row.worker_last_seen_at ?? null,
+    routeFingerprint: row.best_route_fingerprint ?? null,
+    reject_summary: row.reject_summary ?? {},
+    last_error: row.last_error ?? null,
+    best_candidate_present: row.best_candidate_payload != null,
+    candidate_queue_count: Array.isArray(row.candidate_queue_payload)
+      ? row.candidate_queue_payload.length
+      : 0,
+    updated_at: row.updated_at ?? null,
+    expires_at: row.expires_at ?? null,
+    estimated_wait_seconds: row.distance_bucket >= 75
+      ? row.status === "queued" ? 60 : 30
+      : row.status === "queued" ? 45 : 20,
+  };
+}
+
+async function routeSearchSessionStatusResponse(
+  req: Request,
+  sessionId: string | undefined,
+): Promise<Response> {
+  const cleanId = sessionId?.trim();
+  if (!cleanId) {
+    return jsonResponse(req, {
+      error: "missing_search_session_id",
+      code: "validation_error",
+    }, 400);
+  }
+  const rows = await supabaseRest<RouteSearchSessionRow[]>(
+    "route_search_sessions",
+    {
+      query: new URLSearchParams({
+        select: "*",
+        id: `eq.${cleanId}`,
+        limit: "1",
+      }),
+    },
+  );
+  const row = rows[0];
+  if (!row) {
+    return jsonResponse(req, {
+      error: "search_session_not_found",
+      code: "search_session_not_found",
+      meta: { search_session_id: cleanId },
+    }, 404);
+  }
+
+  const payload = row.best_route_payload;
+  if (row.status === "found" && payload != null) {
+    const route = (payload.route ?? payload) as unknown;
+    const payloadMeta = payload.meta != null && typeof payload.meta === "object"
+      ? payload.meta as JsonMap
+      : {};
+    return jsonResponse(req, {
+      route,
+      meta: {
+        ...payloadMeta,
+        ...searchSessionMeta(row),
+        source: payloadMeta.source ?? "search_session",
+        route_source: payloadMeta.route_source ?? "search_session",
+      },
+    });
+  }
+
+  if (row.status === "no_route" || row.status === "failed" || row.status === "expired") {
+    return jsonResponse(req, {
+      route: null,
+      code: "no_route",
+      message: "search_session_no_route",
+      meta: searchSessionMeta(row),
+    }, 200);
+  }
+
+  return jsonResponse(req, {
+    route: null,
+    code: "search_in_progress",
+    message: "search_in_progress",
+    meta: searchSessionMeta(row),
+  }, 202);
+}
+
+async function createRoundTripSearchSession(
+  body: RequestData,
+  roundTripSearch: RoundTripSearchResult | null,
+  meta: JsonMap | null,
+): Promise<RouteSearchSessionRow | null> {
+  if (body.planning_type !== "Zufall") return null;
+  if ((body.route_type ?? "ROUND_TRIP") !== "ROUND_TRIP") return null;
+  const bucket = distanceBucketForTarget(body.targetDistance);
+  if (body.startLocation == null) return null;
+  const candidateQueue = Array.isArray(roundTripSearch?.candidateQueuePayload)
+    ? roundTripSearch.candidateQueuePayload
+      .filter(candidatePayloadDistanceFits)
+      .slice(0, 3)
+    : [];
+  const searchBestCandidate = candidatePayloadDistanceFits(
+    roundTripSearch?.bestCandidatePayload,
+  )
+    ? roundTripSearch?.bestCandidatePayload
+    : null;
+  const bestCandidate = searchBestCandidate ?? candidateQueue[0] ?? null;
+  if (roundTripSearch?.batchExhausted !== true && bestCandidate == null) {
+    return null;
+  }
+
+  const row = {
+    route_type: "ROUND_TRIP",
+    origin_lng: body.startLocation.longitude,
+    origin_lat: body.startLocation.latitude,
+    distance_bucket: bucket,
+    style_key: styleKeyForMode(body.mode),
+    avoid_highways: body.avoid_highways === true,
+    status: "queued",
+    progress_stage: bestCandidate == null
+      ? "queued_without_candidate_payload"
+      : "queued_worker_hydration",
+    attempts_count: 0,
+    mapbox_calls_used: roundTripSearch?.mapboxCallCount ?? 0,
+    request_payload: {
+      ...body,
+      request_id: undefined,
+      search_meta: meta ?? {},
+      queued_at: new Date().toISOString(),
+    },
+    best_candidate_payload: bestCandidate,
+    candidate_queue_payload: candidateQueue,
+    reject_summary: {
+      reject_reasons: roundTripSearch?.rejectReasons ?? {},
+      batch_index: roundTripSearch?.batchIndex ?? null,
+      batch_count: roundTripSearch?.batchCount ?? null,
+      candidate_attempts: roundTripSearch?.candidateAttempts ?? 0,
+      evaluated_routes: roundTripSearch?.evaluatedRouteCount ?? 0,
+      candidate_queue_count: candidateQueue.length,
+      best_candidate_family: bestCandidate?.candidate_family ?? null,
+    },
+    expires_at: new Date(Date.now() + 45 * 60_000).toISOString(),
+  };
+
+  const rows = await supabaseRest<RouteSearchSessionRow[]>(
+    "route_search_sessions",
+    {
+      method: "POST",
+      query: "select=*",
+      headers: { Prefer: "return=representation" },
+      body: row,
+    },
+  );
+  return rows[0] ?? null;
+}
 
 function parseRoundTripTargetHintKm(value?: string): number | null {
   if (!value) return null;
@@ -64,6 +458,88 @@ function finiteNumber(value: unknown): number | null {
 
 function clampNumber(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
+}
+
+function integerOption(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  return Math.round(value);
+}
+
+function routeDisplayGeometryStats(
+  rawCoordinates: unknown,
+): {
+  coordinateCount: number;
+  maxSegmentMeters: number | null;
+  averageSegmentMeters: number | null;
+} {
+  const coordinates = Array.isArray(rawCoordinates)
+    ? rawCoordinates
+      .filter((point): point is [number, number] =>
+        Array.isArray(point) &&
+        point.length >= 2 &&
+        typeof point[0] === "number" &&
+        typeof point[1] === "number" &&
+        Number.isFinite(point[0]) &&
+        Number.isFinite(point[1])
+      )
+      .map((point) => ({
+        longitude: point[0],
+        latitude: point[1],
+      }))
+    : [];
+  if (coordinates.length < 2) {
+    return {
+      coordinateCount: coordinates.length,
+      maxSegmentMeters: null,
+      averageSegmentMeters: null,
+    };
+  }
+  let totalMeters = 0;
+  let maxSegmentMeters = 0;
+  for (let index = 1; index < coordinates.length; index += 1) {
+    const segmentMeters = calculateDistance(
+      coordinates[index - 1],
+      coordinates[index],
+    ) * 1000;
+    if (!Number.isFinite(segmentMeters)) continue;
+    totalMeters += segmentMeters;
+    maxSegmentMeters = Math.max(maxSegmentMeters, segmentMeters);
+  }
+  return {
+    coordinateCount: coordinates.length,
+    maxSegmentMeters: Number(maxSegmentMeters.toFixed(1)),
+    averageSegmentMeters: Number(
+      (totalMeters / Math.max(1, coordinates.length - 1)).toFixed(1),
+    ),
+  };
+}
+
+function minDisplayCoordinateCount(distanceKm: number): number {
+  if (distanceKm <= 60) return 70;
+  if (distanceKm <= 85) return 105;
+  if (distanceKm <= 115) return 145;
+  return 180;
+}
+
+function roundTripDisplayGeometryRejectReason(
+  stats: ReturnType<typeof routeDisplayGeometryStats>,
+  distanceKm: number,
+  overview: unknown,
+): string | null {
+  if (overview !== "full") {
+    return `display_geometry_overview=${String(overview ?? "unknown")}`;
+  }
+  if (stats.coordinateCount < minDisplayCoordinateCount(distanceKm)) {
+    return `display_geometry_coords=${stats.coordinateCount}`;
+  }
+  if ((stats.averageSegmentMeters ?? 0) > 900) {
+    return `display_geometry_avg_segment=${stats.averageSegmentMeters}`;
+  }
+  const maxSegmentLimitMeters = distanceKm >= 90 ? 2500 : 2000;
+  if ((stats.maxSegmentMeters ?? 0) > maxSegmentLimitMeters) {
+    return `display_geometry_max_segment=${stats.maxSegmentMeters}`;
+  }
+  return null;
 }
 
 function buildNoRouteSearchMeta(
@@ -107,6 +583,21 @@ function buildNoRouteSearchMeta(
     live_fill_evaluated_routes: roundTripSearch?.evaluatedRouteCount ?? 0,
     live_fill_guidance_hydrations: roundTripSearch?.guidanceHydrationCount ??
       0,
+    search_session_id: roundTripSearch?.batchCount != null &&
+        roundTripSearch.batchCount > 1
+      ? `roundtrip_batch:${roundTripSearch.batchIndex ?? 0}/${
+        roundTripSearch.batchCount
+      }`
+      : null,
+    roundtrip_batch_index: roundTripSearch?.batchIndex ?? null,
+    roundtrip_batch_count: roundTripSearch?.batchCount ?? null,
+    roundtrip_batch_exhausted: roundTripSearch?.batchExhausted === true,
+    progress_stage: roundTripSearch?.route != null
+      ? "found"
+      : roundTripSearch?.batchExhausted === true
+      ? "batch_exhausted"
+      : null,
+    background_learning_queued: roundTripSearch?.batchExhausted === true,
     silent_via_used: roundTripSearch?.silentViaUsed === true,
     silent_via_waypoints: roundTripSearch?.silentViaWaypoints ?? null,
     shaping_point_count: roundTripSearch?.shapingPointCount ?? 0,
@@ -116,6 +607,13 @@ function buildNoRouteSearchMeta(
     guidance_degraded: roundTripSearch?.guidanceDegraded === true,
     hydration_fallback_used: roundTripSearch?.hydrationFallbackUsed === true,
     final_geometry_source: roundTripSearch?.finalGeometrySource ?? null,
+    geometry_source: roundTripSearch?.geometrySource ?? null,
+    final_overview: roundTripSearch?.finalOverview ?? null,
+    coordinate_count: roundTripSearch?.finalCoordinateCount ?? null,
+    max_segment_m: roundTripSearch?.finalMaxSegmentMeters ?? null,
+    average_segment_m: roundTripSearch?.finalAverageSegmentMeters ?? null,
+    display_geometry_reject_reason:
+      roundTripSearch?.finalDisplayGeometryRejectReason ?? null,
     post_hydration_reject_reason:
       roundTripSearch?.postHydrationRejectReason ?? null,
     pre_hydration_quality_tier:
@@ -149,6 +647,9 @@ function buildNoRouteSearchMeta(
       mapbox_calls: roundTripSearch?.mapboxCallCount ?? 0,
       evaluated_routes: roundTripSearch?.evaluatedRouteCount ?? 0,
       guidance_hydrations: roundTripSearch?.guidanceHydrationCount ?? 0,
+      batch_index: roundTripSearch?.batchIndex ?? null,
+      batch_count: roundTripSearch?.batchCount ?? null,
+      batch_exhausted: roundTripSearch?.batchExhausted === true,
       silent_via_used: roundTripSearch?.silentViaUsed === true,
       silent_via_waypoints: roundTripSearch?.silentViaWaypoints ?? null,
       shaping_point_count: roundTripSearch?.shapingPointCount ?? 0,
@@ -158,6 +659,13 @@ function buildNoRouteSearchMeta(
       guidance_degraded: roundTripSearch?.guidanceDegraded === true,
       hydration_fallback_used: roundTripSearch?.hydrationFallbackUsed === true,
       final_geometry_source: roundTripSearch?.finalGeometrySource ?? null,
+      geometry_source: roundTripSearch?.geometrySource ?? null,
+      final_overview: roundTripSearch?.finalOverview ?? null,
+      coordinate_count: roundTripSearch?.finalCoordinateCount ?? null,
+      max_segment_m: roundTripSearch?.finalMaxSegmentMeters ?? null,
+      average_segment_m: roundTripSearch?.finalAverageSegmentMeters ?? null,
+      display_geometry_reject_reason:
+        roundTripSearch?.finalDisplayGeometryRejectReason ?? null,
       post_hydration_reject_reason:
         roundTripSearch?.postHydrationRejectReason ?? null,
       pre_hydration_quality_tier:
@@ -212,6 +720,12 @@ Deno.serve(async (req) => {
       client_force_fresh_variant?: boolean;
       client_trigger?: string;
     };
+    if (body.action === "get_search_session") {
+      return await routeSearchSessionStatusResponse(
+        req,
+        body.search_session_id,
+      );
+    }
     const {
       planning_type,
       startLocation,
@@ -292,6 +806,12 @@ Deno.serve(async (req) => {
         Number.isFinite(body.max_candidate_attempts)
         ? body.max_candidate_attempts
         : undefined;
+    const requestedRoundTripBatchCount = integerOption(
+      body.roundtrip_batch_count,
+    );
+    const requestedRoundTripBatchIndex = integerOption(
+      body.roundtrip_batch_index,
+    );
     const hintSeedOffset =
       stableStringHash(`${variantHint ?? ""}|${fingerprintHint ?? ""}`) % 9973;
     debugLog(
@@ -330,6 +850,8 @@ Deno.serve(async (req) => {
         fingerprintHint: fingerprintHint ?? null,
         previousRouteFingerprintCount: previousRouteFingerprints.length,
         maxCandidateAttemptsHint: maxCandidateAttemptsHint ?? null,
+        roundtripBatchIndex: requestedRoundTripBatchIndex,
+        roundtripBatchCount: requestedRoundTripBatchCount,
       }),
     );
 
@@ -406,6 +928,20 @@ Deno.serve(async (req) => {
       throw new Error(
         "Invalid max_candidate_attempts: must be a finite number",
       );
+    }
+    if (
+      body.roundtrip_batch_count != null &&
+      (typeof body.roundtrip_batch_count !== "number" ||
+        !Number.isFinite(body.roundtrip_batch_count))
+    ) {
+      throw new Error("Invalid roundtrip_batch_count: must be a finite number");
+    }
+    if (
+      body.roundtrip_batch_index != null &&
+      (typeof body.roundtrip_batch_index !== "number" ||
+        !Number.isFinite(body.roundtrip_batch_index))
+    ) {
+      throw new Error("Invalid roundtrip_batch_index: must be a finite number");
     }
     if (
       body.waypoint_order != null && waypointOrder !== "fixed" &&
@@ -1017,6 +1553,43 @@ Deno.serve(async (req) => {
             : null,
       }
       : null;
+    const roundTripTargetForBatching = effectiveTargetDistanceKm ??
+      targetDistance ?? 0;
+    const forceRoundTripSearchSession =
+      body.force_roundtrip_search_session === true ||
+      body.interactive_roundtrip_search === true;
+    const shortNoHighwayRoundTripNeedsSession =
+      useRoundTripSearch &&
+      planning_type === "Zufall" &&
+      avoidHighways &&
+      roundTripTargetForBatching >= 45;
+    const inferredRoundTripBatchCount = useRoundTripSearch &&
+        planning_type === "Zufall" &&
+        (
+          forceRoundTripSearchSession ||
+          shortNoHighwayRoundTripNeedsSession ||
+          roundTripTargetForBatching >= 70 ||
+          (avoidHighways && roundTripTargetForBatching >= 60) ||
+          roundTripTargetForBatching >= 90 ||
+          mode === "Entdecker"
+        )
+      ? 3
+      : 1;
+    const effectiveRoundTripBatchCount = useRoundTripSearch
+      ? Math.max(
+        1,
+        Math.min(4, requestedRoundTripBatchCount ?? inferredRoundTripBatchCount),
+      )
+      : 1;
+    const effectiveRoundTripBatchIndex = effectiveRoundTripBatchCount <= 1
+      ? 0
+      : Math.max(
+        0,
+        Math.min(
+          effectiveRoundTripBatchCount - 1,
+          requestedRoundTripBatchIndex ?? 0,
+        ),
+      );
     const pointToPointTimeBudgetMs = currentRouteType === "POINT_TO_POINT"
       ? Math.max(
         pointToPointIsScenic
@@ -1144,6 +1717,8 @@ Deno.serve(async (req) => {
         fingerprintHint,
         previousRouteFingerprints: previousRouteFingerprints.slice(0, 5),
         maxCandidateAttemptsHint,
+        batchIndex: effectiveRoundTripBatchIndex,
+        batchCount: effectiveRoundTripBatchCount,
         simplifyWaypoints: body.simplify_waypoints === true,
         maxWaypoints: body.max_waypoints,
         continueStraight: requestContinueStraight,
@@ -1173,7 +1748,82 @@ Deno.serve(async (req) => {
           finiteNumber(body.max_debug_reject_candidates) ??
             undefined,
       });
-      if (!roundTripSearch?.route && !avoidHighways) {
+      if (
+        !roundTripSearch?.route &&
+        effectiveRoundTripBatchCount > 1 &&
+        roundTripSessionCandidateQueue(roundTripSearch).length < 3
+      ) {
+        const attemptedBatchIndexes = new Set<number>([
+          effectiveRoundTripBatchIndex,
+        ]);
+        for (
+          let nextBatchIndex = 0;
+          nextBatchIndex < effectiveRoundTripBatchCount &&
+          roundTripSessionCandidateQueue(roundTripSearch).length < 3;
+          nextBatchIndex += 1
+        ) {
+          if (attemptedBatchIndexes.has(nextBatchIndex)) continue;
+          attemptedBatchIndexes.add(nextBatchIndex);
+          const supplementalSearch = await searchBestRoundTripRoute({
+            startLocation,
+            targetDistanceKm: effectiveTargetDistanceKm ?? targetDistance!,
+            distanceConfig: distanceConfig!,
+            mode,
+            randomSeed: randomSeed + (nextBatchIndex + 1) * 104_729,
+            directionHintDegrees: directionHint,
+            waypointShapeFactor,
+            zigzagWaypoints,
+            mapboxProfile,
+            excludeParams,
+            accessToken: MAPBOX_ACCESS_TOKEN,
+            variantHint: variantHint == null
+              ? `session-batch-${nextBatchIndex}`
+              : `${variantHint}-session-batch-${nextBatchIndex}`,
+            fingerprintHint,
+            previousRouteFingerprints: previousRouteFingerprints.slice(0, 5),
+            maxCandidateAttemptsHint,
+            batchIndex: nextBatchIndex,
+            batchCount: effectiveRoundTripBatchCount,
+            simplifyWaypoints: body.simplify_waypoints === true,
+            maxWaypoints: body.max_waypoints,
+            continueStraight: requestContinueStraight,
+            avoidHighways,
+            preferenceAreas,
+            movingStartOptions: movingStartMeta == null ? undefined : {
+              movingStartDetected,
+              currentHeading: currentHeading == null
+                ? undefined
+                : clampNumber(currentHeading, 0, 359),
+              startRadiusMeters: startRadiusMeters == null
+                ? undefined
+                : clampNumber(startRadiusMeters, 5, 300),
+              startBearingToleranceDegrees: startBearingToleranceDegrees == null
+                ? undefined
+                : clampNumber(startBearingToleranceDegrees, 15, 90),
+              avoidManeuverRadiusMeters: avoidManeuverRadiusMeters == null
+                ? undefined
+                : clampNumber(avoidManeuverRadiusMeters, 1, 1000),
+              startSnapStrategy: String(movingStartMeta.start_snap_strategy),
+              startOnMotorway: typeof body.start_on_motorway === "boolean"
+                ? body.start_on_motorway
+                : null,
+            },
+            debugRejectCandidates: body.debug_reject_candidates === true,
+            maxDebugRejectCandidates:
+              finiteNumber(body.max_debug_reject_candidates) ??
+                undefined,
+          });
+          if (supplementalSearch != null) {
+            roundTripSearch = roundTripSearch == null
+              ? supplementalSearch
+              : mergeRoundTripBatchResults(roundTripSearch, supplementalSearch);
+          }
+        }
+      }
+      if (
+        !roundTripSearch?.route && !avoidHighways &&
+        effectiveRoundTripBatchCount <= 1
+      ) {
         const noHighwayExcludeParams = applyAvoidHighwaysExcludes(
           excludeParams,
           true,
@@ -1196,6 +1846,8 @@ Deno.serve(async (req) => {
           fingerprintHint,
           previousRouteFingerprints: previousRouteFingerprints.slice(0, 5),
           maxCandidateAttemptsHint,
+          batchIndex: 0,
+          batchCount: 1,
           simplifyWaypoints: body.simplify_waypoints === true,
           maxWaypoints: body.max_waypoints,
           continueStraight: requestContinueStraight,
@@ -1781,6 +2433,31 @@ Deno.serve(async (req) => {
         excludeParams,
         movingStartMeta,
       });
+      if (
+        useRoundTripSearch &&
+        currentRouteType === "ROUND_TRIP" &&
+        planning_type === "Zufall" &&
+        roundTripSearch?.batchExhausted === true
+      ) {
+        const session = await createRoundTripSearchSession(
+          body,
+          roundTripSearch,
+          requestDebugMeta,
+        );
+        if (session != null) {
+          return jsonResponse(req, {
+            route: null,
+            code: "search_in_progress",
+            message: "search_in_progress",
+            meta: {
+              ...(requestDebugMeta ?? {}),
+              ...searchSessionMeta(session),
+              background_learning_queued: true,
+              progress_stage: "queued_worker_hydration",
+            },
+          }, 202);
+        }
+      }
       if (isWaypointPreferenceRequest && planning_type !== "Wegpunkte") {
         requestDebugMeta = buildPreferenceNotMatchableMeta(
           requestDebugMeta,
@@ -1803,6 +2480,43 @@ Deno.serve(async (req) => {
         );
       }
       throw new Error(noRouteMessage);
+    }
+
+    if (
+      useRoundTripSearch &&
+      currentRouteType === "ROUND_TRIP" &&
+      planning_type === "Zufall" &&
+      (effectiveTargetDistanceKm ?? targetDistance ?? 0) >= 70 &&
+      roundTripSearch != null &&
+      (
+        roundTripSearch.bestCandidatePayload != null ||
+        (roundTripSearch.candidateQueuePayload?.length ?? 0) > 0
+      )
+    ) {
+      requestDebugMeta = buildNoRouteSearchMeta(roundTripSearch, undefined, {
+        avoidHighways,
+        excludeParams,
+        movingStartMeta,
+      });
+      const session = await createRoundTripSearchSession(
+        body,
+        { ...roundTripSearch, batchExhausted: true },
+        requestDebugMeta,
+      );
+      if (session != null) {
+        return jsonResponse(req, {
+          route: null,
+          code: "search_in_progress",
+          message: "search_in_progress",
+          meta: {
+            ...(requestDebugMeta ?? {}),
+            ...searchSessionMeta(session),
+            background_learning_queued: true,
+            progress_stage: "queued_worker_hydration",
+            long_roundtrip_hydration_deferred: true,
+          },
+        }, 202);
+      }
     }
 
     // Mapbox returns distance in meters -> convert to kilometers for app output.
@@ -2300,6 +3014,42 @@ Deno.serve(async (req) => {
     const responseDistanceKm = applyCleanupToRoute
       ? (finalCleanup?.cleanedDistanceKm ?? finalDistanceKm)
       : finalDistanceKm;
+    const displayGeometryStats = routeDisplayGeometryStats(
+      routeForFrontend?.geometry?.coordinates,
+    );
+    const displayGeometryRejectReason =
+      currentRouteType === "ROUND_TRIP" && planning_type !== "Wegpunkte"
+        ? roundTripDisplayGeometryRejectReason(
+          displayGeometryStats,
+          responseDistanceKm,
+          roundTripSearch?.finalOverview,
+        )
+        : null;
+    if (displayGeometryRejectReason != null) {
+      requestDebugMeta = buildNoRouteSearchMeta(
+        roundTripSearch,
+        displayGeometryRejectReason,
+        { avoidHighways, excludeParams, movingStartMeta },
+      );
+      requestDebugMeta = {
+        ...(requestDebugMeta ?? {}),
+        response_code: "route_display_geometry_invalid",
+        route_quality_too_low: true,
+        geometry_source: roundTripSearch?.geometrySource ?? null,
+        final_geometry_source: roundTripSearch?.finalGeometrySource ?? null,
+        final_overview: roundTripSearch?.finalOverview ?? null,
+        coordinate_count: displayGeometryStats.coordinateCount,
+        max_segment_m: displayGeometryStats.maxSegmentMeters,
+        average_segment_m: displayGeometryStats.averageSegmentMeters,
+        display_geometry_reject_reason: displayGeometryRejectReason,
+      };
+      debugError(
+        `Route display geometry invalid: ${displayGeometryRejectReason}`,
+      );
+      throw new Error(
+        `Route-Qualität zu niedrig (${displayGeometryRejectReason}). Bitte erneut versuchen.`,
+      );
+    }
     const pointToPointActualDetourRatio =
       currentRouteType === "POINT_TO_POINT" && pointToPointDirectDistanceKm > 0
         ? responseDistanceKm / pointToPointDirectDistanceKm
@@ -2572,6 +3322,12 @@ Deno.serve(async (req) => {
           hydration_fallback_used:
             roundTripSearch?.hydrationFallbackUsed === true,
           final_geometry_source: roundTripSearch?.finalGeometrySource ?? null,
+          geometry_source: roundTripSearch?.geometrySource ?? null,
+          final_overview: roundTripSearch?.finalOverview ?? null,
+          coordinate_count: displayGeometryStats.coordinateCount,
+          max_segment_m: displayGeometryStats.maxSegmentMeters,
+          average_segment_m: displayGeometryStats.averageSegmentMeters,
+          display_geometry_reject_reason: displayGeometryRejectReason,
           post_hydration_reject_reason:
             roundTripSearch?.postHydrationRejectReason ?? null,
           pre_hydration_quality_tier:

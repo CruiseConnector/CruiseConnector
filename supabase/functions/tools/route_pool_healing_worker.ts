@@ -10,6 +10,7 @@ import type {
 import {
   applyAvoidHighwaysExcludes,
   calculateDestination,
+  calculateDistance,
   normalizeBearingDegrees,
 } from "../generate-cruise-route/routing_utils.ts";
 
@@ -79,6 +80,64 @@ interface RouteRegion {
   seed_cooldown_minutes?: number;
 }
 
+interface RouteSearchSession {
+  id: string;
+  created_at?: string | null;
+  updated_at?: string | null;
+  expires_at?: string | null;
+  user_id?: string | null;
+  route_type: "ROUND_TRIP";
+  origin_lng: number;
+  origin_lat: number;
+  distance_bucket: 50 | 75 | 100;
+  style_key: string;
+  avoid_highways: boolean;
+  status: string;
+  progress_stage?: string | null;
+  attempts_count?: number | null;
+  mapbox_calls_used?: number | null;
+  request_payload?: JsonMap | null;
+  best_candidate_payload?: JsonMap | null;
+  candidate_queue_payload?: unknown[] | null;
+  best_route_payload?: JsonMap | null;
+  best_route_fingerprint?: string | null;
+  reject_summary?: JsonMap | null;
+  seed_job_id?: string | null;
+  worker_last_seen_at?: string | null;
+  locked_until?: string | null;
+  last_error?: string | null;
+}
+
+type RouteSearchSessionCandidatePayload = {
+  candidate_id: string;
+  route_fingerprint: string;
+  candidate_family: string;
+  planned_coordinates: number[][];
+  silent_via_waypoints?: string | null;
+  waypoint_indexes?: number[];
+  radiuses?: string;
+  bearings?: string | null;
+  avoid_maneuver_radius_m?: number | null;
+  continue_straight?: boolean;
+  force_legacy_waypoints?: boolean;
+  target_distance_km?: number;
+  distance_bucket?: 50 | 75 | 100;
+  distance_band_min_km?: number;
+  distance_band_max_km?: number;
+  predicted_distance_km?: number;
+  pre_hydration_quality?: JsonMap;
+  shape_score?: number | null;
+  style_key?: string;
+  requested_style?: string | null;
+  delivered_style?: string | null;
+  style_downgraded?: boolean;
+  avoid_highways?: boolean;
+  motorway_policy?: string;
+  exclude_params?: string;
+  search_stage?: string;
+  route_request_meta?: JsonMap;
+};
+
 interface HealingCandidatePlan {
   family: string;
   label: string;
@@ -106,6 +165,9 @@ export interface HealingStats {
   mapboxCallsUsed: number;
   verifiedInserted: number;
   candidatesInserted: number;
+  searchSessionsProcessed: number;
+  searchSessionsFound: number;
+  searchSessionsNoRoute: number;
   stoppedForRuntime: boolean;
 }
 
@@ -122,6 +184,16 @@ export interface RoutePoolHealingWorkerOptions {
   maxRuntimeSeconds?: number;
 }
 
+export interface RouteSearchSessionWorkerOptions {
+  supabaseUrl?: string;
+  serviceKey?: string;
+  functionKey?: string;
+  dryRun?: boolean;
+  sessionLimit?: number;
+  maxGlobalMapboxCalls?: number;
+  maxRuntimeSeconds?: number;
+}
+
 export interface RoutePoolHealingWorkerResult {
   dryRun: boolean;
   limits: {
@@ -129,6 +201,16 @@ export interface RoutePoolHealingWorkerResult {
     maxGlobalMapboxCalls: number;
     maxVerifiedPerClusterPerRun: number;
     targetVerifiedPerJob: number;
+    maxRuntimeSeconds: number;
+  };
+  stats: HealingStats;
+}
+
+export interface RouteSearchSessionWorkerResult {
+  dryRun: boolean;
+  limits: {
+    sessionLimit: number;
+    maxGlobalMapboxCalls: number;
     maxRuntimeSeconds: number;
   };
   stats: HealingStats;
@@ -181,7 +263,9 @@ export async function processRouteSeedJobs(
   targetVerifiedPerJob = clampInt(options.targetVerifiedPerJob, 2, 1, 3);
   const maxRuntimeSeconds = clampInt(options.maxRuntimeSeconds, 90, 30, 120);
   maxRuntimeMs = maxRuntimeSeconds * 1000;
-  maxJobsToFetch = Math.max(jobLimit * 3, jobLimit);
+  // Fetch wider than the processing limit so high-priority cooldown rows do not
+  // starve lower-priority queued jobs.
+  maxJobsToFetch = Math.max(jobLimit * 20, 24);
   runStartedAt = Date.now();
   stats = createHealingStats();
 
@@ -226,6 +310,41 @@ export async function processRouteSeedJobs(
   };
 }
 
+export async function processRouteSearchSessions(
+  options: RouteSearchSessionWorkerOptions = {},
+): Promise<RouteSearchSessionWorkerResult> {
+  supabaseUrl = options.supabaseUrl ?? env("SUPABASE_URL");
+  serviceKey = options.serviceKey ??
+    (env("SUPABASE_SERVICE_ROLE_KEY") || env("SUPABASE_ANON_KEY"));
+  functionKey = options.functionKey ?? (env("SUPABASE_FUNCTION_KEY") ||
+    serviceKey);
+  dryRun = options.dryRun ?? false;
+  const sessionLimit = clampInt(options.sessionLimit, 2, 1, 2);
+  maxGlobalMapboxCalls = clampInt(options.maxGlobalMapboxCalls, 2, 1, 4);
+  const maxRuntimeSeconds = clampInt(options.maxRuntimeSeconds, 45, 15, 90);
+  maxRuntimeMs = maxRuntimeSeconds * 1000;
+  runStartedAt = Date.now();
+  stats = createHealingStats();
+
+  if (!supabaseUrl || !serviceKey) {
+    throw new Error(
+      "Missing SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY/SUPABASE_ANON_KEY.",
+    );
+  }
+
+  await processInteractiveSearchSessions(sessionLimit);
+
+  return {
+    dryRun,
+    limits: {
+      sessionLimit,
+      maxGlobalMapboxCalls,
+      maxRuntimeSeconds,
+    },
+    stats,
+  };
+}
+
 if (import.meta.main) {
   const result = await processRouteSeedJobs({
     dryRun: Deno.args.includes("--dry-run"),
@@ -249,6 +368,9 @@ function createHealingStats(): HealingStats {
     mapboxCallsUsed: 0,
     verifiedInserted: 0,
     candidatesInserted: 0,
+    searchSessionsProcessed: 0,
+    searchSessionsFound: 0,
+    searchSessionsNoRoute: 0,
     stoppedForRuntime: false,
   };
 }
@@ -531,7 +653,12 @@ async function fetchHealingMapboxRoute(
   plan: HealingCandidatePlan,
   exclude: string,
   accessToken: string,
-  options: { timeoutMs: number },
+  options: {
+    timeoutMs: number;
+    overview?: "simplified" | "full";
+    boundGeometry?: boolean;
+    steps?: boolean;
+  },
 ): Promise<HealingMapboxFetchResult> {
   const coordinatesStr = plan.waypoints
     .map((point) => `${point.longitude},${point.latitude}`)
@@ -539,8 +666,8 @@ async function fetchHealingMapboxRoute(
   const params = new URLSearchParams({
     access_token: accessToken,
     geometries: "geojson",
-    overview: "simplified",
-    steps: "true",
+    overview: options.overview ?? "simplified",
+    steps: options.steps === false ? "false" : "true",
     language: "de",
     continue_straight: plan.continueStraight ? "true" : "false",
     alternatives: "false",
@@ -584,7 +711,9 @@ async function fetchHealingMapboxRoute(
         details: JSON.stringify(data).slice(0, 300),
       };
     }
-    const boundedRoutes = routes.map(boundHealingRouteGeometry);
+    const boundedRoutes = options.boundGeometry === false
+      ? routes
+      : routes.map(boundHealingRouteGeometry);
     return {
       route: boundedRoutes[0],
       routes: boundedRoutes,
@@ -1082,6 +1211,778 @@ async function upsertCandidateRoute(args: {
     body: row,
   });
   return true;
+}
+
+async function processInteractiveSearchSessions(limit: number): Promise<void> {
+  if (limit <= 0 || runtimeExceeded()) return;
+  let sessions: RouteSearchSession[] = [];
+  try {
+    sessions = await loadClaimableSearchSessions(limit);
+  } catch (error) {
+    const message = errorMessage(error);
+    if (
+      message.includes("route_search_sessions") ||
+      message.includes("schema cache")
+    ) {
+      return;
+    }
+    throw error;
+  }
+
+  for (const session of sessions) {
+    if (stats.mapboxCallsUsed >= maxGlobalMapboxCalls || runtimeExceeded()) {
+      stats.stoppedForRuntime = true;
+      break;
+    }
+    const claimed = await claimSearchSession(session);
+    if (!claimed) continue;
+    stats.searchSessionsProcessed += 1;
+    try {
+      await processSearchSession(claimed);
+    } catch (error) {
+      await updateSearchSession(claimed.id, {
+        status: "queued",
+        progress_stage: "queued_next_batch",
+        last_error: errorMessage(error),
+        locked_until: null,
+        worker_last_seen_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+    }
+  }
+}
+
+async function loadClaimableSearchSessions(
+  limit: number,
+): Promise<RouteSearchSession[]> {
+  const query = new URLSearchParams({
+    select: "*",
+    order: "created_at.asc",
+    limit: String(Math.max(1, limit)),
+  });
+  query.append("status", "in.(queued,running,hydrating)");
+  query.append("route_type", "eq.ROUND_TRIP");
+  query.append("expires_at", `gt.${new Date().toISOString()}`);
+  const rows = await rest<RouteSearchSession[]>("route_search_sessions", {
+    query,
+  });
+  const now = Date.now();
+  return rows.filter((session) => {
+    if (session.status !== "hydrating") return true;
+    const lockedUntil = session.locked_until == null
+      ? 0
+      : Date.parse(session.locked_until);
+    return !Number.isFinite(lockedUntil) || lockedUntil <= now;
+  });
+}
+
+async function claimSearchSession(
+  session: RouteSearchSession,
+): Promise<RouteSearchSession | null> {
+  const now = new Date().toISOString();
+  if (dryRun) {
+    return {
+      ...session,
+      status: "hydrating",
+      progress_stage: "worker_hydrating",
+      worker_last_seen_at: now,
+      locked_until: new Date(Date.now() + 2 * 60_000).toISOString(),
+    };
+  }
+  const rows = await rest<RouteSearchSession[]>("route_search_sessions", {
+    method: "PATCH",
+    query: `id=eq.${encodeURIComponent(session.id)}&status=in.(queued,running,hydrating)&select=*`,
+    headers: { Prefer: "return=representation" },
+    body: {
+      status: "hydrating",
+      progress_stage: "worker_hydrating",
+      worker_last_seen_at: now,
+      locked_until: new Date(Date.now() + 2 * 60_000).toISOString(),
+      updated_at: now,
+    },
+  });
+  return rows[0] ?? null;
+}
+
+async function processSearchSession(session: RouteSearchSession): Promise<void> {
+  const accessToken = env("MAPBOX_ACCESS_TOKEN");
+  if (!accessToken) {
+    await updateSearchSession(session.id, {
+      status: "failed",
+      progress_stage: "mapbox_token_missing",
+      last_error: "mapbox_token_missing",
+      worker_last_seen_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+    stats.searchSessionsNoRoute += 1;
+    return;
+  }
+
+  const queue = searchSessionCandidateQueue(session);
+  const attempt = Math.max(0, session.attempts_count ?? 0);
+  const candidate = queue[attempt] ?? null;
+  if (candidate == null) {
+    await updateSearchSession(session.id, {
+      status: "no_route",
+      progress_stage: "no_route",
+      last_error: "candidate_queue_exhausted",
+      reject_summary: mergeRejectSummary(session.reject_summary, {
+        candidate_queue_exhausted: 1,
+      }),
+      worker_last_seen_at: new Date().toISOString(),
+      locked_until: null,
+      updated_at: new Date().toISOString(),
+    });
+    stats.searchSessionsNoRoute += 1;
+    return;
+  }
+
+  if (!isValidSearchSessionCandidate(candidate)) {
+    await continueOrFinishSearchSession(session, {
+      attempts_count: attempt + 1,
+      mapbox_calls_used: session.mapbox_calls_used ?? 0,
+      best_candidate_payload: candidate,
+      last_error: "invalid_candidate_payload",
+      reject_summary: mergeRejectSummary(session.reject_summary, {
+        invalid_candidate_payload: 1,
+      }),
+      worker_last_seen_at: new Date().toISOString(),
+      locked_until: null,
+      updated_at: new Date().toISOString(),
+    });
+    return;
+  }
+
+  const fetchResult = await fetchSearchSessionCandidateRoute(
+    candidate,
+    session,
+    accessToken,
+  );
+  const callsUsed = 1;
+  stats.mapboxCallsUsed += callsUsed;
+  const attemptsCount = attempt + 1;
+  const totalCalls = (session.mapbox_calls_used ?? 0) + callsUsed;
+  const basePatch: JsonMap = {
+    attempts_count: attemptsCount,
+    mapbox_calls_used: totalCalls,
+    best_candidate_payload: candidate,
+    worker_last_seen_at: new Date().toISOString(),
+    locked_until: null,
+    updated_at: new Date().toISOString(),
+  };
+
+  const route = fetchResult.route;
+  if (!route) {
+    await continueOrFinishSearchSession(session, {
+      ...basePatch,
+      last_error: fetchResult.outcome === "http_error"
+        ? `mapbox_http_${fetchResult.statusCode ?? "unknown"}`
+        : `mapbox_${fetchResult.outcome}`,
+      reject_summary: mergeRejectSummary(session.reject_summary, {
+        [`mapbox_${fetchResult.outcome}`]: 1,
+      }),
+    });
+    return;
+  }
+
+  const displayBucket = candidate.distance_bucket ?? session.distance_bucket;
+  const display = displayGeometryDecision(route, displayBucket);
+  if (display.reason != null) {
+    await continueOrFinishSearchSession(session, {
+      ...basePatch,
+      last_error: display.reason,
+      reject_summary: mergeRejectSummary(session.reject_summary, {
+        [display.reason]: 1,
+      }),
+    });
+    return;
+  }
+
+  const routeDistanceKm = distanceKmFromRoute(route);
+  const band = candidateDistanceBand(candidate, session.distance_bucket);
+  if (routeDistanceKm < band.minKm || routeDistanceKm > band.maxKm) {
+    const reason = `distance_outside_candidate_band_${routeDistanceKm.toFixed(1)}`;
+    await continueOrFinishSearchSession(session, {
+      ...basePatch,
+      last_error: reason,
+      reject_summary: mergeRejectSummary(session.reject_summary, {
+        [reason]: 1,
+      }),
+    });
+    return;
+  }
+
+  if (session.avoid_highways && routeHasMotorway(route)) {
+    await continueOrFinishSearchSession(session, {
+      ...basePatch,
+      last_error: "motorway_violation",
+      reject_summary: mergeRejectSummary(session.reject_summary, {
+        motorway_violation: 1,
+      }),
+    });
+    return;
+  }
+
+  const region = await nearestRegionForSession(session);
+  const job = sessionJobAdapter(session, region);
+  const start = {
+    latitude: session.origin_lat,
+    longitude: session.origin_lng,
+  };
+
+  const decision = evaluateGeneratedRoute(job, route, start);
+  if (!decision.acceptable) {
+    await continueOrFinishSearchSession(session, {
+      ...basePatch,
+      last_error: decision.reason,
+      reject_summary: mergeRejectSummary(session.reject_summary, {
+        [decision.reason]: 1,
+      }),
+    });
+    return;
+  }
+
+  const fingerprint = `session_${shortHash(decision.fingerprint)}`;
+  let verifiedInserted = false;
+  let candidateInserted = false;
+  if (region.id != null) {
+    const existingPoolRoute = await routeExists("route_pool", fingerprint);
+    const existingCandidate = await routeExists(
+      "route_pool_candidates",
+      fingerprint,
+    );
+    if (!existingPoolRoute && !existingCandidate) {
+      if (decision.verified) {
+        verifiedInserted = await upsertVerifiedRoute({
+          job,
+          region,
+          route,
+          fingerprint,
+          decision,
+        });
+        if (verifiedInserted) stats.verifiedInserted += 1;
+      } else {
+        candidateInserted = await upsertCandidateRoute({
+          job,
+          region,
+          route,
+          fingerprint,
+          decision,
+        });
+        if (candidateInserted) stats.candidatesInserted += 1;
+      }
+    }
+  }
+
+  await updateSearchSession(session.id, {
+    ...basePatch,
+    status: "found",
+    progress_stage: "found",
+    best_route_fingerprint: fingerprint,
+    last_error: null,
+    reject_summary: mergeRejectSummary(session.reject_summary, {}),
+    best_route_payload: {
+      route,
+      meta: {
+        source: "search_session",
+        route_source: "search_session",
+        search_session_id: session.id,
+        final_geometry_source: "hydrated_worker",
+        geometry_source: "mapbox_full",
+        final_overview: "full",
+        guidance_degraded: true,
+        guidance_degraded_reason: "worker_hydrated_persisted_live_candidate",
+        final_coordinate_count: display.coordinateCount,
+        coordinate_count: display.coordinateCount,
+        max_display_segment_m: display.maxSegmentMeters,
+        max_segment_m: display.maxSegmentMeters,
+        average_segment_m: display.averageSegmentMeters,
+        road_snapped_geometry: true,
+        quality_tier: decision.qualityTier,
+        quality_score: decision.qualityScore,
+        route_distance_km: decision.distanceKm,
+        target_distance_km: candidate.target_distance_km ??
+          session.distance_bucket,
+        requested_distance_bucket: session.distance_bucket,
+        requested_style_key: session.style_key,
+        delivered_style: candidate.delivered_style ??
+          styleLabel(session.style_key),
+        requested_style: candidate.requested_style ?? styleLabel(session.style_key),
+        style_downgraded: candidate.style_downgraded === true,
+        avoid_highways_requested: session.avoid_highways,
+        motorway_policy: session.avoid_highways
+          ? "exclude_motorway"
+          : "allowed_not_required",
+        actual_has_highway: routeHasMotorway(route),
+        silent_via_used: fetchResult.meta?.silent_via_used === true,
+        silent_via_waypoints: fetchResult.meta?.silent_via_waypoints ?? null,
+        mapbox_leg_count: fetchResult.meta?.mapbox_leg_count ?? null,
+        arrive_maneuver_count: fetchResult.meta?.arrive_maneuver_count ?? null,
+        mapbox_calls_used: totalCalls,
+        candidate_id: candidate.candidate_id,
+        candidate_family: candidate.candidate_family,
+        candidate_queue_index: attempt,
+        worker_invocation_count: attemptsCount,
+        predicted_distance_km: candidate.predicted_distance_km ?? null,
+        final_distance_km: routeDistanceKm,
+        distance_band_min_km: band.minKm,
+        distance_band_max_km: band.maxKm,
+        pre_hydration_quality: candidate.pre_hydration_quality ?? null,
+        candidate_inserted: candidateInserted,
+        verified_inserted: verifiedInserted,
+      },
+    },
+  });
+  stats.searchSessionsFound += 1;
+}
+
+function searchSessionCandidateQueue(
+  session: RouteSearchSession,
+): RouteSearchSessionCandidatePayload[] {
+  const queue = Array.isArray(session.candidate_queue_payload)
+    ? session.candidate_queue_payload
+      .map(searchSessionCandidateFromUnknown)
+      .filter((candidate): candidate is RouteSearchSessionCandidatePayload =>
+        candidate != null
+      )
+    : [];
+  if (queue.length > 0) return queue.slice(0, 3);
+  const best = searchSessionCandidateFromUnknown(
+    session.best_candidate_payload,
+  );
+  return best == null ? [] : [best];
+}
+
+function searchSessionCandidateFromUnknown(
+  value: unknown,
+): RouteSearchSessionCandidatePayload | null {
+  if (value == null || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const record = value as JsonMap;
+  const planned = Array.isArray(record.planned_coordinates)
+    ? record.planned_coordinates
+      .map((point) =>
+        Array.isArray(point) && point.length >= 2
+          ? [Number(point[0]), Number(point[1])]
+          : null
+      )
+      .filter((point): point is number[] =>
+        Array.isArray(point) &&
+        Number.isFinite(point[0]) &&
+        Number.isFinite(point[1])
+      )
+    : [];
+  return {
+    candidate_id: String(record.candidate_id ?? ""),
+    route_fingerprint: String(record.route_fingerprint ?? ""),
+    candidate_family: String(record.candidate_family ?? "unknown"),
+    planned_coordinates: planned,
+    silent_via_waypoints: typeof record.silent_via_waypoints === "string"
+      ? record.silent_via_waypoints
+      : null,
+    waypoint_indexes: Array.isArray(record.waypoint_indexes)
+      ? record.waypoint_indexes.map(Number).filter(Number.isFinite)
+      : undefined,
+    radiuses: typeof record.radiuses === "string" ? record.radiuses : undefined,
+    bearings: typeof record.bearings === "string" ? record.bearings : null,
+    avoid_maneuver_radius_m: typeof record.avoid_maneuver_radius_m === "number"
+      ? record.avoid_maneuver_radius_m
+      : null,
+    continue_straight: record.continue_straight !== false,
+    force_legacy_waypoints: record.force_legacy_waypoints === true,
+    target_distance_km: numberFromUnknown(record.target_distance_km),
+    distance_bucket: bucketFromUnknown(record.distance_bucket),
+    distance_band_min_km: numberFromUnknown(record.distance_band_min_km),
+    distance_band_max_km: numberFromUnknown(record.distance_band_max_km),
+    predicted_distance_km: numberFromUnknown(record.predicted_distance_km),
+    pre_hydration_quality: isJsonMap(record.pre_hydration_quality)
+      ? record.pre_hydration_quality
+      : undefined,
+    shape_score: numberFromUnknown(record.shape_score) ?? null,
+    style_key: typeof record.style_key === "string" ? record.style_key : undefined,
+    requested_style: typeof record.requested_style === "string"
+      ? record.requested_style
+      : null,
+    delivered_style: typeof record.delivered_style === "string"
+      ? record.delivered_style
+      : null,
+    style_downgraded: record.style_downgraded === true,
+    avoid_highways: record.avoid_highways === true,
+    motorway_policy: typeof record.motorway_policy === "string"
+      ? record.motorway_policy
+      : undefined,
+    exclude_params: typeof record.exclude_params === "string"
+      ? record.exclude_params
+      : undefined,
+    search_stage: typeof record.search_stage === "string"
+      ? record.search_stage
+      : undefined,
+    route_request_meta: isJsonMap(record.route_request_meta)
+      ? record.route_request_meta
+      : undefined,
+  };
+}
+
+function isValidSearchSessionCandidate(
+  candidate: RouteSearchSessionCandidatePayload,
+): boolean {
+  return candidate.planned_coordinates.length >= 2 &&
+    candidate.planned_coordinates.every((point) =>
+      point.length >= 2 &&
+      Number.isFinite(point[0]) &&
+      Number.isFinite(point[1]) &&
+      Math.abs(point[0]) <= 180 &&
+      Math.abs(point[1]) <= 90
+    );
+}
+
+async function fetchSearchSessionCandidateRoute(
+  candidate: RouteSearchSessionCandidatePayload,
+  session: RouteSearchSession,
+  accessToken: string,
+): Promise<HealingMapboxFetchResult> {
+  const coordinatesStr = candidate.planned_coordinates
+    .map((point) => `${point[0]},${point[1]}`)
+    .join(";");
+  const params = new URLSearchParams({
+    access_token: accessToken,
+    geometries: "geojson",
+    overview: "full",
+    steps: "true",
+    language: "de",
+    continue_straight: String(candidate.continue_straight !== false),
+    alternatives: "false",
+  });
+  const exclude = applyAvoidHighwaysExcludes(
+    candidate.exclude_params ?? "",
+    session.avoid_highways,
+  );
+  if (exclude.trim().length > 0) params.set("exclude", exclude.trim());
+  params.set("radiuses", validSearchSessionRadiuses(candidate));
+  const bearings = candidate.bearings?.trim();
+  if (
+    bearings &&
+    bearings.split(";").length === candidate.planned_coordinates.length
+  ) {
+    params.set("bearings", bearings);
+  }
+  if (
+    typeof candidate.avoid_maneuver_radius_m === "number" &&
+    Number.isFinite(candidate.avoid_maneuver_radius_m)
+  ) {
+    params.set(
+      "avoid_maneuver_radius",
+      String(
+        Math.max(
+          1,
+          Math.min(1000, Math.round(candidate.avoid_maneuver_radius_m)),
+        ),
+      ),
+    );
+  }
+  if (!candidate.force_legacy_waypoints) {
+    const waypointString = candidate.silent_via_waypoints ??
+      (candidate.planned_coordinates.length > 2
+        ? `0;${candidate.planned_coordinates.length - 1}`
+        : null);
+    if (waypointString != null && waypointString.trim().length > 0) {
+      params.set("waypoints", waypointString);
+    }
+  }
+
+  const url =
+    `https://api.mapbox.com/directions/v5/mapbox/driving/${coordinatesStr}?${params}`;
+  const controller = new AbortController();
+  let timeoutId: number | undefined;
+  const timeoutResult = new Promise<HealingMapboxFetchResult>((resolve) => {
+    timeoutId = setTimeout(() => {
+      controller.abort();
+      resolve({
+        route: null,
+        outcome: "timeout",
+        details: "search_session_mapbox_timeout",
+      });
+    }, 10_000);
+  });
+  const request = (async (): Promise<HealingMapboxFetchResult> => {
+    const response = await fetch(url, { signal: controller.signal });
+    if (!response.ok) {
+      return {
+        route: null,
+        outcome: "http_error",
+        statusCode: response.status,
+        details: (await response.text()).slice(0, 300),
+      };
+    }
+    const data = await response.json();
+    const routes = Array.isArray(data?.routes) ? data.routes : [];
+    if (routes.length === 0) {
+      return {
+        route: null,
+        outcome: "no_route",
+        details: JSON.stringify(data).slice(0, 300),
+      };
+    }
+    const route = routes[0];
+    const silentViaUsed = !candidate.force_legacy_waypoints &&
+      candidate.planned_coordinates.length > 2;
+    return {
+      route,
+      routes,
+      outcome: "ok",
+      meta: {
+        silent_via_used: silentViaUsed,
+        silent_via_waypoints: silentViaUsed
+          ? candidate.silent_via_waypoints ??
+            `0;${candidate.planned_coordinates.length - 1}`
+          : null,
+        shaping_point_count: Math.max(
+          0,
+          candidate.planned_coordinates.length - 2,
+        ),
+        mapbox_leg_count: Array.isArray(route?.legs) ? route.legs.length : null,
+        arrive_maneuver_count: countArriveManeuvers(route),
+      },
+    };
+  })();
+
+  try {
+    return await Promise.race([request, timeoutResult]);
+  } catch (error) {
+    const details = error instanceof Error ? error.message : String(error);
+    const timeout = details.toLowerCase().includes("abort") ||
+      (error instanceof DOMException && error.name === "AbortError");
+    return {
+      route: null,
+      outcome: timeout ? "timeout" : "network_error",
+      details,
+    };
+  } finally {
+    if (timeoutId != null) clearTimeout(timeoutId);
+  }
+}
+
+function validSearchSessionRadiuses(
+  candidate: RouteSearchSessionCandidatePayload,
+): string {
+  if (
+    candidate.radiuses != null &&
+    candidate.radiuses.split(";").length ===
+      candidate.planned_coordinates.length
+  ) {
+    return candidate.radiuses;
+  }
+  return candidate.planned_coordinates
+    .map((_, index) =>
+      index === 0 || index === candidate.planned_coordinates.length - 1
+        ? "1200"
+        : "4500"
+    )
+    .join(";");
+}
+
+function candidateDistanceBand(
+  candidate: RouteSearchSessionCandidatePayload,
+  bucket: 50 | 75 | 100,
+): { minKm: number; maxKm: number } {
+  if (
+    typeof candidate.distance_band_min_km === "number" &&
+    typeof candidate.distance_band_max_km === "number" &&
+    candidate.distance_band_max_km > candidate.distance_band_min_km
+  ) {
+    return {
+      minKm: candidate.distance_band_min_km,
+      maxKm: candidate.distance_band_max_km,
+    };
+  }
+  if (bucket === 50) return { minKm: 42, maxKm: 65 };
+  if (bucket === 75) return { minKm: 62, maxKm: 90 };
+  return { minKm: 85, maxKm: 118 };
+}
+
+async function continueOrFinishSearchSession(
+  session: RouteSearchSession,
+  patch: JsonMap,
+): Promise<void> {
+  const attempts = Number(patch.attempts_count ?? session.attempts_count ?? 0);
+  const exhausted = attempts >= maxSessionAttempts(session);
+  await updateSearchSession(session.id, {
+    ...patch,
+    status: exhausted ? "no_route" : "queued",
+    progress_stage: exhausted ? "no_route" : "queued_next_batch",
+  });
+  if (exhausted) stats.searchSessionsNoRoute += 1;
+}
+
+function maxSessionAttempts(session: RouteSearchSession): number {
+  const queuedCandidates = searchSessionCandidateQueue(session).length;
+  if (queuedCandidates > 0) return Math.min(3, queuedCandidates);
+  if (session.distance_bucket === 100) return 8;
+  if (session.style_key === "kurvenjagd") return 7;
+  return 6;
+}
+
+async function updateSearchSession(
+  sessionId: string,
+  patch: JsonMap,
+): Promise<void> {
+  if (dryRun) return;
+  await rest("route_search_sessions", {
+    method: "PATCH",
+    query: `id=eq.${encodeURIComponent(sessionId)}`,
+    body: patch,
+  });
+}
+
+function sessionJobAdapter(
+  session: RouteSearchSession,
+  region: RouteRegion,
+): SeedJob {
+  return {
+    id: session.id,
+    route_region_id: region.id ?? null,
+    country_code: region.country_code,
+    admin1_name: region.admin1_name,
+    admin2_name: region.admin2_name ?? null,
+    city_cluster: region.city_cluster,
+    route_type: "ROUND_TRIP",
+    distance_bucket: session.distance_bucket,
+    style_key: session.style_key,
+    avoid_highways: session.avoid_highways,
+    status: session.status,
+    job_kind: "interactive_roundtrip_search",
+    max_mapbox_calls: maxSessionAttempts(session),
+    mapbox_calls_used: session.mapbox_calls_used ?? 0,
+  };
+}
+
+async function nearestRegionForSession(
+  session: RouteSearchSession,
+): Promise<RouteRegion> {
+  const rows = await rest<RouteRegion[]>("route_regions", {
+    query: new URLSearchParams({
+      select: "*",
+      limit: "200",
+    }),
+  });
+  const origin = {
+    latitude: session.origin_lat,
+    longitude: session.origin_lng,
+  };
+  const candidates = rows
+    .filter((region) =>
+      Number.isFinite(region.center_lat) && Number.isFinite(region.center_lng)
+    )
+    .map((region) => ({
+      region,
+      distanceKm: calculateDistance(origin, {
+        latitude: region.center_lat,
+        longitude: region.center_lng,
+      }),
+    }))
+    .sort((a, b) => a.distanceKm - b.distanceKm);
+  return candidates[0]?.region ?? {
+    country_code: "AT",
+    admin1_name: "Vorarlberg",
+    city_cluster: "interactive_roundtrip",
+    center_lat: session.origin_lat,
+    center_lng: session.origin_lng,
+  };
+}
+
+function mergeRejectSummary(
+  current: JsonMap | null | undefined,
+  increment: Record<string, number>,
+): JsonMap {
+  const rejectReasons = {
+    ...(
+      current?.reject_reasons != null && typeof current.reject_reasons === "object"
+        ? current.reject_reasons as Record<string, unknown>
+        : {}
+    ),
+  };
+  for (const [reason, count] of Object.entries(increment)) {
+    rejectReasons[reason] = Number(rejectReasons[reason] ?? 0) + count;
+  }
+  return {
+    ...(current ?? {}),
+    reject_reasons: rejectReasons,
+    updated_at: new Date().toISOString(),
+  };
+}
+
+function displayGeometryDecision(
+  route: any,
+  bucket: 50 | 75 | 100,
+): {
+  reason: string | null;
+  coordinateCount: number;
+  maxSegmentMeters: number | null;
+  averageSegmentMeters: number | null;
+} {
+  const stats = routeDisplayGeometryStats(route?.geometry?.coordinates);
+  if (stats.coordinateCount < minDisplayCoordinateCount(bucket)) {
+    return { ...stats, reason: `display_geometry_coords_${stats.coordinateCount}` };
+  }
+  const maxLimit = bucket === 100 ? 2500 : 2000;
+  if ((stats.maxSegmentMeters ?? 0) > maxLimit) {
+    return { ...stats, reason: `display_geometry_max_segment_${stats.maxSegmentMeters}` };
+  }
+  if ((stats.averageSegmentMeters ?? 0) > 900) {
+    return { ...stats, reason: `display_geometry_avg_segment_${stats.averageSegmentMeters}` };
+  }
+  return { ...stats, reason: null };
+}
+
+function routeDisplayGeometryStats(rawCoordinates: unknown): {
+  coordinateCount: number;
+  maxSegmentMeters: number | null;
+  averageSegmentMeters: number | null;
+} {
+  const coordinates = Array.isArray(rawCoordinates)
+    ? rawCoordinates
+      .filter((point): point is [number, number] =>
+        Array.isArray(point) &&
+        point.length >= 2 &&
+        typeof point[0] === "number" &&
+        typeof point[1] === "number" &&
+        Number.isFinite(point[0]) &&
+        Number.isFinite(point[1])
+      )
+      .map((point) => ({ longitude: point[0], latitude: point[1] }))
+    : [];
+  if (coordinates.length < 2) {
+    return {
+      coordinateCount: coordinates.length,
+      maxSegmentMeters: null,
+      averageSegmentMeters: null,
+    };
+  }
+  let totalMeters = 0;
+  let maxSegmentMeters = 0;
+  for (let index = 1; index < coordinates.length; index += 1) {
+    const segmentMeters = calculateDistance(
+      coordinates[index - 1],
+      coordinates[index],
+    ) * 1000;
+    if (!Number.isFinite(segmentMeters)) continue;
+    totalMeters += segmentMeters;
+    maxSegmentMeters = Math.max(maxSegmentMeters, segmentMeters);
+  }
+  return {
+    coordinateCount: coordinates.length,
+    maxSegmentMeters: Number(maxSegmentMeters.toFixed(1)),
+    averageSegmentMeters: Number(
+      (totalMeters / Math.max(1, coordinates.length - 1)).toFixed(1),
+    ),
+  };
+}
+
+function minDisplayCoordinateCount(bucket: 50 | 75 | 100): number {
+  if (bucket === 50) return 70;
+  if (bucket === 75) return 105;
+  return 145;
 }
 
 async function loadClaimableJobs(): Promise<SeedJob[]> {
@@ -1934,6 +2835,21 @@ function nextUtcMidnight(): Date {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function numberFromUnknown(value: unknown): number | undefined {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function bucketFromUnknown(value: unknown): 50 | 75 | 100 | undefined {
+  const parsed = Number(value);
+  if (parsed === 50 || parsed === 75 || parsed === 100) return parsed;
+  return undefined;
+}
+
+function isJsonMap(value: unknown): value is JsonMap {
+  return value != null && typeof value === "object" && !Array.isArray(value);
 }
 
 function runtimeExceeded(): boolean {

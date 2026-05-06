@@ -70,6 +70,7 @@ Deno.serve(async (req) => {
 
 function isAuthorized(req: Request): boolean {
   const bearer = bearerToken(req.headers.get("authorization"));
+  const apiKey = req.headers.get("apikey")?.trim() ?? "";
   const cronSecret = Deno.env.get("ROUTE_POOL_HEALING_CRON_SECRET")?.trim();
   if (cronSecret && constantTimeEquals(bearer, cronSecret)) return true;
   if (
@@ -80,8 +81,18 @@ function isAuthorized(req: Request): boolean {
   }
 
   const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")?.trim();
-  return serviceRoleKey != null && serviceRoleKey.length > 0 &&
-    constantTimeEquals(bearer, serviceRoleKey);
+  if (
+    serviceRoleKey != null && serviceRoleKey.length > 0 &&
+    (constantTimeEquals(bearer, serviceRoleKey) ||
+      constantTimeEquals(apiKey, serviceRoleKey))
+  ) {
+    return true;
+  }
+
+  return secretApiKeys().some((secretKey) =>
+    constantTimeEquals(apiKey, secretKey) ||
+    constantTimeEquals(bearer, secretKey)
+  );
 }
 
 function bearerToken(value: string | null): string {
@@ -105,6 +116,51 @@ function stringOption(value: unknown, envName: string): string | undefined {
   const raw = typeof value === "string" ? value : Deno.env.get(envName);
   const trimmed = raw?.trim();
   return trimmed && trimmed.length > 0 ? trimmed : undefined;
+}
+
+function secretApiKeys(): string[] {
+  return [
+    ...parseNamedSecretKeys(Deno.env.get("SUPABASE_SECRET_KEYS")),
+    ...parseNamedSecretKeys(Deno.env.get("SUPABASE_SECRET_KEY")),
+  ].filter((value, index, all) => value.length > 0 && all.indexOf(value) === index);
+}
+
+function parseNamedSecretKeys(raw: string | undefined): string[] {
+  const trimmed = raw?.trim() ?? "";
+  if (trimmed.length === 0) return [];
+  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) {
+    return [trimmed];
+  }
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (Array.isArray(parsed)) {
+      return parsed.flatMap(secretValuesFromJson);
+    }
+    if (parsed != null && typeof parsed === "object") {
+      return secretValuesFromJson(parsed);
+    }
+  } catch {
+    return [];
+  }
+  return [];
+}
+
+function secretValuesFromJson(value: unknown): string[] {
+  if (typeof value === "string") return [value];
+  if (Array.isArray(value)) return value.flatMap(secretValuesFromJson);
+  if (value != null && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return [
+      record.value,
+      record.key,
+      record.api_key,
+      record.apiKey,
+      ...Object.values(record).filter((entry) =>
+        typeof entry === "string" && entry.startsWith("sb_" + "secret_")
+      ),
+    ].flatMap(secretValuesFromJson);
+  }
+  return [];
 }
 
 function constantTimeEquals(

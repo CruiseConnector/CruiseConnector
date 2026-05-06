@@ -17,6 +17,8 @@ export type RouteMode =
   | "Standard";
 
 export interface RequestData {
+  action?: "get_search_session";
+  search_session_id?: string;
   planning_type: "Zufall" | "Wegpunkte";
   route_type?: "ROUND_TRIP" | "POINT_TO_POINT";
   required_waypoints?: Coordinate[];
@@ -53,6 +55,10 @@ export interface RequestData {
   fingerprint_hint?: string;
   previous_route_fingerprints?: string[];
   max_candidate_attempts?: number;
+  roundtrip_batch_index?: number;
+  roundtrip_batch_count?: number;
+  force_roundtrip_search_session?: boolean;
+  interactive_roundtrip_search?: boolean;
   moving_start?: boolean;
   current_heading?: number;
   current_speed_mps?: number;
@@ -171,6 +177,40 @@ export interface RoundTripCandidatePlan {
   radiuses: string;
 }
 
+export interface RoundTripSessionCandidatePayload {
+  candidate_id: string;
+  route_fingerprint: string;
+  candidate_family: string;
+  planned_coordinates: number[][];
+  silent_via_waypoints: string | null;
+  waypoint_indexes: number[];
+  radiuses: string;
+  bearings?: string | null;
+  avoid_maneuver_radius_m?: number | null;
+  continue_straight: boolean;
+  force_legacy_waypoints?: boolean;
+  target_distance_km: number;
+  distance_bucket: 50 | 75 | 100;
+  distance_band_min_km: number;
+  distance_band_max_km: number;
+  ideal_distance_min_km: number;
+  ideal_distance_max_km: number;
+  predicted_distance_km: number;
+  distance_fit_tier: string;
+  pre_hydration_quality: Record<string, unknown>;
+  shape_score: number | null;
+  style_key: string;
+  requested_style: string | null;
+  delivered_style: string | null;
+  style_downgraded: boolean;
+  avoid_highways: boolean;
+  motorway_policy: "exclude_motorway" | "allowed_not_required";
+  exclude_params: string;
+  search_stage: string;
+  route_request_meta: Record<string, unknown>;
+  created_from_live_batch: true;
+}
+
 export interface RoundTripSearchResult {
   route: any | null;
   waypoints: Coordinate[];
@@ -182,6 +222,9 @@ export interface RoundTripSearchResult {
   mapboxCallCount?: number;
   evaluatedRouteCount?: number;
   guidanceHydrationCount?: number;
+  batchIndex?: number;
+  batchCount?: number;
+  batchExhausted?: boolean;
   searchStageSuccess?: string | null;
   selectedCandidateFamily?: string | null;
   distanceFitTier?: string | null;
@@ -206,6 +249,12 @@ export interface RoundTripSearchResult {
   guidanceDegraded?: boolean;
   hydrationFallbackUsed?: boolean;
   finalGeometrySource?: "hydrated" | "pre_hydration_fallback" | "duplicate_fallback";
+  geometrySource?: string | null;
+  finalOverview?: "full" | "simplified" | null;
+  finalCoordinateCount?: number | null;
+  finalMaxSegmentMeters?: number | null;
+  finalAverageSegmentMeters?: number | null;
+  finalDisplayGeometryRejectReason?: string | null;
   postHydrationRejectReason?: string | null;
   preHydrationQualityTier?: string | null;
   hydrationDiagnostics?: Record<string, unknown>[];
@@ -213,6 +262,8 @@ export interface RoundTripSearchResult {
   exhausted?: boolean;
   preferenceMatch?: PreferenceMatchSummary | null;
   rejectSamples?: Record<string, unknown>[];
+  bestCandidatePayload?: RoundTripSessionCandidatePayload | null;
+  candidateQueuePayload?: RoundTripSessionCandidatePayload[];
 }
 
 export interface MapboxRouteFetchResult {

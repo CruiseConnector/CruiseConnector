@@ -201,6 +201,8 @@ class _CruiseModePageState extends State<CruiseModePage>
 
   // ─────────────────────── Map State (flutter_map) ───────────────────────────
   bool _isLoading = false;
+  Timer? _routeLoadingPhaseTimer;
+  int _routeLoadingPhaseIndex = 0;
   final MapController _mapController = MapController();
   bool _mapReady = false;
   final List<LatLng> _roundTripWaypoints = [];
@@ -319,6 +321,51 @@ class _CruiseModePageState extends State<CruiseModePage>
 
   void _safeSetState(VoidCallback fn) {
     if (mounted && !_disposed) setState(fn);
+  }
+
+  static const List<String> _roundTripLoadingPhases = [
+    'Live-Routen prüfen',
+    'Alternativen vergleichen',
+    'Route auf Straßen prüfen',
+    'Vorschläge im Pool aufbauen',
+    'Fast fertig',
+  ];
+
+  String get _routeLoadingStatusText {
+    if (_isWaypointPlanning) return 'Route über deine Wegpunkte wird berechnet';
+    if (!_isRoundTrip) return 'Wir prüfen Alternativen zum Ziel';
+    final phaseIndex = _routeLoadingPhaseIndex.clamp(
+      0,
+      _roundTripLoadingPhases.length - 1,
+    );
+    return _roundTripLoadingPhases[phaseIndex];
+  }
+
+  void _startRouteLoadingUi() {
+    _routeLoadingPhaseTimer?.cancel();
+    _safeSetState(() {
+      _isLoading = true;
+      _showRouteInfoBanner = false;
+      _routeLoadingPhaseIndex = 0;
+    });
+    _routeLoadingPhaseTimer = Timer.periodic(const Duration(seconds: 18), (_) {
+      if (!mounted || _disposed || !_isLoading) return;
+      _safeSetState(() {
+        _routeLoadingPhaseIndex = math.min(
+          _routeLoadingPhaseIndex + 1,
+          _roundTripLoadingPhases.length - 1,
+        );
+      });
+    });
+  }
+
+  void _stopRouteLoadingUi() {
+    _routeLoadingPhaseTimer?.cancel();
+    _routeLoadingPhaseTimer = null;
+    _safeSetState(() {
+      _isLoading = false;
+      _routeLoadingPhaseIndex = 0;
+    });
   }
 
   void _dismissTransientRouteUi() {
@@ -510,6 +557,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     _disposed = true;
     _routeDrawAnimationToken++;
     _routeDrawAnimationTimer?.cancel();
+    _routeLoadingPhaseTimer?.cancel();
     _cameraAnimController?.removeListener(_onCameraAnimationTick);
     _cameraAnimController?.dispose();
     CruiseModePage.isFullscreen.value = false;
@@ -1705,16 +1753,78 @@ class _CruiseModePageState extends State<CruiseModePage>
             if (_isLoading)
               Padding(
                 padding: const EdgeInsets.only(bottom: 10),
-                child: Text(
-                  _isWaypointPlanning
-                      ? 'Route über deine Wegpunkte wird berechnet...'
-                      : !_isRoundTrip
-                      ? 'Wir prüfen Alternativen zum Ziel...'
-                      : 'Route wird gesucht...',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
+                child: Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF12151C).withValues(alpha: 0.92),
+                    borderRadius: BorderRadius.circular(18),
+                    border: Border.all(
+                      color: Colors.white.withValues(alpha: 0.10),
+                    ),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Wir berechnen bessere Vorschläge',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        _routeLoadingStatusText,
+                        style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.78),
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      if (_isRoundTrip && !_isWaypointPlanning) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          'Das kann bei dieser Region 1-2 Minuten dauern.',
+                          style: TextStyle(
+                            color: Colors.white.withValues(alpha: 0.58),
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
+                      const SizedBox(height: 10),
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(8),
+                        child: LinearProgressIndicator(
+                          minHeight: 4,
+                          value:
+                              (_routeLoadingPhaseIndex + 1) /
+                              _roundTripLoadingPhases.length,
+                          backgroundColor: Colors.white.withValues(alpha: 0.08),
+                          valueColor: AlwaysStoppedAnimation<Color>(
+                            AppAccentColors.accent,
+                          ),
+                        ),
+                      ),
+                      if (!_configCollapsed) ...[
+                        const SizedBox(height: 8),
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: TextButton(
+                            onPressed: () =>
+                                _safeSetState(() => _configCollapsed = true),
+                            style: TextButton.styleFrom(
+                              foregroundColor: AppAccentColors.accent,
+                              padding: EdgeInsets.zero,
+                              minimumSize: const Size(0, 32),
+                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            ),
+                            child: const Text('Karte ansehen'),
+                          ),
+                        ),
+                      ],
+                    ],
                   ),
                 ),
               ),
@@ -1754,10 +1864,8 @@ class _CruiseModePageState extends State<CruiseModePage>
                           ),
                           const SizedBox(width: 12),
                           Text(
-                            _isWaypointPlanning
-                                ? 'Wegpunkte werden berechnet'
-                                : !_isRoundTrip
-                                ? 'Alternativen werden geprüft'
+                            _isRoundTrip
+                                ? 'Berechnung läuft'
                                 : 'Route wird gesucht',
                             style: const TextStyle(
                               color: Colors.white,
@@ -2260,23 +2368,24 @@ class _CruiseModePageState extends State<CruiseModePage>
     if (_isLoading) return;
     final previousUiState = _captureGeneratedRouteUiState();
     _dismissTransientRouteUi();
-    setState(() {
-      _isLoading = true;
-      _showRouteInfoBanner = false;
-    });
+    _startRouteLoadingUi();
 
     // Hintergrund-Generierung pausieren während User aktiv generiert
     RouteCacheService.beginUserGeneration();
 
+    var requestedDistance = 50;
+    String? requestedWaypointSignature;
     try {
       final startPosition = await _getStartCoordinates();
 
       final digits = _selectedLength.replaceAll(RegExp(r'[^0-9]'), '');
       final distance = digits.isNotEmpty ? int.parse(digits) : 50;
+      requestedDistance = distance;
       final waypointSnapshot = List<LatLng>.unmodifiable(_roundTripWaypoints);
       final waypointSignature = _isWaypointPlanning
           ? _roundTripWaypointSignature(waypointSnapshot)
           : null;
+      requestedWaypointSignature = waypointSignature;
       if (_isWaypointPlanning &&
           (waypointSnapshot.isEmpty || waypointSnapshot.length > 3)) {
         _restoreGeneratedRouteFailureUi(
@@ -2462,80 +2571,169 @@ class _CruiseModePageState extends State<CruiseModePage>
         );
       }
 
-      if (!mounted || _disposed) return;
-      result = await _prepareRouteForPreviewStart(
+      await _acceptGeneratedRouteResult(
         result: result,
         startPosition: startPosition,
-        isRoundTrip: _isRoundTrip,
-        avoidHighways: _avoidHighways,
+        distance: distance,
+        waypointSignature: waypointSignature,
       );
-
-      const validator = RouteQualityValidator();
-      final actualKm = result.distanceKm ?? 0.0;
-      final targetKm = _isWaypointPlanning
-          ? actualKm
-          : _isRoundTrip
-          ? distance.toDouble()
-          : 0.0;
-      final quality = validator.validateQuality(
-        coordinates: result.coordinates,
-        isRoundTrip: _isRoundTrip,
-        targetDistanceKm: targetKm,
-        actualDistanceKm: actualKm,
-      );
-      final routeClassification = validator.classifyGeneratedRoute(
-        quality: quality,
-        isRoundTrip: _isRoundTrip,
-        coordinateCount: result.coordinates.length,
-        actualDistanceKm: actualKm,
-        targetDistanceKm: targetKm,
-      );
-      debugPrint(
-        '[CruiseMode] Route erhalten: '
-        'tier=${routeClassification.tier}, '
-        'score=${routeClassification.score.toStringAsFixed(1)}, '
-        'distance=${actualKm.toStringAsFixed(1)}km, '
-        'overlap=${quality.overlapPercent.toStringAsFixed(1)}%, '
-        'uturns=${quality.uturnPositions.length}',
-      );
-
-      debugPrint(
-        '[CruiseMode] Applying route result: ${result.coordinates.length} coords',
-      );
-      _applyRouteResult(result);
-      _lastGeneratedWasRoundTrip = _isRoundTrip;
-      _lastGeneratedSelectedKm = _isRoundTrip ? distance : null;
-      _lastGeneratedSelectedStyle = _selectedStyle;
-      _lastGeneratedAvoidHighways = _avoidHighways;
-      _lastGeneratedWaypointSignature = waypointSignature;
-
-      debugPrint('[CruiseMode] Drawing route...');
-      await _drawRoute(result.geometry, animateRouteDraw: true);
-
-      // Config einklappen + Info-Banner anzeigen damit man die Route sieht
-      if (mounted) {
-        debugPrint('[CruiseMode] Collapsing config, showing banner');
-        setState(() {
-          _configCollapsed = true;
-          _showRouteInfoBanner = true;
-        });
-      }
-      debugPrint('[CruiseMode] Route generation SUCCESS');
     } catch (e, stack) {
       debugPrint('[CruiseMode] Route generation failed: $e');
       debugPrintStack(
         label: '[CruiseMode] Route generation stacktrace',
         stackTrace: stack,
       );
-      final errorMessage = e is RouteServiceException
-          ? e.userMessage
+      Object errorForUi = e;
+      if (e is RouteServiceException && _isSearchInProgressError(e)) {
+        final sessionId = e.edgeMeta['search_session_id']?.toString();
+        if (sessionId != null && sessionId.isNotEmpty) {
+          try {
+            final polled = await _pollRoundTripSearchSession(sessionId);
+            if (polled != null) {
+              await _acceptGeneratedRouteResult(
+                result: polled,
+                startPosition: await _getStartCoordinates(),
+                distance: requestedDistance,
+                waypointSignature: requestedWaypointSignature,
+              );
+              return;
+            }
+            errorForUi = RouteServiceException(
+              type: RouteErrorType.noRoute,
+              userMessage:
+                  'Wir prüfen weitere Routenvorschläge im Hintergrund. Bitte versuche es gleich erneut.',
+              debugMessage:
+                  'Persistent search session polling timed out: $sessionId.',
+              edgeMeta: {
+                ...e.edgeMeta,
+                'response_code': 'search_session_timeout',
+                'search_in_progress': false,
+                'background_learning_queued': true,
+              },
+            );
+          } catch (pollError, pollStack) {
+            debugPrint(
+              '[CruiseMode] Search session polling failed: $pollError',
+            );
+            debugPrintStack(
+              label: '[CruiseMode] Search session polling stacktrace',
+              stackTrace: pollStack,
+            );
+            errorForUi = pollError;
+          }
+        }
+      }
+      final errorMessage = errorForUi is RouteServiceException
+          ? errorForUi.userMessage
           : 'Route konnte nicht generiert werden. Bitte versuche es erneut.';
-      _restoreGeneratedRouteFailureUi(previousUiState, errorMessage, error: e);
+      _restoreGeneratedRouteFailureUi(
+        previousUiState,
+        errorMessage,
+        error: errorForUi,
+      );
     } finally {
       // Hintergrund-Generierung wieder erlauben
       RouteCacheService.endUserGeneration();
-      _safeSetState(() => _isLoading = false);
+      _stopRouteLoadingUi();
     }
+  }
+
+  Future<RouteResult?> _pollRoundTripSearchSession(String sessionId) async {
+    const maxPolls = 30;
+    for (var poll = 0; poll < maxPolls; poll += 1) {
+      if (!mounted || _disposed || !_isLoading) return null;
+      await Future.delayed(const Duration(seconds: 4));
+      if (!mounted || _disposed || !_isLoading) return null;
+      final result = await _routeService.pollRoundTripSearchSession(sessionId);
+      if (result != null) return result;
+      if (mounted && !_disposed) {
+        setState(() {
+          _routeLoadingPhaseIndex = math.min(
+            math.max(_routeLoadingPhaseIndex, 2) + (poll % 4 == 0 ? 1 : 0),
+            _roundTripLoadingPhases.length - 1,
+          );
+        });
+      }
+    }
+    return null;
+  }
+
+  bool _isSearchInProgressError(RouteServiceException error) {
+    final code =
+        error.edgeMeta['response_code']?.toString() ??
+        error.edgeMeta['code']?.toString();
+    final status = error.edgeMeta['search_session_status']?.toString();
+    return code == 'search_in_progress' ||
+        error.edgeMeta['search_in_progress'] == true ||
+        status == 'queued' ||
+        status == 'running' ||
+        status == 'hydrating';
+  }
+
+  Future<void> _acceptGeneratedRouteResult({
+    required RouteResult result,
+    required geo.Position startPosition,
+    required int distance,
+    required String? waypointSignature,
+  }) async {
+    if (!mounted || _disposed) return;
+    final prepared = await _prepareRouteForPreviewStart(
+      result: result,
+      startPosition: startPosition,
+      isRoundTrip: _isRoundTrip,
+      avoidHighways: _avoidHighways,
+    );
+
+    const validator = RouteQualityValidator();
+    final actualKm = prepared.distanceKm ?? 0.0;
+    final targetKm = _isWaypointPlanning
+        ? actualKm
+        : _isRoundTrip
+        ? distance.toDouble()
+        : 0.0;
+    final quality = validator.validateQuality(
+      coordinates: prepared.coordinates,
+      isRoundTrip: _isRoundTrip,
+      targetDistanceKm: targetKm,
+      actualDistanceKm: actualKm,
+    );
+    final routeClassification = validator.classifyGeneratedRoute(
+      quality: quality,
+      isRoundTrip: _isRoundTrip,
+      coordinateCount: prepared.coordinates.length,
+      actualDistanceKm: actualKm,
+      targetDistanceKm: targetKm,
+    );
+    debugPrint(
+      '[CruiseMode] Route erhalten: '
+      'tier=${routeClassification.tier}, '
+      'score=${routeClassification.score.toStringAsFixed(1)}, '
+      'distance=${actualKm.toStringAsFixed(1)}km, '
+      'overlap=${quality.overlapPercent.toStringAsFixed(1)}%, '
+      'uturns=${quality.uturnPositions.length}',
+    );
+
+    debugPrint(
+      '[CruiseMode] Applying route result: ${prepared.coordinates.length} coords',
+    );
+    _applyRouteResult(prepared);
+    _lastGeneratedWasRoundTrip = _isRoundTrip;
+    _lastGeneratedSelectedKm = _isRoundTrip ? distance : null;
+    _lastGeneratedSelectedStyle = _selectedStyle;
+    _lastGeneratedAvoidHighways = _avoidHighways;
+    _lastGeneratedWaypointSignature = waypointSignature;
+
+    debugPrint('[CruiseMode] Drawing route...');
+    await _drawRoute(prepared.geometry, animateRouteDraw: true);
+
+    if (mounted) {
+      debugPrint('[CruiseMode] Collapsing config, showing banner');
+      setState(() {
+        _configCollapsed = true;
+        _showRouteInfoBanner = true;
+      });
+    }
+    debugPrint('[CruiseMode] Route generation SUCCESS');
   }
 
   void _applyRouteResult(RouteResult result) {
@@ -2923,6 +3121,7 @@ class _CruiseModePageState extends State<CruiseModePage>
         code == 'region_warming_up' ||
         code == 'route_generation_limited' ||
         code == 'route_quality_too_low' ||
+        code == 'search_session_timeout' ||
         code == 'detour_not_available' ||
         coverageStatus == 'empty' ||
         coverageStatus == 'thin' ||

@@ -80,6 +80,43 @@ Map<String, dynamic> _closedLoopResponse() {
   };
 }
 
+Map<String, dynamic> _sparseLongRoundTripResponse() {
+  final coords = <List<double>>[
+    [9.7471, 47.5162],
+    [9.95, 47.62],
+    [9.72, 47.78],
+    [9.52, 47.61],
+    [9.7471, 47.5162],
+  ];
+  return {
+    'route': {
+      'geometry': {'type': 'LineString', 'coordinates': coords},
+      'distance': 100000.0,
+      'duration': 7600.0,
+      'legs': [
+        {
+          'steps': [
+            {
+              'maneuver': {
+                'type': 'turn',
+                'modifier': 'left',
+                'location': coords[1],
+              },
+              'distance': 25000.0,
+              'name': 'Sparse Test',
+            },
+          ],
+        },
+      ],
+    },
+    'meta': {
+      'route_type': 'ROUND_TRIP',
+      'geometry_source': 'pre_hydration_fallback',
+      'final_overview': 'simplified',
+    },
+  };
+}
+
 class _CountingInvoker implements RouteEdgeInvoker {
   _CountingInvoker(this.response);
 
@@ -450,6 +487,8 @@ RoutePoolCoverageCheck _coverageCheck({
   bool poolHealthy = false,
   bool poolFull = false,
   bool bootstrapPending = false,
+  String? seedJobStatus,
+  String? seedJobError,
   double centerLat = 47.1548,
   double centerLng = 9.8220,
   double fallbackRadiusKm = 35,
@@ -526,7 +565,8 @@ RoutePoolCoverageCheck _coverageCheck({
     poolHealthy: poolHealthy,
     poolFull: poolFull,
     bootstrapPending: bootstrapPending,
-    seedJobStatus: bootstrapPending ? 'queued' : null,
+    seedJobStatus: seedJobStatus ?? (bootstrapPending ? 'queued' : null),
+    seedJobError: seedJobError,
   );
 }
 
@@ -736,6 +776,35 @@ void main() {
     // (maxAttempts=2 in route_service.dart), wenn der erste Kandidat nicht
     // ideal ist. Ohne Single-Flight wären es 4 Edge-Calls (2 × 2).
     expect(invoker.callCount, lessThanOrEqualTo(2));
+  });
+
+  test('ROUND_TRIP verwirft sparse 100-km Anzeige-Geometrie', () async {
+    service = RouteService(
+      invoker: _CountingInvoker(_sparseLongRoundTripResponse()),
+    );
+
+    await expectLater(
+      service.generateRoundTrip(
+        startPosition: _start(),
+        targetDistanceKm: 100,
+        mode: 'Sport Mode',
+        planningType: 'Zufall',
+        forceFreshVariant: true,
+      ),
+      throwsA(
+        isA<RouteServiceException>()
+            .having(
+              (error) => error.edgeMeta['response_code'],
+              'response_code',
+              'route_display_geometry_invalid',
+            )
+            .having(
+              (error) => error.edgeMeta['display_geometry_reject_reason'],
+              'display_geometry_reject_reason',
+              isNotNull,
+            ),
+      ),
+    );
   });
 
   test(
@@ -952,7 +1021,7 @@ void main() {
   test('nach einem Fehler kann direkt erneut frisch gesucht werden', () async {
     final flakyInvoker = _FlakyCountingInvoker(
       _closedLoopResponse(),
-      failuresBeforeSuccess: 3,
+      failuresBeforeSuccess: 4,
     );
     service = RouteService(invoker: flakyInvoker);
 
@@ -962,6 +1031,7 @@ void main() {
         targetDistanceKm: 50,
         mode: 'Sport Mode',
         planningType: 'Zufall',
+        avoidHighways: true,
         forceFreshVariant: true,
       ),
       throwsA(isA<RouteServiceException>()),
@@ -972,11 +1042,12 @@ void main() {
       targetDistanceKm: 50,
       mode: 'Sport Mode',
       planningType: 'Zufall',
+      avoidHighways: true,
       forceFreshVariant: true,
     );
 
     expect(recovered.coordinates, isNotEmpty);
-    expect(flakyInvoker.callCount, greaterThanOrEqualTo(4));
+    expect(flakyInvoker.callCount, greaterThanOrEqualTo(5));
   });
 
   test(
@@ -1265,6 +1336,49 @@ void main() {
       expect(error.edgeMeta['requested_distance_bucket'], 100);
       expect(error.edgeMeta['avoid_highways'], isTrue);
       expect(error.edgeMeta['exact_cell_required'], isTrue);
+    },
+  );
+
+  test(
+    'paused_budget Seed-Job wird in Testphase nicht als Budget-Popup gemappt',
+    () async {
+      final noRouteInvoker = _CountingInvoker({'route': null});
+      final poolService = _FakeRoutePoolService(
+        null,
+        coverageResponses: [
+          _coverageCheck(
+            cityCluster: 'Bludenz',
+            coverageStatus: 'empty',
+            seedJobStatus: 'paused_budget',
+            seedJobError: 'request_budget_exhausted',
+            bootstrapPending: true,
+          ),
+        ],
+      );
+      service = RouteService(
+        invoker: noRouteInvoker,
+        routePoolService: poolService,
+      );
+
+      late RouteServiceException error;
+      try {
+        await service.generateRoundTrip(
+          startPosition: _position(47.1548, 9.8220),
+          targetDistanceKm: 50,
+          mode: 'Sport Mode',
+          planningType: 'Zufall',
+          avoidHighways: true,
+          forceFreshVariant: true,
+          subscriptionTier: 'premium',
+        );
+      } on RouteServiceException catch (caught) {
+        error = caught;
+      }
+
+      expect(error.userMessage, isNot(contains('Heute wurden viele')));
+      expect(error.edgeMeta['real_budget_limited'], isFalse);
+      expect(error.edgeMeta['route_budget_paused'], isFalse);
+      expect(error.edgeMeta['next_action'], 'queued_for_healing');
     },
   );
 

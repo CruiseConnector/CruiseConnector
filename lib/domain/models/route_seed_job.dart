@@ -205,9 +205,10 @@ class RouteSeedJob {
           (json['verified_inserted_count'] as num?)?.toInt() ?? 0,
       candidateInsertedCount:
           (json['candidate_inserted_count'] as num?)?.toInt() ?? 0,
-      dailyAttemptBudget: (json['daily_attempt_budget'] as num?)?.toInt() ?? 12,
+      dailyAttemptBudget:
+          (json['daily_attempt_budget'] as num?)?.toInt() ?? 120,
       monthlyAttemptBudget:
-          (json['monthly_attempt_budget'] as num?)?.toInt() ?? 120,
+          (json['monthly_attempt_budget'] as num?)?.toInt() ?? 2000,
       dailyAttemptCount: (json['daily_attempt_count'] as num?)?.toInt() ?? 0,
       monthlyAttemptCount:
           (json['monthly_attempt_count'] as num?)?.toInt() ?? 0,
