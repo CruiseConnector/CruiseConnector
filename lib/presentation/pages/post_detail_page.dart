@@ -183,7 +183,7 @@ class _PostDetailPageState extends State<PostDetailPage> {
                         ],
                         const SizedBox(height: 12),
                         Text(
-                          'CruiseConnect',
+                          'Cruise Connector',
                           style: TextStyle(
                             color: Colors.white.withValues(alpha: 0.42),
                             fontSize: 12,

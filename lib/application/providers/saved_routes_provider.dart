@@ -28,7 +28,7 @@ class SavedRoutesProvider extends ChangeNotifier {
 
     // 2. Im Hintergrund mit Supabase synchronisieren
     try {
-      final remote = await SavedRoutesService.getUserRoutes();
+      final remote = await SavedRoutesService.getSavedRouteLibrary();
       _routes = remote;
       _isOffline = false;
       await _saveToCache(remote);

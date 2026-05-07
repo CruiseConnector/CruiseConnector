@@ -57,8 +57,8 @@ class _InteractivePostCardState extends State<InteractivePostCard> {
     final link = CruiseDeepLinks.postUri(widget.postId).toString();
     await shareText(
       context,
-      text: 'Post von ${widget.handle} auf CruiseConnect: $link',
-      subject: 'CruiseConnect Post',
+      text: 'Post von ${widget.handle} auf Cruise Connector: $link',
+      subject: 'Cruise Connector Post',
     );
   }
 

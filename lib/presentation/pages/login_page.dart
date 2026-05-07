@@ -6,6 +6,17 @@ import 'package:cruise_connect/core/input_limits.dart';
 import 'package:cruise_connect/data/services/auth_service.dart';
 import 'package:cruise_connect/presentation/pages/home_page.dart';
 
+const _authBackground = Color(0xFF0D141E);
+const _authSurface = Color(0xFF151E2A);
+const _authField = Color(0xFF1A2432);
+const _authBorder = Color(0xFF344156);
+const _authTextMuted = Color(0xFFB6BECC);
+const _brandMarkAsset = 'assets/branding/cruiseconnect_icon_foreground.png';
+const _brandLogoBoxWidth = 204.0;
+const _brandLogoBoxHeight = 102.0;
+const _brandLogoWidth = 150.0;
+const _brandLogoHeight = 62.0;
+
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
 
@@ -82,12 +93,25 @@ class _LoginPageState extends State<LoginPage> {
     final headerH = size.height * 0.35;
 
     return Scaffold(
-      backgroundColor: brand,
+      backgroundColor: _authBackground,
       body: Stack(
         children: [
-          ColoredBox(color: brand, child: const SizedBox.expand()),
+          DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [
+                  Color.lerp(brand, const Color(0xFF202A3A), 0.24)!,
+                  Color.lerp(brand, _authBackground, 0.58)!,
+                  _authBackground,
+                ],
+                stops: const [0, 0.52, 1],
+              ),
+            ),
+            child: const SizedBox.expand(),
+          ),
 
-          // Weißer unterer Bereich
           Positioned(
             top: headerH,
             bottom: 0,
@@ -95,7 +119,7 @@ class _LoginPageState extends State<LoginPage> {
             right: 0,
             child: Container(
               decoration: const BoxDecoration(
-                color: Colors.white,
+                color: _authSurface,
                 borderRadius: BorderRadius.vertical(top: Radius.circular(40)),
               ),
             ),
@@ -105,7 +129,7 @@ class _LoginPageState extends State<LoginPage> {
           SingleChildScrollView(
             child: Column(
               children: [
-                // ── Roter Header ─────────────────────────────────────────────
+                // ── Auth Header ──────────────────────────────────────────────
                 SizedBox(
                   height: headerH,
                   width: double.infinity,
@@ -126,7 +150,7 @@ class _LoginPageState extends State<LoginPage> {
                               ),
                               const Spacer(),
                               const Text(
-                                'CruiseConnect',
+                                'Cruise Connector',
                                 style: TextStyle(
                                   color: Colors.white70,
                                   fontSize: 16,
@@ -138,25 +162,42 @@ class _LoginPageState extends State<LoginPage> {
                             ],
                           ),
                         ),
-                        const SizedBox(height: 22),
+                        const SizedBox(height: 12),
                         Container(
-                          height: 120,
-                          width: 200,
+                          height: _brandLogoBoxHeight,
+                          width: _brandLogoBoxWidth,
                           decoration: BoxDecoration(
-                            color: Colors.black26,
-                            borderRadius: BorderRadius.circular(15),
+                            color: Color.lerp(_authField, brand, 0.10),
+                            borderRadius: BorderRadius.circular(24),
+                            border: Border.all(
+                              color: brand.withValues(alpha: 0.26),
+                            ),
                             boxShadow: [
                               BoxShadow(
-                                color: Colors.black.withValues(alpha: 0.2),
-                                blurRadius: 15,
+                                color: brand.withValues(alpha: 0.20),
+                                blurRadius: 26,
+                                spreadRadius: -8,
                                 offset: const Offset(0, 8),
+                              ),
+                              BoxShadow(
+                                color: Colors.white.withValues(alpha: 0.06),
+                                blurRadius: 16,
+                                spreadRadius: -12,
+                                offset: const Offset(0, -6),
                               ),
                             ],
                           ),
-                          child: const Icon(
-                            Icons.directions_car,
-                            size: 60,
-                            color: Colors.white,
+                          child: Center(
+                            child: SizedBox(
+                              width: _brandLogoWidth,
+                              height: _brandLogoHeight,
+                              child: Image.asset(
+                                _brandMarkAsset,
+                                fit: BoxFit.contain,
+                                alignment: Alignment.center,
+                                filterQuality: FilterQuality.high,
+                              ),
+                            ),
                           ),
                         ),
                       ],
@@ -164,11 +205,10 @@ class _LoginPageState extends State<LoginPage> {
                   ),
                 ),
 
-                // ── Weißes Formular ──────────────────────────────────────────
                 Container(
                   width: double.infinity,
                   decoration: const BoxDecoration(
-                    color: Colors.white,
+                    color: _authSurface,
                     borderRadius: BorderRadius.vertical(
                       top: Radius.circular(40),
                     ),
@@ -184,7 +224,7 @@ class _LoginPageState extends State<LoginPage> {
                           style: TextStyle(
                             fontSize: 26,
                             fontWeight: FontWeight.w900,
-                            color: Colors.black87,
+                            color: Colors.white,
                           ),
                         ),
                       ),
@@ -192,7 +232,7 @@ class _LoginPageState extends State<LoginPage> {
                       const Center(
                         child: Text(
                           'Melde dich an, um fortzufahren',
-                          style: TextStyle(fontSize: 15, color: Colors.grey),
+                          style: TextStyle(fontSize: 15, color: _authTextMuted),
                         ),
                       ),
                       const SizedBox(height: 30),
@@ -217,7 +257,7 @@ class _LoginPageState extends State<LoginPage> {
                         suffixIcon: IconButton(
                           icon: Icon(
                             _obscure ? Icons.visibility_off : Icons.visibility,
-                            color: Colors.grey,
+                            color: brand.withValues(alpha: 0.76),
                           ),
                           onPressed: () => setState(() => _obscure = !_obscure),
                         ),
@@ -233,15 +273,19 @@ class _LoginPageState extends State<LoginPage> {
                               vertical: 10,
                             ),
                             decoration: BoxDecoration(
-                              color: Colors.red.shade50,
+                              color: const Color(0xFF331316),
                               borderRadius: BorderRadius.circular(10),
-                              border: Border.all(color: Colors.red.shade200),
+                              border: Border.all(
+                                color: const Color(
+                                  0xFFFF6B6B,
+                                ).withValues(alpha: 0.42),
+                              ),
                             ),
                             child: Row(
                               children: [
                                 const Icon(
                                   Icons.error_outline,
-                                  color: Colors.red,
+                                  color: Color(0xFFFF6B6B),
                                   size: 18,
                                 ),
                                 const SizedBox(width: 8),
@@ -249,7 +293,7 @@ class _LoginPageState extends State<LoginPage> {
                                   child: Text(
                                     _errorMsg!,
                                     style: const TextStyle(
-                                      color: Colors.red,
+                                      color: Color(0xFFFFB4B4),
                                       fontSize: 13,
                                     ),
                                   ),
@@ -270,8 +314,10 @@ class _LoginPageState extends State<LoginPage> {
                           style: ElevatedButton.styleFrom(
                             backgroundColor: brand,
                             foregroundColor: Colors.white,
+                            disabledBackgroundColor: _authBorder,
+                            disabledForegroundColor: Colors.white54,
                             elevation: 5,
-                            shadowColor: brand.withValues(alpha: 0.4),
+                            shadowColor: brand.withValues(alpha: 0.28),
                             shape: const StadiumBorder(),
                           ),
                           child: _isLoading
@@ -331,7 +377,7 @@ class _LoginPageState extends State<LoginPage> {
       text,
       style: const TextStyle(
         fontWeight: FontWeight.bold,
-        color: Colors.black87,
+        color: Colors.white,
         fontSize: 14,
       ),
     ),
@@ -346,23 +392,57 @@ class _LoginPageState extends State<LoginPage> {
     Widget? suffixIcon,
     int? maxLength,
   }) {
+    final accent = AppAccentColors.accent;
     return Container(
       decoration: BoxDecoration(
-        color: Colors.grey[100],
+        color: _authField,
         borderRadius: BorderRadius.circular(15),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.16),
+            blurRadius: 14,
+            spreadRadius: -4,
+            offset: const Offset(0, 8),
+          ),
+        ],
       ),
       child: TextField(
         controller: controller,
         obscureText: obscure,
         keyboardType: keyboardType,
         maxLength: maxLength,
+        style: const TextStyle(
+          color: Colors.white,
+          fontWeight: FontWeight.w600,
+        ),
+        cursorColor: accent,
         decoration: InputDecoration(
           counterText: '',
-          prefixIcon: Icon(icon, color: Colors.grey[500], size: 20),
+          prefixIcon: Icon(
+            icon,
+            color: accent.withValues(alpha: 0.92),
+            size: 20,
+          ),
           suffixIcon: suffixIcon,
           hintText: hint,
-          hintStyle: TextStyle(color: Colors.grey[400]),
-          border: InputBorder.none,
+          hintStyle: const TextStyle(color: Color(0xFF8993A3)),
+          filled: true,
+          fillColor: _authField,
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(15),
+            borderSide: const BorderSide(color: _authBorder),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(15),
+            borderSide: BorderSide(
+              color: accent.withValues(alpha: 0.92),
+              width: 1.6,
+            ),
+          ),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(15),
+            borderSide: const BorderSide(color: _authBorder),
+          ),
           contentPadding: const EdgeInsets.symmetric(
             horizontal: 20,
             vertical: 16,

@@ -3,28 +3,55 @@ import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/presentation/pages/login_page.dart';
 // import 'package:cruise_connect/presentation/pages/register_page.dart';
 
+const _authBackground = Color(0xFF0D141E);
+const _authSurface = Color(0xFF151E2A);
+const _authCard = Color(0xFF1A2432);
+const _authBorder = Color(0xFF344156);
+const _authTextMuted = Color(0xFFB6BECC);
+const _brandMarkAsset = 'assets/branding/cruiseconnect_icon_foreground.png';
+const _googleMarkAsset = 'lib/images/google_mark.png';
+const _brandLogoBoxWidth = 204.0;
+const _brandLogoBoxHeight = 102.0;
+const _brandLogoWidth = 150.0;
+const _brandLogoHeight = 62.0;
+
 class WelcomePage extends StatelessWidget {
   const WelcomePage({super.key});
 
   @override
   Widget build(BuildContext context) {
     final size = MediaQuery.of(context).size;
+    final padding = MediaQuery.of(context).padding;
     final brand = AppAccentColors.accent;
 
-    // Feste Werte damit das Layout auf Web genauso aussieht wie auf Mobile
-    // (kein komischer Card-Stil — Original-Design überall)
-    final double iconAreaHeight = size.height.clamp(0, 700) * 0.32;
-    final double iconBoxHeight = iconAreaHeight * 0.55;
-    final double iconBoxWidth = (size.width * 0.65).clamp(0, 280);
+    // Feste Werte damit das Layout auf Web genauso aussieht wie auf Mobile.
+    final double iconAreaHeight = (size.height * 0.35).clamp(300.0, 330.0);
+    final double iconTopGap = (size.height * 0.08).clamp(60.0, 76.0);
+    final double contentGap =
+        (iconAreaHeight - padding.top - iconTopGap - _brandLogoBoxHeight + 48)
+            .clamp(104.0, 142.0);
 
     return Scaffold(
-      backgroundColor: brand,
+      backgroundColor: _authBackground,
       body: Stack(
         children: [
-          // ── Roter Hintergrund ────────────────────────────────────────────
-          Positioned.fill(child: ColoredBox(color: brand)),
+          Positioned.fill(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    Color.lerp(brand, const Color(0xFF202A3A), 0.24)!,
+                    Color.lerp(brand, _authBackground, 0.58)!,
+                    _authBackground,
+                  ],
+                  stops: const [0, 0.52, 1],
+                ),
+              ),
+            ),
+          ),
 
-          // ── Weißer Bereich (unten, abgerundet) ──────────────────────────
           Positioned(
             top: iconAreaHeight,
             bottom: 0,
@@ -32,7 +59,7 @@ class WelcomePage extends StatelessWidget {
             right: 0,
             child: Container(
               decoration: const BoxDecoration(
-                color: Colors.white,
+                color: _authSurface,
                 borderRadius: BorderRadius.only(
                   topLeft: Radius.circular(40),
                   topRight: Radius.circular(40),
@@ -43,56 +70,73 @@ class WelcomePage extends StatelessWidget {
 
           // ── Inhalt ───────────────────────────────────────────────────────
           SafeArea(
-            child: Center(
+            child: Align(
+              alignment: Alignment.topCenter,
               child: ConstrainedBox(
                 // Auf Web: max 460px breit — wirkt wie Mobile
                 constraints: const BoxConstraints(maxWidth: 460),
                 child: SingleChildScrollView(
                   child: Column(
                     children: [
-                      SizedBox(height: iconAreaHeight * 0.08),
+                      SizedBox(height: iconTopGap),
 
-                      // Auto-Icon Box (roter Hintergrund, kein dunkles Quadrat)
+                      // Brand mark sits in the red hero area, not down in the form.
                       Container(
-                        height: iconBoxHeight,
-                        width: iconBoxWidth,
+                        height: _brandLogoBoxHeight,
+                        width: _brandLogoBoxWidth,
                         decoration: BoxDecoration(
-                          color: brand,
+                          color: Color.lerp(_authCard, brand, 0.10),
                           borderRadius: BorderRadius.circular(24),
+                          border: Border.all(
+                            color: brand.withValues(alpha: 0.34),
+                          ),
                           boxShadow: [
                             BoxShadow(
-                              color: Colors.black.withValues(alpha: 0.18),
-                              blurRadius: 20,
-                              offset: const Offset(0, 10),
+                              color: brand.withValues(alpha: 0.22),
+                              blurRadius: 28,
+                              spreadRadius: -6,
+                              offset: const Offset(0, 14),
+                            ),
+                            BoxShadow(
+                              color: Colors.white.withValues(alpha: 0.06),
+                              blurRadius: 18,
+                              spreadRadius: -12,
+                              offset: const Offset(0, -8),
                             ),
                           ],
                         ),
-                        child: const Icon(
-                          Icons.directions_car_rounded,
-                          size: 80,
-                          color: Colors.white,
+                        child: Center(
+                          child: SizedBox(
+                            width: _brandLogoWidth,
+                            height: _brandLogoHeight,
+                            child: Image.asset(
+                              _brandMarkAsset,
+                              fit: BoxFit.contain,
+                              alignment: Alignment.center,
+                              filterQuality: FilterQuality.high,
+                            ),
+                          ),
                         ),
                       ),
 
-                      // Platzhalter: drückt Text in den weißen Bereich
-                      SizedBox(height: iconAreaHeight * 0.42),
+                      SizedBox(height: contentGap),
 
-                      // ── Weiße Sektion ─────────────────────────────────
+                      // ── Auth Sektion ──────────────────────────────────
                       const Text(
-                        'CruiseConnect',
+                        'Cruise Connector',
                         style: TextStyle(
                           fontSize: 32,
                           fontWeight: FontWeight.w900,
-                          color: Colors.black,
+                          color: Colors.white,
                           letterSpacing: -0.5,
                         ),
                       ),
                       const SizedBox(height: 8),
-                      Text(
+                      const Text(
                         'Willkommen zurück!',
                         style: TextStyle(
                           fontSize: 18,
-                          color: Colors.grey[600],
+                          color: _authTextMuted,
                           fontWeight: FontWeight.w500,
                         ),
                       ),
@@ -123,7 +167,7 @@ class WelcomePage extends StatelessWidget {
                         padding: const EdgeInsets.symmetric(horizontal: 40),
                         child: Row(
                           children: [
-                            Expanded(child: Divider(color: Colors.grey[300])),
+                            const Expanded(child: Divider(color: _authBorder)),
                             Padding(
                               padding: const EdgeInsets.symmetric(
                                 horizontal: 12,
@@ -131,12 +175,12 @@ class WelcomePage extends StatelessWidget {
                               child: Text(
                                 'oder anmelden mit',
                                 style: TextStyle(
-                                  color: Colors.grey[400],
+                                  color: _authTextMuted.withValues(alpha: 0.72),
                                   fontSize: 13,
                                 ),
                               ),
                             ),
-                            Expanded(child: Divider(color: Colors.grey[300])),
+                            const Expanded(child: Divider(color: _authBorder)),
                           ],
                         ),
                       ),
@@ -146,9 +190,24 @@ class WelcomePage extends StatelessWidget {
                       Row(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          _buildSocialButton('lib/images/google.jpg'),
+                          _buildSocialButton(
+                            label: 'Google Anmeldung folgt',
+                            child: Image.asset(
+                              _googleMarkAsset,
+                              width: 34,
+                              height: 34,
+                              filterQuality: FilterQuality.high,
+                            ),
+                          ),
                           const SizedBox(width: 20),
-                          _buildSocialButton('lib/images/Apple.png'),
+                          _buildSocialButton(
+                            label: 'Apple Anmeldung folgt',
+                            child: Icon(
+                              Icons.apple,
+                              size: 36,
+                              color: Colors.white.withValues(alpha: 0.9),
+                            ),
+                          ),
                         ],
                       ),
                       const SizedBox(height: 40),
@@ -179,9 +238,10 @@ class WelcomePage extends StatelessWidget {
             borderRadius: BorderRadius.circular(30),
             boxShadow: [
               BoxShadow(
-                color: AppAccentColors.accent.withValues(alpha: 0.4),
-                blurRadius: 15,
-                offset: const Offset(0, 8),
+                color: AppAccentColors.accent.withValues(alpha: 0.28),
+                blurRadius: 20,
+                spreadRadius: -6,
+                offset: const Offset(0, 10),
               ),
             ],
           ),
@@ -207,24 +267,40 @@ class WelcomePage extends StatelessWidget {
     );
   }
 
-  Widget _buildSocialButton(String path) {
-    return Container(
-      padding: const EdgeInsets.all(12),
-      height: 72,
-      width: 72,
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(15),
-        border: Border.all(color: Colors.grey.shade200),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.grey.withValues(alpha: 0.1),
-            blurRadius: 10,
-            offset: const Offset(0, 5),
+  Widget _buildSocialButton({required String label, required Widget child}) {
+    return Semantics(
+      label: label,
+      button: true,
+      enabled: false,
+      child: IgnorePointer(
+        child: Opacity(
+          opacity: 0.76,
+          child: Container(
+            height: 64,
+            width: 64,
+            decoration: BoxDecoration(
+              color: Color.lerp(_authCard, Colors.white, 0.02),
+              borderRadius: BorderRadius.circular(17),
+              border: Border.all(color: _authBorder),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.24),
+                  blurRadius: 16,
+                  spreadRadius: -8,
+                  offset: const Offset(0, 10),
+                ),
+                BoxShadow(
+                  color: Colors.white.withValues(alpha: 0.05),
+                  blurRadius: 12,
+                  spreadRadius: -10,
+                  offset: const Offset(0, -4),
+                ),
+              ],
+            ),
+            child: Center(child: child),
           ),
-        ],
+        ),
       ),
-      child: Image.asset(path),
     );
   }
 }

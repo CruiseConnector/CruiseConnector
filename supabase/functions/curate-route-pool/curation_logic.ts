@@ -74,6 +74,18 @@ export interface CurationDecision {
 
 const negativeTagMarkers = [
   "sackgasse",
+  "zu kuenstlich",
+  "zu künstlich",
+  "künstlich",
+  "kuenstlich",
+  "zu kurz",
+  "zu lang",
+  "zu kurz/lang",
+  "zu kurz lang",
+  "kurz/lang",
+  "wiederholt",
+  "duplicate",
+  "duplikat",
   "falscher start",
   "falsche start",
   "autobahn trotz aus",
@@ -283,7 +295,9 @@ export function deriveCoverageStatus(args: {
         ((args.acceptableReserveLimitPercent ?? 25) / 100),
     ),
   );
-  if (goodEnough < args.minVerifiedCount || args.acceptableCount > acceptableLimit) {
+  if (
+    goodEnough < args.minVerifiedCount || args.acceptableCount > acceptableLimit
+  ) {
     return "quality_thin";
   }
 
@@ -320,7 +334,9 @@ export function hasHardRouteWarning(
   payload: Record<string, unknown> | null | undefined,
 ): boolean {
   if (!payload) return false;
-  if (payload.motorwayViolation === true || payload.motorway_violation === true) {
+  if (
+    payload.motorwayViolation === true || payload.motorway_violation === true
+  ) {
     return true;
   }
   const warnings = Array.isArray(payload.hard_warnings)

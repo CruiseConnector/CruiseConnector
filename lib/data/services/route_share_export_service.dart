@@ -171,7 +171,7 @@ class RouteShareExportService {
     );
     _drawText(
       canvas,
-      'CruiseConnect',
+      'Cruise Connector',
       const Offset(82, 618),
       maxWidth: 220,
       fontSize: 17,

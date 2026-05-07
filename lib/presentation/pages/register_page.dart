@@ -7,6 +7,13 @@ import 'package:cruise_connect/core/input_limits.dart';
 import 'package:cruise_connect/data/services/auth_service.dart';
 import 'package:cruise_connect/presentation/pages/login_page.dart';
 
+const _authBackground = Color(0xFF0D141E);
+const _authSurface = Color(0xFF151E2A);
+const _authField = Color(0xFF1A2432);
+const _authBorder = Color(0xFF344156);
+const _authTextMuted = Color(0xFFB6BECC);
+const _brandMarkAsset = 'assets/branding/cruiseconnect_icon_foreground.png';
+
 class RegisterPage extends StatefulWidget {
   const RegisterPage({super.key});
 
@@ -75,7 +82,11 @@ class _RegisterPageState extends State<RegisterPage> {
         context: context,
         barrierDismissible: false,
         builder: (_) => AlertDialog(
+          backgroundColor: _authSurface,
           shape: RoundedRectangleBorder(
+            side: BorderSide(
+              color: AppAccentColors.accent.withValues(alpha: 0.28),
+            ),
             borderRadius: BorderRadius.circular(20),
           ),
           title: Row(
@@ -85,11 +96,15 @@ class _RegisterPageState extends State<RegisterPage> {
                 color: AppAccentColors.accent,
               ),
               const SizedBox(width: 10),
-              const Text('E-Mail bestätigen'),
+              const Text(
+                'E-Mail bestätigen',
+                style: TextStyle(color: Colors.white),
+              ),
             ],
           ),
           content: Text(
             'Wir haben eine Bestätigungs-E-Mail an $email gesendet.\n\nBitte öffne die E-Mail und klicke auf den Link, um dein Konto zu aktivieren.',
+            style: const TextStyle(color: _authTextMuted),
           ),
           actions: [
             TextButton(
@@ -145,10 +160,24 @@ class _RegisterPageState extends State<RegisterPage> {
     final headerH = size.height * 0.28;
 
     return Scaffold(
-      backgroundColor: brand,
+      backgroundColor: _authBackground,
       body: Stack(
         children: [
-          ColoredBox(color: brand, child: const SizedBox.expand()),
+          DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [
+                  Color.lerp(brand, const Color(0xFF202A3A), 0.24)!,
+                  Color.lerp(brand, _authBackground, 0.58)!,
+                  _authBackground,
+                ],
+                stops: const [0, 0.52, 1],
+              ),
+            ),
+            child: const SizedBox.expand(),
+          ),
 
           Positioned(
             top: headerH,
@@ -157,7 +186,7 @@ class _RegisterPageState extends State<RegisterPage> {
             right: 0,
             child: Container(
               decoration: const BoxDecoration(
-                color: Colors.white,
+                color: _authSurface,
                 borderRadius: BorderRadius.vertical(top: Radius.circular(40)),
               ),
             ),
@@ -187,7 +216,7 @@ class _RegisterPageState extends State<RegisterPage> {
                               ),
                               const Spacer(),
                               const Text(
-                                'CruiseConnect',
+                                'Cruise Connector',
                                 style: TextStyle(
                                   color: Colors.white70,
                                   fontSize: 16,
@@ -204,20 +233,30 @@ class _RegisterPageState extends State<RegisterPage> {
                           height: 90,
                           width: 90,
                           decoration: BoxDecoration(
-                            color: Colors.black26,
-                            shape: BoxShape.circle,
+                            color: Color.lerp(_authField, brand, 0.10),
+                            borderRadius: BorderRadius.circular(24),
+                            border: Border.all(
+                              color: brand.withValues(alpha: 0.26),
+                            ),
                             boxShadow: [
                               BoxShadow(
-                                color: Colors.black.withValues(alpha: 0.2),
-                                blurRadius: 12,
+                                color: brand.withValues(alpha: 0.20),
+                                blurRadius: 22,
+                                spreadRadius: -8,
                                 offset: const Offset(0, 6),
                               ),
                             ],
                           ),
-                          child: const Icon(
-                            Icons.directions_car,
-                            size: 48,
-                            color: Colors.white,
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 17,
+                              vertical: 24,
+                            ),
+                            child: Image.asset(
+                              _brandMarkAsset,
+                              fit: BoxFit.contain,
+                              filterQuality: FilterQuality.high,
+                            ),
                           ),
                         ),
                       ],
@@ -229,7 +268,7 @@ class _RegisterPageState extends State<RegisterPage> {
                 Container(
                   width: double.infinity,
                   decoration: const BoxDecoration(
-                    color: Colors.white,
+                    color: _authSurface,
                     borderRadius: BorderRadius.vertical(
                       top: Radius.circular(40),
                     ),
@@ -245,15 +284,15 @@ class _RegisterPageState extends State<RegisterPage> {
                           style: TextStyle(
                             fontSize: 26,
                             fontWeight: FontWeight.w900,
-                            color: Colors.black87,
+                            color: Colors.white,
                           ),
                         ),
                       ),
                       const SizedBox(height: 5),
                       const Center(
                         child: Text(
-                          'Werde Teil der CruiseConnect Community',
-                          style: TextStyle(fontSize: 14, color: Colors.grey),
+                          'Werde Teil der Cruise Connector Community',
+                          style: TextStyle(fontSize: 14, color: _authTextMuted),
                         ),
                       ),
                       const SizedBox(height: 28),
@@ -288,7 +327,7 @@ class _RegisterPageState extends State<RegisterPage> {
                         suffixIcon: IconButton(
                           icon: Icon(
                             _obscure ? Icons.visibility_off : Icons.visibility,
-                            color: Colors.grey,
+                            color: brand.withValues(alpha: 0.76),
                           ),
                           onPressed: () => setState(() => _obscure = !_obscure),
                         ),
@@ -307,7 +346,7 @@ class _RegisterPageState extends State<RegisterPage> {
                             _obscureConf
                                 ? Icons.visibility_off
                                 : Icons.visibility,
-                            color: Colors.grey,
+                            color: brand.withValues(alpha: 0.76),
                           ),
                           onPressed: () =>
                               setState(() => _obscureConf = !_obscureConf),
@@ -323,15 +362,19 @@ class _RegisterPageState extends State<RegisterPage> {
                               vertical: 10,
                             ),
                             decoration: BoxDecoration(
-                              color: Colors.red.shade50,
+                              color: const Color(0xFF331316),
                               borderRadius: BorderRadius.circular(10),
-                              border: Border.all(color: Colors.red.shade200),
+                              border: Border.all(
+                                color: const Color(
+                                  0xFFFF6B6B,
+                                ).withValues(alpha: 0.42),
+                              ),
                             ),
                             child: Row(
                               children: [
                                 const Icon(
                                   Icons.error_outline,
-                                  color: Colors.red,
+                                  color: Color(0xFFFF6B6B),
                                   size: 18,
                                 ),
                                 const SizedBox(width: 8),
@@ -339,7 +382,7 @@ class _RegisterPageState extends State<RegisterPage> {
                                   child: Text(
                                     _errorMsg!,
                                     style: const TextStyle(
-                                      color: Colors.red,
+                                      color: Color(0xFFFFB4B4),
                                       fontSize: 13,
                                     ),
                                   ),
@@ -359,8 +402,10 @@ class _RegisterPageState extends State<RegisterPage> {
                           style: ElevatedButton.styleFrom(
                             backgroundColor: brand,
                             foregroundColor: Colors.white,
+                            disabledBackgroundColor: _authBorder,
+                            disabledForegroundColor: Colors.white54,
                             elevation: 5,
-                            shadowColor: brand.withValues(alpha: 0.4),
+                            shadowColor: brand.withValues(alpha: 0.28),
                             shape: const StadiumBorder(),
                           ),
                           child: _isLoading
@@ -396,7 +441,7 @@ class _RegisterPageState extends State<RegisterPage> {
                             text: TextSpan(
                               text: 'Bereits ein Konto? ',
                               style: const TextStyle(
-                                color: Colors.grey,
+                                color: _authTextMuted,
                                 fontSize: 14,
                               ),
                               children: [
@@ -430,7 +475,7 @@ class _RegisterPageState extends State<RegisterPage> {
       text,
       style: const TextStyle(
         fontWeight: FontWeight.bold,
-        color: Colors.black87,
+        color: Colors.white,
         fontSize: 14,
       ),
     ),
@@ -446,10 +491,19 @@ class _RegisterPageState extends State<RegisterPage> {
     int? maxLength,
     List<TextInputFormatter>? inputFormatters,
   }) {
+    final accent = AppAccentColors.accent;
     return Container(
       decoration: BoxDecoration(
-        color: Colors.grey[100],
+        color: _authField,
         borderRadius: BorderRadius.circular(15),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.16),
+            blurRadius: 14,
+            spreadRadius: -4,
+            offset: const Offset(0, 8),
+          ),
+        ],
       ),
       child: TextField(
         controller: controller,
@@ -457,13 +511,38 @@ class _RegisterPageState extends State<RegisterPage> {
         keyboardType: keyboardType,
         maxLength: maxLength,
         inputFormatters: inputFormatters,
+        style: const TextStyle(
+          color: Colors.white,
+          fontWeight: FontWeight.w600,
+        ),
+        cursorColor: accent,
         decoration: InputDecoration(
           counterText: '',
-          prefixIcon: Icon(icon, color: Colors.grey[500], size: 20),
+          prefixIcon: Icon(
+            icon,
+            color: accent.withValues(alpha: 0.92),
+            size: 20,
+          ),
           suffixIcon: suffixIcon,
           hintText: hint,
-          hintStyle: TextStyle(color: Colors.grey[400]),
-          border: InputBorder.none,
+          hintStyle: const TextStyle(color: Color(0xFF8993A3)),
+          filled: true,
+          fillColor: _authField,
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(15),
+            borderSide: const BorderSide(color: _authBorder),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(15),
+            borderSide: BorderSide(
+              color: accent.withValues(alpha: 0.92),
+              width: 1.6,
+            ),
+          ),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(15),
+            borderSide: const BorderSide(color: _authBorder),
+          ),
           contentPadding: const EdgeInsets.symmetric(
             horizontal: 20,
             vertical: 16,

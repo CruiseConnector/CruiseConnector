@@ -7,7 +7,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Cruise Connect</string>
+	<string>Cruise Connector</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -15,7 +15,7 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>cruise_connect</string>
+	<string>Cruise Connector</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -42,15 +42,15 @@
 	<key>MBXAccessToken</key>
 	<string>pk.eyJ1IjoibHVjd3F6IiwiYSI6ImNtbHdnMXFpdjBjZTAzZXF3NDgyYmZ3c2oifQ.upeLKXUnY5z6Pe0JiuznEQ</string>
 	<key>NSCameraUsageDescription</key>
-	<string>CruiseConnect nutzt die Kamera, damit du ein Profilbild aufnehmen kannst.</string>
+	<string>Cruise Connector nutzt die Kamera, damit du ein Profilbild aufnehmen kannst.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-	<string>CruiseConnect benötigt deinen Standort auch im Hintergrund, um Gruppenmitglieder live auf der Karte zu zeigen.</string>
+	<string>Cruise Connector benötigt deinen Standort auch im Hintergrund, um Gruppenmitglieder live auf der Karte zu zeigen.</string>
 	<key>NSLocationAlwaysUsageDescription</key>
-	<string>CruiseConnect benötigt deinen Standort auch im Hintergrund, um Gruppenmitglieder live auf der Karte zu zeigen.</string>
+	<string>Cruise Connector benötigt deinen Standort auch im Hintergrund, um Gruppenmitglieder live auf der Karte zu zeigen.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>CruiseConnect zeigt dir deine Position auf der Karte und nutzt GPS zur Navigation.</string>
+	<string>Cruise Connector zeigt dir deine Position auf der Karte und nutzt GPS zur Navigation.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>CruiseConnect liest Bilder aus deiner Galerie, damit du ein Profilbild auswählen kannst.</string>
+	<string>Cruise Connector liest Bilder aus deiner Galerie, damit du ein Profilbild auswählen kannst.</string>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 	<key>UIBackgroundModes</key>

@@ -1698,7 +1698,7 @@ class _ProfilePageState extends State<ProfilePage>
         [file],
         text:
             '${route.name ?? route.displayStyleLabel} · ${route.formattedDistance}',
-        subject: 'CruiseConnect Route',
+        subject: 'Cruise Connector Route',
       );
     } catch (e) {
       if (!mounted) return;

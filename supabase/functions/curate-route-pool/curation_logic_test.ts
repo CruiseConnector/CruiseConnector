@@ -89,6 +89,28 @@ Deno.test("Schlechte Route mit negativen Tags wird nicht promoted", () => {
   assertEquals(decision.reason, "negative_tags");
 });
 
+Deno.test("Alle UI-Vermeidungs-Tags zaehlen als negative Ranking-Signale", () => {
+  const summary = summarizeRatings([
+    {
+      routeFingerprint: "candidate-good",
+      rating: 5,
+      completionPercent: 95,
+      tags: ["zu künstlich", "zu kurz/lang", "wiederholt"],
+    },
+  ]);
+
+  assertEquals(summary.negativeTagCount, 3);
+
+  const decision = shouldPromoteCandidate(baseCandidate, summary, {
+    activeVerifiedCount: 2,
+    maxPoolSize: 20,
+    existingPoolFingerprints: new Set(),
+  });
+
+  assertEquals(decision.accepted, false);
+  assertEquals(decision.reason, "negative_tags");
+});
+
 Deno.test("Verworfene User-Routen bleiben Candidate und werden nicht promoted", () => {
   const ratings = summarizeRatings([
     {

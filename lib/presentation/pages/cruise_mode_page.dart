@@ -13,9 +13,12 @@ import 'package:flutter/services.dart' show HapticFeedback;
 import 'package:geolocator/geolocator.dart' as geo;
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:provider/provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:cruise_connect/core/constants.dart';
 
+import 'package:cruise_connect/application/providers/route_bookmark_provider.dart';
+import 'package:cruise_connect/application/providers/saved_routes_provider.dart';
 import 'package:cruise_connect/data/services/web_position_smoother.dart';
 import 'package:cruise_connect/data/services/native_position_smoother.dart';
 import 'package:cruise_connect/data/services/geocoding_service.dart';
@@ -935,9 +938,7 @@ class _CruiseModePageState extends State<CruiseModePage>
         .join(';');
   }
 
-  List<LatLng> _deliveredRoundTripWaypointsFromMeta(
-    Map<String, dynamic> meta,
-  ) {
+  List<LatLng> _deliveredRoundTripWaypointsFromMeta(Map<String, dynamic> meta) {
     final raw =
         meta['delivered_waypoints'] ??
         meta['delivered_required_waypoints'] ??
@@ -2387,7 +2388,7 @@ class _CruiseModePageState extends State<CruiseModePage>
                       replacing: _replaceRoundTripWaypointIndex == i,
                     ),
                   ),
-              ),
+                ),
             ],
           ),
         if (pointToPointDestination != null)
@@ -2992,7 +2993,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       final openSettings = await _showLocationPermissionDialog(
         title: 'Standort blockiert',
         message:
-            'Bitte erlaube CruiseConnect den Standortzugriff in den App-Einstellungen.',
+            'Bitte erlaube Cruise Connector den Standortzugriff in den App-Einstellungen.',
         confirmLabel: 'Einstellungen öffnen',
       );
       if (openSettings) {
@@ -3021,7 +3022,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     final shouldAskForBackground = await _showLocationPermissionDialog(
       title: 'Standort im Hintergrund?',
       message:
-          'Damit deine Gruppenfahrt weiterläuft, wenn du z. B. zu Spotify wechselst, braucht CruiseConnect die Freigabe "Immer erlauben".',
+          'Damit deine Gruppenfahrt weiterläuft, wenn du z. B. zu Spotify wechselst, braucht Cruise Connector die Freigabe "Immer erlauben".',
       confirmLabel: Platform.isIOS || Platform.isMacOS
           ? 'Einstellungen öffnen'
           : 'Jetzt erlauben',
@@ -3340,9 +3341,7 @@ class _CruiseModePageState extends State<CruiseModePage>
           targetDistanceKm: distance,
           mode: _selectedStyle,
           planningType: _planningType,
-          waypointOrigin: _isWaypointPlanning
-              ? _roundTripWaypointOrigin
-              : null,
+          waypointOrigin: _isWaypointPlanning ? _roundTripWaypointOrigin : null,
           waypointSeedAttempt: _isWaypointPlanning
               ? _roundTripWaypointSeedAttempt
               : null,
@@ -5109,9 +5108,9 @@ class _CruiseModePageState extends State<CruiseModePage>
         distanceFilter: 1,
         intervalDuration: const Duration(seconds: 2),
         foregroundNotificationConfig: geo.ForegroundNotificationConfig(
-          notificationTitle: 'CruiseConnect Navigation',
+          notificationTitle: 'Cruise Connector Navigation',
           notificationText: notificationText,
-          notificationChannelName: 'CruiseConnect Navigation',
+          notificationChannelName: 'Cruise Connector Navigation',
           enableWakeLock: true,
           setOngoing: true,
         ),
@@ -6655,6 +6654,10 @@ class _CruiseModePageState extends State<CruiseModePage>
           completedAtEnd: completed,
           groupId: widget.groupId,
         );
+        if (mounted) {
+          unawaited(context.read<RouteBookmarkProvider>().loadSavedRoutes());
+          unawaited(context.read<SavedRoutesProvider>().loadRoutes());
+        }
         await RouteRatingService.saveRating(
           result: adjustedResult,
           rating: rating,

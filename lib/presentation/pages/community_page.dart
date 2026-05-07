@@ -6,6 +6,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/application/providers/community_provider.dart';
 import 'package:cruise_connect/application/providers/route_bookmark_provider.dart';
+import 'package:cruise_connect/application/providers/saved_routes_provider.dart';
 import 'package:cruise_connect/core/deep_links.dart';
 import 'package:cruise_connect/core/input_limits.dart';
 import 'package:cruise_connect/data/services/gamification_service.dart';
@@ -997,7 +998,7 @@ class _CommunityPageState extends State<CommunityPage>
               ),
               const SizedBox(height: 6),
               const Text(
-                'Noch mehr Fahrer? Lade deine Crew zu CruiseConnect ein.',
+                'Noch mehr Fahrer? Lade deine Crew zu Cruise Connector ein.',
                 style: TextStyle(color: Colors.grey, fontSize: 13),
               ),
               const SizedBox(height: 12),
@@ -1038,8 +1039,8 @@ class _CommunityPageState extends State<CommunityPage>
     await shareText(
       context,
       text:
-          'Komm mit auf CruiseConnect — Routen planen, cruisen & sharen. $link',
-      subject: 'Join CruiseConnect',
+          'Komm mit auf Cruise Connector — Routen planen, cruisen & sharen. $link',
+      subject: 'Join Cruise Connector',
     );
   }
 
@@ -1056,8 +1057,8 @@ class _CommunityPageState extends State<CommunityPage>
     final link = CruiseDeepLinks.postUri(postId.toString()).toString();
     await shareText(
       context,
-      text: 'Post von @$name auf CruiseConnect: $link',
-      subject: 'CruiseConnect Post',
+      text: 'Post von @$name auf Cruise Connector: $link',
+      subject: 'Cruise Connector Post',
     );
   }
 
@@ -3246,6 +3247,8 @@ class _RouteBookmarkButtonState extends State<_RouteBookmarkButton> {
         final saved = await context.read<RouteBookmarkProvider>().toggle(
           widget.routeId,
         );
+        if (!context.mounted || saved == null) return;
+        await context.read<SavedRoutesProvider>().loadRoutes();
         if (!context.mounted || saved != true) return;
         final gamResult = await GamificationService.calculateAndSync();
         if (!context.mounted || gamResult.newBadges.isEmpty) return;

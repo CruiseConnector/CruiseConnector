@@ -154,7 +154,7 @@ class _RoutingOnboardingSheetState extends State<RoutingOnboardingSheet> {
                                   icon: CupertinoIcons.arrow_2_circlepath,
                                   title: 'Was macht der Rundkurs-Modus?',
                                   body:
-                                      'CruiseConnect schlägt dir eine Rundroute vor, die ungefähr zur gewählten Länge, deinem Stil und deiner Autobahn-Einstellung passt. Start und Ende liegen wieder in deiner Nähe. Die Strecke ist immer ein Vorschlag und kann sich durch Verkehr, Sperren oder lokale Regeln in der Realität unterscheiden.',
+                                      'Cruise Connector schlägt dir eine Rundroute vor, die ungefähr zur gewählten Länge, deinem Stil und deiner Autobahn-Einstellung passt. Start und Ende liegen wieder in deiner Nähe. Die Strecke ist immer ein Vorschlag und kann sich durch Verkehr, Sperren oder lokale Regeln in der Realität unterscheiden.',
                                   accent: accent,
                                 ),
                                 _ModeGrid(accent: accent),
@@ -321,7 +321,7 @@ class _IntroHero extends StatelessWidget {
         border: Border.all(color: accent.withValues(alpha: 0.30)),
       ),
       child: const Text(
-        'Routen in CruiseConnect sind intelligente Vorschläge. Du entscheidest immer selbst, ob eine Straße, ein Manöver oder eine Situation sicher und erlaubt ist.',
+        'Routen in Cruise Connector sind intelligente Vorschläge. Du entscheidest immer selbst, ob eine Straße, ein Manöver oder eine Situation sicher und erlaubt ist.',
         style: TextStyle(
           color: Colors.white,
           fontSize: 16,

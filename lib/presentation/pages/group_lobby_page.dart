@@ -29,6 +29,7 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
   bool _loading = true;
   bool _starting = false;
   bool _enteringNavigation = false;
+  final Set<String> _busyRoleUpdates = {};
 
   List<Map<String, dynamic>> _pendingRequests = [];
 
@@ -152,52 +153,158 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
   }
 
   Future<void> _changeMyRideRole(RideRole role) async {
+    final key = 'ride:$_myId';
+    if (_busyRoleUpdates.contains(key) || _myRideRole == role) return;
+    _busyRoleUpdates.add(key);
+    final previous = _applyMemberLocally(_myId, rideRole: role);
     try {
       await CruiseGroupService.updateRideRole(
         groupId: widget.groupId,
         userId: _myId,
         rideRole: role,
       );
-      await _load();
     } catch (e) {
+      _restoreGroup(previous);
       if (mounted) {
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(SnackBar(content: Text('Fehler: $e')));
       }
+    } finally {
+      _busyRoleUpdates.remove(key);
     }
   }
 
   Future<void> _promoteToOwner(GroupMember m) async {
     if (!_hasOwnerPower) return;
-    await CruiseGroupService.updateMemberRole(
-      groupId: widget.groupId,
-      userId: m.userId,
-      role: MemberRole.owner,
-    );
-    await _load();
+    await _changeMemberRoleOptimistically(m, MemberRole.owner);
   }
 
   Future<void> _demoteOwner(GroupMember m) async {
     if (!_amCreator || m.userId == _group?.ownerId) return;
-    await CruiseGroupService.updateMemberRole(
-      groupId: widget.groupId,
-      userId: m.userId,
-      role: m.rideRole == RideRole.driver
-          ? MemberRole.driver
-          : MemberRole.passenger,
+    await _changeMemberRoleOptimistically(
+      m,
+      m.rideRole == RideRole.driver ? MemberRole.driver : MemberRole.passenger,
     );
-    await _load();
   }
 
   Future<void> _changeMemberRideRole(GroupMember m, RideRole role) async {
     if (!_hasOwnerPower && m.userId != _myId) return;
-    await CruiseGroupService.updateRideRole(
-      groupId: widget.groupId,
-      userId: m.userId,
-      rideRole: role,
+    final key = 'ride:${m.userId}';
+    if (_busyRoleUpdates.contains(key) || m.rideRole == role) return;
+    _busyRoleUpdates.add(key);
+    final previous = _applyMemberLocally(m.userId, rideRole: role);
+    try {
+      await CruiseGroupService.updateRideRole(
+        groupId: widget.groupId,
+        userId: m.userId,
+        rideRole: role,
+      );
+    } catch (e) {
+      _restoreGroup(previous);
+      rethrow;
+    } finally {
+      _busyRoleUpdates.remove(key);
+    }
+  }
+
+  Future<void> _changeMemberRoleOptimistically(
+    GroupMember member,
+    MemberRole role,
+  ) async {
+    final key = 'member:${member.userId}';
+    if (_busyRoleUpdates.contains(key) || member.role == role) return;
+    _busyRoleUpdates.add(key);
+    final previous = _applyMemberLocally(member.userId, role: role);
+    try {
+      await CruiseGroupService.updateMemberRole(
+        groupId: widget.groupId,
+        userId: member.userId,
+        role: role,
+      );
+    } catch (e) {
+      _restoreGroup(previous);
+      rethrow;
+    } finally {
+      _busyRoleUpdates.remove(key);
+    }
+  }
+
+  CruiseGroup? _applyMemberLocally(
+    String userId, {
+    MemberRole? role,
+    RideRole? rideRole,
+  }) {
+    final current = _group;
+    if (current == null || !mounted) return null;
+    final nextMembers = current.members.map((member) {
+      if (member.userId != userId) return member;
+      return _copyMember(
+        member,
+        role: role ?? member.role,
+        rideRole: _effectiveRideRole(member, role: role, rideRole: rideRole),
+      );
+    }).toList();
+    setState(() => _group = _copyGroup(current, members: nextMembers));
+    return current;
+  }
+
+  RideRole _effectiveRideRole(
+    GroupMember member, {
+    MemberRole? role,
+    RideRole? rideRole,
+  }) {
+    if (rideRole != null) return rideRole;
+    if (role == MemberRole.driver) return RideRole.driver;
+    if (role == MemberRole.passenger) return RideRole.passenger;
+    return member.rideRole;
+  }
+
+  void _restoreGroup(CruiseGroup? previous) {
+    if (!mounted || previous == null) return;
+    setState(() => _group = previous);
+  }
+
+  GroupMember _copyMember(
+    GroupMember member, {
+    required MemberRole role,
+    required RideRole rideRole,
+  }) {
+    return GroupMember(
+      id: member.id,
+      groupId: member.groupId,
+      userId: member.userId,
+      role: role,
+      rideRole: rideRole,
+      createdAt: member.createdAt,
+      currentLat: member.currentLat,
+      currentLng: member.currentLng,
+      lastUpdatedAt: member.lastUpdatedAt,
+      displayName: member.displayName,
+      avatarUrl: member.avatarUrl,
     );
-    await _load();
+  }
+
+  CruiseGroup _copyGroup(
+    CruiseGroup group, {
+    required List<GroupMember> members,
+  }) {
+    return CruiseGroup(
+      id: group.id,
+      name: group.name,
+      ownerId: group.ownerId,
+      isPublic: group.isPublic,
+      isActive: group.isActive,
+      maxPeople: group.maxPeople,
+      createdAt: group.createdAt,
+      description: group.description,
+      startTime: group.startTime,
+      activatedAt: group.activatedAt,
+      routeData: group.routeData,
+      startLocation: group.startLocation,
+      inviteCode: group.inviteCode,
+      members: members,
+    );
   }
 
   Future<void> _removeMember(GroupMember m) async {

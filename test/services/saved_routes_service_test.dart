@@ -440,5 +440,81 @@ void main() {
         isTrue,
       );
     });
+
+    test(
+      'savedRouteCopiesFromUserRoutes behaelt gefahren gespeicherte Routen in der Library',
+      () {
+        final drivenSavedRoute = SavedRoute.fromJson({
+          'id': 'route-driven-saved',
+          'created_at': '2025-01-18T10:00:00.000Z',
+          'style': 'Sport Mode',
+          'distance_actual': 23.0,
+          'distance_target': 50,
+          'driven_km': 23.0,
+          'geometry': {
+            'type': 'LineString',
+            'coordinates': [
+              [11.58, 48.13],
+              [11.62, 48.17],
+            ],
+          },
+        });
+
+        final libraryCopies = SavedRoutesService.savedRouteCopiesFromUserRoutes(
+          [drivenSavedRoute],
+        );
+
+        expect(libraryCopies, hasLength(1));
+        expect(libraryCopies.single.id, equals('route-driven-saved'));
+        expect(libraryCopies.single.isDrivenSession, isTrue);
+      },
+    );
+
+    test(
+      'buildExistingRouteInsertForTest speichert Community-Kopie ohne Drive-XP-Felder',
+      () {
+        final route = SavedRoute.fromJson({
+          'id': 'route-community',
+          'created_at': '2025-01-18T10:00:00.000Z',
+          'style': 'Entdecker',
+          'distance_actual': 41.6,
+          'distance_target': 50,
+          'duration_seconds': 4700,
+          'driven_km': 41.6,
+          'route_source': 'pool',
+          'route_fingerprint': 'fp-community',
+          'quality_tier': 'good',
+          'route_meta': {'curve_count': 36},
+          'geometry': {
+            'type': 'LineString',
+            'coordinates': [
+              [9.74, 47.50],
+              [9.78, 47.53],
+            ],
+          },
+        });
+
+        final row = SavedRoutesService.buildExistingRouteInsertForTest(
+          userId: 'user-1',
+          route: route,
+        );
+
+        expect(row['user_id'], equals('user-1'));
+        expect(row['source_route_id'], equals('route-community'));
+        expect(row['route_source'], equals('pool'));
+        expect(row['route_fingerprint'], equals('fp-community'));
+        expect(row['quality_tier'], equals('good'));
+        expect(row['distance_actual'], equals(41.6));
+        expect(row['duration_seconds'], equals(4700));
+        expect(row, isNot(contains('driven_km')));
+        expect(row, isNot(contains('xp_awarded')));
+        expect(row, isNot(contains('xp_distance')));
+        expect(
+          row['route_meta'],
+          containsPair('saved_route_source', 'existing_route_copy'),
+        );
+        expect(row['route_meta'], containsPair('curve_count', 36));
+      },
+    );
   });
 }

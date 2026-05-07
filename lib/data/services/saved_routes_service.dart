@@ -180,6 +180,13 @@ class SavedRoutesService {
     return unique;
   }
 
+  @visibleForTesting
+  static List<SavedRoute> savedRouteCopiesFromUserRoutes(
+    Iterable<SavedRoute> routes,
+  ) {
+    return dedupeEquivalentRoutes(routes);
+  }
+
   /// Findet die beste bewertete Route innerhalb eines Radius (in km).
   static SavedRoute? _findBestInRadius(
     List<SavedRoute> routes,
@@ -361,12 +368,68 @@ class SavedRoutesService {
     if (userId == null) return;
 
     final savedRoutes = await getSavedRouteLibrary();
-    if (hasEquivalentSavedRoute(route, savedRoutes)) return;
+    if (hasEquivalentSavedRoute(route, savedRoutes)) {
+      debugPrint(
+        '[SavedRoutes] Route bereits gespeichert: id=${route.id}, '
+        'fingerprint=${route.routeFingerprint ?? route.routeSignature}',
+      );
+      return;
+    }
 
+    final row = _buildExistingRouteInsert(userId: userId, route: route);
+
+    try {
+      await _db.from('routes').insert(row);
+      invalidateWeeklyTopRouteCache();
+    } on PostgrestException catch (e) {
+      if (e.code == 'PGRST204') {
+        debugPrint(
+          '[SavedRoutes] Route-Meta-Spalten fehlen, speichere Empfehlung ohne Meta: ${e.message}',
+        );
+        row
+          ..remove('source_route_id')
+          ..remove('route_source')
+          ..remove('route_fingerprint')
+          ..remove('quality_tier')
+          ..remove('route_meta');
+        await _db.from('routes').insert(row);
+        invalidateWeeklyTopRouteCache();
+      } else if (e.code == '23505') {
+        // Unique constraint: diese Route ist fuer den User bereits gespeichert.
+        debugPrint(
+          '[SavedRoutes] Duplicate Save durch DB verhindert: id=${route.id}',
+        );
+        return;
+      } else {
+        rethrow;
+      }
+    }
+  }
+
+  @visibleForTesting
+  static Map<String, dynamic> buildExistingRouteInsertForTest({
+    required String userId,
+    required SavedRoute route,
+  }) {
+    return _buildExistingRouteInsert(userId: userId, route: route);
+  }
+
+  static Map<String, dynamic> _buildExistingRouteInsert({
+    required String userId,
+    required SavedRoute route,
+  }) {
     final sourceRouteId = (route.sourceRouteId?.trim().isNotEmpty == true)
         ? route.sourceRouteId!.trim()
         : route.id;
-    final row = <String, dynamic>{
+    final routeFingerprint = (route.routeFingerprint?.trim().isNotEmpty == true)
+        ? route.routeFingerprint!.trim()
+        : route.routeSignature;
+    final routeMeta = Map<String, dynamic>.from(route.routeMeta)
+      ..['saved_route_source'] = 'existing_route_copy'
+      ..['source_route_id'] = sourceRouteId
+      ..['source_route_fingerprint'] = routeFingerprint;
+
+    return <String, dynamic>{
       'user_id': userId,
       'name': route.name ?? '${route.styleEmoji} ${route.style}',
       'style': route.style,
@@ -376,26 +439,12 @@ class SavedRoutesService {
       'duration_seconds': route.durationSeconds?.round(),
       'geometry': route.geometry,
       'source_route_id': sourceRouteId,
+      'route_source': route.routeSource ?? 'saved_route_copy',
+      'route_fingerprint': routeFingerprint,
+      'quality_tier': route.qualityTier,
+      'route_meta': routeMeta,
+      if (route.rating != null && route.rating! > 0) 'rating': route.rating,
     };
-
-    try {
-      await _db.from('routes').insert(row);
-      invalidateWeeklyTopRouteCache();
-    } on PostgrestException catch (e) {
-      if (e.code == 'PGRST204' && e.message.contains('source_route_id')) {
-        debugPrint(
-          '[SavedRoutes] source_route_id-Spalte fehlt, speichere Empfehlung ohne Herkunfts-ID',
-        );
-        row.remove('source_route_id');
-        await _db.from('routes').insert(row);
-        invalidateWeeklyTopRouteCache();
-      } else if (e.code == '23505') {
-        // Unique constraint: diese Route ist fuer den User bereits gespeichert.
-        return;
-      } else {
-        rethrow;
-      }
-    }
   }
 
   /// Prüft ob eine Route (anhand ID) dem aktuellen User gehört / gespeichert ist.
@@ -441,15 +490,13 @@ class SavedRoutesService {
     }
   }
 
-  // ─── Beliebte Routen ────────────────────────────────────────────────────
+  // ─── Gespeicherte Bibliothek ─────────────────────────────────────────────
 
-  /// Gibt beliebte Routen anderer Nutzer zurück (ähnlicher Stil, gute Bewertung).
-  /// Kann als Vorschlag für neue Nutzer verwendet werden.
+  /// Gibt eigene gespeicherte Routen-Kopien zurück.
+  /// Gefahrene Routen bleiben sichtbar; XP/Analytics kommen aus Drive-Sessions.
   static Future<List<SavedRoute>> getSavedRouteCopies() async {
     final routes = await getUserRoutes();
-    return dedupeEquivalentRoutes(
-      routes.where((route) => !route.isDrivenSession),
-    );
+    return savedRouteCopiesFromUserRoutes(routes);
   }
 
   static Future<List<SavedRoute>> getBookmarkedRoutes() async {
@@ -579,7 +626,6 @@ class SavedRoutesService {
     try {
       final ownRoutes = await getUserRoutes();
       final savedCopies = ownRoutes
-          .where((candidate) => !candidate.isDrivenSession)
           .where((candidate) => areEquivalentRoutes(route, candidate))
           .map((candidate) => candidate.id)
           .toSet();

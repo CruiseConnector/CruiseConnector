@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:app_links/app_links.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -158,7 +159,7 @@ class _MyAppState extends State<MyApp> {
           return MaterialApp(
             navigatorKey: rootNavigatorKey,
             debugShowCheckedModeBanner: false,
-            title: 'CruiseConnect',
+            title: 'Cruise Connector',
             theme: ThemeData.dark().copyWith(
               colorScheme: ColorScheme.fromSeed(
                 seedColor: accent,
@@ -184,10 +185,351 @@ class _MyAppState extends State<MyApp> {
                 foregroundColor: Colors.white,
               ),
             ),
-            home: const AuthPage(),
+            home: const _CruiseLaunchGate(child: AuthPage()),
           );
         },
       ),
     );
+  }
+}
+
+class _CruiseLaunchGate extends StatefulWidget {
+  const _CruiseLaunchGate({required this.child});
+
+  final Widget child;
+
+  @override
+  State<_CruiseLaunchGate> createState() => _CruiseLaunchGateState();
+}
+
+class _CruiseLaunchGateState extends State<_CruiseLaunchGate>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+  Timer? _hideTimer;
+  bool _visible = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1900),
+    )..forward();
+    _hideTimer = Timer(const Duration(milliseconds: 2200), () {
+      if (mounted) {
+        setState(() => _visible = false);
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _hideTimer?.cancel();
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_visible) return widget.child;
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        widget.child,
+        IgnorePointer(child: _CruiseLaunchScreen(animation: _controller)),
+      ],
+    );
+  }
+}
+
+class _CruiseLaunchScreen extends StatelessWidget {
+  const _CruiseLaunchScreen({required this.animation});
+
+  final Animation<double> animation;
+
+  @override
+  Widget build(BuildContext context) {
+    final accent = Theme.of(context).colorScheme.primary;
+    final size = MediaQuery.sizeOf(context);
+    final cardWidth = math.min(size.width * 0.78, 320.0);
+
+    return AnimatedBuilder(
+      animation: animation,
+      builder: (context, _) {
+        final t = animation.value;
+        final intro = Curves.easeOutCubic.transform(math.min(t / 0.56, 1));
+        final routeProgress = Curves.easeInOutCubic.transform(
+          math.min(t / 0.74, 1),
+        );
+        const fadeStart = 0.78;
+        final opacity = t <= fadeStart
+            ? 1.0
+            : (1 - ((t - fadeStart) / (1 - fadeStart)))
+                  .clamp(0.0, 1.0)
+                  .toDouble();
+        final scan = Curves.easeInOut.transform(math.min(t / 0.95, 1));
+
+        return Opacity(
+          opacity: opacity,
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: RadialGradient(
+                center: const Alignment(0.08, -0.28),
+                radius: 1.12,
+                colors: [
+                  accent.withValues(alpha: 0.30),
+                  const Color(0xFF172232),
+                  const Color(0xFF080D14),
+                ],
+                stops: const [0, 0.48, 1],
+              ),
+            ),
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                Positioned.fill(
+                  child: CustomPaint(
+                    painter: _LaunchRoutePainter(
+                      progress: routeProgress,
+                      accent: accent,
+                      scan: scan,
+                    ),
+                  ),
+                ),
+                Center(
+                  child: Transform.translate(
+                    offset: Offset(0, 18 * (1 - intro)),
+                    child: Transform.scale(
+                      scale: 0.94 + (0.06 * intro),
+                      child: Container(
+                        width: cardWidth,
+                        padding: const EdgeInsets.fromLTRB(24, 22, 24, 20),
+                        decoration: BoxDecoration(
+                          color: const Color(
+                            0xFF121B27,
+                          ).withValues(alpha: 0.86),
+                          borderRadius: BorderRadius.circular(32),
+                          border: Border.all(
+                            color: Color.lerp(
+                              Colors.white.withValues(alpha: 0.08),
+                              accent.withValues(alpha: 0.55),
+                              intro,
+                            )!,
+                          ),
+                          boxShadow: [
+                            BoxShadow(
+                              color: accent.withValues(alpha: 0.34),
+                              blurRadius: 44,
+                              spreadRadius: -16,
+                              offset: const Offset(0, 24),
+                            ),
+                            const BoxShadow(
+                              color: Color(0xCC000000),
+                              blurRadius: 38,
+                              offset: Offset(0, 24),
+                            ),
+                          ],
+                        ),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            SizedBox(
+                              width: math.min(cardWidth * 0.72, 238),
+                              child: Image.asset(
+                                'assets/branding/cruiseconnect_logo_full.png',
+                                fit: BoxFit.contain,
+                              ),
+                            ),
+                            const SizedBox(height: 18),
+                            _LaunchStatusPill(accent: accent, progress: scan),
+                            const SizedBox(height: 16),
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(999),
+                              child: SizedBox(
+                                height: 4,
+                                child: Stack(
+                                  fit: StackFit.expand,
+                                  children: [
+                                    ColoredBox(
+                                      color: Colors.white.withValues(
+                                        alpha: 0.10,
+                                      ),
+                                    ),
+                                    FractionallySizedBox(
+                                      alignment: Alignment.centerLeft,
+                                      widthFactor: math.max(0.08, scan),
+                                      child: DecoratedBox(
+                                        decoration: BoxDecoration(
+                                          gradient: LinearGradient(
+                                            colors: [
+                                              accent.withValues(alpha: 0.35),
+                                              accent,
+                                              const Color(0xFFFF3737),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _LaunchStatusPill extends StatelessWidget {
+  const _LaunchStatusPill({required this.accent, required this.progress});
+
+  final Color accent;
+  final double progress;
+
+  @override
+  Widget build(BuildContext context) {
+    final dotScale = 0.72 + (0.28 * Curves.easeInOut.transform(progress));
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.07),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Transform.scale(
+            scale: dotScale,
+            child: Container(
+              width: 9,
+              height: 9,
+              decoration: BoxDecoration(
+                color: accent,
+                shape: BoxShape.circle,
+                boxShadow: [
+                  BoxShadow(
+                    color: accent.withValues(alpha: 0.8),
+                    blurRadius: 14,
+                    spreadRadius: 2,
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(width: 10),
+          const Text(
+            'Routen werden vorbereitet',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 13,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 0.2,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _LaunchRoutePainter extends CustomPainter {
+  const _LaunchRoutePainter({
+    required this.progress,
+    required this.accent,
+    required this.scan,
+  });
+
+  final double progress;
+  final Color accent;
+  final double scan;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final path = Path()
+      ..moveTo(size.width * 0.13, size.height * 0.67)
+      ..cubicTo(
+        size.width * 0.24,
+        size.height * 0.53,
+        size.width * 0.33,
+        size.height * 0.79,
+        size.width * 0.47,
+        size.height * 0.58,
+      )
+      ..cubicTo(
+        size.width * 0.61,
+        size.height * 0.36,
+        size.width * 0.71,
+        size.height * 0.57,
+        size.width * 0.87,
+        size.height * 0.35,
+      );
+
+    final basePaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.6
+      ..strokeCap = StrokeCap.round
+      ..color = Colors.white.withValues(alpha: 0.08);
+    canvas.drawPath(path, basePaint);
+
+    final glowPaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 11
+      ..strokeCap = StrokeCap.round
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 14)
+      ..color = accent.withValues(alpha: 0.42);
+    final routePaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 3.2
+      ..strokeCap = StrokeCap.round
+      ..color = Color.lerp(accent, const Color(0xFFFF3636), 0.32)!;
+
+    final visiblePath = Path();
+    for (final metric in path.computeMetrics()) {
+      visiblePath.addPath(
+        metric.extractPath(0, metric.length * progress),
+        Offset.zero,
+      );
+    }
+    canvas
+      ..drawPath(visiblePath, glowPaint)
+      ..drawPath(visiblePath, routePaint);
+
+    final pulsePosition = Offset(
+      size.width * (0.13 + (0.74 * scan)),
+      size.height * (0.67 - (0.32 * Curves.easeInOut.transform(scan))),
+    );
+    final pulsePaint = Paint()
+      ..color = accent.withValues(alpha: 0.18)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 18);
+    canvas.drawCircle(pulsePosition, 24 + (8 * scan), pulsePaint);
+    canvas.drawCircle(
+      pulsePosition,
+      4.6,
+      Paint()..color = Colors.white.withValues(alpha: 0.9),
+    );
+
+    final vignette = Paint()
+      ..shader = RadialGradient(
+        colors: [Colors.transparent, Colors.black.withValues(alpha: 0.72)],
+        stops: const [0.55, 1],
+      ).createShader(Offset.zero & size);
+    canvas.drawRect(Offset.zero & size, vignette);
+  }
+
+  @override
+  bool shouldRepaint(covariant _LaunchRoutePainter oldDelegate) {
+    return oldDelegate.progress != progress ||
+        oldDelegate.accent != accent ||
+        oldDelegate.scan != scan;
   }
 }

@@ -8,6 +8,7 @@ import 'package:provider/provider.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/application/providers/community_provider.dart';
 import 'package:cruise_connect/application/providers/route_bookmark_provider.dart';
+import 'package:cruise_connect/application/providers/saved_routes_provider.dart';
 import 'package:cruise_connect/data/services/gamification_service.dart';
 import 'package:cruise_connect/data/services/home_route_recommendation_service.dart';
 import 'package:cruise_connect/data/services/route_elevation_service.dart';
@@ -1032,6 +1033,7 @@ class _HomeContentPageState extends State<HomeContentPage>
             await SavedRoutesService.unsaveRouteEverywhere(route);
             if (!mounted) return;
             unawaited(context.read<RouteBookmarkProvider>().loadSavedRoutes());
+            unawaited(context.read<SavedRoutesProvider>().loadRoutes());
             setState(() => _isRouteSaved = false);
             return;
           }
@@ -1039,6 +1041,7 @@ class _HomeContentPageState extends State<HomeContentPage>
           await SavedRoutesService.saveExistingRoute(route);
           if (!mounted) return;
           unawaited(context.read<RouteBookmarkProvider>().loadSavedRoutes());
+          unawaited(context.read<SavedRoutesProvider>().loadRoutes());
           final gamResult = await GamificationService.calculateAndSync();
           if (!mounted) return;
           if (gamResult.newBadges.isNotEmpty) {
@@ -1266,7 +1269,7 @@ class _HomeContentPageState extends State<HomeContentPage>
                 Text(
                   hasStreak
                       ? '$_streakDays Tage Streak'
-                      : 'Kein aktiver Streak',
+                      : 'Keine aktive Streak',
                   style: const TextStyle(
                     color: Colors.white,
                     fontSize: 16,
