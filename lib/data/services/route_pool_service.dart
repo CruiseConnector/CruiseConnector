@@ -421,7 +421,7 @@ class RoutePoolService {
   static const int defaultCandidateBufferLimit = 30;
   static const int defaultAcceptableReserveLimitPercent = 25;
   static const int defaultMinDistinctFingerprints = 3;
-  static const int defaultSeedDailyAttemptBudget = 120;
+  static const int defaultSeedDailyAttemptBudget = 200;
   static const int defaultSeedMonthlyAttemptBudget = 2000;
   static const int defaultSeedDailyMapboxBudget = 200;
   static const int defaultSeedMonthlyMapboxBudget = 2000;

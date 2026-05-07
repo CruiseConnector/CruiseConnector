@@ -34,12 +34,12 @@ Deno.serve(async (req) => {
       jobLimit: intOption(
         body.max_jobs_per_run,
         "ROUTE_POOL_HEALING_MAX_JOBS_PER_RUN",
-        2,
+        4,
       ),
       maxGlobalMapboxCalls: intOption(
         body.max_mapbox_calls_per_run,
         "ROUTE_POOL_HEALING_MAX_MAPBOX_CALLS_PER_RUN",
-        48,
+        96,
       ),
       maxVerifiedPerClusterPerRun: intOption(
         body.max_verified_per_cluster_per_run,
@@ -49,7 +49,7 @@ Deno.serve(async (req) => {
       targetVerifiedPerJob: intOption(
         body.target_verified_per_job,
         "ROUTE_POOL_HEALING_TARGET_VERIFIED_PER_JOB",
-        1,
+        2,
       ),
       maxRuntimeSeconds: intOption(
         body.max_runtime_seconds,

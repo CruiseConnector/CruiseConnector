@@ -1798,11 +1798,24 @@ Deno.serve(async (req) => {
       planning_type === "Zufall" &&
       avoidHighways &&
       roundTripTargetForBatching >= 45;
+    const shortHighwayAllowedLakeBorderRoundTripNeedsSession =
+      useRoundTripSearch &&
+      planning_type === "Zufall" &&
+      !avoidHighways &&
+      roundTripTargetForBatching >= 45 &&
+      roundTripTargetForBatching <= 60 &&
+      finiteNumber(startLocation.latitude) != null &&
+      finiteNumber(startLocation.longitude) != null &&
+      startLocation.latitude >= 47.43 &&
+      startLocation.latitude <= 47.58 &&
+      startLocation.longitude >= 9.58 &&
+      startLocation.longitude <= 9.86;
     const inferredRoundTripBatchCount = useRoundTripSearch &&
         planning_type === "Zufall" &&
         (
           forceRoundTripSearchSession ||
           shortNoHighwayRoundTripNeedsSession ||
+          shortHighwayAllowedLakeBorderRoundTripNeedsSession ||
           roundTripTargetForBatching >= 70 ||
           (avoidHighways && roundTripTargetForBatching >= 60) ||
           roundTripTargetForBatching >= 90 ||

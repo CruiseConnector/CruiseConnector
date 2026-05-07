@@ -231,16 +231,16 @@ let maxRuntimeMs = 90_000;
 let runStartedAt = 0;
 let stats = createHealingStats();
 
-const DEFAULT_DAILY_ATTEMPT_BUDGET = 120;
+const DEFAULT_DAILY_ATTEMPT_BUDGET = 200;
 const DEFAULT_MONTHLY_ATTEMPT_BUDGET = 2000;
 const DEFAULT_DAILY_MAPBOX_BUDGET = 200;
 const DEFAULT_MONTHLY_MAPBOX_BUDGET = 2000;
-const DEFAULT_MAX_MAPBOX_CALLS_PER_JOB = 24;
+const DEFAULT_MAX_MAPBOX_CALLS_PER_JOB = 48;
 const USER_DEMAND_DAILY_ATTEMPT_BUDGET = 200;
 const USER_DEMAND_MONTHLY_ATTEMPT_BUDGET = 2000;
 const USER_DEMAND_DAILY_MAPBOX_BUDGET = 200;
 const USER_DEMAND_MONTHLY_MAPBOX_BUDGET = 2000;
-const USER_DEMAND_MAX_MAPBOX_CALLS_PER_JOB = 32;
+const USER_DEMAND_MAX_MAPBOX_CALLS_PER_JOB = 64;
 
 export async function processRouteSeedJobs(
   options: RoutePoolHealingWorkerOptions = {},
@@ -255,8 +255,8 @@ export async function processRouteSeedJobs(
   functionKey = options.functionKey ?? (env("SUPABASE_FUNCTION_KEY") ||
     serviceKey);
   dryRun = options.dryRun ?? false;
-  jobLimit = clampInt(options.jobLimit, 3, 1, 3);
-  maxGlobalMapboxCalls = clampInt(options.maxGlobalMapboxCalls, 48, 1, 80);
+  jobLimit = clampInt(options.jobLimit, 4, 1, 8);
+  maxGlobalMapboxCalls = clampInt(options.maxGlobalMapboxCalls, 96, 1, 160);
   maxVerifiedPerClusterPerRun = clampInt(
     options.maxVerifiedPerClusterPerRun,
     3,
