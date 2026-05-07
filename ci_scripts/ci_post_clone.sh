@@ -24,6 +24,7 @@ fi
 
 flutter --version
 flutter config --no-analytics
+rm -rf build/ios
 flutter pub get
 flutter precache --ios
 
