@@ -278,15 +278,15 @@ class _CruiseModePageState extends State<CruiseModePage>
   double _totalDistanceDriven = 0.0; // Gesamte gefahrene Strecke in Metern
   DateTime? _navigationStartTime; // Zeitpunkt des Navigations-Starts
   int _xpStreakDays = 1;
+  bool _driveSessionRecordedForCompletion = false;
   double?
   _originalRouteDistance; // Ursprüngliche Gesamtdistanz (für Zeitberechnung)
   double?
   _originalRouteDuration; // Ursprüngliche Gesamtdauer (für Zeitberechnung)
 
-  // Schwellenwerte für anteilige Gutschrift
-  static const double _minProgressForCredit = 0.20; // 20% Minimum
+  // Schwellenwerte für Completion-Status. XP basiert auf real gefahrenen km.
   static const double _minProgressForFullCredit =
-      1.0; // Nur echte Zielankunft bekommt volle Gutschrift
+      1.0; // Nur echte Zielankunft zählt als abgeschlossen.
   static const double _minProgressForAutomaticCompletion = 0.95;
   static const double _roundTripFinishArmProgress = 0.80;
   int _lastDrawnRouteIndex =
@@ -4263,6 +4263,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     _recentDestinationDistances = [];
     _activeSpeedLimits = [];
     _announcedManeuverIndices.clear();
+    _driveSessionRecordedForCompletion = false;
     _safeSetState(() {
       _isLoading = false;
       _routeLoadingPhaseIndex = 0;
@@ -5141,6 +5142,7 @@ class _CruiseModePageState extends State<CruiseModePage>
 
     // Navigations-Startzeit setzen (nur beim ersten Start, nicht bei Resume)
     _navigationStartTime ??= DateTime.now();
+    _driveSessionRecordedForCompletion = false;
 
     // Smoother resetten für frischen Start
     if (kIsWeb) {
@@ -6462,35 +6464,18 @@ class _CruiseModePageState extends State<CruiseModePage>
       adjustedResult?.distanceMeters,
       completed: completed,
     );
-    final plannedDistanceKm = _completionRouteResult?.distanceMeters != null
-        ? _completionRouteResult!.distanceMeters! / 1000
-        : drivenKm;
-    final creditProgressFraction =
-        GamificationService.completionCreditProgressStep(
-          progressFraction,
-          completed: completed,
-        );
-    final creditedDistanceKm =
-        GamificationService.creditedDistanceKmForProgress(
-          plannedDistanceKm: plannedDistanceKm,
-          progressRatio: progressFraction,
-          completed: completed,
-        );
     final previewCoordinates = adjustedResult?.coordinates ?? <List<double>>[];
-    final xpCoordinates = _buildCompletionCoordinates(creditProgressFraction);
+    final xpCoordinates = _buildCompletionCoordinates(progressFraction);
     final curves = _estimateCompletionCurves(
       previewCoordinates,
       progressFraction,
     );
-    final xpCurves = _estimateCompletionCurves(
-      xpCoordinates,
-      creditProgressFraction,
-    );
+    final xpCurves = _estimateCompletionCurves(xpCoordinates, progressFraction);
     final xpBreakdown = _calculateCompletionXpBreakdown(
-      creditedDistanceKm: creditedDistanceKm,
+      creditedDistanceKm: drivenKm,
       curves: xpCurves,
     );
-    final xpEarned = belowMinimum ? 0 : xpBreakdown.totalXp;
+    final xpEarned = xpBreakdown.totalXp;
 
     return _CruiseCompletionSnapshot(
       distanceKm: drivenKm,
@@ -6535,6 +6520,7 @@ class _CruiseModePageState extends State<CruiseModePage>
           return result;
         },
         onDiscard: () async {
+          await _recordDriveSessionForCurrentRoute(completed: true);
           await _recordRouteCompletionCandidate(
             completed: true,
             discarded: true,
@@ -6561,11 +6547,9 @@ class _CruiseModePageState extends State<CruiseModePage>
       return;
     }
 
-    final belowMinimum = progressFraction < _minProgressForCredit;
-
     final snapshot = _buildCompletionSnapshot(
       isEarlyStop: true,
-      belowMinimum: belowMinimum,
+      belowMinimum: false,
     );
 
     showCruiseCompletionSheet(
@@ -6585,12 +6569,12 @@ class _CruiseModePageState extends State<CruiseModePage>
           final result = await _saveRouteAndSyncXp(
             rating: rating,
             ratingTags: tags,
-            skipXpSync: belowMinimum,
           );
           _resetAfterCompletion();
           return result;
         },
         onDiscard: () async {
+          await _recordDriveSessionForCurrentRoute(completed: false);
           await _recordRouteCompletionCandidate(
             completed: false,
             discarded: true,
@@ -6601,34 +6585,31 @@ class _CruiseModePageState extends State<CruiseModePage>
     );
   }
 
-  /// Speichert die gefahrene Route und synchronisiert XP/Level/Badges.
-  /// [skipXpSync] = true → Route wird gespeichert, aber keine XP vergeben (< 20% gefahren).
+  /// Speichert optional die Route und synchronisiert XP/Level/Badges.
+  /// XP kommt aus einer immutable Drive-Session, nicht aus der gespeicherten Route.
   Future<CruiseCompletionActionResult> _saveRouteAndSyncXp({
     int? rating,
     List<String> ratingTags = const [],
-    bool skipXpSync = false,
     bool completed = false,
   }) async {
     int? previousLevel;
-    if (!skipXpSync) {
-      final userId = Supabase.instance.client.auth.currentUser?.id;
-      if (userId != null) {
-        try {
-          final profile = await Supabase.instance.client
-              .from('profiles')
-              .select('level')
-              .eq('id', userId)
-              .maybeSingle();
-          previousLevel = (profile?['level'] as num?)?.toInt();
-        } catch (e) {
-          debugPrint('[CruiseMode] Vorheriges Level nicht lesbar: $e');
-        }
+    final userId = Supabase.instance.client.auth.currentUser?.id;
+    if (userId != null) {
+      try {
+        final profile = await Supabase.instance.client
+            .from('profiles')
+            .select('level')
+            .eq('id', userId)
+            .maybeSingle();
+        previousLevel = (profile?['level'] as num?)?.toInt();
+      } catch (e) {
+        debugPrint('[CruiseMode] Vorheriges Level nicht lesbar: $e');
       }
     }
 
     try {
       debugPrint(
-        '[CruiseMode] _saveRouteAndSyncXp: _lastRouteResult=${_lastRouteResult != null}, rating=$rating, skipXp=$skipXpSync',
+        '[CruiseMode] _saveRouteAndSyncXp: _lastRouteResult=${_lastRouteResult != null}, rating=$rating',
       );
       final adjustedResult = _buildAdjustedCompletionResult(
         completed: completed,
@@ -6638,39 +6619,23 @@ class _CruiseModePageState extends State<CruiseModePage>
           adjustedResult.distanceMeters,
           completed: completed,
         );
-        final plannedDistanceKm = _completionRouteResult?.distanceMeters != null
-            ? _completionRouteResult!.distanceMeters! / 1000
-            : adjustedResult.distanceKm ?? 0;
-        final creditProgressFraction =
-            GamificationService.completionCreditProgressStep(
-              progressFraction,
-              completed: completed,
-            );
-        final xpCoordinates = _buildCompletionCoordinates(
-          creditProgressFraction,
-        );
+        final drivenKm = adjustedResult.distanceKm ?? 0;
+        final xpCoordinates = _buildCompletionCoordinates(progressFraction);
         final xpCurves = _estimateCompletionCurves(
           xpCoordinates,
-          creditProgressFraction,
+          progressFraction,
         );
-        final creditedDistanceKm =
-            GamificationService.creditedDistanceKmForProgress(
-              plannedDistanceKm: plannedDistanceKm,
-              progressRatio: progressFraction,
-              completed: completed,
-            );
-        final xpBreakdown = skipXpSync
-            ? null
-            : _calculateCompletionXpBreakdown(
-                creditedDistanceKm: creditedDistanceKm,
-                curves: xpCurves,
-              );
+        final xpBreakdown = _calculateCompletionXpBreakdown(
+          creditedDistanceKm: drivenKm,
+          curves: xpCurves,
+        );
         debugPrint(
           '[CruiseMode] Saving route: style=$_selectedStyle, roundTrip=$_isRoundTrip, '
           'distKm=${adjustedResult.distanceKm}, durationSec=${adjustedResult.durationSeconds?.round()}, '
           'progress=${(progressFraction * 100).round()}%, '
-          'xpStep=${(creditProgressFraction * 100).round()}%, xp=${xpBreakdown?.totalXp}',
+          'xp=${xpBreakdown.totalXp}',
         );
+        await _recordDriveSessionForCurrentRoute(completed: completed);
         await SavedRoutesService.saveRoute(
           result: adjustedResult,
           style: _selectedStyle,
@@ -6680,13 +6645,13 @@ class _CruiseModePageState extends State<CruiseModePage>
           plannedDistanceKm: _completionRouteResult?.distanceMeters != null
               ? _completionRouteResult!.distanceMeters! / 1000
               : adjustedResult.distanceKm,
-          xpDistance: xpBreakdown?.distanceXp,
-          xpCurveBonus: xpBreakdown?.curveXp,
-          xpStyleBonus: xpBreakdown?.styleBonus,
-          xpBase: xpBreakdown?.baseXp,
-          xpMultiplier: xpBreakdown?.multiplier,
-          xpStreakDays: xpBreakdown?.streakDays,
-          xpAwarded: xpBreakdown?.totalXp,
+          xpDistance: xpBreakdown.distanceXp,
+          xpCurveBonus: xpBreakdown.curveXp,
+          xpStyleBonus: xpBreakdown.styleBonus,
+          xpBase: xpBreakdown.baseXp,
+          xpMultiplier: xpBreakdown.multiplier,
+          xpStreakDays: xpBreakdown.streakDays,
+          xpAwarded: xpBreakdown.totalXp,
           completedAtEnd: completed,
           groupId: widget.groupId,
         );
@@ -6713,22 +6678,13 @@ class _CruiseModePageState extends State<CruiseModePage>
         );
         debugPrint('[CruiseMode] Route saved successfully!');
       }
-      // XP/Level/Badges synchronisieren (nur wenn über Minimum-Schwelle)
-      if (!skipXpSync) {
-        final gamResult = await GamificationService.calculateAndSync();
-        return CruiseCompletionActionResult(
-          success: true,
-          newBadges: gamResult.newBadges,
-          levelUp:
-              previousLevel != null && gamResult.level.level > previousLevel,
-          newLevel: gamResult.level.level,
-        );
-      } else {
-        debugPrint(
-          '[CruiseMode] XP-Sync übersprungen (unter Minimum-Schwelle)',
-        );
-      }
-      return CruiseCompletionActionResult(success: true);
+      final gamResult = await GamificationService.calculateAndSync();
+      return CruiseCompletionActionResult(
+        success: true,
+        newBadges: gamResult.newBadges,
+        levelUp: previousLevel != null && gamResult.level.level > previousLevel,
+        newLevel: gamResult.level.level,
+      );
     } catch (e, stack) {
       debugPrint('Route speichern / XP sync fehlgeschlagen: $e');
       debugPrint('Stack: $stack');
@@ -6742,6 +6698,28 @@ class _CruiseModePageState extends State<CruiseModePage>
       }
       return CruiseCompletionActionResult(success: false);
     }
+  }
+
+  Future<void> _recordDriveSessionForCurrentRoute({
+    required bool completed,
+  }) async {
+    if (_driveSessionRecordedForCompletion) return;
+    final adjustedResult = _buildAdjustedCompletionResult(completed: completed);
+    if (adjustedResult == null) return;
+    final drivenKm = adjustedResult.distanceKm ?? 0;
+    if (drivenKm <= 0) return;
+
+    await GamificationService.recordDriveSession(
+      distanceKm: drivenKm,
+      durationSeconds: adjustedResult.durationSeconds?.round() ?? 0,
+      completedAtEnd: completed,
+      routeStyle: _selectedStyle,
+      routeType: _isRoundTrip ? 'ROUND_TRIP' : 'POINT_TO_POINT',
+      routeFingerprint: adjustedResult.edgeMeta['route_fingerprint']
+          ?.toString(),
+    );
+    _driveSessionRecordedForCompletion = true;
+    await GamificationService.calculateAndSync();
   }
 
   Future<void> _recordRouteCompletionCandidate({

@@ -5,10 +5,9 @@ import 'dart:math';
 ///
 /// XP-Quellen:
 ///   - 10 XP pro gefahrenem km
-///   - 5 XP pro Kurve auf der Route
-///   - Stil-Bonus: Kurvenjagd +20, Entdecker +15, Sport Mode +10
 ///
-/// Beispiel: 50km-Route mit 8 Kurven im Sport Mode = 500 + 40 + 10 = 550 XP
+/// Beispiel: 50km gefahren = 500 XP. Kurven und Stil bleiben nur Badge-/
+/// Anzeige-Signale und verändern die XP nicht.
 class UserLevel {
   const UserLevel._({
     required this.level,

@@ -3,7 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:cruise_connect/domain/models/badge.dart';
-import 'package:cruise_connect/domain/models/saved_route.dart';
+import 'package:cruise_connect/domain/models/user_drive_session.dart';
 import 'package:cruise_connect/domain/models/user_level.dart';
 
 /// Ergebnis der Gamification-Berechnung.
@@ -55,16 +55,25 @@ class RouteXpBreakdown {
   String get multiplierLabel => 'x${multiplier.toStringAsFixed(2)}';
 }
 
+class DriveSessionTotals {
+  const DriveSessionTotals({
+    required this.totalRoutes,
+    required this.totalDistanceKm,
+    required this.totalSeconds,
+    required this.totalXp,
+  });
+
+  final int totalRoutes;
+  final double totalDistanceKm;
+  final double totalSeconds;
+  final int totalXp;
+}
+
 /// Service für XP-, Level- und Badge-System mit Supabase-Backend.
 class GamificationService {
   static SupabaseClient get _db => Supabase.instance.client;
 
   static const int xpPerDrivenKm = 10;
-  static const int xpPerCurve = 2;
-  static const int maxCurveXp = 80;
-  static const double streakStep = 0.05;
-  static const double maxStreakMultiplier = 1.30;
-  static const double xpCreditStep = 0.20;
   static const Map<String, String> _legacyBadgeIds = {'route_1': 'badge_02'};
 
   @visibleForTesting
@@ -106,8 +115,8 @@ class GamificationService {
     ).where((badgeId) => !previousBadgeSet.contains(badgeId)).toList();
   }
 
-  /// Berechnet XP für eine einzelne Route.
-  /// 10 XP/km + 5 XP/Kurve + Stil-Bonus.
+  /// Berechnet XP für eine einzelne Fahrt.
+  /// Quelle ist ausschließlich die tatsächlich gefahrene Distanz: 10 XP/km.
   static int calculateRouteXp({
     required double distanceKm,
     required int curves,
@@ -128,35 +137,21 @@ class GamificationService {
     required String style,
     int streakDays = 1,
   }) {
-    final distanceXp = (math.max(0, distanceKm) * xpPerDrivenKm).round();
-    final curveXp = math.min(math.max(0, curves) * xpPerCurve, maxCurveXp);
-    int styleBonus = 0;
-    switch (style) {
-      case 'Kurvenjagd':
-        styleBonus = 15;
-        break;
-      case 'Entdecker':
-        styleBonus = 12;
-        break;
-      case 'Sport Mode':
-        styleBonus = 10;
-        break;
-      case 'Abendrunde':
-        styleBonus = 8;
-        break;
-    }
-    final baseXp = distanceXp + curveXp + styleBonus;
+    final distanceXp = calculateDriveXp(distanceKm);
     final safeStreakDays = math.max(1, streakDays);
-    final multiplier = streakMultiplierForDays(safeStreakDays);
     return RouteXpBreakdown(
       distanceXp: distanceXp,
-      curveXp: curveXp,
-      styleBonus: styleBonus,
-      baseXp: baseXp,
+      curveXp: 0,
+      styleBonus: 0,
+      baseXp: distanceXp,
       streakDays: safeStreakDays,
-      multiplier: multiplier,
-      totalXp: (baseXp * multiplier).round(),
+      multiplier: 1.0,
+      totalXp: distanceXp,
     );
+  }
+
+  static int calculateDriveXp(double distanceKm) {
+    return (math.max(0, distanceKm) * xpPerDrivenKm).round();
   }
 
   static double completionCreditProgressStep(
@@ -164,11 +159,7 @@ class GamificationService {
     bool completed = false,
   }) {
     if (completed) return 1.0;
-    final safeProgress = progressRatio.clamp(0.0, 1.0);
-    final steps = ((safeProgress + 1e-9) / xpCreditStep).floor();
-    final maxSteps = (1 / xpCreditStep).round();
-    final boundedSteps = steps.clamp(0, maxSteps);
-    return boundedSteps / maxSteps;
+    return progressRatio.clamp(0.0, 1.0).toDouble();
   }
 
   static double creditedDistanceKmForProgress({
@@ -177,28 +168,20 @@ class GamificationService {
     bool completed = false,
   }) {
     if (plannedDistanceKm <= 0) return 0;
-    final creditProgress = completionCreditProgressStep(
-      progressRatio,
-      completed: completed,
-    );
-    return plannedDistanceKm * creditProgress;
+    if (completed) return plannedDistanceKm;
+    return plannedDistanceKm * progressRatio.clamp(0.0, 1.0);
   }
 
   static double streakMultiplierForDays(int streakDays) {
-    final safeDays = math.max(1, streakDays);
-    final bonus = math.min(
-      (safeDays - 1) * streakStep,
-      maxStreakMultiplier - 1,
-    );
-    return double.parse((1 + bonus).toStringAsFixed(2));
+    return 1.0;
   }
 
   static int calculateDrivingStreakDays(
-    Iterable<SavedRoute> routes, {
+    Iterable<UserDriveSession> sessions, {
     DateTime? now,
   }) {
     final today = _dateOnly((now ?? DateTime.now()).toLocal());
-    final driveDays = _driveDays(routes);
+    final driveDays = _driveDays(sessions);
     if (driveDays.isEmpty) return 0;
 
     var checkDay = today;
@@ -215,11 +198,11 @@ class GamificationService {
   }
 
   static int calculateStreakDaysForRide(
-    Iterable<SavedRoute> existingRoutes, {
+    Iterable<UserDriveSession> existingSessions, {
     DateTime? rideDate,
   }) {
     final rideDay = _dateOnly((rideDate ?? DateTime.now()).toLocal());
-    final driveDays = _driveDays(existingRoutes)..add(rideDay);
+    final driveDays = _driveDays(existingSessions)..add(rideDay);
 
     var streak = 0;
     var checkDay = rideDay;
@@ -236,24 +219,24 @@ class GamificationService {
 
     try {
       final data = await _db
-          .from('routes')
+          .from('user_drive_sessions')
           .select()
           .eq('user_id', userId)
           .order('created_at', ascending: false);
-      final routes = (data as List)
-          .map((row) => SavedRoute.fromJson(row as Map<String, dynamic>))
+      final sessions = (data as List)
+          .map((row) => UserDriveSession.fromJson(row as Map<String, dynamic>))
           .toList();
-      return calculateStreakDaysForRide(routes, rideDate: rideDate);
+      return calculateStreakDaysForRide(sessions, rideDate: rideDate);
     } catch (e) {
       debugPrint('[Gamification] Streak-Abfrage fehlgeschlagen: $e');
       return 1;
     }
   }
 
-  static Set<DateTime> _driveDays(Iterable<SavedRoute> routes) {
-    return routes
-        .where((route) => route.isDrivenSession)
-        .map((route) => _dateOnly(route.createdAt.toLocal()))
+  static Set<DateTime> _driveDays(Iterable<UserDriveSession> sessions) {
+    return sessions
+        .where((session) => session.distanceKm > 0)
+        .map((session) => _dateOnly(session.createdAt.toLocal()))
         .toSet();
   }
 
@@ -288,7 +271,131 @@ class GamificationService {
   static int _countCurvesIsolate(List<List<double>> coords) =>
       countCurves(coords);
 
-  /// Berechnet Level und Badges basierend auf allen Routen des Users.
+  @visibleForTesting
+  static DriveSessionTotals summarizeDriveSessions(
+    Iterable<UserDriveSession> sessions,
+  ) {
+    double totalKm = 0;
+    double totalSecs = 0;
+    int totalXp = 0;
+    int totalRoutes = 0;
+
+    for (final session in sessions) {
+      if (session.distanceKm <= 0 && session.xpAwarded <= 0) continue;
+      totalRoutes++;
+      totalKm += math.max(0, session.distanceKm);
+      totalSecs += math.max(0, session.durationSeconds);
+      totalXp += math.max(
+        0,
+        session.xpAwarded > 0
+            ? session.xpAwarded
+            : calculateDriveXp(session.distanceKm),
+      );
+    }
+
+    return DriveSessionTotals(
+      totalRoutes: totalRoutes,
+      totalDistanceKm: totalKm,
+      totalSeconds: totalSecs,
+      totalXp: totalXp,
+    );
+  }
+
+  @visibleForTesting
+  static Map<String, dynamic> buildDriveSessionInsert({
+    required String userId,
+    required double distanceKm,
+    required int durationSeconds,
+    required bool completedAtEnd,
+    String? routeId,
+    String? routeStyle,
+    String? routeType,
+    String? routeFingerprint,
+    String source = 'navigation',
+  }) {
+    final safeDistanceKm = math.max(0.0, distanceKm);
+    return {
+      'user_id': userId,
+      if (routeId?.trim().isNotEmpty == true) 'route_id': routeId!.trim(),
+      'distance_km': double.parse(safeDistanceKm.toStringAsFixed(3)),
+      'duration_seconds': math.max(0, durationSeconds),
+      'xp_awarded': calculateDriveXp(safeDistanceKm),
+      'completed_at_end': completedAtEnd,
+      if (routeStyle?.trim().isNotEmpty == true)
+        'route_style': routeStyle!.trim(),
+      if (routeType?.trim().isNotEmpty == true) 'route_type': routeType!.trim(),
+      if (routeFingerprint?.trim().isNotEmpty == true)
+        'route_fingerprint': routeFingerprint!.trim(),
+      'source': source,
+    };
+  }
+
+  static Future<UserDriveSession?> recordDriveSession({
+    required double distanceKm,
+    required int durationSeconds,
+    required bool completedAtEnd,
+    String? routeId,
+    String? routeStyle,
+    String? routeType,
+    String? routeFingerprint,
+    String source = 'navigation',
+  }) async {
+    final userId = _db.auth.currentUser?.id;
+    if (userId == null || distanceKm <= 0) return null;
+
+    final row = buildDriveSessionInsert(
+      userId: userId,
+      distanceKm: distanceKm,
+      durationSeconds: durationSeconds,
+      completedAtEnd: completedAtEnd,
+      routeId: routeId,
+      routeStyle: routeStyle,
+      routeType: routeType,
+      routeFingerprint: routeFingerprint,
+      source: source,
+    );
+
+    try {
+      final data = await _db
+          .from('user_drive_sessions')
+          .insert(row)
+          .select()
+          .single();
+      return UserDriveSession.fromJson(data);
+    } catch (e) {
+      debugPrint(
+        '[Gamification] Drive-Session konnte nicht gespeichert werden: $e',
+      );
+      rethrow;
+    }
+  }
+
+  static Future<List<UserDriveSession>> getDriveSessions({int? limit}) async {
+    final userId = _db.auth.currentUser?.id;
+    if (userId == null) return const [];
+
+    try {
+      var query = _db
+          .from('user_drive_sessions')
+          .select()
+          .eq('user_id', userId)
+          .order('created_at', ascending: false);
+      if (limit != null) {
+        query = query.limit(limit);
+      }
+      final data = await query;
+      return (data as List)
+          .map((row) => UserDriveSession.fromJson(row as Map<String, dynamic>))
+          .toList();
+    } catch (e) {
+      debugPrint(
+        '[Gamification] Drive-Sessions konnten nicht geladen werden: $e',
+      );
+      return const [];
+    }
+  }
+
+  /// Berechnet Level und Badges basierend auf immutable Drive-Sessions.
   /// Speichert den Fortschritt in der `profiles`-Tabelle.
   static Future<GamificationResult> calculateAndSync() async {
     final userId = _db.auth.currentUser?.id;
@@ -304,20 +411,12 @@ class GamificationService {
       );
     }
 
-    // 1. Alle Routen laden
-    List<SavedRoute> routes;
+    // 1. Alle Drive-Sessions laden. Gespeicherte Routen sind nicht XP-Quelle.
+    List<UserDriveSession> sessions;
     try {
-      final data = await _db
-          .from('routes')
-          .select()
-          .eq('user_id', userId)
-          .order('created_at', ascending: false);
-
-      routes = (data as List)
-          .map((row) => SavedRoute.fromJson(row as Map<String, dynamic>))
-          .toList();
+      sessions = await getDriveSessions();
     } catch (e) {
-      debugPrint('[Gamification] Routen-Abfrage fehlgeschlagen: $e');
+      debugPrint('[Gamification] Drive-Session-Abfrage fehlgeschlagen: $e');
       return GamificationResult(
         level: UserLevel.fromXp(0),
         earnedBadgeIds: const [],
@@ -329,43 +428,15 @@ class GamificationService {
       );
     }
 
-    final rideRoutes = routes.where((route) => route.isDrivenSession).toList();
-    final xpEligibleRoutes = rideRoutes
-        .where((route) => route.qualifiesForXpCredit)
-        .toList();
-    final completedRoutes = rideRoutes
-        .where((route) => route.isFullyCompleted)
-        .toList();
-    final completedGroupRoutes = completedRoutes
-        .where((route) => route.groupId?.trim().isNotEmpty == true)
-        .toList();
-
     // 2. Statistiken berechnen
-    double totalKm = 0;
-    double totalSecs = 0;
-    int totalXp = 0;
-
-    for (final r in rideRoutes) {
-      totalKm += r.actualDistanceKm;
-      totalSecs += r.durationSeconds ?? 0;
-    }
-
-    final sortedXpRoutes = xpEligibleRoutes.toList()
-      ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
-
-    for (final r in sortedXpRoutes) {
-      if (r.xpAwarded != null) {
-        totalXp += r.xpAwarded!;
-      } else {
-        final creditedDistanceKm = r.xpCreditedDistanceKm;
-        final estimatedCurves = (creditedDistanceKm / 5).round();
-        totalXp += calculateRouteXp(
-          distanceKm: creditedDistanceKm,
-          curves: estimatedCurves,
-          style: r.style,
-        );
-      }
-    }
+    final totals = summarizeDriveSessions(sessions);
+    final totalKm = totals.totalDistanceKm;
+    final totalSecs = totals.totalSeconds;
+    final totalXp = totals.totalXp;
+    final totalRoutes = totals.totalRoutes;
+    final completedSessions = sessions
+        .where((session) => session.completedAtEnd)
+        .toList();
 
     // 3. Level aus XP berechnen
     final level = UserLevel.fromXp(totalXp.toDouble());
@@ -373,7 +444,7 @@ class GamificationService {
     final extraCounts = await Future.wait<int>([
       _countCreatedGroups(userId),
       _countRoutePosts(userId),
-      _countSavedRouteReferences(userId, routes),
+      _countSavedRouteReferences(userId),
     ]);
     final createdGroupCount = extraCounts[0];
     final routePostCount = extraCounts[1];
@@ -391,10 +462,7 @@ class GamificationService {
     }
 
     // Routen- und Gruppen-Badges
-    if (completedRoutes.isNotEmpty) currentlyQualifiedBadges.add('badge_02');
-    if (completedGroupRoutes.length >= 5) {
-      currentlyQualifiedBadges.add('badge_04');
-    }
+    if (completedSessions.isNotEmpty) currentlyQualifiedBadges.add('badge_02');
     if (routePostCount >= 1) currentlyQualifiedBadges.add('badge_05');
     if (createdGroupCount >= 1) currentlyQualifiedBadges.add('badge_07');
     if (savedRouteReferenceCount >= 5) {
@@ -435,7 +503,7 @@ class GamificationService {
             'level': level.level,
             'total_km': totalKm,
             'total_xp': totalXp,
-            'total_routes': completedRoutes.length,
+            'total_routes': totalRoutes,
             'badges': unlockedBadges,
           })
           .eq('id', userId);
@@ -447,7 +515,7 @@ class GamificationService {
       level: level,
       earnedBadgeIds: unlockedBadges,
       newBadgeIds: newBadges,
-      totalRoutes: completedRoutes.length,
+      totalRoutes: totalRoutes,
       totalDistanceKm: totalKm,
       totalHours: totalSecs / 3600,
       totalXp: totalXp,
@@ -484,15 +552,28 @@ class GamificationService {
     }
   }
 
-  static Future<int> _countSavedRouteReferences(
-    String userId,
-    List<SavedRoute> routes,
-  ) async {
-    final routeIds = <String>{
-      for (final route in routes)
-        if (route.sourceRouteId?.trim().isNotEmpty == true)
-          route.sourceRouteId!.trim(),
-    };
+  static Future<int> _countSavedRouteReferences(String userId) async {
+    final routeIds = <String>{};
+
+    try {
+      final rows = await _db
+          .from('routes')
+          .select('id, source_route_id')
+          .eq('user_id', userId);
+      for (final row in (rows as List).whereType<Map>()) {
+        final sourceRouteId = row['source_route_id'] as String?;
+        final routeId = sourceRouteId?.trim().isNotEmpty == true
+            ? sourceRouteId!.trim()
+            : row['id'] as String?;
+        if (routeId != null && routeId.trim().isNotEmpty) {
+          routeIds.add(routeId.trim());
+        }
+      }
+    } catch (e) {
+      debugPrint(
+        '[Gamification] Gespeicherte Routen-Zaehler fehlgeschlagen: $e',
+      );
+    }
 
     try {
       final rows = await _db

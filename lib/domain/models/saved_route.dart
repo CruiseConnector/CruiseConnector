@@ -114,10 +114,7 @@ class SavedRoute {
   }
 
   bool get qualifiesForXpCredit {
-    final ratio = completionRatio;
-    if (!isDrivenSession) return false;
-    if (ratio == null) return true;
-    return ratio >= 0.20;
+    return isDrivenSession;
   }
 
   bool get isFullyCompleted {
@@ -132,16 +129,12 @@ class SavedRoute {
     final ratio = completionRatio;
     if (!isDrivenSession) return 0.0;
     if (ratio == null) return 1.0;
-    final safeRatio = ratio.clamp(0.0, 1.0);
-    final steps = ((safeRatio + 1e-9) / 0.20).floor().clamp(0, 5);
-    return steps / 5;
+    return ratio.clamp(0.0, 1.0).toDouble();
   }
 
   double get xpCreditedDistanceKm {
     if (!isDrivenSession) return 0.0;
-    final planned = distanceTargetKm;
-    if (planned == null || planned <= 0) return actualDistanceKm;
-    return planned * xpCreditProgressRatio;
+    return actualDistanceKm;
   }
 
   bool get isRecommendationEligible {

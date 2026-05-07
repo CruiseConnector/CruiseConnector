@@ -2,14 +2,10 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
-import 'package:cruise_connect/application/providers/route_bookmark_provider.dart';
 import 'package:cruise_connect/data/services/gamification_service.dart';
-import 'package:cruise_connect/data/services/saved_routes_service.dart';
 import 'package:cruise_connect/domain/models/badge.dart' as app;
-import 'package:cruise_connect/domain/models/saved_route.dart';
+import 'package:cruise_connect/domain/models/user_drive_session.dart';
 import 'package:cruise_connect/domain/models/user_level.dart';
-import 'package:cruise_connect/presentation/widgets/badge_unlock_popup.dart';
-import 'package:provider/provider.dart';
 
 const List<String> _weekdayLabels = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
 const List<String> _monthLabelsShort = [
@@ -105,9 +101,7 @@ class _AnalyticsPageState extends State<AnalyticsPage>
   int _totalXp = 0;
   UserLevel _level = UserLevel.fromXp(0);
   List<app.Badge> _earnedBadges = [];
-  List<SavedRoute> _allRoutes = [];
-  List<SavedRoute> _savedRoutes = [];
-  final Set<String> _savingRouteIds = {};
+  List<UserDriveSession> _driveSessions = [];
 
   List<_AnalyticsBucket> _weeklyBuckets = List.generate(
     7,
@@ -153,10 +147,8 @@ class _AnalyticsPageState extends State<AnalyticsPage>
     setState(() => _loading = true);
     try {
       final gamResult = await GamificationService.calculateAndSync();
-      final routes = await SavedRoutesService.getUserRoutes();
-      final rideRoutes = routes.where((route) => route.isDrivenSession).toList()
-        ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
-      final savedRoutes = await SavedRoutesService.getSavedRouteLibrary();
+      final driveSessions = await GamificationService.getDriveSessions();
+      driveSessions.sort((a, b) => b.createdAt.compareTo(a.createdAt));
 
       final now = DateTime.now();
       final todayStart = DateTime(now.year, now.month, now.day);
@@ -195,17 +187,16 @@ class _AnalyticsPageState extends State<AnalyticsPage>
       // Streak-Berechnung
       final driveDays = <DateTime>{};
 
-      for (final r in rideRoutes) {
-        final createdAt = r.createdAt.toLocal();
+      for (final session in driveSessions) {
+        final createdAt = session.createdAt.toLocal();
         final routeDay = DateTime(
           createdAt.year,
           createdAt.month,
           createdAt.day,
         );
-        final actualDistanceKm = r.actualDistanceKm;
-
-        final routeDuration = r.durationSeconds ?? 0.0;
-        final routeXp = _calculateRouteXp(r);
+        final actualDistanceKm = session.distanceKm;
+        final routeDuration = session.durationSeconds.toDouble();
+        final routeXp = session.xpAwarded.toDouble();
 
         // Wöchentliche Daten
         if (!routeDay.isBefore(weekStart) && routeDay.isBefore(nextWeekStart)) {
@@ -268,8 +259,7 @@ class _AnalyticsPageState extends State<AnalyticsPage>
           _totalXp = gamResult.totalXp;
           _level = gamResult.level;
           _earnedBadges = gamResult.earnedBadges;
-          _allRoutes = rideRoutes;
-          _savedRoutes = savedRoutes;
+          _driveSessions = driveSessions;
           _weeklyBuckets = weekBuckets;
           _streakDays = streak;
           _monthlyBuckets = monthBuckets;
@@ -1198,63 +1188,6 @@ class _AnalyticsPageState extends State<AnalyticsPage>
     return '${localDate.day}.${localDate.month}.';
   }
 
-  bool _isRouteSaved(SavedRoute route) =>
-      SavedRoutesService.hasEquivalentSavedRoute(route, _savedRoutes);
-
-  Future<void> _toggleRouteSaved(SavedRoute route) async {
-    if (_savingRouteIds.contains(route.id)) return;
-
-    setState(() => _savingRouteIds.add(route.id));
-    try {
-      final wasSaved = _isRouteSaved(route);
-      if (wasSaved) {
-        await SavedRoutesService.unsaveRouteEverywhere(route);
-      } else {
-        await SavedRoutesService.saveExistingRoute(route);
-      }
-      final savedRoutes = await SavedRoutesService.getSavedRouteLibrary();
-      if (!mounted) return;
-      await context.read<RouteBookmarkProvider>().loadSavedRoutes();
-      if (!mounted) return;
-
-      setState(() => _savedRoutes = savedRoutes);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            wasSaved
-                ? 'Route aus deinen gespeicherten Routen entfernt.'
-                : 'Route gespeichert. Du findest sie jetzt im Profil.',
-          ),
-          backgroundColor: const Color(0xFF1C1F26),
-        ),
-      );
-
-      if (!wasSaved) {
-        final gamResult = await GamificationService.calculateAndSync();
-        if (!mounted || gamResult.newBadges.isEmpty) return;
-        await showBadgeUnlockPopup(
-          context: context,
-          badges: gamResult.newBadges,
-        );
-      }
-    } catch (e) {
-      debugPrint('[Analytics] Route speichern fehlgeschlagen: $e');
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Route konnte nicht gespeichert werden.'),
-          backgroundColor: Color(0xFF1C1F26),
-        ),
-      );
-    } finally {
-      if (mounted) {
-        setState(() => _savingRouteIds.remove(route.id));
-      } else {
-        _savingRouteIds.remove(route.id);
-      }
-    }
-  }
-
   Widget _buildTabSection() {
     return Column(
       children: [
@@ -1615,17 +1548,6 @@ class _AnalyticsPageState extends State<AnalyticsPage>
         label: _monthLabelsShort[month.month - 1],
       );
     });
-  }
-
-  int _calculateRouteXp(SavedRoute route) {
-    if (route.xpAwarded != null) return route.xpAwarded!;
-    if (!route.qualifiesForXpCredit) return 0;
-    final creditedDistanceKm = route.xpCreditedDistanceKm;
-    return GamificationService.calculateRouteXp(
-      distanceKm: creditedDistanceKm,
-      curves: (creditedDistanceKm / 5).round(),
-      style: route.style,
-    );
   }
 
   void _selectWeekBucket(int index) {
@@ -2201,24 +2123,27 @@ class _AnalyticsPageState extends State<AnalyticsPage>
     );
   }
 
-  List<SavedRoute> _recentRouteHistory() {
+  List<UserDriveSession> _recentRouteHistory() {
     final cutoff = DateTime.now().subtract(const Duration(days: 7));
-    return _allRoutes
-        .where((route) => route.createdAt.toLocal().isAfter(cutoff))
+    return _driveSessions
+        .where((session) => session.createdAt.toLocal().isAfter(cutoff))
         .take(10)
         .toList();
   }
 
-  Widget _buildRoutesOverviewStrip(List<SavedRoute> routes) {
-    final distance = routes.fold(
+  Widget _buildRoutesOverviewStrip(List<UserDriveSession> sessions) {
+    final distance = sessions.fold(
       0.0,
-      (total, route) => total + route.actualDistanceKm,
+      (total, session) => total + session.distanceKm,
     );
-    final duration = routes.fold(
+    final duration = sessions.fold(
       0.0,
-      (total, route) => total + (route.durationSeconds ?? 0),
+      (total, session) => total + session.durationSeconds,
     );
-    final savedCount = routes.where(_isRouteSaved).length;
+    final xp = sessions.fold<int>(
+      0,
+      (total, session) => total + session.xpAwarded,
+    );
 
     return Container(
       width: double.infinity,
@@ -2256,9 +2181,9 @@ class _AnalyticsPageState extends State<AnalyticsPage>
           ),
           Expanded(
             child: _buildRouteOverviewMetric(
-              icon: Icons.bookmark_rounded,
-              value: '$savedCount',
-              label: 'Merkliste',
+              icon: Icons.bolt_rounded,
+              value: '$xp',
+              label: 'XP',
             ),
           ),
         ],
@@ -2414,60 +2339,7 @@ class _AnalyticsPageState extends State<AnalyticsPage>
     );
   }
 
-  Widget _buildAnalyticsSaveButton(SavedRoute route, {bool compact = false}) {
-    final saved = _isRouteSaved(route);
-    final busy = _savingRouteIds.contains(route.id);
-    final size = compact ? 34.0 : 38.0;
-
-    return Tooltip(
-      message: saved
-          ? 'Gespeicherte Route entfernen'
-          : 'Route im Profil speichern',
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: busy ? null : () => _toggleRouteSaved(route),
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 160),
-          width: size,
-          height: size,
-          decoration: BoxDecoration(
-            color: saved
-                ? const Color(0xFFFFD166).withValues(alpha: 0.18)
-                : const Color(0xFF20252D),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(
-              color: saved
-                  ? const Color(0xFFFFD166).withValues(alpha: 0.42)
-                  : Colors.white.withValues(alpha: 0.08),
-            ),
-          ),
-          child: Center(
-            child: busy
-                ? SizedBox(
-                    width: compact ? 14 : 16,
-                    height: compact ? 14 : 16,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: AppAccentColors.accent,
-                    ),
-                  )
-                : Icon(
-                    saved
-                        ? Icons.bookmark_rounded
-                        : Icons.bookmark_add_outlined,
-                    color: saved ? const Color(0xFFFFD166) : Colors.white70,
-                    size: compact ? 17 : 19,
-                  ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildRouteSummaryRow(SavedRoute route) {
-    final saved = _isRouteSaved(route);
-    final routeXp = _calculateRouteXp(route);
-
+  Widget _buildRouteSummaryRow(UserDriveSession session) {
     return Container(
       padding: const EdgeInsets.all(13),
       decoration: BoxDecoration(
@@ -2477,11 +2349,7 @@ class _AnalyticsPageState extends State<AnalyticsPage>
           end: Alignment.bottomRight,
         ),
         borderRadius: BorderRadius.circular(18),
-        border: Border.all(
-          color: saved
-              ? const Color(0xFFFFD166).withValues(alpha: 0.2)
-              : Colors.white.withValues(alpha: 0.055),
-        ),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.055)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -2496,9 +2364,12 @@ class _AnalyticsPageState extends State<AnalyticsPage>
                   borderRadius: BorderRadius.circular(15),
                 ),
                 child: Center(
-                  child: Text(
-                    route.styleEmoji,
-                    style: const TextStyle(fontSize: 20),
+                  child: Icon(
+                    session.completedAtEnd
+                        ? Icons.flag_rounded
+                        : Icons.route_rounded,
+                    color: AppAccentColors.accent,
+                    size: 22,
                   ),
                 ),
               ),
@@ -2508,7 +2379,9 @@ class _AnalyticsPageState extends State<AnalyticsPage>
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      route.name ?? route.style,
+                      session.completedAtEnd
+                          ? 'Fahrt abgeschlossen'
+                          : 'Fahrt aufgezeichnet',
                       style: const TextStyle(
                         color: Colors.white,
                         fontWeight: FontWeight.w900,
@@ -2522,10 +2395,10 @@ class _AnalyticsPageState extends State<AnalyticsPage>
                     Row(
                       children: [
                         Icon(
-                          route.isFullyCompleted
+                          session.completedAtEnd
                               ? Icons.check_circle_rounded
                               : Icons.radio_button_unchecked_rounded,
-                          color: route.isFullyCompleted
+                          color: session.completedAtEnd
                               ? const Color(0xFF4ADE80)
                               : const Color(0xFFA0AEC0),
                           size: 14,
@@ -2533,9 +2406,9 @@ class _AnalyticsPageState extends State<AnalyticsPage>
                         const SizedBox(width: 5),
                         Expanded(
                           child: Text(
-                            route.isFullyCompleted
-                                ? 'Abgeschlossen'
-                                : 'Gefahren',
+                            session.routeStyle?.trim().isNotEmpty == true
+                                ? session.routeStyle!
+                                : 'Cruise',
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(
@@ -2550,8 +2423,6 @@ class _AnalyticsPageState extends State<AnalyticsPage>
                   ],
                 ),
               ),
-              const SizedBox(width: 10),
-              _buildAnalyticsSaveButton(route, compact: true),
             ],
           ),
           const SizedBox(height: 12),
@@ -2562,60 +2433,19 @@ class _AnalyticsPageState extends State<AnalyticsPage>
             children: [
               _buildRouteMetaPill(
                 icon: Icons.schedule_rounded,
-                label: _formatDateShort(route.createdAt),
+                label: _formatDateShort(session.createdAt),
               ),
               _buildRouteMetaPill(
                 icon: Icons.map_rounded,
-                label: _formatDistanceShort(route.actualDistanceKm),
+                label: _formatDistanceShort(session.distanceKm),
               ),
               _buildRouteMetaPill(
                 icon: Icons.timer_rounded,
-                label: _formatDurationShort(route.durationSeconds ?? 0),
+                label: _formatDurationShort(session.durationSeconds.toDouble()),
               ),
               _buildRouteMetaPill(
                 icon: Icons.bolt_rounded,
-                label: '$routeXp XP',
-              ),
-              if (route.rating != null)
-                _buildRouteMetaPill(
-                  icon: Icons.star_rounded,
-                  label: '${route.rating}',
-                  color: const Color(0xFFFFD166),
-                ),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
-                decoration: BoxDecoration(
-                  color: saved
-                      ? const Color(0xFFFFD166).withValues(alpha: 0.14)
-                      : Colors.white.withValues(alpha: 0.045),
-                  borderRadius: BorderRadius.circular(999),
-                  border: Border.all(
-                    color: saved
-                        ? const Color(0xFFFFD166).withValues(alpha: 0.28)
-                        : Colors.white.withValues(alpha: 0.04),
-                  ),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      saved
-                          ? Icons.bookmark_rounded
-                          : Icons.bookmark_border_rounded,
-                      color: saved ? const Color(0xFFFFD166) : Colors.white54,
-                      size: 12,
-                    ),
-                    const SizedBox(width: 4),
-                    Text(
-                      saved ? 'gespeichert' : 'merken',
-                      style: TextStyle(
-                        color: saved ? const Color(0xFFFFD166) : Colors.white54,
-                        fontSize: 10,
-                        fontWeight: FontWeight.w900,
-                      ),
-                    ),
-                  ],
-                ),
+                label: '${session.xpAwarded} XP',
               ),
             ],
           ),

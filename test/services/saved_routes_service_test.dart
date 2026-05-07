@@ -57,8 +57,8 @@ void main() {
       expect(route.ratingSummaryLabel, equals('4,6 · 3 Bewertungen'));
       expect(route.completionRate, equals(0.91));
       expect(route.isFullyCompleted, isFalse);
-      expect(route.xpCreditProgressRatio, closeTo(0.8, 0.001));
-      expect(route.xpCreditedDistanceKm, closeTo(40, 0.001));
+      expect(route.xpCreditProgressRatio, closeTo(0.85, 0.001));
+      expect(route.xpCreditedDistanceKm, closeTo(42.5, 0.001));
     });
 
     test('SavedRoute.fromJson mit fehlenden optionalen Feldern → Defaults', () {
@@ -90,7 +90,7 @@ void main() {
       expect(route.isRoundTrip, isFalse);
     });
 
-    test('unter Minimum gefahrene Route erhält keine XP-Gutschrift', () {
+    test('kurz abgebrochene Legacy-Route bleibt als gefahren erkennbar', () {
       final route = SavedRoute.fromJson({
         'id': 'route-early-stop',
         'created_at': '2025-01-15T10:00:00.000Z',
@@ -103,13 +103,13 @@ void main() {
 
       expect(route.isDrivenSession, isTrue);
       expect(route.completionRatio, lessThan(0.20));
-      expect(route.qualifiesForXpCredit, isFalse);
-      expect(route.xpCreditProgressRatio, 0);
-      expect(route.xpCreditedDistanceKm, 0);
+      expect(route.qualifiesForXpCredit, isTrue);
+      expect(route.xpCreditProgressRatio, closeTo(11 / 60, 0.001));
+      expect(route.xpCreditedDistanceKm, 11);
       expect(route.isRecommendationEligible, isFalse);
     });
 
-    test('XP-Gutschrift wird auf 20-Prozent-Stufen abgerundet', () {
+    test('XP-Gutschrift nutzt die tatsaechlich gefahrene Strecke', () {
       final route = SavedRoute.fromJson({
         'id': 'route-stepped-xp',
         'created_at': '2025-01-15T10:00:00.000Z',
@@ -122,8 +122,8 @@ void main() {
 
       expect(route.completionRatio, closeTo(0.25, 0.001));
       expect(route.qualifiesForXpCredit, isTrue);
-      expect(route.xpCreditProgressRatio, closeTo(0.20, 0.001));
-      expect(route.xpCreditedDistanceKm, closeTo(20, 0.001));
+      expect(route.xpCreditProgressRatio, closeTo(0.25, 0.001));
+      expect(route.xpCreditedDistanceKm, closeTo(25, 0.001));
       expect(route.isFullyCompleted, isFalse);
     });
 
@@ -188,14 +188,14 @@ void main() {
     });
   });
 
-  group('Gamification XP-Stufen', () {
-    test('25 Prozent Fahrt gibt nur 20 Prozent Strecken-XP', () {
+  group('Gamification XP-Credit', () {
+    test('25 Prozent Fahrt nutzt die tatsaechliche Strecke ohne Abrundung', () {
       final creditedKm = GamificationService.creditedDistanceKmForProgress(
         plannedDistanceKm: 100,
         progressRatio: 0.25,
       );
 
-      expect(creditedKm, 20);
+      expect(creditedKm, 25);
     });
 
     test('60 Prozent Fahrt gibt 60 Prozent Strecken-XP', () {
@@ -207,13 +207,13 @@ void main() {
       expect(creditedKm, 60);
     });
 
-    test('unter 20 Prozent Fahrt gibt 0 Kilometer XP-Credit', () {
+    test('unter 20 Prozent Fahrt nutzt trotzdem die gefahrene Strecke', () {
       final creditedKm = GamificationService.creditedDistanceKmForProgress(
         plannedDistanceKm: 100,
         progressRatio: 0.19,
       );
 
-      expect(creditedKm, 0);
+      expect(creditedKm, 19);
     });
 
     test('completed erzwingt 100 Prozent XP-Credit', () {

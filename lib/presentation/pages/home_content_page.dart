@@ -78,7 +78,7 @@ class _HomeContentPageState extends State<HomeContentPage>
   Future<void> _loadStats() async {
     try {
       final result = await GamificationService.calculateAndSync();
-      final routes = await SavedRoutesService.getUserRoutes();
+      final driveSessions = await GamificationService.getDriveSessions();
       Map<String, dynamic>? profile;
       final userId = Supabase.instance.client.auth.currentUser?.id;
       if (userId != null) {
@@ -92,10 +92,6 @@ class _HomeContentPageState extends State<HomeContentPage>
           debugPrint('[Home] Profil-Abfrage fehlgeschlagen: $e');
         }
       }
-      final rideRoutes = routes
-          .where((route) => route.isDrivenSession)
-          .toList();
-
       // Wöchentliche Daten berechnen
       final now = DateTime.now();
       final todayStart = DateTime(now.year, now.month, now.day);
@@ -103,8 +99,8 @@ class _HomeContentPageState extends State<HomeContentPage>
         Duration(days: todayStart.weekday - 1),
       );
       final weeklyKm = List<double>.filled(7, 0);
-      for (final r in rideRoutes) {
-        final localCreatedAt = r.createdAt.toLocal();
+      for (final session in driveSessions) {
+        final localCreatedAt = session.createdAt.toLocal();
         final routeDay = DateTime(
           localCreatedAt.year,
           localCreatedAt.month,
@@ -113,7 +109,7 @@ class _HomeContentPageState extends State<HomeContentPage>
         if (!routeDay.isBefore(weekStart)) {
           final dayIndex = routeDay.weekday - 1;
           if (dayIndex >= 0 && dayIndex < 7) {
-            weeklyKm[dayIndex] += r.actualDistanceKm;
+            weeklyKm[dayIndex] += session.distanceKm;
           }
         }
       }
@@ -122,7 +118,9 @@ class _HomeContentPageState extends State<HomeContentPage>
           .map((km) => maxKm > 0 ? (km / maxKm).clamp(0.0, 1.0) : 0.0)
           .toList();
 
-      final streak = GamificationService.calculateDrivingStreakDays(rideRoutes);
+      final streak = GamificationService.calculateDrivingStreakDays(
+        driveSessions,
+      );
 
       // Home-Empfehlung aus dem verified Routenpool laden.
       HomeRouteRecommendation? recommendation;
