@@ -10,8 +10,27 @@ class CarCard extends StatelessWidget {
   static Color get accent => AppAccentColors.accent;
   static const Color surface = Color(0xFF1C1F26);
   static const Color pageBg = Color(0xFF0B0E14);
-  static const double baseHeight = 470;
+  static const double baseHeight = 540;
   static const double _footerHeight = 32;
+  static const Map<String, String> _countryDisplayCodes = <String, String>{
+    'AT': 'AT-AUT',
+    'DE': 'DE-GER',
+    'GB': 'GB-UK',
+    'JP': 'JP-JPN',
+    'KR': 'KR-KOR',
+    'US': 'US-USA',
+    'IT': 'IT-ITA',
+    'FR': 'FR-FRA',
+    'CH': 'CH-SUI',
+    'SE': 'SE-SWE',
+    'ES': 'ES-ESP',
+    'CZ': 'CZ-CZE',
+    'RO': 'RO-ROU',
+    'CN': 'CN-CHN',
+    'IN': 'IN-IND',
+    'NL': 'NL-NED',
+    'RU': 'RU-RUS',
+  };
 
   static double preferredHeightFor(
     Map<String, dynamic> profile, {
@@ -21,11 +40,11 @@ class CarCard extends StatelessWidget {
     final stats = _statsFor(profile);
     final imageHeight = width / (16 / 9);
     final gridWidth = (width - 24).clamp(1, width);
-    final statColumns = gridWidth < 250 ? 1 : 2;
+    final statColumns = gridWidth < 280 ? 1 : 2;
     final statRows = stats.isEmpty ? 0 : (stats.length / statColumns).ceil();
     final statsHeight = stats.isEmpty
         ? 0
-        : 24 + (statRows * 40) + ((statRows - 1) * 8);
+        : 24 + (statRows * 66) + ((statRows - 1) * 10);
 
     if (description == null) {
       return (imageHeight + statsHeight + _footerHeight + 10).clamp(
@@ -39,14 +58,14 @@ class CarCard extends StatelessWidget {
       text: TextSpan(
         text: description,
         style: const TextStyle(
-          fontSize: 10.2,
-          height: 1.18,
+          fontSize: 12,
+          height: 1.25,
           fontWeight: FontWeight.w700,
         ),
       ),
       textDirection: TextDirection.ltr,
     )..layout(maxWidth: textWidth.toDouble());
-    final descriptionHeight = 12 + 20 + descriptionPainter.height;
+    final descriptionHeight = 12 + 26 + descriptionPainter.height;
 
     final computedHeight =
         imageHeight + statsHeight + descriptionHeight + _footerHeight + 24;
@@ -90,6 +109,7 @@ class CarCard extends StatelessWidget {
     final countryCode =
         (_str(_field(profile, 'country_code', 'car_country_code')) ?? 'AT')
             .toUpperCase();
+    final countryLabel = _countryDisplayCodes[countryCode] ?? countryCode;
     final type = (_str(profile['vehicle_type']) ?? 'car').toLowerCase();
     final isBike = type == 'motorcycle';
 
@@ -148,7 +168,7 @@ class CarCard extends StatelessWidget {
                 Positioned(
                   right: 14,
                   top: 14,
-                  child: _CountryChip(countryCode: countryCode),
+                  child: _CountryChip(countryCode: countryLabel),
                 ),
                 Positioned(
                   left: 16,
@@ -240,22 +260,44 @@ class CarCard extends StatelessWidget {
         ?.toDouble();
 
     return [
-      if (horsepower != null) _VehicleStat('Leistung', '$horsepower PS'),
-      if (topSpeed != null) _VehicleStat('Top Speed', '$topSpeed km/h'),
+      if (horsepower != null)
+        _VehicleStat(Icons.bolt_rounded, 'Leistung', '$horsepower PS'),
+      if (topSpeed != null)
+        _VehicleStat(
+          Icons.keyboard_double_arrow_up_rounded,
+          'Top Speed',
+          '$topSpeed km/h',
+        ),
       if (zeroToHundred != null)
-        _VehicleStat('0-100', '${_formatDecimalSeconds(zeroToHundred)} s'),
+        _VehicleStat(
+          Icons.timer_outlined,
+          '0-100',
+          '${_formatDecimalSeconds(zeroToHundred)} s',
+        ),
       if (displacement != null)
-        _VehicleStat('Hubraum', '${_formatThousands(displacement)} ccm')
+        _VehicleStat(
+          Icons.blur_circular_rounded,
+          'Hubraum',
+          '${_formatThousands(displacement)} ccm',
+        )
       else if (engineSize != null)
         _VehicleStat(
+          Icons.blur_circular_rounded,
           'Hubraum',
           '${engineSize.toStringAsFixed(1).replaceAll('.', ',')} L',
         ),
-      if (cylinders != null) _VehicleStat('Zylinder', '$cylinders'),
+      if (cylinders != null)
+        _VehicleStat(Icons.adjust_rounded, 'Zylinder', '$cylinders'),
       if (mileage != null)
-        _VehicleStat('Kilometer', '${_formatThousands(mileage)} km'),
-      if (year != null) _VehicleStat('Baujahr', '$year'),
-      if (drivetrain != null) _VehicleStat('Antrieb', drivetrain),
+        _VehicleStat(
+          Icons.speed_outlined,
+          'Kilometer',
+          '${_formatThousands(mileage)} km',
+        ),
+      if (year != null)
+        _VehicleStat(Icons.calendar_today_outlined, 'Baujahr', '$year'),
+      if (drivetrain != null)
+        _VehicleStat(Icons.settings_suggest_outlined, 'Antrieb', drivetrain),
     ];
   }
 
@@ -286,8 +328,8 @@ class _DescriptionBox extends StatelessWidget {
             description,
             style: TextStyle(
               color: Colors.white.withValues(alpha: 0.8),
-              fontSize: 10.2,
-              height: 1.18,
+              fontSize: 12,
+              height: 1.25,
               fontWeight: FontWeight.w700,
             ),
           ),
@@ -333,7 +375,7 @@ class _TypeChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 7),
       decoration: BoxDecoration(
         color: Colors.black.withValues(alpha: 0.56),
         borderRadius: BorderRadius.circular(999),
@@ -379,7 +421,7 @@ class _CountryChip extends StatelessWidget {
         countryCode,
         style: const TextStyle(
           color: Color(0xFF111318),
-          fontSize: 12,
+          fontSize: 11,
           fontWeight: FontWeight.w900,
         ),
       ),
@@ -408,8 +450,9 @@ class _VehicleImagePlaceholder extends StatelessWidget {
 }
 
 class _VehicleStat {
-  _VehicleStat(this.label, this.value);
+  _VehicleStat(this.icon, this.label, this.value);
 
+  final IconData icon;
   final String label;
   final String value;
 }
@@ -423,16 +466,16 @@ class _StatsGrid extends StatelessWidget {
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        final columns = constraints.maxWidth < 250 ? 1 : 2;
+        final columns = constraints.maxWidth < 280 ? 1 : 2;
         return Wrap(
-          spacing: 8,
-          runSpacing: 8,
+          spacing: 10,
+          runSpacing: 10,
           children: [
             for (final stat in stats)
               SizedBox(
                 width: columns == 1
                     ? constraints.maxWidth
-                    : (constraints.maxWidth - 8) / 2,
+                    : (constraints.maxWidth - 10) / 2,
                 child: _StatTile(stat: stat),
               ),
           ],
@@ -450,40 +493,51 @@ class _StatTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      height: 40,
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      height: 66,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.045),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: CarCard.accent.withValues(alpha: 0.08)),
+        color: Colors.white.withValues(alpha: 0.05),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: CarCard.accent.withValues(alpha: 0.14)),
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Expanded(
-            child: Text(
-              stat.label,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                color: Colors.white.withValues(alpha: 0.52),
-                fontSize: 10,
-                height: 1,
-                fontWeight: FontWeight.w700,
+          Row(
+            children: [
+              Icon(stat.icon, color: CarCard.accent, size: 14),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  stat.label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.62),
+                    fontSize: 10.5,
+                    height: 1,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
               ),
-            ),
+            ],
           ),
-          const SizedBox(width: 6),
-          Flexible(
-            child: Text(
-              stat.value,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              textAlign: TextAlign.right,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 11,
-                height: 1,
-                fontWeight: FontWeight.w900,
+          const SizedBox(height: 8),
+          SizedBox(
+            width: double.infinity,
+            child: FittedBox(
+              alignment: Alignment.centerLeft,
+              fit: BoxFit.scaleDown,
+              child: Text(
+                stat.value,
+                maxLines: 1,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 16,
+                  height: 1,
+                  fontWeight: FontWeight.w900,
+                ),
               ),
             ),
           ),

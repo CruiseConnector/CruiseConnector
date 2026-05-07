@@ -11,6 +11,7 @@ import 'package:cruise_connect/application/providers/community_provider.dart';
 import 'package:cruise_connect/core/input_limits.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/data/services/vehicle_api_service.dart';
+import 'package:cruise_connect/presentation/widgets/car_card.dart';
 import 'package:cruise_connect/presentation/widgets/user_avatar.dart';
 import 'package:cruise_connect/presentation/widgets/vehicle_garage_carousel.dart';
 
@@ -21,23 +22,23 @@ const int _vehicleDescriptionMaxLength =
 const bool _usernameEditingLockedForTest = true;
 
 final List<_CountryOption> _countryOptions = <_CountryOption>[
-  _CountryOption('AT', 'AT - Austria'),
-  _CountryOption('DE', 'DE - Germany'),
-  _CountryOption('GB', 'GB - United Kingdom'),
-  _CountryOption('JP', 'JP - Japan'),
-  _CountryOption('KR', 'KR - South Korea'),
-  _CountryOption('US', 'US - United States'),
-  _CountryOption('IT', 'IT - Italy'),
-  _CountryOption('FR', 'FR - France'),
-  _CountryOption('CH', 'CH - Switzerland'),
-  _CountryOption('SE', 'SE - Sweden'),
-  _CountryOption('ES', 'ES - Spain'),
-  _CountryOption('CZ', 'CZ - Czech Republic'),
-  _CountryOption('RO', 'RO - Romania'),
-  _CountryOption('CN', 'CN - China'),
-  _CountryOption('IN', 'IN - India'),
-  _CountryOption('NL', 'NL - Netherlands'),
-  _CountryOption('RU', 'RU - Russia'),
+  _CountryOption('AT', 'AT-AUT'),
+  _CountryOption('DE', 'DE-GER'),
+  _CountryOption('GB', 'GB-UK'),
+  _CountryOption('JP', 'JP-JPN'),
+  _CountryOption('KR', 'KR-KOR'),
+  _CountryOption('US', 'US-USA'),
+  _CountryOption('IT', 'IT-ITA'),
+  _CountryOption('FR', 'FR-FRA'),
+  _CountryOption('CH', 'CH-SUI'),
+  _CountryOption('SE', 'SE-SWE'),
+  _CountryOption('ES', 'ES-ESP'),
+  _CountryOption('CZ', 'CZ-CZE'),
+  _CountryOption('RO', 'RO-ROU'),
+  _CountryOption('CN', 'CN-CHN'),
+  _CountryOption('IN', 'IN-IND'),
+  _CountryOption('NL', 'NL-NED'),
+  _CountryOption('RU', 'RU-RUS'),
 ];
 
 const Map<String, String> _brandCountryCodes = <String, String>{
@@ -737,6 +738,10 @@ class _EditProfilePageState extends State<EditProfilePage> {
 
   void _selectVehicleDraft(int index) {
     if (index < 0 || index >= _vehicleDrafts.length) return;
+    if (index == _selectedVehicleIndex) {
+      _captureCurrentVehicleDraft();
+      return;
+    }
     setState(() {
       _captureCurrentVehicleDraft();
       _selectedVehicleIndex = index;
@@ -750,8 +755,90 @@ class _EditProfilePageState extends State<EditProfilePage> {
       _vehicleDrafts.add(_emptyVehicleDraft(type: 'car'));
       _selectedVehicleIndex = _vehicleDrafts.length - 1;
       _carCountryChangedManually = false;
+      _renumberVehicleDrafts();
       _loadVehicleDraftIntoForm(_vehicleDrafts.last);
     });
+  }
+
+  void _renumberVehicleDrafts() {
+    for (var i = 0; i < _vehicleDrafts.length; i++) {
+      _vehicleDrafts[i]['sort_order'] = i;
+      _vehicleDrafts[i]['is_primary'] = i == 0;
+    }
+  }
+
+  String _vehicleTitleForDraft(Map<String, dynamic> vehicle) {
+    final brand = (vehicle['brand'] as String?)?.trim() ?? '';
+    final model = (vehicle['model'] as String?)?.trim() ?? '';
+    final title = '$brand $model'.trim();
+    if (title.isNotEmpty) return title;
+    final type = (vehicle['vehicle_type'] as String?) == 'motorcycle'
+        ? 'Motorrad'
+        : 'Auto';
+    return '$type ${_selectedVehicleIndex + 1}';
+  }
+
+  Future<void> _deleteSelectedVehicleDraft() async {
+    if (_vehicleDrafts.isEmpty) return;
+    _captureCurrentVehicleDraft();
+    final safeIndex = _selectedVehicleIndex
+        .clamp(0, _vehicleDrafts.length - 1)
+        .toInt();
+    final title = _vehicleTitleForDraft(_vehicleDrafts[safeIndex]);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1C1F26),
+        title: const Text(
+          'Fahrzeugkarte löschen?',
+          style: TextStyle(color: Colors.white),
+        ),
+        content: Text(
+          'Es wird nur "$title" aus deiner Garage entfernt. Andere Karten bleiben erhalten.',
+          style: const TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text(
+              'Abbrechen',
+              style: TextStyle(color: Colors.grey),
+            ),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text(
+              'Löschen',
+              style: TextStyle(color: Colors.redAccent),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() {
+      if (_vehicleDrafts.length == 1) {
+        _vehicleDrafts = [_emptyVehicleDraft()];
+        _selectedVehicleIndex = 0;
+      } else {
+        _vehicleDrafts.removeAt(safeIndex);
+        _selectedVehicleIndex = safeIndex
+            .clamp(0, _vehicleDrafts.length - 1)
+            .toInt();
+      }
+      _renumberVehicleDrafts();
+      _loadVehicleDraftIntoForm(_vehicleDrafts[_selectedVehicleIndex]);
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          'Fahrzeugkarte entfernt. Speichern übernimmt die Änderung.',
+        ),
+        backgroundColor: Color(0xFF1C1F26),
+      ),
+    );
   }
 
   double? _parseDecimalSeconds(String value) {
@@ -828,100 +915,109 @@ class _EditProfilePageState extends State<EditProfilePage> {
           ),
         ],
       ),
-      body: _loading
-          ? Center(
-              child: CircularProgressIndicator(color: AppAccentColors.accent),
-            )
-          : ListView(
-              padding: const EdgeInsets.only(bottom: 32),
-              children: [
-                _buildBannerWithAvatar(),
-                const SizedBox(height: 56),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 24),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      _buildLabel('Username'),
-                      _buildTextField(
-                        _usernameController,
-                        '@username',
-                        maxLength: AppInputLimits.usernameMaxLength,
-                        inputFormatters: AppInputLimits.usernameFormatters,
-                        enabled: !_usernameEditingLockedForTest,
-                      ),
-                      const SizedBox(height: 6),
-                      Text(
-                        _usernameEditingLockedForTest
-                            ? 'Username ist für die heutige Testversion gesperrt.'
-                            : _nextUsernameChange != null
-                            ? 'Du kannst deinen Benutzernamen erst wieder ab dem '
-                                  '${_nextUsernameChange!.day.toString().padLeft(2, '0')}.'
-                                  '${_nextUsernameChange!.month.toString().padLeft(2, '0')}.'
-                                  '${_nextUsernameChange!.year} ändern.'
-                            : 'Du kannst deinen Benutzernamen nur einmal pro Monat ändern.',
-                        style: const TextStyle(
-                          color: Colors.grey,
-                          fontSize: 12,
+      body: GestureDetector(
+        behavior: HitTestBehavior.translucent,
+        onTap: () => FocusManager.instance.primaryFocus?.unfocus(),
+        child: _loading
+            ? Center(
+                child: CircularProgressIndicator(color: AppAccentColors.accent),
+              )
+            : ListView(
+                keyboardDismissBehavior:
+                    ScrollViewKeyboardDismissBehavior.onDrag,
+                padding: const EdgeInsets.only(bottom: 32),
+                children: [
+                  _buildBannerWithAvatar(),
+                  const SizedBox(height: 56),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 24),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _buildLabel('Username'),
+                        _buildTextField(
+                          _usernameController,
+                          '@username',
+                          maxLength: AppInputLimits.usernameMaxLength,
+                          inputFormatters: AppInputLimits.usernameFormatters,
+                          enabled: !_usernameEditingLockedForTest,
                         ),
-                      ),
+                        const SizedBox(height: 6),
+                        Text(
+                          _usernameEditingLockedForTest
+                              ? 'Username ist für die heutige Testversion gesperrt.'
+                              : _nextUsernameChange != null
+                              ? 'Du kannst deinen Benutzernamen erst wieder ab dem '
+                                    '${_nextUsernameChange!.day.toString().padLeft(2, '0')}.'
+                                    '${_nextUsernameChange!.month.toString().padLeft(2, '0')}.'
+                                    '${_nextUsernameChange!.year} ändern.'
+                              : 'Du kannst deinen Benutzernamen nur einmal pro Monat ändern.',
+                          style: const TextStyle(
+                            color: Colors.grey,
+                            fontSize: 12,
+                          ),
+                        ),
 
-                      const SizedBox(height: 20),
+                        const SizedBox(height: 20),
 
-                      _buildLabel('Bio-Überschrift'),
-                      _buildTextField(
-                        _bioTitleController,
-                        'z.B. Über mich',
-                        maxLength: AppInputLimits.bioTitleMaxLength,
-                      ),
-                      const SizedBox(height: 20),
+                        _buildLabel('Bio-Überschrift'),
+                        _buildTextField(
+                          _bioTitleController,
+                          'z.B. Über mich',
+                          maxLength: AppInputLimits.bioTitleMaxLength,
+                        ),
+                        const SizedBox(height: 20),
 
-                      _buildLabel('Steckbrief / Bio'),
-                      _buildTextField(
-                        _bioController,
-                        'Erzähl etwas über dich…',
-                        maxLines: 4,
-                        maxLength: AppInputLimits.bioMaxLength,
-                      ),
-                      // Live-Counter, weil counterText im TextField selbst
-                      // ausgeblendet ist (sonst doppelt mit anderen Feldern).
-                      Padding(
-                        padding: const EdgeInsets.only(top: 4, right: 4),
-                        child: Align(
-                          alignment: Alignment.centerRight,
-                          child: Text(
-                            '${_bioController.text.length}/${AppInputLimits.bioMaxLength}',
-                            style: TextStyle(
-                              color:
-                                  _bioController.text.length >=
-                                      AppInputLimits.bioMaxLength
-                                  ? AppAccentColors.accent
-                                  : Colors.grey,
-                              fontSize: 11,
+                        _buildLabel('Steckbrief / Bio'),
+                        _buildTextField(
+                          _bioController,
+                          'Erzähl etwas über dich…',
+                          maxLines: 4,
+                          maxLength: AppInputLimits.bioMaxLength,
+                        ),
+                        // Live-Counter, weil counterText im TextField selbst
+                        // ausgeblendet ist (sonst doppelt mit anderen Feldern).
+                        Padding(
+                          padding: const EdgeInsets.only(top: 4, right: 4),
+                          child: Align(
+                            alignment: Alignment.centerRight,
+                            child: Text(
+                              '${_bioController.text.length}/${AppInputLimits.bioMaxLength}',
+                              style: TextStyle(
+                                color:
+                                    _bioController.text.length >=
+                                        AppInputLimits.bioMaxLength
+                                    ? AppAccentColors.accent
+                                    : Colors.grey,
+                                fontSize: 11,
+                              ),
                             ),
                           ),
                         ),
-                      ),
 
-                      const SizedBox(height: 20),
+                        const SizedBox(height: 20),
 
-                      _buildLabel('Link / Webseite'),
-                      _buildTextField(
-                        _linkController,
-                        'https://…',
-                        maxLength: AppInputLimits.linkMaxLength,
-                      ),
+                        _buildLabel('Link / Webseite'),
+                        _buildTextField(
+                          _linkController,
+                          'https://…',
+                          maxLength: AppInputLimits.linkMaxLength,
+                        ),
 
-                      const SizedBox(height: 32),
+                        const SizedBox(height: 32),
 
-                      _buildSectionHeader('Meine Garage', Icons.garage_rounded),
-                      const SizedBox(height: 16),
-                      _buildCarEditor(),
-                    ],
+                        _buildSectionHeader(
+                          'Meine Garage',
+                          Icons.garage_rounded,
+                        ),
+                        const SizedBox(height: 16),
+                        _buildCarEditor(),
+                      ],
+                    ),
                   ),
-                ),
-              ],
-            ),
+                ],
+              ),
+      ),
     );
   }
 
@@ -1107,279 +1203,455 @@ class _EditProfilePageState extends State<EditProfilePage> {
       children: [
         VehicleGarageCarousel(
           vehicles: previewVehicles,
+          selectedIndex: _selectedVehicleIndex,
+          viewportFraction: 1,
+          height: _editableGarageCardHeight(context),
           onAddVehicle: _addVehicleDraft,
           onVehicleTap: _selectVehicleDraft,
+          onVehicleChanged: _selectVehicleDraft,
+          vehicleBuilder: (context, index) {
+            if (index == _selectedVehicleIndex) {
+              return _buildVehicleEditorCard(
+                title: _vehicleTitleForDraft(liveProfile),
+                position: _selectedVehicleIndex + 1,
+                total: previewVehicles.length,
+              );
+            }
+            return CarCard(
+              profile: previewVehicles[index],
+              onTap: () => _selectVehicleDraft(index),
+            );
+          },
         ),
-        const SizedBox(height: 20),
-        _buildVehicleTypeToggle(),
-        const SizedBox(height: 20),
+      ],
+    );
+  }
 
-        // Foto-Upload
-        GestureDetector(
-          onTap: _uploadingCarImage ? null : _pickCarImage,
-          child: Container(
-            width: double.infinity,
-            padding: const EdgeInsets.symmetric(vertical: 14),
-            decoration: BoxDecoration(
-              color: const Color(0xFF1C1F26),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
-            ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                if (_uploadingCarImage)
-                  SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: AppAccentColors.accent,
+  double _editableGarageCardHeight(BuildContext context) {
+    final width = MediaQuery.sizeOf(context).width;
+    if (width < 370) return 1160;
+    return 1080;
+  }
+
+  Widget _buildVehicleEditorCard({
+    required String title,
+    required int position,
+    required int total,
+  }) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF171B23),
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(
+          color: AppAccentColors.accent.withValues(alpha: 0.2),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.28),
+            blurRadius: 24,
+            offset: const Offset(0, 14),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: AppAccentColors.accent.withValues(alpha: 0.14),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Icon(
+                  _vehicleType == 'motorcycle'
+                      ? Icons.two_wheeler_rounded
+                      : Icons.directions_car_filled_rounded,
+                  color: AppAccentColors.accent,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 19,
+                        height: 1.05,
+                        fontWeight: FontWeight.w900,
+                      ),
                     ),
-                  )
-                else
-                  Icon(
-                    Icons.camera_alt,
-                    color: AppAccentColors.accent,
-                    size: 18,
+                    const SizedBox(height: 4),
+                    Text(
+                      'Karte $position von $total',
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.5),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Tooltip(
+                message: 'Nur diese Fahrzeugkarte löschen',
+                child: TextButton.icon(
+                  onPressed: _saving ? null : _deleteSelectedVehicleDraft,
+                  style: TextButton.styleFrom(
+                    foregroundColor: Colors.redAccent,
+                    padding: const EdgeInsets.symmetric(horizontal: 10),
+                    minimumSize: const Size(0, 40),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                   ),
-                const SizedBox(width: 8),
-                Text(
-                  _carImageUrl != null && _carImageUrl!.isNotEmpty
-                      ? 'Fahrzeug-Foto ändern'
-                      : 'Fahrzeug-Foto hinzufügen',
-                  style: TextStyle(
-                    color: AppAccentColors.accent,
-                    fontWeight: FontWeight.w600,
+                  icon: const Icon(Icons.delete_outline_rounded, size: 18),
+                  label: const Text(
+                    'Löschen',
+                    style: TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          _buildVehiclePhotoEditor(),
+          const SizedBox(height: 10),
+          _buildVehicleTypeToggle(),
+          const SizedBox(height: 10),
+          _buildGarageGrid([
+            _buildGarageInputTile(
+              label: 'Marke',
+              icon: Icons.factory_outlined,
+              child: _buildMakeField(),
+            ),
+            _buildGarageInputTile(
+              label: 'Modell',
+              icon: Icons.badge_outlined,
+              child: _buildModelField(),
+            ),
+          ]),
+          const SizedBox(height: 10),
+          _buildGarageInputTile(
+            label: 'Beschreibung',
+            icon: Icons.notes_rounded,
+            child: Column(
+              children: [
+                _buildTextField(
+                  _vehicleDescriptionController,
+                  'z.B. Tracktool, Daily, Umbau...',
+                  maxLines: 3,
+                  maxLength: _vehicleDescriptionMaxLength,
+                  compact: true,
+                ),
+                const SizedBox(height: 6),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: Text(
+                    '${_vehicleDescriptionController.text.length}/$_vehicleDescriptionMaxLength',
+                    style: TextStyle(
+                      color:
+                          _vehicleDescriptionController.text.length >=
+                              _vehicleDescriptionMaxLength
+                          ? AppAccentColors.accent
+                          : Colors.white.withValues(alpha: 0.42),
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
                 ),
               ],
             ),
           ),
-        ),
-        const SizedBox(height: 20),
+          const SizedBox(height: 10),
+          _buildGarageGrid([
+            _buildGarageInputTile(
+              label: 'Herkunft',
+              icon: Icons.flag_outlined,
+              child: _buildCountryDropdown(),
+            ),
+            _buildGarageInputTile(
+              label: 'Baujahr',
+              icon: Icons.calendar_today_outlined,
+              child: _buildTextField(
+                _carYearController,
+                '2021',
+                keyboardType: TextInputType.number,
+                inputFormatters: [
+                  FilteringTextInputFormatter.digitsOnly,
+                  LengthLimitingTextInputFormatter(4),
+                ],
+                compact: true,
+              ),
+            ),
+            _buildGarageInputTile(
+              label: 'Antrieb',
+              icon: Icons.settings_suggest_outlined,
+              child: _buildTextField(
+                _carDrivetrainController,
+                'Heck / Allrad / Front',
+                maxLength: 12,
+                compact: true,
+              ),
+            ),
+            _buildGarageInputTile(
+              label: 'Kilometer',
+              icon: Icons.speed_outlined,
+              child: _buildTextField(
+                _carMileageController,
+                '27870',
+                keyboardType: TextInputType.number,
+                inputFormatters: [
+                  FilteringTextInputFormatter.digitsOnly,
+                  LengthLimitingTextInputFormatter(6),
+                  _MaxIntFormatter(999999),
+                ],
+                compact: true,
+              ),
+            ),
+            _buildGarageInputTile(
+              label: 'Leistung',
+              icon: Icons.bolt_rounded,
+              child: _buildTextField(
+                _carHorsepowerController,
+                '720',
+                keyboardType: TextInputType.number,
+                inputFormatters: [
+                  FilteringTextInputFormatter.digitsOnly,
+                  LengthLimitingTextInputFormatter(4),
+                  _MaxIntFormatter(1999),
+                ],
+                compact: true,
+              ),
+            ),
+            _buildGarageInputTile(
+              label: 'Top Speed',
+              icon: Icons.keyboard_double_arrow_up_rounded,
+              child: _buildTextField(
+                _carTopSpeedController,
+                '340',
+                keyboardType: TextInputType.number,
+                inputFormatters: [
+                  FilteringTextInputFormatter.digitsOnly,
+                  LengthLimitingTextInputFormatter(3),
+                  _MaxIntFormatter(999),
+                ],
+                compact: true,
+              ),
+            ),
+            _buildGarageInputTile(
+              label: '0-100',
+              icon: Icons.timer_outlined,
+              child: _buildTextField(
+                _carZeroToHundredController,
+                '7,3',
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
+                inputFormatters: [
+                  LengthLimitingTextInputFormatter(4),
+                  _DecimalSecondsFormatter(),
+                ],
+                compact: true,
+              ),
+            ),
+            _buildGarageInputTile(
+              label: 'Zylinder',
+              icon: Icons.adjust_rounded,
+              child: _buildTextField(
+                _carCylindersController,
+                '8',
+                keyboardType: TextInputType.number,
+                inputFormatters: [
+                  FilteringTextInputFormatter.digitsOnly,
+                  LengthLimitingTextInputFormatter(2),
+                  _MaxIntFormatter(24),
+                ],
+                compact: true,
+              ),
+            ),
+            _buildGarageInputTile(
+              label: 'Hubraum',
+              icon: Icons.blur_circular_rounded,
+              child: _buildTextField(
+                _carDisplacementController,
+                '3902',
+                keyboardType: TextInputType.number,
+                inputFormatters: [
+                  FilteringTextInputFormatter.digitsOnly,
+                  LengthLimitingTextInputFormatter(5),
+                  _MaxIntFormatter(99999),
+                ],
+                compact: true,
+              ),
+            ),
+          ]),
+        ],
+      ),
+    );
+  }
 
-        Row(
+  Widget _buildVehiclePhotoEditor() {
+    final imageUrl = _carImageUrl?.trim();
+    final hasImage = imageUrl != null && imageUrl.isNotEmpty;
+    return GestureDetector(
+      onTap: _uploadingCarImage ? null : _pickCarImage,
+      child: Container(
+        height: 152,
+        clipBehavior: Clip.antiAlias,
+        decoration: BoxDecoration(
+          color: const Color(0xFF0B0E14),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+        ),
+        child: Stack(
+          fit: StackFit.expand,
           children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [_buildLabel('Marke'), _buildMakeField()],
+            if (hasImage)
+              Image.network(
+                imageUrl,
+                fit: BoxFit.cover,
+                errorBuilder: (_, _, _) => _vehiclePhotoPlaceholder(),
+              )
+            else
+              _vehiclePhotoPlaceholder(),
+            DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    Colors.black.withValues(alpha: 0.08),
+                    Colors.black.withValues(alpha: 0.7),
+                  ],
+                ),
               ),
             ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [_buildLabel('Modell'), _buildModelField()],
-              ),
-            ),
-          ],
-        ),
-
-        const SizedBox(height: 20),
-
-        _buildLabel('Beschreibung'),
-        _buildTextField(
-          _vehicleDescriptionController,
-          'z.B. Tracktool, Daily, Umbau...',
-          maxLines: 3,
-          maxLength: _vehicleDescriptionMaxLength,
-        ),
-        Padding(
-          padding: const EdgeInsets.only(top: 4, right: 4),
-          child: Align(
-            alignment: Alignment.centerRight,
-            child: Text(
-              '${_vehicleDescriptionController.text.length}/$_vehicleDescriptionMaxLength',
-              style: TextStyle(
-                color:
-                    _vehicleDescriptionController.text.length >=
-                        _vehicleDescriptionMaxLength
-                    ? AppAccentColors.accent
-                    : Colors.grey,
-                fontSize: 11,
-              ),
-            ),
-          ),
-        ),
-
-        const SizedBox(height: 20),
-
-        _buildLabel('Herkunft der Marke'),
-        _buildCountryDropdown(),
-
-        const SizedBox(height: 20),
-
-        Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+            Positioned(
+              left: 14,
+              bottom: 14,
+              right: 14,
+              child: Row(
                 children: [
-                  _buildLabel('Baujahr'),
-                  _buildTextField(
-                    _carYearController,
-                    '2021',
-                    keyboardType: TextInputType.number,
-                    inputFormatters: [
-                      FilteringTextInputFormatter.digitsOnly,
-                      LengthLimitingTextInputFormatter(4),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _buildLabel('Antrieb'),
-                  _buildTextField(
-                    _carDrivetrainController,
-                    'Heck / Allrad / Front',
-                    maxLength: 12,
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-
-        const SizedBox(height: 20),
-
-        Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _buildLabel('Kilometerstand'),
-                  _buildTextField(
-                    _carMileageController,
-                    '27870',
-                    keyboardType: TextInputType.number,
-                    inputFormatters: [
-                      FilteringTextInputFormatter.digitsOnly,
-                      LengthLimitingTextInputFormatter(6),
-                      _MaxIntFormatter(999999),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _buildLabel('Leistung (PS)'),
-                  _buildTextField(
-                    _carHorsepowerController,
-                    '720',
-                    keyboardType: TextInputType.number,
-                    inputFormatters: [
-                      FilteringTextInputFormatter.digitsOnly,
-                      LengthLimitingTextInputFormatter(4),
-                      _MaxIntFormatter(1999),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-
-        const SizedBox(height: 20),
-
-        Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _buildLabel('Top Speed (km/h)'),
-                  _buildTextField(
-                    _carTopSpeedController,
-                    '340',
-                    keyboardType: TextInputType.number,
-                    inputFormatters: [
-                      FilteringTextInputFormatter.digitsOnly,
-                      LengthLimitingTextInputFormatter(3),
-                      _MaxIntFormatter(999),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _buildLabel('0-100 km/h (s)'),
-                  _buildTextField(
-                    _carZeroToHundredController,
-                    '7,3',
-                    keyboardType: const TextInputType.numberWithOptions(
-                      decimal: true,
+                  Container(
+                    width: 42,
+                    height: 42,
+                    decoration: BoxDecoration(
+                      color: AppAccentColors.accent.withValues(alpha: 0.94),
+                      borderRadius: BorderRadius.circular(14),
                     ),
-                    inputFormatters: [
-                      LengthLimitingTextInputFormatter(4),
-                      _DecimalSecondsFormatter(),
-                    ],
+                    child: _uploadingCarImage
+                        ? const Padding(
+                            padding: EdgeInsets.all(11),
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
+                          )
+                        : const Icon(
+                            Icons.camera_alt_rounded,
+                            color: Colors.white,
+                          ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      hasImage
+                          ? 'Fahrzeug-Foto ändern'
+                          : 'Fahrzeug-Foto hinzufügen',
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 14,
+                        height: 1.15,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
                   ),
                 ],
               ),
             ),
           ],
         ),
+      ),
+    );
+  }
 
-        const SizedBox(height: 20),
+  Widget _vehiclePhotoPlaceholder() {
+    return Center(
+      child: Icon(
+        _vehicleType == 'motorcycle'
+            ? Icons.two_wheeler_rounded
+            : Icons.directions_car_outlined,
+        color: Colors.white.withValues(alpha: 0.18),
+        size: 72,
+      ),
+    );
+  }
 
-        Row(
+  Widget _buildGarageGrid(List<Widget> children) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final columns = constraints.maxWidth >= 300 ? 2 : 1;
+        final width = columns == 1
+            ? constraints.maxWidth
+            : (constraints.maxWidth - 10) / 2;
+        return Wrap(
+          spacing: 10,
+          runSpacing: 10,
           children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _buildLabel('Zylinder'),
-                  _buildTextField(
-                    _carCylindersController,
-                    '8',
-                    keyboardType: TextInputType.number,
-                    inputFormatters: [
-                      FilteringTextInputFormatter.digitsOnly,
-                      LengthLimitingTextInputFormatter(2),
-                      _MaxIntFormatter(24),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _buildLabel('Hubraum (cm³)'),
-                  _buildTextField(
-                    _carDisplacementController,
-                    '3902',
-                    keyboardType: TextInputType.number,
-                    inputFormatters: [
-                      FilteringTextInputFormatter.digitsOnly,
-                      LengthLimitingTextInputFormatter(5),
-                      _MaxIntFormatter(99999),
-                    ],
-                  ),
-                ],
-              ),
-            ),
+            for (final child in children) SizedBox(width: width, child: child),
           ],
-        ),
-      ],
+        );
+      },
+    );
+  }
+
+  Widget _buildGarageInputTile({
+    required String label,
+    required IconData icon,
+    required Widget child,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.035),
+        borderRadius: BorderRadius.circular(15),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(icon, size: 14, color: AppAccentColors.accent),
+              const SizedBox(width: 5),
+              Expanded(
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.62),
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          child,
+        ],
+      ),
     );
   }
 
@@ -1396,7 +1668,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
           borderRadius: BorderRadius.circular(12),
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 160),
-            padding: const EdgeInsets.symmetric(vertical: 12),
+            padding: const EdgeInsets.symmetric(vertical: 9),
             decoration: BoxDecoration(
               color: selected
                   ? AppAccentColors.accent
@@ -1411,8 +1683,8 @@ class _EditProfilePageState extends State<EditProfilePage> {
             child: Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Icon(icon, color: Colors.white, size: 18),
-                const SizedBox(width: 8),
+                Icon(icon, color: Colors.white, size: 17),
+                const SizedBox(width: 7),
                 Text(
                   label,
                   style: const TextStyle(
@@ -1449,27 +1721,28 @@ class _EditProfilePageState extends State<EditProfilePage> {
       child: DropdownButtonFormField<String>(
         key: ValueKey(_carCountryCode),
         initialValue: _carCountryCode,
+        isDense: true,
+        menuMaxHeight: 280,
         dropdownColor: const Color(0xFF1C1F26),
         iconEnabledColor: AppAccentColors.accent,
-        style: const TextStyle(color: Colors.white),
-        decoration: InputDecoration(
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 18,
+          fontWeight: FontWeight.w500,
+        ),
+        decoration: const InputDecoration(
           border: InputBorder.none,
-          contentPadding: const EdgeInsets.symmetric(
-            horizontal: 14,
-            vertical: 4,
-          ),
-          prefixIcon: Icon(
-            Icons.flag_outlined,
-            color: AppAccentColors.accent,
-            size: 19,
-          ),
-          prefixIconConstraints: const BoxConstraints(minWidth: 42),
+          contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         ),
         items: [
           for (final option in _countryOptions)
             DropdownMenuItem<String>(
               value: option.code,
-              child: Text(option.label, overflow: TextOverflow.ellipsis),
+              child: Text(
+                option.label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
             ),
         ],
         onChanged: (value) {
@@ -1608,7 +1881,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
             controller: fieldController,
             focusNode: focusNode,
             maxLength: AppInputLimits.shortTextMaxLength,
-            style: const TextStyle(color: Colors.white),
+            style: const TextStyle(color: Colors.white, fontSize: 18),
             onChanged: (value) {
               onTextChanged?.call(value);
               setState(() {});
@@ -1620,12 +1893,13 @@ class _EditProfilePageState extends State<EditProfilePage> {
               suffixIcon: Icon(
                 Icons.search_rounded,
                 color: AppAccentColors.accent,
-                size: 20,
+                size: 19,
               ),
+              suffixIconConstraints: const BoxConstraints(minWidth: 38),
               border: InputBorder.none,
               contentPadding: const EdgeInsets.symmetric(
-                horizontal: 14,
-                vertical: 12,
+                horizontal: 12,
+                vertical: 8,
               ),
             ),
           ),
@@ -1674,6 +1948,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
     int? maxLength,
     ValueChanged<String>? onChanged,
     bool enabled = true,
+    bool compact = false,
   }) {
     return Container(
       decoration: BoxDecoration(
@@ -1690,7 +1965,10 @@ class _EditProfilePageState extends State<EditProfilePage> {
         keyboardType: keyboardType,
         inputFormatters: inputFormatters,
         maxLength: maxLength,
-        style: TextStyle(color: enabled ? Colors.white : Colors.white54),
+        style: TextStyle(
+          color: enabled ? Colors.white : Colors.white54,
+          fontSize: compact ? 18 : null,
+        ),
         onChanged: (value) {
           onChanged?.call(value);
           setState(() {});
@@ -1702,9 +1980,9 @@ class _EditProfilePageState extends State<EditProfilePage> {
           hintText: hint,
           hintStyle: TextStyle(color: Colors.grey.withValues(alpha: 0.5)),
           border: InputBorder.none,
-          contentPadding: const EdgeInsets.symmetric(
-            horizontal: 14,
-            vertical: 12,
+          contentPadding: EdgeInsets.symmetric(
+            horizontal: compact ? 12 : 14,
+            vertical: compact ? 8 : 12,
           ),
         ),
       ),

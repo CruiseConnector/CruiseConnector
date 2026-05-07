@@ -8,12 +8,20 @@ class VehicleGarageCarousel extends StatefulWidget {
     required this.vehicles,
     this.onAddVehicle,
     this.onVehicleTap,
+    this.onVehicleChanged,
+    this.selectedIndex = 0,
+    this.vehicleBuilder,
+    this.viewportFraction = 0.96,
     this.height,
   });
 
   final List<Map<String, dynamic>> vehicles;
   final VoidCallback? onAddVehicle;
   final ValueChanged<int>? onVehicleTap;
+  final ValueChanged<int>? onVehicleChanged;
+  final int selectedIndex;
+  final Widget Function(BuildContext context, int index)? vehicleBuilder;
+  final double viewportFraction;
   final double? height;
 
   @override
@@ -30,7 +38,39 @@ class _VehicleGarageCarouselState extends State<VehicleGarageCarousel> {
   @override
   void initState() {
     super.initState();
-    _controller = PageController(viewportFraction: 0.92);
+    _page = _safeSelectedPage;
+    _controller = PageController(
+      viewportFraction: widget.viewportFraction,
+      initialPage: _page,
+    );
+  }
+
+  int get _safeSelectedPage {
+    if (_pageCount <= 0) return 0;
+    return widget.selectedIndex.clamp(0, _pageCount - 1).toInt();
+  }
+
+  @override
+  void didUpdateWidget(covariant VehicleGarageCarousel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final nextPage = _safeSelectedPage;
+    if (nextPage == _page &&
+        oldWidget.vehicles.length == widget.vehicles.length) {
+      return;
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final safePage = _safeSelectedPage;
+      if (_page != safePage) setState(() => _page = safePage);
+      if (_controller.hasClients &&
+          (_controller.page?.round() ?? _controller.initialPage) != safePage) {
+        _controller.animateToPage(
+          safePage,
+          duration: const Duration(milliseconds: 240),
+          curve: Curves.easeOutCubic,
+        );
+      }
+    });
   }
 
   @override
@@ -40,11 +80,10 @@ class _VehicleGarageCarouselState extends State<VehicleGarageCarousel> {
   }
 
   void _handlePageChanged(int value) {
-    if (_page == value) return;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || _page == value) return;
-      setState(() => _page = value);
-    });
+    if (_page != value) setState(() => _page = value);
+    if (value < widget.vehicles.length) {
+      widget.onVehicleChanged?.call(value);
+    }
   }
 
   @override
@@ -60,7 +99,7 @@ class _VehicleGarageCarouselState extends State<VehicleGarageCarousel> {
               260.0,
               constraints.maxWidth,
             );
-            final height =
+            final preferredHeight =
                 widget.height ??
                 widget.vehicles.fold<double>(CarCard.baseHeight, (
                   value,
@@ -72,6 +111,11 @@ class _VehicleGarageCarouselState extends State<VehicleGarageCarousel> {
                   );
                   return value > preferred ? value : preferred;
                 });
+            final isShowingAddCard =
+                widget.onAddVehicle != null && _page >= widget.vehicles.length;
+            final height = isShowingAddCard
+                ? (preferredHeight < 320 ? preferredHeight : 320.0)
+                : preferredHeight;
 
             return SizedBox(
               height: height,
@@ -85,12 +129,13 @@ class _VehicleGarageCarouselState extends State<VehicleGarageCarousel> {
                     padding: const EdgeInsets.only(right: 10),
                     child: isAddCard
                         ? _AddVehicleCard(onTap: widget.onAddVehicle!)
-                        : CarCard(
-                            profile: widget.vehicles[index],
-                            onTap: widget.onVehicleTap == null
-                                ? null
-                                : () => widget.onVehicleTap!(index),
-                          ),
+                        : widget.vehicleBuilder?.call(context, index) ??
+                              CarCard(
+                                profile: widget.vehicles[index],
+                                onTap: widget.onVehicleTap == null
+                                    ? null
+                                    : () => widget.onVehicleTap!(index),
+                              ),
                   );
                 },
               ),
@@ -130,60 +175,138 @@ class _AddVehicleCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(18),
-      child: Container(
-        decoration: BoxDecoration(
-          color: const Color(0xFF1C1F26),
-          borderRadius: BorderRadius.circular(18),
-          border: Border.all(
-            color: CarCard.accent.withValues(alpha: 0.34),
-            width: 1.2,
-          ),
-        ),
-        child: Center(
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  width: 58,
-                  height: 58,
-                  decoration: BoxDecoration(
-                    color: CarCard.accent.withValues(alpha: 0.14),
-                    shape: BoxShape.circle,
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final compactHeight = constraints.maxHeight < 360
+            ? constraints.maxHeight
+            : 286.0;
+        return Align(
+          alignment: Alignment.topCenter,
+          child: SizedBox(
+            height: compactHeight,
+            width: double.infinity,
+            child: InkWell(
+              onTap: onTap,
+              borderRadius: BorderRadius.circular(22),
+              child: Container(
+                padding: const EdgeInsets.all(18),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1C1F26),
+                  borderRadius: BorderRadius.circular(22),
+                  border: Border.all(
+                    color: CarCard.accent.withValues(alpha: 0.34),
+                    width: 1.2,
                   ),
-                  child: Icon(
-                    Icons.add_rounded,
-                    color: CarCard.accent,
-                    size: 34,
-                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.24),
+                      blurRadius: 22,
+                      offset: const Offset(0, 14),
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 16),
-                const Text(
-                  'Weiteres Auto/Motorrad hinzufügen',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 16,
-                    fontWeight: FontWeight.w900,
-                  ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Container(
+                          width: 52,
+                          height: 52,
+                          decoration: BoxDecoration(
+                            color: CarCard.accent.withValues(alpha: 0.14),
+                            borderRadius: BorderRadius.circular(17),
+                          ),
+                          child: Icon(
+                            Icons.add_rounded,
+                            color: CarCard.accent,
+                            size: 32,
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        const Expanded(
+                          child: Text(
+                            'Garage erweitern',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 20,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 18),
+                    Text(
+                      'Tippe hier, um direkt eine neue Fahrzeugkarte anzulegen.',
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.62),
+                        fontSize: 14,
+                        height: 1.35,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const Spacer(),
+                    const Row(
+                      children: [
+                        _GarageAddChip(
+                          icon: Icons.directions_car_filled_rounded,
+                          label: 'Auto',
+                        ),
+                        SizedBox(width: 8),
+                        _GarageAddChip(
+                          icon: Icons.two_wheeler_rounded,
+                          label: 'Motorrad',
+                        ),
+                      ],
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 8),
-                Text(
-                  'Lege deine Garage an und swipe zwischen deinen Fahrzeugen.',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: Colors.white.withValues(alpha: 0.55),
-                    fontSize: 13,
-                    height: 1.35,
-                  ),
-                ),
-              ],
+              ),
             ),
           ),
+        );
+      },
+    );
+  }
+}
+
+class _GarageAddChip extends StatelessWidget {
+  const _GarageAddChip({required this.icon, required this.label});
+
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Expanded(
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.045),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, color: CarCard.accent, size: 17),
+            const SizedBox(width: 7),
+            Flexible(
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );
