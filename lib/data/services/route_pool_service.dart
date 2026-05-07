@@ -1152,6 +1152,152 @@ class RoutePoolService {
     return matches.isEmpty ? null : matches.first;
   }
 
+  Future<List<RoutePoolMatch>> findCandidateReserveRoutesNear({
+    required double userLat,
+    required double userLng,
+    required int distanceBucket,
+    required String style,
+    required bool avoidHighways,
+    String routeType = 'ROUND_TRIP',
+    bool crossBorderAllowed = false,
+    String? preferredCountryCode,
+    String? preferredAdmin1Name,
+    String? preferredAdmin2Name,
+    String? preferredCityCluster,
+    int candidateLimit = 80,
+  }) async {
+    if (routeType != 'ROUND_TRIP') return const [];
+    if (!validDistanceBuckets.contains(distanceBucket)) return const [];
+    final effectiveCandidateLimit = _effectiveCandidateLimit(
+      routeType,
+      candidateLimit,
+    );
+
+    final inMemoryCandidates = _inMemoryCandidates;
+    final inMemoryRegions = _inMemoryRegions;
+    if (inMemoryCandidates != null && inMemoryRegions != null) {
+      return _findCandidateReserveRoutesInMemory(
+        userLat: userLat,
+        userLng: userLng,
+        distanceBucket: distanceBucket,
+        style: style,
+        avoidHighways: avoidHighways,
+        routeType: routeType,
+        crossBorderAllowed: crossBorderAllowed,
+        preferredCountryCode: preferredCountryCode,
+        preferredAdmin1Name: preferredAdmin1Name,
+        preferredAdmin2Name: preferredAdmin2Name,
+        preferredCityCluster: preferredCityCluster,
+        candidates: inMemoryCandidates,
+        regions: inMemoryRegions,
+      );
+    }
+
+    try {
+      final regionSearchBounds = _boundingBoxFor(
+        userLat,
+        userLng,
+        _maxRegionSearchRadiusForRouteType(routeType),
+      );
+      var regionQuery = _db
+          .from('route_regions')
+          .select()
+          .eq('is_active', true)
+          .gte('center_lat', regionSearchBounds.minLat)
+          .lte('center_lat', regionSearchBounds.maxLat)
+          .gte('center_lng', regionSearchBounds.minLng)
+          .lte('center_lng', regionSearchBounds.maxLng);
+      if (!crossBorderAllowed &&
+          preferredCountryCode != null &&
+          preferredCountryCode.trim().isNotEmpty) {
+        regionQuery = regionQuery.eq(
+          'country_code',
+          preferredCountryCode.trim().toUpperCase(),
+        );
+      }
+      if (!crossBorderAllowed &&
+          preferredAdmin1Name != null &&
+          preferredAdmin1Name.trim().isNotEmpty) {
+        regionQuery = regionQuery.eq('admin1_name', preferredAdmin1Name.trim());
+      }
+      final regionRows = await regionQuery;
+      final regions = (regionRows as List)
+          .map((row) => RouteRegion.fromJson(row as Map<String, dynamic>))
+          .toList(growable: false);
+      final nearestRegion = _resolveNearestRegion(
+        userLat: userLat,
+        userLng: userLng,
+        regions: regions,
+        preferredCountryCode: preferredCountryCode,
+        preferredAdmin1Name: preferredAdmin1Name,
+        preferredAdmin2Name: preferredAdmin2Name,
+        preferredCityCluster: preferredCityCluster,
+      );
+      if (nearestRegion == null || !_reserveFallbackAllowed(nearestRegion)) {
+        return const [];
+      }
+
+      final routeSearchBounds = _boundingBoxFor(
+        userLat,
+        userLng,
+        _maxSearchRadiusForRouteType(routeType),
+      );
+      final styleKeys = _candidateReserveStyleKeys(style);
+      var candidateQuery = _db
+          .from('route_pool_candidates')
+          .select()
+          .eq('is_candidate', true)
+          .eq('is_verified_pool', false)
+          .eq('route_type', routeType)
+          .eq('distance_bucket', distanceBucket)
+          .inFilter('style_key', styleKeys.toList(growable: false))
+          .isFilter('promoted_to_pool_at', null)
+          .isFilter('demoted_at', null)
+          .gte('start_lat', routeSearchBounds.minLat)
+          .lte('start_lat', routeSearchBounds.maxLat)
+          .gte('start_lng', routeSearchBounds.minLng)
+          .lte('start_lng', routeSearchBounds.maxLng);
+      if (!crossBorderAllowed) {
+        candidateQuery = candidateQuery
+            .eq('country_code', nearestRegion.countryCode)
+            .eq('admin1_name', nearestRegion.admin1Name);
+      }
+      if (avoidHighways) {
+        candidateQuery = candidateQuery
+            .eq('avoid_highways', true)
+            .eq('has_highway', false);
+      }
+
+      final rows = await candidateQuery
+          .order('quality_score', ascending: false)
+          .limit(effectiveCandidateLimit);
+      final candidates = (rows as List)
+          .map(
+            (row) => RoutePoolCandidate.fromJson(row as Map<String, dynamic>),
+          )
+          .toList(growable: false);
+      return _rankCandidateReserveMatches(
+        query: RoutePoolQuery(
+          userLat: userLat,
+          userLng: userLng,
+          countryCode: nearestRegion.countryCode,
+          admin1Name: nearestRegion.admin1Name,
+          admin2Name: nearestRegion.admin2Name,
+          cityCluster: nearestRegion.cityCluster,
+          distanceBucket: distanceBucket,
+          style: style,
+          avoidHighways: avoidHighways,
+          routeType: routeType,
+          crossBorderAllowed: crossBorderAllowed,
+        ),
+        candidates: candidates,
+        regions: regions,
+      );
+    } catch (_) {
+      return const [];
+    }
+  }
+
   Future<List<RoutePoolMatch>> findCandidateRoutesNear({
     required double userLat,
     required double userLng,
@@ -1413,6 +1559,69 @@ class RoutePoolService {
     } catch (_) {
       return const [];
     }
+  }
+
+  static List<RoutePoolMatch> _findCandidateReserveRoutesInMemory({
+    required double userLat,
+    required double userLng,
+    required int distanceBucket,
+    required String style,
+    required bool avoidHighways,
+    required String routeType,
+    required bool crossBorderAllowed,
+    String? preferredCountryCode,
+    String? preferredAdmin1Name,
+    String? preferredAdmin2Name,
+    String? preferredCityCluster,
+    required List<RoutePoolCandidate> candidates,
+    required List<RouteRegion> regions,
+  }) {
+    final nearestRegion = _resolveNearestRegion(
+      userLat: userLat,
+      userLng: userLng,
+      regions: regions,
+      preferredCountryCode: preferredCountryCode,
+      preferredAdmin1Name: preferredAdmin1Name,
+      preferredAdmin2Name: preferredAdmin2Name,
+      preferredCityCluster: preferredCityCluster,
+    );
+    if (nearestRegion == null || !_reserveFallbackAllowed(nearestRegion)) {
+      return const [];
+    }
+    final styleKeys = _candidateReserveStyleKeys(style);
+    final filtered = candidates
+        .where((candidate) {
+          return candidate.isCandidate &&
+              _sameText(candidate.countryCode, nearestRegion.countryCode) &&
+              _sameText(candidate.admin1Name, nearestRegion.admin1Name) &&
+              _nullableSameText(
+                candidate.admin2Name,
+                nearestRegion.admin2Name,
+              ) &&
+              _sameText(candidate.cityCluster, nearestRegion.cityCluster) &&
+              _sameText(candidate.routeType, routeType) &&
+              candidate.distanceBucket == distanceBucket &&
+              styleKeys.any((key) => _sameText(candidate.styleKey, key)) &&
+              _candidateHighwayCompatible(candidate, avoidHighways);
+        })
+        .toList(growable: false);
+    return _rankCandidateReserveMatches(
+      query: RoutePoolQuery(
+        userLat: userLat,
+        userLng: userLng,
+        countryCode: nearestRegion.countryCode,
+        admin1Name: nearestRegion.admin1Name,
+        admin2Name: nearestRegion.admin2Name,
+        cityCluster: nearestRegion.cityCluster,
+        distanceBucket: distanceBucket,
+        style: style,
+        avoidHighways: avoidHighways,
+        routeType: routeType,
+        crossBorderAllowed: crossBorderAllowed,
+      ),
+      candidates: filtered,
+      regions: regions,
+    );
   }
 
   Future<RoutePoolMatch?> findBestRoute({
@@ -1721,6 +1930,210 @@ class RoutePoolService {
     });
 
     return matches;
+  }
+
+  static List<RoutePoolMatch> _rankCandidateReserveMatches({
+    required RoutePoolQuery query,
+    required Iterable<RoutePoolCandidate> candidates,
+    required Iterable<RouteRegion> regions,
+  }) {
+    final activeRegions = regions.where((region) => region.isActive).toList();
+    final matches = <RoutePoolMatch>[];
+    final requestedStyleKeys = _candidateReserveStyleKeys(query.style);
+
+    for (final candidate in candidates) {
+      if (!candidate.isCandidate || candidate.isVerifiedPool) continue;
+      if (candidate.promotedToPoolAt != null || candidate.demotedAt != null) {
+        continue;
+      }
+      if (!_sameText(candidate.routeType, query.routeType)) continue;
+      if (candidate.distanceBucket != query.distanceBucket) continue;
+      if (!requestedStyleKeys.any(
+        (key) => _sameText(candidate.styleKey, key),
+      )) {
+        continue;
+      }
+      if (!_candidateHighwayCompatible(candidate, query.avoidHighways)) {
+        continue;
+      }
+      final route = _candidateReserveEntry(candidate);
+      if (!_locationScopeMatches(query, route)) continue;
+      if (!_reserveCandidateDistanceFits(candidate, query.distanceBucket)) {
+        continue;
+      }
+      if (!_reserveCandidateGeometrySafe(candidate, query.distanceBucket)) {
+        continue;
+      }
+
+      final distanceKm = haversineDistanceKm(
+        query.userLat,
+        query.userLng,
+        candidate.startLat,
+        candidate.startLng,
+      );
+      final radius = _allowedRadiusFor(query, route, activeRegions);
+      if (radius == null || distanceKm > radius.allowedRadiusKm) continue;
+      final radiusScope = query.routeType == 'ROUND_TRIP'
+          ? _roundTripRadiusScope(query, route, distanceKm)
+          : radius.scope;
+      matches.add(
+        RoutePoolMatch(
+          route: route,
+          startDistanceKm: distanceKm,
+          allowedRadiusKm: radius.allowedRadiusKm,
+          radiusScope: radiusScope,
+        ),
+      );
+    }
+
+    _sortCandidateMatches(
+      matches,
+      requestedBucket: query.distanceBucket,
+      requestedStyle: query.style,
+    );
+    final seenFingerprints = <String>{};
+    return matches
+        .where(
+          (match) => seenFingerprints.add(_fingerprintForRoute(match.route)),
+        )
+        .toList(growable: false);
+  }
+
+  static RoutePoolEntry _candidateReserveEntry(RoutePoolCandidate candidate) {
+    final payload = Map<String, dynamic>.from(candidate.routePayload);
+    final distanceKm =
+        candidate.distanceKm ??
+        (payload['distance_km'] as num?)?.toDouble() ??
+        ((payload['distance'] as num?)?.toDouble() ?? 0.0) / 1000.0;
+    payload['candidate_reserve'] = true;
+    payload['candidate_pool_id'] = candidate.id;
+    payload['route_fingerprint'] = candidate.routeFingerprint;
+    payload['source'] = 'candidate_reserve';
+    payload['route_source'] = 'candidate_reserve';
+    payload.putIfAbsent(
+      'quality_tier',
+      () => _normalizeQualityTier(null, candidate.qualityScore),
+    );
+    payload.putIfAbsent('quality_reason', () => 'candidate_reserve_route');
+    payload.putIfAbsent('final_geometry_source', () => 'candidate_reserve');
+    payload.putIfAbsent('geometry_source', () => 'candidate_reserve');
+    payload.putIfAbsent(
+      'coordinate_count',
+      () => _coordinatesFromGeometry(candidate.geometry).length,
+    );
+    return RoutePoolEntry(
+      id: candidate.id ?? 'candidate:${candidate.routeFingerprint}',
+      countryCode: candidate.countryCode,
+      admin1Name: candidate.admin1Name,
+      admin2Name: candidate.admin2Name,
+      cityCluster: candidate.cityCluster,
+      startLat: candidate.startLat,
+      startLng: candidate.startLng,
+      distanceKm: distanceKm,
+      distanceBucket: candidate.distanceBucket,
+      routeType: candidate.routeType,
+      styleTags: candidate.styleTags.isNotEmpty
+          ? candidate.styleTags
+          : <String>[candidate.styleKey],
+      avoidsHighway: candidate.avoidHighways,
+      hasHighway: candidate.hasHighway,
+      qualityScore: candidate.qualityScore,
+      verified: false,
+      isActive: true,
+      geometry: candidate.geometry,
+      durationSeconds:
+          (payload['duration_seconds'] as num?)?.toDouble() ??
+          (payload['duration'] as num?)?.toDouble(),
+      shapeScore: candidate.shapeScore,
+      averageRating: candidate.averageRating,
+      ratingCount: candidate.ratingCount,
+      completionRate: candidate.completionRate,
+      source: 'candidate_reserve',
+      routePayload: payload,
+    );
+  }
+
+  static Set<String> _candidateReserveStyleKeys(String style) {
+    final normalized = _normalizeStyleKey(style);
+    final profile = RouteStyleConfig.forMode(style).profileKey;
+    return <String>{normalized, profile};
+  }
+
+  static bool _reserveFallbackAllowed(RouteRegion region) {
+    final difficulty = region.difficultyLevel.trim().toLowerCase();
+    final hardStatus = region.hardRegionStatus.trim().toLowerCase();
+    return difficulty == 'hard' ||
+        region.curatedSeedPreferred ||
+        hardStatus == 'curated_needed' ||
+        hardStatus == 'hard_region_curated_needed' ||
+        hardStatus == 'hard_region_thin' ||
+        hardStatus.contains('hard');
+  }
+
+  static bool _reserveCandidateDistanceFits(
+    RoutePoolCandidate candidate,
+    int requestedBucket,
+  ) {
+    final distanceKm = candidate.distanceKm;
+    if (distanceKm == null || !distanceKm.isFinite || distanceKm <= 0) {
+      return false;
+    }
+    final minKm = switch (requestedBucket) {
+      50 => 42.0,
+      75 => 62.0,
+      100 => 92.0,
+      _ => requestedBucket * 0.82,
+    };
+    final maxKm = switch (requestedBucket) {
+      50 => 66.0,
+      75 => 92.0,
+      100 => 112.5,
+      _ => requestedBucket * 1.16,
+    };
+    return distanceKm >= minKm && distanceKm <= maxKm;
+  }
+
+  static bool _reserveCandidateGeometrySafe(
+    RoutePoolCandidate candidate,
+    int requestedBucket,
+  ) {
+    if (candidate.qualityScore < 70.0) return false;
+    final coordinates = _coordinatesFromGeometry(candidate.geometry);
+    if (coordinates.length < _minimumReserveCoordinateCount(requestedBucket)) {
+      return false;
+    }
+    return _maxSegmentMetersForCoordinates(coordinates) <=
+        _maximumReserveSegmentMeters(requestedBucket);
+  }
+
+  static int _minimumReserveCoordinateCount(int requestedBucket) {
+    if (requestedBucket >= 100) return 145;
+    if (requestedBucket >= 75) return 105;
+    return 70;
+  }
+
+  static double _maximumReserveSegmentMeters(int requestedBucket) {
+    return requestedBucket >= 100 ? 2500.0 : 2000.0;
+  }
+
+  static double _maxSegmentMetersForCoordinates(
+    List<List<double>> coordinates,
+  ) {
+    if (coordinates.length < 2) return 0.0;
+    var maxSegment = 0.0;
+    for (var index = 1; index < coordinates.length; index++) {
+      maxSegment = math.max(
+        maxSegment,
+        haversineDistanceKm(
+              coordinates[index - 1][1],
+              coordinates[index - 1][0],
+              coordinates[index][1],
+              coordinates[index][0],
+            ) *
+            1000.0,
+      );
+    }
+    return maxSegment;
   }
 
   static void _sortCandidateMatches(

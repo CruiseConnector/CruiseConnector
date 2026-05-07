@@ -2067,6 +2067,158 @@ void main() {
     });
 
     test(
+      'Candidate-Reserve nutzt nur sichere Candidates in Hard-Region',
+      () async {
+        final service = RoutePoolService(
+          inMemoryRegions: [
+            _region(
+              countryCode: 'AT',
+              admin1Name: 'Vorarlberg',
+              admin2Name: 'Bludenz',
+              cityCluster: 'Bludenz',
+              centerLat: 47.1548,
+              centerLng: 9.8220,
+              difficultyLevel: 'hard',
+              hardRegionStatus: 'curated_needed',
+              curatedSeedPreferred: true,
+            ),
+          ],
+          inMemoryRoutes: const [],
+          inMemoryCoverage: <RoutePoolCoverage>[],
+          inMemorySeedJobs: <RouteSeedJob>[],
+          inMemoryCandidates: [
+            _candidate(
+              id: 'bludenz-safe-reserve',
+              distanceKm: 58,
+              coordinateCount: 120,
+            ),
+            _candidate(
+              id: 'bludenz-highway-reserve',
+              distanceKm: 55,
+              coordinateCount: 120,
+              hasHighway: true,
+              avoidHighways: false,
+            ),
+            _candidate(
+              id: 'bludenz-sparse-reserve',
+              distanceKm: 55,
+              coordinateCount: 12,
+            ),
+            _candidate(
+              id: 'bludenz-demoted-reserve',
+              distanceKm: 55,
+              coordinateCount: 120,
+              demotedAt: DateTime.utc(2026),
+              isCandidate: true,
+            ),
+          ],
+        );
+
+        final matches = await service.findCandidateReserveRoutesNear(
+          userLat: 47.1548,
+          userLng: 9.8220,
+          distanceBucket: 50,
+          style: 'Sport Mode',
+          avoidHighways: true,
+        );
+
+        expect(matches, hasLength(1));
+        expect(matches.single.route.id, 'bludenz-safe-reserve');
+        expect(matches.single.route.source, 'candidate_reserve');
+        expect(matches.single.route.verified, isFalse);
+        expect(matches.single.route.routePayload['candidate_reserve'], true);
+        expect(
+          matches.single.route.routePayload['route_source'],
+          'candidate_reserve',
+        );
+      },
+    );
+
+    test('Candidate-Reserve blockiert 100-km Short-Fallbacks', () async {
+      final service = RoutePoolService(
+        inMemoryRegions: [
+          _region(
+            countryCode: 'AT',
+            admin1Name: 'Vorarlberg',
+            admin2Name: 'Bludenz',
+            cityCluster: 'Bludenz',
+            centerLat: 47.1548,
+            centerLng: 9.8220,
+            difficultyLevel: 'hard',
+            hardRegionStatus: 'curated_needed',
+            curatedSeedPreferred: true,
+          ),
+        ],
+        inMemoryRoutes: const [],
+        inMemoryCoverage: <RoutePoolCoverage>[],
+        inMemorySeedJobs: <RouteSeedJob>[],
+        inMemoryCandidates: [
+          _candidate(
+            id: 'bludenz-short-100-reserve',
+            distanceBucket: 100,
+            distanceKm: 89,
+            coordinateCount: 180,
+          ),
+          _candidate(
+            id: 'bludenz-safe-100-reserve',
+            distanceBucket: 100,
+            distanceKm: 98,
+            coordinateCount: 180,
+          ),
+        ],
+      );
+
+      final matches = await service.findCandidateReserveRoutesNear(
+        userLat: 47.1548,
+        userLng: 9.8220,
+        distanceBucket: 100,
+        style: 'Sport Mode',
+        avoidHighways: true,
+      );
+
+      expect(matches, hasLength(1));
+      expect(matches.single.route.id, 'bludenz-safe-100-reserve');
+    });
+
+    test('Candidate-Reserve ist in normalen Regionen deaktiviert', () async {
+      final service = RoutePoolService(
+        inMemoryRegions: [
+          _region(
+            countryCode: 'AT',
+            admin1Name: 'Vorarlberg',
+            admin2Name: 'Dornbirn',
+            cityCluster: 'Dornbirn',
+            centerLat: 47.4125,
+            centerLng: 9.7417,
+          ),
+        ],
+        inMemoryRoutes: const [],
+        inMemoryCoverage: <RoutePoolCoverage>[],
+        inMemorySeedJobs: <RouteSeedJob>[],
+        inMemoryCandidates: [
+          _candidate(
+            id: 'dornbirn-safe-reserve',
+            cityCluster: 'Dornbirn',
+            startLat: 47.4125,
+            startLng: 9.7417,
+            distanceKm: 55,
+            coordinateCount: 120,
+          ),
+        ],
+      );
+
+      final matches = await service.findCandidateReserveRoutesNear(
+        userLat: 47.4125,
+        userLng: 9.7417,
+        distanceBucket: 50,
+        style: 'Sport Mode',
+        avoidHighways: true,
+      );
+
+      expect(matches, isEmpty);
+    });
+
+    test(
       'Cluster mit vielen falschen Routen ist ohne passende Zellen nicht healthy_minimum',
       () async {
         final service = RoutePoolService(
@@ -2612,4 +2764,83 @@ RoutePoolEntry _route({
       ],
     },
   );
+}
+
+RoutePoolCandidate _candidate({
+  required String id,
+  String countryCode = 'AT',
+  String admin1Name = 'Vorarlberg',
+  String? admin2Name = 'Bludenz',
+  String cityCluster = 'Bludenz',
+  double startLat = 47.1548,
+  double startLng = 9.8220,
+  int distanceBucket = 50,
+  double distanceKm = 55,
+  String styleKey = 'sport',
+  List<String> styleTags = const ['Sport Mode'],
+  bool avoidHighways = true,
+  bool hasHighway = false,
+  double qualityScore = 78,
+  int coordinateCount = 120,
+  DateTime? promotedToPoolAt,
+  DateTime? demotedAt,
+  bool isCandidate = true,
+  bool isVerifiedPool = false,
+}) {
+  return RoutePoolCandidate(
+    id: id,
+    routeFingerprint: 'fingerprint-$id',
+    countryCode: countryCode,
+    admin1Name: admin1Name,
+    admin2Name: admin2Name,
+    cityCluster: cityCluster,
+    startLat: startLat,
+    startLng: startLng,
+    distanceKm: distanceKm,
+    routeType: 'ROUND_TRIP',
+    distanceBucket: distanceBucket,
+    styleKey: styleKey,
+    styleTags: styleTags,
+    avoidHighways: avoidHighways,
+    hasHighway: hasHighway,
+    qualityScore: qualityScore,
+    shapeScore: 78,
+    candidateSource: 'bootstrap',
+    promotedToPoolAt: promotedToPoolAt,
+    demotedAt: demotedAt,
+    isCandidate: isCandidate,
+    isVerifiedPool: isVerifiedPool,
+    geometry: _candidateReserveGeometry(
+      startLat: startLat,
+      startLng: startLng,
+      coordinateCount: coordinateCount,
+    ),
+    routePayload: {
+      'quality_tier': 'acceptable',
+      'final_geometry_source': 'hydrated_worker',
+      'route_distance_km': distanceKm,
+    },
+  );
+}
+
+Map<String, dynamic> _candidateReserveGeometry({
+  required double startLat,
+  required double startLng,
+  required int coordinateCount,
+}) {
+  final safeCount = coordinateCount.clamp(2, 240).toInt();
+  final coordinates = List<List<double>>.generate(safeCount, (index) {
+    final phase = index % 4;
+    final lap = index / (safeCount - 1);
+    final offset = 0.006 + (lap * 0.002);
+    return switch (phase) {
+      0 => [startLng, startLat],
+      1 => [startLng + offset, startLat + 0.002],
+      2 => [startLng + offset, startLat + offset],
+      _ => [startLng - 0.002, startLat + offset],
+    };
+  });
+  coordinates[0] = [startLng, startLat];
+  coordinates[coordinates.length - 1] = [startLng, startLat];
+  return {'type': 'LineString', 'coordinates': coordinates};
 }

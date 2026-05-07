@@ -41,6 +41,13 @@ geo.Position _position(double lat, double lng) => geo.Position(
 );
 
 Map<String, dynamic> _closedLoopResponse() {
+  return _closedLoopResponseAt(latitude: 47.5162, longitude: 9.7471);
+}
+
+Map<String, dynamic> _closedLoopResponseAt({
+  required double latitude,
+  required double longitude,
+}) {
   final coords = List.generate(120, (i) {
     final t = (2 * math.pi * i) / 119;
     final radius =
@@ -49,11 +56,11 @@ Map<String, dynamic> _closedLoopResponse() {
         math.cos(t * 4) * (0.0016 * 0.18) +
         math.sin(t * 3) * (0.0016 * 0.12);
     return [
-      9.7471 + math.cos(t) * radius,
-      47.5162 + math.sin(t) * radius * 0.55,
+      longitude + math.cos(t) * radius,
+      latitude + math.sin(t) * radius * 0.55,
     ];
   });
-  coords[0] = [9.7471, 47.5162];
+  coords[0] = [longitude, latitude];
   coords[coords.length - 1] = [...coords.first];
 
   return {
@@ -277,12 +284,16 @@ class _SequenceInvoker implements RouteEdgeInvoker {
 class _FakeRoutePoolService extends RoutePoolService {
   _FakeRoutePoolService(
     this.match, {
+    RoutePoolMatch? reserveMatch,
     List<RoutePoolCoverageCheck>? coverageResponses,
-  }) : _coverageResponses = coverageResponses ?? const [];
+  }) : reserveMatch = reserveMatch,
+       _coverageResponses = coverageResponses ?? const [];
 
   final RoutePoolMatch? match;
+  final RoutePoolMatch? reserveMatch;
   final List<RoutePoolCoverageCheck> _coverageResponses;
   final calls = <Map<String, dynamic>>[];
+  final reserveCalls = <Map<String, dynamic>>[];
   final coverageCalls = <Map<String, dynamic>>[];
   int ensureCoverageCallCount = 0;
 
@@ -348,6 +359,38 @@ class _FakeRoutePoolService extends RoutePoolService {
       'candidateLimit': candidateLimit,
     });
     return match == null ? const [] : [match!];
+  }
+
+  @override
+  Future<List<RoutePoolMatch>> findCandidateReserveRoutesNear({
+    required double userLat,
+    required double userLng,
+    required int distanceBucket,
+    required String style,
+    required bool avoidHighways,
+    String routeType = 'ROUND_TRIP',
+    bool crossBorderAllowed = false,
+    String? preferredCountryCode,
+    String? preferredAdmin1Name,
+    String? preferredAdmin2Name,
+    String? preferredCityCluster,
+    int candidateLimit = 80,
+  }) async {
+    reserveCalls.add({
+      'userLat': userLat,
+      'userLng': userLng,
+      'distanceBucket': distanceBucket,
+      'style': style,
+      'avoidHighways': avoidHighways,
+      'routeType': routeType,
+      'crossBorderAllowed': crossBorderAllowed,
+      'preferredCountryCode': preferredCountryCode,
+      'preferredAdmin1Name': preferredAdmin1Name,
+      'preferredAdmin2Name': preferredAdmin2Name,
+      'preferredCityCluster': preferredCityCluster,
+      'candidateLimit': candidateLimit,
+    });
+    return reserveMatch == null ? const [] : [reserveMatch!];
   }
 
   @override
@@ -578,6 +621,9 @@ RoutePoolMatch _poolMatchWithResponse({
   double distanceKm = 52,
   int distanceBucket = 50,
   List<String> styleTags = const ['Sport Mode'],
+  bool verified = true,
+  String source = 'curated',
+  Map<String, dynamic> routePayload = const {},
 }) {
   final route = response['route'] as Map<String, dynamic>;
   final geometry = Map<String, dynamic>.from(route['geometry'] as Map);
@@ -599,9 +645,11 @@ RoutePoolMatch _poolMatchWithResponse({
       avoidsHighway: true,
       hasHighway: false,
       qualityScore: 92,
-      verified: true,
+      verified: verified,
       geometry: geometry,
       durationSeconds: 4300,
+      source: source,
+      routePayload: routePayload,
     ),
     startDistanceKm: startDistanceKm,
     allowedRadiusKm: 12,
@@ -1209,6 +1257,57 @@ void main() {
       expect(second.edgeMeta['duplicate_skipped'], isTrue);
       expect(second.edgeMeta['pool_seen_candidate_count'], 1);
       expect(second.edgeMeta['previous_route_fingerprints'], isNotEmpty);
+    },
+  );
+
+  test(
+    'Hard-Region nutzt Candidate-Reserve nach leerem verified Pool',
+    () async {
+      final reserveMatch = _poolMatchWithResponse(
+        response: _closedLoopResponseAt(latitude: 47.1548, longitude: 9.8220),
+        id: 'candidate-reserve-bludenz-50-sport',
+        cityCluster: 'Bludenz',
+        startDistanceKm: 0.3,
+        verified: false,
+        source: 'candidate_reserve',
+        routePayload: const {
+          'candidate_reserve': true,
+          'candidate_pool_id': 'candidate-reserve-bludenz-50-sport',
+        },
+      );
+      final poolService = _FakeRoutePoolService(
+        null,
+        reserveMatch: reserveMatch,
+      );
+      service = RouteService(
+        invoker: _AlwaysFailingInvoker(),
+        routePoolService: poolService,
+      );
+
+      final route = await service.generateRoundTrip(
+        startPosition: _position(47.1548, 9.8220),
+        targetDistanceKm: 50,
+        mode: 'Sport Mode',
+        planningType: 'Zufall',
+        avoidHighways: true,
+        forceFreshVariant: true,
+        subscriptionTier: 'premium',
+      );
+
+      expect(route.coordinates, isNotEmpty);
+      expect(poolService.calls, hasLength(1));
+      expect(poolService.reserveCalls, hasLength(1));
+      expect(poolService.reserveCalls.single['distanceBucket'], 50);
+      expect(poolService.reserveCalls.single['avoidHighways'], true);
+      expect(route.edgeMeta['route_source'], 'candidate_reserve');
+      expect(route.edgeMeta['source'], 'candidate_reserve');
+      expect(route.edgeMeta['candidate_reserve_used'], true);
+      expect(route.edgeMeta['candidate_pool_id'], reserveMatch.route.id);
+      expect(route.edgeMeta['quality_tier'], 'acceptable');
+      expect(route.edgeMeta['final_geometry_source'], 'road_snapped_full');
+      expect(route.edgeMeta['road_snapped_geometry'], true);
+      expect(RouteService.lastRouteGenerationSource, 'candidate_reserve');
+      expect(RouteService.lastRouteTemporaryCandidate, true);
     },
   );
 

@@ -4900,7 +4900,7 @@ class RouteService {
     lastRouteAccessLegUsed = false;
     lastRouteAccessLegDistanceKm = null;
 
-    final matches = await _routePoolService.findCandidateRoutesNear(
+    var matches = await _routePoolService.findCandidateRoutesNear(
       userLat: userLat,
       userLng: userLng,
       distanceBucket: bucket,
@@ -4908,6 +4908,18 @@ class RouteService {
       avoidHighways: scenario.avoidHighways,
       routeType: scenario.routeType,
     );
+    var usingCandidateReserve = false;
+    if (matches.isEmpty && scenario.isRoundTrip) {
+      matches = await _routePoolService.findCandidateReserveRoutesNear(
+        userLat: userLat,
+        userLng: userLng,
+        distanceBucket: bucket,
+        style: scenario.style,
+        avoidHighways: scenario.avoidHighways,
+        routeType: scenario.routeType,
+      );
+      usingCandidateReserve = matches.isNotEmpty;
+    }
     lastRoutePoolCandidateCount = matches.length;
     if (matches.isEmpty) {
       lastRoutePoolExactBucketMissing = true;
@@ -5028,17 +5040,25 @@ class RouteService {
 
       lastRoutePoolFallbackUsed = true;
       lastRouteEmergencyFallbackUsed = true;
-      lastRouteGenerationSource = 'pool';
+      lastRouteGenerationSource = usingCandidateReserve
+          ? 'candidate_reserve'
+          : 'pool';
+      if (usingCandidateReserve) {
+        lastRouteTemporaryCandidate = true;
+      }
       lastRoutePoolMatchId = match.route.id;
       lastRoutePoolMatchTier = match.radiusScope;
       lastRoutePoolStartDistanceKm = actualPoolStartDistanceKm;
-      lastRoutePoolUsedReason = fallbackReason;
+      lastRoutePoolUsedReason = usingCandidateReserve
+          ? 'candidate_reserve:$fallbackReason'
+          : fallbackReason;
       _debugRouteSearch(
         '[PoolFallback] poolHit=true poolUsed=true '
         'poolMatchId=${match.route.id} poolMatchTier=${match.radiusScope} '
         'poolStartDistanceKm=${actualPoolStartDistanceKm.toStringAsFixed(1)} '
         'poolCandidateCount=${matches.length} '
         'poolSeenCandidateCount=$lastRoutePoolSeenCandidateCount '
+        'candidateReserve=$usingCandidateReserve '
         'fallbackReason=$fallbackReason',
       );
 
@@ -5058,17 +5078,25 @@ class RouteService {
       lastRouteDuplicateFallbackUsed = true;
       lastRoutePoolFallbackUsed = true;
       lastRouteEmergencyFallbackUsed = true;
-      lastRouteGenerationSource = 'pool';
+      lastRouteGenerationSource = usingCandidateReserve
+          ? 'candidate_reserve'
+          : 'pool';
+      if (usingCandidateReserve) {
+        lastRouteTemporaryCandidate = true;
+      }
       lastRoutePoolMatchId = match.route.id;
       lastRoutePoolMatchTier = match.radiusScope;
       lastRoutePoolStartDistanceKm = bestSeenStartDistanceKm;
-      lastRoutePoolUsedReason = 'duplicate_pool_fallback:$fallbackReason';
+      lastRoutePoolUsedReason = usingCandidateReserve
+          ? 'duplicate_candidate_reserve_fallback:$fallbackReason'
+          : 'duplicate_pool_fallback:$fallbackReason';
       _debugRouteSearch(
         '[PoolFallback] poolHit=true poolUsed=true duplicateFallbackUsed=true '
         'poolMatchId=${match.route.id} poolMatchTier=${match.radiusScope} '
         'poolStartDistanceKm=${bestSeenStartDistanceKm?.toStringAsFixed(1)} '
         'poolCandidateCount=${matches.length} '
         'poolSeenCandidateCount=$lastRoutePoolSeenCandidateCount '
+        'candidateReserve=$usingCandidateReserve '
         'fallbackReason=$fallbackReason',
       );
       return _finalizeAndRemember(
@@ -6008,6 +6036,10 @@ class RouteService {
     if (geometry['type'] != 'LineString') return null;
     final coordinates = extractCoordinates(geometry);
     if (coordinates.length < 2) return null;
+    final candidateReserve =
+        match.route.source == 'candidate_reserve' ||
+        match.route.routePayload['candidate_reserve'] == true;
+    final routeSource = candidateReserve ? 'candidate_reserve' : 'pool';
     final styleMetrics = styleConfig.calculateStyleMetrics(
       coordinates: coordinates,
       distanceKm: match.route.distanceKm,
@@ -6020,16 +6052,28 @@ class RouteService {
     );
     final meta = <String, dynamic>{
       ...match.route.routePayload,
-      'route_source': 'pool',
-      'source': 'pool',
+      'route_source': routeSource,
+      'source': routeSource,
       'fallbackUsed': true,
       'fallback_reason': fallbackReason,
       'pool_match_id': match.route.id,
       'pool_match_tier': match.radiusScope,
       'pool_start_distance_km': match.startDistanceKm,
       'pool_allowed_radius_km': match.allowedRadiusKm,
-      'quality_tier': 'good',
-      'quality_reason': 'verified_route_pool',
+      'quality_tier': candidateReserve ? 'acceptable' : 'good',
+      'quality_reason': candidateReserve
+          ? 'candidate_reserve_route'
+          : 'verified_route_pool',
+      'candidate_reserve_used': candidateReserve,
+      'candidate_pool_id': candidateReserve ? match.route.id : null,
+      'final_geometry_source': candidateReserve
+          ? 'road_snapped_full'
+          : (match.route.routePayload['final_geometry_source'] ??
+                match.route.routePayload['geometry_source'] ??
+                'route_pool'),
+      'road_snapped_geometry': true,
+      'final_coordinate_count': coordinates.length,
+      'max_display_segment_m': _maxSegmentMeters(coordinates),
       'selected_style': scenario.style,
       'style_fit_score': double.parse(styleFitScore.toStringAsFixed(1)),
       'style_fit_reasons': styleConfig.styleFitReasons(styleMetrics),
@@ -6058,9 +6102,10 @@ class RouteService {
       'distance_bucket': match.route.distanceBucket,
       'mode': scenario.style,
       'orchestration': {
-        'source': 'route_pool',
+        'source': routeSource,
         'pool_hit': true,
         'pool_used': true,
+        'candidate_reserve_used': candidateReserve,
         'pool_match_id': match.route.id,
         'pool_radius_scope': match.radiusScope,
         'mapbox_attempt_count': lastRouteApiCallCount,
@@ -6082,6 +6127,9 @@ class RouteService {
 
   RouteVariant _poolRouteVariant(RouteScenario scenario, RoutePoolMatch match) {
     final bucket = match.route.distanceBucket;
+    final candidateReserve =
+        match.route.source == 'candidate_reserve' ||
+        match.route.routePayload['candidate_reserve'] == true;
     return RouteVariant(
       index: 0,
       seed: 0,
@@ -6089,7 +6137,9 @@ class RouteService {
       radiusJitter: 1,
       offsetBearing: 0,
       fingerprintHint: '${scenario.scenarioKey}|pool|${match.route.id}',
-      variantHint: 'pool-${match.route.id}-$bucket',
+      variantHint: candidateReserve
+          ? 'candidate-reserve-${match.route.id}-$bucket'
+          : 'pool-${match.route.id}-$bucket',
       styleBias: scenario.style,
     );
   }
