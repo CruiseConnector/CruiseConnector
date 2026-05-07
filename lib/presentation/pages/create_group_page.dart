@@ -1,4 +1,5 @@
-import 'dart:convert';
+import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
@@ -11,15 +12,20 @@ import '../../core/input_limits.dart';
 import '../../data/services/cruise_group_service.dart';
 import '../../data/services/gamification_service.dart';
 import '../../data/services/geocoding_service.dart';
+import '../../data/services/group_route_data_builder.dart';
 import '../../data/services/route_service.dart';
+import '../../domain/models/mapbox_suggestion.dart';
 import '../../domain/models/route_result.dart';
 import '../widgets/badge_unlock_popup.dart';
+import '../widgets/cruise/cruise_setup_card.dart';
 import 'group_lobby_page.dart';
 
 /// Gruppenerstellung mit Live-Map: Startpunkt wählen (GPS / Karte / Adresse),
 /// Route generieren, dann als Gruppe in Supabase speichern.
 class CreateGroupPage extends StatefulWidget {
-  const CreateGroupPage({super.key});
+  const CreateGroupPage({super.key, this.disableMapTilesForTesting = false});
+
+  final bool disableMapTilesForTesting;
 
   @override
   State<CreateGroupPage> createState() => _CreateGroupPageState();
@@ -35,18 +41,39 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
   final _nameCtrl = TextEditingController();
   final _descCtrl = TextEditingController();
   final _addressCtrl = TextEditingController();
+  final _destinationCtrl = TextEditingController();
 
   double _maxPeople = 10;
   String _selectedLength = '50 Km';
-  String _selectedLocation = 'Aktueller Standort'; // oder 'Karte antippen'
+  String _selectedLocation = 'Aktueller Standort';
   String _selectedStyle = 'Sport Mode';
+  String _planningType = 'Zufall';
+  String _selectedDetour = 'Direkt';
   String _selectedVisibility = 'Öffentlich (Für jeden)';
   DateTime? _selectedDateTime;
+  bool _isRoundTrip = true;
+  bool _avoidHighways = false;
+  MapboxSuggestion? _selectedDestination;
 
   // Map-State
   LatLng? _startPoint;
+  final List<LatLng> _roundTripWaypoints = [];
   List<LatLng> _routeLatLngs = [];
   RouteResult? _lastRoute;
+  int? _selectedWaypointIndex;
+  int? _replaceWaypointIndex;
+  String _waypointOrigin = 'manual';
+  int _waypointSeedAttempt = 0;
+  int _waypointSeedCounter = 0;
+  int _routeGenerationSerial = 0;
+  bool _lastGeneratedWasRoundTrip = true;
+  String? _lastGeneratedPlanningType;
+  String? _lastGeneratedStyle;
+  int? _lastGeneratedTargetKm;
+  bool? _lastGeneratedAvoidHighways;
+  String? _lastGeneratedWaypointSignature;
+  String? _lastGeneratedDestinationSignature;
+  String _routeStatusText = 'Bereit';
 
   bool _isGenerating = false;
   bool _isCreating = false;
@@ -62,6 +89,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
     _nameCtrl.dispose();
     _descCtrl.dispose();
     _addressCtrl.dispose();
+    _destinationCtrl.dispose();
     super.dispose();
   }
 
@@ -115,57 +143,423 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
 
   Future<void> _generateRoute() async {
     if (_isGenerating) return;
-    if (_startPoint == null) {
-      _showError('Bitte Startpunkt wählen (GPS oder Karte antippen).');
-      return;
-    }
-    setState(() => _isGenerating = true);
+    final generationId = ++_routeGenerationSerial;
+    setState(() {
+      _isGenerating = true;
+      _routeStatusText = 'Route wird berechnet';
+    });
     try {
-      final digits = _selectedLength.replaceAll(RegExp(r'[^0-9]'), '');
-      final distance = digits.isNotEmpty ? int.parse(digits) : 50;
-
-      final pos = geo.Position(
-        latitude: _startPoint!.latitude,
-        longitude: _startPoint!.longitude,
-        timestamp: DateTime.now(),
-        accuracy: 1,
-        altitude: 0,
-        heading: 0,
-        speed: 0,
-        speedAccuracy: 0,
-        altitudeAccuracy: 0,
-        headingAccuracy: 0,
-      );
-
-      final result = await _routeService.generateRoundTrip(
-        startPosition: pos,
-        targetDistanceKm: distance,
-        mode: _selectedStyle,
-        planningType: 'Zufall',
-      );
-
-      final coords = result.coordinates
-          .map((c) => LatLng(c[1], c[0])) // [lng,lat] → LatLng(lat,lng)
-          .toList();
-
-      setState(() {
-        _lastRoute = result;
-        _routeLatLngs = coords;
-      });
-
-      if (coords.isNotEmpty) {
-        _mapController.fitCamera(
-          CameraFit.bounds(
-            bounds: LatLngBounds.fromPoints(coords),
-            padding: const EdgeInsets.all(40),
-          ),
+      final startPosition = await _getStartCoordinates();
+      if (!_isCurrentGeneration(generationId)) return;
+      final targetKm = _targetDistanceKm();
+      final waypointSnapshot = List<LatLng>.unmodifiable(_roundTripWaypoints);
+      final waypointSignature = _isWaypointPlanning
+          ? _waypointSignature(waypointSnapshot)
+          : null;
+      if (_isWaypointPlanning &&
+          (waypointSnapshot.isEmpty || waypointSnapshot.length > 3)) {
+        _showError(
+          waypointSnapshot.isEmpty
+              ? 'Setze mindestens einen Stopp oder lass Stopps vorschlagen.'
+              : 'Bitte nutze maximal 3 Stopps.',
         );
+        return;
       }
+
+      final forceFreshVariant = _shouldForceFreshRoute(
+        targetKm: targetKm,
+        waypointSignature: waypointSignature,
+      );
+
+      final result = _isRoundTrip
+          ? await _generateRoundTripRoute(
+              startPosition: startPosition,
+              targetKm: targetKm,
+              waypointSnapshot: waypointSnapshot,
+              forceFreshVariant: forceFreshVariant,
+            )
+          : await _generatePointToPointRoute(
+              startPosition: startPosition,
+              forceFreshVariant: forceFreshVariant,
+            );
+      if (!_isCurrentGeneration(generationId)) return;
+      await _acceptGeneratedRoute(
+        result,
+        targetKm: targetKm,
+        waypointSignature: waypointSignature,
+      );
     } catch (e) {
-      _showError('Route-Generierung fehlgeschlagen: $e');
+      if (!_isCurrentGeneration(generationId)) return;
+      if (e is RouteServiceException && _isSearchInProgressError(e)) {
+        final sessionId = e.edgeMeta['search_session_id']?.toString();
+        if (sessionId != null && sessionId.isNotEmpty) {
+          final polled = await _pollRoundTripSearchSession(
+            sessionId,
+            generationId: generationId,
+          );
+          if (!_isCurrentGeneration(generationId)) return;
+          if (polled != null) {
+            await _acceptGeneratedRoute(
+              polled,
+              targetKm: _targetDistanceKm(),
+              waypointSignature: _isWaypointPlanning
+                  ? _waypointSignature(_roundTripWaypoints)
+                  : null,
+            );
+            return;
+          }
+          _showError(
+            'Wir prüfen weitere Routenvorschläge im Hintergrund. Bitte versuche es gleich erneut.',
+          );
+          return;
+        }
+      }
+      final message = e is RouteServiceException
+          ? e.userMessage
+          : 'Route konnte nicht generiert werden. Bitte versuche es erneut.';
+      _showError(message);
     } finally {
       if (mounted) setState(() => _isGenerating = false);
     }
+  }
+
+  Future<RouteResult> _generateRoundTripRoute({
+    required geo.Position startPosition,
+    required int targetKm,
+    required List<LatLng> waypointSnapshot,
+    required bool forceFreshVariant,
+  }) {
+    final effectiveTargetKm = _isWaypointPlanning
+        ? _estimateWaypointRouteTargetKm(
+            startPosition: startPosition,
+            waypoints: waypointSnapshot,
+            fallbackKm: targetKm,
+          )
+        : targetKm;
+    return _routeService.generateRoundTrip(
+      startPosition: startPosition,
+      targetDistanceKm: effectiveTargetKm,
+      mode: _selectedStyle,
+      planningType: _planningType,
+      waypointOrigin: _isWaypointPlanning ? _waypointOrigin : null,
+      waypointSeedAttempt: _isWaypointPlanning ? _waypointSeedAttempt : null,
+      userWaypoints: waypointSnapshot
+          .map(
+            (point) => <String, double>{
+              'latitude': point.latitude,
+              'longitude': point.longitude,
+            },
+          )
+          .toList(growable: false),
+      avoidHighways: _avoidHighways,
+      forceFreshVariant: forceFreshVariant,
+      debugTrigger: forceFreshVariant ? 'groupSearchAgain' : 'groupFirstSearch',
+      subscriptionTier: RouteService.resolveEffectiveSubscriptionTier(
+        isTesterOrBeta: true,
+      ),
+    );
+  }
+
+  Future<RouteResult> _generatePointToPointRoute({
+    required geo.Position startPosition,
+    required bool forceFreshVariant,
+  }) async {
+    final destination = await _resolveDestination(startPosition);
+    if (destination == null) {
+      throw const RouteServiceException(
+        type: RouteErrorType.validation,
+        userMessage: 'Bitte wähle ein Ziel aus.',
+        debugMessage: 'Group route generation missing destination.',
+      );
+    }
+    final detourVariant = _detourVariant;
+    final scenicMode = detourVariant > 0;
+    return _routeService.generatePointToPoint(
+      startPosition: startPosition,
+      destinationLat: destination.latitude,
+      destinationLng: destination.longitude,
+      mode: scenicMode ? _selectedStyle : 'Standard',
+      scenic: scenicMode,
+      routeVariant: detourVariant,
+      avoidHighways: _avoidHighways,
+      diversitySeed: Object.hash(
+        destination.latitude.round(),
+        destination.longitude.round(),
+        detourVariant,
+        _avoidHighways,
+        forceFreshVariant,
+      ),
+      forceFreshVariant: forceFreshVariant,
+      subscriptionTier: RouteService.resolveEffectiveSubscriptionTier(
+        isTesterOrBeta: true,
+      ),
+    );
+  }
+
+  Future<geo.Position> _getStartCoordinates() async {
+    if (_selectedLocation == 'Aktueller Standort' || _startPoint == null) {
+      final pos = await _getCurrentPosition();
+      if (mounted) {
+        setState(() => _startPoint = LatLng(pos.latitude, pos.longitude));
+      }
+      return pos;
+    }
+    return _positionFromLatLng(_startPoint!);
+  }
+
+  geo.Position _positionFromLatLng(LatLng point) {
+    return geo.Position(
+      latitude: point.latitude,
+      longitude: point.longitude,
+      timestamp: DateTime.now(),
+      accuracy: 1,
+      altitude: 0,
+      heading: 0,
+      speed: 0,
+      speedAccuracy: 0,
+      altitudeAccuracy: 0,
+      headingAccuracy: 0,
+    );
+  }
+
+  Future<MapboxSuggestion?> _resolveDestination(geo.Position start) async {
+    final selected = _selectedDestination;
+    if (selected != null) return selected;
+    final query = _destinationCtrl.text.trim();
+    if (query.isEmpty) return null;
+    final coordinates = await _geocodingService.getCoordinatesFromAddress(
+      query,
+      proximityLatitude: start.latitude,
+      proximityLongitude: start.longitude,
+      requireUnambiguous: true,
+    );
+    if (coordinates == null) return null;
+    final suggestion = MapboxSuggestion(
+      placeName: query,
+      coordinates: [coordinates['longitude']!, coordinates['latitude']!],
+    );
+    if (mounted) setState(() => _selectedDestination = suggestion);
+    return suggestion;
+  }
+
+  Future<void> _acceptGeneratedRoute(
+    RouteResult result, {
+    required int targetKm,
+    required String? waypointSignature,
+  }) async {
+    final coords = result.coordinates
+        .where((c) => c.length >= 2)
+        .map((c) => LatLng(c[1], c[0]))
+        .toList(growable: false);
+    if (coords.length < 2) {
+      throw const RouteServiceException(
+        type: RouteErrorType.emptyResponse,
+        userMessage: 'Die Route enthält zu wenige Punkte.',
+        debugMessage: 'Group route result has fewer than 2 coordinates.',
+      );
+    }
+    final deliveredWaypoints =
+        _isWaypointPlanning && _waypointOrigin == 'auto_seed'
+        ? _deliveredWaypointsFromMeta(result.edgeMeta)
+        : const <LatLng>[];
+    if (mounted) {
+      setState(() {
+        _lastRoute = result;
+        _routeLatLngs = coords;
+        if (deliveredWaypoints.isNotEmpty) {
+          _roundTripWaypoints
+            ..clear()
+            ..addAll(deliveredWaypoints);
+          _selectedWaypointIndex = 0;
+          _replaceWaypointIndex = null;
+        }
+        _lastGeneratedWasRoundTrip = _isRoundTrip;
+        _lastGeneratedPlanningType = _planningType;
+        _lastGeneratedStyle = _selectedStyle;
+        _lastGeneratedTargetKm = targetKm;
+        _lastGeneratedAvoidHighways = _avoidHighways;
+        _lastGeneratedWaypointSignature = deliveredWaypoints.isNotEmpty
+            ? _waypointSignature(deliveredWaypoints)
+            : waypointSignature;
+        _lastGeneratedDestinationSignature = _destinationSignature();
+        _routeStatusText = 'Route bereit';
+      });
+    }
+    _fitRouteBounds(coords);
+  }
+
+  Future<RouteResult?> _pollRoundTripSearchSession(
+    String sessionId, {
+    required int generationId,
+  }) async {
+    DateTime? lastKickAt;
+    for (var poll = 0; poll < 30; poll += 1) {
+      if (!_isCurrentGeneration(generationId)) return null;
+      if (mounted) {
+        setState(() => _routeStatusText = 'Wir prüfen Live-Varianten');
+      }
+      await Future.delayed(const Duration(seconds: 4));
+      if (!_isCurrentGeneration(generationId)) return null;
+      final result = await _routeService.pollRoundTripSearchSession(sessionId);
+      if (result != null) return result;
+      final meta = _routeService.lastRoundTripSearchSessionMeta;
+      final shouldKick = _shouldKickStaleRoundTripSearchSession(
+        meta,
+        pollIndex: poll,
+      );
+      final now = DateTime.now();
+      if (shouldKick &&
+          (lastKickAt == null ||
+              now.difference(lastKickAt) >= const Duration(seconds: 12))) {
+        lastKickAt = now;
+        unawaited(
+          _routeService.kickRoundTripSearchSession(
+            sessionId,
+            reason: 'group_client_poll_stale',
+          ),
+        );
+      }
+    }
+    return null;
+  }
+
+  bool _shouldKickStaleRoundTripSearchSession(
+    Map<String, dynamic>? meta, {
+    required int pollIndex,
+  }) {
+    if (pollIndex < 2 || meta == null) return false;
+    final status = meta['search_session_status']?.toString();
+    final workerLastSeen = meta['worker_last_seen_at']?.toString().trim();
+    final attemptsRaw = meta['attempts_count'];
+    final attempts = attemptsRaw is num
+        ? attemptsRaw.toInt()
+        : int.tryParse(attemptsRaw?.toString() ?? '') ?? 0;
+    final waiting =
+        status == 'queued' || status == 'running' || status == 'hydrating';
+    return waiting &&
+        attempts <= 0 &&
+        (workerLastSeen == null ||
+            workerLastSeen.isEmpty ||
+            workerLastSeen == 'null');
+  }
+
+  bool _isSearchInProgressError(RouteServiceException error) {
+    final code =
+        error.edgeMeta['response_code']?.toString() ??
+        error.edgeMeta['code']?.toString();
+    final status = error.edgeMeta['search_session_status']?.toString();
+    return code == 'search_in_progress' ||
+        error.edgeMeta['search_in_progress'] == true ||
+        status == 'queued' ||
+        status == 'running' ||
+        status == 'hydrating';
+  }
+
+  bool _isCurrentGeneration(int generationId) {
+    return mounted && generationId == _routeGenerationSerial;
+  }
+
+  void _fitRouteBounds(List<LatLng> coords) {
+    if (coords.isEmpty) return;
+    _mapController.fitCamera(
+      CameraFit.bounds(
+        bounds: LatLngBounds.fromPoints(coords),
+        padding: const EdgeInsets.all(40),
+      ),
+    );
+  }
+
+  int get _detourVariant => switch (_selectedDetour) {
+    'Kleiner Umweg' => 1,
+    'Mittlerer Umweg' => 2,
+    'Großer Umweg' => 3,
+    _ => 0,
+  };
+
+  bool get _isWaypointPlanning => _isRoundTrip && _planningType == 'Wegpunkte';
+
+  int _targetDistanceKm() {
+    final digits = _selectedLength.replaceAll(RegExp(r'[^0-9]'), '');
+    return digits.isNotEmpty ? int.parse(digits) : 50;
+  }
+
+  bool _shouldForceFreshRoute({
+    required int targetKm,
+    required String? waypointSignature,
+  }) {
+    if (_lastRoute == null) return false;
+    return _lastGeneratedWasRoundTrip != _isRoundTrip ||
+        _lastGeneratedPlanningType != _planningType ||
+        _lastGeneratedStyle != _selectedStyle ||
+        _lastGeneratedTargetKm != targetKm ||
+        _lastGeneratedAvoidHighways != _avoidHighways ||
+        _lastGeneratedWaypointSignature != waypointSignature ||
+        _lastGeneratedDestinationSignature != _destinationSignature();
+  }
+
+  String? _destinationSignature() {
+    final selected = _selectedDestination;
+    if (selected == null) return null;
+    return '${selected.latitude.toStringAsFixed(5)},${selected.longitude.toStringAsFixed(5)}';
+  }
+
+  String _waypointSignature([List<LatLng>? points]) {
+    final source = points ?? _roundTripWaypoints;
+    if (source.isEmpty) return 'none';
+    return source
+        .map(
+          (point) =>
+              '${point.latitude.toStringAsFixed(5)},${point.longitude.toStringAsFixed(5)}',
+        )
+        .join(';');
+  }
+
+  int _estimateWaypointRouteTargetKm({
+    required geo.Position startPosition,
+    required List<LatLng> waypoints,
+    required int fallbackKm,
+  }) {
+    if (waypoints.isEmpty) return fallbackKm;
+    var straightLineMeters = 0.0;
+    var previousLat = startPosition.latitude;
+    var previousLng = startPosition.longitude;
+    for (final waypoint in waypoints) {
+      straightLineMeters += geo.Geolocator.distanceBetween(
+        previousLat,
+        previousLng,
+        waypoint.latitude,
+        waypoint.longitude,
+      );
+      previousLat = waypoint.latitude;
+      previousLng = waypoint.longitude;
+    }
+    straightLineMeters += geo.Geolocator.distanceBetween(
+      previousLat,
+      previousLng,
+      startPosition.latitude,
+      startPosition.longitude,
+    );
+    final estimatedRoadKm = (straightLineMeters / 1000.0) * 1.28;
+    return math.max(fallbackKm, estimatedRoadKm.ceil()).clamp(25, 260).toInt();
+  }
+
+  List<LatLng> _deliveredWaypointsFromMeta(Map<String, dynamic> meta) {
+    final raw =
+        meta['delivered_waypoints'] ??
+        meta['delivered_required_waypoints'] ??
+        meta['required_waypoints'];
+    if (raw is! List) return const <LatLng>[];
+    return raw
+        .whereType<Map>()
+        .map((item) {
+          final lat = item['latitude'] ?? item['lat'];
+          final lng = item['longitude'] ?? item['lng'];
+          if (lat is! num || lng is! num) return null;
+          return LatLng(lat.toDouble(), lng.toDouble());
+        })
+        .whereType<LatLng>()
+        .take(3)
+        .toList(growable: false);
   }
 
   Future<void> _createGroup() async {
@@ -196,16 +590,20 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
     try {
       final startDt = _selectedDateTime;
 
-      final routeData = <String, dynamic>{
-        'geoJson': _lastRoute!.geoJson,
-        'coordinates': _lastRoute!.coordinates,
-        'distance_meters': _lastRoute!.distanceMeters,
-        'duration_seconds': _lastRoute!.durationSeconds,
-        'style': _selectedStyle,
-        'length_km_target':
-            int.tryParse(_selectedLength.replaceAll(RegExp(r'[^0-9]'), '')) ??
-            50,
-      };
+      final routeData = GroupRouteDataBuilder.build(
+        route: _lastRoute!,
+        isRoundTrip: _isRoundTrip,
+        planningType: _planningType,
+        style: _selectedStyle,
+        avoidHighways: _avoidHighways,
+        targetDistanceKm: _isRoundTrip ? _targetDistanceKm() : null,
+        destination: _selectedDestination,
+        requiredWaypoints: List<LatLng>.unmodifiable(_roundTripWaypoints),
+        waypointOrigin: _isWaypointPlanning ? _waypointOrigin : null,
+        waypointSeedAttempt: _isWaypointPlanning ? _waypointSeedAttempt : null,
+        detourVariant: _detourVariant,
+        scenic: !_isRoundTrip && _detourVariant > 0,
+      );
 
       final groupId = await CruiseGroupService.create(
         name: _nameCtrl.text.trim(),
@@ -247,6 +645,292 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
+  void _handleRouteModeChanged(bool isRoundTrip) {
+    setState(() {
+      _isRoundTrip = isRoundTrip;
+      _lastRoute = null;
+      _routeLatLngs = [];
+      if (isRoundTrip) {
+        _selectedDetour = 'Direkt';
+        _selectedDestination = null;
+        _destinationCtrl.clear();
+      } else {
+        _planningType = 'Zufall';
+        _roundTripWaypoints.clear();
+        _selectedWaypointIndex = null;
+        _replaceWaypointIndex = null;
+        _waypointOrigin = 'manual';
+      }
+    });
+  }
+
+  void _handlePlanningTypeChanged(String planningType) {
+    setState(() {
+      _planningType = planningType;
+      _lastRoute = null;
+      _routeLatLngs = [];
+      if (planningType == 'Zufall') {
+        _roundTripWaypoints.clear();
+        _selectedWaypointIndex = null;
+        _replaceWaypointIndex = null;
+        _waypointOrigin = 'manual';
+        _waypointSeedAttempt = 0;
+      }
+    });
+  }
+
+  void _handleMapTap(TapPosition _, LatLng point) {
+    if (_isGenerating) return;
+    if (_isWaypointPlanning) {
+      _setWaypointFromMap(point);
+      return;
+    }
+    if (_selectedLocation == 'Standort wählen') {
+      setState(() {
+        _startPoint = point;
+        _lastRoute = null;
+        _routeLatLngs = [];
+      });
+    }
+  }
+
+  void _setWaypointFromMap(LatLng point) {
+    final replaceIndex = _replaceWaypointIndex;
+    var hitWaypointLimit = false;
+    setState(() {
+      _lastRoute = null;
+      _routeLatLngs = [];
+      _waypointOrigin = 'manual';
+      _waypointSeedAttempt = 0;
+      if (replaceIndex != null &&
+          replaceIndex >= 0 &&
+          replaceIndex < _roundTripWaypoints.length) {
+        _roundTripWaypoints[replaceIndex] = point;
+        _selectedWaypointIndex = replaceIndex;
+        _replaceWaypointIndex = null;
+        return;
+      }
+      if (_roundTripWaypoints.length >= 3) {
+        hitWaypointLimit = true;
+        return;
+      }
+      _roundTripWaypoints.add(point);
+      _selectedWaypointIndex = _roundTripWaypoints.length - 1;
+    });
+    if (hitWaypointLimit) {
+      _showError('Maximal 3 Stopps möglich.');
+    }
+  }
+
+  void _removeLastWaypoint() {
+    if (_isGenerating || _roundTripWaypoints.isEmpty) return;
+    setState(() {
+      _roundTripWaypoints.removeLast();
+      _selectedWaypointIndex = _roundTripWaypoints.isEmpty
+          ? null
+          : math.min(
+              _selectedWaypointIndex ?? _roundTripWaypoints.length - 1,
+              _roundTripWaypoints.length - 1,
+            );
+      _replaceWaypointIndex = null;
+      _waypointOrigin = 'manual';
+      _waypointSeedAttempt = 0;
+      _lastRoute = null;
+      _routeLatLngs = [];
+    });
+  }
+
+  void _clearWaypoints() {
+    if (_isGenerating || _roundTripWaypoints.isEmpty) return;
+    setState(() {
+      _roundTripWaypoints.clear();
+      _selectedWaypointIndex = null;
+      _replaceWaypointIndex = null;
+      _waypointOrigin = 'manual';
+      _waypointSeedAttempt = 0;
+      _lastRoute = null;
+      _routeLatLngs = [];
+    });
+  }
+
+  void _deleteSelectedWaypoint() {
+    final index = _selectedWaypointIndex;
+    if (index == null || index < 0 || index >= _roundTripWaypoints.length) {
+      return;
+    }
+    setState(() {
+      _roundTripWaypoints.removeAt(index);
+      _selectedWaypointIndex = _roundTripWaypoints.isEmpty
+          ? null
+          : math.min(index, _roundTripWaypoints.length - 1);
+      _replaceWaypointIndex = null;
+      _waypointOrigin = 'manual';
+      _waypointSeedAttempt = 0;
+      _lastRoute = null;
+      _routeLatLngs = [];
+    });
+  }
+
+  void _replaceSelectedWaypoint() {
+    final index = _selectedWaypointIndex;
+    if (index == null || index < 0 || index >= _roundTripWaypoints.length) {
+      return;
+    }
+    setState(() => _replaceWaypointIndex = index);
+    _showError('Tippe auf die Karte, um Stopp ${index + 1} neu zu setzen.');
+  }
+
+  Future<void> _generateWaypointSeed() async {
+    try {
+      final startPosition = await _getStartCoordinates();
+      final center = LatLng(startPosition.latitude, startPosition.longitude);
+      final targetKm = _targetDistanceKm();
+      final nextSeed = _waypointSeedCounter + 1;
+      var points = <LatLng>[];
+      for (var attempt = 0; attempt < 4; attempt += 1) {
+        points = _buildWaypointSeed(
+          center: center,
+          targetKm: targetKm,
+          variant: nextSeed + attempt,
+        );
+        if (_waypointLayoutLooksStable(center, points, targetKm)) break;
+      }
+      if (!mounted) return;
+      setState(() {
+        _waypointSeedCounter = nextSeed;
+        _planningType = 'Wegpunkte';
+        _roundTripWaypoints
+          ..clear()
+          ..addAll(points);
+        _selectedWaypointIndex = points.isEmpty ? null : 0;
+        _replaceWaypointIndex = null;
+        _waypointOrigin = 'auto_seed';
+        _waypointSeedAttempt = nextSeed;
+        _lastRoute = null;
+        _routeLatLngs = [];
+      });
+    } catch (_) {
+      _showError('Aktueller Standort noch nicht verfügbar.');
+    }
+  }
+
+  List<LatLng> _buildWaypointSeed({
+    required LatLng center,
+    required int targetKm,
+    required int variant,
+  }) {
+    final count = _selectedStyle == 'Abendrunde' ? 2 : 3;
+    final baseRadiusKm = math.min(
+      18.0,
+      math.max(4.0, targetKm / (_selectedStyle == 'Abendrunde' ? 8.5 : 6.0)),
+    );
+    final styleBaseBearing = switch (_selectedStyle) {
+      'Kurvenjagd' => 120.0,
+      'Entdecker' => 35.0,
+      'Abendrunde' => 250.0,
+      _ => 75.0,
+    };
+    final baseBearing = (styleBaseBearing + variant * 47.0) % 360.0;
+    final offsets = switch (_selectedStyle) {
+      'Kurvenjagd' => const [-82.0, 4.0, 112.0],
+      'Entdecker' => const [-82.0, -8.0, 76.0],
+      'Abendrunde' => const [-48.0, 62.0],
+      _ => const [-54.0, 12.0, 84.0],
+    };
+    final factors = switch (_selectedStyle) {
+      'Kurvenjagd' => const [0.90, 1.16, 0.98],
+      'Entdecker' => const [0.90, 1.06, 0.96],
+      'Abendrunde' => const [0.78, 0.90],
+      _ => const [0.94, 1.08, 0.92],
+    };
+    final highwayScale = _avoidHighways ? 0.95 : 1.0;
+    return List.generate(count, (index) {
+      final bearing = (baseBearing + offsets[index]) % 360.0;
+      final distanceKm = baseRadiusKm * factors[index] * highwayScale;
+      return _offsetLatLng(center, distanceKm, bearing);
+    }, growable: false);
+  }
+
+  bool _waypointLayoutLooksStable(
+    LatLng center,
+    List<LatLng> points,
+    int targetKm,
+  ) {
+    if (points.isEmpty || points.length > 3) return false;
+    final maxDistanceKm = math.max(12.0, math.min(80.0, targetKm * 0.75));
+    final bearings = <double>[];
+    for (var i = 0; i < points.length; i += 1) {
+      final point = points[i];
+      final fromStartKm =
+          geo.Geolocator.distanceBetween(
+            center.latitude,
+            center.longitude,
+            point.latitude,
+            point.longitude,
+          ) /
+          1000.0;
+      if (fromStartKm < 0.35 || fromStartKm > maxDistanceKm) return false;
+      for (var j = 0; j < i; j += 1) {
+        final pairKm =
+            geo.Geolocator.distanceBetween(
+              point.latitude,
+              point.longitude,
+              points[j].latitude,
+              points[j].longitude,
+            ) /
+            1000.0;
+        if (pairKm < 0.35) return false;
+      }
+      bearings.add(
+        calculateBearing(
+          center.latitude,
+          center.longitude,
+          point.latitude,
+          point.longitude,
+        ),
+      );
+    }
+    return _bearingSpreadDegrees(bearings) >= 22.0;
+  }
+
+  double _bearingSpreadDegrees(List<double> bearings) {
+    if (bearings.isEmpty) return 0.0;
+    final normalized =
+        bearings
+            .map((bearing) => bearing % 360)
+            .map((bearing) => bearing < 0 ? bearing + 360 : bearing)
+            .toList()
+          ..sort();
+    var largestGap = 0.0;
+    for (var i = 0; i < normalized.length; i += 1) {
+      final current = normalized[i];
+      final next =
+          normalized[(i + 1) % normalized.length] +
+          (i == normalized.length - 1 ? 360.0 : 0.0);
+      largestGap = math.max(largestGap, next - current);
+    }
+    return 360.0 - largestGap;
+  }
+
+  LatLng _offsetLatLng(LatLng origin, double distanceKm, double bearingDeg) {
+    const earthRadiusKm = 6371.0;
+    final angularDistance = distanceKm / earthRadiusKm;
+    final bearing = bearingDeg * math.pi / 180.0;
+    final lat1 = origin.latitude * math.pi / 180.0;
+    final lng1 = origin.longitude * math.pi / 180.0;
+    final lat2 = math.asin(
+      math.sin(lat1) * math.cos(angularDistance) +
+          math.cos(lat1) * math.sin(angularDistance) * math.cos(bearing),
+    );
+    final lng2 =
+        lng1 +
+        math.atan2(
+          math.sin(bearing) * math.sin(angularDistance) * math.cos(lat1),
+          math.cos(angularDistance) - math.sin(lat1) * math.sin(lat2),
+        );
+    return LatLng(lat2 * 180.0 / math.pi, lng2 * 180.0 / math.pi);
+  }
+
   // ── UI ─────────────────────────────────────────────────────────────────────
 
   @override
@@ -286,42 +970,92 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
                     children: [
                       if (_lastRoute != null) _buildRouteStats(),
 
-                      const Text(
-                        'Strecken-Setup',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      const SizedBox(height: 20),
-                      _buildSelectionRow(
-                        'Länge',
-                        ['20 Km', '50 Km', '100 Km', '+100 Km'],
-                        _selectedLength,
-                        (v) => setState(() => _selectedLength = v),
-                      ),
-                      const SizedBox(height: 24),
-                      _buildSelectionRow(
-                        'Startpunkt',
-                        ['Aktueller Standort', 'Karte antippen', 'Adresse'],
-                        _selectedLocation,
-                        (v) async {
-                          setState(() => _selectedLocation = v);
-                          if (v == 'Aktueller Standort') await _tryLocateUser();
+                      CruiseSetupCard(
+                        isRoundTrip: _isRoundTrip,
+                        planningType: _planningType,
+                        selectedLength: _selectedLength,
+                        selectedLocation: _selectedLocation,
+                        selectedStyle: _selectedStyle,
+                        selectedDestination: _selectedDestination,
+                        destinationController: _destinationCtrl,
+                        onRoundTripChanged: _handleRouteModeChanged,
+                        onPlanningTypeChanged: _handlePlanningTypeChanged,
+                        onLengthChanged: (value) {
+                          setState(() {
+                            _selectedLength = value;
+                            _lastRoute = null;
+                            _routeLatLngs = [];
+                          });
                         },
+                        onLocationChanged: (value) async {
+                          setState(() => _selectedLocation = value);
+                          if (value == 'Aktueller Standort') {
+                            await _tryLocateUser();
+                          }
+                        },
+                        onStyleChanged: (value) {
+                          setState(() {
+                            _selectedStyle = value;
+                            _lastRoute = null;
+                            _routeLatLngs = [];
+                          });
+                        },
+                        onDestinationSelected: (suggestion) {
+                          setState(() {
+                            _selectedDestination = suggestion;
+                            _destinationCtrl.text = suggestion.placeName;
+                            _lastRoute = null;
+                            _routeLatLngs = [];
+                          });
+                        },
+                        onDestinationCleared: () {
+                          setState(() {
+                            _selectedDestination = null;
+                            _destinationCtrl.clear();
+                            _lastRoute = null;
+                            _routeLatLngs = [];
+                          });
+                        },
+                        onDestinationInputChanged: (_) {
+                          if (_selectedDestination != null) {
+                            setState(() => _selectedDestination = null);
+                          }
+                        },
+                        selectedDetour: _selectedDetour,
+                        onDetourChanged: (value) {
+                          setState(() {
+                            _selectedDetour = value;
+                            _lastRoute = null;
+                            _routeLatLngs = [];
+                          });
+                        },
+                        selectedAvoidHighways: _avoidHighways,
+                        onAvoidHighwaysChanged: (value) {
+                          setState(() {
+                            _avoidHighways = value;
+                            _lastRoute = null;
+                            _routeLatLngs = [];
+                          });
+                        },
+                        proximityLatitude: _startPoint?.latitude,
+                        proximityLongitude: _startPoint?.longitude,
+                        roundTripWaypointCount: _roundTripWaypoints.length,
+                        selectedWaypointIndex: _selectedWaypointIndex,
+                        replacingWaypointIndex: _replaceWaypointIndex,
+                        waypointActionsEnabled: !_isGenerating,
+                        onGenerateWaypointSeed: () =>
+                            unawaited(_generateWaypointSeed()),
+                        onRemoveLastWaypoint: _removeLastWaypoint,
+                        onDeleteSelectedWaypoint: _deleteSelectedWaypoint,
+                        onReplaceSelectedWaypoint: _replaceSelectedWaypoint,
+                        onClearWaypoints: _clearWaypoints,
                       ),
+                      const SizedBox(height: 16),
+                      _buildStartAddressHelper(),
                       if (_selectedLocation == 'Adresse') ...[
                         const SizedBox(height: 12),
                         _buildAddressField(),
                       ],
-                      const SizedBox(height: 24),
-                      _buildSelectionRow(
-                        'Stil',
-                        ['Kurvenjagd', 'Sport Mode', 'Abendrunde', 'Entdecker'],
-                        _selectedStyle,
-                        (v) => setState(() => _selectedStyle = v),
-                      ),
                       const SizedBox(height: 40),
                       const Text(
                         'Gruppen-Details',
@@ -353,8 +1087,60 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
               ),
             ],
           ),
+          if (_isGenerating) _buildRouteGenerationStatus(),
           _buildBottomBar(),
         ],
+      ),
+    );
+  }
+
+  Widget _buildRouteGenerationStatus() {
+    final top = MediaQuery.of(context).padding.top + 12;
+    return Positioned(
+      top: top,
+      left: 82,
+      right: 20,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        decoration: BoxDecoration(
+          color: const Color(0xFF161B24).withValues(alpha: 0.92),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: AppAccentColors.accent.withValues(alpha: 0.35),
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: AppAccentColors.accent.withValues(alpha: 0.18),
+              blurRadius: 18,
+              offset: const Offset(0, 8),
+            ),
+          ],
+        ),
+        child: Row(
+          children: [
+            SizedBox(
+              width: 20,
+              height: 20,
+              child: CircularProgressIndicator(
+                color: AppAccentColors.accent,
+                strokeWidth: 2.4,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                _routeStatusText,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w800,
+                  fontSize: 14,
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -365,18 +1151,19 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
       options: MapOptions(
         initialCenter: _startPoint ?? const LatLng(48.1351, 11.5820),
         initialZoom: 10,
-        onTap: _selectedLocation == 'Karte antippen'
-            ? (_, p) => setState(() => _startPoint = p)
-            : null,
+        onTap: _handleMapTap,
       ),
       children: [
-        TileLayer(
-          urlTemplate:
-              'https://api.mapbox.com/styles/v1/mapbox/dark-v11/tiles/256/{z}/{x}/{y}?access_token={accessToken}',
-          additionalOptions: {'accessToken': AppConstants.mapboxPublicToken},
-          userAgentPackageName: 'com.cruise_connect.app',
-          retinaMode: true,
-        ),
+        if (!widget.disableMapTilesForTesting)
+          TileLayer(
+            urlTemplate:
+                'https://api.mapbox.com/styles/v1/mapbox/dark-v11/tiles/256/{z}/{x}/{y}?access_token={accessToken}',
+            additionalOptions: {'accessToken': AppConstants.mapboxPublicToken},
+            userAgentPackageName: 'com.cruise_connect.app',
+            retinaMode: true,
+          )
+        else
+          const ColoredBox(color: Color(0xFF0B0E14)),
         if (_routeLatLngs.isNotEmpty)
           PolylineLayer(
             polylines: [
@@ -394,15 +1181,149 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
                 point: _startPoint!,
                 width: 36,
                 height: 36,
-                child: Icon(
-                  Icons.location_on,
-                  color: AppAccentColors.accent,
-                  size: 36,
-                ),
+                child: _buildMapMarker(Icons.my_location),
               ),
+              if (!_isRoundTrip && _selectedDestination != null)
+                Marker(
+                  point: LatLng(
+                    _selectedDestination!.latitude,
+                    _selectedDestination!.longitude,
+                  ),
+                  width: 42,
+                  height: 42,
+                  child: _buildMapMarker(Icons.flag_rounded),
+                ),
+              for (var i = 0; i < _roundTripWaypoints.length; i++)
+                Marker(
+                  point: _roundTripWaypoints[i],
+                  width: 42,
+                  height: 42,
+                  child: GestureDetector(
+                    onTap: () => setState(() => _selectedWaypointIndex = i),
+                    child: _buildWaypointMarker(i),
+                  ),
+                ),
             ],
           ),
+        if (_isWaypointPlanning) _buildWaypointActionOverlay(),
       ],
+    );
+  }
+
+  Widget _buildMapMarker(IconData icon) {
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFF111823).withValues(alpha: 0.92),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: AppAccentColors.accent, width: 1.5),
+        boxShadow: [
+          BoxShadow(
+            color: AppAccentColors.accent.withValues(alpha: 0.35),
+            blurRadius: 12,
+          ),
+        ],
+      ),
+      child: Center(child: Icon(icon, color: AppAccentColors.accent, size: 20)),
+    );
+  }
+
+  Widget _buildWaypointMarker(int index) {
+    final selected = _selectedWaypointIndex == index;
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 180),
+      decoration: BoxDecoration(
+        color: selected
+            ? AppAccentColors.accent
+            : const Color(0xFF111823).withValues(alpha: 0.94),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+          color: selected ? Colors.white : AppAccentColors.accent,
+          width: selected ? 2 : 1.5,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: AppAccentColors.accent.withValues(alpha: 0.35),
+            blurRadius: 12,
+          ),
+        ],
+      ),
+      child: Center(
+        child: Text(
+          '${index + 1}',
+          style: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.w900,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildWaypointActionOverlay() {
+    return Align(
+      alignment: Alignment.centerRight,
+      child: Padding(
+        padding: const EdgeInsets.only(right: 14),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _buildMapActionButton(
+              icon: Icons.auto_awesome,
+              label: 'Stopps vorschlagen',
+              onTap: _isGenerating
+                  ? null
+                  : () => unawaited(_generateWaypointSeed()),
+            ),
+            const SizedBox(height: 10),
+            _buildMapActionButton(
+              icon: Icons.undo,
+              label: 'Letzten löschen',
+              onTap: _roundTripWaypoints.isEmpty ? null : _removeLastWaypoint,
+            ),
+            const SizedBox(height: 10),
+            _buildMapActionButton(
+              icon: Icons.clear_all,
+              label: 'Alle löschen',
+              onTap: _roundTripWaypoints.isEmpty ? null : _clearWaypoints,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMapActionButton({
+    required IconData icon,
+    required String label,
+    required VoidCallback? onTap,
+  }) {
+    final enabled = onTap != null;
+    return Tooltip(
+      message: label,
+      child: GestureDetector(
+        onTap: onTap,
+        child: AnimatedOpacity(
+          opacity: enabled ? 1 : 0.45,
+          duration: const Duration(milliseconds: 160),
+          child: Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: const Color(0xFF1C1F26).withValues(alpha: 0.92),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: Colors.white12),
+              boxShadow: const [
+                BoxShadow(
+                  color: Colors.black45,
+                  blurRadius: 14,
+                  offset: Offset(0, 6),
+                ),
+              ],
+            ),
+            child: Icon(icon, color: Colors.white, size: 20),
+          ),
+        ),
+      ),
     );
   }
 
@@ -450,6 +1371,72 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
     ],
   );
 
+  Widget _buildStartAddressHelper() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1C1F26),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: Colors.white10),
+      ),
+      child: Wrap(
+        crossAxisAlignment: WrapCrossAlignment.center,
+        spacing: 10,
+        runSpacing: 8,
+        children: [
+          const Text(
+            'Start per Adresse:',
+            style: TextStyle(color: Colors.white70, fontSize: 13),
+          ),
+          _buildTinyChoice(
+            label: _selectedLocation == 'Adresse'
+                ? 'Adresse aktiv'
+                : 'Adresse wählen',
+            selected: _selectedLocation == 'Adresse',
+            onTap: () => setState(() => _selectedLocation = 'Adresse'),
+          ),
+          if (_selectedLocation == 'Standort wählen')
+            const Text(
+              'Tippe auf die Karte, um den Startpunkt zu setzen.',
+              style: TextStyle(color: Colors.white38, fontSize: 12),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTinyChoice({
+    required String label,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: selected ? AppAccentColors.accent : const Color(0xFF0B0E14),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(
+            color: selected
+                ? AppAccentColors.accent
+                : Colors.white.withValues(alpha: 0.08),
+          ),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: selected ? Colors.white : Colors.white70,
+            fontWeight: FontWeight.w700,
+            fontSize: 12,
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildAddressField() {
     return Container(
       decoration: BoxDecoration(
@@ -494,6 +1481,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: TextField(
         controller: _nameCtrl,
+        onChanged: (_) => setState(() {}),
         maxLength: AppInputLimits.groupNameMaxLength,
         inputFormatters: AppInputLimits.lengthFormatters(
           AppInputLimits.groupNameMaxLength,
@@ -518,6 +1506,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
       child: TextField(
         controller: _descCtrl,
+        onChanged: (_) => setState(() {}),
         maxLength: AppInputLimits.groupDescriptionMaxLength,
         inputFormatters: AppInputLimits.lengthFormatters(
           AppInputLimits.groupDescriptionMaxLength,
@@ -678,60 +1667,8 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
     );
   }
 
-  Widget _buildSelectionRow(
-    String title,
-    List<String> options,
-    String selectedValue,
-    Function(String) onSelect,
-  ) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          title,
-          style: const TextStyle(
-            color: Colors.grey,
-            fontSize: 14,
-            fontWeight: FontWeight.w500,
-          ),
-        ),
-        const SizedBox(height: 12),
-        Wrap(
-          spacing: 12,
-          runSpacing: 12,
-          children: options.map((option) {
-            final isSelected = option == selectedValue;
-            return GestureDetector(
-              onTap: () => onSelect(option),
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 200),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 10,
-                ),
-                decoration: BoxDecoration(
-                  color: isSelected
-                      ? AppAccentColors.accent
-                      : const Color(0xFF0B0E14),
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                child: Text(
-                  option,
-                  style: TextStyle(
-                    color: isSelected ? Colors.white : Colors.grey[400],
-                    fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
-                    fontSize: 14,
-                  ),
-                ),
-              ),
-            );
-          }).toList(),
-        ),
-      ],
-    );
-  }
-
   Widget _buildBottomBar() {
+    final canCreate = _canCreateGroup;
     return Positioned(
       bottom: 0,
       left: 0,
@@ -769,14 +1706,18 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
                             strokeWidth: 2,
                           ),
                         )
-                      : const Row(
+                      : Row(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            Icon(Icons.refresh, color: Colors.white, size: 20),
-                            SizedBox(width: 8),
+                            const Icon(
+                              Icons.refresh,
+                              color: Colors.white,
+                              size: 20,
+                            ),
+                            const SizedBox(width: 8),
                             Text(
-                              'Generieren',
-                              style: TextStyle(
+                              _lastRoute == null ? 'Generieren' : 'Neue Route',
+                              style: const TextStyle(
                                 color: Colors.white,
                                 fontWeight: FontWeight.bold,
                                 fontSize: 16,
@@ -792,9 +1733,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
               child: SizedBox(
                 height: 56,
                 child: ElevatedButton(
-                  onPressed: (_isCreating || _lastRoute == null)
-                      ? null
-                      : _createGroup,
+                  onPressed: (_isCreating || !canCreate) ? null : _createGroup,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: AppAccentColors.accent,
                     disabledBackgroundColor: AppAccentColors.accent.withValues(
@@ -829,6 +1768,16 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
         ),
       ),
     );
+  }
+
+  bool get _canCreateGroup {
+    return _lastRoute != null &&
+        _nameCtrl.text.trim().isNotEmpty &&
+        _nameCtrl.text.trim().length <= AppInputLimits.groupNameMaxLength &&
+        _descCtrl.text.trim().length <=
+            AppInputLimits.groupDescriptionMaxLength &&
+        _selectedDateTime != null &&
+        _maxPeople.round() >= 2;
   }
 
   Future<void> _selectTime() async {
@@ -882,8 +1831,3 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
     return '$d $t';
   }
 }
-
-// Hilft beim JSON-Encoding sicherzustellen, dass JSONB-Struktur valide ist.
-// (nur referenziert, falls wir die Route-Data lokal debuggen wollen)
-// ignore: unused_element
-String _debugEncode(Object o) => jsonEncode(o);
