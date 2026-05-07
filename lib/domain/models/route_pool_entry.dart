@@ -23,6 +23,11 @@ class RoutePoolEntry {
     this.durationSeconds,
     this.shapeScore = 0.0,
     this.userRating,
+    this.averageRating,
+    this.ratingCount = 0,
+    this.completionRate,
+    this.weeklyRotationScore = 0.0,
+    this.deprecatedAt,
     this.usageCount = 0,
     this.source = 'curated',
     this.routePayload = const {},
@@ -51,6 +56,11 @@ class RoutePoolEntry {
   final double? durationSeconds;
   final double shapeScore;
   final double? userRating;
+  final double? averageRating;
+  final int ratingCount;
+  final double? completionRate;
+  final double weeklyRotationScore;
+  final DateTime? deprecatedAt;
   final int usageCount;
   final String source;
   final Map<String, dynamic> routePayload;
@@ -93,6 +103,12 @@ class RoutePoolEntry {
           (payload['duration_seconds'] as num?)?.toDouble(),
       shapeScore: (json['shape_score'] as num?)?.toDouble() ?? 0.0,
       userRating: (json['user_rating'] as num?)?.toDouble(),
+      averageRating: (json['average_rating'] as num?)?.toDouble(),
+      ratingCount: (json['rating_count'] as num?)?.toInt() ?? 0,
+      completionRate: (json['completion_rate'] as num?)?.toDouble(),
+      weeklyRotationScore:
+          (json['weekly_rotation_score'] as num?)?.toDouble() ?? 0.0,
+      deprecatedAt: _readRoutePoolDateTime(json['deprecated_at']),
       usageCount: (json['usage_count'] as num?)?.toInt() ?? 0,
       source: (json['source'] as String?) ?? 'curated',
       routePayload: payload,
@@ -124,6 +140,11 @@ class RoutePoolEntry {
       'duration_seconds': durationSeconds,
       'shape_score': shapeScore,
       'user_rating': userRating,
+      'average_rating': averageRating,
+      'rating_count': ratingCount,
+      'completion_rate': completionRate,
+      'weekly_rotation_score': weeklyRotationScore,
+      'deprecated_at': deprecatedAt?.toIso8601String(),
       'usage_count': usageCount,
       'source': source,
       'route_payload': routePayload,
@@ -139,4 +160,11 @@ List<String> _readStyleTags(Object? raw) {
     return raw.split(',').map((item) => item.trim()).toList(growable: false);
   }
   return const [];
+}
+
+DateTime? _readRoutePoolDateTime(Object? raw) {
+  if (raw is String && raw.isNotEmpty) {
+    return DateTime.tryParse(raw)?.toUtc();
+  }
+  return null;
 }

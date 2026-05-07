@@ -29,6 +29,17 @@ class CruiseSetupCard extends StatefulWidget {
     required this.onDetourChanged,
     this.selectedAvoidHighways = false,
     this.onAvoidHighwaysChanged,
+    this.proximityLatitude,
+    this.proximityLongitude,
+    this.roundTripWaypointCount = 0,
+    this.selectedWaypointIndex,
+    this.replacingWaypointIndex,
+    this.waypointActionsEnabled = true,
+    this.onGenerateWaypointSeed,
+    this.onRemoveLastWaypoint,
+    this.onDeleteSelectedWaypoint,
+    this.onReplaceSelectedWaypoint,
+    this.onClearWaypoints,
   });
 
   final bool isRoundTrip;
@@ -50,6 +61,17 @@ class CruiseSetupCard extends StatefulWidget {
   final ValueChanged<String>? onDestinationInputChanged;
   final bool selectedAvoidHighways;
   final ValueChanged<bool>? onAvoidHighwaysChanged;
+  final double? proximityLatitude;
+  final double? proximityLongitude;
+  final int roundTripWaypointCount;
+  final int? selectedWaypointIndex;
+  final int? replacingWaypointIndex;
+  final bool waypointActionsEnabled;
+  final VoidCallback? onGenerateWaypointSeed;
+  final VoidCallback? onRemoveLastWaypoint;
+  final VoidCallback? onDeleteSelectedWaypoint;
+  final VoidCallback? onReplaceSelectedWaypoint;
+  final VoidCallback? onClearWaypoints;
 
   static const _geocodingService = GeocodingService();
 
@@ -83,6 +105,8 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
   @override
   Widget build(BuildContext context) {
     final isRoundTrip = widget.isRoundTrip;
+    final isWaypointPlanning =
+        isRoundTrip && widget.planningType == 'Wegpunkte';
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(20),
@@ -133,16 +157,19 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
             ],
           ),
           const Divider(color: Colors.white10, height: 32),
-          AnimatedCrossFade(
-            firstChild: _buildRoundTripOptions(),
-            secondChild: _buildAtoBOptions(context),
-            crossFadeState: isRoundTrip
-                ? CrossFadeState.showFirst
-                : CrossFadeState.showSecond,
+          AnimatedSwitcher(
             duration: const Duration(milliseconds: 300),
+            child: KeyedSubtree(
+              key: ValueKey(
+                isRoundTrip ? 'round_trip_options' : 'atob_options',
+              ),
+              child: isRoundTrip
+                  ? _buildRoundTripOptions()
+                  : _buildAtoBOptions(context),
+            ),
           ),
           const Divider(color: Colors.white10, height: 32),
-          if (isRoundTrip) ...[
+          if (isRoundTrip && !isWaypointPlanning) ...[
             _SelectionRow(
               title: 'Länge',
               options: const ['50 Km', '75 Km', '100 Km'],
@@ -150,30 +177,12 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
               onSelect: widget.onLengthChanged,
             ),
             const Divider(color: Colors.white10, height: 32),
-            _HighwayToggleSwitch(
-              isEnabled: _avoidHighways,
-              onChanged: _setAvoidHighways,
-            ),
-            const Divider(color: Colors.white10, height: 32),
-          ] else ...[
-            _SelectionRow(
-              title: 'Route',
-              options: const [
-                'Direkt',
-                'Kleiner Umweg',
-                'Mittlerer Umweg',
-                'Großer Umweg',
-              ],
-              selectedValue: widget.selectedDetour,
-              onSelect: widget.onDetourChanged,
-            ),
-            const Divider(color: Colors.white10, height: 32),
-            _HighwayToggleSwitch(
-              isEnabled: _avoidHighways,
-              onChanged: _setAvoidHighways,
-            ),
-            const Divider(color: Colors.white10, height: 32),
           ],
+          _HighwayToggleSwitch(
+            isEnabled: _avoidHighways,
+            onChanged: _setAvoidHighways,
+          ),
+          const Divider(color: Colors.white10, height: 32),
           _SelectionRow(
             title: 'Standort',
             options: const ['Aktueller Standort', 'Standort wählen'],
@@ -181,7 +190,8 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
             onSelect: widget.onLocationChanged,
           ),
           const Divider(color: Colors.white10, height: 32),
-          if (isRoundTrip || widget.selectedDetour != 'Direkt') ...[
+          if ((isRoundTrip && !isWaypointPlanning) ||
+              (!isRoundTrip && widget.selectedDetour != 'Direkt')) ...[
             _SelectionRow(
               title: 'Stil',
               options: const [
@@ -199,7 +209,22 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
     );
   }
 
+  Widget _buildDetourSelection() {
+    return _SelectionRow(
+      title: 'Route',
+      options: const [
+        'Direkt',
+        'Kleiner Umweg',
+        'Mittlerer Umweg',
+        'Großer Umweg',
+      ],
+      selectedValue: widget.selectedDetour,
+      onSelect: widget.onDetourChanged,
+    );
+  }
+
   Widget _buildRoundTripOptions() {
+    final isWaypointPlanning = widget.planningType == 'Wegpunkte';
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -222,18 +247,98 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
                 onTap: () => widget.onPlanningTypeChanged('Zufall'),
               ),
             ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _ChoiceButton(
+                label: 'Wegpunkte',
+                isSelected: widget.planningType == 'Wegpunkte',
+                onTap: () => widget.onPlanningTypeChanged('Wegpunkte'),
+              ),
+            ),
           ],
         ),
-        const SizedBox(height: 10),
-        const Text(
-          'Wegpunkt-Planung folgt in einer separaten Ausbaustufe.',
-          style: TextStyle(
-            color: Colors.white38,
-            fontSize: 12,
-            fontWeight: FontWeight.w400,
+        AnimatedSwitcher(
+          duration: const Duration(milliseconds: 320),
+          switchInCurve: Curves.easeOutCubic,
+          switchOutCurve: Curves.easeInCubic,
+          transitionBuilder: (child, animation) {
+            final offsetAnimation = Tween<Offset>(
+              begin: const Offset(0, 0.04),
+              end: Offset.zero,
+            ).animate(animation);
+            return FadeTransition(
+              opacity: animation,
+              child: SizeTransition(
+                sizeFactor: animation,
+                axisAlignment: -1,
+                child: SlideTransition(position: offsetAnimation, child: child),
+              ),
+            );
+          },
+          child: KeyedSubtree(
+            key: ValueKey(
+              isWaypointPlanning
+                  ? 'waypoint_planning_hint'
+                  : 'random_planning_hint',
+            ),
+            child: isWaypointPlanning
+                ? _buildWaypointPlanningHint()
+                : _buildRandomPlanningHint(),
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildWaypointPlanningHint() {
+    return Padding(
+      padding: const EdgeInsets.only(top: 12),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: const Color(0xFF0B0E14),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: Colors.white10),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              _waypointHintText(),
+              style: const TextStyle(
+                color: Colors.white70,
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Die Strecke ergibt sich aus deinen Stopps. Stil und Aktionen steuerst du direkt auf der Karte.',
+              style: TextStyle(
+                color: Colors.white38,
+                fontSize: 11,
+                height: 1.25,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildRandomPlanningHint() {
+    return const Padding(
+      padding: EdgeInsets.only(top: 10),
+      child: Text(
+        'Die App erzeugt automatisch eine geprüfte Rundkursroute.',
+        style: TextStyle(
+          color: Colors.white38,
+          fontSize: 12,
+          fontWeight: FontWeight.w400,
+        ),
+      ),
     );
   }
 
@@ -308,6 +413,8 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
               ],
             ),
           ),
+          const SizedBox(height: 20),
+          _buildDetourSelection(),
         ],
       );
     }
@@ -340,7 +447,11 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
               if (pattern.trim().length < 2) return [];
               try {
                 return await CruiseSetupCard._geocodingService
-                    .searchSuggestions(pattern);
+                    .searchSuggestions(
+                      pattern,
+                      proximityLatitude: widget.proximityLatitude,
+                      proximityLongitude: widget.proximityLongitude,
+                    );
               } catch (e, stack) {
                 debugPrint('[CruiseSetup] Vorschlags-Suche fehlgeschlagen: $e');
                 debugPrintStack(stackTrace: stack);
@@ -361,9 +472,15 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
                 suggestion.placeName,
                 style: const TextStyle(color: Colors.white, fontSize: 14),
               ),
-              subtitle: suggestion.context != null
+              subtitle:
+                  suggestion.context != null ||
+                      suggestion.distanceMeters != null
                   ? Text(
-                      suggestion.context!,
+                      [
+                        if (suggestion.context != null) suggestion.context!,
+                        if (suggestion.distanceMeters != null)
+                          _formatSuggestionDistance(suggestion.distanceMeters!),
+                      ].join(' · '),
                       style: const TextStyle(color: Colors.grey, fontSize: 12),
                     )
                   : null,
@@ -398,7 +515,7 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
               decoration: const InputDecoration(
                 counterText: '',
                 prefixIcon: Icon(Icons.search, color: Colors.white38),
-                hintText: 'Adresse suchen...',
+                hintText: 'Ziel suchen...',
                 hintStyle: TextStyle(color: Colors.white38),
                 border: InputBorder.none,
                 contentPadding: EdgeInsets.symmetric(
@@ -409,8 +526,31 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
             ),
           ),
         ),
+        const SizedBox(height: 20),
+        _buildDetourSelection(),
       ],
     );
+  }
+
+  String _formatSuggestionDistance(double meters) {
+    if (meters < 1000) return '${meters.round()} m entfernt';
+    return '${(meters / 1000).toStringAsFixed(1)} km entfernt';
+  }
+
+  String _waypointHintText() {
+    if (widget.roundTripWaypointCount == 0) {
+      return 'Setze bis zu 3 Stopps, die deine Rundroute wirklich anfahren soll.';
+    }
+    final replacing = widget.replacingWaypointIndex;
+    if (replacing != null && replacing >= 0) {
+      return 'Tippe auf die Karte, um Stopp ${replacing + 1} neu zu setzen.';
+    }
+    final selected = widget.selectedWaypointIndex;
+    if (selected != null && selected >= 0) {
+      return 'Stopp ${selected + 1} ausgewählt. Nutze die Karten-Aktionen rechts.';
+    }
+    final pluralSuffix = widget.roundTripWaypointCount == 1 ? '' : 's';
+    return '${widget.roundTripWaypointCount} Stopp$pluralSuffix gesetzt. Die Route fährt diese Punkte an.';
   }
 }
 

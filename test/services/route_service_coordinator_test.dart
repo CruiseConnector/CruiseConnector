@@ -41,6 +41,13 @@ geo.Position _position(double lat, double lng) => geo.Position(
 );
 
 Map<String, dynamic> _closedLoopResponse() {
+  return _closedLoopResponseAt(latitude: 47.5162, longitude: 9.7471);
+}
+
+Map<String, dynamic> _closedLoopResponseAt({
+  required double latitude,
+  required double longitude,
+}) {
   final coords = List.generate(120, (i) {
     final t = (2 * math.pi * i) / 119;
     final radius =
@@ -49,11 +56,11 @@ Map<String, dynamic> _closedLoopResponse() {
         math.cos(t * 4) * (0.0016 * 0.18) +
         math.sin(t * 3) * (0.0016 * 0.12);
     return [
-      9.7471 + math.cos(t) * radius,
-      47.5162 + math.sin(t) * radius * 0.55,
+      longitude + math.cos(t) * radius,
+      latitude + math.sin(t) * radius * 0.55,
     ];
   });
-  coords[0] = [9.7471, 47.5162];
+  coords[0] = [longitude, latitude];
   coords[coords.length - 1] = [...coords.first];
 
   return {
@@ -76,6 +83,43 @@ Map<String, dynamic> _closedLoopResponse() {
           ],
         },
       ],
+    },
+  };
+}
+
+Map<String, dynamic> _sparseLongRoundTripResponse() {
+  final coords = <List<double>>[
+    [9.7471, 47.5162],
+    [9.95, 47.62],
+    [9.72, 47.78],
+    [9.52, 47.61],
+    [9.7471, 47.5162],
+  ];
+  return {
+    'route': {
+      'geometry': {'type': 'LineString', 'coordinates': coords},
+      'distance': 100000.0,
+      'duration': 7600.0,
+      'legs': [
+        {
+          'steps': [
+            {
+              'maneuver': {
+                'type': 'turn',
+                'modifier': 'left',
+                'location': coords[1],
+              },
+              'distance': 25000.0,
+              'name': 'Sparse Test',
+            },
+          ],
+        },
+      ],
+    },
+    'meta': {
+      'route_type': 'ROUND_TRIP',
+      'geometry_source': 'pre_hydration_fallback',
+      'final_overview': 'simplified',
     },
   };
 }
@@ -139,6 +183,40 @@ class _AlwaysFailingInvoker implements RouteEdgeInvoker {
     callCount += 1;
     bodies.add(Map<String, dynamic>.from(body));
     throw TimeoutException('simulated no route');
+  }
+}
+
+class _ThrowingCandidateRoutePoolService extends RoutePoolService {
+  _ThrowingCandidateRoutePoolService() : super();
+
+  @override
+  Future<RoutePoolCandidateSaveResult> recordCandidateRoute({
+    required double userLat,
+    required double userLng,
+    required int distanceBucket,
+    required String style,
+    required bool avoidHighways,
+    required String routeType,
+    required String candidateSource,
+    required String routeFingerprint,
+    required Map<String, dynamic> geometry,
+    Map<String, dynamic> routePayload = const {},
+    double qualityScore = 0,
+    double shapeScore = 0,
+    double? distanceKm,
+    bool hasHighway = false,
+    bool crossBorderAllowed = false,
+    String? preferredCountryCode,
+    String? preferredAdmin1Name,
+    String? preferredAdmin2Name,
+    String? preferredCityCluster,
+    double? averageRating,
+    int ratingCount = 0,
+    double? completionRate,
+    int timesSelected = 0,
+    DateTime? lastSelectedAt,
+  }) {
+    throw StateError('simulated candidate save failure');
   }
 }
 
@@ -211,12 +289,15 @@ class _SequenceInvoker implements RouteEdgeInvoker {
 class _FakeRoutePoolService extends RoutePoolService {
   _FakeRoutePoolService(
     this.match, {
+    this.reserveMatch,
     List<RoutePoolCoverageCheck>? coverageResponses,
   }) : _coverageResponses = coverageResponses ?? const [];
 
   final RoutePoolMatch? match;
+  final RoutePoolMatch? reserveMatch;
   final List<RoutePoolCoverageCheck> _coverageResponses;
   final calls = <Map<String, dynamic>>[];
+  final reserveCalls = <Map<String, dynamic>>[];
   final coverageCalls = <Map<String, dynamic>>[];
   int ensureCoverageCallCount = 0;
 
@@ -285,6 +366,38 @@ class _FakeRoutePoolService extends RoutePoolService {
   }
 
   @override
+  Future<List<RoutePoolMatch>> findCandidateReserveRoutesNear({
+    required double userLat,
+    required double userLng,
+    required int distanceBucket,
+    required String style,
+    required bool avoidHighways,
+    String routeType = 'ROUND_TRIP',
+    bool crossBorderAllowed = false,
+    String? preferredCountryCode,
+    String? preferredAdmin1Name,
+    String? preferredAdmin2Name,
+    String? preferredCityCluster,
+    int candidateLimit = 80,
+  }) async {
+    reserveCalls.add({
+      'userLat': userLat,
+      'userLng': userLng,
+      'distanceBucket': distanceBucket,
+      'style': style,
+      'avoidHighways': avoidHighways,
+      'routeType': routeType,
+      'crossBorderAllowed': crossBorderAllowed,
+      'preferredCountryCode': preferredCountryCode,
+      'preferredAdmin1Name': preferredAdmin1Name,
+      'preferredAdmin2Name': preferredAdmin2Name,
+      'preferredCityCluster': preferredCityCluster,
+      'candidateLimit': candidateLimit,
+    });
+    return reserveMatch == null ? const [] : [reserveMatch!];
+  }
+
+  @override
   Future<RoutePoolCoverageCheck> ensureCoverageForRequest({
     required double userLat,
     required double userLng,
@@ -331,10 +444,18 @@ class _FakeRoutePoolService extends RoutePoolService {
       hardRegionStatus: 'normal',
       bootstrapEnabled: true,
       curatedSeedPreferred: false,
-      targetPoolSize: 15,
+      minVerifiedCount: 3,
+      targetPoolSize: 8,
       maxPoolSize: 20,
-      currentVerifiedCount: 15,
+      candidateBufferLimit: 30,
+      acceptableReserveLimitPercent: 25,
+      currentVerifiedCount: 8,
       currentCandidateCount: 0,
+      idealCount: 8,
+      goodCount: 0,
+      acceptableCount: 0,
+      rejectedCount: 0,
+      distinctFingerprintCount: 8,
       seedJobCreated: false,
       duplicateJobPrevented: false,
       poolHealthy: true,
@@ -402,9 +523,9 @@ RoutePoolCoverageCheck _coverageCheck({
   String hardRegionStatus = 'normal',
   bool bootstrapEnabled = true,
   bool curatedSeedPreferred = false,
-  int targetPoolSize = 15,
+  int targetPoolSize = 8,
   int maxPoolSize = 20,
-  int healthyThreshold = 15,
+  int healthyThreshold = 3,
   int thinThreshold = 1,
   int currentVerifiedCount = 0,
   int currentCandidateCount = 0,
@@ -413,6 +534,8 @@ RoutePoolCoverageCheck _coverageCheck({
   bool poolHealthy = false,
   bool poolFull = false,
   bool bootstrapPending = false,
+  String? seedJobStatus,
+  String? seedJobError,
   double centerLat = 47.1548,
   double centerLng = 9.8220,
   double fallbackRadiusKm = 35,
@@ -448,12 +571,18 @@ RoutePoolCoverageCheck _coverageCheck({
     hardRegionStatus: hardRegionStatus,
     bootstrapEnabled: bootstrapEnabled,
     curatedSeedPreferred: curatedSeedPreferred,
+    minVerifiedCount: 3,
     targetPoolSize: targetPoolSize,
     maxPoolSize: maxPoolSize,
     healthyThreshold: healthyThreshold,
     thinThreshold: thinThreshold,
     currentVerifiedCount: currentVerifiedCount,
     currentCandidateCount: currentCandidateCount,
+    idealCount: currentVerifiedCount,
+    goodCount: 0,
+    acceptableCount: 0,
+    rejectedCount: 0,
+    distinctFingerprintCount: currentVerifiedCount,
   );
   return RoutePoolCoverageCheck(
     assignment: RoutePoolRegionAssignment(
@@ -466,16 +595,25 @@ RoutePoolCoverageCheck _coverageCheck({
     hardRegionStatus: hardRegionStatus,
     bootstrapEnabled: bootstrapEnabled,
     curatedSeedPreferred: curatedSeedPreferred,
+    minVerifiedCount: coverage.minVerifiedCount,
     targetPoolSize: targetPoolSize,
     maxPoolSize: maxPoolSize,
+    candidateBufferLimit: coverage.candidateBufferLimit,
+    acceptableReserveLimitPercent: coverage.acceptableReserveLimitPercent,
     currentVerifiedCount: currentVerifiedCount,
     currentCandidateCount: currentCandidateCount,
+    idealCount: coverage.idealCount,
+    goodCount: coverage.goodCount,
+    acceptableCount: coverage.acceptableCount,
+    rejectedCount: coverage.rejectedCount,
+    distinctFingerprintCount: coverage.distinctFingerprintCount,
     seedJobCreated: seedJobCreated,
     duplicateJobPrevented: duplicateJobPrevented,
     poolHealthy: poolHealthy,
     poolFull: poolFull,
     bootstrapPending: bootstrapPending,
-    seedJobStatus: bootstrapPending ? 'queued' : null,
+    seedJobStatus: seedJobStatus ?? (bootstrapPending ? 'queued' : null),
+    seedJobError: seedJobError,
   );
 }
 
@@ -484,6 +622,12 @@ RoutePoolMatch _poolMatchWithResponse({
   required String id,
   required String cityCluster,
   required double startDistanceKm,
+  double distanceKm = 52,
+  int distanceBucket = 50,
+  List<String> styleTags = const ['Sport Mode'],
+  bool verified = true,
+  String source = 'curated',
+  Map<String, dynamic> routePayload = const {},
 }) {
   final route = response['route'] as Map<String, dynamic>;
   final geometry = Map<String, dynamic>.from(route['geometry'] as Map);
@@ -498,16 +642,18 @@ RoutePoolMatch _poolMatchWithResponse({
       cityCluster: cityCluster,
       startLat: (first[1] as num).toDouble(),
       startLng: (first[0] as num).toDouble(),
-      distanceKm: 52,
-      distanceBucket: 50,
+      distanceKm: distanceKm,
+      distanceBucket: distanceBucket,
       routeType: 'ROUND_TRIP',
-      styleTags: const ['Sport Mode'],
+      styleTags: styleTags,
       avoidsHighway: true,
       hasHighway: false,
       qualityScore: 92,
-      verified: true,
+      verified: verified,
       geometry: geometry,
       durationSeconds: 4300,
+      source: source,
+      routePayload: routePayload,
     ),
     startDistanceKm: startDistanceKm,
     allowedRadiusKm: 12,
@@ -533,6 +679,28 @@ Map<String, dynamic> _spikyClosedLoopResponse() {
   route['geometry'] = geometry;
   route['distance'] = _polylineDistanceMeters(coordinates);
   return response;
+}
+
+Map<String, dynamic> _outAndBackPoolResponse() {
+  final start = [9.7471, 47.5162];
+  final outbound = List.generate(28, (index) {
+    final t = index / 27.0;
+    return [start[0] - 0.18 * t, start[1] + 0.04 * t];
+  });
+  final coordinates = [...outbound, ...outbound.reversed.skip(1)];
+  coordinates[0] = start;
+  coordinates[coordinates.length - 1] = [...start];
+
+  return {
+    'route': {
+      'geometry': {'type': 'LineString', 'coordinates': coordinates},
+      'distance': 50000.0,
+      'duration': 4100.0,
+      'legs': const [
+        {'steps': []},
+      ],
+    },
+  };
 }
 
 double _polylineDistanceMeters(List<List<double>> coordinates) {
@@ -662,6 +830,120 @@ void main() {
     expect(invoker.callCount, lessThanOrEqualTo(2));
   });
 
+  test('ROUND_TRIP verwirft sparse 100-km Anzeige-Geometrie', () async {
+    service = RouteService(
+      invoker: _CountingInvoker(_sparseLongRoundTripResponse()),
+    );
+
+    await expectLater(
+      service.generateRoundTrip(
+        startPosition: _start(),
+        targetDistanceKm: 100,
+        mode: 'Sport Mode',
+        planningType: 'Zufall',
+        forceFreshVariant: true,
+      ),
+      throwsA(
+        isA<RouteServiceException>()
+            .having(
+              (error) => error.edgeMeta['response_code'],
+              'response_code',
+              'route_display_geometry_invalid',
+            )
+            .having(
+              (error) => error.edgeMeta['display_geometry_reject_reason'],
+              'display_geometry_reject_reason',
+              isNotNull,
+            ),
+      ),
+    );
+  });
+
+  test(
+    'Search-Session-Polling behandelt search_in_progress als pollfähig',
+    () async {
+      service = RouteService(
+        invoker: _CountingInvoker({
+          'route': null,
+          'code': 'search_in_progress',
+          'message': 'search_in_progress',
+          'meta': {
+            'response_code': 'search_in_progress',
+            'search_in_progress': true,
+            'search_session_id': 'session-queued',
+            'search_session_status': 'queued',
+            'attempts_count': 0,
+            'worker_last_seen_at': null,
+            'on_demand_worker_triggered': true,
+          },
+        }),
+      );
+
+      final result = await service.pollRoundTripSearchSession('session-queued');
+
+      expect(result, isNull);
+      expect(
+        service.lastRoundTripSearchSessionMeta?['search_session_id'],
+        'session-queued',
+      );
+      expect(
+        service.lastRoundTripSearchSessionMeta?['search_session_status'],
+        'queued',
+      );
+    },
+  );
+
+  test(
+    'Search-Session-Polling übernimmt found Route als RouteResult',
+    () async {
+      final response = _closedLoopResponse();
+      response['meta'] = {
+        'response_code': 'search_session_found',
+        'search_session_id': 'session-found',
+        'search_session_status': 'found',
+        'route_source': 'search_session',
+        'final_geometry_source': 'hydrated_worker',
+        'final_coordinate_count': 120,
+        'max_display_segment_m': 420,
+        'on_demand_worker_triggered': true,
+      };
+      service = RouteService(invoker: _CountingInvoker(response));
+
+      final result = await service.pollRoundTripSearchSession('session-found');
+
+      expect(result, isNotNull);
+      expect(result!.coordinates, hasLength(120));
+      expect(result.edgeMeta['search_session_id'], 'session-found');
+      expect(result.edgeMeta['route_source'], 'search_session');
+      expect(result.edgeMeta['final_geometry_source'], 'hydrated_worker');
+    },
+  );
+
+  test('Search-Session-Polling verwirft sparse found Geometry', () async {
+    final response = _sparseLongRoundTripResponse();
+    response['meta'] = {
+      'response_code': 'search_session_found',
+      'search_session_id': 'session-sparse',
+      'search_session_status': 'found',
+      'route_source': 'search_session',
+      'final_geometry_source': 'hydrated_worker',
+      'final_coordinate_count': 5,
+      'max_display_segment_m': 30000,
+    };
+    service = RouteService(invoker: _CountingInvoker(response));
+
+    await expectLater(
+      service.pollRoundTripSearchSession('session-sparse'),
+      throwsA(
+        isA<RouteServiceException>().having(
+          (error) => error.edgeMeta['response_code'],
+          'response_code',
+          'route_display_geometry_invalid',
+        ),
+      ),
+    );
+  });
+
   test(
     'explizites Neu-Suchen startet frisch und löst keine Hintergrundroute aus',
     () async {
@@ -702,8 +984,66 @@ void main() {
         varyingInvoker.bodies.map((body) => body['route_variant_hint']).toSet(),
         hasLength(greaterThanOrEqualTo(2)),
       );
+      expect(
+        varyingInvoker.bodies.last['previous_route_fingerprints'],
+        isNotEmpty,
+      );
     },
   );
+
+  test('Search Again sendet maximal die letzten 10 Fingerprints', () async {
+    final varyingInvoker = _VaryingCountingInvoker();
+    service = RouteService(invoker: varyingInvoker);
+
+    for (var i = 0; i < 11; i += 1) {
+      await service.generateRoundTrip(
+        startPosition: _start(),
+        targetDistanceKm: 50,
+        mode: 'Sport Mode',
+        planningType: 'Zufall',
+        forceFreshVariant: true,
+        debugTrigger: 'searchAgain',
+      );
+    }
+
+    final lastPrevious =
+        varyingInvoker.bodies.last['previous_route_fingerprints'] as List?;
+    expect(lastPrevious, isNotNull);
+    expect(lastPrevious, hasLength(10));
+    expect(RouteService.lastRoutePreviousFingerprints, hasLength(10));
+  });
+
+  test('bewegter Rundkurs-Start sendet Snap- und Bearing-Meta', () async {
+    final movingStart = geo.Position(
+      latitude: 47.5162,
+      longitude: 9.7471,
+      timestamp: DateTime.now(),
+      accuracy: 12,
+      altitude: 410,
+      altitudeAccuracy: 8,
+      heading: 92,
+      headingAccuracy: 8,
+      speed: 18,
+      speedAccuracy: 1,
+    );
+
+    final route = await service.generateRoundTrip(
+      startPosition: movingStart,
+      targetDistanceKm: 50,
+      mode: 'Sport Mode',
+      planningType: 'Zufall',
+      forceFreshVariant: true,
+    );
+
+    final body = invoker.bodies.first;
+    expect(body['moving_start'], true);
+    expect(body['current_heading'], 92);
+    expect(body['start_radius_m'], isA<double>());
+    expect(body['avoid_maneuver_radius_m'], isA<double>());
+    expect(route.edgeMeta['moving_start_detected'], true);
+    expect(route.edgeMeta['start_snap_strategy'], 'moving_bearing_radius_snap');
+    expect(route.edgeMeta['avoid_maneuver_radius_used'], isA<double>());
+  });
 
   test(
     'sichtbar andere Route darf nach Seen-Historie erneut geliefert werden',
@@ -818,7 +1158,7 @@ void main() {
   test('nach einem Fehler kann direkt erneut frisch gesucht werden', () async {
     final flakyInvoker = _FlakyCountingInvoker(
       _closedLoopResponse(),
-      failuresBeforeSuccess: 3,
+      failuresBeforeSuccess: 4,
     );
     service = RouteService(invoker: flakyInvoker);
 
@@ -828,6 +1168,7 @@ void main() {
         targetDistanceKm: 50,
         mode: 'Sport Mode',
         planningType: 'Zufall',
+        avoidHighways: true,
         forceFreshVariant: true,
       ),
       throwsA(isA<RouteServiceException>()),
@@ -838,15 +1179,16 @@ void main() {
       targetDistanceKm: 50,
       mode: 'Sport Mode',
       planningType: 'Zufall',
+      avoidHighways: true,
       forceFreshVariant: true,
     );
 
     expect(recovered.coordinates, isNotEmpty);
-    expect(flakyInvoker.callCount, greaterThanOrEqualTo(4));
+    expect(flakyInvoker.callCount, greaterThanOrEqualTo(5));
   });
 
   test(
-    'Mapbox-Fehler nutzt geprüfte Pool-Route statt Fehler, wenn Match vorhanden ist',
+    'Search-Again versucht Live zuerst und nutzt Pool erst nach Live-Fehlschlag',
     () async {
       final failingInvoker = _AlwaysFailingInvoker();
       final poolService = _FakeRoutePoolService(_poolMatch());
@@ -865,18 +1207,138 @@ void main() {
       );
 
       expect(route.coordinates, isNotEmpty);
-      expect(failingInvoker.callCount, greaterThan(0));
+      expect(failingInvoker.callCount, 1);
       expect(poolService.calls, hasLength(1));
       expect(poolService.calls.single['distanceBucket'], 50);
       expect(poolService.calls.single['avoidHighways'], true);
       expect(route.edgeMeta['route_source'], 'pool');
       expect(route.edgeMeta['fallbackUsed'], true);
-      expect(route.edgeMeta['mapboxCallCount'], failingInvoker.callCount);
+      expect(route.edgeMeta['mapboxCallCount'], 1);
+      expect(route.edgeMeta['source_decision'], 'search_again_live_first');
+      expect(route.edgeMeta['live_attempted'], true);
+      expect(route.edgeMeta['live_attempt_reason'], 'search_again_force_fresh');
+      expect(route.edgeMeta['pool_used_reason'], 'network');
       expect(
         route.edgeMeta['pool_match_id'],
         'pool-dornbirn-50-sport-nohighway',
       );
       expect(RouteService.lastRoutePoolFallbackUsed, true);
+    },
+  );
+
+  test(
+    'Search-Again markiert Pool-Duplikat nur als Fallback, wenn keine Alternative bleibt',
+    () async {
+      final poolService = _FakeRoutePoolService(_poolMatch());
+      service = RouteService(
+        invoker: _AlwaysFailingInvoker(),
+        routePoolService: poolService,
+      );
+
+      final first = await service.generateRoundTrip(
+        startPosition: _start(),
+        targetDistanceKm: 50,
+        mode: 'Sport Mode',
+        planningType: 'Zufall',
+        avoidHighways: true,
+      );
+      expect(first.coordinates, isNotEmpty);
+      expect(first.edgeMeta['route_source'], 'pool');
+      expect(first.edgeMeta['duplicateFallbackUsed'], isFalse);
+
+      final second = await service.generateRoundTrip(
+        startPosition: _start(),
+        targetDistanceKm: 50,
+        mode: 'Sport Mode',
+        planningType: 'Zufall',
+        avoidHighways: true,
+        forceFreshVariant: true,
+      );
+
+      expect(second.coordinates, isNotEmpty);
+      expect(second.edgeMeta['route_source'], 'pool');
+      expect(second.edgeMeta['duplicateFallbackUsed'], isTrue);
+      expect(second.edgeMeta['duplicate_skipped'], isTrue);
+      expect(second.edgeMeta['pool_seen_candidate_count'], 1);
+      expect(second.edgeMeta['previous_route_fingerprints'], isNotEmpty);
+    },
+  );
+
+  test(
+    'Hard-Region nutzt Candidate-Reserve nach leerem verified Pool',
+    () async {
+      final reserveMatch = _poolMatchWithResponse(
+        response: _closedLoopResponseAt(latitude: 47.1548, longitude: 9.8220),
+        id: 'candidate-reserve-bludenz-50-sport',
+        cityCluster: 'Bludenz',
+        startDistanceKm: 0.3,
+        verified: false,
+        source: 'candidate_reserve',
+        routePayload: const {
+          'candidate_reserve': true,
+          'candidate_pool_id': 'candidate-reserve-bludenz-50-sport',
+        },
+      );
+      final poolService = _FakeRoutePoolService(
+        null,
+        reserveMatch: reserveMatch,
+      );
+      service = RouteService(
+        invoker: _AlwaysFailingInvoker(),
+        routePoolService: poolService,
+      );
+
+      final route = await service.generateRoundTrip(
+        startPosition: _position(47.1548, 9.8220),
+        targetDistanceKm: 50,
+        mode: 'Sport Mode',
+        planningType: 'Zufall',
+        avoidHighways: true,
+        forceFreshVariant: true,
+        subscriptionTier: 'premium',
+      );
+
+      expect(route.coordinates, isNotEmpty);
+      expect(poolService.calls, hasLength(1));
+      expect(poolService.reserveCalls, hasLength(1));
+      expect(poolService.reserveCalls.single['distanceBucket'], 50);
+      expect(poolService.reserveCalls.single['avoidHighways'], true);
+      expect(route.edgeMeta['route_source'], 'candidate_reserve');
+      expect(route.edgeMeta['source'], 'candidate_reserve');
+      expect(route.edgeMeta['candidate_reserve_used'], true);
+      expect(route.edgeMeta['candidate_pool_id'], reserveMatch.route.id);
+      expect(route.edgeMeta['quality_tier'], 'acceptable');
+      expect(route.edgeMeta['final_geometry_source'], 'road_snapped_full');
+      expect(route.edgeMeta['road_snapped_geometry'], true);
+      expect(RouteService.lastRouteGenerationSource, 'candidate_reserve');
+      expect(RouteService.lastRouteTemporaryCandidate, true);
+    },
+  );
+
+  test(
+    'Autobahn AN darf gute No-Highway-Poolroute als legitimen Fallback nutzen',
+    () async {
+      final poolService = _FakeRoutePoolService(_poolMatch());
+      service = RouteService(
+        invoker: _AlwaysFailingInvoker(),
+        routePoolService: poolService,
+      );
+
+      final route = await service.generateRoundTrip(
+        startPosition: _start(),
+        targetDistanceKm: 50,
+        mode: 'Sport Mode',
+        planningType: 'Zufall',
+        avoidHighways: false,
+      );
+
+      expect(route.coordinates, isNotEmpty);
+      expect(route.edgeMeta['route_source'], 'pool');
+      expect(route.edgeMeta['highway_allowed'], isTrue);
+      expect(route.edgeMeta['motorway_policy'], 'allowed_not_required');
+      expect(route.edgeMeta['actual_has_highway'], isFalse);
+      expect(route.edgeMeta['actual_avoids_highway'], isTrue);
+      expect(route.edgeMeta['cross_cell_highway_fallback'], isTrue);
     },
   );
 
@@ -912,6 +1374,199 @@ void main() {
       expect(RouteService.lastRoutePoolFallbackUsed, isFalse);
       expect(RouteService.lastRoutePoolRejectedTooFar, isTrue);
       expect(RouteService.lastRoutePoolDistanceRuleApplied, isTrue);
+    },
+  );
+
+  test(
+    'ROUND_TRIP-Pool-Fallback verwirft lokal kaputte verified Pool-Route',
+    () async {
+      final poolService = _FakeRoutePoolService(
+        _poolMatchWithResponse(
+          response: _outAndBackPoolResponse(),
+          id: 'pool-bregenz-out-and-back',
+          cityCluster: 'Bregenz',
+          startDistanceKm: 0.2,
+        ),
+      );
+      service = RouteService(
+        invoker: _AlwaysFailingInvoker(),
+        routePoolService: poolService,
+      );
+
+      await expectLater(
+        service.generateRoundTrip(
+          startPosition: _start(),
+          targetDistanceKm: 50,
+          mode: 'Sport Mode',
+          planningType: 'Zufall',
+          avoidHighways: true,
+          forceFreshVariant: true,
+        ),
+        throwsA(isA<RouteServiceException>()),
+      );
+
+      expect(RouteService.lastRoutePoolFallbackUsed, isFalse);
+      expect(RouteService.lastRouteGenerationSource, isNot('pool'));
+      expect(poolService.calls, isNotEmpty);
+    },
+  );
+
+  test('100-km Sport-Pool-Fallback verwirft out-and-back Astroute', () async {
+    final poolService = _FakeRoutePoolService(
+      _poolMatchWithResponse(
+        response: _outAndBackPoolResponse(),
+        id: 'pool-dornbirn-100-sport-out-and-back',
+        cityCluster: 'Dornbirn',
+        startDistanceKm: 0.2,
+        distanceKm: 100,
+        distanceBucket: 100,
+      ),
+    );
+    service = RouteService(
+      invoker: _AlwaysFailingInvoker(),
+      routePoolService: poolService,
+    );
+
+    await expectLater(
+      service.generateRoundTrip(
+        startPosition: _start(),
+        targetDistanceKm: 100,
+        mode: 'Sport Mode',
+        planningType: 'Zufall',
+        avoidHighways: true,
+        forceFreshVariant: true,
+      ),
+      throwsA(isA<RouteServiceException>()),
+    );
+
+    expect(RouteService.lastRoutePoolFallbackUsed, isFalse);
+    expect(RouteService.lastRouteGenerationSource, isNot('pool'));
+  });
+
+  test(
+    '100-km Kurvenjagd ohne Route zeigt spezifischen Availability-Status',
+    () async {
+      final noRouteInvoker = _CountingInvoker({
+        'route': null,
+        'meta': {
+          'requested_style': 'Kurvenjagd',
+          'requested_distance_bucket': 100,
+        },
+      });
+      service = RouteService(
+        invoker: noRouteInvoker,
+        routePoolService: RoutePoolService(
+          inMemoryRegions: const <RouteRegion>[],
+          inMemoryRoutes: const <RoutePoolEntry>[],
+          inMemoryCoverage: const <RoutePoolCoverage>[],
+          inMemorySeedJobs: <RouteSeedJob>[],
+          inMemoryCandidates: const <RoutePoolCandidate>[],
+        ),
+      );
+
+      late RouteServiceException error;
+      try {
+        await service.generateRoundTrip(
+          startPosition: _start(),
+          targetDistanceKm: 100,
+          mode: 'Kurvenjagd',
+          planningType: 'Zufall',
+          avoidHighways: true,
+          forceFreshVariant: true,
+        );
+      } on RouteServiceException catch (caught) {
+        error = caught;
+      }
+
+      expect(error.userMessage, contains('Kurvenjagd'));
+      expect(error.userMessage, isNot(contains('Bitte ändere Stil')));
+      expect(error.edgeMeta['requested_distance_bucket'], 100);
+      expect(noRouteInvoker.bodies, isNotEmpty);
+      expect(
+        noRouteInvoker.bodies.any((body) => body['mode'] == 'Sport Mode'),
+        isFalse,
+      );
+    },
+  );
+
+  test(
+    'ROUND_TRIP-NoRoute ohne Edge-Meta nutzt Request-Cell für User-Status',
+    () async {
+      final noRouteInvoker = _CountingInvoker({'route': null});
+      service = RouteService(
+        invoker: noRouteInvoker,
+        routePoolService: RoutePoolService(
+          inMemoryRegions: const <RouteRegion>[],
+          inMemoryRoutes: const <RoutePoolEntry>[],
+          inMemoryCoverage: const <RoutePoolCoverage>[],
+          inMemorySeedJobs: <RouteSeedJob>[],
+          inMemoryCandidates: const <RoutePoolCandidate>[],
+        ),
+      );
+
+      late RouteServiceException error;
+      try {
+        await service.generateRoundTrip(
+          startPosition: _start(),
+          targetDistanceKm: 100,
+          mode: 'Kurvenjagd',
+          planningType: 'Zufall',
+          avoidHighways: true,
+          forceFreshVariant: true,
+        );
+      } on RouteServiceException catch (caught) {
+        error = caught;
+      }
+
+      expect(error.userMessage, contains('Kurvenjagd'));
+      expect(error.edgeMeta['requested_route_type'], 'ROUND_TRIP');
+      expect(error.edgeMeta['requested_style_key'], 'kurvenjagd');
+      expect(error.edgeMeta['requested_distance_bucket'], 100);
+      expect(error.edgeMeta['avoid_highways'], isTrue);
+      expect(error.edgeMeta['exact_cell_required'], isTrue);
+    },
+  );
+
+  test(
+    'paused_budget Seed-Job wird in Testphase nicht als Budget-Popup gemappt',
+    () async {
+      final noRouteInvoker = _CountingInvoker({'route': null});
+      final poolService = _FakeRoutePoolService(
+        null,
+        coverageResponses: [
+          _coverageCheck(
+            cityCluster: 'Bludenz',
+            coverageStatus: 'empty',
+            seedJobStatus: 'paused_budget',
+            seedJobError: 'request_budget_exhausted',
+            bootstrapPending: true,
+          ),
+        ],
+      );
+      service = RouteService(
+        invoker: noRouteInvoker,
+        routePoolService: poolService,
+      );
+
+      late RouteServiceException error;
+      try {
+        await service.generateRoundTrip(
+          startPosition: _position(47.1548, 9.8220),
+          targetDistanceKm: 50,
+          mode: 'Sport Mode',
+          planningType: 'Zufall',
+          avoidHighways: true,
+          forceFreshVariant: true,
+          subscriptionTier: 'premium',
+        );
+      } on RouteServiceException catch (caught) {
+        error = caught;
+      }
+
+      expect(error.userMessage, isNot(contains('Heute wurden viele')));
+      expect(error.edgeMeta['real_budget_limited'], isFalse);
+      expect(error.edgeMeta['route_budget_paused'], isFalse);
+      expect(error.edgeMeta['next_action'], 'queued_for_healing');
     },
   );
 
@@ -1069,6 +1724,65 @@ void main() {
   );
 
   test(
+    'Premium Search-Again versucht Live vor healthy Pool-Fallback',
+    () async {
+      final jobs = <RouteSeedJob>[];
+      final coverage = _coverageCheck(
+        cityCluster: 'Dornbirn',
+        admin2Name: 'Dornbirn',
+        coverageStatus: 'healthy',
+        currentVerifiedCount: 15,
+        poolHealthy: true,
+        centerLat: 47.5162,
+        centerLng: 9.7471,
+      ).coverage!.copyWith(lastCountedAt: DateTime.now().toUtc());
+      service = RouteService(
+        invoker: invoker,
+        routePoolService: RoutePoolService(
+          inMemoryRegions: [
+            _benchmarkRegion(
+              countryCode: 'AT',
+              admin1Name: 'Vorarlberg',
+              admin2Name: 'Dornbirn',
+              cityCluster: 'Dornbirn',
+              centerLat: 47.5162,
+              centerLng: 9.7471,
+            ),
+          ],
+          inMemoryRoutes: [
+            _inMemoryPoolEntry(
+              id: 'premium-dornbirn-pool',
+              cityCluster: 'Dornbirn',
+              response: _closedLoopResponse(),
+              admin2Name: 'Dornbirn',
+            ),
+          ],
+          inMemoryCoverage: [coverage],
+          inMemorySeedJobs: jobs,
+          inMemoryCandidates: <RoutePoolCandidate>[],
+        ),
+      );
+
+      final route = await service.generateRoundTrip(
+        startPosition: _start(),
+        targetDistanceKm: 50,
+        mode: 'Sport Mode',
+        planningType: 'Zufall',
+        avoidHighways: true,
+        forceFreshVariant: true,
+        subscriptionTier: 'premium',
+      );
+
+      expect(route.edgeMeta['route_source'], 'mapbox');
+      expect(route.edgeMeta['source_decision'], 'search_again_live_first');
+      expect(route.edgeMeta['live_attempted'], true);
+      expect(route.edgeMeta['live_attempt_reason'], 'search_again_force_fresh');
+      expect(invoker.callCount, 1);
+      expect(jobs, isEmpty);
+    },
+  );
+
+  test(
     'Free-User in leerer Region bekommt warming_up statt generischem Fehler und keinen Job-Duplikatsturm',
     () async {
       final jobs = <RouteSeedJob>[];
@@ -1121,7 +1835,7 @@ void main() {
         secondError = error;
       }
 
-      expect(firstError.userMessage, contains('neue Vorschlaege'));
+      expect(firstError.userMessage, contains('Neue Vorschläge'));
       expect(firstError.edgeMeta['region_warming_up'], true);
       expect(firstError.edgeMeta['seed_job_created'], true);
       expect(secondError.edgeMeta['duplicate_job_prevented'], true);
@@ -1129,6 +1843,177 @@ void main() {
       expect(jobs, hasLength(1));
     },
   );
+
+  test(
+    'Premium short no-highway Pool-Luecke nutzt On-Demand-Fill bevor Warmup',
+    () async {
+      final jobs = <RouteSeedJob>[];
+      final failingInvoker = _AlwaysFailingInvoker();
+      service = RouteService(
+        invoker: failingInvoker,
+        routePoolService: RoutePoolService(
+          inMemoryRegions: [
+            _benchmarkRegion(
+              countryCode: 'AT',
+              admin1Name: 'Vorarlberg',
+              admin2Name: 'Feldkirch',
+              cityCluster: 'Feldkirch',
+              centerLat: 47.2383,
+              centerLng: 9.5985,
+            ),
+          ],
+          inMemoryRoutes: const [],
+          inMemoryCoverage: <RoutePoolCoverage>[],
+          inMemorySeedJobs: jobs,
+          inMemoryCandidates: <RoutePoolCandidate>[],
+        ),
+      );
+
+      late RouteServiceException firstError;
+      late RouteServiceException secondError;
+      try {
+        await service.generateRoundTrip(
+          startPosition: _position(47.2383, 9.5985),
+          targetDistanceKm: 50,
+          mode: 'Sport Mode',
+          planningType: 'Zufall',
+          avoidHighways: true,
+          forceFreshVariant: true,
+          subscriptionTier: 'premium',
+        );
+      } on RouteServiceException catch (error) {
+        firstError = error;
+      }
+      try {
+        await service.generateRoundTrip(
+          startPosition: _position(47.2383, 9.5985),
+          targetDistanceKm: 50,
+          mode: 'Sport Mode',
+          planningType: 'Zufall',
+          avoidHighways: true,
+          forceFreshVariant: true,
+          subscriptionTier: 'premium',
+        );
+      } on RouteServiceException catch (error) {
+        secondError = error;
+      }
+
+      expect(failingInvoker.callCount, 6);
+      expect(
+        failingInvoker.bodies.every(
+          (body) => body['max_candidate_attempts'] == 15,
+        ),
+        true,
+      );
+      expect(jobs, hasLength(1));
+      expect(firstError.edgeMeta['code'], 'pool_bootstrap_pending');
+      expect(firstError.edgeMeta['seed_job_created'], true);
+      expect(firstError.edgeMeta['live_attempted'], true);
+      expect(firstError.edgeMeta['live_fill_attempted'], true);
+      expect(firstError.edgeMeta['live_fill_attempt_count'], 3);
+      expect(
+        firstError.edgeMeta['source_decision'],
+        'search_again_on_demand_live_fill',
+      );
+      expect(firstError.edgeMeta['live_attempt_result'], isNot('success'));
+      expect(secondError.edgeMeta['duplicate_job_prevented'], true);
+      expect(secondError.edgeMeta['live_attempted'], true);
+    },
+  );
+
+  test(
+    'Premium On-Demand-Fill returned dritte gute Live-Route und staged Candidate',
+    () async {
+      final jobs = <RouteSeedJob>[];
+      final candidates = <RoutePoolCandidate>[];
+      final flakyInvoker = _FlakyCountingInvoker(
+        _closedLoopResponse(),
+        failuresBeforeSuccess: 2,
+      );
+      service = RouteService(
+        invoker: flakyInvoker,
+        routePoolService: RoutePoolService(
+          inMemoryRegions: [
+            _benchmarkRegion(
+              countryCode: 'AT',
+              admin1Name: 'Vorarlberg',
+              admin2Name: 'Bregenz',
+              cityCluster: 'Bregenz',
+              centerLat: 47.5031,
+              centerLng: 9.7471,
+            ),
+          ],
+          inMemoryRoutes: const [],
+          inMemoryCoverage: <RoutePoolCoverage>[],
+          inMemorySeedJobs: jobs,
+          inMemoryCandidates: candidates,
+        ),
+      );
+
+      final route = await service.generateRoundTrip(
+        startPosition: _position(47.5031, 9.7471),
+        targetDistanceKm: 50,
+        mode: 'Sport Mode',
+        planningType: 'Zufall',
+        avoidHighways: true,
+        forceFreshVariant: true,
+        subscriptionTier: 'premium',
+      );
+
+      expect(flakyInvoker.callCount, 3);
+      expect(route.edgeMeta['route_source'], 'mapbox');
+      expect(route.edgeMeta['live_fill_attempted'], true);
+      expect(route.edgeMeta['live_fill_attempt_count'], 3);
+      expect(route.edgeMeta['live_fill_success'], true);
+      expect(route.edgeMeta['candidate_inserted'], true);
+      expect(route.edgeMeta['candidate_saved'], true);
+      expect(route.edgeMeta['candidate_save_failed'], false);
+      expect(jobs, hasLength(1));
+      expect(candidates, hasLength(1));
+      expect(candidates.single.candidateSource, 'premium_live');
+      expect(
+        candidates.single.routeFingerprint,
+        route.edgeMeta['route_fingerprint'],
+      );
+      expect(
+        candidates.single.routePayload['candidate_subscription_tier'],
+        'premium',
+      );
+    },
+  );
+
+  test('Candidate-Save-Fehler blockiert gute On-Demand-Route nicht', () async {
+    service = RouteService(
+      invoker: invoker,
+      routePoolService: _ThrowingCandidateRoutePoolService(),
+    );
+
+    final route = await service.generateRoundTrip(
+      startPosition: _position(47.5031, 9.7471),
+      targetDistanceKm: 50,
+      mode: 'Sport Mode',
+      planningType: 'Zufall',
+      avoidHighways: false,
+      forceFreshVariant: true,
+      subscriptionTier: 'premium',
+    );
+
+    expect(route.edgeMeta['route_source'], 'mapbox');
+    expect(route.edgeMeta['candidate_inserted'], false);
+    expect(route.edgeMeta['candidate_saved'], false);
+    expect(route.edgeMeta['candidate_save_failed'], true);
+    expect(route.edgeMeta['candidate_save_error_type'], 'StateError');
+    expect(
+      route.edgeMeta['candidate_save_error_reason'],
+      contains('simulated candidate save failure'),
+    );
+    final orchestration = Map<String, dynamic>.from(
+      route.edgeMeta['orchestration'] as Map,
+    );
+    expect(orchestration['candidate_saved'], false);
+    expect(orchestration['candidate_save_failed'], true);
+    expect(orchestration['candidate_save_error_type'], 'StateError');
+  });
 
   test(
     '75-km Free-Anfrage nutzt keine 50-km Poolroute und queued exakten Seed-Job',
@@ -1176,7 +2061,7 @@ void main() {
       }
 
       expect(invoker.callCount, 0);
-      expect(error.userMessage, contains('neue Vorschlaege'));
+      expect(error.userMessage, contains('Neue Vorschläge'));
       expect(error.edgeMeta['code'], 'pool_bootstrap_pending');
       expect(error.edgeMeta['response_code'], 'pool_bootstrap_pending');
       expect(error.edgeMeta['requested_distance_bucket'], 75);
@@ -1329,7 +2214,7 @@ void main() {
   );
 
   test(
-    'Premium-Hard-Region-Status spiegelt erstes Coverage-Snapshot ohne Zweitabruf',
+    'Premium-Hard-Region versucht Live vor Warmup und behält Coverage-Meta',
     () async {
       final failingInvoker = _AlwaysFailingInvoker();
       final poolService = _FakeRoutePoolService(
@@ -1387,6 +2272,10 @@ void main() {
       expect(error.edgeMeta['region_difficulty'], 'hard');
       expect(error.edgeMeta['seed_job_created'], false);
       expect(error.edgeMeta['duplicate_job_prevented'], false);
+      expect(failingInvoker.callCount, greaterThan(0));
+      expect(error.edgeMeta['live_attempted'], true);
+      expect(error.edgeMeta['live_attempt_count'], failingInvoker.callCount);
+      expect(error.edgeMeta['pool_checked'], true);
       expect(poolService.ensureCoverageCallCount, 1);
     },
   );
@@ -1433,6 +2322,74 @@ void main() {
       expect(candidates, hasLength(1));
       expect(candidates.single.candidateSource, 'basic_live');
       expect(candidates.single.isVerifiedPool, isFalse);
+    },
+  );
+
+  test(
+    'Basic-User in Hard-Region darf kontrolliert live explorieren und Candidate stagen',
+    () async {
+      final jobs = <RouteSeedJob>[];
+      final candidates = <RoutePoolCandidate>[];
+      final hardInvoker = _CountingInvoker(_closedLoopResponse());
+      service = RouteService(
+        invoker: hardInvoker,
+        routePoolService: RoutePoolService(
+          inMemoryRegions: [
+            _benchmarkRegion(
+              countryCode: 'AT',
+              admin1Name: 'Vorarlberg',
+              admin2Name: 'Bludenz',
+              cityCluster: 'Bludenz',
+              centerLat: 47.1548,
+              centerLng: 9.8220,
+              fallbackRadiusKm: 35,
+              difficultyLevel: 'hard',
+              hardRegionStatus: 'curated_needed',
+              bootstrapEnabled: false,
+              curatedSeedPreferred: true,
+              defaultTargetPoolSize: 8,
+              defaultMaxPoolSize: 10,
+              healthyThreshold: 4,
+              thinThreshold: 1,
+              seedBudgetUnits: 0,
+              seedCooldownMinutes: 180,
+            ),
+          ],
+          inMemoryRoutes: const [],
+          inMemoryCoverage: <RoutePoolCoverage>[],
+          inMemorySeedJobs: jobs,
+          inMemoryCandidates: candidates,
+        ),
+      );
+
+      final route = await service.generateRoundTrip(
+        startPosition: _position(47.1548, 9.8220),
+        targetDistanceKm: 50,
+        mode: 'Sport Mode',
+        planningType: 'Zufall',
+        avoidHighways: true,
+        forceFreshVariant: true,
+        subscriptionTier: 'basic',
+      );
+
+      expect(hardInvoker.callCount, greaterThan(0));
+      expect(jobs, hasLength(1));
+      expect(jobs.single.jobKind, 'manual_seed');
+      expect(jobs.single.maxAttempts, 1);
+      expect(
+        jobs.single.maxMapboxCalls,
+        lessThanOrEqualTo(RoutePoolService.userDemandSeedMaxMapboxCalls),
+      );
+      expect(jobs.single.seedBudgetUnits, greaterThanOrEqualTo(1));
+      expect(candidates, hasLength(1));
+      expect(candidates.single.candidateSource, 'basic_live');
+      expect(route.edgeMeta['hard_region_exploration_used'], true);
+      expect(route.edgeMeta['seed_job_created'], true);
+      expect(
+        route.edgeMeta['source_decision']?.toString(),
+        contains('hard_region_live_exploration'),
+      );
+      expect(route.edgeMeta['candidate_saved'], true);
     },
   );
 }

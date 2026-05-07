@@ -243,73 +243,133 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
   Widget build(BuildContext context) {
     final bottomInset = MediaQuery.of(context).padding.bottom;
 
-    return Padding(
-      padding: EdgeInsets.fromLTRB(12, 48, 12, _isExportMode ? 0 : bottomInset),
-      child: Stack(
-        alignment: Alignment.center,
-        children: [
-          RepaintBoundary(
-            key: _shareCardKey,
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 200),
-              width: double.infinity,
-              padding: EdgeInsets.fromLTRB(20, 16, 20, _isExportMode ? 8 : 18),
-              decoration: _buildCardDecoration(),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Text(
-                    'CruiseConnect',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: 0.8,
-                    ),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final availableHeight =
+            (constraints.maxHeight * 0.88 - bottomInset - 16)
+                .clamp(420.0, 860.0)
+                .toDouble();
+
+        return Padding(
+          padding: EdgeInsets.fromLTRB(
+            10,
+            42,
+            10,
+            _isExportMode ? 0 : bottomInset,
+          ),
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              RepaintBoundary(
+                key: _shareCardKey,
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 200),
+                  width: double.infinity,
+                  constraints: BoxConstraints(
+                    maxWidth: 440,
+                    maxHeight: _isExportMode
+                        ? double.infinity
+                        : availableHeight,
                   ),
-                  const SizedBox(height: 12),
-                  const _CruiseRedDivider(),
-                  const SizedBox(height: 16),
-                  _buildStatsGrid(),
-                  if (!_isExportMode && _showStreakBonus) ...[
-                    const SizedBox(height: 10),
-                    _buildStreakBonusNote(),
-                  ],
-                  const SizedBox(height: 18),
-                  _RoutePreviewCard(
-                    coordinates: widget.routeCoordinates,
-                    exportMode: _isExportMode,
+                  padding: EdgeInsets.fromLTRB(
+                    18,
+                    14,
+                    18,
+                    _isExportMode ? 8 : 14,
                   ),
-                  const SizedBox(height: 18),
-                  if (!_isExportMode) ...[
-                    _buildRatingPanel(),
-                    const SizedBox(height: 18),
-                  ],
-                  const _CruiseRedDivider(),
-                  if (!_isExportMode) ...[
-                    const SizedBox(height: 16),
-                    _buildActionRow(),
-                    if (widget.belowMinimum) ...[
-                      const SizedBox(height: 12),
-                      const Text(
-                        'Unter 20% Fahranteil: Route kann gespeichert werden, XP wird fairerweise nicht gutgeschrieben.',
-                        style: TextStyle(
-                          color: Color(0xFFA8AFBC),
-                          fontSize: 11,
-                          fontWeight: FontWeight.w500,
-                        ),
-                        textAlign: TextAlign.center,
-                      ),
-                    ],
-                  ],
-                ],
+                  decoration: _buildCardDecoration(),
+                  child: _isExportMode
+                      ? _buildExportContent()
+                      : _buildInteractiveContent(),
+                ),
               ),
+              if (_celebration != null) _buildCelebrationOverlay(),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildExportContent() {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _buildSheetHeader(),
+        const SizedBox(height: 14),
+        _buildStatsGrid(),
+        const SizedBox(height: 14),
+        _RoutePreviewCard(
+          coordinates: widget.routeCoordinates,
+          exportMode: true,
+        ),
+      ],
+    );
+  }
+
+  Widget _buildInteractiveContent() {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _buildSheetHeader(),
+        const SizedBox(height: 12),
+        Flexible(
+          child: SingleChildScrollView(
+            physics: const BouncingScrollPhysics(),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _buildStatsGrid(),
+                if (_showStreakBonus) ...[
+                  const SizedBox(height: 8),
+                  _buildStreakBonusNote(),
+                ],
+                const SizedBox(height: 12),
+                _RoutePreviewCard(
+                  coordinates: widget.routeCoordinates,
+                  exportMode: false,
+                ),
+                const SizedBox(height: 12),
+                _buildRatingPanel(),
+                if (widget.belowMinimum) ...[
+                  const SizedBox(height: 10),
+                  const Text(
+                    'Unter 20% Fahranteil: Route kann gespeichert werden, XP wird fairerweise nicht gutgeschrieben.',
+                    style: TextStyle(
+                      color: Color(0xFFA8AFBC),
+                      fontSize: 10,
+                      fontWeight: FontWeight.w500,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                ],
+              ],
             ),
           ),
-          if (_celebration != null) _buildCelebrationOverlay(),
-        ],
-      ),
+        ),
+        const SizedBox(height: 12),
+        _buildActionRow(),
+      ],
+    );
+  }
+
+  Widget _buildSheetHeader() {
+    return const Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          'CruiseConnect',
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: 12,
+            fontWeight: FontWeight.w800,
+            letterSpacing: 0.8,
+          ),
+        ),
+        SizedBox(height: 10),
+        _CruiseRedDivider(),
+      ],
     );
   }
 
@@ -344,7 +404,7 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
                 exportMode: _isExportMode,
               ),
             ),
-            const SizedBox(width: 12),
+            const SizedBox(width: 8),
             Expanded(
               child: _StatTile(
                 value: widget.durationText,
@@ -354,7 +414,7 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
             ),
           ],
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: 8),
         Row(
           children: [
             Expanded(
@@ -364,7 +424,7 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
                 exportMode: _isExportMode,
               ),
             ),
-            const SizedBox(width: 12),
+            const SizedBox(width: 8),
             Expanded(
               child: _StatTile(
                 label: xpLabel,
@@ -529,62 +589,172 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
   }
 
   Widget _buildRatingPanel() {
-    final tags = <String>[
-      'schön',
-      'langweilig',
-      'zu weit weg',
+    const positiveTags = <String>[
+      'schöne Kurven',
+      'guter Flow',
+      'schöne Gegend',
+      'passende Länge',
+    ];
+    const negativeTags = <String>[
       'Sackgasse',
-      'gute Kurven',
-      'falscher Start',
+      'zu künstlich',
+      'zu kurz/lang',
+      'Autobahn trotz AUS',
+      'wiederholt',
     ];
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.14),
-        borderRadius: BorderRadius.circular(18),
+        color: Colors.black.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(16),
         border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            'Route bewerten',
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: 13,
-              fontWeight: FontWeight.w800,
-            ),
+          Row(
+            children: [
+              Container(
+                width: 30,
+                height: 30,
+                decoration: BoxDecoration(
+                  color: AppAccentColors.accent.withValues(alpha: 0.16),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                    color: AppAccentColors.accent.withValues(alpha: 0.26),
+                  ),
+                ),
+                child: Icon(
+                  Icons.route_rounded,
+                  color: AppAccentColors.accent,
+                  size: 16,
+                ),
+              ),
+              const SizedBox(width: 9),
+              const Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Wie war diese Route?',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    SizedBox(height: 1),
+                    Text(
+                      'Dein Feedback verbessert zukünftige Vorschläge.',
+                      style: TextStyle(
+                        color: Color(0xFFA8AFBC),
+                        fontSize: 10,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
           const SizedBox(height: 10),
           Row(
+            children: [
+              Expanded(
+                child: _QualityChoiceButton(
+                  label: 'Top',
+                  selected: _selectedRating >= 5,
+                  onTap: () => setState(() => _selectedRating = 5),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _QualityChoiceButton(
+                  label: 'Okay',
+                  selected: _selectedRating >= 3 && _selectedRating < 5,
+                  onTap: () => setState(() => _selectedRating = 3),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _QualityChoiceButton(
+                  label: 'Schlecht',
+                  selected: _selectedRating > 0 && _selectedRating < 3,
+                  onTap: () => setState(() => _selectedRating = 1),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 9),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: List.generate(5, (index) {
               final value = index + 1;
               final selected = value <= _selectedRating;
               return GestureDetector(
                 onTap: () => setState(() => _selectedRating = value),
                 child: Padding(
-                  padding: const EdgeInsets.only(right: 4),
+                  padding: const EdgeInsets.symmetric(horizontal: 1),
                   child: Icon(
                     selected ? Icons.star_rounded : Icons.star_border_rounded,
                     color: selected
                         ? const Color(0xFFFFD76A)
                         : Colors.white.withValues(alpha: 0.38),
-                    size: 28,
+                    size: 25,
                   ),
                 ),
               );
             }),
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 11),
+          const Text(
+            'Was war gut?',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 11,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 7),
           Wrap(
-            spacing: 8,
-            runSpacing: 8,
+            spacing: 6,
+            runSpacing: 6,
             children: [
-              for (final tag in tags)
+              for (final tag in positiveTags)
                 _RatingTagChip(
                   label: tag,
                   selected: _selectedTags.contains(tag),
+                  positive: true,
+                  onTap: () {
+                    setState(() {
+                      if (!_selectedTags.add(tag)) {
+                        _selectedTags.remove(tag);
+                      }
+                    });
+                  },
+                ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          const Text(
+            'Was sollen wir vermeiden?',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 11,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 7),
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              for (final tag in negativeTags)
+                _RatingTagChip(
+                  label: tag,
+                  selected: _selectedTags.contains(tag),
+                  positive: false,
                   onTap: () {
                     setState(() {
                       if (!_selectedTags.add(tag)) {
@@ -632,13 +802,23 @@ class _StatTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final valueStyle = TextStyle(
+      color: Colors.white,
+      fontSize: exportMode ? 24 : 19,
+      fontWeight: FontWeight.w800,
+      height: 1.0,
+      letterSpacing: -0.2,
+    );
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+      padding: EdgeInsets.symmetric(
+        horizontal: exportMode ? 14 : 12,
+        vertical: exportMode ? 14 : 10,
+      ),
       decoration: BoxDecoration(
         color: exportMode
             ? Colors.transparent
             : Colors.black.withValues(alpha: 0.16),
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: BorderRadius.circular(exportMode ? 18 : 15),
         border: exportMode
             ? null
             : Border.all(color: Colors.white.withValues(alpha: 0.08)),
@@ -650,32 +830,18 @@ class _StatTile extends StatelessWidget {
               ? AnimatedBuilder(
                   animation: animatedValue!,
                   builder: (context, child) {
-                    return Text(
-                      '${animatedValue!.value}',
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 24,
-                        fontWeight: FontWeight.w800,
-                        height: 1.0,
-                      ),
-                    );
+                    return Text('${animatedValue!.value}', style: valueStyle);
                   },
                 )
-              : Text(
-                  value ?? '--',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 24,
-                    fontWeight: FontWeight.w800,
-                    height: 1.0,
-                  ),
-                ),
-          const SizedBox(height: 6),
+              : Text(value ?? '--', style: valueStyle),
+          SizedBox(height: exportMode ? 6 : 4),
           Text(
             label,
-            style: const TextStyle(
-              color: Color(0xFFA8AFBC),
-              fontSize: 11,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: const Color(0xFFA8AFBC),
+              fontSize: exportMode ? 11 : 10,
               fontWeight: FontWeight.w600,
             ),
           ),
@@ -708,12 +874,12 @@ class _ActionButton extends StatelessWidget {
         duration: const Duration(milliseconds: 180),
         opacity: disabled ? 0.55 : 1,
         child: Container(
-          height: 48,
+          height: 44,
           decoration: BoxDecoration(
             color: filled
                 ? AppAccentColors.accent
                 : Colors.black.withValues(alpha: 0.16),
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: BorderRadius.circular(15),
             border: Border.all(
               color: filled ? Colors.transparent : Colors.white24,
             ),
@@ -721,14 +887,18 @@ class _ActionButton extends StatelessWidget {
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(icon, color: Colors.white, size: 18),
-              const SizedBox(width: 8),
-              Text(
-                label,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w700,
+              Icon(icon, color: Colors.white, size: 17),
+              const SizedBox(width: 7),
+              Flexible(
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
               ),
             ],
@@ -744,6 +914,49 @@ class _RatingTagChip extends StatelessWidget {
     required this.label,
     required this.selected,
     required this.onTap,
+    required this.positive,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+  final bool positive;
+
+  @override
+  Widget build(BuildContext context) {
+    final accent = positive ? AppAccentColors.accent : const Color(0xFFFF6B6B);
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
+        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
+        decoration: BoxDecoration(
+          color: selected
+              ? accent.withValues(alpha: 0.20)
+              : Colors.white.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(
+            color: selected ? accent : Colors.white.withValues(alpha: 0.12),
+          ),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: selected ? Colors.white : const Color(0xFFA8AFBC),
+            fontSize: 10,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _QualityChoiceButton extends StatelessWidget {
+  const _QualityChoiceButton({
+    required this.label,
+    required this.selected,
+    required this.onTap,
   });
 
   final String label;
@@ -756,7 +969,7 @@ class _RatingTagChip extends StatelessWidget {
       onTap: onTap,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 160),
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+        height: 34,
         decoration: BoxDecoration(
           color: selected
               ? AppAccentColors.accent.withValues(alpha: 0.24)
@@ -768,12 +981,14 @@ class _RatingTagChip extends StatelessWidget {
                 : Colors.white.withValues(alpha: 0.12),
           ),
         ),
-        child: Text(
-          label,
-          style: TextStyle(
-            color: selected ? Colors.white : const Color(0xFFA8AFBC),
-            fontSize: 11,
-            fontWeight: FontWeight.w700,
+        child: Center(
+          child: Text(
+            label,
+            style: TextStyle(
+              color: selected ? Colors.white : const Color(0xFFA8AFBC),
+              fontSize: 11,
+              fontWeight: FontWeight.w800,
+            ),
           ),
         ),
       ),
@@ -793,12 +1008,12 @@ class _RoutePreviewCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ClipRRect(
-      borderRadius: BorderRadius.circular(22),
+      borderRadius: BorderRadius.circular(exportMode ? 22 : 18),
       child: Container(
-        height: 184,
+        height: exportMode ? 184 : 138,
         decoration: BoxDecoration(
           color: const Color(0xFF131821),
-          borderRadius: BorderRadius.circular(22),
+          borderRadius: BorderRadius.circular(exportMode ? 22 : 18),
           border: exportMode
               ? null
               : Border.all(color: Colors.white.withValues(alpha: 0.08)),

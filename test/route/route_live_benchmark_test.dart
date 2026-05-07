@@ -411,9 +411,33 @@ List<_Scenario> _buildScenarios() {
     avoidHighways: true,
   );
   addRoundTripScenario(
+    name: 'RT Bregenz 75 Sport ohne Autobahn',
+    start: bregenz,
+    targetDistanceKm: 75,
+    mode: 'Sport Mode',
+    runs: 3,
+    avoidHighways: true,
+  );
+  addRoundTripScenario(
     name: 'RT Bregenz 75 Kurvenjagd ohne Autobahn',
     start: bregenz,
     targetDistanceKm: 75,
+    mode: 'Kurvenjagd',
+    runs: 5,
+    avoidHighways: true,
+  );
+  addRoundTripScenario(
+    name: 'RT Bregenz 100 Sport ohne Autobahn',
+    start: bregenz,
+    targetDistanceKm: 100,
+    mode: 'Sport Mode',
+    runs: 3,
+    avoidHighways: true,
+  );
+  addRoundTripScenario(
+    name: 'RT Bregenz 100 Kurvenjagd ohne Autobahn',
+    start: bregenz,
+    targetDistanceKm: 100,
     mode: 'Kurvenjagd',
     runs: 5,
     avoidHighways: true,
@@ -998,12 +1022,28 @@ void main() {
             .toList();
       }
       if (benchmarkRunsPerScenario > 0) {
-        final runsByScenario = <String, int>{};
-        selectedScenarios = selectedScenarios.where((scenario) {
-          final nextCount = (runsByScenario[scenario.name] ?? 0) + 1;
-          runsByScenario[scenario.name] = nextCount;
-          return nextCount <= benchmarkRunsPerScenario;
-        }).toList();
+        final firstByScenario = <String, _Scenario>{};
+        for (final scenario in selectedScenarios) {
+          firstByScenario.putIfAbsent(scenario.name, () => scenario);
+        }
+        selectedScenarios = [
+          for (final scenario in firstByScenario.values)
+            for (var run = 1; run <= benchmarkRunsPerScenario; run++)
+              _Scenario(
+                name: scenario.name,
+                routeType: scenario.routeType,
+                run: run,
+                start: scenario.start,
+                targetDistanceKm: scenario.targetDistanceKm,
+                destination: scenario.destination,
+                mode: scenario.mode,
+                detourLevel: scenario.detourLevel,
+                avoidHighways: scenario.avoidHighways,
+                subscriptionTier: scenario.subscriptionTier,
+                variantGroup:
+                    '${scenario.variantGroup ?? scenario.name}|run=$run',
+              ),
+        ];
       }
       if (benchmarkLimit > 0) {
         selectedScenarios = selectedScenarios.take(benchmarkLimit).toList();
@@ -1041,6 +1081,12 @@ void main() {
         double? overlapPercent;
         double? distanceKm;
         int candidateAttempts = 0;
+        int mapboxCalls = 0;
+        int evaluatedRoutes = 0;
+        int guidanceHydrations = 0;
+        String? searchStageSuccess;
+        String? candidateFamily;
+        String? distanceFitTier;
         String? qualityReason;
         String? errorCode;
         String? responseCode;
@@ -1078,6 +1124,10 @@ void main() {
         bool? seedJobCreated;
         bool? duplicateJobPrevented;
         bool? poolBootstrapPending;
+        int? deliveredDetourLevel;
+        bool? detourDowngraded;
+        double? detourRatio;
+        String? detourFallbackStage;
 
         try {
           if (scenario.routeType == 'ROUND_TRIP') {
@@ -1134,6 +1184,16 @@ void main() {
             if (searchSummary is Map<String, dynamic>) {
               candidateAttempts =
                   (searchSummary['candidate_attempts'] as num?)?.toInt() ?? 0;
+              mapboxCalls =
+                  (searchSummary['mapbox_calls'] as num?)?.toInt() ?? 0;
+              evaluatedRoutes =
+                  (searchSummary['evaluated_routes'] as num?)?.toInt() ?? 0;
+              guidanceHydrations =
+                  (searchSummary['guidance_hydrations'] as num?)?.toInt() ?? 0;
+              searchStageSuccess = searchSummary['search_stage_success']
+                  ?.toString();
+              candidateFamily = searchSummary['candidate_family']?.toString();
+              distanceFitTier = searchSummary['distance_fit_tier']?.toString();
             }
             final previousCoordinates =
                 previousSuccessfulRoundTripByScenario[scenario.name];
@@ -1259,6 +1319,16 @@ void main() {
             if (searchSummary is Map<String, dynamic>) {
               candidateAttempts =
                   (searchSummary['candidate_attempts'] as num?)?.toInt() ?? 0;
+              mapboxCalls =
+                  (searchSummary['mapbox_calls'] as num?)?.toInt() ?? 0;
+              evaluatedRoutes =
+                  (searchSummary['evaluated_routes'] as num?)?.toInt() ?? 0;
+              guidanceHydrations =
+                  (searchSummary['guidance_hydrations'] as num?)?.toInt() ?? 0;
+              searchStageSuccess = searchSummary['search_stage_success']
+                  ?.toString();
+              candidateFamily = searchSummary['candidate_family']?.toString();
+              distanceFitTier = searchSummary['distance_fit_tier']?.toString();
             }
             final excludes = result.edgeMeta['effective_excludes']?.toString();
             edgeRoutingBuildId = result.edgeMeta['routing_build_id']
@@ -1322,6 +1392,12 @@ void main() {
             styleEffective = scenario.detourLevel <= 0
                 ? (result.edgeMeta['mode']?.toString() ?? '') == 'Standard'
                 : (result.edgeMeta['mode']?.toString() ?? '') == scenario.mode;
+            deliveredDetourLevel =
+                (result.edgeMeta['delivered_detour_level'] as num?)?.toInt();
+            detourDowngraded = result.edgeMeta['detour_downgraded'] == true;
+            detourRatio = (result.edgeMeta['detour_ratio'] as num?)?.toDouble();
+            detourFallbackStage = result.edgeMeta['detour_fallback_stage']
+                ?.toString();
           }
         } catch (error) {
           if (error is RouteServiceException) {
@@ -1359,6 +1435,27 @@ void main() {
             returnedDistanceBucket =
                 (error.edgeMeta['returned_distance_bucket'] as num?)?.toInt() ??
                 RouteService.lastRouteReturnedDistanceBucket;
+            deliveredDetourLevel =
+                (error.edgeMeta['delivered_detour_level'] as num?)?.toInt();
+            detourDowngraded = error.edgeMeta['detour_downgraded'] == true;
+            detourRatio = (error.edgeMeta['detour_ratio'] as num?)?.toDouble();
+            detourFallbackStage = error.edgeMeta['detour_fallback_stage']
+                ?.toString();
+            final searchSummary = error.edgeMeta['search_summary'];
+            if (searchSummary is Map<String, dynamic>) {
+              candidateAttempts =
+                  (searchSummary['candidate_attempts'] as num?)?.toInt() ?? 0;
+              mapboxCalls =
+                  (searchSummary['mapbox_calls'] as num?)?.toInt() ?? 0;
+              evaluatedRoutes =
+                  (searchSummary['evaluated_routes'] as num?)?.toInt() ?? 0;
+              guidanceHydrations =
+                  (searchSummary['guidance_hydrations'] as num?)?.toInt() ?? 0;
+              searchStageSuccess = searchSummary['search_stage_success']
+                  ?.toString();
+              candidateFamily = searchSummary['candidate_family']?.toString();
+              distanceFitTier = searchSummary['distance_fit_tier']?.toString();
+            }
           } else {
             errorCode = error.runtimeType.toString();
             errorMessage = error.toString();
@@ -1400,11 +1497,28 @@ void main() {
           'requestVariantHints': requestVariantHints,
           'requestBodies': requestBodies,
           'candidateAttempts': candidateAttempts,
+          'mapboxCalls': mapboxCalls,
+          'evaluatedRoutes': evaluatedRoutes,
+          'guidanceHydrations': guidanceHydrations,
+          'searchStageSuccess': searchStageSuccess,
+          'candidateFamily': candidateFamily,
+          'distanceFitTier': distanceFitTier,
           'durationMs': stopwatch.elapsedMilliseconds,
           'distanceKm': distanceKm,
           'overlapPercent': overlapPercent,
           'formOkay': success && bucket != 'weak',
-          'errorBanner': !success,
+          'errorBanner':
+              !success &&
+              responseCode != 'pool_bootstrap_pending' &&
+              responseCode != 'region_warming_up' &&
+              responseCode != 'route_quality_too_low' &&
+              responseCode != 'detour_not_available',
+          'warmupPopupWouldBeVisible':
+              !success &&
+              (responseCode == 'pool_bootstrap_pending' ||
+                  responseCode == 'region_warming_up' ||
+                  responseCode == 'route_quality_too_low' ||
+                  responseCode == 'detour_not_available'),
           'qualityReason': qualityReason,
           'errorCode': errorCode,
           'responseCode': responseCode,
@@ -1412,6 +1526,11 @@ void main() {
           'avoidHighways': scenario.avoidHighways,
           'mode': scenario.mode,
           'detourLevel': scenario.detourLevel,
+          'requestedDetourLevel': scenario.detourLevel,
+          'deliveredDetourLevel': deliveredDetourLevel,
+          'detourDowngraded': detourDowngraded,
+          'detourRatio': detourRatio,
+          'detourFallbackStage': detourFallbackStage,
           'fingerprint': fingerprint,
           'similarityToPreviousPercent': similarityToPreviousPercent,
           'variantGroup': scenario.variantGroup,
@@ -1468,6 +1587,7 @@ void main() {
           'sub=${row['subscriptionTier']} | diff=${row['regionDifficulty']} | '
           'edgeReq=${row['edgeRequests']} | dur=${row['durationMs']}ms | '
           'dist=${row['distanceKm'] == null ? 'n/a' : (row['distanceKm'] as double).toStringAsFixed(1)}km | '
+          'delivered=${row['deliveredDetourLevel'] ?? '-'} down=${row['detourDowngraded'] ?? false} | '
           'motorway=${row['motorwayExcludeActive']} | style=${row['styleEffective']}',
         );
       }
@@ -1500,7 +1620,23 @@ void main() {
 
       final durations =
           results.map((entry) => entry['durationMs'] as int).toList()..sort();
-      final summary = <String, dynamic>{
+      final summary = results.isEmpty
+          ? <String, dynamic>{
+              'totalRuns': 0,
+              'usableRoutes': 0,
+              'weakRoutes': 0,
+              'realErrors': 0,
+              'goodRoutes': 0,
+              'acceptableRoutes': 0,
+              'averageDurationMs': 0,
+              'p95DurationMs': 0,
+              'pointToPointDistinctRuns': 0,
+              'mapboxRoutes': 0,
+              'poolFallbackRoutes': 0,
+              'cacheRoutes': 0,
+              'motorwayToggleHonored': null,
+            }
+          : <String, dynamic>{
         'totalRuns': results.length,
         'usableRoutes': results.where((entry) {
           final bucket = entry['bucket'];

@@ -79,20 +79,28 @@ class ModerationActions {
                       style: TextStyle(color: Colors.grey, fontSize: 13),
                     ),
                   ),
-                  ...SocialService.reportReasons.entries.map(
-                    (e) => RadioListTile<String>(
-                      value: e.key,
-                      groupValue: selected,
-                      onChanged: submitting
-                          ? null
-                          : (v) => setSheetState(() => selected = v),
-                      title: Text(
-                        e.value,
-                        style: const TextStyle(color: Colors.white),
-                      ),
-                      activeColor: AppAccentColors.accent,
-                      dense: true,
-                      contentPadding: EdgeInsets.zero,
+                  RadioGroup<String>(
+                    groupValue: selected,
+                    onChanged: (v) {
+                      if (submitting) return;
+                      setSheetState(() => selected = v);
+                    },
+                    child: Column(
+                      children: SocialService.reportReasons.entries
+                          .map(
+                            (e) => RadioListTile<String>(
+                              value: e.key,
+                              enabled: !submitting,
+                              title: Text(
+                                e.value,
+                                style: const TextStyle(color: Colors.white),
+                              ),
+                              activeColor: AppAccentColors.accent,
+                              dense: true,
+                              contentPadding: EdgeInsets.zero,
+                            ),
+                          )
+                          .toList(),
                     ),
                   ),
                   const SizedBox(height: 8),

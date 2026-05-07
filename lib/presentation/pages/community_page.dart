@@ -15,7 +15,7 @@ import 'package:cruise_connect/presentation/pages/create_group_page.dart';
 import 'package:cruise_connect/presentation/pages/group_lobby_page.dart';
 import 'package:cruise_connect/presentation/pages/user_profile_page.dart';
 import 'package:cruise_connect/presentation/widgets/mentions.dart';
-import 'package:cruise_connect/presentation/widgets/route_chip.dart';
+import 'package:cruise_connect/presentation/widgets/social/route_attachment_card.dart';
 import 'package:cruise_connect/presentation/widgets/user_avatar.dart';
 import 'package:cruise_connect/presentation/widgets/moderation_actions.dart';
 import 'package:cruise_connect/presentation/widgets/badge_unlock_popup.dart';
@@ -1448,7 +1448,10 @@ class _CommunityPageState extends State<CommunityPage>
                 // Route-Chip: Wenn Post eine geteilte Route enthält
                 if (post['shared_route_id'] != null) ...[
                   const SizedBox(height: 10),
-                  RouteChip(routeId: post['shared_route_id'] as String),
+                  RouteAttachmentCard(
+                    routeId: post['shared_route_id'] as String,
+                    compact: true,
+                  ),
                 ],
                 const SizedBox(height: 12),
                 Row(
@@ -2680,12 +2683,10 @@ class _CommunityPageState extends State<CommunityPage>
 
   void _showNotifications() async {
     await SocialService.markAllRead();
+    if (!mounted) return;
     setState(() => _unreadNotifications = 0);
 
-    if (!mounted) return;
-
     final notifications = await SocialService.getNotifications();
-
     if (!mounted) return;
 
     showModalBottomSheet(

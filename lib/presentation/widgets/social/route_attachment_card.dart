@@ -77,11 +77,25 @@ class _RouteAttachmentCardState extends State<RouteAttachmentCard> {
       width: double.infinity,
       padding: EdgeInsets.all(isCompact ? 12 : 14),
       decoration: BoxDecoration(
-        color: const Color(0xFF1C1F26),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            const Color(0xFF1C1F26),
+            Color.lerp(const Color(0xFF1C1F26), AppAccentColors.accent, 0.10)!,
+          ],
+        ),
         borderRadius: BorderRadius.circular(isCompact ? 14 : 16),
         border: Border.all(
           color: AppAccentColors.accent.withValues(alpha: 0.25),
         ),
+        boxShadow: [
+          BoxShadow(
+            color: AppAccentColors.accent.withValues(alpha: 0.10),
+            blurRadius: 18,
+            offset: const Offset(0, 10),
+          ),
+        ],
       ),
       child: _loading
           ? Row(
@@ -145,11 +159,14 @@ class _RouteAttachmentCardState extends State<RouteAttachmentCard> {
                   width: isCompact ? 36 : 44,
                   height: isCompact ? 36 : 44,
                   decoration: BoxDecoration(
-                    color: AppAccentColors.accent.withValues(alpha: 0.15),
+                    color: AppAccentColors.accent.withValues(alpha: 0.16),
                     borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: AppAccentColors.accent.withValues(alpha: 0.28),
+                    ),
                   ),
                   child: Icon(
-                    Icons.route,
+                    Icons.route_rounded,
                     color: AppAccentColors.accent,
                     size: isCompact ? 18 : 22,
                   ),
@@ -180,6 +197,8 @@ class _RouteAttachmentCardState extends State<RouteAttachmentCard> {
                           fontSize: isCompact ? 11 : 12,
                         ),
                       ),
+                      const SizedBox(height: 7),
+                      _RouteTrustBadges(route: route, compact: isCompact),
                     ],
                   ),
                 ),
@@ -218,6 +237,143 @@ class _RouteAttachmentCardState extends State<RouteAttachmentCard> {
                 ],
               ],
             ),
+    );
+  }
+}
+
+class _RouteTrustBadges extends StatelessWidget {
+  const _RouteTrustBadges({required this.route, required this.compact});
+
+  final SavedRoute route;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    final badges = <Widget>[
+      _RouteRatingBadge(route: route, compact: compact),
+      if (route.qualityBadgeLabel != null)
+        _RouteTrustBadge(
+          icon: Icons.verified_rounded,
+          label: route.qualityBadgeLabel!,
+          compact: compact,
+          accent: AppAccentColors.accent,
+        ),
+      _RouteTrustBadge(
+        icon: Icons.tune_rounded,
+        label: route.displayStyleLabel,
+        compact: compact,
+        accent: const Color(0xFF7DD3FC),
+      ),
+    ];
+
+    return Wrap(spacing: 6, runSpacing: 6, children: badges);
+  }
+}
+
+class _RouteRatingBadge extends StatelessWidget {
+  const _RouteRatingBadge({required this.route, required this.compact});
+
+  final SavedRoute route;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    final score = route.displayRating;
+    final label = route.ratingTrustLabel;
+    if (score == null || label == null) {
+      return _RouteTrustBadge(
+        icon: Icons.star_border_rounded,
+        label: 'Noch keine Bewertung',
+        compact: compact,
+        accent: Colors.white54,
+        muted: true,
+      );
+    }
+    final filledStars = (score >= 4.4 ? 5 : score.round()).clamp(1, 5);
+
+    return Container(
+      padding: EdgeInsets.symmetric(
+        horizontal: compact ? 8 : 9,
+        vertical: compact ? 4 : 5,
+      ),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFD76A).withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(
+          color: const Color(0xFFFFD76A).withValues(alpha: 0.30),
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ...List.generate(5, (index) {
+            return Icon(
+              index < filledStars
+                  ? Icons.star_rounded
+                  : Icons.star_border_rounded,
+              color: const Color(0xFFFFD76A),
+              size: compact ? 11 : 12,
+            );
+          }),
+          const SizedBox(width: 5),
+          Text(
+            label,
+            style: TextStyle(
+              color: Colors.white.withValues(alpha: 0.92),
+              fontSize: compact ? 10 : 11,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _RouteTrustBadge extends StatelessWidget {
+  const _RouteTrustBadge({
+    required this.icon,
+    required this.label,
+    required this.compact,
+    required this.accent,
+    this.muted = false,
+  });
+
+  final IconData icon;
+  final String label;
+  final bool compact;
+  final Color accent;
+  final bool muted;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: EdgeInsets.symmetric(
+        horizontal: compact ? 7 : 8,
+        vertical: compact ? 4 : 5,
+      ),
+      decoration: BoxDecoration(
+        color: accent.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(
+          color: accent.withValues(alpha: muted ? 0.16 : 0.24),
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, color: accent, size: compact ? 12 : 13),
+          const SizedBox(width: 4),
+          Text(
+            label,
+            style: TextStyle(
+              color: Colors.white.withValues(alpha: 0.88),
+              fontSize: compact ? 10 : 11,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

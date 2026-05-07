@@ -1,12 +1,16 @@
 import type {
   Coordinate,
   DistanceConfig,
+  PreferenceArea,
+  PreferenceMatchSummary,
   RoundTripCandidatePlan,
   RoundTripSearchResult,
+  RoundTripSessionCandidatePayload,
   RouteMode,
   RouteQualityEvaluation,
 } from "./routing_types.ts";
 import {
+  calculateDistance,
   normalizeExcludeParams,
   normalizeHint,
   relaxStreetExcludes,
@@ -48,6 +52,7 @@ function prioritizeCandidatePlans(
     "abendrunde",
     "entdecker",
     "curve",
+    "curvy",
     "evening",
     "explore",
     "h0",
@@ -90,11 +95,42 @@ function prioritizeCandidatePlans(
   const noHighwayOrderTokens = noHighwayTargetKm <= 60
     ? normalizedMode === "kurvenjagd"
       ? [
+        "nohw-short-curvy-valley-clean-west",
+        "nohw-short-curvy-valley-clean-wide",
+        "nohw-short-curvy-hillside-soft",
         "nohw-short-curve-oval-west",
         "nohw-short-curve-oval-northwest",
         "nohw-short-curve-oval-southwest",
+        "nohw-sector-curvy",
+      ]
+      : normalizedMode === "entdecker"
+      ? [
+        "nohw-short-explore-compact",
+        "nohw-short-explore",
+        "nohw-sector-explore",
+        "sport-paired-west",
+        "sport-paired-northwest",
+        "sport-paired-southwest",
+      ]
+      : normalizedMode === "abendrunde"
+      ? [
+        "nohw-short-evening-compact",
+        "nohw-short-evening",
+        "nohw-sector-evening",
+        "nohw-regional-evening",
+        "sport-paired-west",
+        "sport-paired-northwest",
+        "sport-paired-southwest",
       ]
       : [
+        "nohw-short-sport-compact",
+        "nohw-short-sport-valley-clean",
+        "sport-flow-regional",
+        "nohw-sector-sport",
+        "nohw-regional-sport",
+        "fallback-triangle-balanced",
+        "fallback-loop-3",
+        "fallback-loop-4",
         "sport-paired-west",
         "sport-paired-northwest",
         "sport-paired-southwest",
@@ -103,6 +139,11 @@ function prioritizeCandidatePlans(
     : noHighwayTargetKm <= 85
     ? normalizedMode === "sport mode" || normalizedMode === "sport"
       ? [
+        "nohw-medium-sport-compact",
+        "nohw-medium-sport-asymmetric",
+        "nohw-medium-sport-cardinal-compact",
+        "nohw-sector-sport",
+        "nohw-regional-sport",
         "nohw-medium-sport-cardinal-rheintal",
         "nohw-medium-sport-orbital-rheintal-north",
         "nohw-medium-sport-orbital-rheintal-northwest",
@@ -112,6 +153,21 @@ function prioritizeCandidatePlans(
         "nohw-medium-sport-orbital-broad-west",
       ]
       : [
+        normalizedMode === "kurvenjagd"
+          ? "nohw-medium-curvy-distributed"
+          : normalizedMode === "entdecker"
+          ? "nohw-medium-explore"
+          : "nohw-medium-evening",
+        normalizedMode === "entdecker"
+          ? "nohw-sector-explore"
+          : "nohw-sector-evening",
+        normalizedMode === "kurvenjagd"
+          ? "nohw-medium-curvy-hillside"
+          : "nohw-sector-curvy",
+        normalizedMode === "kurvenjagd"
+          ? "nohw-medium-curvy-two-lobe"
+          : "nohw-regional-curvy",
+        "nohw-sector-curvy",
         "nohw-medium-oval-west",
         "nohw-medium-rhine-south",
         "nohw-medium-oval-northwest",
@@ -119,13 +175,33 @@ function prioritizeCandidatePlans(
       ]
     : normalizedMode === "kurvenjagd"
     ? [
+      "nohw-sector-curvy",
       "nohw-curve-rescue-northeast",
       "nohw-long-oval-northwest",
       "nohw-long-oval-west",
       "nohw-long-oval-southwest",
       "nohw-long-oval-west-wide",
     ]
+    : normalizedMode === "entdecker"
+    ? [
+      "nohw-long-explore",
+      "nohw-sector-explore",
+      "nohw-long-oval-west",
+      "nohw-long-oval-northwest",
+      "nohw-long-oval-southwest",
+      "nohw-long-oval-west-wide",
+    ]
+    : normalizedMode === "abendrunde"
+    ? [
+      "nohw-long-evening",
+      "nohw-sector-evening",
+      "nohw-long-oval-west",
+      "nohw-long-oval-northwest",
+      "nohw-long-oval-southwest",
+      "nohw-long-oval-west-wide",
+    ]
     : [
+      "nohw-sector-sport",
       "nohw-long-oval-west",
       "nohw-long-oval-northwest",
       "nohw-long-oval-southwest",
@@ -135,12 +211,12 @@ function prioritizeCandidatePlans(
     ? noHighwayOrderTokens
     : normalizedMode === "kurvenjagd"
     ? [
-      "curve-zigzag-core",
       "curve-loop-scout",
       "curve-orbital-core",
       "curve-loop-tight",
       "curve-loop-wide",
       "curve-triangle",
+      "curve-zigzag-core",
     ]
     : preferWideSportAvoidHighways
     ? (preferStableShortSportAvoidHighways
@@ -204,7 +280,10 @@ function prioritizeCandidatePlans(
     ]
     : normalizedMode === "entdecker"
     ? [
+      "explore-cardinal-wide",
       "explore-loop-scout",
+      "explore-loop-offset",
+      "explore-triangle",
       "explore-orbital-wide",
       "explore-loop-wide",
       "explore-loop-far",
@@ -242,13 +321,13 @@ function prioritizeCandidatePlans(
         ? stableStringHash(`${phaseName}:${normalizedFingerprint}`)
         : 0;
       const phaseShift = preferNoHighwayRoundTrip
-        ? phaseName === "balanced" ? 3 : phaseName === "fallback" ? 6 : 0
+        ? phaseName === "balanced" ? 4 : phaseName === "fallback" ? 8 : 0
         : 0;
       const noHighwayMediumVariantIndex = normalizedVariant?.match(
         /-k\d{2,3}-(\d+)-/i,
       )?.[1];
       const noHighwayRotationLimit = preferNoHighwayRoundTrip
-        ? Math.max(1, Math.min(4, prioritized.length))
+        ? Math.max(1, Math.min(12, prioritized.length))
         : 1;
       const rotationLimit = preferNoHighwayRoundTrip
         ? noHighwayRotationLimit
@@ -363,9 +442,16 @@ export async function searchBestRoundTripRoute({
   accessToken,
   variantHint,
   fingerprintHint,
+  previousRouteFingerprints,
   maxCandidateAttemptsHint,
+  batchIndex,
+  batchCount,
   avoidHighways,
   continueStraight,
+  preferenceAreas,
+  movingStartOptions,
+  debugRejectCandidates,
+  maxDebugRejectCandidates,
 }: {
   startLocation: Coordinate;
   targetDistanceKm: number;
@@ -382,9 +468,24 @@ export async function searchBestRoundTripRoute({
   accessToken: string;
   variantHint?: string;
   fingerprintHint?: string;
+  previousRouteFingerprints?: string[];
   maxCandidateAttemptsHint?: number;
+  batchIndex?: number;
+  batchCount?: number;
   avoidHighways: boolean;
   continueStraight: boolean;
+  preferenceAreas?: PreferenceArea[];
+  movingStartOptions?: {
+    movingStartDetected: boolean;
+    currentHeading?: number;
+    startRadiusMeters?: number;
+    startBearingToleranceDegrees?: number;
+    avoidManeuverRadiusMeters?: number;
+    startSnapStrategy?: string;
+    startOnMotorway?: boolean | null;
+  };
+  debugRejectCandidates?: boolean;
+  maxDebugRejectCandidates?: number;
 }): Promise<RoundTripSearchResult | null> {
   const highCostCurveSearch = mode === "Kurvenjagd" && targetDistanceKm >= 130;
   const extendedRoundTripSearch = targetDistanceKm >= 100 ||
@@ -398,23 +499,116 @@ export async function searchBestRoundTripRoute({
     normalizedExcludeParams,
     avoidHighways,
   );
+  const noHighwayCompatibleExcludes = (() => {
+    const parts = new Set(
+      normalizeExcludeParams(normalizedExcludeParams)
+        .split(",")
+        .map((part) => part.trim())
+        .filter((part) => part.length > 0),
+    );
+    parts.add("motorway");
+    return [...parts].join(",");
+  })();
   const constrainedRoundTripSearch = normalizedExcludeParams.trim() !== "";
   const normalizedVariantHint = normalizeHint(variantHint);
   const normalizedFingerprintHint = normalizeHint(fingerprintHint);
+  const normalizedPreviousRouteFingerprints = (previousRouteFingerprints ?? [])
+    .map((value) => normalizeHint(value))
+    .filter((value): value is string => value != null)
+    .slice(0, 10);
+  const normalizedBatchCount = typeof batchCount === "number" &&
+      Number.isFinite(batchCount)
+    ? Math.max(1, Math.min(4, Math.round(batchCount)))
+    : 1;
+  const normalizedBatchIndex = normalizedBatchCount <= 1 ? 0 : Math.max(
+    0,
+    Math.min(
+      normalizedBatchCount - 1,
+      Math.round(
+        typeof batchIndex === "number" && Number.isFinite(batchIndex)
+          ? batchIndex
+          : 0,
+      ),
+    ),
+  );
+  const batchingUsed = normalizedBatchCount > 1;
+  const movingStartDetected = movingStartOptions?.movingStartDetected === true;
+  const effectivePlanRadiuses = (plan: RoundTripCandidatePlan): string => {
+    if (
+      !movingStartDetected ||
+      typeof movingStartOptions?.startRadiusMeters !== "number" ||
+      !Number.isFinite(movingStartOptions.startRadiusMeters)
+    ) {
+      return plan.radiuses;
+    }
+    const parts = plan.radiuses.split(";");
+    if (parts.length === 0) return plan.radiuses;
+    parts[0] = String(
+      Math.max(
+        5,
+        Math.min(300, Math.round(movingStartOptions.startRadiusMeters)),
+      ),
+    );
+    return parts.join(";");
+  };
+  const effectivePlanBearings = (plan: RoundTripCandidatePlan): string => {
+    if (
+      !movingStartDetected ||
+      typeof movingStartOptions?.currentHeading !== "number" ||
+      !Number.isFinite(movingStartOptions.currentHeading)
+    ) {
+      return "";
+    }
+    const tolerance = typeof movingStartOptions.startBearingToleranceDegrees ===
+          "number" &&
+        Number.isFinite(movingStartOptions.startBearingToleranceDegrees)
+      ? Math.max(
+        15,
+        Math.min(
+          90,
+          Math.round(movingStartOptions.startBearingToleranceDegrees),
+        ),
+      )
+      : 45;
+    const heading =
+      ((Math.round(movingStartOptions.currentHeading) % 360) + 360) %
+      360;
+    return plan.waypoints
+      .map((_, index) => index === 0 ? `${heading},${tolerance}` : "")
+      .join(";");
+  };
+  const effectiveAvoidManeuverRadius = movingStartDetected &&
+      typeof movingStartOptions?.avoidManeuverRadiusMeters === "number" &&
+      Number.isFinite(movingStartOptions.avoidManeuverRadiusMeters)
+    ? Math.max(
+      1,
+      Math.min(1000, Math.round(movingStartOptions.avoidManeuverRadiusMeters)),
+    )
+    : undefined;
   const longNoHighwayCurveRescueLabel = "nohw-curve-rescue-northeast";
   const longNoHighwayCurveRescueSearch = avoidHighways &&
     mode === "Kurvenjagd" &&
     targetDistanceKm > 70;
-  const useMapboxAlternatives = !avoidHighways || targetDistanceKm <= 85;
+  const useSearchAlternatives = !avoidHighwaysRoundTripSearch;
+  const useSelectiveNoHighwayAlternatives = avoidHighwaysRoundTripSearch &&
+    targetDistanceKm <= 115;
+  const noHighwayAttemptBudget = targetDistanceKm <= 60
+    ? mode === "Kurvenjagd" ? 14 : mode === "Sport Mode" ? 15 : 12
+    : targetDistanceKm <= 85
+    ? mode === "Kurvenjagd" ? 12 : 10
+    : mode === "Kurvenjagd"
+    ? 10
+    : 8;
   const shortSportHighwayRoundTrip = !avoidHighwaysRoundTripSearch &&
     mode === "Sport Mode" &&
     targetDistanceKm <= 60;
-  // No-highway roundtrips use a fixed small plan set; keep the provider budget
-  // bounded and let strict/balanced/fallback each test up to two candidates.
+  // No-highway roundtrips still stay bounded, but they must attempt enough
+  // live sectors before surfacing warmup. Pool thinness is support metadata,
+  // not a reason to skip Mapbox entirely.
   const requestedAttemptBudget = Math.round(
     maxCandidateAttemptsHint ??
       (avoidHighwaysRoundTripSearch
-        ? 10
+        ? noHighwayAttemptBudget
         : shortSportHighwayRoundTrip
         ? 14
         : highCostCurveSearch
@@ -425,49 +619,342 @@ export async function searchBestRoundTripRoute({
         ? 8
         : 7),
   );
-  const globalAttemptBudget = avoidHighwaysRoundTripSearch ? 6 : Math.max(
-    shortSportHighwayRoundTrip ? 14 : 7,
+  const minimumLiveAttemptBudget = !avoidHighwaysRoundTripSearch &&
+      mode === "Sport Mode" && targetDistanceKm >= 75
+    ? targetDistanceKm >= 95 ? 8 : 7
+    : 1;
+  const effectiveRequestedAttemptBudget = Math.max(
+    minimumLiveAttemptBudget,
+    requestedAttemptBudget,
+  );
+  const explicitAttemptCap = typeof maxCandidateAttemptsHint === "number" &&
+      Number.isFinite(maxCandidateAttemptsHint)
+    ? Math.max(
+      minimumLiveAttemptBudget,
+      Math.min(
+        avoidHighwaysRoundTripSearch ? noHighwayAttemptBudget : 16,
+        Math.round(maxCandidateAttemptsHint),
+      ),
+    )
+    : null;
+  const uncappedGlobalAttemptBudget = avoidHighwaysRoundTripSearch
+    ? noHighwayAttemptBudget
+    : mode === "Sport Mode" && targetDistanceKm >= 75
+    ? targetDistanceKm >= 95 ? 16 : 15
+    : Math.max(
+      shortSportHighwayRoundTrip ? 14 : 7,
+      Math.min(
+        highCostCurveSearch
+          ? 7
+          : extendedRoundTripSearch
+          ? 8
+          : (constrainedRoundTripSearch || shortCurvySearch)
+          ? 9
+          : shortSportHighwayRoundTrip
+          ? 15
+          : 8,
+        effectiveRequestedAttemptBudget,
+      ),
+    );
+  const batchAttemptBudget = batchingUsed
+    ? shortCurvySearch ? 3 : targetDistanceKm >= 70 ? 3 : 2
+    : Number.POSITIVE_INFINITY;
+  const globalAttemptBudget = Math.max(
+    1,
     Math.min(
-      highCostCurveSearch
-        ? 7
-        : extendedRoundTripSearch
-        ? 8
-        : (constrainedRoundTripSearch || shortCurvySearch)
-        ? 9
-        : shortSportHighwayRoundTrip
-        ? 15
-        : 8,
-      requestedAttemptBudget,
+      explicitAttemptCap == null ? uncappedGlobalAttemptBudget : Math.max(
+        1,
+        Math.min(uncappedGlobalAttemptBudget, explicitAttemptCap),
+      ),
+      batchAttemptBudget,
     ),
   );
   const searchStartTs = Date.now();
   // Time Budget: jeder Mapbox-Call kostet ~1.5–3 s; mit 7–9 Plänen + relax
   // brauchen wir ≥18 s, sonst killt das Time-Budget den Fallback bevor er
   // läuft. Client-_invoke-Timeout muss DARÜBER liegen (siehe route_service).
-  const roundTripTimeBudgetMs = highCostCurveSearch
+  const unbatchedRoundTripTimeBudgetMs = highCostCurveSearch
     ? 16000
     : avoidHighwaysRoundTripSearch
-    ? targetDistanceKm >= 95 ? 21000 : 23000
+    ? 25000
     : shortSportHighwayRoundTrip
     ? 28000
     : (constrainedRoundTripSearch || shortCurvySearch)
     ? 22000
     : 19000;
+  const roundTripTimeBudgetMs = batchingUsed
+    ? Math.min(
+      unbatchedRoundTripTimeBudgetMs,
+      targetDistanceKm >= 70 ? 14000 : 6500,
+    )
+    : unbatchedRoundTripTimeBudgetMs;
   const mapboxCandidateMaxAttempts = avoidHighwaysRoundTripSearch ? 1 : 2;
-  const mapboxCandidateTimeoutMs = avoidHighwaysRoundTripSearch
-    ? targetDistanceKm >= 95 ? 8500 : 9500
+  const mapboxCandidateTimeoutMs = avoidHighwaysRoundTripSearch ? 5200 : 12000;
+  const mapboxRelaxedTimeoutMs = avoidHighwaysRoundTripSearch ? 4500 : 10500;
+  const maxSearchRouteCoordinates = avoidHighwaysRoundTripSearch
+    ? targetDistanceKm <= 60 ? 1600 : targetDistanceKm <= 85 ? 1400 : 1600
+    : 1800;
+  // Search routes stay capped aggressively, but final display hydration uses
+  // Mapbox overview=full. A valid 100 km no-highway route can easily contain
+  // 6k-8k road-snapped points; rejecting that here caused accepted candidates
+  // to disappear before the real quality gate could evaluate them.
+  const maxHydratedRouteCoordinates = batchingUsed
+    ? targetDistanceKm <= 85 ? 5200 : targetDistanceKm <= 115 ? 6400 : 7600
+    : avoidHighwaysRoundTripSearch
+    ? targetDistanceKm <= 60
+      ? 5000
+      : targetDistanceKm <= 85
+      ? 7000
+      : targetDistanceKm <= 115
+      ? 7600
+      : 9000
+    : targetDistanceKm <= 85
+    ? 6500
+    : targetDistanceKm <= 115
+    ? 9000
     : 12000;
-  const mapboxRelaxedTimeoutMs = avoidHighwaysRoundTripSearch
-    ? targetDistanceKm >= 95 ? 7500 : 8500
-    : 10500;
+  const remainingSearchMs = (reserveMs = 0): number =>
+    roundTripTimeBudgetMs - (Date.now() - searchStartTs) - reserveMs;
+  const boundedMapboxTimeoutMs = (
+    preferredMs: number,
+    minimumMs = 2500,
+  ): number =>
+    Math.max(
+      minimumMs,
+      Math.min(preferredMs, remainingSearchMs(900)),
+    );
+  const hasMapboxCallBudget = (minimumMs = 3000): boolean =>
+    remainingSearchMs(900) >= minimumMs;
+  const activePreferenceAreas = (preferenceAreas ?? []).filter((area) =>
+    Number.isFinite(area.latitude) &&
+    Number.isFinite(area.longitude) &&
+    area.latitude >= -90 &&
+    area.latitude <= 90 &&
+    area.longitude >= -180 &&
+    area.longitude <= 180
+  ).slice(0, 3);
+  const hasPreferenceAreas = activePreferenceAreas.length > 0;
+  const rejectSampleLimit = debugRejectCandidates === true
+    ? Math.max(
+      1,
+      Math.min(
+        80,
+        Math.round(
+          typeof maxDebugRejectCandidates === "number" &&
+            Number.isFinite(maxDebugRejectCandidates)
+            ? maxDebugRejectCandidates
+            : 40,
+        ),
+      ),
+    )
+    : 0;
+  const rejectSamples: Record<string, unknown>[] = [];
+  const preferenceRadiusMeters = (area: PreferenceArea): number =>
+    Math.max(500, Math.min(4000, area.radius_m ?? 2200));
+  const routeCoordinates = (route: any): Coordinate[] => {
+    const coordinates = route?.geometry?.coordinates;
+    if (!Array.isArray(coordinates)) return [];
+    return coordinates
+      .map((point: unknown) => {
+        if (!Array.isArray(point) || point.length < 2) return null;
+        const longitude = Number(point[0]);
+        const latitude = Number(point[1]);
+        if (
+          !Number.isFinite(latitude) ||
+          !Number.isFinite(longitude) ||
+          latitude < -90 ||
+          latitude > 90 ||
+          longitude < -180 ||
+          longitude > 180
+        ) {
+          return null;
+        }
+        return { latitude, longitude };
+      })
+      .filter((point): point is Coordinate => point != null);
+  };
+  const sampledDebugGeometry = (coordinates: Coordinate[]): number[][] => {
+    if (coordinates.length === 0) return [];
+    const sampleCount = Math.min(18, coordinates.length);
+    const samples: number[][] = [];
+    for (let i = 0; i < sampleCount; i += 1) {
+      const ratio = sampleCount === 1 ? 0 : i / (sampleCount - 1);
+      const index = Math.round((coordinates.length - 1) * ratio);
+      const point = coordinates[index];
+      samples.push([
+        Number(point.longitude.toFixed(5)),
+        Number(point.latitude.toFixed(5)),
+      ]);
+    }
+    return samples;
+  };
+  const recordRejectSample = (
+    args: {
+      phaseName: string;
+      plan: RoundTripCandidatePlan;
+      reason: string;
+      route?: any;
+      quality?: RouteQualityEvaluation | null;
+      routeRequestMeta?: RoundTripRouteRequestMeta | null;
+      exclude?: string;
+    },
+  ): void => {
+    if (rejectSampleLimit <= 0 || rejectSamples.length >= rejectSampleLimit) {
+      return;
+    }
+    const route = args.route;
+    const coordinates = route == null ? [] : routeCoordinates(route);
+    const first = coordinates[0];
+    const last = coordinates[coordinates.length - 1];
+    const firstLastDistanceMeters = first != null && last != null
+      ? Math.round(calculateDistance(first, last) * 1000)
+      : null;
+    const quality = args.quality ?? null;
+    const shape = quality?.shapeMetrics;
+    const styleMetrics = quality?.styleMetrics;
+    const cleanedDistanceKm = shape != null && quality != null
+      ? Number(
+        (
+          quality.actualDistanceKm *
+          Math.max(0, Math.min(1, shape.cleanupDistanceRetentionRatio))
+        ).toFixed(1),
+      )
+      : null;
+    const localHairpinCandidate = shape != null &&
+      shape.geometricUTurnCount > 0 &&
+      shape.spurScore <= 10 &&
+      shape.outAndBackScore <= 10 &&
+      shape.deadEndArmScore <= 14 &&
+      shape.centerReentryCount === 0;
+    rejectSamples.push({
+      phase: args.phaseName,
+      candidate_family: args.plan.label,
+      target_distance_km: targetDistanceKm,
+      route_distance_km: quality == null
+        ? null
+        : Number(quality.actualDistanceKm.toFixed(1)),
+      reject_reason: args.reason,
+      quality_score: quality == null ? null : Number(quality.score.toFixed(1)),
+      quality_tier: quality?.tier ?? null,
+      curve_density: styleMetrics == null
+        ? null
+        : Number(styleMetrics.curveDensityPer50Km.toFixed(1)),
+      loopness_score: shape == null
+        ? null
+        : Number(shape.loopnessScore.toFixed(1)),
+      spur_score: shape == null ? null : Number(shape.spurScore.toFixed(1)),
+      out_and_back_score: shape == null
+        ? null
+        : Number(shape.outAndBackScore.toFixed(1)),
+      dead_end_arm_score: shape == null
+        ? null
+        : Number(shape.deadEndArmScore.toFixed(1)),
+      u_turn_count: shape?.geometricUTurnCount ?? null,
+      cleanup_u_turn_count: shape?.cleanupUTurnCount ?? null,
+      local_hairpin_candidate: localHairpinCandidate,
+      cleanup_distance_km: cleanedDistanceKm,
+      cleanup_distance_retention_ratio: shape == null
+        ? null
+        : Number(shape.cleanupDistanceRetentionRatio.toFixed(2)),
+      raw_coordinate_count: coordinates.length,
+      silent_via_used: args.routeRequestMeta?.silentViaUsed ?? null,
+      silent_via_fallback_used: args.routeRequestMeta?.silentViaFallbackUsed ??
+        null,
+      mapbox_leg_count: args.routeRequestMeta?.mapboxLegCount ?? null,
+      arrive_maneuver_count: args.routeRequestMeta?.arriveManeuverCount ?? null,
+      first_last_distance_m: firstLastDistanceMeters,
+      effective_excludes: args.exclude ?? null,
+      fingerprint: route == null ? null : buildRouteFingerprintFromRoute(route),
+      geometry_sample: sampledDebugGeometry(coordinates),
+    });
+  };
+  const closestDistanceMeters = (
+    coordinates: Coordinate[],
+    area: PreferenceArea,
+  ): number => {
+    if (coordinates.length === 0) return Number.POSITIVE_INFINITY;
+    let closest = Number.POSITIVE_INFINITY;
+    for (const coordinate of coordinates) {
+      closest = Math.min(closest, calculateDistance(coordinate, area) * 1000);
+    }
+    return closest;
+  };
+  const evaluatePreferenceMatch = (
+    route: any,
+  ): PreferenceMatchSummary | null => {
+    if (!hasPreferenceAreas) return null;
+    const coordinates = routeCoordinates(route);
+    const distances = activePreferenceAreas.map((area) =>
+      Math.round(closestDistanceMeters(coordinates, area))
+    );
+    const matchScores = distances.map((distance, index) => {
+      const radius = preferenceRadiusMeters(activePreferenceAreas[index]);
+      return Math.max(0, Math.min(1, 1 - distance / (radius * 2.5)));
+    });
+    const matchedPreferenceCount =
+      distances.filter((distance, index) =>
+        distance <= preferenceRadiusMeters(activePreferenceAreas[index])
+      ).length;
+    const averageScore = matchScores.length === 0
+      ? 0
+      : matchScores.reduce((sum, score) => sum + score, 0) /
+        matchScores.length;
+    const preferenceMatchScore = Math.round(averageScore * 100);
+    const preferenceIgnoredReason = matchedPreferenceCount === 0 &&
+        preferenceMatchScore < 25
+      ? "all_preference_areas_far"
+      : matchedPreferenceCount < activePreferenceAreas.length
+      ? "partial_preference_match"
+      : null;
+    return {
+      matchedPreferenceCount,
+      preferenceMatchScore,
+      preferenceAreaDistancesMeters: distances,
+      preferenceIgnoredReason,
+    };
+  };
+  const preferenceGoodEnough = (
+    quality: RouteQualityEvaluation | null,
+  ): boolean => {
+    if (!hasPreferenceAreas || quality == null) return true;
+    return (quality.matchedPreferenceCount ?? 0) > 0 ||
+      (quality.preferenceMatchScore ?? 0) >= 35;
+  };
+  const rankCandidatePlansByPreference = (
+    plans: RoundTripCandidatePlan[],
+  ): RoundTripCandidatePlan[] => {
+    if (!hasPreferenceAreas || plans.length <= 1) return plans;
+    const scorePlan = (plan: RoundTripCandidatePlan): number => {
+      const interiorWaypoints = plan.waypoints.slice(1, -1);
+      if (interiorWaypoints.length === 0) return Number.POSITIVE_INFINITY;
+      const distancePenalty = activePreferenceAreas.reduce((sum, area) => {
+        const closest = interiorWaypoints.reduce(
+          (best, waypoint) =>
+            Math.min(best, calculateDistance(waypoint, area) * 1000),
+          Number.POSITIVE_INFINITY,
+        );
+        return sum + closest;
+      }, 0);
+      const matched =
+        activePreferenceAreas.filter((area) =>
+          interiorWaypoints.some((waypoint) =>
+            calculateDistance(waypoint, area) * 1000 <=
+              preferenceRadiusMeters(area) * 2.2
+          )
+        ).length;
+      return distancePenalty - matched * 2500;
+    };
+    return [...plans].sort((a, b) => scorePlan(a) - scorePlan(b));
+  };
 
   const tuneDistanceConfigForAvoidHighways = (
     config: DistanceConfig,
+    forceNoHighway = false,
   ): DistanceConfig => {
-    if (!avoidHighwaysRoundTripSearch) {
+    if (!avoidHighwaysRoundTripSearch && !forceNoHighway) {
       return config;
     }
-    const shortNoHighwaySportRoundTrip = avoidHighways &&
+    const shortNoHighwaySportRoundTrip = (avoidHighways || forceNoHighway) &&
       mode === "Sport Mode" &&
       targetDistanceKm <= 60;
     const snapCap = shortNoHighwaySportRoundTrip
@@ -485,7 +972,7 @@ export async function searchBestRoundTripRoute({
       ? 1.48
       : 1.38;
     const radiusTightening = shortNoHighwaySportRoundTrip
-      ? 0.88
+      ? 0.96
       : targetDistanceKm <= 60
       ? 1.00
       : targetDistanceKm <= 85
@@ -501,7 +988,64 @@ export async function searchBestRoundTripRoute({
     };
   };
 
-  const searchPhases = [
+  type SearchPhase = {
+    name: string;
+    distanceConfig: DistanceConfig;
+    seedOffset: number;
+    continueStraight: boolean;
+    exclude: string;
+    planAvoidHighways?: boolean;
+  };
+
+  const highwayAllowedNoHighwayPhases: SearchPhase[] =
+    !avoidHighwaysRoundTripSearch
+      ? [
+        {
+          name: "compatible_no_highway",
+          distanceConfig: tuneDistanceConfigForAvoidHighways(
+            distanceConfig,
+            true,
+          ),
+          seedOffset: 0,
+          continueStraight,
+          exclude: noHighwayCompatibleExcludes,
+          planAvoidHighways: true,
+        },
+        {
+          name: "compatible_no_highway_balanced",
+          distanceConfig: tuneDistanceConfigForAvoidHighways(
+            widenDistanceConfigForRoundTripSearch(
+              distanceConfig,
+              targetDistanceKm,
+              "balanced",
+            ),
+            true,
+          ),
+          seedOffset: 911,
+          continueStraight,
+          exclude: noHighwayCompatibleExcludes,
+          planAvoidHighways: true,
+        },
+        {
+          name: "compatible_no_highway_fallback",
+          distanceConfig: tuneDistanceConfigForAvoidHighways(
+            widenDistanceConfigForRoundTripSearch(
+              distanceConfig,
+              targetDistanceKm,
+              "fallback",
+            ),
+            true,
+          ),
+          seedOffset: 1777,
+          continueStraight,
+          exclude: noHighwayCompatibleExcludes,
+          planAvoidHighways: true,
+        },
+      ]
+      : [];
+
+  const searchPhases: SearchPhase[] = [
+    ...highwayAllowedNoHighwayPhases,
     {
       name: "strict",
       distanceConfig: tuneDistanceConfigForAvoidHighways(distanceConfig),
@@ -536,6 +1080,17 @@ export async function searchBestRoundTripRoute({
       exclude: relaxedSearchExcludes,
     },
   ];
+  const activeSearchPhases = batchingUsed
+    ? searchPhases.filter((_, index) =>
+      index % normalizedBatchCount === normalizedBatchIndex
+    )
+    : searchPhases;
+  const phasesForThisBatch = batchingUsed
+    ? [searchPhases[Math.min(normalizedBatchIndex, searchPhases.length - 1)]]
+    : activeSearchPhases.length > 0
+    ? activeSearchPhases
+    : [searchPhases[Math.min(normalizedBatchIndex, searchPhases.length - 1)]];
+  const searchPhaseNames = phasesForThisBatch.map((phase) => phase.name);
 
   let candidateAttempts = 0;
   let acceptedCandidates = 0;
@@ -543,23 +1098,100 @@ export async function searchBestRoundTripRoute({
   let bestPlan: RoundTripCandidatePlan | null = null;
   let bestRoute: any = null;
   let bestQuality: RouteQualityEvaluation | null = null;
+  let bestContext: {
+    exclude: string;
+    continueStraight: boolean;
+    distanceConfig: DistanceConfig;
+    forceLegacyWaypoints?: boolean;
+  } | null = null;
+  const acceptedRouteCandidates: Array<{
+    plan: RoundTripCandidatePlan;
+    phaseName: string;
+    distanceFitTier: string;
+    route: any;
+    fingerprint: string;
+    quality: RouteQualityEvaluation;
+    context: {
+      exclude: string;
+      continueStraight: boolean;
+      distanceConfig: DistanceConfig;
+      forceLegacyWaypoints?: boolean;
+    };
+    routeRequestMeta: RoundTripRouteRequestMeta;
+  }> = [];
+  const maxAcceptedCandidateBuffer = batchingUsed ? 3 : 8;
+  type RoundTripRouteRequestMeta = {
+    silentViaUsed: boolean;
+    silentViaWaypoints: string | null;
+    shapingPointCount: number;
+    mapboxLegCount: number | null;
+    arriveManeuverCount: number | null;
+    silentViaFallbackUsed: boolean;
+    overview: "full" | "simplified" | null;
+    includeGuidance: boolean;
+    stepsRequested: boolean;
+    coordinateCount: number;
+    maxSegmentMeters: number | null;
+    averageSegmentMeters: number | null;
+    displayGeometryRejectReason: string | null;
+  };
+  type RoundTripFetchAttempt = {
+    fetchResult: Awaited<ReturnType<typeof getMapboxRouteDetailed>>;
+    callsUsed: number;
+    failureResults: Awaited<ReturnType<typeof getMapboxRouteDetailed>>[];
+    silentViaRequested: boolean;
+    silentViaFallbackUsed: boolean;
+    overview: "full" | "simplified";
+    includeGuidance: boolean;
+    stepsRequested: boolean;
+  };
   let balancedHasPresentableCandidate = false;
   let balancedTerminalShortCircuit = false;
   const rejectReasons = new Map<string, number>();
   const lastPlanLabels: string[] = [];
-  const seenRouteFingerprints = new Set<string>(
-    normalizedFingerprintHint ? [normalizedFingerprintHint] : [],
-  );
+  const seenRouteFingerprints = new Set<string>([
+    ...normalizedPreviousRouteFingerprints,
+    ...(normalizedFingerprintHint ? [normalizedFingerprintHint] : []),
+  ]);
   let duplicateSkips = 0;
   let bestEmergencyDuplicate: {
     plan: RoundTripCandidatePlan;
     route: any;
     quality: RouteQualityEvaluation;
     fingerprint: string;
+    context: {
+      exclude: string;
+      continueStraight: boolean;
+      distanceConfig: DistanceConfig;
+      forceLegacyWaypoints?: boolean;
+    };
+    routeRequestMeta: RoundTripRouteRequestMeta;
   } | null = null;
   let rateLimitHits = 0;
   let timeoutHits = 0;
   let stopSearchWithBestCandidate = false;
+  let mapboxCallCount = 0;
+  let evaluatedRouteCount = 0;
+  let guidanceHydrationCount = 0;
+  let bestPhaseName: string | null = null;
+  let bestCandidateFamily: string | null = null;
+  let bestDistanceFitTier: string | null = null;
+  let bestRouteRequestMeta: RoundTripRouteRequestMeta | null = null;
+  let silentViaAttempted = false;
+  let silentViaFallbackUsed = false;
+  let lastSilentViaWaypoints: string | null = null;
+  let lastSilentViaShapingPointCount = 0;
+  let lastSilentViaMapboxLegCount: number | null = null;
+  let lastSilentViaArriveManeuverCount: number | null = null;
+  let guidanceDegraded = false;
+  let hydrationFallbackUsed = false;
+  let finalGeometrySource:
+    | "hydrated"
+    | "pre_hydration_fallback"
+    | "duplicate_fallback" = "hydrated";
+  let postHydrationRejectReason: string | null = null;
+  let preHydrationQualityTier: string | null = null;
+  const hydrationDiagnostics: Record<string, unknown>[] = [];
 
   const registerReject = (reason: string) => {
     const normalized = normalizeRoundTripRejectReason(reason);
@@ -591,6 +1223,413 @@ export async function searchBestRoundTripRoute({
     }
     return false;
   };
+  const silentViaWaypointIndexes = (plan: RoundTripCandidatePlan): number[] =>
+    plan.waypoints.length > 2 ? [0, plan.waypoints.length - 1] : [];
+  const silentViaWaypointString = (
+    plan: RoundTripCandidatePlan,
+  ): string | null =>
+    plan.waypoints.length > 2 ? `0;${plan.waypoints.length - 1}` : null;
+  const countRouteLegs = (route: any): number | null =>
+    Array.isArray(route?.legs) ? route.legs.length : null;
+  const countArriveManeuvers = (route: any): number | null => {
+    if (!Array.isArray(route?.legs)) return null;
+    let count = 0;
+    for (const leg of route.legs) {
+      if (!Array.isArray(leg?.steps)) continue;
+      for (const step of leg.steps) {
+        const maneuverType = String(step?.maneuver?.type ?? "").toLowerCase();
+        if (maneuverType === "arrive" || maneuverType === "arrive waypoint") {
+          count += 1;
+        }
+      }
+    }
+    return count;
+  };
+  const routeDisplayGeometryStats = (
+    route: any,
+  ): {
+    coordinateCount: number;
+    maxSegmentMeters: number | null;
+    averageSegmentMeters: number | null;
+  } => {
+    const coordinates = routeCoordinates(route);
+    if (coordinates.length < 2) {
+      return {
+        coordinateCount: coordinates.length,
+        maxSegmentMeters: null,
+        averageSegmentMeters: null,
+      };
+    }
+    let totalMeters = 0;
+    let maxSegmentMeters = 0;
+    for (let index = 1; index < coordinates.length; index += 1) {
+      const segmentMeters = calculateDistance(
+        coordinates[index - 1],
+        coordinates[index],
+      ) * 1000;
+      if (!Number.isFinite(segmentMeters)) continue;
+      totalMeters += segmentMeters;
+      maxSegmentMeters = Math.max(maxSegmentMeters, segmentMeters);
+    }
+    return {
+      coordinateCount: coordinates.length,
+      maxSegmentMeters: Number(maxSegmentMeters.toFixed(1)),
+      averageSegmentMeters: Number(
+        (totalMeters / Math.max(1, coordinates.length - 1)).toFixed(1),
+      ),
+    };
+  };
+  const minDisplayCoordinateCount = (distanceKm: number): number => {
+    if (distanceKm <= 60) return 70;
+    if (distanceKm <= 85) return 105;
+    if (distanceKm <= 115) return 145;
+    return 180;
+  };
+  const displayGeometryRejectReason = (
+    route: any,
+    overview: "full" | "simplified" | null,
+  ): string | null => {
+    const stats = routeDisplayGeometryStats(route);
+    const routeDistanceKm = Math.max(0, routeDistanceKmFromRoute(route) ?? 0);
+    const referenceDistanceKm = routeDistanceKm > 0
+      ? routeDistanceKm
+      : targetDistanceKm;
+    if (overview !== "full") {
+      return `display_geometry_overview=${overview ?? "unknown"}`;
+    }
+    if (
+      stats.coordinateCount < minDisplayCoordinateCount(referenceDistanceKm)
+    ) {
+      return `display_geometry_coords=${stats.coordinateCount}`;
+    }
+    if ((stats.averageSegmentMeters ?? 0) > 900) {
+      return `display_geometry_avg_segment=${stats.averageSegmentMeters}`;
+    }
+    const maxSegmentLimitMeters = referenceDistanceKm >= 90 ? 2500 : 2000;
+    if ((stats.maxSegmentMeters ?? 0) > maxSegmentLimitMeters) {
+      return `display_geometry_max_segment=${stats.maxSegmentMeters}`;
+    }
+    return null;
+  };
+  const routeRequestMeta = (
+    plan: RoundTripCandidatePlan,
+    route: any,
+    options: {
+      silentViaUsed: boolean;
+      silentViaFallbackUsed: boolean;
+      overview?: "full" | "simplified" | null;
+      includeGuidance?: boolean;
+      stepsRequested?: boolean;
+    },
+  ): RoundTripRouteRequestMeta => {
+    const overview = options.overview ?? null;
+    const stats = routeDisplayGeometryStats(route);
+    return {
+      silentViaUsed: options.silentViaUsed,
+      silentViaWaypoints: options.silentViaUsed
+        ? silentViaWaypointString(plan)
+        : null,
+      shapingPointCount: Math.max(0, plan.waypoints.length - 2),
+      mapboxLegCount: countRouteLegs(route),
+      arriveManeuverCount: countArriveManeuvers(route),
+      silentViaFallbackUsed: options.silentViaFallbackUsed,
+      overview,
+      includeGuidance: options.includeGuidance === true,
+      stepsRequested: options.stepsRequested === true,
+      coordinateCount: stats.coordinateCount,
+      maxSegmentMeters: stats.maxSegmentMeters,
+      averageSegmentMeters: stats.averageSegmentMeters,
+      displayGeometryRejectReason: displayGeometryRejectReason(
+        route,
+        overview,
+      ),
+    };
+  };
+  const routeDistanceKmFromRoute = (route: any): number | null => {
+    const distanceMeters = typeof route?.distance === "number"
+      ? route.distance
+      : null;
+    return distanceMeters == null
+      ? null
+      : Number((distanceMeters / 1000).toFixed(1));
+  };
+  const routeGeometryChangedRatio = (
+    beforeRoute: any,
+    afterRoute: any,
+  ): number | null => {
+    const beforeCoordinates = routeCoordinates(beforeRoute);
+    const afterCoordinates = routeCoordinates(afterRoute);
+    if (beforeCoordinates.length === 0 || afterCoordinates.length === 0) {
+      return null;
+    }
+    const sampleCount = Math.min(
+      12,
+      beforeCoordinates.length,
+      afterCoordinates.length,
+    );
+    if (sampleCount <= 1) return 0;
+    let totalDeltaKm = 0;
+    for (let index = 0; index < sampleCount; index += 1) {
+      const ratio = index / (sampleCount - 1);
+      const beforeIndex = Math.round((beforeCoordinates.length - 1) * ratio);
+      const afterIndex = Math.round((afterCoordinates.length - 1) * ratio);
+      totalDeltaKm += calculateDistance(
+        beforeCoordinates[beforeIndex],
+        afterCoordinates[afterIndex],
+      );
+    }
+    return Number(
+      Math.min(1, totalDeltaKm / sampleCount / Math.max(1, targetDistanceKm))
+        .toFixed(3),
+    );
+  };
+  const recordHydrationDiagnostic = (
+    args: {
+      candidate: {
+        plan: RoundTripCandidatePlan;
+        phaseName: string;
+        distanceFitTier: string;
+        route: any;
+        fingerprint: string;
+        quality: RouteQualityEvaluation;
+        routeRequestMeta: RoundTripRouteRequestMeta;
+      };
+      hydrationAttempted: boolean;
+      hydrationOutcome: string;
+      hydratedRoute?: any | null;
+      hydratedQuality?: RouteQualityEvaluation | null;
+      hydratedMeta?: RoundTripRouteRequestMeta | null;
+      rejectReason?: string | null;
+    },
+  ): void => {
+    if (hydrationDiagnostics.length >= 12) return;
+    const preShape = args.candidate.quality.shapeMetrics;
+    const postShape = args.hydratedQuality?.shapeMetrics;
+    hydrationDiagnostics.push({
+      candidate_family: args.candidate.plan.label,
+      phase: args.candidate.phaseName,
+      pre_hydration_status: args.candidate.quality.tier,
+      pre_hydration_quality_passed: args.candidate.quality.tier !== "rejected",
+      pre_hydration_distance_km: Number(
+        args.candidate.quality.actualDistanceKm.toFixed(1),
+      ),
+      pre_hydration_fingerprint: args.candidate.fingerprint,
+      pre_hydration_shape_score: preShape == null
+        ? null
+        : Number(preShape.loopnessScore.toFixed(1)),
+      pre_hydration_reject_reason: args.candidate.quality.tier === "rejected"
+        ? args.candidate.quality.reason
+        : null,
+      hydration_attempted: args.hydrationAttempted,
+      hydration_outcome: args.hydrationOutcome,
+      hydration_distance_km: args.hydratedQuality == null
+        ? routeDistanceKmFromRoute(args.hydratedRoute)
+        : Number(args.hydratedQuality.actualDistanceKm.toFixed(1)),
+      hydration_leg_count: args.hydratedMeta?.mapboxLegCount ??
+        countRouteLegs(args.hydratedRoute),
+      hydration_arrive_count: args.hydratedMeta?.arriveManeuverCount ??
+        countArriveManeuvers(args.hydratedRoute),
+      hydration_maneuver_count: Array.isArray(args.hydratedRoute?.legs)
+        ? args.hydratedRoute.legs.reduce((sum: number, leg: any) => {
+          if (!Array.isArray(leg?.steps)) return sum;
+          return sum + leg.steps.length;
+        }, 0)
+        : null,
+      hydration_geometry_changed_ratio: args.hydratedRoute == null
+        ? null
+        : routeGeometryChangedRatio(
+          args.candidate.route,
+          args.hydratedRoute,
+        ),
+      hydration_fingerprint: args.hydratedRoute == null
+        ? null
+        : buildRouteFingerprintFromRoute(args.hydratedRoute),
+      post_hydration_quality_passed: args.hydratedQuality == null
+        ? false
+        : args.hydratedQuality.tier !== "rejected",
+      post_hydration_reject_reason: args.rejectReason ?? null,
+      post_loopness_score: postShape == null
+        ? null
+        : Number(postShape.loopnessScore.toFixed(1)),
+      post_spur_score: postShape == null
+        ? null
+        : Number(postShape.spurScore.toFixed(1)),
+      post_out_and_back_score: postShape == null
+        ? null
+        : Number(postShape.outAndBackScore.toFixed(1)),
+      pre_overview: args.candidate.routeRequestMeta.overview,
+      pre_coordinate_count: args.candidate.routeRequestMeta.coordinateCount,
+      pre_max_segment_m: args.candidate.routeRequestMeta.maxSegmentMeters,
+      pre_average_segment_m:
+        args.candidate.routeRequestMeta.averageSegmentMeters,
+      pre_display_geometry_reject_reason:
+        args.candidate.routeRequestMeta.displayGeometryRejectReason,
+      hydration_overview: args.hydratedMeta?.overview ?? null,
+      hydration_coordinate_count: args.hydratedMeta?.coordinateCount ??
+        routeDisplayGeometryStats(args.hydratedRoute).coordinateCount,
+      hydration_max_segment_m: args.hydratedMeta?.maxSegmentMeters ??
+        routeDisplayGeometryStats(args.hydratedRoute).maxSegmentMeters,
+      hydration_average_segment_m: args.hydratedMeta?.averageSegmentMeters ??
+        routeDisplayGeometryStats(args.hydratedRoute).averageSegmentMeters,
+      hydration_display_geometry_reject_reason:
+        args.hydratedMeta?.displayGeometryRejectReason ?? null,
+      silent_via_used: args.candidate.routeRequestMeta.silentViaUsed,
+      mapbox_leg_count: args.candidate.routeRequestMeta.mapboxLegCount,
+      arrive_maneuver_count:
+        args.candidate.routeRequestMeta.arriveManeuverCount,
+    });
+  };
+  const recordProviderFailures = (
+    failures: RoundTripFetchAttempt["failureResults"],
+  ): void => {
+    for (const failure of failures) {
+      const failureKind = getRetryKindFromMapboxFailure(failure);
+      if (failureKind === "rate_limit") rateLimitHits += 1;
+      if (failureKind === "timeout") timeoutHits += 1;
+    }
+  };
+  const shouldFallbackFromSilentViaFailure = (
+    fetchResult: Awaited<ReturnType<typeof getMapboxRouteDetailed>>,
+  ): boolean =>
+    fetchResult.route == null &&
+    (
+      fetchResult.outcome === "http_error" ||
+      fetchResult.outcome === "network_error" ||
+      fetchResult.outcome === "timeout"
+    );
+  const fetchRoundTripPlanRoute = async (
+    plan: RoundTripCandidatePlan,
+    request: {
+      exclude: string;
+      radiuses: string;
+      continueStraight: boolean;
+      alternatives: boolean;
+      bearings: string;
+      avoidManeuverRadiusMeters?: number;
+      maxAttempts: number;
+      timeoutMs: number;
+      retryDelayBaseMs?: number;
+      includeGuidance: boolean;
+      overview?: "full" | "simplified";
+      forceLegacyWaypoints?: boolean;
+    },
+  ): Promise<RoundTripFetchAttempt> => {
+    const routeLegWaypointIndexes = silentViaWaypointIndexes(plan);
+    if (routeLegWaypointIndexes.length < 2 || request.forceLegacyWaypoints) {
+      const legacyFetch = await getMapboxRouteDetailed(
+        plan.waypoints,
+        mapboxProfile,
+        request.exclude,
+        request.radiuses,
+        accessToken,
+        {
+          continueStraight: request.continueStraight,
+          alternatives: request.alternatives,
+          bearings: request.bearings,
+          avoidManeuverRadiusMeters: request.avoidManeuverRadiusMeters,
+          maxAttempts: request.maxAttempts,
+          timeoutMs: request.timeoutMs,
+          retryDelayBaseMs: request.retryDelayBaseMs,
+          includeGuidance: request.includeGuidance,
+          overview: request.overview,
+        },
+      );
+      return {
+        fetchResult: legacyFetch,
+        callsUsed: 1,
+        failureResults: legacyFetch.route == null ? [legacyFetch] : [],
+        silentViaRequested: false,
+        silentViaFallbackUsed: request.forceLegacyWaypoints === true,
+        overview: request.overview ??
+          (request.includeGuidance ? "full" : "simplified"),
+        includeGuidance: request.includeGuidance,
+        stepsRequested: request.includeGuidance,
+      };
+    }
+
+    silentViaAttempted = true;
+    lastSilentViaWaypoints = silentViaWaypointString(plan);
+    lastSilentViaShapingPointCount = Math.max(0, plan.waypoints.length - 2);
+    const silentFetch = await getMapboxRouteDetailed(
+      plan.waypoints,
+      mapboxProfile,
+      request.exclude,
+      request.radiuses,
+      accessToken,
+      {
+        continueStraight: request.continueStraight,
+        alternatives: request.alternatives,
+        bearings: request.bearings,
+        avoidManeuverRadiusMeters: request.avoidManeuverRadiusMeters,
+        maxAttempts: request.maxAttempts,
+        timeoutMs: request.timeoutMs,
+        retryDelayBaseMs: request.retryDelayBaseMs,
+        includeGuidance: request.includeGuidance,
+        // Mapbox requires steps when the `waypoints` index list is supplied.
+        // For search calls we request steps without voice/banner guidance.
+        steps: true,
+        overview: request.overview,
+        routeLegWaypointIndexes,
+      },
+    );
+    if (!shouldFallbackFromSilentViaFailure(silentFetch)) {
+      if (silentFetch.route != null) {
+        lastSilentViaMapboxLegCount = countRouteLegs(silentFetch.route);
+        lastSilentViaArriveManeuverCount = countArriveManeuvers(
+          silentFetch.route,
+        );
+      }
+      return {
+        fetchResult: silentFetch,
+        callsUsed: 1,
+        failureResults: silentFetch.route == null ? [silentFetch] : [],
+        silentViaRequested: true,
+        silentViaFallbackUsed: false,
+        overview: request.overview ??
+          (request.includeGuidance ? "full" : "simplified"),
+        includeGuidance: request.includeGuidance,
+        stepsRequested: true,
+      };
+    }
+
+    silentViaFallbackUsed = true;
+    registerReject("silent_via_technical_fallback");
+    debugWarn(
+      `[RT] ${plan.label}: silent-via technical failure (${silentFetch.outcome}), retrying legacy hard-waypoint request`,
+    );
+    const legacyFetch = await getMapboxRouteDetailed(
+      plan.waypoints,
+      mapboxProfile,
+      request.exclude,
+      request.radiuses,
+      accessToken,
+      {
+        continueStraight: request.continueStraight,
+        alternatives: request.alternatives,
+        bearings: request.bearings,
+        avoidManeuverRadiusMeters: request.avoidManeuverRadiusMeters,
+        maxAttempts: 1,
+        timeoutMs: request.timeoutMs,
+        retryDelayBaseMs: request.retryDelayBaseMs,
+        includeGuidance: request.includeGuidance,
+        overview: request.overview,
+      },
+    );
+    return {
+      fetchResult: legacyFetch,
+      callsUsed: 2,
+      failureResults: [
+        silentFetch,
+        ...(legacyFetch.route == null ? [legacyFetch] : []),
+      ],
+      silentViaRequested: true,
+      silentViaFallbackUsed: true,
+      overview: request.overview ??
+        (request.includeGuidance ? "full" : "simplified"),
+      includeGuidance: request.includeGuidance,
+      stepsRequested: request.includeGuidance,
+    };
+  };
   const minBalancedPresentableCoords = targetDistanceKm <= 60
     ? 22
     : targetDistanceKm <= 100
@@ -609,10 +1648,299 @@ export async function searchBestRoundTripRoute({
         quality.distanceDeltaKm <= targetDistanceKm * 0.22
       )
     );
+  const styleFitThresholdForEarlyStop = (() => {
+    if (mode === "Kurvenjagd") return 58;
+    if (mode === "Sport Mode") return 54;
+    if (mode === "Entdecker") return 52;
+    if (mode === "Abendrunde") return 52;
+    return 0;
+  })();
+  const styleGoodEnoughForEarlyStop = (
+    quality: RouteQualityEvaluation,
+  ): boolean => {
+    if (styleFitThresholdForEarlyStop <= 0) return true;
+    const styleFit = quality.styleFitScore ?? 0;
+    if (styleFit >= styleFitThresholdForEarlyStop) return true;
+    // Keep searching for style-specific routes, but do not turn a valid route
+    // into a reject solely because style fit is weak.
+    return candidateAttempts >= Math.max(3, globalAttemptBudget - 1);
+  };
+  const distanceFitTierForQuality = (
+    quality: RouteQualityEvaluation,
+    qualityDistanceConfig: DistanceConfig,
+  ): string => {
+    const distanceKm = quality.actualDistanceKm;
+    if (
+      distanceKm >= qualityDistanceConfig.minKm &&
+      distanceKm <= qualityDistanceConfig.maxKm
+    ) {
+      return "ideal";
+    }
+    if (
+      distanceKm >= qualityDistanceConfig.acceptableMinKm &&
+      distanceKm <= qualityDistanceConfig.acceptableMaxKm
+    ) {
+      return "acceptable";
+    }
+    return "outside_bucket";
+  };
+  const safeFallbackDistanceFits = (
+    quality: RouteQualityEvaluation,
+  ): boolean => {
+    const bounds = safeFallbackBounds();
+    return quality.safeFallbackUsed === true &&
+      bounds != null &&
+      quality.actualDistanceKm >= bounds.minKm &&
+      quality.actualDistanceKm <= bounds.maxKm;
+  };
+  const sessionDistanceFitTierForQuality = (
+    quality: RouteQualityEvaluation,
+    qualityDistanceConfig: DistanceConfig,
+  ): string => {
+    const tier = distanceFitTierForQuality(quality, qualityDistanceConfig);
+    if (tier !== "outside_bucket") return tier;
+    return safeFallbackDistanceFits(quality) ? "acceptable" : tier;
+  };
+  const sessionDistanceBandForCandidate = (
+    quality: RouteQualityEvaluation,
+    qualityDistanceConfig: DistanceConfig,
+  ): {
+    acceptableMinKm: number;
+    acceptableMaxKm: number;
+  } => {
+    const bounds = safeFallbackBounds();
+    if (
+      quality.safeFallbackUsed === true &&
+      bounds != null &&
+      quality.actualDistanceKm >= bounds.minKm &&
+      quality.actualDistanceKm <= bounds.maxKm
+    ) {
+      return {
+        acceptableMinKm: Math.min(
+          qualityDistanceConfig.acceptableMinKm,
+          bounds.minKm,
+        ),
+        acceptableMaxKm: Math.max(
+          qualityDistanceConfig.acceptableMaxKm,
+          bounds.maxKm,
+        ),
+      };
+    }
+    return {
+      acceptableMinKm: qualityDistanceConfig.acceptableMinKm,
+      acceptableMaxKm: qualityDistanceConfig.acceptableMaxKm,
+    };
+  };
+  const styleThinSessionSearch = mode === "Abendrunde" || mode === "Entdecker";
+  const shortCurvySessionSearch = shortCurvySearch;
+  const vorarlbergValleyShortSessionSearch = targetDistanceKm <= 60 &&
+    startLocation.latitude >= 47.12 && startLocation.latitude <= 47.60 &&
+    startLocation.longitude >= 9.45 && startLocation.longitude <= 10.05;
+  const targetSessionCandidateQueueSize = batchingUsed
+    ? shortCurvySessionSearch
+      ? styleThinSessionSearch || !avoidHighways ? 10 : 8
+      : vorarlbergValleyShortSessionSearch
+      ? styleThinSessionSearch || !avoidHighways ? 10 : 8
+      : styleThinSessionSearch
+      ? targetDistanceKm >= 70 ? 8 : 6
+      : targetDistanceKm >= 90
+      ? 7
+      : targetDistanceKm >= 70
+      ? 6
+      : 4
+    : styleThinSessionSearch
+    ? 4
+    : 1;
+  const sessionCandidateQueueCount = (): number =>
+    acceptedRouteCandidates.filter((candidate) =>
+      candidate.distanceFitTier !== "outside_bucket"
+    ).length;
+  const shouldContinueForSessionCandidateQueue = (): boolean =>
+    (
+      batchingUsed ||
+      styleThinSessionSearch ||
+      shortCurvySessionSearch ||
+      vorarlbergValleyShortSessionSearch
+    ) &&
+    (targetDistanceKm >= 70 ||
+      styleThinSessionSearch ||
+      shortCurvySessionSearch ||
+      vorarlbergValleyShortSessionSearch) &&
+    sessionCandidateQueueCount() <
+      Math.min(targetSessionCandidateQueueSize, globalAttemptBudget) &&
+    candidateAttempts < globalAttemptBudget &&
+    hasMapboxCallBudget(2600);
+  const distanceBucketForSessionPayload = (): 50 | 75 | 100 => {
+    if (targetDistanceKm >= 88) return 100;
+    if (targetDistanceKm >= 63) return 75;
+    return 50;
+  };
+  const roundNumber = (value: number, digits = 3): number =>
+    Number(Number.isFinite(value) ? value.toFixed(digits) : 0);
+  const compactShapeMetrics = (
+    quality: RouteQualityEvaluation,
+  ): Record<string, unknown> | null => {
+    const shape = quality.shapeMetrics;
+    if (shape == null) return null;
+    return {
+      loopness_score: roundNumber(shape.loopnessScore, 1),
+      spur_score: roundNumber(shape.spurScore, 1),
+      dead_end_arm_score: roundNumber(shape.deadEndArmScore, 1),
+      out_and_back_score: roundNumber(shape.outAndBackScore, 1),
+      overlap_score: roundNumber(shape.overlapScore, 1),
+      geometric_u_turn_count: shape.geometricUTurnCount,
+      cleanup_u_turn_count: shape.cleanupUTurnCount,
+      cleanup_removed_percent: roundNumber(shape.cleanupRemovedPercent, 1),
+      cleanup_distance_retention_ratio: roundNumber(
+        shape.cleanupDistanceRetentionRatio,
+        3,
+      ),
+    };
+  };
+  const compactStyleMetrics = (
+    quality: RouteQualityEvaluation,
+  ): Record<string, unknown> | null => {
+    const style = quality.styleMetrics;
+    if (style == null) return null;
+    return {
+      curve_density_per_50km: roundNumber(style.curveDensityPer50Km, 1),
+      heading_change_per_km: roundNumber(style.headingChangePerKm, 1),
+      smoothness_score: roundNumber(style.smoothnessScore, 1),
+      zigzag_score: roundNumber(style.zigzagScore, 1),
+      sector_diversity_score: roundNumber(style.sectorDiversityScore, 1),
+    };
+  };
+  const sessionCandidateRank = (
+    candidate: typeof acceptedRouteCandidates[number],
+  ): number => {
+    const shape = candidate.quality.shapeMetrics;
+    const distancePenalty = candidate.distanceFitTier === "outside_bucket"
+      ? 250
+      : candidate.distanceFitTier === "acceptable"
+      ? 25
+      : 0;
+    const shapePenalty = shape == null
+      ? 300
+      : Math.max(0, 64 - shape.loopnessScore) * 3 +
+        shape.spurScore * 3 +
+        shape.outAndBackScore * 2 +
+        shape.deadEndArmScore * 2 +
+        shape.geometricUTurnCount * 8;
+    return candidate.quality.score + distancePenalty + shapePenalty;
+  };
+  const serializeSessionCandidate = (
+    candidate: typeof acceptedRouteCandidates[number],
+    index: number,
+  ): RoundTripSessionCandidatePayload => {
+    const distanceConfig = candidate.context.distanceConfig;
+    const sessionDistanceBand = sessionDistanceBandForCandidate(
+      candidate.quality,
+      distanceConfig,
+    );
+    const waypointIndexes = candidate.routeRequestMeta.silentViaUsed &&
+        candidate.plan.waypoints.length > 2
+      ? [0, candidate.plan.waypoints.length - 1]
+      : candidate.plan.waypoints.map((_, waypointIndex) => waypointIndex);
+    const shape = candidate.quality.shapeMetrics;
+    return {
+      candidate_id: `${normalizedBatchIndex}:${index}:${candidate.plan.label}:${
+        candidate.fingerprint.slice(0, 18)
+      }`,
+      route_fingerprint: candidate.fingerprint,
+      previous_route_fingerprints: normalizedPreviousRouteFingerprints,
+      candidate_family: candidate.plan.label,
+      planned_coordinates: candidate.plan.waypoints.map((point) => [
+        roundNumber(point.longitude, 6),
+        roundNumber(point.latitude, 6),
+      ]),
+      silent_via_waypoints:
+        candidate.routeRequestMeta.silentViaUsed && waypointIndexes.length >= 2
+          ? waypointIndexes.join(";")
+          : null,
+      waypoint_indexes: waypointIndexes,
+      radiuses: effectivePlanRadiuses(candidate.plan),
+      bearings: effectivePlanBearings(candidate.plan) || null,
+      avoid_maneuver_radius_m: effectiveAvoidManeuverRadius ?? null,
+      continue_straight: candidate.context.continueStraight,
+      force_legacy_waypoints: candidate.context.forceLegacyWaypoints === true,
+      target_distance_km: targetDistanceKm,
+      distance_bucket: distanceBucketForSessionPayload(),
+      distance_band_min_km: sessionDistanceBand.acceptableMinKm,
+      distance_band_max_km: sessionDistanceBand.acceptableMaxKm,
+      ideal_distance_min_km: distanceConfig.minKm,
+      ideal_distance_max_km: distanceConfig.maxKm,
+      predicted_distance_km: roundNumber(candidate.quality.actualDistanceKm, 1),
+      distance_fit_tier: candidate.distanceFitTier,
+      pre_hydration_quality: {
+        tier: candidate.quality.tier,
+        score: roundNumber(candidate.quality.score, 1),
+        reason: candidate.quality.reason,
+        actual_distance_km: roundNumber(candidate.quality.actualDistanceKm, 1),
+        distance_delta_km: roundNumber(candidate.quality.distanceDeltaKm, 1),
+        overlap_percent: roundNumber(candidate.quality.overlapPercent, 1),
+        has_u_turn: candidate.quality.hasUTurn,
+        safe_fallback_used: candidate.quality.safeFallbackUsed === true,
+        safe_fallback_reason: candidate.quality.safeFallbackReason ?? null,
+        shape_metrics: compactShapeMetrics(candidate.quality),
+        style_metrics: compactStyleMetrics(candidate.quality),
+      },
+      shape_score: shape == null ? null : roundNumber(shape.loopnessScore, 1),
+      style_key: mode === "Kurvenjagd"
+        ? "kurvenjagd"
+        : mode === "Abendrunde"
+        ? "abendrunde"
+        : mode === "Entdecker"
+        ? "entdecker"
+        : "sport",
+      requested_style: candidate.quality.requestedStyle ?? mode ?? null,
+      delivered_style: candidate.quality.deliveredStyle ??
+        candidate.quality.requestedStyle ?? mode ?? null,
+      style_downgraded: candidate.quality.styleDowngraded === true,
+      avoid_highways: avoidHighways,
+      motorway_policy: avoidHighways
+        ? "exclude_motorway"
+        : "allowed_not_required",
+      exclude_params: candidate.context.exclude,
+      search_stage: candidate.phaseName,
+      route_request_meta: {
+        ...candidate.routeRequestMeta,
+      },
+      created_from_live_batch: true,
+    };
+  };
+  const buildSessionCandidateQueuePayload =
+    (): RoundTripSessionCandidatePayload[] =>
+      acceptedRouteCandidates
+        .slice()
+        .sort((a, b) => sessionCandidateRank(a) - sessionCandidateRank(b))
+        .slice(0, targetSessionCandidateQueueSize)
+        .map(serializeSessionCandidate);
+  const shouldRequestSearchAlternatives = (
+    phaseName: string,
+    planLabel: string,
+    phaseAttemptIndex: number,
+  ): boolean => {
+    if (useSearchAlternatives) return phaseName !== "strict";
+    if (!useSelectiveNoHighwayAlternatives) return false;
+    if (phaseName === "strict") return false;
+    if (phaseAttemptIndex > 2) return false;
+
+    const label = planLabel.toLowerCase();
+    return label.includes("compact") ||
+      label.includes("asymmetric") ||
+      label.includes("cardinal") ||
+      label.includes("distributed") ||
+      label.includes("hillside") ||
+      label.includes("two-lobe") ||
+      label.includes("regional") ||
+      label.includes("sector") ||
+      label.includes("long-oval");
+  };
   const applyCleanupGate = (
     route: any,
     quality: RouteQualityEvaluation,
     qualityDistanceConfig: DistanceConfig,
+    cleanupAvoidHighways: boolean,
   ): RouteQualityEvaluation => {
     if (quality.tier === "rejected") {
       return quality;
@@ -621,7 +1949,7 @@ export async function searchBestRoundTripRoute({
       targetDistanceKm,
       distanceConfig: qualityDistanceConfig,
       mode,
-      avoidHighways,
+      avoidHighways: cleanupAvoidHighways,
       startLocation,
     });
     if (cleanup.passed) {
@@ -631,6 +1959,7 @@ export async function searchBestRoundTripRoute({
       ? cleanup.cleanedDistanceKm
       : quality.actualDistanceKm;
     return {
+      ...quality,
       passed: false,
       reason: cleanup.reason,
       overlapPercent: quality.overlapPercent,
@@ -645,30 +1974,323 @@ export async function searchBestRoundTripRoute({
         : quality.distanceDeltaKm,
     };
   };
+  const applyPreferenceScoring = (
+    route: any,
+    quality: RouteQualityEvaluation,
+  ): RouteQualityEvaluation => {
+    const match = evaluatePreferenceMatch(route);
+    if (match == null) return quality;
+    const preferenceMeta = {
+      preferenceMatchScore: match.preferenceMatchScore,
+      matchedPreferenceCount: match.matchedPreferenceCount,
+      preferenceAreaDistancesMeters: match.preferenceAreaDistancesMeters,
+      preferenceIgnoredReason: match.preferenceIgnoredReason,
+    };
+    if (quality.tier === "rejected") {
+      return { ...quality, ...preferenceMeta };
+    }
+    const missingPreferenceCount = Math.max(
+      0,
+      activePreferenceAreas.length - match.matchedPreferenceCount,
+    );
+    const ignorePenalty = missingPreferenceCount * 28 +
+      Math.max(0, 45 - match.preferenceMatchScore) * 0.65;
+    const preferenceReward = match.preferenceMatchScore * 0.55 +
+      match.matchedPreferenceCount * 18;
+    return {
+      ...quality,
+      ...preferenceMeta,
+      baseScore: quality.baseScore ?? quality.score,
+      score: Math.max(0, quality.score + ignorePenalty - preferenceReward),
+    };
+  };
+  const requestedStyleLabel = mode ?? "Standard";
+  const deliveredStyleForSafeFallback = (
+    quality: RouteQualityEvaluation,
+  ): string => {
+    if (mode !== "Kurvenjagd") return requestedStyleLabel;
+    const curveDensity = quality.styleMetrics?.curveDensityPer50Km ?? 0;
+    return curveDensity >= 80 ? "relaxed_curvy" : "sport_like";
+  };
+  const safeFallbackBounds = (): { minKm: number; maxKm: number } | null => {
+    if (targetDistanceKm <= 60) return { minKm: 42, maxKm: 65 };
+    if (targetDistanceKm <= 85) return { minKm: 62, maxKm: 90 };
+    if (targetDistanceKm <= 115) return { minKm: 85, maxKm: 118 };
+    return null;
+  };
+  const isHardRejectReason = (reason: string): boolean => {
+    const normalized = reason.toLowerCase();
+    return normalized.includes("u_turn") ||
+      normalized.includes("dead_end") ||
+      normalized.includes("route_stub") ||
+      normalized.includes("out_and_back") ||
+      normalized.startsWith("hooks=") ||
+      normalized.startsWith("center_return=") ||
+      normalized.startsWith("cleanup_u_turn");
+  };
+  const isSoftFallbackReason = (reason: string): boolean => {
+    const normalized = reason.toLowerCase();
+    return normalized.startsWith("short_sport_distance=") ||
+      normalized.startsWith("short_sport_shape=") ||
+      normalized.startsWith("short_sport_overlap=") ||
+      normalized.startsWith("distance=") ||
+      normalized.startsWith("cleanup_short_sport_shape=") ||
+      normalized.startsWith("cleanup_short_sport_distance=") ||
+      normalized.startsWith("cleanup_distance=");
+  };
+  const applySafeFallbackTier = (
+    quality: RouteQualityEvaluation,
+    selectedExclude: string,
+  ): RouteQualityEvaluation => {
+    if (quality.tier !== "rejected") return quality;
+    const bounds = safeFallbackBounds();
+    if (bounds == null) return quality;
+    if (
+      avoidHighways &&
+      !normalizeExcludeParams(selectedExclude).includes("motorway")
+    ) {
+      return quality;
+    }
+    if (!isSoftFallbackReason(quality.reason)) return quality;
+    const shape = quality.shapeMetrics;
+    if (shape == null) return quality;
+    if (
+      quality.actualDistanceKm < bounds.minKm ||
+      quality.actualDistanceKm > bounds.maxKm
+    ) {
+      return quality;
+    }
+    const loopnessMin = mode === "Kurvenjagd" ? 52 : 56;
+    const spurMax = mode === "Kurvenjagd" ? 30 : 26;
+    const outAndBackMax = mode === "Kurvenjagd" ? 28 : 24;
+    const deadEndMax = mode === "Kurvenjagd" ? 28 : 24;
+    const strictShortSportLocalHairpinOk = mode === "Sport Mode" &&
+      targetDistanceKm <= 60 &&
+      shape.geometricUTurnCount <= 1 &&
+      shape.cleanupUTurnCount <= 1 &&
+      shape.loopnessScore >= 78 &&
+      shape.spurScore <= 14 &&
+      shape.outAndBackScore <= 14 &&
+      shape.deadEndArmScore <= 18 &&
+      shape.middleCoverageRatio >= 0.58 &&
+      shape.foldedLoopPenalty <= 36 &&
+      shape.oppositeOverlapPercent <= 10 &&
+      shape.centerReentryCount === 0 &&
+      shape.repeatedStartAreaPercent <= 10 &&
+      shape.centralReturnPercent <= 8 &&
+      shape.cleanupRemovedPercent <= 12 &&
+      shape.cleanupDistanceRetentionRatio >= 0.88 &&
+      quality.overlapPercent <= 22;
+    const cleanShortSportValleyHairpinOk = mode === "Sport Mode" &&
+      targetDistanceKm <= 60 &&
+      shape.geometricUTurnCount <= 2 &&
+      shape.cleanupUTurnCount <= 2 &&
+      shape.loopnessScore >= 78 &&
+      shape.spurScore <= 8 &&
+      shape.outAndBackScore <= 8 &&
+      shape.deadEndArmScore <= 12 &&
+      shape.middleCoverageRatio >= 0.64 &&
+      shape.foldedLoopPenalty <= 55 &&
+      shape.oppositeOverlapPercent <= 6 &&
+      shape.centerReentryCount === 0 &&
+      shape.repeatedStartAreaPercent <= 8 &&
+      shape.centralReturnPercent <= 5 &&
+      shape.cleanupRemovedPercent <= 8 &&
+      shape.cleanupDistanceRetentionRatio >= 0.94 &&
+      quality.overlapPercent <= 16;
+    const pragmaticShortSportValleyHairpinOk = mode === "Sport Mode" &&
+      targetDistanceKm <= 60 &&
+      shape.geometricUTurnCount <= 2 &&
+      shape.cleanupUTurnCount <= 1 &&
+      shape.loopnessScore >= 62 &&
+      shape.spurScore <= 8 &&
+      shape.outAndBackScore <= 12 &&
+      shape.deadEndArmScore <= 12 &&
+      shape.middleCoverageRatio >= 0.60 &&
+      shape.foldedLoopPenalty <= 56 &&
+      shape.oppositeOverlapPercent <= 7 &&
+      shape.centerReentryCount === 0 &&
+      shape.repeatedStartAreaPercent <= 8 &&
+      shape.centralReturnPercent <= 6 &&
+      shape.cleanupRemovedPercent <= 8 &&
+      shape.cleanupDistanceRetentionRatio >= 0.96 &&
+      quality.overlapPercent <= 18;
+    const relaxedShortSportValleyFallbackOk = mode === "Sport Mode" &&
+      targetDistanceKm <= 60 &&
+      shape.geometricUTurnCount <= 3 &&
+      shape.cleanupUTurnCount <= 2 &&
+      shape.loopnessScore >= 46 &&
+      shape.spurScore <= 4 &&
+      shape.outAndBackScore <= 18 &&
+      shape.deadEndArmScore <= 8 &&
+      shape.centerReentryCount <= 1 &&
+      shape.repeatedStartAreaPercent <= 12 &&
+      shape.centralReturnPercent <= 10 &&
+      shape.oppositeOverlapPercent <= 10 &&
+      shape.cleanupRemovedPercent <= 8 &&
+      shape.cleanupDistanceRetentionRatio >= 0.94 &&
+      quality.overlapPercent <= 22;
+    const cleanLocalStyleHairpinOk = mode !== "Sport Mode" &&
+      targetDistanceKm <= 85 &&
+      shape.geometricUTurnCount <= (mode === "Kurvenjagd" ? 3 : 2) &&
+      shape.cleanupUTurnCount <= 2 &&
+      shape.loopnessScore >= (mode === "Kurvenjagd" ? 70 : 76) &&
+      shape.spurScore <= 10 &&
+      shape.outAndBackScore <= 12 &&
+      shape.deadEndArmScore <= 12 &&
+      shape.centerReentryCount <= 1 &&
+      shape.repeatedStartAreaPercent <= 10 &&
+      shape.centralReturnPercent <= 8 &&
+      shape.oppositeOverlapPercent <= 8 &&
+      shape.cleanupRemovedPercent <= 8 &&
+      shape.cleanupDistanceRetentionRatio >= 0.96 &&
+      quality.overlapPercent <= 18;
+    const localHairpinSafeOk = strictShortSportLocalHairpinOk ||
+      cleanShortSportValleyHairpinOk ||
+      pragmaticShortSportValleyHairpinOk ||
+      relaxedShortSportValleyFallbackOk ||
+      cleanLocalStyleHairpinOk;
+    if (
+      (quality.hasUTurn || isHardRejectReason(quality.reason)) &&
+      !localHairpinSafeOk
+    ) {
+      return quality;
+    }
+    const effectiveLoopnessMin = relaxedShortSportValleyFallbackOk
+      ? 46
+      : loopnessMin;
+    const cleanEnough = shape.loopnessScore >= effectiveLoopnessMin &&
+      shape.spurScore <= spurMax &&
+      shape.outAndBackScore <= outAndBackMax &&
+      shape.deadEndArmScore <= deadEndMax &&
+      (
+        localHairpinSafeOk ||
+        (shape.geometricUTurnCount <= 0 && shape.cleanupUTurnCount <= 0)
+      ) &&
+      shape.centerReentryCount <= 1 &&
+      shape.oppositeOverlapPercent <= 12 &&
+      shape.cleanupRemovedPercent <= 18 &&
+      shape.cleanupDistanceRetentionRatio >= 0.84 &&
+      quality.overlapPercent <= 28;
+    if (!cleanEnough) return quality;
+    const deliveredStyle = deliveredStyleForSafeFallback(quality);
+    return {
+      ...quality,
+      passed: true,
+      reason: `safe_fallback:${quality.reason}`,
+      tier: "acceptable",
+      score: Math.min(quality.score, 390),
+      safeFallbackUsed: true,
+      safeFallbackReason: quality.reason,
+      requestedStyle: requestedStyleLabel,
+      deliveredStyle,
+      styleDowngraded: deliveredStyle !== requestedStyleLabel,
+    };
+  };
   const evaluateRouteAlternative = (
     route: any,
     qualityDistanceConfig: DistanceConfig,
-  ): RouteQualityEvaluation =>
-    applyCleanupGate(
+    selectedExclude: string,
+  ): RouteQualityEvaluation => {
+    const evaluationAvoidHighways = avoidHighways ||
+      normalizeExcludeParams(selectedExclude).includes("motorway");
+    const quality = applyPreferenceScoring(
+      route,
+      applyCleanupGate(
+        route,
+        evaluateRouteQuality(route, "ROUND_TRIP", {
+          targetDistanceKm,
+          distanceConfig: qualityDistanceConfig,
+          mode,
+          avoidHighways: evaluationAvoidHighways,
+        }),
+        qualityDistanceConfig,
+        evaluationAvoidHighways,
+      ),
+    );
+    const safeQuality = applySafeFallbackTier(quality, selectedExclude);
+    if (safeQuality.safeFallbackUsed === true || quality.shapeMetrics != null) {
+      return safeQuality;
+    }
+    const needsDiagnosticShape = quality.reason.startsWith(
+      "short_sport_distance=",
+    ) ||
+      quality.reason.startsWith("cleanup_distance=") ||
+      quality.reason.startsWith("cleanup_short_sport_shape=") ||
+      quality.reason.startsWith("cleanup_short_sport_distance=");
+    if (!needsDiagnosticShape) {
+      return safeQuality;
+    }
+
+    // Some short-Sport rejects are emitted by the cleanup gate after the
+    // original quality object has been replaced by cleanup diagnostics. Re-run
+    // the original route quality to recover shape metrics, then only rescue if
+    // the strict safe-fallback shape gate passes. This does not make
+    // U-turn/stub/out-and-back routes acceptable.
+    const diagnosticQuality = applyPreferenceScoring(
       route,
       evaluateRouteQuality(route, "ROUND_TRIP", {
         targetDistanceKm,
         distanceConfig: qualityDistanceConfig,
         mode,
-        avoidHighways,
+        avoidHighways: avoidHighways ||
+          selectedExclude.split(",").map((part) => part.trim()).includes(
+            "motorway",
+          ),
       }),
-      qualityDistanceConfig,
     );
+    return applySafeFallbackTier({
+      ...diagnosticQuality,
+      passed: false,
+      reason: quality.reason,
+      tier: "rejected",
+      score: quality.score,
+      actualDistanceKm: quality.actualDistanceKm,
+      distanceDeltaKm: quality.distanceDeltaKm,
+    }, selectedExclude);
+  };
   const chooseBestRouteAlternative = (
     routes: any[],
     qualityDistanceConfig: DistanceConfig,
+    selectedExclude: string,
+    options?: {
+      maxCoordinateCount?: number;
+      geometryRejectReason?: string;
+      requireDisplayGeometry?: boolean;
+      overview?: "full" | "simplified" | null;
+    },
   ): { route: any; quality: RouteQualityEvaluation } | null => {
     let selectedRoute: any = null;
     let selectedQuality: RouteQualityEvaluation | null = null;
+    const maxCoordinateCount = options?.maxCoordinateCount ??
+      maxSearchRouteCoordinates;
+    const geometryRejectReason = options?.geometryRejectReason ??
+      "geometry_too_large";
     for (const routeOption of routes) {
+      const routeCoordinateCount = Array.isArray(
+          routeOption?.geometry?.coordinates,
+        )
+        ? routeOption.geometry.coordinates.length
+        : 0;
+      if (routeCoordinateCount > maxCoordinateCount) {
+        registerReject(geometryRejectReason);
+        continue;
+      }
+      if (options?.requireDisplayGeometry === true) {
+        const displayRejectReason = displayGeometryRejectReason(
+          routeOption,
+          options.overview ?? null,
+        );
+        if (displayRejectReason != null) {
+          registerReject(displayRejectReason);
+          continue;
+        }
+      }
+      evaluatedRouteCount += 1;
       const optionQuality = evaluateRouteAlternative(
         routeOption,
         qualityDistanceConfig,
+        selectedExclude,
       );
       if (
         selectedQuality == null ||
@@ -692,54 +2314,277 @@ export async function searchBestRoundTripRoute({
       ? { route: selectedRoute, quality: selectedQuality }
       : null;
   };
-
-  for (const phase of searchPhases) {
-    if (stopSearchWithBestCandidate) break;
-    const orderedCandidates = prioritizeCandidatePlans(
-      buildRoundTripWaypointCandidates({
-        start: startLocation,
-        distanceConfig: phase.distanceConfig,
-        targetDistanceKm,
-        mode,
-        randomSeed: randomSeed + phase.seedOffset,
-        preferredBearingDegrees: directionHintDegrees,
-        waypointShapeFactor,
-        zigzagWaypoints,
-        simplifyWaypoints,
-        maxWaypoints,
-        avoidHighways,
-      }),
-      phase.name,
-      normalizedVariantHint,
-      normalizedFingerprintHint,
+  const shouldTryShortSportLegacyReverse = (
+    plan: RoundTripCandidatePlan,
+  ): boolean =>
+    avoidHighwaysRoundTripSearch &&
+    mode === "Sport Mode" &&
+    targetDistanceKm <= 60 &&
+    plan.waypoints.length > 3;
+  const shouldUseLegacyWaypointsFirst = (
+    plan: RoundTripCandidatePlan,
+  ): boolean =>
+    mode === "Sport Mode" &&
+    targetDistanceKm <= 60 &&
+    plan.label.startsWith("nohw-short-sport-valley-clean");
+  let lastHydrationRejectReason: string | null = null;
+  let lastHydrationRoute: any | null = null;
+  let lastHydrationQuality: RouteQualityEvaluation | null = null;
+  let lastHydrationMeta: RoundTripRouteRequestMeta | null = null;
+  const hydrateGuidanceRoute = async (
+    plan: RoundTripCandidatePlan,
+    context: {
+      exclude: string;
+      continueStraight: boolean;
+      distanceConfig: DistanceConfig;
+      forceLegacyWaypoints?: boolean;
+    },
+  ): Promise<
+    {
+      route: any;
+      quality: RouteQualityEvaluation;
+      routeRequestMeta: RoundTripRouteRequestMeta;
+    } | null
+  > => {
+    lastHydrationRejectReason = null;
+    lastHydrationRoute = null;
+    lastHydrationQuality = null;
+    lastHydrationMeta = null;
+    let attempt = await fetchRoundTripPlanRoute(plan, {
+      exclude: context.exclude,
+      radiuses: effectivePlanRadiuses(plan),
+      continueStraight: context.continueStraight,
+      alternatives: false,
+      bearings: effectivePlanBearings(plan),
+      avoidManeuverRadiusMeters: effectiveAvoidManeuverRadius,
+      maxAttempts: 1,
+      timeoutMs: boundedMapboxTimeoutMs(mapboxCandidateTimeoutMs, 3000),
+      retryDelayBaseMs: 220,
+      includeGuidance: true,
+      overview: "full",
+      forceLegacyWaypoints: context.forceLegacyWaypoints === true,
+    });
+    mapboxCallCount += attempt.callsUsed;
+    guidanceHydrationCount += attempt.callsUsed;
+    recordProviderFailures(attempt.failureResults);
+    if (shouldAbortForProviderPressure()) return null;
+    if (!attempt.fetchResult.route) {
+      lastHydrationRejectReason = attempt.fetchResult.outcome === "http_error"
+        ? `guidance_mapbox_http_${attempt.fetchResult.statusCode ?? "unknown"}`
+        : `guidance_mapbox_${attempt.fetchResult.outcome}`;
+      registerReject(lastHydrationRejectReason);
+      return null;
+    }
+    let selection = chooseBestRouteAlternative(
+      [attempt.fetchResult.route],
+      context.distanceConfig,
+      context.exclude,
       {
-        mode,
-        avoidHighways,
-        targetDistanceKm,
-        shortCurvyRoundTripFallback: phase.name === "fallback" &&
-          shortCurvySearch,
+        maxCoordinateCount: maxHydratedRouteCoordinates,
+        geometryRejectReason: "guidance_geometry_too_large",
+        requireDisplayGeometry: true,
+        overview: attempt.overview,
       },
+    );
+    if (
+      (selection == null || selection.quality.tier === "rejected") &&
+      context.forceLegacyWaypoints !== true &&
+      attempt.silentViaRequested &&
+      hasMapboxCallBudget(2500)
+    ) {
+      const legacyAttempt = await fetchRoundTripPlanRoute(plan, {
+        exclude: context.exclude,
+        radiuses: effectivePlanRadiuses(plan),
+        continueStraight: context.continueStraight,
+        alternatives: false,
+        bearings: effectivePlanBearings(plan),
+        avoidManeuverRadiusMeters: effectiveAvoidManeuverRadius,
+        maxAttempts: 1,
+        timeoutMs: boundedMapboxTimeoutMs(mapboxCandidateTimeoutMs, 3000),
+        retryDelayBaseMs: 220,
+        includeGuidance: true,
+        overview: "full",
+        forceLegacyWaypoints: true,
+      });
+      mapboxCallCount += legacyAttempt.callsUsed;
+      guidanceHydrationCount += legacyAttempt.callsUsed;
+      recordProviderFailures(legacyAttempt.failureResults);
+      if (legacyAttempt.fetchResult.route != null) {
+        const legacySelection = chooseBestRouteAlternative(
+          [legacyAttempt.fetchResult.route],
+          context.distanceConfig,
+          context.exclude,
+          {
+            maxCoordinateCount: maxHydratedRouteCoordinates,
+            geometryRejectReason: "guidance_geometry_too_large",
+            requireDisplayGeometry: true,
+            overview: legacyAttempt.overview,
+          },
+        );
+        if (
+          legacySelection != null &&
+          (
+            selection == null ||
+            legacySelection.quality.tier !== "rejected" ||
+            legacySelection.quality.score < selection.quality.score
+          )
+        ) {
+          selection = legacySelection;
+          attempt = legacyAttempt;
+        }
+      }
+    }
+    if (
+      shouldTryShortSportLegacyReverse(plan) &&
+      context.continueStraight !== false &&
+      hasMapboxCallBudget(2500)
+    ) {
+      const reverseLegacyAttempt = await fetchRoundTripPlanRoute(plan, {
+        exclude: context.exclude,
+        radiuses: effectivePlanRadiuses(plan),
+        continueStraight: false,
+        alternatives: false,
+        bearings: effectivePlanBearings(plan),
+        avoidManeuverRadiusMeters: effectiveAvoidManeuverRadius,
+        maxAttempts: 1,
+        timeoutMs: boundedMapboxTimeoutMs(mapboxCandidateTimeoutMs, 3000),
+        retryDelayBaseMs: 220,
+        includeGuidance: true,
+        overview: "full",
+        forceLegacyWaypoints: true,
+      });
+      mapboxCallCount += reverseLegacyAttempt.callsUsed;
+      guidanceHydrationCount += reverseLegacyAttempt.callsUsed;
+      recordProviderFailures(reverseLegacyAttempt.failureResults);
+      if (reverseLegacyAttempt.fetchResult.route != null) {
+        const reverseLegacySelection = chooseBestRouteAlternative(
+          [reverseLegacyAttempt.fetchResult.route],
+          context.distanceConfig,
+          context.exclude,
+          {
+            maxCoordinateCount: maxHydratedRouteCoordinates,
+            geometryRejectReason: "guidance_geometry_too_large",
+            requireDisplayGeometry: true,
+            overview: reverseLegacyAttempt.overview,
+          },
+        );
+        if (
+          reverseLegacySelection != null &&
+          (
+            selection == null ||
+            reverseLegacySelection.quality.tier !== "rejected" ||
+            reverseLegacySelection.quality.score < selection.quality.score
+          )
+        ) {
+          selection = reverseLegacySelection;
+          attempt = reverseLegacyAttempt;
+        }
+      }
+    }
+    if (selection == null || selection.quality.tier === "rejected") {
+      lastHydrationRejectReason = selection?.quality.reason != null
+        ? `guidance_${selection.quality.reason}`
+        : "guidance_quality_rejected";
+      lastHydrationRoute = selection?.route ?? attempt.fetchResult.route;
+      lastHydrationQuality = selection?.quality ?? null;
+      lastHydrationMeta = routeRequestMeta(
+        plan,
+        lastHydrationRoute,
+        {
+          silentViaUsed: attempt.silentViaRequested &&
+            !attempt.silentViaFallbackUsed,
+          silentViaFallbackUsed: attempt.silentViaFallbackUsed,
+          overview: attempt.overview,
+          includeGuidance: attempt.includeGuidance,
+          stepsRequested: attempt.stepsRequested,
+        },
+      );
+      registerReject(lastHydrationRejectReason);
+      return null;
+    }
+    lastHydrationRoute = selection.route;
+    lastHydrationQuality = selection.quality;
+    lastHydrationMeta = routeRequestMeta(plan, selection.route, {
+      silentViaUsed: attempt.silentViaRequested &&
+        !attempt.silentViaFallbackUsed,
+      silentViaFallbackUsed: attempt.silentViaFallbackUsed,
+      overview: attempt.overview,
+      includeGuidance: attempt.includeGuidance,
+      stepsRequested: attempt.stepsRequested,
+    });
+    return {
+      ...selection,
+      routeRequestMeta: lastHydrationMeta,
+    };
+  };
+
+  for (const phase of phasesForThisBatch) {
+    if (stopSearchWithBestCandidate) break;
+    const phasePlanAvoidHighways = phase.planAvoidHighways ?? avoidHighways;
+    const orderedCandidates = rankCandidatePlansByPreference(
+      prioritizeCandidatePlans(
+        buildRoundTripWaypointCandidates({
+          start: startLocation,
+          distanceConfig: phase.distanceConfig,
+          targetDistanceKm,
+          mode,
+          randomSeed: randomSeed + phase.seedOffset,
+          preferredBearingDegrees: directionHintDegrees,
+          waypointShapeFactor,
+          zigzagWaypoints,
+          simplifyWaypoints,
+          maxWaypoints,
+          avoidHighways: phasePlanAvoidHighways,
+        }),
+        phase.name,
+        normalizedVariantHint,
+        normalizedFingerprintHint,
+        {
+          mode,
+          avoidHighways: phasePlanAvoidHighways,
+          targetDistanceKm,
+          shortCurvyRoundTripFallback: phase.name === "fallback" &&
+            shortCurvySearch,
+        },
+      ),
     );
     // Pro Phase 2-3 Versuche. WICHTIG: Fair-Share-Guard reserviert für
     // jede spätere Phase MINDESTENS 2 Versuche (vorher: 1), damit der
     // Fallback in Bergtälern wirklich Plan A+B testen kann. Strict darf
     // 3 ausschöpfen, falls die Geometrie es zulässt; balanced/fallback
     // bekommen je 2-3.
-    const declaredMaxPerPhase = phase.name === "strict"
-      ? shortSportHighwayRoundTrip ? 4 : 2
+    const phaseIsNoHighwaySearch = phasePlanAvoidHighways === true;
+    const declaredMaxPerPhase = batchingUsed
+      ? targetDistanceKm >= 70 ? 3 : 2
+      : phase.name === "strict"
+      ? phaseIsNoHighwaySearch
+        ? targetDistanceKm <= 60 ? 5 : 5
+        : shortSportHighwayRoundTrip
+        ? 4
+        : mode === "Sport Mode" && targetDistanceKm >= 75
+        ? 3
+        : 2
       : phase.name === "balanced"
-      ? shortSportHighwayRoundTrip ? 4 : 2
-      : avoidHighwaysRoundTripSearch
-      ? 2
+      ? phaseIsNoHighwaySearch
+        ? targetDistanceKm <= 60 ? 5 : 5
+        : shortSportHighwayRoundTrip
+        ? 4
+        : mode === "Sport Mode" && targetDistanceKm >= 75
+        ? 3
+        : 2
+      : phaseIsNoHighwaySearch
+      ? targetDistanceKm <= 60 ? 5 : targetDistanceKm <= 85 ? 5 : 6
       : shortSportHighwayRoundTrip
       ? 4
       : shortCurvySearch
       ? 4
       : constrainedRoundTripSearch
       ? 3
+      : mode === "Sport Mode" && targetDistanceKm >= 75
+      ? 3
       : 2;
-    const phasesRemainingAfterThis = searchPhases.length - 1 -
-      searchPhases.indexOf(phase);
+    const phasesRemainingAfterThis = phasesForThisBatch.length - 1 -
+      phasesForThisBatch.indexOf(phase);
     // Reserviere mindestens 2 Versuche pro nachfolgender Phase.
     const reservedForLaterPhases = phasesRemainingAfterThis * 2;
     const fairShareCeiling = Math.max(
@@ -747,13 +2592,15 @@ export async function searchBestRoundTripRoute({
       globalAttemptBudget - candidateAttempts - reservedForLaterPhases,
     );
     const maxPhaseAttempts = Math.min(declaredMaxPerPhase, fairShareCeiling);
-    const phaseIndex = searchPhases.indexOf(phase);
-    const highwayPhaseStride = shortSportHighwayRoundTrip ? 4 : 0;
+    const phaseIndex = phasesForThisBatch.indexOf(phase);
+    const useHighwaySliceOffset = shortSportHighwayRoundTrip &&
+      phasePlanAvoidHighways !== true;
+    const highwayPhaseStride = useHighwaySliceOffset ? 4 : 0;
     const maxSliceStart = Math.max(
       0,
       orderedCandidates.length - maxPhaseAttempts,
     );
-    const sliceStart = shortSportHighwayRoundTrip
+    const sliceStart = useHighwaySliceOffset
       ? Math.min(phaseIndex * highwayPhaseStride, maxSliceStart)
       : 0;
     let candidatePlans = orderedCandidates.slice(
@@ -791,7 +2638,7 @@ export async function searchBestRoundTripRoute({
       if (
         phaseAttempts >= maxPhaseAttempts ||
         candidateAttempts >= globalAttemptBudget ||
-        Date.now() - searchStartTs >= roundTripTimeBudgetMs
+        !hasMapboxCallBudget()
       ) {
         debugLog(
           `[RT] Phase ${phase.name}: stopping early after ${phaseAttempts} attempts (global=${candidateAttempts})`,
@@ -801,30 +2648,41 @@ export async function searchBestRoundTripRoute({
 
       phaseAttempts += 1;
       candidateAttempts += 1;
-      lastPlanLabels.push(`${phase.name}/${plan.label}`);
+      if (lastPlanLabels.length < 12) {
+        lastPlanLabels.push(`${phase.name}/${plan.label}`);
+      }
       debugLog(
         `[RT] Candidate ${candidateAttempts}: ${phase.name}/${plan.label} (${
           plan.waypoints.length - 2
         } WPs)`,
       );
-
-      let fetchResult = await getMapboxRouteDetailed(
-        plan.waypoints,
-        mapboxProfile,
-        phase.exclude,
-        plan.radiuses,
-        accessToken,
-        {
-          continueStraight: phase.continueStraight,
-          alternatives: useMapboxAlternatives,
-          maxAttempts: mapboxCandidateMaxAttempts,
-          timeoutMs: mapboxCandidateTimeoutMs,
-          retryDelayBaseMs: 220,
-        },
+      const requestAlternatives = shouldRequestSearchAlternatives(
+        phase.name,
+        plan.label,
+        phaseAttempts,
       );
-      const primaryFailureKind = getRetryKindFromMapboxFailure(fetchResult);
-      if (primaryFailureKind === "rate_limit") rateLimitHits += 1;
-      if (primaryFailureKind === "timeout") timeoutHits += 1;
+      const maxEvaluatedAlternatives = requestAlternatives
+        ? (avoidHighwaysRoundTripSearch ? 2 : 3)
+        : 1;
+
+      let fetchAttempt = await fetchRoundTripPlanRoute(plan, {
+        exclude: phase.exclude,
+        radiuses: effectivePlanRadiuses(plan),
+        continueStraight: phase.continueStraight,
+        alternatives: requestAlternatives,
+        bearings: effectivePlanBearings(plan),
+        avoidManeuverRadiusMeters: effectiveAvoidManeuverRadius,
+        maxAttempts: candidateAttempts >= 2 || !hasMapboxCallBudget(8000)
+          ? 1
+          : mapboxCandidateMaxAttempts,
+        timeoutMs: boundedMapboxTimeoutMs(mapboxCandidateTimeoutMs),
+        retryDelayBaseMs: 220,
+        includeGuidance: false,
+        forceLegacyWaypoints: shouldUseLegacyWaypointsFirst(plan),
+      });
+      mapboxCallCount += fetchAttempt.callsUsed;
+      recordProviderFailures(fetchAttempt.failureResults);
+      let fetchResult = fetchAttempt.fetchResult;
       if (shouldAbortForProviderPressure()) break;
 
       const relaxedPhaseExclude = relaxStreetExcludes(
@@ -834,32 +2692,31 @@ export async function searchBestRoundTripRoute({
 
       if (
         fetchResult.outcome === "no_route" &&
-        relaxedPhaseExclude !== phase.exclude
+        relaxedPhaseExclude !== phase.exclude &&
+        hasMapboxCallBudget(3500)
       ) {
         debugLog(
           `[RT] ${plan.label}: retry with relaxed excludes "${
             relaxedPhaseExclude || "none"
           }"`,
         );
-        const relaxedFetch = await getMapboxRouteDetailed(
-          plan.waypoints,
-          mapboxProfile,
-          relaxedPhaseExclude,
-          plan.radiuses,
-          accessToken,
-          {
-            continueStraight: phase.continueStraight,
-            alternatives: useMapboxAlternatives,
-            maxAttempts: 1,
-            timeoutMs: mapboxRelaxedTimeoutMs,
-          },
-        );
-        const relaxedFailureKind = getRetryKindFromMapboxFailure(relaxedFetch);
-        if (relaxedFailureKind === "rate_limit") rateLimitHits += 1;
-        if (relaxedFailureKind === "timeout") timeoutHits += 1;
+        const relaxedAttempt = await fetchRoundTripPlanRoute(plan, {
+          exclude: relaxedPhaseExclude,
+          radiuses: effectivePlanRadiuses(plan),
+          continueStraight: phase.continueStraight,
+          alternatives: false,
+          bearings: effectivePlanBearings(plan),
+          avoidManeuverRadiusMeters: effectiveAvoidManeuverRadius,
+          maxAttempts: 1,
+          timeoutMs: boundedMapboxTimeoutMs(mapboxRelaxedTimeoutMs),
+          includeGuidance: false,
+        });
+        mapboxCallCount += relaxedAttempt.callsUsed;
+        recordProviderFailures(relaxedAttempt.failureResults);
         if (shouldAbortForProviderPressure()) break;
-        if (relaxedFetch.outcome === "ok") {
-          fetchResult = relaxedFetch;
+        if (relaxedAttempt.fetchResult.outcome === "ok") {
+          fetchAttempt = relaxedAttempt;
+          fetchResult = relaxedAttempt.fetchResult;
         }
       }
 
@@ -873,6 +2730,12 @@ export async function searchBestRoundTripRoute({
           ? `mapbox_http_${fetchResult.statusCode ?? "unknown"}`
           : `mapbox_${fetchResult.outcome}`;
         registerReject(reason);
+        recordRejectSample({
+          phaseName: phase.name,
+          plan,
+          reason,
+          exclude: phase.exclude,
+        });
         debugLog(
           `[RT] ${phase.name}/${plan.label}: ${reason}${
             fetchResult.details ? ` (${fetchResult.details.slice(0, 160)})` : ""
@@ -882,57 +2745,157 @@ export async function searchBestRoundTripRoute({
       }
 
       const primaryRoutes = fetchResult.routes?.length
-        ? fetchResult.routes
+        ? fetchResult.routes.slice(0, maxEvaluatedAlternatives)
         : fetchResult.route
         ? [fetchResult.route]
         : [];
       const primarySelection = chooseBestRouteAlternative(
         primaryRoutes,
         phase.distanceConfig,
+        phase.exclude,
       );
       if (primarySelection == null) {
         rejectedCandidates += 1;
         registerReject("mapbox_empty_route");
+        recordRejectSample({
+          phaseName: phase.name,
+          plan,
+          reason: "mapbox_empty_route",
+          route: primaryRoutes[0],
+          routeRequestMeta: routeRequestMeta(plan, primaryRoutes[0], {
+            silentViaUsed: fetchAttempt.silentViaRequested &&
+              !fetchAttempt.silentViaFallbackUsed,
+            silentViaFallbackUsed: fetchAttempt.silentViaFallbackUsed,
+            overview: fetchAttempt.overview,
+            includeGuidance: fetchAttempt.includeGuidance,
+            stepsRequested: fetchAttempt.stepsRequested,
+          }),
+          exclude: phase.exclude,
+        });
         continue;
       }
       let route = primarySelection.route;
       let quality = primarySelection.quality;
+      let selectedExclude = phase.exclude;
+      let selectedContinueStraight = phase.continueStraight;
+      let selectedDistanceConfig = phase.distanceConfig;
+      let selectedForceLegacyWaypoints = false;
+      let selectedRouteRequestMeta = routeRequestMeta(plan, route, {
+        silentViaUsed: fetchAttempt.silentViaRequested &&
+          !fetchAttempt.silentViaFallbackUsed,
+        silentViaFallbackUsed: fetchAttempt.silentViaFallbackUsed,
+        overview: fetchAttempt.overview,
+        includeGuidance: fetchAttempt.includeGuidance,
+        stepsRequested: fetchAttempt.stepsRequested,
+      });
+
+      const shouldTryLegacyQualityFallback = fetchAttempt.silentViaRequested &&
+        !fetchAttempt.silentViaFallbackUsed &&
+        plan.waypoints.length > 3 &&
+        rateLimitHits === 0 &&
+        timeoutHits < 2 &&
+        hasMapboxCallBudget(3200) &&
+        (
+          quality.reason.startsWith("u_turn") ||
+          quality.reason.startsWith("short_sport_shape=") ||
+          quality.reason.startsWith("short_sport_distance=") ||
+          quality.reason.startsWith("cleanup_short_sport_shape=") ||
+          quality.reason.startsWith("cleanup_short_sport_distance=")
+        );
+      if (quality.tier === "rejected" && shouldTryLegacyQualityFallback) {
+        debugLog(
+          `[RT] ${plan.label}: silent-via rejected (${quality.reason}), trying legacy waypoint quality fallback`,
+        );
+        const legacyContinueStraight = shouldTryShortSportLegacyReverse(plan)
+          ? false
+          : phase.continueStraight;
+        const legacyAttempt = await fetchRoundTripPlanRoute(plan, {
+          exclude: phase.exclude,
+          radiuses: effectivePlanRadiuses(plan),
+          continueStraight: legacyContinueStraight,
+          alternatives: requestAlternatives,
+          bearings: effectivePlanBearings(plan),
+          avoidManeuverRadiusMeters: effectiveAvoidManeuverRadius,
+          maxAttempts: 1,
+          timeoutMs: boundedMapboxTimeoutMs(mapboxCandidateTimeoutMs),
+          includeGuidance: false,
+          forceLegacyWaypoints: true,
+        });
+        mapboxCallCount += legacyAttempt.callsUsed;
+        recordProviderFailures(legacyAttempt.failureResults);
+        if (shouldAbortForProviderPressure()) break;
+        const legacyRoutes = legacyAttempt.fetchResult.routes?.length
+          ? legacyAttempt.fetchResult.routes.slice(0, maxEvaluatedAlternatives)
+          : legacyAttempt.fetchResult.route
+          ? [legacyAttempt.fetchResult.route]
+          : [];
+        const legacySelection = chooseBestRouteAlternative(
+          legacyRoutes,
+          phase.distanceConfig,
+          phase.exclude,
+        );
+        if (legacySelection != null) {
+          const legacyQuality = legacySelection.quality;
+          debugLog(
+            `[RT] ${plan.label}: legacy fallback tier=${legacyQuality.tier}, score=${
+              legacyQuality.score.toFixed(1)
+            }, distance=${legacyQuality.actualDistanceKm.toFixed(1)}km`,
+          );
+          if (
+            legacyQuality.tier !== "rejected" ||
+            legacyQuality.score < quality.score
+          ) {
+            route = legacySelection.route;
+            quality = legacyQuality;
+            selectedExclude = phase.exclude;
+            selectedContinueStraight = legacyContinueStraight;
+            selectedDistanceConfig = phase.distanceConfig;
+            selectedForceLegacyWaypoints = true;
+            selectedRouteRequestMeta = routeRequestMeta(plan, route, {
+              silentViaUsed: false,
+              silentViaFallbackUsed: true,
+              overview: legacyAttempt.overview,
+              includeGuidance: legacyAttempt.includeGuidance,
+              stepsRequested: legacyAttempt.stepsRequested,
+            });
+          }
+        }
+      }
 
       if (
         quality.tier === "rejected" &&
         relaxedPhaseExclude !== phase.exclude &&
         quality.reason.startsWith("overlap=") &&
         rateLimitHits === 0 &&
-        timeoutHits < 2
+        timeoutHits < 2 &&
+        hasMapboxCallBudget(3500)
       ) {
         debugLog(
           `[RT] ${plan.label}: rejected with strict excludes, trying relaxed street filter`,
         );
-        const relaxedFetch = await getMapboxRouteDetailed(
-          plan.waypoints,
-          mapboxProfile,
-          relaxedPhaseExclude,
-          plan.radiuses,
-          accessToken,
-          {
-            continueStraight: phase.continueStraight,
-            alternatives: useMapboxAlternatives,
-            maxAttempts: 1,
-            timeoutMs: mapboxRelaxedTimeoutMs,
-          },
-        );
-        const relaxedFailureKind = getRetryKindFromMapboxFailure(relaxedFetch);
-        if (relaxedFailureKind === "rate_limit") rateLimitHits += 1;
-        if (relaxedFailureKind === "timeout") timeoutHits += 1;
+        const relaxedAttempt = await fetchRoundTripPlanRoute(plan, {
+          exclude: relaxedPhaseExclude,
+          radiuses: effectivePlanRadiuses(plan),
+          continueStraight: phase.continueStraight,
+          alternatives: false,
+          bearings: effectivePlanBearings(plan),
+          avoidManeuverRadiusMeters: effectiveAvoidManeuverRadius,
+          maxAttempts: 1,
+          timeoutMs: boundedMapboxTimeoutMs(mapboxRelaxedTimeoutMs),
+          includeGuidance: false,
+        });
+        mapboxCallCount += relaxedAttempt.callsUsed;
+        recordProviderFailures(relaxedAttempt.failureResults);
         if (shouldAbortForProviderPressure()) break;
-        const relaxedRoutes = relaxedFetch.routes?.length
-          ? relaxedFetch.routes
-          : relaxedFetch.route
-          ? [relaxedFetch.route]
+        const relaxedRoutes = relaxedAttempt.fetchResult.routes?.length
+          ? relaxedAttempt.fetchResult.routes.slice(0, maxEvaluatedAlternatives)
+          : relaxedAttempt.fetchResult.route
+          ? [relaxedAttempt.fetchResult.route]
           : [];
         const relaxedSelection = chooseBestRouteAlternative(
           relaxedRoutes,
           phase.distanceConfig,
+          relaxedPhaseExclude,
         );
         if (relaxedSelection != null) {
           const relaxedQuality = relaxedSelection.quality;
@@ -952,6 +2915,18 @@ export async function searchBestRoundTripRoute({
           ) {
             route = relaxedSelection.route;
             quality = relaxedQuality;
+            selectedExclude = relaxedPhaseExclude;
+            selectedDistanceConfig = phase.distanceConfig;
+            selectedForceLegacyWaypoints = relaxedAttempt
+              .silentViaFallbackUsed;
+            selectedRouteRequestMeta = routeRequestMeta(plan, route, {
+              silentViaUsed: relaxedAttempt.silentViaRequested &&
+                !relaxedAttempt.silentViaFallbackUsed,
+              silentViaFallbackUsed: relaxedAttempt.silentViaFallbackUsed,
+              overview: relaxedAttempt.overview,
+              includeGuidance: relaxedAttempt.includeGuidance,
+              stepsRequested: relaxedAttempt.stepsRequested,
+            });
           }
         }
       }
@@ -985,6 +2960,15 @@ export async function searchBestRoundTripRoute({
       if (quality.tier === "rejected") {
         rejectedCandidates += 1;
         registerReject(quality.reason);
+        recordRejectSample({
+          phaseName: phase.name,
+          plan,
+          reason: quality.reason,
+          route,
+          quality,
+          routeRequestMeta: selectedRouteRequestMeta,
+          exclude: selectedExclude,
+        });
         continue;
       }
 
@@ -992,6 +2976,15 @@ export async function searchBestRoundTripRoute({
       if (seenRouteFingerprints.has(routeFingerprint)) {
         duplicateSkips += 1;
         registerReject("duplicate_skip");
+        recordRejectSample({
+          phaseName: phase.name,
+          plan,
+          reason: "duplicate_skip",
+          route,
+          quality,
+          routeRequestMeta: selectedRouteRequestMeta,
+          exclude: selectedExclude,
+        });
         debugLog(
           `[RT] ${phase.name}/${plan.label}: duplicate_skip fingerprint=${
             routeFingerprint.slice(0, 24)
@@ -1006,6 +2999,12 @@ export async function searchBestRoundTripRoute({
             route,
             quality,
             fingerprint: routeFingerprint,
+            routeRequestMeta: selectedRouteRequestMeta,
+            context: {
+              exclude: selectedExclude,
+              continueStraight: selectedContinueStraight,
+              distanceConfig: selectedDistanceConfig,
+            },
           };
         }
         continue;
@@ -1014,23 +3013,65 @@ export async function searchBestRoundTripRoute({
 
       acceptedCandidates += 1;
       phaseAcceptedCandidates += 1;
+      const distanceFitTier = sessionDistanceFitTierForQuality(
+        quality,
+        selectedDistanceConfig,
+      );
+      const acceptedContext = {
+        exclude: selectedExclude,
+        continueStraight: selectedContinueStraight,
+        distanceConfig: selectedDistanceConfig,
+        forceLegacyWaypoints: selectedForceLegacyWaypoints,
+      };
+      acceptedRouteCandidates.push({
+        plan,
+        phaseName: phase.name,
+        distanceFitTier,
+        route,
+        fingerprint: routeFingerprint,
+        quality,
+        context: acceptedContext,
+        routeRequestMeta: selectedRouteRequestMeta,
+      });
+      if (acceptedRouteCandidates.length > maxAcceptedCandidateBuffer) {
+        acceptedRouteCandidates.sort((a, b) =>
+          a.quality.score - b.quality.score
+        );
+        acceptedRouteCandidates.length = maxAcceptedCandidateBuffer;
+      }
       if (!bestQuality || quality.score < bestQuality.score) {
         bestPlan = plan;
         bestRoute = route;
         bestQuality = quality;
+        bestContext = acceptedContext;
+        bestPhaseName = phase.name;
+        bestCandidateFamily = plan.label;
+        bestDistanceFitTier = distanceFitTier;
+        bestRouteRequestMeta = selectedRouteRequestMeta;
       }
       if (
         phase.name === "balanced" &&
-        isBalancedPresentableCandidate(quality)
+        isBalancedPresentableCandidate(quality) &&
+        preferenceGoodEnough(quality)
       ) {
         balancedHasPresentableCandidate = true;
       }
 
+      const noHighwayMediumLongShapeClean =
+        (quality.shapeMetrics?.loopnessScore ?? 0) >=
+          (targetDistanceKm >= 90 ? 62 : 54) &&
+        (quality.shapeMetrics?.spurScore ?? 100) <=
+          (targetDistanceKm >= 90 ? 28 : 34) &&
+        (quality.shapeMetrics?.outAndBackScore ?? 100) <=
+          (targetDistanceKm >= 90 ? 28 : 34) &&
+        (quality.shapeMetrics?.deadEndArmScore ?? 100) <=
+          (targetDistanceKm >= 90 ? 24 : 30);
       const noHighwayMediumLongGoodEnough = avoidHighwaysRoundTripSearch &&
         targetDistanceKm > 60 &&
         (quality.tier === "ideal" || quality.tier === "good") &&
         quality.distanceDeltaKm <= targetDistanceKm * 0.15 &&
-        quality.overlapPercent <= (mode === "Kurvenjagd" ? 18 : 22);
+        quality.overlapPercent <= (mode === "Kurvenjagd" ? 18 : 22) &&
+        noHighwayMediumLongShapeClean;
       // Stop aggressively for medium no-highway Sport acceptable hits:
       // alpine geometry means retrying will not improve quality, and
       // running all 6 Mapbox candidates costs >26s (client timeout).
@@ -1040,14 +3081,32 @@ export async function searchBestRoundTripRoute({
         mode === "Sport Mode" &&
         quality.tier === "acceptable" &&
         quality.distanceDeltaKm <= targetDistanceKm * 0.30 &&
+        quality.actualDistanceKm >=
+          Math.max(
+            selectedDistanceConfig.acceptableMinKm,
+            targetDistanceKm * 0.88,
+          ) &&
         (plan.label.startsWith("nohw-medium-sport-orbital-") ||
           plan.label.startsWith("nohw-medium-sport-orbital-rheintal-") ||
           plan.label.startsWith("nohw-medium-sport-cardinal-"));
+      const noHighwayMediumSportShapeCleanForEarlyStop =
+        !noHighwayMediumSportAcceptableEarly ||
+        (
+          (quality.shapeMetrics?.loopnessScore ?? 0) >=
+            (targetDistanceKm >= 90 ? 58 : 52) &&
+          (quality.shapeMetrics?.spurScore ?? 100) <=
+            (targetDistanceKm >= 90 ? 32 : 38) &&
+          (quality.shapeMetrics?.outAndBackScore ?? 100) <=
+            (targetDistanceKm >= 90 ? 30 : 36) &&
+          (quality.shapeMetrics?.deadEndArmScore ?? 100) <=
+            (targetDistanceKm >= 90 ? 28 : 34)
+        );
       const noHighwayMediumRescueCandidate = avoidHighwaysRoundTripSearch &&
         targetDistanceKm > 60 &&
         targetDistanceKm <= 85 &&
         (plan.label === "nohw-medium-rhine-south" ||
-          noHighwayMediumSportAcceptableEarly);
+          (noHighwayMediumSportAcceptableEarly &&
+            noHighwayMediumSportShapeCleanForEarlyStop));
       const shouldStopAfterGoodCandidate = quality.tier === "ideal" ||
         noHighwayMediumLongGoodEnough ||
         noHighwayMediumRescueCandidate ||
@@ -1069,13 +3128,24 @@ export async function searchBestRoundTripRoute({
       const shouldStopAfterAcceptableCandidate =
         quality.tier === "acceptable" &&
         !avoidHighwaysTightRoundTripSearch &&
+        noHighwayMediumSportShapeCleanForEarlyStop &&
         (
           phase.name === "fallback" ||
           phaseAcceptedCandidates >= 2 ||
           candidateAttempts >= (constrainedRoundTripSearch ? 3 : 2)
         );
 
-      if (shouldStopAfterGoodCandidate || shouldStopAfterAcceptableCandidate) {
+      if (
+        (shouldStopAfterGoodCandidate || shouldStopAfterAcceptableCandidate) &&
+        styleGoodEnoughForEarlyStop(quality) &&
+        preferenceGoodEnough(quality)
+      ) {
+        if (shouldContinueForSessionCandidateQueue()) {
+          debugLog(
+            `[RT] Phase ${phase.name}: usable session candidate found, continuing lightweight batch to fill queue (${sessionCandidateQueueCount()}/${targetSessionCandidateQueueSize})`,
+          );
+          continue;
+        }
         debugLog(
           `[RT] Phase ${phase.name}: usable candidate found, stopping early after ${phaseAttempts} attempts`,
         );
@@ -1099,20 +3169,28 @@ export async function searchBestRoundTripRoute({
     ) {
       break;
     }
-    if (bestQuality?.tier === "ideal") {
+    if (
+      bestQuality?.tier === "ideal" &&
+      styleGoodEnoughForEarlyStop(bestQuality) &&
+      preferenceGoodEnough(bestQuality) &&
+      !shouldContinueForSessionCandidateQueue()
+    ) {
       break;
     }
     if (
       phaseAcceptedCandidates > 0 &&
       bestQuality?.tier === "good" &&
-      !avoidHighwaysTightRoundTripSearch
+      !avoidHighwaysTightRoundTripSearch &&
+      styleGoodEnoughForEarlyStop(bestQuality) &&
+      preferenceGoodEnough(bestQuality) &&
+      !shouldContinueForSessionCandidateQueue()
     ) {
       break;
     }
     if (
       phase.name === "balanced" &&
       balancedHasPresentableCandidate &&
-      !avoidHighwaysTightRoundTripSearch
+      !avoidHighwaysRoundTripSearch
     ) {
       debugLog(
         `[RT] Phase balanced: presentable candidate found, skipping fallback/rescue for this seed`,
@@ -1125,6 +3203,9 @@ export async function searchBestRoundTripRoute({
       phaseAcceptedCandidates > 0 &&
       bestQuality?.tier === "acceptable" &&
       !avoidHighwaysTightRoundTripSearch &&
+      styleGoodEnoughForEarlyStop(bestQuality) &&
+      preferenceGoodEnough(bestQuality) &&
+      !shouldContinueForSessionCandidateQueue() &&
       (
         phase.name === "fallback" ||
         candidateAttempts >= (constrainedRoundTripSearch ? 3 : 2)
@@ -1135,6 +3216,21 @@ export async function searchBestRoundTripRoute({
   }
 
   if (!bestPlan || !bestRoute || !bestQuality) {
+    if (bestEmergencyDuplicate != null && !batchingUsed) {
+      const hydratedDuplicate = await hydrateGuidanceRoute(
+        bestEmergencyDuplicate.plan,
+        bestEmergencyDuplicate.context,
+      );
+      if (hydratedDuplicate == null) {
+        registerReject("guidance_fetch_failed");
+        bestEmergencyDuplicate = null;
+      } else {
+        bestEmergencyDuplicate.route = hydratedDuplicate.route;
+        bestEmergencyDuplicate.quality = hydratedDuplicate.quality;
+        bestEmergencyDuplicate.routeRequestMeta =
+          hydratedDuplicate.routeRequestMeta;
+      }
+    }
     if (bestEmergencyDuplicate != null) {
       debugWarn(
         `[RT] Emergency duplicate fallback: ${bestEmergencyDuplicate.plan.label} (${
@@ -1144,18 +3240,68 @@ export async function searchBestRoundTripRoute({
       return {
         route: bestEmergencyDuplicate.route,
         waypoints: bestEmergencyDuplicate.plan.waypoints,
-        radiuses: bestEmergencyDuplicate.plan.radiuses,
+        radiuses: effectivePlanRadiuses(bestEmergencyDuplicate.plan),
         quality: bestEmergencyDuplicate.quality,
         candidateAttempts,
         acceptedCandidates,
         rejectedCandidates,
+        mapboxCallCount,
+        evaluatedRouteCount,
+        guidanceHydrationCount,
+        searchStageSuccess: "duplicate_fallback",
+        selectedCandidateFamily: bestEmergencyDuplicate.plan.label,
+        distanceFitTier: sessionDistanceFitTierForQuality(
+          bestEmergencyDuplicate.quality,
+          bestEmergencyDuplicate.context.distanceConfig,
+        ),
         rejectReasons: Object.fromEntries(rejectReasons),
-        searchPhases: searchPhases.map((phase) => phase.name),
+        batchIndex: normalizedBatchIndex,
+        batchCount: normalizedBatchCount,
+        batchExhausted: false,
+        searchPhases: searchPhaseNames,
         lastPlanLabels,
         variantHint: normalizedVariantHint,
         fingerprintHint: normalizedFingerprintHint,
         duplicateSkips,
         emergencyDuplicateUsed: true,
+        safeFallbackUsed:
+          bestEmergencyDuplicate.quality.safeFallbackUsed === true,
+        safeFallbackReason: bestEmergencyDuplicate.quality.safeFallbackReason ??
+          null,
+        requestedStyle: bestEmergencyDuplicate.quality.requestedStyle ?? null,
+        deliveredStyle: bestEmergencyDuplicate.quality.deliveredStyle ?? null,
+        styleDowngraded:
+          bestEmergencyDuplicate.quality.styleDowngraded === true,
+        silentViaUsed: bestEmergencyDuplicate.routeRequestMeta.silentViaUsed,
+        silentViaWaypoints:
+          bestEmergencyDuplicate.routeRequestMeta.silentViaWaypoints,
+        shapingPointCount:
+          bestEmergencyDuplicate.routeRequestMeta.shapingPointCount,
+        mapboxLegCount: bestEmergencyDuplicate.routeRequestMeta.mapboxLegCount,
+        arriveManeuverCount:
+          bestEmergencyDuplicate.routeRequestMeta.arriveManeuverCount,
+        silentViaFallbackUsed:
+          bestEmergencyDuplicate.routeRequestMeta.silentViaFallbackUsed ||
+          silentViaFallbackUsed,
+        guidanceDegraded: false,
+        hydrationFallbackUsed: false,
+        finalGeometrySource: "duplicate_fallback",
+        postHydrationRejectReason: null,
+        preHydrationQualityTier: bestEmergencyDuplicate.quality.tier,
+        hydrationDiagnostics,
+        rejectSamples,
+        bestCandidatePayload: buildSessionCandidateQueuePayload()[0] ?? null,
+        candidateQueuePayload: buildSessionCandidateQueuePayload(),
+        preferenceMatch: bestEmergencyDuplicate.quality == null ? null : {
+          matchedPreferenceCount:
+            bestEmergencyDuplicate.quality.matchedPreferenceCount ?? 0,
+          preferenceMatchScore:
+            bestEmergencyDuplicate.quality.preferenceMatchScore ?? 0,
+          preferenceAreaDistancesMeters:
+            bestEmergencyDuplicate.quality.preferenceAreaDistancesMeters ?? [],
+          preferenceIgnoredReason:
+            bestEmergencyDuplicate.quality.preferenceIgnoredReason ?? null,
+        },
       };
     }
     debugLog(
@@ -1171,14 +3317,335 @@ export async function searchBestRoundTripRoute({
       candidateAttempts,
       acceptedCandidates,
       rejectedCandidates,
+      mapboxCallCount,
+      evaluatedRouteCount,
+      guidanceHydrationCount,
+      searchStageSuccess: null,
+      selectedCandidateFamily: null,
+      distanceFitTier: null,
       rejectReasons: Object.fromEntries(rejectReasons),
-      searchPhases: searchPhases.map((phase) => phase.name),
+      batchIndex: normalizedBatchIndex,
+      batchCount: normalizedBatchCount,
+      batchExhausted: batchingUsed,
+      searchPhases: searchPhaseNames,
       lastPlanLabels,
       variantHint: normalizedVariantHint,
       fingerprintHint: normalizedFingerprintHint,
       duplicateSkips,
       exhausted: true,
+      silentViaUsed: silentViaAttempted,
+      silentViaWaypoints: lastSilentViaWaypoints,
+      shapingPointCount: lastSilentViaShapingPointCount,
+      mapboxLegCount: lastSilentViaMapboxLegCount,
+      arriveManeuverCount: lastSilentViaArriveManeuverCount,
+      silentViaFallbackUsed,
+      hydrationDiagnostics,
+      rejectSamples,
+      bestCandidatePayload: buildSessionCandidateQueuePayload()[0] ?? null,
+      candidateQueuePayload: buildSessionCandidateQueuePayload(),
     };
+  }
+
+  if (bestContext != null) {
+    let hydratedSelection: {
+      plan: RoundTripCandidatePlan;
+      phaseName: string;
+      distanceFitTier: string;
+      route: any;
+      quality: RouteQualityEvaluation;
+      routeRequestMeta: RoundTripRouteRequestMeta;
+    } | null = null;
+    const isPreHydrationFallbackAllowed = (
+      candidate: typeof acceptedRouteCandidates[number],
+    ): boolean => {
+      if (candidate.quality.tier === "rejected") return false;
+      const candidateMeta = candidate.routeRequestMeta;
+      if (candidateMeta.overview !== "full") {
+        registerReject(
+          candidateMeta.overview == null
+            ? "pre_hydration_no_full_geometry"
+            : `pre_hydration_overview=${candidateMeta.overview}`,
+        );
+        return false;
+      }
+      if (
+        candidateMeta.silentViaUsed === true &&
+        candidateMeta.stepsRequested !== true
+      ) {
+        registerReject("pre_hydration_silent_via_without_steps");
+        return false;
+      }
+      if (candidateMeta.displayGeometryRejectReason != null) {
+        registerReject(candidateMeta.displayGeometryRejectReason);
+        return false;
+      }
+      if (candidate.distanceFitTier === "outside_bucket") {
+        const bounds = safeFallbackBounds();
+        if (
+          bounds == null ||
+          candidate.quality.actualDistanceKm < bounds.minKm ||
+          candidate.quality.actualDistanceKm > bounds.maxKm ||
+          (
+            candidate.quality.safeFallbackUsed !== true &&
+            candidate.quality.tier !== "ideal" &&
+            candidate.quality.tier !== "good"
+          )
+        ) {
+          return false;
+        }
+      }
+      if (
+        avoidHighways &&
+        !normalizeExcludeParams(candidate.context.exclude).includes("motorway")
+      ) {
+        return false;
+      }
+      const shape = candidate.quality.shapeMetrics;
+      if (shape == null) return false;
+      const candidateNoHighwayCompatible = normalizeExcludeParams(
+        candidate.context.exclude,
+      ).includes("motorway");
+      const fallbackLoopnessMinimum =
+        candidate.quality.safeFallbackUsed === true
+          ? mode === "Sport Mode" ? 58 : 52
+          : 52;
+      if (shape.loopnessScore < fallbackLoopnessMinimum) return false;
+      const isLocalHairpinFallback =
+        candidate.quality.safeFallbackUsed === true &&
+        shape.geometricUTurnCount <= (mode === "Kurvenjagd" ? 3 : 2) &&
+        shape.cleanupUTurnCount <= 2 &&
+        shape.centerReentryCount <= 1 &&
+        shape.cleanupDistanceRetentionRatio >= 0.92;
+      const isCleanAcceptedNoHighwaySportHairpin =
+        candidate.quality.safeFallbackUsed !== true &&
+        mode === "Sport Mode" &&
+        candidateNoHighwayCompatible &&
+        targetDistanceKm > 60 &&
+        targetDistanceKm <= 115 &&
+        shape.geometricUTurnCount <= (targetDistanceKm > 85 ? 6 : 5) &&
+        shape.cleanupUTurnCount <= (targetDistanceKm > 85 ? 6 : 5) &&
+        shape.loopnessScore >= 60 &&
+        shape.spurScore <= 24 &&
+        shape.outAndBackScore <= 20 &&
+        shape.deadEndArmScore <= 20 &&
+        shape.centerReentryCount <= 2 &&
+        shape.repeatedStartAreaPercent <= 22 &&
+        shape.centralReturnPercent <= 18 &&
+        shape.oppositeOverlapPercent <= 24 &&
+        shape.cleanupRemovedPercent <= 22 &&
+        shape.cleanupDistanceRetentionRatio >= 0.82 &&
+        candidate.quality.overlapPercent <= 30;
+      const isCleanAcceptedNoHighwayStyleHairpin =
+        candidate.quality.safeFallbackUsed !== true &&
+        mode !== "Sport Mode" &&
+        candidateNoHighwayCompatible &&
+        targetDistanceKm > 60 &&
+        targetDistanceKm <= 115 &&
+        shape.geometricUTurnCount <= (mode === "Kurvenjagd" ? 5 : 4) &&
+        shape.cleanupUTurnCount <= (mode === "Kurvenjagd" ? 5 : 4) &&
+        shape.loopnessScore >= 56 &&
+        shape.spurScore <= 28 &&
+        shape.outAndBackScore <= 24 &&
+        shape.deadEndArmScore <= 24 &&
+        shape.centerReentryCount <= 2 &&
+        shape.repeatedStartAreaPercent <= 24 &&
+        shape.centralReturnPercent <= 20 &&
+        shape.oppositeOverlapPercent <= 24 &&
+        shape.cleanupRemovedPercent <= 22 &&
+        shape.cleanupDistanceRetentionRatio >= 0.82 &&
+        candidate.quality.overlapPercent <= 30;
+      const hardUTurnPresent = candidate.quality.hasUTurn === true &&
+        !isLocalHairpinFallback &&
+        !isCleanAcceptedNoHighwaySportHairpin &&
+        !isCleanAcceptedNoHighwayStyleHairpin;
+      if (hardUTurnPresent) return false;
+      const loopnessMin = fallbackLoopnessMinimum;
+      const spurMax = candidate.quality.safeFallbackUsed === true ? 18 : 30;
+      const outAndBackMax = candidate.quality.safeFallbackUsed === true
+        ? 18
+        : 30;
+      const deadEndMax = candidate.quality.safeFallbackUsed === true ? 18 : 30;
+      return shape.loopnessScore >= loopnessMin &&
+        shape.spurScore <= spurMax &&
+        shape.outAndBackScore <= outAndBackMax &&
+        shape.deadEndArmScore <= deadEndMax &&
+        shape.centerReentryCount <=
+          (isCleanAcceptedNoHighwaySportHairpin ||
+              isCleanAcceptedNoHighwayStyleHairpin
+            ? 2
+            : 1) &&
+        shape.repeatedStartAreaPercent <=
+          (isCleanAcceptedNoHighwaySportHairpin ||
+              isCleanAcceptedNoHighwayStyleHairpin
+            ? 24
+            : 14) &&
+        shape.centralReturnPercent <=
+          (isCleanAcceptedNoHighwaySportHairpin ||
+              isCleanAcceptedNoHighwayStyleHairpin
+            ? 20
+            : 12) &&
+        shape.cleanupRemovedPercent <=
+          (isCleanAcceptedNoHighwaySportHairpin ||
+              isCleanAcceptedNoHighwayStyleHairpin
+            ? 22
+            : 14) &&
+        candidate.quality.overlapPercent <=
+          (isCleanAcceptedNoHighwaySportHairpin ||
+              isCleanAcceptedNoHighwayStyleHairpin
+            ? 30
+            : candidate.quality.safeFallbackUsed === true
+            ? 28
+            : 24);
+    };
+    const hydrationFallbackRank = (
+      candidate: typeof acceptedRouteCandidates[number],
+    ): number => {
+      const shape = candidate.quality.shapeMetrics;
+      const distancePenalty = candidate.distanceFitTier === "outside_bucket"
+        ? 40
+        : candidate.distanceFitTier === "acceptable"
+        ? 12
+        : 0;
+      const shapePenalty = shape == null
+        ? 200
+        : Math.max(0, 72 - shape.loopnessScore) * 6 +
+          shape.spurScore * 5 +
+          shape.outAndBackScore * 3 +
+          shape.deadEndArmScore * 4 +
+          shape.centerReentryCount * 25 +
+          shape.geometricUTurnCount * 8 +
+          shape.cleanupUTurnCount * 10;
+      return candidate.quality.score + distancePenalty + shapePenalty;
+    };
+    const maxHydrationCandidates = batchingUsed
+      ? 0
+      : avoidHighwaysRoundTripSearch
+      ? targetDistanceKm >= 90 ? 2 : targetDistanceKm >= 70 ? 2 : 4
+      : 2;
+    const hydrationQueue = acceptedRouteCandidates
+      .slice()
+      .sort((a, b) => a.quality.score - b.quality.score)
+      .slice(0, maxHydrationCandidates);
+    for (const candidate of hydrationQueue) {
+      const hydratedCandidate = await hydrateGuidanceRoute(
+        candidate.plan,
+        candidate.context,
+      );
+      recordHydrationDiagnostic({
+        candidate,
+        hydrationAttempted: true,
+        hydrationOutcome: hydratedCandidate == null ? "rejected" : "accepted",
+        hydratedRoute: lastHydrationRoute,
+        hydratedQuality: lastHydrationQuality,
+        hydratedMeta: lastHydrationMeta,
+        rejectReason: hydratedCandidate == null
+          ? lastHydrationRejectReason
+          : null,
+      });
+      if (hydratedCandidate == null) {
+        postHydrationRejectReason = lastHydrationRejectReason ??
+          "guidance_hydration_failed";
+        continue;
+      }
+      hydratedSelection = {
+        plan: candidate.plan,
+        phaseName: candidate.phaseName,
+        distanceFitTier: sessionDistanceFitTierForQuality(
+          hydratedCandidate.quality,
+          candidate.context.distanceConfig,
+        ),
+        route: hydratedCandidate.route,
+        quality: hydratedCandidate.quality,
+        routeRequestMeta: hydratedCandidate.routeRequestMeta,
+      };
+      finalGeometrySource = "hydrated";
+      preHydrationQualityTier = candidate.quality.tier;
+      break;
+    }
+    if (hydratedSelection == null) {
+      const allowPreHydrationFallback = !batchingUsed;
+      const fallbackCandidate = hydrationQueue
+        .slice()
+        .sort((a, b) => hydrationFallbackRank(a) - hydrationFallbackRank(b))
+        .find(isPreHydrationFallbackAllowed) ??
+        (allowPreHydrationFallback
+          ? acceptedRouteCandidates
+            .slice()
+            .sort((a, b) => hydrationFallbackRank(a) - hydrationFallbackRank(b))
+            .find(isPreHydrationFallbackAllowed)
+          : undefined);
+      if (fallbackCandidate == null) {
+        registerReject("guidance_fetch_failed");
+        debugLog(
+          `[RT] Search exhausted after accepted candidates because guidance hydration failed. Reject summary=${
+            JSON.stringify(Object.fromEntries(rejectReasons))
+          }`,
+        );
+        return {
+          route: null,
+          waypoints: [],
+          radiuses: "",
+          quality: null,
+          candidateAttempts,
+          acceptedCandidates,
+          rejectedCandidates,
+          mapboxCallCount,
+          evaluatedRouteCount,
+          guidanceHydrationCount,
+          searchStageSuccess: null,
+          selectedCandidateFamily: null,
+          distanceFitTier: null,
+          rejectReasons: Object.fromEntries(rejectReasons),
+          batchIndex: normalizedBatchIndex,
+          batchCount: normalizedBatchCount,
+          batchExhausted: batchingUsed,
+          searchPhases: searchPhaseNames,
+          lastPlanLabels,
+          variantHint: normalizedVariantHint,
+          fingerprintHint: normalizedFingerprintHint,
+          duplicateSkips,
+          exhausted: true,
+          silentViaUsed: silentViaAttempted,
+          silentViaWaypoints: lastSilentViaWaypoints,
+          shapingPointCount: lastSilentViaShapingPointCount,
+          mapboxLegCount: lastSilentViaMapboxLegCount,
+          arriveManeuverCount: lastSilentViaArriveManeuverCount,
+          silentViaFallbackUsed,
+          guidanceDegraded,
+          hydrationFallbackUsed,
+          finalGeometrySource,
+          postHydrationRejectReason,
+          preHydrationQualityTier,
+          hydrationDiagnostics,
+          bestCandidatePayload: buildSessionCandidateQueuePayload()[0] ?? null,
+          candidateQueuePayload: buildSessionCandidateQueuePayload(),
+        };
+      }
+      guidanceDegraded = true;
+      hydrationFallbackUsed = true;
+      finalGeometrySource = "pre_hydration_fallback";
+      postHydrationRejectReason = postHydrationRejectReason ??
+        "guidance_hydration_failed";
+      preHydrationQualityTier = fallbackCandidate.quality.tier;
+      hydratedSelection = {
+        plan: fallbackCandidate.plan,
+        phaseName: fallbackCandidate.phaseName,
+        distanceFitTier: fallbackCandidate.distanceFitTier,
+        route: fallbackCandidate.route,
+        quality: fallbackCandidate.quality,
+        routeRequestMeta: fallbackCandidate.routeRequestMeta,
+      };
+      debugWarn(
+        `[RT] Guidance hydration failed for accepted candidates; using pre-hydration safe fallback ${fallbackCandidate.plan.label} (${fallbackCandidate.quality.tier}, reason=${fallbackCandidate.quality.reason})`,
+      );
+    }
+    bestPlan = hydratedSelection.plan;
+    bestRoute = hydratedSelection.route;
+    bestQuality = hydratedSelection.quality;
+    bestPhaseName = hydratedSelection.phaseName;
+    bestCandidateFamily = hydratedSelection.plan.label;
+    bestDistanceFitTier = hydratedSelection.distanceFitTier;
+    bestRouteRequestMeta = hydratedSelection.routeRequestMeta;
   }
 
   debugLog(
@@ -1197,21 +3664,109 @@ export async function searchBestRoundTripRoute({
       }`,
   );
 
+  const selectedFamilyLower = (bestCandidateFamily ?? bestPlan.label)
+    .toLowerCase();
+  const requestedStyle = bestQuality.requestedStyle ?? mode ?? null;
+  let deliveredStyle = bestQuality.deliveredStyle ?? requestedStyle;
+  let styleDowngraded = bestQuality.styleDowngraded === true;
+  if (requestedStyle === "Abendrunde" || requestedStyle === "Entdecker") {
+    const requestedToken = requestedStyle === "Abendrunde"
+      ? "evening"
+      : "explore";
+    const familyMatchesRequested = selectedFamilyLower.includes(
+      requestedToken,
+    );
+    const familyIsSportLike = selectedFamilyLower.includes("sport") ||
+      selectedFamilyLower.includes("flow");
+    const familyIsCurvyLike = selectedFamilyLower.includes("curv") ||
+      selectedFamilyLower.includes("curve");
+    if (!familyMatchesRequested) {
+      styleDowngraded = true;
+      deliveredStyle = familyIsSportLike
+        ? "sport_like"
+        : familyIsCurvyLike
+        ? "curvy_like"
+        : "generic_roundtrip";
+    }
+  }
+  const finalDisplayStats = routeDisplayGeometryStats(bestRoute);
+  const finalDisplayGeometryRejectReason =
+    bestRouteRequestMeta?.displayGeometryRejectReason ??
+      displayGeometryRejectReason(
+        bestRoute,
+        bestRouteRequestMeta?.overview ??
+          null,
+      );
+
   return {
     route: bestRoute,
     waypoints: bestPlan.waypoints,
-    radiuses: bestPlan.radiuses,
+    radiuses: effectivePlanRadiuses(bestPlan),
     quality: bestQuality,
     candidateAttempts,
     acceptedCandidates,
     rejectedCandidates,
+    mapboxCallCount,
+    evaluatedRouteCount,
+    guidanceHydrationCount,
+    searchStageSuccess: bestPhaseName,
+    selectedCandidateFamily: bestCandidateFamily,
+    distanceFitTier: bestDistanceFitTier,
     rejectReasons: Object.fromEntries(rejectReasons),
-    searchPhases: searchPhases.map((phase) => phase.name),
+    batchIndex: normalizedBatchIndex,
+    batchCount: normalizedBatchCount,
+    batchExhausted: false,
+    searchPhases: searchPhaseNames,
     lastPlanLabels,
     variantHint: normalizedVariantHint,
     fingerprintHint: normalizedFingerprintHint,
     duplicateSkips,
     emergencyDuplicateUsed: false,
+    safeFallbackUsed: bestQuality.safeFallbackUsed === true,
+    safeFallbackReason: bestQuality.safeFallbackReason ?? null,
+    requestedStyle,
+    deliveredStyle,
+    styleDowngraded,
+    silentViaUsed: bestRouteRequestMeta?.silentViaUsed ?? silentViaAttempted,
+    silentViaWaypoints: bestRouteRequestMeta?.silentViaWaypoints ??
+      lastSilentViaWaypoints,
+    shapingPointCount: bestRouteRequestMeta?.shapingPointCount ??
+      Math.max(0, bestPlan.waypoints.length - 2),
+    mapboxLegCount: bestRouteRequestMeta?.mapboxLegCount ??
+      countRouteLegs(bestRoute),
+    arriveManeuverCount: bestRouteRequestMeta?.arriveManeuverCount ??
+      countArriveManeuvers(bestRoute),
+    silentViaFallbackUsed:
+      (bestRouteRequestMeta?.silentViaFallbackUsed === true) ||
+      silentViaFallbackUsed,
+    guidanceDegraded,
+    hydrationFallbackUsed,
+    finalGeometrySource,
+    geometrySource: finalGeometrySource === "hydrated"
+      ? "mapbox_full_hydrated"
+      : finalGeometrySource === "pre_hydration_fallback"
+      ? "mapbox_full_pre_hydration"
+      : finalGeometrySource,
+    finalOverview: bestRouteRequestMeta?.overview ?? null,
+    finalCoordinateCount: finalDisplayStats.coordinateCount,
+    finalMaxSegmentMeters: finalDisplayStats.maxSegmentMeters,
+    finalAverageSegmentMeters: finalDisplayStats.averageSegmentMeters,
+    finalDisplayGeometryRejectReason,
+    postHydrationRejectReason,
+    preHydrationQualityTier,
+    hydrationDiagnostics,
     terminalShortCircuit: balancedTerminalShortCircuit,
+    rejectSamples,
+    bestCandidatePayload: buildSessionCandidateQueuePayload()[0] ?? null,
+    candidateQueuePayload: buildSessionCandidateQueuePayload(),
+    preferenceMatch: hasPreferenceAreas
+      ? {
+        matchedPreferenceCount: bestQuality.matchedPreferenceCount ?? 0,
+        preferenceMatchScore: bestQuality.preferenceMatchScore ?? 0,
+        preferenceAreaDistancesMeters:
+          bestQuality.preferenceAreaDistancesMeters ?? [],
+        preferenceIgnoredReason: bestQuality.preferenceIgnoredReason ?? null,
+      }
+      : null,
   };
 }

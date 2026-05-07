@@ -13,6 +13,8 @@ class RouteScenario {
     this.targetDistanceKm,
     this.detourLevel = 0,
     this.avoidHighways = false,
+    this.waypointSignature,
+    this.closeLoop = false,
   });
 
   final String routeType;
@@ -25,6 +27,8 @@ class RouteScenario {
   final int detourLevel;
   final bool avoidHighways;
   final String planningType;
+  final String? waypointSignature;
+  final bool closeLoop;
 
   bool get isRoundTrip => routeType == 'ROUND_TRIP';
   bool get isPointToPoint => routeType == 'POINT_TO_POINT';
@@ -33,7 +37,15 @@ class RouteScenario {
     if (!isRoundTrip) return scenarioKey;
     final startLat = startLatitude.toStringAsFixed(3);
     final startLng = startLongitude.toStringAsFixed(3);
-    return [routeType, startLat, startLng, 'novelty'].join('|');
+    return [
+      routeType,
+      startLat,
+      startLng,
+      'novelty',
+      if (waypointSignature != null && waypointSignature!.isNotEmpty)
+        'wp$waypointSignature',
+      if (closeLoop) 'loop1',
+    ].join('|');
   }
 
   String get scenarioKey {
@@ -55,6 +67,9 @@ class RouteScenario {
       distanceKey,
       'd$detourLevel',
       'h${avoidHighways ? 1 : 0}',
+      if (waypointSignature != null && waypointSignature!.isNotEmpty)
+        'wp$waypointSignature',
+      if (closeLoop) 'loop1',
     ].join('|');
   }
 }

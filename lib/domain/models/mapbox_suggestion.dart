@@ -4,11 +4,13 @@ class MapboxSuggestion {
     required this.placeName,
     required this.coordinates,
     this.context,
+    this.distanceMeters,
   });
 
   final String placeName;
   final List<double> coordinates; // [longitude, latitude]
   final String? context;
+  final double? distanceMeters;
 
   double get longitude => coordinates[0];
   double get latitude => coordinates[1];

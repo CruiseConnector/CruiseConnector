@@ -26,6 +26,13 @@ void main() {
         'rating': 5,
         'user_id': 'user-1',
         'source_route_id': 'route-source',
+        'route_source': 'pool',
+        'route_fingerprint': 'fp-route-123',
+        'quality_tier': 'good',
+        'route_meta': {'style_fit_score': 82.5},
+        'average_rating': 4.6,
+        'rating_count': 3,
+        'completion_rate': 0.91,
         'completed_at_end': false,
         'group_id': 'group-1',
       };
@@ -44,6 +51,11 @@ void main() {
       expect(route.isDrivenSession, isTrue);
       expect(route.completionRatio, closeTo(0.85, 0.001));
       expect(route.qualifiesForXpCredit, isTrue);
+      expect(route.routeSource, equals('pool'));
+      expect(route.routeFingerprint, equals('fp-route-123'));
+      expect(route.qualityBadgeLabel, equals('Gut'));
+      expect(route.ratingSummaryLabel, equals('4,6 · 3 Bewertungen'));
+      expect(route.completionRate, equals(0.91));
       expect(route.isFullyCompleted, isFalse);
       expect(route.xpCreditProgressRatio, closeTo(0.8, 0.001));
       expect(route.xpCreditedDistanceKm, closeTo(40, 0.001));

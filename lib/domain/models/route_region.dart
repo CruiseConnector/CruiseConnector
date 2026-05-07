@@ -14,6 +14,7 @@ class RouteRegion {
     this.difficultyLevel = 'normal',
     this.hardRegionStatus = 'normal',
     this.curatedSeedPreferred = false,
+    this.defaultMinVerifiedCount = 3,
     this.defaultTargetPoolSize = 15,
     this.defaultMaxPoolSize = 20,
     this.healthyThreshold = 15,
@@ -37,6 +38,7 @@ class RouteRegion {
   final String difficultyLevel;
   final String hardRegionStatus;
   final bool curatedSeedPreferred;
+  final int defaultMinVerifiedCount;
   final int defaultTargetPoolSize;
   final int defaultMaxPoolSize;
   final int healthyThreshold;
@@ -62,6 +64,8 @@ class RouteRegion {
       difficultyLevel: (json['difficulty_level'] as String?) ?? 'normal',
       hardRegionStatus: (json['hard_region_status'] as String?) ?? 'normal',
       curatedSeedPreferred: (json['curated_seed_preferred'] as bool?) ?? false,
+      defaultMinVerifiedCount:
+          (json['default_min_verified_count'] as num?)?.toInt() ?? 3,
       defaultTargetPoolSize:
           (json['default_target_pool_size'] as num?)?.toInt() ?? 15,
       defaultMaxPoolSize:
@@ -91,6 +95,7 @@ class RouteRegion {
       'difficulty_level': difficultyLevel,
       'hard_region_status': hardRegionStatus,
       'curated_seed_preferred': curatedSeedPreferred,
+      'default_min_verified_count': defaultMinVerifiedCount,
       'default_target_pool_size': defaultTargetPoolSize,
       'default_max_pool_size': defaultMaxPoolSize,
       'healthy_threshold': healthyThreshold,

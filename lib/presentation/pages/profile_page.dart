@@ -3,12 +3,14 @@ import 'package:flutter/services.dart';
 import 'package:image_cropper/image_cropper.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/application/providers/community_provider.dart';
 import 'package:cruise_connect/application/providers/route_bookmark_provider.dart';
 import 'package:cruise_connect/core/input_limits.dart';
+import 'package:cruise_connect/data/services/route_share_export_service.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/data/services/saved_routes_service.dart';
 import 'package:cruise_connect/domain/models/saved_route.dart';
@@ -25,7 +27,7 @@ import 'package:cruise_connect/presentation/pages/saved_route_bookmarks_page.dar
 import 'package:cruise_connect/presentation/pages/user_profile_page.dart';
 import 'package:cruise_connect/presentation/widgets/mentions.dart';
 import 'package:cruise_connect/presentation/widgets/accent_color_picker.dart';
-import 'package:cruise_connect/presentation/widgets/route_chip.dart';
+import 'package:cruise_connect/presentation/widgets/social/route_attachment_card.dart';
 import 'package:cruise_connect/presentation/widgets/user_avatar.dart';
 import 'package:cruise_connect/presentation/widgets/vehicle_garage_carousel.dart';
 import 'package:cruise_connect/presentation/pages/group_lobby_page.dart';
@@ -906,12 +908,10 @@ class _ProfilePageState extends State<ProfilePage>
                                     ),
                                     if (post['shared_route_id'] != null) ...[
                                       const SizedBox(height: 10),
-                                      Align(
-                                        alignment: Alignment.centerLeft,
-                                        child: RouteChip(
-                                          routeId:
-                                              post['shared_route_id'] as String,
-                                        ),
+                                      RouteAttachmentCard(
+                                        routeId:
+                                            post['shared_route_id'] as String,
+                                        compact: true,
                                       ),
                                     ],
                                   ],
@@ -1104,10 +1104,7 @@ class _ProfilePageState extends State<ProfilePage>
           ),
           if (sharedRouteId != null) ...[
             const SizedBox(height: 10),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: RouteChip(routeId: sharedRouteId),
-            ),
+            RouteAttachmentCard(routeId: sharedRouteId, compact: true),
           ],
           const SizedBox(height: 16),
           Align(
@@ -1540,6 +1537,15 @@ class _ProfilePageState extends State<ProfilePage>
                   },
                 ),
                 _buildOptionTile(
+                  Icons.ios_share_rounded,
+                  'Extern als Bild teilen',
+                  const Color(0xFFD7B48A),
+                  () {
+                    Navigator.pop(ctx);
+                    _shareRouteExternally(route);
+                  },
+                ),
+                _buildOptionTile(
                   Icons.bookmark_remove_outlined,
                   'Gespeicherte Route entfernen',
                   Colors.grey,
@@ -1675,6 +1681,34 @@ class _ProfilePageState extends State<ProfilePage>
             CreatePostPage(initialText: routeText, sharedRouteId: route.id),
       ),
     ).then((_) => _loadData());
+  }
+
+  Future<void> _shareRouteExternally(SavedRoute route) async {
+    try {
+      final pngBytes = await RouteShareExportService.buildTransparentRoutePng(
+        route: route,
+        accent: context.read<AppAccentProvider>().color,
+      );
+      final file = XFile.fromData(
+        pngBytes,
+        mimeType: 'image/png',
+        name: 'cruiseconnect-route.png',
+      );
+      await Share.shareXFiles(
+        [file],
+        text:
+            '${route.name ?? route.displayStyleLabel} · ${route.formattedDistance}',
+        subject: 'CruiseConnect Route',
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Route konnte nicht als Bild geteilt werden.'),
+          backgroundColor: Color(0xFF1C1F26),
+        ),
+      );
+    }
   }
 
   Widget _buildBurgerMenu() {
