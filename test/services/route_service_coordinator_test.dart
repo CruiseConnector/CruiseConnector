@@ -2370,7 +2370,7 @@ void main() {
 
       expect(hardInvoker.callCount, greaterThan(0));
       expect(jobs, hasLength(1));
-      expect(jobs.single.jobKind, 'user_demand_learning');
+      expect(jobs.single.jobKind, 'manual_seed');
       expect(jobs.single.maxAttempts, 1);
       expect(
         jobs.single.maxMapboxCalls,

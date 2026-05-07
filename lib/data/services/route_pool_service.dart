@@ -1190,6 +1190,7 @@ class RoutePoolService {
         preferredCityCluster: preferredCityCluster,
         candidates: inMemoryCandidates,
         regions: inMemoryRegions,
+        coverageRows: _inMemoryCoverage,
       );
     }
 
@@ -1233,7 +1234,27 @@ class RoutePoolService {
         preferredAdmin2Name: preferredAdmin2Name,
         preferredCityCluster: preferredCityCluster,
       );
-      if (nearestRegion == null || !_reserveFallbackAllowed(nearestRegion)) {
+      if (nearestRegion == null) {
+        return const [];
+      }
+      final assignment = RoutePoolRegionAssignment(
+        region: nearestRegion,
+        distanceToCenterKm: haversineDistanceKm(
+          userLat,
+          userLng,
+          nearestRegion.centerLat,
+          nearestRegion.centerLng,
+        ),
+      );
+      final coverage = await _loadOrRefreshCoverage(
+        assignment: assignment,
+        distanceBucket: distanceBucket,
+        styleKey: _normalizeStyleKey(style),
+        avoidHighways: avoidHighways,
+        routeType: routeType,
+      );
+      if (!(_reserveFallbackAllowed(nearestRegion) ||
+          _reserveFallbackAllowedForCoverage(coverage))) {
         return const [];
       }
 
@@ -1575,6 +1596,7 @@ class RoutePoolService {
     String? preferredCityCluster,
     required List<RoutePoolCandidate> candidates,
     required List<RouteRegion> regions,
+    required List<RoutePoolCoverage>? coverageRows,
   }) {
     final nearestRegion = _resolveNearestRegion(
       userLat: userLat,
@@ -1585,7 +1607,19 @@ class RoutePoolService {
       preferredAdmin2Name: preferredAdmin2Name,
       preferredCityCluster: preferredCityCluster,
     );
-    if (nearestRegion == null || !_reserveFallbackAllowed(nearestRegion)) {
+    final coverage = nearestRegion == null
+        ? null
+        : _findCoverageForCandidateReserve(
+            coverageRows: coverageRows,
+            region: nearestRegion,
+            distanceBucket: distanceBucket,
+            style: style,
+            avoidHighways: avoidHighways,
+            routeType: routeType,
+          );
+    if (nearestRegion == null ||
+        !(_reserveFallbackAllowed(nearestRegion) ||
+            _reserveFallbackAllowedForCoverage(coverage))) {
       return const [];
     }
     final styleKeys = _candidateReserveStyleKeys(style);
@@ -2070,6 +2104,55 @@ class RoutePoolService {
         hardStatus.contains('hard');
   }
 
+  static RoutePoolCoverage? _findCoverageForCandidateReserve({
+    required List<RoutePoolCoverage>? coverageRows,
+    required RouteRegion region,
+    required int distanceBucket,
+    required String style,
+    required bool avoidHighways,
+    required String routeType,
+  }) {
+    if (coverageRows == null) return null;
+    final styleKey = _normalizeStyleKey(style);
+    for (final coverage in coverageRows) {
+      if (_sameText(coverage.countryCode, region.countryCode) &&
+          _sameText(coverage.admin1Name, region.admin1Name) &&
+          _nullableSameText(coverage.admin2Name, region.admin2Name) &&
+          _sameText(coverage.cityCluster, region.cityCluster) &&
+          _sameText(coverage.routeType, routeType) &&
+          coverage.distanceBucket == distanceBucket &&
+          _sameText(coverage.styleKey, styleKey) &&
+          coverage.avoidHighways == avoidHighways) {
+        return coverage;
+      }
+    }
+    return null;
+  }
+
+  static bool _reserveFallbackAllowedForCoverage(RoutePoolCoverage? coverage) {
+    if (coverage == null) return false;
+    final status = coverage.coverageStatus.trim().toLowerCase();
+    final hardStatus = coverage.hardRegionStatus.trim().toLowerCase();
+    if (status == 'empty' ||
+        status == 'thin' ||
+        status == 'quality_thin' ||
+        status == 'warming_up' ||
+        status == 'cooldown' ||
+        status == 'bootstrap_limited' ||
+        status == 'hard_region_thin' ||
+        status == 'hard_region_curated_needed') {
+      return true;
+    }
+    if (coverage.currentVerifiedCount <= 0 &&
+        coverage.currentCandidateCount > 0) {
+      return true;
+    }
+    return hardStatus == 'curated_needed' ||
+        hardStatus == 'hard_region_curated_needed' ||
+        hardStatus == 'hard_region_thin' ||
+        hardStatus.contains('hard');
+  }
+
   static bool _reserveCandidateDistanceFits(
     RoutePoolCandidate candidate,
     int requestedBucket,
@@ -2079,15 +2162,15 @@ class RoutePoolService {
       return false;
     }
     final minKm = switch (requestedBucket) {
-      50 => 42.0,
-      75 => 62.0,
+      50 => 40.0,
+      75 => 65.0,
       100 => 92.0,
       _ => requestedBucket * 0.82,
     };
     final maxKm = switch (requestedBucket) {
-      50 => 66.0,
-      75 => 92.0,
-      100 => 112.5,
+      50 => 65.0,
+      75 => 90.0,
+      100 => 125.0,
       _ => requestedBucket * 1.16,
     };
     return distanceKm >= minKm && distanceKm <= maxKm;
@@ -2758,9 +2841,7 @@ class RoutePoolService {
             ? math.max(userDemandSeedMaxMapboxCalls, existing.maxMapboxCalls)
             : math.max(defaultSeedMaxMapboxCalls, existing.maxMapboxCalls),
         triggeredByTier: subscriptionTier,
-        jobKind: userDemandLearningJob
-            ? 'user_demand_learning'
-            : existing.jobKind,
+        jobKind: userDemandLearningJob ? 'manual_seed' : existing.jobKind,
       );
       return _SeedJobUpsertResult(
         job: await _saveSeedJob(restarted),
@@ -2797,7 +2878,7 @@ class RoutePoolService {
           ? userDemandSeedMaxMapboxCalls
           : defaultSeedMaxMapboxCalls,
       triggeredByTier: subscriptionTier,
-      jobKind: userDemandLearningJob ? 'user_demand_learning' : 'seed_healing',
+      jobKind: userDemandLearningJob ? 'manual_seed' : 'seed_healing',
     );
     return _SeedJobUpsertResult(
       job: await _saveSeedJob(job),
@@ -3339,7 +3420,8 @@ class RoutePoolService {
     final now = DateTime.now().toUtc();
     payload['budget_window_date'] ??= _dateOnlyKey(now);
     payload['budget_window_month'] ??= _monthOnlyKey(now);
-    final userDemand = job.jobKind == 'user_demand_learning';
+    final userDemand =
+        job.jobKind == 'user_demand_learning' || job.jobKind == 'manual_seed';
     payload['daily_attempt_budget'] = math.max(
       (payload['daily_attempt_budget'] as num?)?.toInt() ?? 0,
       userDemand

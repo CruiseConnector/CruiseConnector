@@ -1511,7 +1511,7 @@ void main() {
         expect(first.bootstrapPending, isTrue);
         expect(first.seedJobStatus, 'queued');
         expect(jobs, hasLength(1));
-        expect(jobs.single.jobKind, 'user_demand_learning');
+        expect(jobs.single.jobKind, 'manual_seed');
         expect(jobs.single.maxAttempts, 1);
         expect(
           jobs.single.maxMapboxCalls,
@@ -2179,6 +2179,65 @@ void main() {
       expect(matches, hasLength(1));
       expect(matches.single.route.id, 'bludenz-safe-100-reserve');
     });
+
+    test(
+      'Candidate-Reserve darf normale thin Coverage-Zellen stuetzen',
+      () async {
+        final service = RoutePoolService(
+          inMemoryRegions: [
+            _region(
+              countryCode: 'AT',
+              admin1Name: 'Vorarlberg',
+              admin2Name: 'Bregenz',
+              cityCluster: 'Bregenz',
+              centerLat: 47.5031,
+              centerLng: 9.7471,
+            ),
+          ],
+          inMemoryRoutes: const [],
+          inMemoryCoverage: const [
+            RoutePoolCoverage(
+              countryCode: 'AT',
+              admin1Name: 'Vorarlberg',
+              admin2Name: 'Bregenz',
+              cityCluster: 'Bregenz',
+              routeType: 'ROUND_TRIP',
+              distanceBucket: 50,
+              styleKey: 'sport_mode',
+              avoidHighways: false,
+              coverageStatus: 'thin',
+              currentVerifiedCount: 0,
+              currentCandidateCount: 3,
+            ),
+          ],
+          inMemorySeedJobs: <RouteSeedJob>[],
+          inMemoryCandidates: [
+            _candidate(
+              id: 'bregenz-thin-reserve',
+              admin2Name: 'Bregenz',
+              cityCluster: 'Bregenz',
+              startLat: 47.5031,
+              startLng: 9.7471,
+              distanceKm: 42,
+              coordinateCount: 120,
+              avoidHighways: true,
+            ),
+          ],
+        );
+
+        final matches = await service.findCandidateReserveRoutesNear(
+          userLat: 47.5031,
+          userLng: 9.7471,
+          distanceBucket: 50,
+          style: 'Sport Mode',
+          avoidHighways: false,
+        );
+
+        expect(matches, hasLength(1));
+        expect(matches.single.route.id, 'bregenz-thin-reserve');
+        expect(matches.single.route.routePayload['candidate_reserve'], true);
+      },
+    );
 
     test('Candidate-Reserve ist in normalen Regionen deaktiviert', () async {
       final service = RoutePoolService(

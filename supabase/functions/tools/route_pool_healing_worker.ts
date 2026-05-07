@@ -391,8 +391,8 @@ async function processJob(job: SeedJob): Promise<void> {
     await failJob(job, "route_region_missing", false);
     return;
   }
-  const userDemandLearningJob = job.job_kind === "user_demand_learning";
-  if (region.bootstrap_enabled === false && !userDemandLearningJob) {
+  const hardRegionLearningJob = isHardRegionLearningJob(job);
+  if (region.bootstrap_enabled === false && !hardRegionLearningJob) {
     await markCuratedNeeded(job, region, "bootstrap_disabled");
     return;
   }
@@ -400,7 +400,7 @@ async function processJob(job: SeedJob): Promise<void> {
     region.difficulty_level === "hard" &&
     (region.curated_seed_preferred === true ||
       region.hard_region_status === "curated_needed") &&
-    !userDemandLearningJob
+    !hardRegionLearningJob
   ) {
     await markCuratedNeeded(job, region, "hard_region_curated_needed");
     return;
@@ -2138,7 +2138,8 @@ async function failJob(
   stats.failed += 1;
   const failureCount = (job.failure_count ?? 0) + 1;
   const maxAttempts = Math.max(1, job.max_attempts ?? 3);
-  const shouldCurate = job.difficulty_level === "hard" ||
+  const shouldCurate =
+    (!isHardRegionLearningJob(job) && job.difficulty_level === "hard") ||
     failureCount >= maxAttempts;
   const cooldownUntil = new Date(
     Date.now() + Math.max(1, job.seed_cooldown_minutes ?? 20) * 60_000,
@@ -2536,7 +2537,13 @@ function remainingMapboxBudget(job: SeedJob): number {
 }
 
 function isUserDemandLearningJob(job: SeedJob): boolean {
-  return job.job_kind === "user_demand_learning";
+  return job.job_kind === "user_demand_learning" ||
+    job.job_kind === "manual_seed";
+}
+
+function isHardRegionLearningJob(job: SeedJob): boolean {
+  return job.job_kind === "user_demand_learning" ||
+    job.job_kind === "manual_seed";
 }
 
 function dailyAttemptBudgetForJob(job: SeedJob): number {
