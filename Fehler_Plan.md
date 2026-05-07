@@ -1,7 +1,7 @@
 # Fehlerbehebungs-Plan
 
 ## Fehler 1: Layout und Banner auf fremden Profilen
-**Problem:** 
+**Problem:**
 Die Profilseite von anderen Nutzern (`user_profile_page.dart`) sieht anders aus als das eigene Profil (`profile_page.dart`). Der Profil-Banner des Nutzers wird nicht angezeigt, und das generelle Layout (Position des Avatars, Statistiken, Bio mit "mehr"-Funktion) ist nicht konsistent. Statt "Profil bearbeiten" soll dort an gleicher Stelle dynamisch der "Folgst du" / "Folgen" Button sitzen.
 
 **Geplante Implementierungen in `lib/presentation/pages/user_profile_page.dart`:**
@@ -17,7 +17,7 @@ Die Profilseite von anderen Nutzern (`user_profile_page.dart`) sieht anders aus 
    - Die Garagen-Darstellung (`VehicleGarageCarousel`) auf das exakt gleiche Design heben.
 
 ## Fehler 2: Profilbild-Upload schlägt fehl (RLS Policy Error)
-**Problem:** 
+**Problem:**
 Beim Hochladen eines Profilbildes (Avatar) erscheint der Fehler: `StorageException(message: new row violates row-level security policy, statusCode: 403, error: Unauthorized)`. Das bedeutet, dass die Supabase Storage Row-Level Security (RLS) Policy für den Bucket `avatars` den Upload (Insert/Update) blockiert. Banner und Auto-Bilder funktionieren hingegen.
 
 **Geplante Implementierungen in Supabase / SQL Migration:**
@@ -26,7 +26,7 @@ Beim Hochladen eines Profilbildes (Avatar) erscheint der Fehler: `StorageExcepti
    - Eine SQL-Migration oder Anleitung vorbereiten, um die Policy für den `avatars`-Bucket korrekt zu setzen.
 
 ## Fehler 3: Mitgliederverwaltung und Owner-Rechte in Gruppen
-**Problem:** 
+**Problem:**
 In einer Gruppe kann man aktuell Mitgliedern über ein Stern-Icon die Owner-Rolle geben, aber nicht mehr entziehen. Zusätzlich soll das Dropdown für alle Aktionen in einem 3-Punkte-Menü vereint werden. Der ursprüngliche Ersteller der Gruppe bekommt eine separate Bezeichung ("Ersteller" statt nur "Owner"). Owner sollen zudem wählen können, ob sie Fahrer oder Mitfahrer sind, und man soll auf die Profile der Nutzer gelangen können.
 
 **Geplante Implementierungen in `lib/presentation/pages/group_lobby_page.dart` & `SocialService`:**
@@ -37,7 +37,7 @@ In einer Gruppe kann man aktuell Mitgliedern über ein Stern-Icon die Owner-Roll
 2. **Mitglieder-Aktionen umbauen (3-Punkte-Menü):**
    - Das bisherige Inline-/Stern-Layout für Rollen entfernen.
    - Bei Tipp auf die 3 Punkte neben einem Mitglied geht ein Menü auf.
-   - Optionen im Menü: 
+   - Optionen im Menü:
      - "Rolle ändern (Fahrer/Mitfahrer)"
      - "Owner geben" (wenn man selbst Owner/Ersteller ist und der andere User normaler Fahrer ist)
      - "Owner wegnehmen" (wenn der andere User bereits Owner ist; Ersteller kann anderen Ownern die Rolle nehmen)
@@ -47,16 +47,16 @@ In einer Gruppe kann man aktuell Mitgliedern über ein Stern-Icon die Owner-Roll
    - Verlassen der Gruppe: Die Gruppe wird erst dann gelöscht, wenn der *letzte* verbleibende Owner (oder Ersteller) die Gruppe verlässt.
 
 ## Fehler 4: Abgeschnittene Gruppen-Namen in Listen
-**Problem:** 
-Sowohl in der Community-Ansicht unter "Aktive Gruppen" als auch auf der eigenen und fremden Profilseite im "Gruppen"-Tab werden lange texte abgeschnitten (Ellipsis). 
+**Problem:**
+Sowohl in der Community-Ansicht unter "Aktive Gruppen" als auch auf der eigenen und fremden Profilseite im "Gruppen"-Tab werden lange texte abgeschnitten (Ellipsis).
 
 **Geplante Implementierungen in `lib/presentation/pages/community_page.dart` (und ggf. Profil-Tabs):**
 1. **Erweiterbare UI für Gruppennamen:**
-   - Anstatt den Text starr abzuschneiden, wird eine Interaktion hinzugefügt, um den vollen Namen hervorzuheben also man klickt auf den tab aktive gruppen in der community page diser wird ehrvorgehebt und deswegen auch vollständig gezeigt sollte aber nicht übertieben sein weil man sollt ja auch noch wissen wo feed und wo entdecken ist auf der Profil Seite genau das gleiche. 
+   - Anstatt den Text starr abzuschneiden, wird eine Interaktion hinzugefügt, um den vollen Namen hervorzuheben also man klickt auf den tab aktive gruppen in der community page diser wird ehrvorgehebt und deswegen auch vollständig gezeigt sollte aber nicht übertieben sein weil man sollt ja auch noch wissen wo feed und wo entdecken ist auf der Profil Seite genau das gleiche.
    - Ideal: Zeige eine kleine Tooltip-ähnliche Box oder fahre den Text aus (`AnimatedSize` / `Text(maxLines: null)` nach Tap), wenn der Name zu lang ist.
 
 ## Fehler 5: Privatsphäre-Sperre & Follow-Status Logik
-**Problem:** 
+**Problem:**
 Private Profile sollen komplett versteckt bleiben, solange man nicht befreundet ist. In der Suche werden die Follow-Statusse (Folgen / Angefragt / Folge ich) nicht korrekt und dynamisch angezeigt.
 
 **Geplante Implementierungen:**
@@ -67,7 +67,7 @@ Private Profile sollen komplett versteckt bleiben, solange man nicht befreundet 
    - In Such-Listen (Community/Search) muss der Button sofort den korrekten Zustand anzeigen: "Folgen" (noch nichts), "Angefragt" (Anfrage ausstehend) oder "Folge ich" (bereits befreundet).
 
 ## Fehler 6: Benachrichtigungen (Glocke) für Friends & Gruppen
-**Problem:** 
+**Problem:**
 Es fehlen verschiedene In-App-Benachrichtigungen für soziale Interaktionen und Gruppen-Ereignisse. Follow-Anfragen können teilweise im Tab "Freundschaftsanfragen" angenommen werden, sollen aber auch in den Benachrichtigungs-Verlauf.
 
 **Geplante Implementierungen (`SocialService` & Notifications):**
@@ -79,7 +79,7 @@ Es fehlen verschiedene In-App-Benachrichtigungen für soziale Interaktionen und 
    - Wenn ein User einer beliebigen Gruppe (privat/öffentlich) beitritt, erhält der *Ersteller* (oder Owner) eine Notification darüber.
 
 ## Fehler 7: Absolute Blockier-Konsequenzen
-**Problem:** 
+**Problem:**
 Das Blockieren eines Nutzers greift nicht tief genug. Blockierte User sehen teilweise noch Profilinhalte.
 
 **Geplante Implementierungen:**
@@ -91,7 +91,7 @@ Das Blockieren eines Nutzers greift nicht tief genug. Blockierte User sehen teil
    - Ein User kann die Gruppe eines Users, den er blockiert hat (oder von dem er blockiert wurde), niemals einsehen oder ihr beitreten – nicht über Links, nicht über Gruppen-Codes und nicht über den Feed.
 
 ## Fehler 8: Eigene Follower verwalten (Entfernen)
-**Problem:** 
+**Problem:**
 Man kann User, die einem bereits folgen, nicht aus der eigenen Follower-Liste entfernen.
 
 **Geplante Implementierungen in `profile_page.dart` (Follower-Liste) & `SocialService`:**
@@ -102,7 +102,7 @@ Man kann User, die einem bereits folgen, nicht aus der eigenen Follower-Liste en
    - Methode `removeFollower(followerId)` hinzufügen, welche den entsprechenden Datensatz aus der Datenbank löscht, sodass dir diese Person nicht mehr folgt.
 
 ## Fehler 9: Echtzeit-Standorte zu langsam
-**Problem:** 
+**Problem:**
 In Gruppenfahrten aktualisieren sich die Live-Standorte der anderen Nutzer auf der Karte zu langsam/nicht flüssig genug in Echtzeit.
 
 **Geplante Implementierungen:**
@@ -111,19 +111,19 @@ In Gruppenfahrten aktualisieren sich die Live-Standorte der anderen Nutzer auf d
    - supabase Realtime (oder entsprechenden Socket) sicherstellen, dass er auf niedrige Latency konfiguriert ist, damit Cursor flüssig über die Karte ziehen.
 
 ## Fehler 10: Routen-Ansicht minimieren & Hintergrund-Navigation
-**Problem:** 
+**Problem:**
 Wenn der Admin eine Route in der Gruppe startet, werden alle wartenden Mitglieder reingezogen. Man sollte jedoch aus der Navi-Kartenansicht zurück in die Gruppen-Lobby (oder die App) können, während die Live-Locations *im Hintergrund* / als Picture-in-picture (bzw. auf Server-Level) weiterlaufen. Auch App-Wechsel (z.B. zu Spotify) dürfen den Live-Standort nicht unterbrechen.
 
 **Geplante Implementierungen:**
 1. **Navigation zur Gruppe zurück (Minimieren & App-Navigation):**
    - In der aktiven Fahr-Ansicht einen "Minimieren"- oder "Zurück"-Button anbieten, ohne stattdessen die komplette Navigation abzubrechen.
-   - Man muss nahtlos von der Map-Ansicht in die Gruppen-Lobby und von dort aus weiter in die normale App-Ansicht wechseln können, während die Fahrt/Route im Hintergrund aktiv bleibt. dann kann man reinteoretisch auf die Aktive Gruppe klicken und von dort aus wieder in die Map ansicht zu kommen und dann weil alles im Hintergrund gelaufen ist ganz normal weiterfahren können und für jeden anderen User hat es deinen Live Standort dauerhaft bewegt. 
+   - Man muss nahtlos von der Map-Ansicht in die Gruppen-Lobby und von dort aus weiter in die normale App-Ansicht wechseln können, während die Fahrt/Route im Hintergrund aktiv bleibt. dann kann man reinteoretisch auf die Aktive Gruppe klicken und von dort aus wieder in die Map ansicht zu kommen und dann weil alles im Hintergrund gelaufen ist ganz normal weiterfahren können und für jeden anderen User hat es deinen Live Standort dauerhaft bewegt.
 2. **Hintergrund-Standort / Background Execution:**
    - Sicherstellen, dass das Flutter Location-Plugin (z.B. `flutter_background_geolocation` oder `geolocator` im Background Mode) konfiguriert ist.
    - Erfordert iOS/Android Permissions für `Always Allow` bzw. Foreground-Services mit lokaler Notification ("Navigation wird ausgeführt..."), damit die Standorte selbst beim Spotify-Wechsel live bleiben.
 
 ## Fehler 11: Map-Marker (Avatare) und Verlassen-Status
-**Problem:** 
+**Problem:**
 Die Standorte anderer Fahrer in der Gruppen-Navigation sollen individueller erkennbar sein. Außerdem muss klar ersichtlich sein, wenn ein Nutzer die Gruppe verlassen hat, anstatt dass der Standort einfach einfriert oder verschwindet.
 
 **Geplante Implementierungen:**
@@ -135,7 +135,7 @@ Die Standorte anderer Fahrer in der Gruppen-Navigation sollen individueller erke
    - Dieser Marker wird dann visuell mit einem roten "X" (oder Ausgegraut mit X) überlagert, um zu signalisieren, dass der Fahrer die Session verlassen hat.
 
 ## Fehler 12: Aktive Gruppen-Fahrten hervorheben & Benachrichtigen
-**Problem:** 
+**Problem:**
 Wenn der Owner eine Fahrt für eine Gruppe startet, ist das in der App-Übersicht für die anderen Mitglieder nicht auffällig genug markiert und es fehlt eine direkte Benachrichtigung.
 
 **Geplante Implementierungen:**

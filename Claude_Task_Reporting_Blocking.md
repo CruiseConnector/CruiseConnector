@@ -1,6 +1,6 @@
 # Task für Claude: Implementierung der Melde- und Blockier-Funktion (UGC)
 
-Hallo Claude, 
+Hallo Claude,
 
 deine Aufgabe ist es, die Melde- und Blockier-Funktion für User Generated Content (UGC) vollumfänglich in Flutter und Supabase zu implementieren. Ohne diese Funktion wird die App von Apple und Google abgelehnt.
 
