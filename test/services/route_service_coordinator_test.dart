@@ -210,6 +210,11 @@ class _ThrowingCandidateRoutePoolService extends RoutePoolService {
     String? preferredAdmin1Name,
     String? preferredAdmin2Name,
     String? preferredCityCluster,
+    double? averageRating,
+    int ratingCount = 0,
+    double? completionRate,
+    int timesSelected = 0,
+    DateTime? lastSelectedAt,
   }) {
     throw StateError('simulated candidate save failure');
   }

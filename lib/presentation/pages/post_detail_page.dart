@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/presentation/widgets/mentions.dart';
-import 'package:cruise_connect/presentation/widgets/route_chip.dart';
+import 'package:cruise_connect/presentation/widgets/social/route_attachment_card.dart';
 import 'package:cruise_connect/presentation/widgets/user_avatar.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -95,83 +95,136 @@ class _PostDetailPageState extends State<PostDetailPage> {
         children: [
           Expanded(
             child: SingleChildScrollView(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.fromLTRB(14, 10, 14, 16),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   // Original Post
-                  Row(
-                    children: [
-                      UserAvatar(
-                        name: widget.name,
-                        avatarUrl: widget.avatarUrl,
-                        radius: 24,
-                      ),
-                      const SizedBox(width: 12),
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            widget.name,
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF151922),
+                      borderRadius: BorderRadius.circular(18),
+                      border: Border.all(color: Colors.white10),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            UserAvatar(
+                              name: widget.name,
+                              avatarUrl: widget.avatarUrl,
+                              radius: 21,
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    widget.name,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.w800,
+                                      fontSize: 15,
+                                    ),
+                                  ),
+                                  Text(
+                                    widget.handle,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      color: Colors.grey,
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            Text(
+                              widget.time,
+                              style: const TextStyle(
+                                color: Colors.grey,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+                        Text.rich(
+                          TextSpan(
                             style: const TextStyle(
                               color: Colors.white,
-                              fontWeight: FontWeight.bold,
                               fontSize: 16,
+                              height: 1.35,
+                            ),
+                            children: buildMentionSpans(
+                              context: context,
+                              text: widget.content,
+                              baseStyle: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 16,
+                                height: 1.35,
+                              ),
                             ),
                           ),
-                          Text(
-                            widget.handle,
-                            style: const TextStyle(
-                              color: Colors.grey,
-                              fontSize: 14,
-                            ),
+                        ),
+                        if (widget.sharedRouteId != null) ...[
+                          const SizedBox(height: 12),
+                          RouteAttachmentCard(
+                            routeId: widget.sharedRouteId!,
+                            compact: true,
                           ),
                         ],
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 20),
-                  Text.rich(
-                    TextSpan(
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 20,
-                        height: 1.4,
-                      ),
-                      children: buildMentionSpans(
-                        context: context,
-                        text: widget.content,
-                        baseStyle: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 20,
-                          height: 1.4,
+                        const SizedBox(height: 12),
+                        Text(
+                          'CruiseConnect',
+                          style: TextStyle(
+                            color: Colors.white.withValues(alpha: 0.42),
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
                         ),
-                      ),
-                    ),
-                  ),
-                  if (widget.sharedRouteId != null) ...[
-                    const SizedBox(height: 16),
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: RouteChip(routeId: widget.sharedRouteId!),
-                    ),
-                  ],
-                  const SizedBox(height: 20),
-                  Text(
-                    '${widget.time} · CruiseConnect',
-                    style: const TextStyle(color: Colors.grey, fontSize: 14),
-                  ),
-                  const Divider(color: Colors.white24),
-                  const SizedBox(height: 10),
-                  Text(
-                    'Kommentare (${_comments.length})',
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 18,
+                      ],
                     ),
                   ),
                   const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      const Text(
+                        'Kommentare',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w800,
+                          fontSize: 17,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 3,
+                        ),
+                        decoration: BoxDecoration(
+                          color: AppAccentColors.accent.withValues(alpha: 0.14),
+                          borderRadius: BorderRadius.circular(999),
+                        ),
+                        child: Text(
+                          '${_comments.length}',
+                          style: TextStyle(
+                            color: AppAccentColors.accent,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
 
                   if (_loading)
                     Center(

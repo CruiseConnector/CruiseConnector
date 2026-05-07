@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:cruise_connect/domain/models/route_pool_candidate.dart';
@@ -969,6 +970,11 @@ class RoutePoolService {
     String? preferredAdmin1Name,
     String? preferredAdmin2Name,
     String? preferredCityCluster,
+    double? averageRating,
+    int ratingCount = 0,
+    double? completionRate,
+    int timesSelected = 0,
+    DateTime? lastSelectedAt,
   }) async {
     if (!validDistanceBuckets.contains(distanceBucket)) {
       return const RoutePoolCandidateSaveResult(
@@ -1065,6 +1071,11 @@ class RoutePoolService {
         distanceToCenterKm: assignment.distanceToCenterKm,
       ),
       repeatedSuccessCount: 1,
+      averageRating: averageRating,
+      ratingCount: ratingCount,
+      completionRate: completionRate,
+      timesSelected: timesSelected,
+      lastSelectedAt: lastSelectedAt,
       isCandidate: true,
       isVerifiedPool: false,
       geometry: geometry,
@@ -3052,12 +3063,17 @@ class RoutePoolService {
         .eq('route_fingerprint', candidate.routeFingerprint)
         .limit(1);
     if ((rows as List).isNotEmpty) {
+      final existing = RoutePoolCandidate.fromJson(
+        Map<String, dynamic>.from(rows.first as Map),
+      );
+      final updated = await _recordCandidateDuplicateSignal(
+        existing: existing,
+        incoming: candidate,
+      );
       return _CandidateUpsertResult(
         saved: false,
         duplicate: true,
-        candidate: RoutePoolCandidate.fromJson(
-          Map<String, dynamic>.from(rows.first as Map),
-        ),
+        candidate: updated,
         duplicateSource: 'candidate',
       );
     }
@@ -3082,12 +3098,17 @@ class RoutePoolService {
             .eq('route_fingerprint', candidate.routeFingerprint)
             .limit(1);
         if ((existing as List).isNotEmpty) {
+          final existingCandidate = RoutePoolCandidate.fromJson(
+            Map<String, dynamic>.from(existing.first as Map),
+          );
+          final updated = await _recordCandidateDuplicateSignal(
+            existing: existingCandidate,
+            incoming: candidate,
+          );
           return _CandidateUpsertResult(
             saved: false,
             duplicate: true,
-            candidate: RoutePoolCandidate.fromJson(
-              Map<String, dynamic>.from(existing.first as Map),
-            ),
+            candidate: updated,
             duplicateSource: 'candidate',
           );
         }
@@ -3107,6 +3128,78 @@ class RoutePoolService {
         saveErrorReason: error.message,
       );
     }
+  }
+
+  Future<RoutePoolCandidate> _recordCandidateDuplicateSignal({
+    required RoutePoolCandidate existing,
+    required RoutePoolCandidate incoming,
+  }) async {
+    final now = DateTime.now().toUtc();
+    final payload = Map<String, dynamic>.from(existing.routePayload);
+    final observations = payload['candidate_observations'] is List
+        ? List<dynamic>.from(payload['candidate_observations'] as List)
+        : <dynamic>[];
+    observations.add({
+      'source': incoming.candidateSource,
+      'observed_at': now.toIso8601String(),
+      'saved_by_user': incoming.routePayload['completion_candidate_saved'],
+      'discarded_by_user':
+          incoming.routePayload['completion_candidate_discarded'],
+      'completed_at_end':
+          incoming.routePayload['completion_candidate_completed'],
+      'completion_percent': incoming.routePayload['completion_percent'],
+      'rating': incoming.routePayload['rating'],
+    });
+    payload['candidate_observations'] = observations.length > 12
+        ? observations.sublist(observations.length - 12)
+        : observations;
+    payload['duplicate_observation_count'] =
+        ((payload['duplicate_observation_count'] as num?)?.toInt() ?? 0) + 1;
+    payload['last_duplicate_observed_at'] = now.toIso8601String();
+    payload['last_duplicate_source'] = incoming.candidateSource;
+
+    final successfulSignal =
+        incoming.routePayload['completion_candidate_discarded'] != true &&
+        (incoming.routePayload['completion_candidate_saved'] == true ||
+            incoming.routePayload['completion_candidate_completed'] == true ||
+            ((incoming.routePayload['completion_percent'] as num?)
+                        ?.toDouble() ??
+                    0.0) >=
+                75.0);
+    final repeatedSuccessCount =
+        existing.repeatedSuccessCount + (successfulSignal ? 1 : 0);
+    final timesSelected =
+        existing.timesSelected +
+        (incoming.timesSelected > 0 || successfulSignal ? 1 : 0);
+    final averageRating = incoming.averageRating ?? existing.averageRating;
+    final ratingCount = math.max(existing.ratingCount, incoming.ratingCount);
+    final completionRate = incoming.completionRate ?? existing.completionRate;
+
+    try {
+      final rows = await _db
+          .from('route_pool_candidates')
+          .update({
+            'repeated_success_count': repeatedSuccessCount,
+            'times_selected': timesSelected,
+            'last_selected_at': now.toIso8601String(),
+            'average_rating': averageRating,
+            'rating_count': ratingCount,
+            'completion_rate': completionRate,
+            'route_payload': payload,
+            'updated_at': now.toIso8601String(),
+          })
+          .eq('route_fingerprint', existing.routeFingerprint)
+          .select()
+          .limit(1);
+      if ((rows as List).isNotEmpty) {
+        return RoutePoolCandidate.fromJson(
+          Map<String, dynamic>.from(rows.first as Map),
+        );
+      }
+    } catch (error) {
+      debugPrint('[RoutePool] Duplicate candidate signal failed: $error');
+    }
+    return existing;
   }
 
   static bool _isDuplicateFingerprintError(PostgrestException error) {

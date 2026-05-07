@@ -84,6 +84,9 @@ const negativeTagMarkers = [
   "hin-und-zurück",
   "out and back",
   "out-and-back",
+  "discarded",
+  "verworfen",
+  "route_discarded",
 ];
 
 const hardWarningMarkers = [

@@ -1,5 +1,6 @@
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/presentation/widgets/accent_color_picker.dart';
+import 'package:cruise_connect/presentation/widgets/cruise/routing_onboarding_sheet.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -25,7 +26,10 @@ class _SettingsPageState extends State<SettingsPage> {
 
   Future<void> _loadSettings() async {
     final uid = Supabase.instance.client.auth.currentUser?.id;
-    if (uid == null) return;
+    if (uid == null) {
+      if (mounted) setState(() => _loading = false);
+      return;
+    }
     try {
       final data = await Supabase.instance.client
           .from('profiles')
@@ -197,6 +201,15 @@ class _SettingsPageState extends State<SettingsPage> {
                     _metricUnits,
                     (val) => setState(() => _metricUnits = val),
                   ),
+                  const Divider(color: Colors.white10, height: 1),
+                  _buildNavTile(
+                    'Routing-Hinweise',
+                    Icons.route_outlined,
+                    subtitle:
+                        'Routenmodi, Wegpunkte und Sicherheit erneut lesen',
+                    onTap: () =>
+                        showRoutingOnboardingSheet(context, force: true),
+                  ),
                 ]),
 
                 const SizedBox(height: 24),
@@ -280,16 +293,26 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 
-  Widget _buildNavTile(String title, IconData icon) {
+  Widget _buildNavTile(
+    String title,
+    IconData icon, {
+    String? subtitle,
+    VoidCallback? onTap,
+  }) {
     return ListTile(
+      leading: Icon(icon, color: Colors.grey),
       title: Text(
         title,
         style: const TextStyle(color: Colors.white, fontSize: 16),
       ),
+      subtitle: subtitle != null
+          ? Text(
+              subtitle,
+              style: const TextStyle(color: Colors.grey, fontSize: 12),
+            )
+          : null,
       trailing: const Icon(Icons.chevron_right, color: Colors.grey),
-      onTap: () {
-        // Navigation logic
-      },
+      onTap: onTap,
     );
   }
 }

@@ -692,7 +692,6 @@ export function buildRoundTripWaypointCandidates({
         maxRadiusFactor: 1.32,
       },
     );
-
   if (avoidHighwaysRoundTripSearch) {
     const styleKey = mode === "Kurvenjagd"
       ? "curvy"
@@ -985,6 +984,46 @@ export function buildRoundTripWaypointCandidates({
             maxRadiusFactor: 1.24,
           }),
           1.12,
+        );
+      }
+      if (mode === "Kurvenjagd") {
+        addPlan(
+          "nohw-short-curvy-valley-clean-west",
+          pairedLoop(0.96, 286, 2199, 64, [0.92, 1.08, 0.92], {
+            bearingJitterDegrees: 0,
+            radialJitter: 0,
+            smoothing: 0.12,
+            minRadiusFactor: 0.78,
+            maxRadiusFactor: 1.14,
+          }),
+          1.06,
+        );
+        addPlan(
+          "nohw-short-curvy-valley-clean-wide",
+          orbitalRing(0.94, 300, 2203, 4, 188, [
+            0.88,
+            1.02,
+            1.04,
+            0.90,
+          ], {
+            bearingJitterDegrees: 2,
+            radialJitter: 0.012,
+            smoothing: 0.11,
+            minRadiusFactor: 0.74,
+            maxRadiusFactor: 1.16,
+          }),
+          1.08,
+        );
+        addPlan(
+          "nohw-short-curvy-hillside-soft",
+          pairedLoop(0.82, 96, 2207, 52, [0.82, 0.98, 0.84], {
+            bearingJitterDegrees: 4,
+            radialJitter: 0.018,
+            smoothing: 0.16,
+            minRadiusFactor: 0.68,
+            maxRadiusFactor: 1.06,
+          }),
+          1.04,
         );
       }
       addPlan(
@@ -1785,21 +1824,22 @@ export function buildRoundTripWaypointCandidates({
         label.includes("nohw-medium-sport-orbital-rheintal-") ||
         label.includes("nohw-medium-sport-cardinal-")
       );
-    // Orbital plans must survive the rescue pass even when the client
-    // asks for simplifyWaypoints (maxWaypoints=3). The whole point of
-    // the orbital families is to carry 4–5 waypoints — if we drop them
-    // here, the rescue falls back to triangles and u-turn rejects.
-    const orbitalWaypointsOk = sportOrbitalPlan &&
-      intermediateCount <= 5;
-    if (!orbitalWaypointsOk && intermediateCount > maxIntermediateWaypoints) {
-      return false;
-    }
     const shortCurvyCompactPlan = mode === "Kurvenjagd" && shortTarget &&
       (
+        label.includes("nohw-short-curvy-") ||
         label.includes("loop-scout") ||
         label.includes("orbital-core") ||
         label.includes("zigzag-core")
       );
+    // Orbital plans must survive the rescue pass even when the client
+    // asks for simplifyWaypoints (maxWaypoints=3). The whole point of
+    // the orbital families is to carry 4–5 waypoints — if we drop them
+    // here, the rescue falls back to triangles and u-turn rejects.
+    const orbitalWaypointsOk = (sportOrbitalPlan || shortCurvyCompactPlan) &&
+      intermediateCount <= 5;
+    if (!orbitalWaypointsOk && intermediateCount > maxIntermediateWaypoints) {
+      return false;
+    }
     const shortSportLoopCore = mode === "Sport Mode" && shortTarget &&
       (
         label.includes("sport-loop-flow") ||

@@ -654,17 +654,24 @@ function roundTripSearchSessionQueueLimit(body: RequestData): number {
     50;
   const styleKey = styleKeyForMode(body.mode);
   const styleThin = styleKey === "abendrunde" || styleKey === "entdecker";
+  const shortCurvy = styleKey === "curvy" && targetKm <= 60;
   const start = body.startLocation;
   const startLat = finiteNumber(start?.latitude);
   const startLng = finiteNumber(start?.longitude);
-  const lakeBorderShortLoop = targetKm <= 60 &&
+  const vorarlbergValleyShortLoop = targetKm <= 60 &&
     startLat != null && startLng != null &&
-    startLat >= 47.43 && startLat <= 47.58 &&
-    startLng >= 9.58 && startLng <= 9.86;
-  if (lakeBorderShortLoop && (styleThin || body.avoid_highways === false)) {
+    startLat >= 47.12 && startLat <= 47.60 &&
+    startLng >= 9.45 && startLng <= 10.05;
+  if (shortCurvy && (styleThin || body.avoid_highways === false)) {
     return 10;
   }
-  if (lakeBorderShortLoop) return 8;
+  if (shortCurvy) return 8;
+  if (
+    vorarlbergValleyShortLoop && (styleThin || body.avoid_highways === false)
+  ) {
+    return 10;
+  }
+  if (vorarlbergValleyShortLoop) return 8;
   if (styleThin && targetKm >= 70) return 8;
   if (styleThin) return 6;
   if (targetKm >= 90) return 7;
@@ -1794,6 +1801,11 @@ Deno.serve(async (req) => {
     const forceRoundTripSearchSession =
       body.force_roundtrip_search_session === true ||
       body.interactive_roundtrip_search === true;
+    const shortCurvyRoundTripNeedsSession = useRoundTripSearch &&
+      planning_type === "Zufall" &&
+      mode === "Kurvenjagd" &&
+      roundTripTargetForBatching >= 45 &&
+      roundTripTargetForBatching <= 60;
     const shortNoHighwayRoundTripNeedsSession = useRoundTripSearch &&
       planning_type === "Zufall" &&
       avoidHighways &&
@@ -1814,6 +1826,7 @@ Deno.serve(async (req) => {
         planning_type === "Zufall" &&
         (
           forceRoundTripSearchSession ||
+          shortCurvyRoundTripNeedsSession ||
           shortNoHighwayRoundTripNeedsSession ||
           shortHighwayAllowedLakeBorderRoundTripNeedsSession ||
           roundTripTargetForBatching >= 70 ||
@@ -1822,7 +1835,7 @@ Deno.serve(async (req) => {
           mode === "Abendrunde" ||
           mode === "Entdecker"
         )
-      ? 3
+      ? shortCurvyRoundTripNeedsSession ? 4 : 3
       : 1;
     const effectiveRoundTripBatchCount = useRoundTripSearch
       ? Math.max(
@@ -2003,15 +2016,21 @@ Deno.serve(async (req) => {
       if (
         !roundTripSearch?.route &&
         effectiveRoundTripBatchCount > 1 &&
-        roundTripSessionCandidateQueue(roundTripSearch).length < 3
+        roundTripSessionCandidateQueue(roundTripSearch).length <
+          Math.min(roundTripSearchSessionQueueLimit(body), 10)
       ) {
         const attemptedBatchIndexes = new Set<number>([
           effectiveRoundTripBatchIndex,
         ]);
+        const targetSessionQueueLength = Math.min(
+          roundTripSearchSessionQueueLimit(body),
+          10,
+        );
         for (
           let nextBatchIndex = 0;
           nextBatchIndex < effectiveRoundTripBatchCount &&
-          roundTripSessionCandidateQueue(roundTripSearch).length < 3;
+          roundTripSessionCandidateQueue(roundTripSearch).length <
+            targetSessionQueueLength;
           nextBatchIndex += 1
         ) {
           if (attemptedBatchIndexes.has(nextBatchIndex)) continue;

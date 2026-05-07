@@ -278,4 +278,18 @@ class SavedRoute {
     }
     return '$scoreText Route-Score';
   }
+
+  String? get ratingTrustLabel {
+    final score = displayRating;
+    if (score == null) return null;
+    if (score >= 4.4) return 'Sehr gut';
+    if (score >= 3.0) return 'Okay';
+    return 'Schlecht';
+  }
+
+  String? get ratingShareLabel {
+    final score = displayRating;
+    if (score == null) return null;
+    return '${score.toStringAsFixed(1).replaceAll('.', ',')} Sterne';
+  }
 }

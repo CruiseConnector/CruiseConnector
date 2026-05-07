@@ -25,6 +25,7 @@ import 'package:cruise_connect/data/services/offline_map_service.dart';
 import 'package:cruise_connect/data/services/route_access_plan.dart';
 import 'package:cruise_connect/data/services/route_service.dart';
 import 'package:cruise_connect/data/services/route_cache_service.dart';
+import 'package:cruise_connect/data/services/route_completion_candidate_service.dart';
 import 'package:cruise_connect/data/services/route_pool_service.dart';
 import 'package:cruise_connect/data/services/route_rating_service.dart';
 import 'package:cruise_connect/data/services/smart_reroute_engine.dart';
@@ -40,6 +41,7 @@ import 'package:cruise_connect/presentation/widgets/cruise/cruise_maneuver_indic
 import 'package:cruise_connect/presentation/widgets/cruise/cruise_navigation_info_panel.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/cruise_setup_card.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/drive_control_panel.dart';
+import 'package:cruise_connect/presentation/widgets/cruise/routing_onboarding_sheet.dart';
 import 'package:cruise_connect/data/services/gamification_service.dart';
 import 'package:cruise_connect/data/services/cruise_group_service.dart';
 import 'package:cruise_connect/data/services/route_quality_validator.dart';
@@ -186,9 +188,12 @@ class _CruiseModePageState extends State<CruiseModePage>
   bool _configCollapsed = false; // Config-Panel ein-/ausgeklappt
   bool _showRouteInfoBanner = false; // Route-Info Banner nach Generation
   bool _routeWarmupDialogOpen = false;
-  bool _routeSearchStatusMinimized = false;
   String? _routeSearchNoticeTitle;
   String? _routeSearchNoticeMessage;
+  double _routeSearchProgress = 0.08;
+  int _routeGenerationSerial = 0;
+  int? _activeRouteGenerationSerial;
+  bool _routeGenerationCancelled = false;
   int _cachedCurveCount = 0; // Vorab im Isolate berechnet
   List<double>? _activeDestinationCoordinate;
   String _activePointToPointMode = 'Standard';
@@ -345,33 +350,86 @@ class _CruiseModePageState extends State<CruiseModePage>
     return _roundTripLoadingPhases[phaseIndex];
   }
 
-  void _startRouteLoadingUi() {
+  void _startRouteLoadingUi({required int generationId}) {
     _routeLoadingPhaseTimer?.cancel();
     _safeSetState(() {
       _isLoading = true;
+      _activeRouteGenerationSerial = generationId;
+      _routeGenerationCancelled = false;
       _showRouteInfoBanner = false;
       _routeLoadingPhaseIndex = 0;
-      _routeSearchStatusMinimized = false;
+      _routeSearchProgress = 0.08;
       _routeSearchNoticeTitle = null;
       _routeSearchNoticeMessage = null;
     });
-    _routeLoadingPhaseTimer = Timer.periodic(const Duration(seconds: 18), (_) {
-      if (!mounted || _disposed || !_isLoading) return;
+    _routeLoadingPhaseTimer = Timer.periodic(const Duration(seconds: 3), (_) {
+      if (!mounted ||
+          _disposed ||
+          !_isLoading ||
+          _activeRouteGenerationSerial != generationId) {
+        return;
+      }
       _safeSetState(() {
+        _routeSearchProgress = math.min(_routeSearchProgress + 0.045, 0.92);
         _routeLoadingPhaseIndex = math.min(
-          _routeLoadingPhaseIndex + 1,
+          (_routeSearchProgress * _roundTripLoadingPhases.length).floor(),
           _roundTripLoadingPhases.length - 1,
         );
       });
     });
   }
 
-  void _stopRouteLoadingUi() {
+  void _stopRouteLoadingUi({int? generationId}) {
+    if (generationId != null && _activeRouteGenerationSerial != generationId) {
+      return;
+    }
     _routeLoadingPhaseTimer?.cancel();
     _routeLoadingPhaseTimer = null;
     _safeSetState(() {
       _isLoading = false;
       _routeLoadingPhaseIndex = 0;
+      _routeSearchProgress = 0.08;
+      if (generationId == null ||
+          _activeRouteGenerationSerial == generationId) {
+        _activeRouteGenerationSerial = null;
+      }
+    });
+  }
+
+  bool _isRouteGenerationCancelled(int generationId) {
+    return _routeGenerationCancelled ||
+        _activeRouteGenerationSerial != generationId ||
+        !mounted ||
+        _disposed;
+  }
+
+  void _cancelRouteGeneration() {
+    if (!_isLoading && _routeSearchNoticeTitle == null) return;
+    _routeLoadingPhaseTimer?.cancel();
+    _routeLoadingPhaseTimer = null;
+    _safeSetState(() {
+      _routeGenerationCancelled = true;
+      _activeRouteGenerationSerial = null;
+      _isLoading = false;
+      _routeLoadingPhaseIndex = 0;
+      _routeSearchProgress = 1.0;
+      _routeSearchNoticeTitle = 'Suche abgebrochen';
+      _routeSearchNoticeMessage =
+          'Wir übernehmen keine Route aus dieser Suche. Du kannst jederzeit neu starten.';
+    });
+  }
+
+  void _hideRouteSearchStatusForAcceptedRoute() {
+    _routeLoadingPhaseTimer?.cancel();
+    _routeLoadingPhaseTimer = null;
+    _safeSetState(() {
+      _isLoading = false;
+      _activeRouteGenerationSerial = null;
+      _routeGenerationCancelled = false;
+      _routeLoadingPhaseIndex = 0;
+      _routeSearchProgress = 0.08;
+      _routeSearchNoticeTitle = null;
+      _routeSearchNoticeMessage = null;
     });
   }
 
@@ -428,6 +486,14 @@ class _CruiseModePageState extends State<CruiseModePage>
     }
     CruiseModePage.pendingRoute.addListener(_onPendingRoute);
     _destinationController.addListener(_onDestinationTextChanged);
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) => _maybeShowRoutingOnboarding(),
+    );
+  }
+
+  Future<void> _maybeShowRoutingOnboarding() async {
+    if (!mounted || _disposed) return;
+    await showRoutingOnboardingSheet(context);
   }
 
   // ═══════════════════════ GROUP / LIVE TRACKING ═══════════════════════════
@@ -1069,11 +1135,13 @@ class _CruiseModePageState extends State<CruiseModePage>
           if (_isRouteConfirmed)
             RepaintBoundary(child: _buildNavigationOverlay()),
           if (_shouldShowRoundTripSearchStatus)
-            RepaintBoundary(child: _buildRoundTripSearchStatusOverlay()),
+            _buildRoundTripSearchStatusOverlay(),
 
           // Exit-Button wenn wir als Gruppen-Session gestartet wurden
           // (sonst ist man in der Fullscreen-Navigation gefangen).
-          if (widget.groupId != null && Navigator.canPop(context))
+          if (widget.groupId != null &&
+              !_isRouteConfirmed &&
+              Navigator.canPop(context))
             Positioned(
               top: MediaQuery.of(context).padding.top + 12,
               left: 12,
@@ -1085,263 +1153,187 @@ class _CruiseModePageState extends State<CruiseModePage>
   }
 
   bool get _shouldShowRoundTripSearchStatus =>
-      _isRoundTrip &&
-      !_isWaypointPlanning &&
-      (_isLoading || _routeSearchNoticeTitle != null);
+      _isRoundTrip && (_isLoading || _routeSearchNoticeTitle != null);
 
   Widget _buildRoundTripSearchStatusOverlay() {
     final media = MediaQuery.of(context);
     final isNotice = !_isLoading && _routeSearchNoticeTitle != null;
     final title = _isLoading
-        ? 'Wir suchen eine bessere Route'
+        ? 'Rundkurs wird berechnet'
         : _routeSearchNoticeTitle!;
     final status = _isLoading
         ? _routeLoadingStatusText
         : (_routeSearchNoticeMessage ??
               'Gerade keine gute Route gefunden. Wir suchen weiter im Hintergrund.');
-    final progressValue = isNotice ? 1.0 : null;
+    final progressValue = isNotice ? 1.0 : _routeSearchProgress;
 
     return Positioned(
       top: media.padding.top + 10,
-      left: 12,
-      right: 12,
-      child: Align(
-        alignment: Alignment.topCenter,
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 440),
-          child: AnimatedSwitcher(
-            duration: const Duration(milliseconds: 180),
-            child: _routeSearchStatusMinimized
-                ? _buildMinimizedRoundTripSearchStatus(title)
-                : _buildExpandedRoundTripSearchStatus(
-                    title: title,
-                    status: status,
-                    progressValue: progressValue,
-                    isNotice: isNotice,
-                  ),
+      left: 14,
+      right: 14,
+      child: IgnorePointer(
+        ignoring: true,
+        child: Align(
+          alignment: Alignment.topCenter,
+          child: _buildCompactRoundTripSearchStatus(
+            title: title,
+            status: status,
+            progress: progressValue,
+            isNotice: isNotice,
+            maxWidth: math.min(media.size.width - 28, 370),
           ),
         ),
       ),
     );
   }
 
-  Widget _buildMinimizedRoundTripSearchStatus(String title) {
-    const capsuleColor = Color(0xCC2B211B);
-    const borderColor = Color(0x40F3D9BC);
-    const textColor = Color(0xFFF8EADB);
-    return Material(
-      key: const ValueKey('roundtrip-search-minimized'),
-      color: Colors.transparent,
-      child: InkWell(
-        borderRadius: BorderRadius.circular(999),
-        onTap: () => _safeSetState(() => _routeSearchStatusMinimized = false),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(999),
-          child: BackdropFilter(
-            filter: ui.ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-              decoration: BoxDecoration(
-                color: capsuleColor,
-                borderRadius: BorderRadius.circular(999),
-                border: Border.all(color: borderColor),
-                boxShadow: [
-                  BoxShadow(
-                    color: const Color(0xFF140D08).withValues(alpha: 0.28),
-                    blurRadius: 22,
-                    offset: const Offset(0, 10),
-                  ),
-                ],
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const CupertinoActivityIndicator(radius: 7),
-                  const SizedBox(width: 10),
-                  Flexible(
-                    child: Text(
-                      title,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: textColor,
-                        fontSize: 13,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: -0.1,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildExpandedRoundTripSearchStatus({
+  Widget _buildCompactRoundTripSearchStatus({
     required String title,
     required String status,
-    required double? progressValue,
+    required double progress,
     required bool isNotice,
+    required double maxWidth,
   }) {
-    const cardColor = Color(0xE62A201A);
-    const topGlowColor = Color(0x66C89563);
-    const borderColor = Color(0x40F3D9BC);
-    const textColor = Color(0xFFF8EADB);
-    const secondaryTextColor = Color(0xCCDFC3A6);
-    const accentColor = Color(0xFFD6A66F);
-    return Material(
-      key: const ValueKey('roundtrip-search-expanded'),
-      color: Colors.transparent,
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(26),
-        child: BackdropFilter(
-          filter: ui.ImageFilter.blur(sigmaX: 22, sigmaY: 22),
-          child: Container(
-            padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(
-              color: cardColor,
-              borderRadius: BorderRadius.circular(26),
-              border: Border.all(color: borderColor),
-              gradient: const LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [
-                  Color(0xF03A2A20),
-                  Color(0xE6261B16),
-                  Color(0xE01B1512),
-                ],
-              ),
-              boxShadow: [
-                BoxShadow(
-                  color: const Color(0xFF120B07).withValues(alpha: 0.34),
-                  blurRadius: 28,
-                  offset: const Offset(0, 14),
-                ),
-                BoxShadow(
-                  color: topGlowColor.withValues(alpha: 0.18),
-                  blurRadius: 18,
-                  offset: const Offset(0, -6),
-                ),
-              ],
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Container(
-                      width: 36,
-                      height: 36,
-                      decoration: BoxDecoration(
-                        color: const Color(0x33F1C38E),
-                        borderRadius: BorderRadius.circular(15),
-                        border: Border.all(color: const Color(0x26F3D9BC)),
-                      ),
-                      child: isNotice
-                          ? const Icon(
-                              Icons.route_outlined,
-                              color: accentColor,
-                              size: 19,
-                            )
-                          : const CupertinoActivityIndicator(radius: 9),
+    final accent = AppAccentColors.accent;
+    final clampedProgress = progress.clamp(0.0, 1.0);
+    return TweenAnimationBuilder<double>(
+      key: const ValueKey('roundtrip-search-compact'),
+      duration: const Duration(milliseconds: 420),
+      curve: Curves.easeOutCubic,
+      tween: Tween<double>(end: clampedProgress),
+      builder: (context, animatedProgress, _) {
+        return Material(
+          color: Colors.transparent,
+          child: ConstrainedBox(
+            constraints: BoxConstraints(maxWidth: maxWidth),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(24),
+              child: BackdropFilter(
+                filter: ui.ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+                child: Container(
+                  padding: const EdgeInsets.fromLTRB(12, 11, 12, 10),
+                  decoration: BoxDecoration(
+                    color: const Color(0xE8151820),
+                    borderRadius: BorderRadius.circular(24),
+                    border: Border.all(
+                      color: accent.withValues(alpha: 0.46),
+                      width: 1.2,
                     ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
+                    boxShadow: [
+                      BoxShadow(
+                        color: accent.withValues(alpha: 0.22),
+                        blurRadius: 24,
+                        offset: const Offset(0, 10),
+                      ),
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.28),
+                        blurRadius: 18,
+                        offset: const Offset(0, 8),
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Row(
                         children: [
-                          Text(
-                            title,
-                            style: const TextStyle(
-                              color: textColor,
-                              fontSize: 15,
-                              fontWeight: FontWeight.w900,
-                              letterSpacing: -0.2,
+                          Container(
+                            width: 32,
+                            height: 32,
+                            decoration: BoxDecoration(
+                              color: accent.withValues(alpha: 0.18),
+                              borderRadius: BorderRadius.circular(14),
+                              border: Border.all(
+                                color: accent.withValues(alpha: 0.34),
+                              ),
+                            ),
+                            child: isNotice
+                                ? Icon(
+                                    CupertinoIcons.check_mark_circled,
+                                    color: accent,
+                                    size: 18,
+                                  )
+                                : CupertinoActivityIndicator(
+                                    radius: 8,
+                                    color: accent,
+                                  ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  title,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 14.5,
+                                    fontWeight: FontWeight.w900,
+                                    letterSpacing: -0.2,
+                                  ),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  status,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    color: Colors.white.withValues(alpha: 0.72),
+                                    fontSize: 12,
+                                    height: 1.15,
+                                    fontWeight: FontWeight.w600,
+                                    letterSpacing: -0.05,
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
-                          const SizedBox(height: 4),
+                          const SizedBox(width: 10),
                           Text(
-                            status,
-                            style: const TextStyle(
-                              color: secondaryTextColor,
+                            '${(animatedProgress * 100).clamp(0, 100).round()}%',
+                            style: TextStyle(
+                              color: accent,
                               fontSize: 13,
-                              height: 1.25,
-                              fontWeight: FontWeight.w600,
-                              letterSpacing: -0.05,
+                              fontWeight: FontWeight.w900,
+                              letterSpacing: -0.15,
                             ),
                           ),
                         ],
                       ),
-                    ),
-                    IconButton(
-                      onPressed: () => _safeSetState(
-                        () => _routeSearchStatusMinimized = true,
+                      const SizedBox(height: 8),
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(999),
+                        child: Container(
+                          height: 4,
+                          color: Colors.white.withValues(alpha: 0.10),
+                          alignment: Alignment.centerLeft,
+                          child: FractionallySizedBox(
+                            widthFactor: animatedProgress.clamp(0.03, 1.0),
+                            child: DecoratedBox(
+                              decoration: BoxDecoration(
+                                color: accent,
+                                borderRadius: BorderRadius.circular(999),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: accent.withValues(alpha: 0.48),
+                                    blurRadius: 10,
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
                       ),
-                      icon: const Icon(CupertinoIcons.chevron_up),
-                      color: secondaryTextColor,
-                      tooltip: 'Karte ansehen',
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(999),
-                  child: LinearProgressIndicator(
-                    minHeight: 4,
-                    value: progressValue,
-                    backgroundColor: Colors.white.withValues(alpha: 0.08),
-                    valueColor: const AlwaysStoppedAnimation<Color>(
-                      accentColor,
-                    ),
+                    ],
                   ),
                 ),
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    TextButton(
-                      onPressed: () => _safeSetState(
-                        () => _routeSearchStatusMinimized = true,
-                      ),
-                      style: TextButton.styleFrom(
-                        foregroundColor: accentColor,
-                        padding: EdgeInsets.zero,
-                        minimumSize: const Size(0, 34),
-                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      ),
-                      child: const Text('Karte ansehen'),
-                    ),
-                    const Spacer(),
-                    if (isNotice)
-                      TextButton(
-                        onPressed: () {
-                          _safeSetState(() {
-                            _routeSearchNoticeTitle = null;
-                            _routeSearchNoticeMessage = null;
-                            _routeSearchStatusMinimized = false;
-                          });
-                          unawaited(
-                            Future<void>.delayed(Duration.zero, _generateRoute),
-                          );
-                        },
-                        style: TextButton.styleFrom(
-                          foregroundColor: textColor,
-                          padding: const EdgeInsets.symmetric(horizontal: 10),
-                          minimumSize: const Size(0, 34),
-                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        ),
-                        child: const Text('Nochmal suchen'),
-                      ),
-                  ],
-                ),
-              ],
+              ),
             ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 
@@ -1719,12 +1711,18 @@ class _CruiseModePageState extends State<CruiseModePage>
   // ═══════════════════════ NAVIGATION OVERLAY ═════════════════════════════
 
   Widget _buildNavigationOverlay() {
+    final topInset = MediaQuery.of(context).padding.top;
     return Stack(
       children: [
+        Positioned(
+          top: topInset + 8,
+          left: 12,
+          child: _buildConfirmedRouteBackButton(),
+        ),
         if (_maneuvers.isNotEmpty)
           Positioned(
-            top: MediaQuery.of(context).padding.top + 8,
-            left: 12,
+            top: topInset + 8,
+            left: 68,
             right: 12,
             child: CruiseManeuverIndicator(
               maneuver:
@@ -1822,6 +1820,51 @@ class _CruiseModePageState extends State<CruiseModePage>
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildConfirmedRouteBackButton() {
+    final accent = AppAccentColors.accent;
+    return Semantics(
+      button: true,
+      label: 'Zurück zum Strecken-Setup',
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(18),
+        child: BackdropFilter(
+          filter: ui.ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+          child: Material(
+            color: const Color(0xE8151820),
+            child: InkWell(
+              onTap: _returnToCruiseSetupFromActiveRoute,
+              borderRadius: BorderRadius.circular(18),
+              child: Container(
+                width: 46,
+                height: 46,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(18),
+                  border: Border.all(
+                    color: accent.withValues(alpha: 0.48),
+                    width: 1.1,
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.22),
+                      blurRadius: 16,
+                      offset: const Offset(0, 8),
+                    ),
+                  ],
+                ),
+                alignment: Alignment.center,
+                child: Icon(
+                  CupertinoIcons.chevron_left,
+                  color: Colors.white.withValues(alpha: 0.96),
+                  size: 22,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 
@@ -1975,7 +2018,10 @@ class _CruiseModePageState extends State<CruiseModePage>
 
   Widget _buildBottomActions() {
     final hasConfirmableRoute =
-        _routeGeoJson != null && _fullRouteCoordinates.isNotEmpty;
+        _lastRouteResult != null &&
+        (_fullRouteCoordinates.length >= 2 ||
+            _routeLatLngs.length >= 2 ||
+            _routeGeoJson != null);
     return Container(
       height: 160,
       padding: const EdgeInsets.symmetric(horizontal: 24),
@@ -2027,16 +2073,27 @@ class _CruiseModePageState extends State<CruiseModePage>
                 borderRadius: BorderRadius.circular(30),
                 boxShadow: [
                   BoxShadow(
-                    color: AppAccentColors.accent.withValues(alpha: 0.3),
+                    color:
+                        (_isLoading && _isRoundTrip
+                                ? const Color(0xFFFF453A)
+                                : AppAccentColors.accent)
+                            .withValues(alpha: 0.3),
                     blurRadius: 12,
                     offset: const Offset(0, 4),
                   ),
                 ],
               ),
               child: ElevatedButton(
-                onPressed: _isLoading ? null : _generateRoute,
+                onPressed: _isLoading
+                    ? (_isRoundTrip ? _cancelRouteGeneration : null)
+                    : _generateRoute,
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: AppAccentColors.accent,
+                  backgroundColor: _isLoading && _isRoundTrip
+                      ? const Color(0xFFB9443A)
+                      : AppAccentColors.accent,
+                  disabledBackgroundColor: AppAccentColors.accent.withValues(
+                    alpha: 0.42,
+                  ),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(30),
                   ),
@@ -2044,7 +2101,7 @@ class _CruiseModePageState extends State<CruiseModePage>
                 ),
                 child: _isLoading
                     ? Text(
-                        _isRoundTrip ? 'Suche läuft' : 'Route wird gesucht',
+                        _isRoundTrip ? 'Suche abbrechen' : 'Route wird gesucht',
                         style: const TextStyle(
                           color: Colors.white,
                           fontSize: 16,
@@ -2542,9 +2599,10 @@ class _CruiseModePageState extends State<CruiseModePage>
   Future<void> _generateRoute() async {
     // Doppelklick-Schutz: Wenn bereits generiert wird, ignorieren
     if (_isLoading) return;
+    final generationId = ++_routeGenerationSerial;
     final previousUiState = _captureGeneratedRouteUiState();
     _dismissTransientRouteUi();
-    _startRouteLoadingUi();
+    _startRouteLoadingUi(generationId: generationId);
 
     // Hintergrund-Generierung pausieren während User aktiv generiert
     RouteCacheService.beginUserGeneration();
@@ -2553,6 +2611,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     String? requestedWaypointSignature;
     try {
       final startPosition = await _getStartCoordinates();
+      if (_isRouteGenerationCancelled(generationId)) return;
 
       final digits = _selectedLength.replaceAll(RegExp(r'[^0-9]'), '');
       final distance = digits.isNotEmpty ? int.parse(digits) : 50;
@@ -2633,8 +2692,10 @@ class _CruiseModePageState extends State<CruiseModePage>
             proximityLongitude: startPosition.longitude,
             requireUnambiguous: true,
           );
+          if (_isRouteGenerationCancelled(generationId)) return;
         } on GeocodingException catch (e) {
           debugPrint('[CruiseMode] Geocoding failed: ${e.debugMessage}');
+          if (_isRouteGenerationCancelled(generationId)) return;
           _restoreGeneratedRouteFailureUi(
             previousUiState,
             e.userMessage,
@@ -2747,6 +2808,12 @@ class _CruiseModePageState extends State<CruiseModePage>
         );
       }
 
+      if (_isRouteGenerationCancelled(generationId)) {
+        debugPrint(
+          '[CruiseMode] Route generation result ignored after user cancel.',
+        );
+        return;
+      }
       await _acceptGeneratedRouteResult(
         result: result,
         startPosition: startPosition,
@@ -2759,6 +2826,12 @@ class _CruiseModePageState extends State<CruiseModePage>
         label: '[CruiseMode] Route generation stacktrace',
         stackTrace: stack,
       );
+      if (_isRouteGenerationCancelled(generationId)) {
+        debugPrint(
+          '[CruiseMode] Route generation error ignored after user cancel.',
+        );
+        return;
+      }
       Object errorForUi = e;
       if (e is RouteServiceException && _isSearchInProgressError(e)) {
         final sessionId = e.edgeMeta['search_session_id']?.toString();
@@ -2769,7 +2842,11 @@ class _CruiseModePageState extends State<CruiseModePage>
             sessionId: sessionId,
           );
           try {
-            final polled = await _pollRoundTripSearchSession(sessionId);
+            final polled = await _pollRoundTripSearchSession(
+              sessionId,
+              generationId: generationId,
+            );
+            if (_isRouteGenerationCancelled(generationId)) return;
             if (polled != null) {
               _logRoundTripSearchUiDecision(
                 'route_accepted_from_poll',
@@ -2825,23 +2902,27 @@ class _CruiseModePageState extends State<CruiseModePage>
     } finally {
       // Hintergrund-Generierung wieder erlauben
       RouteCacheService.endUserGeneration();
-      _stopRouteLoadingUi();
+      _stopRouteLoadingUi(generationId: generationId);
     }
   }
 
-  Future<RouteResult?> _pollRoundTripSearchSession(String sessionId) async {
+  Future<RouteResult?> _pollRoundTripSearchSession(
+    String sessionId, {
+    required int generationId,
+  }) async {
     const maxPolls = 45;
     DateTime? lastWorkerKickAt;
     for (var poll = 0; poll < maxPolls; poll += 1) {
-      if (!mounted || _disposed) return null;
+      if (_isRouteGenerationCancelled(generationId)) return null;
       await Future.delayed(const Duration(seconds: 4));
-      if (!mounted || _disposed) return null;
+      if (_isRouteGenerationCancelled(generationId)) return null;
       _logRoundTripSearchUiDecision(
         'poll_attempt',
         sessionId: sessionId,
         pollAttempt: poll + 1,
       );
       final result = await _routeService.pollRoundTripSearchSession(sessionId);
+      if (_isRouteGenerationCancelled(generationId)) return null;
       if (result != null) {
         _logRoundTripSearchUiDecision(
           'poll_found',
@@ -2881,6 +2962,11 @@ class _CruiseModePageState extends State<CruiseModePage>
       }
       if (mounted && !_disposed) {
         setState(() {
+          final pollProgress = 0.34 + ((poll + 1) / maxPolls) * 0.56;
+          _routeSearchProgress = math.max(
+            _routeSearchProgress,
+            math.min(pollProgress, 0.94),
+          );
           _routeLoadingPhaseIndex = math.min(
             math.max(_routeLoadingPhaseIndex, 2) + (poll % 4 == 0 ? 1 : 0),
             _roundTripLoadingPhases.length - 1,
@@ -3000,24 +3086,30 @@ class _CruiseModePageState extends State<CruiseModePage>
       '[CruiseMode] Applying route result: ${prepared.coordinates.length} coords',
     );
     _applyRouteResult(prepared);
+    _hideRouteSearchStatusForAcceptedRoute();
     _lastGeneratedWasRoundTrip = _isRoundTrip;
     _lastGeneratedSelectedKm = _isRoundTrip ? distance : null;
     _lastGeneratedSelectedStyle = _selectedStyle;
     _lastGeneratedAvoidHighways = _avoidHighways;
     _lastGeneratedWaypointSignature = waypointSignature;
-    _routeSearchNoticeTitle = null;
-    _routeSearchNoticeMessage = null;
-    _routeSearchStatusMinimized = false;
-
-    debugPrint('[CruiseMode] Drawing route...');
-    await _drawRoute(prepared.geometry, animateRouteDraw: true);
 
     if (mounted) {
-      debugPrint('[CruiseMode] Collapsing config, showing banner');
+      debugPrint('[CruiseMode] Route preview ready, showing confirm state');
       setState(() {
         _configCollapsed = true;
         _showRouteInfoBanner = true;
       });
+    }
+
+    debugPrint('[CruiseMode] Drawing route...');
+    try {
+      await _drawRoute(prepared.geometry, animateRouteDraw: true);
+    } catch (drawError, drawStack) {
+      debugPrint('[CruiseMode] Route drawing failed after accept: $drawError');
+      debugPrintStack(
+        label: '[CruiseMode] Route drawing stacktrace',
+        stackTrace: drawStack,
+      );
     }
     debugPrint('[CruiseMode] Route generation SUCCESS');
   }
@@ -3449,18 +3541,17 @@ class _CruiseModePageState extends State<CruiseModePage>
       'search_in_progress' =>
         'Wir prüfen Live-Varianten und verfeinern die Strecke.',
       'search_session_timeout' =>
-        'Die Suche dauert länger als üblich. Wir prüfen weitere Varianten im Hintergrund.',
+        'Die Suche läuft im Hintergrund weiter. Beim nächsten Versuch prüfen wir neue Vorschläge.',
       'search_session_no_route' =>
-        'Wir haben mehrere Varianten geprüft. Gerade war keine sichere Route dabei, die Suche läuft aber weiter.',
+        'Gerade war keine sichere Route dabei. Wir sammeln weiter passende Varianten.',
       'route_quality_too_low' =>
         'Die gefundenen Varianten waren noch nicht sauber genug. Wir prüfen weiter.',
       _ =>
-        'Gerade keine gute Route gefunden. Wir suchen weiter im Hintergrund.',
+        'Gerade keine gute Route gefunden. Wir suchen weiter und prüfen beim nächsten Versuch erneut.',
     };
     _safeSetState(() {
       _routeSearchNoticeTitle = title;
       _routeSearchNoticeMessage = message;
-      _routeSearchStatusMinimized = false;
     });
   }
 
@@ -3600,6 +3691,10 @@ class _CruiseModePageState extends State<CruiseModePage>
   }
 
   void _resetGeneratedRouteUiState() {
+    _routeDrawAnimationToken++;
+    _routeDrawAnimationTimer?.cancel();
+    _routeLoadingPhaseTimer?.cancel();
+    _routeLoadingPhaseTimer = null;
     _clearAccessLegState();
     _lastRouteResult = null;
     _sessionRouteResult = null;
@@ -3617,6 +3712,13 @@ class _CruiseModePageState extends State<CruiseModePage>
     _activeSpeedLimits = [];
     _announcedManeuverIndices.clear();
     _safeSetState(() {
+      _isLoading = false;
+      _routeLoadingPhaseIndex = 0;
+      _routeSearchProgress = 0.08;
+      _activeRouteGenerationSerial = null;
+      _routeGenerationCancelled = false;
+      _routeSearchNoticeTitle = null;
+      _routeSearchNoticeMessage = null;
       _routeGeoJson = null;
       _routeDistance = null;
       _routeDuration = null;
@@ -3645,6 +3747,22 @@ class _CruiseModePageState extends State<CruiseModePage>
       _isCameraLocked = false;
       _configCollapsed = false;
     });
+  }
+
+  void _returnToCruiseSetupFromActiveRoute() {
+    if (!mounted || _disposed) return;
+    _dismissTransientRouteUi();
+    _stopSimulation(restartLiveTracking: false);
+    _stopNavigationTracking();
+    CruiseModePage.isFullscreen.value = false;
+    _resetGeneratedRouteUiState();
+
+    final currentLocation = _userLocation;
+    if (currentLocation != null) {
+      _setCameraToPosition(currentLocation);
+    } else {
+      unawaited(_initializeMapLocation());
+    }
   }
 
   void _maybeFinalizeAccessLegPhase() {
@@ -5820,6 +5938,9 @@ class _CruiseModePageState extends State<CruiseModePage>
       belowMinimum: false,
       completed: true,
     );
+    unawaited(
+      _recordRouteCompletionCandidate(completed: true, discarded: false),
+    );
     showCruiseCompletionSheet(
       context: context,
       child: CruiseCompletionDialog(
@@ -5841,6 +5962,10 @@ class _CruiseModePageState extends State<CruiseModePage>
           return result;
         },
         onDiscard: () async {
+          await _recordRouteCompletionCandidate(
+            completed: true,
+            discarded: true,
+          );
           _resetAfterCompletion();
         },
       ),
@@ -5893,6 +6018,10 @@ class _CruiseModePageState extends State<CruiseModePage>
           return result;
         },
         onDiscard: () async {
+          await _recordRouteCompletionCandidate(
+            completed: false,
+            discarded: true,
+          );
           _resetAfterCompletion();
         },
       ),
@@ -5996,6 +6125,18 @@ class _CruiseModePageState extends State<CruiseModePage>
           durationSeconds: adjustedResult.durationSeconds,
           qualityTier: adjustedResult.edgeMeta['quality_tier']?.toString(),
         );
+        await RouteCompletionCandidateService.submitCandidate(
+          result: adjustedResult,
+          style: _selectedStyle,
+          isRoundTrip: _isRoundTrip,
+          avoidHighways: _activeAvoidHighways || _avoidHighways,
+          savedByUser: true,
+          discardedByUser: false,
+          completedAtEnd: completed,
+          rating: rating,
+          ratingTags: ratingTags,
+          completionPercent: progressFraction * 100,
+        );
         debugPrint('[CruiseMode] Route saved successfully!');
       }
       // XP/Level/Badges synchronisieren (nur wenn über Minimum-Schwelle)
@@ -6031,18 +6172,56 @@ class _CruiseModePageState extends State<CruiseModePage>
     }
   }
 
+  Future<void> _recordRouteCompletionCandidate({
+    required bool completed,
+    required bool discarded,
+  }) async {
+    try {
+      final adjustedResult = _buildAdjustedCompletionResult(
+        completed: completed,
+      );
+      if (adjustedResult == null) return;
+      final progressFraction = _calculateCompletionProgressFraction(
+        adjustedResult.distanceMeters,
+        completed: completed,
+      );
+      if (discarded) {
+        await RouteRatingService.saveRating(
+          result: adjustedResult,
+          rating: null,
+          tags: const ['route_discarded'],
+          completionPercent: progressFraction * 100,
+          distanceKm: adjustedResult.distanceKm,
+          durationSeconds: adjustedResult.durationSeconds,
+          qualityTier: adjustedResult.edgeMeta['quality_tier']?.toString(),
+        );
+      }
+      await RouteCompletionCandidateService.submitCandidate(
+        result: adjustedResult,
+        style: _selectedStyle,
+        isRoundTrip: _isRoundTrip,
+        avoidHighways: _activeAvoidHighways || _avoidHighways,
+        savedByUser: false,
+        discardedByUser: discarded,
+        completedAtEnd: completed,
+        ratingTags: discarded ? const ['route_discarded'] : const [],
+        completionPercent: progressFraction * 100,
+      );
+    } catch (error) {
+      debugPrint('[CruiseMode] Completion candidate skipped: $error');
+    }
+  }
+
   void _resetAfterCompletion() {
+    _stopSimulation(restartLiveTracking: false);
+    _stopNavigationTracking();
     CruiseModePage.isFullscreen.value = false;
-    _clearAccessLegState();
-    _safeSetState(() {
-      _isRouteConfirmed = false;
-      _isCameraLocked = false;
-      _totalDistanceDriven = 0.0;
-      _xpStreakDays = 1;
-      _sessionRouteStartIndexInActiveRoute = 0;
-      _navigationStartTime = null;
-      _isExistingRouteSession = false;
-    });
+    _xpStreakDays = 1;
+    _resetGeneratedRouteUiState();
+    final currentLocation = _userLocation;
+    if (currentLocation != null) {
+      _setCameraToPosition(currentLocation);
+    }
   }
 
   // ═══════════════════════ DIALOGS ══════════════════════════════════════════

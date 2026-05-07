@@ -7,6 +7,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:provider/provider.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/data/services/gamification_service.dart';
+import 'package:cruise_connect/data/services/home_route_recommendation_service.dart';
 import 'package:cruise_connect/data/services/route_elevation_service.dart';
 import 'package:cruise_connect/data/services/saved_routes_service.dart';
 import 'package:cruise_connect/domain/models/saved_route.dart';
@@ -47,7 +48,7 @@ class _HomeContentPageState extends State<HomeContentPage>
   bool _loading = true;
   List<double> _weeklyChartData = List.filled(7, 0);
   int _streakDays = 0;
-  SavedRoute? _weeklyTopRoute;
+  HomeRouteRecommendation? _todayRecommendation;
   bool _isRouteSaved = false;
   final Map<String, _HeroRouteInsights> _heroInsightsByRouteId = {};
   final Set<String> _heroInsightsLoading = <String>{};
@@ -118,8 +119,8 @@ class _HomeContentPageState extends State<HomeContentPage>
 
       final streak = GamificationService.calculateDrivingStreakDays(rideRoutes);
 
-      // Wöchentliche Top-Route laden
-      SavedRoute? topRoute;
+      // Home-Empfehlung aus dem verified Routenpool laden.
+      HomeRouteRecommendation? recommendation;
       bool routeSaved = false;
       try {
         // Standort ermitteln
@@ -145,20 +146,20 @@ class _HomeContentPageState extends State<HomeContentPage>
           debugPrint('[Home] Standort nicht verfügbar, nutze Fallback: $e');
         }
 
-        topRoute = await SavedRoutesService.getWeeklyTopRoute(
+        recommendation = await HomeRouteRecommendationService.getTodayRoute(
           userLat: userLat,
           userLng: userLng,
         );
 
         // Prüfen ob Route bereits gespeichert
-        if (topRoute != null) {
+        if (recommendation != null) {
           routeSaved = SavedRoutesService.hasEquivalentSavedRoute(
-            topRoute,
+            recommendation.route,
             routes,
           );
         }
       } catch (e) {
-        debugPrint('[Home] Top-Route laden fehlgeschlagen: $e');
+        debugPrint('[Home] Routepool-Empfehlung laden fehlgeschlagen: $e');
       }
 
       if (mounted) {
@@ -176,14 +177,14 @@ class _HomeContentPageState extends State<HomeContentPage>
           _avatarUrl = profile?['avatar_url'] as String?;
           _weeklyChartData = normalized;
           _streakDays = streak;
-          _weeklyTopRoute = topRoute;
+          _todayRecommendation = recommendation;
           _isRouteSaved = routeSaved;
           _loading = false;
         });
       }
 
-      if (topRoute != null) {
-        unawaited(_ensureHeroRouteInsights(topRoute));
+      if (recommendation != null) {
+        unawaited(_ensureHeroRouteInsights(recommendation.route));
       }
     } catch (e) {
       debugPrint('[Home] Daten laden fehlgeschlagen: $e');
@@ -549,8 +550,9 @@ class _HomeContentPageState extends State<HomeContentPage>
   }
 
   Widget _buildSuggestedRouteSection() {
-    if (_weeklyTopRoute != null) {
-      return _buildSuggestedRouteCard(_weeklyTopRoute!);
+    final recommendation = _todayRecommendation;
+    if (recommendation != null) {
+      return _buildSuggestedRouteCard(recommendation);
     }
 
     if (_loading) {
@@ -560,14 +562,13 @@ class _HomeContentPageState extends State<HomeContentPage>
     return _buildEmptyRecommendation();
   }
 
-  Widget _buildSuggestedRouteCard(SavedRoute route) {
+  Widget _buildSuggestedRouteCard(HomeRouteRecommendation recommendation) {
+    final route = recommendation.route;
     final coordinates = _extractCoordinates(route.geometry);
     final heroInsights = _heroInsightsByRouteId[route.id];
     final isLoadingInsights = _heroInsightsLoading.contains(route.id);
-    final ratingValue = route.rating?.toDouble();
-    final title = (route.name?.trim().isNotEmpty ?? false)
-        ? route.name!.trim()
-        : '${route.styleEmoji} ${route.style}';
+    final ratingValue = recommendation.averageRating;
+    final title = recommendation.displayName;
     final climbMeters = heroInsights?.elevation?.ascentMeters;
     final routeTypeLabel = route.isRoundTrip ? 'Rundkurs' : 'A nach B';
     final curvesLabel = heroInsights != null
@@ -585,127 +586,130 @@ class _HomeContentPageState extends State<HomeContentPage>
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        final isCompact = constraints.maxWidth < 680;
-        final previewSize = isCompact ? 148.0 : 232.0;
+        final isCompact = constraints.maxWidth < 430;
+        final previewSize = isCompact ? 92.0 : 116.0;
 
         return Container(
           width: double.infinity,
           decoration: BoxDecoration(
-            color: const Color(0xFF2A313C),
-            borderRadius: BorderRadius.circular(34),
+            color: const Color(0xFF252C36),
+            borderRadius: BorderRadius.circular(24),
             boxShadow: [
               BoxShadow(
-                color: AppAccentColors.accent.withValues(alpha: 0.12),
-                blurRadius: 28,
-                offset: const Offset(0, 14),
+                color: AppAccentColors.accent.withValues(alpha: 0.10),
+                blurRadius: 18,
+                offset: const Offset(0, 8),
               ),
             ],
           ),
           child: Padding(
-            padding: const EdgeInsets.all(18),
+            padding: const EdgeInsets.all(12),
             child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
+              crossAxisAlignment: CrossAxisAlignment.center,
               children: [
                 Expanded(
                   child: Padding(
-                    padding: const EdgeInsets.only(
-                      right: 16,
-                      top: 4,
-                      bottom: 4,
-                    ),
+                    padding: const EdgeInsets.only(right: 12),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
                       children: [
-                        const Text(
-                          'Heute für dich',
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 17,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: 0.2,
-                          ),
+                        Row(
+                          children: [
+                            Container(
+                              width: 7,
+                              height: 7,
+                              decoration: BoxDecoration(
+                                color: AppAccentColors.accent,
+                                shape: BoxShape.circle,
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: AppAccentColors.accent.withValues(
+                                      alpha: 0.45,
+                                    ),
+                                    blurRadius: 10,
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(width: 7),
+                            Text(
+                              'Heute für dich',
+                              style: TextStyle(
+                                color: Colors.white.withValues(alpha: 0.78),
+                                fontSize: 12,
+                                fontWeight: FontWeight.w800,
+                                letterSpacing: 0.45,
+                              ),
+                            ),
+                          ],
                         ),
-                        const SizedBox(height: 18),
+                        const SizedBox(height: 6),
                         Text(
-                          '${route.styleEmoji} – $title',
-                          maxLines: 2,
+                          title,
+                          maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
                             color: Colors.white,
-                            fontSize: isCompact ? 21 : 25,
-                            fontWeight: FontWeight.w800,
+                            fontSize: isCompact ? 18 : 20,
+                            fontWeight: FontWeight.w900,
+                            letterSpacing: -0.25,
                             height: 1.05,
                           ),
                         ),
-                        const SizedBox(height: 12),
+                        const SizedBox(height: 5),
                         Text(
                           '$distanceLabel • $curvesLabel • $durationLabel',
-                          maxLines: 2,
+                          maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
-                            color: Colors.white.withValues(alpha: 0.92),
-                            fontSize: isCompact ? 14 : 17,
-                            fontWeight: FontWeight.w600,
-                            height: 1.2,
+                            color: Colors.white.withValues(alpha: 0.68),
+                            fontSize: isCompact ? 11.5 : 12.5,
+                            fontWeight: FontWeight.w700,
+                            height: 1.1,
                           ),
                         ),
-                        const SizedBox(height: 24),
-                        if (ratingValue != null && ratingValue > 0)
-                          _buildSuggestedInfoRow(
-                            icon: Icons.star_rounded,
-                            label:
-                                '${ratingValue.toStringAsFixed(1)} Bewertung',
-                            tint: const Color(0xFFFFD76A),
-                          ),
-                        const SizedBox(height: 14),
-                        _buildSuggestedInfoRow(
-                          icon: Icons.local_fire_department_rounded,
-                          label: tertiaryLabel,
-                          tint: AppAccentColors.accent,
-                        ),
-                        const SizedBox(height: 18),
+                        const SizedBox(height: 9),
                         Wrap(
-                          spacing: 10,
-                          runSpacing: 10,
+                          spacing: 6,
+                          runSpacing: 6,
+                          children: [
+                            _buildMetricChip(
+                              icon: Icons.star_rounded,
+                              label:
+                                  ratingValue != null &&
+                                      recommendation.ratingCount > 0
+                                  ? '${ratingValue.toStringAsFixed(1)} (${recommendation.ratingCount})'
+                                  : 'Noch keine Bewertung',
+                              tint: const Color(0xFFFFD76A),
+                            ),
+                            _buildMetricChip(
+                              icon: Icons.flag_circle_rounded,
+                              label: recommendation.hasCompletions
+                                  ? '${recommendation.completionCount} Fahrten'
+                                  : 'Neue Empfehlung',
+                              tint: AppAccentColors.accent,
+                            ),
+                            _buildMetricChip(
+                              icon: Icons.local_fire_department_rounded,
+                              label: tertiaryLabel,
+                              tint: const Color(0xFFFF9D6A),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 10),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
                           crossAxisAlignment: WrapCrossAlignment.center,
                           children: [
                             _buildStyleChip(route),
                             _buildSaveChip(route),
-                            GestureDetector(
+                            _buildDriveChip(
                               onTap: () {
                                 CruiseModePage.pendingRoute.value = route;
                                 widget.onTabChange?.call(2);
                               },
-                              child: Container(
-                                height: 42,
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 16,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: AppAccentColors.accent,
-                                  borderRadius: BorderRadius.circular(16),
-                                ),
-                                alignment: Alignment.center,
-                                child: const Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Icon(
-                                      Icons.directions_car_rounded,
-                                      color: Colors.white,
-                                      size: 18,
-                                    ),
-                                    SizedBox(width: 8),
-                                    Text(
-                                      'Fahren',
-                                      style: TextStyle(
-                                        color: Colors.white,
-                                        fontSize: 13,
-                                        fontWeight: FontWeight.w700,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
                             ),
                           ],
                         ),
@@ -726,29 +730,34 @@ class _HomeContentPageState extends State<HomeContentPage>
     );
   }
 
-  Widget _buildSuggestedInfoRow({
+  Widget _buildMetricChip({
     required IconData icon,
     required String label,
     required Color tint,
   }) {
-    return Row(
-      children: [
-        Icon(icon, size: 22, color: tint),
-        const SizedBox(width: 10),
-        Expanded(
-          child: Text(
+    return Container(
+      height: 26,
+      padding: const EdgeInsets.symmetric(horizontal: 8),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.16),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 13, color: tint),
+          const SizedBox(width: 5),
+          Text(
             label,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
             style: const TextStyle(
               color: Colors.white,
-              fontSize: 16,
-              fontWeight: FontWeight.w600,
-              height: 1.1,
+              fontSize: 10.5,
+              fontWeight: FontWeight.w700,
             ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 
@@ -762,36 +771,36 @@ class _HomeContentPageState extends State<HomeContentPage>
       height: size,
       child: DecoratedBox(
         decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(30),
+          borderRadius: BorderRadius.circular(24),
           gradient: LinearGradient(
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
             colors: [
-              Color.lerp(AppAccentColors.accent, Colors.white, 0.10)!,
-              AppAccentColors.accentStrong,
+              Color.lerp(AppAccentColors.accent, Colors.white, 0.16)!,
+              Color.lerp(AppAccentColors.accent, Colors.black, 0.24)!,
             ],
           ),
           boxShadow: [
             BoxShadow(
               color: AppAccentColors.accent.withValues(alpha: 0.28),
-              blurRadius: 28,
-              offset: const Offset(0, 10),
+              blurRadius: 18,
+              offset: const Offset(0, 8),
             ),
           ],
         ),
         child: Padding(
-          padding: const EdgeInsets.all(10),
+          padding: const EdgeInsets.all(7),
           child: Container(
             decoration: BoxDecoration(
-              color: const Color(0xFF171C24),
-              borderRadius: BorderRadius.circular(24),
+              color: const Color(0xFF151B23),
+              borderRadius: BorderRadius.circular(19),
             ),
             child: Stack(
               children: [
                 Positioned.fill(
                   child: Container(
                     decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(24),
+                      borderRadius: BorderRadius.circular(19),
                       gradient: LinearGradient(
                         begin: Alignment.topLeft,
                         end: Alignment.bottomRight,
@@ -805,7 +814,7 @@ class _HomeContentPageState extends State<HomeContentPage>
                 ),
                 Positioned.fill(
                   child: Padding(
-                    padding: const EdgeInsets.all(18),
+                    padding: const EdgeInsets.all(10),
                     child: coordinates.length >= 2
                         ? CustomPaint(
                             painter: _RoutePolylinePainter(
@@ -821,12 +830,12 @@ class _HomeContentPageState extends State<HomeContentPage>
                   ),
                 ),
                 Positioned(
-                  left: 14,
-                  top: 14,
+                  left: 9,
+                  top: 9,
                   child: Container(
                     padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 5,
+                      horizontal: 7,
+                      vertical: 4,
                     ),
                     decoration: BoxDecoration(
                       color: Colors.black.withValues(alpha: 0.28),
@@ -834,16 +843,16 @@ class _HomeContentPageState extends State<HomeContentPage>
                     ),
                     child: Text(
                       route.styleEmoji,
-                      style: const TextStyle(fontSize: 13),
+                      style: const TextStyle(fontSize: 11),
                     ),
                   ),
                 ),
                 Positioned(
-                  right: 14,
-                  bottom: 14,
+                  right: 9,
+                  bottom: 9,
                   child: Container(
-                    width: 28,
-                    height: 28,
+                    width: 24,
+                    height: 24,
                     decoration: BoxDecoration(
                       color: Colors.black.withValues(alpha: 0.28),
                       shape: BoxShape.circle,
@@ -851,7 +860,7 @@ class _HomeContentPageState extends State<HomeContentPage>
                     child: const Icon(
                       Icons.map_outlined,
                       color: Colors.white,
-                      size: 14,
+                      size: 12,
                     ),
                   ),
                 ),
@@ -960,25 +969,23 @@ class _HomeContentPageState extends State<HomeContentPage>
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          _shimmerBar(width: capped(150), height: 18),
-          const SizedBox(height: 20),
-          _shimmerBar(width: capped(250), height: 28),
+          _shimmerBar(width: capped(112), height: 12),
+          const SizedBox(height: 8),
+          _shimmerBar(width: capped(220), height: 24),
+          const SizedBox(height: 8),
+          _shimmerBar(width: capped(230), height: 14),
           const SizedBox(height: 12),
-          _shimmerBar(width: capped(260), height: 18),
-          const SizedBox(height: 28),
-          _shimmerBar(width: capped(220), height: 18),
-          const SizedBox(height: 14),
-          _shimmerBar(width: capped(180), height: 18),
-          const SizedBox(height: 20),
           Wrap(
-            spacing: 10,
-            runSpacing: 10,
+            spacing: 8,
+            runSpacing: 8,
             children: [
-              _shimmerPill(width: capped(92)),
-              _shimmerPill(width: capped(42)),
-              _shimmerPill(width: capped(90)),
+              _shimmerPill(width: capped(118)),
+              _shimmerPill(width: capped(98)),
+              _shimmerPill(width: capped(74)),
             ],
           ),
+          const SizedBox(height: 10),
+          _shimmerBar(width: capped(190), height: 34, radius: 12),
         ],
       );
     }
@@ -986,13 +993,13 @@ class _HomeContentPageState extends State<HomeContentPage>
     return LayoutBuilder(
       builder: (context, constraints) {
         final isCompact = constraints.maxWidth < 420;
-        final previewSize = isCompact ? 132.0 : 188.0;
+        final previewSize = isCompact ? 92.0 : 116.0;
 
         return Container(
           width: double.infinity,
           decoration: BoxDecoration(
             color: const Color(0xFF2A313C),
-            borderRadius: BorderRadius.circular(34),
+            borderRadius: BorderRadius.circular(24),
             boxShadow: [
               BoxShadow(
                 color: AppAccentColors.accent.withValues(alpha: 0.08),
@@ -1002,9 +1009,9 @@ class _HomeContentPageState extends State<HomeContentPage>
             ],
           ),
           child: Padding(
-            padding: const EdgeInsets.all(18),
+            padding: const EdgeInsets.all(12),
             child: Container(
-              constraints: const BoxConstraints(minHeight: 208),
+              constraints: const BoxConstraints(minHeight: 150),
               child: Row(
                 children: [
                   Expanded(
@@ -1040,13 +1047,13 @@ class _HomeContentPageState extends State<HomeContentPage>
       },
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 180),
-        width: 44,
-        height: 44,
+        width: 36,
+        height: 34,
         decoration: BoxDecoration(
           color: _isRouteSaved
               ? const Color(0xFFFFE2A8).withValues(alpha: 0.16)
               : Colors.black.withValues(alpha: 0.14),
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(12),
           border: Border.all(
             color: _isRouteSaved
                 ? const Color(0xFFFFE2A8).withValues(alpha: 0.45)
@@ -1058,7 +1065,7 @@ class _HomeContentPageState extends State<HomeContentPage>
               ? Icons.bookmark_rounded
               : Icons.bookmark_border_rounded,
           color: _isRouteSaved ? const Color(0xFFFFE2A8) : Colors.white,
-          size: 20,
+          size: 17,
         ),
       ),
     );
@@ -1066,18 +1073,58 @@ class _HomeContentPageState extends State<HomeContentPage>
 
   Widget _buildStyleChip(SavedRoute route) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      height: 34,
+      padding: const EdgeInsets.symmetric(horizontal: 10),
       decoration: BoxDecoration(
         color: Colors.black.withValues(alpha: 0.14),
-        borderRadius: BorderRadius.circular(999),
+        borderRadius: BorderRadius.circular(12),
         border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
       ),
-      child: Text(
-        '${route.styleEmoji} ${route.style}',
-        style: const TextStyle(
-          color: Colors.white,
-          fontSize: 12,
-          fontWeight: FontWeight.w700,
+      child: Center(
+        child: Text(
+          '${route.styleEmoji} ${route.style}',
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 11,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDriveChip({required VoidCallback onTap}) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        height: 34,
+        padding: const EdgeInsets.symmetric(horizontal: 14),
+        decoration: BoxDecoration(
+          color: AppAccentColors.accent,
+          borderRadius: BorderRadius.circular(12),
+          boxShadow: [
+            BoxShadow(
+              color: AppAccentColors.accent.withValues(alpha: 0.24),
+              blurRadius: 14,
+              offset: const Offset(0, 6),
+            ),
+          ],
+        ),
+        alignment: Alignment.center,
+        child: const Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.directions_car_rounded, color: Colors.white, size: 15),
+            SizedBox(width: 7),
+            Text(
+              'Fahren',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 12,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ],
         ),
       ),
     );

@@ -89,6 +89,27 @@ Deno.test("Schlechte Route mit negativen Tags wird nicht promoted", () => {
   assertEquals(decision.reason, "negative_tags");
 });
 
+Deno.test("Verworfene User-Routen bleiben Candidate und werden nicht promoted", () => {
+  const ratings = summarizeRatings([
+    {
+      routeFingerprint: "candidate-good",
+      rating: 5,
+      completionPercent: 95,
+      tags: ["route_discarded"],
+    },
+    { routeFingerprint: "candidate-good", rating: 5, completionPercent: 90 },
+  ]);
+
+  const decision = shouldPromoteCandidate(baseCandidate, ratings, {
+    activeVerifiedCount: 2,
+    maxPoolSize: 20,
+    existingPoolFingerprints: new Set(),
+  });
+
+  assertEquals(decision.accepted, false);
+  assertEquals(decision.reason, "negative_tags");
+});
+
 Deno.test("Max pool size bleibt pro Zelle erhalten", () => {
   const ratings = summarizeRatings([
     { routeFingerprint: "candidate-good", rating: 5, completionPercent: 91 },

@@ -8,7 +8,7 @@ import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/presentation/pages/post_detail_page.dart';
 import 'package:cruise_connect/presentation/pages/user_profile_page.dart';
 import 'package:cruise_connect/presentation/widgets/mentions.dart';
-import 'package:cruise_connect/presentation/widgets/route_chip.dart';
+import 'package:cruise_connect/presentation/widgets/social/route_attachment_card.dart';
 import 'package:cruise_connect/presentation/widgets/user_avatar.dart';
 
 class LikedPostsPage extends StatefulWidget {
@@ -370,11 +370,9 @@ class _LikedPostCard extends StatelessWidget {
                       ),
                       if (post['shared_route_id'] != null) ...[
                         const SizedBox(height: 10),
-                        Align(
-                          alignment: Alignment.centerLeft,
-                          child: RouteChip(
-                            routeId: post['shared_route_id'] as String,
-                          ),
+                        RouteAttachmentCard(
+                          routeId: post['shared_route_id'] as String,
+                          compact: true,
                         ),
                       ],
                       const SizedBox(height: 12),

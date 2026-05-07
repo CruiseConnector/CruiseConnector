@@ -52,6 +52,7 @@ function prioritizeCandidatePlans(
     "abendrunde",
     "entdecker",
     "curve",
+    "curvy",
     "evening",
     "explore",
     "h0",
@@ -94,10 +95,13 @@ function prioritizeCandidatePlans(
   const noHighwayOrderTokens = noHighwayTargetKm <= 60
     ? normalizedMode === "kurvenjagd"
       ? [
-        "nohw-sector-curvy",
+        "nohw-short-curvy-valley-clean-west",
+        "nohw-short-curvy-valley-clean-wide",
+        "nohw-short-curvy-hillside-soft",
         "nohw-short-curve-oval-west",
         "nohw-short-curve-oval-northwest",
         "nohw-short-curve-oval-southwest",
+        "nohw-sector-curvy",
       ]
       : normalizedMode === "entdecker"
       ? [
@@ -653,7 +657,7 @@ export async function searchBestRoundTripRoute({
       ),
     );
   const batchAttemptBudget = batchingUsed
-    ? targetDistanceKm >= 70 ? 3 : 2
+    ? shortCurvySearch ? 3 : targetDistanceKm >= 70 ? 3 : 2
     : Number.POSITIVE_INFINITY;
   const globalAttemptBudget = Math.max(
     1,
@@ -1728,11 +1732,14 @@ export async function searchBestRoundTripRoute({
     };
   };
   const styleThinSessionSearch = mode === "Abendrunde" || mode === "Entdecker";
-  const lakeBorderShortSessionSearch = targetDistanceKm <= 60 &&
-    startLocation.latitude >= 47.43 && startLocation.latitude <= 47.58 &&
-    startLocation.longitude >= 9.58 && startLocation.longitude <= 9.86;
+  const shortCurvySessionSearch = shortCurvySearch;
+  const vorarlbergValleyShortSessionSearch = targetDistanceKm <= 60 &&
+    startLocation.latitude >= 47.12 && startLocation.latitude <= 47.60 &&
+    startLocation.longitude >= 9.45 && startLocation.longitude <= 10.05;
   const targetSessionCandidateQueueSize = batchingUsed
-    ? lakeBorderShortSessionSearch
+    ? shortCurvySessionSearch
+      ? styleThinSessionSearch || !avoidHighways ? 10 : 8
+      : vorarlbergValleyShortSessionSearch
       ? styleThinSessionSearch || !avoidHighways ? 10 : 8
       : styleThinSessionSearch
       ? targetDistanceKm >= 70 ? 8 : 6
@@ -1749,10 +1756,16 @@ export async function searchBestRoundTripRoute({
       candidate.distanceFitTier !== "outside_bucket"
     ).length;
   const shouldContinueForSessionCandidateQueue = (): boolean =>
-    (batchingUsed || styleThinSessionSearch || lakeBorderShortSessionSearch) &&
+    (
+      batchingUsed ||
+      styleThinSessionSearch ||
+      shortCurvySessionSearch ||
+      vorarlbergValleyShortSessionSearch
+    ) &&
     (targetDistanceKm >= 70 ||
       styleThinSessionSearch ||
-      lakeBorderShortSessionSearch) &&
+      shortCurvySessionSearch ||
+      vorarlbergValleyShortSessionSearch) &&
     sessionCandidateQueueCount() <
       Math.min(targetSessionCandidateQueueSize, globalAttemptBudget) &&
     candidateAttempts < globalAttemptBudget &&
