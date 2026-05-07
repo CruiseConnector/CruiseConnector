@@ -13,6 +13,13 @@ class CommunityProvider extends ChangeNotifier {
   List<Map<String, dynamic>> _feedPosts = [];
   List<Map<String, dynamic>> _discoverPosts = [];
   Set<String> _followingIds = {};
+  final Map<String, String> _followStatuses = {};
+  final Set<String> _knownFollowStatuses = {};
+  final Map<String, Map<String, dynamic>> _profileCache = {};
+  RealtimeChannel? _myFollowingChannel;
+  RealtimeChannel? _myFollowersChannel;
+  RealtimeChannel? _myProfileChannel;
+  String? _realtimeUserId;
 
   /// IDs aller User, die ich blockiert habe ODER die mich blockiert haben —
   /// werden überall aus Listen herausgefiltert.
@@ -48,7 +55,242 @@ class CommunityProvider extends ChangeNotifier {
   int likeCount(String postId) => _likeCounts[postId] ?? 0;
   bool isReposted(String postId) => _repostedPosts[postId] ?? false;
   int repostCount(String postId) => _repostCounts[postId] ?? 0;
-  bool isFollowing(String userId) => _followingIds.contains(userId);
+  bool isFollowing(String userId) => followStatus(userId) == 'accepted';
+  bool isPendingFollow(String userId) => followStatus(userId) == 'pending';
+  bool hasKnownFollowStatus(String userId) =>
+      _knownFollowStatuses.contains(userId) || _followingIds.contains(userId);
+
+  String followStatus(String userId, {String fallback = 'none'}) {
+    final status = _followStatuses[userId];
+    if (status != null) return status;
+    return _followingIds.contains(userId) ? 'accepted' : fallback;
+  }
+
+  Map<String, dynamic>? cachedProfile(String userId) {
+    final cached = _profileCache[userId];
+    return cached == null ? null : Map.unmodifiable(cached);
+  }
+
+  Map<String, dynamic> mergedProfile(String userId, Map<String, dynamic> base) {
+    final cached = _profileCache[userId];
+    if (cached == null) return Map<String, dynamic>.from(base);
+    return {...base, ...cached};
+  }
+
+  void seedFollowStatus(String userId, String? status, {bool notify = false}) {
+    if (_applyFollowStatus(userId, status ?? 'none') && notify) {
+      notifyListeners();
+    }
+  }
+
+  void seedProfiles(Iterable<Map<String, dynamic>> profiles) {
+    var changed = false;
+    for (final profile in profiles) {
+      changed = _seedProfile(profile) || changed;
+    }
+    if (changed) notifyListeners();
+  }
+
+  void seedProfile(Map<String, dynamic>? profile, {bool notify = false}) {
+    if (profile == null) return;
+    if (_seedProfile(profile) && notify) notifyListeners();
+  }
+
+  void applyProfilePatch(
+    String userId,
+    Map<String, dynamic> patch, {
+    bool notify = true,
+  }) {
+    if (userId.isEmpty || patch.isEmpty) return;
+    final next = {...?_profileCache[userId], 'id': userId, ...patch};
+    _profileCache[userId] = next;
+    if (notify) notifyListeners();
+  }
+
+  Future<String> ensureFollowStatus(String userId) async {
+    if (hasKnownFollowStatus(userId)) return followStatus(userId);
+    try {
+      final status = await SocialService.getFollowStatus(userId);
+      seedFollowStatus(userId, status, notify: true);
+      return status;
+    } catch (e) {
+      debugPrint('[CommunityProvider] ensureFollowStatus Fehler: $e');
+      return 'none';
+    }
+  }
+
+  bool _seedProfile(Map<String, dynamic> profile) {
+    final id = profile['id'] as String?;
+    if (id == null || id.isEmpty) return false;
+    final next = {...?_profileCache[id], ...Map<String, dynamic>.from(profile)};
+    final changed = _profileCache[id].toString() != next.toString();
+    _profileCache[id] = next;
+    return changed;
+  }
+
+  bool _applyFollowStatus(String userId, String status) {
+    final normalized = switch (status) {
+      'accepted' => 'accepted',
+      'pending' => 'pending',
+      _ => 'none',
+    };
+    final previous = followStatus(userId);
+    _knownFollowStatuses.add(userId);
+    _followStatuses[userId] = normalized;
+    if (normalized == 'accepted') {
+      _followingIds = {..._followingIds, userId};
+    } else {
+      _followingIds = {..._followingIds}..remove(userId);
+    }
+    return previous != normalized;
+  }
+
+  bool _applyFollowStatusWithFollowerCount(String userId, String status) {
+    final previousAccepted = followStatus(userId) == 'accepted';
+    final changed = _applyFollowStatus(userId, status);
+    final nextAccepted = followStatus(userId) == 'accepted';
+    if (previousAccepted != nextAccepted) {
+      _bumpCachedProfileCount(
+        userId,
+        'follower_count',
+        nextAccepted ? 1 : -1,
+        notify: false,
+      );
+    }
+    return changed;
+  }
+
+  void _bumpCachedProfileCount(
+    String userId,
+    String field,
+    int delta, {
+    bool notify = true,
+  }) {
+    if (delta == 0) return;
+    final current = (_profileCache[userId]?[field] as num?)?.toInt();
+    if (current == null) return;
+    applyProfilePatch(userId, {
+      field: (current + delta).clamp(0, 1 << 31),
+    }, notify: notify);
+  }
+
+  void startRealtime() {
+    final db = Supabase.instance.client;
+    final uid = db.auth.currentUser?.id;
+    if (uid == null) {
+      stopRealtime();
+      return;
+    }
+    if (_realtimeUserId == uid &&
+        _myFollowingChannel != null &&
+        _myFollowersChannel != null &&
+        _myProfileChannel != null) {
+      return;
+    }
+
+    stopRealtime();
+    _realtimeUserId = uid;
+
+    _myFollowingChannel = db
+        .channel('cc:my_following:$uid')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'follows',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'follower_id',
+            value: uid,
+          ),
+          callback: _handleMyFollowingChange,
+        )
+        .subscribe();
+
+    _myFollowersChannel = db
+        .channel('cc:my_followers:$uid')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'follows',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'following_id',
+            value: uid,
+          ),
+          callback: _handleMyFollowerChange,
+        )
+        .subscribe();
+
+    _myProfileChannel = db
+        .channel('cc:my_profile:$uid')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.update,
+          schema: 'public',
+          table: 'profiles',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'id',
+            value: uid,
+          ),
+          callback: (payload) {
+            if (payload.newRecord.isEmpty) return;
+            seedProfile(payload.newRecord, notify: true);
+          },
+        )
+        .subscribe();
+  }
+
+  void stopRealtime() {
+    _myFollowingChannel?.unsubscribe();
+    _myFollowersChannel?.unsubscribe();
+    _myProfileChannel?.unsubscribe();
+    _myFollowingChannel = null;
+    _myFollowersChannel = null;
+    _myProfileChannel = null;
+    _realtimeUserId = null;
+  }
+
+  void _handleMyFollowingChange(PostgresChangePayload payload) {
+    final row = payload.newRecord.isNotEmpty
+        ? payload.newRecord
+        : payload.oldRecord;
+    final targetUserId = row['following_id'] as String?;
+    if (targetUserId == null) return;
+
+    final oldAccepted = payload.oldRecord['status'] == 'accepted';
+    final nextStatus = payload.eventType == PostgresChangeEvent.delete
+        ? 'none'
+        : (row['status'] as String? ?? 'none');
+    final changed = _applyFollowStatus(targetUserId, nextStatus);
+    final newAccepted = nextStatus == 'accepted';
+    if (oldAccepted != newAccepted && _realtimeUserId != null) {
+      _bumpCachedProfileCount(
+        _realtimeUserId!,
+        'following_count',
+        newAccepted ? 1 : -1,
+      );
+    }
+    if (changed) {
+      notifyListeners();
+      if (newAccepted) {
+        _refreshFeedSilently();
+      } else {
+        _refreshDiscoverSilently();
+      }
+    }
+  }
+
+  void _handleMyFollowerChange(PostgresChangePayload payload) {
+    final uid = _realtimeUserId;
+    if (uid == null) return;
+    final oldAccepted = payload.oldRecord['status'] == 'accepted';
+    final newAccepted =
+        payload.eventType != PostgresChangeEvent.delete &&
+        payload.newRecord['status'] == 'accepted';
+    if (oldAccepted == newAccepted) return;
+    _bumpCachedProfileCount(uid, 'follower_count', newAccepted ? 1 : -1);
+    notifyListeners();
+  }
 
   /// Ruft jede Seite (Feed, Entdecken, Profil) auf, bevor sie Posts rendert.
   /// Seedet den zentralen State mit Serverwerten, solange kein Toggle läuft.
@@ -127,13 +369,28 @@ class CommunityProvider extends ChangeNotifier {
       ]);
       _feedPosts = results[0] as List<Map<String, dynamic>>;
       _discoverPosts = results[1] as List<Map<String, dynamic>>;
-      _followingIds = results[2] as Set<String>;
+      final freshFollowingIds = results[2] as Set<String>;
+      final previouslyAccepted = _followStatuses.entries
+          .where((entry) => entry.value == 'accepted')
+          .map((entry) => entry.key)
+          .toSet();
+      _followingIds = freshFollowingIds;
+      for (final id in freshFollowingIds) {
+        _followStatuses[id] = 'accepted';
+        _knownFollowStatuses.add(id);
+      }
+      for (final id in previouslyAccepted.difference(freshFollowingIds)) {
+        _followStatuses[id] = 'none';
+        _knownFollowStatuses.add(id);
+      }
       _blockedIds = results[3] as Set<String>;
       for (final post in _feedPosts) {
         registerPost(post);
+        seedProfile(post['profiles'] as Map<String, dynamic>?);
       }
       for (final post in _discoverPosts) {
         registerPost(post);
+        seedProfile(post['profiles'] as Map<String, dynamic>?);
       }
     } catch (e) {
       _errorMessage = 'Feed konnte nicht geladen werden.';
@@ -152,41 +409,53 @@ class CommunityProvider extends ChangeNotifier {
   /// erzeugt — der lokale `_followingIds`-State wird in dem Fall NICHT
   /// erweitert (weil noch nicht akzeptiert). Returns: 'accepted' | 'pending'
   /// | 'none'.
-  Future<String> followUser(String targetUserId) async {
-    if (_busyFollow.contains(targetUserId)) return 'none';
+  Future<String> followUser(
+    String targetUserId, {
+    bool? targetIsPrivate,
+  }) async {
+    if (_blockedIds.contains(targetUserId)) return 'none';
+    if (_busyFollow.contains(targetUserId)) return followStatus(targetUserId);
     _busyFollow.add(targetUserId);
 
-    final wasFollowing = _followingIds.contains(targetUserId);
-    if (wasFollowing) {
+    final currentStatus = followStatus(targetUserId);
+    if (currentStatus == 'accepted' || currentStatus == 'pending') {
       _busyFollow.remove(targetUserId);
-      return 'accepted';
+      return currentStatus;
     }
 
-    // Optimistisch: erstmal aus Discover entfernen, falls Post da ist.
+    final optimisticStatus =
+        (targetIsPrivate ?? _profileCache[targetUserId]?['is_private'] == true)
+        ? 'pending'
+        : 'accepted';
+
+    // Optimistisch: Button sofort umschalten und Discover ggf. entfernen.
     final removedFromDiscover = _discoverPosts
         .where((p) => p['user_id'] == targetUserId)
         .toList();
     _discoverPosts = _discoverPosts
         .where((p) => p['user_id'] != targetUserId)
         .toList();
-    // following-IDs sind erstmal NICHT gesetzt — wir wissen noch nicht, ob
-    // Server 'pending' oder 'accepted' liefert. Der UI-Roundtrip ist kurz.
+    _applyFollowStatusWithFollowerCount(targetUserId, optimisticStatus);
     notifyListeners();
 
     try {
       final status = await SocialService.followUser(targetUserId);
+      _applyFollowStatusWithFollowerCount(targetUserId, status);
       if (status == 'accepted') {
-        _followingIds = {..._followingIds, targetUserId};
         notifyListeners();
         _refreshFeedSilently();
       } else if (status == 'pending') {
         // Bei Pending wieder in Discover zurück, weil noch nicht echtes Following.
         _discoverPosts = [..._discoverPosts, ...removedFromDiscover];
         notifyListeners();
+      } else {
+        _discoverPosts = [..._discoverPosts, ...removedFromDiscover];
+        notifyListeners();
       }
       return status;
     } catch (e) {
       _discoverPosts = [..._discoverPosts, ...removedFromDiscover];
+      _applyFollowStatusWithFollowerCount(targetUserId, currentStatus);
       debugPrint('[CommunityProvider] followUser Fehler: $e');
       notifyListeners();
       return 'none';
@@ -202,11 +471,17 @@ class CommunityProvider extends ChangeNotifier {
   Future<void> acceptFollowRequest(String fromUserId) async {
     try {
       await SocialService.acceptFollowRequest(fromUserId);
+      final uid = Supabase.instance.client.auth.currentUser?.id;
+      if (uid != null) {
+        _bumpCachedProfileCount(uid, 'follower_count', 1);
+        notifyListeners();
+      }
       // Falls ich dem User auch folge, könnte sich Mutual ändern —
       // einfacher Refresh des Feeds reicht.
       _refreshFeedSilently();
     } catch (e) {
       debugPrint('[CommunityProvider] acceptFollowRequest Fehler: $e');
+      rethrow;
     }
   }
 
@@ -215,6 +490,7 @@ class CommunityProvider extends ChangeNotifier {
       await SocialService.rejectFollowRequest(fromUserId);
     } catch (e) {
       debugPrint('[CommunityProvider] rejectFollowRequest Fehler: $e');
+      rethrow;
     }
   }
 
@@ -240,9 +516,7 @@ class CommunityProvider extends ChangeNotifier {
     _discoverPosts = _discoverPosts
         .where((p) => p['user_id'] != targetUserId)
         .toList();
-    if (wasFollowing) {
-      _followingIds = {..._followingIds}..remove(targetUserId);
-    }
+    seedFollowStatus(targetUserId, 'none');
     notifyListeners();
 
     try {
@@ -253,7 +527,7 @@ class CommunityProvider extends ChangeNotifier {
       _feedPosts = [..._feedPosts, ...removedFromFeed];
       _discoverPosts = [..._discoverPosts, ...removedFromDiscover];
       if (wasFollowing) {
-        _followingIds = {..._followingIds, targetUserId};
+        seedFollowStatus(targetUserId, 'accepted');
       }
       debugPrint('[CommunityProvider] blockUser Fehler: $e');
       notifyListeners();
@@ -286,12 +560,15 @@ class CommunityProvider extends ChangeNotifier {
     if (_busyFollow.contains(targetUserId)) return;
     _busyFollow.add(targetUserId);
 
-    final wasFollowing = _followingIds.contains(targetUserId);
+    final previousStatus = followStatus(targetUserId);
+    final wasFollowing = previousStatus == 'accepted';
     if (!wasFollowing) {
+      seedFollowStatus(targetUserId, 'none', notify: true);
       try {
         await SocialService.unfollowUser(targetUserId);
         _refreshDiscoverSilently();
       } catch (e) {
+        seedFollowStatus(targetUserId, previousStatus, notify: true);
         debugPrint('[CommunityProvider] pending unfollow Fehler: $e');
       } finally {
         _busyFollow.remove(targetUserId);
@@ -303,14 +580,14 @@ class CommunityProvider extends ChangeNotifier {
         .where((p) => p['user_id'] == targetUserId)
         .toList();
     _feedPosts = _feedPosts.where((p) => p['user_id'] != targetUserId).toList();
-    _followingIds = {..._followingIds}..remove(targetUserId);
+    seedFollowStatus(targetUserId, 'none');
     notifyListeners();
 
     try {
       await SocialService.unfollowUser(targetUserId);
       _refreshDiscoverSilently();
     } catch (e) {
-      _followingIds = {..._followingIds, targetUserId};
+      seedFollowStatus(targetUserId, previousStatus);
       _feedPosts = [...removedFromFeed, ..._feedPosts];
       debugPrint('[CommunityProvider] unfollowUser Fehler: $e');
       notifyListeners();
@@ -407,5 +684,11 @@ class CommunityProvider extends ChangeNotifier {
     _checkedLike.remove(postId);
     _checkedRepost.remove(postId);
     notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    stopRealtime();
+    super.dispose();
   }
 }

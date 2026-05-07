@@ -3,6 +3,7 @@ import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../core/input_limits.dart';
 import '../../data/services/cruise_group_service.dart';
 import '../../data/services/social_service.dart';
 import '../../domain/models/cruise_group.dart';
@@ -992,8 +993,13 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
                     padding: const EdgeInsets.symmetric(horizontal: 16),
                     child: TextField(
                       controller: searchCtrl,
+                      maxLength: AppInputLimits.searchQueryMaxLength,
+                      inputFormatters: AppInputLimits.lengthFormatters(
+                        AppInputLimits.searchQueryMaxLength,
+                      ),
                       style: const TextStyle(color: Colors.white),
                       decoration: InputDecoration(
+                        counterText: '',
                         hintText: 'User suchen…',
                         hintStyle: TextStyle(color: Colors.grey[600]),
                         filled: true,

@@ -7,6 +7,7 @@ import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/application/providers/community_provider.dart';
 import 'package:cruise_connect/application/providers/route_bookmark_provider.dart';
 import 'package:cruise_connect/core/deep_links.dart';
+import 'package:cruise_connect/core/input_limits.dart';
 import 'package:cruise_connect/data/services/gamification_service.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/presentation/pages/create_post_page.dart';
@@ -248,8 +249,17 @@ class _CommunityPageState extends State<CommunityPage>
     final results = await Future.wait(futures);
 
     if (!mounted) return;
+    final users = results[0] as List<Map<String, dynamic>>;
+    final provider = context.read<CommunityProvider>();
+    provider.seedProfiles(users);
+    for (final user in users) {
+      provider.seedFollowStatus(
+        user['id'] as String,
+        user['follow_status'] as String?,
+      );
+    }
     setState(() {
-      _searchResults = results[0] as List<Map<String, dynamic>>;
+      _searchResults = users;
       _searchedGroup = looksLikeCode
           ? results[1] as Map<String, dynamic>?
           : null;
@@ -608,8 +618,13 @@ class _CommunityPageState extends State<CommunityPage>
           ),
           child: TextField(
             controller: _groupSearchController,
+            maxLength: AppInputLimits.searchQueryMaxLength,
+            inputFormatters: AppInputLimits.lengthFormatters(
+              AppInputLimits.searchQueryMaxLength,
+            ),
             style: const TextStyle(color: Colors.white, fontSize: 14),
             decoration: const InputDecoration(
+              counterText: '',
               hintText: 'Suche nach Gruppe oder User...',
               hintStyle: TextStyle(color: Colors.grey),
               prefixIcon: Icon(Icons.search, color: Colors.grey, size: 20),
@@ -789,173 +804,232 @@ class _CommunityPageState extends State<CommunityPage>
     final ctrl = PageController(
       viewportFraction: itemWidth / MediaQuery.of(context).size.width,
     );
-    return Container(
-      margin: const EdgeInsets.symmetric(vertical: 8),
-      padding: const EdgeInsets.symmetric(vertical: 12),
-      decoration: BoxDecoration(
-        color: const Color(0xFF12151C),
-        border: Border(
-          top: BorderSide(color: Colors.white.withValues(alpha: 0.04)),
-          bottom: BorderSide(color: Colors.white.withValues(alpha: 0.04)),
+    return Column(
+      children: [
+        const SizedBox(height: 10),
+        Divider(height: 1, color: Colors.white.withValues(alpha: 0.10)),
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(vertical: 14),
+          decoration: const BoxDecoration(color: Color(0xFF11141B)),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 2, 16, 4),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 3,
+                      height: 18,
+                      decoration: BoxDecoration(
+                        color: AppAccentColors.accent,
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 16,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (subtitle != null)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(29, 0, 16, 10),
+                  child: Text(
+                    subtitle,
+                    style: const TextStyle(color: Colors.grey, fontSize: 12),
+                  ),
+                )
+              else
+                const SizedBox(height: 6),
+              SizedBox(
+                height: height,
+                child: PageView.builder(
+                  controller: ctrl,
+                  padEnds: false,
+                  itemCount: itemCount,
+                  itemBuilder: itemBuilder,
+                ),
+              ),
+            ],
+          ),
         ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
-            child: Text(
-              title,
-              style: const TextStyle(
-                color: Colors.white,
-                fontWeight: FontWeight.bold,
-                fontSize: 16,
-              ),
-            ),
-          ),
-          if (subtitle != null)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-              child: Text(
-                subtitle,
-                style: const TextStyle(color: Colors.grey, fontSize: 12),
-              ),
-            )
-          else
-            const SizedBox(height: 4),
-          SizedBox(
-            height: height,
-            child: PageView.builder(
-              controller: ctrl,
-              padEnds: false,
-              itemCount: itemCount,
-              itemBuilder: itemBuilder,
-            ),
-          ),
-        ],
-      ),
+        Divider(height: 1, color: Colors.white.withValues(alpha: 0.10)),
+        const SizedBox(height: 10),
+      ],
     );
   }
 
   Widget _buildCreateGroupTile() {
-    return Container(
-      margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: const Color(0xFF12151C),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: AppAccentColors.accent.withValues(alpha: 0.4),
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
+    return Column(
+      children: [
+        const SizedBox(height: 10),
+        Divider(height: 1, color: Colors.white.withValues(alpha: 0.10)),
+        Container(
+          width: double.infinity,
+          margin: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            color: const Color(0xFF12151C),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: AppAccentColors.accent.withValues(alpha: 0.4),
+            ),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Icon(Icons.group_add, color: AppAccentColors.accent, size: 22),
-              const SizedBox(width: 8),
+              Row(
+                children: [
+                  Icon(
+                    Icons.group_add,
+                    color: AppAccentColors.accent,
+                    size: 22,
+                  ),
+                  const SizedBox(width: 8),
+                  const Expanded(
+                    child: Text(
+                      'Keine aktiven Gruppen in der Nähe',
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 15,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 6),
               const Text(
-                'Keine aktiven Gruppen in der Nähe',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 15,
+                'Starte selbst eine — andere können beitreten.',
+                style: TextStyle(color: Colors.grey, fontSize: 13),
+              ),
+              const SizedBox(height: 12),
+              GestureDetector(
+                onTap: () async {
+                  await Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const CreateGroupPage()),
+                  );
+                  _loadData();
+                },
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 8,
+                  ),
+                  decoration: BoxDecoration(
+                    color: AppAccentColors.accent,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: const Text(
+                    'Aktive Gruppe erstellen',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 13,
+                    ),
+                  ),
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 6),
-          const Text(
-            'Starte selbst eine — andere können beitreten.',
-            style: TextStyle(color: Colors.grey, fontSize: 13),
-          ),
-          const SizedBox(height: 12),
-          GestureDetector(
-            onTap: () async {
-              await Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const CreateGroupPage()),
-              );
-              _loadData();
-            },
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-              decoration: BoxDecoration(
-                color: AppAccentColors.accent,
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: const Text(
-                'Jetzt Aktive Gruppe erstellen',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 13,
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
+        ),
+        Divider(height: 1, color: Colors.white.withValues(alpha: 0.10)),
+        const SizedBox(height: 10),
+      ],
     );
   }
 
   Widget _buildInviteFriendsTile() {
-    return Container(
-      margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: const Color(0xFF12151C),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
+    return Column(
+      children: [
+        const SizedBox(height: 10),
+        Divider(height: 1, color: Colors.white.withValues(alpha: 0.10)),
+        Container(
+          width: double.infinity,
+          margin: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            color: const Color(0xFF12151C),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Icon(
-                Icons.person_add_alt_1,
-                color: AppAccentColors.accent,
-                size: 22,
+              Row(
+                children: [
+                  Icon(
+                    Icons.person_add_alt_1,
+                    color: AppAccentColors.accent,
+                    size: 22,
+                  ),
+                  const SizedBox(width: 8),
+                  const Expanded(
+                    child: Text(
+                      'Freunde einladen',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 15,
+                      ),
+                    ),
+                  ),
+                ],
               ),
-              const SizedBox(width: 8),
+              const SizedBox(height: 6),
               const Text(
-                'Freunde einladen',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 15,
+                'Noch mehr Fahrer? Lade deine Crew zu CruiseConnect ein.',
+                style: TextStyle(color: Colors.grey, fontSize: 13),
+              ),
+              const SizedBox(height: 12),
+              GestureDetector(
+                onTap: () => _shareInviteLink(context),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 8,
+                  ),
+                  decoration: BoxDecoration(
+                    color: AppAccentColors.accent,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: const Text(
+                    'Einladungslink teilen',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 13,
+                    ),
+                  ),
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 6),
-          const Text(
-            'Noch mehr Fahrer? Lade deine Crew zu CruiseConnect ein.',
-            style: TextStyle(color: Colors.grey, fontSize: 13),
-          ),
-          const SizedBox(height: 12),
-          GestureDetector(
-            onTap: () => _shareInviteLink(context),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-              decoration: BoxDecoration(
-                color: AppAccentColors.accent,
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: const Text(
-                'Einladungslink teilen',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 13,
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
+        ),
+        Divider(height: 1, color: Colors.white.withValues(alpha: 0.10)),
+        const SizedBox(height: 10),
+      ],
     );
   }
 
@@ -988,10 +1062,11 @@ class _CommunityPageState extends State<CommunityPage>
   }
 
   Widget _buildUsersCarousel() {
+    final visibleCount = math.min(_suggestedUsers.length, 5);
     return _buildCarouselSection(
       title: 'Leute, denen du folgen könntest',
       height: 170,
-      itemCount: _suggestedUsers.length,
+      itemCount: visibleCount,
       itemWidth: 160,
       itemBuilder: (ctx, i) => Padding(
         padding: const EdgeInsets.symmetric(horizontal: 6),
@@ -1097,6 +1172,13 @@ class _CommunityPageState extends State<CommunityPage>
 
   Widget _buildSuggestedUserCard(Map<String, dynamic> user) {
     final id = user['id'] as String;
+    final provider = context.watch<CommunityProvider>();
+    final status = provider.followStatus(
+      id,
+      fallback: user['follow_status'] as String? ?? 'none',
+    );
+    final isConnected = status == 'accepted' || status == 'pending';
+    final isPrivate = user['is_private'] == true;
     final name = SocialService.publicDisplayName(
       user,
       fallbackUserId: user['id'] as String?,
@@ -1129,18 +1211,36 @@ class _CommunityPageState extends State<CommunityPage>
           ),
           GestureDetector(
             onTap: () async {
-              await context.read<CommunityProvider>().followUser(id);
+              final next = await context.read<CommunityProvider>().followUser(
+                id,
+                targetIsPrivate: isPrivate,
+              );
+              if (!mounted) return;
+              if (next == 'accepted') {
+                setState(() {
+                  _suggestedUsers.removeWhere((u) => u['id'] == id);
+                });
+              }
             },
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
               decoration: BoxDecoration(
-                color: AppAccentColors.accent,
+                color: isConnected
+                    ? Colors.transparent
+                    : AppAccentColors.accent,
                 borderRadius: BorderRadius.circular(12),
+                border: isConnected ? Border.all(color: Colors.grey) : null,
               ),
-              child: const Text(
-                'Folgen',
+              child: Text(
+                status == 'accepted'
+                    ? 'Gefolgt'
+                    : status == 'pending'
+                    ? 'Angefragt'
+                    : isPrivate
+                    ? 'Anfragen'
+                    : 'Folgen',
                 style: TextStyle(
-                  color: Colors.white,
+                  color: isConnected ? Colors.grey : Colors.white,
                   fontSize: 12,
                   fontWeight: FontWeight.bold,
                 ),
@@ -1732,11 +1832,16 @@ class _CommunityPageState extends State<CommunityPage>
                           Expanded(
                             child: MentionTextField(
                               controller: commentController,
+                              maxLength: AppInputLimits.commentMaxLength,
+                              inputFormatters: AppInputLimits.lengthFormatters(
+                                AppInputLimits.commentMaxLength,
+                              ),
                               style: const TextStyle(
                                 color: Colors.white,
                                 fontSize: 14,
                               ),
                               decoration: InputDecoration(
+                                counterText: '',
                                 hintText: replyToId != null
                                     ? 'Antwort schreiben...'
                                     : 'Kommentar schreiben — @ erwähnt Follower',
@@ -2237,8 +2342,13 @@ class _CommunityPageState extends State<CommunityPage>
                       child: TextField(
                         controller: _searchController,
                         autofocus: true,
+                        maxLength: AppInputLimits.searchQueryMaxLength,
+                        inputFormatters: AppInputLimits.lengthFormatters(
+                          AppInputLimits.searchQueryMaxLength,
+                        ),
                         style: const TextStyle(color: Colors.white),
                         decoration: InputDecoration(
+                          counterText: '',
                           hintText: 'Benutzer oder Gruppen-Code (CC-XXXXXX)...',
                           hintStyle: const TextStyle(color: Colors.grey),
                           prefixIcon: const Icon(
@@ -2309,6 +2419,9 @@ class _CommunityPageState extends State<CommunityPage>
                                     ),
                                     trailing: _FollowButton(
                                       userId: user['id'],
+                                      initialStatus:
+                                          user['follow_status'] as String?,
+                                      isPrivate: user['is_private'] == true,
                                       onChanged: () => _loadData(),
                                     ),
                                   );
@@ -2885,15 +2998,25 @@ class _CommunityPageState extends State<CommunityPage>
         children: [
           GestureDetector(
             onTap: () async {
-              setSheetState();
-              await provider.acceptFollowRequest(fromId);
-              if (!mounted) return;
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text('Anfrage angenommen'),
-                  backgroundColor: Color(0xFF1C1F26),
-                ),
-              );
+              try {
+                setSheetState();
+                await provider.acceptFollowRequest(fromId);
+                if (!mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Anfrage angenommen'),
+                    backgroundColor: Color(0xFF1C1F26),
+                  ),
+                );
+              } catch (_) {
+                if (!mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Anfrage konnte nicht angenommen werden'),
+                    backgroundColor: Color(0xFF1C1F26),
+                  ),
+                );
+              }
             },
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
@@ -2914,15 +3037,25 @@ class _CommunityPageState extends State<CommunityPage>
           const SizedBox(width: 6),
           GestureDetector(
             onTap: () async {
-              setSheetState();
-              await provider.rejectFollowRequest(fromId);
-              if (!mounted) return;
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text('Anfrage abgelehnt'),
-                  backgroundColor: Color(0xFF1C1F26),
-                ),
-              );
+              try {
+                setSheetState();
+                await provider.rejectFollowRequest(fromId);
+                if (!mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Anfrage abgelehnt'),
+                    backgroundColor: Color(0xFF1C1F26),
+                  ),
+                );
+              } catch (_) {
+                if (!mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Anfrage konnte nicht abgelehnt werden'),
+                    backgroundColor: Color(0xFF1C1F26),
+                  ),
+                );
+              }
             },
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
@@ -2953,7 +3086,14 @@ class _CommunityPageState extends State<CommunityPage>
 class _FollowButton extends StatefulWidget {
   final String userId;
   final VoidCallback onChanged;
-  const _FollowButton({required this.userId, required this.onChanged});
+  final String? initialStatus;
+  final bool isPrivate;
+  const _FollowButton({
+    required this.userId,
+    required this.onChanged,
+    this.initialStatus,
+    this.isPrivate = false,
+  });
 
   @override
   State<_FollowButton> createState() => _FollowButtonState();
@@ -2966,11 +3106,35 @@ class _FollowButtonState extends State<_FollowButton> {
   @override
   void initState() {
     super.initState();
-    _checkFollow();
+    _seedInitialStatus();
+    _checkFollowIfNeeded();
   }
 
-  Future<void> _checkFollow() async {
-    final result = await SocialService.getFollowStatus(widget.userId);
+  @override
+  void didUpdateWidget(covariant _FollowButton oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.userId != widget.userId ||
+        oldWidget.initialStatus != widget.initialStatus) {
+      _loading = true;
+      _seedInitialStatus();
+      _checkFollowIfNeeded();
+    }
+  }
+
+  void _seedInitialStatus() {
+    final initial = widget.initialStatus;
+    if (initial == null) return;
+    _status = initial;
+    context.read<CommunityProvider>().seedFollowStatus(widget.userId, initial);
+  }
+
+  Future<void> _checkFollowIfNeeded() async {
+    final provider = context.read<CommunityProvider>();
+    if (provider.hasKnownFollowStatus(widget.userId)) {
+      if (mounted) setState(() => _loading = false);
+      return;
+    }
+    final result = await provider.ensureFollowStatus(widget.userId);
     if (mounted) {
       setState(() {
         _status = result;
@@ -2981,7 +3145,11 @@ class _FollowButtonState extends State<_FollowButton> {
 
   @override
   Widget build(BuildContext context) {
-    if (_loading) {
+    final provider = context.watch<CommunityProvider>();
+    final status = provider.followStatus(widget.userId, fallback: _status);
+    final stillResolving =
+        _loading && !provider.hasKnownFollowStatus(widget.userId);
+    if (stillResolving) {
       return SizedBox(
         width: 24,
         height: 24,
@@ -2997,12 +3165,15 @@ class _FollowButtonState extends State<_FollowButton> {
 
     return GestureDetector(
       onTap: () async {
-        if (_status == 'accepted' || _status == 'pending') {
-          await SocialService.unfollowUser(widget.userId);
-          if (!mounted) return;
+        if (status == 'accepted' || status == 'pending') {
           setState(() => _status = 'none');
+          await provider.unfollowUser(widget.userId);
+          if (!mounted) return;
         } else {
-          final next = await SocialService.followUser(widget.userId);
+          final next = await provider.followUser(
+            widget.userId,
+            targetIsPrivate: widget.isPrivate,
+          );
           if (!mounted) return;
           setState(() => _status = next);
         }
@@ -3011,20 +3182,20 @@ class _FollowButtonState extends State<_FollowButton> {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         decoration: BoxDecoration(
-          color: _status == 'none'
-              ? AppAccentColors.accent
-              : Colors.transparent,
+          color: status == 'none' ? AppAccentColors.accent : Colors.transparent,
           borderRadius: BorderRadius.circular(20),
-          border: _status == 'none' ? null : Border.all(color: Colors.grey),
+          border: status == 'none' ? null : Border.all(color: Colors.grey),
         ),
         child: Text(
-          _status == 'accepted'
+          status == 'accepted'
               ? 'Folge ich'
-              : _status == 'pending'
+              : status == 'pending'
               ? 'Angefragt'
+              : widget.isPrivate
+              ? 'Anfragen'
               : 'Folgen',
           style: TextStyle(
-            color: _status == 'none' ? Colors.white : Colors.grey,
+            color: status == 'none' ? Colors.white : Colors.grey,
             fontSize: 13,
             fontWeight: FontWeight.bold,
           ),

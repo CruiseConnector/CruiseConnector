@@ -1,7 +1,23 @@
 {
   "extensions.ignoreRecommendations": true,
+  "dart.flutterSdkPath": "/Users/cruiseconnector/development/flutter",
   "dart.enableSdkFormatter": true,
   "dart.runPubGetOnPubspecChanges": "always",
+  "files.exclude": {
+    "**/.dart_tool": true,
+    "**/build": true,
+    "**/ios/build": true
+  },
+  "search.exclude": {
+    "**/.dart_tool": true,
+    "**/build": true,
+    "**/ios/build": true
+  },
+  "files.watcherExclude": {
+    "**/.dart_tool/**": true,
+    "**/build/**": true,
+    "**/ios/build/**": true
+  },
   "[dart]": {
     "editor.formatOnSave": true,
     "editor.rulers": [80]

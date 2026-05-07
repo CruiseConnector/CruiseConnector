@@ -5,6 +5,7 @@ import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:provider/provider.dart';
 
 import 'package:cruise_connect/application/providers/community_provider.dart';
+import 'package:cruise_connect/core/input_limits.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
 
 /// Sammelt alle UI-Helfer rund um Melden und Blockieren — wird sowohl von
@@ -98,7 +99,7 @@ class ModerationActions {
                   TextField(
                     controller: detailsController,
                     maxLines: 3,
-                    maxLength: 280,
+                    maxLength: AppInputLimits.reportDetailsMaxLength,
                     enabled: !submitting,
                     style: const TextStyle(color: Colors.white, fontSize: 14),
                     decoration: InputDecoration(

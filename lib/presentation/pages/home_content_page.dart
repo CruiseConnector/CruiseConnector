@@ -6,6 +6,7 @@ import 'package:geolocator/geolocator.dart' as geo;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:provider/provider.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
+import 'package:cruise_connect/application/providers/community_provider.dart';
 import 'package:cruise_connect/application/providers/route_bookmark_provider.dart';
 import 'package:cruise_connect/data/services/gamification_service.dart';
 import 'package:cruise_connect/data/services/route_elevation_service.dart';
@@ -49,6 +50,7 @@ class _HomeContentPageState extends State<HomeContentPage>
   String? _profileUsername;
   bool _loading = true;
   List<double> _weeklyChartData = List.filled(7, 0);
+  List<double> _weeklyKmData = List.filled(7, 0);
   int _streakDays = 0;
   SavedRoute? _weeklyTopRoute;
   bool _isRouteSaved = false;
@@ -179,6 +181,7 @@ class _HomeContentPageState extends State<HomeContentPage>
           _profileUsername = (profile?['username'] as String?)?.trim();
           _avatarUrl = profile?['avatar_url'] as String?;
           _weeklyChartData = normalized;
+          _weeklyKmData = weeklyKm;
           _streakDays = streak;
           _weeklyTopRoute = topRoute;
           _isRouteSaved = routeSaved;
@@ -188,6 +191,9 @@ class _HomeContentPageState extends State<HomeContentPage>
 
       if (topRoute != null) {
         unawaited(_ensureHeroRouteInsights(topRoute));
+      }
+      if (mounted && profile != null) {
+        context.read<CommunityProvider>().seedProfile(profile);
       }
     } catch (e) {
       debugPrint('[Home] Daten laden fehlgeschlagen: $e');
@@ -265,10 +271,18 @@ class _HomeContentPageState extends State<HomeContentPage>
   @override
   Widget build(BuildContext context) {
     final accent = context.watch<AppAccentProvider>().color;
+    final community = context.watch<CommunityProvider>();
     final user = Supabase.instance.client.auth.currentUser;
     final profileBelongsToUser = _profileUserId == user?.id;
-    final profileUsername = profileBelongsToUser ? _profileUsername : null;
-    final avatarUrl = profileBelongsToUser ? _avatarUrl : null;
+    final cachedProfile = user?.id == null
+        ? null
+        : community.cachedProfile(user!.id);
+    final profileUsername =
+        (cachedProfile?['username'] as String?) ??
+        (profileBelongsToUser ? _profileUsername : null);
+    final avatarUrl =
+        (cachedProfile?['avatar_url'] as String?) ??
+        (profileBelongsToUser ? _avatarUrl : null);
     final String userName = (profileUsername?.isNotEmpty ?? false)
         ? profileUsername!
         : (user?.userMetadata?['username'] as String?) ??
@@ -488,7 +502,7 @@ class _HomeContentPageState extends State<HomeContentPage>
 
             // Community + Chart Section
             SizedBox(
-              height: 200,
+              height: 244,
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
@@ -498,67 +512,7 @@ class _HomeContentPageState extends State<HomeContentPage>
                     ),
                   ),
                   const SizedBox(width: 12),
-                  Expanded(
-                    child: Container(
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF1C1F26),
-                        borderRadius: BorderRadius.circular(24),
-                        border: Border.all(
-                          color: const Color(
-                            0xFFFFFFFF,
-                          ).withValues(alpha: 0.06),
-                          width: 1,
-                        ),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text(
-                            'Letzte 7 Tage',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 16,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          const SizedBox(height: 10),
-                          Expanded(
-                            child: Row(
-                              children: [
-                                const RotatedBox(
-                                  quarterTurns: 3,
-                                  child: Text(
-                                    'Kilometer',
-                                    style: TextStyle(
-                                      color: Color(0xFFA0AEC0),
-                                      fontSize: 12,
-                                    ),
-                                  ),
-                                ),
-                                Expanded(
-                                  child: Row(
-                                    mainAxisAlignment:
-                                        MainAxisAlignment.spaceEvenly,
-                                    crossAxisAlignment: CrossAxisAlignment.end,
-                                    children: [
-                                      _buildChartBar('Mo', _weeklyChartData[0]),
-                                      _buildChartBar('Di', _weeklyChartData[1]),
-                                      _buildChartBar('Mi', _weeklyChartData[2]),
-                                      _buildChartBar('Do', _weeklyChartData[3]),
-                                      _buildChartBar('Fr', _weeklyChartData[4]),
-                                      _buildChartBar('Sa', _weeklyChartData[5]),
-                                      _buildChartBar('So', _weeklyChartData[6]),
-                                    ],
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
+                  Expanded(child: _buildWeeklyActivityCard()),
                 ],
               ),
             ),
@@ -1310,53 +1264,147 @@ class _HomeContentPageState extends State<HomeContentPage>
     );
   }
 
-  Widget _buildChartBar(String day, double value) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 2),
+  Widget _buildWeeklyActivityCard() {
+    const days = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
+    final totalKm = _weeklyKmData.fold<double>(0, (sum, km) => sum + km);
+    final activeDays = _weeklyKmData.where((km) => km > 0.05).length;
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1C1F26),
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(
+          color: const Color(0xFFFFFFFF).withValues(alpha: 0.06),
+          width: 1,
+        ),
+      ),
       child: Column(
-        mainAxisAlignment: MainAxisAlignment.end,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Expanded(
-            child: Container(
-              width: 8,
-              decoration: BoxDecoration(
-                color: const Color(0xFF2D3748),
-                borderRadius: BorderRadius.circular(6),
-              ),
-              child: Align(
-                alignment: Alignment.bottomCenter,
-                child: FractionallySizedBox(
-                  heightFactor: value,
-                  child: Container(
-                    width: 8,
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        colors: [
-                          AppAccentColors.accent,
-                          AppAccentColors.accentStrong,
-                        ],
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
-                      ),
-                      borderRadius: BorderRadius.circular(6),
-                    ),
+          Row(
+            children: [
+              const Expanded(
+                child: Text(
+                  'Letzte 7 Tage',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
                   ),
                 ),
               ),
-            ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: AppAccentColors.accent.withValues(alpha: 0.14),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Text(
+                  _formatCompactKm(totalKm),
+                  style: TextStyle(
+                    color: AppAccentColors.accent,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+            ],
           ),
           const SizedBox(height: 4),
           Text(
-            day,
-            style: const TextStyle(
-              color: Color(0xFFA0AEC0),
-              fontSize: 10,
-              fontWeight: FontWeight.w500,
+            activeDays == 0
+                ? 'Noch keine Fahrten'
+                : '$activeDays aktive ${activeDays == 1 ? 'Tag' : 'Tage'}',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(color: Color(0xFFA0AEC0), fontSize: 11),
+          ),
+          const SizedBox(height: 12),
+          Expanded(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: List.generate(days.length, (index) {
+                return Expanded(
+                  child: _buildWeeklyBar(
+                    day: days[index],
+                    value: _weeklyChartData[index],
+                    km: _weeklyKmData[index],
+                  ),
+                );
+              }),
             ),
           ),
         ],
       ),
     );
+  }
+
+  Widget _buildWeeklyBar({
+    required String day,
+    required double value,
+    required double km,
+  }) {
+    final hasKm = km > 0.05;
+    final fill = hasKm ? math.max(value, 0.12) : 0.0;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 2),
+      child: Column(
+        children: [
+          Expanded(
+            child: Align(
+              alignment: Alignment.bottomCenter,
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  return Container(
+                    width: 12,
+                    height: constraints.maxHeight,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF2D3748),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Align(
+                      alignment: Alignment.bottomCenter,
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 260),
+                        curve: Curves.easeOutCubic,
+                        width: 12,
+                        height: constraints.maxHeight * fill,
+                        decoration: BoxDecoration(
+                          gradient: hasKm
+                              ? AppAccentColors.primaryGradient
+                              : null,
+                          color: hasKm ? null : Colors.transparent,
+                          borderRadius: BorderRadius.circular(999),
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            day,
+            maxLines: 1,
+            style: TextStyle(
+              color: hasKm ? Colors.white : const Color(0xFFA0AEC0),
+              fontSize: 10,
+              fontWeight: hasKm ? FontWeight.w800 : FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _formatCompactKm(double km) {
+    if (km <= 0.05) return '0 km';
+    if (km >= 100) return '${km.round()} km';
+    return '${km.toStringAsFixed(1).replaceAll('.', ',')} km';
   }
 }
 

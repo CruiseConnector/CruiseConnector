@@ -4,19 +4,6 @@
 <dict>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
-	<key>CFBundleURLTypes</key>
-	<array>
-		<dict>
-			<key>CFBundleTypeRole</key>
-			<string>Editor</string>
-			<key>CFBundleURLName</key>
-			<string>app.cruiseconnect</string>
-			<key>CFBundleURLSchemes</key>
-			<array>
-				<string>cruiseconnect</string>
-			</array>
-		</dict>
-	</array>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
@@ -35,20 +22,33 @@
 	<string>$(FLUTTER_BUILD_NAME)</string>
 	<key>CFBundleSignature</key>
 	<string>????</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>app.cruiseconnect</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>cruiseconnect</string>
+			</array>
+		</dict>
+	</array>
 	<key>CFBundleVersion</key>
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>MBXAccessToken</key>
 	<string>pk.eyJ1IjoibHVjd3F6IiwiYSI6ImNtbHdnMXFpdjBjZTAzZXF3NDgyYmZ3c2oifQ.upeLKXUnY5z6Pe0JiuznEQ</string>
+	<key>NSCameraUsageDescription</key>
+	<string>CruiseConnect nutzt die Kamera, damit du ein Profilbild aufnehmen kannst.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>CruiseConnect benötigt deinen Standort auch im Hintergrund, um Gruppenmitglieder live auf der Karte zu zeigen.</string>
 	<key>NSLocationAlwaysUsageDescription</key>
 	<string>CruiseConnect benötigt deinen Standort auch im Hintergrund, um Gruppenmitglieder live auf der Karte zu zeigen.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>CruiseConnect zeigt dir deine Position auf der Karte und nutzt GPS zur Navigation.</string>
-	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-	<string>CruiseConnect benötigt deinen Standort auch im Hintergrund, um Gruppenmitglieder live auf der Karte zu zeigen.</string>
-	<key>NSCameraUsageDescription</key>
-	<string>CruiseConnect nutzt die Kamera, damit du ein Profilbild aufnehmen kannst.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>CruiseConnect liest Bilder aus deiner Galerie, damit du ein Profilbild auswählen kannst.</string>
 	<key>UIApplicationSupportsIndirectInputEvents</key>

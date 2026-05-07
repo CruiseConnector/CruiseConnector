@@ -16,13 +16,21 @@ class CommunityCarouselCard extends StatefulWidget {
 }
 
 class _CommunityCarouselCardState extends State<CommunityCarouselCard> {
+  static const int _visibleSuggestionLimit = 5;
+  static const int _suggestionFetchLimit = 10;
+  static const int _visibleGroupLimit = 3;
+  static const int _groupFetchLimit = 8;
+
   final PageController _pageController = PageController();
   final Set<String> _busyUsers = {};
   final Set<String> _busyGroups = {};
   final Set<String> _joinedGroups = {};
+  final Set<String> _dismissedUsers = {};
 
   int _page = 0;
   bool _loading = true;
+  bool _replenishingUsers = false;
+  bool _replenishingGroups = false;
   List<Map<String, dynamic>> _suggestedUsers = [];
   List<Map<String, dynamic>> _publicGroups = [];
 
@@ -42,13 +50,17 @@ class _CommunityCarouselCardState extends State<CommunityCarouselCard> {
     setState(() => _loading = true);
     try {
       final results = await Future.wait([
-        SocialService.getSuggestedUsers(limit: 3),
+        SocialService.getSuggestedUsers(limit: _suggestionFetchLimit),
         SocialService.getDiscoverGroups(),
       ]);
       if (!mounted) return;
+      final suggestions = results[0]
+          .where((user) => !_dismissedUsers.contains(user['id']))
+          .take(_visibleSuggestionLimit)
+          .toList();
       setState(() {
-        _suggestedUsers = results[0].take(3).toList();
-        _publicGroups = results[1].take(3).toList();
+        _suggestedUsers = suggestions;
+        _publicGroups = results[1].take(_visibleGroupLimit).toList();
         _loading = false;
       });
     } catch (e) {
@@ -57,18 +69,108 @@ class _CommunityCarouselCardState extends State<CommunityCarouselCard> {
     }
   }
 
-  Future<void> _followUser(String userId) async {
-    if (_busyUsers.contains(userId)) return;
-    setState(() => _busyUsers.add(userId));
+  Future<void> _replenishSuggestedUsers() async {
+    if (_replenishingUsers ||
+        _suggestedUsers.length >= _visibleSuggestionLimit) {
+      return;
+    }
+    _replenishingUsers = true;
     try {
-      await context.read<CommunityProvider>().followUser(userId);
+      final latest = await SocialService.getSuggestedUsers(
+        limit: _suggestionFetchLimit,
+      );
       if (!mounted) return;
       setState(() {
+        final visibleIds = _suggestedUsers
+            .map((user) => user['id'] as String?)
+            .whereType<String>()
+            .toSet();
+        for (final user in latest) {
+          final id = user['id'] as String?;
+          if (id == null ||
+              visibleIds.contains(id) ||
+              _dismissedUsers.contains(id)) {
+            continue;
+          }
+          _suggestedUsers.add(user);
+          visibleIds.add(id);
+          if (_suggestedUsers.length >= _visibleSuggestionLimit) break;
+        }
+      });
+    } catch (e) {
+      debugPrint('[CommunityCarouselCard] User nachladen fehlgeschlagen: $e');
+    } finally {
+      _replenishingUsers = false;
+    }
+  }
+
+  Future<void> _replenishPublicGroups() async {
+    if (_replenishingGroups || _publicGroups.length >= _visibleGroupLimit) {
+      return;
+    }
+    _replenishingGroups = true;
+    try {
+      final latest = await SocialService.getDiscoverGroups();
+      if (!mounted) return;
+      setState(() {
+        final visibleIds = _publicGroups
+            .map((group) => group['id'] as String?)
+            .whereType<String>()
+            .toSet();
+        for (final group in latest.take(_groupFetchLimit)) {
+          final id = group['id'] as String?;
+          if (id == null ||
+              visibleIds.contains(id) ||
+              _joinedGroups.contains(id)) {
+            continue;
+          }
+          _publicGroups.add(group);
+          visibleIds.add(id);
+          if (_publicGroups.length >= _visibleGroupLimit) break;
+        }
+      });
+    } catch (e) {
+      debugPrint(
+        '[CommunityCarouselCard] Gruppen nachladen fehlgeschlagen: $e',
+      );
+    } finally {
+      _replenishingGroups = false;
+    }
+  }
+
+  Future<void> _followUser(String userId) async {
+    if (_busyUsers.contains(userId)) return;
+    Map<String, dynamic>? user;
+    for (final entry in _suggestedUsers) {
+      if (entry['id'] == userId) {
+        user = entry;
+        break;
+      }
+    }
+    setState(() => _busyUsers.add(userId));
+    try {
+      await context.read<CommunityProvider>().followUser(
+        userId,
+        targetIsPrivate: user?['is_private'] == true,
+      );
+      if (!mounted) return;
+      setState(() {
+        _dismissedUsers.add(userId);
         _suggestedUsers.removeWhere((user) => user['id'] == userId);
       });
+      await _replenishSuggestedUsers();
     } finally {
       if (mounted) setState(() => _busyUsers.remove(userId));
     }
+  }
+
+  Future<void> _dismissUser(String userId) async {
+    if (userId.isEmpty) return;
+    setState(() {
+      _dismissedUsers.add(userId);
+      _suggestedUsers.removeWhere((user) => user['id'] == userId);
+    });
+    await _replenishSuggestedUsers();
   }
 
   Future<void> _joinGroup(String groupId) async {
@@ -79,7 +181,26 @@ class _CommunityCarouselCardState extends State<CommunityCarouselCard> {
     try {
       await SocialService.joinGroup(groupId);
       if (!mounted) return;
-      setState(() => _joinedGroups.add(groupId));
+      setState(() {
+        _busyGroups.remove(groupId);
+        _joinedGroups.add(groupId);
+      });
+      await Future<void>.delayed(const Duration(milliseconds: 650));
+      if (!mounted) return;
+      setState(() {
+        _publicGroups.removeWhere((group) => group['id'] == groupId);
+        _joinedGroups.remove(groupId);
+      });
+      await _replenishPublicGroups();
+    } catch (e) {
+      debugPrint('[CommunityCarouselCard] Beitreten fehlgeschlagen: $e');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Beitreten gerade nicht möglich.'),
+          backgroundColor: Color(0xFF1C1F26),
+        ),
+      );
     } finally {
       if (mounted) setState(() => _busyGroups.remove(groupId));
     }
@@ -153,6 +274,7 @@ class _CommunityCarouselCardState extends State<CommunityCarouselCard> {
                         busyUserIds: _busyUsers,
                         onOpenUser: _openUser,
                         onFollow: _followUser,
+                        onDismiss: _dismissUser,
                         onOpenCommunity: widget.onOpenCommunity,
                       ),
                       PublicGroupsSlide(
@@ -181,6 +303,7 @@ class SuggestedContactsSlide extends StatelessWidget {
   final Set<String> busyUserIds;
   final ValueChanged<Map<String, dynamic>> onOpenUser;
   final ValueChanged<String> onFollow;
+  final ValueChanged<String> onDismiss;
   final VoidCallback? onOpenCommunity;
 
   const SuggestedContactsSlide({
@@ -189,6 +312,7 @@ class SuggestedContactsSlide extends StatelessWidget {
     required this.busyUserIds,
     required this.onOpenUser,
     required this.onFollow,
+    required this.onDismiss,
     this.onOpenCommunity,
   });
 
@@ -208,7 +332,7 @@ class SuggestedContactsSlide extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const Text(
-          'Leute, die du vielleicht kennst',
+          'Vorschläge',
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
           style: TextStyle(
@@ -219,33 +343,36 @@ class SuggestedContactsSlide extends StatelessWidget {
         ),
         const SizedBox(height: 8),
         Expanded(
-          child: ListView.separated(
-            padding: EdgeInsets.zero,
-            physics: const NeverScrollableScrollPhysics(),
-            itemCount: users.length,
-            separatorBuilder: (_, _) => const SizedBox(height: 7),
-            itemBuilder: (context, index) {
-              final user = users[index];
-              final id = user['id'] as String? ?? '';
-              final name = SocialService.publicDisplayName(
-                user,
-                fallbackUserId: id,
-              );
-              final handle = SocialService.publicHandle(
-                user,
-                fallbackUserId: id,
-              );
-              final busy = busyUserIds.contains(id);
+          child: Scrollbar(
+            child: ListView.separated(
+              padding: EdgeInsets.zero,
+              physics: const BouncingScrollPhysics(),
+              itemCount: users.length > 5 ? 5 : users.length,
+              separatorBuilder: (_, _) => const SizedBox(height: 7),
+              itemBuilder: (context, index) {
+                final user = users[index];
+                final id = user['id'] as String? ?? '';
+                final name = SocialService.publicDisplayName(
+                  user,
+                  fallbackUserId: id,
+                );
+                final handle = SocialService.publicHandle(
+                  user,
+                  fallbackUserId: id,
+                );
+                final busy = busyUserIds.contains(id);
 
-              return _ContactRow(
-                name: name,
-                handle: handle,
-                avatarUrl: user['avatar_url'] as String?,
-                busy: busy,
-                onTap: () => onOpenUser(user),
-                onFollow: id.isEmpty ? null : () => onFollow(id),
-              );
-            },
+                return _ContactRow(
+                  name: name,
+                  handle: handle,
+                  avatarUrl: user['avatar_url'] as String?,
+                  busy: busy,
+                  onTap: () => onOpenUser(user),
+                  onFollow: id.isEmpty ? null : () => onFollow(id),
+                  onDismiss: id.isEmpty ? null : () => onDismiss(id),
+                );
+              },
+            ),
           ),
         ),
       ],
@@ -276,7 +403,7 @@ class PublicGroupsSlide extends StatelessWidget {
         icon: Icons.groups_outlined,
         title: 'Öffentliche Gruppen',
         text: 'Aktuell ist keine offene Gruppe verfügbar.',
-        actionLabel: 'Zur Community',
+        actionLabel: 'Community',
         onAction: onOpenCommunity,
       );
     }
@@ -395,6 +522,7 @@ class _ContactRow extends StatelessWidget {
   final bool busy;
   final VoidCallback onTap;
   final VoidCallback? onFollow;
+  final VoidCallback? onDismiss;
 
   const _ContactRow({
     required this.name,
@@ -403,52 +531,75 @@ class _ContactRow extends StatelessWidget {
     required this.busy,
     required this.onTap,
     required this.onFollow,
+    required this.onDismiss,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      children: [
-        UserAvatar(name: name, avatarUrl: avatarUrl, radius: 17, onTap: onTap),
-        const SizedBox(width: 9),
-        Expanded(
-          child: GestureDetector(
-            onTap: onTap,
-            behavior: HitTestBehavior.opaque,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w700,
+    return Container(
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.035),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
+      ),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              UserAvatar(
+                name: name,
+                avatarUrl: avatarUrl,
+                radius: 15,
+                onTap: onTap,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: GestureDetector(
+                  onTap: onTap,
+                  behavior: HitTestBehavior.opaque,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      Text(
+                        handle,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Color(0xFFA0AEC0),
+                          fontSize: 10,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-                Text(
-                  handle,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: Color(0xFFA0AEC0),
-                    fontSize: 10,
-                  ),
-                ),
-              ],
+              ),
+              const SizedBox(width: 6),
+              _DismissButton(onTap: onDismiss),
+            ],
+          ),
+          const SizedBox(height: 7),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: _MiniActionButton(
+              label: 'Folgen',
+              icon: Icons.person_add_alt_1,
+              busy: busy,
+              onTap: onFollow,
             ),
           ),
-        ),
-        const SizedBox(width: 8),
-        _MiniActionButton(
-          label: 'Folgen',
-          icon: Icons.person_add_alt_1,
-          busy: busy,
-          onTap: onFollow,
-        ),
-      ],
+        ],
+      ),
     );
   }
 }
@@ -553,41 +704,80 @@ class _MiniActionButton extends StatelessWidget {
     return GestureDetector(
       onTap: enabled ? onTap : null,
       behavior: HitTestBehavior.opaque,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 160),
-        height: 28,
-        padding: const EdgeInsets.symmetric(horizontal: 9),
-        decoration: BoxDecoration(
-          color: enabled
-              ? AppAccentColors.accent
-              : Colors.white.withValues(alpha: 0.08),
-          borderRadius: BorderRadius.circular(999),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (busy)
-              const SizedBox(
-                width: 12,
-                height: 12,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  color: Colors.white,
-                ),
-              )
-            else
-              Icon(icon, color: Colors.white, size: 13),
-            const SizedBox(width: 5),
-            Text(
-              label,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 11,
-                fontWeight: FontWeight.w700,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 108),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 160),
+          height: 28,
+          padding: const EdgeInsets.symmetric(horizontal: 9),
+          decoration: BoxDecoration(
+            color: enabled
+                ? AppAccentColors.accent
+                : Colors.white.withValues(alpha: 0.08),
+            borderRadius: BorderRadius.circular(999),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              AnimatedSwitcher(
+                duration: const Duration(milliseconds: 140),
+                child: busy
+                    ? const SizedBox(
+                        key: ValueKey('busy'),
+                        width: 12,
+                        height: 12,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                    : Icon(
+                        icon,
+                        key: ValueKey(icon),
+                        color: Colors.white,
+                        size: 13,
+                      ),
               ),
-            ),
-          ],
+              const SizedBox(width: 5),
+              Flexible(
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
+      ),
+    );
+  }
+}
+
+class _DismissButton extends StatelessWidget {
+  final VoidCallback? onTap;
+
+  const _DismissButton({required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: Container(
+        width: 26,
+        height: 26,
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.06),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
+        ),
+        child: const Icon(Icons.close, color: Color(0xFFA0AEC0), size: 14),
       ),
     );
   }
@@ -641,9 +831,13 @@ class _EmptySlide extends StatelessWidget {
           const SizedBox(height: 6),
           Text(
             text,
-            maxLines: 2,
+            maxLines: 3,
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(color: Color(0xFFA0AEC0), fontSize: 10),
+            style: const TextStyle(
+              color: Color(0xFFA0AEC0),
+              fontSize: 10,
+              height: 1.25,
+            ),
           ),
           const Spacer(),
           if (onAction != null)

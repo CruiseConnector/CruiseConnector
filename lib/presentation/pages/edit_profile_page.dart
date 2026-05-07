@@ -4,8 +4,11 @@ import 'package:flutter/services.dart';
 import 'package:flutter_typeahead/flutter_typeahead.dart';
 import 'package:image_cropper/image_cropper.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:provider/provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'package:cruise_connect/application/providers/community_provider.dart';
+import 'package:cruise_connect/core/input_limits.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/data/services/vehicle_api_service.dart';
 import 'package:cruise_connect/presentation/widgets/user_avatar.dart';
@@ -13,7 +16,9 @@ import 'package:cruise_connect/presentation/widgets/vehicle_garage_carousel.dart
 
 enum _ImageCropPreset { avatar, banner, car }
 
-const int _vehicleDescriptionMaxLength = 500;
+const int _vehicleDescriptionMaxLength =
+    AppInputLimits.vehicleDescriptionMaxLength;
+const bool _usernameEditingLockedForTest = true;
 
 final List<_CountryOption> _countryOptions = <_CountryOption>[
   _CountryOption('AT', 'AT - Austria'),
@@ -114,9 +119,8 @@ class _CountryOption {
 /// Profil-Editor: Banner + Avatar Upload, Username/Bio/Link, Auto-Stammdaten
 /// im Ferrari-Verkaufsanzeigen-Stil.
 ///
-/// Username-Änderungen sind auf 1x pro 30 Tage limitiert (Service-Layer
-/// prüft via `canChangeUsername()`); vor dem Save erscheint ein
-/// Bestätigungsdialog mit Hinweis.
+/// In der Testversion ist der Username gesperrt, damit Tester eindeutig
+/// zuordenbar bleiben. Die Cooldown-Logik bleibt für spätere Builds erhalten.
 class EditProfilePage extends StatefulWidget {
   const EditProfilePage({super.key});
 
@@ -344,7 +348,20 @@ class _EditProfilePageState extends State<EditProfilePage> {
       );
       if (url == null) throw Exception('Upload fehlgeschlagen');
       await SocialService.updateProfileImageUrl(column: column, publicUrl: url);
-      if (mounted) onSuccess(url);
+      if (mounted) {
+        final uid = Supabase.instance.client.auth.currentUser?.id;
+        if (uid != null) {
+          context.read<CommunityProvider>().applyProfilePatch(uid, {
+            column: url,
+          });
+        }
+        await _precacheProfileImage(
+          url,
+          width: maxWidth.toDouble(),
+          height: maxHeight.toDouble(),
+        );
+        onSuccess(url);
+      }
     } catch (e) {
       debugPrint('[EditProfile] Upload fehlgeschlagen: $e');
       if (mounted) {
@@ -401,6 +418,30 @@ class _EditProfilePageState extends State<EditProfilePage> {
       debugPrint('[EditProfile] Auto-Bild Upload fehlgeschlagen: $e');
     } finally {
       if (mounted) setState(() => _uploadingCarImage = false);
+    }
+  }
+
+  Future<void> _precacheProfileImage(
+    String url, {
+    required double width,
+    double? height,
+  }) async {
+    if (!mounted) return;
+    final imageProvider = UserAvatar.resizedNetworkImageProvider(
+      context,
+      url,
+      width: width,
+      height: height,
+      maxCacheSize: 1600,
+    );
+    if (imageProvider == null) return;
+    try {
+      await precacheImage(
+        imageProvider,
+        context,
+      ).timeout(const Duration(seconds: 2));
+    } catch (e) {
+      debugPrint('[EditProfile] Bild-Precache fehlgeschlagen: $e');
     }
   }
 
@@ -478,6 +519,18 @@ class _EditProfilePageState extends State<EditProfilePage> {
   Future<bool> _confirmUsernameChangeIfNeeded() async {
     final newName = _usernameController.text.trim();
     if (newName.isEmpty || newName == _initialUsername) return true;
+    if (_usernameEditingLockedForTest) {
+      _usernameController.text = _initialUsername;
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Username ist in der Testversion gesperrt.'),
+            backgroundColor: Color(0xFF1C1F26),
+          ),
+        );
+      }
+      return true;
+    }
     if (_nextUsernameChange != null) {
       // Cooldown läuft noch — nicht ändern lassen.
       final dt = _nextUsernameChange!;
@@ -557,8 +610,12 @@ class _EditProfilePageState extends State<EditProfilePage> {
     try {
       _captureCurrentVehicleDraft();
       // 1) Username separat (Cooldown-Tracking)
-      final newName = _usernameController.text.trim();
-      if (newName.isNotEmpty && newName != _initialUsername) {
+      final newName = _usernameEditingLockedForTest
+          ? _initialUsername
+          : _usernameController.text.trim();
+      if (!_usernameEditingLockedForTest &&
+          newName.isNotEmpty &&
+          newName != _initialUsername) {
         await SocialService.updateUsername(newName);
         _initialUsername = newName;
       }
@@ -571,6 +628,22 @@ class _EditProfilePageState extends State<EditProfilePage> {
       // 3) Garage: mehrere Autos/Motorräder. Das erste Fahrzeug wird vom
       // Service zusätzlich in die Legacy-Profile-Spalten gespiegelt.
       await SocialService.saveUserVehicles(_vehicleDrafts);
+      final uid = Supabase.instance.client.auth.currentUser?.id;
+      if (mounted && uid != null) {
+        context.read<CommunityProvider>().applyProfilePatch(uid, {
+          'username': newName,
+          'bio_title': _bioTitleController.text.trim().isEmpty
+              ? null
+              : _bioTitleController.text.trim(),
+          'bio': _bioController.text.trim(),
+          'link': _linkController.text.trim(),
+          'avatar_url': _avatarUrl,
+          'banner_url': _bannerUrl,
+          'car_image_url': _vehicleDrafts.isEmpty
+              ? _carImageUrl
+              : _vehicleDrafts.first['image_url'],
+        });
+      }
       if (mounted) Navigator.pop(context, true);
     } catch (e) {
       debugPrint('[EditProfile] Speichern fehlgeschlagen: $e');
@@ -770,10 +843,18 @@ class _EditProfilePageState extends State<EditProfilePage> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       _buildLabel('Username'),
-                      _buildTextField(_usernameController, '@username'),
+                      _buildTextField(
+                        _usernameController,
+                        '@username',
+                        maxLength: AppInputLimits.usernameMaxLength,
+                        inputFormatters: AppInputLimits.usernameFormatters,
+                        enabled: !_usernameEditingLockedForTest,
+                      ),
                       const SizedBox(height: 6),
                       Text(
-                        _nextUsernameChange != null
+                        _usernameEditingLockedForTest
+                            ? 'Username ist für die heutige Testversion gesperrt.'
+                            : _nextUsernameChange != null
                             ? 'Du kannst deinen Benutzernamen erst wieder ab dem '
                                   '${_nextUsernameChange!.day.toString().padLeft(2, '0')}.'
                                   '${_nextUsernameChange!.month.toString().padLeft(2, '0')}.'
@@ -791,7 +872,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
                       _buildTextField(
                         _bioTitleController,
                         'z.B. Über mich',
-                        maxLength: 40,
+                        maxLength: AppInputLimits.bioTitleMaxLength,
                       ),
                       const SizedBox(height: 20),
 
@@ -800,7 +881,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
                         _bioController,
                         'Erzähl etwas über dich…',
                         maxLines: 4,
-                        maxLength: 500,
+                        maxLength: AppInputLimits.bioMaxLength,
                       ),
                       // Live-Counter, weil counterText im TextField selbst
                       // ausgeblendet ist (sonst doppelt mit anderen Feldern).
@@ -809,9 +890,11 @@ class _EditProfilePageState extends State<EditProfilePage> {
                         child: Align(
                           alignment: Alignment.centerRight,
                           child: Text(
-                            '${_bioController.text.length}/500',
+                            '${_bioController.text.length}/${AppInputLimits.bioMaxLength}',
                             style: TextStyle(
-                              color: _bioController.text.length >= 500
+                              color:
+                                  _bioController.text.length >=
+                                      AppInputLimits.bioMaxLength
                                   ? AppAccentColors.accent
                                   : Colors.grey,
                               fontSize: 11,
@@ -823,7 +906,11 @@ class _EditProfilePageState extends State<EditProfilePage> {
                       const SizedBox(height: 20),
 
                       _buildLabel('Link / Webseite'),
-                      _buildTextField(_linkController, 'https://…'),
+                      _buildTextField(
+                        _linkController,
+                        'https://…',
+                        maxLength: AppInputLimits.linkMaxLength,
+                      ),
 
                       const SizedBox(height: 32),
 
@@ -1520,7 +1607,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
           child: TextField(
             controller: fieldController,
             focusNode: focusNode,
-            maxLength: 32,
+            maxLength: AppInputLimits.shortTextMaxLength,
             style: const TextStyle(color: Colors.white),
             onChanged: (value) {
               onTextChanged?.call(value);
@@ -1586,19 +1673,24 @@ class _EditProfilePageState extends State<EditProfilePage> {
     List<TextInputFormatter>? inputFormatters,
     int? maxLength,
     ValueChanged<String>? onChanged,
+    bool enabled = true,
   }) {
     return Container(
       decoration: BoxDecoration(
-        color: const Color(0xFF1C1F26),
+        color: enabled ? const Color(0xFF1C1F26) : const Color(0xFF171B23),
         borderRadius: BorderRadius.circular(12),
+        border: enabled
+            ? null
+            : Border.all(color: Colors.white.withValues(alpha: 0.04)),
       ),
       child: TextField(
+        enabled: enabled,
         controller: controller,
         maxLines: maxLines,
         keyboardType: keyboardType,
         inputFormatters: inputFormatters,
         maxLength: maxLength,
-        style: const TextStyle(color: Colors.white),
+        style: TextStyle(color: enabled ? Colors.white : Colors.white54),
         onChanged: (value) {
           onChanged?.call(value);
           setState(() {});

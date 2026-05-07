@@ -1,5 +1,6 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../core/input_limits.dart';
 import '../../domain/models/cruise_group.dart';
 import '../../domain/models/group_member.dart';
 
@@ -20,12 +21,24 @@ class CruiseGroupService {
     required Map<String, dynamic> startLocation,
   }) async {
     final uid = _db.auth.currentUser!.id;
+    final cleanName = name.trim();
+    final cleanDescription = description?.trim();
+    if (cleanName.isEmpty ||
+        cleanName.length > AppInputLimits.groupNameMaxLength) {
+      throw ArgumentError('Gruppenname ist ungültig.');
+    }
+    if ((cleanDescription?.length ?? 0) >
+        AppInputLimits.groupDescriptionMaxLength) {
+      throw ArgumentError('Gruppenbeschreibung ist zu lang.');
+    }
     final row = await _db
         .from('groups')
         .insert({
           'created_by': uid,
-          'name': name,
-          'description': description,
+          'name': cleanName,
+          'description': cleanDescription?.isEmpty == true
+              ? null
+              : cleanDescription,
           'is_public': isPublic,
           'max_people': maxPeople,
           'start_time': startTime?.toIso8601String(),

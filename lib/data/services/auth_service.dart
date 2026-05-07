@@ -1,5 +1,6 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'package:cruise_connect/core/input_limits.dart';
 import 'package:cruise_connect/data/services/saved_routes_cache_service.dart';
 
 /// Wrapper um Supabase Auth — Login, Registrierung, Abmelden.
@@ -31,14 +32,20 @@ class AuthService {
     required String password,
     String? username,
   }) async {
-    final derivedName = username?.trim().isNotEmpty == true
+    final rawName = username?.trim().isNotEmpty == true
         ? username!.trim()
-        : email.split('@').first;
+        : AppInputLimits.normalizeUsernameFallback(email.split('@').first);
+    if (!AppInputLimits.isValidUsername(rawName)) {
+      throw ArgumentError(
+        'Username muss 3-${AppInputLimits.usernameMaxLength} Zeichen haben '
+        'und darf nur Buchstaben, Zahlen und _ enthalten.',
+      );
+    }
 
     await _db.auth.signUp(
       email: email,
       password: password,
-      data: {'username': derivedName},
+      data: {'username': rawName},
     );
   }
 

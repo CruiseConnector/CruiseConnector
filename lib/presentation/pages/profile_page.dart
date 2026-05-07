@@ -8,6 +8,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/application/providers/community_provider.dart';
 import 'package:cruise_connect/application/providers/route_bookmark_provider.dart';
+import 'package:cruise_connect/core/input_limits.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/data/services/saved_routes_service.dart';
 import 'package:cruise_connect/domain/models/saved_route.dart';
@@ -106,6 +107,12 @@ class _ProfilePageState extends State<ProfilePage>
 
       if (mounted) {
         final profile = results[6] as Map<String, dynamic>?;
+        final profileWithCounts = {
+          ...?profile,
+          'id': uid,
+          'follower_count': results[0] as int,
+          'following_count': results[1] as int,
+        };
         setState(() {
           _followerCount = results[0] as int;
           _followingCount = results[1] as int;
@@ -113,12 +120,13 @@ class _ProfilePageState extends State<ProfilePage>
           _reposts = results[3] as List<Map<String, dynamic>>;
           _groups = results[4] as List<Map<String, dynamic>>;
           _savedRoutes = results[5] as List<SavedRoute>;
-          _profile = profile ?? <String, dynamic>{};
+          _profile = profileWithCounts;
           _vehicles = results[7] as List<Map<String, dynamic>>;
           _avatarUrl = profile?['avatar_url'] as String?;
           _bannerUrl = profile?['banner_url'] as String?;
           _loading = false;
         });
+        context.read<CommunityProvider>().seedProfile(profileWithCounts);
       }
     } catch (e) {
       debugPrint('[Profile] Daten laden fehlgeschlagen: $e');
@@ -251,6 +259,9 @@ class _ProfilePageState extends State<ProfilePage>
       );
 
       if (mounted) {
+        context.read<CommunityProvider>().applyProfilePatch(uid, {
+          'avatar_url': urlWithCacheBuster,
+        });
         setState(() {
           _avatarUrl = urlWithCacheBuster;
           _uploadingAvatar = false;
@@ -347,21 +358,31 @@ class _ProfilePageState extends State<ProfilePage>
   @override
   Widget build(BuildContext context) {
     final accent = context.watch<AppAccentProvider>().color;
+    final community = context.watch<CommunityProvider>();
     final user = Supabase.instance.client.auth.currentUser;
+    final liveProfile = user?.id == null
+        ? _profile
+        : community.mergedProfile(user!.id, _profile);
     // Username & Bio kommen jetzt aus dem `profiles`-Table — Edits aus
     // EditProfilePage werden so direkt sichtbar. user.userMetadata ist
     // unzuverlässig, weil sie nicht synchron zum profiles-Update ist.
-    final dbUsername = (_profile['username'] as String?)?.trim();
+    final dbUsername = (liveProfile['username'] as String?)?.trim();
     final String userName = (dbUsername != null && dbUsername.isNotEmpty)
         ? dbUsername
         : 'Cruiser';
     final String userHandle = SocialService.publicHandle(
-      _profile,
+      liveProfile,
       fallbackUserId: user?.id,
     );
-    final String? userBio = (_profile['bio'] as String?)?.trim();
-    final String? userBioTitle = (_profile['bio_title'] as String?)?.trim();
-    final String? userLink = (_profile['link'] as String?)?.trim();
+    final String? userBio = (liveProfile['bio'] as String?)?.trim();
+    final String? userBioTitle = (liveProfile['bio_title'] as String?)?.trim();
+    final String? userLink = (liveProfile['link'] as String?)?.trim();
+    final liveAvatarUrl = (liveProfile['avatar_url'] as String?) ?? _avatarUrl;
+    final liveBannerUrl = (liveProfile['banner_url'] as String?) ?? _bannerUrl;
+    final liveFollowerCount =
+        (liveProfile['follower_count'] as num?)?.toInt() ?? _followerCount;
+    final liveFollowingCount =
+        (liveProfile['following_count'] as num?)?.toInt() ?? _followingCount;
 
     return Scaffold(
       key: _scaffoldKey,
@@ -413,11 +434,11 @@ class _ProfilePageState extends State<ProfilePage>
                         colors: [Color(0xFF1C1F26), Color(0xFF0B0E14)],
                         stops: [0.3, 1.0],
                       ),
-                      image: _bannerUrl != null && _bannerUrl!.isNotEmpty
+                      image: liveBannerUrl != null && liveBannerUrl.isNotEmpty
                           ? DecorationImage(
                               image: UserAvatar.resizedNetworkImageProvider(
                                 context,
-                                _bannerUrl,
+                                liveBannerUrl,
                                 width: MediaQuery.sizeOf(context).width,
                                 height: 220,
                                 maxCacheSize: 1600,
@@ -426,7 +447,7 @@ class _ProfilePageState extends State<ProfilePage>
                             )
                           : null,
                     ),
-                    child: _bannerUrl != null && _bannerUrl!.isNotEmpty
+                    child: liveBannerUrl != null && liveBannerUrl.isNotEmpty
                         ? null
                         : Center(
                             child: Icon(
@@ -481,7 +502,7 @@ class _ProfilePageState extends State<ProfilePage>
                                     foregroundImage:
                                         UserAvatar.avatarImageProvider(
                                           context,
-                                          _avatarUrl,
+                                          liveAvatarUrl,
                                           radius: 40,
                                         ),
                                     child: Text(
@@ -642,7 +663,7 @@ class _ProfilePageState extends State<ProfilePage>
                             GestureDetector(
                               onTap: () => _showFollowList('following'),
                               child: _buildFollowStat(
-                                '$_followingCount',
+                                '$liveFollowingCount',
                                 'Folge ich',
                               ),
                             ),
@@ -650,7 +671,7 @@ class _ProfilePageState extends State<ProfilePage>
                             GestureDetector(
                               onTap: () => _showFollowList('followers'),
                               child: _buildFollowStat(
-                                '$_followerCount',
+                                '$liveFollowerCount',
                                 'Follower',
                               ),
                             ),
@@ -972,6 +993,15 @@ class _ProfilePageState extends State<ProfilePage>
     required int repostsCount,
     String? sharedRouteId,
   }) {
+    final uid = Supabase.instance.client.auth.currentUser?.id;
+    final liveAvatarUrl = uid == null
+        ? _avatarUrl
+        : context.watch<CommunityProvider>().mergedProfile(
+                    uid,
+                    _profile,
+                  )['avatar_url']
+                  as String? ??
+              _avatarUrl;
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       padding: const EdgeInsets.all(16),
@@ -984,7 +1014,7 @@ class _ProfilePageState extends State<ProfilePage>
         children: [
           Row(
             children: [
-              UserAvatar(name: name, avatarUrl: _avatarUrl, radius: 18),
+              UserAvatar(name: name, avatarUrl: liveAvatarUrl, radius: 18),
               const SizedBox(width: 10),
               Expanded(
                 child: Column(
@@ -1577,7 +1607,7 @@ class _ProfilePageState extends State<ProfilePage>
           content: TextField(
             controller: controller,
             autofocus: true,
-            maxLength: 60,
+            maxLength: AppInputLimits.routeNameMaxLength,
             style: const TextStyle(color: Colors.white),
             decoration: InputDecoration(
               counterStyle: const TextStyle(color: Colors.grey),
@@ -1829,7 +1859,11 @@ class _ProfilePageState extends State<ProfilePage>
   }
 
   Widget _buildCarSection() {
-    final firstVehicle = _vehicles.isNotEmpty ? _vehicles.first : _profile;
+    final uid = Supabase.instance.client.auth.currentUser?.id;
+    final liveProfile = uid == null
+        ? _profile
+        : context.watch<CommunityProvider>().mergedProfile(uid, _profile);
+    final firstVehicle = _vehicles.isNotEmpty ? _vehicles.first : liveProfile;
     final brand =
         ((firstVehicle['brand'] ?? firstVehicle['car_brand']) as String?)
             ?.trim();

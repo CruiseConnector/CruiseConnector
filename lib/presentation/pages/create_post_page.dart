@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
+import 'package:cruise_connect/core/input_limits.dart';
 import 'package:cruise_connect/data/services/gamification_service.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/presentation/widgets/badge_unlock_popup.dart';
@@ -25,7 +26,11 @@ class _CreatePostPageState extends State<CreatePostPage> {
   void initState() {
     super.initState();
     if (widget.initialText != null) {
-      _controller.text = widget.initialText!;
+      final initialText = widget.initialText!;
+      _controller.text =
+          initialText.length <= AppInputLimits.postContentMaxLength
+          ? initialText
+          : initialText.substring(0, AppInputLimits.postContentMaxLength);
     }
     _checkRoutePostAvailability();
   }
@@ -268,7 +273,25 @@ class _CreatePostPageState extends State<CreatePostPage> {
                       autofocus: true,
                       style: const TextStyle(color: Colors.white, fontSize: 18),
                       maxLines: null,
+                      maxLength: AppInputLimits.postContentMaxLength,
                       onChanged: (_) => setState(() {}),
+                      buildCounter:
+                          (
+                            context, {
+                            required currentLength,
+                            required isFocused,
+                            required maxLength,
+                          }) => Text(
+                            '$currentLength/$maxLength',
+                            style: TextStyle(
+                              color:
+                                  currentLength >=
+                                      AppInputLimits.postContentMaxLength
+                                  ? AppAccentColors.accent
+                                  : Colors.grey,
+                              fontSize: 12,
+                            ),
+                          ),
                       decoration: const InputDecoration(
                         hintText: "Was gibt's Neues?",
                         hintStyle: TextStyle(color: Colors.grey, fontSize: 18),

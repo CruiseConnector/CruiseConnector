@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:provider/provider.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
+import 'package:cruise_connect/application/providers/community_provider.dart';
 import 'package:cruise_connect/data/services/offline_map_service.dart';
 import 'package:cruise_connect/presentation/pages/home_content_page.dart';
 import 'package:cruise_connect/presentation/pages/community_page.dart';
@@ -20,6 +21,7 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   int _selectedIndex = 0;
   bool _isFullscreen = false;
+  CommunityProvider? _communityProvider;
   // Refresh-Counter pro Tab — wird beim Tab-Wechsel erhöht,
   // damit die Zielseite ihre Daten automatisch neu lädt.
   int _refreshCounter = 0;
@@ -34,6 +36,11 @@ class _HomePageState extends State<HomePage> {
     CruiseModePage.isFullscreen.addListener(_onFullscreenChanged);
     CruiseModePage.pendingRoute.addListener(_onPendingRoute);
     _requestLocationPermission();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _communityProvider = context.read<CommunityProvider>();
+      _communityProvider?.startRealtime();
+    });
     // Dark-Style für Offline-Nutzung im Hintergrund cachen
     Future.delayed(const Duration(seconds: 2), () {
       OfflineMapService.instance.ensureStyleCached();
@@ -65,6 +72,7 @@ class _HomePageState extends State<HomePage> {
   void dispose() {
     CruiseModePage.isFullscreen.removeListener(_onFullscreenChanged);
     CruiseModePage.pendingRoute.removeListener(_onPendingRoute);
+    _communityProvider?.stopRealtime();
     super.dispose();
   }
 

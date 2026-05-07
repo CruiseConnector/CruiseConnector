@@ -1,6 +1,8 @@
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'package:cruise_connect/core/input_limits.dart';
+
 class SocialServiceException implements Exception {
   const SocialServiceException(this.message);
 
@@ -390,6 +392,11 @@ class SocialService {
   }) async {
     final uid = _userId;
     if (uid == null) return null;
+    final cleanedContent = content.trim();
+    if (cleanedContent.isEmpty) return null;
+    if (cleanedContent.length > AppInputLimits.postContentMaxLength) {
+      throw const SocialServiceException('Post ist zu lang.');
+    }
     final cleanedSharedRouteId = sharedRouteId?.trim();
 
     if (cleanedSharedRouteId != null && cleanedSharedRouteId.isNotEmpty) {
@@ -401,7 +408,7 @@ class SocialService {
 
     final row = <String, dynamic>{
       'user_id': uid,
-      'content': content,
+      'content': cleanedContent,
       'visibility': visibility,
     };
     if (cleanedSharedRouteId != null && cleanedSharedRouteId.isNotEmpty) {
@@ -422,7 +429,7 @@ class SocialService {
     // Mentions im Content auflösen — Anti-Spam: nur eigene Follower werden
     // tatsächlich benachrichtigt.
     if (postId != null) {
-      final mentions = _extractMentions(content);
+      final mentions = _extractMentions(cleanedContent);
       if (mentions.isNotEmpty) {
         await sendMentionNotifications(postId: postId, usernames: mentions);
       }
@@ -604,12 +611,16 @@ class SocialService {
     String? parentCommentId,
   }) async {
     final uid = _userId;
-    if (uid == null || content.trim().isEmpty) return;
+    final cleanedContent = content.trim();
+    if (uid == null || cleanedContent.isEmpty) return;
+    if (cleanedContent.length > AppInputLimits.commentMaxLength) {
+      throw const SocialServiceException('Kommentar ist zu lang.');
+    }
 
     final row = <String, dynamic>{
       'post_id': postId,
       'user_id': uid,
-      'content': content.trim(),
+      'content': cleanedContent,
     };
     if (parentCommentId != null) {
       row['parent_comment_id'] = parentCommentId;
@@ -830,6 +841,12 @@ class SocialService {
   static Future<String> followUser(String targetUserId) async {
     final uid = _userId;
     if (uid == null || uid == targetUserId) return 'none';
+    if (await isBlockedEither(targetUserId)) return 'none';
+
+    final existingStatus = await getFollowStatus(targetUserId);
+    if (existingStatus == 'accepted' || existingStatus == 'pending') {
+      return existingStatus;
+    }
 
     // Prüfen, ob Ziel privat ist.
     final profile = await _db
@@ -840,11 +857,16 @@ class SocialService {
     final isPrivate = (profile as Map?)?['is_private'] == true;
     final status = isPrivate ? 'pending' : 'accepted';
 
-    await _db.from('follows').upsert({
-      'follower_id': uid,
-      'following_id': targetUserId,
-      'status': status,
-    });
+    try {
+      await _db.from('follows').insert({
+        'follower_id': uid,
+        'following_id': targetUserId,
+        'status': status,
+      });
+    } on PostgrestException catch (e) {
+      if (e.code == '23505') return getFollowStatus(targetUserId);
+      rethrow;
+    }
 
     try {
       await _db.from('notifications').insert({
@@ -897,16 +919,24 @@ class SocialService {
   }
 
   static Future<bool> isBlockedEither(String targetUserId) async {
+    return await getBlockRelationship(targetUserId) != 'none';
+  }
+
+  /// Richtung der Block-Beziehung zum aktuellen User.
+  /// Werte: `none`, `blocked_by_me`, `blocked_me`, `mutual`.
+  static Future<String> getBlockRelationship(String targetUserId) async {
     final uid = _userId;
-    if (uid == null) return false;
-    final row = await _db
-        .from('user_blocks')
-        .select('blocker_id')
-        .or(
-          'and(blocker_id.eq.$uid,blocked_id.eq.$targetUserId),and(blocker_id.eq.$targetUserId,blocked_id.eq.$uid)',
-        )
-        .maybeSingle();
-    return row != null;
+    if (uid == null || uid == targetUserId) return 'none';
+    try {
+      final result = await _db.rpc(
+        'block_relationship',
+        params: {'other': targetUserId},
+      );
+      return result as String? ?? 'none';
+    } catch (e) {
+      debugPrint('[Social] getBlockRelationship Fehler: $e');
+      return 'none';
+    }
   }
 
   static Future<bool> isFollowing(String targetUserId) async {
@@ -929,12 +959,16 @@ class SocialService {
   static Future<void> acceptFollowRequest(String fromUserId) async {
     final uid = _userId;
     if (uid == null) return;
-    await _db
+    final rows = await _db
         .from('follows')
         .update({'status': 'accepted'})
         .eq('follower_id', fromUserId)
         .eq('following_id', uid)
-        .eq('status', 'pending');
+        .eq('status', 'pending')
+        .select('id');
+    if ((rows as List).isEmpty) {
+      throw StateError('Follow-Anfrage konnte nicht angenommen werden.');
+    }
     try {
       await _db.from('notifications').insert({
         'user_id': fromUserId,
@@ -951,12 +985,16 @@ class SocialService {
   static Future<void> rejectFollowRequest(String fromUserId) async {
     final uid = _userId;
     if (uid == null) return;
-    await _db
+    final rows = await _db
         .from('follows')
         .delete()
         .eq('follower_id', fromUserId)
         .eq('following_id', uid)
-        .eq('status', 'pending');
+        .eq('status', 'pending')
+        .select('id');
+    if ((rows as List).isEmpty) {
+      throw StateError('Follow-Anfrage konnte nicht abgelehnt werden.');
+    }
   }
 
   /// Anzahl meiner offenen Follow-Anfragen — für Badge im Burger-Menü.
@@ -1143,16 +1181,35 @@ class SocialService {
     final blocked = await getBlockedAndBlockerIds();
     final results = await _db
         .from('profiles')
-        .select('id, username, email, avatar_url')
+        .select('id, username, email, avatar_url, is_private')
         .or('username.ilike.%$sanitized%,email.ilike.%$sanitized%')
         .limit(20);
 
-    return List<Map<String, dynamic>>.from(
+    final profiles = List<Map<String, dynamic>>.from(
       (results as List).where((row) {
         final id = (row as Map)['id'] as String?;
         return id != null && !blocked.contains(id);
       }),
     );
+
+    final uid = _userId;
+    if (uid == null || profiles.isEmpty) return profiles;
+
+    final ids = profiles.map((profile) => profile['id']).whereType<String>();
+    final followRows = await _db
+        .from('follows')
+        .select('following_id, status')
+        .eq('follower_id', uid)
+        .inFilter('following_id', ids.toList());
+    final byUser = {
+      for (final row in followRows as List)
+        (row as Map)['following_id'] as String: row['status'] as String?,
+    };
+    for (final profile in profiles) {
+      final id = profile['id'] as String?;
+      profile['follow_status'] = id == null ? 'none' : byUser[id] ?? 'none';
+    }
+    return profiles;
   }
 
   /// Nutzer-Vorschläge: Freunde-von-Freunden, fallback neueste Nutzer.
@@ -1163,24 +1220,27 @@ class SocialService {
     final uid = _userId;
     if (uid == null) return [];
 
-    // IDs denen ich folge (sowie ich selbst) ausschließen
+    // IDs denen ich folge oder bei denen eine Anfrage offen ist ausschließen.
     final following = await _db
         .from('follows')
-        .select('following_id')
-        .eq('follower_id', uid)
-        .eq('status', 'accepted');
+        .select('following_id, status')
+        .eq('follower_id', uid);
+    final acceptedFollowing = (following as List)
+        .where((r) => (r as Map)['status'] == 'accepted')
+        .map((r) => r['following_id'] as String)
+        .toSet();
     final excluded = <String>{
       uid,
-      ...(following as List).map((r) => r['following_id'] as String),
+      ...following.map((r) => (r as Map)['following_id'] as String),
     };
 
     // 1) Freunde-von-Freunden
     if (excluded.length > 1) {
-      final myFollowingIds = excluded.where((id) => id != uid).toList();
+      final myFollowingIds = acceptedFollowing.toList();
       final fof = await _db
           .from('follows')
           .select(
-            'following_id, profiles!follows_following_id_profiles_fkey(id, username, email, avatar_url)',
+            'following_id, profiles!follows_following_id_profiles_fkey(id, username, email, avatar_url, is_private)',
           )
           .inFilter('follower_id', myFollowingIds)
           .eq('status', 'accepted')
@@ -1200,7 +1260,7 @@ class SocialService {
     // 2) Fallback: neueste Profile (nicht-private)
     final recent = await _db
         .from('profiles')
-        .select('id, username, email, avatar_url')
+        .select('id, username, email, avatar_url, is_private')
         .eq('is_private', false)
         .order('created_at', ascending: false)
         .limit(limit + excluded.length);
@@ -1344,16 +1404,35 @@ class SocialService {
   }) async {
     final uid = _userId;
     if (uid == null) return;
+    final cleanName = name.trim();
+    final cleanDescription = description?.trim();
+    if (cleanName.isEmpty ||
+        cleanName.length > AppInputLimits.groupNameMaxLength) {
+      throw const SocialServiceException('Gruppenname ist ungültig.');
+    }
+    if ((cleanDescription?.length ?? 0) >
+        AppInputLimits.groupDescriptionMaxLength) {
+      throw const SocialServiceException('Gruppenbeschreibung ist zu lang.');
+    }
+    if ((routeName?.trim().length ?? 0) >
+            AppInputLimits.groupRouteNameMaxLength ||
+        (stats?.trim().length ?? 0) > AppInputLimits.groupStatsMaxLength ||
+        (timeLocation?.trim().length ?? 0) >
+            AppInputLimits.groupTimeLocationMaxLength) {
+      throw const SocialServiceException('Gruppendetails sind zu lang.');
+    }
 
     await _db
         .from('groups')
         .insert({
           'created_by': uid,
-          'name': name,
-          'route_name': routeName,
-          'stats': stats,
-          'time_location': timeLocation,
-          'description': description,
+          'name': cleanName,
+          'route_name': routeName?.trim(),
+          'stats': stats?.trim(),
+          'time_location': timeLocation?.trim(),
+          'description': cleanDescription?.isEmpty == true
+              ? null
+              : cleanDescription,
         })
         .select('id')
         .single();
@@ -1616,6 +1695,7 @@ class SocialService {
   static Future<List<Map<String, dynamic>>> getNotifications() async {
     final uid = _userId;
     if (uid == null) return [];
+    final blocked = await getBlockedAndBlockerIds();
 
     final results = await _db
         .from('notifications')
@@ -1626,20 +1706,27 @@ class SocialService {
         .order('created_at', ascending: false)
         .limit(50);
 
-    return List<Map<String, dynamic>>.from(results);
+    return List<Map<String, dynamic>>.from(results as List).where((row) {
+      final fromId = row['from_user_id'] as String?;
+      return fromId == null || !blocked.contains(fromId);
+    }).toList();
   }
 
   static Future<int> getUnreadCount() async {
     final uid = _userId;
     if (uid == null) return 0;
+    final blocked = await getBlockedAndBlockerIds();
 
     final results = await _db
         .from('notifications')
-        .select('id')
+        .select('id, from_user_id')
         .eq('user_id', uid)
         .eq('read', false);
 
-    return (results as List).length;
+    return (results as List).where((row) {
+      final fromId = (row as Map)['from_user_id'] as String?;
+      return fromId == null || !blocked.contains(fromId);
+    }).length;
   }
 
   static Future<void> markAllRead() async {
@@ -1730,10 +1817,26 @@ class SocialService {
     if (uid == null) return;
     final patch = <String, dynamic>{};
     if (bioTitle != null) {
-      patch['bio_title'] = bioTitle.trim().isEmpty ? null : bioTitle.trim();
+      final cleaned = bioTitle.trim();
+      if (cleaned.length > AppInputLimits.bioTitleMaxLength) {
+        throw const SocialServiceException('Bio-Überschrift ist zu lang.');
+      }
+      patch['bio_title'] = cleaned.isEmpty ? null : cleaned;
     }
-    if (bio != null) patch['bio'] = bio.trim();
-    if (link != null) patch['link'] = link.trim();
+    if (bio != null) {
+      final cleaned = bio.trim();
+      if (cleaned.length > AppInputLimits.bioMaxLength) {
+        throw const SocialServiceException('Bio ist zu lang.');
+      }
+      patch['bio'] = cleaned;
+    }
+    if (link != null) {
+      final cleaned = link.trim();
+      if (cleaned.length > AppInputLimits.linkMaxLength) {
+        throw const SocialServiceException('Link ist zu lang.');
+      }
+      patch['link'] = cleaned;
+    }
     if (isPrivate != null) patch['is_private'] = isPrivate;
     if (patch.isEmpty) return;
     try {
@@ -1761,8 +1864,11 @@ class SocialService {
     final uid = _userId;
     if (uid == null) return;
     final cleaned = newUsername.trim();
-    if (cleaned.isEmpty) {
-      throw ArgumentError('Username darf nicht leer sein');
+    if (!AppInputLimits.isValidUsername(cleaned)) {
+      throw ArgumentError(
+        'Username muss 3-${AppInputLimits.usernameMaxLength} Zeichen haben '
+        'und darf nur Buchstaben, Zahlen und _ enthalten.',
+      );
     }
     final check = await canChangeUsername();
     if (!check.canChange) {
@@ -1976,19 +2082,21 @@ class SocialService {
     String uid,
     int index,
   ) {
-    const vehicleDescriptionMaxLength = 500;
-
-    String? cleanText(dynamic value) {
+    String? cleanText(dynamic value, {int? maxLength}) {
       final text = (value as String?)?.trim();
-      return text == null || text.isEmpty ? null : text;
+      if (text == null || text.isEmpty) return null;
+      if (maxLength != null && text.length > maxLength) {
+        return text.substring(0, maxLength);
+      }
+      return text;
     }
 
     String? cleanDescription(dynamic value) {
       final text = cleanText(value);
       if (text == null) return null;
-      return text.length <= vehicleDescriptionMaxLength
+      return text.length <= AppInputLimits.vehicleDescriptionMaxLength
           ? text
-          : text.substring(0, vehicleDescriptionMaxLength);
+          : text.substring(0, AppInputLimits.vehicleDescriptionMaxLength);
     }
 
     double? cleanZeroToHundred(dynamic value) {
@@ -2003,10 +2111,16 @@ class SocialService {
     return {
       'user_id': uid,
       'vehicle_type': type,
-      'brand': cleanText(raw['brand']),
-      'model': cleanText(raw['model']),
+      'brand': cleanText(
+        raw['brand'],
+        maxLength: AppInputLimits.shortTextMaxLength,
+      ),
+      'model': cleanText(
+        raw['model'],
+        maxLength: AppInputLimits.shortTextMaxLength,
+      ),
       'description': cleanDescription(raw['description']),
-      'drivetrain': cleanText(raw['drivetrain']),
+      'drivetrain': cleanText(raw['drivetrain'], maxLength: 12),
       'country_code': cleanText(raw['country_code'])?.toUpperCase(),
       'top_speed': (raw['top_speed'] as num?)?.toInt(),
       'zero_to_hundred_seconds': cleanZeroToHundred(
@@ -2077,6 +2191,7 @@ class SocialService {
     final profile = await getUserProfile(userId);
 
     return {
+      'id': userId,
       'follower_count': followers,
       'following_count': following,
       'username': profile?['username'],
@@ -2186,19 +2301,11 @@ class SocialService {
     final uid = _userId;
     if (uid == null) return {};
     try {
-      final rows = await _db
-          .from('user_blocks')
-          .select('blocker_id, blocked_id')
-          .or('blocker_id.eq.$uid,blocked_id.eq.$uid');
-      final ids = <String>{};
-      for (final row in rows as List) {
-        final m = row as Map;
-        final b1 = m['blocker_id'] as String?;
-        final b2 = m['blocked_id'] as String?;
-        if (b1 != null && b1 != uid) ids.add(b1);
-        if (b2 != null && b2 != uid) ids.add(b2);
-      }
-      return ids;
+      final rows = await _db.rpc('blocked_user_ids');
+      return {
+        for (final row in rows as List)
+          if ((row as Map)['user_id'] case final String id) id,
+      };
     } catch (e) {
       debugPrint('[Social] getBlockedAndBlockerIds: $e');
       return {};

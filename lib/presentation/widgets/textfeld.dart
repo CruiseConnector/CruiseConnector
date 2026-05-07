@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 /// Wiederverwendbares Eingabefeld mit einheitlichem Styling.
 /// Wird für Login, Registrierung und andere Formulare verwendet.
@@ -6,12 +7,16 @@ class Textfeld extends StatelessWidget {
   final TextEditingController controller;
   final String hintText;
   final bool obscureText;
+  final int? maxLength;
+  final List<TextInputFormatter>? inputFormatters;
 
   const Textfeld({
     super.key,
     required this.controller,
     required this.hintText,
     required this.obscureText,
+    this.maxLength,
+    this.inputFormatters,
   });
 
   @override
@@ -21,7 +26,10 @@ class Textfeld extends StatelessWidget {
       child: TextField(
         controller: controller,
         obscureText: obscureText,
+        maxLength: maxLength,
+        inputFormatters: inputFormatters,
         decoration: InputDecoration(
+          counterText: '',
           enabledBorder: const OutlineInputBorder(
             borderSide: BorderSide(color: Colors.white),
           ),

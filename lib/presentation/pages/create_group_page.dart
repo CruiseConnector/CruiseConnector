@@ -7,6 +7,7 @@ import 'package:geolocator/geolocator.dart' as geo;
 import 'package:latlong2/latlong.dart';
 
 import '../../core/constants.dart';
+import '../../core/input_limits.dart';
 import '../../data/services/cruise_group_service.dart';
 import '../../data/services/gamification_service.dart';
 import '../../data/services/geocoding_service.dart';
@@ -175,6 +176,15 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
     }
     if (_nameCtrl.text.trim().isEmpty) {
       _showError('Bitte Gruppennamen eingeben.');
+      return;
+    }
+    if (_nameCtrl.text.trim().length > AppInputLimits.groupNameMaxLength) {
+      _showError('Gruppenname ist zu lang.');
+      return;
+    }
+    if (_descCtrl.text.trim().length >
+        AppInputLimits.groupDescriptionMaxLength) {
+      _showError('Beschreibung ist zu lang.');
       return;
     }
     if (_selectedDateTime == null) {
@@ -452,8 +462,13 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
           Expanded(
             child: TextField(
               controller: _addressCtrl,
+              maxLength: AppInputLimits.addressMaxLength,
+              inputFormatters: AppInputLimits.lengthFormatters(
+                AppInputLimits.addressMaxLength,
+              ),
               style: const TextStyle(color: Colors.white),
               decoration: InputDecoration(
+                counterText: '',
                 hintText: 'Adresse oder Ort',
                 hintStyle: TextStyle(color: Colors.grey[600]),
                 border: InputBorder.none,
@@ -479,8 +494,13 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: TextField(
         controller: _nameCtrl,
+        maxLength: AppInputLimits.groupNameMaxLength,
+        inputFormatters: AppInputLimits.lengthFormatters(
+          AppInputLimits.groupNameMaxLength,
+        ),
         style: const TextStyle(color: Colors.white, fontSize: 16),
         decoration: InputDecoration(
+          counterText: '',
           hintText: 'Gruppenname',
           hintStyle: TextStyle(color: Colors.grey[600]),
           border: InputBorder.none,
@@ -498,9 +518,14 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
       child: TextField(
         controller: _descCtrl,
+        maxLength: AppInputLimits.groupDescriptionMaxLength,
+        inputFormatters: AppInputLimits.lengthFormatters(
+          AppInputLimits.groupDescriptionMaxLength,
+        ),
         style: const TextStyle(color: Colors.white),
         maxLines: 5,
         decoration: InputDecoration(
+          counterText: '',
           hintText: 'Beschreibe deine Gruppe...',
           hintStyle: TextStyle(color: Colors.grey[600]),
           border: InputBorder.none,

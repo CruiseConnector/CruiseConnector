@@ -1,4 +1,5 @@
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
+import 'package:cruise_connect/application/providers/community_provider.dart';
 import 'package:cruise_connect/presentation/widgets/accent_color_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -93,6 +94,11 @@ class _SettingsPageState extends State<SettingsPage> {
           .from('profiles')
           .update({'is_private': newValue})
           .eq('id', uid);
+      if (mounted) {
+        context.read<CommunityProvider>().applyProfilePatch(uid, {
+          'is_private': newValue,
+        });
+      }
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(

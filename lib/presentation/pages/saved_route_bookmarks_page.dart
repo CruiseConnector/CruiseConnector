@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:cruise_connect/application/providers/route_bookmark_provider.dart';
+import 'package:cruise_connect/core/input_limits.dart';
 import 'package:cruise_connect/data/services/saved_routes_service.dart';
 import 'package:cruise_connect/domain/models/saved_route.dart';
 import 'package:cruise_connect/presentation/pages/cruise_mode_page.dart';
@@ -136,7 +137,7 @@ class _SavedRouteBookmarksPageState extends State<SavedRouteBookmarksPage> {
           content: TextField(
             controller: controller,
             autofocus: true,
-            maxLength: 60,
+            maxLength: AppInputLimits.routeNameMaxLength,
             style: const TextStyle(color: Colors.white),
             decoration: InputDecoration(
               counterStyle: const TextStyle(color: Colors.grey),

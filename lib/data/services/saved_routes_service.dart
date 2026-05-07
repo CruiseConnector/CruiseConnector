@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'package:cruise_connect/core/input_limits.dart';
 import 'package:cruise_connect/data/services/route_quality_validator.dart';
 import 'package:cruise_connect/domain/models/route_result.dart';
 import 'package:cruise_connect/domain/models/saved_route.dart';
@@ -538,6 +539,9 @@ class SavedRoutesService {
     final userId = _db.auth.currentUser?.id;
     final cleaned = name.trim();
     if (userId == null || cleaned.isEmpty) return;
+    if (cleaned.length > AppInputLimits.routeNameMaxLength) {
+      throw ArgumentError('Routenname ist zu lang.');
+    }
 
     try {
       await _db

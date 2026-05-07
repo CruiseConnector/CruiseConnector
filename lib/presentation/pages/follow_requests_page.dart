@@ -61,6 +61,14 @@ class _FollowRequestsPageState extends State<FollowRequestsPage> {
       }
     } catch (e) {
       debugPrint('[FollowRequests] Aktion fehlgeschlagen: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Anfrage konnte nicht geändert werden'),
+            backgroundColor: Color(0xFF1C1F26),
+          ),
+        );
+      }
     } finally {
       if (mounted) setState(() => _busy.remove(fromId));
     }

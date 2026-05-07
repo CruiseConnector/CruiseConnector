@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
+import 'package:cruise_connect/core/input_limits.dart';
 import 'package:cruise_connect/data/services/auth_service.dart';
 import 'package:cruise_connect/presentation/pages/home_page.dart';
 
@@ -202,6 +203,7 @@ class _LoginPageState extends State<LoginPage> {
                         icon: Icons.email_outlined,
                         hint: 'deine@email.de',
                         keyboardType: TextInputType.emailAddress,
+                        maxLength: AppInputLimits.emailMaxLength,
                       ),
                       const SizedBox(height: 18),
 
@@ -211,6 +213,7 @@ class _LoginPageState extends State<LoginPage> {
                         icon: Icons.lock_outline,
                         hint: '••••••••',
                         obscure: _obscure,
+                        maxLength: AppInputLimits.passwordMaxLength,
                         suffixIcon: IconButton(
                           icon: Icon(
                             _obscure ? Icons.visibility_off : Icons.visibility,
@@ -341,6 +344,7 @@ class _LoginPageState extends State<LoginPage> {
     bool obscure = false,
     TextInputType keyboardType = TextInputType.text,
     Widget? suffixIcon,
+    int? maxLength,
   }) {
     return Container(
       decoration: BoxDecoration(
@@ -351,7 +355,9 @@ class _LoginPageState extends State<LoginPage> {
         controller: controller,
         obscureText: obscure,
         keyboardType: keyboardType,
+        maxLength: maxLength,
         decoration: InputDecoration(
+          counterText: '',
           prefixIcon: Icon(icon, color: Colors.grey[500], size: 20),
           suffixIcon: suffixIcon,
           hintText: hint,

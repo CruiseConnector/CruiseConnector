@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
+import 'package:cruise_connect/core/input_limits.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/presentation/widgets/mentions.dart';
 import 'package:cruise_connect/presentation/widgets/route_chip.dart';
@@ -229,8 +230,10 @@ class _PostDetailPageState extends State<PostDetailPage> {
                       ),
                       child: TextField(
                         controller: _commentController,
+                        maxLength: AppInputLimits.commentMaxLength,
                         style: const TextStyle(color: Colors.white),
                         decoration: const InputDecoration(
+                          counterText: '',
                           hintText: 'Kommentar schreiben...',
                           hintStyle: TextStyle(color: Colors.grey),
                           border: InputBorder.none,

@@ -1,4 +1,5 @@
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 
 /// Wiederverwendbarer Avatar mit Bild-Fallback auf Initiale.
@@ -113,7 +114,7 @@ class UserAvatar extends StatelessWidget {
     return ResizeImage.resizeIfNeeded(
       cacheWidth,
       cacheHeight,
-      NetworkImage(normalizedUrl),
+      CachedNetworkImageProvider(normalizedUrl),
     );
   }
 }

@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
+import 'package:cruise_connect/core/input_limits.dart';
 import 'package:cruise_connect/data/services/auth_service.dart';
 import 'package:cruise_connect/presentation/pages/login_page.dart';
 
@@ -39,6 +41,13 @@ class _RegisterPageState extends State<RegisterPage> {
 
     if (username.isEmpty || email.isEmpty || password.isEmpty) {
       setState(() => _errorMsg = 'Bitte alle Felder ausfüllen.');
+      return;
+    }
+    if (!AppInputLimits.isValidUsername(username)) {
+      setState(
+        () => _errorMsg =
+            'Benutzername: 3-${AppInputLimits.usernameMaxLength} Zeichen, nur Buchstaben, Zahlen und _.',
+      );
       return;
     }
     if (password != confirm) {
@@ -254,6 +263,8 @@ class _RegisterPageState extends State<RegisterPage> {
                         controller: _usernameController,
                         icon: Icons.person_outline,
                         hint: 'DeinFahrername',
+                        maxLength: AppInputLimits.usernameMaxLength,
+                        inputFormatters: AppInputLimits.usernameFormatters,
                       ),
                       const SizedBox(height: 16),
 
@@ -263,6 +274,7 @@ class _RegisterPageState extends State<RegisterPage> {
                         icon: Icons.email_outlined,
                         hint: 'deine@email.de',
                         keyboardType: TextInputType.emailAddress,
+                        maxLength: AppInputLimits.emailMaxLength,
                       ),
                       const SizedBox(height: 16),
 
@@ -272,6 +284,7 @@ class _RegisterPageState extends State<RegisterPage> {
                         icon: Icons.lock_outline,
                         hint: 'Mindestens 6 Zeichen',
                         obscure: _obscure,
+                        maxLength: AppInputLimits.passwordMaxLength,
                         suffixIcon: IconButton(
                           icon: Icon(
                             _obscure ? Icons.visibility_off : Icons.visibility,
@@ -288,6 +301,7 @@ class _RegisterPageState extends State<RegisterPage> {
                         icon: Icons.lock_outline,
                         hint: 'Passwort wiederholen',
                         obscure: _obscureConf,
+                        maxLength: AppInputLimits.passwordMaxLength,
                         suffixIcon: IconButton(
                           icon: Icon(
                             _obscureConf
@@ -429,6 +443,8 @@ class _RegisterPageState extends State<RegisterPage> {
     bool obscure = false,
     TextInputType keyboardType = TextInputType.text,
     Widget? suffixIcon,
+    int? maxLength,
+    List<TextInputFormatter>? inputFormatters,
   }) {
     return Container(
       decoration: BoxDecoration(
@@ -439,7 +455,10 @@ class _RegisterPageState extends State<RegisterPage> {
         controller: controller,
         obscureText: obscure,
         keyboardType: keyboardType,
+        maxLength: maxLength,
+        inputFormatters: inputFormatters,
         decoration: InputDecoration(
+          counterText: '',
           prefixIcon: Icon(icon, color: Colors.grey[500], size: 20),
           suffixIcon: suffixIcon,
           hintText: hint,

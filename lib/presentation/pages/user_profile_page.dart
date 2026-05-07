@@ -33,7 +33,7 @@ class UserProfilePage extends StatefulWidget {
 }
 
 class _UserProfilePageState extends State<UserProfilePage>
-    with SingleTickerProviderStateMixin {
+    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   late TabController _tabController;
   bool _loading = true;
   Map<String, dynamic> _stats = {};
@@ -46,6 +46,10 @@ class _UserProfilePageState extends State<UserProfilePage>
   bool _carCardExpanded = false;
   bool _bioExpanded = false;
   bool _blockedProfile = false;
+  String _blockRelationship = 'none';
+  bool _fullProfileLoaded = false;
+  bool _reloadAfterUnlockQueued = false;
+  CommunityProvider? _communityProvider;
   static const int _bioCollapseAt = 20;
 
   /// Status meiner Follow-Beziehung zu diesem Profil:
@@ -55,6 +59,7 @@ class _UserProfilePageState extends State<UserProfilePage>
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _tabController = TabController(length: 2, vsync: this);
     _isOwnProfile =
         widget.userId == Supabase.instance.client.auth.currentUser?.id;
@@ -62,9 +67,62 @@ class _UserProfilePageState extends State<UserProfilePage>
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && !_loading) {
+      _load();
+    }
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final provider = context.read<CommunityProvider>();
+    if (_communityProvider == provider) return;
+    _communityProvider?.removeListener(_handleCommunityStateChanged);
+    _communityProvider = provider..addListener(_handleCommunityStateChanged);
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _communityProvider?.removeListener(_handleCommunityStateChanged);
     _tabController.dispose();
     super.dispose();
+  }
+
+  void _handleCommunityStateChanged() {
+    final provider = _communityProvider;
+    if (!mounted || provider == null) return;
+
+    final cachedProfile = provider.cachedProfile(widget.userId);
+    final nextStatus = _isOwnProfile
+        ? 'none'
+        : provider.followStatus(widget.userId, fallback: _followStatus);
+    final shouldUnlockAndLoad =
+        !_isOwnProfile &&
+        _isPrivate &&
+        nextStatus == 'accepted' &&
+        !_fullProfileLoaded &&
+        !_loading &&
+        !_reloadAfterUnlockQueued;
+
+    final statusChanged = nextStatus != _followStatus;
+    final hasProfilePatch = cachedProfile != null && cachedProfile.isNotEmpty;
+    if (statusChanged || hasProfilePatch) {
+      setState(() {
+        if (hasProfilePatch) {
+          _stats = {..._stats, ...cachedProfile};
+          _isPrivate = _stats['is_private'] == true;
+        }
+        _followStatus = nextStatus;
+        _isFollowing = nextStatus == 'accepted';
+      });
+    }
+
+    if (shouldUnlockAndLoad) {
+      _reloadAfterUnlockQueued = true;
+      _load().whenComplete(() => _reloadAfterUnlockQueued = false);
+    }
   }
 
   Future<void> _load() async {
@@ -73,10 +131,13 @@ class _UserProfilePageState extends State<UserProfilePage>
         setState(() {
           _loading = true;
           _blockedProfile = false;
+          _blockRelationship = 'none';
         });
       }
-      if (!_isOwnProfile &&
-          await SocialService.isBlockedEither(widget.userId)) {
+      final blockRelationship = _isOwnProfile
+          ? 'none'
+          : await SocialService.getBlockRelationship(widget.userId);
+      if (!_isOwnProfile && blockRelationship != 'none') {
         if (!mounted) return;
         setState(() {
           _stats = {};
@@ -87,6 +148,7 @@ class _UserProfilePageState extends State<UserProfilePage>
           _isFollowing = false;
           _isPrivate = false;
           _blockedProfile = true;
+          _blockRelationship = blockRelationship;
           _loading = false;
         });
         return;
@@ -98,8 +160,12 @@ class _UserProfilePageState extends State<UserProfilePage>
         final private = preview?['is_private'] == true;
         if (private && status != 'accepted') {
           if (!mounted) return;
+          context.read<CommunityProvider>()
+            ..seedProfile(preview)
+            ..seedFollowStatus(widget.userId, status);
           setState(() {
             _stats = {
+              'id': widget.userId,
               'username': preview?['username'],
               'avatar_url': preview?['avatar_url'],
               'is_private': true,
@@ -110,6 +176,7 @@ class _UserProfilePageState extends State<UserProfilePage>
             _followStatus = status;
             _isFollowing = false;
             _isPrivate = true;
+            _fullProfileLoaded = false;
             _loading = false;
           });
           return;
@@ -126,6 +193,7 @@ class _UserProfilePageState extends State<UserProfilePage>
       if (mounted) {
         setState(() {
           _stats = results[0] as Map<String, dynamic>;
+          _stats['id'] = widget.userId;
           _isPrivate = _stats['is_private'] == true;
           _posts = results[1] as List<Map<String, dynamic>>;
           _reposts = results[2] as List<Map<String, dynamic>>;
@@ -134,8 +202,12 @@ class _UserProfilePageState extends State<UserProfilePage>
             _followStatus = results[4] as String;
             _isFollowing = _followStatus == 'accepted';
           }
+          _fullProfileLoaded = true;
           _loading = false;
         });
+        context.read<CommunityProvider>()
+          ..seedProfile(_stats)
+          ..seedFollowStatus(widget.userId, _followStatus);
       }
     } catch (e) {
       debugPrint('[UserProfile] Daten laden fehlgeschlagen: $e');
@@ -155,22 +227,29 @@ class _UserProfilePageState extends State<UserProfilePage>
   @override
   Widget build(BuildContext context) {
     final accent = context.watch<AppAccentProvider>().color;
+    final community = context.watch<CommunityProvider>();
+    final liveStats = community.mergedProfile(widget.userId, _stats);
+    final liveFollowStatus = _isOwnProfile
+        ? 'none'
+        : community.followStatus(widget.userId, fallback: _followStatus);
+    final liveIsFollowing = liveFollowStatus == 'accepted';
 
     // Stats > vom Aufrufer mitgegebener Username > leer.
     // Vermeidet "@user"-Default während des Loadings, wenn der Caller den
     // tatsächlichen Username schon kennt (z.B. aus einem Mention-Tap).
-    final loadedName = _stats['username'] as String?;
+    final loadedName = liveStats['username'] as String?;
     final displayName = loadedName ?? widget.initialUsername ?? '';
-    final level = _stats['level'] ?? 1;
-    final totalKm = (_stats['total_km'] as num?)?.toDouble() ?? 0;
-    final totalRoutes = _stats['total_routes'] ?? 0;
-    final followers = _stats['follower_count'] ?? 0;
-    final following = _stats['following_count'] ?? 0;
+    final level = liveStats['level'] ?? 1;
+    final totalKm = (liveStats['total_km'] as num?)?.toDouble() ?? 0;
+    final totalRoutes = liveStats['total_routes'] ?? 0;
+    final followers = liveStats['follower_count'] ?? 0;
+    final following = liveStats['following_count'] ?? 0;
     final headerName = displayName.isEmpty ? 'User' : displayName;
-    final privateLocked = _isPrivate && !_isFollowing && !_isOwnProfile;
-    final bannerUrl = (_stats['banner_url'] as String?)?.trim();
+    final liveIsPrivate = liveStats['is_private'] == true || _isPrivate;
+    final privateLocked = liveIsPrivate && !liveIsFollowing && !_isOwnProfile;
+    final bannerUrl = (liveStats['banner_url'] as String?)?.trim();
     final handle = SocialService.publicHandle(
-      _stats,
+      liveStats,
       fallbackUserId: widget.userId,
     );
 
@@ -249,7 +328,8 @@ class _UserProfilePageState extends State<UserProfilePage>
                   SliverToBoxAdapter(
                     child: _buildTwitterProfileHeader(
                       bannerUrl: privateLocked ? null : bannerUrl,
-                      avatarUrl: _stats['avatar_url'] as String?,
+                      avatarUrl: liveStats['avatar_url'] as String?,
+                      stats: liveStats,
                       name: headerName,
                       handle: handle,
                       level: level,
@@ -297,7 +377,7 @@ class _UserProfilePageState extends State<UserProfilePage>
                         controller: _tabController,
                         children: [
                           // Posts Tab
-                          (_isPrivate && !_isFollowing && !_isOwnProfile)
+                          (liveIsPrivate && !liveIsFollowing && !_isOwnProfile)
                               ? _buildPrivateMessage()
                               : _posts.isEmpty
                               ? const Center(
@@ -313,7 +393,7 @@ class _UserProfilePageState extends State<UserProfilePage>
                                       _buildPostItem(_posts[index]),
                                 ),
                           // Reposts Tab
-                          (_isPrivate && !_isFollowing && !_isOwnProfile)
+                          (liveIsPrivate && !liveIsFollowing && !_isOwnProfile)
                               ? _buildPrivateMessage()
                               : _reposts.isEmpty
                               ? const Center(
@@ -336,12 +416,21 @@ class _UserProfilePageState extends State<UserProfilePage>
   }
 
   Widget _buildFollowButton({bool compact = false}) {
-    final isAccepted = _followStatus == 'accepted';
-    final isPending = _followStatus == 'pending';
+    final provider = context.watch<CommunityProvider>();
+    final profile = provider.mergedProfile(widget.userId, _stats);
+    final targetIsPrivate = profile['is_private'] == true || _isPrivate;
+    final effectiveStatus = provider.followStatus(
+      widget.userId,
+      fallback: _followStatus,
+    );
+    final isAccepted = effectiveStatus == 'accepted';
+    final isPending = effectiveStatus == 'pending';
     final label = isAccepted
         ? 'Folgst du'
         : isPending
         ? 'Angefragt'
+        : targetIsPrivate
+        ? 'Anfragen'
         : 'Folgen';
     final displayLabel = label;
     final isFilled = !isAccepted && !isPending;
@@ -367,13 +456,16 @@ class _UserProfilePageState extends State<UserProfilePage>
           } else {
             setState(() {
               // Optimistisch: bei privatem Konto pending, sonst accepted.
-              _followStatus = _isPrivate ? 'pending' : 'accepted';
-              _isFollowing = !_isPrivate;
-              if (!_isPrivate) {
+              _followStatus = targetIsPrivate ? 'pending' : 'accepted';
+              _isFollowing = !targetIsPrivate;
+              if (!targetIsPrivate) {
                 _stats['follower_count'] = previousFollowers + 1;
               }
             });
-            final status = await provider.followUser(widget.userId);
+            final status = await provider.followUser(
+              widget.userId,
+              targetIsPrivate: targetIsPrivate,
+            );
             // Server hat Source-of-Truth — Status angleichen.
             if (mounted) {
               setState(() {
@@ -433,6 +525,7 @@ class _UserProfilePageState extends State<UserProfilePage>
   Widget _buildTwitterProfileHeader({
     required String? bannerUrl,
     required String? avatarUrl,
+    required Map<String, dynamic> stats,
     required String name,
     required String handle,
     required int level,
@@ -442,9 +535,9 @@ class _UserProfilePageState extends State<UserProfilePage>
     required int following,
     required bool privateLocked,
   }) {
-    final bio = (_stats['bio'] as String?)?.trim();
-    final bioTitle = (_stats['bio_title'] as String?)?.trim();
-    final link = (_stats['link'] as String?)?.trim();
+    final bio = (stats['bio'] as String?)?.trim();
+    final bioTitle = (stats['bio_title'] as String?)?.trim();
+    final link = (stats['link'] as String?)?.trim();
     const bannerHeight = 178.0;
     const headerControlsSpace = 58.0;
 
@@ -1135,6 +1228,19 @@ class _UserProfilePageState extends State<UserProfilePage>
   }
 
   Widget _buildBlockedProfileBody() {
+    final title = switch (_blockRelationship) {
+      'blocked_by_me' => 'Du hast diesen Nutzer blockiert',
+      'mutual' => 'Ihr habt euch blockiert',
+      _ => 'Dieses Profil ist nicht verfügbar',
+    };
+    final subtitle = switch (_blockRelationship) {
+      'blocked_by_me' =>
+        'Du findest diesen Nutzer erst wieder, wenn du ihn im Menü entblockst.',
+      'mutual' =>
+        'Ihr seid füreinander unsichtbar, bis die Blockierung aufgehoben wird.',
+      _ => 'Profilinhalte, Garage und Statistiken sind nicht sichtbar.',
+    };
+
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(32),
@@ -1147,9 +1253,9 @@ class _UserProfilePageState extends State<UserProfilePage>
               child: Icon(Icons.block, color: AppAccentColors.accent, size: 34),
             ),
             const SizedBox(height: 18),
-            const Text(
-              'Dieser Nutzer hat Sie blockiert',
-              style: TextStyle(
+            Text(
+              title,
+              style: const TextStyle(
                 color: Colors.white,
                 fontSize: 18,
                 fontWeight: FontWeight.bold,
@@ -1157,9 +1263,9 @@ class _UserProfilePageState extends State<UserProfilePage>
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 8),
-            const Text(
-              'Profilinhalte, Garage und Statistiken sind nicht sichtbar.',
-              style: TextStyle(color: Colors.grey, fontSize: 14),
+            Text(
+              subtitle,
+              style: const TextStyle(color: Colors.grey, fontSize: 14),
               textAlign: TextAlign.center,
             ),
           ],

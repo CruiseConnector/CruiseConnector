@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:flutter_typeahead/flutter_typeahead.dart';
 
+import 'package:cruise_connect/core/input_limits.dart';
 import 'package:cruise_connect/data/services/geocoding_service.dart';
 import 'package:cruise_connect/domain/models/mapbox_suggestion.dart';
 
@@ -387,10 +388,15 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
             builder: (context, controller, focusNode) => TextField(
               controller: controller,
               focusNode: focusNode,
+              maxLength: AppInputLimits.addressMaxLength,
+              inputFormatters: AppInputLimits.lengthFormatters(
+                AppInputLimits.addressMaxLength,
+              ),
               style: const TextStyle(color: Colors.white),
               onChanged: widget.onDestinationInputChanged,
               onTapOutside: (_) => FocusScope.of(context).unfocus(),
               decoration: const InputDecoration(
+                counterText: '',
                 prefixIcon: Icon(Icons.search, color: Colors.white38),
                 hintText: 'Adresse suchen...',
                 hintStyle: TextStyle(color: Colors.white38),

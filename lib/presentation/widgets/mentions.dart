@@ -1,12 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/presentation/pages/user_profile_page.dart';
 import 'package:cruise_connect/presentation/widgets/user_avatar.dart';
 
-/// Regex zum Parsen von `@username`-Tokens. Akzeptiert ASCII-Buchstaben,
-/// Ziffern, Unterstriche und Punkte (häufig in Usernames).
-final RegExp mentionPattern = RegExp(r'@([A-Za-z0-9_\.]+)');
+/// Regex zum Parsen von `@username`-Tokens.
+final RegExp mentionPattern = RegExp(r'@([A-Za-z0-9_]+)');
 
 /// Zieht alle erwähnten Usernames (lowercase, ohne `@`) aus einem Text.
 Set<String> extractMentionUsernames(String text) {
@@ -119,6 +119,8 @@ class MentionTextField extends StatefulWidget {
   final ValueChanged<String>? onSubmitted;
   final FocusNode? focusNode;
   final bool autofocus;
+  final int? maxLength;
+  final List<TextInputFormatter>? inputFormatters;
 
   const MentionTextField({
     super.key,
@@ -131,6 +133,8 @@ class MentionTextField extends StatefulWidget {
     this.onSubmitted,
     this.focusNode,
     this.autofocus = false,
+    this.maxLength,
+    this.inputFormatters,
   });
 
   @override
@@ -186,7 +190,7 @@ class _MentionTextFieldState extends State<MentionTextField> {
       return;
     }
     final prefix = text.substring(at + 1, cursor);
-    if (!RegExp(r'^[A-Za-z0-9_\.]*$').hasMatch(prefix)) {
+    if (!RegExp(r'^[A-Za-z0-9_]*$').hasMatch(prefix)) {
       _clearSuggestions();
       return;
     }
@@ -350,6 +354,8 @@ class _MentionTextFieldState extends State<MentionTextField> {
           style: widget.style,
           maxLines: widget.maxLines,
           minLines: widget.minLines,
+          maxLength: widget.maxLength,
+          inputFormatters: widget.inputFormatters,
           textInputAction: widget.textInputAction,
           onSubmitted: widget.onSubmitted,
         ),
