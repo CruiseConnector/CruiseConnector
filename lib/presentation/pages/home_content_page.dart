@@ -1040,6 +1040,15 @@ class _HomeContentPageState extends State<HomeContentPage>
 
           await SavedRoutesService.saveExistingRoute(route);
           if (!mounted) return;
+          final savedRoutes = await SavedRoutesService.getSavedRouteLibrary();
+          final saved = SavedRoutesService.hasEquivalentSavedRoute(
+            route,
+            savedRoutes,
+          );
+          if (!saved) {
+            throw StateError('Route wurde nicht in der Bibliothek gefunden.');
+          }
+          if (!mounted) return;
           unawaited(context.read<RouteBookmarkProvider>().loadSavedRoutes());
           unawaited(context.read<SavedRoutesProvider>().loadRoutes());
           final gamResult = await GamificationService.calculateAndSync();
@@ -1052,9 +1061,22 @@ class _HomeContentPageState extends State<HomeContentPage>
           }
           if (mounted) {
             setState(() => _isRouteSaved = true);
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Route gespeichert.'),
+                backgroundColor: Color(0xFF1F2933),
+              ),
+            );
           }
         } catch (e) {
           debugPrint('[Home] Route speichern fehlgeschlagen: $e');
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Route konnte nicht gespeichert werden.'),
+              backgroundColor: Colors.red,
+            ),
+          );
         }
       },
       child: AnimatedContainer(

@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 
-import 'package:flutter/foundation.dart' show compute, visibleForTesting;
+import 'package:flutter/foundation.dart' show compute, kDebugMode, visibleForTesting;
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart' as geo;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -253,6 +253,7 @@ class RouteService {
   }
 
   static void _debugRouteSearch(String message) {
+    if (!kDebugMode) return;
     debugPrint('[RouteDebug] $message');
   }
 
@@ -3033,20 +3034,22 @@ class RouteService {
           ? rawCoordinates.length
           : responseMeta['final_coordinate_count'] ??
                 responseMeta['coordinate_count'];
-      debugPrint(
-        '[RouteDebug][RoundTripResponse] '
-        'clientRoutingBuildId=$clientRoutingBuildId '
-        'requestId=${body['request_id']} '
-        'status=${statusCode ?? 200} '
-        'code=${data['code'] ?? responseMeta['response_code']} '
-        'search_session_id=${responseMeta['search_session_id']} '
-        'search_session_status=${responseMeta['search_session_status']} '
-        'on_demand_worker_triggered=${responseMeta['on_demand_worker_triggered']} '
-        'route_present=${data['route'] != null} '
-        'source=${responseMeta['route_source'] ?? responseMeta['source']} '
-        'final_geometry_source=${responseMeta['final_geometry_source'] ?? responseMeta['geometry_source']} '
-        'coordinate_count=$responseCoordinateCount',
-      );
+      if (kDebugMode) {
+        debugPrint(
+          '[RouteDebug][RoundTripResponse] '
+          'clientRoutingBuildId=$clientRoutingBuildId '
+          'requestId=${body['request_id']} '
+          'status=${statusCode ?? 200} '
+          'code=${data['code'] ?? responseMeta['response_code']} '
+          'search_session_id=${responseMeta['search_session_id']} '
+          'search_session_status=${responseMeta['search_session_status']} '
+          'on_demand_worker_triggered=${responseMeta['on_demand_worker_triggered']} '
+          'route_present=${data['route'] != null} '
+          'source=${responseMeta['route_source'] ?? responseMeta['source']} '
+          'final_geometry_source=${responseMeta['final_geometry_source'] ?? responseMeta['geometry_source']} '
+          'coordinate_count=$responseCoordinateCount',
+        );
+      }
     }
 
     if (data['error'] != null) {

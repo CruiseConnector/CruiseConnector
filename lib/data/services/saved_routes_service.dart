@@ -418,15 +418,16 @@ class SavedRoutesService {
     required String userId,
     required SavedRoute route,
   }) {
-    final sourceRouteId = (route.sourceRouteId?.trim().isNotEmpty == true)
+    final rawSourceRouteId = (route.sourceRouteId?.trim().isNotEmpty == true)
         ? route.sourceRouteId!.trim()
         : route.id;
+    final sourceRouteId = _isUuid(rawSourceRouteId) ? rawSourceRouteId : null;
     final routeFingerprint = (route.routeFingerprint?.trim().isNotEmpty == true)
         ? route.routeFingerprint!.trim()
         : route.routeSignature;
     final routeMeta = Map<String, dynamic>.from(route.routeMeta)
       ..['saved_route_source'] = 'existing_route_copy'
-      ..['source_route_id'] = sourceRouteId
+      ..['source_route_id'] = rawSourceRouteId
       ..['source_route_fingerprint'] = routeFingerprint;
 
     return <String, dynamic>{
@@ -438,13 +439,19 @@ class SavedRoutesService {
       'distance_actual': route.distanceKm,
       'duration_seconds': route.durationSeconds?.round(),
       'geometry': route.geometry,
-      'source_route_id': sourceRouteId,
+      if (sourceRouteId != null) 'source_route_id': sourceRouteId,
       'route_source': route.routeSource ?? 'saved_route_copy',
       'route_fingerprint': routeFingerprint,
       'quality_tier': route.qualityTier,
       'route_meta': routeMeta,
       if (route.rating != null && route.rating! > 0) 'rating': route.rating,
     };
+  }
+
+  static bool _isUuid(String value) {
+    return RegExp(
+      r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
+    ).hasMatch(value);
   }
 
   /// Prüft ob eine Route (anhand ID) dem aktuellen User gehört / gespeichert ist.

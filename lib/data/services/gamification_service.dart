@@ -74,6 +74,7 @@ class GamificationService {
   static SupabaseClient get _db => Supabase.instance.client;
 
   static const int xpPerDrivenKm = 10;
+  static const double minRouteProgressForXp = 0.20;
   static const Map<String, String> _legacyBadgeIds = {'route_1': 'badge_02'};
 
   @visibleForTesting
@@ -158,7 +159,6 @@ class GamificationService {
     double progressRatio, {
     bool completed = false,
   }) {
-    if (completed) return 1.0;
     return progressRatio.clamp(0.0, 1.0).toDouble();
   }
 
@@ -168,8 +168,12 @@ class GamificationService {
     bool completed = false,
   }) {
     if (plannedDistanceKm <= 0) return 0;
-    if (completed) return plannedDistanceKm;
-    return plannedDistanceKm * progressRatio.clamp(0.0, 1.0);
+    final progress = completionCreditProgressStep(
+      progressRatio,
+      completed: completed,
+    );
+    if (progress < minRouteProgressForXp) return 0;
+    return plannedDistanceKm * progress;
   }
 
   static double streakMultiplierForDays(int streakDays) {

@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:app_links/app_links.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kDebugMode, kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 // ignore: depend_on_referenced_packages
@@ -78,7 +78,9 @@ class _MyAppState extends State<MyApp> {
   }
 
   Future<void> _handleDeepLink(Uri uri) async {
-    debugPrint('[DeepLink] $uri');
+    if (kDebugMode) {
+      debugPrint('[DeepLink] $uri');
+    }
     final postId = _postIdFromDeepLink(uri);
     if (postId != null) {
       await Future.delayed(const Duration(milliseconds: 400));

@@ -120,6 +120,7 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
   bool _isExportMode = false;
   bool _isSaving = false;
   bool _isSharing = false;
+  bool _showRatingDetails = false;
   int _selectedRating = 0;
   final Set<String> _selectedTags = <String>{};
   CruiseCompletionActionResult? _celebration;
@@ -173,8 +174,16 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
 
   Future<void> _handleDiscard() async {
     if (_isSaving || _isSharing) return;
-    await widget.onDiscard();
-    if (mounted) Navigator.of(context).pop();
+    setState(() => _isSaving = true);
+    try {
+      await widget.onDiscard();
+    } catch (error) {
+      debugPrint(
+        '[CruiseCompletion] Verwerfen konnte nicht synchronisieren: $error',
+      );
+    } finally {
+      if (mounted) Navigator.of(context).pop();
+    }
   }
 
   Future<void> _handleShare() async {
@@ -246,7 +255,7 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
     return LayoutBuilder(
       builder: (context, constraints) {
         final availableHeight =
-            (constraints.maxHeight * 0.88 - bottomInset - 16)
+            (constraints.maxHeight * 0.82 - bottomInset - 16)
                 .clamp(420.0, 860.0)
                 .toDouble();
 
@@ -324,12 +333,12 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
                   const SizedBox(height: 8),
                   _buildStreakBonusNote(),
                 ],
-                const SizedBox(height: 12),
+                const SizedBox(height: 10),
                 _RoutePreviewCard(
                   coordinates: widget.routeCoordinates,
                   exportMode: false,
                 ),
-                const SizedBox(height: 12),
+                const SizedBox(height: 10),
                 _buildRatingPanel(),
                 if (widget.belowMinimum) ...[
                   const SizedBox(height: 10),
@@ -589,30 +598,22 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
   }
 
   Widget _buildRatingPanel() {
-    const positiveTags = <String>[
+    const detailTags = <String>[
       'schöne Kurven',
       'guter Flow',
-      'schöne Gegend',
       'passende Länge',
-    ];
-    const negativeTags = <String>[
-      'Sackgasse',
       'zu künstlich',
       'zu kurz/lang',
       'Autobahn trotz AUS',
       'wiederholt',
     ];
-    final tagGroups = <({String label, bool positive, List<String> tags})>[
-      (label: 'Gut', positive: true, tags: positiveTags),
-      (label: 'Vermeiden', positive: false, tags: negativeTags),
-    ];
 
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(10, 10, 10, 9),
+      padding: const EdgeInsets.fromLTRB(10, 9, 10, 9),
       decoration: BoxDecoration(
         color: const Color(0xFF111720).withValues(alpha: 0.82),
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: BorderRadius.circular(16),
         border: Border.all(color: Colors.white.withValues(alpha: 0.09)),
         boxShadow: [
           BoxShadow(
@@ -670,7 +671,7 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
               ),
             ],
           ),
-          const SizedBox(height: 9),
+          const SizedBox(height: 8),
           LayoutBuilder(
             builder: (context, constraints) {
               final chipWidth = (constraints.maxWidth - 12) / 3;
@@ -706,28 +707,59 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
               );
             },
           ),
-          const SizedBox(height: 8),
-          _RatingStars(
-            selectedRating: _selectedRating,
-            onChanged: (value) => setState(() => _selectedRating = value),
-          ),
-          const SizedBox(height: 9),
-          for (var i = 0; i < tagGroups.length; i++) ...[
-            _RatingTagGroup(
-              label: tagGroups[i].label,
-              tags: tagGroups[i].tags,
-              positive: tagGroups[i].positive,
-              selectedTags: _selectedTags,
-              onToggle: (tag) {
-                setState(() {
-                  if (!_selectedTags.add(tag)) {
-                    _selectedTags.remove(tag);
-                  }
-                });
-              },
+          const SizedBox(height: 6),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: GestureDetector(
+              onTap: () =>
+                  setState(() => _showRatingDetails = !_showRatingDetails),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 2),
+                child: Text(
+                  _showRatingDetails
+                      ? 'Details ausblenden'
+                      : 'Details optional',
+                  style: TextStyle(
+                    color: AppAccentColors.accent.withValues(alpha: 0.92),
+                    fontSize: 10,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
             ),
-            if (i != tagGroups.length - 1) const SizedBox(height: 7),
-          ],
+          ),
+          AnimatedCrossFade(
+            firstChild: const SizedBox.shrink(),
+            secondChild: Padding(
+              padding: const EdgeInsets.only(top: 7),
+              child: Wrap(
+                spacing: 5,
+                runSpacing: 5,
+                children: [
+                  for (final tag in detailTags)
+                    _RatingTagChip(
+                      label: tag,
+                      selected: _selectedTags.contains(tag),
+                      positive:
+                          !tag.startsWith('zu ') &&
+                          tag != 'Autobahn trotz AUS' &&
+                          tag != 'wiederholt',
+                      onTap: () {
+                        setState(() {
+                          if (!_selectedTags.add(tag)) {
+                            _selectedTags.remove(tag);
+                          }
+                        });
+                      },
+                    ),
+                ],
+              ),
+            ),
+            crossFadeState: _showRatingDetails
+                ? CrossFadeState.showSecond
+                : CrossFadeState.showFirst,
+            duration: const Duration(milliseconds: 180),
+          ),
         ],
       ),
     );
@@ -943,7 +975,7 @@ class _QualityChoiceButton extends StatelessWidget {
         onTap: onTap,
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 160),
-          height: 36,
+          height: 34,
           decoration: BoxDecoration(
             color: selected
                 ? AppAccentColors.accent.withValues(alpha: 0.24)
@@ -972,112 +1004,6 @@ class _QualityChoiceButton extends StatelessWidget {
   }
 }
 
-class _RatingStars extends StatelessWidget {
-  const _RatingStars({required this.selectedRating, required this.onChanged});
-
-  final int selectedRating;
-  final ValueChanged<int> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      height: 38,
-      padding: const EdgeInsets.symmetric(horizontal: 8),
-      decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.16),
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: List.generate(5, (index) {
-          final value = index + 1;
-          final selected = value <= selectedRating;
-          return Semantics(
-            button: true,
-            label: '$value Sterne',
-            selected: selected,
-            child: GestureDetector(
-              onTap: () => onChanged(value),
-              child: SizedBox(
-                width: 34,
-                height: 38,
-                child: Icon(
-                  selected ? Icons.star_rounded : Icons.star_border_rounded,
-                  color: selected
-                      ? const Color(0xFFFFD76A)
-                      : Colors.white.withValues(alpha: 0.38),
-                  size: 24,
-                ),
-              ),
-            ),
-          );
-        }),
-      ),
-    );
-  }
-}
-
-class _RatingTagGroup extends StatelessWidget {
-  const _RatingTagGroup({
-    required this.label,
-    required this.tags,
-    required this.positive,
-    required this.selectedTags,
-    required this.onToggle,
-  });
-
-  final String label;
-  final List<String> tags;
-  final bool positive;
-  final Set<String> selectedTags;
-  final ValueChanged<String> onToggle;
-
-  @override
-  Widget build(BuildContext context) {
-    final accent = positive ? AppAccentColors.accent : const Color(0xFFFF6B6B);
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Container(
-          height: 24,
-          padding: const EdgeInsets.symmetric(horizontal: 8),
-          decoration: BoxDecoration(
-            color: accent.withValues(alpha: 0.12),
-            borderRadius: BorderRadius.circular(999),
-            border: Border.all(color: accent.withValues(alpha: 0.24)),
-          ),
-          alignment: Alignment.center,
-          child: Text(
-            label,
-            style: TextStyle(
-              color: Colors.white.withValues(alpha: 0.84),
-              fontSize: 9.5,
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-        ),
-        const SizedBox(width: 7),
-        Expanded(
-          child: Wrap(
-            spacing: 5,
-            runSpacing: 5,
-            children: [
-              for (final tag in tags)
-                _RatingTagChip(
-                  label: tag,
-                  selected: selectedTags.contains(tag),
-                  positive: positive,
-                  onTap: () => onToggle(tag),
-                ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-}
-
 class _RoutePreviewCard extends StatelessWidget {
   const _RoutePreviewCard({
     required this.coordinates,
@@ -1092,7 +1018,7 @@ class _RoutePreviewCard extends StatelessWidget {
     return ClipRRect(
       borderRadius: BorderRadius.circular(exportMode ? 22 : 18),
       child: Container(
-        height: exportMode ? 184 : 138,
+        height: exportMode ? 184 : 112,
         decoration: BoxDecoration(
           color: exportMode ? Colors.transparent : const Color(0xFF131821),
           borderRadius: BorderRadius.circular(exportMode ? 22 : 18),

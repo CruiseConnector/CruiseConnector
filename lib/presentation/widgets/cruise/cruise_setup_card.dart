@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:flutter_typeahead/flutter_typeahead.dart';
 
@@ -98,7 +99,9 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
 
   void _setAvoidHighways(bool value) {
     setState(() => _avoidHighways = value);
-    debugPrint('[RouteDebug][SetupCard] avoidHighways=$value');
+    if (kDebugMode) {
+      debugPrint('[RouteDebug][SetupCard] avoidHighways=$value');
+    }
     widget.onAvoidHighwaysChanged?.call(value);
   }
 

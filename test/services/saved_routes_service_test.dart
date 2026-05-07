@@ -207,23 +207,23 @@ void main() {
       expect(creditedKm, 60);
     });
 
-    test('unter 20 Prozent Fahrt nutzt trotzdem die gefahrene Strecke', () {
+    test('unter 20 Prozent Fahrt gibt keinen XP-Credit', () {
       final creditedKm = GamificationService.creditedDistanceKmForProgress(
         plannedDistanceKm: 100,
         progressRatio: 0.19,
       );
 
-      expect(creditedKm, 19);
+      expect(creditedKm, 0);
     });
 
-    test('completed erzwingt 100 Prozent XP-Credit', () {
+    test('completed nutzt trotzdem nur die tatsaechlich gefahrene Strecke', () {
       final creditedKm = GamificationService.creditedDistanceKmForProgress(
         plannedDistanceKm: 100,
         progressRatio: 0.96,
         completed: true,
       );
 
-      expect(creditedKm, 100);
+      expect(creditedKm, 96);
     });
 
     test('Level ist bei 100 gedeckelt', () {
@@ -473,8 +473,9 @@ void main() {
     test(
       'buildExistingRouteInsertForTest speichert Community-Kopie ohne Drive-XP-Felder',
       () {
+        const sourceRouteId = '11111111-2222-4333-8444-555555555555';
         final route = SavedRoute.fromJson({
-          'id': 'route-community',
+          'id': sourceRouteId,
           'created_at': '2025-01-18T10:00:00.000Z',
           'style': 'Entdecker',
           'distance_actual': 41.6,
@@ -500,7 +501,7 @@ void main() {
         );
 
         expect(row['user_id'], equals('user-1'));
-        expect(row['source_route_id'], equals('route-community'));
+        expect(row['source_route_id'], equals(sourceRouteId));
         expect(row['route_source'], equals('pool'));
         expect(row['route_fingerprint'], equals('fp-community'));
         expect(row['quality_tier'], equals('good'));
@@ -514,6 +515,44 @@ void main() {
           containsPair('saved_route_source', 'existing_route_copy'),
         );
         expect(row['route_meta'], containsPair('curve_count', 36));
+      },
+    );
+
+    test(
+      'buildExistingRouteInsertForTest speichert Pool-Empfehlung mit Text-ID ohne uuid source_route_id',
+      () {
+        final route = SavedRoute.fromJson({
+          'id': 'vorarlberg-bregenz-50-sport-seed-1',
+          'created_at': '2025-01-18T10:00:00.000Z',
+          'style': 'Sport Mode',
+          'distance_actual': 50.2,
+          'distance_target': 50,
+          'duration_seconds': 3900,
+          'route_source': 'route_pool',
+          'route_fingerprint': 'fp-pool-route',
+          'quality_tier': 'good',
+          'route_meta': {'pool_route_id': 'vorarlberg-bregenz-50-sport-seed-1'},
+          'geometry': {
+            'type': 'LineString',
+            'coordinates': [
+              [9.74, 47.50],
+              [9.78, 47.53],
+            ],
+          },
+        });
+
+        final row = SavedRoutesService.buildExistingRouteInsertForTest(
+          userId: 'user-1',
+          route: route,
+        );
+
+        expect(row, isNot(contains('source_route_id')));
+        expect(row['route_source'], equals('route_pool'));
+        expect(row['route_fingerprint'], equals('fp-pool-route'));
+        expect(
+          row['route_meta'],
+          containsPair('source_route_id', 'vorarlberg-bregenz-50-sport-seed-1'),
+        );
       },
     );
   });

@@ -66,6 +66,8 @@ void main() {
 
     await tester.tap(find.text('Top'));
     await tester.pump();
+    await tester.tap(find.text('Details optional'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('schöne Kurven'));
     await tester.pump();
     await tester.tap(find.text('Autobahn trotz AUS'));
@@ -102,7 +104,24 @@ void main() {
       expect(find.text('Top'), findsOneWidget);
       expect(find.text('Okay'), findsOneWidget);
       expect(find.text('Schlecht'), findsOneWidget);
-      expect(find.text('schöne Kurven'), findsOneWidget);
+      expect(find.text('Details optional'), findsOneWidget);
     },
   );
+
+  testWidgets('Verwerfen schließt auch wenn Sync im Callback fehlschlägt', (
+    tester,
+  ) async {
+    setSurface(tester, const Size(390, 844));
+
+    await pumpCompletionDialog(
+      tester,
+      onDiscard: () async => throw Exception('backend offline'),
+    );
+
+    expect(find.text('Verwerfen'), findsOneWidget);
+    await tester.tap(find.text('Verwerfen'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Verwerfen'), findsNothing);
+  });
 }
