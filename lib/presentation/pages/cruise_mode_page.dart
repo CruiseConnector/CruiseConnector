@@ -891,6 +891,23 @@ class _CruiseModePageState extends State<CruiseModePage>
     return LatLng(selected.latitude, selected.longitude);
   }
 
+  bool get _isActivelyDrivingRoute =>
+      _isRouteConfirmed &&
+      (_positionSubscription != null ||
+          _socketPositionSubscription != null ||
+          _isSimulationRunning);
+
+  LatLng? get _activeRouteEndMarkerPoint {
+    if (!_isActivelyDrivingRoute || _fullRouteCoordinates.length < 2) {
+      return null;
+    }
+    final remainingDistance = _remainingDistance;
+    if (remainingDistance == null || remainingDistance > 3000) return null;
+    final end = _fullRouteCoordinates.last;
+    if (end.length < 2) return null;
+    return LatLng(end[1], end[0]);
+  }
+
   void _handlePlanningTypeChanged(String planningType) {
     if (_isLoading) return;
     setState(() {
@@ -2288,6 +2305,7 @@ class _CruiseModePageState extends State<CruiseModePage>
 
   Widget _buildMapWidget() {
     final pointToPointDestination = _pointToPointDestinationMarkerPoint;
+    final activeRouteEnd = _activeRouteEndMarkerPoint;
     return FlutterMap(
       mapController: _mapController,
       options: MapOptions(
@@ -2379,6 +2397,17 @@ class _CruiseModePageState extends State<CruiseModePage>
                 point: pointToPointDestination,
                 width: 44,
                 height: 44,
+                child: _buildDestinationMarker(),
+              ),
+            ],
+          ),
+        if (activeRouteEnd != null)
+          MarkerLayer(
+            markers: [
+              Marker(
+                point: activeRouteEnd,
+                width: 46,
+                height: 46,
                 child: _buildDestinationMarker(),
               ),
             ],
