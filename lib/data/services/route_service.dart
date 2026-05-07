@@ -320,6 +320,8 @@ class RouteService {
     int? variantIndex,
     bool avoidHighways = false,
     bool forceFreshVariant = false,
+    String? waypointOrigin,
+    int? waypointSeedAttempt,
     String debugTrigger = 'unknown',
     String subscriptionTier = 'premium',
   }) async {
@@ -408,6 +410,8 @@ class RouteService {
           userWaypoints: normalizedUserWaypoints,
           variantIndex: variantIndex,
           forceFreshVariant: forceFreshVariant,
+          waypointOrigin: waypointOrigin,
+          waypointSeedAttempt: waypointSeedAttempt,
           debugTrigger: debugTrigger,
         );
       }
@@ -1109,6 +1113,8 @@ class RouteService {
     required List<Map<String, double>> userWaypoints,
     int? variantIndex,
     bool forceFreshVariant = false,
+    String? waypointOrigin,
+    int? waypointSeedAttempt,
     String debugTrigger = 'unknown',
     Map<String, double>? targetLocation,
   }) async {
@@ -1117,7 +1123,14 @@ class RouteService {
         : 'waypoint_required_stops';
     lastRouteLiveAttemptReason = 'required_waypoint_route';
 
-    final maxAttempts = forceFreshVariant ? 3 : 2;
+    final normalizedWaypointOrigin = waypointOrigin == 'auto_seed'
+        ? 'auto_seed'
+        : 'manual';
+    final isAutoSeed = normalizedWaypointOrigin == 'auto_seed';
+    final maxAttempts = isAutoSeed
+        ? (forceFreshVariant ? 4 : 3)
+        : (forceFreshVariant ? 3 : 2);
+    final candidateBudget = isAutoSeed ? 30 : 18;
     _RouteCandidate? bestCandidate;
     _RouteCandidate? bestDuplicateCandidate;
     RouteServiceException? lastError;
@@ -1132,7 +1145,8 @@ class RouteService {
       _debugRouteSearch(
         '[WaypointRequired] attempt=${attempt + 1}/$maxAttempts '
         'scenarioKey=${scenario.scenarioKey} routeVariantHint=${variant.variantHint} '
-        'fingerprintHint=${variant.fingerprintHint} forceFreshVariant=$forceFreshVariant',
+        'fingerprintHint=${variant.fingerprintHint} forceFreshVariant=$forceFreshVariant '
+        'waypointOrigin=$normalizedWaypointOrigin',
       );
       try {
         final candidate = await _requestRoundTripVariant(
@@ -1145,7 +1159,9 @@ class RouteService {
           variant: variant,
           forceFreshVariant: forceFreshVariant,
           debugTrigger: debugTrigger,
-          candidateBudget: 18,
+          candidateBudget: candidateBudget,
+          waypointOrigin: normalizedWaypointOrigin,
+          waypointSeedAttempt: waypointSeedAttempt,
         );
         if (!candidate.accepted) {
           continue;
@@ -2121,7 +2137,7 @@ class RouteService {
     const minPointDistanceKm = 0.20;
     final maxWaypointDistanceKm = math.max(
       12.0,
-      math.min(80.0, targetDistanceKm * 0.75),
+      math.min(220.0, targetDistanceKm * 0.75),
     );
     for (var i = 0; i < waypoints.length; i += 1) {
       final point = waypoints[i];
@@ -2223,9 +2239,15 @@ class RouteService {
     bool avoidHighways = false,
     List<String> previousFingerprints = const [],
     String? originalPlanningType,
+    String? waypointOrigin,
+    int? waypointSeedAttempt,
   }) {
     final isRequiredWaypointRoundTrip =
         originalPlanningType == 'Wegpunkte' && userWaypoints.isNotEmpty;
+    final normalizedWaypointOrigin = waypointOrigin == 'auto_seed'
+        ? 'auto_seed'
+        : 'manual';
+    final isAutoSeedWaypoint = normalizedWaypointOrigin == 'auto_seed';
     final movingStart =
         !isRequiredWaypointRoundTrip && _isMovingStart(startPosition);
     final usableHeading = movingStart ? _usableHeading(startPosition) : null;
@@ -2260,9 +2282,13 @@ class RouteService {
       if (isRequiredWaypointRoundTrip) ...{
         'waypoint_mode': 'required_stops',
         'required_waypoints': userWaypoints,
+        'waypoint_origin': normalizedWaypointOrigin,
+        'auto_seed_waypoints': isAutoSeedWaypoint,
+        if (waypointSeedAttempt != null)
+          'waypoint_seed_attempt': waypointSeedAttempt,
         'waypoint_order': 'auto_optimize',
         'close_loop': true,
-        'max_search_ms': 33000,
+        'max_search_ms': isAutoSeedWaypoint ? 42000 : 33000,
         'required_waypoint_count': userWaypoints.length,
       },
       'language': 'de',
@@ -3230,6 +3256,9 @@ class RouteService {
       'user_waypoint_signature': waypointSignature,
       'waypoint_mode': body['waypoint_mode'],
       'waypoint_order': body['waypoint_order'],
+      'waypoint_origin': body['waypoint_origin'],
+      'auto_seed_waypoints': body['auto_seed_waypoints'],
+      'waypoint_seed_attempt': body['waypoint_seed_attempt'],
       'required_waypoint_count': body['required_waypoint_count'],
       'original_planning_type': body['original_planning_type'],
       'effective_planning_type': body['effective_planning_type'],
@@ -3284,6 +3313,10 @@ class RouteService {
         'avoid_highways': body['avoid_highways'] == true,
       if (body['client_scenario_key'] != null)
         'client_scenario_key': body['client_scenario_key'],
+      if (body['waypoint_origin'] != null)
+        'waypoint_origin': body['waypoint_origin'],
+      if (body['auto_seed_waypoints'] != null)
+        'auto_seed_waypoints': body['auto_seed_waypoints'],
       if (isRoundTrip) 'exact_cell_required': true,
     };
   }
@@ -3704,6 +3737,8 @@ class RouteService {
     Map<String, double>? targetLocation,
     List<Map<String, double>> userWaypoints = const [],
     String? originalPlanningType,
+    String? waypointOrigin,
+    int? waypointSeedAttempt,
   }) async {
     final adjustedTargetKm = styleConfig.clampRoundTripDistanceKm(
       variant.index == 0
@@ -3728,6 +3763,8 @@ class RouteService {
       avoidHighways: requestAvoidHighways ?? scenario.avoidHighways,
       previousFingerprints: previousFingerprints,
       originalPlanningType: originalPlanningType,
+      waypointOrigin: waypointOrigin,
+      waypointSeedAttempt: waypointSeedAttempt,
     );
     body['client_scenario_key'] = scenario.scenarioKey;
     body['client_force_fresh_variant'] = forceFreshVariant;
@@ -3738,6 +3775,8 @@ class RouteService {
       snapped.edgeMeta['waypoint_mode'] ??= 'required_stops';
       snapped.edgeMeta['waypoint_route_mode'] ??= 'required_stops';
       snapped.edgeMeta['required_waypoint_count'] ??= userWaypoints.length;
+      snapped.edgeMeta['waypoint_origin'] ??= waypointOrigin ?? 'manual';
+      snapped.edgeMeta['auto_seed_waypoints'] ??= waypointOrigin == 'auto_seed';
       snapped.edgeMeta['route_source'] ??= 'mapbox';
     }
     return _evaluateCandidate(

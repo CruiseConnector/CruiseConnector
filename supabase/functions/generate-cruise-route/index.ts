@@ -1015,6 +1015,16 @@ Deno.serve(async (req) => {
       (planning_type === "Wegpunkte" ? "required_stops" : undefined);
     const waypointOrder = body.waypoint_order ??
       (waypointMode === "required_stops" ? "auto_optimize" : "fixed");
+    const waypointOrigin = body.waypoint_origin === "auto_seed"
+      ? "auto_seed"
+      : "manual";
+    const autoSeedWaypoints = waypointOrigin === "auto_seed" ||
+      body.auto_seed_waypoints === true;
+    const waypointSeedAttempt =
+      typeof body.waypoint_seed_attempt === "number" &&
+        Number.isFinite(body.waypoint_seed_attempt)
+        ? Math.max(0, Math.trunc(body.waypoint_seed_attempt))
+        : null;
     const directionHint = typeof body.direction_hint === "number" &&
         Number.isFinite(body.direction_hint)
       ? normalizeBearingDegrees(Math.round(body.direction_hint))
@@ -1081,6 +1091,9 @@ Deno.serve(async (req) => {
         waypointSource,
         waypointMode: waypointMode ?? null,
         waypointOrder,
+        waypointOrigin,
+        autoSeedWaypoints,
+        waypointSeedAttempt,
         targetDistance: targetDistance ?? null,
         detourLevel: body.detour_level ?? 0,
         directionHint: directionHint ?? null,
@@ -1241,7 +1254,7 @@ Deno.serve(async (req) => {
             Math.abs(stop.latitude - point.latitude) < 1e-9 &&
             Math.abs(stop.longitude - point.longitude) < 1e-9
           );
-          return required ? "150" : "4500";
+          return required ? "1200" : "4500";
         })
         .join(";");
 
@@ -1337,6 +1350,8 @@ Deno.serve(async (req) => {
     let waypointAutoOptimizeAttemptCount = 0;
     let waypointAutoOptimizeSelectedIndex: number | null = null;
     let waypointRoutingMeta: Record<string, unknown> | null = null;
+    let deliveredRequiredWaypoints: Coordinate[] | null = null;
+    let autoSeedReplanned = false;
     let waypointReachMeta: {
       userWaypointCount: number;
       reachedCount: number;
@@ -1635,10 +1650,20 @@ Deno.serve(async (req) => {
         );
       }
       const maxWaypointDistanceKm = targetDistance != null
-        ? Math.max(12, Math.min(80, targetDistance * 0.75))
+        ? Math.max(
+          autoSeedWaypoints ? 18 : 12,
+          Math.min(220, targetDistance * (autoSeedWaypoints ? 0.82 : 0.75)),
+        )
+        : autoSeedWaypoints
+        ? 70
         : 50;
       const maxLegDistanceKm = targetDistance != null
-        ? Math.max(20, targetDistance * 0.85)
+        ? Math.max(
+          autoSeedWaypoints ? 26 : 20,
+          targetDistance * (autoSeedWaypoints ? 0.95 : 0.85),
+        )
+        : autoSeedWaypoints
+        ? 58
         : 45;
       const bearingsFromStart: number[] = [];
       let previousWaypoint = startLocation;
@@ -1865,7 +1890,13 @@ Deno.serve(async (req) => {
       : 0;
     const waypointTimeBudgetMs =
       planning_type === "Wegpunkte" && currentRouteType === "ROUND_TRIP"
-        ? Math.max(12000, Math.min(35000, body.max_search_ms ?? 33000))
+        ? Math.max(
+          12000,
+          Math.min(
+            autoSeedWaypoints ? 45000 : 35000,
+            body.max_search_ms ?? (autoSeedWaypoints ? 42000 : 33000),
+          ),
+        )
         : 0;
     const pointToPointTimeRemainingMs = () =>
       pointToPointTimeBudgetMs <= 0
@@ -2181,7 +2212,10 @@ Deno.serve(async (req) => {
           randomSeed,
           variantHint,
           fingerprintHint,
-          maxSearchMs: waypointTimeBudgetMs || 30000,
+          waypointOrigin,
+          waypointSeedAttempt,
+          maxSearchMs: waypointTimeBudgetMs ||
+            (autoSeedWaypoints ? 42000 : 30000),
         });
         waypointRoutingMeta = waypointSearch.meta;
         waypointAutoOptimizeAttemptCount = Number(
@@ -2192,6 +2226,12 @@ Deno.serve(async (req) => {
           finalWaypoints = waypointSearch.waypoints;
           radiusesParams = waypointSearch.radiuses;
           waypointOrderDelivered = waypointSearch.deliveredOrder;
+          deliveredRequiredWaypoints = waypointSearch.requiredOrder;
+          autoSeedReplanned = autoSeedWaypoints &&
+            waypointSearch.deliveredOrder != null &&
+            waypointSearch.deliveredOrder.some((value, index) =>
+              value !== index
+            );
         } else {
           const rejectReason = waypointSearch.rejectReason;
           const responseCode = rejectReason === "waypoint_not_reached"
@@ -2208,6 +2248,9 @@ Deno.serve(async (req) => {
             route_quality_too_low: responseCode === "waypoint_quality_too_low",
             waypoint_source: waypointSource,
             waypoint_mode: waypointMode ?? null,
+            waypoint_origin: waypointOrigin,
+            auto_seed_waypoints: autoSeedWaypoints,
+            waypoint_seed_attempt: waypointSeedAttempt,
             waypoint_order_requested: waypointOrder,
             requested_close_loop: body.close_loop !== false,
             normalized_user_waypoint_count:
@@ -3363,7 +3406,7 @@ Deno.serve(async (req) => {
       }
     }
     if (planning_type === "Wegpunkte" && currentRouteType === "ROUND_TRIP") {
-      const reachThresholdMeters = 150;
+      const reachThresholdMeters = 1200;
       const routeCoordinates = routeForFrontend?.geometry?.coordinates;
       const reachDistances = waypointReachDistancesMeters(
         routeCoordinates,
@@ -3384,6 +3427,9 @@ Deno.serve(async (req) => {
           response_code: "waypoint_not_reached",
           waypoint_source: waypointSource,
           waypoint_mode: waypointMode ?? null,
+          waypoint_origin: waypointOrigin,
+          auto_seed_waypoints: autoSeedWaypoints,
+          waypoint_seed_attempt: waypointSeedAttempt,
           waypoint_route_mode: "required_stops",
           waypoint_order_requested: waypointOrder,
           waypoint_order_used: waypointOrderDelivered,
@@ -3519,6 +3565,18 @@ Deno.serve(async (req) => {
           waypoint_route_mode: planning_type === "Wegpunkte"
             ? "required_stops"
             : null,
+          waypoint_origin: planning_type === "Wegpunkte"
+            ? waypointOrigin
+            : null,
+          auto_seed_waypoints: planning_type === "Wegpunkte"
+            ? autoSeedWaypoints
+            : null,
+          auto_seed_replanned: planning_type === "Wegpunkte"
+            ? autoSeedReplanned
+            : null,
+          waypoint_seed_attempt: planning_type === "Wegpunkte"
+            ? waypointSeedAttempt
+            : null,
           waypoint_order_requested: planning_type === "Wegpunkte"
             ? waypointOrder
             : null,
@@ -3540,6 +3598,12 @@ Deno.serve(async (req) => {
             null,
           required_waypoint_count: planning_type === "Wegpunkte"
             ? normalizedUserWaypointsForMeta.length
+            : null,
+          delivered_waypoints: planning_type === "Wegpunkte"
+            ? (deliveredRequiredWaypoints ?? normalizedUserWaypointsForMeta)
+            : null,
+          delivered_required_waypoints: planning_type === "Wegpunkte"
+            ? (deliveredRequiredWaypoints ?? normalizedUserWaypointsForMeta)
             : null,
           required_waypoints_reached: waypointReachMeta?.reachedCount ?? null,
           required_stop_reach_distances_m:

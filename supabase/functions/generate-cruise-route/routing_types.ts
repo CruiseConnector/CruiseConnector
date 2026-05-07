@@ -26,6 +26,9 @@ export interface RequestData {
   manual_waypoints?: Coordinate[];
   waypoint_mode?: "required_stops";
   waypoint_order?: "fixed" | "auto_optimize";
+  waypoint_origin?: "manual" | "auto_seed";
+  auto_seed_waypoints?: boolean;
+  waypoint_seed_attempt?: number;
   max_search_ms?: number;
   original_planning_type?: "waypoints" | "Wegpunkte";
   effective_planning_type?: "random" | "Zufall";

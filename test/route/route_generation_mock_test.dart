@@ -527,6 +527,8 @@ void main() {
       expect(captured['route_type'], 'ROUND_TRIP');
       expect(captured['waypoint_mode'], 'required_stops');
       expect(captured['waypoint_order'], 'auto_optimize');
+      expect(captured['waypoint_origin'], 'manual');
+      expect(captured['auto_seed_waypoints'], isFalse);
       expect(captured['close_loop'], isTrue);
       expect(captured['max_search_ms'], 33000);
       expect(captured['max_candidate_attempts'], 18);
@@ -560,6 +562,13 @@ void main() {
             'required_waypoints_reached': 2,
             'waypoint_order_requested': 'auto_optimize',
             'waypoint_order_used': [1, 0],
+            'waypoint_origin': 'auto_seed',
+            'auto_seed_waypoints': true,
+            'auto_seed_replanned': true,
+            'delivered_waypoints': [
+              {'latitude': 48.1151, 'longitude': 11.6502},
+              {'latitude': 48.1501, 'longitude': 11.6201},
+            ],
             'waypoint_reach_distances_m': [18, 41],
             'waypoint_reach_threshold_m': 150,
           },
@@ -583,8 +592,40 @@ void main() {
       expect(result.edgeMeta['required_waypoints_reached'], 2);
       expect(result.edgeMeta['waypoint_order_requested'], 'auto_optimize');
       expect(result.edgeMeta['waypoint_order_used'], [1, 0]);
+      expect(result.edgeMeta['waypoint_origin'], 'auto_seed');
+      expect(result.edgeMeta['auto_seed_replanned'], isTrue);
+      expect(result.edgeMeta['delivered_waypoints'], isA<List>());
       expect(result.edgeMeta['waypoint_reach_distances_m'], [18, 41]);
       expect(result.edgeMeta['waypoint_reach_threshold_m'], 150);
+    });
+
+    test('Auto-Seed-Wegpunkte senden Herkunft und größeres Suchbudget', () async {
+      when(mockInvoker.invoke(any)).thenAnswer(
+        (_) async =>
+            _buildRouteResponse(distanceMeters: 47000, durationSeconds: 3400),
+      );
+
+      await service.generateRoundTrip(
+        startPosition: _munich(),
+        targetDistanceKm: 50,
+        mode: 'Sport Mode',
+        planningType: 'Wegpunkte',
+        waypointOrigin: 'auto_seed',
+        waypointSeedAttempt: 3,
+        userWaypoints: const [
+          {'latitude': 48.1501, 'longitude': 11.6201},
+          {'latitude': 48.1151, 'longitude': 11.6502},
+        ],
+      );
+
+      final captured =
+          verify(mockInvoker.invoke(captureAny)).captured.first
+              as Map<String, dynamic>;
+      expect(captured['waypoint_origin'], 'auto_seed');
+      expect(captured['auto_seed_waypoints'], isTrue);
+      expect(captured['waypoint_seed_attempt'], 3);
+      expect(captured['max_search_ms'], 42000);
+      expect(captured['max_candidate_attempts'], 30);
     });
 
     test('Wegpunkte-Rundkurs braucht mindestens einen User-Wegpunkt', () async {

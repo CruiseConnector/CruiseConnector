@@ -14,6 +14,8 @@ void main() {
   });
 
   Widget buildCard({
+    bool isRoundTrip = true,
+    String planningType = 'Wegpunkte',
     int waypointCount = 2,
     int? selectedWaypointIndex,
     int? replacingWaypointIndex,
@@ -25,8 +27,8 @@ void main() {
       home: Scaffold(
         body: SingleChildScrollView(
           child: CruiseSetupCard(
-            isRoundTrip: true,
-            planningType: 'Wegpunkte',
+            isRoundTrip: isRoundTrip,
+            planningType: planningType,
             selectedLength: '50 km',
             selectedLocation: 'Aktueller Standort',
             selectedStyle: 'Sport Mode',
@@ -55,32 +57,39 @@ void main() {
     );
   }
 
-  testWidgets('zeigt Auswahl-Aktionen nur bei ausgewähltem Stopp', (
-    tester,
-  ) async {
-    var deleted = false;
-    var replaced = false;
-
-    await tester.pumpWidget(
-      buildCard(
-        selectedWaypointIndex: 1,
-        onDeleteSelected: () => deleted = true,
-        onReplaceSelected: () => replaced = true,
-      ),
-    );
+  testWidgets('zeigt Wegpunkt-Hinweis ohne Setup-Aktionschips', (tester) async {
+    await tester.pumpWidget(buildCard(selectedWaypointIndex: 1));
 
     expect(
-      find.text('Stopp 2 ausgewählt. Du kannst ihn löschen oder neu setzen.'),
+      find.text('Stopp 2 ausgewählt. Nutze die Karten-Aktionen rechts.'),
+      findsOneWidget,
+    );
+    expect(
+      find.text(
+        'Die Strecke ergibt sich aus deinen Stopps. Stil und Aktionen steuerst du direkt auf der Karte.',
+      ),
       findsOneWidget,
     );
 
-    await tester.tap(find.text('Auswahl löschen'));
-    await tester.pump();
-    await tester.tap(find.text('Auswahl neu setzen'));
-    await tester.pump();
+    expect(find.text('Auswahl löschen'), findsNothing);
+    expect(find.text('Auswahl neu setzen'), findsNothing);
+    expect(find.text('Letzten löschen'), findsNothing);
+    expect(find.text('Stopps vorschlagen'), findsNothing);
+    expect(find.text('Route'), findsNothing);
+    expect(find.text('Direkt'), findsNothing);
+    expect(find.text('Kleiner Umweg'), findsNothing);
+    expect(find.text('Stil'), findsNothing);
+    expect(find.text('Sport Mode'), findsNothing);
+  });
 
-    expect(deleted, isTrue);
-    expect(replaced, isTrue);
+  testWidgets('zeigt Umweg-Auswahl nur im A-nach-B-Modus', (tester) async {
+    await tester.pumpWidget(
+      buildCard(isRoundTrip: false, planningType: 'Zufall'),
+    );
+
+    expect(find.text('Route'), findsOneWidget);
+    expect(find.text('Direkt'), findsOneWidget);
+    expect(find.text('Kleiner Umweg'), findsOneWidget);
   });
 
   testWidgets('zeigt Neu-setzen-Hinweis im Ersetzen-Modus', (tester) async {

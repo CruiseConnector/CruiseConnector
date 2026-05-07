@@ -36,6 +36,8 @@ export interface RequiredWaypointRoundTripOptions {
   randomSeed: number;
   variantHint?: string;
   fingerprintHint?: string;
+  waypointOrigin?: "manual" | "auto_seed";
+  waypointSeedAttempt?: number | null;
   maxSearchMs: number;
 }
 
@@ -47,11 +49,12 @@ interface RequiredWaypointPlan {
   radiuses: string;
   continueStraight: boolean;
   alternatives: boolean;
+  silentVia: boolean;
 }
 
-const REQUIRED_STOP_RADIUS_METERS = 650;
+const REQUIRED_STOP_RADIUS_METERS = 1200;
 const SHAPE_POINT_RADIUS_METERS = 5500;
-const REACH_THRESHOLD_METERS = 150;
+const REACH_THRESHOLD_METERS = 1200;
 
 function sameCoordinate(a: Coordinate, b: Coordinate): boolean {
   return (
@@ -328,6 +331,7 @@ function buildRequiredWaypointPlans(
     interiorWaypoints: Coordinate[],
     continueStraight: boolean,
     alternatives = true,
+    silentVia = false,
   ) => {
     const waypoints = [
       options.startLocation,
@@ -342,10 +346,12 @@ function buildRequiredWaypointPlans(
       radiuses: radiusesForPlan(waypoints, requiredOrder),
       continueStraight,
       alternatives,
+      silentVia,
     });
   };
 
   const targetKm = options.targetDistanceKm ?? 50;
+  const isAutoSeed = options.waypointOrigin === "auto_seed";
   const seedOffset = stableStringHash(
     `${options.variantHint ?? ""}|${options.fingerprintHint ?? ""}`,
   );
@@ -389,10 +395,21 @@ function buildRequiredWaypointPlans(
           true,
         );
       }
+      if (isAutoSeed) {
+        addPlan(
+          `order_${orderIndex}_shape_${shapeIndex}_silent_via`,
+          "directions_shape_silent_via",
+          order,
+          chain,
+          false,
+          false,
+          true,
+        );
+      }
     });
   });
 
-  return plans.slice(0, 18);
+  return plans.slice(0, isAutoSeed ? 32 : 18);
 }
 
 export async function routeRequiredWaypointRoundTrip(
@@ -433,6 +450,9 @@ export async function routeRequiredWaypointRoundTrip(
         continueStraight: plan.continueStraight,
         alternatives: plan.alternatives,
         maxAttempts: 1,
+        routeLegWaypointIndexes: plan.silentVia
+          ? [0, plan.waypoints.length - 1]
+          : undefined,
         timeoutMs: Math.max(
           2800,
           Math.min(6200, options.maxSearchMs - (Date.now() - startedAt) - 900),
@@ -502,9 +522,15 @@ export async function routeRequiredWaypointRoundTrip(
       const score = durationMin + distanceKm * 0.30 + quality.score * 0.36 +
         distanceFitPenalty + alternativeIndex * 3 +
         (plan.continueStraight ? 3 : 0);
+      const silentViaPenalty = plan.silentVia ? -2 : 0;
+      const originPenalty = options.waypointOrigin === "auto_seed" &&
+          plan.silentVia
+        ? -3
+        : 0;
+      const finalScore = score + silentViaPenalty + originPenalty;
 
-      if (score < bestScore) {
-        bestScore = score;
+      if (finalScore < bestScore) {
+        bestScore = finalScore;
         bestRoute = candidateRoute;
         bestPlan = plan;
       }
@@ -538,6 +564,9 @@ export async function routeRequiredWaypointRoundTrip(
         : waypointOrderIndices(optimization.order, options.requiredWaypoints),
       directions_variant: bestPlan?.label ?? null,
       continue_straight_used: bestPlan?.continueStraight ?? null,
+      silent_via_used: bestPlan?.silentVia ?? false,
+      waypoint_origin: options.waypointOrigin ?? "manual",
+      waypoint_seed_attempt: options.waypointSeedAttempt ?? null,
       reached_reject_count: reachedRejectCount,
       quality_reject_count: qualityRejectCount,
       waypoint_reach_distances_m: bestReachDistances,

@@ -104,6 +104,8 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
   @override
   Widget build(BuildContext context) {
     final isRoundTrip = widget.isRoundTrip;
+    final isWaypointPlanning =
+        isRoundTrip && widget.planningType == 'Wegpunkte';
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(20),
@@ -154,16 +156,19 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
             ],
           ),
           const Divider(color: Colors.white10, height: 32),
-          AnimatedCrossFade(
-            firstChild: _buildRoundTripOptions(),
-            secondChild: _buildAtoBOptions(context),
-            crossFadeState: isRoundTrip
-                ? CrossFadeState.showFirst
-                : CrossFadeState.showSecond,
+          AnimatedSwitcher(
             duration: const Duration(milliseconds: 300),
+            child: KeyedSubtree(
+              key: ValueKey(
+                isRoundTrip ? 'round_trip_options' : 'atob_options',
+              ),
+              child: isRoundTrip
+                  ? _buildRoundTripOptions()
+                  : _buildAtoBOptions(context),
+            ),
           ),
           const Divider(color: Colors.white10, height: 32),
-          if (isRoundTrip) ...[
+          if (isRoundTrip && !isWaypointPlanning) ...[
             _SelectionRow(
               title: 'Länge',
               options: const ['50 Km', '75 Km', '100 Km'],
@@ -171,30 +176,12 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
               onSelect: widget.onLengthChanged,
             ),
             const Divider(color: Colors.white10, height: 32),
-            _HighwayToggleSwitch(
-              isEnabled: _avoidHighways,
-              onChanged: _setAvoidHighways,
-            ),
-            const Divider(color: Colors.white10, height: 32),
-          ] else ...[
-            _SelectionRow(
-              title: 'Route',
-              options: const [
-                'Direkt',
-                'Kleiner Umweg',
-                'Mittlerer Umweg',
-                'Großer Umweg',
-              ],
-              selectedValue: widget.selectedDetour,
-              onSelect: widget.onDetourChanged,
-            ),
-            const Divider(color: Colors.white10, height: 32),
-            _HighwayToggleSwitch(
-              isEnabled: _avoidHighways,
-              onChanged: _setAvoidHighways,
-            ),
-            const Divider(color: Colors.white10, height: 32),
           ],
+          _HighwayToggleSwitch(
+            isEnabled: _avoidHighways,
+            onChanged: _setAvoidHighways,
+          ),
+          const Divider(color: Colors.white10, height: 32),
           _SelectionRow(
             title: 'Standort',
             options: const ['Aktueller Standort', 'Standort wählen'],
@@ -202,7 +189,8 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
             onSelect: widget.onLocationChanged,
           ),
           const Divider(color: Colors.white10, height: 32),
-          if (isRoundTrip || widget.selectedDetour != 'Direkt') ...[
+          if ((isRoundTrip && !isWaypointPlanning) ||
+              (!isRoundTrip && widget.selectedDetour != 'Direkt')) ...[
             _SelectionRow(
               title: 'Stil',
               options: const [
@@ -220,7 +208,22 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
     );
   }
 
+  Widget _buildDetourSelection() {
+    return _SelectionRow(
+      title: 'Route',
+      options: const [
+        'Direkt',
+        'Kleiner Umweg',
+        'Mittlerer Umweg',
+        'Großer Umweg',
+      ],
+      selectedValue: widget.selectedDetour,
+      onSelect: widget.onDetourChanged,
+    );
+  }
+
   Widget _buildRoundTripOptions() {
+    final isWaypointPlanning = widget.planningType == 'Wegpunkte';
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -253,92 +256,88 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
             ),
           ],
         ),
-        if (widget.planningType == 'Wegpunkte') ...[
-          const SizedBox(height: 12),
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(
-              color: const Color(0xFF0B0E14),
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: Colors.white10),
+        AnimatedSwitcher(
+          duration: const Duration(milliseconds: 320),
+          switchInCurve: Curves.easeOutCubic,
+          switchOutCurve: Curves.easeInCubic,
+          transitionBuilder: (child, animation) {
+            final offsetAnimation = Tween<Offset>(
+              begin: const Offset(0, 0.04),
+              end: Offset.zero,
+            ).animate(animation);
+            return FadeTransition(
+              opacity: animation,
+              child: SizeTransition(
+                sizeFactor: animation,
+                axisAlignment: -1,
+                child: SlideTransition(position: offsetAnimation, child: child),
+              ),
+            );
+          },
+          child: KeyedSubtree(
+            key: ValueKey(
+              isWaypointPlanning
+                  ? 'waypoint_planning_hint'
+                  : 'random_planning_hint',
             ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  _waypointHintText(),
-                  style: const TextStyle(
-                    color: Colors.white70,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-                const SizedBox(height: 10),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    _SmallActionButton(
-                      label: 'Stopps vorschlagen',
-                      icon: Icons.auto_awesome,
-                      onTap: widget.waypointActionsEnabled
-                          ? widget.onGenerateWaypointSeed
-                          : null,
-                    ),
-                    _SmallActionButton(
-                      label: 'Letzten löschen',
-                      icon: Icons.undo,
-                      onTap:
-                          widget.waypointActionsEnabled &&
-                              widget.roundTripWaypointCount > 0
-                          ? widget.onRemoveLastWaypoint
-                          : null,
-                    ),
-                    _SmallActionButton(
-                      label: 'Auswahl löschen',
-                      icon: Icons.delete_outline,
-                      onTap:
-                          widget.waypointActionsEnabled &&
-                              widget.selectedWaypointIndex != null
-                          ? widget.onDeleteSelectedWaypoint
-                          : null,
-                    ),
-                    _SmallActionButton(
-                      label: 'Auswahl neu setzen',
-                      icon: Icons.edit_location_alt_outlined,
-                      onTap:
-                          widget.waypointActionsEnabled &&
-                              widget.selectedWaypointIndex != null
-                          ? widget.onReplaceSelectedWaypoint
-                          : null,
-                    ),
-                    _SmallActionButton(
-                      label: 'Alle löschen',
-                      icon: Icons.clear,
-                      onTap:
-                          widget.waypointActionsEnabled &&
-                              widget.roundTripWaypointCount > 0
-                          ? widget.onClearWaypoints
-                          : null,
-                    ),
-                  ],
-                ),
-              ],
-            ),
+            child: isWaypointPlanning
+                ? _buildWaypointPlanningHint()
+                : _buildRandomPlanningHint(),
           ),
-        ] else ...[
-          const SizedBox(height: 10),
-          const Text(
-            'Die App erzeugt automatisch eine geprüfte Rundkursroute.',
-            style: TextStyle(
-              color: Colors.white38,
-              fontSize: 12,
-              fontWeight: FontWeight.w400,
-            ),
-          ),
-        ],
+        ),
       ],
+    );
+  }
+
+  Widget _buildWaypointPlanningHint() {
+    return Padding(
+      padding: const EdgeInsets.only(top: 12),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: const Color(0xFF0B0E14),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: Colors.white10),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              _waypointHintText(),
+              style: const TextStyle(
+                color: Colors.white70,
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Die Strecke ergibt sich aus deinen Stopps. Stil und Aktionen steuerst du direkt auf der Karte.',
+              style: TextStyle(
+                color: Colors.white38,
+                fontSize: 11,
+                height: 1.25,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildRandomPlanningHint() {
+    return const Padding(
+      padding: EdgeInsets.only(top: 10),
+      child: Text(
+        'Die App erzeugt automatisch eine geprüfte Rundkursroute.',
+        style: TextStyle(
+          color: Colors.white38,
+          fontSize: 12,
+          fontWeight: FontWeight.w400,
+        ),
+      ),
     );
   }
 
@@ -413,6 +412,8 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
               ],
             ),
           ),
+          const SizedBox(height: 20),
+          _buildDetourSelection(),
         ],
       );
     }
@@ -519,6 +520,8 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
             ),
           ),
         ),
+        const SizedBox(height: 20),
+        _buildDetourSelection(),
       ],
     );
   }
@@ -538,7 +541,7 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
     }
     final selected = widget.selectedWaypointIndex;
     if (selected != null && selected >= 0) {
-      return 'Stopp ${selected + 1} ausgewählt. Du kannst ihn löschen oder neu setzen.';
+      return 'Stopp ${selected + 1} ausgewählt. Nutze die Karten-Aktionen rechts.';
     }
     final pluralSuffix = widget.roundTripWaypointCount == 1 ? '' : 's';
     return '${widget.roundTripWaypointCount} Stopp$pluralSuffix gesetzt. Die Route fährt diese Punkte an.';
@@ -821,60 +824,6 @@ class _HighwayToggleSwitch extends StatelessWidget {
               ],
             ),
           ),
-        ),
-      ),
-    );
-  }
-}
-
-class _SmallActionButton extends StatelessWidget {
-  const _SmallActionButton({
-    required this.label,
-    required this.icon,
-    required this.onTap,
-  });
-
-  final String label;
-  final IconData icon;
-  final VoidCallback? onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final enabled = onTap != null;
-    return GestureDetector(
-      onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 180),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        decoration: BoxDecoration(
-          color: enabled
-              ? const Color(0xFFFF3B30).withValues(alpha: 0.16)
-              : Colors.white.withValues(alpha: 0.05),
-          borderRadius: BorderRadius.circular(999),
-          border: Border.all(
-            color: enabled
-                ? const Color(0xFFFF3B30).withValues(alpha: 0.35)
-                : Colors.white10,
-          ),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              icon,
-              size: 15,
-              color: enabled ? const Color(0xFFFF3B30) : Colors.white30,
-            ),
-            const SizedBox(width: 6),
-            Text(
-              label,
-              style: TextStyle(
-                color: enabled ? Colors.white70 : Colors.white30,
-                fontSize: 12,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ],
         ),
       ),
     );
