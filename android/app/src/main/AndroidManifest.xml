@@ -6,6 +6,7 @@
     <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- Profilbild-Upload: Kamera + Galerie via image_picker -->
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
@@ -41,7 +42,7 @@
                 <category android:name="android.intent.category.BROWSABLE"/>
                 <data android:scheme="cruiseconnect"/>
             </intent-filter>
-            <!-- Universal Link: https://cruiseconnect.app/... -->
+            <!-- Android App Link: https://cruiseconnector.at?post=<id> -->
             <intent-filter android:autoVerify="true">
                 <action android:name="android.intent.action.VIEW"/>
                 <category android:name="android.intent.category.DEFAULT"/>
@@ -49,6 +50,10 @@
                 <data android:scheme="https" android:host="cruiseconnector.at"/>
             </intent-filter>
         </activity>
+        <activity
+            android:name="com.yalantis.ucrop.UCropActivity"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.AppCompat.Light.NoActionBar" />
         <!-- Mapbox public access token -->
         <meta-data
             android:name="MAPBOX_ACCESS_TOKEN"

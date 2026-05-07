@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:share_plus/share_plus.dart';
+import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/application/providers/community_provider.dart';
+import 'package:cruise_connect/core/deep_links.dart';
 import 'package:cruise_connect/presentation/pages/post_detail_page.dart';
 
 class InteractivePostCard extends StatefulWidget {
@@ -50,6 +53,13 @@ class _InteractivePostCardState extends State<InteractivePostCard> {
       context.read<CommunityProvider>().toggleLike(widget.postId);
   void _toggleRepost() =>
       context.read<CommunityProvider>().toggleRepost(widget.postId);
+  void _sharePost() {
+    final link = CruiseDeepLinks.postUri(widget.postId).toString();
+    Share.share(
+      'Post von ${widget.handle} auf CruiseConnect: $link',
+      subject: 'CruiseConnect Post',
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -73,22 +83,50 @@ class _InteractivePostCardState extends State<InteractivePostCard> {
             children: [
               CircleAvatar(
                 radius: 18,
-                backgroundColor: const Color(0xFFFF3B30),
-                child: Text(widget.name.isNotEmpty ? widget.name[0].toUpperCase() : 'U', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                backgroundColor: AppAccentColors.accent,
+                child: Text(
+                  widget.name.isNotEmpty ? widget.name[0].toUpperCase() : 'U',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
               ),
               const SizedBox(width: 10),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(widget.name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
+                    Text(
+                      widget.name,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 15,
+                      ),
+                    ),
                     Row(
                       children: [
-                        Text(widget.handle, style: const TextStyle(color: Colors.grey, fontSize: 13)),
+                        Text(
+                          widget.handle,
+                          style: const TextStyle(
+                            color: Colors.grey,
+                            fontSize: 13,
+                          ),
+                        ),
                         const SizedBox(width: 5),
-                        const Text('·', style: TextStyle(color: Colors.grey, fontSize: 13)),
+                        const Text(
+                          '·',
+                          style: TextStyle(color: Colors.grey, fontSize: 13),
+                        ),
                         const SizedBox(width: 5),
-                        Text(widget.time, style: const TextStyle(color: Colors.grey, fontSize: 13)),
+                        Text(
+                          widget.time,
+                          style: const TextStyle(
+                            color: Colors.grey,
+                            fontSize: 13,
+                          ),
+                        ),
                       ],
                     ),
                   ],
@@ -101,7 +139,11 @@ class _InteractivePostCardState extends State<InteractivePostCard> {
           // Content
           Text(
             widget.content,
-            style: const TextStyle(color: Colors.white, fontSize: 15, height: 1.4),
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 15,
+              height: 1.4,
+            ),
           ),
           const SizedBox(height: 16),
           // Action Bar
@@ -129,11 +171,26 @@ class _InteractivePostCardState extends State<InteractivePostCard> {
                 },
               ),
               // Repost Button
-              _buildActionButton(icon: isReposted ? Icons.repeat_on : Icons.repeat, color: isReposted ? const Color(0xFF00C853) : Colors.grey, count: repostCount.toString(), onTap: _toggleRepost),
+              _buildActionButton(
+                icon: isReposted ? Icons.repeat_on : Icons.repeat,
+                color: isReposted ? const Color(0xFF00C853) : Colors.grey,
+                count: repostCount.toString(),
+                onTap: _toggleRepost,
+              ),
               // Like Button
-              _buildActionButton(icon: isLiked ? Icons.favorite : Icons.favorite_border, color: isLiked ? const Color(0xFFFF3B30) : Colors.grey, count: likeCount.toString(), onTap: _toggleLike),
+              _buildActionButton(
+                icon: isLiked ? Icons.favorite : Icons.favorite_border,
+                color: isLiked ? AppAccentColors.accent : Colors.grey,
+                count: likeCount.toString(),
+                onTap: _toggleLike,
+              ),
               // Share Button
-              _buildActionButton(icon: Icons.share_outlined, color: Colors.grey, count: '', onTap: () {}),
+              _buildActionButton(
+                icon: Icons.share_outlined,
+                color: Colors.grey,
+                count: '',
+                onTap: _sharePost,
+              ),
             ],
           ),
         ],
@@ -141,7 +198,12 @@ class _InteractivePostCardState extends State<InteractivePostCard> {
     );
   }
 
-  Widget _buildActionButton({required IconData icon, required Color color, required String count, required VoidCallback onTap}) {
+  Widget _buildActionButton({
+    required IconData icon,
+    required Color color,
+    required String count,
+    required VoidCallback onTap,
+  }) {
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(20),

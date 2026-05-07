@@ -13,6 +13,10 @@ class CommunityProvider extends ChangeNotifier {
   List<Map<String, dynamic>> _feedPosts = [];
   List<Map<String, dynamic>> _discoverPosts = [];
   Set<String> _followingIds = {};
+
+  /// IDs aller User, die ich blockiert habe ODER die mich blockiert haben —
+  /// werden überall aus Listen herausgefiltert.
+  Set<String> _blockedIds = {};
   bool _isLoading = false;
   String? _errorMessage;
 
@@ -47,21 +51,32 @@ class CommunityProvider extends ChangeNotifier {
   bool isFollowing(String userId) => _followingIds.contains(userId);
 
   /// Ruft jede Seite (Feed, Entdecken, Profil) auf, bevor sie Posts rendert.
-  /// Seedet den zentralen State, falls der Post noch nicht bekannt ist;
-  /// überschreibt keine bereits vorhandenen Werte (optimistic wins).
+  /// Seedet den zentralen State mit Serverwerten, solange kein Toggle läuft.
   void registerPost(Map<String, dynamic> post) {
     final id = post['id'] as String?;
     if (id == null) return;
-    _likeCounts.putIfAbsent(id, () => (post['likes_count'] as num?)?.toInt() ?? 0);
-    _repostCounts.putIfAbsent(id, () => (post['reposts_count'] as num?)?.toInt() ?? 0);
+    final serverLikeCount = (post['likes_count'] as num?)?.toInt();
+    if (serverLikeCount != null && !_busyLike.contains(id)) {
+      _likeCounts[id] = serverLikeCount < 0 ? 0 : serverLikeCount;
+    } else {
+      _likeCounts.putIfAbsent(id, () => 0);
+    }
+
+    final serverRepostCount = (post['reposts_count'] as num?)?.toInt();
+    if (serverRepostCount != null && !_busyRepost.contains(id)) {
+      _repostCounts[id] = serverRepostCount < 0 ? 0 : serverRepostCount;
+    } else {
+      _repostCounts.putIfAbsent(id, () => 0);
+    }
+
     final liked = post['is_liked_by_me'];
-    if (liked is bool) {
-      _likedPosts.putIfAbsent(id, () => liked);
+    if (liked is bool && !_busyLike.contains(id)) {
+      _likedPosts[id] = liked;
       _checkedLike.add(id);
     }
     final reposted = post['is_reposted_by_me'];
-    if (reposted is bool) {
-      _repostedPosts.putIfAbsent(id, () => reposted);
+    if (reposted is bool && !_busyRepost.contains(id)) {
+      _repostedPosts[id] = reposted;
       _checkedRepost.add(id);
     }
   }
@@ -108,10 +123,12 @@ class CommunityProvider extends ChangeNotifier {
           SocialService.getFollowingIds(uid)
         else
           Future.value(<String>{}),
+        SocialService.getBlockedAndBlockerIds(),
       ]);
       _feedPosts = results[0] as List<Map<String, dynamic>>;
       _discoverPosts = results[1] as List<Map<String, dynamic>>;
       _followingIds = results[2] as Set<String>;
+      _blockedIds = results[3] as Set<String>;
       for (final post in _feedPosts) {
         registerPost(post);
       }
@@ -131,39 +148,134 @@ class CommunityProvider extends ChangeNotifier {
   /// Delegiert auf [loadAll], weil Feed/Discover/Following zusammenhängen.
   Future<void> loadFeed() => loadAll();
 
-  /// Folgt einem User und entfernt dessen Posts sofort aus dem Discover-Tab,
-  /// damit der Wechsel ohne Re-Fetch sichtbar ist. Im Hintergrund wird der
-  /// Feed neu geladen, damit die noch unbekannten Posts des Users erscheinen.
-  Future<void> followUser(String targetUserId) async {
-    if (_busyFollow.contains(targetUserId)) return;
+  /// Folgt einem User. Bei privaten Konten wird intern eine Pending-Anfrage
+  /// erzeugt — der lokale `_followingIds`-State wird in dem Fall NICHT
+  /// erweitert (weil noch nicht akzeptiert). Returns: 'accepted' | 'pending'
+  /// | 'none'.
+  Future<String> followUser(String targetUserId) async {
+    if (_busyFollow.contains(targetUserId)) return 'none';
     _busyFollow.add(targetUserId);
 
     final wasFollowing = _followingIds.contains(targetUserId);
     if (wasFollowing) {
       _busyFollow.remove(targetUserId);
-      return;
+      return 'accepted';
     }
 
-    _followingIds = {..._followingIds, targetUserId};
+    // Optimistisch: erstmal aus Discover entfernen, falls Post da ist.
     final removedFromDiscover = _discoverPosts
         .where((p) => p['user_id'] == targetUserId)
         .toList();
     _discoverPosts = _discoverPosts
         .where((p) => p['user_id'] != targetUserId)
         .toList();
+    // following-IDs sind erstmal NICHT gesetzt — wir wissen noch nicht, ob
+    // Server 'pending' oder 'accepted' liefert. Der UI-Roundtrip ist kurz.
     notifyListeners();
 
     try {
-      await SocialService.followUser(targetUserId);
-      // Hintergrund-Refetch, um neue Posts zu bekommen (ohne UI-Block).
-      _refreshFeedSilently();
+      final status = await SocialService.followUser(targetUserId);
+      if (status == 'accepted') {
+        _followingIds = {..._followingIds, targetUserId};
+        notifyListeners();
+        _refreshFeedSilently();
+      } else if (status == 'pending') {
+        // Bei Pending wieder in Discover zurück, weil noch nicht echtes Following.
+        _discoverPosts = [..._discoverPosts, ...removedFromDiscover];
+        notifyListeners();
+      }
+      return status;
     } catch (e) {
-      _followingIds = {..._followingIds}..remove(targetUserId);
       _discoverPosts = [..._discoverPosts, ...removedFromDiscover];
       debugPrint('[CommunityProvider] followUser Fehler: $e');
       notifyListeners();
+      return 'none';
     } finally {
       _busyFollow.remove(targetUserId);
+    }
+  }
+
+  /// Wird vom Notifications-Sheet / FollowRequests-Page aufgerufen, wenn
+  /// der Inhaber eine Anfrage akzeptiert — der Anfragende wird als Follower
+  /// (nicht in `_followingIds`, da andere Richtung). State-Effekt nur
+  /// indirekt über Refresh.
+  Future<void> acceptFollowRequest(String fromUserId) async {
+    try {
+      await SocialService.acceptFollowRequest(fromUserId);
+      // Falls ich dem User auch folge, könnte sich Mutual ändern —
+      // einfacher Refresh des Feeds reicht.
+      _refreshFeedSilently();
+    } catch (e) {
+      debugPrint('[CommunityProvider] acceptFollowRequest Fehler: $e');
+    }
+  }
+
+  Future<void> rejectFollowRequest(String fromUserId) async {
+    try {
+      await SocialService.rejectFollowRequest(fromUserId);
+    } catch (e) {
+      debugPrint('[CommunityProvider] rejectFollowRequest Fehler: $e');
+    }
+  }
+
+  // ── Blocking ───────────────────────────────────────────────────────────
+
+  Set<String> get blockedIds => Set.unmodifiable(_blockedIds);
+  bool isBlocked(String userId) => _blockedIds.contains(userId);
+
+  /// Blockt einen User: serverseitig via RPC (löscht Follows in beide
+  /// Richtungen automatisch); lokal werden Posts des Users sofort aus
+  /// Feed + Discover entfernt, und der User aus `_followingIds` raus.
+  Future<void> blockUser(String targetUserId) async {
+    final wasFollowing = _followingIds.contains(targetUserId);
+    final removedFromFeed = _feedPosts
+        .where((p) => p['user_id'] == targetUserId)
+        .toList();
+    final removedFromDiscover = _discoverPosts
+        .where((p) => p['user_id'] == targetUserId)
+        .toList();
+
+    _blockedIds = {..._blockedIds, targetUserId};
+    _feedPosts = _feedPosts.where((p) => p['user_id'] != targetUserId).toList();
+    _discoverPosts = _discoverPosts
+        .where((p) => p['user_id'] != targetUserId)
+        .toList();
+    if (wasFollowing) {
+      _followingIds = {..._followingIds}..remove(targetUserId);
+    }
+    notifyListeners();
+
+    try {
+      await SocialService.blockUser(targetUserId);
+    } catch (e) {
+      // Rollback bei Fehler.
+      _blockedIds = {..._blockedIds}..remove(targetUserId);
+      _feedPosts = [..._feedPosts, ...removedFromFeed];
+      _discoverPosts = [..._discoverPosts, ...removedFromDiscover];
+      if (wasFollowing) {
+        _followingIds = {..._followingIds, targetUserId};
+      }
+      debugPrint('[CommunityProvider] blockUser Fehler: $e');
+      notifyListeners();
+      rethrow;
+    }
+  }
+
+  Future<void> unblockUser(String targetUserId) async {
+    final wasBlocked = _blockedIds.contains(targetUserId);
+    _blockedIds = {..._blockedIds}..remove(targetUserId);
+    notifyListeners();
+
+    try {
+      await SocialService.unblockUser(targetUserId);
+      // Discover neu laden — Posts des entblockten Users könnten wieder
+      // sichtbar werden.
+      _refreshDiscoverSilently();
+    } catch (e) {
+      if (wasBlocked) _blockedIds = {..._blockedIds, targetUserId};
+      debugPrint('[CommunityProvider] unblockUser Fehler: $e');
+      notifyListeners();
+      rethrow;
     }
   }
 
@@ -176,16 +288,21 @@ class CommunityProvider extends ChangeNotifier {
 
     final wasFollowing = _followingIds.contains(targetUserId);
     if (!wasFollowing) {
-      _busyFollow.remove(targetUserId);
+      try {
+        await SocialService.unfollowUser(targetUserId);
+        _refreshDiscoverSilently();
+      } catch (e) {
+        debugPrint('[CommunityProvider] pending unfollow Fehler: $e');
+      } finally {
+        _busyFollow.remove(targetUserId);
+      }
       return;
     }
 
     final removedFromFeed = _feedPosts
         .where((p) => p['user_id'] == targetUserId)
         .toList();
-    _feedPosts = _feedPosts
-        .where((p) => p['user_id'] != targetUserId)
-        .toList();
+    _feedPosts = _feedPosts.where((p) => p['user_id'] != targetUserId).toList();
     _followingIds = {..._followingIds}..remove(targetUserId);
     notifyListeners();
 
@@ -237,16 +354,13 @@ class CommunityProvider extends ChangeNotifier {
 
     _likedPosts[postId] = !wasLiked;
     _likeCounts[postId] = wasLiked ? oldCount - 1 : oldCount + 1;
+    if (_likeCounts[postId]! < 0) _likeCounts[postId] = 0;
     notifyListeners();
 
     try {
-      final nowLiked = await SocialService.toggleLike(postId);
-      // Server ist Source of Truth: Zustand angleichen, Count aus Baseline
-      // neu ableiten, damit -1 / +2 nicht möglich sind.
-      _likedPosts[postId] = nowLiked;
-      final baseline = wasLiked ? oldCount - 1 : oldCount;
-      _likeCounts[postId] = baseline + (nowLiked ? 1 : 0);
-      if (_likeCounts[postId]! < 0) _likeCounts[postId] = 0;
+      final result = await SocialService.toggleLikeWithCount(postId);
+      _likedPosts[postId] = result.isActive;
+      _likeCounts[postId] = result.count < 0 ? 0 : result.count;
     } catch (e) {
       _likedPosts[postId] = wasLiked;
       _likeCounts[postId] = oldCount;
@@ -266,14 +380,13 @@ class CommunityProvider extends ChangeNotifier {
 
     _repostedPosts[postId] = !wasReposted;
     _repostCounts[postId] = wasReposted ? oldCount - 1 : oldCount + 1;
+    if (_repostCounts[postId]! < 0) _repostCounts[postId] = 0;
     notifyListeners();
 
     try {
-      final nowReposted = await SocialService.toggleRepost(postId);
-      _repostedPosts[postId] = nowReposted;
-      final baseline = wasReposted ? oldCount - 1 : oldCount;
-      _repostCounts[postId] = baseline + (nowReposted ? 1 : 0);
-      if (_repostCounts[postId]! < 0) _repostCounts[postId] = 0;
+      final result = await SocialService.toggleRepostWithCount(postId);
+      _repostedPosts[postId] = result.isActive;
+      _repostCounts[postId] = result.count < 0 ? 0 : result.count;
     } catch (e) {
       _repostedPosts[postId] = wasReposted;
       _repostCounts[postId] = oldCount;

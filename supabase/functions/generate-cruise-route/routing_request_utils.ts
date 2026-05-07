@@ -2,6 +2,14 @@ export function classifyRoutingError(message: string): {
   status: number;
   code:
     | "INVALID_REQUEST"
+    | "too_few_waypoints"
+    | "too_many_waypoints"
+    | "waypoint_duplicate_or_too_close"
+    | "waypoint_too_far"
+    | "waypoint_layout_unstable"
+    | "waypoint_route_not_possible"
+    | "waypoint_not_reached"
+    | "waypoint_quality_too_low"
     | "NO_ROUTE"
     | "UNAUTHORIZED"
     | "RATE_LIMIT"
@@ -12,6 +20,46 @@ export function classifyRoutingError(message: string): {
   retryAfterSec?: number;
 } {
   const lower = message.toLowerCase();
+  if (lower.includes("too_few_waypoints")) {
+    return { status: 422, code: "too_few_waypoints", retryable: false };
+  }
+  if (lower.includes("too_many_waypoints")) {
+    return { status: 422, code: "too_many_waypoints", retryable: false };
+  }
+  if (lower.includes("waypoint_duplicate_or_too_close")) {
+    return {
+      status: 422,
+      code: "waypoint_duplicate_or_too_close",
+      retryable: false,
+    };
+  }
+  if (lower.includes("waypoint_too_far")) {
+    return { status: 422, code: "waypoint_too_far", retryable: false };
+  }
+  if (lower.includes("waypoint_layout_unstable")) {
+    return {
+      status: 422,
+      code: "waypoint_layout_unstable",
+      retryable: false,
+    };
+  }
+  if (lower.includes("waypoint_not_reached")) {
+    return { status: 404, code: "waypoint_not_reached", retryable: false };
+  }
+  if (lower.includes("waypoint_route_not_possible")) {
+    return {
+      status: 404,
+      code: "waypoint_route_not_possible",
+      retryable: false,
+    };
+  }
+  if (lower.includes("waypoint_quality_too_low")) {
+    return {
+      status: 404,
+      code: "waypoint_quality_too_low",
+      retryable: false,
+    };
+  }
   if (
     lower.includes("invalid") ||
     lower.includes("missing") ||

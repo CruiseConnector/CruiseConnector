@@ -286,7 +286,8 @@ class NativePositionSmoother {
 
   void _updateHeading(geo.Position raw) {
     final gpsHeading = raw.heading;
-    final hasGpsHeading = gpsHeading.isFinite &&
+    final hasGpsHeading =
+        gpsHeading.isFinite &&
         gpsHeading >= 0 &&
         gpsHeading <= 360 &&
         raw.headingAccuracy.isFinite &&
@@ -333,7 +334,8 @@ class NativePositionSmoother {
       }
     } else {
       // Mittlere Geschwindigkeit: Blend beide
-      final speedFactor = (_smoothedSpeed - lowSpeedThresholdMs) /
+      final speedFactor =
+          (_smoothedSpeed - lowSpeedThresholdMs) /
           (highSpeedThresholdMs - lowSpeedThresholdMs);
 
       if (hasGpsHeading && _hasValidMovementHeading) {
@@ -358,7 +360,11 @@ class NativePositionSmoother {
       final effectiveBlend = headingDelta <= headingNoiseThresholdDegrees
           ? blendFactor * 0.6
           : blendFactor;
-      _smoothedHeading = _lerpAngle(_smoothedHeading, targetHeading, effectiveBlend);
+      _smoothedHeading = _lerpAngle(
+        _smoothedHeading,
+        targetHeading,
+        effectiveBlend,
+      );
     } else {
       _smoothedHeading = targetHeading;
     }
@@ -438,7 +444,8 @@ class NativePositionSmoother {
     final lat2R = lat2 * math.pi / 180;
     final dLng = (lng2 - lng1) * math.pi / 180;
     final y = math.sin(dLng) * math.cos(lat2R);
-    final x = math.cos(lat1R) * math.sin(lat2R) -
+    final x =
+        math.cos(lat1R) * math.sin(lat2R) -
         math.sin(lat1R) * math.cos(lat2R) * math.cos(dLng);
     return (math.atan2(y, x) * 180 / math.pi + 360) % 360;
   }

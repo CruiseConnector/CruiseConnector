@@ -1,10 +1,39 @@
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+class DuplicateSharedRoutePostException implements Exception {
+  const DuplicateSharedRoutePostException();
+
+  String get message => SocialService.duplicateSharedRoutePostMessage;
+
+  @override
+  String toString() => message;
+}
+
 /// Service für soziale Features: Posts, Follows, Gruppen, Notifications.
 class SocialService {
   static SupabaseClient get _db => Supabase.instance.client;
   static String? get _userId => _db.auth.currentUser?.id;
+
+  static const String duplicateSharedRoutePostMessage =
+      'Du hast diese Strecke bereits gepostet. Loesche zuerst den alten Post, '
+      'danach kannst du die Strecke erneut posten.';
+
+  static const String _profileSelect =
+      'id, username, email, created_at, level, total_km, total_routes, '
+      'badges, bio_title, bio, avatar_url, banner_url, link, is_private, '
+      'username_changed_at, '
+      'car_brand, car_name, car_country_code, car_top_speed, car_engine_size, '
+      'car_displacement, car_cylinders, car_horsepower, car_year, '
+      'car_first_reg, car_mileage, car_image_url';
+
+  static const String _legacyProfileSelect =
+      'id, username, email, created_at, level, total_km, total_routes, '
+      'badges, bio, avatar_url, banner_url, link, is_private, '
+      'username_changed_at, '
+      'car_brand, car_name, car_top_speed, car_engine_size, '
+      'car_displacement, car_cylinders, car_horsepower, car_year, '
+      'car_first_reg, car_mileage, car_image_url';
 
   static String publicDisplayName(
     Map<String, dynamic>? profile, {
@@ -50,6 +79,115 @@ class SocialService {
       .map((m) => m.group(1)!.toLowerCase())
       .toSet();
 
+  static Future<void> _hydratePostReactionState(
+    List<Map<String, dynamic>> posts,
+  ) async {
+    final uid = _userId;
+    final ids = posts
+        .map((post) => post['id'])
+        .whereType<String>()
+        .toSet()
+        .toList();
+    if (ids.isEmpty) return;
+
+    try {
+      final results = await Future.wait([
+        _db
+            .from('post_likes')
+            .select('post_id, user_id')
+            .inFilter('post_id', ids),
+        _db.from('reposts').select('post_id, user_id').inFilter('post_id', ids),
+      ]);
+
+      final likeCounts = <String, int>{};
+      final repostCounts = <String, int>{};
+      final likedByMe = <String>{};
+      final repostedByMe = <String>{};
+
+      for (final row in results[0] as List) {
+        final map = row as Map;
+        final postId = map['post_id'] as String?;
+        if (postId == null) continue;
+        likeCounts[postId] = (likeCounts[postId] ?? 0) + 1;
+        if (uid != null && map['user_id'] == uid) likedByMe.add(postId);
+      }
+
+      for (final row in results[1] as List) {
+        final map = row as Map;
+        final postId = map['post_id'] as String?;
+        if (postId == null) continue;
+        repostCounts[postId] = (repostCounts[postId] ?? 0) + 1;
+        if (uid != null && map['user_id'] == uid) repostedByMe.add(postId);
+      }
+
+      for (final post in posts) {
+        final postId = post['id'] as String?;
+        if (postId == null) continue;
+        post['likes_count'] = likeCounts[postId] ?? 0;
+        post['reposts_count'] = repostCounts[postId] ?? 0;
+        post['is_liked_by_me'] = likedByMe.contains(postId);
+        post['is_reposted_by_me'] = repostedByMe.contains(postId);
+      }
+    } catch (e) {
+      debugPrint(
+        '[SocialService] Reaction-State konnte nicht geladen werden: $e',
+      );
+    }
+  }
+
+  static ({bool isActive, int count}) _reactionToggleResult(dynamic raw) {
+    final map = raw is Map
+        ? Map<String, dynamic>.from(raw)
+        : <String, dynamic>{};
+    final isActive =
+        map['is_active'] == true || map['is_active']?.toString() == 'true';
+    final count = (map['count'] as num?)?.toInt() ?? 0;
+    return (isActive: isActive, count: count);
+  }
+
+  static bool isDuplicateSharedRoutePostError(Object error) {
+    if (error is DuplicateSharedRoutePostException) return true;
+    if (error is PostgrestException) {
+      final text = '${error.message} ${error.details ?? ''}'.toLowerCase();
+      return error.code == '23505' &&
+          (text.contains('posts_user_shared_route_unique_idx') ||
+              text.contains('shared_route_id'));
+    }
+    return false;
+  }
+
+  static Future<int> _countPostReactions(String table, String postId) async {
+    final rows = await _db.from(table).select('id').eq('post_id', postId);
+    return (rows as List).length;
+  }
+
+  static Future<void> _sendPostReactionNotification({
+    required String postId,
+    required String type,
+  }) async {
+    final uid = _userId;
+    if (uid == null) return;
+
+    try {
+      final post = await _db
+          .from('posts')
+          .select('user_id')
+          .eq('id', postId)
+          .maybeSingle();
+      final postAuthor = post?['user_id'] as String?;
+      if (postAuthor == null || postAuthor == uid) return;
+
+      await _db.from('notifications').insert({
+        'user_id': postAuthor,
+        'from_user_id': uid,
+        'type': type,
+        'reference_id': postId,
+      });
+    } catch (e) {
+      debugPrint('[Social] $type-Notification fehlgeschlagen: $e');
+    }
+  }
+
   // ── Posts ──────────────────────────────────────────────────────────────
 
   static Future<List<Map<String, dynamic>>> getFeedPosts() async {
@@ -60,6 +198,13 @@ class SocialService {
       final following = await getFollowingIds(uid);
       if (following.isEmpty) return [];
 
+      // Blockierte User in beide Richtungen ausfiltern.
+      final blocked = await getBlockedAndBlockerIds();
+      final allowedFollowing = following
+          .where((id) => !blocked.contains(id))
+          .toList();
+      if (allowedFollowing.isEmpty) return [];
+
       // Mutual = Subset von following, die mir zurück folgen.
       // Nur dann darf ich `visibility='followers'`-Posts (= "Nur Follower")
       // sehen — sonst leakt Privates an einseitige Follower.
@@ -68,7 +213,7 @@ class SocialService {
           .select('follower_id')
           .eq('following_id', uid)
           .eq('status', 'accepted')
-          .inFilter('follower_id', following.toList());
+          .inFilter('follower_id', allowedFollowing);
       final mutual = (back as List)
           .map((r) => (r as Map)['follower_id'] as String)
           .toSet();
@@ -78,13 +223,15 @@ class SocialService {
 
       // Zwei disjunkte Queries (nach visibility) parallel — Filter auf
       // Query-Ebene verhindert, dass private Posts überhaupt ans Frontend
-      // kommen, falls Mutual fehlt.
+      // kommen, falls Mutual fehlt. is_hidden filter ist tolerant: alte
+      // Spalten ohne Default werden als null = nicht hidden behandelt.
       final results = await Future.wait([
         _db
             .from('posts')
             .select(select)
-            .inFilter('user_id', following.toList())
+            .inFilter('user_id', allowedFollowing)
             .eq('visibility', 'public')
+            .neq('is_hidden', true)
             .order('created_at', ascending: false)
             .limit(80),
         if (mutual.isNotEmpty)
@@ -93,6 +240,7 @@ class SocialService {
               .select(select)
               .inFilter('user_id', mutual.toList())
               .eq('visibility', 'followers')
+              .neq('is_hidden', true)
               .order('created_at', ascending: false)
               .limit(80),
       ]);
@@ -117,6 +265,7 @@ class SocialService {
         });
 
       final capped = list.take(80).toList();
+      await _hydratePostReactionState(capped);
       debugPrint(
         '[Feed] uid=$uid following=${following.length} mutual=${mutual.length} → posts=${capped.length}',
       );
@@ -175,7 +324,9 @@ class SocialService {
           .eq('user_id', userId)
           .order('created_at', ascending: false);
 
-      return List<Map<String, dynamic>>.from(posts);
+      final list = List<Map<String, dynamic>>.from(posts);
+      await _hydratePostReactionState(list);
+      return list;
     } catch (e) {
       debugPrint('[SocialService] getUserPosts Fehler: $e');
       return [];
@@ -186,15 +337,18 @@ class SocialService {
     try {
       final uid = _userId;
       final following = uid == null ? <String>{} : await getFollowingIds(uid);
+      final blocked = await getBlockedAndBlockerIds();
 
       // Entdecken = öffentliche Posts von Usern, denen der aktuelle User
-      // NICHT folgt (und nicht vom User selbst). Private Accounts sowieso raus.
+      // NICHT folgt (und nicht vom User selbst). Private Accounts und
+      // blockierte User in beide Richtungen sind raus.
       final posts = await _db
           .from('posts')
           .select(
-            '*, profiles(id, username, email, is_private), shared_route_id',
+            '*, profiles(id, username, email, avatar_url, is_private), shared_route_id',
           )
           .eq('visibility', 'public')
+          .neq('is_hidden', true)
           .order('created_at', ascending: false)
           .limit(80);
 
@@ -203,11 +357,14 @@ class SocialService {
         if (authorId == null) return false;
         if (authorId == uid) return false;
         if (following.contains(authorId)) return false;
+        if (blocked.contains(authorId)) return false;
         final profile = p['profiles'] as Map<String, dynamic>?;
         return profile?['is_private'] != true;
       }).toList();
 
-      return List<Map<String, dynamic>>.from(filtered.take(30));
+      final list = List<Map<String, dynamic>>.from(filtered.take(30));
+      await _hydratePostReactionState(list);
+      return list;
     } catch (e) {
       debugPrint('[SocialService] getDiscoverPosts Fehler: $e');
       return [];
@@ -224,15 +381,33 @@ class SocialService {
   }) async {
     final uid = _userId;
     if (uid == null) return null;
+    final cleanedSharedRouteId = sharedRouteId?.trim();
+
+    if (cleanedSharedRouteId != null && cleanedSharedRouteId.isNotEmpty) {
+      final alreadyPosted = await hasOwnPostForSharedRoute(
+        cleanedSharedRouteId,
+      );
+      if (alreadyPosted) throw const DuplicateSharedRoutePostException();
+    }
 
     final row = <String, dynamic>{
       'user_id': uid,
       'content': content,
       'visibility': visibility,
     };
-    if (sharedRouteId != null) row['shared_route_id'] = sharedRouteId;
+    if (cleanedSharedRouteId != null && cleanedSharedRouteId.isNotEmpty) {
+      row['shared_route_id'] = cleanedSharedRouteId;
+    }
 
-    final result = await _db.from('posts').insert(row).select('id').single();
+    late final dynamic result;
+    try {
+      result = await _db.from('posts').insert(row).select('id').single();
+    } on PostgrestException catch (e) {
+      if (isDuplicateSharedRoutePostError(e)) {
+        throw const DuplicateSharedRoutePostException();
+      }
+      rethrow;
+    }
     final postId = (result as Map?)?['id'] as String?;
 
     // Mentions im Content auflösen — Anti-Spam: nur eigene Follower werden
@@ -244,6 +419,20 @@ class SocialService {
       }
     }
     return postId;
+  }
+
+  static Future<bool> hasOwnPostForSharedRoute(String routeId) async {
+    final uid = _userId;
+    final cleanedRouteId = routeId.trim();
+    if (uid == null || cleanedRouteId.isEmpty) return false;
+
+    final row = await _db
+        .from('posts')
+        .select('id')
+        .eq('user_id', uid)
+        .eq('shared_route_id', cleanedRouteId)
+        .maybeSingle();
+    return row != null;
   }
 
   static Future<void> deletePost(String postId) async {
@@ -259,7 +448,10 @@ class SocialService {
           )
           .eq('id', postId)
           .maybeSingle();
-      return result;
+      if (result == null) return null;
+      final post = Map<String, dynamic>.from(result);
+      await _hydratePostReactionState([post]);
+      return post;
     } catch (e) {
       debugPrint('[SocialService] getPostById Fehler: $e');
       return null;
@@ -269,8 +461,29 @@ class SocialService {
   // ── Likes ─────────────────────────────────────────────────────────────
 
   static Future<bool> toggleLike(String postId) async {
+    final result = await toggleLikeWithCount(postId);
+    return result.isActive;
+  }
+
+  static Future<({bool isActive, int count})> toggleLikeWithCount(
+    String postId,
+  ) async {
     final uid = _userId;
-    if (uid == null) return false;
+    if (uid == null) return (isActive: false, count: 0);
+
+    try {
+      final raw = await _db.rpc(
+        'toggle_post_like',
+        params: {'post_id_param': postId},
+      );
+      final result = _reactionToggleResult(raw);
+      if (result.isActive) {
+        await _sendPostReactionNotification(postId: postId, type: 'like');
+      }
+      return result;
+    } catch (e) {
+      debugPrint('[SocialService] toggle_post_like RPC fallback: $e');
+    }
 
     final existing = await _db
         .from('post_likes')
@@ -281,35 +494,24 @@ class SocialService {
 
     if (existing != null) {
       await _db.from('post_likes').delete().eq('id', existing['id']);
-      await _db.rpc('decrement_likes', params: {'post_id_param': postId});
-      return false;
-    } else {
-      await _db.from('post_likes').insert({'post_id': postId, 'user_id': uid});
-      await _db.rpc('increment_likes', params: {'post_id_param': postId});
-
-      // Notification an Post-Autor
       try {
-        final post = await _db
-            .from('posts')
-            .select('user_id')
-            .eq('id', postId)
-            .maybeSingle();
-        if (post != null) {
-          final postAuthor = post['user_id'] as String;
-          if (postAuthor != uid) {
-            await _db.from('notifications').insert({
-              'user_id': postAuthor,
-              'from_user_id': uid,
-              'type': 'like',
-              'reference_id': postId,
-            });
-          }
-        }
+        await _db.rpc('decrement_likes', params: {'post_id_param': postId});
       } catch (e) {
-        debugPrint('[Social] Like-Notification fehlgeschlagen: $e');
+        debugPrint('[SocialService] decrement_likes ignoriert: $e');
       }
-      return true;
+      final count = await _countPostReactions('post_likes', postId);
+      return (isActive: false, count: count);
     }
+
+    await _db.from('post_likes').insert({'post_id': postId, 'user_id': uid});
+    try {
+      await _db.rpc('increment_likes', params: {'post_id_param': postId});
+    } catch (e) {
+      debugPrint('[SocialService] increment_likes ignoriert: $e');
+    }
+    await _sendPostReactionNotification(postId: postId, type: 'like');
+    final count = await _countPostReactions('post_likes', postId);
+    return (isActive: true, count: count);
   }
 
   static Future<bool> hasLiked(String postId) async {
@@ -324,6 +526,36 @@ class SocialService {
         .maybeSingle();
 
     return existing != null;
+  }
+
+  /// Alle Posts, die ein User geliket hat (für "Gefällt mir" im Profil-Menü).
+  static Future<List<Map<String, dynamic>>> getUserLikes(String userId) async {
+    final likes = await _db
+        .from('post_likes')
+        .select('*, posts(*, profiles(id, username, email, avatar_url))')
+        .eq('user_id', userId)
+        .order('created_at', ascending: false);
+
+    final list = List<Map<String, dynamic>>.from(likes);
+    final nestedPosts = <String, Map<String, dynamic>>{};
+    for (final like in list) {
+      final post = like['posts'];
+      if (post is! Map) continue;
+      final postMap = Map<String, dynamic>.from(post);
+      final postId = postMap['id'] as String?;
+      if (postId != null) nestedPosts[postId] = postMap;
+    }
+
+    await _hydratePostReactionState(nestedPosts.values.toList());
+    for (final like in list) {
+      final post = like['posts'];
+      if (post is! Map) continue;
+      final postId = post['id'] as String?;
+      final hydrated = postId == null ? null : nestedPosts[postId];
+      if (hydrated != null) like['posts'] = hydrated;
+    }
+
+    return list;
   }
 
   // ── Comments ─────────────────────────────────────────────────────────
@@ -481,8 +713,29 @@ class SocialService {
   // ── Reposts ─────────────────────────────────────────────────────────
 
   static Future<bool> toggleRepost(String postId) async {
+    final result = await toggleRepostWithCount(postId);
+    return result.isActive;
+  }
+
+  static Future<({bool isActive, int count})> toggleRepostWithCount(
+    String postId,
+  ) async {
     final uid = _userId;
-    if (uid == null) return false;
+    if (uid == null) return (isActive: false, count: 0);
+
+    try {
+      final raw = await _db.rpc(
+        'toggle_post_repost',
+        params: {'post_id_param': postId},
+      );
+      final result = _reactionToggleResult(raw);
+      if (result.isActive) {
+        await _sendPostReactionNotification(postId: postId, type: 'repost');
+      }
+      return result;
+    } catch (e) {
+      debugPrint('[SocialService] toggle_post_repost RPC fallback: $e');
+    }
 
     final existing = await _db
         .from('reposts')
@@ -493,35 +746,24 @@ class SocialService {
 
     if (existing != null) {
       await _db.from('reposts').delete().eq('id', existing['id']);
-      await _db.rpc('decrement_reposts', params: {'post_id_param': postId});
-      return false;
-    } else {
-      await _db.from('reposts').insert({'post_id': postId, 'user_id': uid});
-      await _db.rpc('increment_reposts', params: {'post_id_param': postId});
-
-      // Notification an Post-Autor
       try {
-        final post = await _db
-            .from('posts')
-            .select('user_id')
-            .eq('id', postId)
-            .maybeSingle();
-        if (post != null) {
-          final postAuthor = post['user_id'] as String;
-          if (postAuthor != uid) {
-            await _db.from('notifications').insert({
-              'user_id': postAuthor,
-              'from_user_id': uid,
-              'type': 'repost',
-              'reference_id': postId,
-            });
-          }
-        }
+        await _db.rpc('decrement_reposts', params: {'post_id_param': postId});
       } catch (e) {
-        debugPrint('[Social] Repost-Notification fehlgeschlagen: $e');
+        debugPrint('[SocialService] decrement_reposts ignoriert: $e');
       }
-      return true;
+      final count = await _countPostReactions('reposts', postId);
+      return (isActive: false, count: count);
     }
+
+    await _db.from('reposts').insert({'post_id': postId, 'user_id': uid});
+    try {
+      await _db.rpc('increment_reposts', params: {'post_id_param': postId});
+    } catch (e) {
+      debugPrint('[SocialService] increment_reposts ignoriert: $e');
+    }
+    await _sendPostReactionNotification(postId: postId, type: 'repost');
+    final count = await _countPostReactions('reposts', postId);
+    return (isActive: true, count: count);
   }
 
   static Future<bool> hasReposted(String postId) async {
@@ -548,31 +790,63 @@ class SocialService {
         .eq('user_id', userId)
         .order('created_at', ascending: false);
 
-    return List<Map<String, dynamic>>.from(reposts);
+    final list = List<Map<String, dynamic>>.from(reposts);
+    final nestedPosts = <String, Map<String, dynamic>>{};
+    for (final repost in list) {
+      final post = repost['posts'];
+      if (post is! Map) continue;
+      final postMap = Map<String, dynamic>.from(post);
+      final postId = postMap['id'] as String?;
+      if (postId != null) nestedPosts[postId] = postMap;
+    }
+
+    await _hydratePostReactionState(nestedPosts.values.toList());
+    for (final repost in list) {
+      final post = repost['posts'];
+      if (post is! Map) continue;
+      final postId = post['id'] as String?;
+      final hydrated = postId == null ? null : nestedPosts[postId];
+      if (hydrated != null) repost['posts'] = hydrated;
+    }
+
+    return list;
   }
 
   // ── Follows ───────────────────────────────────────────────────────────
 
-  static Future<void> followUser(String targetUserId) async {
+  /// Folgt einem User. Bei privaten Konten wird stattdessen ein
+  /// Pending-Request angelegt — der Inhaber muss erst akzeptieren, bevor
+  /// die Beziehung als `accepted` gilt.
+  /// Returns: 'accepted' | 'pending' | 'none' (none = self/no-op).
+  static Future<String> followUser(String targetUserId) async {
     final uid = _userId;
-    if (uid == null || uid == targetUserId) return;
+    if (uid == null || uid == targetUserId) return 'none';
+
+    // Prüfen, ob Ziel privat ist.
+    final profile = await _db
+        .from('profiles')
+        .select('is_private')
+        .eq('id', targetUserId)
+        .maybeSingle();
+    final isPrivate = (profile as Map?)?['is_private'] == true;
+    final status = isPrivate ? 'pending' : 'accepted';
 
     await _db.from('follows').upsert({
       'follower_id': uid,
       'following_id': targetUserId,
-      'status': 'accepted',
+      'status': status,
     });
 
-    // Notification erstellen
     try {
       await _db.from('notifications').insert({
         'user_id': targetUserId,
         'from_user_id': uid,
-        'type': 'follow',
+        'type': isPrivate ? 'follow_request' : 'follow',
       });
     } catch (e) {
       debugPrint('[Social] Follow-Notification fehlgeschlagen: $e');
     }
+    return status;
   }
 
   static Future<void> unfollowUser(String targetUserId) async {
@@ -584,6 +858,46 @@ class SocialService {
         .delete()
         .eq('follower_id', uid)
         .eq('following_id', targetUserId);
+  }
+
+  /// Entfernt einen Follower von meinem Profil.
+  static Future<void> removeFollower(String followerId) async {
+    final uid = _userId;
+    if (uid == null) return;
+
+    await _db
+        .from('follows')
+        .delete()
+        .eq('follower_id', followerId)
+        .eq('following_id', uid);
+  }
+
+  /// Gibt den Status der Follow-Beziehung zurück:
+  /// `'accepted'` | `'pending'` | `'none'`.
+  static Future<String> getFollowStatus(String targetUserId) async {
+    final uid = _userId;
+    if (uid == null) return 'none';
+    final row = await _db
+        .from('follows')
+        .select('status')
+        .eq('follower_id', uid)
+        .eq('following_id', targetUserId)
+        .maybeSingle();
+    final status = (row as Map?)?['status'] as String?;
+    return status ?? 'none';
+  }
+
+  static Future<bool> isBlockedEither(String targetUserId) async {
+    final uid = _userId;
+    if (uid == null) return false;
+    final row = await _db
+        .from('user_blocks')
+        .select('blocker_id')
+        .or(
+          'and(blocker_id.eq.$uid,blocked_id.eq.$targetUserId),and(blocker_id.eq.$targetUserId,blocked_id.eq.$uid)',
+        )
+        .maybeSingle();
+    return row != null;
   }
 
   static Future<bool> isFollowing(String targetUserId) async {
@@ -599,6 +913,70 @@ class SocialService {
         .maybeSingle();
 
     return result != null;
+  }
+
+  /// Akzeptiert eine Follow-Anfrage (Update `pending` → `accepted`).
+  /// Notification an den Anfragenden, dass die Beziehung jetzt steht.
+  static Future<void> acceptFollowRequest(String fromUserId) async {
+    final uid = _userId;
+    if (uid == null) return;
+    await _db
+        .from('follows')
+        .update({'status': 'accepted'})
+        .eq('follower_id', fromUserId)
+        .eq('following_id', uid)
+        .eq('status', 'pending');
+    try {
+      await _db.from('notifications').insert({
+        'user_id': fromUserId,
+        'from_user_id': uid,
+        'type': 'follow_accepted',
+      });
+    } catch (e) {
+      debugPrint('[Social] follow_accepted-Notification fehlgeschlagen: $e');
+    }
+  }
+
+  /// Lehnt eine Follow-Anfrage ab — Row wird gelöscht, kein Eintrag in
+  /// notifications, damit der Anfragende es nicht direkt mitbekommt.
+  static Future<void> rejectFollowRequest(String fromUserId) async {
+    final uid = _userId;
+    if (uid == null) return;
+    await _db
+        .from('follows')
+        .delete()
+        .eq('follower_id', fromUserId)
+        .eq('following_id', uid)
+        .eq('status', 'pending');
+  }
+
+  /// Anzahl meiner offenen Follow-Anfragen — für Badge im Burger-Menü.
+  static Future<int> getPendingFollowRequestCount() async {
+    final uid = _userId;
+    if (uid == null) return 0;
+    final rows = await _db
+        .from('follows')
+        .select('follower_id')
+        .eq('following_id', uid)
+        .eq('status', 'pending');
+    return (rows as List).length;
+  }
+
+  /// Liste meiner offenen Follow-Anfragen mit Profil-Infos.
+  /// Sortiert: neueste zuerst (über follows.created_at, falls vorhanden).
+  static Future<List<Map<String, dynamic>>> getPendingFollowRequests() async {
+    final uid = _userId;
+    if (uid == null) return [];
+    final rows = await _db
+        .from('follows')
+        .select(
+          'follower_id, created_at, '
+          'profiles!follows_follower_id_profiles_fkey(id, username, email, avatar_url)',
+        )
+        .eq('following_id', uid)
+        .eq('status', 'pending')
+        .order('created_at', ascending: false);
+    return List<Map<String, dynamic>>.from(rows as List);
   }
 
   static Future<int> getFollowerCount(String userId) async {
@@ -657,9 +1035,12 @@ class SocialService {
 
     final profiles = <Map<String, dynamic>>[];
     final p = prefix.trim().toLowerCase();
+    final blocked = await getBlockedAndBlockerIds();
     for (final row in rows as List) {
       final profile = (row as Map)['profiles'] as Map<String, dynamic>?;
       if (profile == null) continue;
+      final targetId = profile['id'] as String?;
+      if (targetId == null || blocked.contains(targetId)) continue;
       final username = (profile['username'] as String? ?? '').toLowerCase();
       if (username.isEmpty) continue;
       if (p.isNotEmpty && !username.startsWith(p)) continue;
@@ -684,6 +1065,7 @@ class SocialService {
         .where((u) => u.isNotEmpty)
         .toSet();
     if (cleaned.isEmpty) return [];
+    final blocked = await getBlockedAndBlockerIds();
 
     // Auflösen Username → user_id, beschränkt auf eigene Follower.
     final rows = await _db
@@ -700,6 +1082,7 @@ class SocialService {
       final username = (profile?['username'] as String? ?? '').toLowerCase();
       final targetId = profile?['id'] as String?;
       if (targetId == null || targetId == uid) continue;
+      if (blocked.contains(targetId)) continue;
       if (!cleaned.contains(username)) continue;
       try {
         await _db.from('notifications').insert({
@@ -748,13 +1131,19 @@ class SocialService {
     final sanitized = query.trim().replaceAll(RegExp(r'[%_\\,\.\(\)]'), '');
     if (sanitized.isEmpty) return [];
 
+    final blocked = await getBlockedAndBlockerIds();
     final results = await _db
         .from('profiles')
         .select('id, username, email, avatar_url')
         .or('username.ilike.%$sanitized%,email.ilike.%$sanitized%')
         .limit(20);
 
-    return List<Map<String, dynamic>>.from(results);
+    return List<Map<String, dynamic>>.from(
+      (results as List).where((row) {
+        final id = (row as Map)['id'] as String?;
+        return id != null && !blocked.contains(id);
+      }),
+    );
   }
 
   /// Nutzer-Vorschläge: Freunde-von-Freunden, fallback neueste Nutzer.
@@ -832,15 +1221,6 @@ class SocialService {
     final groupIds = <String>{
       ...(memberships as List).map((m) => m['group_id'] as String),
     };
-
-    // Owner-Gruppen zusätzlich einsammeln — falls der Owner-Trigger
-    // (set_owner_on_group_insert) mal nicht gegriffen hat.
-    final ownGroups = await _db
-        .from('groups')
-        .select('id')
-        .eq('created_by', uid);
-    groupIds.addAll((ownGroups as List).map((g) => g['id'] as String));
-
     if (groupIds.isEmpty) return [];
 
     var q = _db
@@ -873,11 +1253,6 @@ class SocialService {
     final groupIds = <String>{
       ...(memberships as List).map((m) => m['group_id'] as String),
     };
-    final ownGroups = await _db
-        .from('groups')
-        .select('id')
-        .eq('created_by', uid);
-    groupIds.addAll((ownGroups as List).map((g) => g['id'] as String));
     if (groupIds.isEmpty) return [];
 
     final groups = await _db
@@ -894,6 +1269,7 @@ class SocialService {
   /// Sortiert nach `start_time` (nächstes Event zuerst).
   static Future<List<Map<String, dynamic>>> getDiscoverGroups() async {
     final uid = _userId;
+    final blocked = await getBlockedAndBlockerIds();
 
     final groups = await _db
         .from('groups')
@@ -905,6 +1281,7 @@ class SocialService {
         .limit(80);
 
     final list = List<Map<String, dynamic>>.from(groups);
+    list.removeWhere((g) => blocked.contains(g['created_by']));
     if (uid == null) {
       _sortByStartTime(list);
       return list.take(40).toList();
@@ -912,6 +1289,7 @@ class SocialService {
 
     // Ausfiltern: Gruppen in denen ich Mitglied ODER Owner bin.
     final filtered = list.where((g) {
+      if (g['is_active'] == true) return false;
       if (g['created_by'] == uid) return false;
       final members = (g['group_members'] as List?) ?? const [];
       return !members.any((m) => (m as Map)['user_id'] == uid);
@@ -982,10 +1360,31 @@ class SocialService {
     final uid = _userId;
     if (uid == null) return;
 
+    final group = await _db
+        .from('groups')
+        .select('created_by, is_active, group_members(user_id)')
+        .eq('id', groupId)
+        .maybeSingle();
+    final creatorId = (group as Map?)?['created_by'] as String?;
+    final isActive = (group as Map?)?['is_active'] == true;
+    final members = ((group as Map?)?['group_members'] as List?) ?? const [];
+    final isAlreadyMember = members.any((m) => (m as Map)['user_id'] == uid);
+    final blocked = await getBlockedAndBlockerIds();
+    if (creatorId != null && blocked.contains(creatorId)) {
+      throw Exception('Diese Gruppe ist nicht verfuegbar.');
+    }
+    if (isActive && !isAlreadyMember) {
+      throw Exception('Diese Fahrt laeuft bereits.');
+    }
+
     await _db.from('group_members').upsert({
       'group_id': groupId,
       'user_id': uid,
+      'ride_role': 'passenger',
     });
+    if (!isAlreadyMember) {
+      await _notifyGroupOwners(groupId, type: 'group_joined', fromUserId: uid);
+    }
   }
 
   static Future<void> leaveGroup(String groupId) async {
@@ -997,6 +1396,14 @@ class SocialService {
         .delete()
         .eq('group_id', groupId)
         .eq('user_id', uid);
+  }
+
+  static Future<void> removeGroupMember(String groupId, String userId) async {
+    await _db
+        .from('group_members')
+        .delete()
+        .eq('group_id', groupId)
+        .eq('user_id', userId);
   }
 
   /// Prüft, ob der aktuelle User in der Gruppe die Rolle 'owner' hat.
@@ -1058,10 +1465,24 @@ class SocialService {
     try {
       final row = await _db
           .from('groups')
-          .select('*, profiles:created_by(id, username, email)')
+          .select(
+            '*, group_members(user_id), profiles:created_by(id, username, email)',
+          )
           .eq('invite_code', code)
           .maybeSingle();
-      return row;
+      if (row == null) return null;
+      final map = Map<String, dynamic>.from(row as Map);
+      final creatorId = map['created_by'] as String?;
+      final blocked = await getBlockedAndBlockerIds();
+      if (creatorId != null && blocked.contains(creatorId)) return null;
+      if (map['is_active'] == true) {
+        final uid = _userId;
+        final members = (map['group_members'] as List?) ?? const [];
+        final isMember =
+            uid != null && members.any((m) => (m as Map)['user_id'] == uid);
+        if (!isMember) return null;
+      }
+      return map;
     } catch (e) {
       debugPrint('[SocialService] findGroupByCode Fehler: $e');
       return null;
@@ -1076,6 +1497,14 @@ class SocialService {
   }) async {
     final uid = _userId;
     if (uid == null) return;
+    final group = await _db
+        .from('groups')
+        .select('is_active')
+        .eq('id', groupId)
+        .maybeSingle();
+    if ((group as Map?)?['is_active'] == true) {
+      throw Exception('Diese Fahrt laeuft bereits.');
+    }
     await _db.from('group_join_requests').upsert({
       'group_id': groupId,
       'user_id': uid,
@@ -1188,16 +1617,418 @@ class SocialService {
     try {
       final profile = await _db
           .from('profiles')
-          .select(
-            'id, username, email, created_at, level, total_km, total_routes, badges, bio, avatar_url',
-          )
+          .select(_profileSelect)
           .eq('id', userId)
           .maybeSingle();
       return profile;
+    } on PostgrestException catch (e) {
+      if ((e.code == 'PGRST204' || e.code == '42703') &&
+          (e.message.contains('car_country_code') ||
+              e.message.contains('bio_title'))) {
+        final profile = await _db
+            .from('profiles')
+            .select(_legacyProfileSelect)
+            .eq('id', userId)
+            .maybeSingle();
+        debugPrint(
+          '[Social] car_country_code-Spalte fehlt, Legacy-Profil geladen. Migration ausfuehren!',
+        );
+        return profile;
+      }
+      debugPrint('[Social] Profil-Abfrage fehlgeschlagen: $e');
+      return null;
     } catch (e) {
       debugPrint('[Social] Profil-Abfrage fehlgeschlagen: $e');
       return null;
     }
+  }
+
+  /// Mindestabstand zwischen zwei Username-Änderungen.
+  static const Duration usernameChangeCooldown = Duration(days: 30);
+
+  /// Prüft serverseitig, ob der eingeloggte User den Username gerade ändern
+  /// darf. Ist das `username_changed_at`-Feld weniger als 30 Tage her,
+  /// ist `canChange == false` und `nextChange` zeigt das Datum.
+  static Future<({bool canChange, DateTime? nextChange})>
+  canChangeUsername() async {
+    final uid = _userId;
+    if (uid == null) return (canChange: false, nextChange: null);
+    try {
+      final row = await _db
+          .from('profiles')
+          .select('username_changed_at')
+          .eq('id', uid)
+          .maybeSingle();
+      final raw = (row as Map?)?['username_changed_at'] as String?;
+      if (raw == null) return (canChange: true, nextChange: null);
+      final last = DateTime.tryParse(raw);
+      if (last == null) return (canChange: true, nextChange: null);
+      final next = last.add(usernameChangeCooldown);
+      return (canChange: DateTime.now().isAfter(next), nextChange: next);
+    } catch (e) {
+      debugPrint('[Social] canChangeUsername Fehler: $e');
+      // Optimistisch: bei Fehler erlauben — Server-side RLS sollte schützen.
+      return (canChange: true, nextChange: null);
+    }
+  }
+
+  /// Aktualisiert die freien Profil-Felder. Username-Änderungen werden hier
+  /// NICHT durchgeführt — dafür [updateUsername] verwenden (mit Cooldown-Check).
+  ///
+  /// Robustheit: einzelne fehlende Spalten (z.B. `link` ohne Migration)
+  /// brechen den Update nicht ab; betroffene Spalten werden weggelassen
+  /// und die Operation einmal retried.
+  static Future<void> updateProfile({
+    String? bioTitle,
+    String? bio,
+    String? link,
+    bool? isPrivate,
+  }) async {
+    final uid = _userId;
+    if (uid == null) return;
+    final patch = <String, dynamic>{};
+    if (bioTitle != null) {
+      patch['bio_title'] = bioTitle.trim().isEmpty ? null : bioTitle.trim();
+    }
+    if (bio != null) patch['bio'] = bio.trim();
+    if (link != null) patch['link'] = link.trim();
+    if (isPrivate != null) patch['is_private'] = isPrivate;
+    if (patch.isEmpty) return;
+    try {
+      await _db.from('profiles').update(patch).eq('id', uid);
+    } on PostgrestException catch (e) {
+      // PGRST204: Column not found in schema cache — Migration noch nicht da?
+      if ((e.code == 'PGRST204' || e.code == '42703') &&
+          (e.message.contains('link') || e.message.contains('bio_title'))) {
+        if (e.message.contains('bio_title')) patch.remove('bio_title');
+        patch.remove('link');
+        if (patch.isEmpty) return;
+        await _db.from('profiles').update(patch).eq('id', uid);
+        debugPrint(
+          '[Social] updateProfile: link-Spalte fehlt, übersprungen. Migration ausführen!',
+        );
+      } else {
+        rethrow;
+      }
+    }
+  }
+
+  /// Username ändern. Wirft `StateError`, wenn der Cooldown noch läuft.
+  /// Setzt `username_changed_at = now()`, damit der Cooldown beginnt.
+  static Future<void> updateUsername(String newUsername) async {
+    final uid = _userId;
+    if (uid == null) return;
+    final cleaned = newUsername.trim();
+    if (cleaned.isEmpty) {
+      throw ArgumentError('Username darf nicht leer sein');
+    }
+    final check = await canChangeUsername();
+    if (!check.canChange) {
+      throw StateError(
+        'Username kann erst wieder geändert werden ab ${check.nextChange}',
+      );
+    }
+    await _db
+        .from('profiles')
+        .update({
+          'username': cleaned,
+          'username_changed_at': DateTime.now().toUtc().toIso8601String(),
+        })
+        .eq('id', uid);
+  }
+
+  /// Speichert das Auto-Profil (Stammdaten) auf den eingeloggten User.
+  /// Felder mit `null` werden NICHT überschrieben.
+  static Future<void> updateCarProfile({
+    String? brand,
+    String? name,
+    int? topSpeed,
+    double? engineSize,
+    int? displacement,
+    int? cylinders,
+    int? horsepower,
+    int? year,
+    String? firstReg,
+    int? mileage,
+    String? countryCode,
+    String? imageUrl,
+  }) async {
+    final uid = _userId;
+    if (uid == null) return;
+    final patch = <String, dynamic>{};
+    if (brand != null) {
+      patch['car_brand'] = brand.trim().isEmpty ? null : brand.trim();
+    }
+    if (name != null) {
+      patch['car_name'] = name.trim().isEmpty ? null : name.trim();
+    }
+    if (topSpeed != null) patch['car_top_speed'] = topSpeed;
+    if (engineSize != null) patch['car_engine_size'] = engineSize;
+    if (displacement != null) patch['car_displacement'] = displacement;
+    if (cylinders != null) patch['car_cylinders'] = cylinders;
+    if (horsepower != null) patch['car_horsepower'] = horsepower;
+    if (year != null) patch['car_year'] = year;
+    if (firstReg != null) {
+      patch['car_first_reg'] = firstReg.trim().isEmpty ? null : firstReg.trim();
+    }
+    if (mileage != null) patch['car_mileage'] = mileage;
+    if (countryCode != null) {
+      final cleaned = countryCode.trim().toUpperCase();
+      patch['car_country_code'] = cleaned.isEmpty ? null : cleaned;
+    }
+    if (imageUrl != null) patch['car_image_url'] = imageUrl;
+    if (patch.isEmpty) return;
+    try {
+      await _db.from('profiles').update(patch).eq('id', uid);
+    } on PostgrestException catch (e) {
+      if (e.code == 'PGRST204' && e.message.contains('car_country_code')) {
+        patch.remove('car_country_code');
+        if (patch.isEmpty) return;
+        await _db.from('profiles').update(patch).eq('id', uid);
+        debugPrint(
+          '[Social] updateCarProfile: car_country_code-Spalte fehlt, uebersprungen. Migration ausfuehren!',
+        );
+        return;
+      }
+      rethrow;
+    }
+  }
+
+  static Map<String, dynamic>? legacyVehicleFromProfile(
+    Map<String, dynamic>? profile,
+  ) {
+    if (profile == null) return null;
+    final vehicle = <String, dynamic>{
+      'vehicle_type': 'car',
+      'brand': profile['car_brand'],
+      'model': profile['car_name'],
+      'description': null,
+      'drivetrain': null,
+      'country_code': profile['car_country_code'],
+      'top_speed': profile['car_top_speed'],
+      'engine_size': profile['car_engine_size'],
+      'displacement': profile['car_displacement'],
+      'cylinders': profile['car_cylinders'],
+      'horsepower': profile['car_horsepower'],
+      'year': profile['car_year'],
+      'first_reg': profile['car_first_reg'],
+      'mileage': profile['car_mileage'],
+      'image_url': profile['car_image_url'],
+      'sort_order': 0,
+      'is_primary': true,
+    };
+    final hasData = vehicle.entries.any((entry) {
+      if (entry.key == 'vehicle_type' ||
+          entry.key == 'sort_order' ||
+          entry.key == 'is_primary') {
+        return false;
+      }
+      final value = entry.value;
+      if (value is String) return value.trim().isNotEmpty;
+      return value != null;
+    });
+    return hasData ? vehicle : null;
+  }
+
+  static Future<List<Map<String, dynamic>>> getUserVehicles(
+    String userId,
+  ) async {
+    try {
+      final rows = await _db
+          .from('profile_vehicles')
+          .select()
+          .eq('user_id', userId)
+          .order('sort_order', ascending: true)
+          .order('created_at', ascending: true);
+      final vehicles = List<Map<String, dynamic>>.from(rows as List);
+      if (vehicles.isNotEmpty) return vehicles;
+
+      final profile = await getUserProfile(userId);
+      final legacy = legacyVehicleFromProfile(profile);
+      return legacy == null ? [] : [legacy];
+    } on PostgrestException catch (e) {
+      if (e.code == 'PGRST205' ||
+          e.code == 'PGRST204' ||
+          e.message.contains('profile_vehicles')) {
+        final profile = await getUserProfile(userId);
+        final legacy = legacyVehicleFromProfile(profile);
+        debugPrint(
+          '[Social] profile_vehicles fehlt, nutze Legacy-Fahrzeug. Migration ausfuehren!',
+        );
+        return legacy == null ? [] : [legacy];
+      }
+      rethrow;
+    } catch (e) {
+      debugPrint('[Social] Fahrzeuge laden fehlgeschlagen: $e');
+      return [];
+    }
+  }
+
+  static Future<void> saveUserVehicles(
+    List<Map<String, dynamic>> vehicles,
+  ) async {
+    final uid = _userId;
+    if (uid == null) return;
+
+    final cleaned = <Map<String, dynamic>>[];
+    for (var i = 0; i < vehicles.length; i++) {
+      final vehicle = _cleanVehicleForDb(vehicles[i], uid, i);
+      if (_vehicleHasData(vehicle)) cleaned.add(vehicle);
+    }
+
+    final primary = cleaned.isEmpty ? null : cleaned.first;
+    await updateCarProfile(
+      brand: primary?['brand'] as String?,
+      name: primary?['model'] as String?,
+      countryCode: primary?['country_code'] as String?,
+      topSpeed: (primary?['top_speed'] as num?)?.toInt(),
+      engineSize: (primary?['engine_size'] as num?)?.toDouble(),
+      displacement: (primary?['displacement'] as num?)?.toInt(),
+      cylinders: (primary?['cylinders'] as num?)?.toInt(),
+      horsepower: (primary?['horsepower'] as num?)?.toInt(),
+      year: (primary?['year'] as num?)?.toInt(),
+      firstReg: primary?['first_reg'] as String?,
+      mileage: (primary?['mileage'] as num?)?.toInt(),
+      imageUrl: primary?['image_url'] as String?,
+    );
+
+    try {
+      await _db.from('profile_vehicles').delete().eq('user_id', uid);
+      if (cleaned.isNotEmpty) {
+        await _db.from('profile_vehicles').insert(cleaned);
+      }
+    } on PostgrestException catch (e) {
+      if ((e.code == 'PGRST204' || e.code == '42703') &&
+          (e.message.contains('drivetrain') ||
+              e.message.contains('zero_to_hundred_seconds'))) {
+        final compatible = cleaned
+            .map(
+              (vehicle) => Map<String, dynamic>.from(vehicle)
+                ..remove('drivetrain')
+                ..remove('zero_to_hundred_seconds'),
+            )
+            .toList();
+        await _db.from('profile_vehicles').delete().eq('user_id', uid);
+        if (compatible.isNotEmpty) {
+          await _db.from('profile_vehicles').insert(compatible);
+        }
+        debugPrint(
+          '[Social] saveUserVehicles: optionale Fahrzeug-Spalten fehlen, kompatibel gespeichert. Migration ausfuehren!',
+        );
+        return;
+      }
+      if (e.code == 'PGRST205' ||
+          e.code == 'PGRST204' ||
+          e.message.contains('profile_vehicles')) {
+        debugPrint(
+          '[Social] saveUserVehicles: profile_vehicles fehlt, nur Legacy-Fahrzeug gespeichert.',
+        );
+        return;
+      }
+      rethrow;
+    }
+  }
+
+  static Map<String, dynamic> _cleanVehicleForDb(
+    Map<String, dynamic> raw,
+    String uid,
+    int index,
+  ) {
+    const vehicleDescriptionMaxLength = 500;
+
+    String? cleanText(dynamic value) {
+      final text = (value as String?)?.trim();
+      return text == null || text.isEmpty ? null : text;
+    }
+
+    String? cleanDescription(dynamic value) {
+      final text = cleanText(value);
+      if (text == null) return null;
+      return text.length <= vehicleDescriptionMaxLength
+          ? text
+          : text.substring(0, vehicleDescriptionMaxLength);
+    }
+
+    double? cleanZeroToHundred(dynamic value) {
+      final seconds = (value as num?)?.toDouble();
+      if (seconds == null) return null;
+      return seconds.clamp(0, 99.9).toDouble();
+    }
+
+    final type = cleanText(raw['vehicle_type']) == 'motorcycle'
+        ? 'motorcycle'
+        : 'car';
+    return {
+      'user_id': uid,
+      'vehicle_type': type,
+      'brand': cleanText(raw['brand']),
+      'model': cleanText(raw['model']),
+      'description': cleanDescription(raw['description']),
+      'drivetrain': cleanText(raw['drivetrain']),
+      'country_code': cleanText(raw['country_code'])?.toUpperCase(),
+      'top_speed': (raw['top_speed'] as num?)?.toInt(),
+      'zero_to_hundred_seconds': cleanZeroToHundred(
+        raw['zero_to_hundred_seconds'],
+      ),
+      'engine_size': (raw['engine_size'] as num?)?.toDouble(),
+      'displacement': (raw['displacement'] as num?)?.toInt(),
+      'cylinders': (raw['cylinders'] as num?)?.toInt(),
+      'horsepower': (raw['horsepower'] as num?)?.toInt(),
+      'year': (raw['year'] as num?)?.toInt(),
+      'first_reg': cleanText(raw['first_reg']),
+      'mileage': (raw['mileage'] as num?)?.toInt(),
+      'image_url': cleanText(raw['image_url']),
+      'sort_order': index,
+      'is_primary': index == 0,
+    };
+  }
+
+  static bool _vehicleHasData(Map<String, dynamic> vehicle) {
+    const ignored = {'user_id', 'vehicle_type', 'sort_order', 'is_primary'};
+    return vehicle.entries.any((entry) {
+      if (ignored.contains(entry.key)) return false;
+      final value = entry.value;
+      if (value is String) return value.trim().isNotEmpty;
+      return value != null;
+    });
+  }
+
+  /// Lädt ein Bild in einen beliebigen Storage-Bucket des aktuellen Users.
+  /// Pfad wird `<uid>/<filename>.<ext>` (RLS-freundlich, weil
+  /// `auth.uid()::text = (storage.foldername(name))[1]`).
+  /// Returns: Public-URL mit Cache-Buster.
+  static Future<String?> uploadUserAsset({
+    required String bucket,
+    required Uint8List bytes,
+    required String fileName,
+    String? contentType,
+  }) async {
+    final uid = _userId;
+    if (uid == null) return null;
+    final path = '$uid/$fileName';
+    await _db.storage
+        .from(bucket)
+        .uploadBinary(
+          path,
+          bytes,
+          fileOptions: FileOptions(upsert: true, contentType: contentType),
+        );
+    final publicUrl = _db.storage.from(bucket).getPublicUrl(path);
+    return '$publicUrl?t=${DateTime.now().millisecondsSinceEpoch}';
+  }
+
+  /// Persistiert die rohe Public-URL (ohne Cache-Buster) im jeweiligen
+  /// Profil-Feld — für Avatar oder Banner.
+  static Future<void> updateProfileImageUrl({
+    required String column,
+    required String publicUrl,
+  }) async {
+    final uid = _userId;
+    if (uid == null) return;
+    // Cache-Buster aus URL strippen, damit alle Clients konsistente URLs
+    // bekommen (DB ist der "kanonische" Stand).
+    final clean = publicUrl.split('?').first;
+    await _db.from('profiles').update({column: clean}).eq('id', uid);
   }
 
   static Future<Map<String, dynamic>> getProfileStats(String userId) async {
@@ -1210,14 +2041,29 @@ class SocialService {
       'follower_count': followers,
       'following_count': following,
       'username': profile?['username'],
-      'email': profile?['email'],
       'avatar_url': profile?['avatar_url'],
+      'banner_url': profile?['banner_url'],
+      'bio_title': profile?['bio_title'],
+      'bio': profile?['bio'],
+      'link': profile?['link'],
       'created_at': profile?['created_at'],
       'level': profile?['level'] ?? 1,
       'total_km': profile?['total_km'] ?? 0,
       'total_routes': profile?['total_routes'] ?? 0,
       'badges': profile?['badges'] ?? [],
       'is_private': profile?['is_private'] ?? false,
+      'car_brand': profile?['car_brand'],
+      'car_name': profile?['car_name'],
+      'car_country_code': profile?['car_country_code'],
+      'car_top_speed': profile?['car_top_speed'],
+      'car_engine_size': profile?['car_engine_size'],
+      'car_displacement': profile?['car_displacement'],
+      'car_cylinders': profile?['car_cylinders'],
+      'car_horsepower': profile?['car_horsepower'],
+      'car_year': profile?['car_year'],
+      'car_first_reg': profile?['car_first_reg'],
+      'car_mileage': profile?['car_mileage'],
+      'car_image_url': profile?['car_image_url'],
     };
   }
 
@@ -1233,5 +2079,152 @@ class SocialService {
       'type': 'group_invite',
       'reference_id': groupId,
     });
+  }
+
+  static Future<Map<String, dynamic>?> getProfilePreview(String userId) async {
+    try {
+      final profile = await _db
+          .from('profiles')
+          .select('id, username, avatar_url, is_private')
+          .eq('id', userId)
+          .maybeSingle();
+      return profile;
+    } catch (e) {
+      debugPrint('[Social] Profil-Preview fehlgeschlagen: $e');
+      return null;
+    }
+  }
+
+  static Future<void> _notifyGroupOwners(
+    String groupId, {
+    required String type,
+    required String fromUserId,
+  }) async {
+    try {
+      final owners = await _db
+          .from('group_members')
+          .select('user_id')
+          .eq('group_id', groupId)
+          .eq('role', 'owner');
+      final targets = (owners as List)
+          .map((r) => (r as Map)['user_id'] as String?)
+          .whereType<String>()
+          .where((id) => id != fromUserId)
+          .toSet();
+      if (targets.isEmpty) return;
+      await _db.from('notifications').insert([
+        for (final target in targets)
+          {
+            'user_id': target,
+            'from_user_id': fromUserId,
+            'type': type,
+            'reference_id': groupId,
+          },
+      ]);
+    } catch (e) {
+      debugPrint('[Social] Group-Owner-Notification fehlgeschlagen: $e');
+    }
+  }
+
+  // ── Blocking & Reporting ─────────────────────────────────────────────────
+
+  /// Erlaubte Reason-Codes für Reports (müssen mit DB-Check übereinstimmen).
+  static const reportReasons = <String, String>{
+    'spam': 'Spam oder Werbung',
+    'harassment': 'Belästigung / Mobbing',
+    'hate_speech': 'Hassrede',
+    'sexual_content': 'Sexueller Inhalt',
+    'violence': 'Gewalt',
+    'self_harm': 'Selbstverletzung',
+    'illegal': 'Illegaler Inhalt',
+    'other': 'Sonstiges',
+  };
+
+  /// IDs aller User, die ich blockiert habe ODER die mich blockiert haben.
+  /// Wird vom Feed/Discover als Filter genutzt — beide Richtungen sollen
+  /// füreinander unsichtbar sein.
+  static Future<Set<String>> getBlockedAndBlockerIds() async {
+    final uid = _userId;
+    if (uid == null) return {};
+    try {
+      final rows = await _db
+          .from('user_blocks')
+          .select('blocker_id, blocked_id')
+          .or('blocker_id.eq.$uid,blocked_id.eq.$uid');
+      final ids = <String>{};
+      for (final row in rows as List) {
+        final m = row as Map;
+        final b1 = m['blocker_id'] as String?;
+        final b2 = m['blocked_id'] as String?;
+        if (b1 != null && b1 != uid) ids.add(b1);
+        if (b2 != null && b2 != uid) ids.add(b2);
+      }
+      return ids;
+    } catch (e) {
+      debugPrint('[Social] getBlockedAndBlockerIds: $e');
+      return {};
+    }
+  }
+
+  /// IDs, die ich aktiv blockiert habe (für Block-Liste im Profil).
+  static Future<List<Map<String, dynamic>>> getBlockedUsers() async {
+    final uid = _userId;
+    if (uid == null) return [];
+    try {
+      final rows = await _db
+          .from('user_blocks')
+          .select(
+            'blocked_id, created_at, profiles!user_blocks_blocked_id_fkey(id, username, email, avatar_url)',
+          )
+          .eq('blocker_id', uid)
+          .order('created_at', ascending: false);
+      return List<Map<String, dynamic>>.from(rows as List);
+    } catch (e) {
+      debugPrint('[Social] getBlockedUsers: $e');
+      return [];
+    }
+  }
+
+  static Future<bool> isBlocking(String targetUserId) async {
+    final uid = _userId;
+    if (uid == null) return false;
+    final row = await _db
+        .from('user_blocks')
+        .select('blocker_id')
+        .eq('blocker_id', uid)
+        .eq('blocked_id', targetUserId)
+        .maybeSingle();
+    return row != null;
+  }
+
+  /// Blockt einen User über die SECURITY-DEFINER RPC `block_user`. Diese
+  /// entfernt zusätzlich beidseitige Follow-Beziehungen.
+  static Future<void> blockUser(String targetUserId) async {
+    await _db.rpc('block_user', params: {'target': targetUserId});
+  }
+
+  static Future<void> unblockUser(String targetUserId) async {
+    await _db.rpc('unblock_user', params: {'target': targetUserId});
+  }
+
+  /// Sendet einen Report. Mindestens eines von [postId], [commentId] oder
+  /// [reportedUserId] muss gesetzt sein. Server-side check via RPC.
+  static Future<void> submitReport({
+    required String reason,
+    String? reportedUserId,
+    String? postId,
+    String? commentId,
+    String? details,
+  }) async {
+    await _db.rpc(
+      'submit_content_report',
+      params: {
+        'p_reason': reason,
+        'p_reported_user_id': reportedUserId,
+        'p_post_id': postId,
+        'p_comment_id': commentId,
+        'p_details': details,
+      },
+    );
   }
 }

@@ -1,28 +1,28 @@
 import 'package:flutter/material.dart';
+import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/presentation/pages/login_page.dart';
 // import 'package:cruise_connect/presentation/pages/register_page.dart';
 
 class WelcomePage extends StatelessWidget {
   const WelcomePage({super.key});
 
-  static const Color _brand = Color(0xFFEF4F4F);
-
   @override
   Widget build(BuildContext context) {
     final size = MediaQuery.of(context).size;
+    final brand = AppAccentColors.accent;
 
     // Feste Werte damit das Layout auf Web genauso aussieht wie auf Mobile
     // (kein komischer Card-Stil — Original-Design überall)
     final double iconAreaHeight = size.height.clamp(0, 700) * 0.32;
-    final double iconBoxHeight  = iconAreaHeight * 0.55;
-    final double iconBoxWidth   = (size.width * 0.65).clamp(0, 280);
+    final double iconBoxHeight = iconAreaHeight * 0.55;
+    final double iconBoxWidth = (size.width * 0.65).clamp(0, 280);
 
     return Scaffold(
-      backgroundColor: _brand,
+      backgroundColor: brand,
       body: Stack(
         children: [
           // ── Roter Hintergrund ────────────────────────────────────────────
-          const Positioned.fill(child: ColoredBox(color: _brand)),
+          Positioned.fill(child: ColoredBox(color: brand)),
 
           // ── Weißer Bereich (unten, abgerundet) ──────────────────────────
           Positioned(
@@ -57,7 +57,7 @@ class WelcomePage extends StatelessWidget {
                         height: iconBoxHeight,
                         width: iconBoxWidth,
                         decoration: BoxDecoration(
-                          color: _brand,
+                          color: brand,
                           borderRadius: BorderRadius.circular(24),
                           boxShadow: [
                             BoxShadow(
@@ -125,10 +125,15 @@ class WelcomePage extends StatelessWidget {
                           children: [
                             Expanded(child: Divider(color: Colors.grey[300])),
                             Padding(
-                              padding: const EdgeInsets.symmetric(horizontal: 12),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                              ),
                               child: Text(
                                 'oder anmelden mit',
-                                style: TextStyle(color: Colors.grey[400], fontSize: 13),
+                                style: TextStyle(
+                                  color: Colors.grey[400],
+                                  fontSize: 13,
+                                ),
                               ),
                             ),
                             Expanded(child: Divider(color: Colors.grey[300])),
@@ -158,7 +163,11 @@ class WelcomePage extends StatelessWidget {
     );
   }
 
-  Widget _buildButton(BuildContext context, {required String text, required VoidCallback onTap}) {
+  Widget _buildButton(
+    BuildContext context, {
+    required String text,
+    required VoidCallback onTap,
+  }) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 35),
       child: SizedBox(
@@ -166,11 +175,11 @@ class WelcomePage extends StatelessWidget {
         height: 60,
         child: DecoratedBox(
           decoration: BoxDecoration(
-            color: _brand,
+            color: AppAccentColors.accent,
             borderRadius: BorderRadius.circular(30),
             boxShadow: [
               BoxShadow(
-                color: _brand.withValues(alpha: 0.4),
+                color: AppAccentColors.accent.withValues(alpha: 0.4),
                 blurRadius: 15,
                 offset: const Offset(0, 8),
               ),

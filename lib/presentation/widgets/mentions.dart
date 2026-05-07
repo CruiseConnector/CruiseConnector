@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/presentation/pages/user_profile_page.dart';
+import 'package:cruise_connect/presentation/widgets/user_avatar.dart';
 
 /// Regex zum Parsen von `@username`-Tokens. Akzeptiert ASCII-Buchstaben,
 /// Ziffern, Unterstriche und Punkte (häufig in Usernames).
@@ -23,9 +25,10 @@ List<InlineSpan> buildMentionSpans({
   TextStyle? mentionStyle,
 }) {
   final spans = <InlineSpan>[];
-  final effectiveMentionStyle = mentionStyle ??
+  final effectiveMentionStyle =
+      mentionStyle ??
       baseStyle.copyWith(
-        color: const Color(0xFFFF3B30),
+        color: AppAccentColors.accent,
         fontWeight: FontWeight.w600,
       );
 
@@ -35,11 +38,13 @@ List<InlineSpan> buildMentionSpans({
       spans.add(TextSpan(text: text.substring(cursor, match.start)));
     }
     final username = match.group(1)!;
-    spans.add(_MentionSpan.build(
-      label: '@$username',
-      style: effectiveMentionStyle,
-      onTap: () => _openProfileByUsername(context, username),
-    ));
+    spans.add(
+      _MentionSpan.build(
+        label: '@$username',
+        style: effectiveMentionStyle,
+        onTap: () => _openProfileByUsername(context, username),
+      ),
+    );
     cursor = match.end;
   }
   if (cursor < text.length) {
@@ -66,7 +71,10 @@ class _MentionSpan {
   }
 }
 
-Future<void> _openProfileByUsername(BuildContext context, String username) async {
+Future<void> _openProfileByUsername(
+  BuildContext context,
+  String username,
+) async {
   final userId = await SocialService.findUserIdByUsername(username);
   if (!context.mounted) return;
   if (userId == null) {
@@ -78,6 +86,17 @@ Future<void> _openProfileByUsername(BuildContext context, String username) async
     );
     return;
   }
+  if (await SocialService.isBlockedEither(userId)) {
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Profil ist nicht verfuegbar'),
+        backgroundColor: Color(0xFF1C1F26),
+      ),
+    );
+    return;
+  }
+  if (!context.mounted) return;
   Navigator.push(
     context,
     MaterialPageRoute(
@@ -234,7 +253,7 @@ class _MentionTextFieldState extends State<MentionTextField> {
               border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
             ),
             child: _loading && _suggestions.isEmpty
-                ? const SizedBox(
+                ? SizedBox(
                     height: 44,
                     child: Center(
                       child: Row(
@@ -244,86 +263,84 @@ class _MentionTextFieldState extends State<MentionTextField> {
                             height: 14,
                             width: 14,
                             child: CircularProgressIndicator(
-                                strokeWidth: 2, color: Color(0xFFFF3B30)),
+                              strokeWidth: 2,
+                              color: AppAccentColors.accent,
+                            ),
                           ),
-                          SizedBox(width: 10),
-                          Text('Follower laden…',
-                              style: TextStyle(
-                                  color: Colors.grey, fontSize: 12)),
+                          const SizedBox(width: 10),
+                          const Text(
+                            'Follower laden…',
+                            style: TextStyle(color: Colors.grey, fontSize: 12),
+                          ),
                         ],
                       ),
                     ),
                   )
                 : _suggestions.isEmpty
-                    ? const SizedBox(
-                        height: 44,
-                        child: Center(
-                          child: Text(
-                            'Keine passenden Follower',
-                            style:
-                                TextStyle(color: Colors.grey, fontSize: 12),
+                ? const SizedBox(
+                    height: 44,
+                    child: Center(
+                      child: Text(
+                        'Keine passenden Follower',
+                        style: TextStyle(color: Colors.grey, fontSize: 12),
+                      ),
+                    ),
+                  )
+                : ListView.builder(
+                    padding: EdgeInsets.zero,
+                    shrinkWrap: true,
+                    itemCount: _suggestions.length,
+                    itemBuilder: (context, i) {
+                      final p = _suggestions[i];
+                      final username = p['username'] as String? ?? '';
+                      final email = p['email'] as String? ?? '';
+                      final avatar = p['avatar_url'] as String?;
+                      return InkWell(
+                        onTap: () => _insertMention(username),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 8,
+                          ),
+                          child: Row(
+                            children: [
+                              UserAvatar(
+                                name: username.isNotEmpty ? username : '?',
+                                avatarUrl: avatar,
+                                radius: 14,
+                                backgroundColor: AppAccentColors.accent,
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      '@$username',
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                    if (email.isNotEmpty)
+                                      Text(
+                                        email,
+                                        style: const TextStyle(
+                                          color: Colors.grey,
+                                          fontSize: 11,
+                                        ),
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                  ],
+                                ),
+                              ),
+                            ],
                           ),
                         ),
-                      )
-                    : ListView.builder(
-                        padding: EdgeInsets.zero,
-                        shrinkWrap: true,
-                        itemCount: _suggestions.length,
-                        itemBuilder: (context, i) {
-                          final p = _suggestions[i];
-                          final username = p['username'] as String? ?? '';
-                          final email = p['email'] as String? ?? '';
-                          final avatar = p['avatar_url'] as String?;
-                          return InkWell(
-                            onTap: () => _insertMention(username),
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 12, vertical: 8),
-                              child: Row(
-                                children: [
-                                  CircleAvatar(
-                                    radius: 14,
-                                    backgroundColor: const Color(0xFFFF3B30),
-                                    backgroundImage:
-                                        avatar != null ? NetworkImage(avatar) : null,
-                                    child: avatar == null
-                                        ? Text(
-                                            username.isNotEmpty
-                                                ? username[0].toUpperCase()
-                                                : '?',
-                                            style: const TextStyle(
-                                                color: Colors.white,
-                                                fontWeight: FontWeight.bold,
-                                                fontSize: 12),
-                                          )
-                                        : null,
-                                  ),
-                                  const SizedBox(width: 10),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Text('@$username',
-                                            style: const TextStyle(
-                                                color: Colors.white,
-                                                fontSize: 13,
-                                                fontWeight: FontWeight.w600)),
-                                        if (email.isNotEmpty)
-                                          Text(email,
-                                              style: const TextStyle(
-                                                  color: Colors.grey,
-                                                  fontSize: 11),
-                                              overflow: TextOverflow.ellipsis),
-                                      ],
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          );
-                        },
-                      ),
+                      );
+                    },
+                  ),
           ),
         TextField(
           controller: widget.controller,

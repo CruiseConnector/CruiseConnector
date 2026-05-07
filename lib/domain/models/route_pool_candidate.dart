@@ -99,8 +99,8 @@ class RoutePoolCandidate {
           (json['difficulty_level'] as String?) ??
           'normal',
       hardRegionStatus: (json['hard_region_status'] as String?) ?? 'normal',
-      candidateLocalityScore:
-          (json['candidate_locality_score'] as num?)?.toDouble(),
+      candidateLocalityScore: (json['candidate_locality_score'] as num?)
+          ?.toDouble(),
       repeatedSuccessCount:
           (json['repeated_success_count'] as num?)?.toInt() ?? 0,
       averageRating: (json['average_rating'] as num?)?.toDouble(),
@@ -123,6 +123,9 @@ class RoutePoolCandidate {
   }
 
   Map<String, dynamic> toJson() {
+    final payload = Map<String, dynamic>.from(routePayload);
+    payload.putIfAbsent('candidate_region_difficulty', () => difficultyLevel);
+    payload.putIfAbsent('hard_region_status', () => hardRegionStatus);
     return {
       if (id != null) 'id': id,
       'route_region_id': routeRegionId,
@@ -143,9 +146,7 @@ class RoutePoolCandidate {
       'quality_score': qualityScore,
       'shape_score': shapeScore,
       'candidate_source': candidateSource,
-      'difficulty_level': difficultyLevel,
       'candidate_region_difficulty': difficultyLevel,
-      'hard_region_status': hardRegionStatus,
       'candidate_locality_score': candidateLocalityScore,
       'repeated_success_count': repeatedSuccessCount,
       'average_rating': averageRating,
@@ -159,7 +160,7 @@ class RoutePoolCandidate {
       'is_verified_pool': isVerifiedPool,
       'candidate_score': candidateScore,
       'geometry': geometry,
-      'route_payload': routePayload,
+      'route_payload': payload,
     };
   }
 }

@@ -198,30 +198,30 @@ class RouteStyleConfig {
         _weighted(
           _scoreAround(
             metrics.curveDensityPer50Km,
-            center: 10.0,
-            tolerance: 12.0,
+            center: 8.0,
+            tolerance: 9.0,
           ),
-          0.18,
+          0.08,
         ),
         _weighted(
           _scoreAround(
             metrics.sharpCurveDensityPer50Km,
-            center: 3.0,
-            tolerance: 5.0,
+            center: 2.0,
+            tolerance: 4.0,
           ),
-          0.14,
+          0.08,
         ),
         _weighted(
           _scoreRamp(metrics.spreadRatio, softMin: 0.16, idealMin: 0.30),
-          0.14,
+          0.16,
         ),
-        _weighted(segmentFlowScore, 0.14),
-        _weighted(smoothnessScore, 0.30),
+        _weighted(segmentFlowScore, 0.20),
+        _weighted(smoothnessScore, 0.36),
         _weighted(
           averageSpeedKmh == null
               ? 0.65
               : _scoreAround(averageSpeedKmh, center: 70.0, tolerance: 24.0),
-          0.10,
+          0.12,
         ),
       ]),
       'kurvenjagd' => _weightedAverage([
@@ -329,7 +329,64 @@ class RouteStyleConfig {
       ]),
     };
 
-    return (normalizedScore * 100.0).clamp(0.0, 100.0);
+    final separatedScore = _applyStyleSeparation(
+      profileKey,
+      normalizedScore,
+      metrics,
+      smoothnessScore,
+    );
+    return (separatedScore * 100.0).clamp(0.0, 100.0);
+  }
+
+  static double _applyStyleSeparation(
+    String profileKey,
+    double score,
+    RouteStyleMetrics metrics,
+    double smoothnessScore,
+  ) {
+    if (profileKey == 'sport') {
+      final excessiveCurves = _scoreRamp(
+        metrics.curveDensityPer50Km,
+        softMin: 22.0,
+        idealMin: 34.0,
+      );
+      final excessiveSharp = _scoreRamp(
+        metrics.sharpCurveDensityPer50Km,
+        softMin: 7.0,
+        idealMin: 13.0,
+      );
+      final excessiveHeading = _scoreRamp(
+        metrics.headingChangePerKm,
+        softMin: 115.0,
+        idealMin: 165.0,
+      );
+      return (score -
+              excessiveCurves * 0.12 -
+              excessiveSharp * 0.08 -
+              excessiveHeading * 0.06)
+          .clamp(0.0, 1.0);
+    }
+    if (profileKey == 'kurvenjagd') {
+      final loopSupport = _weightedAverage([
+        _weighted(
+          _scoreAround(metrics.compactnessScore, center: 50.0, tolerance: 32.0),
+          0.36,
+        ),
+        _weighted(
+          _scoreRamp(metrics.spreadRatio, softMin: 0.18, idealMin: 0.30),
+          0.34,
+        ),
+        _weighted(
+          _scoreRamp(smoothnessScore, softMin: 0.46, idealMin: 0.70),
+          0.30,
+        ),
+      ]);
+      final loopPenalty = loopSupport < 0.56
+          ? (0.56 - loopSupport) * 0.18
+          : 0.0;
+      return (score - loopPenalty).clamp(0.0, 1.0);
+    }
+    return score.clamp(0.0, 1.0);
   }
 
   RouteStyleMetrics calculateStyleMetrics({
@@ -471,9 +528,9 @@ class RouteStyleConfig {
   // unterschiedlich anfühlen. Vorher überlappten die Bereiche so stark, dass
   // eine Route mit 1.85× direkter Distanz für alle drei Stufen gültig war.
   // Aktuelle Fenster:
-  //   Klein:  1.18×–1.65× direkt   (~Faktor 1.32×)
-  //   Mittel: 1.46×–2.10× direkt   (~Faktor 1.65×)
-  //   Groß:   1.84×–2.95× direkt   (~Faktor 2.10×)
+  //   Klein:  1.20×–1.45× direkt   (~Faktor 1.32×)
+  //   Mittel: 1.50×–1.90× direkt   (~Faktor 1.65×)
+  //   Groß:   1.90×–2.80× direkt   (~Faktor 2.10×)
   // Bewusst etwas weiter als zuvor, damit Mapbox bei Bergland (Dornbirn,
   // Bregenzerwald) das Fenster wirklich treffen kann. Eine schmale ~10%
   // Überlappung an den Rändern bleibt absichtlich erhalten, damit der
@@ -495,9 +552,9 @@ class RouteStyleConfig {
           )
         : directDistanceKm;
     final minByVariant = switch (detourVariant) {
-      1 => scenicReferenceKm * 1.18,
-      2 => scenicReferenceKm * 1.46,
-      3 => scenicReferenceKm * 1.84,
+      1 => scenicReferenceKm * 1.20,
+      2 => scenicReferenceKm * 1.50,
+      3 => scenicReferenceKm * 1.90,
       _ => scenicReferenceKm * 1.08,
     };
     final paddingKm = switch (detourVariant) {
@@ -525,15 +582,15 @@ class RouteStyleConfig {
           )
         : directDistanceKm;
     final maxByTarget = switch (detourVariant) {
-      1 => targetKm * 1.28,
-      2 => targetKm * 1.38,
-      3 => targetKm * 1.50,
+      1 => targetKm * 1.12,
+      2 => targetKm * 1.14,
+      3 => targetKm * 1.18,
       _ => targetKm * 1.20,
     };
     final maxByDirect = switch (detourVariant) {
-      1 => scenicReferenceKm * 1.65,
-      2 => scenicReferenceKm * 2.10,
-      3 => scenicReferenceKm * 2.95,
+      1 => scenicReferenceKm * 1.45,
+      2 => scenicReferenceKm * 1.90,
+      3 => scenicReferenceKm * 2.80,
       _ => scenicReferenceKm * 1.40,
     };
     final slackKm = switch (detourVariant) {
@@ -547,7 +604,7 @@ class RouteStyleConfig {
       scenic: scenic,
       detourVariant: detourVariant,
     );
-    return math.max(lowerBound + slackKm, math.max(maxByTarget, maxByDirect));
+    return math.max(lowerBound + slackKm, math.min(maxByDirect, maxByTarget));
   }
 
   Map<String, dynamic> toRequestHints() {

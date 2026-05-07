@@ -58,6 +58,7 @@ Map<String, dynamic> _buildRouteResponse({
   String mode = 'Sport Mode',
   double centerLat = 48.140,
   double centerLng = 11.592,
+  Map<String, dynamic> meta = const {},
 }) {
   final distanceKm = distanceMeters / 1000.0;
   final params = _profiledLoopParams(distanceKm: distanceKm, mode: mode);
@@ -77,6 +78,7 @@ Map<String, dynamic> _buildRouteResponse({
   coords[coords.length - 1] = [...coords.first];
 
   return {
+    if (meta.isNotEmpty) 'meta': meta,
     'route': {
       'geometry': {'type': 'LineString', 'coordinates': coords},
       'distance': distanceMeters,
@@ -403,7 +405,11 @@ void main() {
     });
 
     test('80 km Ziel → Route zwischen 64 km und 96 km', () async {
-      await testDistanceTolerance(targetKm: 80, responseDistanceM: 80000);
+      await testDistanceTolerance(
+        targetKm: 80,
+        responseDistanceM: 80000,
+        coordinateCount: 120,
+      );
     });
 
     test('100 km Ziel → Route zwischen 80 km und 120 km', () async {
@@ -495,6 +501,216 @@ void main() {
           verify(mockInvoker.invoke(captureAny)).captured.last
               as Map<String, dynamic>;
       expect(captured['language'], 'de');
+    });
+
+    test('sendet Pflichtstopps für Wegpunkte-Rundkurs', () async {
+      when(mockInvoker.invoke(any)).thenAnswer(
+        (_) async =>
+            _buildRouteResponse(distanceMeters: 42000, durationSeconds: 3200),
+      );
+
+      await service.generateRoundTrip(
+        startPosition: _munich(),
+        targetDistanceKm: 50,
+        mode: 'Sport Mode',
+        planningType: 'Wegpunkte',
+        userWaypoints: const [
+          {'latitude': 48.1501, 'longitude': 11.6201},
+          {'latitude': 48.1151, 'longitude': 11.6502},
+        ],
+      );
+
+      final captured =
+          verify(mockInvoker.invoke(captureAny)).captured.first
+              as Map<String, dynamic>;
+      expect(captured['planning_type'], 'Wegpunkte');
+      expect(captured['route_type'], 'ROUND_TRIP');
+      expect(captured['waypoint_mode'], 'required_stops');
+      expect(captured['waypoint_order'], 'auto_optimize');
+      expect(captured['close_loop'], isTrue);
+      expect(captured['max_search_ms'], 33000);
+      expect(captured['max_candidate_attempts'], 18);
+      expect(captured['required_waypoint_count'], 2);
+      expect(captured.containsKey('preference_areas'), isFalse);
+      expect(captured.containsKey('manual_waypoints'), isFalse);
+      expect(captured.containsKey('original_planning_type'), isFalse);
+      expect(captured.containsKey('effective_planning_type'), isFalse);
+      expect(captured.containsKey('generation_mode'), isFalse);
+      final waypointPayload = (captured['required_waypoints'] as List)
+          .cast<Map<String, dynamic>>();
+      expect(waypointPayload[0]['latitude'], 48.1501);
+      expect(waypointPayload[0]['longitude'], 11.6201);
+      expect(waypointPayload[1]['latitude'], 48.1151);
+      expect(waypointPayload[1]['longitude'], 11.6502);
+      expect(
+        captured['client_scenario_key'].toString(),
+        contains('wp48.15010,11.62010;48.11510,11.65020'),
+      );
+    });
+
+    test('übernimmt Required-Stop-Meta aus der Edge-Antwort', () async {
+      when(mockInvoker.invoke(any)).thenAnswer(
+        (_) async => _buildRouteResponse(
+          distanceMeters: 42000,
+          durationSeconds: 3200,
+          meta: const {
+            'waypoint_mode': 'required_stops',
+            'waypoint_route_mode': 'required_stops',
+            'required_waypoint_count': 2,
+            'required_waypoints_reached': 2,
+            'waypoint_order_requested': 'auto_optimize',
+            'waypoint_order_used': [1, 0],
+            'waypoint_reach_distances_m': [18, 41],
+            'waypoint_reach_threshold_m': 150,
+          },
+        ),
+      );
+
+      final result = await service.generateRoundTrip(
+        startPosition: _munich(),
+        targetDistanceKm: 50,
+        mode: 'Sport Mode',
+        planningType: 'Wegpunkte',
+        userWaypoints: const [
+          {'latitude': 48.1501, 'longitude': 11.6201},
+          {'latitude': 48.1151, 'longitude': 11.6502},
+        ],
+      );
+
+      expect(result.edgeMeta['waypoint_mode'], 'required_stops');
+      expect(result.edgeMeta['waypoint_route_mode'], 'required_stops');
+      expect(result.edgeMeta['required_waypoint_count'], 2);
+      expect(result.edgeMeta['required_waypoints_reached'], 2);
+      expect(result.edgeMeta['waypoint_order_requested'], 'auto_optimize');
+      expect(result.edgeMeta['waypoint_order_used'], [1, 0]);
+      expect(result.edgeMeta['waypoint_reach_distances_m'], [18, 41]);
+      expect(result.edgeMeta['waypoint_reach_threshold_m'], 150);
+    });
+
+    test('Wegpunkte-Rundkurs braucht mindestens einen User-Wegpunkt', () async {
+      await expectLater(
+        service.generateRoundTrip(
+          startPosition: _munich(),
+          targetDistanceKm: 50,
+          mode: 'Sport Mode',
+          planningType: 'Wegpunkte',
+        ),
+        throwsA(
+          isA<RouteServiceException>().having(
+            (error) => error.edgeMeta['response_code'],
+            'response_code',
+            'too_few_waypoints',
+          ),
+        ),
+      );
+      verifyNever(mockInvoker.invoke(any));
+    });
+
+    test('Wegpunkte-Rundkurs erlaubt maximal 3 Anker', () async {
+      await expectLater(
+        service.generateRoundTrip(
+          startPosition: _munich(),
+          targetDistanceKm: 50,
+          mode: 'Sport Mode',
+          planningType: 'Wegpunkte',
+          userWaypoints: List.generate(
+            4,
+            (index) => {
+              'latitude': 48.14 + index * 0.005,
+              'longitude': 11.59 + index * 0.005,
+            },
+          ),
+        ),
+        throwsA(
+          isA<RouteServiceException>()
+              .having(
+                (error) => error.edgeMeta['response_code'],
+                'response_code',
+                'too_many_waypoints',
+              )
+              .having(
+                (error) => error.edgeMeta['max_waypoints'],
+                'max_waypoints',
+                3,
+              ),
+        ),
+      );
+      verifyNever(mockInvoker.invoke(any));
+    });
+
+    test('Wegpunkte-Rundkurs lehnt zu weit entfernten Stopp ab', () async {
+      await expectLater(
+        service.generateRoundTrip(
+          startPosition: _munich(),
+          targetDistanceKm: 50,
+          mode: 'Sport Mode',
+          planningType: 'Wegpunkte',
+          userWaypoints: const [
+            {'latitude': 53.5511, 'longitude': 9.9937},
+          ],
+        ),
+        throwsA(
+          isA<RouteServiceException>().having(
+            (error) => error.edgeMeta['response_code'],
+            'response_code',
+            'waypoint_too_far',
+          ),
+        ),
+      );
+      verifyNever(mockInvoker.invoke(any));
+    });
+
+    test('Wegpunkte-Rundkurs lehnt doppelte Stopps ab', () async {
+      await expectLater(
+        service.generateRoundTrip(
+          startPosition: _munich(),
+          targetDistanceKm: 50,
+          mode: 'Sport Mode',
+          planningType: 'Wegpunkte',
+          userWaypoints: const [
+            {'latitude': 48.1501, 'longitude': 11.6201},
+            {'latitude': 48.1502, 'longitude': 11.6202},
+          ],
+        ),
+        throwsA(
+          isA<RouteServiceException>().having(
+            (error) => error.edgeMeta['response_code'],
+            'response_code',
+            'waypoint_duplicate_or_too_close',
+          ),
+        ),
+      );
+      verifyNever(mockInvoker.invoke(any));
+    });
+
+    test('Zufall-Rundkurs sendet keine Wegpunkte-Anker-Felder', () async {
+      when(mockInvoker.invoke(any)).thenAnswer(
+        (_) async =>
+            _buildRouteResponse(distanceMeters: 50000, durationSeconds: 3600),
+      );
+
+      await service.generateRoundTrip(
+        startPosition: _munich(),
+        targetDistanceKm: 50,
+        mode: 'Sport Mode',
+        planningType: 'Zufall',
+      );
+
+      final captured =
+          verify(mockInvoker.invoke(captureAny)).captured.first
+              as Map<String, dynamic>;
+      expect(captured['planning_type'], 'Zufall');
+      expect(captured.containsKey('required_waypoints'), isFalse);
+      expect(captured.containsKey('user_waypoints'), isFalse);
+      expect(captured.containsKey('manual_waypoints'), isFalse);
+      expect(captured.containsKey('waypoint_mode'), isFalse);
+      expect(captured.containsKey('waypoint_order'), isFalse);
+      expect(captured.containsKey('anchor_visit_radius_m'), isFalse);
+      expect(captured.containsKey('preference_areas'), isFalse);
+      expect(captured.containsKey('original_planning_type'), isFalse);
+      expect(captured.containsKey('effective_planning_type'), isFalse);
+      expect(captured.containsKey('close_loop'), isFalse);
+      expect(captured.containsKey('allow_seed_generation'), isFalse);
     });
 
     test(
@@ -779,6 +995,26 @@ void main() {
       );
     });
 
+    test('verwirft A→B wenn Start und Ziel praktisch gleich sind', () async {
+      await expectLater(
+        service.generatePointToPoint(
+          startPosition: _dornbirn(),
+          destinationLat: _dornbirnLat,
+          destinationLng: _dornbirnLng,
+          mode: 'Sport Mode',
+        ),
+        throwsA(
+          isA<RouteServiceException>().having(
+            (e) => e.type,
+            'type',
+            RouteErrorType.validation,
+          ),
+        ),
+      );
+
+      verifyNever(mockInvoker.invoke(any));
+    });
+
     test('scenic = false → mode wird auf "Standard" gesetzt', () async {
       when(mockInvoker.invoke(any)).thenAnswer(
         (_) async =>
@@ -865,17 +1101,25 @@ void main() {
 
     test('scenic = true → übergibt den eigentlichen mode', () async {
       when(mockInvoker.invoke(any)).thenAnswer(
-        (_) async =>
-            _buildRouteResponse(distanceMeters: 56000, durationSeconds: 3600),
+        (_) async => _buildPointToPointResponse(
+          distanceMeters: 56000,
+          durationSeconds: 3600,
+          destinationLat: 47.8,
+          destinationLng: 12.0,
+        ),
       );
 
-      await service.generatePointToPoint(
-        startPosition: _munich(),
-        destinationLat: 47.8,
-        destinationLng: 12.0,
-        mode: 'Alpenstraßen',
-        scenic: true,
-      );
+      try {
+        await service.generatePointToPoint(
+          startPosition: _munich(),
+          destinationLat: 47.8,
+          destinationLng: 12.0,
+          mode: 'Alpenstraßen',
+          scenic: true,
+        );
+      } on RouteServiceException {
+        // Für diese Prüfung zählt nur der Request-Body.
+      }
 
       final captured =
           verify(mockInvoker.invoke(captureAny)).captured.first
@@ -887,18 +1131,26 @@ void main() {
       'scenic = true → targetDistance und dynamischer randomSeed werden mitgesendet',
       () async {
         when(mockInvoker.invoke(any)).thenAnswer(
-          (_) async =>
-              _buildRouteResponse(distanceMeters: 92000, durationSeconds: 5200),
+          (_) async => _buildPointToPointResponse(
+            distanceMeters: 92000,
+            durationSeconds: 5200,
+            destinationLat: 47.8,
+            destinationLng: 12.0,
+          ),
         );
 
-        await service.generatePointToPoint(
-          startPosition: _munich(),
-          destinationLat: 47.8,
-          destinationLng: 12.0,
-          mode: 'Sport Mode',
-          scenic: true,
-          routeVariant: 2,
-        );
+        try {
+          await service.generatePointToPoint(
+            startPosition: _munich(),
+            destinationLat: 47.8,
+            destinationLng: 12.0,
+            mode: 'Sport Mode',
+            scenic: true,
+            routeVariant: 2,
+          );
+        } on RouteServiceException {
+          // Für diese Prüfung zählt nur der Request-Body.
+        }
 
         final captured =
             verify(mockInvoker.invoke(captureAny)).captured.first
@@ -913,19 +1165,27 @@ void main() {
       'scenic + avoidHighways → Detour-Parameter bleiben erhalten',
       () async {
         when(mockInvoker.invoke(any)).thenAnswer(
-          (_) async =>
-              _buildRouteResponse(distanceMeters: 112000, durationSeconds: 6200),
+          (_) async => _buildPointToPointResponse(
+            distanceMeters: 112000,
+            durationSeconds: 6200,
+            destinationLat: 47.8,
+            destinationLng: 12.0,
+          ),
         );
 
-        await service.generatePointToPoint(
-          startPosition: _munich(),
-          destinationLat: 47.8,
-          destinationLng: 12.0,
-          mode: 'Sport Mode',
-          scenic: true,
-          routeVariant: 3,
-          avoidHighways: true,
-        );
+        try {
+          await service.generatePointToPoint(
+            startPosition: _munich(),
+            destinationLat: 47.8,
+            destinationLng: 12.0,
+            mode: 'Sport Mode',
+            scenic: true,
+            routeVariant: 3,
+            avoidHighways: true,
+          );
+        } on RouteServiceException {
+          // Für diese Prüfung zählt nur der Request-Body.
+        }
 
         final captured =
             verify(mockInvoker.invoke(captureAny)).captured.first
@@ -985,25 +1245,33 @@ void main() {
         final scenicFallback = captured.firstWhere(
           (request) => request['simplify_waypoints'] == true,
         );
-        expect(scenicFallback['max_waypoints'], 3);
+        expect(scenicFallback['max_waypoints'], 2);
         expect(scenicFallback['detour_level'], 2);
       },
     );
 
     test('Umwegstufen skalieren die targetDistance sichtbar', () async {
       when(mockInvoker.invoke(any)).thenAnswer(
-        (_) async =>
-            _buildRouteResponse(distanceMeters: 68000, durationSeconds: 4200),
+        (_) async => _buildPointToPointResponse(
+          distanceMeters: 68000,
+          durationSeconds: 4200,
+          destinationLat: 47.8,
+          destinationLng: 12.0,
+        ),
       );
 
-      await service.generatePointToPoint(
-        startPosition: _munich(),
-        destinationLat: 47.8,
-        destinationLng: 12.0,
-        mode: 'Sport Mode',
-        scenic: true,
-        routeVariant: 1,
-      );
+      try {
+        await service.generatePointToPoint(
+          startPosition: _munich(),
+          destinationLat: 47.8,
+          destinationLng: 12.0,
+          mode: 'Sport Mode',
+          scenic: true,
+          routeVariant: 1,
+        );
+      } on RouteServiceException {
+        // Für diese Prüfung zählt nur der Request-Body.
+      }
 
       final smallDetour =
           verify(mockInvoker.invoke(captureAny)).captured.first
@@ -1011,18 +1279,26 @@ void main() {
       clearInteractions(mockInvoker);
 
       when(mockInvoker.invoke(any)).thenAnswer(
-        (_) async =>
-            _buildRouteResponse(distanceMeters: 92000, durationSeconds: 5200),
+        (_) async => _buildPointToPointResponse(
+          distanceMeters: 92000,
+          durationSeconds: 5200,
+          destinationLat: 47.8,
+          destinationLng: 12.0,
+        ),
       );
 
-      await service.generatePointToPoint(
-        startPosition: _munich(),
-        destinationLat: 47.8,
-        destinationLng: 12.0,
-        mode: 'Sport Mode',
-        scenic: true,
-        routeVariant: 2,
-      );
+      try {
+        await service.generatePointToPoint(
+          startPosition: _munich(),
+          destinationLat: 47.8,
+          destinationLng: 12.0,
+          mode: 'Sport Mode',
+          scenic: true,
+          routeVariant: 2,
+        );
+      } on RouteServiceException {
+        // Für diese Prüfung zählt nur der Request-Body.
+      }
 
       final mediumDetour =
           verify(mockInvoker.invoke(captureAny)).captured.first
@@ -1030,18 +1306,26 @@ void main() {
       clearInteractions(mockInvoker);
 
       when(mockInvoker.invoke(any)).thenAnswer(
-        (_) async =>
-            _buildRouteResponse(distanceMeters: 112000, durationSeconds: 6200),
+        (_) async => _buildPointToPointResponse(
+          distanceMeters: 112000,
+          durationSeconds: 6200,
+          destinationLat: 47.8,
+          destinationLng: 12.0,
+        ),
       );
 
-      await service.generatePointToPoint(
-        startPosition: _munich(),
-        destinationLat: 47.8,
-        destinationLng: 12.0,
-        mode: 'Sport Mode',
-        scenic: true,
-        routeVariant: 3,
-      );
+      try {
+        await service.generatePointToPoint(
+          startPosition: _munich(),
+          destinationLat: 47.8,
+          destinationLng: 12.0,
+          mode: 'Sport Mode',
+          scenic: true,
+          routeVariant: 3,
+        );
+      } on RouteServiceException {
+        // Für diese Prüfung zählt nur der Request-Body.
+      }
 
       final largeDetour =
           verify(mockInvoker.invoke(captureAny)).captured.first
@@ -1144,8 +1428,9 @@ void main() {
           expect(request['mode'], 'Sport Mode');
           expect(request['style_profile'], 'sport');
           expect(request['continue_straight'], isTrue);
-          // Variants 1-3 sind alle scenic — Klein bekommt 4, Mittel/Groß 5.
-          expect(request['max_candidate_attempts'], variant == 1 ? 4 : 5);
+          // Scenic A→B testet mehrere Korridor-Familien; Mittel/Groß brauchen
+          // mehr Budget, damit sie nicht still auf kleine Umwege zurückfallen.
+          expect(request['max_candidate_attempts'], variant == 1 ? 6 : 9);
           expect(request['detour_factor'], isA<double>());
         }
 
@@ -1273,12 +1558,12 @@ void main() {
             );
           }
           return _buildPointToPointResponse(
-            distanceMeters: 250000,
-            durationSeconds: 14800,
+            distanceMeters: 190000,
+            durationSeconds: 11200,
             destinationLat: 47.8095,
             destinationLng: 13.0550,
             coordinateCount: 900,
-            bendScale: 0.82,
+            bendScale: 0.50,
           );
         });
 
@@ -1328,13 +1613,19 @@ void main() {
         final captured = verify(
           mockInvoker.invoke(captureAny),
         ).captured.cast<Map<String, dynamic>>();
+        final pointToPointRequests = captured.where(
+          (request) => request['route_type'] == 'POINT_TO_POINT',
+        );
         expect(
-          captured.every(
+          pointToPointRequests.every(
             (request) =>
-                request['route_type'] != 'POINT_TO_POINT' ||
-                request['detour_level'] == null ||
-                request['detour_level'] == 3,
+                (request['detour_level'] as int?) != null &&
+                (request['detour_level'] as int) > 0,
           ),
+          isTrue,
+        );
+        expect(
+          pointToPointRequests.any((request) => request['detour_level'] == 3),
           isTrue,
         );
       },

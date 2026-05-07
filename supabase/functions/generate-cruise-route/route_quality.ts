@@ -5,6 +5,7 @@ import type {
   RouteMode,
   RouteQualityEvaluation,
   RouteQualityTier,
+  RouteShapeMetrics,
   RouteStyleMetrics,
 } from "./routing_types.ts";
 import {
@@ -16,7 +17,6 @@ import {
   headingDeltaDegrees,
   measureCoordinatePathMeters,
   pointToCoordinate,
-  routeHeadingAt,
   smoothDistanceSeries,
   stableStringHash,
 } from "./routing_utils.ts";
@@ -33,21 +33,54 @@ export function countUTurnManeuvers(route: any): number {
     if (!Array.isArray(steps)) continue;
 
     for (const step of steps) {
-      const maneuver = step?.maneuver ?? {};
-      const modifier = String(maneuver?.modifier ?? "").toLowerCase();
-      const type = String(maneuver?.type ?? "").toLowerCase();
-      const instruction = String(maneuver?.instruction ?? "").toLowerCase();
-
-      if (
-        modifier.includes("uturn") ||
-        modifier.includes("u-turn") ||
-        type === "uturn" ||
-        type === "u-turn" ||
-        instruction.includes("wenden") ||
-        instruction.includes("u-turn")
-      ) {
+      if (isUTurnManeuverStep(step)) {
         count += 1;
       }
+    }
+  }
+  return count;
+}
+
+function isUTurnManeuverStep(step: any): boolean {
+  const maneuver = step?.maneuver ?? {};
+  const modifier = String(maneuver?.modifier ?? "").toLowerCase();
+  const type = String(maneuver?.type ?? "").toLowerCase();
+  const instruction = String(maneuver?.instruction ?? "").toLowerCase();
+
+  return (
+    modifier.includes("uturn") ||
+    modifier.includes("u-turn") ||
+    type === "uturn" ||
+    type === "u-turn" ||
+    instruction.includes("wenden") ||
+    instruction.includes("u-turn")
+  );
+}
+
+function countRequiredStopUTurnManeuvers(
+  route: any,
+  requiredStopCoordinates: Coordinate[] | undefined,
+  thresholdMeters = 180,
+): number {
+  if (!requiredStopCoordinates?.length) return 0;
+  const legs = route?.legs;
+  if (!Array.isArray(legs)) return 0;
+
+  let count = 0;
+  for (const leg of legs) {
+    const steps = leg?.steps;
+    if (!Array.isArray(steps)) continue;
+
+    for (const step of steps) {
+      if (!isUTurnManeuverStep(step)) continue;
+      const location = step?.maneuver?.location;
+      if (!Array.isArray(location) || location.length < 2) continue;
+      const maneuverPoint = pointToCoordinate(location);
+      if (!maneuverPoint) continue;
+      const nearRequiredStop = requiredStopCoordinates.some((stop) =>
+        calculateDistance(maneuverPoint, stop) * 1000 <= thresholdMeters
+      );
+      if (nearRequiredStop) count += 1;
     }
   }
   return count;
@@ -86,7 +119,9 @@ export function hasUTurnManeuver(route: any): boolean {
 }
 
 function calculateRouteOverlapPercent(route: any): number {
-  const coordinates = route?.geometry?.coordinates;
+  const coordinates = normalizeCoordinatesForShapeAnalysis(
+    extractRouteCoordinates(route),
+  );
   if (!Array.isArray(coordinates) || coordinates.length < 25) {
     return 0;
   }
@@ -98,21 +133,25 @@ function calculateRouteOverlapPercent(route: any): number {
   let overlapCount = 0;
 
   for (let i = 0; i < coordinates.length; i += sampleStep) {
-    const current = pointToCoordinate(coordinates[i]);
-    if (!current) continue;
+    const current = coordinates[i];
 
     sampleCount += 1;
-    const headingI = routeHeadingAt(coordinates, i);
+    const headingI = calculateBearing(
+      current,
+      coordinates[Math.min(i + 1, coordinates.length - 1)],
+    );
     let foundOverlap = false;
 
     for (let j = i + minIndexGap; j < coordinates.length; j += sampleStep) {
-      const candidate = pointToCoordinate(coordinates[j]);
-      if (!candidate) continue;
+      const candidate = coordinates[j];
 
       const distanceMeters = calculateDistance(current, candidate) * 1000;
       if (distanceMeters >= overlapDistanceMeters) continue;
 
-      const headingJ = routeHeadingAt(coordinates, j);
+      const headingJ = calculateBearing(
+        candidate,
+        coordinates[Math.min(j + 1, coordinates.length - 1)],
+      );
       const headingDelta = headingDeltaDegrees(headingI, headingJ);
       const sameDirection = headingDelta <= 35;
       const oppositeDirection = headingDelta >= 145;
@@ -159,6 +198,46 @@ function sampleCoordinates(
     samples.push(coordinates[index]);
   }
   return samples;
+}
+
+function normalizeCoordinatesForShapeAnalysis(
+  coordinates: Coordinate[],
+): Coordinate[] {
+  if (coordinates.length < 16) return coordinates;
+
+  const pathMeters = measureCoordinatePathMeters(coordinates);
+  if (!Number.isFinite(pathMeters) || pathMeters <= 0) return coordinates;
+
+  // Mapbox returns very different point densities for simplified search
+  // geometries and final guidance geometries. Shape gates must evaluate the
+  // road form, not the encoding density, so dense routes are reduced to a
+  // distance-based sample before hook/u-turn/overlap detection.
+  const targetSpacingMeters = clampNumber(pathMeters / 850, 45, 80);
+  const result: Coordinate[] = [coordinates[0]];
+  let distanceSinceLastSample = 0;
+
+  for (let i = 1; i < coordinates.length; i += 1) {
+    const segmentMeters = calculateDistance(
+      coordinates[i - 1],
+      coordinates[i],
+    ) * 1000;
+    distanceSinceLastSample += segmentMeters;
+    if (distanceSinceLastSample >= targetSpacingMeters) {
+      result.push(coordinates[i]);
+      distanceSinceLastSample = 0;
+    }
+  }
+
+  const last = coordinates[coordinates.length - 1];
+  const sampledLast = result[result.length - 1];
+  if (
+    sampledLast == null ||
+    calculateDistance(sampledLast, last) * 1000 > 5
+  ) {
+    result.push(last);
+  }
+
+  return result.length >= 12 ? result : coordinates;
 }
 
 export function buildRouteFingerprint(
@@ -412,6 +491,106 @@ function countGeometricUTurns(coordinates: Coordinate[]): number {
   return count;
 }
 
+type UTurnShapeClassification =
+  | "none"
+  | "maneuver_u_turn"
+  | "true_out_and_back"
+  | "dead_end_spike"
+  | "route_stub"
+  | "start_reentry"
+  | "mountain_switchback"
+  | "local_hairpin"
+  | "u_turn_geometry";
+
+function classifyUTurnShape(
+  signals: ReturnType<typeof calculateRouteShapeSignals>,
+  {
+    overlapPercent,
+    hasManeuverUTurn,
+    hasGeometricUTurn,
+    isNoHighwayHairpinEligibleRoundTrip,
+    isCurveChase,
+    isSportMode,
+    targetDistanceKm,
+  }: {
+    overlapPercent: number;
+    hasManeuverUTurn: boolean;
+    hasGeometricUTurn: boolean;
+    isNoHighwayHairpinEligibleRoundTrip: boolean;
+    isCurveChase: boolean;
+    isSportMode: boolean;
+    targetDistanceKm: number;
+  },
+): UTurnShapeClassification {
+  if (!hasManeuverUTurn && !hasGeometricUTurn) return "none";
+  if (hasManeuverUTurn) return "maneuver_u_turn";
+
+  const sustainedBacktracking = overlapPercent > 28 ||
+    signals.oppositeOverlapPercent > (isCurveChase ? 18 : 20) ||
+    (
+      signals.oppositeOverlapPercent > (isCurveChase ? 12 : 14) &&
+      signals.repeatedStartAreaPercent > 24
+    );
+  if (sustainedBacktracking) return "true_out_and_back";
+
+  const deadEndSpike = signals.spurArmPercent > 40 ||
+    (
+      signals.radialPeakCount >= (isCurveChase ? 3 : 4) &&
+      signals.middleCoverageRatio < 0.40
+    ) ||
+    (
+      signals.loopCleanupRemovedPercent > 22 &&
+      signals.loopCleanupDistanceRetentionRatio < 0.84
+    );
+  if (deadEndSpike) return "dead_end_spike";
+
+  const routeStub = signals.middleCoverageRatio < 0.30 ||
+    (
+      signals.loopCleanupRemovedPercent > 16 &&
+      signals.loopCleanupDistanceRetentionRatio < 0.88
+    );
+  if (routeStub) return "route_stub";
+
+  if (
+    signals.centerReentryCount >= 3 ||
+    signals.repeatedStartAreaPercent > 34 ||
+    signals.centralReturnPercent > (isCurveChase ? 26 : 30)
+  ) {
+    return "start_reentry";
+  }
+
+  if (!isNoHighwayHairpinEligibleRoundTrip) return "u_turn_geometry";
+
+  const maxLocalHairpins = isCurveChase
+    ? targetDistanceKm > 85 ? 8 : 7
+    : isSportMode
+    ? targetDistanceKm > 85 ? 5 : 4
+    : 5;
+  const structurallyCleanForHairpins =
+    signals.geometricUTurnCount <= maxLocalHairpins &&
+    overlapPercent <= (isCurveChase ? 30 : 28) &&
+    signals.oppositeOverlapPercent <= (isCurveChase ? 18 : 16) &&
+    signals.middleCoverageRatio >= (isCurveChase ? 0.48 : 0.54) &&
+    signals.centerReentryCount <= 2 &&
+    signals.radialPeakCount <= 3 &&
+    signals.repeatedStartAreaPercent <= (isCurveChase ? 30 : 24) &&
+    signals.spurArmPercent <= (isCurveChase ? 28 : 22) &&
+    signals.loopCleanupRemovedPercent <= (isCurveChase ? 18 : 12) &&
+    signals.loopCleanupDistanceRetentionRatio >= (isCurveChase ? 0.84 : 0.88);
+
+  if (!structurallyCleanForHairpins) return "u_turn_geometry";
+  return isCurveChase && signals.geometricUTurnCount >= 3
+    ? "mountain_switchback"
+    : "local_hairpin";
+}
+
+function isAllowedHairpinClassification(
+  classification: UTurnShapeClassification,
+): boolean {
+  return classification === "local_hairpin" ||
+    classification === "mountain_switchback";
+}
+
 function removeClientStyleLocalLoops(coordinates: Coordinate[]): {
   coordinates: Coordinate[];
   removedLoops: number;
@@ -564,7 +743,9 @@ function calculateRouteShapeSignals(route: any): {
   loopCleanupDistanceKm: number;
   loopCleanupUTurnCount: number;
 } {
-  const coordinates = extractRouteCoordinates(route);
+  const coordinates = normalizeCoordinatesForShapeAnalysis(
+    extractRouteCoordinates(route),
+  );
   if (coordinates.length < 12) {
     return {
       angularRoughness: 0,
@@ -758,6 +939,73 @@ function calculateRouteShapeSignals(route: any): {
   };
 }
 
+function shapeMetricsFromSignals(
+  signals: ReturnType<typeof calculateRouteShapeSignals>,
+  overlapPercent: number,
+): RouteShapeMetrics {
+  const outAndBackScore = clampNumber(
+    signals.oppositeOverlapPercent * 2.2 +
+      overlapPercent * 0.45 +
+      signals.foldedLoopPenalty * 0.22,
+    0,
+    100,
+  );
+  const spurScore = clampNumber(
+    signals.spurArmPercent +
+      signals.repeatedStartAreaPercent * 0.35 +
+      signals.loopCleanupRemovedPercent * 0.55,
+    0,
+    100,
+  );
+  const deadEndArmScore = clampNumber(
+    signals.hookCount * 8 +
+      signals.spurArmPercent * 0.85 +
+      Math.max(0, signals.radialPeakCount - 1) * 12,
+    0,
+    100,
+  );
+  const loopnessScore = clampNumber(
+    100 -
+      signals.foldedLoopPenalty * 0.62 -
+      spurScore * 0.34 -
+      outAndBackScore * 0.30 -
+      Math.max(0, 0.48 - signals.middleCoverageRatio) * 95 -
+      Math.max(0, signals.centerReentryCount - 1) * 8,
+    0,
+    100,
+  );
+  return {
+    loopnessScore,
+    spurScore,
+    deadEndArmScore,
+    outAndBackScore,
+    overlapScore: clampNumber(overlapPercent, 0, 100),
+    centralReturnPercent: signals.centralReturnPercent,
+    centerReentryCount: signals.centerReentryCount,
+    radialPeakCount: signals.radialPeakCount,
+    middleCoverageRatio: signals.middleCoverageRatio,
+    geometricUTurnCount: signals.geometricUTurnCount,
+    oppositeOverlapPercent: signals.oppositeOverlapPercent,
+    foldedLoopPenalty: signals.foldedLoopPenalty,
+    repeatedStartAreaPercent: signals.repeatedStartAreaPercent,
+    spurArmPercent: signals.spurArmPercent,
+    cleanupRemovedPercent: signals.loopCleanupRemovedPercent,
+    cleanupDistanceRetentionRatio: signals.loopCleanupDistanceRetentionRatio,
+    cleanupLoopCount: signals.loopCleanupCount,
+    cleanupUTurnCount: signals.loopCleanupUTurnCount,
+  };
+}
+
+function calculateRouteShapeMetrics(
+  route: any,
+  overlapPercent?: number,
+): RouteShapeMetrics {
+  return shapeMetricsFromSignals(
+    calculateRouteShapeSignals(route),
+    overlapPercent ?? calculateRouteOverlapPercent(route),
+  );
+}
+
 function clampNumber(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
@@ -820,8 +1068,14 @@ export function calculateRouteStyleMetrics(route: any): RouteStyleMetrics {
       zigzagScore: 0,
       stubPenalty: 0,
       sectorDiversityScore: 0,
+      loopnessScore: 0,
+      spurScore: 100,
+      deadEndArmScore: 100,
+      outAndBackScore: 100,
+      overlapScore: 100,
     };
   }
+  const shapeMetrics = shapeMetricsFromSignals(shapeSignals, 0);
 
   const sampleStep = 5;
   let curveCount = 0;
@@ -890,6 +1144,11 @@ export function calculateRouteStyleMetrics(route: any): RouteStyleMetrics {
     zigzagScore,
     stubPenalty,
     sectorDiversityScore: estimateRouteSectorDiversity(coordinates),
+    loopnessScore: shapeMetrics.loopnessScore,
+    spurScore: shapeMetrics.spurScore,
+    deadEndArmScore: shapeMetrics.deadEndArmScore,
+    outAndBackScore: shapeMetrics.outAndBackScore,
+    overlapScore: shapeMetrics.overlapScore,
   };
 }
 
@@ -910,19 +1169,30 @@ export function scoreRouteStyleFit(
         }
         if (metrics.zigzagScore >= 30) reasons.push("zigzag_penalty");
         if (metrics.sharpTurnRate >= 22) reasons.push("too_many_sharp_turns");
-        return weightedAverage([
-          {
-            value: scoreAround(metrics.curveDensityPer50Km, 10, 12),
-            weight: 0.18,
-          },
-          { value: scoreAround(metrics.sharpTurnRate, 8, 10), weight: 0.14 },
-          {
-            value: scoreRamp(metrics.averageSegmentLengthMeters, 120, 260),
-            weight: 0.16,
-          },
-          { value: smoothness, weight: 0.34 },
-          { value: scoreAround(metrics.zigzagScore, 8, 24), weight: 0.18 },
-        ]) * 100;
+        if (metrics.spurScore >= 24) reasons.push("spur_penalty");
+        {
+          const rawScore = weightedAverage([
+            {
+              value: scoreAround(metrics.curveDensityPer50Km, 8, 9),
+              weight: 0.07,
+            },
+            { value: scoreAround(metrics.sharpTurnRate, 6, 8), weight: 0.08 },
+            {
+              value: scoreRamp(metrics.averageSegmentLengthMeters, 130, 280),
+              weight: 0.24,
+            },
+            { value: smoothness, weight: 0.38 },
+            { value: scoreAround(metrics.zigzagScore, 8, 24), weight: 0.08 },
+            { value: 1 - metrics.spurScore / 100, weight: 0.09 },
+            { value: 1 - metrics.outAndBackScore / 100, weight: 0.08 },
+            { value: metrics.loopnessScore / 100, weight: 0.08 },
+          ]) * 100;
+          const curvePenalty =
+            scoreRamp(metrics.curveDensityPer50Km, 22, 34) * 16 +
+            scoreRamp(metrics.sharpTurnRate, 14, 24) * 10 +
+            scoreRamp(metrics.headingChangePerKm, 115, 165) * 8;
+          return rawScore - curvePenalty;
+        }
       case "Kurvenjagd":
         if (metrics.curveDensityPer50Km >= 28) {
           reasons.push("high_curve_density");
@@ -931,50 +1201,72 @@ export function scoreRouteStyleFit(
           reasons.push("continuous_bends");
         }
         if (metrics.stubPenalty >= 28) reasons.push("stub_penalty");
-        return weightedAverage([
-          {
-            value: scoreRamp(metrics.curveDensityPer50Km, 22, 36),
-            weight: 0.34,
-          },
-          { value: scoreRamp(metrics.sharpTurnRate, 8, 18), weight: 0.20 },
-          {
-            value: scoreRamp(metrics.headingChangePerKm, 95, 150),
-            weight: 0.16,
-          },
-          { value: scoreAround(metrics.stubPenalty, 8, 24), weight: 0.14 },
-          { value: scoreRamp(smoothness, 0.45, 0.72), weight: 0.16 },
-        ]) * 100;
+        if (metrics.loopnessScore >= 72) reasons.push("clean_loop");
+        {
+          const loopSupport = weightedAverage([
+            { value: metrics.loopnessScore / 100, weight: 0.44 },
+            { value: 1 - metrics.spurScore / 100, weight: 0.24 },
+            { value: 1 - metrics.outAndBackScore / 100, weight: 0.20 },
+            { value: smoothness, weight: 0.12 },
+          ]);
+          const rawScore = weightedAverage([
+            {
+              value: scoreRamp(metrics.curveDensityPer50Km, 22, 36),
+              weight: 0.34,
+            },
+            { value: scoreRamp(metrics.sharpTurnRate, 8, 18), weight: 0.16 },
+            {
+              value: scoreRamp(metrics.headingChangePerKm, 95, 150),
+              weight: 0.18,
+            },
+            { value: metrics.loopnessScore / 100, weight: 0.14 },
+            { value: 1 - metrics.spurScore / 100, weight: 0.08 },
+            { value: 1 - metrics.outAndBackScore / 100, weight: 0.06 },
+            { value: scoreRamp(smoothness, 0.45, 0.72), weight: 0.04 },
+          ]) * 100;
+          const loopPenalty = loopSupport < 0.62
+            ? (0.62 - loopSupport) * 22
+            : 0;
+          return rawScore - loopPenalty;
+        }
       case "Abendrunde":
         if (metrics.smoothnessScore >= 72) reasons.push("calm_flow");
         return weightedAverage([
-          { value: smoothness, weight: 0.30 },
+          {
+            value: smoothness,
+            weight: 0.28,
+          },
           {
             value: scoreAround(metrics.curveDensityPer50Km, 10, 12),
-            weight: 0.18,
+            weight: 0.14,
           },
-          { value: scoreAround(metrics.zigzagScore, 6, 18), weight: 0.22 },
-          { value: scoreAround(metrics.stubPenalty, 4, 16), weight: 0.18 },
-          { value: scoreAround(metrics.sharpTurnRate, 6, 8), weight: 0.12 },
+          { value: scoreAround(metrics.zigzagScore, 6, 18), weight: 0.16 },
+          { value: 1 - metrics.spurScore / 100, weight: 0.14 },
+          { value: 1 - metrics.outAndBackScore / 100, weight: 0.10 },
+          { value: metrics.loopnessScore / 100, weight: 0.12 },
+          { value: scoreAround(metrics.sharpTurnRate, 6, 8), weight: 0.06 },
         ]) * 100;
       case "Entdecker":
         if (metrics.sectorDiversityScore >= 55) {
           reasons.push("sector_diverse");
         }
         return weightedAverage([
-          { value: metrics.sectorDiversityScore / 100, weight: 0.38 },
+          { value: metrics.sectorDiversityScore / 100, weight: 0.34 },
           {
             value: scoreRamp(metrics.headingChangePerKm, 45, 105),
-            weight: 0.18,
+            weight: 0.16,
           },
           {
             value: scoreRamp(metrics.averageSegmentLengthMeters, 95, 210),
-            weight: 0.12,
+            weight: 0.10,
           },
           {
             value: scoreAround(metrics.curveDensityPer50Km, 16, 20),
-            weight: 0.14,
+            weight: 0.12,
           },
-          { value: smoothness, weight: 0.18 },
+          { value: metrics.loopnessScore / 100, weight: 0.16 },
+          { value: 1 - metrics.outAndBackScore / 100, weight: 0.08 },
+          { value: smoothness, weight: 0.04 },
         ]) * 100;
       default:
         return weightedAverage([
@@ -997,6 +1289,10 @@ function applyStyleFitToQuality(
   mode?: RouteMode,
 ): RouteQualityEvaluation {
   const styleFit = scoreRouteStyleFit(route, mode);
+  const shapeMetrics = calculateRouteShapeMetrics(
+    route,
+    quality.overlapPercent,
+  );
   const baseScore = quality.score;
   if (quality.tier === "rejected") {
     return {
@@ -1005,10 +1301,11 @@ function applyStyleFitToQuality(
       styleFitScore: styleFit.score,
       styleFitReasons: styleFit.reasons,
       styleMetrics: styleFit.metrics,
+      shapeMetrics,
     };
   }
-  const stylePenalty = (100 - styleFit.score) * 0.42;
-  const styleBonus = styleFit.score * 0.12;
+  const stylePenalty = (100 - styleFit.score) * 0.70;
+  const styleBonus = styleFit.score * 0.10;
   return {
     ...quality,
     baseScore,
@@ -1016,6 +1313,7 @@ function applyStyleFitToQuality(
     styleFitScore: styleFit.score,
     styleFitReasons: styleFit.reasons,
     styleMetrics: styleFit.metrics,
+    shapeMetrics,
   };
 }
 
@@ -1027,16 +1325,19 @@ function evaluateRouteQualityCore(
     distanceConfig?: DistanceConfig;
     mode?: RouteMode;
     avoidHighways?: boolean;
+    requiredStops?: boolean;
+    requiredStopCoordinates?: Coordinate[];
   },
 ): RouteQualityEvaluation {
   const coordinateCount = route?.geometry?.coordinates?.length ?? 0;
   const actualDistanceKm = getRouteDistanceKm(route);
-  const overlapPercent = calculateRouteOverlapPercent(route);
-  const shapeSignals = calculateRouteShapeSignals(route);
-  const hasManeuverUTurn = hasUTurnManeuver(route);
-  const hasGeometricUTurn = routeType === "ROUND_TRIP" &&
-    shapeSignals.geometricUTurnCount > 0;
-  const hasUTurn = hasManeuverUTurn || hasGeometricUTurn;
+  const targetDistanceKm = options?.targetDistanceKm ?? 0;
+  const distanceConfig = options?.distanceConfig;
+  const avoidHighways = options?.avoidHighways === true;
+  const requiredStops = options?.requiredStops === true;
+  const distanceDeltaKm = targetDistanceKm > 0
+    ? Math.abs(actualDistanceKm - targetDistanceKm)
+    : 0;
   // Anti-Kraken: Kurvenjagd bekommt einen etwas schärferen Overlap-
   // Threshold, damit echte Out-and-Back-/Ast-Formen (Sackgasse hin+zurück)
   // konsequent als rejected markiert werden. Wert kalibriert auf reale
@@ -1060,15 +1361,69 @@ function evaluateRouteQualityCore(
     isSportMode &&
     options?.avoidHighways === false &&
     (options?.targetDistanceKm ?? Number.POSITIVE_INFINITY) <= 60;
+  const hardDistanceMin = targetDistanceKm <= 0 ? 0 : targetDistanceKm *
+    (targetDistanceKm <= 60
+      ? avoidHighways ? 0.64 : 0.70
+      : targetDistanceKm <= 100
+      ? 0.74
+      : 0.76);
+  const hardDistanceMax = targetDistanceKm <= 0
+    ? Number.POSITIVE_INFINITY
+    : targetDistanceKm *
+      (targetDistanceKm <= 60
+        ? avoidHighways ? isShortNoHighwaySportRoundTrip ? 1.30 : 1.44 : 1.36
+        : targetDistanceKm <= 100
+        ? 1.34
+        : 1.30);
+  const severeDistanceMiss = targetDistanceKm > 0 &&
+    (actualDistanceKm < hardDistanceMin || actualDistanceKm > hardDistanceMax);
+  const shortSportPresentationMinKm = 44.8;
+  const shortSportPresentationMaxKm = 55.2;
+  const shortSportRawDistanceMiss = isShortNoHighwaySportRoundTrip &&
+    (actualDistanceKm < shortSportPresentationMinKm - 1.0 ||
+      actualDistanceKm > shortSportPresentationMaxKm + 1.2);
+  if (routeType === "ROUND_TRIP" && severeDistanceMiss) {
+    return {
+      passed: false,
+      reason: `distance=${actualDistanceKm.toFixed(1)}km`,
+      overlapPercent: 0,
+      hasUTurn: false,
+      tier: "rejected",
+      score: 910 +
+        distanceDeltaKm * 7 +
+        Math.max(0, Math.abs(actualDistanceKm - targetDistanceKm)) * 2.5,
+      coordinateCount,
+      actualDistanceKm,
+      distanceDeltaKm,
+    };
+  }
+  if (routeType === "ROUND_TRIP" && shortSportRawDistanceMiss) {
+    return {
+      passed: false,
+      reason: `short_sport_distance=${actualDistanceKm.toFixed(1)}km`,
+      overlapPercent: 0,
+      hasUTurn: false,
+      tier: "rejected",
+      score: 940 +
+        Math.abs(
+            actualDistanceKm < shortSportPresentationMinKm
+              ? shortSportPresentationMinKm - actualDistanceKm
+              : actualDistanceKm - shortSportPresentationMaxKm,
+          ) * 18,
+      coordinateCount,
+      actualDistanceKm,
+      distanceDeltaKm,
+    };
+  }
+  const overlapPercent = calculateRouteOverlapPercent(route);
+  const shapeSignals = calculateRouteShapeSignals(route);
+  const hasManeuverUTurn = hasUTurnManeuver(route);
+  const hasGeometricUTurn = routeType === "ROUND_TRIP" &&
+    shapeSignals.geometricUTurnCount > 0;
+  const hasUTurn = hasManeuverUTurn || hasGeometricUTurn;
   const overlapThreshold = routeType === "ROUND_TRIP"
     ? (isCurveChase ? 15 : 16)
     : (isCurveChase ? 12 : 14);
-  const targetDistanceKm = options?.targetDistanceKm ?? 0;
-  const distanceConfig = options?.distanceConfig;
-  const avoidHighways = options?.avoidHighways === true;
-  const distanceDeltaKm = targetDistanceKm > 0
-    ? Math.abs(actualDistanceKm - targetDistanceKm)
-    : 0;
   // Kurvenjagd strenger bei Haken/Radial-Peaks — das sind die typischen
   // „Äste/Kraken“ (Mapbox stolpert in Sackgasse, kehrt um, nächster Ast).
   // 6 (statt 8) ist genug aggressiv für Anti-Kraken ohne valide Kurven-Loops
@@ -1093,9 +1448,40 @@ function evaluateRouteQualityCore(
     avoidHighways === true && isSportMode &&
     !isShortNoHighwaySportRoundTrip && targetDistanceKm > 60 &&
     targetDistanceKm <= 115;
-  const severeRoundTripShape = routeType === "ROUND_TRIP" &&
+  const longNoHighwaySportSpurShape = mediumLongNoHighwaySportShape &&
+    targetDistanceKm >= 90 &&
+    (
+      (
+        shapeSignals.spurArmPercent >= 42 &&
+        (
+          shapeSignals.middleCoverageRatio < 0.34 ||
+          shapeSignals.repeatedStartAreaPercent >= 18 ||
+          shapeSignals.oppositeOverlapPercent >= 22 ||
+          shapeSignals.radialPeakCount >= 3
+        )
+      ) ||
+      (
+        shapeSignals.oppositeOverlapPercent > 22 &&
+        shapeSignals.middleCoverageRatio < 0.34 &&
+        shapeSignals.foldedLoopPenalty > 68
+      ) ||
+      (
+        shapeSignals.loopCleanupRemovedPercent > 24 &&
+        shapeSignals.hookCount >= 6
+      )
+    );
+  const severeFoldedLoopGate =
+    // foldedLoopPenalty is clamped at 100, which naturally hits for
+    // alpine serpentines. Keep the gate, but allow a later local-hairpin
+    // classification to prevent foldedLoopPenalty alone from rejecting
+    // a clean no-highway Kurvenjagd switchback route.
+    !mediumLongNoHighwaySportShape &&
+    shapeSignals.foldedLoopPenalty >
+      (isShortNoHighwaySportRoundTrip ? 56 : 74);
+  const severeRoundTripShapeWithoutFoldGate = routeType === "ROUND_TRIP" &&
     (
       shapeSignals.centerReentryCount >= 4 ||
+      longNoHighwaySportSpurShape ||
       (shapeSignals.radialPeakCount >= (isCurveChase ? 3 : 4) &&
         shapeSignals.middleCoverageRatio < 0.34) ||
       (shapeSignals.middleCoverageRatio < 0.18 &&
@@ -1129,17 +1515,10 @@ function evaluateRouteQualityCore(
           (isShortNoHighwaySportRoundTrip
             ? 0.46
             : (mediumLongNoHighwaySportShape ? 0.25 : 0.36))
-      ) ||
-      (
-        // foldedLoopPenalty is clamped at 100, which naturally hits for
-        // alpine serpentines. Disable the gate entirely for medium/long
-        // no-highway Sport and rely on oppositeOverlap + coverage above
-        // to catch real kraken shapes.
-        !mediumLongNoHighwaySportShape &&
-        shapeSignals.foldedLoopPenalty >
-          (isShortNoHighwaySportRoundTrip ? 56 : 74)
       )
     );
+  let severeRoundTripShape = severeRoundTripShapeWithoutFoldGate ||
+    (routeType === "ROUND_TRIP" && severeFoldedLoopGate);
   const severeCentralReturn = routeType === "ROUND_TRIP"
     ? (
       shapeSignals.centralReturnPercent > (isCurveChase ? 30 : 35) ||
@@ -1252,31 +1631,12 @@ function evaluateRouteQualityCore(
     coordinateCount < severeCoordinateThreshold && actualDistanceKm > 8;
   const weakGeometry = coordinateCount < weakGeometryThreshold &&
     actualDistanceKm > 15;
-  const hardDistanceMin = targetDistanceKm <= 0 ? 0 : targetDistanceKm *
-    (targetDistanceKm <= 60
-      ? avoidHighways ? 0.64 : 0.70
-      : targetDistanceKm <= 100
-      ? 0.74
-      : 0.76);
-  const hardDistanceMax = targetDistanceKm <= 0
-    ? Number.POSITIVE_INFINITY
-    : targetDistanceKm *
-      (targetDistanceKm <= 60
-        ? avoidHighways ? isShortNoHighwaySportRoundTrip ? 1.30 : 1.44 : 1.36
-        : targetDistanceKm <= 100
-        ? 1.34
-        : 1.30);
-  const severeDistanceMiss = targetDistanceKm > 0 &&
-    (actualDistanceKm < hardDistanceMin || actualDistanceKm > hardDistanceMax);
-  const shortSportPresentationMinKm = 44.8;
-  const shortSportPresentationMaxKm = 55.2;
-  const shortSportRawDistanceMiss = isShortNoHighwaySportRoundTrip &&
-    (actualDistanceKm < shortSportPresentationMinKm - 1.0 ||
-      actualDistanceKm > shortSportPresentationMaxKm + 1.2);
   const shortSportOverlapMiss = isShortNoHighwaySportRoundTrip &&
     overlapPercent > 22;
   const noHighwayLoopCleanup = isNoHighwayHairpinEligibleRoundTrip
-    ? estimateClientLoopCleanupImpact(extractRouteCoordinates(route))
+    ? estimateClientLoopCleanupImpact(
+      normalizeCoordinatesForShapeAnalysis(extractRouteCoordinates(route)),
+    )
     : null;
   if (noHighwayLoopCleanup != null) {
     shapeSignals.loopCleanupRemovedPercent =
@@ -1287,6 +1647,25 @@ function evaluateRouteQualityCore(
     shapeSignals.loopCleanupDistanceKm = noHighwayLoopCleanup.cleanedDistanceKm;
     shapeSignals.loopCleanupUTurnCount =
       noHighwayLoopCleanup.cleanedGeometricUTurnCount;
+  }
+  const uTurnClassification = classifyUTurnShape(shapeSignals, {
+    overlapPercent,
+    hasManeuverUTurn,
+    hasGeometricUTurn,
+    isNoHighwayHairpinEligibleRoundTrip,
+    isCurveChase,
+    isSportMode,
+    targetDistanceKm,
+  });
+  const allowedGeometryHairpin = isAllowedHairpinClassification(
+    uTurnClassification,
+  );
+  if (
+    allowedGeometryHairpin &&
+    severeFoldedLoopGate &&
+    !severeRoundTripShapeWithoutFoldGate
+  ) {
+    severeRoundTripShape = false;
   }
   // Real mountain valleys (Dornbirn/Bregenzerwald) naturally contain
   // hairpin bends on no-highway roads. The short-distance path stays
@@ -1301,6 +1680,12 @@ function evaluateRouteQualityCore(
   // we tolerate a handful of those as long as the geometric signals stay
   // within the (loosened) hairpin gate thresholds.
   const uTurnManeuverCount = hasManeuverUTurn ? countUTurnManeuvers(route) : 0;
+  const requiredStopUTurnManeuverCount = requiredStops
+    ? countRequiredStopUTurnManeuvers(route, options?.requiredStopCoordinates)
+    : 0;
+  const requiredStopManeuverUTurnsOnly = requiredStops &&
+    uTurnManeuverCount > 0 &&
+    requiredStopUTurnManeuverCount === uTurnManeuverCount;
   const tolerantShortSportHairpin = isShortSportWithHighwayRoundTrip;
   const cleanShortSportHairpin = tolerantShortSportHairpin &&
     !hasManeuverUTurn && shapeSignals.geometricUTurnCount <= 3 &&
@@ -1323,6 +1708,8 @@ function evaluateRouteQualityCore(
     shapeSignals.geometricUTurnCount <=
       (mediumLongNoHighwaySport
         ? (targetDistanceKm > 85 ? 6 : 5)
+        : isShortNoHighwaySportRoundTrip && isSportMode
+        ? 0
         : (targetDistanceKm > 85 ? 2 : 1)) &&
     (distanceConfig == null ||
       (
@@ -1365,11 +1752,29 @@ function evaluateRouteQualityCore(
           ? shortSportPresentationMinKm - 1.0
           : distanceConfig.acceptableMinKm - 1.0))) ||
     cleanShortSportHairpin;
+  const cleanRequiredStopHairpin = requiredStops &&
+    (!hasManeuverUTurn || requiredStopManeuverUTurnsOnly) &&
+    shapeSignals.geometricUTurnCount <= (isCurveChase ? 5 : 4) &&
+    overlapPercent <= (isCurveChase ? 28 : 30) &&
+    shapeSignals.oppositeOverlapPercent <= (isCurveChase ? 24 : 26) &&
+    shapeSignals.foldedLoopPenalty <= 88 &&
+    shapeSignals.middleCoverageRatio >= 0.22 &&
+    shapeSignals.centerReentryCount <= 2 &&
+    shapeSignals.repeatedStartAreaPercent <= 42 &&
+    shapeSignals.spurArmPercent <= 36 &&
+    shapeSignals.centralReturnPercent <= 28 &&
+    shapeSignals.hookCount <= (isCurveChase ? 14 : 16);
 
-  if (hasUTurn && !cleanNoHighwayHairpin) {
+  if (
+    hasUTurn &&
+    !allowedGeometryHairpin &&
+    !cleanNoHighwayHairpin &&
+    !cleanRequiredStopHairpin
+  ) {
     if (isNoHighwayHairpinEligibleRoundTrip && hasGeometricUTurn) {
       debugLog(
         `[RT-QA] hairpin-reject uTurn=${shapeSignals.geometricUTurnCount}` +
+          ` class=${uTurnClassification}` +
           ` manUT=${hasManeuverUTurn}(${uTurnManeuverCount}) clean=${cleanNoHighwayHairpin}` +
           ` dist=${actualDistanceKm.toFixed(1)} ovl=${
             overlapPercent.toFixed(1)
@@ -1390,7 +1795,15 @@ function evaluateRouteQualityCore(
     }
     return {
       passed: false,
-      reason: hasGeometricUTurn
+      reason: uTurnClassification === "true_out_and_back"
+        ? "u_turn_true_out_and_back"
+        : uTurnClassification === "dead_end_spike"
+        ? "u_turn_dead_end_spike"
+        : uTurnClassification === "route_stub"
+        ? "u_turn_route_stub"
+        : uTurnClassification === "start_reentry"
+        ? "u_turn_start_reentry"
+        : hasGeometricUTurn
         ? `u_turn_geometry=${shapeSignals.geometricUTurnCount}`
         : "u_turn",
       overlapPercent,
@@ -1690,10 +2103,39 @@ export function evaluateRouteQuality(
     distanceConfig?: DistanceConfig;
     mode?: RouteMode;
     avoidHighways?: boolean;
+    requiredStops?: boolean;
+    requiredStopCoordinates?: Coordinate[];
   },
 ): RouteQualityEvaluation {
   const quality = evaluateRouteQualityCore(route, routeType, options);
-  if (routeType !== "ROUND_TRIP") return quality;
+  if (routeType !== "ROUND_TRIP") {
+    const styleFit = scoreRouteStyleFit(route, options?.mode);
+    const shapeMetrics = calculateRouteShapeMetrics(
+      route,
+      quality.overlapPercent,
+    );
+    if (quality.tier === "rejected") {
+      return {
+        ...quality,
+        baseScore: quality.score,
+        styleFitScore: styleFit.score,
+        styleFitReasons: styleFit.reasons,
+        styleMetrics: styleFit.metrics,
+        shapeMetrics,
+      };
+    }
+    const stylePenalty = (100 - styleFit.score) * 0.30;
+    const styleBonus = styleFit.score * 0.035;
+    return {
+      ...quality,
+      baseScore: quality.score,
+      score: quality.score + stylePenalty - styleBonus,
+      styleFitScore: styleFit.score,
+      styleFitReasons: styleFit.reasons,
+      styleMetrics: styleFit.metrics,
+      shapeMetrics,
+    };
+  }
   return applyStyleFitToQuality(quality, route, options?.mode);
 }
 
@@ -1706,6 +2148,8 @@ export function evaluateRouteCleanupGate(
     mode?: RouteMode;
     avoidHighways?: boolean;
     startLocation?: Coordinate;
+    requiredStops?: boolean;
+    requiredStopCoordinates?: Coordinate[];
   },
 ): RouteCleanupEvaluation {
   if (routeType !== "ROUND_TRIP") {
@@ -1744,16 +2188,6 @@ export function evaluateRouteCleanupGate(
       : measureCoordinatePathMeters(coordinates),
     options?.startLocation,
   );
-  const cleanedRoute = cloneRouteWithCoordinates(
-    route,
-    cleanup.coordinates,
-    cleanup.cleanedDistanceKm,
-  );
-  const cleanedQuality = evaluateRouteQualityCore(
-    cleanedRoute,
-    routeType,
-    options,
-  );
   const distanceConfig = options?.distanceConfig;
   const targetDistanceKm = options?.targetDistanceKm ?? 0;
   // Medium/long no-highway Sport rides run through alpine serpentines
@@ -1763,10 +2197,33 @@ export function evaluateRouteCleanupGate(
     options?.avoidHighways === true &&
     options?.mode === "Sport Mode" &&
     targetDistanceKm > 60 && targetDistanceKm <= 115;
+  const shortNoHighwaySportGate = routeType === "ROUND_TRIP" &&
+    options?.avoidHighways === true &&
+    options?.mode === "Sport Mode" &&
+    targetDistanceKm > 0 && targetDistanceKm <= 60;
+  const gentleNoHighwayStyleHairpinGate = routeType === "ROUND_TRIP" &&
+    options?.avoidHighways === true &&
+    (options?.mode === "Abendrunde" || options?.mode === "Entdecker") &&
+    targetDistanceKm > 0 && targetDistanceKm <= 85;
+  const noHighwayCurveChaseHairpinGate = routeType === "ROUND_TRIP" &&
+    options?.avoidHighways === true &&
+    options?.mode === "Kurvenjagd" &&
+    targetDistanceKm <= 115;
+  const requiredStopsGate = options?.requiredStops === true;
   const maneuverUTurnAllowance = mediumLongNoHighwaySportGate ? 6 : 0;
   const maneuverUTurnCount = countUTurnManeuvers(route);
   const manualUTurnBreach = maneuverUTurnCount > maneuverUTurnAllowance;
-  const geometricUTurnAllowance = mediumLongNoHighwaySportGate ? 6 : 0;
+  const geometricUTurnAllowance = requiredStopsGate
+    ? 4
+    : mediumLongNoHighwaySportGate
+    ? 6
+    : shortNoHighwaySportGate
+    ? 2
+    : noHighwayCurveChaseHairpinGate
+    ? targetDistanceKm > 85 ? 8 : 7
+    : gentleNoHighwayStyleHairpinGate
+    ? 2
+    : 0;
   const cleanedGeometricUTurnBreach = cleanup.cleanedGeometricUTurnCount >
     geometricUTurnAllowance;
   const cleanedHasUTurn = manualUTurnBreach || cleanedGeometricUTurnBreach;
@@ -1798,6 +2255,29 @@ export function evaluateRouteCleanupGate(
       reason: `cleanup_distance=${cleanup.cleanedDistanceKm.toFixed(1)}km`,
     };
   }
+
+  if (
+    !cleanup.startTrimApplied &&
+    !cleanup.loopRemovalApplied &&
+    cleanup.removedPointPercent <= 0.1 &&
+    cleanup.cleanedGeometricUTurnCount === 0
+  ) {
+    return {
+      ...cleanup,
+      cleanedCoordinates: cleanup.coordinates,
+    };
+  }
+
+  const cleanedRoute = cloneRouteWithCoordinates(
+    route,
+    cleanup.coordinates,
+    cleanup.cleanedDistanceKm,
+  );
+  const cleanedQuality = evaluateRouteQualityCore(
+    cleanedRoute,
+    routeType,
+    options,
+  );
 
   if (
     !mediumLongNoHighwaySportGate && hasFoldLoop(cleanedQuality.reason, cleanup)

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:flutter_typeahead/flutter_typeahead.dart';
 
 import 'package:cruise_connect/data/services/geocoding_service.dart';
@@ -27,6 +28,17 @@ class CruiseSetupCard extends StatefulWidget {
     required this.onDetourChanged,
     this.selectedAvoidHighways = false,
     this.onAvoidHighwaysChanged,
+    this.proximityLatitude,
+    this.proximityLongitude,
+    this.roundTripWaypointCount = 0,
+    this.selectedWaypointIndex,
+    this.replacingWaypointIndex,
+    this.waypointActionsEnabled = true,
+    this.onGenerateWaypointSeed,
+    this.onRemoveLastWaypoint,
+    this.onDeleteSelectedWaypoint,
+    this.onReplaceSelectedWaypoint,
+    this.onClearWaypoints,
   });
 
   final bool isRoundTrip;
@@ -48,6 +60,17 @@ class CruiseSetupCard extends StatefulWidget {
   final ValueChanged<String>? onDestinationInputChanged;
   final bool selectedAvoidHighways;
   final ValueChanged<bool>? onAvoidHighwaysChanged;
+  final double? proximityLatitude;
+  final double? proximityLongitude;
+  final int roundTripWaypointCount;
+  final int? selectedWaypointIndex;
+  final int? replacingWaypointIndex;
+  final bool waypointActionsEnabled;
+  final VoidCallback? onGenerateWaypointSeed;
+  final VoidCallback? onRemoveLastWaypoint;
+  final VoidCallback? onDeleteSelectedWaypoint;
+  final VoidCallback? onReplaceSelectedWaypoint;
+  final VoidCallback? onClearWaypoints;
 
   static const _geocodingService = GeocodingService();
 
@@ -220,17 +243,101 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
                 onTap: () => widget.onPlanningTypeChanged('Zufall'),
               ),
             ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _ChoiceButton(
+                label: 'Wegpunkte',
+                isSelected: widget.planningType == 'Wegpunkte',
+                onTap: () => widget.onPlanningTypeChanged('Wegpunkte'),
+              ),
+            ),
           ],
         ),
-        const SizedBox(height: 10),
-        const Text(
-          'Wegpunkt-Planung folgt in einer separaten Ausbaustufe.',
-          style: TextStyle(
-            color: Colors.white38,
-            fontSize: 12,
-            fontWeight: FontWeight.w400,
+        if (widget.planningType == 'Wegpunkte') ...[
+          const SizedBox(height: 12),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: const Color(0xFF0B0E14),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: Colors.white10),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  _waypointHintText(),
+                  style: const TextStyle(
+                    color: Colors.white70,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    _SmallActionButton(
+                      label: 'Stopps vorschlagen',
+                      icon: Icons.auto_awesome,
+                      onTap: widget.waypointActionsEnabled
+                          ? widget.onGenerateWaypointSeed
+                          : null,
+                    ),
+                    _SmallActionButton(
+                      label: 'Letzten löschen',
+                      icon: Icons.undo,
+                      onTap:
+                          widget.waypointActionsEnabled &&
+                              widget.roundTripWaypointCount > 0
+                          ? widget.onRemoveLastWaypoint
+                          : null,
+                    ),
+                    _SmallActionButton(
+                      label: 'Auswahl löschen',
+                      icon: Icons.delete_outline,
+                      onTap:
+                          widget.waypointActionsEnabled &&
+                              widget.selectedWaypointIndex != null
+                          ? widget.onDeleteSelectedWaypoint
+                          : null,
+                    ),
+                    _SmallActionButton(
+                      label: 'Auswahl neu setzen',
+                      icon: Icons.edit_location_alt_outlined,
+                      onTap:
+                          widget.waypointActionsEnabled &&
+                              widget.selectedWaypointIndex != null
+                          ? widget.onReplaceSelectedWaypoint
+                          : null,
+                    ),
+                    _SmallActionButton(
+                      label: 'Alle löschen',
+                      icon: Icons.clear,
+                      onTap:
+                          widget.waypointActionsEnabled &&
+                              widget.roundTripWaypointCount > 0
+                          ? widget.onClearWaypoints
+                          : null,
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
-        ),
+        ] else ...[
+          const SizedBox(height: 10),
+          const Text(
+            'Die App erzeugt automatisch eine geprüfte Rundkursroute.',
+            style: TextStyle(
+              color: Colors.white38,
+              fontSize: 12,
+              fontWeight: FontWeight.w400,
+            ),
+          ),
+        ],
       ],
     );
   }
@@ -256,14 +363,14 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
               color: const Color(0xFF0B0E14),
               borderRadius: BorderRadius.circular(16),
               border: Border.all(
-                color: const Color(0xFFFF3B30).withValues(alpha: 0.5),
+                color: AppAccentColors.accent.withValues(alpha: 0.5),
               ),
             ),
             child: Row(
               children: [
-                const Icon(
+                Icon(
                   Icons.location_on,
-                  color: Color(0xFFFF3B30),
+                  color: AppAccentColors.accent,
                   size: 24,
                 ),
                 const SizedBox(width: 12),
@@ -335,14 +442,18 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
             debounceDuration: const Duration(milliseconds: 450),
             suggestionsCallback: (pattern) async {
               // Erst ab 2 Zeichen abfragen, sonst wenig sinnvolle Treffer.
-              if (pattern.trim().length < 2) return const [];
+              if (pattern.trim().length < 2) return [];
               try {
                 return await CruiseSetupCard._geocodingService
-                    .searchSuggestions(pattern);
+                    .searchSuggestions(
+                      pattern,
+                      proximityLatitude: widget.proximityLatitude,
+                      proximityLongitude: widget.proximityLongitude,
+                    );
               } catch (e, stack) {
                 debugPrint('[CruiseSetup] Vorschlags-Suche fehlgeschlagen: $e');
                 debugPrintStack(stackTrace: stack);
-                return const [];
+                return [];
               }
             },
             errorBuilder: (context, error) => Padding(
@@ -354,14 +465,20 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
             ),
             itemBuilder: (context, suggestion) => ListTile(
               tileColor: const Color(0xFF1C1F26),
-              leading: const Icon(Icons.location_on, color: Color(0xFFFF3B30)),
+              leading: Icon(Icons.location_on, color: AppAccentColors.accent),
               title: Text(
                 suggestion.placeName,
                 style: const TextStyle(color: Colors.white, fontSize: 14),
               ),
-              subtitle: suggestion.context != null
+              subtitle:
+                  suggestion.context != null ||
+                      suggestion.distanceMeters != null
                   ? Text(
-                      suggestion.context!,
+                      [
+                        if (suggestion.context != null) suggestion.context!,
+                        if (suggestion.distanceMeters != null)
+                          _formatSuggestionDistance(suggestion.distanceMeters!),
+                      ].join(' · '),
                       style: const TextStyle(color: Colors.grey, fontSize: 12),
                     )
                   : null,
@@ -377,10 +494,10 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
                 style: TextStyle(color: Colors.grey, fontSize: 13),
               ),
             ),
-            loadingBuilder: (context) => const Padding(
-              padding: EdgeInsets.all(16),
+            loadingBuilder: (context) => Padding(
+              padding: const EdgeInsets.all(16),
               child: Center(
-                child: CircularProgressIndicator(color: Color(0xFFFF3B30)),
+                child: CircularProgressIndicator(color: AppAccentColors.accent),
               ),
             ),
             builder: (context, controller, focusNode) => TextField(
@@ -391,7 +508,7 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
               onTapOutside: (_) => FocusScope.of(context).unfocus(),
               decoration: const InputDecoration(
                 prefixIcon: Icon(Icons.search, color: Colors.white38),
-                hintText: 'Adresse suchen...',
+                hintText: 'Ziel suchen...',
                 hintStyle: TextStyle(color: Colors.white38),
                 border: InputBorder.none,
                 contentPadding: EdgeInsets.symmetric(
@@ -404,6 +521,27 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
         ),
       ],
     );
+  }
+
+  String _formatSuggestionDistance(double meters) {
+    if (meters < 1000) return '${meters.round()} m entfernt';
+    return '${(meters / 1000).toStringAsFixed(1)} km entfernt';
+  }
+
+  String _waypointHintText() {
+    if (widget.roundTripWaypointCount == 0) {
+      return 'Setze bis zu 3 Stopps, die deine Rundroute wirklich anfahren soll.';
+    }
+    final replacing = widget.replacingWaypointIndex;
+    if (replacing != null && replacing >= 0) {
+      return 'Tippe auf die Karte, um Stopp ${replacing + 1} neu zu setzen.';
+    }
+    final selected = widget.selectedWaypointIndex;
+    if (selected != null && selected >= 0) {
+      return 'Stopp ${selected + 1} ausgewählt. Du kannst ihn löschen oder neu setzen.';
+    }
+    final pluralSuffix = widget.roundTripWaypointCount == 1 ? '' : 's';
+    return '${widget.roundTripWaypointCount} Stopp$pluralSuffix gesetzt. Die Route fährt diese Punkte an.';
   }
 }
 
@@ -433,13 +571,13 @@ class _LargeModeButton extends StatelessWidget {
           color: isActive ? const Color(0xFF1C1F26) : const Color(0xFF0B0E14),
           borderRadius: BorderRadius.circular(20),
           border: Border.all(
-            color: isActive ? const Color(0xFFFF3B30) : Colors.white12,
+            color: isActive ? AppAccentColors.accent : Colors.white12,
             width: isActive ? 2 : 1,
           ),
           boxShadow: isActive
               ? [
                   BoxShadow(
-                    color: const Color(0xFFFF3B30).withValues(alpha: 0.3),
+                    color: AppAccentColors.accent.withValues(alpha: 0.3),
                     blurRadius: 15,
                     spreadRadius: 1,
                   ),
@@ -451,7 +589,7 @@ class _LargeModeButton extends StatelessWidget {
           children: [
             Icon(
               icon,
-              color: isActive ? const Color(0xFFFF3B30) : Colors.white38,
+              color: isActive ? AppAccentColors.accent : Colors.white38,
               size: 32,
             ),
             const SizedBox(height: 10),
@@ -490,11 +628,11 @@ class _ChoiceButton extends StatelessWidget {
         padding: const EdgeInsets.symmetric(vertical: 20),
         decoration: BoxDecoration(
           color: isSelected
-              ? const Color(0xFFFF3B30).withValues(alpha: 0.15)
+              ? AppAccentColors.accent.withValues(alpha: 0.15)
               : const Color(0xFF0B0E14),
           borderRadius: BorderRadius.circular(16),
           border: Border.all(
-            color: isSelected ? const Color(0xFFFF3B30) : Colors.transparent,
+            color: isSelected ? AppAccentColors.accent : Colors.transparent,
             width: 1.5,
           ),
         ),
@@ -502,7 +640,7 @@ class _ChoiceButton extends StatelessWidget {
         child: Text(
           label,
           style: TextStyle(
-            color: isSelected ? const Color(0xFFFF3B30) : Colors.white60,
+            color: isSelected ? AppAccentColors.accent : Colors.white60,
             fontWeight: FontWeight.bold,
             fontSize: 15,
           ),
@@ -524,9 +662,7 @@ class _HighwayToggleSwitch extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final highwaysIncluded = !isEnabled;
-    final accentColor = highwaysIncluded
-        ? const Color(0xFFFF5A36)
-        : const Color(0xFFFF3B30);
+    final accentColor = AppAccentColors.accent;
     final backgroundColor = highwaysIncluded
         ? accentColor.withValues(alpha: 0.12)
         : const Color(0xFF0B0E14);
@@ -691,6 +827,60 @@ class _HighwayToggleSwitch extends StatelessWidget {
   }
 }
 
+class _SmallActionButton extends StatelessWidget {
+  const _SmallActionButton({
+    required this.label,
+    required this.icon,
+    required this.onTap,
+  });
+
+  final String label;
+  final IconData icon;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = onTap != null;
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: enabled
+              ? const Color(0xFFFF3B30).withValues(alpha: 0.16)
+              : Colors.white.withValues(alpha: 0.05),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(
+            color: enabled
+                ? const Color(0xFFFF3B30).withValues(alpha: 0.35)
+                : Colors.white10,
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              icon,
+              size: 15,
+              color: enabled ? const Color(0xFFFF3B30) : Colors.white30,
+            ),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: TextStyle(
+                color: enabled ? Colors.white70 : Colors.white30,
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _SelectionRow extends StatelessWidget {
   const _SelectionRow({
     required this.title,
@@ -733,15 +923,15 @@ class _SelectionRow extends StatelessWidget {
                 ),
                 decoration: BoxDecoration(
                   color: isSelected
-                      ? const Color(0xFFFF3B30)
+                      ? AppAccentColors.accent
                       : const Color(0xFF0B0E14),
                   borderRadius: BorderRadius.circular(20),
                   boxShadow: isSelected
                       ? [
                           BoxShadow(
-                            color: const Color(
-                              0xFFFF3B30,
-                            ).withValues(alpha: 0.4),
+                            color: AppAccentColors.accent.withValues(
+                              alpha: 0.4,
+                            ),
                             blurRadius: 8,
                             offset: const Offset(0, 2),
                           ),

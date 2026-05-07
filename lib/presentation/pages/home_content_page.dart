@@ -4,12 +4,16 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart' as geo;
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:provider/provider.dart';
+import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/data/services/gamification_service.dart';
+import 'package:cruise_connect/data/services/home_route_recommendation_service.dart';
 import 'package:cruise_connect/data/services/route_elevation_service.dart';
 import 'package:cruise_connect/data/services/saved_routes_service.dart';
-import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/domain/models/saved_route.dart';
 import 'package:cruise_connect/presentation/pages/cruise_mode_page.dart';
+import 'package:cruise_connect/presentation/widgets/community_carousel_card.dart';
+import 'package:cruise_connect/presentation/widgets/user_avatar.dart';
 
 class HomeContentPage extends StatefulWidget {
   final Function(int)? onTabChange;
@@ -38,11 +42,13 @@ class _HomeContentPageState extends State<HomeContentPage>
   int totalRoutes = 0;
   double totalDistanceKm = 0;
   int badgeCount = 0;
+  String? _profileUserId;
+  String? _avatarUrl;
+  String? _profileUsername;
   bool _loading = true;
   List<double> _weeklyChartData = List.filled(7, 0);
-  int _followerCount = 0;
   int _streakDays = 0;
-  SavedRoute? _weeklyTopRoute;
+  HomeRouteRecommendation? _todayRecommendation;
   bool _isRouteSaved = false;
   final Map<String, _HeroRouteInsights> _heroInsightsByRouteId = {};
   final Set<String> _heroInsightsLoading = <String>{};
@@ -68,6 +74,19 @@ class _HomeContentPageState extends State<HomeContentPage>
     try {
       final result = await GamificationService.calculateAndSync();
       final routes = await SavedRoutesService.getUserRoutes();
+      Map<String, dynamic>? profile;
+      final userId = Supabase.instance.client.auth.currentUser?.id;
+      if (userId != null) {
+        try {
+          profile = await Supabase.instance.client
+              .from('profiles')
+              .select('id, username, avatar_url')
+              .eq('id', userId)
+              .maybeSingle();
+        } catch (e) {
+          debugPrint('[Home] Profil-Abfrage fehlgeschlagen: $e');
+        }
+      }
       final rideRoutes = routes
           .where((route) => route.isDrivenSession)
           .toList();
@@ -98,33 +117,10 @@ class _HomeContentPageState extends State<HomeContentPage>
           .map((km) => maxKm > 0 ? (km / maxKm).clamp(0.0, 1.0) : 0.0)
           .toList();
 
-      // Streak berechnen (Tage in Folge gefahren)
-      int streak = 0;
-      if (rideRoutes.isNotEmpty) {
-        final today = DateTime(now.year, now.month, now.day);
-        final driveDays = <DateTime>{};
-        for (final r in rideRoutes) {
-          final localCreatedAt = r.createdAt.toLocal();
-          driveDays.add(
-            DateTime(
-              localCreatedAt.year,
-              localCreatedAt.month,
-              localCreatedAt.day,
-            ),
-          );
-        }
-        var checkDay = today;
-        if (!driveDays.contains(checkDay)) {
-          checkDay = checkDay.subtract(const Duration(days: 1));
-        }
-        while (driveDays.contains(checkDay)) {
-          streak++;
-          checkDay = checkDay.subtract(const Duration(days: 1));
-        }
-      }
+      final streak = GamificationService.calculateDrivingStreakDays(rideRoutes);
 
-      // Wöchentliche Top-Route laden
-      SavedRoute? topRoute;
+      // Home-Empfehlung aus dem verified Routenpool laden.
+      HomeRouteRecommendation? recommendation;
       bool routeSaved = false;
       try {
         // Standort ermitteln
@@ -150,31 +146,20 @@ class _HomeContentPageState extends State<HomeContentPage>
           debugPrint('[Home] Standort nicht verfügbar, nutze Fallback: $e');
         }
 
-        topRoute = await SavedRoutesService.getWeeklyTopRoute(
+        recommendation = await HomeRouteRecommendationService.getTodayRoute(
           userLat: userLat,
           userLng: userLng,
         );
 
         // Prüfen ob Route bereits gespeichert
-        if (topRoute != null) {
+        if (recommendation != null) {
           routeSaved = SavedRoutesService.hasEquivalentSavedRoute(
-            topRoute,
+            recommendation.route,
             routes,
           );
         }
       } catch (e) {
-        debugPrint('[Home] Top-Route laden fehlgeschlagen: $e');
-      }
-
-      // Community stats
-      final uid = Supabase.instance.client.auth.currentUser?.id;
-      int followers = 0;
-      if (uid != null) {
-        try {
-          followers = await SocialService.getFollowerCount(uid);
-        } catch (e) {
-          debugPrint('[Home] Follower-Count fehlgeschlagen: $e');
-        }
+        debugPrint('[Home] Routepool-Empfehlung laden fehlgeschlagen: $e');
       }
 
       if (mounted) {
@@ -187,17 +172,19 @@ class _HomeContentPageState extends State<HomeContentPage>
           totalRoutes = result.totalRoutes;
           totalDistanceKm = result.totalDistanceKm;
           badgeCount = result.earnedBadgeIds.length;
+          _profileUserId = userId;
+          _profileUsername = (profile?['username'] as String?)?.trim();
+          _avatarUrl = profile?['avatar_url'] as String?;
           _weeklyChartData = normalized;
-          _followerCount = followers;
           _streakDays = streak;
-          _weeklyTopRoute = topRoute;
+          _todayRecommendation = recommendation;
           _isRouteSaved = routeSaved;
           _loading = false;
         });
       }
 
-      if (topRoute != null) {
-        unawaited(_ensureHeroRouteInsights(topRoute));
+      if (recommendation != null) {
+        unawaited(_ensureHeroRouteInsights(recommendation.route));
       }
     } catch (e) {
       debugPrint('[Home] Daten laden fehlgeschlagen: $e');
@@ -267,18 +254,23 @@ class _HomeContentPageState extends State<HomeContentPage>
         }
       }
     } catch (_) {
-      return const [];
+      return [];
     }
     return extracted;
   }
 
   @override
   Widget build(BuildContext context) {
+    final accent = context.watch<AppAccentProvider>().color;
     final user = Supabase.instance.client.auth.currentUser;
-    final String userName =
-        (user?.userMetadata?['username'] as String?) ??
-        user?.email?.split('@')[0] ??
-        'User';
+    final profileBelongsToUser = _profileUserId == user?.id;
+    final profileUsername = profileBelongsToUser ? _profileUsername : null;
+    final avatarUrl = profileBelongsToUser ? _avatarUrl : null;
+    final String userName = (profileUsername?.isNotEmpty ?? false)
+        ? profileUsername!
+        : (user?.userMetadata?['username'] as String?) ??
+              user?.email?.split('@')[0] ??
+              'User';
 
     return SingleChildScrollView(
       physics: const BouncingScrollPhysics(),
@@ -317,10 +309,15 @@ class _HomeContentPageState extends State<HomeContentPage>
                 Stack(
                   alignment: Alignment.topRight,
                   children: [
-                    const CircleAvatar(
-                      radius: 28,
-                      backgroundColor: Color(0xFFFF3B30),
-                      child: Icon(Icons.person, color: Colors.white, size: 32),
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4, right: 2),
+                      child: UserAvatar(
+                        name: userName,
+                        avatarUrl: avatarUrl,
+                        radius: 28,
+                        backgroundColor: accent,
+                        onTap: () => widget.onTabChange?.call(4),
+                      ),
                     ),
                     Container(
                       width: 24,
@@ -371,13 +368,13 @@ class _HomeContentPageState extends State<HomeContentPage>
                   ),
                   const SizedBox(height: 12),
                   _loading
-                      ? const Center(
+                      ? Center(
                           child: SizedBox(
                             width: 20,
                             height: 20,
                             child: CircularProgressIndicator(
                               strokeWidth: 2,
-                              color: Color(0xFFFF3B30),
+                              color: accent,
                             ),
                           ),
                         )
@@ -438,8 +435,8 @@ class _HomeContentPageState extends State<HomeContentPage>
                           child: Container(
                             decoration: BoxDecoration(
                               borderRadius: BorderRadius.circular(4),
-                              gradient: const LinearGradient(
-                                colors: [Color(0xFFFF5252), Color(0xFFD32F2F)],
+                              gradient: LinearGradient(
+                                colors: [accent, AppAccentColors.accentStrong],
                                 begin: Alignment.centerLeft,
                                 end: Alignment.centerRight,
                               ),
@@ -473,75 +470,8 @@ class _HomeContentPageState extends State<HomeContentPage>
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Expanded(
-                    child: Container(
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF1C1F26),
-                        borderRadius: BorderRadius.circular(24),
-                        border: Border.all(
-                          color: const Color(
-                            0xFFFFFFFF,
-                          ).withValues(alpha: 0.06),
-                          width: 1,
-                        ),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text(
-                            'Community',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 16,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          const SizedBox(height: 10),
-                          _buildCommunityItem('$_followerCount Follower', '👥'),
-                          const SizedBox(height: 4),
-                          _buildCommunityItem(
-                            '$totalRoutes Fahrten absolviert',
-                            '🔥',
-                          ),
-                          const SizedBox(height: 4),
-                          _buildCommunityItem(
-                            'Level $userLevel - $levelName',
-                            '📍',
-                          ),
-                          const Spacer(),
-                          SizedBox(
-                            width: double.infinity,
-                            child: GestureDetector(
-                              onTap: () {
-                                widget.onTabChange?.call(1);
-                              },
-                              child: Container(
-                                height: 35.0,
-                                decoration: BoxDecoration(
-                                  gradient: const LinearGradient(
-                                    colors: [
-                                      Color(0xFFFF5252),
-                                      Color(0xFFD32F2F),
-                                    ],
-                                    begin: Alignment.topLeft,
-                                    end: Alignment.bottomRight,
-                                  ),
-                                  borderRadius: BorderRadius.circular(30.0),
-                                ),
-                                alignment: Alignment.center,
-                                child: const Text(
-                                  'Beitreten',
-                                  style: TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
+                    child: CommunityCarouselCard(
+                      onOpenCommunity: () => widget.onTabChange?.call(1),
                     ),
                   ),
                   const SizedBox(width: 12),
@@ -620,8 +550,9 @@ class _HomeContentPageState extends State<HomeContentPage>
   }
 
   Widget _buildSuggestedRouteSection() {
-    if (_weeklyTopRoute != null) {
-      return _buildSuggestedRouteCard(_weeklyTopRoute!);
+    final recommendation = _todayRecommendation;
+    if (recommendation != null) {
+      return _buildSuggestedRouteCard(recommendation);
     }
 
     if (_loading) {
@@ -631,14 +562,13 @@ class _HomeContentPageState extends State<HomeContentPage>
     return _buildEmptyRecommendation();
   }
 
-  Widget _buildSuggestedRouteCard(SavedRoute route) {
+  Widget _buildSuggestedRouteCard(HomeRouteRecommendation recommendation) {
+    final route = recommendation.route;
     final coordinates = _extractCoordinates(route.geometry);
     final heroInsights = _heroInsightsByRouteId[route.id];
     final isLoadingInsights = _heroInsightsLoading.contains(route.id);
-    final ratingValue = route.rating?.toDouble();
-    final title = (route.name?.trim().isNotEmpty ?? false)
-        ? route.name!.trim()
-        : '${route.styleEmoji} ${route.style}';
+    final ratingValue = recommendation.averageRating;
+    final title = recommendation.displayName;
     final climbMeters = heroInsights?.elevation?.ascentMeters;
     final routeTypeLabel = route.isRoundTrip ? 'Rundkurs' : 'A nach B';
     final curvesLabel = heroInsights != null
@@ -656,123 +586,130 @@ class _HomeContentPageState extends State<HomeContentPage>
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        final isCompact = constraints.maxWidth < 680;
-        final previewSize = isCompact ? 148.0 : 232.0;
+        final isCompact = constraints.maxWidth < 430;
+        final previewSize = isCompact ? 92.0 : 116.0;
 
         return Container(
           width: double.infinity,
           decoration: BoxDecoration(
-            color: const Color(0xFF2A313C),
-            borderRadius: BorderRadius.circular(34),
+            color: const Color(0xFF252C36),
+            borderRadius: BorderRadius.circular(24),
             boxShadow: [
               BoxShadow(
-                color: const Color(0xFFFF3B30).withValues(alpha: 0.12),
-                blurRadius: 28,
-                offset: const Offset(0, 14),
+                color: AppAccentColors.accent.withValues(alpha: 0.10),
+                blurRadius: 18,
+                offset: const Offset(0, 8),
               ),
             ],
           ),
           child: Padding(
-            padding: const EdgeInsets.all(18),
+            padding: const EdgeInsets.all(12),
             child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
+              crossAxisAlignment: CrossAxisAlignment.center,
               children: [
                 Expanded(
                   child: Padding(
-                    padding: const EdgeInsets.only(right: 16, top: 4, bottom: 4),
+                    padding: const EdgeInsets.only(right: 12),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
                       children: [
-                        const Text(
-                          'Heute für dich',
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 17,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: 0.2,
-                          ),
+                        Row(
+                          children: [
+                            Container(
+                              width: 7,
+                              height: 7,
+                              decoration: BoxDecoration(
+                                color: AppAccentColors.accent,
+                                shape: BoxShape.circle,
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: AppAccentColors.accent.withValues(
+                                      alpha: 0.45,
+                                    ),
+                                    blurRadius: 10,
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(width: 7),
+                            Text(
+                              'Heute für dich',
+                              style: TextStyle(
+                                color: Colors.white.withValues(alpha: 0.78),
+                                fontSize: 12,
+                                fontWeight: FontWeight.w800,
+                                letterSpacing: 0.45,
+                              ),
+                            ),
+                          ],
                         ),
-                        const SizedBox(height: 18),
+                        const SizedBox(height: 6),
                         Text(
-                          '${route.styleEmoji} – $title',
-                          maxLines: 2,
+                          title,
+                          maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
                             color: Colors.white,
-                            fontSize: isCompact ? 21 : 25,
-                            fontWeight: FontWeight.w800,
+                            fontSize: isCompact ? 18 : 20,
+                            fontWeight: FontWeight.w900,
+                            letterSpacing: -0.25,
                             height: 1.05,
                           ),
                         ),
-                        const SizedBox(height: 12),
+                        const SizedBox(height: 5),
                         Text(
                           '$distanceLabel • $curvesLabel • $durationLabel',
-                          maxLines: 2,
+                          maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
-                            color: Colors.white.withValues(alpha: 0.92),
-                            fontSize: isCompact ? 14 : 17,
-                            fontWeight: FontWeight.w600,
-                            height: 1.2,
+                            color: Colors.white.withValues(alpha: 0.68),
+                            fontSize: isCompact ? 11.5 : 12.5,
+                            fontWeight: FontWeight.w700,
+                            height: 1.1,
                           ),
                         ),
-                        const SizedBox(height: 24),
-                        if (ratingValue != null && ratingValue > 0)
-                          _buildSuggestedInfoRow(
-                            icon: Icons.star_rounded,
-                            label:
-                                '${ratingValue.toStringAsFixed(1)} Bewertung',
-                            tint: const Color(0xFFFFD76A),
-                          ),
-                        const SizedBox(height: 14),
-                        _buildSuggestedInfoRow(
-                          icon: Icons.local_fire_department_rounded,
-                          label: tertiaryLabel,
-                          tint: const Color(0xFFFF6B3D),
-                        ),
-                        const SizedBox(height: 18),
+                        const SizedBox(height: 9),
                         Wrap(
-                          spacing: 10,
-                          runSpacing: 10,
+                          spacing: 6,
+                          runSpacing: 6,
+                          children: [
+                            _buildMetricChip(
+                              icon: Icons.star_rounded,
+                              label:
+                                  ratingValue != null &&
+                                      recommendation.ratingCount > 0
+                                  ? '${ratingValue.toStringAsFixed(1)} (${recommendation.ratingCount})'
+                                  : 'Noch keine Bewertung',
+                              tint: const Color(0xFFFFD76A),
+                            ),
+                            _buildMetricChip(
+                              icon: Icons.flag_circle_rounded,
+                              label: recommendation.hasCompletions
+                                  ? '${recommendation.completionCount} Fahrten'
+                                  : 'Neue Empfehlung',
+                              tint: AppAccentColors.accent,
+                            ),
+                            _buildMetricChip(
+                              icon: Icons.local_fire_department_rounded,
+                              label: tertiaryLabel,
+                              tint: const Color(0xFFFF9D6A),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 10),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
                           crossAxisAlignment: WrapCrossAlignment.center,
                           children: [
                             _buildStyleChip(route),
                             _buildSaveChip(route),
-                            GestureDetector(
+                            _buildDriveChip(
                               onTap: () {
                                 CruiseModePage.pendingRoute.value = route;
                                 widget.onTabChange?.call(2);
                               },
-                              child: Container(
-                                height: 42,
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 16,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFFFF3B30),
-                                  borderRadius: BorderRadius.circular(16),
-                                ),
-                                alignment: Alignment.center,
-                                child: const Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Icon(
-                                      Icons.directions_car_rounded,
-                                      color: Colors.white,
-                                      size: 18,
-                                    ),
-                                    SizedBox(width: 8),
-                                    Text(
-                                      'Fahren',
-                                      style: TextStyle(
-                                        color: Colors.white,
-                                        fontSize: 13,
-                                        fontWeight: FontWeight.w700,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
                             ),
                           ],
                         ),
@@ -793,69 +730,77 @@ class _HomeContentPageState extends State<HomeContentPage>
     );
   }
 
-  Widget _buildSuggestedInfoRow({
+  Widget _buildMetricChip({
     required IconData icon,
     required String label,
     required Color tint,
   }) {
-    return Row(
-      children: [
-        Icon(icon, size: 22, color: tint),
-        const SizedBox(width: 10),
-        Expanded(
-          child: Text(
+    return Container(
+      height: 26,
+      padding: const EdgeInsets.symmetric(horizontal: 8),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.16),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 13, color: tint),
+          const SizedBox(width: 5),
+          Text(
             label,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
             style: const TextStyle(
               color: Colors.white,
-              fontSize: 16,
-              fontWeight: FontWeight.w600,
-              height: 1.1,
+              fontSize: 10.5,
+              fontWeight: FontWeight.w700,
             ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 
   Widget _buildSuggestedRoutePreview(
     SavedRoute route,
-    List<List<double>> coordinates,
-    {required double size}
-  ) {
+    List<List<double>> coordinates, {
+    required double size,
+  }) {
     return SizedBox(
       width: size,
       height: size,
       child: DecoratedBox(
         decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(30),
-          gradient: const LinearGradient(
+          borderRadius: BorderRadius.circular(24),
+          gradient: LinearGradient(
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
-            colors: [Color(0xFFFF5A5A), Color(0xFFC70000)],
+            colors: [
+              Color.lerp(AppAccentColors.accent, Colors.white, 0.16)!,
+              Color.lerp(AppAccentColors.accent, Colors.black, 0.24)!,
+            ],
           ),
           boxShadow: [
             BoxShadow(
-              color: const Color(0xFFFF3B30).withValues(alpha: 0.28),
-              blurRadius: 28,
-              offset: const Offset(0, 10),
+              color: AppAccentColors.accent.withValues(alpha: 0.28),
+              blurRadius: 18,
+              offset: const Offset(0, 8),
             ),
           ],
         ),
         child: Padding(
-          padding: const EdgeInsets.all(10),
+          padding: const EdgeInsets.all(7),
           child: Container(
             decoration: BoxDecoration(
-              color: const Color(0xFF171C24),
-              borderRadius: BorderRadius.circular(24),
+              color: const Color(0xFF151B23),
+              borderRadius: BorderRadius.circular(19),
             ),
             child: Stack(
               children: [
                 Positioned.fill(
                   child: Container(
                     decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(24),
+                      borderRadius: BorderRadius.circular(19),
                       gradient: LinearGradient(
                         begin: Alignment.topLeft,
                         end: Alignment.bottomRight,
@@ -869,7 +814,7 @@ class _HomeContentPageState extends State<HomeContentPage>
                 ),
                 Positioned.fill(
                   child: Padding(
-                    padding: const EdgeInsets.all(18),
+                    padding: const EdgeInsets.all(10),
                     child: coordinates.length >= 2
                         ? CustomPaint(
                             painter: _RoutePolylinePainter(
@@ -885,12 +830,12 @@ class _HomeContentPageState extends State<HomeContentPage>
                   ),
                 ),
                 Positioned(
-                  left: 14,
-                  top: 14,
+                  left: 9,
+                  top: 9,
                   child: Container(
                     padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 5,
+                      horizontal: 7,
+                      vertical: 4,
                     ),
                     decoration: BoxDecoration(
                       color: Colors.black.withValues(alpha: 0.28),
@@ -898,16 +843,16 @@ class _HomeContentPageState extends State<HomeContentPage>
                     ),
                     child: Text(
                       route.styleEmoji,
-                      style: const TextStyle(fontSize: 13),
+                      style: const TextStyle(fontSize: 11),
                     ),
                   ),
                 ),
                 Positioned(
-                  right: 14,
-                  bottom: 14,
+                  right: 9,
+                  bottom: 9,
                   child: Container(
-                    width: 28,
-                    height: 28,
+                    width: 24,
+                    height: 24,
                     decoration: BoxDecoration(
                       color: Colors.black.withValues(alpha: 0.28),
                       shape: BoxShape.circle,
@@ -915,7 +860,7 @@ class _HomeContentPageState extends State<HomeContentPage>
                     child: const Icon(
                       Icons.map_outlined,
                       color: Colors.white,
-                      size: 14,
+                      size: 12,
                     ),
                   ),
                 ),
@@ -935,7 +880,7 @@ class _HomeContentPageState extends State<HomeContentPage>
         borderRadius: BorderRadius.circular(34),
         boxShadow: [
           BoxShadow(
-            color: const Color(0xFFFF3B30).withValues(alpha: 0.1),
+            color: AppAccentColors.accent.withValues(alpha: 0.1),
             blurRadius: 24,
             offset: const Offset(0, 12),
           ),
@@ -987,10 +932,13 @@ class _HomeContentPageState extends State<HomeContentPage>
               child: DecoratedBox(
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(28),
-                  gradient: const LinearGradient(
+                  gradient: LinearGradient(
                     begin: Alignment.topLeft,
                     end: Alignment.bottomRight,
-                    colors: [Color(0xFFFF5A5A), Color(0xFFC70000)],
+                    colors: [
+                      Color.lerp(AppAccentColors.accent, Colors.white, 0.10)!,
+                      AppAccentColors.accentStrong,
+                    ],
                   ),
                 ),
                 child: Container(
@@ -999,9 +947,9 @@ class _HomeContentPageState extends State<HomeContentPage>
                     color: const Color(0xFF171C24),
                     borderRadius: BorderRadius.circular(22),
                   ),
-                  child: const Icon(
+                  child: Icon(
                     Icons.explore_outlined,
-                    color: Color(0xFFFF3B30),
+                    color: AppAccentColors.accent,
                     size: 40,
                   ),
                 ),
@@ -1014,58 +962,73 @@ class _HomeContentPageState extends State<HomeContentPage>
   }
 
   Widget _buildSuggestedRouteSkeleton() {
-    return Container(
-      width: double.infinity,
-      decoration: BoxDecoration(
-        color: const Color(0xFF2A313C),
-        borderRadius: BorderRadius.circular(34),
-        boxShadow: [
-          BoxShadow(
-            color: const Color(0xFFFF3B30).withValues(alpha: 0.08),
-            blurRadius: 24,
-            offset: const Offset(0, 12),
-          ),
-        ],
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(18),
-        child: Container(
-          constraints: const BoxConstraints(minHeight: 208),
-          child: Row(
+    Widget shimmerCopy(double maxWidth) {
+      double capped(double width) => math.min(width, maxWidth);
+
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          _shimmerBar(width: capped(112), height: 12),
+          const SizedBox(height: 8),
+          _shimmerBar(width: capped(220), height: 24),
+          const SizedBox(height: 8),
+          _shimmerBar(width: capped(230), height: 14),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
             children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    _shimmerBar(width: 150, height: 18),
-                    const SizedBox(height: 20),
-                    _shimmerBar(width: 250, height: 28),
-                    const SizedBox(height: 12),
-                    _shimmerBar(width: 260, height: 18),
-                    const SizedBox(height: 28),
-                    _shimmerBar(width: 220, height: 18),
-                    const SizedBox(height: 14),
-                    _shimmerBar(width: 180, height: 18),
-                    const SizedBox(height: 20),
-                    Row(
-                      children: [
-                        _shimmerPill(width: 92),
-                        const SizedBox(width: 10),
-                        _shimmerPill(width: 42),
-                        const SizedBox(width: 10),
-                        _shimmerPill(width: 90),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 16),
-              _shimmerRoutePreview(),
+              _shimmerPill(width: capped(118)),
+              _shimmerPill(width: capped(98)),
+              _shimmerPill(width: capped(74)),
             ],
           ),
-        ),
-      ),
+          const SizedBox(height: 10),
+          _shimmerBar(width: capped(190), height: 34, radius: 12),
+        ],
+      );
+    }
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isCompact = constraints.maxWidth < 420;
+        final previewSize = isCompact ? 92.0 : 116.0;
+
+        return Container(
+          width: double.infinity,
+          decoration: BoxDecoration(
+            color: const Color(0xFF2A313C),
+            borderRadius: BorderRadius.circular(24),
+            boxShadow: [
+              BoxShadow(
+                color: AppAccentColors.accent.withValues(alpha: 0.08),
+                blurRadius: 24,
+                offset: const Offset(0, 12),
+              ),
+            ],
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Container(
+              constraints: const BoxConstraints(minHeight: 150),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: LayoutBuilder(
+                      builder: (context, copyConstraints) {
+                        return shimmerCopy(copyConstraints.maxWidth);
+                      },
+                    ),
+                  ),
+                  const SizedBox(width: 16),
+                  _shimmerRoutePreview(size: previewSize),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -1084,13 +1047,13 @@ class _HomeContentPageState extends State<HomeContentPage>
       },
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 180),
-        width: 44,
-        height: 44,
+        width: 36,
+        height: 34,
         decoration: BoxDecoration(
           color: _isRouteSaved
               ? const Color(0xFFFFE2A8).withValues(alpha: 0.16)
               : Colors.black.withValues(alpha: 0.14),
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(12),
           border: Border.all(
             color: _isRouteSaved
                 ? const Color(0xFFFFE2A8).withValues(alpha: 0.45)
@@ -1102,7 +1065,7 @@ class _HomeContentPageState extends State<HomeContentPage>
               ? Icons.bookmark_rounded
               : Icons.bookmark_border_rounded,
           color: _isRouteSaved ? const Color(0xFFFFE2A8) : Colors.white,
-          size: 20,
+          size: 17,
         ),
       ),
     );
@@ -1110,18 +1073,58 @@ class _HomeContentPageState extends State<HomeContentPage>
 
   Widget _buildStyleChip(SavedRoute route) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      height: 34,
+      padding: const EdgeInsets.symmetric(horizontal: 10),
       decoration: BoxDecoration(
         color: Colors.black.withValues(alpha: 0.14),
-        borderRadius: BorderRadius.circular(999),
+        borderRadius: BorderRadius.circular(12),
         border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
       ),
-      child: Text(
-        '${route.styleEmoji} ${route.style}',
-        style: const TextStyle(
-          color: Colors.white,
-          fontSize: 12,
-          fontWeight: FontWeight.w700,
+      child: Center(
+        child: Text(
+          '${route.styleEmoji} ${route.style}',
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 11,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDriveChip({required VoidCallback onTap}) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        height: 34,
+        padding: const EdgeInsets.symmetric(horizontal: 14),
+        decoration: BoxDecoration(
+          color: AppAccentColors.accent,
+          borderRadius: BorderRadius.circular(12),
+          boxShadow: [
+            BoxShadow(
+              color: AppAccentColors.accent.withValues(alpha: 0.24),
+              blurRadius: 14,
+              offset: const Offset(0, 6),
+            ),
+          ],
+        ),
+        alignment: Alignment.center,
+        child: const Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.directions_car_rounded, color: Colors.white, size: 15),
+            SizedBox(width: 7),
+            Text(
+              'Fahren',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 12,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -1161,17 +1164,20 @@ class _HomeContentPageState extends State<HomeContentPage>
     return _shimmerBar(width: width, height: 28, radius: 999);
   }
 
-  Widget _shimmerRoutePreview() {
+  Widget _shimmerRoutePreview({double size = 188}) {
     return SizedBox(
-      width: 188,
-      height: 188,
+      width: size,
+      height: size,
       child: DecoratedBox(
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(30),
-          gradient: const LinearGradient(
+          gradient: LinearGradient(
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
-            colors: [Color(0xFFFF5A5A), Color(0xFFC70000)],
+            colors: [
+              Color.lerp(AppAccentColors.accent, Colors.white, 0.10)!,
+              AppAccentColors.accentStrong,
+            ],
           ),
         ),
         child: Container(
@@ -1187,7 +1193,7 @@ class _HomeContentPageState extends State<HomeContentPage>
                 padding: const EdgeInsets.all(18),
                 child: CustomPaint(
                   painter: _RoutePolylinePainter(
-                    coordinates: const [
+                    coordinates: [
                       [0.12, 0.78],
                       [0.26, 0.52],
                       [0.42, 0.60],
@@ -1209,6 +1215,10 @@ class _HomeContentPageState extends State<HomeContentPage>
 
   Widget _buildStreakWidget() {
     final hasStreak = _streakDays > 0;
+    final nextStreakDays = hasStreak ? _streakDays + 1 : 1;
+    final nextMultiplier = GamificationService.streakMultiplierForDays(
+      nextStreakDays,
+    );
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(16),
@@ -1217,7 +1227,7 @@ class _HomeContentPageState extends State<HomeContentPage>
         borderRadius: BorderRadius.circular(20),
         border: Border.all(
           color: hasStreak
-              ? const Color(0xFFFF3B30).withValues(alpha: 0.3)
+              ? AppAccentColors.accent.withValues(alpha: 0.3)
               : const Color(0xFFFFFFFF).withValues(alpha: 0.06),
         ),
       ),
@@ -1228,7 +1238,7 @@ class _HomeContentPageState extends State<HomeContentPage>
             height: 48,
             decoration: BoxDecoration(
               color: hasStreak
-                  ? const Color(0xFFFF3B30).withValues(alpha: 0.15)
+                  ? AppAccentColors.accent.withValues(alpha: 0.15)
                   : const Color(0xFF2D3748),
               borderRadius: BorderRadius.circular(14),
             ),
@@ -1257,8 +1267,8 @@ class _HomeContentPageState extends State<HomeContentPage>
                 const SizedBox(height: 2),
                 Text(
                   hasStreak
-                      ? 'Weiter so! Fahre heute um den Streak zu halten.'
-                      : 'Starte eine Fahrt und beginne deinen Streak!',
+                      ? 'Fahre heute für ${nextMultiplier.toStringAsFixed(2)}x XP.'
+                      : 'Starte eine Fahrt und beginne deinen XP-Streak.',
                   style: const TextStyle(
                     color: Color(0xFFA0AEC0),
                     fontSize: 12,
@@ -1271,13 +1281,11 @@ class _HomeContentPageState extends State<HomeContentPage>
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
               decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  colors: [Color(0xFFFF5252), Color(0xFFD32F2F)],
-                ),
+                gradient: AppAccentColors.primaryGradient,
                 borderRadius: BorderRadius.circular(12),
               ),
               child: Text(
-                '${_streakDays}d',
+                '${nextMultiplier.toStringAsFixed(2)}x',
                 style: const TextStyle(
                   color: Colors.white,
                   fontSize: 14,
@@ -1308,22 +1316,6 @@ class _HomeContentPageState extends State<HomeContentPage>
     );
   }
 
-  Widget _buildCommunityItem(String text, String emoji) {
-    return Row(
-      children: [
-        Text(emoji, style: const TextStyle(fontSize: 13)),
-        const SizedBox(width: 8),
-        Expanded(
-          child: Text(
-            text,
-            style: const TextStyle(color: Color(0xFFA0AEC0), fontSize: 11),
-            overflow: TextOverflow.ellipsis,
-          ),
-        ),
-      ],
-    );
-  }
-
   Widget _buildChartBar(String day, double value) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 2),
@@ -1344,8 +1336,11 @@ class _HomeContentPageState extends State<HomeContentPage>
                   child: Container(
                     width: 8,
                     decoration: BoxDecoration(
-                      gradient: const LinearGradient(
-                        colors: [Color(0xFFFF5252), Color(0xFFD32F2F)],
+                      gradient: LinearGradient(
+                        colors: [
+                          AppAccentColors.accent,
+                          AppAccentColors.accentStrong,
+                        ],
                         begin: Alignment.topCenter,
                         end: Alignment.bottomCenter,
                       ),
@@ -1374,7 +1369,7 @@ class _HomeContentPageState extends State<HomeContentPage>
 // ── CustomPainter für Route-Polyline auf dem Gradient-Hintergrund ──────────
 
 class _HeroRouteInsights {
-  const _HeroRouteInsights({
+  _HeroRouteInsights({
     required this.curves,
     required this.xp,
     required this.elevation,
@@ -1431,7 +1426,7 @@ class _RoutePolylinePainter extends CustomPainter {
 
     // Glow-Effekt zeichnen
     final glowPaint = Paint()
-      ..color = const Color(0xFFFF5252).withValues(alpha: 0.3)
+      ..color = AppAccentColors.accent.withValues(alpha: 0.3)
       ..strokeWidth = 8
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round

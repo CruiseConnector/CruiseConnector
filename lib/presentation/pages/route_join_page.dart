@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 
 class RouteJoinPage extends StatelessWidget {
   const RouteJoinPage({super.key});
@@ -21,18 +22,19 @@ class RouteJoinPage extends StatelessWidget {
                 gradient: LinearGradient(
                   begin: Alignment.topLeft,
                   end: Alignment.bottomRight,
-                  colors: [
-                    Colors.teal[900]!,
-                    Colors.teal[600]!,
-                  ],
+                  colors: [Colors.teal[900]!, Colors.teal[600]!],
                 ),
               ),
               child: Stack(
                 fit: StackFit.expand,
                 children: [
                   // Platzhalter für echte Karte
-                  Icon(Icons.map_outlined, size: 120, color: Colors.white.withValues(alpha: 0.1)),
-                  
+                  Icon(
+                    Icons.map_outlined,
+                    size: 120,
+                    color: Colors.white.withValues(alpha: 0.1),
+                  ),
+
                   // Verlauf nach unten (Fade to Black)
                   Container(
                     decoration: BoxDecoration(
@@ -52,7 +54,7 @@ class RouteJoinPage extends StatelessWidget {
               ),
             ),
           ),
-          
+
           // Zurück Button
           Positioned(
             top: MediaQuery.of(context).padding.top + 8,
@@ -90,9 +92,12 @@ class RouteJoinPage extends StatelessWidget {
                         ),
                       ),
                       Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 6,
+                        ),
                         decoration: BoxDecoration(
-                          color: const Color(0xFFFF3B30),
+                          color: AppAccentColors.accent,
                           borderRadius: BorderRadius.circular(20),
                         ),
                         child: const Row(
@@ -101,7 +106,10 @@ class RouteJoinPage extends StatelessWidget {
                             SizedBox(width: 4),
                             Text(
                               '4.9',
-                              style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                              ),
                             ),
                           ],
                         ),
@@ -113,17 +121,31 @@ class RouteJoinPage extends StatelessWidget {
                     'Empfohlen für dich • Sportlich',
                     style: TextStyle(color: Colors.grey, fontSize: 16),
                   ),
-                  
+
                   const SizedBox(height: 32),
 
                   // Stats Grid
                   Row(
                     children: [
-                      Expanded(child: _buildStatItem(Icons.straighten, '87 km', 'Distanz')),
+                      Expanded(
+                        child: _buildStatItem(
+                          Icons.straighten,
+                          '87 km',
+                          'Distanz',
+                        ),
+                      ),
                       const SizedBox(width: 12),
-                      Expanded(child: _buildStatItem(Icons.timer, '1h 36m', 'Dauer')),
+                      Expanded(
+                        child: _buildStatItem(Icons.timer, '1h 36m', 'Dauer'),
+                      ),
                       const SizedBox(width: 12),
-                      Expanded(child: _buildStatItem(Icons.turn_right, '132', 'Kurven')),
+                      Expanded(
+                        child: _buildStatItem(
+                          Icons.turn_right,
+                          '132',
+                          'Kurven',
+                        ),
+                      ),
                     ],
                   ),
 
@@ -138,12 +160,14 @@ class RouteJoinPage extends StatelessWidget {
                         // Logik zum Beitreten hier
                       },
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFFFF3B30),
+                        backgroundColor: AppAccentColors.accent,
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(16),
                         ),
                         elevation: 8,
-                        shadowColor: const Color(0xFFFF3B30).withValues(alpha: 0.5),
+                        shadowColor: AppAccentColors.accent.withValues(
+                          alpha: 0.5,
+                        ),
                       ),
                       child: const Text(
                         'Route beitreten',
@@ -175,7 +199,7 @@ class RouteJoinPage extends StatelessWidget {
       ),
       child: Column(
         children: [
-          Icon(icon, color: const Color(0xFFFF3B30), size: 28),
+          Icon(icon, color: AppAccentColors.accent, size: 28),
           const SizedBox(height: 12),
           Text(
             value,
@@ -186,13 +210,7 @@ class RouteJoinPage extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 4),
-          Text(
-            label,
-            style: const TextStyle(
-              color: Colors.grey,
-              fontSize: 12,
-            ),
-          ),
+          Text(label, style: const TextStyle(color: Colors.grey, fontSize: 12)),
         ],
       ),
     );

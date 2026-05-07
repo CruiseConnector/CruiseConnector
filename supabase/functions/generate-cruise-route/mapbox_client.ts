@@ -15,7 +15,7 @@ const RETRYABLE_MAPBOX_STATUS_CODES = new Set([
 const MAX_MAPBOX_FETCH_ATTEMPTS = 3;
 const MAPBOX_FETCH_TIMEOUT_MS = 15000;
 const DEFAULT_MAPBOX_RATE_PER_MINUTE = 250;
-const MAPBOX_ROUTE_CACHE_MAX_ENTRIES = 64;
+const MAPBOX_ROUTE_CACHE_MAX_ENTRIES = 12;
 
 interface MapboxTokenBucket {
   ratePerMinute: number;
@@ -95,6 +95,11 @@ function getMapboxRouteCacheKey(
   continueStraight: boolean,
   alternatives: boolean,
   bearings: string,
+  steps: boolean,
+  includeGuidance: boolean,
+  overview: "full" | "simplified",
+  avoidManeuverRadiusMeters: number | null,
+  routeLegWaypointIndexes: string,
 ): string {
   return [
     profile,
@@ -104,6 +109,15 @@ function getMapboxRouteCacheKey(
     continueStraight ? "continue" : "allow_reverse",
     alternatives ? "alts" : "single",
     bearings,
+    steps ? "steps" : "no_steps",
+    includeGuidance ? "guidance" : "geometry",
+    overview,
+    avoidManeuverRadiusMeters == null
+      ? "avoid_maneuver_radius=none"
+      : `avoid_maneuver_radius=${avoidManeuverRadiusMeters.toFixed(0)}`,
+    routeLegWaypointIndexes === ""
+      ? "route_waypoints=all"
+      : `route_waypoints=${routeLegWaypointIndexes}`,
   ].join("|");
 }
 
@@ -131,8 +145,13 @@ function getCachedMapboxRoute(
 function cacheMapboxRoute(
   cacheKey: string,
   result: MapboxRouteFetchResult,
+  options?: { alternatives?: boolean },
 ): void {
   if (result.outcome !== "ok" && result.outcome !== "no_route") return;
+  // Alternative responses carry multiple full geometries, steps and
+  // instructions. Random roundtrip candidates rarely repeat, so caching those
+  // payloads costs memory without materially improving hit rate.
+  if (result.outcome === "ok" && options?.alternatives === true) return;
 
   if (mapboxRouteCache.has(cacheKey)) {
     mapboxRouteCache.delete(cacheKey);
@@ -144,6 +163,85 @@ function cacheMapboxRoute(
     if (oldestKey === undefined) break;
     mapboxRouteCache.delete(oldestKey);
   }
+}
+
+function normalizeRouteLegWaypointIndexes(
+  indexes: number[] | undefined,
+  coordinateCount: number,
+): string {
+  if (!Array.isArray(indexes) || indexes.length === 0) return "";
+  const normalized = indexes
+    .map((index) => Math.trunc(index))
+    .filter((index) => index >= 0 && index < coordinateCount);
+  const unique = [...new Set(normalized)].sort((a, b) => a - b);
+  return unique.length >= 2 ? unique.join(";") : "";
+}
+
+export function buildMapboxDirectionsRequestUrl(
+  waypoints: Coordinate[],
+  profile: string,
+  exclude: string,
+  radiuses: string,
+  accessToken: string,
+  options?: {
+    continueStraight?: boolean;
+    alternatives?: boolean;
+    bearings?: string;
+    includeGuidance?: boolean;
+    steps?: boolean;
+    overview?: "full" | "simplified";
+    avoidManeuverRadiusMeters?: number;
+    routeLegWaypointIndexes?: number[];
+  },
+): string {
+  const coordinatesStr = waypoints
+    .map((p) => `${p.longitude},${p.latitude}`)
+    .join(";");
+  const continueStraight = options?.continueStraight ?? true;
+  const alternatives = options?.alternatives === true;
+  const includeGuidance = options?.includeGuidance !== false;
+  const steps = options?.steps ?? includeGuidance;
+  const bearings = options?.bearings?.trim() ?? "";
+  const overview = options?.overview ??
+    (includeGuidance ? "full" : "simplified");
+  const routeLegWaypointIndexes = normalizeRouteLegWaypointIndexes(
+    options?.routeLegWaypointIndexes,
+    waypoints.length,
+  );
+  const avoidManeuverRadiusMeters =
+    typeof options?.avoidManeuverRadiusMeters === "number" &&
+      Number.isFinite(options.avoidManeuverRadiusMeters) &&
+      options.avoidManeuverRadiusMeters > 0
+      ? Math.round(options.avoidManeuverRadiusMeters)
+      : null;
+  let url =
+    `https://api.mapbox.com/directions/v5/${profile}/${coordinatesStr}?access_token=${accessToken}&geometries=geojson&overview=${overview}&steps=${
+      steps ? "true" : "false"
+    }&language=de&continue_straight=${
+      continueStraight ? "true" : "false"
+    }&alternatives=${alternatives ? "true" : "false"}`;
+  if (includeGuidance && overview === "full") {
+    url +=
+      "&voice_instructions=true&banner_instructions=true&annotations=maxspeed";
+  } else if (includeGuidance) {
+    url += "&voice_instructions=true&banner_instructions=true";
+  }
+  if (exclude && exclude.trim() !== "") {
+    url += `&exclude=${exclude}`;
+  }
+  if (radiuses && radiuses.trim() !== "") {
+    url += `&radiuses=${radiuses}`;
+  }
+  if (bearings !== "") {
+    url += `&bearings=${bearings}`;
+  }
+  if (routeLegWaypointIndexes !== "") {
+    url += `&waypoints=${routeLegWaypointIndexes}`;
+  }
+  if (avoidManeuverRadiusMeters != null) {
+    url += `&avoid_maneuver_radius=${avoidManeuverRadiusMeters}`;
+  }
+  return url;
 }
 
 export function getRetryKindFromMapboxFailure(
@@ -180,33 +278,50 @@ export async function getMapboxRouteDetailed(
     maxAttempts?: number;
     timeoutMs?: number;
     retryDelayBaseMs?: number;
+    includeGuidance?: boolean;
+    steps?: boolean;
+    overview?: "full" | "simplified";
+    avoidManeuverRadiusMeters?: number;
+    routeLegWaypointIndexes?: number[];
   },
 ): Promise<MapboxRouteFetchResult> {
-  // Format coordinates: "lon,lat;lon,lat;..."
+  const continueStraight = options?.continueStraight ?? true;
+  const alternatives = options?.alternatives === true;
+  const includeGuidance = options?.includeGuidance !== false;
+  const steps = options?.steps ?? includeGuidance;
+  const bearings = options?.bearings?.trim() ?? "";
+  const overview = options?.overview ??
+    (includeGuidance ? "full" : "simplified");
+  const routeLegWaypointIndexes = normalizeRouteLegWaypointIndexes(
+    options?.routeLegWaypointIndexes,
+    waypoints.length,
+  );
+  const avoidManeuverRadiusMeters =
+    typeof options?.avoidManeuverRadiusMeters === "number" &&
+      Number.isFinite(options.avoidManeuverRadiusMeters) &&
+      options.avoidManeuverRadiusMeters > 0
+      ? Math.round(options.avoidManeuverRadiusMeters)
+      : null;
   const coordinatesStr = waypoints
     .map((p) => `${p.longitude},${p.latitude}`)
     .join(";");
-
-  // Base URL
-  // We use geometries=geojson to get the path geometry
-  const continueStraight = options?.continueStraight ?? true;
-  const alternatives = options?.alternatives === true;
-  const bearings = options?.bearings?.trim() ?? "";
-  let url =
-    `https://api.mapbox.com/directions/v5/${profile}/${coordinatesStr}?access_token=${accessToken}&geometries=geojson&overview=full&steps=true&voice_instructions=true&banner_instructions=true&language=de&continue_straight=${
-      continueStraight ? "true" : "false"
-    }&alternatives=${alternatives ? "true" : "false"}&annotations=maxspeed`;
-
-  // Append optional parameters if they exist
-  if (exclude && exclude.trim() !== "") {
-    url += `&exclude=${exclude}`;
-  }
-  if (radiuses && radiuses.trim() !== "") {
-    url += `&radiuses=${radiuses}`;
-  }
-  if (bearings !== "") {
-    url += `&bearings=${bearings}`;
-  }
+  const url = buildMapboxDirectionsRequestUrl(
+    waypoints,
+    profile,
+    exclude,
+    radiuses,
+    accessToken,
+    {
+      continueStraight,
+      alternatives,
+      bearings,
+      includeGuidance,
+      steps,
+      overview,
+      avoidManeuverRadiusMeters: avoidManeuverRadiusMeters ?? undefined,
+      routeLegWaypointIndexes: options?.routeLegWaypointIndexes,
+    },
+  );
 
   const cacheKey = getMapboxRouteCacheKey(
     coordinatesStr,
@@ -216,6 +331,11 @@ export async function getMapboxRouteDetailed(
     continueStraight,
     alternatives,
     bearings,
+    steps,
+    includeGuidance,
+    overview,
+    avoidManeuverRadiusMeters,
+    routeLegWaypointIndexes,
   );
   const cachedResult = getCachedMapboxRoute(cacheKey);
   if (cachedResult) {
@@ -272,7 +392,7 @@ export async function getMapboxRouteDetailed(
           outcome: "no_route",
           details: JSON.stringify(data).slice(0, 500),
         };
-        cacheMapboxRoute(cacheKey, noRouteResult);
+        cacheMapboxRoute(cacheKey, noRouteResult, { alternatives });
         return noRouteResult;
       }
 
@@ -282,7 +402,7 @@ export async function getMapboxRouteDetailed(
         routes: data.routes,
         outcome: "ok",
       };
-      cacheMapboxRoute(cacheKey, successResult);
+      cacheMapboxRoute(cacheKey, successResult, { alternatives });
       return successResult;
     } catch (error) {
       const details = error instanceof Error ? error.message : String(error);
@@ -330,6 +450,11 @@ export async function getMapboxRoute(
     maxAttempts?: number;
     timeoutMs?: number;
     retryDelayBaseMs?: number;
+    includeGuidance?: boolean;
+    steps?: boolean;
+    overview?: "full" | "simplified";
+    avoidManeuverRadiusMeters?: number;
+    routeLegWaypointIndexes?: number[];
   },
 ) {
   const result = await getMapboxRouteDetailed(
@@ -341,4 +466,158 @@ export async function getMapboxRoute(
     options,
   );
   return result.route;
+}
+
+export interface MapboxOptimizationWaypoint {
+  waypoint_index?: number;
+  trips_index?: number;
+  name?: string;
+  location?: [number, number];
+}
+
+export interface MapboxOptimizationFetchResult {
+  trip: any | null;
+  waypoints?: MapboxOptimizationWaypoint[];
+  outcome:
+    | "ok"
+    | "no_route"
+    | "http_error"
+    | "network_error"
+    | "timeout";
+  statusCode?: number;
+  details?: string;
+}
+
+/**
+ * Calls Mapbox Optimization API v1 to get a visit order.
+ *
+ * We only use this for required-stop waypoint roundtrips. The optimized trip is
+ * not shown directly; Directions API still builds the final full route and
+ * guidance after the order is known.
+ */
+export async function getMapboxOptimizationDetailed(
+  waypoints: Coordinate[],
+  profile: string,
+  accessToken: string,
+  options?: {
+    roundTrip?: boolean;
+    source?: "first" | "any";
+    radiuses?: string;
+    approaches?: string;
+    maxAttempts?: number;
+    timeoutMs?: number;
+    retryDelayBaseMs?: number;
+  },
+): Promise<MapboxOptimizationFetchResult> {
+  const coordinatesStr = waypoints
+    .map((p) => `${p.longitude},${p.latitude}`)
+    .join(";");
+
+  const roundTrip = options?.roundTrip !== false;
+  const source = options?.source ?? "first";
+  let url =
+    `https://api.mapbox.com/optimized-trips/v1/${profile}/${coordinatesStr}?access_token=${accessToken}&roundtrip=${
+      roundTrip ? "true" : "false"
+    }&source=${source}&geometries=geojson&overview=simplified&steps=false`;
+
+  if (options?.radiuses?.trim()) {
+    url += `&radiuses=${options.radiuses}`;
+  }
+  if (options?.approaches?.trim()) {
+    url += `&approaches=${options.approaches}`;
+  }
+
+  const maxAttempts = Math.max(
+    1,
+    Math.min(3, options?.maxAttempts ?? 2),
+  );
+  const timeoutMs = Math.max(
+    3000,
+    Math.min(16000, options?.timeoutMs ?? 9000),
+  );
+  const retryDelayBaseMs = Math.max(
+    120,
+    Math.min(800, options?.retryDelayBaseMs ?? 180),
+  );
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    await acquireMapboxFetchSlot();
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(url, { signal: controller.signal });
+      if (!res.ok) {
+        const text = await res.text();
+        const retryable = RETRYABLE_MAPBOX_STATUS_CODES.has(res.status);
+        if (retryable && attempt < maxAttempts) {
+          debugWarn(
+            `Mapbox Optimization retryable error (${res.status}), retry ${
+              attempt + 1
+            }/${maxAttempts}`,
+          );
+          await wait(retryDelayBaseMs * attempt);
+          continue;
+        }
+        debugError(
+          `Mapbox Optimization API Error (${res.status}): ${
+            text.slice(0, 240)
+          }`,
+        );
+        return {
+          trip: null,
+          outcome: "http_error",
+          statusCode: res.status,
+          details: text,
+        };
+      }
+
+      const data = await res.json();
+      if (!data.trips || data.trips.length === 0) {
+        return {
+          trip: null,
+          waypoints: Array.isArray(data.waypoints) ? data.waypoints : undefined,
+          outcome: "no_route",
+          details: JSON.stringify(data).slice(0, 500),
+        };
+      }
+
+      return {
+        trip: data.trips[0],
+        waypoints: Array.isArray(data.waypoints) ? data.waypoints : undefined,
+        outcome: "ok",
+      };
+    } catch (error) {
+      const details = error instanceof Error ? error.message : String(error);
+      const isAbort =
+        (error instanceof DOMException && error.name === "AbortError") ||
+        String(details).toLowerCase().includes("abort");
+      if (attempt < maxAttempts) {
+        debugWarn(
+          `Mapbox Optimization ${isAbort ? "timeout" : "network"} retry (${
+            attempt + 1
+          }/${maxAttempts}): ${details}`,
+        );
+        await wait(retryDelayBaseMs * attempt);
+        continue;
+      }
+      debugError(
+        `Mapbox Optimization fetch failed (${
+          isAbort ? "timeout" : "network_error"
+        }): ${details}`,
+      );
+      return {
+        trip: null,
+        outcome: isAbort ? "timeout" : "network_error",
+        details,
+      };
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  return {
+    trip: null,
+    outcome: "network_error",
+    details: "Mapbox Optimization retry budget exhausted",
+  };
 }

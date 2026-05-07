@@ -204,6 +204,14 @@ class SavedRoutesService {
     int? rating,
     double? drivenKm,
     double? plannedDistanceKm,
+    int? xpDistance,
+    int? xpCurveBonus,
+    int? xpStyleBonus,
+    int? xpBase,
+    double? xpMultiplier,
+    int? xpStreakDays,
+    int? xpAwarded,
+    bool completedAtEnd = false,
   }) async {
     final userId = _db.auth.currentUser?.id;
     if (userId == null) return;
@@ -241,6 +249,14 @@ class SavedRoutesService {
           ),
       'quality_tier': result.edgeMeta['quality_tier']?.toString(),
       'route_meta': result.edgeMeta,
+      'completed_at_end': completedAtEnd,
+      if (xpDistance != null) 'xp_distance': xpDistance,
+      if (xpCurveBonus != null) 'xp_curve_bonus': xpCurveBonus,
+      if (xpStyleBonus != null) 'xp_style_bonus': xpStyleBonus,
+      if (xpBase != null) 'xp_base': xpBase,
+      if (xpMultiplier != null) 'xp_multiplier': xpMultiplier,
+      if (xpStreakDays != null) 'xp_streak_days': xpStreakDays,
+      if (xpAwarded != null) 'xp_awarded': xpAwarded,
     };
     if (rating != null && rating > 0) row['rating'] = rating;
 
@@ -254,6 +270,14 @@ class SavedRoutesService {
         row.remove('name');
         await _db.from('routes').insert(row);
         invalidateWeeklyTopRouteCache();
+      } else if (e.code == 'PGRST204' &&
+          e.message.contains('completed_at_end')) {
+        debugPrint(
+          '[SavedRoutes] completed_at_end-Spalte fehlt, speichere ohne Completion-Flag',
+        );
+        row.remove('completed_at_end');
+        await _db.from('routes').insert(row);
+        invalidateWeeklyTopRouteCache();
       } else if (e.code == 'PGRST204') {
         debugPrint(
           '[SavedRoutes] Route-Meta-Spalten fehlen, speichere ohne Meta: ${e.message}',
@@ -262,7 +286,15 @@ class SavedRoutesService {
           ..remove('route_source')
           ..remove('route_fingerprint')
           ..remove('quality_tier')
-          ..remove('route_meta');
+          ..remove('route_meta')
+          ..remove('completed_at_end')
+          ..remove('xp_distance')
+          ..remove('xp_curve_bonus')
+          ..remove('xp_style_bonus')
+          ..remove('xp_base')
+          ..remove('xp_multiplier')
+          ..remove('xp_streak_days')
+          ..remove('xp_awarded');
         await _db.from('routes').insert(row);
         invalidateWeeklyTopRouteCache();
       } else {
@@ -408,6 +440,28 @@ class SavedRoutesService {
   // ─── Löschen ─────────────────────────────────────────────────────────────
 
   /// Löscht eine Route anhand ihrer ID.
+  /// Benennt eine eigene gespeicherte Route um.
+  ///
+  /// Posts und Bookmarks referenzieren dieselbe `routes.id`, deshalb ist der
+  /// neue Name danach überall sichtbar, wo diese Route geladen wird.
+  static Future<void> renameRoute(String id, String name) async {
+    final userId = _db.auth.currentUser?.id;
+    final cleaned = name.trim();
+    if (userId == null || cleaned.isEmpty) return;
+
+    try {
+      await _db
+          .from('routes')
+          .update({'name': cleaned})
+          .eq('id', id)
+          .eq('user_id', userId);
+      invalidateWeeklyTopRouteCache();
+    } catch (e) {
+      debugPrint('[SavedRoutes] renameRoute Fehler: $e');
+      rethrow;
+    }
+  }
+
   static Future<void> deleteRoute(String id) async {
     try {
       await _db.from('routes').delete().eq('id', id);

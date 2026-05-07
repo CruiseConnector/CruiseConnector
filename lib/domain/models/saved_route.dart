@@ -13,6 +13,21 @@ class SavedRoute {
     this.distanceTargetKm,
     this.drivenKm,
     this.sourceRouteId,
+    this.xpDistance,
+    this.xpCurveBonus,
+    this.xpStyleBonus,
+    this.xpBase,
+    this.xpMultiplier,
+    this.xpStreakDays,
+    this.xpAwarded,
+    this.routeSource,
+    this.routeFingerprint,
+    this.qualityTier,
+    this.routeMeta = const {},
+    this.averageRating,
+    this.ratingCount = 0,
+    this.completionRate,
+    this.completedAtEnd = false,
   });
 
   final String id;
@@ -27,6 +42,21 @@ class SavedRoute {
   final double? distanceTargetKm;
   final double? drivenKm;
   final String? sourceRouteId;
+  final int? xpDistance;
+  final int? xpCurveBonus;
+  final int? xpStyleBonus;
+  final int? xpBase;
+  final double? xpMultiplier;
+  final int? xpStreakDays;
+  final int? xpAwarded;
+  final String? routeSource;
+  final String? routeFingerprint;
+  final String? qualityTier;
+  final Map<String, dynamic> routeMeta;
+  final double? averageRating;
+  final int ratingCount;
+  final double? completionRate;
+  final bool completedAtEnd;
 
   factory SavedRoute.fromJson(Map<String, dynamic> json) {
     return SavedRoute(
@@ -44,6 +74,23 @@ class SavedRoute {
       distanceTargetKm: (json['distance_target'] as num?)?.toDouble(),
       drivenKm: (json['driven_km'] as num?)?.toDouble(),
       sourceRouteId: json['source_route_id'] as String?,
+      xpDistance: (json['xp_distance'] as num?)?.toInt(),
+      xpCurveBonus: (json['xp_curve_bonus'] as num?)?.toInt(),
+      xpStyleBonus: (json['xp_style_bonus'] as num?)?.toInt(),
+      xpBase: (json['xp_base'] as num?)?.toInt(),
+      xpMultiplier: (json['xp_multiplier'] as num?)?.toDouble(),
+      xpStreakDays: (json['xp_streak_days'] as num?)?.toInt(),
+      xpAwarded: (json['xp_awarded'] as num?)?.toInt(),
+      routeSource: json['route_source'] as String?,
+      routeFingerprint: json['route_fingerprint'] as String?,
+      qualityTier: json['quality_tier'] as String?,
+      routeMeta: json['route_meta'] is Map
+          ? Map<String, dynamic>.from(json['route_meta'] as Map)
+          : const {},
+      averageRating: (json['average_rating'] as num?)?.toDouble(),
+      ratingCount: (json['rating_count'] as num?)?.toInt() ?? 0,
+      completionRate: (json['completion_rate'] as num?)?.toDouble(),
+      completedAtEnd: json['completed_at_end'] == true,
     );
   }
 
@@ -64,7 +111,31 @@ class SavedRoute {
     final ratio = completionRatio;
     if (!isDrivenSession) return false;
     if (ratio == null) return true;
-    return ratio >= 0.10;
+    return ratio >= 0.20;
+  }
+
+  bool get isFullyCompleted {
+    if (!isDrivenSession) return false;
+    if (completedAtEnd) return true;
+    final ratio = completionRatio;
+    if (ratio == null) return true;
+    return ratio >= 1.0;
+  }
+
+  double get xpCreditProgressRatio {
+    final ratio = completionRatio;
+    if (!isDrivenSession) return 0.0;
+    if (ratio == null) return 1.0;
+    final safeRatio = ratio.clamp(0.0, 1.0);
+    final steps = ((safeRatio + 1e-9) / 0.20).floor().clamp(0, 5);
+    return steps / 5;
+  }
+
+  double get xpCreditedDistanceKm {
+    if (!isDrivenSession) return 0.0;
+    final planned = distanceTargetKm;
+    if (planned == null || planned <= 0) return actualDistanceKm;
+    return planned * xpCreditProgressRatio;
   }
 
   bool get isRecommendationEligible {
@@ -114,6 +185,21 @@ class SavedRoute {
       'distance_target': distanceTargetKm,
       'driven_km': drivenKm,
       'source_route_id': sourceRouteId,
+      'xp_distance': xpDistance,
+      'xp_curve_bonus': xpCurveBonus,
+      'xp_style_bonus': xpStyleBonus,
+      'xp_base': xpBase,
+      'xp_multiplier': xpMultiplier,
+      'xp_streak_days': xpStreakDays,
+      'xp_awarded': xpAwarded,
+      'route_source': routeSource,
+      'route_fingerprint': routeFingerprint,
+      'quality_tier': qualityTier,
+      'route_meta': routeMeta,
+      'average_rating': averageRating,
+      'rating_count': ratingCount,
+      'completion_rate': completionRate,
+      'completed_at_end': completedAtEnd,
     };
   }
 
@@ -145,5 +231,65 @@ class SavedRoute {
       default:
         return '🛣️';
     }
+  }
+
+  String get displayStyleLabel {
+    switch (style) {
+      case 'Sport Mode':
+        return 'Sport';
+      case 'Kurvenjagd':
+      case 'Abendrunde':
+      case 'Entdecker':
+        return style;
+      default:
+        return style.trim().isEmpty ? 'Route' : style;
+    }
+  }
+
+  String? get qualityBadgeLabel {
+    final tier = (qualityTier ?? routeMeta['quality_tier']?.toString())
+        ?.trim()
+        .toLowerCase();
+    switch (tier) {
+      case 'ideal':
+        return 'Ideal';
+      case 'good':
+        return 'Gut';
+      case 'acceptable':
+        return 'Reserve';
+      default:
+        return null;
+    }
+  }
+
+  double? get displayRating {
+    if (averageRating != null && averageRating! > 0) return averageRating;
+    if (rating != null && rating! > 0) return rating!.toDouble();
+    return null;
+  }
+
+  String? get ratingSummaryLabel {
+    final score = displayRating;
+    if (score == null) return null;
+    final scoreText = score.toStringAsFixed(1).replaceAll('.', ',');
+    if (ratingCount > 0) {
+      final suffix = ratingCount == 1 ? 'Bewertung' : 'Bewertungen';
+      return '$scoreText · $ratingCount $suffix';
+    }
+    return '$scoreText Route-Score';
+  }
+
+  String? get ratingTrustLabel {
+    final score = displayRating;
+    if (score == null) return null;
+    if (score >= 4.4) return 'Sehr gut';
+    if (score >= 3.0) return 'Okay';
+    return 'Schlecht';
+  }
+
+  String? get ratingShareLabel {
+    final score = displayRating;
+    if (score == null) return null;
+    return '${score.toStringAsFixed(1).replaceAll('.', ',')} Sterne';
   }
 }
