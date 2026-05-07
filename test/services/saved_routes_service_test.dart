@@ -398,6 +398,44 @@ void main() {
       );
     });
 
+    test('hasEquivalentSavedRoute erkennt gleiche Route über Fingerprint', () {
+      final recommended = SavedRoute.fromJson({
+        'id': 'pool-route',
+        'created_at': '2025-01-15T10:00:00.000Z',
+        'style': 'Sport Mode',
+        'distance_actual': 73.7,
+        'route_source': 'route_pool',
+        'route_fingerprint': 'fp-dornbirn-75-sport',
+        'geometry': {
+          'type': 'LineString',
+          'coordinates': [
+            [9.74, 47.50],
+            [9.80, 47.55],
+          ],
+        },
+      });
+      final savedCopy = SavedRoute.fromJson({
+        'id': 'saved-copy',
+        'created_at': '2025-01-16T10:00:00.000Z',
+        'style': 'Sport Mode',
+        'distance_actual': 73.7,
+        'route_source': 'route_pool',
+        'route_fingerprint': 'fp-dornbirn-75-sport',
+        'geometry': {
+          'type': 'LineString',
+          'coordinates': [
+            [9.74, 47.50],
+            [9.81, 47.56],
+          ],
+        },
+      });
+
+      expect(
+        SavedRoutesService.hasEquivalentSavedRoute(recommended, [savedCopy]),
+        isTrue,
+      );
+    });
+
     test('dedupeEquivalentRoutes entfernt doppelte gespeicherte Kopien', () {
       final original = SavedRoute.fromJson({
         'id': 'route-original',
@@ -553,6 +591,43 @@ void main() {
           row['route_meta'],
           containsPair('source_route_id', 'vorarlberg-bregenz-50-sport-seed-1'),
         );
+      },
+    );
+
+    test(
+      'buildExistingRouteInsertForTest schreibt route_pool UUID nicht in routes-FK source_route_id',
+      () {
+        const poolRouteId = '22222222-3333-4444-8555-666666666666';
+        final route = SavedRoute.fromJson({
+          'id': poolRouteId,
+          'created_at': '2025-01-18T10:00:00.000Z',
+          'style': 'Sport Mode',
+          'distance_actual': 73.7,
+          'distance_target': 75,
+          'duration_seconds': 7200,
+          'route_source': 'route_pool',
+          'route_fingerprint': 'fp-home-pool',
+          'quality_tier': 'good',
+          'route_meta': {'pool_route_id': poolRouteId},
+          'geometry': {
+            'type': 'LineString',
+            'coordinates': [
+              [9.74, 47.50],
+              [9.78, 47.53],
+            ],
+          },
+        });
+
+        final row = SavedRoutesService.buildExistingRouteInsertForTest(
+          userId: 'user-1',
+          route: route,
+        );
+
+        expect(row, isNot(contains('source_route_id')));
+        expect(row['route_source'], equals('route_pool'));
+        expect(row['route_fingerprint'], equals('fp-home-pool'));
+        expect(row['route_meta'], containsPair('source_route_id', poolRouteId));
+        expect(row['route_meta'], containsPair('pool_route_id', poolRouteId));
       },
     );
   });

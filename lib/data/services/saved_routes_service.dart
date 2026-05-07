@@ -145,6 +145,14 @@ class SavedRoutesService {
   static bool areEquivalentRoutes(SavedRoute first, SavedRoute second) {
     if (first.id == second.id) return true;
 
+    final firstFingerprint = _normalizedRouteFingerprint(first);
+    final secondFingerprint = _normalizedRouteFingerprint(second);
+    if (firstFingerprint != null &&
+        secondFingerprint != null &&
+        firstFingerprint == secondFingerprint) {
+      return true;
+    }
+
     final firstSource = first.sourceRouteId?.trim();
     final secondSource = second.sourceRouteId?.trim();
     final firstIds = <String>{
@@ -158,6 +166,19 @@ class SavedRoutesService {
 
     if (firstIds.intersection(secondIds).isNotEmpty) return true;
     return first.routeSignature == second.routeSignature;
+  }
+
+  static String? _normalizedRouteFingerprint(SavedRoute route) {
+    final explicit = route.routeFingerprint?.trim();
+    if (explicit != null && explicit.isNotEmpty) return explicit;
+
+    final metaFingerprint =
+        route.routeMeta['route_fingerprint']?.toString().trim() ??
+        route.routeMeta['fingerprint']?.toString().trim();
+    if (metaFingerprint != null && metaFingerprint.isNotEmpty) {
+      return metaFingerprint;
+    }
+    return null;
   }
 
   static bool hasEquivalentSavedRoute(
@@ -421,7 +442,13 @@ class SavedRoutesService {
     final rawSourceRouteId = (route.sourceRouteId?.trim().isNotEmpty == true)
         ? route.sourceRouteId!.trim()
         : route.id;
-    final sourceRouteId = _isUuid(rawSourceRouteId) ? rawSourceRouteId : null;
+    final sourceRouteId =
+        _shouldPersistSourceRouteId(
+          route: route,
+          rawSourceRouteId: rawSourceRouteId,
+        )
+        ? rawSourceRouteId
+        : null;
     final routeFingerprint = (route.routeFingerprint?.trim().isNotEmpty == true)
         ? route.routeFingerprint!.trim()
         : route.routeSignature;
@@ -446,6 +473,29 @@ class SavedRoutesService {
       'route_meta': routeMeta,
       if (route.rating != null && route.rating! > 0) 'rating': route.rating,
     };
+  }
+
+  static bool _shouldPersistSourceRouteId({
+    required SavedRoute route,
+    required String rawSourceRouteId,
+  }) {
+    if (!_isUuid(rawSourceRouteId)) return false;
+
+    final routeSource = route.routeSource?.trim().toLowerCase();
+    if (routeSource == 'route_pool' ||
+        routeSource == 'route_pool_candidate' ||
+        routeSource == 'candidate_reserve') {
+      return false;
+    }
+
+    final externalSourceIds = <String>{
+      route.routeMeta['pool_route_id']?.toString().trim() ?? '',
+      route.routeMeta['route_pool_id']?.toString().trim() ?? '',
+      route.routeMeta['candidate_route_id']?.toString().trim() ?? '',
+      route.routeMeta['route_pool_candidate_id']?.toString().trim() ?? '',
+    }..removeWhere((value) => value.isEmpty);
+
+    return !externalSourceIds.contains(rawSourceRouteId);
   }
 
   static bool _isUuid(String value) {

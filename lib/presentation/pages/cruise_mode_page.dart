@@ -2057,14 +2057,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       top: MediaQuery.of(context).padding.top + 8,
       left: 12,
       right: 12,
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _buildRoutePreviewBackButton(),
-          const SizedBox(width: 10),
-          Expanded(child: _buildRouteInfoBanner()),
-        ],
-      ),
+      child: _buildRouteInfoBanner(),
     );
   }
 
@@ -2163,20 +2156,30 @@ class _CruiseModePageState extends State<CruiseModePage>
     final topInset = MediaQuery.of(context).padding.top;
     return Stack(
       children: [
-        if (_maneuvers.isNotEmpty)
-          Positioned(
-            top: topInset + 8,
-            left: 12,
-            right: 12,
-            child: CruiseManeuverIndicator(
-              maneuver:
-                  _maneuvers[_activeManeuverIndex.clamp(
-                    0,
-                    _maneuvers.length - 1,
-                  )],
-              distanceToManeuverMeters: _calculateDistanceToManeuver(),
-            ),
+        Positioned(
+          top: topInset + 8,
+          left: 12,
+          right: _maneuvers.isNotEmpty ? 12 : null,
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _buildRoutePreviewBackButton(),
+              if (_maneuvers.isNotEmpty) ...[
+                const SizedBox(width: 10),
+                Expanded(
+                  child: CruiseManeuverIndicator(
+                    maneuver:
+                        _maneuvers[_activeManeuverIndex.clamp(
+                          0,
+                          _maneuvers.length - 1,
+                        )],
+                    distanceToManeuverMeters: _calculateDistanceToManeuver(),
+                  ),
+                ),
+              ],
+            ],
           ),
+        ),
         // FAB-Spalte rechts: Simulation + Zentrieren
         Positioned(
           right: 16,
