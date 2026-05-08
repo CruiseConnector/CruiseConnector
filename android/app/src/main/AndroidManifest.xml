@@ -68,7 +68,8 @@
             android:name=".car.CruiseCarAppService"
             android:exported="true"
             android:icon="@mipmap/ic_launcher"
-            android:label="Cruise Connector">
+            android:label="Cruise Connector"
+            android:permission="androidx.car.app.CarAppService">
             <intent-filter>
                 <action android:name="androidx.car.app.CarAppService" />
                 <category android:name="androidx.car.app.category.NAVIGATION" />
