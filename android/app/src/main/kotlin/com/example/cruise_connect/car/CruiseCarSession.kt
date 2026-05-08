@@ -1,4 +1,4 @@
-package com.example.cruise_connect.car
+package com.vucko.cruiserconnect.car
 
 import android.content.Intent
 import androidx.car.app.AppManager

@@ -1,4 +1,4 @@
-package com.example.cruise_connect.car
+package com.vucko.cruiserconnect.car
 
 import androidx.car.app.CarContext
 import androidx.car.app.Screen
@@ -12,7 +12,7 @@ import androidx.car.app.model.PaneTemplate
 import androidx.car.app.model.Row
 import androidx.car.app.model.Template
 import androidx.core.graphics.drawable.IconCompat
-import com.example.cruise_connect.R
+import com.vucko.cruiserconnect.R
 
 class CruiseCarHomeScreen(
     carContext: CarContext,

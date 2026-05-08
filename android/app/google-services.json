@@ -7,9 +7,9 @@
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:643677007260:android:9b553a0314c14012b76c59",
+        "mobilesdk_app_id": "1:643677007260:android:c761b830cf08b63fb76c59",
         "android_client_info": {
-          "package_name": "com.example.cruise_connect"
+          "package_name": "com.vucko.cruiserconnect"
         }
       },
       "oauth_client": [],

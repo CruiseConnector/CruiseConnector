@@ -1,4 +1,4 @@
-package com.example.cruise_connect
+package com.vucko.cruiserconnect
 
 import io.flutter.embedding.android.FlutterActivity
 
