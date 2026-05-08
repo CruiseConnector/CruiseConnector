@@ -25,6 +25,7 @@ import 'package:cruise_connect/data/services/geocoding_service.dart';
 import 'package:cruise_connect/data/services/navigation_guidance_utils.dart';
 import 'package:cruise_connect/data/services/navigation_progress_socket_service.dart';
 import 'package:cruise_connect/data/services/offline_map_service.dart';
+import 'package:cruise_connect/data/services/car_route_bridge_service.dart';
 import 'package:cruise_connect/data/services/route_access_plan.dart';
 import 'package:cruise_connect/data/services/route_service.dart';
 import 'package:cruise_connect/data/services/route_cache_service.dart';
@@ -165,6 +166,7 @@ class _CruiseModePageState extends State<CruiseModePage>
   // ─────────────────────── Services ──────────────────────────────────────────
   final _geocodingService = const GeocodingService();
   final _routeService = RouteService();
+  final _carRouteBridge = CarRouteBridgeService();
   final _smartRerouteEngine = const SmartRerouteEngine();
   final _navigationSocketService = NavigationProgressSocketService();
 
@@ -418,6 +420,13 @@ class _CruiseModePageState extends State<CruiseModePage>
       _routeSearchNoticeMessage = null;
       _configCollapsed = true;
     });
+    unawaited(
+      _carRouteBridge.publishSearching(
+        routeType: _carRouteType,
+        style: _selectedStyle,
+        avoidHighways: _avoidHighways,
+      ),
+    );
     _routeLoadingPhaseTimer = Timer.periodic(const Duration(seconds: 3), (_) {
       if (!mounted ||
           _disposed ||
@@ -884,6 +893,11 @@ class _CruiseModePageState extends State<CruiseModePage>
   bool _requiresDestination(bool isRoundTrip) => !isRoundTrip;
 
   bool get _isWaypointPlanning => _isRoundTrip && _planningType == 'Wegpunkte';
+
+  String get _carRouteType {
+    if (_isWaypointPlanning) return CarRouteType.waypoints;
+    return _isRoundTrip ? CarRouteType.roundtrip : CarRouteType.pointToPoint;
+  }
 
   LatLng? get _pointToPointDestinationMarkerPoint {
     if (_isRoundTrip || _isRouteConfirmed) return null;
@@ -3466,6 +3480,7 @@ class _CruiseModePageState extends State<CruiseModePage>
         errorMessage,
         error: errorForUi,
       );
+      unawaited(_carRouteBridge.publishFailed(message: errorMessage));
     } finally {
       // Hintergrund-Generierung wieder erlauben
       RouteCacheService.endUserGeneration();
@@ -3659,6 +3674,14 @@ class _CruiseModePageState extends State<CruiseModePage>
         ? _deliveredRoundTripWaypointsFromMeta(prepared.edgeMeta)
         : const <LatLng>[];
     _applyRouteResult(prepared);
+    unawaited(
+      _carRouteBridge.publishFound(
+        result: prepared,
+        routeType: _carRouteType,
+        style: _selectedStyle,
+        avoidHighways: _avoidHighways,
+      ),
+    );
     _hideRouteSearchStatusForAcceptedRoute();
     _lastGeneratedWasRoundTrip = _isRoundTrip;
     _lastGeneratedSelectedKm = _isRoundTrip ? distance : null;
@@ -4316,6 +4339,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       _isCameraLocked = false;
       _configCollapsed = false;
     });
+    unawaited(_carRouteBridge.publishEnded());
   }
 
   void _returnToCruiseSetupFromActiveRoute() {
@@ -4402,6 +4426,21 @@ class _CruiseModePageState extends State<CruiseModePage>
       'type': 'LineString',
       'coordinates': _remainingRouteCoordinates,
     }, animateCamera: false);
+    final activeResult = _lastRouteResult;
+    if (activeResult != null) {
+      unawaited(
+        _carRouteBridge.publishNavigationStarted(
+          result: activeResult,
+          routeType: _carRouteType,
+          style: _selectedStyle,
+          avoidHighways: _avoidHighways,
+          remainingDistanceMeters: _remainingDistance ?? _routeDistance,
+          remainingDurationSeconds: _remainingDuration ?? _routeDuration,
+          nextManeuverText: _currentCarManeuverText(),
+          nextManeuverDistance: _calculateDistanceToManeuver(),
+        ),
+      );
+    }
   }
 
   Future<void> _prepareXpStreakContext() async {
@@ -5465,6 +5504,23 @@ class _CruiseModePageState extends State<CruiseModePage>
     }
 
     if (needsRebuild) _safeSetState(() {});
+    unawaited(
+      _carRouteBridge.publishProgress(
+        remainingDistanceMeters: _remainingDistance,
+        remainingDurationSeconds: _remainingDuration,
+        nextManeuverText: _currentCarManeuverText(),
+        nextManeuverDistance: distToManeuver,
+      ),
+    );
+  }
+
+  String? _currentCarManeuverText() {
+    if (_maneuvers.isEmpty) return null;
+    final maneuver =
+        _maneuvers[_activeManeuverIndex.clamp(0, _maneuvers.length - 1)];
+    return maneuver.instruction.isNotEmpty
+        ? maneuver.instruction
+        : maneuver.announcement;
   }
 
   void _updateRemainingDistanceAndDuration() {
