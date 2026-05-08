@@ -9,7 +9,8 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
 
     func templateApplicationScene(
         _ templateApplicationScene: CPTemplateApplicationScene,
-        didConnect interfaceController: CPInterfaceController
+        didConnect interfaceController: CPInterfaceController,
+        to window: CPWindow
     ) {
         let coordinator = CarPlayRouteCoordinator(
             interfaceController: interfaceController
@@ -20,7 +21,8 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
 
     func templateApplicationScene(
         _ templateApplicationScene: CPTemplateApplicationScene,
-        didDisconnect interfaceController: CPInterfaceController
+        didDisconnect interfaceController: CPInterfaceController,
+        from window: CPWindow
     ) {
         coordinator = nil
     }
