@@ -391,6 +391,7 @@ class _FakeRoutePoolService extends RoutePoolService {
     String? preferredAdmin2Name,
     String? preferredCityCluster,
     int candidateLimit = 80,
+    bool forceAllow = false,
   }) async {
     reserveCalls.add({
       'userLat': userLat,
@@ -405,6 +406,7 @@ class _FakeRoutePoolService extends RoutePoolService {
       'preferredAdmin2Name': preferredAdmin2Name,
       'preferredCityCluster': preferredCityCluster,
       'candidateLimit': candidateLimit,
+      'forceAllow': forceAllow,
     });
     if (_reserveMatches != null) {
       return _reserveMatches!;
@@ -1507,7 +1509,7 @@ void main() {
   );
 
   test(
-    'ROUND_TRIP-Pool-Fallback verwirft zu weite Pool-Route ueber 10 km',
+    'ROUND_TRIP-Pool-Fallback verwirft zu weite Pool-Route ueber 12 km',
     () async {
       final failingInvoker = _AlwaysFailingInvoker();
       final farPoolService = _FakeRoutePoolService(

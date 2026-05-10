@@ -256,11 +256,30 @@ export function cellKey(cell: CurationRouteCell): string {
     cell.admin1Name.trim(),
     cell.admin2Name?.trim() ?? "",
     cell.cityCluster.trim(),
-    cell.routeType.trim().toUpperCase(),
+    normalizeRouteType(cell.routeType),
     cell.distanceBucket,
     normalizeStyleKey(cell.styleKey),
     cell.avoidHighways ? "no_highway" : "highway_allowed",
   ].join("|");
+}
+
+export function normalizeRouteType(routeType: string): string {
+  const normalized = normalizeText(routeType)
+    .replaceAll(" ", "_")
+    .replaceAll("-", "_");
+  if (
+    normalized === "round_trip" || normalized === "roundtrip" ||
+    normalized === "rundkurs"
+  ) {
+    return "ROUND_TRIP";
+  }
+  if (
+    normalized === "point_to_point" || normalized === "pointtopoint" ||
+    normalized === "a_b" || normalized === "ab"
+  ) {
+    return "POINT_TO_POINT";
+  }
+  return routeType.trim().toUpperCase();
 }
 
 export function deriveCoverageStatus(args: {
@@ -361,6 +380,10 @@ export function normalizeStyleKey(style: string): string {
     .replaceAll(" ", "_")
     .replaceAll("-", "_")
     .replaceAll("kurvenjagd", "curvy")
+    .replaceAll("kurvenreich", "curvy")
+    .replaceAll("alpenstrassen", "curvy")
+    .replaceAll("alpenstrasse", "curvy")
+    .replaceAll("alpenstra_en", "curvy")
     .replaceAll("sport_mode", "sport")
     .replaceAll("abendrunde", "evening")
     .replaceAll("entdecker", "explorer");

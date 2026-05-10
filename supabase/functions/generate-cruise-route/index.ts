@@ -53,6 +53,7 @@ const ROUTING_BUILD_TIME = Deno.env.get("ROUTING_BUILD_TIME") ??
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")?.replace(/\/$/, "") ?? "";
 
 type JsonMap = Record<string, unknown>;
+type RouteType = "ROUND_TRIP" | "POINT_TO_POINT";
 
 interface RouteSearchSessionRow {
   id: string;
@@ -182,11 +183,36 @@ function distanceBucketForTarget(targetDistance?: number): 50 | 75 | 100 {
 
 function styleKeyForMode(mode?: string): string {
   const normalized = (mode ?? "Sport Mode").trim().toLowerCase();
-  if (normalized.includes("kurven")) return "kurvenjagd";
+  if (normalized.includes("kurven") || normalized.includes("curvy")) {
+    return "kurvenjagd";
+  }
   if (normalized.includes("abend")) return "abendrunde";
   if (normalized.includes("entdeck")) return "entdecker";
   if (normalized.includes("sport")) return "sport_mode";
   return "sport_mode";
+}
+
+function routeTypeForRequest(routeType?: string): RouteType {
+  const normalized = (routeType ?? "ROUND_TRIP").trim().toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_|_$/g, "");
+  if (
+    normalized === "round_trip" || normalized === "roundtrip" ||
+    normalized === "rundkurs"
+  ) {
+    return "ROUND_TRIP";
+  }
+  if (
+    normalized === "point_to_point" || normalized === "pointtopoint" ||
+    normalized === "a_b" || normalized === "ab"
+  ) {
+    return "POINT_TO_POINT";
+  }
+  return (routeType ?? "ROUND_TRIP").trim().toUpperCase() ===
+      "POINT_TO_POINT"
+    ? "POINT_TO_POINT"
+    : "ROUND_TRIP";
 }
 
 function candidatePayloadDistanceFits(value: unknown): boolean {
@@ -546,7 +572,7 @@ async function createRoundTripSearchSession(
   meta: JsonMap | null,
 ): Promise<RouteSearchSessionRow | null> {
   if (body.planning_type !== "Zufall") return null;
-  if ((body.route_type ?? "ROUND_TRIP") !== "ROUND_TRIP") return null;
+  if (routeTypeForRequest(body.route_type) !== "ROUND_TRIP") return null;
   const bucket = distanceBucketForTarget(body.targetDistance);
   if (body.startLocation == null) return null;
   const queueLimit = roundTripSearchSessionQueueLimit(body);
@@ -1379,7 +1405,7 @@ Deno.serve(async (req) => {
     let pointToPointEffectiveTargetDistanceKm: number | undefined;
     let pointToPointDestinationDistanceMeters: number | null = null;
     // Default to ROUND_TRIP if not specified, for backward compatibility or default 'Zufall' behavior
-    const currentRouteType = body.route_type || "ROUND_TRIP";
+    const currentRouteType = routeTypeForRequest(body.route_type);
     const detourLevel = Math.max(0, Math.min(3, body.detour_level ?? 0));
     let pointToPointDeliveredDetourLevel = detourLevel;
     let pointToPointDetourDowngraded = false;

@@ -216,6 +216,14 @@ Deno.test("Coverage Status nutzt exakte Zelle und Zielwerte", () => {
     cellKey(baseCandidate),
   );
   assertEquals(
+    cellKey({ ...baseCandidate, routeType: "roundtrip" }),
+    cellKey(baseCandidate),
+  );
+  assertEquals(
+    cellKey({ ...baseCandidate, routeType: "Rundkurs" }),
+    cellKey(baseCandidate),
+  );
+  assertEquals(
     cellKey({ ...baseCandidate, avoidHighways: false }),
     "AT|Vorarlberg|Dornbirn|Dornbirn|ROUND_TRIP|50|sport|highway_allowed",
   );

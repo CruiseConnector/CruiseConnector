@@ -1114,6 +1114,14 @@ function canonicalStyleKey(styleKey: string): string {
   if (normalized === "sport" || normalized === "sport_mode") {
     return "sport_mode";
   }
+  if (
+    normalized === "kurvenjagd" || normalized === "kurvenreich" ||
+    normalized === "curvy" || normalized === "curves" ||
+    normalized === "alpenstrassen" || normalized === "alpenstrasse" ||
+    normalized === "alpenstra_en"
+  ) {
+    return "kurvenjagd";
+  }
   return normalized || "sport_mode";
 }
 

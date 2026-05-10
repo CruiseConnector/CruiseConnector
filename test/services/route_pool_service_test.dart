@@ -771,6 +771,215 @@ void main() {
     });
 
     test(
+      'ROUND_TRIP: roundtrip/round_trip/Rundkurs matchen identisch',
+      () async {
+        final service = RoutePoolService(
+          inMemoryRegions: [
+            _region(
+              countryCode: 'AT',
+              admin1Name: 'Vorarlberg',
+              admin2Name: 'Feldkirch',
+              cityCluster: 'Feldkirch',
+              centerLat: 47.2386,
+              centerLng: 9.5986,
+            ),
+          ],
+          inMemoryRoutes: [
+            _route(
+              id: 'feldkirch-50-sport-roundtrip-alias',
+              countryCode: 'AT',
+              admin1Name: 'Vorarlberg',
+              admin2Name: 'Feldkirch',
+              cityCluster: 'Feldkirch',
+              startLat: 47.2386,
+              startLng: 9.5986,
+              distanceBucket: 50,
+              routeType: 'roundtrip',
+              styleTags: const ['Sport Mode'],
+            ),
+          ],
+        );
+
+        final matches = await service.findCandidateRoutesNear(
+          userLat: 47.2386,
+          userLng: 9.5986,
+          distanceBucket: 50,
+          style: 'Sport Mode',
+          avoidHighways: true,
+          routeType: 'Rundkurs',
+        );
+
+        expect(matches.map((match) => match.route.id), [
+          'feldkirch-50-sport-roundtrip-alias',
+        ]);
+      },
+    );
+
+    test('Goetzis Sport 50 Autobahn AN akzeptiert no-highway Route', () async {
+      final service = RoutePoolService(
+        inMemoryRegions: [
+          _region(
+            countryCode: 'AT',
+            admin1Name: 'Vorarlberg',
+            admin2Name: 'Rheintal-Sued',
+            cityCluster: 'Rheintal-Sued',
+            centerLat: 47.3331,
+            centerLng: 9.6336,
+          ),
+        ],
+        inMemoryRoutes: [
+          _route(
+            id: 'goetzis-50-sport-no-highway',
+            countryCode: 'AT',
+            admin1Name: 'Vorarlberg',
+            admin2Name: 'Rheintal-Sued',
+            cityCluster: 'Rheintal-Sued',
+            startLat: 47.356,
+            startLng: 9.65,
+            distanceBucket: 50,
+            styleTags: const ['Sport Mode'],
+            avoidsHighway: true,
+            hasHighway: false,
+            qualityScore: 88,
+          ),
+        ],
+      );
+
+      final matches = await service.findCandidateRoutesNear(
+        userLat: 47.3331,
+        userLng: 9.6336,
+        distanceBucket: 50,
+        style: 'Sport Mode',
+        avoidHighways: false,
+        routeType: 'ROUND_TRIP',
+      );
+
+      expect(matches.map((match) => match.route.id), [
+        'goetzis-50-sport-no-highway',
+      ]);
+    });
+
+    test(
+      'Goetzis Sport 50 Autobahn AUS gibt niemals has_highway true zurueck',
+      () async {
+        final service = RoutePoolService(
+          inMemoryRegions: [
+            _region(
+              countryCode: 'AT',
+              admin1Name: 'Vorarlberg',
+              admin2Name: 'Rheintal-Sued',
+              cityCluster: 'Rheintal-Sued',
+              centerLat: 47.3331,
+              centerLng: 9.6336,
+            ),
+          ],
+          inMemoryRoutes: [
+            _route(
+              id: 'goetzis-50-sport-highway',
+              countryCode: 'AT',
+              admin1Name: 'Vorarlberg',
+              admin2Name: 'Rheintal-Sued',
+              cityCluster: 'Rheintal-Sued',
+              startLat: 47.3333,
+              startLng: 9.6338,
+              distanceBucket: 50,
+              styleTags: const ['Sport Mode'],
+              avoidsHighway: false,
+              hasHighway: true,
+              qualityScore: 99,
+            ),
+            _route(
+              id: 'goetzis-50-sport-safe',
+              countryCode: 'AT',
+              admin1Name: 'Vorarlberg',
+              admin2Name: 'Rheintal-Sued',
+              cityCluster: 'Rheintal-Sued',
+              startLat: 47.334,
+              startLng: 9.634,
+              distanceBucket: 50,
+              styleTags: const ['Sport Mode'],
+              avoidsHighway: true,
+              hasHighway: false,
+              qualityScore: 88,
+            ),
+          ],
+        );
+
+        final matches = await service.findCandidateRoutesNear(
+          userLat: 47.3331,
+          userLng: 9.6336,
+          distanceBucket: 50,
+          style: 'Sport Mode',
+          avoidHighways: true,
+          routeType: 'ROUND_TRIP',
+        );
+
+        expect(matches.map((match) => match.route.id), [
+          'goetzis-50-sport-safe',
+        ]);
+      },
+    );
+
+    test(
+      'Hohenems Kurvenjagd 75 nutzt nahe regionale Route bei leerem Stadtcluster',
+      () async {
+        final service = RoutePoolService(
+          inMemoryRegions: [
+            _region(
+              countryCode: 'AT',
+              admin1Name: 'Vorarlberg',
+              admin2Name: 'Rheintal-Sued',
+              cityCluster: 'Hohenems',
+              centerLat: 47.3667,
+              centerLng: 9.6831,
+            ),
+            _region(
+              countryCode: 'AT',
+              admin1Name: 'Vorarlberg',
+              admin2Name: 'Dornbirn',
+              cityCluster: 'Dornbirn',
+              centerLat: 47.4125,
+              centerLng: 9.743,
+            ),
+          ],
+          inMemoryRoutes: [
+            _route(
+              id: 'dornbirn-75-kurven-near-hohenems',
+              countryCode: 'AT',
+              admin1Name: 'Vorarlberg',
+              admin2Name: 'Dornbirn',
+              cityCluster: 'Dornbirn',
+              startLat: 47.4125,
+              startLng: 9.743,
+              distanceBucket: 75,
+              styleTags: const ['Kurvenjagd'],
+              avoidsHighway: true,
+              hasHighway: false,
+              qualityScore: 91,
+            ),
+          ],
+        );
+
+        final matches = await service.findCandidateRoutesNear(
+          userLat: 47.3667,
+          userLng: 9.6831,
+          distanceBucket: 75,
+          style: 'Kurvenjagd',
+          avoidHighways: true,
+          routeType: 'ROUND_TRIP',
+          preferredCountryCode: 'AT',
+          preferredAdmin1Name: 'Vorarlberg',
+          preferredCityCluster: 'Hohenems',
+        );
+
+        expect(matches.map((match) => match.route.id), [
+          'dornbirn-75-kurven-near-hohenems',
+        ]);
+        expect(matches.single.radiusScope, 'regional_nearby');
+      },
+    );
+
+    test(
       'Coverage-Zellen trennen Style und Distanz, Autobahn AN akzeptiert No-Highway-Routen',
       () async {
         final routes = <RoutePoolEntry>[
@@ -2880,6 +3089,52 @@ void main() {
 
       expect(matches, isEmpty);
     });
+
+    test(
+      'Candidate-Reserve kann nach Live-NoRoute in normaler Region erzwungen werden',
+      () async {
+        final service = RoutePoolService(
+          inMemoryRegions: [
+            _region(
+              countryCode: 'AT',
+              admin1Name: 'Vorarlberg',
+              admin2Name: 'Rheintal-Sued',
+              cityCluster: 'Rheintal-Sued',
+              centerLat: 47.3331,
+              centerLng: 9.6336,
+            ),
+          ],
+          inMemoryRoutes: const [],
+          inMemoryCoverage: <RoutePoolCoverage>[],
+          inMemorySeedJobs: <RouteSeedJob>[],
+          inMemoryCandidates: [
+            _candidate(
+              id: 'goetzis-safe-forced-reserve',
+              admin2Name: 'Rheintal-Sued',
+              cityCluster: 'Rheintal-Sued',
+              startLat: 47.356,
+              startLng: 9.65,
+              styleKey: 'sport_mode',
+              distanceKm: 52,
+              coordinateCount: 120,
+            ),
+          ],
+        );
+
+        final matches = await service.findCandidateReserveRoutesNear(
+          userLat: 47.3331,
+          userLng: 9.6336,
+          distanceBucket: 50,
+          style: 'Sport Mode',
+          avoidHighways: true,
+          forceAllow: true,
+        );
+
+        expect(matches.map((match) => match.route.id), [
+          'goetzis-safe-forced-reserve',
+        ]);
+      },
+    );
 
     test(
       'Cluster mit vielen falschen Routen ist ohne passende Zellen nicht healthy_minimum',

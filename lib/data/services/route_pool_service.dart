@@ -414,7 +414,7 @@ class RoutePoolService {
   static const double regionalMaxKm = 30.0;
   static const double maxExtendedRegionalKm = 45.0;
   static const double roundTripIdealStartMaxKm = 5.0;
-  static const double roundTripHardStartMaxKm = 10.0;
+  static const double roundTripHardStartMaxKm = 12.0;
   static const Set<int> validDistanceBuckets = {50, 75, 100};
   static const int defaultMinVerifiedPerCell = 3;
   static const int defaultTargetPoolSize = 12;
@@ -471,7 +471,7 @@ class RoutePoolService {
       _cellKeyPart(admin1Name),
       _cellKeyPart(admin2Name),
       _cellKeyPart(cityCluster),
-      routeType.trim().toUpperCase(),
+      _normalizeRouteType(routeType),
       distanceBucket.toString(),
       _normalizeStyleKey(styleKey),
       avoidHighways ? 'avoid_highways' : 'allow_highways',
@@ -1177,6 +1177,7 @@ class RoutePoolService {
     String? preferredAdmin2Name,
     String? preferredCityCluster,
     int candidateLimit = 80,
+    bool forceAllow = false,
   }) async {
     final normalizedRouteType = _normalizeRouteType(routeType);
     if (!_sameText(normalizedRouteType, 'ROUND_TRIP')) return const [];
@@ -1204,6 +1205,7 @@ class RoutePoolService {
         candidates: inMemoryCandidates,
         regions: inMemoryRegions,
         coverageRows: _inMemoryCoverage,
+        forceAllow: forceAllow,
       );
     }
 
@@ -1266,8 +1268,9 @@ class RoutePoolService {
         avoidHighways: avoidHighways,
         routeType: normalizedRouteType,
       );
-      if (!(_reserveFallbackAllowed(nearestRegion) ||
-          _reserveFallbackAllowedForCoverage(coverage))) {
+      if (!forceAllow &&
+          !(_reserveFallbackAllowed(nearestRegion) ||
+              _reserveFallbackAllowedForCoverage(coverage))) {
         return const [];
       }
 
@@ -1282,7 +1285,10 @@ class RoutePoolService {
           .select()
           .eq('is_candidate', true)
           .eq('is_verified_pool', false)
-          .eq('route_type', normalizedRouteType)
+          .inFilter(
+            'route_type',
+            _routeTypeAliases(normalizedRouteType).toList(growable: false),
+          )
           .eq('distance_bucket', distanceBucket)
           .inFilter('style_key', styleKeys.toList(growable: false))
           .isFilter('promoted_to_pool_at', null)
@@ -1440,7 +1446,10 @@ class RoutePoolService {
             .select()
             .eq('verified', true)
             .eq('is_active', true)
-            .eq('route_type', normalizedRouteType)
+            .inFilter(
+              'route_type',
+              _routeTypeAliases(normalizedRouteType).toList(growable: false),
+            )
             .eq('distance_bucket', bucket)
             .gte('start_lat', routeSearchBounds.minLat)
             .lte('start_lat', routeSearchBounds.maxLat)
@@ -1610,6 +1619,7 @@ class RoutePoolService {
     required List<RoutePoolCandidate> candidates,
     required List<RouteRegion> regions,
     required List<RoutePoolCoverage>? coverageRows,
+    required bool forceAllow,
   }) {
     final nearestRegion = _resolveNearestRegion(
       userLat: userLat,
@@ -1631,8 +1641,9 @@ class RoutePoolService {
             routeType: routeType,
           );
     if (nearestRegion == null ||
-        !(_reserveFallbackAllowed(nearestRegion) ||
-            _reserveFallbackAllowedForCoverage(coverage))) {
+        (!forceAllow &&
+            !(_reserveFallbackAllowed(nearestRegion) ||
+                _reserveFallbackAllowedForCoverage(coverage)))) {
       return const [];
     }
     final styleKeys = _candidateReserveStyleKeys(style);
@@ -1641,12 +1652,7 @@ class RoutePoolService {
           return candidate.isCandidate &&
               _sameText(candidate.countryCode, nearestRegion.countryCode) &&
               _sameText(candidate.admin1Name, nearestRegion.admin1Name) &&
-              _nullableSameText(
-                candidate.admin2Name,
-                nearestRegion.admin2Name,
-              ) &&
-              _sameText(candidate.cityCluster, nearestRegion.cityCluster) &&
-              _sameText(candidate.routeType, routeType) &&
+              _routeTypeMatches(candidate.routeType, routeType) &&
               candidate.distanceBucket == distanceBucket &&
               styleKeys.any((key) => _sameText(candidate.styleKey, key)) &&
               _candidateHighwayCompatible(candidate, avoidHighways);
@@ -1753,7 +1759,10 @@ class RoutePoolService {
     final seenExactFallbackRouteIds = <String>{};
     final seenRelaxedPrimaryRouteIds = <String>{};
     final seenRelaxedFallbackRouteIds = <String>{};
-    final preferSingleBucketRoundTrip = _sameText(routeType, 'ROUND_TRIP');
+    final preferSingleBucketRoundTrip = _routeTypeMatches(
+      routeType,
+      'ROUND_TRIP',
+    );
     final primaryBucketOrder = preferSingleBucketRoundTrip
         ? <int>[distanceBucket]
         : bucketOrder;
@@ -1919,7 +1928,7 @@ class RoutePoolService {
     for (final candidate in candidates) {
       if (!candidate.verified) continue;
       if (!candidate.isActive) continue;
-      if (!_sameText(candidate.routeType, query.routeType)) continue;
+      if (!_routeTypeMatches(candidate.routeType, query.routeType)) continue;
       if (!validDistanceBuckets.contains(candidate.distanceBucket)) continue;
       if (candidate.distanceBucket != query.distanceBucket) continue;
       final exactStyleMatch = _styleMatches(candidate, query.style);
@@ -1940,7 +1949,7 @@ class RoutePoolService {
       );
       final radius = _allowedRadiusFor(query, candidate, activeRegions);
       if (radius == null || distanceKm > radius.allowedRadiusKm) continue;
-      final radiusScope = _sameText(query.routeType, 'ROUND_TRIP')
+      final radiusScope = _routeTypeMatches(query.routeType, 'ROUND_TRIP')
           ? _roundTripRadiusScope(query, candidate, distanceKm)
           : radius.scope;
 
@@ -1993,7 +2002,7 @@ class RoutePoolService {
       if (candidate.promotedToPoolAt != null || candidate.demotedAt != null) {
         continue;
       }
-      if (!_sameText(candidate.routeType, query.routeType)) continue;
+      if (!_routeTypeMatches(candidate.routeType, query.routeType)) continue;
       if (candidate.distanceBucket != query.distanceBucket) continue;
       if (!requestedStyleKeys.any(
         (key) => _sameText(candidate.styleKey, key),
@@ -2020,7 +2029,7 @@ class RoutePoolService {
       );
       final radius = _allowedRadiusFor(query, route, activeRegions);
       if (radius == null || distanceKm > radius.allowedRadiusKm) continue;
-      final radiusScope = _sameText(query.routeType, 'ROUND_TRIP')
+      final radiusScope = _routeTypeMatches(query.routeType, 'ROUND_TRIP')
           ? _roundTripRadiusScope(query, route, distanceKm)
           : radius.scope;
       matches.add(
@@ -2132,7 +2141,7 @@ class RoutePoolService {
           _sameText(coverage.admin1Name, region.admin1Name) &&
           _nullableSameText(coverage.admin2Name, region.admin2Name) &&
           _sameText(coverage.cityCluster, region.cityCluster) &&
-          _sameText(coverage.routeType, routeType) &&
+          _routeTypeMatches(coverage.routeType, routeType) &&
           coverage.distanceBucket == distanceBucket &&
           _styleKeyMatches(coverage.styleKey, styleKeys) &&
           coverage.avoidHighways == avoidHighways) {
@@ -2521,7 +2530,7 @@ class RoutePoolService {
         .eq('country_code', assignment.region.countryCode)
         .eq('admin1_name', assignment.region.admin1Name)
         .eq('city_cluster', assignment.region.cityCluster)
-        .eq('route_type', routeType)
+        .inFilter('route_type', _routeTypeAliases(routeType).toList())
         .eq('distance_bucket', distanceBucket)
         .inFilter('style_key', _styleKeyAliases(styleKey).toList())
         .eq('avoid_highways', avoidHighways);
@@ -2545,7 +2554,7 @@ class RoutePoolService {
             _sameText(item.admin1Name, coverage.admin1Name) &&
             _nullableSameText(item.admin2Name, coverage.admin2Name) &&
             _sameText(item.cityCluster, coverage.cityCluster) &&
-            _sameText(item.routeType, coverage.routeType) &&
+            _routeTypeMatches(item.routeType, coverage.routeType) &&
             item.distanceBucket == coverage.distanceBucket &&
             _sameText(item.styleKey, coverage.styleKey) &&
             item.avoidHighways == coverage.avoidHighways;
@@ -2626,7 +2635,7 @@ class RoutePoolService {
         if (!_sameText(route.cityCluster, assignment.region.cityCluster)) {
           continue;
         }
-        if (!_sameText(route.routeType, routeType)) continue;
+        if (!_routeTypeMatches(route.routeType, routeType)) continue;
         if (route.distanceBucket != distanceBucket) continue;
         if (!_normalizeStyleKeyList(
           route.styleTags,
@@ -2655,7 +2664,7 @@ class RoutePoolService {
         .eq('country_code', assignment.region.countryCode)
         .eq('admin1_name', assignment.region.admin1Name)
         .eq('city_cluster', assignment.region.cityCluster)
-        .eq('route_type', routeType)
+        .inFilter('route_type', _routeTypeAliases(routeType).toList())
         .eq('distance_bucket', distanceBucket);
     for (final row in rows as List) {
       final map = Map<String, dynamic>.from(row as Map);
@@ -2698,7 +2707,7 @@ class RoutePoolService {
               assignment.region.admin2Name,
             ) &&
             _sameText(candidate.cityCluster, assignment.region.cityCluster) &&
-            _sameText(candidate.routeType, routeType) &&
+            _routeTypeMatches(candidate.routeType, routeType) &&
             candidate.distanceBucket == distanceBucket &&
             _styleKeyMatches(candidate.styleKey, styleKeys) &&
             _candidateHighwayCompatible(candidate, avoidHighways);
@@ -2711,7 +2720,7 @@ class RoutePoolService {
         .eq('country_code', assignment.region.countryCode)
         .eq('admin1_name', assignment.region.admin1Name)
         .eq('city_cluster', assignment.region.cityCluster)
-        .eq('route_type', routeType)
+        .inFilter('route_type', _routeTypeAliases(routeType).toList())
         .eq('distance_bucket', distanceBucket)
         .inFilter('style_key', styleKeys.toList())
         .eq('is_candidate', true);
@@ -2745,7 +2754,7 @@ class RoutePoolService {
             _sameText(route.admin1Name, assignment.region.admin1Name) &&
             _nullableSameText(route.admin2Name, assignment.region.admin2Name) &&
             _sameText(route.cityCluster, assignment.region.cityCluster) &&
-            _sameText(route.routeType, routeType);
+            _routeTypeMatches(route.routeType, routeType);
       }).length;
     }
 
@@ -2757,7 +2766,7 @@ class RoutePoolService {
         .eq('country_code', assignment.region.countryCode)
         .eq('admin1_name', assignment.region.admin1Name)
         .eq('city_cluster', assignment.region.cityCluster)
-        .eq('route_type', routeType);
+        .inFilter('route_type', _routeTypeAliases(routeType).toList());
     var count = 0;
     for (final row in rows as List) {
       final map = Map<String, dynamic>.from(row as Map);
@@ -2786,7 +2795,7 @@ class RoutePoolService {
               assignment.region.admin2Name,
             ) &&
             _sameText(candidate.cityCluster, assignment.region.cityCluster) &&
-            _sameText(candidate.routeType, routeType);
+            _routeTypeMatches(candidate.routeType, routeType);
       }).length;
     }
 
@@ -2796,7 +2805,7 @@ class RoutePoolService {
         .eq('country_code', assignment.region.countryCode)
         .eq('admin1_name', assignment.region.admin1Name)
         .eq('city_cluster', assignment.region.cityCluster)
-        .eq('route_type', routeType)
+        .inFilter('route_type', _routeTypeAliases(routeType).toList())
         .eq('is_candidate', true);
     var count = 0;
     for (final row in rows as List) {
@@ -2937,7 +2946,7 @@ class RoutePoolService {
         .eq('country_code', assignment.region.countryCode)
         .eq('admin1_name', assignment.region.admin1Name)
         .eq('city_cluster', assignment.region.cityCluster)
-        .eq('route_type', routeType)
+        .inFilter('route_type', _routeTypeAliases(routeType).toList())
         .eq('distance_bucket', distanceBucket)
         .inFilter('style_key', styleAliases)
         .eq('avoid_highways', avoidHighways);
@@ -2962,7 +2971,7 @@ class RoutePoolService {
             _sameText(item.admin1Name, job.admin1Name) &&
             _nullableSameText(item.admin2Name, job.admin2Name) &&
             _sameText(item.cityCluster, job.cityCluster) &&
-            _sameText(item.routeType, job.routeType) &&
+            _routeTypeMatches(item.routeType, job.routeType) &&
             item.distanceBucket == job.distanceBucket &&
             _styleKeyMatches(item.styleKey, _styleKeyAliases(job.styleKey)) &&
             item.avoidHighways == job.avoidHighways;
@@ -3248,7 +3257,7 @@ class RoutePoolService {
         _sameText(coverage.admin1Name, assignment.region.admin1Name) &&
         _nullableSameText(coverage.admin2Name, assignment.region.admin2Name) &&
         _sameText(coverage.cityCluster, assignment.region.cityCluster) &&
-        _sameText(coverage.routeType, routeType) &&
+        _routeTypeMatches(coverage.routeType, routeType) &&
         coverage.distanceBucket == distanceBucket &&
         _styleKeyMatches(coverage.styleKey, _styleKeyAliases(styleKey)) &&
         coverage.avoidHighways == avoidHighways;
@@ -3266,7 +3275,7 @@ class RoutePoolService {
         _sameText(job.admin1Name, assignment.region.admin1Name) &&
         _nullableSameText(job.admin2Name, assignment.region.admin2Name) &&
         _sameText(job.cityCluster, assignment.region.cityCluster) &&
-        _sameText(job.routeType, routeType) &&
+        _routeTypeMatches(job.routeType, routeType) &&
         job.distanceBucket == distanceBucket &&
         _styleKeyMatches(job.styleKey, _styleKeyAliases(styleKey)) &&
         job.avoidHighways == avoidHighways;
@@ -3747,8 +3756,26 @@ class RoutePoolService {
 
   static Set<String> _styleKeyAliases(String style) {
     final normalized = _normalizeStyleKey(style);
-    if (normalized == 'sport' || normalized == 'sport_mode') {
+    if (normalized == 'sport' ||
+        normalized == 'sport_mode' ||
+        normalized == 'sportmode') {
       return const {'sport_mode', 'sport'};
+    }
+    if (normalized == 'kurvenjagd' ||
+        normalized == 'kurvenreich' ||
+        normalized == 'curvy' ||
+        normalized == 'curves' ||
+        normalized == 'alpenstrassen' ||
+        normalized == 'alpenstrasse' ||
+        normalized == 'alpenstra_en') {
+      return const {
+        'kurvenjagd',
+        'kurvenreich',
+        'curvy',
+        'alpenstrassen',
+        'alpenstrasse',
+        'alpenstra_en',
+      };
     }
     return {normalized};
   }
@@ -3935,7 +3962,7 @@ class RoutePoolService {
     RoutePoolEntry candidate,
     List<RouteRegion> regions,
   ) {
-    if (_sameText(query.routeType, 'ROUND_TRIP')) {
+    if (_routeTypeMatches(query.routeType, 'ROUND_TRIP')) {
       if (_sameCity(query, candidate) ||
           _sameAdmin2(query, candidate) ||
           _sameText(query.admin1Name, candidate.admin1Name)) {
@@ -4078,8 +4105,47 @@ class RoutePoolService {
         (right ?? '').trim().toLowerCase();
   }
 
-  static String _normalizeRouteType(String routeType) =>
-      routeType.trim().toUpperCase();
+  static String _normalizeRouteType(String routeType) {
+    final cleaned = routeType
+        .trim()
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^a-z0-9]+'), '_')
+        .replaceAll(RegExp(r'_+'), '_')
+        .replaceAll(RegExp(r'^_|_$'), '');
+    if (cleaned == 'round_trip' ||
+        cleaned == 'roundtrip' ||
+        cleaned == 'rundkurs') {
+      return 'ROUND_TRIP';
+    }
+    if (cleaned == 'point_to_point' ||
+        cleaned == 'pointtopoint' ||
+        cleaned == 'a_b' ||
+        cleaned == 'ab') {
+      return 'POINT_TO_POINT';
+    }
+    return routeType.trim().toUpperCase();
+  }
+
+  static bool _routeTypeMatches(String? left, String? right) {
+    return _normalizeRouteType(left ?? '') == _normalizeRouteType(right ?? '');
+  }
+
+  static Set<String> _routeTypeAliases(String routeType) {
+    return switch (_normalizeRouteType(routeType)) {
+      'ROUND_TRIP' => const {
+        'ROUND_TRIP',
+        'round_trip',
+        'roundtrip',
+        'Rundkurs',
+      },
+      'POINT_TO_POINT' => const {
+        'POINT_TO_POINT',
+        'point_to_point',
+        'pointtopoint',
+      },
+      final normalized => {normalized},
+    };
+  }
 
   static int _boolScore(bool value) => value ? 1 : 0;
 
@@ -4103,20 +4169,20 @@ class RoutePoolService {
   }
 
   static double _maxSearchRadiusForRouteType(String routeType) {
-    return _sameText(routeType, 'ROUND_TRIP')
+    return _routeTypeMatches(routeType, 'ROUND_TRIP')
         ? roundTripHardStartMaxKm
         : maxExtendedRegionalKm;
   }
 
   static double _maxRegionSearchRadiusForRouteType(String routeType) {
-    return _sameText(routeType, 'ROUND_TRIP')
+    return _routeTypeMatches(routeType, 'ROUND_TRIP')
         ? roundTripHardStartMaxKm
         : maxExtendedRegionalKm;
   }
 
   static int _effectiveCandidateLimit(String routeType, int candidateLimit) {
     final normalizedLimit = candidateLimit.clamp(1, 200);
-    return _sameText(routeType, 'ROUND_TRIP')
+    return _routeTypeMatches(routeType, 'ROUND_TRIP')
         ? math.min<int>(normalizedLimit, 80)
         : math.min<int>(normalizedLimit, 140);
   }

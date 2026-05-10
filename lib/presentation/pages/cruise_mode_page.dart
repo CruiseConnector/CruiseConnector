@@ -373,8 +373,8 @@ class _CruiseModePageState extends State<CruiseModePage>
   }
 
   static const List<String> _roundTripLoadingPhases = [
-    'Live-Routen prüfen',
-    'Alternativen vergleichen',
+    'Wir suchen eine passende Route',
+    'Alternativen werden geprüft',
     'Route verfeinern',
     'Strecke final prüfen',
     'Fast fertig',
@@ -4735,13 +4735,13 @@ class _CruiseModePageState extends State<CruiseModePage>
     final title = healingQueued
         ? 'Wir bereiten bessere Routen vor'
         : code == 'search_in_progress'
-        ? 'Live-Routen prüfen'
+        ? 'Alternativen werden geprüft'
         : 'Keine passende Route gefunden';
     final message = healingQueued
         ? 'Wir bereiten automatisch neue Vorschläge für diese Einstellung vor.'
         : switch (code) {
             'search_in_progress' =>
-              'Wir prüfen Live-Varianten und verfeinern die Strecke.',
+              'Wir prüfen weitere Varianten und verfeinern die Strecke.',
             'search_session_timeout' =>
               'Die Suche läuft weiter. Beim nächsten Versuch prüfen wir neue Vorschläge.',
             'search_session_no_route' =>

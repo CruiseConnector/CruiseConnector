@@ -5136,6 +5136,10 @@ class RouteService {
       fallbackReason: fallbackReason,
     );
     if (shouldProbeCandidateReserve) {
+      final forceCandidateReserve = _shouldForceCandidateReserve(
+        matches: matches,
+        fallbackReason: fallbackReason,
+      );
       final reserveMatches = await _routePoolService
           .findCandidateReserveRoutesNear(
             userLat: userLat,
@@ -5144,6 +5148,7 @@ class RouteService {
             style: scenario.style,
             avoidHighways: scenario.avoidHighways,
             routeType: scenario.routeType,
+            forceAllow: forceCandidateReserve,
           );
       if (reserveMatches.isNotEmpty) {
         final seenRouteIds = matches.map((match) => match.route.id).toSet();
@@ -5367,7 +5372,10 @@ class RouteService {
     if (reason.contains('search_again') ||
         reason.contains('no_route') ||
         reason.contains('no_accepted') ||
+        reason.contains('border') ||
+        reason.contains('candidate_queue') ||
         reason.contains('quality') ||
+        reason.contains('similar') ||
         reason.contains('coverage') ||
         reason.contains('thin') ||
         reason.contains('warming')) {
@@ -5377,6 +5385,21 @@ class RouteService {
     // neighbor must not hide a local candidate reserve that already matches the
     // exact requested policy.
     return scenario.avoidHighways;
+  }
+
+  bool _shouldForceCandidateReserve({
+    required List<RoutePoolMatch> matches,
+    required String fallbackReason,
+  }) {
+    if (matches.isEmpty) return true;
+    final reason = fallbackReason.toLowerCase();
+    return reason.contains('search_again') ||
+        reason.contains('no_route') ||
+        reason.contains('no_accepted') ||
+        reason.contains('border') ||
+        reason.contains('candidate_queue') ||
+        reason.contains('quality') ||
+        reason.contains('similar');
   }
 
   List<RoutePoolMatch> _rankPoolFallbackMatchesForScenario({
