@@ -427,6 +427,7 @@ async function processJob(job: SeedJob): Promise<void> {
   let candidatesInserted = 0;
   let callsUsed = 0;
   let lastFailure = "no_candidate_generated";
+  let lastFailureWasQualityReject = false;
   let verifiedCapacityRemaining = await verifiedCapacityRemainingForCell(
     job,
     region,
@@ -456,6 +457,7 @@ async function processJob(job: SeedJob): Promise<void> {
       callsUsed += 1;
       stats.mapboxCallsUsed += 1;
       lastFailure = response.reason;
+      lastFailureWasQualityReject = false;
       continue;
     }
     const callCost = mapboxCallsFromMeta(response.meta);
@@ -469,6 +471,7 @@ async function processJob(job: SeedJob): Promise<void> {
         ? `${response.meta.healing_family}_`
         : "";
       lastFailure = `${family}${decision.reason}`;
+      lastFailureWasQualityReject = true;
       continue;
     }
 
@@ -480,6 +483,7 @@ async function processJob(job: SeedJob): Promise<void> {
     );
     if (existingPoolRoute || existingCandidate) {
       lastFailure = "duplicate_fingerprint";
+      lastFailureWasQualityReject = false;
       continue;
     }
 
@@ -532,7 +536,9 @@ async function processJob(job: SeedJob): Promise<void> {
     });
     return;
   }
-  await failJob(job, lastFailure, true, callsUsed);
+  await failJob(job, lastFailure, true, callsUsed, {
+    qualityReject: lastFailureWasQualityReject,
+  });
 }
 
 async function callRouteGenerator(
@@ -2140,17 +2146,27 @@ async function failJob(
   reason: string,
   cooldown: boolean,
   callsUsed = 0,
+  options: { qualityReject?: boolean } = {},
 ): Promise<void> {
   stats.failed += 1;
   const failureCount = (job.failure_count ?? 0) + 1;
   const maxAttempts = Math.max(1, job.max_attempts ?? 3);
-  const shouldCurate =
-    (!isHardRegionLearningJob(job) && job.difficulty_level === "hard") ||
-    failureCount >= maxAttempts;
-  const cooldownUntil = new Date(
-    Date.now() + Math.max(1, job.seed_cooldown_minutes ?? 20) * 60_000,
-  ).toISOString();
-  const status = shouldCurate ? "failed" : cooldown ? "cooldown" : "failed";
+  // Quality-reject path: route was generated but quality gates rejected it.
+  // Self-heals once gates relax — keep the job in extended cooldown instead of
+  // letting failureCount >= maxAttempts permanently kill the cell.
+  const qualityReject = options.qualityReject === true;
+  const shouldCurate = !qualityReject &&
+    ((!isHardRegionLearningJob(job) && job.difficulty_level === "hard") ||
+      failureCount >= maxAttempts);
+  const cooldownDurationMs = qualityReject
+    ? 6 * 60 * 60 * 1000
+    : Math.max(1, job.seed_cooldown_minutes ?? 20) * 60_000;
+  const cooldownUntil = new Date(Date.now() + cooldownDurationMs).toISOString();
+  const status = shouldCurate
+    ? "failed"
+    : (cooldown || qualityReject)
+    ? "cooldown"
+    : "failed";
   if (dryRun) return;
   await rest("route_seed_jobs", {
     method: "PATCH",
