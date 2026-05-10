@@ -404,7 +404,20 @@ class _CruiseModePageState extends State<CruiseModePage>
     'Fast fertig',
   ];
 
+  static const List<String> _groupLoadingPhases = [
+    'Route abstimmen',
+    'Gruppe synchronisieren',
+    'Fast fertig',
+  ];
+
   String get _routeLoadingStatusText {
+    if (widget.groupId != null) {
+      final phaseIndex = _routeLoadingPhaseIndex.clamp(
+        0,
+        _groupLoadingPhases.length - 1,
+      );
+      return _groupLoadingPhases[phaseIndex];
+    }
     if (_isPreparingExistingRoute) {
       final phaseIndex = _routeLoadingPhaseIndex.clamp(
         0,
@@ -469,7 +482,9 @@ class _CruiseModePageState extends State<CruiseModePage>
       }
       _safeSetState(() {
         _routeSearchProgress = math.min(_routeSearchProgress + 0.024, 0.92);
-        final phaseCount = _isPreparingExistingRoute
+        final phaseCount = widget.groupId != null
+            ? _groupLoadingPhases.length
+            : _isPreparingExistingRoute
             ? _existingRouteLoadingPhases.length
             : _isWaypointPlanning
             ? _waypointLoadingPhases.length
@@ -551,7 +566,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       _routeSearchStatusLeaving = false;
       _routeSearchDismissScheduled = false;
     });
-    _scheduleRouteSearchStatusDismiss(hold: const Duration(milliseconds: 900));
+    _scheduleRouteSearchStatusDismiss(hold: const Duration(milliseconds: 2600));
   }
 
   void _scheduleRouteSearchStatusDismiss({
@@ -2034,10 +2049,10 @@ class _CruiseModePageState extends State<CruiseModePage>
                                     overflow: TextOverflow.ellipsis,
                                     style: TextStyle(
                                       color: Colors.white.withValues(
-                                        alpha: 0.76,
+                                        alpha: 0.82,
                                       ),
-                                      fontSize: 12.5,
-                                      height: 1.18,
+                                      fontSize: 14,
+                                      height: 1.22,
                                       fontWeight: FontWeight.w600,
                                       letterSpacing: 0,
                                     ),
@@ -2859,42 +2874,34 @@ class _CruiseModePageState extends State<CruiseModePage>
   }
 
   Widget _buildRoutePreviewBackButton() {
-    final accent = AppAccentColors.accent;
     return Semantics(
       button: true,
       label: 'Zurück zum Strecken-Setup',
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(18),
-        child: BackdropFilter(
-          filter: ui.ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-          child: Material(
-            color: const Color(0xE8151820),
-            child: InkWell(
-              onTap: _returnToCruiseSetupFromActiveRoute,
-              borderRadius: BorderRadius.circular(18),
-              child: Container(
-                width: 46,
-                height: 46,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(18),
-                  border: Border.all(
-                    color: accent.withValues(alpha: 0.48),
-                    width: 1.1,
-                  ),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.22),
-                      blurRadius: 16,
-                      offset: const Offset(0, 8),
-                    ),
-                  ],
-                ),
-                alignment: Alignment.center,
-                child: Icon(
-                  CupertinoIcons.chevron_left,
-                  color: Colors.white.withValues(alpha: 0.96),
-                  size: 22,
-                ),
+      child: Container(
+        width: 46,
+        height: 46,
+        decoration: BoxDecoration(
+          color: const Color(0xFF1C2028).withValues(alpha: 0.95),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
+          boxShadow: const [
+            BoxShadow(
+              color: Colors.black26,
+              blurRadius: 12,
+              offset: Offset(0, 3),
+            ),
+          ],
+        ),
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: _returnToCruiseSetupFromActiveRoute,
+            borderRadius: BorderRadius.circular(14),
+            child: const Center(
+              child: Icon(
+                Icons.arrow_back_ios_new_rounded,
+                color: Colors.white,
+                size: 18,
               ),
             ),
           ),

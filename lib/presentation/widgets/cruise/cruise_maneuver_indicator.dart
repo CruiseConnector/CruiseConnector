@@ -61,6 +61,13 @@ class CruiseManeuverIndicator extends StatelessWidget {
               decoration: BoxDecoration(
                 color: AppAccentColors.accent.withValues(alpha: 0.15),
                 borderRadius: BorderRadius.circular(14),
+                boxShadow: [
+                  BoxShadow(
+                    color: AppAccentColors.accent.withValues(alpha: 0.18),
+                    blurRadius: 12,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
               ),
               child: Icon(
                 maneuver.icon,
@@ -104,6 +111,12 @@ class CruiseManeuverIndicator extends StatelessWidget {
 }
 
 /// Zeichnet einen Kreisverkehr mit markierter Ausfahrt.
+///
+/// Layout (DACH/Rechtsverkehr):
+/// - Einfahrt unten (π/2 in Bildschirm-Koordinaten, y-down).
+/// - Im Kreis fährt man CCW visuell (= negative sweep in Flutter).
+/// - Exit 1 = rechts (0 rad), Exit 2 = geradeaus, Exit 3 = links —
+///   gegeben durch [roundaboutExitAngleForRightHandTraffic].
 class _RoundaboutPainter extends CustomPainter {
   _RoundaboutPainter({required this.exitNumber});
 
@@ -112,59 +125,104 @@ class _RoundaboutPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final center = Offset(size.width / 2, size.height / 2);
-    final radius = size.width * 0.32;
-    final arrowRadius = size.width * 0.45;
+    final ringRadius = size.width * 0.32;
+    final exitRadius = size.width * 0.45;
+    final accent = AppAccentColors.accent;
+    final ringRect = Rect.fromCircle(center: center, radius: ringRadius);
 
-    // Kreisverkehr-Ring
+    // 1. Ring (statisch, weiß).
     final ringPaint = Paint()
       ..color = Colors.white.withValues(alpha: 0.4)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 2.5;
-    canvas.drawCircle(center, radius, ringPaint);
+    canvas.drawCircle(center, ringRadius, ringPaint);
 
-    // DACH/Rechtsverkehr: Einfahrt von unten, Ausfahrten gegen den Uhrzeigersinn.
-    // Exit 1 = rechts, Exit 2 = geradeaus, Exit 3 = links.
+    // 2. Drehrichtungs-Arc: zeigt CCW über fast den ganzen Ring, kleine Lücke
+    //    nahe Einfahrt damit die Einfahrt "rein-mündet".
+    const directionStart = math.pi / 2 + 0.3;
+    const directionSweep = -4.5;
+    final directionArcPaint = Paint()
+      ..color = accent.withValues(alpha: 0.40)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 3.0
+      ..strokeCap = StrokeCap.round;
+    canvas.drawArc(
+      ringRect,
+      directionStart,
+      directionSweep,
+      false,
+      directionArcPaint,
+    );
+
+    // 3. Aktiver Fahrweg: vom Einfahrtspunkt (π/2) CCW zur aktiven Ausfahrt.
+    //    Wird ÜBER den Drehrichtungs-Arc gezeichnet, voller Accent.
     final totalExits = math.max(4, exitNumber.clamp(1, 6).toInt());
+    final activeExitAngle = roundaboutExitAngleForRightHandTraffic(
+      exitNumber,
+      totalExits: totalExits,
+    );
+    var activeSweep = activeExitAngle - math.pi / 2;
+    while (activeSweep > 0) {
+      activeSweep -= 2 * math.pi;
+    }
+    while (activeSweep <= -2 * math.pi) {
+      activeSweep += 2 * math.pi;
+    }
+    if (activeSweep < 0) {
+      final activePathPaint = Paint()
+        ..color = accent
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 3.0
+        ..strokeCap = StrokeCap.round;
+      canvas.drawArc(
+        ringRect,
+        math.pi / 2,
+        activeSweep,
+        false,
+        activePathPaint,
+      );
+    }
 
+    // 4. Ausfahrt-Stubs: inaktive dünn-weiß, aktive accent + Pfeilspitze.
     for (var i = 1; i <= totalExits; i++) {
       final angle = roundaboutExitAngleForRightHandTraffic(
         i,
         totalExits: totalExits,
       );
-      final exitX = center.dx + arrowRadius * math.cos(angle);
-      final exitY = center.dy + arrowRadius * math.sin(angle);
-      final innerX = center.dx + radius * math.cos(angle);
-      final innerY = center.dy + radius * math.sin(angle);
-
+      final exitOffset = Offset(
+        center.dx + exitRadius * math.cos(angle),
+        center.dy + exitRadius * math.sin(angle),
+      );
+      final innerOffset = Offset(
+        center.dx + ringRadius * math.cos(angle),
+        center.dy + ringRadius * math.sin(angle),
+      );
       final isActive = i == exitNumber;
-      final exitPaint = Paint()
+      final stubPaint = Paint()
         ..color = isActive
-            ? AppAccentColors.accent
-            : Colors.white.withValues(alpha: 0.35)
+            ? accent
+            : Colors.white.withValues(alpha: 0.30)
         ..style = PaintingStyle.stroke
         ..strokeWidth = isActive ? 3.5 : 2.0
         ..strokeCap = StrokeCap.round;
+      canvas.drawLine(innerOffset, exitOffset, stubPaint);
 
-      canvas.drawLine(Offset(innerX, innerY), Offset(exitX, exitY), exitPaint);
-
-      // Pfeilspitze für aktive Ausfahrt
       if (isActive) {
         final arrowPaint = Paint()
-          ..color = AppAccentColors.accent
+          ..color = accent
           ..style = PaintingStyle.fill;
         const arrowSize = 5.0;
-        final tip = Offset(exitX, exitY);
         final left = Offset(
-          tip.dx - arrowSize * math.cos(angle - 0.5),
-          tip.dy - arrowSize * math.sin(angle - 0.5),
+          exitOffset.dx - arrowSize * math.cos(angle - 0.5),
+          exitOffset.dy - arrowSize * math.sin(angle - 0.5),
         );
         final right = Offset(
-          tip.dx - arrowSize * math.cos(angle + 0.5),
-          tip.dy - arrowSize * math.sin(angle + 0.5),
+          exitOffset.dx - arrowSize * math.cos(angle + 0.5),
+          exitOffset.dy - arrowSize * math.sin(angle + 0.5),
         );
         canvas.drawPath(
           Path()
-            ..moveTo(tip.dx, tip.dy)
+            ..moveTo(exitOffset.dx, exitOffset.dy)
             ..lineTo(left.dx, left.dy)
             ..lineTo(right.dx, right.dy)
             ..close(),
@@ -173,15 +231,70 @@ class _RoundaboutPainter extends CustomPainter {
       }
     }
 
-    // Einfahrt von unten
+    // 5. Drehrichtungs-Pfeil am Ende des Direction-Arcs (CCW-Tangente).
+    const directionEnd = directionStart + directionSweep;
+    final dirEndOffset = Offset(
+      center.dx + ringRadius * math.cos(directionEnd),
+      center.dy + ringRadius * math.sin(directionEnd),
+    );
+    // CCW-Tangente an θ: (sin θ, -cos θ) — Bewegungsrichtung bei abnehmendem θ.
+    final tangentDx = math.sin(directionEnd);
+    final tangentDy = -math.cos(directionEnd);
+    const dirArrowSize = 4.5;
+    final dirTip = Offset(
+      dirEndOffset.dx + tangentDx * dirArrowSize * 0.7,
+      dirEndOffset.dy + tangentDy * dirArrowSize * 0.7,
+    );
+    // Senkrecht zur Tangente für die Basis.
+    final perpDx = -tangentDy;
+    final perpDy = tangentDx;
+    final dirBaseLeft = Offset(
+      dirEndOffset.dx + perpDx * dirArrowSize * 0.55 -
+          tangentDx * dirArrowSize * 0.25,
+      dirEndOffset.dy + perpDy * dirArrowSize * 0.55 -
+          tangentDy * dirArrowSize * 0.25,
+    );
+    final dirBaseRight = Offset(
+      dirEndOffset.dx - perpDx * dirArrowSize * 0.55 -
+          tangentDx * dirArrowSize * 0.25,
+      dirEndOffset.dy - perpDy * dirArrowSize * 0.55 -
+          tangentDy * dirArrowSize * 0.25,
+    );
+    final dirArrowPaint = Paint()
+      ..color = accent
+      ..style = PaintingStyle.fill;
+    canvas.drawPath(
+      Path()
+        ..moveTo(dirTip.dx, dirTip.dy)
+        ..lineTo(dirBaseLeft.dx, dirBaseLeft.dy)
+        ..lineTo(dirBaseRight.dx, dirBaseRight.dy)
+        ..close(),
+      dirArrowPaint,
+    );
+
+    // 6. Einfahrt von unten mit leichtem Rechts-Bogen vor dem Ring.
     final entryPaint = Paint()
       ..color = Colors.white.withValues(alpha: 0.6)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 2.5
       ..strokeCap = StrokeCap.round;
-    final entryStart = Offset(center.dx, center.dy + arrowRadius);
-    final entryEnd = Offset(center.dx, center.dy + radius);
-    canvas.drawLine(entryStart, entryEnd, entryPaint);
+    final entryStart = Offset(center.dx, center.dy + exitRadius);
+    final entryEnd = Offset(center.dx, center.dy + ringRadius);
+    final entryControl = Offset(
+      center.dx + 3.0,
+      (entryStart.dy + entryEnd.dy) / 2,
+    );
+    canvas.drawPath(
+      Path()
+        ..moveTo(entryStart.dx, entryStart.dy)
+        ..quadraticBezierTo(
+          entryControl.dx,
+          entryControl.dy,
+          entryEnd.dx,
+          entryEnd.dy,
+        ),
+      entryPaint,
+    );
   }
 
   @override
