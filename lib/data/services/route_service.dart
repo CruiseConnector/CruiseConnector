@@ -398,8 +398,11 @@ class RouteService {
       );
     }
 
+    // Stabiler Suffix statt Timestamp: rapid Double-Click auf "Erneut suchen"
+    // dedupliziert auf einen einzigen Single-Flight statt parallele Edge-Calls
+    // zu erzeugen — verhindert Mapbox-5xx-Flood unter Last.
     final singleFlightKey = forceFreshVariant
-        ? '${scenario.scenarioKey}|fresh|${DateTime.now().microsecondsSinceEpoch}'
+        ? '${scenario.scenarioKey}|sa'
         : scenario.scenarioKey;
     return RouteGenerationCoordinator.runSingleFlight(singleFlightKey, () async {
       if (isWaypointRequiredRoundTrip) {
@@ -596,29 +599,18 @@ class RouteService {
         }
       }
 
+      // Search Again überspringt den Pool-Probe-Schritt vorne weg: der User
+      // hat explizit Variation angefordert, der Pool-Fallback hinter den
+      // Live-Versuchen (siehe _tryRoutePoolFallback weiter unten) bleibt als
+      // Sicherheitsnetz. Live darf 30-45s laufen, Pool kommt nur wenn live
+      // wirklich nichts liefert.
       if (forceFreshVariant) {
-        final postPoolProbeDecision = onDemandLiveFill
+        lastRouteSourceDecision = onDemandLiveFill
             ? lastRouteSourceDecision
-            : null;
-        final postPoolProbeLiveReason = onDemandLiveFill
+            : 'search_again_live_first';
+        lastRouteLiveAttemptReason = onDemandLiveFill
             ? lastRouteLiveAttemptReason
-            : null;
-        lastRouteSourceDecision = 'search_again_pool_probe';
-        final freshPoolRoute = await _tryRoutePoolFallback(
-          scenario: scenario,
-          styleConfig: styleConfig,
-          userLat: startPosition.latitude,
-          userLng: startPosition.longitude,
-          fallbackReason: 'search_again_pool_probe',
-          allowDuplicateFallback: false,
-        );
-        if (freshPoolRoute != null) {
-          return freshPoolRoute;
-        }
-        lastRouteSourceDecision =
-            postPoolProbeDecision ?? 'search_again_live_first';
-        lastRouteLiveAttemptReason =
-            postPoolProbeLiveReason ?? 'search_again_force_fresh';
+            : 'search_again_force_fresh';
       }
 
       final prepared = forceFreshVariant
@@ -640,13 +632,17 @@ class RouteService {
       // testen. Sobald es aber bereits eine gute Route für dieselben Settings
       // gibt, reicht ein frischer Versuch; danach fällt die App schnell auf
       // die geprüfte Route zurück statt 30-45s in NO_ROUTE-Tails zu laufen.
-      final maxAttempts = poolHealingFirstPolicy
+      // Search Again bekommt einen Versuch mehr als die Erstsuche
+      // (capped bei 5), damit der User explizit eine Variante erzwingen kann
+      // ohne dass die Schleife einfach in den Pool/NO_ROUTE-Tail fällt.
+      final regularMaxAttempts = poolHealingFirstPolicy
           ? 1
-          : forceFreshVariant
-          ? (difficultScenario ? 3 : 2)
           : difficultScenario
           ? (hasSeenHistory ? 1 : 3)
           : (hasSeenHistory ? 1 : 2);
+      final maxAttempts = forceFreshVariant
+          ? math.min(regularMaxAttempts + 1, 5)
+          : regularMaxAttempts;
       _RouteCandidate? bestCandidate;
       _RouteCandidate? spareCandidate;
       _RouteCandidate? bestDuplicateCandidate;
@@ -658,6 +654,7 @@ class RouteService {
           scenario,
           styleConfig: styleConfig,
           explicitIndex: attempt == 0 ? variantIndex : null,
+          forceFreshVariant: forceFreshVariant,
         );
         _debugRouteSearch(
           '[Attempt] attempt=${attempt + 1}/$maxAttempts '
@@ -1364,8 +1361,11 @@ class RouteService {
       PreparedRouteBuffer.clearScenario(scenario.scenarioKey);
     }
 
+    // Stabiler Suffix statt Timestamp: rapid Double-Click auf "Erneut suchen"
+    // dedupliziert auf einen einzigen Single-Flight statt parallele Edge-Calls
+    // zu erzeugen — verhindert Mapbox-5xx-Flood unter Last.
     final singleFlightKey = forceFreshVariant
-        ? '${scenario.scenarioKey}|fresh|${DateTime.now().microsecondsSinceEpoch}'
+        ? '${scenario.scenarioKey}|sa'
         : scenario.scenarioKey;
     return RouteGenerationCoordinator.runSingleFlight(singleFlightKey, () async {
       if (_isFreeTier(lastRouteSubscriptionTier)) {
@@ -3738,6 +3738,7 @@ class RouteService {
     RouteScenario scenario, {
     required RouteStyleConfig styleConfig,
     int? explicitIndex,
+    bool forceFreshVariant = false,
   }) async {
     final index = _nextScenarioVariantIndex(
       scenario.scenarioKey,
@@ -3751,8 +3752,20 @@ class RouteService {
       variantIndex: index,
     );
     final radiusJitter = 1.0 + ((rng.nextDouble() - 0.5) * 0.24);
+    // Search Again mit Seen-Historie: 90° Pre-Shift damit der erste
+    // ausprobierte Sektor garantiert deutlich von der zuletzt gefahrenen
+    // Richtung abweicht. Die anschließende _avoidRecentRoundTripSector-
+    // Iteration kann immer noch in einen anderen Sektor zurückspringen,
+    // wenn der vorgeschlagene blockiert ist.
+    final hasSeenForSearchAgain = forceFreshVariant &&
+        SeenRouteRegistry.entriesForAny(
+          _seenHistoryKeysForScenario(scenario),
+        ).isNotEmpty;
+    final searchAgainShiftDegrees = hasSeenForSearchAgain ? 90.0 : 0.0;
     final rawAngleOffset =
-        (baseDirection + index * 47.0 + (index % 5) * 23.0) % 360;
+        (baseDirection + searchAgainShiftDegrees + index * 47.0 +
+                (index % 5) * 23.0) %
+            360;
     final angleOffset = _avoidRecentRoundTripSector(rawAngleOffset, scenario);
     return RouteVariant(
       index: index,
