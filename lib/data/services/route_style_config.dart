@@ -85,7 +85,7 @@ class RouteStyleConfig {
     maxRoundTripKm: 100,
     retryAttempts: 5,
     minStyleFitScore: 52.0,
-    minCurvesPer50km: 22,
+    minCurvesPer50km: 18,
     zigzagWaypoints: true,
   );
 
@@ -95,12 +95,12 @@ class RouteStyleConfig {
     name: 'Abendrunde',
     profileKey: 'abendrunde',
     waypointShapeFactor: 1.0,
-    radiusMultiplier: 0.66,
+    radiusMultiplier: 0.70,
     minRoundTripKm: 10,
     maxRoundTripKm: 100,
-    retryAttempts: 3,
+    retryAttempts: 4,
     minStyleFitScore: 51.0,
-    maxAvgSpeedKmh: 64.0,
+    maxAvgSpeedKmh: 72.0,
   );
 
   /// ENTDECKER: Zufällige Richtung die sich von den letzten 3 unterscheidet,
@@ -110,10 +110,10 @@ class RouteStyleConfig {
     profileKey: 'entdecker',
     waypointShapeFactor: 1.08,
     radiusMultiplier: 1.24,
-    minRoundTripKm: 30,
+    minRoundTripKm: 20,
     maxRoundTripKm: 100,
     retryAttempts: 5,
-    minStyleFitScore: 49.0,
+    minStyleFitScore: 47.0,
   );
 
   /// Gibt die passende Config für einen Stil-Namen zurück.
@@ -288,14 +288,14 @@ class RouteStyleConfig {
         ),
       ]),
       'entdecker' => _weightedAverage([
-        _weighted(metrics.sectorDiversityScore / 100.0, 0.30),
+        _weighted(metrics.sectorDiversityScore / 100.0, 0.20),
         _weighted(
-          _scoreRamp(metrics.spreadRatio, softMin: 0.20, idealMin: 0.36),
-          0.28,
+          _scoreRamp(metrics.spreadRatio, softMin: 0.16, idealMin: 0.28),
+          0.34,
         ),
         _weighted(
           _scoreAround(metrics.compactnessScore, center: 38.0, tolerance: 30.0),
-          0.10,
+          0.12,
         ),
         _weighted(
           _scoreAround(
@@ -305,7 +305,7 @@ class RouteStyleConfig {
           ),
           0.10,
         ),
-        _weighted(_scoreRamp(distanceKm, softMin: 35.0, idealMin: 70.0), 0.12),
+        _weighted(_scoreRamp(distanceKm, softMin: 35.0, idealMin: 70.0), 0.14),
         _weighted(smoothnessScore, 0.10),
       ]),
       _ => _weightedAverage([
@@ -626,7 +626,11 @@ class RouteStyleConfig {
     if (coordinates.length < 4) return 0;
 
     var count = 0;
-    const sampleStep = 5;
+    // Feinerer Step (3) fängt alpine Switchbacks im 250–500m Fenster zuverlässig.
+    // Nur hier sicher: _countBearingChanges wird ausschließlich vom Kurvenjagd-
+    // Hard-Gate genutzt (minCurvesPer50km != null). Sport/Abendrunde/Entdecker
+    // bleiben über _calculateTurnStats (sampleStep=5) unbeeinflusst.
+    const sampleStep = 3;
 
     for (
       var i = sampleStep;
