@@ -728,6 +728,48 @@ void main() {
       },
     );
 
+    test('ROUND_TRIP: Route-Type-Matching ist case-insensitive', () async {
+      final service = RoutePoolService(
+        inMemoryRegions: [
+          _region(
+            countryCode: 'AT',
+            admin1Name: 'Vorarlberg',
+            admin2Name: 'Feldkirch',
+            cityCluster: 'Feldkirch',
+            centerLat: 47.2386,
+            centerLng: 9.5986,
+          ),
+        ],
+        inMemoryRoutes: [
+          _route(
+            id: 'feldkirch-50-sport-uppercase-type',
+            countryCode: 'AT',
+            admin1Name: 'Vorarlberg',
+            admin2Name: 'Feldkirch',
+            cityCluster: 'Feldkirch',
+            startLat: 47.2386,
+            startLng: 9.5986,
+            distanceBucket: 50,
+            routeType: 'ROUND_TRIP',
+            styleTags: const ['sport'],
+          ),
+        ],
+      );
+
+      final matches = await service.findCandidateRoutesNear(
+        userLat: 47.2386,
+        userLng: 9.5986,
+        distanceBucket: 50,
+        style: 'Sport Mode',
+        avoidHighways: true,
+        routeType: 'round_trip',
+      );
+
+      expect(matches.map((match) => match.route.id), [
+        'feldkirch-50-sport-uppercase-type',
+      ]);
+    });
+
     test(
       'Coverage-Zellen trennen Style und Distanz, Autobahn AN akzeptiert No-Highway-Routen',
       () async {

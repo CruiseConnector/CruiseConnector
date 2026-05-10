@@ -1342,6 +1342,43 @@ void main() {
   );
 
   test(
+    'Search-Again gibt bekannte sichere Pool-Route zurück, wenn keine neue Variante verfügbar ist',
+    () async {
+      final poolMatch = _poolMatch();
+      final poolService = _FakeRoutePoolService(poolMatch);
+      final invoker = _AlwaysFailingInvoker();
+      service = RouteService(invoker: invoker, routePoolService: poolService);
+
+      final first = await service.generateRoundTrip(
+        startPosition: _start(),
+        targetDistanceKm: 50,
+        mode: 'Sport Mode',
+        planningType: 'Zufall',
+        avoidHighways: true,
+      );
+      expect(first.edgeMeta['pool_match_id'], poolMatch.route.id);
+
+      final second = await service.generateRoundTrip(
+        startPosition: _start(),
+        targetDistanceKm: 50,
+        mode: 'Sport Mode',
+        planningType: 'Zufall',
+        avoidHighways: true,
+        forceFreshVariant: true,
+        debugTrigger: 'searchAgain',
+      );
+
+      expect(invoker.callCount, greaterThan(0));
+      expect(second.coordinates, isNotEmpty);
+      expect(second.edgeMeta['route_source'], 'pool');
+      expect(second.edgeMeta['pool_match_id'], poolMatch.route.id);
+      expect(second.edgeMeta['duplicateFallbackUsed'], isTrue);
+      expect(second.edgeMeta['pool_used_reason'], contains('duplicate'));
+      expect(RouteService.lastRouteDuplicateFallbackUsed, true);
+    },
+  );
+
+  test(
     'Search-Again nutzt Candidate-Reserve neben verified Pool-Duplikat',
     () async {
       final reserveMatch = _poolMatchWithResponse(

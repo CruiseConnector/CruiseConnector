@@ -4738,7 +4738,7 @@ class _CruiseModePageState extends State<CruiseModePage>
         ? 'Live-Routen prüfen'
         : 'Keine passende Route gefunden';
     final message = healingQueued
-        ? 'Der Routenpool wird für diese Einstellung automatisch nachgefüllt.'
+        ? 'Wir bereiten automatisch neue Vorschläge für diese Einstellung vor.'
         : switch (code) {
             'search_in_progress' =>
               'Wir prüfen Live-Varianten und verfeinern die Strecke.',

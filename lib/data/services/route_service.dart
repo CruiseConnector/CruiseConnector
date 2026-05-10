@@ -388,9 +388,7 @@ class RouteService {
         : 'initial_search';
     await SeenRouteRegistry.ensureLoaded();
     final allowDuplicateFallbackForThisSearch =
-        forceFreshVariant &&
-        debugTrigger != 'searchAgain' &&
-        debugTrigger != 'settingsChanged';
+        forceFreshVariant && debugTrigger != 'settingsChanged';
 
     if (forceFreshVariant) {
       RouteGenerationCoordinator.suspendBackgroundPreparation();
@@ -5535,7 +5533,7 @@ class RouteService {
       lastError,
     );
     final warmupMessage = qualityTooLow
-        ? 'Wir suchen noch nach einer besseren Route. Für diese Strecke und Einstellung gibt es gerade noch keine geprüfte Variante. Bitte warte kurz oder versuche es erneut.'
+        ? 'Wir suchen noch nach einer besseren Route. Für diese Strecke und Einstellung gibt es gerade noch keine stabile Variante. Bitte warte kurz oder versuche es erneut.'
         : _coverageStatusUserMessage(
             coverage: coverage,
             cluster: cluster,
@@ -5637,7 +5635,7 @@ class RouteService {
     return RouteServiceException(
       type: RouteErrorType.quality,
       userMessage:
-          'Wir suchen noch nach einer besseren Route. Für diese Strecke und Einstellung gibt es gerade noch keine geprüfte Variante.',
+          'Wir suchen noch nach einer besseren Route. Für diese Strecke und Einstellung gibt es gerade noch keine stabile Variante.',
       debugMessage:
           'POINT_TO_POINT candidates were returned by Mapbox but rejected by quality gates. '
           'bestTier=${candidate.tier.name}, distance=${candidate.route.distanceKm?.toStringAsFixed(1)}km',
@@ -5694,9 +5692,9 @@ class RouteService {
     }
     switch (coverage.coverageStatus) {
       case 'hard_region_curated_needed':
-        return 'In $clusterText ist diese Einstellung noch schwierig. Wir suchen passende Strecken und sammeln geprüfte Fahrten.';
+        return 'In $clusterText ist diese Einstellung noch schwierig. Wir suchen passende Strecken und sammeln sichere Vorschläge.';
       case 'hard_region_thin':
-        return 'In $clusterText gibt es erst wenige lokal verifizierte Routen. Wir suchen weiter nach guten Varianten.';
+        return 'In $clusterText gibt es erst wenige gute Varianten. Wir suchen weiter nach passenden Vorschlägen.';
       case 'bootstrap_limited':
         return 'In $clusterText sind die automatischen Aufbauversuche aktuell begrenzt. Bitte versuche es spaeter erneut.';
       case 'cooldown':
@@ -5705,7 +5703,7 @@ class RouteService {
       case 'warming_up':
       case 'empty':
       default:
-        return 'Fuer diese Laenge und diesen Stil gibt es in deiner Umgebung noch zu wenige gepruefte Routen. Wir erstellen gerade neue Vorschlaege. Bitte versuche es in ein paar Minuten erneut.';
+        return 'Fuer diese Laenge und diesen Stil gibt es in deiner Umgebung noch zu wenige gute Varianten. Wir erstellen gerade neue Vorschlaege. Bitte versuche es in ein paar Minuten erneut.';
     }
   }
 

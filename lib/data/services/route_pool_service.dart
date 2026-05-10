@@ -1178,10 +1178,11 @@ class RoutePoolService {
     String? preferredCityCluster,
     int candidateLimit = 80,
   }) async {
-    if (routeType != 'ROUND_TRIP') return const [];
+    final normalizedRouteType = _normalizeRouteType(routeType);
+    if (!_sameText(normalizedRouteType, 'ROUND_TRIP')) return const [];
     if (!validDistanceBuckets.contains(distanceBucket)) return const [];
     final effectiveCandidateLimit = _effectiveCandidateLimit(
-      routeType,
+      normalizedRouteType,
       candidateLimit,
     );
 
@@ -1194,7 +1195,7 @@ class RoutePoolService {
         distanceBucket: distanceBucket,
         style: style,
         avoidHighways: avoidHighways,
-        routeType: routeType,
+        routeType: normalizedRouteType,
         crossBorderAllowed: crossBorderAllowed,
         preferredCountryCode: preferredCountryCode,
         preferredAdmin1Name: preferredAdmin1Name,
@@ -1210,7 +1211,7 @@ class RoutePoolService {
       final regionSearchBounds = _boundingBoxFor(
         userLat,
         userLng,
-        _maxRegionSearchRadiusForRouteType(routeType),
+        _maxRegionSearchRadiusForRouteType(normalizedRouteType),
       );
       var regionQuery = _db
           .from('route_regions')
@@ -1263,7 +1264,7 @@ class RoutePoolService {
         distanceBucket: distanceBucket,
         styleKey: _normalizeStyleKey(style),
         avoidHighways: avoidHighways,
-        routeType: routeType,
+        routeType: normalizedRouteType,
       );
       if (!(_reserveFallbackAllowed(nearestRegion) ||
           _reserveFallbackAllowedForCoverage(coverage))) {
@@ -1273,7 +1274,7 @@ class RoutePoolService {
       final routeSearchBounds = _boundingBoxFor(
         userLat,
         userLng,
-        _maxSearchRadiusForRouteType(routeType),
+        _maxSearchRadiusForRouteType(normalizedRouteType),
       );
       final styleKeys = _candidateReserveStyleKeys(style);
       var candidateQuery = _db
@@ -1281,7 +1282,7 @@ class RoutePoolService {
           .select()
           .eq('is_candidate', true)
           .eq('is_verified_pool', false)
-          .eq('route_type', routeType)
+          .eq('route_type', normalizedRouteType)
           .eq('distance_bucket', distanceBucket)
           .inFilter('style_key', styleKeys.toList(growable: false))
           .isFilter('promoted_to_pool_at', null)
@@ -1318,7 +1319,7 @@ class RoutePoolService {
           distanceBucket: distanceBucket,
           style: style,
           avoidHighways: avoidHighways,
-          routeType: routeType,
+          routeType: normalizedRouteType,
           crossBorderAllowed: crossBorderAllowed,
         ),
         candidates: candidates,
@@ -1343,9 +1344,10 @@ class RoutePoolService {
     String? preferredCityCluster,
     int candidateLimit = 120,
   }) async {
+    final normalizedRouteType = _normalizeRouteType(routeType);
     if (!validDistanceBuckets.contains(distanceBucket)) return const [];
     final effectiveCandidateLimit = _effectiveCandidateLimit(
-      routeType,
+      normalizedRouteType,
       candidateLimit,
     );
 
@@ -1358,7 +1360,7 @@ class RoutePoolService {
         distanceBucket: distanceBucket,
         style: style,
         avoidHighways: avoidHighways,
-        routeType: routeType,
+        routeType: normalizedRouteType,
         crossBorderAllowed: crossBorderAllowed,
         preferredCountryCode: preferredCountryCode,
         preferredAdmin1Name: preferredAdmin1Name,
@@ -1373,7 +1375,7 @@ class RoutePoolService {
       final regionSearchBounds = _boundingBoxFor(
         userLat,
         userLng,
-        _maxRegionSearchRadiusForRouteType(routeType),
+        _maxRegionSearchRadiusForRouteType(normalizedRouteType),
       );
       Future<List<RouteRegion>> loadRegions({
         String? countryCode,
@@ -1431,14 +1433,14 @@ class RoutePoolService {
         final routeSearchBounds = _boundingBoxFor(
           userLat,
           userLng,
-          _maxSearchRadiusForRouteType(routeType),
+          _maxSearchRadiusForRouteType(normalizedRouteType),
         );
         var routeQuery = _db
             .from('route_pool')
             .select()
             .eq('verified', true)
             .eq('is_active', true)
-            .eq('route_type', routeType)
+            .eq('route_type', normalizedRouteType)
             .eq('distance_bucket', bucket)
             .gte('start_lat', routeSearchBounds.minLat)
             .lte('start_lat', routeSearchBounds.maxLat)
@@ -1472,7 +1474,7 @@ class RoutePoolService {
             distanceBucket: bucket,
             style: style,
             avoidHighways: avoidHighways,
-            routeType: routeType,
+            routeType: normalizedRouteType,
             crossBorderAllowed: crossBorderAllowed,
           ),
           candidates: candidates,
@@ -1501,7 +1503,10 @@ class RoutePoolService {
       final seenExactFallbackRouteIds = <String>{};
       final seenRelaxedPrimaryRouteIds = <String>{};
       final seenRelaxedFallbackRouteIds = <String>{};
-      final preferSingleBucketRoundTrip = routeType == 'ROUND_TRIP';
+      final preferSingleBucketRoundTrip = _sameText(
+        normalizedRouteType,
+        'ROUND_TRIP',
+      );
       final primaryBucketOrder = preferSingleBucketRoundTrip
           ? <int>[distanceBucket]
           : bucketOrder;
@@ -1748,7 +1753,7 @@ class RoutePoolService {
     final seenExactFallbackRouteIds = <String>{};
     final seenRelaxedPrimaryRouteIds = <String>{};
     final seenRelaxedFallbackRouteIds = <String>{};
-    final preferSingleBucketRoundTrip = routeType == 'ROUND_TRIP';
+    final preferSingleBucketRoundTrip = _sameText(routeType, 'ROUND_TRIP');
     final primaryBucketOrder = preferSingleBucketRoundTrip
         ? <int>[distanceBucket]
         : bucketOrder;
@@ -1914,7 +1919,7 @@ class RoutePoolService {
     for (final candidate in candidates) {
       if (!candidate.verified) continue;
       if (!candidate.isActive) continue;
-      if (candidate.routeType != query.routeType) continue;
+      if (!_sameText(candidate.routeType, query.routeType)) continue;
       if (!validDistanceBuckets.contains(candidate.distanceBucket)) continue;
       if (candidate.distanceBucket != query.distanceBucket) continue;
       final exactStyleMatch = _styleMatches(candidate, query.style);
@@ -1935,7 +1940,7 @@ class RoutePoolService {
       );
       final radius = _allowedRadiusFor(query, candidate, activeRegions);
       if (radius == null || distanceKm > radius.allowedRadiusKm) continue;
-      final radiusScope = query.routeType == 'ROUND_TRIP'
+      final radiusScope = _sameText(query.routeType, 'ROUND_TRIP')
           ? _roundTripRadiusScope(query, candidate, distanceKm)
           : radius.scope;
 
@@ -2015,7 +2020,7 @@ class RoutePoolService {
       );
       final radius = _allowedRadiusFor(query, route, activeRegions);
       if (radius == null || distanceKm > radius.allowedRadiusKm) continue;
-      final radiusScope = query.routeType == 'ROUND_TRIP'
+      final radiusScope = _sameText(query.routeType, 'ROUND_TRIP')
           ? _roundTripRadiusScope(query, route, distanceKm)
           : radius.scope;
       matches.add(
@@ -3930,7 +3935,7 @@ class RoutePoolService {
     RoutePoolEntry candidate,
     List<RouteRegion> regions,
   ) {
-    if (query.routeType == 'ROUND_TRIP') {
+    if (_sameText(query.routeType, 'ROUND_TRIP')) {
       if (_sameCity(query, candidate) ||
           _sameAdmin2(query, candidate) ||
           _sameText(query.admin1Name, candidate.admin1Name)) {
@@ -4073,6 +4078,9 @@ class RoutePoolService {
         (right ?? '').trim().toLowerCase();
   }
 
+  static String _normalizeRouteType(String routeType) =>
+      routeType.trim().toUpperCase();
+
   static int _boolScore(bool value) => value ? 1 : 0;
 
   static double _toRadians(double degrees) => degrees * (math.pi / 180.0);
@@ -4095,20 +4103,20 @@ class RoutePoolService {
   }
 
   static double _maxSearchRadiusForRouteType(String routeType) {
-    return routeType == 'ROUND_TRIP'
+    return _sameText(routeType, 'ROUND_TRIP')
         ? roundTripHardStartMaxKm
         : maxExtendedRegionalKm;
   }
 
   static double _maxRegionSearchRadiusForRouteType(String routeType) {
-    return routeType == 'ROUND_TRIP'
+    return _sameText(routeType, 'ROUND_TRIP')
         ? roundTripHardStartMaxKm
         : maxExtendedRegionalKm;
   }
 
   static int _effectiveCandidateLimit(String routeType, int candidateLimit) {
     final normalizedLimit = candidateLimit.clamp(1, 200);
-    return routeType == 'ROUND_TRIP'
+    return _sameText(routeType, 'ROUND_TRIP')
         ? math.min<int>(normalizedLimit, 80)
         : math.min<int>(normalizedLimit, 140);
   }

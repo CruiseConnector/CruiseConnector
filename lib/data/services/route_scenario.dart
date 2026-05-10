@@ -30,15 +30,17 @@ class RouteScenario {
   final String? waypointSignature;
   final bool closeLoop;
 
-  bool get isRoundTrip => routeType == 'ROUND_TRIP';
-  bool get isPointToPoint => routeType == 'POINT_TO_POINT';
+  String get normalizedRouteType => routeType.trim().toUpperCase();
+
+  bool get isRoundTrip => normalizedRouteType == 'ROUND_TRIP';
+  bool get isPointToPoint => normalizedRouteType == 'POINT_TO_POINT';
 
   String get noveltyKey {
     if (!isRoundTrip) return scenarioKey;
     final startLat = startLatitude.toStringAsFixed(3);
     final startLng = startLongitude.toStringAsFixed(3);
     return [
-      routeType,
+      normalizedRouteType,
       startLat,
       startLng,
       'novelty',
@@ -53,7 +55,7 @@ class RouteScenario {
     final startLat = startLatitude.toStringAsFixed(2);
     final startLng = startLongitude.toStringAsFixed(2);
     return [
-      routeType,
+      normalizedRouteType,
       startLat,
       startLng,
       'novelty_broad',
@@ -73,7 +75,7 @@ class RouteScenario {
         ? targetDistanceKm!.toStringAsFixed(1)
         : '0.0';
     return [
-      routeType,
+      normalizedRouteType,
       startLat,
       startLng,
       destKey,
