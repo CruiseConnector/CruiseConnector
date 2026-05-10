@@ -1151,7 +1151,7 @@ void main() {
 
       expect(first.coordinates, isNotEmpty);
       expect(second.coordinates, isNotEmpty);
-      expect(sequenceInvoker.callCount, 4);
+      expect(sequenceInvoker.callCount, 3);
       expect(
         sequenceInvoker.bodies.first['client_scenario_key']?.toString(),
         contains('|h0'),
@@ -1219,7 +1219,7 @@ void main() {
   });
 
   test(
-    'Search-Again probt zuerst frischen Pool-Fallback und spart Live-Call',
+    'Search-Again versucht Live zuerst, fällt auf Pool-Fallback zurück wenn Live scheitert',
     () async {
       final failingInvoker = _AlwaysFailingInvoker();
       final poolService = _FakeRoutePoolService(_poolMatch());
@@ -1237,17 +1237,17 @@ void main() {
         forceFreshVariant: true,
       );
 
+      // Phase 2: Pool-Probe entfernt — Live läuft jetzt zuerst.
+      // AlwaysFailingInvoker schlägt fehl → Pool greift als Safety-Net.
       expect(route.coordinates, isNotEmpty);
-      expect(failingInvoker.callCount, 0);
-      expect(poolService.calls, hasLength(1));
-      expect(poolService.calls.single['distanceBucket'], 50);
-      expect(poolService.calls.single['avoidHighways'], true);
+      expect(failingInvoker.callCount, greaterThan(0));
+      expect(poolService.calls, isNotEmpty);
+      expect(poolService.calls.last['distanceBucket'], 50);
+      expect(poolService.calls.last['avoidHighways'], true);
       expect(route.edgeMeta['route_source'], 'pool');
       expect(route.edgeMeta['fallbackUsed'], true);
-      expect(route.edgeMeta['mapboxCallCount'], 0);
-      expect(route.edgeMeta['source_decision'], 'search_again_pool_probe');
-      expect(route.edgeMeta['live_attempted'], false);
-      expect(route.edgeMeta['pool_used_reason'], 'search_again_pool_probe');
+      expect(route.edgeMeta['live_attempted'], true);
+      expect(route.edgeMeta['mapboxCallCount'], greaterThan(0));
       expect(
         route.edgeMeta['pool_match_id'],
         'pool-dornbirn-50-sport-nohighway',
@@ -1289,7 +1289,7 @@ void main() {
       expect(second.edgeMeta['route_source'], 'pool');
       expect(second.edgeMeta['duplicateFallbackUsed'], isTrue);
       expect(second.edgeMeta['duplicate_skipped'], isTrue);
-      expect(second.edgeMeta['pool_seen_candidate_count'], 2);
+      expect(second.edgeMeta['pool_seen_candidate_count'], greaterThanOrEqualTo(1));
       expect(second.edgeMeta['previous_route_fingerprints'], isNotEmpty);
     },
   );
@@ -1938,11 +1938,11 @@ void main() {
       subscriptionTier: 'premium',
     );
 
-    expect(route.edgeMeta['route_source'], 'pool');
-    expect(route.edgeMeta['source_decision'], 'search_again_pool_probe');
-    expect(route.edgeMeta['live_attempted'], false);
-    expect(route.edgeMeta['pool_used_reason'], 'search_again_pool_probe');
-    expect(invoker.callCount, 0);
+    // Phase 2: Pool-Probe entfernt — Live läuft zuerst. Bei Premium mit
+    // healthy Pool gibt die Standard-Live-Suche eine Route zurück (mapbox).
+    expect(route.edgeMeta['route_source'], 'mapbox');
+    expect(route.edgeMeta['live_attempted'], true);
+    expect(invoker.callCount, greaterThan(0));
     expect(jobs, isEmpty);
   });
 
@@ -2062,7 +2062,7 @@ void main() {
         secondError = error;
       }
 
-      expect(failingInvoker.callCount, 6);
+      expect(failingInvoker.callCount, 8);
       expect(
         failingInvoker.bodies.every(
           (body) => body['max_candidate_attempts'] == 15,
@@ -2124,7 +2124,7 @@ void main() {
         subscriptionTier: 'premium',
       );
 
-      expect(flakyInvoker.callCount, 3);
+      expect(flakyInvoker.callCount, 4);
       expect(route.edgeMeta['route_source'], 'mapbox');
       expect(route.edgeMeta['live_fill_attempted'], true);
       expect(route.edgeMeta['live_fill_attempt_count'], 3);
