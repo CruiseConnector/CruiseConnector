@@ -2,6 +2,8 @@ import 'dart:math' as math;
 
 import 'package:geolocator/geolocator.dart' as geo;
 
+import 'package:cruise_connect/domain/models/route_maneuver.dart';
+
 /// Kleinstmöglicher Winkelunterschied zweier Himmelsrichtungen in Grad (0..180).
 double headingDeltaDegrees(double headingA, double headingB) {
   final normalizedA = headingA % 360;
@@ -145,6 +147,114 @@ bool isApproachingDestination(
   return improvement >= dynamicThreshold;
 }
 
+bool shouldShowArrivalManeuver({
+  required double? remainingRouteDistanceMeters,
+  required double? distanceToFinalTargetMeters,
+  double arrivalRadiusMeters = 50.0,
+}) {
+  if (remainingRouteDistanceMeters == null ||
+      distanceToFinalTargetMeters == null) {
+    return false;
+  }
+  return remainingRouteDistanceMeters <= arrivalRadiusMeters &&
+      distanceToFinalTargetMeters <= arrivalRadiusMeters;
+}
+
+bool shouldCompleteNavigation({
+  required bool isRoundTrip,
+  required double distanceToFinalTargetMeters,
+  required double drivenDistanceMeters,
+  required double? plannedDistanceMeters,
+  double completionRadiusMeters = 50.0,
+  double minRoundTripProgress = 0.95,
+}) {
+  if (distanceToFinalTargetMeters > completionRadiusMeters) return false;
+  if (!isRoundTrip) return true;
+  if (plannedDistanceMeters == null || plannedDistanceMeters <= 0) return true;
+  final progress = (drivenDistanceMeters / plannedDistanceMeters).clamp(
+    0.0,
+    1.0,
+  );
+  return progress >= minRoundTripProgress;
+}
+
+bool violatesNoHighwayPolicy({
+  required bool avoidHighways,
+  required Map<String, dynamic> edgeMeta,
+}) {
+  if (!avoidHighways) return false;
+
+  final motorwayViolation =
+      _boolMeta(edgeMeta, 'motorwayViolation') ??
+      _boolMeta(edgeMeta, 'motorway_violation') ??
+      false;
+  if (motorwayViolation) return true;
+
+  final hasHighway =
+      _boolMeta(edgeMeta, 'actual_has_highway') ??
+      _boolMeta(edgeMeta, 'has_highway') ??
+      _boolMeta(edgeMeta, 'motorway_present') ??
+      false;
+  if (hasHighway) return true;
+
+  final avoidRequested = _boolMeta(edgeMeta, 'avoid_highways_requested');
+  if (avoidRequested == false) return true;
+
+  final highwayAllowed = _boolMeta(edgeMeta, 'highway_allowed');
+  if (highwayAllowed == true) return true;
+
+  final motorwayPolicy = _stringMeta(edgeMeta, 'motorway_policy');
+  if (motorwayPolicy == 'allowed_not_required') return true;
+
+  final effectiveExcludes = _stringMeta(edgeMeta, 'effective_excludes');
+  if (effectiveExcludes != null &&
+      !_containsExclude(effectiveExcludes, 'motorway')) {
+    return true;
+  }
+
+  return false;
+}
+
+int? selectActiveGuidanceManeuverIndex({
+  required List<RouteManeuver> maneuvers,
+  required int currentRouteIndex,
+  required double? remainingRouteDistanceMeters,
+  required double? distanceToFinalTargetMeters,
+  int startIndex = 0,
+  double arrivalRadiusMeters = 50.0,
+}) {
+  if (maneuvers.isEmpty) return null;
+
+  final safeStart = startIndex.clamp(0, maneuvers.length - 1).toInt();
+  for (var i = safeStart; i < maneuvers.length; i++) {
+    final maneuver = maneuvers[i];
+    if (maneuver.routeIndex < currentRouteIndex) continue;
+    if (maneuver.isArrival) {
+      return shouldShowArrivalManeuver(
+            remainingRouteDistanceMeters: remainingRouteDistanceMeters,
+            distanceToFinalTargetMeters: distanceToFinalTargetMeters,
+            arrivalRadiusMeters: arrivalRadiusMeters,
+          )
+          ? i
+          : null;
+    }
+    return i;
+  }
+
+  final lastIndex = maneuvers.length - 1;
+  final last = maneuvers[lastIndex];
+  if (last.isArrival) {
+    return shouldShowArrivalManeuver(
+          remainingRouteDistanceMeters: remainingRouteDistanceMeters,
+          distanceToFinalTargetMeters: distanceToFinalTargetMeters,
+          arrivalRadiusMeters: arrivalRadiusMeters,
+        )
+        ? lastIndex
+        : null;
+  }
+  return lastIndex;
+}
+
 /// Baut kompakte Telemetrie für einen echten Straßen-Reroute.
 Map<String, dynamic> buildRerouteTelemetry({
   required String rerouteReason,
@@ -175,4 +285,23 @@ Map<String, dynamic> buildRerouteTelemetry({
     'eta_after': roundSeconds(etaAfterSeconds),
     'reroute_failed': rerouteFailed,
   };
+}
+
+bool? _boolMeta(Map<String, dynamic> meta, String key) {
+  final value = meta[key];
+  return value is bool ? value : null;
+}
+
+String? _stringMeta(Map<String, dynamic> meta, String key) {
+  final value = meta[key];
+  if (value == null) return null;
+  final text = value.toString().trim().toLowerCase();
+  return text.isEmpty ? null : text;
+}
+
+bool _containsExclude(String excludes, String token) {
+  return excludes
+      .split(',')
+      .map((entry) => entry.trim().toLowerCase())
+      .contains(token);
 }

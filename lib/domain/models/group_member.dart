@@ -31,6 +31,8 @@ RideRole rideRoleFromString(String? s, {MemberRole? fallbackRole}) {
 String rideRoleToString(RideRole r) => r.name;
 
 class GroupMember {
+  static const Duration defaultFreshLocationAge = Duration(seconds: 12);
+
   final String id;
   final String groupId;
   final String userId;
@@ -81,6 +83,61 @@ class GroupMember {
           profile?['display_name'] as String? ??
           profile?['username'] as String?,
       avatarUrl: profile?['avatar_url'] as String?,
+    );
+  }
+
+  bool get hasLocation =>
+      currentLat != null &&
+      currentLng != null &&
+      currentLat!.isFinite &&
+      currentLng!.isFinite;
+
+  Duration? locationAge({DateTime? now}) {
+    final updatedAt = lastUpdatedAt;
+    if (updatedAt == null) return null;
+    final reference = (now ?? DateTime.now()).toUtc();
+    final age = reference.difference(updatedAt.toUtc());
+    return age.isNegative ? Duration.zero : age;
+  }
+
+  bool hasFreshLocation({
+    DateTime? now,
+    Duration maxAge = defaultFreshLocationAge,
+  }) {
+    if (!hasLocation) return false;
+    final age = locationAge(now: now);
+    return age != null && age <= maxAge;
+  }
+
+  bool hasStaleLocation({
+    DateTime? now,
+    Duration maxAge = defaultFreshLocationAge,
+  }) {
+    return hasLocation && !hasFreshLocation(now: now, maxAge: maxAge);
+  }
+
+  GroupMember copyWith({
+    MemberRole? role,
+    RideRole? rideRole,
+    double? currentLat,
+    double? currentLng,
+    DateTime? lastUpdatedAt,
+    String? displayName,
+    String? avatarUrl,
+    bool clearLocation = false,
+  }) {
+    return GroupMember(
+      id: id,
+      groupId: groupId,
+      userId: userId,
+      role: role ?? this.role,
+      rideRole: rideRole ?? this.rideRole,
+      currentLat: clearLocation ? null : currentLat ?? this.currentLat,
+      currentLng: clearLocation ? null : currentLng ?? this.currentLng,
+      lastUpdatedAt: clearLocation ? null : lastUpdatedAt ?? this.lastUpdatedAt,
+      createdAt: createdAt,
+      displayName: displayName ?? this.displayName,
+      avatarUrl: avatarUrl ?? this.avatarUrl,
     );
   }
 }

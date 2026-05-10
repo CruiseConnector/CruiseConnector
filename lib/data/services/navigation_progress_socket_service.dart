@@ -27,7 +27,7 @@ class NavigationProgressSocketService {
 
     final channel = _client.channel(
       'navigation-progress:$sessionId',
-      opts: const RealtimeChannelConfig(self: true, ack: false),
+      opts: const RealtimeChannelConfig(self: false, ack: false),
     );
 
     channel.onBroadcast(
@@ -65,18 +65,19 @@ class NavigationProgressSocketService {
       return;
     }
 
+    // Native Navigation muss sofort lokal reagieren. Realtime läuft nur parallel
+    // für Companion-Displays/Diagnostik und darf die Kartenposition nie bremsen.
+    _emit(position);
+
     final payload = _positionToPayload(position);
     final channel = _channel;
     if (channel == null || !_isSubscribed) {
-      _emit(position);
       return;
     }
 
     try {
       await channel.sendBroadcastMessage(event: 'position', payload: payload);
-    } catch (_) {
-      _emit(position);
-    }
+    } catch (_) {}
   }
 
   Future<void> close() async {
@@ -136,7 +137,7 @@ class NavigationProgressSocketService {
         position.latitude,
         position.longitude,
       );
-      final interpolationSteps = (distance / 4.0).floor().clamp(0, 3);
+      final interpolationSteps = (distance / 2.0).floor().clamp(0, 5);
       if (interpolationSteps > 0) {
         for (var i = 1; i <= interpolationSteps; i++) {
           final t = i / (interpolationSteps + 1);

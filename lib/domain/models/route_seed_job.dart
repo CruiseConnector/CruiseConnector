@@ -20,12 +20,12 @@ class RouteSeedJob {
     this.seedBudgetUnits = 1,
     this.seedCooldownMinutes = 20,
     this.jobKind = 'seed_healing',
-    this.maxMapboxCalls = 8,
+    this.maxMapboxCalls = 36,
     this.mapboxCallsUsed = 0,
     this.verifiedInsertedCount = 0,
     this.candidateInsertedCount = 0,
-    this.dailyAttemptBudget = 12,
-    this.monthlyAttemptBudget = 120,
+    this.dailyAttemptBudget = 240,
+    this.monthlyAttemptBudget = 4000,
     this.dailyAttemptCount = 0,
     this.monthlyAttemptCount = 0,
     this.budgetWindowDate,
@@ -199,16 +199,16 @@ class RouteSeedJob {
       seedCooldownMinutes:
           (json['seed_cooldown_minutes'] as num?)?.toInt() ?? 20,
       jobKind: (json['job_kind'] as String?) ?? 'seed_healing',
-      maxMapboxCalls: (json['max_mapbox_calls'] as num?)?.toInt() ?? 8,
+      maxMapboxCalls: (json['max_mapbox_calls'] as num?)?.toInt() ?? 36,
       mapboxCallsUsed: (json['mapbox_calls_used'] as num?)?.toInt() ?? 0,
       verifiedInsertedCount:
           (json['verified_inserted_count'] as num?)?.toInt() ?? 0,
       candidateInsertedCount:
           (json['candidate_inserted_count'] as num?)?.toInt() ?? 0,
       dailyAttemptBudget:
-          (json['daily_attempt_budget'] as num?)?.toInt() ?? 120,
+          (json['daily_attempt_budget'] as num?)?.toInt() ?? 240,
       monthlyAttemptBudget:
-          (json['monthly_attempt_budget'] as num?)?.toInt() ?? 2000,
+          (json['monthly_attempt_budget'] as num?)?.toInt() ?? 4000,
       dailyAttemptCount: (json['daily_attempt_count'] as num?)?.toInt() ?? 0,
       monthlyAttemptCount:
           (json['monthly_attempt_count'] as num?)?.toInt() ?? 0,

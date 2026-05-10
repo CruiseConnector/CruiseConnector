@@ -16,6 +16,10 @@ class CruiseGroup {
   final String? inviteCode;
 
   final Map<String, dynamic>? routeData;
+  final Map<String, dynamic>? currentRouteData;
+  final int routeRevision;
+  final String? routeUpdatedBy;
+  final DateTime? routeUpdatedAt;
   final Map<String, dynamic>? startLocation;
 
   final List<GroupMember> members;
@@ -32,6 +36,10 @@ class CruiseGroup {
     this.startTime,
     this.activatedAt,
     this.routeData,
+    this.currentRouteData,
+    this.routeRevision = 1,
+    this.routeUpdatedBy,
+    this.routeUpdatedAt,
     this.startLocation,
     this.members = const [],
     this.inviteCode,
@@ -53,7 +61,13 @@ class CruiseGroup {
         : null,
     createdAt: DateTime.parse(m['created_at'] as String),
     inviteCode: m['invite_code'] as String?,
-    routeData: m['route_data'] as Map<String, dynamic>?,
+    routeData: _jsonMapOrNull(m['route_data']),
+    currentRouteData: _jsonMapOrNull(m['current_route_data']),
+    routeRevision: (m['route_revision'] as num?)?.toInt() ?? 1,
+    routeUpdatedBy: m['route_updated_by'] as String?,
+    routeUpdatedAt: m['route_updated_at'] != null
+        ? DateTime.parse(m['route_updated_at'] as String)
+        : null,
     startLocation: m['start_location'] as Map<String, dynamic>?,
     members: (m['group_members'] is List)
         ? (m['group_members'] as List)
@@ -68,4 +82,22 @@ class CruiseGroup {
       members.any(
         (mem) => mem.userId == userId && mem.role == MemberRole.owner,
       );
+
+  Map<String, dynamic>? get activeRouteData => currentRouteData ?? routeData;
+
+  bool canUpdateRoute(String userId) {
+    if (isOwner(userId)) return true;
+    return members.any(
+      (member) =>
+          member.userId == userId &&
+          (member.role == MemberRole.driver ||
+              member.rideRole == RideRole.driver),
+    );
+  }
+
+  static Map<String, dynamic>? _jsonMapOrNull(Object? value) {
+    if (value is Map<String, dynamic>) return value;
+    if (value is Map) return Map<String, dynamic>.from(value);
+    return null;
+  }
 }

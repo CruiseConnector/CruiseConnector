@@ -30,6 +30,7 @@ class RouteQualityResult {
     this.microZigzagPercent = 0.0,
     this.dominantLoopScore = 0.0,
     this.styleFitScore = 0.0,
+    this.deadEndSpikeCount = 0,
   });
 
   /// Prozent der Route die sich mit sich selbst überlappt (0-100).
@@ -67,6 +68,7 @@ class RouteQualityResult {
   final double microZigzagPercent;
   final double dominantLoopScore;
   final double styleFitScore;
+  final int deadEndSpikeCount;
 
   @override
   String toString() {
@@ -81,6 +83,7 @@ class RouteQualityResult {
         'start=${repeatedStartAreaPercent.toStringAsFixed(0)}%, '
         'zigzag=${microZigzagPercent.toStringAsFixed(0)}%, '
         'loop=${dominantLoopScore.toStringAsFixed(0)}, '
+        '${deadEndSpikeCount > 0 ? 'deadEnds=$deadEndSpikeCount, ' : ''}'
         'distOk=$distanceInTolerance, '
         'passed=$passed'
         '${actualDistanceKm != null ? ', ${actualDistanceKm!.toStringAsFixed(1)}km' : ''}'
@@ -89,6 +92,41 @@ class RouteQualityResult {
 }
 
 enum RouteQualityTier { ideal, good, acceptable, rejected }
+
+enum RouteOverlapType {
+  none,
+  shortConnector,
+  gradeSeparatedOrParallel,
+  deadEndSpike,
+  trueOutAndBack,
+  mixed,
+}
+
+class RouteOverlapAnalysis {
+  const RouteOverlapAnalysis({
+    required this.rawOverlapPercent,
+    required this.penalizedOverlapPercent,
+    required this.sameDirectionPercent,
+    required this.oppositeDirectionPercent,
+    required this.crossingPercent,
+    required this.type,
+    this.deadEndSpikeCount = 0,
+  });
+
+  final double rawOverlapPercent;
+  final double penalizedOverlapPercent;
+  final double sameDirectionPercent;
+  final double oppositeDirectionPercent;
+  final double crossingPercent;
+  final RouteOverlapType type;
+  final int deadEndSpikeCount;
+
+  bool get isHardBacktracking =>
+      type == RouteOverlapType.deadEndSpike ||
+      type == RouteOverlapType.trueOutAndBack;
+}
+
+enum _OverlapDirection { same, opposite, crossing }
 
 class RouteQualityClassification {
   const RouteQualityClassification({required this.tier, required this.score});
@@ -167,12 +205,27 @@ class RouteQualityValidator {
   /// Fahrtrichtung ähnlich oder gegensinnig ist. So werden Kreuzungen
   /// weniger hart bestraft, echtes Hin-und-Zurück aber sicher erkannt.
   double validateOverlap(List<List<double>> coordinates) {
-    if (coordinates.length < 20) return 0.0;
+    return analyzeOverlap(coordinates).penalizedOverlapPercent;
+  }
+
+  RouteOverlapAnalysis analyzeOverlap(List<List<double>> coordinates) {
+    if (coordinates.length < 20) {
+      return const RouteOverlapAnalysis(
+        rawOverlapPercent: 0.0,
+        penalizedOverlapPercent: 0.0,
+        sameDirectionPercent: 0.0,
+        oppositeDirectionPercent: 0.0,
+        crossingPercent: 0.0,
+        type: RouteOverlapType.none,
+      );
+    }
 
     // Sampling: jeden 5. Punkt prüfen (Performance)
     const sampleStep = 4;
-    var overlapCount = 0;
     var sampleCount = 0;
+    var sameDirectionCount = 0;
+    var oppositeDirectionCount = 0;
+    var crossingCount = 0;
 
     for (var i = 0; i < coordinates.length; i += sampleStep) {
       sampleCount++;
@@ -180,7 +233,7 @@ class RouteQualityValidator {
       if (ci.length < 2) continue;
       final headingI = _localHeading(coordinates, i);
 
-      var foundOverlap = false;
+      _OverlapDirection? foundOverlap;
       // Prüfe gegen alle Punkte die >minIndexGap entfernt sind
       for (
         var j = i + overlapMinIndexGap;
@@ -198,16 +251,68 @@ class RouteQualityValidator {
         final alignedDirection = headingDelta <= 35.0;
         final oppositeDirection = headingDelta >= 145.0;
 
-        if (alignedDirection || oppositeDirection) {
-          foundOverlap = true;
+        if (oppositeDirection) {
+          foundOverlap = _OverlapDirection.opposite;
           break;
         }
+        if (alignedDirection) {
+          foundOverlap ??= _OverlapDirection.same;
+        } else {
+          foundOverlap ??= _OverlapDirection.crossing;
+        }
       }
-      if (foundOverlap) overlapCount++;
+      switch (foundOverlap) {
+        case _OverlapDirection.same:
+          sameDirectionCount++;
+          break;
+        case _OverlapDirection.opposite:
+          oppositeDirectionCount++;
+          break;
+        case _OverlapDirection.crossing:
+          crossingCount++;
+          break;
+        case null:
+          break;
+      }
     }
 
-    if (sampleCount == 0) return 0.0;
-    return (overlapCount / sampleCount) * 100.0;
+    if (sampleCount == 0) {
+      return const RouteOverlapAnalysis(
+        rawOverlapPercent: 0.0,
+        penalizedOverlapPercent: 0.0,
+        sameDirectionPercent: 0.0,
+        oppositeDirectionPercent: 0.0,
+        crossingPercent: 0.0,
+        type: RouteOverlapType.none,
+      );
+    }
+
+    final samePercent = (sameDirectionCount / sampleCount) * 100.0;
+    final oppositePercent = (oppositeDirectionCount / sampleCount) * 100.0;
+    final crossingPercent = (crossingCount / sampleCount) * 100.0;
+    final rawPercent = samePercent + oppositePercent + crossingPercent;
+    final deadEndSpikeCount = detectDeadEndSpikes(coordinates).length;
+    final penalizedPercent =
+        (oppositePercent + math.max(0.0, samePercent - 24.0) * 0.25).clamp(
+          0.0,
+          100.0,
+        );
+
+    return RouteOverlapAnalysis(
+      rawOverlapPercent: rawPercent,
+      penalizedOverlapPercent: penalizedPercent,
+      sameDirectionPercent: samePercent,
+      oppositeDirectionPercent: oppositePercent,
+      crossingPercent: crossingPercent,
+      type: _classifyOverlap(
+        rawPercent: rawPercent,
+        sameDirectionPercent: samePercent,
+        oppositeDirectionPercent: oppositePercent,
+        crossingPercent: crossingPercent,
+        deadEndSpikeCount: deadEndSpikeCount,
+      ),
+      deadEndSpikeCount: deadEndSpikeCount,
+    );
   }
 
   /// Erkennt Wendemanöver: Bearing-Änderung >150° innerhalb <200m.
@@ -328,7 +433,8 @@ class RouteQualityValidator {
       coordinates: coordinates,
       isRoundTrip: isRoundTrip,
     );
-    final overlap = validateOverlap(coordinates);
+    final overlapAnalysis = analyzeOverlap(coordinates);
+    final overlap = overlapAnalysis.penalizedOverlapPercent;
     final uturns = validateNoUturns(coordinates);
     final loopClosed = isRoundTrip ? validateLoopClosed(coordinates) : true;
     final returnPathPercent = isRoundTrip
@@ -353,6 +459,7 @@ class RouteQualityValidator {
         uturns.isEmpty &&
         loopClosed &&
         distOk &&
+        overlapAnalysis.deadEndSpikeCount == 0 &&
         (!isRoundTrip || returnPathPercent <= maxReturnPathPercent) &&
         shape.shapePenalty < (isRoundTrip ? 90.0 : 72.0);
 
@@ -381,6 +488,7 @@ class RouteQualityValidator {
       repeatedStartAreaPercent: shape.repeatedStartAreaPercent,
       microZigzagPercent: shape.microZigzagPercent,
       dominantLoopScore: shape.dominantLoopScore,
+      deadEndSpikeCount: overlapAnalysis.deadEndSpikeCount,
     );
 
     // Debug-Output im Console-Log
@@ -446,6 +554,7 @@ class RouteQualityValidator {
     final score =
         quality.overlapPercent +
         quality.uturnPositions.length * 18 +
+        quality.deadEndSpikeCount * 35 +
         distanceDeltaPercent * 100 * 1.6 +
         (isRoundTrip ? quality.returnPathPercent * 1.4 : 0.0) +
         quality.shapePenalty +
@@ -525,6 +634,7 @@ class RouteQualityValidator {
 
     if (!quality.isLoopClosed ||
         hardUturnFailure ||
+        quality.deadEndSpikeCount > 0 ||
         (isRoundTrip && quality.returnPathPercent > acceptableReturnPath) ||
         severeRoundTripShape ||
         severePointShape) {
@@ -849,6 +959,32 @@ class RouteQualityValidator {
     }
 
     return spikes;
+  }
+
+  static RouteOverlapType _classifyOverlap({
+    required double rawPercent,
+    required double sameDirectionPercent,
+    required double oppositeDirectionPercent,
+    required double crossingPercent,
+    required int deadEndSpikeCount,
+  }) {
+    if (deadEndSpikeCount > 0) return RouteOverlapType.deadEndSpike;
+    if (rawPercent <= 0.1) return RouteOverlapType.none;
+
+    final legitimatePercent = sameDirectionPercent + crossingPercent;
+    if (oppositeDirectionPercent >= 20.0 ||
+        (oppositeDirectionPercent >= 12.0 &&
+            oppositeDirectionPercent >= legitimatePercent)) {
+      return RouteOverlapType.trueOutAndBack;
+    }
+
+    if (legitimatePercent > 0 && rawPercent <= 8.0) {
+      return RouteOverlapType.shortConnector;
+    }
+    if (legitimatePercent >= oppositeDirectionPercent) {
+      return RouteOverlapType.gradeSeparatedOrParallel;
+    }
+    return RouteOverlapType.mixed;
   }
 
   static List<List<double>> _sampleRoute(

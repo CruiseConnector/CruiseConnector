@@ -44,7 +44,7 @@ Deno.serve(async (req) => {
       maxVerifiedPerClusterPerRun: intOption(
         body.max_verified_per_cluster_per_run,
         "ROUTE_POOL_HEALING_MAX_VERIFIED_PER_CLUSTER_PER_RUN",
-        2,
+        3,
       ),
       targetVerifiedPerJob: intOption(
         body.target_verified_per_job,

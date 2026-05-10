@@ -208,6 +208,18 @@ Deno.test("Coverage Status nutzt exakte Zelle und Zielwerte", () => {
     "AT|Vorarlberg|Dornbirn|Dornbirn|ROUND_TRIP|50|sport|no_highway",
   );
   assertEquals(
+    cellKey({ ...baseCandidate, styleKey: "sport_mode" }),
+    cellKey(baseCandidate),
+  );
+  assertEquals(
+    cellKey({ ...baseCandidate, styleKey: "Sport Mode" }),
+    cellKey(baseCandidate),
+  );
+  assertEquals(
+    cellKey({ ...baseCandidate, avoidHighways: false }),
+    "AT|Vorarlberg|Dornbirn|Dornbirn|ROUND_TRIP|50|sport|highway_allowed",
+  );
+  assertEquals(
     deriveCoverageStatus({
       verifiedCount: 3,
       candidateCount: 1,
@@ -216,8 +228,8 @@ Deno.test("Coverage Status nutzt exakte Zelle und Zielwerte", () => {
       acceptableCount: 0,
       distinctFingerprintCount: 3,
       minVerifiedCount: 3,
-      targetPoolSize: 8,
-      maxPoolSize: 20,
+      targetPoolSize: 12,
+      maxPoolSize: 32,
     }),
     "healthy",
   );

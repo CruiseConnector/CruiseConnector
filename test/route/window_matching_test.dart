@@ -70,6 +70,24 @@ void main() {
       expect(match.distanceMeters, lessThan(50.0));
     });
 
+    test(
+      'User auf langem Segment bleibt on-route trotz ferner Stützpunkte',
+      () {
+        final coords = _straightNorthRoute(points: 3, stepDegrees: 0.01);
+
+        final match = findNearestInWindow(
+          position: _position(48.005, 11.58),
+          coordinates: coords,
+          currentIndex: 0,
+          windowSize: 2,
+        );
+
+        expect(match.distanceMeters, lessThan(5.0));
+        expect(match.segmentIndex, 0);
+        expect(match.segmentFraction, closeTo(0.5, 0.05));
+      },
+    );
+
     test('currentIndex wird als Startpunkt des Fensters genutzt', () {
       final coords = _straightNorthRoute(points: 50);
 

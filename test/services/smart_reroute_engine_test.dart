@@ -62,6 +62,36 @@ void main() {
       expect(plan.anchorCoordinate, [11.0040, 48.0020]);
     });
 
+    test('avoidHighways ueberspringt Autobahn-Ausfahrt als Rejoin-Ziel', () {
+      final coordinates = buildStraightRoute();
+      final maneuvers = <RouteManeuver>[
+        const RouteManeuver(
+          latitude: 48.0020,
+          longitude: 11.0040,
+          routeIndex: 40,
+          icon: Icons.directions_car,
+          announcement: 'In 800 Metern die Ausfahrt nehmen',
+          instruction: 'Nehmen Sie die Ausfahrt Richtung Autobahn',
+        ),
+      ];
+
+      final plan = engine.createPlan(
+        currentPosition: position(latitude: 48.0, longitude: 11.0),
+        coordinates: coordinates,
+        maneuvers: maneuvers,
+        nearestIndex: 8,
+        currentHeadingDegrees: 90,
+        speedLimits: const [
+          SpeedLimitSegment(startIndex: 0, endIndex: 80, speedKmh: 120),
+        ],
+        avoidHighways: true,
+      );
+
+      expect(plan.strategy, isNot(SmartRerouteStrategy.motorwayExit));
+      expect(plan.debugLabel, isNot('next_motorway_exit'));
+      expect(plan.rejoinIndex, greaterThan(40));
+    });
+
     test('Kreisverkehr im Nahbereich waehlt roundabout-Strategie', () {
       final coordinates = buildStraightRoute();
       final maneuvers = <RouteManeuver>[

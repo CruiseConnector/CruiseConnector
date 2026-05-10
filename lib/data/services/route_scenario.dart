@@ -48,6 +48,21 @@ class RouteScenario {
     ].join('|');
   }
 
+  String get broadNoveltyKey {
+    if (!isRoundTrip) return scenarioKey;
+    final startLat = startLatitude.toStringAsFixed(2);
+    final startLng = startLongitude.toStringAsFixed(2);
+    return [
+      routeType,
+      startLat,
+      startLng,
+      'novelty_broad',
+      if (waypointSignature != null && waypointSignature!.isNotEmpty)
+        'wp$waypointSignature',
+      if (closeLoop) 'loop1',
+    ].join('|');
+  }
+
   String get scenarioKey {
     final startLat = startLatitude.toStringAsFixed(3);
     final startLng = startLongitude.toStringAsFixed(3);

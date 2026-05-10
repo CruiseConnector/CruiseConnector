@@ -263,6 +263,7 @@ Map<String, dynamic> _buildPointToPointResponse({
   double bendScale = 0.18,
   double startLat = 48.1351,
   double startLng = 11.5820,
+  Map<String, dynamic> meta = const {},
 }) {
   final dx = destinationLng - startLng;
   final dy = destinationLat - startLat;
@@ -282,6 +283,7 @@ Map<String, dynamic> _buildPointToPointResponse({
   });
 
   return {
+    if (meta.isNotEmpty) 'meta': meta,
     'route': {
       'geometry': {'type': 'LineString', 'coordinates': coords},
       'distance': distanceMeters,
@@ -1142,6 +1144,61 @@ void main() {
       expect(captured.containsKey('detour_level'), isFalse);
       expect(captured.containsKey('detour_factor'), isFalse);
     });
+
+    test(
+      'Navigation-Reroute mit avoidHighways verwirft Kandidat ohne motorway exclude',
+      () async {
+        when(mockInvoker.invoke(any)).thenAnswer(
+          (_) async => _buildPointToPointResponse(
+            distanceMeters: 20000,
+            durationSeconds: 1800,
+            destinationLat: 47.8,
+            destinationLng: 12.0,
+            meta: const {
+              'avoid_highways_requested': true,
+              'highway_allowed': true,
+              'motorway_policy': 'allowed_not_required',
+              'effective_excludes': 'ferry',
+            },
+          ),
+        );
+
+        await expectLater(
+          service.generatePointToPoint(
+            startPosition: _munich(),
+            destinationLat: 47.8,
+            destinationLng: 12.0,
+            mode: 'Standard',
+            scenic: false,
+            avoidHighways: true,
+            forceFreshVariant: true,
+            navigationReroute: true,
+            candidateBudgetOverride: 1,
+            maxSearchMsOverride: 7500,
+            currentHeadingDegrees: 90,
+            currentSpeedMetersPerSecond: 8,
+          ),
+          throwsA(
+            isA<RouteServiceException>()
+                .having((e) => e.type, 'type', RouteErrorType.noRoute)
+                .having(
+                  (e) => e.edgeMeta['motorway_violation'],
+                  'motorway_violation',
+                  isTrue,
+                ),
+          ),
+        );
+
+        final captured =
+            verify(mockInvoker.invoke(captureAny)).captured.single
+                as Map<String, dynamic>;
+        expect(captured['avoid_highways'], isTrue);
+        expect(captured['reroute_request'], isTrue);
+        expect(captured['moving_start'], isTrue);
+        expect(captured['max_candidate_attempts'], 1);
+        expect(captured['max_search_ms'], 7500);
+      },
+    );
 
     test('scenic = true → übergibt den eigentlichen mode', () async {
       when(mockInvoker.invoke(any)).thenAnswer(

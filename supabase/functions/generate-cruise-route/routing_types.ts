@@ -60,6 +60,7 @@ export interface RequestData {
   max_candidate_attempts?: number;
   roundtrip_batch_index?: number;
   roundtrip_batch_count?: number;
+  reroute_request?: boolean;
   force_roundtrip_search_session?: boolean;
   interactive_roundtrip_search?: boolean;
   moving_start?: boolean;

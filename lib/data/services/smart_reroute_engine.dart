@@ -38,6 +38,7 @@ class SmartRerouteEngine {
     required int nearestIndex,
     required double currentHeadingDegrees,
     required List<SpeedLimitSegment> speedLimits,
+    bool avoidHighways = false,
   }) {
     if (coordinates.length < 2) {
       return const SmartReroutePlan(
@@ -48,11 +49,13 @@ class SmartRerouteEngine {
       );
     }
 
-    final onMotorway = _isLikelyOnMotorway(
-      routeIndex: nearestIndex,
-      maneuvers: maneuvers,
-      speedLimits: speedLimits,
-    );
+    final onMotorway =
+        !avoidHighways &&
+        _isLikelyOnMotorway(
+          routeIndex: nearestIndex,
+          maneuvers: maneuvers,
+          speedLimits: speedLimits,
+        );
 
     if (onMotorway) {
       final exit = _findNextHighwayExit(
@@ -89,6 +92,7 @@ class SmartRerouteEngine {
       maneuvers: maneuvers,
       minimumRouteIndex: nearestIndex + 18,
       currentHeadingDegrees: currentHeadingDegrees,
+      avoidHighways: avoidHighways,
     );
     if (forwardTurn != null) {
       return SmartReroutePlan(
@@ -103,9 +107,9 @@ class SmartRerouteEngine {
       coordinates: coordinates,
       nearestIndex: nearestIndex,
       currentHeadingDegrees: currentHeadingDegrees,
-      minLookAheadPoints: onMotorway ? 140 : 90,
-      maxLookAheadPoints: onMotorway ? 420 : 320,
-      maxAlignmentDeltaDegrees: onMotorway ? 120 : 100,
+      minLookAheadPoints: onMotorway ? 140 : 55,
+      maxLookAheadPoints: onMotorway ? 420 : 220,
+      maxAlignmentDeltaDegrees: onMotorway ? 120 : 105,
     ).clamp(0, coordinates.length - 1);
 
     return SmartReroutePlan(
@@ -202,9 +206,17 @@ class SmartRerouteEngine {
     required List<RouteManeuver> maneuvers,
     required int minimumRouteIndex,
     required double currentHeadingDegrees,
+    required bool avoidHighways,
   }) {
     for (final maneuver in maneuvers) {
       if (maneuver.routeIndex < minimumRouteIndex) continue;
+      final instruction = maneuver.instruction.toLowerCase();
+      if (avoidHighways &&
+          (instruction.contains('autobahn') ||
+              instruction.contains('ausfahrt') ||
+              instruction.contains('abfahrt'))) {
+        continue;
+      }
       if (!_isUsefulTurnManeuver(maneuver)) continue;
 
       final distance = geo.Geolocator.distanceBetween(

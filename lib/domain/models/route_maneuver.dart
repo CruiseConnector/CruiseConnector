@@ -25,12 +25,21 @@ class RouteManeuver {
   final ManeuverType maneuverType;
   final int?
   roundaboutExitNumber; // Welche Ausfahrt im Kreisverkehr (1, 2, 3...)
+
+  bool get isArrival => icon == Icons.flag;
 }
 
 /// Ergebnis einer Nearest-Route-Point Fenstersuche.
 class RouteWindowMatch {
-  const RouteWindowMatch({required this.index, required this.distanceMeters});
+  const RouteWindowMatch({
+    required this.index,
+    required this.distanceMeters,
+    this.segmentIndex,
+    this.segmentFraction,
+  });
 
   final int index;
   final double distanceMeters;
+  final int? segmentIndex;
+  final double? segmentFraction;
 }

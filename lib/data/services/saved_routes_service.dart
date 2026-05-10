@@ -237,7 +237,12 @@ class SavedRoutesService {
       final geometry = route.geometry;
       final coordinates = geometry['coordinates'];
       if (coordinates is List && coordinates.isNotEmpty) {
-        final first = coordinates[0];
+        final first =
+            geometry['type'] == 'MultiLineString' &&
+                coordinates.first is List &&
+                (coordinates.first as List).isNotEmpty
+            ? (coordinates.first as List).first
+            : coordinates[0];
         if (first is List && first.length >= 2) {
           return [(first[0] as num).toDouble(), (first[1] as num).toDouble()];
         }

@@ -29,7 +29,9 @@ void main() {
       );
       final coords = [...outbound, ...inbound];
       final overlap = validator.validateOverlap(coords);
+      final analysis = validator.analyzeOverlap(coords);
       expect(overlap, greaterThan(20.0));
+      expect(analysis.type, RouteOverlapType.trueOutAndBack);
     });
 
     test('Nahe Kreuzung ohne Backtracking bleibt unter dem Grenzwert', () {
@@ -44,6 +46,77 @@ void main() {
 
       expect(overlap, lessThan(12.0));
     });
+
+    test('Legitimer Tunnel- oder Bruecken-Overlap bleibt erhalten', () {
+      final coords = _polyline([
+        [9.7000, 47.4000],
+        [9.7450, 47.4000],
+        [9.7450, 47.4200],
+        [9.7000, 47.4200],
+        [9.7000, 47.4002],
+        [9.7450, 47.4002],
+        [9.7580, 47.4170],
+        [9.7040, 47.4320],
+      ]);
+
+      final analysis = validator.analyzeOverlap(coords);
+
+      expect(analysis.sameDirectionPercent, greaterThan(0));
+      expect(
+        analysis.rawOverlapPercent,
+        greaterThan(analysis.penalizedOverlapPercent),
+      );
+      expect(analysis.penalizedOverlapPercent, lessThan(8.0));
+      expect(analysis.type, RouteOverlapType.gradeSeparatedOrParallel);
+    });
+
+    test('Kurze notwendige Doppelung bleibt unter dem harten Overlap-Gate', () {
+      final coords = _polyline([
+        [9.7000, 47.4000],
+        [9.7450, 47.4000],
+        [9.7450, 47.4200],
+        [9.7200, 47.4200],
+        [9.7200, 47.4002],
+        [9.7250, 47.4002],
+        [9.7550, 47.4280],
+        [9.7000, 47.4320],
+      ]);
+
+      final analysis = validator.analyzeOverlap(coords);
+
+      expect(analysis.sameDirectionPercent, greaterThan(0));
+      expect(analysis.penalizedOverlapPercent, lessThan(5.0));
+      expect(analysis.type, RouteOverlapType.shortConnector);
+    });
+
+    test(
+      'Sackgassen-Spike wird erkannt und nicht als legitimer Overlap gewertet',
+      () {
+        final coords = _polyline([
+          [9.7000, 47.4000],
+          [9.7200, 47.4000],
+          [9.7200, 47.4024],
+          [9.7200, 47.4000],
+          [9.7450, 47.4000],
+          [9.7450, 47.4200],
+          [9.7000, 47.4200],
+          [9.7000, 47.4000],
+        ], stepDegrees: 0.0002);
+
+        final analysis = validator.analyzeOverlap(coords);
+        final result = validator.validateQuality(
+          coordinates: coords,
+          isRoundTrip: true,
+          targetDistanceKm: 12.0,
+          actualDistanceKm: 12.0,
+        );
+
+        expect(analysis.type, RouteOverlapType.deadEndSpike);
+        expect(analysis.deadEndSpikeCount, greaterThan(0));
+        expect(result.deadEndSpikeCount, greaterThan(0));
+        expect(result.passed, isFalse);
+      },
+    );
   });
 
   group('buildRouteFingerprint', () {
@@ -690,6 +763,31 @@ void main() {
       expect(curveCurvyScore, greaterThan(curveFlowScore));
     });
   });
+}
+
+List<List<double>> _polyline(
+  List<List<double>> points, {
+  double stepDegrees = 0.00025,
+}) {
+  final coordinates = <List<double>>[];
+  for (var index = 0; index < points.length - 1; index++) {
+    final start = points[index];
+    final end = points[index + 1];
+    final deltaLng = end[0] - start[0];
+    final deltaLat = end[1] - start[1];
+    var steps = ((deltaLng.abs() + deltaLat.abs()) / stepDegrees).ceil();
+    if (steps < 1) steps = 1;
+    if (steps > 1000) steps = 1000;
+    for (var step = 0; step < steps; step++) {
+      final ratio = step / steps;
+      coordinates.add([
+        start[0] + deltaLng * ratio,
+        start[1] + deltaLat * ratio,
+      ]);
+    }
+  }
+  coordinates.add(points.last);
+  return coordinates;
 }
 
 double cos(double x) => x.isNaN ? 0 : _cos(x);

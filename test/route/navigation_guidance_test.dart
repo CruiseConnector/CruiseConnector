@@ -1,7 +1,9 @@
 // ignore_for_file: avoid_print, no_leading_underscores_for_local_identifiers, prefer_const_declarations
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter/material.dart';
 import 'package:cruise_connect/data/services/navigation_guidance_utils.dart';
+import 'package:cruise_connect/domain/models/route_maneuver.dart';
 
 void main() {
   // ─────────────────────── selectForwardRejoinIndex ─────────────────────────
@@ -209,6 +211,156 @@ void main() {
           reason: 'Bearing sollte auf gerader Route konstant sein',
         );
       }
+    });
+  });
+
+  group('Arrival-Guidance', () {
+    RouteManeuver maneuver(IconData icon, int routeIndex, String text) {
+      return RouteManeuver(
+        latitude: 47.0,
+        longitude: 13.0,
+        routeIndex: routeIndex,
+        icon: icon,
+        announcement: text,
+        instruction: text,
+      );
+    }
+
+    test('zeigt Arrive nicht, wenn noch viel Route uebrig ist', () {
+      expect(
+        shouldShowArrivalManeuver(
+          remainingRouteDistanceMeters: 850,
+          distanceToFinalTargetMeters: 35,
+        ),
+        isFalse,
+      );
+    });
+
+    test('zeigt Arrive erst im echten Zielradius', () {
+      expect(
+        shouldShowArrivalManeuver(
+          remainingRouteDistanceMeters: 38,
+          distanceToFinalTargetMeters: 42,
+        ),
+        isTrue,
+      );
+      expect(
+        shouldShowArrivalManeuver(
+          remainingRouteDistanceMeters: 38,
+          distanceToFinalTargetMeters: 120,
+        ),
+        isFalse,
+      );
+    });
+
+    test('waehlt kein Ziel-Manoever als naechstes, solange Ziel fern ist', () {
+      final maneuvers = [
+        maneuver(Icons.turn_left, 10, 'Links abbiegen'),
+        maneuver(Icons.flag, 100, 'Ziel erreicht'),
+      ];
+
+      final selected = selectActiveGuidanceManeuverIndex(
+        maneuvers: maneuvers,
+        currentRouteIndex: 80,
+        remainingRouteDistanceMeters: 1200,
+        distanceToFinalTargetMeters: 1200,
+        startIndex: 1,
+      );
+
+      expect(selected, isNull);
+    });
+
+    test('waehlt Ziel-Manoever im Zielradius', () {
+      final maneuvers = [
+        maneuver(Icons.turn_left, 10, 'Links abbiegen'),
+        maneuver(Icons.flag, 100, 'Ziel erreicht'),
+      ];
+
+      final selected = selectActiveGuidanceManeuverIndex(
+        maneuvers: maneuvers,
+        currentRouteIndex: 99,
+        remainingRouteDistanceMeters: 28,
+        distanceToFinalTargetMeters: 24,
+        startIndex: 1,
+      );
+
+      expect(selected, 1);
+    });
+
+    test('Rundkurs completed erst am Ziel und nach genug Fortschritt', () {
+      expect(
+        shouldCompleteNavigation(
+          isRoundTrip: true,
+          distanceToFinalTargetMeters: 25,
+          drivenDistanceMeters: 1200,
+          plannedDistanceMeters: 10000,
+        ),
+        isFalse,
+      );
+      expect(
+        shouldCompleteNavigation(
+          isRoundTrip: true,
+          distanceToFinalTargetMeters: 25,
+          drivenDistanceMeters: 9600,
+          plannedDistanceMeters: 10000,
+        ),
+        isTrue,
+      );
+      expect(
+        shouldCompleteNavigation(
+          isRoundTrip: true,
+          distanceToFinalTargetMeters: 120,
+          drivenDistanceMeters: 10000,
+          plannedDistanceMeters: 10000,
+        ),
+        isFalse,
+      );
+    });
+  });
+
+  group('No-Highway-Policy', () {
+    test('akzeptiert No-Highway-Meta mit motorway exclude', () {
+      expect(
+        violatesNoHighwayPolicy(
+          avoidHighways: true,
+          edgeMeta: const {
+            'avoid_highways_requested': true,
+            'highway_allowed': false,
+            'motorway_policy': 'exclude_motorway',
+            'effective_excludes': 'ferry,motorway',
+          },
+        ),
+        isFalse,
+      );
+    });
+
+    test('verwirft Reroute-Kandidat mit Autobahn-Meta', () {
+      expect(
+        violatesNoHighwayPolicy(
+          avoidHighways: true,
+          edgeMeta: const {
+            'avoid_highways_requested': true,
+            'effective_excludes': 'ferry,motorway',
+            'actual_has_highway': true,
+          },
+        ),
+        isTrue,
+      );
+    });
+
+    test('verwirft Reroute-Kandidat ohne motorway exclude', () {
+      expect(
+        violatesNoHighwayPolicy(
+          avoidHighways: true,
+          edgeMeta: const {
+            'avoid_highways_requested': true,
+            'highway_allowed': true,
+            'motorway_policy': 'allowed_not_required',
+            'effective_excludes': 'ferry',
+          },
+        ),
+        isTrue,
+      );
     });
   });
 }

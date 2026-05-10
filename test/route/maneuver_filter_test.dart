@@ -125,6 +125,26 @@ void main() {
       expect(arrives.length, 1);
     });
 
+    test('Arrive weit vor Routenende wird nicht als Ziel behalten', () {
+      final result = service.filterManeuvers([
+        _turnLeft(routeIndex: 10),
+        _arrive(routeIndex: 40),
+      ], routeCoordinateCount: 120);
+
+      expect(result.any((m) => m.icon == Icons.flag), isFalse);
+    });
+
+    test('Arrive nahe Routenende bleibt als echtes Ziel erhalten', () {
+      final result = service.filterManeuvers([
+        _turnLeft(routeIndex: 10),
+        _arrive(routeIndex: 118),
+      ], routeCoordinateCount: 120);
+
+      final arrives = result.where((m) => m.icon == Icons.flag).toList();
+      expect(arrives.length, 1);
+      expect(arrives.first.routeIndex, 118);
+    });
+
     test('Kein Arrive in der Liste → kein Arrive im Ergebnis', () {
       final result = service.filterManeuvers([
         _turnLeft(routeIndex: 10),

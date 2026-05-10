@@ -24,7 +24,10 @@ class RouteCompletionCandidateService {
     double? completionPercent,
     String? source,
   }) async {
-    final coordinates = result.coordinates;
+    final geometrySegments = _segmentsFromResult(result);
+    final coordinates = geometrySegments
+        .expand((segment) => segment)
+        .toList(growable: false);
     if (coordinates.length < 2) return null;
 
     final routeType = isRoundTrip ? 'ROUND_TRIP' : 'POINT_TO_POINT';
@@ -155,7 +158,8 @@ class RouteCompletionCandidateService {
     required int distanceBucket,
     required bool isRoundTrip,
   }) {
-    final coordinates = result.coordinates;
+    final segments = _segmentsFromResult(result);
+    final coordinates = segments.expand((segment) => segment).toList();
     final minCoordinates = isRoundTrip
         ? (distanceBucket >= 100
               ? 32
@@ -185,7 +189,7 @@ class RouteCompletionCandidateService {
 
     final maxSegmentMeters =
         _numMeta(result.edgeMeta, 'max_display_segment_m') ??
-        _maxSegmentMeters(coordinates);
+        _maxSegmentMeters(segments);
     final maxAllowedSegment = distanceBucket >= 100
         ? 2200.0
         : distanceBucket >= 75
@@ -251,16 +255,50 @@ class RouteCompletionCandidateService {
     return sampled;
   }
 
-  static double _maxSegmentMeters(List<List<double>> coordinates) {
+  static List<List<List<double>>> _segmentsFromResult(RouteResult result) {
+    final geometry = result.geometry;
+    final raw = geometry['coordinates'];
+    if (geometry['type'] == 'MultiLineString' && raw is List) {
+      final segments = raw
+          .whereType<List>()
+          .map(_parseCoordinateSegment)
+          .where((segment) => segment.length >= 2)
+          .toList(growable: false);
+      if (segments.isNotEmpty) return segments;
+    }
+    if (raw is List) {
+      final segment = _parseCoordinateSegment(raw);
+      if (segment.length >= 2) return [segment];
+    }
+    return result.coordinates.length >= 2 ? [result.coordinates] : const [];
+  }
+
+  static List<List<double>> _parseCoordinateSegment(List raw) {
+    return raw
+        .whereType<List>()
+        .where((point) => point.length >= 2)
+        .map((point) {
+          final lng = point[0];
+          final lat = point[1];
+          if (lng is! num || lat is! num) return null;
+          return [lng.toDouble(), lat.toDouble()];
+        })
+        .whereType<List<double>>()
+        .toList(growable: false);
+  }
+
+  static double _maxSegmentMeters(List<List<List<double>>> segments) {
     var maxSegment = 0.0;
-    for (var i = 1; i < coordinates.length; i++) {
-      final previous = coordinates[i - 1];
-      final current = coordinates[i];
-      if (previous.length < 2 || current.length < 2) continue;
-      maxSegment = math.max(
-        maxSegment,
-        _haversineMeters(previous[1], previous[0], current[1], current[0]),
-      );
+    for (final coordinates in segments) {
+      for (var i = 1; i < coordinates.length; i++) {
+        final previous = coordinates[i - 1];
+        final current = coordinates[i];
+        if (previous.length < 2 || current.length < 2) continue;
+        maxSegment = math.max(
+          maxSegment,
+          _haversineMeters(previous[1], previous[0], current[1], current[0]),
+        );
+      }
     }
     return maxSegment;
   }

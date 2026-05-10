@@ -1891,7 +1891,7 @@ export async function searchBestRoundTripRoute({
         ? "abendrunde"
         : mode === "Entdecker"
         ? "entdecker"
-        : "sport",
+        : "sport_mode",
       requested_style: candidate.quality.requestedStyle ?? mode ?? null,
       delivered_style: candidate.quality.deliveredStyle ??
         candidate.quality.requestedStyle ?? mode ?? null,

@@ -12,8 +12,8 @@ class RouteShareExportService {
     required Color accent,
     double pixelRatio = 2,
   }) async {
-    final coordinates = _extractCoordinates(route);
-    if (coordinates.length < 2) {
+    final segments = _extractSegments(route);
+    if (segments.isEmpty) {
       throw StateError('Route hat keine exportierbare Geometrie.');
     }
 
@@ -31,7 +31,7 @@ class RouteShareExportService {
     canvas.scale(pixelRatio, pixelRatio);
 
     final routeBounds = Rect.fromLTWH(56, 52, logicalSize.width - 112, 390);
-    _drawRoute(canvas, coordinates, routeBounds, accent);
+    _drawRoute(canvas, segments, routeBounds, accent);
     _drawInfoPanel(canvas, route, accent, logicalSize);
 
     final picture = recorder.endRecording();
@@ -46,9 +46,21 @@ class RouteShareExportService {
     return byteData.buffer.asUint8List();
   }
 
-  static List<Offset> _extractCoordinates(SavedRoute route) {
+  static List<List<Offset>> _extractSegments(SavedRoute route) {
     final raw = route.geometry['coordinates'];
     if (raw is! List) return const [];
+    if (route.geometry['type'] == 'MultiLineString') {
+      return raw
+          .whereType<List>()
+          .map(_parseCoordinateSegment)
+          .where((segment) => segment.length >= 2)
+          .toList(growable: false);
+    }
+    final segment = _parseCoordinateSegment(raw);
+    return segment.length >= 2 ? [segment] : const [];
+  }
+
+  static List<Offset> _parseCoordinateSegment(List raw) {
     final points = <Offset>[];
     for (final item in raw) {
       if (item is List && item.length >= 2) {
@@ -64,10 +76,11 @@ class RouteShareExportService {
 
   static void _drawRoute(
     Canvas canvas,
-    List<Offset> coordinates,
+    List<List<Offset>> segments,
     Rect bounds,
     Color accent,
   ) {
+    final coordinates = segments.expand((segment) => segment).toList();
     var minLng = coordinates.first.dx;
     var maxLng = coordinates.first.dx;
     var minLat = coordinates.first.dy;
@@ -94,13 +107,6 @@ class RouteShareExportService {
       );
     }
 
-    final path = Path()
-      ..moveTo(project(coordinates.first).dx, project(coordinates.first).dy);
-    for (final point in coordinates.skip(1)) {
-      final projected = project(point);
-      path.lineTo(projected.dx, projected.dy);
-    }
-
     final halo = Paint()
       ..color = Colors.black.withValues(alpha: 0.34)
       ..style = PaintingStyle.stroke
@@ -121,12 +127,20 @@ class RouteShareExportService {
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round;
 
-    canvas.drawPath(path, halo);
-    canvas.drawPath(path, glow);
-    canvas.drawPath(path, line);
+    for (final segment in segments) {
+      final path = Path()
+        ..moveTo(project(segment.first).dx, project(segment.first).dy);
+      for (final point in segment.skip(1)) {
+        final projected = project(point);
+        path.lineTo(projected.dx, projected.dy);
+      }
+      canvas.drawPath(path, halo);
+      canvas.drawPath(path, glow);
+      canvas.drawPath(path, line);
+    }
 
-    final start = project(coordinates.first);
-    final finish = project(coordinates.last);
+    final start = project(segments.first.first);
+    final finish = project(segments.last.last);
     final dotStroke = Paint()..color = Colors.white;
     final dotFill = Paint()..color = accent;
     canvas.drawCircle(start, 11, dotStroke);

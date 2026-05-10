@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:cruise_connect/data/services/route_quality_validator.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -8,10 +9,12 @@ class SeenRouteEntry {
   const SeenRouteEntry({
     required this.fingerprint,
     required this.sampledCoordinates,
+    this.dominantSector,
   });
 
   final String fingerprint;
   final List<List<double>> sampledCoordinates;
+  final int? dominantSector;
 }
 
 class SeenRouteRegistry {
@@ -85,6 +88,9 @@ class SeenRouteRegistry {
     return SeenRouteEntry(
       fingerprint: fingerprint,
       sampledCoordinates: sampledCoordinates,
+      dominantSector:
+          _parseSector(value['dominantSector']) ??
+          dominantSectorForCoordinates(sampledCoordinates),
     );
   }
 
@@ -100,6 +106,8 @@ class SeenRouteRegistry {
               (entry) => <String, dynamic>{
                 'fingerprint': entry.fingerprint,
                 'sampledCoordinates': entry.sampledCoordinates,
+                if (entry.dominantSector != null)
+                  'dominantSector': entry.dominantSector,
               },
             )
             .toList(growable: false),
@@ -184,6 +192,45 @@ class SeenRouteRegistry {
     return false;
   }
 
+  static bool hasRecentDominantSectorInAny(
+    Iterable<String> scenarioKeys,
+    List<List<double>> sampledCoordinates, {
+    int recentEntryLimit = 4,
+  }) {
+    final sector = dominantSectorForCoordinates(sampledCoordinates);
+    if (sector == null) return false;
+    for (final scenarioKey in scenarioKeys) {
+      final entries = _entries[scenarioKey] ?? const <SeenRouteEntry>[];
+      final recent = entries.length <= recentEntryLimit
+          ? entries
+          : entries.sublist(entries.length - recentEntryLimit);
+      for (final entry in recent) {
+        if (entry.dominantSector == sector) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  static Set<int> recentDominantSectorsForAny(
+    Iterable<String> scenarioKeys, {
+    int recentEntryLimit = 4,
+  }) {
+    final sectors = <int>{};
+    for (final scenarioKey in scenarioKeys) {
+      final entries = _entries[scenarioKey] ?? const <SeenRouteEntry>[];
+      final recent = entries.length <= recentEntryLimit
+          ? entries
+          : entries.sublist(entries.length - recentEntryLimit);
+      for (final entry in recent) {
+        final sector = entry.dominantSector;
+        if (sector != null) sectors.add(sector);
+      }
+    }
+    return sectors;
+  }
+
   static void remember(
     String scenarioKey, {
     required String fingerprint,
@@ -195,6 +242,7 @@ class SeenRouteRegistry {
       SeenRouteEntry(
         fingerprint: fingerprint,
         sampledCoordinates: sampledCoordinates,
+        dominantSector: dominantSectorForCoordinates(sampledCoordinates),
       ),
     );
     if (list.length > _maxEntriesPerScenario) {
@@ -241,5 +289,55 @@ class SeenRouteRegistry {
     _loaded = false;
     _loadFuture = null;
     _prefs = null;
+  }
+
+  static int? dominantSectorForCoordinates(List<List<double>> coordinates) {
+    if (coordinates.length < 2 || coordinates.first.length < 2) return null;
+    final start = coordinates.first;
+    var bestDistanceScore = 0.0;
+    List<double>? farthest;
+    for (final point in coordinates) {
+      if (point.length < 2) continue;
+      final dx = point[0] - start[0];
+      final dy = point[1] - start[1];
+      final score = dx * dx + dy * dy;
+      if (score > bestDistanceScore) {
+        bestDistanceScore = score;
+        farthest = point;
+      }
+    }
+    if (farthest == null || bestDistanceScore <= 0.00000001) return null;
+    final bearing = _bearingDegrees(
+      start[1],
+      start[0],
+      farthest[1],
+      farthest[0],
+    );
+    return (bearing / 45.0).floor().clamp(0, 7).toInt();
+  }
+
+  static int? _parseSector(Object? value) {
+    final parsed = value is num
+        ? value.toInt()
+        : int.tryParse(value?.toString() ?? '');
+    if (parsed == null || parsed < 0 || parsed > 7) return null;
+    return parsed;
+  }
+
+  static double _bearingDegrees(
+    double lat1,
+    double lng1,
+    double lat2,
+    double lng2,
+  ) {
+    final phi1 = lat1 * math.pi / 180.0;
+    final phi2 = lat2 * math.pi / 180.0;
+    final deltaLambda = (lng2 - lng1) * math.pi / 180.0;
+    final y = math.sin(deltaLambda) * math.cos(phi2);
+    final x =
+        math.cos(phi1) * math.sin(phi2) -
+        math.sin(phi1) * math.cos(phi2) * math.cos(deltaLambda);
+    final degrees = math.atan2(y, x) * 180.0 / math.pi;
+    return (degrees + 360.0) % 360.0;
   }
 }

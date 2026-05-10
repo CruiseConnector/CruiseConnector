@@ -1,8 +1,11 @@
 // ignore_for_file: avoid_print
 
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:cruise_connect/data/services/route_service.dart';
+import 'package:cruise_connect/presentation/widgets/cruise/cruise_maneuver_indicator.dart';
 
 void main() {
   late RouteService service;
@@ -18,6 +21,24 @@ void main() {
     });
     test('rotary → roundabout_right', () {
       expect(service.iconForManeuver('rotary', ''), Icons.roundabout_right);
+    });
+    test('roundabout turn → roundabout_right', () {
+      expect(
+        service.iconForManeuver('roundabout turn', ''),
+        Icons.roundabout_right,
+      );
+    });
+
+    test('Rechtsverkehr-Winkel: Exit 1 rechts, Exit 2 geradeaus', () {
+      expect(roundaboutExitAngleForRightHandTraffic(1), closeTo(0.0, 0.001));
+      expect(
+        roundaboutExitAngleForRightHandTraffic(2),
+        closeTo(-math.pi / 2, 0.001),
+      );
+      expect(
+        roundaboutExitAngleForRightHandTraffic(3),
+        closeTo(-math.pi, 0.001),
+      );
     });
   });
 

@@ -122,14 +122,15 @@ class _RoundaboutPainter extends CustomPainter {
       ..strokeWidth = 2.5;
     canvas.drawCircle(center, radius, ringPaint);
 
-    // Ausfahrten im Uhrzeigersinn ab 12-Uhr-Position
-    // Exit 1 = erste Ausfahrt rechts (ca. 3 Uhr), Exit 2 = ca. 12 Uhr, etc.
-    const totalExits = 4;
+    // DACH/Rechtsverkehr: Einfahrt von unten, Ausfahrten gegen den Uhrzeigersinn.
+    // Exit 1 = rechts, Exit 2 = geradeaus, Exit 3 = links.
+    final totalExits = math.max(4, exitNumber.clamp(1, 6).toInt());
 
     for (var i = 1; i <= totalExits; i++) {
-      // Winkel: Exit 1 = rechts (0°), Exit 2 = oben (-90°), etc.
-      // Im Canvas: 0° = rechts, -90° = oben
-      final angle = -math.pi / 2 + (i - 1) * (2 * math.pi / totalExits);
+      final angle = roundaboutExitAngleForRightHandTraffic(
+        i,
+        totalExits: totalExits,
+      );
       final exitX = center.dx + arrowRadius * math.cos(angle);
       final exitY = center.dy + arrowRadius * math.sin(angle);
       final innerX = center.dx + radius * math.cos(angle);
@@ -186,4 +187,14 @@ class _RoundaboutPainter extends CustomPainter {
   @override
   bool shouldRepaint(_RoundaboutPainter oldDelegate) =>
       oldDelegate.exitNumber != exitNumber;
+}
+
+@visibleForTesting
+double roundaboutExitAngleForRightHandTraffic(
+  int exitNumber, {
+  int totalExits = 4,
+}) {
+  final safeTotal = math.max(1, totalExits);
+  final safeExit = exitNumber.clamp(1, safeTotal).toInt();
+  return -((safeExit - 1) * 2 * math.pi / safeTotal);
 }

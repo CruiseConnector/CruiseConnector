@@ -417,21 +417,21 @@ class RoutePoolService {
   static const double roundTripHardStartMaxKm = 10.0;
   static const Set<int> validDistanceBuckets = {50, 75, 100};
   static const int defaultMinVerifiedPerCell = 3;
-  static const int defaultTargetPoolSize = 8;
-  static const int defaultMaxPoolSize = 20;
-  static const int defaultCandidateBufferLimit = 30;
+  static const int defaultTargetPoolSize = 12;
+  static const int defaultMaxPoolSize = 32;
+  static const int defaultCandidateBufferLimit = 72;
   static const int defaultAcceptableReserveLimitPercent = 25;
   static const int defaultMinDistinctFingerprints = 3;
-  static const int defaultSeedDailyAttemptBudget = 200;
-  static const int defaultSeedMonthlyAttemptBudget = 2000;
-  static const int defaultSeedDailyMapboxBudget = 200;
-  static const int defaultSeedMonthlyMapboxBudget = 2000;
-  static const int defaultSeedMaxMapboxCalls = 24;
-  static const int userDemandSeedDailyAttemptBudget = 200;
-  static const int userDemandSeedMonthlyAttemptBudget = 2000;
-  static const int userDemandSeedDailyMapboxBudget = 200;
-  static const int userDemandSeedMonthlyMapboxBudget = 2000;
-  static const int userDemandSeedMaxMapboxCalls = 32;
+  static const int defaultSeedDailyAttemptBudget = 240;
+  static const int defaultSeedMonthlyAttemptBudget = 4000;
+  static const int defaultSeedDailyMapboxBudget = 300;
+  static const int defaultSeedMonthlyMapboxBudget = 4000;
+  static const int defaultSeedMaxMapboxCalls = 36;
+  static const int userDemandSeedDailyAttemptBudget = 240;
+  static const int userDemandSeedMonthlyAttemptBudget = 4000;
+  static const int userDemandSeedDailyMapboxBudget = 300;
+  static const int userDemandSeedMonthlyMapboxBudget = 4000;
+  static const int userDemandSeedMaxMapboxCalls = 48;
   static const Duration coverageRefreshTtl = Duration(minutes: 15);
   static const Duration defaultSeedJobCooldown = Duration(minutes: 20);
   static final List<RoutePoolRequiredCombination> mvpRequiredCombinations = [
@@ -1026,6 +1026,7 @@ class RoutePoolService {
         distanceKm == null ||
         (distanceKm >= distanceBucket * 0.65 &&
             distanceKm <= distanceBucket * 1.35);
+    final candidateAvoidsHighway = !hasHighway;
     final skippedReason = avoidHighways && hasHighway
         ? 'motorway_violation'
         : qualityTier == 'rejected'
@@ -1060,7 +1061,7 @@ class RoutePoolService {
       distanceBucket: distanceBucket,
       styleKey: styleKey,
       styleTags: [style],
-      avoidHighways: avoidHighways,
+      avoidHighways: candidateAvoidsHighway,
       hasHighway: hasHighway,
       qualityScore: qualityScore.clamp(0, 100).toDouble(),
       shapeScore: shapeScore.clamp(0, 100).toDouble(),
@@ -1295,9 +1296,7 @@ class RoutePoolService {
             .eq('admin1_name', nearestRegion.admin1Name);
       }
       if (avoidHighways) {
-        candidateQuery = candidateQuery
-            .eq('avoid_highways', true)
-            .eq('has_highway', false);
+        candidateQuery = candidateQuery.eq('has_highway', false);
       }
 
       final rows = await candidateQuery
@@ -1452,9 +1451,7 @@ class RoutePoolService {
               .eq('admin1_name', nearestRegion.admin1Name);
         }
         if (avoidHighways) {
-          routeQuery = routeQuery
-              .eq('avoids_highway', true)
-              .eq('has_highway', false);
+          routeQuery = routeQuery.eq('has_highway', false);
         }
 
         final routeRows = await routeQuery
@@ -2099,9 +2096,9 @@ class RoutePoolService {
   }
 
   static Set<String> _candidateReserveStyleKeys(String style) {
-    final normalized = _normalizeStyleKey(style);
+    final normalized = _styleKeyAliases(style);
     final profile = RouteStyleConfig.forMode(style).profileKey;
-    return <String>{normalized, profile};
+    return <String>{...normalized, ..._styleKeyAliases(profile)};
   }
 
   static bool _reserveFallbackAllowed(RouteRegion region) {
@@ -2124,7 +2121,7 @@ class RoutePoolService {
     required String routeType,
   }) {
     if (coverageRows == null) return null;
-    final styleKey = _normalizeStyleKey(style);
+    final styleKeys = _styleKeyAliases(style);
     for (final coverage in coverageRows) {
       if (_sameText(coverage.countryCode, region.countryCode) &&
           _sameText(coverage.admin1Name, region.admin1Name) &&
@@ -2132,7 +2129,7 @@ class RoutePoolService {
           _sameText(coverage.cityCluster, region.cityCluster) &&
           _sameText(coverage.routeType, routeType) &&
           coverage.distanceBucket == distanceBucket &&
-          _sameText(coverage.styleKey, styleKey) &&
+          _styleKeyMatches(coverage.styleKey, styleKeys) &&
           coverage.avoidHighways == avoidHighways) {
         return coverage;
       }
@@ -2156,6 +2153,13 @@ class RoutePoolService {
     }
     if (coverage.currentVerifiedCount <= 0 &&
         coverage.currentCandidateCount > 0) {
+      return true;
+    }
+    if (coverage.currentCandidateCount > 0 &&
+        (coverage.currentVerifiedCount < coverage.minVerifiedCount ||
+            coverage.distinctFingerprintCount < coverage.minVerifiedCount ||
+            coverage.currentVerifiedCount <
+                math.min(3, coverage.targetPoolSize))) {
       return true;
     }
     return hardStatus == 'curated_needed' ||
@@ -2514,7 +2518,7 @@ class RoutePoolService {
         .eq('city_cluster', assignment.region.cityCluster)
         .eq('route_type', routeType)
         .eq('distance_bucket', distanceBucket)
-        .eq('style_key', styleKey)
+        .inFilter('style_key', _styleKeyAliases(styleKey).toList())
         .eq('avoid_highways', avoidHighways);
     for (final row in rows as List) {
       final coverage = RoutePoolCoverage.fromJson(row as Map<String, dynamic>);
@@ -2597,6 +2601,7 @@ class RoutePoolService {
     required String routeType,
   }) async {
     final summary = _CoverageQualitySummary();
+    final styleKeys = _styleKeyAliases(styleKey);
     final inMemoryRoutes = _inMemoryRoutes;
     if (inMemoryRoutes != null) {
       for (final route in inMemoryRoutes) {
@@ -2618,8 +2623,9 @@ class RoutePoolService {
         }
         if (!_sameText(route.routeType, routeType)) continue;
         if (route.distanceBucket != distanceBucket) continue;
-        if (_normalizeStyleKeyList(route.styleTags).contains(styleKey) ==
-            false) {
+        if (!_normalizeStyleKeyList(
+          route.styleTags,
+        ).any((tag) => _styleKeyMatches(tag, styleKeys))) {
           continue;
         }
         if (!_highwayMatches(route, avoidHighways)) {
@@ -2655,10 +2661,9 @@ class RoutePoolService {
         continue;
       }
       final tags = _normalizeStyleKeyList(_styleTagsFromRaw(map['style_tags']));
-      if (!tags.contains(styleKey)) continue;
-      final avoidsHighway = (map['avoids_highway'] as bool?) ?? false;
+      if (!tags.any((tag) => _styleKeyMatches(tag, styleKeys))) continue;
       final hasHighway = (map['has_highway'] as bool?) ?? false;
-      if (avoidHighways && (!avoidsHighway || hasHighway)) {
+      if (avoidHighways && hasHighway) {
         continue;
       }
       summary.add(
@@ -2676,6 +2681,7 @@ class RoutePoolService {
     required bool avoidHighways,
     required String routeType,
   }) async {
+    final styleKeys = _styleKeyAliases(styleKey);
     final inMemoryCandidates = _inMemoryCandidates;
     if (inMemoryCandidates != null) {
       return inMemoryCandidates.where((candidate) {
@@ -2689,7 +2695,7 @@ class RoutePoolService {
             _sameText(candidate.cityCluster, assignment.region.cityCluster) &&
             _sameText(candidate.routeType, routeType) &&
             candidate.distanceBucket == distanceBucket &&
-            _sameText(candidate.styleKey, styleKey) &&
+            _styleKeyMatches(candidate.styleKey, styleKeys) &&
             _candidateHighwayCompatible(candidate, avoidHighways);
       }).length;
     }
@@ -2702,7 +2708,7 @@ class RoutePoolService {
         .eq('city_cluster', assignment.region.cityCluster)
         .eq('route_type', routeType)
         .eq('distance_bucket', distanceBucket)
-        .eq('style_key', styleKey)
+        .inFilter('style_key', styleKeys.toList())
         .eq('is_candidate', true);
     var count = 0;
     for (final row in rows as List) {
@@ -2711,11 +2717,8 @@ class RoutePoolService {
         map['admin2_name'] as String?,
         assignment.region.admin2Name,
       )) {
-        final candidateAvoidsHighways =
-            (map['avoid_highways'] as bool?) ?? false;
         final candidateHasHighway = (map['has_highway'] as bool?) ?? false;
-        if (avoidHighways &&
-            (!candidateAvoidsHighways || candidateHasHighway)) {
+        if (avoidHighways && candidateHasHighway) {
           continue;
         }
         count += 1;
@@ -2922,6 +2925,7 @@ class RoutePoolService {
       return null;
     }
 
+    final styleAliases = _styleKeyAliases(styleKey).toList(growable: false);
     final rows = await _db
         .from('route_seed_jobs')
         .select()
@@ -2930,15 +2934,19 @@ class RoutePoolService {
         .eq('city_cluster', assignment.region.cityCluster)
         .eq('route_type', routeType)
         .eq('distance_bucket', distanceBucket)
-        .eq('style_key', styleKey)
+        .inFilter('style_key', styleAliases)
         .eq('avoid_highways', avoidHighways);
+    RouteSeedJob? fallback;
     for (final row in rows as List) {
       final job = RouteSeedJob.fromJson(row as Map<String, dynamic>);
       if (_nullableSameText(job.admin2Name, assignment.region.admin2Name)) {
-        return job;
+        if (_sameText(job.styleKey, styleKey)) {
+          return job;
+        }
+        fallback ??= job;
       }
     }
-    return null;
+    return fallback;
   }
 
   Future<RouteSeedJob> _saveSeedJob(RouteSeedJob job) async {
@@ -2951,7 +2959,7 @@ class RoutePoolService {
             _sameText(item.cityCluster, job.cityCluster) &&
             _sameText(item.routeType, job.routeType) &&
             item.distanceBucket == job.distanceBucket &&
-            _sameText(item.styleKey, job.styleKey) &&
+            _styleKeyMatches(item.styleKey, _styleKeyAliases(job.styleKey)) &&
             item.avoidHighways == job.avoidHighways;
       });
       if (index >= 0) {
@@ -3237,7 +3245,7 @@ class RoutePoolService {
         _sameText(coverage.cityCluster, assignment.region.cityCluster) &&
         _sameText(coverage.routeType, routeType) &&
         coverage.distanceBucket == distanceBucket &&
-        _sameText(coverage.styleKey, styleKey) &&
+        _styleKeyMatches(coverage.styleKey, _styleKeyAliases(styleKey)) &&
         coverage.avoidHighways == avoidHighways;
   }
 
@@ -3255,7 +3263,7 @@ class RoutePoolService {
         _sameText(job.cityCluster, assignment.region.cityCluster) &&
         _sameText(job.routeType, routeType) &&
         job.distanceBucket == distanceBucket &&
-        _sameText(job.styleKey, styleKey) &&
+        _styleKeyMatches(job.styleKey, _styleKeyAliases(styleKey)) &&
         job.avoidHighways == avoidHighways;
   }
 
@@ -3287,11 +3295,37 @@ class RoutePoolService {
         requiredVerifiedCount ?? defaultMinVerifiedPerCell,
       ),
     );
-    final targetPoolSize = math.max(minVerifiedCount, defaultTargetPoolSize);
-    final maxPoolSize = math.max(targetPoolSize, defaultMaxPoolSize);
+    final hardCuratedRegion =
+        region.difficultyLevel.trim().toLowerCase() == 'hard' &&
+        region.curatedSeedPreferred;
+    final targetFloor = hardCuratedRegion
+        ? region.defaultTargetPoolSize
+        : defaultTargetPoolSize;
+    final maxFloor = hardCuratedRegion
+        ? region.defaultMaxPoolSize
+        : defaultMaxPoolSize;
+    final configuredTargetPoolSize = math.max(
+      coverage?.targetPoolSize ?? 0,
+      region.defaultTargetPoolSize,
+    );
+    final targetPoolSize = math.max(
+      minVerifiedCount,
+      math.max(targetFloor, configuredTargetPoolSize),
+    );
+    final configuredMaxPoolSize = math.max(
+      coverage?.maxPoolSize ?? 0,
+      region.defaultMaxPoolSize,
+    );
+    final maxPoolSize = math.max(
+      targetPoolSize,
+      math.max(maxFloor, configuredMaxPoolSize),
+    );
     final candidateBufferLimit = math.max(
       0,
-      coverage?.candidateBufferLimit ?? defaultCandidateBufferLimit,
+      math.max(
+        coverage?.candidateBufferLimit ?? 0,
+        math.max(defaultCandidateBufferLimit, targetPoolSize * 4),
+      ),
     );
     final acceptableReserveLimitPercent = math.max(
       0,
@@ -3413,7 +3447,7 @@ class RoutePoolService {
     required RouteSeedJob? existingSeedJob,
     bool allowUserDemandLearningJob = false,
   }) {
-    if (_coverageMeetsMinimum(policy: policy, coverage: coverage)) {
+    if (_coverageMeetsTarget(policy: policy, coverage: coverage)) {
       return false;
     }
     if (coverage.currentVerifiedCount >= policy.maxPoolSize) return false;
@@ -3610,6 +3644,14 @@ class RoutePoolService {
         coverage.acceptableCount <= acceptableLimit;
   }
 
+  static bool _coverageMeetsTarget({
+    required _CoveragePolicy policy,
+    required RoutePoolCoverage coverage,
+  }) {
+    return _coverageMeetsMinimum(policy: policy, coverage: coverage) &&
+        coverage.currentVerifiedCount >= policy.targetPoolSize;
+  }
+
   static int _missingMinimumCoverageCount({
     required _CoveragePolicy policy,
     required RoutePoolCoverage coverage,
@@ -3696,6 +3738,19 @@ class RoutePoolService {
         .replaceAll(RegExp(r'_+'), '_')
         .replaceAll(RegExp(r'^_|_$'), '');
     return cleaned.isEmpty ? 'standard' : cleaned;
+  }
+
+  static Set<String> _styleKeyAliases(String style) {
+    final normalized = _normalizeStyleKey(style);
+    if (normalized == 'sport' || normalized == 'sport_mode') {
+      return const {'sport_mode', 'sport'};
+    }
+    return {normalized};
+  }
+
+  static bool _styleKeyMatches(String style, Set<String> aliases) {
+    final normalized = _normalizeStyleKey(style);
+    return aliases.any((alias) => _sameText(normalized, alias));
   }
 
   static String _cellKeyPart(String? value) {
@@ -3789,7 +3844,10 @@ class RoutePoolService {
   }
 
   static bool _styleMatches(RoutePoolEntry candidate, String style) {
-    return candidate.styleTags.any((tag) => _sameText(tag, style));
+    final aliases = _styleKeyAliases(style);
+    return candidate.styleTags.any((tag) {
+      return _sameText(tag, style) || _styleKeyMatches(tag, aliases);
+    });
   }
 
   static bool _relaxedStyleCompatible(RoutePoolEntry candidate, String style) {
@@ -3842,7 +3900,7 @@ class RoutePoolService {
   }
 
   static bool _highwayMatches(RoutePoolEntry candidate, bool avoidHighways) {
-    if (avoidHighways) return candidate.avoidsHighway && !candidate.hasHighway;
+    if (avoidHighways) return !candidate.hasHighway;
     return true;
   }
 
@@ -3851,7 +3909,7 @@ class RoutePoolService {
     bool avoidHighways,
   ) {
     if (!avoidHighways) return true;
-    return candidate.avoidHighways && !candidate.hasHighway;
+    return !candidate.hasHighway;
   }
 
   static bool _locationScopeMatches(

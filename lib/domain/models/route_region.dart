@@ -16,7 +16,7 @@ class RouteRegion {
     this.curatedSeedPreferred = false,
     this.defaultMinVerifiedCount = 3,
     this.defaultTargetPoolSize = 15,
-    this.defaultMaxPoolSize = 20,
+    this.defaultMaxPoolSize = 32,
     this.healthyThreshold = 15,
     this.thinThreshold = 1,
     this.seedBudgetUnits = 1,
@@ -69,7 +69,7 @@ class RouteRegion {
       defaultTargetPoolSize:
           (json['default_target_pool_size'] as num?)?.toInt() ?? 15,
       defaultMaxPoolSize:
-          (json['default_max_pool_size'] as num?)?.toInt() ?? 20,
+          (json['default_max_pool_size'] as num?)?.toInt() ?? 32,
       healthyThreshold: (json['healthy_threshold'] as num?)?.toInt() ?? 15,
       thinThreshold: (json['thin_threshold'] as num?)?.toInt() ?? 1,
       seedBudgetUnits: (json['seed_budget_units'] as num?)?.toInt() ?? 1,

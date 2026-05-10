@@ -1,4 +1,9 @@
-import { evaluateRouteQuality, scoreRouteStyleFit } from "./route_quality.ts";
+import {
+  analyzeRouteOverlap,
+  cleanupLoopAndCollapse,
+  evaluateRouteQuality,
+  scoreRouteStyleFit,
+} from "./route_quality.ts";
 import { calculateDistance } from "./routing_utils.ts";
 import type { Coordinate, RouteMode } from "./routing_types.ts";
 
@@ -68,6 +73,12 @@ function evaluateRoundTrip(route: any, mode: RouteMode) {
   });
 }
 
+function coordinatesFromRoute(route: any): Coordinate[] {
+  return route.geometry.coordinates.map((
+    point: [number, number],
+  ) => ({ longitude: point[0], latitude: point[1] }));
+}
+
 Deno.test("geometry-only local hairpins in a clean loop are not rejected as invalid u-turns", () => {
   const route = buildRoute([
     [0, 0],
@@ -125,7 +136,12 @@ Deno.test("true out-and-back arm remains rejected", () => {
   ], { stepKm: 0.05 });
 
   const quality = evaluateRoundTrip(route, "Kurvenjagd");
+  const overlap = analyzeRouteOverlap(route);
 
+  assert(
+    overlap.type === "true_out_and_back",
+    `expected true_out_and_back overlap, got ${overlap.type}`,
+  );
   assert(!quality.passed, "true out-and-back route must be rejected");
   assert(
     quality.tier === "rejected",
@@ -136,6 +152,105 @@ Deno.test("true out-and-back arm remains rejected", () => {
       quality.reason.startsWith("shape=") ||
       quality.reason.startsWith("overlap="),
     `unexpected out-and-back reject reason: ${quality.reason}`,
+  );
+});
+
+Deno.test("legitimate bridge or tunnel overlap is kept", () => {
+  const route = buildRoute([
+    [0, 0],
+    [3, 0],
+    [3, 1],
+    [0, 1],
+    [0, 0.025],
+    [3, 0.025],
+    [4, 1.2],
+    [0, 2],
+    [0, 0],
+  ], { stepKm: 0.03 });
+
+  const overlap = analyzeRouteOverlap(route);
+  const cleanup = cleanupLoopAndCollapse(coordinatesFromRoute(route));
+
+  assert(
+    overlap.sameDirectionPercent > 0,
+    "fixture must include same-direction near-road overlap",
+  );
+  assert(
+    overlap.rawOverlapPercent > overlap.penalizedOverlapPercent,
+    "legitimate overlap should not be charged as backtracking",
+  );
+  assert(
+    overlap.penalizedOverlapPercent < 8,
+    `expected low overlap penalty, got ${overlap.penalizedOverlapPercent}`,
+  );
+  assert(
+    overlap.type === "grade_separated_or_parallel",
+    `unexpected overlap type: ${overlap.type}`,
+  );
+  assert(
+    cleanup.removedLoops === 0,
+    "cleanup must not remove grade-separated/parallel overlap",
+  );
+});
+
+Deno.test("short required duplicate connector is kept", () => {
+  const route = buildRoute([
+    [0, 0],
+    [3, 0],
+    [3, 1],
+    [1.2, 1],
+    [1.2, 0.025],
+    [1.55, 0.025],
+    [2.4, 1.4],
+    [0, 1.8],
+    [0, 0],
+  ], { stepKm: 0.025 });
+
+  const overlap = analyzeRouteOverlap(route);
+  const cleanup = cleanupLoopAndCollapse(coordinatesFromRoute(route));
+
+  assert(
+    overlap.type === "short_connector",
+    `unexpected overlap type: ${overlap.type}`,
+  );
+  assert(
+    overlap.penalizedOverlapPercent < 5,
+    `short connector should have low penalty, got ${overlap.penalizedOverlapPercent}`,
+  );
+  assert(
+    cleanup.removedLoops === 0,
+    "cleanup must not delete a short required connector",
+  );
+});
+
+Deno.test("dead-end spike is still removed or rejected", () => {
+  const route = buildRoute([
+    [0, 0],
+    [1, 0],
+    [1, 0.24],
+    [1, 0],
+    [2, 0],
+    [2, 1],
+    [0, 1],
+    [0, 0],
+  ], { stepKm: 0.02 });
+
+  const overlap = analyzeRouteOverlap(route);
+  const cleanup = cleanupLoopAndCollapse(coordinatesFromRoute(route));
+  const quality = evaluateRoundTrip(route, "Kurvenjagd");
+
+  assert(
+    overlap.type === "dead_end_spike",
+    `expected dead_end_spike overlap, got ${overlap.type}`,
+  );
+  assert(cleanup.removedLoops > 0, "cleanup should remove the dead-end spike");
+  assert(!quality.passed, "dead-end spike route must be rejected");
+  assert(
+    quality.reason.includes("dead_end") ||
+      quality.reason.includes("u_turn") ||
+      quality.reason.startsWith("cleanup_") ||
+      quality.reason.startsWith("shape="),
+    `unexpected dead-end reject reason: ${quality.reason}`,
   );
 });
 

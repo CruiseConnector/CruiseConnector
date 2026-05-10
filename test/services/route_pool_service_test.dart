@@ -685,6 +685,50 @@ void main() {
     );
 
     test(
+      'ROUND_TRIP: legacy sport Style-Tag matcht Sport Mode exakt',
+      () async {
+        final service = RoutePoolService(
+          inMemoryRegions: [
+            _region(
+              countryCode: 'AT',
+              admin1Name: 'Vorarlberg',
+              admin2Name: 'Feldkirch',
+              cityCluster: 'Feldkirch',
+              centerLat: 47.2386,
+              centerLng: 9.5986,
+            ),
+          ],
+          inMemoryRoutes: [
+            _route(
+              id: 'feldkirch-50-legacy-sport',
+              countryCode: 'AT',
+              admin1Name: 'Vorarlberg',
+              admin2Name: 'Feldkirch',
+              cityCluster: 'Feldkirch',
+              startLat: 47.2386,
+              startLng: 9.5986,
+              distanceBucket: 50,
+              styleTags: const ['sport'],
+            ),
+          ],
+        );
+
+        final matches = await service.findCandidateRoutesNear(
+          userLat: 47.2386,
+          userLng: 9.5986,
+          distanceBucket: 50,
+          style: 'Sport Mode',
+          avoidHighways: true,
+          routeType: 'ROUND_TRIP',
+        );
+
+        expect(matches.map((match) => match.route.id), [
+          'feldkirch-50-legacy-sport',
+        ]);
+      },
+    );
+
+    test(
       'Coverage-Zellen trennen Style und Distanz, Autobahn AN akzeptiert No-Highway-Routen',
       () async {
         final routes = <RoutePoolEntry>[
@@ -752,14 +796,78 @@ void main() {
               !combo.requirement.avoidHighways,
         );
 
-        expect(sport50.coverageStatus, 'target_met');
+        expect(sport50.coverageStatus, 'healthy');
         expect(sport50.distinctFingerprintCount, 12);
         expect(curvy50.currentVerifiedCount, 0);
         expect(curvy50.coverageStatus, 'empty');
         expect(sport75.currentVerifiedCount, 0);
         expect(sport75.coverageStatus, 'empty');
         expect(sport50HighwayAllowed.currentVerifiedCount, 12);
-        expect(sport50HighwayAllowed.coverageStatus, 'target_met');
+        expect(sport50HighwayAllowed.coverageStatus, 'healthy');
+      },
+    );
+
+    test(
+      'Coverage Autobahn AUS zaehlt echte no-highway Routen aus Allow-Zellen',
+      () async {
+        final service = RoutePoolService(
+          inMemoryRegions: [
+            _region(
+              countryCode: 'AT',
+              admin1Name: 'Vorarlberg',
+              admin2Name: 'Bregenz',
+              cityCluster: 'Bregenz',
+              centerLat: 47.5031,
+              centerLng: 9.7471,
+            ),
+          ],
+          inMemoryRoutes: [
+            for (var i = 0; i < 3; i += 1)
+              _route(
+                id: 'bregenz-allow-no-highway-coverage-$i',
+                countryCode: 'AT',
+                admin1Name: 'Vorarlberg',
+                admin2Name: 'Bregenz',
+                cityCluster: 'Bregenz',
+                startLat: 47.5031 + (i * 0.0001),
+                startLng: 9.7471 + (i * 0.0001),
+                styleTags: const ['Sport Mode'],
+                avoidsHighway: false,
+                hasHighway: false,
+                qualityScore: 88,
+              ),
+            _route(
+              id: 'bregenz-actual-highway-coverage',
+              countryCode: 'AT',
+              admin1Name: 'Vorarlberg',
+              admin2Name: 'Bregenz',
+              cityCluster: 'Bregenz',
+              startLat: 47.5041,
+              startLng: 9.7481,
+              styleTags: const ['Sport Mode'],
+              avoidsHighway: false,
+              hasHighway: true,
+              qualityScore: 99,
+            ),
+          ],
+          inMemoryCoverage: <RoutePoolCoverage>[],
+          inMemorySeedJobs: <RouteSeedJob>[],
+          inMemoryCandidates: <RoutePoolCandidate>[],
+        );
+
+        final check = await service.ensureCoverageForRequest(
+          userLat: 47.5031,
+          userLng: 9.7471,
+          distanceBucket: 50,
+          style: 'Sport Mode',
+          avoidHighways: true,
+          routeType: 'ROUND_TRIP',
+          subscriptionTier: 'free',
+        );
+
+        expect(check.currentVerifiedCount, 3);
+        expect(check.coverageStatus, 'healthy');
+        expect(check.poolHealthy, isTrue);
       },
     );
 
@@ -926,6 +1034,60 @@ void main() {
 
       expect(matches.map((match) => match.route.id), ['bregenz-no-highway']);
     });
+
+    test(
+      'avoidHighways true akzeptiert echte no-highway Routen aus Allow-Zellen',
+      () async {
+        final service = RoutePoolService(
+          inMemoryRegions: [
+            _region(
+              countryCode: 'AT',
+              admin1Name: 'Vorarlberg',
+              cityCluster: 'Bregenz',
+              centerLat: 47.5031,
+              centerLng: 9.7471,
+            ),
+          ],
+          inMemoryRoutes: [
+            _route(
+              id: 'bregenz-allow-no-highway',
+              countryCode: 'AT',
+              admin1Name: 'Vorarlberg',
+              cityCluster: 'Bregenz',
+              startLat: 47.5031,
+              startLng: 9.7471,
+              avoidsHighway: false,
+              hasHighway: false,
+              qualityScore: 88,
+            ),
+            _route(
+              id: 'bregenz-actual-highway',
+              countryCode: 'AT',
+              admin1Name: 'Vorarlberg',
+              cityCluster: 'Bregenz',
+              startLat: 47.5032,
+              startLng: 9.7472,
+              avoidsHighway: false,
+              hasHighway: true,
+              qualityScore: 99,
+            ),
+          ],
+        );
+
+        final matches = await service.findCandidateRoutesNear(
+          userLat: 47.5031,
+          userLng: 9.7471,
+          distanceBucket: 50,
+          style: 'Sport Mode',
+          avoidHighways: true,
+          routeType: 'ROUND_TRIP',
+        );
+
+        expect(matches.map((match) => match.route.id), [
+          'bregenz-allow-no-highway',
+        ]);
+      },
+    );
 
     test('Acceptable-Reserve macht eine Zelle quality_thin', () async {
       final jobs = <RouteSeedJob>[];
@@ -1692,6 +1854,134 @@ void main() {
     );
 
     test(
+      'Legacy sport Seed-Job verhindert doppelten sport_mode Seed-Job',
+      () async {
+        final jobs = <RouteSeedJob>[
+          const RouteSeedJob(
+            countryCode: 'AT',
+            admin1Name: 'Vorarlberg',
+            admin2Name: 'Feldkirch',
+            cityCluster: 'Feldkirch',
+            routeType: 'ROUND_TRIP',
+            distanceBucket: 50,
+            styleKey: 'sport',
+            avoidHighways: true,
+            status: 'queued',
+          ),
+        ];
+        final service = RoutePoolService(
+          inMemoryRegions: [
+            _region(
+              countryCode: 'AT',
+              admin1Name: 'Vorarlberg',
+              admin2Name: 'Feldkirch',
+              cityCluster: 'Feldkirch',
+              centerLat: 47.2386,
+              centerLng: 9.5986,
+            ),
+          ],
+          inMemoryCoverage: <RoutePoolCoverage>[],
+          inMemorySeedJobs: jobs,
+          inMemoryCandidates: <RoutePoolCandidate>[],
+          inMemoryRoutes: const [],
+        );
+
+        final result = await service.ensureCoverageForRequest(
+          userLat: 47.2386,
+          userLng: 9.5986,
+          distanceBucket: 50,
+          style: 'Sport Mode',
+          avoidHighways: true,
+          routeType: 'ROUND_TRIP',
+          subscriptionTier: 'free',
+          createSeedJob: true,
+          preferredCountryCode: 'AT',
+          preferredAdmin1Name: 'Vorarlberg',
+          preferredAdmin2Name: 'Feldkirch',
+          preferredCityCluster: 'Feldkirch',
+        );
+
+        expect(result.seedJobCreated, isFalse);
+        expect(result.duplicateJobPrevented, isTrue);
+        expect(result.seedJobStatus, 'queued');
+        expect(jobs, hasLength(1));
+        expect(jobs.single.styleKey, 'sport');
+      },
+    );
+
+    test(
+      'Healthy-Minimum unter Target erzeugt weiteren Seed-Job statt Pool frueh voll zu melden',
+      () async {
+        final now = DateTime.now().toUtc();
+        final coverages = <RoutePoolCoverage>[
+          RoutePoolCoverage(
+            countryCode: 'AT',
+            admin1Name: 'Vorarlberg',
+            admin2Name: 'Feldkirch',
+            cityCluster: 'Feldkirch',
+            routeType: 'ROUND_TRIP',
+            distanceBucket: 50,
+            styleKey: 'sport_mode',
+            avoidHighways: true,
+            coverageStatus: 'healthy',
+            targetPoolSize: 12,
+            maxPoolSize: 32,
+            candidateBufferLimit: 72,
+            currentVerifiedCount: 3,
+            idealCount: 3,
+            distinctFingerprintCount: 3,
+            lastCountedAt: now,
+          ),
+        ];
+        final jobs = <RouteSeedJob>[];
+        final service = RoutePoolService(
+          inMemoryRegions: [
+            _region(
+              countryCode: 'AT',
+              admin1Name: 'Vorarlberg',
+              admin2Name: 'Feldkirch',
+              cityCluster: 'Feldkirch',
+              centerLat: 47.2386,
+              centerLng: 9.5986,
+              defaultTargetPoolSize: 12,
+              defaultMaxPoolSize: 32,
+              healthyThreshold: 12,
+            ),
+          ],
+          inMemoryCoverage: coverages,
+          inMemorySeedJobs: jobs,
+          inMemoryCandidates: <RoutePoolCandidate>[],
+          inMemoryRoutes: const [],
+        );
+
+        final result = await service.ensureCoverageForRequest(
+          userLat: 47.2386,
+          userLng: 9.5986,
+          distanceBucket: 50,
+          style: 'Sport Mode',
+          avoidHighways: true,
+          routeType: 'ROUND_TRIP',
+          subscriptionTier: 'free',
+          createSeedJob: true,
+          preferredCountryCode: 'AT',
+          preferredAdmin1Name: 'Vorarlberg',
+          preferredAdmin2Name: 'Feldkirch',
+          preferredCityCluster: 'Feldkirch',
+        );
+
+        expect(result.coverageStatus, 'healthy');
+        expect(result.poolHealthy, isTrue);
+        expect(result.poolFull, isFalse);
+        expect(result.seedJobCreated, isTrue);
+        expect(result.targetPoolSize, 12);
+        expect(result.maxPoolSize, 32);
+        expect(result.candidateBufferLimit, 72);
+        expect(jobs, hasLength(1));
+        expect(jobs.single.status, 'queued');
+      },
+    );
+
+    test(
       'Max-Pool-Groesse leitet neue gute Route in Candidate-Staging statt Verified-Overflow',
       () async {
         final coverages = <RoutePoolCoverage>[
@@ -1706,8 +1996,8 @@ void main() {
             avoidHighways: true,
             coverageStatus: 'healthy',
             targetPoolSize: 15,
-            maxPoolSize: 20,
-            currentVerifiedCount: 20,
+            maxPoolSize: 32,
+            currentVerifiedCount: 32,
             currentCandidateCount: 0,
           ),
         ];
@@ -1724,7 +2014,7 @@ void main() {
             ),
           ],
           inMemoryRoutes: List.generate(
-            20,
+            32,
             (index) => _route(
               id: 'munich-verified-$index',
               countryCode: 'DE',
@@ -2239,6 +2529,278 @@ void main() {
       },
     );
 
+    test(
+      'Candidate-Reserve Autobahn AUS nutzt nur echte no-highway Kandidaten',
+      () async {
+        final service = RoutePoolService(
+          inMemoryRegions: [
+            _region(
+              countryCode: 'AT',
+              admin1Name: 'Vorarlberg',
+              admin2Name: 'Bregenz',
+              cityCluster: 'Bregenz',
+              centerLat: 47.5031,
+              centerLng: 9.7471,
+            ),
+          ],
+          inMemoryRoutes: const [],
+          inMemoryCoverage: const [
+            RoutePoolCoverage(
+              countryCode: 'AT',
+              admin1Name: 'Vorarlberg',
+              admin2Name: 'Bregenz',
+              cityCluster: 'Bregenz',
+              routeType: 'ROUND_TRIP',
+              distanceBucket: 50,
+              styleKey: 'sport_mode',
+              avoidHighways: true,
+              coverageStatus: 'thin',
+              currentVerifiedCount: 0,
+              currentCandidateCount: 2,
+            ),
+          ],
+          inMemorySeedJobs: <RouteSeedJob>[],
+          inMemoryCandidates: [
+            _candidate(
+              id: 'bregenz-allow-no-highway-reserve',
+              admin2Name: 'Bregenz',
+              cityCluster: 'Bregenz',
+              startLat: 47.5031,
+              startLng: 9.7471,
+              distanceKm: 52,
+              coordinateCount: 120,
+              avoidHighways: false,
+              hasHighway: false,
+            ),
+            _candidate(
+              id: 'bregenz-actual-highway-reserve',
+              admin2Name: 'Bregenz',
+              cityCluster: 'Bregenz',
+              startLat: 47.5032,
+              startLng: 9.7472,
+              distanceKm: 52,
+              coordinateCount: 120,
+              avoidHighways: false,
+              hasHighway: true,
+            ),
+          ],
+        );
+
+        final matches = await service.findCandidateReserveRoutesNear(
+          userLat: 47.5031,
+          userLng: 9.7471,
+          distanceBucket: 50,
+          style: 'Sport Mode',
+          avoidHighways: true,
+        );
+
+        expect(matches.map((match) => match.route.id), [
+          'bregenz-allow-no-highway-reserve',
+        ]);
+      },
+    );
+
+    test(
+      'Candidate-Reserve stuetzt healthy Zellen mit zu wenig verifizierten Routen',
+      () async {
+        final service = RoutePoolService(
+          inMemoryRegions: [
+            _region(
+              countryCode: 'AT',
+              admin1Name: 'Vorarlberg',
+              admin2Name: 'Feldkirch',
+              cityCluster: 'Feldkirch',
+              centerLat: 47.2386,
+              centerLng: 9.5986,
+              defaultTargetPoolSize: 12,
+              defaultMaxPoolSize: 32,
+            ),
+          ],
+          inMemoryRoutes: const [],
+          inMemoryCoverage: const [
+            RoutePoolCoverage(
+              countryCode: 'AT',
+              admin1Name: 'Vorarlberg',
+              admin2Name: 'Feldkirch',
+              cityCluster: 'Feldkirch',
+              routeType: 'ROUND_TRIP',
+              distanceBucket: 50,
+              styleKey: 'sport_mode',
+              avoidHighways: true,
+              coverageStatus: 'healthy',
+              minVerifiedCount: 3,
+              targetPoolSize: 12,
+              currentVerifiedCount: 1,
+              currentCandidateCount: 4,
+              distinctFingerprintCount: 1,
+            ),
+          ],
+          inMemorySeedJobs: <RouteSeedJob>[],
+          inMemoryCandidates: [
+            _candidate(
+              id: 'feldkirch-healthy-thin-reserve',
+              admin2Name: 'Feldkirch',
+              cityCluster: 'Feldkirch',
+              startLat: 47.2386,
+              startLng: 9.5986,
+              styleKey: 'sport',
+              distanceKm: 52,
+              coordinateCount: 140,
+            ),
+          ],
+        );
+
+        final matches = await service.findCandidateReserveRoutesNear(
+          userLat: 47.2386,
+          userLng: 9.5986,
+          distanceBucket: 50,
+          style: 'Sport Mode',
+          avoidHighways: true,
+        );
+
+        expect(matches, hasLength(1));
+        expect(matches.single.route.id, 'feldkirch-healthy-thin-reserve');
+        expect(matches.single.route.source, 'candidate_reserve');
+      },
+    );
+
+    test(
+      'Coverage zaehlt legacy sport Candidates fuer Sport-Mode-Zellen',
+      () async {
+        final service = RoutePoolService(
+          inMemoryRegions: [
+            _region(
+              countryCode: 'AT',
+              admin1Name: 'Vorarlberg',
+              admin2Name: 'Feldkirch',
+              cityCluster: 'Feldkirch',
+              centerLat: 47.2386,
+              centerLng: 9.5986,
+            ),
+          ],
+          inMemoryRoutes: const [],
+          inMemoryCoverage: <RoutePoolCoverage>[],
+          inMemorySeedJobs: <RouteSeedJob>[],
+          inMemoryCandidates: [
+            _candidate(
+              id: 'feldkirch-legacy-sport-reserve',
+              admin2Name: 'Feldkirch',
+              cityCluster: 'Feldkirch',
+              startLat: 47.2386,
+              startLng: 9.5986,
+              styleKey: 'sport',
+              distanceKm: 52,
+              coordinateCount: 120,
+            ),
+            _candidate(
+              id: 'feldkirch-canonical-sport-reserve',
+              admin2Name: 'Feldkirch',
+              cityCluster: 'Feldkirch',
+              startLat: 47.2387,
+              startLng: 9.5987,
+              styleKey: 'sport_mode',
+              distanceKm: 54,
+              coordinateCount: 120,
+            ),
+          ],
+        );
+
+        final check = await service.ensureCoverageForRequest(
+          userLat: 47.2386,
+          userLng: 9.5986,
+          distanceBucket: 50,
+          style: 'Sport Mode',
+          avoidHighways: true,
+          routeType: 'ROUND_TRIP',
+          subscriptionTier: 'premium',
+          createSeedJob: false,
+          preferredCountryCode: 'AT',
+          preferredAdmin1Name: 'Vorarlberg',
+          preferredAdmin2Name: 'Feldkirch',
+          preferredCityCluster: 'Feldkirch',
+        );
+
+        expect(check.coverage?.styleKey, 'sport_mode');
+        expect(check.currentVerifiedCount, 0);
+        expect(check.currentCandidateCount, 2);
+        expect(check.coverage?.currentCandidateCount, 2);
+      },
+    );
+
+    test(
+      'Candidate-Reserve findet sport und sport_mode Candidates fuer Sport Mode',
+      () async {
+        final service = RoutePoolService(
+          inMemoryRegions: [
+            _region(
+              countryCode: 'AT',
+              admin1Name: 'Vorarlberg',
+              admin2Name: 'Feldkirch',
+              cityCluster: 'Feldkirch',
+              centerLat: 47.2386,
+              centerLng: 9.5986,
+              difficultyLevel: 'normal',
+            ),
+          ],
+          inMemoryRoutes: const [],
+          inMemoryCoverage: const [
+            RoutePoolCoverage(
+              countryCode: 'AT',
+              admin1Name: 'Vorarlberg',
+              admin2Name: 'Feldkirch',
+              cityCluster: 'Feldkirch',
+              routeType: 'ROUND_TRIP',
+              distanceBucket: 50,
+              styleKey: 'sport_mode',
+              avoidHighways: true,
+              coverageStatus: 'warming_up',
+              currentVerifiedCount: 1,
+              currentCandidateCount: 2,
+            ),
+          ],
+          inMemorySeedJobs: <RouteSeedJob>[],
+          inMemoryCandidates: [
+            _candidate(
+              id: 'feldkirch-legacy-sport-reserve',
+              admin2Name: 'Feldkirch',
+              cityCluster: 'Feldkirch',
+              startLat: 47.2386,
+              startLng: 9.5986,
+              styleKey: 'sport',
+              distanceKm: 52,
+              coordinateCount: 120,
+            ),
+            _candidate(
+              id: 'feldkirch-canonical-sport-reserve',
+              admin2Name: 'Feldkirch',
+              cityCluster: 'Feldkirch',
+              startLat: 47.2388,
+              startLng: 9.5988,
+              styleKey: 'sport_mode',
+              distanceKm: 54,
+              coordinateCount: 120,
+            ),
+          ],
+        );
+
+        final matches = await service.findCandidateReserveRoutesNear(
+          userLat: 47.2386,
+          userLng: 9.5986,
+          distanceBucket: 50,
+          style: 'Sport Mode',
+          avoidHighways: true,
+        );
+
+        expect(
+          matches.map((match) => match.route.id),
+          containsAll([
+            'feldkirch-legacy-sport-reserve',
+            'feldkirch-canonical-sport-reserve',
+          ]),
+        );
+      },
+    );
+
     test('Candidate-Reserve ist in normalen Regionen deaktiviert', () async {
       final service = RoutePoolService(
         inMemoryRegions: [
@@ -2706,7 +3268,7 @@ RouteRegion _region({
   bool bootstrapEnabled = true,
   bool curatedSeedPreferred = false,
   int defaultTargetPoolSize = 15,
-  int defaultMaxPoolSize = 20,
+  int defaultMaxPoolSize = 32,
   int healthyThreshold = 15,
   int thinThreshold = 1,
   int seedBudgetUnits = 1,
@@ -2759,9 +3321,9 @@ RoutePoolCoverageCheck _coverageCheck({
     bootstrapEnabled: coverageStatus != 'hard_region_curated_needed',
     curatedSeedPreferred: coverageStatus == 'hard_region_curated_needed',
     minVerifiedCount: 3,
-    targetPoolSize: 8,
-    maxPoolSize: 20,
-    candidateBufferLimit: 30,
+    targetPoolSize: 12,
+    maxPoolSize: 32,
+    candidateBufferLimit: 72,
     acceptableReserveLimitPercent: 25,
     currentVerifiedCount: 0,
     currentCandidateCount: 0,

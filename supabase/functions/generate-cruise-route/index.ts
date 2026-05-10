@@ -185,8 +185,8 @@ function styleKeyForMode(mode?: string): string {
   if (normalized.includes("kurven")) return "kurvenjagd";
   if (normalized.includes("abend")) return "abendrunde";
   if (normalized.includes("entdeck")) return "entdecker";
-  if (normalized.includes("sport")) return "sport";
-  return "sport";
+  if (normalized.includes("sport")) return "sport_mode";
+  return "sport_mode";
 }
 
 function candidatePayloadDistanceFits(value: unknown): boolean {
@@ -386,9 +386,9 @@ async function invokeSearchSessionWorkerNow(
     search_session_id: sessionId,
     session_id: sessionId,
     max_sessions_per_run: 1,
-    max_hydrations_per_run: 1,
+    max_hydrations_per_run: 2,
     max_sessions: 1,
-    max_candidates: 1,
+    max_candidates: 2,
     source: options.source,
     on_demand: true,
   };
@@ -1287,6 +1287,53 @@ Deno.serve(async (req) => {
     const randomSeed = (body.randomSeed ?? Math.floor(Math.random() * 100000)) +
       hintSeedOffset;
     const requestStartedAt = Date.now();
+    const isNavigationReroute = body.reroute_request === true;
+    const currentHeading = finiteNumber(body.current_heading);
+    const currentSpeedMps = finiteNumber(body.current_speed_mps);
+    const startRadiusMeters = finiteNumber(body.start_radius_m);
+    const startBearingToleranceDegrees = finiteNumber(
+      body.start_bearing_tolerance_deg,
+    );
+    const avoidManeuverRadiusMeters = finiteNumber(
+      body.avoid_maneuver_radius_m,
+    );
+    const pointToPointMovingStartDetected =
+      body.route_type === "POINT_TO_POINT" &&
+      body.moving_start === true &&
+      (isNavigationReroute || (currentSpeedMps ?? 0) >= 2.5);
+    const movingStartBearings = (waypointCount: number): string | undefined => {
+      if (
+        !pointToPointMovingStartDetected || currentHeading == null ||
+        waypointCount < 2
+      ) {
+        return undefined;
+      }
+      const heading = Math.round(clampNumber(currentHeading, 0, 359));
+      const tolerance = Math.round(
+        clampNumber(startBearingToleranceDegrees ?? 70, 15, 90),
+      );
+      return [
+        `${heading},${tolerance}`,
+        ...Array.from({ length: waypointCount - 1 }, () => ""),
+      ].join(";");
+    };
+    const movingStartRadiuses = (
+      radiuses: string,
+      waypointCount: number,
+    ): string => {
+      if (!pointToPointMovingStartDetected || waypointCount < 2) {
+        return radiuses;
+      }
+      const parts = radiuses.split(";");
+      while (parts.length < waypointCount) parts.push("unlimited");
+      parts[0] = String(
+        Math.round(clampNumber(startRadiusMeters ?? 65, 5, 300)),
+      );
+      return parts.slice(0, waypointCount).join(";");
+    };
+    const movingStartAvoidManeuverRadius = pointToPointMovingStartDetected
+      ? Math.round(clampNumber(avoidManeuverRadiusMeters ?? 80, 1, 1000))
+      : undefined;
 
     // --- 2. Fahrstil-Parameter (Mapbox) ---
     // Jeder Stil nutzt unterschiedliche Mapbox-Profile und Exclude-Parameter.
@@ -1482,7 +1529,11 @@ Deno.serve(async (req) => {
         const requestedPointToPointScenic = detourLevel > 0 ||
           (mode != null && mode !== "Standard");
         const directWaypoints = [startLocation, body.destination_location];
-        const directRadiuses = "unlimited;unlimited";
+        const directRadiuses = movingStartRadiuses(
+          "unlimited;unlimited",
+          directWaypoints.length,
+        );
+        const directBearings = movingStartBearings(directWaypoints.length);
         let directRoute = await getMapboxRoute(
           directWaypoints,
           mapboxProfile,
@@ -1492,7 +1543,9 @@ Deno.serve(async (req) => {
           {
             continueStraight: requestContinueStraight,
             maxAttempts: 1,
-            timeoutMs: 6500,
+            timeoutMs: pointToPointMovingStartDetected ? 5200 : 6500,
+            bearings: directBearings,
+            avoidManeuverRadiusMeters: movingStartAvoidManeuverRadius,
           },
         );
         const relaxedDirectExcludes = relaxStreetExcludes(
@@ -1509,7 +1562,9 @@ Deno.serve(async (req) => {
             {
               continueStraight: requestContinueStraight,
               maxAttempts: 1,
-              timeoutMs: 6000,
+              timeoutMs: pointToPointMovingStartDetected ? 4800 : 6000,
+              bearings: directBearings,
+              avoidManeuverRadiusMeters: movingStartAvoidManeuverRadius,
             },
           );
         }
@@ -1598,6 +1653,10 @@ Deno.serve(async (req) => {
               : scenicRadius
           )
           .join(";");
+        radiusesParams = movingStartRadiuses(
+          radiusesParams,
+          finalWaypoints.length,
+        );
       } else {
         // ROUND_TRIP logic
         if (!targetDistance) {
@@ -1783,25 +1842,20 @@ Deno.serve(async (req) => {
       currentRouteType === "ROUND_TRIP" &&
       distanceConfig != null &&
       targetDistance != null;
-    const movingStartDetected = useRoundTripSearch &&
-      body.moving_start === true &&
-      (finiteNumber(body.current_speed_mps) ?? 0) >= 2.5;
-    const currentHeading = finiteNumber(body.current_heading);
-    const startRadiusMeters = finiteNumber(body.start_radius_m);
-    const startBearingToleranceDegrees = finiteNumber(
-      body.start_bearing_tolerance_deg,
-    );
-    const avoidManeuverRadiusMeters = finiteNumber(
-      body.avoid_maneuver_radius_m,
-    );
-    const movingStartMeta = useRoundTripSearch
+    const movingStartDetected = useRoundTripSearch
+      ? body.moving_start === true && (currentSpeedMps ?? 0) >= 2.5
+      : pointToPointMovingStartDetected;
+    const movingStartMeta = useRoundTripSearch ||
+        currentRouteType === "POINT_TO_POINT"
       ? {
         moving_start_detected: movingStartDetected,
         start_snap_strategy: movingStartDetected
           ? currentHeading == null
             ? "moving_radius_snap"
             : "moving_bearing_radius_snap"
-          : "default_roundtrip_snap",
+          : useRoundTripSearch
+          ? "default_roundtrip_snap"
+          : "default_point_to_point_snap",
         start_on_motorway: typeof body.start_on_motorway === "boolean"
           ? body.start_on_motorway
           : null,
@@ -1880,12 +1934,22 @@ Deno.serve(async (req) => {
           requestedRoundTripBatchIndex ?? 0,
         ),
       );
+    const pointToPointDefaultBudgetMs = isNavigationReroute
+      ? 7500
+      : pointToPointIsScenic
+      ? avoidHighways || detourLevel >= 2 ? 24000 : 19000
+      : 12000;
+    const pointToPointBudgetFloorMs = isNavigationReroute
+      ? 4500
+      : pointToPointDefaultBudgetMs;
+    const pointToPointBudgetCeilingMs = isNavigationReroute ? 9000 : 26000;
     const pointToPointTimeBudgetMs = currentRouteType === "POINT_TO_POINT"
       ? Math.max(
-        pointToPointIsScenic
-          ? avoidHighways || detourLevel >= 2 ? 24000 : 19000
-          : 12000,
-        Math.min(26000, Math.max(0, body.max_search_ms ?? 0)),
+        pointToPointBudgetFloorMs,
+        Math.min(
+          pointToPointBudgetCeilingMs,
+          Math.max(0, body.max_search_ms ?? pointToPointDefaultBudgetMs),
+        ),
       )
       : 0;
     const waypointTimeBudgetMs =
@@ -1948,6 +2012,8 @@ Deno.serve(async (req) => {
           maxAttempts: 1,
           timeoutMs: pointToPointTimeoutMs(timeoutMs),
           retryDelayBaseMs: 220,
+          bearings: movingStartBearings(waypoints.length),
+          avoidManeuverRadiusMeters: movingStartAvoidManeuverRadius,
         },
       );
       const candidateRoutes = detailed.routes ??
@@ -2312,6 +2378,8 @@ Deno.serve(async (req) => {
               maxAttempts: 2,
               timeoutMs: pointToPointTimeoutMs(9500),
               retryDelayBaseMs: 220,
+              bearings: movingStartBearings(finalWaypoints.length),
+              avoidManeuverRadiusMeters: movingStartAvoidManeuverRadius,
             },
           );
           const relaxedPointToPointExcludes = relaxStreetExcludes(
@@ -2329,6 +2397,8 @@ Deno.serve(async (req) => {
                 continueStraight: requestContinueStraight,
                 maxAttempts: 1,
                 timeoutMs: pointToPointTimeoutMs(8500),
+                bearings: movingStartBearings(finalWaypoints.length),
+                avoidManeuverRadiusMeters: movingStartAvoidManeuverRadius,
               },
             );
           }
@@ -2528,7 +2598,7 @@ Deno.serve(async (req) => {
 
         route = await fetchPointToPointScenicRoute({
           waypoints: retryWaypoints,
-          radiuses: retryRadiuses,
+          radiuses: movingStartRadiuses(retryRadiuses, retryWaypoints.length),
           exclude: excludeParams,
           detourLevelForBand: retryDetourLevel,
           targetDistanceForBand: softenedTarget,
@@ -2547,7 +2617,10 @@ Deno.serve(async (req) => {
         if (!route && relaxedRetryExcludes !== excludeParams) {
           route = await fetchPointToPointScenicRoute({
             waypoints: retryWaypoints,
-            radiuses: retryRadiuses,
+            radiuses: movingStartRadiuses(
+              retryRadiuses,
+              retryWaypoints.length,
+            ),
             exclude: relaxedRetryExcludes,
             detourLevelForBand: retryDetourLevel,
             targetDistanceForBand: softenedTarget,
@@ -2562,7 +2635,10 @@ Deno.serve(async (req) => {
         }
         if (route) {
           finalWaypoints = retryWaypoints;
-          radiusesParams = retryRadiuses;
+          radiusesParams = movingStartRadiuses(
+            retryRadiuses,
+            retryWaypoints.length,
+          );
           pointToPointDeliveredDetourLevel = retryDetourLevel;
           pointToPointDetourDowngraded = retryDowngraded;
           pointToPointDetourFallbackStage = retryDowngraded
@@ -2649,7 +2725,11 @@ Deno.serve(async (req) => {
           safeWaypoint,
           body.destination_location,
         ];
-        const safeRadiuses = "unlimited;12000;unlimited";
+        const safeRadiuses = movingStartRadiuses(
+          "unlimited;12000;unlimited",
+          safeWaypoints.length,
+        );
+        const safeBearings = movingStartBearings(safeWaypoints.length);
         route = await getMapboxRoute(
           safeWaypoints,
           mapboxProfile,
@@ -2660,6 +2740,8 @@ Deno.serve(async (req) => {
             continueStraight: requestContinueStraight,
             maxAttempts: 1,
             timeoutMs: pointToPointTimeoutMs(7000),
+            bearings: safeBearings,
+            avoidManeuverRadiusMeters: movingStartAvoidManeuverRadius,
           },
         );
         const relaxedSafeFallbackExcludes = relaxStreetExcludes(
@@ -2677,6 +2759,8 @@ Deno.serve(async (req) => {
               continueStraight: requestContinueStraight,
               maxAttempts: 1,
               timeoutMs: pointToPointTimeoutMs(6200),
+              bearings: safeBearings,
+              avoidManeuverRadiusMeters: movingStartAvoidManeuverRadius,
             },
           );
         }
@@ -3644,6 +3728,7 @@ Deno.serve(async (req) => {
           preference_ignored_reason:
             roundTripSearch?.preferenceMatch?.preferenceIgnoredReason ?? null,
           avoid_highways_requested: avoidHighways,
+          reroute_request: isNavigationReroute,
           effective_excludes: excludeParams,
           highway_allowed: !avoidHighways,
           motorway_policy: avoidHighways

@@ -83,6 +83,7 @@ class CruiseCompletionDialog extends StatefulWidget {
     required this.routeCoordinates,
     required this.onSave,
     required this.onDiscard,
+    this.routeSegments,
     this.baseXp,
     this.streakDays = 1,
     this.xpMultiplier = 1.0,
@@ -95,6 +96,7 @@ class CruiseCompletionDialog extends StatefulWidget {
   final int curves;
   final int xpEarned;
   final List<List<double>> routeCoordinates;
+  final List<List<List<double>>>? routeSegments;
   final int? baseXp;
   final int streakDays;
   final double xpMultiplier;
@@ -310,6 +312,7 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
         const SizedBox(height: 14),
         _RoutePreviewCard(
           coordinates: widget.routeCoordinates,
+          segments: widget.routeSegments,
           exportMode: true,
         ),
       ],
@@ -336,6 +339,7 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
                 const SizedBox(height: 10),
                 _RoutePreviewCard(
                   coordinates: widget.routeCoordinates,
+                  segments: widget.routeSegments,
                   exportMode: false,
                 ),
                 const SizedBox(height: 10),
@@ -1008,9 +1012,11 @@ class _RoutePreviewCard extends StatelessWidget {
   const _RoutePreviewCard({
     required this.coordinates,
     required this.exportMode,
+    this.segments,
   });
 
   final List<List<double>> coordinates;
+  final List<List<List<double>>>? segments;
   final bool exportMode;
 
   @override
@@ -1030,7 +1036,10 @@ class _RoutePreviewCard extends StatelessWidget {
           children: [
             Positioned.fill(
               child: CustomPaint(
-                painter: _RoutePreviewPainter(coordinates: coordinates),
+                painter: _RoutePreviewPainter(
+                  coordinates: coordinates,
+                  segments: segments,
+                ),
               ),
             ),
             Positioned(
@@ -1060,9 +1069,10 @@ class _RoutePreviewCard extends StatelessWidget {
 }
 
 class _RoutePreviewPainter extends CustomPainter {
-  _RoutePreviewPainter({required this.coordinates});
+  _RoutePreviewPainter({required this.coordinates, this.segments});
 
   final List<List<double>> coordinates;
+  final List<List<List<double>>>? segments;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -1077,13 +1087,15 @@ class _RoutePreviewPainter extends CustomPainter {
       canvas.drawLine(Offset(0, y), Offset(size.width, y), gridPaint);
     }
 
-    if (coordinates.length < 2) return;
+    final drawableSegments = _effectiveSegments();
+    if (drawableSegments.isEmpty) return;
 
-    double minLng = coordinates.first[0];
-    double maxLng = coordinates.first[0];
-    double minLat = coordinates.first[1];
-    double maxLat = coordinates.first[1];
-    for (final point in coordinates) {
+    final allPoints = drawableSegments.expand((segment) => segment).toList();
+    double minLng = allPoints.first[0];
+    double maxLng = allPoints.first[0];
+    double minLat = allPoints.first[1];
+    double maxLat = allPoints.first[1];
+    for (final point in allPoints) {
       minLng = point[0] < minLng ? point[0] : minLng;
       maxLng = point[0] > maxLng ? point[0] : maxLng;
       minLat = point[1] < minLat ? point[1] : minLat;
@@ -1093,21 +1105,13 @@ class _RoutePreviewPainter extends CustomPainter {
     final width = (maxLng - minLng).abs().clamp(0.00001, double.infinity);
     final height = (maxLat - minLat).abs().clamp(0.00001, double.infinity);
     const padding = 18.0;
-    final routePath = Path();
-
-    for (var i = 0; i < coordinates.length; i++) {
-      final point = coordinates[i];
-      final dx =
-          padding + ((point[0] - minLng) / width) * (size.width - padding * 2);
-      final dy =
-          size.height -
-          padding -
-          ((point[1] - minLat) / height) * (size.height - padding * 2);
-      if (i == 0) {
-        routePath.moveTo(dx, dy);
-      } else {
-        routePath.lineTo(dx, dy);
-      }
+    Offset project(List<double> point) {
+      return Offset(
+        padding + ((point[0] - minLng) / width) * (size.width - padding * 2),
+        size.height -
+            padding -
+            ((point[1] - minLat) / height) * (size.height - padding * 2),
+      );
     }
 
     final glowPaint = Paint()
@@ -1123,26 +1127,49 @@ class _RoutePreviewPainter extends CustomPainter {
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round;
 
-    canvas.drawPath(routePath, glowPaint);
-    canvas.drawPath(routePath, routePaint);
-
-    final metrics = routePath.computeMetrics().toList();
-    if (metrics.isNotEmpty) {
-      final start = metrics.first.getTangentForOffset(0)?.position;
-      final end = metrics.last
-          .getTangentForOffset(metrics.last.length)
-          ?.position;
-      if (start != null) {
-        canvas.drawCircle(start, 5, Paint()..color = const Color(0xFFFFFFFF));
+    for (final segment in drawableSegments) {
+      final routePath = Path();
+      for (var i = 0; i < segment.length; i++) {
+        final point = project(segment[i]);
+        if (i == 0) {
+          routePath.moveTo(point.dx, point.dy);
+        } else {
+          routePath.lineTo(point.dx, point.dy);
+        }
       }
-      if (end != null) {
-        canvas.drawCircle(end, 5, Paint()..color = AppAccentColors.accent);
-      }
+      canvas.drawPath(routePath, glowPaint);
+      canvas.drawPath(routePath, routePaint);
     }
+
+    final start = project(drawableSegments.first.first);
+    final end = project(drawableSegments.last.last);
+    canvas.drawCircle(start, 5, Paint()..color = const Color(0xFFFFFFFF));
+    canvas.drawCircle(end, 5, Paint()..color = AppAccentColors.accent);
   }
 
   @override
   bool shouldRepaint(covariant _RoutePreviewPainter oldDelegate) {
-    return oldDelegate.coordinates != coordinates;
+    return oldDelegate.coordinates != coordinates ||
+        oldDelegate.segments != segments;
+  }
+
+  List<List<List<double>>> _effectiveSegments() {
+    final provided = segments
+        ?.map(
+          (segment) => segment
+              .where((point) => point.length >= 2)
+              .map((point) => [point[0], point[1]])
+              .toList(growable: false),
+        )
+        .where((segment) => segment.length >= 2)
+        .toList(growable: false);
+    if (provided != null && provided.isNotEmpty) return provided;
+    if (coordinates.length < 2) return const [];
+    return [
+      coordinates
+          .where((point) => point.length >= 2)
+          .map((point) => [point[0], point[1]])
+          .toList(growable: false),
+    ];
   }
 }

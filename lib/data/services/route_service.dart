@@ -2,13 +2,15 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 
-import 'package:flutter/foundation.dart' show compute, kDebugMode, visibleForTesting;
+import 'package:flutter/foundation.dart'
+    show compute, kDebugMode, visibleForTesting;
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart' as geo;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:cruise_connect/core/constants.dart';
+import 'package:cruise_connect/data/services/navigation_guidance_utils.dart';
 import 'package:cruise_connect/data/services/prepared_route_buffer.dart';
 import 'package:cruise_connect/data/services/route_access_plan.dart';
 import 'package:cruise_connect/data/services/route_cache_service.dart';
@@ -596,6 +598,31 @@ class RouteService {
         }
       }
 
+      if (forceFreshVariant) {
+        final postPoolProbeDecision = onDemandLiveFill
+            ? lastRouteSourceDecision
+            : null;
+        final postPoolProbeLiveReason = onDemandLiveFill
+            ? lastRouteLiveAttemptReason
+            : null;
+        lastRouteSourceDecision = 'search_again_pool_probe';
+        final freshPoolRoute = await _tryRoutePoolFallback(
+          scenario: scenario,
+          styleConfig: styleConfig,
+          userLat: startPosition.latitude,
+          userLng: startPosition.longitude,
+          fallbackReason: 'search_again_pool_probe',
+          allowDuplicateFallback: false,
+        );
+        if (freshPoolRoute != null) {
+          return freshPoolRoute;
+        }
+        lastRouteSourceDecision =
+            postPoolProbeDecision ?? 'search_again_live_first';
+        lastRouteLiveAttemptReason =
+            postPoolProbeLiveReason ?? 'search_again_force_fresh';
+      }
+
       final prepared = forceFreshVariant
           ? null
           : _takePreparedRoute(scenario: scenario, styleConfig: styleConfig);
@@ -1083,6 +1110,7 @@ class RouteService {
       'planning_type': 'Zufall',
       'client_trigger': reason,
       'client_scenario_key': 'search_session_kick:$id',
+      'await_worker_response': reason == 'client_poll_stale',
     };
     try {
       final raw = await _invoker
@@ -1245,6 +1273,12 @@ class RouteService {
     int diversitySeed = 0,
     bool forceFreshVariant = false,
     String subscriptionTier = 'premium',
+    bool navigationReroute = false,
+    int? candidateBudgetOverride,
+    int? maxSearchMsOverride,
+    double? currentHeadingDegrees,
+    double? currentSpeedMetersPerSecond,
+    double? locationAccuracyMeters,
   }) async {
     final startToDestinationMeters = geo.Geolocator.distanceBetween(
       startPosition.latitude,
@@ -1405,7 +1439,7 @@ class RouteService {
       final hasSeenHistory = SeenRouteRegistry.entriesForAny(
         _seenHistoryKeysForScenario(scenario),
       ).isNotEmpty;
-      final shouldUseTwoLiveAttempts = shouldDiversify;
+      final shouldUseTwoLiveAttempts = shouldDiversify && !navigationReroute;
       // Client-Schleife: direkte A→B-Routen bekommen nur einen Live-Versuch,
       // Scenic-/Detour-Varianten behalten einen zweiten Versuch für echte
       // Diversifikation und transienten Provider-Pressure.
@@ -1443,10 +1477,15 @@ class RouteService {
             variant: variant,
             // Scenic A→B darf 15-25s suchen; mehrere Korridor-Familien
             // sind nötig, damit Klein/Mittel/Groß unterscheidbar bleiben.
-            candidateBudget: normalizedVariant >= 2
-                ? 9
-                : (hasSeenHistory ? 5 : 6),
+            candidateBudget:
+                candidateBudgetOverride ??
+                (normalizedVariant >= 2 ? 9 : (hasSeenHistory ? 5 : 6)),
             previousFingerprints: previousFingerprints,
+            navigationReroute: navigationReroute,
+            maxSearchMsOverride: maxSearchMsOverride,
+            currentHeadingDegrees: currentHeadingDegrees,
+            currentSpeedMetersPerSecond: currentSpeedMetersPerSecond,
+            locationAccuracyMeters: locationAccuracyMeters,
           );
           if (candidate.accepted && !candidate.novelEnough) {
             lastRouteDuplicateSkipped = true;
@@ -1543,7 +1582,9 @@ class RouteService {
               preparedAt: DateTime.now(),
             ),
           );
-        } else if (shouldDiversify && !forceFreshVariant) {
+        } else if (shouldDiversify &&
+            !forceFreshVariant &&
+            !navigationReroute) {
           _schedulePreparedPointToPointRoute(
             scenario: scenario,
             styleConfig: styleConfig,
@@ -1564,58 +1605,60 @@ class RouteService {
         );
       }
 
-      final poolFallback = await _tryRoutePoolFallback(
-        scenario: scenario,
-        styleConfig: styleConfig,
-        userLat: startPosition.latitude,
-        userLng: startPosition.longitude,
-        fallbackReason: lastError?.type.name ?? 'no_accepted_mapbox_route',
-        directDistanceKm: directDistanceKm,
-      );
-      if (poolFallback != null) {
-        return poolFallback;
-      }
-
-      if (_canUseStructuredFallback(lastError)) {
-        final fallback = await _tryPointToPointFallback(
+      if (!navigationReroute) {
+        final poolFallback = await _tryRoutePoolFallback(
           scenario: scenario,
-          startPosition: startPosition,
-          destinationLat: destinationLat,
-          destinationLng: destinationLng,
-          avoidHighways: avoidHighways,
+          styleConfig: styleConfig,
+          userLat: startPosition.latitude,
+          userLng: startPosition.longitude,
+          fallbackReason: lastError?.type.name ?? 'no_accepted_mapbox_route',
           directDistanceKm: directDistanceKm,
-          allowDirectFallback: scenario.detourLevel <= 0,
         );
-        if (fallback != null) {
-          return fallback;
+        if (poolFallback != null) {
+          return poolFallback;
         }
-      }
 
-      final cached = forceFreshVariant
-          ? null
-          : await _loadRecentOrCachedRoute(scenarioKey: scenario.scenarioKey);
-      if (cached != null &&
-          _shouldUseCachedFallbackRoute(
-            cached,
+        if (_canUseStructuredFallback(lastError)) {
+          final fallback = await _tryPointToPointFallback(
             scenario: scenario,
-            lastError: lastError,
-          )) {
-        lastRouteFromCache = true;
-        return _finalizeAndRememberRoute(
-          scenario: scenario,
-          route: cached,
-          fromCache: true,
-        );
-      }
+            startPosition: startPosition,
+            destinationLat: destinationLat,
+            destinationLng: destinationLng,
+            avoidHighways: avoidHighways,
+            directDistanceKm: directDistanceKm,
+            allowDirectFallback: scenario.detourLevel <= 0,
+          );
+          if (fallback != null) {
+            return fallback;
+          }
+        }
 
-      final warmupError = await _maybeBuildCoverageWarmupError(
-        scenario: scenario,
-        userLat: startPosition.latitude,
-        userLng: startPosition.longitude,
-        lastError: lastError,
-      );
-      if (warmupError != null) {
-        throw warmupError;
+        final cached = forceFreshVariant
+            ? null
+            : await _loadRecentOrCachedRoute(scenarioKey: scenario.scenarioKey);
+        if (cached != null &&
+            _shouldUseCachedFallbackRoute(
+              cached,
+              scenario: scenario,
+              lastError: lastError,
+            )) {
+          lastRouteFromCache = true;
+          return _finalizeAndRememberRoute(
+            scenario: scenario,
+            route: cached,
+            fromCache: true,
+          );
+        }
+
+        final warmupError = await _maybeBuildCoverageWarmupError(
+          scenario: scenario,
+          userLat: startPosition.latitude,
+          userLng: startPosition.longitude,
+          lastError: lastError,
+        );
+        if (warmupError != null) {
+          throw warmupError;
+        }
       }
 
       throw lastError ??
@@ -1980,7 +2023,11 @@ class RouteService {
     if (!scenario.isRoundTrip) {
       return <String>{scenario.scenarioKey};
     }
-    return <String>{scenario.scenarioKey, scenario.noveltyKey};
+    return <String>{
+      scenario.scenarioKey,
+      scenario.noveltyKey,
+      scenario.broadNoveltyKey,
+    };
   }
 
   static List<String> _recentFingerprintsForScenario(RouteScenario scenario) =>
@@ -2347,6 +2394,11 @@ class RouteService {
     int? offsetSide,
     int candidateBudget = 5,
     List<String> previousFingerprints = const [],
+    bool navigationReroute = false,
+    int? maxSearchMsOverride,
+    double? currentHeadingDegrees,
+    double? currentSpeedMetersPerSecond,
+    double? locationAccuracyMeters,
   }) {
     return <String, dynamic>{
       'startLocation': {
@@ -2367,9 +2419,22 @@ class RouteService {
       'route_variant_hint': variant.variantHint,
       'route_fingerprint_hint': variant.fingerprintHint,
       'max_candidate_attempts': candidateBudget,
+      if (navigationReroute) 'reroute_request': true,
+      if (navigationReroute) 'moving_start': true,
+      if (maxSearchMsOverride != null) 'max_search_ms': maxSearchMsOverride,
+      if (currentHeadingDegrees != null)
+        'current_heading': currentHeadingDegrees,
+      if (currentSpeedMetersPerSecond != null)
+        'current_speed_mps': currentSpeedMetersPerSecond,
+      if (locationAccuracyMeters != null)
+        'location_accuracy_m': locationAccuracyMeters,
+      if (navigationReroute) 'start_radius_m': 65,
+      if (navigationReroute) 'start_bearing_tolerance_deg': 70,
+      if (navigationReroute) 'avoid_maneuver_radius_m': 80,
       if (previousFingerprints.isNotEmpty)
         'previous_route_fingerprints': previousFingerprints.take(8).toList(),
-      if (scenic || normalizedVariant > 0) 'max_search_ms': 25000,
+      if (maxSearchMsOverride == null && (scenic || normalizedVariant > 0))
+        'max_search_ms': 25000,
       if (scenic || normalizedVariant > 0) ...styleConfig.toRequestHints(),
       if (scenic || normalizedVariant > 0) ...{
         'targetDistance': targetDistanceKm,
@@ -2707,7 +2772,10 @@ class RouteService {
       coordinates: result.coordinates
           .map(_copyCoordinate)
           .toList(growable: false),
-      maneuvers: filterManeuvers(result.maneuvers),
+      maneuvers: filterManeuvers(
+        result.maneuvers,
+        routeCoordinateCount: result.coordinates.length,
+      ),
       distanceMeters: result.distanceMeters,
       durationSeconds: result.durationSeconds,
       distanceKm: result.distanceKm,
@@ -2726,7 +2794,10 @@ class RouteService {
       coordinates: result.coordinates
           .map(_copyCoordinate)
           .toList(growable: false),
-      maneuvers: filterManeuvers(result.maneuvers),
+      maneuvers: filterManeuvers(
+        result.maneuvers,
+        routeCoordinateCount: result.coordinates.length,
+      ),
       distanceMeters: result.distanceMeters,
       durationSeconds: result.durationSeconds,
       distanceKm: result.distanceKm,
@@ -3125,6 +3196,21 @@ class RouteService {
     final edgeMeta = data['meta'] is Map
         ? Map<String, dynamic>.from(data['meta'] as Map)
         : <String, dynamic>{};
+    if (violatesNoHighwayPolicy(
+      avoidHighways: body['avoid_highways'] == true,
+      edgeMeta: edgeMeta,
+    )) {
+      edgeMeta['motorway_violation'] = true;
+      throw RouteServiceException(
+        type: RouteErrorType.noRoute,
+        userMessage:
+            'Keine passende Route ohne Autobahn gefunden. Bitte fahre weiter und versuche es erneut.',
+        debugMessage:
+            'No-highway request rejected because Edge meta violates motorway policy.',
+        statusCode: statusCode,
+        edgeMeta: edgeMeta,
+      );
+    }
     final displayGeometryIssue = routeType == 'ROUND_TRIP'
         ? _roundTripDisplayGeometryIssue(
             coordinates: coordinates,
@@ -3667,8 +3753,9 @@ class RouteService {
       variantIndex: index,
     );
     final radiusJitter = 1.0 + ((rng.nextDouble() - 0.5) * 0.24);
-    final angleOffset =
+    final rawAngleOffset =
         (baseDirection + index * 47.0 + (index % 5) * 23.0) % 360;
+    final angleOffset = _avoidRecentRoundTripSector(rawAngleOffset, scenario);
     return RouteVariant(
       index: index,
       seed: seed,
@@ -3683,6 +3770,27 @@ class RouteService {
           '-${(angleOffset / 45).round()}',
       styleBias: styleConfig.profileKey,
     );
+  }
+
+  static double _avoidRecentRoundTripSector(
+    double angleDegrees,
+    RouteScenario scenario,
+  ) {
+    if (!scenario.isRoundTrip) return angleDegrees % 360.0;
+    final recentSectors = SeenRouteRegistry.recentDominantSectorsForAny(
+      _seenHistoryKeysForScenario(scenario),
+    );
+    if (recentSectors.isEmpty || recentSectors.length >= 8) {
+      return angleDegrees % 360.0;
+    }
+    for (var step = 0; step < 8; step += 1) {
+      final candidate = (angleDegrees + step * 45.0) % 360.0;
+      final sector = (candidate / 45.0).floor().clamp(0, 7).toInt();
+      if (!recentSectors.contains(sector)) {
+        return candidate;
+      }
+    }
+    return angleDegrees % 360.0;
   }
 
   RouteVariant _nextPointToPointVariant(
@@ -3805,6 +3913,11 @@ class RouteService {
     required RouteVariant variant,
     required int candidateBudget,
     List<String> previousFingerprints = const [],
+    bool navigationReroute = false,
+    int? maxSearchMsOverride,
+    double? currentHeadingDegrees,
+    double? currentSpeedMetersPerSecond,
+    double? locationAccuracyMeters,
   }) async {
     final jitteredTargetKm = styleConfig.clampPointToPointTargetKm(
       targetDistanceKm * variant.radiusJitter,
@@ -3833,6 +3946,11 @@ class RouteService {
       offsetSide: variant.offsetSide,
       candidateBudget: candidateBudget,
       previousFingerprints: previousFingerprints,
+      navigationReroute: navigationReroute,
+      maxSearchMsOverride: maxSearchMsOverride,
+      currentHeadingDegrees: currentHeadingDegrees,
+      currentSpeedMetersPerSecond: currentSpeedMetersPerSecond,
+      locationAccuracyMeters: locationAccuracyMeters,
     );
     final result = await _invoke(body);
     final snapped = _snapRouteToStartPosition(result, startPosition);
@@ -3955,7 +4073,22 @@ class RouteService {
           thresholdPercent: recentSimilarityThreshold,
           proximityMeters: recentSimilarityProximityMeters,
         );
-    final tooSimilar =
+    final routeDominantSector = scenario.isRoundTrip
+        ? SeenRouteRegistry.dominantSectorForCoordinates(sampledCoordinates)
+        : null;
+    final recentRouteSameSector =
+        scenario.isRoundTrip &&
+        routeDominantSector != null &&
+        recentRouteSamples != null &&
+        SeenRouteRegistry.dominantSectorForCoordinates(recentRouteSamples) ==
+            routeDominantSector;
+    final seenRouteSameSector =
+        scenario.isRoundTrip &&
+        SeenRouteRegistry.hasRecentDominantSectorInAny(
+          _seenHistoryKeysForScenario(scenario),
+          sampledCoordinates,
+        );
+    final exactOrShapeSimilar =
         SeenRouteRegistry.hasExactFingerprintInAny(
           _seenHistoryKeysForScenario(scenario),
           fingerprint,
@@ -3967,8 +4100,14 @@ class RouteService {
           proximityMeters: similarityProximityMeters,
         ) ||
         recentRouteTooSimilar;
+    final sameSectorRepeated = recentRouteSameSector || seenRouteSameSector;
+    final tooSimilar = exactOrShapeSimilar;
     final noveltyRequired = scenario.isRoundTrip || scenario.detourLevel > 0;
     final novelEnough = !noveltyRequired || !tooSimilar;
+    final borderIntrusionRejected = _rejectRoundTripBorderIntrusion(
+      scenario: scenario,
+      coordinates: route.coordinates,
+    );
     final minPoints = _minimumPointsForScenario(
       scenario,
       actualDistanceKm: actualDistanceKm,
@@ -4204,7 +4343,8 @@ class RouteService {
         qualityAcceptable &&
         poolShapeQualityOk &&
         longSportRoundTripShapeOk &&
-        !deadEndSpikeDetected;
+        !deadEndSpikeDetected &&
+        !borderIntrusionRejected;
     final styleSoftOk =
         styleOk ||
         (scenario.isRoundTrip &&
@@ -4229,7 +4369,8 @@ class RouteService {
         !detourDistanceOk &&
         detourRenderableOk;
     final hasSoftStylePenalty = !styleSoftOk;
-    final hasSoftSimilarityPenalty = tooSimilar;
+    final sectorRepeatPenalty = !tooSimilar && sameSectorRepeated ? 22.0 : 0.0;
+    final hasSoftSimilarityPenalty = tooSimilar || sectorRepeatPenalty > 0.0;
     final baseTier = _preferredTier(classification.tier, edgeTier);
     final effectiveTier = !softRenderable
         ? RouteQualityTier.rejected
@@ -4248,7 +4389,9 @@ class RouteService {
         (styleOk ? 0.0 : 18.0) +
         (styleSoftOk ? 0.0 : 30.0) +
         (deadEndSpikeDetected ? 90.0 : 0.0) +
+        (borderIntrusionRejected ? 220.0 : 0.0) +
         (tooSimilar ? 45.0 : 0.0) +
+        sectorRepeatPenalty +
         (detourDistanceOk ? 0.0 : 135.0) +
         (destinationReached ? 0.0 : 500.0) +
         (hasEnoughPoints ? 0.0 : 24.0) -
@@ -4271,6 +4414,9 @@ class RouteService {
       'uturns=${quality.uturnPositions.length}, '
       'deadEndSpikes=${deadEndSpikes.length}, '
       'poolShapeOk=$poolShapeQualityOk, '
+      'borderIntrusionRejected=$borderIntrusionRejected, '
+      'dominantSector=${routeDominantSector ?? '-'}, '
+      'sameSectorRecent=$recentRouteSameSector/$seenRouteSameSector, '
       'tooSimilar=$tooSimilar, novelEnough=$novelEnough, '
       'edgeTier=${edgeTier?.name ?? 'none'}, '
       'detourOk=$detourDistanceOk, deliveredDetour=$pointToPointEvaluationDetourLevel, '
@@ -4314,6 +4460,36 @@ class RouteService {
       return 8;
     }
     return actualDistanceKm >= 10 ? 30 : 0;
+  }
+
+  bool _rejectRoundTripBorderIntrusion({
+    required RouteScenario scenario,
+    required List<List<double>> coordinates,
+  }) {
+    if (!scenario.isRoundTrip || coordinates.length < 8) return false;
+    if (!_isVorarlbergRhineValleyStart(scenario)) return false;
+
+    var foreignCorridorPoints = 0;
+    for (final point in coordinates) {
+      if (point.length < 2) continue;
+      final lng = point[0];
+      final lat = point[1];
+      final likelySwissRhineValley =
+          lat >= 47.05 &&
+          lat <= 47.58 &&
+          (lng < 9.53 || (lat >= 47.30 && lat <= 47.52 && lng < 9.61));
+      if (likelySwissRhineValley) {
+        foreignCorridorPoints += 1;
+      }
+    }
+    return foreignCorridorPoints >= math.max(4, coordinates.length * 0.03);
+  }
+
+  bool _isVorarlbergRhineValleyStart(RouteScenario scenario) {
+    return scenario.startLatitude >= 47.18 &&
+        scenario.startLatitude <= 47.46 &&
+        scenario.startLongitude >= 9.55 &&
+        scenario.startLongitude <= 9.80;
   }
 
   bool _roundTripStructureRenderable({
@@ -4863,6 +5039,12 @@ class RouteService {
     lastRouteSimilarityToPreviousPercent = similarityToPrevious;
     lastRoutePreviousFingerprints = _recentFingerprintsForScenario(scenario);
     final finalized = _finalizeRoute(route, scenarioKey: scenario.scenarioKey);
+    final dominantSector = scenario.isRoundTrip
+        ? SeenRouteRegistry.dominantSectorForCoordinates(sampledCoordinates)
+        : null;
+    if (dominantSector != null) {
+      finalized.edgeMeta['dominant_direction_sector'] = dominantSector;
+    }
     _recentSuccessfulRoutes[scenario.scenarioKey] = finalized;
     _recentDisplayedRoutes[_recentDisplayedKeyForScenario(scenario)] =
         finalized;
@@ -4950,18 +5132,34 @@ class RouteService {
       avoidHighways: scenario.avoidHighways,
       routeType: scenario.routeType,
     );
-    var usingCandidateReserve = false;
-    if (matches.isEmpty && scenario.isRoundTrip) {
-      matches = await _routePoolService.findCandidateReserveRoutesNear(
-        userLat: userLat,
-        userLng: userLng,
-        distanceBucket: bucket,
-        style: scenario.style,
-        avoidHighways: scenario.avoidHighways,
-        routeType: scenario.routeType,
-      );
-      usingCandidateReserve = matches.isNotEmpty;
+    final shouldProbeCandidateReserve = _shouldProbeCandidateReserve(
+      scenario: scenario,
+      matches: matches,
+      fallbackReason: fallbackReason,
+    );
+    if (shouldProbeCandidateReserve) {
+      final reserveMatches = await _routePoolService
+          .findCandidateReserveRoutesNear(
+            userLat: userLat,
+            userLng: userLng,
+            distanceBucket: bucket,
+            style: scenario.style,
+            avoidHighways: scenario.avoidHighways,
+            routeType: scenario.routeType,
+          );
+      if (reserveMatches.isNotEmpty) {
+        final seenRouteIds = matches.map((match) => match.route.id).toSet();
+        matches = <RoutePoolMatch>[
+          ...matches,
+          ...reserveMatches.where((match) => seenRouteIds.add(match.route.id)),
+        ];
+      }
     }
+    matches = _rankPoolFallbackMatchesForScenario(
+      scenario: scenario,
+      matches: matches,
+      fallbackReason: fallbackReason,
+    );
     lastRoutePoolCandidateCount = matches.length;
     if (matches.isEmpty) {
       lastRoutePoolExactBucketMissing = true;
@@ -5080,6 +5278,7 @@ class RouteService {
         continue;
       }
 
+      final usingCandidateReserve = _poolMatchUsesCandidateReserve(match);
       lastRoutePoolFallbackUsed = true;
       lastRouteEmergencyFallbackUsed = true;
       lastRouteGenerationSource = usingCandidateReserve
@@ -5117,6 +5316,7 @@ class RouteService {
         bestSeenMatch != null) {
       final match = bestSeenMatch;
       final candidate = bestSeenCandidate;
+      final usingCandidateReserve = _poolMatchUsesCandidateReserve(match);
       lastRouteDuplicateFallbackUsed = true;
       lastRoutePoolFallbackUsed = true;
       lastRouteEmergencyFallbackUsed = true;
@@ -5156,6 +5356,129 @@ class RouteService {
       'poolSeenCandidateCount=$lastRoutePoolSeenCandidateCount',
     );
     return null;
+  }
+
+  bool _shouldProbeCandidateReserve({
+    required RouteScenario scenario,
+    required List<RoutePoolMatch> matches,
+    required String fallbackReason,
+  }) {
+    if (!scenario.isRoundTrip) return false;
+    if (matches.isEmpty || matches.length < 3) return true;
+    final reason = fallbackReason.toLowerCase();
+    if (reason.contains('search_again') ||
+        reason.contains('no_route') ||
+        reason.contains('no_accepted') ||
+        reason.contains('quality') ||
+        reason.contains('coverage') ||
+        reason.contains('thin') ||
+        reason.contains('warming')) {
+      return true;
+    }
+    // No-highway roundtrips are the most constrained cells. A nearby verified
+    // neighbor must not hide a local candidate reserve that already matches the
+    // exact requested policy.
+    return scenario.avoidHighways;
+  }
+
+  List<RoutePoolMatch> _rankPoolFallbackMatchesForScenario({
+    required RouteScenario scenario,
+    required List<RoutePoolMatch> matches,
+    required String fallbackReason,
+  }) {
+    if (!scenario.isRoundTrip || matches.length < 2) return matches;
+    final historyKeys = _seenHistoryKeysForScenario(scenario);
+    final recentSectors = SeenRouteRegistry.recentDominantSectorsForAny(
+      historyKeys,
+    );
+    final reason = fallbackReason.toLowerCase();
+    final forceDiversity =
+        recentSectors.isNotEmpty ||
+        reason.contains('search_again') ||
+        reason.contains('settings') ||
+        reason.contains('no_route') ||
+        reason.contains('no_accepted') ||
+        reason.contains('quality');
+    final verifiedMatchCount = matches
+        .where((match) => !_poolMatchUsesCandidateReserve(match))
+        .length;
+    final ranked = [...matches];
+    ranked.sort((a, b) {
+      final rankA = _poolFallbackNoveltyRank(
+        scenario: scenario,
+        match: a,
+        historyKeys: historyKeys,
+        recentSectors: recentSectors,
+        forceDiversity: forceDiversity,
+        verifiedMatchCount: verifiedMatchCount,
+      );
+      final rankB = _poolFallbackNoveltyRank(
+        scenario: scenario,
+        match: b,
+        historyKeys: historyKeys,
+        recentSectors: recentSectors,
+        forceDiversity: forceDiversity,
+        verifiedMatchCount: verifiedMatchCount,
+      );
+      if ((rankA - rankB).abs() > 0.001) {
+        return rankA.compareTo(rankB);
+      }
+      return a.startDistanceKm.compareTo(b.startDistanceKm);
+    });
+    return ranked;
+  }
+
+  double _poolFallbackNoveltyRank({
+    required RouteScenario scenario,
+    required RoutePoolMatch match,
+    required Iterable<String> historyKeys,
+    required Set<int> recentSectors,
+    required bool forceDiversity,
+    required int verifiedMatchCount,
+  }) {
+    var rank = match.startDistanceKm.clamp(0.0, 999.0).toDouble();
+    if (match.route.distanceBucket !=
+        _distanceBucketForPool(scenario.targetDistanceKm)) {
+      rank += 90.0;
+    }
+
+    final candidateReserve = _poolMatchUsesCandidateReserve(match);
+    if (candidateReserve) {
+      rank += forceDiversity || verifiedMatchCount <= 0 ? -14.0 : 8.0;
+    } else if (!match.route.verified) {
+      rank += 20.0;
+    }
+
+    final coordinates = extractCoordinates(match.route.geometry);
+    if (coordinates.length >= 2) {
+      final sampled = _sampleRouteForSimilarity(coordinates);
+      final fingerprint = RouteQualityValidator.buildRouteFingerprint(
+        sampled,
+        distanceKm: match.route.distanceKm,
+        precision: 4,
+      );
+      if (SeenRouteRegistry.hasExactFingerprintInAny(
+        historyKeys,
+        fingerprint,
+      )) {
+        rank += 500.0;
+      } else if (SeenRouteRegistry.hasSimilarRouteInAny(
+        historyKeys,
+        sampled,
+        thresholdPercent: _similarityThresholdForScenario(scenario),
+        proximityMeters: _similarityProximityMetersForScenario(scenario),
+      )) {
+        rank += forceDiversity ? 180.0 : 70.0;
+      }
+
+      final sector = SeenRouteRegistry.dominantSectorForCoordinates(sampled);
+      if (sector != null && recentSectors.contains(sector)) {
+        rank += forceDiversity ? 80.0 : 24.0;
+      }
+    }
+
+    rank -= match.route.qualityScore.clamp(0.0, 100.0).toDouble() * 0.02;
+    return rank;
   }
 
   Future<RoutePoolCoverageCheck?> _ensureCoverageBootstrapStatus({
@@ -6078,9 +6401,7 @@ class RouteService {
     if (geometry['type'] != 'LineString') return null;
     final coordinates = extractCoordinates(geometry);
     if (coordinates.length < 2) return null;
-    final candidateReserve =
-        match.route.source == 'candidate_reserve' ||
-        match.route.routePayload['candidate_reserve'] == true;
+    final candidateReserve = _poolMatchUsesCandidateReserve(match);
     final routeSource = candidateReserve ? 'candidate_reserve' : 'pool';
     final styleMetrics = styleConfig.calculateStyleMetrics(
       coordinates: coordinates,
@@ -6169,9 +6490,7 @@ class RouteService {
 
   RouteVariant _poolRouteVariant(RouteScenario scenario, RoutePoolMatch match) {
     final bucket = match.route.distanceBucket;
-    final candidateReserve =
-        match.route.source == 'candidate_reserve' ||
-        match.route.routePayload['candidate_reserve'] == true;
+    final candidateReserve = _poolMatchUsesCandidateReserve(match);
     return RouteVariant(
       index: 0,
       seed: 0,
@@ -6184,6 +6503,11 @@ class RouteService {
           : 'pool-${match.route.id}-$bucket',
       styleBias: scenario.style,
     );
+  }
+
+  static bool _poolMatchUsesCandidateReserve(RoutePoolMatch match) {
+    return match.route.source == 'candidate_reserve' ||
+        match.route.routePayload['candidate_reserve'] == true;
   }
 
   Future<RouteResult?> _tryRoundTripFallback({
@@ -7480,13 +7804,22 @@ class RouteService {
   /// - Zwischenziel-"Arrive" — nur das letzte "Ziel erreicht" behalten
   /// - Kurze "continue/new name"-Manöver die eigentlich geradeaus sind
   // ignore: library_private_types_in_public_api
-  List<RouteManeuver> filterManeuvers(List<RouteManeuver> maneuvers) {
+  List<RouteManeuver> filterManeuvers(
+    List<RouteManeuver> maneuvers, {
+    int? routeCoordinateCount,
+  }) {
     if (maneuvers.isEmpty) return maneuvers;
 
     // Finde den letzten Arrive-Index (= echtes Ziel)
     int lastArriveIndex = -1;
+    final minFinalArriveRouteIndex = routeCoordinateCount == null
+        ? null
+        : math.max(0, routeCoordinateCount - 4);
     for (var i = maneuvers.length - 1; i >= 0; i--) {
-      if (maneuvers[i].icon == Icons.flag) {
+      final maneuver = maneuvers[i];
+      if (maneuver.icon == Icons.flag &&
+          (minFinalArriveRouteIndex == null ||
+              maneuver.routeIndex >= minFinalArriveRouteIndex)) {
         lastArriveIndex = i;
         break;
       }
@@ -7808,7 +8141,7 @@ class RouteService {
     final typ = type.toLowerCase().trim();
 
     // Kreisverkehr → eigenes Symbol
-    if (typ == 'roundabout' || typ == 'rotary') {
+    if (typ == 'roundabout' || typ == 'rotary' || typ == 'roundabout turn') {
       return Icons.roundabout_right;
     }
 
@@ -8602,11 +8935,13 @@ RouteWindowMatch findNearestInWindow({
     return const RouteWindowMatch(index: 0, distanceMeters: double.infinity);
   }
 
-  final start = currentIndex.clamp(0, coordinates.length - 1);
+  final start = currentIndex.clamp(0, coordinates.length - 1).toInt();
   final end = math.min(start + windowSize, coordinates.length - 1);
 
   var nearestIndex = start;
   var nearestDistance = double.infinity;
+  int? nearestSegmentIndex;
+  double? nearestSegmentFraction;
 
   for (var i = start; i <= end; i++) {
     final c = coordinates[i];
@@ -8623,11 +8958,84 @@ RouteWindowMatch findNearestInWindow({
     }
   }
 
+  for (var i = start; i < end; i++) {
+    final from = coordinates[i];
+    final to = coordinates[i + 1];
+    if (from.length < 2 || to.length < 2) continue;
+
+    final projection = _projectPositionOnRouteSegment(
+      position: position,
+      from: from,
+      to: to,
+    );
+    if (projection.distanceMeters < nearestDistance) {
+      nearestDistance = projection.distanceMeters;
+      nearestSegmentIndex = i;
+      nearestSegmentFraction = projection.fraction;
+      nearestIndex = projection.fraction >= 0.5 ? i + 1 : i;
+    }
+  }
+
   // Wenn das Match weit weg von der Route liegt, den Index nicht nach vorne
   // springen lassen. Distanz bleibt erhalten für Off-Route-Erkennung.
   if (nearestDistance > maxJumpMeters) {
-    return RouteWindowMatch(index: start, distanceMeters: nearestDistance);
+    return RouteWindowMatch(
+      index: start,
+      distanceMeters: nearestDistance,
+      segmentIndex: nearestSegmentIndex,
+      segmentFraction: nearestSegmentFraction,
+    );
   }
 
-  return RouteWindowMatch(index: nearestIndex, distanceMeters: nearestDistance);
+  return RouteWindowMatch(
+    index: nearestIndex,
+    distanceMeters: nearestDistance,
+    segmentIndex: nearestSegmentIndex,
+    segmentFraction: nearestSegmentFraction,
+  );
+}
+
+class _RouteSegmentProjection {
+  const _RouteSegmentProjection({
+    required this.distanceMeters,
+    required this.fraction,
+  });
+
+  final double distanceMeters;
+  final double fraction;
+}
+
+_RouteSegmentProjection _projectPositionOnRouteSegment({
+  required geo.Position position,
+  required List<double> from,
+  required List<double> to,
+}) {
+  const metersPerDegreeLat = 111320.0;
+  final metersPerDegreeLng =
+      metersPerDegreeLat * math.cos(position.latitude * math.pi / 180.0);
+
+  final ax = (from[0] - position.longitude) * metersPerDegreeLng;
+  final ay = (from[1] - position.latitude) * metersPerDegreeLat;
+  final bx = (to[0] - position.longitude) * metersPerDegreeLng;
+  final by = (to[1] - position.latitude) * metersPerDegreeLat;
+
+  final dx = bx - ax;
+  final dy = by - ay;
+  final lengthSquared = dx * dx + dy * dy;
+  if (lengthSquared == 0) {
+    return _RouteSegmentProjection(
+      distanceMeters: math.sqrt(ax * ax + ay * ay),
+      fraction: 0.0,
+    );
+  }
+
+  final fraction = ((-ax * dx - ay * dy) / lengthSquared)
+      .clamp(0.0, 1.0)
+      .toDouble();
+  final closestX = ax + dx * fraction;
+  final closestY = ay + dy * fraction;
+  return _RouteSegmentProjection(
+    distanceMeters: math.sqrt(closestX * closestX + closestY * closestY),
+    fraction: fraction,
+  );
 }

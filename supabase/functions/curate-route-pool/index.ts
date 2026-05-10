@@ -135,7 +135,9 @@ export async function curateRoutePool(options: CurationOptions = {}) {
       activePool.map((route) => route.routeFingerprint),
     );
     const coverageByCell = new Map(
-      coverageRows.map((coverage) => [cellKey(toCoverageCell(coverage)), coverage]),
+      coverageRows.map((
+        coverage,
+      ) => [cellKey(toCoverageCell(coverage)), coverage]),
     );
     const touchedCells = new Set<string>();
 
@@ -183,7 +185,7 @@ export async function curateRoutePool(options: CurationOptions = {}) {
       ).length;
       const decision = shouldPromoteCandidate(candidate, summary, {
         activeVerifiedCount,
-        maxPoolSize: coverage?.max_pool_size ?? 20,
+        maxPoolSize: coverage?.max_pool_size ?? 32,
         existingPoolFingerprints,
       });
       if (!decision.accepted) {
@@ -212,7 +214,10 @@ export async function curateRoutePool(options: CurationOptions = {}) {
     await finishRun(runId, "completed", stats);
     return { run_id: runId, dry_run: dryRun, stats };
   } catch (error) {
-    await failRun(runId, error instanceof Error ? error.message : String(error));
+    await failRun(
+      runId,
+      error instanceof Error ? error.message : String(error),
+    );
     throw error;
   }
 }
@@ -316,12 +321,17 @@ async function patchCandidateStats(
   if (dryRun) return;
   await rest("route_pool_candidates", {
     method: "PATCH",
-    query: `route_fingerprint=eq.${encodeURIComponent(candidate.routeFingerprint)}`,
+    query: `route_fingerprint=eq.${
+      encodeURIComponent(candidate.routeFingerprint)
+    }`,
     body: {
       average_rating: summary.averageRating,
       rating_count: summary.ratingCount,
       completion_rate: summary.completionRate,
-      candidate_score: weeklyRotationScore(candidateToPool(candidate, summary), summary),
+      candidate_score: weeklyRotationScore(
+        candidateToPool(candidate, summary),
+        summary,
+      ),
       updated_at: new Date().toISOString(),
     },
   });
@@ -349,7 +359,7 @@ async function promoteCandidate(
     distance_km: candidate.distance_km,
     distance_bucket: candidate.distance_bucket,
     route_type: candidate.route_type,
-    style_tags: candidate.style_tags ?? [],
+    style_tags: styleTagsForCandidate(candidate),
     avoids_highway: candidate.avoid_highways === true,
     has_highway: candidate.has_highway === true,
     quality_score: candidate.quality_score ?? 0,
@@ -387,7 +397,9 @@ async function markCandidatePromoted(
   if (dryRun) return;
   await rest("route_pool_candidates", {
     method: "PATCH",
-    query: `route_fingerprint=eq.${encodeURIComponent(candidate.routeFingerprint)}`,
+    query: `route_fingerprint=eq.${
+      encodeURIComponent(candidate.routeFingerprint)
+    }`,
     body: {
       is_candidate: false,
       is_verified_pool: true,
@@ -435,15 +447,16 @@ async function refreshCoverage(
   candidateRows: JsonMap[],
 ): Promise<void> {
   if (dryRun) return;
-  const key = cellKey(toCoverageCell(coverage));
+  const coverageCell = toCoverageCell(coverage);
   const verified = poolRows.filter((route) =>
-    route.isActive && route.verified && cellKey(route) === key
+    route.isActive && route.verified &&
+    routeMatchesCoverageCell(route, coverageCell)
   );
   const candidates = candidateRows.map(toCandidate).filter((candidate) =>
     candidate.isCandidate !== false &&
     !candidate.promotedToPoolAt &&
     !candidate.demotedAt &&
-    cellKey(candidate) === key
+    routeMatchesCoverageCell(candidate, coverageCell)
   );
   const qualityCounts = verified.reduce(
     (counts, route) => {
@@ -462,10 +475,10 @@ async function refreshCoverage(
       verified.map((route) => route.routeFingerprint),
     ).size,
     minVerifiedCount: coverage.min_verified_count ?? 3,
-    targetPoolSize: coverage.target_pool_size ?? 8,
-    maxPoolSize: coverage.max_pool_size ?? 20,
-    acceptableReserveLimitPercent:
-      coverage.acceptable_reserve_limit_percent ?? 25,
+    targetPoolSize: coverage.target_pool_size ?? 12,
+    maxPoolSize: coverage.max_pool_size ?? 32,
+    acceptableReserveLimitPercent: coverage.acceptable_reserve_limit_percent ??
+      25,
   });
   await rest("route_pool_coverage", {
     method: "PATCH",
@@ -487,6 +500,15 @@ async function refreshCoverage(
   });
 }
 
+function routeMatchesCoverageCell(
+  route: CurationRouteCell & { hasHighway: boolean },
+  coverageCell: CurationRouteCell,
+): boolean {
+  if (coverageCell.avoidHighways && route.hasHighway) return false;
+  return cellKey({ ...route, avoidHighways: coverageCell.avoidHighways }) ===
+    cellKey(coverageCell);
+}
+
 async function finishRun(
   runId: string,
   status: "completed",
@@ -502,7 +524,9 @@ async function finishRun(
       demoted_count: stats.demoted,
       updated_at: new Date().toISOString(),
       notes:
-        `Promoted ${stats.promoted}, demoted ${stats.demoted}; no hard deletes. Stats=${JSON.stringify(stats).slice(0, 900)}`,
+        `Promoted ${stats.promoted}, demoted ${stats.demoted}; no hard deletes. Stats=${
+          JSON.stringify(stats).slice(0, 900)
+        }`,
     },
   });
 }
@@ -656,6 +680,34 @@ function toCoverageCell(row: CoverageRow): CurationRouteCell {
   };
 }
 
+function styleTagsForCandidate(candidate: JsonMap): string[] {
+  const tags = Array.isArray(candidate.style_tags)
+    ? candidate.style_tags.map(String).map((tag) => tag.trim()).filter(Boolean)
+    : [];
+  if (tags.length > 0) return tags;
+  return [styleLabelForKey(String(candidate.style_key ?? "sport_mode"))];
+}
+
+function styleLabelForKey(styleKey: string): string {
+  const normalized = styleKey.trim().toLowerCase()
+    .replaceAll(/[^a-z0-9]+/g, "_")
+    .replaceAll(/_+/g, "_")
+    .replaceAll(/^_|_$/g, "");
+  if (
+    normalized === "kurvenjagd" || normalized === "kurvenreich" ||
+    normalized === "curvy"
+  ) {
+    return "Kurvenjagd";
+  }
+  if (normalized === "abendrunde" || normalized === "evening") {
+    return "Abendrunde";
+  }
+  if (normalized === "entdecker" || normalized === "explorer") {
+    return "Entdecker";
+  }
+  return "Sport Mode";
+}
+
 function routePayload(row: JsonMap): JsonMap {
   return row.route_payload && typeof row.route_payload === "object" &&
       !Array.isArray(row.route_payload)
@@ -683,7 +735,10 @@ function increment(target: Record<string, number>, key: string): void {
 function isAuthorized(req: Request): boolean {
   const bearer = bearerToken(req.headers.get("authorization"));
   const cronSecret = Deno.env.get("ROUTE_POOL_CURATION_CRON_SECRET")?.trim();
-  if (cronSecret && constantTimeEquals(req.headers.get("x-cron-secret"), cronSecret)) {
+  if (
+    cronSecret &&
+    constantTimeEquals(req.headers.get("x-cron-secret"), cronSecret)
+  ) {
     return true;
   }
   if (cronSecret && constantTimeEquals(bearer, cronSecret)) {
@@ -701,7 +756,10 @@ function bearerToken(value: string | null): string {
     : "";
 }
 
-function constantTimeEquals(left: string | null, right: string | null): boolean {
+function constantTimeEquals(
+  left: string | null,
+  right: string | null,
+): boolean {
   const a = new TextEncoder().encode(left ?? "");
   const b = new TextEncoder().encode(right ?? "");
   const length = Math.max(a.length, b.length);
@@ -717,7 +775,9 @@ function env(name: string): string {
 }
 
 function intOption(value: unknown, fallback: number, min: number, max: number) {
-  const parsed = typeof value === "number" ? value : Number(String(value ?? ""));
+  const parsed = typeof value === "number"
+    ? value
+    : Number(String(value ?? ""));
   if (!Number.isFinite(parsed)) return fallback;
   return Math.min(max, Math.max(min, Math.floor(parsed)));
 }

@@ -231,16 +231,16 @@ let maxRuntimeMs = 90_000;
 let runStartedAt = 0;
 let stats = createHealingStats();
 
-const DEFAULT_DAILY_ATTEMPT_BUDGET = 200;
-const DEFAULT_MONTHLY_ATTEMPT_BUDGET = 2000;
-const DEFAULT_DAILY_MAPBOX_BUDGET = 200;
-const DEFAULT_MONTHLY_MAPBOX_BUDGET = 2000;
-const DEFAULT_MAX_MAPBOX_CALLS_PER_JOB = 48;
-const USER_DEMAND_DAILY_ATTEMPT_BUDGET = 200;
-const USER_DEMAND_MONTHLY_ATTEMPT_BUDGET = 2000;
-const USER_DEMAND_DAILY_MAPBOX_BUDGET = 200;
-const USER_DEMAND_MONTHLY_MAPBOX_BUDGET = 2000;
-const USER_DEMAND_MAX_MAPBOX_CALLS_PER_JOB = 64;
+const DEFAULT_DAILY_ATTEMPT_BUDGET = 240;
+const DEFAULT_MONTHLY_ATTEMPT_BUDGET = 4000;
+const DEFAULT_DAILY_MAPBOX_BUDGET = 300;
+const DEFAULT_MONTHLY_MAPBOX_BUDGET = 4000;
+const DEFAULT_MAX_MAPBOX_CALLS_PER_JOB = 36;
+const USER_DEMAND_DAILY_ATTEMPT_BUDGET = 240;
+const USER_DEMAND_MONTHLY_ATTEMPT_BUDGET = 4000;
+const USER_DEMAND_DAILY_MAPBOX_BUDGET = 300;
+const USER_DEMAND_MONTHLY_MAPBOX_BUDGET = 4000;
+const USER_DEMAND_MAX_MAPBOX_CALLS_PER_JOB = 48;
 
 export async function processRouteSeedJobs(
   options: RoutePoolHealingWorkerOptions = {},
@@ -833,6 +833,9 @@ function preferredHealingSectors(job: SeedJob): number[] {
     if (city.includes("dornbirn")) {
       return [120, 170, 220, 90, 260, 45, 315, 0];
     }
+    if (city.includes("feldkirch")) {
+      return [70, 115, 155, 205, 35, 250, 300, 340];
+    }
     if (city.includes("götzis") || city.includes("goetzis")) {
       return [90, 140, 190, 230, 45, 280, 320, 0];
     }
@@ -861,7 +864,7 @@ function healingFamilyPlans(
   const curvy = job.style_key === "kurvenjagd";
   const explorer = job.style_key === "entdecker";
   const evening = job.style_key === "abendrunde";
-  const sport = job.style_key === "sport_mode";
+  const sport = styleKeyAliases(job.style_key).includes("sport_mode");
   const compactScale = healingRadiusScale(
     job,
     job.avoid_highways ? 0.19 : 0.21,
@@ -1084,6 +1087,9 @@ function evaluateGeneratedRoute(
   if (job.avoid_highways && routeHasMotorway(route)) {
     return rejectDecision("motorway_violation");
   }
+  if (rejectVorarlbergRhineBorderIntrusion(job, route)) {
+    return rejectDecision("border_intrusion");
+  }
 
   const verified = quality.tier === "ideal" || quality.tier === "good";
   return {
@@ -1140,7 +1146,7 @@ async function upsertVerifiedRoute(args: {
     distance_bucket: args.job.distance_bucket,
     route_type: args.job.route_type,
     style_tags: [styleLabel(args.job.style_key)],
-    avoids_highway: args.job.avoid_highways,
+    avoids_highway: !hasHighway,
     has_highway: hasHighway,
     quality_score: args.decision.qualityScore,
     shape_score: args.decision.shapeScore,
@@ -1187,9 +1193,9 @@ async function upsertCandidateRoute(args: {
     distance_km: args.decision.distanceKm,
     route_type: args.job.route_type,
     distance_bucket: args.job.distance_bucket,
-    style_key: args.job.style_key,
+    style_key: canonicalStyleKey(args.job.style_key),
     style_tags: [styleLabel(args.job.style_key)],
-    avoid_highways: args.job.avoid_highways,
+    avoid_highways: !hasHighway,
     has_highway: hasHighway,
     quality_score: args.decision.qualityScore,
     shape_score: args.decision.shapeScore,
@@ -1515,7 +1521,7 @@ async function processSearchSession(
         target_distance_km: candidate.target_distance_km ??
           session.distance_bucket,
         requested_distance_bucket: session.distance_bucket,
-        requested_style_key: session.style_key,
+        requested_style_key: canonicalStyleKey(session.style_key),
         delivered_style: candidate.delivered_style ??
           styleLabel(session.style_key),
         requested_style: candidate.requested_style ??
@@ -1862,7 +1868,7 @@ function sessionJobAdapter(
     city_cluster: region.city_cluster,
     route_type: "ROUND_TRIP",
     distance_bucket: session.distance_bucket,
-    style_key: session.style_key,
+    style_key: canonicalStyleKey(session.style_key),
     avoid_highways: session.avoid_highways,
     status: session.status,
     job_kind: "interactive_roundtrip_search",
@@ -2260,20 +2266,21 @@ async function refreshCoverage(job: SeedJob, region: RouteRegion) {
   const verifiedSummary = summarizeVerifiedRows(verifiedRows, job, region);
   const candidateRows = await rest<JsonMap[]>("route_pool_candidates", {
     query: new URLSearchParams({
-      select: "id,admin2_name",
+      select: "id,admin2_name,style_key,avoid_highways,has_highway",
       country_code: `eq.${region.country_code}`,
       admin1_name: `eq.${region.admin1_name}`,
       city_cluster: `eq.${region.city_cluster}`,
       route_type: `eq.${job.route_type}`,
       distance_bucket: `eq.${job.distance_bucket}`,
-      style_key: `eq.${job.style_key}`,
-      avoid_highways: `eq.${job.avoid_highways}`,
       is_candidate: "eq.true",
     }),
   });
+  const styleAliases = styleKeyAliases(job.style_key);
   const candidateCount =
     candidateRows.filter((row) =>
-      nullableSame(row.admin2_name, region.admin2_name)
+      nullableSame(row.admin2_name, region.admin2_name) &&
+      styleAliases.includes(canonicalStyleKey(String(row.style_key ?? ""))) &&
+      (!job.avoid_highways || row.has_highway !== true)
     ).length;
   const policy = coveragePolicy(region);
   const coverageStatus = coverageStatusForSummary(
@@ -2301,7 +2308,7 @@ async function verifiedCapacityRemainingForCell(
   const maxPoolSize = Math.max(
     0,
     Number(
-      coverage?.max_pool_size ?? region.default_max_pool_size ?? 20,
+      coverage?.max_pool_size ?? region.default_max_pool_size ?? 32,
     ),
   );
   const currentVerifiedCount = Math.max(
@@ -2322,6 +2329,7 @@ async function upsertCoverage(
   },
 ) {
   const existing = await loadCoverage(job, region);
+  const policy = coveragePolicy(region);
   const payload = {
     route_region_id: region.id ?? job.route_region_id ?? null,
     country_code: region.country_code,
@@ -2330,12 +2338,12 @@ async function upsertCoverage(
     city_cluster: region.city_cluster,
     route_type: job.route_type,
     distance_bucket: job.distance_bucket,
-    style_key: job.style_key,
+    style_key: canonicalStyleKey(job.style_key),
     avoid_highways: job.avoid_highways,
-    min_verified_count: 3,
-    target_pool_size: 8,
-    max_pool_size: 20,
-    candidate_buffer_limit: 30,
+    min_verified_count: policy.minVerifiedCount,
+    target_pool_size: policy.targetPoolSize,
+    max_pool_size: policy.maxPoolSize,
+    candidate_buffer_limit: Math.max(72, policy.targetPoolSize * 4),
     acceptable_reserve_limit_percent: 25,
     coverage_status: data.coverageStatus,
     healing_status: data.healingStatus,
@@ -2401,7 +2409,7 @@ async function loadCoverage(job: SeedJob, region: RouteRegion) {
     city_cluster: `eq.${region.city_cluster}`,
     route_type: `eq.${job.route_type}`,
     distance_bucket: `eq.${job.distance_bucket}`,
-    style_key: `eq.${job.style_key}`,
+    style_key: `eq.${canonicalStyleKey(job.style_key)}`,
     avoid_highways: `eq.${job.avoid_highways}`,
     limit: "1",
   });
@@ -2624,6 +2632,40 @@ function routeHasMotorway(route: any): boolean {
   return text.includes("motorway") || text.includes("autobahn");
 }
 
+function rejectVorarlbergRhineBorderIntrusion(
+  job: SeedJob,
+  route: any,
+): boolean {
+  if (job.route_type !== "ROUND_TRIP") return false;
+  const country = job.country_code.trim().toUpperCase();
+  const admin1 = job.admin1_name.trim().toLowerCase();
+  if (country !== "AT" || !admin1.includes("vorarlberg")) return false;
+  const city = job.city_cluster.trim().toLowerCase();
+  const rhineValleyStart = city.includes("dornbirn") ||
+    city.includes("feldkirch") ||
+    city.includes("götzis") ||
+    city.includes("goetzis");
+  if (!rhineValleyStart) return false;
+  const coordinates = Array.isArray(route?.geometry?.coordinates)
+    ? route.geometry.coordinates
+    : [];
+  let foreignCorridorPoints = 0;
+  for (const point of coordinates) {
+    if (
+      !Array.isArray(point) || point.length < 2 ||
+      typeof point[0] !== "number" || typeof point[1] !== "number"
+    ) continue;
+    const [lng, lat] = point;
+    if (
+      lat >= 47.05 && lat <= 47.58 &&
+      (lng < 9.53 || (lat >= 47.30 && lat <= 47.52 && lng < 9.61))
+    ) {
+      foreignCorridorPoints += 1;
+    }
+  }
+  return foreignCorridorPoints >= Math.max(4, coordinates.length * 0.03);
+}
+
 function healthyThreshold(region: RouteRegion, job: SeedJob): number {
   if (
     typeof region.healthy_threshold === "number" && region.healthy_threshold > 0
@@ -2643,8 +2685,21 @@ function targetDistanceFor(bucket: 50 | 75 | 100, attempt: number): number {
   return variants[attempt % variants.length] ?? bucket;
 }
 
+function canonicalStyleKey(styleKey: string): string {
+  const normalized = normalizeStyleKey(styleKey);
+  if (normalized === "sport" || normalized === "sport_mode") {
+    return "sport_mode";
+  }
+  return normalized || "sport_mode";
+}
+
+function styleKeyAliases(styleKey: string): string[] {
+  const canonical = canonicalStyleKey(styleKey);
+  return canonical === "sport_mode" ? ["sport_mode", "sport"] : [canonical];
+}
+
 function styleLabel(styleKey: string): RouteMode {
-  switch (styleKey) {
+  switch (canonicalStyleKey(styleKey)) {
     case "kurvenjagd":
       return "Kurvenjagd";
     case "abendrunde":
@@ -2658,7 +2713,7 @@ function styleLabel(styleKey: string): RouteMode {
 }
 
 function styleProfileFor(styleKey: string): string {
-  switch (styleKey) {
+  switch (canonicalStyleKey(styleKey)) {
     case "kurvenjagd":
       return "kurvenjagd";
     case "abendrunde":
@@ -2705,10 +2760,15 @@ interface CoverageQualitySummary {
 }
 
 function coveragePolicy(region: RouteRegion): CoveragePolicy {
+  const targetPoolSize = Math.max(12, region.default_target_pool_size ?? 12);
+  const maxPoolSize = Math.max(
+    targetPoolSize,
+    Math.max(32, region.default_max_pool_size ?? 32),
+  );
   return {
     minVerifiedCount: 3,
-    targetPoolSize: 8,
-    maxPoolSize: Math.max(8, region.default_max_pool_size ?? 20),
+    targetPoolSize,
+    maxPoolSize,
     acceptableReserveLimitPercent: 25,
     minDistinctFingerprints: 3,
   };
@@ -2730,8 +2790,11 @@ function summarizeVerifiedRows(
   };
   for (const row of rows) {
     if (!nullableSame(row.admin2_name, region.admin2_name)) continue;
+    const aliases = styleKeyAliases(job.style_key);
     if (
-      !styleTags(row.style_tags).map(normalizeStyleKey).includes(job.style_key)
+      !styleTags(row.style_tags).map(canonicalStyleKey).some((tag) =>
+        aliases.includes(tag)
+      )
     ) {
       continue;
     }
@@ -2765,7 +2828,7 @@ function summarizeVerifiedRows(
 
 function highwayMatches(row: JsonMap, avoidHighways: boolean): boolean {
   if (avoidHighways) {
-    return row.avoids_highway === true && row.has_highway !== true;
+    return row.has_highway !== true;
   }
   return true;
 }

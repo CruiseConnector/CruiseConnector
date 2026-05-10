@@ -23,6 +23,24 @@ import {
 import { getRouteDistanceKm } from "./point_to_point.ts";
 import { debugLog } from "./routing_debug.ts";
 
+export type RouteOverlapType =
+  | "none"
+  | "short_connector"
+  | "grade_separated_or_parallel"
+  | "dead_end_spike"
+  | "true_out_and_back"
+  | "mixed";
+
+export interface RouteOverlapAnalysis {
+  rawOverlapPercent: number;
+  penalizedOverlapPercent: number;
+  sameDirectionPercent: number;
+  oppositeDirectionPercent: number;
+  crossingPercent: number;
+  type: RouteOverlapType;
+  removableDeadEndCount: number;
+}
+
 export function countUTurnManeuvers(route: any): number {
   const legs = route?.legs;
   if (!Array.isArray(legs)) return 0;
@@ -118,19 +136,39 @@ export function hasUTurnManeuver(route: any): boolean {
   return false;
 }
 
-function calculateRouteOverlapPercent(route: any): number {
-  const coordinates = normalizeCoordinatesForShapeAnalysis(
-    extractRouteCoordinates(route),
+export function analyzeRouteOverlap(route: any): RouteOverlapAnalysis {
+  const rawCoordinates = extractRouteCoordinates(route);
+  const coordinates = normalizeCoordinatesForShapeAnalysis(rawCoordinates);
+  return analyzeCoordinateOverlap(
+    coordinates,
+    findRemovableLocalLoop(rawCoordinates)?.removedLoops ?? 0,
   );
+}
+
+function analyzeCoordinateOverlap(
+  coordinates: Coordinate[],
+  removableDeadEndCountHint = 0,
+): RouteOverlapAnalysis {
   if (!Array.isArray(coordinates) || coordinates.length < 25) {
-    return 0;
+    return {
+      rawOverlapPercent: 0,
+      penalizedOverlapPercent: 0,
+      sameDirectionPercent: 0,
+      oppositeDirectionPercent: 0,
+      crossingPercent: 0,
+      type: "none",
+      removableDeadEndCount: 0,
+    };
   }
 
   const sampleStep = 4;
+  const candidateStep = 2;
   const minIndexGap = 30;
-  const overlapDistanceMeters = 45;
+  const overlapDistanceMeters = 95;
   let sampleCount = 0;
-  let overlapCount = 0;
+  let sameDirectionCount = 0;
+  let oppositeDirectionCount = 0;
+  let crossingCount = 0;
 
   for (let i = 0; i < coordinates.length; i += sampleStep) {
     const current = coordinates[i];
@@ -140,9 +178,9 @@ function calculateRouteOverlapPercent(route: any): number {
       current,
       coordinates[Math.min(i + 1, coordinates.length - 1)],
     );
-    let foundOverlap = false;
+    let foundOverlap: "same" | "opposite" | "crossing" | null = null;
 
-    for (let j = i + minIndexGap; j < coordinates.length; j += sampleStep) {
+    for (let j = i + minIndexGap; j < coordinates.length; j += candidateStep) {
       const candidate = coordinates[j];
 
       const distanceMeters = calculateDistance(current, candidate) * 1000;
@@ -156,19 +194,99 @@ function calculateRouteOverlapPercent(route: any): number {
       const sameDirection = headingDelta <= 35;
       const oppositeDirection = headingDelta >= 145;
 
-      if (sameDirection || oppositeDirection) {
-        foundOverlap = true;
+      if (oppositeDirection) {
+        foundOverlap = "opposite";
         break;
+      }
+      if (sameDirection) {
+        foundOverlap ??= "same";
+      } else {
+        foundOverlap ??= "crossing";
       }
     }
 
-    if (foundOverlap) {
-      overlapCount += 1;
+    if (foundOverlap === "same") {
+      sameDirectionCount += 1;
+    } else if (foundOverlap === "opposite") {
+      oppositeDirectionCount += 1;
+    } else if (foundOverlap === "crossing") {
+      crossingCount += 1;
     }
   }
 
-  if (sampleCount === 0) return 0;
-  return (overlapCount / sampleCount) * 100;
+  if (sampleCount === 0) {
+    return {
+      rawOverlapPercent: 0,
+      penalizedOverlapPercent: 0,
+      sameDirectionPercent: 0,
+      oppositeDirectionPercent: 0,
+      crossingPercent: 0,
+      type: "none",
+      removableDeadEndCount: 0,
+    };
+  }
+
+  const sameDirectionPercent = (sameDirectionCount / sampleCount) * 100;
+  const oppositeDirectionPercent = (oppositeDirectionCount / sampleCount) * 100;
+  const crossingPercent = (crossingCount / sampleCount) * 100;
+  const rawOverlapPercent = sameDirectionPercent + oppositeDirectionPercent +
+    crossingPercent;
+  const removableDeadEndCount = removableDeadEndCountHint > 0
+    ? removableDeadEndCountHint
+    : findRemovableLocalLoop(coordinates)?.removedLoops ?? 0;
+  const penalizedOverlapPercent = clampNumber(
+    oppositeDirectionPercent +
+      Math.max(0, sameDirectionPercent - 24) * 0.25,
+    0,
+    100,
+  );
+
+  return {
+    rawOverlapPercent,
+    penalizedOverlapPercent,
+    sameDirectionPercent,
+    oppositeDirectionPercent,
+    crossingPercent,
+    type: classifyOverlapType({
+      rawOverlapPercent,
+      sameDirectionPercent,
+      oppositeDirectionPercent,
+      crossingPercent,
+      removableDeadEndCount,
+    }),
+    removableDeadEndCount,
+  };
+}
+
+function calculateRouteOverlapPercent(route: any): number {
+  return analyzeRouteOverlap(route).penalizedOverlapPercent;
+}
+
+function classifyOverlapType(args: {
+  rawOverlapPercent: number;
+  sameDirectionPercent: number;
+  oppositeDirectionPercent: number;
+  crossingPercent: number;
+  removableDeadEndCount: number;
+}): RouteOverlapType {
+  if (args.removableDeadEndCount > 0) return "dead_end_spike";
+  if (args.rawOverlapPercent <= 0.1) return "none";
+
+  const legitimatePercent = args.sameDirectionPercent + args.crossingPercent;
+  if (
+    args.oppositeDirectionPercent >= 20 ||
+    (args.oppositeDirectionPercent >= 12 &&
+      args.oppositeDirectionPercent >= legitimatePercent)
+  ) {
+    return "true_out_and_back";
+  }
+  if (legitimatePercent > 0 && args.rawOverlapPercent <= 8) {
+    return "short_connector";
+  }
+  if (legitimatePercent >= args.oppositeDirectionPercent) {
+    return "grade_separated_or_parallel";
+  }
+  return "mixed";
 }
 
 function extractRouteCoordinates(route: any): Coordinate[] {
@@ -595,9 +713,27 @@ function removeClientStyleLocalLoops(coordinates: Coordinate[]): {
   coordinates: Coordinate[];
   removedLoops: number;
 } {
-  if (coordinates.length < 10) {
+  const loop = findRemovableLocalLoop(coordinates);
+  if (loop == null) {
     return { coordinates, removedLoops: 0 };
   }
+
+  const shortened = coordinates.slice(0, loop.startIndex + 1).concat(
+    coordinates.slice(loop.endIndex),
+  );
+  const next = removeClientStyleLocalLoops(shortened);
+  return {
+    coordinates: next.coordinates,
+    removedLoops: next.removedLoops + loop.removedLoops,
+  };
+}
+
+function findRemovableLocalLoop(coordinates: Coordinate[]): {
+  startIndex: number;
+  endIndex: number;
+  removedLoops: number;
+} | null {
+  if (coordinates.length < 10) return null;
 
   const cumulative: number[] = [0];
   for (let i = 1; i < coordinates.length; i += 1) {
@@ -624,18 +760,77 @@ function removeClientStyleLocalLoops(coordinates: Coordinate[]): {
       if (pathLengthMeters < directDistanceMeters * 4) continue;
       if (pathLengthMeters > 1200) continue;
 
-      const shortened = coordinates.slice(0, j + 1).concat(
-        coordinates.slice(i),
-      );
-      const next = removeClientStyleLocalLoops(shortened);
-      return {
-        coordinates: next.coordinates,
-        removedLoops: next.removedLoops + 1,
-      };
+      if (
+        isRemovableDeadEndOverlap(
+          coordinates,
+          j,
+          i,
+          directDistanceMeters,
+          pathLengthMeters,
+        )
+      ) {
+        return { startIndex: j, endIndex: i, removedLoops: 1 };
+      }
     }
   }
 
-  return { coordinates, removedLoops: 0 };
+  return null;
+}
+
+function isRemovableDeadEndOverlap(
+  coordinates: Coordinate[],
+  startIndex: number,
+  endIndex: number,
+  directDistanceMeters: number,
+  pathLengthMeters: number,
+): boolean {
+  if (startIndex <= 0 || endIndex >= coordinates.length - 1) return false;
+  if (pathLengthMeters < 140 || pathLengthMeters > 1200) return false;
+  if (pathLengthMeters < Math.max(160, directDistanceMeters * 4)) return false;
+
+  const headingBefore = calculateBearing(
+    coordinates[startIndex - 1],
+    coordinates[startIndex],
+  );
+  const headingAfter = calculateBearing(
+    coordinates[endIndex],
+    coordinates[Math.min(endIndex + 1, coordinates.length - 1)],
+  );
+  if (headingDeltaDegrees(headingBefore, headingAfter) > 55) {
+    return false;
+  }
+
+  const outboundHeading = calculateBearing(
+    coordinates[startIndex],
+    coordinates[Math.min(startIndex + 2, endIndex)],
+  );
+  const inboundHeading = calculateBearing(
+    coordinates[Math.max(startIndex, endIndex - 2)],
+    coordinates[endIndex],
+  );
+  const returnsAgainstOutbound =
+    headingDeltaDegrees(outboundHeading, inboundHeading) >= 132;
+  const segment = coordinates.slice(startIndex, endIndex + 1);
+  const hasLocalUTurn = countGeometricUTurns(segment) > 0;
+  const outwardRadiusMeters = maxDistanceFromAnchorMeters(
+    segment,
+    coordinates[startIndex],
+  );
+
+  return (returnsAgainstOutbound || hasLocalUTurn) &&
+    outwardRadiusMeters >= 35 &&
+    outwardRadiusMeters <= 420;
+}
+
+function maxDistanceFromAnchorMeters(
+  coordinates: Coordinate[],
+  anchor: Coordinate,
+): number {
+  return coordinates.reduce(
+    (maxDistance, point) =>
+      Math.max(maxDistance, calculateDistance(anchor, point) * 1000),
+    0,
+  );
 }
 
 function estimateClientLoopCleanupImpact(coordinates: Coordinate[]): {
@@ -1415,7 +1610,8 @@ function evaluateRouteQualityCore(
       distanceDeltaKm,
     };
   }
-  const overlapPercent = calculateRouteOverlapPercent(route);
+  const overlapAnalysis = analyzeRouteOverlap(route);
+  const overlapPercent = overlapAnalysis.penalizedOverlapPercent;
   const shapeSignals = calculateRouteShapeSignals(route);
   const hasManeuverUTurn = hasUTurnManeuver(route);
   const hasGeometricUTurn = routeType === "ROUND_TRIP" &&
@@ -1764,6 +1960,20 @@ function evaluateRouteQualityCore(
     shapeSignals.spurArmPercent <= 36 &&
     shapeSignals.centralReturnPercent <= 28 &&
     shapeSignals.hookCount <= (isCurveChase ? 14 : 16);
+
+  if (routeType === "ROUND_TRIP" && overlapAnalysis.type === "dead_end_spike") {
+    return {
+      passed: false,
+      reason: "dead_end_spike",
+      overlapPercent,
+      hasUTurn,
+      tier: "rejected",
+      score: 1180 + overlapAnalysis.rawOverlapPercent * 4,
+      coordinateCount,
+      actualDistanceKm,
+      distanceDeltaKm,
+    };
+  }
 
   if (
     hasUTurn &&

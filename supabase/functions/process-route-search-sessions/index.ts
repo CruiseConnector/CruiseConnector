@@ -100,7 +100,7 @@ Deno.serve(async (req) => {
       maxHydrations: clampInt(
         body.max_hydrations_per_run ?? body.max_candidates ??
           body.max_mapbox_calls_per_run,
-        1,
+        2,
         1,
         2,
       ),
@@ -280,6 +280,23 @@ async function hydrateClaimedSession(session: SessionRow): Promise<JsonMap> {
       candidate_queue_index: attempt,
     };
   }
+  if (rejectVorarlbergRhineBorderIntrusion(session, route)) {
+    await rejectOrRetry(
+      session,
+      "border_intrusion",
+      callsUsed,
+      candidate,
+      queue,
+    );
+    return {
+      search_session_id: session.id,
+      found: false,
+      finished: false,
+      reason: "border_intrusion",
+      mapbox_calls_used: callsUsed,
+      candidate_queue_index: attempt,
+    };
+  }
 
   const totalCalls = (session.mapbox_calls_used ?? 0) + callsUsed;
   const fingerprint = candidate.route_fingerprint ||
@@ -323,7 +340,7 @@ async function hydrateClaimedSession(session: SessionRow): Promise<JsonMap> {
       target_distance_km: candidate.target_distance_km ??
         session.distance_bucket,
       requested_distance_bucket: session.distance_bucket,
-      requested_style_key: session.style_key,
+      requested_style_key: canonicalStyleKey(session.style_key),
       requested_style: candidate.requested_style ??
         styleLabel(session.style_key),
       delivered_style: candidate.delivered_style ??
@@ -601,7 +618,7 @@ async function upsertCandidateRoute(args: {
       distance_km: args.distanceKm,
       route_type: "ROUND_TRIP",
       distance_bucket: args.session.distance_bucket,
-      style_key: args.session.style_key,
+      style_key: canonicalStyleKey(args.session.style_key),
       style_tags: [styleLabel(args.session.style_key)],
       avoid_highways: !args.hasMotorway,
       has_highway: args.hasMotorway,
@@ -1091,10 +1108,20 @@ function mergeReject(
   };
 }
 
+function canonicalStyleKey(styleKey: string): string {
+  const normalized = styleKey.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_")
+    .replace(/_+/g, "_").replace(/^_|_$/g, "");
+  if (normalized === "sport" || normalized === "sport_mode") {
+    return "sport_mode";
+  }
+  return normalized || "sport_mode";
+}
+
 function styleLabel(styleKey: string): string {
-  if (styleKey === "kurvenjagd") return "Kurvenjagd";
-  if (styleKey === "abendrunde") return "Abendrunde";
-  if (styleKey === "entdecker") return "Entdecker";
+  const canonical = canonicalStyleKey(styleKey);
+  if (canonical === "kurvenjagd") return "Kurvenjagd";
+  if (canonical === "abendrunde") return "Abendrunde";
+  if (canonical === "entdecker") return "Entdecker";
   return "Sport Mode";
 }
 
@@ -1109,6 +1136,28 @@ function routeCoordinates(route: any): number[][] {
       Number.isFinite(point[1])
     )
     : [];
+}
+
+function rejectVorarlbergRhineBorderIntrusion(
+  session: SessionRow,
+  route: any,
+): boolean {
+  const inVorarlbergRhineValley = session.origin_lat >= 47.18 &&
+    session.origin_lat <= 47.46 &&
+    session.origin_lng >= 9.55 &&
+    session.origin_lng <= 9.80;
+  if (!inVorarlbergRhineValley) return false;
+  const coordinates = routeCoordinates(route);
+  let foreignCorridorPoints = 0;
+  for (const [lng, lat] of coordinates) {
+    if (
+      lat >= 47.05 && lat <= 47.58 &&
+      (lng < 9.53 || (lat >= 47.30 && lat <= 47.52 && lng < 9.61))
+    ) {
+      foreignCorridorPoints += 1;
+    }
+  }
+  return foreignCorridorPoints >= Math.max(4, coordinates.length * 0.03);
 }
 
 function shapeScoreFromCandidate(candidate: CandidatePayload): number {

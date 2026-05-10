@@ -508,6 +508,32 @@ void main() {
       },
     );
 
+    test('SavedRoute Signatur unterstuetzt GPS-Track mit Segment-Luecken', () {
+      final drivenRoute = SavedRoute.fromJson({
+        'id': 'route-driven-multiline',
+        'created_at': '2026-05-09T10:00:00.000Z',
+        'style': 'Sport Mode',
+        'distance_actual': 12.4,
+        'driven_km': 12.4,
+        'geometry': {
+          'type': 'MultiLineString',
+          'coordinates': [
+            [
+              [9.7471, 47.5162],
+              [9.7500, 47.5200],
+            ],
+            [
+              [9.8100, 47.5500],
+              [9.8200, 47.5600],
+            ],
+          ],
+        },
+      });
+
+      expect(drivenRoute.routeSignature, contains('9.7471,47.5162'));
+      expect(drivenRoute.routeSignature, contains('9.8200,47.5600'));
+    });
+
     test(
       'buildExistingRouteInsertForTest speichert Community-Kopie ohne Drive-XP-Felder',
       () {

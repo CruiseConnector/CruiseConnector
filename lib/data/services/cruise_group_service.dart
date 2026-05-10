@@ -4,6 +4,23 @@ import '../../core/input_limits.dart';
 import '../../domain/models/cruise_group.dart';
 import '../../domain/models/group_member.dart';
 
+class GroupRouteUpdateResult {
+  const GroupRouteUpdateResult({
+    required this.routeRevision,
+    required this.routeUpdatedAt,
+  });
+
+  final int routeRevision;
+  final DateTime routeUpdatedAt;
+
+  factory GroupRouteUpdateResult.fromMap(Map<String, dynamic> row) {
+    return GroupRouteUpdateResult(
+      routeRevision: (row['new_route_revision'] as num).toInt(),
+      routeUpdatedAt: DateTime.parse(row['updated_at'].toString()),
+    );
+  }
+}
+
 /// CRUD + Realtime für `groups`/`group_members` im Cruise-Kontext.
 class CruiseGroupService {
   CruiseGroupService._();
@@ -43,6 +60,9 @@ class CruiseGroupService {
           'max_people': maxPeople,
           'start_time': startTime?.toIso8601String(),
           'route_data': routeData,
+          'current_route_data': routeData,
+          'route_updated_by': uid,
+          'route_updated_at': DateTime.now().toUtc().toIso8601String(),
           'start_location': startLocation,
         })
         .select('id')
@@ -62,24 +82,21 @@ class CruiseGroupService {
         .maybeSingle();
     if (row == null) return null;
 
-    // Profile-Daten separat laden (keine FK zu profiles vorhanden).
     final members = (row['group_members'] as List?) ?? const [];
-    final userIds = members
-        .whereType<Map<String, dynamic>>()
-        .map((m) => m['user_id'] as String)
-        .toList();
-    if (userIds.isNotEmpty) {
-      final profiles = await _db
-          .from('profiles')
-          .select('id, username, avatar_url')
-          .inFilter('id', userIds);
-      final byId = {for (final p in profiles as List) (p as Map)['id']: p};
-      for (final m in members.whereType<Map<String, dynamic>>()) {
-        final p = byId[m['user_id']];
-        if (p != null) m['profiles'] = p;
-      }
-    }
+    await _attachProfiles(members.whereType<Map<String, dynamic>>().toList());
     return CruiseGroup.fromMap(row);
+  }
+
+  static Future<List<GroupMember>> fetchMembers(String groupId) async {
+    final rows = await _db
+        .from('group_members')
+        .select('*')
+        .eq('group_id', groupId);
+    final members = (rows as List).whereType<Map<String, dynamic>>().toList(
+      growable: false,
+    );
+    await _attachProfiles(members);
+    return members.map(GroupMember.fromMap).toList(growable: false);
   }
 
   static Future<void> activate(String groupId) async {
@@ -159,6 +176,30 @@ class CruiseGroupService {
         .eq('user_id', uid);
   }
 
+  static Future<GroupRouteUpdateResult?> updateCurrentRoute({
+    required String groupId,
+    required int expectedRevision,
+    required Map<String, dynamic> routeData,
+  }) async {
+    final rows = await _db.rpc(
+      'update_group_current_route',
+      params: {
+        'p_group_id': groupId,
+        'p_expected_revision': expectedRevision,
+        'p_route_data': routeData,
+      },
+    );
+    if (rows is List && rows.isNotEmpty) {
+      return GroupRouteUpdateResult.fromMap(
+        Map<String, dynamic>.from(rows.first as Map),
+      );
+    }
+    if (rows is Map && rows.isNotEmpty) {
+      return GroupRouteUpdateResult.fromMap(Map<String, dynamic>.from(rows));
+    }
+    return null;
+  }
+
   static Future<void> join(
     String groupId, {
     MemberRole role = MemberRole.passenger,
@@ -189,8 +230,9 @@ class CruiseGroupService {
   /// Hört auf Änderungen am `groups`-Row (z.B. is_active → true).
   static RealtimeChannel subscribeGroup(
     String groupId,
-    void Function(Map<String, dynamic> newRow) onChange,
-  ) {
+    void Function(Map<String, dynamic> newRow) onChange, {
+    void Function(RealtimeSubscribeStatus status, Object? error)? onStatus,
+  }) {
     final ch = _db.channel('group_sync_$groupId');
     ch.onPostgresChanges(
       event: PostgresChangeEvent.update,
@@ -203,15 +245,17 @@ class CruiseGroupService {
       ),
       callback: (payload) => onChange(payload.newRecord),
     );
-    ch.subscribe();
+    ch.subscribe(onStatus);
     return ch;
   }
 
   /// Hört auf Positions- und Rollen-Updates aller Mitglieder.
   static RealtimeChannel subscribeMembers(
     String groupId,
-    void Function(Map<String, dynamic> row) onChange,
-  ) {
+    void Function(Map<String, dynamic> row) onChange, {
+    void Function(Map<String, dynamic> oldRow)? onDelete,
+    void Function(RealtimeSubscribeStatus status, Object? error)? onStatus,
+  }) {
     final ch = _db.channel('location_sync_$groupId');
     ch.onPostgresChanges(
       event: PostgresChangeEvent.all,
@@ -223,14 +267,39 @@ class CruiseGroupService {
         value: groupId,
       ),
       callback: (payload) {
+        if (payload.eventType == PostgresChangeEvent.delete) {
+          onDelete?.call(payload.oldRecord);
+          return;
+        }
         final row = payload.newRecord.isNotEmpty
             ? payload.newRecord
             : payload.oldRecord;
         onChange(row);
       },
     );
-    ch.subscribe();
+    ch.subscribe(onStatus);
     return ch;
+  }
+
+  static Future<void> _attachProfiles(
+    List<Map<String, dynamic>> members,
+  ) async {
+    final userIds = members
+        .map((m) => m['user_id'] as String?)
+        .whereType<String>()
+        .toSet()
+        .toList(growable: false);
+    if (userIds.isEmpty) return;
+
+    final profiles = await _db
+        .from('profiles')
+        .select('id, username, avatar_url')
+        .inFilter('id', userIds);
+    final byId = {for (final p in profiles as List) (p as Map)['id']: p};
+    for (final m in members) {
+      final p = byId[m['user_id']];
+      if (p != null) m['profiles'] = p;
+    }
   }
 
   static Future<void> _notifyMutualFriendsAboutPublicGroup(

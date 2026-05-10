@@ -145,8 +145,8 @@ class SavedRoute {
   }
 
   String get routeSignature {
-    final coordinates = geometry['coordinates'];
-    if (coordinates is! List || coordinates.isEmpty) {
+    final coordinates = _flattenGeometryCoordinates(geometry);
+    if (coordinates.isEmpty) {
       return '$routeType|$style|${distanceKm.toStringAsFixed(1)}';
     }
 
@@ -160,13 +160,39 @@ class SavedRoute {
     final samples = <String>[];
     for (final index in sampleIndexes.toList()..sort()) {
       final point = coordinates[index];
-      if (point is List && point.length >= 2) {
-        final lng = (point[0] as num).toDouble().toStringAsFixed(4);
-        final lat = (point[1] as num).toDouble().toStringAsFixed(4);
-        samples.add('$lng,$lat');
-      }
+      final lng = point[0].toStringAsFixed(4);
+      final lat = point[1].toStringAsFixed(4);
+      samples.add('$lng,$lat');
     }
     return '$routeType|$style|${distanceKm.toStringAsFixed(1)}|${samples.join("|")}';
+  }
+
+  static List<List<double>> _flattenGeometryCoordinates(
+    Map<String, dynamic> geometry,
+  ) {
+    final raw = geometry['coordinates'];
+    if (raw is! List) return const [];
+    if (geometry['type'] == 'MultiLineString') {
+      return raw
+          .whereType<List>()
+          .expand(_parseCoordinateSegment)
+          .toList(growable: false);
+    }
+    return _parseCoordinateSegment(raw);
+  }
+
+  static List<List<double>> _parseCoordinateSegment(List raw) {
+    return raw
+        .whereType<List>()
+        .where((point) => point.length >= 2)
+        .map((point) {
+          final lng = point[0];
+          final lat = point[1];
+          if (lng is! num || lat is! num) return null;
+          return [lng.toDouble(), lat.toDouble()];
+        })
+        .whereType<List<double>>()
+        .toList(growable: false);
   }
 
   /// Serialisiert die Route für den lokalen Cache (shared_preferences).
