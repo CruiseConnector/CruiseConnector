@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:cruise_connect/data/services/route_cache_service.dart';
 import 'package:cruise_connect/domain/models/route_maneuver.dart';
 import 'package:cruise_connect/domain/models/route_result.dart';
@@ -65,6 +67,11 @@ void main() {
         groupId: 'group-a',
       );
 
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString('confirmed_navigation_route_v1')!;
+      expect(raw, contains('"icon_name":"turn_right"'));
+      expect(raw, isNot(contains('icon_code_point')));
+
       final cached = await RouteCacheService.instance.loadConfirmedRoute();
 
       expect(cached, isNotNull);
@@ -115,5 +122,48 @@ void main() {
         expect(await RouteCacheService.instance.loadConfirmedRoute(), isNull);
       },
     );
+
+    test('liest Legacy-Icon-Codepoints ohne dynamische IconData', () async {
+      SharedPreferences.setMockInitialValues({
+        'confirmed_navigation_route_v1': jsonEncode({
+          'saved_at': DateTime.now().toUtc().toIso8601String(),
+          'is_round_trip': true,
+          'style': 'Sport Mode',
+          'avoid_highways': false,
+          'route': {
+            'geo_json':
+                '{"type":"LineString","coordinates":[[9,47],[9.1,47.1]]}',
+            'geometry': {
+              'type': 'LineString',
+              'coordinates': [
+                [9.0, 47.0],
+                [9.1, 47.1],
+              ],
+            },
+            'coordinates': [
+              [9.0, 47.0],
+              [9.1, 47.1],
+            ],
+            'maneuvers': [
+              {
+                'latitude': 47.1,
+                'longitude': 9.1,
+                'route_index': 1,
+                'announcement': 'Links abbiegen.',
+                'instruction': 'Links abbiegen.',
+                'icon_code_point': Icons.turn_left.codePoint,
+                'icon_font_family': Icons.turn_left.fontFamily,
+                'maneuver_type': ManeuverType.normal.name,
+              },
+            ],
+          },
+        }),
+      });
+
+      final cached = await RouteCacheService.instance.loadConfirmedRoute();
+
+      expect(cached, isNotNull);
+      expect(cached!.route.maneuvers.single.icon, Icons.turn_left);
+    });
   });
 }

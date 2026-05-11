@@ -103,19 +103,25 @@ class _HomePageState extends State<HomePage> {
     });
   }
 
+  /// Fullscreen-Modus darf nur greifen wenn der User tatsächlich auf der
+  /// Cruise-Tab (Index 2) ist. Verhindert dass ein verwaister Notifier-Zustand
+  /// (z. B. nach App-Resume aus dem Hintergrund mit aktiver Route) die
+  /// Bottom-Nav auf den anderen Tabs ausblendet.
+  bool get _hideChromeForFullscreen => _isFullscreen && _selectedIndex == 2;
+
   @override
   Widget build(BuildContext context) {
+    final hideChrome = _hideChromeForFullscreen;
     return Scaffold(
       backgroundColor: const Color(0xFF0B0E14),
       body: SafeArea(
-        // Im Fullscreen-Modus: SafeArea-Padding deaktivieren, aber Widget-Tree bleibt gleich
-        top: !_isFullscreen,
-        bottom: !_isFullscreen,
-        left: !_isFullscreen,
-        right: !_isFullscreen,
+        top: !hideChrome,
+        bottom: !hideChrome,
+        left: !hideChrome,
+        right: !hideChrome,
         child: kIsWeb ? _buildWebTabs() : _buildNativeTabs(),
       ),
-      bottomNavigationBar: _isFullscreen ? null : _buildBottomNav(),
+      bottomNavigationBar: hideChrome ? null : _buildBottomNav(),
     );
   }
 

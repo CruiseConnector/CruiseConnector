@@ -157,10 +157,7 @@ class RouteCacheService {
               'route_index': maneuver.routeIndex,
               'announcement': maneuver.announcement,
               'instruction': maneuver.instruction,
-              'icon_code_point': maneuver.icon.codePoint,
-              'icon_font_family': maneuver.icon.fontFamily,
-              'icon_font_package': maneuver.icon.fontPackage,
-              'icon_match_text_direction': maneuver.icon.matchTextDirection,
+              'icon_name': _iconName(maneuver.icon),
               'maneuver_type': maneuver.maneuverType.name,
               'roundabout_exit_number': maneuver.roundaboutExitNumber,
             },
@@ -233,7 +230,7 @@ class RouteCacheService {
             latitude: (map['latitude'] as num?)?.toDouble() ?? 0,
             longitude: (map['longitude'] as num?)?.toDouble() ?? 0,
             routeIndex: (map['route_index'] as num?)?.toInt() ?? 0,
-            icon: _iconFromJson(map),
+            icon: _iconFromJson(map, maneuverType: maneuverType),
             announcement: map['announcement']?.toString() ?? '',
             instruction: map['instruction']?.toString() ?? '',
             maneuverType: maneuverType,
@@ -244,15 +241,120 @@ class RouteCacheService {
         .toList(growable: false);
   }
 
-  IconData _iconFromJson(Map<String, dynamic> json) {
+  String _iconName(IconData icon) {
+    if (icon == Icons.flag) return 'flag';
+    if (icon == Icons.navigation) return 'navigation';
+    if (icon == Icons.roundabout_right) return 'roundabout_right';
+    if (icon == Icons.turn_left) return 'turn_left';
+    if (icon == Icons.turn_right) return 'turn_right';
+    if (icon == Icons.turn_slight_left) return 'turn_slight_left';
+    if (icon == Icons.turn_slight_right) return 'turn_slight_right';
+    if (icon == Icons.turn_sharp_left) return 'turn_sharp_left';
+    if (icon == Icons.turn_sharp_right) return 'turn_sharp_right';
+    if (icon == Icons.u_turn_left) return 'u_turn_left';
+    if (icon == Icons.u_turn_right) return 'u_turn_right';
+    if (icon == Icons.ramp_left) return 'ramp_left';
+    if (icon == Icons.ramp_right) return 'ramp_right';
+    if (icon == Icons.merge) return 'merge';
+    if (icon == Icons.fork_left) return 'fork_left';
+    if (icon == Icons.fork_right) return 'fork_right';
+    return 'straight';
+  }
+
+  IconData _iconFromJson(
+    Map<String, dynamic> json, {
+    required ManeuverType maneuverType,
+  }) {
+    if (maneuverType == ManeuverType.roundabout) {
+      return Icons.roundabout_right;
+    }
+    final iconName =
+        json['icon_name']?.toString() ?? json['maneuver_icon']?.toString();
+    final namedIcon = _iconFromName(iconName);
+    if (namedIcon != null) return namedIcon;
+
     final codePoint = (json['icon_code_point'] as num?)?.toInt();
-    if (codePoint == null) return Icons.straight;
-    return IconData(
-      codePoint,
-      fontFamily: json['icon_font_family']?.toString(),
-      fontPackage: json['icon_font_package']?.toString(),
-      matchTextDirection: json['icon_match_text_direction'] == true,
-    );
+    if (codePoint != null) {
+      final legacyIcon = _legacyIconFromCodePoint(codePoint);
+      if (legacyIcon != null) return legacyIcon;
+    }
+
+    final instruction = json['instruction']?.toString().toLowerCase() ?? '';
+    if (instruction.contains('ziel') || instruction.contains('arrive')) {
+      return Icons.flag;
+    }
+    return Icons.straight;
+  }
+
+  IconData? _iconFromName(String? name) {
+    switch (name) {
+      case 'flag':
+        return Icons.flag;
+      case 'navigation':
+        return Icons.navigation;
+      case 'roundabout_right':
+        return Icons.roundabout_right;
+      case 'turn_left':
+        return Icons.turn_left;
+      case 'turn_right':
+        return Icons.turn_right;
+      case 'turn_slight_left':
+        return Icons.turn_slight_left;
+      case 'turn_slight_right':
+        return Icons.turn_slight_right;
+      case 'turn_sharp_left':
+        return Icons.turn_sharp_left;
+      case 'turn_sharp_right':
+        return Icons.turn_sharp_right;
+      case 'u_turn_left':
+        return Icons.u_turn_left;
+      case 'u_turn_right':
+        return Icons.u_turn_right;
+      case 'ramp_left':
+        return Icons.ramp_left;
+      case 'ramp_right':
+        return Icons.ramp_right;
+      case 'merge':
+        return Icons.merge;
+      case 'fork_left':
+        return Icons.fork_left;
+      case 'fork_right':
+        return Icons.fork_right;
+      case 'straight':
+        return Icons.straight;
+    }
+    return null;
+  }
+
+  IconData? _legacyIconFromCodePoint(int codePoint) {
+    if (codePoint == Icons.flag.codePoint) return Icons.flag;
+    if (codePoint == Icons.navigation.codePoint) return Icons.navigation;
+    if (codePoint == Icons.roundabout_right.codePoint) {
+      return Icons.roundabout_right;
+    }
+    if (codePoint == Icons.turn_left.codePoint) return Icons.turn_left;
+    if (codePoint == Icons.turn_right.codePoint) return Icons.turn_right;
+    if (codePoint == Icons.turn_slight_left.codePoint) {
+      return Icons.turn_slight_left;
+    }
+    if (codePoint == Icons.turn_slight_right.codePoint) {
+      return Icons.turn_slight_right;
+    }
+    if (codePoint == Icons.turn_sharp_left.codePoint) {
+      return Icons.turn_sharp_left;
+    }
+    if (codePoint == Icons.turn_sharp_right.codePoint) {
+      return Icons.turn_sharp_right;
+    }
+    if (codePoint == Icons.u_turn_left.codePoint) return Icons.u_turn_left;
+    if (codePoint == Icons.u_turn_right.codePoint) return Icons.u_turn_right;
+    if (codePoint == Icons.ramp_left.codePoint) return Icons.ramp_left;
+    if (codePoint == Icons.ramp_right.codePoint) return Icons.ramp_right;
+    if (codePoint == Icons.merge.codePoint) return Icons.merge;
+    if (codePoint == Icons.fork_left.codePoint) return Icons.fork_left;
+    if (codePoint == Icons.fork_right.codePoint) return Icons.fork_right;
+    if (codePoint == Icons.straight.codePoint) return Icons.straight;
+    return null;
   }
 
   List<SpeedLimitSegment> _speedLimitsFromJson(Object? value) {
