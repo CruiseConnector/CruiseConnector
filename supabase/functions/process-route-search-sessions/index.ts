@@ -1146,7 +1146,7 @@ function routeCoordinates(route: any): number[][] {
     : [];
 }
 
-function rejectVorarlbergRhineBorderIntrusion(
+export function rejectVorarlbergRhineBorderIntrusion(
   session: SessionRow,
   route: any,
 ): boolean {
@@ -1156,16 +1156,47 @@ function rejectVorarlbergRhineBorderIntrusion(
     session.origin_lng <= 9.80;
   if (!inVorarlbergRhineValley) return false;
   const coordinates = routeCoordinates(route);
-  let foreignCorridorPoints = 0;
+  // Foreign-Korridor enger gefasst (hartes Foreign nur lng < 9.50; im Streifen
+  // lat 47.30–47.52 zusätzlich bis lng < 9.55). Reject erst wenn DEUTLICH viele
+  // Punkte UND eine zusammenhängende Foreign-Strecke > 4 km erreicht werden —
+  // beide Bedingungen müssen zutreffen. Damit fallen kurze westliche Polyline-
+  // Streifen, die keine echten CH/FL-Ausflüge sind, nicht mehr durchs Raster.
+  const isForeignPoint = (lng: number, lat: number): boolean => {
+    if (lat < 47.05 || lat > 47.58) return false;
+    if (lng < 9.50) return true;
+    if (lat >= 47.30 && lat <= 47.52 && lng < 9.55) return true;
+    return false;
+  };
+  const haversineKm = (
+    a: readonly [number, number],
+    b: readonly [number, number],
+  ): number => {
+    const earthRadiusKm = 6371;
+    const lat1Rad = (a[1] * Math.PI) / 180;
+    const lat2Rad = (b[1] * Math.PI) / 180;
+    const dLatRad = ((b[1] - a[1]) * Math.PI) / 180;
+    const dLngRad = ((b[0] - a[0]) * Math.PI) / 180;
+    const h = Math.sin(dLatRad / 2) * Math.sin(dLatRad / 2) +
+      Math.cos(lat1Rad) * Math.cos(lat2Rad) *
+        Math.sin(dLngRad / 2) * Math.sin(dLngRad / 2);
+    return 2 * earthRadiusKm * Math.asin(Math.sqrt(h));
+  };
+  let foreignPoints = 0;
+  let foreignSegmentKm = 0;
+  let previousForeignPoint: [number, number] | null = null;
   for (const [lng, lat] of coordinates) {
-    if (
-      lat >= 47.05 && lat <= 47.58 &&
-      (lng < 9.53 || (lat >= 47.30 && lat <= 47.52 && lng < 9.61))
-    ) {
-      foreignCorridorPoints += 1;
+    if (isForeignPoint(lng, lat)) {
+      foreignPoints += 1;
+      if (previousForeignPoint != null) {
+        foreignSegmentKm += haversineKm(previousForeignPoint, [lng, lat]);
+      }
+      previousForeignPoint = [lng, lat];
+    } else {
+      previousForeignPoint = null;
     }
   }
-  return foreignCorridorPoints >= Math.max(4, coordinates.length * 0.03);
+  const pointThreshold = Math.max(10, coordinates.length * 0.08);
+  return foreignPoints >= pointThreshold && foreignSegmentKm > 4;
 }
 
 function shapeScoreFromCandidate(candidate: CandidatePayload): number {
