@@ -1092,6 +1092,50 @@ class RouteService {
     }
   }
 
+  /// Last-Chance Pool-Fallback nach erschöpftem search_session_no_route.
+  ///
+  /// Wenn die persistente Edge-Suche `search_session_no_route` zurückliefert
+  /// (z. B. Border-Intrusion in Vorarlberg exhausted), aber der Pool für die
+  /// Kombination (region, distance_bucket, style, avoid_highways) verifizierte
+  /// Routen bereit hält, soll der User KEINE „Wir bereiten Routen vor"-Meldung
+  /// sehen, sondern direkt eine verified Pool-Route bekommen.
+  ///
+  /// Delegiert an [_tryRoutePoolFallback] mit `allowDuplicateFallback=true`, so
+  /// dass auch bereits gesehene Pool-Routen als Notbremse zurückgeliefert werden.
+  /// `avoid_highways` muss exakt matchen (vom Pool-Service durchgesetzt) — die
+  /// No-Highway-Regel wird also nicht verletzt.
+  Future<RouteResult?> tryPoolFallbackForFailedRoundTrip({
+    required geo.Position startPosition,
+    required int targetDistanceKm,
+    required String mode,
+    required bool avoidHighways,
+    String planningType = 'Zufall',
+  }) async {
+    final styleConfig = RouteStyleConfig.forMode(mode);
+    final normalizedTargetKm = styleConfig.clampRoundTripDistanceKm(
+      targetDistanceKm,
+    );
+    final scenario = RouteScenario(
+      routeType: 'ROUND_TRIP',
+      startLatitude: startPosition.latitude,
+      startLongitude: startPosition.longitude,
+      style: mode,
+      planningType: planningType,
+      targetDistanceKm: normalizedTargetKm.toDouble(),
+      avoidHighways: avoidHighways,
+      waypointSignature: null,
+      closeLoop: false,
+    );
+    return _tryRoutePoolFallback(
+      scenario: scenario,
+      styleConfig: styleConfig,
+      userLat: startPosition.latitude,
+      userLng: startPosition.longitude,
+      fallbackReason: 'search_session_no_route_last_chance',
+      allowDuplicateFallback: true,
+    );
+  }
+
   Future<bool> kickRoundTripSearchSession(
     String searchSessionId, {
     String reason = 'client_poll_stale',

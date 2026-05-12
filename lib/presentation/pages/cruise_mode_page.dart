@@ -4051,6 +4051,52 @@ class _CruiseModePageState extends State<CruiseModePage>
               label: '[CruiseMode] Search session polling stacktrace',
               stackTrace: pollStack,
             );
+            // Last-Chance Pool-Fallback bei `search_session_no_route`: wenn der
+            // Pool für (region, bucket, style, avoid_highways) verifizierte
+            // Routen kennt, lieber eine bewährte Pool-Route ausspielen als die
+            // generische „Wir bereiten Routen vor"-Statusmeldung zu zeigen.
+            if (_isRoundTrip &&
+                pollError is RouteServiceException &&
+                (pollError.edgeMeta['response_code']?.toString() ==
+                        'search_session_no_route' ||
+                    pollError.edgeMeta['code']?.toString() ==
+                        'search_session_no_route')) {
+              try {
+                final lastChanceStart = await _getStartCoordinates();
+                if (_isRouteGenerationCancelled(generationId)) return;
+                final lastChance = await _routeService
+                    .tryPoolFallbackForFailedRoundTrip(
+                      startPosition: lastChanceStart,
+                      targetDistanceKm: requestedDistance,
+                      mode: _selectedStyle,
+                      avoidHighways: _avoidHighways,
+                      planningType: _planningType,
+                    );
+                if (lastChance != null &&
+                    !_isRouteGenerationCancelled(generationId)) {
+                  _logRoundTripSearchUiDecision(
+                    'route_accepted_from_last_chance_pool',
+                    sessionId: sessionId,
+                    result: lastChance,
+                  );
+                  await _acceptGeneratedRouteResult(
+                    result: lastChance,
+                    startPosition: lastChanceStart,
+                    distance: requestedDistance,
+                    waypointSignature: requestedWaypointSignature,
+                  );
+                  return;
+                }
+              } catch (lastChanceError, lastChanceStack) {
+                debugPrint(
+                  '[CruiseMode] Last-chance pool fallback failed: $lastChanceError',
+                );
+                debugPrintStack(
+                  label: '[CruiseMode] Last-chance pool stacktrace',
+                  stackTrace: lastChanceStack,
+                );
+              }
+            }
             errorForUi = pollError;
           }
         }
