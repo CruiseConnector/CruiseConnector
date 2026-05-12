@@ -3025,6 +3025,28 @@ class RoutePoolService {
     );
   }
 
+  /// Markiert eine Pool-Route als gerade vorgeschlagen, sodass die nächste
+  /// Pool-Probe sie hinten anstellt (siehe `last_suggested_at`-Sortierung in
+  /// [findCandidateRoutesNear]). Fire-and-forget: Fehler werden nur geloggt,
+  /// damit ein DB-Hiccup eine bereits gelieferte Route nie blockiert.
+  Future<void> recordPoolHit(String routeId) async {
+    final id = routeId.trim();
+    if (id.isEmpty) return;
+    if (_inMemoryRoutes != null) {
+      return;
+    }
+    try {
+      await _db
+          .from('route_pool')
+          .update(<String, dynamic>{
+            'last_suggested_at': DateTime.now().toUtc().toIso8601String(),
+          })
+          .eq('id', id);
+    } catch (error) {
+      debugPrint('[RoutePoolService] recordPoolHit failed for $id: $error');
+    }
+  }
+
   Future<_CandidateUpsertResult> _upsertCandidate(
     RoutePoolCandidate candidate,
   ) async {

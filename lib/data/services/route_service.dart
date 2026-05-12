@@ -5353,6 +5353,7 @@ class RouteService {
       lastRoutePoolUsedReason = usingCandidateReserve
           ? 'candidate_reserve:$fallbackReason'
           : fallbackReason;
+      unawaited(_routePoolService.recordPoolHit(match.route.id));
       _debugRouteSearch(
         '[PoolFallback] poolHit=true poolUsed=true '
         'poolMatchId=${match.route.id} poolMatchTier=${match.radiusScope} '
@@ -5392,6 +5393,7 @@ class RouteService {
       lastRoutePoolUsedReason = usingCandidateReserve
           ? 'duplicate_candidate_reserve_fallback:$fallbackReason'
           : 'duplicate_pool_fallback:$fallbackReason';
+      unawaited(_routePoolService.recordPoolHit(match.route.id));
       _debugRouteSearch(
         '[PoolFallback] poolHit=true poolUsed=true duplicateFallbackUsed=true '
         'poolMatchId=${match.route.id} poolMatchTier=${match.radiusScope} '
