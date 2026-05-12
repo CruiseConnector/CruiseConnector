@@ -1465,8 +1465,13 @@ class RoutePoolService {
           routeQuery = routeQuery.eq('has_highway', false);
         }
 
+        // Rotation: bei gleichem quality_score zuerst die noch nie
+        // vorgeschlagenen Routen (last_suggested_at IS NULL), danach die am
+        // längsten nicht mehr gezeigten. Verhindert, dass Pool-Probe bei
+        // wiederholten Suchen immer dieselbe Top-Route liefert.
         final routeRows = await routeQuery
             .order('quality_score', ascending: false)
+            .order('last_suggested_at', ascending: true, nullsFirst: true)
             .limit(effectiveCandidateLimit);
         final candidates = (routeRows as List)
             .map((row) => RoutePoolEntry.fromJson(row as Map<String, dynamic>))
