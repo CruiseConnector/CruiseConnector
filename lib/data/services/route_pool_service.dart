@@ -1465,8 +1465,13 @@ class RoutePoolService {
           routeQuery = routeQuery.eq('has_highway', false);
         }
 
+        // Rotation: bei gleichem quality_score zuerst die noch nie
+        // vorgeschlagenen Routen (last_suggested_at IS NULL), danach die am
+        // längsten nicht mehr gezeigten. Verhindert, dass Pool-Probe bei
+        // wiederholten Suchen immer dieselbe Top-Route liefert.
         final routeRows = await routeQuery
             .order('quality_score', ascending: false)
+            .order('last_suggested_at', ascending: true, nullsFirst: true)
             .limit(effectiveCandidateLimit);
         final candidates = (routeRows as List)
             .map((row) => RoutePoolEntry.fromJson(row as Map<String, dynamic>))
@@ -3023,6 +3028,28 @@ class RoutePoolService {
     return RouteSeedJob.fromJson(
       Map<String, dynamic>.from((rows as List).first as Map),
     );
+  }
+
+  /// Markiert eine Pool-Route als gerade vorgeschlagen, sodass die nächste
+  /// Pool-Probe sie hinten anstellt (siehe `last_suggested_at`-Sortierung in
+  /// [findCandidateRoutesNear]). Fire-and-forget: Fehler werden nur geloggt,
+  /// damit ein DB-Hiccup eine bereits gelieferte Route nie blockiert.
+  Future<void> recordPoolHit(String routeId) async {
+    final id = routeId.trim();
+    if (id.isEmpty) return;
+    if (_inMemoryRoutes != null) {
+      return;
+    }
+    try {
+      await _db
+          .from('route_pool')
+          .update(<String, dynamic>{
+            'last_suggested_at': DateTime.now().toUtc().toIso8601String(),
+          })
+          .eq('id', id);
+    } catch (error) {
+      debugPrint('[RoutePoolService] recordPoolHit failed for $id: $error');
+    }
   }
 
   Future<_CandidateUpsertResult> _upsertCandidate(

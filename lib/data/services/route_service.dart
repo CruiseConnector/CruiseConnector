@@ -782,13 +782,19 @@ class RouteService {
         throw lastError;
       }
 
+      // Live ist hier durch — ein bereits gesehener Pool-Match ist immer
+      // besser als NO_ROUTE. Fix A/B (recordPoolHit + last_suggested_at-
+      // Sortierung) sorgen ohnehin dafür, dass der "Duplicate" über mehrere
+      // Suchen rotiert. Vorher war allowDuplicateFallback nur bei Search
+      // Again wahr, dadurch entstand der Sport-AB-AN-NO_ROUTE-Effekt in
+      // Feldkirch obwohl 15 kompatible Pool-Routen verfügbar waren.
       final poolFallback = await _tryRoutePoolFallback(
         scenario: scenario,
         styleConfig: styleConfig,
         userLat: startPosition.latitude,
         userLng: startPosition.longitude,
         fallbackReason: lastError?.type.name ?? 'no_accepted_mapbox_route',
-        allowDuplicateFallback: allowDuplicateFallbackForThisSearch,
+        allowDuplicateFallback: true,
       );
       if (poolFallback != null) {
         return poolFallback;
@@ -5353,6 +5359,7 @@ class RouteService {
       lastRoutePoolUsedReason = usingCandidateReserve
           ? 'candidate_reserve:$fallbackReason'
           : fallbackReason;
+      unawaited(_routePoolService.recordPoolHit(match.route.id));
       _debugRouteSearch(
         '[PoolFallback] poolHit=true poolUsed=true '
         'poolMatchId=${match.route.id} poolMatchTier=${match.radiusScope} '
@@ -5392,6 +5399,7 @@ class RouteService {
       lastRoutePoolUsedReason = usingCandidateReserve
           ? 'duplicate_candidate_reserve_fallback:$fallbackReason'
           : 'duplicate_pool_fallback:$fallbackReason';
+      unawaited(_routePoolService.recordPoolHit(match.route.id));
       _debugRouteSearch(
         '[PoolFallback] poolHit=true poolUsed=true duplicateFallbackUsed=true '
         'poolMatchId=${match.route.id} poolMatchTier=${match.radiusScope} '
