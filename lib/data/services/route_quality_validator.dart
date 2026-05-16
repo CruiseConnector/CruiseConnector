@@ -593,23 +593,26 @@ class RouteQualityValidator {
     // ABER neu: einzeln extrem hoher spurArmPercent (echte Kraken) sowie
     // kombinierte Stern-Pattern (radialPeak≥3 + spurArm≥55% ODER
     // centerRecross≥55% + spurArm≥40%) kippen in rejected.
-    // User-Feedback 2026-05-16 (Friedrichshafen-Test): Pool-Routes für Sport
-    // mit 2 separaten Loops + Tail kamen durch alle bisherigen Schwellen
-    // (centerReentryCount=2, radialPeakCount=3, spurArmPercent~25%). Die
-    // Schwellen wurden für allgemein konzipiert — Sport reagiert deutlich
-    // empfindlicher. Eigener Sport-Branch hier zieht client-side parallel
-    // zum Edge-Filter (route_quality.ts). Kurvenjagd/Entdecker/Abendrunde
-    // bleiben unangetastet, weil deren Routen legitim höhere radialPeaks
-    // haben (Serpentinen, Erkundungs-Pattern).
+    // Sport-Tentakel-Gate — User-Feedback 2026-05-16: ursprüngliche
+    // Schwellen (centerReentryCount ≥ 2, radialPeakCount ≥ 3, spurArm 22%)
+    // waren in flachen Bodensee-Regionen so eng, dass Friedrichshafen-Tests
+    // garnichts mehr lieferten. Schwellen jetzt eine Stufe lockerer:
+    // CenterReentry ≥ 3 (vorher 2), radialPeakCount ≥ 4 (vorher 3),
+    // spurArm 28% (vorher 22%), spurArmCount ≥ 3 (vorher 2). Echte
+    // 3-Spur-Tentakel werden weiterhin rejected, aber 2-Spur-Routen wie
+    // sie Mapbox in flacher Region oft liefert kommen jetzt durch.
+    // Kombiniert mit dem Live-Emergency-Fallback im RoundTrip-Loop und
+    // dem strict-Pfad bei reichlich Pool-Auswahl gibt das ein robusteres
+    // System: clean wenn möglich, akzeptabel wenn nicht, NIE NoRoute.
     final sportTentacleGate =
         isRoundTrip &&
         styleProfileKey == 'sport' &&
-        ((quality.centerReentryCount >= 2) ||
-            (quality.radialPeakCount >= 3) ||
-            (quality.spurArmPercent >= 22.0 &&
-                (quality.spurArmCount >= 1 ||
-                    quality.repeatedStartAreaPercent >= 14.0)) ||
-            (quality.spurArmCount >= 2));
+        ((quality.centerReentryCount >= 3) ||
+            (quality.radialPeakCount >= 4) ||
+            (quality.spurArmPercent >= 28.0 &&
+                (quality.spurArmCount >= 2 ||
+                    quality.repeatedStartAreaPercent >= 20.0)) ||
+            (quality.spurArmCount >= 3));
     final severeRoundTripShape =
         isRoundTrip &&
         (sportTentacleGate ||
