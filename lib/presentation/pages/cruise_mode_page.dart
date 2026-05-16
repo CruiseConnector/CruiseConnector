@@ -2686,6 +2686,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     final mins = durationMin % 60;
     final timeStr = hours > 0 ? '${hours}h ${mins}min' : '$mins min';
     final curveCount = _cachedCurveCount;
+    final routeSource = _routeSourceLabel(result);
 
     return Container(
       padding: const EdgeInsets.all(14),
@@ -2701,13 +2702,40 @@ class _CruiseModePageState extends State<CruiseModePage>
       ),
       child: Column(
         children: [
-          Text(
-            'Route berechnet',
-            style: TextStyle(
-              color: AppAccentColors.accent,
-              fontSize: 14,
-              fontWeight: FontWeight.bold,
-            ),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(
+                'Route berechnet',
+                style: TextStyle(
+                  color: AppAccentColors.accent,
+                  fontSize: 14,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              if (routeSource != null) ...[
+                const SizedBox(width: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 6,
+                    vertical: 2,
+                  ),
+                  decoration: BoxDecoration(
+                    color: AppAccentColors.accent.withValues(alpha: 0.18),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Text(
+                    routeSource,
+                    style: TextStyle(
+                      color: AppAccentColors.accent,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: 0.4,
+                    ),
+                  ),
+                ),
+              ],
+            ],
           ),
           const SizedBox(height: 10),
           Row(
@@ -2726,6 +2754,19 @@ class _CruiseModePageState extends State<CruiseModePage>
         ],
       ),
     );
+  }
+
+  String? _routeSourceLabel(RouteResult result) {
+    final meta = result.edgeMeta;
+    if (meta.isEmpty) return null;
+    final raw =
+        (meta['route_source'] ?? meta['source'] ?? '').toString().toLowerCase();
+    if (raw.isEmpty) return null;
+    if (raw == 'pool' || raw == 'route_pool') return 'POOL';
+    if (raw == 'candidate_reserve') return 'POOL+';
+    if (raw == 'cache' || raw == 'session_cache') return 'CACHE';
+    if (raw == 'mapbox' || raw == 'live') return 'LIVE';
+    return raw.toUpperCase();
   }
 
   /// Berechnet XP für die aktuelle Route via GamificationService.

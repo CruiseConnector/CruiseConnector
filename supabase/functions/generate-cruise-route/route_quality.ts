@@ -1689,6 +1689,20 @@ function evaluateRouteQualityCore(
         !mediumLongNoHighwaySportShape &&
         shapeSignals.radialPeakCount >= 4 &&
         shapeSignals.middleCoverageRatio < 0.33) ||
+      // Sport AB-AN: bereits ein einziger spürbarer Spur-Arm reicht damit
+      // die Route „tentakelig" wirkt. User-Feedback 2026-05-16: 2 separate
+      // Out-and-back-Spurs (Sennwald + Eschen) machten 25-32% der Strecke
+      // aus → Route fühlte sich kaputt an. Schärfere Sport-Schwelle (25%)
+      // greift hier — Kurvenjagd bleibt unangetastet (höhere Toleranz für
+      // Serpentinen).
+      (isSportMode === true &&
+        !mediumLongNoHighwaySportShape &&
+        shapeSignals.spurArmPercent >= 25 &&
+        (
+          shapeSignals.geometricUTurnCount >= 1 ||
+          shapeSignals.hookCount >= 8 ||
+          shapeSignals.repeatedStartAreaPercent >= 18
+        )) ||
       shapeSignals.repeatedStartAreaPercent > 52 ||
       (
         shapeSignals.spurArmPercent >= 58 &&
@@ -1882,21 +1896,29 @@ function evaluateRouteQualityCore(
   const requiredStopManeuverUTurnsOnly = requiredStops &&
     uTurnManeuverCount > 0 &&
     requiredStopUTurnManeuverCount === uTurnManeuverCount;
+  // Sport mit Autobahn AN ≤60km: User-Feedback 2026-05-16 zeigte Tentakel-
+  // Outbreaks (kleine Out-and-back Spurs in Sennwald + Eschen) in einer
+  // 52km-Route. Vorher waren die Schwellen liberal (spurArm≤30, U-turns≤3,
+  // hooks≤12, repeatedStartArea≤26) — das hat genau diese Form durchgelassen.
+  // Sport ≠ Tentakel-Loop; jetzt hart gegen Spur-Arms (18), U-turns (1),
+  // Hooks (6) und Wiederholungen am Start (16). Wenn dadurch zu viele
+  // Routes durchfallen, kompensiert der bestEmergencyDuplicate-Pfad
+  // (intern-duplicate ≠ client-duplicate) und der Pool-Fallback.
   const tolerantShortSportHairpin = isShortSportWithHighwayRoundTrip;
   const cleanShortSportHairpin = tolerantShortSportHairpin &&
-    !hasManeuverUTurn && shapeSignals.geometricUTurnCount <= 3 &&
+    !hasManeuverUTurn && shapeSignals.geometricUTurnCount <= 1 &&
     (distanceConfig == null ||
       (
         actualDistanceKm >= distanceConfig.acceptableMinKm * 0.9 &&
         actualDistanceKm <= distanceConfig.acceptableMaxKm * 1.12
       )) &&
-    overlapPercent <= 26 &&
-    shapeSignals.oppositeOverlapPercent <= 20 &&
-    shapeSignals.centerReentryCount <= 2 &&
-    shapeSignals.repeatedStartAreaPercent <= 26 &&
-    shapeSignals.spurArmPercent <= 30 &&
-    shapeSignals.centralReturnPercent <= 20 &&
-    shapeSignals.hookCount <= 12;
+    overlapPercent <= 22 &&
+    shapeSignals.oppositeOverlapPercent <= 16 &&
+    shapeSignals.centerReentryCount <= 1 &&
+    shapeSignals.repeatedStartAreaPercent <= 16 &&
+    shapeSignals.spurArmPercent <= 18 &&
+    shapeSignals.centralReturnPercent <= 14 &&
+    shapeSignals.hookCount <= 6;
   const cleanNoHighwayHairpin = (isNoHighwayHairpinEligibleRoundTrip &&
     (mediumLongNoHighwaySport
       ? uTurnManeuverCount <= (targetDistanceKm > 85 ? 6 : 5)
