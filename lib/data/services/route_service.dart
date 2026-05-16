@@ -654,6 +654,13 @@ class RouteService {
       _RouteCandidate? bestCandidate;
       _RouteCandidate? spareCandidate;
       _RouteCandidate? bestDuplicateCandidate;
+      // Best-of-rejected: bei Sport in dünnen Regionen (Friedrichshafen) lehnt
+      // der client-side Tentakel-Gate jede Live-Route ab. Ohne diesen Tracker
+      // landet der User auf NO_ROUTE obwohl Edge erfolgreich eine Geometrie
+      // geliefert hat. Wir merken uns den am wenigsten tentakeligen rejected
+      // Candidate und nehmen ihn als allerletzten Fallback — besser als gar
+      // nichts und besser als die ganze Skalierungs-Arbeit aufzuwerfen.
+      _RouteCandidate? bestRejectedCandidate;
       RouteServiceException? lastError;
 
       for (var attempt = 0; attempt < maxAttempts; attempt++) {
@@ -714,6 +721,15 @@ class RouteService {
             } else if (_isBetterCandidate(candidate, spareCandidate)) {
               spareCandidate = candidate;
             }
+          } else if (candidate.route.coordinates.length >= 20 &&
+              (bestRejectedCandidate == null ||
+                  candidate.score < bestRejectedCandidate.score)) {
+            // Edge hat eine valide Geometrie geliefert (sonst hätten wir hier
+            // eine exception). Selbst wenn unser Service-Validator sie als
+            // hardRejected markiert (z.B. Sport-Tentakel-Gate), die Route ist
+            // safe (Edge hat border-intrusion / dead-end bereits gefiltert).
+            // Merken als Notnagel für den emergency-fallback-Pfad.
+            bestRejectedCandidate = candidate;
           }
           if (candidate.accepted &&
               candidate.novelEnough &&
@@ -1040,6 +1056,32 @@ class RouteService {
 
       if (_isSearchInProgressError(lastError)) {
         throw lastError!;
+      }
+
+      // Allerletzter Live-Emergency: Edge hat valide Geometrie geliefert,
+      // aber unsere Quality-Gates (insbesondere der client-side Sport-
+      // Tentakel-Gate) haben sie rejected. Bevor wir den User auf NO_ROUTE
+      // schicken, geben wir die am wenigsten tentakelige Variante zurück.
+      // Das passiert NACH Pool/Highway/Recent/Cached — also nur wenn
+      // wirklich keine bessere Quelle da ist. Markieren als emergency,
+      // damit die UI klar zeigt „beste verfügbare Form" statt eine
+      // perfekte Route vorzutäuschen.
+      if (bestRejectedCandidate != null &&
+          bestRejectedCandidate.route.coordinates.isNotEmpty) {
+        lastRouteEmergencyFallbackUsed = true;
+        lastRouteGenerationSource = 'mapbox_rescue';
+        _debugRouteSearch(
+          '[Fallback] liveRescueFallbackUsed=true reason=all_attempts_rejected '
+          'scenarioKey=${scenario.scenarioKey} '
+          'forceFreshVariant=$forceFreshVariant trigger=$debugTrigger '
+          'score=${bestRejectedCandidate.score.toStringAsFixed(1)}',
+        );
+        return _finalizeAndRemember(
+          scenario: scenario,
+          route: bestRejectedCandidate.route,
+          sampledCoordinates: bestRejectedCandidate.sampledCoordinates,
+          fingerprint: bestRejectedCandidate.fingerprint,
+        );
       }
 
       final warmupError = await _maybeBuildCoverageWarmupError(
