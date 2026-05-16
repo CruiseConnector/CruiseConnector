@@ -2679,9 +2679,28 @@ class _CruiseModePageState extends State<CruiseModePage>
     final distKm = result.distanceMeters != null
         ? (result.distanceMeters! / 1000.0).toStringAsFixed(1)
         : '--';
-    final durationMin = result.durationSeconds != null
-        ? (result.durationSeconds! / 60).round()
-        : 0;
+    final actualDistanceKm = result.distanceMeters != null
+        ? result.distanceMeters! / 1000.0
+        : (result.distanceKm ?? 0.0);
+    // Pool-Routen kommen oft ohne duration_seconds zurück → UI zeigte „0 min".
+    // Fallback: aus Distanz schätzen (Sport ≈ 55 km/h Schnitt auf Landstraße,
+    // Kurvenjagd ≈ 45 km/h, Abendrunde ≈ 50 km/h, sonst 50). Ist nur eine
+    // grobe Schätzung — sobald Mapbox-Duration vorhanden ist, gewinnt die.
+    int durationMin;
+    final realDurationSeconds = result.durationSeconds;
+    if (realDurationSeconds != null && realDurationSeconds > 30) {
+      durationMin = (realDurationSeconds / 60).round();
+    } else if (actualDistanceKm > 0) {
+      final estimatedAverageKmh = switch (_selectedStyle.toLowerCase()) {
+        'kurvenjagd' || 'kurvenreich' => 45.0,
+        'abendrunde' || 'panorama' => 50.0,
+        'sport' || 'sport mode' || 'sport_mode' => 55.0,
+        _ => 50.0,
+      };
+      durationMin = (actualDistanceKm / estimatedAverageKmh * 60).round();
+    } else {
+      durationMin = 0;
+    }
     final hours = durationMin ~/ 60;
     final mins = durationMin % 60;
     final timeStr = hours > 0 ? '${hours}h ${mins}min' : '$mins min';

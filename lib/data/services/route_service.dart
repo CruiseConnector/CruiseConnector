@@ -5350,18 +5350,24 @@ class RouteService {
         candidateRoute = rebasedRoute;
       }
 
+      // Sport hat strenge Form-Anforderungen — Pool-Routen die als Live
+      // gerade abgelehnt würden dürfen über den Pool nicht durch die
+      // Hintertür reinkommen. Andere Stile (Kurvenjagd/Entdecker/Abendrunde)
+      // sind toleranter und behalten den relaxed-Pfad.
+      final isSportLikePool = styleConfig.profileKey == 'sport';
       final candidate = _evaluateCandidate(
         scenario: scenario,
         styleConfig: styleConfig,
         route: candidateRoute,
         variant: _poolRouteVariant(scenario, match),
-        relaxedRoundTrip: true,
+        relaxedRoundTrip: !isSportLikePool,
         directDistanceKm: directDistanceKm,
       );
       if (!candidate.accepted || candidate.hardRejected) {
         _debugRouteSearch(
           '[PoolFallback] poolHit=true poolUsed=false reason=quality_rejected '
-          'poolMatchId=${match.route.id} tier=${candidate.tier.name}',
+          'poolMatchId=${match.route.id} tier=${candidate.tier.name} '
+          'sportStrict=$isSportLikePool',
         );
         continue;
       }
@@ -5468,6 +5474,17 @@ class RouteService {
     required String fallbackReason,
   }) {
     if (!scenario.isRoundTrip) return false;
+    // User-Feedback 2026-05-16 Friedrichshafen: candidate_reserve (POOL+) hat
+    // eine 44.7-km-Sport-Route mit Tentakel-Form geliefert (Eriskirch-Loop +
+    // Spurarm). Reserve-Routen sind explizit `verified=false` und tragen
+    // qualityScore aus der ersten Mapbox-Generierung — das reicht für
+    // Kurvenjagd/Entdecker, aber Sport hat strengere Form-Erwartungen. Wenn
+    // schon eine verifizierte Pool-Route da ist, lieber die nehmen statt
+    // einer Reserve-Route mit unsauberer Form.
+    final isSportLike = scenario.style.toLowerCase().contains('sport');
+    if (isSportLike && matches.isNotEmpty) {
+      return false;
+    }
     if (matches.isEmpty || matches.length < 3) return true;
     final reason = fallbackReason.toLowerCase();
     if (reason.contains('search_again') ||
