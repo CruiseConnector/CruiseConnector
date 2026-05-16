@@ -1936,6 +1936,12 @@ Deno.serve(async (req) => {
           shortHighwayAllowedLakeBorderRoundTripNeedsSession ||
           roundTripTargetForBatching >= 70 ||
           (avoidHighways && roundTripTargetForBatching >= 60) ||
+          // Highway-allowed (Autobahn AN) short-/mid-distance round-trips brauchen
+          // ebenfalls eine Session damit `batchExhausted` getriggert wird und der
+          // Background-Worker den Pool füllen kann. Ohne diesen Pfad blieb
+          // search_session_id null und der User bekam 404 ohne Pool-Fallback-Chance.
+          (!avoidHighways && roundTripTargetForBatching >= 45 &&
+            roundTripTargetForBatching <= 105) ||
           roundTripTargetForBatching >= 90 ||
           mode === "Abendrunde" ||
           mode === "Entdecker"
