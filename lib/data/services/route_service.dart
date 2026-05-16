@@ -3572,6 +3572,19 @@ class RouteService {
     RoutePoolCoverageCheck coverage,
   ) {
     if (coverage.poolHealthy) return false;
+    // Skalierungs-Fix 2026-05-16: Wenn der Pool für diese Region praktisch
+    // leer ist (z.B. unbekannte Stadt ohne route_regions-Eintrag, oder
+    // bootstrap_enabled=false aber noch keine kuratierten Routen), darf
+    // Live NIEMALS blockiert werden — sonst sieht der User in jeder Nicht-
+    // Vorarlberg-Region nur „Wir bereiten bessere Routen vor" obwohl
+    // tatsächlich nichts vorbereitet wird (kein seed_job ohne Region).
+    // Live ist die einzige verbleibende Source und MUSS laufen dürfen.
+    final assignment = coverage.assignment;
+    if (assignment == null) return false;
+    if (coverage.currentVerifiedCount <= 2 &&
+        coverage.coverageStatus != 'cooldown') {
+      return false;
+    }
     if (!coverage.bootstrapEnabled) return true;
     if (coverage.regionDifficulty == 'hard') return true;
     if (coverage.coverageStatus == 'hard_region_curated_needed' ||

@@ -565,7 +565,7 @@ class RoutePoolService {
       );
     }
 
-    final assignment = await resolveRegionAssignment(
+    var assignment = await resolveRegionAssignment(
       userLat: userLat,
       userLng: userLng,
       crossBorderAllowed: crossBorderAllowed,
@@ -574,6 +574,22 @@ class RoutePoolService {
       preferredAdmin2Name: preferredAdmin2Name,
       preferredCityCluster: preferredCityCluster,
     );
+    // Skalierungs-Fix 2026-05-16: Friedrichshafen, Lindau und andere
+    // Bodensee-Orte liegen ≤30 km von Bregenz/Konstanz, fielen aber bei
+    // strengem Country-Match (DE vs AT) durch. Wenn beim ersten Versuch
+    // nichts gefunden wird, ein zweiter Versuch über die Grenze: lieber
+    // Bregenz-Pool nutzen als gar keine Coverage haben.
+    if (assignment == null && !crossBorderAllowed) {
+      assignment = await resolveRegionAssignment(
+        userLat: userLat,
+        userLng: userLng,
+        crossBorderAllowed: true,
+        preferredCountryCode: null,
+        preferredAdmin1Name: null,
+        preferredAdmin2Name: null,
+        preferredCityCluster: null,
+      );
+    }
 
     if (assignment == null) {
       return const RoutePoolCoverageCheck(
