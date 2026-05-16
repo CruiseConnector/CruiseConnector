@@ -53,3 +53,13 @@ secrets/
 **/secrets/
 *secret*.dart
 !**/secrets.example.dart
+
+# Claude Code intern (Skills, Agents, Worktrees, Scheduling — lokal pro Maschine)
+.claude/skills/
+.claude/agents/
+.claude/worktrees/
+.claude/scheduled_tasks.lock
+.claude/projects/
+
+# Build/Output Artefakte
+output/
