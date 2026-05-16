@@ -1692,17 +1692,27 @@ function evaluateRouteQualityCore(
       // Sport AB-AN: bereits ein einziger spürbarer Spur-Arm reicht damit
       // die Route „tentakelig" wirkt. User-Feedback 2026-05-16: 2 separate
       // Out-and-back-Spurs (Sennwald + Eschen) machten 25-32% der Strecke
-      // aus → Route fühlte sich kaputt an. Schärfere Sport-Schwelle (25%)
+      // aus → Route fühlte sich kaputt an. Schärfere Sport-Schwelle (22%)
       // greift hier — Kurvenjagd bleibt unangetastet (höhere Toleranz für
       // Serpentinen).
       (isSportMode === true &&
         !mediumLongNoHighwaySportShape &&
-        shapeSignals.spurArmPercent >= 25 &&
+        shapeSignals.spurArmPercent >= 22 &&
         (
           shapeSignals.geometricUTurnCount >= 1 ||
-          shapeSignals.hookCount >= 8 ||
-          shapeSignals.repeatedStartAreaPercent >= 18
+          shapeSignals.hookCount >= 6 ||
+          shapeSignals.repeatedStartAreaPercent >= 14
         )) ||
+      // Sport AB-AN, jede Distanz: zwei oder mehr separate Loops, die sich
+      // alle am Start treffen, lesen sich auf der Map als „mehrere kleine
+      // Runden" statt als ein Sport-Rundkurs. User-Feedback 2026-05-16
+      // Screenshot 1 (62km, Bangs-Matschels-Loop + Rankweil-Loop +
+      // Frastanz-Tail) ist genau diese Form: radialPeakCount=3,
+      // centerReentryCount=2. Sport will EIN klarer Rundkurs.
+      (isSportMode === true &&
+        !mediumLongNoHighwaySportShape &&
+        (shapeSignals.centerReentryCount >= 2 ||
+          shapeSignals.radialPeakCount >= 3)) ||
       shapeSignals.repeatedStartAreaPercent > 52 ||
       (
         shapeSignals.spurArmPercent >= 58 &&
