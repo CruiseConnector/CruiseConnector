@@ -2,9 +2,12 @@ import { assertEquals } from "https://deno.land/std@0.210.0/assert/mod.ts";
 import { rejectVorarlbergRhineBorderIntrusion } from "./index.ts";
 
 // Origin Feldkirch (47.238, 9.598). Trigger inVorarlbergRhineValley = true.
+// Tests use avoid_highways=true (strict 4 km threshold). Ein eigener Test
+// weiter unten deckt den relaxed AB-AN-Pfad (8 km Schwelle) ab.
 const feldkirchSession = {
   origin_lat: 47.238,
   origin_lng: 9.598,
+  avoid_highways: true,
   // deno-lint-ignore no-explicit-any
 } as unknown as any;
 
@@ -68,6 +71,72 @@ Deno.test(
       result,
       true,
       "Routes spending > 4 km west of the border must still be rejected.",
+    );
+  },
+);
+
+Deno.test(
+  "Feldkirch AB-AN (avoid_highways=false) tolerates ~6 km foreign segment",
+  () => {
+    // AB-AN: User akzeptiert auch kurzes Liechtenstein-Streck (lng 9.40-9.48,
+    // ~6 km Foreign-Strecke). Vorher wurde das wegen 4-km-Schwelle hart als
+    // border_intrusion abgelehnt → User bekam NO_ROUTE. Jetzt 8-km-Schwelle.
+    const sessionAbAn = {
+      origin_lat: 47.238,
+      origin_lng: 9.598,
+      avoid_highways: false,
+      // deno-lint-ignore no-explicit-any
+    } as unknown as any;
+    const coordinates: number[][] = [];
+    for (let i = 0; i < 50; i += 1) {
+      coordinates.push([
+        9.60 + (i / 50) * 0.10,
+        47.20 + (i / 50) * 0.20,
+      ]);
+    }
+    for (let i = 0; i < 20; i += 1) {
+      coordinates.push([9.40 + (i / 20) * 0.08, 47.25]);
+    }
+    const result = rejectVorarlbergRhineBorderIntrusion(
+      sessionAbAn,
+      makeRoute(coordinates),
+    );
+    assertEquals(
+      result,
+      false,
+      "AB-AN with ~6 km foreign segment must NOT be rejected (relaxed threshold).",
+    );
+  },
+);
+
+Deno.test(
+  "Feldkirch AB-AN still rejects deep foreign detour (>10 km)",
+  () => {
+    const sessionAbAn = {
+      origin_lat: 47.238,
+      origin_lng: 9.598,
+      avoid_highways: false,
+      // deno-lint-ignore no-explicit-any
+    } as unknown as any;
+    const coordinates: number[][] = [];
+    for (let i = 0; i < 30; i += 1) {
+      coordinates.push([
+        9.60 + (i / 30) * 0.10,
+        47.20 + (i / 30) * 0.20,
+      ]);
+    }
+    // ~12 km Foreign-Strecke (lng 9.32-9.48, lat 47.25)
+    for (let i = 0; i < 40; i += 1) {
+      coordinates.push([9.32 + (i / 40) * 0.16, 47.25]);
+    }
+    const result = rejectVorarlbergRhineBorderIntrusion(
+      sessionAbAn,
+      makeRoute(coordinates),
+    );
+    assertEquals(
+      result,
+      true,
+      "AB-AN with deep foreign detour (>8 km) must still be rejected.",
     );
   },
 );

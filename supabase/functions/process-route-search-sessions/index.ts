@@ -1195,8 +1195,17 @@ export function rejectVorarlbergRhineBorderIntrusion(
       previousForeignPoint = null;
     }
   }
-  const pointThreshold = Math.max(10, coordinates.length * 0.08);
-  return foreignPoints >= pointThreshold && foreignSegmentKm > 4;
+  // Asymmetrische Schwelle: AB-AN-Anfragen tolerieren mehr CH/FL-Touch
+  // (User akzeptiert oft Liechtenstein-Streifen wenn er Autobahn erlaubt),
+  // AB-AUS bleibt streng. Live-Daten 2026-05-16: 3/8 Sport-50-Sessions
+  // wurden mit foreignSegmentKm=4-7 abgelehnt obwohl Mapbox sonst keine
+  // saubere Route in Vorarlberg-Tälern bauen konnte → User bekam NO_ROUTE.
+  const segmentThresholdKm = session.avoid_highways ? 4 : 8;
+  const pointThreshold = session.avoid_highways
+    ? Math.max(10, coordinates.length * 0.08)
+    : Math.max(14, coordinates.length * 0.12);
+  return foreignPoints >= pointThreshold &&
+    foreignSegmentKm > segmentThresholdKm;
 }
 
 function shapeScoreFromCandidate(candidate: CandidatePayload): number {
