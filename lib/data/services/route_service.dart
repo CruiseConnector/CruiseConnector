@@ -640,9 +640,17 @@ class RouteService {
           : difficultScenario
           ? (hasSeenHistory ? 1 : 3)
           : (hasSeenHistory ? 1 : 2);
+      // Sport in unbekannten Regionen (z.B. Friedrichshafen ohne Pool):
+      // mehr Live-Versuche, weil dort weder Pool greift noch ein einzelner
+      // Mapbox-Plan zuverlässig eine tentakel-freie Form liefert. Bei Sport
+      // mit ohne ausreichenden Pool muss Live mehr Seeds durchprobieren,
+      // sonst sieht der User entweder NO_ROUTE oder die eine Tentakel-Form
+      // immer wieder. Cap bei 6 — darüber wird der Edge-Provider zu langsam.
+      final isSportSearch = styleConfig.profileKey == 'sport';
+      final sportLiveBoost = isSportSearch && !hasSeenHistory ? 2 : 0;
       final maxAttempts = forceFreshVariant
-          ? math.min(regularMaxAttempts + 1, 5)
-          : regularMaxAttempts;
+          ? math.min(regularMaxAttempts + 1 + sportLiveBoost, 6)
+          : math.min(regularMaxAttempts + sportLiveBoost, 5);
       _RouteCandidate? bestCandidate;
       _RouteCandidate? spareCandidate;
       _RouteCandidate? bestDuplicateCandidate;

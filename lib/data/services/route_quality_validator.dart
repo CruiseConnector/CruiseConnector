@@ -593,9 +593,27 @@ class RouteQualityValidator {
     // ABER neu: einzeln extrem hoher spurArmPercent (echte Kraken) sowie
     // kombinierte Stern-Pattern (radialPeak≥3 + spurArm≥55% ODER
     // centerRecross≥55% + spurArm≥40%) kippen in rejected.
+    // User-Feedback 2026-05-16 (Friedrichshafen-Test): Pool-Routes für Sport
+    // mit 2 separaten Loops + Tail kamen durch alle bisherigen Schwellen
+    // (centerReentryCount=2, radialPeakCount=3, spurArmPercent~25%). Die
+    // Schwellen wurden für allgemein konzipiert — Sport reagiert deutlich
+    // empfindlicher. Eigener Sport-Branch hier zieht client-side parallel
+    // zum Edge-Filter (route_quality.ts). Kurvenjagd/Entdecker/Abendrunde
+    // bleiben unangetastet, weil deren Routen legitim höhere radialPeaks
+    // haben (Serpentinen, Erkundungs-Pattern).
+    final sportTentacleGate =
+        isRoundTrip &&
+        styleProfileKey == 'sport' &&
+        ((quality.centerReentryCount >= 2) ||
+            (quality.radialPeakCount >= 3) ||
+            (quality.spurArmPercent >= 22.0 &&
+                (quality.spurArmCount >= 1 ||
+                    quality.repeatedStartAreaPercent >= 14.0)) ||
+            (quality.spurArmCount >= 2));
     final severeRoundTripShape =
         isRoundTrip &&
-        ((quality.centerReentryCount >= 3) ||
+        (sportTentacleGate ||
+            (quality.centerReentryCount >= 3) ||
             (quality.radialPeakCount >= 4 && quality.centerReentryCount >= 2) ||
             (quality.spurArmPercent >= 68.0) ||
             (quality.radialPeakCount >= 3 &&
