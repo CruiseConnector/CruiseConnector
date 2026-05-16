@@ -195,33 +195,39 @@ class RouteStyleConfig {
 
     final normalizedScore = switch (profileKey) {
       'sport' => _weightedAverage([
+        // Stärkere Penalty für zu viele Kurven: Sport ist KEIN Kurvenjagd.
+        // Vorher: weight=0.08, tolerance=9 → 60-Kurven-Routes wurden trotz
+        // Kurvenjagd-Charakteristik akzeptiert. Jetzt: weight=0.18,
+        // tolerance=15 → 8-23 Kurven/50km kriegen vollen Score, alles
+        // darüber wird deutlich abgestraft. Sport-Routes fühlen sich jetzt
+        // wie flüssige Landstraßen an, nicht wie verkappte Kurvenjagden.
         _weighted(
           _scoreAround(
             metrics.curveDensityPer50Km,
             center: 8.0,
-            tolerance: 9.0,
+            tolerance: 15.0,
           ),
-          0.08,
+          0.18,
         ),
         _weighted(
           _scoreAround(
             metrics.sharpCurveDensityPer50Km,
             center: 2.0,
-            tolerance: 4.0,
+            tolerance: 5.0,
           ),
-          0.08,
+          0.14,
         ),
         _weighted(
           _scoreRamp(metrics.spreadRatio, softMin: 0.16, idealMin: 0.30),
-          0.16,
+          0.14,
         ),
-        _weighted(segmentFlowScore, 0.20),
-        _weighted(smoothnessScore, 0.36),
+        _weighted(segmentFlowScore, 0.18),
+        _weighted(smoothnessScore, 0.26),
         _weighted(
           averageSpeedKmh == null
               ? 0.65
               : _scoreAround(averageSpeedKmh, center: 70.0, tolerance: 24.0),
-          0.12,
+          0.10,
         ),
       ]),
       'kurvenjagd' => _weightedAverage([

@@ -3794,7 +3794,15 @@ class RouteService {
       scenario.scenarioKey,
       explicitIndex: explicitIndex,
     );
-    final seed = _nextRandomSeed() + index * 37;
+    // Bei Search Again einen größeren Seed-Sprung machen, damit Mapbox
+    // wirklich einen anderen Suchraum sieht statt dieselbe Route zu liefern.
+    // Vorher: seed + index*37 — bei wiederholten Suchen in alpinen Regionen
+    // (Feldkirch) führt das oft zur identischen Route, weil Mapbox bei
+    // ähnlichen Bearings + Radien deterministisch antwortet.
+    final searchAgainSeedKick = forceFreshVariant
+        ? 10_000 + (DateTime.now().microsecondsSinceEpoch & 0xFFFF)
+        : 0;
+    final seed = _nextRandomSeed() + index * 37 + searchAgainSeedKick;
     final rng = math.Random(seed);
     final baseDirection = await _initialRoundTripDirectionHint(
       rng: rng,
@@ -3802,19 +3810,25 @@ class RouteService {
       variantIndex: index,
     );
     final radiusJitter = 1.0 + ((rng.nextDouble() - 0.5) * 0.24);
-    // Search Again mit Seen-Historie: 90° Pre-Shift damit der erste
-    // ausprobierte Sektor garantiert deutlich von der zuletzt gefahrenen
-    // Richtung abweicht. Die anschließende _avoidRecentRoundTripSector-
-    // Iteration kann immer noch in einen anderen Sektor zurückspringen,
-    // wenn der vorgeschlagene blockiert ist.
+    // Search Again mit Seen-Historie: 137° Pre-Shift (goldener Schnitt).
+    // 90° landete in alpinen Tälern oft auf denselben Korridoren, weil das
+    // Tal in Nord-Süd-Richtung verläuft und 90° bringt einen ins Ost-West-
+    // Geländedach mit identischer Mapbox-Antwort. 137° rastert die Sektor-
+    // Karte gleichmäßiger und kommt erst nach 360°/137 ≈ 2.6 Iterationen
+    // zurück zum Ausgangs-Sektor.
     final hasSeenForSearchAgain = forceFreshVariant &&
         SeenRouteRegistry.entriesForAny(
           _seenHistoryKeysForScenario(scenario),
         ).isNotEmpty;
-    final searchAgainShiftDegrees = hasSeenForSearchAgain ? 90.0 : 0.0;
+    final searchAgainShiftDegrees = hasSeenForSearchAgain ? 137.0 : 0.0;
+    // Plus Random-Jitter pro Search Again, damit der gleiche
+    // _scenarioVariantCounters-Index nicht denselben Sektor doppelt liefert.
+    final searchAgainJitter = forceFreshVariant
+        ? (rng.nextDouble() - 0.5) * 60.0
+        : 0.0;
     final rawAngleOffset =
-        (baseDirection + searchAgainShiftDegrees + index * 47.0 +
-                (index % 5) * 23.0) %
+        (baseDirection + searchAgainShiftDegrees + searchAgainJitter +
+                index * 47.0 + (index % 5) * 23.0) %
             360;
     final angleOffset = _avoidRecentRoundTripSector(rawAngleOffset, scenario);
     return RouteVariant(
