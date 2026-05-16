@@ -219,11 +219,13 @@ class _CruiseModePageState extends State<CruiseModePage>
   // Defensive Layer gegen den Duplikat-Bug: wenn die Edge-Function trotz
   // forceFreshVariant + previousFingerprints aus Race-Conditions oder
   // Pool-Engpass die GLEICHE Route zurückliefert, fängt das die UI hier ab.
-  // Wird in `_acceptGeneratedRouteResult` befüllt und vor dem `setState`
-  // verglichen — bei Match zeigen wir keine "Route gefunden"-Anzeige sondern
-  // eine konkrete Hinweis-Meldung statt die alte Route stillschweigend
-  // nochmal zu malen.
+  // Statt einer „keine neue Variante"-Snackbar (verwirrt mehr als sie
+  // hilft) triggern wir bis zu 2 automatische Re-Suchen mit
+  // forceFreshVariant=true — Calimoto-Pattern: User klickt Search Again,
+  // App soll selbst weiter rotieren bis was Neues kommt.
   String? _lastDisplayedRouteFingerprint;
+  int _searchAgainAutoRetryCount = 0;
+  static const int _maxSearchAgainAutoRetries = 2;
   List<double> _recentDestinationDistances = [];
   List<SpeedLimitSegment> _activeSpeedLimits = [];
 
@@ -4381,15 +4383,34 @@ class _CruiseModePageState extends State<CruiseModePage>
         : const <LatLng>[];
 
     // Defensive Duplikat-Detection: vergleiche das gerade gelieferte Route-
-    // Fingerprint mit dem zuletzt gezeigten. Wenn identisch, ist trotz Edge-
-    // und Service-Filter die alte Route nochmal durchgekommen — der User soll
-    // dann statt der stillen Wiederholung einen klaren Hinweis bekommen.
+    // Fingerprint mit dem zuletzt gezeigten. Wenn identisch — und der User
+    // war auf einem Search-Again-Pfad — triggern wir bis zu 2 automatische
+    // Re-Suchen mit forceFreshVariant statt eine "keine neue Variante"-
+    // Snackbar zu zeigen. Calimoto-Pattern: die App rotiert selbst weiter.
     final newFingerprint =
         prepared.edgeMeta['route_fingerprint']?.toString() ??
         RouteService.lastRouteDebugFingerprint;
     final isRepeatedRoute = newFingerprint != null &&
         newFingerprint.isNotEmpty &&
         _lastDisplayedRouteFingerprint == newFingerprint;
+    final canAutoRetry = isRepeatedRoute &&
+        _lastDisplayedRouteFingerprint != null &&
+        _searchAgainAutoRetryCount < _maxSearchAgainAutoRetries;
+
+    if (canAutoRetry && mounted) {
+      _searchAgainAutoRetryCount += 1;
+      debugPrint(
+        '[CruiseMode] Auto-retry $_searchAgainAutoRetryCount/$_maxSearchAgainAutoRetries — same fingerprint, triggering fresh search.',
+      );
+      // Direkt nochmal `_generateRoute` — die globalen Single-Flight-Locks
+      // sorgen dafür, dass das sauber sequenziell läuft. State-Reset macht
+      // generateRoute selbst (loading flag etc.).
+      Future.microtask(() {
+        if (!mounted || _disposed) return;
+        _generateRoute();
+      });
+      return;
+    }
 
     _applyRouteResult(prepared);
     unawaited(
@@ -4411,19 +4432,11 @@ class _CruiseModePageState extends State<CruiseModePage>
     if (newFingerprint != null && newFingerprint.isNotEmpty) {
       _lastDisplayedRouteFingerprint = newFingerprint;
     }
-    if (isRepeatedRoute && mounted) {
-      debugPrint(
-        '[CruiseMode] Repeated route fingerprint detected — showing hint instead of silent re-display.',
-      );
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          duration: Duration(seconds: 4),
-          content: Text(
-            'Aktuell keine neue Variante in dieser Region — '
-            'probier eine andere Distanz oder einen anderen Stil für mehr Auswahl.',
-          ),
-        ),
-      );
+    // Auto-Retry-Counter resetten sobald wir eine echte neue Route zeigen.
+    // Nur wenn die aktuelle Route NICHT eine Wiederholung war, sind wir aus
+    // dem Retry-Loop raus.
+    if (!isRepeatedRoute) {
+      _searchAgainAutoRetryCount = 0;
     }
 
     if (mounted) {
