@@ -3914,10 +3914,20 @@ class RoutePoolService {
     final candidateKeys = _normalizeStyleKeyList(candidate.styleTags);
     if (candidateKeys.contains(requested)) return true;
 
+    // Notfall-Kompatibilität: sport_mode darf auch Kurvenjagd-Routen ziehen,
+    // sonst stehen User in Regionen mit knapper Pool-Coverage (z. B. Feldkirch
+    // AB-AN mit nur 1 verified Kurvenjagd-Route) komplett ohne Match da.
+    // Symmetrisch für Kurvenjagd-Anfragen, die zusätzlich sport_mode/abendrunde
+    // als Notfall akzeptieren.
     final allowed = switch (requested) {
-      'sport_mode' || 'sport' => const {'entdecker', 'abendrunde'},
-      'kurvenjagd' || 'kurvenreich' || 'alpenstrassen' => const {'entdecker'},
-      'abendrunde' || 'panorama' => const {'sport_mode', 'sport'},
+      'sport_mode' ||
+      'sport' => const {'entdecker', 'abendrunde', 'kurvenjagd'},
+      'kurvenjagd' ||
+      'kurvenreich' ||
+      'alpenstrassen' => const {'entdecker', 'sport_mode', 'sport',
+            'abendrunde'},
+      'abendrunde' ||
+      'panorama' => const {'sport_mode', 'sport', 'entdecker', 'kurvenjagd'},
       'entdecker' ||
       'zufall' => const {'sport_mode', 'sport', 'kurvenjagd', 'abendrunde'},
       _ => const <String>{},
