@@ -814,11 +814,15 @@ class RouteService {
         return highwayAllowedNoHighwayFallback;
       }
 
-      // Availability beats diversity: if every fresh attempt only failed the
-      // novelty gate, return the best clean duplicate instead of surfacing a
-      // no-route error. The route still passed the same quality gates.
+      // Availability beats diversity ONLY außerhalb von Search Again.
+      // Bei explicit Search Again (forceFreshVariant=true) hat der User
+      // wörtlich "neue Variante" gefragt — wir geben dann lieber eine
+      // andere Pool-Route (rotiert via last_suggested_at) zurück als die
+      // letzte Live-Route ein zweites Mal anzuzeigen. Das war der eigentliche
+      // Grund warum „2 Sekunden später kam wieder die alte Route" — der
+      // duplicate-fallback hier hat den Edge-Fix umgangen.
       final allowDuplicateEmergencyFallback =
-          allowDuplicateFallbackForThisSearch;
+          allowDuplicateFallbackForThisSearch && !forceFreshVariant;
       if (bestDuplicateCandidate?.accepted == true &&
           allowDuplicateEmergencyFallback) {
         final duplicate = bestDuplicateCandidate!;
@@ -843,11 +847,16 @@ class RouteService {
       if (bestDuplicateCandidate?.accepted == true) {
         _debugRouteSearch(
           '[Fallback] duplicateFallbackSkipped=true trigger=$debugTrigger '
-          'scenarioKey=${scenario.scenarioKey} reason=settingsChangedRequiresFreshRoute',
+          'scenarioKey=${scenario.scenarioKey} '
+          'reason=${forceFreshVariant ? 'searchAgainRequiresFreshRoute' : 'settingsChangedRequiresFreshRoute'}',
         );
       }
 
-      final recentDuplicate = allowDuplicateFallbackForThisSearch
+      // Bei Search Again NIEMALS die letzte angezeigte Route nochmal liefern —
+      // sonst sieht der User exakt das Bild was die ganze Beschwerde war:
+      // „die alte Route wird wieder angezeigt obwohl Route gefunden steht".
+      final recentDuplicate = (allowDuplicateFallbackForThisSearch &&
+              !forceFreshVariant)
           ? (_recentDisplayedRoutes[_recentDisplayedKeyForScenario(scenario)] ??
                 _recentSuccessfulRoutes[scenario.scenarioKey])
           : null;

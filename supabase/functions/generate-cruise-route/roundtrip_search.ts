@@ -2990,9 +2990,19 @@ export async function searchBestRoundTripRoute({
             routeFingerprint.slice(0, 24)
           }`,
         );
+        // Client hat diesen Fingerprint explizit als "schon angezeigt" gemeldet
+        // → niemals als Emergency-Fallback zurückgeben. Sonst sieht der User
+        // bei Search Again wieder genau dieselbe Route, was den ganzen Zweck
+        // der erneuten Suche untergräbt. Intern-Duplikate (gleiche Route in
+        // mehreren Phasen derselben Edge-Suche) sind dagegen weiterhin als
+        // letzter Notnagel erlaubt — sie sind für den Client neu.
+        const isClientSideSeen = normalizedPreviousRouteFingerprints.includes(
+          routeFingerprint,
+        );
         if (
-          bestEmergencyDuplicate == null ||
-          quality.score < bestEmergencyDuplicate.quality.score
+          !isClientSideSeen &&
+          (bestEmergencyDuplicate == null ||
+            quality.score < bestEmergencyDuplicate.quality.score)
         ) {
           bestEmergencyDuplicate = {
             plan,
@@ -3216,6 +3226,23 @@ export async function searchBestRoundTripRoute({
   }
 
   if (!bestPlan || !bestRoute || !bestQuality) {
+    // Letzte Sicherheitslinie: falls der Emergency-Fallback trotz früher
+    // Filterung doch ein clientseitig schon gezeigtes Fingerprint enthält,
+    // verwerfen wir ihn hier hart. Lieber NO_ROUTE als die alte Route nochmal.
+    if (
+      bestEmergencyDuplicate != null &&
+      normalizedPreviousRouteFingerprints.includes(
+        bestEmergencyDuplicate.fingerprint,
+      )
+    ) {
+      debugWarn(
+        `[RT] Emergency duplicate fingerprint (${
+          bestEmergencyDuplicate.fingerprint.slice(0, 24)
+        }) is in client previous_route_fingerprints — rejecting fallback so the user doesn't see the same route again.`,
+      );
+      registerReject("emergency_duplicate_client_seen");
+      bestEmergencyDuplicate = null;
+    }
     if (bestEmergencyDuplicate != null && !batchingUsed) {
       const hydratedDuplicate = await hydrateGuidanceRoute(
         bestEmergencyDuplicate.plan,

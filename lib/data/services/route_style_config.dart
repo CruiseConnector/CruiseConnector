@@ -195,39 +195,41 @@ class RouteStyleConfig {
 
     final normalizedScore = switch (profileKey) {
       'sport' => _weightedAverage([
-        // Stärkere Penalty für zu viele Kurven: Sport ist KEIN Kurvenjagd.
-        // Vorher: weight=0.08, tolerance=9 → 60-Kurven-Routes wurden trotz
-        // Kurvenjagd-Charakteristik akzeptiert. Jetzt: weight=0.18,
-        // tolerance=15 → 8-23 Kurven/50km kriegen vollen Score, alles
-        // darüber wird deutlich abgestraft. Sport-Routes fühlen sich jetzt
-        // wie flüssige Landstraßen an, nicht wie verkappte Kurvenjagden.
+        // Sport ≠ Kurvenjagd. User-Feedback 2026-05-16: 50 Kurven/44km Route
+        // (≈57 Kurven/50km) wurde im Live-Test als „zu kurvig für Sport"
+        // empfunden. Vorher: weight=0.18, center=8, tolerance=15 — 57 lag
+        // gerade noch im 0.08-Score-Bereich, der Gesamtscore blieb hoch
+        // genug. Jetzt: weight=0.24, center=10, tolerance=11 — eine
+        // 57-Kurven-Route bekommt score≈0 und der Curve-Penalty zieht den
+        // Gesamtscore klar unter Kurvenjagd-Niveau. 8-25 Kurven/50km = full
+        // score, ab 30 zieht der Penalty messbar.
         _weighted(
           _scoreAround(
             metrics.curveDensityPer50Km,
-            center: 8.0,
-            tolerance: 15.0,
+            center: 10.0,
+            tolerance: 11.0,
           ),
-          0.18,
+          0.24,
         ),
         _weighted(
           _scoreAround(
             metrics.sharpCurveDensityPer50Km,
             center: 2.0,
-            tolerance: 5.0,
+            tolerance: 4.0,
           ),
-          0.14,
+          0.16,
         ),
         _weighted(
           _scoreRamp(metrics.spreadRatio, softMin: 0.16, idealMin: 0.30),
-          0.14,
+          0.12,
         ),
         _weighted(segmentFlowScore, 0.18),
-        _weighted(smoothnessScore, 0.26),
+        _weighted(smoothnessScore, 0.22),
         _weighted(
           averageSpeedKmh == null
               ? 0.65
               : _scoreAround(averageSpeedKmh, center: 70.0, tolerance: 24.0),
-          0.10,
+          0.08,
         ),
       ]),
       'kurvenjagd' => _weightedAverage([
