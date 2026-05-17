@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
@@ -41,10 +43,38 @@ class _HomePageState extends State<HomePage> {
       _communityProvider = context.read<CommunityProvider>();
       _communityProvider?.startRealtime();
     });
-    // Dark-Style für Offline-Nutzung im Hintergrund cachen
-    Future.delayed(const Duration(seconds: 2), () {
-      OfflineMapService.instance.ensureStyleCached();
-    });
+    // Dark-Style für Offline-Nutzung im Hintergrund cachen, plus die
+    // Heimat-Region (≈35 km Radius) vorwärmen damit die Karte beim ersten
+    // Öffnen der Cruise-Tab sofort da ist statt zu streamen.
+    Future.delayed(const Duration(seconds: 2), _prewarmOfflineMapRegion);
+  }
+
+  Future<void> _prewarmOfflineMapRegion() async {
+    if (kIsWeb) return;
+    try {
+      await OfflineMapService.instance.ensureStyleCached();
+      double lat = OfflineMapService.defaultHomeLat;
+      double lng = OfflineMapService.defaultHomeLng;
+      try {
+        final last = await Geolocator.getLastKnownPosition();
+        if (last != null) {
+          lat = last.latitude;
+          lng = last.longitude;
+        }
+      } catch (_) {
+        // Standort nicht verfügbar — Default-Heimatregion bleibt.
+      }
+      if (!mounted) return;
+      unawaited(
+        OfflineMapService.instance.cacheRegionAroundPoint(
+          latitude: lat,
+          longitude: lng,
+          regionId: 'home_prewarm',
+        ),
+      );
+    } catch (e) {
+      debugPrint('[HomePage] Offline-Map pre-warm failed: $e');
+    }
   }
 
   Future<void> _requestLocationPermission() async {

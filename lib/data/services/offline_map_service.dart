@@ -53,6 +53,19 @@ class OfflineMapService {
   static const int defaultMaxZoom = 16;
   static const int defaultMaxTiles = 650;
 
+  // Region-Cache (statt nur Route-Cache): wird beim App-Start für die
+  // Heimat-Region vorgewärmt, damit die Karte beim ersten Öffnen sofort
+  // erscheint statt zu streamen.
+  static const int defaultRegionMinZoom = 9;
+  static const int defaultRegionMaxZoom = 13;
+  static const int defaultRegionMaxTiles = 2400;
+  static const double defaultRegionRadiusKm = 35.0;
+
+  // Vorarlberg + Bodensee als Default-Heimatregion, falls kein User-Standort
+  // verfügbar (erster Launch, Geo-Permission verweigert).
+  static const double defaultHomeLat = 47.4500;
+  static const double defaultHomeLng = 9.6000;
+
   Directory? _tileCacheDirectory;
   Future<Directory?>? _tileCacheDirectoryFuture;
 
@@ -61,6 +74,144 @@ class OfflineMapService {
   }
 
   TileProvider tileProvider() => OfflineMapTileProvider(this);
+
+  /// Cached alle Tiles in einem Quadrat um einen Center-Punkt.
+  /// Wird beim App-Start für die Heimat-Region aufgerufen, damit beim ersten
+  /// Öffnen der Karte sofort gerendert werden kann statt aus dem Netz zu
+  /// streamen. Idempotent: bereits vorhandene Tiles werden nicht erneut
+  /// heruntergeladen.
+  ///
+  /// Default-Radius 35 km, Zoom 9-13 → ~1500-2400 Tiles, ~6-12 MB Storage.
+  Future<OfflineMapCacheReport> cacheRegionAroundPoint({
+    required double latitude,
+    required double longitude,
+    double radiusKm = defaultRegionRadiusKm,
+    int minZoom = defaultRegionMinZoom,
+    int maxZoom = defaultRegionMaxZoom,
+    int maxTiles = defaultRegionMaxTiles,
+    String regionId = 'home',
+  }) async {
+    if (kIsWeb) {
+      return const OfflineMapCacheReport(
+        requestedTiles: 0,
+        downloadedTiles: 0,
+        existingTiles: 0,
+        failedTiles: 0,
+        skipped: true,
+      );
+    }
+    final directory = await _resolveTileCacheDirectory();
+    if (directory == null) {
+      return const OfflineMapCacheReport(
+        requestedTiles: 0,
+        downloadedTiles: 0,
+        existingTiles: 0,
+        failedTiles: 0,
+        skipped: true,
+      );
+    }
+
+    final tiles = tilesForBoundingBox(
+      centerLat: latitude,
+      centerLng: longitude,
+      radiusKm: radiusKm,
+      minZoom: minZoom,
+      maxZoom: maxZoom,
+      maxTiles: maxTiles,
+    );
+    if (tiles.isEmpty) {
+      return const OfflineMapCacheReport(
+        requestedTiles: 0,
+        downloadedTiles: 0,
+        existingTiles: 0,
+        failedTiles: 0,
+        skipped: true,
+      );
+    }
+
+    var downloaded = 0;
+    var existing = 0;
+    var failed = 0;
+    final client = http.Client();
+    try {
+      const batchSize = 6;
+      for (var i = 0; i < tiles.length; i += batchSize) {
+        final batch = tiles.skip(i).take(batchSize);
+        final outcomes = await Future.wait(
+          batch.map((tile) => _cacheTile(client, directory, tile)),
+        );
+        for (final outcome in outcomes) {
+          switch (outcome) {
+            case _TileCacheOutcome.downloaded:
+              downloaded += 1;
+            case _TileCacheOutcome.existing:
+              existing += 1;
+            case _TileCacheOutcome.failed:
+              failed += 1;
+          }
+        }
+      }
+    } finally {
+      client.close();
+    }
+
+    debugPrint(
+      '[OfflineMap] Region cache region=$regionId center=($latitude,$longitude) '
+      'radius=${radiusKm}km zoom=$minZoom-$maxZoom requested=${tiles.length} '
+      'downloaded=$downloaded existing=$existing failed=$failed',
+    );
+    return OfflineMapCacheReport(
+      requestedTiles: tiles.length,
+      downloadedTiles: downloaded,
+      existingTiles: existing,
+      failedTiles: failed,
+      skipped: false,
+    );
+  }
+
+  /// Berechnet alle Tiles innerhalb eines Quadrats um den Center-Punkt für
+  /// jeden Zoom-Level. Limitiert auf maxTiles total — höhere Zoom-Levels
+  /// werden zuerst eingefroren wenn das Limit erreicht ist (Übersichts-
+  /// Zoom hat Priorität, weil dort die meisten App-Starts beginnen).
+  @visibleForTesting
+  List<OfflineTile> tilesForBoundingBox({
+    required double centerLat,
+    required double centerLng,
+    required double radiusKm,
+    required int minZoom,
+    required int maxZoom,
+    required int maxTiles,
+  }) {
+    if (minZoom > maxZoom || maxTiles <= 0 || radiusKm <= 0) {
+      return const <OfflineTile>[];
+    }
+    // Grobe Umrechnung km → Grad. Längengrad-Abstand wird mit lat skaliert
+    // (cos(lat)), Breitengrad ist konstant 111 km.
+    final degLat = radiusKm / 111.0;
+    final cosLat = math.cos(centerLat * math.pi / 180.0).abs();
+    final degLng = radiusKm / (111.0 * (cosLat < 0.1 ? 0.1 : cosLat));
+    final minLat = (centerLat - degLat).clamp(-85.0, 85.0);
+    final maxLat = (centerLat + degLat).clamp(-85.0, 85.0);
+    final minLng = centerLng - degLng;
+    final maxLng = centerLng + degLng;
+
+    final tiles = <OfflineTile>{};
+    for (var zoom = minZoom; zoom <= maxZoom; zoom += 1) {
+      final topLeft = _tileForCoordinate([minLng, maxLat], zoom);
+      final bottomRight = _tileForCoordinate([maxLng, minLat], zoom);
+      for (var x = topLeft.x; x <= bottomRight.x; x += 1) {
+        for (var y = topLeft.y; y <= bottomRight.y; y += 1) {
+          final tile = _normalizeTile(OfflineTile(z: zoom, x: x, y: y));
+          if (tile == null) continue;
+          tiles.add(tile);
+          if (tiles.length >= maxTiles) {
+            return tiles.toList(growable: false);
+          }
+        }
+      }
+    }
+    return tiles.toList(growable: false);
+  }
 
   Future<OfflineMapCacheReport> cacheRouteRegion(
     List<List<double>> routeCoordinates, {
