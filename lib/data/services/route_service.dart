@@ -60,7 +60,14 @@ class RouteService {
     : _invoker = invoker ?? const SupabaseRouteInvoker(),
       _routePoolService = routePoolService ?? RoutePoolService();
 
-  static const String edgeFunction = 'generate-cruise-route';
+  // Migration 2026-05-20: vom 15.000-Zeilen Mapbox-Hack 'generate-cruise-route'
+  // auf den schlanken GraphHopper-Adapter 'generate-cruise-route-v2'.
+  // Response-Format ist v1-kompatibel (route.distance in Meter,
+  // route.duration in Millisekunden) — der bestehende Flutter-Parsing-Code
+  // (_invoke + RouteResult-Mapping) funktioniert unverändert weiter.
+  //
+  // Rollback: einfach diesen String auf 'generate-cruise-route' zurücksetzen.
+  static const String edgeFunction = 'generate-cruise-route-v2';
   static const String clientRoutingBuildId = String.fromEnvironment(
     'ROUTING_CLIENT_BUILD_ID',
     defaultValue: 'local-dev',
