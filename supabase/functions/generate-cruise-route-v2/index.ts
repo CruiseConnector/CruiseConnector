@@ -25,15 +25,38 @@ const ALLOWED_ORIGINS = '*';
 // ─────────────────────────── Types ────────────────────────────────────────
 
 interface RouteRequest {
-  route_type: 'ROUND_TRIP' | 'POINT_TO_POINT';
-  start_location: { latitude: number; longitude: number };
+  route_type?: 'ROUND_TRIP' | 'POINT_TO_POINT';
+  // Flutter-Client sendet die Felder in camelCase, alte Mapbox-Edge nutzte
+  // snake_case. Wir akzeptieren beide Schreibweisen damit der Adapter direkt
+  // gegen den unveränderten Flutter-Code funktioniert.
+  start_location?: { latitude: number; longitude: number };
+  startLocation?: { latitude: number; longitude: number };
   target_location?: { latitude: number; longitude: number };
+  targetLocation?: { latitude: number; longitude: number };
+  // Distanz: target_distance_km (v2-Native) ODER targetDistance (Flutter, in km)
   target_distance_km?: number;
+  targetDistance?: number;
+  // Style: selected_style (v2) ODER mode (Flutter)
   selected_style?: string;
+  mode?: string;
   avoid_highways?: boolean;
   force_fresh_variant?: boolean;
+  forceFreshVariant?: boolean;
   previous_route_fingerprints?: string[];
   client_trigger?: string;
+}
+
+// Normalisierung: ergänzt fehlende v2-Felder aus den Flutter-Aliassen
+function normalizeRequest(raw: RouteRequest): RouteRequest {
+  return {
+    ...raw,
+    route_type: raw.route_type ?? 'ROUND_TRIP',
+    start_location: raw.start_location ?? raw.startLocation,
+    target_location: raw.target_location ?? raw.targetLocation,
+    target_distance_km: raw.target_distance_km ?? raw.targetDistance,
+    selected_style: raw.selected_style ?? raw.mode,
+    force_fresh_variant: raw.force_fresh_variant ?? raw.forceFreshVariant,
+  };
 }
 
 interface GraphHopperPath {
@@ -380,14 +403,22 @@ async function handler(req: Request): Promise<Response> {
   if (req.method !== 'POST') {
     return jsonResponse({ error: 'method_not_allowed' }, 405);
   }
-  let body: RouteRequest;
+  let raw: RouteRequest;
   try {
-    body = await req.json();
+    raw = await req.json();
   } catch (_) {
     return jsonResponse({ error: 'invalid_json' }, 400);
   }
+  const body = normalizeRequest(raw);
   if (!body.start_location?.latitude || !body.start_location?.longitude) {
-    return jsonResponse({ error: 'missing_start_location' }, 400);
+    // Vermeide das Wort "missing/invalid" im error damit der Flutter-Mapper
+    // diese nicht als Validation-Fehler "Rundkurs-Parameter sind ungültig"
+    // interpretiert sondern den echten user_message zeigt.
+    return jsonResponse({
+      error: 'start_location_required',
+      user_message: 'Standort ist nicht verfügbar — bitte App-Berechtigungen prüfen.',
+      debug_message: 'Edge v2: neither start_location nor startLocation in request body',
+    }, 400);
   }
   return await generateRoute(body);
 }
