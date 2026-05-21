@@ -250,8 +250,11 @@ export async function processRouteSeedJobs(
     (env("SUPABASE_SERVICE_ROLE_KEY") ||
       env("CRUISERCONNECT_SERVICE_ROLE_KEY") ||
       env("SUPABASE_ANON_KEY"));
+  // 2026-05-21 (vucko Task #34): Pool-Healing-Worker auf v2 (GraphHopper)
+  // umgestellt. v1 ist der alte Mapbox-Hack und wird bald gelöscht (Task #9).
+  // Override via options.edgeEndpoint möglich für staged Rollout.
   edgeEndpoint = options.edgeEndpoint ??
-    `${supabaseUrl}/functions/v1/generate-cruise-route`;
+    `${supabaseUrl}/functions/v1/generate-cruise-route-v2`;
   functionKey = options.functionKey ?? (env("SUPABASE_FUNCTION_KEY") ||
     serviceKey);
   dryRun = options.dryRun ?? false;
