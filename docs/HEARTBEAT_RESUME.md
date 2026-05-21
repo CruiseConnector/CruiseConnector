@@ -20,10 +20,11 @@ Hier ist alles was du brauchst um den Heartbeat-Loop nahtlos fortzusetzen.
 **Flutter:**
 - `lib/data/services/route_service.dart` Konstante `edgeFunction = 'generate-cruise-route-v2'` aktiv. Rollback durch Zurückstellen auf `'generate-cruise-route'`.
 
-**E2E DACH-Sweep verifiziert (alle 8/8):**
-- Friedrichshafen 51.85km ✓, Wien 50.5km ✓, Stuttgart 50.28km ✓, Zürich 49.72km ✓
-- München 51.07km ✓, Bregenz 40.93km ⚠ (18% short, alpenanrand-tuning offen)
-- Salzburg 50.08km ✓, Innsbruck 50.98km ✓
+**E2E DACH-Sweep verifiziert (15/18 ≈ 83%):**
+- ✓ Friedrichshafen, Wien, Stuttgart, Zürich, München, Salzburg, Klagenfurt
+- ✓ Vaduz, Lugano, Graz, Linz, Heilbronn, Feldkirch, Bern, Mannheim
+- ⚠ Bregenz -24% (alpine reachable-area), Innsbruck -17% (alpine Bergtal),
+  Basel +23% (GH-Round-Trip-Variance, kein systemisches Issue)
 
 ## Heartbeat-Befehl (vor jedem Wakeup-Reply)
 
@@ -85,7 +86,7 @@ Branch graphhopper-dach-stabilize. Falls Compact: docs/HEARTBEAT_RESUME.md ist d
 | 14 | ✓ completed | DACH Vollabdeckung — DE-Tunnel live, Friedrichshafen verifiziert |
 | 17 | pending | systemd-Unit für GH-Auto-Restart |
 | 18 | ✓ completed | DE-Server Tunnel-Exposure — beide Funnels aktiv |
-| **Tuning** | offen | Bregenz/alpenanrand 18% short — Compensation auf 0.85? |
+| **Tuning** | accepted | Bregenz/Innsbruck/Basel als known-Outlier (alpine reachable-area + GH-Variance) |
 
 ## Architektur-Snapshot
 

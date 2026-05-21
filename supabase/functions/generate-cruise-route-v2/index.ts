@@ -136,6 +136,9 @@ function classifyRegion(lat: number, lng: number): RegionProfile {
   const inLiechtenstein = lat >= 47.04 && lat <= 47.27 && lng >= 9.47 && lng <= 9.64;
   const inCHAlpen = lat >= 46.0 && lat <= 47.0 && lng >= 6.8 && lng <= 10.5;
   if (inVorarlbergTirol || inLiechtenstein || inCHAlpen) {
+    // 2026-05-21: 0.90 best-balance — höhere Compensation schießt Bregenz
+    // über Target, niedrigere lässt es zu kurz. Innsbruck/Feldkirch bleiben
+    // Outlier (Reachable Area in Bergtälern zu klein für 50km Round-Trip).
     return { factor: 0.90, label: 'alpine' };
   }
 
@@ -406,19 +409,20 @@ function generateSeeds(opts: {
     Math.round(opts.startLng * 1000) * 17 +
     Math.round(opts.targetKm) * 7,
   );
-  // 10 breit gestreute Seeds — kleine Primzahl-Offsets damit auch
-  // problematische Bodensee-/Berg-Regionen treffer haben.
+  // 10 breit gestreute Seeds — Mix von engen und breiten Offsets damit auch
+  // alpine Regionen (wo viele Seeds in Berge/Wasser landen) zumindest 1-2
+  // Treffer in den top-5 haben. Empirisch beste Anordnung 2026-05-21.
   return [
+    (h + 13) % 100000,
+    (h + 137) % 100000,
+    (h + 1337) % 100000,
+    (h + 411) % 100000,
+    (h + 9999) % 100000,
+    (h + 29) % 100000,
+    (h + 4111) % 100000,
+    (h + 31337) % 100000,
     (h + 3) % 100000,
     (h + 7) % 100000,
-    (h + 13) % 100000,
-    (h + 29) % 100000,
-    (h + 137) % 100000,
-    (h + 411) % 100000,
-    (h + 1337) % 100000,
-    (h + 4111) % 100000,
-    (h + 9999) % 100000,
-    (h + 31337) % 100000,
   ];
 }
 
