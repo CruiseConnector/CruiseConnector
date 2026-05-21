@@ -86,6 +86,11 @@ Branch graphhopper-dach-stabilize. Falls Compact: docs/HEARTBEAT_RESUME.md ist d
 | 14 | ✓ completed | DACH Vollabdeckung — DE-Tunnel live, Friedrichshafen verifiziert |
 | 17 | pending | systemd-Unit für GH-Auto-Restart |
 | 18 | ✓ completed | DE-Server Tunnel-Exposure — beide Funnels aktiv |
+| 19 | ✓ completed | Stil-Differenzierung — Runtime-Overlay (Wien: Kurvenjagd +24% turns) |
+| 20 | ✓ completed | Pool-Stil-Mismatch — strict cluster (sport↔kurvenjagd \| abendrunde↔entdecker) |
+| 21 | ✓ completed | Endless-Loop-Guard — 30s wall-clock cap + settingsChanged reset |
+| 22 | ✓ completed | Live-Diversity — 8 Seeds bei force_fresh oder previousFingerprints |
+| 23 | wartend | Live-First Policy — User regelt Pool/Live-Mix später separat |
 | **Tuning** | accepted | Bregenz/Innsbruck/Basel als known-Outlier (alpine reachable-area + GH-Variance) |
 
 ## Architektur-Snapshot
