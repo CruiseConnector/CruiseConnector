@@ -28,6 +28,11 @@ Hier ist alles was du brauchst um den Heartbeat-Loop nahtlos fortzusetzen.
 
 ## Autonomous Monitoring (seit 2026-05-21)
 
+**Drei Layer Continuous Testing:**
+1. **Heartbeat-Loop** (jede Minute, lokaler Background-Process) — SSH + /health + 1 Edge-Smoke
+2. **Watchdog-Cron** (alle 3 Min) — analysiert letzte 5 Heartbeats, reagiert auf Anomalien
+3. **Regression-Cron** (alle 15 Min, Min 4,19,34,49) — 12 random Routen aus 8×4×3 Matrix (Regions × Styles × Distanzen)
+
 **Background-Loop** läuft als nohup-Process unter PPID 1:
 ```bash
 ps -axo pid,ppid,command | awk '/[d]ach_heartbeat_loop\.sh$/'
