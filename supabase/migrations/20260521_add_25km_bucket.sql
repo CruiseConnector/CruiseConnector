@@ -7,6 +7,10 @@
 -- Diese Migration erlaubt Pool-Routes auch im 25-km-Bucket, damit der
 -- Healing-Worker später curated 25er Routen einlegen kann (separater Task).
 --
+-- Tabellen verifiziert via information_schema 2026-05-21:
+--   route_pool, route_pool_candidates, route_pool_coverage,
+--   route_search_sessions, route_seed_jobs
+--
 -- Idempotent: drop old constraint, add new with 25 included.
 
 ALTER TABLE public.route_pool
@@ -21,16 +25,16 @@ ALTER TABLE public.route_pool_candidates
   ADD CONSTRAINT route_pool_candidates_distance_bucket_check
   CHECK (distance_bucket IN (25, 50, 75, 100));
 
-ALTER TABLE public.route_pool_seed_jobs
-  DROP CONSTRAINT IF EXISTS route_pool_seed_jobs_distance_bucket_check;
-ALTER TABLE public.route_pool_seed_jobs
-  ADD CONSTRAINT route_pool_seed_jobs_distance_bucket_check
+ALTER TABLE public.route_pool_coverage
+  DROP CONSTRAINT IF EXISTS route_pool_coverage_distance_bucket_check;
+ALTER TABLE public.route_pool_coverage
+  ADD CONSTRAINT route_pool_coverage_distance_bucket_check
   CHECK (distance_bucket IN (25, 50, 75, 100));
 
-ALTER TABLE public.route_region_coverage
-  DROP CONSTRAINT IF EXISTS route_region_coverage_distance_bucket_check;
-ALTER TABLE public.route_region_coverage
-  ADD CONSTRAINT route_region_coverage_distance_bucket_check
+ALTER TABLE public.route_seed_jobs
+  DROP CONSTRAINT IF EXISTS route_seed_jobs_distance_bucket_check;
+ALTER TABLE public.route_seed_jobs
+  ADD CONSTRAINT route_seed_jobs_distance_bucket_check
   CHECK (distance_bucket IN (25, 50, 75, 100));
 
 ALTER TABLE public.route_search_sessions
