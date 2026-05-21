@@ -9,7 +9,8 @@ set -u
 ROOT="/Users/vucko/Development/CruiserConnect/.claude/worktrees/admiring-hawking-3afe1f"
 cd "$ROOT" || exit 1
 
-LOOP_PIDS=$(pgrep -f dach_heartbeat_loop.sh 2>/dev/null | head -10)
+# nur den Loop selbst, nicht children/subshells. PPID muss launchd o.ä. sein.
+LOOP_PIDS=$(ps -axo pid,ppid,command | awk '/[d]ach_heartbeat_loop\.sh$/ {print $1}' | head -10)
 
 if [[ -n "$LOOP_PIDS" ]]; then
   COUNT=$(echo "$LOOP_PIDS" | wc -l | xargs)

@@ -26,13 +26,29 @@ Hier ist alles was du brauchst um den Heartbeat-Loop nahtlos fortzusetzen.
 - ⚠ Bregenz -24% (alpine reachable-area), Innsbruck -17% (alpine Bergtal),
   Basel +23% (GH-Round-Trip-Variance, kein systemisches Issue)
 
-## Heartbeat-Befehl (vor jedem Wakeup-Reply)
+## Autonomous Monitoring (seit 2026-05-21)
 
+**Background-Loop** läuft als nohup-Process unter PPID 1:
 ```bash
-ssh -o ConnectTimeout=15 vucko1@vucko 'curl -sf -m 3 http://localhost:8989/health; echo; curl -sf -m 3 http://localhost:8991/health; echo; tailscale funnel status 2>&1 | head -8; free -h | head -2'
+ps -axo pid,ppid,command | awk '/[d]ach_heartbeat_loop\.sh$/'
 ```
 
-Erwartete OK-Antwort: zweimal `OK`, Funnel-Liste, Memory ≤ 8 GB used.
+**Bei jedem Wakeup oder neuer Session zuerst:**
+```bash
+bash scripts/dach_loop_ensure.sh   # Loop neu starten falls down (idempotent)
+bash scripts/dach_watchdog.sh      # Last-5-Heartbeats Analyse
+```
+
+**Logs:**
+- `logs/heartbeat-loop.log` — 1 Zeile pro Minute (`timestamp exit=N`)
+- `logs/heartbeat-YYYY-MM-DD.log` — detaillierter Status (SSH + Edge-Smoke)
+
+**Manueller Heartbeat-Befehl (one-shot):**
+```bash
+bash scripts/dach_autonomous_heartbeat.sh
+```
+
+Erwartete OK-Antwort: `STATE=ok|smoke=OK:km=49.48|dur_s=3763|turns=58|pen=0`
 
 ## Was zu tun ist je nach Heartbeat-Befund
 
@@ -95,7 +111,11 @@ Branch graphhopper-dach-stabilize. Falls Compact: docs/HEARTBEAT_RESUME.md ist d
 | 25 | ✓ completed | MAPBOX_RESCUE-Label — umbenannt zu `emergency_fallback` |
 | 26 | ✓ completed | 25km Rundkurs — UI-Option + Live-Pfad (Pool DB hat noch keine 25er) |
 | 27 | ✓ completed | Sport-Style-Penalty — turn-density Score 1.0 t/km für Sport, 1.4 für Kurvenjagd |
-| 28 | pending | Komische Schmetterling-Routen filtern (Bodensee-Effekt) |
+| 28 | ✓ completed | Butterfly-Shape-Filter — style-agnostic spurArmCount≥2 + foldedArea>50 |
+| **Autonomous Loop** | ✓ live | Background-Loop + Watchdog-Cron alle 3 Min (vucko Wunsch) |
+| **Endbericht** | ✓ done | docs/MIGRATION_FINAL_REPORT.md — Verdict GO |
+| **Mapbox-Löschung** | wartend | docs/MAPBOX_DELETION_INVENTORY.md prep, nur nach User-OK |
+| **systemd-Units** | drafted | docs/systemd_*.service + SYSTEMD_INSTALL.md — User-sudo nötig |
 | **Tuning** | accepted | Bregenz/Innsbruck/Basel als known-Outlier (alpine reachable-area + GH-Variance) |
 
 ## Architektur-Snapshot
