@@ -208,8 +208,12 @@ function classifyRegion(lat: number, lng: number): RegionProfile {
   // Alpenanrand: Allgäu + Bodensee-Süd + Salzburg-Region + CH-Mittelland-Süd
   const inAllgaeuBodensee = lat >= 47.3 && lat <= 47.85 && lng >= 9.5 && lng <= 10.8;
   const inSalzburgRegion = lat >= 47.5 && lat <= 48.2 && lng >= 12.5 && lng <= 13.8;
-  if (inAllgaeuBodensee || inSalzburgRegion) {
-    return { factor: 1.00, label: 'alpenanrand' };
+  // 2026-05-21 (vucko): Obersteiermark (Leoben/Bruck/Mariazell/Liezen) sind
+  // bergisch — Regression-Test fand 29-53% over-target wegen falscher
+  // flatland-Klassifikation. Alpenanrand 0.92 zieht effective_target enger.
+  const inObersteiermark = lat >= 47.3 && lat <= 47.85 && lng >= 14.0 && lng <= 15.7;
+  if (inAllgaeuBodensee || inSalzburgRegion || inObersteiermark) {
+    return { factor: 0.92, label: 'alpenanrand' };
   }
 
   // Default: flatland (Wien/Linz/Graz/Zürich/Bern/Stuttgart-Nord/...).
