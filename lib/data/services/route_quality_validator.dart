@@ -613,9 +613,21 @@ class RouteQualityValidator {
                 (quality.spurArmCount >= 2 ||
                     quality.repeatedStartAreaPercent >= 20.0)) ||
             (quality.spurArmCount >= 3));
+    // 2026-05-21 (vucko): Butterfly-Filter — User-Beschwerde "manchmal komische
+    // eingeengte Form mit 2 Flügeln". Klassisches Symptom bei Bodensee+
+    // Bergrand-Regionen (Bregenz, Friedrichshafen): zwei spur-Lobes neben dem
+    // Start mit großer hull-vs-area Disparität. Style-agnostisch (war vorher
+    // nur im sportTentacleGate).
+    final butterflyShape =
+        isRoundTrip &&
+        quality.spurArmCount >= 2 &&
+        quality.spurArmPercent >= 32.0 &&
+        quality.foldedAreaPenalty > 50.0 &&
+        quality.dominantLoopScore < 80.0;
     final severeRoundTripShape =
         isRoundTrip &&
         (sportTentacleGate ||
+            butterflyShape ||
             (quality.centerReentryCount >= 3) ||
             (quality.radialPeakCount >= 4 && quality.centerReentryCount >= 2) ||
             (quality.spurArmPercent >= 68.0) ||
