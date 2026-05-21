@@ -1076,7 +1076,10 @@ class RouteService {
       if (bestRejectedCandidate != null &&
           bestRejectedCandidate.route.coordinates.isNotEmpty) {
         lastRouteEmergencyFallbackUsed = true;
-        lastRouteGenerationSource = 'mapbox_rescue';
+        // 2026-05-21: Label umbenannt von 'mapbox_rescue' (historisch aus
+        // Mapbox-Zeit) zu 'emergency_fallback' — User sah „MAPBOX_RESCUE"
+        // im UI und dachte fälschlich die App fällt auf alten Code zurück.
+        lastRouteGenerationSource = 'emergency_fallback';
         _debugRouteSearch(
           '[Fallback] liveRescueFallbackUsed=true reason=all_attempts_rejected '
           'scenarioKey=${scenario.scenarioKey} '
@@ -6581,6 +6584,9 @@ class RouteService {
 
   static int? _distanceBucketForPool(double? targetDistanceKm) {
     if (targetDistanceKm == null || !targetDistanceKm.isFinite) return null;
+    // 2026-05-21 (vucko): 25km wird über LIVE generiert (Pool-Schema hat nur
+    // 50/75/100 buckets in der DB). Pool-Path skipped, Live übernimmt sofort.
+    if (targetDistanceKm <= 37.5) return null;
     if (targetDistanceKm <= 62.5) return 50;
     if (targetDistanceKm <= 87.5) return 75;
     if (targetDistanceKm <= 112.5) return 100;

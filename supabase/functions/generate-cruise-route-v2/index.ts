@@ -243,6 +243,39 @@ interface RouteResult {
   meta: Record<string, unknown>;
 }
 
+// ─────────────────── Style-Quality Metriken ───────────────────────────────
+//
+// 2026-05-21 (vucko): User-Beschwerde "Sport hat manchmal nur 10 Kurven".
+// Wir berechnen die Kurven-Dichte (turns >30°/km) und vergleichen sie mit
+// einem Profile-spezifischen Minimum. Routes unter dem Min bekommen Penalty
+// im Best-of-N-Ranking, nicht hard-reject (sonst NO_ROUTE in alpine).
+
+function countSignificantTurns(coords: [number, number][]): number {
+  if (coords.length < 3) return 0;
+  let turns = 0;
+  for (let i = 2; i < coords.length; i++) {
+    const a = coords[i - 2], b = coords[i - 1], c = coords[i];
+    const v1x = b[0] - a[0], v1y = b[1] - a[1];
+    const v2x = c[0] - b[0], v2y = c[1] - b[1];
+    const dot = v1x * v2x + v1y * v2y;
+    const cross = v1x * v2y - v1y * v2x;
+    if (dot === 0 && cross === 0) continue;
+    const angle = Math.abs(Math.atan2(cross, dot) * 180 / Math.PI);
+    if (angle > 30) turns++;
+  }
+  return turns;
+}
+
+function minTurnsPerKmForProfile(profile: string): number {
+  switch (profile) {
+    case 'motorcycle_kurvenjagd': return 1.4;
+    case 'motorcycle_scenic':    return 1.0;  // Sport: ≥50 Kurven für 50km
+    case 'motorcycle_entdecker': return 0.6;
+    case 'motorcycle_abendrunde':return 0.3;
+    default: return 0.5;
+  }
+}
+
 async function callGraphHopper(opts: {
   startLat: number;
   startLng: number;
@@ -399,6 +432,9 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
     parallel = await tryServer(serverChoice.fallback);
   }
 
+  // 2026-05-21 (vucko): Style-Quality-Scoring damit Sport nicht zu wenig
+  // Kurven hat. Berechnet turn-count und shape-quality. Bei profile-specific
+  // Minimum unterschritten → Penalty im Score, nicht hard reject.
   for (const { result, seed } of parallel) {
     if ('error' in result) {
       lastError = result.error;
@@ -409,27 +445,44 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
     candidates.push({ result, deltaPct, seed, isDup });
   }
 
-  // Best non-duplicate mit niedrigstem Delta
-  const nonDupSorted = candidates.filter(c => !c.isDup).sort((a, b) => a.deltaPct - b.deltaPct);
+  // Style-Quality-Bonus: bevorzuge Routen die zum gewählten Stil passen.
+  // Min Turn-Count / km (Sport ≥0.8, Kurvenjagd ≥1.2, Abendrunde ≥0.3, Entdecker ≥0.5)
+  const minTurnsPerKm = minTurnsPerKmForProfile(profile);
+  const scored = candidates.map(c => {
+    const turns = countSignificantTurns(c.result.geometry.coordinates as [number, number][]);
+    const turnsPerKm = c.result.distanceKm > 0 ? turns / c.result.distanceKm : 0;
+    const turnDeficit = Math.max(0, minTurnsPerKm - turnsPerKm);
+    // Penalty 0 wenn passt, bis +30 wenn weit unter Min
+    const stylePenalty = Math.min(30, turnDeficit * 25);
+    return { ...c, turns, turnsPerKm, stylePenalty, score: c.deltaPct + stylePenalty };
+  });
+
+  // Best non-duplicate mit niedrigstem combined Score (delta + style-penalty)
+  const nonDupSorted = scored.filter(c => !c.isDup).sort((a, b) => a.score - b.score);
   if (nonDupSorted.length > 0) {
     bestCandidate = nonDupSorted[0].result;
-  } else if (candidates.length > 0) {
-    // Fallback: alle waren Duplicates oder nichts non-dup → nimm besten duplicate
-    candidates.sort((a, b) => a.deltaPct - b.deltaPct);
-    bestCandidate = candidates[0].result;
+  } else if (scored.length > 0) {
+    scored.sort((a, b) => a.score - b.score);
+    bestCandidate = scored[0].result;
   }
 
   if (bestCandidate) {
     const selectedCandidate = candidates.find(c => c.result.fingerprint === bestCandidate!.fingerprint);
+    const selectedScored = scored.find(c => c.result.fingerprint === bestCandidate!.fingerprint);
     // V1-kompatible Response-Struktur damit Flutter route_service.dart
     // unverändert weiter funktioniert. Felder die der alte Mapbox-Code parst:
-    //   route.geometry, route.distance (in METER), route.duration (in MILLISEKUNDEN)
+    //   route.geometry, route.distance (in METER), route.duration (in SEKUNDEN)
     //   meta.route_source, meta.route_fingerprint, meta.distance_km
+    //
+    // 2026-05-21 BUGFIX (vucko): Mapbox Directions API liefert duration in
+    // SEKUNDEN (nicht ms wie initial gedacht). Flutter parser nimmt duration
+    // direkt als durationSeconds — ms hier hätte 1000× zu lange Anzeige.
+    // (Symptom: "1029h 49min" für 51km Route)
     return jsonResponse({
       route: {
         geometry: bestCandidate.geometry,
         distance: Math.round(bestCandidate.distanceKm * 1000), // METER (v1 compat)
-        duration: Math.round(bestCandidate.durationSeconds * 1000), // MILLISEKUNDEN (v1 compat)
+        duration: Math.round(bestCandidate.durationSeconds), // SEKUNDEN (Mapbox-Spec)
         // Zusätzliche v2-Felder (optional, nicht-breaking):
         distance_km: Number(bestCandidate.distanceKm.toFixed(2)),
         duration_seconds: Math.round(bestCandidate.durationSeconds),
@@ -449,6 +502,10 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
         // v1-kompatible meta-Felder
         distance_km: Number(bestCandidate.distanceKm.toFixed(2)),
         duration_seconds: Math.round(bestCandidate.durationSeconds),
+        // Style-Quality (turn-density Vergleich gegen Profile-Min)
+        turn_count: selectedScored?.turns ?? 0,
+        turns_per_km: Number((selectedScored?.turnsPerKm ?? 0).toFixed(2)),
+        style_penalty: Number((selectedScored?.stylePenalty ?? 0).toFixed(1)),
       },
     });
   }

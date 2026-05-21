@@ -175,7 +175,7 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
           if (isRoundTrip && !isWaypointPlanning) ...[
             _SelectionRow(
               title: 'Länge',
-              options: const ['50 Km', '75 Km', '100 Km'],
+              options: const ['25 Km', '50 Km', '75 Km', '100 Km'],
               selectedValue: widget.selectedLength,
               onSelect: widget.onLengthChanged,
             ),

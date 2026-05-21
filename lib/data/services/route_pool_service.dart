@@ -2212,12 +2212,14 @@ class RoutePoolService {
       return false;
     }
     final minKm = switch (requestedBucket) {
+      25 => 18.0,
       50 => 40.0,
       75 => 65.0,
       100 => 92.0,
       _ => requestedBucket * 0.82,
     };
     final maxKm = switch (requestedBucket) {
+      25 => 32.0,
       50 => 65.0,
       75 => 90.0,
       100 => 125.0,
