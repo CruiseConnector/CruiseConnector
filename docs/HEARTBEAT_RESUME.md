@@ -100,7 +100,7 @@ Branch graphhopper-dach-stabilize. Falls Compact: docs/HEARTBEAT_RESUME.md ist d
 | 9 | pending | Alten 15K-Zeilen Mapbox-Hack löschen — erst nach App-Live-Test im Simulator |
 | 10 | pending | Endbericht: Migration-Verdict + Demo-readiness |
 | 14 | ✓ completed | DACH Vollabdeckung — DE-Tunnel live, Friedrichshafen verifiziert |
-| 17 | pending | systemd-Unit für GH-Auto-Restart |
+| 17 | ✓ completed | systemd-Units installed + enabled + active (2026-05-21 14:03:50) — Auto-Restart aktiv |
 | 18 | ✓ completed | DE-Server Tunnel-Exposure — beide Funnels aktiv |
 | 19 | ✓ completed | Stil-Differenzierung — Runtime-Overlay (Wien: Kurvenjagd +24% turns) |
 | 20 | ✓ completed | Pool-Stil-Mismatch — strict cluster (sport↔kurvenjagd \| abendrunde↔entdecker) |
