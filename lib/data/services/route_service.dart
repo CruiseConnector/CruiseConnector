@@ -366,9 +366,20 @@ class RouteService {
       waypointSignature: waypointSignature,
       closeLoop: isWaypointRequiredRoundTrip,
     );
+    // 2026-05-22 (vucko): 50/50 Live/Pool Mix.
+    // User-Vorgabe: bei jeder Suche coin-flip — 50% Pool-First (schnell, kein
+    // GH-Last), 50% Live (frisch, immer neue Route). Pool-First wird
+    // automatisch via Search-Again-Logic gewechselt wenn User mehr Variety
+    // will. Bei forceFreshVariant ALWAYS Live (User hat ja explizit „neue
+    // Route" gewünscht).
+    // Waypoint-Routen MÜSSEN Live sein (Pool kennt keine spezifischen
+    // Waypoints des Users).
+    final coinFlip = (DateTime.now().millisecondsSinceEpoch ~/ 100) % 2 == 0;
     var poolHealingFirstPolicy = isWaypointRequiredRoundTrip
         ? false
-        : _usePoolHealingFirstForRoundTrip(scenario);
+        : (forceFreshVariant
+            ? false  // Search-Again → IMMER Live für frische Route
+            : coinFlip);  // 50/50
     _resetRouteDebugState();
     lastRouteGenerationStartedAtMs = DateTime.now().millisecondsSinceEpoch;
     lastRouteDebugTrigger = debugTrigger;
@@ -3621,6 +3632,9 @@ class RouteService {
         styleConfig.profileKey == 'entdecker';
   }
 
+  // 2026-05-22: Ersetzt durch 50/50 coin-flip in generateRoundTrip.
+  // Beibehalten als documentation der alten engen Bedingung (nur Sport 50km AB-AUS).
+  // ignore: unused_element
   static bool _usePoolHealingFirstForRoundTrip(RouteScenario scenario) {
     return scenario.isRoundTrip &&
         scenario.planningType == 'Zufall' &&

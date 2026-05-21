@@ -1,0 +1,63 @@
+# DACH Master-Städte-Liste für Auto-Seed
+# Format:  name:lat:lng
+# Auto-Seed Cron nimmt die erste Stadt ohne Pool-Migration.
+# Reihenfolge = Priorität (oben zuerst).
+
+# DE Baden-Württemberg
+Karlsruhe:49.0069:8.4037
+Heidelberg:49.3988:8.6724
+Mannheim:49.4875:8.4660
+Ulm:48.4011:9.9876
+Konstanz:47.6603:9.1758
+Ravensburg:47.7826:9.6128
+Tübingen:48.5216:9.0576
+Freiburg:47.9990:7.8421
+
+# DE Bayern
+Nürnberg:49.4521:11.0767
+Augsburg:48.3705:10.8978
+Ingolstadt:48.7665:11.4258
+Kempten:47.7268:10.3171
+Garmisch:47.4925:11.0954
+Regensburg:49.0134:12.1016
+Würzburg:49.7913:9.9534
+
+# AT Tirol
+Kufstein:47.5825:12.1645
+Wörgl:47.4828:12.0641
+Lienz:46.8294:12.7689
+Schwaz:47.3499:11.7066
+
+# AT Salzburg
+Zell-am-See:47.3225:12.7949
+Bischofshofen:47.4180:13.2222
+St-Johann:47.3500:13.2050
+
+# CH
+Bern:46.9480:7.4474
+Basel:47.5596:7.5886
+Luzern:47.0502:8.3093
+St-Gallen:47.4244:9.3767
+Chur:46.8499:9.5318
+Schaffhausen:47.6970:8.6346
+Winterthur:47.5022:8.7252
+
+# AT Niederösterreich
+St-Pölten:48.2057:15.6235
+Krems:48.4093:15.6147
+Wiener-Neustadt:47.8159:16.2459
+
+# AT Burgenland
+Eisenstadt:47.8456:16.5292
+
+# AT Steiermark Cluster (deeper)
+Leoben:47.3776:15.0936
+Bruck-Mur:47.4109:15.2742
+Liezen:47.5704:14.2419
+Mariazell:47.7733:15.3169
+Schladming:47.3938:13.6906
+Hartberg:47.2820:15.9716
+
+# DE Hessen
+Frankfurt:50.1109:8.6821
+Wiesbaden:50.0826:8.2400
