@@ -20,7 +20,32 @@
 import { serve } from 'https://deno.land/std@0.210.0/http/server.ts';
 
 const GRAPHHOPPER_URL = Deno.env.get('GRAPHHOPPER_URL') ?? 'http://graphhopper.local:8989';
+// DE-Server (Port 8991 hinter dem Tunnel) hat germany-latest.osm.pbf alleine —
+// covers Friedrichshafen, München, Stuttgart, Nürnberg etc. die im DACH-merged
+// Graph wegen osmium duplicate-node-ID Crashes nicht drin sind.
+const GRAPHHOPPER_DE_URL = Deno.env.get('GRAPHHOPPER_DE_URL') ?? GRAPHHOPPER_URL.replace(':8989', ':8991');
 const ALLOWED_ORIGINS = '*';
+
+// Lat-basierte Server-Wahl:
+// - AT/CH/LI/BW-Nord-Routing → DACH-Server (8989)
+// - DE-südlich-48.3 + Bayern + restliches DE → DE-Server (8991)
+// Fallback: wenn ein Server fehlschlägt, anderen probieren.
+function chooseGraphhopperUrl(lat: number, lng: number): { primary: string; fallback: string } {
+  // DACH-Server kennt: AT (alle), CH (alle), LI, BW lat≥48.3
+  const inDachServerArea =
+    // Österreich grob 46.4-49.0, 9.5-17.2
+    (lat >= 46.4 && lat <= 49.0 && lng >= 9.5 && lng <= 17.2) ||
+    // Schweiz grob 45.8-47.8, 5.9-10.5
+    (lat >= 45.8 && lat <= 47.8 && lng >= 5.9 && lng <= 10.5) ||
+    // BW lat≥48.3 (mein clip), 7.5-10.5
+    (lat >= 48.3 && lat <= 49.8 && lng >= 7.5 && lng <= 10.5);
+  if (inDachServerArea) {
+    return { primary: GRAPHHOPPER_URL, fallback: GRAPHHOPPER_DE_URL };
+  }
+  // DE-Areas die NICHT im DACH-Server drin: Bayern, BW-Süd (Friedrichshafen),
+  // restliches Deutschland (Hessen, Berlin, NRW...)
+  return { primary: GRAPHHOPPER_DE_URL, fallback: GRAPHHOPPER_URL };
+}
 
 // ─────────────────────────── Types ────────────────────────────────────────
 
@@ -162,6 +187,7 @@ async function callGraphHopper(opts: {
   targetDistanceKm?: number;
   seed?: number;
   avoidHighways: boolean;
+  serverUrl?: string;
 }): Promise<RouteResult | { error: string }> {
   const params = new URLSearchParams();
   params.append('point', `${opts.startLat},${opts.startLng}`);
@@ -191,7 +217,8 @@ async function callGraphHopper(opts: {
     params.set('custom_model', JSON.stringify(customModel));
   }
 
-  const url = `${GRAPHHOPPER_URL}/route?${params.toString()}`;
+  const baseUrl = opts.serverUrl ?? GRAPHHOPPER_URL;
+  const url = `${baseUrl}/route?${params.toString()}`;
   try {
     const res = await fetch(url);
     if (!res.ok) {
@@ -247,53 +274,65 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
     targetKm: req.target_distance_km ?? 50,
   });
 
-  // Best-of-N Strategie statt Single-Seed:
-  // Round-Trip-Distanzen variieren ±25% pro Seed (GH-Algorithmus ist stochastisch).
-  // Wir sammeln bis zu 4 Kandidaten, nehmen den nähesten am Target.
-  // Bei explicit Search Again (force_fresh): zusätzlich previous-fingerprint-Filter.
-  const maxAttempts = isRoundTrip ? 4 : 1;
-  let lastError = 'unknown';
-  let bestCandidate: RouteResult | null = null;
-  let bestDelta = Infinity;
+  // PARALLEL Best-of-N statt sequenziell (Latenz-Optimierung 2026-05-21):
+  // Vorher: bis zu 4 sequenzielle GraphHopper-Calls × 0.3-0.8s = 1.2-3.2s total.
+  // Jetzt: 5 parallele Calls in Promise.all → max(call_time) ≈ 0.3-0.8s total.
+  // 5 statt 3 weil Friedrichshafen-Test (Bodensee) zeigte: seed-Failures sind
+  // häufiger als gedacht. Mit 5 Versuchen finden wir fast immer 1-2 saubere.
+  const maxAttempts = isRoundTrip ? 5 : 1;
   const targetKm = req.target_distance_km ?? 50;
   const candidates: Array<{ result: RouteResult; deltaPct: number; seed: number; isDup: boolean }> = [];
+  let bestCandidate: RouteResult | null = null;
+  let lastError = 'unknown';
 
-  for (let attempt = 0; attempt < Math.min(maxAttempts, seeds.length); attempt++) {
-    const result = await callGraphHopper({
-      startLat: req.start_location.latitude,
-      startLng: req.start_location.longitude,
-      endLat: req.target_location?.latitude,
-      endLng: req.target_location?.longitude,
-      profile,
-      isRoundTrip,
-      targetDistanceKm: effectiveDistanceKm,
-      seed: seeds[attempt],
-      avoidHighways: req.avoid_highways ?? false,
-    });
+  const candidateSeeds = seeds.slice(0, maxAttempts);
+  // Server-Wahl basierend auf User-Position
+  const serverChoice = chooseGraphhopperUrl(
+    req.start_location.latitude,
+    req.start_location.longitude,
+  );
+  const tryServer = async (serverUrl: string) => {
+    return await Promise.all(
+      candidateSeeds.map(seed =>
+        callGraphHopper({
+          startLat: req.start_location!.latitude,
+          startLng: req.start_location!.longitude,
+          endLat: req.target_location?.latitude,
+          endLng: req.target_location?.longitude,
+          profile,
+          isRoundTrip,
+          targetDistanceKm: effectiveDistanceKm,
+          seed,
+          avoidHighways: req.avoid_highways ?? false,
+          serverUrl,
+        }).then(result => ({ result, seed })),
+      ),
+    );
+  };
+  // Versuche primary, wenn alle fail → fallback server
+  let parallel = await tryServer(serverChoice.primary);
+  const primaryAllFailed = parallel.every(p => 'error' in p.result);
+  if (primaryAllFailed && serverChoice.primary !== serverChoice.fallback) {
+    console.log(`Primary server ${serverChoice.primary} all failed, trying fallback ${serverChoice.fallback}`);
+    parallel = await tryServer(serverChoice.fallback);
+  }
+
+  for (const { result, seed } of parallel) {
     if ('error' in result) {
       lastError = result.error;
       continue;
     }
     const isDup = previousFps.has(result.fingerprint);
     const deltaPct = Math.abs(result.distanceKm - targetKm) / targetKm * 100;
-    candidates.push({ result, deltaPct, seed: seeds[attempt], isDup });
-
-    // Für Point-to-Point: erster valider Treffer reicht
-    if (!isRoundTrip) {
-      bestCandidate = result;
-      break;
-    }
-    // Round-Trip: weiter sammeln, am Ende besten wählen
-    if (deltaPct < bestDelta && !isDup) {
-      bestCandidate = result;
-      bestDelta = deltaPct;
-    }
-    // Early exit wenn schon sehr gut
-    if (deltaPct < 10 && !isDup) break;
+    candidates.push({ result, deltaPct, seed, isDup });
   }
 
-  // Fallback: wenn alle non-duplicate Routes zu weit daneben, nimm duplicate-Route
-  if (!bestCandidate && candidates.length > 0) {
+  // Best non-duplicate mit niedrigstem Delta
+  const nonDupSorted = candidates.filter(c => !c.isDup).sort((a, b) => a.deltaPct - b.deltaPct);
+  if (nonDupSorted.length > 0) {
+    bestCandidate = nonDupSorted[0].result;
+  } else if (candidates.length > 0) {
+    // Fallback: alle waren Duplicates oder nichts non-dup → nimm besten duplicate
     candidates.sort((a, b) => a.deltaPct - b.deltaPct);
     bestCandidate = candidates[0].result;
   }
@@ -350,18 +389,37 @@ function generateSeeds(opts: {
   startLng: number;
   targetKm: number;
 }): number[] {
+  // Erkenntnis 2026-05-21 (Friedrichshafen-Test): Round-Trip Algorithmus von
+  // GraphHopper hat seed-spezifische Failures wenn Sub-Waypoints in Wasser /
+  // Bergen / unbestraßten Bereichen landen. Lösung: viele, breit gestreute
+  // Seeds (statt 5 nah beieinander Werte) damit immer mindestens 2-3 davon
+  // saubere Sub-Waypoints treffen.
   if (opts.forceFresh) {
-    // Calimoto-Pattern: Timestamp-basiert + verschiedene Versuche
     const base = Date.now() % 1_000_000;
-    return [base, base + 137, base + 274, base + 411, base + 9999, base + 31337];
+    return [
+      base, base + 7, base + 13, base + 137, base + 274,
+      base + 411, base + 1337, base + 9999, base + 31337, base + 100003,
+    ];
   }
-  // Initial: deterministischer Seed aus Position + Distanz
   const h = Math.abs(
     Math.round(opts.startLat * 1000) * 31 +
     Math.round(opts.startLng * 1000) * 17 +
     Math.round(opts.targetKm) * 7,
   );
-  return [h % 100000, (h + 137) % 100000, (h + 274) % 100000, (h + 411) % 100000, (h + 9999) % 100000];
+  // 10 breit gestreute Seeds — kleine Primzahl-Offsets damit auch
+  // problematische Bodensee-/Berg-Regionen treffer haben.
+  return [
+    (h + 3) % 100000,
+    (h + 7) % 100000,
+    (h + 13) % 100000,
+    (h + 29) % 100000,
+    (h + 137) % 100000,
+    (h + 411) % 100000,
+    (h + 1337) % 100000,
+    (h + 4111) % 100000,
+    (h + 9999) % 100000,
+    (h + 31337) % 100000,
+  ];
 }
 
 // ─────────────────── HTTP-Handling ────────────────────────────────────────
