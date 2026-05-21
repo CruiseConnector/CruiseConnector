@@ -1,0 +1,29 @@
+[Unit]
+Description=GraphHopper DE Routing Server (Bayern + DE-rest + Friedrichshafen)
+Documentation=https://github.com/graphhopper/graphhopper
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=vucko1
+Group=vucko1
+WorkingDirectory=/home/vucko1/graphhopper/config
+Environment="JAVA_OPTS=-Xmx5g -Xms1g -server"
+ExecStart=/usr/bin/java -Xmx5g -Xms1g -server \
+  -jar /home/vucko1/graphhopper/bin/graphhopper-web.jar \
+  server /home/vucko1/graphhopper/config/config-de.yml
+Restart=always
+RestartSec=20
+StandardOutput=append:/home/vucko1/graphhopper/gh-de.log
+StandardError=append:/home/vucko1/graphhopper/gh-de.log
+
+MemoryHigh=5.5G
+MemoryMax=6G
+TasksMax=512
+
+PrivateTmp=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

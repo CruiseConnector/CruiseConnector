@@ -1,0 +1,31 @@
+[Unit]
+Description=GraphHopper DACH Routing Server (AT/CH/LI/BW-Nord)
+Documentation=https://github.com/graphhopper/graphhopper
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=vucko1
+Group=vucko1
+WorkingDirectory=/home/vucko1/graphhopper/config
+Environment="JAVA_OPTS=-Xmx10g -Xms2g -server"
+ExecStart=/usr/bin/java -Xmx10g -Xms2g -server \
+  -jar /home/vucko1/graphhopper/bin/graphhopper-web.jar \
+  server /home/vucko1/graphhopper/config/config.yml
+Restart=always
+RestartSec=20
+StandardOutput=append:/home/vucko1/graphhopper/gh.log
+StandardError=append:/home/vucko1/graphhopper/gh.log
+
+# Resource-Limits — verhindert RAM-Exhaustion crashes
+MemoryHigh=11G
+MemoryMax=12G
+TasksMax=512
+
+# Security-Hardening (optional)
+PrivateTmp=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
