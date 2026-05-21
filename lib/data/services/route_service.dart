@@ -6584,9 +6584,10 @@ class RouteService {
 
   static int? _distanceBucketForPool(double? targetDistanceKm) {
     if (targetDistanceKm == null || !targetDistanceKm.isFinite) return null;
-    // 2026-05-21 (vucko): 25km wird über LIVE generiert (Pool-Schema hat nur
-    // 50/75/100 buckets in der DB). Pool-Path skipped, Live übernimmt sofort.
-    if (targetDistanceKm <= 37.5) return null;
+    // 2026-05-21 (vucko Task #35): 25km Bucket jetzt im DB-Schema erlaubt
+    // (Migration 20260521_add_25km_bucket.sql). Pool-Matches möglich sobald
+    // Healing-Worker curated 25er gelegt hat.
+    if (targetDistanceKm <= 37.5) return 25;
     if (targetDistanceKm <= 62.5) return 50;
     if (targetDistanceKm <= 87.5) return 75;
     if (targetDistanceKm <= 112.5) return 100;
