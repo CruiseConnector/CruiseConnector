@@ -1,0 +1,16 @@
+# DACH autonomous task queue — eine Zeile pro Task.
+# Format:    <task-id>:<short-desc>:<file-hint>
+# Erledigt:  DONE:<task-id>:...
+#
+# Geskippt (brauchen User-Action):
+#   #9  Mapbox-Code löschen — wartet auf App-Live-Test
+#   #17 systemd-Units — User hat manuell installiert
+#   #23 Live-First Policy — wartet auf Pool/Live-Mix-Regeln
+#
+# Der Task-Worker nimmt die erste Zeile ohne DONE-Präfix.
+# Bei Problemen: Zeile bleibt, wird beim nächsten Tick erneut probiert.
+# Bei Erfolg: Präfix "DONE:" voranstellen.
+
+29:U-Loop-Bug — Routes biegen ab, Viereck zurück auf gleiche Straße:lib/data/services/route_quality_validator.dart
+31:Navigation flüssiger + mehr live:lib/presentation/pages/cruise_mode_page.dart
+32:Steiermark-Coverage tieferes Tuning (Live-Suche bei Fallback/Emergency):supabase/functions/generate-cruise-route-v2/index.ts
