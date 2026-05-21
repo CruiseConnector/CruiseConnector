@@ -51,6 +51,37 @@ def call_edge(anon, lat, lng, km, style):
         return {"error": "fetch_failed", "detail": str(e)}
 
 
+# Region → (country_code, admin1_name) — für NOT NULL constraints
+REGION_META = {
+    "Friedrichshafen": ("DE", "Baden-Württemberg"),
+    "Stuttgart": ("DE", "Baden-Württemberg"),
+    "Heilbronn": ("DE", "Baden-Württemberg"),
+    "Mannheim": ("DE", "Baden-Württemberg"),
+    "München": ("DE", "Bayern"),
+    "Munich": ("DE", "Bayern"),
+    "Bregenz": ("AT", "Vorarlberg"),
+    "Feldkirch": ("AT", "Vorarlberg"),
+    "Innsbruck": ("AT", "Tirol"),
+    "Salzburg": ("AT", "Salzburg"),
+    "Wien": ("AT", "Wien"),
+    "Vienna": ("AT", "Wien"),
+    "Linz": ("AT", "Oberösterreich"),
+    "Graz": ("AT", "Steiermark"),
+    "Klagenfurt": ("AT", "Kärnten"),
+    "Leoben": ("AT", "Steiermark"),
+    "Bruck-Mur": ("AT", "Steiermark"),
+    "Liezen": ("AT", "Steiermark"),
+    "Mariazell": ("AT", "Steiermark"),
+    "Schladming": ("AT", "Steiermark"),
+    "Zürich": ("CH", "Zürich"),
+    "Zurich": ("CH", "Zürich"),
+    "Bern": ("CH", "Bern"),
+    "Basel": ("CH", "Basel-Stadt"),
+    "Lugano": ("CH", "Tessin"),
+    "Vaduz": ("LI", "Vaduz"),
+}
+
+
 def main():
     if len(sys.argv) < 6:
         print(__doc__)
@@ -62,6 +93,8 @@ def main():
     buckets = [int(b) for b in sys.argv[4].split(",")]
     styles = sys.argv[5].split(",")
     count = int(sys.argv[6]) if len(sys.argv) > 6 else 3
+
+    country_code, admin1_name = REGION_META.get(region, ("DE", "Unknown"))
 
     anon = read_anon()
     if not anon:
@@ -148,6 +181,7 @@ def main():
                 out.write(
                     "INSERT INTO public.route_pool ("
                     "title, distance_bucket, distance_km, "
+                    "country_code, admin1_name, city_cluster, "
                     "start_lat, start_lng, end_lat, end_lng, "
                     "route_type, geometry, style_tags, avoids_highway, has_highway, "
                     "verified, is_active, source, route_payload, route_fingerprint, "
@@ -155,6 +189,7 @@ def main():
                     "usage_count, rating_count, completion_rate, weekly_rotation_score"
                     ") VALUES ("
                     f"'{title_sql}', {bucket}, {km:.2f}, "
+                    f"'{country_code}', '{admin1_name}', '{region.replace(chr(39), chr(39)+chr(39))}', "
                     f"{start[1]:.6f}, {start[0]:.6f}, {end[1]:.6f}, {end[0]:.6f}, "
                     f"'ROUND_TRIP', '{geom_sql}'::jsonb, ARRAY['{style_tag}']::text[], true, false, "
                     f"true, true, 'pool_seed_v2', '{payload_sql}'::jsonb, '{fingerprint}', "
