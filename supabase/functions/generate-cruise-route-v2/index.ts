@@ -69,6 +69,11 @@ interface RouteRequest {
   forceFreshVariant?: boolean;
   previous_route_fingerprints?: string[];
   client_trigger?: string;
+  // 2026-05-22 (Task #41): A→B Detour-Level (0=direkt, 1=klein, 2=mittel, 3=groß)
+  detour_level?: number;
+  detourLevel?: number;
+  // 2026-05-22 (Task #42): Explicit user-waypoints (zwischen start + end)
+  waypoints?: Array<{ latitude: number; longitude: number }>;
 }
 
 // Normalisierung: ergänzt fehlende v2-Felder aus den Flutter-Aliassen
@@ -81,6 +86,7 @@ function normalizeRequest(raw: RouteRequest): RouteRequest {
     target_distance_km: raw.target_distance_km ?? raw.targetDistance,
     selected_style: raw.selected_style ?? raw.mode,
     force_fresh_variant: raw.force_fresh_variant ?? raw.forceFreshVariant,
+    detour_level: raw.detour_level ?? raw.detourLevel ?? 0,
   };
 }
 
@@ -247,6 +253,33 @@ interface RouteResult {
   meta: Record<string, unknown>;
 }
 
+// ─────────────────── Geo-Helpers (A→B Detour, Task #41) ─────────────────
+
+function bearingDeg(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const toDeg = (r: number) => (r * 180) / Math.PI;
+  const φ1 = toRad(lat1), φ2 = toRad(lat2);
+  const Δλ = toRad(lng2 - lng1);
+  const y = Math.sin(Δλ) * Math.cos(φ2);
+  const x = Math.cos(φ1) * Math.sin(φ2) - Math.sin(φ1) * Math.cos(φ2) * Math.cos(Δλ);
+  return (toDeg(Math.atan2(y, x)) + 360) % 360;
+}
+
+function offsetCoord(lat: number, lng: number, distKm: number, bearingDeg_: number): { lat: number; lng: number } {
+  const R = 6371; // km Earth radius
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const toDeg = (r: number) => (r * 180) / Math.PI;
+  const φ1 = toRad(lat), λ1 = toRad(lng);
+  const θ = toRad(bearingDeg_);
+  const φ2 = Math.asin(Math.sin(φ1) * Math.cos(distKm / R)
+    + Math.cos(φ1) * Math.sin(distKm / R) * Math.cos(θ));
+  const λ2 = λ1 + Math.atan2(
+    Math.sin(θ) * Math.sin(distKm / R) * Math.cos(φ1),
+    Math.cos(distKm / R) - Math.sin(φ1) * Math.sin(φ2),
+  );
+  return { lat: toDeg(φ2), lng: toDeg(λ2) };
+}
+
 // ─────────────────── Style-Quality Metriken ───────────────────────────────
 //
 // 2026-05-21 (vucko): User-Beschwerde "Sport hat manchmal nur 10 Kurven".
@@ -291,10 +324,36 @@ async function callGraphHopper(opts: {
   seed?: number;
   avoidHighways: boolean;
   serverUrl?: string;
+  // 2026-05-22 (vucko Task #41): A→B Detour via Sub-Waypoint
+  // detourBearing/detourDistance bestimmen die Lage des Mittelpunkts
+  // senkrecht zur direkten Linie. Ohne diese Felder = direkte Route.
+  detourBearingDeg?: number;
+  detourPerpendicularKm?: number;
+  // Custom waypoints (zwischen start + end, in order)
+  intermediateWaypoints?: Array<{ lat: number; lng: number }>;
 }): Promise<RouteResult | { error: string }> {
   const params = new URLSearchParams();
   params.append('point', `${opts.startLat},${opts.startLng}`);
+
+  // A→B: füge sub-waypoint(s) für detour-Charakter
   if (!opts.isRoundTrip && opts.endLat != null && opts.endLng != null) {
+    // Explicit waypoints zuerst (für Wegpunkte-Mode)
+    if (opts.intermediateWaypoints && opts.intermediateWaypoints.length > 0) {
+      for (const wp of opts.intermediateWaypoints) {
+        params.append('point', `${wp.lat},${wp.lng}`);
+      }
+    }
+    // Auto-detour via senkrecht-Offset (klein/mittel/groß umweg)
+    else if (opts.detourPerpendicularKm != null && opts.detourPerpendicularKm > 0
+          && opts.detourBearingDeg != null) {
+      const midLat = (opts.startLat + opts.endLat) / 2;
+      const midLng = (opts.startLng + opts.endLng) / 2;
+      // Senkrecht zur direkten Linie:
+      const directBearing = bearingDeg(opts.startLat, opts.startLng, opts.endLat, opts.endLng);
+      const perpBearing = (directBearing + opts.detourBearingDeg + 360) % 360;
+      const offset = offsetCoord(midLat, midLng, opts.detourPerpendicularKm, perpBearing);
+      params.append('point', `${offset.lat},${offset.lng}`);
+    }
     params.append('point', `${opts.endLat},${opts.endLng}`);
   }
   params.set('profile', opts.profile);
@@ -398,7 +457,58 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
   // statt 5 — User-Beschwerde "Routen überschneiden sich". Mehr Seeds = höhere
   // Chance dass mindestens einer in den vorherigen Routen nicht enthalten ist.
   const needsDiversity = (req.force_fresh_variant ?? false) || previousFps.size > 0;
-  const maxAttempts = isRoundTrip ? (needsDiversity ? 8 : 5) : 1;
+
+  // 2026-05-22 (Task #41): A→B Detour-Multi-Variant
+  // Bei detour_level > 0 generieren wir parallele Routen mit verschiedenen
+  // Sub-Waypoint-Positionen (senkrecht zur direkten Linie). Best-of-N wählt
+  // dann die mit dem besten Score (style + speed + distance-fit).
+  // detour_level 0 = direkt (1 Versuch)
+  // detour_level 1 = klein (Sub-WP 3-5 km senkrecht, 3 Versuche)
+  // detour_level 2 = mittel (Sub-WP 6-12 km, 4 Versuche)
+  // detour_level 3 = groß (Sub-WP 12-25 km, 5 Versuche)
+  const detourLevel = isRoundTrip ? 0 : (req.detour_level ?? 0);
+  const detourSpec: Array<{ bearing: number; distKm: number }> = [];
+  if (!isRoundTrip && req.target_location && detourLevel > 0) {
+    const directKm = (() => {
+      const R = 6371;
+      const toRad = (d: number) => (d * Math.PI) / 180;
+      const dLat = toRad(req.target_location.latitude - req.start_location.latitude);
+      const dLng = toRad(req.target_location.longitude - req.start_location.longitude);
+      const a = Math.sin(dLat/2)**2 + Math.cos(toRad(req.start_location.latitude))
+        * Math.cos(toRad(req.target_location.latitude)) * Math.sin(dLng/2)**2;
+      return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    })();
+    // Sub-WP-Distanz als Anteil der direkten Distanz, MODULIERT vom Profil:
+    // Sport/Kurvenjagd: mehr Umweg → curvy roads
+    // Abendrunde: weniger Umweg → entspannt
+    // Entdecker: medium
+    const profileDetourMultiplier = profile === 'motorcycle_kurvenjagd' ? 1.4
+      : profile === 'motorcycle_scenic' ? 1.15
+      : profile === 'motorcycle_abendrunde' ? 0.7
+      : profile === 'motorcycle_entdecker' ? 1.0
+      : 1.0;
+    const baseFactor = detourLevel === 1 ? 0.15 : detourLevel === 2 ? 0.30 : 0.50;
+    const baseKm = Math.max(2, directKm * baseFactor * profileDetourMultiplier);
+    // Bearing-Sets pro Stil unterschiedlich damit Routes sich klar
+    // unterscheiden (sonst pickt GH die kürzeste path egal welches profile).
+    const bearingsForStyle = profile === 'motorcycle_kurvenjagd'
+      ? [90, -90, 120, -120]  // breit + tief — viele Optionen
+      : profile === 'motorcycle_scenic'
+      ? [75, -75, 60, -60]    // schmaler Spread — Cruiser-feeling
+      : profile === 'motorcycle_abendrunde'
+      ? [60, -60, 45]         // wenig Umweg
+      : [80, -80, 100, -100]; // entdecker: variability
+    const limit = detourLevel === 1 ? 3 : detourLevel === 2 ? 4 : 5;
+    for (const b of bearingsForStyle.slice(0, limit)) {
+      detourSpec.push({ bearing: b, distKm: baseKm });
+    }
+  }
+  const hasExplicitWaypoints = !isRoundTrip && (req.waypoints?.length ?? 0) > 0;
+
+  // maxAttempts pro Modus
+  const maxAttempts = isRoundTrip
+    ? (needsDiversity ? 8 : 5)
+    : (hasExplicitWaypoints ? 1 : Math.max(1, detourSpec.length));
   const targetKm = req.target_distance_km ?? 50;
   const candidates: Array<{ result: RouteResult; deltaPct: number; seed: number; isDup: boolean }> = [];
   let bestCandidate: RouteResult | null = null;
@@ -416,20 +526,66 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
     latOffset: number = 0,
     lngOffset: number = 0,
   ) => {
+    if (isRoundTrip) {
+      return await Promise.all(
+        candidateSeeds.map(seed =>
+          callGraphHopper({
+            startLat: req.start_location!.latitude + latOffset,
+            startLng: req.start_location!.longitude + lngOffset,
+            endLat: req.target_location?.latitude,
+            endLng: req.target_location?.longitude,
+            profile: profileToUse,
+            isRoundTrip,
+            targetDistanceKm: effectiveDistanceKm,
+            seed,
+            avoidHighways: req.avoid_highways ?? false,
+            serverUrl,
+          }).then(result => ({ result, seed })),
+        ),
+      );
+    }
+    // A→B mode
+    if (hasExplicitWaypoints) {
+      return [await callGraphHopper({
+        startLat: req.start_location!.latitude,
+        startLng: req.start_location!.longitude,
+        endLat: req.target_location!.latitude,
+        endLng: req.target_location!.longitude,
+        profile: profileToUse,
+        isRoundTrip: false,
+        avoidHighways: req.avoid_highways ?? false,
+        serverUrl,
+        intermediateWaypoints: req.waypoints!.map(w => ({ lat: w.latitude, lng: w.longitude })),
+      }).then(result => ({ result, seed: 0 }))];
+    }
+    if (detourSpec.length === 0) {
+      // Direkter A→B (detourLevel 0)
+      return [await callGraphHopper({
+        startLat: req.start_location!.latitude,
+        startLng: req.start_location!.longitude,
+        endLat: req.target_location!.latitude,
+        endLng: req.target_location!.longitude,
+        profile: profileToUse,
+        isRoundTrip: false,
+        avoidHighways: req.avoid_highways ?? false,
+        serverUrl,
+      }).then(result => ({ result, seed: 0 }))];
+    }
+    // detourLevel > 0: parallel mit verschiedenen Sub-Waypoint-Positionen
     return await Promise.all(
-      candidateSeeds.map(seed =>
+      detourSpec.map((spec, idx) =>
         callGraphHopper({
-          startLat: req.start_location!.latitude + latOffset,
-          startLng: req.start_location!.longitude + lngOffset,
-          endLat: req.target_location?.latitude,
-          endLng: req.target_location?.longitude,
+          startLat: req.start_location!.latitude,
+          startLng: req.start_location!.longitude,
+          endLat: req.target_location!.latitude,
+          endLng: req.target_location!.longitude,
           profile: profileToUse,
-          isRoundTrip,
-          targetDistanceKm: effectiveDistanceKm,
-          seed,
+          isRoundTrip: false,
           avoidHighways: req.avoid_highways ?? false,
           serverUrl,
-        }).then(result => ({ result, seed })),
+          detourBearingDeg: spec.bearing,
+          detourPerpendicularKm: spec.distKm,
+        }).then(result => ({ result, seed: idx })),
       ),
     );
   };
@@ -495,30 +651,47 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
     const turns = countSignificantTurns(c.result.geometry.coordinates as [number, number][]);
     const turnsPerKm = c.result.distanceKm > 0 ? turns / c.result.distanceKm : 0;
     const turnDeficit = Math.max(0, minTurnsPerKm - turnsPerKm);
-    // Penalty 0 wenn passt, bis +30 wenn weit unter Min
     const stylePenalty = Math.min(30, turnDeficit * 25);
-    // 2026-05-21 (vucko): Avg-Speed-Penalty — Friedrichshafen-Pattern zeigte
-    // Routen mit 12 km/h Schnitt (Promenaden/Fußgängerzonen-Routing). Motorrad
-    // sollte mind. 25 km/h Schnitt fahren. Penalty bis +25 für sehr langsame
-    // Routen. Greift wenn GH durch Tempo-30/Hafen/Wander routet.
+    // 2026-05-21 (vucko v2): Speed-Penalty verschärft + isUnreasonablySlow Flag.
+    // User-Befund: Friedrichshafen-Bahnhof-Start → erste 2-3km Hafen/City mit
+    // Tempo-30 zieht avg_speed bei kurzen Routes massiv runter (12-28 km/h).
+    // Diese Routes liefern UX wie "EMERGENCY_FALLBACK".
+    //
+    // Neuer Schwellwert: <35 km/h für ≥75km Routes, <30 km/h für 25-50km.
+    // Solche Routes bekommen +60 Penalty (effectiv hard-reject im Best-of-N,
+    // aber als allerletzter Fallback noch nutzbar wenn alle anderen failen).
     const avgSpeedKmh = c.result.durationSeconds > 0
       ? (c.result.distanceKm / (c.result.durationSeconds / 3600))
       : 50;
-    const speedDeficit = Math.max(0, 25 - avgSpeedKmh);
-    const speedPenalty = Math.min(25, speedDeficit * 1.5);
+    const minAcceptableSpeed = c.result.distanceKm >= 75 ? 35 : 30;
+    const speedDeficit = Math.max(0, minAcceptableSpeed - avgSpeedKmh);
+    const isUnreasonablySlow = avgSpeedKmh > 0 && avgSpeedKmh < minAcceptableSpeed;
+    // Penalty: bis +25 für soft (innerhalb Tolerance), +60 für unreasonable
+    const speedPenalty = isUnreasonablySlow
+      ? 60 + Math.min(20, speedDeficit * 0.8)
+      : Math.min(25, speedDeficit * 1.5);
     return {
       ...c, turns, turnsPerKm, stylePenalty, speedPenalty, avgSpeedKmh,
+      isUnreasonablySlow,
       score: c.deltaPct + stylePenalty + speedPenalty,
     };
   });
 
-  // Best non-duplicate mit niedrigstem combined Score (delta + style-penalty)
-  const nonDupSorted = scored.filter(c => !c.isDup).sort((a, b) => a.score - b.score);
-  if (nonDupSorted.length > 0) {
-    bestCandidate = nonDupSorted[0].result;
-  } else if (scored.length > 0) {
-    scored.sort((a, b) => a.score - b.score);
-    bestCandidate = scored[0].result;
+  // Best non-duplicate mit niedrigstem combined Score.
+  // Zuerst nur "reasonable speed" Routes betrachten (nicht isUnreasonablySlow).
+  // Nur wenn ALLE slow sind, fallback auf besten slow.
+  const nonDupReasonable = scored.filter(c => !c.isDup && !c.isUnreasonablySlow)
+    .sort((a, b) => a.score - b.score);
+  if (nonDupReasonable.length > 0) {
+    bestCandidate = nonDupReasonable[0].result;
+  } else {
+    const nonDupAny = scored.filter(c => !c.isDup).sort((a, b) => a.score - b.score);
+    if (nonDupAny.length > 0) {
+      bestCandidate = nonDupAny[0].result;
+    } else if (scored.length > 0) {
+      scored.sort((a, b) => a.score - b.score);
+      bestCandidate = scored[0].result;
+    }
   }
 
   if (bestCandidate) {
