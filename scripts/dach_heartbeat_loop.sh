@@ -16,7 +16,11 @@ echo "[loop-start] $(date +"%Y-%m-%dT%H:%M:%S") pid=$$" >> logs/heartbeat-loop.l
 
 while true; do
   bash "$ROOT/scripts/dach_autonomous_heartbeat.sh" --quiet >/dev/null 2>&1
+  EXIT_CODE=$?
+  TS=$(date +"%Y-%m-%dT%H:%M:%S")
   # exit code → status für später (anomaly detection durch Claude-Cron)
-  echo "$(date +"%Y-%m-%dT%H:%M:%S") exit=$?" >> "$ROOT/logs/heartbeat-loop.log"
+  # 2026-05-21 BUGFIX (vucko): $? referenzierte vorher $(date)-substitution
+  # (return=0), nicht das heartbeat-Skript. Fix: in Variable cachen.
+  echo "$TS exit=$EXIT_CODE" >> "$ROOT/logs/heartbeat-loop.log"
   sleep 60
 done
