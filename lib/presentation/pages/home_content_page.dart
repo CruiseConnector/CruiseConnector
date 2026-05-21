@@ -127,9 +127,14 @@ class _HomeContentPageState extends State<HomeContentPage>
       HomeRouteRecommendation? recommendation;
       bool routeSaved = false;
       try {
-        // Standort ermitteln
-        double userLat = 50.1109; // Fallback: Frankfurt
-        double userLng = 8.6821;
+        // 2026-05-21 (vucko): Standort-Ermittlung robuster.
+        // User-Beschwerde: "empfohlene Routen sollen wirklich vom Standort sein".
+        // Alte Logik fiel zu schnell auf Frankfurt-Fallback durch:
+        //   - accuracy.low + 5s Timeout = häufig timeout bei schlechtem GPS
+        //   - Frankfurt 50.11/8.68 als hard-coded fallback → falsche Region
+        // Neu: medium accuracy + 10s, dann lastKnownPosition, dann erst Fallback.
+        double? userLat;
+        double? userLng;
         try {
           final permission = await geo.Geolocator.checkPermission();
           final hasPermission =
@@ -140,14 +145,31 @@ class _HomeContentPageState extends State<HomeContentPage>
           }
           final pos = await geo.Geolocator.getCurrentPosition(
             locationSettings: const geo.LocationSettings(
-              accuracy: geo.LocationAccuracy.low,
-              timeLimit: Duration(seconds: 5),
+              accuracy: geo.LocationAccuracy.medium,
+              timeLimit: Duration(seconds: 10),
             ),
           );
           userLat = pos.latitude;
           userLng = pos.longitude;
+          debugPrint('[Home] GPS-Live OK: ${userLat.toStringAsFixed(4)}, ${userLng.toStringAsFixed(4)}');
         } catch (e) {
-          debugPrint('[Home] Standort nicht verfügbar, nutze Fallback: $e');
+          debugPrint('[Home] GPS-Live timeout, versuche lastKnownPosition: $e');
+          try {
+            final last = await geo.Geolocator.getLastKnownPosition();
+            if (last != null) {
+              userLat = last.latitude;
+              userLng = last.longitude;
+              debugPrint('[Home] lastKnownPosition OK: ${userLat.toStringAsFixed(4)}, ${userLng.toStringAsFixed(4)}');
+            }
+          } catch (e2) {
+            debugPrint('[Home] lastKnownPosition fehlgeschlagen: $e2');
+          }
+        }
+        // Notfall-Fallback nur wenn beide GPS-Pfade gefailed haben.
+        if (userLat == null || userLng == null) {
+          userLat = 50.1109;
+          userLng = 8.6821;
+          debugPrint('[Home] Beide GPS-Pfade gefailed, nutze Frankfurt-Fallback');
         }
 
         recommendation = await HomeRouteRecommendationService.getTodayRoute(
