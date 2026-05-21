@@ -410,15 +410,20 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
     req.start_location.latitude,
     req.start_location.longitude,
   );
-  const tryServer = async (serverUrl: string) => {
+  const tryServerWithProfile = async (
+    serverUrl: string,
+    profileToUse: string,
+    latOffset: number = 0,
+    lngOffset: number = 0,
+  ) => {
     return await Promise.all(
       candidateSeeds.map(seed =>
         callGraphHopper({
-          startLat: req.start_location!.latitude,
-          startLng: req.start_location!.longitude,
+          startLat: req.start_location!.latitude + latOffset,
+          startLng: req.start_location!.longitude + lngOffset,
           endLat: req.target_location?.latitude,
           endLng: req.target_location?.longitude,
-          profile,
+          profile: profileToUse,
           isRoundTrip,
           targetDistanceKm: effectiveDistanceKm,
           seed,
@@ -428,12 +433,46 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
       ),
     );
   };
-  // Versuche primary, wenn alle fail → fallback server
-  let parallel = await tryServer(serverChoice.primary);
+  // 2026-05-21 (vucko Task #32): Mehrstufiger Fallback:
+  // 1. primary Server, gewünschtes Profil
+  // 2. fallback Server, gewünschtes Profil
+  // 3. primary mit motorcycle_entdecker (permissive profile)
+  // 4. Point-Offset ~100m (Punkt landete evtl auf Autobahn die alle Profile
+  //    filtern → "Cannot find valid point", Schladming-Bug)
+  let parallel = await tryServerWithProfile(serverChoice.primary, profile);
+  let usedProfileFallback = false;
   const primaryAllFailed = parallel.every(p => 'error' in p.result);
   if (primaryAllFailed && serverChoice.primary !== serverChoice.fallback) {
-    console.log(`Primary server ${serverChoice.primary} all failed, trying fallback ${serverChoice.fallback}`);
-    parallel = await tryServer(serverChoice.fallback);
+    console.log(`Primary server all failed, trying fallback server`);
+    parallel = await tryServerWithProfile(serverChoice.fallback, profile);
+  }
+  const bothServersFailed = parallel.every(p => 'error' in p.result);
+  if (bothServersFailed && profile !== 'motorcycle_entdecker') {
+    console.log(`Both servers failed with profile ${profile}, trying motorcycle_entdecker as fallback`);
+    parallel = await tryServerWithProfile(serverChoice.primary, 'motorcycle_entdecker');
+    const primaryEntdeckerFailed = parallel.every(p => 'error' in p.result);
+    if (primaryEntdeckerFailed && serverChoice.primary !== serverChoice.fallback) {
+      parallel = await tryServerWithProfile(serverChoice.fallback, 'motorcycle_entdecker');
+    }
+    usedProfileFallback = !parallel.every(p => 'error' in p.result);
+  }
+  // Letzte Eskalation: Punkt landete evtl auf Autobahn → 8 offset-Versuche
+  // in 45°-Schritten mit motorcycle_entdecker (permissivstes profile).
+  // 0.0015° ≈ 100-150m — weit genug um auf Nebenstraße zu landen.
+  const stillAllFailed = parallel.every(p => 'error' in p.result);
+  if (stillAllFailed) {
+    console.log(`All profile fallbacks failed, trying point-offset in 8 directions with entdecker`);
+    const offsets: Array<[number, number]> = [
+      [ 0.0015,  0     ], [ 0.0011,  0.0011], [ 0,       0.0015], [-0.0011,  0.0011],
+      [-0.0015,  0     ], [-0.0011, -0.0011], [ 0,      -0.0015], [ 0.0011, -0.0011],
+    ];
+    for (const [dLat, dLng] of offsets) {
+      parallel = await tryServerWithProfile(serverChoice.primary, 'motorcycle_entdecker', dLat, dLng);
+      if (!parallel.every(p => 'error' in p.result)) {
+        usedProfileFallback = true; // markiere als degraded
+        break;
+      }
+    }
   }
 
   // 2026-05-21 (vucko): Style-Quality-Scoring damit Sport nicht zu wenig
@@ -524,6 +563,7 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
         style_penalty: Number((selectedScored?.stylePenalty ?? 0).toFixed(1)),
         avg_speed_kmh: Number((selectedScored?.avgSpeedKmh ?? 0).toFixed(1)),
         speed_penalty: Number((selectedScored?.speedPenalty ?? 0).toFixed(1)),
+        profile_fallback_used: usedProfileFallback,
       },
     });
   }

@@ -13,4 +13,5 @@
 
 DONE:29:U-Loop-Bug — Routes biegen ab, Viereck zurück auf gleiche Straße:lib/data/services/route_quality_validator.dart
 DONE:31:Navigation flüssiger + mehr live:lib/presentation/pages/cruise_mode_page.dart
-32:Steiermark-Coverage tieferes Tuning (Live-Suche bei Fallback/Emergency):supabase/functions/generate-cruise-route-v2/index.ts
+DONE:32:Steiermark-Coverage tieferes Tuning + Schladming-Snap-Bug (Sport+Entdecker fixed, Kurvenjagd+Abendrunde brauchen snap_prevention):supabase/functions/generate-cruise-route-v2/index.ts
+33:GH snap_prevention für Sport-Variants in alpine Schladming-artige Spots:supabase/functions/generate-cruise-route-v2/index.ts
