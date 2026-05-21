@@ -3,22 +3,27 @@
 **Wenn du diese Datei liest, ist die letzte Session-Memory verloren.**
 Hier ist alles was du brauchst um den Heartbeat-Loop nahtlos fortzusetzen.
 
-## Was läuft (Stand 2026-05-21 ~02:38)
+## Was läuft (Stand 2026-05-21, DE-Tunnel LIVE)
 
 **Branch:** `graphhopper-dach-stabilize`
 
 **Setup auf vucko1@vucko** (Tailscale-IP 100.65.155.7):
-- Port **8989**: GraphHopper mit AT+LI+CH+BW-clipped (1.7 GB merged). Tunnel aktiv: `https://vucko.taildddd94.ts.net`
-- Port **8991**: GraphHopper mit germany-latest.osm.pbf. **Kein Tunnel** (User-sudo ausstehend).
-- Memory-Verbrauch ~6 GB / 15 GB. Beide Server stabil seit ~2 h.
+- Port **8989**: GraphHopper mit AT+LI+CH+BW-clipped (1.7 GB merged). Tunnel: `https://vucko.taildddd94.ts.net`
+- Port **8991**: GraphHopper mit germany-latest.osm.pbf. Tunnel: `https://vucko.taildddd94.ts.net:8443`
+- Memory-Verbrauch ~6 GB / 15 GB. Beide Server stabil.
 
 **Supabase Edge:**
 - `generate-cruise-route-v2` deployed mit lat-basierter Server-Wahl + 5-seed Best-of-N parallel.
 - Secret `GRAPHHOPPER_URL = https://vucko.taildddd94.ts.net` gesetzt.
-- Secret `GRAPHHOPPER_DE_URL` **noch nicht gesetzt** — wartet auf zweiten Tunnel.
+- Secret `GRAPHHOPPER_DE_URL = https://vucko.taildddd94.ts.net:8443` gesetzt ✓.
 
 **Flutter:**
 - `lib/data/services/route_service.dart` Konstante `edgeFunction = 'generate-cruise-route-v2'` aktiv. Rollback durch Zurückstellen auf `'generate-cruise-route'`.
+
+**E2E DACH-Sweep verifiziert (alle 8/8):**
+- Friedrichshafen 51.85km ✓, Wien 50.5km ✓, Stuttgart 50.28km ✓, Zürich 49.72km ✓
+- München 51.07km ✓, Bregenz 40.93km ⚠ (18% short, alpenanrand-tuning offen)
+- Salzburg 50.08km ✓, Innsbruck 50.98km ✓
 
 ## Heartbeat-Befehl (vor jedem Wakeup-Reply)
 
@@ -32,11 +37,12 @@ Erwartete OK-Antwort: zweimal `OK`, Funnel-Liste, Memory ≤ 8 GB used.
 
 | Befund | Aktion |
 |---|---|
-| **SSH-Timeout / PC offline** | Nichts tun. ScheduleWakeup 300s. User-Mac/Tailscale könnte gerade Probleme haben. |
+| **Beide /health OK + beide Funnels** | Healthy state. ScheduleWakeup 1800s. |
+| **SSH-Timeout / PC offline** | ScheduleWakeup 900s. User-Mac/Tailscale könnte gerade Probleme haben. |
 | **Server 8989 down** | Restart per SSH: `cd ~/graphhopper/config && (nohup java -Xmx10g -Xms2g -server -jar ~/graphhopper/bin/graphhopper-web.jar server config.yml > ~/graphhopper/gh.log 2>&1 < /dev/null &)` |
 | **Server 8991 down** | Restart per SSH: `cd ~/graphhopper/config && (nohup java -Xmx5g -Xms1g -server -jar ~/graphhopper/bin/graphhopper-web.jar server config-de.yml > ~/graphhopper/gh-de.log 2>&1 < /dev/null &)` |
-| **Funnel zeigt nur 8989** | User-Tunnel-sudo noch offen. ScheduleWakeup 1800s, warten. |
-| **Funnel zeigt 8991 (oder /de path)** | **Action:** Secret setzen + redeploy (siehe unten). |
+| **Funnel-Status zeigt nur einen Port** | Anderen reaktivieren: `sudo tailscale funnel --bg --https=443 http://localhost:8989` bzw `--https=8443 http://localhost:8991`. Erfordert User-sudo. |
+| **Friedrichshafen-Test fail** | Edge-Logs prüfen: `supabase functions logs generate-cruise-route-v2 --project-ref tlcfaxvvqzobmzwvfnvb`. Secret verifizieren: `supabase secrets list --project-ref tlcfaxvvqzobmzwvfnvb`. |
 
 ## Wenn DE-Tunnel-URL erkennbar wird
 
@@ -74,11 +80,12 @@ Branch graphhopper-dach-stabilize. Falls Compact: docs/HEARTBEAT_RESUME.md ist d
 
 | # | Status | Was |
 |---|---|---|
-| 9 | pending | Alten 15K-Zeilen Mapbox-Hack löschen — erst nach erfolgreichem App-Live-Test |
-| 10 | pending | Endbericht |
-| 14 | in_progress | DE-Side-Server — Server läuft, Tunnel ausstehend |
+| 9 | pending | Alten 15K-Zeilen Mapbox-Hack löschen — erst nach App-Live-Test im Simulator |
+| 10 | pending | Endbericht: Migration-Verdict + Demo-readiness |
+| 14 | ✓ completed | DACH Vollabdeckung — DE-Tunnel live, Friedrichshafen verifiziert |
 | 17 | pending | systemd-Unit für GH-Auto-Restart |
-| 18 | pending | DE-Server Tunnel-Exposure (User-sudo) |
+| 18 | ✓ completed | DE-Server Tunnel-Exposure — beide Funnels aktiv |
+| **Tuning** | offen | Bregenz/alpenanrand 18% short — Compensation auf 0.85? |
 
 ## Architektur-Snapshot
 
