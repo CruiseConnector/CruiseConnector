@@ -2533,6 +2533,12 @@ class RouteService {
         'latitude': startPosition.latitude,
         'longitude': startPosition.longitude,
       },
+      // 2026-05-22 (Task #41): Edge v2 erwartet target_location/targetLocation
+      // (destination_location ist alter Mapbox-v1 Alias).
+      'targetLocation': {
+        'latitude': destinationLat,
+        'longitude': destinationLng,
+      },
       'destination_location': {
         'latitude': destinationLat,
         'longitude': destinationLng,
@@ -2564,11 +2570,13 @@ class RouteService {
       if (maxSearchMsOverride == null && (scenic || normalizedVariant > 0))
         'max_search_ms': 25000,
       if (scenic || normalizedVariant > 0) ...styleConfig.toRequestHints(),
-      if (scenic || normalizedVariant > 0) ...{
-        'targetDistance': targetDistanceKm,
-        'detour_level': normalizedVariant,
-        'detour_factor': detourFactor,
-      },
+      // 2026-05-22 (Task #41): detour_level IMMER an Edge v2 schicken
+      // (vorher nur bei scenic/variant>0). v2 nutzt das für Sub-Waypoint-
+      // Routing — Direct (level=0) bleibt direkt, Detour-Levels generieren
+      // Sub-WPs senkrecht zur Linie.
+      'detour_level': normalizedVariant,
+      'detour_factor': detourFactor,
+      if (scenic || normalizedVariant > 0) 'targetDistance': targetDistanceKm,
       // Seite für Waypoint-Offset: -1 = links, +1 = rechts der Direktlinie.
       // Edge Function nutzt dies als baseSide-Override für Diversifizierung.
       if ((offsetSide ?? variant.offsetSide) != null)
