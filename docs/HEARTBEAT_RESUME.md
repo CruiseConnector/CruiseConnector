@@ -91,6 +91,11 @@ Branch graphhopper-dach-stabilize. Falls Compact: docs/HEARTBEAT_RESUME.md ist d
 | 21 | ✓ completed | Endless-Loop-Guard — 30s wall-clock cap + settingsChanged reset |
 | 22 | ✓ completed | Live-Diversity — 8 Seeds bei force_fresh oder previousFingerprints |
 | 23 | wartend | Live-First Policy — User regelt Pool/Live-Mix später separat |
+| 24 | ✓ completed | Duration-Bug CRITICAL — Edge schickte ms statt s (1029h-Fehler behoben) |
+| 25 | ✓ completed | MAPBOX_RESCUE-Label — umbenannt zu `emergency_fallback` |
+| 26 | ✓ completed | 25km Rundkurs — UI-Option + Live-Pfad (Pool DB hat noch keine 25er) |
+| 27 | ✓ completed | Sport-Style-Penalty — turn-density Score 1.0 t/km für Sport, 1.4 für Kurvenjagd |
+| 28 | pending | Komische Schmetterling-Routen filtern (Bodensee-Effekt) |
 | **Tuning** | accepted | Bregenz/Innsbruck/Basel als known-Outlier (alpine reachable-area + GH-Variance) |
 
 ## Architektur-Snapshot
