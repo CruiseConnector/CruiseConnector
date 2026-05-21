@@ -454,7 +454,19 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
     const turnDeficit = Math.max(0, minTurnsPerKm - turnsPerKm);
     // Penalty 0 wenn passt, bis +30 wenn weit unter Min
     const stylePenalty = Math.min(30, turnDeficit * 25);
-    return { ...c, turns, turnsPerKm, stylePenalty, score: c.deltaPct + stylePenalty };
+    // 2026-05-21 (vucko): Avg-Speed-Penalty — Friedrichshafen-Pattern zeigte
+    // Routen mit 12 km/h Schnitt (Promenaden/Fußgängerzonen-Routing). Motorrad
+    // sollte mind. 25 km/h Schnitt fahren. Penalty bis +25 für sehr langsame
+    // Routen. Greift wenn GH durch Tempo-30/Hafen/Wander routet.
+    const avgSpeedKmh = c.result.durationSeconds > 0
+      ? (c.result.distanceKm / (c.result.durationSeconds / 3600))
+      : 50;
+    const speedDeficit = Math.max(0, 25 - avgSpeedKmh);
+    const speedPenalty = Math.min(25, speedDeficit * 1.5);
+    return {
+      ...c, turns, turnsPerKm, stylePenalty, speedPenalty, avgSpeedKmh,
+      score: c.deltaPct + stylePenalty + speedPenalty,
+    };
   });
 
   // Best non-duplicate mit niedrigstem combined Score (delta + style-penalty)
@@ -506,6 +518,8 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
         turn_count: selectedScored?.turns ?? 0,
         turns_per_km: Number((selectedScored?.turnsPerKm ?? 0).toFixed(2)),
         style_penalty: Number((selectedScored?.stylePenalty ?? 0).toFixed(1)),
+        avg_speed_kmh: Number((selectedScored?.avgSpeedKmh ?? 0).toFixed(1)),
+        speed_penalty: Number((selectedScored?.speedPenalty ?? 0).toFixed(1)),
       },
     });
   }
