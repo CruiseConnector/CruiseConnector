@@ -666,11 +666,13 @@ class _CruiseModePageState extends State<CruiseModePage>
   void initState() {
     super.initState();
     // Animierte Kamera-Bewegung zwischen GPS-Updates (alle Plattformen, 60fps)
-    // iOS: sehr kurze Animation für reaktives Apple-Maps-artiges Gefühl.
-    // Web/Android: etwas länger, damit Interpolation trotz variabler GPS-Takte ruhig bleibt.
+    // 2026-05-21 (vucko Task #31): "Navigation kann viel flüssiger und mehr
+    // live sein". 120ms iOS / 160ms andere war zu kurz — bei GPS-Update alle
+    // 500-1000ms war animation in 12-25% der Zeit aktiv, der Rest war "stop".
+    // Längere Animationen (180/220ms) überbrücken die Lücken besser.
     final animDuration = (!kIsWeb && Platform.isIOS)
-        ? const Duration(milliseconds: 120)
-        : const Duration(milliseconds: 160);
+        ? const Duration(milliseconds: 180)
+        : const Duration(milliseconds: 220);
     _cameraAnimController = AnimationController(
       vsync: this,
       duration: animDuration,
@@ -1281,20 +1283,23 @@ class _CruiseModePageState extends State<CruiseModePage>
     var lng = _camFromLng + (_camToLng - _camFromLng) * t;
     var heading = _lerpAngleDeg(_camFromHeading, _camToHeading, t);
 
-    // Plattformspezifische Vorhersage für flüssigere Animation
+    // Plattformspezifische Vorhersage für flüssigere Animation.
+    // 2026-05-21 (vucko Task #31): Prediction-Mix verstärkt — User wollte
+    // "mehr live". Höhere Faktoren = mehr Kalman-Predict zwischen GPS-Updates,
+    // weniger Stillstand zwischen Paketen.
     if (kIsWeb && _webSmoother.current != null) {
       final prediction = _webSmoother.predict(DateTime.now());
-      lat = lat + (prediction.lat - lat) * 0.35;
-      lng = lng + (prediction.lng - lng) * 0.35;
-      heading = _lerpAngleDeg(heading, prediction.heading, 0.35);
+      lat = lat + (prediction.lat - lat) * 0.50;
+      lng = lng + (prediction.lng - lng) * 0.50;
+      heading = _lerpAngleDeg(heading, prediction.heading, 0.50);
     } else if (!kIsWeb && _nativeSmoother.hasValidHeading) {
       // iOS/Android: Native Smoother für Heading-Prediction
       final prediction = _nativeSmoother.predict(DateTime.now());
       // Position sanft mischen (Kalman-geglättet)
-      lat = lat + (prediction.lat - lat) * 0.30;
-      lng = lng + (prediction.lng - lng) * 0.30;
+      lat = lat + (prediction.lat - lat) * 0.45;
+      lng = lng + (prediction.lng - lng) * 0.45;
       // Heading stärker gewichten für reaktive Drehung (Apple-Maps-artig)
-      heading = _lerpAngleDeg(heading, prediction.heading, 0.45);
+      heading = _lerpAngleDeg(heading, prediction.heading, 0.60);
     }
 
     // Forward-Offset: Kartenzentrum ~100m in Fahrtrichtung verschieben,
