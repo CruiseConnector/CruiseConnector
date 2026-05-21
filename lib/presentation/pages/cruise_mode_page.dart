@@ -2693,21 +2693,35 @@ class _CruiseModePageState extends State<CruiseModePage>
     final actualDistanceKm = result.distanceMeters != null
         ? result.distanceMeters! / 1000.0
         : (result.distanceKm ?? 0.0);
-    // Pool-Routen kommen oft ohne duration_seconds zurück → UI zeigte „0 min".
-    // Fallback: aus Distanz schätzen (Sport ≈ 55 km/h Schnitt auf Landstraße,
-    // Kurvenjagd ≈ 45 km/h, Abendrunde ≈ 50 km/h, sonst 50). Ist nur eine
-    // grobe Schätzung — sobald Mapbox-Duration vorhanden ist, gewinnt die.
+    // 2026-05-23 (vucko): Akkuratere Zeit-Anzeige.
+    // GH-Duration kann unrealistisch sein (zu lang in alpine Bergen wenn viele
+    // Tempo-30-Zonen drin, zu kurz wenn Autobahn übergewichtet). Hybrid:
+    //   1. Wenn GH-Duration vorhanden UND avg-speed plausibel (25-110 km/h) → nehmen
+    //   2. Sonst: aus Distanz × style-typischer Avg-Speed schätzen
+    // Style-Werte basierend auf echten Motorradtouring-Schnitten (Landstraße):
+    //   Sport: 60 km/h (gemischt Land+Stadt)
+    //   Kurvenjagd: 48 km/h (kurvenreich = langsamer)
+    //   Abendrunde: 55 km/h (entspannt)
+    //   Entdecker: 52 km/h (mix mit kleinen Straßen)
+    final estimatedAverageKmh = switch (_selectedStyle.toLowerCase()) {
+      'kurvenjagd' || 'kurvenreich' => 48.0,
+      'abendrunde' || 'panorama' => 55.0,
+      'sport' || 'sport mode' || 'sport_mode' => 60.0,
+      'entdecker' || 'zufall' => 52.0,
+      _ => 55.0,
+    };
     int durationMin;
     final realDurationSeconds = result.durationSeconds;
-    if (realDurationSeconds != null && realDurationSeconds > 30) {
-      durationMin = (realDurationSeconds / 60).round();
+    if (realDurationSeconds != null && realDurationSeconds > 30 && actualDistanceKm > 0) {
+      final ghAvgKmh = actualDistanceKm / (realDurationSeconds / 3600);
+      if (ghAvgKmh >= 25 && ghAvgKmh <= 110) {
+        // GH-Wert plausibel — direkt nutzen
+        durationMin = (realDurationSeconds / 60).round();
+      } else {
+        // GH unrealistisch — Style-Schätzung
+        durationMin = (actualDistanceKm / estimatedAverageKmh * 60).round();
+      }
     } else if (actualDistanceKm > 0) {
-      final estimatedAverageKmh = switch (_selectedStyle.toLowerCase()) {
-        'kurvenjagd' || 'kurvenreich' => 45.0,
-        'abendrunde' || 'panorama' => 50.0,
-        'sport' || 'sport mode' || 'sport_mode' => 55.0,
-        _ => 50.0,
-      };
       durationMin = (actualDistanceKm / estimatedAverageKmh * 60).round();
     } else {
       durationMin = 0;
@@ -2716,7 +2730,9 @@ class _CruiseModePageState extends State<CruiseModePage>
     final mins = durationMin % 60;
     final timeStr = hours > 0 ? '${hours}h ${mins}min' : '$mins min';
     final curveCount = _cachedCurveCount;
-    final routeSource = _routeSourceLabel(result);
+    // 2026-05-23 (vucko): Source-Badge entfernt — User-Wunsch
+    // "live / emergency_fallback / routenpool nicht mehr oben anzeigen".
+    // _routeSourceLabel() bleibt in den meta-Daten für Debug, aber nicht im UI.
 
     return Container(
       padding: const EdgeInsets.all(14),
@@ -2732,40 +2748,13 @@ class _CruiseModePageState extends State<CruiseModePage>
       ),
       child: Column(
         children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Text(
-                'Route berechnet',
-                style: TextStyle(
-                  color: AppAccentColors.accent,
-                  fontSize: 14,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              if (routeSource != null) ...[
-                const SizedBox(width: 8),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 6,
-                    vertical: 2,
-                  ),
-                  decoration: BoxDecoration(
-                    color: AppAccentColors.accent.withValues(alpha: 0.18),
-                    borderRadius: BorderRadius.circular(6),
-                  ),
-                  child: Text(
-                    routeSource,
-                    style: TextStyle(
-                      color: AppAccentColors.accent,
-                      fontSize: 10,
-                      fontWeight: FontWeight.w600,
-                      letterSpacing: 0.4,
-                    ),
-                  ),
-                ),
-              ],
-            ],
+          Text(
+            'Route berechnet',
+            style: TextStyle(
+              color: AppAccentColors.accent,
+              fontSize: 14,
+              fontWeight: FontWeight.bold,
+            ),
           ),
           const SizedBox(height: 10),
           Row(
@@ -2786,6 +2775,9 @@ class _CruiseModePageState extends State<CruiseModePage>
     );
   }
 
+  // 2026-05-23: nicht mehr im UI gezeigt (User-Wunsch). Beibehalten für
+  // Debug-Logs / zukünftige Verwendung in Settings.
+  // ignore: unused_element
   String? _routeSourceLabel(RouteResult result) {
     final meta = result.edgeMeta;
     if (meta.isEmpty) return null;
