@@ -121,6 +121,69 @@ function resolveProfile(style: string | undefined): string {
   return STYLE_TO_PROFILE[key] ?? 'motorcycle_scenic';
 }
 
+// 2026-05-21: Style-Overlay als Runtime-Custom-Model — verschärft die
+// Charakter-Unterschiede zwischen den 4 Profilen ohne den Graph-Cache zu
+// invalidieren (GH hasht Baseline-Profile in den Cache).
+//
+// distance_influence:
+//   niedrig (60-120)  → bevorzugt Umwege/Kurven (Sport, Kurvenjagd)
+//   mittel  (180-220) → balanciert
+//   hoch    (260-340) → bevorzugt direkten Weg (Abendrunde)
+interface StyleOverlay {
+  priority: Array<{ if: string; multiply_by: string }>;
+  distance_influence?: number;
+}
+function styleOverlayForProfile(profile: string): StyleOverlay {
+  switch (profile) {
+    case 'motorcycle_kurvenjagd':
+      // Maximum Kurven, kleine Strassen, Bergstrecken
+      return {
+        priority: [
+          { if: 'road_class == TERTIARY', multiply_by: '1.4' },
+          { if: 'road_class == UNCLASSIFIED', multiply_by: '1.3' },
+          { if: 'curvature < 0.7', multiply_by: '1.5' },
+          { if: 'curvature < 0.5', multiply_by: '1.8' },
+          { if: 'road_class == RESIDENTIAL', multiply_by: '0.4' },
+        ],
+        distance_influence: 80,
+      };
+    case 'motorcycle_scenic':
+      // Sport: schöne offene curvy roads, secondary bevorzugt
+      return {
+        priority: [
+          { if: 'road_class == SECONDARY', multiply_by: '1.35' },
+          { if: 'road_class == PRIMARY', multiply_by: '1.15' },
+          { if: 'curvature < 0.75', multiply_by: '1.3' },
+          { if: 'road_class == RESIDENTIAL', multiply_by: '0.6' },
+        ],
+        distance_influence: 150,
+      };
+    case 'motorcycle_abendrunde':
+      // Kurze gemütliche Feierabend-Tour, weniger anstrengende Kurven
+      return {
+        priority: [
+          { if: 'road_class == PRIMARY', multiply_by: '1.3' },
+          { if: 'road_class == SECONDARY', multiply_by: '1.4' },
+          { if: 'road_class == RESIDENTIAL', multiply_by: '1.1' },
+          { if: 'curvature < 0.5', multiply_by: '0.8' },
+        ],
+        distance_influence: 280,
+      };
+    case 'motorcycle_entdecker':
+      // Tertiary + variety, längere distance_influence (eher direkter Weg)
+      return {
+        priority: [
+          { if: 'road_class == TERTIARY', multiply_by: '1.5' },
+          { if: 'road_class == UNCLASSIFIED', multiply_by: '1.3' },
+          { if: 'road_class == RESIDENTIAL', multiply_by: '1.1' },
+        ],
+        distance_influence: 180,
+      };
+    default:
+      return { priority: [] };
+  }
+}
+
 // ─────────────────── Adaptive Distance-Compensation ───────────────────────
 
 interface RegionProfile {
@@ -212,12 +275,23 @@ async function callGraphHopper(opts: {
     }
   }
 
-  // Custom-Model-Override für Autobahn-vermeidung
+  // 2026-05-21 (vucko): Stil-Differenzierung als Runtime-Overlay statt
+  // Baseline-Profile-Änderung (die wäre ein Graph-Re-Import). Custom-Model
+  // wird zusätzlich zum Profile angewandt — verschärft die Charakter-
+  // Unterschiede zwischen Sport/Kurvenjagd/Abendrunde/Entdecker.
+  const customOverlay = styleOverlayForProfile(opts.profile);
+  const overlay: { priority: Array<{ if: string; multiply_by: string }>; distance_influence?: number } = {
+    priority: [...customOverlay.priority],
+  };
+  if (customOverlay.distance_influence != null) {
+    overlay.distance_influence = customOverlay.distance_influence;
+  }
+  // Autobahn-Vermeidung als Top-Up
   if (opts.avoidHighways) {
-    const customModel = {
-      priority: [{ if: 'road_class == MOTORWAY || road_class == TRUNK', multiply_by: '0.05' }],
-    };
-    params.set('custom_model', JSON.stringify(customModel));
+    overlay.priority.push({ if: 'road_class == MOTORWAY || road_class == TRUNK', multiply_by: '0.05' });
+  }
+  if (overlay.priority.length > 0 || overlay.distance_influence != null) {
+    params.set('custom_model', JSON.stringify(overlay));
   }
 
   const baseUrl = opts.serverUrl ?? GRAPHHOPPER_URL;
@@ -282,7 +356,12 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
   // Jetzt: 5 parallele Calls in Promise.all → max(call_time) ≈ 0.3-0.8s total.
   // 5 statt 3 weil Friedrichshafen-Test (Bodensee) zeigte: seed-Failures sind
   // häufiger als gedacht. Mit 5 Versuchen finden wir fast immer 1-2 saubere.
-  const maxAttempts = isRoundTrip ? 5 : 1;
+  //
+  // 2026-05-21 (vucko): Bei Search-Again oder mit recent-Fingerprints 8 Seeds
+  // statt 5 — User-Beschwerde "Routen überschneiden sich". Mehr Seeds = höhere
+  // Chance dass mindestens einer in den vorherigen Routen nicht enthalten ist.
+  const needsDiversity = (req.force_fresh_variant ?? false) || previousFps.size > 0;
+  const maxAttempts = isRoundTrip ? (needsDiversity ? 8 : 5) : 1;
   const targetKm = req.target_distance_km ?? 50;
   const candidates: Array<{ result: RouteResult; deltaPct: number; seed: number; isDup: boolean }> = [];
   let bestCandidate: RouteResult | null = null;

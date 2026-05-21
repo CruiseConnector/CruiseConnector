@@ -3930,22 +3930,22 @@ class RoutePoolService {
     final candidateKeys = _normalizeStyleKeyList(candidate.styleTags);
     if (candidateKeys.contains(requested)) return true;
 
-    // Notfall-Kompatibilität: sport_mode darf auch Kurvenjagd-Routen ziehen,
-    // sonst stehen User in Regionen mit knapper Pool-Coverage (z. B. Feldkirch
-    // AB-AN mit nur 1 verified Kurvenjagd-Route) komplett ohne Match da.
-    // Symmetrisch für Kurvenjagd-Anfragen, die zusätzlich sport_mode/abendrunde
-    // als Notfall akzeptieren.
+    // Notfall-Kompatibilität INNERHALB Stil-Clustern:
+    // - Sport-Cluster: sport ↔ kurvenjagd (beide „sportlich/zackig")
+    // - Comfort-Cluster: abendrunde ↔ entdecker (beide „chill/Panorama")
+    // 2026-05-21 (vucko): NIEMALS Cross-Cluster (sport↔abendrunde) — User
+    // beschwert sich „Pool-Route entspricht nicht dem Stil". Strikte Trennung
+    // verhindert das. Bei leerem Cluster gibt's Live-Fallback (siehe v2 Edge).
     final allowed = switch (requested) {
       'sport_mode' ||
-      'sport' => const {'entdecker', 'abendrunde', 'kurvenjagd'},
+      'sport' => const {'kurvenjagd', 'kurvenreich', 'alpenstrassen'},
       'kurvenjagd' ||
       'kurvenreich' ||
-      'alpenstrassen' => const {'entdecker', 'sport_mode', 'sport',
-            'abendrunde'},
+      'alpenstrassen' => const {'sport_mode', 'sport'},
       'abendrunde' ||
-      'panorama' => const {'sport_mode', 'sport', 'entdecker', 'kurvenjagd'},
+      'panorama' => const {'entdecker', 'zufall'},
       'entdecker' ||
-      'zufall' => const {'sport_mode', 'sport', 'kurvenjagd', 'abendrunde'},
+      'zufall' => const {'abendrunde', 'panorama'},
       _ => const <String>{},
     };
     return candidateKeys.any(allowed.contains);

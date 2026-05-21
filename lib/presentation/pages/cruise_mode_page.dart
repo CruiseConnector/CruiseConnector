@@ -225,7 +225,11 @@ class _CruiseModePageState extends State<CruiseModePage>
   // App soll selbst weiter rotieren bis was Neues kommt.
   String? _lastDisplayedRouteFingerprint;
   int _searchAgainAutoRetryCount = 0;
+  DateTime? _searchAgainAutoRetryWindowStart;
   static const int _maxSearchAgainAutoRetries = 2;
+  // Wall-Clock-Cap: Auto-Retry-Counter wird nach 30s zurückgesetzt. Verhindert
+  // dass ein gestauter Edge-Server endlose UI-Re-Suchen triggert.
+  static const Duration _searchAgainAutoRetryWindow = Duration(seconds: 30);
   List<double> _recentDestinationDistances = [];
   List<SpeedLimitSegment> _activeSpeedLimits = [];
 
@@ -3889,6 +3893,15 @@ class _CruiseModePageState extends State<CruiseModePage>
           : settingsChanged
           ? 'settingsChanged'
           : 'searchAgain';
+      // 2026-05-21 (vucko): Bei settingsChanged (Stil/Distanz/AB-Toggle) muss
+      // der Auto-Retry-State resettet werden — sonst meint die Defensive-
+      // Logik fälschlich, die neue Route sei eine Wiederholung der alten
+      // (anderer Style aber zufällig gleicher Fingerprint), triggert Retry,
+      // und der User sieht endlose "Suche..."-Schleife.
+      if (settingsChanged || routeDebugTrigger == 'firstSearch') {
+        _lastDisplayedRouteFingerprint = null;
+        _searchAgainAutoRetryCount = 0;
+      }
       if (kDebugMode) {
         debugPrint(
           '[RouteDebug][UI] selectedKm=$distance selectedStyle=$_selectedStyle '
@@ -4393,6 +4406,15 @@ class _CruiseModePageState extends State<CruiseModePage>
     final isRepeatedRoute = newFingerprint != null &&
         newFingerprint.isNotEmpty &&
         _lastDisplayedRouteFingerprint == newFingerprint;
+    // Wall-Clock-Window: nach 30s Counter resetten — vermeidet dass ein
+    // gestauter Edge-Server endlose Re-Suchen triggert (vucko 2026-05-21).
+    final now = DateTime.now();
+    if (_searchAgainAutoRetryWindowStart == null ||
+        now.difference(_searchAgainAutoRetryWindowStart!) >
+            _searchAgainAutoRetryWindow) {
+      _searchAgainAutoRetryWindowStart = now;
+      _searchAgainAutoRetryCount = 0;
+    }
     final canAutoRetry = isRepeatedRoute &&
         _lastDisplayedRouteFingerprint != null &&
         _searchAgainAutoRetryCount < _maxSearchAgainAutoRetries;
