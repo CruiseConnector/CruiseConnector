@@ -350,6 +350,44 @@ class RouteQualityValidator {
       }
     }
 
+    // 2026-05-21 (vucko Task #29): Block-Loop-Detection — Routes die einen
+    // Viereck-Block fahren (4× ~90° turn) und auf der gleichen Straße zurück
+    // landen. Pattern: coord[i] und coord[j] (j > i+15) sind <60m auseinander,
+    // dazwischen liegt eine Pfadlänge von 150-700m → kleiner Block-Loop.
+    // Beispiel-Symptom: "biegt ab, Viereck, dann zurück auf der gleichen
+    // Straße in derselben Richtung". Wir markieren das wie einen U-Turn.
+    final cumulativeDist = <double>[0.0];
+    for (var k = 1; k < coordinates.length; k++) {
+      final p1 = coordinates[k - 1];
+      final p2 = coordinates[k];
+      if (p1.length < 2 || p2.length < 2) {
+        cumulativeDist.add(cumulativeDist.last);
+        continue;
+      }
+      cumulativeDist.add(
+        cumulativeDist.last +
+            geo.Geolocator.distanceBetween(p1[1], p1[0], p2[1], p2[0]),
+      );
+    }
+    for (var i = 0; i < coordinates.length - 15; i++) {
+      for (var j = i + 15; j < coordinates.length && j < i + 60; j++) {
+        final ci = coordinates[i];
+        final cj = coordinates[j];
+        if (ci.length < 2 || cj.length < 2) continue;
+        final straightDist = geo.Geolocator.distanceBetween(
+          ci[1], ci[0], cj[1], cj[0],
+        );
+        if (straightDist > 60.0) continue;
+        final pathDist = cumulativeDist[j] - cumulativeDist[i];
+        if (pathDist >= 150.0 && pathDist <= 700.0) {
+          // Block-loop detected — markiere den Mittelpunkt als pseudo-U-Turn
+          uturns.add((i + j) ~/ 2);
+          i = j; // skip until after this loop
+          break;
+        }
+      }
+    }
+
     return uturns;
   }
 
