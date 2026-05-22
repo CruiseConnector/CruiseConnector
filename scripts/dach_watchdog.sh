@@ -52,6 +52,12 @@ fi
 
 if [[ "$OK_COUNT" -eq "$TOTAL_COUNT" ]]; then
   echo "STATUS=healthy total_recent=$TOTAL_COUNT ok=$OK_COUNT last=\"$LAST_DETAILS\""
+  # 2026-05-23 (vucko): Letzte 3 GH-smoke-results auch zeigen damit
+  # User trend sieht statt nur "ok".
+  if [[ -f "$DAY_LOG" ]]; then
+    echo "--- Last 3 smoke-runs ---"
+    tail -3 "$DAY_LOG" | sed 's/|/!/g'
+  fi
   exit 0
 fi
 
