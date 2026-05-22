@@ -666,13 +666,16 @@ class _CruiseModePageState extends State<CruiseModePage>
   void initState() {
     super.initState();
     // Animierte Kamera-Bewegung zwischen GPS-Updates (alle Plattformen, 60fps)
-    // 2026-05-21 (vucko Task #31): "Navigation kann viel flüssiger und mehr
-    // live sein". 120ms iOS / 160ms andere war zu kurz — bei GPS-Update alle
-    // 500-1000ms war animation in 12-25% der Zeit aktiv, der Rest war "stop".
-    // Längere Animationen (180/220ms) überbrücken die Lücken besser.
+    // 2026-05-22 (vucko): GPS-Update-Frequenz jetzt 200ms (Android). Camera-
+    // Animation muss noch dazu passen damit zwischen Updates ohne Stop weitergeht.
+    //   iOS:     250ms (GPS variabel)
+    //   Android: 230ms (knapp länger als 200ms GPS-Intervall → seamless overlap)
+    //   Web:     280ms (GPS langsamer + smoother prediction)
     final animDuration = (!kIsWeb && Platform.isIOS)
-        ? const Duration(milliseconds: 180)
-        : const Duration(milliseconds: 220);
+        ? const Duration(milliseconds: 250)
+        : Platform.isAndroid
+        ? const Duration(milliseconds: 230)
+        : const Duration(milliseconds: 280);
     _cameraAnimController = AnimationController(
       vsync: this,
       duration: animDuration,
@@ -1284,22 +1287,22 @@ class _CruiseModePageState extends State<CruiseModePage>
     var heading = _lerpAngleDeg(_camFromHeading, _camToHeading, t);
 
     // Plattformspezifische Vorhersage für flüssigere Animation.
-    // 2026-05-21 (vucko Task #31): Prediction-Mix verstärkt — User wollte
-    // "mehr live". Höhere Faktoren = mehr Kalman-Predict zwischen GPS-Updates,
-    // weniger Stillstand zwischen Paketen.
+    // 2026-05-22 (vucko): Prediction-Mix nochmal verstärkt für "jede
+    // Minidrehung sehen können". Faktoren jetzt 0.6-0.75 = aggressive
+    // Vorhersage, fast Echtzeit-Heading.
     if (kIsWeb && _webSmoother.current != null) {
       final prediction = _webSmoother.predict(DateTime.now());
-      lat = lat + (prediction.lat - lat) * 0.50;
-      lng = lng + (prediction.lng - lng) * 0.50;
-      heading = _lerpAngleDeg(heading, prediction.heading, 0.50);
+      lat = lat + (prediction.lat - lat) * 0.60;
+      lng = lng + (prediction.lng - lng) * 0.60;
+      heading = _lerpAngleDeg(heading, prediction.heading, 0.60);
     } else if (!kIsWeb && _nativeSmoother.hasValidHeading) {
       // iOS/Android: Native Smoother für Heading-Prediction
       final prediction = _nativeSmoother.predict(DateTime.now());
       // Position sanft mischen (Kalman-geglättet)
-      lat = lat + (prediction.lat - lat) * 0.45;
-      lng = lng + (prediction.lng - lng) * 0.45;
-      // Heading stärker gewichten für reaktive Drehung (Apple-Maps-artig)
-      heading = _lerpAngleDeg(heading, prediction.heading, 0.60);
+      lat = lat + (prediction.lat - lat) * 0.55;
+      lng = lng + (prediction.lng - lng) * 0.55;
+      // Heading stark gewichten für reaktive Drehung (Apple-Maps-artig)
+      heading = _lerpAngleDeg(heading, prediction.heading, 0.75);
     }
 
     // Forward-Offset: Kartenzentrum ~100m in Fahrtrichtung verschieben,
@@ -1321,9 +1324,15 @@ class _CruiseModePageState extends State<CruiseModePage>
     final controller = _cameraAnimController;
     if (controller == null) return;
 
-    // iOS: Kleinere Dead-Zone (1.5°) für reaktiveres Heading
-    // Andere Plattformen: 2° Standard
-    final deadZoneDegrees = (!kIsWeb && Platform.isIOS) ? 1.5 : 2.0;
+    // 2026-05-22 (vucko): Dead-Zone reduziert für "jede Minidrehung sichtbar"
+    // iOS: 0.8° (war 1.5°) — sehr reaktiv, schon kleinste Lenkbewegungen
+    // Android: 1.0° (war 2.0°)
+    // Web: 1.5° (etwas mehr filtering wegen weniger reliable GPS)
+    final deadZoneDegrees = (!kIsWeb && Platform.isIOS)
+        ? 0.8
+        : Platform.isAndroid
+        ? 1.0
+        : 1.5;
 
     // Bearing-Dead-Zone: Sehr kleine Heading-Änderungen ignorieren (GPS-Rauschen)
     var effectiveHeading = heading;
@@ -1574,8 +1583,14 @@ class _CruiseModePageState extends State<CruiseModePage>
       HapticFeedback.selectionClick();
       return;
     }
-    if (_roundTripWaypoints.length >= 3) {
-      _showError('Maximal 3 Stopps möglich.', isCritical: false);
+    // 2026-05-22 (vucko): Von 3 auf 8 erhöht — Edge v2 + GraphHopper kann
+    // viel mehr Waypoints verarbeiten (kein Mapbox-Matrix-Limit mehr).
+    // Für noch mehr Stopps (mit Pause/Resume): Trip-Modus.
+    if (_roundTripWaypoints.length >= 8) {
+      _showError(
+        'Max 8 Stopps. Für längere Touren nutze Trip-Modus.',
+        isCritical: false,
+      );
       return;
     }
     setState(() {
@@ -6067,7 +6082,10 @@ class _CruiseModePageState extends State<CruiseModePage>
       return geo.AndroidSettings(
         accuracy: geo.LocationAccuracy.bestForNavigation,
         distanceFilter: 0,
-        intervalDuration: const Duration(milliseconds: 500),
+        // 2026-05-22 (vucko): 500ms → 200ms für 2.5× häufigere GPS-Updates.
+        // User-Wunsch: "jede Minidrehung sehen können, jeden Meter scharf".
+        // Android GPS hardware kann ~5Hz (200ms) wenn bestForNavigation.
+        intervalDuration: const Duration(milliseconds: 200),
         foregroundNotificationConfig: geo.ForegroundNotificationConfig(
           notificationTitle: 'Cruise Connector Navigation',
           notificationText: notificationText,

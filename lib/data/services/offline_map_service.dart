@@ -53,13 +53,14 @@ class OfflineMapService {
   static const int defaultMaxZoom = 16;
   static const int defaultMaxTiles = 650;
 
-  // Region-Cache (statt nur Route-Cache): wird beim App-Start für die
-  // Heimat-Region vorgewärmt, damit die Karte beim ersten Öffnen sofort
-  // erscheint statt zu streamen.
-  static const int defaultRegionMinZoom = 9;
-  static const int defaultRegionMaxZoom = 13;
-  static const int defaultRegionMaxTiles = 2400;
-  static const double defaultRegionRadiusKm = 35.0;
+  // Region-Cache: 2026-05-22 (vucko) aggressiver vorwärmen.
+  // User-Wunsch "Karte wirklich gedownloaded oder schneller".
+  // Erhöht: minZoom 8 (war 9, größere Übersicht), maxZoom 14 (war 13, mehr Detail),
+  // maxTiles 4000 (war 2400, ~16-20 MB Storage statt 6-12 MB).
+  static const int defaultRegionMinZoom = 8;
+  static const int defaultRegionMaxZoom = 14;
+  static const int defaultRegionMaxTiles = 4000;
+  static const double defaultRegionRadiusKm = 50.0; // 35 → 50 km
 
   // Vorarlberg + Bodensee als Default-Heimatregion, falls kein User-Standort
   // verfügbar (erster Launch, Geo-Permission verweigert).

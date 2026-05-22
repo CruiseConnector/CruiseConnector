@@ -43,10 +43,10 @@ class _HomePageState extends State<HomePage> {
       _communityProvider = context.read<CommunityProvider>();
       _communityProvider?.startRealtime();
     });
-    // Dark-Style für Offline-Nutzung im Hintergrund cachen, plus die
-    // Heimat-Region (≈35 km Radius) vorwärmen damit die Karte beim ersten
-    // Öffnen der Cruise-Tab sofort da ist statt zu streamen.
-    Future.delayed(const Duration(seconds: 2), _prewarmOfflineMapRegion);
+    // 2026-05-22 (vucko): Pre-Warm SOFORT statt nach 2s Delay.
+    // User-Beschwerde: "Mapbox-Tiles laden teilweise lange, sieht nicht
+    // schön aus". Je früher der cache greift desto besser.
+    _prewarmOfflineMapRegion();
   }
 
   Future<void> _prewarmOfflineMapRegion() async {

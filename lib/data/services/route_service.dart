@@ -2289,7 +2289,7 @@ class RouteService {
           'waypoint_mode': 'required_stops',
           'waypoint_route_mode': 'required_stops',
           'required_waypoint_count': waypoints.length,
-          'max_waypoints': 3,
+          'max_waypoints': 8,
           ...meta,
         },
       );
@@ -2302,11 +2302,14 @@ class RouteService {
         'Waypoint required-stops mode requires at least one waypoint.',
       );
     }
-    if (waypoints.length > 3) {
+    // 2026-05-22 (vucko): Waypoint-Limit von 3 auf 8 erhöht.
+    // Edge v2 mit GraphHopper kann mehr WPs verarbeiten (kein Mapbox-Matrix-Limit
+    // mehr). User-Vorgabe: große Distanzen zwischen WPs müssen funktionieren.
+    if (waypoints.length > 8) {
       return failure(
         'too_many_waypoints',
-        'Bitte nutze maximal 3 Stopps.',
-        'Waypoint required-stops mode supports at most 3 waypoints.',
+        'Bitte nutze maximal 8 Stopps für eine einzelne Route. Für mehr Stopps nutze den Trip-Modus.',
+        'Waypoint required-stops mode supports at most 8 waypoints.',
       );
     }
 
@@ -6763,7 +6766,7 @@ class RouteService {
           avoidHighways: scenario.avoidHighways,
         );
         body['simplify_waypoints'] = true;
-        body['max_waypoints'] = 3;
+        body['max_waypoints'] = 8;
         final result = await _invoke(body);
         final snapped = _snapRouteToStartPosition(result, startPosition);
         final candidate = _evaluateCandidate(
