@@ -247,6 +247,15 @@ class _CruiseModePageState extends State<CruiseModePage>
   int _waypointSeedCounter = 0;
   String _roundTripWaypointOrigin = 'manual';
   int _roundTripWaypointSeedAttempt = 0;
+  // 2026-05-22 (vucko): Trip-Modus erweitert max-WPs auf 5 (statt 3 default).
+  // User toggled via TripMode-Switch. First-Use Tutorial-Overlay zeigt
+  // sich wenn _waypointTutorialShown == false.
+  bool _tripModeEnabled = false;
+  bool _waypointTutorialShown = false;
+  static const int _maxWaypointsNormal = 3;
+  static const int _maxWaypointsTripMode = 5;
+  int get _currentMaxWaypoints =>
+      _tripModeEnabled ? _maxWaypointsTripMode : _maxWaypointsNormal;
   // Route als LatLng-Liste für PolylineLayer
   List<LatLng> _routeLatLngs = [];
   Timer? _routeDrawAnimationTimer;
@@ -1583,15 +1592,23 @@ class _CruiseModePageState extends State<CruiseModePage>
       HapticFeedback.selectionClick();
       return;
     }
-    // 2026-05-22 (vucko): Von 3 auf 8 erhöht — Edge v2 + GraphHopper kann
-    // viel mehr Waypoints verarbeiten (kein Mapbox-Matrix-Limit mehr).
-    // Für noch mehr Stopps (mit Pause/Resume): Trip-Modus.
+    // 2026-05-22 (vucko): Dynamisches Limit je nach Mode.
+    // Normal: 3 Stopps, Trip-Mode: 5. UI lässt User mehr setzen, aber bei
+    // Route-Suche → klare Hinweis "max N".
+    // Hard-Cap auf 8 für sehr explorative User (mehr ist nicht sinnvoll).
     if (_roundTripWaypoints.length >= 8) {
       _showError(
-        'Max 8 Stopps. Für längere Touren nutze Trip-Modus.',
+        'Max 8 Stopps technisch möglich. Aktiviere Trip-Modus für 5, sonst max 3.',
         isCritical: false,
       );
       return;
+    }
+    // First-Use Tutorial: bei 2. WP wenn nicht TripMode → zeige Hint
+    if (!_waypointTutorialShown && _roundTripWaypoints.length == 1) {
+      _waypointTutorialShown = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _showWaypointTutorialOverlay();
+      });
     }
     setState(() {
       _roundTripWaypoints.add(point);
@@ -1602,6 +1619,214 @@ class _CruiseModePageState extends State<CruiseModePage>
     });
     _invalidateWaypointPreview();
     HapticFeedback.selectionClick();
+  }
+
+  /// First-Use Tutorial-Overlay zeigt Trip-Modus-Option freundlich.
+  /// 2026-05-22 (vucko Task #7): "schau dass ein cooles overlay kommt"
+  void _showWaypointTutorialOverlay() {
+    if (!mounted) return;
+    showDialog<void>(
+      context: context,
+      barrierColor: Colors.black.withValues(alpha: 0.75),
+      builder: (ctx) => Dialog(
+        backgroundColor: const Color(0xFF1C1F26),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: AppAccentColors.accent.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Icon(Icons.tips_and_updates_rounded,
+                        color: AppAccentColors.accent, size: 24),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      'Tipp: Trip-Modus',
+                      style: TextStyle(
+                        color: AppAccentColors.accent,
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                'Du planst eine Route mit Stopps. Hier dein Cheat-Sheet:',
+                style: TextStyle(color: Colors.white70, fontSize: 14),
+              ),
+              const SizedBox(height: 14),
+              _tutorialBullet('🎯', 'Standard',
+                  'Bis zu 3 Stopps für eine schnelle Tour'),
+              const SizedBox(height: 10),
+              _tutorialBullet('🗺️', 'Trip-Modus',
+                  'Bis zu 5 Stopps, mit Pause/Resume — perfekt für Mehrtages-Touren'),
+              const SizedBox(height: 10),
+              _tutorialBullet('💾', 'Auto-Save',
+                  'Trip wird gespeichert, du kannst später im Homescreen weitermachen'),
+              const SizedBox(height: 20),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: () {
+                    Navigator.of(ctx).pop();
+                    if (mounted) setState(() => _tripModeEnabled = true);
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppAccentColors.accent,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  child: const Text(
+                    'Trip-Modus aktivieren (5 Stopps)',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
+              SizedBox(
+                width: double.infinity,
+                child: TextButton(
+                  onPressed: () => Navigator.of(ctx).pop(),
+                  child: const Text(
+                    'Bei 3 Stopps bleiben',
+                    style: TextStyle(color: Colors.white60, fontSize: 13),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showWaypointLimitDialog(String message) {
+    if (!mounted) return;
+    showDialog<void>(
+      context: context,
+      barrierColor: Colors.black.withValues(alpha: 0.6),
+      builder: (ctx) => Dialog(
+        backgroundColor: const Color(0xFF1C1F26),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        child: Padding(
+          padding: const EdgeInsets.all(22),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.amber.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(50),
+                ),
+                child: const Icon(
+                  Icons.info_outline_rounded,
+                  color: Colors.amber,
+                  size: 28,
+                ),
+              ),
+              const SizedBox(height: 14),
+              const Text(
+                'Zu viele Stopps',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 17,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                message,
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: Colors.white70, fontSize: 14, height: 1.4),
+              ),
+              const SizedBox(height: 20),
+              if (!_tripModeEnabled) ...[
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: () {
+                      Navigator.of(ctx).pop();
+                      if (mounted) setState(() => _tripModeEnabled = true);
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppAccentColors.accent,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                    ),
+                    child: const Text(
+                      'Trip-Modus aktivieren',
+                      style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 8),
+              ],
+              SizedBox(
+                width: double.infinity,
+                child: TextButton(
+                  onPressed: () => Navigator.of(ctx).pop(),
+                  child: const Text(
+                    'OK, ich entferne Stopps',
+                    style: TextStyle(color: Colors.white60, fontSize: 13),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _tutorialBullet(String emoji, String title, String text) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(emoji, style: const TextStyle(fontSize: 18)),
+        const SizedBox(width: 10),
+        Expanded(
+          child: RichText(
+            text: TextSpan(
+              style: const TextStyle(fontSize: 13, height: 1.4),
+              children: [
+                TextSpan(
+                  text: '$title — ',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                TextSpan(
+                  text: text,
+                  style: const TextStyle(color: Colors.white70),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
   }
 
   void _removeLastRoundTripWaypoint() {
@@ -2199,11 +2424,12 @@ class _CruiseModePageState extends State<CruiseModePage>
         media.padding.top + (_shouldShowRoundTripSearchStatus ? 96 : 88);
     final selected = _selectedRoundTripWaypointIndex;
     final replacing = _replaceRoundTripWaypointIndex;
+    // 2026-05-22 (vucko): Dynamisches Limit-Display
     final subtitle = replacing != null
         ? 'Neu'
         : _roundTripWaypoints.isEmpty
         ? 'Stopps'
-        : '${_roundTripWaypoints.length}/3';
+        : '${_roundTripWaypoints.length}/$_currentMaxWaypoints';
     return Positioned(
       top: top,
       right: 14,
@@ -3176,8 +3402,9 @@ class _CruiseModePageState extends State<CruiseModePage>
         (_fullRouteCoordinates.length >= 2 ||
             _routeLatLngs.length >= 2 ||
             _routeGeoJson != null);
+    final showTripToggle = _isWaypointPlanning && !_isRouteConfirmed;
     return Container(
-      height: 160,
+      height: showTripToggle ? 210 : 160,
       padding: const EdgeInsets.symmetric(horizontal: 24),
       decoration: const BoxDecoration(
         gradient: LinearGradient(
@@ -3191,6 +3418,11 @@ class _CruiseModePageState extends State<CruiseModePage>
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            if (showTripToggle)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: _buildTripModeToggle(),
+              ),
             if (hasConfirmableRoute)
               Padding(
                 padding: const EdgeInsets.only(bottom: 12),
@@ -3276,6 +3508,144 @@ class _CruiseModePageState extends State<CruiseModePage>
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  /// Trip-Mode-Toggle: zeigt aktuelles Limit (3 / 5) + Switch.
+  /// Tippt der User auf "?" öffnet sich das Tutorial-Overlay erneut.
+  Widget _buildTripModeToggle() {
+    final accent = AppAccentColors.accent;
+    final current = _roundTripWaypoints.length;
+    final max = _currentMaxWaypoints;
+    final atLimit = current >= max;
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(18),
+      child: BackdropFilter(
+        filter: ui.ImageFilter.blur(sigmaX: 14, sigmaY: 14),
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          decoration: BoxDecoration(
+            color: const Color(0xE01A1E28),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(
+              color: (_tripModeEnabled ? accent : Colors.white24).withValues(
+                alpha: 0.5,
+              ),
+              width: 1.2,
+            ),
+            boxShadow: _tripModeEnabled
+                ? [
+                    BoxShadow(
+                      color: accent.withValues(alpha: 0.22),
+                      blurRadius: 18,
+                    ),
+                  ]
+                : null,
+          ),
+          child: Row(
+            children: [
+              Icon(
+                _tripModeEnabled ? Icons.route : Icons.flag_outlined,
+                color: _tripModeEnabled ? accent : Colors.white70,
+                size: 22,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Row(
+                      children: [
+                        Text(
+                          _tripModeEnabled ? 'Trip-Modus' : 'Standard',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        GestureDetector(
+                          onTap: _showWaypointTutorialOverlay,
+                          behavior: HitTestBehavior.opaque,
+                          child: Container(
+                            width: 18,
+                            height: 18,
+                            decoration: const BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: Colors.white12,
+                            ),
+                            alignment: Alignment.center,
+                            child: const Text(
+                              '?',
+                              style: TextStyle(
+                                color: Colors.white70,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      _tripModeEnabled
+                          ? 'Bis zu 5 Stopps · Auto-Save'
+                          : 'Bis zu 3 Stopps · Schneller Rundkurs',
+                      style: TextStyle(
+                        color: atLimit
+                            ? const Color(0xFFFFB74D)
+                            : Colors.white60,
+                        fontSize: 11.5,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 8,
+                  vertical: 3,
+                ),
+                decoration: BoxDecoration(
+                  color: atLimit
+                      ? const Color(0xFFFFB74D).withValues(alpha: 0.18)
+                      : Colors.white10,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Text(
+                  '$current/$max',
+                  style: TextStyle(
+                    color: atLimit
+                        ? const Color(0xFFFFB74D)
+                        : Colors.white70,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 6),
+              Transform.scale(
+                scale: 0.85,
+                child: Switch.adaptive(
+                  value: _tripModeEnabled,
+                  activeThumbColor: accent,
+                  onChanged: (v) {
+                    setState(() => _tripModeEnabled = v);
+                    if (v && !_waypointTutorialShown) {
+                      _waypointTutorialShown = true;
+                    }
+                  },
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -3836,6 +4206,19 @@ class _CruiseModePageState extends State<CruiseModePage>
   Future<void> _generateRoute() async {
     // Doppelklick-Schutz: Wenn bereits generiert wird, ignorieren
     if (_isLoading) return;
+
+    // 2026-05-22 (vucko Task #7): Limit-Check vor Routensuche.
+    // Normal-Mode: max 3 WPs, Trip-Mode: max 5. UI lässt mehr setzen damit
+    // User experimentieren kann, hier kommt der freundliche Hinweis.
+    if (_isWaypointPlanning && _roundTripWaypoints.length > _currentMaxWaypoints) {
+      final extra = _roundTripWaypoints.length - _currentMaxWaypoints;
+      final hint = _tripModeEnabled
+          ? 'Im Trip-Modus max 5 Stopps. Du hast $extra zu viel.'
+          : 'Im Standard max 3 Stopps. Aktiviere Trip-Modus für bis zu 5, oder entferne $extra Stopp${extra > 1 ? "s" : ""}.';
+      _showWaypointLimitDialog(hint);
+      return;
+    }
+
     final generationId = ++_routeGenerationSerial;
     final previousUiState = _captureGeneratedRouteUiState();
     _dismissTransientRouteUi();

@@ -544,8 +544,48 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
         ),
       );
     }
-    // A→B mode
+    // A→B mode mit Wegpunkten
     if (hasExplicitWaypoints) {
+      // 2026-05-22 (vucko Task #7): Snap-Fallback für weit entfernte Stopps.
+      // Erstversuch: alle Waypoints exakt wie geklickt. Wenn fail (kein Match,
+      // Snap zu Autobahn etc.), versuche bis zu 4 Varianten mit kleinem Offset
+      // pro Waypoint (8 Richtungen × 0.0012° ≈ 130m). Reihenfolge der Versuche:
+      //   0: Original
+      //   1: alle WP +E (0.0012, 0)
+      //   2: alle WP +N (0, 0.0012)
+      //   3: gemischt — gerade WP +E, ungerade +N
+      //   4: alle WP -W -S
+      const baseWPs = req.waypoints!.map(w => ({ lat: w.latitude, lng: w.longitude }));
+      const offsetVariants: Array<Array<{ lat: number; lng: number }>> = [
+        baseWPs,
+        baseWPs.map(wp => ({ lat: wp.lat + 0.0012, lng: wp.lng })),
+        baseWPs.map(wp => ({ lat: wp.lat, lng: wp.lng + 0.0012 })),
+        baseWPs.map((wp, i) => i % 2 === 0
+          ? { lat: wp.lat + 0.0012, lng: wp.lng }
+          : { lat: wp.lat, lng: wp.lng + 0.0012 }),
+        baseWPs.map(wp => ({ lat: wp.lat - 0.0012, lng: wp.lng - 0.0012 })),
+      ];
+      for (let attempt = 0; attempt < offsetVariants.length; attempt++) {
+        const wps = offsetVariants[attempt];
+        const result = await callGraphHopper({
+          startLat: req.start_location!.latitude,
+          startLng: req.start_location!.longitude,
+          endLat: req.target_location!.latitude,
+          endLng: req.target_location!.longitude,
+          profile: profileToUse,
+          isRoundTrip: false,
+          avoidHighways: req.avoid_highways ?? false,
+          serverUrl,
+          intermediateWaypoints: wps,
+        });
+        if (!('error' in result)) {
+          return [{ result, seed: attempt }];
+        }
+        if (attempt === 0) {
+          console.log(`Waypoint snap attempt 0 failed: ${result.error.slice(0, 120)} — retrying with offsets`);
+        }
+      }
+      // Alle Versuche fail → return last (mit error)
       return [await callGraphHopper({
         startLat: req.start_location!.latitude,
         startLng: req.start_location!.longitude,
@@ -555,7 +595,7 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
         isRoundTrip: false,
         avoidHighways: req.avoid_highways ?? false,
         serverUrl,
-        intermediateWaypoints: req.waypoints!.map(w => ({ lat: w.latitude, lng: w.longitude })),
+        intermediateWaypoints: baseWPs,
       }).then(result => ({ result, seed: 0 }))];
     }
     if (detourSpec.length === 0) {
