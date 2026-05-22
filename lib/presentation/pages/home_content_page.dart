@@ -76,23 +76,65 @@ class _HomeContentPageState extends State<HomeContentPage>
     super.dispose();
   }
 
+  /// 2026-05-22 (vucko): Schneller GPS-Resolve für Home-Recommendation.
+  /// Strategie: lastKnownPosition zuerst (instant), parallel currentPosition
+  /// mit 3s timeout. Wenn lastKnown da ist → sofort zurück. Sonst warte
+  /// auf current. Fallback Frankfurt nach 3s total.
+  Future<({double lat, double lng})> _resolveUserPosition() async {
+    try {
+      final permission = await geo.Geolocator.checkPermission();
+      if (permission != geo.LocationPermission.always &&
+          permission != geo.LocationPermission.whileInUse) {
+        await geo.Geolocator.requestPermission();
+      }
+    } catch (_) {}
+    // lastKnownPosition ist instant (gecached) — meistens genau genug
+    try {
+      final last = await geo.Geolocator.getLastKnownPosition()
+          .timeout(const Duration(seconds: 1));
+      if (last != null) return (lat: last.latitude, lng: last.longitude);
+    } catch (_) {}
+    // Sonst: kurzes currentPosition mit medium accuracy + 3s timeout
+    try {
+      final pos = await geo.Geolocator.getCurrentPosition(
+        locationSettings: const geo.LocationSettings(
+          accuracy: geo.LocationAccuracy.medium,
+          timeLimit: Duration(seconds: 3),
+        ),
+      );
+      return (lat: pos.latitude, lng: pos.longitude);
+    } catch (_) {}
+    // Fallback Vorarlberg-Bodensee (besser als Frankfurt für DACH-User)
+    return (lat: 47.5031, lng: 9.7471);
+  }
+
   Future<void> _loadStats() async {
     try {
-      final result = await GamificationService.calculateAndSync();
-      final driveSessions = await GamificationService.getDriveSessions();
-      Map<String, dynamic>? profile;
+      // 2026-05-22 (vucko): PARALLEL loading — vorher seriell:
+      // gamification → drive → profile → weekly → GPS(10s!) → recommendation → saved
+      // Jetzt: alle unabhängigen calls gleichzeitig, GPS startet sofort.
       final userId = Supabase.instance.client.auth.currentUser?.id;
-      if (userId != null) {
-        try {
-          profile = await Supabase.instance.client
+
+      final gamificationFuture = GamificationService.calculateAndSync();
+      final driveSessionsFuture = GamificationService.getDriveSessions();
+      final profileFuture = userId != null
+          ? Supabase.instance.client
               .from('profiles')
               .select('id, username, avatar_url')
               .eq('id', userId)
-              .maybeSingle();
-        } catch (e) {
-          debugPrint('[Home] Profil-Abfrage fehlgeschlagen: $e');
-        }
-      }
+              .maybeSingle()
+              .then<Map<String, dynamic>?>((v) => v)
+              .catchError((_) => null)
+          : Future<Map<String, dynamic>?>.value(null);
+      final userPosFuture = _resolveUserPosition();
+      final savedRoutesFuture = SavedRoutesService.getSavedRouteLibrary()
+          .catchError((_) => <SavedRoute>[]);
+
+      final result = await gamificationFuture;
+      final driveSessions = await driveSessionsFuture;
+      final profile = await profileFuture;
+      final userPos = await userPosFuture;
+      final savedRoutes = await savedRoutesFuture;
       // Wöchentliche Daten berechnen
       final now = DateTime.now();
       final todayStart = DateTime(now.year, now.month, now.day);
@@ -123,63 +165,15 @@ class _HomeContentPageState extends State<HomeContentPage>
         driveSessions,
       );
 
-      // Home-Empfehlung aus dem verified Routenpool laden.
+      // Recommendation aus dem verified Routenpool — GPS schon parallel oben gelaufen.
       HomeRouteRecommendation? recommendation;
       bool routeSaved = false;
       try {
-        // 2026-05-21 (vucko): Standort-Ermittlung robuster.
-        // User-Beschwerde: "empfohlene Routen sollen wirklich vom Standort sein".
-        // Alte Logik fiel zu schnell auf Frankfurt-Fallback durch:
-        //   - accuracy.low + 5s Timeout = häufig timeout bei schlechtem GPS
-        //   - Frankfurt 50.11/8.68 als hard-coded fallback → falsche Region
-        // Neu: medium accuracy + 10s, dann lastKnownPosition, dann erst Fallback.
-        double? userLat;
-        double? userLng;
-        try {
-          final permission = await geo.Geolocator.checkPermission();
-          final hasPermission =
-              permission == geo.LocationPermission.always ||
-              permission == geo.LocationPermission.whileInUse;
-          if (!hasPermission) {
-            await geo.Geolocator.requestPermission();
-          }
-          final pos = await geo.Geolocator.getCurrentPosition(
-            locationSettings: const geo.LocationSettings(
-              accuracy: geo.LocationAccuracy.medium,
-              timeLimit: Duration(seconds: 10),
-            ),
-          );
-          userLat = pos.latitude;
-          userLng = pos.longitude;
-          debugPrint('[Home] GPS-Live OK: ${userLat.toStringAsFixed(4)}, ${userLng.toStringAsFixed(4)}');
-        } catch (e) {
-          debugPrint('[Home] GPS-Live timeout, versuche lastKnownPosition: $e');
-          try {
-            final last = await geo.Geolocator.getLastKnownPosition();
-            if (last != null) {
-              userLat = last.latitude;
-              userLng = last.longitude;
-              debugPrint('[Home] lastKnownPosition OK: ${userLat.toStringAsFixed(4)}, ${userLng.toStringAsFixed(4)}');
-            }
-          } catch (e2) {
-            debugPrint('[Home] lastKnownPosition fehlgeschlagen: $e2');
-          }
-        }
-        // Notfall-Fallback nur wenn beide GPS-Pfade gefailed haben.
-        if (userLat == null || userLng == null) {
-          userLat = 50.1109;
-          userLng = 8.6821;
-          debugPrint('[Home] Beide GPS-Pfade gefailed, nutze Frankfurt-Fallback');
-        }
-
         recommendation = await HomeRouteRecommendationService.getTodayRoute(
-          userLat: userLat,
-          userLng: userLng,
+          userLat: userPos.lat,
+          userLng: userPos.lng,
         );
-
-        // Prüfen ob Route bereits gespeichert
         if (recommendation != null) {
-          final savedRoutes = await SavedRoutesService.getSavedRouteLibrary();
           routeSaved = SavedRoutesService.hasEquivalentSavedRoute(
             recommendation.route,
             savedRoutes,
@@ -1050,49 +1044,51 @@ class _HomeContentPageState extends State<HomeContentPage>
   Widget _buildSaveChip(SavedRoute route) {
     return GestureDetector(
       onTap: () async {
+        // 2026-05-22 (vucko): Optimistic UI — setState SOFORT, dann async work.
+        // Vorher: 5 sequenzielle awaits (save → reload → checkSaved → provider
+        // reload → calculateAndSync) blockten UI 2-3s. Jetzt: User sieht
+        // sofort den Haken, alles andere passiert im Hintergrund.
+        final wasSaved = _isRouteSaved;
         try {
-          if (_isRouteSaved) {
-            await SavedRoutesService.unsaveRouteEverywhere(route);
+          if (wasSaved) {
+            setState(() => _isRouteSaved = false);  // optimistic
+            unawaited(SavedRoutesService.unsaveRouteEverywhere(route));
             if (!mounted) return;
             unawaited(context.read<RouteBookmarkProvider>().loadSavedRoutes());
             unawaited(context.read<SavedRoutesProvider>().loadRoutes());
-            setState(() => _isRouteSaved = false);
             return;
           }
 
-          await SavedRoutesService.saveExistingRoute(route);
-          if (!mounted) return;
-          final savedRoutes = await SavedRoutesService.getSavedRouteLibrary();
-          final saved = SavedRoutesService.hasEquivalentSavedRoute(
-            route,
-            savedRoutes,
+          // optimistic: setState true sofort
+          setState(() => _isRouteSaved = true);
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Route gespeichert.'),
+              backgroundColor: Color(0xFF1F2933),
+              duration: Duration(seconds: 2),
+            ),
           );
-          if (!saved) {
-            throw StateError('Route wurde nicht in der Bibliothek gefunden.');
-          }
+          // Async work im Hintergrund
+          await SavedRoutesService.saveExistingRoute(route);
           if (!mounted) return;
           unawaited(context.read<RouteBookmarkProvider>().loadSavedRoutes());
           unawaited(context.read<SavedRoutesProvider>().loadRoutes());
-          final gamResult = await GamificationService.calculateAndSync();
-          if (!mounted) return;
-          if (gamResult.newBadges.isNotEmpty) {
-            await showBadgeUnlockPopup(
-              context: context,
-              badges: gamResult.newBadges,
-            );
-          }
-          if (mounted) {
-            setState(() => _isRouteSaved = true);
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('Route gespeichert.'),
-                backgroundColor: Color(0xFF1F2933),
-              ),
-            );
-          }
+          // Gamification + Badge-Popup async (kein UI-Block)
+          unawaited(() async {
+            final gamResult = await GamificationService.calculateAndSync();
+            if (!mounted) return;
+            if (gamResult.newBadges.isNotEmpty) {
+              await showBadgeUnlockPopup(
+                context: context,
+                badges: gamResult.newBadges,
+              );
+            }
+          }());
         } catch (e) {
           debugPrint('[Home] Route speichern fehlgeschlagen: $e');
           if (!mounted) return;
+          // Rollback optimistic state
+          setState(() => _isRouteSaved = wasSaved);
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
               content: Text('Route konnte nicht gespeichert werden.'),
