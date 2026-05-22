@@ -18,3 +18,9 @@ DONE:33:GH snap_prevention investigiert — Schladming ist alpine extreme Reacha
 DONE:34:Pool-Healing-Worker auf v2-Edge umstellen (vorher v1 mapbox-hack):supabase/functions/tools/route_pool_healing_worker.ts
 DONE:35:Pool DB-Schema 25km Bucket-Constraint erweitert + Flutter-Pfad reaktiviert:supabase/migrations/20260521_add_25km_bucket.sql
 36:Migration apply auf production DB:supabase/migrations/20260521_add_25km_bucket.sql
+
+# Neue Tasks (2026-05-22) — User-Vorgabe stück für stück abarbeiten:
+41:A->B Live-Routing alle Detour-Stufen + Stile:lib/data/services/route_service.dart
+42:Waypoints Live-Route beliebige Distanzen + Stile:lib/data/services/route_service.dart
+43:Trip-Modus Multi-Stop Pause Resume Speichern:lib/presentation/pages/cruise_mode_page.dart
+44:Gruppen Routen-Teilung + Friend-Finder:lib/presentation/pages/groups/

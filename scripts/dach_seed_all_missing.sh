@@ -10,8 +10,9 @@ mkdir -p "$(dirname "$LOG")"
 
 log() { echo "[$(date +%H:%M:%S)] $1" | tee -a "$LOG"; }
 
-# Enumerate missing
-mapfile -t missing < <(python3 << 'PYEOF'
+# Enumerate missing — bash 3 kompatibel (kein mapfile)
+missing_tmp="/tmp/dach_seed_missing.txt"
+python3 << 'PYEOF' > "$missing_tmp"
 import os, re
 master = []
 with open('scripts/dach_master_cities.txt') as f:
@@ -34,9 +35,9 @@ for city, lat, lng in master:
     if slug not in migrations:
         print(f"{city}|{lat}|{lng}|{slug}")
 PYEOF
-)
 
-log "📋 ${#missing[@]} Städte zu seeden"
+missing_count=$(wc -l < "$missing_tmp" | xargs)
+log "📋 $missing_count Städte zu seeden"
 
 # Get next timestamp
 last_seed=$(ls supabase/migrations/2026052[12]*_*_pool.sql 2>/dev/null | sort | tail -1)
@@ -49,8 +50,8 @@ fi
 
 ok=0
 fail=0
-for entry in "${missing[@]}"; do
-  IFS='|' read -r city lat lng slug <<< "$entry"
+while IFS='|' read -r city lat lng slug; do
+  [[ -z "$city" ]] && continue
   log "🌱 Seeding $city ($lat, $lng)..."
   python3 scripts/dach_pool_seed.py "$city" "$lat" "$lng" \
     "25,50,75,100" "Sport Mode,Kurvenjagd,Abendrunde,Entdecker" 3 \
@@ -81,7 +82,12 @@ with open('$migration', 'w') as f:
   log "  ✓ $city: $n routes → $(basename $migration)"
   ok=$((ok + 1))
   next_ts=$((next_ts + 100))
-done
+done < "$missing_tmp"
 
 log "📊 SUMMARY: $ok geseeded, $fail gefailed"
-log "→ bash scripts/dach_push_with_retry.sh um zu pushen"
+
+# Automatischer Push nach Seed-Abschluss
+if [[ "$ok" -gt 0 ]]; then
+  log "🚀 Auto-Push der neuen Migrations..."
+  bash "$ROOT/scripts/dach_push_with_retry.sh" 2>&1 | tee -a "$LOG"
+fi

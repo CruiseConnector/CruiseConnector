@@ -123,6 +123,7 @@ CREATE INDEX IF NOT EXISTS idx_auto_seed_jobs_pending
 --   - nur Combos die: activity_score > 0.5 (mindestens 1 user multi search)
 --     UND pool_routes < 5 (Slot ist unter-versorgt)
 --   - Skip wenn schon pending/running job für selbe Combo existiert
+DROP FUNCTION IF EXISTS public.trigger_pool_auto_seed();
 CREATE OR REPLACE FUNCTION public.trigger_pool_auto_seed()
 RETURNS TABLE (queued_count integer, scanned_count integer, last_priority double precision)
 LANGUAGE plpgsql SECURITY DEFINER AS $$
