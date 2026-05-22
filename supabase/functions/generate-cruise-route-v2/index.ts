@@ -360,6 +360,9 @@ async function callGraphHopper(opts: {
   params.set('points_encoded', 'false');
   params.set('ch.disable', 'true');
   params.set('instructions', 'true');
+  // 2026-05-22 (vucko Task #10): Ferry-Vermeidung über Custom-Model
+  // (siehe unten) — der `snap_prevention` Query-Param ist von unserer
+  // GraphHopper 8.0 Installation nicht supported (HTTP 400).
 
   if (opts.isRoundTrip) {
     params.set('algorithm', 'round_trip');
@@ -386,6 +389,11 @@ async function callGraphHopper(opts: {
   if (opts.avoidHighways) {
     overlay.priority.push({ if: 'road_class == MOTORWAY || road_class == TRUNK', multiply_by: '0.05' });
   }
+  // 2026-05-22 (vucko Task #10): Ferries als Fallback-Penalty (zusätzlich
+  // zu snap_prevention). Wenn ein Routing dennoch eine Fähre einbaut
+  // (z. B. weil nur snap_prevention den Start- aber nicht Mid-Segment
+  // betrifft), wird sie hier multiplikativ fast komplett gestrichen.
+  overlay.priority.push({ if: 'road_environment == FERRY', multiply_by: '0.02' });
   if (overlay.priority.length > 0 || overlay.distance_influence != null) {
     params.set('custom_model', JSON.stringify(overlay));
   }
@@ -492,15 +500,22 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
     // Bearing-Sets pro Stil unterschiedlich damit Routes sich klar
     // unterscheiden (sonst pickt GH die kürzeste path egal welches profile).
     const bearingsForStyle = profile === 'motorcycle_kurvenjagd'
-      ? [90, -90, 120, -120]  // breit + tief — viele Optionen
+      ? [90, -90, 120, -120, 60, -60]  // breit + tief — viele Optionen
       : profile === 'motorcycle_scenic'
-      ? [75, -75, 60, -60]    // schmaler Spread — Cruiser-feeling
+      ? [75, -75, 60, -60, 90, -90]    // schmaler Spread — Cruiser-feeling
       : profile === 'motorcycle_abendrunde'
-      ? [60, -60, 45]         // wenig Umweg
-      : [80, -80, 100, -100]; // entdecker: variability
-    const limit = detourLevel === 1 ? 3 : detourLevel === 2 ? 4 : 5;
-    for (const b of bearingsForStyle.slice(0, limit)) {
-      detourSpec.push({ bearing: b, distKm: baseKm });
+      ? [60, -60, 45, -45, 75]         // wenig Umweg
+      : [80, -80, 100, -100, 60, -60]; // entdecker: variability
+    const limit = detourLevel === 1 ? 4 : detourLevel === 2 ? 6 : 8;
+    // 2026-05-22 (vucko Task #11): Pro Bearing zwei distanzen probieren —
+    // wenn der primäre Sub-WP im Wasser/Berg landet, fängt der kleinere
+    // baseKm-Wert oft trotzdem. Verdoppelt effektiv die Erfolgsrate
+    // ohne Latenz zu sprengen (Promise.all parallel).
+    const distanceVariants = [baseKm, Math.max(2, baseKm * 0.55)];
+    for (const b of bearingsForStyle.slice(0, Math.ceil(limit / 2))) {
+      for (const d of distanceVariants) {
+        detourSpec.push({ bearing: b, distKm: d });
+      }
     }
   }
   const hasExplicitWaypoints = !isRoundTrip && (req.waypoints?.length ?? 0) > 0;
@@ -508,7 +523,7 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
   // maxAttempts pro Modus
   const maxAttempts = isRoundTrip
     ? (needsDiversity ? 8 : 5)
-    : (hasExplicitWaypoints ? 1 : Math.max(1, detourSpec.length));
+    : (hasExplicitWaypoints ? 1 : Math.max(1, detourSpec.length || 1));
   const targetKm = req.target_distance_km ?? 50;
   const candidates: Array<{ result: RouteResult; deltaPct: number; seed: number; isDup: boolean }> = [];
   let bestCandidate: RouteResult | null = null;

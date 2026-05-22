@@ -209,10 +209,10 @@ class _SettingsPageState extends State<SettingsPage> {
                   ),
                   const Divider(color: Colors.white10, height: 1),
                   _buildNavTile(
-                    'Routing-Hinweise',
-                    Icons.route_outlined,
+                    'Sicherheits- & Routing-Hinweise',
+                    Icons.shield_outlined,
                     subtitle:
-                        'Routenmodi, Wegpunkte und Sicherheit erneut lesen',
+                        'Haftung, Routenmodi, Wegpunkte und Sicherheit nachlesen',
                     onTap: () =>
                         showRoutingOnboardingSheet(context, force: true),
                   ),

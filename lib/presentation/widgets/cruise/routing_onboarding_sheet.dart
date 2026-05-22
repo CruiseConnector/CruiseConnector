@@ -9,19 +9,26 @@ Future<void> showRoutingOnboardingSheet(
   BuildContext context, {
   bool force = false,
 }) async {
+  // Doppel-Open verhindern: wenn das Sheet bereits offen ist, sofort raus.
+  if (RoutingOnboardingService.isOpen) return;
   if (!force && await RoutingOnboardingService.hasAccepted()) return;
   if (!context.mounted) return;
 
-  await showModalBottomSheet<void>(
-    context: context,
-    isScrollControlled: true,
-    isDismissible: force,
-    enableDrag: force,
-    useSafeArea: true,
-    backgroundColor: Colors.transparent,
-    barrierColor: Colors.black.withValues(alpha: 0.72),
-    builder: (_) => RoutingOnboardingSheet(showCloseButton: force),
-  );
+  RoutingOnboardingService.acquireLock();
+  try {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      isDismissible: force,
+      enableDrag: force,
+      useSafeArea: true,
+      backgroundColor: Colors.transparent,
+      barrierColor: Colors.black.withValues(alpha: 0.72),
+      builder: (_) => RoutingOnboardingSheet(showCloseButton: force),
+    );
+  } finally {
+    RoutingOnboardingService.releaseLock();
+  }
 }
 
 class RoutingOnboardingSheet extends StatefulWidget {
@@ -619,22 +626,38 @@ class _LegalNote extends StatelessWidget {
       decoration: BoxDecoration(
         color: Colors.black.withValues(alpha: 0.24),
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
       ),
-      child: Row(
+      child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(CupertinoIcons.doc_text, color: accent, size: 18),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              'Der finale Rechtstext muss später juristisch geprüft werden. Diese Hinweise ersetzen keine rechtliche Prüfung.',
-              style: TextStyle(
-                color: Colors.white.withValues(alpha: 0.62),
-                fontSize: 12.5,
-                height: 1.35,
-                fontWeight: FontWeight.w500,
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(CupertinoIcons.doc_text, color: accent, size: 18),
+              const SizedBox(width: 10),
+              const Expanded(
+                child: Text(
+                  'Nutzungsbedingungen & Haftung',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
               ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Text(
+            'Cruise Connector liefert ausschließlich unverbindliche Routenvorschläge auf Basis öffentlich verfügbarer Kartendaten (GraphHopper, OpenStreetMap). Diese ersetzen weder die Pflichten der Straßenverkehrsordnung noch die Sorgfaltspflicht des Fahrers.\n\n'
+            'Verantwortlich für jede Fahrt bist ausschließlich du als Fahrzeugführer. Die Anbieter der App übernehmen keine Haftung für Schäden, Verstöße, Verspätungen, Sperrungen, Privatwege, fehlerhafte Kartendaten oder Unfälle, die im Zusammenhang mit der Nutzung der App entstehen — soweit gesetzlich zulässig.\n\n'
+            'Beachte die geltenden Verkehrsregeln, Fahrverbote, Tempolimits und örtlichen Vorschriften. Bediene das Gerät nicht während der Fahrt. Du kannst diese Hinweise jederzeit in den Einstellungen unter „Sicherheits- & Routing-Hinweise" erneut öffnen.',
+            style: TextStyle(
+              color: Colors.white.withValues(alpha: 0.74),
+              fontSize: 12.5,
+              height: 1.42,
+              fontWeight: FontWeight.w500,
             ),
           ),
         ],

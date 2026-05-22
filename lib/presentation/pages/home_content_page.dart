@@ -18,6 +18,7 @@ import 'package:cruise_connect/domain/models/user_level.dart';
 import 'package:cruise_connect/presentation/pages/cruise_mode_page.dart';
 import 'package:cruise_connect/presentation/widgets/badge_unlock_popup.dart';
 import 'package:cruise_connect/presentation/widgets/community_carousel_card.dart';
+import 'package:cruise_connect/presentation/widgets/top_toast.dart';
 import 'package:cruise_connect/presentation/widgets/user_avatar.dart';
 
 class HomeContentPage extends StatefulWidget {
@@ -1061,12 +1062,10 @@ class _HomeContentPageState extends State<HomeContentPage>
 
           // optimistic: setState true sofort
           setState(() => _isRouteSaved = true);
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Route gespeichert.'),
-              backgroundColor: Color(0xFF1F2933),
-              duration: Duration(seconds: 2),
-            ),
+          TopToast.show(
+            context,
+            message: 'Route gespeichert',
+            icon: Icons.bookmark_added_rounded,
           );
           // Async work im Hintergrund
           await SavedRoutesService.saveExistingRoute(route);
@@ -1089,11 +1088,11 @@ class _HomeContentPageState extends State<HomeContentPage>
           if (!mounted) return;
           // Rollback optimistic state
           setState(() => _isRouteSaved = wasSaved);
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Route konnte nicht gespeichert werden.'),
-              backgroundColor: Colors.red,
-            ),
+          TopToast.show(
+            context,
+            message: 'Route konnte nicht gespeichert werden',
+            icon: Icons.error_outline,
+            isError: true,
           );
         }
       },
