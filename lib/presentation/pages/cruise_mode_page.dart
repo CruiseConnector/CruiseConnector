@@ -24,6 +24,7 @@ import 'package:cruise_connect/data/services/web_position_smoother.dart';
 import 'package:cruise_connect/data/services/native_position_smoother.dart';
 import 'package:cruise_connect/data/services/geocoding_service.dart';
 import 'package:cruise_connect/data/services/voice_settings_service.dart';
+import 'package:cruise_connect/data/services/tts_service.dart';
 import 'package:cruise_connect/presentation/widgets/weather_chip.dart';
 import 'package:cruise_connect/presentation/widgets/top_toast.dart';
 import 'package:cruise_connect/data/services/driven_track_recorder.dart';
@@ -2592,6 +2593,9 @@ class _CruiseModePageState extends State<CruiseModePage>
     );
   }
 
+  // 2026-05-24 (vucko Task #33): Style-Dock entfernt aus Map.
+  // Funktion bleibt für Fallback/Future-Use erhalten.
+  // ignore: unused_element
   Widget _buildWaypointStyleDock() {
     final media = MediaQuery.of(context);
     const styles = ['Sport Mode', 'Kurvenjagd', 'Abendrunde', 'Entdecker'];
@@ -2692,9 +2696,11 @@ class _CruiseModePageState extends State<CruiseModePage>
   Widget _buildConfigOverlay() {
     // Eingeklappter Zustand: nur Buttons am unteren Rand + Expand-Handle + Info-Banner
     if (_configCollapsed) {
-      // 2026-05-23 (vucko Task #23): Wenn Error-Banner ("Stopps prüfen")
+      // 2026-05-23 (vucko Task #23+33): Wenn Error-Banner ("Stopps prüfen")
       // sichtbar ist, Mode-Header + Style-Dock ausblenden → Screen wird
       // aufgeräumt, User-Fokus bleibt auf Banner + Karte.
+      // 2026-05-24 (vucko Task #33): Style-Dock GANZ aus der Map raus —
+      // gehört ins Setup-Panel. Map zeigt nur noch Mode-Header + Stop-Controls.
       final hasErrorBanner = _routeSearchNoticeTitle != null;
       final showWaypointChrome =
           _isWaypointPlanning && !_showRouteInfoBanner && !hasErrorBanner;
@@ -2711,7 +2717,8 @@ class _CruiseModePageState extends State<CruiseModePage>
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                if (showWaypointChrome) _buildWaypointStyleDock(),
+                // Style-Dock entfernt: ist im ausgeklappten Setup-Panel
+                // weiter verfügbar.
                 // Handle zum Hochziehen
                 GestureDetector(
                   onTap: () => setState(() => _configCollapsed = false),
@@ -3058,9 +3065,46 @@ class _CruiseModePageState extends State<CruiseModePage>
               ),
             ],
           ),
+          // 2026-05-24 (vucko Task #38): Höhenmeter wenn vorhanden.
+          // Sub-Zeile statt extra Card — bleibt kompakt.
+          if (_ascentMeters() > 50) ...[
+            const SizedBox(height: 6),
+            Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
+                color: AppAccentColors.accent.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.terrain_outlined,
+                      size: 13, color: AppAccentColors.accent),
+                  const SizedBox(width: 4),
+                  Text(
+                    '+${_ascentMeters()}m Steigung',
+                    style: TextStyle(
+                      color: AppAccentColors.accent,
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ],
       ),
     );
+  }
+
+  int _ascentMeters() {
+    final meta = _lastRouteResult?.edgeMeta;
+    if (meta == null) return 0;
+    final raw = meta['ascent_meters'] ?? meta['ascent'];
+    if (raw is num) return raw.round();
+    return 0;
   }
 
   // 2026-05-23: nicht mehr im UI gezeigt (User-Wunsch). Beibehalten für
@@ -3179,44 +3223,56 @@ class _CruiseModePageState extends State<CruiseModePage>
                   child: const Icon(Icons.map_outlined, size: 20),
                 ),
               ),
-              // Voice-Toggle (Sprach-Navigation an/aus) — sichtbar während
-              // Cruise. Persistiert via VoiceSettingsService.
+              // Voice-Mode-Cycle (off → important → all → off).
               Padding(
                 padding: const EdgeInsets.only(bottom: 12),
                 child: AnimatedBuilder(
                   animation: VoiceSettingsService.instance,
                   builder: (context, _) {
-                    final enabled = VoiceSettingsService.instance.isEnabled;
+                    final mode = VoiceSettingsService.instance.mode;
+                    final (icon, label, color) = switch (mode) {
+                      VoiceMode.off => (
+                          Icons.volume_off_rounded,
+                          'Stumm',
+                          const Color(0xFF2D3138),
+                        ),
+                      VoiceMode.important => (
+                          Icons.volume_down_rounded,
+                          'Nur Wichtiges',
+                          const Color(0xFFFBBF24),
+                        ),
+                      VoiceMode.all => (
+                          Icons.volume_up_rounded,
+                          'Alle Ansagen',
+                          AppAccentColors.accent,
+                        ),
+                    };
                     return FloatingActionButton.small(
                       heroTag: 'voice_toggle_fab',
-                      backgroundColor: enabled
-                          ? AppAccentColors.accent
-                          : const Color(0xFF2D3138),
+                      backgroundColor: color,
                       foregroundColor: Colors.white,
-                      tooltip: enabled
-                          ? 'Sprach-Navigation aus'
-                          : 'Sprach-Navigation an',
-                      onPressed: () {
-                        VoiceSettingsService.instance.toggle();
+                      tooltip: label,
+                      onPressed: () async {
+                        await VoiceSettingsService.instance.cycleMode();
                         HapticFeedback.selectionClick();
-                        final nowEnabled =
-                            VoiceSettingsService.instance.isEnabled;
+                        if (!context.mounted) return;
+                        final newMode = VoiceSettingsService.instance.mode;
+                        final newLabel = switch (newMode) {
+                          VoiceMode.off => 'Stumm',
+                          VoiceMode.important => 'Nur Wichtiges',
+                          VoiceMode.all => 'Alle Ansagen',
+                        };
                         TopToast.show(
                           context,
-                          message: nowEnabled
-                              ? 'Sprach-Navigation an'
-                              : 'Sprach-Navigation aus',
-                          icon: nowEnabled
-                              ? Icons.volume_up_rounded
-                              : Icons.volume_off_rounded,
+                          message: 'Sprache: $newLabel',
+                          icon: switch (newMode) {
+                            VoiceMode.off => Icons.volume_off_rounded,
+                            VoiceMode.important => Icons.volume_down_rounded,
+                            VoiceMode.all => Icons.volume_up_rounded,
+                          },
                         );
                       },
-                      child: Icon(
-                        enabled
-                            ? Icons.volume_up_rounded
-                            : Icons.volume_off_rounded,
-                        size: 20,
-                      ),
+                      child: Icon(icon, size: 20),
                     );
                   },
                 ),
@@ -4437,7 +4493,8 @@ class _CruiseModePageState extends State<CruiseModePage>
           waypointSnapshot.length >= 2) {
         // 2026-05-23 (vucko Task #22): Trip-Modus = A→B mit Multi-Stopps.
         // Letzter WP = Endziel, alle dazwischen = intermediates.
-        // Kein close_loop, kein Rundkurs zurück zum Start.
+        // 2026-05-24 (vucko Task #32): Auch im Trip-Modus die gleichen
+        // Umweg-Optionen (Direkt / Klein / Mittel / Groß) wie bei A→B.
         final lastWp = waypointSnapshot.last;
         final intermediates = waypointSnapshot
             .sublist(0, waypointSnapshot.length - 1)
@@ -4446,10 +4503,18 @@ class _CruiseModePageState extends State<CruiseModePage>
                   'longitude': p.longitude,
                 })
             .toList(growable: false);
+        final tripDetourVariant = switch (_selectedDetour) {
+          'Kleiner Umweg' => 1,
+          'Mittlerer Umweg' => 2,
+          'Großer Umweg' => 3,
+          _ => 0,
+        };
+        final tripScenic = _selectedDetour != 'Direkt';
         _activeDestinationCoordinate = [lastWp.longitude, lastWp.latitude];
-        _activeDetourVariant = 0;
-        _activePointToPointScenic = true;
-        _activePointToPointMode = _selectedStyle;
+        _activeDetourVariant = tripDetourVariant;
+        _activePointToPointScenic = tripScenic;
+        _activePointToPointMode =
+            tripScenic ? _selectedStyle : 'Standard';
         _activeAvoidHighways = _avoidHighways;
         final subscriptionTier = RouteService.resolveEffectiveSubscriptionTier(
           isTesterOrBeta: true,
@@ -4458,9 +4523,9 @@ class _CruiseModePageState extends State<CruiseModePage>
           startPosition: startPosition,
           destinationLat: lastWp.latitude,
           destinationLng: lastWp.longitude,
-          mode: _selectedStyle,
-          scenic: true,
-          routeVariant: 0,
+          mode: tripScenic ? _selectedStyle : 'Standard',
+          scenic: tripScenic,
+          routeVariant: tripDetourVariant,
           avoidHighways: _avoidHighways,
           forceFreshVariant: forceFreshVariant,
           subscriptionTier: subscriptionTier,
@@ -6935,20 +7000,23 @@ class _CruiseModePageState extends State<CruiseModePage>
         _hapticStage150m = false;
         _hapticStage50m = false;
       }
-      // 300m → lightImpact (Vorwarnung)
+      // 300m → lightImpact + TTS-Ansage (wichtig)
       if (!_hapticStage300m && distToManeuver <= 300 && distToManeuver > 150) {
         HapticFeedback.lightImpact();
         _hapticStage300m = true;
+        _speakManeuverAnnouncement(distToManeuver.round(), important: true);
       }
-      // 150m → mediumImpact (achtung)
+      // 150m → mediumImpact
       if (!_hapticStage150m && distToManeuver <= 150 && distToManeuver > 50) {
         HapticFeedback.mediumImpact();
         _hapticStage150m = true;
+        _speakManeuverAnnouncement(distToManeuver.round(), important: true);
       }
-      // 50m → heavyImpact (gleich!)
+      // 50m → heavyImpact + finale TTS
       if (!_hapticStage50m && distToManeuver <= 50) {
         HapticFeedback.heavyImpact();
         _hapticStage50m = true;
+        _speakManeuverAnnouncement(0, important: true);
       }
     }
 
@@ -6961,6 +7029,27 @@ class _CruiseModePageState extends State<CruiseModePage>
         nextManeuverDistance: distToManeuver,
       ),
     );
+  }
+
+  // 2026-05-24 (vucko Task #39): Manöver-TTS-Ansage.
+  // distMeters=0 → "Jetzt links" / "Jetzt rechts"
+  // distMeters>0 → "In Xm links abbiegen"
+  void _speakManeuverAnnouncement(int distMeters, {required bool important}) {
+    final maneuver = _activeVisibleManeuver();
+    if (maneuver == null) return;
+    final raw = (maneuver.instruction.isNotEmpty
+            ? maneuver.instruction
+            : maneuver.announcement)
+        .trim();
+    if (raw.isEmpty) return;
+    final text = distMeters <= 30
+        ? 'Jetzt $raw'
+        : 'In ${distMeters}m $raw';
+    if (important) {
+      unawaited(TtsService.instance.speakImportant(text));
+    } else {
+      unawaited(TtsService.instance.speakOptional(text));
+    }
   }
 
   String? _currentCarManeuverText() {

@@ -308,15 +308,31 @@ class _HomeContentPageState extends State<HomeContentPage>
               user?.email?.split('@')[0] ??
               'User';
 
-    return SingleChildScrollView(
-      physics: const BouncingScrollPhysics(),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 10, 20, 30),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Header
-            Row(
+    return RefreshIndicator(
+      color: accent,
+      backgroundColor: const Color(0xFF1A1E28),
+      onRefresh: () async {
+        // Re-fetch alle Home-Daten parallel
+        await Future.wait([
+          GamificationService.calculateAndSync(),
+          context.read<SavedRoutesProvider>().loadRoutes().catchError((_) {}),
+          context
+              .read<RouteBookmarkProvider>()
+              .loadSavedRoutes()
+              .catchError((_) {}),
+        ]);
+        if (mounted) setState(() {});
+      },
+      child: SingleChildScrollView(
+        physics: const AlwaysScrollableScrollPhysics(
+            parent: BouncingScrollPhysics()),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 10, 20, 30),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Header
+              Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Expanded(
@@ -618,6 +634,7 @@ class _HomeContentPageState extends State<HomeContentPage>
             // Streak Widget
             _buildStreakWidget(),
           ],
+          ),
         ),
       ),
     );

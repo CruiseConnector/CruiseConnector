@@ -56,7 +56,7 @@ class WeatherChip extends StatelessWidget {
   }
 }
 
-class _WeatherCompact extends StatelessWidget {
+class _WeatherCompact extends StatefulWidget {
   const _WeatherCompact({
     required this.snapshot,
     this.durationMinutes,
@@ -67,9 +67,37 @@ class _WeatherCompact extends StatelessWidget {
   final int? durationMinutes;
   final VoidCallback? onTap;
 
-  /// Liefert (arrivalForecast, trendMessage) wenn durationMinutes gesetzt
-  /// und sich Wetter signifikant ändert. Sonst (null, null).
-  (HourlyForecast?, String?) _arrivalTrend() {
+  @override
+  State<_WeatherCompact> createState() => _WeatherCompactState();
+}
+
+class _WeatherCompactState extends State<_WeatherCompact>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _pulse;
+
+  @override
+  void initState() {
+    super.initState();
+    _pulse = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 2400),
+    )..repeat(reverse: true);
+  }
+
+  @override
+  void dispose() {
+    _pulse.dispose();
+    super.dispose();
+  }
+
+  WeatherSnapshot get snapshot => widget.snapshot;
+  int? get durationMinutes => widget.durationMinutes;
+  VoidCallback? get onTap => widget.onTap;
+
+  // alte Methode hier zur Kompat — Aufrufer-Code im Body nutzt jetzt
+  // die zweite Definition unten (deduplicated). Behalten als Backup.
+  // ignore: unused_element
+  (HourlyForecast?, String?) _arrivalTrendOld() {
     if (durationMinutes == null || durationMinutes! < 45) {
       return (null, null);
     }
@@ -80,7 +108,6 @@ class _WeatherCompact extends StatelessWidget {
     final endCode = arrival.weatherCode;
     const startProb = 0;
     final endProb = arrival.precipitationProbability;
-    // Trend nur zeigen wenn sich was Bedeutendes ändert
     if (startCode <= 2 && endCode >= 51) {
       return (arrival, 'wird regnerisch');
     }
@@ -96,6 +123,26 @@ class _WeatherCompact extends StatelessWidget {
     return (null, null);
   }
 
+  /// Liefert (arrivalForecast, trendMessage) wenn durationMinutes gesetzt
+  /// und sich Wetter signifikant ändert.
+  (HourlyForecast?, String?) _arrivalTrend() {
+    if (durationMinutes == null || durationMinutes! < 45) return (null, null);
+    final arrivalHourIdx = (durationMinutes! / 60).round().clamp(1, 5);
+    if (arrivalHourIdx >= snapshot.next6Hours.length) return (null, null);
+    final arrival = snapshot.next6Hours[arrivalHourIdx];
+    final startCode = snapshot.weatherCode;
+    final endCode = arrival.weatherCode;
+    const startProb = 0;
+    final endProb = arrival.precipitationProbability;
+    if (startCode <= 2 && endCode >= 51) return (arrival, 'wird regnerisch');
+    if (startCode >= 51 && endCode <= 2) return (arrival, 'klart auf');
+    if (endProb >= 50 && startProb < 30) return (arrival, 'Regenrisiko');
+    if (endCode != startCode && (endCode >= 95 || startCode >= 95)) {
+      return (arrival, 'Gewitter zieht auf');
+    }
+    return (null, null);
+  }
+
   @override
   Widget build(BuildContext context) {
     final accent = AppAccentColors.accent;
@@ -103,10 +150,10 @@ class _WeatherCompact extends StatelessWidget {
         WeatherCodeIcon.describe(snapshot.weatherCode);
     final icon = IconData(iconCp, fontFamily: 'MaterialIcons');
     final condColor = switch (snapshot.ridingCondition) {
-      RidingCondition.excellent => const Color(0xFF34D399), // grün
-      RidingCondition.good => const Color(0xFF60A5FA),       // blau
-      RidingCondition.marginal => const Color(0xFFFBBF24),   // gelb
-      RidingCondition.poor => const Color(0xFFF87171),       // rot
+      RidingCondition.excellent => const Color(0xFF34D399),
+      RidingCondition.good => const Color(0xFF60A5FA),
+      RidingCondition.marginal => const Color(0xFFFBBF24),
+      RidingCondition.poor => const Color(0xFFF87171),
     };
     final condLabel = switch (snapshot.ridingCondition) {
       RidingCondition.excellent => 'Perfekt',
@@ -116,13 +163,28 @@ class _WeatherCompact extends StatelessWidget {
     };
     final maxRainProb = snapshot.maxPrecipitationProbabilityNext6h;
     final rainHour = snapshot.firstHeavyRainHour;
+    // 2026-05-24 (vucko Task #34): Tageszeit-Gradient.
+    final hour = DateTime.now().hour;
+    final isDawn = hour >= 5 && hour < 8;
+    final isDay = hour >= 8 && hour < 18;
+    final isDusk = hour >= 18 && hour < 21;
+    final isNight = !isDawn && !isDay && !isDusk;
+    final timeTint = isDawn
+        ? const Color(0xFFFF8A65)
+        : isDay
+            ? const Color(0xFFFFA94D)
+            : isDusk
+                ? const Color(0xFFEA580C)
+                : const Color(0xFF1E40AF);
     final tintColor = colorHint == 0
-        ? const Color(0xFFFFA94D)  // sonnig: orange tint
+        ? timeTint
         : colorHint == 2
-        ? const Color(0xFF60A5FA)  // regen: blau
-        : colorHint == 3
-        ? const Color(0xFFF87171)  // sturm: rot
-        : const Color(0xFF94A3B8); // cloudy/foggy: grau
+            ? const Color(0xFF60A5FA)
+            : colorHint == 3
+                ? const Color(0xFFF87171)
+                : isNight
+                    ? const Color(0xFF6366F1)
+                    : const Color(0xFF94A3B8);
 
     return GestureDetector(
       onTap: onTap,
@@ -131,41 +193,56 @@ class _WeatherCompact extends StatelessWidget {
         child: BackdropFilter(
           filter: ui.ImageFilter.blur(sigmaX: 16, sigmaY: 16),
           child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            padding: const EdgeInsets.fromLTRB(10, 9, 14, 9),
             decoration: BoxDecoration(
               gradient: LinearGradient(
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
                 colors: [
-                  tintColor.withValues(alpha: 0.18),
-                  const Color(0xCC1A1E28),
+                  tintColor.withValues(alpha: 0.28),
+                  tintColor.withValues(alpha: 0.10),
+                  const Color(0xCC0E1117),
                 ],
+                stops: const [0.0, 0.4, 1.0],
               ),
-              borderRadius: BorderRadius.circular(16),
+              borderRadius: BorderRadius.circular(20),
               border: Border.all(
-                color: tintColor.withValues(alpha: 0.35),
+                color: tintColor.withValues(alpha: 0.42),
                 width: 1,
               ),
               boxShadow: [
                 BoxShadow(
-                  color: tintColor.withValues(alpha: 0.15),
-                  blurRadius: 14,
+                  color: Colors.black.withValues(alpha: 0.30),
+                  blurRadius: 18,
+                  offset: const Offset(0, 6),
+                ),
+                BoxShadow(
+                  color: tintColor.withValues(alpha: 0.22),
+                  blurRadius: 22,
                 ),
               ],
             ),
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                // Linke Seite: Icon + Temperatur
-                Container(
-                  width: 38,
-                  height: 38,
-                  decoration: BoxDecoration(
-                    color: tintColor.withValues(alpha: 0.22),
-                    shape: BoxShape.circle,
+                // Linke Seite: pulsierendes Icon + Glow
+                AnimatedBuilder(
+                  animation: _pulse,
+                  builder: (context, child) => Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      gradient: RadialGradient(
+                        colors: [
+                          tintColor.withValues(alpha: 0.40 + 0.18 * _pulse.value),
+                          tintColor.withValues(alpha: 0.12),
+                        ],
+                      ),
+                      shape: BoxShape.circle,
+                    ),
+                    alignment: Alignment.center,
+                    child: Icon(icon, color: Colors.white, size: 22),
                   ),
-                  alignment: Alignment.center,
-                  child: Icon(icon, color: Colors.white, size: 22),
                 ),
                 const SizedBox(width: 10),
                 Column(

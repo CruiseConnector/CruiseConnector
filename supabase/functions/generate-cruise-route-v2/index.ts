@@ -31,20 +31,34 @@ const ALLOWED_ORIGINS = '*';
 // - DE-südlich-48.3 + Bayern + restliches DE → DE-Server (8991)
 // Fallback: wenn ein Server fehlschlägt, anderen probieren.
 function chooseGraphhopperUrl(lat: number, lng: number): { primary: string; fallback: string } {
-  // DACH-Server kennt: AT (alle), CH (alle), LI, BW lat≥48.3
   const inDachServerArea =
-    // Österreich grob 46.4-49.0, 9.5-17.2
     (lat >= 46.4 && lat <= 49.0 && lng >= 9.5 && lng <= 17.2) ||
-    // Schweiz grob 45.8-47.8, 5.9-10.5
     (lat >= 45.8 && lat <= 47.8 && lng >= 5.9 && lng <= 10.5) ||
-    // BW lat≥48.3 (mein clip), 7.5-10.5
     (lat >= 48.3 && lat <= 49.8 && lng >= 7.5 && lng <= 10.5);
   if (inDachServerArea) {
     return { primary: GRAPHHOPPER_URL, fallback: GRAPHHOPPER_DE_URL };
   }
-  // DE-Areas die NICHT im DACH-Server drin: Bayern, BW-Süd (Friedrichshafen),
-  // restliches Deutschland (Hessen, Berlin, NRW...)
   return { primary: GRAPHHOPPER_DE_URL, fallback: GRAPHHOPPER_URL };
+}
+
+/// 2026-05-24 (vucko): Server-Wahl mit allen Routen-Punkten.
+/// Wenn IRGENDEIN Punkt außerhalb DACH ist (z. B. Wegpunkt in Frankfurt),
+/// nutzen wir den DE-Server primary — der hat größere Coverage.
+function chooseGraphhopperUrlForRoute(points: Array<{ lat: number; lng: number }>): { primary: string; fallback: string } {
+  if (points.length === 0) {
+    return { primary: GRAPHHOPPER_URL, fallback: GRAPHHOPPER_DE_URL };
+  }
+  // Wenn ALLE Punkte in DACH → DACH-Server. Sonst DE.
+  const allInDach = points.every(p => {
+    const inDach =
+      (p.lat >= 46.4 && p.lat <= 49.0 && p.lng >= 9.5 && p.lng <= 17.2) ||
+      (p.lat >= 45.8 && p.lat <= 47.8 && p.lng >= 5.9 && p.lng <= 10.5) ||
+      (p.lat >= 48.3 && p.lat <= 49.8 && p.lng >= 7.5 && p.lng <= 10.5);
+    return inDach;
+  });
+  return allInDach
+    ? { primary: GRAPHHOPPER_URL, fallback: GRAPHHOPPER_DE_URL }
+    : { primary: GRAPHHOPPER_DE_URL, fallback: GRAPHHOPPER_URL };
 }
 
 // ─────────────────────────── Types ────────────────────────────────────────
@@ -567,11 +581,24 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
   let lastError = 'unknown';
 
   const candidateSeeds = seeds.slice(0, maxAttempts);
-  // Server-Wahl basierend auf User-Position
-  const serverChoice = chooseGraphhopperUrl(
-    req.start_location.latitude,
-    req.start_location.longitude,
-  );
+  // 2026-05-24 (vucko): Server-Wahl mit ALLEN Routen-Punkten —
+  // Multi-Stopp-Tours die bis Frankfurt/Berlin gehen müssen automatisch
+  // den DE-Server nutzen, sonst out-of-bounds.
+  const allRoutePoints: Array<{ lat: number; lng: number }> = [
+    { lat: req.start_location.latitude, lng: req.start_location.longitude },
+  ];
+  if (req.target_location) {
+    allRoutePoints.push({
+      lat: req.target_location.latitude,
+      lng: req.target_location.longitude,
+    });
+  }
+  if (req.waypoints) {
+    for (const wp of req.waypoints) {
+      allRoutePoints.push({ lat: wp.latitude, lng: wp.longitude });
+    }
+  }
+  const serverChoice = chooseGraphhopperUrlForRoute(allRoutePoints);
   const tryServerWithProfile = async (
     serverUrl: string,
     profileToUse: string,
@@ -891,10 +918,23 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
     });
   }
 
-  // Alle Seeds liefen ins Leere — entweder kein valid point oder nur Duplikate
+  // 2026-05-24 (vucko Task #31): Spezifischere Error-Message bei
+  // bekannten Mustern. Out-of-bounds = Coverage-Limit.
+  let userMessage = 'Konnte aktuell keine passende Route generieren. Probier andere Distanz oder Stil.';
+  let errCode = 'no_route';
+  if (lastError.includes('out of bounds')) {
+    userMessage = 'Diese Route reicht über unser aktuelles Liefergebiet hinaus. Wir unterstützen DACH (DE, AT, CH). Setze Stopps näher beieinander.';
+    errCode = 'coverage_out_of_bounds';
+  } else if (lastError.includes('Cannot find point')) {
+    userMessage = 'Ein Stopp liegt nicht an einer Straße. Verschiebe den Punkt etwas auf eine sichtbare Straße.';
+    errCode = 'point_off_road';
+  } else if (lastError.includes('Ferry detected')) {
+    userMessage = 'Wir konnten keine Land-Route finden — versuche andere Wegpunkte.';
+    errCode = 'no_land_route';
+  }
   return jsonResponse({
-    error: 'no_route',
-    user_message: 'Konnte aktuell keine passende Route generieren. Probier andere Distanz oder Stil.',
+    error: errCode,
+    user_message: userMessage,
     debug_message: lastError,
     region: region.label,
     attempts: Math.min(maxAttempts, seeds.length),
