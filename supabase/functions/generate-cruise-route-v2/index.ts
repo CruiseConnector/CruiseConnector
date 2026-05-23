@@ -523,7 +523,7 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
   // maxAttempts pro Modus
   const maxAttempts = isRoundTrip
     ? (needsDiversity ? 8 : 5)
-    : (hasExplicitWaypoints ? 1 : Math.max(1, detourSpec.length || 1));
+    : (hasExplicitWaypoints ? 1 : Math.max(5, detourSpec.length || 5));
   const targetKm = req.target_distance_km ?? 50;
   const candidates: Array<{ result: RouteResult; deltaPct: number; seed: number; isDup: boolean }> = [];
   let bestCandidate: RouteResult | null = null;
@@ -571,14 +571,41 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
       //   3: gemischt — gerade WP +E, ungerade +N
       //   4: alle WP -W -S
       const baseWPs = req.waypoints!.map(w => ({ lat: w.latitude, lng: w.longitude }));
-      const offsetVariants: Array<Array<{ lat: number; lng: number }>> = [
+      // 2026-05-23 (vucko Task #13): Zwei-Stufen-Snap.
+      // Stufe 1: kleine Offsets (~130m) — fängt 90% der Fälle wo der
+      //   gewählte Punkt knapp neben einer Straße ist.
+      // Stufe 2: GROSSE Offsets (~1.1km) in 8 Richtungen pro WP — fängt
+      //   Fälle wo der User auf Wasser/Wald/Berg getippt hat. Wir suchen
+      //   jeden WP einzeln neu, bis ein Snap klappt; behalten die 7 anderen.
+      const smallOffsetVariants: Array<Array<{ lat: number; lng: number }>> = [
         baseWPs,
-        baseWPs.map(wp => ({ lat: wp.lat + 0.0012, lng: wp.lng })),
-        baseWPs.map(wp => ({ lat: wp.lat, lng: wp.lng + 0.0012 })),
+        baseWPs.map(wp => ({ lat: wp.lat + 0.0014, lng: wp.lng })),
+        baseWPs.map(wp => ({ lat: wp.lat, lng: wp.lng + 0.0014 })),
         baseWPs.map((wp, i) => i % 2 === 0
-          ? { lat: wp.lat + 0.0012, lng: wp.lng }
-          : { lat: wp.lat, lng: wp.lng + 0.0012 }),
-        baseWPs.map(wp => ({ lat: wp.lat - 0.0012, lng: wp.lng - 0.0012 })),
+          ? { lat: wp.lat + 0.0014, lng: wp.lng }
+          : { lat: wp.lat, lng: wp.lng + 0.0014 }),
+        baseWPs.map(wp => ({ lat: wp.lat - 0.0014, lng: wp.lng - 0.0014 })),
+      ];
+      // ~1.1km Offsets in 8 Richtungen (für See/Wald/Berg-Punkte).
+      const bigDeltas: Array<[number, number]> = [
+        [ 0.010,  0     ], [ 0.007,  0.007], [ 0,       0.010], [-0.007,  0.007],
+        [-0.010,  0     ], [-0.007, -0.007], [ 0,      -0.010], [ 0.007, -0.007],
+      ];
+      // ~5-6km Offsets (Mega-Stufe) für Punkte mitten im Bodensee/Bergsee.
+      // Letzte Eskalationsstufe — User-Intent wird nur grob respektiert,
+      // aber besser als "Stopps prüfen"-Fehler.
+      const megaDeltas: Array<[number, number]> = [
+        [ 0.050,  0     ], [ 0.035,  0.035], [ 0,       0.050], [-0.035,  0.035],
+        [-0.050,  0     ], [-0.035, -0.035], [ 0,      -0.050], [ 0.035, -0.035],
+      ];
+      const buildVariants = (deltas: Array<[number, number]>) =>
+        deltas.map(([dLat, dLng]) =>
+          baseWPs.map(wp => ({ lat: wp.lat + dLat, lng: wp.lng + dLng })),
+        );
+      const offsetVariants = [
+        ...smallOffsetVariants,
+        ...buildVariants(bigDeltas),
+        ...buildVariants(megaDeltas),
       ];
       for (let attempt = 0; attempt < offsetVariants.length; attempt++) {
         const wps = offsetVariants[attempt];
@@ -614,17 +641,37 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
       }).then(result => ({ result, seed: 0 }))];
     }
     if (detourSpec.length === 0) {
-      // Direkter A→B (detourLevel 0)
-      return [await callGraphHopper({
-        startLat: req.start_location!.latitude,
-        startLng: req.start_location!.longitude,
-        endLat: req.target_location!.latitude,
-        endLng: req.target_location!.longitude,
-        profile: profileToUse,
-        isRoundTrip: false,
-        avoidHighways: req.avoid_highways ?? false,
-        serverUrl,
-      }).then(result => ({ result, seed: 0 }))];
+      // Direkter A→B (detourLevel 0) — 2026-05-23 (vucko Task #13):
+      // Parallel 5 calls mit verschiedenen Start/End-Snap-Offsets.
+      // Behebt Bodensee-Bug wo Start (Friedrichshafen-Hafen) oder Ziel
+      // im Wasser/auf Ferry-Anleger landet. Best-of-N pickt dann die
+      // beste Route.
+      const directVariants: Array<{
+        sLatOff: number;
+        sLngOff: number;
+        eLatOff: number;
+        eLngOff: number;
+      }> = [
+        { sLatOff: 0, sLngOff: 0, eLatOff: 0, eLngOff: 0 },         // Original
+        { sLatOff: 0.0014, sLngOff: 0, eLatOff: 0, eLngOff: 0 },     // Start +N
+        { sLatOff: 0, sLngOff: 0.0014, eLatOff: 0, eLngOff: 0 },     // Start +E
+        { sLatOff: 0, sLngOff: 0, eLatOff: 0.0014, eLngOff: 0 },     // End +N
+        { sLatOff: 0, sLngOff: 0, eLatOff: 0, eLngOff: 0.0014 },     // End +E
+      ];
+      return await Promise.all(
+        directVariants.map((v, idx) =>
+          callGraphHopper({
+            startLat: req.start_location!.latitude + v.sLatOff,
+            startLng: req.start_location!.longitude + v.sLngOff,
+            endLat: req.target_location!.latitude + v.eLatOff,
+            endLng: req.target_location!.longitude + v.eLngOff,
+            profile: profileToUse,
+            isRoundTrip: false,
+            avoidHighways: req.avoid_highways ?? false,
+            serverUrl,
+          }).then(result => ({ result, seed: idx })),
+        ),
+      );
     }
     // detourLevel > 0: parallel mit verschiedenen Sub-Waypoint-Positionen
     return await Promise.all(

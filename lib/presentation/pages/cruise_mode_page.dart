@@ -2420,8 +2420,10 @@ class _CruiseModePageState extends State<CruiseModePage>
 
   Widget _buildWaypointMapControls() {
     final media = MediaQuery.of(context);
+    // 2026-05-23 (vucko): Map-Controls weiter runter weil oben jetzt der
+    // Mode-Header (Standard/Trip) sitzt. Header braucht ~170-185px.
     final top =
-        media.padding.top + (_shouldShowRoundTripSearchStatus ? 96 : 88);
+        media.padding.top + (_shouldShowRoundTripSearchStatus ? 200 : 192);
     final selected = _selectedRoundTripWaypointIndex;
     final replacing = _replaceRoundTripWaypointIndex;
     // 2026-05-22 (vucko): Dynamisches Limit-Display
@@ -2686,6 +2688,9 @@ class _CruiseModePageState extends State<CruiseModePage>
           // Route-Info Banner oben (bleibt bis zur Bestätigung)
           if (_showRouteInfoBanner && _lastRouteResult != null)
             _buildRoutePreviewHeader(),
+          // Top-Mode-Header: Standard ↔ Trip-Modus mit Animation
+          if (_isWaypointPlanning && !_showRouteInfoBanner)
+            _buildWaypointModeHeader(),
           if (_isWaypointPlanning && !_showRouteInfoBanner)
             _buildWaypointMapControls(),
           Positioned(
@@ -2911,6 +2916,9 @@ class _CruiseModePageState extends State<CruiseModePage>
         // Route-Info Banner (bleibt bis zur Bestätigung)
         if (_showRouteInfoBanner && _lastRouteResult != null)
           _buildRoutePreviewHeader(),
+        // Top-Mode-Header auch im ausgeklappten Zustand
+        if (_isWaypointPlanning && !_showRouteInfoBanner)
+          _buildWaypointModeHeader(),
         Positioned(bottom: 0, left: 0, right: 0, child: _buildBottomActions()),
       ],
     );
@@ -3402,9 +3410,8 @@ class _CruiseModePageState extends State<CruiseModePage>
         (_fullRouteCoordinates.length >= 2 ||
             _routeLatLngs.length >= 2 ||
             _routeGeoJson != null);
-    final showTripToggle = _isWaypointPlanning && !_isRouteConfirmed;
     return Container(
-      height: showTripToggle ? 210 : 160,
+      height: 160,
       padding: const EdgeInsets.symmetric(horizontal: 24),
       decoration: const BoxDecoration(
         gradient: LinearGradient(
@@ -3418,11 +3425,6 @@ class _CruiseModePageState extends State<CruiseModePage>
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (showTripToggle)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 10),
-                child: _buildTripModeToggle(),
-              ),
             if (hasConfirmableRoute)
               Padding(
                 padding: const EdgeInsets.only(bottom: 12),
@@ -3515,136 +3517,47 @@ class _CruiseModePageState extends State<CruiseModePage>
 
   /// Trip-Mode-Toggle: zeigt aktuelles Limit (3 / 5) + Switch.
   /// Tippt der User auf "?" öffnet sich das Tutorial-Overlay erneut.
-  Widget _buildTripModeToggle() {
-    final accent = AppAccentColors.accent;
+  /// Top-Mode-Header für Wegpunkte: zwei große Segment-Cards
+  /// (Standard / Trip-Modus) mit Slide+Glow-Animation und ausklappbarer
+  /// Erklärung. Erscheint ganz oben auf der Map sobald Wegpunkt-Planung
+  /// aktiv ist. Ersetzt den alten Bottom-Switch.
+  Widget _buildWaypointModeHeader() {
+    final media = MediaQuery.of(context);
+    final top = media.padding.top + 8;
     final current = _roundTripWaypoints.length;
     final max = _currentMaxWaypoints;
-    final atLimit = current >= max;
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(18),
-      child: BackdropFilter(
-        filter: ui.ImageFilter.blur(sigmaX: 14, sigmaY: 14),
-        child: Container(
-          width: double.infinity,
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-          decoration: BoxDecoration(
-            color: const Color(0xE01A1E28),
-            borderRadius: BorderRadius.circular(18),
-            border: Border.all(
-              color: (_tripModeEnabled ? accent : Colors.white24).withValues(
-                alpha: 0.5,
-              ),
-              width: 1.2,
-            ),
-            boxShadow: _tripModeEnabled
-                ? [
-                    BoxShadow(
-                      color: accent.withValues(alpha: 0.22),
-                      blurRadius: 18,
-                    ),
-                  ]
-                : null,
+    return Positioned(
+      top: top,
+      left: 14,
+      right: 14,
+      child: SafeArea(
+        top: false,
+        bottom: false,
+        child: TweenAnimationBuilder<double>(
+          tween: Tween(begin: 0.85, end: 1.0),
+          duration: const Duration(milliseconds: 320),
+          curve: Curves.easeOutBack,
+          builder: (context, scale, child) => Transform.scale(
+            scale: scale,
+            alignment: Alignment.topCenter,
+            child: child,
           ),
-          child: Row(
-            children: [
-              Icon(
-                _tripModeEnabled ? Icons.route : Icons.flag_outlined,
-                color: _tripModeEnabled ? accent : Colors.white70,
-                size: 22,
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Row(
-                      children: [
-                        Text(
-                          _tripModeEnabled ? 'Trip-Modus' : 'Standard',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 14,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                        const SizedBox(width: 6),
-                        GestureDetector(
-                          onTap: _showWaypointTutorialOverlay,
-                          behavior: HitTestBehavior.opaque,
-                          child: Container(
-                            width: 18,
-                            height: 18,
-                            decoration: const BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: Colors.white12,
-                            ),
-                            alignment: Alignment.center,
-                            child: const Text(
-                              '?',
-                              style: TextStyle(
-                                color: Colors.white70,
-                                fontSize: 11,
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      _tripModeEnabled
-                          ? 'Bis zu 5 Stopps · Auto-Save'
-                          : 'Bis zu 3 Stopps · Schneller Rundkurs',
-                      style: TextStyle(
-                        color: atLimit
-                            ? const Color(0xFFFFB74D)
-                            : Colors.white60,
-                        fontSize: 11.5,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 8),
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 8,
-                  vertical: 3,
-                ),
-                decoration: BoxDecoration(
-                  color: atLimit
-                      ? const Color(0xFFFFB74D).withValues(alpha: 0.18)
-                      : Colors.white10,
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Text(
-                  '$current/$max',
-                  style: TextStyle(
-                    color: atLimit
-                        ? const Color(0xFFFFB74D)
-                        : Colors.white70,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 6),
-              Transform.scale(
-                scale: 0.85,
-                child: Switch.adaptive(
-                  value: _tripModeEnabled,
-                  activeThumbColor: accent,
-                  onChanged: (v) {
-                    setState(() => _tripModeEnabled = v);
-                    if (v && !_waypointTutorialShown) {
-                      _waypointTutorialShown = true;
-                    }
-                  },
-                ),
-              ),
-            ],
+          child: _WaypointModeHeader(
+            tripEnabled: _tripModeEnabled,
+            current: current,
+            max: max,
+            onSelect: (enabled) {
+              if (_tripModeEnabled == enabled) {
+                _showWaypointTutorialOverlay();
+                return;
+              }
+              HapticFeedback.mediumImpact();
+              setState(() {
+                _tripModeEnabled = enabled;
+                _waypointTutorialShown = true;
+              });
+            },
+            onHelpTap: _showWaypointTutorialOverlay,
           ),
         ),
       ),
@@ -8444,4 +8357,310 @@ class _NavigationArrowPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+/// Wegpunkt-Mode-Header: zwei Segment-Cards (Standard / Trip-Modus)
+/// mit AnimatedContainer-Glow auf der aktiven Seite, ausklappbarer
+/// Erklärung darunter, und Live-Stop-Counter rechts.
+class _WaypointModeHeader extends StatelessWidget {
+  const _WaypointModeHeader({
+    required this.tripEnabled,
+    required this.current,
+    required this.max,
+    required this.onSelect,
+    required this.onHelpTap,
+  });
+
+  final bool tripEnabled;
+  final int current;
+  final int max;
+  final ValueChanged<bool> onSelect;
+  final VoidCallback onHelpTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final accent = AppAccentColors.accent;
+    final atLimit = current >= max;
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(22),
+      child: BackdropFilter(
+        filter: ui.ImageFilter.blur(sigmaX: 22, sigmaY: 22),
+        child: Container(
+          decoration: BoxDecoration(
+            color: const Color(0xE6101319),
+            borderRadius: BorderRadius.circular(22),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.35),
+                blurRadius: 24,
+                offset: const Offset(0, 8),
+              ),
+              BoxShadow(
+                color: accent.withValues(alpha: tripEnabled ? 0.22 : 0.10),
+                blurRadius: 22,
+              ),
+            ],
+          ),
+          padding: const EdgeInsets.fromLTRB(10, 10, 10, 10),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: _ModeCard(
+                      selected: !tripEnabled,
+                      icon: CupertinoIcons.flag,
+                      title: 'Standard',
+                      subtitle: 'Bis 3 Stopps',
+                      accent: accent,
+                      onTap: () => onSelect(false),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: _ModeCard(
+                      selected: tripEnabled,
+                      icon: CupertinoIcons.map_pin_ellipse,
+                      title: 'Trip-Modus',
+                      subtitle: 'Bis 5 Stopps',
+                      accent: accent,
+                      onTap: () => onSelect(true),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Column(
+                    children: [
+                      AnimatedContainer(
+                        duration: const Duration(milliseconds: 220),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 6,
+                        ),
+                        decoration: BoxDecoration(
+                          color: atLimit
+                              ? const Color(0xFFFFB74D).withValues(alpha: 0.22)
+                              : Colors.white.withValues(alpha: 0.10),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Text(
+                          '$current/$max',
+                          style: TextStyle(
+                            color: atLimit
+                                ? const Color(0xFFFFB74D)
+                                : Colors.white,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w900,
+                            letterSpacing: -0.2,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      GestureDetector(
+                        onTap: onHelpTap,
+                        behavior: HitTestBehavior.opaque,
+                        child: Container(
+                          width: 22,
+                          height: 22,
+                          decoration: const BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: Color(0x22FFFFFF),
+                          ),
+                          alignment: Alignment.center,
+                          child: const Text(
+                            '?',
+                            style: TextStyle(
+                              color: Colors.white70,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+              AnimatedSize(
+                duration: const Duration(milliseconds: 260),
+                curve: Curves.easeOutCubic,
+                child: AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 220),
+                  switchInCurve: Curves.easeOutCubic,
+                  switchOutCurve: Curves.easeInCubic,
+                  transitionBuilder: (child, anim) => FadeTransition(
+                    opacity: anim,
+                    child: SlideTransition(
+                      position: Tween<Offset>(
+                        begin: const Offset(0, 0.15),
+                        end: Offset.zero,
+                      ).animate(anim),
+                      child: child,
+                    ),
+                  ),
+                  child: Padding(
+                    key: ValueKey<bool>(tripEnabled),
+                    padding: const EdgeInsets.only(top: 10),
+                    child: Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 10,
+                      ),
+                      decoration: BoxDecoration(
+                        color: accent.withValues(
+                          alpha: tripEnabled ? 0.16 : 0.10,
+                        ),
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(
+                          color: accent.withValues(
+                            alpha: tripEnabled ? 0.42 : 0.20,
+                          ),
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            tripEnabled
+                                ? CupertinoIcons.compass_fill
+                                : CupertinoIcons.bolt_fill,
+                            color: accent,
+                            size: 16,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              tripEnabled
+                                  ? 'Plane bis zu 5 Stopps quer durchs Land — Stopps können beliebig weit auseinander liegen.'
+                                  : 'Schnelle Tour mit max. 3 Stopps. Tippe Trip-Modus für mehr Stopps + weite Strecken.',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 12,
+                                height: 1.3,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ModeCard extends StatelessWidget {
+  const _ModeCard({
+    required this.selected,
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.accent,
+    required this.onTap,
+  });
+
+  final bool selected;
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final Color accent;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 260),
+        curve: Curves.easeOutCubic,
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+        decoration: BoxDecoration(
+          gradient: selected
+              ? LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [
+                    accent.withValues(alpha: 0.38),
+                    accent.withValues(alpha: 0.18),
+                  ],
+                )
+              : null,
+          color: selected ? null : Colors.white.withValues(alpha: 0.05),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: selected
+                ? accent.withValues(alpha: 0.85)
+                : Colors.white.withValues(alpha: 0.08),
+            width: selected ? 1.5 : 1,
+          ),
+          boxShadow: selected
+              ? [
+                  BoxShadow(
+                    color: accent.withValues(alpha: 0.32),
+                    blurRadius: 14,
+                  ),
+                ]
+              : null,
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            AnimatedContainer(
+              duration: const Duration(milliseconds: 220),
+              width: 30,
+              height: 30,
+              decoration: BoxDecoration(
+                color: selected
+                    ? Colors.white.withValues(alpha: 0.18)
+                    : Colors.white.withValues(alpha: 0.06),
+                shape: BoxShape.circle,
+              ),
+              alignment: Alignment.center,
+              child: Icon(
+                icon,
+                size: 16,
+                color: selected ? Colors.white : Colors.white60,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Flexible(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    title,
+                    style: TextStyle(
+                      color: selected ? Colors.white : Colors.white70,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: -0.2,
+                    ),
+                  ),
+                  Text(
+                    subtitle,
+                    style: TextStyle(
+                      color: selected
+                          ? Colors.white.withValues(alpha: 0.85)
+                          : Colors.white38,
+                      fontSize: 10.5,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
