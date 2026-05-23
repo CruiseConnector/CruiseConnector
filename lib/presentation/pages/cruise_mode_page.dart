@@ -2692,16 +2692,18 @@ class _CruiseModePageState extends State<CruiseModePage>
   Widget _buildConfigOverlay() {
     // Eingeklappter Zustand: nur Buttons am unteren Rand + Expand-Handle + Info-Banner
     if (_configCollapsed) {
+      // 2026-05-23 (vucko Task #23): Wenn Error-Banner ("Stopps prüfen")
+      // sichtbar ist, Mode-Header + Style-Dock ausblenden → Screen wird
+      // aufgeräumt, User-Fokus bleibt auf Banner + Karte.
+      final hasErrorBanner = _routeSearchNoticeTitle != null;
+      final showWaypointChrome =
+          _isWaypointPlanning && !_showRouteInfoBanner && !hasErrorBanner;
       return Stack(
         children: [
-          // Route-Info Banner oben (bleibt bis zur Bestätigung)
           if (_showRouteInfoBanner && _lastRouteResult != null)
             _buildRoutePreviewHeader(),
-          // Top-Mode-Header: Standard ↔ Trip-Modus mit Animation
-          if (_isWaypointPlanning && !_showRouteInfoBanner)
-            _buildWaypointModeHeader(),
-          if (_isWaypointPlanning && !_showRouteInfoBanner)
-            _buildWaypointMapControls(),
+          if (showWaypointChrome) _buildWaypointModeHeader(),
+          if (showWaypointChrome) _buildWaypointMapControls(),
           Positioned(
             bottom: 0,
             left: 0,
@@ -2709,8 +2711,7 @@ class _CruiseModePageState extends State<CruiseModePage>
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                if (_isWaypointPlanning && !_showRouteInfoBanner)
-                  _buildWaypointStyleDock(),
+                if (showWaypointChrome) _buildWaypointStyleDock(),
                 // Handle zum Hochziehen
                 GestureDetector(
                   onTap: () => setState(() => _configCollapsed = false),
@@ -2925,8 +2926,11 @@ class _CruiseModePageState extends State<CruiseModePage>
         // Route-Info Banner (bleibt bis zur Bestätigung)
         if (_showRouteInfoBanner && _lastRouteResult != null)
           _buildRoutePreviewHeader(),
-        // Top-Mode-Header auch im ausgeklappten Zustand
-        if (_isWaypointPlanning && !_showRouteInfoBanner)
+        // Top-Mode-Header auch im ausgeklappten Zustand — aber nicht
+        // wenn Error-Banner aktiv (sonst Doppel-Header oben)
+        if (_isWaypointPlanning &&
+            !_showRouteInfoBanner &&
+            _routeSearchNoticeTitle == null)
           _buildWaypointModeHeader(),
         Positioned(bottom: 0, left: 0, right: 0, child: _buildBottomActions()),
       ],
@@ -2957,6 +2961,9 @@ class _CruiseModePageState extends State<CruiseModePage>
                 child: WeatherChip(
                   latitude: start[1],
                   longitude: start[0],
+                  // 2026-05-23 (vucko Task #24): Trend basierend auf Dauer
+                  durationMinutes:
+                      ((_lastRouteResult?.durationSeconds ?? 0) / 60).round(),
                 ),
               ),
             ),
@@ -4424,6 +4431,40 @@ class _CruiseModePageState extends State<CruiseModePage>
           diversitySeed: p2pDiversitySeed,
           forceFreshVariant: forceFreshVariant,
           subscriptionTier: subscriptionTier,
+        );
+      } else if (_isWaypointPlanning &&
+          _tripModeEnabled &&
+          waypointSnapshot.length >= 2) {
+        // 2026-05-23 (vucko Task #22): Trip-Modus = A→B mit Multi-Stopps.
+        // Letzter WP = Endziel, alle dazwischen = intermediates.
+        // Kein close_loop, kein Rundkurs zurück zum Start.
+        final lastWp = waypointSnapshot.last;
+        final intermediates = waypointSnapshot
+            .sublist(0, waypointSnapshot.length - 1)
+            .map((p) => <String, double>{
+                  'latitude': p.latitude,
+                  'longitude': p.longitude,
+                })
+            .toList(growable: false);
+        _activeDestinationCoordinate = [lastWp.longitude, lastWp.latitude];
+        _activeDetourVariant = 0;
+        _activePointToPointScenic = true;
+        _activePointToPointMode = _selectedStyle;
+        _activeAvoidHighways = _avoidHighways;
+        final subscriptionTier = RouteService.resolveEffectiveSubscriptionTier(
+          isTesterOrBeta: true,
+        );
+        result = await _routeService.generatePointToPoint(
+          startPosition: startPosition,
+          destinationLat: lastWp.latitude,
+          destinationLng: lastWp.longitude,
+          mode: _selectedStyle,
+          scenic: true,
+          routeVariant: 0,
+          avoidHighways: _avoidHighways,
+          forceFreshVariant: forceFreshVariant,
+          subscriptionTier: subscriptionTier,
+          intermediateWaypoints: intermediates,
         );
       } else {
         _activeDestinationCoordinate = null;

@@ -6,16 +6,21 @@ import 'package:cruise_connect/data/services/weather_service.dart';
 /// Kleines Wetter-Chip-Widget für den Route-Preview.
 /// Lädt Wetter im FutureBuilder, animiert sanft beim Laden ein.
 /// Bei Fail zeigt es einfach nichts (silent fail).
+///
+/// 2026-05-23 (vucko Task #24): durationMinutes optional — wenn gesetzt,
+/// wird ein zweiter Forecast für die Ankunftszeit gezeigt (Trend-Pfeil).
 class WeatherChip extends StatelessWidget {
   const WeatherChip({
     super.key,
     required this.latitude,
     required this.longitude,
+    this.durationMinutes,
     this.onTap,
   });
 
   final double latitude;
   final double longitude;
+  final int? durationMinutes;
   final VoidCallback? onTap;
 
   @override
@@ -42,6 +47,7 @@ class WeatherChip extends StatelessWidget {
           ),
           child: _WeatherCompact(
             snapshot: snapshot.data!,
+            durationMinutes: durationMinutes,
             onTap: onTap,
           ),
         );
@@ -51,10 +57,44 @@ class WeatherChip extends StatelessWidget {
 }
 
 class _WeatherCompact extends StatelessWidget {
-  const _WeatherCompact({required this.snapshot, this.onTap});
+  const _WeatherCompact({
+    required this.snapshot,
+    this.durationMinutes,
+    this.onTap,
+  });
 
   final WeatherSnapshot snapshot;
+  final int? durationMinutes;
   final VoidCallback? onTap;
+
+  /// Liefert (arrivalForecast, trendMessage) wenn durationMinutes gesetzt
+  /// und sich Wetter signifikant ändert. Sonst (null, null).
+  (HourlyForecast?, String?) _arrivalTrend() {
+    if (durationMinutes == null || durationMinutes! < 45) {
+      return (null, null);
+    }
+    final arrivalHourIdx = (durationMinutes! / 60).round().clamp(1, 5);
+    if (arrivalHourIdx >= snapshot.next6Hours.length) return (null, null);
+    final arrival = snapshot.next6Hours[arrivalHourIdx];
+    final startCode = snapshot.weatherCode;
+    final endCode = arrival.weatherCode;
+    const startProb = 0;
+    final endProb = arrival.precipitationProbability;
+    // Trend nur zeigen wenn sich was Bedeutendes ändert
+    if (startCode <= 2 && endCode >= 51) {
+      return (arrival, 'wird regnerisch');
+    }
+    if (startCode >= 51 && endCode <= 2) {
+      return (arrival, 'klart auf');
+    }
+    if (endProb >= 50 && startProb < 30) {
+      return (arrival, 'Regenrisiko');
+    }
+    if (endCode != startCode && (endCode >= 95 || startCode >= 95)) {
+      return (arrival, 'Gewitter zieht auf');
+    }
+    return (null, null);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -166,14 +206,30 @@ class _WeatherCompact extends StatelessWidget {
                       ],
                     ),
                     const SizedBox(height: 1),
-                    Text(
-                      label,
-                      style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.75),
-                        fontSize: 11.5,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
+                    Builder(builder: (context) {
+                      final (arrival, trendMsg) = _arrivalTrend();
+                      if (arrival != null && trendMsg != null) {
+                        final (_, arrLabel, _) =
+                            WeatherCodeIcon.describe(arrival.weatherCode);
+                        return Text(
+                          '$label → $arrLabel · $trendMsg',
+                          style: TextStyle(
+                            color: Colors.white.withValues(alpha: 0.85),
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w700,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        );
+                      }
+                      return Text(
+                        label,
+                        style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.75),
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      );
+                    }),
                   ],
                 ),
                 // Regen-Warnung wenn relevant

@@ -1404,6 +1404,10 @@ class RouteService {
     double? currentHeadingDegrees,
     double? currentSpeedMetersPerSecond,
     double? locationAccuracyMeters,
+    // 2026-05-23 (vucko Task #22): Trip-Modus = A→B mit
+    // Zwischenstopps. Wenn gesetzt, werden diese als
+    // intermediate waypoints an Edge übergeben.
+    List<Map<String, double>>? intermediateWaypoints,
   }) async {
     final startToDestinationMeters = geo.Geolocator.distanceBetween(
       startPosition.latitude,
@@ -1614,6 +1618,7 @@ class RouteService {
             currentHeadingDegrees: currentHeadingDegrees,
             currentSpeedMetersPerSecond: currentSpeedMetersPerSecond,
             locationAccuracyMeters: locationAccuracyMeters,
+            intermediateWaypoints: intermediateWaypoints,
           );
           if (candidate.accepted && !candidate.novelEnough) {
             lastRouteDuplicateSkipped = true;
@@ -2530,6 +2535,8 @@ class RouteService {
     double? currentHeadingDegrees,
     double? currentSpeedMetersPerSecond,
     double? locationAccuracyMeters,
+    // 2026-05-23 (vucko Task #22): Trip-Modus = A→B mit Stopps
+    List<Map<String, double>>? intermediateWaypoints,
   }) {
     return <String, dynamic>{
       'startLocation': {
@@ -2584,6 +2591,11 @@ class RouteService {
       // Edge Function nutzt dies als baseSide-Override für Diversifizierung.
       if ((offsetSide ?? variant.offsetSide) != null)
         'offset_side': offsetSide ?? variant.offsetSide,
+      // 2026-05-23 (vucko Task #22): Trip-Modus Stopps
+      if (intermediateWaypoints != null && intermediateWaypoints.isNotEmpty)
+        'waypoints': intermediateWaypoints
+            .map((wp) => {'latitude': wp['latitude'], 'longitude': wp['longitude']})
+            .toList(),
     };
   }
 
@@ -4100,6 +4112,8 @@ class RouteService {
     double? currentHeadingDegrees,
     double? currentSpeedMetersPerSecond,
     double? locationAccuracyMeters,
+    // 2026-05-23 (vucko Task #22): Trip-Modus
+    List<Map<String, double>>? intermediateWaypoints,
   }) async {
     final jitteredTargetKm = styleConfig.clampPointToPointTargetKm(
       targetDistanceKm * variant.radiusJitter,
@@ -4133,6 +4147,7 @@ class RouteService {
       currentHeadingDegrees: currentHeadingDegrees,
       currentSpeedMetersPerSecond: currentSpeedMetersPerSecond,
       locationAccuracyMeters: locationAccuracyMeters,
+      intermediateWaypoints: intermediateWaypoints,
     );
     final result = await _invoke(body);
     final snapped = _snapRouteToStartPosition(result, startPosition);
@@ -4528,6 +4543,11 @@ class RouteService {
         _longSportRoundTripShapeRenderable(quality: quality);
     // 2026-05-23 (vucko Bug-Fix A→B): Für isPointToPoint nur die
     // Minimal-Checks. Round-Trip hat weiter alle Shape-Gates.
+    // 2026-05-23 (vucko Task #25): Round-Trip Loop-Cleanup — verworrene
+    // Anfangs-Knoten ablehnen. Wenn repeatedStartArea >25% oder
+    // spurArmCount >2 → ekliger Knoten am Start, lieber ablehnen.
+    final hasTangledStartCluster = scenario.isRoundTrip &&
+        (quality.repeatedStartAreaPercent > 25.0 || quality.spurArmCount > 2);
     final softRenderable = scenario.isPointToPoint
         ? (hasEnoughPoints && qualityAcceptable && !borderIntrusionRejected)
         : (hasEnoughPoints &&
@@ -4535,7 +4555,8 @@ class RouteService {
               poolShapeQualityOk &&
               longSportRoundTripShapeOk &&
               !deadEndSpikeDetected &&
-              !borderIntrusionRejected);
+              !borderIntrusionRejected &&
+              !hasTangledStartCluster);
     final styleSoftOk =
         styleOk ||
         (scenario.isRoundTrip &&
