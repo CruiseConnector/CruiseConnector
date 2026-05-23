@@ -8187,6 +8187,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     unawaited(
       _recordRouteCompletionCandidate(completed: true, discarded: false),
     );
+    final drivenSnap = _drivenTrackRecorder.snapshot();
     showCruiseCompletionSheet(
       context: context,
       child: CruiseCompletionDialog(
@@ -8199,6 +8200,9 @@ class _CruiseModePageState extends State<CruiseModePage>
         xpMultiplier: snapshot.xpBreakdown.multiplier,
         routeCoordinates: snapshot.coordinates,
         routeSegments: snapshot.segments,
+        drivenSegments: drivenSnap.segments.isEmpty
+            ? null
+            : drivenSnap.segments,
         onSave: (rating, tags) async {
           final result = await _saveRouteAndSyncXp(
             rating: rating,
@@ -8244,6 +8248,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       belowMinimum: _completionProgressBelowXpMinimum(completed: false),
     );
 
+    final drivenSnap = _drivenTrackRecorder.snapshot();
     showCruiseCompletionSheet(
       context: context,
       child: CruiseCompletionDialog(
@@ -8256,6 +8261,9 @@ class _CruiseModePageState extends State<CruiseModePage>
         xpMultiplier: snapshot.xpBreakdown.multiplier,
         routeCoordinates: snapshot.coordinates,
         routeSegments: snapshot.segments,
+        drivenSegments: drivenSnap.segments.isEmpty
+            ? null
+            : drivenSnap.segments,
         isEarlyStop: snapshot.isEarlyStop,
         belowMinimum: snapshot.belowMinimum,
         onSave: (rating, tags) async {

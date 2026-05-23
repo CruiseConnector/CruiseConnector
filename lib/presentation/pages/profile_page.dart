@@ -25,6 +25,7 @@ import 'package:cruise_connect/presentation/pages/liked_posts_page.dart';
 import 'package:cruise_connect/presentation/pages/post_detail_page.dart';
 import 'package:cruise_connect/presentation/pages/saved_route_bookmarks_page.dart';
 import 'package:cruise_connect/presentation/pages/user_profile_page.dart';
+import 'package:cruise_connect/presentation/widgets/cruiser_dna_card.dart';
 import 'package:cruise_connect/presentation/widgets/mentions.dart';
 import 'package:cruise_connect/presentation/widgets/accent_color_picker.dart';
 import 'package:cruise_connect/presentation/widgets/social/route_attachment_card.dart';
@@ -683,6 +684,14 @@ class _ProfilePageState extends State<ProfilePage>
                     ),
                   ],
                 ),
+              ),
+            ),
+
+            // 2026-05-24 (vucko Task #40): Kurven-DNA Profil-Card.
+            const SliverToBoxAdapter(
+              child: Padding(
+                padding: EdgeInsets.fromLTRB(20, 4, 20, 16),
+                child: CruiserDnaCard(),
               ),
             ),
 

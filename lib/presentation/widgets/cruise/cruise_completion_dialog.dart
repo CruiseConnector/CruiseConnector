@@ -84,6 +84,7 @@ class CruiseCompletionDialog extends StatefulWidget {
     required this.onSave,
     required this.onDiscard,
     this.routeSegments,
+    this.drivenSegments,
     this.baseXp,
     this.streakDays = 1,
     this.xpMultiplier = 1.0,
@@ -97,6 +98,10 @@ class CruiseCompletionDialog extends StatefulWidget {
   final int xpEarned;
   final List<List<double>> routeCoordinates;
   final List<List<List<double>>>? routeSegments;
+  /// 2026-05-24 (vucko Task #41): GPS-Track der ECHT gefahren wurde.
+  /// Wenn vorhanden, wird er als accent-Overlay über die geplante Route
+  /// (grau) gezeichnet → "Das bin ich wirklich gefahren".
+  final List<List<List<double>>>? drivenSegments;
   final int? baseXp;
   final int streakDays;
   final double xpMultiplier;
@@ -313,6 +318,7 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
         _RoutePreviewCard(
           coordinates: widget.routeCoordinates,
           segments: widget.routeSegments,
+          drivenSegments: widget.drivenSegments,
           exportMode: true,
         ),
       ],
@@ -340,8 +346,24 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
                 _RoutePreviewCard(
                   coordinates: widget.routeCoordinates,
                   segments: widget.routeSegments,
+                  drivenSegments: widget.drivenSegments,
                   exportMode: false,
                 ),
+                if (widget.drivenSegments != null &&
+                    widget.drivenSegments!.any((s) => s.length >= 2)) ...[
+                  const SizedBox(height: 8),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const _LegendDot(
+                          color: Color(0xAAFFFFFF), label: 'Geplant'),
+                      const SizedBox(width: 14),
+                      _LegendDot(
+                          color: AppAccentColors.accent,
+                          label: 'Wirklich gefahren'),
+                    ],
+                  ),
+                ],
                 const SizedBox(height: 10),
                 _buildRatingPanel(),
                 if (widget.belowMinimum) ...[
@@ -1013,10 +1035,12 @@ class _RoutePreviewCard extends StatelessWidget {
     required this.coordinates,
     required this.exportMode,
     this.segments,
+    this.drivenSegments,
   });
 
   final List<List<double>> coordinates;
   final List<List<List<double>>>? segments;
+  final List<List<List<double>>>? drivenSegments;
   final bool exportMode;
 
   @override
@@ -1039,6 +1063,7 @@ class _RoutePreviewCard extends StatelessWidget {
                 painter: _RoutePreviewPainter(
                   coordinates: coordinates,
                   segments: segments,
+                  drivenSegments: drivenSegments,
                 ),
               ),
             ),
@@ -1069,10 +1094,16 @@ class _RoutePreviewCard extends StatelessWidget {
 }
 
 class _RoutePreviewPainter extends CustomPainter {
-  _RoutePreviewPainter({required this.coordinates, this.segments});
+  _RoutePreviewPainter({
+    required this.coordinates,
+    this.segments,
+    this.drivenSegments,
+  });
 
   final List<List<double>> coordinates;
   final List<List<List<double>>>? segments;
+  /// 2026-05-24 (vucko Task #41): Echter GPS-Track (überlagert geplant).
+  final List<List<List<double>>>? drivenSegments;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -1114,16 +1145,27 @@ class _RoutePreviewPainter extends CustomPainter {
       );
     }
 
+    // 2026-05-24 (vucko Task #41): Zwei-Layer-Rendering wenn DrivenTrack
+    // verfügbar. Geplante Route in dezentem Grau, echter Track in accent.
+    final hasDrivenTrack = drivenSegments != null &&
+        drivenSegments!.any((s) => s.length >= 2);
+
+    final plannedColor =
+        hasDrivenTrack ? const Color(0x66FFFFFF) : AppAccentColors.accent;
+    final plannedGlowAlpha = hasDrivenTrack ? 0.12 : 0.40;
+
     final glowPaint = Paint()
-      ..color = AppAccentColors.accent.withValues(alpha: 0.40)
+      ..color = plannedColor.withValues(alpha: plannedGlowAlpha)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 12
       ..strokeCap = StrokeCap.round
       ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 12);
     final routePaint = Paint()
-      ..color = Color.lerp(AppAccentColors.accent, Colors.white, 0.10)!
+      ..color = hasDrivenTrack
+          ? const Color(0xAAFFFFFF)
+          : Color.lerp(AppAccentColors.accent, Colors.white, 0.10)!
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 4
+      ..strokeWidth = hasDrivenTrack ? 3 : 4
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round;
 
@@ -1141,6 +1183,36 @@ class _RoutePreviewPainter extends CustomPainter {
       canvas.drawPath(routePath, routePaint);
     }
 
+    // Echter gefahrener Track als accent-Overlay
+    if (hasDrivenTrack) {
+      final drivenGlow = Paint()
+        ..color = AppAccentColors.accent.withValues(alpha: 0.50)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 13
+        ..strokeCap = StrokeCap.round
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 11);
+      final drivenLine = Paint()
+        ..color = AppAccentColors.accent
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 5
+        ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round;
+      for (final segment in drivenSegments!) {
+        if (segment.length < 2) continue;
+        final p = Path();
+        for (var i = 0; i < segment.length; i++) {
+          final pt = project(segment[i]);
+          if (i == 0) {
+            p.moveTo(pt.dx, pt.dy);
+          } else {
+            p.lineTo(pt.dx, pt.dy);
+          }
+        }
+        canvas.drawPath(p, drivenGlow);
+        canvas.drawPath(p, drivenLine);
+      }
+    }
+
     final start = project(drawableSegments.first.first);
     final end = project(drawableSegments.last.last);
     canvas.drawCircle(start, 5, Paint()..color = const Color(0xFFFFFFFF));
@@ -1150,7 +1222,8 @@ class _RoutePreviewPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant _RoutePreviewPainter oldDelegate) {
     return oldDelegate.coordinates != coordinates ||
-        oldDelegate.segments != segments;
+        oldDelegate.segments != segments ||
+        oldDelegate.drivenSegments != drivenSegments;
   }
 
   List<List<List<double>>> _effectiveSegments() {
@@ -1171,5 +1244,36 @@ class _RoutePreviewPainter extends CustomPainter {
           .map((point) => [point[0], point[1]])
           .toList(growable: false),
     ];
+  }
+}
+
+class _LegendDot extends StatelessWidget {
+  const _LegendDot({required this.color, required this.label});
+  final Color color;
+  final String label;
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 10,
+          height: 4,
+          decoration: BoxDecoration(
+            color: color,
+            borderRadius: BorderRadius.circular(2),
+          ),
+        ),
+        const SizedBox(width: 5),
+        Text(
+          label,
+          style: const TextStyle(
+            color: Color(0xCCFFFFFF),
+            fontSize: 10.5,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ],
+    );
   }
 }

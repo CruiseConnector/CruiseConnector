@@ -474,6 +474,14 @@ class _HomeContentPageState extends State<HomeContentPage>
             ),
             const SizedBox(height: 10),
 
+            // 2026-05-24 (vucko Task #42): Hero-Streak-Banner (nur sichtbar
+            // wenn 2+ Tage). Prominent, animiert, sofort sichtbar im
+            // Above-the-fold-Bereich für Daily-Retention.
+            if (_streakDays >= 2) ...[
+              _buildHeroStreakBanner(),
+              const SizedBox(height: 14),
+            ],
+
             // Fortschritt Section
             GestureDetector(
               behavior: HitTestBehavior.opaque,
@@ -1353,6 +1361,107 @@ class _HomeContentPageState extends State<HomeContentPage>
                 ),
               );
             },
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ── Hero-Streak-Banner (prominent, above-the-fold) ──────────────────────
+
+  Widget _buildHeroStreakBanner() {
+    final accent = AppAccentColors.accent;
+    final mul = GamificationService.streakMultiplierForDays(_streakDays);
+    final mulNext = GamificationService.streakMultiplierForDays(_streakDays + 1);
+    final extra = ((mulNext - mul) * 100).round();
+    return TweenAnimationBuilder<double>(
+      tween: Tween(begin: 0.94, end: 1.0),
+      duration: const Duration(milliseconds: 420),
+      curve: Curves.easeOutBack,
+      builder: (context, scale, child) =>
+          Transform.scale(scale: scale, child: child),
+      child: GestureDetector(
+        onTap: () => widget.onTabChange?.call(3),
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [
+                const Color(0xFFFF6B35).withValues(alpha: 0.85),
+                accent.withValues(alpha: 0.78),
+              ],
+            ),
+            borderRadius: BorderRadius.circular(22),
+            boxShadow: [
+              BoxShadow(
+                color: const Color(0xFFFF6B35).withValues(alpha: 0.35),
+                blurRadius: 22,
+                offset: const Offset(0, 8),
+              ),
+            ],
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 52,
+                height: 52,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.18),
+                  shape: BoxShape.circle,
+                  border:
+                      Border.all(color: Colors.white.withValues(alpha: 0.30)),
+                ),
+                child: const Text('🔥', style: TextStyle(fontSize: 26)),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '$_streakDays Tage Streak',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 17,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: -0.2,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      'Heute fahren: ${mulNext.toStringAsFixed(2)}× XP'
+                      '${extra > 0 ? " (+$extra%)" : ""}',
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.92),
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.22),
+                  borderRadius: BorderRadius.circular(14),
+                  border:
+                      Border.all(color: Colors.white.withValues(alpha: 0.40)),
+                ),
+                child: Text(
+                  '${mul.toStringAsFixed(2)}×',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
       ),
