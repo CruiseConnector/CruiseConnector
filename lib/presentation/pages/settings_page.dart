@@ -1,4 +1,5 @@
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
+import 'package:cruise_connect/data/services/voice_settings_service.dart';
 import 'package:cruise_connect/application/providers/community_provider.dart';
 import 'package:cruise_connect/presentation/widgets/accent_color_picker.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/routing_onboarding_sheet.dart';
@@ -206,6 +207,16 @@ class _SettingsPageState extends State<SettingsPage> {
                     'Metrische Einheiten (km)',
                     _metricUnits,
                     (val) => setState(() => _metricUnits = val),
+                  ),
+                  const Divider(color: Colors.white10, height: 1),
+                  AnimatedBuilder(
+                    animation: VoiceSettingsService.instance,
+                    builder: (context, _) => _buildSwitchTile(
+                      'Sprach-Navigation (Ansagen)',
+                      VoiceSettingsService.instance.isEnabled,
+                      (val) =>
+                          VoiceSettingsService.instance.setEnabled(val),
+                    ),
                   ),
                   const Divider(color: Colors.white10, height: 1),
                   _buildNavTile(

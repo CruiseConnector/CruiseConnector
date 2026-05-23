@@ -18,6 +18,7 @@ import 'package:cruise_connect/application/providers/saved_routes_provider.dart'
 import 'package:cruise_connect/core/constants.dart';
 import 'package:cruise_connect/core/deep_links.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
+import 'package:cruise_connect/data/services/voice_settings_service.dart';
 import 'package:cruise_connect/presentation/pages/auth_page.dart';
 import 'package:cruise_connect/presentation/pages/post_detail_page.dart';
 
@@ -35,6 +36,8 @@ void main() {
         url: AppConstants.supabaseUrl,
         anonKey: AppConstants.supabaseAnonKey,
       );
+      // Voice-Setting beim Start laden (persistiert via SharedPrefs).
+      unawaited(VoiceSettingsService.instance.load());
 
       runApp(const MyApp());
     },

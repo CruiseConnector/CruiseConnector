@@ -23,7 +23,9 @@ import 'package:cruise_connect/application/providers/saved_routes_provider.dart'
 import 'package:cruise_connect/data/services/web_position_smoother.dart';
 import 'package:cruise_connect/data/services/native_position_smoother.dart';
 import 'package:cruise_connect/data/services/geocoding_service.dart';
+import 'package:cruise_connect/data/services/voice_settings_service.dart';
 import 'package:cruise_connect/presentation/widgets/weather_chip.dart';
+import 'package:cruise_connect/presentation/widgets/top_toast.dart';
 import 'package:cruise_connect/data/services/driven_track_recorder.dart';
 import 'package:cruise_connect/data/services/navigation_guidance_utils.dart';
 import 'package:cruise_connect/data/services/navigation_progress_socket_service.dart';
@@ -2427,10 +2429,10 @@ class _CruiseModePageState extends State<CruiseModePage>
 
   Widget _buildWaypointMapControls() {
     final media = MediaQuery.of(context);
-    // 2026-05-23 (vucko): Map-Controls weiter runter weil oben jetzt der
-    // Mode-Header (Standard/Trip) sitzt. Header braucht ~170-185px.
+    // 2026-05-23 (vucko UX-refactor): Mode-Header schlank (~44px),
+    // also Map-Controls direkt darunter (~70px Abstand).
     final top =
-        media.padding.top + (_shouldShowRoundTripSearchStatus ? 200 : 192);
+        media.padding.top + (_shouldShowRoundTripSearchStatus ? 78 : 70);
     final selected = _selectedRoundTripWaypointIndex;
     final replacing = _replaceRoundTripWaypointIndex;
     // 2026-05-22 (vucko): Dynamisches Limit-Display
@@ -3170,6 +3172,48 @@ class _CruiseModePageState extends State<CruiseModePage>
                   child: const Icon(Icons.map_outlined, size: 20),
                 ),
               ),
+              // Voice-Toggle (Sprach-Navigation an/aus) — sichtbar während
+              // Cruise. Persistiert via VoiceSettingsService.
+              Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: AnimatedBuilder(
+                  animation: VoiceSettingsService.instance,
+                  builder: (context, _) {
+                    final enabled = VoiceSettingsService.instance.isEnabled;
+                    return FloatingActionButton.small(
+                      heroTag: 'voice_toggle_fab',
+                      backgroundColor: enabled
+                          ? AppAccentColors.accent
+                          : const Color(0xFF2D3138),
+                      foregroundColor: Colors.white,
+                      tooltip: enabled
+                          ? 'Sprach-Navigation aus'
+                          : 'Sprach-Navigation an',
+                      onPressed: () {
+                        VoiceSettingsService.instance.toggle();
+                        HapticFeedback.selectionClick();
+                        final nowEnabled =
+                            VoiceSettingsService.instance.isEnabled;
+                        TopToast.show(
+                          context,
+                          message: nowEnabled
+                              ? 'Sprach-Navigation an'
+                              : 'Sprach-Navigation aus',
+                          icon: nowEnabled
+                              ? Icons.volume_up_rounded
+                              : Icons.volume_off_rounded,
+                        );
+                      },
+                      child: Icon(
+                        enabled
+                            ? Icons.volume_up_rounded
+                            : Icons.volume_off_rounded,
+                        size: 20,
+                      ),
+                    );
+                  },
+                ),
+              ),
               // Zentrierungs-Button
               FloatingActionButton(
                 heroTag: 'recenter_map_fab',
@@ -3558,36 +3602,51 @@ class _CruiseModePageState extends State<CruiseModePage>
     final max = _currentMaxWaypoints;
     return Positioned(
       top: top,
-      left: 14,
-      right: 14,
+      // 2026-05-23 (vucko UX-refactor): Schlanke zentrierte Pill statt
+      // breiter Block. Spart vertical Real-Estate massiv.
+      left: 0,
+      right: 0,
       child: SafeArea(
         top: false,
         bottom: false,
-        child: TweenAnimationBuilder<double>(
-          tween: Tween(begin: 0.85, end: 1.0),
-          duration: const Duration(milliseconds: 320),
-          curve: Curves.easeOutBack,
-          builder: (context, scale, child) => Transform.scale(
-            scale: scale,
-            alignment: Alignment.topCenter,
-            child: child,
-          ),
-          child: _WaypointModeHeader(
-            tripEnabled: _tripModeEnabled,
-            current: current,
-            max: max,
-            onSelect: (enabled) {
-              if (_tripModeEnabled == enabled) {
-                _showWaypointTutorialOverlay();
-                return;
-              }
-              HapticFeedback.mediumImpact();
-              setState(() {
-                _tripModeEnabled = enabled;
-                _waypointTutorialShown = true;
-              });
-            },
-            onHelpTap: _showWaypointTutorialOverlay,
+        child: Center(
+          child: TweenAnimationBuilder<double>(
+            tween: Tween(begin: 0.92, end: 1.0),
+            duration: const Duration(milliseconds: 380),
+            curve: Curves.easeOutBack,
+            builder: (context, scale, child) => Transform.scale(
+              scale: scale,
+              alignment: Alignment.topCenter,
+              child: child,
+            ),
+            child: _WaypointModeHeader(
+              tripEnabled: _tripModeEnabled,
+              current: current,
+              max: max,
+              onSelect: (enabled) {
+                if (_tripModeEnabled == enabled) {
+                  _showWaypointTutorialOverlay();
+                  return;
+                }
+                HapticFeedback.mediumImpact();
+                setState(() {
+                  _tripModeEnabled = enabled;
+                  _waypointTutorialShown = true;
+                });
+                // Kurzer Toast statt permanenter Erklärung.
+                TopToast.show(
+                  context,
+                  message: enabled
+                      ? 'Trip-Modus aktiv · bis 5 Stopps, beliebig weit'
+                      : 'Standard · bis 3 Stopps für schnelle Rundkurse',
+                  icon: enabled
+                      ? Icons.compass_calibration
+                      : Icons.flag_circle,
+                  duration: const Duration(milliseconds: 2200),
+                );
+              },
+              onHelpTap: _showWaypointTutorialOverlay,
+            ),
           ),
         ),
       ),
@@ -8410,9 +8469,13 @@ class _NavigationArrowPainter extends CustomPainter {
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
-/// Wegpunkt-Mode-Header: zwei Segment-Cards (Standard / Trip-Modus)
-/// mit AnimatedContainer-Glow auf der aktiven Seite, ausklappbarer
-/// Erklärung darunter, und Live-Stop-Counter rechts.
+/// Wegpunkt-Mode-Header (v2 — schlank).
+///
+/// Eine zentrierte Pill mit zwei Segment-Tabs (Standard | Trip),
+/// kleinem Stop-Counter und "?"-Bubble. Höhe ~44px statt ~180px.
+/// Animierter "Slide-Pill" hinter dem aktiven Tab (iOS-Style) statt
+/// fetter Card-Backgrounds. Keine permanente Erklärung mehr —
+/// Erklärung erscheint nur als TopToast beim Mode-Wechsel.
 class _WaypointModeHeader extends StatelessWidget {
   const _WaypointModeHeader({
     required this.tripEnabled,
@@ -8433,172 +8496,81 @@ class _WaypointModeHeader extends StatelessWidget {
     final accent = AppAccentColors.accent;
     final atLimit = current >= max;
     return ClipRRect(
-      borderRadius: BorderRadius.circular(22),
+      borderRadius: BorderRadius.circular(28),
       child: BackdropFilter(
-        filter: ui.ImageFilter.blur(sigmaX: 22, sigmaY: 22),
+        filter: ui.ImageFilter.blur(sigmaX: 24, sigmaY: 24),
         child: Container(
+          height: 44,
+          padding: const EdgeInsets.symmetric(horizontal: 4),
           decoration: BoxDecoration(
-            color: const Color(0xE6101319),
-            borderRadius: BorderRadius.circular(22),
-            border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
+            color: const Color(0xCC0E1117),
+            borderRadius: BorderRadius.circular(28),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withValues(alpha: 0.35),
-                blurRadius: 24,
-                offset: const Offset(0, 8),
+                color: Colors.black.withValues(alpha: 0.40),
+                blurRadius: 18,
+                offset: const Offset(0, 6),
               ),
               BoxShadow(
-                color: accent.withValues(alpha: tripEnabled ? 0.22 : 0.10),
-                blurRadius: 22,
+                color: accent.withValues(alpha: 0.12),
+                blurRadius: 18,
               ),
             ],
           ),
-          padding: const EdgeInsets.fromLTRB(10, 10, 10, 10),
-          child: Column(
+          child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: _ModeCard(
-                      selected: !tripEnabled,
-                      icon: CupertinoIcons.flag,
-                      title: 'Standard',
-                      subtitle: 'Bis 3 Stopps',
-                      accent: accent,
-                      onTap: () => onSelect(false),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: _ModeCard(
-                      selected: tripEnabled,
-                      icon: CupertinoIcons.map_pin_ellipse,
-                      title: 'Trip-Modus',
-                      subtitle: 'Bis 5 Stopps',
-                      accent: accent,
-                      onTap: () => onSelect(true),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Column(
-                    children: [
-                      AnimatedContainer(
-                        duration: const Duration(milliseconds: 220),
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 10,
-                          vertical: 6,
-                        ),
-                        decoration: BoxDecoration(
-                          color: atLimit
-                              ? const Color(0xFFFFB74D).withValues(alpha: 0.22)
-                              : Colors.white.withValues(alpha: 0.10),
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Text(
-                          '$current/$max',
-                          style: TextStyle(
-                            color: atLimit
-                                ? const Color(0xFFFFB74D)
-                                : Colors.white,
-                            fontSize: 13,
-                            fontWeight: FontWeight.w900,
-                            letterSpacing: -0.2,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      GestureDetector(
-                        onTap: onHelpTap,
-                        behavior: HitTestBehavior.opaque,
-                        child: Container(
-                          width: 22,
-                          height: 22,
-                          decoration: const BoxDecoration(
-                            shape: BoxShape.circle,
-                            color: Color(0x22FFFFFF),
-                          ),
-                          alignment: Alignment.center,
-                          child: const Text(
-                            '?',
-                            style: TextStyle(
-                              color: Colors.white70,
-                              fontSize: 13,
-                              fontWeight: FontWeight.w800,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
+              // Segmented Tabs — Stack mit animierter Slide-Pill darunter
+              _SegmentedTabs(
+                tripEnabled: tripEnabled,
+                accent: accent,
+                onSelect: onSelect,
               ),
-              AnimatedSize(
-                duration: const Duration(milliseconds: 260),
-                curve: Curves.easeOutCubic,
-                child: AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 220),
-                  switchInCurve: Curves.easeOutCubic,
-                  switchOutCurve: Curves.easeInCubic,
-                  transitionBuilder: (child, anim) => FadeTransition(
-                    opacity: anim,
-                    child: SlideTransition(
-                      position: Tween<Offset>(
-                        begin: const Offset(0, 0.15),
-                        end: Offset.zero,
-                      ).animate(anim),
-                      child: child,
-                    ),
-                  ),
-                  child: Padding(
-                    key: ValueKey<bool>(tripEnabled),
-                    padding: const EdgeInsets.only(top: 10),
-                    child: Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 10,
-                      ),
-                      decoration: BoxDecoration(
-                        color: accent.withValues(
-                          alpha: tripEnabled ? 0.16 : 0.10,
-                        ),
-                        borderRadius: BorderRadius.circular(14),
-                        border: Border.all(
-                          color: accent.withValues(
-                            alpha: tripEnabled ? 0.42 : 0.20,
-                          ),
-                        ),
-                      ),
-                      child: Row(
-                        children: [
-                          Icon(
-                            tripEnabled
-                                ? CupertinoIcons.compass_fill
-                                : CupertinoIcons.bolt_fill,
-                            color: accent,
-                            size: 16,
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              tripEnabled
-                                  ? 'Plane bis zu 5 Stopps quer durchs Land — Stopps können beliebig weit auseinander liegen.'
-                                  : 'Schnelle Tour mit max. 3 Stopps. Tippe Trip-Modus für mehr Stopps + weite Strecken.',
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 12,
-                                height: 1.3,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
+              const SizedBox(width: 6),
+              // Counter
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 220),
+                height: 30,
+                padding: const EdgeInsets.symmetric(horizontal: 9),
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: atLimit
+                      ? const Color(0xFFFFB74D).withValues(alpha: 0.22)
+                      : Colors.white.withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(15),
+                ),
+                child: Text(
+                  '$current/$max',
+                  style: TextStyle(
+                    color:
+                        atLimit ? const Color(0xFFFFB74D) : Colors.white,
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: -0.2,
                   ),
                 ),
               ),
+              const SizedBox(width: 4),
+              GestureDetector(
+                onTap: onHelpTap,
+                behavior: HitTestBehavior.opaque,
+                child: Container(
+                  width: 30,
+                  height: 30,
+                  alignment: Alignment.center,
+                  decoration: const BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: Color(0x14FFFFFF),
+                  ),
+                  child: const Icon(
+                    CupertinoIcons.info,
+                    color: Colors.white70,
+                    size: 16,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 4),
             ],
           ),
         ),
@@ -8607,21 +8579,96 @@ class _WaypointModeHeader extends StatelessWidget {
   }
 }
 
-class _ModeCard extends StatelessWidget {
-  const _ModeCard({
-    required this.selected,
-    required this.icon,
-    required this.title,
-    required this.subtitle,
+class _SegmentedTabs extends StatelessWidget {
+  const _SegmentedTabs({
+    required this.tripEnabled,
     required this.accent,
+    required this.onSelect,
+  });
+
+  final bool tripEnabled;
+  final Color accent;
+  final ValueChanged<bool> onSelect;
+
+  @override
+  Widget build(BuildContext context) {
+    const tabWidth = 108.0;
+    const tabHeight = 34.0;
+    return SizedBox(
+      width: tabWidth * 2,
+      height: tabHeight + 4,
+      child: Stack(
+        alignment: Alignment.centerLeft,
+        children: [
+          // Animierte Slide-Pill hinter dem aktiven Tab (iOS-Segmented-Style).
+          AnimatedAlign(
+            duration: const Duration(milliseconds: 260),
+            curve: Curves.easeOutCubic,
+            alignment:
+                tripEnabled ? Alignment.centerRight : Alignment.centerLeft,
+            child: Container(
+              width: tabWidth,
+              height: tabHeight,
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [
+                    accent.withValues(alpha: 0.95),
+                    accent.withValues(alpha: 0.70),
+                  ],
+                ),
+                borderRadius: BorderRadius.circular(20),
+                boxShadow: [
+                  BoxShadow(
+                    color: accent.withValues(alpha: 0.45),
+                    blurRadius: 14,
+                  ),
+                ],
+              ),
+            ),
+          ),
+          Row(
+            children: [
+              _SegTab(
+                label: 'Standard',
+                icon: CupertinoIcons.flag,
+                width: tabWidth,
+                height: tabHeight + 4,
+                active: !tripEnabled,
+                onTap: () => onSelect(false),
+              ),
+              _SegTab(
+                label: 'Trip-Modus',
+                icon: CupertinoIcons.map_pin_ellipse,
+                width: tabWidth,
+                height: tabHeight + 4,
+                active: tripEnabled,
+                onTap: () => onSelect(true),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SegTab extends StatelessWidget {
+  const _SegTab({
+    required this.label,
+    required this.icon,
+    required this.width,
+    required this.height,
+    required this.active,
     required this.onTap,
   });
 
-  final bool selected;
+  final String label;
   final IconData icon;
-  final String title;
-  final String subtitle;
-  final Color accent;
+  final double width;
+  final double height;
+  final bool active;
   final VoidCallback onTap;
 
   @override
@@ -8629,83 +8676,34 @@ class _ModeCard extends StatelessWidget {
     return GestureDetector(
       onTap: onTap,
       behavior: HitTestBehavior.opaque,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 260),
-        curve: Curves.easeOutCubic,
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
-        decoration: BoxDecoration(
-          gradient: selected
-              ? LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [
-                    accent.withValues(alpha: 0.38),
-                    accent.withValues(alpha: 0.18),
-                  ],
-                )
-              : null,
-          color: selected ? null : Colors.white.withValues(alpha: 0.05),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(
-            color: selected
-                ? accent.withValues(alpha: 0.85)
-                : Colors.white.withValues(alpha: 0.08),
-            width: selected ? 1.5 : 1,
-          ),
-          boxShadow: selected
-              ? [
-                  BoxShadow(
-                    color: accent.withValues(alpha: 0.32),
-                    blurRadius: 14,
-                  ),
-                ]
-              : null,
-        ),
+      child: SizedBox(
+        width: width,
+        height: height,
         child: Row(
-          mainAxisSize: MainAxisSize.min,
+          mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            AnimatedContainer(
+            AnimatedDefaultTextStyle(
               duration: const Duration(milliseconds: 220),
-              width: 30,
-              height: 30,
-              decoration: BoxDecoration(
-                color: selected
-                    ? Colors.white.withValues(alpha: 0.18)
-                    : Colors.white.withValues(alpha: 0.06),
-                shape: BoxShape.circle,
+              style: TextStyle(
+                color: active ? Colors.white : Colors.white60,
+                fontSize: 12.5,
+                fontWeight: FontWeight.w800,
+                letterSpacing: -0.1,
               ),
-              alignment: Alignment.center,
-              child: Icon(
-                icon,
-                size: 16,
-                color: selected ? Colors.white : Colors.white60,
-              ),
-            ),
-            const SizedBox(width: 8),
-            Flexible(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+              child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Text(
-                    title,
-                    style: TextStyle(
-                      color: selected ? Colors.white : Colors.white70,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w900,
-                      letterSpacing: -0.2,
+                  AnimatedScale(
+                    scale: active ? 1.0 : 0.92,
+                    duration: const Duration(milliseconds: 220),
+                    child: Icon(
+                      icon,
+                      size: 14,
+                      color: active ? Colors.white : Colors.white54,
                     ),
                   ),
-                  Text(
-                    subtitle,
-                    style: TextStyle(
-                      color: selected
-                          ? Colors.white.withValues(alpha: 0.85)
-                          : Colors.white38,
-                      fontSize: 10.5,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
+                  const SizedBox(width: 6),
+                  Text(label),
                 ],
               ),
             ),
