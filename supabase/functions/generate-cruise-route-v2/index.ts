@@ -523,7 +523,7 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
   // maxAttempts pro Modus
   const maxAttempts = isRoundTrip
     ? (needsDiversity ? 8 : 5)
-    : (hasExplicitWaypoints ? 1 : Math.max(5, detourSpec.length || 5));
+    : (hasExplicitWaypoints ? 1 : Math.max(13, detourSpec.length || 13));
   const targetKm = req.target_distance_km ?? 50;
   const candidates: Array<{ result: RouteResult; deltaPct: number; seed: number; isDup: boolean }> = [];
   let bestCandidate: RouteResult | null = null;
@@ -646,6 +646,8 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
       // Behebt Bodensee-Bug wo Start (Friedrichshafen-Hafen) oder Ziel
       // im Wasser/auf Ferry-Anleger landet. Best-of-N pickt dann die
       // beste Route.
+      // 2026-05-23 (vucko Bug-Fix Lindau-Insel): zusätzlich zur kleinen
+      // Snap-Variante (130m) auch große Offsets (1.1km) für Inseln/Häfen.
       const directVariants: Array<{
         sLatOff: number;
         sLngOff: number;
@@ -653,10 +655,19 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
         eLngOff: number;
       }> = [
         { sLatOff: 0, sLngOff: 0, eLatOff: 0, eLngOff: 0 },         // Original
-        { sLatOff: 0.0014, sLngOff: 0, eLatOff: 0, eLngOff: 0 },     // Start +N
-        { sLatOff: 0, sLngOff: 0.0014, eLatOff: 0, eLngOff: 0 },     // Start +E
-        { sLatOff: 0, sLngOff: 0, eLatOff: 0.0014, eLngOff: 0 },     // End +N
-        { sLatOff: 0, sLngOff: 0, eLatOff: 0, eLngOff: 0.0014 },     // End +E
+        { sLatOff: 0.0014, sLngOff: 0, eLatOff: 0, eLngOff: 0 },
+        { sLatOff: 0, sLngOff: 0.0014, eLatOff: 0, eLngOff: 0 },
+        { sLatOff: 0, sLngOff: 0, eLatOff: 0.0014, eLngOff: 0 },
+        { sLatOff: 0, sLngOff: 0, eLatOff: 0, eLngOff: 0.0014 },
+        // Große Offsets (~1.1km) für Insel/Hafen-Punkte (Lindau, Mainau).
+        { sLatOff: 0.010, sLngOff: 0, eLatOff: 0, eLngOff: 0 },
+        { sLatOff: -0.010, sLngOff: 0, eLatOff: 0, eLngOff: 0 },
+        { sLatOff: 0, sLngOff: 0.010, eLatOff: 0, eLngOff: 0 },
+        { sLatOff: 0, sLngOff: -0.010, eLatOff: 0, eLngOff: 0 },
+        { sLatOff: 0, sLngOff: 0, eLatOff: 0.010, eLngOff: 0 },
+        { sLatOff: 0, sLngOff: 0, eLatOff: -0.010, eLngOff: 0 },
+        { sLatOff: 0, sLngOff: 0, eLatOff: 0, eLngOff: 0.010 },
+        { sLatOff: 0, sLngOff: 0, eLatOff: 0, eLngOff: -0.010 },
       ];
       return await Promise.all(
         directVariants.map((v, idx) =>

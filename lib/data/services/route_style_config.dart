@@ -550,28 +550,14 @@ class RouteStyleConfig {
     required bool scenic,
     required int detourVariant,
   }) {
-    if (!scenic && detourVariant <= 0) {
-      return directDistanceKm;
-    }
-    final scenicReferenceKm = scenic
-        ? pointToPointScenicReferenceDistanceKm(
-            directDistanceKm: directDistanceKm,
-            detourVariant: detourVariant,
-          )
-        : directDistanceKm;
-    final minByVariant = switch (detourVariant) {
-      1 => scenicReferenceKm * 1.20,
-      2 => scenicReferenceKm * 1.50,
-      3 => scenicReferenceKm * 1.90,
-      _ => scenicReferenceKm * 1.08,
-    };
-    final paddingKm = switch (detourVariant) {
-      1 => 1.0,
-      2 => 3.0,
-      3 => 6.0,
-      _ => 1.0,
-    };
-    return math.max(minByVariant, scenicReferenceKm + paddingKm);
+    // 2026-05-23 (vucko Bug-Fix A→B): Min-Distanz darf NICHT mehr eine
+    // gefundene Route ablehnen. User wählt detour weil er mehr Umweg
+    // wünscht, aber wenn GH nicht so viel Umweg findet wie gewünscht
+    // ist eine kurze Route immer noch besser als "Stopps prüfen".
+    // → min = direct distance (jede sinnvolle Route ≥ direct).
+    // scenic/detourVariant werden weiter im Konstruktor evaluiert,
+    // aber für Min-Bound jetzt egal.
+    return directDistanceKm;
   }
 
   double maximumPointToPointDistanceKm({
@@ -581,38 +567,22 @@ class RouteStyleConfig {
     required int detourVariant,
   }) {
     if (!scenic && detourVariant <= 0) {
-      return math.max(directDistanceKm + 2.0, directDistanceKm * 1.12);
+      // 2026-05-23 (vucko Bug-Fix A→B): Direct mode max muss auch
+      // Bergrouten (Bregenz→Innsbruck via Arlbergpass) tolerieren.
+      // Real-Route kann 1.5× der Luftlinie sein. Großzügig:
+      return math.max(directDistanceKm + 20.0, directDistanceKm * 1.80);
     }
-    final scenicReferenceKm = scenic
-        ? pointToPointScenicReferenceDistanceKm(
-            directDistanceKm: directDistanceKm,
-            detourVariant: detourVariant,
-          )
-        : directDistanceKm;
-    final maxByTarget = switch (detourVariant) {
-      1 => targetKm * 1.12,
-      2 => targetKm * 1.14,
-      3 => targetKm * 1.18,
-      _ => targetKm * 1.20,
-    };
+    // 2026-05-23 (vucko Bug-Fix A→B): Großzügige Obergrenze damit auch
+    // Bergregionen (Bregenz→Innsbruck via Alpen) und detour=3 nie
+    // abgelehnt werden. Direct distance × 4× als hartes Limit reicht
+    // selbst für die windigsten Routen.
     final maxByDirect = switch (detourVariant) {
-      1 => scenicReferenceKm * 1.45,
-      2 => scenicReferenceKm * 1.90,
-      3 => scenicReferenceKm * 2.80,
-      _ => scenicReferenceKm * 1.40,
+      1 => directDistanceKm * 2.20,
+      2 => directDistanceKm * 3.00,
+      3 => directDistanceKm * 4.00,
+      _ => directDistanceKm * 1.80,
     };
-    final slackKm = switch (detourVariant) {
-      1 => 3.0,
-      2 => 5.5,
-      3 => 10.0,
-      _ => 2.5,
-    };
-    final lowerBound = minimumPointToPointDistanceKm(
-      directDistanceKm: directDistanceKm,
-      scenic: scenic,
-      detourVariant: detourVariant,
-    );
-    return math.max(lowerBound + slackKm, math.min(maxByDirect, maxByTarget));
+    return math.max(directDistanceKm + 20.0, maxByDirect);
   }
 
   Map<String, dynamic> toRequestHints() {
