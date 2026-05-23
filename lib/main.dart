@@ -19,6 +19,8 @@ import 'package:cruise_connect/core/constants.dart';
 import 'package:cruise_connect/core/deep_links.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/data/services/voice_settings_service.dart';
+import 'package:cruise_connect/data/services/notification_service.dart';
+import 'package:cruise_connect/data/services/notification_settings_service.dart';
 import 'package:cruise_connect/presentation/pages/auth_page.dart';
 import 'package:cruise_connect/presentation/pages/post_detail_page.dart';
 
@@ -36,8 +38,10 @@ void main() {
         url: AppConstants.supabaseUrl,
         anonKey: AppConstants.supabaseAnonKey,
       );
-      // Voice-Setting beim Start laden (persistiert via SharedPrefs).
+      // Voice-Setting + Notification-Settings beim Start laden
+      // (persistiert via SharedPrefs).
       unawaited(VoiceSettingsService.instance.load());
+      unawaited(NotificationSettingsService.instance.load());
 
       runApp(const MyApp());
     },
@@ -157,6 +161,10 @@ class _MyAppState extends State<MyApp> {
         ChangeNotifierProvider(create: (_) => SavedRoutesProvider()),
         ChangeNotifierProvider(create: (_) => RouteBookmarkProvider()),
         ChangeNotifierProvider(create: (_) => AppAccentProvider()..load()),
+        // 2026-05-23 (vucko): Notification-Service als Provider —
+        // Realtime-Subscription wird in HomePage initState gestartet.
+        ChangeNotifierProvider<NotificationService>.value(
+            value: NotificationService.instance),
       ],
       child: Consumer<AppAccentProvider>(
         builder: (context, accentProvider, _) {

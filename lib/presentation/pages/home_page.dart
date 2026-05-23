@@ -7,7 +7,9 @@ import 'package:provider/provider.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/application/providers/community_provider.dart';
 import 'package:cruise_connect/data/services/offline_map_service.dart';
+import 'package:cruise_connect/data/services/notification_service.dart';
 import 'package:cruise_connect/presentation/pages/home_content_page.dart';
+import 'package:cruise_connect/presentation/widgets/top_toast.dart';
 import 'package:cruise_connect/presentation/pages/community_page.dart';
 import 'package:cruise_connect/presentation/pages/cruise_mode_page.dart';
 import 'package:cruise_connect/presentation/pages/analytics_page.dart';
@@ -42,6 +44,9 @@ class _HomePageState extends State<HomePage> {
       if (!mounted) return;
       _communityProvider = context.read<CommunityProvider>();
       _communityProvider?.startRealtime();
+      // 2026-05-23 (vucko): Notification-Service starten + Toast bei
+      // neuen Einträgen anzeigen.
+      _setupNotificationService();
     });
     // 2026-05-22 (vucko): Pre-Warm SOFORT statt nach 2s Delay.
     // User-Beschwerde: "Mapbox-Tiles laden teilweise lange, sieht nicht
@@ -103,8 +108,37 @@ class _HomePageState extends State<HomePage> {
     CruiseModePage.isFullscreen.removeListener(_onFullscreenChanged);
     CruiseModePage.pendingRoute.removeListener(_onPendingRoute);
     _communityProvider?.stopRealtime();
+    NotificationService.instance.onNew = null;
+    unawaited(NotificationService.instance.stopRealtime());
     super.dispose();
   }
+
+  Future<void> _setupNotificationService() async {
+    final svc = NotificationService.instance;
+    svc.onNew = (notif) {
+      if (!mounted) return;
+      final (title, body) = notif.renderTexts();
+      TopToast.show(
+        context,
+        message: '$title · $body',
+        icon: _iconForType(notif.type),
+        duration: const Duration(milliseconds: 3500),
+      );
+    };
+    await svc.loadInitial();
+    await svc.startRealtime();
+  }
+
+  IconData _iconForType(String type) => switch (type) {
+        'follow' => Icons.person_add_alt_1,
+        'like' => Icons.favorite,
+        'comment' => Icons.chat_bubble_outline,
+        'friend_request' => Icons.handshake_outlined,
+        'group_invite' => Icons.group_add_outlined,
+        'weather_recommendation' => Icons.wb_sunny_outlined,
+        'trip_reminder' => Icons.route_outlined,
+        _ => Icons.notifications_active_outlined,
+      };
 
   void _onPendingRoute() {
     if (CruiseModePage.pendingRoute.value != null && mounted) {

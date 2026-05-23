@@ -1,4 +1,5 @@
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
+import 'package:cruise_connect/data/services/notification_settings_service.dart';
 import 'package:cruise_connect/data/services/voice_settings_service.dart';
 import 'package:cruise_connect/application/providers/community_provider.dart';
 import 'package:cruise_connect/presentation/widgets/accent_color_picker.dart';
@@ -226,6 +227,43 @@ class _SettingsPageState extends State<SettingsPage> {
                         'Haftung, Routenmodi, Wegpunkte und Sicherheit nachlesen',
                     onTap: () =>
                         showRoutingOnboardingSheet(context, force: true),
+                  ),
+                ]),
+
+                const SizedBox(height: 24),
+
+                _buildSectionHeader('BENACHRICHTIGUNGEN'),
+                _buildSectionContainer([
+                  AnimatedBuilder(
+                    animation: NotificationSettingsService.instance,
+                    builder: (context, _) {
+                      final s = NotificationSettingsService.instance;
+                      return Column(
+                        children: [
+                          _buildSwitchTile('Neue Follower', s.follows,
+                              (v) => s.setFollows(v)),
+                          const Divider(color: Colors.white10, height: 1),
+                          _buildSwitchTile('Likes auf deine Posts', s.likes,
+                              (v) => s.setLikes(v)),
+                          const Divider(color: Colors.white10, height: 1),
+                          _buildSwitchTile('Kommentare', s.comments,
+                              (v) => s.setComments(v)),
+                          const Divider(color: Colors.white10, height: 1),
+                          _buildSwitchTile('Freundschaftsanfragen',
+                              s.friendRequests,
+                              (v) => s.setFriendRequests(v)),
+                          const Divider(color: Colors.white10, height: 1),
+                          _buildSwitchTile('Gruppen-Einladungen',
+                              s.groupInvites,
+                              (v) => s.setGroupInvites(v)),
+                          const Divider(color: Colors.white10, height: 1),
+                          _buildSwitchTile(
+                              'Wetter-Tipp morgens (wenn schön)',
+                              s.dailyWeather,
+                              (v) => s.setDailyWeather(v)),
+                        ],
+                      );
+                    },
                   ),
                 ]),
 
