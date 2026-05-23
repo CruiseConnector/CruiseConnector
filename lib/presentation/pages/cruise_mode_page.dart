@@ -25,6 +25,8 @@ import 'package:cruise_connect/data/services/native_position_smoother.dart';
 import 'package:cruise_connect/data/services/geocoding_service.dart';
 import 'package:cruise_connect/data/services/voice_settings_service.dart';
 import 'package:cruise_connect/data/services/tts_service.dart';
+import 'package:cruise_connect/data/services/route_poi_service.dart';
+import 'package:cruise_connect/data/services/road_hazard_service.dart';
 import 'package:cruise_connect/presentation/widgets/weather_chip.dart';
 import 'package:cruise_connect/presentation/widgets/top_toast.dart';
 import 'package:cruise_connect/data/services/driven_track_recorder.dart';
@@ -279,6 +281,18 @@ class _CruiseModePageState extends State<CruiseModePage>
   int _activeManeuverIndex = 0;
   int _currentRouteIndex = 0;
   final Set<int> _announcedManeuverIndices = <int>{};
+  // 2026-05-24 (vucko Task #44): POI-Layer (Tankstellen etc.)
+  bool _poisVisible = false;
+  bool _poisLoading = false;
+  List<RoutePoi> _routePois = const [];
+  final Set<PoiType> _poiTypes = const {PoiType.fuel};
+  // 2026-05-24 (vucko Task #45): Road-Hazard-Detection (OSM construction).
+  // Aktuell als Toast-Warnung beim Route-Build genutzt; Liste wird für
+  // zukünftige Map-Marker-Overlay-Iteration vorgehalten.
+  // ignore: unused_field
+  List<RoadHazard> _roadHazards = const [];
+  // ignore: unused_field
+  bool _hazardCheckDone = false;
   // 2026-05-23 (vucko): Haptic-Tracking damit jede Stufe (300m/150m/50m)
   // nur 1× pro Manöver feuert statt bei jedem GPS-Tick.
   int? _lastHapticManeuverIndex;
@@ -3223,6 +3237,30 @@ class _CruiseModePageState extends State<CruiseModePage>
                   child: const Icon(Icons.map_outlined, size: 20),
                 ),
               ),
+              // POI-Toggle (Tankstellen entlang Route).
+              Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: FloatingActionButton.small(
+                  heroTag: 'pois_fab',
+                  backgroundColor: _poisVisible
+                      ? AppAccentColors.accent
+                      : const Color(0xFF2D3138),
+                  foregroundColor: Colors.white,
+                  tooltip:
+                      _poisVisible ? 'POIs verbergen' : 'Tankstellen anzeigen',
+                  onPressed: _togglePois,
+                  child: _poisLoading
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : const Icon(Icons.local_gas_station_rounded, size: 20),
+                ),
+              ),
               // Voice-Mode-Cycle (off → important → all → off).
               Padding(
                 padding: const EdgeInsets.only(bottom: 12),
@@ -5019,6 +5057,11 @@ class _CruiseModePageState extends State<CruiseModePage>
     _recentDestinationDistances = [];
     _drivenTrackRecorder.reset();
     _clearAccessLegState();
+    // 2026-05-24 (vucko Task #45): Hazard-Check im Hintergrund.
+    // Wenn Construction/Closed entlang Route → Top-Toast Warnung.
+    _hazardCheckDone = false;
+    _roadHazards = const [];
+    unawaited(_checkHazardsInBackground(result.coordinates));
     setState(() {
       _routeGeoJson = result.geoJson;
       _routeDistance = result.distanceMeters;
@@ -7028,6 +7071,170 @@ class _CruiseModePageState extends State<CruiseModePage>
         nextManeuverText: _currentCarManeuverText(),
         nextManeuverDistance: distToManeuver,
       ),
+    );
+  }
+
+  // 2026-05-24 (vucko Task #45): Hazard-Check im Hintergrund nach Route-Build.
+  Future<void> _checkHazardsInBackground(List<List<double>> coords) async {
+    if (coords.length < 2) return;
+    try {
+      final hazards = await RoadHazardService.instance.fetchHazardsAlongRoute(
+        coordinates: coords,
+        bufferMeters: 90,
+      );
+      if (!mounted) return;
+      setState(() {
+        _roadHazards = hazards;
+        _hazardCheckDone = true;
+      });
+      if (hazards.isNotEmpty) {
+        final first = hazards.first;
+        TopToast.show(
+          context,
+          message:
+              '${first.type.emoji} ${hazards.length} Baustelle${hazards.length > 1 ? "n" : ""} entlang der Route',
+          icon: Icons.construction_rounded,
+          duration: const Duration(seconds: 4),
+        );
+      }
+    } catch (_) {
+      // silent fail
+    }
+  }
+
+  // 2026-05-24 (vucko Task #44): POI-Toggle (Tankstellen entlang Route).
+  Future<void> _togglePois() async {
+    if (_poisLoading) return;
+    final newState = !_poisVisible;
+    if (!newState) {
+      setState(() {
+        _poisVisible = false;
+        _routePois = const [];
+      });
+      return;
+    }
+    if (_fullRouteCoordinates.length < 2) {
+      TopToast.show(
+        context,
+        message: 'Erst eine Route berechnen',
+        icon: Icons.info_outline,
+      );
+      return;
+    }
+    setState(() => _poisLoading = true);
+    try {
+      final pois = await RoutePoiService.instance.fetchPoisAlongRoute(
+        coordinates: _fullRouteCoordinates,
+        types: _poiTypes,
+        bufferMeters: 250,
+        maxResults: 40,
+      );
+      if (!mounted) return;
+      setState(() {
+        _routePois = pois;
+        _poisVisible = true;
+        _poisLoading = false;
+      });
+      if (pois.isEmpty) {
+        TopToast.show(
+          context,
+          message: 'Keine Tankstellen direkt an der Route gefunden',
+          icon: Icons.search_off,
+        );
+      } else {
+        _showPoiBottomSheet();
+      }
+    } catch (e) {
+      if (mounted) setState(() => _poisLoading = false);
+    }
+  }
+
+  void _showPoiBottomSheet() {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: const Color(0xFF14181F),
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) {
+        return Container(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.of(ctx).size.height * 0.7,
+          ),
+          padding: const EdgeInsets.fromLTRB(20, 14, 20, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 40,
+                height: 4,
+                margin: const EdgeInsets.only(bottom: 14, left: 0, right: 0),
+                decoration: BoxDecoration(
+                  color: Colors.white24,
+                  borderRadius: BorderRadius.circular(99),
+                ),
+              ),
+              Row(
+                children: [
+                  Icon(Icons.local_gas_station_rounded,
+                      color: AppAccentColors.accent, size: 22),
+                  const SizedBox(width: 8),
+                  Text(
+                    '${_routePois.length} POIs entlang der Route',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Flexible(
+                child: ListView.separated(
+                  shrinkWrap: true,
+                  itemCount: _routePois.length,
+                  separatorBuilder: (ctx, _) => Divider(
+                    color: Colors.white.withValues(alpha: 0.06),
+                    height: 1,
+                  ),
+                  itemBuilder: (_, i) {
+                    final p = _routePois[i];
+                    return ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: CircleAvatar(
+                        radius: 18,
+                        backgroundColor:
+                            AppAccentColors.accent.withValues(alpha: 0.20),
+                        child: Text(p.type.emoji,
+                            style: const TextStyle(fontSize: 16)),
+                      ),
+                      title: Text(
+                        p.displayName,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      subtitle: Text(
+                        '${p.distanceFromRouteMeters.round()}m abseits'
+                        '${p.openingHours != null ? "  ·  ${p.openingHours}" : ""}',
+                        style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.55),
+                          fontSize: 11.5,
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 

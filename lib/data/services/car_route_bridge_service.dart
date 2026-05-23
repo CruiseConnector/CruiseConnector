@@ -27,10 +27,28 @@ class CarRouteType {
 class CarRouteBridgeService {
   static const snapshotKey = 'car_route_snapshot';
   static const progressKey = 'car_route_progress_snapshot';
+  // 2026-05-24 (vucko Task #46): wird vom Native-Target (CarPlay/AA)
+  // beschrieben sobald es connected wird. Flutter pollt hier nur.
+  static const carConnectedKey = 'car_connected_at';
   static const _progressThrottle = Duration(seconds: 3);
 
   SharedPreferences? _preferences;
   DateTime? _lastProgressWrite;
+
+  /// Liefert true wenn ein CarPlay/AA-Target sich in den letzten 30s
+  /// gemeldet hat. Native Target soll `car_connected_at` regelmäßig setzen.
+  Future<bool> isCarConnected() async {
+    final prefs = await _ensurePrefs();
+    final iso = prefs.getString(carConnectedKey);
+    if (iso == null) return false;
+    final dt = DateTime.tryParse(iso);
+    if (dt == null) return false;
+    return DateTime.now().difference(dt) < const Duration(seconds: 30);
+  }
+
+  Future<SharedPreferences> _ensurePrefs() async {
+    return _preferences ??= await SharedPreferences.getInstance();
+  }
 
   Future<void> publishSearching({
     required String routeType,

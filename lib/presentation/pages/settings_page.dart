@@ -220,6 +220,38 @@ class _SettingsPageState extends State<SettingsPage> {
                     ),
                   ),
                   const Divider(color: Colors.white10, height: 1),
+                  // 2026-05-24 (vucko Task #46): CarPlay/AA Foundation-Status
+                  _buildNavTile(
+                    'CarPlay & Android Auto',
+                    Icons.directions_car_filled_outlined,
+                    subtitle: 'Native Setup in Arbeit — Bridge bereit',
+                    onTap: () {
+                      showDialog<void>(
+                        context: context,
+                        builder: (_) => AlertDialog(
+                          backgroundColor: const Color(0xFF1A1E28),
+                          title: const Text('CarPlay & Android Auto',
+                              style: TextStyle(color: Colors.white)),
+                          content: const Text(
+                            'Die Flutter-Bridge ist bereit. Native CarPlay-/AA-Targets '
+                            'werden in einem separaten Dev-Sprint angelegt '
+                            '(Apple-Review ~4 Wochen).\n\n'
+                            'Aktueller Status: Datenpipeline aktiv — sobald native '
+                            'Extension live ist, läuft die App ohne weitere Änderungen '
+                            'auch im Auto.',
+                            style: TextStyle(color: Colors.white70),
+                          ),
+                          actions: [
+                            TextButton(
+                              onPressed: () => Navigator.of(context).pop(),
+                              child: const Text('OK'),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+                  const Divider(color: Colors.white10, height: 1),
                   _buildNavTile(
                     'Sicherheits- & Routing-Hinweise',
                     Icons.shield_outlined,
