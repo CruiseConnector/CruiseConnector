@@ -4385,6 +4385,10 @@ class RouteService {
         scenario.isPointToPoint && pointToPointEvaluationDetourLevel > 0
         ? detourRenderableOk
         : successFirstDistanceOk;
+    // 2026-05-23 (vucko): scenicFallbackRenderable wird seit neuem A→B-
+    // Acceptance-Modell nicht mehr direkt referenziert — Dijkstra-Routen
+    // werden immer akzeptiert wenn destinationReached. Bleibt als Doku.
+    // ignore: unused_local_variable
     final scenicFallbackRenderable =
         scenario.isPointToPoint &&
         pointToPointEvaluationDetourLevel > 0 &&
@@ -4499,17 +4503,19 @@ class RouteService {
         successFirstDistanceOk &&
         quality.uturnPositions.length <= 1 &&
         sportRescueLoopShape;
+    // 2026-05-23 (vucko Bug-Fix A→B Basel→Götzis):
+    // GraphHopper's Dijkstra-Routing liefert per Definition den schnellsten
+    // gültigen Weg. Wenn Edge eine Route geliefert hat und der Endpunkt
+    // erreicht wird, AKZEPTIEREN. Kein Quality-Reject mehr — der User
+    // wollte explizit "schnellster Weg / andere Wege" statt unsere
+    // Soft-Quality-Filter die unbekannte Routen blockierten.
+    // Für Round-Trip bleiben die Quality-Gates aktiv (dort macht's Sinn).
     final qualityAcceptable = scenario.isRoundTrip
         ? classification.isAcceptable ||
               rescueRoundTripAcceptable ||
               serverApprovedAcceptable ||
               serverApprovedSportRescue
-        : destinationReached &&
-              detourRenderableOk &&
-              (quality.passed ||
-                  classification.isAcceptable ||
-                  scenicFallbackRenderable ||
-                  serverApprovedAcceptable);
+        : destinationReached;
     final isPoolFallbackRoute =
         scenario.isRoundTrip && variant.variantHint.startsWith('pool-');
     final poolShapeQualityOk =
@@ -4520,13 +4526,16 @@ class RouteService {
         styleConfig.profileKey != 'sport' ||
         (scenario.targetDistanceKm ?? actualDistanceKm) < 90.0 ||
         _longSportRoundTripShapeRenderable(quality: quality);
-    final softRenderable =
-        hasEnoughPoints &&
-        qualityAcceptable &&
-        poolShapeQualityOk &&
-        longSportRoundTripShapeOk &&
-        !deadEndSpikeDetected &&
-        !borderIntrusionRejected;
+    // 2026-05-23 (vucko Bug-Fix A→B): Für isPointToPoint nur die
+    // Minimal-Checks. Round-Trip hat weiter alle Shape-Gates.
+    final softRenderable = scenario.isPointToPoint
+        ? (hasEnoughPoints && qualityAcceptable && !borderIntrusionRejected)
+        : (hasEnoughPoints &&
+              qualityAcceptable &&
+              poolShapeQualityOk &&
+              longSportRoundTripShapeOk &&
+              !deadEndSpikeDetected &&
+              !borderIntrusionRejected);
     final styleSoftOk =
         styleOk ||
         (scenario.isRoundTrip &&

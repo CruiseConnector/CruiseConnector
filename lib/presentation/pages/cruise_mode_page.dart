@@ -4242,20 +4242,27 @@ class _CruiseModePageState extends State<CruiseModePage>
           ? _roundTripWaypointSignature(waypointSnapshot)
           : null;
       requestedWaypointSignature = waypointSignature;
+      // 2026-05-23 (vucko Bug-Fix): Limit muss aus _currentMaxWaypoints
+      // kommen, nicht hardcoded 3. Vorher griff im Trip-Modus (5 WPs)
+      // dieser Branch und zeigte "Bitte nutze maximal 3 Stopps".
       if (_isWaypointPlanning &&
-          (waypointSnapshot.isEmpty || waypointSnapshot.length > 3)) {
+          (waypointSnapshot.isEmpty ||
+              waypointSnapshot.length > _currentMaxWaypoints)) {
+        final tooManyMsg = _tripModeEnabled
+            ? 'Im Trip-Modus max $_currentMaxWaypoints Stopps. Entferne einen Stopp.'
+            : 'Standard erlaubt max $_currentMaxWaypoints Stopps. Aktiviere Trip-Modus oben für bis zu 5.';
         _restoreGeneratedRouteFailureUi(
           previousUiState,
           waypointSnapshot.isEmpty
               ? 'Setze mindestens einen Stopp oder lass Vorschläge erzeugen.'
-              : 'Bitte nutze maximal 3 Stopps.',
+              : tooManyMsg,
           error: RouteServiceException(
             type: RouteErrorType.validation,
             userMessage: waypointSnapshot.isEmpty
                 ? 'Setze mindestens einen Stopp oder lass Vorschläge erzeugen.'
-                : 'Bitte nutze maximal 3 Stopps.',
+                : tooManyMsg,
             debugMessage:
-                'Invalid UI waypoint count=${waypointSnapshot.length}.',
+                'Invalid UI waypoint count=${waypointSnapshot.length} max=$_currentMaxWaypoints trip=$_tripModeEnabled.',
             edgeMeta: {
               'response_code': waypointSnapshot.isEmpty
                   ? 'too_few_waypoints'
@@ -5369,6 +5376,12 @@ class _CruiseModePageState extends State<CruiseModePage>
     final code =
         error.edgeMeta['response_code']?.toString() ??
         error.edgeMeta['code']?.toString();
+    // 2026-05-23 (vucko Bug-Fix): too_many_waypoints muss das AKTUELLE
+    // Limit kennen (3 Standard, 5 Trip-Modus). Vorher fest "drei" verdrahtet,
+    // was im Trip-Modus mit 5 Stopps fälschlich getriggert wurde.
+    final tooManyMsg = _tripModeEnabled
+        ? 'Im Trip-Modus max $_currentMaxWaypoints Stopps. Entferne einen Stopp und versuche es erneut.'
+        : 'Standard erlaubt max $_currentMaxWaypoints Stopps. Tippe oben auf "Trip-Modus" für bis zu 5 Stopps.';
     final message = switch (code) {
       'waypoint_too_far' =>
         'Wir konnten die Stopps noch nicht sauber an Straßen anbinden. Setze einen Stopp näher an eine Straße oder lass neue Stopps vorschlagen.',
@@ -5376,7 +5389,7 @@ class _CruiseModePageState extends State<CruiseModePage>
         'Zwei Stopps liegen zu nah beieinander. Verschiebe einen Punkt oder entferne ihn.',
       'too_few_waypoints' =>
         'Setze mindestens einen Stopp oder lass passende Stopps vorschlagen.',
-      'too_many_waypoints' => 'Nutze maximal drei Stopps für diese Rundroute.',
+      'too_many_waypoints' => tooManyMsg,
       _ =>
         'Diese Stopps ergeben gerade keine sichere Strecke. Bearbeite sie auf der Karte oder lass neue Stopps vorschlagen.',
     };
