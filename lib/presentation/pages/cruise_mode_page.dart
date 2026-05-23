@@ -23,6 +23,7 @@ import 'package:cruise_connect/application/providers/saved_routes_provider.dart'
 import 'package:cruise_connect/data/services/web_position_smoother.dart';
 import 'package:cruise_connect/data/services/native_position_smoother.dart';
 import 'package:cruise_connect/data/services/geocoding_service.dart';
+import 'package:cruise_connect/presentation/widgets/weather_chip.dart';
 import 'package:cruise_connect/data/services/driven_track_recorder.dart';
 import 'package:cruise_connect/data/services/navigation_guidance_utils.dart';
 import 'package:cruise_connect/data/services/navigation_progress_socket_service.dart';
@@ -275,6 +276,12 @@ class _CruiseModePageState extends State<CruiseModePage>
   int _activeManeuverIndex = 0;
   int _currentRouteIndex = 0;
   final Set<int> _announcedManeuverIndices = <int>{};
+  // 2026-05-23 (vucko): Haptic-Tracking damit jede Stufe (300m/150m/50m)
+  // nur 1× pro Manöver feuert statt bei jedem GPS-Tick.
+  int? _lastHapticManeuverIndex;
+  bool _hapticStage300m = false;
+  bool _hapticStage150m = false;
+  bool _hapticStage50m = false;
   StreamSubscription<geo.Position>? _positionSubscription;
   StreamSubscription<geo.Position>? _socketPositionSubscription;
   StreamSubscription<geo.Position>?
@@ -2925,11 +2932,34 @@ class _CruiseModePageState extends State<CruiseModePage>
   }
 
   Widget _buildRoutePreviewHeader() {
+    final coords = _lastRouteResult?.coordinates;
+    final start =
+        (coords != null && coords.isNotEmpty) ? coords.first : null;
     return Positioned(
       top: MediaQuery.of(context).padding.top + 8,
       left: 12,
       right: 12,
-      child: _buildRouteInfoBanner(),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _buildRouteInfoBanner(),
+          // Wetter-Chip nur wenn Start-Koordinate verfügbar.
+          // Erscheint zentriert + animiert unter dem Stats-Banner als
+          // schlanke Pill. Bei API-Fehler: silent fail (return SizedBox).
+          if (start != null && start.length >= 2)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Align(
+                alignment: Alignment.center,
+                child: WeatherChip(
+                  latitude: start[1],
+                  longitude: start[0],
+                ),
+              ),
+            ),
+        ],
+      ),
     );
   }
 
@@ -6774,18 +6804,39 @@ class _CruiseModePageState extends State<CruiseModePage>
     if (_activeManeuverIndex != prevManeuver ||
         visibleManeuverIndex != previousVisibleManeuverIndex) {
       needsRebuild = true;
-      // Haptic Feedback wenn neues Manöver aktiv wird
+      // Haptic Feedback wenn neues Manöver aktiv wird (Abbiegung erreicht)
       if (visibleManeuverIndex != null &&
           visibleManeuverIndex != previousVisibleManeuverIndex) {
-        HapticFeedback.mediumImpact();
+        HapticFeedback.heavyImpact();
       }
     }
-    // Leichtes Feedback kurz vor einem Manöver (< 150m)
+    // 2026-05-23 (vucko Task #16): 3-Stufen-Annäherungs-Haptic.
+    // Jede Stufe feuert nur 1× pro Manöver — verhindert Spam bei
+    // GPS-Updates alle 200-500ms im Annäherungsbereich.
     final distToManeuver = _calculateDistanceToManeuver();
-    if (distToManeuver != null &&
-        distToManeuver < 150 &&
-        distToManeuver > 100) {
-      HapticFeedback.lightImpact();
+    if (visibleManeuverIndex != null && distToManeuver != null) {
+      // Reset state wenn neues Manöver
+      if (_lastHapticManeuverIndex != visibleManeuverIndex) {
+        _lastHapticManeuverIndex = visibleManeuverIndex;
+        _hapticStage300m = false;
+        _hapticStage150m = false;
+        _hapticStage50m = false;
+      }
+      // 300m → lightImpact (Vorwarnung)
+      if (!_hapticStage300m && distToManeuver <= 300 && distToManeuver > 150) {
+        HapticFeedback.lightImpact();
+        _hapticStage300m = true;
+      }
+      // 150m → mediumImpact (achtung)
+      if (!_hapticStage150m && distToManeuver <= 150 && distToManeuver > 50) {
+        HapticFeedback.mediumImpact();
+        _hapticStage150m = true;
+      }
+      // 50m → heavyImpact (gleich!)
+      if (!_hapticStage50m && distToManeuver <= 50) {
+        HapticFeedback.heavyImpact();
+        _hapticStage50m = true;
+      }
     }
 
     if (needsRebuild) _safeSetState(() {});
