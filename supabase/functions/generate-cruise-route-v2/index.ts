@@ -379,8 +379,18 @@ async function callGraphHopper(opts: {
   // wird zusätzlich zum Profile angewandt — verschärft die Charakter-
   // Unterschiede zwischen Sport/Kurvenjagd/Abendrunde/Entdecker.
   const customOverlay = styleOverlayForProfile(opts.profile);
-  const overlay: { priority: Array<{ if: string; multiply_by: string }>; distance_influence?: number } = {
+  const overlay: {
+    priority: Array<{ if: string; multiply_by: string }>;
+    speed?: Array<{ if: string; limit_to: string }>;
+    distance_influence?: number;
+  } = {
     priority: [...customOverlay.priority],
+    // 2026-05-23 (vucko Bug-Fix FH→Romanshorn Fähre):
+    // speed.limit_to=0 ist GraphHopper's echter Hard-Block für eine Edge.
+    // multiply_by Penalties allein reichen nicht — GH nahm Bodensee-Fähre
+    // trotzdem weil Land-Route 50× länger wäre. limit_to=0 macht die
+    // Edge komplett unbefahrbar.
+    speed: [{ if: 'road_environment == FERRY', limit_to: '0' }],
   };
   if (customOverlay.distance_influence != null) {
     overlay.distance_influence = customOverlay.distance_influence;
@@ -389,12 +399,9 @@ async function callGraphHopper(opts: {
   if (opts.avoidHighways) {
     overlay.priority.push({ if: 'road_class == MOTORWAY || road_class == TRUNK', multiply_by: '0.05' });
   }
-  // 2026-05-22 (vucko Task #10): Ferries als Fallback-Penalty (zusätzlich
-  // zu snap_prevention). Wenn ein Routing dennoch eine Fähre einbaut
-  // (z. B. weil nur snap_prevention den Start- aber nicht Mid-Segment
-  // betrifft), wird sie hier multiplikativ fast komplett gestrichen.
-  overlay.priority.push({ if: 'road_environment == FERRY', multiply_by: '0.02' });
-  if (overlay.priority.length > 0 || overlay.distance_influence != null) {
+  // Doppelter Schutz: Ferry zusätzlich noch hohe priority-Penalty
+  overlay.priority.push({ if: 'road_environment == FERRY', multiply_by: '0.001' });
+  if (overlay.priority.length > 0 || overlay.distance_influence != null || overlay.speed != null) {
     params.set('custom_model', JSON.stringify(overlay));
   }
 
@@ -412,6 +419,36 @@ async function callGraphHopper(opts: {
     const p = data.paths[0];
     const coords = p.points.coordinates;
     const distanceKm = p.distance / 1000;
+    // 2026-05-23 (vucko Bug-Fix Bodensee-Ferry): GraphHopper Custom-Model
+    // mit road_environment==FERRY wird nicht zuverlässig durchgesetzt
+    // (bleibt im Routing). Post-Process: wenn die Route Edges mit
+    // >1500m zwischen 2 aufeinanderfolgenden Punkten hat UND wir nicht
+    // round_trip sind → Ferry-Verdacht → als Error zurückgeben damit
+    // upper layer retry mit anderem Snap-Offset macht.
+    if (!opts.isRoundTrip) {
+      let suspiciousEdgeCount = 0;
+      let longestEdgeMeters = 0;
+      for (let i = 1; i < Math.min(coords.length, 200); i++) {
+        const c1 = coords[i - 1];
+        const c2 = coords[i];
+        // Haversine in Meter
+        const R = 6371000;
+        const lat1 = (c1[1] * Math.PI) / 180;
+        const lat2 = (c2[1] * Math.PI) / 180;
+        const dLat = ((c2[1] - c1[1]) * Math.PI) / 180;
+        const dLng = ((c2[0] - c1[0]) * Math.PI) / 180;
+        const a = Math.sin(dLat / 2) ** 2 +
+          Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
+        const d = 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        if (d > 1500) suspiciousEdgeCount++;
+        if (d > longestEdgeMeters) longestEdgeMeters = d;
+      }
+      if (suspiciousEdgeCount >= 2) {
+        return {
+          error: `Ferry detected: ${suspiciousEdgeCount} edges >1.5km (longest ${Math.round(longestEdgeMeters)}m)`,
+        };
+      }
+    }
     return {
       geometry: p.points,
       distanceKm,
