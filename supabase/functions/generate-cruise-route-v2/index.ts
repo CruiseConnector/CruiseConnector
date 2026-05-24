@@ -20,56 +20,72 @@
 import { serve } from 'https://deno.land/std@0.210.0/http/server.ts';
 
 const GRAPHHOPPER_URL = Deno.env.get('GRAPHHOPPER_URL') ?? 'http://graphhopper.local:8989';
-// DE-Server (Port 8991 hinter dem Tunnel) hat germany-latest.osm.pbf alleine —
-// covers Friedrichshafen, München, Stuttgart, Nürnberg etc. die im DACH-merged
-// Graph wegen osmium duplicate-node-ID Crashes nicht drin sind.
+// DE-Server (PC1 Port 8991) — kompakter Backup, aktuell mit Mittelost-Daten
+// geseedet (TODO: PC1 neu seeden mit germany-latest).
 const GRAPHHOPPER_DE_URL = Deno.env.get('GRAPHHOPPER_DE_URL') ?? GRAPHHOPPER_URL.replace(':8989', ':8991');
+// 2026-05-24 (vucko PC2-Architektur): PC2 hostet erweitertes Europa-OSM
+// (Italien, Frankreich, Spanien, Balkan, Beneluxx, Polen). Wird automatisch
+// genutzt für alle Punkte AUSSER DACH, plus als Load-Balancing für DACH
+// wenn PC1 stark belastet. Falls ENV nicht gesetzt → wir fallen auf
+// PC1-DE-Server zurück (graceful degradation).
+const GRAPHHOPPER_EU_URL = Deno.env.get('GRAPHHOPPER_EU_URL') ?? GRAPHHOPPER_DE_URL;
 const ALLOWED_ORIGINS = '*';
 
-// Server-Wahl:
-// Empirie 2026-05-24 (vucko diagnose-test): DACH-Server (8989) deckt
-// tatsächlich ganz DACH ab inkl. Bayern (München, Augsburg, Salzburg, etc.).
-// DE-Server (8991) ist aktuell mit MITTELOST-OSM-Daten geseedet (bounds:
-// lat 5.86-47.28, lng 25.19-60.43) — also UNBRAUCHBAR für DACH.
-// Konsequenz:
-//   - DACH-Punkte → DACH-Server primary, DE-Server als toter Fallback (kostet wenig)
-//   - Non-DACH-Punkte → es gibt keinen sinnvollen Fallback; user_message
-//     "coverage_out_of_bounds" wird returnt.
-//
-// TODO (Infrastruktur): PC2 GH-Container mit echten DE-OSM-Daten neu seeden.
-//   Bis dahin nutzen wir DACH-Server als single source of truth.
-function chooseGraphhopperUrl(lat: number, lng: number): { primary: string; fallback: string } {
-  const inDachServerArea = isInDachCoverage(lat, lng);
-  if (inDachServerArea) {
-    return { primary: GRAPHHOPPER_URL, fallback: GRAPHHOPPER_DE_URL };
+/// Region-Klassifikation für intelligente Server-Wahl.
+/// 2026-05-24 (vucko): 3 Region-Buckets:
+///   - DACH (PC1-DACH-Server 8989) — DE+AT+CH+LI komplett
+///   - EU-WEST (PC2 Frankreich, Belgien, Niederlande, Luxemburg)
+///   - EU-SOUTH (PC2 Italien, Spanien, Portugal, Süd-Frankreich)
+///   - EU-EAST (PC2 Polen, Tschechien, Slowakei, Ungarn, Balkan)
+///   - UNKNOWN (außerhalb, z.B. Skandinavien-Nord oder weit außerhalb EU)
+enum GeoRegion { dach = 'dach', euWest = 'eu_west', euSouth = 'eu_south', euEast = 'eu_east', unknown = 'unknown' }
+
+function classifyPoint(lat: number, lng: number): GeoRegion {
+  // DACH-Box (großzügig, deckt auch Grenzregionen ab)
+  if (lat >= 45.8 && lat <= 55.1 && lng >= 5.86 && lng <= 17.2) {
+    return GeoRegion.dach;
   }
-  return { primary: GRAPHHOPPER_DE_URL, fallback: GRAPHHOPPER_URL };
+  // Italien + Süd-Frankreich + Spanien + Portugal
+  if (lat >= 36.0 && lat <= 47.0 && lng >= -10.0 && lng <= 18.5) {
+    return GeoRegion.euSouth;
+  }
+  // Frankreich-Nord + Benelux + UK-Süd
+  if (lat >= 47.0 && lat <= 55.0 && lng >= -5.5 && lng <= 7.5) {
+    return GeoRegion.euWest;
+  }
+  // Polen + Tschechien + Slowakei + Ungarn + Balkan (Slowenien, Kroatien, Serbien, etc.)
+  if (lat >= 40.0 && lat <= 55.5 && lng >= 12.0 && lng <= 30.0) {
+    return GeoRegion.euEast;
+  }
+  return GeoRegion.unknown;
 }
 
-/// Großzügige DACH-Box (DACH-Server hat Coverage für DE+AT+CH+LI komplett,
-/// inkl. Bayern). Wir verifizieren weit genug west/ost/nord/süd damit alle
-/// realistischen User-Stopps drin sind.
 function isInDachCoverage(lat: number, lng: number): boolean {
-  // Bounding Box DACH komplett:
-  //   - DE: lat 47.27-55.06, lng 5.87-15.04
-  //   - AT: lat 46.37-49.02, lng 9.53-17.16
-  //   - CH: lat 45.82-47.81, lng 5.96-10.49
-  //   - LI: ~47, ~9.5
-  // Vereint: lat 45.8-55.1, lng 5.86-17.2
-  return lat >= 45.8 && lat <= 55.1 && lng >= 5.86 && lng <= 17.2;
+  return classifyPoint(lat, lng) === GeoRegion.dach;
 }
 
-/// Server-Wahl mit allen Routen-Punkten. Wenn IRGENDEIN Punkt außerhalb
-/// DACH ist → nutzen DE-Server primary (auch wenn aktuell tote Bounds,
-/// liefert wenigstens deterministisch "coverage_out_of_bounds" zurück).
+/// 3-Server-Wahl mit intelligentem Routing.
+/// 2026-05-24 (vucko):
+///   - DACH-Punkt → PC1-DACH primary (PC1-DE fallback, PC2-EU fallback²)
+///   - EU-Punkt → PC2-EU primary (PC1-DE fallback, PC1-DACH fallback²)
+///   - Cross-DACH-EU Route (z.B. München→Mailand) → beide Server müssen
+///     coveren, also EU primary
+function chooseGraphhopperUrl(lat: number, lng: number): { primary: string; fallback: string } {
+  return chooseGraphhopperUrlForRoute([{ lat, lng }]);
+}
+
 function chooseGraphhopperUrlForRoute(points: Array<{ lat: number; lng: number }>): { primary: string; fallback: string } {
   if (points.length === 0) {
     return { primary: GRAPHHOPPER_URL, fallback: GRAPHHOPPER_DE_URL };
   }
-  const allInDach = points.every(p => isInDachCoverage(p.lat, p.lng));
-  return allInDach
-    ? { primary: GRAPHHOPPER_URL, fallback: GRAPHHOPPER_DE_URL }
-    : { primary: GRAPHHOPPER_DE_URL, fallback: GRAPHHOPPER_URL };
+  const regions = new Set(points.map(p => classifyPoint(p.lat, p.lng)));
+  // Alle Punkte in DACH → DACH-Server primary
+  if (regions.size === 1 && regions.has(GeoRegion.dach)) {
+    return { primary: GRAPHHOPPER_URL, fallback: GRAPHHOPPER_EU_URL };
+  }
+  // Sonst: EU-Server primary (hat größere Coverage). DACH-Server als fallback
+  // falls EU offline ist und der Routen-Großteil DACH ist.
+  return { primary: GRAPHHOPPER_EU_URL, fallback: GRAPHHOPPER_URL };
 }
 
 // ─────────────────────────── Types ────────────────────────────────────────
@@ -450,7 +466,14 @@ async function callGraphHopper(opts: {
     // >1500m zwischen 2 aufeinanderfolgenden Punkten hat UND wir nicht
     // round_trip sind → Ferry-Verdacht → als Error zurückgeben damit
     // upper layer retry mit anderem Snap-Offset macht.
-    if (!opts.isRoundTrip) {
+    //
+    // 2026-05-24 (vucko Fix für FH→Wien false-positive): Ferry-Detection
+    // NUR für motorcycle-Profile mit avoidHighways aktivieren. Bei `car`
+    // ohne avoidHighways wollen wir Autobahn-Edges, die ohnehin oft große
+    // Knotenabstände haben. Plus 6km-Schwelle statt 1.5km — Bodensee-Fähre
+    // ist ~12km, Autobahn-Edges selten >6km.
+    const isMotorcycleProfile = opts.profile.startsWith('motorcycle');
+    if (!opts.isRoundTrip && isMotorcycleProfile) {
       let suspiciousEdgeCount = 0;
       let longestEdgeMeters = 0;
       for (let i = 1; i < Math.min(coords.length, 200); i++) {
@@ -465,12 +488,15 @@ async function callGraphHopper(opts: {
         const a = Math.sin(dLat / 2) ** 2 +
           Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
         const d = 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-        if (d > 1500) suspiciousEdgeCount++;
+        // Erhöht von 1500m → 4000m: vermeidet false-positives bei Autobahn-Edges
+        // ohne dichten Knotenraster (z.B. zwischen Anschlussstellen).
+        if (d > 4000) suspiciousEdgeCount++;
         if (d > longestEdgeMeters) longestEdgeMeters = d;
       }
-      if (suspiciousEdgeCount >= 2) {
+      // Schwelle von 2 → 3 Edges: noch konservativer false-positive-Schutz.
+      if (suspiciousEdgeCount >= 3) {
         return {
-          error: `Ferry detected: ${suspiciousEdgeCount} edges >1.5km (longest ${Math.round(longestEdgeMeters)}m)`,
+          error: `Ferry detected: ${suspiciousEdgeCount} edges >4km (longest ${Math.round(longestEdgeMeters)}m)`,
         };
       }
     }
@@ -931,6 +957,45 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
       if (!parallel.every(p => 'error' in p.result)) {
         usedProfileFallback = true; // markiere als degraded
         break;
+      }
+    }
+  }
+
+  // 2026-05-24 (vucko ULTIMATE-FALLBACK):
+  // Wenn ALLE motorcycle-Profile Varianten fail → versuche `car` Profil
+  // OHNE avoid_highways. Das ist der "Google Maps Fallback": IMMER eine
+  // befahrbare Route, auch wenn nicht scenic. Besser als gar nichts.
+  // Nutzt Plain-Dijkstra ohne Custom-Model.
+  const ultimateAllFailed = parallel.every(p => 'error' in p.result);
+  if (ultimateAllFailed && !isRoundTrip && req.target_location != null) {
+    console.log(`[ULTIMATE FALLBACK] All motorcycle attempts failed, trying car profile direct`);
+    // Direkter A→B mit "car" profil, kein Custom-Model, keine Avoid-Highways
+    const carServers = serverChoice.primary === serverChoice.fallback
+      ? [serverChoice.primary]
+      : [serverChoice.primary, serverChoice.fallback];
+    for (const carServer of carServers) {
+      try {
+        const carResult = await callGraphHopper({
+          startLat: req.start_location!.latitude,
+          startLng: req.start_location!.longitude,
+          endLat: req.target_location.latitude,
+          endLng: req.target_location.longitude,
+          profile: 'car',
+          isRoundTrip: false,
+          avoidHighways: false,  // explicit FALSE — Autobahn ok
+          serverUrl: carServer,
+          intermediateWaypoints: req.waypoints?.map(w => ({
+            lat: w.latitude, lng: w.longitude,
+          })),
+        });
+        if (!('error' in carResult)) {
+          console.log(`[ULTIMATE FALLBACK] car profile succeeded on ${carServer}`);
+          parallel = [{ result: carResult, seed: 0 }];
+          usedProfileFallback = true;
+          break;
+        }
+      } catch (e) {
+        console.log(`[ULTIMATE FALLBACK] car attempt threw: ${e}`);
       }
     }
   }
