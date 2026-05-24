@@ -157,11 +157,11 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
           ? _waypointSignature(waypointSnapshot)
           : null;
       if (_isWaypointPlanning &&
-          (waypointSnapshot.isEmpty || waypointSnapshot.length > 3)) {
+          (waypointSnapshot.isEmpty || waypointSnapshot.length > 5)) {
         _showError(
           waypointSnapshot.isEmpty
               ? 'Setze mindestens einen Stopp oder lass Stopps vorschlagen.'
-              : 'Bitte nutze maximal 3 Stopps.',
+              : 'Bitte nutze maximal 5 Stopps (Trip-Modus).',
         );
         return;
       }
@@ -856,7 +856,8 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
     List<LatLng> points,
     int targetKm,
   ) {
-    if (points.isEmpty || points.length > 3) return false;
+    // 2026-05-24 (vucko Task #47): Limit erhöht auf 5 (Trip-Modus)
+    if (points.isEmpty || points.length > 5) return false;
     final maxDistanceKm = math.max(12.0, math.min(80.0, targetKm * 0.75));
     final bearings = <double>[];
     for (var i = 0; i < points.length; i += 1) {

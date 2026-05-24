@@ -21,6 +21,7 @@ import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/data/services/voice_settings_service.dart';
 import 'package:cruise_connect/data/services/notification_service.dart';
 import 'package:cruise_connect/data/services/notification_settings_service.dart';
+import 'package:cruise_connect/data/services/poi_settings_service.dart';
 import 'package:cruise_connect/presentation/pages/auth_page.dart';
 import 'package:cruise_connect/presentation/pages/post_detail_page.dart';
 
@@ -42,6 +43,7 @@ void main() {
       // (persistiert via SharedPrefs).
       unawaited(VoiceSettingsService.instance.load());
       unawaited(NotificationSettingsService.instance.load());
+      unawaited(PoiSettingsService.instance.load());
 
       runApp(const MyApp());
     },

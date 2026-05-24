@@ -27,6 +27,7 @@ import 'package:cruise_connect/data/services/voice_settings_service.dart';
 import 'package:cruise_connect/data/services/tts_service.dart';
 import 'package:cruise_connect/data/services/route_poi_service.dart';
 import 'package:cruise_connect/data/services/road_hazard_service.dart';
+import 'package:cruise_connect/data/services/poi_settings_service.dart';
 import 'package:cruise_connect/presentation/widgets/weather_chip.dart';
 import 'package:cruise_connect/presentation/widgets/top_toast.dart';
 import 'package:cruise_connect/data/services/driven_track_recorder.dart';
@@ -2029,7 +2030,9 @@ class _CruiseModePageState extends State<CruiseModePage>
     List<LatLng> points,
     int targetKm,
   ) {
-    if (points.isEmpty || points.length > 3) return false;
+    // 2026-05-24 (vucko Task #47): Limit erhöht auf 5 (Trip-Modus).
+    // Vorher hartes "> 3" hat Trip-Modus mit 4-5 Stopps blockiert.
+    if (points.isEmpty || points.length > 5) return false;
     final maxDistanceKm = math.max(12.0, math.min(80.0, targetKm * 0.75));
     final bearings = <double>[];
     for (var i = 0; i < points.length; i += 1) {
@@ -2959,37 +2962,13 @@ class _CruiseModePageState extends State<CruiseModePage>
   }
 
   Widget _buildRoutePreviewHeader() {
-    final coords = _lastRouteResult?.coordinates;
-    final start =
-        (coords != null && coords.isNotEmpty) ? coords.first : null;
+    // 2026-05-24 (vucko Task #48): Wetter direkt im Stats-Banner
+    // integriert (kein 2. Pop-up mehr). Cleaner Single-Card.
     return Positioned(
       top: MediaQuery.of(context).padding.top + 8,
       left: 12,
       right: 12,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          _buildRouteInfoBanner(),
-          // Wetter-Chip nur wenn Start-Koordinate verfügbar.
-          // Erscheint zentriert + animiert unter dem Stats-Banner als
-          // schlanke Pill. Bei API-Fehler: silent fail (return SizedBox).
-          if (start != null && start.length >= 2)
-            Padding(
-              padding: const EdgeInsets.only(top: 8),
-              child: Align(
-                alignment: Alignment.center,
-                child: WeatherChip(
-                  latitude: start[1],
-                  longitude: start[0],
-                  // 2026-05-23 (vucko Task #24): Trend basierend auf Dauer
-                  durationMinutes:
-                      ((_lastRouteResult?.durationSeconds ?? 0) / 60).round(),
-                ),
-              ),
-            ),
-        ],
-      ),
+      child: _buildRouteInfoBanner(),
     );
   }
 
@@ -3079,37 +3058,73 @@ class _CruiseModePageState extends State<CruiseModePage>
               ),
             ],
           ),
-          // 2026-05-24 (vucko Task #38): Höhenmeter wenn vorhanden.
-          // Sub-Zeile statt extra Card — bleibt kompakt.
-          if (_ascentMeters() > 50) ...[
-            const SizedBox(height: 6),
-            Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-              decoration: BoxDecoration(
-                color: AppAccentColors.accent.withValues(alpha: 0.12),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(Icons.terrain_outlined,
-                      size: 13, color: AppAccentColors.accent),
-                  const SizedBox(width: 4),
-                  Text(
-                    '+${_ascentMeters()}m Steigung',
-                    style: TextStyle(
-                      color: AppAccentColors.accent,
-                      fontSize: 11.5,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                ],
-              ),
-            ),
+          // 2026-05-24 (vucko Task #48): Wetter + Steigung als einheitliche
+          // Footer-Zeile direkt im Banner — eine Card, keine 2 Pop-ups.
+          if (_hasFooterChips()) ...[
+            const SizedBox(height: 8),
+            _buildBannerFooterChips(),
           ],
         ],
       ),
+    );
+  }
+
+  bool _hasFooterChips() {
+    final coords = _lastRouteResult?.coordinates;
+    final hasStart =
+        coords != null && coords.isNotEmpty && coords.first.length >= 2;
+    return _ascentMeters() > 50 || hasStart;
+  }
+
+  Widget _buildBannerFooterChips() {
+    final coords = _lastRouteResult?.coordinates;
+    final start =
+        (coords != null && coords.isNotEmpty) ? coords.first : null;
+    final hasWeather = start != null && start.length >= 2;
+    final ascent = _ascentMeters();
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        if (ascent > 50) ...[
+          Container(
+            padding:
+                const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+            decoration: BoxDecoration(
+              color: AppAccentColors.accent.withValues(alpha: 0.14),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                color: AppAccentColors.accent.withValues(alpha: 0.30),
+              ),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.terrain_outlined,
+                    size: 13, color: AppAccentColors.accent),
+                const SizedBox(width: 4),
+                Text(
+                  '+${ascent}m',
+                  style: TextStyle(
+                    color: AppAccentColors.accent,
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (hasWeather) const SizedBox(width: 8),
+        ],
+        if (hasWeather)
+          Flexible(
+            child: WeatherChip(
+              latitude: start[1],
+              longitude: start[0],
+              durationMinutes:
+                  ((_lastRouteResult?.durationSeconds ?? 0) / 60).round(),
+            ),
+          ),
+      ],
     );
   }
 
@@ -3516,6 +3531,22 @@ class _CruiseModePageState extends State<CruiseModePage>
                 height: 46,
                 child: _buildDestinationMarker(),
               ),
+            ],
+          ),
+        // ── POI-Marker (Tankstellen, Restaurants etc., Google-Maps-Style) ─
+        if (_routePois.isNotEmpty)
+          MarkerLayer(
+            markers: [
+              for (final poi in _routePois)
+                Marker(
+                  point: LatLng(poi.latitude, poi.longitude),
+                  width: 36,
+                  height: 36,
+                  child: GestureDetector(
+                    onTap: () => _showPoiInfoCard(poi),
+                    child: _buildPoiMarker(poi),
+                  ),
+                ),
             ],
           ),
         // ── User-Position Marker (Live-Navigation) ─────────────────────────
@@ -5058,10 +5089,21 @@ class _CruiseModePageState extends State<CruiseModePage>
     _drivenTrackRecorder.reset();
     _clearAccessLegState();
     // 2026-05-24 (vucko Task #45): Hazard-Check im Hintergrund.
-    // Wenn Construction/Closed entlang Route → Top-Toast Warnung.
     _hazardCheckDone = false;
     _roadHazards = const [];
     unawaited(_checkHazardsInBackground(result.coordinates));
+    // 2026-05-24 (vucko Task #49): POIs auto-laden wenn Settings aktiv
+    // (Google-Maps-Style: Tankstellen erscheinen automatisch auf der Map).
+    _routePois = const [];
+    if (PoiSettingsService.instance.anyEnabled) {
+      unawaited(_loadPoisFromSettings(result.coordinates));
+    }
+    // First-Run-Tutorial einmalig zeigen
+    if (!PoiSettingsService.instance.tutorialSeen) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _showPoiFirstRunTutorial();
+      });
+    }
     setState(() {
       _routeGeoJson = result.geoJson;
       _routeDistance = result.distanceMeters;
@@ -7074,6 +7116,163 @@ class _CruiseModePageState extends State<CruiseModePage>
     );
   }
 
+  // 2026-05-24 (vucko Task #49): POI-Auto-Fetch + Map-Marker.
+  Future<void> _loadPoisFromSettings(List<List<double>> coords) async {
+    final types = PoiSettingsService.instance.enabledTypes;
+    if (types.isEmpty || coords.length < 2) return;
+    try {
+      final pois = await RoutePoiService.instance.fetchPoisAlongRoute(
+        coordinates: coords,
+        types: types,
+        bufferMeters: 250,
+        maxResults: 50,
+      );
+      if (!mounted) return;
+      setState(() => _routePois = pois);
+    } catch (_) {/* silent */}
+  }
+
+  Widget _buildPoiMarker(RoutePoi poi) {
+    final color = switch (poi.type) {
+      PoiType.fuel => const Color(0xFFEF4444),         // rot — Tankstelle
+      PoiType.restaurant => const Color(0xFFFBBF24),   // gelb — Restaurant
+      PoiType.cafe => const Color(0xFF8B5CF6),         // violett — Café
+      PoiType.motorcycleRepair => const Color(0xFF14B8A6), // teal — Werkstatt
+      _ => Colors.white70,
+    };
+    return Container(
+      decoration: BoxDecoration(
+        color: color,
+        shape: BoxShape.circle,
+        border: Border.all(color: Colors.white, width: 2.5),
+        boxShadow: [
+          BoxShadow(
+            color: color.withValues(alpha: 0.45),
+            blurRadius: 6,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      alignment: Alignment.center,
+      child: Text(
+        poi.type.emoji,
+        style: const TextStyle(fontSize: 16),
+      ),
+    );
+  }
+
+  void _showPoiInfoCard(RoutePoi poi) {
+    HapticFeedback.selectionClick();
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: const Color(0xFF14181F),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+      ),
+      builder: (ctx) => Padding(
+        padding: const EdgeInsets.fromLTRB(20, 14, 20, 24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Center(
+              child: Container(
+                width: 38,
+                height: 4,
+                margin: const EdgeInsets.only(bottom: 14),
+                decoration: BoxDecoration(
+                  color: Colors.white24,
+                  borderRadius: BorderRadius.circular(99),
+                ),
+              ),
+            ),
+            Row(
+              children: [
+                Text(poi.type.emoji, style: const TextStyle(fontSize: 28)),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        poi.displayName,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 17,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      Text(
+                        poi.type.label,
+                        style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.60),
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 14),
+            Row(
+              children: [
+                Icon(Icons.alt_route_outlined,
+                    size: 14, color: AppAccentColors.accent),
+                const SizedBox(width: 4),
+                Text(
+                  '${poi.distanceFromRouteMeters.round()}m abseits der Route',
+                  style: TextStyle(
+                    color: AppAccentColors.accent,
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
+            if (poi.openingHours != null) ...[
+              const SizedBox(height: 6),
+              Row(
+                children: [
+                  Icon(Icons.schedule_outlined,
+                      size: 14,
+                      color: Colors.white.withValues(alpha: 0.60)),
+                  const SizedBox(width: 4),
+                  Expanded(
+                    child: Text(
+                      poi.openingHours!,
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.75),
+                        fontSize: 12,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 2026-05-24 (vucko Task #50): First-Run-Tutorial — Google-Maps-Stil
+  /// Hinweis dass Tankstellen jetzt auf der Map sichtbar sind, Settings-Link
+  /// für Filter.
+  Future<void> _showPoiFirstRunTutorial() async {
+    if (!mounted || PoiSettingsService.instance.tutorialSeen) return;
+    await PoiSettingsService.instance.markTutorialSeen();
+    if (!mounted) return;
+    TopToast.show(
+      context,
+      message:
+          '⛽ Tankstellen erscheinen automatisch auf der Karte — Filter in Einstellungen',
+      icon: Icons.local_gas_station_rounded,
+      duration: const Duration(seconds: 5),
+    );
+  }
+
   // 2026-05-24 (vucko Task #45): Hazard-Check im Hintergrund nach Route-Build.
   Future<void> _checkHazardsInBackground(List<List<double>> coords) async {
     if (coords.length < 2) return;
@@ -7103,6 +7302,9 @@ class _CruiseModePageState extends State<CruiseModePage>
   }
 
   // 2026-05-24 (vucko Task #44): POI-Toggle (Tankstellen entlang Route).
+  /// 2026-05-24 (vucko Task #49): POI-Toggle — Marker IN/AUS auf der Map
+  /// statt Bottom-Sheet (Google-Maps-Stil). Bottom-Sheet bleibt nur
+  /// als Sekundär-Aktion auf langes Drücken.
   Future<void> _togglePois() async {
     if (_poisLoading) return;
     final newState = !_poisVisible;
@@ -7121,13 +7323,16 @@ class _CruiseModePageState extends State<CruiseModePage>
       );
       return;
     }
+    final types = PoiSettingsService.instance.anyEnabled
+        ? PoiSettingsService.instance.enabledTypes
+        : _poiTypes;
     setState(() => _poisLoading = true);
     try {
       final pois = await RoutePoiService.instance.fetchPoisAlongRoute(
         coordinates: _fullRouteCoordinates,
-        types: _poiTypes,
+        types: types,
         bufferMeters: 250,
-        maxResults: 40,
+        maxResults: 50,
       );
       if (!mounted) return;
       setState(() {
@@ -7138,17 +7343,25 @@ class _CruiseModePageState extends State<CruiseModePage>
       if (pois.isEmpty) {
         TopToast.show(
           context,
-          message: 'Keine Tankstellen direkt an der Route gefunden',
+          message: 'Keine POIs entlang dieser Route gefunden',
           icon: Icons.search_off,
         );
       } else {
-        _showPoiBottomSheet();
+        TopToast.show(
+          context,
+          message: '${pois.length} POIs auf der Karte sichtbar',
+          icon: Icons.place_outlined,
+          duration: const Duration(milliseconds: 2200),
+        );
       }
     } catch (e) {
       if (mounted) setState(() => _poisLoading = false);
     }
   }
 
+  // 2026-05-24 (vucko): Bottom-Sheet ist nicht mehr standard Workflow.
+  // Bleibt als optionaler Helper für Listing-View (z.B. Long-Press FAB).
+  // ignore: unused_element
   void _showPoiBottomSheet() {
     showModalBottomSheet<void>(
       context: context,

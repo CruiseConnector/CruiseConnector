@@ -1,5 +1,6 @@
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/data/services/notification_settings_service.dart';
+import 'package:cruise_connect/data/services/poi_settings_service.dart';
 import 'package:cruise_connect/data/services/voice_settings_service.dart';
 import 'package:cruise_connect/application/providers/community_provider.dart';
 import 'package:cruise_connect/presentation/widgets/accent_color_picker.dart';
@@ -259,6 +260,34 @@ class _SettingsPageState extends State<SettingsPage> {
                         'Haftung, Routenmodi, Wegpunkte und Sicherheit nachlesen',
                     onTap: () =>
                         showRoutingOnboardingSheet(context, force: true),
+                  ),
+                ]),
+
+                const SizedBox(height: 24),
+
+                _buildSectionHeader('POIs AUF DER KARTE'),
+                _buildSectionContainer([
+                  AnimatedBuilder(
+                    animation: PoiSettingsService.instance,
+                    builder: (context, _) {
+                      final s = PoiSettingsService.instance;
+                      return Column(
+                        children: [
+                          _buildSwitchTile('⛽  Tankstellen', s.fuel,
+                              (v) => s.setFuel(v)),
+                          const Divider(color: Colors.white10, height: 1),
+                          _buildSwitchTile('🍴  Restaurants', s.restaurant,
+                              (v) => s.setRestaurant(v)),
+                          const Divider(color: Colors.white10, height: 1),
+                          _buildSwitchTile('☕  Cafés', s.cafe,
+                              (v) => s.setCafe(v)),
+                          const Divider(color: Colors.white10, height: 1),
+                          _buildSwitchTile('🔧  Motorrad-Werkstätten',
+                              s.repair,
+                              (v) => s.setRepair(v)),
+                        ],
+                      );
+                    },
                   ),
                 ]),
 
