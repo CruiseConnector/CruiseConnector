@@ -25,10 +25,13 @@ import 'package:cruise_connect/data/services/native_position_smoother.dart';
 import 'package:cruise_connect/data/services/geocoding_service.dart';
 import 'package:cruise_connect/data/services/voice_settings_service.dart';
 import 'package:cruise_connect/data/services/tts_service.dart';
+import 'package:cruise_connect/data/services/trip_service.dart';
 import 'package:cruise_connect/data/services/route_poi_service.dart';
+import 'package:cruise_connect/data/services/opening_hours_parser.dart';
+import 'package:cruise_connect/presentation/widgets/cruise/poi_detail_sheet.dart';
 import 'package:cruise_connect/data/services/road_hazard_service.dart';
 import 'package:cruise_connect/data/services/poi_settings_service.dart';
-import 'package:cruise_connect/presentation/widgets/weather_chip.dart';
+import 'package:cruise_connect/presentation/widgets/weather_inline.dart';
 import 'package:cruise_connect/presentation/widgets/top_toast.dart';
 import 'package:cruise_connect/data/services/driven_track_recorder.dart';
 import 'package:cruise_connect/data/services/navigation_guidance_utils.dart';
@@ -80,6 +83,13 @@ class CruiseModePage extends StatefulWidget {
   /// HomePage hört darauf und wechselt zum Cruise-Tab.
   static final ValueNotifier<SavedRoute?> pendingRoute =
       ValueNotifier<SavedRoute?>(null);
+
+  /// 2026-05-24 (vucko Task #53): Trip-Resume-Signal.
+  /// Wird gesetzt wenn HomeCarousel auf Trip-Resume-Card geklickt wird.
+  /// CruiseModePage hört darauf und lädt TripService.stopsFor(tripId)
+  /// + setzt Wegpunkte + öffnet Routing-Sheet im Trip-Mode.
+  static final ValueNotifier<String?> pendingTripResume =
+      ValueNotifier<String?>(null);
 
   @override
   State<CruiseModePage> createState() => _CruiseModePageState();
@@ -258,6 +268,9 @@ class _CruiseModePageState extends State<CruiseModePage>
   // User toggled via TripMode-Switch. First-Use Tutorial-Overlay zeigt
   // sich wenn _waypointTutorialShown == false.
   bool _tripModeEnabled = false;
+  // 2026-05-24 (vucko Task #53): Trip-DB-ID wenn Trip-Mode aktiv + Route gestartet.
+  // null = kein Trip aktiv. Bei Pause/Verlassen → TripService.pauseTrip(this).
+  String? _activeTripId;
   bool _waypointTutorialShown = false;
   static const int _maxWaypointsNormal = 3;
   static const int _maxWaypointsTripMode = 5;
@@ -730,6 +743,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       );
     }
     CruiseModePage.pendingRoute.addListener(_onPendingRoute);
+    CruiseModePage.pendingTripResume.addListener(_onPendingTripResume);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _consumePendingRouteIfAvailable();
     });
@@ -1269,9 +1283,96 @@ class _CruiseModePageState extends State<CruiseModePage>
     }
   }
 
+  // 2026-05-24 (vucko Task #53): Trip-Resume aus Home-Carousel.
+  void _onPendingTripResume() {
+    _consumePendingTripResumeIfAvailable();
+  }
+
+  Future<void> _consumePendingTripResumeIfAvailable() async {
+    if (!mounted || _disposed) return;
+    final tripId = CruiseModePage.pendingTripResume.value;
+    if (tripId == null) return;
+    CruiseModePage.pendingTripResume.value = null;
+    try {
+      final stops = await TripService.instance.stopsFor(tripId);
+      if (!mounted || _disposed) return;
+      // 2026-05-24 (vucko Fix): wenn Trip kaputt (keine/zu wenige Stops) →
+      // sauberer Top-Toast + Trip in DB als completed markieren damit er
+      // nicht weiter in der Resume-Card auftaucht.
+      if (stops.length < 2) {
+        TopToast.show(
+          context,
+          message: 'Diese Tour hat keine gültigen Wegpunkte mehr — wird geschlossen.',
+          icon: Icons.info_outline_rounded,
+          duration: const Duration(milliseconds: 3500),
+        );
+        unawaited(_safeCompleteTrip(tripId));
+        return;
+      }
+      // Resume in DB markieren (status=active, resumed_at=now)
+      await TripService.instance.resumeTrip(tripId);
+      // Setze UI-State: Trip-Mode an, Wegpunkte = stops (ohne start),
+      // _activeTripId = tripId damit Pause/Complete später greift.
+      final waypoints = stops
+          .where((s) => s.stopType != 'start')
+          .map((s) => LatLng(s.lat, s.lng))
+          .toList(growable: false);
+      if (!mounted || _disposed) return;
+      if (waypoints.length < 2) {
+        TopToast.show(
+          context,
+          message: 'Tour hat nicht genug Wegpunkte zum Fortsetzen.',
+          icon: Icons.info_outline_rounded,
+          duration: const Duration(milliseconds: 3500),
+        );
+        unawaited(_safeCompleteTrip(tripId));
+        return;
+      }
+      setState(() {
+        _activeTripId = tripId;
+        _tripModeEnabled = true;
+        _isRoundTrip = true;
+        _planningType = 'Wegpunkte';
+        _roundTripWaypoints
+          ..clear()
+          ..addAll(waypoints);
+      });
+      // Visuelle Bestätigung
+      TopToast.show(
+        context,
+        message: 'Trip wird fortgesetzt — ${waypoints.length} Stopps geladen',
+        icon: Icons.route_rounded,
+        duration: const Duration(milliseconds: 2800),
+      );
+      // 2026-05-24 (vucko): Auto-Route-Generation nach Resume.
+      // Sonst sieht der User nur leere Karte mit Wegpunkten — verwirrend.
+      // Delay damit setState durch ist + UI gemounted.
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+      if (!mounted || _disposed) return;
+      unawaited(_generateRoute());
+    } catch (e) {
+      debugPrint('[CruiseMode] Trip-Resume failed: $e');
+      if (mounted && !_disposed) {
+        TopToast.show(
+          context,
+          message: 'Tour konnte nicht geladen werden.',
+          icon: Icons.warning_amber_rounded,
+          duration: const Duration(milliseconds: 3000),
+        );
+      }
+    }
+  }
+
   @override
   void dispose() {
     _disposed = true;
+    // 2026-05-24 (vucko Task #53): aktive Trip pausieren beim Verlassen
+    // (z. B. App-Backgrounding, Tab-Wechsel). Best-effort.
+    final tripIdToPause = _activeTripId;
+    if (tripIdToPause != null) {
+      _activeTripId = null;
+      unawaited(_safePauseTrip(tripIdToPause));
+    }
     _routeDrawAnimationToken++;
     _routeDrawAnimationTimer?.cancel();
     _routeLoadingPhaseTimer?.cancel();
@@ -1280,6 +1381,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     _cameraAnimController?.dispose();
     CruiseModePage.isFullscreen.value = false;
     CruiseModePage.pendingRoute.removeListener(_onPendingRoute);
+    CruiseModePage.pendingTripResume.removeListener(_onPendingTripResume);
     _stopSimulation(restartLiveTracking: false);
     _positionSubscription?.cancel();
     _socketPositionSubscription?.cancel();
@@ -3045,84 +3147,95 @@ class _CruiseModePageState extends State<CruiseModePage>
             ),
           ),
           const SizedBox(height: 10),
+          // 2026-05-24 (vucko): Wetter inline als 5. Metric — passt zum
+          // Style der anderen (Distanz/Dauer/Kurven/XP) ohne dicke Extra-Card.
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             children: [
-              _buildInfoItem(Icons.straighten, '$distKm km', 'Distanz'),
-              _buildInfoItem(Icons.timer_outlined, timeStr, 'Dauer'),
-              _buildInfoItem(Icons.turn_right, '$curveCount', 'Kurven'),
-              _buildInfoItem(
+              Expanded(child: _buildInfoItem(Icons.straighten, '$distKm km', 'Distanz')),
+              Expanded(child: _buildInfoItem(Icons.timer_outlined, timeStr, 'Dauer')),
+              Expanded(child: _buildInfoItem(Icons.turn_right, '$curveCount', 'Kurven')),
+              Expanded(child: _buildInfoItem(
                 Icons.star_outline,
                 '${_calculateRouteXp()}',
                 'XP',
-              ),
+              )),
+              if (_routeStartCoord() != null)
+                Expanded(
+                  child: WeatherInline(
+                    latitude: _routeStartCoord()![1],
+                    longitude: _routeStartCoord()![0],
+                    durationMinutes: durationMin,
+                  ),
+                ),
             ],
           ),
-          // 2026-05-24 (vucko Task #48): Wetter + Steigung als einheitliche
-          // Footer-Zeile direkt im Banner — eine Card, keine 2 Pop-ups.
-          if (_hasFooterChips()) ...[
-            const SizedBox(height: 8),
-            _buildBannerFooterChips(),
+          // 2026-05-24 (vucko): Optionale dezente Footer-Zeile:
+          // - Steigung wenn > 50m (kleines Chip)
+          // - Wetter-Warnung (Regen/Trend/Gewitter) nur bei Bedarf
+          if (_ascentMeters() > 50 || _routeStartCoord() != null) ...[
+            _buildBannerFooterStrip(durationMin: durationMin),
           ],
         ],
       ),
     );
   }
 
-  bool _hasFooterChips() {
+  /// 2026-05-24 (vucko): Route-Start-Coordinate [lng, lat] für Wetter-Position.
+  List<double>? _routeStartCoord() {
     final coords = _lastRouteResult?.coordinates;
-    final hasStart =
-        coords != null && coords.isNotEmpty && coords.first.length >= 2;
-    return _ascentMeters() > 50 || hasStart;
+    if (coords == null || coords.isEmpty) return null;
+    final c = coords.first;
+    if (c.length < 2) return null;
+    return c;
   }
 
-  Widget _buildBannerFooterChips() {
-    final coords = _lastRouteResult?.coordinates;
-    final start =
-        (coords != null && coords.isNotEmpty) ? coords.first : null;
-    final hasWeather = start != null && start.length >= 2;
+  Widget _buildBannerFooterStrip({required int durationMin}) {
+    final start = _routeStartCoord();
     final ascent = _ascentMeters();
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
+    final showAscent = ascent > 50;
+    final showWeatherWarning = start != null;
+    if (!showAscent && !showWeatherWarning) return const SizedBox.shrink();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
       children: [
-        if (ascent > 50) ...[
-          Container(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-            decoration: BoxDecoration(
-              color: AppAccentColors.accent.withValues(alpha: 0.14),
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(
-                color: AppAccentColors.accent.withValues(alpha: 0.30),
+        if (showAscent) ...[
+          const SizedBox(height: 8),
+          Center(
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              decoration: BoxDecoration(
+                color: AppAccentColors.accent.withValues(alpha: 0.14),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(
+                  color: AppAccentColors.accent.withValues(alpha: 0.30),
+                ),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.terrain_outlined,
+                      size: 13, color: AppAccentColors.accent),
+                  const SizedBox(width: 4),
+                  Text(
+                    '+${ascent}m',
+                    style: TextStyle(
+                      color: AppAccentColors.accent,
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ],
               ),
             ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(Icons.terrain_outlined,
-                    size: 13, color: AppAccentColors.accent),
-                const SizedBox(width: 4),
-                Text(
-                  '+${ascent}m',
-                  style: TextStyle(
-                    color: AppAccentColors.accent,
-                    fontSize: 11.5,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-              ],
-            ),
           ),
-          if (hasWeather) const SizedBox(width: 8),
         ],
-        if (hasWeather)
-          Flexible(
-            child: WeatherChip(
-              latitude: start[1],
-              longitude: start[0],
-              durationMinutes:
-                  ((_lastRouteResult?.durationSeconds ?? 0) / 60).round(),
-            ),
+        if (showWeatherWarning)
+          WeatherWarningStrip(
+            latitude: start[1],
+            longitude: start[0],
+            durationMinutes: durationMin,
           ),
       ],
     );
@@ -4600,6 +4713,24 @@ class _CruiseModePageState extends State<CruiseModePage>
           subscriptionTier: subscriptionTier,
           intermediateWaypoints: intermediates,
         );
+        // 2026-05-24 (vucko Task #53): Trip-Mode → Trip in DB persistieren
+        // NUR wenn der User in einer Gruppen-Session ist. Solo-Touren werden
+        // nicht als Resume-Card angezeigt (User-Wunsch), darum auch nicht
+        // in der trips-Tabelle landen — vermeidet DB-Pollution.
+        // Best-effort, fail silent (Trip-Persistierung darf nie das Routing blockieren).
+        if (widget.groupId != null &&
+            result.distanceMeters != null &&
+            result.distanceMeters! > 0) {
+          unawaited(_createTripInDb(
+            startLat: startPosition.latitude,
+            startLng: startPosition.longitude,
+            waypoints: waypointSnapshot,
+            style: _selectedStyle,
+            avoidHighways: _avoidHighways,
+            distanceKm: (result.distanceMeters! / 1000),
+            durationSeconds: result.durationSeconds?.round() ?? 0,
+          ));
+        }
       } else {
         _activeDestinationCoordinate = null;
         _activeDetourVariant = 0;
@@ -7117,6 +7248,9 @@ class _CruiseModePageState extends State<CruiseModePage>
   }
 
   // 2026-05-24 (vucko Task #49): POI-Auto-Fetch + Map-Marker.
+  // 2026-05-24 (vucko v2): nur OFFENE POIs anzeigen — geschlossene sind für
+  // den User nutzlos. Unbekannte Öffnungszeiten zeigen wir trotzdem an
+  // (z.B. kleine Tankstellen ohne OSM-Tag).
   Future<void> _loadPoisFromSettings(List<List<double>> coords) async {
     final types = PoiSettingsService.instance.enabledTypes;
     if (types.isEmpty || coords.length < 2) return;
@@ -7125,136 +7259,73 @@ class _CruiseModePageState extends State<CruiseModePage>
         coordinates: coords,
         types: types,
         bufferMeters: 250,
-        maxResults: 50,
+        maxResults: 80,
       );
       if (!mounted) return;
-      setState(() => _routePois = pois);
+      final filtered = pois.where((p) {
+        final info = OpeningHoursParser.parse(p.openingHours);
+        // Unbekannte/parseFailed → anzeigen (besser als nichts).
+        if (info.parseFailed || info.status == OpenStatus.unknown) return true;
+        return info.isOpenNow;
+      }).take(50).toList();
+      setState(() => _routePois = filtered);
     } catch (_) {/* silent */}
   }
 
   Widget _buildPoiMarker(RoutePoi poi) {
     final color = switch (poi.type) {
       PoiType.fuel => const Color(0xFFEF4444),         // rot — Tankstelle
-      PoiType.restaurant => const Color(0xFFFBBF24),   // gelb — Restaurant
-      PoiType.cafe => const Color(0xFF8B5CF6),         // violett — Café
-      PoiType.motorcycleRepair => const Color(0xFF14B8A6), // teal — Werkstatt
-      _ => Colors.white70,
+      PoiType.restaurant => const Color(0xFFFB923C),   // orange — Restaurant
+      PoiType.cafe => const Color(0xFFA78BFA),         // violett — Café
+      PoiType.fastFood => const Color(0xFFFBBF24),     // gelb — Imbiss
+      PoiType.pub => const Color(0xFF22C55E),          // grün — Pub
+      PoiType.motorcycleRepair => const Color(0xFF2DD4BF),  // teal — Werkstatt
+      PoiType.parking => const Color(0xFF60A5FA),
+      PoiType.toilets => const Color(0xFF9CA3AF),
     };
+    // 2026-05-24 (vucko): Material-Icons statt Emoji — Emoji-Font
+    // rendert auf manchen iOS-Geräten als "?" (siehe User-Bug).
+    final iconData = switch (poi.type) {
+      PoiType.fuel => Icons.local_gas_station_rounded,
+      PoiType.restaurant => Icons.restaurant_rounded,
+      PoiType.cafe => Icons.local_cafe_rounded,
+      PoiType.fastFood => Icons.fastfood_rounded,
+      PoiType.pub => Icons.sports_bar_rounded,
+      PoiType.motorcycleRepair => Icons.build_rounded,
+      PoiType.parking => Icons.local_parking_rounded,
+      PoiType.toilets => Icons.wc_rounded,
+    };
+    // 2026-05-24 (vucko): "Schließt bald" → orange Pulsations-Ring
+    // damit User auf einen Blick sieht: hier nicht mehr lange offen.
+    final info = OpeningHoursParser.parse(poi.openingHours);
+    final isClosingSoon = info.isClosingSoon;
+    final ringColor =
+        isClosingSoon ? const Color(0xFFFB923C) : Colors.white;
+    final ringWidth = isClosingSoon ? 2.6 : 2.2;
     return Container(
       decoration: BoxDecoration(
         color: color,
         shape: BoxShape.circle,
-        border: Border.all(color: Colors.white, width: 2.5),
+        border: Border.all(color: ringColor, width: ringWidth),
         boxShadow: [
           BoxShadow(
-            color: color.withValues(alpha: 0.45),
-            blurRadius: 6,
+            color: (isClosingSoon ? const Color(0xFFFB923C) : color)
+                .withValues(alpha: 0.55),
+            blurRadius: isClosingSoon ? 12 : 8,
             offset: const Offset(0, 2),
           ),
         ],
       ),
       alignment: Alignment.center,
-      child: Text(
-        poi.type.emoji,
-        style: const TextStyle(fontSize: 16),
-      ),
+      child: Icon(iconData, color: Colors.white, size: 16),
     );
   }
 
   void _showPoiInfoCard(RoutePoi poi) {
     HapticFeedback.selectionClick();
-    showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: const Color(0xFF14181F),
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
-      ),
-      builder: (ctx) => Padding(
-        padding: const EdgeInsets.fromLTRB(20, 14, 20, 24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Center(
-              child: Container(
-                width: 38,
-                height: 4,
-                margin: const EdgeInsets.only(bottom: 14),
-                decoration: BoxDecoration(
-                  color: Colors.white24,
-                  borderRadius: BorderRadius.circular(99),
-                ),
-              ),
-            ),
-            Row(
-              children: [
-                Text(poi.type.emoji, style: const TextStyle(fontSize: 28)),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        poi.displayName,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 17,
-                          fontWeight: FontWeight.w900,
-                        ),
-                      ),
-                      Text(
-                        poi.type.label,
-                        style: TextStyle(
-                          color: Colors.white.withValues(alpha: 0.60),
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 14),
-            Row(
-              children: [
-                Icon(Icons.alt_route_outlined,
-                    size: 14, color: AppAccentColors.accent),
-                const SizedBox(width: 4),
-                Text(
-                  '${poi.distanceFromRouteMeters.round()}m abseits der Route',
-                  style: TextStyle(
-                    color: AppAccentColors.accent,
-                    fontSize: 12.5,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ],
-            ),
-            if (poi.openingHours != null) ...[
-              const SizedBox(height: 6),
-              Row(
-                children: [
-                  Icon(Icons.schedule_outlined,
-                      size: 14,
-                      color: Colors.white.withValues(alpha: 0.60)),
-                  const SizedBox(width: 4),
-                  Expanded(
-                    child: Text(
-                      poi.openingHours!,
-                      style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.75),
-                        fontSize: 12,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ],
-        ),
-      ),
-    );
+    // 2026-05-24 (vucko): neues PoiDetailSheet — Status, Wochentag-Tabelle,
+    // farbiges Icon-Badge, "Schließt bald"-Warnung.
+    PoiDetailSheet.show(context, poi);
   }
 
   /// 2026-05-24 (vucko Task #50): First-Run-Tutorial — Google-Maps-Stil
@@ -8904,9 +8975,77 @@ class _CruiseModePageState extends State<CruiseModePage>
     _xpStreakDays = 1;
     _drivenTrackRecorder.reset();
     _resetGeneratedRouteUiState();
+    // 2026-05-24 (vucko Task #53): Trip in DB als completed markieren
+    // (best-effort, fail silent).
+    final tripIdToComplete = _activeTripId;
+    if (tripIdToComplete != null) {
+      _activeTripId = null;
+      unawaited(_safeCompleteTrip(tripIdToComplete));
+    }
     final currentLocation = _userLocation;
     if (currentLocation != null) {
       _setCameraToPosition(currentLocation);
+    }
+  }
+
+  // 2026-05-24 (vucko Task #53): Trip-Persistierung Helper.
+  Future<void> _createTripInDb({
+    required double startLat,
+    required double startLng,
+    required List<LatLng> waypoints,
+    required String style,
+    required bool avoidHighways,
+    required double distanceKm,
+    required int durationSeconds,
+  }) async {
+    try {
+      final stops = <({double lat, double lng, String name, String stopType})>[
+        (lat: startLat, lng: startLng, name: 'Start', stopType: 'start'),
+      ];
+      for (var i = 0; i < waypoints.length; i++) {
+        final wp = waypoints[i];
+        final isLast = i == waypoints.length - 1;
+        stops.add((
+          lat: wp.latitude,
+          lng: wp.longitude,
+          name: isLast ? 'Ziel' : 'Stopp ${i + 1}',
+          stopType: isLast ? 'end' : 'waypoint',
+        ));
+      }
+      final title = waypoints.length >= 2
+          ? '${waypoints.length}-Stop Tour'
+          : 'Tour';
+      final tripId = await TripService.instance.createTrip(
+        title: title,
+        stops: stops,
+        defaultStyle: style,
+        defaultAvoidHighways: avoidHighways,
+        groupId: widget.groupId,
+        totalDistanceKm: distanceKm,
+        totalDurationSeconds: durationSeconds,
+      );
+      if (tripId != null && mounted && !_disposed) {
+        setState(() => _activeTripId = tripId);
+        debugPrint('[CruiseMode] Trip #$tripId in DB erstellt mit ${stops.length} Stops');
+      }
+    } catch (e) {
+      debugPrint('[CruiseMode] Trip-Create fehlgeschlagen (silent): $e');
+    }
+  }
+
+  Future<void> _safePauseTrip(String tripId) async {
+    try {
+      await TripService.instance.pauseTrip(tripId);
+    } catch (e) {
+      debugPrint('[CruiseMode] Trip pause fail (silent): $e');
+    }
+  }
+
+  Future<void> _safeCompleteTrip(String tripId) async {
+    try {
+      await TripService.instance.completeTrip(tripId);
+    } catch (e) {
+      debugPrint('[CruiseMode] Trip complete fail (silent): $e');
     }
   }
 
@@ -8916,25 +9055,18 @@ class _CruiseModePageState extends State<CruiseModePage>
     if (!mounted || _disposed) return;
     debugPrint('[CruiseMode] Error: $message (critical=$isCritical)');
 
-    final messenger = ScaffoldMessenger.of(context);
-    messenger.clearSnackBars();
-    messenger.showSnackBar(
-      SnackBar(
-        content: Text(message, style: const TextStyle(color: Colors.white)),
-        backgroundColor: isCritical
-            ? AppAccentColors.accent
-            : const Color(0xFF2A2F3A),
-        behavior: SnackBarBehavior.floating,
-        margin: const EdgeInsets.all(16),
-        duration: Duration(seconds: isCritical ? 4 : 3),
-        action: isCritical
-            ? SnackBarAction(
-                label: 'OK',
-                textColor: Colors.white,
-                onPressed: () {},
-              )
-            : null,
-      ),
+    // 2026-05-24 (vucko UX-Fix): TopToast statt fetter Orange-Snackbar.
+    // Die alte Snackbar nahm zu viel Platz, überdeckte die Karte und sah
+    // nicht zur App-Optik passend aus. TopToast ist konsistent mit dem Rest
+    // (Streak, Notifications, Saved-Route, Trip-Resume-Confirm etc.).
+    final icon = isCritical
+        ? Icons.warning_amber_rounded
+        : Icons.wifi_off_rounded;
+    TopToast.show(
+      context,
+      message: message,
+      icon: icon,
+      duration: Duration(milliseconds: isCritical ? 4500 : 3200),
     );
   }
 }

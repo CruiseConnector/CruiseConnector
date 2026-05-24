@@ -14,21 +14,96 @@ class TripService {
 
   SupabaseClient get _client => Supabase.instance.client;
 
-  /// Liefert die aktive ODER pausierte Trip des aktuellen Users, falls vorhanden.
-  /// Genau ein Trip pro User kann "active" oder "paused" sein.
-  /// Verwendung: Home-Screen Resume-Card.
-  Future<TripSummary?> activeOrPausedTripForCurrentUser() async {
+  /// Erstellt eine neue Trip in DB inkl. trip_stops für jeden Wegpunkt.
+  /// Returnt die Trip-ID oder null bei Fehler.
+  ///
+  /// 2026-05-24 (vucko Task #53): UI-Integration für Trip-Save+Resume.
+  Future<String?> createTrip({
+    required String title,
+    required List<({double lat, double lng, String name, String stopType})> stops,
+    required String defaultStyle,
+    required bool defaultAvoidHighways,
+    String? groupId,
+    double totalDistanceKm = 0,
+    int totalDurationSeconds = 0,
+  }) async {
     final userId = _client.auth.currentUser?.id;
     if (userId == null) return null;
     try {
-      final result = await _client
+      // 1. Trip erzeugen (aktiv direkt nach Erstellung)
+      // 2026-05-24 (vucko Fix): `.toUtc()` damit der ISO-String mit Z suffix
+      // versendet wird. Sonst interpretiert Postgres die naive Time als UTC,
+      // was bei Gerät in UTC+2 zu "in der Zukunft"-Eintrag führt → negative
+      // "läuft seit X Min" im UI.
+      final tripRow = await _client.from('trips').insert({
+        'owner_id': userId,
+        'title': title,
+        'status': 'active',
+        'started_at': DateTime.now().toUtc().toIso8601String(),
+        'stop_count': stops.length,
+        'total_distance_km': totalDistanceKm,
+        'total_duration_seconds': totalDurationSeconds,
+        'default_style': defaultStyle,
+        'default_avoid_highways': defaultAvoidHighways,
+        if (groupId != null) 'group_id': groupId,
+      }).select('id').single();
+      final tripId = tripRow['id'] as String;
+      // 2. Stops mit sequence (0=start, N-1=end)
+      final stopRows = <Map<String, dynamic>>[];
+      for (var i = 0; i < stops.length; i++) {
+        final s = stops[i];
+        stopRows.add({
+          'trip_id': tripId,
+          'sequence': i,
+          'name': s.name,
+          'lat': s.lat,
+          'lng': s.lng,
+          'stop_type': s.stopType,
+          'planned_duration_minutes': 0,
+        });
+      }
+      if (stopRows.isNotEmpty) {
+        await _client.from('trip_stops').insert(stopRows);
+      }
+      return tripId;
+    } catch (e) {
+      // Logge im Debug
+      return null;
+    }
+  }
+
+  /// Markiert einen Stop als erreicht (actual_arrival = now).
+  Future<void> markStopReached(String tripId, int sequence) async {
+    await _client.from('trip_stops').update({
+      'actual_arrival': DateTime.now().toUtc().toIso8601String(),
+    }).eq('trip_id', tripId).eq('sequence', sequence);
+  }
+
+  /// Liefert die aktive ODER pausierte Trip des aktuellen Users, falls vorhanden.
+  /// Genau ein Trip pro User kann "active" oder "paused" sein.
+  /// Verwendung: Home-Screen Resume-Card.
+  ///
+  /// 2026-05-24 (vucko User-Wunsch): Resume-Card nur bei GROUP-Trips zeigen.
+  /// Solo-Tours sind im Home-Screen nicht relevant — der User will den
+  /// Resume-Hero-Slot nur sehen wenn er in einer aktiven Gruppen-Tour ist.
+  Future<TripSummary?> activeOrPausedTripForCurrentUser({
+    bool groupOnly = true,
+  }) async {
+    final userId = _client.auth.currentUser?.id;
+    if (userId == null) return null;
+    try {
+      var query = _client
           .from('trips')
           .select(
             'id, title, status, paused_at, started_at, total_distance_km, '
-            'total_duration_seconds, stop_count, default_style',
+            'total_duration_seconds, stop_count, default_style, group_id',
           )
           .eq('owner_id', userId)
-          .inFilter('status', ['active', 'paused'])
+          .inFilter('status', ['active', 'paused']);
+      if (groupOnly) {
+        query = query.not('group_id', 'is', null);
+      }
+      final result = await query
           .order('updated_at', ascending: false)
           .limit(1)
           .maybeSingle();
@@ -43,7 +118,7 @@ class TripService {
   Future<void> pauseTrip(String tripId) async {
     await _client.from('trips').update({
       'status': 'paused',
-      'paused_at': DateTime.now().toIso8601String(),
+      'paused_at': DateTime.now().toUtc().toIso8601String(),
     }).eq('id', tripId);
   }
 
@@ -51,7 +126,7 @@ class TripService {
   Future<void> resumeTrip(String tripId) async {
     await _client.from('trips').update({
       'status': 'active',
-      'resumed_at': DateTime.now().toIso8601String(),
+      'resumed_at': DateTime.now().toUtc().toIso8601String(),
     }).eq('id', tripId);
   }
 
@@ -59,7 +134,7 @@ class TripService {
   Future<void> completeTrip(String tripId) async {
     await _client.from('trips').update({
       'status': 'completed',
-      'finished_at': DateTime.now().toIso8601String(),
+      'finished_at': DateTime.now().toUtc().toIso8601String(),
     }).eq('id', tripId);
   }
 

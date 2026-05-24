@@ -26,36 +26,47 @@ const GRAPHHOPPER_URL = Deno.env.get('GRAPHHOPPER_URL') ?? 'http://graphhopper.l
 const GRAPHHOPPER_DE_URL = Deno.env.get('GRAPHHOPPER_DE_URL') ?? GRAPHHOPPER_URL.replace(':8989', ':8991');
 const ALLOWED_ORIGINS = '*';
 
-// Lat-basierte Server-Wahl:
-// - AT/CH/LI/BW-Nord-Routing → DACH-Server (8989)
-// - DE-südlich-48.3 + Bayern + restliches DE → DE-Server (8991)
-// Fallback: wenn ein Server fehlschlägt, anderen probieren.
+// Server-Wahl:
+// Empirie 2026-05-24 (vucko diagnose-test): DACH-Server (8989) deckt
+// tatsächlich ganz DACH ab inkl. Bayern (München, Augsburg, Salzburg, etc.).
+// DE-Server (8991) ist aktuell mit MITTELOST-OSM-Daten geseedet (bounds:
+// lat 5.86-47.28, lng 25.19-60.43) — also UNBRAUCHBAR für DACH.
+// Konsequenz:
+//   - DACH-Punkte → DACH-Server primary, DE-Server als toter Fallback (kostet wenig)
+//   - Non-DACH-Punkte → es gibt keinen sinnvollen Fallback; user_message
+//     "coverage_out_of_bounds" wird returnt.
+//
+// TODO (Infrastruktur): PC2 GH-Container mit echten DE-OSM-Daten neu seeden.
+//   Bis dahin nutzen wir DACH-Server als single source of truth.
 function chooseGraphhopperUrl(lat: number, lng: number): { primary: string; fallback: string } {
-  const inDachServerArea =
-    (lat >= 46.4 && lat <= 49.0 && lng >= 9.5 && lng <= 17.2) ||
-    (lat >= 45.8 && lat <= 47.8 && lng >= 5.9 && lng <= 10.5) ||
-    (lat >= 48.3 && lat <= 49.8 && lng >= 7.5 && lng <= 10.5);
+  const inDachServerArea = isInDachCoverage(lat, lng);
   if (inDachServerArea) {
     return { primary: GRAPHHOPPER_URL, fallback: GRAPHHOPPER_DE_URL };
   }
   return { primary: GRAPHHOPPER_DE_URL, fallback: GRAPHHOPPER_URL };
 }
 
-/// 2026-05-24 (vucko): Server-Wahl mit allen Routen-Punkten.
-/// Wenn IRGENDEIN Punkt außerhalb DACH ist (z. B. Wegpunkt in Frankfurt),
-/// nutzen wir den DE-Server primary — der hat größere Coverage.
+/// Großzügige DACH-Box (DACH-Server hat Coverage für DE+AT+CH+LI komplett,
+/// inkl. Bayern). Wir verifizieren weit genug west/ost/nord/süd damit alle
+/// realistischen User-Stopps drin sind.
+function isInDachCoverage(lat: number, lng: number): boolean {
+  // Bounding Box DACH komplett:
+  //   - DE: lat 47.27-55.06, lng 5.87-15.04
+  //   - AT: lat 46.37-49.02, lng 9.53-17.16
+  //   - CH: lat 45.82-47.81, lng 5.96-10.49
+  //   - LI: ~47, ~9.5
+  // Vereint: lat 45.8-55.1, lng 5.86-17.2
+  return lat >= 45.8 && lat <= 55.1 && lng >= 5.86 && lng <= 17.2;
+}
+
+/// Server-Wahl mit allen Routen-Punkten. Wenn IRGENDEIN Punkt außerhalb
+/// DACH ist → nutzen DE-Server primary (auch wenn aktuell tote Bounds,
+/// liefert wenigstens deterministisch "coverage_out_of_bounds" zurück).
 function chooseGraphhopperUrlForRoute(points: Array<{ lat: number; lng: number }>): { primary: string; fallback: string } {
   if (points.length === 0) {
     return { primary: GRAPHHOPPER_URL, fallback: GRAPHHOPPER_DE_URL };
   }
-  // Wenn ALLE Punkte in DACH → DACH-Server. Sonst DE.
-  const allInDach = points.every(p => {
-    const inDach =
-      (p.lat >= 46.4 && p.lat <= 49.0 && p.lng >= 9.5 && p.lng <= 17.2) ||
-      (p.lat >= 45.8 && p.lat <= 47.8 && p.lng >= 5.9 && p.lng <= 10.5) ||
-      (p.lat >= 48.3 && p.lat <= 49.8 && p.lng >= 7.5 && p.lng <= 10.5);
-    return inDach;
-  });
+  const allInDach = points.every(p => isInDachCoverage(p.lat, p.lng));
   return allInDach
     ? { primary: GRAPHHOPPER_URL, fallback: GRAPHHOPPER_DE_URL }
     : { primary: GRAPHHOPPER_DE_URL, fallback: GRAPHHOPPER_URL };
@@ -666,18 +677,55 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
         deltas.map(([dLat, dLng]) =>
           baseWPs.map(wp => ({ lat: wp.lat + dLat, lng: wp.lng + dLng })),
         );
+      // 2026-05-24 (vucko): Pro-WP individueller Snap.
+      // Bug: Bei `baseWPs.map(wp => ...same offset...)` werden ALLE WPs
+      // gleichzeitig verschoben. Wenn WP[0]=München gut snappt aber WP[1]=Salzburg
+      // nicht → globaler offset kann beide kaputt machen.
+      // Lösung: Pro WP einzeln 8 Richtungen + start/target auch einzeln versuchen.
+      const buildPerWpVariants = (deltas: Array<[number, number]>): Array<Array<{ lat: number; lng: number }>> => {
+        const variants: Array<Array<{ lat: number; lng: number }>> = [];
+        for (let wpIdx = 0; wpIdx < baseWPs.length; wpIdx++) {
+          for (const [dLat, dLng] of deltas) {
+            const v = baseWPs.map((wp, i) =>
+              i === wpIdx ? { lat: wp.lat + dLat, lng: wp.lng + dLng } : wp,
+            );
+            variants.push(v);
+          }
+        }
+        return variants;
+      };
       const offsetVariants = [
         ...smallOffsetVariants,
-        ...buildVariants(bigDeltas),
-        ...buildVariants(megaDeltas),
+        ...buildPerWpVariants(bigDeltas),         // pro WP einzeln
+        ...buildVariants(bigDeltas),               // alle WPs gleich (legacy)
+        ...buildPerWpVariants(megaDeltas),        // pro WP einzeln mit Mega
+        ...buildVariants(megaDeltas),              // alle WPs gleich (legacy)
+      ];
+      // 2026-05-24 (vucko): Auch start + target einzeln offsetten —
+      // bei "Cannot find point 0/N" liegt es nicht an WPs.
+      const startEndOffsets: Array<{ sLat: number; sLng: number; tLat: number; tLng: number }> = [
+        { sLat: 0, sLng: 0, tLat: 0, tLng: 0 },           // Original
+        { sLat: 0.0014, sLng: 0, tLat: 0, tLng: 0 },
+        { sLat: 0, sLng: 0.0014, tLat: 0, tLng: 0 },
+        { sLat: 0, sLng: 0, tLat: 0.0014, tLng: 0 },
+        { sLat: 0, sLng: 0, tLat: 0, tLng: 0.0014 },
+        { sLat: 0.010, sLng: 0, tLat: 0, tLng: 0 },
+        { sLat: 0, sLng: 0, tLat: 0.010, tLng: 0 },
+        { sLat: 0, sLng: 0, tLat: 0, tLng: 0.010 },
+        { sLat: 0, sLng: 0, tLat: -0.010, tLng: 0 },
       ];
       for (let attempt = 0; attempt < offsetVariants.length; attempt++) {
         const wps = offsetVariants[attempt];
+        // Bei letzten Versuchen auch start/target offsetten (cross-product
+        // wäre exponentiell — wir nehmen nur 0 oder 1 start/target offset).
+        const seOffset = attempt < smallOffsetVariants.length
+          ? startEndOffsets[0]
+          : startEndOffsets[attempt % startEndOffsets.length];
         const result = await callGraphHopper({
-          startLat: req.start_location!.latitude,
-          startLng: req.start_location!.longitude,
-          endLat: req.target_location!.latitude,
-          endLng: req.target_location!.longitude,
+          startLat: req.start_location!.latitude + seOffset.sLat,
+          startLng: req.start_location!.longitude + seOffset.sLng,
+          endLat: req.target_location!.latitude + seOffset.tLat,
+          endLng: req.target_location!.longitude + seOffset.tLng,
           profile: profileToUse,
           isRoundTrip: false,
           avoidHighways: req.avoid_highways ?? false,
@@ -691,18 +739,97 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
           console.log(`Waypoint snap attempt 0 failed: ${result.error.slice(0, 120)} — retrying with offsets`);
         }
       }
-      // Alle Versuche fail → return last (mit error)
-      return [await callGraphHopper({
-        startLat: req.start_location!.latitude,
-        startLng: req.start_location!.longitude,
-        endLat: req.target_location!.latitude,
-        endLng: req.target_location!.longitude,
-        profile: profileToUse,
-        isRoundTrip: false,
-        avoidHighways: req.avoid_highways ?? false,
-        serverUrl,
-        intermediateWaypoints: baseWPs,
-      }).then(result => ({ result, seed: 0 }))];
+      // 2026-05-24 (vucko): SEGMENT-STITCH-FALLBACK.
+      // Empirie: GraphHopper Multi-Point-Routing (>=3 points) ist STRENGER
+      // beim Point-Snap als 2-Point-Routing. Konkret: München-Marienplatz
+      // (48.13, 11.58) snappt bei A→B aber NICHT als WP in 3-Point-Setup.
+      // Mit motorcycle_scenic gilt das umso mehr (Auswahl-Filter "weniger
+      // Straßen erreichbar").
+      // Workaround: Wenn Multi-Point fail → route N+1 separate A→B Segmente,
+      //   stitch geometries zusammen. Jedes Segment nutzt directVariants
+      //   (13 Start/End-Snap-Versuche). Klappt zuverlässig.
+      console.log(`All ${offsetVariants.length} WP-snap attempts failed — falling back to segment-stitch`);
+      const segments: Array<{ start: { lat: number; lng: number }; end: { lat: number; lng: number } }> = [];
+      const allPoints = [
+        { lat: req.start_location!.latitude, lng: req.start_location!.longitude },
+        ...baseWPs,
+        { lat: req.target_location!.latitude, lng: req.target_location!.longitude },
+      ];
+      for (let i = 0; i < allPoints.length - 1; i++) {
+        segments.push({ start: allPoints[i], end: allPoints[i + 1] });
+      }
+      // Pro Segment: directVariants-ähnlicher Best-of-N Snap.
+      const segDirectVariants: Array<{ sLatOff: number; sLngOff: number; eLatOff: number; eLngOff: number }> = [
+        { sLatOff: 0, sLngOff: 0, eLatOff: 0, eLngOff: 0 },
+        { sLatOff: 0.0014, sLngOff: 0, eLatOff: 0, eLngOff: 0 },
+        { sLatOff: 0, sLngOff: 0.0014, eLatOff: 0, eLngOff: 0 },
+        { sLatOff: 0, sLngOff: 0, eLatOff: 0.0014, eLngOff: 0 },
+        { sLatOff: 0, sLngOff: 0, eLatOff: 0, eLngOff: 0.0014 },
+        { sLatOff: 0.010, sLngOff: 0, eLatOff: 0, eLngOff: 0 },
+        { sLatOff: 0, sLngOff: 0, eLatOff: 0.010, eLngOff: 0 },
+        { sLatOff: 0, sLngOff: 0.010, eLatOff: 0, eLngOff: 0 },
+        { sLatOff: 0, sLngOff: 0, eLatOff: 0, eLngOff: 0.010 },
+      ];
+      const segResults: Array<RouteResult> = [];
+      for (let segIdx = 0; segIdx < segments.length; segIdx++) {
+        const seg = segments[segIdx];
+        const tries = await Promise.all(
+          segDirectVariants.map(v =>
+            callGraphHopper({
+              startLat: seg.start.lat + v.sLatOff,
+              startLng: seg.start.lng + v.sLngOff,
+              endLat: seg.end.lat + v.eLatOff,
+              endLng: seg.end.lng + v.eLngOff,
+              profile: profileToUse,
+              isRoundTrip: false,
+              avoidHighways: req.avoid_highways ?? false,
+              serverUrl,
+            }),
+          ),
+        );
+        const ok = tries.find(r => !('error' in r));
+        if (!ok) {
+          // Segment unrettbar → komplettes Multi-Stop fail
+          const lastErr = tries[tries.length - 1];
+          const errMsg = 'error' in lastErr ? lastErr.error : 'unknown';
+          console.log(`Segment ${segIdx} (${seg.start.lat},${seg.start.lng} → ${seg.end.lat},${seg.end.lng}) all snap variants failed: ${errMsg}`);
+          return [{ result: lastErr, seed: 0 }];
+        }
+        segResults.push(ok as RouteResult);
+      }
+      // Stitche alle Segmente zusammen.
+      const stitchedCoords: [number, number][] = [];
+      let totalDistKm = 0;
+      let totalDurSec = 0;
+      let totalAscent = 0;
+      for (let i = 0; i < segResults.length; i++) {
+        const sr = segResults[i];
+        const coords = sr.geometry.coordinates;
+        // Bei nicht-erstem Segment den ersten Punkt überspringen (= Endpunkt von vorherigem).
+        const startFrom = i === 0 ? 0 : 1;
+        for (let j = startFrom; j < coords.length; j++) {
+          stitchedCoords.push(coords[j] as [number, number]);
+        }
+        totalDistKm += sr.distanceKm;
+        totalDurSec += sr.durationSeconds;
+        totalAscent += sr.ascent;
+      }
+      const stitched: RouteResult = {
+        geometry: { type: 'LineString', coordinates: stitchedCoords },
+        distanceKm: totalDistKm,
+        durationSeconds: totalDurSec,
+        ascent: totalAscent,
+        coordinateCount: stitchedCoords.length,
+        fingerprint: buildFingerprint(stitchedCoords, totalDistKm),
+        meta: {
+          route_source: 'graphhopper-stitched',
+          engine: 'graphhopper-8',
+          profile: profileToUse,
+          bbox: segResults[0].meta.bbox,
+        },
+      };
+      console.log(`Stitched ${segments.length} segments: ${totalDistKm.toFixed(1)}km`);
+      return [{ result: stitched, seed: 0 }];
     }
     if (detourSpec.length === 0) {
       // Direkter A→B (detourLevel 0) — 2026-05-23 (vucko Task #13):
@@ -926,7 +1053,17 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
     userMessage = 'Diese Route reicht über unser aktuelles Liefergebiet hinaus. Wir unterstützen DACH (DE, AT, CH). Setze Stopps näher beieinander.';
     errCode = 'coverage_out_of_bounds';
   } else if (lastError.includes('Cannot find point')) {
-    userMessage = 'Ein Stopp liegt nicht an einer Straße. Verschiebe den Punkt etwas auf eine sichtbare Straße.';
+    // Parse welcher Punkt — Index sagt uns ob Start/Ziel/Wegpunkt.
+    const pointIdxMatch = lastError.match(/Cannot find point (\d+):/);
+    const idx = pointIdxMatch ? parseInt(pointIdxMatch[1], 10) : null;
+    const hasWaypoints = (req.waypoints?.length ?? 0) > 0;
+    if (idx === 0) {
+      userMessage = 'Dein Start-Punkt konnte nicht an eine befahrbare Straße angedockt werden. Verschiebe ihn ein paar Meter auf eine sichtbare Straße.';
+    } else if (idx != null && hasWaypoints && idx > 0 && idx <= (req.waypoints?.length ?? 0)) {
+      userMessage = `Der Wegpunkt #${idx} konnte nicht an eine befahrbare Straße angedockt werden. Verschiebe ihn auf eine ländliche Straße (Stadtkern-Plätze funktionieren oft nicht — probiere einen Vorort).`;
+    } else {
+      userMessage = 'Dein Ziel konnte nicht an eine befahrbare Straße angedockt werden. Verschiebe es ein paar Meter auf eine sichtbare Straße.';
+    }
     errCode = 'point_off_road';
   } else if (lastError.includes('Ferry detected')) {
     userMessage = 'Wir konnten keine Land-Route finden — versuche andere Wegpunkte.';

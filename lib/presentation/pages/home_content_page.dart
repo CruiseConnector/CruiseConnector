@@ -20,6 +20,7 @@ import 'package:cruise_connect/presentation/widgets/badge_unlock_popup.dart';
 import 'package:cruise_connect/presentation/widgets/community_carousel_card.dart';
 import 'package:cruise_connect/presentation/widgets/top_toast.dart';
 import 'package:cruise_connect/data/services/notification_service.dart';
+import 'package:cruise_connect/data/services/trip_service.dart';
 import 'package:cruise_connect/presentation/pages/notifications_page.dart';
 import 'package:cruise_connect/presentation/widgets/user_avatar.dart';
 
@@ -57,6 +58,7 @@ class _HomeContentPageState extends State<HomeContentPage>
   List<double> _weeklyChartData = List.filled(7, 0);
   List<double> _weeklyKmData = List.filled(7, 0);
   int _streakDays = 0;
+  TripSummary? _activeTrip; // 2026-05-24 (vucko Task #53): Resume-Card
   HomeRouteRecommendation? _todayRecommendation;
   bool _isRouteSaved = false;
   final Map<String, _HeroRouteInsights> _heroInsightsByRouteId = {};
@@ -186,6 +188,14 @@ class _HomeContentPageState extends State<HomeContentPage>
         debugPrint('[Home] Routepool-Empfehlung laden fehlgeschlagen: $e');
       }
 
+      // 2026-05-24 (vucko Task #53): Aktive/pausierte Trip checken für Resume-Card
+      TripSummary? activeTrip;
+      try {
+        activeTrip = await TripService.instance.activeOrPausedTripForCurrentUser();
+      } catch (e) {
+        debugPrint('[Home] Trip-Status laden fehlgeschlagen: $e');
+      }
+
       if (mounted) {
         setState(() {
           userLevel = result.level.level;
@@ -202,6 +212,7 @@ class _HomeContentPageState extends State<HomeContentPage>
           _weeklyChartData = normalized;
           _weeklyKmData = weeklyKm;
           _streakDays = streak;
+          _activeTrip = activeTrip;
           _todayRecommendation = recommendation;
           _isRouteSaved = routeSaved;
           _loading = false;
@@ -650,15 +661,267 @@ class _HomeContentPageState extends State<HomeContentPage>
 
   Widget _buildSuggestedRouteSection() {
     final recommendation = _todayRecommendation;
+    final trip = _activeTrip;
+
+    // 2026-05-24 (vucko): Beides vorhanden → swipeable Carousel mit Trip zuerst.
+    // Nur Trip → nur Trip-Card. Nur Recommendation → nur diese.
+    if (trip != null && recommendation != null) {
+      return _buildHomeCarousel(
+        cards: [
+          _buildTripResumeCarouselCard(trip),
+          // Heute-für-dich-Card auf gleiche Carousel-Höhe wrappen damit
+          // PageView nichts streckt. Original-Card hat intrinsisch < 180px.
+          SizedBox(
+            height: _carouselCardHeight,
+            child: _buildSuggestedRouteCard(recommendation),
+          ),
+        ],
+      );
+    }
+    if (trip != null) {
+      return _buildTripResumeCarouselCard(trip);
+    }
     if (recommendation != null) {
       return _buildSuggestedRouteCard(recommendation);
     }
-
     if (_loading) {
       return _buildSuggestedRouteSkeleton();
     }
-
     return _buildEmptyRecommendation();
+  }
+
+  // 2026-05-24 (vucko): Carousel-State für Trip+Heute-Slides.
+  int _carouselIndex = 0;
+  late final PageController _carouselController = PageController();
+
+  /// Carousel-Höhe synchron zur Heute-für-dich-Card.
+  /// "Heute für dich" Card hat intrinsisch ~175px (gemessen am Original-Layout).
+  /// Wir geben 180 als gemeinsame Höhe für beide Slides damit nichts gestretched
+  /// wird, die nachfolgenden Widgets (Community-Row, 244px) ihren festen Slot
+  /// behalten und der Carousel-Block sich genauso einfügt wie die alte
+  /// Single-Card.
+  static const double _carouselCardHeight = 180;
+
+  Widget _buildHomeCarousel({required List<Widget> cards}) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SizedBox(
+          height: _carouselCardHeight,
+          child: PageView.builder(
+            controller: _carouselController,
+            itemCount: cards.length,
+            onPageChanged: (i) {
+              if (mounted) setState(() => _carouselIndex = i);
+            },
+            itemBuilder: (_, i) => Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 1),
+              child: cards[i],
+            ),
+          ),
+        ),
+        const SizedBox(height: 8),
+        // Pagination dots
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: List.generate(cards.length, (i) {
+            final active = i == _carouselIndex;
+            return AnimatedContainer(
+              duration: const Duration(milliseconds: 280),
+              curve: Curves.easeOut,
+              margin: const EdgeInsets.symmetric(horizontal: 3),
+              height: 6,
+              width: active ? 20 : 6,
+              decoration: BoxDecoration(
+                color: active
+                    ? AppAccentColors.accent
+                    : Colors.white.withValues(alpha: 0.18),
+                borderRadius: BorderRadius.circular(3),
+              ),
+            );
+          }),
+        ),
+      ],
+    );
+  }
+
+  /// Trip-Resume-Card im Carousel — komplett app-konforme dunkle Optik.
+  /// 2026-05-24 (vucko v2): kein Gradient, kein helles Tinten, exakt das
+  /// gleiche Card-Schema wie "Heute für dich". Status nur als kleiner
+  /// gefärbter Pin.
+  Widget _buildTripResumeCarouselCard(TripSummary trip) {
+    final isPaused = trip.isPaused;
+    final statusColor = isPaused
+        ? const Color(0xFFFFB347)
+        : AppAccentColors.accent;
+    final statusLabel = isPaused ? 'Tour pausiert' : 'Tour aktiv';
+    final statusSubtitle = _tripStatusSubtitle(trip);
+    final title = trip.title.isEmpty ? 'Multi-Stop Tour' : trip.title;
+    // Distanz nur zeigen wenn > 0 (sonst irreführend "0 km")
+    final km = trip.totalDistanceKm;
+    final metricsLine = km > 0
+        ? '${trip.stopCount} Stopps • ${km.toStringAsFixed(0)} km • ${trip.defaultStyle}'
+        : '${trip.stopCount} Stopps • ${trip.defaultStyle}';
+    return SizedBox(
+      height: _carouselCardHeight,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () {
+          CruiseModePage.pendingTripResume.value = trip.id;
+          widget.onTabChange?.call(2);
+        },
+        child: Container(
+          decoration: BoxDecoration(
+            color: const Color(0xFF1C1F26),
+            borderRadius: BorderRadius.circular(22),
+            border: Border.all(
+              color: const Color(0xFFFFFFFF).withValues(alpha: 0.06),
+              width: 1,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.16),
+                blurRadius: 14,
+                offset: const Offset(0, 8),
+              ),
+            ],
+          ),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 11, 12, 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Header-Zeile (exakt analog "Heute für dich")
+                Row(
+                  children: [
+                    Container(
+                      width: 7,
+                      height: 7,
+                      decoration: BoxDecoration(
+                        color: statusColor,
+                        shape: BoxShape.circle,
+                        boxShadow: [
+                          BoxShadow(
+                            color: statusColor.withValues(alpha: 0.45),
+                            blurRadius: 10,
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 7),
+                    Text(
+                      statusLabel.toUpperCase(),
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.66),
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 0.35,
+                      ),
+                    ),
+                    if (statusSubtitle.isNotEmpty) ...[
+                      const SizedBox(width: 6),
+                      Flexible(
+                        child: Text(
+                          '· $statusSubtitle',
+                          style: TextStyle(
+                            color: Colors.white.withValues(alpha: 0.42),
+                            fontSize: 11,
+                            fontWeight: FontWeight.w500,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  title,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 19,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: -0.25,
+                    height: 1.05,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                const SizedBox(height: 5),
+                Text(
+                  metricsLine,
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.64),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    height: 1.15,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                const Spacer(),
+                // CTA wie der Drive-Chip in der Heute-Card (orange filled)
+                SizedBox(
+                  height: 40,
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: AppAccentColors.accent,
+                      borderRadius: BorderRadius.circular(12),
+                      boxShadow: [
+                        BoxShadow(
+                          color: AppAccentColors.accent.withValues(alpha: 0.32),
+                          blurRadius: 14,
+                          offset: const Offset(0, 4),
+                        ),
+                      ],
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Icon(
+                          Icons.play_arrow_rounded,
+                          color: Colors.white,
+                          size: 19,
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          isPaused ? 'Tour fortsetzen' : 'Tour öffnen',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 13.5,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  String _tripStatusSubtitle(TripSummary trip) {
+    // 2026-05-24 (vucko Fix): negative Diff (clock skew / zukünftiger
+    // started_at) als "gerade gestartet" zeigen — niemals "-X Min".
+    String formatAgo(DateTime when, String prefix) {
+      final mins = DateTime.now().difference(when).inMinutes;
+      if (mins <= 0) return '$prefix gerade eben';
+      if (mins < 60) return '$prefix seit $mins Min';
+      final h = mins ~/ 60;
+      if (h < 24) return '$prefix seit ${h}h';
+      return '$prefix seit ${h ~/ 24}d';
+    }
+    if (trip.isPaused && trip.pausedAt != null) {
+      return formatAgo(trip.pausedAt!, 'pausiert');
+    }
+    if (trip.isActive && trip.startedAt != null) {
+      return formatAgo(trip.startedAt!, 'läuft');
+    }
+    return '';
   }
 
   Widget _buildSuggestedRouteCard(HomeRouteRecommendation recommendation) {
