@@ -41,6 +41,19 @@ class HomeRouteRecommendationService {
   static HomeRouteRecommendation? _cachedRecommendation;
   static DateTime? _cachedAt;
   static String? _cacheKey;
+  // 2026-05-24 (vucko Region-aware): Cache-Anker — wenn User sich >25km
+  // vom Anker wegbewegt hat, Cache als ungültig markieren auch wenn der
+  // Bucket-Key zufällig matched (Bucket = 0.1° = ~11km, kann zu Drift führen).
+  static double? _cachedAnchorLat;
+  static double? _cachedAnchorLng;
+
+  // 2026-05-24 (vucko): Region-Radius — eine Recommendation ist nur dann
+  // relevant wenn der Routen-Startpunkt innerhalb dieses Radius vom User ist.
+  // Damit zeigt die Card nie "Bregenz-Loop" wenn der User in Wien ist.
+  static const double _regionRadiusKm = 100;
+  // Wenn User sich um mehr als das vom letzten Cache-Anker wegbewegt hat,
+  // Cache wird invalidiert sofort (statt erst nach 60min).
+  static const double _cacheInvalidationDistanceKm = 25;
 
   static Future<HomeRouteRecommendation?> getTodayRoute({
     double? userLat,
@@ -49,10 +62,15 @@ class HomeRouteRecommendationService {
     final key = _cacheKeyFor(userLat: userLat, userLng: userLng);
     final cached = _cachedRecommendation;
     final cachedAt = _cachedAt;
-    if (cached != null && cachedAt != null && _cacheKey == key) {
-      if (DateTime.now().difference(cachedAt).inMinutes < 60) {
-        return cached;
-      }
+    // 2026-05-24 (vucko): Distanz-basierter Cache-Check. Bucket-Key in
+    // _cacheKeyFor kann driften (User wandert grob in selber Region). Zusätzlich
+    // exakte Distanz prüfen — wenn >25km gewandert → Cache ungültig.
+    if (cached != null &&
+        cachedAt != null &&
+        _cacheKey == key &&
+        !_movedTooFarFromCacheAnchor(userLat, userLng) &&
+        DateTime.now().difference(cachedAt).inMinutes < 60) {
+      return cached;
     }
 
     try {
@@ -65,16 +83,26 @@ class HomeRouteRecommendationService {
           .gte('quality_score', 70)
           .order('weekly_rotation_score', ascending: false)
           .order('quality_score', ascending: false)
-          .limit(80);
+          .limit(120);
 
-      final entries = (rows as List)
+      var entries = (rows as List)
           .whereType<Map>()
           .map((row) => RoutePoolEntry.fromJson(Map<String, dynamic>.from(row)))
           .where(_isSafeHomePoolRoute)
           .toList(growable: false);
 
+      // 2026-05-24 (vucko): Region-Filter — nur Routen mit Start innerhalb
+      // _regionRadiusKm vom User. Verhindert dass User in Wien eine
+      // Bregenz-Route empfohlen bekommt.
+      if (userLat != null && userLng != null) {
+        entries = entries.where((e) {
+          final distKm = _haversineKm(userLat, userLng, e.startLat, e.startLng);
+          return distKm <= _regionRadiusKm;
+        }).toList(growable: false);
+      }
+
       if (entries.isEmpty) {
-        _cacheRecommendation(null, key);
+        _cacheRecommendation(null, key, userLat, userLng);
         return null;
       }
 
@@ -97,7 +125,7 @@ class HomeRouteRecommendationService {
       final seed = _stableDailySeed(topWindow.map((item) => item.entry.id));
       final selected = topWindow[math.Random(seed).nextInt(topWindow.length)];
       final recommendation = _toRecommendation(selected.entry, selected.score);
-      _cacheRecommendation(recommendation, key);
+      _cacheRecommendation(recommendation, key, userLat, userLng);
       return recommendation;
     } catch (error) {
       debugPrint('[HomeRouteRecommendation] route_pool read failed: $error');
@@ -105,10 +133,23 @@ class HomeRouteRecommendationService {
     }
   }
 
+  /// True wenn User-Position deutlich vom Cache-Anker abweicht.
+  /// Trigger für sofortige Cache-Invalidation auch wenn TTL noch nicht
+  /// abgelaufen ist (z.B. wenn User per Bahn von Bregenz nach Wien fährt).
+  static bool _movedTooFarFromCacheAnchor(double? lat, double? lng) {
+    if (lat == null || lng == null) return false;
+    final aLat = _cachedAnchorLat;
+    final aLng = _cachedAnchorLng;
+    if (aLat == null || aLng == null) return false;
+    return _haversineKm(lat, lng, aLat, aLng) > _cacheInvalidationDistanceKm;
+  }
+
   static void invalidateCache() {
     _cachedRecommendation = null;
     _cachedAt = null;
     _cacheKey = null;
+    _cachedAnchorLat = null;
+    _cachedAnchorLng = null;
   }
 
   static const String _routePoolSelect =
@@ -122,10 +163,14 @@ class HomeRouteRecommendationService {
   static void _cacheRecommendation(
     HomeRouteRecommendation? recommendation,
     String key,
+    double? anchorLat,
+    double? anchorLng,
   ) {
     _cachedRecommendation = recommendation;
     _cachedAt = DateTime.now();
     _cacheKey = key;
+    _cachedAnchorLat = anchorLat;
+    _cachedAnchorLng = anchorLng;
   }
 
   static String _cacheKeyFor({double? userLat, double? userLng}) {
