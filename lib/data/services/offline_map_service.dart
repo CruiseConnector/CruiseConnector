@@ -50,17 +50,23 @@ class OfflineMapService {
       'https://api.mapbox.com/styles/v1/mapbox/dark-v11/tiles/256/{z}/{x}/{y}?access_token={accessToken}';
 
   static const int defaultMinZoom = 10;
-  static const int defaultMaxZoom = 16;
-  static const int defaultMaxTiles = 650;
+  // 2026-05-25 (vucko): Route-Cache maxZoom 17 statt 16 für scharfere Live-
+  // Navigation. Plus maxTiles 2400 statt 650 für ganze 5km-Korridor um die
+  // Route — sodass Offroad-Excursionen + Reroute-Visualisierung offline klappen.
+  static const int defaultMaxZoom = 17;
+  static const int defaultMaxTiles = 2400;
 
   // Region-Cache: 2026-05-22 (vucko) aggressiver vorwärmen.
-  // User-Wunsch "Karte wirklich gedownloaded oder schneller".
-  // Erhöht: minZoom 8 (war 9, größere Übersicht), maxZoom 14 (war 13, mehr Detail),
-  // maxTiles 4000 (war 2400, ~16-20 MB Storage statt 6-12 MB).
+  // 2026-05-25 (vucko v2): User-Wunsch "Karte wirklich gedownloaded und auch
+  // bei Off-Route Visualisierung funktionsfähig". Erweitert:
+  //   - minZoom 8 → übersichtliche Karte schon bei großer Höhe
+  //   - maxZoom 15 statt 14 → schärfere Tiles für Live-Navigation
+  //   - maxTiles 8000 statt 4000 → ganze Vorarlberg-Region (~100km × 100km)
+  //   - radius 100km statt 50km → User der nach Tirol/Schweiz fährt hat schon Tiles
   static const int defaultRegionMinZoom = 8;
-  static const int defaultRegionMaxZoom = 14;
-  static const int defaultRegionMaxTiles = 4000;
-  static const double defaultRegionRadiusKm = 50.0; // 35 → 50 km
+  static const int defaultRegionMaxZoom = 15;
+  static const int defaultRegionMaxTiles = 8000;
+  static const double defaultRegionRadiusKm = 100.0;
 
   // Vorarlberg + Bodensee als Default-Heimatregion, falls kein User-Standort
   // verfügbar (erster Launch, Geo-Permission verweigert).
@@ -301,8 +307,23 @@ class OfflineMapService {
 
     final sampled = _sampleRouteCoordinates(routeCoordinates);
     final tiles = <OfflineTile>{};
+    // 2026-05-25 (vucko): Bewusst breiterer Korridor um die Route. So sind
+    // beim Off-Route (User fährt 300-500m abseits) die Tiles schon im Cache
+    // → Mapbox-Map bleibt sichtbar + Reroute kann visualisiert werden ohne
+    // dass leere graue Tiles erscheinen.
     for (var zoom = minZoom; zoom <= maxZoom; zoom += 1) {
-      final ring = zoom >= 15 ? 1 : 0;
+      // Korridor-Ring abhängig vom Zoom:
+      //   z ≤ 11: ring 0 (eine Tile pro Sample-Punkt, viele km abgedeckt)
+      //   z 12-13: ring 1 (3×3 = 9 Tiles pro Punkt)
+      //   z 14-15: ring 2 (5×5 = 25 Tiles pro Punkt — ~2km Korridor)
+      //   z ≥ 16: ring 3 (7×7 = 49 Tiles — ~500m Korridor bei z=17)
+      final ring = zoom <= 11
+          ? 0
+          : zoom <= 13
+              ? 1
+              : zoom <= 15
+                  ? 2
+                  : 3;
       for (final coordinate in sampled) {
         final tile = _tileForCoordinate(coordinate, zoom);
         for (var dx = -ring; dx <= ring; dx += 1) {

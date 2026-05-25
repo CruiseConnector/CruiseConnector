@@ -4914,11 +4914,20 @@ class _CruiseModePageState extends State<CruiseModePage>
     String sessionId, {
     required int generationId,
   }) async {
-    const maxPolls = 30;
+    // 2026-05-25 (vucko): Polling beschleunigt — vorher 30 × 3s = 90s (User
+    // hat in Feldkirch/Götzis bis zu mehrere Minuten warten muessen).
+    // Neu: progressiv kürzere Polls, max 18 × 2s = 36s. Wenn dann nicht da,
+    // fällt RouteService auf Pool-Fallback (`tryPoolFallbackForFailedRoundTrip`).
+    const maxPolls = 18;
     DateTime? lastWorkerKickAt;
     for (var poll = 0; poll < maxPolls; poll += 1) {
       if (_isRouteGenerationCancelled(generationId)) return null;
-      await Future.delayed(const Duration(seconds: 3));
+      // Erste 4 Polls sehr schnell (1.5s), danach 2.5s — die meisten Edge-
+      // Sessions sind in 3-6s da, längere brauchen Worker-Kick + retry.
+      final pollDelay = poll < 4
+          ? const Duration(milliseconds: 1500)
+          : const Duration(milliseconds: 2500);
+      await Future.delayed(pollDelay);
       if (_isRouteGenerationCancelled(generationId)) return null;
       _logRoundTripSearchUiDecision(
         'poll_attempt',
@@ -7657,17 +7666,15 @@ class _CruiseModePageState extends State<CruiseModePage>
     }
 
     if (mounted) {
-      ScaffoldMessenger.of(context)
-        ..hideCurrentSnackBar()
-        ..showSnackBar(
-          const SnackBar(
-            content: Text(
-              'Route wird neu berechnet. Bitte weiterfahren, nicht abrupt wenden.',
-            ),
-            backgroundColor: Color(0xFFFF9500),
-            duration: Duration(seconds: 2),
-          ),
-        );
+      // 2026-05-25 (vucko UX): TopToast statt Snackbar, persistent bis
+      // Reroute fertig oder fail (10s timeout). Frueher 2s Snackbar war
+      // zu kurz → User wusste nicht ob das System antwortet.
+      TopToast.show(
+        context,
+        message: 'Route wird neu berechnet — bitte weiterfahren',
+        icon: Icons.refresh_rounded,
+        duration: const Duration(seconds: 8),
+      );
     }
 
     try {
@@ -8205,15 +8212,13 @@ class _CruiseModePageState extends State<CruiseModePage>
       }
 
       if (mounted) {
-        ScaffoldMessenger.of(context)
-          ..hideCurrentSnackBar()
-          ..showSnackBar(
-            const SnackBar(
-              content: Text('Route neu berechnet!'),
-              backgroundColor: Colors.green,
-              duration: Duration(seconds: 2),
-            ),
-          );
+        // 2026-05-25 (vucko UX): TopToast statt Snackbar — konsistent mit Rest.
+        TopToast.show(
+          context,
+          message: 'Route neu berechnet!',
+          icon: Icons.check_circle_rounded,
+          duration: const Duration(milliseconds: 2200),
+        );
       }
     } catch (e, stack) {
       debugPrint('Rerouting fehlgeschlagen: $e');
@@ -8227,6 +8232,17 @@ class _CruiseModePageState extends State<CruiseModePage>
         remainingDistanceBeforeMeters: remainingDistanceBeforeMeters,
         etaBeforeSeconds: etaBeforeSeconds,
       );
+      // 2026-05-25 (vucko UX): klarer Fail-Toast wenn Reroute nicht klappt.
+      // Vorher: Snackbar verschwand still → User wusste nicht ob das System
+      // versucht hat oder noch wartet.
+      if (mounted && !_disposed) {
+        TopToast.show(
+          context,
+          message: 'Route konnte nicht neu berechnet werden — folge der alten Linie',
+          icon: Icons.warning_amber_rounded,
+          duration: const Duration(milliseconds: 3500),
+        );
+      }
     } finally {
       _isRerouting = false;
     }
