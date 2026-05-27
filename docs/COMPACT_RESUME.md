@@ -1,157 +1,227 @@
 # Compact-Resume — CruiseConnect
 
-**Letztes Update**: 2026-05-24
+**Letztes Update**: 2026-05-27 (PC2-Migration mitten drin)
 **Branch**: `graphhopper-dach-stabilize`
 **Worktree**: `/Users/vucko/Development/CruiserConnect/.claude/worktrees/admiring-hawking-3afe1f`
 **Supabase Project-ID**: `tlcfaxvvqzobmzwvfnvb`
+**App-Version**: `1.0.3+4` (pubspec + iOS pbxproj — synchron)
 
-## Sofort-Status
+---
 
-System läuft autonom. Heartbeat- und Scout-Loops via Claude-Cron.
-- GH-DACH-Server: ok (smoke 49.48km/58t/pen 0)
-- GH-DE-Server: ok
-- Pool: 2.182 routes / 48 DACH-cities
-- Edge `generate-cruise-route-v2` deployed
-- Edge `daily-weather-push` deployed mit pg_cron daily 06:00 UTC
+## 🚨 OFFENE AKTION (User ist weg, kommt zurück) — PC2-PBF-Migration
 
-## Architektur-Kern
+**Stand**: User hat `europe-latest.osm.pbf` (32 GB) auf PC2 heruntergeladen, ABER der **osmium extract Schritt fehlt** noch. Container-Start fail mit "Your specified OSM file does not exist: /data/dach-italy-balkan.osm.pbf".
 
-- **Flutter Front-End** (lib/) – ~250 dart-files
-- **Supabase Backend** (postgres + RLS + pg_cron + Realtime)
-- **GraphHopper 8.0** für Routing (DACH-Server + DE-Server fallback)
-- **OpenMeteo** für Wetter (gratis, kein Key)
-- **Mapbox** nur als Tile-Provider (keine Routing-Logik)
-
-## Was in dieser Session (42+ Tasks) gebaut wurde
-
-### Routing
-- A→B mit detour 0-3 funktioniert für alle DACH-Distanzen
-- Trip-Modus = A→B mit Multi-Stopps (letzter WP = Endziel)
-- Bodensee-Fähre via Custom-Model `road_environment==FERRY → limit_to=0` blockiert
-- Snap-Fallback 3-stufig (130m → 1.1km → 5.5km)
-- Server-Wahl checkt ALLE Punkte (DACH/DE)
-- Quality-Filter für A→B: nur `destinationReached`
-- Loop-Cleanup für Round-Trip
-- Klare Error-Codes statt "Temporärer Serverfehler"
-
-### UI/UX
-- Trip-Mode-Picker als iOS-Style Segmented-Pill (44px)
-- Style-Dock aus Map raus (nur in Setup-Panel)
-- Wegpunkte 3/5-Limit dynamisch je Modus
-- Mode-Header verbirgt sich bei Error-Banner
-- TopToast oben statt Bottom-Snackbar
-- Pull-to-Refresh Home
-- Disclaimer rechtssicher
-
-### Notifications v2
-- DB-Triggers auto-erzeugen Notifications (follows, likes, group_members)
-- Like-Batching 10-min-Buckets (aggregate_count)
-- NotificationService + Supabase Realtime
-- Inbox-Page mit Swipe + Mark-all-read
-- Bell-Badge in Home-Header
-- 6 Settings-Switches
-- Daily-Weather-Push (pg_cron 06:00 UTC)
-
-### Wetter
-- WeatherChip mit Pulse-Animation + Tageszeit-Gradient
-- Trend für lange Routen ("Sonnig → Regen")
-
-### USP-Features (Marktdifferenzierung)
-- **Driven Track Overlay**: geplant grau + echt accent → "Das bin ich gefahren". Im Completion + PNG-Share
-- **Streak-Hero-Banner**: above-the-fold ab 2 Tagen
-- **Kurven-DNA**: Rider-Type (KURVEN-JÄGER/SPORT-TYP/CRUISER/EXPLORER) + 8 Stats-Chips
-
-### Navigation
-- Haptic 3-Stufen (300/150/50m)
-- Voice-TTS mit 3 Modi (off/important/all)
-- Map-Live 200ms
-
-### Security + Infra
-- RLS überall (route_pool_coverage_snapshot war einzige Lücke)
-- Heartbeat-Loop minütlich + Scout-Loop 30min
-- 41 DACH-Cities seeded (10 Umlaut-Cities noch pending)
-
-## Offene Tasks (diese Session)
-
-1. **POIs entlang Route** (Task #44) — IN ARBEIT
-2. **Baustellen/Stau-Reroute** (Task #45) — IN ARBEIT
-3. **CarPlay/Android Auto Foundation** (Task #46) — IN ARBEIT
-
-## Wichtige Commands
+**Was der User auf PC2 ausführen muss (wenn er zurück ist)**:
 
 ```bash
-# Heartbeat
-bash scripts/dach_loop_ensure.sh
-bash scripts/dach_watchdog.sh
+cd ~/gh-eu
 
-# Scout
-bash scripts/dach_improvement_ensure.sh
-bash scripts/dach_improvement_watchdog.sh
+# 1. Wo liegt europe-latest.osm.pbf?
+ls -lh ~/gh-eu/europe-latest.osm.pbf ~/gh-eu/data/europe-latest.osm.pbf 2>&1
 
-# Edge deploy (aus Worktree)
-supabase functions deploy generate-cruise-route-v2 --no-verify-jwt
-supabase functions deploy daily-weather-push --no-verify-jwt
+# 2. osmium extract (~5-10 Min Wartezeit, kein Progress visible)
+osmium extract -b 5.5,42.0,18.5,50.5 europe-latest.osm.pbf -o data/dach-italy-balkan.osm.pbf --overwrite
 
-# Tests
-flutter analyze lib/
+# 3. Verifizieren (~5-6 GB erwartet)
+ls -lh data/dach-italy-balkan.osm.pbf
 
-# Live Route Test
-curl -sS -X POST "https://tlcfaxvvqzobmzwvfnvb.supabase.co/functions/v1/generate-cruise-route-v2" \
-  -H "Content-Type: application/json" \
-  -d '{"route_type":"ROUND_TRIP","start_location":{"latitude":47.5031,"longitude":9.7471},"selected_style":"Sport Mode","target_distance_km":50,"avoid_highways":true}'
+# 4. Container starten (~30-45 Min Graph-Build)
+docker rm -f gh-eu
+docker run -d --name gh-eu --restart unless-stopped \
+  -p 8989:8989 -p 8990:8990 \
+  -v $PWD/data:/data \
+  -v $PWD/config.yml:/graphhopper/config.yml \
+  -v $PWD/custom_models:/graphhopper/custom_models \
+  my-gh:8.0 \
+  java -Xmx12g -Xms2g -jar graphhopper.jar server /graphhopper/config.yml
+docker logs -f gh-eu
+
+# 5. NACH Build → europe-latest löschen (spart 32 GB Disk)
+rm ~/gh-eu/europe-latest.osm.pbf
 ```
 
-## Kritische Dateien
+**Ziel**: `Server started, listening on 0.0.0.0:8989` — dann routet Edge automatisch Cross-Border über PC2.
 
-- `lib/presentation/pages/cruise_mode_page.dart` — ~8500 Zeilen
-- `lib/data/services/route_service.dart` — ~9300 Zeilen
-- `lib/data/services/route_style_config.dart` — Style + Limits
-- `supabase/functions/generate-cruise-route-v2/index.ts` — Edge v2
-- `lib/data/services/notification_service.dart` — Realtime
-- `lib/presentation/widgets/weather_chip.dart` — Wetter
-- `lib/presentation/widgets/cruiser_dna_card.dart` — DNA
+**Sofort danach Verifizieren** (von Mac):
+```bash
+python3 /tmp/test_cross_border.py
+# Erwartung: München→Mailand, Bregenz→Verona, Graz→Ljubljana ALLE OK statt cross_border_unsupported
+```
 
-## User-Stil (kritisch)
+---
 
-- Vucko schreibt Deutsch — Antworten auf Deutsch
+## 🏗 Architektur — wie es JETZT läuft
+
+### Server-Topologie
+- **PC1 (vucko1@vucko)** — DACH-Server (DE+AT+CH+LI), Port 8989
+- **PC2 (vucko2@vucko2-HP-ProDesk)** — EU-Server, läuft AKTUELL noch mit `eu-south.osm.pbf` (IT+SI+HR+FR-Süd ohne DACH). Tailscale Funnel-URL: `https://vucko2-hp-prodesk-600-g5-desktop-mini.taildddd94.ts.net`
+- Nach PC2-Migration: `dach-italy-balkan.osm.pbf` (DE+AT+CH+IT+SI+HR+FR-Süd in einer dedupzierten PBF aus europe-latest.osm.pbf bbox-extract 5.5,42.0,18.5,50.5)
+
+### Edge-Function Routing-Logik (`generate-cruise-route-v2`)
+- **DACH-only Routen** → PC1 primary (schneller, weniger Daten)
+- **Alle anderen Routen** (EU-only ODER Cross-Border) → PC2 primary
+- **PC1 ist Fallback** wenn PC2 offline
+- **Cross-Border-Detection** in `chooseGraphhopperUrlForRoute` mit GeoRegion enum (dach/euSouth/euWest/euEast/unknown)
+  - Region-Klassifikation Alpen-Linie lat 46.5 (Italien ≤46.5, AT ≥45.8)
+  - Slowenien-Box explizit (45.42-46.55, 13.38-16.61) damit Klagenfurt (46.62) als AT erkennt
+
+### Supabase Secrets
+- `GRAPHHOPPER_URL` → PC1 (Tailscale)
+- `GRAPHHOPPER_DE_URL` → ungenutzt (legacy)
+- `GRAPHHOPPER_EU_URL` → PC2 Tailscale Funnel
+
+---
+
+## 📦 App-State
+
+### Letzte Commits (neueste zuerst)
+```
+8c7eb12 feat(routing): PC2 wird primary für Cross-Border (dach-italy-balkan-pbf)
+04a3bad chore: bump version to 1.0.3+4
+c6373c4 perf(routing): Live-First default statt 50/50 Pool/Live Coin-Flip
+eceab38 fix(routing): Region-Klassifikation mit Alpen-Linie 46.5 + Cross-Border-Prio
+e315e3f feat(routing): Cross-Border-Detection + PC1-priority bei DACH-Mix
+b1a4701 feat: aggressive Offline-Tiles + Reroute-UX + Vorarlberg-Speed
+1e82bcc chore: bump version to 1.0.2+3 in pubspec + Xcode pbxproj
+c661552 feat: Region-aware Route-Empfehlung + abwechslungsreiche Push-Texte
+888d62a feat(routing): 3-Server-Architektur + Ultimate car-Fallback + Ferry-Fix
+ec05e35 feat: Tour-Modus + Wetter-Inline + POI-Details + Home-Carousel
+```
+
+### Was 1.0.3 alles drin hat (über 1.0.0)
+- **Tour-Modus** mit Pause/Resume (TripService + UI Carousel)
+- **POI-Detail-Sheet** mit Live-Status (Jetzt offen / Schließt bald) + Wochentag-Tabelle
+- **POI-Marker** Material-Icons statt Emoji
+- **Wetter inline** als 5. Metric im Route-Banner (statt fette Glas-Card)
+- **Mode-Explainer-Bubble** beim Klick auf bereits-aktiven Routen-Modus
+- **Home-Carousel** für Trip-Resume + Heute-für-dich
+- **Region-aware Recommendation** (100km Radius)
+- **Push-Texte mit Varianten** (Wetter context-aware nach Temp + Tageszeit)
+- **Live-First-Default** statt 50/50 Pool/Live → Vorarlberg <2s statt mehrere Min
+- **Cross-Border-Detection** mit klarer User-Message
+- **FH→Wien (695km)** funktioniert (Ferry-False-Positive Fix)
+- **Offline-Map aggressiver** (Korridor um Route, 8000 Tiles, 100km Radius)
+- **TopToast statt Snackbar** ("Keine Verbindung" + Reroute-Feedback)
+- **Trip-Save+Resume UTC-Fix** (negative "läuft seit X Min" Bug)
+
+---
+
+## 🔧 Kritische Code-Locations
+
+| Datei | Zweck | Größe |
+|---|---|---|
+| `lib/presentation/pages/cruise_mode_page.dart` | Routing-Hub + GPS-Tracking | ~8500 LoC |
+| `lib/data/services/route_service.dart` | Edge-Wrapper + Pool-Logik | ~9300 LoC |
+| `lib/data/services/trip_service.dart` | Tour-Save/Resume CRUD | ~174 LoC |
+| `lib/data/services/offline_map_service.dart` | Tile-Cache | ~480 LoC |
+| `lib/data/services/smart_reroute_engine.dart` | Off-Route-Logic | ~300 LoC |
+| `lib/data/services/opening_hours_parser.dart` | OSM-Hours-Parser | ~250 LoC |
+| `lib/data/services/notification_service.dart` | Realtime + Push-Texte | ~430 LoC |
+| `lib/data/services/home_route_recommendation_service.dart` | Region-aware Empfehlung | ~510 LoC |
+| `lib/presentation/pages/home_content_page.dart` | Home + Carousel | ~1860 LoC |
+| `lib/presentation/widgets/cruise/poi_detail_sheet.dart` | POI-Popup | ~440 LoC |
+| `lib/presentation/widgets/cruise/cruise_setup_card.dart` | Modus-Buttons + Explainer | ~860 LoC |
+| `lib/presentation/widgets/cruise/mode_explainer_bubble.dart` | Tap-to-Explain | ~150 LoC |
+| `lib/presentation/widgets/weather_inline.dart` | Inline-Wetter + Warning | ~250 LoC |
+| `supabase/functions/generate-cruise-route-v2/index.ts` | Edge-Routing | ~1180 LoC |
+
+---
+
+## ⚠ Bekannte Edge-Cases / Pending
+
+### Task #55 (pending) — München-OSM-Snap-Bug auf PC1-DACH
+München-Stadt-Koordinaten (Marienplatz 48.13/11.58, Sendling, Garching) snappen asymmetrisch auf PC1: als END klappt München, als START oder Multi-Stop-WP nicht. PC2-Migration wird das wahrscheinlich automatisch lösen weil das `dach-italy-balkan.osm.pbf` saubere Daten hat.
+
+### Test-Trip in DB (group_id=null)
+Es liegt ein Test-Trip in `trips` mit id=`7bb95a29-9a4f-401b-aadb-2bd8734a4d01`, status=active, group_id=NULL. Mein Code-Filter `groupOnly:true` blendet ihn aus, aber falls Cleanup gewünscht:
+```sql
+update trips set status='completed', finished_at=now()
+where id='7bb95a29-9a4f-401b-aadb-2bd8734a4d01';
+```
+
+---
+
+## 🛠 User-Stil + Regeln (kritisch)
+
+- Vucko schreibt Deutsch → Antworten auf Deutsch
 - "Autobahn an / Autobahn aus" NICHT "AB-AN / AB-AUS"
-- Erwartet ehrliche Diagnose, klare Optionen, dann seine Entscheidung
-- Pushed selber nach größeren Sweeps
+- Ehrliche Diagnose, klare Optionen, dann User-Entscheidung
+- User pushed selber nach größeren Sweeps (manchmal — heute meist commit+push selber)
 - NIEMALS API-Keys aus core/constants.dart ausgeben
+- Auto-Mode classifier blockt prod-DB-Writes ohne explizite User-Erlaubnis
+- Worktree-Path: `/Users/vucko/Development/CruiserConnect/.claude/worktrees/admiring-hawking-3afe1f`
+- supabase functions deploy LÄUFT lokal ohne Login (nicht aus Haupt-Repo, aus Worktree)
+- SSH-Permission OK für vucko1@vucko + vucko2@vucko2-HP-ProDesk
+- Cocoapods install braucht UTF-8 Locale: `cd ios && LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 pod install`
 
-## Heartbeat-System
+---
 
-Cron: `7,22,37,52 * * * *` (15 min)
-Antwort-Format:
+## 🚀 App-Build-Befehle (Version 1.0.3+4 ready)
+
+### iOS (TestFlight)
+```bash
+flutter clean && flutter pub get
+cd ios && LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 pod install && cd ..
+flutter build ipa --release
+# Upload via Transporter App: build/ios/ipa/cruise_connect.ipa
 ```
-🟢/🟡/🔴 [HH:MM]
-  GH Servers: DACH ok | DE ok
-  Pool: 2.182 routes / 48 cities
-  Demand last 15min: N suchen
-  Auto-Seed-Queue: M pending
-  Open Tasks: #44 POI, #45 Reroute, #46 CarPlay
-  Nächste 15min: <was passiert>
+
+Falls Xcode-direkt-Archive: vorher in Xcode → Runner → General → Identity → Version 1.0.3, Build 4 manuell setzen wenn nicht aus pbxproj kommt.
+
+### Android (Play Console)
+```bash
+flutter build appbundle --release --no-tree-shake-icons
+# Output: build/app/outputs/bundle/release/app-release.aab
+# Upload: Play Console → Internal Test
 ```
 
-## Scout-System (parallel)
+Keystore: `/Users/vucko/cruiseconnect-upload-keystore.jks` (NICHT im Git, in `android/key.properties` referenziert).
 
-Cron: `*/30 * * * *`
-Schreibt nach `logs/improvement-suggestions.log`
+---
 
-## Rückkehr nach Compact
+## 🧪 Test-Scripts (alle in /tmp/)
 
-1. **Read this file first**
-2. `git log --oneline -15` für letzte Commits
-3. `flutter analyze lib/` für Health
-4. Bei Routing-Fragen: erst Edge-Function curl-Test
-5. User merkt sofort wenn was vergessen — direkt fragen statt raten
+- `/tmp/full_route_test.py` — 14 Standard-Szenarien (Round-Trip + A→B + Trips + OOB)
+- `/tmp/test_cross_border.py` — Cross-Border-Detection-Tests
+- `/tmp/test_final.py` — Erwartet `cross_border_unsupported` als PASS
+- `/tmp/test_vorarlberg_speed.py` — 32 Vorarlberg-Round-Trips Timing
+- `/tmp/test_fh_wien.py` — FH→Wien (695km) Sanity-Check
 
-## Letzte Commits
+---
 
-- `5be51ac` 3 USP-Features (Driven-Track, Streak-Hero, Kurven-DNA)
-- `f7b30f9` 9-Tasks-Sweep (Trip-Bug, TTS, Elevation, Wetter-Polish)
-- `f1d3eba` Notification-System v2 (vollständig)
-- `75b2da0` Trip-Modus + UI-Cleanup + Wetter-Trend
-- `847fd84` Bodensee-Fähre blockiert
-- `21c49f7` A→B Dijkstra-Accept
-- `d018add` schlanker Mode-Header + Voice-Toggle
+## 📍 Coverage-Status nach PC2-Migration (Ziel)
+
+| Land | PC1 | PC2 (jetzt) | PC2 (nach Migration) |
+|---|---|---|---|
+| 🇩🇪 Deutschland | ✅ | ❌ | ✅ |
+| 🇦🇹 Österreich | ✅ | ❌ | ✅ |
+| 🇨🇭 Schweiz | ✅ | ❌ | ✅ |
+| 🇱🇮 Liechtenstein | ✅ | ❌ | ✅ |
+| 🇮🇹 Italien | ❌ | ✅ | ✅ |
+| 🇸🇮 Slowenien | ❌ | ✅ | ✅ |
+| 🇭🇷 Kroatien | ❌ | ✅ | ✅ |
+| 🇫🇷 Côte d'Azur + Elsass | ❌ | ✅ | ✅ |
+| 🇫🇷 Restliches Frankreich (bis lat 50.5) | ❌ | ❌ | ✅ (bbox enthält Teil) |
+
+---
+
+## 🔄 Rückkehr nach Compact — Workflow
+
+1. **Lies diese Datei zuerst** (`docs/COMPACT_RESUME.md`)
+2. Frag User: "Hast du den `osmium extract` auf PC2 ausgeführt? Container läuft mit `dach-italy-balkan.osm.pbf`?"
+3. `git log --oneline -10` für aktuelle Commit-State
+4. `git status` für uncommitted Changes
+5. Wenn PC2 noch nicht migriert: User-Anleitung von oben „🚨 OFFENE AKTION" geben
+6. Wenn PC2 migriert: `python3 /tmp/test_cross_border.py` ausführen → bestätigen dass München→Mailand etc. jetzt routen
+7. Bei Routing-Fragen: erst Edge-Function curl-Test machen, dann tiefer
+
+## Cron-Worker
+
+- `process_route_search_sessions_every_minute` — `* * * * *` (jede Min)
+- `process_route_seed_jobs_every_2_minutes` — `* * * * *` (eigentlich jede Min trotz des Namens, max 5 jobs/run)
+- `dach_pool_auto_seeder` — `*/15 * * * *`
+- `daily-weather-push` — täglich 06:00 UTC
+
+## Heartbeat (optional)
+Aktuell pausiert (Task #12 completed). Kann via cron reaktiviert werden falls User es will.
