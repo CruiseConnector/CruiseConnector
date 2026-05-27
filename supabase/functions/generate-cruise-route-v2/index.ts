@@ -83,9 +83,21 @@ function chooseGraphhopperUrlForRoute(points: Array<{ lat: number; lng: number }
   if (regions.size === 1 && regions.has(GeoRegion.dach)) {
     return { primary: GRAPHHOPPER_URL, fallback: GRAPHHOPPER_EU_URL };
   }
-  // Sonst: EU-Server primary (hat größere Coverage). DACH-Server als fallback
-  // falls EU offline ist und der Routen-Großteil DACH ist.
-  return { primary: GRAPHHOPPER_EU_URL, fallback: GRAPHHOPPER_URL };
+  // Alle Punkte in EU-Süd/-West/-Ost (kein DACH) → EU-Server primary
+  if (!regions.has(GeoRegion.dach)) {
+    return { primary: GRAPHHOPPER_EU_URL, fallback: GRAPHHOPPER_URL };
+  }
+  // 2026-05-27 (vucko Cross-Border-Fix): Wenn Punkte MISCHUNG aus DACH +
+  // EU-Region (z.B. München→Mailand), kann keiner der beiden Server
+  // BEIDE Punkte snappen (PC1 hat kein IT, PC2 hat kein Bayern).
+  // Strategie: DACH-Server primary versuchen (Stitching-Logik im Code
+  // unten findet ggf. eine Route nahe der Grenze). Wenn fail, fällt es
+  // auf EU-Server → der versucht eu-south internal. Wenn beide fail →
+  // car-Ultimate-Fallback auf beiden Servern. Bei echten Cross-Border-
+  // Routen (München→Mailand) erwarten wir aktuell ehrlicherweise nicht
+  // dass eine reine PC2-Single-Server-Route klappt — daher liefert der
+  // Endcode eine klare Fehlermeldung statt einer falschen "no_route".
+  return { primary: GRAPHHOPPER_URL, fallback: GRAPHHOPPER_EU_URL };
 }
 
 // ─────────────────────────── Types ────────────────────────────────────────
@@ -1114,8 +1126,29 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
   // bekannten Mustern. Out-of-bounds = Coverage-Limit.
   let userMessage = 'Konnte aktuell keine passende Route generieren. Probier andere Distanz oder Stil.';
   let errCode = 'no_route';
-  if (lastError.includes('out of bounds')) {
-    userMessage = 'Diese Route reicht über unser aktuelles Liefergebiet hinaus. Wir unterstützen DACH (DE, AT, CH). Setze Stopps näher beieinander.';
+
+  // 2026-05-27 (vucko Cross-Border-Detection): Wenn die Route MISCHUNG aus
+  // DACH und EU-Süd ist (z.B. München→Mailand), kann aktuell keiner unserer
+  // Server beide Punkte snappen. Klare Fehlermeldung statt cryptic "no_route".
+  const allPoints: Array<{ lat: number; lng: number }> = [];
+  if (req.start_location) {
+    allPoints.push({ lat: req.start_location.latitude, lng: req.start_location.longitude });
+  }
+  if (req.target_location) {
+    allPoints.push({ lat: req.target_location.latitude, lng: req.target_location.longitude });
+  }
+  if (req.waypoints) {
+    for (const wp of req.waypoints) allPoints.push({ lat: wp.latitude, lng: wp.longitude });
+  }
+  const pointRegions = new Set(allPoints.map(p => classifyPoint(p.lat, p.lng)));
+  const isCrossBorder = pointRegions.has(GeoRegion.dach) &&
+    [GeoRegion.euSouth, GeoRegion.euWest, GeoRegion.euEast].some(r => pointRegions.has(r));
+
+  if (isCrossBorder) {
+    userMessage = 'Diese Tour kreuzt DACH und Süd-/West-Europa. Unsere Server bauen wir gerade um diese Cross-Border-Routen zu unterstützen. Vorerst: bleibe entweder im DACH-Raum ODER innerhalb Italien/Slowenien/Kroatien.';
+    errCode = 'cross_border_unsupported';
+  } else if (lastError.includes('out of bounds')) {
+    userMessage = 'Diese Route reicht über unser aktuelles Liefergebiet hinaus. Wir unterstützen DACH (DE, AT, CH) plus Italien, Slowenien, Kroatien und Süd-Frankreich. Setze Stopps näher beieinander.';
     errCode = 'coverage_out_of_bounds';
   } else if (lastError.includes('Cannot find point')) {
     // Parse welcher Punkt — Index sagt uns ob Start/Ziel/Wegpunkt.
