@@ -764,6 +764,19 @@ class _CruiseModePageState extends State<CruiseModePage>
     if (_fullRouteCoordinates.isNotEmpty) return;
     final cached = await RouteCacheService.instance.loadConfirmedRoute();
     if (cached == null || !mounted || _disposed) return;
+    // 2026-05-27 (vucko UX): TTL 2h — alte Routen vom letzten App-Start sollen
+    // den User beim Öffnen NICHT in eine bereits abgebrochene Route werfen.
+    // 2h reicht für echtes Offline-Recovery (Funkloch während aktiver Fahrt),
+    // verhindert aber den „warum bin ich in einer alten Route"-Effekt.
+    final age = DateTime.now().toUtc().difference(cached.savedAt.toUtc());
+    if (age > const Duration(hours: 2)) {
+      debugPrint(
+        '[CruiseMode] Bestätigte Route ist ${age.inHours}h alt — '
+        'verwerfe statt automatisch wiederherzustellen.',
+      );
+      unawaited(RouteCacheService.instance.clearConfirmedRoute());
+      return;
+    }
     await OfflineMapService.instance.ensureStyleCached();
     if (!mounted || _disposed) return;
 
@@ -5897,6 +5910,9 @@ class _CruiseModePageState extends State<CruiseModePage>
     _stopSimulation(restartLiveTracking: false);
     _stopNavigationTracking();
     CruiseModePage.isFullscreen.value = false;
+    // 2026-05-27 (vucko UX): Cancel = User will diese Route NICHT weiter.
+    // Cache leeren damit beim nächsten App-Start die Map sauber kommt.
+    unawaited(RouteCacheService.instance.clearConfirmedRoute());
     _resetGeneratedRouteUiState();
 
     final currentLocation = _userLocation;

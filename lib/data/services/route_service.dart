@@ -747,13 +747,38 @@ class RouteService {
             // Merken als Notnagel für den emergency-fallback-Pfad.
             bestRejectedCandidate = candidate;
           }
-          if (candidate.accepted &&
-              candidate.novelEnough &&
-              (candidate.isIdeal ||
-                  candidate.isGood ||
-                  (candidate.tier == RouteQualityTier.acceptable &&
-                      !difficultScenario))) {
-            break;
+          // 2026-05-27 (vucko Speed-Fix): Schnelleres Break aus der Live-
+          // Schleife.
+          // Vor diesem Fix: In Vorarlberg / Götzis / Feldkirch sind fast alle
+          // Round-Trip-Anfragen "difficult" (avoidHighways=true oder
+          // Kurvenjagd ≤60km oder Entdecker), und acceptable-Routes triggern
+          // dort KEIN Break. Bei isSportSearch+!hasSeenHistory zusätzlich
+          // sportLiveBoost=+2 → maxAttempts bis 5, alles sequentiell
+          // → 30-60s Wartezeit obwohl die erste Route bereits brauchbar war.
+          //
+          // Neue Policy:
+          // - ideal / good     → IMMER sofort break
+          // - acceptable       → ab attempt ≥ 1 break (also nach max 2 Tries)
+          //   damit difficult-Scenarios trotzdem 1 Mal nach besser suchen
+          //   können, aber nicht 5× sequenziell hängen
+          // - Search Again (forceFreshVariant) bleibt aggressiver: kein
+          //   acceptable-Break wenn ein difficult-Scenario nach Variation
+          //   gefragt wurde — der User hat explizit „lieber besser"
+          //   signalisiert.
+          if (candidate.accepted && candidate.novelEnough) {
+            final isQuickAccept =
+                candidate.isIdeal ||
+                candidate.isGood ||
+                (candidate.tier == RouteQualityTier.acceptable &&
+                    !difficultScenario);
+            final isDifficultAcceptableAfterRetry =
+                candidate.tier == RouteQualityTier.acceptable &&
+                difficultScenario &&
+                attempt >= 1 &&
+                !forceFreshVariant;
+            if (isQuickAccept || isDifficultAcceptableAfterRetry) {
+              break;
+            }
           }
         } catch (e, stack) {
           final mapped = e is RouteServiceException
