@@ -366,20 +366,18 @@ class RouteService {
       waypointSignature: waypointSignature,
       closeLoop: isWaypointRequiredRoundTrip,
     );
-    // 2026-05-22 (vucko): 50/50 Live/Pool Mix.
-    // User-Vorgabe: bei jeder Suche coin-flip — 50% Pool-First (schnell, kein
-    // GH-Last), 50% Live (frisch, immer neue Route). Pool-First wird
-    // automatisch via Search-Again-Logic gewechselt wenn User mehr Variety
-    // will. Bei forceFreshVariant ALWAYS Live (User hat ja explizit „neue
-    // Route" gewünscht).
-    // Waypoint-Routen MÜSSEN Live sein (Pool kennt keine spezifischen
-    // Waypoints des Users).
-    final coinFlip = (DateTime.now().millisecondsSinceEpoch ~/ 100) % 2 == 0;
-    var poolHealingFirstPolicy = isWaypointRequiredRoundTrip
-        ? false
-        : (forceFreshVariant
-            ? false  // Search-Again → IMMER Live für frische Route
-            : coinFlip);  // 50/50
+    // 2026-05-27 (vucko Speed-Fix): Live-First default statt 50/50 Coin-Flip.
+    // Empirie: in dünner Pool-Coverage (Vorarlberg, Feldkirch, Götzis) hat
+    // Pool-First triggert oft eine search_session die auf den Cron-Worker
+    // wartet (60s Interval) → mehrere Minuten Wartezeit für User.
+    // Direkter Edge-Call ist hingegen 0.6-1.5s in allen getesteten Regionen.
+    //
+    // Neue Policy:
+    // - Live-First IMMER (bei Premium/Test) — User sieht in <2s eine Route
+    // - Pool wird als Fallback genutzt wenn Live keine Quality-Route liefert
+    // - Search-Again triggert sowieso Live
+    // - Free/Basic Tier bleibt Pool-Only (siehe unten)
+    var poolHealingFirstPolicy = false;
     _resetRouteDebugState();
     lastRouteGenerationStartedAtMs = DateTime.now().millisecondsSinceEpoch;
     lastRouteDebugTrigger = debugTrigger;
@@ -398,9 +396,9 @@ class RouteService {
     _activeScenarioKeyForDebug = scenario.scenarioKey;
     _activeForceFreshVariantForDebug = forceFreshVariant;
     _activeTriggerForDebug = debugTrigger;
-    lastRouteSourceDecision = poolHealingFirstPolicy
-        ? 'hybrid_short_no_highway'
-        : 'live_first';
+    // 2026-05-27 (vucko): poolHealingFirstPolicy ist jetzt immer false bei
+    // Premium/Test → Decision ist immer 'live_first'.
+    lastRouteSourceDecision = 'live_first';
     lastRouteLiveAttemptReason = forceFreshVariant
         ? 'search_again_force_fresh'
         : 'initial_search';
