@@ -41,19 +41,37 @@ const ALLOWED_ORIGINS = '*';
 enum GeoRegion { dach = 'dach', euWest = 'eu_west', euSouth = 'eu_south', euEast = 'eu_east', unknown = 'unknown' }
 
 function classifyPoint(lat: number, lng: number): GeoRegion {
-  // DACH-Box (großzügig, deckt auch Grenzregionen ab)
+  // 2026-05-27 (vucko v2): Explicit-First-Order mit Alpen-Trennlinie bei
+  // lat 46.5. Süd der Alpen = euSouth/Balkan, nördlich = DACH/AT.
+  // Vermeidet dass Graz (47.07) als Italien klassifiziert wird oder
+  // Klagenfurt (46.62) als Slowenien.
+
+  // Slowenien (45.42-46.55, 13.38-16.61) — engere lat-Box um Klagenfurt/Villach auszuschließen
+  if (lat >= 45.42 && lat <= 46.55 && lng >= 13.38 && lng <= 16.61) {
+    return GeoRegion.euEast;
+  }
+  // Kroatien (42.4-46.55, 13.5-19.45)
+  if (lat >= 42.4 && lat <= 46.55 && lng >= 13.5 && lng <= 19.45) {
+    return GeoRegion.euEast;
+  }
+  // Italien (35.5-46.5, 6.6-18.5) — Alpen-Linie bei lat 46.5 trennt von AT/CH
+  // Südtirol (Bozen 46.49) ist gerade noch IT, alles ab lat 46.5 ist DACH
+  if (lat >= 35.5 && lat <= 46.5 && lng >= 6.6 && lng <= 18.5) {
+    return GeoRegion.euSouth;
+  }
+  // Spanien + Portugal + Süd-Frankreich (Lat <44 = klar süd der DACH-Box)
+  if (lat >= 36.0 && lat <= 44.0 && lng >= -10.0 && lng <= 7.5) {
+    return GeoRegion.euSouth;
+  }
+  // DACH (DE + AT + CH + LI) — nach den kleineren Ländern
   if (lat >= 45.8 && lat <= 55.1 && lng >= 5.86 && lng <= 17.2) {
     return GeoRegion.dach;
-  }
-  // Italien + Süd-Frankreich + Spanien + Portugal
-  if (lat >= 36.0 && lat <= 47.0 && lng >= -10.0 && lng <= 18.5) {
-    return GeoRegion.euSouth;
   }
   // Frankreich-Nord + Benelux + UK-Süd
   if (lat >= 47.0 && lat <= 55.0 && lng >= -5.5 && lng <= 7.5) {
     return GeoRegion.euWest;
   }
-  // Polen + Tschechien + Slowakei + Ungarn + Balkan (Slowenien, Kroatien, Serbien, etc.)
+  // Polen + Tschechien + Slowakei + Ungarn + Serbien + Bosnien etc.
   if (lat >= 40.0 && lat <= 55.5 && lng >= 12.0 && lng <= 30.0) {
     return GeoRegion.euEast;
   }
@@ -1144,6 +1162,8 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
   const isCrossBorder = pointRegions.has(GeoRegion.dach) &&
     [GeoRegion.euSouth, GeoRegion.euWest, GeoRegion.euEast].some(r => pointRegions.has(r));
 
+  // Cross-Border-Detection HAT VORRANG — auch bei "out of bounds" oder
+  // "Cannot find point" Fehlern, wenn die Punkte in 2 Regionen sind.
   if (isCrossBorder) {
     userMessage = 'Diese Tour kreuzt DACH und Süd-/West-Europa. Unsere Server bauen wir gerade um diese Cross-Border-Routen zu unterstützen. Vorerst: bleibe entweder im DACH-Raum ODER innerhalb Italien/Slowenien/Kroatien.';
     errCode = 'cross_border_unsupported';
