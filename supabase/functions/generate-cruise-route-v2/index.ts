@@ -97,25 +97,17 @@ function chooseGraphhopperUrlForRoute(points: Array<{ lat: number; lng: number }
     return { primary: GRAPHHOPPER_URL, fallback: GRAPHHOPPER_DE_URL };
   }
   const regions = new Set(points.map(p => classifyPoint(p.lat, p.lng)));
-  // Alle Punkte in DACH → DACH-Server primary
+  // Alle Punkte in DACH → DACH-Server primary (PC1 ist schneller, weniger
+  // Daten zu durchsuchen)
   if (regions.size === 1 && regions.has(GeoRegion.dach)) {
     return { primary: GRAPHHOPPER_URL, fallback: GRAPHHOPPER_EU_URL };
   }
-  // Alle Punkte in EU-Süd/-West/-Ost (kein DACH) → EU-Server primary
-  if (!regions.has(GeoRegion.dach)) {
-    return { primary: GRAPHHOPPER_EU_URL, fallback: GRAPHHOPPER_URL };
-  }
-  // 2026-05-27 (vucko Cross-Border-Fix): Wenn Punkte MISCHUNG aus DACH +
-  // EU-Region (z.B. München→Mailand), kann keiner der beiden Server
-  // BEIDE Punkte snappen (PC1 hat kein IT, PC2 hat kein Bayern).
-  // Strategie: DACH-Server primary versuchen (Stitching-Logik im Code
-  // unten findet ggf. eine Route nahe der Grenze). Wenn fail, fällt es
-  // auf EU-Server → der versucht eu-south internal. Wenn beide fail →
-  // car-Ultimate-Fallback auf beiden Servern. Bei echten Cross-Border-
-  // Routen (München→Mailand) erwarten wir aktuell ehrlicherweise nicht
-  // dass eine reine PC2-Single-Server-Route klappt — daher liefert der
-  // Endcode eine klare Fehlermeldung statt einer falschen "no_route".
-  return { primary: GRAPHHOPPER_URL, fallback: GRAPHHOPPER_EU_URL };
+  // 2026-05-27 (vucko v3): PC2 hat jetzt MIT dach-italy-balkan.osm.pbf
+  // (DE+AT+CH+IT+SI+HR+FR-Süd in einer einzigen dedupzierten PBF aus
+  // europe-latest.osm.pbf bbox-extract). Damit kann PC2 BEIDE Regionen
+  // routen. Cross-Border und reine EU-Routen → PC2 primary, PC1 als
+  // Fallback wenn PC2 offline.
+  return { primary: GRAPHHOPPER_EU_URL, fallback: GRAPHHOPPER_URL };
 }
 
 // ─────────────────────────── Types ────────────────────────────────────────
@@ -1162,11 +1154,12 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
   const isCrossBorder = pointRegions.has(GeoRegion.dach) &&
     [GeoRegion.euSouth, GeoRegion.euWest, GeoRegion.euEast].some(r => pointRegions.has(r));
 
-  // Cross-Border-Detection HAT VORRANG — auch bei "out of bounds" oder
-  // "Cannot find point" Fehlern, wenn die Punkte in 2 Regionen sind.
-  if (isCrossBorder) {
-    userMessage = 'Diese Tour kreuzt DACH und Süd-/West-Europa. Unsere Server bauen wir gerade um diese Cross-Border-Routen zu unterstützen. Vorerst: bleibe entweder im DACH-Raum ODER innerhalb Italien/Slowenien/Kroatien.';
-    errCode = 'cross_border_unsupported';
+  // 2026-05-27 (vucko v3): Cross-Border ist jetzt PC2-supported (PC2 hat
+  // dach-italy-balkan.osm.pbf). Daher nur noch als Last-Resort-Message wenn
+  // PC2 wirklich offline ist UND DACH-PC1 das auch nicht abdecken kann.
+  if (isCrossBorder && (lastError.includes('fetch failed') || lastError.includes('error sending request'))) {
+    userMessage = 'Cross-Border-Routing-Server vorübergehend nicht erreichbar. Bleibe vorerst entweder im DACH-Raum ODER innerhalb Italien/Slowenien/Kroatien.';
+    errCode = 'cross_border_server_offline';
   } else if (lastError.includes('out of bounds')) {
     userMessage = 'Diese Route reicht über unser aktuelles Liefergebiet hinaus. Wir unterstützen DACH (DE, AT, CH) plus Italien, Slowenien, Kroatien und Süd-Frankreich. Setze Stopps näher beieinander.';
     errCode = 'coverage_out_of_bounds';
