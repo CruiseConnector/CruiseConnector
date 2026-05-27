@@ -644,29 +644,33 @@ class RouteService {
         styleConfig,
       );
       final liveBatchCount = _roundTripLiveBatchCount(scenario, styleConfig);
-      // Client-Schleife: Erstsuche darf in schwierigen Szenarien mehr Seeds
-      // testen. Sobald es aber bereits eine gute Route für dieselben Settings
-      // gibt, reicht ein frischer Versuch; danach fällt die App schnell auf
-      // die geprüfte Route zurück statt 30-45s in NO_ROUTE-Tails zu laufen.
-      // Search Again bekommt einen Versuch mehr als die Erstsuche
-      // (capped bei 5), damit der User explizit eine Variante erzwingen kann
-      // ohne dass die Schleife einfach in den Pool/NO_ROUTE-Tail fällt.
+      // 2026-05-27 (vucko Speed-Fix v2): Radikal kürzere Client-Schleife.
+      //
+      // Empirie (32 Vorarlberg-Tests gegen Edge mit echtem App-Body):
+      // Edge antwortet konstant 0.4-0.8s. Wenn User „mehrere Minuten"
+      // wartet, liegt das ausschließlich an sequenzieller Client-Wiederholung.
+      //
+      // Neue Policy:
+      // - Normal Search: max 2 attempts. Erste accepted+novelEnough Route
+      //   wird IMMER sofort genommen (auch acceptable, auch difficult).
+      // - Search Again (forceFreshVariant): max 3 attempts — User hat
+      //   explizit Variation angefordert. Auch hier: erste new+accepted
+      //   Route reicht.
+      // - SportLiveBoost komplett raus: Sport-Probleme sollen am Edge
+      //   gelöst werden (ist über Plan-Phasen schon parallelisiert), nicht
+      //   durch sequenzielle Client-Wiederholung. Auch in Sport-Hotspots
+      //   testet der Edge intern bereits 5 parallele Seeds — zwei
+      //   sequenzielle Client-Calls reichen für Diversity.
+      // - hasSeenHistory: Wenn schon eine Route für dieselben Settings
+      //   bekannt ist, reicht 1 frischer Versuch.
       final regularMaxAttempts = poolHealingFirstPolicy
           ? 1
-          : difficultScenario
-          ? (hasSeenHistory ? 1 : 3)
-          : (hasSeenHistory ? 1 : 2);
-      // Sport in unbekannten Regionen (z.B. Friedrichshafen ohne Pool):
-      // mehr Live-Versuche, weil dort weder Pool greift noch ein einzelner
-      // Mapbox-Plan zuverlässig eine tentakel-freie Form liefert. Bei Sport
-      // mit ohne ausreichenden Pool muss Live mehr Seeds durchprobieren,
-      // sonst sieht der User entweder NO_ROUTE oder die eine Tentakel-Form
-      // immer wieder. Cap bei 6 — darüber wird der Edge-Provider zu langsam.
-      final isSportSearch = styleConfig.profileKey == 'sport';
-      final sportLiveBoost = isSportSearch && !hasSeenHistory ? 2 : 0;
+          : hasSeenHistory
+          ? 1
+          : 2;
       final maxAttempts = forceFreshVariant
-          ? math.min(regularMaxAttempts + 1 + sportLiveBoost, 6)
-          : math.min(regularMaxAttempts + sportLiveBoost, 5);
+          ? math.min(regularMaxAttempts + 1, 3)
+          : regularMaxAttempts;
       _RouteCandidate? bestCandidate;
       _RouteCandidate? spareCandidate;
       _RouteCandidate? bestDuplicateCandidate;
@@ -747,38 +751,21 @@ class RouteService {
             // Merken als Notnagel für den emergency-fallback-Pfad.
             bestRejectedCandidate = candidate;
           }
-          // 2026-05-27 (vucko Speed-Fix): Schnelleres Break aus der Live-
-          // Schleife.
-          // Vor diesem Fix: In Vorarlberg / Götzis / Feldkirch sind fast alle
-          // Round-Trip-Anfragen "difficult" (avoidHighways=true oder
-          // Kurvenjagd ≤60km oder Entdecker), und acceptable-Routes triggern
-          // dort KEIN Break. Bei isSportSearch+!hasSeenHistory zusätzlich
-          // sportLiveBoost=+2 → maxAttempts bis 5, alles sequentiell
-          // → 30-60s Wartezeit obwohl die erste Route bereits brauchbar war.
+          // 2026-05-27 (vucko Speed-Fix v2): JEDE accepted+novelEnough Route
+          // wird sofort genommen — egal welcher Quality-Tier, egal ob
+          // difficult, egal welcher attempt-Index. Spare-Logik darunter sammelt
+          // bessere Kandidaten in den PreparedRouteBuffer für Search-Again.
           //
-          // Neue Policy:
-          // - ideal / good     → IMMER sofort break
-          // - acceptable       → ab attempt ≥ 1 break (also nach max 2 Tries)
-          //   damit difficult-Scenarios trotzdem 1 Mal nach besser suchen
-          //   können, aber nicht 5× sequenziell hängen
-          // - Search Again (forceFreshVariant) bleibt aggressiver: kein
-          //   acceptable-Break wenn ein difficult-Scenario nach Variation
-          //   gefragt wurde — der User hat explizit „lieber besser"
-          //   signalisiert.
+          // Vor diesem Fix: Die Schleife wartete in difficult Scenarios bis
+          // ideal/good kam, oft 3-5 Edge-Calls = 2-5s+. Mit Edge-Speed 0.4-
+          // 0.8s ist das im Worst-Case >5s sichtbar als hängende Loading-UI.
+          //
+          // Trade-off: Wenn die erste Route nur „acceptable" ist, könnte ein
+          // weiterer Versuch eine bessere liefern. Aber Acceptable IST
+          // accepted+novelEnough → die Route ist brauchbar. Lieber sofort
+          // zeigen als 2-5s zusätzlich auf „good" warten.
           if (candidate.accepted && candidate.novelEnough) {
-            final isQuickAccept =
-                candidate.isIdeal ||
-                candidate.isGood ||
-                (candidate.tier == RouteQualityTier.acceptable &&
-                    !difficultScenario);
-            final isDifficultAcceptableAfterRetry =
-                candidate.tier == RouteQualityTier.acceptable &&
-                difficultScenario &&
-                attempt >= 1 &&
-                !forceFreshVariant;
-            if (isQuickAccept || isDifficultAcceptableAfterRetry) {
-              break;
-            }
+            break;
           }
         } catch (e, stack) {
           final mapped = e is RouteServiceException

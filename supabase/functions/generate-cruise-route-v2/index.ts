@@ -464,6 +464,17 @@ async function callGraphHopper(opts: {
   }
   // Doppelter Schutz: Ferry zusätzlich noch hohe priority-Penalty
   overlay.priority.push({ if: 'road_environment == FERRY', multiply_by: '0.001' });
+  // 2026-05-27 (vucko Quality-Fix): Track/Service/Path universell ausschließen.
+  // Diese Klassen sind in OSM oft Forst-/Wirtschaftswege, Service-Roads zu
+  // Parkplätzen, oder unbefahrbare Fußwege. Sie waren bisher NIRGENDS
+  // penalisiert → GraphHopper hat sie regelmäßig in Sport/Kurvenjagd-Routen
+  // eingebaut wenn sie kurzer oder „kurviger" waren. User-Beschwerde:
+  // „komische Nebenstraßen ohne Grund". Multiply_by 0.05 = praktisch
+  // ausgeschlossen ohne Hard-Block (falls eine Route wirklich nur darüber
+  // funktioniert, GH kann immer noch eskalieren).
+  overlay.priority.push({ if: 'road_class == TRACK', multiply_by: '0.05' });
+  overlay.priority.push({ if: 'road_class == SERVICE', multiply_by: '0.05' });
+  overlay.priority.push({ if: 'road_class == PATH', multiply_by: '0.02' });
   if (overlay.priority.length > 0 || overlay.distance_influence != null || overlay.speed != null) {
     params.set('custom_model', JSON.stringify(overlay));
   }
