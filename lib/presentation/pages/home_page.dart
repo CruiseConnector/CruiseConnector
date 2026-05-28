@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:provider/provider.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/application/providers/community_provider.dart';
@@ -77,8 +78,47 @@ class _HomePageState extends State<HomePage> {
           regionId: 'home_prewarm',
         ),
       );
+      // 2026-05-28 (vucko Task #64): DACH-Übersicht einmalig cachen.
+      // Läuft im Hintergrund nach dem lokalen Pre-Warm. SharedPreferences-
+      // Flag verhindert mehrfaches Ausführen — neuer Download nur wenn User
+      // den Cache manuell aus Settings löscht oder wir hier die Version
+      // erhöhen (z.B. wenn Mapbox-Style ändert).
+      unawaited(_prewarmDachOverviewIfNeeded());
     } catch (e) {
       debugPrint('[HomePage] Offline-Map pre-warm failed: $e');
+    }
+  }
+
+  /// 2026-05-28 (vucko Task #64): DACH-Übersicht (~30-50 MB) einmalig
+  /// vorladen. Schweigend im Hintergrund — User sieht in Settings später
+  /// Status + manuellen Re-Download-Button.
+  Future<void> _prewarmDachOverviewIfNeeded() async {
+    const cacheVersionKey = 'offline_map_dach_overview_v1';
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (prefs.getBool(cacheVersionKey) == true) {
+        return; // Schon einmal erfolgreich gelaufen.
+      }
+      // 2s Delay damit der lokale Pre-Warm (route-relevante Tiles) nicht
+      // mit den DACH-Übersichts-Downloads kollidiert.
+      await Future.delayed(const Duration(seconds: 2));
+      if (!mounted) return;
+      final report = await OfflineMapService.instance.cacheDachOverview();
+      if (!report.skipped && report.failedTiles < report.requestedTiles * 0.1) {
+        await prefs.setBool(cacheVersionKey, true);
+        debugPrint(
+          '[HomePage] DACH-Überblick gecacht: '
+          '${report.downloadedTiles + report.existingTiles} / '
+          '${report.requestedTiles} Tiles.',
+        );
+      } else {
+        debugPrint(
+          '[HomePage] DACH-Überblick teilweise fehlgeschlagen — '
+          'versuche es beim nächsten App-Start erneut.',
+        );
+      }
+    } catch (e) {
+      debugPrint('[HomePage] DACH-Überblick fehlgeschlagen: $e');
     }
   }
 

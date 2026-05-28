@@ -73,6 +73,19 @@ class OfflineMapService {
   static const double defaultHomeLat = 47.4500;
   static const double defaultHomeLng = 9.6000;
 
+  // 2026-05-28 (vucko Task #64): DACH-Pre-Cache.
+  // bbox umschließt DE + AT + CH + LI mit kleinem Puffer.
+  // Zoom 5-10 für Übersicht (App-Open + Karten-Zoom-Out). Höhere Zoom-Levels
+  // werden weiter route-spezifisch nachgeladen.
+  // Erwartete Größe: ~3500 Tiles, ~30-50 MB Disk.
+  static const double dachBboxSouthLat = 45.7;
+  static const double dachBboxNorthLat = 55.1;
+  static const double dachBboxWestLng = 5.5;
+  static const double dachBboxEastLng = 17.2;
+  static const int dachOverviewMinZoom = 5;
+  static const int dachOverviewMaxZoom = 10;
+  static const int dachOverviewMaxTiles = 4500;
+
   Directory? _tileCacheDirectory;
   Future<Directory?>? _tileCacheDirectoryFuture;
 
@@ -206,6 +219,130 @@ class OfflineMapService {
     for (var zoom = minZoom; zoom <= maxZoom; zoom += 1) {
       final topLeft = _tileForCoordinate([minLng, maxLat], zoom);
       final bottomRight = _tileForCoordinate([maxLng, minLat], zoom);
+      for (var x = topLeft.x; x <= bottomRight.x; x += 1) {
+        for (var y = topLeft.y; y <= bottomRight.y; y += 1) {
+          final tile = _normalizeTile(OfflineTile(z: zoom, x: x, y: y));
+          if (tile == null) continue;
+          tiles.add(tile);
+          if (tiles.length >= maxTiles) {
+            return tiles.toList(growable: false);
+          }
+        }
+      }
+    }
+    return tiles.toList(growable: false);
+  }
+
+  /// 2026-05-28 (vucko Task #64): DACH-Übersichtskarte einmalig downloaden.
+  ///
+  /// Wird beim First-Launch (oder via Settings-Button) im Hintergrund
+  /// ausgeführt. Cached die komplette DACH-bbox (Zoom 5-10) → User kann
+  /// jederzeit aus dem Cruise-Modus rauszoomen und sieht direkt die ganze
+  /// Region offline.
+  ///
+  /// Erwartete Größe: ~3500 Tiles, ~30-50 MB. WLAN-only Empfehlung.
+  ///
+  /// [onProgress] wird mit (downloaded, total) callback nach jedem Batch
+  /// aufgerufen für UI-Progress-Bar.
+  Future<OfflineMapCacheReport> cacheDachOverview({
+    void Function(int downloaded, int total)? onProgress,
+  }) async {
+    if (kIsWeb) {
+      return const OfflineMapCacheReport(
+        requestedTiles: 0,
+        downloadedTiles: 0,
+        existingTiles: 0,
+        failedTiles: 0,
+        skipped: true,
+      );
+    }
+    final directory = await _resolveTileCacheDirectory();
+    if (directory == null) {
+      return const OfflineMapCacheReport(
+        requestedTiles: 0,
+        downloadedTiles: 0,
+        existingTiles: 0,
+        failedTiles: 0,
+        skipped: true,
+      );
+    }
+    final tiles = _tilesForBbox(
+      southLat: dachBboxSouthLat,
+      westLng: dachBboxWestLng,
+      northLat: dachBboxNorthLat,
+      eastLng: dachBboxEastLng,
+      minZoom: dachOverviewMinZoom,
+      maxZoom: dachOverviewMaxZoom,
+      maxTiles: dachOverviewMaxTiles,
+    );
+    if (tiles.isEmpty) {
+      return const OfflineMapCacheReport(
+        requestedTiles: 0,
+        downloadedTiles: 0,
+        existingTiles: 0,
+        failedTiles: 0,
+        skipped: true,
+      );
+    }
+    var downloaded = 0;
+    var existing = 0;
+    var failed = 0;
+    final client = http.Client();
+    try {
+      const batchSize = 8;
+      for (var i = 0; i < tiles.length; i += batchSize) {
+        final batch = tiles.skip(i).take(batchSize);
+        final outcomes = await Future.wait(
+          batch.map((tile) => _cacheTile(client, directory, tile)),
+        );
+        for (final outcome in outcomes) {
+          switch (outcome) {
+            case _TileCacheOutcome.downloaded:
+              downloaded += 1;
+            case _TileCacheOutcome.existing:
+              existing += 1;
+            case _TileCacheOutcome.failed:
+              failed += 1;
+          }
+        }
+        onProgress?.call(downloaded + existing, tiles.length);
+      }
+    } finally {
+      client.close();
+    }
+    debugPrint(
+      '[OfflineMap] DACH overview cache: requested=${tiles.length} '
+      'downloaded=$downloaded existing=$existing failed=$failed',
+    );
+    return OfflineMapCacheReport(
+      requestedTiles: tiles.length,
+      downloadedTiles: downloaded,
+      existingTiles: existing,
+      failedTiles: failed,
+      skipped: false,
+    );
+  }
+
+  /// bbox-Tiles (direkter Bounding-Box, ohne Center+Radius-Umrechnung).
+  List<OfflineTile> _tilesForBbox({
+    required double southLat,
+    required double westLng,
+    required double northLat,
+    required double eastLng,
+    required int minZoom,
+    required int maxZoom,
+    required int maxTiles,
+  }) {
+    if (minZoom > maxZoom ||
+        maxTiles <= 0 ||
+        southLat >= northLat ||
+        westLng >= eastLng) {
+      return const <OfflineTile>[];
+    }
+    final tiles = <OfflineTile>{};
+    for (var zoom = minZoom; zoom <= maxZoom; zoom += 1) {
+      final topLeft = _tileForCoordinate([westLng, northLat], zoom);
+      final bottomRight = _tileForCoordinate([eastLng, southLat], zoom);
       for (var x = topLeft.x; x <= bottomRight.x; x += 1) {
         for (var y = topLeft.y; y <= bottomRight.y; y += 1) {
           final tile = _normalizeTile(OfflineTile(z: zoom, x: x, y: y));

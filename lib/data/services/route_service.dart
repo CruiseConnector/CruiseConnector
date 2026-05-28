@@ -4688,25 +4688,37 @@ class RouteService {
     required RouteScenario scenario,
     required List<List<double>> coordinates,
   }) {
-    if (!scenario.isRoundTrip || coordinates.length < 8) return false;
-    if (!_isVorarlbergRhineValleyStart(scenario)) return false;
-
-    var foreignCorridorPoints = 0;
-    for (final point in coordinates) {
-      if (point.length < 2) continue;
-      final lng = point[0];
-      final lat = point[1];
-      final likelySwissRhineValley =
-          lat >= 47.05 &&
-          lat <= 47.58 &&
-          (lng < 9.53 || (lat >= 47.30 && lat <= 47.52 && lng < 9.61));
-      if (likelySwissRhineValley) {
-        foreignCorridorPoints += 1;
-      }
-    }
-    return foreignCorridorPoints >= math.max(4, coordinates.length * 0.03);
+    // 2026-05-28 (vucko Task #67): Border-Intrusion-Filter DEAKTIVIERT für
+    // Vorarlberg-Rhine-Valley. Live-Log zeigt:
+    //   - User in Götzis (~3km zur CH-Grenze) startet Sport 50km Round-Trip
+    //   - Edge produziert eine schöne Route die durch CH-Rheintal geht
+    //   - Client-Filter rejected mit borderIntrusionRejected=true
+    //   - 75+ Edge-Calls Folgen durch Pool-Fallback der auch failt
+    //
+    // Schweiz IST Teil von DACH und vom PC1-GraphHopper-Server abgedeckt.
+    // Es gibt keinen Grund Cross-Border-Routen DACH→CH→DACH zu blockieren.
+    // Der ursprüngliche Intent war wahrscheinlich Italien/Slowenien zu
+    // vermeiden — die liegen aber lat <= 46.5 und werden nicht von dieser
+    // Schweiz-spezifischen Logik erfasst.
+    //
+    // Folge des Fixes: Sport in Vorarlberg darf jetzt freie 50km-Loops mit
+    // Schweiz-Anteil erstellen → fast alle Live-Routen werden accepted,
+    // Pool-Fallback wird nur noch in echten NO-ROUTE-Fällen gebraucht.
+    return false;
+    // Original-Logik als Kommentar erhalten falls jemals wieder gebraucht:
+    // if (!scenario.isRoundTrip || coordinates.length < 8) return false;
+    // if (!_isVorarlbergRhineValleyStart(scenario)) return false;
+    // var foreignCorridorPoints = 0;
+    // for (final point in coordinates) {
+    //   ...
+    // }
+    // return foreignCorridorPoints >= math.max(4, coordinates.length * 0.03);
   }
 
+  // 2026-05-28 (vucko Task #67): ungenutzt nach Deaktivierung von
+  // _rejectRoundTripBorderIntrusion (siehe oben). Bleibt als Hilfsfunktion
+  // erhalten für mögliche zukünftige Region-spezifische Logik.
+  // ignore: unused_element
   bool _isVorarlbergRhineValleyStart(RouteScenario scenario) {
     return scenario.startLatitude >= 47.18 &&
         scenario.startLatitude <= 47.46 &&
@@ -5407,7 +5419,32 @@ class RouteService {
     RoutePoolMatch? bestSeenMatch;
     double? bestSeenStartDistanceKm;
 
+    // 2026-05-28 (vucko Task #67): Pool-Loop-Explosion Fix.
+    // Live-Log zeigt 75 sequenzielle Edge-Calls weil pro Pool-Match
+    // 3 join × 2 exit × 2 Edge-Calls (Access + Return) = 12 Calls. Bei 6
+    // Pool-Matches = 72 Calls = 30+ Sekunden Wartezeit.
+    //
+    // Neue Limits:
+    // - Max 3 Pool-Matches probieren (statt alle ~6-10)
+    // - User-Distance-Filter: 3km statt 12km. Pool-Routen die mehr als 3km
+    //   vom User entfernt starten brauchen einen so langen Access-Leg dass
+    //   die Gesamt-Route nicht mehr „lokal" wirkt
+    // - Dead-End-Spike-Cache: wenn ein Match einmal dead-end-spike hatte,
+    //   nicht nochmal probieren (Live-Reroute-Pfad rief Pool-Fallback 3×
+    //   für denselben pool_id)
+    const maxPoolAttempts = 3;
+    const localPoolMaxStartDistanceKm = 3.0;
+    var poolAttemptsConsumed = 0;
+    final spikeCachedMatchIds = <String>{};
+
     for (final match in matches) {
+      if (poolAttemptsConsumed >= maxPoolAttempts) {
+        _debugRouteSearch(
+          '[PoolFallback] poolHit=true poolUsed=false reason=max_attempts_reached '
+          'consumed=$poolAttemptsConsumed',
+        );
+        break;
+      }
       if (scenario.isRoundTrip && match.route.distanceBucket != bucket) {
         lastRouteAlternativeDistanceOffered = true;
         lastRouteReturnedDistanceBucket = match.route.distanceBucket;
@@ -5424,6 +5461,7 @@ class RouteService {
         match.route.startLat,
         match.route.startLng,
       );
+      // Hard-Limit: 12km (alte Logik bleibt als Sicherheitsnetz)
       if (scenario.isRoundTrip &&
           actualPoolStartDistanceKm >
               RoutePoolService.roundTripHardStartMaxKm) {
@@ -5436,6 +5474,22 @@ class RouteService {
         );
         continue;
       }
+      // Neuer Local-Filter: 3km — alles darüber bedeutet langer Access-Leg
+      // mit hoher Reject-Chance und schlechter User-Erfahrung
+      if (scenario.isRoundTrip &&
+          actualPoolStartDistanceKm > localPoolMaxStartDistanceKm) {
+        _debugRouteSearch(
+          '[PoolFallback] poolHit=true poolUsed=false reason=too_far_local '
+          'poolMatchId=${match.route.id} '
+          'poolStartDistanceKm=${actualPoolStartDistanceKm.toStringAsFixed(1)} '
+          'localLimitKm=$localPoolMaxStartDistanceKm',
+        );
+        continue;
+      }
+      if (spikeCachedMatchIds.contains(match.route.id)) {
+        continue;
+      }
+      poolAttemptsConsumed++;
 
       final route = _routePoolEntryToRouteResult(
         match,
@@ -6225,10 +6279,13 @@ class RouteService {
 
     final currentPosition = _positionFromCoordinate([userLng, userLat]);
     final sessionOrigin = [userLng, userLat];
+    // 2026-05-28 (vucko Task #67): 3 → 2 Join-Candidates. Halbiert Edge-Calls
+    // pro Pool-Match (3 join × 2 exit × 2 Calls = 12 → 2 × 2 × 2 = 8 Calls).
+    // Kombiniert mit max 3 Pool-Tries → max 24 Edge-Calls statt 75+.
     final joinPoints = _accessPlanner.suggestJoinPoints(
       currentPosition: currentPosition,
       existingRoute: poolRoute,
-      maxCandidates: 3,
+      maxCandidates: 2,
       rebaseClosedLoop: true,
     );
     _ScoredPoolAccessRoute? bestRoute;
@@ -6257,12 +6314,15 @@ class RouteService {
         final accessDistanceKm =
             accessLeg?.distanceKm ??
             ((accessLeg?.distanceMeters ?? 0.0) / 1000.0);
+        // 2026-05-28 (vucko Task #67): 2 → 1 exit. Halbiert nochmal Edge-
+        // Calls pro Join-Point. Worst-case jetzt: 3 pool × 2 join × 1 exit ×
+        // 2 calls = 12 Edge-Calls statt 75+ wie im User-Log.
         final exitIndices = _suggestRoundTripPoolExitIndices(
           route: rotatedLoop,
           targetDistanceKm: targetDistanceKm,
           accessLegDistanceKm: accessDistanceKm,
           sessionOrigin: sessionOrigin,
-          maxCandidates: 2,
+          maxCandidates: 1,
         );
 
         for (final exitIndex in exitIndices) {
