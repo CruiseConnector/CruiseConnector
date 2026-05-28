@@ -2254,6 +2254,10 @@ class _CruiseModePageState extends State<CruiseModePage>
           if (!_isRouteConfirmed) RepaintBoundary(child: _buildConfigOverlay()),
           if (_isRouteConfirmed)
             RepaintBoundary(child: _buildNavigationOverlay()),
+          // 2026-05-28 (vucko Task #78): POI-Filter-FAB IMMER sichtbar — auch
+          // wenn noch keine Route bestätigt ist. User-Wunsch: er soll vor dem
+          // Suchen Tankstellen/Cafés in der Region einsehen können.
+          if (!_isRouteConfirmed) _buildStandalonePoiFilterFab(),
           if (_shouldShowRoundTripSearchStatus)
             _buildRoundTripSearchStatusOverlay(),
 
@@ -7824,8 +7828,6 @@ class _CruiseModePageState extends State<CruiseModePage>
     HapticFeedback.selectionClick();
     await PoiFilterSheet.show(context);
     if (!mounted || _disposed) return;
-    final hasRoute = _fullRouteCoordinates.length >= 2;
-    if (!hasRoute) return;
     final anyEnabled = PoiSettingsService.instance.anyEnabled;
     if (!anyEnabled) {
       setState(() {
@@ -7834,9 +7836,109 @@ class _CruiseModePageState extends State<CruiseModePage>
       });
       return;
     }
-    // Lade POIs mit aktuellen Filtern neu.
+    // 2026-05-28 (vucko Task #78): Wenn Route da → entlang Route laden.
+    // Wenn keine Route → viewport-basiert laden (was der User gerade sieht).
+    final hasRoute = _fullRouteCoordinates.length >= 2;
     setState(() => _poisVisible = true);
-    await _loadPoisFromSettings(_fullRouteCoordinates);
+    if (hasRoute) {
+      await _loadPoisFromSettings(_fullRouteCoordinates);
+    } else {
+      await _loadPoisInViewport();
+    }
+  }
+
+  /// 2026-05-28 (vucko Task #78): POIs für aktuelle Map-Sichtbarkeit laden.
+  /// Wird ausgeführt wenn der User vor einer Route bereits Tankstellen etc.
+  /// sehen will (z.B. um eine Tankstelle als Start zu wählen).
+  ///
+  /// bbox = aktuelle Map-Camera-Bounds; Buffer 0 weil wir wirklich nur
+  /// das zeigen wollen was der User sieht.
+  Future<void> _loadPoisInViewport() async {
+    if (!mounted || _disposed) return;
+    if (_poisLoading) return;
+    setState(() => _poisLoading = true);
+    try {
+      LatLngBounds? bounds;
+      try {
+        bounds = _mapController.camera.visibleBounds;
+      } catch (_) {
+        // MapController nicht ready — Fallback: 5km Radius um User-Position.
+        final user = _userLocation;
+        if (user == null) return;
+        bounds = LatLngBounds(
+          LatLng(user.latitude - 0.04, user.longitude - 0.06),
+          LatLng(user.latitude + 0.04, user.longitude + 0.06),
+        );
+      }
+      final samples = <List<double>>[
+        [bounds.west, bounds.north],
+        [bounds.east, bounds.north],
+        [bounds.east, bounds.south],
+        [bounds.west, bounds.south],
+        [(bounds.west + bounds.east) / 2, (bounds.north + bounds.south) / 2],
+      ];
+      final pois = await RoutePoiService.instance.fetchPoisAlongRoute(
+        coordinates: samples,
+        types: PoiSettingsService.instance.enabledTypes,
+        // Großer Buffer: wir wollen die ganze sichtbare Fläche, nicht nur
+        // entlang einer (fiktiven) Linie.
+        bufferMeters: 5000,
+        maxResults: 200,
+      );
+      if (!mounted) return;
+      setState(() {
+        _routePois = pois;
+        _poisLoading = false;
+      });
+      if (pois.isEmpty) {
+        TopToast.show(
+          context,
+          message: 'Keine POIs im sichtbaren Bereich.',
+          icon: Icons.info_outline_rounded,
+          duration: const Duration(seconds: 3),
+        );
+      }
+    } catch (e) {
+      debugPrint('[CruiseMode] Viewport-POI-Load fehlgeschlagen: $e');
+      if (mounted) setState(() => _poisLoading = false);
+    }
+  }
+
+  /// 2026-05-28 (vucko Task #78): Standalone POI-Filter-FAB für Pre-Route-
+  /// State. An genau derselben Position wie der NavigationOverlay-FAB
+  /// (right 16, bottom 260) damit User keine UI-Verschiebung wahrnimmt
+  /// nach dem Confirm.
+  Widget _buildStandalonePoiFilterFab() {
+    return Positioned(
+      right: 16,
+      bottom: 260,
+      child: AnimatedBuilder(
+        animation: PoiSettingsService.instance,
+        builder: (context, _) {
+          final s = PoiSettingsService.instance;
+          final active = s.anyEnabled;
+          return FloatingActionButton.small(
+            heroTag: 'pois_fab_standalone',
+            backgroundColor: active
+                ? AppAccentColors.accent
+                : const Color(0xFF2D3138),
+            foregroundColor: Colors.white,
+            tooltip: 'POI-Filter',
+            onPressed: _openPoiFilter,
+            child: _poisLoading
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Colors.white,
+                    ),
+                  )
+                : const Icon(Icons.tune_rounded, size: 20),
+          );
+        },
+      ),
+    );
   }
 
   // 2026-05-28 (vucko Task #75): _togglePois bleibt für Backwards-
