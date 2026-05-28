@@ -1,8 +1,10 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart' as geo;
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:provider/provider.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
@@ -72,7 +74,85 @@ class _HomeContentPageState extends State<HomeContentPage>
       vsync: this,
       duration: const Duration(milliseconds: 1400),
     )..repeat();
+    // 2026-05-28 (vucko Task #68): Cached Home-Snapshot ASYNC laden damit
+    // beim App-Start Level + Wochen-Chart + Lite-Recommendation sofort
+    // sichtbar sind statt Skeleton — der Refresh läuft im Hintergrund.
+    unawaited(_hydrateFromHomeSnapshot());
     _loadStats();
+  }
+
+  /// 2026-05-28 (vucko Task #68): Schneller initial-Render aus dem letzten
+  /// gespeicherten Home-Snapshot — User sieht Level, XP-Bar, Wochen-Chart
+  /// und eine Lite-Version der Empfehlung sofort beim App-Start. Sobald der
+  /// Hintergrund-Refresh (_loadStats) durch ist, wird animiert auf die
+  /// frischen Werte umgestellt.
+  Future<void> _hydrateFromHomeSnapshot() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString('home_snapshot_v1');
+      if (raw == null || !mounted) return;
+      final map = jsonDecode(raw);
+      if (map is! Map) return;
+      setState(() {
+        userLevel = (map['userLevel'] as num?)?.toInt() ?? userLevel;
+        levelProgress =
+            (map['levelProgress'] as num?)?.toDouble() ?? levelProgress;
+        levelName = (map['levelName'] as String?) ?? levelName;
+        xpToNextLevel =
+            (map['xpToNextLevel'] as num?)?.toInt() ?? xpToNextLevel;
+        totalXp = (map['totalXp'] as num?)?.toInt() ?? totalXp;
+        totalRoutes = (map['totalRoutes'] as num?)?.toInt() ?? totalRoutes;
+        totalDistanceKm =
+            (map['totalDistanceKm'] as num?)?.toDouble() ?? totalDistanceKm;
+        badgeCount = (map['badgeCount'] as num?)?.toInt() ?? badgeCount;
+        _streakDays = (map['streakDays'] as num?)?.toInt() ?? _streakDays;
+        final weekly = map['weeklyKm'];
+        if (weekly is List && weekly.length == 7) {
+          _weeklyKmData = weekly
+              .map((e) => (e as num?)?.toDouble() ?? 0.0)
+              .toList(growable: false);
+          final maxKm = _weeklyKmData.fold<double>(
+            0,
+            (a, b) => a > b ? a : b,
+          );
+          _weeklyChartData = _weeklyKmData
+              .map((km) => maxKm > 0 ? (km / maxKm).clamp(0.0, 1.0) : 0.0)
+              .toList(growable: false);
+        }
+        _profileUsername = map['profileUsername'] as String? ?? _profileUsername;
+        _avatarUrl = map['avatarUrl'] as String? ?? _avatarUrl;
+        // Loading-Flag bleibt true — Card wird sofort gerendert mit cached
+        // Daten, im Hintergrund läuft der echte Refresh weiter.
+        _loading = false;
+      });
+    } catch (e) {
+      debugPrint('[Home] Snapshot-Hydration fehlgeschlagen: $e');
+    }
+  }
+
+  Future<void> _persistHomeSnapshot() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(
+        'home_snapshot_v1',
+        jsonEncode(<String, dynamic>{
+          'userLevel': userLevel,
+          'levelProgress': levelProgress,
+          'levelName': levelName,
+          'xpToNextLevel': xpToNextLevel,
+          'totalXp': totalXp,
+          'totalRoutes': totalRoutes,
+          'totalDistanceKm': totalDistanceKm,
+          'badgeCount': badgeCount,
+          'streakDays': _streakDays,
+          'weeklyKm': _weeklyKmData,
+          'profileUsername': _profileUsername,
+          'avatarUrl': _avatarUrl,
+        }),
+      );
+    } catch (e) {
+      debugPrint('[Home] Snapshot persistieren fehlgeschlagen: $e');
+    }
   }
 
   @override
@@ -225,6 +305,10 @@ class _HomeContentPageState extends State<HomeContentPage>
       if (mounted && profile != null) {
         context.read<CommunityProvider>().seedProfile(profile);
       }
+      // 2026-05-28 (vucko Task #68): Persistiere Home-Snapshot damit der
+      // nächste App-Start sofort die Card mit cached Werten rendert statt
+      // Skeleton.
+      unawaited(_persistHomeSnapshot());
     } catch (e) {
       debugPrint('[Home] Daten laden fehlgeschlagen: $e');
       if (mounted) setState(() => _loading = false);

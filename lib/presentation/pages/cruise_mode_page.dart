@@ -7408,6 +7408,12 @@ class _CruiseModePageState extends State<CruiseModePage>
   /// Prüft, ob ein POI bereits als Wegpunkt in der aktuellen Route hinterlegt
   /// ist. Match-Toleranz: 50 m radial.
   bool _poiIsOnRoute(RoutePoi poi) {
+    // 1. via_poi_id im edgeMeta (Route wurde gepatcht über genau diesen POI)
+    final activeMeta = _lastRouteResult?.edgeMeta;
+    if (activeMeta != null && activeMeta['via_poi_id'] == poi.id) {
+      return true;
+    }
+    // 2. Klassischer Waypoint im Round-Trip-Wegpunkt-Modus
     if (_isRoundTrip) {
       return _roundTripWaypoints.any((wp) {
         final dist = geo.Geolocator.distanceBetween(
@@ -7419,46 +7425,209 @@ class _CruiseModePageState extends State<CruiseModePage>
     return false;
   }
 
-  /// 2026-05-28 (vucko Task #62): POI als Pflicht-Wegpunkt einfügen und
-  /// Route neu berechnen. Verwendet existierende Round-Trip-Waypoint-Logik —
-  /// die Edge baut die Route inklusive Stop, der Umweg ist gegenüber der
-  /// alten Geometrie typischerweise klein.
+  /// 2026-05-28 (vucko Task #62 + #68): Route minimal über POI patchen.
+  ///
+  /// Der User soll im selben Routenmodus bleiben (Zufall / Sport / ...),
+  /// nur die Geometrie wird lokal so verändert dass sie kurz zum POI
+  /// abzweigt und an der Route weiterfährt.
+  ///
+  /// Algorithmus:
+  ///   1. Finde den Punkt auf der aktuellen Route der dem POI am nächsten ist
+  ///   2. Window-Range entry- und exit-Index (±~15 Punkte ≈ ~300 m)
+  ///   3. Edge A→B-Call: entry → POI → exit (kurzer Detour, ~1-2 s)
+  ///   4. Splice: original[0..entry] + patch + original[exit..end]
+  ///   5. RouteResult lokal updaten, neu zeichnen
+  ///
+  /// Wenn POI < 30 m an der Route ist → kein Reroute nötig.
   Future<void> _addPoiAsWaypointAndReroute(RoutePoi poi) async {
     if (!mounted || _disposed) return;
-    if (!_isRoundTrip) {
+    final activeRoute = _lastRouteResult;
+    if (activeRoute == null || activeRoute.coordinates.length < 8) {
       TopToast.show(
         context,
-        message:
-            'POI-Stopps sind aktuell nur in Rundkurs- oder Wegpunkt-Modus möglich.',
+        message: 'Erst eine Route berechnen.',
         icon: Icons.info_outline_rounded,
-        duration: const Duration(seconds: 4),
+        duration: const Duration(seconds: 3),
       );
       return;
     }
-    if (_roundTripWaypoints.length >= 8) {
+    final coords = activeRoute.coordinates;
+    // 1. Find nearest point on route to POI.
+    var nearestIdx = 0;
+    var minDistMeters = double.infinity;
+    for (var i = 0; i < coords.length; i++) {
+      final c = coords[i];
+      if (c.length < 2) continue;
+      final d = geo.Geolocator.distanceBetween(
+        poi.latitude,
+        poi.longitude,
+        c[1],
+        c[0],
+      );
+      if (d < minDistMeters) {
+        minDistMeters = d;
+        nearestIdx = i;
+      }
+    }
+    // 2. Schon auf der Route → kein Reroute nötig.
+    if (minDistMeters < 30) {
       TopToast.show(
         context,
-        message: 'Maximal 8 Stopps pro Route. Entferne erst einen anderen.',
-        icon: Icons.warning_rounded,
+        message: 'Die ${poi.type.label} liegt schon direkt an deiner Route.',
+        icon: Icons.check_circle_outline_rounded,
+        duration: const Duration(seconds: 3),
+      );
+      return;
+    }
+    // 3. Wenn extrem weit weg (> 8 km) → User-Warnung, lieber neue Route bauen.
+    if (minDistMeters > 8000) {
+      TopToast.show(
+        context,
+        message:
+            '${poi.type.label} liegt ${(minDistMeters / 1000).toStringAsFixed(1)} km abseits — bitte als neuen Stopp planen.',
+        icon: Icons.warning_amber_rounded,
         duration: const Duration(seconds: 4),
       );
       return;
     }
     HapticFeedback.mediumImpact();
-    setState(() {
-      _roundTripWaypoints.add(LatLng(poi.latitude, poi.longitude));
-      // _isWaypointPlanning ist ein computed getter — wird automatisch true
-      // wenn _isRoundTrip && _planningType == 'Wegpunkte'.
-      _planningType = 'Wegpunkte';
-      _roundTripWaypointOrigin = 'manual';
-    });
     TopToast.show(
       context,
-      message: '${poi.type.label} eingefügt — Route wird neu berechnet…',
+      message: 'Route wird minimal über die ${poi.type.label} angepasst…',
       icon: Icons.add_road_rounded,
       duration: const Duration(seconds: 3),
     );
-    await _generateRoute();
+    // 4. Window-Range — kleinerer Window bei kleinerer Route.
+    final windowSize = math.max(5, math.min(20, coords.length ~/ 12));
+    final entryIdx = math.max(0, nearestIdx - windowSize);
+    final exitIdx =
+        math.min(coords.length - 1, nearestIdx + windowSize);
+    final entryCoord = coords[entryIdx];
+    final exitCoord = coords[exitIdx];
+    try {
+      // 5. Patch-Call. Wir nutzen direct-A→B (Standard-Profil) damit der
+      // Detour kurz bleibt — nicht das Sport-Profil das gerne extra Kurven
+      // macht.
+      final subscriptionTier = RouteService.resolveEffectiveSubscriptionTier(
+        isTesterOrBeta: true,
+      );
+      final patch = await _routeService.generatePointToPoint(
+        startPosition: geo.Position(
+          latitude: entryCoord[1],
+          longitude: entryCoord[0],
+          timestamp: DateTime.now(),
+          accuracy: 5,
+          altitude: 0,
+          altitudeAccuracy: 0,
+          heading: 0,
+          headingAccuracy: 0,
+          speed: 0,
+          speedAccuracy: 0,
+        ),
+        destinationLat: exitCoord[1],
+        destinationLng: exitCoord[0],
+        mode: 'Standard',
+        scenic: false,
+        routeVariant: 0,
+        avoidHighways: _activeAvoidHighways || _avoidHighways,
+        forceFreshVariant: true,
+        subscriptionTier: subscriptionTier,
+        intermediateWaypoints: [
+          {'latitude': poi.latitude, 'longitude': poi.longitude},
+        ],
+      );
+      if (!mounted) return;
+      // 6. Splice: erste Hälfte + patch + zweite Hälfte.
+      final patchCoords = patch.coordinates;
+      if (patchCoords.length < 2) {
+        throw StateError('patch empty');
+      }
+      final newCoords = <List<double>>[
+        ...coords.sublist(0, entryIdx).map(List<double>.from),
+        ...patchCoords.map(List<double>.from),
+        ...coords.sublist(exitIdx + 1).map(List<double>.from),
+      ];
+      // Approximate-distance: Original-Distance ± patch-delta.
+      final originalDistanceM = activeRoute.distanceMeters ??
+          (activeRoute.distanceKm ?? 0) * 1000;
+      final removedSegmentM = _approximateSegmentDistanceMeters(
+        coords,
+        entryIdx,
+        exitIdx,
+      );
+      final patchDistanceM = patch.distanceMeters ??
+          ((patch.distanceKm ?? 0) * 1000);
+      final newDistanceM =
+          (originalDistanceM - removedSegmentM + patchDistanceM)
+              .clamp(0.0, double.infinity);
+      final geometry = <String, dynamic>{
+        'type': 'LineString',
+        'coordinates': newCoords,
+      };
+      final newRoute = RouteResult(
+        geoJson: json.encode(geometry),
+        geometry: geometry,
+        coordinates: newCoords,
+        maneuvers: activeRoute.maneuvers,
+        distanceMeters: newDistanceM,
+        durationSeconds: activeRoute.durationSeconds,
+        distanceKm: newDistanceM / 1000.0,
+        speedLimits: activeRoute.speedLimits,
+        edgeMeta: {
+          ...activeRoute.edgeMeta,
+          'via_poi_id': poi.id,
+          'via_poi_label': poi.type.label,
+          'patch_applied': true,
+        },
+      );
+      _lastRouteResult = newRoute;
+      _sessionRouteResult = newRoute;
+      setState(() {
+        _fullRouteCoordinates = newCoords;
+        _remainingRouteCoordinates = newCoords;
+        _routeGeoJson = json.encode(geometry);
+        _routeDistance = newDistanceM;
+        _remainingDistance = newDistanceM;
+      });
+      await _drawRoute(geometry, animateRouteDraw: false);
+      if (!mounted) return;
+      // Map aktuelle POI-Liste merken, der POI ist jetzt „auf der Route".
+      // Beim nächsten POI-Tap zeigt das Sheet „Aus Route entfernen".
+      TopToast.show(
+        context,
+        message:
+            'Route führt jetzt über die ${poi.type.label} (${minDistMeters.round()} m Detour).',
+        icon: Icons.check_circle_outline_rounded,
+        duration: const Duration(seconds: 4),
+      );
+    } catch (e) {
+      debugPrint('[CruiseMode] POI-Route-Patch fehlgeschlagen: $e');
+      if (!mounted) return;
+      TopToast.show(
+        context,
+        message: 'Route konnte nicht angepasst werden — versuch es nochmal.',
+        icon: Icons.error_outline_rounded,
+        duration: const Duration(seconds: 4),
+      );
+    }
+  }
+
+  /// Hilfsfunktion: Summiert die Distanz zwischen [startIdx] und [endIdx]
+  /// in der Coordinates-Liste (kompakter Haversine-Sum).
+  double _approximateSegmentDistanceMeters(
+    List<List<double>> coords,
+    int startIdx,
+    int endIdx,
+  ) {
+    if (startIdx >= endIdx) return 0.0;
+    var sum = 0.0;
+    for (var i = startIdx; i < endIdx && i + 1 < coords.length; i++) {
+      final a = coords[i];
+      final b = coords[i + 1];
+      if (a.length < 2 || b.length < 2) continue;
+      sum += geo.Geolocator.distanceBetween(a[1], a[0], b[1], b[0]);
+    }
+    return sum;
   }
 
   /// Entfernt einen POI aus den aktuellen Round-Trip-Wegpunkten und triggert

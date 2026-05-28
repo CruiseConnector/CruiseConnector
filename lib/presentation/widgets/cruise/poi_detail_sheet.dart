@@ -80,9 +80,11 @@ class PoiDetailSheet extends StatelessWidget {
         : '${(poi.distanceFromRouteMeters / 1000).toStringAsFixed(1)} km abseits der Route';
 
     return DraggableScrollableSheet(
-      initialChildSize: 0.5,
-      minChildSize: 0.3,
-      maxChildSize: 0.85,
+      // 2026-05-28 (vucko): Direkt voll ausgeklappt öffnen — User sieht
+      // sofort den „Route über …" Button ohne ziehen zu müssen.
+      initialChildSize: 0.92,
+      minChildSize: 0.45,
+      maxChildSize: 0.95,
       expand: false,
       builder: (context, scrollController) {
         return ClipRRect(
