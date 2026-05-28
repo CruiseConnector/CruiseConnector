@@ -77,6 +77,16 @@ class OfflineMapService {
   static const int defaultRegionMaxTiles = 8000;
   static const double defaultRegionRadiusKm = 100.0;
 
+  // 2026-05-28 (vucko Task #70 v3): Zusätzlicher Detail-Cache für die
+  // unmittelbare Umgebung (25km), hochauflösend (Zoom 13-16). Komplementär
+  // zum großräumigen Region-Cache (100km, Zoom 8-15) damit die Map auch
+  // bei höchsten Zoom-Stufen sofort gerendert wird ohne weiße Lücken.
+  // ~4500 Tiles, ~55 MB Disk.
+  static const int detailRegionMinZoom = 13;
+  static const int detailRegionMaxZoom = 16;
+  static const int detailRegionMaxTiles = 4500;
+  static const double detailRegionRadiusKm = 25.0;
+
   // Vorarlberg + Bodensee als Default-Heimatregion, falls kein User-Standort
   // verfügbar (erster Launch, Geo-Permission verweigert).
   static const double defaultHomeLat = 47.4500;
@@ -353,6 +363,26 @@ class OfflineMapService {
       existingTiles: existing,
       failedTiles: failed,
       skipped: false,
+    );
+  }
+
+  /// 2026-05-28 (vucko Task #71): Detail-Region-Cache um User-Position.
+  /// Komplementär zum großräumigen Region-Cache (100km/Zoom 8-15): hier
+  /// 25km Radius bei Zoom 13-16 für hochauflösende Live-Navi ohne weiße
+  /// Tile-Lücken. Wird beim Home-Open einmalig getriggert wenn noch nicht
+  /// vorhanden.
+  Future<OfflineMapCacheReport> cacheDetailRegionAroundPoint({
+    required double latitude,
+    required double longitude,
+  }) async {
+    return cacheRegionAroundPoint(
+      latitude: latitude,
+      longitude: longitude,
+      radiusKm: detailRegionRadiusKm,
+      minZoom: detailRegionMinZoom,
+      maxZoom: detailRegionMaxZoom,
+      maxTiles: detailRegionMaxTiles,
+      regionId: 'detail_local',
     );
   }
 

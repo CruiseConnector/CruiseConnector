@@ -78,6 +78,19 @@ class _HomePageState extends State<HomePage> {
           regionId: 'home_prewarm',
         ),
       );
+      // 2026-05-28 (vucko Task #71): Zusätzlicher Detail-Cache 25km @Zoom
+      // 13-16 für hochauflösende Live-Navi-Tiles um die User-Position.
+      // Läuft 3s versetzt damit die Region-Pre-Warm Mapbox-Bandbreite
+      // zuerst bekommt.
+      unawaited(Future<void>.delayed(const Duration(seconds: 3)).then((_) {
+        if (!mounted) return;
+        unawaited(
+          OfflineMapService.instance.cacheDetailRegionAroundPoint(
+            latitude: lat,
+            longitude: lng,
+          ),
+        );
+      }));
       // 2026-05-28 (vucko Task #64): DACH-Übersicht einmalig cachen.
       // Läuft im Hintergrund nach dem lokalen Pre-Warm. SharedPreferences-
       // Flag verhindert mehrfaches Ausführen — neuer Download nur wenn User

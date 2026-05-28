@@ -1166,14 +1166,6 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
             additionalOptions: {'accessToken': AppConstants.mapboxPublicToken},
             userAgentPackageName: 'com.cruise_connect.app',
             retinaMode: true,
-            // Auch hier: dunkle ColoredBox unter jedem Tile damit weiße
-            // Quadrate beim Laden nicht durchblitzen.
-            tileBuilder: (context, tileWidget, tile) {
-              return ColoredBox(
-                color: OfflineMapService.mapboxDarkBackground,
-                child: tileWidget,
-              );
-            },
           )
         else
           const ColoredBox(color: Color(0xFF0B0E14)),
