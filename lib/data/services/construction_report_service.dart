@@ -198,18 +198,35 @@ class ConstructionReportService {
     required double northLat,
     required double eastLng,
   }) async {
-    // Empfehlung aus Recherche: highway=construction + roadworks + node-
-    // Hazards. Begrenzt auf 80 Treffer damit die Antwort < 100 KB bleibt.
+    // 2026-05-28 (vucko Task #74): erweiterte Query — User-Beschwerde
+    // „Klaus/Götzis-Baustelle wird nicht angezeigt". Wir checken jetzt
+    // alle plausiblen OSM-Tags für aktive/temporäre Bauarbeiten:
+    //   - highway=construction (langfristig)
+    //   - construction:highway=* (Klassifikation des Endzustands)
+    //   - construction=yes (auf bestehender highway-Way)
+    //   - roadworks=yes
+    //   - temporary=yes (auf highway)
+    //   - lanes:disused=* (Spursperrung)
+    //   - hazard=construction (Punkt-Markierung)
+    //   - barrier=construction
+    // Plus: relation für längere Construction-Strecken die als Linie
+    // strukturiert sind.
     final bbox = '$southLat,$westLng,$northLat,$eastLng';
     final query = '''
-[out:json][timeout:18];
+[out:json][timeout:25];
 (
   way["highway"="construction"]($bbox);
   way["construction:highway"]($bbox);
+  way["highway"]["construction"="yes"]($bbox);
   way["roadworks"="yes"]($bbox);
+  way["highway"]["temporary"="yes"]($bbox);
+  way["highway"]["lanes:disused"]($bbox);
+  way["barrier"="construction"]($bbox);
   node["hazard"="construction"]($bbox);
+  node["traffic_calming"="construction"]($bbox);
+  relation["construction"]($bbox);
 );
-out center 80;
+out center 150;
 ''';
     final response = await http
         .post(

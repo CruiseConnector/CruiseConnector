@@ -3908,7 +3908,14 @@ class RouteService {
       _scenarioVariantCounters[scenarioKey] = explicitIndex + 1;
       return explicitIndex;
     }
-    final next = _scenarioVariantCounters[scenarioKey] ?? 0;
+    // 2026-05-28 (vucko Task #73): Counter war In-Memory → bei jedem App-
+    // Restart begann er bei 0 → gleicher Seed → gleiche Route. Beim ALLER-
+    // ERSTEN Aufruf für ein Scenario (counter == null) zünden wir mit einem
+    // zufälligen Wert aus 0-31 statt deterministisch 0. So sieht jeder
+    // App-Start eine andere Variante in der gleichen Region.
+    final existing = _scenarioVariantCounters[scenarioKey];
+    final next = existing ??
+        (DateTime.now().microsecondsSinceEpoch & 0x1F); // 0..31
     _scenarioVariantCounters[scenarioKey] = next + 1;
     return next;
   }

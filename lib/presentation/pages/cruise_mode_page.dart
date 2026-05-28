@@ -29,6 +29,7 @@ import 'package:cruise_connect/data/services/trip_service.dart';
 import 'package:cruise_connect/data/services/route_poi_service.dart';
 import 'package:cruise_connect/data/services/opening_hours_parser.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/poi_detail_sheet.dart';
+import 'package:cruise_connect/presentation/widgets/cruise/poi_filter_sheet.dart';
 import 'package:cruise_connect/data/services/road_hazard_service.dart';
 import 'package:cruise_connect/data/services/poi_settings_service.dart';
 import 'package:cruise_connect/presentation/widgets/weather_inline.dart';
@@ -3388,28 +3389,38 @@ class _CruiseModePageState extends State<CruiseModePage>
                   child: const Icon(Icons.map_outlined, size: 20),
                 ),
               ),
-              // POI-Toggle (Tankstellen entlang Route).
+              // 2026-05-28 (vucko Task #75): POI-Filter-Panel statt simpler
+              // Toggle. Öffnet ein Bottom-Sheet mit allen 8 POI-Kategorien
+              // (Tankstellen / Cafés / Restaurants / Werkstätten / Imbisse /
+              // Pubs / Parkplätze / WC) als ästhetisches 2×4-Grid mit
+              // Schnellaktionen „Alle" / „Aus".
               Padding(
                 padding: const EdgeInsets.only(bottom: 12),
-                child: FloatingActionButton.small(
-                  heroTag: 'pois_fab',
-                  backgroundColor: _poisVisible
-                      ? AppAccentColors.accent
-                      : const Color(0xFF2D3138),
-                  foregroundColor: Colors.white,
-                  tooltip:
-                      _poisVisible ? 'POIs verbergen' : 'Tankstellen anzeigen',
-                  onPressed: _togglePois,
-                  child: _poisLoading
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Colors.white,
-                          ),
-                        )
-                      : const Icon(Icons.local_gas_station_rounded, size: 20),
+                child: AnimatedBuilder(
+                  animation: PoiSettingsService.instance,
+                  builder: (context, _) {
+                    final s = PoiSettingsService.instance;
+                    final active = s.anyEnabled;
+                    return FloatingActionButton.small(
+                      heroTag: 'pois_fab',
+                      backgroundColor: active
+                          ? AppAccentColors.accent
+                          : const Color(0xFF2D3138),
+                      foregroundColor: Colors.white,
+                      tooltip: 'POI-Filter',
+                      onPressed: _openPoiFilter,
+                      child: _poisLoading
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
+                              ),
+                            )
+                          : const Icon(Icons.tune_rounded, size: 20),
+                    );
+                  },
                 ),
               ),
               // Voice-Mode-Cycle (off → important → all → off).
@@ -7743,10 +7754,14 @@ class _CruiseModePageState extends State<CruiseModePage>
         eastLng: maxLng + 0.018,
       );
       if (!mounted) return;
+      // 2026-05-28 (vucko Task #74): Buffer 90→200m. Vorarlberger Bauarbeiten
+      // sind oft als ein einzelner Way getaggt der nicht exakt auf den
+      // Straßenmittel-Punkt liegt → 90m war zu eng und filterte echte
+      // Treffer raus (User-Beschwerde Klaus-Götzis).
       final onRoute = ConstructionReportService.instance.filterToRoute(
         reports: reports,
         routeCoordinates: coords,
-        bufferMeters: 90,
+        bufferMeters: 200,
       );
       setState(() {
         _routeConstructions = onRoute;
@@ -7811,6 +7826,34 @@ class _CruiseModePageState extends State<CruiseModePage>
   /// 2026-05-24 (vucko Task #49): POI-Toggle — Marker IN/AUS auf der Map
   /// statt Bottom-Sheet (Google-Maps-Stil). Bottom-Sheet bleibt nur
   /// als Sekundär-Aktion auf langes Drücken.
+  /// 2026-05-28 (vucko Task #75): Öffnet das POI-Filter-Bottom-Sheet.
+  /// Nach dem Schließen werden die POIs nach den aktuellen Filtern neu
+  /// geladen (oder gelöscht falls alle deaktiviert).
+  Future<void> _openPoiFilter() async {
+    if (!mounted || _disposed) return;
+    HapticFeedback.selectionClick();
+    await PoiFilterSheet.show(context);
+    if (!mounted || _disposed) return;
+    final hasRoute = _fullRouteCoordinates.length >= 2;
+    if (!hasRoute) return;
+    final anyEnabled = PoiSettingsService.instance.anyEnabled;
+    if (!anyEnabled) {
+      setState(() {
+        _routePois = const [];
+        _poisVisible = false;
+      });
+      return;
+    }
+    // Lade POIs mit aktuellen Filtern neu.
+    setState(() => _poisVisible = true);
+    await _loadPoisFromSettings(_fullRouteCoordinates);
+  }
+
+  // 2026-05-28 (vucko Task #75): _togglePois bleibt für Backwards-
+  // Compatibility (z.B. wenn anderswo aufgerufen), wird aber durch
+  // _openPoiFilter ersetzt. Wird vom Linter als unused erkannt — bewusst
+  // behalten falls extern getriggert.
+  // ignore: unused_element
   Future<void> _togglePois() async {
     if (_poisLoading) return;
     final newState = !_poisVisible;

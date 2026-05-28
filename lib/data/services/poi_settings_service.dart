@@ -15,6 +15,11 @@ class PoiSettingsService extends ChangeNotifier {
   static const _keyRestaurant = 'poi_restaurant_v1';
   static const _keyCafe = 'poi_cafe_v1';
   static const _keyRepair = 'poi_repair_v1';
+  // 2026-05-28 (vucko Task #75): Volle PoiType-Abdeckung im Filter-Sheet.
+  static const _keyFastFood = 'poi_fastfood_v1';
+  static const _keyPub = 'poi_pub_v1';
+  static const _keyParking = 'poi_parking_v1';
+  static const _keyToilets = 'poi_toilets_v1';
   static const _keyTutorialSeen = 'poi_tutorial_seen_v1';
 
   bool _loaded = false;
@@ -22,6 +27,10 @@ class PoiSettingsService extends ChangeNotifier {
   bool _restaurant = false;
   bool _cafe = false;
   bool _repair = false;
+  bool _fastFood = false;
+  bool _pub = false;
+  bool _parking = false;
+  bool _toilets = false;
   bool _tutorialSeen = false;
 
   bool get isLoaded => _loaded;
@@ -29,6 +38,10 @@ class PoiSettingsService extends ChangeNotifier {
   bool get restaurant => _restaurant;
   bool get cafe => _cafe;
   bool get repair => _repair;
+  bool get fastFood => _fastFood;
+  bool get pub => _pub;
+  bool get parking => _parking;
+  bool get toilets => _toilets;
   bool get tutorialSeen => _tutorialSeen;
 
   /// Liefert die aktiv-getoggelten POI-Typen.
@@ -38,10 +51,22 @@ class PoiSettingsService extends ChangeNotifier {
     if (_restaurant) s.add(PoiType.restaurant);
     if (_cafe) s.add(PoiType.cafe);
     if (_repair) s.add(PoiType.motorcycleRepair);
+    if (_fastFood) s.add(PoiType.fastFood);
+    if (_pub) s.add(PoiType.pub);
+    if (_parking) s.add(PoiType.parking);
+    if (_toilets) s.add(PoiType.toilets);
     return s;
   }
 
-  bool get anyEnabled => _fuel || _restaurant || _cafe || _repair;
+  bool get anyEnabled =>
+      _fuel ||
+      _restaurant ||
+      _cafe ||
+      _repair ||
+      _fastFood ||
+      _pub ||
+      _parking ||
+      _toilets;
 
   Future<void> load() async {
     if (_loaded) return;
@@ -50,6 +75,10 @@ class PoiSettingsService extends ChangeNotifier {
     _restaurant = p.getBool(_keyRestaurant) ?? false;
     _cafe = p.getBool(_keyCafe) ?? false;
     _repair = p.getBool(_keyRepair) ?? false;
+    _fastFood = p.getBool(_keyFastFood) ?? false;
+    _pub = p.getBool(_keyPub) ?? false;
+    _parking = p.getBool(_keyParking) ?? false;
+    _toilets = p.getBool(_keyToilets) ?? false;
     _tutorialSeen = p.getBool(_keyTutorialSeen) ?? false;
     _loaded = true;
     notifyListeners();
@@ -61,6 +90,13 @@ class PoiSettingsService extends ChangeNotifier {
   Future<void> setCafe(bool v) => _set(_keyCafe, v, (n) => _cafe = n);
   Future<void> setRepair(bool v) =>
       _set(_keyRepair, v, (n) => _repair = n);
+  Future<void> setFastFood(bool v) =>
+      _set(_keyFastFood, v, (n) => _fastFood = n);
+  Future<void> setPub(bool v) => _set(_keyPub, v, (n) => _pub = n);
+  Future<void> setParking(bool v) =>
+      _set(_keyParking, v, (n) => _parking = n);
+  Future<void> setToilets(bool v) =>
+      _set(_keyToilets, v, (n) => _toilets = n);
 
   Future<void> markTutorialSeen() async {
     if (_tutorialSeen) return;
