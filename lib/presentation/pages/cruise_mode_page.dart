@@ -3592,30 +3592,14 @@ class _CruiseModePageState extends State<CruiseModePage>
         },
       ),
       children: [
-        // ── Mapbox Dark-Style: ZWEI TileLayer übereinander ──────────────────
-        // 2026-05-28 (vucko Task #72): Apple-Maps / Google-Maps Pattern.
-        // Unten: Low-Zoom-Layer (zoom 0-10, immer aus DACH-Cache) wird
-        //        automatisch hochskaliert wenn Map auf höheren Zoom ist.
-        // Oben:  Detail-Layer (zoom 11-17), versucht erst aus Cache zu
-        //        laden, fallback Network-Image, parallel persistTile.
-        //        Wenn er nicht da ist scheint der untere durch → kein
-        //        schwarzer/leerer Block mehr.
-        // Effekt: User sieht IMMER eine Karte, evtl. unscharf wo Detail
-        //         fehlt, aber nie schwarze/leere Quadrate.
-        TileLayer(
-          urlTemplate: OfflineMapService.mapboxDarkTileUrlTemplate,
-          additionalOptions: {'accessToken': AppConstants.mapboxPublicToken},
-          tileProvider: OfflineMapService.instance.tileProvider(),
-          userAgentPackageName: 'com.cruise_connect.app',
-          retinaMode: false,
-          maxNativeZoom: OfflineMapService.dachOverviewMaxZoom, // 10
-          minZoom: 0,
-          maxZoom: 17,
-          errorImage: MemoryImage(TileProvider.transparentImage),
-        ),
-        // Detail-Layer drüber. Setting maxNativeZoom auf den vollen Zoom,
-        // dieser läuft per Cache/Network im offline_map_service.
-        // Web: Retina deaktiviert — halbiert Tile-Downloads, weniger Speicher.
+        // ── Mapbox Dark-Style als Raster-Tile-Layer ──────────────────────────
+        // 2026-05-28 (vucko Task #76): zurück auf SINGLE TileLayer.
+        // Vorher Doppel-Layer (Task #72) hatte vertikale Streifen erzeugt
+        // weil retinaMode-Mismatch zwischen den beiden Layern + falsches
+        // Aufeinander-Layern bei höheren Zoomstufen.
+        // MapOptions.backgroundColor sorgt dafür dass Tile-Lücken dunkel
+        // statt weiß sind. errorImage transparent + Map-Background dunkel
+        // = User sieht dunkle Lücken (gut) statt System-Weiß (schlecht).
         TileLayer(
           urlTemplate: OfflineMapService.mapboxDarkTileUrlTemplate,
           additionalOptions: {'accessToken': AppConstants.mapboxPublicToken},
@@ -3623,7 +3607,6 @@ class _CruiseModePageState extends State<CruiseModePage>
           userAgentPackageName: 'com.cruise_connect.app',
           retinaMode: !kIsWeb,
           maxNativeZoom: OfflineMapService.defaultMaxZoom,
-          minZoom: 11,
           errorImage: MemoryImage(TileProvider.transparentImage),
         ),
         // ── Route (Glow + Hauptlinie) ────────────────────────────────────────
