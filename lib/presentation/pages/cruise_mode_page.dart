@@ -7790,9 +7790,12 @@ class _CruiseModePageState extends State<CruiseModePage>
           child: AnimatedOpacity(
             opacity: hidden ? 0 : 1,
             duration: const Duration(milliseconds: 180),
+            // 2026-05-28 (vucko Task #79.1): center-alignment damit alle
+            // FABs perfekt auf derselben vertikalen Achse stehen — auch
+            // wenn intern verschiedene Bubble-Größen verwendet würden.
             child: Column(
               mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.end,
+              crossAxisAlignment: CrossAxisAlignment.center,
               children: [
                 // Simulation Start/Stop — nur wenn Route da + sim enabled
                 if (hasRoute &&
@@ -9956,17 +9959,24 @@ class _SegTab extends StatelessWidget {
 /// 2026-05-28 (vucko Task #79): Ästhetischer FAB-Bubble mit Glas-Look,
 /// Schatten und Tap-Bounce. Ersetzt die nackten FloatingActionButton.small.
 ///
-/// - [big]=true → 56×56 (für Recenter/Simulation), sonst 48×48
+/// 2026-05-28 (vucko Task #79.1): Einheitliche Größe (48px) damit alle FABs
+/// in der Spalte perfekt vertikal aligned sind. [big]-Flag bleibt für
+/// Backwards-Compat aber hat keinen optischen Effekt mehr.
+///
 /// - Loading-Spinner statt Icon wenn [loading]=true
 /// - Schatten mit Color-Tint vom Background damit der FAB „glüht" wenn
 ///   eine Aktion aktiv ist (z.B. POI-Filter mit Akzentfarbe = leichter
 ///   Akzent-Glow)
 class _FabBubble extends StatelessWidget {
+  static const double _size = 48.0;
+  static const double _iconSize = 20.0;
+
   final String heroTag;
   final IconData icon;
   final Color color;
   final VoidCallback onPressed;
   final bool loading;
+  // ignore: unused_element
   final bool big;
   const _FabBubble({
     required this.heroTag,
@@ -9979,16 +9989,14 @@ class _FabBubble extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final size = big ? 52.0 : 44.0;
-    final iconSize = big ? 24.0 : 19.0;
     return Padding(
-      padding: const EdgeInsets.only(bottom: 11),
+      padding: const EdgeInsets.only(bottom: 12),
       child: Hero(
         tag: heroTag,
         child: Material(
           color: Colors.transparent,
           child: InkWell(
-            borderRadius: BorderRadius.circular(size),
+            borderRadius: BorderRadius.circular(_size),
             onTap: () {
               HapticFeedback.lightImpact();
               onPressed();
@@ -9996,8 +10004,8 @@ class _FabBubble extends StatelessWidget {
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 220),
               curve: Curves.easeOutCubic,
-              width: size,
-              height: size,
+              width: _size,
+              height: _size,
               decoration: BoxDecoration(
                 gradient: LinearGradient(
                   colors: [
@@ -10028,15 +10036,15 @@ class _FabBubble extends StatelessWidget {
               ),
               alignment: Alignment.center,
               child: loading
-                  ? SizedBox(
-                      width: iconSize - 2,
-                      height: iconSize - 2,
-                      child: const CircularProgressIndicator(
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
                         strokeWidth: 2,
                         color: Colors.white,
                       ),
                     )
-                  : Icon(icon, color: Colors.white, size: iconSize),
+                  : Icon(icon, color: Colors.white, size: _iconSize),
             ),
           ),
         ),
