@@ -203,50 +203,74 @@ interface StyleOverlay {
   distance_influence?: number;
 }
 function styleOverlayForProfile(profile: string): StyleOverlay {
+  // 2026-05-28 (vucko Profile-Diff): Profile massiv differenziert.
+  // Vorher: Sport+Kurvenjagd hatten beide curvature-Bonus → fast identische
+  // Geometrien. User-Beschwerde: „Sport gibt Bergstrecke, Kurvenjagd gibt
+  // geradere Strecke — die Modi sind kaum unterschiedlich."
+  //
+  // Neue Charakterisierung:
+  // - SPORT (scenic):  offene Genuss-Kurven auf SECONDARY/PRIMARY,
+  //                    geringer curvature-Bonus, längere Stretches (200)
+  // - KURVENJAGD:      MAX Kurven auf TERTIARY/UNCLASSIFIED + Bergpässe,
+  //                    PRIMARY penalisiert (zu gerade), starker curvature-
+  //                    Bonus, kompakte Loops (55)
+  // - ABENDRUNDE:      Hauptstraßen, curve-averse, direkter Weg (300)
+  // - ENTDECKER:       Variety-Mix, kein curvature-Bonus, mittlere Distanz
   switch (profile) {
     case 'motorcycle_kurvenjagd':
-      // Maximum Kurven, kleine Strassen, Bergstrecken
+      // MAX Kurven, kleine technische Straßen, Bergpässe.
+      // PRIMARY bewusst penalisiert — zu gerade, zu wenig Fahr-Spaß.
       return {
         priority: [
-          { if: 'road_class == TERTIARY', multiply_by: '1.4' },
-          { if: 'road_class == UNCLASSIFIED', multiply_by: '1.3' },
-          { if: 'curvature < 0.7', multiply_by: '1.5' },
-          { if: 'curvature < 0.5', multiply_by: '1.8' },
-          { if: 'road_class == RESIDENTIAL', multiply_by: '0.4' },
+          { if: 'road_class == TERTIARY', multiply_by: '1.7' },
+          { if: 'road_class == UNCLASSIFIED', multiply_by: '1.45' },
+          { if: 'road_class == SECONDARY', multiply_by: '1.15' },
+          { if: 'road_class == PRIMARY', multiply_by: '0.7' },
+          { if: 'road_class == RESIDENTIAL', multiply_by: '0.3' },
+          { if: 'curvature < 0.7', multiply_by: '1.9' },
+          { if: 'curvature < 0.5', multiply_by: '2.4' },
         ],
-        distance_influence: 80,
+        distance_influence: 55,
       };
     case 'motorcycle_scenic':
-      // Sport: schöne offene curvy roads, secondary bevorzugt
+      // Sport: offene Genuss-Kurven, breite gut ausgebaute Straßen.
+      // TERTIARY/UNCLASSIFIED leicht penalisiert (zu schmal für Genuss).
+      // Geringer curvature-Bonus — Charakter über Straßentyp, nicht Krümmung.
       return {
         priority: [
-          { if: 'road_class == SECONDARY', multiply_by: '1.35' },
-          { if: 'road_class == PRIMARY', multiply_by: '1.15' },
-          { if: 'curvature < 0.75', multiply_by: '1.3' },
-          { if: 'road_class == RESIDENTIAL', multiply_by: '0.6' },
+          { if: 'road_class == SECONDARY', multiply_by: '1.6' },
+          { if: 'road_class == PRIMARY', multiply_by: '1.4' },
+          { if: 'road_class == TERTIARY', multiply_by: '0.85' },
+          { if: 'road_class == UNCLASSIFIED', multiply_by: '0.75' },
+          { if: 'road_class == RESIDENTIAL', multiply_by: '0.4' },
+          { if: 'curvature < 0.75', multiply_by: '1.15' },
         ],
-        distance_influence: 150,
+        distance_influence: 200,
       };
     case 'motorcycle_abendrunde':
-      // Kurze gemütliche Feierabend-Tour, weniger anstrengende Kurven
+      // Hauptstraßen, ruhig, direkter Weg zurück — curve-averse.
       return {
         priority: [
-          { if: 'road_class == PRIMARY', multiply_by: '1.3' },
-          { if: 'road_class == SECONDARY', multiply_by: '1.4' },
-          { if: 'road_class == RESIDENTIAL', multiply_by: '1.1' },
-          { if: 'curvature < 0.5', multiply_by: '0.8' },
+          { if: 'road_class == PRIMARY', multiply_by: '1.5' },
+          { if: 'road_class == SECONDARY', multiply_by: '1.6' },
+          { if: 'road_class == TERTIARY', multiply_by: '0.8' },
+          { if: 'road_class == UNCLASSIFIED', multiply_by: '0.5' },
+          { if: 'curvature < 0.5', multiply_by: '0.7' },
         ],
-        distance_influence: 280,
+        distance_influence: 300,
       };
     case 'motorcycle_entdecker':
-      // Tertiary + variety, längere distance_influence (eher direkter Weg)
+      // Variety: kleinere Straßen + Mix, KEIN curvature-Bonus
+      // (Erkundung über Straßenvielfalt, nicht über Krümmung).
       return {
         priority: [
-          { if: 'road_class == TERTIARY', multiply_by: '1.5' },
-          { if: 'road_class == UNCLASSIFIED', multiply_by: '1.3' },
-          { if: 'road_class == RESIDENTIAL', multiply_by: '1.1' },
+          { if: 'road_class == TERTIARY', multiply_by: '1.45' },
+          { if: 'road_class == UNCLASSIFIED', multiply_by: '1.25' },
+          { if: 'road_class == SECONDARY', multiply_by: '1.15' },
+          { if: 'road_class == PRIMARY', multiply_by: '0.95' },
+          { if: 'road_class == RESIDENTIAL', multiply_by: '1.05' },
         ],
-        distance_influence: 180,
+        distance_influence: 170,
       };
     default:
       return { priority: [] };
