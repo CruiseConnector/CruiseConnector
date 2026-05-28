@@ -3,6 +3,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
+import 'package:cruise_connect/data/services/offline_map_service.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:geolocator/geolocator.dart' as geo;
 import 'package:latlong2/latlong.dart';
@@ -1153,6 +1154,9 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
         initialCenter: _startPoint ?? const LatLng(48.1351, 11.5820),
         initialZoom: 10,
         onTap: _handleMapTap,
+        // 2026-05-28 (vucko Task #70): dunkler Map-Background statt System-
+        // Weiß, gleicher Stil wie Cruise-Mode-Page.
+        backgroundColor: OfflineMapService.mapboxDarkBackground,
       ),
       children: [
         if (!widget.disableMapTilesForTesting)
@@ -1162,6 +1166,14 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
             additionalOptions: {'accessToken': AppConstants.mapboxPublicToken},
             userAgentPackageName: 'com.cruise_connect.app',
             retinaMode: true,
+            // Auch hier: dunkle ColoredBox unter jedem Tile damit weiße
+            // Quadrate beim Laden nicht durchblitzen.
+            tileBuilder: (context, tileWidget, tile) {
+              return ColoredBox(
+                color: OfflineMapService.mapboxDarkBackground,
+                child: tileWidget,
+              );
+            },
           )
         else
           const ColoredBox(color: Color(0xFF0B0E14)),

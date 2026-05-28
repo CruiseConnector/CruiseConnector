@@ -53,6 +53,11 @@ class OfflineMapService {
   static const String mapboxDarkTileUrlTemplate =
       'https://api.mapbox.com/styles/v1/mapbox/dark-v11/tiles/256/{z}/{x}/{y}?access_token={accessToken}';
 
+  /// 2026-05-28 (vucko Task #70): Mapbox-Dark-V11-Hintergrundfarbe.
+  /// Wird als TileLayer.backgroundColor + tileBuilder-Container verwendet
+  /// damit Pan-Lücken nicht weiß sondern in Map-Style erscheinen.
+  static const Color mapboxDarkBackground = Color(0xFF0E1216);
+
   static const int defaultMinZoom = 10;
   // 2026-05-25 (vucko): Route-Cache maxZoom 17 statt 16 für scharfere Live-
   // Navigation. Plus maxTiles 2400 statt 650 für ganze 5km-Korridor um die
@@ -771,6 +776,46 @@ class OfflineMapService {
     return Uri.parse(url);
   }
 
+  /// 2026-05-28 (vucko Task #70): Wird vom [OfflineMapTileProvider] bei
+  /// jedem Cache-Miss gefeuert. Lädt das Tile silent im Hintergrund und
+  /// speichert es persistent → beim nächsten Pan über dieselbe Region
+  /// gibt's keinen weißen Block mehr.
+  ///
+  /// Dedup pro (z,x,y) damit nicht 5× parallel das gleiche Tile gezogen
+  /// wird (flutter_map kann denselben Coord mehrfach abfragen während
+  /// Animations).
+  final Set<String> _inflightTileFetches = <String>{};
+
+  void persistTileFromNetwork(OfflineTile tile) {
+    if (kIsWeb) return;
+    final key = '${tile.z}/${tile.x}/${tile.y}';
+    if (_inflightTileFetches.contains(key)) return;
+    _inflightTileFetches.add(key);
+    unawaited(_persistTileFromNetwork(tile).whenComplete(() {
+      _inflightTileFetches.remove(key);
+    }));
+  }
+
+  Future<void> _persistTileFromNetwork(OfflineTile tile) async {
+    try {
+      final directory = await _resolveTileCacheDirectory();
+      if (directory == null) return;
+      final file = _tileFile(directory, tile);
+      if (await file.exists() && await file.length() >= 128) return;
+      final response = await http.get(_tileUri(tile)).timeout(
+        const Duration(seconds: 6),
+      );
+      if (response.statusCode >= 200 &&
+          response.statusCode < 300 &&
+          response.bodyBytes.length > 128) {
+        await file.parent.create(recursive: true);
+        await file.writeAsBytes(response.bodyBytes, flush: false);
+      }
+    } catch (_) {
+      // best-effort, silent fail
+    }
+  }
+
   File _tileFile(Directory directory, OfflineTile tile) {
     return File('${directory.path}/${tile.z}/${tile.x}/${tile.y}.png');
   }
@@ -844,6 +889,11 @@ class OfflineMapTileProvider extends TileProvider {
     if (file != null && file.existsSync()) {
       return FileImage(file);
     }
+    // 2026-05-28 (vucko Task #69 follow-up): Bei Cache-Miss NICHT nur
+    // ein Network-Image returnen — auch parallel den Tile in den Cache
+    // schreiben. So fängt jedes mal-bewegen die fehlende Tiles ab und
+    // beim nächsten Render ist die Datei da → kein weißes Kästchen mehr.
+    _service.persistTileFromNetwork(tile);
     return NetworkImage(
       getTileUrl(coordinates, options),
       headers: headers.isEmpty ? null : headers,

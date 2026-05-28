@@ -3569,6 +3569,10 @@ class _CruiseModePageState extends State<CruiseModePage>
         initialZoom: 6.0,
         onMapReady: _onMapReady,
         onTap: _handleMapTap,
+        // 2026-05-28 (vucko Task #70): Map-Background bei Tile-Lücken auf
+        // Mapbox-Dark-Farbe statt System-Weiß. So sind Pan-Lücken kaum
+        // sichtbar während die Tiles im Hintergrund nachgeladen werden.
+        backgroundColor: OfflineMapService.mapboxDarkBackground,
         // Bei Berührung der Karte: Kamera-Lock deaktivieren (war Listener-Widget)
         onPointerDown: (event, point) {
           if (_isCameraLocked && _isRouteConfirmed) {
@@ -3579,6 +3583,12 @@ class _CruiseModePageState extends State<CruiseModePage>
       children: [
         // ── Mapbox Dark-Style als Raster-Tile-Layer ──────────────────────────
         // Web: Retina deaktiviert — halbiert Tile-Downloads, weniger Speicher/GPU-Last.
+        // 2026-05-28 (vucko Task #70): backgroundColor + tileBuilder mit
+        // Map-Dark-Hintergrund. Frühere weiße Kästchen bei Pan kamen daher
+        // dass errorImage transparent war + kein Layer-Background gesetzt.
+        // Jetzt: während ein Tile lädt erscheint Mapbox-Dark-Farbe, kein
+        // weißer Block. Plus: NetworkImage-Errors fallen auf denselben
+        // dunklen Hintergrund.
         TileLayer(
           urlTemplate: OfflineMapService.mapboxDarkTileUrlTemplate,
           additionalOptions: {'accessToken': AppConstants.mapboxPublicToken},
@@ -3587,6 +3597,17 @@ class _CruiseModePageState extends State<CruiseModePage>
           retinaMode: !kIsWeb,
           maxNativeZoom: OfflineMapService.defaultMaxZoom,
           errorImage: MemoryImage(TileProvider.transparentImage),
+          tileBuilder: (context, tileWidget, tile) {
+            // 2026-05-28 (vucko Task #70): während ein Tile noch lädt
+            // (oder beim Cache-Miss kurz vor dem Network-Fetch) zeigen
+            // wir Mapbox-Dark-Farbe statt weißem Quadrat. Wenn der
+            // network fetch fail’t fällt errorImage auf transparent
+            // zurück → die dunkle ColoredBox bleibt sichtbar.
+            return ColoredBox(
+              color: OfflineMapService.mapboxDarkBackground,
+              child: tileWidget,
+            );
+          },
         ),
         // ── Route (Glow + Hauptlinie) ────────────────────────────────────────
         // Web: Glow-Effekt entfernt — spart eine komplette Polyline-Layer-Berechnung.
