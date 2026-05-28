@@ -7350,7 +7350,109 @@ class _CruiseModePageState extends State<CruiseModePage>
     HapticFeedback.selectionClick();
     // 2026-05-24 (vucko): neues PoiDetailSheet — Status, Wochentag-Tabelle,
     // farbiges Icon-Badge, "Schließt bald"-Warnung.
-    PoiDetailSheet.show(context, poi);
+    // 2026-05-28 (vucko Task #62): „Zur Route hinzufügen" Button — Reroute
+    // mit POI als Pflicht-Wegpunkt. Sichtbar nur wenn eine aktive Route da
+    // ist und User nicht in einer Group-Session ist (Group hat eigenen Flow).
+    final hasActiveRoute = _lastRouteResult != null &&
+        _fullRouteCoordinates.isNotEmpty;
+    final canAddToRoute = hasActiveRoute &&
+        widget.groupId == null &&
+        !_isLoading;
+    final isAlready = _poiIsOnRoute(poi);
+    PoiDetailSheet.show(
+      context,
+      poi,
+      onAddToRoute: canAddToRoute
+          ? () => isAlready
+              ? _removePoiFromRoute(poi)
+              : _addPoiAsWaypointAndReroute(poi)
+          : null,
+      isAlreadyOnRoute: isAlready,
+    );
+  }
+
+  /// Prüft, ob ein POI bereits als Wegpunkt in der aktuellen Route hinterlegt
+  /// ist. Match-Toleranz: 50 m radial.
+  bool _poiIsOnRoute(RoutePoi poi) {
+    if (_isRoundTrip) {
+      return _roundTripWaypoints.any((wp) {
+        final dist = geo.Geolocator.distanceBetween(
+          poi.latitude, poi.longitude, wp.latitude, wp.longitude,
+        );
+        return dist < 50;
+      });
+    }
+    return false;
+  }
+
+  /// 2026-05-28 (vucko Task #62): POI als Pflicht-Wegpunkt einfügen und
+  /// Route neu berechnen. Verwendet existierende Round-Trip-Waypoint-Logik —
+  /// die Edge baut die Route inklusive Stop, der Umweg ist gegenüber der
+  /// alten Geometrie typischerweise klein.
+  Future<void> _addPoiAsWaypointAndReroute(RoutePoi poi) async {
+    if (!mounted || _disposed) return;
+    if (!_isRoundTrip) {
+      TopToast.show(
+        context,
+        message:
+            'POI-Stopps sind aktuell nur in Rundkurs- oder Wegpunkt-Modus möglich.',
+        icon: Icons.info_outline_rounded,
+        duration: const Duration(seconds: 4),
+      );
+      return;
+    }
+    if (_roundTripWaypoints.length >= 8) {
+      TopToast.show(
+        context,
+        message: 'Maximal 8 Stopps pro Route. Entferne erst einen anderen.',
+        icon: Icons.warning_rounded,
+        duration: const Duration(seconds: 4),
+      );
+      return;
+    }
+    HapticFeedback.mediumImpact();
+    setState(() {
+      _roundTripWaypoints.add(LatLng(poi.latitude, poi.longitude));
+      // _isWaypointPlanning ist ein computed getter — wird automatisch true
+      // wenn _isRoundTrip && _planningType == 'Wegpunkte'.
+      _planningType = 'Wegpunkte';
+      _roundTripWaypointOrigin = 'manual';
+    });
+    TopToast.show(
+      context,
+      message: '${poi.type.label} eingefügt — Route wird neu berechnet…',
+      icon: Icons.add_road_rounded,
+      duration: const Duration(seconds: 3),
+    );
+    await _generateRoute();
+  }
+
+  /// Entfernt einen POI aus den aktuellen Round-Trip-Wegpunkten und triggert
+  /// einen Reroute.
+  Future<void> _removePoiFromRoute(RoutePoi poi) async {
+    if (!mounted || _disposed) return;
+    final removedIndex = _roundTripWaypoints.indexWhere((wp) {
+      final dist = geo.Geolocator.distanceBetween(
+        poi.latitude, poi.longitude, wp.latitude, wp.longitude,
+      );
+      return dist < 50;
+    });
+    if (removedIndex < 0) return;
+    HapticFeedback.mediumImpact();
+    setState(() {
+      _roundTripWaypoints.removeAt(removedIndex);
+      if (_roundTripWaypoints.isEmpty) {
+        _planningType = 'Zufall';
+        _roundTripWaypointOrigin = 'manual';
+      }
+    });
+    TopToast.show(
+      context,
+      message: '${poi.type.label} entfernt — Route wird neu berechnet…',
+      icon: Icons.remove_circle_outline_rounded,
+      duration: const Duration(seconds: 3),
+    );
+    await _generateRoute();
   }
 
   /// 2026-05-24 (vucko Task #50): First-Run-Tutorial — Google-Maps-Stil

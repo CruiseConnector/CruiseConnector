@@ -665,9 +665,20 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
   }
   const hasExplicitWaypoints = !isRoundTrip && (req.waypoints?.length ?? 0) > 0;
 
-  // maxAttempts pro Modus
+  // 2026-05-28 (vucko Speed-Boost): Hard-Regions (Vorarlberg/Tirol/CH-Alpen)
+  // bekommen weniger parallele Seeds — GraphHopper-Thread-Pool ist dort
+  // auf den schwierigen Bergpässen schneller saturiert. Weniger parallele
+  // Calls = max(call_time) sinkt um 20-30% weil kein einzelner Seed mehr auf
+  // den überlasteten Pool wartet.
+  const regionForHotspot = classifyRegion(
+    req.start_location.latitude,
+    req.start_location.longitude,
+  );
+  const isAlpineHotspot = regionForHotspot.label === 'alpine';
   const maxAttempts = isRoundTrip
-    ? (needsDiversity ? 8 : 5)
+    ? (isAlpineHotspot
+        ? (needsDiversity ? 5 : 4)
+        : (needsDiversity ? 6 : 5))
     : (hasExplicitWaypoints ? 1 : Math.max(13, detourSpec.length || 13));
   const targetKm = req.target_distance_km ?? 50;
   const candidates: Array<{ result: RouteResult; deltaPct: number; seed: number; isDup: boolean }> = [];

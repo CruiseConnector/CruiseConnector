@@ -25,12 +25,19 @@ class RoutePoiService {
   ///
   /// [coordinates] = Liste [lng, lat] Punkte
   /// [types] = amenity-Tags ('fuel', 'restaurant', 'cafe', etc.)
-  /// [bufferMeters] = wie nah POI an Route sein muss (default 200m)
+  /// [bufferMeters] = wie nah POI an Route sein muss (default 350m)
+  ///
+  /// 2026-05-28 (vucko POI-Coverage): Erweitert um alle Wege Tankstellen
+  /// zu finden:
+  ///   - node["amenity"=fuel] — Standard
+  ///   - way["amenity"=fuel]  — Tankstellen mit Hofzufahrt (häufig in DE/AT)
+  ///   - node["shop"=fuel]    — Tankstellen primär als Shop getaggt
+  /// Plus größerer Buffer (200→350m) und höheres Limit (200→500).
   Future<List<RoutePoi>> fetchPoisAlongRoute({
     required List<List<double>> coordinates,
     Set<PoiType> types = const {PoiType.fuel},
-    double bufferMeters = 200,
-    int maxResults = 60,
+    double bufferMeters = 350,
+    int maxResults = 120,
   }) async {
     if (coordinates.length < 2) return [];
     final cacheKey = _cacheKey(coordinates, types);
@@ -38,15 +45,27 @@ class RoutePoiService {
     if (cached != null && cached.isFresh) return cached.pois;
 
     try {
-      final sampledRoute = _sampleRoute(coordinates, targetSamples: 80);
-      final bbox = _boundingBox(sampledRoute, paddingDegrees: 0.018);
+      final sampledRoute = _sampleRoute(coordinates, targetSamples: 100);
+      final bbox = _boundingBox(sampledRoute, paddingDegrees: 0.022);
       final amenityFilter = types.map((t) => t.osmTag).join('|');
+      final wantsFuel = types.contains(PoiType.fuel);
+      final bboxStr =
+          '${bbox.south},${bbox.west},${bbox.north},${bbox.east}';
+      // Erweiterte Query: nodes UND ways. Bei ways nimmt Overpass mit `center`
+      // den Mittelpunkt des Polygons → wir können das wie eine Node behandeln.
+      // Zusätzlich shop=fuel für Tankstellen ohne amenity-Tag.
+      final shopFuelClause = wantsFuel
+          ? '''
+  node["shop"="fuel"]($bboxStr);
+  way["shop"="fuel"]($bboxStr);'''
+          : '';
       final query = '''
-[out:json][timeout:18];
+[out:json][timeout:22];
 (
-  node["amenity"~"^($amenityFilter)\$"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
+  node["amenity"~"^($amenityFilter)\$"]($bboxStr);
+  way["amenity"~"^($amenityFilter)\$"]($bboxStr);$shopFuelClause
 );
-out body 200;
+out center 500;
 ''';
       final response = await http
           .post(
@@ -56,18 +75,32 @@ out body 200;
             },
             body: {'data': query},
           )
-          .timeout(const Duration(seconds: 18));
+          .timeout(const Duration(seconds: 22));
       if (response.statusCode != 200) return [];
       final data = jsonDecode(response.body) as Map<String, dynamic>;
       final elements = data['elements'] as List? ?? [];
       final all = <RoutePoi>[];
+      final seenIds = <int>{};
       for (final el in elements) {
         try {
-          final lat = (el['lat'] as num?)?.toDouble();
-          final lng = (el['lon'] as num?)?.toDouble();
+          // Bei nodes: lat/lon direkt. Bei ways: center.lat / center.lon.
+          double? lat = (el['lat'] as num?)?.toDouble();
+          double? lng = (el['lon'] as num?)?.toDouble();
+          if (lat == null || lng == null) {
+            final center = el['center'] as Map?;
+            lat = (center?['lat'] as num?)?.toDouble();
+            lng = (center?['lon'] as num?)?.toDouble();
+          }
           if (lat == null || lng == null) continue;
+          final id = (el['id'] as num).toInt();
+          // Ways und nodes haben dieselbe ID-Range, plus shop=fuel kann doppelt
+          // mit amenity=fuel kommen. Dedup über (typ+id+rundete-coord).
+          final dedupKey =
+              id * 10 + (el['type'] == 'way' ? 1 : 0);
+          if (seenIds.contains(dedupKey)) continue;
           final tags = (el['tags'] as Map?)?.cast<String, dynamic>() ?? {};
-          final amenity = tags['amenity'] as String? ?? '';
+          final amenity = (tags['amenity'] as String?) ??
+              (tags['shop'] == 'fuel' ? 'fuel' : '');
           final type = PoiType.values.firstWhere(
             (t) => t.osmTag == amenity,
             orElse: () => PoiType.fuel,
@@ -75,8 +108,9 @@ out body 200;
           // Distanz zur Route prüfen
           final dist = _minDistanceToRoute(lat, lng, sampledRoute);
           if (dist > bufferMeters) continue;
+          seenIds.add(dedupKey);
           all.add(RoutePoi(
-            id: (el['id'] as num).toInt(),
+            id: dedupKey,
             type: type,
             latitude: lat,
             longitude: lng,
@@ -89,9 +123,21 @@ out body 200;
           continue;
         }
       }
-      all.sort((a, b) => a.distanceFromRouteMeters
+      // Zweiter Dedup-Pass: POIs an quasi-identischer Position (z.B. amenity
+      // + shop für dieselbe Tankstelle) zusammenfassen — wir behalten den
+      // ersten und werfen Duplikate <30m raus.
+      final deduped = <RoutePoi>[];
+      for (final poi in all) {
+        final isDup = deduped.any((other) =>
+            other.type == poi.type &&
+            _haversine(poi.latitude, poi.longitude, other.latitude,
+                    other.longitude) <
+                30);
+        if (!isDup) deduped.add(poi);
+      }
+      deduped.sort((a, b) => a.distanceFromRouteMeters
           .compareTo(b.distanceFromRouteMeters));
-      final limited = all.take(maxResults).toList();
+      final limited = deduped.take(maxResults).toList();
       _cache[cacheKey] = _PoiCacheEntry(limited);
       return limited;
     } catch (e) {

@@ -9,16 +9,35 @@ import 'package:cruise_connect/data/services/opening_hours_parser.dart';
 /// in X Min / Geschlossen), Distanz-Chip, ausklappbare Wochentag-Tabelle.
 class PoiDetailSheet extends StatelessWidget {
   final RoutePoi poi;
+  // 2026-05-28 (vucko): Callback für „Tankstelle in Route einbauen".
+  // null = Button wird nicht gezeigt (z.B. keine aktive Route).
+  final VoidCallback? onAddToRoute;
+  // Wenn POI bereits Teil der Route ist: Button wird zu „Entfernen".
+  final bool isAlreadyOnRoute;
 
-  const PoiDetailSheet({super.key, required this.poi});
+  const PoiDetailSheet({
+    super.key,
+    required this.poi,
+    this.onAddToRoute,
+    this.isAlreadyOnRoute = false,
+  });
 
-  static Future<void> show(BuildContext context, RoutePoi poi) {
+  static Future<void> show(
+    BuildContext context,
+    RoutePoi poi, {
+    VoidCallback? onAddToRoute,
+    bool isAlreadyOnRoute = false,
+  }) {
     return showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       barrierColor: Colors.black.withValues(alpha: 0.45),
-      builder: (_) => PoiDetailSheet(poi: poi),
+      builder: (_) => PoiDetailSheet(
+        poi: poi,
+        onAddToRoute: onAddToRoute,
+        isAlreadyOnRoute: isAlreadyOnRoute,
+      ),
     );
   }
 
@@ -244,6 +263,19 @@ class PoiDetailSheet extends StatelessWidget {
                       ],
                     ),
                   ],
+                  // 2026-05-28 (vucko): „Zur Route hinzufügen" Button
+                  if (onAddToRoute != null) ...[
+                    const SizedBox(height: 22),
+                    _AddToRouteButton(
+                      accent: accent,
+                      isAlreadyOnRoute: isAlreadyOnRoute,
+                      poiTypeLabel: poi.type.label,
+                      onTap: () {
+                        Navigator.of(context).pop();
+                        onAddToRoute!();
+                      },
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -279,6 +311,102 @@ class PoiDetailSheet extends StatelessWidget {
       OpenStatus.closedToday => Icons.do_not_disturb_on_rounded,
       OpenStatus.unknown => Icons.help_outline_rounded,
     };
+  }
+}
+
+/// 2026-05-28 (vucko): "Zur Route hinzufügen" Button für POI-Sheet.
+/// Triggert eine Re-Routing mit dem POI als Pflicht-Wegpunkt.
+class _AddToRouteButton extends StatelessWidget {
+  final Color accent;
+  final bool isAlreadyOnRoute;
+  final String poiTypeLabel;
+  final VoidCallback onTap;
+
+  const _AddToRouteButton({
+    required this.accent,
+    required this.isAlreadyOnRoute,
+    required this.poiTypeLabel,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final color = isAlreadyOnRoute
+        ? const Color(0xFFF87171)
+        : accent;
+    final label = isAlreadyOnRoute
+        ? 'Aus Route entfernen'
+        : 'Route über diese${_genderArticleSuffix()} ${poiTypeLabel.toLowerCase()}';
+    final icon = isAlreadyOnRoute
+        ? Icons.remove_circle_outline_rounded
+        : Icons.add_road_rounded;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(16),
+        child: Ink(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [
+                color.withValues(alpha: 0.95),
+                color.withValues(alpha: 0.7),
+              ],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            borderRadius: BorderRadius.circular(16),
+            boxShadow: [
+              BoxShadow(
+                color: color.withValues(alpha: 0.45),
+                blurRadius: 18,
+                offset: const Offset(0, 6),
+              ),
+            ],
+          ),
+          padding: const EdgeInsets.symmetric(
+            horizontal: 18,
+            vertical: 16,
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(icon, color: Colors.white, size: 20),
+              const SizedBox(width: 10),
+              Flexible(
+                child: Text(
+                  label,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: -0.2,
+                  ),
+                  textAlign: TextAlign.center,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // Tankstelle / Werkstatt = feminin → "diese"
+  // Café / Restaurant / Imbiss = neutrum → "dieses"
+  // Pub / Parkplatz = maskulin → "diesen"
+  // Default: feminin ("diese"), passt für Tankstelle (häufigster Fall).
+  String _genderArticleSuffix() {
+    final lower = poiTypeLabel.toLowerCase();
+    if (lower == 'restaurant' || lower == 'café' || lower == 'imbiss' || lower == 'wc') {
+      return 's';
+    }
+    if (lower == 'pub' || lower == 'parkplatz') {
+      return 'n';
+    }
+    return '';
   }
 }
 
