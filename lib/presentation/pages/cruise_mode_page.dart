@@ -2254,10 +2254,9 @@ class _CruiseModePageState extends State<CruiseModePage>
           if (!_isRouteConfirmed) RepaintBoundary(child: _buildConfigOverlay()),
           if (_isRouteConfirmed)
             RepaintBoundary(child: _buildNavigationOverlay()),
-          // 2026-05-28 (vucko Task #78): POI-Filter-FAB IMMER sichtbar — auch
-          // wenn noch keine Route bestätigt ist. User-Wunsch: er soll vor dem
-          // Suchen Tankstellen/Cafés in der Region einsehen können.
-          if (!_isRouteConfirmed) _buildStandalonePoiFilterFab(),
+          // 2026-05-28 (vucko Task #79): Komplette FAB-Spalte auch ohne
+          // Route — verschwindet animiert wenn Setup-Sheet hochgezogen ist.
+          if (!_isRouteConfirmed) _buildFabColumn(hasRoute: false),
           if (_shouldShowRoundTripSearchStatus)
             _buildRoundTripSearchStatusOverlay(),
 
@@ -3360,146 +3359,11 @@ class _CruiseModePageState extends State<CruiseModePage>
             ],
           ),
         ),
-        // FAB-Spalte rechts: Simulation + Zentrieren
-        Positioned(
-          right: 16,
-          bottom: 260,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // Simulation Start/Stop Button
-              if (_isSimulationEnabled && _fullRouteCoordinates.length > 1)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 12),
-                  child: FloatingActionButton(
-                    heroTag: 'simulation_fab',
-                    backgroundColor: _isSimulationRunning
-                        ? const Color(0xFFFF9500)
-                        : const Color(0xFF34C759),
-                    foregroundColor: Colors.white,
-                    onPressed: _toggleSimulation,
-                    child: Icon(
-                      _isSimulationRunning
-                          ? Icons.stop_rounded
-                          : Icons.play_arrow_rounded,
-                      size: 28,
-                    ),
-                  ),
-                ),
-              // Route-Übersicht Button
-              Padding(
-                padding: const EdgeInsets.only(bottom: 12),
-                child: FloatingActionButton.small(
-                  heroTag: 'overview_fab',
-                  backgroundColor: const Color(0xFF2D3138),
-                  foregroundColor: Colors.white,
-                  onPressed: _showRouteOverview,
-                  child: const Icon(Icons.map_outlined, size: 20),
-                ),
-              ),
-              // 2026-05-28 (vucko Task #75): POI-Filter-Panel statt simpler
-              // Toggle. Öffnet ein Bottom-Sheet mit allen 8 POI-Kategorien
-              // (Tankstellen / Cafés / Restaurants / Werkstätten / Imbisse /
-              // Pubs / Parkplätze / WC) als ästhetisches 2×4-Grid mit
-              // Schnellaktionen „Alle" / „Aus".
-              Padding(
-                padding: const EdgeInsets.only(bottom: 12),
-                child: AnimatedBuilder(
-                  animation: PoiSettingsService.instance,
-                  builder: (context, _) {
-                    final s = PoiSettingsService.instance;
-                    final active = s.anyEnabled;
-                    return FloatingActionButton.small(
-                      heroTag: 'pois_fab',
-                      backgroundColor: active
-                          ? AppAccentColors.accent
-                          : const Color(0xFF2D3138),
-                      foregroundColor: Colors.white,
-                      tooltip: 'POI-Filter',
-                      onPressed: _openPoiFilter,
-                      child: _poisLoading
-                          ? const SizedBox(
-                              width: 16,
-                              height: 16,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                color: Colors.white,
-                              ),
-                            )
-                          : const Icon(Icons.tune_rounded, size: 20),
-                    );
-                  },
-                ),
-              ),
-              // Voice-Mode-Cycle (off → important → all → off).
-              Padding(
-                padding: const EdgeInsets.only(bottom: 12),
-                child: AnimatedBuilder(
-                  animation: VoiceSettingsService.instance,
-                  builder: (context, _) {
-                    final mode = VoiceSettingsService.instance.mode;
-                    final (icon, label, color) = switch (mode) {
-                      VoiceMode.off => (
-                          Icons.volume_off_rounded,
-                          'Stumm',
-                          const Color(0xFF2D3138),
-                        ),
-                      VoiceMode.important => (
-                          Icons.volume_down_rounded,
-                          'Nur Wichtiges',
-                          const Color(0xFFFBBF24),
-                        ),
-                      VoiceMode.all => (
-                          Icons.volume_up_rounded,
-                          'Alle Ansagen',
-                          AppAccentColors.accent,
-                        ),
-                    };
-                    return FloatingActionButton.small(
-                      heroTag: 'voice_toggle_fab',
-                      backgroundColor: color,
-                      foregroundColor: Colors.white,
-                      tooltip: label,
-                      onPressed: () async {
-                        await VoiceSettingsService.instance.cycleMode();
-                        HapticFeedback.selectionClick();
-                        if (!context.mounted) return;
-                        final newMode = VoiceSettingsService.instance.mode;
-                        final newLabel = switch (newMode) {
-                          VoiceMode.off => 'Stumm',
-                          VoiceMode.important => 'Nur Wichtiges',
-                          VoiceMode.all => 'Alle Ansagen',
-                        };
-                        TopToast.show(
-                          context,
-                          message: 'Sprache: $newLabel',
-                          icon: switch (newMode) {
-                            VoiceMode.off => Icons.volume_off_rounded,
-                            VoiceMode.important => Icons.volume_down_rounded,
-                            VoiceMode.all => Icons.volume_up_rounded,
-                          },
-                        );
-                      },
-                      child: Icon(icon, size: 20),
-                    );
-                  },
-                ),
-              ),
-              // Zentrierungs-Button
-              FloatingActionButton(
-                heroTag: 'recenter_map_fab',
-                backgroundColor: _isCameraLocked
-                    ? AppAccentColors.accent
-                    : const Color(0xFF2D3138),
-                foregroundColor: Colors.white,
-                onPressed: _toggleCameraLock,
-                child: Icon(
-                  _isCameraLocked ? Icons.explore : Icons.explore_off,
-                ),
-              ),
-            ],
-          ),
-        ),
+        // 2026-05-28 (vucko Task #79): FAB-Spalte aus _buildFabColumn —
+        // gleicher Code für Pre-Route und während Navigation, mit dem
+        // Unterschied dass im Navigation-State auch Simulation + Overview
+        // gezeigt werden. Verschwindet wenn Setup-Sheet hochgezogen ist.
+        _buildFabColumn(hasRoute: true),
         Positioned(
           bottom: 0,
           left: 0,
@@ -7904,39 +7768,134 @@ class _CruiseModePageState extends State<CruiseModePage>
     }
   }
 
-  /// 2026-05-28 (vucko Task #78): Standalone POI-Filter-FAB für Pre-Route-
-  /// State. An genau derselben Position wie der NavigationOverlay-FAB
-  /// (right 16, bottom 260) damit User keine UI-Verschiebung wahrnimmt
-  /// nach dem Confirm.
-  Widget _buildStandalonePoiFilterFab() {
+  /// 2026-05-28 (vucko Task #79): Gemeinsame FAB-Spalte für Pre-Route- UND
+  /// Navigation-State. Verschwindet animiert (fade + slide-out-right) wenn
+  /// das Strecken-Setup hochgezogen ist (_configCollapsed == false). Während
+  /// der Animation und bei voll-versteckt sind die FABs nicht klickbar.
+  ///
+  /// [hasRoute] true wenn Cruise-Mode in Navigation-State ist; dann werden
+  /// zusätzlich Simulation + Route-Übersicht gezeigt.
+  Widget _buildFabColumn({required bool hasRoute}) {
+    // Bei hochgezogenem Setup-Sheet: FABs ausblenden + nicht klickbar.
+    final hidden = !hasRoute && !_configCollapsed;
     return Positioned(
       right: 16,
-      bottom: 260,
-      child: AnimatedBuilder(
-        animation: PoiSettingsService.instance,
-        builder: (context, _) {
-          final s = PoiSettingsService.instance;
-          final active = s.anyEnabled;
-          return FloatingActionButton.small(
-            heroTag: 'pois_fab_standalone',
-            backgroundColor: active
-                ? AppAccentColors.accent
-                : const Color(0xFF2D3138),
-            foregroundColor: Colors.white,
-            tooltip: 'POI-Filter',
-            onPressed: _openPoiFilter,
-            child: _poisLoading
-                ? const SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: Colors.white,
-                    ),
-                  )
-                : const Icon(Icons.tune_rounded, size: 20),
-          );
-        },
+      bottom: hasRoute ? 260 : 240,
+      child: IgnorePointer(
+        ignoring: hidden,
+        child: AnimatedSlide(
+          offset: hidden ? const Offset(1.4, 0) : Offset.zero,
+          duration: const Duration(milliseconds: 240),
+          curve: Curves.easeOutCubic,
+          child: AnimatedOpacity(
+            opacity: hidden ? 0 : 1,
+            duration: const Duration(milliseconds: 180),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                // Simulation Start/Stop — nur wenn Route da + sim enabled
+                if (hasRoute &&
+                    _isSimulationEnabled &&
+                    _fullRouteCoordinates.length > 1)
+                  _FabBubble(
+                    heroTag: 'simulation_fab',
+                    icon: _isSimulationRunning
+                        ? Icons.stop_rounded
+                        : Icons.play_arrow_rounded,
+                    color: _isSimulationRunning
+                        ? const Color(0xFFFF9500)
+                        : const Color(0xFF34C759),
+                    onPressed: _toggleSimulation,
+                    big: true,
+                  ),
+                // Route-Übersicht — nur wenn Route da
+                if (hasRoute)
+                  _FabBubble(
+                    heroTag: 'overview_fab',
+                    icon: Icons.map_outlined,
+                    color: const Color(0xFF2D3138),
+                    onPressed: _showRouteOverview,
+                  ),
+                // POI-Filter — IMMER sichtbar (auch Pre-Route)
+                AnimatedBuilder(
+                  animation: PoiSettingsService.instance,
+                  builder: (context, _) {
+                    final active = PoiSettingsService.instance.anyEnabled;
+                    return _FabBubble(
+                      heroTag: 'pois_fab',
+                      icon: Icons.tune_rounded,
+                      color: active
+                          ? AppAccentColors.accent
+                          : const Color(0xFF2D3138),
+                      onPressed: _openPoiFilter,
+                      loading: _poisLoading,
+                    );
+                  },
+                ),
+                // Voice-Mode-Cycle — IMMER sichtbar
+                AnimatedBuilder(
+                  animation: VoiceSettingsService.instance,
+                  builder: (context, _) {
+                    final mode = VoiceSettingsService.instance.mode;
+                    final (icon, color) = switch (mode) {
+                      VoiceMode.off => (
+                          Icons.volume_off_rounded,
+                          const Color(0xFF2D3138),
+                        ),
+                      VoiceMode.important => (
+                          Icons.volume_down_rounded,
+                          const Color(0xFFFBBF24),
+                        ),
+                      VoiceMode.all => (
+                          Icons.volume_up_rounded,
+                          AppAccentColors.accent,
+                        ),
+                    };
+                    return _FabBubble(
+                      heroTag: 'voice_toggle_fab',
+                      icon: icon,
+                      color: color,
+                      onPressed: () async {
+                        await VoiceSettingsService.instance.cycleMode();
+                        HapticFeedback.selectionClick();
+                        if (!context.mounted) return;
+                        final newMode = VoiceSettingsService.instance.mode;
+                        final newLabel = switch (newMode) {
+                          VoiceMode.off => 'Stumm',
+                          VoiceMode.important => 'Nur Wichtiges',
+                          VoiceMode.all => 'Alle Ansagen',
+                        };
+                        TopToast.show(
+                          context,
+                          message: 'Sprache: $newLabel',
+                          icon: switch (newMode) {
+                            VoiceMode.off => Icons.volume_off_rounded,
+                            VoiceMode.important =>
+                                Icons.volume_down_rounded,
+                            VoiceMode.all => Icons.volume_up_rounded,
+                          },
+                        );
+                      },
+                    );
+                  },
+                ),
+                // Camera-Lock / Recenter — IMMER sichtbar
+                _FabBubble(
+                  heroTag: 'recenter_map_fab',
+                  icon: _isCameraLocked
+                      ? Icons.explore
+                      : Icons.explore_off,
+                  color: _isCameraLocked
+                      ? AppAccentColors.accent
+                      : const Color(0xFF2D3138),
+                  onPressed: _toggleCameraLock,
+                  big: true,
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -9988,6 +9947,98 @@ class _SegTab extends StatelessWidget {
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 2026-05-28 (vucko Task #79): Ästhetischer FAB-Bubble mit Glas-Look,
+/// Schatten und Tap-Bounce. Ersetzt die nackten FloatingActionButton.small.
+///
+/// - [big]=true → 56×56 (für Recenter/Simulation), sonst 48×48
+/// - Loading-Spinner statt Icon wenn [loading]=true
+/// - Schatten mit Color-Tint vom Background damit der FAB „glüht" wenn
+///   eine Aktion aktiv ist (z.B. POI-Filter mit Akzentfarbe = leichter
+///   Akzent-Glow)
+class _FabBubble extends StatelessWidget {
+  final String heroTag;
+  final IconData icon;
+  final Color color;
+  final VoidCallback onPressed;
+  final bool loading;
+  final bool big;
+  const _FabBubble({
+    required this.heroTag,
+    required this.icon,
+    required this.color,
+    required this.onPressed,
+    this.loading = false,
+    this.big = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final size = big ? 52.0 : 44.0;
+    final iconSize = big ? 24.0 : 19.0;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 11),
+      child: Hero(
+        tag: heroTag,
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            borderRadius: BorderRadius.circular(size),
+            onTap: () {
+              HapticFeedback.lightImpact();
+              onPressed();
+            },
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 220),
+              curve: Curves.easeOutCubic,
+              width: size,
+              height: size,
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [
+                    color,
+                    Color.lerp(color, Colors.black, 0.18) ?? color,
+                  ],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: Colors.white.withValues(alpha: 0.08),
+                  width: 1,
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: color.withValues(alpha: 0.36),
+                    blurRadius: 12,
+                    spreadRadius: 0,
+                    offset: const Offset(0, 4),
+                  ),
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.32),
+                    blurRadius: 8,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
+              ),
+              alignment: Alignment.center,
+              child: loading
+                  ? SizedBox(
+                      width: iconSize - 2,
+                      height: iconSize - 2,
+                      child: const CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    )
+                  : Icon(icon, color: Colors.white, size: iconSize),
+            ),
+          ),
         ),
       ),
     );
