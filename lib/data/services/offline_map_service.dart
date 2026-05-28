@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:cruise_connect/core/constants.dart';
+import 'package:cruise_connect/data/services/map_cache_status.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -41,6 +42,9 @@ class OfflineMapCacheReport {
 }
 
 enum _TileCacheOutcome { downloaded, existing, failed }
+
+// MapCacheStatus-Import als Top-level damit der OfflineMapService den
+// globalen Status für die Settings-UI aktualisieren kann.
 
 class OfflineMapService {
   OfflineMapService._();
@@ -258,6 +262,9 @@ class OfflineMapService {
     }
     final directory = await _resolveTileCacheDirectory();
     if (directory == null) {
+      MapCacheStatus.instance.markFailed(
+        error: 'Cache-Verzeichnis nicht verfügbar',
+      );
       return const OfflineMapCacheReport(
         requestedTiles: 0,
         downloadedTiles: 0,
@@ -284,6 +291,7 @@ class OfflineMapService {
         skipped: true,
       );
     }
+    MapCacheStatus.instance.markStarted(totalTiles: tiles.length);
     var downloaded = 0;
     var existing = 0;
     var failed = 0;
@@ -305,7 +313,9 @@ class OfflineMapService {
               failed += 1;
           }
         }
-        onProgress?.call(downloaded + existing, tiles.length);
+        final progressed = downloaded + existing;
+        MapCacheStatus.instance.updateProgress(downloaded: progressed);
+        onProgress?.call(progressed, tiles.length);
       }
     } finally {
       client.close();
@@ -314,6 +324,19 @@ class OfflineMapService {
       '[OfflineMap] DACH overview cache: requested=${tiles.length} '
       'downloaded=$downloaded existing=$existing failed=$failed',
     );
+    // Faustregel: Mapbox-Tile ~12 KB im Schnitt (Dark-V11 style). Real
+    // measured ~9-14 KB. Wir runden auf 12 KB pro Tile.
+    final approxSizeMb = ((downloaded + existing) * 12) ~/ 1024;
+    if (failed < tiles.length * 0.1) {
+      MapCacheStatus.instance.markCompleted(
+        totalTiles: tiles.length,
+        approxSizeMb: approxSizeMb,
+      );
+    } else {
+      MapCacheStatus.instance.markFailed(
+        error: '$failed von ${tiles.length} Tiles konnten nicht geladen werden',
+      );
+    }
     return OfflineMapCacheReport(
       requestedTiles: tiles.length,
       downloadedTiles: downloaded,
@@ -321,6 +344,41 @@ class OfflineMapService {
       failedTiles: failed,
       skipped: false,
     );
+  }
+
+  /// 2026-05-28 (vucko Task #64): DACH-Cache wieder löschen — bei
+  /// User-Anfrage aus Settings.
+  /// Löscht NUR die DACH-Überblick-Zoomstufen (5-10). Route-Cache-Tiles
+  /// (Zoom 11+) und persönliche Cache-Regionen bleiben erhalten.
+  Future<int> clearDachOverviewCache() async {
+    if (kIsWeb) return 0;
+    final directory = await _resolveTileCacheDirectory();
+    if (directory == null) return 0;
+    var deleted = 0;
+    try {
+      for (var zoom = dachOverviewMinZoom;
+          zoom <= dachOverviewMaxZoom;
+          zoom += 1) {
+        final zoomDir = Directory('${directory.path}/$zoom');
+        if (await zoomDir.exists()) {
+          await for (final entity in zoomDir.list(recursive: true)) {
+            if (entity is File) {
+              try {
+                await entity.delete();
+                deleted += 1;
+              } catch (_) {
+                // ignore single-file delete errors
+              }
+            }
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('[OfflineMap] Fehler beim Löschen des DACH-Caches: $e');
+    }
+    MapCacheStatus.instance.reset();
+    debugPrint('[OfflineMap] DACH-Cache gelöscht — $deleted Tiles entfernt.');
+    return deleted;
   }
 
   /// bbox-Tiles (direkter Bounding-Box, ohne Center+Radius-Umrechnung).

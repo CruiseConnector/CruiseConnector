@@ -1,12 +1,18 @@
+import 'dart:async';
+
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
+import 'package:cruise_connect/data/services/map_cache_status.dart';
 import 'package:cruise_connect/data/services/notification_settings_service.dart';
+import 'package:cruise_connect/data/services/offline_map_service.dart';
 import 'package:cruise_connect/data/services/poi_settings_service.dart';
 import 'package:cruise_connect/data/services/voice_settings_service.dart';
 import 'package:cruise_connect/application/providers/community_provider.dart';
 import 'package:cruise_connect/presentation/widgets/accent_color_picker.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/routing_onboarding_sheet.dart';
+import 'package:cruise_connect/presentation/widgets/top_toast.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class SettingsPage extends StatefulWidget {
@@ -330,6 +336,18 @@ class _SettingsPageState extends State<SettingsPage> {
 
                 const SizedBox(height: 24),
 
+                // 2026-05-28 (vucko Task #64): DACH-Offline-Karte Status +
+                // manuelles Re-Download / Cache löschen.
+                _buildSectionHeader('OFFLINE-KARTE (DACH)'),
+                _buildSectionContainer([
+                  AnimatedBuilder(
+                    animation: MapCacheStatus.instance,
+                    builder: (context, _) => _buildOfflineMapCard(),
+                  ),
+                ]),
+
+                const SizedBox(height: 24),
+
                 _buildSectionHeader('GEFAHRENZONE'),
                 _buildSectionContainer([
                   ListTile(
@@ -429,6 +447,291 @@ class _SettingsPageState extends State<SettingsPage> {
           : null,
       trailing: const Icon(Icons.chevron_right, color: Colors.grey),
       onTap: onTap,
+    );
+  }
+
+  // 2026-05-28 (vucko Task #64): DACH-Offline-Karte Status-Card.
+  // Zeigt den aktuellen Cache-Status (geladen / lädt / fehlgeschlagen /
+  // nicht gestartet) mit einem großen Status-Icon, optional Progress-Bar
+  // und Action-Buttons (Re-Download bei Fehler, Cache löschen bei OK).
+  Widget _buildOfflineMapCard() {
+    final status = MapCacheStatus.instance;
+    final state = status.state;
+    final accent = AppAccentColors.accent;
+
+    Color iconColor;
+    IconData iconData;
+    String title;
+    String subtitle;
+
+    switch (state) {
+      case MapCacheState.completed:
+        iconColor = const Color(0xFF34D399);
+        iconData = Icons.cloud_done_rounded;
+        title = 'DACH offline verfügbar';
+        subtitle =
+            '${status.totalTiles} Tiles · ca. ${status.approxSizeMb} MB';
+      case MapCacheState.downloading:
+        iconColor = accent;
+        iconData = Icons.cloud_download_rounded;
+        title = 'Karte wird geladen…';
+        final pct = (status.progress * 100).toStringAsFixed(0);
+        subtitle =
+            '$pct% · ${status.downloadedTiles}/${status.totalTiles} Tiles';
+      case MapCacheState.failed:
+        iconColor = const Color(0xFFF87171);
+        iconData = Icons.cloud_off_rounded;
+        title = 'Download fehlgeschlagen';
+        subtitle = status.lastError ?? 'Unbekannter Fehler';
+      case MapCacheState.notStarted:
+        iconColor = Colors.grey;
+        iconData = Icons.cloud_outlined;
+        title = 'DACH noch nicht geladen';
+        subtitle = 'Karte (~30 MB) für Offline-Cruising vorbereiten';
+    }
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // Header: Status-Icon + Text
+          Row(
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: iconColor.withValues(alpha: 0.12),
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: iconColor.withValues(alpha: 0.35),
+                    width: 1.2,
+                  ),
+                ),
+                alignment: Alignment.center,
+                child: Icon(iconData, color: iconColor, size: 24),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle,
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.6),
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          if (state == MapCacheState.downloading) ...[
+            const SizedBox(height: 14),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(99),
+              child: LinearProgressIndicator(
+                value: status.progress,
+                minHeight: 6,
+                backgroundColor: Colors.white.withValues(alpha: 0.08),
+                valueColor: AlwaysStoppedAnimation<Color>(accent),
+              ),
+            ),
+          ],
+          const SizedBox(height: 14),
+          Row(
+            children: [
+              if (state == MapCacheState.completed) ...[
+                Expanded(
+                  child: _OfflineMapButton(
+                    label: 'Erneut laden',
+                    icon: Icons.refresh_rounded,
+                    color: accent,
+                    onTap: _redownloadDachCache,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: _OfflineMapButton(
+                    label: 'Löschen',
+                    icon: Icons.delete_outline_rounded,
+                    color: const Color(0xFFF87171),
+                    onTap: _clearDachCache,
+                  ),
+                ),
+              ] else if (state == MapCacheState.downloading) ...[
+                Expanded(
+                  child: Text(
+                    'Bitte App geöffnet lassen…',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.55),
+                      fontSize: 12,
+                      fontStyle: FontStyle.italic,
+                    ),
+                  ),
+                ),
+              ] else ...[
+                Expanded(
+                  child: _OfflineMapButton(
+                    label: state == MapCacheState.failed
+                        ? 'Erneut versuchen'
+                        : 'Jetzt herunterladen',
+                    icon: Icons.cloud_download_rounded,
+                    color: accent,
+                    onTap: _redownloadDachCache,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _redownloadDachCache() async {
+    // 2026-05-28 (vucko): Manuelles Re-Download. Wir setzen das First-
+    // Launch-Flag zurück damit der Re-Download als „first install"
+    // behandelt wird.
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('offline_map_dach_overview_v1');
+    if (!mounted) return;
+    TopToast.show(
+      context,
+      message: 'DACH-Karte wird im Hintergrund geladen…',
+      icon: Icons.cloud_download_rounded,
+      duration: const Duration(seconds: 3),
+    );
+    unawaited(
+      OfflineMapService.instance.cacheDachOverview().then((report) async {
+        if (!mounted) return;
+        if (report.skipped) return;
+        if (report.failedTiles < report.requestedTiles * 0.1) {
+          final prefs2 = await SharedPreferences.getInstance();
+          await prefs2.setBool('offline_map_dach_overview_v1', true);
+          if (!mounted) return;
+          TopToast.show(
+            context,
+            message: 'DACH-Karte ist jetzt offline verfügbar 🗺️',
+            icon: Icons.cloud_done_rounded,
+            duration: const Duration(seconds: 4),
+          );
+        }
+      }),
+    );
+  }
+
+  Future<void> _clearDachCache() async {
+    final accent = AppAccentColors.accent;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1C1F26),
+        title: const Text(
+          'DACH-Cache löschen?',
+          style: TextStyle(color: Colors.white),
+        ),
+        content: Text(
+          'Die Übersichts-Karte muss beim nächsten Cruise-Start neu geladen werden.',
+          style: TextStyle(color: Colors.white.withValues(alpha: 0.7)),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: Text(
+              'Abbrechen',
+              style: TextStyle(color: Colors.white.withValues(alpha: 0.7)),
+            ),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: Text(
+              'Löschen',
+              style: TextStyle(color: accent, fontWeight: FontWeight.bold),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    final deleted =
+        await OfflineMapService.instance.clearDachOverviewCache();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('offline_map_dach_overview_v1');
+    if (!mounted) return;
+    TopToast.show(
+      context,
+      message: '$deleted Tiles gelöscht — Cache leer',
+      icon: Icons.delete_outline_rounded,
+      duration: const Duration(seconds: 3),
+    );
+  }
+}
+
+/// Pillen-Button mit Akzent-Farben für die Offline-Map-Card.
+class _OfflineMapButton extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final Color color;
+  final VoidCallback onTap;
+
+  const _OfflineMapButton({
+    required this.label,
+    required this.icon,
+    required this.color,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: onTap,
+        child: Ink(
+          decoration: BoxDecoration(
+            color: color.withValues(alpha: 0.12),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: color.withValues(alpha: 0.4),
+              width: 1,
+            ),
+          ),
+          padding: const EdgeInsets.symmetric(vertical: 11, horizontal: 12),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(icon, color: color, size: 16),
+              const SizedBox(width: 7),
+              Flexible(
+                child: Text(
+                  label,
+                  style: TextStyle(
+                    color: color,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

@@ -59,6 +59,10 @@ import 'package:cruise_connect/presentation/widgets/cruise/cruise_navigation_inf
 import 'package:cruise_connect/presentation/widgets/cruise/cruise_setup_card.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/drive_control_panel.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/routing_onboarding_sheet.dart';
+import 'package:cruise_connect/presentation/widgets/cruise/construction_alert_sheet.dart';
+import 'package:cruise_connect/domain/models/construction_report.dart';
+import 'package:cruise_connect/data/services/construction_geofence.dart';
+import 'package:cruise_connect/data/services/construction_report_service.dart';
 import 'package:cruise_connect/data/services/gamification_service.dart';
 import 'package:cruise_connect/data/services/cruise_group_service.dart';
 import 'package:cruise_connect/data/services/route_quality_validator.dart';
@@ -307,6 +311,12 @@ class _CruiseModePageState extends State<CruiseModePage>
   List<RoadHazard> _roadHazards = const [];
   // ignore: unused_field
   bool _hazardCheckDone = false;
+  // 2026-05-28 (vucko Task #66): Baustellen-Crowdsourcing (Supabase +
+  // OSM Overpass). Liste wird beim Route-Build gefiltert auf die Route,
+  // Geofence triggert das Alert-Sheet während der Fahrt.
+  List<ConstructionReport> _routeConstructions = const [];
+  final ConstructionGeofence _constructionGeofence = ConstructionGeofence();
+  String? _activeConstructionAlertId;
   // 2026-05-23 (vucko): Haptic-Tracking damit jede Stufe (300m/150m/50m)
   // nur 1× pro Manöver feuert statt bei jedem GPS-Tick.
   int? _lastHapticManeuverIndex;
@@ -3675,6 +3685,22 @@ class _CruiseModePageState extends State<CruiseModePage>
                 ),
             ],
           ),
+        // ── Baustellen-Marker (Task #66, orange pulsierend) ────────────────
+        if (_routeConstructions.isNotEmpty)
+          MarkerLayer(
+            markers: [
+              for (final c in _routeConstructions)
+                Marker(
+                  point: LatLng(c.latitude, c.longitude),
+                  width: 40,
+                  height: 40,
+                  child: GestureDetector(
+                    onTap: () => ConstructionAlertSheet.show(context, c),
+                    child: _buildConstructionMarker(c),
+                  ),
+                ),
+            ],
+          ),
         // ── User-Position Marker (Live-Navigation) ─────────────────────────
         if (_userPosition != null && _isRouteConfirmed)
           MarkerLayer(
@@ -5244,6 +5270,10 @@ class _CruiseModePageState extends State<CruiseModePage>
     // 2026-05-24 (vucko Task #45): Hazard-Check im Hintergrund.
     _hazardCheckDone = false;
     _roadHazards = const [];
+    // 2026-05-28 (vucko Task #66): alte Baustellen + Geofence zurücksetzen.
+    _routeConstructions = const [];
+    _constructionGeofence.clear();
+    _activeConstructionAlertId = null;
     unawaited(_checkHazardsInBackground(result.coordinates));
     // 2026-05-24 (vucko Task #49): POIs auto-laden wenn Settings aktiv
     // (Google-Maps-Style: Tankstellen erscheinen automatisch auf der Map).
@@ -6935,6 +6965,10 @@ class _CruiseModePageState extends State<CruiseModePage>
         '[CruiseMode] GPS-Luecke erkannt, Track-Segment getrennt gespeichert.',
       );
     }
+    // 2026-05-28 (vucko Task #66): Geofence-Check pro Driven-Track-Sample.
+    // Sample-Frequenz ist ~1Hz während aktiver Fahrt — reicht für 200m
+    // Trigger bei Geschwindigkeiten bis 200 km/h (= ~55 m/s).
+    _processConstructionGeofence(position.latitude, position.longitude);
   }
 
   void _stopNavigationTracking() {
@@ -7484,19 +7518,97 @@ class _CruiseModePageState extends State<CruiseModePage>
         _roadHazards = hazards;
         _hazardCheckDone = true;
       });
-      if (hazards.isNotEmpty) {
-        final first = hazards.first;
-        TopToast.show(
-          context,
-          message:
-              '${first.type.emoji} ${hazards.length} Baustelle${hazards.length > 1 ? "n" : ""} entlang der Route',
-          icon: Icons.construction_rounded,
-          duration: const Duration(seconds: 4),
-        );
-      }
+      // Task #66: Crowd+OSM Baustellen-Layer als Live-Quelle parallel zum
+      // Toast laden. Liefert Marker, Geofence-Trigger und Voting.
+      unawaited(_loadConstructionReports(coords));
     } catch (_) {
       // silent fail
     }
+  }
+
+  /// 2026-05-28 (vucko Task #66): Construction-Reports für die Route laden.
+  /// Wird im Hintergrund parallel zum Road-Hazard-Check ausgeführt.
+  Future<void> _loadConstructionReports(List<List<double>> coords) async {
+    if (coords.length < 2) return;
+    try {
+      // bbox um die Route mit kleinem Puffer (0.018° ≈ 2 km).
+      double minLat = coords.first[1], maxLat = coords.first[1];
+      double minLng = coords.first[0], maxLng = coords.first[0];
+      for (final c in coords) {
+        if (c[1] < minLat) minLat = c[1];
+        if (c[1] > maxLat) maxLat = c[1];
+        if (c[0] < minLng) minLng = c[0];
+        if (c[0] > maxLng) maxLng = c[0];
+      }
+      final reports = await ConstructionReportService.instance.fetchInBbox(
+        southLat: minLat - 0.018,
+        westLng: minLng - 0.018,
+        northLat: maxLat + 0.018,
+        eastLng: maxLng + 0.018,
+      );
+      if (!mounted) return;
+      final onRoute = ConstructionReportService.instance.filterToRoute(
+        reports: reports,
+        routeCoordinates: coords,
+        bufferMeters: 90,
+      );
+      setState(() {
+        _routeConstructions = onRoute;
+      });
+      _constructionGeofence.setReports(onRoute);
+      debugPrint(
+        '[CruiseMode] Baustellen geladen: ${reports.length} bbox, '
+        '${onRoute.length} auf Route.',
+      );
+    } catch (e) {
+      debugPrint('[CruiseMode] Construction-Load fehlgeschlagen: $e');
+    }
+  }
+
+  /// 2026-05-28 (vucko Task #66): Marker-Widget — Orange Pulse-Kreis.
+  Widget _buildConstructionMarker(ConstructionReport c) {
+    const accent = Color(0xFFFF9500);
+    return Container(
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: Colors.white,
+        border: Border.all(color: accent, width: 2.2),
+        boxShadow: [
+          BoxShadow(
+            color: accent.withValues(alpha: 0.6),
+            blurRadius: 12,
+            spreadRadius: 1,
+          ),
+        ],
+      ),
+      alignment: Alignment.center,
+      child: const Icon(
+        Icons.construction_rounded,
+        size: 18,
+        color: accent,
+      ),
+    );
+  }
+
+  /// 2026-05-28 (vucko Task #66): Geofence-Tick pro Position-Update.
+  /// Wenn der User in eine Trigger-Zone kommt → Bottom-Sheet zeigen.
+  /// Nur eine Baustelle gleichzeitig (verhindert Stack).
+  void _processConstructionGeofence(double lat, double lng) {
+    if (!_isRouteConfirmed) return;
+    if (_routeConstructions.isEmpty) return;
+    if (_activeConstructionAlertId != null) return;
+    final entered = _constructionGeofence.processPosition(
+      latitude: lat,
+      longitude: lng,
+    );
+    if (entered.isEmpty || !mounted) return;
+    final report = entered.first;
+    _activeConstructionAlertId = report.id;
+    unawaited(
+      ConstructionAlertSheet.show(context, report).then((_) {
+        _activeConstructionAlertId = null;
+      }),
+    );
   }
 
   // 2026-05-24 (vucko Task #44): POI-Toggle (Tankstellen entlang Route).
