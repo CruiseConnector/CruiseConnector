@@ -92,29 +92,52 @@ class _HomePageState extends State<HomePage> {
   /// 2026-05-28 (vucko Task #64): DACH-Übersicht (~30-50 MB) einmalig
   /// vorladen. Schweigend im Hintergrund — User sieht in Settings später
   /// Status + manuellen Re-Download-Button.
+  ///
+  /// 2026-05-28 (vucko Task #69): Auch nach erfolgreich-markiertem Cache
+  /// laufen wir bei jedem App-Start eine Verify-Pass im Hintergrund —
+  /// fängt Tiles die durch Connection-Resets ausfallen oder vom System
+  /// gelöscht wurden.
   Future<void> _prewarmDachOverviewIfNeeded() async {
     const cacheVersionKey = 'offline_map_dach_overview_v1';
     try {
       final prefs = await SharedPreferences.getInstance();
-      if (prefs.getBool(cacheVersionKey) == true) {
-        return; // Schon einmal erfolgreich gelaufen.
+      final alreadyDone = prefs.getBool(cacheVersionKey) == true;
+
+      if (!alreadyDone) {
+        // 2s Delay damit der lokale Pre-Warm (route-relevante Tiles) nicht
+        // mit den DACH-Übersichts-Downloads kollidiert.
+        await Future.delayed(const Duration(seconds: 2));
+        if (!mounted) return;
+        final report = await OfflineMapService.instance.cacheDachOverview();
+        if (!report.skipped &&
+            report.failedTiles < report.requestedTiles * 0.1) {
+          await prefs.setBool(cacheVersionKey, true);
+          debugPrint(
+            '[HomePage] DACH-Überblick gecacht: '
+            '${report.downloadedTiles + report.existingTiles} / '
+            '${report.requestedTiles} Tiles.',
+          );
+        } else {
+          debugPrint(
+            '[HomePage] DACH-Überblick teilweise fehlgeschlagen — '
+            'versuche es beim nächsten App-Start erneut.',
+          );
+        }
+        return;
       }
-      // 2s Delay damit der lokale Pre-Warm (route-relevante Tiles) nicht
-      // mit den DACH-Übersichts-Downloads kollidiert.
-      await Future.delayed(const Duration(seconds: 2));
+
+      // Cache schon einmal als "fertig" markiert. Background-Verify damit
+      // wir Lücken durch Connection-Resets / System-Cleanup nachträglich
+      // schließen. 5s Delay damit die App-Start-UX nicht beeinträchtigt
+      // wird.
+      await Future.delayed(const Duration(seconds: 5));
       if (!mounted) return;
-      final report = await OfflineMapService.instance.cacheDachOverview();
-      if (!report.skipped && report.failedTiles < report.requestedTiles * 0.1) {
-        await prefs.setBool(cacheVersionKey, true);
+      final verify =
+          await OfflineMapService.instance.verifyAndRepairDachOverview();
+      if (verify.repairedNow > 0 || verify.stillMissing > 0) {
         debugPrint(
-          '[HomePage] DACH-Überblick gecacht: '
-          '${report.downloadedTiles + report.existingTiles} / '
-          '${report.requestedTiles} Tiles.',
-        );
-      } else {
-        debugPrint(
-          '[HomePage] DACH-Überblick teilweise fehlgeschlagen — '
-          'versuche es beim nächsten App-Start erneut.',
+          '[HomePage] DACH-Background-Verify: '
+          '${verify.repairedNow} repariert, ${verify.stillMissing} fehlen weiterhin.',
         );
       }
     } catch (e) {

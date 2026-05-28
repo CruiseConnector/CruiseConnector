@@ -470,7 +470,8 @@ class _SettingsPageState extends State<SettingsPage> {
         iconData = Icons.cloud_done_rounded;
         title = 'DACH offline verfügbar';
         subtitle =
-            '${status.totalTiles} Tiles · ca. ${status.approxSizeMb} MB';
+            '${status.totalTiles} Tiles · ca. ${status.approxSizeMb} MB · '
+            'Tippe „Prüfen" zur Verifikation';
       case MapCacheState.downloading:
         iconColor = accent;
         iconData = Icons.cloud_download_rounded;
@@ -556,13 +557,22 @@ class _SettingsPageState extends State<SettingsPage> {
               if (state == MapCacheState.completed) ...[
                 Expanded(
                   child: _OfflineMapButton(
-                    label: 'Erneut laden',
+                    label: 'Prüfen',
+                    icon: Icons.verified_outlined,
+                    color: const Color(0xFF34D399),
+                    onTap: _verifyAndRepairDachCache,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _OfflineMapButton(
+                    label: 'Erneut',
                     icon: Icons.refresh_rounded,
                     color: accent,
                     onTap: _redownloadDachCache,
                   ),
                 ),
-                const SizedBox(width: 10),
+                const SizedBox(width: 8),
                 Expanded(
                   child: _OfflineMapButton(
                     label: 'Löschen',
@@ -632,6 +642,39 @@ class _SettingsPageState extends State<SettingsPage> {
         }
       }),
     );
+  }
+
+  /// 2026-05-28 (vucko Task #69): Verify+Repair manuell aus Settings
+  /// triggern. Zeigt Live-Progress + Ergebnis-Toast.
+  Future<void> _verifyAndRepairDachCache() async {
+    if (!mounted) return;
+    TopToast.show(
+      context,
+      message: 'Karte wird geprüft — fehlende Tiles werden nachgeladen…',
+      icon: Icons.verified_outlined,
+      duration: const Duration(seconds: 3),
+    );
+    final result =
+        await OfflineMapService.instance.verifyAndRepairDachOverview();
+    if (!mounted) return;
+    if (result.stillMissing == 0) {
+      TopToast.show(
+        context,
+        message: result.repairedNow > 0
+            ? '✅ ${result.repairedNow} Tiles repariert — Karte ist komplett.'
+            : '✅ Karte ist komplett (${result.ok} Tiles).',
+        icon: Icons.check_circle_outline_rounded,
+        duration: const Duration(seconds: 4),
+      );
+    } else {
+      TopToast.show(
+        context,
+        message:
+            '⚠️ ${result.stillMissing} Tiles fehlen weiterhin — Netzverbindung prüfen.',
+        icon: Icons.warning_amber_rounded,
+        duration: const Duration(seconds: 5),
+      );
+    }
   }
 
   Future<void> _clearDachCache() async {

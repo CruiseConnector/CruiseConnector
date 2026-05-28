@@ -327,14 +327,19 @@ class OfflineMapService {
     // Faustregel: Mapbox-Tile ~12 KB im Schnitt (Dark-V11 style). Real
     // measured ~9-14 KB. Wir runden auf 12 KB pro Tile.
     final approxSizeMb = ((downloaded + existing) * 12) ~/ 1024;
-    if (failed < tiles.length * 0.1) {
+    // 2026-05-28 (vucko Task #69): NACH dem ersten Pass automatisch
+    // verify+repair laufen lassen — fängt die Connection-Reset-Fehler ab
+    // die im ersten Durchlauf einzelne Tiles fehlen lassen.
+    if (failed > 0) {
+      debugPrint(
+        '[OfflineMap] DACH-Pass hatte $failed Fehlversuche — Verify+Repair startet.',
+      );
+      // Verify+Repair updated den MapCacheStatus selbst.
+      await verifyAndRepairDachOverview(onProgress: onProgress);
+    } else if (failed == 0) {
       MapCacheStatus.instance.markCompleted(
         totalTiles: tiles.length,
         approxSizeMb: approxSizeMb,
-      );
-    } else {
-      MapCacheStatus.instance.markFailed(
-        error: '$failed von ${tiles.length} Tiles konnten nicht geladen werden',
       );
     }
     return OfflineMapCacheReport(
@@ -344,6 +349,175 @@ class OfflineMapService {
       failedTiles: failed,
       skipped: false,
     );
+  }
+
+  /// 2026-05-28 (vucko Task #69): Verifiziert dass alle DACH-Overview-Tiles
+  /// wirklich auf der Disk liegen — und repariert fehlende automatisch.
+  ///
+  /// Problem das das löst: Mapbox-Server hat ab und zu Connection-Resets
+  /// (sieht man in `http: connection closed before full header was received`),
+  /// einzelne Tiles fallen durch obwohl der Download-Pass als „completed"
+  /// (>90% success) markiert wurde. Diese Methode:
+  ///   1. Berechnet alle expected DACH-Tiles
+  ///   2. Prüft pro Tile: file.exists() UND size > 128 Bytes (sonst leeres
+  ///      Tile aus früherem fehlerhaftem Download)
+  ///   3. Sammelt fehlende
+  ///   4. Lädt sie mit höherem Timeout + bis zu 3 Retries pro Tile nach
+  ///
+  /// Returns: ({total, ok, repairedNow, stillMissing}).
+  ///
+  /// [onProgress] wird mit (done, total) für Settings-UI gefeuert während
+  /// der Repair-Phase läuft.
+  Future<({int total, int ok, int repairedNow, int stillMissing})>
+      verifyAndRepairDachOverview({
+    void Function(int done, int total)? onProgress,
+  }) async {
+    if (kIsWeb) return (total: 0, ok: 0, repairedNow: 0, stillMissing: 0);
+    final directory = await _resolveTileCacheDirectory();
+    if (directory == null) return (total: 0, ok: 0, repairedNow: 0, stillMissing: 0);
+    final expected = _tilesForBbox(
+      southLat: dachBboxSouthLat,
+      westLng: dachBboxWestLng,
+      northLat: dachBboxNorthLat,
+      eastLng: dachBboxEastLng,
+      minZoom: dachOverviewMinZoom,
+      maxZoom: dachOverviewMaxZoom,
+      maxTiles: dachOverviewMaxTiles,
+    );
+    if (expected.isEmpty) {
+      return (total: 0, ok: 0, repairedNow: 0, stillMissing: 0);
+    }
+    // 1. Verify-Pass: welche Tiles fehlen oder sind defekt (< 128 Bytes)?
+    final missing = <OfflineTile>[];
+    var okCount = 0;
+    for (final tile in expected) {
+      final file = _tileFile(directory, tile);
+      if (!await file.exists()) {
+        missing.add(tile);
+        continue;
+      }
+      final size = await file.length();
+      if (size < 128) {
+        try {
+          await file.delete();
+        } catch (_) {}
+        missing.add(tile);
+        continue;
+      }
+      okCount += 1;
+    }
+    debugPrint(
+      '[OfflineMap] Verify: ${expected.length} expected, $okCount OK, '
+      '${missing.length} fehlen/defekt.',
+    );
+    if (missing.isEmpty) {
+      MapCacheStatus.instance.markCompleted(
+        totalTiles: expected.length,
+        approxSizeMb: (okCount * 12) ~/ 1024,
+      );
+      return (total: expected.length, ok: okCount, repairedNow: 0, stillMissing: 0);
+    }
+    // 2. Repair-Pass: fehlende mit höherem Timeout + 3 Retries nachladen.
+    MapCacheStatus.instance.markStarted(totalTiles: expected.length);
+    MapCacheStatus.instance.updateProgress(downloaded: okCount);
+    var repairedNow = 0;
+    final client = http.Client();
+    try {
+      const batchSize = 4; // kleiner Batch, längeres Timeout — fairer zu Mapbox
+      for (var i = 0; i < missing.length; i += batchSize) {
+        final batch = missing.skip(i).take(batchSize);
+        final outcomes = await Future.wait(
+          batch.map((tile) => _cacheTileWithRetry(
+                client,
+                directory,
+                tile,
+                maxRetries: 3,
+              )),
+        );
+        for (final outcome in outcomes) {
+          if (outcome == _TileCacheOutcome.downloaded ||
+              outcome == _TileCacheOutcome.existing) {
+            repairedNow += 1;
+          }
+        }
+        final done = okCount + repairedNow;
+        MapCacheStatus.instance.updateProgress(downloaded: done);
+        onProgress?.call(done, expected.length);
+      }
+    } finally {
+      client.close();
+    }
+    final stillMissing = missing.length - repairedNow;
+    final newOk = okCount + repairedNow;
+    final approxSizeMb = (newOk * 12) ~/ 1024;
+    debugPrint(
+      '[OfflineMap] Repair: $repairedNow von ${missing.length} fehlende '
+      'erfolgreich nachgeladen, $stillMissing weiterhin fehlen.',
+    );
+    if (stillMissing == 0) {
+      MapCacheStatus.instance.markCompleted(
+        totalTiles: expected.length,
+        approxSizeMb: approxSizeMb,
+      );
+    } else if (stillMissing < expected.length * 0.02) {
+      // < 2% Toleranz — wir markieren trotzdem als „completed" weil das
+      // visuell kaum auffällt, beim nächsten Tile-Render lädt der Network-
+      // Provider den Rest on-demand nach.
+      MapCacheStatus.instance.markCompleted(
+        totalTiles: expected.length,
+        approxSizeMb: approxSizeMb,
+      );
+    } else {
+      MapCacheStatus.instance.markFailed(
+        error:
+            '$stillMissing von ${expected.length} Tiles konnten auch nach Repair nicht geladen werden',
+      );
+    }
+    return (
+      total: expected.length,
+      ok: newOk,
+      repairedNow: repairedNow,
+      stillMissing: stillMissing,
+    );
+  }
+
+  /// 2026-05-28 (vucko Task #69): Variante von [_cacheTile] mit Retry-Loop
+  /// und längerem Timeout — gedacht für Repair-Pass damit transient errors
+  /// nicht permanente Lücken hinterlassen.
+  Future<_TileCacheOutcome> _cacheTileWithRetry(
+    http.Client client,
+    Directory directory,
+    OfflineTile tile, {
+    required int maxRetries,
+  }) async {
+    final file = _tileFile(directory, tile);
+    if (await file.exists() && await file.length() >= 128) {
+      return _TileCacheOutcome.existing;
+    }
+    var attempt = 0;
+    while (attempt < maxRetries) {
+      attempt += 1;
+      try {
+        final response = await client
+            .get(_tileUri(tile))
+            .timeout(const Duration(seconds: 8));
+        if (response.statusCode >= 200 &&
+            response.statusCode < 300 &&
+            response.bodyBytes.length > 128) {
+          await file.parent.create(recursive: true);
+          await file.writeAsBytes(response.bodyBytes, flush: true);
+          return _TileCacheOutcome.downloaded;
+        }
+      } catch (_) {
+        // Bei Connection-Reset: kurzes Backoff dann Retry.
+      }
+      if (attempt < maxRetries) {
+        await Future<void>.delayed(
+          Duration(milliseconds: 200 + attempt * 350),
+        );
+      }
+    }
+    return _TileCacheOutcome.failed;
   }
 
   /// 2026-05-28 (vucko Task #64): DACH-Cache wieder löschen — bei
