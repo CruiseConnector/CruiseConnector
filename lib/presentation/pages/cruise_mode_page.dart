@@ -775,15 +775,19 @@ class _CruiseModePageState extends State<CruiseModePage>
     if (_fullRouteCoordinates.isNotEmpty) return;
     final cached = await RouteCacheService.instance.loadConfirmedRoute();
     if (cached == null || !mounted || _disposed) return;
-    // 2026-05-27 (vucko UX): TTL 2h — alte Routen vom letzten App-Start sollen
-    // den User beim Öffnen NICHT in eine bereits abgebrochene Route werfen.
-    // 2h reicht für echtes Offline-Recovery (Funkloch während aktiver Fahrt),
-    // verhindert aber den „warum bin ich in einer alten Route"-Effekt.
+    // 2026-05-28 (vucko Task #77): TTL drastisch verkürzt auf 15 Min UND
+    // nur restoren wenn der Cache-Eintrag eine groupId hat (= aktive
+    // Gruppenfahrt). Solo-Routes verschwinden beim Tab-Wechsel komplett —
+    // User-Beschwerde: „beim Cruise-Open kommt alte Route, was nicht
+    // passieren darf". Echtes Funkloch-Recovery passiert über Tour-Resume
+    // (groupId basiert), nicht über diesen Cache.
     final age = DateTime.now().toUtc().difference(cached.savedAt.toUtc());
-    if (age > const Duration(hours: 2)) {
+    final isStale = age > const Duration(minutes: 15);
+    final isSoloRoute = cached.groupId == null;
+    if (isStale || isSoloRoute) {
       debugPrint(
-        '[CruiseMode] Bestätigte Route ist ${age.inHours}h alt — '
-        'verwerfe statt automatisch wiederherzustellen.',
+        '[CruiseMode] Bestätigte Route nicht wiederhergestellt: '
+        'age=${age.inMinutes}min groupId=${cached.groupId} — Cache geleert.',
       );
       unawaited(RouteCacheService.instance.clearConfirmedRoute());
       return;
@@ -3593,21 +3597,24 @@ class _CruiseModePageState extends State<CruiseModePage>
       ),
       children: [
         // ── Mapbox Dark-Style als Raster-Tile-Layer ──────────────────────────
-        // 2026-05-28 (vucko Task #76): zurück auf SINGLE TileLayer.
-        // Vorher Doppel-Layer (Task #72) hatte vertikale Streifen erzeugt
-        // weil retinaMode-Mismatch zwischen den beiden Layern + falsches
-        // Aufeinander-Layern bei höheren Zoomstufen.
-        // MapOptions.backgroundColor sorgt dafür dass Tile-Lücken dunkel
-        // statt weiß sind. errorImage transparent + Map-Background dunkel
-        // = User sieht dunkle Lücken (gut) statt System-Weiß (schlecht).
+        // 2026-05-28 (vucko Task #77): retinaMode KOMPLETT DEAKTIVIERT.
+        // User-Screenshots zeigen regelmäßige vertikale Streifen — das ist
+        // klassischer Symptom für retinaMode-URL-Mismatch (Mapbox liefert
+        // 256px Tiles, retinaMode würde @2x verlangen, aber unsere URL
+        // hat „/256/" hardcoded → flutter_map streched die Tiles in einer
+        // Weise die auf iPhone 17 Pro Max (3x Display) die Streifen
+        // produziert).
+        // Plus tileDisplay.instantaneous statt fade-in damit es kein
+        // Alpha-Blending zwischen alten und neuen Tiles gibt.
         TileLayer(
           urlTemplate: OfflineMapService.mapboxDarkTileUrlTemplate,
           additionalOptions: {'accessToken': AppConstants.mapboxPublicToken},
           tileProvider: OfflineMapService.instance.tileProvider(),
           userAgentPackageName: 'com.cruise_connect.app',
-          retinaMode: !kIsWeb,
+          retinaMode: false,
           maxNativeZoom: OfflineMapService.defaultMaxZoom,
           errorImage: MemoryImage(TileProvider.transparentImage),
+          tileDisplay: const TileDisplay.instantaneous(),
         ),
         // ── Route (Glow + Hauptlinie) ────────────────────────────────────────
         // Web: Glow-Effekt entfernt — spart eine komplette Polyline-Layer-Berechnung.

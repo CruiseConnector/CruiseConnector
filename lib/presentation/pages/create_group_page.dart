@@ -1165,7 +1165,10 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
                 'https://api.mapbox.com/styles/v1/mapbox/dark-v11/tiles/256/{z}/{x}/{y}?access_token={accessToken}',
             additionalOptions: {'accessToken': AppConstants.mapboxPublicToken},
             userAgentPackageName: 'com.cruise_connect.app',
-            retinaMode: true,
+            // 2026-05-28 (vucko Task #77): retinaMode aus — verursacht
+            // vertikale Streifen wegen URL-256-Mismatch auf iPhone-Retina.
+            retinaMode: false,
+            tileDisplay: const TileDisplay.instantaneous(),
           )
         else
           const ColoredBox(color: Color(0xFF0B0E14)),
