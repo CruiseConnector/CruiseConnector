@@ -31,6 +31,40 @@ class HomeRouteRecommendation {
 
   bool get hasRating => averageRating != null && ratingCount > 0;
   bool get hasCompletions => completionCount > 0;
+
+  /// 2026-05-28 (vucko Task #72): JSON-Serialisierung für persistenten
+  /// Cache. Wird in SharedPreferences gespeichert damit die Home-Card beim
+  /// 2.+ App-Start sofort gerendert wird, kein leerer "Starte deine erste
+  /// Route"-Empty-State mehr.
+  Map<String, dynamic> toJson() => <String, dynamic>{
+        'pool_entry': poolEntry.toJson(),
+        'route': route.toJson(),
+        'display_name': displayName,
+        'quality_score': qualityScore,
+        'recommendation_score': recommendationScore,
+        'completion_count': completionCount,
+        'average_rating': averageRating,
+        'rating_count': ratingCount,
+        'completion_rate': completionRate,
+      };
+
+  factory HomeRouteRecommendation.fromJson(Map<String, dynamic> json) {
+    return HomeRouteRecommendation(
+      poolEntry: RoutePoolEntry.fromJson(
+        Map<String, dynamic>.from(json['pool_entry'] as Map),
+      ),
+      route: SavedRoute.fromJson(
+        Map<String, dynamic>.from(json['route'] as Map),
+      ),
+      displayName: json['display_name'] as String,
+      qualityScore: (json['quality_score'] as num).toDouble(),
+      recommendationScore: (json['recommendation_score'] as num).toDouble(),
+      completionCount: (json['completion_count'] as num?)?.toInt() ?? 0,
+      averageRating: (json['average_rating'] as num?)?.toDouble(),
+      ratingCount: (json['rating_count'] as num?)?.toInt() ?? 0,
+      completionRate: (json['completion_rate'] as num?)?.toDouble(),
+    );
+  }
 }
 
 class HomeRouteRecommendationService {

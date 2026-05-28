@@ -3581,13 +3581,30 @@ class _CruiseModePageState extends State<CruiseModePage>
         },
       ),
       children: [
-        // ── Mapbox Dark-Style als Raster-Tile-Layer ──────────────────────────
-        // Web: Retina deaktiviert — halbiert Tile-Downloads, weniger Speicher/GPU-Last.
-        // 2026-05-28 (vucko Task #70 v2): tileBuilder rausgenommen — der
-        // ColoredBox-Wrap zerschiss das Rendering (vertikale dunkle Streifen
-        // wie auf Vucko's Screenshot). Stattdessen reicht MapOptions.
-        // backgroundColor auf dem FlutterMap-Widget — Lücken erscheinen dann
-        // map-dark statt System-weiß ohne Tile-Rendering zu stören.
+        // ── Mapbox Dark-Style: ZWEI TileLayer übereinander ──────────────────
+        // 2026-05-28 (vucko Task #72): Apple-Maps / Google-Maps Pattern.
+        // Unten: Low-Zoom-Layer (zoom 0-10, immer aus DACH-Cache) wird
+        //        automatisch hochskaliert wenn Map auf höheren Zoom ist.
+        // Oben:  Detail-Layer (zoom 11-17), versucht erst aus Cache zu
+        //        laden, fallback Network-Image, parallel persistTile.
+        //        Wenn er nicht da ist scheint der untere durch → kein
+        //        schwarzer/leerer Block mehr.
+        // Effekt: User sieht IMMER eine Karte, evtl. unscharf wo Detail
+        //         fehlt, aber nie schwarze/leere Quadrate.
+        TileLayer(
+          urlTemplate: OfflineMapService.mapboxDarkTileUrlTemplate,
+          additionalOptions: {'accessToken': AppConstants.mapboxPublicToken},
+          tileProvider: OfflineMapService.instance.tileProvider(),
+          userAgentPackageName: 'com.cruise_connect.app',
+          retinaMode: false,
+          maxNativeZoom: OfflineMapService.dachOverviewMaxZoom, // 10
+          minZoom: 0,
+          maxZoom: 17,
+          errorImage: MemoryImage(TileProvider.transparentImage),
+        ),
+        // Detail-Layer drüber. Setting maxNativeZoom auf den vollen Zoom,
+        // dieser läuft per Cache/Network im offline_map_service.
+        // Web: Retina deaktiviert — halbiert Tile-Downloads, weniger Speicher.
         TileLayer(
           urlTemplate: OfflineMapService.mapboxDarkTileUrlTemplate,
           additionalOptions: {'accessToken': AppConstants.mapboxPublicToken},
@@ -3595,6 +3612,7 @@ class _CruiseModePageState extends State<CruiseModePage>
           userAgentPackageName: 'com.cruise_connect.app',
           retinaMode: !kIsWeb,
           maxNativeZoom: OfflineMapService.defaultMaxZoom,
+          minZoom: 11,
           errorImage: MemoryImage(TileProvider.transparentImage),
         ),
         // ── Route (Glow + Hauptlinie) ────────────────────────────────────────

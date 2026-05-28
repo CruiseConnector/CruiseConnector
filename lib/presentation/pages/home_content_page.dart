@@ -121,6 +121,19 @@ class _HomeContentPageState extends State<HomeContentPage>
         }
         _profileUsername = map['profileUsername'] as String? ?? _profileUsername;
         _avatarUrl = map['avatarUrl'] as String? ?? _avatarUrl;
+        // 2026-05-28 (vucko Task #72): Cached Recommendation hydraten
+        // damit die "Heute für dich"-Card beim 2.+ App-Start direkt sichtbar
+        // ist (statt "Starte deine erste Route" Empty-State).
+        final recoRaw = map['recommendation'];
+        if (recoRaw is Map) {
+          try {
+            _todayRecommendation = HomeRouteRecommendation.fromJson(
+              Map<String, dynamic>.from(recoRaw),
+            );
+          } catch (e) {
+            debugPrint('[Home] Cached recommendation parse failed: $e');
+          }
+        }
         // Loading-Flag bleibt true — Card wird sofort gerendert mit cached
         // Daten, im Hintergrund läuft der echte Refresh weiter.
         _loading = false;
@@ -133,6 +146,7 @@ class _HomeContentPageState extends State<HomeContentPage>
   Future<void> _persistHomeSnapshot() async {
     try {
       final prefs = await SharedPreferences.getInstance();
+      final reco = _todayRecommendation;
       await prefs.setString(
         'home_snapshot_v1',
         jsonEncode(<String, dynamic>{
@@ -148,6 +162,9 @@ class _HomeContentPageState extends State<HomeContentPage>
           'weeklyKm': _weeklyKmData,
           'profileUsername': _profileUsername,
           'avatarUrl': _avatarUrl,
+          // 2026-05-28 (vucko Task #72): Recommendation mit serialisieren
+          // damit beim 2.+ App-Start sofort die Card sichtbar ist.
+          if (reco != null) 'recommendation': reco.toJson(),
         }),
       );
     } catch (e) {
