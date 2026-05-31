@@ -10223,10 +10223,13 @@ class _CruiseModePageState extends State<CruiseModePage>
         drivenSegments: drivenSnap.segments.isEmpty
             ? null
             : drivenSnap.segments,
-        onSave: (rating, tags) async {
+        routeStyle: _selectedStyle,
+        isRoundTrip: _isRoundTrip,
+        onSave: (rating, tags, title) async {
           final result = await _saveRouteAndSyncXp(
             rating: rating,
             ratingTags: tags,
+            title: title,
             completed: true,
           );
           _resetAfterCompletion();
@@ -10286,10 +10289,13 @@ class _CruiseModePageState extends State<CruiseModePage>
             : drivenSnap.segments,
         isEarlyStop: snapshot.isEarlyStop,
         belowMinimum: snapshot.belowMinimum,
-        onSave: (rating, tags) async {
+        routeStyle: _selectedStyle,
+        isRoundTrip: _isRoundTrip,
+        onSave: (rating, tags, title) async {
           final result = await _saveRouteAndSyncXp(
             rating: rating,
             ratingTags: tags,
+            title: title,
           );
           _resetAfterCompletion();
           return result;
@@ -10314,6 +10320,7 @@ class _CruiseModePageState extends State<CruiseModePage>
   Future<CruiseCompletionActionResult> _saveRouteAndSyncXp({
     int? rating,
     List<String> ratingTags = const [],
+    String? title,
     bool completed = false,
   }) async {
     int? previousLevel;
@@ -10359,6 +10366,7 @@ class _CruiseModePageState extends State<CruiseModePage>
           result: adjustedResult,
           style: _selectedStyle,
           isRoundTrip: _isRoundTrip,
+          customName: title,
           rating: rating,
           drivenKm: adjustedResult.distanceKm,
           plannedDistanceKm: _completionRouteResult?.distanceMeters != null

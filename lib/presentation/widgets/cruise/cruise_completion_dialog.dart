@@ -1,10 +1,12 @@
+import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
+import 'package:cruise_connect/data/services/completion_title_generator.dart';
 import 'package:cruise_connect/domain/models/badge.dart' as app;
 import 'package:flutter/rendering.dart';
-import 'package:share_plus/share_plus.dart';
 import 'package:cruise_connect/presentation/widgets/badge_unlock_popup.dart';
 import 'package:cruise_connect/presentation/utils/share_helper.dart';
 
@@ -90,12 +92,18 @@ class CruiseCompletionDialog extends StatefulWidget {
     this.xpMultiplier = 1.0,
     this.isEarlyStop = false,
     this.belowMinimum = false,
+    this.routeStyle = '',
+    this.isRoundTrip = true,
   });
 
   final double distanceKm;
   final String durationText;
   final int curves;
   final int xpEarned;
+  // 2026-05-31 (vucko): Für den automatisch generierten, passenden Titel
+  // (Wochentag + Tageszeit + Fahrstil) im Header.
+  final String routeStyle;
+  final bool isRoundTrip;
   final List<List<double>> routeCoordinates;
   final List<List<List<double>>>? routeSegments;
   /// 2026-05-24 (vucko Task #41): GPS-Track der ECHT gefahren wurde.
@@ -108,6 +116,7 @@ class CruiseCompletionDialog extends StatefulWidget {
   final Future<CruiseCompletionActionResult> Function(
     int? rating,
     List<String> tags,
+    String? title,
   )
   onSave;
   final Future<void> Function() onDiscard;
@@ -131,10 +140,23 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
   int _selectedRating = 0;
   final Set<String> _selectedTags = <String>{};
   CruiseCompletionActionResult? _celebration;
+  // 2026-05-31 (vucko): Editierbarer Auto-Titel + optionales Foto fürs Teilen.
+  late final TextEditingController _titleController;
+  Uint8List? _photoBytes;
+  bool _isPickingPhoto = false;
 
   @override
   void initState() {
     super.initState();
+    _titleController = TextEditingController(
+      text: CompletionTitleGenerator.generate(
+        time: DateTime.now(),
+        style: widget.routeStyle,
+        distanceKm: widget.distanceKm,
+        curves: widget.curves,
+        isRoundTrip: widget.isRoundTrip,
+      ),
+    );
     _xpController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 600),
@@ -152,17 +174,45 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
 
   @override
   void dispose() {
+    _titleController.dispose();
     _xpController.dispose();
     _celebrationController.dispose();
     super.dispose();
   }
 
+  /// Foto aus Galerie/Kamera wählen → fließt in die teilbare Share-Card.
+  Future<void> _pickPhoto() async {
+    if (_isPickingPhoto || _isSaving || _isSharing) return;
+    setState(() => _isPickingPhoto = true);
+    try {
+      final picked = await ImagePicker().pickImage(
+        source: ImageSource.gallery,
+        maxWidth: 1600,
+        imageQuality: 85,
+      );
+      if (picked != null) {
+        final bytes = await picked.readAsBytes();
+        if (mounted) setState(() => _photoBytes = bytes);
+      }
+    } catch (e) {
+      debugPrint('[CruiseCompletion] Foto wählen fehlgeschlagen: $e');
+    } finally {
+      if (mounted) setState(() => _isPickingPhoto = false);
+    }
+  }
+
+  Future<void> _removePhoto() async {
+    setState(() => _photoBytes = null);
+  }
+
   Future<void> _handleSave() async {
     if (_isSaving || _isSharing) return;
     setState(() => _isSaving = true);
+    final title = _titleController.text.trim();
     final result = await widget.onSave(
       _selectedRating > 0 ? _selectedRating : null,
       _selectedTags.toList(growable: false),
+      title.isEmpty ? null : title,
     );
     if (!mounted) return;
     setState(() => _isSaving = false);
@@ -229,10 +279,14 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
       }
 
       if (!mounted) return;
+      final titleText = _titleController.text.trim();
+      final shareText = titleText.isEmpty
+          ? 'Meine Fahrt mit Cruise Connector'
+          : '$titleText · ${widget.distanceKm.toStringAsFixed(1)} km mit Cruise Connector';
       await shareFiles(
         context,
         [shareFile],
-        text: 'Meine Fahrt mit Cruise Connector',
+        text: shareText,
         fileNameOverrides: const ['cruiseconnect-ride.png'],
       );
     } catch (e) {
@@ -311,6 +365,7 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
+        _buildPhotoBanner(),
         _buildSheetHeader(),
         const SizedBox(height: 14),
         _buildStatsGrid(),
@@ -329,6 +384,7 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
+        _buildPhotoBanner(),
         _buildSheetHeader(),
         const SizedBox(height: 12),
         Flexible(
@@ -365,6 +421,8 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
                   ),
                 ],
                 const SizedBox(height: 10),
+                _buildPhotoControl(),
+                const SizedBox(height: 10),
                 _buildRatingPanel(),
                 if (widget.belowMinimum) ...[
                   const SizedBox(height: 10),
@@ -389,21 +447,123 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
   }
 
   Widget _buildSheetHeader() {
-    return const Column(
+    return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Text(
-          'Cruise Connector',
+        const Text(
+          'CRUISE CONNECTOR',
           textAlign: TextAlign.center,
           style: TextStyle(
-            color: Colors.white,
-            fontSize: 12,
+            color: Color(0xFFA8AFBC),
+            fontSize: 10,
             fontWeight: FontWeight.w800,
-            letterSpacing: 0.8,
+            letterSpacing: 1.6,
           ),
         ),
-        SizedBox(height: 10),
-        _CruiseRedDivider(),
+        const SizedBox(height: 6),
+        // 2026-05-31 (vucko): Automatisch generierter, passender Titel
+        // ("Sportlicher Donnerstagabend") — editierbar wie bei Strava.
+        _buildTitleField(),
+        const SizedBox(height: 10),
+        const _CruiseRedDivider(),
+      ],
+    );
+  }
+
+  Widget _buildTitleField() {
+    final titleText = _titleController.text.trim();
+    // Export/Teilen-Karte: reiner Text (kein Cursor/Border im PNG).
+    if (_isExportMode) {
+      return Text(
+        titleText.isEmpty ? 'Meine Fahrt' : titleText,
+        textAlign: TextAlign.center,
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 21,
+          fontWeight: FontWeight.w800,
+          letterSpacing: -0.3,
+        ),
+      );
+    }
+    // Interaktiv: editierbar. Der Stift signalisiert „antippen zum Ändern".
+    return TextField(
+      controller: _titleController,
+      textAlign: TextAlign.center,
+      textCapitalization: TextCapitalization.sentences,
+      maxLength: 48,
+      maxLines: 1,
+      onChanged: (_) => setState(() {}),
+      style: const TextStyle(
+        color: Colors.white,
+        fontSize: 21,
+        fontWeight: FontWeight.w800,
+        letterSpacing: -0.3,
+      ),
+      cursorColor: AppAccentColors.accent,
+      decoration: InputDecoration(
+        isDense: true,
+        counterText: '',
+        border: InputBorder.none,
+        contentPadding: const EdgeInsets.symmetric(vertical: 2),
+        hintText: 'Titel der Fahrt',
+        hintStyle: const TextStyle(color: Color(0xFF8A93A6)),
+        suffixIcon: Icon(
+          Icons.edit_outlined,
+          size: 16,
+          color: AppAccentColors.accent.withValues(alpha: 0.8),
+        ),
+        suffixIconConstraints: const BoxConstraints(minWidth: 26, minHeight: 26),
+      ),
+    );
+  }
+
+  /// Eigenes Foto als Banner oben in der (teilbaren) Karte.
+  Widget _buildPhotoBanner() {
+    final bytes = _photoBytes;
+    if (bytes == null) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(16),
+        child: AspectRatio(
+          aspectRatio: 16 / 9,
+          child: Image.memory(bytes, fit: BoxFit.cover),
+        ),
+      ),
+    );
+  }
+
+  /// „Foto hinzufügen/ändern" + optional „Entfernen". Nur interaktiv.
+  Widget _buildPhotoControl() {
+    final hasPhoto = _photoBytes != null;
+    final busy = _isPickingPhoto || _isSaving || _isSharing;
+    return Row(
+      children: [
+        Expanded(
+          child: _ActionButton(
+            icon: hasPhoto
+                ? Icons.swap_horiz_rounded
+                : Icons.add_a_photo_outlined,
+            label: _isPickingPhoto
+                ? 'Öffne…'
+                : (hasPhoto ? 'Foto ändern' : 'Foto hinzufügen'),
+            onTap: _pickPhoto,
+            disabled: busy,
+          ),
+        ),
+        if (hasPhoto) ...[
+          const SizedBox(width: 10),
+          Expanded(
+            child: _ActionButton(
+              icon: Icons.delete_outline_rounded,
+              label: 'Entfernen',
+              onTap: _removePhoto,
+              disabled: _isSaving || _isSharing,
+            ),
+          ),
+        ],
       ],
     );
   }
