@@ -22,6 +22,8 @@ import 'package:cruise_connect/application/providers/route_bookmark_provider.dar
 import 'package:cruise_connect/application/providers/saved_routes_provider.dart';
 import 'package:cruise_connect/data/services/web_position_smoother.dart';
 import 'package:cruise_connect/data/services/native_position_smoother.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:cruise_connect/data/services/country_region.dart';
 import 'package:cruise_connect/data/services/geocoding_service.dart';
 import 'package:cruise_connect/data/services/voice_settings_service.dart';
 import 'package:cruise_connect/data/services/tts_service.dart';
@@ -201,10 +203,32 @@ class _CruiseModePageState extends State<CruiseModePage>
   String _planningType = 'Zufall';
   String _selectedLength = '50 Km';
   String _selectedLocation = 'Aktueller Standort';
+  // 2026-05-28 (vucko): "Standort wählen" — vom User gesetzter Startpunkt
+  // (Karten-Tap ODER Adresssuche). Wenn gesetzt + _selectedLocation ==
+  // 'Standort wählen', startet die Route von hier statt vom GPS.
+  LatLng? _pickedStartLocation;
+  String? _pickedStartLabel; // Reverse-geocodeter Ortsname für die Anzeige.
+  bool _isPickingStartOnMap = false; // Karten-Tap setzt gerade den Startpunkt.
+  final TextEditingController _startLocationController =
+      TextEditingController();
+  final FocusNode _startLocationFocusNode = FocusNode();
   String _selectedStyle = 'Sport Mode';
   String _selectedDetour = 'Direkt';
+  // 2026-05-30 (vucko): Länder-Präferenz (egal / eher im Land / nur im Land).
+  // Weiches Scoring — nie ein harter Reject (sonst Vorarlberg-Explosion).
+  CountryPreference _countryPreference = CountryPreference.any;
+  String? _homeCountryCode; // Auto-erkannt via Reverse-Geocode am Start.
+  // 2026-05-28 (vucko Task #83): One-Shot — nächste A→B-Suche erzwingt eine
+  // direkte Route ohne Quality-Reject ("Direkte Route nehmen").
+  bool _forceAcceptDirectOnce = false;
   bool _avoidHighways = false;
   final TextEditingController _destinationController = TextEditingController();
+  // 2026-05-28 (vucko Startup-V Issue 3A): Eigener FocusNode für das A→B-
+  // Suchfeld. Hat das Feld Fokus (User tippt eine Adresse), blenden wir die
+  // Bottom-Actions (Route berechnen/bestätigen) aus, damit das Autocomplete-
+  // Overlay sie nicht überlagert und der User einen Vorschlag auswählen kann.
+  final FocusNode _destinationFocusNode = FocusNode();
+  bool _destinationHasFocus = false;
 
   // ─────────────────────── A-to-B Route Selection State ──────────────────────
   MapboxSuggestion? _selectedDestination;
@@ -217,7 +241,17 @@ class _CruiseModePageState extends State<CruiseModePage>
   RouteResult? _lastRouteResult;
   RouteResult? _sessionRouteResult;
   bool _configCollapsed = false; // Config-Panel ein-/ausgeklappt
+  // 2026-05-28 (vucko Startup-V Issue 1): Scroll-Position des ausgeklappten
+  // Setup-Panels. Solange noch Inhalt nach unten kommt, zeigen wir am unteren
+  // Rand einen Fade + Chevron als „mehr unten"-Hinweis.
+  final ScrollController _configScrollController = ScrollController();
+  bool _configCanScrollDown = false;
   bool _showRouteInfoBanner = false; // Route-Info Banner nach Generation
+  // 2026-05-31 (vucko): Preview-Banner per Hochwischen weggewischt → statt des
+  // vollen Banners erscheint eine kompakte Recall-Pille. Tipp/Runterwischen
+  // holt die Route-Info wieder zurück ("lebendiges" Gefühl). Wird bei jeder
+  // neuen Route zurückgesetzt.
+  bool _routeBannerDismissed = false;
   bool _routeWarmupDialogOpen = false;
   String? _routeSearchNoticeTitle;
   String? _routeSearchNoticeMessage;
@@ -249,6 +283,12 @@ class _CruiseModePageState extends State<CruiseModePage>
   int _searchAgainAutoRetryCount = 0;
   DateTime? _searchAgainAutoRetryWindowStart;
   static const int _maxSearchAgainAutoRetries = 2;
+  // 2026-05-31 (vucko): Retries für den harten Länder-Gate („Im Land bleiben").
+  // Nur 1 sichtbarer UI-Neustart — die eigentliche Mehrarbeit macht jetzt der
+  // Service (maxAttempts=5 bei onlyHome), damit der User nicht 17%→30%→49%-
+  // Neustarts hintereinander sieht.
+  int _countryGateRetryCount = 0;
+  static const int _maxCountryGateRetries = 1;
   // Wall-Clock-Cap: Auto-Retry-Counter wird nach 30s zurückgesetzt. Verhindert
   // dass ein gestauter Edge-Server endlose UI-Re-Suchen triggert.
   static const Duration _searchAgainAutoRetryWindow = Duration(seconds: 30);
@@ -285,6 +325,25 @@ class _CruiseModePageState extends State<CruiseModePage>
   List<LatLng> _routeLatLngs = [];
   Timer? _routeDrawAnimationTimer;
   int _routeDrawAnimationToken = 0;
+  // 2026-05-28 (vucko Task #86 / Startup-V Issue 2): Memoisierte Gesamt-Route
+  // als gedimmte Hintergrund-Polyline. Während der Fahrt zeichnen wir nur das
+  // 3km-Sliding-Window hell — ohne Hintergrund sah es aus als würde die Route
+  // abrupt enden („schaut kaputt aus"). Cache-Key ist die Identität der
+  // _fullRouteCoordinates-Liste, damit nicht bei jedem GPS-Tick (200ms)
+  // re-konvertiert wird.
+  List<LatLng> _fullRouteLatLngsCache = const [];
+  List<List<double>>? _fullRouteLatLngsCacheSource;
+  List<LatLng> get _fullRouteBackgroundLatLngs {
+    if (!identical(_fullRouteLatLngsCacheSource, _fullRouteCoordinates)) {
+      _fullRouteLatLngsCacheSource = _fullRouteCoordinates;
+      _fullRouteLatLngsCache = _fullRouteCoordinates.length < 2
+          ? const []
+          : _fullRouteCoordinates
+              .map((c) => LatLng(c[1], c[0]))
+              .toList(growable: false);
+    }
+    return _fullRouteLatLngsCache;
+  }
   // Aktuelle User-Position als Marker
   LatLng? _userPosition;
   double _userHeading = 0.0; // GPS-Heading in Grad (0=Nord, 90=Ost)
@@ -334,8 +393,11 @@ class _CruiseModePageState extends State<CruiseModePage>
   bool _isSimulationRunning = false;
   bool _isSimulationStepRunning = false;
   int _simulationIndex = 0;
-  final bool _isSimulationEnabled = false; // Simulation deaktiviert
-  double _simulationSpeedKmh = 60; // Aktuelle Simulationsgeschwindigkeit
+  // 2026-05-30 (vucko): Fahrten-Simulator wieder aktiv — grüner Play-FAB in
+  // der Navigation, um die Routenabfahrt zu prüfen. Konstant 100 km/h.
+  final bool _isSimulationEnabled = true;
+  static const double _simulationConstantKmh = 100; // Konstante Sim-Speed
+  double _simulationSpeedKmh = _simulationConstantKmh;
 
   bool _isCameraLocked =
       false; // Compass-Toggle: true = Kamera folgt dem Standort
@@ -664,6 +726,21 @@ class _CruiseModePageState extends State<CruiseModePage>
     });
   }
 
+  // 2026-05-31 (vucko): Hinweis-Banner manuell wegwischen. Spiegelt das
+  // finale Cleanup aus _scheduleRouteSearchStatusDismiss und bricht einen
+  // evtl. laufenden Auto-Dismiss-Timer ab, damit nichts doppelt feuert.
+  void _dismissRouteSearchNotice() {
+    if (!mounted || _disposed) return;
+    _routeSearchExitTimer?.cancel();
+    _safeSetState(() {
+      _routeSearchDismissScheduled = false;
+      _routeSearchStatusLeaving = false;
+      _routeSearchProgress = 0.08;
+      _routeSearchNoticeTitle = null;
+      _routeSearchNoticeMessage = null;
+    });
+  }
+
   void _dismissTransientRouteUi() {
     if (!mounted || _disposed) return;
     FocusManager.instance.primaryFocus?.unfocus();
@@ -696,6 +773,22 @@ class _CruiseModePageState extends State<CruiseModePage>
     if (_remainingRouteCoordinates.length < 2 || _routeLatLngs.length < 2) {
       return false;
     }
+
+    // 2026-05-28 (vucko Task #83): Den sichtbaren Routenkopf NUR dann an die
+    // GPS-Position heften, wenn der Fahrer wirklich nah am Routenanfang ist.
+    // Der A→B-Korridor ist bis zu 800m breit (_currentPointToPointCorridorMeters).
+    // Ohne diese Schranke wurde bei seitlichem Versatz eine lange Verbindungs-
+    // linie von der weit entfernten GPS-Position zum zweiten Routenpunkt
+    // gezeichnet, die sich optisch mit dem Rest kreuzt → das „X"-Artefakt aus
+    // dem Startup-V-Test (sichtbar während „Route wird neu berechnet").
+    final routeHead = _remainingRouteCoordinates[1];
+    final distToRouteHead = geo.Geolocator.distanceBetween(
+      position.latitude,
+      position.longitude,
+      routeHead[1],
+      routeHead[0],
+    );
+    if (distToRouteHead > 70) return false;
 
     final nextStart = LatLng(position.latitude, position.longitude);
     final currentStart = _routeLatLngs.first;
@@ -759,9 +852,36 @@ class _CruiseModePageState extends State<CruiseModePage>
       _consumePendingRouteIfAvailable();
     });
     _destinationController.addListener(_onDestinationTextChanged);
+    _destinationFocusNode.addListener(_onDestinationFocusChanged);
+    _startLocationFocusNode.addListener(_onDestinationFocusChanged);
+    unawaited(_loadCountryPreference());
     WidgetsBinding.instance.addPostFrameCallback(
       (_) => _maybeShowRoutingOnboarding(),
     );
+  }
+
+  // 2026-05-30 (vucko): Länder-Präferenz persistent.
+  static const String _countryPrefKey = 'route_country_preference_v1';
+  Future<void> _loadCountryPreference() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final stored = prefs.getString(_countryPrefKey);
+      final pref = CountryPreferenceLabel.fromStorage(stored);
+      if (mounted && pref != _countryPreference) {
+        setState(() => _countryPreference = pref);
+      }
+    } catch (_) {
+      // Best-effort — Default bleibt 'egal'.
+    }
+  }
+
+  Future<void> _persistCountryPreference(CountryPreference pref) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_countryPrefKey, pref.storageValue);
+    } catch (_) {
+      // Best-effort.
+    }
   }
 
   Future<void> _maybeShowRoutingOnboarding() async {
@@ -1425,7 +1545,29 @@ class _CruiseModePageState extends State<CruiseModePage>
     unawaited(_navigationSocketService.dispose());
     _destinationController.removeListener(_onDestinationTextChanged);
     _destinationController.dispose();
+    _destinationFocusNode.removeListener(_onDestinationFocusChanged);
+    _destinationFocusNode.dispose();
+    _startLocationFocusNode.removeListener(_onDestinationFocusChanged);
+    _startLocationFocusNode.dispose();
+    _startLocationController.dispose();
+    _configScrollController.dispose();
     super.dispose();
+  }
+
+  // 2026-05-28 (vucko Startup-V Issue 3A): Fokus-Wechsel des Suchfelds →
+  // Bottom-Actions ein-/ausblenden, damit das Autocomplete-Overlay sie nicht
+  // verdeckt.
+  void _onDestinationFocusChanged() {
+    // 2026-05-28 (vucko): Beide Suchfelder (Ziel + Startort) berücksichtigen —
+    // sobald eines Fokus hat, Bottom-Actions ausblenden.
+    final hasFocus =
+        _destinationFocusNode.hasFocus || _startLocationFocusNode.hasFocus;
+    if (hasFocus == _destinationHasFocus) return;
+    if (!mounted || _disposed) {
+      _destinationHasFocus = hasFocus;
+      return;
+    }
+    setState(() => _destinationHasFocus = hasFocus);
   }
 
   void _onDestinationTextChanged() {
@@ -1730,8 +1872,87 @@ class _CruiseModePageState extends State<CruiseModePage>
     }
   }
 
+  // ─────────────────── "Standort wählen": Start-Picker ───────────────────────
+  // 2026-05-28 (vucko): Setzt den manuell gewählten Startpunkt (Karten-Tap
+  // oder Adresssuche), beendet den Karten-Pick-Modus, reverse-geocodet den
+  // Ortsnamen für die Anzeige und verwirft eine evtl. alte Route-Preview.
+  void _setPickedStartLocation(LatLng point, {String? label}) {
+    setState(() {
+      _pickedStartLocation = point;
+      _pickedStartLabel = label;
+      _isPickingStartOnMap = false;
+      _selectedLocation = 'Standort wählen';
+    });
+    HapticFeedback.selectionClick();
+    _dismissTransientRouteUi();
+    _resetGeneratedRouteUiState();
+    if (label == null) {
+      unawaited(() async {
+        final name = await _geocodingService.reverseGeocode(
+          point.latitude,
+          point.longitude,
+        );
+        if (!mounted || _disposed) return;
+        if (name != null && _pickedStartLocation == point) {
+          setState(() => _pickedStartLabel = name);
+        }
+      }());
+    }
+    if (mounted) {
+      TopToast.show(
+        context,
+        message: label == null
+            ? 'Startpunkt gesetzt'
+            : 'Startpunkt: $label',
+        icon: Icons.my_location_rounded,
+        duration: const Duration(milliseconds: 2200),
+      );
+    }
+  }
+
+  void _beginPickStartOnMap() {
+    setState(() {
+      _isPickingStartOnMap = true;
+      _selectedLocation = 'Standort wählen';
+      _configCollapsed = true; // Karte freigeben für den Tap.
+    });
+    if (mounted) {
+      TopToast.show(
+        context,
+        message: 'Tippe auf die Karte für deinen Startpunkt',
+        icon: Icons.touch_app_rounded,
+        duration: const Duration(milliseconds: 2600),
+      );
+    }
+  }
+
+  // 2026-05-28 (vucko): Startort aus der Adresssuche übernommen.
+  void _onStartLocationSelected(MapboxSuggestion suggestion) {
+    _setPickedStartLocation(
+      LatLng(suggestion.latitude, suggestion.longitude),
+      label: suggestion.placeName,
+    );
+  }
+
+  void _clearPickedStartLocation() {
+    setState(() {
+      _pickedStartLocation = null;
+      _pickedStartLabel = null;
+      _isPickingStartOnMap = false;
+      _startLocationController.clear();
+    });
+    _dismissTransientRouteUi();
+    _resetGeneratedRouteUiState();
+  }
+
   void _handleMapTap(TapPosition tapPosition, LatLng point) {
-    if (!_isWaypointPlanning || _isLoading || _isRouteConfirmed) return;
+    if (_isLoading || _isRouteConfirmed) return;
+    // 2026-05-28 (vucko): "Standort wählen" — Karten-Tap setzt den Startpunkt.
+    if (_isPickingStartOnMap) {
+      _setPickedStartLocation(point);
+      return;
+    }
+    if (!_isWaypointPlanning) return;
     final replaceIndex = _replaceRoundTripWaypointIndex;
     if (replaceIndex != null &&
         replaceIndex >= 0 &&
@@ -2251,7 +2472,38 @@ class _CruiseModePageState extends State<CruiseModePage>
 
           // Config-Overlay ODER Navigation-Overlay
           // RepaintBoundary trennt UI-Overlays vom Karten-Repaint (Web-Performance).
-          if (!_isRouteConfirmed) RepaintBoundary(child: _buildConfigOverlay()),
+          if (!_isRouteConfirmed)
+            RepaintBoundary(
+              // 2026-05-28 (vucko): Weicher Übergang beim Auf-/Zuklappen statt
+              // hartem setState-Wechsel. Collapsed- und Expanded-Tree haben
+              // distinkte Keys (config_collapsed / config_expanded), der
+              // AnimatedSwitcher faded+slidet zwischen ihnen. Beide Trees sind
+              // bottom-anchored → vertikaler Slide liest sich wie ein
+              // hochfahrendes/absinkendes Sheet.
+              child: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 320),
+                switchInCurve: Curves.easeOutCubic,
+                switchOutCurve: Curves.easeInCubic,
+                transitionBuilder: (child, animation) {
+                  final slide = Tween<Offset>(
+                    begin: const Offset(0, 0.06),
+                    end: Offset.zero,
+                  ).animate(animation);
+                  return FadeTransition(
+                    opacity: animation,
+                    child: SlideTransition(position: slide, child: child),
+                  );
+                },
+                layoutBuilder: (currentChild, previousChildren) => Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    ...previousChildren,
+                    if (currentChild != null) currentChild,
+                  ],
+                ),
+                child: _buildConfigOverlay(),
+              ),
+            ),
           if (_isRouteConfirmed)
             RepaintBoundary(child: _buildNavigationOverlay()),
           // 2026-05-28 (vucko Task #79): Komplette FAB-Spalte auch ohne
@@ -2301,22 +2553,35 @@ class _CruiseModePageState extends State<CruiseModePage>
         ? (noticeIsSuccess ? 1.0 : math.min(_routeSearchProgress, 0.92))
         : _routeSearchProgress;
 
+    final statusCard = _buildCompactRoundTripSearchStatus(
+      title: title,
+      status: status,
+      progress: progressValue,
+      isNotice: isNotice,
+      isLeaving: _routeSearchStatusLeaving,
+      maxWidth: math.min(media.size.width - 32, 430),
+    );
     return Positioned(
       top: media.padding.top + 12,
       left: 16,
       right: 16,
+      // 2026-05-31 (vucko): Während der Suche bleibt der Status nicht
+      // wegwischbar (IgnorePointer ein). Sobald es ein Hinweis ist (z.B.
+      // „Route noch nicht verfügbar"/„Route gefunden"), kann man ihn einzeln
+      // zur Seite wischen — wie eine Handy-Benachrichtigung.
       child: IgnorePointer(
-        ignoring: true,
+        ignoring: !isNotice,
         child: Align(
           alignment: Alignment.topCenter,
-          child: _buildCompactRoundTripSearchStatus(
-            title: title,
-            status: status,
-            progress: progressValue,
-            isNotice: isNotice,
-            isLeaving: _routeSearchStatusLeaving,
-            maxWidth: math.min(media.size.width - 32, 430),
-          ),
+          child: isNotice
+              ? Dismissible(
+                  key: const ValueKey('roundtrip-search-notice'),
+                  direction: DismissDirection.horizontal,
+                  resizeDuration: null,
+                  onDismissed: (_) => _dismissRouteSearchNotice(),
+                  child: statusCard,
+                )
+              : statusCard,
         ),
       ),
     );
@@ -2688,6 +2953,89 @@ class _CruiseModePageState extends State<CruiseModePage>
                         : null,
                     destructive: true,
                   ),
+                  // 2026-05-28 (vucko Task #80): Inline-FABs in der
+                  // Wegpunkt-Rail. Statt einer zweiten Spalte rechts unten
+                  // landen POI/Voice/Camera hier am Ende der Rail. Optisch
+                  // getrennt mit dünnem Divider.
+                  const SizedBox(height: 12),
+                  Container(
+                    width: 36,
+                    height: 1,
+                    color: Colors.white.withValues(alpha: 0.10),
+                  ),
+                  const SizedBox(height: 4),
+                  AnimatedBuilder(
+                    animation: PoiSettingsService.instance,
+                    builder: (context, _) {
+                      final active =
+                          PoiSettingsService.instance.anyEnabled;
+                      return _buildWaypointMapAction(
+                        icon: Icons.tune_rounded,
+                        label: 'POIs',
+                        onTap: _isLoading ? null : _openPoiFilter,
+                        overrideAccent: active
+                            ? AppAccentColors.accent
+                            : null,
+                      );
+                    },
+                  ),
+                  AnimatedBuilder(
+                    animation: VoiceSettingsService.instance,
+                    builder: (context, _) {
+                      final mode = VoiceSettingsService.instance.mode;
+                      final (icon, color) = switch (mode) {
+                        VoiceMode.off => (
+                            Icons.volume_off_rounded,
+                            null,
+                          ),
+                        VoiceMode.important => (
+                            Icons.volume_down_rounded,
+                            const Color(0xFFFBBF24),
+                          ),
+                        VoiceMode.all => (
+                            Icons.volume_up_rounded,
+                            AppAccentColors.accent,
+                          ),
+                      };
+                      return _buildWaypointMapAction(
+                        icon: icon,
+                        label: 'Sprache',
+                        overrideAccent: color,
+                        onTap: () async {
+                          await VoiceSettingsService.instance.cycleMode();
+                          HapticFeedback.selectionClick();
+                          if (!context.mounted) return;
+                          final newMode =
+                              VoiceSettingsService.instance.mode;
+                          final newLabel = switch (newMode) {
+                            VoiceMode.off => 'Stumm',
+                            VoiceMode.important => 'Nur Wichtiges',
+                            VoiceMode.all => 'Alle Ansagen',
+                          };
+                          TopToast.show(
+                            context,
+                            message: 'Sprache: $newLabel',
+                            icon: switch (newMode) {
+                              VoiceMode.off => Icons.volume_off_rounded,
+                              VoiceMode.important =>
+                                  Icons.volume_down_rounded,
+                              VoiceMode.all => Icons.volume_up_rounded,
+                            },
+                          );
+                        },
+                      );
+                    },
+                  ),
+                  _buildWaypointMapAction(
+                    icon: _isCameraLocked
+                        ? Icons.explore
+                        : Icons.explore_off,
+                    label: 'Kamera',
+                    overrideAccent: _isCameraLocked
+                        ? AppAccentColors.accent
+                        : null,
+                    onTap: _toggleCameraLock,
+                  ),
                 ],
               ),
             ),
@@ -2702,11 +3050,12 @@ class _CruiseModePageState extends State<CruiseModePage>
     required String label,
     required VoidCallback? onTap,
     bool destructive = false,
+    Color? overrideAccent,
   }) {
     final enabled = onTap != null;
     final accent = destructive
         ? const Color(0xFFFF6B5F)
-        : AppAccentColors.accent;
+        : (overrideAccent ?? AppAccentColors.accent);
     return Padding(
       padding: const EdgeInsets.only(top: 8),
       child: Tooltip(
@@ -2855,6 +3204,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       final showWaypointChrome =
           _isWaypointPlanning && !_showRouteInfoBanner && !hasErrorBanner;
       return Stack(
+        key: const ValueKey('config_collapsed'),
         children: [
           if (_showRouteInfoBanner && _lastRouteResult != null)
             _buildRoutePreviewHeader(),
@@ -2864,57 +3214,177 @@ class _CruiseModePageState extends State<CruiseModePage>
             bottom: 0,
             left: 0,
             right: 0,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // Style-Dock entfernt: ist im ausgeklappten Setup-Panel
-                // weiter verfügbar.
-                // Handle zum Hochziehen
-                GestureDetector(
-                  onTap: () => setState(() => _configCollapsed = false),
-                  onVerticalDragEnd: (details) {
-                    if ((details.primaryVelocity ?? 0) < -100) {
-                      setState(() => _configCollapsed = false);
-                    }
-                  },
-                  child: Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.only(top: 12, bottom: 8),
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
-                        colors: [
-                          Colors.transparent,
-                          const Color(0xFF0B0E14).withValues(alpha: 0.95),
-                        ],
-                      ),
-                    ),
-                    child: Column(
-                      children: [
-                        Container(
-                          width: 40,
-                          height: 4,
-                          decoration: BoxDecoration(
-                            color: Colors.grey[600],
-                            borderRadius: BorderRadius.circular(2),
-                          ),
-                        ),
-                        const SizedBox(height: 6),
-                        const Icon(
-                          Icons.keyboard_arrow_up,
-                          color: Colors.grey,
-                          size: 20,
-                        ),
-                      ],
-                    ),
+            // 2026-05-28 (vucko): KEIN „Rundkurs suchen"-Button mehr im
+            // eingeklappten Zustand. Im Startup-V-Test haben viele sofort auf
+            // den Button getippt, OHNE je die Einstellungen (Länge/Stil/
+            // Autobahn/Standort) zu sehen. Jetzt gibt es hier nur eine klare
+            // „Strecke planen"-CTA, die das Setup-Panel öffnet — der eigentliche
+            // Such-Button lebt ausschließlich unten im ausgeklappten Panel,
+            // nachdem der User die Optionen gesehen hat.
+            child: GestureDetector(
+              onTap: () => setState(() => _configCollapsed = false),
+              onVerticalDragUpdate: (details) {
+                // Hochziehen (negativer dy) öffnet das Panel.
+                if (details.primaryDelta != null &&
+                    details.primaryDelta! < -6) {
+                  setState(() => _configCollapsed = false);
+                }
+              },
+              child: Container(
+                width: double.infinity,
+                padding: EdgeInsets.fromLTRB(
+                  20,
+                  16,
+                  20,
+                  MediaQuery.of(context).padding.bottom + 14,
+                ),
+                decoration: const BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      Colors.transparent,
+                      Color(0xCC0B0E14),
+                      Color(0xFF0B0E14),
+                    ],
+                    stops: [0.0, 0.4, 1.0],
                   ),
                 ),
-                Container(
-                  color: const Color(0xFF0B0E14),
-                  child: _buildBottomActions(),
+                child: Builder(
+                  builder: (context) {
+                    // 2026-05-30 (vucko): Wenn schon eine Route berechnet ist
+                    // (Preview-Banner oben sichtbar), gehört der „Route
+                    // bestätigen"-Button auch in den eingeklappten Zustand —
+                    // direkt über „Strecke planen", damit man nicht erst wieder
+                    // hochziehen muss, um loszufahren.
+                    final hasConfirmableRoute = _showRouteInfoBanner &&
+                        _lastRouteResult != null &&
+                        (_fullRouteCoordinates.length >= 2 ||
+                            _routeLatLngs.length >= 2);
+                    return Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        // Drag-Handle (Pill)
+                        Container(
+                          width: 44,
+                          height: 5,
+                          decoration: BoxDecoration(
+                            color: Colors.white24,
+                            borderRadius: BorderRadius.circular(2.5),
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        if (hasConfirmableRoute) ...[
+                          SizedBox(
+                            width: double.infinity,
+                            height: 56,
+                            child: ElevatedButton.icon(
+                              onPressed: _isLoading ? null : _confirmRoute,
+                              icon: const Icon(
+                                Icons.navigation_rounded,
+                                color: Colors.white,
+                                size: 20,
+                              ),
+                              label: const Text(
+                                'Route bestätigen',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 17,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: AppAccentColors.accent,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(28),
+                                ),
+                                elevation: 0,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                        ],
+                        // „Strecke planen" (bzw. „Route ändern" wenn schon eine
+                        // Route da ist) — öffnet das Setup-Panel.
+                        Container(
+                          width: double.infinity,
+                          height: 60,
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(30),
+                            boxShadow: hasConfirmableRoute
+                                ? null
+                                : [
+                                    BoxShadow(
+                                      color: AppAccentColors.accent
+                                          .withValues(alpha: 0.3),
+                                      blurRadius: 12,
+                                      offset: const Offset(0, 4),
+                                    ),
+                                  ],
+                          ),
+                          child: hasConfirmableRoute
+                              ? OutlinedButton.icon(
+                                  onPressed: () => setState(
+                                      () => _configCollapsed = false),
+                                  icon: Icon(
+                                    Icons.tune_rounded,
+                                    color: AppAccentColors.accent,
+                                    size: 20,
+                                  ),
+                                  label: const Text(
+                                    'Route ändern',
+                                    style: TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                  style: OutlinedButton.styleFrom(
+                                    backgroundColor: const Color(0xFF1C1F26),
+                                    side: BorderSide(
+                                      color: AppAccentColors.accent
+                                          .withValues(alpha: 0.5),
+                                    ),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(30),
+                                    ),
+                                  ),
+                                )
+                              : ElevatedButton.icon(
+                                  onPressed: () => setState(
+                                      () => _configCollapsed = false),
+                                  icon: const Icon(
+                                    Icons.tune_rounded,
+                                    color: Colors.white,
+                                    size: 22,
+                                  ),
+                                  label: Text(
+                                    _isWaypointPlanning
+                                        ? 'Wegpunkte planen'
+                                        : _isRoundTrip
+                                        ? 'Strecke planen'
+                                        : 'Route planen',
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 18,
+                                      fontWeight: FontWeight.bold,
+                                      letterSpacing: 0.8,
+                                    ),
+                                  ),
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: AppAccentColors.accent,
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(30),
+                                    ),
+                                    elevation: 0,
+                                  ),
+                                ),
+                        ),
+                      ],
+                    );
+                  },
                 ),
-              ],
+              ),
             ),
           ),
         ],
@@ -2923,78 +3393,126 @@ class _CruiseModePageState extends State<CruiseModePage>
 
     // Ausgeklappter Zustand: vollständiges Config-Panel
     return Stack(
+      key: const ValueKey('config_expanded'),
       children: [
-        // Overscroll nach oben (= Swipe-Down am Anfang) → einklappen
-        NotificationListener<OverscrollNotification>(
+        // Overscroll nach oben (= Swipe-Down am Anfang) → einklappen.
+        // 2026-05-28 (vucko Startup-V Issue 1): ScrollNotification zusätzlich
+        // abgreifen, um zu wissen ob noch Inhalt nach unten kommt (Fade-Hint).
+        // 2026-05-30 (vucko): Schwelle gesenkt (−6 statt −15), damit Runter-
+        // wischen am Listenanfang zuverlässig einklappt statt zu „kleben".
+        NotificationListener<ScrollNotification>(
           onNotification: (notification) {
-            // Overscroll am oberen Rand = User swipt nach unten
-            if (notification.overscroll < -15) {
+            if (notification is OverscrollNotification &&
+                notification.overscroll < -6) {
               setState(() => _configCollapsed = true);
               return true;
+            }
+            if (notification is ScrollUpdateNotification ||
+                notification is ScrollMetricsNotification) {
+              final m = notification.metrics;
+              final canScrollDown = m.pixels < m.maxScrollExtent - 12;
+              if (canScrollDown != _configCanScrollDown && mounted) {
+                setState(() => _configCanScrollDown = canScrollDown);
+              }
             }
             return false;
           },
           child: CustomScrollView(
+            controller: _configScrollController,
             physics: const AlwaysScrollableScrollPhysics(),
             slivers: [
               // Transparenter Bereich oben → Map scheint durch + Einklapp-Pfeil
               SliverToBoxAdapter(
                 child: GestureDetector(
+                  // 2026-05-30 (vucko): Direkt auf die Wisch-Bewegung reagieren
+                  // (onVerticalDragUpdate) statt nur auf die End-Velocity —
+                  // dadurch klappt der obere Streifen sofort & zuverlässig ein,
+                  // egal wie schnell gewischt wird (Bug: „kam nicht vom Overlay
+                  // weg"). Tap auf den Streifen klappt ebenfalls ein.
+                  onTap: () => setState(() => _configCollapsed = true),
+                  onVerticalDragUpdate: (details) {
+                    if (details.primaryDelta != null &&
+                        details.primaryDelta! > 4) {
+                      setState(() => _configCollapsed = true);
+                    }
+                  },
                   onVerticalDragEnd: (details) {
-                    if ((details.primaryVelocity ?? 0) > 150) {
+                    // 2026-05-31 (vucko): Fling-Schwelle gesenkt (120→60), damit
+                    // schon ein leichtes Runterwischen das Panel schließt.
+                    if ((details.primaryVelocity ?? 0) > 60) {
                       setState(() => _configCollapsed = true);
                     }
                   },
                   child: Container(
-                    height: MediaQuery.of(context).size.height * 0.38,
-                    decoration: BoxDecoration(
+                    // 2026-05-28 (vucko Startup-V Issue 1): Ausgeklappt =
+                    // (fast) Vollbild. Nur ein schmaler Streifen Karte oben
+                    // bleibt sichtbar + der „Einklappen"-Griff. Das Setup füllt
+                    // den Rest, und der Such-Button scrollt am Ende mit (unten)
+                    // — so ist sofort klar, dass man scrollen kann.
+                    height: MediaQuery.of(context).padding.top + 64,
+                    decoration: const BoxDecoration(
                       gradient: LinearGradient(
                         begin: Alignment.topCenter,
                         end: Alignment.bottomCenter,
                         colors: [
                           Colors.transparent,
-                          const Color(0xFF0B0E14).withValues(alpha: 0.8),
-                          const Color(0xFF0B0E14),
+                          Color(0xFF0B0E14),
                         ],
-                        stops: const [0.6, 0.9, 1.0],
+                        stops: [0.0, 1.0],
                       ),
                     ),
                     child: Align(
                       alignment: Alignment.bottomCenter,
                       child: Padding(
-                        padding: const EdgeInsets.only(bottom: 8),
-                        child: GestureDetector(
-                          onTap: () => setState(() => _configCollapsed = true),
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 16,
-                              vertical: 6,
+                        padding: const EdgeInsets.only(bottom: 6),
+                        // 2026-05-31 (vucko): Prominenter Pull-Tab statt kleinem
+                        // „Einklappen"-Chip — der breite Greif-Balken signalisiert
+                        // klar „hier runterwischen zum Schließen". Tippen schließt
+                        // ebenfalls (onTap am äußeren GestureDetector).
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              width: 52,
+                              height: 6,
+                              decoration: BoxDecoration(
+                                color: Colors.white.withValues(alpha: 0.5),
+                                borderRadius: BorderRadius.circular(3),
+                              ),
                             ),
-                            decoration: BoxDecoration(
-                              color: const Color(
-                                0xFF1C1F26,
-                              ).withValues(alpha: 0.8),
-                              borderRadius: BorderRadius.circular(20),
-                            ),
-                            child: const Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(
-                                  Icons.keyboard_arrow_down,
-                                  color: Colors.grey,
-                                  size: 18,
-                                ),
-                                SizedBox(width: 4),
-                                Text(
-                                  'Einklappen',
-                                  style: TextStyle(
-                                    color: Colors.grey,
-                                    fontSize: 12,
+                            const SizedBox(height: 8),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 14,
+                                vertical: 5,
+                              ),
+                              decoration: BoxDecoration(
+                                color: const Color(
+                                  0xFF1C1F26,
+                                ).withValues(alpha: 0.82),
+                                borderRadius: BorderRadius.circular(20),
+                              ),
+                              child: const Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                    Icons.keyboard_arrow_down_rounded,
+                                    color: Colors.white70,
+                                    size: 18,
                                   ),
-                                ),
-                              ],
+                                  SizedBox(width: 5),
+                                  Text(
+                                    'Runterwischen zum Schließen',
+                                    style: TextStyle(
+                                      color: Colors.white70,
+                                      fontSize: 11.5,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ],
+                              ),
                             ),
-                          ),
+                          ],
                         ),
                       ),
                     ),
@@ -3010,6 +3528,19 @@ class _CruiseModePageState extends State<CruiseModePage>
                   ),
                   child: Column(
                     children: [
+                      // 2026-05-31 (vucko): Wenn schon eine Route berechnet ist,
+                      // sitzt das Stats-Banner als erste Karte IM Scroll-Fluss
+                      // — direkt über dem Setup, sauber gestapelt, keine
+                      // Überlappung mehr. Antippen klappt das Panel ein, damit
+                      // man die Route gleich auf der Karte sieht.
+                      if (_showRouteInfoBanner && _lastRouteResult != null) ...[
+                        GestureDetector(
+                          onTap: () =>
+                              setState(() => _configCollapsed = true),
+                          child: _buildRouteInfoBanner(),
+                        ),
+                        const SizedBox(height: 18),
+                      ],
                       CruiseSetupCard(
                         isRoundTrip: _isRoundTrip,
                         planningType: _planningType,
@@ -3018,6 +3549,23 @@ class _CruiseModePageState extends State<CruiseModePage>
                         selectedStyle: _selectedStyle,
                         selectedDestination: _selectedDestination,
                         destinationController: _destinationController,
+                        destinationFocusNode: _destinationFocusNode,
+                        startLocationController: _startLocationController,
+                        startLocationFocusNode: _startLocationFocusNode,
+                        pickedStartLabel: _pickedStartLabel,
+                        onPickStartOnMap: _beginPickStartOnMap,
+                        onStartLocationSelected: _onStartLocationSelected,
+                        onStartLocationCleared: _clearPickedStartLocation,
+                        countryPreference: _countryPreference,
+                        homeCountryCode: _homeCountryCode ??
+                            CountryRegion.classify(
+                              _userLocation?.latitude ?? 47.24,
+                              _userLocation?.longitude ?? 9.6,
+                            ),
+                        onCountryPreferenceChanged: (pref) {
+                          setState(() => _countryPreference = pref);
+                          unawaited(_persistCountryPreference(pref));
+                        },
                         onRoundTripChanged: _handleRouteModeChanged,
                         onPlanningTypeChanged: _handlePlanningTypeChanged,
                         onLengthChanged: (v) {
@@ -3072,7 +3620,16 @@ class _CruiseModePageState extends State<CruiseModePage>
                           _destinationController.clear();
                         }),
                       ),
-                      const SizedBox(height: 140),
+                      // 2026-05-28 (vucko Startup-V Issue 1): Such-/Bestätigen-
+                      // Button sitzt am Ende des Scroll-Inhalts (inline, kein
+                      // dunkles Loch mehr). Direkt unter dem Setup → man muss
+                      // scrollen, um ihn zu erreichen, was die Scrollbarkeit
+                      // signalisiert. Safe-Area-Abstand unten.
+                      const SizedBox(height: 20),
+                      _buildBottomActions(inline: true),
+                      SizedBox(
+                        height: MediaQuery.of(context).padding.bottom + 20,
+                      ),
                     ],
                   ),
                 ),
@@ -3080,16 +3637,47 @@ class _CruiseModePageState extends State<CruiseModePage>
             ],
           ),
         ),
-        // Route-Info Banner (bleibt bis zur Bestätigung)
-        if (_showRouteInfoBanner && _lastRouteResult != null)
-          _buildRoutePreviewHeader(),
+        // 2026-05-31 (vucko): Route-Info-Banner NICHT mehr schwebend im
+        // ausgeklappten Zustand — das überlappte den „Strecken-Setup"-Header
+        // (höchst unprofessionell). Stattdessen wird es als erste Karte IN den
+        // Scroll-Fluss über den Setup gesetzt (siehe unten in der Column).
+        // Schwebend bleibt es nur im eingeklappten Zustand (über der Karte).
         // Top-Mode-Header auch im ausgeklappten Zustand — aber nicht
         // wenn Error-Banner aktiv (sonst Doppel-Header oben)
         if (_isWaypointPlanning &&
             !_showRouteInfoBanner &&
             _routeSearchNoticeTitle == null)
           _buildWaypointModeHeader(),
-        Positioned(bottom: 0, left: 0, right: 0, child: _buildBottomActions()),
+        // 2026-05-28 (vucko Startup-V Issue 1): „Mehr unten"-Hinweis. Solange
+        // noch Inhalt nach unten scrollbar ist, ein weicher Fade + pulsierender
+        // Chevron am unteren Rand — wie bei Apple/Google Maps. Verschwindet
+        // automatisch, sobald der User ganz unten ist (Button erreicht).
+        // IgnorePointer, damit Taps/Scroll durchgehen.
+        if (_configCanScrollDown && !_destinationHasFocus)
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            height: 56,
+            child: IgnorePointer(
+              child: Container(
+                alignment: Alignment.bottomCenter,
+                padding: const EdgeInsets.only(bottom: 6),
+                decoration: const BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [Colors.transparent, Color(0xFF0B0E14)],
+                  ),
+                ),
+                child: Icon(
+                  Icons.keyboard_arrow_down_rounded,
+                  color: AppAccentColors.accent.withValues(alpha: 0.9),
+                  size: 26,
+                ),
+              ),
+            ),
+          ),
       ],
     );
   }
@@ -3097,11 +3685,93 @@ class _CruiseModePageState extends State<CruiseModePage>
   Widget _buildRoutePreviewHeader() {
     // 2026-05-24 (vucko Task #48): Wetter direkt im Stats-Banner
     // integriert (kein 2. Pop-up mehr). Cleaner Single-Card.
+    final top = MediaQuery.of(context).padding.top + 8;
+    // 2026-05-31 (vucko): Hochwischen wischt das Banner weg → es schrumpft zu
+    // einer kleinen Recall-Pille oben rechts. Tippen oder Runterwischen holt
+    // die volle Route-Info wieder zurück. Das macht das Wegräumen/Zurückholen
+    // „lebendig" und gibt der Karte Platz, ohne die Route zu verlieren.
+    if (_routeBannerDismissed) {
+      return Positioned(
+        top: top,
+        right: 12,
+        child: _buildRouteRecallPill(),
+      );
+    }
     return Positioned(
-      top: MediaQuery.of(context).padding.top + 8,
+      top: top,
       left: 12,
       right: 12,
-      child: _buildRouteInfoBanner(),
+      child: Dismissible(
+        key: const ValueKey('route_preview_banner'),
+        direction: DismissDirection.up,
+        resizeDuration: null,
+        onDismissed: (_) {
+          if (!mounted) return;
+          setState(() => _routeBannerDismissed = true);
+        },
+        child: _buildRouteInfoBanner(),
+      ),
+    );
+  }
+
+  /// 2026-05-31 (vucko): Kompakte Pille, die das weggewischte Route-Banner
+  /// repräsentiert. Tippen oder Runterwischen holt es zurück.
+  Widget _buildRouteRecallPill() {
+    final result = _lastRouteResult;
+    final distMeters = result?.distanceMeters;
+    final distLabel = distMeters != null
+        ? '${(distMeters / 1000.0).toStringAsFixed(0)} km'
+        : null;
+    return GestureDetector(
+      onTap: () {
+        if (!mounted) return;
+        setState(() => _routeBannerDismissed = false);
+      },
+      onVerticalDragUpdate: (details) {
+        if ((details.primaryDelta ?? 0) > 4) {
+          if (!mounted) return;
+          setState(() => _routeBannerDismissed = false);
+        }
+      },
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 9),
+        decoration: BoxDecoration(
+          color: const Color(0xF0151820),
+          borderRadius: BorderRadius.circular(22),
+          border: Border.all(
+            color: AppAccentColors.accent.withValues(alpha: 0.5),
+            width: 1.2,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.35),
+              blurRadius: 14,
+              offset: const Offset(0, 6),
+            ),
+          ],
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.route_rounded, color: AppAccentColors.accent, size: 18),
+            const SizedBox(width: 7),
+            Text(
+              distLabel != null ? 'Route · $distLabel' : 'Routeninfo',
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(width: 5),
+            const Icon(
+              Icons.keyboard_arrow_down_rounded,
+              color: Colors.white54,
+              size: 18,
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -3484,6 +4154,23 @@ class _CruiseModePageState extends State<CruiseModePage>
           errorImage: MemoryImage(TileProvider.transparentImage),
           tileDisplay: const TileDisplay.instantaneous(),
         ),
+        // ── Gesamt-Route als gedimmter Hintergrund ───────────────────────────
+        // 2026-05-28 (vucko Task #86 / Startup-V Issue 2): Während der Fahrt
+        // ist _routeLatLngs nur das 3km-Sliding-Window. Ohne diesen Hintergrund
+        // wirkte die Route „abgeschnitten / kaputt". Wir zeichnen die komplette
+        // Route schwach darunter, damit der Gesamtverlauf immer sichtbar ist —
+        // KEIN abruptes Ende mehr. Nur im Navigations-Modus (sonst ist die
+        // Preview-Polyline ohnehin die volle Route).
+        if (_isRouteConfirmed && _fullRouteBackgroundLatLngs.length >= 2)
+          PolylineLayer(
+            polylines: [
+              Polyline(
+                points: _fullRouteBackgroundLatLngs,
+                color: AppAccentColors.accent.withValues(alpha: 0.28),
+                strokeWidth: 3,
+              ),
+            ],
+          ),
         // ── Route (Glow + Hauptlinie) ────────────────────────────────────────
         // Web: Glow-Effekt entfernt — spart eine komplette Polyline-Layer-Berechnung.
         if (_routeLatLngs.length >= 2)
@@ -3516,6 +4203,21 @@ class _CruiseModePageState extends State<CruiseModePage>
                 width: _puckSize,
                 height: _puckSize,
                 child: _buildLocationPuck(_userHeading),
+              ),
+            ],
+          ),
+        // 2026-05-28 (vucko): Manuell gewählter Startpunkt ("Standort wählen").
+        if (_pickedStartLocation != null &&
+            _selectedLocation == 'Standort wählen' &&
+            !_isRouteConfirmed)
+          MarkerLayer(
+            markers: [
+              Marker(
+                point: _pickedStartLocation!,
+                width: 46,
+                height: 56,
+                alignment: Alignment.topCenter,
+                child: _buildPickedStartMarker(),
               ),
             ],
           ),
@@ -3658,113 +4360,132 @@ class _CruiseModePageState extends State<CruiseModePage>
 
   // ═══════════════════════ BOTTOM ACTIONS ═══════════════════════════════════
 
-  Widget _buildBottomActions() {
+  // 2026-05-28 (vucko Startup-V Issue 1+3A): [inline]=true wird im
+  // ausgeklappten Scroll-Panel verwendet — dann OHNE fixe 160px-Höhe und ohne
+  // Gradient-Box, damit der Button nicht in einem großen dunklen Loch
+  // „schwebt", sondern sauber direkt unter dem Setup sitzt. [inline]=false
+  // (Default) ist die fixierte Leiste im eingeklappten Zustand über der Karte.
+  Widget _buildBottomActions({bool inline = false}) {
     final hasConfirmableRoute =
         _lastRouteResult != null &&
         (_fullRouteCoordinates.length >= 2 ||
             _routeLatLngs.length >= 2 ||
             _routeGeoJson != null);
-    return Container(
-      height: 160,
-      padding: const EdgeInsets.symmetric(horizontal: 24),
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [Colors.transparent, Color(0xFF0B0E14)],
-          stops: [0.0, 0.6],
-        ),
-      ),
-      child: Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (hasConfirmableRoute)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 12),
-                child: SizedBox(
-                  width: double.infinity,
-                  height: 50,
-                  child: OutlinedButton(
-                    onPressed: _isLoading ? null : _confirmRoute,
-                    style: OutlinedButton.styleFrom(
-                      side: BorderSide(
-                        color: AppAccentColors.accent,
-                        width: 1.5,
-                      ),
-                      backgroundColor: const Color(0xFF1C1F26),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(25),
-                      ),
-                    ),
-                    child: const Text(
-                      'Route bestätigen',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            Container(
-              height: 60,
+    final actions = Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (hasConfirmableRoute)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: SizedBox(
               width: double.infinity,
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(30),
-                boxShadow: [
-                  BoxShadow(
-                    color:
-                        (_isLoading
-                                ? const Color(0xFFFF453A)
-                                : AppAccentColors.accent)
-                            .withValues(alpha: 0.3),
-                    blurRadius: 12,
-                    offset: const Offset(0, 4),
+              height: 50,
+              child: OutlinedButton(
+                onPressed: _isLoading ? null : _confirmRoute,
+                style: OutlinedButton.styleFrom(
+                  side: BorderSide(
+                    color: AppAccentColors.accent,
+                    width: 1.5,
                   ),
-                ],
-              ),
-              child: ElevatedButton(
-                onPressed: _isLoading ? _cancelRouteGeneration : _generateRoute,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: _isLoading
-                      ? const Color(0xFFB9443A)
-                      : AppAccentColors.accent,
-                  disabledBackgroundColor: AppAccentColors.accent.withValues(
-                    alpha: 0.42,
-                  ),
+                  backgroundColor: const Color(0xFF1C1F26),
                   shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(30),
+                    borderRadius: BorderRadius.circular(25),
                   ),
-                  elevation: 0,
                 ),
-                child: _isLoading
-                    ? const Text(
-                        'Suche abbrechen',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      )
-                    : Text(
-                        _isWaypointPlanning
-                            ? 'Wegpunkt-Route suchen'
-                            : _isRoundTrip
-                            ? 'Rundkurs suchen'
-                            : 'Route berechnen',
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                          letterSpacing: 1.2,
-                        ),
-                      ),
+                child: const Text(
+                  'Route bestätigen',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
               ),
             ),
-          ],
+          ),
+        Container(
+          height: 60,
+          width: double.infinity,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(30),
+            boxShadow: [
+              BoxShadow(
+                color:
+                    (_isLoading
+                            ? const Color(0xFFFF453A)
+                            : AppAccentColors.accent)
+                        .withValues(alpha: 0.3),
+                blurRadius: 12,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: ElevatedButton(
+            onPressed: _isLoading ? _cancelRouteGeneration : _generateRoute,
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _isLoading
+                  ? const Color(0xFFB9443A)
+                  : AppAccentColors.accent,
+              disabledBackgroundColor: AppAccentColors.accent.withValues(
+                alpha: 0.42,
+              ),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(30),
+              ),
+              elevation: 0,
+            ),
+            child: _isLoading
+                ? const Text(
+                    'Suche abbrechen',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  )
+                : Text(
+                    _isWaypointPlanning
+                        ? 'Wegpunkt-Route suchen'
+                        : _isRoundTrip
+                        ? 'Rundkurs suchen'
+                        : 'Route berechnen',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 1.2,
+                    ),
+                  ),
+          ),
         ),
+      ],
+    );
+
+    if (inline) {
+      // Kein Gradient, keine fixe Höhe — sitzt direkt unter dem Setup-Inhalt.
+      return Offstage(
+        offstage: _destinationHasFocus,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 4),
+          child: actions,
+        ),
+      );
+    }
+
+    return Offstage(
+      offstage: _destinationHasFocus,
+      child: Container(
+        height: 160,
+        padding: const EdgeInsets.symmetric(horizontal: 24),
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [Colors.transparent, Color(0xFF0B0E14)],
+            stops: [0.0, 0.6],
+          ),
+        ),
+        child: Center(child: actions),
       ),
     );
   }
@@ -3951,6 +4672,60 @@ class _CruiseModePageState extends State<CruiseModePage>
           ),
           alignment: Alignment.center,
           child: Icon(Icons.flag_rounded, color: color, size: 19),
+        ),
+      ],
+    );
+  }
+
+  // 2026-05-28 (vucko): Marker für den manuell gewählten Startpunkt
+  // ("Standort wählen"). Grüner Pin mit Play/Start-Icon, klar vom blauen
+  // Ziel-Marker unterscheidbar.
+  Widget _buildPickedStartMarker() {
+    const color = Color(0xFF34C759);
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 38,
+          height: 38,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: const Color(0xFF101722),
+            border: Border.all(color: color, width: 2.3),
+            boxShadow: [
+              BoxShadow(
+                color: color.withValues(alpha: 0.36),
+                blurRadius: 14,
+                offset: const Offset(0, 6),
+              ),
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.34),
+                blurRadius: 9,
+                offset: const Offset(0, 3),
+              ),
+            ],
+          ),
+          alignment: Alignment.center,
+          child: const Icon(
+            Icons.play_arrow_rounded,
+            color: color,
+            size: 22,
+          ),
+        ),
+        Transform.translate(
+          offset: const Offset(0, -4),
+          child: Transform.rotate(
+            angle: math.pi / 4,
+            child: Container(
+              width: 13,
+              height: 13,
+              decoration: BoxDecoration(
+                color: const Color(0xFF101722),
+                borderRadius: BorderRadius.circular(3),
+                border: Border.all(color: color.withValues(alpha: 0.72)),
+              ),
+            ),
+          ),
         ),
       ],
     );
@@ -4317,6 +5092,25 @@ class _CruiseModePageState extends State<CruiseModePage>
   }
 
   Future<geo.Position> _getStartCoordinates() async {
+    // 2026-05-28 (vucko): "Standort wählen" mit gesetztem Punkt → von dort
+    // starten (Karten-Tap oder Adresssuche). Dijkstra-Routing braucht nur
+    // gültige Start-Koordinaten, egal woher.
+    if (_selectedLocation == 'Standort wählen' &&
+        _pickedStartLocation != null) {
+      final picked = _pickedStartLocation!;
+      return geo.Position(
+        longitude: picked.longitude,
+        latitude: picked.latitude,
+        timestamp: DateTime.now(),
+        accuracy: 5,
+        altitude: 0,
+        heading: 0,
+        speed: 0,
+        speedAccuracy: 0,
+        altitudeAccuracy: 0,
+        headingAccuracy: 0,
+      );
+    }
     if (_selectedLocation == 'Aktueller Standort') {
       if (!kIsWeb) {
         bool serviceEnabled = await geo.Geolocator.isLocationServiceEnabled();
@@ -4414,6 +5208,16 @@ class _CruiseModePageState extends State<CruiseModePage>
     try {
       final startPosition = await _getStartCoordinates();
       if (_isRouteGenerationCancelled(generationId)) return;
+
+      // 2026-05-30 (vucko): Heimatland automatisch aus dem Startpunkt ableiten
+      // (offline-Heuristik, kein extra API-Call). Nur relevant wenn eine
+      // Länder-Präferenz aktiv ist.
+      if (_countryPreference != CountryPreference.any) {
+        _homeCountryCode = CountryRegion.classify(
+          startPosition.latitude,
+          startPosition.longitude,
+        );
+      }
 
       final digits = _selectedLength.replaceAll(RegExp(r'[^0-9]'), '');
       var distance = digits.isNotEmpty ? int.parse(digits) : 50;
@@ -4604,17 +5408,34 @@ class _CruiseModePageState extends State<CruiseModePage>
           diversitySeed: p2pDiversitySeed,
           forceFreshVariant: forceFreshVariant,
           subscriptionTier: subscriptionTier,
+          // 2026-05-28 (vucko Task #83): One-Shot direkte Route ohne Quality-Reject.
+          forceAcceptDirect: _forceAcceptDirectOnce,
+          countryPreference: _countryPreference,
+          homeCountryCode: _homeCountryCode,
         );
-      } else if (_isWaypointPlanning &&
-          _tripModeEnabled &&
-          waypointSnapshot.length >= 2) {
+      } else if (_isWaypointPlanning && waypointSnapshot.isNotEmpty) {
         // 2026-05-23 (vucko Task #22): Trip-Modus = A→B mit Multi-Stopps.
         // Letzter WP = Endziel, alle dazwischen = intermediates.
         // 2026-05-24 (vucko Task #32): Auch im Trip-Modus die gleichen
         // Umweg-Optionen (Direkt / Klein / Mittel / Groß) wie bei A→B.
-        final lastWp = waypointSnapshot.last;
-        final intermediates = waypointSnapshot
-            .sublist(0, waypointSnapshot.length - 1)
+        //
+        // 2026-05-28 (vucko Task #81): Standard-Wegpunkte-Modus (kein
+        // Trip-Modus aber Stops gesetzt) wird hier MIT übernommen und
+        // als A→B-Pattern mit `destination = startPosition` (Rundkurs-
+        // Schleife) geroutet. Vorher ging der Standard-Pfad über
+        // `generateRoundTrip(userWaypoints: …)` mit `required_waypoints` —
+        // das produziert oft „Stopps prüfen — keine sichere Strecke"
+        // wenn der Algorithmus Mapbox-side zu strikt prüft. Trip-Pattern
+        // ist deutlich robuster.
+        final bool isStandardWaypointMode =
+            !_tripModeEnabled && waypointSnapshot.isNotEmpty;
+        final LatLng destinationLatLng = isStandardWaypointMode
+            ? LatLng(startPosition.latitude, startPosition.longitude)
+            : waypointSnapshot.last;
+        final List<LatLng> intermediateLatLngs = isStandardWaypointMode
+            ? waypointSnapshot
+            : waypointSnapshot.sublist(0, waypointSnapshot.length - 1);
+        final intermediates = intermediateLatLngs
             .map((p) => <String, double>{
                   'latitude': p.latitude,
                   'longitude': p.longitude,
@@ -4627,7 +5448,10 @@ class _CruiseModePageState extends State<CruiseModePage>
           _ => 0,
         };
         final tripScenic = _selectedDetour != 'Direkt';
-        _activeDestinationCoordinate = [lastWp.longitude, lastWp.latitude];
+        _activeDestinationCoordinate = [
+          destinationLatLng.longitude,
+          destinationLatLng.latitude,
+        ];
         _activeDetourVariant = tripDetourVariant;
         _activePointToPointScenic = tripScenic;
         _activePointToPointMode =
@@ -4638,8 +5462,8 @@ class _CruiseModePageState extends State<CruiseModePage>
         );
         result = await _routeService.generatePointToPoint(
           startPosition: startPosition,
-          destinationLat: lastWp.latitude,
-          destinationLng: lastWp.longitude,
+          destinationLat: destinationLatLng.latitude,
+          destinationLng: destinationLatLng.longitude,
           mode: tripScenic ? _selectedStyle : 'Standard',
           scenic: tripScenic,
           routeVariant: tripDetourVariant,
@@ -4647,6 +5471,8 @@ class _CruiseModePageState extends State<CruiseModePage>
           forceFreshVariant: forceFreshVariant,
           subscriptionTier: subscriptionTier,
           intermediateWaypoints: intermediates,
+          countryPreference: _countryPreference,
+          homeCountryCode: _homeCountryCode,
         );
         // 2026-05-24 (vucko Task #53): Trip-Mode → Trip in DB persistieren
         // NUR wenn der User in einer Gruppen-Session ist. Solo-Touren werden
@@ -4697,6 +5523,8 @@ class _CruiseModePageState extends State<CruiseModePage>
           forceFreshVariant: forceFreshVariant,
           debugTrigger: routeDebugTrigger,
           subscriptionTier: subscriptionTier,
+          countryPreference: _countryPreference,
+          homeCountryCode: _homeCountryCode,
         );
       }
 
@@ -4842,6 +5670,8 @@ class _CruiseModePageState extends State<CruiseModePage>
       // Hintergrund-Generierung wieder erlauben
       RouteCacheService.endUserGeneration();
       _stopRouteLoadingUi(generationId: generationId);
+      // 2026-05-28 (vucko Task #83): One-Shot-Flag nach jedem Versuch zurücksetzen.
+      _forceAcceptDirectOnce = false;
     }
   }
 
@@ -5005,12 +5835,59 @@ class _CruiseModePageState extends State<CruiseModePage>
     required String? waypointSignature,
   }) async {
     if (!mounted || _disposed) return;
+    // 2026-05-31 (vucko): UNIVERSELLER Spike-Cleanup vor der Anzeige — greift
+    // für ALLE Quellen (Live, Pool, A→B), nicht nur den Live-Snap-Pfad. So
+    // werden Sackgassen-Zacken auch aus Pool-Routen entfernt (User-Report:
+    // „manchmal kommt es trotzdem auf"). Off-Road-sicher (40m-Guard im
+    // Validator); fällt auf das Original zurück, wenn Cleanup nichts findet.
+    final cleanedResult = _cleanRouteForDisplay(result);
     final prepared = await _prepareRouteForPreviewStart(
-      result: result,
+      result: cleanedResult,
       startPosition: startPosition,
       isRoundTrip: _isRoundTrip,
       avoidHighways: _avoidHighways,
     );
+
+    // 2026-05-31 (vucko): FINALER, harter Länder-Gate am universellen Anzeige-
+    // Chokepoint. Egal aus welcher Quelle die Route kommt (Live, Pool, Cached,
+    // Emergency-Fallback) — wenn „Im Land bleiben" aktiv ist, ein Rundkurs
+    // läuft und die Route überwiegend im Ausland liegt, wird sie NICHT
+    // angezeigt. Stattdessen einmalig automatisch neu suchen, danach klare
+    // Notice statt einer unprofessionellen Cross-Border-Route.
+    if (_countryPreference == CountryPreference.onlyHome &&
+        _isRoundTrip &&
+        !_isWaypointPlanning &&
+        _homeCountryCode != null) {
+      final foreign = CountryRegion.foreignFraction(
+        coordinates: prepared.coordinates,
+        homeCountryCode: _homeCountryCode!,
+      );
+      if (foreign > 0.35) {
+        debugPrint(
+          '[CruiseMode] Länder-Gate: Route abgelehnt — '
+          '${(foreign * 100).toStringAsFixed(0)}% Ausland '
+          '(home=$_homeCountryCode, source=${result.edgeMeta['route_generation_source'] ?? 'unknown'}).',
+        );
+        if (_countryGateRetryCount < _maxCountryGateRetries) {
+          _countryGateRetryCount += 1;
+          Future.microtask(() {
+            if (!mounted || _disposed) return;
+            _generateRoute();
+          });
+          return;
+        }
+        // Nach den Retries keine reine Inlandsroute gefunden → ehrliche Notice,
+        // KEINE Cross-Border-Route anzeigen.
+        _countryGateRetryCount = 0;
+        _restoreGeneratedRouteFailureUi(
+          _captureGeneratedRouteUiState(),
+          'Hier gibt es gerade keine reine Inlandsroute. Schalte „Im Land '
+          'bleiben" aus oder wähle einen anderen Startpunkt.',
+        );
+        return;
+      }
+      _countryGateRetryCount = 0;
+    }
 
     const validator = RouteQualityValidator();
     final actualKm = prepared.distanceKm ?? 0.0;
@@ -5089,6 +5966,15 @@ class _CruiseModePageState extends State<CruiseModePage>
     }
 
     _applyRouteResult(prepared);
+    // 2026-05-31 (vucko): Routen-Korridor SOFORT beim Anzeigen vorladen (Zoom
+    // 10-17), nicht erst beim Bestätigen. So sind die Straßen-Tiles entlang der
+    // Route schon da, wenn der User in der Preview reinzoomt oder offline geht
+    // — kein Nachladen mehr im DACH-Raum entlang der geplanten Strecke.
+    if (prepared.coordinates.length >= 2) {
+      unawaited(
+        OfflineMapService.instance.cacheRouteRegion(prepared.coordinates),
+      );
+    }
     unawaited(
       _carRouteBridge.publishFound(
         result: prepared,
@@ -5127,6 +6013,7 @@ class _CruiseModePageState extends State<CruiseModePage>
         }
         _configCollapsed = true;
         _showRouteInfoBanner = true;
+        _routeBannerDismissed = false;
       });
     }
 
@@ -5254,6 +6141,13 @@ class _CruiseModePageState extends State<CruiseModePage>
         distanceToRouteStartMeters <= onStartCorridor &&
         matchesRouteStartIndex &&
         globalMatch.distanceMeters <= onStartCorridor) {
+      // 2026-05-31 (vucko): KEIN synthetischer GPS→Routenkopf-Strich mehr.
+      // Der frühere _pinRouteStartToUser zeichnete eine Luftlinie, die quer
+      // durchs Gelände gehen konnte — der User-Wunsch ist aber: die Strecke
+      // muss IMMER auf der Straße bleiben. Innerhalb des Korridors (≤70m) ist
+      // der optische Versatz minimal; die echte GraphHopper-Geometrie bleibt
+      // unverändert. Größere Lücken laufen weiter über die Access-Leg-Logik
+      // unten (echter on-road Connector).
       return _withMergedRouteMeta(result, {
         'route_start_distance_km': double.parse(
           (distanceToRouteStartMeters / 1000).toStringAsFixed(2),
@@ -5525,6 +6419,28 @@ class _CruiseModePageState extends State<CruiseModePage>
       });
     }
 
+    // 2026-05-28 (vucko Task #84): Wenn eine zuvor berechnete Route noch
+    // sichtbar ist (Preview-Karte „Route berechnet"), war der gescheiterte
+    // Versuch nur eine ZUSÄTZLICHE Variantensuche („Nochmal suchen"). Dann
+    // NIE mit dem blockierenden „Route noch nicht verfügbar"-Dialog
+    // unterbrechen — das war der False-Positive aus dem Startup-V-Test
+    // (Popup erschien über gültiger „24.6 km · Perfekt"-Karte). Diese Prüfung
+    // MUSS vor den Warmup-/Notice-Checks stehen, sonst greift der
+    // Warmup-Dialog (route_quality_too_low etc.) trotz sichtbarer Route.
+    if (_snapshotHasVisibleRoute(previousUiState)) {
+      debugPrint(
+        '[CruiseMode] Route attempt failed but previous route stayed visible: '
+        '$message${error == null ? "" : " ($error)"}',
+      );
+      // Höchstens eine sanfte, selbst-schließende Notice — kein Dialog.
+      if (_isWaypointRouteError(error)) {
+        _showWaypointRouteStatusNotice(error as RouteServiceException);
+      } else if (_isExpectedRoundTripRoutingStatus(error)) {
+        _showRoundTripRouteStatusNotice(error as RouteServiceException);
+      }
+      return;
+    }
+
     if (_isWaypointRouteError(error)) {
       _showWaypointRouteStatusNotice(error as RouteServiceException);
       return;
@@ -5537,14 +6453,6 @@ class _CruiseModePageState extends State<CruiseModePage>
 
     if (_isRouteWarmupError(error)) {
       unawaited(_showRouteWarmupDialog(error as RouteServiceException));
-      return;
-    }
-
-    if (_snapshotHasVisibleRoute(previousUiState)) {
-      debugPrint(
-        '[CruiseMode] Route attempt failed but previous route stayed visible: '
-        '$message${error == null ? "" : " ($error)"}',
-      );
       return;
     }
 
@@ -5756,6 +6664,9 @@ class _CruiseModePageState extends State<CruiseModePage>
         'retry_reason=${error.edgeMeta['retry_reason']}',
       );
       if (action == 'direct') {
+        // 2026-05-28 (vucko Task #83): "Direkte Route nehmen" erzwingt einmalig
+        // eine direkte Route ohne Quality-Reject statt nur dieselbe Suche zu wiederholen.
+        _forceAcceptDirectOnce = true;
         setState(() => _selectedDetour = 'Direkt');
         unawaited(Future<void>.delayed(Duration.zero, _generateRoute));
       } else if (action == 'retry') {
@@ -6146,6 +7057,73 @@ class _CruiseModePageState extends State<CruiseModePage>
     );
   }
 
+  // 2026-05-31 (vucko): Entfernt Dead-End-Spikes aus der anzuzeigenden Route
+  // (alle Quellen). Off-Road-sicher über den 40m-Guard im Validator. Manöver
+  // werden auf den nächstgelegenen bereinigten Koordinaten-Index neu gemappt,
+  // damit Turn-by-Turn konsistent bleibt; Speed-Limits werden verworfen, wenn
+  // sich die Punktzahl ändert (sie werden ohnehin nur grob indexiert genutzt).
+  RouteResult _cleanRouteForDisplay(RouteResult result) {
+    if (result.coordinates.length < 8) return result;
+    final cleaned = RouteQualityValidator.cleanRouteArtifacts(
+      result.coordinates,
+    );
+    if (cleaned.length == result.coordinates.length) return result; // nichts
+    final geometry = <String, dynamic>{
+      'type': 'LineString',
+      'coordinates': cleaned,
+    };
+    // Manöver auf nächsten bereinigten Index neu mappen.
+    final remappedManeuvers = <RouteManeuver>[];
+    for (final m in result.maneuvers) {
+      var bestIdx = 0;
+      var bestDist = double.infinity;
+      for (var i = 0; i < cleaned.length; i++) {
+        final d = geo.Geolocator.distanceBetween(
+          m.latitude,
+          m.longitude,
+          cleaned[i][1],
+          cleaned[i][0],
+        );
+        if (d < bestDist) {
+          bestDist = d;
+          bestIdx = i;
+        }
+      }
+      // Manöver, das näher als 25m an einem bereinigten Punkt liegt, behalten
+      // (alles andere lag im entfernten Spike → wegfallen lassen).
+      if (bestDist <= 25.0) {
+        remappedManeuvers.add(RouteManeuver(
+          latitude: m.latitude,
+          longitude: m.longitude,
+          routeIndex: bestIdx,
+          icon: m.icon,
+          announcement: m.announcement,
+          instruction: m.instruction,
+          maneuverType: m.maneuverType,
+          roundaboutExitNumber: m.roundaboutExitNumber,
+        ));
+      }
+    }
+    final cleanedDistanceMeters = _calculatePolylineDistanceMeters(cleaned);
+    return RouteResult(
+      geoJson: json.encode(geometry),
+      geometry: geometry,
+      coordinates: cleaned,
+      maneuvers: remappedManeuvers.isEmpty
+          ? result.maneuvers
+          : remappedManeuvers,
+      distanceMeters: cleanedDistanceMeters > 0
+          ? cleanedDistanceMeters
+          : result.distanceMeters,
+      durationSeconds: result.durationSeconds,
+      distanceKm: cleanedDistanceMeters > 0
+          ? cleanedDistanceMeters / 1000
+          : result.distanceKm,
+      speedLimits: const [],
+      edgeMeta: {...result.edgeMeta, 'spike_cleanup_applied': true},
+    );
+  }
+
   RouteResult _withMergedRouteMeta(
     RouteResult result,
     Map<String, dynamic> edgeMeta,
@@ -6162,6 +7140,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       edgeMeta: {...result.edgeMeta, ...edgeMeta},
     );
   }
+
 
   bool get _effectiveNavigationAvoidHighways {
     return _activeAvoidHighways ||
@@ -6496,6 +7475,7 @@ class _CruiseModePageState extends State<CruiseModePage>
         _isCameraLocked = false;
         _configCollapsed = true;
         _showRouteInfoBanner = true;
+        _routeBannerDismissed = false;
         _activeDestinationCoordinate = route.isRoundTrip
             ? null
             : lastCoordinate;
@@ -7777,7 +8757,16 @@ class _CruiseModePageState extends State<CruiseModePage>
   /// zusätzlich Simulation + Route-Übersicht gezeigt.
   Widget _buildFabColumn({required bool hasRoute}) {
     // Bei hochgezogenem Setup-Sheet: FABs ausblenden + nicht klickbar.
-    final hidden = !hasRoute && !_configCollapsed;
+    // 2026-05-28 (vucko Task #80): Im Wegpunkte-Modus (Pre-Route) komplett
+    // ausblenden, weil die Wegpunkt-Spalte rechts oben jetzt eine
+    // integrierte Right-Rail inkl. POI/Voice/Camera-Lock zeigt. Das
+    // verhindert Überlappung der beiden Spalten am rechten Bildschirmrand.
+    final hasErrorBanner = _routeSearchNoticeTitle != null;
+    final waypointRailActive = !hasRoute &&
+        _isWaypointPlanning &&
+        !_showRouteInfoBanner &&
+        !hasErrorBanner;
+    final hidden = (!hasRoute && !_configCollapsed) || waypointRailActive;
     return Positioned(
       right: 16,
       bottom: hasRoute ? 260 : 240,
@@ -8929,7 +9918,8 @@ class _CruiseModePageState extends State<CruiseModePage>
     _activeManeuverIndex = 0;
     // Speed-History entfernt
     _isSimulationRunning = true;
-    _simulationSpeedKmh = 60;
+    // 2026-05-30 (vucko): Konstant 100 km/h für die Routenabfahrt-Prüfung.
+    _simulationSpeedKmh = _simulationConstantKmh;
 
     // Initiale Route zeichnen
     final windowEnd = _findLookAheadIndex(0, 3000);
