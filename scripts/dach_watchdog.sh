@@ -1,14 +1,6 @@
 #!/usr/bin/env bash
-# DACH-Stabilize watchdog — analysiert heartbeat-loop.log + meldet Anomalien.
-#
-# Wird vom Claude-Cron alle paar Minuten ausgelöst. Schaut sich die letzten
-# 5 heartbeats an und entscheidet ob alles ok ist oder ob Eskalation nötig.
-#
-# Output (1 Zeile, parseable):
-#   STATUS=healthy total_recent=N ok=M
-#   STATUS=degraded recent_ok=M/N last_failure=...
-#   STATUS=down consecutive_fails=K last_state=...
-#   STATUS=loop_dead reason=no_recent_entries  (loop scheint nicht zu laufen)
+# DACH-Stabilize watchdog — analysiert heartbeat-loop.log + meldet beide PCs.
+# 2026-05-27: PC2-parallel support, tac-Fix für macOS.
 
 set -uo pipefail
 
@@ -30,43 +22,56 @@ if [[ -z "$RECENT" ]]; then
   exit 1
 fi
 
-# Check ob letzter Entry < 3 Min alt (loop läuft noch)
+# Check ob letzter Entry < 3 Min alt
 LAST_TS=$(echo "$RECENT" | tail -1 | awk '{print $1}')
 LAST_EPOCH=$(date -j -f "%Y-%m-%dT%H:%M:%S" "$LAST_TS" "+%s" 2>/dev/null || echo 0)
 NOW_EPOCH=$(date +%s)
 AGE=$((NOW_EPOCH - LAST_EPOCH))
+AGE_MIN=$(( AGE / 60 ))
 
 if [[ "$AGE" -gt 180 ]]; then
   echo "STATUS=loop_dead reason=last_entry_age=${AGE}s pid_check=$(pgrep -f dach_heartbeat_loop | wc -l | xargs)"
   exit 1
 fi
 
-OK_COUNT=$(echo "$RECENT" | grep -c "exit=0")
+# PC1: ok wenn exit=0 oder exit=4 (nur PC2-Problem, PC1 läuft)
+OK_COUNT=$(echo "$RECENT" | grep -cE "exit=[04]")
 TOTAL_COUNT=$(echo "$RECENT" | wc -l | xargs)
 
-# Tag-Log letzte 3 zeigen für details
-LAST_DETAILS=""
+# Letzter Day-Log-Eintrag — PC1 und PC2 Status extrahieren
+LAST_LINE=""
+PC1_STATUS="?"
+PC2_STATUS="?"
+PC1_MEM="?"
+PC2_MEM="?"
+PC2_LOAD="?"
 if [[ -f "$DAY_LOG" ]]; then
-  LAST_DETAILS=$(tail -1 "$DAY_LOG" 2>/dev/null | sed 's/|/!/g')
+  LAST_LINE=$(tail -1 "$DAY_LOG" 2>/dev/null)
+  PC1_STATUS=$(echo "$LAST_LINE" | grep -oE "PC1=[a-z_]+" | head -1 | cut -d= -f2)
+  PC2_STATUS=$(echo "$LAST_LINE" | grep -oE "PC2=[a-z_]+" | head -1 | cut -d= -f2)
+  PC1_MEM=$(echo "$LAST_LINE" | grep -oE "pc1mem=[0-9/]+" | cut -d= -f2)
+  PC2_MEM=$(echo "$LAST_LINE" | grep -oE "pc2mem=[0-9/]+" | cut -d= -f2)
+  PC2_LOAD=$(echo "$LAST_LINE" | grep -oE "pc2load=[0-9,. ]+" | cut -d= -f2 | xargs | cut -d' ' -f1)
 fi
 
+# Consecutive fails: tail -r als tac-Ersatz auf macOS
+CONSECUTIVE_FAILS=$(tail -5 "$LOOP_LOG" | grep -E "exit=[0-9]" | tail -r 2>/dev/null | \
+  awk '/exit=[04]/ {exit} /exit=[1-9]/ {c++} END {print c+0}')
+
+# Output
 if [[ "$OK_COUNT" -eq "$TOTAL_COUNT" ]]; then
-  echo "STATUS=healthy total_recent=$TOTAL_COUNT ok=$OK_COUNT last=\"$LAST_DETAILS\""
-  # 2026-05-23 (vucko): Letzte 3 GH-smoke-results auch zeigen damit
-  # User trend sieht statt nur "ok".
+  echo "STATUS=healthy last_age_min=$AGE_MIN ok=$OK_COUNT/$TOTAL_COUNT PC1=$PC1_STATUS(mem:$PC1_MEM) PC2=$PC2_STATUS(mem:$PC2_MEM load:$PC2_LOAD)"
   if [[ -f "$DAY_LOG" ]]; then
-    echo "--- Last 3 smoke-runs ---"
+    echo "--- Letzte 3 Runs ---"
     tail -3 "$DAY_LOG" | sed 's/|/!/g'
   fi
   exit 0
 fi
 
-CONSECUTIVE_FAILS=$(echo "$RECENT" | tac | awk '/exit=0/ {exit} /exit=[1-9]/ {c++} END {print c+0}')
-
 if [[ "$CONSECUTIVE_FAILS" -ge 3 ]]; then
-  echo "STATUS=down consecutive_fails=$CONSECUTIVE_FAILS total_recent=$TOTAL_COUNT ok=$OK_COUNT last=\"$LAST_DETAILS\""
+  echo "STATUS=down consecutive_fails=$CONSECUTIVE_FAILS PC1=$PC1_STATUS PC2=$PC2_STATUS last=\"$LAST_LINE\""
   exit 2
 fi
 
-echo "STATUS=degraded recent_ok=$OK_COUNT/$TOTAL_COUNT consecutive_fails=$CONSECUTIVE_FAILS last=\"$LAST_DETAILS\""
+echo "STATUS=degraded ok=$OK_COUNT/$TOTAL_COUNT consec_fails=$CONSECUTIVE_FAILS PC1=$PC1_STATUS PC2=$PC2_STATUS"
 exit 1
