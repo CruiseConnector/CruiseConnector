@@ -67,7 +67,11 @@ class GeocodingService {
       'limit': limit.clamp(1, 10).toString(),
       'language': 'de',
       'country': countryCodes,
-      'types': 'address,poi,place,locality,neighborhood',
+      // 2026-05-28 (vucko Startup-V Issue 4): poi ZUERST, damit bekannte
+      // Marken-POIs ("McDonald's", "Flughafen Wien") vor reinen
+      // Straßen-Matches ranken. language=de + proximity (unten) sorgen für
+      // den nächstgelegenen, deutschsprachigen Treffer.
+      'types': 'poi,place,address,locality,neighborhood',
     };
     final hasProximity =
         proximityLatitude != null &&
@@ -259,6 +263,37 @@ class GeocodingService {
     );
   }
 
+  /// 2026-05-28 (vucko): Reverse-Geocoding — Koordinaten → lesbarer Ortsname.
+  /// Für die Anzeige des per Karten-Tap gewählten Startpunkts ("Start: Hard").
+  /// Best-effort: gibt null zurück wenn nichts gefunden/Netzfehler.
+  Future<String?> reverseGeocode(double latitude, double longitude) async {
+    final uri = Uri.https(
+      'api.mapbox.com',
+      '/geocoding/v5/mapbox.places/'
+          '${longitude.toStringAsFixed(6)},${latitude.toStringAsFixed(6)}.json',
+      <String, String>{
+        'access_token': AppConstants.mapboxPublicToken,
+        'language': 'de',
+        'limit': '1',
+        'types': 'address,place,locality,neighborhood,poi',
+      },
+    );
+    try {
+      final response = await http.get(uri).timeout(const Duration(seconds: 8));
+      if (response.statusCode != 200) return null;
+      final data = json.decode(response.body) as Map<String, dynamic>;
+      final features = data['features'] as List? ?? const [];
+      if (features.isEmpty) return null;
+      final first = features.first as Map<String, dynamic>;
+      final text =
+          (first['text'] as String?) ?? (first['place_name'] as String?);
+      return (text != null && text.trim().isNotEmpty) ? text.trim() : null;
+    } catch (e) {
+      _debugLog('[Geocoding] Reverse-Geocode failed: ${e.runtimeType}');
+      return null;
+    }
+  }
+
   /// Geocodiert eine Adresse und gibt Koordinaten zurück.
   Future<Map<String, double>?> getCoordinatesFromAddress(
     String address, {
@@ -272,7 +307,10 @@ class GeocodingService {
       'limit': requireUnambiguous ? '3' : '1',
       'language': 'de',
       'country': 'at,de,ch',
-      'types': 'address,poi,place,locality,neighborhood',
+      // 2026-05-28 (vucko Startup-V Issue 4): poi-first konsistent mit
+      // searchSuggestions, damit das aufgelöste Ziel zum angezeigten
+      // Vorschlag passt.
+      'types': 'poi,place,address,locality,neighborhood',
     };
     if (proximityLatitude != null &&
         proximityLongitude != null &&

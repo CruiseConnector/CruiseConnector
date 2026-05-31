@@ -17,6 +17,7 @@ import 'package:cruise_connect/data/services/route_cache_service.dart';
 import 'package:cruise_connect/data/services/route_generation_coordinator.dart';
 import 'package:cruise_connect/data/services/route_pool_service.dart';
 import 'package:cruise_connect/data/services/route_quality_validator.dart';
+import 'package:cruise_connect/data/services/country_region.dart';
 import 'package:cruise_connect/data/services/route_scenario.dart';
 import 'package:cruise_connect/domain/models/route_maneuver.dart';
 import 'package:cruise_connect/data/services/route_style_config.dart';
@@ -334,6 +335,8 @@ class RouteService {
     int? waypointSeedAttempt,
     String debugTrigger = 'unknown',
     String subscriptionTier = 'premium',
+    CountryPreference countryPreference = CountryPreference.any,
+    String? homeCountryCode,
   }) async {
     final styleConfig = RouteStyleConfig.forMode(mode);
     final isWaypointRequiredRoundTrip = planningType == 'Wegpunkte';
@@ -365,6 +368,8 @@ class RouteService {
       avoidHighways: avoidHighways,
       waypointSignature: waypointSignature,
       closeLoop: isWaypointRequiredRoundTrip,
+      countryPreference: countryPreference,
+      homeCountryCode: homeCountryCode,
     );
     // 2026-05-27 (vucko Speed-Fix): Live-First default statt 50/50 Coin-Flip.
     // Empirie: in dünner Pool-Coverage (Vorarlberg, Feldkirch, Götzis) hat
@@ -668,9 +673,18 @@ class RouteService {
           : hasSeenHistory
           ? 1
           : 2;
-      final maxAttempts = forceFreshVariant
+      var maxAttempts = forceFreshVariant
           ? math.min(regularMaxAttempts + 1, 3)
           : regularMaxAttempts;
+      // 2026-05-31 (vucko): Bei „Im Land bleiben" mehr Versuche in EINER
+      // Suche, damit der Service selbst eine reine Inlandsroute findet — statt
+      // dass die UI die ganze Suche mehrfach sichtbar neu startet (verwirrend
+      // + unzuverlässig). country-rejected Kandidaten werden hier verworfen,
+      // also brauchen wir genug Anläufe, um eine heimische Variante zu treffen.
+      if (scenario.countryPreference == CountryPreference.onlyHome &&
+          scenario.homeCountryCode != null) {
+        maxAttempts = math.max(maxAttempts, 5);
+      }
       _RouteCandidate? bestCandidate;
       _RouteCandidate? spareCandidate;
       _RouteCandidate? bestDuplicateCandidate;
@@ -1414,11 +1428,21 @@ class RouteService {
     double? currentHeadingDegrees,
     double? currentSpeedMetersPerSecond,
     double? locationAccuracyMeters,
+    // 2026-05-28 (vucko Task #83): "Direkte Route nehmen" erzwingt die erste
+    // gültige GraphHopper-Geometrie ohne Quality-Reject.
+    bool forceAcceptDirect = false,
     // 2026-05-23 (vucko Task #22): Trip-Modus = A→B mit
     // Zwischenstopps. Wenn gesetzt, werden diese als
     // intermediate waypoints an Edge übergeben.
     List<Map<String, double>>? intermediateWaypoints,
+    CountryPreference countryPreference = CountryPreference.any,
+    String? homeCountryCode,
   }) async {
+    // 2026-05-28 (vucko Task #83): direkter Modus → keine Detour/Scenic-Variante.
+    if (forceAcceptDirect) {
+      scenic = false;
+      routeVariant = 0;
+    }
     final startToDestinationMeters = geo.Geolocator.distanceBetween(
       startPosition.latitude,
       startPosition.longitude,
@@ -1490,6 +1514,8 @@ class RouteService {
       targetDistanceKm: targetDistanceKm,
       detourLevel: normalizedVariant,
       avoidHighways: avoidHighways,
+      countryPreference: countryPreference,
+      homeCountryCode: homeCountryCode,
     );
     _resetRouteDebugState();
     lastRouteGenerationStartedAtMs = DateTime.now().millisecondsSinceEpoch;
@@ -1629,6 +1655,7 @@ class RouteService {
             currentSpeedMetersPerSecond: currentSpeedMetersPerSecond,
             locationAccuracyMeters: locationAccuracyMeters,
             intermediateWaypoints: intermediateWaypoints,
+            forceAcceptDirect: forceAcceptDirect,
           );
           if (candidate.accepted && !candidate.novelEnough) {
             lastRouteDuplicateSkipped = true;
@@ -1741,7 +1768,9 @@ class RouteService {
         return finalized;
       }
 
-      if (bestRejectedCandidate != null && lastError == null) {
+      if (!forceAcceptDirect &&
+          bestRejectedCandidate != null &&
+          lastError == null) {
         lastError = _buildPointToPointQualityTooLowException(
           scenario: scenario,
           candidate: bestRejectedCandidate,
@@ -4131,6 +4160,9 @@ class RouteService {
     double? locationAccuracyMeters,
     // 2026-05-23 (vucko Task #22): Trip-Modus
     List<Map<String, double>>? intermediateWaypoints,
+    // 2026-05-28 (vucko Task #83): "Direkte Route nehmen" akzeptiert jede
+    // gültige Geometrie ohne Quality-Reject.
+    bool forceAcceptDirect = false,
   }) async {
     final jitteredTargetKm = styleConfig.clampPointToPointTargetKm(
       targetDistanceKm * variant.radiusJitter,
@@ -4174,6 +4206,9 @@ class RouteService {
       route: snapped,
       variant: variant,
       directDistanceKm: directDistanceKm,
+      // 2026-05-28 (vucko Task #83): "Direkte Route nehmen" akzeptiert jede
+      // gültige Geometrie (>=2 Punkte) ohne Quality-Reject.
+      forceAcceptDirect: forceAcceptDirect,
     );
   }
 
@@ -4203,6 +4238,9 @@ class RouteService {
     required RouteVariant variant,
     double? directDistanceKm,
     bool relaxedRoundTrip = false,
+    // 2026-05-28 (vucko Task #83): "Direkte Route nehmen" — jede gültige
+    // Geometrie (>=2 Punkte) wird ohne Quality-Reject akzeptiert.
+    bool forceAcceptDirect = false,
   }) {
     final actualDistanceKm = route.distanceKm ?? 0.0;
     final isRequiredWaypointRoundTrip =
@@ -4600,15 +4638,59 @@ class RouteService {
     final hasSoftStylePenalty = !styleSoftOk;
     final sectorRepeatPenalty = !tooSimilar && sameSectorRepeated ? 22.0 : 0.0;
     final hasSoftSimilarityPenalty = tooSimilar || sectorRepeatPenalty > 0.0;
+    // 2026-05-28 (vucko Direkt-Bug): Eine DIREKTE A→B-Route (Punkt-zu-Punkt,
+    // Umweg-Stufe 0) ist per Definition der kürzeste befahrbare Dijkstra-Pfad.
+    // Die DARF NIE „Route nicht verfügbar" liefern, solange sie genug Punkte
+    // hat und das Ziel erreicht — egal wie Style-/Shape-Gates sie bewerten
+    // (die sind für Kurven-Rundkurse gedacht, nicht für die Direktstrecke).
+    // Greift sowohl beim expliziten „Direkte Route nehmen" (forceAcceptDirect)
+    // als auch wenn der User im Dropdown „Direkt" gewählt hat (detour 0).
+    final isDirectPointToPoint = scenario.isPointToPoint &&
+        pointToPointEvaluationDetourLevel <= 0;
+    final forceDirectAcceptable = (forceAcceptDirect || isDirectPointToPoint) &&
+        hasEnoughPoints &&
+        destinationReached;
+    // 2026-05-31 (vucko): Länder-Filter. Ausland-Anteil EINMAL berechnen.
+    // „onlyHome" lehnt foreign-lastige Rundkurse jetzt als Kandidat AB
+    // (countryRejected) — der reine Score-Penalty reichte nicht, weil bei nur
+    // EINEM (Schweiz-)Kandidaten dieser trotzdem akzeptiert wurde. Damit
+    // Vorarlberg nicht total ausfällt, bleibt der Reject WEICH: er kippt nur
+    // `accepted`, nicht den bestRejectedCandidate-Fallback — gibt es gar keine
+    // heimische Route, surft am Ende die am-wenigsten-ausländische hoch.
+    final double foreignFraction =
+        (scenario.homeCountryCode != null &&
+                scenario.countryPreference != CountryPreference.any)
+            ? CountryRegion.foreignFraction(
+                coordinates: route.coordinates,
+                homeCountryCode: scenario.homeCountryCode!,
+              )
+            : 0.0;
+    final double countryPenalty = scenario.countryPreference ==
+            CountryPreference.any
+        ? 0.0
+        : CountryRegion.scorePenalty(
+            foreignFraction: foreignFraction,
+            preference: scenario.countryPreference,
+          );
+    // Harter Kandidaten-Reject bei onlyHome + Rundkurs, wenn die Route
+    // überwiegend im Ausland liegt (>35%). preferHome bleibt rein weich.
+    final countryRejected = scenario.isRoundTrip &&
+        scenario.countryPreference == CountryPreference.onlyHome &&
+        foreignFraction > 0.35;
     final baseTier = _preferredTier(classification.tier, edgeTier);
-    final effectiveTier = !softRenderable
+    final effectiveTier = countryRejected
+        ? RouteQualityTier.rejected
+        : forceDirectAcceptable && !softRenderable
+        ? RouteQualityTier.acceptable
+        : !softRenderable
         ? RouteQualityTier.rejected
         : (hasSoftDetourPenalty ||
               hasSoftStylePenalty ||
               hasSoftSimilarityPenalty)
         ? RouteQualityTier.acceptable
         : baseTier;
-    final accepted = softRenderable;
+    final accepted =
+        (softRenderable || forceDirectAcceptable) && !countryRejected;
     final score =
         classification.score +
         (effectiveTier == RouteQualityTier.acceptable &&
@@ -4621,6 +4703,7 @@ class RouteService {
         (borderIntrusionRejected ? 220.0 : 0.0) +
         (tooSimilar ? 45.0 : 0.0) +
         sectorRepeatPenalty +
+        countryPenalty +
         (detourDistanceOk ? 0.0 : 135.0) +
         (destinationReached ? 0.0 : 500.0) +
         (hasEnoughPoints ? 0.0 : 24.0) -
@@ -6282,6 +6365,38 @@ class RouteService {
         'deadEndSpikeCount=${poolRouteDeadEndSpikes.length}',
       );
       return null;
+    }
+
+    // 2026-05-31 (vucko Länder-Filter): Pool-Routen laufen NICHT durch
+    // _evaluateCandidate, daher hier ein eigener Länder-Gate. Bei aktiver
+    // „eher/nur im Land"-Präferenz Pool-Matches mit zu hohem Ausland-Anteil
+    // ablehnen (return null → nächstes Match oder Live-Fallback). „onlyHome"
+    // ist strikt (>10% Ausland raus), „preferHome" tolerant (>45% raus). So
+    // wird ein 101km-Schweiz-Loop in Vorarlberg nicht mehr als Pool-Treffer
+    // angezeigt, ohne in echten Grenzregionen alles zu blockieren.
+    if (scenario.countryPreference != CountryPreference.any &&
+        scenario.homeCountryCode != null) {
+      final foreignFraction = CountryRegion.foreignFraction(
+        coordinates: poolRoute.coordinates,
+        homeCountryCode: scenario.homeCountryCode!,
+      );
+      // 2026-05-31 (vucko): onlyHome-Schwelle 0.10→0.35 angeglichen an den
+      // Live-Gate (_evaluateCandidate). 10% war zu streng — ein Loop der nur
+      // kurz die Grenze touchiert wurde verworfen. 35% lässt Grenzberührungen
+      // zu, kippt aber echte Cross-Border-Schleifen (z.B. ganzer Schweiz-Loop).
+      final maxForeign =
+          scenario.countryPreference == CountryPreference.onlyHome
+              ? 0.35
+              : 0.45;
+      if (foreignFraction > maxForeign) {
+        _debugRouteSearch(
+          '[PoolFallback] poolHit=true poolUsed=false reason=country_filter '
+          'poolMatchId=${match.route.id} '
+          'foreignFraction=${foreignFraction.toStringAsFixed(2)} '
+          'maxForeign=$maxForeign pref=${scenario.countryPreference.name}',
+        );
+        return null;
+      }
     }
 
     final currentPosition = _positionFromCoordinate([userLng, userLat]);
@@ -8972,8 +9087,11 @@ class RouteService {
       coords[0][1],
       coords[0][0],
     );
-    if (distToFirstPoint < 30) {
+    // 2026-05-28 (vucko Task #82): Start sichtbar am User beginnen lassen
+    if (distToFirstPoint < 80) {
       coords[0] = [startLng, startLat];
+    } else if (distToFirstPoint < 400) {
+      coords.insert(0, [startLng, startLat]);
     }
 
     // ── Rundkurs: letzten Punkt nur setzen wenn nah genug an der Straße ───────
@@ -9005,6 +9123,29 @@ class RouteService {
     } else {
       debugPrint(
         '[RouteService] Loop-Fix ÜBERSPRUNGEN: würde ${(removedPercent * 100).toStringAsFixed(0)}% der Route entfernen (${coordsBefore - coordsAfterLoops.length} von $coordsBefore Punkten)',
+      );
+    }
+
+    // ── Dead-End-Spikes / Sackgassen-Zacken entfernen ─────────────────────────
+    // 2026-05-31 (vucko Qualitäts-Fix): Aus-und-Zurück-Zacken (kurze Spikes,
+    // die wieder am Startbereich einmünden) physisch herausschneiden — die
+    // sahen in echten Routen wie Fehler aus. Gleiche Sicherheits-Logik wie
+    // beim Loop-Fix: max. 25% der Punkte dürfen wegfallen, sonst überspringen.
+    final coordsBeforeSpikeFix = coords.length;
+    final coordsAfterSpikes = RouteQualityValidator.cleanRouteArtifacts(coords);
+    final spikeRemovedPercent = coordsBeforeSpikeFix > 0
+        ? 1.0 - (coordsAfterSpikes.length / coordsBeforeSpikeFix)
+        : 0.0;
+    if (coordsAfterSpikes.length >= 2 && spikeRemovedPercent <= 0.25) {
+      if (coordsAfterSpikes.length != coords.length) {
+        debugPrint(
+          '[RouteService] Spike-Fix: ${coords.length - coordsAfterSpikes.length} Punkte entfernt (${(spikeRemovedPercent * 100).toStringAsFixed(0)}%)',
+        );
+      }
+      coords = coordsAfterSpikes;
+    } else if (coordsAfterSpikes.length != coords.length) {
+      debugPrint(
+        '[RouteService] Spike-Fix ÜBERSPRUNGEN: würde ${(spikeRemovedPercent * 100).toStringAsFixed(0)}% entfernen',
       );
     }
 

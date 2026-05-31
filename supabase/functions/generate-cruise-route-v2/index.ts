@@ -162,6 +162,9 @@ interface GraphHopperPath {
   points_encoded: boolean;
   bbox: [number, number, number, number];
   instructions?: Array<Record<string, unknown>>;
+  // 2026-05-28 (vucko Task #82): Path-Details (road_class/road_environment)
+  // kommen als [from, to, value]-Segmente, wenn `details=` angefragt wird.
+  details?: Record<string, Array<[number, number, string | number]>>;
 }
 
 interface GraphHopperResponse {
@@ -447,6 +450,10 @@ async function callGraphHopper(opts: {
   params.set('points_encoded', 'false');
   params.set('ch.disable', 'true');
   params.set('instructions', 'true');
+  // 2026-05-28 (vucko Task #82): road_class/road_environment Details anfordern,
+  // damit wir echte Autobahn-Nutzung in meta erkennen (has_highway etc.).
+  params.append('details', 'road_class');
+  params.append('details', 'road_environment');
   // 2026-05-22 (vucko Task #10): Ferry-Vermeidung über Custom-Model
   // (siehe unten) — der `snap_prevention` Query-Param ist von unserer
   // GraphHopper 8.0 Installation nicht supported (HTTP 400).
@@ -499,6 +506,10 @@ async function callGraphHopper(opts: {
   overlay.priority.push({ if: 'road_class == TRACK', multiply_by: '0.05' });
   overlay.priority.push({ if: 'road_class == SERVICE', multiply_by: '0.05' });
   overlay.priority.push({ if: 'road_class == PATH', multiply_by: '0.02' });
+  // 2026-05-28 (vucko Task #82): Unbedingte milde Autobahn-De-Präferenz.
+  // Kurze A→B bevorzugen normale Straßen + Auf-/Abfahrten, außer die Autobahn
+  // ist klar schneller. Der harte Block bleibt hinter avoidHighways (oben).
+  overlay.priority.push({ if: 'road_class == MOTORWAY', multiply_by: '0.6' });
   if (overlay.priority.length > 0 || overlay.distance_influence != null || overlay.speed != null) {
     params.set('custom_model', JSON.stringify(overlay));
   }
@@ -557,6 +568,21 @@ async function callGraphHopper(opts: {
         };
       }
     }
+    // 2026-05-28 (vucko Task #82): Echte Autobahn-Nutzung aus den
+    // road_class-Details ableiten. road_class-Details kommen als
+    // [from, to, value]-Segmente; MOTORWAY/TRUNK = Autobahn-artig.
+    const roadClassSegments = p.details?.road_class ?? [];
+    const hasHighway = roadClassSegments.some(
+      (seg: [number, number, string | number]) => {
+        const value = String(seg[2] ?? '').toUpperCase();
+        return value === 'MOTORWAY' || value === 'TRUNK';
+      },
+    );
+    const leadingSegment = roadClassSegments.length > 0
+      ? String(roadClassSegments[0][2] ?? '').toUpperCase()
+      : '';
+    const startOnMotorway =
+      leadingSegment === 'MOTORWAY' || leadingSegment === 'TRUNK';
     return {
       geometry: p.points,
       distanceKm,
@@ -569,6 +595,9 @@ async function callGraphHopper(opts: {
         engine: 'graphhopper-8',
         profile: opts.profile,
         bbox: p.bbox,
+        has_highway: hasHighway,
+        actual_has_highway: hasHighway,
+        start_on_motorway: startOnMotorway,
       },
     };
   } catch (e) {
@@ -1036,8 +1065,45 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
   // Nutzt Plain-Dijkstra ohne Custom-Model.
   const ultimateAllFailed = parallel.every(p => 'error' in p.result);
   if (ultimateAllFailed && !isRoundTrip && req.target_location != null) {
+    const ultimateServers = serverChoice.primary === serverChoice.fallback
+      ? [serverChoice.primary]
+      : [serverChoice.primary, serverChoice.fallback];
+    // 2026-05-28 (vucko Task #82): VOR dem Auto-Fallback noch ein
+    // motorcycle_scenic-Versuch MIT avoid_highways. Kurze Trips (z.B.
+    // Hohenems→Feldkirch) bekommen so die parallele B-Straße (L190) statt
+    // der A14, bevor wir auf das generische Auto-Profil zurückfallen.
+    console.log(`[ULTIMATE FALLBACK] All attempts failed, trying motorcycle_scenic avoid-highway first`);
+    for (const scenicServer of ultimateServers) {
+      try {
+        const scenicResult = await callGraphHopper({
+          startLat: req.start_location!.latitude,
+          startLng: req.start_location!.longitude,
+          endLat: req.target_location.latitude,
+          endLng: req.target_location.longitude,
+          profile: 'motorcycle_scenic',
+          isRoundTrip: false,
+          avoidHighways: true,
+          serverUrl: scenicServer,
+          intermediateWaypoints: req.waypoints?.map(w => ({
+            lat: w.latitude, lng: w.longitude,
+          })),
+        });
+        if (!('error' in scenicResult)) {
+          console.log(`[ULTIMATE FALLBACK] motorcycle_scenic avoid-highway succeeded on ${scenicServer}`);
+          parallel = [{ result: scenicResult, seed: 0 }];
+          usedProfileFallback = true;
+          break;
+        }
+      } catch (e) {
+        console.log(`[ULTIMATE FALLBACK] motorcycle_scenic attempt threw: ${e}`);
+      }
+    }
+  }
+
+  const ultimateStillFailed = parallel.every(p => 'error' in p.result);
+  if (ultimateStillFailed && !isRoundTrip && req.target_location != null) {
     console.log(`[ULTIMATE FALLBACK] All motorcycle attempts failed, trying car profile direct`);
-    // Direkter A→B mit "car" profil, kein Custom-Model, keine Avoid-Highways
+    // Direkter A→B mit "car" profil, kein Custom-Model.
     const carServers = serverChoice.primary === serverChoice.fallback
       ? [serverChoice.primary]
       : [serverChoice.primary, serverChoice.fallback];
@@ -1050,7 +1116,9 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
           endLng: req.target_location.longitude,
           profile: 'car',
           isRoundTrip: false,
-          avoidHighways: false,  // explicit FALSE — Autobahn ok
+          // 2026-05-28 (vucko Task #82): respektiere die User-Einstellung
+          // statt hart Autobahn zu erlauben.
+          avoidHighways: req.avoid_highways ?? false,
           serverUrl: carServer,
           intermediateWaypoints: req.waypoints?.map(w => ({
             lat: w.latitude, lng: w.longitude,
@@ -1058,6 +1126,8 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
         });
         if (!('error' in carResult)) {
           console.log(`[ULTIMATE FALLBACK] car profile succeeded on ${carServer}`);
+          // 2026-05-28 (vucko Task #82): markiere die Notfall-Auto-Route.
+          carResult.meta.ultimate_car_fallback = true;
           parallel = [{ result: carResult, seed: 0 }];
           usedProfileFallback = true;
           break;

@@ -194,12 +194,22 @@ void main() {
         final coordinates = (geometry['coordinates'] as List)
             .map((point) => List<double>.from(point as List))
             .toList(growable: false);
-        final spikes = RouteQualityValidator.detectDeadEndSpikes(coordinates);
+        // 2026-05-31 (vucko): Dieser Test prüft gezielt KURZE Spikes (≤600m) —
+        // daher explizit mit den historischen engen Parametern. Die
+        // Produktiv-Defaults von detectDeadEndSpikes wurden separat erweitert
+        // (bis 1500m), um auch lange Sackgassen-Stiche zu erkennen; das ist
+        // hier bewusst NICHT Gegenstand (sonst flaggt es längere, evtl.
+        // gewollte Pool-Geometrien).
+        final spikes = RouteQualityValidator.detectDeadEndSpikes(
+          coordinates,
+          maxPathMeters: 600.0,
+          maxOutwardRadiusMeters: 320.0,
+        );
         expect(
           spikes,
           isEmpty,
           reason:
-              'seed route ${route['route_fingerprint']} contains dead-end spikes',
+              'seed route ${route['route_fingerprint']} contains short dead-end spikes',
         );
       }
     });

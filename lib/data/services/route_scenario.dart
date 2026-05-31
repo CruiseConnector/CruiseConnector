@@ -1,5 +1,7 @@
 import 'package:flutter/foundation.dart';
 
+import 'package:cruise_connect/data/services/country_region.dart';
+
 @immutable
 class RouteScenario {
   const RouteScenario({
@@ -15,6 +17,9 @@ class RouteScenario {
     this.avoidHighways = false,
     this.waypointSignature,
     this.closeLoop = false,
+    // 2026-05-30 (vucko): Länder-Präferenz (Soft-Scoring, nie Reject).
+    this.countryPreference = CountryPreference.any,
+    this.homeCountryCode,
   });
 
   final String routeType;
@@ -29,6 +34,8 @@ class RouteScenario {
   final String planningType;
   final String? waypointSignature;
   final bool closeLoop;
+  final CountryPreference countryPreference;
+  final String? homeCountryCode;
 
   String get normalizedRouteType => routeType.trim().toUpperCase();
 

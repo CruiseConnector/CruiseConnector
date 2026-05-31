@@ -914,18 +914,23 @@ class RouteQualityValidator {
   static List<RouteDeadEndSpike> detectDeadEndSpikes(
     List<List<double>> coordinates, {
     double minPathMeters = 80.0,
-    double maxPathMeters = 600.0,
+    // 2026-05-31 (vucko): Reichweite erhöht (600→1500m, Fenster 32→80), damit
+    // auch LÄNGERE Sackgassen erkannt werden, in die man reinfährt und wieder
+    // rausmuss (Hinterbühle-Report). Rejoin-Toleranz (35m) + Backtrack-
+    // Similarity (74%) halten den Detektor präzise; der Off-Road-Guard (40m)
+    // im cleanRouteArtifacts verhindert weiterhin jeden Sehnensprung.
+    double maxPathMeters = 1500.0,
     double rejoinToleranceMeters = 35.0,
     double backtrackSimilarityThresholdPercent = 74.0,
     double minOutwardRadiusMeters = 35.0,
-    double maxOutwardRadiusMeters = 320.0,
+    double maxOutwardRadiusMeters = 700.0,
     double corridorRejoinMaxDistanceMeters = 120.0,
     double corridorHeadingToleranceDegrees = 40.0,
   }) {
     if (coordinates.length < 8) return const [];
 
     final spikes = <RouteDeadEndSpike>[];
-    final maxWindowSize = math.min(32, coordinates.length - 1);
+    final maxWindowSize = math.min(80, coordinates.length - 1);
     var startIndex = 0;
 
     while (startIndex < coordinates.length - 4) {
@@ -1030,6 +1035,68 @@ class RouteQualityValidator {
     }
 
     return spikes;
+  }
+
+  /// 2026-05-31 (vucko Qualitäts-Fix): Entfernt Dead-End-Spikes / Sackgassen-
+  /// Zacken PHYSISCH aus der Polyline. Ein Spike ist ein Aus-und-Zurück, das
+  /// nahe seinem Startpunkt wieder einmündet (startIndex..endIndex). Wir
+  /// schneiden die Punkte dazwischen heraus und verbinden startIndex direkt mit
+  /// endIndex — die Route „glättet" sich an der Stelle.
+  ///
+  /// Iterativ bis keine Spikes mehr gefunden werden (max. [maxPasses] Runden,
+  /// um Endlosschleifen auszuschließen). Gibt die bereinigten Koordinaten
+  /// zurück; wenn nichts gefunden wurde, identisch zur Eingabe.
+  static List<List<double>> cleanRouteArtifacts(
+    List<List<double>> coordinates, {
+    int maxPasses = 4,
+  }) {
+    if (coordinates.length < 8) return coordinates;
+    var current = coordinates;
+    for (var pass = 0; pass < maxPasses; pass++) {
+      final spikes = detectDeadEndSpikes(current);
+      if (spikes.isEmpty) break;
+      // Spikes sind nach startIndex sortiert + überlappen nicht (detect springt
+      // hinter endIndex). Wir bauen die neue Liste, indem wir die
+      // out-and-back-Segmente überspringen.
+      final cleaned = <List<double>>[];
+      var cursor = 0;
+      for (final spike in spikes) {
+        // 2026-05-31 (vucko): NIEMALS einen Off-Road-Sehnensprung erzeugen.
+        // Wir schneiden nur, wenn der Wiederanschluss-Punkt (endIndex+1) sehr
+        // nah am behaltenen Punkt (startIndex) liegt — dann verläuft die
+        // Verbindung auf derselben Straße weiter. Ist die Lücke größer (>40m),
+        // lassen wir den Spike lieber drin, als eine Linie quer durchs Gelände
+        // zu ziehen. (Der Detektor garantiert nur startIndex≈endIndex, nicht
+        // startIndex≈endIndex+1.)
+        final reconnectIndex = spike.endIndex + 1;
+        final keptPoint = current[spike.startIndex];
+        final canExcise = reconnectIndex < current.length &&
+            geo.Geolocator.distanceBetween(
+                  keptPoint[1],
+                  keptPoint[0],
+                  current[reconnectIndex][1],
+                  current[reconnectIndex][0],
+                ) <=
+                40.0;
+        if (!canExcise) continue;
+        // Punkte bis inkl. spike.startIndex behalten …
+        for (var i = cursor; i <= spike.startIndex; i++) {
+          cleaned.add(current[i]);
+        }
+        // … und direkt hinter dem Spike weitermachen (out-and-back gedroppt).
+        cursor = reconnectIndex;
+      }
+      for (var i = cursor; i < current.length; i++) {
+        cleaned.add(current[i]);
+      }
+      if (cleaned.length < 2 || cleaned.length == current.length) {
+        // Kein Fortschritt mehr → abbrechen (Sicherheitsnetz).
+        current = cleaned.length >= 2 ? cleaned : current;
+        break;
+      }
+      current = cleaned;
+    }
+    return current;
   }
 
   static RouteOverlapType _classifyOverlap({
