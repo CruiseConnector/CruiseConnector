@@ -9,6 +9,7 @@ import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/application/providers/community_provider.dart';
 import 'package:cruise_connect/data/services/offline_map_service.dart';
 import 'package:cruise_connect/data/services/notification_service.dart';
+import 'package:cruise_connect/data/services/push_notification_service.dart';
 import 'package:cruise_connect/presentation/pages/home_content_page.dart';
 import 'package:cruise_connect/presentation/widgets/top_toast.dart';
 import 'package:cruise_connect/presentation/pages/community_page.dart';
@@ -203,6 +204,10 @@ class _HomePageState extends State<HomePage> {
     };
     await svc.loadInitial();
     await svc.startRealtime();
+    // 2026-05-31 (vucko): Echte Handy-Push aktivieren — Permission anfragen +
+    // FCM-Device-Token in Supabase registrieren. Läuft erst hier (nach Login),
+    // damit das Token dem eingeloggten User zugeordnet wird. No-op auf Web.
+    unawaited(PushNotificationService.instance.initForUser());
   }
 
   IconData _iconForType(String type) => switch (type) {

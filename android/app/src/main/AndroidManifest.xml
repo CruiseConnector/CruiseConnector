@@ -64,6 +64,12 @@
         <meta-data
             android:name="com.google.android.gms.car.application"
             android:resource="@xml/automotive_app_desc" />
+        <!-- 2026-05-31 (vucko): FCM-Default-Channel. Muss zur Channel-ID in
+             PushNotificationService + Edge-Function send-push passen, damit
+             Background-Pushes im richtigen Kanal (mit Ton/Wichtigkeit) landen. -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="cruise_default" />
         <service
             android:name=".car.CruiseCarAppService"
             android:exported="true"

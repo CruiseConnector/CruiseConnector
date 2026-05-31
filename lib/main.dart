@@ -2,7 +2,8 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:app_links/app_links.dart';
-import 'package:flutter/foundation.dart' show kDebugMode, kIsWeb;
+import 'package:flutter/foundation.dart'
+    show kDebugMode, kIsWeb, defaultTargetPlatform, TargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 // ignore: depend_on_referenced_packages
@@ -21,6 +22,7 @@ import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/data/services/voice_settings_service.dart';
 import 'package:cruise_connect/data/services/notification_service.dart';
 import 'package:cruise_connect/data/services/notification_settings_service.dart';
+import 'package:cruise_connect/data/services/push_notification_service.dart';
 import 'package:cruise_connect/data/services/poi_settings_service.dart';
 import 'package:cruise_connect/presentation/pages/auth_page.dart';
 import 'package:cruise_connect/presentation/pages/post_detail_page.dart';
@@ -44,6 +46,16 @@ void main() {
       unawaited(VoiceSettingsService.instance.load());
       unawaited(NotificationSettingsService.instance.load());
       unawaited(PoiSettingsService.instance.load());
+
+      // 2026-05-31 (vucko): Push (FCM) nur auf Android/iOS. Firebase ist hier
+      // REIN der Push-Kanal (kein Parallelbackend, vgl. codex.md). Der
+      // Background-Handler wird intern beim Init registriert; Token-Registrierung
+      // + Permission laufen erst nach Login (HomePage).
+      if (!kIsWeb &&
+          (defaultTargetPlatform == TargetPlatform.android ||
+              defaultTargetPlatform == TargetPlatform.iOS)) {
+        await PushNotificationService.instance.ensureFirebaseInitialized();
+      }
 
       runApp(const MyApp());
     },
