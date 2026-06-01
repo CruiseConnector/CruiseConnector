@@ -9,6 +9,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
+import 'package:vector_map_tiles_pmtiles/vector_map_tiles_pmtiles.dart';
 
 class OfflineTile {
   const OfflineTile({required this.z, required this.x, required this.y});
@@ -64,6 +65,36 @@ class OfflineMapService {
   // Format wie Mapbox: 'https://<cdn>/{z}/{x}/{y}.png' (256px, dark-Style nahe
   // CARTO Dark / Mapbox-dark). Kein {accessToken} nötig.
   static const String? selfHostedTileUrlTemplate = null;
+
+  // 2026-06-02 (vucko): Self-hosted VEKTOR-Tiles (PMTiles auf Cloudflare R2).
+  // Eine Datei, per HTTP-Range gestreamt — löst die teuren Mapbox-Tile-Requests
+  // ab. Wird clientseitig im Dark-Style gerendert (vector_map_tiles_pmtiles).
+  // Bei Lade-/Render-Fehler nutzt die App weiter den Mapbox-Raster-Layer.
+  // Leeren String setzen, um die Vektor-Quelle abzuschalten (→ Mapbox-Raster).
+  static const String selfHostedPmtilesUrl =
+      'https://pub-0535dd4f86054de1820907b6f06bf17c.r2.dev/dach.pmtiles';
+
+  PmTilesVectorTileProvider? _pmtilesProvider;
+  bool _pmtilesLoadAttempted = false;
+
+  /// Lädt den PMTiles-Vektor-Provider einmalig (gecacht). `null` = nicht
+  /// verfügbar (leere URL, Web oder Fehler) → die App bleibt beim Mapbox-Raster.
+  Future<PmTilesVectorTileProvider?> loadPmtilesProvider() async {
+    if (_pmtilesProvider != null || _pmtilesLoadAttempted) {
+      return _pmtilesProvider;
+    }
+    _pmtilesLoadAttempted = true;
+    if (kIsWeb || selfHostedPmtilesUrl.isEmpty) return null;
+    try {
+      _pmtilesProvider =
+          await PmTilesVectorTileProvider.fromSource(selfHostedPmtilesUrl);
+      if (kDebugMode) debugPrint('[OfflineMap] PMTiles-Vektorquelle geladen.');
+    } catch (e) {
+      _pmtilesProvider = null;
+      if (kDebugMode) debugPrint('[OfflineMap] PMTiles laden fehlgeschlagen: $e');
+    }
+    return _pmtilesProvider;
+  }
 
   bool _selfHostedHealthy = false;
   int _selfHostedErrorStreak = 0;

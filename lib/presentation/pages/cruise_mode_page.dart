@@ -40,6 +40,8 @@ import 'package:cruise_connect/data/services/driven_track_recorder.dart';
 import 'package:cruise_connect/data/services/navigation_guidance_utils.dart';
 import 'package:cruise_connect/data/services/navigation_progress_socket_service.dart';
 import 'package:cruise_connect/data/services/offline_map_service.dart';
+import 'package:vector_map_tiles/vector_map_tiles.dart';
+import 'package:vector_map_tiles_pmtiles/vector_map_tiles_pmtiles.dart';
 import 'package:cruise_connect/data/services/car_route_bridge_service.dart';
 import 'package:cruise_connect/data/services/group_route_data_builder.dart';
 import 'package:cruise_connect/data/services/route_access_plan.dart';
@@ -822,6 +824,7 @@ class _CruiseModePageState extends State<CruiseModePage>
   @override
   void initState() {
     super.initState();
+    _loadVectorTiles();
     // Animierte Kamera-Bewegung zwischen GPS-Updates (alle Plattformen, 60fps)
     // 2026-05-22 (vucko): GPS-Update-Frequenz jetzt 200ms (Android). Camera-
     // Animation muss noch dazu passen damit zwischen Updates ohne Stop weitergeht.
@@ -4172,7 +4175,19 @@ class _CruiseModePageState extends State<CruiseModePage>
         // produziert).
         // Plus tileDisplay.instantaneous statt fade-in damit es kein
         // Alpha-Blending zwischen alten und neuen Tiles gibt.
-        TileLayer(
+        // 2026-06-02 (vucko): Self-hosted VEKTOR-Tiles (PMTiles aus R2) im
+        // Cruise-Dark-Style, sobald geladen. Schlägt Laden/Rendern fehl, bleibt
+        // _pmtilesProvider null → Mapbox-Raster-Layer (else) als Fallback,
+        // damit die Karte IMMER funktioniert.
+        if (_pmtilesProvider != null)
+          VectorTileLayer(
+            tileProviders: TileProviders({'protomaps': _pmtilesProvider!}),
+            theme: ProtomapsThemes.darkV3(),
+            tileOffset: TileOffset.DEFAULT,
+            concurrency: 2,
+          )
+        else
+          TileLayer(
           // 2026-06-01 (vucko): Aktive Quelle = self-hosted (wenn gesund) ODER
           // Mapbox-Fallback. Die echte URL baut der OfflineMapTileProvider
           // dynamisch; errorTileCallback meldet Fehler → Auto-Rückfall auf Mapbox.
@@ -4376,6 +4391,18 @@ class _CruiseModePageState extends State<CruiseModePage>
   // ═══════════════════════ MAP LIFECYCLE ═════════════════════════════════════
 
   /// Wird von flutter_map aufgerufen wenn die Karte bereit ist.
+  /// PMTiles-Vektorquelle (R2). Sobald geladen, rendert die Karte die
+  /// self-hosted Tiles im Dark-Style (siehe _buildMapWidget); bleibt sie null,
+  /// nutzt die App weiter den Mapbox-Raster-Layer (Fallback, nichts bricht).
+  PmTilesVectorTileProvider? _pmtilesProvider;
+
+  Future<void> _loadVectorTiles() async {
+    final provider = await OfflineMapService.instance.loadPmtilesProvider();
+    if (provider != null && mounted) {
+      _safeSetState(() => _pmtilesProvider = provider);
+    }
+  }
+
   void _onMapReady() {
     debugPrint(
       '[CruiseMode] _onMapReady called, routeGeoJson=${_routeGeoJson != null}, routeLatLngs=${_routeLatLngs.length}',

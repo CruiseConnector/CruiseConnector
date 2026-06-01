@@ -67,6 +67,8 @@ dependencies:
   firebase_core: ^4.9.0
   firebase_messaging: ^16.2.2
   flutter_local_notifications: ^21.0.0
+  vector_map_tiles: ^8.0.0
+  vector_map_tiles_pmtiles: ^1.5.0
 dev_dependencies:
   flutter_test:
     sdk: flutter
