@@ -50,10 +50,22 @@ final class CarPlayRouteCoordinator: NSObject {
     func start() {
         window.rootViewController = mapViewController
         mapTemplate.automaticallyHidesNavigationBar = false
+        configureMapButtons()
         interfaceController.setRootTemplate(mapTemplate, animated: false)
         showSafetyNoticeIfNeeded()
         refresh()
         startTimer()
+    }
+
+    /// Karten-Buttons im Maps-Stil: Zentrieren, Zoom raus, Zoom rein.
+    private func configureMapButtons() {
+        let recenter = CPMapButton { [weak self] _ in self?.mapViewController.recenterOnRoute() }
+        recenter.image = UIImage(systemName: "location.fill")
+        let zoomOut = CPMapButton { [weak self] _ in self?.mapViewController.zoomOut() }
+        zoomOut.image = UIImage(systemName: "minus.magnifyingglass")
+        let zoomIn = CPMapButton { [weak self] _ in self?.mapViewController.zoomIn() }
+        zoomIn.image = UIImage(systemName: "plus.magnifyingglass")
+        mapTemplate.mapButtons = [recenter, zoomOut, zoomIn]
     }
 
     private func startTimer() {
@@ -66,6 +78,12 @@ final class CarPlayRouteCoordinator: NSObject {
     }
 
     private func refresh() {
+        // Meldet der Handy-App, dass CarPlay verbunden ist → reduzierte
+        // Manöver-Ansicht am Handy (Key mit flutter.-Präfix wie shared_preferences).
+        UserDefaults.standard.set(
+            ISO8601DateFormatter().string(from: Date()),
+            forKey: "flutter.car_connected_at"
+        )
         guard let snapshot = routeStore.readSnapshot() else {
             applyIdleState()
             endNavigationSession(cancel: true)
@@ -322,6 +340,31 @@ final class CarPlayMapViewController: UIViewController, MKMapViewDelegate {
             mapView.removeOverlay(existing)
             routeOverlay = nil
         }
+    }
+
+    // MARK: - Karten-Steuerung (CPMapButtons)
+
+    func zoomIn() {
+        var region = mapView.region
+        region.span.latitudeDelta = max(region.span.latitudeDelta * 0.5, 0.001)
+        region.span.longitudeDelta = max(region.span.longitudeDelta * 0.5, 0.001)
+        mapView.setRegion(region, animated: true)
+    }
+
+    func zoomOut() {
+        var region = mapView.region
+        region.span.latitudeDelta = min(region.span.latitudeDelta * 2.0, 80.0)
+        region.span.longitudeDelta = min(region.span.longitudeDelta * 2.0, 80.0)
+        mapView.setRegion(region, animated: true)
+    }
+
+    func recenterOnRoute() {
+        guard let overlay = routeOverlay else { return }
+        mapView.setVisibleMapRect(
+            overlay.boundingMapRect,
+            edgePadding: UIEdgeInsets(top: 48, left: 48, bottom: 48, right: 48),
+            animated: true
+        )
     }
 
     func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {

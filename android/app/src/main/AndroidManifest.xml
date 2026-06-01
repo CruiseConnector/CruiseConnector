@@ -16,6 +16,12 @@
         android:label="Cruise Connector"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
+        <!-- Android Auto: Min Car API Level MUSS im <application>-Tag stehen
+             (nicht im <service>), sonst liest die Library es nicht und der
+             Car-App-Start crasht mit "Min API level not declared". -->
+        <meta-data
+            android:name="androidx.car.app.minCarApiLevel"
+            android:value="1" />
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -74,15 +80,16 @@
             android:name=".car.CruiseCarAppService"
             android:exported="true"
             android:icon="@mipmap/ic_launcher"
-            android:label="Cruise Connector"
-            android:permission="androidx.car.app.CarAppService">
+            android:label="Cruise Connector">
+            <!-- KEIN android:permission: androidx.car.app.CarAppService ist auf
+                 Geräten nicht als Permission definiert → der Auto-Host bekäme
+                 "Not allowed to bind / Permission Denial". Zugriffsschutz läuft
+                 korrekt über createHostValidator() in CruiseCarAppService.
+                 (Lint-Warnung "exported ohne permission" ist hier beabsichtigt.) -->
             <intent-filter>
                 <action android:name="androidx.car.app.CarAppService" />
                 <category android:name="androidx.car.app.category.NAVIGATION" />
             </intent-filter>
-            <meta-data
-                android:name="androidx.car.app.minCarApiLevel"
-                android:value="1" />
         </service>
     </application>
     <!-- Required to query activities that can process text, see:

@@ -1,38 +1,135 @@
 package com.vucko.cruiserconnect.car
 
+import android.os.Handler
+import android.os.Looper
 import androidx.car.app.CarContext
 import androidx.car.app.Screen
 import androidx.car.app.model.Action
 import androidx.car.app.model.ActionStrip
+import androidx.car.app.model.CarColor
 import androidx.car.app.model.CarIcon
-import androidx.car.app.model.CarText
-import androidx.car.app.model.MessageTemplate
-import androidx.car.app.model.Pane
-import androidx.car.app.model.PaneTemplate
-import androidx.car.app.model.Row
 import androidx.car.app.model.Template
+import androidx.car.app.navigation.model.MessageInfo
+import androidx.car.app.navigation.model.NavigationTemplate
 import androidx.core.graphics.drawable.IconCompat
+import androidx.lifecycle.DefaultLifecycleObserver
+import androidx.lifecycle.LifecycleOwner
 import com.vucko.cruiserconnect.R
 
+/**
+ * Karten-Start-Screen für Android Auto.
+ *
+ * 2026-06-02 (vucko): Zeigt IMMER die Karte (NavigationTemplate + Surface) mit
+ * Zoom/Zentrieren. Sobald am Handy eine Navigation startet (status=navigating),
+ * springt das Auto-Display **automatisch** in die Navigations-Karte — ohne
+ * Knopfdruck, wie bei Apple/Google Maps mit verbundenem System.
+ */
 class CruiseCarHomeScreen(
     carContext: CarContext,
     private val routeStore: CarRouteSnapshotStore,
-) : Screen(carContext) {
-    override fun onGetTemplate(): Template {
-        val snapshot = routeStore.readSnapshot()
-        return when {
-            snapshot == null || snapshot.status == "idle" || snapshot.status == "ended" -> emptyTemplate()
-            snapshot.status == "searching" -> searchingTemplate(snapshot)
-            snapshot.status == "failed" -> failedTemplate()
-            snapshot.hasRoute -> previewTemplate(snapshot)
-            else -> emptyTemplate()
+    private val renderer: CruiseCarMapSurfaceRenderer,
+) : Screen(carContext), DefaultLifecycleObserver {
+
+    private val handler = Handler(Looper.getMainLooper())
+    private var lastStatus: String? = null
+
+    private val refreshRunnable = object : Runnable {
+        override fun run() {
+            routeStore.markCarConnected()
+            autoEnterNavigationIfNeeded()
+            invalidate()
+            handler.postDelayed(this, REFRESH_INTERVAL_MS)
         }
     }
 
-    private fun emptyTemplate(): Template {
-        return MessageTemplate.Builder("Plane deine Route am Handy und sie erscheint hier.")
-            .setTitle("Cruise Connector")
-            .setHeaderAction(Action.APP_ICON)
+    init {
+        lifecycle.addObserver(this)
+    }
+
+    override fun onResume(owner: LifecycleOwner) {
+        handler.removeCallbacks(refreshRunnable)
+        handler.post(refreshRunnable)
+    }
+
+    override fun onPause(owner: LifecycleOwner) {
+        handler.removeCallbacks(refreshRunnable)
+    }
+
+    /**
+     * Springt automatisch in die Navigations-Karte, sobald am Handy eine Route
+     * gestartet wurde (Übergang zu "navigating") — nur einmal pro Navi und nur,
+     * solange der Home-Screen oben liegt (kein erneutes Pushen nach Zurück).
+     */
+    private fun autoEnterNavigationIfNeeded() {
+        val status = routeStore.readSnapshot()?.status
+        if (status == "navigating" && lastStatus != "navigating" &&
+            screenManager.top === this
+        ) {
+            screenManager.push(
+                CruiseCarNavigationScreen(carContext, routeStore, renderer),
+            )
+        }
+        lastStatus = status
+    }
+
+    override fun onGetTemplate(): Template {
+        val snapshot = routeStore.readSnapshot()
+        val builder = NavigationTemplate.Builder()
+            .setMapActionStrip(mapActionStrip())
+
+        when {
+            snapshot != null && snapshot.hasRoute &&
+                (snapshot.status == "found" || snapshot.status == "navigating") -> {
+                builder.setNavigationInfo(
+                    MessageInfo.Builder(
+                        "${snapshot.title()} • ${formatDistance(snapshot.distanceMeters)} • " +
+                            formatDuration(snapshot.durationSeconds),
+                    ).build(),
+                )
+                builder.setActionStrip(
+                    ActionStrip.Builder()
+                        .addAction(
+                            Action.Builder()
+                                .setTitle("Navigation starten")
+                                .setOnClickListener {
+                                    screenManager.push(
+                                        CruiseCarNavigationScreen(carContext, routeStore, renderer),
+                                    )
+                                }
+                                .build(),
+                        )
+                        .build(),
+                )
+            }
+
+            snapshot != null && snapshot.status == "searching" -> {
+                builder.setNavigationInfo(
+                    MessageInfo.Builder("Route wird berechnet …").build(),
+                )
+                builder.setActionStrip(refreshStrip())
+            }
+
+            snapshot != null && snapshot.status == "failed" -> {
+                builder.setNavigationInfo(
+                    MessageInfo.Builder("Keine Route gefunden — am Handy neu suchen.").build(),
+                )
+                builder.setActionStrip(refreshStrip())
+            }
+
+            else -> {
+                builder.setNavigationInfo(
+                    MessageInfo.Builder(
+                        "Plane eine Route — sie erscheint hier direkt auf der Karte.",
+                    ).build(),
+                )
+                builder.setActionStrip(refreshStrip())
+            }
+        }
+        return builder.build()
+    }
+
+    private fun refreshStrip(): ActionStrip {
+        return ActionStrip.Builder()
             .addAction(
                 Action.Builder()
                     .setTitle("Aktualisieren")
@@ -42,80 +139,38 @@ class CruiseCarHomeScreen(
             .build()
     }
 
-    private fun searchingTemplate(snapshot: CarRouteSnapshot): Template {
-        return MessageTemplate.Builder("Wir prüfen Varianten und bereiten die Route vor.")
-            .setTitle(snapshot.style ?: "Route wird berechnet")
-            .setHeaderAction(Action.APP_ICON)
+    /** Karten-Buttons wie bei Google Maps: Zoom rein/raus, Zentrieren, Schieben. */
+    private fun mapActionStrip(): ActionStrip {
+        return ActionStrip.Builder()
             .addAction(
                 Action.Builder()
-                    .setTitle("Aktualisieren")
-                    .setOnClickListener { invalidate() }
+                    .setIcon(carIcon(R.drawable.ic_car_zoom_in))
+                    .setOnClickListener { renderer.zoomIn() }
                     .build(),
             )
+            .addAction(
+                Action.Builder()
+                    .setIcon(carIcon(R.drawable.ic_car_zoom_out))
+                    .setOnClickListener { renderer.zoomOut() }
+                    .build(),
+            )
+            .addAction(
+                Action.Builder()
+                    .setIcon(carIcon(R.drawable.ic_car_recenter))
+                    .setOnClickListener { renderer.recenter() }
+                    .build(),
+            )
+            .addAction(Action.PAN)
             .build()
     }
 
-    private fun failedTemplate(): Template {
-        return MessageTemplate.Builder("Die letzte Routensuche konnte nicht abgeschlossen werden.")
-            .setTitle("Keine Route verfügbar")
-            .setHeaderAction(Action.APP_ICON)
-            .addAction(
-                Action.Builder()
-                    .setTitle("Neu laden")
-                    .setOnClickListener { invalidate() }
-                    .build(),
-            )
+    private fun carIcon(resId: Int): CarIcon {
+        return CarIcon.Builder(IconCompat.createWithResource(carContext, resId))
+            .setTint(CarColor.DEFAULT)
             .build()
     }
 
-    private fun previewTemplate(snapshot: CarRouteSnapshot): Template {
-        val pane = Pane.Builder()
-            .addRow(
-                Row.Builder()
-                    .setTitle(snapshot.title())
-                    .addText("${formatDistance(snapshot.distanceMeters)} • ${formatDuration(snapshot.durationSeconds)}")
-                    .addText(snapshot.style ?: "Cruise Route")
-                    .build(),
-            )
-            .addRow(
-                Row.Builder()
-                    .setTitle("Autobahn")
-                    .addText(if (snapshot.avoidHighways) "wird vermieden" else "erlaubt, nicht Pflicht")
-                    .build(),
-            )
-            .build()
-
-        return PaneTemplate.Builder(pane)
-            .setTitle("Route bereit")
-            .setHeaderAction(Action.APP_ICON)
-            .setActionStrip(
-                ActionStrip.Builder()
-                    .addAction(
-                        Action.Builder()
-                            .setTitle("Navigation")
-                            .setIcon(
-                                CarIcon.Builder(
-                                    IconCompat.createWithResource(
-                                        carContext,
-                                        R.drawable.ic_car_compass,
-                                    ),
-                                ).build(),
-                            )
-                            .setOnClickListener {
-                                screenManager.push(
-                                    CruiseCarNavigationScreen(carContext, routeStore),
-                                )
-                            }
-                            .build(),
-                    )
-                    .addAction(
-                        Action.Builder()
-                            .setTitle("Neu laden")
-                            .setOnClickListener { invalidate() }
-                            .build(),
-                    )
-                    .build(),
-            )
-            .build()
+    companion object {
+        private const val REFRESH_INTERVAL_MS = 2000L
     }
 }

@@ -6,6 +6,8 @@ import androidx.car.app.CarContext
 import androidx.car.app.Screen
 import androidx.car.app.model.Action
 import androidx.car.app.model.ActionStrip
+import androidx.car.app.model.CarColor
+import androidx.car.app.model.CarIcon
 import androidx.car.app.model.CarText
 import androidx.car.app.model.Distance
 import androidx.car.app.model.MessageTemplate
@@ -19,27 +21,25 @@ import androidx.car.app.navigation.model.RoutingInfo
 import androidx.car.app.navigation.model.Step
 import androidx.car.app.navigation.model.TravelEstimate
 import androidx.car.app.navigation.model.Trip
+import androidx.core.graphics.drawable.IconCompat
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
+import com.vucko.cruiserconnect.R
 import java.time.ZonedDateTime
 import kotlin.math.max
 
 /**
- * Zeigt die laufende Cruise-Navigation auf Android Auto.
+ * Maps-Stil-Navigation auf Android Auto: gezeichnete Karte (Surface) mit
+ * Route + Zoom/Zentrieren-Buttons + Abbiege-Banner + Live-ETA.
  *
- * 2026-06-01 (vucko): Aus der statischen Pull-Anzeige (manueller
- * "Aktualisieren"-Button, immer TYPE_STRAIGHT) wurde echte Live-Navigation:
- *  - periodisches [invalidate] (alle [REFRESH_INTERVAL_MS] ms) → Distanz,
- *    Restzeit und Manöver laufen automatisch mit, kein Tippen mehr nötig.
- *  - echtes Manöver-Mapping ([maneuverFor]) → links/rechts/Kreisverkehr statt
- *    immer geradeaus. Quelle ist `nextManeuverKind` aus dem Flutter-Snapshot.
- *  - [NavigationManager]-Integration: navigationStarted/Ended + updateTrip, damit
- *    der Auto-Host weiß, dass wir aktiv navigieren (Audio-Fokus, Cluster-Display,
- *    Host-seitiger Stop-Button). Nötig für eine echte Navigations-App.
+ * 2026-06-02 (vucko): Map-Steuerung ([setMapActionStrip]) verbindet die
+ * Zoom-/Recenter-Buttons mit dem geteilten [CruiseCarMapSurfaceRenderer].
+ * Plus echtes Manöver-Mapping, periodisches Live-Update und NavigationManager.
  */
 class CruiseCarNavigationScreen(
     carContext: CarContext,
     private val routeStore: CarRouteSnapshotStore,
+    private val renderer: CruiseCarMapSurfaceRenderer,
 ) : Screen(carContext), DefaultLifecycleObserver {
 
     private val handler = Handler(Looper.getMainLooper())
@@ -47,6 +47,7 @@ class CruiseCarNavigationScreen(
 
     private val refreshRunnable = object : Runnable {
         override fun run() {
+            routeStore.markCarConnected()
             val snapshot = routeStore.readSnapshot()
             if (snapshot != null && snapshot.hasRoute && snapshot.status == "navigating") {
                 startNavigationManagerIfNeeded(snapshot)
@@ -110,6 +111,7 @@ class CruiseCarNavigationScreen(
         return NavigationTemplate.Builder()
             .setNavigationInfo(routingInfo)
             .setDestinationTravelEstimate(travelEstimate)
+            .setMapActionStrip(mapActionStrip())
             .setActionStrip(
                 ActionStrip.Builder()
                     .addAction(
@@ -126,12 +128,37 @@ class CruiseCarNavigationScreen(
             .build()
     }
 
-    /**
-     * Meldet dem Auto-Host den Start einer aktiven Navigation und registriert den
-     * Stop-Callback (Host kann die Navigation z. B. per Lenkrad beenden).
-     * Idempotent über [navigationActive]; jede Host-Interaktion ist defensiv
-     * gekapselt, damit ein Host-Fehler die App nie crasht.
-     */
+    /** Karten-Steuerung wie bei Google Maps: Zoom rein/raus, Zentrieren, Schieben. */
+    private fun mapActionStrip(): ActionStrip {
+        return ActionStrip.Builder()
+            .addAction(
+                Action.Builder()
+                    .setIcon(carIcon(R.drawable.ic_car_zoom_in))
+                    .setOnClickListener { renderer.zoomIn() }
+                    .build(),
+            )
+            .addAction(
+                Action.Builder()
+                    .setIcon(carIcon(R.drawable.ic_car_zoom_out))
+                    .setOnClickListener { renderer.zoomOut() }
+                    .build(),
+            )
+            .addAction(
+                Action.Builder()
+                    .setIcon(carIcon(R.drawable.ic_car_recenter))
+                    .setOnClickListener { renderer.recenter() }
+                    .build(),
+            )
+            .addAction(Action.PAN)
+            .build()
+    }
+
+    private fun carIcon(resId: Int): CarIcon {
+        return CarIcon.Builder(IconCompat.createWithResource(carContext, resId))
+            .setTint(CarColor.DEFAULT)
+            .build()
+    }
+
     private fun startNavigationManagerIfNeeded(snapshot: CarRouteSnapshot) {
         if (navigationActive) return
         if (!snapshot.hasRoute || snapshot.status != "navigating") return
@@ -144,7 +171,7 @@ class CruiseCarNavigationScreen(
                 }
 
                 override fun onAutoDriveEnabled() {
-                    // Test-/Simulationsmodus des Hosts — keine eigene Reaktion nötig.
+                    // Host-Simulationsmodus — keine eigene Reaktion nötig.
                 }
             })
             manager.navigationStarted()
@@ -161,15 +188,11 @@ class CruiseCarNavigationScreen(
             manager.navigationEnded()
             manager.clearNavigationManagerCallback()
         } catch (_: Exception) {
-            // Host bereits getrennt — Zustand trotzdem zurücksetzen.
+            // Host bereits getrennt.
         }
         navigationActive = false
     }
 
-    /**
-     * Schiebt den aktuellen Schritt + Ziel-ETA als [Trip] an den Host, damit
-     * Distanz/Manöver auch im Instrumenten-Cluster / Lockscreen erscheinen.
-     */
     private fun pushTripUpdate(snapshot: CarRouteSnapshot) {
         if (!navigationActive) return
         try {
@@ -207,11 +230,6 @@ class CruiseCarNavigationScreen(
         }
     }
 
-    /**
-     * Übersetzt den maschinenlesbaren Kind aus dem Flutter-Snapshot in ein echtes
-     * Android-Auto-Manöversymbol. Fällt bei unbekanntem/fehlerhaftem Wert sicher
-     * auf "geradeaus" zurück.
-     */
     private fun maneuverFor(kind: String?): Maneuver {
         return try {
             when (kind) {

@@ -34,6 +34,23 @@ data class CarRouteSnapshot(
 }
 
 class CarRouteSnapshotStore(private val context: Context) {
+
+    /**
+     * Markiert das Auto-Modul als "verbunden", damit die Handy-App (Flutter)
+     * weiß, dass auf dem Auto-Display projiziert wird und in die reduzierte
+     * Manöver-Ansicht wechseln kann. Key mit "flutter."-Präfix, da Flutters
+     * shared_preferences nativ geschriebene Werte nur so liest.
+     */
+    fun markCarConnected() {
+        val prefs = context.getSharedPreferences(
+            "FlutterSharedPreferences",
+            Context.MODE_PRIVATE,
+        )
+        prefs.edit()
+            .putString("flutter.car_connected_at", java.time.Instant.now().toString())
+            .apply()
+    }
+
     fun readSnapshot(): CarRouteSnapshot? {
         val raw = readString("flutter.car_route_snapshot")
             ?: readString("car_route_snapshot")

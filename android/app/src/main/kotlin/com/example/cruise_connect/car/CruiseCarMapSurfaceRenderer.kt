@@ -5,38 +5,106 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.Rect
+import android.os.Handler
+import android.os.Looper
 import android.view.Surface
 import androidx.car.app.SurfaceCallback
 import androidx.car.app.SurfaceContainer
 import kotlin.math.max
 import kotlin.math.min
 
+/**
+ * Zeichnet die Cruise-Route als interaktive Karte auf die Android-Auto-Surface.
+ *
+ * 2026-06-02 (vucko): Aus dem statischen Hintergrund-Renderer wurde eine
+ * bedienbare Karte im Maps-Stil:
+ *  - Zoom rein/raus + Zentrieren ([zoomIn]/[zoomOut]/[recenter]) — vom
+ *    NavigationScreen über die Map-Buttons aufgerufen.
+ *  - Schieben (Pan) per Finger ([onScroll]) und Pinch-Zoom ([onScale]).
+ *  - periodisches Neuzeichnen, damit Reroutes/POIs automatisch erscheinen.
+ */
 class CruiseCarMapSurfaceRenderer(
     private val routeStore: CarRouteSnapshotStore,
 ) : SurfaceCallback {
+
+    private val handler = Handler(Looper.getMainLooper())
+    private var surfaceContainer: SurfaceContainer? = null
     private var visibleArea: Rect? = null
 
+    private var zoomScale = 1.0f
+    private var panX = 0f
+    private var panY = 0f
+
+    private val redrawRunnable = object : Runnable {
+        override fun run() {
+            render()
+            handler.postDelayed(this, REDRAW_INTERVAL_MS)
+        }
+    }
+
+    // MARK: - SurfaceCallback
+
     override fun onSurfaceAvailable(surfaceContainer: SurfaceContainer) {
-        render(surfaceContainer)
+        this.surfaceContainer = surfaceContainer
+        handler.removeCallbacks(redrawRunnable)
+        handler.post(redrawRunnable)
     }
 
     override fun onVisibleAreaChanged(visibleArea: Rect) {
         this.visibleArea = Rect(visibleArea)
+        render()
     }
 
     override fun onStableAreaChanged(stableArea: Rect) {
-        // The renderer draws into the full host surface. Templates keep cards
-        // inside the stable area; the route is intentionally background-only.
+        // Karte zeichnet in die volle Surface; Cards liegen im Stable-Bereich.
     }
 
-    private fun render(surfaceContainer: SurfaceContainer) {
-        val surface = surfaceContainer.surface ?: return
+    override fun onSurfaceDestroyed(surfaceContainer: SurfaceContainer) {
+        handler.removeCallbacks(redrawRunnable)
+        this.surfaceContainer = null
+    }
+
+    override fun onScroll(distanceX: Float, distanceY: Float) {
+        panX -= distanceX
+        panY -= distanceY
+        render()
+    }
+
+    override fun onScale(focusX: Float, focusY: Float, scaleFactor: Float) {
+        zoomScale = (zoomScale * scaleFactor).coerceIn(MIN_ZOOM, MAX_ZOOM)
+        render()
+    }
+
+    // MARK: - Öffentliche Steuerung (Map-Buttons)
+
+    fun zoomIn() {
+        zoomScale = (zoomScale * 1.4f).coerceIn(MIN_ZOOM, MAX_ZOOM)
+        render()
+    }
+
+    fun zoomOut() {
+        zoomScale = (zoomScale / 1.4f).coerceIn(MIN_ZOOM, MAX_ZOOM)
+        render()
+    }
+
+    fun recenter() {
+        zoomScale = 1.0f
+        panX = 0f
+        panY = 0f
+        render()
+    }
+
+    // MARK: - Zeichnen
+
+    private fun render() {
+        val container = surfaceContainer ?: return
+        val surface = container.surface ?: return
         if (!surface.isValid) return
         val canvas = tryLock(surface) ?: return
         try {
             drawRoute(canvas, routeStore.readSnapshot())
         } finally {
-            surface.unlockCanvasAndPost(canvas)
+            runCatching { surface.unlockCanvasAndPost(canvas) }
         }
     }
 
@@ -60,25 +128,23 @@ class CruiseCarMapSurfaceRenderer(
         val maxLat = coordinates.maxOf { it.second }
         val lngSpan = max(0.0001, maxLng - minLng)
         val latSpan = max(0.0001, maxLat - minLat)
+        val centerLng = (minLng + maxLng) / 2.0
+        val centerLat = (minLat + maxLat) / 2.0
+
         val safe = visibleArea ?: Rect(0, 0, canvas.width, canvas.height)
         val padding = 56f
-        val width = max(1f, safe.width().toFloat() - padding * 2)
-        val height = max(1f, safe.height().toFloat() - padding * 2)
-        val scale = min(width / lngSpan.toFloat(), height / latSpan.toFloat())
+        val width = max(1f, safe.width() - padding * 2)
+        val height = max(1f, safe.height() - padding * 2)
+        val baseScale = min(width / lngSpan.toFloat(), height / latSpan.toFloat())
+        val scale = baseScale * zoomScale
+        val cx = safe.exactCenterX() + panX
+        val cy = safe.exactCenterY() + panY
+
+        fun x(lng: Double): Float = cx + ((lng - centerLng) * scale).toFloat()
+        fun y(lat: Double): Float = cy + ((centerLat - lat) * scale).toFloat()
+
         val routeWidth = max(8f, min(canvas.width, canvas.height) * 0.018f)
         val glowWidth = routeWidth * 2.4f
-
-        fun x(lng: Double): Float {
-            val routeWidthPx = lngSpan.toFloat() * scale
-            val left = safe.left + (safe.width() - routeWidthPx) / 2f
-            return left + ((lng - minLng).toFloat() * scale)
-        }
-
-        fun y(lat: Double): Float {
-            val routeHeightPx = latSpan.toFloat() * scale
-            val top = safe.top + (safe.height() - routeHeightPx) / 2f
-            return top + ((maxLat - lat).toFloat() * scale)
-        }
 
         val path = Path()
         coordinates.forEachIndexed { index, coordinate ->
@@ -135,5 +201,11 @@ class CruiseCarMapSurfaceRenderer(
             canvas.drawLine(0f, y, canvas.width.toFloat(), y, paint)
             y += step
         }
+    }
+
+    companion object {
+        private const val REDRAW_INTERVAL_MS = 2500L
+        private const val MIN_ZOOM = 0.4f
+        private const val MAX_ZOOM = 8.0f
     }
 }

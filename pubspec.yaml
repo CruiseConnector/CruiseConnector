@@ -81,6 +81,20 @@ dev_dependencies:
   # Nach Änderungen ausführen: dart run build_runner build
   mockito: ^5.4.4
   build_runner: ^2.4.14
+  # App-Icon-Generator: erzeugt alle Android-Dichten (Legacy + adaptiv) + iOS
+  # aus einem Asset. Nach Asset-Änderung neu laufen lassen:
+  #   dart run flutter_launcher_icons
+  flutter_launcher_icons: ^0.14.1
+
+# App-Icon aus zentriertem CC-Logo (assets/branding). Schwarzer Hintergrund,
+# Logo groß + mittig → sauber auf allen Geräten (Android Legacy/adaptiv + iOS).
+flutter_launcher_icons:
+  android: true
+  ios: true
+  remove_alpha_ios: true
+  image_path: "assets/branding/cc_app_icon_full.png"
+  adaptive_icon_background: "#000000"
+  adaptive_icon_foreground: "assets/branding/cc_app_icon_foreground.png"
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
