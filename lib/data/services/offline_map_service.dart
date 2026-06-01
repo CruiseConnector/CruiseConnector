@@ -53,6 +53,92 @@ class OfflineMapService {
   static const String mapboxDarkTileUrlTemplate =
       'https://api.mapbox.com/styles/v1/mapbox/dark-v11/tiles/256/{z}/{x}/{y}?access_token={accessToken}';
 
+  // 2026-06-01 (vucko): Self-hosted Tile-Quelle (Raster-Tiles aus einer
+  // PMTiles-Datei auf einem CDN), um die teuren Mapbox-Tile-Requests abzulösen.
+  //
+  //   null  → AUS. Es wird ausschließlich Mapbox genutzt (kein Verhaltenswechsel).
+  //   gesetzt → sobald der Health-Check die URL als erreichbar meldet, liefert
+  //             activeTileUrlTemplate die self-hosted URL. Fällt sie aus,
+  //             schaltet es AUTOMATISCH auf Mapbox zurück (Fallback).
+  //
+  // Format wie Mapbox: 'https://<cdn>/{z}/{x}/{y}.png' (256px, dark-Style nahe
+  // CARTO Dark / Mapbox-dark). Kein {accessToken} nötig.
+  static const String? selfHostedTileUrlTemplate = null;
+
+  bool _selfHostedHealthy = false;
+  int _selfHostedErrorStreak = 0;
+  bool _healthRecheckScheduled = false;
+
+  /// self-hosted Quelle aktiv = konfiguriert UND zuletzt als erreichbar geprüft.
+  bool get isSelfHostedActive =>
+      selfHostedTileUrlTemplate != null && _selfHostedHealthy;
+
+  /// Aktive Tile-URL: self-hosted wenn gesund, sonst Mapbox (Auto-Fallback).
+  String get activeTileUrlTemplate =>
+      isSelfHostedActive ? selfHostedTileUrlTemplate! : mapboxDarkTileUrlTemplate;
+
+  /// Quell-ID → getrennter Cache-Ordner + TileLayer-Key, damit sich die
+  /// Styles (Mapbox vs. self-hosted) im Cache nicht mischen.
+  String get activeTileSourceId =>
+      isSelfHostedActive ? 'self_hosted_dark' : 'mapbox_dark_v11';
+
+  /// Prüft die self-hosted Quelle (ein Test-Tile). Erfolg → self-hosted aktiv,
+  /// Fehler/kein-URL → Mapbox. Beim App-Start + periodisch aufrufen.
+  Future<void> refreshTileSourceHealth() async {
+    const template = selfHostedTileUrlTemplate;
+    if (kIsWeb || template == null) {
+      _setSelfHostedHealthy(false);
+      return;
+    }
+    // Test-Tile etwa DACH-Mitte bei Zoom 8.
+    final testUrl = template
+        .replaceAll('{z}', '8')
+        .replaceAll('{x}', '136')
+        .replaceAll('{y}', '90')
+        .replaceAll('{accessToken}', '');
+    try {
+      final res = await http
+          .get(Uri.parse(testUrl))
+          .timeout(const Duration(seconds: 4));
+      final ok = res.statusCode >= 200 &&
+          res.statusCode < 300 &&
+          res.bodyBytes.length > 128;
+      _setSelfHostedHealthy(ok);
+      if (kDebugMode) {
+        debugPrint('[OfflineMap] self-hosted Tiles health=$ok (${res.statusCode})');
+      }
+    } catch (e) {
+      _setSelfHostedHealthy(false);
+      if (kDebugMode) debugPrint('[OfflineMap] self-hosted health check failed: $e');
+    }
+  }
+
+  /// Tile-Lade-Fehler melden (TileLayer.errorTileCallback). Häufen sie sich bei
+  /// aktiver self-hosted Quelle, wird automatisch auf Mapbox zurückgeschaltet.
+  void reportTileLoadError() {
+    if (!isSelfHostedActive) return;
+    _selfHostedErrorStreak += 1;
+    if (_selfHostedErrorStreak >= 6) {
+      _setSelfHostedHealthy(false);
+      if (!_healthRecheckScheduled) {
+        _healthRecheckScheduled = true;
+        unawaited(Future<void>.delayed(const Duration(seconds: 45), () {
+          _healthRecheckScheduled = false;
+          unawaited(refreshTileSourceHealth());
+        }));
+      }
+    }
+  }
+
+  void _setSelfHostedHealthy(bool healthy) {
+    if (_selfHostedHealthy == healthy) return;
+    _selfHostedHealthy = healthy;
+    _selfHostedErrorStreak = 0;
+    // Quelle gewechselt → Cache-Verzeichnis neu auflösen (getrennt pro Quelle).
+    _tileCacheDirectory = null;
+    _tileCacheDirectoryFuture = null;
+  }
+
   /// 2026-05-28 (vucko Task #70): Mapbox-Dark-V11-Hintergrundfarbe.
   /// Wird als TileLayer.backgroundColor + tileBuilder-Container verwendet
   /// damit Pan-Lücken nicht weiß sondern in Map-Style erscheinen.
@@ -785,7 +871,10 @@ class OfflineMapService {
   Future<Directory?> _createTileCacheDirectory() async {
     try {
       final base = await getApplicationSupportDirectory();
-      final directory = Directory('${base.path}/offline_tiles/mapbox_dark_v11');
+      // 2026-06-01 (vucko): Ordner pro Quelle (mapbox_dark_v11 / self_hosted_dark)
+      // → kein Style-Mix im Cache beim Umschalten.
+      final directory =
+          Directory('${base.path}/offline_tiles/$activeTileSourceId');
       await directory.create(recursive: true);
       _tileCacheDirectory = directory;
       return directory;
@@ -797,8 +886,15 @@ class OfflineMapService {
     }
   }
 
-  Uri _tileUri(OfflineTile tile) {
-    final url = mapboxDarkTileUrlTemplate
+  Uri _tileUri(OfflineTile tile) => tileNetworkUri(tile);
+
+  /// 2026-06-01 (vucko): Baut die Tile-URL aus der AKTIVEN Quelle (self-hosted
+  /// oder Mapbox-Fallback). Wird sowohl vom Cache-Download als auch vom
+  /// [OfflineMapTileProvider] (Live-Tiles) genutzt → eine Source-of-Truth.
+  /// {accessToken} wird nur ersetzt, wenn das Template ihn enthält (Mapbox);
+  /// bei self-hosted ist es ein No-op.
+  Uri tileNetworkUri(OfflineTile tile) {
+    final url = activeTileUrlTemplate
         .replaceAll('{z}', tile.z.toString())
         .replaceAll('{x}', tile.x.toString())
         .replaceAll('{y}', tile.y.toString())
@@ -924,8 +1020,11 @@ class OfflineMapTileProvider extends TileProvider {
     // schreiben. So fängt jedes mal-bewegen die fehlende Tiles ab und
     // beim nächsten Render ist die Datei da → kein weißes Kästchen mehr.
     _service.persistTileFromNetwork(tile);
+    // 2026-06-01 (vucko): URL aus der AKTIVEN Quelle bauen (self-hosted ODER
+    // Mapbox-Fallback) statt aus dem statischen TileLayer-Template — so greift
+    // ein Quellwechsel sofort, ohne Rebuild.
     return NetworkImage(
-      getTileUrl(coordinates, options),
+      _service.tileNetworkUri(tile).toString(),
       headers: headers.isEmpty ? null : headers,
     );
   }

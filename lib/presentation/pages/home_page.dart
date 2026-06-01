@@ -59,6 +59,10 @@ class _HomePageState extends State<HomePage> {
   Future<void> _prewarmOfflineMapRegion() async {
     if (kIsWeb) return;
     try {
+      // 2026-06-01 (vucko): Zuerst prüfen, welche Tile-Quelle aktiv ist
+      // (self-hosted CDN wenn erreichbar, sonst Mapbox-Fallback) — DANN cachen,
+      // damit die Tiles im richtigen (quell-getrennten) Ordner landen.
+      await OfflineMapService.instance.refreshTileSourceHealth();
       await OfflineMapService.instance.ensureStyleCached();
       double lat = OfflineMapService.defaultHomeLat;
       double lng = OfflineMapService.defaultHomeLng;

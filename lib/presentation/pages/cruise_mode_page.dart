@@ -4173,13 +4173,19 @@ class _CruiseModePageState extends State<CruiseModePage>
         // Plus tileDisplay.instantaneous statt fade-in damit es kein
         // Alpha-Blending zwischen alten und neuen Tiles gibt.
         TileLayer(
-          urlTemplate: OfflineMapService.mapboxDarkTileUrlTemplate,
+          // 2026-06-01 (vucko): Aktive Quelle = self-hosted (wenn gesund) ODER
+          // Mapbox-Fallback. Die echte URL baut der OfflineMapTileProvider
+          // dynamisch; errorTileCallback meldet Fehler → Auto-Rückfall auf Mapbox.
+          urlTemplate: OfflineMapService.instance.activeTileUrlTemplate,
           additionalOptions: {'accessToken': AppConstants.mapboxPublicToken},
           tileProvider: OfflineMapService.instance.tileProvider(),
           userAgentPackageName: 'com.cruise_connect.app',
           retinaMode: false,
           maxNativeZoom: OfflineMapService.defaultMaxZoom,
           errorImage: MemoryImage(TileProvider.transparentImage),
+          errorTileCallback: (tile, error, stackTrace) {
+            OfflineMapService.instance.reportTileLoadError();
+          },
           tileDisplay: const TileDisplay.instantaneous(),
           // 2026-06-01 (vucko): „Schwarz beim Reinzoomen, lädt erst nach Pan"-Fix.
           // keepBuffer hält die vorherige Zoom-Stufe im Speicher → sie wird
