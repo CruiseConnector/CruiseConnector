@@ -419,6 +419,10 @@ class _CruiseModePageState extends State<CruiseModePage>
   static const int _offRouteCountThreshold =
       5; // Mindestanzahl Off-Route-Updates vor Reroute (verhindert Flackern)
   static const Duration _rerouteCooldown = Duration(seconds: 12);
+  // 2026-06-01 (vucko): Max. Versatz, bis zu dem der sichtbare Routenkopf an
+  // die GPS-Position geheftet wird. Darüber bleibt der echte Routenpunkt der
+  // Kopf → keine Off-Route-Zacken bei GPS-Drift in Bergtälern.
+  static const double _headSnapMaxMeters = 18.0;
   static const int _routeRedrawIndexThreshold =
       1; // Navigation: sichtbare Linie praktisch live nachführen
   static const double _routeRedrawDistanceMeters = 5.0;
@@ -788,7 +792,9 @@ class _CruiseModePageState extends State<CruiseModePage>
       routeHead[1],
       routeHead[0],
     );
-    if (distToRouteHead > 70) return false;
+    // 2026-06-01 (vucko): 70→25m verschärft. 70m erlaubte bei GPS-Drift im
+    // Bergtal noch deutlich sichtbare Zacken vom Routenpunkt zur Position.
+    if (distToRouteHead > 25) return false;
 
     final nextStart = LatLng(position.latitude, position.longitude);
     final currentStart = _routeLatLngs.first;
@@ -855,9 +861,34 @@ class _CruiseModePageState extends State<CruiseModePage>
     _destinationFocusNode.addListener(_onDestinationFocusChanged);
     _startLocationFocusNode.addListener(_onDestinationFocusChanged);
     unawaited(_loadCountryPreference());
+    unawaited(_loadWaypointTutorialShown());
     WidgetsBinding.instance.addPostFrameCallback(
       (_) => _maybeShowRoutingOnboarding(),
     );
+  }
+
+  // 2026-06-01 (vucko): Trip-Modus-Tutorial nur EINMALIG (persistent) und nur
+  // beim echten Wechsel zu Trip-Modus — nicht mehr beim Setzen des 2. Wegpunkts
+  // im Standard-Modus (das nervte im Test).
+  static const String _waypointTutorialKey = 'waypoint_trip_tutorial_shown_v1';
+  Future<void> _loadWaypointTutorialShown() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (prefs.getBool(_waypointTutorialKey) == true) {
+        _waypointTutorialShown = true;
+      }
+    } catch (_) {
+      // Best-effort — Default: noch nicht gezeigt.
+    }
+  }
+
+  Future<void> _persistWaypointTutorialShown() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_waypointTutorialKey, true);
+    } catch (_) {
+      // Best-effort.
+    }
   }
 
   // 2026-05-30 (vucko): Länder-Präferenz persistent.
@@ -1979,13 +2010,10 @@ class _CruiseModePageState extends State<CruiseModePage>
       );
       return;
     }
-    // First-Use Tutorial: bei 2. WP wenn nicht TripMode → zeige Hint
-    if (!_waypointTutorialShown && _roundTripWaypoints.length == 1) {
-      _waypointTutorialShown = true;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _showWaypointTutorialOverlay();
-      });
-    }
+    // 2026-06-01 (vucko): KEIN Trip-Modus-Tutorial mehr beim Setzen des 2.
+    // Wegpunkts im Standard-Modus — das nervte im Test ("Vorschlag Trip-Modus"
+    // obwohl man bewusst Standard nutzt). Das Tutorial kommt jetzt nur noch
+    // einmalig beim echten Wechsel auf Trip-Modus (siehe _buildWaypointModeHeader).
     setState(() {
       _roundTripWaypoints.add(point);
       _roundTripWaypointOrigin = 'manual';
@@ -4153,6 +4181,15 @@ class _CruiseModePageState extends State<CruiseModePage>
           maxNativeZoom: OfflineMapService.defaultMaxZoom,
           errorImage: MemoryImage(TileProvider.transparentImage),
           tileDisplay: const TileDisplay.instantaneous(),
+          // 2026-06-01 (vucko): „Schwarz beim Reinzoomen, lädt erst nach Pan"-Fix.
+          // keepBuffer hält die vorherige Zoom-Stufe im Speicher → sie wird
+          // hochskaliert sichtbar, während die neue lädt, statt schwarz zu werden.
+          // panBuffer lädt einen Ring um den Viewport vor. evictErrorTileStrategy
+          // verwirft fehlgeschlagene/langsame Tiles, damit sie beim nächsten
+          // Frame (Zoom) automatisch neu angefordert werden — kein Warten auf Pan.
+          keepBuffer: 5,
+          panBuffer: 3,
+          evictErrorTileStrategy: EvictErrorTileStrategy.notVisible,
         ),
         // ── Gesamt-Route als gedimmter Hintergrund ───────────────────────────
         // 2026-05-28 (vucko Task #86 / Startup-V Issue 2): Während der Fahrt
@@ -4530,21 +4567,28 @@ class _CruiseModePageState extends State<CruiseModePage>
                   return;
                 }
                 HapticFeedback.mediumImpact();
-                setState(() {
-                  _tripModeEnabled = enabled;
+                setState(() => _tripModeEnabled = enabled);
+                // 2026-06-01 (vucko): Das Trip-Modus-Tutorial kommt jetzt NUR
+                // hier — beim ERSTEN echten Wechsel auf Trip-Modus, und nur
+                // einmalig (persistent). Beim Zurückschalten/danach nur ein Toast.
+                if (enabled && !_waypointTutorialShown) {
                   _waypointTutorialShown = true;
-                });
-                // Kurzer Toast statt permanenter Erklärung.
-                TopToast.show(
-                  context,
-                  message: enabled
-                      ? 'Trip-Modus aktiv · bis 5 Stopps, beliebig weit'
-                      : 'Standard · bis 3 Stopps für schnelle Rundkurse',
-                  icon: enabled
-                      ? Icons.compass_calibration
-                      : Icons.flag_circle,
-                  duration: const Duration(milliseconds: 2200),
-                );
+                  unawaited(_persistWaypointTutorialShown());
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    if (mounted) _showWaypointTutorialOverlay();
+                  });
+                } else {
+                  TopToast.show(
+                    context,
+                    message: enabled
+                        ? 'Trip-Modus aktiv · bis 5 Stopps, beliebig weit'
+                        : 'Standard · bis 3 Stopps für schnelle Rundkurse',
+                    icon: enabled
+                        ? Icons.compass_calibration
+                        : Icons.flag_circle,
+                    duration: const Duration(milliseconds: 2200),
+                  );
+                }
               },
               onHelpTap: _showWaypointTutorialOverlay,
             ),
@@ -6246,6 +6290,27 @@ class _CruiseModePageState extends State<CruiseModePage>
     return 300;
   }
 
+  /// 2026-06-01 (vucko): Effektiver Off-Route-Korridor — wie Google/Apple werden
+  /// GPS-Ungenauigkeit + Tempo eingerechnet. Bei schlechtem GPS (Bergtal/Tunnel,
+  /// große accuracy) wird der Korridor erweitert → keine Fehl-Reroutes durch
+  /// Drift. Bei höherem Tempo etwas mehr Toleranz (GPS-Lag + Bewegung). Statisch
+  /// + pur, damit unit-testbar.
+  static double effectiveOffRouteCorridorMeters({
+    required double baseCorridor,
+    double? accuracyMeters,
+    double? speedMps,
+  }) {
+    final accuracy =
+        (accuracyMeters != null && accuracyMeters.isFinite && accuracyMeters > 0)
+        ? math.min(accuracyMeters, 60.0)
+        : 0.0;
+    final speed = (speedMps != null && speedMps.isFinite && speedMps > 0)
+        ? speedMps
+        : 0.0;
+    final speedBuffer = speed > 22 ? 35.0 : (speed > 12 ? 18.0 : 0.0);
+    return baseCorridor + accuracy * 0.8 + speedBuffer;
+  }
+
   bool _isApproachingCurrentDestination(geo.Position position) {
     final destination = _activeDestinationCoordinate;
     if (destination == null) return false;
@@ -7367,7 +7432,9 @@ class _CruiseModePageState extends State<CruiseModePage>
         first[1],
         first[0],
       );
-      if (distanceToFirst <= 35.0) {
+      // 2026-06-01 (vucko): Kopf nur an GPS heften, wenn das Fahrzeug WIRKLICH
+      // auf der Linie ist (≤18m). Bei GPS-Drift (Bergtal) sonst Off-Route-Zacken.
+      if (distanceToFirst <= _headSnapMaxMeters) {
         routeSlice[0] = [position.longitude, position.latitude];
       }
     }
@@ -8018,11 +8085,18 @@ class _CruiseModePageState extends State<CruiseModePage>
     _updateDistanceToFinalTarget(position);
     final previousVisibleManeuverIndex = _activeVisibleManeuverIndex();
 
-    final offRouteCorridor = _isAccessLegActive
+    final baseCorridor = _isAccessLegActive
         ? 85.0
         : _isRoundTrip
         ? _offRouteThresholdMeters
         : _currentPointToPointCorridorMeters();
+    // 2026-06-01 (vucko): GPS-Genauigkeit + Tempo einrechnen — verhindert
+    // Fehl-Reroutes bei GPS-Drift (Bergtal/Tunnel) wie bei Google/Apple.
+    final offRouteCorridor = effectiveOffRouteCorridorMeters(
+      baseCorridor: baseCorridor,
+      accuracyMeters: position.accuracy,
+      speedMps: position.speed,
+    );
     final isOutsideCorridor = match.distanceMeters > offRouteCorridor;
     final approachingDestination =
         !_isRoundTrip &&
@@ -8037,7 +8111,15 @@ class _CruiseModePageState extends State<CruiseModePage>
         );
       } else {
         _offRouteCount++;
-        if (_offRouteCount >= _offRouteCountThreshold && !_isRerouting) {
+        // 2026-06-01 (vucko): Adaptive Bestätigung wie Google/Apple — wer KLAR
+        // daneben ist (echtes Abbiegen, > 2.2× Korridor), wird schneller neu
+        // geroutet (3 Updates statt 5). Knapp daneben (evtl. noch Drift)
+        // braucht weiterhin die volle Bestätigung, um Fehl-Reroutes zu meiden.
+        final clearlyOffRoute = match.distanceMeters > offRouteCorridor * 2.2;
+        final neededOffRouteCount = clearlyOffRoute
+            ? 3
+            : _offRouteCountThreshold;
+        if (_offRouteCount >= neededOffRouteCount && !_isRerouting) {
           final now = DateTime.now();
           final cooldownOk =
               _lastRerouteTime == null ||
@@ -8100,8 +8182,23 @@ class _CruiseModePageState extends State<CruiseModePage>
             .sublist(_currentRouteIndex, windowEnd)
             .map((c) => [c[0], c[1]])
             .toList();
+        // 2026-06-01 (vucko): Kopf nur an die GPS-Position heften, wenn das
+        // Fahrzeug wirklich auf der Linie ist (≤18m). Vorher BEDINGUNGSLOS →
+        // bei GPS-Drift in Bergtälern entstand ein Off-Route-Zacken vom realen
+        // Routenpunkt zur seitlich versetzten Position. Bei größerem Versatz
+        // bleibt der echte Routenpunkt der Kopf → Linie bleibt sauber auf der
+        // Straße (kleine Lücke zum Punkt ist unkritisch, ein Zacken nicht).
         if (routeSlice.isNotEmpty) {
-          routeSlice[0] = [position.longitude, position.latitude];
+          final head = routeSlice[0];
+          final distToHead = geo.Geolocator.distanceBetween(
+            position.latitude,
+            position.longitude,
+            head[1],
+            head[0],
+          );
+          if (distToHead <= _headSnapMaxMeters) {
+            routeSlice[0] = [position.longitude, position.latitude];
+          }
         }
         _remainingRouteCoordinates = routeSlice;
         final clipped = {

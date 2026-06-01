@@ -1449,7 +1449,15 @@ class RouteService {
       destinationLat,
       destinationLng,
     );
-    if (startToDestinationMeters < 250) {
+    // 2026-06-01 (vucko): Der „Start und Ziel zu nah"-Guard darf NUR für echte
+    // A→B-Routen ohne Zwischenstopps gelten. Im Wegpunkte-Standard-Modus wird
+    // ein Rundkurs als P2P mit destination == start + Stopps geroutet — dort
+    // ist start==ziel ABSICHTLICH (die Schleife läuft über die Stopps zurück
+    // zum Start). Ohne diese Ausnahme feuerte der Guard IMMER und blockierte
+    // den kompletten Standard-Wegpunkte-Modus mit „Endpunkt zu nah am Start".
+    final hasIntermediateStops =
+        intermediateWaypoints != null && intermediateWaypoints.isNotEmpty;
+    if (startToDestinationMeters < 250 && !hasIntermediateStops) {
       throw const RouteServiceException(
         type: RouteErrorType.validation,
         userMessage: 'Start und Ziel liegen zu nah beieinander.',
