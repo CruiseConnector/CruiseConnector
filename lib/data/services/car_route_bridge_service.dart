@@ -3,7 +3,34 @@ import 'dart:convert';
 
 import 'package:cruise_connect/domain/models/route_maneuver.dart';
 import 'package:cruise_connect/domain/models/route_result.dart';
+import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+/// Maschinenlesbare Manöver-Typen für die Auto-Displays (Android Auto +
+/// CarPlay). Die Fahr-Richtung steckt in der App nur im Material-Icon
+/// (`RouteManeuver.icon`), nicht im groben `maneuverType` (normal/roundabout).
+/// Diese Kinds werden nativ auf `Maneuver.TYPE_*` (Android) bzw. `CPManeuver`-
+/// Symbole (iOS) gemappt. String-Werte müssen 1:1 mit der Kotlin/Swift-Seite
+/// übereinstimmen.
+class CarManeuverKind {
+  const CarManeuverKind._();
+
+  static const straight = 'straight';
+  static const turnLeft = 'turnLeft';
+  static const turnRight = 'turnRight';
+  static const slightLeft = 'slightLeft';
+  static const slightRight = 'slightRight';
+  static const sharpLeft = 'sharpLeft';
+  static const sharpRight = 'sharpRight';
+  static const uturn = 'uturn';
+  static const roundabout = 'roundabout';
+  static const rampLeft = 'rampLeft';
+  static const rampRight = 'rampRight';
+  static const merge = 'merge';
+  static const forkLeft = 'forkLeft';
+  static const forkRight = 'forkRight';
+  static const arrive = 'arrive';
+}
 
 class CarRouteStatus {
   const CarRouteStatus._();
@@ -92,6 +119,7 @@ class CarRouteBridgeService {
     double? remainingDurationSeconds,
     String? nextManeuverText,
     double? nextManeuverDistance,
+    String? nextManeuverKind,
   }) async {
     await _writeSnapshot(
       _snapshotFromRoute(
@@ -104,6 +132,7 @@ class CarRouteBridgeService {
         remainingDurationSeconds: remainingDurationSeconds,
         nextManeuverText: nextManeuverText,
         nextManeuverDistance: nextManeuverDistance,
+        nextManeuverKind: nextManeuverKind,
       ),
     );
   }
@@ -113,6 +142,7 @@ class CarRouteBridgeService {
     required double? remainingDurationSeconds,
     required String? nextManeuverText,
     required double? nextManeuverDistance,
+    String? nextManeuverKind,
     bool force = false,
   }) async {
     final now = DateTime.now();
@@ -128,6 +158,7 @@ class CarRouteBridgeService {
       'remainingDurationSeconds': remainingDurationSeconds,
       'nextManeuverText': nextManeuverText,
       'nextManeuverDistance': nextManeuverDistance,
+      'nextManeuverKind': nextManeuverKind,
       'updatedAt': now.toIso8601String(),
     });
   }
@@ -159,6 +190,7 @@ class CarRouteBridgeService {
     double? remainingDurationSeconds,
     String? nextManeuverText,
     double? nextManeuverDistance,
+    String? nextManeuverKind,
   }) {
     final edgeMeta = result.edgeMeta;
     final fingerprint =
@@ -186,6 +218,7 @@ class CarRouteBridgeService {
           remainingDurationSeconds ?? result.durationSeconds,
       'nextManeuverText': nextManeuverText ?? _firstManeuverText(result),
       'nextManeuverDistance': nextManeuverDistance,
+      'nextManeuverKind': nextManeuverKind ?? _firstManeuverKind(result),
       'style': style,
       'avoidHighways': avoidHighways,
       'updatedAt': DateTime.now().toIso8601String(),
@@ -200,8 +233,34 @@ class CarRouteBridgeService {
       'announcement': maneuver.announcement,
       'instruction': maneuver.instruction,
       'maneuverType': maneuver.maneuverType.name,
+      'kind': maneuverKindFromIcon(maneuver.icon),
       'roundaboutExitNumber': maneuver.roundaboutExitNumber,
     };
+  }
+
+  /// Leitet aus dem Manöver-Icon (die einzige Richtungsquelle in der App) einen
+  /// maschinenlesbaren Kind-String ab, den Android Auto / CarPlay in ein echtes
+  /// Abbiege-Symbol übersetzen. Muss zu den nativen Mappings passen.
+  static String maneuverKindFromIcon(IconData icon) {
+    if (icon == Icons.turn_left) return CarManeuverKind.turnLeft;
+    if (icon == Icons.turn_right) return CarManeuverKind.turnRight;
+    if (icon == Icons.turn_slight_left) return CarManeuverKind.slightLeft;
+    if (icon == Icons.turn_slight_right) return CarManeuverKind.slightRight;
+    if (icon == Icons.turn_sharp_left) return CarManeuverKind.sharpLeft;
+    if (icon == Icons.turn_sharp_right) return CarManeuverKind.sharpRight;
+    if (icon == Icons.u_turn_left || icon == Icons.u_turn_right) {
+      return CarManeuverKind.uturn;
+    }
+    if (icon == Icons.roundabout_left || icon == Icons.roundabout_right) {
+      return CarManeuverKind.roundabout;
+    }
+    if (icon == Icons.ramp_left) return CarManeuverKind.rampLeft;
+    if (icon == Icons.ramp_right) return CarManeuverKind.rampRight;
+    if (icon == Icons.merge) return CarManeuverKind.merge;
+    if (icon == Icons.fork_left) return CarManeuverKind.forkLeft;
+    if (icon == Icons.fork_right) return CarManeuverKind.forkRight;
+    if (icon == Icons.flag) return CarManeuverKind.arrive;
+    return CarManeuverKind.straight;
   }
 
   String? _firstManeuverText(RouteResult result) {
@@ -210,6 +269,11 @@ class CarRouteBridgeService {
     return first.instruction.isNotEmpty
         ? first.instruction
         : first.announcement;
+  }
+
+  String? _firstManeuverKind(RouteResult result) {
+    if (result.maneuvers.isEmpty) return null;
+    return maneuverKindFromIcon(result.maneuvers.first.icon);
   }
 
   Future<void> _writeSnapshot(Map<String, dynamic> snapshot) async {

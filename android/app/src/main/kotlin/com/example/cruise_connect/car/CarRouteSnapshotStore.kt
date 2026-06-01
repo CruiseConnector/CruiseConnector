@@ -8,6 +8,7 @@ data class CarManeuverSnapshot(
     val instruction: String,
     val announcement: String,
     val routeIndex: Int,
+    val kind: String,
 )
 
 data class CarRouteSnapshot(
@@ -23,6 +24,7 @@ data class CarRouteSnapshot(
     val remainingDurationSeconds: Double?,
     val nextManeuverText: String?,
     val nextManeuverDistance: Double?,
+    val nextManeuverKind: String?,
     val style: String?,
     val avoidHighways: Boolean,
     val updatedAt: String?,
@@ -75,6 +77,10 @@ class CarRouteSnapshotStore(private val context: Context) {
                     "nextManeuverDistance",
                     snapshot.nextManeuverDistance,
                 ),
+                nextManeuverKind = json.optNullableString(
+                    "nextManeuverKind",
+                    snapshot.nextManeuverKind,
+                ),
                 updatedAt = json.optNullableString("updatedAt", snapshot.updatedAt),
             )
         } catch (_: Exception) {
@@ -102,6 +108,7 @@ class CarRouteSnapshotStore(private val context: Context) {
                 ),
                 nextManeuverText = json.optNullableString("nextManeuverText"),
                 nextManeuverDistance = json.optNullableDouble("nextManeuverDistance"),
+                nextManeuverKind = json.optNullableString("nextManeuverKind"),
                 style = json.optNullableString("style"),
                 avoidHighways = json.optBoolean("avoidHighways", false),
                 updatedAt = json.optNullableString("updatedAt"),
@@ -133,6 +140,7 @@ private fun JSONArray?.toManeuvers(): List<CarManeuverSnapshot> {
                 instruction = item.optString("instruction"),
                 announcement = item.optString("announcement"),
                 routeIndex = item.optInt("routeIndex"),
+                kind = item.optString("kind", "straight"),
             ),
         )
     }

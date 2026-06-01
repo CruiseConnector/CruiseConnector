@@ -1,5 +1,7 @@
 package com.vucko.cruiserconnect.car
 
+import android.os.Handler
+import android.os.Looper
 import androidx.car.app.CarContext
 import androidx.car.app.Screen
 import androidx.car.app.model.Action
@@ -8,21 +10,75 @@ import androidx.car.app.model.CarText
 import androidx.car.app.model.Distance
 import androidx.car.app.model.MessageTemplate
 import androidx.car.app.model.Template
+import androidx.car.app.navigation.NavigationManager
+import androidx.car.app.navigation.NavigationManagerCallback
+import androidx.car.app.navigation.model.Destination
 import androidx.car.app.navigation.model.Maneuver
 import androidx.car.app.navigation.model.NavigationTemplate
 import androidx.car.app.navigation.model.RoutingInfo
 import androidx.car.app.navigation.model.Step
 import androidx.car.app.navigation.model.TravelEstimate
+import androidx.car.app.navigation.model.Trip
+import androidx.lifecycle.DefaultLifecycleObserver
+import androidx.lifecycle.LifecycleOwner
 import java.time.ZonedDateTime
 import kotlin.math.max
 
+/**
+ * Zeigt die laufende Cruise-Navigation auf Android Auto.
+ *
+ * 2026-06-01 (vucko): Aus der statischen Pull-Anzeige (manueller
+ * "Aktualisieren"-Button, immer TYPE_STRAIGHT) wurde echte Live-Navigation:
+ *  - periodisches [invalidate] (alle [REFRESH_INTERVAL_MS] ms) → Distanz,
+ *    Restzeit und Manöver laufen automatisch mit, kein Tippen mehr nötig.
+ *  - echtes Manöver-Mapping ([maneuverFor]) → links/rechts/Kreisverkehr statt
+ *    immer geradeaus. Quelle ist `nextManeuverKind` aus dem Flutter-Snapshot.
+ *  - [NavigationManager]-Integration: navigationStarted/Ended + updateTrip, damit
+ *    der Auto-Host weiß, dass wir aktiv navigieren (Audio-Fokus, Cluster-Display,
+ *    Host-seitiger Stop-Button). Nötig für eine echte Navigations-App.
+ */
 class CruiseCarNavigationScreen(
     carContext: CarContext,
     private val routeStore: CarRouteSnapshotStore,
-) : Screen(carContext) {
+) : Screen(carContext), DefaultLifecycleObserver {
+
+    private val handler = Handler(Looper.getMainLooper())
+    private var navigationActive = false
+
+    private val refreshRunnable = object : Runnable {
+        override fun run() {
+            val snapshot = routeStore.readSnapshot()
+            if (snapshot != null && snapshot.hasRoute && snapshot.status == "navigating") {
+                startNavigationManagerIfNeeded(snapshot)
+                pushTripUpdate(snapshot)
+            }
+            invalidate()
+            handler.postDelayed(this, REFRESH_INTERVAL_MS)
+        }
+    }
+
+    init {
+        lifecycle.addObserver(this)
+    }
+
+    override fun onResume(owner: LifecycleOwner) {
+        handler.removeCallbacks(refreshRunnable)
+        handler.post(refreshRunnable)
+    }
+
+    override fun onPause(owner: LifecycleOwner) {
+        handler.removeCallbacks(refreshRunnable)
+    }
+
+    override fun onDestroy(owner: LifecycleOwner) {
+        handler.removeCallbacks(refreshRunnable)
+        stopNavigationManager()
+    }
+
     override fun onGetTemplate(): Template {
         val snapshot = routeStore.readSnapshot()
         if (snapshot == null || !snapshot.hasRoute) {
+            stopNavigationManager()
             return MessageTemplate.Builder("Keine aktive Route gefunden.")
                 .setTitle("Cruise Connector")
                 .setHeaderAction(Action.BACK)
@@ -42,7 +98,7 @@ class CruiseCarNavigationScreen(
             ZonedDateTime.now().plusSeconds(max(0.0, remainingSeconds).toLong()),
         ).build()
         val step = Step.Builder(CarText.create(maneuverText))
-            .setManeuver(Maneuver.Builder(Maneuver.TYPE_STRAIGHT).build())
+            .setManeuver(maneuverFor(snapshot.nextManeuverKind))
             .build()
         val routingInfo = RoutingInfo.Builder()
             .setCurrentStep(
@@ -58,18 +114,131 @@ class CruiseCarNavigationScreen(
                 ActionStrip.Builder()
                     .addAction(
                         Action.Builder()
-                            .setTitle("Aktualisieren")
-                            .setOnClickListener { invalidate() }
-                            .build(),
-                    )
-                    .addAction(
-                        Action.Builder()
-                            .setTitle("Zurück")
-                            .setOnClickListener { screenManager.pop() }
+                            .setTitle("Beenden")
+                            .setOnClickListener {
+                                stopNavigationManager()
+                                screenManager.pop()
+                            }
                             .build(),
                     )
                     .build(),
             )
             .build()
+    }
+
+    /**
+     * Meldet dem Auto-Host den Start einer aktiven Navigation und registriert den
+     * Stop-Callback (Host kann die Navigation z. B. per Lenkrad beenden).
+     * Idempotent über [navigationActive]; jede Host-Interaktion ist defensiv
+     * gekapselt, damit ein Host-Fehler die App nie crasht.
+     */
+    private fun startNavigationManagerIfNeeded(snapshot: CarRouteSnapshot) {
+        if (navigationActive) return
+        if (!snapshot.hasRoute || snapshot.status != "navigating") return
+        try {
+            val manager = carContext.getCarService(NavigationManager::class.java)
+            manager.setNavigationManagerCallback(object : NavigationManagerCallback {
+                override fun onStopNavigation() {
+                    stopNavigationManager()
+                    invalidate()
+                }
+
+                override fun onAutoDriveEnabled() {
+                    // Test-/Simulationsmodus des Hosts — keine eigene Reaktion nötig.
+                }
+            })
+            manager.navigationStarted()
+            navigationActive = true
+        } catch (_: Exception) {
+            navigationActive = false
+        }
+    }
+
+    private fun stopNavigationManager() {
+        if (!navigationActive) return
+        try {
+            val manager = carContext.getCarService(NavigationManager::class.java)
+            manager.navigationEnded()
+            manager.clearNavigationManagerCallback()
+        } catch (_: Exception) {
+            // Host bereits getrennt — Zustand trotzdem zurücksetzen.
+        }
+        navigationActive = false
+    }
+
+    /**
+     * Schiebt den aktuellen Schritt + Ziel-ETA als [Trip] an den Host, damit
+     * Distanz/Manöver auch im Instrumenten-Cluster / Lockscreen erscheinen.
+     */
+    private fun pushTripUpdate(snapshot: CarRouteSnapshot) {
+        if (!navigationActive) return
+        try {
+            val manager = carContext.getCarService(NavigationManager::class.java)
+            val remainingMeters = snapshot.remainingDistanceMeters
+                ?: snapshot.distanceMeters
+                ?: return
+            val remainingSeconds = snapshot.remainingDurationSeconds
+                ?: snapshot.durationSeconds
+                ?: 0.0
+            val maneuverDistance = snapshot.nextManeuverDistance ?: remainingMeters
+            val eta = ZonedDateTime.now().plusSeconds(max(0.0, remainingSeconds).toLong())
+            val step = Step.Builder(CarText.create(snapshot.nextManeuverText ?: "Route folgen"))
+                .setManeuver(maneuverFor(snapshot.nextManeuverKind))
+                .build()
+            val stepEstimate = TravelEstimate.Builder(
+                Distance.create(max(0.0, maneuverDistance), Distance.UNIT_METERS),
+                eta,
+            ).build()
+            val destination = Destination.Builder()
+                .setName(snapshot.title())
+                .build()
+            val destinationEstimate = TravelEstimate.Builder(
+                Distance.create(max(0.0, remainingMeters), Distance.UNIT_METERS),
+                eta,
+            ).build()
+            val trip = Trip.Builder()
+                .addStep(step, stepEstimate)
+                .addDestination(destination, destinationEstimate)
+                .setLoading(false)
+                .build()
+            manager.updateTrip(trip)
+        } catch (_: Exception) {
+            // Trip-Update ist Best-Effort; Anzeige läuft über das Template weiter.
+        }
+    }
+
+    /**
+     * Übersetzt den maschinenlesbaren Kind aus dem Flutter-Snapshot in ein echtes
+     * Android-Auto-Manöversymbol. Fällt bei unbekanntem/fehlerhaftem Wert sicher
+     * auf "geradeaus" zurück.
+     */
+    private fun maneuverFor(kind: String?): Maneuver {
+        return try {
+            when (kind) {
+                "turnLeft" -> Maneuver.Builder(Maneuver.TYPE_TURN_NORMAL_LEFT).build()
+                "turnRight" -> Maneuver.Builder(Maneuver.TYPE_TURN_NORMAL_RIGHT).build()
+                "slightLeft" -> Maneuver.Builder(Maneuver.TYPE_TURN_SLIGHT_LEFT).build()
+                "slightRight" -> Maneuver.Builder(Maneuver.TYPE_TURN_SLIGHT_RIGHT).build()
+                "sharpLeft" -> Maneuver.Builder(Maneuver.TYPE_TURN_SHARP_LEFT).build()
+                "sharpRight" -> Maneuver.Builder(Maneuver.TYPE_TURN_SHARP_RIGHT).build()
+                "uturn" -> Maneuver.Builder(Maneuver.TYPE_U_TURN_LEFT).build()
+                "rampLeft" -> Maneuver.Builder(Maneuver.TYPE_ON_RAMP_NORMAL_LEFT).build()
+                "rampRight" -> Maneuver.Builder(Maneuver.TYPE_ON_RAMP_NORMAL_RIGHT).build()
+                "forkLeft" -> Maneuver.Builder(Maneuver.TYPE_FORK_LEFT).build()
+                "forkRight" -> Maneuver.Builder(Maneuver.TYPE_FORK_RIGHT).build()
+                "merge" -> Maneuver.Builder(Maneuver.TYPE_MERGE_LEFT).build()
+                "arrive" -> Maneuver.Builder(Maneuver.TYPE_DESTINATION).build()
+                "roundabout" -> Maneuver.Builder(Maneuver.TYPE_ROUNDABOUT_ENTER_AND_EXIT_CW)
+                    .setRoundaboutExitNumber(1)
+                    .build()
+                else -> Maneuver.Builder(Maneuver.TYPE_STRAIGHT).build()
+            }
+        } catch (_: Exception) {
+            Maneuver.Builder(Maneuver.TYPE_STRAIGHT).build()
+        }
+    }
+
+    companion object {
+        private const val REFRESH_INTERVAL_MS = 2000L
     }
 }

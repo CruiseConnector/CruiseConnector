@@ -4,6 +4,7 @@ struct CarPlayManeuverSnapshot {
     let instruction: String
     let announcement: String
     let routeIndex: Int
+    let kind: String
 }
 
 struct CarPlayRouteSnapshot {
@@ -19,6 +20,7 @@ struct CarPlayRouteSnapshot {
     let remainingDurationSeconds: Double?
     let nextManeuverText: String?
     let nextManeuverDistance: Double?
+    let nextManeuverKind: String?
     let style: String?
     let avoidHighways: Bool
     let updatedAt: String?
@@ -72,6 +74,8 @@ final class CarPlayRouteSnapshotStore {
                 ?? snapshot.nextManeuverText,
             nextManeuverDistance: json["nextManeuverDistance"] as? Double
                 ?? snapshot.nextManeuverDistance,
+            nextManeuverKind: json["nextManeuverKind"] as? String
+                ?? snapshot.nextManeuverKind,
             style: snapshot.style,
             avoidHighways: snapshot.avoidHighways,
             updatedAt: json["updatedAt"] as? String ?? snapshot.updatedAt
@@ -91,7 +95,8 @@ final class CarPlayRouteSnapshotStore {
             CarPlayManeuverSnapshot(
                 instruction: $0["instruction"] as? String ?? "",
                 announcement: $0["announcement"] as? String ?? "",
-                routeIndex: $0["routeIndex"] as? Int ?? 0
+                routeIndex: $0["routeIndex"] as? Int ?? 0,
+                kind: $0["kind"] as? String ?? "straight"
             )
         }
         return CarPlayRouteSnapshot(
@@ -107,6 +112,7 @@ final class CarPlayRouteSnapshotStore {
             remainingDurationSeconds: json["remainingDurationSeconds"] as? Double,
             nextManeuverText: json["nextManeuverText"] as? String,
             nextManeuverDistance: json["nextManeuverDistance"] as? Double,
+            nextManeuverKind: json["nextManeuverKind"] as? String,
             style: json["style"] as? String,
             avoidHighways: json["avoidHighways"] as? Bool ?? false,
             updatedAt: json["updatedAt"] as? String

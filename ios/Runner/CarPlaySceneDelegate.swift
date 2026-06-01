@@ -13,7 +13,8 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
         to window: CPWindow
     ) {
         let coordinator = CarPlayRouteCoordinator(
-            interfaceController: interfaceController
+            interfaceController: interfaceController,
+            window: window
         )
         self.coordinator = coordinator
         coordinator.start()

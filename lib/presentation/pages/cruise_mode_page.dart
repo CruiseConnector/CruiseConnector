@@ -6911,6 +6911,7 @@ class _CruiseModePageState extends State<CruiseModePage>
           remainingDurationSeconds: _remainingDuration ?? _routeDuration,
           nextManeuverText: _currentCarManeuverText(),
           nextManeuverDistance: _calculateDistanceToManeuver(),
+          nextManeuverKind: _currentCarManeuverKind(),
         ),
       );
     }
@@ -8281,6 +8282,7 @@ class _CruiseModePageState extends State<CruiseModePage>
         remainingDurationSeconds: _remainingDuration,
         nextManeuverText: _currentCarManeuverText(),
         nextManeuverDistance: distToManeuver,
+        nextManeuverKind: _currentCarManeuverKind(),
       ),
     );
   }
@@ -9173,6 +9175,14 @@ class _CruiseModePageState extends State<CruiseModePage>
     return maneuver.instruction.isNotEmpty
         ? maneuver.instruction
         : maneuver.announcement;
+  }
+
+  /// Maschinenlesbarer Manöver-Typ (links/rechts/Kreisverkehr…) für die
+  /// Auto-Displays — abgeleitet aus dem Icon des nächsten Manövers.
+  String? _currentCarManeuverKind() {
+    final maneuver = _activeVisibleManeuver();
+    if (maneuver == null) return null;
+    return CarRouteBridgeService.maneuverKindFromIcon(maneuver.icon);
   }
 
   bool _updateRemainingDistanceAndDuration({RouteWindowMatch? routeMatch}) {
