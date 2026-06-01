@@ -9285,14 +9285,21 @@ class RouteService {
           coords[j][1],
           coords[j][0],
         );
-        if (directDist > 60.0) continue;
+        // 2026-06-01 (vucko): Nur ECHTE, winzige Selbstüberschneidungen
+        // entfernen (≤10m Luftlinie, ≤250m Umweg). Vorher (60m/1200m) wurden
+        // kurvige Bergstraßen/Serpentinen — wo Hin- und Rückast nah liegen —
+        // fälschlich als „Loop" erkannt und durch eine gerade Sehne ersetzt,
+        // die die Straße verlässt. GraphHopper liefert straßenkonforme
+        // Geometrie; sie soll möglichst unangetastet bleiben → Linie bleibt
+        // auf der Straße.
+        if (directDist > 10.0) continue;
 
         final pathLen = cum[i] - cum[j];
         if (pathLen < directDist * 4.0) continue;
-        if (pathLen > 1200) continue;
+        if (pathLen > 250) continue;
 
-        // Loop gefunden: Punkte j+1 bis i-1 sind der Umweg.
-        // Wir verbinden j direkt mit i — beide liegen auf der Originalstraße.
+        // Echter Mini-Loop: Punkte j+1 bis i-1 sind der Umweg. Wir verbinden j
+        // direkt mit i — bei ≤10m Versatz praktisch unsichtbar, kein Off-Road.
         final shortened = [...coords.sublist(0, j + 1), ...coords.sublist(i)];
         debugPrint(
           '[RouteService] Loop entfernt: ${i - j} Punkte, ${pathLen.toStringAsFixed(0)}m Umweg',
