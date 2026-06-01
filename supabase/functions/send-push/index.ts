@@ -229,9 +229,31 @@ serve(async (req) => {
   try {
     if (req.method !== 'POST') return json({ error: 'method_not_allowed' }, 405);
 
-    // 1. Auth via Shared Secret (der Trigger schickt x-push-secret).
+    const supa = createClient(SUPABASE_URL, SERVICE_ROLE, {
+      auth: { persistSession: false },
+    });
+
+    // 1. Auth: x-push-secret gegen den Vault prüfen (eine Source-of-Truth, die
+    //    auch der DB-Trigger nutzt) — via RPC verify_push_webhook_secret, das
+    //    Secret verlässt die DB nicht. So kann es nie ein Function-Env/Vault-
+    //    Mismatch geben. Fallback auf PUSH_WEBHOOK_SECRET, falls die RPC fehlt.
     const secret = req.headers.get('x-push-secret') ?? '';
-    if (!PUSH_WEBHOOK_SECRET || secret !== PUSH_WEBHOOK_SECRET) {
+    let authorized = false;
+    if (secret) {
+      try {
+        const { data: ok, error: authErr } = await supa.rpc(
+          'verify_push_webhook_secret',
+          { candidate: secret },
+        );
+        if (!authErr && ok === true) authorized = true;
+      } catch (_) {
+        // Vault-RPC nicht verfügbar → Env-Fallback unten.
+      }
+      if (!authorized && PUSH_WEBHOOK_SECRET && secret === PUSH_WEBHOOK_SECRET) {
+        authorized = true;
+      }
+    }
+    if (!authorized) {
       return json({ error: 'unauthorized' }, 401);
     }
 
@@ -246,10 +268,6 @@ serve(async (req) => {
       console.warn('[send-push] FCM_SERVICE_ACCOUNT not set — push skipped');
       return json({ skipped: 'no_service_account' }, 200);
     }
-
-    const supa = createClient(SUPABASE_URL, SERVICE_ROLE, {
-      auth: { persistSession: false },
-    });
 
     // 3. Device-Tokens des Empfängers.
     const { data: tokenRows, error: tokErr } = await supa
