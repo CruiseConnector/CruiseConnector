@@ -45,11 +45,36 @@ class SupabaseRouteInvoker implements RouteEdgeInvoker {
 
   @override
   Future<dynamic> invoke(Map<String, dynamic> body) async {
-    final response = await Supabase.instance.client.functions.invoke(
-      RouteService.edgeFunction,
-      body: body,
-    );
-    return response;
+    final client = Supabase.instance.client;
+    try {
+      return await client.functions.invoke(RouteService.edgeFunction, body: body);
+    } on FunctionException catch (e) {
+      // 2026-06-02 (vucko): 401/403 = abgelaufenes/ungültiges User-Token (lange
+      // Session, App-Neustart, Auto-Refresh hinterher). Das war die Ursache für
+      // „keine Route" — JEDER Edge-Call wurde sofort (52ms) abgewiesen, obwohl
+      // GraphHopper + Pool völlig ok sind. Dreistufige Absicherung, damit eine
+      // Suche NIE an Auth scheitert:
+      //   1) Session erneuern + erneut mit User-Token,
+      //   2) zur Not mit dem Anon-Key (immer gültig) — die Route MUSS kommen.
+      if (e.status != 401 && e.status != 403) rethrow;
+      try {
+        await client.auth.refreshSession();
+      } catch (_) {
+        // Refresh-Token auch tot → Anon-Fallback unten.
+      }
+      try {
+        return await client.functions.invoke(RouteService.edgeFunction, body: body);
+      } on FunctionException catch (e2) {
+        if (e2.status != 401 && e2.status != 403) rethrow;
+        return await client.functions.invoke(
+          RouteService.edgeFunction,
+          body: body,
+          headers: {
+            'Authorization': 'Bearer ${AppConstants.supabaseAnonKey}',
+          },
+        );
+      }
+    }
   }
 }
 
