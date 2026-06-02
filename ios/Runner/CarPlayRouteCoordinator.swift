@@ -339,17 +339,23 @@ final class CarPlayMapViewController: UIViewController, MKMapViewDelegate {
     private func addCruiseTileOverlay() {
         let template =
             "https://pub-0535dd4f86054de1820907b6f06bf17c.r2.dev/raster/{z}/{x}/{y}.png"
-        let overlay = MKTileOverlay(urlTemplate: template)
-        overlay.canReplaceMapContent = false
+        // 2026-06-02 (vucko): Eigene Overzoom-Overlay. MKTileOverlay überzoomt
+        // NICHT von selbst über maximumZ hinaus → bei Navi-Zoom (z14+) gab's
+        // keine Kachel → Apple-Grün (genau der Bug nach Routenbestätigung).
+        // Die Subklasse holt bei hohem Zoom die höchste gerenderte Kachel (z13),
+        // schneidet den passenden Teilbereich aus + skaliert ihn → unser Look
+        // bleibt bei JEDER Zoomstufe. maximumZ hoch (19) damit MapKit überhaupt
+        // anfragt; minimumZ = unterste gerenderte Stufe.
+        let overlay = OverzoomTileOverlay(urlTemplate: template, maxRenderedZ: 13)
+        // 2026-06-02 (vucko): canReplaceMapContent=true → MapKit zeichnet seine
+        // EIGENE Karte gar nicht erst darunter. Vorher (false) blitzte beim
+        // Zoomen/Pannen die Apple-Karte durch, bis unsere Kacheln nachgeladen
+        // waren („Apple-Style poppt auf, höherer Kontrast"). Jetzt nur noch
+        // unser Look (dort wo gerendert) bzw. dunkler Grund beim Nachladen.
+        overlay.canReplaceMapContent = true
         overlay.tileSize = CGSize(width: 512, height: 512)
-        // 2026-06-02 (vucko): minZ/maxZ = tatsächlich gerenderter Bereich.
-        // Proof = z9–13. maximumZ NICHT höher setzen als gerendert → MapKit
-        // ÜBERZOOMT unsere z13-Kachel beim Reinzoomen (bleibt unser Look, nur
-        // weicher), statt für z14 eine 404 zu kriegen und auf Apple-Grün zu
-        // fallen (genau das war „CarPlay grün beim Reinzoomen"). Nach dem
-        // vollen DACH-Render hier auf 14 erhöhen.
         overlay.minimumZ = 9
-        overlay.maximumZ = 13
+        overlay.maximumZ = 19
         mapView.addOverlay(overlay, level: .aboveLabels)
     }
 
@@ -437,6 +443,68 @@ final class CarPlayMapViewController: UIViewController, MKMapViewDelegate {
         renderer.lineCap = .round
         renderer.lineJoin = .round
         return renderer
+    }
+}
+
+/// 2026-06-02 (vucko): Raster-Overlay, das über die höchste gerenderte Zoom-
+/// stufe hinaus „überzoomt", indem es die Vorfahr-Kachel ausschneidet +
+/// skaliert. So zeigt CarPlay unseren eigenen Cruise-Dark-Look bei JEDER
+/// Zoomstufe (auch Navi z14+), statt auf die Apple-Karte zu fallen.
+@available(iOS 14.0, *)
+final class OverzoomTileOverlay: MKTileOverlay {
+    private let maxRenderedZ: Int
+    private let session = URLSession(configuration: .default)
+
+    init(urlTemplate: String?, maxRenderedZ: Int) {
+        self.maxRenderedZ = maxRenderedZ
+        super.init(urlTemplate: urlTemplate)
+    }
+
+    private func tileURL(_ z: Int, _ x: Int, _ y: Int) -> URL? {
+        guard let t = urlTemplate else { return nil }
+        let s = t
+            .replacingOccurrences(of: "{z}", with: "\(z)")
+            .replacingOccurrences(of: "{x}", with: "\(x)")
+            .replacingOccurrences(of: "{y}", with: "\(y)")
+        return URL(string: s)
+    }
+
+    override func loadTile(
+        at path: MKTileOverlayPath,
+        result: @escaping (Data?, Error?) -> Void
+    ) {
+        // Innerhalb des gerenderten Bereichs: Kachel direkt laden.
+        if path.z <= maxRenderedZ {
+            guard let url = tileURL(path.z, path.x, path.y) else {
+                result(nil, nil); return
+            }
+            session.dataTask(with: url) { data, _, err in result(data, err) }.resume()
+            return
+        }
+        // Überzoom: Vorfahr-Kachel auf maxRenderedZ holen, Teilbereich ausschneiden.
+        let dz = path.z - maxRenderedZ
+        let factor = 1 << dz
+        let ax = path.x >> dz
+        let ay = path.y >> dz
+        guard let url = tileURL(maxRenderedZ, ax, ay) else { result(nil, nil); return }
+        let subX = path.x - (ax << dz)
+        let subY = path.y - (ay << dz)
+        let tile = tileSize
+        session.dataTask(with: url) { data, _, err in
+            guard let data, let img = UIImage(data: data), let cg = img.cgImage else {
+                result(data, err); return
+            }
+            let w = CGFloat(cg.width) / CGFloat(factor)
+            let h = CGFloat(cg.height) / CGFloat(factor)
+            let rect = CGRect(x: CGFloat(subX) * w, y: CGFloat(subY) * h, width: w, height: h)
+            guard let sub = cg.cropping(to: rect) else { result(data, nil); return }
+            let renderer = UIGraphicsImageRenderer(size: tile)
+            let out = renderer.image { ctx in
+                ctx.cgContext.interpolationQuality = .high
+                UIImage(cgImage: sub).draw(in: CGRect(origin: .zero, size: tile))
+            }
+            result(out.pngData() ?? data, nil)
+        }.resume()
     }
 }
 #endif

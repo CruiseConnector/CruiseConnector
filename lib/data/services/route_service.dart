@@ -4606,17 +4606,21 @@ class RouteService {
     // (deadEndSpikes, borderIntrusion, hasTangledStartCluster, poolShapeQualityOk,
     // longSportRoundTripShapeOk) bleiben via softRenderable-AND-Kette aktiv —
     // gelockert wird NUR der Stil-/Kurven-Anspruch, nicht die Sicherheit.
+    // 2026-06-02 (vucko v2): WEITER gelockert. Live-Log Vorarlberg: saubere
+    // Alpen-Sport-Loops (overlap 0.6%, shape 36, keine Spikes) wurden vom
+    // strengeren Rescue trotzdem abgelehnt (eine Sub-Metrik wie isLoopClosed/
+    // middleCoverage/centerReentry griff) → 15 Edge-Calls / 9.7s Emergency-
+    // Fallback statt sofort. Jetzt nur die KERN-Signale „sauberer Rundkurs":
+    // wenig Overlap (kein Zurückfahren), kein Zigzag-Artefakt, vernünftige
+    // Gesamtform. Die harten Sicherheits-Gates (deadEndSpikes, borderIntrusion,
+    // hasTangledStartCluster, poolShape, longSportShape) bleiben via
+    // softRenderable-AND-Kette voll aktiv → loosen NUR den Kurven-/Stil-
+    // Anspruch, nicht die Sicherheit.
     final cleanCurvyRescue = scenario.isRoundTrip &&
         hasEnoughPoints &&
-        quality.isLoopClosed &&
-        quality.overlapPercent <= 22.0 &&
-        quality.microZigzagPercent <= 30.0 &&
-        quality.shapePenalty <= 62.0 &&
-        quality.foldedAreaPenalty <= 78.0 &&
-        quality.spurArmCount <= 2 &&
-        quality.centerReentryCount <= 2 &&
-        quality.centerRecrossPercent <= 26.0 &&
-        quality.middleCoverageRatio >= 0.22;
+        quality.overlapPercent <= 26.0 &&
+        quality.microZigzagPercent <= 34.0 &&
+        quality.shapePenalty <= 72.0;
     final qualityAcceptable = scenario.isRoundTrip
         ? classification.isAcceptable ||
               rescueRoundTripAcceptable ||
