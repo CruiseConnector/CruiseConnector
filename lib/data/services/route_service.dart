@@ -8177,8 +8177,16 @@ class RouteService {
     List<List<double>> routeCoordinates,
   ) {
     final route = responseData is Map ? responseData['route'] : null;
+    if (routeCoordinates.length < 2) return const [];
     final legs = route is Map ? route['legs'] as List? : null;
-    if (legs == null || legs.isEmpty || routeCoordinates.length < 2) {
+    if (legs == null || legs.isEmpty) {
+      // 2026-06-02 (vucko): GraphHopper-v2-Pfad. Kein Mapbox-`legs`, dafür
+      // `route.instructions` (sign/interval/text). Ohne diesen Zweig hatten
+      // ALLE GraphHopper-Routen 0 Manöver → „Route folgen" statt „300m rechts".
+      final ghInstructions = route is Map ? route['instructions'] as List? : null;
+      if (ghInstructions != null && ghInstructions.isNotEmpty) {
+        return _extractManeuversFromGraphhopper(ghInstructions, routeCoordinates);
+      }
       return const [];
     }
 
@@ -8289,6 +8297,116 @@ class RouteService {
 
     maneuvers.sort((a, b) => a.routeIndex.compareTo(b.routeIndex));
     return maneuvers;
+  }
+
+  /// 2026-06-02 (vucko): Parst GraphHoppers Turn-by-turn-Instructions
+  /// (`{text, sign, interval:[a,b], exit_number}`) in RouteManeuver. `sign`
+  /// kodiert die Richtung (-3 scharf links … 0 geradeaus … 3 scharf rechts,
+  /// 4 Ziel, 6 Kreisverkehr). `interval[0]` ist der Punkt-Index in der Route,
+  /// an dem das Manöver passiert. `text` ist dank `locale=de` schon deutsch.
+  List<RouteManeuver> _extractManeuversFromGraphhopper(
+    List<dynamic> instructions,
+    List<List<double>> routeCoordinates,
+  ) {
+    final maneuvers = <RouteManeuver>[];
+    for (final ins in instructions) {
+      if (ins is! Map) continue;
+      final sign = (ins['sign'] as num?)?.toInt() ?? 0;
+      // sign 0 = geradeaus/weiter, 5 = Zwischenziel → kein Abbiege-Manöver.
+      if (sign == 0 || sign == 5) continue;
+      final interval = ins['interval'];
+      var coordIdx = 0;
+      if (interval is List && interval.isNotEmpty) {
+        coordIdx = (interval[0] as num?)?.toInt() ?? 0;
+      }
+      coordIdx = coordIdx.clamp(0, routeCoordinates.length - 1);
+      final c = routeCoordinates[coordIdx];
+      if (c.length < 2) continue;
+      final lng = c[0];
+      final lat = c[1];
+      final text = (ins['text'] as String?)?.trim() ?? '';
+      final isRoundabout = sign == 6;
+      final exitNumber = isRoundabout
+          ? (ins['exit_number'] as num?)?.toInt()
+          : null;
+      final instruction = sign == 4
+          ? 'Ziel erreicht.'
+          : (text.isNotEmpty
+                ? (text.endsWith('.') ? text : '$text.')
+                : _graphhopperFallbackText(sign));
+      maneuvers.add(
+        RouteManeuver(
+          latitude: lat,
+          longitude: lng,
+          routeIndex: coordIdx,
+          icon: _iconForGraphhopperSign(sign),
+          announcement: instruction,
+          instruction: instruction,
+          maneuverType: isRoundabout
+              ? ManeuverType.roundabout
+              : ManeuverType.normal,
+          roundaboutExitNumber: exitNumber,
+        ),
+      );
+    }
+    maneuvers.sort((a, b) => a.routeIndex.compareTo(b.routeIndex));
+    return maneuvers;
+  }
+
+  IconData _iconForGraphhopperSign(int sign) {
+    switch (sign) {
+      case -3:
+        return Icons.turn_sharp_left;
+      case -2:
+        return Icons.turn_left;
+      case -1:
+      case -7: // keep left
+        return Icons.turn_slight_left;
+      case 1:
+      case 7: // keep right
+        return Icons.turn_slight_right;
+      case 2:
+        return Icons.turn_right;
+      case 3:
+        return Icons.turn_sharp_right;
+      case 4:
+        return Icons.flag; // Ziel
+      case 6:
+        return Icons.roundabout_right;
+      case -8:
+      case -98:
+        return Icons.u_turn_left;
+      default:
+        return Icons.straight;
+    }
+  }
+
+  String _graphhopperFallbackText(int sign) {
+    switch (sign) {
+      case -3:
+        return 'Scharf links abbiegen.';
+      case -2:
+        return 'Links abbiegen.';
+      case -1:
+      case -7:
+        return 'Leicht links halten.';
+      case 1:
+      case 7:
+        return 'Leicht rechts halten.';
+      case 2:
+        return 'Rechts abbiegen.';
+      case 3:
+        return 'Scharf rechts abbiegen.';
+      case 4:
+        return 'Ziel erreicht.';
+      case 6:
+        return 'Im Kreisverkehr.';
+      case -8:
+      case -98:
+        return 'Wenden.';
+      default:
+        return 'Weiter geradeaus.';
+    }
   }
 
   int _findNearestIndex(

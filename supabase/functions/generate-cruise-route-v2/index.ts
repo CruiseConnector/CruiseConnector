@@ -346,6 +346,10 @@ interface RouteResult {
   coordinateCount: number;
   fingerprint: string;
   meta: Record<string, unknown>;
+  // 2026-06-02 (vucko): GraphHoppers Turn-by-turn-Instructions durchreichen,
+  // damit das Handy/CarPlay echte Wegbeschreibung („300m rechts abbiegen")
+  // zeigen kann. Wurde bisher verworfen → 0 Manöver.
+  instructions?: Array<Record<string, unknown>>;
 }
 
 // ─────────────────── Geo-Helpers (A→B Detour, Task #41) ─────────────────
@@ -459,6 +463,9 @@ async function callGraphHopper(opts: {
   params.set('points_encoded', 'false');
   params.set('ch.disable', 'true');
   params.set('instructions', 'true');
+  // 2026-06-02 (vucko): Deutsche Turn-by-turn-Texte („Rechts abbiegen auf …")
+  // für Handy + CarPlay.
+  params.set('locale', 'de');
   // 2026-05-28 (vucko Task #82): road_class/road_environment Details anfordern,
   // damit wir echte Autobahn-Nutzung in meta erkennen (has_highway etc.).
   params.append('details', 'road_class');
@@ -621,6 +628,7 @@ async function callGraphHopper(opts: {
         actual_has_highway: hasHighway,
         start_on_motorway: startOnMotorway,
       },
+      instructions: p.instructions ?? [],
     };
   } catch (e) {
     return { error: `GraphHopper fetch failed: ${(e as Error).message}` };
@@ -1317,6 +1325,10 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
         duration_seconds: Math.round(bestCandidate.durationSeconds),
         ascent_meters: Math.round(bestCandidate.ascent),
         coordinate_count: bestCandidate.coordinateCount,
+        // 2026-06-02 (vucko): GraphHopper Turn-by-turn durchreichen → echte
+        // Wegbeschreibung („300m rechts abbiegen") auf Handy + CarPlay.
+        // Format: [{text, distance, time, sign, interval:[a,b], street_name}].
+        instructions: bestCandidate.instructions ?? [],
       },
       meta: {
         ...bestCandidate.meta,
