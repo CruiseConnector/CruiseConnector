@@ -4186,7 +4186,17 @@ class _CruiseModePageState extends State<CruiseModePage>
             tileProviders: TileProviders({'protomaps': _pmtilesProvider!}),
             theme: _cruiseMapTheme,
             tileOffset: TileOffset.DEFAULT,
-            concurrency: 2,
+            // 2026-06-02 (vucko): VEKTOR-Modus statt Raster (Default). Raster
+            // rendert Tiles zu Bitmaps und skaliert sie beim Reinzoomen hoch →
+            // blockig/unscharf, bis ein neues Tile fertig ist (= „erst nach
+            // Pan normal"). Vektor zeichnet die Geometrie pro Zoomstufe live →
+            // bei JEDER Zoomstufe gestochen scharf. maximumTileSubstitution-
+            // Difference 3 = mehr Ersatz-Tiles während des Ladens → weniger
+            // leere/komische Frames. concurrency 4 (Default, Release-only)
+            // beschleunigt das Laden über Isolates.
+            layerMode: VectorTileLayerMode.vector,
+            maximumTileSubstitutionDifference: 3,
+            concurrency: 4,
           )
         else
           TileLayer(
