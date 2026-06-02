@@ -135,6 +135,8 @@ final class CarPlayRouteCoordinator: NSObject {
     private func updateNavigation(_ snapshot: CarPlayRouteSnapshot) {
         let navigating = snapshot.status == "navigating" && snapshot.hasRoute
         if navigating {
+            // Flüssig mit dem Standort mitführen + in Fahrtrichtung drehen.
+            mapViewController.followWithHeading()
             if navigationSession == nil {
                 beginNavigationSession(snapshot)
             } else {
@@ -333,6 +335,16 @@ final class CarPlayMapViewController: UIViewController, MKMapViewDelegate {
         guard routeOverlay == nil else { return }
         if mapView.userTrackingMode != .follow {
             mapView.setUserTrackingMode(.follow, animated: true)
+        }
+    }
+
+    /// 2026-06-02 (vucko): Aktive Navigation → Kamera führt flüssig mit dem
+    /// Standort mit und dreht in Fahrtrichtung (heading-up), wie die
+    /// Cruise-Mode-Page am Handy. MapKit animiert den blauen Punkt + die
+    /// Kamerafahrt nativ weich bei jedem GPS-Update.
+    func followWithHeading() {
+        if mapView.userTrackingMode != .followWithHeading {
+            mapView.setUserTrackingMode(.followWithHeading, animated: true)
         }
     }
 
