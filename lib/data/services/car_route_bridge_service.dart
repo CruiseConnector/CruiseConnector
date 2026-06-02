@@ -57,10 +57,19 @@ class CarRouteBridgeService {
   // 2026-05-24 (vucko Task #46): wird vom Native-Target (CarPlay/AA)
   // beschrieben sobald es connected wird. Flutter pollt hier nur.
   static const carConnectedKey = 'car_connected_at';
+  // 2026-06-02 (vucko): Login-Status für CarPlay/Android-Auto. Ist niemand
+  // eingeloggt, zeigt das Auto-Display „Bitte zuerst einloggen" statt der Karte.
+  static const loggedInKey = 'cc_logged_in';
   static const _progressThrottle = Duration(seconds: 3);
 
   SharedPreferences? _preferences;
   DateTime? _lastProgressWrite;
+
+  /// Schreibt den Login-Status, den die CarPlay/Android-Auto-Seite liest.
+  Future<void> publishLoginState(bool loggedIn) async {
+    final prefs = await _ensurePrefs();
+    await prefs.setString(loggedInKey, loggedIn ? '1' : '0');
+  }
 
   /// Liefert true wenn ein CarPlay/AA-Target sich in den letzten 30s
   /// gemeldet hat. Native Target soll `car_connected_at` regelmäßig setzen.

@@ -52,9 +52,37 @@ final class CarPlayRouteCoordinator: NSObject {
         mapTemplate.automaticallyHidesNavigationBar = false
         configureMapButtons()
         interfaceController.setRootTemplate(mapTemplate, animated: false)
-        showSafetyNoticeIfNeeded()
+        // 2026-06-02 (vucko): Ohne Login zuerst die „bitte einloggen"-Meldung,
+        // sonst der normale Sicherheitshinweis.
+        if isLoggedIn() {
+            showSafetyNoticeIfNeeded()
+        } else {
+            showLoginGateIfNeeded()
+        }
         refresh()
         startTimer()
+    }
+
+    private func isLoggedIn() -> Bool {
+        return UserDefaults.standard.string(forKey: "flutter.cc_logged_in") == "1"
+    }
+
+    private var loginGateShown = false
+    /// 2026-06-02 (vucko): App ohne Account in CarPlay geöffnet → klare Meldung
+    /// statt leerer Karte. Routen-Planung/-Laden geht erst nach Login am Handy.
+    private func showLoginGateIfNeeded() {
+        guard !isLoggedIn(), !loginGateShown else { return }
+        loginGateShown = true
+        let ok = CPAlertAction(title: "Verstanden", style: .default) { _ in }
+        let alert = CPAlertTemplate(
+            titleVariants: [
+                "Bitte zuerst in der App einloggen — dann kannst du deine Route hier laden.",
+                "Bitte zuerst einloggen, dann Route hier laden.",
+                "Erst einloggen",
+            ],
+            actions: [ok]
+        )
+        interfaceController.presentTemplate(alert, animated: true)
     }
 
     /// Karten-Buttons im Maps-Stil: Zentrieren, Zoom raus, Zoom rein.

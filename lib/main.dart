@@ -24,6 +24,7 @@ import 'package:cruise_connect/data/services/notification_service.dart';
 import 'package:cruise_connect/data/services/notification_settings_service.dart';
 import 'package:cruise_connect/data/services/push_notification_service.dart';
 import 'package:cruise_connect/data/services/poi_settings_service.dart';
+import 'package:cruise_connect/data/services/car_route_bridge_service.dart';
 import 'package:cruise_connect/presentation/pages/auth_page.dart';
 import 'package:cruise_connect/presentation/pages/post_detail_page.dart';
 
@@ -46,6 +47,16 @@ void main() {
       unawaited(VoiceSettingsService.instance.load());
       unawaited(NotificationSettingsService.instance.load());
       unawaited(PoiSettingsService.instance.load());
+
+      // 2026-06-02 (vucko): Login-Status fürs Auto-Display (CarPlay/Android
+      // Auto) veröffentlichen — initial + bei jedem Auth-Wechsel. Das Auto
+      // zeigt sonst „Bitte zuerst einloggen", bevor man eine Route laden kann.
+      final carBridge = CarRouteBridgeService();
+      unawaited(carBridge.publishLoginState(
+          Supabase.instance.client.auth.currentSession != null));
+      Supabase.instance.client.auth.onAuthStateChange.listen((state) {
+        unawaited(carBridge.publishLoginState(state.session != null));
+      });
 
       // 2026-05-31 (vucko): Push (FCM) nur auf Android/iOS. Firebase ist hier
       // REIN der Push-Kanal (kein Parallelbackend, vgl. codex.md). Der
