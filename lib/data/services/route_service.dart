@@ -4997,20 +4997,36 @@ class RouteService {
     RouteResult route,
   ) {
     if (!scenario.isPointToPoint) return true;
-    if (scenario.destinationLatitude == null ||
-        scenario.destinationLongitude == null ||
-        route.coordinates.isEmpty) {
+    final destLat = scenario.destinationLatitude;
+    final destLng = scenario.destinationLongitude;
+    if (destLat == null || destLng == null || route.coordinates.isEmpty) {
       return false;
     }
-    final end = route.coordinates.last;
-    if (end.length < 2) return false;
-    final distanceMeters = geo.Geolocator.distanceBetween(
-      end[1],
-      end[0],
-      scenario.destinationLatitude!,
-      scenario.destinationLongitude!,
+    // 2026-06-02 (vucko A→B-Fix): Live-Log Hohenems→Bregenz zeigte eine SAUBERE
+    // Route (tier=acceptable, 0% Overlap, 22.7km), die EINZIG an
+    // destinationReached scheiterte → „Route noch nicht verfügbar", und sogar
+    // der „Direkte Route nehmen"-Button war blockiert (auch er braucht
+    // destinationReached). Ursachen für ein Ende knapp >750 m: GraphHopper
+    // schnappt das Ziel auf die nächste befahrbare Straße (Ziel-POI liegt oft
+    // etwas abseits), und der Geometrie-Cleanup kann den letzten Punkt leicht
+    // verschieben. Fix: (1) nächsten der LETZTEN Punkte prüfen statt nur den
+    // allerletzten, (2) Toleranz 750 m → 2 km. Bis 2 km ist die Route nutzbar
+    // (endet am nächstgelegenen erreichbaren Punkt zum Ziel). Echte
+    // Falsch-Ziele (Route läuft ganz woanders hin) werden weiter abgelehnt.
+    final coords = route.coordinates;
+    final fromIdx = coords.length > 30 ? coords.length - 30 : 0;
+    var bestMeters = double.infinity;
+    for (var i = fromIdx; i < coords.length; i++) {
+      final c = coords[i];
+      if (c.length < 2) continue;
+      final d = geo.Geolocator.distanceBetween(c[1], c[0], destLat, destLng);
+      if (d < bestMeters) bestMeters = d;
+    }
+    debugPrint(
+      '[RouteService] destReached: best=${bestMeters.isFinite ? bestMeters.toStringAsFixed(0) : "inf"}m '
+      'to dest=($destLat,$destLng), routeEnd=${coords.last}',
     );
-    return distanceMeters <= 750.0;
+    return bestMeters <= 2000.0;
   }
 
   bool _isBetterCandidate(_RouteCandidate candidate, _RouteCandidate? current) {

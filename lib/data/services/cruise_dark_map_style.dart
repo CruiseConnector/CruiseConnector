@@ -82,6 +82,9 @@ const Map<String, dynamic> cruiseDarkMapStyle = {
       'type': 'line',
       'source': 'protomaps',
       'source-layer': 'boundaries',
+      // 2026-06-02 (vucko): NUR Ländergrenzen (kind=country) — Bundesland-/
+      // Regionsgrenzen (kind=region) raus, das war zu viel (User-Wunsch).
+      'filter': ['in', 'kind', 'country', 'unrecognized_country'],
       'paint': {
         // 2026-06-02 (vucko): noch erkennbarer — heller, breiter, dichtere
         // Striche (mehr Linie/weniger Lücke), volle Deckkraft.
@@ -187,6 +190,12 @@ const Map<String, dynamic> cruiseDarkMapStyle = {
       'type': 'symbol',
       'source': 'protomaps',
       'source-layer': 'places',
+      // 2026-06-02 (vucko): NUR echte Siedlungen — Stadt/Ort/Dorf
+      // (kind_detail = city/town/village). Weiler/Ortsteile/Quartiere
+      // (hamlet, suburb, neighbourhood, locality, isolated_dwelling …) und
+      // Flur-/Einzelnamen wie „Plattentöbele"/„Suldis"/„Sportplatz" raus —
+      // das war viel zu viel Info für den User.
+      'filter': ['in', 'kind_detail', 'city', 'town', 'village'],
       'layout': {
         'text-field': ['get', 'name'],
         // 2026-06-02 (vucko): Orte sollen klar HERAUSSTECHEN — größer als die
