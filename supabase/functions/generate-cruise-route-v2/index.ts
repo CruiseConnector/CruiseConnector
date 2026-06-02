@@ -29,6 +29,11 @@ const GRAPHHOPPER_DE_URL = Deno.env.get('GRAPHHOPPER_DE_URL') ?? GRAPHHOPPER_URL
 // wenn PC1 stark belastet. Falls ENV nicht gesetzt → wir fallen auf
 // PC1-DE-Server zurück (graceful degradation).
 const GRAPHHOPPER_EU_URL = Deno.env.get('GRAPHHOPPER_EU_URL') ?? GRAPHHOPPER_DE_URL;
+// 2026-06-02 (vucko Routing-Stabilität): Harte Obergrenze pro GraphHopper-Call.
+// Ohne Timeout konnte ein hängender Round-Trip-Request die ganze Funktion bis
+// zum Plattform-Limit blockieren → Client sah „Keine Verbindung zum Routing-
+// Dienst". 9s deckt auch langsame Alpine-Loops ab, kappt aber echte Hänger.
+const GH_FETCH_TIMEOUT_MS = 9000;
 const ALLOWED_ORIGINS = '*';
 
 /// Region-Klassifikation für intelligente Server-Wahl.
@@ -421,6 +426,10 @@ async function callGraphHopper(opts: {
   detourPerpendicularKm?: number;
   // Custom waypoints (zwischen start + end, in order)
   intermediateWaypoints?: Array<{ lat: number; lng: number }>;
+  // 2026-06-02 (vucko): externes Abbruch-Signal (Round-Trip-Racer bricht die
+  // nicht mehr benötigten Verlierer-Calls ab) + optionaler Per-Call-Timeout.
+  signal?: AbortSignal;
+  timeoutMs?: number;
 }): Promise<RouteResult | { error: string }> {
   const params = new URLSearchParams();
   params.append('point', `${opts.startLat},${opts.startLng}`);
@@ -516,8 +525,21 @@ async function callGraphHopper(opts: {
 
   const baseUrl = opts.serverUrl ?? GRAPHHOPPER_URL;
   const url = `${baseUrl}/route?${params.toString()}`;
+  // 2026-06-02 (vucko): Per-Call-Timeout + externes Abort-Signal. Ein hängender
+  // GraphHopper-Call wird nach GH_FETCH_TIMEOUT_MS hart abgebrochen (statt die
+  // Funktion bis zum Plattform-Limit zu blockieren), und der Round-Trip-Racer
+  // kann nicht mehr benötigte Calls vorzeitig abbrechen (spart GH-Last).
+  const timeoutCtrl = new AbortController();
+  const timeoutId = setTimeout(
+    () => timeoutCtrl.abort(),
+    opts.timeoutMs ?? GH_FETCH_TIMEOUT_MS,
+  );
+  if (opts.signal) {
+    if (opts.signal.aborted) timeoutCtrl.abort();
+    else opts.signal.addEventListener('abort', () => timeoutCtrl.abort(), { once: true });
+  }
   try {
-    const res = await fetch(url);
+    const res = await fetch(url, { signal: timeoutCtrl.signal });
     if (!res.ok) {
       return { error: `GraphHopper HTTP ${res.status}: ${await res.text().then(t => t.slice(0, 200))}` };
     }
@@ -602,7 +624,45 @@ async function callGraphHopper(opts: {
     };
   } catch (e) {
     return { error: `GraphHopper fetch failed: ${(e as Error).message}` };
+  } finally {
+    clearTimeout(timeoutId);
   }
+}
+
+// 2026-06-02 (vucko Routing-Speed): Feuert alle Promises parallel und gibt
+// SOFORT [ersterAkzeptabler] zurück, sobald einer die Schwelle erfüllt — die
+// restlichen Calls werden vom Aufrufer abgebrochen. Erfüllt KEINER die
+// Schwelle, kommen am Ende ALLE gesammelten Ergebnisse zurück, sodass das
+// normale Best-of-N-Scoring den besten verfügbaren wählt. So hängt die
+// Live-Suche nicht mehr am langsamsten von N parallelen GraphHopper-Calls
+// (Promise.all = langsamster gewinnt → 9-11s; hier: erster guter → ~2-4s).
+async function raceForFirstAcceptable<T>(
+  promises: Array<Promise<T>>,
+  isAcceptable: (v: T) => boolean,
+): Promise<T[]> {
+  if (promises.length === 0) return [];
+  return await new Promise<T[]>((resolve) => {
+    const collected: T[] = [];
+    let done = false;
+    let remaining = promises.length;
+    for (const p of promises) {
+      p.then((v) => {
+        collected.push(v);
+        if (!done && isAcceptable(v)) {
+          done = true;
+          resolve([v]);
+        }
+      }).catch(() => {
+        /* Fehler/Abbruch zählt als nicht akzeptabel */
+      }).finally(() => {
+        remaining--;
+        if (remaining === 0 && !done) {
+          done = true;
+          resolve(collected);
+        }
+      });
+    }
+  });
 }
 
 // ─────────────────── Route-Generation mit Retries + Compensation ───────────
@@ -740,22 +800,56 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
     lngOffset: number = 0,
   ) => {
     if (isRoundTrip) {
-      return await Promise.all(
-        candidateSeeds.map(seed =>
-          callGraphHopper({
-            startLat: req.start_location!.latitude + latOffset,
-            startLng: req.start_location!.longitude + lngOffset,
-            endLat: req.target_location?.latitude,
-            endLng: req.target_location?.longitude,
-            profile: profileToUse,
-            isRoundTrip,
-            targetDistanceKm: effectiveDistanceKm,
-            seed,
-            avoidHighways: req.avoid_highways ?? false,
-            serverUrl,
-          }).then(result => ({ result, seed })),
-        ),
+      // 2026-06-02 (vucko Routing-Speed/Stabilität): NICHT auf alle Seeds warten
+      // (Promise.all = langsamster von N gewinnt → 9-11s). Stattdessen den ERSTEN
+      // akzeptablen Kandidaten nehmen und die restlichen Calls abbrechen.
+      // GraphHopper-Round-Trip-Latenz schwankt 2-9s → so liefert die Live-Suche
+      // in ~2-4s statt am langsamsten Outlier zu hängen. Die Akzeptanz-Schwelle
+      // spiegelt das spätere Best-of-N-Scoring (nah an Zieldistanz, kein
+      // Duplikat, realistische Geschwindigkeit, Stil getroffen).
+      const controllers = candidateSeeds.map(() => new AbortController());
+      const calls = candidateSeeds.map((seed, i) =>
+        callGraphHopper({
+          startLat: req.start_location!.latitude + latOffset,
+          startLng: req.start_location!.longitude + lngOffset,
+          endLat: req.target_location?.latitude,
+          endLng: req.target_location?.longitude,
+          profile: profileToUse,
+          isRoundTrip,
+          targetDistanceKm: effectiveDistanceKm,
+          seed,
+          avoidHighways: req.avoid_highways ?? false,
+          serverUrl,
+          signal: controllers[i].signal,
+        }).then(result => ({ result, seed })),
       );
+      const minTurns = minTurnsPerKmForProfile(profileToUse);
+      const isAcceptable = (
+        entry: { result: RouteResult | { error: string }; seed: number },
+      ): boolean => {
+        const r = entry.result;
+        if ('error' in r) return false;
+        if (previousFps.has(r.fingerprint)) return false; // Duplikat → nächster Seed
+        const deltaPct = Math.abs(r.distanceKm - targetKm) / targetKm * 100;
+        if (deltaPct > 12) return false; // zu weit von Zieldistanz
+        const avgSpeedKmh = r.durationSeconds > 0
+          ? r.distanceKm / (r.durationSeconds / 3600)
+          : 50;
+        const minSpeed = r.distanceKm >= 75 ? 35 : 30;
+        if (avgSpeedKmh < minSpeed) return false; // unrealistisch langsam
+        const turns = countSignificantTurns(
+          r.geometry.coordinates as [number, number][],
+        );
+        const turnsPerKm = r.distanceKm > 0 ? turns / r.distanceKm : 0;
+        if (turnsPerKm < minTurns * 0.85) return false; // Stil klar verfehlt
+        return true;
+      };
+      const picked = await raceForFirstAcceptable(calls, isAcceptable);
+      // Verlierer-Calls abbrechen → GraphHopper-Last sparen (Cron-Kontention).
+      for (const c of controllers) {
+        try { c.abort(); } catch { /* ignore */ }
+      }
+      return picked;
     }
     // A→B mode mit Wegpunkten
     if (hasExplicitWaypoints) {
