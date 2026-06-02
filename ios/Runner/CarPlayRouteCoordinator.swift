@@ -110,11 +110,13 @@ final class CarPlayRouteCoordinator: NSObject {
 
     private func applyIdleState() {
         mapTemplate.leadingNavigationBarButtons = [
-            CPBarButton(title: "Am Handy planen") { _ in }
+            CPBarButton(title: "Route am Handy starten – erscheint hier") { _ in }
         ]
         mapTemplate.trailingNavigationBarButtons = []
         lastRouteSignature = nil
         mapViewController.clearRoute()
+        // Keine Route → Live-„Wo bin ich"-Ansicht: der eigenen Position folgen.
+        mapViewController.followUser()
     }
 
     private func updateBarButtons(_ snapshot: CarPlayRouteSnapshot) {
@@ -313,8 +315,24 @@ final class CarPlayMapViewController: UIViewController, MKMapViewDelegate {
         mapView.showsScale = false
         mapView.showsTraffic = false
         mapView.pointOfInterestFilter = .excludingAll
+        // 2026-06-02 (vucko): Standort live anzeigen + ihm folgen, damit die
+        // CarPlay-Karte sofort nützlich ist (User sah nach dem Disclaimer eine
+        // leere Karte). Wie die Cruise-Mode-Page: Karte + eigene Position immer
+        // sichtbar. Route-Planung bleibt bewusst am Handy (Apple-Guideline) —
+        // eine geplante Route erscheint hier automatisch.
+        mapView.showsUserLocation = true
+        mapView.userTrackingMode = .follow
         if #available(iOS 13.0, *) {
             mapView.overrideUserInterfaceStyle = .dark
+        }
+    }
+
+    /// Folgt der eigenen Position (nur wenn keine Route aktiv ist) → „Wo bin
+    /// ich"-Live-Ansicht im Leerlauf.
+    func followUser() {
+        guard routeOverlay == nil else { return }
+        if mapView.userTrackingMode != .follow {
+            mapView.setUserTrackingMode(.follow, animated: true)
         }
     }
 
@@ -325,6 +343,8 @@ final class CarPlayMapViewController: UIViewController, MKMapViewDelegate {
             return CLLocationCoordinate2D(latitude: pair[1], longitude: pair[0])
         }
         guard points.count >= 2 else { return }
+        // Route aktiv → nicht mehr dem Standort folgen, sondern die Route zeigen.
+        mapView.setUserTrackingMode(.none, animated: false)
         let polyline = MKPolyline(coordinates: points, count: points.count)
         mapView.addOverlay(polyline)
         routeOverlay = polyline
