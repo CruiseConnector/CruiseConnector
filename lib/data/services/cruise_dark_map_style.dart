@@ -83,13 +83,15 @@ const Map<String, dynamic> cruiseDarkMapStyle = {
       'source': 'protomaps',
       'source-layer': 'boundaries',
       'paint': {
-        'line-color': '#8b98ad',
+        // 2026-06-02 (vucko): noch erkennbarer — heller, breiter, dichtere
+        // Striche (mehr Linie/weniger Lücke), volle Deckkraft.
+        'line-color': '#b3bdce',
         'line-width': [
           'interpolate', ['linear'], ['zoom'],
-          3, 0.9, 6, 1.6, 9, 2.4, 13, 3.4,
+          3, 1.4, 6, 2.4, 9, 3.4, 13, 4.8,
         ],
-        'line-dasharray': [2.5, 1.5],
-        'line-opacity': 0.92,
+        'line-dasharray': [3, 1.1],
+        'line-opacity': 1.0,
       },
     },
     // ── Straßen: dunkel→hell nach Wichtigkeit, Breite bis Zoom 20 ──

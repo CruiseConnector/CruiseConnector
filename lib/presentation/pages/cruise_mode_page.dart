@@ -4281,6 +4281,7 @@ class _CruiseModePageState extends State<CruiseModePage>
             _selectedLocation == 'Standort wählen' &&
             !_isRouteConfirmed)
           MarkerLayer(
+            rotate: true,
             markers: [
               Marker(
                 point: _pickedStartLocation!,
@@ -4293,6 +4294,7 @@ class _CruiseModePageState extends State<CruiseModePage>
           ),
         if (_isWaypointPlanning && _roundTripWaypoints.isNotEmpty)
           MarkerLayer(
+            rotate: true,
             markers: [
               for (var i = 0; i < _roundTripWaypoints.length; i++)
                 Marker(
@@ -4317,6 +4319,7 @@ class _CruiseModePageState extends State<CruiseModePage>
           ),
         if (pointToPointDestination != null)
           MarkerLayer(
+            rotate: true,
             markers: [
               Marker(
                 point: pointToPointDestination,
@@ -4328,6 +4331,7 @@ class _CruiseModePageState extends State<CruiseModePage>
           ),
         if (activeRouteEnd != null)
           MarkerLayer(
+            rotate: true,
             markers: [
               Marker(
                 point: activeRouteEnd,
@@ -4340,6 +4344,10 @@ class _CruiseModePageState extends State<CruiseModePage>
         // ── POI-Marker (Tankstellen, Restaurants etc., Google-Maps-Style) ─
         if (_routePois.isNotEmpty)
           MarkerLayer(
+            // 2026-06-02 (vucko): rotate=true → Symbole richten sich gegen die
+            // Kartendrehung auf, bleiben für den User IMMER lesbar/aufrecht,
+            // auch wenn die Karte während der Fahrt gedreht ist.
+            rotate: true,
             markers: [
               for (final poi in _routePois)
                 Marker(
@@ -4356,6 +4364,7 @@ class _CruiseModePageState extends State<CruiseModePage>
         // ── Baustellen-Marker (Task #66, orange pulsierend) ────────────────
         if (_routeConstructions.isNotEmpty)
           MarkerLayer(
+            rotate: true,
             markers: [
               for (final c in _routeConstructions)
                 Marker(
@@ -4384,6 +4393,7 @@ class _CruiseModePageState extends State<CruiseModePage>
         // ── Gruppen-Mitglieder (Live-Positionen) ────────────────────────────
         if (widget.groupId != null && _groupMembers.isNotEmpty)
           MarkerLayer(
+            rotate: true,
             markers: _groupMembers.values
                 .where(_hasGroupMemberLocation)
                 .map(
