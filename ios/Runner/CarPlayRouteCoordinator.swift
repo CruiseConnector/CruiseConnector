@@ -51,13 +51,21 @@ final class CarPlayRouteCoordinator: NSObject {
         window.rootViewController = mapViewController
         mapTemplate.automaticallyHidesNavigationBar = false
         configureMapButtons()
+        // 2026-06-02 (vucko v2): Apple verlangt bei Navi-Apps (carplay-maps)
+        // zwingend ein CPMapTemplate als Root — ein anderes Root-Template crasht
+        // zur Laufzeit. Das Login-Gate ist daher KEIN eigenes Root, sondern:
+        // (a) eine persistente Sperr-Leiste auf der Karte + (b) ein Alert, der
+        // ZWINGEND verzögert (DispatchQueue.main.async) präsentiert wird — sonst
+        // racet er beim Scene-Connect und erscheint nie („es kommt nichts wenn
+        // ausgeloggt"). refresh() wechselt live, sobald man sich am Handy einloggt.
         interfaceController.setRootTemplate(mapTemplate, animated: false)
-        // 2026-06-02 (vucko): Ohne Login zuerst die „bitte einloggen"-Meldung,
-        // sonst der normale Sicherheitshinweis.
         if isLoggedIn() {
+            loggedOut = false
             showSafetyNoticeIfNeeded()
         } else {
-            showLoginGateIfNeeded()
+            loggedOut = true
+            applyLoggedOutState()
+            presentLoginAlertIfNeeded()
         }
         refresh()
         startTimer()
@@ -67,22 +75,42 @@ final class CarPlayRouteCoordinator: NSObject {
         return UserDefaults.standard.string(forKey: "flutter.cc_logged_in") == "1"
     }
 
-    private var loginGateShown = false
-    /// 2026-06-02 (vucko): App ohne Account in CarPlay geöffnet → klare Meldung
-    /// statt leerer Karte. Routen-Planung/-Laden geht erst nach Login am Handy.
-    private func showLoginGateIfNeeded() {
-        guard !isLoggedIn(), !loginGateShown else { return }
-        loginGateShown = true
-        let ok = CPAlertAction(title: "Verstanden", style: .default) { _ in }
-        let alert = CPAlertTemplate(
-            titleVariants: [
-                "Bitte zuerst in der App einloggen — dann kannst du deine Route hier laden.",
-                "Bitte zuerst einloggen, dann Route hier laden.",
-                "Erst einloggen",
-            ],
-            actions: [ok]
-        )
-        interfaceController.presentTemplate(alert, animated: true)
+    private var loggedOut = false
+    private var loginAlertShown = false
+
+    /// Sperr-Zustand auf der Karte, wenn niemand eingeloggt ist: klare Leiste
+    /// oben, keine Route, einfach der eigenen Position folgen (unsere Tiles).
+    private func applyLoggedOutState() {
+        mapTemplate.leadingNavigationBarButtons = [
+            CPBarButton(title: "🔒 Erst in der App einloggen") { [weak self] _ in
+                self?.loginAlertShown = false
+                self?.presentLoginAlertIfNeeded()
+            }
+        ]
+        mapTemplate.trailingNavigationBarButtons = []
+        lastRouteSignature = nil
+        mapViewController.clearRoute()
+        mapViewController.followUser()
+    }
+
+    /// 2026-06-02 (vucko): Alert MUSS verzögert kommen, sonst erscheint er beim
+    /// Scene-Connect nicht (Race gegen CarPlays interne Initialisierung).
+    private func presentLoginAlertIfNeeded() {
+        guard !isLoggedIn(), !loginAlertShown else { return }
+        loginAlertShown = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self, !self.isLoggedIn() else { return }
+            let ok = CPAlertAction(title: "Verstanden", style: .default) { _ in }
+            let alert = CPAlertTemplate(
+                titleVariants: [
+                    "Bitte zuerst in der CruiseConnect-App am iPhone einloggen — dann lädt deine Route hier.",
+                    "Bitte zuerst in der App einloggen, dann Route hier laden.",
+                    "Erst in der App einloggen",
+                ],
+                actions: [ok]
+            )
+            self.interfaceController.presentTemplate(alert, animated: true)
+        }
     }
 
     /// Karten-Buttons im Maps-Stil: Zentrieren, Zoom raus, Zoom rein.
@@ -112,6 +140,23 @@ final class CarPlayRouteCoordinator: NSObject {
             ISO8601DateFormatter().string(from: Date()),
             forKey: "flutter.car_connected_at"
         )
+        // 2026-06-02 (vucko v2): Login-Gate live. Loggt man sich am Handy ein/aus,
+        // wechselt CarPlay beim nächsten 2s-Tick automatisch — ohne Reconnect.
+        // Karte bleibt Root (Apple-Pflicht), nur der Inhalt ändert sich.
+        if !isLoggedIn() {
+            if !loggedOut {
+                loggedOut = true
+                loginAlertShown = false
+                endNavigationSession(cancel: true)
+                applyLoggedOutState()
+                presentLoginAlertIfNeeded()
+            }
+            return
+        }
+        if loggedOut {
+            loggedOut = false
+            showSafetyNoticeIfNeeded()
+        }
         guard let snapshot = routeStore.readSnapshot() else {
             applyIdleState()
             endNavigationSession(cancel: true)
@@ -131,14 +176,24 @@ final class CarPlayRouteCoordinator: NSObject {
             "\(snapshot.routeId ?? "")|\(snapshot.fingerprint ?? "")|\(snapshot.coordinates.count)"
         guard signature != lastRouteSignature else { return }
         lastRouteSignature = signature
-        mapViewController.updateRoute(coordinates: snapshot.coordinates)
+        // Frisch gefundene Route (Vorschau) → mit Zeichen-Animation; sonst direkt.
+        if snapshot.status == "found" {
+            mapViewController.animateRouteDraw(coordinates: snapshot.coordinates)
+        } else {
+            mapViewController.updateRoute(coordinates: snapshot.coordinates)
+        }
     }
 
     // MARK: - Navigationsleiste (Info wenn keine Navi-Session läuft)
 
     private func applyIdleState() {
+        // 2026-06-02 (vucko Task #115): Im Auto direkt eine Route planen können
+        // (Stil → km → Autobahn). Apple erlaubt listen-basierte Auswahl auch
+        // während der Fahrt — kein Freitext, daher Rundkurs.
         mapTemplate.leadingNavigationBarButtons = [
-            CPBarButton(title: "Route am Handy starten – erscheint hier") { _ in }
+            CPBarButton(title: "🧭 Route planen") { [weak self] _ in
+                self?.presentStylePicker()
+            }
         ]
         mapTemplate.trailingNavigationBarButtons = []
         lastRouteSignature = nil
@@ -148,6 +203,22 @@ final class CarPlayRouteCoordinator: NSObject {
     }
 
     private func updateBarButtons(_ snapshot: CarPlayRouteSnapshot) {
+        // Gefundene Route = Vorschau: „Losfahren" (Navigation starten) oder
+        // „Neu konfigurieren" — wie der Bestätigen/Neu-Konfigurieren-Schritt
+        // in der App.
+        if snapshot.status == "found" {
+            mapTemplate.leadingNavigationBarButtons = [
+                CPBarButton(title: "🏍️ Losfahren") { [weak self] _ in
+                    self?.startNavigationFromPreview()
+                }
+            ]
+            mapTemplate.trailingNavigationBarButtons = [
+                CPBarButton(title: "Neu konfigurieren") { [weak self] _ in
+                    self?.presentStylePicker()
+                }
+            ]
+            return
+        }
         let distance = formatDistance(snapshot.remainingDistanceMeters ?? snapshot.distanceMeters)
         let duration = formatDuration(snapshot.remainingDurationSeconds ?? snapshot.durationSeconds)
         mapTemplate.leadingNavigationBarButtons = [
@@ -172,8 +243,34 @@ final class CarPlayRouteCoordinator: NSObject {
             }
         } else if snapshot.status == "ended" {
             endNavigationSession(cancel: false) // angekommen → finishTrip
+            showPostRouteScreenIfNeeded(snapshot)
         } else {
             endNavigationSession(cancel: true)
+        }
+    }
+
+    /// 2026-06-02 (vucko Task #115): Abschluss-Screen im Auto, wenn die Tour
+    /// fertig ist — kurzer Glückwunsch + zurück zur „Route planen"-Karte. Pro
+    /// beendeter Route nur einmal (Signatur-Guard).
+    private var postRouteShownSignature: String?
+    private func showPostRouteScreenIfNeeded(_ snapshot: CarPlayRouteSnapshot) {
+        let sig = "\(snapshot.routeId ?? "")|\(snapshot.updatedAt ?? "")"
+        guard postRouteShownSignature != sig else { return }
+        postRouteShownSignature = sig
+        let distance = formatDistance(snapshot.distanceMeters)
+        let ok = CPAlertAction(title: "Fertig", style: .default) { [weak self] _ in
+            self?.applyIdleState()
+        }
+        let alert = CPAlertTemplate(
+            titleVariants: [
+                "Tour beendet — \(distance) gefahren. Gute Fahrt war's! 🏍️",
+                "Tour beendet — \(distance) gefahren.",
+                "Tour beendet",
+            ],
+            actions: [ok]
+        )
+        DispatchQueue.main.async { [weak self] in
+            self?.interfaceController.presentTemplate(alert, animated: true)
         }
     }
 
@@ -295,6 +392,108 @@ final class CarPlayRouteCoordinator: NSObject {
         interfaceController.presentTemplate(alert, animated: true)
     }
 
+    // MARK: - Config-Flow (Route im Auto planen)
+
+    private var commandRequestId = 0
+    private let availableStyles = ["Sport Mode", "Kurvenjagd", "Abendrunde", "Entdecker"]
+    private let availableDistances = [30, 50, 75, 100]
+
+    /// Schreibt einen Befehl für die Flutter-Seite (CarCommandListener) in
+    /// UserDefaults. Monoton steigende requestId, damit Flutter nur neue
+    /// Befehle ausführt. Key mit `flutter.`-Präfix (shared_preferences-Konvention).
+    private func writeCommand(_ payload: [String: Any]) {
+        commandRequestId += 1
+        var dict = payload
+        dict["requestId"] = commandRequestId
+        if let data = try? JSONSerialization.data(withJSONObject: dict),
+           let str = String(data: data, encoding: .utf8) {
+            UserDefaults.standard.set(str, forKey: "flutter.car_command")
+        }
+    }
+
+    private func styleDisplayName(_ style: String) -> String {
+        switch style {
+        case "Sport Mode": return "Sport — flüssig & schnell"
+        case "Kurvenjagd": return "Kurvenjagd — maximale Kurven"
+        case "Abendrunde": return "Abendrunde — ruhig & entspannt"
+        case "Entdecker": return "Entdecker — neue Strecken"
+        default: return style
+        }
+    }
+
+    /// Schritt 1: Fahrstil.
+    private func presentStylePicker() {
+        guard isLoggedIn() else { presentLoginAlertIfNeeded(); return }
+        let items: [CPListItem] = availableStyles.map { style in
+            let item = CPListItem(text: styleDisplayName(style), detailText: nil)
+            item.handler = { [weak self] _, completion in
+                self?.presentDistancePicker(style: style)
+                completion()
+            }
+            return item
+        }
+        let template = CPListTemplate(
+            title: "Fahrstil wählen",
+            sections: [CPListSection(items: items)]
+        )
+        interfaceController.pushTemplate(template, animated: true, completion: nil)
+    }
+
+    /// Schritt 2: Distanz.
+    private func presentDistancePicker(style: String) {
+        let items: [CPListItem] = availableDistances.map { km in
+            let item = CPListItem(text: "\(km) km", detailText: nil)
+            item.handler = { [weak self] _, completion in
+                self?.presentHighwayPicker(style: style, km: km)
+                completion()
+            }
+            return item
+        }
+        let template = CPListTemplate(
+            title: "Distanz wählen",
+            sections: [CPListSection(items: items)]
+        )
+        interfaceController.pushTemplate(template, animated: true, completion: nil)
+    }
+
+    /// Schritt 3: Autobahn an/aus (User-Terminologie: voll ausschreiben).
+    private func presentHighwayPicker(style: String, km: Int) {
+        let on = CPListItem(text: "Autobahn an", detailText: "Autobahn erlaubt")
+        on.handler = { [weak self] _, completion in
+            self?.submitPlan(style: style, km: km, avoidHighways: false)
+            completion()
+        }
+        let off = CPListItem(text: "Autobahn aus", detailText: "Autobahn vermeiden")
+        off.handler = { [weak self] _, completion in
+            self?.submitPlan(style: style, km: km, avoidHighways: true)
+            completion()
+        }
+        let template = CPListTemplate(
+            title: "Autobahn",
+            sections: [CPListSection(items: [on, off])]
+        )
+        interfaceController.pushTemplate(template, animated: true, completion: nil)
+    }
+
+    /// Schickt die Konfiguration an Flutter und kehrt zur Karte zurück. Der
+    /// Snapshot wechselt dann auf „searching" → „found" (Vorschau).
+    private func submitPlan(style: String, km: Int, avoidHighways: Bool) {
+        writeCommand([
+            "action": "planRoute",
+            "style": style,
+            "distanceKm": km,
+            "avoidHighways": avoidHighways,
+        ])
+        lastRouteSignature = nil // erzwingt Neu-Zeichnen der kommenden Route
+        interfaceController.popToRootTemplate(animated: true, completion: nil)
+    }
+
+    /// „Losfahren" aus der Vorschau → Navigation starten (Flutter übernimmt
+    /// GPS-Tracking, falls die Cruise-Page offen ist; sonst Auto-Navi pur).
+    private func startNavigationFromPreview() {
+        writeCommand(["action": "startNavigation"])
+    }
+
     // MARK: - Formatierung
 
     private func title(for snapshot: CarPlayRouteSnapshot) -> String {
@@ -333,6 +532,7 @@ final class CarPlayRouteCoordinator: NSObject {
 final class CarPlayMapViewController: UIViewController, MKMapViewDelegate {
     private let mapView = MKMapView()
     private var routeOverlay: MKPolyline?
+    private var drawTimer: Timer?
 
     override func loadView() {
         view = mapView
@@ -374,7 +574,10 @@ final class CarPlayMapViewController: UIViewController, MKMapViewDelegate {
         // schneidet den passenden Teilbereich aus + skaliert ihn → unser Look
         // bleibt bei JEDER Zoomstufe. maximumZ hoch (19) damit MapKit überhaupt
         // anfragt; minimumZ = unterste gerenderte Stufe.
-        let overlay = OverzoomTileOverlay(urlTemplate: template, maxRenderedZ: 13)
+        // 2026-06-02 (vucko): DACH ist als z6–12 gerendert (kein flächiges z13).
+        // maxRenderedZ=12 → z6–12 direkt, z13+ überzoomt aus z12 (überall gültig,
+        // kein 404/Apple-Grün). Vorher 13 → z13 außerhalb Vorarlberg fehlte.
+        let overlay = OverzoomTileOverlay(urlTemplate: template, maxRenderedZ: 12)
         // 2026-06-02 (vucko): canReplaceMapContent=true → MapKit zeichnet seine
         // EIGENE Karte gar nicht erst darunter. Vorher (false) blitzte beim
         // Zoomen/Pannen die Apple-Karte durch, bis unsere Kacheln nachgeladen
@@ -382,7 +585,7 @@ final class CarPlayMapViewController: UIViewController, MKMapViewDelegate {
         // unser Look (dort wo gerendert) bzw. dunkler Grund beim Nachladen.
         overlay.canReplaceMapContent = true
         overlay.tileSize = CGSize(width: 512, height: 512)
-        overlay.minimumZ = 9
+        overlay.minimumZ = 6
         overlay.maximumZ = 19
         mapView.addOverlay(overlay, level: .aboveLabels)
     }
@@ -425,7 +628,52 @@ final class CarPlayMapViewController: UIViewController, MKMapViewDelegate {
         )
     }
 
+    /// 2026-06-02 (vucko Task #115): Route-Vorschau mit „Zeichen-Animation" wie
+    /// in der App — die Linie wächst in ~0,7s vom Start zum Ziel. Umgesetzt als
+    /// progressives Reveal (wachsende Polyline), da MapKit kein natives
+    /// Linien-Stroke-Animieren bietet.
+    func animateRouteDraw(coordinates: [[Double]]) {
+        drawTimer?.invalidate()
+        clearRoute()
+        let pts = coordinates.compactMap { pair -> CLLocationCoordinate2D? in
+            guard pair.count >= 2 else { return nil }
+            return CLLocationCoordinate2D(latitude: pair[1], longitude: pair[0])
+        }
+        guard pts.count >= 2 else { return }
+        mapView.setUserTrackingMode(.none, animated: false)
+        let full = MKPolyline(coordinates: pts, count: pts.count)
+        mapView.setVisibleMapRect(
+            full.boundingMapRect,
+            edgePadding: UIEdgeInsets(top: 48, left: 48, bottom: 48, right: 48),
+            animated: true
+        )
+        let steps = 18
+        var step = 1
+        let timer = Timer.scheduledTimer(withTimeInterval: 0.04, repeats: true) {
+            [weak self] t in
+            guard let self = self else { t.invalidate(); return }
+            if step >= steps {
+                t.invalidate()
+                if let existing = self.routeOverlay { self.mapView.removeOverlay(existing) }
+                self.mapView.addOverlay(full)
+                self.routeOverlay = full
+                return
+            }
+            let count = max(2, Int(Double(pts.count) * Double(step) / Double(steps)))
+            let slice = Array(pts.prefix(count))
+            if let existing = self.routeOverlay { self.mapView.removeOverlay(existing) }
+            let pl = MKPolyline(coordinates: slice, count: slice.count)
+            self.mapView.addOverlay(pl)
+            self.routeOverlay = pl
+            step += 1
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        drawTimer = timer
+    }
+
     func clearRoute() {
+        drawTimer?.invalidate()
+        drawTimer = nil
         if let existing = routeOverlay {
             mapView.removeOverlay(existing)
             routeOverlay = nil
