@@ -287,12 +287,8 @@ class _CruiseModePageState extends State<CruiseModePage>
   int _searchAgainAutoRetryCount = 0;
   DateTime? _searchAgainAutoRetryWindowStart;
   static const int _maxSearchAgainAutoRetries = 2;
-  // 2026-05-31 (vucko): Retries für den harten Länder-Gate („Im Land bleiben").
-  // Nur 1 sichtbarer UI-Neustart — die eigentliche Mehrarbeit macht jetzt der
-  // Service (maxAttempts=5 bei onlyHome), damit der User nicht 17%→30%→49%-
-  // Neustarts hintereinander sieht.
-  int _countryGateRetryCount = 0;
-  static const int _maxCountryGateRetries = 1;
+  // 2026-06-02 (vucko): Länder-Gate-Retry-Felder entfernt — „Im Land bleiben"
+  // ist jetzt SOFT (blockiert nie), daher keine UI-Retry-Schleife mehr nötig.
   // Wall-Clock-Cap: Auto-Retry-Counter wird nach 30s zurückgesetzt. Verhindert
   // dass ein gestauter Edge-Server endlose UI-Re-Suchen triggert.
   static const Duration _searchAgainAutoRetryWindow = Duration(seconds: 30);
@@ -5997,46 +5993,14 @@ class _CruiseModePageState extends State<CruiseModePage>
       avoidHighways: _avoidHighways,
     );
 
-    // 2026-05-31 (vucko): FINALER, harter Länder-Gate am universellen Anzeige-
-    // Chokepoint. Egal aus welcher Quelle die Route kommt (Live, Pool, Cached,
-    // Emergency-Fallback) — wenn „Im Land bleiben" aktiv ist, ein Rundkurs
-    // läuft und die Route überwiegend im Ausland liegt, wird sie NICHT
-    // angezeigt. Stattdessen einmalig automatisch neu suchen, danach klare
-    // Notice statt einer unprofessionellen Cross-Border-Route.
-    if (_countryPreference == CountryPreference.onlyHome &&
-        _isRoundTrip &&
-        !_isWaypointPlanning &&
-        _homeCountryCode != null) {
-      final foreign = CountryRegion.foreignFraction(
-        coordinates: prepared.coordinates,
-        homeCountryCode: _homeCountryCode!,
-      );
-      if (foreign > 0.35) {
-        debugPrint(
-          '[CruiseMode] Länder-Gate: Route abgelehnt — '
-          '${(foreign * 100).toStringAsFixed(0)}% Ausland '
-          '(home=$_homeCountryCode, source=${result.edgeMeta['route_generation_source'] ?? 'unknown'}).',
-        );
-        if (_countryGateRetryCount < _maxCountryGateRetries) {
-          _countryGateRetryCount += 1;
-          Future.microtask(() {
-            if (!mounted || _disposed) return;
-            _generateRoute();
-          });
-          return;
-        }
-        // Nach den Retries keine reine Inlandsroute gefunden → ehrliche Notice,
-        // KEINE Cross-Border-Route anzeigen.
-        _countryGateRetryCount = 0;
-        _restoreGeneratedRouteFailureUi(
-          _captureGeneratedRouteUiState(),
-          'Hier gibt es gerade keine reine Inlandsroute. Schalte „Im Land '
-          'bleiben" aus oder wähle einen anderen Startpunkt.',
-        );
-        return;
-      }
-      _countryGateRetryCount = 0;
-    }
+    // 2026-06-02 (vucko KRITISCHER FIX): Der Länder-Gate war ein HARTER Block
+    // (Route NICHT angezeigt + „keine reine Inlandsroute"-Sackgasse). In
+    // Grenzregionen (Vorarlberg liegt minutennah an CH/LI/IT) gibt es fast nie
+    // eine reine Inlandsroute → der User blieb stecken, SOGAR nach dem
+    // Ausschalten von „Im Land bleiben". Das darf nie passieren. „Im Land
+    // bleiben" ist jetzt wieder SOFT: es bevorzugt Inland NUR über den
+    // Routen-Score (in der Generierung), blockiert die Anzeige aber NIEMALS —
+    // die beste verfügbare Route wird immer gezeigt.
 
     const validator = RouteQualityValidator();
     final actualKm = prepared.distanceKm ?? 0.0;

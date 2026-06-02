@@ -4714,15 +4714,15 @@ class RouteService {
             foreignFraction: foreignFraction,
             preference: scenario.countryPreference,
           );
-    // Harter Kandidaten-Reject bei onlyHome + Rundkurs, wenn die Route
-    // überwiegend im Ausland liegt (>35%). preferHome bleibt rein weich.
-    final countryRejected = scenario.isRoundTrip &&
-        scenario.countryPreference == CountryPreference.onlyHome &&
-        foreignFraction > 0.35;
+    // 2026-06-02 (vucko KRITISCHER FIX): KEIN harter Länder-Reject mehr.
+    // Vorher lehnte onlyHome auslandslastige Rundkurse hart ab (countryRejected)
+    // → in Grenzregionen (Vorarlberg) fand sich nie eine reine Inlandsroute →
+    // gar keine Route + Sackgasse, sogar nach Ausschalten. Das darf nie
+    // passieren. „Im Land bleiben" wirkt jetzt NUR noch über den Score-Penalty
+    // (countryPenalty oben) → bevorzugt Inland, blockiert aber nie. Gibt es nur
+    // Auslandsrouten, wird die am-wenigsten-ausländische gezeigt.
     final baseTier = _preferredTier(classification.tier, edgeTier);
-    final effectiveTier = countryRejected
-        ? RouteQualityTier.rejected
-        : forceDirectAcceptable && !softRenderable
+    final effectiveTier = forceDirectAcceptable && !softRenderable
         ? RouteQualityTier.acceptable
         : !softRenderable
         ? RouteQualityTier.rejected
@@ -4731,8 +4731,7 @@ class RouteService {
               hasSoftSimilarityPenalty)
         ? RouteQualityTier.acceptable
         : baseTier;
-    final accepted =
-        (softRenderable || forceDirectAcceptable) && !countryRejected;
+    final accepted = softRenderable || forceDirectAcceptable;
     final score =
         classification.score +
         (effectiveTier == RouteQualityTier.acceptable &&
@@ -6442,10 +6441,15 @@ class RouteService {
       // Live-Gate (_evaluateCandidate). 10% war zu streng — ein Loop der nur
       // kurz die Grenze touchiert wurde verworfen. 35% lässt Grenzberührungen
       // zu, kippt aber echte Cross-Border-Schleifen (z.B. ganzer Schweiz-Loop).
+      // 2026-06-02 (vucko KRITISCHER FIX): sehr tolerant — nur fast-komplett-
+      // ausländische Pool-Routen (>85%) raus. Vorher 0.35/0.45 → in
+      // Grenzregionen wurden ALLE Pool-Matches verworfen → konnte zur Sackgasse
+      // beitragen. „Im Land bleiben" ist jetzt soft; die beste verfügbare Route
+      // soll immer durchkommen.
       final maxForeign =
           scenario.countryPreference == CountryPreference.onlyHome
-              ? 0.35
-              : 0.45;
+              ? 0.85
+              : 0.92;
       if (foreignFraction > maxForeign) {
         _debugRouteSearch(
           '[PoolFallback] poolHit=true poolUsed=false reason=country_filter '
