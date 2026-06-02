@@ -30,6 +30,7 @@ final class CarPlayRouteCoordinator: NSObject {
     private var refreshTimer: Timer?
     private var navigationSession: CPNavigationSession?
     private var activeManeuver: CPManeuver?
+    private var activeTrip: CPTrip?
     private var lastRouteSignature: String?
 
     init(
@@ -335,23 +336,33 @@ final class CarPlayRouteCoordinator: NSObject {
         session.upcomingManeuvers = [maneuver]
         navigationSession = session
         activeManeuver = maneuver
+        activeTrip = trip
         updateManeuver(snapshot)
     }
 
     private func updateManeuver(_ snapshot: CarPlayRouteSnapshot) {
         guard let session = navigationSession else { return }
-        let estimates = travelEstimates(
-            distance: snapshot.nextManeuverDistance ?? snapshot.remainingDistanceMeters,
-            seconds: snapshot.remainingDurationSeconds
+        let info = nextManeuverDisplay(snapshot)
+        // Manöver-Karte: Distanz + Zeit bis zur NÄCHSTEN Kurve.
+        let maneuverEstimates = travelEstimates(
+            distance: info.distance,
+            seconds: info.seconds
         )
         let fresh = makeManeuver(snapshot)
-        // Manöver nur austauschen, wenn sich der Hinweis geändert hat.
         if fresh.instructionVariants != activeManeuver?.instructionVariants {
             session.upcomingManeuvers = [fresh]
             activeManeuver = fresh
         }
         if let current = activeManeuver {
-            session.updateEstimates(estimates, for: current)
+            session.updateEstimates(maneuverEstimates, for: current)
+        }
+        // Trip-Leiste unten: Rest-Distanz + Rest-Zeit bis zum Ziel.
+        if let trip = activeTrip {
+            let tripEstimates = travelEstimates(
+                distance: snapshot.remainingDistanceMeters ?? snapshot.distanceMeters,
+                seconds: snapshot.remainingDurationSeconds ?? snapshot.durationSeconds
+            )
+            mapTemplate.updateEstimates(tripEstimates, for: trip)
         }
     }
 
@@ -364,6 +375,49 @@ final class CarPlayRouteCoordinator: NSObject {
         }
         navigationSession = nil
         activeManeuver = nil
+        activeTrip = nil
+    }
+
+    /// 2026-06-02 (vucko): Ermittelt das nächste Manöver + Distanz dorthin
+    /// CarPlay-SEITIG aus dem eigenen Standort + den Manöver-Koordinaten. So
+    /// zeigt CarPlay „300m rechts abbiegen" live — auch wenn das Handy keine
+    /// Progress-Updates schickt (z.B. eine auf CarPlay gestartete Route).
+    /// nextManeuverDistance im Snapshot war hier null → CarPlay zeigte die
+    /// VOLLE Routendistanz (75km) als Abbiege-Distanz. Fällt auf Snapshot zurück.
+    private func nextManeuverDisplay(_ snapshot: CarPlayRouteSnapshot)
+        -> (text: String, kind: String?, distance: Double, seconds: Double) {
+        let dist = snapshot.distanceMeters ?? 0
+        let dur = snapshot.durationSeconds ?? 0
+        let avgSpeed = (dist > 0 && dur > 0) ? dist / dur : 13.9 // ~50 km/h Fallback
+        if let user = mapViewController.currentUserCoordinate,
+           snapshot.coordinates.count >= 2 {
+            let userLoc = CLLocation(latitude: user.latitude, longitude: user.longitude)
+            var userIdx = 0
+            var bestD = Double.greatestFiniteMagnitude
+            for (i, p) in snapshot.coordinates.enumerated() where p.count >= 2 {
+                let d = userLoc.distance(
+                    from: CLLocation(latitude: p[1], longitude: p[0]))
+                if d < bestD { bestD = d; userIdx = i }
+            }
+            let upcoming = snapshot.maneuvers
+                .filter { $0.latitude != nil && $0.longitude != nil && $0.routeIndex >= userIdx }
+                .min(by: { $0.routeIndex < $1.routeIndex })
+            if let m = upcoming, let mlat = m.latitude, let mlng = m.longitude {
+                let d = userLoc.distance(from: CLLocation(latitude: mlat, longitude: mlng))
+                let text = !m.instruction.isEmpty
+                    ? m.instruction
+                    : (!m.announcement.isEmpty ? m.announcement : "Route folgen")
+                return (text, m.kind, d, max(5, d / avgSpeed))
+            }
+        }
+        let fallbackDist = snapshot.nextManeuverDistance
+            ?? snapshot.remainingDistanceMeters ?? 0
+        return (
+            snapshot.nextManeuverText ?? "Route folgen",
+            snapshot.nextManeuverKind,
+            fallbackDist,
+            snapshot.remainingDurationSeconds ?? (fallbackDist / avgSpeed)
+        )
     }
 
     // MARK: - Bau-Helfer
@@ -385,13 +439,14 @@ final class CarPlayRouteCoordinator: NSObject {
     }
 
     private func makeManeuver(_ snapshot: CarPlayRouteSnapshot) -> CPManeuver {
+        let info = nextManeuverDisplay(snapshot)
         let maneuver = CPManeuver()
-        maneuver.instructionVariants = [snapshot.nextManeuverText ?? "Route folgen"]
+        maneuver.instructionVariants = [info.text]
         maneuver.initialTravelEstimates = travelEstimates(
-            distance: snapshot.nextManeuverDistance ?? snapshot.remainingDistanceMeters,
-            seconds: snapshot.remainingDurationSeconds
+            distance: info.distance,
+            seconds: info.seconds
         )
-        if let symbol = maneuverSymbol(snapshot.nextManeuverKind) {
+        if let symbol = maneuverSymbol(info.kind) {
             maneuver.symbolImage = symbol
         }
         return maneuver
@@ -587,6 +642,16 @@ final class CarPlayMapViewController: UIViewController, MKMapViewDelegate {
     private let mapView = MKMapView()
     private var routeOverlay: MKPolyline?
     private var drawTimer: Timer?
+
+    /// Aktueller Standort des Nutzers (für CarPlay-seitige „Distanz zur nächsten
+    /// Kurve"-Berechnung). Nil, solange MapKit noch keine Position hat.
+    var currentUserCoordinate: CLLocationCoordinate2D? {
+        let c = mapView.userLocation.coordinate
+        if !CLLocationCoordinate2DIsValid(c) || (c.latitude == 0 && c.longitude == 0) {
+            return nil
+        }
+        return c
+    }
 
     override func loadView() {
         view = mapView

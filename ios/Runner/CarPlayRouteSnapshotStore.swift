@@ -5,6 +5,8 @@ struct CarPlayManeuverSnapshot {
     let announcement: String
     let routeIndex: Int
     let kind: String
+    let latitude: Double?
+    let longitude: Double?
 }
 
 struct CarPlayRouteSnapshot {
@@ -101,7 +103,9 @@ final class CarPlayRouteSnapshotStore {
                 instruction: $0["instruction"] as? String ?? "",
                 announcement: $0["announcement"] as? String ?? "",
                 routeIndex: $0["routeIndex"] as? Int ?? 0,
-                kind: $0["kind"] as? String ?? "straight"
+                kind: $0["kind"] as? String ?? "straight",
+                latitude: ($0["latitude"] as? NSNumber)?.doubleValue,
+                longitude: ($0["longitude"] as? NSNumber)?.doubleValue
             )
         }
         return CarPlayRouteSnapshot(
