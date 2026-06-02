@@ -54,6 +54,14 @@ class OfflineMapService {
   static const String mapboxDarkTileUrlTemplate =
       'https://api.mapbox.com/styles/v1/mapbox/dark-v11/tiles/256/{z}/{x}/{y}?access_token={accessToken}';
 
+  // 2026-06-02 (vucko): Unsere gerasterten Cruise-Dark-Tiles (z6–12) aus R2 —
+  // dieselbe Quelle wie CarPlay, laden zuverlässig als einzelne PNGs. Ersetzt
+  // den Mapbox-Raster-Fallback im Phone-Map-Widget, damit der User IMMER unseren
+  // eigenen Dark-Look sieht (nie die graue Mapbox-Karte), auch wenn die Vektor-
+  // PMTiles gerade nicht laden.
+  static const String cruiseRasterTileUrl =
+      'https://pub-0535dd4f86054de1820907b6f06bf17c.r2.dev/raster/{z}/{x}/{y}.png';
+
   // 2026-06-01 (vucko): Self-hosted Tile-Quelle (Raster-Tiles aus einer
   // PMTiles-Datei auf einem CDN), um die teuren Mapbox-Tile-Requests abzulösen.
   //

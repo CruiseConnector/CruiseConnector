@@ -16,7 +16,6 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:cruise_connect/core/constants.dart';
 
 import 'package:cruise_connect/application/providers/route_bookmark_provider.dart';
 import 'package:cruise_connect/application/providers/saved_routes_provider.dart';
@@ -4299,26 +4298,19 @@ class _CruiseModePageState extends State<CruiseModePage>
           )
         else
           TileLayer(
-          // 2026-06-01 (vucko): Aktive Quelle = self-hosted (wenn gesund) ODER
-          // Mapbox-Fallback. Die echte URL baut der OfflineMapTileProvider
-          // dynamisch; errorTileCallback meldet Fehler → Auto-Rückfall auf Mapbox.
-          urlTemplate: OfflineMapService.instance.activeTileUrlTemplate,
-          additionalOptions: {'accessToken': AppConstants.mapboxPublicToken},
-          tileProvider: OfflineMapService.instance.tileProvider(),
+          // 2026-06-02 (vucko): MAPBOX DEAKTIVIERT (User-Wunsch). Fällt das
+          // Vektor-PMTiles-Laden aus (z.B. r2.dev rate-limitet die Range-
+          // Requests auf die 5GB-Datei), zeigen wir jetzt UNSERE gerasterten
+          // Cruise-Dark-Tiles (z6–12 aus R2 — dieselben wie CarPlay, laden
+          // zuverlässig als einzelne PNGs) statt der grauen Mapbox-Karte. So
+          // sieht der User IMMER unseren eigenen Look, nie Mapbox.
+          urlTemplate: OfflineMapService.cruiseRasterTileUrl,
+          tileProvider: NetworkTileProvider(),
           userAgentPackageName: 'com.cruise_connect.app',
           retinaMode: false,
-          maxNativeZoom: OfflineMapService.defaultMaxZoom,
-          errorImage: MemoryImage(TileProvider.transparentImage),
-          errorTileCallback: (tile, error, stackTrace) {
-            OfflineMapService.instance.reportTileLoadError();
-          },
+          // Tiles enden bei z12 → darüber skaliert flutter_map hoch (kein Schwarz).
+          maxNativeZoom: 12,
           tileDisplay: const TileDisplay.instantaneous(),
-          // 2026-06-01 (vucko): „Schwarz beim Reinzoomen, lädt erst nach Pan"-Fix.
-          // keepBuffer hält die vorherige Zoom-Stufe im Speicher → sie wird
-          // hochskaliert sichtbar, während die neue lädt, statt schwarz zu werden.
-          // panBuffer lädt einen Ring um den Viewport vor. evictErrorTileStrategy
-          // verwirft fehlgeschlagene/langsame Tiles, damit sie beim nächsten
-          // Frame (Zoom) automatisch neu angefordert werden — kein Warten auf Pan.
           keepBuffer: 5,
           panBuffer: 3,
           evictErrorTileStrategy: EvictErrorTileStrategy.notVisible,

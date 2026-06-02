@@ -1,5 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
+
+import 'package:http/http.dart' as http;
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart'
@@ -66,15 +68,34 @@ class SupabaseRouteInvoker implements RouteEdgeInvoker {
         return await client.functions.invoke(RouteService.edgeFunction, body: body);
       } on FunctionException catch (e2) {
         if (e2.status != 401 && e2.status != 403) rethrow;
-        return await client.functions.invoke(
-          RouteService.edgeFunction,
-          body: body,
-          headers: {
-            'Authorization': 'Bearer ${AppConstants.supabaseAnonKey}',
-          },
-        );
+        // Tier 3: roher HTTP-POST mit Anon-Key. Umgeht die SDK-Session-
+        // Injektion komplett (functions.invoke hängt sonst das tote User-Token
+        // dran → wieder 401). Der Anon-Key ist immer gültig → garantiert kein
+        // 401 mehr. Die Edge ist zustandslose Routenberechnung, braucht kein
+        // User-Token.
+        return await _invokeWithAnonKey(body);
       }
     }
+  }
+
+  /// Roher Edge-Aufruf mit dem Anon-Key (umgeht die Supabase-Session). Liefert
+  /// eine FunctionResponse-kompatible Antwort zurück, damit der bestehende
+  /// Parser unverändert funktioniert.
+  Future<FunctionResponse> _invokeWithAnonKey(Map<String, dynamic> body) async {
+    final uri = Uri.parse(
+      '${AppConstants.supabaseUrl}/functions/v1/${RouteService.edgeFunction}',
+    );
+    final resp = await http.post(
+      uri,
+      headers: {
+        'Authorization': 'Bearer ${AppConstants.supabaseAnonKey}',
+        'apikey': AppConstants.supabaseAnonKey,
+        'Content-Type': 'application/json',
+      },
+      body: json.encode(body),
+    );
+    final decoded = resp.body.isNotEmpty ? json.decode(resp.body) : null;
+    return FunctionResponse(data: decoded, status: resp.statusCode);
   }
 }
 
