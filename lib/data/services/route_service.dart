@@ -1806,7 +1806,13 @@ class RouteService {
             destinationLng: destinationLng,
             avoidHighways: avoidHighways,
             directDistanceKm: directDistanceKm,
-            allowDirectFallback: scenario.detourLevel <= 0,
+            // 2026-06-02 (vucko): IMMER die direkte Route als letzten Ausweg
+            // erlauben — auch bei Scenic-A→B (detour>0). Findet die Scenic-Suche
+            // in einer schwierigen/kurvigen Region keine Umweg-Variante, ist die
+            // direkte Strecke besser als „Route nicht verfügbar". A→B muss IMMER
+            // ein Ergebnis liefern (Dijkstra-Garantie, Task #90). Greift nur,
+            // wenn die reguläre Suche nichts Akzeptiertes geliefert hat.
+            allowDirectFallback: true,
           );
           if (fallback != null) {
             return fallback;
@@ -4588,11 +4594,35 @@ class RouteService {
     // wollte explizit "schnellster Weg / andere Wege" statt unsere
     // Soft-Quality-Filter die unbekannte Routen blockierten.
     // Für Round-Trip bleiben die Quality-Gates aktiv (dort macht's Sinn).
+    // 2026-06-02 (vucko): Region-toleranter Rescue für kurvige/alpine Gegenden.
+    // Live-Daten Vorarlberg (47.333/9.633): Bergstraßen sind von Natur aus
+    // extrem kurvig (~146 Kurven/50km), das moderate Sport-Kurvenprofil
+    // (~10/50km) ist dort UNERREICHBAR → Classification lehnte 100% der Routen
+    // ab (47 Kandidaten / 0 akzeptiert) → 15s-Rescue-Kaskade + „Route nicht
+    // verfügbar". Ist die Route aber sauber (Loop geschlossen, kaum Overlap,
+    // kein Zigzag-Artefakt, vernünftige Form + Mittel-Abdeckung), ist die hohe
+    // Kurvigkeit ECHTE Straße statt Fehler → akzeptieren, statt 15s zu suchen
+    // oder zu blockieren. WICHTIG: Die harten Shape-Sicherheits-Gates
+    // (deadEndSpikes, borderIntrusion, hasTangledStartCluster, poolShapeQualityOk,
+    // longSportRoundTripShapeOk) bleiben via softRenderable-AND-Kette aktiv —
+    // gelockert wird NUR der Stil-/Kurven-Anspruch, nicht die Sicherheit.
+    final cleanCurvyRescue = scenario.isRoundTrip &&
+        hasEnoughPoints &&
+        quality.isLoopClosed &&
+        quality.overlapPercent <= 22.0 &&
+        quality.microZigzagPercent <= 30.0 &&
+        quality.shapePenalty <= 62.0 &&
+        quality.foldedAreaPenalty <= 78.0 &&
+        quality.spurArmCount <= 2 &&
+        quality.centerReentryCount <= 2 &&
+        quality.centerRecrossPercent <= 26.0 &&
+        quality.middleCoverageRatio >= 0.22;
     final qualityAcceptable = scenario.isRoundTrip
         ? classification.isAcceptable ||
               rescueRoundTripAcceptable ||
               serverApprovedAcceptable ||
-              serverApprovedSportRescue
+              serverApprovedSportRescue ||
+              cleanCurvyRescue
         : destinationReached;
     final isPoolFallbackRoute =
         scenario.isRoundTrip && variant.variantHint.startsWith('pool-');

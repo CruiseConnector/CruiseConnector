@@ -179,16 +179,18 @@ const Map<String, dynamic> cruiseDarkMapStyle = {
       'source-layer': 'places',
       'layout': {
         'text-field': ['get', 'name'],
+        // 2026-06-02 (vucko): Orte sollen klar HERAUSSTECHEN — größer als die
+        // Straßen, damit man den Überblick behält (Hohenems/Götzis/Altach …).
         'text-size': [
           'interpolate', ['linear'], ['zoom'],
-          6, 11, 9, 13, 12, 16, 15, 19, 18, 21,
+          6, 13, 9, 16, 12, 20, 15, 24, 18, 27,
         ],
         'text-max-width': 7,
       },
       'paint': {
-        'text-color': '#e3e9f1',
-        'text-halo-color': '#05080c',
-        'text-halo-width': 2.2,
+        'text-color': '#f3f6fa',
+        'text-halo-color': '#04070b',
+        'text-halo-width': 2.8,
       },
     },
   ],
