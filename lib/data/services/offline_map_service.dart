@@ -74,8 +74,16 @@ class OfflineMapService {
   static const String selfHostedPmtilesUrl =
       'https://pub-0535dd4f86054de1820907b6f06bf17c.r2.dev/dach.pmtiles';
 
+  // 2026-06-02 (vucko): Welt-Übersicht z0–6 (~43 MB) als Unterlage unter den
+  // DACH-Detail-Tiles. So kann man die GANZE Welt sehen/zoomen, während nur
+  // DACH im Detail (z0–14) heruntergeladen ist. Egress über R2 = gratis.
+  static const String selfHostedWorldPmtilesUrl =
+      'https://pub-0535dd4f86054de1820907b6f06bf17c.r2.dev/world_z6.pmtiles';
+
   PmTilesVectorTileProvider? _pmtilesProvider;
   bool _pmtilesLoadAttempted = false;
+  PmTilesVectorTileProvider? _worldPmtilesProvider;
+  bool _worldPmtilesLoadAttempted = false;
 
   /// Lädt den PMTiles-Vektor-Provider einmalig (gecacht). `null` = nicht
   /// verfügbar (leere URL, Web oder Fehler) → die App bleibt beim Mapbox-Raster.
@@ -94,6 +102,27 @@ class OfflineMapService {
       if (kDebugMode) debugPrint('[OfflineMap] PMTiles laden fehlgeschlagen: $e');
     }
     return _pmtilesProvider;
+  }
+
+  /// Lädt die Welt-Übersichts-Vektorquelle (z0–6) einmalig (gecacht). `null` =
+  /// nicht verfügbar → die App zeigt außerhalb DACH nur den dunklen Hintergrund.
+  Future<PmTilesVectorTileProvider?> loadWorldPmtilesProvider() async {
+    if (_worldPmtilesProvider != null || _worldPmtilesLoadAttempted) {
+      return _worldPmtilesProvider;
+    }
+    _worldPmtilesLoadAttempted = true;
+    if (kIsWeb || selfHostedWorldPmtilesUrl.isEmpty) return null;
+    try {
+      _worldPmtilesProvider =
+          await PmTilesVectorTileProvider.fromSource(selfHostedWorldPmtilesUrl);
+      if (kDebugMode) debugPrint('[OfflineMap] Welt-PMTiles-Quelle geladen.');
+    } catch (e) {
+      _worldPmtilesProvider = null;
+      if (kDebugMode) {
+        debugPrint('[OfflineMap] Welt-PMTiles laden fehlgeschlagen: $e');
+      }
+    }
+    return _worldPmtilesProvider;
   }
 
   bool _selfHostedHealthy = false;

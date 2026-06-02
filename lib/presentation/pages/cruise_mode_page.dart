@@ -4187,6 +4187,25 @@ class _CruiseModePageState extends State<CruiseModePage>
         // produziert).
         // Plus tileDisplay.instantaneous statt fade-in damit es kein
         // Alpha-Blending zwischen alten und neuen Tiles gibt.
+        // 2026-06-02 (vucko): WELT-ÜBERSICHT (z0–6) als unterste Vektor-Ebene.
+        // Liegt UNTER dem DACH-Detail-Layer → die ganze Welt ist sichtbar/
+        // zoombar, außerhalb DACH bleibt (überzoomt) etwas sichtbar statt
+        // schwarz. In DACH deckt der DACH-Layer (gleiches Theme, fast gleiche
+        // Hintergrundfarbe) sie nahtlos ab. Nur ~43 MB, Egress via R2 gratis.
+        if (_worldPmtilesProvider != null)
+          VectorTileLayer(
+            key: ValueKey(
+              _isRouteConfirmed ? 'vtl-world-raster' : 'vtl-world-vector',
+            ),
+            tileProviders: TileProviders({'protomaps': _worldPmtilesProvider!}),
+            theme: _cruiseMapTheme,
+            tileOffset: TileOffset.DEFAULT,
+            layerMode: _isRouteConfirmed
+                ? VectorTileLayerMode.raster
+                : VectorTileLayerMode.vector,
+            maximumTileSubstitutionDifference: 3,
+            concurrency: 4,
+          ),
         // 2026-06-02 (vucko): Self-hosted VEKTOR-Tiles (PMTiles aus R2) im
         // Cruise-Dark-Style, sobald geladen. Schlägt Laden/Rendern fehl, bleibt
         // _pmtilesProvider null → Mapbox-Raster-Layer (else) als Fallback,
@@ -4429,6 +4448,8 @@ class _CruiseModePageState extends State<CruiseModePage>
   /// self-hosted Tiles im Dark-Style (siehe _buildMapWidget); bleibt sie null,
   /// nutzt die App weiter den Mapbox-Raster-Layer (Fallback, nichts bricht).
   PmTilesVectorTileProvider? _pmtilesProvider;
+  // 2026-06-02 (vucko): Welt-Übersicht (z0–6) als Unterlage unter DACH-Detail.
+  PmTilesVectorTileProvider? _worldPmtilesProvider;
 
   /// Eigenes Mapbox-Dark-ähnliches Theme für die self-hosted Protomaps-Tiles
   /// (einmal gebaut). Ersetzt das karge Standard-Protomaps-Dark.
@@ -4439,6 +4460,12 @@ class _CruiseModePageState extends State<CruiseModePage>
     final provider = await OfflineMapService.instance.loadPmtilesProvider();
     if (provider != null && mounted) {
       _safeSetState(() => _pmtilesProvider = provider);
+    }
+    // Welt-Übersicht parallel laden (klein, ~43 MB) → ganze Welt sichtbar,
+    // DACH bleibt im Detail. Schlägt das Laden fehl, bleibt's bei DACH-only.
+    final world = await OfflineMapService.instance.loadWorldPmtilesProvider();
+    if (world != null && mounted) {
+      _safeSetState(() => _worldPmtilesProvider = world);
     }
   }
 
