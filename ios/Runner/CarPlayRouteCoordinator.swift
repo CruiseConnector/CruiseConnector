@@ -576,6 +576,17 @@ final class CarPlayMapViewController: UIViewController, MKMapViewDelegate {
         if #available(iOS 13.0, *) {
             mapView.overrideUserInterfaceStyle = .dark
         }
+        // 2026-06-02 (vucko): Zoom-Untergrenze. Bei Navigation zoomt
+        // .followWithHeading sonst auf Straßen-Niveau (z16+) — unsere Tiles
+        // gehen aber nur bis z12, der Overzoom (16-32×) macht die Karte dann zu
+        // einer dunklen, unleserlichen Fläche („man sieht die Map nicht").
+        // minCenterCoordinateDistance ≈ 1200m hält die Kamera bei ~z13 → unsere
+        // Tiles bleiben scharf (Overzoom ~2×) UND fürs Cruisen sieht man mehr
+        // von der kommenden Strecke. Rauszoomen bleibt unbegrenzt (Route-Übersicht).
+        mapView.setCameraZoomRange(
+            MKMapView.CameraZoomRange(minCenterCoordinateDistance: 1200),
+            animated: false
+        )
         addCruiseTileOverlay()
     }
 
