@@ -854,16 +854,39 @@ class _CruiseModePageState extends State<CruiseModePage>
     CarCommandListener.instance.onStartNavigation = (route, style, avoidHighways) {
       if (!mounted || _disposed || _isLoading) return;
       if (_navigationStartTime != null) return; // läuft bereits
-      setState(() {
-        _selectedStyle = style;
-        _isRoundTrip = true; // CarPlay plant Rundkurse
-      });
-      _applyRouteResult(route);
+      // Hat das Handy schon eine Route in der Vorschau (selbst geplant via
+      // onPlanRoute)? Dann die fahren. Sonst die vom Auto gelieferte übernehmen.
+      final hasCurrentRoute = _fullRouteCoordinates.length >= 2;
+      if (!hasCurrentRoute && route != null) {
+        setState(() {
+          _selectedStyle = style;
+          _isRoundTrip = true; // CarPlay plant Rundkurse
+        });
+        _applyRouteResult(route);
+      }
       WidgetsBinding.instance.addPostFrameCallback((_) async {
         if (!mounted || _disposed) return;
+        if (_fullRouteCoordinates.length < 2) return; // keine Route da
         await _confirmRoute();
         await _startNavigationFlow();
       });
+    };
+    // 2026-06-02 (vucko Mirror): „Route planen" auf CarPlay → das HANDY fährt
+    // die Suche (Lade-Popup + Vorschau-Animation) und publisht searching/found
+    // selbst an CarPlay zurück → beide Geräte suchen gleichzeitig, beide zeichnen
+    // die Route. true = Page hat übernommen (sonst rechnet der Listener standalone).
+    CarCommandListener.instance.onPlanRoute = (style, km, avoidHighways) {
+      if (!mounted || _disposed || _isLoading) return false;
+      if (_navigationStartTime != null) return false; // fährt schon
+      setState(() {
+        _isRoundTrip = true;
+        _planningType = 'Zufall';
+        _selectedStyle = style;
+        _selectedLength = '$km Km';
+        _avoidHighways = avoidHighways;
+      });
+      unawaited(_generateRoute());
+      return true;
     };
     // Animierte Kamera-Bewegung zwischen GPS-Updates (alle Plattformen, 60fps)
     // 2026-05-22 (vucko): GPS-Update-Frequenz jetzt 200ms (Android). Camera-
@@ -1594,6 +1617,9 @@ class _CruiseModePageState extends State<CruiseModePage>
     }
     if (CarCommandListener.instance.onStartNavigation != null) {
       CarCommandListener.instance.onStartNavigation = null;
+    }
+    if (CarCommandListener.instance.onPlanRoute != null) {
+      CarCommandListener.instance.onPlanRoute = null;
     }
     // 2026-05-24 (vucko Task #53): aktive Trip pausieren beim Verlassen
     // (z. B. App-Backgrounding, Tab-Wechsel). Best-effort.

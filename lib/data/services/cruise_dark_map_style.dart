@@ -42,13 +42,17 @@ const Map<String, dynamic> cruiseDarkMapStyle = {
     },
     // Flächen (Wald/Grün/Nutzung) nur bis Zoom 15 — darüber (Straßen-Level)
     // würden die großen Polygone überzoomt als Schlieren gestreckt.
+    // 2026-06-02 (vucko): Flächen NAH an der Erdfarbe (#0d1117) gehalten —
+    // vorher hoben sich Wald-/Nutzungs-Polygone als deutliche hellere Blöcke
+    // ab („Kontrast-Flächen", User-markiert). Jetzt nur noch ein Hauch
+    // Unterschied → einheitlicher dunkler Look, Nebenstraßen bleiben sichtbar.
     {
       'id': 'landcover',
       'type': 'fill',
       'source': 'protomaps',
       'source-layer': 'landcover',
       'maxzoom': 15,
-      'paint': {'fill-color': '#0f1620', 'fill-opacity': 0.5},
+      'paint': {'fill-color': '#0d1219', 'fill-opacity': 0.35},
     },
     {
       'id': 'landuse',
@@ -56,7 +60,7 @@ const Map<String, dynamic> cruiseDarkMapStyle = {
       'source': 'protomaps',
       'source-layer': 'landuse',
       'maxzoom': 15,
-      'paint': {'fill-color': '#121a24', 'fill-opacity': 0.4},
+      'paint': {'fill-color': '#0e131b', 'fill-opacity': 0.28},
     },
     {
       'id': 'water',

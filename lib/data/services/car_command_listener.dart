@@ -50,8 +50,19 @@ class CarCommandListener {
   /// drückt. Die Cruise-Page registriert sich hier, um die echte Fahrt
   /// (GPS-Tracking, Voice, Progress) zu starten. Ist niemand registriert,
   /// fährt das Auto mit der reinen Snapshot-Navigation (eigener Standort-Follow).
-  void Function(RouteResult route, String style, bool avoidHighways)?
+  /// Wird mit der berechneten Route aufgerufen, sobald das Auto „Losfahren"
+  /// drückt. `route` ist null, wenn die Cruise-Page die Route selbst geplant
+  /// hat (onPlanRoute) — dann fährt die Page ihre aktuelle Route.
+  void Function(RouteResult? route, String style, bool avoidHighways)?
   onStartNavigation;
+
+  /// 2026-06-02 (vucko Mirror): Wird aufgerufen, wenn das Auto „Route planen"
+  /// abschließt. Ist die Cruise-Page offen, übernimmt SIE die Suche (zeigt das
+  /// Lade-Popup + die Vorschau-Animation + publisht searching/found an CarPlay
+  /// zurück) → echtes 1:1-Mirroring, beide Geräte suchen gleichzeitig. Gibt true
+  /// zurück, wenn die Page übernommen hat (dann rechnet der Listener NICHT
+  /// standalone). Ist die Page zu → false → Listener rechnet selbst.
+  bool Function(String style, int distanceKm, bool avoidHighways)? onPlanRoute;
 
   /// Wird aufgerufen, wenn das Auto den Abschluss-Screen mit „Fertig" schließt
   /// (completionDone). Die Cruise-Page registriert sich hier, um ihren eigenen
@@ -138,6 +149,15 @@ class CarCommandListener {
     _lastAvoidHighways = avoidHighways;
     _lastRouteType = CarRouteType.roundtrip;
 
+    // 2026-06-02 (vucko Mirror): Ist die Cruise-Page offen, lassen wir SIE die
+    // Route suchen → Handy zeigt Lade-Popup + Vorschau-Animation und publisht
+    // searching/found selbst an CarPlay (1:1-Spiegelung). Nur wenn die Page zu
+    // ist, rechnen wir hier standalone weiter.
+    if (onPlanRoute != null && onPlanRoute!(style, distanceKm, avoidHighways)) {
+      _lastRoute = null; // Page besitzt die Route
+      return;
+    }
+
     await _bridge.publishSearching(
       routeType: CarRouteType.roundtrip,
       style: style,
@@ -184,13 +204,17 @@ class CarCommandListener {
 
   Future<void> _handleStartNavigation() async {
     final route = _lastRoute;
-    if (route == null) return;
-    await _bridge.publishNavigationStarted(
-      result: route,
-      routeType: _lastRouteType,
-      style: _lastStyle,
-      avoidHighways: _lastAvoidHighways,
-    );
+    // Hat der Listener die Route selbst berechnet (Page war zu), publishen wir
+    // direkt navigating. Hat die Page geplant (route == null), startet die Page
+    // ihre eigene Route + publisht selbst.
+    if (route != null) {
+      await _bridge.publishNavigationStarted(
+        result: route,
+        routeType: _lastRouteType,
+        style: _lastStyle,
+        avoidHighways: _lastAvoidHighways,
+      );
+    }
     onStartNavigation?.call(route, _lastStyle, _lastAvoidHighways);
   }
 
