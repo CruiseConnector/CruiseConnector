@@ -42,6 +42,8 @@ import 'package:cruise_connect/data/services/navigation_progress_socket_service.
 import 'package:cruise_connect/data/services/offline_map_service.dart';
 import 'package:vector_map_tiles/vector_map_tiles.dart';
 import 'package:vector_map_tiles_pmtiles/vector_map_tiles_pmtiles.dart';
+import 'package:vector_tile_renderer/vector_tile_renderer.dart' as vtr;
+import 'package:cruise_connect/data/services/cruise_dark_map_style.dart';
 import 'package:cruise_connect/data/services/car_route_bridge_service.dart';
 import 'package:cruise_connect/data/services/group_route_data_builder.dart';
 import 'package:cruise_connect/data/services/route_access_plan.dart';
@@ -4182,7 +4184,7 @@ class _CruiseModePageState extends State<CruiseModePage>
         if (_pmtilesProvider != null)
           VectorTileLayer(
             tileProviders: TileProviders({'protomaps': _pmtilesProvider!}),
-            theme: ProtomapsThemes.darkV3(),
+            theme: _cruiseMapTheme,
             tileOffset: TileOffset.DEFAULT,
             concurrency: 2,
           )
@@ -4395,6 +4397,11 @@ class _CruiseModePageState extends State<CruiseModePage>
   /// self-hosted Tiles im Dark-Style (siehe _buildMapWidget); bleibt sie null,
   /// nutzt die App weiter den Mapbox-Raster-Layer (Fallback, nichts bricht).
   PmTilesVectorTileProvider? _pmtilesProvider;
+
+  /// Eigenes Mapbox-Dark-ähnliches Theme für die self-hosted Protomaps-Tiles
+  /// (einmal gebaut). Ersetzt das karge Standard-Protomaps-Dark.
+  late final vtr.Theme _cruiseMapTheme =
+      vtr.ThemeReader().read(cruiseDarkMapStyle);
 
   Future<void> _loadVectorTiles() async {
     final provider = await OfflineMapService.instance.loadPmtilesProvider();

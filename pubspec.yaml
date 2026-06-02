@@ -69,6 +69,7 @@ dependencies:
   flutter_local_notifications: ^21.0.0
   vector_map_tiles: ^8.0.0
   vector_map_tiles_pmtiles: ^1.5.0
+  vector_tile_renderer: ^5.2.1
 dev_dependencies:
   flutter_test:
     sdk: flutter
