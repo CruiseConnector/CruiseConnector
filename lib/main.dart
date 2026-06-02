@@ -53,6 +53,11 @@ void main() {
       // Auto) veröffentlichen — initial + bei jedem Auth-Wechsel. Das Auto
       // zeigt sonst „Bitte zuerst einloggen", bevor man eine Route laden kann.
       final carBridge = CarRouteBridgeService();
+      // 2026-06-02 (vucko): Frischer Start fürs Auto-Display — alte persistierte
+      // Route/Befehle löschen, sonst zeigt CarPlay nach Neustart eine
+      // Geister-Navigation und der Listener führt einen alten Plan-Befehl erneut
+      // aus. MUSS vor dem Listener-Start passieren (awaited).
+      await carBridge.clearCarSession();
       unawaited(carBridge.publishLoginState(
           Supabase.instance.client.auth.currentSession != null));
       Supabase.instance.client.auth.onAuthStateChange.listen((state) {

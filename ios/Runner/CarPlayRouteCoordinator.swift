@@ -162,9 +162,30 @@ final class CarPlayRouteCoordinator: NSObject {
             endNavigationSession(cancel: true)
             return
         }
+        // 2026-06-02 (vucko): Veraltet-Backstop. Ein nach App-Neustart noch in
+        // UserDefaults liegender Snapshot darf KEINE Geister-Navigation starten
+        // („Navigation läuft" mit alter Route, obwohl das Handy idle ist). Beim
+        // aktiven Fahren schreibt das Handy alle ~3s frisch — alles älter als 90s
+        // ist ein Relikt. Flutter löscht die Keys zwar beim Start, aber dieser
+        // Guard gewinnt auch den Race beim Scene-Connect. So sieht CarPlay nach
+        // einem Neustart IMMER frisch aus.
+        if isStaleSnapshot(snapshot) {
+            applyIdleState()
+            endNavigationSession(cancel: true)
+            return
+        }
         updateMapRoute(snapshot)
         updateBarButtons(snapshot)
         updateNavigation(snapshot)
+    }
+
+    /// True, wenn der Snapshot zu alt ist, um noch echt zu sein (Relikt eines
+    /// früheren App-Laufs). Fehlt updatedAtMs (alte Schreiber), gilt er als
+    /// frisch genug — dann greift Flutters Clear-on-Launch.
+    private func isStaleSnapshot(_ snapshot: CarPlayRouteSnapshot) -> Bool {
+        guard let ms = snapshot.updatedAtMs else { return false }
+        let ageSeconds = Date().timeIntervalSince1970 - ms / 1000.0
+        return ageSeconds > 90
     }
 
     // MARK: - Karte

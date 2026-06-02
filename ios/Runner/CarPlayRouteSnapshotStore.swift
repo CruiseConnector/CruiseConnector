@@ -24,6 +24,10 @@ struct CarPlayRouteSnapshot {
     let style: String?
     let avoidHighways: Bool
     let updatedAt: String?
+    /// Epoch-Millisekunden des letzten Schreibens (von Flutter gesetzt). Dient
+    /// dem Veraltet-Check: ein nach App-Neustart noch in UserDefaults liegender
+    /// Snapshot darf keine Geister-Navigation auslösen.
+    let updatedAtMs: Double?
 
     var hasRoute: Bool { coordinates.count >= 2 }
 }
@@ -78,7 +82,8 @@ final class CarPlayRouteSnapshotStore {
                 ?? snapshot.nextManeuverKind,
             style: snapshot.style,
             avoidHighways: snapshot.avoidHighways,
-            updatedAt: json["updatedAt"] as? String ?? snapshot.updatedAt
+            updatedAt: json["updatedAt"] as? String ?? snapshot.updatedAt,
+            updatedAtMs: json["updatedAtMs"] as? Double ?? snapshot.updatedAtMs
         )
     }
 
@@ -115,7 +120,8 @@ final class CarPlayRouteSnapshotStore {
             nextManeuverKind: json["nextManeuverKind"] as? String,
             style: json["style"] as? String,
             avoidHighways: json["avoidHighways"] as? Bool ?? false,
-            updatedAt: json["updatedAt"] as? String
+            updatedAt: json["updatedAt"] as? String,
+            updatedAtMs: json["updatedAtMs"] as? Double
         )
     }
 }

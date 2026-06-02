@@ -287,17 +287,34 @@ class CarRouteBridgeService {
 
   Future<void> _writeSnapshot(Map<String, dynamic> snapshot) async {
     final preferences = await _prefs();
+    // updatedAtMs ist die Veraltet-Marke für die CarPlay-Seite (Epoch-ms,
+    // trivial vergleichbar — kein ISO-Parsing nötig). Verhindert, dass ein
+    // alter Snapshot nach App-Neustart eine Geister-Navigation auslöst.
+    snapshot['updatedAtMs'] = DateTime.now().millisecondsSinceEpoch;
     await preferences.setString(snapshotKey, json.encode(snapshot));
   }
 
   Future<void> _writeProgress(Map<String, dynamic> progress) async {
     final preferences = await _prefs();
+    progress['updatedAtMs'] = DateTime.now().millisecondsSinceEpoch;
     await preferences.setString(progressKey, json.encode(progress));
   }
 
   Future<void> _clearProgress() async {
     final preferences = await _prefs();
     await preferences.remove(progressKey);
+    _lastProgressWrite = null;
+  }
+
+  /// 2026-06-02 (vucko): Beim App-Start aufrufen. Löscht alle persistierten
+  /// Auto-Keys, damit nach einem Neustart KEINE alte Route als „Navigation
+  /// läuft" wiederaufersteht und KEIN alter `car_command` erneut ausgeführt
+  /// wird (der Listener startet mit requestId 0). CarPlay startet so frisch.
+  Future<void> clearCarSession() async {
+    final prefs = await _ensurePrefs();
+    await prefs.remove(snapshotKey);
+    await prefs.remove(progressKey);
+    await prefs.remove('car_command');
     _lastProgressWrite = null;
   }
 
