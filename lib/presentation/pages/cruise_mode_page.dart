@@ -846,6 +846,25 @@ class _CruiseModePageState extends State<CruiseModePage>
       }
       _resetAfterCompletion();
     };
+    // 2026-06-02 (vucko Sync): „Losfahren" auf CarPlay → das HANDY übernimmt die
+    // Fahrt (GPS/Voice-Treiber) → beide Geräte 1:1 synchron, und CarPlay bekommt
+    // echte Live-Wegbeschreibung/ETA via publishProgress. Abgesichert: nur wenn
+    // die Cruise-Page offen ist, nicht gerade lädt und nicht schon navigiert.
+    // Ist die Page zu, navigiert CarPlay eigenständig weiter (kein Abbruch).
+    CarCommandListener.instance.onStartNavigation = (route, style, avoidHighways) {
+      if (!mounted || _disposed || _isLoading) return;
+      if (_navigationStartTime != null) return; // läuft bereits
+      setState(() {
+        _selectedStyle = style;
+        _isRoundTrip = true; // CarPlay plant Rundkurse
+      });
+      _applyRouteResult(route);
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        if (!mounted || _disposed) return;
+        await _confirmRoute();
+        await _startNavigationFlow();
+      });
+    };
     // Animierte Kamera-Bewegung zwischen GPS-Updates (alle Plattformen, 60fps)
     // 2026-05-22 (vucko): GPS-Update-Frequenz jetzt 200ms (Android). Camera-
     // Animation muss noch dazu passen damit zwischen Updates ohne Stop weitergeht.
@@ -1569,9 +1588,12 @@ class _CruiseModePageState extends State<CruiseModePage>
   @override
   void dispose() {
     _disposed = true;
-    // 2026-06-02 (vucko Sync): CarPlay-Completion-Hook lösen (Page-Lebenszyklus).
+    // 2026-06-02 (vucko Sync): CarPlay-Hooks lösen (Page-Lebenszyklus).
     if (CarCommandListener.instance.onCompletionDone != null) {
       CarCommandListener.instance.onCompletionDone = null;
+    }
+    if (CarCommandListener.instance.onStartNavigation != null) {
+      CarCommandListener.instance.onStartNavigation = null;
     }
     // 2026-05-24 (vucko Task #53): aktive Trip pausieren beim Verlassen
     // (z. B. App-Backgrounding, Tab-Wechsel). Best-effort.
