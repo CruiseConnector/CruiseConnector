@@ -172,9 +172,14 @@ class CarRouteBridgeService {
     });
   }
 
-  Future<void> publishEnded() async {
+  /// 2026-06-02 (vucko): Wird beim Ankommen aufgerufen (wenn das Handy seinen
+  /// Abschluss-Screen zeigt) → CarPlay zeigt seinen Abschluss-Screen SYNCHRON.
+  /// distanceMeters wird mitgegeben, damit CarPlay „X km gefahren" statt „--"
+  /// zeigt (der reine ended-Snapshot hätte sonst keine Distanz).
+  Future<void> publishEnded({double? distanceMeters}) async {
     await _writeSnapshot({
       'status': CarRouteStatus.ended,
+      if (distanceMeters != null) 'distanceMeters': distanceMeters,
       'updatedAt': DateTime.now().toIso8601String(),
     });
     await _clearProgress();

@@ -208,6 +208,7 @@ final class CarPlayRouteCoordinator: NSObject {
     // MARK: - Navigationsleiste (Info wenn keine Navi-Session läuft)
 
     private func applyIdleState() {
+        dismissPostRouteIfShowing() // kein hängender Abschluss-Screen im Idle
         // 2026-06-02 (vucko Task #115): Im Auto direkt eine Route planen können
         // (Stil → km → Autobahn). Apple erlaubt listen-basierte Auswahl auch
         // während der Fahrt — kein Freitext, daher Rundkurs.
@@ -255,6 +256,10 @@ final class CarPlayRouteCoordinator: NSObject {
     private func updateNavigation(_ snapshot: CarPlayRouteSnapshot) {
         let navigating = snapshot.status == "navigating" && snapshot.hasRoute
         if navigating {
+            // Distanz für den späteren Abschluss-Screen merken (ended-Snapshot
+            // hat oft keine mehr).
+            lastNavDistanceMeters = snapshot.distanceMeters ?? lastNavDistanceMeters
+            dismissPostRouteIfShowing() // neue Fahrt → alter Abschluss-Screen weg
             // Flüssig mit dem Standort mitführen + in Fahrtrichtung drehen.
             mapViewController.followWithHeading()
             if navigationSession == nil {
@@ -266,33 +271,61 @@ final class CarPlayRouteCoordinator: NSObject {
             endNavigationSession(cancel: false) // angekommen → finishTrip
             showPostRouteScreenIfNeeded(snapshot)
         } else {
+            // Nicht mehr „ended" (Handy hat z.B. die Bewertung abgeschlossen) →
+            // Abschluss-Screen hier auch schließen (beidseitige Sync).
+            dismissPostRouteIfShowing()
             endNavigationSession(cancel: true)
         }
     }
 
     /// 2026-06-02 (vucko Task #115): Abschluss-Screen im Auto, wenn die Tour
     /// fertig ist — kurzer Glückwunsch + zurück zur „Route planen"-Karte. Pro
-    /// beendeter Route nur einmal (Signatur-Guard).
+    /// beendeter Route nur einmal (Signatur-Guard). Synchron mit dem Handy:
+    /// „Fertig" schließt den Screen UND meldet es dem Handy (completionDone);
+    /// schließt umgekehrt das Handy die Bewertung zuerst, dismisst refresh()
+    /// den Screen hier automatisch (dismissPostRouteIfShowing).
     private var postRouteShownSignature: String?
+    private var postRouteAlert: CPAlertTemplate?
+    /// Letzte bekannte Routendistanz während der Navigation — der „ended"-
+    /// Snapshot hat oft keine Distanz mehr (→ war „-- gefahren").
+    private var lastNavDistanceMeters: Double?
+
     private func showPostRouteScreenIfNeeded(_ snapshot: CarPlayRouteSnapshot) {
         let sig = "\(snapshot.routeId ?? "")|\(snapshot.updatedAt ?? "")"
         guard postRouteShownSignature != sig else { return }
         postRouteShownSignature = sig
-        let distance = formatDistance(snapshot.distanceMeters)
+        let meters = snapshot.distanceMeters ?? lastNavDistanceMeters
+        let titleMain: String
+        if let m = meters, m > 0 {
+            titleMain = "Tour beendet — \(formatDistance(m)) gefahren. Gute Fahrt war's!"
+        } else {
+            titleMain = "Tour beendet. Gute Fahrt war's!"
+        }
         let ok = CPAlertAction(title: "Fertig", style: .default) { [weak self] _ in
-            self?.applyIdleState()
+            guard let self = self else { return }
+            self.postRouteAlert = nil
+            // Beidseitige Sync: Handy soll seine Bewertung auch schließen.
+            self.writeCommand(["action": "completionDone"])
+            self.interfaceController.dismissTemplate(animated: true, completion: nil)
+            self.applyIdleState()
         }
         let alert = CPAlertTemplate(
-            titleVariants: [
-                "Tour beendet — \(distance) gefahren. Gute Fahrt war's! 🏍️",
-                "Tour beendet — \(distance) gefahren.",
-                "Tour beendet",
-            ],
+            titleVariants: [titleMain, "Tour beendet. Gute Fahrt war's!", "Tour beendet"],
             actions: [ok]
         )
+        postRouteAlert = alert
         DispatchQueue.main.async { [weak self] in
-            self?.interfaceController.presentTemplate(alert, animated: true)
+            self?.interfaceController.presentTemplate(alert, animated: true, completion: nil)
         }
+    }
+
+    /// Schließt den Abschluss-Screen, falls er noch offen ist — z.B. weil das
+    /// Handy die Bewertung schon abgeschlossen hat (Snapshot ist nicht mehr
+    /// „ended"). So verschwindet er auf beiden Geräten synchron.
+    private func dismissPostRouteIfShowing() {
+        guard postRouteAlert != nil else { return }
+        postRouteAlert = nil
+        interfaceController.dismissTemplate(animated: true, completion: nil)
     }
 
     private func beginNavigationSession(_ snapshot: CarPlayRouteSnapshot) {

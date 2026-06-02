@@ -53,6 +53,11 @@ class CarCommandListener {
   void Function(RouteResult route, String style, bool avoidHighways)?
   onStartNavigation;
 
+  /// Wird aufgerufen, wenn das Auto den Abschluss-Screen mit „Fertig" schließt
+  /// (completionDone). Die Cruise-Page registriert sich hier, um ihren eigenen
+  /// Abschluss-Screen ebenfalls zu schließen → beidseitige Sync.
+  void Function()? onCompletionDone;
+
   bool get isRunning => _pollTimer != null;
 
   void start() {
@@ -104,6 +109,13 @@ class CarCommandListener {
           case 'cancel':
             _lastRoute = null;
             await _bridge.publishEnded();
+            break;
+          case 'completionDone':
+            // Auto hat den Abschluss-Screen mit „Fertig" geschlossen → Handy
+            // soll seinen Abschluss-Screen ebenfalls schließen + Auto-Session
+            // leeren (beidseitige Sync).
+            onCompletionDone?.call();
+            await _bridge.clearCarSession();
             break;
           default:
             break;

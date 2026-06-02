@@ -45,6 +45,7 @@ import 'package:vector_map_tiles_pmtiles/vector_map_tiles_pmtiles.dart';
 import 'package:vector_tile_renderer/vector_tile_renderer.dart' as vtr;
 import 'package:cruise_connect/data/services/cruise_dark_map_style.dart';
 import 'package:cruise_connect/data/services/car_route_bridge_service.dart';
+import 'package:cruise_connect/data/services/car_command_listener.dart';
 import 'package:cruise_connect/data/services/group_route_data_builder.dart';
 import 'package:cruise_connect/data/services/route_access_plan.dart';
 import 'package:cruise_connect/data/services/route_service.dart';
@@ -198,6 +199,9 @@ class _CruiseModePageState extends State<CruiseModePage>
   final _geocodingService = const GeocodingService();
   final _routeService = RouteService();
   final _carRouteBridge = CarRouteBridgeService();
+  // 2026-06-02 (vucko Sync): true solange der Abschluss-Screen (Bewertung)
+  // offen ist — damit CarPlays „Fertig" das Handy-Sheet gezielt schließen kann.
+  bool _completionSheetOpen = false;
   final _smartRerouteEngine = const SmartRerouteEngine();
   final _navigationSocketService = NavigationProgressSocketService();
   final _drivenTrackRecorder = DrivenTrackRecorder();
@@ -832,6 +836,16 @@ class _CruiseModePageState extends State<CruiseModePage>
   void initState() {
     super.initState();
     _loadVectorTiles();
+    // 2026-06-02 (vucko Sync): Schließt das Auto den Abschluss-Screen mit
+    // „Fertig", soll das Handy-Sheet ebenfalls zugehen (beidseitige Sync).
+    CarCommandListener.instance.onCompletionDone = () {
+      if (!mounted || _disposed) return;
+      if (_completionSheetOpen) {
+        _completionSheetOpen = false;
+        Navigator.of(context, rootNavigator: true).pop();
+      }
+      _resetAfterCompletion();
+    };
     // Animierte Kamera-Bewegung zwischen GPS-Updates (alle Plattformen, 60fps)
     // 2026-05-22 (vucko): GPS-Update-Frequenz jetzt 200ms (Android). Camera-
     // Animation muss noch dazu passen damit zwischen Updates ohne Stop weitergeht.
@@ -1555,6 +1569,10 @@ class _CruiseModePageState extends State<CruiseModePage>
   @override
   void dispose() {
     _disposed = true;
+    // 2026-06-02 (vucko Sync): CarPlay-Completion-Hook lösen (Page-Lebenszyklus).
+    if (CarCommandListener.instance.onCompletionDone != null) {
+      CarCommandListener.instance.onCompletionDone = null;
+    }
     // 2026-05-24 (vucko Task #53): aktive Trip pausieren beim Verlassen
     // (z. B. App-Backgrounding, Tab-Wechsel). Best-effort.
     final tripIdToPause = _activeTripId;
@@ -6872,7 +6890,12 @@ class _CruiseModePageState extends State<CruiseModePage>
       _isCameraLocked = false;
       _configCollapsed = false;
     });
-    unawaited(_carRouteBridge.publishEnded());
+    // 2026-06-02 (vucko Sync): Bewertung am Handy fertig → Auto-Session leeren.
+    // CarPlay liest den geleerten Snapshot → schließt seinen Abschluss-Screen
+    // automatisch (beidseitige Sync). publishEnded (status=ended) hätte CarPlay
+    // dagegen am Abschluss-Screen hängen lassen.
+    _completionSheetOpen = false;
+    unawaited(_carRouteBridge.clearCarSession());
   }
 
   void _returnToCruiseSetupFromActiveRoute() {
@@ -10404,6 +10427,13 @@ class _CruiseModePageState extends State<CruiseModePage>
       belowMinimum: _completionProgressBelowXpMinimum(completed: true),
       completed: true,
     );
+    // 2026-06-02 (vucko Sync): Abschluss-Screen SYNCHRON aufs Auto bringen —
+    // SOFORT beim Ankommen (nicht erst nach dem Beantworten am Handy, das war
+    // der „CarPlay kam zu spät"-Bug). Distanz mitgeben → kein „-- gefahren".
+    _completionSheetOpen = true;
+    unawaited(
+      _carRouteBridge.publishEnded(distanceMeters: snapshot.distanceKm * 1000),
+    );
     unawaited(
       _recordRouteCompletionCandidate(completed: true, discarded: false),
     );
@@ -10469,6 +10499,12 @@ class _CruiseModePageState extends State<CruiseModePage>
     final snapshot = _buildCompletionSnapshot(
       isEarlyStop: true,
       belowMinimum: _completionProgressBelowXpMinimum(completed: false),
+    );
+    // 2026-06-02 (vucko Sync): Abschluss-Screen synchron aufs Auto (siehe
+    // _onRouteCompleted).
+    _completionSheetOpen = true;
+    unawaited(
+      _carRouteBridge.publishEnded(distanceMeters: snapshot.distanceKm * 1000),
     );
 
     final drivenSnap = _drivenTrackRecorder.snapshot();
