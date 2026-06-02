@@ -327,6 +327,24 @@ final class CarPlayMapViewController: UIViewController, MKMapViewDelegate {
         if #available(iOS 13.0, *) {
             mapView.overrideUserInterfaceStyle = .dark
         }
+        addCruiseTileOverlay()
+    }
+
+    /// 2026-06-02 (vucko): UNSER eigener Karten-Look in CarPlay. Wir legen die
+    /// gerasterten Cruise-Dark-Tiles (aus R2, gerendert aus unserem PMTiles-
+    /// Style) als Overlay über die Apple-Karte. So sieht CarPlay aus wie unsere
+    /// App, nicht wie Apple Maps. canReplaceMapContent=false → außerhalb der
+    /// gerenderten Abdeckung fällt es auf die Apple-Karte zurück (kein Schwarz).
+    /// tileSize 512 passt zum 512er-Rendering (retina über @2x-PNG).
+    private func addCruiseTileOverlay() {
+        let template =
+            "https://pub-0535dd4f86054de1820907b6f06bf17c.r2.dev/raster/{z}/{x}/{y}.png"
+        let overlay = MKTileOverlay(urlTemplate: template)
+        overlay.canReplaceMapContent = false
+        overlay.tileSize = CGSize(width: 512, height: 512)
+        overlay.minimumZ = 8
+        overlay.maximumZ = 14
+        mapView.addOverlay(overlay, level: .aboveLabels)
     }
 
     /// Folgt der eigenen Position (nur wenn keine Route aktiv ist) → „Wo bin
@@ -400,6 +418,10 @@ final class CarPlayMapViewController: UIViewController, MKMapViewDelegate {
     }
 
     func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
+        // Unsere gerasterten Cruise-Dark-Kacheln.
+        if let tileOverlay = overlay as? MKTileOverlay {
+            return MKTileOverlayRenderer(tileOverlay: tileOverlay)
+        }
         guard let polyline = overlay as? MKPolyline else {
             return MKOverlayRenderer(overlay: overlay)
         }

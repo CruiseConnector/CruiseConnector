@@ -1,0 +1,10 @@
+{
+  "name": "cc-raster",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "puppeteer": "^23.0.0",
+    "maplibre-gl": "^4.7.1",
+    "pmtiles": "^3.2.0"
+  }
+}

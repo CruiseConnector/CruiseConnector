@@ -1,0 +1,27 @@
+{
+  "version": 8,
+  "name": "Cruise Dark Raster",
+  "glyphs": "https://protomaps.github.io/basemaps-assets/fonts/{fontstack}/{range}.pbf",
+  "sources": {
+    "protomaps": {
+      "type": "vector",
+      "url": "pmtiles://https://pub-0535dd4f86054de1820907b6f06bf17c.r2.dev/dach.pmtiles"
+    }
+  },
+  "layers": [
+    { "id": "background", "type": "background", "paint": { "background-color": "#0b0e13" } },
+    { "id": "earth", "type": "fill", "source": "protomaps", "source-layer": "earth", "paint": { "fill-color": "#0d1117" } },
+    { "id": "landcover", "type": "fill", "source": "protomaps", "source-layer": "landcover", "maxzoom": 15, "paint": { "fill-color": "#0f1620", "fill-opacity": 0.5 } },
+    { "id": "landuse", "type": "fill", "source": "protomaps", "source-layer": "landuse", "maxzoom": 15, "paint": { "fill-color": "#121a24", "fill-opacity": 0.4 } },
+    { "id": "water", "type": "fill", "source": "protomaps", "source-layer": "water", "paint": { "fill-color": "#16212f" } },
+    { "id": "buildings", "type": "fill", "source": "protomaps", "source-layer": "buildings", "minzoom": 13, "paint": { "fill-color": "#1c2430", "fill-opacity": 0.85 } },
+    { "id": "boundaries", "type": "line", "source": "protomaps", "source-layer": "boundaries", "filter": ["in", "kind", "country", "unrecognized_country"], "paint": { "line-color": "#b3bdce", "line-width": ["interpolate", ["linear"], ["zoom"], 3, 1.4, 6, 2.4, 9, 3.4, 13, 4.8], "line-dasharray": [3, 1.1], "line-opacity": 1.0 } },
+    { "id": "roads-minor", "type": "line", "source": "protomaps", "source-layer": "roads", "filter": ["in", "kind", "minor_road", "other", "path"], "minzoom": 12, "paint": { "line-color": "#38404c", "line-width": ["interpolate", ["linear"], ["zoom"], 12, 0.6, 14, 1.6, 16, 3.4, 20, 11.0] } },
+    { "id": "roads-medium", "type": "line", "source": "protomaps", "source-layer": "roads", "filter": ["==", "kind", "medium_road"], "paint": { "line-color": "#48515f", "line-width": ["interpolate", ["linear"], ["zoom"], 9, 0.6, 14, 2.4, 16, 5.0, 20, 16.0] } },
+    { "id": "roads-major-casing", "type": "line", "source": "protomaps", "source-layer": "roads", "filter": ["==", "kind", "major_road"], "paint": { "line-color": "#1c222b", "line-width": ["interpolate", ["linear"], ["zoom"], 6, 1.8, 14, 5.2, 16, 9.5, 20, 26.0] } },
+    { "id": "roads-major", "type": "line", "source": "protomaps", "source-layer": "roads", "filter": ["==", "kind", "major_road"], "paint": { "line-color": "#545f6e", "line-width": ["interpolate", ["linear"], ["zoom"], 6, 1.0, 14, 3.4, 16, 6.5, 20, 20.0] } },
+    { "id": "roads-highway-casing", "type": "line", "source": "protomaps", "source-layer": "roads", "filter": ["==", "kind", "highway"], "paint": { "line-color": "#262e3a", "line-width": ["interpolate", ["linear"], ["zoom"], 5, 2.4, 14, 6.8, 16, 12.0, 20, 30.0] } },
+    { "id": "roads-highway", "type": "line", "source": "protomaps", "source-layer": "roads", "filter": ["==", "kind", "highway"], "paint": { "line-color": "#6f7f99", "line-width": ["interpolate", ["linear"], ["zoom"], 5, 1.4, 14, 4.8, 16, 8.8, 20, 24.0] } },
+    { "id": "places", "type": "symbol", "source": "protomaps", "source-layer": "places", "filter": ["in", "kind_detail", "city", "town", "village"], "layout": { "text-field": ["get", "name"], "text-font": ["Noto Sans Regular"], "text-size": ["interpolate", ["linear"], ["zoom"], 6, 13, 9, 16, 12, 20, 15, 24, 18, 27], "text-max-width": 7 }, "paint": { "text-color": "#f3f6fa", "text-halo-color": "#04070b", "text-halo-width": 2.8 } }
+  ]
+}
