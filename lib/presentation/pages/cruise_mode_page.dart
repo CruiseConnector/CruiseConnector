@@ -463,6 +463,9 @@ class _CruiseModePageState extends State<CruiseModePage>
   Timer? _groupMembersBackfillTimer;
   Timer? _groupMembersReconnectTimer;
   Timer? _groupMembersFreshnessTimer;
+  // 2026-06-02 (vucko): Debounce für automatisches Nachladen der Viewport-POIs
+  // beim Schwenken/Zoomen (mehr POIs je weiter rausgezoomt).
+  Timer? _viewportPoiDebounce;
   bool _groupRouteBackfillInFlight = false;
   bool _groupMembersBackfillInFlight = false;
   bool _canPublishGroupRoute = false;
@@ -1575,6 +1578,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     _groupMembersBackfillTimer?.cancel();
     _groupMembersReconnectTimer?.cancel();
     _groupMembersFreshnessTimer?.cancel();
+    _viewportPoiDebounce?.cancel();
     _groupRouteCh?.unsubscribe();
     _groupMembersCh?.unsubscribe();
     _stopIdlePositionStream();
@@ -4165,6 +4169,12 @@ class _CruiseModePageState extends State<CruiseModePage>
             _safeSetState(() => _isCameraLocked = false);
           }
         },
+        // 2026-06-02 (vucko): Beim Schwenken/Zoomen automatisch die POIs im
+        // sichtbaren Bereich nachladen → je weiter rausgezoomt, desto mehr
+        // POIs über das ganze Sichtfeld. Debounced + nur beim Planen/Browsen.
+        onPositionChanged: (camera, hasGesture) {
+          if (hasGesture) _scheduleViewportPoiRefresh();
+        },
       ),
       children: [
         // ── Mapbox Dark-Style als Raster-Tile-Layer ──────────────────────────
@@ -4183,18 +4193,20 @@ class _CruiseModePageState extends State<CruiseModePage>
         // damit die Karte IMMER funktioniert.
         if (_pmtilesProvider != null)
           VectorTileLayer(
+            // 2026-06-02 (vucko): HYBRID-Render-Modus (User-Wahl).
+            // Während aktiver Navigation (Route bestätigt) = RASTER → maximal
+            // flüssig beim Fahren & Zoomen (Doku: "best frame rate"). Beim
+            // Planen/Stillstand = VEKTOR → gestochen scharf bei jeder Zoomstufe.
+            // Der ValueKey erzwingt den Layer-Rebuild beim Moduswechsel; der
+            // Übergang (kurzes Tile-Nachladen) passiert nur 1× pro Fahrtstart,
+            // nicht bei jeder Geste → keine teuren Dauer-Rebuilds.
+            key: ValueKey(_isRouteConfirmed ? 'vtl-raster' : 'vtl-vector'),
             tileProviders: TileProviders({'protomaps': _pmtilesProvider!}),
             theme: _cruiseMapTheme,
             tileOffset: TileOffset.DEFAULT,
-            // 2026-06-02 (vucko): VEKTOR-Modus statt Raster (Default). Raster
-            // rendert Tiles zu Bitmaps und skaliert sie beim Reinzoomen hoch →
-            // blockig/unscharf, bis ein neues Tile fertig ist (= „erst nach
-            // Pan normal"). Vektor zeichnet die Geometrie pro Zoomstufe live →
-            // bei JEDER Zoomstufe gestochen scharf. maximumTileSubstitution-
-            // Difference 3 = mehr Ersatz-Tiles während des Ladens → weniger
-            // leere/komische Frames. concurrency 4 (Default, Release-only)
-            // beschleunigt das Laden über Isolates.
-            layerMode: VectorTileLayerMode.vector,
+            layerMode: _isRouteConfirmed
+                ? VectorTileLayerMode.raster
+                : VectorTileLayerMode.vector,
             maximumTileSubstitutionDifference: 3,
             concurrency: 4,
           )
@@ -8856,7 +8868,24 @@ class _CruiseModePageState extends State<CruiseModePage>
   ///
   /// bbox = aktuelle Map-Camera-Bounds; Buffer 0 weil wir wirklich nur
   /// das zeigen wollen was der User sieht.
-  Future<void> _loadPoisInViewport() async {
+  /// 2026-06-02 (vucko): Debounced Auto-Refresh der Viewport-POIs beim
+  /// Schwenken/Zoomen. Nur beim Planen/Browsen (nicht während aktiver
+  /// Navigation — da bleiben die Routen-POIs), nur wenn POIs aktiviert sind.
+  /// So sieht man beim Rauszoomen mehr POIs über die ganze sichtbare Karte,
+  /// ohne Overpass mit Dauer-Queries zu überlasten.
+  void _scheduleViewportPoiRefresh() {
+    if (_isRouteConfirmed) return;
+    if (!PoiSettingsService.instance.anyEnabled) return;
+    _viewportPoiDebounce?.cancel();
+    _viewportPoiDebounce = Timer(const Duration(milliseconds: 700), () {
+      if (!mounted || _disposed) return;
+      if (_isRouteConfirmed || _poisLoading) return;
+      if (!PoiSettingsService.instance.anyEnabled) return;
+      unawaited(_loadPoisInViewport(silent: true));
+    });
+  }
+
+  Future<void> _loadPoisInViewport({bool silent = false}) async {
     if (!mounted || _disposed) return;
     if (_poisLoading) return;
     setState(() => _poisLoading = true);
@@ -8893,7 +8922,7 @@ class _CruiseModePageState extends State<CruiseModePage>
         _routePois = pois;
         _poisLoading = false;
       });
-      if (pois.isEmpty) {
+      if (pois.isEmpty && !silent) {
         TopToast.show(
           context,
           message: 'Keine POIs im sichtbaren Bereich.',
