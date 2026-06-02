@@ -432,6 +432,12 @@ class _CruiseModePageState extends State<CruiseModePage>
   static const double _routeRedrawDistanceMeters = 5.0;
   double _totalDistanceDriven = 0.0; // Gesamte gefahrene Strecke in Metern
   DateTime? _navigationStartTime; // Zeitpunkt des Navigations-Starts
+  // 2026-06-02 (vucko): „Fährt der User gerade WIRKLICH?" — erst nach
+  // „Fahrt starten" (bzw. Simulation) gesetzt, in der Route-VORSCHAU noch null.
+  // Steuert den Karten-Render-Modus: nur beim echten Fahren Raster (flüssig),
+  // sonst Vektor (scharf) — die Vorschau soll nie im Raster-„Schlieren-Look"
+  // laden.
+  bool get _isActivelyDriving => _navigationStartTime != null;
   int _xpStreakDays = 1;
   bool _driveSessionRecordedForCompletion = false;
   double?
@@ -4195,12 +4201,12 @@ class _CruiseModePageState extends State<CruiseModePage>
         if (_worldPmtilesProvider != null)
           VectorTileLayer(
             key: ValueKey(
-              _isRouteConfirmed ? 'vtl-world-raster' : 'vtl-world-vector',
+              _isActivelyDriving ? 'vtl-world-raster' : 'vtl-world-vector',
             ),
             tileProviders: TileProviders({'protomaps': _worldPmtilesProvider!}),
             theme: _cruiseMapTheme,
             tileOffset: TileOffset.DEFAULT,
-            layerMode: _isRouteConfirmed
+            layerMode: _isActivelyDriving
                 ? VectorTileLayerMode.raster
                 : VectorTileLayerMode.vector,
             maximumTileSubstitutionDifference: 3,
@@ -4219,11 +4225,11 @@ class _CruiseModePageState extends State<CruiseModePage>
             // Der ValueKey erzwingt den Layer-Rebuild beim Moduswechsel; der
             // Übergang (kurzes Tile-Nachladen) passiert nur 1× pro Fahrtstart,
             // nicht bei jeder Geste → keine teuren Dauer-Rebuilds.
-            key: ValueKey(_isRouteConfirmed ? 'vtl-raster' : 'vtl-vector'),
+            key: ValueKey(_isActivelyDriving ? 'vtl-raster' : 'vtl-vector'),
             tileProviders: TileProviders({'protomaps': _pmtilesProvider!}),
             theme: _cruiseMapTheme,
             tileOffset: TileOffset.DEFAULT,
-            layerMode: _isRouteConfirmed
+            layerMode: _isActivelyDriving
                 ? VectorTileLayerMode.raster
                 : VectorTileLayerMode.vector,
             maximumTileSubstitutionDifference: 3,
