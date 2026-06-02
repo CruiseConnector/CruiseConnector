@@ -81,46 +81,76 @@ class OfflineMapService {
       'https://pub-0535dd4f86054de1820907b6f06bf17c.r2.dev/world_z6.pmtiles';
 
   PmTilesVectorTileProvider? _pmtilesProvider;
-  bool _pmtilesLoadAttempted = false;
+  bool _pmtilesLoading = false;
   PmTilesVectorTileProvider? _worldPmtilesProvider;
-  bool _worldPmtilesLoadAttempted = false;
+  bool _worldPmtilesLoading = false;
 
-  /// Lädt den PMTiles-Vektor-Provider einmalig (gecacht). `null` = nicht
-  /// verfügbar (leere URL, Web oder Fehler) → die App bleibt beim Mapbox-Raster.
+  /// Lädt den PMTiles-Vektor-Provider (gecacht, MIT Retry). `null` = nicht
+  /// verfügbar (leere URL, Web oder nach mehreren Fehlversuchen) → Mapbox-Raster.
+  ///
+  /// 2026-06-02 (vucko): Retry-Logik. Vorher genau EIN Versuch — schlug der
+  /// initiale Range-Request (r2.dev-Hänger / Cold-Start / kurze Drosselung)
+  /// fehl, blieb der Provider für die GANZE Session null → das Handy fiel auf
+  /// Mapbox-Raster zurück (User sah „mal unsere Karte, mal Mapbox"). Jetzt
+  /// 4 Versuche mit Backoff; bei komplettem Fehlschlag darf ein späterer Aufruf
+  /// erneut probieren (kein permanentes Aufgeben).
   Future<PmTilesVectorTileProvider?> loadPmtilesProvider() async {
-    if (_pmtilesProvider != null || _pmtilesLoadAttempted) {
-      return _pmtilesProvider;
-    }
-    _pmtilesLoadAttempted = true;
+    if (_pmtilesProvider != null) return _pmtilesProvider;
     if (kIsWeb || selfHostedPmtilesUrl.isEmpty) return null;
+    if (_pmtilesLoading) return null;
+    _pmtilesLoading = true;
     try {
-      _pmtilesProvider =
-          await PmTilesVectorTileProvider.fromSource(selfHostedPmtilesUrl);
-      if (kDebugMode) debugPrint('[OfflineMap] PMTiles-Vektorquelle geladen.');
-    } catch (e) {
-      _pmtilesProvider = null;
-      if (kDebugMode) debugPrint('[OfflineMap] PMTiles laden fehlgeschlagen: $e');
+      for (var attempt = 1; attempt <= 4 && _pmtilesProvider == null; attempt++) {
+        try {
+          _pmtilesProvider =
+              await PmTilesVectorTileProvider.fromSource(selfHostedPmtilesUrl);
+          if (kDebugMode) {
+            debugPrint('[OfflineMap] PMTiles-Vektorquelle geladen (Versuch $attempt).');
+          }
+        } catch (e) {
+          if (kDebugMode) {
+            debugPrint('[OfflineMap] PMTiles Versuch $attempt/4 fehlgeschlagen: $e');
+          }
+          if (attempt < 4) {
+            await Future<void>.delayed(Duration(milliseconds: 400 * attempt));
+          }
+        }
+      }
+    } finally {
+      _pmtilesLoading = false;
     }
     return _pmtilesProvider;
   }
 
-  /// Lädt die Welt-Übersichts-Vektorquelle (z0–6) einmalig (gecacht). `null` =
-  /// nicht verfügbar → die App zeigt außerhalb DACH nur den dunklen Hintergrund.
+  /// Lädt die Welt-Übersichts-Vektorquelle (z0–6, gecacht, MIT Retry). `null` =
+  /// nicht verfügbar → außerhalb DACH nur dunkler Hintergrund.
   Future<PmTilesVectorTileProvider?> loadWorldPmtilesProvider() async {
-    if (_worldPmtilesProvider != null || _worldPmtilesLoadAttempted) {
-      return _worldPmtilesProvider;
-    }
-    _worldPmtilesLoadAttempted = true;
+    if (_worldPmtilesProvider != null) return _worldPmtilesProvider;
     if (kIsWeb || selfHostedWorldPmtilesUrl.isEmpty) return null;
+    if (_worldPmtilesLoading) return null;
+    _worldPmtilesLoading = true;
     try {
-      _worldPmtilesProvider =
-          await PmTilesVectorTileProvider.fromSource(selfHostedWorldPmtilesUrl);
-      if (kDebugMode) debugPrint('[OfflineMap] Welt-PMTiles-Quelle geladen.');
-    } catch (e) {
-      _worldPmtilesProvider = null;
-      if (kDebugMode) {
-        debugPrint('[OfflineMap] Welt-PMTiles laden fehlgeschlagen: $e');
+      for (var attempt = 1;
+          attempt <= 4 && _worldPmtilesProvider == null;
+          attempt++) {
+        try {
+          _worldPmtilesProvider = await PmTilesVectorTileProvider.fromSource(
+            selfHostedWorldPmtilesUrl,
+          );
+          if (kDebugMode) {
+            debugPrint('[OfflineMap] Welt-PMTiles-Quelle geladen (Versuch $attempt).');
+          }
+        } catch (e) {
+          if (kDebugMode) {
+            debugPrint('[OfflineMap] Welt-PMTiles Versuch $attempt/4 fehlgeschlagen: $e');
+          }
+          if (attempt < 4) {
+            await Future<void>.delayed(Duration(milliseconds: 400 * attempt));
+          }
+        }
       }
+    } finally {
+      _worldPmtilesLoading = false;
     }
     return _worldPmtilesProvider;
   }

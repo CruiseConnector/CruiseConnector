@@ -342,8 +342,14 @@ final class CarPlayMapViewController: UIViewController, MKMapViewDelegate {
         let overlay = MKTileOverlay(urlTemplate: template)
         overlay.canReplaceMapContent = false
         overlay.tileSize = CGSize(width: 512, height: 512)
-        overlay.minimumZ = 8
-        overlay.maximumZ = 14
+        // 2026-06-02 (vucko): minZ/maxZ = tatsächlich gerenderter Bereich.
+        // Proof = z9–13. maximumZ NICHT höher setzen als gerendert → MapKit
+        // ÜBERZOOMT unsere z13-Kachel beim Reinzoomen (bleibt unser Look, nur
+        // weicher), statt für z14 eine 404 zu kriegen und auf Apple-Grün zu
+        // fallen (genau das war „CarPlay grün beim Reinzoomen"). Nach dem
+        // vollen DACH-Render hier auf 14 erhöhen.
+        overlay.minimumZ = 9
+        overlay.maximumZ = 13
         mapView.addOverlay(overlay, level: .aboveLabels)
     }
 
