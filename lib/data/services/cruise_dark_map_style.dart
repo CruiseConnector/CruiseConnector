@@ -74,14 +74,22 @@ const Map<String, dynamic> cruiseDarkMapStyle = {
       'paint': {'fill-color': '#1c2430', 'fill-opacity': 0.85},
     },
     {
+      // 2026-06-02 (vucko): Ländergrenzen deutlich sichtbarer (User-Wunsch).
+      // Vorher dunkel (#3a4452) + dünn (0.9) → kaum erkennbar. Jetzt hell,
+      // zoom-skaliert breiter + leichter Glanz, damit man die Grenze CH/AT/DE/LI
+      // (Hohenems liegt am Dreiländereck) klar sieht.
       'id': 'boundaries',
       'type': 'line',
       'source': 'protomaps',
       'source-layer': 'boundaries',
       'paint': {
-        'line-color': '#3a4452',
-        'line-width': 0.9,
-        'line-dasharray': [3, 2],
+        'line-color': '#8b98ad',
+        'line-width': [
+          'interpolate', ['linear'], ['zoom'],
+          3, 0.9, 6, 1.6, 9, 2.4, 13, 3.4,
+        ],
+        'line-dasharray': [2.5, 1.5],
+        'line-opacity': 0.92,
       },
     },
     // ── Straßen: dunkel→hell nach Wichtigkeit, Breite bis Zoom 20 ──

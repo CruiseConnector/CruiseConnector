@@ -8915,7 +8915,14 @@ class _CruiseModePageState extends State<CruiseModePage>
         _isWaypointPlanning &&
         !_showRouteInfoBanner &&
         !hasErrorBanner;
-    final hidden = (!hasRoute && !_configCollapsed) || waypointRailActive;
+    // 2026-06-02 (vucko): POI-/Config-Button jetzt AUCH vor der Fahrt /
+    // während der Routenplanung erreichbar (User-Wunsch: „über die ganze Karte
+    // einstellen, nicht erst bei bestätigter Route"). Vorher pre-route nur
+    // sichtbar, wenn das Setup-Sheet eingeklappt war (_configCollapsed) — dadurch
+    // wirkte der Button, als käme er erst nach der Routenbestätigung. Jetzt nur
+    // noch im Wegpunkte-Modus ausgeblendet, weil dort die rechte Wegpunkt-Rail
+    // bereits POI/Voice/Camera zeigt (sonst Doppel-Spalte, Task #80).
+    final hidden = waypointRailActive;
     return Positioned(
       right: 16,
       bottom: hasRoute ? 260 : 240,

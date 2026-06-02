@@ -417,17 +417,33 @@ class GeocodingService {
         );
   }
 
+  // 2026-06-02 (vucko): Verallgemeinert. Vorher NUR für "mcdonald" hartcodiert
+  // (Test-Überbleibsel aus Startup-V Issue 4) → jede andere Marke/jeder andere
+  // POI (Spar, Lidl, Bäckerei, Hotel, Restaurant, Tankstelle …) fiel durch und
+  // wurde NIE über die bessere Search-Box-POI-API gesucht. Das war die Ursache,
+  // dass z.B. "McDonald's Hohenems" / Geschäfte nicht gefunden wurden.
+  // Jetzt: Wenn der v5-Geocoder nichts fand ODER das wichtigste Anfrage-
+  // Stichwort (i.d.R. der POI-/Marken-Name = erstes Wort) im besten Treffer
+  // fehlt, die Search-Box-POI-Suche bevorzugen — sie hat deutlich bessere
+  // Business-/POI-Daten als der klassische v5-Geocoder.
   static bool _shouldPreferSearchBoxPoi(
     String query,
     List<MapboxSuggestion> geocodingSuggestions,
   ) {
     final normalizedQuery = _normalizeAddressText(
       _normalizePoiSearchAlias(query),
-    );
-    if (!normalizedQuery.contains('mcdonald')) return false;
+    ).trim();
+    if (normalizedQuery.isEmpty) return false;
     if (geocodingSuggestions.isEmpty) return true;
+    final tokens = normalizedQuery
+        .split(RegExp(r'\s+'))
+        .where((t) => t.length >= 3)
+        .toList();
+    if (tokens.isEmpty) return false;
     final top = _normalizeAddressText(geocodingSuggestions.first.placeName);
-    return !top.contains('mcdonald');
+    // Wichtigstes Stichwort fehlt im besten v5-Treffer → POI nicht erkannt,
+    // die dedizierte POI-Suche übernimmt.
+    return !top.contains(tokens.first);
   }
 
   static String _sanitizeSearchPath(String value) =>
