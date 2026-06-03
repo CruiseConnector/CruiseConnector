@@ -1,6 +1,46 @@
 # Compact-Resume — CruiseConnect
 
-**Letztes Update**: 2026-05-27 (PC2-Migration mitten drin)
+> ## ⭐ 2026-06-03 — ROUTING-STABILISIERUNG (laufende Session)
+>
+> **Symptom (User):** Rundkurs + A→B seit Mapbox→GraphHopper-Umstieg kaputt:
+> „keine Route" auf dem Gerät (im Simulator unsichtbar), Autobahn-Regel ignoriert,
+> hässliche U-Turns, komische Formen.
+>
+> **3 ROOT CAUSES gefunden + gefixt (alle live bewiesen, Edge v2 neu deployt):**
+> 1. **Auth/„keine Route":** `generate-cruise-route-v2` war als EINZIGE Funktion
+>    mit `verify_jwt:true` deployt (config.toml-Block fehlte). Die App schickt
+>    einen `sb_publishable_…`-Key (kein JWT) → Gateway wies ihn als „Invalid JWT"
+>    ab. Im Simulator unsichtbar (frische Session = gültiger JWT), auf dem Gerät
+>    nach Token-Ablauf → 401. **Fix:** `[functions.generate-cruise-route-v2]
+>    verify_jwt=false` in `supabase/config.toml` + neu deployt. **DURABLE** —
+>    ohne diesen Block setzt JEDER künftige Deploy den Bug neu.
+> 2. **custom_model wurde IGNORIERT (DER große Fix):** Edge schickte GraphHopper
+>    per **GET**-Query → GH ehrt `custom_model` NUR per **POST**-Body (an PC1+PC2
+>    direkt bewiesen: GET avoid=true≡avoid=false; POST → Autobahn weg). Darum
+>    wirkten Autobahn-Block, Stil-Overlays, Track/Service-Penalty, Ferry NIE.
+>    **Fix:** `callGraphHopper` komplett auf POST umgestellt (points als [lng,lat],
+>    round_trip-Params als dotted keys `round_trip.distance`/`.seed`, custom_model
+>    als Objekt). → **Autobahn-Verletzungen 43→0** über 96-Suchen-Matrix.
+> 3. **Selektion liess Autobahn/U-Turns durch:** `isAcceptable`/Best-of-N prüften
+>    weder `uses_motorway` noch U-Turns. **Fix:** motorway split von trunk,
+>    `u_turn_count` aus Instructions, isAcceptable rejectet beides, Best-of-N
+>    highwayPenalty 1000 + uTurnPenalty 40. Motorway hart `priority:0` (trunk
+>    bleibt erlaubt = Bundesstraße). Seed-Bump 5→6/8.
+>
+> **Matrix-Stand (96 Suchen, 6 Regionen × 4 Stile × 25/50/75/100km, Autobahn aus):**
+> Autobahn **0/96** ✅ · Latenz alle <2.3s ✅ · Loop-Closure 0m ✅ · alle 200 ✅ ·
+> 25/50km **sauber**. OFFEN: 75/100km je 1 U-Turn (GH-round_trip Tip-Turnaround am
+> Via-Punkt), 100km Distanz-Überschuss in einigen Regionen (FH 100km +42%).
+>
+> **NÄCHSTE SCHRITTE:** (a) Simulator-Test iPhone 17 Pro Max — jeder Modus+km,
+> Routen visuell prüfen (User-Pflicht-Gate vor Commit). (b) ggf. 75/100km-U-Turns
+> via Wegpunkt-Polygon-Loop (start==end + via-Punkte als Point-to-Point statt
+> GH-round_trip) — ehrt custom_model + kein Tip-Turnaround. (c) `flutter analyze`,
+> dann commit+push in `graphhopper-dach-stabilize`.
+> **Test-Harness:** `/tmp/cc_matrix.py all` (nutzt Publishable-Key, MW/TR/UT-Spalten).
+> Edge-Quelle: `supabase/functions/generate-cruise-route-v2/index.ts` (callGraphHopper).
+
+**Letztes Update**: 2026-06-03 (Routing-Stabilisierung — Auth+POST+Selektion gefixt)
 **Branch**: `graphhopper-dach-stabilize`
 **Worktree**: `/Users/vucko/Development/CruiserConnect/.claude/worktrees/admiring-hawking-3afe1f`
 **Supabase Project-ID**: `tlcfaxvvqzobmzwvfnvb`

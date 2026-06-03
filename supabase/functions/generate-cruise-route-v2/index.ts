@@ -435,15 +435,21 @@ async function callGraphHopper(opts: {
   signal?: AbortSignal;
   timeoutMs?: number;
 }): Promise<RouteResult | { error: string }> {
-  const params = new URLSearchParams();
-  params.append('point', `${opts.startLat},${opts.startLng}`);
-
-  // A→B: füge sub-waypoint(s) für detour-Charakter
+  // 2026-06-03 (vucko ROOT-CAUSE-FIX): GraphHopper wird jetzt per POST mit
+  // JSON-Body angesprochen, NICHT mehr per GET-Query. Live-Test an PC1+PC2
+  // bewies eindeutig: `custom_model` als GET-Query-Param wird KOMPLETT IGNORIERT
+  // (avoid=true ≡ avoid=false → identischer Fingerprint, Autobahn blieb). Per
+  // POST-Body wirkt es sofort (Autobahn weg, Stil-Overlays greifen). DAS war die
+  // wahre Ursache, warum „Autobahn aus", Stil-Differenzierung, Track/Service-
+  // Penalty und Ferry-Block bei Rundkurs UND A→B alle NIE funktionierten.
+  // GraphHopper-points sind im Body [lng, lat] (GeoJSON) — umgekehrt zur
+  // GET-Form `point=lat,lng`.
+  const points: Array<[number, number]> = [[opts.startLng, opts.startLat]];
   if (!opts.isRoundTrip && opts.endLat != null && opts.endLng != null) {
     // Explicit waypoints zuerst (für Wegpunkte-Mode)
     if (opts.intermediateWaypoints && opts.intermediateWaypoints.length > 0) {
       for (const wp of opts.intermediateWaypoints) {
-        params.append('point', `${wp.lat},${wp.lng}`);
+        points.push([wp.lng, wp.lat]);
       }
     }
     // Auto-detour via senkrecht-Offset (klein/mittel/groß umweg)
@@ -455,32 +461,31 @@ async function callGraphHopper(opts: {
       const directBearing = bearingDeg(opts.startLat, opts.startLng, opts.endLat, opts.endLng);
       const perpBearing = (directBearing + opts.detourBearingDeg + 360) % 360;
       const offset = offsetCoord(midLat, midLng, opts.detourPerpendicularKm, perpBearing);
-      params.append('point', `${offset.lat},${offset.lng}`);
+      points.push([offset.lng, offset.lat]);
     }
-    params.append('point', `${opts.endLat},${opts.endLng}`);
+    points.push([opts.endLng, opts.endLat]);
   }
-  params.set('profile', opts.profile);
-  params.set('points_encoded', 'false');
-  params.set('ch.disable', 'true');
-  params.set('instructions', 'true');
-  // 2026-06-02 (vucko): Deutsche Turn-by-turn-Texte („Rechts abbiegen auf …")
-  // für Handy + CarPlay.
-  params.set('locale', 'de');
-  // 2026-05-28 (vucko Task #82): road_class/road_environment Details anfordern,
-  // damit wir echte Autobahn-Nutzung in meta erkennen (has_highway etc.).
-  params.append('details', 'road_class');
-  params.append('details', 'road_environment');
-  // 2026-05-22 (vucko Task #10): Ferry-Vermeidung über Custom-Model
-  // (siehe unten) — der `snap_prevention` Query-Param ist von unserer
-  // GraphHopper 8.0 Installation nicht supported (HTTP 400).
-
+  // deno-lint-ignore no-explicit-any
+  const ghBody: Record<string, any> = {
+    points,
+    profile: opts.profile,
+    points_encoded: false,
+    'ch.disable': true,
+    instructions: true,
+    // Deutsche Turn-by-turn-Texte („Rechts abbiegen auf …") für Handy + CarPlay.
+    locale: 'de',
+    // road_class/road_environment Details für echte Autobahn-Erkennung in meta.
+    details: ['road_class', 'road_environment'],
+  };
   if (opts.isRoundTrip) {
-    params.set('algorithm', 'round_trip');
+    ghBody.algorithm = 'round_trip';
     if (opts.targetDistanceKm) {
-      params.set('round_trip.distance', String(Math.round(opts.targetDistanceKm * 1000)));
+      // dotted-key Form ist die einzige, die GH im POST-Body ehrt (nested
+      // `round_trip:{distance}` wird ignoriert → 9km-Default; Live-getestet).
+      ghBody['round_trip.distance'] = Math.round(opts.targetDistanceKm * 1000);
     }
     if (opts.seed != null) {
-      params.set('round_trip.seed', String(opts.seed));
+      ghBody['round_trip.seed'] = opts.seed;
     }
   }
 
@@ -505,9 +510,26 @@ async function callGraphHopper(opts: {
   if (customOverlay.distance_influence != null) {
     overlay.distance_influence = customOverlay.distance_influence;
   }
-  // Autobahn-Vermeidung als Top-Up
+  // Autobahn-Vermeidung: HARTER Block, nicht nur Penalty.
+  // 2026-06-03 (vucko): multiply_by 0.05 war zu weich — Live-Matrix zeigte
+  // 43/96 Routen MIT Autobahn trotz „Autobahn aus" (auf langen Strecken ist die
+  // Autobahn ~20× schneller → GH nahm sie trotz Penalty). Lösung: dieselbe
+  // bewiesene Hard-Block-Technik wie bei Ferry — speed.limit_to=0 macht die
+  // Motorway-Edge KOMPLETT unbefahrbar (priority allein reicht nicht). TRUNK
+  // (Schnell-/Bundesstraße) bleibt nur stark bestraft, NICHT 0 — in Alpentälern
+  // ist sie oft die einzige Durchfahrt; Hard-Block dort → NO_ROUTE.
   if (opts.avoidHighways) {
-    overlay.priority.push({ if: 'road_class == MOTORWAY || road_class == TRUNK', multiply_by: '0.05' });
+    // HARTER Block via priority 0 = „Kante komplett meiden" (GH-Doku). Live-Test
+    // 2026-06-03 bewies: speed.limit_to=0 wirkt im round_trip-Algorithmus NICHT
+    // (uses_motorway blieb true MITTEN in der Route, start_on_motorway=false).
+    // priority dagegen wird angewandt — die Stil-Overlays sind alle priority-
+    // basiert und differenzieren klar. Darum Motorway hart auf priority 0.
+    overlay.priority.push({ if: 'road_class == MOTORWAY', multiply_by: '0' });
+    // Trunk (Bundes-/Schnellstraße): stark bestraft, NICHT 0 — in Alpentälern
+    // (Inntal: A12 ‖ B171) oft einzige Durchfahrt; Hard-Block dort → NO_ROUTE.
+    overlay.priority.push({ if: 'road_class == TRUNK', multiply_by: '0.05' });
+    // speed.limit_to=0 zusätzlich als Gürtel-und-Hosenträger (schadet nicht).
+    overlay.speed!.push({ if: 'road_class == MOTORWAY', limit_to: '0' });
   }
   // Doppelter Schutz: Ferry zusätzlich noch hohe priority-Penalty
   overlay.priority.push({ if: 'road_environment == FERRY', multiply_by: '0.001' });
@@ -527,11 +549,12 @@ async function callGraphHopper(opts: {
   // ist klar schneller. Der harte Block bleibt hinter avoidHighways (oben).
   overlay.priority.push({ if: 'road_class == MOTORWAY', multiply_by: '0.6' });
   if (overlay.priority.length > 0 || overlay.distance_influence != null || overlay.speed != null) {
-    params.set('custom_model', JSON.stringify(overlay));
+    // Objekt, NICHT JSON.stringify — geht jetzt im POST-Body an GraphHopper.
+    ghBody.custom_model = overlay;
   }
 
   const baseUrl = opts.serverUrl ?? GRAPHHOPPER_URL;
-  const url = `${baseUrl}/route?${params.toString()}`;
+  const url = `${baseUrl}/route`;
   // 2026-06-02 (vucko): Per-Call-Timeout + externes Abort-Signal. Ein hängender
   // GraphHopper-Call wird nach GH_FETCH_TIMEOUT_MS hart abgebrochen (statt die
   // Funktion bis zum Plattform-Limit zu blockieren), und der Round-Trip-Racer
@@ -546,7 +569,12 @@ async function callGraphHopper(opts: {
     else opts.signal.addEventListener('abort', () => timeoutCtrl.abort(), { once: true });
   }
   try {
-    const res = await fetch(url, { signal: timeoutCtrl.signal });
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(ghBody),
+      signal: timeoutCtrl.signal,
+    });
     if (!res.ok) {
       return { error: `GraphHopper HTTP ${res.status}: ${await res.text().then(t => t.slice(0, 200))}` };
     }
@@ -601,17 +629,27 @@ async function callGraphHopper(opts: {
     // road_class-Details ableiten. road_class-Details kommen als
     // [from, to, value]-Segmente; MOTORWAY/TRUNK = Autobahn-artig.
     const roadClassSegments = p.details?.road_class ?? [];
-    const hasHighway = roadClassSegments.some(
-      (seg: [number, number, string | number]) => {
-        const value = String(seg[2] ?? '').toUpperCase();
-        return value === 'MOTORWAY' || value === 'TRUNK';
-      },
+    const upperSegs = roadClassSegments.map(
+      (seg: [number, number, string | number]) => String(seg[2] ?? '').toUpperCase(),
     );
-    const leadingSegment = roadClassSegments.length > 0
-      ? String(roadClassSegments[0][2] ?? '').toUpperCase()
-      : '';
+    // 2026-06-03 (vucko): Motorway (Autobahn) und Trunk (Schnellstraße) GETRENNT
+    // erfassen. avoid_highways blockt Motorway HART; Trunk darf als Alpen-
+    // Notausgang bleiben → Selektion + Scoring behandeln beide getrennt.
+    const usesMotorway = upperSegs.includes('MOTORWAY');
+    const usesTrunk = upperSegs.includes('TRUNK');
+    const hasHighway = usesMotorway || usesTrunk;
+    const leadingSegment = upperSegs.length > 0 ? upperSegs[0] : '';
     const startOnMotorway =
       leadingSegment === 'MOTORWAY' || leadingSegment === 'TRUNK';
+    const instructions = p.instructions ?? [];
+    // 2026-06-03 (vucko): echte U-Turns aus den GraphHopper-Instructions zählen
+    // (sign -8/8 = U-Turn links/rechts, -98 = U-Turn unbekannte Richtung). Das
+    // ist der „hässliche U-Turn in einer Einfahrt", über den der User klagt —
+    // Selektion + Best-of-N-Scoring bestrafen ihn jetzt.
+    const uTurnCount = instructions.filter((i) => {
+      const s = (i as Record<string, unknown>).sign;
+      return s === -8 || s === 8 || s === -98;
+    }).length;
     return {
       geometry: p.points,
       distanceKm,
@@ -626,9 +664,12 @@ async function callGraphHopper(opts: {
         bbox: p.bbox,
         has_highway: hasHighway,
         actual_has_highway: hasHighway,
+        uses_motorway: usesMotorway,
+        uses_trunk: usesTrunk,
+        u_turn_count: uTurnCount,
         start_on_motorway: startOnMotorway,
       },
-      instructions: p.instructions ?? [],
+      instructions,
     };
   } catch (e) {
     return { error: `GraphHopper fetch failed: ${(e as Error).message}` };
@@ -682,7 +723,10 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
 
   // Adaptive Distance Compensation (nur für Round-Trip relevant)
   const region = classifyRegion(req.start_location.latitude, req.start_location.longitude);
-  const effectiveDistanceKm = isRoundTrip && req.target_distance_km
+  // 2026-06-03 (vucko): `let` statt `const` — die adaptive Distanz-Korrektur
+  // unten justiert round_trip.distance nach, wenn GH in engem Terrain daneben
+  // liegt (tryServerWithProfile liest diesen Wert zur Call-Zeit aus dem Closure).
+  let effectiveDistanceKm = isRoundTrip && req.target_distance_km
     ? req.target_distance_km * region.factor
     : req.target_distance_km;
 
@@ -772,10 +816,14 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
     req.start_location.longitude,
   );
   const isAlpineHotspot = regionForHotspot.label === 'alpine';
+  // 2026-06-03 (vucko): moderater Seed-Bump. Mit strengerer Akzeptanz (kein
+  // Motorway, keine U-Turns) braucht die Auswahl mehr saubere Kandidaten zum
+  // Vergleichen. generateSeeds liefert 10 — wir nutzen jetzt mehr davon. Der
+  // Racer bricht Verlierer ab, sobald ein sauberer da ist → Latenz bleibt < 10s.
   const maxAttempts = isRoundTrip
     ? (isAlpineHotspot
-        ? (needsDiversity ? 5 : 4)
-        : (needsDiversity ? 6 : 5))
+        ? (needsDiversity ? 6 : 5)
+        : (needsDiversity ? 8 : 6))
     : (hasExplicitWaypoints ? 1 : Math.max(13, detourSpec.length || 13));
   const targetKm = req.target_distance_km ?? 50;
   const candidates: Array<{ result: RouteResult; deltaPct: number; seed: number; isDup: boolean }> = [];
@@ -837,6 +885,12 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
       ): boolean => {
         const r = entry.result;
         if ('error' in r) return false;
+        // 2026-06-03 (vucko): „Autobahn aus" heißt KEINE Autobahn. Ein Kandidat
+        // mit Motorway ist niemals akzeptabel wenn avoid_highways gesetzt ist.
+        if ((req.avoid_highways ?? false) && r.meta.uses_motorway === true) return false;
+        // 2026-06-03 (vucko): hässliche U-Turns hart aussortieren — lieber ein
+        // anderer Seed (mehrere laufen parallel) als ein U-Turn in der Route.
+        if (((r.meta.u_turn_count as number | undefined) ?? 0) > 0) return false;
         if (previousFps.has(r.fingerprint)) return false; // Duplikat → nächster Seed
         const deltaPct = Math.abs(r.distanceKm - targetKm) / targetKm * 100;
         if (deltaPct > 12) return false; // zu weit von Zieldistanz
@@ -1240,6 +1294,40 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
     }
   }
 
+  // 2026-06-03 (vucko): Adaptive Distanz-Korrektur für Round-Trip. GHs
+  // round_trip.distance ist in alpinem/eingeengtem Terrain unzuverlässig
+  // (Feldkirch live: 50km→40km, 100km→157km bei GLEICHEM comp-Faktor 0.9). Ein
+  // einzelner Region-Faktor kann das nicht fixen. Lösung: einmalige Feedback-
+  // Korrektur — liegt die beste Route >15% daneben, neu anfragen mit
+  // round_trip.distance × (Ziel/Ist). Homt zuverlässig aufs Ziel ohne Region-
+  // Tuning; kostet nur bei Bedarf einen Extra-Batch (Latenz bleibt < 10s).
+  if (isRoundTrip && req.target_distance_km && effectiveDistanceKm) {
+    const okResults = parallel
+      .map((p) => p.result)
+      .filter((r): r is RouteResult => !('error' in r));
+    if (okResults.length > 0) {
+      const best = okResults.reduce((a, b) =>
+        Math.abs(a.distanceKm - targetKm) < Math.abs(b.distanceKm - targetKm) ? a : b
+      );
+      const deltaRatio = Math.abs(best.distanceKm - targetKm) / targetKm;
+      if (deltaRatio > 0.15 && best.distanceKm > 1) {
+        const corrected = Math.max(
+          targetKm * 0.5,
+          Math.min(targetKm * 2.5, effectiveDistanceKm * (targetKm / best.distanceKm)),
+        );
+        console.log(
+          `[DIST-CORRECT] best=${best.distanceKm.toFixed(1)}km vs target=${targetKm}km → re-request ${corrected.toFixed(1)}km`,
+        );
+        effectiveDistanceKm = corrected;
+        const corrective = await tryServerWithProfile(
+          serverChoice.primary,
+          usedProfileFallback ? 'motorcycle_entdecker' : profile,
+        );
+        parallel = parallel.concat(corrective);
+      }
+    }
+  }
+
   // 2026-05-21 (vucko): Style-Quality-Scoring damit Sport nicht zu wenig
   // Kurven hat. Berechnet turn-count und shape-quality. Bei profile-specific
   // Minimum unterschritten → Penalty im Score, nicht hard reject.
@@ -1279,10 +1367,24 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
     const speedPenalty = isUnreasonablySlow
       ? 60 + Math.min(20, speedDeficit * 0.8)
       : Math.min(25, speedDeficit * 1.5);
+    // 2026-06-03 (vucko): Autobahn- + U-Turn-Penalty im Best-of-N. Diese
+    // Fallback-Auswahl greift nur, wenn KEIN Kandidat „acceptable" war — dann
+    // trotzdem den mit am wenigsten Autobahn/U-Turns nehmen. highwayPenalty 1000
+    // = effektiv Hard-Reject (Motorway nur wenn buchstäblich nichts anderes).
+    const usesMotorway = c.result.meta.uses_motorway === true;
+    const uTurns = (c.result.meta.u_turn_count as number | undefined) ?? 0;
+    const highwayPenalty = ((req.avoid_highways ?? false) && usesMotorway) ? 1000 : 0;
+    // 2026-06-03 (vucko): 40 war zu hart — ein einzelner U-Turn überstimmte
+    // einen großen Distanz-Fehler (Feldkirch 50km: sauberer 40km-Untertreffer
+    // [deltaPct 20] schlug die korrigierte 50km-Route mit 1 U-Turn [Score 40]).
+    // 18/U-Turn: ein U-Turn ist ~18% Distanz-Miss „wert" — so kann die adaptive
+    // Distanz-Korrektur gewinnen, ohne dass U-Turns wahllos zurückkommen (die
+    // 75/100km-Fälle haben ohnehin NUR U-Turn-Kandidaten → unverändert).
+    const uTurnPenalty = uTurns * 18;
     return {
       ...c, turns, turnsPerKm, stylePenalty, speedPenalty, avgSpeedKmh,
       isUnreasonablySlow,
-      score: c.deltaPct + stylePenalty + speedPenalty,
+      score: c.deltaPct + stylePenalty + speedPenalty + highwayPenalty + uTurnPenalty,
     };
   });
 

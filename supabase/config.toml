@@ -398,6 +398,17 @@ entrypoint = "./functions/generate-cruise-route/index.ts"
 # For example, if you want to serve static HTML pages in your function:
 # static_files = [ "./functions/generate-cruise-route/*.html" ]
 
+# 2026-06-03 (vucko): v2 GraphHopper-Adapter. KRITISCH verify_jwt = false —
+# die Edge ist zustandslose Routenberechnung (kein Supabase-Client, keine
+# Auth/DB-Writes) und MUSS mit dem Publishable-Key + abgelaufenen User-Tokens
+# erreichbar bleiben. Fehlte dieser Block → Deploy-Default verify_jwt = true
+# → Gateway wies den Publishable-Key als „Invalid JWT" ab → „keine Route" auf
+# dem Gerät (im Simulator mit frischer Session unsichtbar). Niemals entfernen.
+[functions.generate-cruise-route-v2]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/generate-cruise-route-v2/index.ts"
+
 [functions.process-route-seed-jobs]
 enabled = true
 verify_jwt = false
