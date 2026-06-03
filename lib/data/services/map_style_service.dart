@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'dart:io';
 
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:path_provider/path_provider.dart';
@@ -35,6 +37,38 @@ class MapStyleService {
 
   bool _downloadInProgress = false;
   bool get isDownloading => _downloadInProgress;
+
+  /// Lädt den DACH-Raum automatisch offline (User-Wunsch „automatisch"). NUR
+  /// über WLAN (kein Mobilfunk-Volumen). Auf `false` setzen, um den
+  /// automatischen ~mehrere-GB-Download zu deaktivieren (manuell via
+  /// [downloadDach] bleibt möglich).
+  static const bool autoDownloadEnabled = true;
+
+  /// Startet den DACH-Offline-Download automatisch, wenn sinnvoll: aktiviert,
+  /// noch nicht geladen, nicht schon laufend, und auf WLAN. Fire-and-forget —
+  /// blockiert nichts. MapLibre cached parallel ohnehin jede geladene Kachel.
+  Future<void> maybeAutoDownloadDach() async {
+    if (!autoDownloadEnabled || _downloadInProgress) return;
+    try {
+      if (await isDachDownloaded()) return;
+      final conn = await Connectivity().checkConnectivity();
+      if (!conn.contains(ConnectivityResult.wifi)) {
+        debugPrint('[MapStyle] Auto-DACH-Download übersprungen (kein WLAN).');
+        return;
+      }
+    } catch (_) {
+      return;
+    }
+    debugPrint('[MapStyle] Auto-DACH-Offline-Download startet (WLAN)…');
+    unawaited(downloadDach(onProgress: (received, total) {
+      // Grob alle ~100 MB loggen.
+      if (received % (100 * 1024 * 1024) < (2 * 1024 * 1024)) {
+        final mb = (received / 1024 / 1024).round();
+        final totalMb = total > 0 ? (total / 1024 / 1024).round() : -1;
+        debugPrint('[MapStyle] DACH offline: $mb${totalMb > 0 ? '/$totalMb' : ''} MB');
+      }
+    }));
+  }
 
   Future<File> _localFile() async {
     final dir = await getApplicationSupportDirectory();

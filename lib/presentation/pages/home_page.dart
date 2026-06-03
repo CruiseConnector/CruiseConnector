@@ -8,6 +8,7 @@ import 'package:provider/provider.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/application/providers/community_provider.dart';
 import 'package:cruise_connect/data/services/offline_map_service.dart';
+import 'package:cruise_connect/data/services/map_style_service.dart';
 import 'package:cruise_connect/data/services/notification_service.dart';
 import 'package:cruise_connect/data/services/push_notification_service.dart';
 import 'package:cruise_connect/presentation/pages/home_content_page.dart';
@@ -58,6 +59,10 @@ class _HomePageState extends State<HomePage> {
 
   Future<void> _prewarmOfflineMapRegion() async {
     if (kIsWeb) return;
+    // 2026-06-03 (vucko): DACH automatisch offline laden (User-Wunsch) — nur
+    // über WLAN, resumierbar, im Hintergrund. Sobald lokal, rendert MapLibre die
+    // ganze DACH-Karte ohne Netz. Deaktivieren via MapStyleService.autoDownloadEnabled.
+    unawaited(MapStyleService.instance.maybeAutoDownloadDach());
     try {
       // 2026-06-01 (vucko): Zuerst prüfen, welche Tile-Quelle aktiv ist
       // (self-hosted CDN wenn erreichbar, sonst Mapbox-Fallback) — DANN cachen,
