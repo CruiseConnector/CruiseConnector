@@ -822,8 +822,8 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
   // Racer bricht Verlierer ab, sobald ein sauberer da ist → Latenz bleibt < 10s.
   const maxAttempts = isRoundTrip
     ? (isAlpineHotspot
-        ? (needsDiversity ? 6 : 5)
-        : (needsDiversity ? 8 : 6))
+        ? (needsDiversity ? 8 : 7)
+        : (needsDiversity ? 10 : 8))
     : (hasExplicitWaypoints ? 1 : Math.max(13, detourSpec.length || 13));
   const targetKm = req.target_distance_km ?? 50;
   const candidates: Array<{ result: RouteResult; deltaPct: number; seed: number; isDup: boolean }> = [];
@@ -888,8 +888,11 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
         // 2026-06-03 (vucko): „Autobahn aus" heißt KEINE Autobahn. Ein Kandidat
         // mit Motorway ist niemals akzeptabel wenn avoid_highways gesetzt ist.
         if ((req.avoid_highways ?? false) && r.meta.uses_motorway === true) return false;
-        // 2026-06-03 (vucko): hässliche U-Turns hart aussortieren — lieber ein
-        // anderer Seed (mehrere laufen parallel) als ein U-Turn in der Route.
+        // 2026-06-03 (vucko): Racer schließt NUR auf einer 0-U-Turn-Route kurz
+        // (die ideale). Gibt es keine, sammelt er alle und das nicht-lineare
+        // Best-of-N-Scoring wählt den Fallback: 0 < 1 (Kosten 14) < 2 (250). So
+        // bevorzugen wir 0-U-Turn, fallen auf 1 zurück und liefern NIE eine
+        // ≥2-U-Turn-Route (die der Client hart wegwirft → „keine Route").
         if (((r.meta.u_turn_count as number | undefined) ?? 0) > 0) return false;
         if (previousFps.has(r.fingerprint)) return false; // Duplikat → nächster Seed
         const deltaPct = Math.abs(r.distanceKm - targetKm) / targetKm * 100;
@@ -1374,13 +1377,20 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
     const usesMotorway = c.result.meta.uses_motorway === true;
     const uTurns = (c.result.meta.u_turn_count as number | undefined) ?? 0;
     const highwayPenalty = ((req.avoid_highways ?? false) && usesMotorway) ? 1000 : 0;
-    // 2026-06-03 (vucko): 40 war zu hart — ein einzelner U-Turn überstimmte
-    // einen großen Distanz-Fehler (Feldkirch 50km: sauberer 40km-Untertreffer
-    // [deltaPct 20] schlug die korrigierte 50km-Route mit 1 U-Turn [Score 40]).
-    // 18/U-Turn: ein U-Turn ist ~18% Distanz-Miss „wert" — so kann die adaptive
-    // Distanz-Korrektur gewinnen, ohne dass U-Turns wahllos zurückkommen (die
-    // 75/100km-Fälle haben ohnehin NUR U-Turn-Kandidaten → unverändert).
-    const uTurnPenalty = uTurns * 18;
+    // 2026-06-03 (vucko KRITISCH): NICHT-linearer U-Turn-Penalty, an die
+    // CLIENT-Akzeptanz angepasst. Der Flutter-Validator (route_quality_validator
+    // hardUturnFailure) wirft Rundkurse mit ≥2 U-Turns HART weg → die Edge darf
+    // solche Routen nie als beste liefern, sonst „keine Route" (genau der vom
+    // User gemeldete Fehlschlag bei Inland/Sport 100km). Darum:
+    //   0 U-Turns → 0   (ideal)
+    //   1 U-Turn  → 14  (mild; Client akzeptiert, Distanz-Korrektur darf gewinnen)
+    //   ≥2 U-Turns → 250+  (quasi Hard-Reject — nur wenn buchstäblich nichts
+    //                       anderes existiert, dann lieber als NO_ROUTE)
+    const uTurnPenalty = uTurns === 0
+        ? 0
+        : uTurns === 1
+        ? 14
+        : 250 + (uTurns - 2) * 120;
     return {
       ...c, turns, turnsPerKm, stylePenalty, speedPenalty, avgSpeedKmh,
       isUnreasonablySlow,
