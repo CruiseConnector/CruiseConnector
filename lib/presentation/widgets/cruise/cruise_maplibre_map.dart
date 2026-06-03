@@ -120,6 +120,20 @@ class CruiseMapLibreController {
       ),
     );
   }
+
+  /// Sichtbarer Kartenausschnitt als [southwest, northeast] in latlong2-Koords.
+  /// Hält die maplibre-Typen aus den Aufrufern heraus (kein LatLng-Konflikt).
+  Future<List<ll.LatLng>?> visibleBounds() async {
+    try {
+      final r = await _map.getVisibleRegion();
+      return [
+        ll.LatLng(r.southwest.latitude, r.southwest.longitude),
+        ll.LatLng(r.northeast.latitude, r.northeast.longitude),
+      ];
+    } catch (_) {
+      return null;
+    }
+  }
 }
 
 /// Die self-contained MapLibre-Karte für CruiseConnect.

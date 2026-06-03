@@ -67,6 +67,7 @@ import 'package:cruise_connect/presentation/widgets/cruise/cruise_setup_card.dar
 import 'package:cruise_connect/presentation/widgets/cruise/drive_control_panel.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/routing_onboarding_sheet.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/construction_alert_sheet.dart';
+import 'package:cruise_connect/presentation/widgets/cruise/cruise_maplibre_map.dart';
 import 'package:cruise_connect/domain/models/construction_report.dart';
 import 'package:cruise_connect/data/services/construction_geofence.dart';
 import 'package:cruise_connect/data/services/construction_report_service.dart';
@@ -305,6 +306,13 @@ class _CruiseModePageState extends State<CruiseModePage>
   Timer? _routeSearchExitTimer;
   int _routeLoadingPhaseIndex = 0;
   final MapController _mapController = MapController();
+  // 2026-06-03 (vucko): MapLibre GL Native als neue Karten-Engine — Mapbox-Look,
+  // GPU-flüssig, rendert PMTiles KORREKT (kein vector_tile_renderer-Stottern/
+  // Muster). `_useMapLibre` schaltet zwischen neuer MapLibre-Karte und alter
+  // flutter_map-Karte um → sofortiges Sicherheitsnetz, falls auf dem Gerät in
+  // der Navigation etwas hakt (der eingeloggte Screen war am Sim nicht testbar).
+  static const bool _useMapLibre = true;
+  CruiseMapLibreController? _mlController;
   bool _mapReady = false;
   final List<LatLng> _roundTripWaypoints = [];
   int? _selectedRoundTripWaypointIndex;
@@ -431,12 +439,9 @@ class _CruiseModePageState extends State<CruiseModePage>
   static const double _routeRedrawDistanceMeters = 5.0;
   double _totalDistanceDriven = 0.0; // Gesamte gefahrene Strecke in Metern
   DateTime? _navigationStartTime; // Zeitpunkt des Navigations-Starts
-  // 2026-06-02 (vucko): „Fährt der User gerade WIRKLICH?" — erst nach
-  // „Fahrt starten" (bzw. Simulation) gesetzt, in der Route-VORSCHAU noch null.
-  // Steuert den Karten-Render-Modus: nur beim echten Fahren Raster (flüssig),
-  // sonst Vektor (scharf) — die Vorschau soll nie im Raster-„Schlieren-Look"
-  // laden.
-  bool get _isActivelyDriving => _navigationStartTime != null;
+  // 2026-06-03 (vucko): Getter _isActivelyDriving entfernt — die Karte rendert
+  // jetzt IMMER im Raster-Modus (flüssig + einheitlich), nicht mehr abhängig vom
+  // Fahr-Status. _navigationStartTime bleibt für _isActivelyDrivingRoute aktiv.
   int _xpStreakDays = 1;
   bool _driveSessionRecordedForCompletion = false;
   double?
@@ -1723,13 +1728,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     final offsetLat = lat + _forwardOffsetLat(heading);
     final offsetLng = lng + _forwardOffsetLng(heading);
 
-    try {
-      _mapController.moveAndRotate(
-        LatLng(offsetLat, offsetLng),
-        16.5,
-        -heading,
-      );
-    } catch (_) {}
+    _camMoveRotate(offsetLat, offsetLng, 16.5, heading);
   }
 
   /// Startet eine animierte Kamera-Bewegung von der aktuellen zur neuen Position.
@@ -2052,7 +2051,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     _resetGeneratedRouteUiState();
   }
 
-  void _handleMapTap(TapPosition tapPosition, LatLng point) {
+  void _handleMapTap(TapPosition? tapPosition, LatLng point) {
     if (_isLoading || _isRouteConfirmed) return;
     // 2026-05-28 (vucko): "Standort wählen" — Karten-Tap setzt den Startpunkt.
     if (_isPickingStartOnMap) {
@@ -4216,6 +4215,223 @@ class _CruiseModePageState extends State<CruiseModePage>
   // ═══════════════════════ MAP WIDGET (flutter_map) ════════════════════════
 
   Widget _buildMapWidget() {
+    if (_useMapLibre) return _buildMapLibreMap();
+    return _buildFlutterMap();
+  }
+
+  // ───────────────────── MapLibre-Kamera-Adapter ─────────────────────────────
+  // Bilden die wenigen MapController-Aufrufe nach und dispatchen je nach Engine,
+  // damit die Aufrufstellen identisch bleiben.
+  void _camMoveRotate(double lat, double lng, double zoom, double headingDeg) {
+    if (_useMapLibre) {
+      // MapLibre bearing = Kompassrichtung der Kamera = heading (Fahrtrichtung
+      // oben). Instantes moveCamera pro Tick (der Smoother interpoliert bereits).
+      _mlController?.moveTo(lat: lat, lng: lng, zoom: zoom, bearing: headingDeg);
+    } else {
+      try {
+        _mapController.moveAndRotate(LatLng(lat, lng), zoom, -headingDeg);
+      } catch (_) {}
+    }
+  }
+
+  void _camMove(double lat, double lng, double zoom, {bool animate = true}) {
+    if (_useMapLibre) {
+      if (animate) {
+        _mlController?.animateTo(lat: lat, lng: lng, zoom: zoom);
+      } else {
+        _mlController?.moveTo(lat: lat, lng: lng, zoom: zoom);
+      }
+    } else {
+      try {
+        _mapController.move(LatLng(lat, lng), zoom);
+      } catch (_) {}
+    }
+  }
+
+  void _camFitBounds(List<LatLng> points, EdgeInsets padding) {
+    if (points.length < 2) return;
+    if (_useMapLibre) {
+      _mlController?.fitBounds(points, padding: padding);
+    } else {
+      try {
+        _mapController.fitCamera(
+          CameraFit.bounds(
+            bounds: LatLngBounds.fromPoints(points),
+            padding: padding,
+          ),
+        );
+      } catch (_) {}
+    }
+  }
+
+  // ───────────────────── MapLibre-Karte (neue Engine) ────────────────────────
+  Widget _buildMapLibreMap() {
+    return CruiseMapLibreMap(
+      initialCenter: const LatLng(51.165691, 10.451526),
+      initialZoom: 6.0,
+      lines: _buildMapLibreLines(),
+      markers: _buildMapLibreMarkers(),
+      onControllerReady: (c) {
+        _mlController = c;
+        if (!_mapReady) _onMapReady();
+      },
+      onMapClick: (p) => _handleMapTap(null, p),
+      onCameraMoved: () {
+        if (_isCameraLocked && _isRouteConfirmed) {
+          _safeSetState(() => _isCameraLocked = false);
+        }
+        _scheduleViewportPoiRefresh();
+      },
+    );
+  }
+
+  List<CruiseMapLine> _buildMapLibreLines() {
+    final accent = AppAccentColors.accent;
+    final lines = <CruiseMapLine>[];
+    // Gesamt-Route als gedimmter Hintergrund (während Navigation).
+    if (_isRouteConfirmed && _fullRouteBackgroundLatLngs.length >= 2) {
+      lines.add(CruiseMapLine(
+        points: List<LatLng>.from(_fullRouteBackgroundLatLngs),
+        color: accent,
+        opacity: 0.28,
+        width: 3,
+      ));
+    }
+    // Aktive Route: Glow + Hauptlinie.
+    if (_routeLatLngs.length >= 2) {
+      lines.add(CruiseMapLine(
+        points: List<LatLng>.from(_routeLatLngs),
+        color: accent,
+        opacity: 0.30,
+        width: 12,
+        blur: 2,
+      ));
+      lines.add(CruiseMapLine(
+        points: List<LatLng>.from(_routeLatLngs),
+        color: accent,
+        width: 5,
+      ));
+    }
+    return lines;
+  }
+
+  List<CruiseMapMarker> _buildMapLibreMarkers() {
+    final markers = <CruiseMapMarker>[];
+    final pointToPointDestination = _pointToPointDestinationMarkerPoint;
+    final activeRouteEnd = _activeRouteEndMarkerPoint;
+
+    if (_userLocation != null && !_isRouteConfirmed) {
+      markers.add(CruiseMapMarker(
+        id: 'user-loc',
+        position: LatLng(_userLocation!.latitude, _userLocation!.longitude),
+        width: _puckSize,
+        height: _puckSize,
+        child: _buildLocationPuck(_userHeading),
+      ));
+    }
+    if (_pickedStartLocation != null &&
+        _selectedLocation == 'Standort wählen' &&
+        !_isRouteConfirmed) {
+      markers.add(CruiseMapMarker(
+        id: 'picked-start',
+        position: _pickedStartLocation!,
+        width: 46,
+        height: 56,
+        alignment: Alignment.topCenter,
+        child: _buildPickedStartMarker(),
+      ));
+    }
+    if (_isWaypointPlanning && _roundTripWaypoints.isNotEmpty) {
+      for (var i = 0; i < _roundTripWaypoints.length; i++) {
+        markers.add(CruiseMapMarker(
+          id: 'wp-$i',
+          position: _roundTripWaypoints[i],
+          width: 44,
+          height: 44,
+          child: GestureDetector(
+            onTap: _isLoading ? null : () => _selectRoundTripWaypoint(i),
+            onLongPress: _isLoading ? null : () => _deleteRoundTripWaypoint(i),
+            child: _buildWaypointMarker(
+              i + 1,
+              selected: _selectedRoundTripWaypointIndex == i,
+              replacing: _replaceRoundTripWaypointIndex == i,
+            ),
+          ),
+        ));
+      }
+    }
+    if (pointToPointDestination != null) {
+      markers.add(CruiseMapMarker(
+        id: 'p2p-dest',
+        position: pointToPointDestination,
+        width: 44,
+        height: 44,
+        child: _buildDestinationMarker(),
+      ));
+    }
+    if (activeRouteEnd != null) {
+      markers.add(CruiseMapMarker(
+        id: 'route-end',
+        position: activeRouteEnd,
+        width: 46,
+        height: 46,
+        child: _buildDestinationMarker(),
+      ));
+    }
+    for (final poi in _routePois) {
+      markers.add(CruiseMapMarker(
+        id: 'poi-${poi.latitude},${poi.longitude}',
+        position: LatLng(poi.latitude, poi.longitude),
+        width: 36,
+        height: 36,
+        child: GestureDetector(
+          onTap: () => _showPoiInfoCard(poi),
+          child: _buildPoiMarker(poi),
+        ),
+      ));
+    }
+    for (final c in _routeConstructions) {
+      markers.add(CruiseMapMarker(
+        id: 'cons-${c.latitude},${c.longitude}',
+        position: LatLng(c.latitude, c.longitude),
+        width: 40,
+        height: 40,
+        child: GestureDetector(
+          onTap: () => ConstructionAlertSheet.show(context, c),
+          child: _buildConstructionMarker(c),
+        ),
+      ));
+    }
+    if (_userPosition != null && _isRouteConfirmed) {
+      // Bei gesperrter Navi-Kamera dreht die MapLibre-Karte bereits per
+      // bearing=heading (Fahrtrichtung oben) → der Screen-Overlay-Puck zeigt
+      // gerade nach oben (0). Bei freigegebener Kamera (User hat gepannt) zeigt
+      // er die echte Fahrtrichtung relativ zur (north-up) Karte.
+      markers.add(CruiseMapMarker(
+        id: 'user-pos',
+        position: _userPosition!,
+        width: _puckSize,
+        height: _puckSize,
+        child: _buildLocationPuck(_isCameraLocked ? 0.0 : _userHeading),
+      ));
+    }
+    if (widget.groupId != null && _groupMembers.isNotEmpty) {
+      for (final entry in _groupMembers.entries) {
+        final m = entry.value;
+        if (!_hasGroupMemberLocation(m)) continue;
+        markers.add(CruiseMapMarker(
+          id: 'grp-${entry.key}',
+          position: LatLng(m.currentLat!, m.currentLng!),
+          width: 40,
+          height: 40,
+          child: _buildGroupMemberMarker(m),
+        ));
+      }
+    }
+    return markers;
+  }
+
+  Widget _buildFlutterMap() {
     final pointToPointDestination = _pointToPointDestinationMarkerPoint;
     final activeRouteEnd = _activeRouteEndMarkerPoint;
     return FlutterMap(
@@ -4261,15 +4477,15 @@ class _CruiseModePageState extends State<CruiseModePage>
         // Hintergrundfarbe) sie nahtlos ab. Nur ~43 MB, Egress via R2 gratis.
         if (_worldPmtilesProvider != null)
           VectorTileLayer(
-            key: ValueKey(
-              _isActivelyDriving ? 'vtl-world-raster' : 'vtl-world-vector',
-            ),
+            // 2026-06-03 (vucko): IMMER Raster-Modus (nicht nur beim Fahren).
+            // Live-Vektor-Rendering ruckelte beim Planen/Schwenken auf dem Gerät
+            // (CPU-schwer). Rasterisierte Tiles werden gecacht → flüssig überall.
+            // Konstanter Key → kein Layer-Rebuild/Flash beim Fahrt-Start.
+            key: const ValueKey('vtl-world-raster'),
             tileProviders: TileProviders({'protomaps': _worldPmtilesProvider!}),
             theme: _cruiseMapTheme,
             tileOffset: TileOffset.DEFAULT,
-            layerMode: _isActivelyDriving
-                ? VectorTileLayerMode.raster
-                : VectorTileLayerMode.vector,
+            layerMode: VectorTileLayerMode.raster,
             maximumTileSubstitutionDifference: 3,
             concurrency: 4,
           ),
@@ -4279,20 +4495,17 @@ class _CruiseModePageState extends State<CruiseModePage>
         // damit die Karte IMMER funktioniert.
         if (_pmtilesProvider != null)
           VectorTileLayer(
-            // 2026-06-02 (vucko): HYBRID-Render-Modus (User-Wahl).
-            // Während aktiver Navigation (Route bestätigt) = RASTER → maximal
-            // flüssig beim Fahren & Zoomen (Doku: "best frame rate"). Beim
-            // Planen/Stillstand = VEKTOR → gestochen scharf bei jeder Zoomstufe.
-            // Der ValueKey erzwingt den Layer-Rebuild beim Moduswechsel; der
-            // Übergang (kurzes Tile-Nachladen) passiert nur 1× pro Fahrtstart,
-            // nicht bei jeder Geste → keine teuren Dauer-Rebuilds.
-            key: ValueKey(_isActivelyDriving ? 'vtl-raster' : 'vtl-vector'),
+            // 2026-06-03 (vucko): IMMER Raster-Modus + konstanter Key.
+            // Vorher hybrid (vector beim Planen, raster beim Fahren) — der
+            // Vektor-Modus ruckelte beim Schwenken auf dem Gerät, und der
+            // Wechsel verursachte einen Tile-Reload-Flash. Raster überall =
+            // flüssig + einheitlich, minimal weniger scharf beim Zwischenzoom
+            // (akzeptabler Trade-off fürs Cruisen).
+            key: const ValueKey('vtl-raster'),
             tileProviders: TileProviders({'protomaps': _pmtilesProvider!}),
             theme: _cruiseMapTheme,
             tileOffset: TileOffset.DEFAULT,
-            layerMode: _isActivelyDriving
-                ? VectorTileLayerMode.raster
-                : VectorTileLayerMode.vector,
+            layerMode: VectorTileLayerMode.raster,
             maximumTileSubstitutionDifference: 3,
             concurrency: 4,
           )
@@ -5139,7 +5352,7 @@ class _CruiseModePageState extends State<CruiseModePage>
   void _setCameraToPosition(geo.Position position) {
     if (!_mapReady) return;
     try {
-      _mapController.move(LatLng(position.latitude, position.longitude), 13.0);
+      _camMove(position.latitude, position.longitude, 13.0);
     } catch (e) {
       debugPrint('[CruiseMode] setCamera fehlgeschlagen: $e');
     }
@@ -6628,7 +6841,14 @@ class _CruiseModePageState extends State<CruiseModePage>
       if (_isWaypointRouteError(error)) {
         _showWaypointRouteStatusNotice(error as RouteServiceException);
       } else if (_isExpectedRoundTripRoutingStatus(error)) {
-        _showRoundTripRouteStatusNotice(error as RouteServiceException);
+        // 2026-06-02 (vucko): Eine Route IST sichtbar — der gescheiterte Versuch
+        // war nur eine Zusatzsuche. NIE „Keine passende Route gefunden / keine
+        // sichere Route" zeigen (das war die Kontradiktion im Screenshot: Banner
+        // über gültiger 47,4km-Route). Stattdessen neutrale Kopie.
+        _showRoundTripRouteStatusNotice(
+          error as RouteServiceException,
+          routeAlreadyVisible: true,
+        );
       }
       return;
     }
@@ -6685,12 +6905,32 @@ class _CruiseModePageState extends State<CruiseModePage>
         code == 'worker_resource_limit';
   }
 
-  void _showRoundTripRouteStatusNotice(RouteServiceException error) {
+  void _showRoundTripRouteStatusNotice(
+    RouteServiceException error, {
+    bool routeAlreadyVisible = false,
+  }) {
     if (!mounted || _disposed) return;
     final code =
         error.edgeMeta['response_code']?.toString() ??
         error.edgeMeta['code']?.toString();
     final healingQueued = _routeSearchHealingQueued(error);
+    // 2026-06-02 (vucko): Ist schon eine Route sichtbar, war dies nur eine
+    // ZUSATZsuche → niemals als Fehler framen („keine Route"). Neutrale,
+    // selbst-schließende Kopie, die NICHT der angezeigten Strecke widerspricht.
+    if (routeAlreadyVisible) {
+      _routeSearchExitTimer?.cancel();
+      _safeSetState(() {
+        _routeSearchProgress = 1.0;
+        _routeSearchStatusLeaving = false;
+        _routeSearchDismissScheduled = false;
+        _routeSearchNoticeTitle = 'Aktuelle Strecke bleibt';
+        _routeSearchNoticeMessage = healingQueued
+            ? 'Wir bereiten im Hintergrund neue Vorschläge vor.'
+            : 'Keine neue Variante gefunden — deine Route passt.';
+      });
+      _scheduleRouteSearchStatusDismiss(hold: const Duration(milliseconds: 1800));
+      return;
+    }
     final title = healingQueued
         ? 'Wir bereiten bessere Routen vor'
         : code == 'search_in_progress'
@@ -7849,11 +8089,9 @@ class _CruiseModePageState extends State<CruiseModePage>
               48.0,
               220.0,
             );
-        _mapController.fitCamera(
-          CameraFit.bounds(
-            bounds: bounds,
-            padding: EdgeInsets.fromLTRB(24, safeTop + 18, 24, bottomPad),
-          ),
+        _camFitBounds(
+          [bounds.southWest, bounds.northEast],
+          EdgeInsets.fromLTRB(24, safeTop + 18, 24, bottomPad),
         );
         debugPrint(
           '[CruiseMode] _drawRoute: Kamera auf Route-Bounds angepasst',
@@ -8951,10 +9189,16 @@ class _CruiseModePageState extends State<CruiseModePage>
     setState(() => _poisLoading = true);
     try {
       LatLngBounds? bounds;
-      try {
-        bounds = _mapController.camera.visibleBounds;
-      } catch (_) {
-        // MapController nicht ready — Fallback: 5km Radius um User-Position.
+      if (_useMapLibre) {
+        final b = await _mlController?.visibleBounds();
+        if (b != null) bounds = LatLngBounds(b[0], b[1]);
+      } else {
+        try {
+          bounds = _mapController.camera.visibleBounds;
+        } catch (_) {}
+      }
+      if (bounds == null) {
+        // Karte nicht ready — Fallback: ~5km Radius um User-Position.
         final user = _userLocation;
         if (user == null) return;
         bounds = LatLngBounds(
@@ -10085,7 +10329,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     final position = _userLocation;
     if (position == null || !_mapReady) return;
     try {
-      _mapController.move(LatLng(position.latitude, position.longitude), 16.0);
+      _camMove(position.latitude, position.longitude, 16.0);
     } catch (e) {
       debugPrint('[CruiseMode] Recenter fehlgeschlagen: $e');
     }
@@ -10103,12 +10347,9 @@ class _CruiseModePageState extends State<CruiseModePage>
       final routeLatLngs = _fullRouteCoordinates
           .map((c) => LatLng(c[1], c[0]))
           .toList();
-      final bounds = LatLngBounds.fromPoints(routeLatLngs);
-      _mapController.fitCamera(
-        CameraFit.bounds(
-          bounds: bounds,
-          padding: const EdgeInsets.fromLTRB(40, 80, 40, 160),
-        ),
+      _camFitBounds(
+        routeLatLngs,
+        const EdgeInsets.fromLTRB(40, 80, 40, 160),
       );
 
       // 4 Sekunden Übersicht anzeigen, dann zurück
@@ -10149,7 +10390,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     });
     try {
       // Kamera zur User-Position zoomen
-      _mapController.move(LatLng(position.latitude, position.longitude), 16.0);
+      _camMove(position.latitude, position.longitude, 16.0);
     } catch (e) {
       debugPrint('[CruiseMode] Navigations-Kamera setzen fehlgeschlagen: $e');
     }
