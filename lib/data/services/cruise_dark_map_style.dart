@@ -93,13 +93,18 @@ const Map<String, dynamic> cruiseDarkMapStyle = {
       'type': 'line',
       'source': 'protomaps',
       'source-layer': 'roads',
-      'filter': ['in', 'kind', 'minor_road', 'other', 'path'],
-      'minzoom': 12,
+      // 2026-06-03 (vucko): NUR echte Nebenstraßen — 'path' + 'other' (Wander-/
+      // Feld-/Forstwege) ENTFERNT, minzoom 12 → 13. Die zeichneten in alpinem
+      // Gelände ein dichtes Linien-Netz über alle Hänge (das „komische Muster"
+      // aus dem User-Screenshot Schwarzenberg/Bregenzerwald). Eine Cruise-Karte
+      // braucht keine Trampelpfade — nur befahrbare Straßen.
+      'filter': ['==', 'kind', 'minor_road'],
+      'minzoom': 13,
       'paint': {
-        'line-color': '#38404c',
+        'line-color': '#363e4a',
         'line-width': [
           'interpolate', ['linear'], ['zoom'],
-          12, 0.6, 14, 1.6, 16, 3.4, 20, 11.0,
+          13, 0.5, 15, 1.4, 16, 2.6, 20, 9.0,
         ],
       },
     },
