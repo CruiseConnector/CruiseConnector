@@ -40,6 +40,12 @@ dependencies:
   flutter_map: ^7.0.2
   # Koordinaten-Typ für flutter_map (LatLng)
   latlong2: ^0.9.1
+  # MapLibre GL Native — GPU-Rendering wie Mapbox GL (Open-Source-Fork). Rendert
+  # Vektor-Tiles KORREKT (kein opacity-0-Bug des flutter_map-vector_tile_renderer)
+  # und GPU-flüssig (kein Stottern). PMTiles-Support (remote + lokal/offline) +
+  # native Offline-Regionen. Löst cruise_mode_page schrittweise vom
+  # vector_tile_renderer ab. Ziel-Look: Mapbox Dark.
+  maplibre_gl: ^0.26.1
   http: ^1.6.0
   flutter_tts: ^4.2.5
   flutter_typeahead: ^5.2.0
@@ -115,6 +121,7 @@ flutter:
     - lib/images/
     - lib/images/badges/
     - assets/branding/
+    - assets/map/
   #   - images/a_dot_ham.jpeg
 
   # An image asset can refer to one or more resolution-specific "variants", see
