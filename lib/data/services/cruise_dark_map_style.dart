@@ -113,12 +113,19 @@ const Map<String, dynamic> cruiseDarkMapStyle = {
       'type': 'line',
       'source': 'protomaps',
       'source-layer': 'roads',
+      // 2026-06-03 (vucko): minzoom 12. medium_road hatte KEIN minzoom → in den
+      // Alpen ein dichtes Linien-Netz schon beim Überblick (z≈11, genau die
+      // User-Ansicht „Kontrast/Muster"). Bei Überblick (z<12) zeigt die Karte
+      // jetzt NUR earth (einheitlich) + Wasser + Grenzen + Haupt-/Autobahnen +
+      // Labels → garantiert clean, kein Web. Ab z12 (Detail/Routen-Inspektion)
+      // kommen die Nebenstraßen sauber dazu.
       'filter': ['==', 'kind', 'medium_road'],
+      'minzoom': 12,
       'paint': {
         'line-color': '#48515f',
         'line-width': [
           'interpolate', ['linear'], ['zoom'],
-          9, 0.6, 14, 2.4, 16, 5.0, 20, 16.0,
+          12, 0.8, 14, 2.4, 16, 5.0, 20, 16.0,
         ],
       },
     },
