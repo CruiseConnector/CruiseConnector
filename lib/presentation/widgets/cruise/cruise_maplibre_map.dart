@@ -1,9 +1,10 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart' show rootBundle;
 import 'package:latlong2/latlong.dart' as ll;
 import 'package:maplibre_gl/maplibre_gl.dart' as mb;
+
+import 'package:cruise_connect/data/services/map_style_service.dart';
 
 /// Ein Marker, der als echtes Flutter-Widget über der MapLibre-Karte schwebt.
 ///
@@ -181,7 +182,9 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap> {
   @override
   void initState() {
     super.initState();
-    rootBundle.loadString(widget.styleAsset).then((s) {
+    // Style via Service bauen: nutzt automatisch die LOKALEN PMTiles, wenn DACH
+    // offline geladen wurde — sonst remote von R2.
+    MapStyleService.instance.buildStyleString(asset: widget.styleAsset).then((s) {
       if (mounted) setState(() => _style = s);
     });
   }
