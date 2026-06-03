@@ -40,28 +40,12 @@ const Map<String, dynamic> cruiseDarkMapStyle = {
       'source-layer': 'earth',
       'paint': {'fill-color': '#0d1117'},
     },
-    // Flächen (Wald/Grün/Nutzung) nur bis Zoom 15 — darüber (Straßen-Level)
-    // würden die großen Polygone überzoomt als Schlieren gestreckt.
-    // 2026-06-02 (vucko): Flächen NAH an der Erdfarbe (#0d1117) gehalten —
-    // vorher hoben sich Wald-/Nutzungs-Polygone als deutliche hellere Blöcke
-    // ab („Kontrast-Flächen", User-markiert). Jetzt nur noch ein Hauch
-    // Unterschied → einheitlicher dunkler Look, Nebenstraßen bleiben sichtbar.
-    {
-      'id': 'landcover',
-      'type': 'fill',
-      'source': 'protomaps',
-      'source-layer': 'landcover',
-      'maxzoom': 15,
-      'paint': {'fill-color': '#0d1219', 'fill-opacity': 0.35},
-    },
-    {
-      'id': 'landuse',
-      'type': 'fill',
-      'source': 'protomaps',
-      'source-layer': 'landuse',
-      'maxzoom': 15,
-      'paint': {'fill-color': '#0e131b', 'fill-opacity': 0.28},
-    },
+    // 2026-06-03 (vucko): landcover + landuse Layer KOMPLETT ENTFERNT (nicht nur
+    // fill-opacity 0). Der vector_tile_renderer der App zeichnete die Wald-/
+    // Feld-Polygone TROTZ opacity 0 als helle, eckige Facetten auf den Hügeln
+    // (User-Screenshot „komische Muster/Kontraste"). Ein ENTFERNTER Layer kann
+    // gar nicht rendern → garantiert weg. Nur noch earth (einheitlich dunkel)
+    // + water + Straßen + Labels.
     {
       'id': 'water',
       'type': 'fill',
@@ -90,15 +74,17 @@ const Map<String, dynamic> cruiseDarkMapStyle = {
       // Regionsgrenzen (kind=region) raus, das war zu viel (User-Wunsch).
       'filter': ['in', 'kind', 'country', 'unrecognized_country'],
       'paint': {
-        // 2026-06-02 (vucko): noch erkennbarer — heller, breiter, dichtere
-        // Striche (mehr Linie/weniger Lücke), volle Deckkraft.
-        'line-color': '#b3bdce',
+        // 2026-06-03 (vucko): Grenze KLAR sichtbar, aber nicht grell. Weiß
+        // (#b3bdce) war zu hart, Schiefer-Grau (#2e3742@0.5) kaum erkennbar.
+        // Jetzt ein klares mittleres Grau-Blau, deutliche Striche, etwas breiter,
+        // fast volle Deckkraft → die Grenze CH/AT/DE/LI ist eindeutig erkennbar.
+        'line-color': '#8c99b3',
         'line-width': [
           'interpolate', ['linear'], ['zoom'],
-          3, 1.4, 6, 2.4, 9, 3.4, 13, 4.8,
+          3, 1.0, 6, 1.8, 9, 2.6, 13, 3.6,
         ],
-        'line-dasharray': [3, 1.1],
-        'line-opacity': 1.0,
+        'line-dasharray': [3, 2],
+        'line-opacity': 0.92,
       },
     },
     // ── Straßen: dunkel→hell nach Wichtigkeit, Breite bis Zoom 20 ──
