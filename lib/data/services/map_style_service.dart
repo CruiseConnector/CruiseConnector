@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
@@ -28,6 +29,13 @@ class MapStyleService {
       'pmtiles://https://pub-0535dd4f86054de1820907b6f06bf17c.r2.dev/dach.pmtiles';
   static const String _downloadUrl =
       'https://pub-0535dd4f86054de1820907b6f06bf17c.r2.dev/dach.pmtiles';
+
+  /// Optionaler Remote-Style auf Cloudflare (vom User hochgeladen). Wenn
+  /// vorhanden, wird er bevorzugt → Karten-Look ohne App-Release änderbar
+  /// (wie Mapbox-gehostete Styles). Fehlt er (404/kein Netz), nutzt die App den
+  /// gebündelten Style. Upload: `rclone copy assets/map/cruise_dark.json r2:<bucket>/`.
+  static const String _remoteStyleUrl =
+      'https://tiles.cruiseconnector.at/cruise_dark.json';
 
   static const String _localFileName = 'dach.pmtiles';
 
@@ -92,7 +100,7 @@ class MapStyleService {
   /// Baut den Style-JSON-String. Quelle = LOKALE PMTiles wenn vorhanden
   /// (offline), sonst remote von R2.
   Future<String> buildStyleString({String asset = _styleAsset}) async {
-    final raw = await rootBundle.loadString(asset);
+    final raw = await _loadBaseStyle(asset);
     try {
       if (await isDachDownloaded()) {
         final f = await _localFile();
@@ -104,6 +112,56 @@ class MapStyleService {
       debugPrint('[MapStyle] lokale PMTiles-Prüfung fehlgeschlagen: $e');
     }
     return raw;
+  }
+
+  /// Basis-Style: bevorzugt den von Cloudflare gespiegelten (remote
+  /// aktualisierbaren) Style aus dem lokalen Cache, sonst das App-Bundle. Liest
+  /// NUR lokal (kein Netz-Block beim Kartenstart) — der Remote-Style wird per
+  /// [refreshRemoteStyle] im Hintergrund aktualisiert.
+  Future<String> _loadBaseStyle(String asset) async {
+    try {
+      final cached = await _cachedRemoteStyleFile();
+      if (await cached.exists()) {
+        final body = await cached.readAsString();
+        if (body.trimLeft().startsWith('{') && body.contains('"layers"')) {
+          return body;
+        }
+      }
+    } catch (_) {
+      // Cache defekt/fehlt → Bundle.
+    }
+    return rootBundle.loadString(asset);
+  }
+
+  Future<File> _cachedRemoteStyleFile() async {
+    final dir = await getApplicationSupportDirectory();
+    return File('${dir.path}/offline_map/cruise_dark.remote.json');
+  }
+
+  /// Holt den Style von Cloudflare (falls dort hochgeladen) und cached ihn
+  /// lokal → wird beim nächsten Kartenstart verwendet. Fehlt die Datei auf R2
+  /// (404) oder kein Netz, bleibt es beim Bundle. Hintergrund, blockiert nichts.
+  Future<void> refreshRemoteStyle() async {
+    final client = HttpClient();
+    try {
+      final req = await client.getUrl(Uri.parse(_remoteStyleUrl));
+      final resp = await req.close();
+      if (resp.statusCode != HttpStatus.ok) return;
+      final body = await resp.transform(const Utf8Decoder()).join();
+      // Plausibilitätscheck: gültiges Style-JSON?
+      if (!body.trimLeft().startsWith('{') || !body.contains('"layers"')) {
+        return;
+      }
+      json.decode(body); // wirft bei kaputtem JSON → Bundle bleibt
+      final cached = await _cachedRemoteStyleFile();
+      await cached.parent.create(recursive: true);
+      await cached.writeAsString(body);
+      debugPrint('[MapStyle] Remote-Style von Cloudflare aktualisiert.');
+    } catch (_) {
+      // Kein Netz / 404 / kaputt → Bundle bleibt.
+    } finally {
+      client.close();
+    }
   }
 
   /// Lädt die DACH-PMTiles (ganz DACH offline) nach lokal — resumierbar über
