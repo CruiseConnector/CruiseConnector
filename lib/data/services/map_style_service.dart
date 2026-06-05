@@ -50,7 +50,10 @@ class MapStyleService {
   /// über WLAN (kein Mobilfunk-Volumen). Auf `false` setzen, um den
   /// automatischen ~mehrere-GB-Download zu deaktivieren (manuell via
   /// [downloadDach] bleibt möglich).
-  static const bool autoDownloadEnabled = true;
+  // 2026-06-05 (vucko): Auto-5GB-Download standardmäßig AUS. Ein stiller
+  // Mehrere-GB-Download beim App-Start kann den Gerätespeicher fluten/abstürzen.
+  // Offline-DACH bleibt manuell über downloadDach() (künftig Settings-Toggle).
+  static const bool autoDownloadEnabled = false;
 
   /// Startet den DACH-Offline-Download automatisch, wenn sinnvoll: aktiviert,
   /// noch nicht geladen, nicht schon laufend, und auf WLAN. Fire-and-forget —
@@ -123,7 +126,12 @@ class MapStyleService {
       final cached = await _cachedRemoteStyleFile();
       if (await cached.exists()) {
         final body = await cached.readAsString();
-        if (body.trimLeft().startsWith('{') && body.contains('"layers"')) {
+        // VOLLSTÄNDIG validieren — ein partiell geschriebener/korrupter Cache
+        // (Race mit refreshRemoteStyle) brachte MapLibre NATIV zum Abort
+        // (SIGABRT, EXC_CRASH). Nur bei sauber parsebarem Style-JSON verwenden,
+        // sonst Bundle. json.decode wirft bei halber Datei → catch → Bundle.
+        final parsed = json.decode(body);
+        if (parsed is Map && parsed['layers'] != null) {
           return body;
         }
       }
@@ -155,7 +163,11 @@ class MapStyleService {
       json.decode(body); // wirft bei kaputtem JSON → Bundle bleibt
       final cached = await _cachedRemoteStyleFile();
       await cached.parent.create(recursive: true);
-      await cached.writeAsString(body);
+      // Atomar schreiben (tmp + rename) → ein gleichzeitig lesender Kartenstart
+      // sieht NIE eine halbe Datei (sonst MapLibre-Abort, s. _loadBaseStyle).
+      final tmp = File('${cached.path}.tmp');
+      await tmp.writeAsString(body);
+      await tmp.rename(cached.path);
       debugPrint('[MapStyle] Remote-Style von Cloudflare aktualisiert.');
     } catch (_) {
       // Kein Netz / 404 / kaputt → Bundle bleibt.

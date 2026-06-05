@@ -212,7 +212,7 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap> {
 
   Future<void> _syncLines() async {
     final map = _map;
-    if (map == null) return;
+    if (!_styleLoaded || map == null) return;
     // Bestehende Linien entfernen, dann neu zeichnen (Routen ändern sich selten).
     try {
       await map.clearLines();
@@ -239,7 +239,11 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap> {
 
   Future<void> _projectMarkers() async {
     final map = _map;
-    if (map == null || widget.markers.isEmpty) {
+    // KRITISCH: keine Controller-Methode (toScreenLocationBatch) aufrufen, bevor
+    // der Style geladen ist. MapLibre wirft sonst nativ eine C++-Exception
+    // (SIGABRT) — von Dart NICHT fangbar → App-Crash. onCameraMove kann während
+    // des Karten-Setups schon feuern, daher dieser Gate.
+    if (!_styleLoaded || map == null || widget.markers.isEmpty) {
       if (_markerScreen.isNotEmpty && mounted) {
         setState(_markerScreen.clear);
       }
@@ -270,6 +274,9 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap> {
   }
 
   void _onCameraMove(mb.CameraPosition _) {
+    // Gate: vor Style-Load KEINE Controller-Aufrufe (siehe _projectMarkers) —
+    // sonst MapLibre-Abort. onCameraMove feuert teils schon beim Setup.
+    if (!_styleLoaded) return;
     // Während der Bewegung Marker mitführen (throttled über Frame-Coalescing
     // von setState). Linien sind GL-gerendert und brauchen kein Update.
     _projectMarkers();

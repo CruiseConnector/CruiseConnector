@@ -292,7 +292,15 @@ class _HomePageState extends State<HomePage> {
           refreshKey: _selectedIndex == 0 ? _refreshCounter : 0,
         ),
         CommunityPage(refreshKey: _selectedIndex == 1 ? _refreshCounter : 0),
-        const CruiseModePage(),
+        // 2026-06-05 (vucko): Cruise-Tab LAZY bauen (erst bei Besuch). Die
+        // MapLibre-Karte ist eine native Platform-View — wird sie im IndexedStack
+        // OFFSTAGE (Tab nicht sichtbar) gebaut, initialisiert die View mit
+        // 0-Größe und toScreenLocation wirft nativ (SIGABRT → App-Crash beim
+        // Start). _visitedTabs.add(2) passiert beim Tab-Tap UND beim pendingRoute
+        // → die Karte entsteht nur sichtbar. (Web-Tabs machen das schon so.)
+        _visitedTabs.contains(2)
+            ? const CruiseModePage()
+            : const SizedBox.shrink(),
         AnalyticsPage(refreshKey: _selectedIndex == 3 ? _refreshCounter : 0),
         ProfilePage(refreshKey: _selectedIndex == 4 ? _refreshCounter : 0),
       ],
