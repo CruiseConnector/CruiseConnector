@@ -179,7 +179,8 @@ class CruiseMapLibreMap extends StatefulWidget {
   State<CruiseMapLibreMap> createState() => _CruiseMapLibreMapState();
 }
 
-class _CruiseMapLibreMapState extends State<CruiseMapLibreMap> {
+class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
+    with WidgetsBindingObserver {
   mb.MapLibreMapController? _map;
   CruiseMapLibreController? _ctrl;
   String? _style;
@@ -214,10 +215,17 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap> {
   /// gleichzeitig in flight (sonst Platform-Channel-Pile-up → Marker-Trailing).
   bool _projecting = false;
   bool _projectPending = false;
+  // 2026-06-05 (vucko Crash-Fix): App-Lifecycle. Im Hintergrund/Inaktiv baut iOS
+  // den Metal-Renderer (CAMetalLayer-Drawable) ab — view-/quellen-abhängige Calls
+  // (toScreenLocationBatch, setGeoJsonSource, Kamera) würden dann nativ werfen
+  // (uncatchbarer C++-Throw → SIGABRT). Solange die App nicht „resumed" ist:
+  // ALLE solchen Calls gaten; beim Zurückkommen erst nach dem nächsten Frame.
+  bool _appResumed = true;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     // Sichtbarkeit SOFORT erkennen (kein 500ms-Default) → beim Tab-Wechsel wird
     // die Karte ohne Verzögerung als unsichtbar markiert, bevor ein GPS-Tick
     // einen view-abhängigen Call auf die offstage-View feuern kann.
@@ -231,10 +239,32 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _initialSyncFallback?.cancel();
     _initialSyncFallback = null;
     _ctrl?.active = false;
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    final resumed = state == AppLifecycleState.resumed;
+    if (resumed == _appResumed) return;
+    _appResumed = resumed;
+    if (!resumed) {
+      // Hintergrund/Inaktiv: keine view-/quellen-abhängigen Calls an die
+      // (Metal-)Karte mehr. Controller-Methoden gaten zusätzlich über `active`.
+      _ctrl?.active = false;
+      return;
+    }
+    // Zurück im Vordergrund: erst NACH dem nächsten Frame wieder syncen/projizieren
+    // (der Metal-Drawable muss sich neu aufbauen) — nicht synchron im selben Frame.
+    _ctrl?.active = _visible;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_appResumed || !_visible) return;
+      _syncLines();
+      _projectMarkers();
+    });
   }
 
   @override
@@ -373,6 +403,7 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap> {
     // Quell-Abriss während der Renderer arbeitet → kein C++-Throw mehr).
     if (!_styleLoaded ||
         !_visible ||
+        !_appResumed ||
         !_firstFrameSynced ||
         !_lineLayerReady ||
         map == null) {
@@ -417,6 +448,7 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap> {
     // des Karten-Setups schon feuern, daher dieser Gate.
     if (!_styleLoaded ||
         !_visible ||
+        !_appResumed ||
         !_firstFrameSynced ||
         map == null ||
         widget.markers.isEmpty) {
@@ -466,9 +498,9 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap> {
   }
 
   void _onCameraMove(mb.CameraPosition _) {
-    // Gate: nur sichtbar + nach Style-Load Controller-Aufrufe (siehe
+    // Gate: nur sichtbar + resumed + nach Style-Load Controller-Aufrufe (siehe
     // _projectMarkers) — sonst MapLibre-Abort.
-    if (!_styleLoaded || !_visible) return;
+    if (!_styleLoaded || !_visible || !_appResumed) return;
     // Während der Bewegung Marker mitführen (throttled über Frame-Coalescing
     // von setState). Linien sind GL-gerendert und brauchen kein Update.
     _projectMarkers();
