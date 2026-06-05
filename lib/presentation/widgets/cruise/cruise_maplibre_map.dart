@@ -191,7 +191,21 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap> {
 
   /// Aktuelle Bildschirmpositionen der Marker (id -> Offset in logischen Pixeln).
   final Map<String, Offset> _markerScreen = {};
-  final List<mb.Line> _glLines = [];
+  // 2026-06-05 (vucko Crash-Fix): Route-Linien laufen NICHT mehr über die
+  // Annotation-LineManager. clearLines()+addLine() baute die GeoJSON-Quelle bei
+  // JEDEM Sync live ab + neu auf → mbgl warf nativ eine C++-Exception SYNCHRON in
+  // onMethodCall (LineBucket/RenderLayer/updateTile) → std::terminate → SIGABRT,
+  // nur am Gerät + „manchmal" (exakt flutter-maplibre-gl #509 / maplibre-native
+  // #2467). Jetzt: EINE persistente GeoJSON-Quelle + Line-Layer, der NUR via
+  // setGeoJsonSource aktualisiert wird (kein remove/re-add der Quelle mehr).
+  static const String _lineSourceId = 'cruise-route-lines';
+  static const String _lineLayerId = 'cruise-route-lines-layer';
+  bool _lineLayerReady = false;
+  // View-/quellen-abhängige Calls (setGeoJsonSource, toScreenLocationBatch) erst
+  // NACH dem ersten gerenderten Frame (onCameraIdle) feuern — nicht direkt im
+  // onStyleLoaded, solange Renderer/Tiles noch nicht idle sind (sonst Throw).
+  bool _firstFrameSynced = false;
+  Timer? _initialSyncFallback;
   /// Signatur der zuletzt gezeichneten Linien — _syncLines (teures clearLines+
   /// addLine = voller GeoJSON-Source-Rebuild) läuft NUR bei echter Geometrie-
   /// Änderung, nicht bei jedem Parent-Rebuild/GPS-Tick (Task #4 Lag).
@@ -213,6 +227,14 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap> {
     MapStyleService.instance.buildStyleString(asset: widget.styleAsset).then((s) {
       if (mounted) setState(() => _style = s);
     });
+  }
+
+  @override
+  void dispose() {
+    _initialSyncFallback?.cancel();
+    _initialSyncFallback = null;
+    _ctrl?.active = false;
+    super.dispose();
   }
 
   @override
@@ -252,12 +274,83 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap> {
   Future<void> _onStyleLoaded() async {
     _styleLoaded = true;
     _ctrl?.active = _visible;
-    if (_visible) {
-      await _syncLines();
-      await _projectMarkers();
-    }
+    // Persistente Linien-Quelle + Layer EINMAL anlegen (idempotent). Danach wird
+    // NUR noch setGeoJsonSource aufgerufen — nie wieder remove/re-add.
+    await _ensureLineLayer();
+    // Quell-/View-abhängige Calls NICHT sofort feuern. Erst nach dem ersten
+    // onCameraIdle (Renderer hat einen Frame produziert). Fallback-Timer, falls
+    // onCameraIdle ausbleibt (z. B. statische Kamera ohne Bewegung).
+    _initialSyncFallback?.cancel();
+    _initialSyncFallback = Timer(const Duration(milliseconds: 700), () {
+      if (mounted) _runFirstSync();
+    });
     // Controller wird IMMER übergeben — seine Methoden sind selbst gegatet.
     if (mounted && _ctrl != null) widget.onControllerReady?.call(_ctrl!);
+  }
+
+  /// Legt die persistente Route-Linien-Quelle + den Line-Layer einmalig an.
+  /// Datengetriebene Paint-Properties (Farbe/Breite/Opazität/Blur kommen als
+  /// Feature-Properties) → ein Layer für alle Linien, kein Annotation-Churn.
+  Future<void> _ensureLineLayer() async {
+    final map = _map;
+    if (_lineLayerReady || map == null) return;
+    try {
+      // Reste eines früheren Style-Loads vorsorglich entfernen.
+      try {
+        await map.removeLayer(_lineLayerId);
+      } catch (_) {}
+      try {
+        await map.removeSource(_lineSourceId);
+      } catch (_) {}
+      await map.addSource(
+        _lineSourceId,
+        const mb.GeojsonSourceProperties(
+          data: <String, dynamic>{
+            'type': 'FeatureCollection',
+            'features': <dynamic>[],
+          },
+        ),
+      );
+      await map.addLineLayer(
+        _lineSourceId,
+        _lineLayerId,
+        const mb.LineLayerProperties(
+          lineColor: ['get', 'color'],
+          lineWidth: ['get', 'width'],
+          lineOpacity: ['get', 'opacity'],
+          lineBlur: ['get', 'blur'],
+          lineJoin: 'round',
+          lineCap: 'round',
+        ),
+      );
+      _lineLayerReady = true;
+    } catch (_) {
+      // Layer existiert evtl. schon — nicht fatal, der erste Sync greift trotzdem.
+      _lineLayerReady = true;
+    }
+  }
+
+  /// Erster Sync nach dem ersten gerenderten Frame — danach laufen Updates
+  /// regulär über didUpdateWidget / Sichtbarkeitswechsel.
+  void _runFirstSync() {
+    if (_firstFrameSynced) return;
+    _firstFrameSynced = true;
+    _initialSyncFallback?.cancel();
+    _initialSyncFallback = null;
+    if (_visible) {
+      _syncLines();
+      _projectMarkers();
+    }
+  }
+
+  void _onCameraIdle() {
+    // Erstes Idle nach Style-Load = Renderer hat einen Frame → ab jetzt erst
+    // Quell-/View-Calls. Vorher würde setGeoJsonSource/convert nativ werfen.
+    if (!_firstFrameSynced) {
+      _runFirstSync();
+      return;
+    }
+    _projectMarkers();
   }
 
   void _onVisibilityChanged(VisibilityInfo info) {
@@ -275,30 +368,44 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap> {
 
   Future<void> _syncLines() async {
     final map = _map;
-    if (!_styleLoaded || !_visible || map == null) return;
+    // Erst nach dem ersten Frame + wenn Layer bereit. KEIN clearLines/addLine
+    // mehr — nur die persistente Quelle in-place aktualisieren (kein nativer
+    // Quell-Abriss während der Renderer arbeitet → kein C++-Throw mehr).
+    if (!_styleLoaded ||
+        !_visible ||
+        !_firstFrameSynced ||
+        !_lineLayerReady ||
+        map == null) {
+      return;
+    }
     _lastLinesSig = _linesSignature();
-    // Bestehende Linien entfernen, dann neu zeichnen. Läuft dank Signatur-Gate
-    // (didUpdateWidget) nur bei echter Geometrie-Änderung, nicht pro Frame.
-    try {
-      await map.clearLines();
-    } catch (_) {}
-    _glLines.clear();
+    final features = <Map<String, dynamic>>[];
     for (final l in widget.lines) {
       if (l.points.length < 2) continue;
-      final line = await map.addLine(
-        mb.LineOptions(
-          geometry: l.points
-              .map((p) => mb.LatLng(p.latitude, p.longitude))
-              .toList(),
-          lineColor:
+      features.add({
+        'type': 'Feature',
+        'properties': {
+          'color':
               '#${(l.color.toARGB32() & 0xFFFFFF).toRadixString(16).padLeft(6, '0')}',
-          lineWidth: l.width,
-          lineOpacity: l.opacity,
-          lineJoin: 'round',
-          lineBlur: l.blur,
-        ),
+          'width': l.width,
+          'opacity': l.opacity,
+          'blur': l.blur,
+        },
+        'geometry': {
+          'type': 'LineString',
+          'coordinates': [
+            for (final p in l.points) [p.longitude, p.latitude],
+          ],
+        },
+      });
+    }
+    try {
+      await map.setGeoJsonSource(
+        _lineSourceId,
+        {'type': 'FeatureCollection', 'features': features},
       );
-      _glLines.add(line);
+    } catch (_) {
+      // Quelle noch nicht bereit / transienter Zustand — nächster Sync zieht nach.
     }
   }
 
@@ -308,7 +415,11 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap> {
     // der Style geladen ist. MapLibre wirft sonst nativ eine C++-Exception
     // (SIGABRT) — von Dart NICHT fangbar → App-Crash. onCameraMove kann während
     // des Karten-Setups schon feuern, daher dieser Gate.
-    if (!_styleLoaded || !_visible || map == null || widget.markers.isEmpty) {
+    if (!_styleLoaded ||
+        !_visible ||
+        !_firstFrameSynced ||
+        map == null ||
+        widget.markers.isEmpty) {
       if (_markerScreen.isNotEmpty && mounted) {
         setState(_markerScreen.clear);
       }
@@ -394,7 +505,7 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap> {
           onMapClick: (point, latLng) =>
               widget.onMapClick?.call(ll.LatLng(latLng.latitude, latLng.longitude)),
           onCameraMove: _onCameraMove,
-          onCameraIdle: _projectMarkers,
+          onCameraIdle: _onCameraIdle,
           ),
         ),
         // Marker-Overlay

@@ -51,10 +51,14 @@ class _HomePageState extends State<HomePage> {
       // neuen Einträgen anzeigen.
       _setupNotificationService();
     });
-    // 2026-05-22 (vucko): Pre-Warm SOFORT statt nach 2s Delay.
-    // User-Beschwerde: "Mapbox-Tiles laden teilweise lange, sieht nicht
-    // schön aus". Je früher der cache greift desto besser.
-    _prewarmOfflineMapRegion();
+    // 2026-06-05 (vucko Crash-Fix): Pre-Warm NICHT mehr sofort. Die schwere
+    // Download-/Cache-IO lief gleichzeitig mit dem ersten Karten-Öffnen und war
+    // der Geräte-Verstärker für den MapLibre-SIGABRT (GPU/IO-Druck genau dann,
+    // wenn der Renderer die Linien-Quelle aufbaut). Erst nach kurzer Idle-Phase,
+    // damit das erste Cruise-Öffnen race-frei bleibt.
+    unawaited(Future<void>.delayed(const Duration(seconds: 10)).then((_) {
+      if (mounted) _prewarmOfflineMapRegion();
+    }));
   }
 
   Future<void> _prewarmOfflineMapRegion() async {

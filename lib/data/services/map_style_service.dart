@@ -63,7 +63,14 @@ class MapStyleService {
   // Sicher: NUR WLAN, EINMALIG (isDachDownloaded-Guard), resumierbar (.part),
   // graceful (Abbruch/Speicher-voll → keine halbe Datei wird genutzt, kein
   // Crash). Auf false, falls der ~mehrere-GB-Download nicht gewünscht ist.
-  static const bool autoDownloadEnabled = true;
+  // 2026-06-05 (vucko Crash-Fix): AUS. Der gleichzeitig beim App-Start laufende
+  // 4,75-GB-Download war (mit dem Prewarm) der Geräte-Verstärker für den
+  // MapLibre-SIGABRT beim Karten-Öffnen (GPU/IO-Druck genau dann, wenn der
+  // Renderer die Linien-Quelle aufbaut). Zudem schaltet er die Karte auf die
+  // lokale 4,75-GB-PMTiles um — die geräte-spezifische Daten-Quelle, die der Sim
+  // nie hat. Auf Remote bleiben = wie der (nie crashende) Sim. Wieder
+  // einschaltbar, sobald der Download sicher OFF dem Karten-Öffnen-Pfad läuft.
+  static const bool autoDownloadEnabled = false;
 
   /// Startet den DACH-Offline-Download automatisch, wenn sinnvoll: aktiviert,
   /// noch nicht geladen, nicht schon laufend, und auf WLAN. Fire-and-forget —
