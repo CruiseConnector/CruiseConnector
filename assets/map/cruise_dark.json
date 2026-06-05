@@ -5,7 +5,7 @@
   "sources": {
     "protomaps": {
       "type": "vector",
-      "url": "pmtiles://https://pub-0535dd4f86054de1820907b6f06bf17c.r2.dev/dach.pmtiles",
+      "url": "pmtiles://https://tiles.cruiseconnector.at/dach.pmtiles",
       "attribution": "© OpenStreetMap"
     }
   },

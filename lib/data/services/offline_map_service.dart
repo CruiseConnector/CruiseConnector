@@ -60,7 +60,7 @@ class OfflineMapService {
   // eigenen Dark-Look sieht (nie die graue Mapbox-Karte), auch wenn die Vektor-
   // PMTiles gerade nicht laden.
   static const String cruiseRasterTileUrl =
-      'https://pub-0535dd4f86054de1820907b6f06bf17c.r2.dev/raster/{z}/{x}/{y}.png';
+      'https://tiles.cruiseconnector.at/raster/{z}/{x}/{y}.png';
 
   // 2026-06-01 (vucko): Self-hosted Tile-Quelle (Raster-Tiles aus einer
   // PMTiles-Datei auf einem CDN), um die teuren Mapbox-Tile-Requests abzulösen.
@@ -80,13 +80,13 @@ class OfflineMapService {
   // Bei Lade-/Render-Fehler nutzt die App weiter den Mapbox-Raster-Layer.
   // Leeren String setzen, um die Vektor-Quelle abzuschalten (→ Mapbox-Raster).
   static const String selfHostedPmtilesUrl =
-      'https://pub-0535dd4f86054de1820907b6f06bf17c.r2.dev/dach.pmtiles';
+      'https://tiles.cruiseconnector.at/dach.pmtiles';
 
   // 2026-06-02 (vucko): Welt-Übersicht z0–6 (~43 MB) als Unterlage unter den
   // DACH-Detail-Tiles. So kann man die GANZE Welt sehen/zoomen, während nur
   // DACH im Detail (z0–14) heruntergeladen ist. Egress über R2 = gratis.
   static const String selfHostedWorldPmtilesUrl =
-      'https://pub-0535dd4f86054de1820907b6f06bf17c.r2.dev/world_z6.pmtiles';
+      'https://tiles.cruiseconnector.at/world_z6.pmtiles';
 
   PmTilesVectorTileProvider? _pmtilesProvider;
   bool _pmtilesLoading = false;
@@ -108,7 +108,12 @@ class OfflineMapService {
     if (_pmtilesLoading) return null;
     _pmtilesLoading = true;
     try {
-      for (var attempt = 1; attempt <= 4 && _pmtilesProvider == null; attempt++) {
+      // 2026-06-03 (vucko): 4 → 8 Versuche + längerer Backoff. Scheitert der
+      // initiale Header-Read der 5GB-PMTiles (Netz-Hänger beim Start), blieb der
+      // Provider die GANZE Session null → stale Raster-Fallback (= die hellen
+      // „Spotlights") die ganze Zeit. Mehr/geduldigere Versuche → der saubere
+      // Vektor-Layer greift zuverlässiger, der Fallback erscheint seltener.
+      for (var attempt = 1; attempt <= 8 && _pmtilesProvider == null; attempt++) {
         try {
           _pmtilesProvider =
               await PmTilesVectorTileProvider.fromSource(selfHostedPmtilesUrl);
@@ -117,10 +122,10 @@ class OfflineMapService {
           }
         } catch (e) {
           if (kDebugMode) {
-            debugPrint('[OfflineMap] PMTiles Versuch $attempt/4 fehlgeschlagen: $e');
+            debugPrint('[OfflineMap] PMTiles Versuch $attempt/8 fehlgeschlagen: $e');
           }
-          if (attempt < 4) {
-            await Future<void>.delayed(Duration(milliseconds: 400 * attempt));
+          if (attempt < 8) {
+            await Future<void>.delayed(Duration(milliseconds: 500 * attempt));
           }
         }
       }

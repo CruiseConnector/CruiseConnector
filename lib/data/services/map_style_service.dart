@@ -25,10 +25,15 @@ class MapStyleService {
 
   /// Die remote PMTiles-Quelle, wie sie im Asset-Style steht (wird beim
   /// Offline-Modus durch die lokale Datei ersetzt).
+  // 2026-06-05 (vucko): Auf den eigenen CDN (tiles.cruiseconnector.at) migriert —
+  // konsistent mit OfflineMapService + CarPlay. r2.dev drosselt Range-Requests auf
+  // der 5GB-Datei (PMTiles-Header/Tiles laden über Ranges). WICHTIG: remoteDachSource
+  // MUSS byte-genau mit der `url` in assets/map/cruise_dark.json übereinstimmen,
+  // sonst greift der Offline-Swap (replaceAll) in buildStyleString nicht.
   static const String remoteDachSource =
-      'pmtiles://https://pub-0535dd4f86054de1820907b6f06bf17c.r2.dev/dach.pmtiles';
+      'pmtiles://https://tiles.cruiseconnector.at/dach.pmtiles';
   static const String _downloadUrl =
-      'https://pub-0535dd4f86054de1820907b6f06bf17c.r2.dev/dach.pmtiles';
+      'https://tiles.cruiseconnector.at/dach.pmtiles';
 
   /// Optionaler Remote-Style auf Cloudflare (vom User hochgeladen). Wenn
   /// vorhanden, wird er bevorzugt → Karten-Look ohne App-Release änderbar
@@ -63,14 +68,16 @@ class MapStyleService {
   // Sicher: NUR WLAN, EINMALIG (isDachDownloaded-Guard), resumierbar (.part),
   // graceful (Abbruch/Speicher-voll → keine halbe Datei wird genutzt, kein
   // Crash). Auf false, falls der ~mehrere-GB-Download nicht gewünscht ist.
-  // 2026-06-05 (vucko Crash-Fix): AUS. Der gleichzeitig beim App-Start laufende
-  // 4,75-GB-Download war (mit dem Prewarm) der Geräte-Verstärker für den
-  // MapLibre-SIGABRT beim Karten-Öffnen (GPU/IO-Druck genau dann, wenn der
-  // Renderer die Linien-Quelle aufbaut). Zudem schaltet er die Karte auf die
-  // lokale 4,75-GB-PMTiles um — die geräte-spezifische Daten-Quelle, die der Sim
-  // nie hat. Auf Remote bleiben = wie der (nie crashende) Sim. Wieder
-  // einschaltbar, sobald der Download sicher OFF dem Karten-Öffnen-Pfad läuft.
-  static const bool autoDownloadEnabled = false;
+  // 2026-06-05 (vucko Crash-Fix #2): WIEDER AN. Die ECHTE SIGABRT-Ursache war
+  // NICHT der Download, sondern addSource/addLineLayer vor dem ersten Frame
+  // (Redundant-Layer-Throw aus dem mbgl-Core) — gefixt in cruise_maplibre_map.dart
+  // (existenz-geprüft + erst nach erstem Frame) und on-device 18/18 + Bg/Fg
+  // verifiziert. Der frühere AUS-Schalter (d12d9d5) basierte auf der falschen
+  // Download-Verstärker-Hypothese. Download bleibt sicher: NUR WLAN, EINMALIG
+  // (isDachDownloaded-Guard), resumierbar (.part), graceful (Abbruch/Speicher-voll
+  // → keine halbe Datei wird genutzt), und läuft erst 10s nach App-Start
+  // (home_page Prewarm-Delay) → kollidiert nicht mehr mit dem Karten-Öffnen.
+  static const bool autoDownloadEnabled = true;
 
   /// Startet den DACH-Offline-Download automatisch, wenn sinnvoll: aktiviert,
   /// noch nicht geladen, nicht schon laufend, und auf WLAN. Fire-and-forget —

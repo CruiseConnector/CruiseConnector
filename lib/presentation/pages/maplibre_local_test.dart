@@ -20,7 +20,7 @@ class _MaplibreLocalTestState extends State<MaplibreLocalTest> {
   String? _style;
 
   static const _url =
-      'https://pub-0535dd4f86054de1820907b6f06bf17c.r2.dev/world_z6.pmtiles';
+      'https://tiles.cruiseconnector.at/world_z6.pmtiles';
 
   @override
   void initState() {
