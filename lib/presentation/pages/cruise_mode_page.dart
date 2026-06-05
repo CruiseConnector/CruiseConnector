@@ -434,9 +434,13 @@ class _CruiseModePageState extends State<CruiseModePage>
   // die GPS-Position geheftet wird. Darüber bleibt der echte Routenpunkt der
   // Kopf → keine Off-Route-Zacken bei GPS-Drift in Bergtälern.
   static const double _headSnapMaxMeters = 18.0;
-  static const int _routeRedrawIndexThreshold =
-      1; // Navigation: sichtbare Linie praktisch live nachführen
-  static const double _routeRedrawDistanceMeters = 5.0;
+  // 2026-06-05 (vucko Task #4): Redraw-Kadenz entschärft (vorher 1 / 5m). Jeder
+  // Redraw erzeugt eine neue Window-Geometrie → die GL-Linie wird neu gezeichnet
+  // (clearLines+addLine = teuer). Bei 5m lief das ~6×/Sek (Lag). 25m / index 3 =
+  // ~1×/Sek → butterweich. Der Head-Snap + die volle Hintergrund-Route halten die
+  // Linie trotzdem optisch am Puck (kein sichtbares Nachhängen).
+  static const int _routeRedrawIndexThreshold = 3;
+  static const double _routeRedrawDistanceMeters = 25.0;
   double _totalDistanceDriven = 0.0; // Gesamte gefahrene Strecke in Metern
   DateTime? _navigationStartTime; // Zeitpunkt des Navigations-Starts
   // 2026-06-03 (vucko): Getter _isActivelyDriving entfernt — die Karte rendert

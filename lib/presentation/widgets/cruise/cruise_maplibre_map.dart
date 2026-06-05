@@ -192,6 +192,14 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap> {
   /// Aktuelle Bildschirmpositionen der Marker (id -> Offset in logischen Pixeln).
   final Map<String, Offset> _markerScreen = {};
   final List<mb.Line> _glLines = [];
+  /// Signatur der zuletzt gezeichneten Linien — _syncLines (teures clearLines+
+  /// addLine = voller GeoJSON-Source-Rebuild) läuft NUR bei echter Geometrie-
+  /// Änderung, nicht bei jedem Parent-Rebuild/GPS-Tick (Task #4 Lag).
+  String _lastLinesSig = '';
+  /// Coalescing der Marker-Projektion: nur EINE toScreenLocationBatch-Anfrage
+  /// gleichzeitig in flight (sonst Platform-Channel-Pile-up → Marker-Trailing).
+  bool _projecting = false;
+  bool _projectPending = false;
 
   @override
   void initState() {
@@ -211,9 +219,29 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap> {
   void didUpdateWidget(CruiseMapLibreMap old) {
     super.didUpdateWidget(old);
     if (_styleLoaded) {
-      if (!identical(old.lines, widget.lines)) _syncLines();
+      // Linien NUR neu zeichnen, wenn sich die Geometrie wirklich geändert hat
+      // (cruise_mode_page liefert pro GPS-Tick frische Listen → identical war
+      // immer false → voller Rebuild pro Frame = Lag).
+      if (_linesSignature() != _lastLinesSig) _syncLines();
       _projectMarkers();
     }
+  }
+
+  /// Billige Signatur der Linien-Geometrie (Anzahl + erster/letzter Punkt je
+  /// Linie). Ändert sich nur, wenn die Route-Geometrie sich tatsächlich ändert.
+  String _linesSignature() {
+    final b = StringBuffer();
+    for (final l in widget.lines) {
+      b.write(l.points.length);
+      if (l.points.isNotEmpty) {
+        final f = l.points.first;
+        final t = l.points.last;
+        b.write(
+            '|${f.latitude.toStringAsFixed(5)},${f.longitude.toStringAsFixed(5)}'
+            '-${t.latitude.toStringAsFixed(5)},${t.longitude.toStringAsFixed(5)};');
+      }
+    }
+    return b.toString();
   }
 
   Future<void> _onMapCreated(mb.MapLibreMapController c) async {
@@ -248,7 +276,9 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap> {
   Future<void> _syncLines() async {
     final map = _map;
     if (!_styleLoaded || !_visible || map == null) return;
-    // Bestehende Linien entfernen, dann neu zeichnen (Routen ändern sich selten).
+    _lastLinesSig = _linesSignature();
+    // Bestehende Linien entfernen, dann neu zeichnen. Läuft dank Signatur-Gate
+    // (didUpdateWidget) nur bei echter Geometrie-Änderung, nicht pro Frame.
     try {
       await map.clearLines();
     } catch (_) {}
@@ -284,6 +314,14 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap> {
       }
       return;
     }
+    // Coalescing: läuft schon eine Projektion, nur „pending" merken und raus —
+    // verhindert das Platform-Channel-Pile-up (jede toScreenLocationBatch ist ein
+    // awaited Roundtrip; bei 5Hz GPS + 60fps Kamera stauen sie sich → Marker-Lag).
+    if (_projecting) {
+      _projectPending = true;
+      return;
+    }
+    _projecting = true;
     try {
       final pts = await map.toScreenLocationBatch(
         widget.markers.map((m) => mb.LatLng(m.position.latitude, m.position.longitude)),
@@ -305,6 +343,14 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap> {
       }
     } catch (_) {
       // Projektion vor Style-Load o. Ä. — ignorieren, nächster Frame korrigiert.
+    } finally {
+      _projecting = false;
+      // Wurde während der laufenden Projektion eine weitere angefragt → genau
+      // EINMAL nachziehen (mit den dann aktuellen Marker-Positionen).
+      if (_projectPending) {
+        _projectPending = false;
+        _projectMarkers();
+      }
     }
   }
 
