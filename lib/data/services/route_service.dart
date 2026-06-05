@@ -48,33 +48,57 @@ class SupabaseRouteInvoker implements RouteEdgeInvoker {
   @override
   Future<dynamic> invoke(Map<String, dynamic> body) async {
     final client = Supabase.instance.client;
+    // 2026-06-02 (vucko): „keine Route" = 401 (abgelaufenes User-Token bei langer
+    // Session). KERN-ERKENNTNIS aus den Edge-Logs: functions.invoke WIRFT bei 401
+    // NICHT immer — es liefert oft eine FunctionResponse mit status:401 zurück.
+    // Darum sprang mein erster catch-Fix NIE an (toter Block). Jetzt prüfen wir
+    // BEIDES: den Response-Status UND Exceptions. Bei Auth-Fehler: Session
+    // erneuern → sonst roher Anon-HTTP-POST (immer gültig) → Route MUSS kommen.
     try {
-      return await client.functions.invoke(RouteService.edgeFunction, body: body);
+      final resp = await client.functions.invoke(
+        RouteService.edgeFunction,
+        body: body,
+      );
+      if (_isAuthStatus(resp.status)) {
+        return await _retryWithRefreshThenAnon(body);
+      }
+      return resp;
     } on FunctionException catch (e) {
-      // 2026-06-02 (vucko): 401/403 = abgelaufenes/ungültiges User-Token (lange
-      // Session, App-Neustart, Auto-Refresh hinterher). Das war die Ursache für
-      // „keine Route" — JEDER Edge-Call wurde sofort (52ms) abgewiesen, obwohl
-      // GraphHopper + Pool völlig ok sind. Dreistufige Absicherung, damit eine
-      // Suche NIE an Auth scheitert:
-      //   1) Session erneuern + erneut mit User-Token,
-      //   2) zur Not mit dem Anon-Key (immer gültig) — die Route MUSS kommen.
-      if (e.status != 401 && e.status != 403) rethrow;
-      try {
-        await client.auth.refreshSession();
-      } catch (_) {
-        // Refresh-Token auch tot → Anon-Fallback unten.
+      if (!_isAuthStatus(e.status)) rethrow;
+      return await _retryWithRefreshThenAnon(body);
+    } catch (e) {
+      final s = e.toString().toLowerCase();
+      if (s.contains('401') ||
+          s.contains('403') ||
+          s.contains('unauthor') ||
+          s.contains('jwt') ||
+          s.contains('token')) {
+        return await _retryWithRefreshThenAnon(body);
       }
-      try {
-        return await client.functions.invoke(RouteService.edgeFunction, body: body);
-      } on FunctionException catch (e2) {
-        if (e2.status != 401 && e2.status != 403) rethrow;
-        // Tier 3: roher HTTP-POST mit Anon-Key. Umgeht die SDK-Session-
-        // Injektion komplett (functions.invoke hängt sonst das tote User-Token
-        // dran → wieder 401). Der Anon-Key ist immer gültig → garantiert kein
-        // 401 mehr. Die Edge ist zustandslose Routenberechnung, braucht kein
-        // User-Token.
-        return await _invokeWithAnonKey(body);
-      }
+      rethrow;
+    }
+  }
+
+  static bool _isAuthStatus(int? status) => status == 401 || status == 403;
+
+  /// Erst Session erneuern + erneut mit User-Token; scheitert das wieder mit
+  /// 401/403, roher HTTP-POST mit Anon-Key (immer gültig) → garantiert Route.
+  Future<dynamic> _retryWithRefreshThenAnon(Map<String, dynamic> body) async {
+    final client = Supabase.instance.client;
+    try {
+      await client.auth.refreshSession();
+    } catch (_) {
+      // Refresh-Token tot → direkt Anon.
+    }
+    try {
+      final resp = await client.functions.invoke(
+        RouteService.edgeFunction,
+        body: body,
+      );
+      if (_isAuthStatus(resp.status)) return await _invokeWithAnonKey(body);
+      return resp;
+    } catch (_) {
+      return await _invokeWithAnonKey(body);
     }
   }
 
@@ -1891,6 +1915,27 @@ class RouteService {
         if (warmupError != null) {
           throw warmupError;
         }
+      } else {
+        // 2026-06-05 (vucko Task #5): Reroute hatte bisher KEINEN Fallback — der
+        // gesamte Block oben lief nur für !navigationReroute. Wurde der eine
+        // Live-Reroute-Versuch von einem Quality-/Autobahn-Gate abgelehnt, warf
+        // er → „Route konnte nicht neu berechnet werden", der Fahrer blieb auf
+        // der alten Linie. Ein Reroute MUSS aber immer eine Anschluss-Route
+        // liefern. Letzter Ausweg: direkte Strecke zum Rejoin/Ziel, und zwar
+        // avoidHighways:false (sonst wieder motorway_violation → throw). Eine
+        // kurze Autobahn-Anfahrt zurück auf die Route ist besser als gar nichts.
+        final rerouteFallback = await _tryPointToPointFallback(
+          scenario: scenario,
+          startPosition: startPosition,
+          destinationLat: destinationLat,
+          destinationLng: destinationLng,
+          avoidHighways: false,
+          directDistanceKm: directDistanceKm,
+          allowDirectFallback: true,
+        );
+        if (rerouteFallback != null) {
+          return rerouteFallback;
+        }
       }
 
       throw lastError ??
@@ -2520,6 +2565,7 @@ class RouteService {
     int roundTripBatchIndex = 0,
     int roundTripBatchCount = 1,
     bool avoidHighways = false,
+    bool forceFreshVariant = false,
     List<String> previousFingerprints = const [],
     String? originalPlanningType,
     String? waypointOrigin,
@@ -2580,6 +2626,11 @@ class RouteService {
       'avoid_highways': avoidHighways,
       'route_variant_hint': variant.variantHint,
       'route_fingerprint_hint': variant.fingerprintHint,
+      // 2026-06-03 (vucko): KRITISCH — ohne dieses Feld nutzt der Edge IMMER den
+      // deterministischen Seed Hash(start,distance) → bei „Nochmal suchen" exakt
+      // dieselbe Route → „keine neue Variante". Mit force_fresh_variant=true
+      // schaltet der Edge auf Date.now()-basierte Diversitäts-Seeds um.
+      'force_fresh_variant': forceFreshVariant,
       if (previousFingerprints.isNotEmpty)
         'previous_route_fingerprints': previousFingerprints.take(10).toList(),
       'max_candidate_attempts': candidateBudget,
@@ -4172,6 +4223,7 @@ class RouteService {
       roundTripBatchIndex: roundTripBatchIndex,
       roundTripBatchCount: roundTripBatchCount,
       avoidHighways: requestAvoidHighways ?? scenario.avoidHighways,
+      forceFreshVariant: forceFreshVariant,
       previousFingerprints: previousFingerprints,
       originalPlanningType: originalPlanningType,
       waypointOrigin: waypointOrigin,
@@ -7094,6 +7146,7 @@ class RouteService {
             styleConfig,
           ),
           avoidHighways: scenario.avoidHighways,
+          forceFreshVariant: true,
         );
         body['simplify_waypoints'] = true;
         body['max_waypoints'] = 8;
@@ -7376,6 +7429,7 @@ class RouteService {
           directionHint: (variant.angleOffset + 37.0) % 360.0,
           candidateBudget: candidateBudget,
           avoidHighways: avoidHighways,
+          forceFreshVariant: true,
         );
         body['simplify_waypoints'] = true;
         body['max_waypoints'] = _rescueRoundTripWaypointLimit(scenario);
@@ -9313,10 +9367,25 @@ class RouteService {
       coords[0][1],
       coords[0][0],
     );
-    // 2026-05-28 (vucko Task #82): Start sichtbar am User beginnen lassen
+    // 2026-05-28 (vucko Task #82): Start sichtbar am User beginnen lassen.
+    // 2026-06-05 (vucko Task #7): Rundkurs-Signal — die Schleife endet nahe am
+    // Start. Bei Rundkurs den 80–400m-Luftlinien-Stub NICHT einfügen: er erzeugte
+    // eine gerade Diagonale GPS→GH-Snap-Punkt („Route startet ein paar Straßen
+    // weiter") und maskierte zudem den on-road Access-Leg-Rebase in
+    // cruise_mode_page (_prepareRouteForPreviewStart), der sonst eine ECHTE
+    // straßenfolgende Anfahrt vom GPS zur Schleife zieht. P2P-Routen behalten den
+    // Stub (dort endet die Route am Ziel, nicht am Start → unverändert).
+    final lastCoord = coords.last;
+    final distLastToStart = geo.Geolocator.distanceBetween(
+      startLat,
+      startLng,
+      lastCoord[1],
+      lastCoord[0],
+    );
+    final isLikelyRoundTrip = coords.length > 1 && distLastToStart < 600;
     if (distToFirstPoint < 80) {
       coords[0] = [startLng, startLat];
-    } else if (distToFirstPoint < 400) {
+    } else if (distToFirstPoint < 400 && !isLikelyRoundTrip) {
       coords.insert(0, [startLng, startLat]);
     }
 

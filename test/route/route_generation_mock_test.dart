@@ -1146,7 +1146,7 @@ void main() {
     });
 
     test(
-      'Navigation-Reroute mit avoidHighways verwirft Kandidat ohne motorway exclude',
+      'Navigation-Reroute: bei Autobahn-Ablehnung Fallback auf direkte Route statt throw',
       () async {
         when(mockInvoker.invoke(any)).thenAnswer(
           (_) async => _buildPointToPointResponse(
@@ -1163,40 +1163,36 @@ void main() {
           ),
         );
 
-        await expectLater(
-          service.generatePointToPoint(
-            startPosition: _munich(),
-            destinationLat: 47.8,
-            destinationLng: 12.0,
-            mode: 'Standard',
-            scenic: false,
-            avoidHighways: true,
-            forceFreshVariant: true,
-            navigationReroute: true,
-            candidateBudgetOverride: 1,
-            maxSearchMsOverride: 7500,
-            currentHeadingDegrees: 90,
-            currentSpeedMetersPerSecond: 8,
-          ),
-          throwsA(
-            isA<RouteServiceException>()
-                .having((e) => e.type, 'type', RouteErrorType.noRoute)
-                .having(
-                  (e) => e.edgeMeta['motorway_violation'],
-                  'motorway_violation',
-                  isTrue,
-                ),
-          ),
+        // 2026-06-05 (vucko Task #5): Reroute hatte früher KEINEN Fallback und
+        // warf bei Autobahn-Ablehnung („Route konnte nicht neu berechnet
+        // werden"). Jetzt fällt es auf die direkte Route (avoidHighways:false)
+        // zurück → ein Reroute MUSS immer eine Anschluss-Route liefern, nie
+        // throw. Der Fahrer darf nie ohne Route dastehen.
+        final result = await service.generatePointToPoint(
+          startPosition: _munich(),
+          destinationLat: 47.8,
+          destinationLng: 12.0,
+          mode: 'Standard',
+          scenic: false,
+          avoidHighways: true,
+          forceFreshVariant: true,
+          navigationReroute: true,
+          candidateBudgetOverride: 1,
+          maxSearchMsOverride: 7500,
+          currentHeadingDegrees: 90,
+          currentSpeedMetersPerSecond: 8,
         );
+        expect(result, isA<RouteResult>());
+        expect(result.coordinates, isNotEmpty);
 
-        final captured =
-            verify(mockInvoker.invoke(captureAny)).captured.single
-                as Map<String, dynamic>;
-        expect(captured['avoid_highways'], isTrue);
-        expect(captured['reroute_request'], isTrue);
-        expect(captured['moving_start'], isTrue);
-        expect(captured['max_candidate_attempts'], 1);
-        expect(captured['max_search_ms'], 7500);
+        // Der ERSTE Reroute-Versuch ging korrekt mit avoid_highways:true raus.
+        final captured = verify(mockInvoker.invoke(captureAny)).captured;
+        final firstRequest = captured.first as Map<String, dynamic>;
+        expect(firstRequest['avoid_highways'], isTrue);
+        expect(firstRequest['reroute_request'], isTrue);
+        expect(firstRequest['moving_start'], isTrue);
+        expect(firstRequest['max_candidate_attempts'], 1);
+        expect(firstRequest['max_search_ms'], 7500);
       },
     );
 
