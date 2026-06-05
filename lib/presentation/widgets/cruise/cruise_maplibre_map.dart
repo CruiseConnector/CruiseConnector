@@ -64,6 +64,25 @@ class CruiseMapLibreController {
   /// werfen (SIGABRT, von Dart nicht fangbar → App-Crash).
   bool active = true;
 
+  // 2026-06-05 (vucko Crash-Fix #2): Erst NACH dem ersten gerenderten Frame
+  // dürfen view-abhängige native Calls (Kamera/Projektion/getVisibleRegion)
+  // laufen. Vorher hat MapLibre auf dem Gerät beim ersten Cruise-Öffnen
+  // intermittierend synchron eine C++-Exception in onMethodCall geworfen
+  // (uncatchbar → SIGABRT). Kamera-Wünsche, die vor dem ersten Frame kommen
+  // (z. B. initiale GPS-Zentrierung aus _onMapReady), werden NICHT verworfen,
+  // sondern als „letzter Wunsch" gepuffert und beim ersten Frame angewandt.
+  bool firstFrameReady = false;
+  Future<void> Function()? _pendingCamera;
+
+  /// Vom Widget aufgerufen, sobald der Renderer den ersten Frame produziert hat.
+  void markFirstFrameReady() {
+    if (firstFrameReady) return;
+    firstFrameReady = true;
+    final pending = _pendingCamera;
+    _pendingCamera = null;
+    if (pending != null) unawaited(pending());
+  }
+
   mb.MapLibreMapController get raw => _map;
 
   Future<void> animateTo({
@@ -74,6 +93,11 @@ class CruiseMapLibreController {
     Duration duration = const Duration(milliseconds: 600),
   }) async {
     if (!active) return;
+    if (!firstFrameReady) {
+      _pendingCamera = () =>
+          animateTo(lat: lat, lng: lng, zoom: zoom, bearing: bearing, duration: duration);
+      return;
+    }
     await _map.animateCamera(
       mb.CameraUpdate.newCameraPosition(
         mb.CameraPosition(
@@ -93,6 +117,10 @@ class CruiseMapLibreController {
     double? bearing,
   }) async {
     if (!active) return;
+    if (!firstFrameReady) {
+      _pendingCamera = () => moveTo(lat: lat, lng: lng, zoom: zoom, bearing: bearing);
+      return;
+    }
     await _map.moveCamera(
       mb.CameraUpdate.newCameraPosition(
         mb.CameraPosition(
@@ -109,6 +137,10 @@ class CruiseMapLibreController {
     EdgeInsets padding = const EdgeInsets.all(40),
   }) async {
     if (!active || points.length < 2) return;
+    if (!firstFrameReady) {
+      _pendingCamera = () => fitBounds(points, padding: padding);
+      return;
+    }
     double minLat = points.first.latitude, maxLat = points.first.latitude;
     double minLng = points.first.longitude, maxLng = points.first.longitude;
     for (final p in points) {
@@ -134,7 +166,7 @@ class CruiseMapLibreController {
   /// Sichtbarer Kartenausschnitt als [southwest, northeast] in latlong2-Koords.
   /// Hält die maplibre-Typen aus den Aufrufern heraus (kein LatLng-Konflikt).
   Future<List<ll.LatLng>?> visibleBounds() async {
-    if (!active) return null;
+    if (!active || !firstFrameReady) return null;
     try {
       final r = await _map.getVisibleRegion();
       return [
@@ -304,17 +336,36 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
   Future<void> _onStyleLoaded() async {
     _styleLoaded = true;
     _ctrl?.active = _visible;
-    // Persistente Linien-Quelle + Layer EINMAL anlegen (idempotent). Danach wird
-    // NUR noch setGeoJsonSource aufgerufen — nie wieder remove/re-add.
-    await _ensureLineLayer();
-    // Quell-/View-abhängige Calls NICHT sofort feuern. Erst nach dem ersten
-    // onCameraIdle (Renderer hat einen Frame produziert). Fallback-Timer, falls
-    // onCameraIdle ausbleibt (z. B. statische Kamera ohne Bewegung).
+    // 2026-06-05 (vucko Crash-Fix #2): onStyleLoaded kann auf iOS MEHRFACH
+    // feuern (z. B. wenn die PMTiles-Vektorquelle asynchron nachlädt). Bei jedem
+    // (Re-)Load ist unsere Custom-Linien-Quelle/-Layer im nativen Style weg →
+    // als „neu anzulegen" markieren. Ist der erste Frame schon da, etablieren
+    // wir sie post-frame erneut (idempotent + existenz-geprüft → kein Redundant-
+    // Throw, keine Mutation vor dem ersten Frame).
+    final bool wasReload = _firstFrameSynced;
+    _lineLayerReady = false;
+    if (wasReload) {
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        if (!mounted || !_appResumed || !_visible) return;
+        await _ensureLineLayer();
+        if (mounted) _syncLines();
+      });
+    }
+    // 2026-06-05 (vucko Crash-Fix #2): KEINE native Style-/Quellen-/Layer-/View-
+    // Mutation mehr direkt in onStyleLoaded. onStyleLoaded feuert, sobald das
+    // Style-JSON geparst ist — der Metal-Renderer hat aber noch KEINEN Frame
+    // produziert und die PMTiles-Quellen laden auf dem Gerät noch asynchron.
+    // Eine Quellen-/Layer- oder Kamera-Mutation in genau diesem Fenster warf auf
+    // dem Gerät intermittierend synchron eine C++-Exception in onMethodCall
+    // (uncatchbar → SIGABRT, bei jedem 5 frischen Crash byte-identischer Stack).
+    // Deshalb: ALLES (Linien-Quelle+Layer anlegen, erster Sync, Kamera) erst
+    // im ersten onCameraIdle (= erster gerenderter Frame) bzw. im Fallback-Timer.
     _initialSyncFallback?.cancel();
     _initialSyncFallback = Timer(const Duration(milliseconds: 700), () {
       if (mounted) _runFirstSync();
     });
-    // Controller wird IMMER übergeben — seine Methoden sind selbst gegatet.
+    // Controller wird IMMER übergeben — seine Methoden sind selbst gegatet
+    // (firstFrameReady). Kamera-Wünsche vor dem ersten Frame werden gepuffert.
     if (mounted && _ctrl != null) widget.onControllerReady?.call(_ctrl!);
   }
 
@@ -325,48 +376,71 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
     final map = _map;
     if (_lineLayerReady || map == null) return;
     try {
-      // Reste eines früheren Style-Loads vorsorglich entfernen.
-      try {
-        await map.removeLayer(_lineLayerId);
-      } catch (_) {}
-      try {
-        await map.removeSource(_lineSourceId);
-      } catch (_) {}
-      await map.addSource(
-        _lineSourceId,
-        const mb.GeojsonSourceProperties(
-          data: <String, dynamic>{
-            'type': 'FeatureCollection',
-            'features': <dynamic>[],
-          },
-        ),
-      );
-      await map.addLineLayer(
-        _lineSourceId,
-        _lineLayerId,
-        const mb.LineLayerProperties(
-          lineColor: ['get', 'color'],
-          lineWidth: ['get', 'width'],
-          lineOpacity: ['get', 'opacity'],
-          lineBlur: ['get', 'blur'],
-          lineJoin: 'round',
-          lineCap: 'round',
-        ),
-      );
+      // 2026-06-05 (vucko Crash-Fix #2 — ROOT CAUSE): addSource/addLineLayer mit
+      // einer ID, die im Style schon existiert, wirft NATIV eine C++-Exception
+      // (MLNRedundantSourceException / MLNRedundantLayerException aus dem
+      // mbgl-Core) — synchron in onMethodCall, von Dart NICHT fangbar →
+      // std::terminate → SIGABRT. Genau das war der intermittierende Geräte-
+      // Crash beim ersten Cruise-Öffnen (5 frische Crash-Logs, byte-identischer
+      // Stack). Deshalb KEIN remove+add mehr (removeSource auf eine vom Layer
+      // genutzte Quelle wirft ebenfalls), sondern strikt existenz-geprüft adden:
+      // jede ID entsteht garantiert höchstens einmal, kein Redundant-Throw.
+      final sourceIds = await map.getSourceIds();
+      if (!mounted) return;
+      if (!sourceIds.contains(_lineSourceId)) {
+        await map.addSource(
+          _lineSourceId,
+          const mb.GeojsonSourceProperties(
+            data: <String, dynamic>{
+              'type': 'FeatureCollection',
+              'features': <dynamic>[],
+            },
+          ),
+        );
+        if (!mounted) return;
+      }
+      final layerIds = await map.getLayerIds();
+      if (!mounted) return;
+      if (!layerIds.contains(_lineLayerId)) {
+        await map.addLineLayer(
+          _lineSourceId,
+          _lineLayerId,
+          const mb.LineLayerProperties(
+            lineColor: ['get', 'color'],
+            lineWidth: ['get', 'width'],
+            lineOpacity: ['get', 'opacity'],
+            lineBlur: ['get', 'blur'],
+            lineJoin: 'round',
+            lineCap: 'round',
+          ),
+        );
+      }
       _lineLayerReady = true;
     } catch (_) {
-      // Layer existiert evtl. schon — nicht fatal, der erste Sync greift trotzdem.
+      // Defensiv: bei irgendeinem transienten Fehler NICHT erneut blind adden.
       _lineLayerReady = true;
     }
   }
 
   /// Erster Sync nach dem ersten gerenderten Frame — danach laufen Updates
   /// regulär über didUpdateWidget / Sichtbarkeitswechsel.
-  void _runFirstSync() {
+  ///
+  /// Hier passiert ALLES, was native Style-/Quellen-/View-Mutation ist, ZUM
+  /// ERSTEN MAL — bewusst erst nachdem der Renderer einen Frame produziert hat
+  /// (onCameraIdle) bzw. nach dem 700ms-Fallback. Reihenfolge ist wichtig:
+  /// erst die Linien-Quelle+Layer anlegen, DANN die Kamera freigeben + erster
+  /// Sync (setGeoJsonSource braucht die Quelle).
+  Future<void> _runFirstSync() async {
     if (_firstFrameSynced) return;
     _firstFrameSynced = true;
     _initialSyncFallback?.cancel();
     _initialSyncFallback = null;
+    // Persistente Linien-Quelle + Layer EINMAL anlegen (idempotent). Danach wird
+    // NUR noch setGeoJsonSource aufgerufen — nie wieder remove/re-add.
+    await _ensureLineLayer();
+    if (!mounted) return;
+    // Aufgestaute Kamera-Wünsche (initiale GPS-Zentrierung) jetzt anwenden.
+    _ctrl?.markFirstFrameReady();
     if (_visible) {
       _syncLines();
       _projectMarkers();
