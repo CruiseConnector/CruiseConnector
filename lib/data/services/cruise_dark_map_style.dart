@@ -202,12 +202,11 @@ const Map<String, dynamic> cruiseDarkMapStyle = {
       'type': 'symbol',
       'source': 'protomaps',
       'source-layer': 'places',
-      // 2026-06-02 (vucko): NUR echte Siedlungen — Stadt/Ort/Dorf
-      // (kind_detail = city/town/village). Weiler/Ortsteile/Quartiere
-      // (hamlet, suburb, neighbourhood, locality, isolated_dwelling …) und
-      // Flur-/Einzelnamen wie „Plattentöbele"/„Suldis"/„Sportplatz" raus —
-      // das war viel zu viel Info für den User.
-      'filter': ['in', 'kind_detail', 'city', 'town', 'village'],
+      // 2026-06-05 (vucko): NUR Städte/Hauptorte — city/town. „village" raus
+      // (User: nur Hauptorte wie Dornbirn/Götzis, keine Dörfer). Synchron zu
+      // assets/map/cruise_dark.json + carplay style.json. Weiler/Ortsteile/
+      // Flurnamen (hamlet, suburb, locality …) waren ohnehin schon draußen.
+      'filter': ['in', 'kind_detail', 'city', 'town'],
       'layout': {
         'text-field': ['get', 'name'],
         // 2026-06-02 (vucko): Orte sollen klar HERAUSSTECHEN — größer als die
