@@ -51,17 +51,36 @@ const Map<String, dynamic> cruiseDarkMapStyle = {
       'type': 'fill',
       'source': 'protomaps',
       'source-layer': 'water',
-      // 2026-06-05 (vucko): NUR echtes Wasser (Seen/Flüsse/Bodensee/Rhein/Kanäle).
-      // Fake-Wasser raus — swimming_pool/fountain/dock/basin (+ water/kind_detail=
-      // basin) sind Pools/Brunnen/Rückhaltebecken: als Wasser markiert, aber keine
-      // Seen. Streams/Rivers/Canals sind ohnehin LINES (rendern nicht im fill).
-      // Gleicher Filter wie in assets/map/cruise_dark.json (Single Source of Truth).
+      // 2026-06-05 (vucko Kontrast-Fix): NUR Flächen-Wasser, das auch wie Wasser
+      // aussieht — Seen + generische Wasserflächen. Die großen, GROBEN Fluss-/
+      // Bach-/Kanal-FLÄCHEN (water/kind_detail river|stream|canal) sind raus: beim
+      // Über-Zoomen (PMTiles maxzoom 14) wurden ihre groben z14-Kanten zu kantigen
+      // Kontrast-Flecken über den Bergen (Alpen-Flussbetten Lech/Iller/Ill). Flüsse
+      // kommen stattdessen als dünne LINIE (water-river-line) → markiert, kein Blob.
+      // Fake-Wasser (basin/dock/pool/fountain) bleibt draußen. Synchron zu
+      // assets/map/cruise_dark.json.
       'filter': [
         'all',
-        ['in', 'kind', 'ocean', 'lake', 'river', 'water'],
-        ['!in', 'kind_detail', 'basin'],
+        ['in', 'kind', 'ocean', 'lake', 'water'],
+        ['!in', 'kind_detail', 'river', 'stream', 'canal', 'basin', 'dock'],
       ],
       'paint': {'fill-color': '#16273b'},
+    },
+    {
+      'id': 'water-river-line',
+      'type': 'line',
+      'source': 'protomaps',
+      'source-layer': 'water',
+      'filter': ['==', 'kind', 'river'],
+      'layout': {'line-cap': 'round', 'line-join': 'round'},
+      'paint': {
+        'line-color': '#16273b',
+        'line-width': [
+          'interpolate', ['linear'], ['zoom'],
+          7, 0.4, 11, 1.1, 14, 2.2, 17, 4.5,
+        ],
+        'line-opacity': 0.85,
+      },
     },
     {
       'id': 'buildings',

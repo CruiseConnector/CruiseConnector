@@ -26,12 +26,17 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:cruise_connect/data/services/cruise_dark_map_style.dart';
 
 void main() {
+  // 2026-06-05 (vucko Kontrast-Fix): Fill = nur Seen + generische Wasserflächen.
+  // Die großen, groben Fluss-/Bach-/Kanal-FLÄCHEN (water/kind_detail river|stream|
+  // canal) sind raus — sie wurden beim Über-Zoomen zu kantigen Kontrast-Flecken.
+  // Flüsse kommen als dünne Linie (water-river-line) zurück.
   const expectedWaterFilter = [
     'all',
-    ['in', 'kind', 'ocean', 'lake', 'river', 'water'],
-    ['!in', 'kind_detail', 'basin'],
+    ['in', 'kind', 'ocean', 'lake', 'water'],
+    ['!in', 'kind_detail', 'river', 'stream', 'canal', 'basin', 'dock'],
   ];
   const expectedWaterColor = '#16273b';
+  const expectedRiverLineFilter = ['==', 'kind', 'river'];
 
   Map<String, dynamic> layerById(List<dynamic> layers, String id) =>
       layers.firstWhere((l) => (l as Map)['id'] == id) as Map<String, dynamic>;
@@ -45,6 +50,14 @@ void main() {
         reason: '$label: Wasser-Filter muss Fake-Wasser ausschließen');
     expect((water['paint'] as Map)['fill-color'], equals(expectedWaterColor),
         reason: '$label: Wasserfarbe muss $expectedWaterColor sein');
+
+    // Flüsse als dünne Linie (kind=river) statt grober Fläche → markiert, aber
+    // kein Kontrast-Blob beim Über-Zoomen.
+    final riverLine = layerById(layers, 'water-river-line');
+    expect(riverLine['type'], equals('line'),
+        reason: '$label: water-river-line muss eine Linie sein');
+    expect(riverLine['filter'], equals(expectedRiverLineFilter),
+        reason: '$label: water-river-line muss kind=river filtern');
 
     // Labels: keine Dörfer.
     final places = layerById(layers, 'places');
