@@ -57,9 +57,13 @@ class MapStyleService {
   // dach.pmtiles umbenannt → die Karte nutzt nie eine halbe Datei (kein Crash,
   // kein korrupter Zustand). Der Crash vorher kam von der Offstage-Karte, NICHT
   // vom Download. Auf false setzen, um den automatischen Download abzuschalten.
-  // Während der Stabilisierung AUS (kein 5-GB-Zug während Crash-/Smoothness-
-  // Debugging). Offline wird als eigene, robuste Task umgesetzt (Pre-Cache).
-  static const bool autoDownloadEnabled = false;
+  // 2026-06-05 (vucko Task #8): AN — User will den DACH-Raum KOMPLETT offline
+  // („nicht unscharfe/fehlende Orte weil es laden muss"). Sobald die lokale
+  // dach.pmtiles da ist, rendert MapLibre ganz DACH OHNE Netz (kein Lade-Blur).
+  // Sicher: NUR WLAN, EINMALIG (isDachDownloaded-Guard), resumierbar (.part),
+  // graceful (Abbruch/Speicher-voll → keine halbe Datei wird genutzt, kein
+  // Crash). Auf false, falls der ~mehrere-GB-Download nicht gewünscht ist.
+  static const bool autoDownloadEnabled = true;
 
   /// Startet den DACH-Offline-Download automatisch, wenn sinnvoll: aktiviert,
   /// noch nicht geladen, nicht schon laufend, und auf WLAN. Fire-and-forget —
