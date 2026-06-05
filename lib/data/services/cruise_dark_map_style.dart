@@ -51,7 +51,17 @@ const Map<String, dynamic> cruiseDarkMapStyle = {
       'type': 'fill',
       'source': 'protomaps',
       'source-layer': 'water',
-      'paint': {'fill-color': '#16212f'},
+      // 2026-06-05 (vucko): NUR echtes Wasser (Seen/Flüsse/Bodensee/Rhein/Kanäle).
+      // Fake-Wasser raus — swimming_pool/fountain/dock/basin (+ water/kind_detail=
+      // basin) sind Pools/Brunnen/Rückhaltebecken: als Wasser markiert, aber keine
+      // Seen. Streams/Rivers/Canals sind ohnehin LINES (rendern nicht im fill).
+      // Gleicher Filter wie in assets/map/cruise_dark.json (Single Source of Truth).
+      'filter': [
+        'all',
+        ['in', 'kind', 'ocean', 'lake', 'river', 'water'],
+        ['!in', 'kind_detail', 'basin'],
+      ],
+      'paint': {'fill-color': '#16273b'},
     },
     {
       'id': 'buildings',
