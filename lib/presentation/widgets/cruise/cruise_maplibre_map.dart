@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:latlong2/latlong.dart' as ll;
 import 'package:maplibre_gl/maplibre_gl.dart' as mb;
+import 'package:visibility_detector/visibility_detector.dart';
 
 import 'package:cruise_connect/data/services/map_style_service.dart';
 
@@ -57,6 +58,12 @@ class CruiseMapLibreController {
   CruiseMapLibreController._(this._map);
   final mb.MapLibreMapController _map;
 
+  /// Sichtbarkeit — vom Widget mit dem VisibilityDetector synchron gehalten.
+  /// Ist die Karte offstage (false), werden ALLE Kamera-/View-Calls
+  /// übersprungen. Sonst würde MapLibre auf die unsichtbare native View nativ
+  /// werfen (SIGABRT, von Dart nicht fangbar → App-Crash).
+  bool active = true;
+
   mb.MapLibreMapController get raw => _map;
 
   Future<void> animateTo({
@@ -65,8 +72,9 @@ class CruiseMapLibreController {
     double? zoom,
     double? bearing,
     Duration duration = const Duration(milliseconds: 600),
-  }) {
-    return _map.animateCamera(
+  }) async {
+    if (!active) return;
+    await _map.animateCamera(
       mb.CameraUpdate.newCameraPosition(
         mb.CameraPosition(
           target: mb.LatLng(lat, lng),
@@ -83,8 +91,9 @@ class CruiseMapLibreController {
     required double lng,
     double? zoom,
     double? bearing,
-  }) {
-    return _map.moveCamera(
+  }) async {
+    if (!active) return;
+    await _map.moveCamera(
       mb.CameraUpdate.newCameraPosition(
         mb.CameraPosition(
           target: mb.LatLng(lat, lng),
@@ -99,7 +108,7 @@ class CruiseMapLibreController {
     List<ll.LatLng> points, {
     EdgeInsets padding = const EdgeInsets.all(40),
   }) async {
-    if (points.length < 2) return;
+    if (!active || points.length < 2) return;
     double minLat = points.first.latitude, maxLat = points.first.latitude;
     double minLng = points.first.longitude, maxLng = points.first.longitude;
     for (final p in points) {
@@ -125,6 +134,7 @@ class CruiseMapLibreController {
   /// Sichtbarer Kartenausschnitt als [southwest, northeast] in latlong2-Koords.
   /// Hält die maplibre-Typen aus den Aufrufern heraus (kein LatLng-Konflikt).
   Future<List<ll.LatLng>?> visibleBounds() async {
+    if (!active) return null;
     try {
       final r = await _map.getVisibleRegion();
       return [
@@ -174,6 +184,10 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap> {
   CruiseMapLibreController? _ctrl;
   String? _style;
   bool _styleLoaded = false;
+  // Sichtbarkeit der Karte (VisibilityDetector). Sicherer Default false: solange
+  // die Karte nicht nachweislich sichtbar ist, KEINE view-abhängigen Calls
+  // (offstage im IndexedStack → nativer Crash). Wird true, sobald sichtbar.
+  bool _visible = false;
 
   /// Aktuelle Bildschirmpositionen der Marker (id -> Offset in logischen Pixeln).
   final Map<String, Offset> _markerScreen = {};
@@ -182,6 +196,10 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap> {
   @override
   void initState() {
     super.initState();
+    // Sichtbarkeit SOFORT erkennen (kein 500ms-Default) → beim Tab-Wechsel wird
+    // die Karte ohne Verzögerung als unsichtbar markiert, bevor ein GPS-Tick
+    // einen view-abhängigen Call auf die offstage-View feuern kann.
+    VisibilityDetectorController.instance.updateInterval = Duration.zero;
     // Style via Service bauen: nutzt automatisch die LOKALEN PMTiles, wenn DACH
     // offline geladen wurde — sonst remote von R2.
     MapStyleService.instance.buildStyleString(asset: widget.styleAsset).then((s) {
@@ -205,14 +223,31 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap> {
 
   Future<void> _onStyleLoaded() async {
     _styleLoaded = true;
-    await _syncLines();
-    await _projectMarkers();
+    _ctrl?.active = _visible;
+    if (_visible) {
+      await _syncLines();
+      await _projectMarkers();
+    }
+    // Controller wird IMMER übergeben — seine Methoden sind selbst gegatet.
     if (mounted && _ctrl != null) widget.onControllerReady?.call(_ctrl!);
+  }
+
+  void _onVisibilityChanged(VisibilityInfo info) {
+    final v = info.visibleFraction > 0;
+    if (v == _visible) return;
+    _visible = v;
+    _ctrl?.active = v;
+    // Wieder sichtbar geworden → Marker/Linien neu syncen (offstage wurde
+    // bewusst nichts an die native View geschickt).
+    if (v && _styleLoaded) {
+      _syncLines();
+      _projectMarkers();
+    }
   }
 
   Future<void> _syncLines() async {
     final map = _map;
-    if (!_styleLoaded || map == null) return;
+    if (!_styleLoaded || !_visible || map == null) return;
     // Bestehende Linien entfernen, dann neu zeichnen (Routen ändern sich selten).
     try {
       await map.clearLines();
@@ -243,7 +278,7 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap> {
     // der Style geladen ist. MapLibre wirft sonst nativ eine C++-Exception
     // (SIGABRT) — von Dart NICHT fangbar → App-Crash. onCameraMove kann während
     // des Karten-Setups schon feuern, daher dieser Gate.
-    if (!_styleLoaded || map == null || widget.markers.isEmpty) {
+    if (!_styleLoaded || !_visible || map == null || widget.markers.isEmpty) {
       if (_markerScreen.isNotEmpty && mounted) {
         setState(_markerScreen.clear);
       }
@@ -274,9 +309,9 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap> {
   }
 
   void _onCameraMove(mb.CameraPosition _) {
-    // Gate: vor Style-Load KEINE Controller-Aufrufe (siehe _projectMarkers) —
-    // sonst MapLibre-Abort. onCameraMove feuert teils schon beim Setup.
-    if (!_styleLoaded) return;
+    // Gate: nur sichtbar + nach Style-Load Controller-Aufrufe (siehe
+    // _projectMarkers) — sonst MapLibre-Abort.
+    if (!_styleLoaded || !_visible) return;
     // Während der Bewegung Marker mitführen (throttled über Frame-Coalescing
     // von setState). Linien sind GL-gerendert und brauchen kein Update.
     _projectMarkers();
@@ -291,7 +326,10 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap> {
     }
     return Stack(
       children: [
-        mb.MapLibreMap(
+        VisibilityDetector(
+          key: const ValueKey('cruise-maplibre-visibility'),
+          onVisibilityChanged: _onVisibilityChanged,
+          child: mb.MapLibreMap(
           styleString: style,
           initialCameraPosition: mb.CameraPosition(
             target: mb.LatLng(
@@ -311,6 +349,7 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap> {
               widget.onMapClick?.call(ll.LatLng(latLng.latitude, latLng.longitude)),
           onCameraMove: _onCameraMove,
           onCameraIdle: _projectMarkers,
+          ),
         ),
         // Marker-Overlay
         ..._buildMarkerOverlay(),

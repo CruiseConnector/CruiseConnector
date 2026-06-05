@@ -50,9 +50,15 @@ class MapStyleService {
   /// über WLAN (kein Mobilfunk-Volumen). Auf `false` setzen, um den
   /// automatischen ~mehrere-GB-Download zu deaktivieren (manuell via
   /// [downloadDach] bleibt möglich).
-  // 2026-06-05 (vucko): Auto-5GB-Download standardmäßig AUS. Ein stiller
-  // Mehrere-GB-Download beim App-Start kann den Gerätespeicher fluten/abstürzen.
-  // Offline-DACH bleibt manuell über downloadDach() (künftig Settings-Toggle).
+  // 2026-06-05 (vucko): DACH automatisch offline laden (expliziter User-Wunsch).
+  // SICHER, weil: NUR über WLAN (kein Mobilfunk), EINMALIG (isDachDownloaded-
+  // Guard), resumierbar (.part), und scheitert GRACEFUL — bei vollem Speicher/
+  // Abbruch wirft der Stream → catch → die unfertige .part wird NIE zu
+  // dach.pmtiles umbenannt → die Karte nutzt nie eine halbe Datei (kein Crash,
+  // kein korrupter Zustand). Der Crash vorher kam von der Offstage-Karte, NICHT
+  // vom Download. Auf false setzen, um den automatischen Download abzuschalten.
+  // Während der Stabilisierung AUS (kein 5-GB-Zug während Crash-/Smoothness-
+  // Debugging). Offline wird als eigene, robuste Task umgesetzt (Pre-Cache).
   static const bool autoDownloadEnabled = false;
 
   /// Startet den DACH-Offline-Download automatisch, wenn sinnvoll: aktiviert,
