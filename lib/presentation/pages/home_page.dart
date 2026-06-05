@@ -63,9 +63,8 @@ class _HomePageState extends State<HomePage> {
     // über WLAN, resumierbar, im Hintergrund. Sobald lokal, rendert MapLibre die
     // ganze DACH-Karte ohne Netz. Deaktivieren via MapStyleService.autoDownloadEnabled.
     unawaited(MapStyleService.instance.maybeAutoDownloadDach());
-    // Karten-Style von Cloudflare spiegeln (falls dort hochgeladen) → Look ohne
-    // App-Release änderbar. Fehlt die Datei auf R2, bleibt's beim App-Bundle.
-    unawaited(MapStyleService.instance.refreshRemoteStyle());
+    // 2026-06-05 (vucko): refreshRemoteStyle entfernt — das Bundle ist die
+    // Single Source of Truth (Style-Änderungen greifen sofort, besser offline).
     try {
       // 2026-06-01 (vucko): Zuerst prüfen, welche Tile-Quelle aktiv ist
       // (self-hosted CDN wenn erreichbar, sonst Mapbox-Fallback) — DANN cachen,

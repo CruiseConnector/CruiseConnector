@@ -128,22 +128,10 @@ class MapStyleService {
   /// NUR lokal (kein Netz-Block beim Kartenstart) — der Remote-Style wird per
   /// [refreshRemoteStyle] im Hintergrund aktualisiert.
   Future<String> _loadBaseStyle(String asset) async {
-    try {
-      final cached = await _cachedRemoteStyleFile();
-      if (await cached.exists()) {
-        final body = await cached.readAsString();
-        // VOLLSTÄNDIG validieren — ein partiell geschriebener/korrupter Cache
-        // (Race mit refreshRemoteStyle) brachte MapLibre NATIV zum Abort
-        // (SIGABRT, EXC_CRASH). Nur bei sauber parsebarem Style-JSON verwenden,
-        // sonst Bundle. json.decode wirft bei halber Datei → catch → Bundle.
-        final parsed = json.decode(body);
-        if (parsed is Map && parsed['layers'] != null) {
-          return body;
-        }
-      }
-    } catch (_) {
-      // Cache defekt/fehlt → Bundle.
-    }
+    // 2026-06-05 (vucko): Das BUNDLE ist die Single Source of Truth. Der
+    // Remote-Cache-Vorzug (df8a6d1) ist raus — er machte Style-Änderungen
+    // unsichtbar (App renderte die gecachte R2-Datei) und war Race-/Crash-
+    // anfällig. Bundle ist zudem besser für Offline (immer da, sofort).
     return rootBundle.loadString(asset);
   }
 
