@@ -7779,6 +7779,14 @@ class _CruiseModePageState extends State<CruiseModePage>
       _maneuvers = result.maneuvers;
       _activeManeuverIndex = 0;
       _announcedManeuverIndices.clear();
+      // 2026-06-05 (vucko Task #6): Haptic-Stage-Flags + letzten Manöver-Index
+      // mit zurücksetzen. Sonst hat das 1. Manöver der NEUEN Route denselben
+      // Index 0 wie das alte → der Reset im Location-Update greift nicht → Flags
+      // bleiben true → die erste Ansage der neuen Route wird verschluckt.
+      _hapticStage300m = false;
+      _hapticStage150m = false;
+      _hapticStage50m = false;
+      _lastHapticManeuverIndex = null;
       _offRouteCount = 0;
       _lastRerouteTime = DateTime.now();
       _remainingDistance = result.distanceMeters;
@@ -8619,23 +8627,25 @@ class _CruiseModePageState extends State<CruiseModePage>
         _hapticStage150m = false;
         _hapticStage50m = false;
       }
-      // 300m → lightImpact + TTS-Ansage (wichtig)
+      // 300m → lightImpact + EINE saubere Vorankündigung.
       if (!_hapticStage300m && distToManeuver <= 300 && distToManeuver > 150) {
         HapticFeedback.lightImpact();
         _hapticStage300m = true;
         _speakManeuverAnnouncement(distToManeuver.round(), important: true);
       }
-      // 150m → mediumImpact
+      // 150m → 2026-06-05 (vucko Task #6): NUR Haptik, KEINE Voice mehr. Die
+      // 150m-Ansage würgte sonst per stop() die 300m-Vorankündigung mitten im
+      // Satz ab (das hörbare „Abhacken"). 2 Ansagen/Manöver reichen.
       if (!_hapticStage150m && distToManeuver <= 150 && distToManeuver > 50) {
         HapticFeedback.mediumImpact();
         _hapticStage150m = true;
-        _speakManeuverAnnouncement(distToManeuver.round(), important: true);
       }
-      // 50m → heavyImpact + finale TTS
+      // 50m → heavyImpact + finale „Jetzt"-Ansage (interrupt: zeitkritisch,
+      // darf die Vorankündigung ablösen).
       if (!_hapticStage50m && distToManeuver <= 50) {
         HapticFeedback.heavyImpact();
         _hapticStage50m = true;
-        _speakManeuverAnnouncement(0, important: true);
+        _speakManeuverAnnouncement(0, important: true, interrupt: true);
       }
     }
 
@@ -9545,19 +9555,34 @@ class _CruiseModePageState extends State<CruiseModePage>
   // 2026-05-24 (vucko Task #39): Manöver-TTS-Ansage.
   // distMeters=0 → "Jetzt links" / "Jetzt rechts"
   // distMeters>0 → "In Xm links abbiegen"
-  void _speakManeuverAnnouncement(int distMeters, {required bool important}) {
+  void _speakManeuverAnnouncement(
+    int distMeters, {
+    required bool important,
+    bool interrupt = false,
+  }) {
     final maneuver = _activeVisibleManeuver();
     if (maneuver == null) return;
-    final raw = (maneuver.instruction.isNotEmpty
-            ? maneuver.instruction
-            : maneuver.announcement)
-        .trim();
+    // 2026-06-05 (vucko Task #6): NUR die reine instruction (ohne Distanz) als
+    // Voice-Quelle. maneuver.announcement enthält bereits eine Distanz → der alte
+    // Fallback doppelte sie zu „In 287m In 300m rechts abbiegen". Ist instruction
+    // leer, gar nicht ansagen.
+    final raw = maneuver.instruction.trim();
     if (raw.isEmpty) return;
-    final text = distMeters <= 30
-        ? 'Jetzt $raw'
-        : 'In ${distMeters}m $raw';
+    // Distanz auf SAUBERE Stufen runden statt krummer Live-Werte („In 287m" →
+    // „In 300 Metern"). „Metern" ausgeschrieben für klare TTS-Aussprache.
+    final String text;
+    if (distMeters <= 30) {
+      text = 'Jetzt $raw';
+    } else {
+      final rounded = distMeters < 250
+          ? 200
+          : distMeters < 400
+              ? 300
+              : ((distMeters / 100).round() * 100);
+      text = 'In $rounded Metern $raw';
+    }
     if (important) {
-      unawaited(TtsService.instance.speakImportant(text));
+      unawaited(TtsService.instance.speakImportant(text, interrupt: interrupt));
     } else {
       unawaited(TtsService.instance.speakOptional(text));
     }

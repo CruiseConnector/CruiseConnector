@@ -19,6 +19,22 @@ class TtsService {
   Future<void> _initIfNeeded() async {
     if (_initialized) return;
     try {
+      // 2026-06-05 (vucko Task #6): iOS-Audiosession konfigurieren. OHNE diese
+      // wird die ERSTE Ansage im Fahrbetrieb von laufender Musik/anderem Audio
+      // verschluckt oder kommt verspätet (Session schläft). playback +
+      // duckOthers/mixWithOthers = andere Audioquellen werden während der Ansage
+      // leiser, die Navi-Stimme spielt zuverlässig.
+      if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS) {
+        await _tts.setSharedInstance(true);
+        await _tts.setIosAudioCategory(
+          IosTextToSpeechAudioCategory.playback,
+          [
+            IosTextToSpeechAudioCategoryOptions.duckOthers,
+            IosTextToSpeechAudioCategoryOptions.mixWithOthers,
+          ],
+          IosTextToSpeechAudioMode.voicePrompt,
+        );
+      }
       await _tts.setLanguage('de-DE');
       await _tts.setSpeechRate(0.50);  // 0.5 = natürlich, motorradtauglich
       await _tts.setPitch(1.0);
@@ -46,12 +62,19 @@ class TtsService {
   }
 
   /// Wichtige Ansagen (Manöver, Re-Route, Ziel-erreicht).
-  Future<void> speakImportant(String text) async {
+  ///
+  /// [interrupt] = laufende Ansage hart abbrechen. NUR für echte Prioritäts-
+  /// Interrupts (Reroute, Ziel erreicht). Für normale Manöver-Ansagen `false`
+  /// (Default) → aufeinanderfolgende Ansagen queuen/laufen aus, statt sich
+  /// gegenseitig mitten im Satz abzuwürgen (das war das hörbare „Abhacken").
+  Future<void> speakImportant(String text, {bool interrupt = false}) async {
     if (!_shouldSpeak(isImportant: true)) return;
     if (_isDuplicate(text)) return;
     await _initIfNeeded();
     try {
-      await _tts.stop();  // unterbreche aktuelle Ansage für Wichtiges
+      if (interrupt) {
+        await _tts.stop();
+      }
       _lastSpoken = text;
       _lastSpokenAt = DateTime.now();
       await _tts.speak(text);
