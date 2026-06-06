@@ -404,9 +404,12 @@ class _CruiseModePageState extends State<CruiseModePage>
   bool _isSimulationRunning = false;
   bool _isSimulationStepRunning = false;
   int _simulationIndex = 0;
-  // 2026-05-30 (vucko): Fahrten-Simulator wieder aktiv — grüner Play-FAB in
-  // der Navigation, um die Routenabfahrt zu prüfen. Konstant 100 km/h.
-  final bool _isSimulationEnabled = true;
+  // 2026-05-30 (vucko): Fahrten-Simulator — grüner Play-FAB in der Navigation,
+  // um die Routenabfahrt zu prüfen. Konstant 100 km/h.
+  // 2026-06-06 (vucko): VORLÄUFIG AUS fürs Release — nur ich brauche den Sim,
+  // Testuser sollen ihn nicht sehen. Wieder einschalten: zurück auf true setzen,
+  // sobald Vucko sagt „Sim wieder an". (Versteckt den FAB + _startSimulation no-op.)
+  final bool _isSimulationEnabled = false;
   static const double _simulationConstantKmh = 100; // Konstante Sim-Speed
   double _simulationSpeedKmh = _simulationConstantKmh;
 
