@@ -405,12 +405,12 @@ class _CruiseModePageState extends State<CruiseModePage>
   bool _isSimulationStepRunning = false;
   int _simulationIndex = 0;
   // 2026-05-30 (vucko): Fahrten-Simulator — grüner Play-FAB in der Navigation,
-  // um die Routenabfahrt zu prüfen. Konstant 100 km/h.
-  // 2026-06-06 (vucko): VORLÄUFIG AUS fürs Release — nur ich brauche den Sim,
-  // Testuser sollen ihn nicht sehen. Wieder einschalten: zurück auf true setzen,
-  // sobald Vucko sagt „Sim wieder an". (Versteckt den FAB + _startSimulation no-op.)
-  final bool _isSimulationEnabled = false;
-  static const double _simulationConstantKmh = 100; // Konstante Sim-Speed
+  // um die Routenabfahrt zu prüfen.
+  // 2026-06-06 (vucko): Sim wieder AN für die Smoothness-/Kamera-/Linien-Tests
+  // (konstant 30 km/h statt 100 → man sieht Ruckler/Kamera-Verhalten viel besser).
+  // Vor dem finalen Release wieder auf false setzen (Testuser sollen ihn nicht sehen).
+  final bool _isSimulationEnabled = true;
+  static const double _simulationConstantKmh = 30; // Konstante Sim-Speed (Test)
   double _simulationSpeedKmh = _simulationConstantKmh;
 
   bool _isCameraLocked =
@@ -797,49 +797,62 @@ class _CruiseModePageState extends State<CruiseModePage>
     return false;
   }
 
-  bool _pinVisibleRouteStartToPosition(geo.Position position) {
-    if (_remainingRouteCoordinates.length < 2 || _routeLatLngs.length < 2) {
-      return false;
+  // 2026-06-06 (vucko P3): Setzt den Kopf der sichtbaren (roten) Route JEDEN Tick
+  // exakt auf die PROJIZIERTE Position des Pucks auf der Polylinie und schneidet
+  // alle bereits passierten Stützpunkte ab. So „schmilzt" die Linie smooth unter
+  // dem Puck weg — nie vor, nie hinter dem Standort.
+  //
+  // Vorher (_pinVisibleRouteStartToPosition) hing der Kopf am nächsten Vertex und
+  // wurde nur geheftet, wenn dieser <25m entfernt war. Auf langen Segmenten
+  // (GraphHopper-Vertices 50–300m auseinander) blieb der Kopf darum hinter dem
+  // Puck stehen → genau das gemeldete „Linie viel zu weit vorne/hinten".
+  bool _trimVisibleRouteToProjection(RouteWindowMatch match) {
+    final coords = _fullRouteCoordinates;
+    if (coords.length < 2) return false;
+    // Nur heften, wenn der Fahrer wirklich auf der Route ist (lateral ≤ 18m) —
+    // sonst (echter Off-Route/Drift) den Kopf NICHT zwangsweise ziehen.
+    if (match.distanceMeters > _headSnapMaxMeters) return false;
+
+    final segIdx = match.segmentIndex;
+    final frac = match.segmentFraction;
+    List<double> projHead;
+    int aheadStart;
+    if (segIdx != null && frac != null && segIdx + 1 < coords.length) {
+      final a = coords[segIdx];
+      final b = coords[segIdx + 1];
+      final f = frac.clamp(0.0, 1.0);
+      projHead = [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f];
+      aheadStart = segIdx + 1;
+    } else {
+      final idx = match.index.clamp(0, coords.length - 1);
+      projHead = [coords[idx][0], coords[idx][1]];
+      aheadStart = idx + 1;
+    }
+    if (aheadStart > coords.length) aheadStart = coords.length;
+
+    final windowEnd = _findLookAheadIndex(aheadStart, 3000);
+    final newRemaining = <List<double>>[
+      projHead,
+      if (aheadStart < windowEnd)
+        for (final c in coords.sublist(aheadStart, windowEnd)) [c[0], c[1]],
+    ];
+    if (newRemaining.length < 2) return false;
+
+    // Kein Update, wenn sich praktisch nichts geändert hat (Spam vermeiden).
+    if (_remainingRouteCoordinates.isNotEmpty &&
+        _remainingRouteCoordinates.length == newRemaining.length) {
+      final cur = _remainingRouteCoordinates.first;
+      final moved = geo.Geolocator.distanceBetween(
+          cur[1], cur[0], projHead[1], projHead[0]);
+      if (moved < 0.4) return false;
     }
 
-    // 2026-05-28 (vucko Task #83): Den sichtbaren Routenkopf NUR dann an die
-    // GPS-Position heften, wenn der Fahrer wirklich nah am Routenanfang ist.
-    // Der A→B-Korridor ist bis zu 800m breit (_currentPointToPointCorridorMeters).
-    // Ohne diese Schranke wurde bei seitlichem Versatz eine lange Verbindungs-
-    // linie von der weit entfernten GPS-Position zum zweiten Routenpunkt
-    // gezeichnet, die sich optisch mit dem Rest kreuzt → das „X"-Artefakt aus
-    // dem Startup-V-Test (sichtbar während „Route wird neu berechnet").
-    final routeHead = _remainingRouteCoordinates[1];
-    final distToRouteHead = geo.Geolocator.distanceBetween(
-      position.latitude,
-      position.longitude,
-      routeHead[1],
-      routeHead[0],
-    );
-    // 2026-06-01 (vucko): 70→25m verschärft. 70m erlaubte bei GPS-Drift im
-    // Bergtal noch deutlich sichtbare Zacken vom Routenpunkt zur Position.
-    if (distToRouteHead > 25) return false;
-
-    final nextStart = LatLng(position.latitude, position.longitude);
-    final currentStart = _routeLatLngs.first;
-    final movedMeters = geo.Geolocator.distanceBetween(
-      currentStart.latitude,
-      currentStart.longitude,
-      nextStart.latitude,
-      nextStart.longitude,
-    );
-    if (movedMeters < 0.4) return false;
-
-    final nextCoordinate = [position.longitude, position.latitude];
-    _remainingRouteCoordinates = [
-      nextCoordinate,
-      ..._remainingRouteCoordinates.skip(1),
-    ];
+    _remainingRouteCoordinates = newRemaining;
     _routeGeoJson = json.encode({
       'type': 'LineString',
-      'coordinates': _remainingRouteCoordinates,
+      'coordinates': newRemaining,
     });
-    _routeLatLngs = [nextStart, ..._routeLatLngs.skip(1)];
+    _routeLatLngs = [for (final c in newRemaining) LatLng(c[1], c[0])];
     return true;
   }
 
@@ -1785,7 +1798,30 @@ class _CruiseModePageState extends State<CruiseModePage>
       _camFromHeading = effectiveHeading;
     }
 
-    controller.forward(from: 0.0);
+    // 2026-06-06 (vucko P8): KEIN 60fps-Ticker (controller.forward) mehr — der
+    // feuerte pro Display-Frame ein instantes moveCamera über den Method-Channel
+    // (= der spürbare Lag). Stattdessen EIN engine-seitiges animateCamera pro
+    // GPS-Fix mit Dauer ≈ Fix-Intervall; die GL-Engine interpoliert Position +
+    // Bearing selbst (smooth). Forward-Offset (Look-ahead) wie zuvor, damit der
+    // Puck im unteren Drittel sitzt.
+    final offLat = lat + _forwardOffsetLat(effectiveHeading);
+    final offLng = lng + _forwardOffsetLng(effectiveHeading);
+    _camMoveRotate(offLat, offLng, 16.5, effectiveHeading,
+        animDuration: _followAnimDuration());
+  }
+
+  // 2026-06-06 (vucko P8): Animationsdauer ≈ tatsächliches GPS-Fix-Intervall
+  // (clamp 220–1200ms). So endet die Kamera-Animation genau dann, wenn der
+  // nächste Fix kommt → nahtlose, kontinuierliche Bewegung statt Sprünge.
+  DateTime? _lastFollowFixTime;
+  Duration _followAnimDuration() {
+    final now = DateTime.now();
+    var ms = 900;
+    if (_lastFollowFixTime != null) {
+      ms = now.difference(_lastFollowFixTime!).inMilliseconds.clamp(220, 1200);
+    }
+    _lastFollowFixTime = now;
+    return Duration(milliseconds: ms);
   }
 
   /// Zirkuläre Interpolation für Heading (0–360°).
@@ -4229,11 +4265,21 @@ class _CruiseModePageState extends State<CruiseModePage>
   // ───────────────────── MapLibre-Kamera-Adapter ─────────────────────────────
   // Bilden die wenigen MapController-Aufrufe nach und dispatchen je nach Engine,
   // damit die Aufrufstellen identisch bleiben.
-  void _camMoveRotate(double lat, double lng, double zoom, double headingDeg) {
+  void _camMoveRotate(double lat, double lng, double zoom, double headingDeg,
+      {Duration? animDuration}) {
     if (_useMapLibre) {
-      // MapLibre bearing = Kompassrichtung der Kamera = heading (Fahrtrichtung
-      // oben). Instantes moveCamera pro Tick (der Smoother interpoliert bereits).
-      _mlController?.moveTo(lat: lat, lng: lng, zoom: zoom, bearing: headingDeg);
+      // 2026-06-06 (vucko P8): EIN engine-seitiges animateCamera pro GPS-Fix
+      // (Dauer ≈ Fix-Intervall) statt 60fps-moveCamera über den Method-Channel.
+      // Die GL-Engine interpoliert Position UND Bearing auf ihrem eigenen Render-
+      // Thread → butterweich (Apple/Google-Technik), 1 Channel-Call pro Fix statt
+      // 60-120/s (= der frühere Lag). Bearing-Wrap übernimmt die Engine.
+      _mlController?.animateTo(
+        lat: lat,
+        lng: lng,
+        zoom: zoom,
+        bearing: headingDeg,
+        duration: animDuration ?? const Duration(milliseconds: 900),
+      );
     } else {
       try {
         _mapController.moveAndRotate(LatLng(lat, lng), zoom, -headingDeg);
@@ -8448,11 +8494,14 @@ class _CruiseModePageState extends State<CruiseModePage>
     // sichtbare Luftlinie vom Fahrer zur Route. Route-Slices werden nur nach
     // einem echten Route-Match oder einer berechneten Access-/Reroute gesetzt.
 
+    // 2026-06-06 (vucko P8): Rebuild-Throttle jetzt auf ALLEN Plattformen (vorher
+    // nur Web/16ms). Dieser „nackte" Per-Fix-Rebuild aktualisiert nur Puck-Geo +
+    // HUD; die FLÜSSIGE Bewegung macht die engine-seitige Kamera-Animation +
+    // Marker-Reprojektion in onCameraMove. Max ~11Hz reicht, spart UI-Churn.
     final now = DateTime.now();
     final skipRebuild =
-        kIsWeb &&
         _lastWebRebuildTime != null &&
-        now.difference(_lastWebRebuildTime!).inMilliseconds < 16;
+        now.difference(_lastWebRebuildTime!).inMilliseconds < 90;
     if (!skipRebuild) {
       _lastWebRebuildTime = now;
       _safeSetState(() {});
@@ -8524,10 +8573,6 @@ class _CruiseModePageState extends State<CruiseModePage>
 
     var needsRebuild = false;
     if (!isOutsideCorridor &&
-        _pinVisibleRouteStartToPosition(effectivePosition)) {
-      needsRebuild = true;
-    }
-    if (!isOutsideCorridor &&
         _updateRemainingDistanceAndDuration(routeMatch: match)) {
       needsRebuild = true;
     }
@@ -8594,6 +8639,14 @@ class _CruiseModePageState extends State<CruiseModePage>
         _routeGeoJson = json.encode(clipped);
         await _drawRoute(clipped, animateCamera: false);
       }
+    }
+
+    // 2026-06-06 (vucko P3): JEDEN Tick den Kopf der roten Linie exakt auf die
+    // projizierte Puck-Position setzen (entkoppelt vom groben 25m-Redraw oben,
+    // der nur teure GeoJSON-/flutter_map-Updates throttelt). So folgt der
+    // Linienkopf dem Standort lückenlos — nie davor, nie dahinter.
+    if (!isOutsideCorridor && _trimVisibleRouteToProjection(match)) {
+      needsRebuild = true;
     }
 
     // Prüfe ob Route zu Ende ist
@@ -10361,7 +10414,9 @@ class _CruiseModePageState extends State<CruiseModePage>
     final position = _userLocation;
     if (position == null || !_mapReady) return;
     try {
-      _camMove(position.latitude, position.longitude, 16.0);
+      // 2026-06-06 (vucko P1): 16.0 → 16.5 = identischer Zoom wie der Follow-
+      // Modus, damit Recenter/Nav-Start nicht zwischen 16.0/16.5 springt.
+      _camMove(position.latitude, position.longitude, 16.5);
     } catch (e) {
       debugPrint('[CruiseMode] Recenter fehlgeschlagen: $e');
     }
@@ -10422,7 +10477,9 @@ class _CruiseModePageState extends State<CruiseModePage>
     });
     try {
       // Kamera zur User-Position zoomen
-      _camMove(position.latitude, position.longitude, 16.0);
+      // 2026-06-06 (vucko P1): 16.0 → 16.5 = identischer Zoom wie der Follow-
+      // Modus, damit Recenter/Nav-Start nicht zwischen 16.0/16.5 springt.
+      _camMove(position.latitude, position.longitude, 16.5);
     } catch (e) {
       debugPrint('[CruiseMode] Navigations-Kamera setzen fehlgeschlagen: $e');
     }
