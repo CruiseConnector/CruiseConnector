@@ -364,6 +364,11 @@ class _CruiseModePageState extends State<CruiseModePage>
 
   // ─────────────────────── Navigation State ─────────────────────────────────
   geo.Position? _userLocation;
+  // 2026-06-06 (vucko P10): Letzter bekannter Standort, STATISCH über Page-Opens
+  // hinweg gecacht. Wird als initialCenter der Karte benutzt → beim Öffnen der
+  // Cruise-Page ist man SOFORT auf dem Standort statt erst „Deutschland-Mitte@z6"
+  // zu sehen, bis das asynchrone GPS aufgelöst hat.
+  static LatLng? _cachedUserCenter;
   List<List<double>> _fullRouteCoordinates = [];
   List<List<double>> _remainingRouteCoordinates = [];
   List<RouteManeuver> _maneuvers = [];
@@ -864,6 +869,9 @@ class _CruiseModePageState extends State<CruiseModePage>
   void initState() {
     super.initState();
     _loadVectorTiles();
+    // 2026-06-06 (vucko P10): Zuletzt bekannten Standort laden → Karte öffnet
+    // (auch beim Kaltstart) sofort dort statt bei „Deutschland-Mitte@z6".
+    unawaited(_loadPersistedUserCenter());
     // 2026-06-02 (vucko Sync): Schließt das Auto den Abschluss-Screen mit
     // „Fertig", soll das Handy-Sheet ebenfalls zugehen (beidseitige Sync).
     CarCommandListener.instance.onCompletionDone = () {
@@ -4325,9 +4333,16 @@ class _CruiseModePageState extends State<CruiseModePage>
 
   // ───────────────────── MapLibre-Karte (neue Engine) ────────────────────────
   Widget _buildMapLibreMap() {
+    // 2026-06-06 (vucko P10): Wenn wir den Standort schon kennen (gecacht oder
+    // live), die Karte SOFORT dort öffnen (z13) statt bei Deutschland-Mitte@z6.
+    final initialCenter = _userPosition ??
+        _cachedUserCenter ??
+        const LatLng(51.165691, 10.451526);
+    final initialZoom =
+        (_userPosition ?? _cachedUserCenter) != null ? 13.0 : 6.0;
     return CruiseMapLibreMap(
-      initialCenter: const LatLng(51.165691, 10.451526),
-      initialZoom: 6.0,
+      initialCenter: initialCenter,
+      initialZoom: initialZoom,
       lines: _buildMapLibreLines(),
       markers: _buildMapLibreMarkers(),
       onControllerReady: (c) {
@@ -4822,6 +4837,14 @@ class _CruiseModePageState extends State<CruiseModePage>
       // Kein _drawRoute nötig da _routeLatLngs bereits im State ist
       if (_isRouteConfirmed) _activateNavigationCamera();
     } else {
+      // 2026-06-06 (vucko P10): Kennen wir den Standort schon (gecacht/persistiert),
+      // SOFORT hin zentrieren — bevor das asynchrone GPS in _initializeMapLocation
+      // auflöst. Schließt das Kaltstart-Fenster, in dem sonst kurz „Deutschland"
+      // zu sehen war, falls die Karte vor dem Prefs-Load nativ erzeugt wurde.
+      final cached = _cachedUserCenter;
+      if (cached != null && _userLocation == null) {
+        _camMove(cached.latitude, cached.longitude, 13.0);
+      }
       _initializeMapLocation();
     }
   }
@@ -5409,12 +5432,48 @@ class _CruiseModePageState extends State<CruiseModePage>
   }
 
   void _setCameraToPosition(geo.Position position) {
+    // 2026-06-06 (vucko P10): Standort cachen → nächstes Cruise-Page-Öffnen
+    // startet die Karte sofort hier statt bei Deutschland-Mitte.
+    _cachedUserCenter = LatLng(position.latitude, position.longitude);
+    unawaited(_persistUserCenter(_cachedUserCenter!));
     if (!_mapReady) return;
     try {
       _camMove(position.latitude, position.longitude, 13.0);
     } catch (e) {
       debugPrint('[CruiseMode] setCamera fehlgeschlagen: $e');
     }
+  }
+
+  // 2026-06-06 (vucko P10): Letzten Standort persistieren + beim App-Start laden,
+  // damit AUCH das allererste Cruise-Öffnen nach einem Kaltstart sofort auf dem
+  // (zuletzt bekannten) Standort liegt statt auf „Deutschland-Mitte".
+  static const String _prefsLastCenterLat = 'cruise_last_center_lat_v1';
+  static const String _prefsLastCenterLng = 'cruise_last_center_lng_v1';
+
+  Future<void> _persistUserCenter(LatLng c) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setDouble(_prefsLastCenterLat, c.latitude);
+      await prefs.setDouble(_prefsLastCenterLng, c.longitude);
+    } catch (_) {}
+  }
+
+  Future<void> _loadPersistedUserCenter() async {
+    if (_cachedUserCenter != null) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final lat = prefs.getDouble(_prefsLastCenterLat);
+      final lng = prefs.getDouble(_prefsLastCenterLng);
+      if (lat != null && lng != null) {
+        _cachedUserCenter ??= LatLng(lat, lng);
+        // Karte schon offen, aber noch kein Live-Fix → sofort grob hin zentrieren.
+        if (mounted && _mapReady && _userLocation == null) {
+          _camMove(lat, lng, 13.0);
+        } else if (mounted) {
+          _safeSetState(() {}); // nächster Build nutzt _cachedUserCenter als initialCenter
+        }
+      }
+    } catch (_) {}
   }
 
   bool _hasUsableLocationPermission(geo.LocationPermission permission) {
@@ -8513,7 +8572,10 @@ class _CruiseModePageState extends State<CruiseModePage>
 
     // ── Kamera-Bewegung ──────────────────────────────────────────────────────
     // Alle Plattformen: Animierte Interpolation (60fps smooth)
-    if (_isCameraLocked && _mapReady) {
+    // 2026-06-06 (vucko P11): Während die Routen-Übersicht (Karten-Button) läuft,
+    // den Follow NICHT feuern — sonst zog der nächste GPS-Fix die Kamera sofort
+    // wieder auf den Standort und die Übersicht „funktionierte nicht".
+    if (_isCameraLocked && _mapReady && !_isOverviewActive) {
       if (kIsWeb) {
         final predicted = _webSmoother.predict(
           DateTime.now().add(const Duration(milliseconds: 180)),
@@ -8539,6 +8601,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       effectivePosition.latitude,
       effectivePosition.longitude,
     );
+    _cachedUserCenter = _userPosition; // 2026-06-06 (vucko P10): Center-Cache frisch halten
     if (_isRouteConfirmed && _navigationStartTime != null) {
       _recordDrivenTrackSample(effectivePosition);
     }
@@ -10582,9 +10645,12 @@ class _CruiseModePageState extends State<CruiseModePage>
       }
     } catch (e) {
       debugPrint('[CruiseMode] Route-Übersicht fehlgeschlagen: $e');
+    } finally {
+      // 2026-06-06 (vucko P11-Fix): IMMER zurücksetzen — auch wenn oben bei
+      // !mounted/_disposed früh returnt wird. Sonst bliebe _isOverviewActive
+      // true hängen → der Follow wäre für diese Page-Instanz dauerhaft tot.
+      _isOverviewActive = false;
     }
-
-    _isOverviewActive = false;
   }
 
   Future<void> _activateNavigationCamera() async {
