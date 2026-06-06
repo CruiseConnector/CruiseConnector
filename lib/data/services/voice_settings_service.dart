@@ -1,27 +1,32 @@
-import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter/foundation.dart';
 
 /// Globale Voice-Navigation-Einstellung.
 ///
-/// Wird persistiert via SharedPreferences. Aktuell noch nicht mit
-/// flutter_tts verkoppelt — die UI-Toggles sind aber bereits da, damit
-/// User die Option überall (Settings + In-Route) sehen können.
+/// 2026-06-06 (vucko): EINE Source of Truth = [mode] (off / important / all).
+/// Früher gab es zwei getrennte Flags (`enabled` UND `mode`), und TTS sprach nur
+/// wenn BEIDE passten. Dadurch musste man die Ansagen erst in den Einstellungen
+/// freischalten, bevor der Cruise-Mode-Schalter überhaupt wirkte — unlogisch.
+/// Jetzt steuert JEDER der beiden Schalter (Settings-Switch ODER Cruise-FAB)
+/// die Ansagen vollständig allein. `isEnabled` ist nur noch abgeleitet.
 ///
-/// Default: OFF — TTS wird erst aktiviert wenn die Implementierung
-/// gegen alle Manöver-Codes/Sprachen getestet ist.
+/// Persistiert via SharedPreferences. Default: OFF (Ansagen aus, bis der User
+/// sie mit EINEM Tap aktiviert — kein doppeltes Freischalten mehr).
 enum VoiceMode { off, important, all }
 
 class VoiceSettingsService extends ChangeNotifier {
   VoiceSettingsService._();
   static final VoiceSettingsService instance = VoiceSettingsService._();
 
-  static const _keyEnabled = 'voice_navigation_enabled_v1';
   static const _keyMode = 'voice_navigation_mode_v1';
-  bool _loaded = false;
-  bool _enabled = false;
-  VoiceMode _mode = VoiceMode.all;
+  // Nur noch für die Migration alter Installationen gelesen (siehe load()).
+  static const _keyEnabledLegacy = 'voice_navigation_enabled_v1';
 
-  bool get isEnabled => _enabled;
+  bool _loaded = false;
+  VoiceMode _mode = VoiceMode.off;
+
+  /// Abgeleitet: Ansagen aktiv = Modus ist nicht „off". Kein separates Flag mehr.
+  bool get isEnabled => _mode != VoiceMode.off;
   bool get isLoaded => _loaded;
   VoiceMode get mode => _mode;
 
@@ -29,34 +34,34 @@ class VoiceSettingsService extends ChangeNotifier {
   Future<void> load() async {
     if (_loaded) return;
     final prefs = await SharedPreferences.getInstance();
-    _enabled = prefs.getBool(_keyEnabled) ?? false;
-    final modeIdx = prefs.getInt(_keyMode) ?? 2;
-    _mode = VoiceMode.values[modeIdx.clamp(0, 2)];
+    final modeIdx = prefs.getInt(_keyMode);
+    if (modeIdx != null) {
+      _mode = VoiceMode.values[modeIdx.clamp(0, 2)];
+    } else if (prefs.getBool(_keyEnabledLegacy) ?? false) {
+      // Migration: wer früher den Settings-Schalter „an" hatte → volle Ansagen.
+      _mode = VoiceMode.all;
+    } else {
+      _mode = VoiceMode.off;
+    }
     _loaded = true;
     notifyListeners();
-  }
-
-  Future<void> setEnabled(bool value) async {
-    if (_enabled == value) return;
-    _enabled = value;
-    notifyListeners();
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_keyEnabled, value);
   }
 
   Future<void> setMode(VoiceMode m) async {
     if (_mode == m) return;
     _mode = m;
-    if (m != VoiceMode.off) _enabled = true;
     notifyListeners();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt(_keyMode, m.index);
-    await prefs.setBool(_keyEnabled, _enabled);
   }
 
-  Future<void> toggle() => setEnabled(!_enabled);
+  /// Master-An/Aus (z. B. Settings-Switch): an → „Alle Ansagen", aus → stumm.
+  Future<void> setEnabled(bool value) =>
+      setMode(value ? VoiceMode.all : VoiceMode.off);
 
-  /// 3-Phasen-Cycle: off → important → all → off.
+  Future<void> toggle() => setMode(isEnabled ? VoiceMode.off : VoiceMode.all);
+
+  /// 3-Phasen-Cycle (Cruise-FAB): off → important → all → off.
   Future<void> cycleMode() async {
     final next = switch (_mode) {
       VoiceMode.off => VoiceMode.important,

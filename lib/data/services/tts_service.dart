@@ -47,8 +47,12 @@ class TtsService {
   }
 
   bool _shouldSpeak({required bool isImportant}) {
+    // 2026-06-06 (vucko): EINZIGES Gate = mode. Früher zusätzlich `isEnabled`
+    // verlangt → man musste Ansagen erst in den Einstellungen freischalten,
+    // bevor der Cruise-Schalter wirkte. Jetzt steuert der Modus (off/important/
+    // all) allein, egal über welchen Schalter er gesetzt wurde.
     final s = VoiceSettingsService.instance;
-    if (!s.isEnabled || s.mode == VoiceMode.off) return false;
+    if (s.mode == VoiceMode.off) return false;
     if (s.mode == VoiceMode.important && !isImportant) return false;
     return true;
   }
