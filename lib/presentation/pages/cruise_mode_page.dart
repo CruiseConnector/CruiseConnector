@@ -6316,11 +6316,27 @@ class _CruiseModePageState extends State<CruiseModePage>
     // „manchmal kommt es trotzdem auf"). Off-Road-sicher (40m-Guard im
     // Validator); fällt auf das Original zurück, wenn Cleanup nichts findet.
     final cleanedResult = _cleanRouteForDisplay(result);
+    // 2026-06-06 (vucko P9): Die Route MUSS IMMER am User-Standort beginnen —
+    // egal ob Live, Pool, A→B oder Wegpunkte. Darum den Access-Leg vom GPS zum
+    // Routenstart hier UNBEDINGT erzwingen (vorher nur für Rundkurse → A→B- und
+    // Pool-Routen starteten mitten in der Strecke, Puck mittendrin = User-Report).
+    // allowDistantAccess nur für POOL/Reserve-Quellen (deren fixer Start kann weit
+    // weg liegen); eine LIVE-Route startet ohnehin am User → ist sie „zu weit",
+    // soll lieber der bestehende Guard werfen als ein Querfeldein-Connector.
+    final routeSource =
+        (cleanedResult.edgeMeta['route_source'] ?? cleanedResult.edgeMeta['source'])
+            ?.toString() ??
+        '';
+    final isPoolSourced = routeSource == 'pool' ||
+        routeSource == 'route_pool' ||
+        routeSource == 'candidate_reserve';
     final prepared = await _prepareRouteForPreviewStart(
       result: cleanedResult,
       startPosition: startPosition,
       isRoundTrip: _isRoundTrip,
       avoidHighways: _avoidHighways,
+      forceAccessFromCurrentLocation: true,
+      allowDistantAccess: isPoolSourced,
     );
 
     // 2026-06-02 (vucko KRITISCHER FIX): Der Länder-Gate war ein HARTER Block
@@ -6615,14 +6631,35 @@ class _CruiseModePageState extends State<CruiseModePage>
       );
     }
 
-    final accessPlan = await _routeService.buildAccessRouteToExistingRoute(
-      currentPosition: startPosition,
-      existingRoute: result,
-      mode: _selectedStyle,
-      avoidHighways: avoidHighways,
-      returnToSessionOrigin: true,
-      rebaseClosedLoop: isRoundTrip,
-    );
+    final RouteAccessPlan accessPlan;
+    try {
+      accessPlan = await _routeService.buildAccessRouteToExistingRoute(
+        currentPosition: startPosition,
+        existingRoute: result,
+        mode: _selectedStyle,
+        avoidHighways: avoidHighways,
+        // 2026-06-06 (vucko P9-Fix): returnToSessionOrigin NUR bei Rundkursen.
+        // Seit P9 läuft dieser Block auch für A→B (forceAccessFromCurrentLocation);
+        // mit `true` hängte er eine Rück-Leg B→A an → aus A→B wurde ein Loop.
+        // Der Navigations-Pfad nutzt ebenfalls returnToSessionOrigin:isRoundTrip.
+        returnToSessionOrigin: isRoundTrip,
+        rebaseClosedLoop: isRoundTrip,
+        // 2026-06-06 (vucko P9): Bei NICHT-Rundkursen (A→B) den Join hart auf den
+        // ECHTEN Routenstart (Index 0) pinnen. Sonst wählt chooseJoinPoint den
+        // nächstgelegenen On-Route-Punkt → sitzt der User mittig, würde der
+        // Routenkopf abgeschnitten und die Strecke begänne mittendrin. Rundkurse
+        // behalten die Loop-Rotation (rebaseClosedLoop wählt den besten Einstieg).
+        preferredJoinIndex: isRoundTrip ? null : 0,
+      );
+    } catch (e) {
+      // 2026-06-06 (vucko P9-Fix): Schlägt die Access-Leg-Berechnung fehl
+      // (z.B. GraphHopper liefert nichts für die Anbindung), die Route TROTZDEM
+      // anzeigen (un-rebased) statt sie zu verschlucken — sichtbare Route >
+      // gar keine Route. (Die Distanz-Reject-Guard oben wirft weiterhin bewusst.)
+      debugPrint(
+          '[CruiseMode] Preview-Access-Leg fehlgeschlagen, zeige Route ohne Rebase: $e');
+      return result;
+    }
     _logAccessLegMeta(accessPlan);
     final prepared = _withMergedRouteMeta(accessPlan.activeRoute, {
       'route_source':
