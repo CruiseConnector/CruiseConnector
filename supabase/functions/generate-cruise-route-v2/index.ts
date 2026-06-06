@@ -543,10 +543,12 @@ async function callGraphHopper(opts: {
   // funktioniert, GH kann immer noch eskalieren).
   // 2026-06-06 (vucko P5): HARTE Sperre für nicht-PKW-Wege. User-Feedback aus
   // Test-Rundkurs: die Route führte über Traktor-/Feldwege (TRACK) und Wege, die
-  // ein PKW NICHT befahren darf. priority 0 = „Kante komplett meiden" (im
-  // round_trip-Algorithmus bewiesen wirksam, s. Motorway-Hard-Block oben).
-  // SERVICE bleibt nur mild bestraft (legitime Zufahrten nötig, sonst NO_ROUTE).
-  // road_class ist derselbe Encoded-Value wie bisher → safe (kein Re-Import).
+  // ein PKW NICHT befahren darf. priority 0 = ECHTER Hard-Block (GraphHopper:
+  // ConnectionNotFound auf der Kante, NICHT eskalierbar — gleiche Mechanik wie
+  // der Motorway-Block oben). Bewusst: lieber NO_ROUTE als eine Route über einen
+  // Feldweg. SERVICE bleibt nur mild bestraft (legitime Zufahrten nötig, sonst
+  // würden Start/Ziel an Service-Roads unerreichbar). road_class ist derselbe
+  // Encoded-Value wie bisher → safe (kein Graph-Re-Import nötig).
   overlay.priority.push({ if: 'road_class == TRACK', multiply_by: '0' });
   overlay.priority.push({ if: 'road_class == PATH', multiply_by: '0' });
   overlay.priority.push({ if: 'road_class == FOOTWAY', multiply_by: '0' });

@@ -1808,25 +1808,27 @@ class _CruiseModePageState extends State<CruiseModePage>
     // GPS-Fix mit Dauer ≈ Fix-Intervall; die GL-Engine interpoliert Position +
     // Bearing selbst (smooth). Forward-Offset (Look-ahead) wie zuvor, damit der
     // Puck im unteren Drittel sitzt.
+    // 2026-06-06 (vucko P8): Throttle für SCHNELLE Quellen (Sim 20Hz / High-Rate-
+    // GPS). Ohne das würde alle ~50ms eine neue 220ms-Engine-Animation gestartet
+    // → jede Animation 4-5× neu angestoßen, bevor sie ausläuft = Mikro-Ruckeln.
+    // Min. 180ms Abstand → die laufende Animation darf ~auslaufen; die Dauer ≈
+    // tatsächliches Ausgabe-Intervall (clamp 220–1200ms) → nahtlose Bewegung.
+    final nowCam = DateTime.now();
+    if (_lastFollowFixTime != null &&
+        nowCam.difference(_lastFollowFixTime!).inMilliseconds < 180) {
+      return;
+    }
+    final durMs = _lastFollowFixTime == null
+        ? 900
+        : nowCam.difference(_lastFollowFixTime!).inMilliseconds.clamp(220, 1200);
+    _lastFollowFixTime = nowCam;
     final offLat = lat + _forwardOffsetLat(effectiveHeading);
     final offLng = lng + _forwardOffsetLng(effectiveHeading);
     _camMoveRotate(offLat, offLng, 16.5, effectiveHeading,
-        animDuration: _followAnimDuration());
+        animDuration: Duration(milliseconds: durMs));
   }
 
-  // 2026-06-06 (vucko P8): Animationsdauer ≈ tatsächliches GPS-Fix-Intervall
-  // (clamp 220–1200ms). So endet die Kamera-Animation genau dann, wenn der
-  // nächste Fix kommt → nahtlose, kontinuierliche Bewegung statt Sprünge.
   DateTime? _lastFollowFixTime;
-  Duration _followAnimDuration() {
-    final now = DateTime.now();
-    var ms = 900;
-    if (_lastFollowFixTime != null) {
-      ms = now.difference(_lastFollowFixTime!).inMilliseconds.clamp(220, 1200);
-    }
-    _lastFollowFixTime = now;
-    return Duration(milliseconds: ms);
-  }
 
   /// Zirkuläre Interpolation für Heading (0–360°).
   static double _lerpAngleDeg(double from, double to, double t) {
@@ -10116,8 +10118,12 @@ class _CruiseModePageState extends State<CruiseModePage>
       // Fahrer dockt smooth wieder an, statt dass das System aufgibt.
       if (rerouteResult == null && mounted && !_disposed) {
         try {
+          // 2026-06-06 (vucko P2-Fix): untere Schranke nie > obere — sonst wirft
+          // clamp ArgumentError, wenn der Match schon am Routenende sitzt.
+          final rejoinUpper = planningCoordinates.length - 1;
           final rejoinIdx = _findLookAheadIndex(globalMatch.index, 400)
-              .clamp(globalMatch.index + 1, planningCoordinates.length - 1);
+              .clamp(math.min(globalMatch.index + 1, rejoinUpper), rejoinUpper)
+              .toInt();
           final rejoinPt = planningCoordinates[rejoinIdx];
           final connector = await _routeService.generatePointToPoint(
             startPosition: position,
