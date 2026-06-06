@@ -418,6 +418,10 @@ class _CruiseModePageState extends State<CruiseModePage>
   double? _remainingDistance; // Live verbleibende Distanz in Metern
   double? _remainingDuration; // Live verbleibende Zeit in Sekunden
   bool _isRerouting = false; // Verhindert mehrfaches gleichzeitiges Rerouting
+  // 2026-06-06 (vucko P2): „Route wird neu berechnet"-Banner NUR einmal pro
+  // Reroute-Zyklus zeigen (vorher pro Versuch → Spam). Wird beim Erfolg/Fehler
+  // zurückgesetzt.
+  bool _rerouteBannerShown = false;
   DateTime? _lastRerouteTime; // Cooldown zwischen Reroutes
   int _offRouteCount = 0; // Zählt aufeinanderfolgende Off-Route-Updates
   bool _isExistingRouteSession =
@@ -7711,18 +7715,22 @@ class _CruiseModePageState extends State<CruiseModePage>
     );
     _markCurrentRouteWithRerouteMeta(meta);
     _logRerouteMeta(meta);
+    // 2026-06-06 (vucko P2): Auch ein FEHLGESCHLAGENER Reroute verhängt den vollen
+    // Cooldown → kein erneutes Antriggern alle ~12s (das war der Meldungs-Spam).
+    _lastRerouteTime = DateTime.now();
+    _rerouteBannerShown = false;
+    // 2026-06-06 (vucko P6): Meldung NUR oben (TopToast), nicht mehr als orange
+    // SnackBar unten. P7 deckelt automatisch auf ≤5s + Swipe-to-dismiss.
     if (mounted) {
-      ScaffoldMessenger.of(context)
-        ..hideCurrentSnackBar()
-        ..showSnackBar(
-          const SnackBar(
-            content: Text(
-              'Keine sichere Straßen-Reroute gefunden. Bitte weiterfahren und erst bei sicherer Möglichkeit wenden.',
-            ),
-            backgroundColor: Color(0xFFFF9500),
-            duration: Duration(seconds: 2),
-          ),
-        );
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      TopToast.show(
+        context,
+        message:
+            'Keine sichere Reroute — folge der Linie, wende erst bei sicherer Möglichkeit',
+        icon: Icons.warning_amber_rounded,
+        isError: true,
+        duration: const Duration(milliseconds: 4000),
+      );
     }
   }
 
@@ -7754,18 +7762,18 @@ class _CruiseModePageState extends State<CruiseModePage>
     );
     _markCurrentRouteWithRerouteMeta(meta);
     _logRerouteMeta(meta);
+    _lastRerouteTime = DateTime.now();
+    _rerouteBannerShown = false;
+    // 2026-06-06 (vucko P6): oben statt orange Bottom-SnackBar.
     if (mounted) {
-      ScaffoldMessenger.of(context)
-        ..hideCurrentSnackBar()
-        ..showSnackBar(
-          const SnackBar(
-            content: Text(
-              'Offline: Keine neue Route möglich. Die gespeicherte Route bleibt sichtbar - fahre nur bei sicherer Möglichkeit zur Route zurück.',
-            ),
-            backgroundColor: Color(0xFFFF9500),
-            duration: Duration(seconds: 4),
-          ),
-        );
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      TopToast.show(
+        context,
+        message: 'Offline — gespeicherte Route bleibt sichtbar',
+        icon: Icons.cloud_off_rounded,
+        isError: true,
+        duration: const Duration(milliseconds: 4000),
+      );
     }
   }
 
@@ -7880,6 +7888,12 @@ class _CruiseModePageState extends State<CruiseModePage>
     };
     _routeGeoJson = json.encode(clipped);
     await _drawRoute(clipped, animateCamera: false);
+    // 2026-06-06 (vucko P2/P4): Reroute-Banner-Flag zurücksetzen (nächster Off-
+    // Route-Zyklus darf wieder genau EIN Banner zeigen) + die GRAUE Vorschau-/
+    // Hintergrundroute deterministisch neu zeichnen (gleicher Signatur-
+    // Fingerprint bei Rundkurs-Reroute hätte sie sonst stehen lassen).
+    _rerouteBannerShown = false;
+    _mlController?.forceResyncLines();
     unawaited(
       RouteCacheService.instance.storeConfirmedRoute(
         route: result,
@@ -9769,15 +9783,15 @@ class _CruiseModePageState extends State<CruiseModePage>
       return;
     }
 
-    if (mounted) {
-      // 2026-05-25 (vucko UX): TopToast statt Snackbar, persistent bis
-      // Reroute fertig oder fail (10s timeout). Frueher 2s Snackbar war
-      // zu kurz → User wusste nicht ob das System antwortet.
+    if (mounted && !_rerouteBannerShown) {
+      // 2026-06-06 (vucko P2): NUR EINMAL pro Reroute-Zyklus (vorher pro Versuch
+      // → der Spam aus dem Test). P7 deckelt die Anzeige auf ≤5s.
+      _rerouteBannerShown = true;
       TopToast.show(
         context,
         message: 'Route wird neu berechnet — bitte weiterfahren',
         icon: Icons.refresh_rounded,
-        duration: const Duration(seconds: 8),
+        duration: const Duration(seconds: 5),
       );
     }
 
@@ -10092,6 +10106,82 @@ class _CruiseModePageState extends State<CruiseModePage>
         rerouteResult = candidate;
         acceptedPlan = activePlan;
         break;
+      }
+
+      // 2026-06-06 (vucko P2-B): GARANTIERTER Re-Dock-Fallback. Lieferten die
+      // regulären Connector-Versuche nichts (häufig bei Rundkursen → vorher nur
+      // „Keine sichere Reroute" + Spam, ohne dass je etwas passierte), erzwingen
+      // wir eine DIREKTE Verbindung vom aktuellen GPS zu einem Vorwärts-Punkt der
+      // Originalroute (forceAcceptDirect) und mergen mit dem Original-Rest → der
+      // Fahrer dockt smooth wieder an, statt dass das System aufgibt.
+      if (rerouteResult == null && mounted && !_disposed) {
+        try {
+          final rejoinIdx = _findLookAheadIndex(globalMatch.index, 400)
+              .clamp(globalMatch.index + 1, planningCoordinates.length - 1);
+          final rejoinPt = planningCoordinates[rejoinIdx];
+          final connector = await _routeService.generatePointToPoint(
+            startPosition: position,
+            destinationLat: rejoinPt[1],
+            destinationLng: rejoinPt[0],
+            mode: 'Standard',
+            avoidHighways: rerouteAvoidHighways,
+            navigationReroute: true,
+            forceAcceptDirect: true,
+            currentHeadingDegrees: heading,
+            currentSpeedMetersPerSecond: rerouteSpeedMps,
+            locationAccuracyMeters: rerouteAccuracyMeters,
+          );
+          if (connector.coordinates.length >= 2 && mounted && !_disposed) {
+            final connLen = connector.coordinates.length;
+            final tail = planningCoordinates.sublist(rejoinIdx);
+            final mergedCoords = <List<double>>[
+              ...connector.coordinates,
+              ...tail.skip(1),
+            ];
+            final mergedManeuvers = <RouteManeuver>[
+              ...connector.maneuvers,
+              for (final m in planningManeuvers)
+                if (m.routeIndex >= rejoinIdx)
+                  RouteManeuver(
+                    latitude: m.latitude,
+                    longitude: m.longitude,
+                    routeIndex: connLen + (m.routeIndex - rejoinIdx) - 1,
+                    icon: m.icon,
+                    announcement: m.announcement,
+                    instruction: m.instruction,
+                    maneuverType: m.maneuverType,
+                    roundaboutExitNumber: m.roundaboutExitNumber,
+                  ),
+            ];
+            final dist = _calculatePolylineDistanceMeters(mergedCoords);
+            await _commitRerouteResult(
+              result: _buildRouteResultFromCoordinates(
+                coordinates: mergedCoords,
+                maneuvers: mergedManeuvers,
+                distanceMeters: dist,
+                durationSeconds: _estimateDurationSecondsForDistance(dist),
+                speedLimits: connector.speedLimits,
+                edgeMeta: {
+                  ...connector.edgeMeta,
+                  'reroute_mode': 'guaranteed_redock',
+                },
+              ),
+              position: position,
+            );
+            if (mounted) {
+              TopToast.show(
+                context,
+                message: 'Route neu berechnet — zurück auf Kurs',
+                icon: Icons.check_circle,
+                duration: const Duration(milliseconds: 2500),
+              );
+            }
+            return;
+          }
+        } catch (e) {
+          debugPrint(
+              '[CruiseMode] Garantierter Re-Dock-Fallback fehlgeschlagen: $e');
+        }
       }
 
       if (rerouteResult == null ||
