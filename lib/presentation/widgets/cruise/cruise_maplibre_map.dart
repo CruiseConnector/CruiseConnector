@@ -83,6 +83,14 @@ class CruiseMapLibreController {
     if (pending != null) unawaited(pending());
   }
 
+  // 2026-06-06 (vucko P4): Erzwingt ein Neuzeichnen ALLER Linien (rote aktive +
+  // graue Vorschau), auch wenn die billige Signatur sich „nicht geändert" hat
+  // (z. B. Reroute mit gleicher Punktzahl/gleichen Endpunkten, aber neuer
+  // Mitte). Wird vom State gesetzt (forceResyncLines → _lastLinesSig='' +
+  // _syncLines()) und von cruise_mode_page beim Reroute-Commit aufgerufen.
+  void Function()? onForceResyncLines;
+  void forceResyncLines() => onForceResyncLines?.call();
+
   mb.MapLibreMapController get raw => _map;
 
   Future<void> animateTo({
@@ -254,6 +262,13 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
   // ALLE solchen Calls gaten; beim Zurückkommen erst nach dem nächsten Frame.
   bool _appResumed = true;
 
+  // 2026-06-06 (vucko P1): Echte Finger-Geste vs. programmatischer Follow-Move.
+  // Programmatische Kamera-Moves (animateTo/moveTo) erzeugen KEINE Pointer-
+  // Events — nur eine echte Geste tut das. Beim echten Drag (>18px) wird
+  // onCameraMoved EINMAL pro Geste gefeuert (= Lock lösen), sonst nie.
+  Offset? _pointerDownPos;
+  bool _userPanFired = false;
+
   @override
   void initState() {
     super.initState();
@@ -311,18 +326,28 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
     }
   }
 
-  /// Billige Signatur der Linien-Geometrie (Anzahl + erster/letzter Punkt je
-  /// Linie). Ändert sich nur, wenn die Route-Geometrie sich tatsächlich ändert.
+  /// Billige Signatur der Linien-Geometrie. Ändert sich, wenn sich die Route-
+  /// Geometrie ändert.
+  /// 2026-06-06 (vucko P4): zusätzlich 3 Mittel-Stützpunkte (¼/½/¾) samplen.
+  /// Vorher nur Anzahl+erster+letzter → ein Reroute mit GLEICHER Punktzahl und
+  /// gleichem Start/Ziel (typisch bei Rundkursen) änderte die Signatur NICHT →
+  /// die graue Vorschau-Route blieb auf der alten Geometrie stehen.
   String _linesSignature() {
     final b = StringBuffer();
     for (final l in widget.lines) {
-      b.write(l.points.length);
-      if (l.points.isNotEmpty) {
-        final f = l.points.first;
-        final t = l.points.last;
-        b.write(
-            '|${f.latitude.toStringAsFixed(5)},${f.longitude.toStringAsFixed(5)}'
-            '-${t.latitude.toStringAsFixed(5)},${t.longitude.toStringAsFixed(5)};');
+      final pts = l.points;
+      b.write(pts.length);
+      if (pts.isNotEmpty) {
+        void w(ll.LatLng p) => b.write(
+            '${p.latitude.toStringAsFixed(5)},${p.longitude.toStringAsFixed(5)};');
+        b.write('|');
+        w(pts.first);
+        if (pts.length > 3) {
+          w(pts[pts.length ~/ 4]);
+          w(pts[pts.length ~/ 2]);
+          w(pts[(pts.length * 3) ~/ 4]);
+        }
+        w(pts.last);
       }
     }
     return b.toString();
@@ -331,6 +356,12 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
   Future<void> _onMapCreated(mb.MapLibreMapController c) async {
     _map = c;
     _ctrl = CruiseMapLibreController._(c);
+    // 2026-06-06 (vucko P4): Reroute kann denselben Signatur-Fingerprint haben →
+    // expliziter Resync-Hook, der die Signatur invalidiert und neu zeichnet.
+    _ctrl!.onForceResyncLines = () {
+      _lastLinesSig = '';
+      _syncLines();
+    };
   }
 
   Future<void> _onStyleLoaded() async {
@@ -577,8 +608,12 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
     if (!_styleLoaded || !_visible || !_appResumed) return;
     // Während der Bewegung Marker mitführen (throttled über Frame-Coalescing
     // von setState). Linien sind GL-gerendert und brauchen kein Update.
+    // 2026-06-06 (vucko P1): onCameraMoved (= Kamera-Lock lösen) wird hier NICHT
+    // mehr gefeuert. Sonst löste JEDER programmatische Follow-Move den Lock →
+    // die Follow-Schleife starb und der Standort driftete aus der Mitte. Echte
+    // Finger-Gesten werden jetzt über den Pointer-Listener in build() erkannt
+    // (programmatische Kamera-Moves erzeugen KEINE Pointer-Events → eindeutig).
     _projectMarkers();
-    widget.onCameraMoved?.call();
   }
 
   @override
@@ -592,6 +627,22 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
         VisibilityDetector(
           key: const ValueKey('cruise-maplibre-visibility'),
           onVisibilityChanged: _onVisibilityChanged,
+          // 2026-06-06 (vucko P1): Pointer-Listener erkennt ECHTE Finger-Gesten
+          // (translucent → bekommt Events auch, während MapLibre selbst pannt).
+          // Nur ein echter Drag löst den Kamera-Lock — programmatische Moves nie.
+          child: Listener(
+          behavior: HitTestBehavior.translucent,
+          onPointerDown: (e) {
+            _pointerDownPos = e.position;
+            _userPanFired = false;
+          },
+          onPointerMove: (e) {
+            if (_userPanFired || _pointerDownPos == null) return;
+            if ((e.position - _pointerDownPos!).distance > 18) {
+              _userPanFired = true;
+              widget.onCameraMoved?.call();
+            }
+          },
           child: mb.MapLibreMap(
           styleString: style,
           initialCameraPosition: mb.CameraPosition(
@@ -612,6 +663,7 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
               widget.onMapClick?.call(ll.LatLng(latLng.latitude, latLng.longitude)),
           onCameraMove: _onCameraMove,
           onCameraIdle: _onCameraIdle,
+          ),
           ),
         ),
         // Marker-Overlay

@@ -541,9 +541,20 @@ async function callGraphHopper(opts: {
   // „komische Nebenstraßen ohne Grund". Multiply_by 0.05 = praktisch
   // ausgeschlossen ohne Hard-Block (falls eine Route wirklich nur darüber
   // funktioniert, GH kann immer noch eskalieren).
-  overlay.priority.push({ if: 'road_class == TRACK', multiply_by: '0.05' });
-  overlay.priority.push({ if: 'road_class == SERVICE', multiply_by: '0.05' });
-  overlay.priority.push({ if: 'road_class == PATH', multiply_by: '0.02' });
+  // 2026-06-06 (vucko P5): HARTE Sperre für nicht-PKW-Wege. User-Feedback aus
+  // Test-Rundkurs: die Route führte über Traktor-/Feldwege (TRACK) und Wege, die
+  // ein PKW NICHT befahren darf. priority 0 = „Kante komplett meiden" (im
+  // round_trip-Algorithmus bewiesen wirksam, s. Motorway-Hard-Block oben).
+  // SERVICE bleibt nur mild bestraft (legitime Zufahrten nötig, sonst NO_ROUTE).
+  // road_class ist derselbe Encoded-Value wie bisher → safe (kein Re-Import).
+  overlay.priority.push({ if: 'road_class == TRACK', multiply_by: '0' });
+  overlay.priority.push({ if: 'road_class == PATH', multiply_by: '0' });
+  overlay.priority.push({ if: 'road_class == FOOTWAY', multiply_by: '0' });
+  overlay.priority.push({ if: 'road_class == PEDESTRIAN', multiply_by: '0' });
+  overlay.priority.push({ if: 'road_class == STEPS', multiply_by: '0' });
+  overlay.priority.push({ if: 'road_class == BRIDLEWAY', multiply_by: '0' });
+  overlay.priority.push({ if: 'road_class == CYCLEWAY', multiply_by: '0' });
+  overlay.priority.push({ if: 'road_class == SERVICE', multiply_by: '0.15' });
   // 2026-05-28 (vucko Task #82): Unbedingte milde Autobahn-De-Präferenz.
   // Kurze A→B bevorzugen normale Straßen + Auf-/Abfahrten, außer die Autobahn
   // ist klar schneller. Der harte Block bleibt hinter avoidHighways (oben).

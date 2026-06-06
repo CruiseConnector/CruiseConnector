@@ -27,12 +27,16 @@ class TopToast {
     final accent = isError
         ? const Color(0xFFE53935)
         : AppAccentColors.accent;
+    // 2026-06-06 (vucko P7): JEDES Top-Popup wird hart auf max. 5s gedeckelt —
+    // egal was der Aufrufer übergibt. (Plus Swipe-to-dismiss im Widget.)
+    const maxDuration = Duration(seconds: 5);
+    final effective = duration > maxDuration ? maxDuration : duration;
     final entry = OverlayEntry(
       builder: (ctx) => _TopToastWidget(
         message: message,
         icon: icon,
         accent: accent,
-        duration: duration,
+        duration: effective,
         onDismiss: () {
           _current?.remove();
           _current = null;
@@ -108,7 +112,13 @@ class _TopToastWidgetState extends State<_TopToastWidget>
         position: _offset,
         child: FadeTransition(
           opacity: _opacity,
-          child: Material(
+          // 2026-06-06 (vucko P7): per Swipe nach oben wegwischbar.
+          child: Dismissible(
+            key: ValueKey<String>('toptoast_${widget.message}'),
+            direction: DismissDirection.up,
+            resizeDuration: null,
+            onDismissed: (_) => widget.onDismiss(),
+            child: Material(
             color: Colors.transparent,
             child: Container(
               padding: const EdgeInsets.symmetric(
@@ -151,6 +161,7 @@ class _TopToastWidgetState extends State<_TopToastWidget>
                 ],
               ),
             ),
+          ),
           ),
         ),
       ),
