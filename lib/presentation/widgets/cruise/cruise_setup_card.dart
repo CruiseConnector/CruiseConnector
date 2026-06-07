@@ -869,12 +869,18 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
                     children: [
                       Row(
                         children: [
-                          const Text(
-                            'Im Land bleiben',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.w700,
-                              fontSize: 15,
+                          // 2026-06-08 (vucko): Flexible + ellipsis → kein
+                          // RenderFlex-Overflow (war 11px) bei schmalem Layout.
+                          const Flexible(
+                            child: Text(
+                              'Im Land bleiben',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w700,
+                                fontSize: 15,
+                              ),
                             ),
                           ),
                           const SizedBox(width: 8),
@@ -1554,12 +1560,19 @@ class _HighwayToggleSwitch extends StatelessWidget {
                     children: [
                       Row(
                         children: [
-                          Text(
-                            'Autobahn-Zugang',
-                            style: TextStyle(
-                              color: Colors.white.withValues(alpha: 0.96),
-                              fontWeight: FontWeight.w700,
-                              fontSize: 15,
+                          // 2026-06-08 (vucko): Flexible + ellipsis → kein
+                          // RenderFlex-Overflow mehr, wenn Titel + Badge in
+                          // schmalen Layouts knapp werden (war 22px Overflow).
+                          Flexible(
+                            child: Text(
+                              'Autobahn-Zugang',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: Colors.white.withValues(alpha: 0.96),
+                                fontWeight: FontWeight.w700,
+                                fontSize: 15,
+                              ),
                             ),
                           ),
                           const SizedBox(width: 8),
