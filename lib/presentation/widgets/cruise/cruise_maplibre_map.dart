@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:latlong2/latlong.dart' as ll;
@@ -157,34 +158,34 @@ class CruiseMapLibreController {
       if (p.longitude < minLng) minLng = p.longitude;
       if (p.longitude > maxLng) maxLng = p.longitude;
     }
-    // 2026-06-07 (vucko P-overview): Padding HART deckeln. Eine hohe DACH-Route
-    // + großzügiges Padding (top+bottom) konnte den lösbaren Bereich übersteigen
-    // → MapLibre no-opte still (Button „tat nichts"). Plus EXPLIZITE Dauer (sonst
-    // Plugin-Default = teils gar keine sichtbare Animation).
-    final top = padding.top.clamp(0.0, 180.0);
-    final bottom = padding.bottom.clamp(0.0, 200.0);
-    final left = padding.left.clamp(0.0, 80.0);
-    final right = padding.right.clamp(0.0, 80.0);
+    // 2026-06-08 (vucko Overview-Fix): MapLibres CameraUpdate.newLatLngBounds
+    // bewegt die Kamera auf iOS unzuverlässig (no-op trotz gültiger Bounds) —
+    // der „ganze Route sehen"-Button tat dadurch nichts. Stattdessen Center +
+    // passenden Zoom SELBST berechnen und über den BEWIESEN funktionierenden
+    // newCameraPosition-Pfad (animateTo) anwenden.
+    final centerLat = (minLat + maxLat) / 2.0;
+    final centerLng = (minLng + maxLng) / 2.0;
+    final latSpan = (maxLat - minLat).abs().clamp(0.0008, 180.0);
+    final lngSpan = (maxLng - minLng).abs().clamp(0.0008, 360.0);
+    // Mercator-Korrektur für die Breitenspanne, dann den größeren der beiden
+    // Spans in einen ~1.1-Tile-breiten Viewport packen (Rand inklusive).
+    final latRad = centerLat * math.pi / 180.0;
+    final effLatSpan = latSpan / math.max(math.cos(latRad), 0.1);
+    final span = math.max(lngSpan, effLatSpan);
+    const viewportTiles = 1.1; // ~ (Viewport-Breite − Padding) / 256px
+    var zoom = math.log(viewportTiles * 360.0 / span) / math.ln2 - 0.3;
+    zoom = zoom.clamp(3.0, 16.0);
     debugPrint(
         '[CruiseMapLibre] fitBounds span=${(maxLat - minLat).toStringAsFixed(4)}x'
-        '${(maxLng - minLng).toStringAsFixed(4)} pad=L$left/T$top/R$right/B$bottom pts=${points.length}');
-    try {
-      await _map.animateCamera(
-        mb.CameraUpdate.newLatLngBounds(
-          mb.LatLngBounds(
-            southwest: mb.LatLng(minLat, minLng),
-            northeast: mb.LatLng(maxLat, maxLng),
-          ),
-          left: left,
-          top: top,
-          right: right,
-          bottom: bottom,
-        ),
-        duration: const Duration(milliseconds: 600),
-      );
-    } catch (e) {
-      debugPrint('[CruiseMapLibre] fitBounds fehlgeschlagen: $e');
-    }
+        '${(maxLng - minLng).toStringAsFixed(4)} -> zoom=${zoom.toStringAsFixed(2)} pts=${points.length}');
+    // bearing:0 → Route Nord-oben in der Übersicht (kein gedrehter Ausschnitt).
+    await animateTo(
+      lat: centerLat,
+      lng: centerLng,
+      zoom: zoom,
+      bearing: 0,
+      duration: const Duration(milliseconds: 600),
+    );
   }
 
   /// Sichtbarer Kartenausschnitt als [southwest, northeast] in latlong2-Koords.
@@ -372,6 +373,11 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
   Future<void> _onMapCreated(mb.MapLibreMapController c) async {
     _map = c;
     _ctrl = CruiseMapLibreController._(c);
+    // 2026-06-08 (vucko Kamera-Fix): Wird der Controller NACH dem ersten Sync neu
+    // erzeugt (z. B. Plattform-View-Rebuild), den Frame-Ready-Zustand übertragen —
+    // sonst hält die Page einen Controller mit firstFrameReady=false und ALLE
+    // Kamera-Ops werden für immer gepuffert (= Kamera eingefroren).
+    if (_firstFrameSynced) _ctrl!.markFirstFrameReady();
     // 2026-06-06 (vucko P4): Reroute kann denselben Signatur-Fingerprint haben →
     // expliziter Resync-Hook, der die Signatur invalidiert und neu zeichnet.
     _ctrl!.onForceResyncLines = () {
@@ -482,12 +488,21 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
     _firstFrameSynced = true;
     _initialSyncFallback?.cancel();
     _initialSyncFallback = null;
+    // 2026-06-08 (vucko Kamera-Fix — ROOT CAUSE): Kamera ZUERST freigeben, VOR dem
+    // ge-await-eten _ensureLineLayer. Lag markFirstFrameReady danach und wurde
+    // `mounted` während des awaits (transienter Rebuild) kurz false, sprang der
+    // `if (!mounted) return` davor und markFirstFrameReady lief NIE — der
+    // `if (_firstFrameSynced) return`-Guard verhinderte jeden Retry. Folge:
+    // firstFrameReady blieb false → ALLE Kamera-Ops (Follow + Recenter) wurden
+    // dauerhaft gepuffert und nie angewandt = „Kamera folgt/zentriert nicht,
+    // Karte eingefroren". Der erste Frame ist hier bereits gerendert
+    // (onCameraIdle bzw. 700ms-Fallback) → die Kamera-Freigabe ist sicher (der
+    // SIGABRT kam von Quellen-/Layer-Mutation vor dem Frame, nicht von Kamera).
+    _ctrl?.markFirstFrameReady();
     // Persistente Linien-Quelle + Layer EINMAL anlegen (idempotent). Danach wird
     // NUR noch setGeoJsonSource aufgerufen — nie wieder remove/re-add.
     await _ensureLineLayer();
     if (!mounted) return;
-    // Aufgestaute Kamera-Wünsche (initiale GPS-Zentrierung) jetzt anwenden.
-    _ctrl?.markFirstFrameReady();
     if (_visible) {
       _syncLines();
       _projectMarkers();

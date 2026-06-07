@@ -369,6 +369,10 @@ class _CruiseModePageState extends State<CruiseModePage>
   // Cruise-Page ist man SOFORT auf dem Standort statt erst „Deutschland-Mitte@z6"
   // zu sehen, bis das asynchrone GPS aufgelöst hat.
   static LatLng? _cachedUserCenter;
+  // 2026-06-08 (vucko Kamera-Fix): EINMAL fixierte Initial-Kamera (siehe
+  // _buildMapLibreMap) — verhindert Map-Widget-Neuerzeugung pro GPS-Tick.
+  LatLng? _stableInitialCenter;
+  double? _stableInitialZoom;
   List<List<double>> _fullRouteCoordinates = [];
   List<List<double>> _remainingRouteCoordinates = [];
   List<RouteManeuver> _maneuvers = [];
@@ -4356,14 +4360,19 @@ class _CruiseModePageState extends State<CruiseModePage>
   Widget _buildMapLibreMap() {
     // 2026-06-06 (vucko P10): Wenn wir den Standort schon kennen (gecacht oder
     // live), die Karte SOFORT dort öffnen (z13) statt bei Deutschland-Mitte@z6.
-    final initialCenter = _userPosition ??
+    // 2026-06-08 (vucko Kamera-Fix): initialCenter/zoom EINMAL fixieren. Vorher
+    // hingen sie an _userPosition (ändert sich pro GPS-Tick) → der Map-Widget bekam
+    // ständig neue initial-Props → Plattform-View/Controller wurde neu erzeugt →
+    // firstFrameReady ging auf dem von der Page gehaltenen Controller verloren →
+    // Kamera eingefroren. „Initial" ist per Definition einmalig.
+    _stableInitialCenter ??= _userPosition ??
         _cachedUserCenter ??
         const LatLng(51.165691, 10.451526);
-    final initialZoom =
+    _stableInitialZoom ??=
         (_userPosition ?? _cachedUserCenter) != null ? 13.0 : 6.0;
     return CruiseMapLibreMap(
-      initialCenter: initialCenter,
-      initialZoom: initialZoom,
+      initialCenter: _stableInitialCenter!,
+      initialZoom: _stableInitialZoom!,
       lines: _buildMapLibreLines(),
       markers: _buildMapLibreMarkers(),
       onControllerReady: (c) {
