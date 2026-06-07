@@ -409,6 +409,12 @@ class _CruiseModePageState extends State<CruiseModePage>
   bool _isSimulationRunning = false;
   bool _isSimulationStepRunning = false;
   int _simulationIndex = 0;
+  // 2026-06-08 (vucko Sim-Speed-Fix): Distanz-basierte Interpolation. _simulation
+  // DistanceM = zurückgelegte Strecke entlang der Route; _simulationDistAtIndexM =
+  // kumulierte Strecke bis zum Segment-Start _simulationIndex. So fährt der Sim
+  // EXAKT _simulationConstantKmh, egal wie dicht/dünn die Vertices liegen.
+  double _simulationDistanceM = 0.0;
+  double _simulationDistAtIndexM = 0.0;
   // 2026-05-30 (vucko): Fahrten-Simulator — grüner Play-FAB in der Navigation,
   // um die Routenabfahrt zu prüfen.
   // 2026-06-06 (vucko): Sim wieder AN für die Smoothness-/Kamera-/Linien-Tests
@@ -7956,7 +7962,11 @@ class _CruiseModePageState extends State<CruiseModePage>
       // → Puck teleportierte ans Routenende, Bearing kollabierte → „fährt nach
       // Norden, zeigt Süden". Cursor auf 0 zurücksetzen = Sim fährt vom Standort
       // vorwärts weiter.
-      if (_isSimulationRunning) _simulationIndex = 0;
+      if (_isSimulationRunning) {
+        _simulationIndex = 0;
+        _simulationDistanceM = 0.0;
+        _simulationDistAtIndexM = 0.0;
+      }
       _lastDrawnRouteIndex = 0;
       _distanceSinceLastRedraw = 0.0;
       _maneuvers = result.maneuvers;
@@ -9158,7 +9168,11 @@ class _CruiseModePageState extends State<CruiseModePage>
         // 2026-06-07 (vucko P-reroute): wie beim Reroute-Commit — wird die Route
         // mitten in der Sim-Fahrt durch einen POI-Umweg ersetzt, muss der Sim-
         // Cursor mit zurück auf 0, sonst indexiert er den neuen Array am Ende.
-        if (_isSimulationRunning) _simulationIndex = 0;
+        if (_isSimulationRunning) {
+          _simulationIndex = 0;
+          _simulationDistanceM = 0.0;
+          _simulationDistAtIndexM = 0.0;
+        }
         _routeGeoJson = json.encode(geometry);
         _routeDistance = newDistanceM;
         _remainingDistance = newDistanceM;
@@ -10763,6 +10777,8 @@ class _CruiseModePageState extends State<CruiseModePage>
     if (_fullRouteCoordinates.length < 2) return;
     _stopNavigationTracking();
     _simulationIndex = 0;
+    _simulationDistanceM = 0.0;
+    _simulationDistAtIndexM = 0.0;
     _currentRouteIndex = 0;
     _lastDrawnRouteIndex = 0;
     _distanceSinceLastRedraw = 0.0;
@@ -10773,7 +10789,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     _activeManeuverIndex = 0;
     // Speed-History entfernt
     _isSimulationRunning = true;
-    // 2026-05-30 (vucko): Konstant 100 km/h für die Routenabfahrt-Prüfung.
+    // 2026-06-08 (vucko): Konstant 30 km/h (Sim-Speed, distanz-interpoliert).
     _simulationSpeedKmh = _simulationConstantKmh;
 
     // Initiale Route zeichnen
@@ -10842,30 +10858,49 @@ class _CruiseModePageState extends State<CruiseModePage>
         return;
       }
 
-      // Berechne wie viele Punkte bei aktueller Geschwindigkeit in 50ms übersprungen werden
+      // 2026-06-08 (vucko Sim-Speed-Fix): DISTANZ-basierte Interpolation entlang
+      // der Polyline statt „mind. 1 Vertex pro Tick". GraphHopper-Vertices liegen
+      // 10–100m auseinander → der alte „1 Punkt/50ms" lief mit tausenden km/h.
+      // Jetzt: pro Tick exakt speedMs*0.05m weiter; Position WIRD im Segment
+      // interpoliert → echte konstante 30 km/h + butterweich.
       final speedMs = _simulationSpeedKmh / 3.6;
-      final targetDistPerStep = speedMs * 0.05; // Meter in 50ms
-      double accumulated = 0.0;
-      int newIndex = _simulationIndex;
-      while (newIndex < lastIndex && accumulated < targetDistPerStep) {
-        final c1 = _fullRouteCoordinates[newIndex];
-        final c2 = _fullRouteCoordinates[newIndex + 1];
-        accumulated += geo.Geolocator.distanceBetween(
-          c1[1],
-          c1[0],
-          c2[1],
-          c2[0],
-        );
-        newIndex++;
-      }
-      // Mindestens 1 Punkt vorwärts
-      _simulationIndex = math
-          .max(newIndex, _simulationIndex + 1)
-          .clamp(0, lastIndex);
+      _simulationDistanceM += speedMs * 0.05; // Meter in 50ms
 
-      final current = _fullRouteCoordinates[_simulationIndex];
-      final next =
-          _fullRouteCoordinates[math.min(_simulationIndex + 1, lastIndex)];
+      // Vertex-Cursor vorrücken, bis das aktuelle Segment die Ziel-Distanz enthält.
+      while (_simulationIndex < lastIndex) {
+        final a = _fullRouteCoordinates[_simulationIndex];
+        final b = _fullRouteCoordinates[_simulationIndex + 1];
+        final segLen = geo.Geolocator.distanceBetween(a[1], a[0], b[1], b[0]);
+        if (segLen <= 0) {
+          _simulationIndex++;
+          continue;
+        }
+        if (_simulationDistAtIndexM + segLen >= _simulationDistanceM) break;
+        _simulationDistAtIndexM += segLen;
+        _simulationIndex++;
+      }
+
+      if (_simulationIndex >= lastIndex) {
+        _simulationIndex = lastIndex;
+        _stopSimulation(restartLiveTracking: false);
+        _onRouteCompleted();
+        return;
+      }
+
+      final segA = _fullRouteCoordinates[_simulationIndex];
+      final segB = _fullRouteCoordinates[_simulationIndex + 1];
+      final segLen =
+          geo.Geolocator.distanceBetween(segA[1], segA[0], segB[1], segB[0]);
+      final segFrac = segLen > 0
+          ? ((_simulationDistanceM - _simulationDistAtIndexM) / segLen)
+              .clamp(0.0, 1.0)
+          : 0.0;
+      // Interpolierte Position INNERHALB des Segments (smooth, exakte Speed).
+      final current = <double>[
+        segA[0] + (segB[0] - segA[0]) * segFrac,
+        segA[1] + (segB[1] - segA[1]) * segFrac,
+      ];
+      final next = segB;
 
       // Simulations-Puck auf der Karte bewegen
       try {
@@ -10881,12 +10916,6 @@ class _CruiseModePageState extends State<CruiseModePage>
         );
       } catch (e) {
         debugPrint('[Sim] Location-Update: $e');
-      }
-
-      if (_simulationIndex >= lastIndex) {
-        _stopSimulation(restartLiveTracking: false);
-        _onRouteCompleted();
-        return;
       }
     } catch (e) {
       debugPrint('[Sim] Simulationsschritt fehlgeschlagen: $e');
