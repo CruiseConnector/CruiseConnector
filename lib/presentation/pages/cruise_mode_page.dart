@@ -429,6 +429,11 @@ class _CruiseModePageState extends State<CruiseModePage>
   bool _rerouteBannerShown = false;
   DateTime? _lastRerouteTime; // Cooldown zwischen Reroutes
   int _offRouteCount = 0; // Zählt aufeinanderfolgende Off-Route-Updates
+  // 2026-06-07 (vucko P-reroute): Zeit-basierte Hysterese wie Apple/Google —
+  // Off-Route muss ANHALTEND sein (Wall-Clock), nicht nur N Ticks (bei 20Hz-Sim
+  // wären 5 Ticks = 0.25s = viel zu zappelig). Gesetzt beim ersten Außerhalb-
+  // Tick, geleert sobald wieder im Korridor ODER der Puck weiter vorankommt.
+  DateTime? _offRouteSince;
   bool _isExistingRouteSession =
       false; // Route aus gespeicherter Vorlage gestartet
   bool _isAccessLegActive = false; // Nutzer fährt aktuell Zufahrts-Abschnitt
@@ -439,8 +444,8 @@ class _CruiseModePageState extends State<CruiseModePage>
   RouteResult? _accessLegMainRouteResult;
   static const double _offRouteThresholdMeters =
       50.0; // Ab wann Off-Route erkannt wird (wie Apple/Google Maps)
-  static const int _offRouteCountThreshold =
-      5; // Mindestanzahl Off-Route-Updates vor Reroute (verhindert Flackern)
+  // 2026-06-07 (vucko P-reroute): _offRouteCountThreshold (Tick-Count) entfernt —
+  // durch zeit-basierte Hysterese (_offRouteSince, ≥3s/≥1.5s) ersetzt.
   static const Duration _rerouteCooldown = Duration(seconds: 12);
   // 2026-06-01 (vucko): Max. Versatz, bis zu dem der sichtbare Routenkopf an
   // die GPS-Position geheftet wird. Darüber bleibt der echte Routenpunkt der
@@ -847,13 +852,18 @@ class _CruiseModePageState extends State<CruiseModePage>
     ];
     if (newRemaining.length < 2) return false;
 
-    // Kein Update, wenn sich praktisch nichts geändert hat (Spam vermeiden).
+    // 2026-06-07 (vucko P-map-stops): Guard 0.4m → 3m. Bei 30km/h (≈0.42m/Tick,
+    // 20Hz) feuerte der 0.4m-Guard JEDEN Tick → ~11–20Hz Voll-Route-GeoJSON-
+    // Rewrite (setGeoJsonSource), der die native PMTiles-Vektor-Tile-Pipeline
+    // aushungerte → Karte wurde schwarz/lud nicht mehr. 3m → ~3Hz Updates: die
+    // Linie bleibt visuell sauber unterm Puck (Kamera animiert eh smooth), aber
+    // der Renderer hat wieder Luft für die Tiles.
     if (_remainingRouteCoordinates.isNotEmpty &&
         _remainingRouteCoordinates.length == newRemaining.length) {
       final cur = _remainingRouteCoordinates.first;
       final moved = geo.Geolocator.distanceBetween(
           cur[1], cur[0], projHead[1], projHead[0]);
-      if (moved < 0.4) return false;
+      if (moved < 3.0) return false;
     }
 
     _remainingRouteCoordinates = newRemaining;
@@ -1837,6 +1847,11 @@ class _CruiseModePageState extends State<CruiseModePage>
   }
 
   DateTime? _lastFollowFixTime;
+  // 2026-06-07 (vucko P-centering): Nach einem expliziten Recenter den Follow
+  // kurz unterdrücken, sonst überschreibt der nächste 50ms-Sim-Tick die
+  // Recenter-Animation engine-seitig (animateCamera ist nicht concurrency-safe)
+  // → „zentriert nicht auf mich".
+  DateTime? _suppressFollowUntil;
 
   /// Zirkuläre Interpolation für Heading (0–360°).
   static double _lerpAngleDeg(double from, double to, double t) {
@@ -7933,6 +7948,15 @@ class _CruiseModePageState extends State<CruiseModePage>
       _fullRouteCoordinates = result.coordinates;
       _remainingRouteCoordinates = result.coordinates;
       _currentRouteIndex = 0;
+      // 2026-06-07 (vucko P-reroute): Beim Reroute wird _fullRouteCoordinates
+      // KOMPLETT ersetzt (neuer, oft kürzerer Array; Index 0 = aktueller GPS-
+      // Standort, da der Connector via generatePointToPoint(startPosition) gebaut
+      // wird). Lief der Fahrsimulator, behielt _simulationIndex seinen alten,
+      // großen Wert → er indexierte den neuen Array am Ende (clamp auf lastIndex)
+      // → Puck teleportierte ans Routenende, Bearing kollabierte → „fährt nach
+      // Norden, zeigt Süden". Cursor auf 0 zurücksetzen = Sim fährt vom Standort
+      // vorwärts weiter.
+      if (_isSimulationRunning) _simulationIndex = 0;
       _lastDrawnRouteIndex = 0;
       _distanceSinceLastRedraw = 0.0;
       _maneuvers = result.maneuvers;
@@ -8575,7 +8599,11 @@ class _CruiseModePageState extends State<CruiseModePage>
     // 2026-06-06 (vucko P11): Während die Routen-Übersicht (Karten-Button) läuft,
     // den Follow NICHT feuern — sonst zog der nächste GPS-Fix die Kamera sofort
     // wieder auf den Standort und die Übersicht „funktionierte nicht".
-    if (_isCameraLocked && _mapReady && !_isOverviewActive) {
+    if (_isCameraLocked &&
+        _mapReady &&
+        !_isOverviewActive &&
+        (_suppressFollowUntil == null ||
+            DateTime.now().isAfter(_suppressFollowUntil!))) {
       if (kIsWeb) {
         final predicted = _webSmoother.predict(
           DateTime.now().add(const Duration(milliseconds: 180)),
@@ -8625,65 +8653,67 @@ class _CruiseModePageState extends State<CruiseModePage>
 
     if (!_isRouteConfirmed || _fullRouteCoordinates.length < 2) return;
 
-    // Für Route-Matching die rohe Position verwenden (genauer für Snap-to-Route)
-    final rawMatch = findNearestInWindow(
-      position: position,
-      coordinates: _fullRouteCoordinates,
-      currentIndex: _currentRouteIndex,
-      windowSize: 40,
-    );
-    final match = _guardRoundTripFinishMatch(rawMatch);
-    _updateDistanceToFinalTarget(position);
-    final previousVisibleManeuverIndex = _activeVisibleManeuverIndex();
-
+    // 2026-06-07 (vucko P-reroute): Korridor ZUERST (vor dem Match) berechnen,
+    // damit das Index-Advance-Fenster an denselben Korridor gekoppelt ist — sonst
+    // entstand ein 45–54m-„Dead-Band", in dem der Index einfror, das Vorwärts-
+    // Fenster überlief und auf perfekt befahrener Route ein Fehl-Reroute feuerte.
     final baseCorridor = _isAccessLegActive
         ? 85.0
         : _isRoundTrip
         ? _offRouteThresholdMeters
         : _currentPointToPointCorridorMeters();
-    // 2026-06-01 (vucko): GPS-Genauigkeit + Tempo einrechnen — verhindert
-    // Fehl-Reroutes bei GPS-Drift (Bergtal/Tunnel) wie bei Google/Apple.
     final offRouteCorridor = effectiveOffRouteCorridorMeters(
       baseCorridor: baseCorridor,
       accuracyMeters: position.accuracy,
       speedMps: position.speed,
     );
+
+    final prevRouteIndex = _currentRouteIndex;
+    // windowSize 40→80 + maxJumpMeters an den Korridor gekoppelt: der Index folgt
+    // dem Puck auch über lange GraphHopper-Segmente, statt einzufrieren.
+    final rawMatch = findNearestInWindow(
+      position: position,
+      coordinates: _fullRouteCoordinates,
+      currentIndex: _currentRouteIndex,
+      windowSize: 80,
+      maxJumpMeters: math.max(offRouteCorridor + 15, 60.0),
+    );
+    final match = _guardRoundTripFinishMatch(rawMatch);
+    _updateDistanceToFinalTarget(position);
+    final previousVisibleManeuverIndex = _activeVisibleManeuverIndex();
+
     final isOutsideCorridor = match.distanceMeters > offRouteCorridor;
     final approachingDestination =
         !_isRoundTrip &&
         _activeDestinationCoordinate != null &&
         _isApproachingCurrentDestination(position);
+    // Apple/Google-Regel: ein VORWÄRTS-laufender Puck fährt die Route — auch wenn
+    // ein einzelner Fix seitlich zappelt. Dann niemals reroute.
+    final makingForwardProgress = match.index > prevRouteIndex;
 
-    if (isOutsideCorridor) {
-      if (approachingDestination) {
-        _offRouteCount = 0;
-        debugPrint(
-          '[CruiseMode] Alternative Route akzeptiert: ${match.distanceMeters.toStringAsFixed(0)}m neben Original, Zielentfernung sinkt weiter.',
-        );
-      } else {
-        _offRouteCount++;
-        // 2026-06-01 (vucko): Adaptive Bestätigung wie Google/Apple — wer KLAR
-        // daneben ist (echtes Abbiegen, > 2.2× Korridor), wird schneller neu
-        // geroutet (3 Updates statt 5). Knapp daneben (evtl. noch Drift)
-        // braucht weiterhin die volle Bestätigung, um Fehl-Reroutes zu meiden.
-        final clearlyOffRoute = match.distanceMeters > offRouteCorridor * 2.2;
-        final neededOffRouteCount = clearlyOffRoute
-            ? 3
-            : _offRouteCountThreshold;
-        if (_offRouteCount >= neededOffRouteCount && !_isRerouting) {
-          final now = DateTime.now();
-          final cooldownOk =
-              _lastRerouteTime == null ||
-              now.difference(_lastRerouteTime!) >= _rerouteCooldown;
-          if (cooldownOk) {
-            _lastRerouteTime = now;
-            _offRouteCount = 0;
-            _rerouteToOriginalRoute(position);
-            return;
-          }
+    if (isOutsideCorridor && !approachingDestination && !makingForwardProgress) {
+      // Zeit-basierte Hysterese: anhaltend ≥3.0s daneben ODER klar daneben
+      // (≥2.5× Korridor, echtes Abbiegen) ≥1.5s. Kein Zappeln über Tick-Count.
+      _offRouteSince ??= DateTime.now();
+      final offFor = DateTime.now().difference(_offRouteSince!);
+      final clearlyOffRoute = match.distanceMeters > offRouteCorridor * 2.5;
+      final sustained = offFor >= const Duration(milliseconds: 3000) ||
+          (clearlyOffRoute && offFor >= const Duration(milliseconds: 1500));
+      if (sustained && !_isRerouting) {
+        final now = DateTime.now();
+        final cooldownOk = _lastRerouteTime == null ||
+            now.difference(_lastRerouteTime!) >= _rerouteCooldown;
+        if (cooldownOk) {
+          _lastRerouteTime = now;
+          _offRouteCount = 0;
+          _offRouteSince = null;
+          _rerouteToOriginalRoute(position);
+          return;
         }
       }
     } else {
+      // Im Korridor ODER Fortschritt ODER Ziel-Annäherung → Off-Route-Timer aus.
+      _offRouteSince = null;
       _offRouteCount = 0;
     }
 
@@ -8693,7 +8723,16 @@ class _CruiseModePageState extends State<CruiseModePage>
       needsRebuild = true;
     }
 
-    if (match.index > _currentRouteIndex && match.distanceMeters <= 45.0) {
+    // 2026-06-07 (vucko P-reroute): Advance-Gate an den Korridor gekoppelt (war
+    // hart 45m) → kein Dead-Band mehr zwischen 45m und Korridorbreite.
+    // + Anti-Overlap-Cap: ein einzelner Tick darf den Index NICHT um >60 Punkte
+    // vorspringen. Auf einem sich selbst überlappenden Rundkurs (Hin-/Rückweg
+    // dieselbe Straße) könnte das 80er-Fenster sonst auf die RÜCKWEG-Spur
+    // springen → Fortschritt korrupt, nötiger Reroute unterdrückt. Echtes Fahren
+    // rückt <2 Punkte/Tick vor, der Cap blockt also nur anomale Sprünge.
+    if (match.index > _currentRouteIndex &&
+        match.index - _currentRouteIndex <= 60 &&
+        match.distanceMeters <= offRouteCorridor) {
       // Gefahrene Distanz tracken
       for (var i = _currentRouteIndex; i < match.index; i++) {
         final c1 = _fullRouteCoordinates[i];
@@ -9116,6 +9155,10 @@ class _CruiseModePageState extends State<CruiseModePage>
       setState(() {
         _fullRouteCoordinates = newCoords;
         _remainingRouteCoordinates = newCoords;
+        // 2026-06-07 (vucko P-reroute): wie beim Reroute-Commit — wird die Route
+        // mitten in der Sim-Fahrt durch einen POI-Umweg ersetzt, muss der Sim-
+        // Cursor mit zurück auf 0, sonst indexiert er den neuen Array am Ende.
+        if (_isSimulationRunning) _simulationIndex = 0;
         _routeGeoJson = json.encode(geometry);
         _routeDistance = newDistanceM;
         _remainingDistance = newDistanceM;
@@ -10221,7 +10264,14 @@ class _CruiseModePageState extends State<CruiseModePage>
           // 2026-06-06 (vucko P2-Fix): untere Schranke nie > obere — sonst wirft
           // clamp ArgumentError, wenn der Match schon am Routenende sitzt.
           final rejoinUpper = planningCoordinates.length - 1;
-          final rejoinIdx = _findLookAheadIndex(globalMatch.index, 400)
+          // 2026-06-07 (vucko P-reroute STEP 3): VORWÄRTS-Rejoin verwenden statt
+          // blind 400m ab dem rohen Nächsten-Punkt zu laufen. globalMatch.index
+          // ist der absolut-nächste Punkt (Voll-Fenster) — auf einem sich selbst
+          // überlappenden Rundkurs kann das die RÜCKWEG-Spur sein → der Re-Dock
+          // dockte rückwärts an („fährt Nord, zeigt Süd" / verdrehte Linie).
+          // fallbackRejoinIndex (oben, mit Heading-/Alignment-Guard berechnet)
+          // wählt einen Punkt IN FAHRTRICHTUNG.
+          final rejoinIdx = fallbackRejoinIndex
               .clamp(math.min(globalMatch.index + 1, rejoinUpper), rejoinUpper)
               .toInt();
           final rejoinPt = planningCoordinates[rejoinIdx];
@@ -10597,22 +10647,35 @@ class _CruiseModePageState extends State<CruiseModePage>
 
   // ═══════════════════════ CAMERA ═══════════════════════════════════════════
 
+  // 2026-06-07 (vucko P-centering): Der Kamera-FAB ist jetzt ein EXPLIZITER
+  // RECENTER, KEIN Toggle mehr. Vorher: beim Start ist _isCameraLocked bereits
+  // true (Sim/Nav) → der erste Tap flippte auf false und ZENTRIERTE NICHT
+  // („Button tut nichts / Kamera driftet weg"). Jetzt: Tap = immer auf den
+  // Standort zentrieren + Follow an. Entriegelt wird NUR per Finger-Pan (P1).
   void _toggleCameraLock() {
-    _safeSetState(() => _isCameraLocked = !_isCameraLocked);
-    if (_isCameraLocked) {
-      // Sofort zur aktuellen Position fliegen (flutter_map: direkt move())
-      _recenterMap();
-    }
-    // Wenn deaktiviert: freie Kartenbewegung — nichts extra nötig
+    _safeSetState(() => _isCameraLocked = true);
+    _recenterMap();
   }
 
   Future<void> _recenterMap() async {
     final position = _userLocation;
     if (position == null || !_mapReady) return;
     try {
-      // 2026-06-06 (vucko P1): 16.0 → 16.5 = identischer Zoom wie der Follow-
-      // Modus, damit Recenter/Nav-Start nicht zwischen 16.0/16.5 springt.
-      _camMove(position.latitude, position.longitude, 16.5);
+      // 2026-06-07 (vucko P-centering): Über DENSELBEN Pfad wie der Follow
+      // (_camMoveRotate → eine animateTo-Quelle, identische Rahmung mit Forward-
+      // Offset + Heading) → kein konkurrierendes animateCamera, das die
+      // Zentrierung abwürgt. Heading-Fallback: aktuelle Kamera-Bearing wenn
+      // _userHeading ungültig (Stillstand).
+      final heading = (_userHeading.isFinite && _userHeading >= 0)
+          ? _userHeading
+          : _lastCameraHeading;
+      final offLat = position.latitude + _forwardOffsetLat(heading);
+      final offLng = position.longitude + _forwardOffsetLng(heading);
+      _camMoveRotate(offLat, offLng, 16.5, heading,
+          animDuration: const Duration(milliseconds: 500));
+      // Follow ~700ms unterdrücken, damit die Recenter-Animation sauber landet.
+      _suppressFollowUntil =
+          DateTime.now().add(const Duration(milliseconds: 700));
     } catch (e) {
       debugPrint('[CruiseMode] Recenter fehlgeschlagen: $e');
     }

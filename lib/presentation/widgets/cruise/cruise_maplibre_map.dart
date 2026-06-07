@@ -157,18 +157,34 @@ class CruiseMapLibreController {
       if (p.longitude < minLng) minLng = p.longitude;
       if (p.longitude > maxLng) maxLng = p.longitude;
     }
-    await _map.animateCamera(
-      mb.CameraUpdate.newLatLngBounds(
-        mb.LatLngBounds(
-          southwest: mb.LatLng(minLat, minLng),
-          northeast: mb.LatLng(maxLat, maxLng),
+    // 2026-06-07 (vucko P-overview): Padding HART deckeln. Eine hohe DACH-Route
+    // + großzügiges Padding (top+bottom) konnte den lösbaren Bereich übersteigen
+    // → MapLibre no-opte still (Button „tat nichts"). Plus EXPLIZITE Dauer (sonst
+    // Plugin-Default = teils gar keine sichtbare Animation).
+    final top = padding.top.clamp(0.0, 180.0);
+    final bottom = padding.bottom.clamp(0.0, 200.0);
+    final left = padding.left.clamp(0.0, 80.0);
+    final right = padding.right.clamp(0.0, 80.0);
+    debugPrint(
+        '[CruiseMapLibre] fitBounds span=${(maxLat - minLat).toStringAsFixed(4)}x'
+        '${(maxLng - minLng).toStringAsFixed(4)} pad=L$left/T$top/R$right/B$bottom pts=${points.length}');
+    try {
+      await _map.animateCamera(
+        mb.CameraUpdate.newLatLngBounds(
+          mb.LatLngBounds(
+            southwest: mb.LatLng(minLat, minLng),
+            northeast: mb.LatLng(maxLat, maxLng),
+          ),
+          left: left,
+          top: top,
+          right: right,
+          bottom: bottom,
         ),
-        left: padding.left,
-        top: padding.top,
-        right: padding.right,
-        bottom: padding.bottom,
-      ),
-    );
+        duration: const Duration(milliseconds: 600),
+      );
+    } catch (e) {
+      debugPrint('[CruiseMapLibre] fitBounds fehlgeschlagen: $e');
+    }
   }
 
   /// Sichtbarer Kartenausschnitt als [southwest, northeast] in latlong2-Koords.
@@ -501,6 +517,15 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
     }
   }
 
+  // 2026-06-07 (vucko P-map-stops): Throttle + Coalesce für _syncLines. Vorher
+  // konnte der per-Tick-Aufruf ~11–20Hz eine VOLL-Route via setGeoJsonSource
+  // pushen → die native MLNShape(data:)-Reparse hungerte die PMTiles-Vektor-
+  // Tile-Pipeline aus (Karte wurde schwarz). Jetzt: max ~5Hz, laufender Sync
+  // koalesziert einen Nachzieher, statt zu stapeln.
+  bool _syncInFlight = false;
+  bool _syncQueued = false;
+  DateTime? _lastSyncAt;
+
   Future<void> _syncLines() async {
     final map = _map;
     // Erst nach dem ersten Frame + wenn Layer bereit. KEIN clearLines/addLine
@@ -514,6 +539,21 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
         map == null) {
       return;
     }
+    final now = DateTime.now();
+    if (_syncInFlight ||
+        (_lastSyncAt != null &&
+            now.difference(_lastSyncAt!) < const Duration(milliseconds: 180))) {
+      if (!_syncQueued) {
+        _syncQueued = true;
+        Future<void>.delayed(const Duration(milliseconds: 180), () {
+          _syncQueued = false;
+          if (mounted) _syncLines();
+        });
+      }
+      return;
+    }
+    _syncInFlight = true;
+    _lastSyncAt = now;
     _lastLinesSig = _linesSignature();
     final features = <Map<String, dynamic>>[];
     for (final l in widget.lines) {
@@ -542,6 +582,8 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
       );
     } catch (_) {
       // Quelle noch nicht bereit / transienter Zustand — nächster Sync zieht nach.
+    } finally {
+      _syncInFlight = false;
     }
   }
 
