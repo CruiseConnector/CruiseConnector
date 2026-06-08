@@ -8701,7 +8701,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     _updateDistanceToFinalTarget(position);
     final previousVisibleManeuverIndex = _activeVisibleManeuverIndex();
 
-    final isOutsideCorridor = match.distanceMeters > offRouteCorridor;
+    var isOutsideCorridor = match.distanceMeters > offRouteCorridor;
     final approachingDestination =
         !_isRoundTrip &&
         _activeDestinationCoordinate != null &&
@@ -8709,6 +8709,30 @@ class _CruiseModePageState extends State<CruiseModePage>
     // Apple/Google-Regel: ein VORWÄRTS-laufender Puck fährt die Route — auch wenn
     // ein einzelner Fix seitlich zappelt. Dann niemals reroute.
     final makingForwardProgress = match.index > prevRouteIndex;
+
+    // 2026-06-08 (vucko P-reroute): GLOBALER RE-SNAP (wie Apple/Google). Das
+    // gefensterte Matching kann hinter dem Fahrer zurückbleiben (Fenster
+    // [idx,idx+80] erreicht die echte Position nicht mehr) → es meldet fälschlich
+    // „off-route", obwohl der Puck IN Wahrheit auf der Route ist (= die unnötigen
+    // Reroutes nach einem Re-Dock). Meckert das Fenster, durchsuchen wir EINMAL
+    // die ganze Route: liegt der nächste Punkt doch im Korridor, war es nur
+    // Fenster-Verzug → re-ankern + NICHT off-route. Nur wirklich-daneben (auch
+    // global > Korridor) zählt. Läuft nur wenn das Fenster off-route meldet →
+    // kein Overhead im Normalbetrieb.
+    if (isOutsideCorridor && !approachingDestination) {
+      final globalMatch = findNearestInWindow(
+        position: position,
+        coordinates: _fullRouteCoordinates,
+        currentIndex: 0,
+        windowSize: _fullRouteCoordinates.length,
+        maxJumpMeters: double.infinity,
+      );
+      if (globalMatch.distanceMeters <= offRouteCorridor) {
+        _currentRouteIndex =
+            globalMatch.index.clamp(0, _fullRouteCoordinates.length - 1);
+        isOutsideCorridor = false; // doch auf der Route — nur Fenster nachgehinkt
+      }
+    }
 
     if (isOutsideCorridor && !approachingDestination && !makingForwardProgress) {
       // Zeit-basierte Hysterese: anhaltend ≥3.0s daneben ODER klar daneben
@@ -10905,7 +10929,7 @@ class _CruiseModePageState extends State<CruiseModePage>
               .clamp(0.0, 1.0)
           : 0.0;
       // Interpolierte Position INNERHALB des Segments (smooth, exakte Speed).
-      final current = <double>[
+      var current = <double>[
         segA[0] + (segB[0] - segA[0]) * segFrac,
         segA[1] + (segB[1] - segA[1]) * segFrac,
       ];
