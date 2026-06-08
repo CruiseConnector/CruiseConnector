@@ -544,13 +544,16 @@ class _CruiseModePageState extends State<CruiseModePage>
 
   // Animierte Kamera-Bewegung zwischen GPS-Updates (alle Plattformen)
   AnimationController? _cameraAnimController;
-  double _camFromLat = 0.0;
-  double _camFromLng = 0.0;
   double _camToLat = 0.0;
   double _camToLng = 0.0;
-  double _camFromHeading = 0.0;
   double _camToHeading = 0.0;
   double _lastCameraHeading = 0.0; // Für Bearing-Dead-Zone (< 5° ignorieren)
+  // 2026-06-08 (vucko Butterweich): KONTINUIERLICHER Smooth-Follow. _camCur* ist
+  // der pro Frame sanft Richtung _camTo* gezogene Kamera-Stand; pro Frame EIN
+  // INSTANTES moveCamera (kein engine-Ease → kein Puls-Ruckeln der 5Hz-Animation).
+  double _camCurLat = 0.0, _camCurLng = 0.0, _camCurHeading = 0.0;
+  bool _camHasState = false;
+  bool _camMoveInFlight = false; // Coalescing — kein Method-Channel-Stau
 
   // ──────────────────────────────────────────────────────────────────────────
 
@@ -1747,58 +1750,49 @@ class _CruiseModePageState extends State<CruiseModePage>
   }
 
   // ── Smooth Kamera-Animation (60fps zwischen GPS-Updates) ───────────────
+  // 2026-06-08 (vucko Butterweich): KONTINUIERLICHER Smooth-Follow pro Frame.
+  // Statt 5Hz engine-animateCamera (deren Ease-in/out an jeder Unterbrechung die
+  // Geschwindigkeit pulsen ließ = Mini-Ruckeln) zieht der Ticker den Kamera-Stand
+  // jeden Frame ein Stück linear Richtung Ziel und setzt ihn INSTANT (moveCamera).
+  // Lineare Bewegung + 1 Channel-Call pro Frame (coalesced) = butterweich.
   void _onCameraAnimationTick() {
-    final controller = _cameraAnimController;
-    if (controller == null || !_isCameraLocked || !_mapReady) return;
-
-    final t = Curves.easeOutCubic.transform(controller.value);
-    var lat = _camFromLat + (_camToLat - _camFromLat) * t;
-    var lng = _camFromLng + (_camToLng - _camFromLng) * t;
-    var heading = _lerpAngleDeg(_camFromHeading, _camToHeading, t);
-
-    // Plattformspezifische Vorhersage für flüssigere Animation.
-    // 2026-05-22 (vucko): Prediction-Mix nochmal verstärkt für "jede
-    // Minidrehung sehen können". Faktoren jetzt 0.6-0.75 = aggressive
-    // Vorhersage, fast Echtzeit-Heading.
-    if (kIsWeb && _webSmoother.current != null) {
-      final prediction = _webSmoother.predict(DateTime.now());
-      lat = lat + (prediction.lat - lat) * 0.60;
-      lng = lng + (prediction.lng - lng) * 0.60;
-      heading = _lerpAngleDeg(heading, prediction.heading, 0.60);
-    } else if (!kIsWeb && _nativeSmoother.hasValidHeading) {
-      // iOS/Android: Native Smoother für Heading-Prediction
-      final prediction = _nativeSmoother.predict(DateTime.now());
-      // Position sanft mischen (Kalman-geglättet)
-      lat = lat + (prediction.lat - lat) * 0.55;
-      lng = lng + (prediction.lng - lng) * 0.55;
-      // Heading stark gewichten für reaktive Drehung (Apple-Maps-artig)
-      heading = _lerpAngleDeg(heading, prediction.heading, 0.75);
+    if (!_isCameraLocked || !_mapReady || _isOverviewActive) {
+      _cameraAnimController?.stop();
+      return;
     }
-
-    // Forward-Offset: Kartenzentrum ~100m in Fahrtrichtung verschieben,
-    // damit der Fahrer mehr Straße vor sich sieht (Marker im unteren Drittel).
-    final offsetLat = lat + _forwardOffsetLat(heading);
-    final offsetLng = lng + _forwardOffsetLng(heading);
-
-    _camMoveRotate(offsetLat, offsetLng, 16.5, heading);
+    if (!_camHasState || _camMoveInFlight) return;
+    // Kritisch gedämpftes Annähern (Apple/Google-artig). Faktor pro Frame.
+    const f = 0.18;
+    _camCurLat += (_camToLat - _camCurLat) * f;
+    _camCurLng += (_camToLng - _camCurLng) * f;
+    _camCurHeading = _lerpAngleDeg(_camCurHeading, _camToHeading, f);
+    final ctrl = _mlController;
+    if (ctrl == null) return;
+    // Forward-Offset: Zentrum ~100m voraus → Puck sitzt im unteren Drittel.
+    final offLat = _camCurLat + _forwardOffsetLat(_camCurHeading);
+    final offLng = _camCurLng + _forwardOffsetLng(_camCurHeading);
+    _camMoveInFlight = true;
+    ctrl
+        .moveTo(
+          lat: offLat,
+          lng: offLng,
+          zoom: 16.5,
+          bearing: _camCurHeading,
+        )
+        .whenComplete(() => _camMoveInFlight = false);
   }
 
   /// Startet eine animierte Kamera-Bewegung von der aktuellen zur neuen Position.
   void _animateCameraTo(double lat, double lng, double heading) {
     final controller = _cameraAnimController;
-    if (controller == null) return;
+    if (controller == null || !_mapReady) return;
 
-    // 2026-05-22 (vucko): Dead-Zone reduziert für "jede Minidrehung sichtbar"
-    // iOS: 0.8° (war 1.5°) — sehr reaktiv, schon kleinste Lenkbewegungen
-    // Android: 1.0° (war 2.0°)
-    // Web: 1.5° (etwas mehr filtering wegen weniger reliable GPS)
+    // Bearing-Dead-Zone: kleinste Heading-Änderungen ignorieren (GPS-Rauschen).
     final deadZoneDegrees = (!kIsWeb && Platform.isIOS)
         ? 0.8
         : Platform.isAndroid
         ? 1.0
         : 1.5;
-
-    // Bearing-Dead-Zone: Sehr kleine Heading-Änderungen ignorieren (GPS-Rauschen)
     var effectiveHeading = heading;
     final headingDelta = _angleDiff(_lastCameraHeading, heading).abs();
     if (headingDelta < deadZoneDegrees) {
@@ -1807,61 +1801,20 @@ class _CruiseModePageState extends State<CruiseModePage>
       _lastCameraHeading = heading;
     }
 
-    // Fließender Übergang: aktuelle interpolierte Position als neuen Startpunkt nehmen
-    // (statt vom letzten Ziel zu starten → verhindert Ruckeln bei schnellen Updates)
-    if (controller.isAnimating) {
-      final t = Curves.easeOutCubic.transform(controller.value);
-      _camFromLat = _camFromLat + (_camToLat - _camFromLat) * t;
-      _camFromLng = _camFromLng + (_camToLng - _camFromLng) * t;
-      _camFromHeading = _lerpAngleDeg(_camFromHeading, _camToHeading, t);
-    } else {
-      _camFromLat = _camToLat;
-      _camFromLng = _camToLng;
-      _camFromHeading = _camToHeading;
-    }
+    // 2026-06-08 (vucko Butterweich): NUR das Ziel setzen — die Bewegung macht der
+    // kontinuierliche Ticker (_onCameraAnimationTick) pro Frame. Kein engine-Ease
+    // pro Fix → kein Puls-Ruckeln; ein moveCamera/Frame (coalesced) → kein Stau.
     _camToLat = lat;
     _camToLng = lng;
     _camToHeading = effectiveHeading;
-
-    // Wenn erste Animation: From = To (kein Sprung)
-    if (_camFromLat == 0.0 && _camFromLng == 0.0) {
-      _camFromLat = lat;
-      _camFromLng = lng;
-      _camFromHeading = effectiveHeading;
+    if (!_camHasState) {
+      _camCurLat = lat;
+      _camCurLng = lng;
+      _camCurHeading = effectiveHeading;
+      _camHasState = true;
     }
-
-    // 2026-06-06 (vucko P8): KEIN 60fps-Ticker (controller.forward) mehr — der
-    // feuerte pro Display-Frame ein instantes moveCamera über den Method-Channel
-    // (= der spürbare Lag). Stattdessen EIN engine-seitiges animateCamera pro
-    // GPS-Fix mit Dauer ≈ Fix-Intervall; die GL-Engine interpoliert Position +
-    // Bearing selbst (smooth). Forward-Offset (Look-ahead) wie zuvor, damit der
-    // Puck im unteren Drittel sitzt.
-    // 2026-06-06 (vucko P8): Throttle für SCHNELLE Quellen (Sim 20Hz / High-Rate-
-    // GPS). Ohne das würde alle ~50ms eine neue 220ms-Engine-Animation gestartet
-    // → jede Animation 4-5× neu angestoßen, bevor sie ausläuft = Mikro-Ruckeln.
-    // Min. 180ms Abstand → die laufende Animation darf ~auslaufen; die Dauer ≈
-    // tatsächliches Ausgabe-Intervall (clamp 220–1200ms) → nahtlose Bewegung.
-    final nowCam = DateTime.now();
-    if (_lastFollowFixTime != null &&
-        nowCam.difference(_lastFollowFixTime!).inMilliseconds < 180) {
-      return;
-    }
-    final durMs = _lastFollowFixTime == null
-        ? 900
-        : nowCam.difference(_lastFollowFixTime!).inMilliseconds.clamp(220, 1200);
-    _lastFollowFixTime = nowCam;
-    final offLat = lat + _forwardOffsetLat(effectiveHeading);
-    final offLng = lng + _forwardOffsetLng(effectiveHeading);
-    _camMoveRotate(offLat, offLng, 16.5, effectiveHeading,
-        animDuration: Duration(milliseconds: durMs));
+    if (!controller.isAnimating) controller.repeat();
   }
-
-  DateTime? _lastFollowFixTime;
-  // 2026-06-07 (vucko P-centering): Nach einem expliziten Recenter den Follow
-  // kurz unterdrücken, sonst überschreibt der nächste 50ms-Sim-Tick die
-  // Recenter-Animation engine-seitig (animateCamera ist nicht concurrency-safe)
-  // → „zentriert nicht auf mich".
-  DateTime? _suppressFollowUntil;
 
   /// Zirkuläre Interpolation für Heading (0–360°).
   static double _lerpAngleDeg(double from, double to, double t) {
@@ -4304,28 +4257,6 @@ class _CruiseModePageState extends State<CruiseModePage>
   // ───────────────────── MapLibre-Kamera-Adapter ─────────────────────────────
   // Bilden die wenigen MapController-Aufrufe nach und dispatchen je nach Engine,
   // damit die Aufrufstellen identisch bleiben.
-  void _camMoveRotate(double lat, double lng, double zoom, double headingDeg,
-      {Duration? animDuration}) {
-    if (_useMapLibre) {
-      // 2026-06-06 (vucko P8): EIN engine-seitiges animateCamera pro GPS-Fix
-      // (Dauer ≈ Fix-Intervall) statt 60fps-moveCamera über den Method-Channel.
-      // Die GL-Engine interpoliert Position UND Bearing auf ihrem eigenen Render-
-      // Thread → butterweich (Apple/Google-Technik), 1 Channel-Call pro Fix statt
-      // 60-120/s (= der frühere Lag). Bearing-Wrap übernimmt die Engine.
-      _mlController?.animateTo(
-        lat: lat,
-        lng: lng,
-        zoom: zoom,
-        bearing: headingDeg,
-        duration: animDuration ?? const Duration(milliseconds: 900),
-      );
-    } else {
-      try {
-        _mapController.moveAndRotate(LatLng(lat, lng), zoom, -headingDeg);
-      } catch (_) {}
-    }
-  }
-
   void _camMove(double lat, double lng, double zoom, {bool animate = true}) {
     if (_useMapLibre) {
       if (animate) {
@@ -8618,11 +8549,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     // 2026-06-06 (vucko P11): Während die Routen-Übersicht (Karten-Button) läuft,
     // den Follow NICHT feuern — sonst zog der nächste GPS-Fix die Kamera sofort
     // wieder auf den Standort und die Übersicht „funktionierte nicht".
-    if (_isCameraLocked &&
-        _mapReady &&
-        !_isOverviewActive &&
-        (_suppressFollowUntil == null ||
-            DateTime.now().isAfter(_suppressFollowUntil!))) {
+    if (_isCameraLocked && _mapReady && !_isOverviewActive) {
       if (kIsWeb) {
         final predicted = _webSmoother.predict(
           DateTime.now().add(const Duration(milliseconds: 180)),
@@ -10707,24 +10634,22 @@ class _CruiseModePageState extends State<CruiseModePage>
   Future<void> _recenterMap() async {
     final position = _userLocation;
     if (position == null || !_mapReady) return;
-    try {
-      // 2026-06-07 (vucko P-centering): Über DENSELBEN Pfad wie der Follow
-      // (_camMoveRotate → eine animateTo-Quelle, identische Rahmung mit Forward-
-      // Offset + Heading) → kein konkurrierendes animateCamera, das die
-      // Zentrierung abwürgt. Heading-Fallback: aktuelle Kamera-Bearing wenn
-      // _userHeading ungültig (Stillstand).
-      final heading = (_userHeading.isFinite && _userHeading >= 0)
-          ? _userHeading
-          : _lastCameraHeading;
-      final offLat = position.latitude + _forwardOffsetLat(heading);
-      final offLng = position.longitude + _forwardOffsetLng(heading);
-      _camMoveRotate(offLat, offLng, 16.5, heading,
-          animDuration: const Duration(milliseconds: 500));
-      // Follow ~700ms unterdrücken, damit die Recenter-Animation sauber landet.
-      _suppressFollowUntil =
-          DateTime.now().add(const Duration(milliseconds: 700));
-    } catch (e) {
-      debugPrint('[CruiseMode] Recenter fehlgeschlagen: $e');
+    // 2026-06-08 (vucko Butterweich): Recenter über den Smooth-Follow-Ticker.
+    // Kamera-Stand UND Ziel auf den Standort setzen (Snap), Ticker (re)starten —
+    // kein konkurrierendes animateCamera mehr.
+    final heading = (_userHeading.isFinite && _userHeading >= 0)
+        ? _userHeading
+        : _lastCameraHeading;
+    _camCurLat = position.latitude;
+    _camCurLng = position.longitude;
+    _camCurHeading = heading;
+    _camToLat = position.latitude;
+    _camToLng = position.longitude;
+    _camToHeading = heading;
+    _lastCameraHeading = heading;
+    _camHasState = true;
+    if (!(_cameraAnimController?.isAnimating ?? false)) {
+      _cameraAnimController?.repeat();
     }
   }
 
@@ -10784,14 +10709,9 @@ class _CruiseModePageState extends State<CruiseModePage>
       _userPosition = LatLng(position.latitude, position.longitude);
       _isCameraLocked = true;
     });
-    try {
-      // Kamera zur User-Position zoomen
-      // 2026-06-06 (vucko P1): 16.0 → 16.5 = identischer Zoom wie der Follow-
-      // Modus, damit Recenter/Nav-Start nicht zwischen 16.0/16.5 springt.
-      _camMove(position.latitude, position.longitude, 16.5);
-    } catch (e) {
-      debugPrint('[CruiseMode] Navigations-Kamera setzen fehlgeschlagen: $e');
-    }
+    // 2026-06-08 (vucko Butterweich): Nav-Start initialisiert den Smooth-Follow-
+    // Ticker auf den Standort (Snap + Ticker an), zoom 16.5.
+    unawaited(_recenterMap());
   }
 
   // ═══════════════════════ SIMULATION ═══════════════════════════════════════
