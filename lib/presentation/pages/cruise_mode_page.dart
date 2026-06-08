@@ -375,6 +375,15 @@ class _CruiseModePageState extends State<CruiseModePage>
   double? _stableInitialZoom;
   List<List<double>> _fullRouteCoordinates = [];
   List<List<double>> _remainingRouteCoordinates = [];
+  // 2026-06-08 (vucko Leitlinie GPU-Trim): Metriken der aktiven Route für das
+  // line-gradient-Trimmen. _activeRouteLatLngs = volle Route (an die Karte, wird
+  // dort EINMAL je Wechsel gesetzt). _routeCumDist = kumulierte Distanz je Punkt;
+  // _routeProgress 0..1 = Fraktion bis zum Puck (= Trim-Punkt). _routeMetricsSig
+  // erkennt Routen-/Reroute-Wechsel → Neuberechnung + Progress-Reset.
+  String _routeMetricsSig = '';
+  List<double> _routeCumDist = [];
+  double _routeTotalLenM = 0.0;
+  double _routeProgress = 0.0;
   List<RouteManeuver> _maneuvers = [];
   int _activeManeuverIndex = 0;
   int _currentRouteIndex = 0;
@@ -849,6 +858,49 @@ class _CruiseModePageState extends State<CruiseModePage>
   // wurde nur geheftet, wenn dieser <25m entfernt war. Auf langen Segmenten
   // (GraphHopper-Vertices 50–300m auseinander) blieb der Kopf darum hinter dem
   // Puck stehen → genau das gemeldete „Linie viel zu weit vorne/hinten".
+  // 2026-06-08 (vucko Leitlinie GPU-Trim): kumulierte Distanzen + LatLng-Liste der
+  // aktiven Route. Nur neu rechnen, wenn sich die Route ändert (Start/Reroute).
+  void _ensureRouteMetrics() {
+    final coords = _fullRouteCoordinates;
+    final sig = coords.length < 2
+        ? 'e'
+        : '${coords.length}:${coords.first[0].toStringAsFixed(5)},'
+            '${coords.first[1].toStringAsFixed(5)}>'
+            '${coords.last[0].toStringAsFixed(5)},'
+            '${coords.last[1].toStringAsFixed(5)}';
+    if (sig == _routeMetricsSig) return;
+    _routeMetricsSig = sig;
+    final cum = List<double>.filled(coords.length, 0.0);
+    var total = 0.0;
+    for (var i = 1; i < coords.length; i++) {
+      total += geo.Geolocator.distanceBetween(
+          coords[i - 1][1], coords[i - 1][0], coords[i][1], coords[i][0]);
+      cum[i] = total;
+    }
+    _routeCumDist = cum;
+    _routeTotalLenM = total;
+    _routeProgress = 0.0; // neue Route → von vorne
+  }
+
+  // Fahrt-Fortschritt 0..1 als DISTANZ-Fraktion (line-progress misst Distanz!) aus
+  // der Puck-Projektion (Segment-Index + -Fraktion des Matches).
+  double _routeProgressFromMatch(RouteWindowMatch match) {
+    _ensureRouteMetrics();
+    final n = _routeCumDist.length;
+    if (_routeTotalLenM <= 0 || n < 2) return _routeProgress;
+    final segIdx = match.segmentIndex;
+    final frac = match.segmentFraction;
+    double along;
+    if (segIdx != null && frac != null && segIdx >= 0 && segIdx + 1 < n) {
+      final f = frac.clamp(0.0, 1.0);
+      along =
+          _routeCumDist[segIdx] + f * (_routeCumDist[segIdx + 1] - _routeCumDist[segIdx]);
+    } else {
+      along = _routeCumDist[match.index.clamp(0, n - 1)];
+    }
+    return (along / _routeTotalLenM).clamp(0.0, 1.0);
+  }
+
   bool _trimVisibleRouteToProjection(RouteWindowMatch match) {
     final coords = _fullRouteCoordinates;
     if (coords.length < 2) return false;
@@ -4337,11 +4389,18 @@ class _CruiseModePageState extends State<CruiseModePage>
         const LatLng(51.165691, 10.451526);
     _stableInitialZoom ??=
         (_userPosition ?? _cachedUserCenter) != null ? 13.0 : 6.0;
+    // 2026-06-08 (vucko Leitlinie GPU-Trim): Routen-Metriken frisch halten (nur
+    // bei echtem Routenwechsel teuer), dann volle aktive Route + Fortschritt an
+    // die Karte → der line-gradient trimmt GPU-seitig exakt am Puck.
+    _ensureRouteMetrics();
     return CruiseMapLibreMap(
       initialCenter: _stableInitialCenter!,
       initialZoom: _stableInitialZoom!,
       lines: _buildMapLibreLines(),
       markers: _buildMapLibreMarkers(),
+      activeRoutePoints: _fullRouteBackgroundLatLngs,
+      routeProgress: _routeProgress,
+      routeColor: AppAccentColors.accent,
       onControllerReady: (c) {
         _mlController = c;
         if (!_mapReady) _onMapReady();
@@ -4359,28 +4418,17 @@ class _CruiseModePageState extends State<CruiseModePage>
   List<CruiseMapLine> _buildMapLibreLines() {
     final accent = AppAccentColors.accent;
     final lines = <CruiseMapLine>[];
-    // Gesamt-Route als gedimmter Hintergrund (während Navigation).
+    // 2026-06-08 (vucko Leitlinie GPU-Trim): nur noch der gedimmte Hintergrund
+    // (Gesamt-Route). Die AKTIVE rote Linie — Preview UND Navigation — zeichnet
+    // jetzt der GPU-line-gradient (activeRoutePoints + routeProgress), der sie
+    // EXAKT am Puck trimmt. Kein _routeLatLngs-Glow/Haupt mehr (das pushte pro
+    // Frame Geometrie nach → Lag/Schwarz, die rote Linie hinkte dem Puck nach).
     if (_isRouteConfirmed && _fullRouteBackgroundLatLngs.length >= 2) {
       lines.add(CruiseMapLine(
         points: List<LatLng>.from(_fullRouteBackgroundLatLngs),
         color: accent,
         opacity: 0.28,
         width: 3,
-      ));
-    }
-    // Aktive Route: Glow + Hauptlinie.
-    if (_routeLatLngs.length >= 2) {
-      lines.add(CruiseMapLine(
-        points: List<LatLng>.from(_routeLatLngs),
-        color: accent,
-        opacity: 0.30,
-        width: 12,
-        blur: 2,
-      ));
-      lines.add(CruiseMapLine(
-        points: List<LatLng>.from(_routeLatLngs),
-        color: accent,
-        width: 5,
       ));
     }
     return lines;
@@ -8806,12 +8854,22 @@ class _CruiseModePageState extends State<CruiseModePage>
       }
     }
 
-    // 2026-06-06 (vucko P3): JEDEN Tick den Kopf der roten Linie exakt auf die
-    // projizierte Puck-Position setzen (entkoppelt vom groben 25m-Redraw oben,
-    // der nur teure GeoJSON-/flutter_map-Updates throttelt). So folgt der
-    // Linienkopf dem Standort lückenlos — nie davor, nie dahinter.
-    if (!isOutsideCorridor && _trimVisibleRouteToProjection(match)) {
-      needsRebuild = true;
+    // 2026-06-08 (vucko Leitlinie GPU-Trim): Fahrt-Fortschritt 0..1 entlang der
+    // Route bestimmt den line-gradient (GPU-seitig) — der trimmt die rote Linie
+    // EXAKT an der Puck-Projektion, geo-verankert → bei jedem Tempo nie davor und
+    // nie dahinter. Ersetzt das frühere Geometrie-Trimmen (das pro Frame die
+    // ganze Route neu pushte → Lag/Schwarz). Nur bei echter Änderung rebuild.
+    if (!isOutsideCorridor) {
+      final newProgress = _routeProgressFromMatch(match);
+      if ((newProgress - _routeProgress).abs() > 0.00003) {
+        _routeProgress = newProgress;
+        needsRebuild = true;
+      }
+    }
+    // _remainingRouteCoordinates für andere Logik (Restdistanz/Snapshot) weiter
+    // pflegen, aber NICHT mehr für die sichtbare Linie (die macht der Gradient).
+    if (!isOutsideCorridor) {
+      _trimVisibleRouteToProjection(match);
     }
 
     // Prüfe ob Route zu Ende ist

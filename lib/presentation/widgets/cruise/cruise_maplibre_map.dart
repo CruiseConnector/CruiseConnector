@@ -220,6 +220,9 @@ class CruiseMapLibreMap extends StatefulWidget {
     this.onCameraMoved,
     this.rotateGestures = true,
     this.styleAsset = 'assets/map/cruise_dark.json',
+    this.activeRoutePoints = const [],
+    this.routeProgress = 0.0,
+    this.routeColor = const Color(0xFFFF4438),
   });
 
   final ll.LatLng initialCenter;
@@ -231,6 +234,14 @@ class CruiseMapLibreMap extends StatefulWidget {
   final VoidCallback? onCameraMoved;
   final bool rotateGestures;
   final String styleAsset;
+
+  // 2026-06-08 (vucko Leitlinie GPU-Trim): die VOLLE aktive Route (wird EINMAL je
+  // Routen-/Reroute-Wechsel gesetzt) + der Fahrt-Fortschritt 0..1 entlang dieser
+  // Route. Statt die getrimmte Geometrie pro Frame neu zu pushen, bleibt die
+  // Geometrie statisch und nur ein line-gradient (GPU) „frisst" sie am Puck auf.
+  final List<ll.LatLng> activeRoutePoints;
+  final double routeProgress;
+  final Color routeColor;
 
   @override
   State<CruiseMapLibreMap> createState() => _CruiseMapLibreMapState();
@@ -259,6 +270,18 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
   static const String _lineSourceId = 'cruise-route-lines';
   static const String _lineLayerId = 'cruise-route-lines-layer';
   bool _lineLayerReady = false;
+  // 2026-06-08 (vucko Leitlinie GPU-Trim): EIGENE Quelle (lineMetrics:true) für
+  // die aktive Route — Geometrie wird nur bei Routen-/Reroute-Wechsel gesetzt;
+  // das „Abfahren" macht ein line-gradient (GPU), der pro Tick via
+  // setLayerProperties auf den Puck-Progress geschoben wird. Kein Geometrie-
+  // Neupush pro Frame → kein Lag, kein Tile-Hunger.
+  static const String _activeSrcId = 'cruise-route-active';
+  static const String _activeGlowLayerId = 'cruise-route-active-glow';
+  static const String _activeMainLayerId = 'cruise-route-active-main';
+  String _lastActiveSig = '';
+  double _lastProgress = -1.0;
+  bool _gradientInFlight = false;
+  bool _gradientQueued = false;
   // View-/quellen-abhängige Calls (setGeoJsonSource, toScreenLocationBatch) erst
   // NACH dem ersten gerenderten Frame (onCameraIdle) feuern — nicht direkt im
   // onStyleLoaded, solange Renderer/Tiles noch nicht idle sind (sonst Throw).
@@ -339,6 +362,10 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
       // (cruise_mode_page liefert pro GPS-Tick frische Listen → identical war
       // immer false → voller Rebuild pro Frame = Lag).
       if (_linesSignature() != _lastLinesSig) _syncLines();
+      // 2026-06-08 (vucko Leitlinie GPU-Trim): aktive Route nur bei Wechsel neu
+      // setzen, den Gradient (= das „Abfahren") jeden Frame schieben.
+      _syncActiveRoute();
+      if (widget.routeProgress != old.routeProgress) _updateRouteGradient();
       _projectMarkers();
     }
   }
@@ -468,6 +495,51 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
           ),
         );
       }
+      // 2026-06-08 (vucko Leitlinie GPU-Trim): aktive Quelle (lineMetrics!) +
+      // Glow/Haupt-Layer mit line-gradient. lineMetrics=true ist Pflicht, sonst
+      // ist `line-progress` nicht verfügbar. Existenz-geprüft wie oben (kein
+      // Redundant-Throw → kein SIGABRT). Beide Layer ÜBER der Hintergrund-Linie.
+      if (!sourceIds.contains(_activeSrcId)) {
+        await map.addSource(
+          _activeSrcId,
+          const mb.GeojsonSourceProperties(
+            data: <String, dynamic>{
+              'type': 'FeatureCollection',
+              'features': <dynamic>[],
+            },
+            lineMetrics: true,
+          ),
+        );
+        if (!mounted) return;
+      }
+      final initialGradient = _routeGradient(0.0, widget.routeColor);
+      if (!layerIds.contains(_activeGlowLayerId)) {
+        await map.addLineLayer(
+          _activeSrcId,
+          _activeGlowLayerId,
+          mb.LineLayerProperties(
+            lineGradient: initialGradient,
+            lineWidth: 12.0,
+            lineOpacity: 0.30,
+            lineBlur: 2.0,
+            lineJoin: 'round',
+            lineCap: 'round',
+          ),
+        );
+        if (!mounted) return;
+      }
+      if (!layerIds.contains(_activeMainLayerId)) {
+        await map.addLineLayer(
+          _activeSrcId,
+          _activeMainLayerId,
+          mb.LineLayerProperties(
+            lineGradient: initialGradient,
+            lineWidth: 5.0,
+            lineJoin: 'round',
+            lineCap: 'round',
+          ),
+        );
+      }
       _lineLayerReady = true;
     } catch (_) {
       // Defensiv: bei irgendeinem transienten Fehler NICHT erneut blind adden.
@@ -505,6 +577,8 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
     if (!mounted) return;
     if (_visible) {
       _syncLines();
+      _syncActiveRoute();
+      _updateRouteGradient();
       _projectMarkers();
     }
   }
@@ -599,6 +673,127 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
       // Quelle noch nicht bereit / transienter Zustand — nächster Sync zieht nach.
     } finally {
       _syncInFlight = false;
+    }
+  }
+
+  // 2026-06-08 (vucko Leitlinie GPU-Trim): baut den line-gradient-Ausdruck so,
+  // dass [0..progress] transparent (= „abgefahren") und [progress..1] in voller
+  // Farbe ist. Eingabe ist `line-progress` (Fraktion der Gesamtlänge, braucht
+  // lineMetrics:true). Schmaler Feather für eine saubere, nicht-treppige Kante.
+  static List<dynamic> _routeGradient(double progress, Color color) {
+    final argb = color.toARGB32();
+    final r = (argb >> 16) & 0xFF;
+    final g = (argb >> 8) & 0xFF;
+    final b = argb & 0xFF;
+    final transparent = 'rgba($r,$g,$b,0)';
+    final solid = 'rgba($r,$g,$b,1)';
+    final p = progress.clamp(0.0, 1.0).toDouble();
+    if (p <= 0.001) {
+      return ['interpolate', ['linear'], ['line-progress'], 0.0, solid, 1.0, solid];
+    }
+    if (p >= 0.999) {
+      return [
+        'interpolate', ['linear'], ['line-progress'],
+        0.0, transparent, 1.0, transparent,
+      ];
+    }
+    const feather = 0.0015; // ~weiche, aber knappe Kante
+    final p0 = (p - feather).clamp(0.0, 1.0).toDouble();
+    final p1 = p.clamp(p0 + 0.0005, 1.0).toDouble();
+    final stops = <dynamic>[0.0, transparent];
+    if (p0 > 0.0006) {
+      stops..add(p0)..add(transparent);
+    }
+    stops..add(p1)..add(solid);
+    if (p1 < 0.9994) {
+      stops..add(1.0)..add(solid);
+    }
+    return ['interpolate', ['linear'], ['line-progress'], ...stops];
+  }
+
+  /// Setzt die VOLLE aktive Route in die eigene Quelle — nur bei echtem Wechsel
+  /// (Routenstart/Reroute), NICHT pro Frame.
+  Future<void> _syncActiveRoute() async {
+    final map = _map;
+    if (!_styleLoaded ||
+        !_visible ||
+        !_appResumed ||
+        !_firstFrameSynced ||
+        !_lineLayerReady ||
+        map == null) {
+      return;
+    }
+    final pts = widget.activeRoutePoints;
+    final sig = pts.length < 2
+        ? 'empty'
+        : '${pts.length}:${pts.first.latitude.toStringAsFixed(5)},'
+            '${pts.first.longitude.toStringAsFixed(5)}>'
+            '${pts.last.latitude.toStringAsFixed(5)},'
+            '${pts.last.longitude.toStringAsFixed(5)}';
+    if (sig == _lastActiveSig) return;
+    _lastActiveSig = sig;
+    try {
+      await map.setGeoJsonSource(_activeSrcId, {
+        'type': 'FeatureCollection',
+        'features': pts.length < 2
+            ? <dynamic>[]
+            : [
+                {
+                  'type': 'Feature',
+                  'properties': <String, dynamic>{},
+                  'geometry': {
+                    'type': 'LineString',
+                    'coordinates': [
+                      for (final p in pts) [p.longitude, p.latitude],
+                    ],
+                  },
+                },
+              ],
+      });
+      // Geometrie neu → Gradient zwingend neu anwenden (Progress ggf. 0).
+      _lastProgress = -1.0;
+      unawaited(_updateRouteGradient());
+    } catch (_) {}
+  }
+
+  /// Schiebt den line-gradient auf den aktuellen Fahrt-Fortschritt — GPU-seitig,
+  /// KEIN Geometrie-Neupush. Coalesced (nie gestapelt), aber nicht gedrosselt
+  /// (setLayerProperties ist billig — kein Tile-Reparse wie setGeoJsonSource).
+  Future<void> _updateRouteGradient() async {
+    final map = _map;
+    if (!_styleLoaded ||
+        !_visible ||
+        !_appResumed ||
+        !_firstFrameSynced ||
+        !_lineLayerReady ||
+        map == null) {
+      return;
+    }
+    final p = widget.routeProgress.clamp(0.0, 1.0).toDouble();
+    if ((p - _lastProgress).abs() < 0.0002) return; // sub-pixel → spare den Call
+    if (_gradientInFlight) {
+      _gradientQueued = true;
+      return;
+    }
+    _gradientInFlight = true;
+    _lastProgress = p;
+    final grad = _routeGradient(p, widget.routeColor);
+    try {
+      await map.setLayerProperties(
+        _activeGlowLayerId,
+        mb.LineLayerProperties(lineGradient: grad),
+      );
+      await map.setLayerProperties(
+        _activeMainLayerId,
+        mb.LineLayerProperties(lineGradient: grad),
+      );
+    } catch (_) {
+    } finally {
+      _gradientInFlight = false;
+      if (_gradientQueued) {
+        _gradientQueued = false;
+        unawaited(_updateRouteGradient());
+      }
     }
   }
 
