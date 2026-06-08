@@ -296,12 +296,7 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
   // Rot-Braun) → liest sich als Schatten-Rand, hebt die rote Linie klar vom
   // dunklen Map-Hintergrund ab (Apple/Google-Maps-Look).
   static const Color _routeCasingColor = Color(0xFF230806);
-  // Abgefahrener Teil = gedämpftes Grau (Apple/Google-Look: „driven = grau,
-  // vor mir = kräftig rot"). Die Füllung blendet per line-gradient von diesem
-  // Grau (hinter dem Puck) auf das Akzent-Rot (vor dem Puck).
-  static const Color _routeDrivenColor = Color(0xFF8A8E99);
-  // Zoom-abhängige Breiten: sichtbar, aber schlank (vucko: „zu fett" → ~⅓ dünner).
-  // Casing ~1,5× breiter = klarer dunkler Rand.
+  // Zoom-abhängige Breiten: sichtbar, aber schlank. Casing ~1,5× = dunkler Rand.
   static const List<dynamic> _casingWidth = <dynamic>[
     'interpolate', <dynamic>['linear'], <dynamic>['zoom'],
     10, 6.0, 14, 11.0, 16, 14.5, 18, 20.0, 22, 30.0,
@@ -311,9 +306,6 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
     10, 4.0, 14, 7.0, 16, 9.5, 18, 13.0, 22, 19.0,
   ];
   String _lastActiveSig = '';
-  double _lastProgress = -1.0;
-  bool _gradientInFlight = false;
-  bool _gradientQueued = false;
   // View-/quellen-abhängige Calls (setGeoJsonSource, toScreenLocationBatch) erst
   // NACH dem ersten gerenderten Frame (onCameraIdle) feuern — nicht direkt im
   // onStyleLoaded, solange Renderer/Tiles noch nicht idle sind (sonst Throw).
@@ -397,10 +389,9 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
       // (cruise_mode_page liefert pro GPS-Tick frische Listen → identical war
       // immer false → voller Rebuild pro Frame = Lag).
       if (_linesSignature() != _lastLinesSig) _syncLines();
-      // 2026-06-08 (vucko Leitlinie GPU-Trim): aktive Route nur bei Wechsel neu
-      // setzen, den Gradient (= das „Abfahren") jeden Frame schieben.
+      // 2026-06-08 (vucko Sharp-Cut): aktive Route = am Puck geschnittene
+      // Reststrecke; bei Geometrie-Wechsel neu pushen (kein Gradient mehr).
       _syncActiveRoute();
-      if (widget.routeProgress != old.routeProgress) _updateRouteGradient();
       _projectMarkers();
     }
   }
@@ -554,10 +545,13 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
         );
         if (!mounted) return;
       }
-      // CASING (durchgehende dunkle Kontur, breiter) — UNTER der Füllung. STATISCH
-      // (kein Trim): die Kontur läuft auf der ganzen Route durch, die Füllung
-      // wechselt am Puck die Farbe (grau↔rot). So braucht NUR die Füllung einen
-      // Gradient — robust, keine zwei Layer müssen synchron trimmen.
+      // 2026-06-08 (vucko Leitstrich-Sharp-Cut): aktive Quelle = nur noch die
+      // RESTSTRECKE (am Puck geschnitten, siehe cruise_mode_page). Casing + Füllung
+      // sind SOLIDE Farben (KEIN line-gradient mehr) → der Schnitt entsteht durch
+      // die Geometrie-Kante am Puck = knackscharf wie bei Google/Apple Maps (kein
+      // langer, schwammiger Gradient-Übergang, der durch die niedrig aufgelöste
+      // line-gradient-Textur auf langen Routen entstand). Der abgefahrene Teil ist
+      // der graue Hintergrund (Gesamt-Route) aus _buildMapLibreLines.
       if (!layerIds.contains(_activeGlowLayerId)) {
         await map.addLineLayer(
           _activeSrcId,
@@ -572,14 +566,13 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
         );
         if (!mounted) return;
       }
-      // FÜLLUNG — line-gradient blendet grau (abgefahren) → rot (vor dir).
       if (!layerIds.contains(_activeMainLayerId)) {
         await map.addLineLayer(
           _activeSrcId,
           _activeMainLayerId,
           mb.LineLayerProperties(
-            lineGradient:
-                _routeGradient(0.0, _routeDrivenColor, widget.routeColor),
+            lineColor:
+                '#${(widget.routeColor.toARGB32() & 0xFFFFFF).toRadixString(16).padLeft(6, '0')}',
             lineWidth: _fillWidth,
             lineBlur: 0.5,
             lineJoin: 'round',
@@ -632,7 +625,6 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
     if (_visible) {
       _syncLines();
       _syncActiveRoute();
-      _updateRouteGradient();
       _projectMarkers();
     }
   }
@@ -730,44 +722,8 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
     }
   }
 
-  // 2026-06-08 (vucko Leitstrich-Premium): baut den line-gradient so, dass
-  // [0..progress] = `driven` (Grau) und [progress..1] = `remain` (Rot) ist —
-  // die Füllung „färbt sich am Puck um" statt zu verschwinden (Apple/Google-Look).
-  // Eingabe ist `line-progress` (braucht lineMetrics:true). Knapper Feather für
-  // eine saubere, nicht-treppige Kante GENAU unter dem Puck.
-  static List<dynamic> _routeGradient(double progress, Color driven, Color remain) {
-    String rgba(Color c) {
-      final a = c.toARGB32();
-      final al = ((a >> 24) & 0xFF) / 255.0;
-      return 'rgba(${(a >> 16) & 0xFF},${(a >> 8) & 0xFF},${a & 0xFF},'
-          '${al.toStringAsFixed(3)})';
-    }
-
-    final d = rgba(driven);
-    final rm = rgba(remain);
-    final p = progress.clamp(0.0, 1.0).toDouble();
-    if (p <= 0.001) {
-      return ['interpolate', ['linear'], ['line-progress'], 0.0, rm, 1.0, rm];
-    }
-    if (p >= 0.999) {
-      return ['interpolate', ['linear'], ['line-progress'], 0.0, d, 1.0, d];
-    }
-    const feather = 0.0009; // knappe, vom Puck verdeckte Kante
-    final p0 = (p - feather).clamp(0.0, 1.0).toDouble();
-    final p1 = p.clamp(p0 + 0.0004, 1.0).toDouble();
-    final stops = <dynamic>[0.0, d];
-    if (p0 > 0.0006) {
-      stops..add(p0)..add(d);
-    }
-    stops..add(p1)..add(rm);
-    if (p1 < 0.9994) {
-      stops..add(1.0)..add(rm);
-    }
-    return ['interpolate', ['linear'], ['line-progress'], ...stops];
-  }
-
-  /// Setzt die VOLLE aktive Route in die eigene Quelle — nur bei echtem Wechsel
-  /// (Routenstart/Reroute), NICHT pro Frame.
+  /// Setzt die aktive Reststrecke (am Puck geschnitten) in die eigene Quelle —
+  /// nur bei echtem Geometrie-Wechsel (distanz-gegated im Page), NICHT pro Frame.
   Future<void> _syncActiveRoute() async {
     final map = _map;
     if (!_styleLoaded ||
@@ -805,58 +761,7 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
                 },
               ],
       });
-      // Geometrie neu → Gradient zwingend neu anwenden (Progress ggf. 0).
-      _lastProgress = -1.0;
-      unawaited(_updateRouteGradient());
     } catch (_) {}
-  }
-
-  /// Schiebt den line-gradient auf den aktuellen Fahrt-Fortschritt — GPU-seitig,
-  /// KEIN Geometrie-Neupush. Coalesced (nie gestapelt), aber nicht gedrosselt
-  /// (setLayerProperties ist billig — kein Tile-Reparse wie setGeoJsonSource).
-  Future<void> _updateRouteGradient() async {
-    final map = _map;
-    if (!_styleLoaded ||
-        !_visible ||
-        !_appResumed ||
-        !_firstFrameSynced ||
-        !_lineLayerReady ||
-        map == null) {
-      return;
-    }
-    final p = widget.routeProgress.clamp(0.0, 1.0).toDouble();
-    if ((p - _lastProgress).abs() < 0.0002) return; // sub-pixel → spare den Call
-    if (_gradientInFlight) {
-      _gradientQueued = true;
-      return;
-    }
-    _gradientInFlight = true;
-    _lastProgress = p;
-    // Nur die FÜLLUNG bekommt den Gradient (grau→rot am Puck). Das Casing ist
-    // statisch (durchgehende dunkle Kontur). WICHTIG: Breite + Caps + Blur bei
-    // JEDEM Update mitschicken — setLayerProperties serialisiert mit skipNulls:
-    // false; nur lineGradient zu setzen würde lineWidth auf den Default (~1px
-    // Haarlinie) zurücksetzen → genau das machte den Leitstrich „unsichtbar dünn".
-    final fillGrad = _routeGradient(p, _routeDrivenColor, widget.routeColor);
-    try {
-      await map.setLayerProperties(
-        _activeMainLayerId,
-        mb.LineLayerProperties(
-          lineGradient: fillGrad,
-          lineWidth: _fillWidth,
-          lineBlur: 0.5,
-          lineJoin: 'round',
-          lineCap: 'round',
-        ),
-      );
-    } catch (_) {
-    } finally {
-      _gradientInFlight = false;
-      if (_gradientQueued) {
-        _gradientQueued = false;
-        unawaited(_updateRouteGradient());
-      }
-    }
   }
 
   // 2026-06-08 (vucko Marker-Glue): projiziert ALLE Marker SYNCHRON in Dart aus

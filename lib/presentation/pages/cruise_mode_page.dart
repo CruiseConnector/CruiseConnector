@@ -933,18 +933,19 @@ class _CruiseModePageState extends State<CruiseModePage>
     ];
     if (newRemaining.length < 2) return false;
 
-    // 2026-06-07 (vucko P-map-stops): Guard von 0.4m hoch — der 0.4m-Guard feuerte
-    // bei 30km/h JEDEN Tick → ~20Hz Voll-Route-Rewrite, der die PMTiles-Tile-
-    // Pipeline aushungerte (Karte schwarz). 2026-06-08 (Butterweich): 3m → 1.5m
-    // halbiert die Lücke zwischen Linienkopf und Puck (smoother), OHNE die Push-
-    // Frequenz zu erhöhen — die ist ohnehin durch den _syncLines-Throttle (≤5Hz)
-    // gedeckelt, also kein zusätzliches Schwarz-Risiko.
+    // 2026-06-08 (vucko Sharp-Cut): Distanz-Gate für den Re-Slice/Re-Push der
+    // aktiven Reststrecke. Seit dem Sharp-Cut pusht _syncActiveRoute die (am Puck
+    // geschnittene, 3km-gefensterte) Reststrecke OHNE Zeit-Throttle — die Frequenz
+    // ist also nur noch durch dieses Gate gedeckelt. 3m hält selbst bei 130km/h
+    // die Push-Rate < ~12Hz auf einem KLEINEN 3km-Fenster (≈ 1/25 der Voll-Route)
+    // → weit weg vom Schwarz-Karte-Risiko (das kam von der VOLLEN Route bei 20Hz).
+    // 3m sind zudem klar < Puck-Durchmesser → der Schnitt sitzt optisch am Puck.
     if (_remainingRouteCoordinates.isNotEmpty &&
         _remainingRouteCoordinates.length == newRemaining.length) {
       final cur = _remainingRouteCoordinates.first;
       final moved = geo.Geolocator.distanceBetween(
           cur[1], cur[0], projHead[1], projHead[0]);
-      if (moved < 1.5) return false;
+      if (moved < 3.0) return false;
     }
 
     _remainingRouteCoordinates = newRemaining;
@@ -4389,16 +4390,24 @@ class _CruiseModePageState extends State<CruiseModePage>
         const LatLng(51.165691, 10.451526);
     _stableInitialZoom ??=
         (_userPosition ?? _cachedUserCenter) != null ? 13.0 : 6.0;
-    // 2026-06-08 (vucko Leitlinie GPU-Trim): Routen-Metriken frisch halten (nur
-    // bei echtem Routenwechsel teuer), dann volle aktive Route + Fortschritt an
-    // die Karte → der line-gradient trimmt GPU-seitig exakt am Puck.
+    // 2026-06-08 (vucko Leitstrich-Sharp-Cut): die AKTIVE rote Linie = die am Puck
+    // GESCHNITTENE Reststrecke (solide Farbe), der abgefahrene Teil = grauer
+    // Hintergrund. Der Schnitt entsteht durch die Geometrie-Kante (knackscharf wie
+    // Google/Apple) statt durch einen unscharfen line-gradient.
+    //  - Während der Navigation (Route bestätigt, NICHT Übersicht): das am Puck
+    //    geschnittene 3-km-Fenster (_routeLatLngs, distanz-gegated → kein Black-Map).
+    //  - Preview/Übersicht: die ganze Route (rot), damit auch zoomed-out alles rot ist.
     _ensureRouteMetrics();
+    final activePts =
+        (_isRouteConfirmed && !_isOverviewActive && _routeLatLngs.length >= 2)
+        ? _routeLatLngs
+        : _fullRouteBackgroundLatLngs;
     return CruiseMapLibreMap(
       initialCenter: _stableInitialCenter!,
       initialZoom: _stableInitialZoom!,
       lines: _buildMapLibreLines(),
       markers: _buildMapLibreMarkers(),
-      activeRoutePoints: _fullRouteBackgroundLatLngs,
+      activeRoutePoints: activePts,
       routeProgress: _routeProgress,
       routeColor: AppAccentColors.accent,
       onControllerReady: (c) {
