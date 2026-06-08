@@ -224,6 +224,12 @@ class RouteService {
   static const RouteAccessPlanner _accessPlanner = RouteAccessPlanner();
   static final Map<String, int> _scenarioVariantCounters = {};
 
+  // 2026-06-08 (vucko Im-Land-bleiben): aktive Länder-Präferenz der laufenden
+  // Suche. Von _evaluateCandidate gesetzt, von _isBetterCandidate gelesen, damit
+  // die Auswahl Inland-Kandidaten BEVORZUGT (vor Tier/Score) — ohne Acceptance
+  // zu ändern (kein zusätzlicher Edge-Call/Retry → keine Sackgasse-Explosion).
+  CountryPreference _activeCountryPreference = CountryPreference.any;
+
   /// Session-Cache: verhindert doppelte API-Calls für identische Anfragen.
   /// Key = konkrete Variant-/Request-Signatur, Value = RouteResult.
   static final Map<String, RouteResult> _sessionCache = {};
@@ -4797,6 +4803,7 @@ class RouteService {
     // Vorarlberg nicht total ausfällt, bleibt der Reject WEICH: er kippt nur
     // `accepted`, nicht den bestRejectedCandidate-Fallback — gibt es gar keine
     // heimische Route, surft am Ende die am-wenigsten-ausländische hoch.
+    _activeCountryPreference = scenario.countryPreference;
     final double foreignFraction =
         (scenario.homeCountryCode != null &&
                 scenario.countryPreference != CountryPreference.any)
@@ -4891,6 +4898,7 @@ class RouteService {
       styleFitScore: styleFitScore,
       tooSimilar: tooSimilar,
       novelEnough: novelEnough,
+      foreignFraction: foreignFraction,
     );
   }
 
@@ -5133,6 +5141,23 @@ class RouteService {
   bool _isBetterCandidate(_RouteCandidate candidate, _RouteCandidate? current) {
     if (!candidate.accepted) return false;
     if (current == null || !current.accepted) return true;
+
+    // 2026-06-08 (vucko Im-Land-bleiben): INLAND ZUERST. Bei aktiver Präferenz
+    // gewinnt eine Inlands-Route IMMER gegen eine auslandslastige — VOR Tier/
+    // Score (vorher schlug eine „ideale" Schweiz-Schleife die „gute" Inland-
+    // Route trotz Penalty, weil Tier vor Score verglichen wird = der Grund,
+    // warum „Im Land bleiben" nichts tat). Rein Auswahl-Logik: ändert NICHTS an
+    // Acceptance → kein zusätzlicher Edge-Call. Gibt es nur Auslandsrouten
+    // (echte Grenzregion), sind beide „foreign" → normaler Vergleich greift =
+    // beste verfügbare Route, keine Sackgasse.
+    if (_activeCountryPreference != CountryPreference.any) {
+      final thr = _activeCountryPreference == CountryPreference.onlyHome
+          ? 0.15
+          : 0.35;
+      final candHome = candidate.foreignFraction <= thr;
+      final curHome = current.foreignFraction <= thr;
+      if (candHome != curHome) return candHome;
+    }
 
     if (candidate.novelEnough != current.novelEnough) {
       return candidate.novelEnough;
@@ -6539,15 +6564,17 @@ class RouteService {
       // Live-Gate (_evaluateCandidate). 10% war zu streng — ein Loop der nur
       // kurz die Grenze touchiert wurde verworfen. 35% lässt Grenzberührungen
       // zu, kippt aber echte Cross-Border-Schleifen (z.B. ganzer Schweiz-Loop).
-      // 2026-06-02 (vucko KRITISCHER FIX): sehr tolerant — nur fast-komplett-
-      // ausländische Pool-Routen (>85%) raus. Vorher 0.35/0.45 → in
-      // Grenzregionen wurden ALLE Pool-Matches verworfen → konnte zur Sackgasse
-      // beitragen. „Im Land bleiben" ist jetzt soft; die beste verfügbare Route
-      // soll immer durchkommen.
+      // 2026-06-02: sehr tolerant (0.85) gesetzt, damit Grenzregionen nicht in
+      // die Sackgasse laufen — aber damit filterte „Im Land bleiben" praktisch
+      // NICHTS (halb-ausländische Pool-Loops kamen durch = vucko-Beschwerde).
+      // 2026-06-08 (vucko Im-Land-bleiben): wieder strenger (onlyHome >50% raus,
+      // preferHome >65%). Sackgasse-sicher, weil ein Pool-Reject hier nur `return
+      // null` macht → nächstes Match ODER Live-Suche; die Live-Suche bevorzugt
+      // jetzt selbst Inland (_isBetterCandidate) und liefert IMMER etwas.
       final maxForeign =
           scenario.countryPreference == CountryPreference.onlyHome
-              ? 0.85
-              : 0.92;
+              ? 0.50
+              : 0.65;
       if (foreignFraction > maxForeign) {
         _debugRouteSearch(
           '[PoolFallback] poolHit=true poolUsed=false reason=country_filter '
@@ -9613,6 +9640,7 @@ class _RouteCandidate {
     required this.styleFitScore,
     required this.tooSimilar,
     required this.novelEnough,
+    this.foreignFraction = 0.0,
   });
 
   final RouteResult route;
@@ -9628,6 +9656,9 @@ class _RouteCandidate {
   final double styleFitScore;
   final bool tooSimilar;
   final bool novelEnough;
+  // 2026-06-08 (vucko Im-Land-bleiben): Ausland-Anteil (0..1) für die
+  // Inland-zuerst-Auswahl in _isBetterCandidate.
+  final double foreignFraction;
 }
 
 class _ScoredPoolAccessRoute {
