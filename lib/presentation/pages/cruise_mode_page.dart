@@ -4165,23 +4165,18 @@ class _CruiseModePageState extends State<CruiseModePage>
           top: topInset + 8,
           left: 12,
           right: visibleManeuver != null ? 12 : null,
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _buildRoutePreviewBackButton(),
-              if (visibleManeuver != null) ...[
-                const SizedBox(width: 10),
-                Expanded(
-                  child: CruiseManeuverIndicator(
-                    maneuver: visibleManeuver,
-                    distanceToManeuverMeters: _calculateDistanceToManeuver(
-                      visibleManeuver,
-                    ),
+          // 2026-06-08 (vucko): Zurück-Button + Manöver-Banner zu EINER Einheit
+          // vereint — der Zurück-Chevron sitzt jetzt INNERHALB der Banner-Karte
+          // (per Trennlinie abgesetzt) statt als zweite lose Pille daneben.
+          child: visibleManeuver != null
+              ? CruiseManeuverIndicator(
+                  maneuver: visibleManeuver,
+                  distanceToManeuverMeters: _calculateDistanceToManeuver(
+                    visibleManeuver,
                   ),
-                ),
-              ],
-            ],
-          ),
+                  leading: _buildManeuverBackChevron(),
+                )
+              : _buildRoutePreviewBackButton(),
         ),
         // 2026-05-28 (vucko Task #79): FAB-Spalte aus _buildFabColumn —
         // gleicher Code für Pre-Route und während Navigation, mit dem
@@ -4223,6 +4218,31 @@ class _CruiseModePageState extends State<CruiseModePage>
           ),
         ),
       ],
+    );
+  }
+
+  // 2026-06-08 (vucko): kompakter Zurück-Chevron, der INNERHALB der Manöver-
+  // Karte sitzt (als `leading`) — vereint Zurück + Manöver zu einer Einheit.
+  Widget _buildManeuverBackChevron() {
+    return Semantics(
+      button: true,
+      label: 'Zurück zum Strecken-Setup',
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: _returnToCruiseSetupFromActiveRoute,
+          borderRadius: BorderRadius.circular(13),
+          child: const SizedBox(
+            width: 44,
+            height: 56,
+            child: Icon(
+              Icons.arrow_back_ios_new_rounded,
+              color: Colors.white,
+              size: 19,
+            ),
+          ),
+        ),
+      ),
     );
   }
 

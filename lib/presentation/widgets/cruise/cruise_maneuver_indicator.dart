@@ -11,12 +11,18 @@ class CruiseManeuverIndicator extends StatelessWidget {
     super.key,
     required this.maneuver,
     this.distanceToManeuverMeters,
+    this.leading,
   });
 
   final RouteManeuver maneuver;
 
   /// Distanz entlang der Route zum nächsten Manöver (in Metern).
   final double? distanceToManeuverMeters;
+
+  /// Optionales führendes Element (z. B. Zurück-Button), das INNERHALB der
+  /// Banner-Karte sitzt und per Trennlinie vom Manöver abgesetzt wird — so wirkt
+  /// oben alles als EINE Einheit statt zwei lose Pillen.
+  final Widget? leading;
 
   @override
   Widget build(BuildContext context) {
@@ -29,10 +35,10 @@ class CruiseManeuverIndicator extends StatelessWidget {
     final isRoundabout = maneuver.maneuverType == ManeuverType.roundabout;
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      padding: EdgeInsets.fromLTRB(leading != null ? 6 : 16, 14, 16, 14),
       decoration: BoxDecoration(
         color: const Color(0xFF1C2028).withValues(alpha: 0.97),
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(22),
         border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
         boxShadow: [
           BoxShadow(
@@ -44,6 +50,16 @@ class CruiseManeuverIndicator extends StatelessWidget {
       ),
       child: Row(
         children: [
+          if (leading != null) ...[
+            leading!,
+            const SizedBox(width: 6),
+            Container(
+              width: 1,
+              height: 44,
+              color: Colors.white.withValues(alpha: 0.10),
+            ),
+            const SizedBox(width: 14),
+          ],
           if (isRoundabout)
             SizedBox(
               width: 48,
