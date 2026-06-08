@@ -419,13 +419,29 @@ class _CruiseModePageState extends State<CruiseModePage>
   // EXAKT _simulationConstantKmh, egal wie dicht/dünn die Vertices liegen.
   double _simulationDistanceM = 0.0;
   double _simulationDistAtIndexM = 0.0;
+  // 2026-06-08 (vucko DACH-Test): ON-ROAD Reroute-Test-Hook. NUR mit
+  // --dart-define=SIM_DEVIATE=true. Nach _simDeviateAfterMeters holt der Sim eine
+  // ECHTE GraphHopper-Route quer zur Fahrtrichtung (bleibt auf Straßen!) und
+  // fährt sie ab statt der Nav-Route → realistisches Off-Route, das Reroute
+  // testet OHNE ins Gelände zu fahren. Endet nach erstem Reroute (devOnce).
+  static const bool _simDeviateEnabled = bool.fromEnvironment('SIM_DEVIATE');
+  static const double _simDeviateAfterMeters = 1500.0;
+  bool _simDeviateRequested = false;
+  bool _simDeviatedOnce = false;
+  List<List<double>>? _simDeviationRoute;
+  double _simDeviationDistM = 0.0;
+  double _simDeviationDistAtIndexM = 0.0;
+  int _simDeviationIndex = 0;
   // 2026-05-30 (vucko): Fahrten-Simulator — grüner Play-FAB in der Navigation,
   // um die Routenabfahrt zu prüfen.
   // 2026-06-06 (vucko): Sim wieder AN für die Smoothness-/Kamera-/Linien-Tests
   // (konstant 30 km/h statt 100 → man sieht Ruckler/Kamera-Verhalten viel besser).
   // Vor dem finalen Release wieder auf false setzen (Testuser sollen ihn nicht sehen).
   final bool _isSimulationEnabled = true;
-  static const double _simulationConstantKmh = 30; // Konstante Sim-Speed (Test)
+  // Konstante Sim-Speed. Default 30 km/h (man sieht Ruckler gut); für schnelle
+  // Test-Durchläufe via --dart-define=SIM_KMH=70 hochsetzen.
+  static const double _simulationConstantKmh =
+      int.fromEnvironment('SIM_KMH', defaultValue: 30) * 1.0;
   double _simulationSpeedKmh = _simulationConstantKmh;
 
   bool _isCameraLocked =
@@ -7906,6 +7922,10 @@ class _CruiseModePageState extends State<CruiseModePage>
         _simulationIndex = 0;
         _simulationDistanceM = 0.0;
         _simulationDistAtIndexM = 0.0;
+        // 2026-06-08 (vucko DACH-Test): Reroute committet → Abweichung beenden,
+        // der Sim folgt ab jetzt der NEUEN (re-gedockten) Route.
+        _simDeviationRoute = null;
+        _simDeviatedOnce = true;
       }
       _lastDrawnRouteIndex = 0;
       _distanceSinceLastRedraw = 0.0;
@@ -10853,7 +10873,58 @@ class _CruiseModePageState extends State<CruiseModePage>
         segA[0] + (segB[0] - segA[0]) * segFrac,
         segA[1] + (segB[1] - segA[1]) * segFrac,
       ];
-      final next = segB;
+      var next = segB;
+
+      // 2026-06-08 (vucko DACH-Test): ON-ROAD-Abweichung für den Reroute-Test.
+      // Nach _simDeviateAfterMeters einmalig eine echte GraphHopper-Route quer
+      // zur Fahrtrichtung holen und abfahren (bleibt auf Straßen) → realistisches
+      // Off-Route. Endet, wenn der Abweichungs-Pfad zu Ende ist oder ein Reroute
+      // committet (dort wird _simDeviationRoute genullt).
+      if (_simDeviateEnabled &&
+          !_simDeviatedOnce &&
+          _simDeviationRoute == null &&
+          !_simDeviateRequested &&
+          _simulationDistanceM > _simDeviateAfterMeters) {
+        _simDeviateRequested = true;
+        unawaited(_fetchOnRoadDeviation(current, _userHeading));
+      }
+      final dev = _simDeviationRoute;
+      if (dev != null && dev.length >= 2) {
+        final devLast = dev.length - 1;
+        _simDeviationDistM += speedMs * 0.05;
+        while (_simDeviationIndex < devLast) {
+          final a = dev[_simDeviationIndex];
+          final b = dev[_simDeviationIndex + 1];
+          final sl = geo.Geolocator.distanceBetween(a[1], a[0], b[1], b[0]);
+          if (sl <= 0) {
+            _simDeviationIndex++;
+            continue;
+          }
+          if (_simDeviationDistAtIndexM + sl >= _simDeviationDistM) break;
+          _simDeviationDistAtIndexM += sl;
+          _simDeviationIndex++;
+        }
+        if (_simDeviationIndex >= devLast || _simDeviationDistM > 1200.0) {
+          // Abweichung endet (Pfad zu Ende ODER ~1.2km gefahren = kurzer,
+          // realistischer Falsch-Abzweig) → Sim folgt der (neuen) Route.
+          _simDeviatedOnce = true;
+          _simDeviationRoute = null;
+        } else {
+          final da = dev[_simDeviationIndex];
+          final db = dev[_simDeviationIndex + 1];
+          final dl =
+              geo.Geolocator.distanceBetween(da[1], da[0], db[1], db[0]);
+          final df = dl > 0
+              ? ((_simDeviationDistM - _simDeviationDistAtIndexM) / dl)
+                  .clamp(0.0, 1.0)
+              : 0.0;
+          current = <double>[
+            da[0] + (db[0] - da[0]) * df,
+            da[1] + (db[1] - da[1]) * df,
+          ];
+          next = db;
+        }
+      }
 
       // Simulations-Puck auf der Karte bewegen
       try {
@@ -10876,6 +10947,77 @@ class _CruiseModePageState extends State<CruiseModePage>
       _isSimulationStepRunning = false;
     }
     if (_isSimulationRunning) _scheduleNextSimulationStep();
+  }
+
+  // 2026-06-08 (vucko DACH-Test): holt eine ECHTE GraphHopper-Route quer zur
+  // Fahrtrichtung als On-Road-Abweichungs-Pfad (nur SIM_DEVIATE). So bleibt der
+  // Test-Puck auf Straßen statt geradeaus ins Gelände zu fahren.
+  Future<void> _fetchOnRoadDeviation(List<double> from, double headingDeg) async {
+    try {
+      // 2026-06-08 (vucko): Abweichungs-Ziel NACH AUSSEN (weg vom Routen-
+      // Schwerpunkt), nicht senkrecht — sonst kürzt die Abweichung bei dünnen
+      // Schleifen zur Gegenseite ab und der Reroute rejoint 60km voraus. Außen =
+      // der Puck verlässt die Schleife → Reroute rejoint nahe der Abzweigung.
+      double cLat = 0, cLng = 0;
+      final n = _fullRouteCoordinates.length;
+      for (final c in _fullRouteCoordinates) {
+        cLng += c[0];
+        cLat += c[1];
+      }
+      cLat /= n;
+      cLng /= n;
+      var mLat = (from[1] - cLat) * 111000.0;
+      var mLng = (from[0] - cLng) * 75000.0;
+      final mag = math.sqrt(mLat * mLat + mLng * mLng);
+      if (mag < 1.0) {
+        // Puck ~im Zentrum → Fallback senkrecht.
+        final perpRad = (headingDeg + 90.0) * math.pi / 180.0;
+        mLat = math.cos(perpRad);
+        mLng = math.sin(perpRad);
+      } else {
+        mLat /= mag;
+        mLng /= mag;
+      }
+      const outM = 900.0; // ~0.9 km nach außen
+      final destLat = from[1] + (mLat * outM) / 111000.0;
+      final destLng = from[0] + (mLng * outM) / 75000.0;
+      final res = await _routeService.generatePointToPoint(
+        startPosition: geo.Position(
+          latitude: from[1],
+          longitude: from[0],
+          timestamp: DateTime.now(),
+          accuracy: 5,
+          altitude: 0,
+          altitudeAccuracy: 0,
+          heading: 0,
+          headingAccuracy: 0,
+          speed: 0,
+          speedAccuracy: 0,
+        ),
+        destinationLat: destLat,
+        destinationLng: destLng,
+        mode: 'Standard',
+        scenic: false,
+        routeVariant: 0,
+        avoidHighways: true,
+        forceAcceptDirect: true,
+        subscriptionTier: 'premium',
+      );
+      if (!_disposed && res.coordinates.length >= 2) {
+        _simDeviationRoute = res.coordinates;
+        _simDeviationIndex = 0;
+        _simDeviationDistM = 0.0;
+        _simDeviationDistAtIndexM = 0.0;
+        debugPrint('[SIMDEV] ON-ROAD Abweichung gesetzt: '
+            '${res.coordinates.length} Punkte, '
+            '${res.distanceKm?.toStringAsFixed(1)} km');
+      } else {
+        _simDeviatedOnce = true;
+      }
+    } catch (e) {
+      debugPrint('[SIMDEV] Abweichung-Fetch fehlgeschlagen: $e');
+      _simDeviatedOnce = true;
+    }
   }
 
   Future<void> _updateSimulationPuck(double lng, double lat) async {
