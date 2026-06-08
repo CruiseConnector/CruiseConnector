@@ -1065,38 +1065,18 @@ class _HomeContentPageState extends State<HomeContentPage>
     final route = recommendation.route;
     final coordinates = _extractCoordinates(route.geometry);
     final heroInsights = _heroInsightsByRouteId[route.id];
-    final isLoadingInsights = _heroInsightsLoading.contains(route.id);
     final ratingValue = recommendation.averageRating;
     final title = recommendation.displayName;
-    final climbMeters = heroInsights?.elevation?.ascentMeters;
     final routeTypeLabel = route.isRoundTrip ? 'Rundkurs' : 'A nach B';
-    final curvesLabel = heroInsights != null
-        ? '${heroInsights.curves} Kurven'
-        : isLoadingInsights
-        ? 'Kurven ...'
-        : 'Kurven --';
     final durationLabel = route.formattedDuration;
     final distanceLabel = route.formattedDistance;
-    final tertiaryLabel = heroInsights != null
-        ? '${heroInsights.xp} XP'
-        : climbMeters != null
-        ? '↑ $climbMeters m'
-        : routeTypeLabel;
 
     return LayoutBuilder(
       builder: (context, constraints) {
         final isCompact = constraints.maxWidth < 430;
-        // 2026-06-08 (vucko Homescreen-Redesign): Vorschau etwas größer → die
-        // Route ist im Kästchen besser lesbar (bleibt unter der Titelspalten-Höhe,
-        // Card wächst nicht).
-        final previewSize = isCompact ? 84.0 : 100.0;
-        final ratingLabel =
-            ratingValue != null && recommendation.ratingCount > 0
-            ? '${ratingValue.toStringAsFixed(1)} · ${recommendation.ratingCount} Stimmen'
-            : 'Noch keine Bewertung';
-        final activityLabel = recommendation.hasCompletions
-            ? '${recommendation.completionCount} Fahrten'
-            : tertiaryLabel;
+        // 2026-06-08 (vucko Route-Widget): quadratische Mini-Map, ~Höhe der
+        // dichten Titel-/Stat-Spalte links.
+        final previewSize = isCompact ? 96.0 : 104.0;
 
         return Container(
           width: double.infinity,
@@ -1115,10 +1095,15 @@ class _HomeContentPageState extends State<HomeContentPage>
               ),
             ],
           ),
+          // 2026-06-08 (vucko Route-Widget): dichteres, premium Layout. Tight-
+          // Cluster (Eyebrow→Titel→Untertitel→Stat-Strip mit 2–11px) + EIN
+          // bewusster 14px-Bruch vor der CTA. Stat-Chips → randlose Inline-Icon-
+          // Metriken, Stil wandert in den Untertitel → kein Stil-Chip mehr.
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(12, 11, 12, 12),
+            padding: const EdgeInsets.fromLTRB(14, 13, 14, 14),
             child: Column(
               mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -1131,81 +1116,97 @@ class _HomeContentPageState extends State<HomeContentPage>
                           Row(
                             children: [
                               Container(
-                                width: 7,
-                                height: 7,
+                                width: 5,
+                                height: 5,
                                 decoration: BoxDecoration(
                                   color: AppAccentColors.accent,
                                   shape: BoxShape.circle,
-                                  boxShadow: [
-                                    BoxShadow(
-                                      color: AppAccentColors.accent.withValues(
-                                        alpha: 0.45,
-                                      ),
-                                      blurRadius: 10,
-                                    ),
-                                  ],
                                 ),
                               ),
-                              const SizedBox(width: 7),
+                              const SizedBox(width: 6),
                               Text(
-                                'Heute für dich',
+                                'HEUTE FÜR DICH',
                                 style: TextStyle(
-                                  color: Colors.white.withValues(alpha: 0.66),
-                                  fontSize: 11.5,
-                                  fontWeight: FontWeight.w800,
-                                  letterSpacing: 0.35,
+                                  color: Colors.white.withValues(alpha: 0.55),
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w700,
+                                  letterSpacing: 0.6,
                                 ),
                               ),
                             ],
                           ),
-                          const SizedBox(height: 6),
+                          const SizedBox(height: 5),
                           Text(
                             title,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(
-                              color: Colors.white,
+                              color: Colors.white.withValues(alpha: 0.96),
                               fontSize: isCompact ? 17.5 : 19,
-                              fontWeight: FontWeight.w900,
+                              fontWeight: FontWeight.w800,
                               letterSpacing: -0.25,
                               height: 1.05,
                             ),
                           ),
-                          const SizedBox(height: 5),
+                          const SizedBox(height: 3),
                           Text(
-                            '$distanceLabel • $curvesLabel • $durationLabel',
+                            '$routeTypeLabel · ${route.displayStyleLabel}',
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(
-                              color: Colors.white.withValues(alpha: 0.64),
-                              fontSize: isCompact ? 11 : 12,
-                              fontWeight: FontWeight.w600,
-                              height: 1.15,
+                              color: Colors.white.withValues(alpha: 0.55),
+                              fontSize: 12,
+                              fontWeight: FontWeight.w500,
+                              height: 1.1,
                             ),
                           ),
-                          const SizedBox(height: 8),
+                          const SizedBox(height: 11),
                           Wrap(
-                            spacing: 6,
-                            runSpacing: 5,
+                            spacing: 13,
+                            runSpacing: 7,
                             children: [
-                              _buildMetricChip(
-                                icon: Icons.star_rounded,
-                                label: ratingLabel,
-                                tint: const Color(0xFFFFD76A),
+                              _inlineMetric(
+                                Icons.straighten_rounded,
+                                distanceLabel,
                               ),
-                              _buildMetricChip(
-                                icon: recommendation.hasCompletions
-                                    ? Icons.flag_circle_rounded
-                                    : Icons.local_fire_department_rounded,
-                                label: activityLabel,
-                                tint: const Color(0xFFFF9D6A),
-                              ),
+                              if (heroInsights != null)
+                                _inlineMetric(
+                                  Icons.moving_rounded,
+                                  '${heroInsights.curves} Kurven',
+                                ),
+                              if (durationLabel.isNotEmpty &&
+                                  durationLabel != '--')
+                                _inlineMetric(
+                                  Icons.schedule_rounded,
+                                  durationLabel,
+                                ),
+                              if (ratingValue != null &&
+                                  recommendation.ratingCount > 0)
+                                _inlineMetric(
+                                  Icons.star_rounded,
+                                  ratingValue.toStringAsFixed(1),
+                                  iconColor: AppAccentColors.accent,
+                                  valueColor: AppAccentColors.accent,
+                                ),
+                              if (heroInsights != null)
+                                _inlineMetric(
+                                  Icons.bolt_rounded,
+                                  '${heroInsights.xp} XP',
+                                  iconColor: Colors.white.withValues(
+                                    alpha: 0.45,
+                                  ),
+                                  valueColor: Colors.white.withValues(
+                                    alpha: 0.5,
+                                  ),
+                                  valueSize: 12.5,
+                                  valueWeight: FontWeight.w500,
+                                ),
                             ],
                           ),
                         ],
                       ),
                     ),
-                    const SizedBox(width: 10),
+                    const SizedBox(width: 12),
                     _buildSuggestedRoutePreview(
                       route,
                       coordinates,
@@ -1213,19 +1214,19 @@ class _HomeContentPageState extends State<HomeContentPage>
                     ),
                   ],
                 ),
-                const SizedBox(height: 10),
+                const SizedBox(height: 14),
                 Row(
                   children: [
-                    Expanded(child: _buildStyleChip(route)),
+                    Expanded(
+                      child: _buildDriveCta(
+                        onTap: () {
+                          CruiseModePage.pendingRoute.value = route;
+                          widget.onTabChange?.call(2);
+                        },
+                      ),
+                    ),
                     const SizedBox(width: 8),
                     _buildSaveChip(route),
-                    const SizedBox(width: 8),
-                    _buildDriveChip(
-                      onTap: () {
-                        CruiseModePage.pendingRoute.value = route;
-                        widget.onTabChange?.call(2);
-                      },
-                    ),
                   ],
                 ),
               ],
@@ -1236,33 +1237,74 @@ class _HomeContentPageState extends State<HomeContentPage>
     );
   }
 
-  Widget _buildMetricChip({
-    required IconData icon,
-    required String label,
-    required Color tint,
+  // 2026-06-08 (vucko Route-Widget): randlose Inline-Metrik (Icon = Label, Wert
+  // daneben). Dichter + ruhiger als Pills; Icon trägt die Bedeutung.
+  Widget _inlineMetric(
+    IconData icon,
+    String value, {
+    Color? iconColor,
+    Color? valueColor,
+    double valueSize = 13.5,
+    FontWeight valueWeight = FontWeight.w600,
   }) {
-    return Container(
-      height: 23,
-      padding: const EdgeInsets.symmetric(horizontal: 7),
-      decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.16),
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 12, color: tint),
-          const SizedBox(width: 4),
-          Text(
-            label,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 10,
-              fontWeight: FontWeight.w700,
-            ),
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(
+          icon,
+          size: 14,
+          color: iconColor ?? Colors.white.withValues(alpha: 0.5),
+        ),
+        const SizedBox(width: 4),
+        Text(
+          value,
+          style: TextStyle(
+            color: valueColor ?? Colors.white.withValues(alpha: 0.88),
+            fontSize: valueSize,
+            fontWeight: valueWeight,
+            height: 1.0,
           ),
-        ],
+        ),
+      ],
+    );
+  }
+
+  // Primäre CTA — füllt per Expanded die Restbreite, h44 für ein klares Tap-Ziel.
+  Widget _buildDriveCta({required VoidCallback onTap}) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        height: 44,
+        decoration: BoxDecoration(
+          color: AppAccentColors.accent,
+          borderRadius: BorderRadius.circular(13),
+          boxShadow: [
+            BoxShadow(
+              color: AppAccentColors.accent.withValues(alpha: 0.34),
+              blurRadius: 14,
+              offset: const Offset(0, 5),
+            ),
+          ],
+        ),
+        child: const Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.directions_car_filled_rounded,
+              color: Colors.white,
+              size: 19,
+            ),
+            SizedBox(width: 7),
+            Text(
+              'Fahren',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 15,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1272,122 +1314,34 @@ class _HomeContentPageState extends State<HomeContentPage>
     List<List<double>> coordinates, {
     required double size,
   }) {
-    return SizedBox(
+    // 2026-06-08 (vucko Route-Widget): Mini-Map mit straßen-artigem Hintergrund
+    // (Land → Blöcke → an der Routenachse ausgerichtetes Straßennetz → Route mit
+    // Glow/Casing/Linie/Punkten). KEINE Overlay-Icons mehr (Stil-Badge + Map-Icon
+    // entfernt) — das Kästchen zeigt nur Karte + Route.
+    return Container(
       width: size,
       height: size,
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(20),
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [
-              Color.lerp(
-                AppAccentColors.accent,
-                const Color(0xFF1C1F26),
-                0.42,
-              )!,
-              Color.lerp(
-                AppAccentColors.accent,
-                const Color(0xFF0B0E14),
-                0.58,
-              )!,
-            ],
-          ),
-          boxShadow: [
-            BoxShadow(
-              color: AppAccentColors.accent.withValues(alpha: 0.14),
-              blurRadius: 12,
-              offset: const Offset(0, 5),
-            ),
-          ],
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: Colors.white.withValues(alpha: 0.08),
+          width: 1,
         ),
-        child: Padding(
-          padding: const EdgeInsets.all(6),
-          child: Container(
-            decoration: BoxDecoration(
-              color: const Color(0xFF171C24),
-              borderRadius: BorderRadius.circular(15),
-              border: Border.all(
-                color: Colors.white.withValues(alpha: 0.05),
-                width: 1,
-              ),
-            ),
-            child: Stack(
-              children: [
-                Positioned.fill(
-                  child: Container(
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(15),
-                      gradient: LinearGradient(
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                        colors: [
-                          Colors.white.withValues(alpha: 0.06),
-                          Colors.transparent,
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-                Positioned.fill(
-                  child: Padding(
-                    padding: const EdgeInsets.all(8),
-                    child: coordinates.length >= 2
-                        ? CustomPaint(
-                            painter: _RoutePolylinePainter(
-                              coordinates: coordinates,
-                              accent: AppAccentColors.accent,
-                            ),
-                          )
-                        // 2026-06-08 (vucko Homescreen-Redesign): kein Riesen-
-                        // Emoji-Platzhalter mehr — eine dezente, deterministische
-                        // Kurven-Skizze (sieht IMMER nach „Route" aus, nie kaputt),
-                        // bis die echte Geometrie da ist.
-                        : CustomPaint(
-                            painter: _GenericRouteSketchPainter(
-                              seed: route.id.hashCode,
-                              accent: AppAccentColors.accent,
-                            ),
-                          ),
-                  ),
-                ),
-                Positioned(
-                  left: 7,
-                  top: 7,
-                  child: Container(
-                    width: 22,
-                    height: 22,
-                    decoration: BoxDecoration(
-                      color: Colors.black.withValues(alpha: 0.32),
-                      shape: BoxShape.circle,
-                    ),
-                    child: Icon(
-                      _styleIcon(route.style),
-                      color: Colors.white.withValues(alpha: 0.92),
-                      size: 12,
-                    ),
-                  ),
-                ),
-                Positioned(
-                  right: 7,
-                  bottom: 7,
-                  child: Container(
-                    width: 20,
-                    height: 20,
-                    decoration: BoxDecoration(
-                      color: Colors.black.withValues(alpha: 0.28),
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Icon(
-                      Icons.map_outlined,
-                      color: Colors.white,
-                      size: 11,
-                    ),
-                  ),
-                ),
-              ],
-            ),
+        boxShadow: [
+          BoxShadow(
+            color: AppAccentColors.accent.withValues(alpha: 0.10),
+            blurRadius: 12,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(13),
+        child: CustomPaint(
+          painter: _RouteMiniMapPainter(
+            coordinates: coordinates,
+            seed: route.id.hashCode,
+            accent: AppAccentColors.accent,
           ),
         ),
       ),
@@ -1629,96 +1583,6 @@ class _HomeContentPageState extends State<HomeContentPage>
               : Icons.bookmark_border_rounded,
           color: _isRouteSaved ? const Color(0xFFFFE2A8) : Colors.white,
           size: 17,
-        ),
-      ),
-    );
-  }
-
-  // 2026-06-08 (vucko Homescreen-Redesign): Stil-Icon statt Emoji. Material-Icons
-  // sind crisp + konsistent; Emojis wirken billig/„gevibecoded".
-  static IconData _styleIcon(String style) {
-    switch (style) {
-      case 'Kurvenjagd':
-        return Icons.terrain_rounded;
-      case 'Sport Mode':
-        return Icons.sports_motorsports_rounded;
-      case 'Abendrunde':
-        return Icons.nightlight_round;
-      case 'Entdecker':
-        return Icons.explore_rounded;
-      default:
-        return Icons.route_rounded;
-    }
-  }
-
-  Widget _buildStyleChip(SavedRoute route) {
-    return Container(
-      height: 34,
-      padding: const EdgeInsets.symmetric(horizontal: 11),
-      decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.14),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(
-            _styleIcon(route.style),
-            color: Colors.white.withValues(alpha: 0.82),
-            size: 15,
-          ),
-          const SizedBox(width: 6),
-          Flexible(
-            child: Text(
-              route.displayStyleLabel,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 11.5,
-                fontWeight: FontWeight.w700,
-                letterSpacing: 0.2,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildDriveChip({required VoidCallback onTap}) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        height: 34,
-        padding: const EdgeInsets.symmetric(horizontal: 14),
-        decoration: BoxDecoration(
-          color: AppAccentColors.accent,
-          borderRadius: BorderRadius.circular(12),
-          boxShadow: [
-            BoxShadow(
-              color: AppAccentColors.accent.withValues(alpha: 0.24),
-              blurRadius: 14,
-              offset: const Offset(0, 6),
-            ),
-          ],
-        ),
-        alignment: Alignment.center,
-        child: const Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.directions_car_rounded, color: Colors.white, size: 15),
-            SizedBox(width: 7),
-            Text(
-              'Fahren',
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 12,
-                fontWeight: FontWeight.w800,
-              ),
-            ),
-          ],
         ),
       ),
     );
@@ -2330,72 +2194,199 @@ class _RoutePolylinePainter extends CustomPainter {
       oldDelegate.coordinates != coordinates || oldDelegate.accent != accent;
 }
 
-// 2026-06-08 (vucko Homescreen-Redesign): dezente, deterministische Kurven-Skizze
-// als Fallback, solange die echte Geometrie (noch) nicht geladen ist — sieht IMMER
-// nach einer kurvigen Route aus, nie wie ein kaputter Platzhalter. Seed = Route-ID
-// → stabil pro Route, kein Flackern.
-class _GenericRouteSketchPainter extends CustomPainter {
+// 2026-06-08 (vucko Route-Widget): Offline-Mini-Map als Hintergrund der Empfehlung.
+// Recherchiert (Komoot/Strava-Thumbnail-Look): gedämpfter Karten-Basemap (Land +
+// Häuserblöcke + an der Routen-Hauptachse ausgerichtetes Straßennetz) in einem
+// engen Grau-Wertband, darüber die Route als einziges saturiertes Element. Alles
+// deterministisch aus der Route-ID geseedet (kein Flackern), keine Tiles/kein
+// Live-GL-Map → performant im Scroll-Feed.
+class _RouteMiniMapPainter extends CustomPainter {
+  final List<List<double>> coordinates; // leer → generische Skizze
   final int seed;
   final Color accent;
 
-  _GenericRouteSketchPainter({required this.seed, required this.accent});
+  _RouteMiniMapPainter({
+    required this.coordinates,
+    required this.seed,
+    required this.accent,
+  });
+
+  static const Color _land = Color(0xFF0E0F12);
 
   @override
   void paint(Canvas canvas, Size size) {
     final rnd = math.Random(seed & 0x7fffffff);
-    const padding = 15.0;
+
+    // 1. Land-Basis.
+    canvas.drawRect(Offset.zero & size, Paint()..color = _land);
+
+    // 2. Häuserblöcke (faint).
+    final blockPaint = Paint()
+      ..color = const Color(0xFF3A3F4A).withValues(alpha: 0.30);
+    for (var i = 0; i < 22; i++) {
+      final bw = 7.0 + rnd.nextDouble() * 14;
+      final bh = 7.0 + rnd.nextDouble() * 14;
+      final bx = rnd.nextDouble() * (size.width - bw);
+      final by = rnd.nextDouble() * (size.height - bh);
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(
+          Rect.fromLTWH(bx, by, bw, bh),
+          const Radius.circular(2),
+        ),
+        blockPaint,
+      );
+    }
+
+    // Route-Punkte (echt oder generisch) — bestimmen auch die Straßen-Ausrichtung.
+    final pts = coordinates.length >= 2
+        ? _projectRoute(size)
+        : _genericRoute(size, rnd);
+
+    // 3. Straßennetz, an der Routen-Hauptachse ausgerichtet → wirkt wie ein Bezirk.
+    final theta = math.atan2(
+      pts.last.dy - pts.first.dy,
+      pts.last.dx - pts.first.dx,
+    );
+    final perp = theta + math.pi / 2;
+    void street(double cx, double cy, double angle, double width, Color color) {
+      final ux = math.cos(angle), uy = math.sin(angle);
+      final len = size.width + size.height;
+      canvas.drawLine(
+        Offset(cx - ux * len, cy - uy * len),
+        Offset(cx + ux * len, cy + uy * len),
+        Paint()
+          ..color = color
+          ..strokeWidth = width
+          ..style = PaintingStyle.stroke
+          ..strokeCap = StrokeCap.round,
+      );
+    }
+
+    for (var i = 0; i < 10; i++) {
+      street(
+        rnd.nextDouble() * size.width,
+        rnd.nextDouble() * size.height,
+        i.isEven ? theta : perp,
+        0.8,
+        const Color(0xFF3E4452),
+      );
+    }
+    for (var i = 0; i < 4; i++) {
+      street(
+        (0.2 + rnd.nextDouble() * 0.6) * size.width,
+        (0.2 + rnd.nextDouble() * 0.6) * size.height,
+        i.isEven ? theta : perp,
+        1.5,
+        const Color(0xFF4B5263),
+      );
+    }
+    street(
+      (0.35 + rnd.nextDouble() * 0.3) * size.width,
+      (0.35 + rnd.nextDouble() * 0.3) * size.height,
+      theta,
+      2.4,
+      const Color(0xFF585F70),
+    );
+    street(
+      (0.35 + rnd.nextDouble() * 0.3) * size.width,
+      (0.35 + rnd.nextDouble() * 0.3) * size.height,
+      perp,
+      2.4,
+      const Color(0xFF585F70),
+    );
+
+    // 4. Route: Glow → Casing → Linie → Punkte.
+    final path = Path()..moveTo(pts.first.dx, pts.first.dy);
+    for (var i = 1; i < pts.length; i++) {
+      path.lineTo(pts[i].dx, pts[i].dy);
+    }
+    canvas.drawPath(
+      path,
+      Paint()
+        ..color = accent.withValues(alpha: 0.22)
+        ..strokeWidth = 8
+        ..style = PaintingStyle.stroke
+        ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3),
+    );
+    canvas.drawPath(
+      path,
+      Paint()
+        ..color = Colors.black.withValues(alpha: 0.5)
+        ..strokeWidth = 4.2
+        ..style = PaintingStyle.stroke
+        ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round,
+    );
+    canvas.drawPath(
+      path,
+      Paint()
+        ..color = accent
+        ..strokeWidth = 2.6
+        ..style = PaintingStyle.stroke
+        ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round,
+    );
+
+    final isLoop =
+        coordinates.length >= 2 && (pts.first - pts.last).distance < 6.0;
+    void dot(Offset p, Color fill) {
+      canvas.drawCircle(p, 3.4, Paint()..color = _land);
+      canvas.drawCircle(p, 2.4, Paint()..color = fill);
+    }
+
+    if (isLoop) {
+      dot(pts.first, accent);
+    } else {
+      dot(pts.first, const Color(0xFF34D399));
+      dot(pts.last, accent);
+    }
+  }
+
+  List<Offset> _projectRoute(Size size) {
+    double minLon = double.infinity, maxLon = -double.infinity;
+    double minLat = double.infinity, maxLat = -double.infinity;
+    for (final c in coordinates) {
+      if (c[0] < minLon) minLon = c[0];
+      if (c[0] > maxLon) maxLon = c[0];
+      if (c[1] < minLat) minLat = c[1];
+      if (c[1] > maxLat) maxLat = c[1];
+    }
+    final lonRange = (maxLon - minLon).abs();
+    final latRange = (maxLat - minLat).abs();
+    const padding = 11.0;
+    final dw = size.width - padding * 2;
+    final dh = size.height - padding * 2;
+    final scale = math.min(
+      lonRange > 0 ? dw / lonRange : 1.0,
+      latRange > 0 ? dh / latRange : 1.0,
+    );
+    final ox = padding + (dw - lonRange * scale) / 2;
+    final oy = padding + (dh - latRange * scale) / 2;
+    return coordinates
+        .map((c) =>
+            Offset(ox + (c[0] - minLon) * scale, oy + (maxLat - c[1]) * scale))
+        .toList();
+  }
+
+  List<Offset> _genericRoute(Size size, math.Random rnd) {
+    const padding = 14.0;
     final w = size.width - padding * 2;
     final h = size.height - padding * 2;
     const n = 5;
-    final pts = <Offset>[];
-    for (var i = 0; i < n; i++) {
+    return List.generate(n, (i) {
       final t = i / (n - 1);
-      final x = padding + t * w;
-      final y = padding + (0.18 + rnd.nextDouble() * 0.64) * h;
-      pts.add(Offset(x, y));
-    }
-    final path = Path()..moveTo(pts.first.dx, pts.first.dy);
-    for (var i = 1; i < pts.length; i++) {
-      final prev = pts[i - 1];
-      final cur = pts[i];
-      final cx = (prev.dx + cur.dx) / 2;
-      final cy = (prev.dy + cur.dy) / 2;
-      path.quadraticBezierTo(prev.dx, prev.dy, cx, cy);
-    }
-    path.lineTo(pts.last.dx, pts.last.dy);
-
-    canvas.drawPath(
-      path,
-      Paint()
-        ..color = accent.withValues(alpha: 0.16)
-        ..strokeWidth = 6
-        ..strokeCap = StrokeCap.round
-        ..strokeJoin = StrokeJoin.round
-        ..style = PaintingStyle.stroke
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4),
-    );
-    canvas.drawPath(
-      path,
-      Paint()
-        ..color = accent.withValues(alpha: 0.5)
-        ..strokeWidth = 2.5
-        ..strokeCap = StrokeCap.round
-        ..strokeJoin = StrokeJoin.round
-        ..style = PaintingStyle.stroke,
-    );
-    canvas.drawCircle(
-      pts.first,
-      2.8,
-      Paint()..color = accent.withValues(alpha: 0.7),
-    );
-    canvas.drawCircle(
-      pts.last,
-      2.8,
-      Paint()..color = accent.withValues(alpha: 0.7),
-    );
+      return Offset(
+        padding + t * w,
+        padding + (0.2 + rnd.nextDouble() * 0.6) * h,
+      );
+    });
   }
 
   @override
-  bool shouldRepaint(covariant _GenericRouteSketchPainter old) =>
-      old.seed != seed || old.accent != accent;
+  bool shouldRepaint(covariant _RouteMiniMapPainter old) =>
+      old.seed != seed ||
+      old.coordinates != coordinates ||
+      old.accent != accent;
 }
