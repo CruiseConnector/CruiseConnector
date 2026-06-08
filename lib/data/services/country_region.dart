@@ -70,14 +70,27 @@ class CountryRegion {
     //     darüber ist Bayern (DE) — z.B. München 48.14 = DE.
     //   - Ost (lng >= 13, Ober-/Niederösterreich): AT reicht bis ~lat 48.8.
     if (lng >= 9.53 && lng <= 17.16 && lat >= 46.37) {
-      final austriaNorthLimit = lng < 13.0 ? 47.70 : 48.80;
-      if (lat <= austriaNorthLimit) return 'AT';
+      if (lat <= _austriaNorthLimit(lng)) return 'AT';
     }
     // Deutschland — nördlich/westlich von AT (Bayern + BW + nördlicher).
     if (lat >= 47.27 && lat <= 55.06 && lng >= 5.87 && lng <= 15.04) {
       return 'DE';
     }
     return null;
+  }
+
+  /// 2026-06-08 (vucko DACH-Test): Die AT/DE-Grenze ist im Alpenraum stark
+  /// gezackt — eine flache Nordgrenze (vorher 47.70 für lng<13) labelte deutsche
+  /// Alpenorte SÜDLICH davon fälschlich als AT (z.B. Garmisch 47.49, Mittenwald
+  /// 47.44) → „Im Land bleiben" zielte aufs falsche Land. Stückweise lineare
+  /// Näherung der echten Grenze (geprüft an Reutte/Füssen/Garmisch/Scharnitz/
+  /// Kufstein/Kiefersfelden/Salzburg/Freilassing).
+  static double _austriaNorthLimit(double lng) {
+    if (lng < 10.9) return 47.55; // Außerfern (Reutte AT reicht nach Norden)
+    if (lng < 11.6) return 47.42; // Garmisch/Mittenwald (DE buchtet nach Süden)
+    if (lng < 12.6) return 47.60; // Inntal/Kufstein
+    if (lng < 13.4) return 47.82; // Salzburg
+    return 48.80; // Ost-Österreich (OÖ/NÖ reichen weit hoch)
   }
 
   /// Anteil der Routenpunkte, die NICHT im Heimatland liegen (0..1).
