@@ -645,16 +645,49 @@ class _HomeContentPageState extends State<HomeContentPage>
                         : Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              _statRow('⚡', '$totalXp XP gesamt'),
-                              const SizedBox(height: 6),
-                              _statRow(
-                                '🏎️',
-                                '${totalDistanceKm.toStringAsFixed(0)} Km gefahren',
+                              // 2026-06-08 (vucko Homescreen-Redesign): 2×2-Raster
+                              // aus Icon-Kacheln statt Emoji-Liste → sofortiger
+                              // Überblick, crisp Material-Icons statt Emojis.
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: _statTile(
+                                      Icons.bolt,
+                                      _formatThousands(totalXp),
+                                      'XP GESAMT',
+                                      isAccent: true,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: _statTile(
+                                      Icons.speed,
+                                      totalDistanceKm.toStringAsFixed(0),
+                                      'KM GEFAHREN',
+                                    ),
+                                  ),
+                                ],
                               ),
-                              const SizedBox(height: 6),
-                              _statRow('🛣️', '$totalRoutes Strecken'),
-                              const SizedBox(height: 6),
-                              _statRow('🏅', '$badgeCount Badges'),
+                              const SizedBox(height: 14),
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: _statTile(
+                                      Icons.route,
+                                      '$totalRoutes',
+                                      'STRECKEN',
+                                    ),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: _statTile(
+                                      Icons.workspace_premium,
+                                      '$badgeCount',
+                                      'BADGES',
+                                    ),
+                                  ),
+                                ],
+                              ),
                             ],
                           ),
                     const SizedBox(height: 12),
@@ -686,16 +719,19 @@ class _HomeContentPageState extends State<HomeContentPage>
                           ],
                         ),
                         const SizedBox(height: 4),
+                        // 2026-06-08 (vucko Homescreen-Redesign): akzent-getönte
+                        // Spur (statt flachem Grau) → der Balken wirkt integriert;
+                        // Mindest-Nub, damit kleiner Fortschritt sichtbar bleibt.
                         Container(
                           height: 8,
                           width: double.infinity,
                           decoration: BoxDecoration(
-                            color: Colors.grey[800],
+                            color: accent.withValues(alpha: 0.14),
                             borderRadius: BorderRadius.circular(4),
                           ),
                           child: FractionallySizedBox(
                             alignment: Alignment.centerLeft,
-                            widthFactor: levelProgress,
+                            widthFactor: levelProgress.clamp(0.02, 1.0),
                             child: Container(
                               decoration: BoxDecoration(
                                 borderRadius: BorderRadius.circular(4),
@@ -1050,7 +1086,10 @@ class _HomeContentPageState extends State<HomeContentPage>
     return LayoutBuilder(
       builder: (context, constraints) {
         final isCompact = constraints.maxWidth < 430;
-        final previewSize = isCompact ? 76.0 : 90.0;
+        // 2026-06-08 (vucko Homescreen-Redesign): Vorschau etwas größer → die
+        // Route ist im Kästchen besser lesbar (bleibt unter der Titelspalten-Höhe,
+        // Card wächst nicht).
+        final previewSize = isCompact ? 84.0 : 100.0;
         final ratingLabel =
             ratingValue != null && recommendation.ratingCount > 0
             ? '${ratingValue.toStringAsFixed(1)} · ${recommendation.ratingCount} Stimmen'
@@ -1298,12 +1337,17 @@ class _HomeContentPageState extends State<HomeContentPage>
                         ? CustomPaint(
                             painter: _RoutePolylinePainter(
                               coordinates: coordinates,
+                              accent: AppAccentColors.accent,
                             ),
                           )
-                        : Center(
-                            child: Text(
-                              route.styleEmoji,
-                              style: const TextStyle(fontSize: 46),
+                        // 2026-06-08 (vucko Homescreen-Redesign): kein Riesen-
+                        // Emoji-Platzhalter mehr — eine dezente, deterministische
+                        // Kurven-Skizze (sieht IMMER nach „Route" aus, nie kaputt),
+                        // bis die echte Geometrie da ist.
+                        : CustomPaint(
+                            painter: _GenericRouteSketchPainter(
+                              seed: route.id.hashCode,
+                              accent: AppAccentColors.accent,
                             ),
                           ),
                   ),
@@ -1312,17 +1356,16 @@ class _HomeContentPageState extends State<HomeContentPage>
                   left: 7,
                   top: 7,
                   child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 6,
-                      vertical: 3,
-                    ),
+                    width: 22,
+                    height: 22,
                     decoration: BoxDecoration(
-                      color: Colors.black.withValues(alpha: 0.28),
-                      borderRadius: BorderRadius.circular(999),
+                      color: Colors.black.withValues(alpha: 0.32),
+                      shape: BoxShape.circle,
                     ),
-                    child: Text(
-                      route.styleEmoji,
-                      style: const TextStyle(fontSize: 10),
+                    child: Icon(
+                      _styleIcon(route.style),
+                      color: Colors.white.withValues(alpha: 0.92),
+                      size: 12,
                     ),
                   ),
                 ),
@@ -1591,24 +1634,55 @@ class _HomeContentPageState extends State<HomeContentPage>
     );
   }
 
+  // 2026-06-08 (vucko Homescreen-Redesign): Stil-Icon statt Emoji. Material-Icons
+  // sind crisp + konsistent; Emojis wirken billig/„gevibecoded".
+  static IconData _styleIcon(String style) {
+    switch (style) {
+      case 'Kurvenjagd':
+        return Icons.terrain_rounded;
+      case 'Sport Mode':
+        return Icons.sports_motorsports_rounded;
+      case 'Abendrunde':
+        return Icons.nightlight_round;
+      case 'Entdecker':
+        return Icons.explore_rounded;
+      default:
+        return Icons.route_rounded;
+    }
+  }
+
   Widget _buildStyleChip(SavedRoute route) {
     return Container(
       height: 34,
-      padding: const EdgeInsets.symmetric(horizontal: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 11),
       decoration: BoxDecoration(
         color: Colors.black.withValues(alpha: 0.14),
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
       ),
-      child: Center(
-        child: Text(
-          '${route.styleEmoji} ${route.style}',
-          style: const TextStyle(
-            color: Colors.white,
-            fontSize: 11,
-            fontWeight: FontWeight.w800,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            _styleIcon(route.style),
+            color: Colors.white.withValues(alpha: 0.82),
+            size: 15,
           ),
-        ),
+          const SizedBox(width: 6),
+          Flexible(
+            child: Text(
+              route.displayStyleLabel,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 11.5,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 0.2,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1713,6 +1787,7 @@ class _HomeContentPageState extends State<HomeContentPage>
                 padding: const EdgeInsets.all(18),
                 child: CustomPaint(
                   painter: _RoutePolylinePainter(
+                    accent: AppAccentColors.accent,
                     coordinates: [
                       [0.12, 0.78],
                       [0.26, 0.52],
@@ -1921,20 +1996,73 @@ class _HomeContentPageState extends State<HomeContentPage>
 
   // ── Helper Widgets ───────────────────────────────────────────────────────
 
-  Widget _statRow(String emoji, String text) {
+  // 2026-06-08 (vucko Homescreen-Redesign): eine Stat-Kachel — Icon in dezentem
+  // Squircle-Chip, große Zahl, kleines Uppercase-Label. Eine Kachel akzentuiert
+  // (XP), der Rest neutral-grau → ein Fokus, kein Emoji-Wirrwarr.
+  Widget _statTile(
+    IconData icon,
+    String value,
+    String label, {
+    bool isAccent = false,
+  }) {
+    final tint = isAccent ? AppAccentColors.accent : const Color(0xFF9AA4B2);
     return Row(
       children: [
-        Text(emoji, style: const TextStyle(fontSize: 14)),
-        const SizedBox(width: 8),
-        Flexible(
-          child: Text(
-            text,
-            style: const TextStyle(color: Colors.white70, fontSize: 12),
-            overflow: TextOverflow.ellipsis,
+        Container(
+          width: 34,
+          height: 34,
+          decoration: BoxDecoration(
+            color: tint.withValues(alpha: isAccent ? 0.16 : 0.10),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Icon(icon, color: tint, size: 19),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                value,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: Color(0xFFF0F0F0),
+                  fontSize: 19,
+                  fontWeight: FontWeight.w700,
+                  height: 1.0,
+                  letterSpacing: -0.3,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: Color(0x80FFFFFF),
+                  fontSize: 9.5,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: 0.5,
+                ),
+              ),
+            ],
           ),
         ),
       ],
     );
+  }
+
+  // Tausender-Trennung (deutsch: 1.535).
+  String _formatThousands(int n) {
+    final s = n.abs().toString();
+    final buf = StringBuffer();
+    for (var i = 0; i < s.length; i++) {
+      if (i > 0 && (s.length - i) % 3 == 0) buf.write('.');
+      buf.write(s[i]);
+    }
+    return (n < 0 ? '-' : '') + buf.toString();
   }
 
   Widget _buildWeeklyActivityCard() {
@@ -2095,16 +2223,22 @@ class _HeroRouteInsights {
   final RouteElevationSummary? elevation;
 }
 
+// 2026-06-08 (vucko Homescreen-Redesign): echte GPS-Route als premium Mini-Skizze.
+// Aufbau hintereinander (Mapbox-Nav-Look): weicher Glow → Casing in BG-Farbe (hebt
+// die Linie sauber vom Glow ab) → Akzent-Linie → Start/Ziel-Punkte mit Ring.
+// Rundkurs (Start≈Ziel) zeigt EINEN Punkt statt zwei überlappender.
 class _RoutePolylinePainter extends CustomPainter {
   final List<List<double>> coordinates;
+  final Color accent;
 
-  _RoutePolylinePainter({required this.coordinates});
+  _RoutePolylinePainter({required this.coordinates, required this.accent});
+
+  static const Color _bg = Color(0xFF171C24);
 
   @override
   void paint(Canvas canvas, Size size) {
     if (coordinates.length < 2) return;
 
-    // Bounding Box berechnen
     double minLon = double.infinity, maxLon = -double.infinity;
     double minLat = double.infinity, maxLat = -double.infinity;
     for (final c in coordinates) {
@@ -2118,64 +2252,150 @@ class _RoutePolylinePainter extends CustomPainter {
     final latRange = maxLat - minLat;
     if (lonRange == 0 && latRange == 0) return;
 
-    // Padding
-    const padding = 24.0;
+    const padding = 12.0;
     final drawWidth = size.width - padding * 2;
     final drawHeight = size.height - padding * 2;
-
-    // Skalierung mit Aspect Ratio beibehalten
     final scaleX = lonRange > 0 ? drawWidth / lonRange : 1.0;
     final scaleY = latRange > 0 ? drawHeight / latRange : 1.0;
     final scale = math.min(scaleX, scaleY);
-
     final offsetX = padding + (drawWidth - lonRange * scale) / 2;
     final offsetY = padding + (drawHeight - latRange * scale) / 2;
 
-    // Punkte normalisieren
     final points = coordinates.map((c) {
       final x = offsetX + (c[0] - minLon) * scale;
-      // Y invertieren (Lat steigt nach oben, Canvas nach unten)
       final y = offsetY + (maxLat - c[1]) * scale;
       return Offset(x, y);
     }).toList();
 
-    // Glow-Effekt zeichnen
-    final glowPaint = Paint()
-      ..color = AppAccentColors.accent.withValues(alpha: 0.3)
-      ..strokeWidth = 8
-      ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round
-      ..style = PaintingStyle.stroke
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6);
-
-    final path = Path();
-    path.moveTo(points[0].dx, points[0].dy);
-    for (int i = 1; i < points.length; i++) {
+    final path = Path()..moveTo(points[0].dx, points[0].dy);
+    for (var i = 1; i < points.length; i++) {
       path.lineTo(points[i].dx, points[i].dy);
     }
-    canvas.drawPath(path, glowPaint);
 
-    // Haupt-Linie zeichnen
-    final linePaint = Paint()
-      ..color = Colors.white.withValues(alpha: 0.9)
-      ..strokeWidth = 3
-      ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round
-      ..style = PaintingStyle.stroke;
+    // 1. Glow (weicher Akzent-Schein)
+    canvas.drawPath(
+      path,
+      Paint()
+        ..color = accent.withValues(alpha: 0.26)
+        ..strokeWidth = 5
+        ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round
+        ..style = PaintingStyle.stroke
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4.5),
+    );
+    // 2. Casing (BG-Farbe) — hebt die Linie sauber vom Glow ab.
+    canvas.drawPath(
+      path,
+      Paint()
+        ..color = _bg
+        ..strokeWidth = 4
+        ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round
+        ..style = PaintingStyle.stroke,
+    );
+    // 3. Hauptlinie (Akzent)
+    canvas.drawPath(
+      path,
+      Paint()
+        ..color = accent
+        ..strokeWidth = 2.4
+        ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round
+        ..style = PaintingStyle.stroke,
+    );
 
-    canvas.drawPath(path, linePaint);
+    // 4. Start/Ziel-Punkte
+    final diag = math.sqrt(lonRange * lonRange + latRange * latRange);
+    final startEndGeo = math.sqrt(
+      math.pow(coordinates.first[0] - coordinates.last[0], 2) +
+          math.pow(coordinates.first[1] - coordinates.last[1], 2),
+    );
+    final isLoop = diag > 0 && startEndGeo / diag < 0.08;
 
-    // Start-Punkt
-    final startDotPaint = Paint()..color = Colors.white;
-    canvas.drawCircle(points.first, 5, startDotPaint);
+    void dot(Offset p, Color fill) {
+      canvas.drawCircle(p, 3.6, Paint()..color = _bg);
+      canvas.drawCircle(p, 2.4, Paint()..color = fill);
+    }
 
-    // End-Punkt
-    final endDotPaint = Paint()..color = const Color(0xFFFFD700);
-    canvas.drawCircle(points.last, 5, endDotPaint);
+    if (isLoop) {
+      dot(points.first, accent);
+    } else {
+      dot(points.first, const Color(0xFF34D399)); // grün = Start
+      dot(points.last, accent); // Akzent = Ziel
+    }
   }
 
   @override
-  bool shouldRepaint(covariant _RoutePolylinePainter oldDelegate) {
-    return oldDelegate.coordinates != coordinates;
+  bool shouldRepaint(covariant _RoutePolylinePainter oldDelegate) =>
+      oldDelegate.coordinates != coordinates || oldDelegate.accent != accent;
+}
+
+// 2026-06-08 (vucko Homescreen-Redesign): dezente, deterministische Kurven-Skizze
+// als Fallback, solange die echte Geometrie (noch) nicht geladen ist — sieht IMMER
+// nach einer kurvigen Route aus, nie wie ein kaputter Platzhalter. Seed = Route-ID
+// → stabil pro Route, kein Flackern.
+class _GenericRouteSketchPainter extends CustomPainter {
+  final int seed;
+  final Color accent;
+
+  _GenericRouteSketchPainter({required this.seed, required this.accent});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rnd = math.Random(seed & 0x7fffffff);
+    const padding = 15.0;
+    final w = size.width - padding * 2;
+    final h = size.height - padding * 2;
+    const n = 5;
+    final pts = <Offset>[];
+    for (var i = 0; i < n; i++) {
+      final t = i / (n - 1);
+      final x = padding + t * w;
+      final y = padding + (0.18 + rnd.nextDouble() * 0.64) * h;
+      pts.add(Offset(x, y));
+    }
+    final path = Path()..moveTo(pts.first.dx, pts.first.dy);
+    for (var i = 1; i < pts.length; i++) {
+      final prev = pts[i - 1];
+      final cur = pts[i];
+      final cx = (prev.dx + cur.dx) / 2;
+      final cy = (prev.dy + cur.dy) / 2;
+      path.quadraticBezierTo(prev.dx, prev.dy, cx, cy);
+    }
+    path.lineTo(pts.last.dx, pts.last.dy);
+
+    canvas.drawPath(
+      path,
+      Paint()
+        ..color = accent.withValues(alpha: 0.16)
+        ..strokeWidth = 6
+        ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round
+        ..style = PaintingStyle.stroke
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4),
+    );
+    canvas.drawPath(
+      path,
+      Paint()
+        ..color = accent.withValues(alpha: 0.5)
+        ..strokeWidth = 2.5
+        ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round
+        ..style = PaintingStyle.stroke,
+    );
+    canvas.drawCircle(
+      pts.first,
+      2.8,
+      Paint()..color = accent.withValues(alpha: 0.7),
+    );
+    canvas.drawCircle(
+      pts.last,
+      2.8,
+      Paint()..color = accent.withValues(alpha: 0.7),
+    );
   }
+
+  @override
+  bool shouldRepaint(covariant _GenericRouteSketchPainter old) =>
+      old.seed != seed || old.accent != accent;
 }
