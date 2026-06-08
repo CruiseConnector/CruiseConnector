@@ -50,6 +50,13 @@ class CountryRegion {
     if (lat >= 47.05 && lat <= 47.27 && lng >= 9.47 && lng <= 9.64) {
       return 'LI';
     }
+    // 2026-06-08 (vucko Grenz-Test): Lindau (DE) ragt als Halbinsel in den
+    // Bodensee, umgeben von AT (Hörbranz/Bregenz östl. + südl.). Die flache AT-
+    // Nordgrenze würde es als AT labeln → „Im Land bleiben" am falschen Land.
+    // Box schließt Hörbranz (lng>9.74) + Bregenz (lat<47.52) aus.
+    if (lat >= 47.52 && lat <= 47.58 && lng >= 9.63 && lng <= 9.74) {
+      return 'DE';
+    }
     // Schweiz — westlich/südlich des Rheins, grob.
     if (lat >= 45.80 && lat <= 47.81 && lng >= 5.95 && lng <= 9.55) {
       // Ostgrenze CH läuft im Rheintal ~lng 9.55; AT beginnt östlich davon.

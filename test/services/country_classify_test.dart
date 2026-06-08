@@ -16,6 +16,7 @@ void main() {
     expectCountry('Füssen', 47.5710, 10.7020, 'DE');
     expectCountry('Kiefersfelden', 47.6170, 12.1880, 'DE');
     expectCountry('Freilassing', 47.8370, 12.9760, 'DE');
+    expectCountry('Lindau', 47.5459, 9.6845, 'DE'); // Halbinsel im Bodensee
     expectCountry('München', 48.1372, 11.5755, 'DE');
     expectCountry('Kempten', 47.7333, 10.3167, 'DE');
     // Österreich (nördliche Ausbuchtungen / Tirol)
@@ -23,6 +24,8 @@ void main() {
     expectCountry('Scharnitz', 47.3900, 11.2670, 'AT');
     expectCountry('Innsbruck', 47.2692, 11.4041, 'AT');
     expectCountry('Kufstein', 47.5830, 12.1690, 'AT');
+    expectCountry('Lochau', 47.5350, 9.7550, 'AT'); // AT, südöstl. von Lindau
+    expectCountry('Bregenz', 47.5031, 9.7471, 'AT'); // südl. von Lindau
     expectCountry('Salzburg', 47.8000, 13.0450, 'AT');
     expectCountry('Wien', 48.2082, 16.3738, 'AT');
     // Schweiz / weitere

@@ -759,7 +759,11 @@ class RouteService {
       // also brauchen wir genug Anläufe, um eine heimische Variante zu treffen.
       if (scenario.countryPreference == CountryPreference.onlyHome &&
           scenario.homeCountryCode != null) {
-        maxAttempts = math.max(maxAttempts, 5);
+        // 2026-06-08 (vucko HARTE Inland-Garantie): mehr Anläufe (5→8), damit in
+        // Grenzregionen (Vorarlberg) trotz hartem Reject grenzüberschreitender
+        // Varianten genug Chancen bleiben, eine reine Inlands-Schleife zu treffen.
+        // Bleibt weit unter der alten 75-Call-Explosion (Task #67).
+        maxAttempts = math.max(maxAttempts, 8);
       }
       _RouteCandidate? bestCandidate;
       _RouteCandidate? spareCandidate;
@@ -771,6 +775,10 @@ class RouteService {
       // Candidate und nehmen ihn als allerletzten Fallback — besser als gar
       // nichts und besser als die ganze Skalierungs-Arbeit aufzuwerfen.
       _RouteCandidate? bestRejectedCandidate;
+      // 2026-06-08 (vucko HARTE Inland-Garantie): merkt, ob eine Route nur wegen
+      // Grenzübertritt verworfen wurde — dann ist die Ursache klar „kein
+      // Inlandskurs hier", nicht „Backend kaputt".
+      var sawCountryRejected = false;
       RouteServiceException? lastError;
 
       for (var attempt = 0; attempt < maxAttempts; attempt++) {
@@ -831,6 +839,11 @@ class RouteService {
             } else if (_isBetterCandidate(candidate, spareCandidate)) {
               spareCandidate = candidate;
             }
+          } else if (candidate.countryRejected) {
+            // 2026-06-08 (vucko): grenzüberschreitende Route bei „Im Land bleiben"
+            // — NIEMALS wählen, auch nicht als Notnagel. Nur merken, dass es sie
+            // gab (→ klarer „kein Inlandskurs"-Fehler statt Backend-Fehler).
+            sawCountryRejected = true;
           } else if (candidate.route.coordinates.length >= 20 &&
               (bestRejectedCandidate == null ||
                   candidate.score < bestRejectedCandidate.score)) {
@@ -1202,6 +1215,21 @@ class RouteService {
           route: bestRejectedCandidate.route,
           sampledCoordinates: bestRejectedCandidate.sampledCoordinates,
           fingerprint: bestRejectedCandidate.fingerprint,
+        );
+      }
+
+      // 2026-06-08 (vucko HARTE Inland-Garantie): wenn die EINZIGEN gefundenen
+      // Routen die Grenze queren, ist die Gegend zu grenznah für einen
+      // Inlandskurs → klare, handlungsfähige Meldung statt eine Pass-pflichtige
+      // Route oder ein kryptischer Backend-Fehler.
+      if (sawCountryRejected) {
+        throw const RouteServiceException(
+          type: RouteErrorType.noRoute,
+          userMessage:
+              'Hier ist kein Rundkurs möglich, der im Land bleibt — die Gegend '
+              'grenzt direkt ans Ausland. Schalt „Im Land bleiben" aus oder wähl '
+              'eine kürzere Distanz bzw. einen Start weiter im Landesinneren.',
+          debugMessage: 'all_round_trip_candidates_crossed_border',
         );
       }
 
@@ -4819,13 +4847,18 @@ class RouteService {
             foreignFraction: foreignFraction,
             preference: scenario.countryPreference,
           );
-    // 2026-06-02 (vucko KRITISCHER FIX): KEIN harter Länder-Reject mehr.
-    // Vorher lehnte onlyHome auslandslastige Rundkurse hart ab (countryRejected)
-    // → in Grenzregionen (Vorarlberg) fand sich nie eine reine Inlandsroute →
-    // gar keine Route + Sackgasse, sogar nach Ausschalten. Das darf nie
-    // passieren. „Im Land bleiben" wirkt jetzt NUR noch über den Score-Penalty
-    // (countryPenalty oben) → bevorzugt Inland, blockiert aber nie. Gibt es nur
-    // Auslandsrouten, wird die am-wenigsten-ausländische gezeigt.
+    // 2026-06-08 (vucko HARTE Inland-Garantie): „Im Land bleiben" (onlyHome) ist
+    // jetzt wieder ein HARTER Reject für grenzüberschreitende Routen — der User
+    // will GARANTIERT nie über die Grenze (Vorarlberg→Schweiz war der Auslöser).
+    // ABER explosionssicher: der Reject kippt NUR `accepted` + schließt den
+    // Kandidaten vom bestRejected-Notnagel aus — er verursacht KEINE zusätzlichen
+    // Edge-Calls (maxAttempts ist gedeckelt). Gibt es nur Auslandsrouten →
+    // klarer noRoute statt einer Pass-pflichtigen Route. Schwelle 0.06 toleriert
+    // Box-Rauschen an der Grenze, kippt aber jeden echten Übertritt.
+    final bool countryRejected =
+        scenario.countryPreference == CountryPreference.onlyHome &&
+        scenario.homeCountryCode != null &&
+        foreignFraction > 0.06;
     final baseTier = _preferredTier(classification.tier, edgeTier);
     final effectiveTier = forceDirectAcceptable && !softRenderable
         ? RouteQualityTier.acceptable
@@ -4836,7 +4869,8 @@ class RouteService {
               hasSoftSimilarityPenalty)
         ? RouteQualityTier.acceptable
         : baseTier;
-    final accepted = softRenderable || forceDirectAcceptable;
+    final accepted =
+        (softRenderable || forceDirectAcceptable) && !countryRejected;
     final score =
         classification.score +
         (effectiveTier == RouteQualityTier.acceptable &&
@@ -4899,6 +4933,7 @@ class RouteService {
       tooSimilar: tooSimilar,
       novelEnough: novelEnough,
       foreignFraction: foreignFraction,
+      countryRejected: countryRejected,
     );
   }
 
@@ -5541,6 +5576,33 @@ class RouteService {
     }
   }
 
+  // 2026-06-08 (vucko HARTE Inland-Garantie): LETZTE Instanz. Egal über welchen
+  // Pfad eine Route hierher kommt (Live-Suche, Pool, Cache, Prepared-Buffer,
+  // Emergency-Fallback, Search-Again) — bei „Im Land bleiben" darf sie NIE die
+  // Grenze queren. Der Kandidaten-Gate (_evaluateCandidate.countryRejected)
+  // bevorzugt schon Inland; dieser Finalizer-Guard ist das unumgehbare Netz
+  // darunter. >6% Ausland → klarer noRoute statt eine Pass-pflichtige Route.
+  void _guardRoundTripCountry(RouteScenario scenario, RouteResult route) {
+    if (scenario.routeType != 'ROUND_TRIP') return;
+    if (scenario.countryPreference != CountryPreference.onlyHome) return;
+    final home = scenario.homeCountryCode;
+    if (home == null) return;
+    final foreign = CountryRegion.foreignFraction(
+      coordinates: route.coordinates,
+      homeCountryCode: home,
+    );
+    if (foreign > 0.06) {
+      throw const RouteServiceException(
+        type: RouteErrorType.noRoute,
+        userMessage:
+            'Hier ist kein Rundkurs möglich, der im Land bleibt — die Gegend '
+            'grenzt direkt ans Ausland. Schalt „Im Land bleiben" aus oder wähl '
+            'eine kürzere Distanz bzw. einen Start weiter im Landesinneren.',
+        debugMessage: 'finalized_round_trip_crosses_border',
+      );
+    }
+  }
+
   RouteResult _finalizeAndRemember({
     required RouteScenario scenario,
     required RouteResult route,
@@ -5549,6 +5611,7 @@ class RouteService {
     bool fromCache = false,
   }) {
     _guardRoundTripOvershoot(scenario, route);
+    _guardRoundTripCountry(scenario, route);
     final previousDisplayed =
         _recentDisplayedRoutes[_recentDisplayedKeyForScenario(scenario)] ??
         _recentSuccessfulRoutes[scenario.scenarioKey];
@@ -5615,6 +5678,7 @@ class RouteService {
     bool fromCache = false,
   }) {
     _guardRoundTripOvershoot(scenario, route);
+    _guardRoundTripCountry(scenario, route);
     final sampledCoordinates = _sampleRouteForSimilarity(route.coordinates);
     final fingerprint = RouteQualityValidator.buildRouteFingerprint(
       sampledCoordinates,
@@ -6596,13 +6660,14 @@ class RouteService {
       // 2026-06-02: sehr tolerant (0.85) gesetzt, damit Grenzregionen nicht in
       // die Sackgasse laufen — aber damit filterte „Im Land bleiben" praktisch
       // NICHTS (halb-ausländische Pool-Loops kamen durch = vucko-Beschwerde).
-      // 2026-06-08 (vucko Im-Land-bleiben): wieder strenger (onlyHome >50% raus,
-      // preferHome >65%). Sackgasse-sicher, weil ein Pool-Reject hier nur `return
-      // null` macht → nächstes Match ODER Live-Suche; die Live-Suche bevorzugt
-      // jetzt selbst Inland (_isBetterCandidate) und liefert IMMER etwas.
+      // 2026-06-08 (vucko HARTE Inland-Garantie): onlyHome ist jetzt HART —
+      // Pool-Routen, die die Grenze queren, werden wie im Live-Gate verworfen
+      // (>6% Ausland raus, Box-Rauschen toleriert). preferHome bleibt weich (65%).
+      // Sackgasse-sicher: Pool-Reject macht nur `return null` → nächstes Match
+      // ODER Live-Suche; gibt es gar keinen Inlandskurs → klarer noRoute.
       final maxForeign =
           scenario.countryPreference == CountryPreference.onlyHome
-              ? 0.50
+              ? 0.06
               : 0.65;
       if (foreignFraction > maxForeign) {
         _debugRouteSearch(
@@ -9670,6 +9735,7 @@ class _RouteCandidate {
     required this.tooSimilar,
     required this.novelEnough,
     this.foreignFraction = 0.0,
+    this.countryRejected = false,
   });
 
   final RouteResult route;
@@ -9688,6 +9754,9 @@ class _RouteCandidate {
   // 2026-06-08 (vucko Im-Land-bleiben): Ausland-Anteil (0..1) für die
   // Inland-zuerst-Auswahl in _isBetterCandidate.
   final double foreignFraction;
+  // 2026-06-08 (vucko HARTE Inland-Garantie): onlyHome + Grenzübertritt → dieser
+  // Kandidat darf NIE gewählt werden, auch nicht als Notnagel-Fallback.
+  final bool countryRejected;
 }
 
 class _ScoredPoolAccessRoute {
