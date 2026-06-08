@@ -270,14 +270,46 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
   static const String _lineSourceId = 'cruise-route-lines';
   static const String _lineLayerId = 'cruise-route-lines-layer';
   bool _lineLayerReady = false;
+  // 2026-06-08 (vucko CRASH-Fix): In-Flight-Guard gegen Re-Entrancy von
+  // _ensureLineLayer. onStyleLoaded feuert auf iOS MEHRFACH (Tiles laden async) →
+  // überlappende _ensureLineLayer-Läufe sehen über die await-Lücken BEIDE „Quelle
+  // fehlt" → BEIDE addSource/addLineLayer → MLNRedundant…Exception (nativer C++-
+  // Throw, von Dart NICHT fangbar) → SIGABRT. _lineLayerReady schützt nicht (erst
+  // am Ende gesetzt) → echtes Serialisierungs-Flag, synchron am Start gesetzt.
+  bool _ensuringLineLayer = false;
+  // Lädt der Style WÄHREND eines _ensureLineLayer-Laufs neu, würde der parallele
+  // Re-Establish-Aufruf am In-Flight-Guard abprallen → Layer fehlen im neuen Style
+  // (Linie weg + späteres setGeoJsonSource auf fehlende Quelle = erneut SIGABRT).
+  // Daher genau EIN Nachzieher gemerkt und nach dem Lauf ausgeführt.
+  bool _ensureLinePending = false;
   // 2026-06-08 (vucko Leitlinie GPU-Trim): EIGENE Quelle (lineMetrics:true) für
   // die aktive Route — Geometrie wird nur bei Routen-/Reroute-Wechsel gesetzt;
   // das „Abfahren" macht ein line-gradient (GPU), der pro Tick via
   // setLayerProperties auf den Puck-Progress geschoben wird. Kein Geometrie-
   // Neupush pro Frame → kein Lag, kein Tile-Hunger.
   static const String _activeSrcId = 'cruise-route-active';
+  // _activeGlowLayerId = jetzt das CASING (dunkle Kontur UNTER der Füllung),
+  // _activeMainLayerId = die rote Füllung darüber. (IDs aus Kompatibilität.)
   static const String _activeGlowLayerId = 'cruise-route-active-glow';
   static const String _activeMainLayerId = 'cruise-route-active-main';
+  // 2026-06-08 (vucko Leitstrich-Premium): dunkle Kontur-Farbe (entsättigtes
+  // Rot-Braun) → liest sich als Schatten-Rand, hebt die rote Linie klar vom
+  // dunklen Map-Hintergrund ab (Apple/Google-Maps-Look).
+  static const Color _routeCasingColor = Color(0xFF230806);
+  // Abgefahrener Teil = gedämpftes Grau (Apple/Google-Look: „driven = grau,
+  // vor mir = kräftig rot"). Die Füllung blendet per line-gradient von diesem
+  // Grau (hinter dem Puck) auf das Akzent-Rot (vor dem Puck).
+  static const Color _routeDrivenColor = Color(0xFF8A8E99);
+  // Zoom-abhängige Breiten: Füllung dick genug, dass die Linie bei Navi-Zoom
+  // NIE als Haarlinie erscheint; Casing ~1,5× breiter = klarer dunkler Rand.
+  static const List<dynamic> _casingWidth = <dynamic>[
+    'interpolate', <dynamic>['linear'], <dynamic>['zoom'],
+    10, 9.0, 14, 17.0, 16, 22.0, 18, 30.0, 22, 44.0,
+  ];
+  static const List<dynamic> _fillWidth = <dynamic>[
+    'interpolate', <dynamic>['linear'], <dynamic>['zoom'],
+    10, 6.0, 14, 11.0, 16, 15.0, 18, 21.0, 22, 30.0,
+  ];
   String _lastActiveSig = '';
   double _lastProgress = -1.0;
   bool _gradientInFlight = false;
@@ -457,7 +489,14 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
   /// Feature-Properties) → ein Layer für alle Linien, kein Annotation-Churn.
   Future<void> _ensureLineLayer() async {
     final map = _map;
-    if (_lineLayerReady || map == null) return;
+    // Re-Entrancy-Guard (siehe _ensuringLineLayer-Deklaration): nur EIN Lauf
+    // gleichzeitig — verhindert Doppel-add → SIGABRT bei mehrfachem onStyleLoaded.
+    if (map == null || _lineLayerReady) return;
+    if (_ensuringLineLayer) {
+      _ensureLinePending = true; // läuft schon → genau einen Nachzieher merken
+      return;
+    }
+    _ensuringLineLayer = true;
     try {
       // 2026-06-05 (vucko Crash-Fix #2 — ROOT CAUSE): addSource/addLineLayer mit
       // einer ID, die im Style schon existiert, wirft NATIV eine C++-Exception
@@ -515,29 +554,34 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
         );
         if (!mounted) return;
       }
-      final initialGradient = _routeGradient(0.0, widget.routeColor);
+      // CASING (durchgehende dunkle Kontur, breiter) — UNTER der Füllung. STATISCH
+      // (kein Trim): die Kontur läuft auf der ganzen Route durch, die Füllung
+      // wechselt am Puck die Farbe (grau↔rot). So braucht NUR die Füllung einen
+      // Gradient — robust, keine zwei Layer müssen synchron trimmen.
       if (!layerIds.contains(_activeGlowLayerId)) {
         await map.addLineLayer(
           _activeSrcId,
           _activeGlowLayerId,
           mb.LineLayerProperties(
-            lineGradient: initialGradient,
-            lineWidth: 12.0,
-            lineOpacity: 0.30,
-            lineBlur: 2.0,
+            lineColor:
+                '#${(_routeCasingColor.toARGB32() & 0xFFFFFF).toRadixString(16).padLeft(6, '0')}',
+            lineWidth: _casingWidth,
             lineJoin: 'round',
             lineCap: 'round',
           ),
         );
         if (!mounted) return;
       }
+      // FÜLLUNG — line-gradient blendet grau (abgefahren) → rot (vor dir).
       if (!layerIds.contains(_activeMainLayerId)) {
         await map.addLineLayer(
           _activeSrcId,
           _activeMainLayerId,
           mb.LineLayerProperties(
-            lineGradient: initialGradient,
-            lineWidth: 5.0,
+            lineGradient:
+                _routeGradient(0.0, _routeDrivenColor, widget.routeColor),
+            lineWidth: _fillWidth,
+            lineBlur: 0.5,
             lineJoin: 'round',
             lineCap: 'round',
           ),
@@ -547,6 +591,13 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
     } catch (_) {
       // Defensiv: bei irgendeinem transienten Fehler NICHT erneut blind adden.
       _lineLayerReady = true;
+    } finally {
+      _ensuringLineLayer = false;
+      // Kam während des Laufs ein Re-Establish-Wunsch (Style-Reload) → genau EINMAL
+      // nachziehen, falls der Layer dadurch wieder als „nicht bereit" gilt.
+      final pending = _ensureLinePending;
+      _ensureLinePending = false;
+      if (pending && !_lineLayerReady) unawaited(_ensureLineLayer());
     }
   }
 
@@ -679,37 +730,38 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
     }
   }
 
-  // 2026-06-08 (vucko Leitlinie GPU-Trim): baut den line-gradient-Ausdruck so,
-  // dass [0..progress] transparent (= „abgefahren") und [progress..1] in voller
-  // Farbe ist. Eingabe ist `line-progress` (Fraktion der Gesamtlänge, braucht
-  // lineMetrics:true). Schmaler Feather für eine saubere, nicht-treppige Kante.
-  static List<dynamic> _routeGradient(double progress, Color color) {
-    final argb = color.toARGB32();
-    final r = (argb >> 16) & 0xFF;
-    final g = (argb >> 8) & 0xFF;
-    final b = argb & 0xFF;
-    final transparent = 'rgba($r,$g,$b,0)';
-    final solid = 'rgba($r,$g,$b,1)';
+  // 2026-06-08 (vucko Leitstrich-Premium): baut den line-gradient so, dass
+  // [0..progress] = `driven` (Grau) und [progress..1] = `remain` (Rot) ist —
+  // die Füllung „färbt sich am Puck um" statt zu verschwinden (Apple/Google-Look).
+  // Eingabe ist `line-progress` (braucht lineMetrics:true). Knapper Feather für
+  // eine saubere, nicht-treppige Kante GENAU unter dem Puck.
+  static List<dynamic> _routeGradient(double progress, Color driven, Color remain) {
+    String rgba(Color c) {
+      final a = c.toARGB32();
+      final al = ((a >> 24) & 0xFF) / 255.0;
+      return 'rgba(${(a >> 16) & 0xFF},${(a >> 8) & 0xFF},${a & 0xFF},'
+          '${al.toStringAsFixed(3)})';
+    }
+
+    final d = rgba(driven);
+    final rm = rgba(remain);
     final p = progress.clamp(0.0, 1.0).toDouble();
     if (p <= 0.001) {
-      return ['interpolate', ['linear'], ['line-progress'], 0.0, solid, 1.0, solid];
+      return ['interpolate', ['linear'], ['line-progress'], 0.0, rm, 1.0, rm];
     }
     if (p >= 0.999) {
-      return [
-        'interpolate', ['linear'], ['line-progress'],
-        0.0, transparent, 1.0, transparent,
-      ];
+      return ['interpolate', ['linear'], ['line-progress'], 0.0, d, 1.0, d];
     }
-    const feather = 0.0015; // ~weiche, aber knappe Kante
+    const feather = 0.0009; // knappe, vom Puck verdeckte Kante
     final p0 = (p - feather).clamp(0.0, 1.0).toDouble();
-    final p1 = p.clamp(p0 + 0.0005, 1.0).toDouble();
-    final stops = <dynamic>[0.0, transparent];
+    final p1 = p.clamp(p0 + 0.0004, 1.0).toDouble();
+    final stops = <dynamic>[0.0, d];
     if (p0 > 0.0006) {
-      stops..add(p0)..add(transparent);
+      stops..add(p0)..add(d);
     }
-    stops..add(p1)..add(solid);
+    stops..add(p1)..add(rm);
     if (p1 < 0.9994) {
-      stops..add(1.0)..add(solid);
+      stops..add(1.0)..add(rm);
     }
     return ['interpolate', ['linear'], ['line-progress'], ...stops];
   }
@@ -780,15 +832,22 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
     }
     _gradientInFlight = true;
     _lastProgress = p;
-    final grad = _routeGradient(p, widget.routeColor);
+    // Nur die FÜLLUNG bekommt den Gradient (grau→rot am Puck). Das Casing ist
+    // statisch (durchgehende dunkle Kontur). WICHTIG: Breite + Caps + Blur bei
+    // JEDEM Update mitschicken — setLayerProperties serialisiert mit skipNulls:
+    // false; nur lineGradient zu setzen würde lineWidth auf den Default (~1px
+    // Haarlinie) zurücksetzen → genau das machte den Leitstrich „unsichtbar dünn".
+    final fillGrad = _routeGradient(p, _routeDrivenColor, widget.routeColor);
     try {
       await map.setLayerProperties(
-        _activeGlowLayerId,
-        mb.LineLayerProperties(lineGradient: grad),
-      );
-      await map.setLayerProperties(
         _activeMainLayerId,
-        mb.LineLayerProperties(lineGradient: grad),
+        mb.LineLayerProperties(
+          lineGradient: fillGrad,
+          lineWidth: _fillWidth,
+          lineBlur: 0.5,
+          lineJoin: 'round',
+          lineCap: 'round',
+        ),
       );
     } catch (_) {
     } finally {

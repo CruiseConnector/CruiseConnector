@@ -4416,19 +4416,18 @@ class _CruiseModePageState extends State<CruiseModePage>
   }
 
   List<CruiseMapLine> _buildMapLibreLines() {
-    final accent = AppAccentColors.accent;
     final lines = <CruiseMapLine>[];
-    // 2026-06-08 (vucko Leitlinie GPU-Trim): nur noch der gedimmte Hintergrund
-    // (Gesamt-Route). Die AKTIVE rote Linie — Preview UND Navigation — zeichnet
-    // jetzt der GPU-line-gradient (activeRoutePoints + routeProgress), der sie
-    // EXAKT am Puck trimmt. Kein _routeLatLngs-Glow/Haupt mehr (das pushte pro
-    // Frame Geometrie nach → Lag/Schwarz, die rote Linie hinkte dem Puck nach).
+    // 2026-06-08 (vucko Leitstrich-Premium): Hintergrund-Linie = GRAUER „Driven-
+    // Trail" der Gesamt-Route. Wo der aktive rote Gradient (Casing+Füllung)
+    // transparent ist (abgefahrener Teil HINTER dem Puck), scheint dieser dezente
+    // Grau-Faden durch → „abgefahren = grau, vor mir = kräftig rot", klar lesbar
+    // (Apple/Google-Maps-Look). Vor dem Puck verdeckt ihn das rote Casing.
     if (_isRouteConfirmed && _fullRouteBackgroundLatLngs.length >= 2) {
       lines.add(CruiseMapLine(
         points: List<LatLng>.from(_fullRouteBackgroundLatLngs),
-        color: accent,
-        opacity: 0.28,
-        width: 3,
+        color: const Color(0xFF7B7E88),
+        opacity: 0.45,
+        width: 4,
       ));
     }
     return lines;
