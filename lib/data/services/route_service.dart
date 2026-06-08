@@ -5514,6 +5514,33 @@ class RouteService {
     );
   }
 
+  // 2026-06-08 (vucko DACH-Test): Distanz-Sicherung. In dünnen Alpennetzen
+  // (Sackgassen-Täler wie Andermatt/Ramsau) lieferte die Rundkurs-Generierung
+  // Monster-Loops (z.B. 565km für 75km, 168km für 75km) statt zu scheitern. Ein
+  // Rundkurs >1.9× der (geclampten) Zieldistanz ist für den User wertlos → lieber
+  // ein klarer „in dieser Länge hier nicht möglich"-Fehler. Greift NUR bei
+  // eklatanter Überschreitung; populäre Regionen liegen bei ~1.0–1.3×.
+  void _guardRoundTripOvershoot(RouteScenario scenario, RouteResult route) {
+    if (scenario.routeType != 'ROUND_TRIP') return;
+    final target = scenario.targetDistanceKm;
+    final actual = route.distanceKm;
+    if (target == null || actual == null || target <= 0 || actual <= 0) {
+      return;
+    }
+    if (actual > target * 1.9) {
+      throw RouteServiceException(
+        type: RouteErrorType.noRoute,
+        userMessage:
+            'Hier ist kein Rundkurs mit ~${target.round()} km möglich — der '
+            'kürzeste Kurs wäre ${actual.round()} km. Versuch eine andere '
+            'Distanz oder einen Start näher an einem dichteren Straßennetz.',
+        debugMessage:
+            'roundtrip_overshoot target=$target actual=$actual ratio='
+            '${(actual / target).toStringAsFixed(2)}',
+      );
+    }
+  }
+
   RouteResult _finalizeAndRemember({
     required RouteScenario scenario,
     required RouteResult route,
@@ -5521,6 +5548,7 @@ class RouteService {
     required String fingerprint,
     bool fromCache = false,
   }) {
+    _guardRoundTripOvershoot(scenario, route);
     final previousDisplayed =
         _recentDisplayedRoutes[_recentDisplayedKeyForScenario(scenario)] ??
         _recentSuccessfulRoutes[scenario.scenarioKey];
@@ -5586,6 +5614,7 @@ class RouteService {
     required RouteResult route,
     bool fromCache = false,
   }) {
+    _guardRoundTripOvershoot(scenario, route);
     final sampledCoordinates = _sampleRouteForSimilarity(route.coordinates);
     final fingerprint = RouteQualityValidator.buildRouteFingerprint(
       sampledCoordinates,
