@@ -300,15 +300,15 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
   // vor mir = kräftig rot"). Die Füllung blendet per line-gradient von diesem
   // Grau (hinter dem Puck) auf das Akzent-Rot (vor dem Puck).
   static const Color _routeDrivenColor = Color(0xFF8A8E99);
-  // Zoom-abhängige Breiten: Füllung dick genug, dass die Linie bei Navi-Zoom
-  // NIE als Haarlinie erscheint; Casing ~1,5× breiter = klarer dunkler Rand.
+  // Zoom-abhängige Breiten: sichtbar, aber schlank (vucko: „zu fett" → ~⅓ dünner).
+  // Casing ~1,5× breiter = klarer dunkler Rand.
   static const List<dynamic> _casingWidth = <dynamic>[
     'interpolate', <dynamic>['linear'], <dynamic>['zoom'],
-    10, 9.0, 14, 17.0, 16, 22.0, 18, 30.0, 22, 44.0,
+    10, 6.0, 14, 11.0, 16, 14.5, 18, 20.0, 22, 30.0,
   ];
   static const List<dynamic> _fillWidth = <dynamic>[
     'interpolate', <dynamic>['linear'], <dynamic>['zoom'],
-    10, 6.0, 14, 11.0, 16, 15.0, 18, 21.0, 22, 30.0,
+    10, 4.0, 14, 7.0, 16, 9.5, 18, 13.0, 22, 19.0,
   ];
   String _lastActiveSig = '';
   double _lastProgress = -1.0;
