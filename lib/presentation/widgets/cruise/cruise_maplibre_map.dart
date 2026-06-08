@@ -291,10 +291,13 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
   /// addLine = voller GeoJSON-Source-Rebuild) läuft NUR bei echter Geometrie-
   /// Änderung, nicht bei jedem Parent-Rebuild/GPS-Tick (Task #4 Lag).
   String _lastLinesSig = '';
-  /// Coalescing der Marker-Projektion: nur EINE toScreenLocationBatch-Anfrage
-  /// gleichzeitig in flight (sonst Platform-Channel-Pile-up → Marker-Trailing).
-  bool _projecting = false;
-  bool _projectPending = false;
+  // 2026-06-08 (vucko Marker-Glue): Marker werden jetzt LOKAL in Dart projiziert
+  // (synchron, aus map.cameraPosition) statt per async toScreenLocationBatch — das
+  // killt den Platform-Channel-Roundtrip, der die Overlay-Marker beim (schnellen)
+  // Pannen hinterherhinken ließ. Dafür die Live-Viewport-Größe der Karte (logische
+  // Pixel) aus dem LayoutBuilder. Kein _projecting/_projectPending mehr nötig.
+  double _mapW = 0;
+  double _mapH = 0;
   // 2026-06-05 (vucko Crash-Fix): App-Lifecycle. Im Hintergrund/Inaktiv baut iOS
   // den Metal-Renderer (CAMetalLayer-Drawable) ab — view-/quellen-abhängige Calls
   // (toScreenLocationBatch, setGeoJsonSource, Kamera) würden dann nativ werfen
@@ -797,12 +800,22 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
     }
   }
 
-  Future<void> _projectMarkers() async {
+  // 2026-06-08 (vucko Marker-Glue): projiziert ALLE Marker SYNCHRON in Dart aus
+  // der aktuellen Kamera (map.cameraPosition) — kein async toScreenLocationBatch-
+  // Roundtrip mehr, der die Overlay-Marker beim Pannen hinterherhinken ließ. Die
+  // Marker bewegen sich jetzt im SELBEN Frame wie die Karte (onCameraMove liefert
+  // die frische Kamera) → geo-fixiert, auch bei schnellem Pannen.
+  //
+  // Pitch ist hier IMMER 0 (tiltGesturesEnabled:false + es wird nirgends ein Tilt
+  // gesetzt) → die exakte 2D-Web-Mercator-Projektion reicht (kein Perspektiv-Term).
+  // Sollte je ein Tilt>0 gesetzt werden, fällt es sauber auf die native Projektion
+  // zurück (siehe unten).
+  void _projectMarkers() {
     final map = _map;
-    // KRITISCH: keine Controller-Methode (toScreenLocationBatch) aufrufen, bevor
-    // der Style geladen ist. MapLibre wirft sonst nativ eine C++-Exception
-    // (SIGABRT) — von Dart NICHT fangbar → App-Crash. onCameraMove kann während
-    // des Karten-Setups schon feuern, daher dieser Gate.
+    // SIGABRT-Gate UNVERÄNDERT lassen (load-bearing): keine view-/quellen-
+    // abhängigen Calls vor dem ersten Frame. cameraPosition ist zwar ein
+    // synchroner Getter (kein nativer Throw), aber der Gate schützt auch vor
+    // 0-Größe/offstage.
     if (!_styleLoaded ||
         !_visible ||
         !_appResumed ||
@@ -814,25 +827,59 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
       }
       return;
     }
-    // Coalescing: läuft schon eine Projektion, nur „pending" merken und raus —
-    // verhindert das Platform-Channel-Pile-up (jede toScreenLocationBatch ist ein
-    // awaited Roundtrip; bei 5Hz GPS + 60fps Kamera stauen sie sich → Marker-Lag).
-    if (_projecting) {
-      _projectPending = true;
+    final cam = map.cameraPosition;
+    if (cam == null || _mapW <= 0 || _mapH <= 0) return;
+
+    // Tilt>0 (falls je gesetzt): exakte 2D-Projektion stimmt nicht → native
+    // (async) Projektion als Fallback. Heute nie der Fall.
+    if (cam.tilt > 0.5) {
+      unawaited(_projectMarkersNative());
       return;
     }
-    _projecting = true;
+
+    final zoom = cam.zoom;
+    final ws = _tileSize * math.pow(2.0, zoom); // fraktionaler Zoom — NICHT runden
+    final cx =
+        _mercX(cam.target.longitude) * ws;
+    final cy =
+        _mercY(cam.target.latitude.clamp(-_maxMercLat, _maxMercLat)) * ws;
+    final theta = -cam.bearing * math.pi / 180.0; // MapLibre: rotateZ(-bearing)
+    final cosT = math.cos(theta), sinT = math.sin(theta);
+    final halfW = _mapW / 2, halfH = _mapH / 2;
+
+    final next = <String, Offset>{};
+    for (final m in widget.markers) {
+      final px = _mercX(m.position.longitude) * ws;
+      final py =
+          _mercY(m.position.latitude.clamp(-_maxMercLat, _maxMercLat)) * ws;
+      final dx = px - cx, dy = py - cy;
+      next[m.id] = Offset(
+        halfW + (dx * cosT - dy * sinT),
+        halfH + (dx * sinT + dy * cosT),
+      );
+    }
+    if (mounted) {
+      setState(() {
+        _markerScreen
+          ..clear()
+          ..addAll(next);
+      });
+    }
+  }
+
+  /// Fallback (nur bei Tilt>0 — heute nie): native async Projektion.
+  Future<void> _projectMarkersNative() async {
+    final map = _map;
+    if (map == null) return;
     try {
       final pts = await map.toScreenLocationBatch(
-        widget.markers.map((m) => mb.LatLng(m.position.latitude, m.position.longitude)),
+        widget.markers
+            .map((m) => mb.LatLng(m.position.latitude, m.position.longitude)),
       );
       final next = <String, Offset>{};
       for (var i = 0; i < widget.markers.length; i++) {
-        final p = pts[i];
-        // maplibre_gl liefert auf iOS bereits LOGISCHE Pixel (Flutter-Koords) —
-        // NICHT durch devicePixelRatio teilen (sonst rutschen Marker nach
-        // oben-links). (Android müsste ggf. /dpr — bei Bedarf plattform-spezifisch.)
-        next[widget.markers[i].id] = Offset(p.x.toDouble(), p.y.toDouble());
+        next[widget.markers[i].id] =
+            Offset(pts[i].x.toDouble(), pts[i].y.toDouble());
       }
       if (mounted) {
         setState(() {
@@ -841,17 +888,7 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
             ..addAll(next);
         });
       }
-    } catch (_) {
-      // Projektion vor Style-Load o. Ä. — ignorieren, nächster Frame korrigiert.
-    } finally {
-      _projecting = false;
-      // Wurde während der laufenden Projektion eine weitere angefragt → genau
-      // EINMAL nachziehen (mit den dann aktuellen Marker-Positionen).
-      if (_projectPending) {
-        _projectPending = false;
-        _projectMarkers();
-      }
-    }
+    } catch (_) {}
   }
 
   void _onCameraMove(mb.CameraPosition _) {
@@ -874,7 +911,16 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
     if (style == null) {
       return const ColoredBox(color: Color(0xFF0b0e13));
     }
-    return Stack(
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // 2026-06-08 (vucko Marker-Glue): Live-Viewport-Größe der Karte (logische
+        // Pixel) für die lokale Marker-Projektion festhalten.
+        if (constraints.maxWidth != _mapW ||
+            constraints.maxHeight != _mapH) {
+          _mapW = constraints.maxWidth;
+          _mapH = constraints.maxHeight;
+        }
+        return Stack(
       children: [
         VisibilityDetector(
           key: const ValueKey('cruise-maplibre-visibility'),
@@ -921,6 +967,8 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
         // Marker-Overlay
         ..._buildMarkerOverlay(),
       ],
+        );
+      },
     );
   }
 
@@ -946,3 +994,18 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
     return out;
   }
 }
+
+// ── Lokale Web-Mercator-Projektion (vucko 2026-06-08 Marker-Glue) ─────────────
+// Wandelt lng/lat → normierte Mercator-Koordinaten [0..1]. MapLibre nutzt eine
+// 512er-Kachel (worldSize = 512 · 2^zoom). KEIN devicePixelRatio (Transform +
+// Flutter-Layout sind beide in logischen Pixeln). Latitude vor _mercY clampen.
+const double _tileSize = 512.0;
+const double _maxMercLat = 85.051129;
+
+double _mercX(double lng) => (180.0 + lng) / 360.0;
+
+double _mercY(double lat) =>
+    (180.0 -
+        (180.0 / math.pi) *
+            math.log(math.tan(math.pi / 4 + lat * math.pi / 360.0))) /
+    360.0;
