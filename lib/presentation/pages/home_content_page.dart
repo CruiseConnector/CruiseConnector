@@ -1323,8 +1323,9 @@ class _HomeContentPageState extends State<HomeContentPage>
       height: size,
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(14),
+        // 2026-06-08 (vucko Route-Widget): ganz leicht sichtbarer Rahmen.
         border: Border.all(
-          color: Colors.white.withValues(alpha: 0.08),
+          color: Colors.white.withValues(alpha: 0.16),
           width: 1,
         ),
         boxShadow: [
@@ -1564,13 +1565,14 @@ class _HomeContentPageState extends State<HomeContentPage>
       },
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 180),
-        width: 36,
-        height: 34,
+        // 2026-06-08 (vucko Route-Widget): gleiche Höhe wie der Fahren-Button (44).
+        width: 48,
+        height: 44,
         decoration: BoxDecoration(
           color: _isRouteSaved
               ? const Color(0xFFFFE2A8).withValues(alpha: 0.16)
               : Colors.black.withValues(alpha: 0.14),
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(13),
           border: Border.all(
             color: _isRouteSaved
                 ? const Color(0xFFFFE2A8).withValues(alpha: 0.45)
@@ -2217,83 +2219,119 @@ class _RouteMiniMapPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final rnd = math.Random(seed & 0x7fffffff);
 
-    // 1. Land-Basis.
-    canvas.drawRect(Offset.zero & size, Paint()..color = _land);
+    // 1. Land-Basis mit dezentem Vertikal-Verlauf (Tiefe statt flach).
+    final baseRect = Offset.zero & size;
+    canvas.drawRect(
+      baseRect,
+      Paint()
+        ..shader = const LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [Color(0xFF14171E), Color(0xFF0C0D11)],
+        ).createShader(baseRect),
+    );
 
-    // 2. Häuserblöcke (faint).
-    final blockPaint = Paint()
-      ..color = const Color(0xFF3A3F4A).withValues(alpha: 0.30);
-    for (var i = 0; i < 22; i++) {
-      final bw = 7.0 + rnd.nextDouble() * 14;
-      final bh = 7.0 + rnd.nextDouble() * 14;
-      final bx = rnd.nextDouble() * (size.width - bw);
-      final by = rnd.nextDouble() * (size.height - bh);
-      canvas.drawRRect(
-        RRect.fromRectAndRadius(
-          Rect.fromLTWH(bx, by, bw, bh),
-          const Radius.circular(2),
-        ),
-        blockPaint,
-      );
-    }
-
-    // Route-Punkte (echt oder generisch) — bestimmen auch die Straßen-Ausrichtung.
+    // Route-Punkte (echt oder generisch) — geben die Haupt-Ausrichtung des
+    // Straßennetzes vor (first→Mitte ist auch bei Rundkursen stabil).
     final pts = coordinates.length >= 2
         ? _projectRoute(size)
         : _genericRoute(size, rnd);
-
-    // 3. Straßennetz, an der Routen-Hauptachse ausgerichtet → wirkt wie ein Bezirk.
-    final theta = math.atan2(
-      pts.last.dy - pts.first.dy,
-      pts.last.dx - pts.first.dx,
-    );
+    final mid = pts[pts.length ~/ 2];
+    final theta = math.atan2(mid.dy - pts.first.dy, mid.dx - pts.first.dx);
     final perp = theta + math.pi / 2;
-    void street(double cx, double cy, double angle, double width, Color color) {
-      final ux = math.cos(angle), uy = math.sin(angle);
-      final len = size.width + size.height;
-      canvas.drawLine(
-        Offset(cx - ux * len, cy - uy * len),
-        Offset(cx + ux * len, cy + uy * len),
+    final diag = size.width + size.height;
+
+    // 2. Baufelder: leicht in Netz-Richtung gedrehte Blöcke (wie echte Häuserzeilen
+    // zwischen den Straßen), nicht achsen-parallel → wirkt organischer.
+    final blockPaint = Paint()
+      ..color = const Color(0xFF2B313C).withValues(alpha: 0.55);
+    for (var i = 0; i < 16; i++) {
+      final bw = 6.0 + rnd.nextDouble() * 13;
+      final bh = 6.0 + rnd.nextDouble() * 13;
+      canvas.save();
+      canvas.translate(rnd.nextDouble() * size.width, rnd.nextDouble() * size.height);
+      canvas.rotate(theta + (rnd.nextDouble() - 0.5) * 0.3);
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(
+          Rect.fromCenter(center: Offset.zero, width: bw, height: bh),
+          const Radius.circular(1.5),
+        ),
+        blockPaint,
+      );
+      canvas.restore();
+    }
+
+    // 3. Organisches Straßennetz: sanft mäandernde Linien (keine starren Geraden),
+    //    grob an theta/perp ausgerichtet mit Winkel-Jitter → wirkt wie echte Straßen.
+    void windingRoad(
+      double sx,
+      double sy,
+      double angle,
+      double length,
+      int steps,
+      double width,
+      Color color,
+    ) {
+      final path = Path()..moveTo(sx, sy);
+      var px = sx, py = sy, a = angle;
+      final seg = length / steps;
+      for (var i = 0; i < steps; i++) {
+        a += (rnd.nextDouble() - 0.5) * 0.34;
+        px += math.cos(a) * seg;
+        py += math.sin(a) * seg;
+        path.lineTo(px, py);
+      }
+      canvas.drawPath(
+        path,
         Paint()
           ..color = color
           ..strokeWidth = width
           ..style = PaintingStyle.stroke
-          ..strokeCap = StrokeCap.round,
+          ..strokeCap = StrokeCap.round
+          ..strokeJoin = StrokeJoin.round,
       );
     }
 
-    for (var i = 0; i < 10; i++) {
-      street(
+    for (var i = 0; i < 8; i++) {
+      final a = (i.isEven ? theta : perp) + (rnd.nextDouble() - 0.5) * 0.6;
+      windingRoad(
         rnd.nextDouble() * size.width,
         rnd.nextDouble() * size.height,
-        i.isEven ? theta : perp,
+        a,
+        size.width * (0.45 + rnd.nextDouble() * 0.5),
+        4,
         0.8,
-        const Color(0xFF3E4452),
+        const Color(0xFF3C4350),
       );
     }
-    for (var i = 0; i < 4; i++) {
-      street(
-        (0.2 + rnd.nextDouble() * 0.6) * size.width,
-        (0.2 + rnd.nextDouble() * 0.6) * size.height,
-        i.isEven ? theta : perp,
-        1.5,
-        const Color(0xFF4B5263),
+    for (var i = 0; i < 3; i++) {
+      final a = (i.isEven ? theta : perp) + (rnd.nextDouble() - 0.5) * 0.4;
+      final cx = (0.25 + rnd.nextDouble() * 0.5) * size.width;
+      final cy = (0.25 + rnd.nextDouble() * 0.5) * size.height;
+      windingRoad(
+        cx - math.cos(a) * diag * 0.45,
+        cy - math.sin(a) * diag * 0.45,
+        a,
+        diag * 0.9,
+        6,
+        1.4,
+        const Color(0xFF4A5161),
       );
     }
-    street(
-      (0.35 + rnd.nextDouble() * 0.3) * size.width,
-      (0.35 + rnd.nextDouble() * 0.3) * size.height,
-      theta,
-      2.4,
-      const Color(0xFF585F70),
-    );
-    street(
-      (0.35 + rnd.nextDouble() * 0.3) * size.width,
-      (0.35 + rnd.nextDouble() * 0.3) * size.height,
-      perp,
-      2.4,
-      const Color(0xFF585F70),
-    );
+    for (var i = 0; i < 2; i++) {
+      final a = (i == 0 ? theta : perp) + (rnd.nextDouble() - 0.5) * 0.22;
+      final cx = (0.3 + rnd.nextDouble() * 0.4) * size.width;
+      final cy = (0.3 + rnd.nextDouble() * 0.4) * size.height;
+      windingRoad(
+        cx - math.cos(a) * diag * 0.6,
+        cy - math.sin(a) * diag * 0.6,
+        a,
+        diag * 1.25,
+        7,
+        2.3,
+        const Color(0xFF595F71),
+      );
+    }
 
     // 4. Route: Glow → Casing → Linie → Punkte.
     final path = Path()..moveTo(pts.first.dx, pts.first.dy);
