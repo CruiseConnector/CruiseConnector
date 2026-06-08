@@ -8017,6 +8017,18 @@ class _CruiseModePageState extends State<CruiseModePage>
       _hapticStage50m = false;
       _lastHapticManeuverIndex = null;
       _offRouteCount = 0;
+      // 2026-06-08 (vucko Task #47): Access-Leg-State MUSS beim Reroute-Commit
+      // zurück. _fullRouteCoordinates wird komplett durch neue (kürzere) Geometrie
+      // ersetzt — ein alter _accessLegJoinIndex zeigt dann in den ALTEN Array
+      // (out-of-bounds/falsches Segment) und _isAccessLegActive=true bläht den
+      // Off-Route-Korridor auf 85m → der globale Re-Snap ankert auf dem FALSCHEN
+      // Ast eines sich selbst überlappenden Rundkurses → Selbstüberschneidung.
+      // Der legitime Access-Leg-Reroute-Pfad setzt die Flags NACH dem await
+      // wieder, daher hier gefahrlos (inline statt _clearAccessLegState(), damit
+      // es Teil dieser setState-Transaktion ist).
+      _isAccessLegActive = false;
+      _accessLegJoinIndex = null;
+      _accessLegMainRouteResult = null;
       _lastRerouteTime = DateTime.now();
       _remainingDistance = result.distanceMeters;
       _remainingDuration = result.durationSeconds;
@@ -8029,9 +8041,28 @@ class _CruiseModePageState extends State<CruiseModePage>
       }
     });
 
-    final windowEnd = _findLookAheadIndex(0, 3000);
+    // 2026-06-08 (vucko Task #47): Auf der NEUEN Geometrie re-matchen statt blind
+    // ab 0 zu slicen. Index 0 ist zwar der Connector-Start (= GPS), aber falls
+    // der Puck schon ein paar Punkte weiter ist oder die Naht minimal driftet,
+    // darf das Puck-Fenster NICHT über eine Naht hinweg slicen. Kleines Fenster
+    // ab 0 (Puck ist frisch am Connector-Start) → ein evtl. Self-Overlap trifft
+    // nicht den falschen Ast.
+    final reanchor = findNearestInWindow(
+      position: position,
+      coordinates: result.coordinates,
+      currentIndex: 0,
+      windowSize: math.min(120, result.coordinates.length),
+      maxJumpMeters: double.infinity,
+    );
+    if (reanchor.distanceMeters <= _headSnapMaxMeters) {
+      _currentRouteIndex = reanchor.index.clamp(
+        0,
+        math.max(0, result.coordinates.length - 1),
+      );
+    }
+    final windowEnd = _findLookAheadIndex(_currentRouteIndex, 3000);
     final routeSlice = result.coordinates.sublist(
-      0,
+      _currentRouteIndex,
       math.min(windowEnd, result.coordinates.length),
     );
     if (routeSlice.isNotEmpty) {
@@ -10326,6 +10357,34 @@ class _CruiseModePageState extends State<CruiseModePage>
             );
             continue;
           }
+
+          // 2026-06-08 (vucko Task #47): HARTER Naht-Guard gegen die „Bat-Wing".
+          // isUTurnJoin prüft nur ein Einzelsegment; rerouteMergeFoldsBack prüft
+          // gemitteltes Heading-Reversal UND echte Selbstüberschneidung im Naht-
+          // Fenster → fängt auch die Faltung, die der schwache U-Turn-Test durch-
+          // lässt. Bei Faltung: weiter vorne andocken (oder verwerfen).
+          final foldsBack = rerouteMergeFoldsBack(
+            connector: candidate.coordinates,
+            tail: planningCoordinates.sublist(
+              rejoinIndex,
+              math.min(rejoinIndex + 30, planningCoordinates.length),
+            ),
+          );
+          if (foldsBack && rejoinIndex < maxRejoinIndex) {
+            rejoinIndex = math.min(rejoinIndex + 80, maxRejoinIndex).toInt();
+            debugPrint(
+              '[CruiseMode] Reroute-Attempt ${attempt + 1}: Merge-Naht faltet zurück, rejoinIndex=$rejoinIndex',
+            );
+            continue;
+          }
+          if (foldsBack) {
+            // Letzter Rejoin-Index und IMMER NOCH Faltung → diesen Kandidaten
+            // NICHT mergen; der garantierte Re-Dock / Fallback übernimmt.
+            debugPrint(
+              '[CruiseMode] Reroute-Attempt ${attempt + 1}: Merge-Naht faltet auch am Ende — Kandidat verworfen',
+            );
+            continue;
+          }
         }
 
         rerouteResult = candidate;
@@ -10367,9 +10426,28 @@ class _CruiseModePageState extends State<CruiseModePage>
             currentSpeedMetersPerSecond: rerouteSpeedMps,
             locationAccuracyMeters: rerouteAccuracyMeters,
           );
-          if (connector.coordinates.length >= 2 && mounted && !_disposed) {
+          final redockTail = planningCoordinates.sublist(rejoinIdx);
+          // 2026-06-08 (vucko Task #47): forceAcceptDirect umgeht ALLE Shape-/
+          // U-Turn-Gates → der Re-Dock konnte die „Bat-Wing" committen. Auch hier
+          // HART gegen Rückfaltung/Selbstüberschneidung der Naht prüfen. Faltet
+          // sie zurück → NICHT committen: die alte Route bleibt sichtbar (besser
+          // als eine sichtbar kaputte Route), nächster Tick versucht es erneut.
+          final redockFolds = connector.coordinates.length >= 2 &&
+              rerouteMergeFoldsBack(
+                connector: connector.coordinates,
+                tail: redockTail,
+              );
+          if (redockFolds) {
+            debugPrint(
+              '[CruiseMode] Garantierter Re-Dock faltet zurück — verworfen, alte Route bleibt',
+            );
+          }
+          if (connector.coordinates.length >= 2 &&
+              !redockFolds &&
+              mounted &&
+              !_disposed) {
             final connLen = connector.coordinates.length;
-            final tail = planningCoordinates.sublist(rejoinIdx);
+            final tail = redockTail;
             final mergedCoords = <List<double>>[
               ...connector.coordinates,
               ...tail.skip(1),

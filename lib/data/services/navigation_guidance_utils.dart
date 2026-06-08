@@ -118,6 +118,79 @@ bool isUTurnJoin({
   );
 }
 
+/// 2026-06-08 (vucko Task #47): Prüft, ob sich die ZUSAMMENGESETZTE Reroute-
+/// Geometrie (Connector A→Rejoin + Original-Rest ab Rejoin) an der NAHT
+/// zurückfaltet oder selbst überschneidet — die „Bat-Wing"-Signatur aus dem
+/// Bug-Report (chaotischer Zickzack nach Reroute).
+///
+/// Warum nötig: Connector und Original-Tail sind je für sich validiert/sauber,
+/// aber die NAHT zwischen ihnen prüfte bisher nichts Hartes. Die Round-Trip-
+/// Shape-Guards (severeRoundTripShape …) sind `isRoundTrip`-gated und sehen
+/// Reroutes (route_type POINT_TO_POINT) nie; P2P akzeptiert allein „Ziel
+/// erreicht"; der `forceAcceptDirect`-Redock umging selbst den schwachen
+/// `isUTurnJoin`. Folge: ein Connector, der den Rejoin-Punkt „erreicht", ihn
+/// aber von hinten/seitlich anläuft, erzeugt beim Merge eine Schleife/Faltung,
+/// die committet und gerendert wird. Reiner Geometrie-Test → unit-testbar.
+bool rerouteMergeFoldsBack({
+  required List<List<double>> connector,
+  required List<List<double>> tail,
+  double reversalThresholdDegrees = 125.0,
+  int seamWindowPoints = 28,
+}) {
+  if (connector.length < 2 || tail.length < 2) return false;
+  // 1. Heading-Reversal an der Naht — über ein kleines Fenster gemittelt (robust
+  //    gegen GPS-Zacken), schärfer als der Einzelsegment-isUTurnJoin: läuft der
+  //    Original-Rest entgegen der Connector-Anfahrt, faltet die Linie zurück.
+  final approachFrom = connector[math.max(0, connector.length - 4)];
+  final approachTo = connector.last;
+  final leaveFrom = tail.first;
+  final leaveTo = tail[math.min(tail.length - 1, 3)];
+  final approachHeading = bearingFromCoordinates(approachFrom, approachTo);
+  final leaveHeading = bearingFromCoordinates(leaveFrom, leaveTo);
+  if (headingDeltaDegrees(approachHeading, leaveHeading) >=
+      reversalThresholdDegrees) {
+    return true;
+  }
+  // 2. Echte (proper) Selbstüberschneidung im Naht-Fenster: die letzten K
+  //    Connector-Segmente gegen die ersten K Tail-Segmente. Fängt die Schleife,
+  //    wenn der Connector über den Tail-Anfang hinweg läuft.
+  final cFrom = math.max(0, connector.length - 1 - seamWindowPoints);
+  final tTo = math.min(tail.length - 1, seamWindowPoints);
+  for (var i = cFrom; i < connector.length - 1; i++) {
+    for (var j = 0; j < tTo; j++) {
+      if (segmentsProperlyIntersect(
+        connector[i],
+        connector[i + 1],
+        tail[j],
+        tail[j + 1],
+      )) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/// Echte („proper") Überschneidung zweier Segmente in [lng, lat]. Gemeinsame
+/// Endpunkte zählen NICHT als Überschneidung (die Reroute-Naht teilt sich einen
+/// Punkt). Orientierungs-Test (Vorzeichen der Kreuzprodukte), planar — für die
+/// kurzen Distanzen am Naht-Fenster völlig ausreichend.
+bool segmentsProperlyIntersect(
+  List<double> p1,
+  List<double> p2,
+  List<double> p3,
+  List<double> p4,
+) {
+  double orient(List<double> a, List<double> b, List<double> c) =>
+      (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+  final d1 = orient(p3, p4, p1);
+  final d2 = orient(p3, p4, p2);
+  final d3 = orient(p1, p2, p3);
+  final d4 = orient(p1, p2, p4);
+  return ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) &&
+      ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0));
+}
+
 /// Distanz in Metern von einer Position zu einem [lng, lat]-Zielpunkt.
 double distanceToCoordinateMeters({
   required geo.Position position,
