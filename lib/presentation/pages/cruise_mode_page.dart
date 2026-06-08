@@ -865,18 +865,18 @@ class _CruiseModePageState extends State<CruiseModePage>
     ];
     if (newRemaining.length < 2) return false;
 
-    // 2026-06-07 (vucko P-map-stops): Guard 0.4m → 3m. Bei 30km/h (≈0.42m/Tick,
-    // 20Hz) feuerte der 0.4m-Guard JEDEN Tick → ~11–20Hz Voll-Route-GeoJSON-
-    // Rewrite (setGeoJsonSource), der die native PMTiles-Vektor-Tile-Pipeline
-    // aushungerte → Karte wurde schwarz/lud nicht mehr. 3m → ~3Hz Updates: die
-    // Linie bleibt visuell sauber unterm Puck (Kamera animiert eh smooth), aber
-    // der Renderer hat wieder Luft für die Tiles.
+    // 2026-06-07 (vucko P-map-stops): Guard von 0.4m hoch — der 0.4m-Guard feuerte
+    // bei 30km/h JEDEN Tick → ~20Hz Voll-Route-Rewrite, der die PMTiles-Tile-
+    // Pipeline aushungerte (Karte schwarz). 2026-06-08 (Butterweich): 3m → 1.5m
+    // halbiert die Lücke zwischen Linienkopf und Puck (smoother), OHNE die Push-
+    // Frequenz zu erhöhen — die ist ohnehin durch den _syncLines-Throttle (≤5Hz)
+    // gedeckelt, also kein zusätzliches Schwarz-Risiko.
     if (_remainingRouteCoordinates.isNotEmpty &&
         _remainingRouteCoordinates.length == newRemaining.length) {
       final cur = _remainingRouteCoordinates.first;
       final moved = geo.Geolocator.distanceBetween(
           cur[1], cur[0], projHead[1], projHead[0]);
-      if (moved < 3.0) return false;
+      if (moved < 1.5) return false;
     }
 
     _remainingRouteCoordinates = newRemaining;
