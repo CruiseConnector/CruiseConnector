@@ -508,6 +508,14 @@ class _CruiseModePageState extends State<CruiseModePage>
   double?
   _originalRouteDuration; // Ursprüngliche Gesamtdauer (für Zeitberechnung)
   double? _distanceToFinalTargetMeters;
+  // 2026-06-09 (vucko Trip-Skip): Aktive Zwischenstopps der laufenden A→B-/
+  // Trip-/Wegpunkte-Route ([lng,lat], geplante Reihenfolge) + welche bereits
+  // besucht ODER bewusst übersprungen wurden. Grundlage für Reroutes, die durch
+  // die VERBLEIBENDEN Stopps führen (statt stumm direkt zum Endziel), und fürs
+  // automatische Überspringen: Lässt der Fahrer einen Stopp aus, wird zum
+  // näheren von (nächster verbleibender Stopp | Endziel) gereroutet.
+  List<List<double>> _activeIntermediateWaypoints = const [];
+  final Set<int> _passedWaypointIndices = <int>{};
 
   // Schwellenwerte für Completion-Status. XP basiert auf real gefahrenen km.
   static const double _minProgressForXpCredit =
@@ -902,6 +910,76 @@ class _CruiseModePageState extends State<CruiseModePage>
       along = _routeCumDist[match.index.clamp(0, n - 1)];
     }
     return (along / _routeTotalLenM).clamp(0.0, 1.0);
+  }
+
+  /// 2026-06-09 (vucko Trip-Skip): markiert Zwischenstopps als besucht, sobald
+  /// der Fahrer ≤120 m herankommt. Billig (≤8 Stopps, 1 Distanz je Tick).
+  void _markPassedWaypoints(geo.Position position) {
+    if (_activeIntermediateWaypoints.isEmpty) return;
+    for (var i = 0; i < _activeIntermediateWaypoints.length; i++) {
+      if (_passedWaypointIndices.contains(i)) continue;
+      final wp = _activeIntermediateWaypoints[i];
+      final d = geo.Geolocator.distanceBetween(
+          position.latitude, position.longitude, wp[1], wp[0]);
+      if (d <= 120.0) _passedWaypointIndices.add(i);
+    }
+  }
+
+  /// 2026-06-09 (vucko Trip-Skip): verbleibende Stopps für einen Reroute.
+  /// Regel (User-Spec): Lässt der Fahrer einen Stopp aus, wird automatisch zum
+  /// NÄHEREN von (nächster verbleibender Stopp | Endziel) geroutet — Stopps vor
+  /// dem näheren Ziel gelten als bewusst übersprungen. null = keine Stopps mehr
+  /// (Reroute direkt zum Endziel).
+  List<Map<String, double>>? _remainingWaypointsForReroute(
+    geo.Position position,
+    List<double> destination,
+  ) {
+    if (_activeIntermediateWaypoints.isEmpty) return null;
+    final remaining = <MapEntry<int, List<double>>>[];
+    for (var i = 0; i < _activeIntermediateWaypoints.length; i++) {
+      if (!_passedWaypointIndices.contains(i)) {
+        remaining.add(MapEntry(i, _activeIntermediateWaypoints[i]));
+      }
+    }
+    if (remaining.isEmpty) return null;
+    double distTo(List<double> c) => geo.Geolocator.distanceBetween(
+        position.latitude, position.longitude, c[1], c[0]);
+    final destDist = distTo(destination);
+    var nearestIdx = 0;
+    var nearestDist = double.infinity;
+    for (var i = 0; i < remaining.length; i++) {
+      final d = distTo(remaining[i].value);
+      if (d < nearestDist) {
+        nearestDist = d;
+        nearestIdx = i;
+      }
+    }
+    if (destDist < nearestDist) {
+      // Endziel ist näher als jeder verbleibende Stopp → alle überspringen.
+      for (final e in remaining) {
+        _passedWaypointIndices.add(e.key);
+      }
+      debugPrint(
+        '[CruiseMode] Trip-Skip: Endziel näher als alle Rest-Stopps → direkt zum Ziel.',
+      );
+      return null;
+    }
+    for (var i = 0; i < nearestIdx; i++) {
+      _passedWaypointIndices.add(remaining[i].key);
+    }
+    if (nearestIdx > 0) {
+      debugPrint(
+        '[CruiseMode] Trip-Skip: $nearestIdx Stopp(s) übersprungen, '
+        '${remaining.length - nearestIdx} verbleibend.',
+      );
+    }
+    return [
+      for (var i = nearestIdx; i < remaining.length; i++)
+        {
+          'latitude': remaining[i].value[1],
+          'longitude': remaining[i].value[0],
+        },
+    ];
   }
 
   bool _trimVisibleRouteToProjection(RouteWindowMatch match) {
@@ -6003,6 +6081,8 @@ class _CruiseModePageState extends State<CruiseModePage>
         };
         scenicMode = _selectedDetour != 'Direkt';
         _activeDestinationCoordinate = [destLng, destLat];
+        _activeIntermediateWaypoints = const [];
+        _passedWaypointIndices.clear();
         _activeDetourVariant = detourVariant;
         _activePointToPointScenic = scenicMode;
         _activePointToPointMode = scenicMode ? _selectedStyle : 'Standard';
@@ -6078,6 +6158,11 @@ class _CruiseModePageState extends State<CruiseModePage>
           destinationLatLng.longitude,
           destinationLatLng.latitude,
         ];
+        // 2026-06-09 (vucko Trip-Skip): Stopps für Reroute-durch-Reststopps merken.
+        _activeIntermediateWaypoints = [
+          for (final p in intermediateLatLngs) [p.longitude, p.latitude],
+        ];
+        _passedWaypointIndices.clear();
         _activeDetourVariant = tripDetourVariant;
         _activePointToPointScenic = tripScenic;
         _activePointToPointMode =
@@ -6120,6 +6205,8 @@ class _CruiseModePageState extends State<CruiseModePage>
         }
       } else {
         _activeDestinationCoordinate = null;
+        _activeIntermediateWaypoints = const [];
+        _passedWaypointIndices.clear();
         _activeDetourVariant = 0;
         _activePointToPointScenic = false;
         _activePointToPointMode = 'Standard';
@@ -7395,6 +7482,8 @@ class _CruiseModePageState extends State<CruiseModePage>
       _remainingRouteCoordinates = [];
       _drivenTrailLatLngs = const [];
       _lastDrivenHead = null;
+      _activeIntermediateWaypoints = const [];
+      _passedWaypointIndices.clear();
       _maneuvers = [];
       _activeManeuverIndex = 0;
       _currentRouteIndex = 0;
@@ -8937,6 +9026,8 @@ class _CruiseModePageState extends State<CruiseModePage>
     if (!isOutsideCorridor) {
       if (_trimVisibleRouteToProjection(match)) needsRebuild = true;
     }
+    // 2026-06-09 (vucko Trip-Skip): besuchte Zwischenstopps abhaken.
+    _markPassedWaypoints(position);
 
     // Prüfe ob Route zu Ende ist
     final lastIndex = _fullRouteCoordinates.length - 1;
@@ -10147,6 +10238,11 @@ class _CruiseModePageState extends State<CruiseModePage>
               ? _fullRouteCoordinates.last
               : null);
       if (!_isRoundTrip && destination != null && !accessLegMode) {
+        // 2026-06-09 (vucko Trip-Skip): Reroute führt durch die VERBLEIBENDEN
+        // Zwischenstopps (übersprungene werden automatisch abgehakt) statt
+        // stumm direkt zum Endziel.
+        final rerouteWaypoints =
+            _remainingWaypointsForReroute(position, destination);
         final destinationRerouteSeed = Object.hash(
           destination[0].round(),
           destination[1].round(),
@@ -10172,6 +10268,7 @@ class _CruiseModePageState extends State<CruiseModePage>
             currentHeadingDegrees: heading,
             currentSpeedMetersPerSecond: rerouteSpeedMps,
             locationAccuracyMeters: rerouteAccuracyMeters,
+            intermediateWaypoints: rerouteWaypoints,
           );
         } catch (e) {
           debugPrint('[CruiseMode] Direkter Ziel-Reroute fehlgeschlagen: $e');
@@ -10222,6 +10319,7 @@ class _CruiseModePageState extends State<CruiseModePage>
                 currentHeadingDegrees: heading,
                 currentSpeedMetersPerSecond: rerouteSpeedMps,
                 locationAccuracyMeters: rerouteAccuracyMeters,
+                intermediateWaypoints: rerouteWaypoints,
               );
               if (forced.coordinates.length >= 2) acceptedDest = forced;
             } catch (e) {

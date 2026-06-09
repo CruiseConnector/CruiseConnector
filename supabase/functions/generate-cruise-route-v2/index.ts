@@ -142,6 +142,13 @@ interface RouteRequest {
   detourLevel?: number;
   // 2026-05-22 (Task #42): Explicit user-waypoints (zwischen start + end)
   waypoints?: Array<{ latitude: number; longitude: number }>;
+  // 2026-06-09 (vucko U-Turn-Fix): Reroute während der Fahrt — der Client
+  // schickt seine Fahrtrichtung mit. Wird als GraphHopper-`heading` am
+  // Startpunkt durchgereicht → die neue Route startet IN Fahrtrichtung,
+  // keine Einbiegungen, die sofort einen U-Turn verlangen.
+  reroute_request?: boolean;
+  moving_start?: boolean;
+  current_heading?: number;
 }
 
 // Normalisierung: ergänzt fehlende v2-Felder aus den Flutter-Aliassen
@@ -430,6 +437,11 @@ async function callGraphHopper(opts: {
   detourPerpendicularKm?: number;
   // Custom waypoints (zwischen start + end, in order)
   intermediateWaypoints?: Array<{ lat: number; lng: number }>;
+  // 2026-06-09 (vucko U-Turn-Fix): Fahrtrichtung am Startpunkt (Grad, 0=Nord).
+  // GraphHopper bevorzugt damit Routen, die IN Fahrtrichtung starten —
+  // verhindert Reroutes, die mit einer Wende/U-Turn beginnen. ch.disable ist
+  // ohnehin global true (custom_model) → heading wird ehrt.
+  headingDeg?: number;
   // 2026-06-02 (vucko): externes Abbruch-Signal (Round-Trip-Racer bricht die
   // nicht mehr benötigten Verlierer-Calls ab) + optionaler Per-Call-Timeout.
   signal?: AbortSignal;
@@ -477,6 +489,13 @@ async function callGraphHopper(opts: {
     // road_class/road_environment Details für echte Autobahn-Erkennung in meta.
     details: ['road_class', 'road_environment'],
   };
+  // 2026-06-09 (vucko U-Turn-Fix): EIN heading-Wert = gilt für den Startpunkt
+  // (GH-Doku). heading_penalty 120s: gegen die Fahrtrichtung starten kostet
+  // 2 Fahrminuten → nur wenn es WIRKLICH keine Alternative gibt, dreht GH um.
+  if (!opts.isRoundTrip && opts.headingDeg != null && Number.isFinite(opts.headingDeg)) {
+    ghBody.heading = [((Math.round(opts.headingDeg) % 360) + 360) % 360];
+    ghBody.heading_penalty = 120;
+  }
   if (opts.isRoundTrip) {
     ghBody.algorithm = 'round_trip';
     if (opts.targetDistanceKm) {
@@ -1041,6 +1060,8 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
           avoidHighways: req.avoid_highways ?? false,
           serverUrl,
           intermediateWaypoints: wps,
+          // 2026-06-09 (vucko U-Turn-Fix): Reroute startet in Fahrtrichtung.
+          headingDeg: req.reroute_request === true ? req.current_heading : undefined,
         });
         if (!('error' in result)) {
           return [{ result, seed: attempt }];
@@ -1094,6 +1115,11 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
               isRoundTrip: false,
               avoidHighways: req.avoid_highways ?? false,
               serverUrl,
+              // Heading nur fürs ERSTE Segment (= Fahrzeugposition); an den
+              // Zwischenstopps ist die Ankunftsrichtung unbekannt.
+              headingDeg: segIdx === 0 && req.reroute_request === true
+                ? req.current_heading
+                : undefined,
             }),
           ),
         );
@@ -1143,47 +1169,67 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
     }
     if (detourSpec.length === 0) {
       // Direkter A→B (detourLevel 0) — 2026-05-23 (vucko Task #13):
-      // Parallel 5 calls mit verschiedenen Start/End-Snap-Offsets.
-      // Behebt Bodensee-Bug wo Start (Friedrichshafen-Hafen) oder Ziel
-      // im Wasser/auf Ferry-Anleger landet. Best-of-N pickt dann die
-      // beste Route.
-      // 2026-05-23 (vucko Bug-Fix Lindau-Insel): zusätzlich zur kleinen
-      // Snap-Variante (130m) auch große Offsets (1.1km) für Inseln/Häfen.
-      const directVariants: Array<{
-        sLatOff: number;
-        sLngOff: number;
-        eLatOff: number;
-        eLngOff: number;
-      }> = [
-        { sLatOff: 0, sLngOff: 0, eLatOff: 0, eLngOff: 0 },         // Original
-        { sLatOff: 0.0014, sLngOff: 0, eLatOff: 0, eLngOff: 0 },
-        { sLatOff: 0, sLngOff: 0.0014, eLatOff: 0, eLngOff: 0 },
-        { sLatOff: 0, sLngOff: 0, eLatOff: 0.0014, eLngOff: 0 },
-        { sLatOff: 0, sLngOff: 0, eLatOff: 0, eLngOff: 0.0014 },
-        // Große Offsets (~1.1km) für Insel/Hafen-Punkte (Lindau, Mainau).
-        { sLatOff: 0.010, sLngOff: 0, eLatOff: 0, eLngOff: 0 },
-        { sLatOff: -0.010, sLngOff: 0, eLatOff: 0, eLngOff: 0 },
-        { sLatOff: 0, sLngOff: 0.010, eLatOff: 0, eLngOff: 0 },
-        { sLatOff: 0, sLngOff: -0.010, eLatOff: 0, eLngOff: 0 },
-        { sLatOff: 0, sLngOff: 0, eLatOff: 0.010, eLngOff: 0 },
-        { sLatOff: 0, sLngOff: 0, eLatOff: -0.010, eLngOff: 0 },
-        { sLatOff: 0, sLngOff: 0, eLatOff: 0, eLngOff: 0.010 },
-        { sLatOff: 0, sLngOff: 0, eLatOff: 0, eLngOff: -0.010 },
+      // Snap-Offset-Varianten gegen „Punkt im Wasser/Hafen"-Fails.
+      //
+      // 2026-06-09 (vucko A→B-Endpunkt-Fix): GESTUFT statt alle 13 parallel.
+      // Vorher konnten Varianten mit ZIEL-Offset bis ±1.1km gewinnen, obwohl
+      // das exakte Ziel erreichbar war → die Route endete sichtbar NEBEN/HINTER
+      // dem Zielmarker (Bregenz→Götzis-Bug). Jetzt: Phase A = exaktes Ziel
+      // (nur Start-Snap-Varianten). Nur wenn ALLE scheitern, Phase B mit
+      // kleinen Ziel-Offsets (~150m), zuletzt Phase C mit großen Offsets
+      // (~1.1km, Insel/Hafen-Rettung wie Lindau/Mainau).
+      const heading = req.reroute_request === true ? req.current_heading : undefined;
+      const phases: Array<Array<{
+        sLatOff: number; sLngOff: number; eLatOff: number; eLngOff: number;
+      }>> = [
+        [ // Phase A: Ziel EXAKT, Start-Snap-Varianten
+          { sLatOff: 0, sLngOff: 0, eLatOff: 0, eLngOff: 0 },
+          { sLatOff: 0.0014, sLngOff: 0, eLatOff: 0, eLngOff: 0 },
+          { sLatOff: 0, sLngOff: 0.0014, eLatOff: 0, eLngOff: 0 },
+          { sLatOff: 0.010, sLngOff: 0, eLatOff: 0, eLngOff: 0 },
+          { sLatOff: -0.010, sLngOff: 0, eLatOff: 0, eLngOff: 0 },
+          { sLatOff: 0, sLngOff: 0.010, eLatOff: 0, eLngOff: 0 },
+          { sLatOff: 0, sLngOff: -0.010, eLatOff: 0, eLngOff: 0 },
+        ],
+        [ // Phase B: kleine Ziel-Offsets (~150m)
+          { sLatOff: 0, sLngOff: 0, eLatOff: 0.0014, eLngOff: 0 },
+          { sLatOff: 0, sLngOff: 0, eLatOff: 0, eLngOff: 0.0014 },
+          { sLatOff: 0, sLngOff: 0, eLatOff: -0.0014, eLngOff: 0 },
+          { sLatOff: 0, sLngOff: 0, eLatOff: 0, eLngOff: -0.0014 },
+        ],
+        [ // Phase C: große Ziel-Offsets (~1.1km) — Insel/Hafen-Rettung
+          { sLatOff: 0, sLngOff: 0, eLatOff: 0.010, eLngOff: 0 },
+          { sLatOff: 0, sLngOff: 0, eLatOff: -0.010, eLngOff: 0 },
+          { sLatOff: 0, sLngOff: 0, eLatOff: 0, eLngOff: 0.010 },
+          { sLatOff: 0, sLngOff: 0, eLatOff: 0, eLngOff: -0.010 },
+        ],
       ];
-      return await Promise.all(
-        directVariants.map((v, idx) =>
-          callGraphHopper({
-            startLat: req.start_location!.latitude + v.sLatOff,
-            startLng: req.start_location!.longitude + v.sLngOff,
-            endLat: req.target_location!.latitude + v.eLatOff,
-            endLng: req.target_location!.longitude + v.eLngOff,
-            profile: profileToUse,
-            isRoundTrip: false,
-            avoidHighways: req.avoid_highways ?? false,
-            serverUrl,
-          }).then(result => ({ result, seed: idx })),
-        ),
-      );
+      let lastResults: Array<{ result: RouteResult | { error: string }; seed: number }> = [];
+      for (let p = 0; p < phases.length; p++) {
+        const results = await Promise.all(
+          phases[p].map((v, idx) =>
+            callGraphHopper({
+              startLat: req.start_location!.latitude + v.sLatOff,
+              startLng: req.start_location!.longitude + v.sLngOff,
+              endLat: req.target_location!.latitude + v.eLatOff,
+              endLng: req.target_location!.longitude + v.eLngOff,
+              profile: profileToUse,
+              isRoundTrip: false,
+              avoidHighways: req.avoid_highways ?? false,
+              serverUrl,
+              headingDeg: heading,
+            }).then(result => ({ result, seed: p * 16 + idx })),
+          ),
+        );
+        if (results.some(r => !('error' in r.result))) {
+          if (p > 0) {
+            console.log(`Direct A→B: exact-end phase(s) failed, phase ${p} (end-offset) succeeded`);
+          }
+          return results;
+        }
+        lastResults = results;
+      }
+      return lastResults;
     }
     // detourLevel > 0: parallel mit verschiedenen Sub-Waypoint-Positionen
     return await Promise.all(
@@ -1199,6 +1245,8 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
           serverUrl,
           detourBearingDeg: spec.bearing,
           detourPerpendicularKm: spec.distKm,
+          // 2026-06-09 (vucko U-Turn-Fix): Reroute startet in Fahrtrichtung.
+          headingDeg: req.reroute_request === true ? req.current_heading : undefined,
         }).then(result => ({ result, seed: idx })),
       ),
     );

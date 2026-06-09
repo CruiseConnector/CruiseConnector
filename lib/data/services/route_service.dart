@@ -3612,6 +3612,78 @@ class RouteService {
     final maneuvers = extractManeuvers(data, coordinates);
     final speedLimits = _extractSpeedLimits(data, coordinates);
 
+    // 2026-06-09 (vucko A→B-Endpunkt): GraphHopper kann das Ziel auf einen
+    // Straßenpunkt HINTER dem Ziel snappen → die Route fährt sichtbar am
+    // Zielmarker VORBEI und endet erst dahinter (Bregenz→Götzis-Bug). Der
+    // Validator akzeptierte das, weil IRGENDEIN Punkt der letzten 30 nah genug
+    // war. Fix: Überschuss-Tail hinter dem zielnächsten Punkt abschneiden —
+    // die Route endet damit IMMER an der engsten Annäherung ans Ziel.
+    // Loop-sicher: Wegpunkte-Rundkurse (Ende==Ziel) werden nie beschnitten,
+    // weil ihr Ende nicht weiter weg ist als die engste Annäherung (+80m-Guard).
+    var effCoordinates = coordinates;
+    var effManeuvers = maneuvers;
+    var effSpeedLimits = speedLimits;
+    var effGeometry = geometry;
+    var effDistanceRaw = distanceRaw;
+    var effDurationRaw = durationRaw;
+    var effDistanceKm = distanceKmActual;
+    if (routeType == 'POINT_TO_POINT') {
+      final targetLoc =
+          (body['target_location'] ?? body['targetLocation']) as Map?;
+      final destLat = (targetLoc?['latitude'] as num?)?.toDouble();
+      final destLng = (targetLoc?['longitude'] as num?)?.toDouble();
+      if (destLat != null && destLng != null) {
+        final trim = _overshootTrimForDestination(coordinates, destLat, destLng);
+        if (trim != null) {
+          final cutIndex = trim.cutIndex;
+          effCoordinates = trim.coordinates;
+          effGeometry = Map<String, dynamic>.from(geometry)
+            ..['coordinates'] = effCoordinates;
+          // Manöver hinter dem Schnitt verwerfen; Ziel-Ankunft ans neue Ende.
+          final kept = maneuvers
+              .where((m) => m.routeIndex <= cutIndex && !m.isArrival)
+              .toList(growable: true);
+          RouteManeuver? originalArrive;
+          for (final m in maneuvers) {
+            if (m.isArrival) originalArrive = m;
+          }
+          kept.add(RouteManeuver(
+            latitude: effCoordinates.last[1],
+            longitude: effCoordinates.last[0],
+            routeIndex: cutIndex,
+            icon: originalArrive?.icon ?? Icons.flag,
+            announcement:
+                originalArrive?.announcement ?? 'Sie haben Ihr Ziel erreicht',
+            instruction: originalArrive?.instruction ?? 'Ziel erreicht',
+          ));
+          effManeuvers = kept;
+          effSpeedLimits = [
+            for (final s in speedLimits)
+              if (s.startIndex <= cutIndex)
+                SpeedLimitSegment(
+                  startIndex: s.startIndex,
+                  endIndex: math.min(s.endIndex, cutIndex),
+                  speedKmh: s.speedKmh,
+                ),
+          ];
+          if (distanceRaw != null && distanceRaw > 0) {
+            final newDistance =
+                math.max(0.0, distanceRaw - trim.removedMeters);
+            if (durationRaw != null && durationRaw > 0) {
+              effDurationRaw = durationRaw * (newDistance / distanceRaw);
+            }
+            effDistanceRaw = newDistance;
+            effDistanceKm = newDistance / 1000.0;
+          }
+          edgeMeta['overshoot_trimmed_m'] = trim.removedMeters.round();
+          debugPrint(
+            '[RouteService] A→B Overshoot-Trim: ${trim.removedMeters.toStringAsFixed(0)}m '
+            'Tail hinter dem Ziel entfernt (cut@$cutIndex/${coordinates.length})',
+          );
+        }
+      }
+    }
+
     debugPrint(
       '[RouteService] Route OK: ${coordinates.length} Punkte, ${distanceKmActual?.toStringAsFixed(1)} km (Mapbox: ${distanceRaw?.toStringAsFixed(0)} m)',
     );
@@ -3648,14 +3720,14 @@ class RouteService {
     }
 
     final routeResult = RouteResult(
-      geoJson: json.encode(geometry),
-      geometry: geometry,
-      coordinates: coordinates,
-      maneuvers: maneuvers,
-      distanceMeters: distanceRaw,
-      durationSeconds: durationRaw,
-      distanceKm: distanceKmActual,
-      speedLimits: speedLimits,
+      geoJson: json.encode(effGeometry),
+      geometry: effGeometry,
+      coordinates: effCoordinates,
+      maneuvers: effManeuvers,
+      distanceMeters: effDistanceRaw,
+      durationSeconds: effDurationRaw,
+      distanceKm: effDistanceKm,
+      speedLimits: effSpeedLimits,
       edgeMeta: edgeMeta,
     );
     _sessionCache[cacheKey] = routeResult;
@@ -5160,6 +5232,55 @@ class RouteService {
           1.04,
     );
     return actualDistanceKm >= rescueMinKm && actualDistanceKm <= rescueMaxKm;
+  }
+
+  /// 2026-06-09 (vucko A→B-Endpunkt): Findet den zielnächsten Punkt im END-
+  /// Fenster der Route und liefert die am ihm abgeschnittene Geometrie, wenn
+  /// die Route danach ECHT am Ziel vorbeifährt (Tail ≥120 m UND Routen-Ende
+  /// deutlich weiter vom Ziel entfernt als die engste Annäherung +80 m).
+  /// Loop-sicher: bei Wegpunkte-Rundkursen (Ende==Ziel) greift der +80 m-Guard
+  /// nie → kein Schnitt. Suchfenster nur das letzte Viertel (min. 30 Punkte),
+  /// damit frühe Zielnähe-Passagen einer Schleife nicht angeschnitten werden.
+  ({List<List<double>> coordinates, int cutIndex, double removedMeters})?
+      _overshootTrimForDestination(
+    List<List<double>> coords,
+    double destLat,
+    double destLng,
+  ) {
+    if (coords.length < 3) return null;
+    final windowStart =
+        math.max(0, coords.length - math.max(30, coords.length ~/ 4)) as int;
+    var bestIdx = coords.length - 1;
+    var bestMeters = double.infinity;
+    for (int i = windowStart; i < coords.length; i++) {
+      final c = coords[i];
+      if (c.length < 2) continue;
+      final d = geo.Geolocator.distanceBetween(c[1], c[0], destLat, destLng);
+      if (d < bestMeters) {
+        bestMeters = d;
+        bestIdx = i;
+      }
+    }
+    if (bestIdx >= coords.length - 1) return null;
+    final last = coords.last;
+    final endMeters =
+        geo.Geolocator.distanceBetween(last[1], last[0], destLat, destLng);
+    if (endMeters <= bestMeters + 80.0) return null;
+    var tailMeters = 0.0;
+    for (var i = bestIdx; i < coords.length - 1; i++) {
+      tailMeters += geo.Geolocator.distanceBetween(
+        coords[i][1],
+        coords[i][0],
+        coords[i + 1][1],
+        coords[i + 1][0],
+      );
+    }
+    if (tailMeters < 120.0) return null;
+    return (
+      coordinates: coords.sublist(0, bestIdx + 1),
+      cutIndex: bestIdx,
+      removedMeters: tailMeters,
+    );
   }
 
   bool _pointToPointDestinationReached(
