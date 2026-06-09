@@ -465,6 +465,10 @@ class _HomeContentPageState extends State<HomeContentPage>
                           fontSize: 32,
                           fontWeight: FontWeight.bold,
                         ),
+                        // 2026-06-09 (vucko Audit T3-C): maxLines:1 — ohne das war
+                        // ellipsis in der unbeschränkten Column wirkungslos (Overflow
+                        // bei langen Namen auf schmalen Screens).
+                        maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
                     ],

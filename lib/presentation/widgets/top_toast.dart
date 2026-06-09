@@ -151,6 +151,10 @@ class _TopToastWidgetState extends State<_TopToastWidget>
                   Expanded(
                     child: Text(
                       widget.message,
+                      // 2026-06-09 (vucko Audit T3-A): lange Meldungen kappen statt
+                      // unbegrenzt wachsen / horizontal überlaufen.
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
                         color: Colors.white,
                         fontSize: 14.5,

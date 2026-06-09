@@ -240,6 +240,10 @@ class OfflineMapService {
     // Quelle gewechselt → Cache-Verzeichnis neu auflösen (getrennt pro Quelle).
     _tileCacheDirectory = null;
     _tileCacheDirectoryFuture = null;
+    // 2026-06-09 (vucko Audit T2-K): In-Flight-Dedup-Set leeren. Die Keys sind
+    // quellen-AGNOSTISCH (z/x/y) — nach dem Quellenwechsel hätten sie sonst die
+    // gleiche Kachel von der NEUEN Quelle blockiert (fehlende Kachel).
+    _inflightTileFetches.clear();
   }
 
   /// 2026-05-28 (vucko Task #70): Mapbox-Dark-V11-Hintergrundfarbe.

@@ -836,13 +836,18 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
     final map = _map;
     if (map == null) return;
     try {
+      // 2026-06-09 (vucko Audit T1-E): die Marker-Liste EINMAL fixieren (vor dem
+      // await) und danach NUR diese Referenz indizieren + i<pts.length prüfen.
+      // Vorher las die Schleife widget.markers nach dem await neu → schrumpfte das
+      // Eltern-Widget die Liste, gab es einen IndexOutOfRange-Crash.
+      final markers = widget.markers;
       final pts = await map.toScreenLocationBatch(
-        widget.markers
+        markers
             .map((m) => mb.LatLng(m.position.latitude, m.position.longitude)),
       );
       final next = <String, Offset>{};
-      for (var i = 0; i < widget.markers.length; i++) {
-        next[widget.markers[i].id] =
+      for (var i = 0; i < markers.length && i < pts.length; i++) {
+        next[markers[i].id] =
             Offset(pts[i].x.toDouble(), pts[i].y.toDouble());
       }
       if (mounted) {

@@ -77,7 +77,13 @@ class GeocodingService {
     // KEIN Zeichenlimit - sofort suchen ab 1 Zeichen
     if (query.isEmpty) return const [];
     final searchQuery = _normalizePoiSearchAlias(query);
-    final cacheKey = '$searchQuery|$countryCodes|$limit';
+    // 2026-06-09 (vucko Audit T2-D): Proximity in den Cache-Key — sonst lieferte die
+    // gleiche Anfrage aus Wien vs. Dornbirn die Wien-gerankten/-distanzierten Treffer.
+    // 3 Nachkommastellen (~110m) = grob genug für gute Cache-Trefferquote, fein genug
+    // um verschiedene Orte zu trennen.
+    final cacheKey = '$searchQuery|$countryCodes|$limit|'
+        '${proximityLatitude?.toStringAsFixed(3) ?? "n"},'
+        '${proximityLongitude?.toStringAsFixed(3) ?? "n"}';
     final cached = _suggestCache[cacheKey];
     if (cached != null) return cached; // Cache-Treffer → sofort, kein Netz
 
@@ -268,7 +274,15 @@ class GeocodingService {
     final response =
         await http.get(retrieveUri).timeout(const Duration(seconds: 3));
     if (response.statusCode != 200) return null;
-    final data = json.decode(response.body) as Map<String, dynamic>;
+    // 2026-06-09 (vucko Audit T1-B): defensiv parsen — ein 200 mit fehlerhaftem
+    // Body warf sonst eine unbehandelte FormatException (Autocomplete-Crash),
+    // konsistent mit den Geschwister-Methoden.
+    final Map<String, dynamic> data;
+    try {
+      data = json.decode(response.body) as Map<String, dynamic>;
+    } catch (_) {
+      return null;
+    }
     final features = data['features'] as List? ?? const [];
     if (features.isEmpty || features.first is! Map<String, dynamic>) {
       return null;
@@ -479,9 +493,11 @@ class GeocodingService {
         .toList();
     if (tokens.isEmpty) return false;
     final top = _normalizeAddressText(geocodingSuggestions.first.placeName);
-    // Wichtigstes Stichwort fehlt im besten v5-Treffer → POI nicht erkannt,
-    // die dedizierte POI-Suche übernimmt.
-    return !top.contains(tokens.first);
+    // 2026-06-09 (vucko Audit T3-F): nur die teure Zweit-Anfrage (SearchBox)
+    // feuern, wenn der beste v5-Treffer KEINEN der signifikanten Tokens enthält
+    // (vorher reichte das Fehlen des ERSTEN Tokens → feuerte zu eifrig bei z.B.
+    // „Spar Hohenems", wo „hohenems" sehr wohl matcht).
+    return !tokens.any(top.contains);
   }
 
   static String _sanitizeSearchPath(String value) =>

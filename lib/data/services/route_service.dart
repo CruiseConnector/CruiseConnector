@@ -1559,8 +1559,11 @@ class RouteService {
     // ist start==ziel ABSICHTLICH (die Schleife läuft über die Stopps zurück
     // zum Start). Ohne diese Ausnahme feuerte der Guard IMMER und blockierte
     // den kompletten Standard-Wegpunkte-Modus mit „Endpunkt zu nah am Start".
-    final hasIntermediateStops =
-        intermediateWaypoints != null && intermediateWaypoints.isNotEmpty;
+    // 2026-06-09 (vucko Audit T1-N): Eine ÜBERGEBENE (auch leere) Stopp-Liste
+    // signalisiert den Wegpunkte-/Rundkurs-als-P2P-Modus, in dem start==ziel
+    // ABSICHT ist. Vorher feuerte der „zu nah"-Guard bei einer leeren `[]`-Liste
+    // fälschlich (empty != null). `!= null` statt `isNotEmpty`.
+    final hasIntermediateStops = intermediateWaypoints != null;
     if (startToDestinationMeters < 250 && !hasIntermediateStops) {
       throw const RouteServiceException(
         type: RouteErrorType.validation,
@@ -2920,11 +2923,11 @@ class RouteService {
     final slicedCoordinates = shouldWrap
         ? <List<double>>[
             ...route.coordinates.sublist(clampedStart).map(_copyCoordinate),
+            // 2026-06-09 (vucko Audit T1-A): vorher sublist(1, clampedStart+1) →
+            // ließ coord[0] FALLEN und dupliziert coord[clampedStart] → kaputter
+            // rotierter Loop. Korrekt: der Kopf-Teil ist [0 .. clampedStart-1].
             ...route.coordinates
-                .sublist(
-                  1,
-                  math.min(clampedStart + 1, route.coordinates.length),
-                )
+                .sublist(0, clampedStart)
                 .map(_copyCoordinate),
           ]
         : route.coordinates
@@ -3017,7 +3020,6 @@ class RouteService {
     final combinedCoordinates = <List<double>>[];
     final combinedManeuvers = <RouteManeuver>[];
     final combinedSpeedLimits = <SpeedLimitSegment>[];
-    var routeIndexOffset = 0;
     var distanceMeters = 0.0;
     var durationSeconds = 0.0;
 
@@ -3025,6 +3027,14 @@ class RouteService {
       final coordinates = segment.coordinates
           .map(_copyCoordinate)
           .toList(growable: true);
+      // 2026-06-09 (vucko Audit T1-L): Manöver-/Speed-Indizes KORREKT mappen —
+      // unter Berücksichtigung des Naht-Dedup. `base` = globaler Index, an dem die
+      // (ggf. um den Duplikat-Anfangspunkt gekürzten) Segment-Koordinaten beginnen.
+      // Ein lokaler Index i des ORIGINAL-Segments liegt global bei
+      // base + (i - droppedFirst). Der frühere `routeIndexOffset = length - 1`
+      // stimmte NUR im Dedup-Fall, ein nacktes `length` NUR ohne Dedup → beides
+      // war off-by-one im jeweils anderen Fall. Diese Form ist in beiden korrekt.
+      var droppedFirst = 0;
       if (combinedCoordinates.isNotEmpty &&
           coordinates.isNotEmpty &&
           _distanceBetweenCoordinates(
@@ -3033,22 +3043,25 @@ class RouteService {
               ) <=
               30.0) {
         coordinates.removeAt(0);
+        droppedFirst = 1;
       }
+      final base = combinedCoordinates.length;
+      int mapIndex(int local) => math.max(0, base + local - droppedFirst);
 
       combinedCoordinates.addAll(coordinates);
       combinedManeuvers.addAll(
         segment.maneuvers.map(
           (maneuver) => _copyManeuver(
             maneuver,
-            routeIndex: maneuver.routeIndex + routeIndexOffset,
+            routeIndex: mapIndex(maneuver.routeIndex),
           ),
         ),
       );
       combinedSpeedLimits.addAll(
         segment.speedLimits.map(
           (speedLimit) => SpeedLimitSegment(
-            startIndex: speedLimit.startIndex + routeIndexOffset,
-            endIndex: speedLimit.endIndex + routeIndexOffset,
+            startIndex: mapIndex(speedLimit.startIndex),
+            endIndex: mapIndex(speedLimit.endIndex),
             speedKmh: speedLimit.speedKmh,
           ),
         ),
@@ -3057,7 +3070,6 @@ class RouteService {
           segment.distanceMeters ??
           _distanceAlongCoordinates(segment.coordinates);
       durationSeconds += segment.durationSeconds ?? 0.0;
-      routeIndexOffset = math.max(0, combinedCoordinates.length - 1);
     }
 
     final geometry = <String, dynamic>{
@@ -3510,6 +3522,17 @@ class RouteService {
       );
     }
 
+    // 2026-06-09 (vucko Audit T1-G): Typ-Guard vor dem Cast — ein nicht-null,
+    // nicht-Map `route` (z.B. fehlerhafte API-Antwort) warf vorher einen
+    // unbehandelten CastException → Crash beim P2P-Parsen.
+    if (data['route'] is! Map) {
+      throw RouteServiceException(
+        type: RouteErrorType.parsing,
+        userMessage: 'Die Route hat ein ungültiges Format.',
+        debugMessage: 'route is ${data['route'].runtimeType}',
+        statusCode: statusCode,
+      );
+    }
     final route = data['route'] as Map;
     if (route['geometry'] == null) {
       throw RouteServiceException(
@@ -4853,12 +4876,15 @@ class RouteService {
     // ABER explosionssicher: der Reject kippt NUR `accepted` + schließt den
     // Kandidaten vom bestRejected-Notnagel aus — er verursacht KEINE zusätzlichen
     // Edge-Calls (maxAttempts ist gedeckelt). Gibt es nur Auslandsrouten →
-    // klarer noRoute statt einer Pass-pflichtigen Route. Schwelle 0.06 toleriert
-    // Box-Rauschen an der Grenze, kippt aber jeden echten Übertritt.
+    // klarer noRoute statt einer Pass-pflichtigen Route.
+    // 2026-06-09 (vucko Audit T2-A): Schwelle 0.06 → 0.10. 6-7% „Ausland" aus
+    // Box-Rauschen an gezackten Grenzen (Vorarlberg/Konstanz/Götzis) kippte legitime
+    // INLAND-Routen fälschlich auf noRoute. Echte Grenzübertritte liegen klar bei
+    // 20%+ → 0.10 toleriert das Rauschen, fängt aber jeden echten Übertritt.
     final bool countryRejected =
         scenario.countryPreference == CountryPreference.onlyHome &&
         scenario.homeCountryCode != null &&
-        foreignFraction > 0.06;
+        foreignFraction > 0.10;
     final baseTier = _preferredTier(classification.tier, edgeTier);
     final effectiveTier = forceDirectAcceptable && !softRenderable
         ? RouteQualityTier.acceptable
@@ -8540,7 +8566,16 @@ class RouteService {
       if (interval is List && interval.isNotEmpty) {
         coordIdx = (interval[0] as num?)?.toInt() ?? 0;
       }
-      coordIdx = coordIdx.clamp(0, routeCoordinates.length - 1);
+      // 2026-06-09 (vucko Audit T2-F): out-of-range NICHT stumm auf den letzten
+      // Punkt klemmen — das stapelte Manöver am Routenende und maskierte einen
+      // Geometrie-/Instruktions-Versatz. Stattdessen überspringen + loggen.
+      if (coordIdx < 0 || coordIdx >= routeCoordinates.length) {
+        debugPrint(
+          '[RouteService] Manöver-Index $coordIdx außerhalb '
+          '${routeCoordinates.length} — übersprungen',
+        );
+        continue;
+      }
       final c = routeCoordinates[coordIdx];
       if (c.length < 2) continue;
       final lng = c[0];
