@@ -221,6 +221,7 @@ class CruiseMapLibreMap extends StatefulWidget {
     this.rotateGestures = true,
     this.styleAsset = 'assets/map/cruise_dark.json',
     this.activeRoutePoints = const [],
+    this.drivenTrailPoints = const [],
     this.routeProgress = 0.0,
     this.routeColor = const Color(0xFFFF4438),
   });
@@ -240,6 +241,13 @@ class CruiseMapLibreMap extends StatefulWidget {
   // Route. Statt die getrimmte Geometrie pro Frame neu zu pushen, bleibt die
   // Geometrie statisch und nur ein line-gradient (GPU) „frisst" sie am Puck auf.
   final List<ll.LatLng> activeRoutePoints;
+  // 2026-06-09 (vucko Voll-Route-Sichtbar): der bereits ABGEFAHRENE Teil (ein
+  // begrenztes Fenster HINTER dem Puck). Wird als grauer „Driven-Trail" ÜBER der
+  // (statischen, vollen) roten Route gezeichnet → „frisst" sie hinter dem Puck
+  // grau auf. So bleibt die volle Reststrecke IMMER kräftig rot sichtbar
+  // (kein 3km-Abschnitt mehr, der wie „kaputt/abgeschnitten" aussieht), während
+  // der scharfe Schnitt am Puck erhalten bleibt (Apple/Google-Look).
+  final List<ll.LatLng> drivenTrailPoints;
   final double routeProgress;
   final Color routeColor;
 
@@ -292,6 +300,16 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
   // _activeMainLayerId = die rote Füllung darüber. (IDs aus Kompatibilität.)
   static const String _activeGlowLayerId = 'cruise-route-active-glow';
   static const String _activeMainLayerId = 'cruise-route-active-main';
+  // 2026-06-09 (vucko Voll-Route-Sichtbar): grauer „Driven-Trail" ÜBER der roten
+  // Route — frisst den abgefahrenen Teil hinter dem Puck grau auf. Eigene Quelle +
+  // Casing/Füllung (gleiche Breiten wie Rot), damit der abgefahrene Teil exakt wie
+  // die rote Linie aussieht, nur grau. Liegt z-mäßig ÜBER _activeMainLayerId.
+  static const String _drivenSrcId = 'cruise-route-driven';
+  static const String _drivenCasingLayerId = 'cruise-route-driven-casing';
+  static const String _drivenFillLayerId = 'cruise-route-driven-fill';
+  // Gedämpftes Grau für „schon gefahren" — klar als erledigt lesbar, ohne mit der
+  // roten Rest-Route zu konkurrieren.
+  static const Color _drivenFillColor = Color(0xFF6E7178);
   // 2026-06-08 (vucko Leitstrich-Premium): dunkle Kontur-Farbe (entsättigtes
   // Rot-Braun) → liest sich als Schatten-Rand, hebt die rote Linie klar vom
   // dunklen Map-Hintergrund ab (Apple/Google-Maps-Look).
@@ -307,6 +325,7 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
     10, 3.2, 14, 5.6, 16, 7.6, 18, 10.4, 22, 15.2,
   ];
   String _lastActiveSig = '';
+  String _lastDrivenSig = '';
   // View-/quellen-abhängige Calls (setGeoJsonSource, toScreenLocationBatch) erst
   // NACH dem ersten gerenderten Frame (onCameraIdle) feuern — nicht direkt im
   // onStyleLoaded, solange Renderer/Tiles noch nicht idle sind (sonst Throw).
@@ -393,6 +412,7 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
       // 2026-06-08 (vucko Sharp-Cut): aktive Route = am Puck geschnittene
       // Reststrecke; bei Geometrie-Wechsel neu pushen (kein Gradient mehr).
       _syncActiveRoute();
+      _syncDrivenTrail();
       _projectMarkers();
     }
   }
@@ -455,7 +475,17 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
       WidgetsBinding.instance.addPostFrameCallback((_) async {
         if (!mounted || !_appResumed || !_visible) return;
         await _ensureLineLayer();
-        if (mounted) _syncLines();
+        if (!mounted) return;
+        // 2026-06-09 (vucko Voll-Route-Sichtbar): die Quellen wurden beim Reload
+        // neu (leer) angelegt → ALLE Signaturen invalidieren, sonst bliebe die
+        // statische rote Voll-Route (deren Signatur sich während der Fahrt NIE
+        // ändert) nach einem Style-Reload für immer leer.
+        _lastLinesSig = '';
+        _lastActiveSig = '';
+        _lastDrivenSig = '';
+        _syncLines();
+        _syncActiveRoute();
+        _syncDrivenTrail();
       });
     }
     // 2026-06-05 (vucko Crash-Fix #2): KEINE native Style-/Quellen-/Layer-/View-
@@ -580,6 +610,51 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
             lineCap: 'round',
           ),
         );
+        if (!mounted) return;
+      }
+      // 2026-06-09 (vucko Voll-Route-Sichtbar): grauer Driven-Trail GANZ OBEN.
+      // Eigene Quelle (kein lineMetrics nötig). Casing + Füllung in denselben
+      // Breiten wie Rot → deckt die rote Linie hinter dem Puck deckend grau ab.
+      // Der scharfe Schnitt entsteht an der Geometrie-Kante am Puck (Kopf des
+      // Trails = Puck-Projektion). Existenz-geprüft (kein Redundant-Throw).
+      if (!sourceIds.contains(_drivenSrcId)) {
+        await map.addSource(
+          _drivenSrcId,
+          const mb.GeojsonSourceProperties(
+            data: <String, dynamic>{
+              'type': 'FeatureCollection',
+              'features': <dynamic>[],
+            },
+          ),
+        );
+        if (!mounted) return;
+      }
+      if (!layerIds.contains(_drivenCasingLayerId)) {
+        await map.addLineLayer(
+          _drivenSrcId,
+          _drivenCasingLayerId,
+          mb.LineLayerProperties(
+            lineColor:
+                '#${(_routeCasingColor.toARGB32() & 0xFFFFFF).toRadixString(16).padLeft(6, '0')}',
+            lineWidth: _casingWidth,
+            lineJoin: 'round',
+            lineCap: 'round',
+          ),
+        );
+        if (!mounted) return;
+      }
+      if (!layerIds.contains(_drivenFillLayerId)) {
+        await map.addLineLayer(
+          _drivenSrcId,
+          _drivenFillLayerId,
+          mb.LineLayerProperties(
+            lineColor:
+                '#${(_drivenFillColor.toARGB32() & 0xFFFFFF).toRadixString(16).padLeft(6, '0')}',
+            lineWidth: _fillWidth,
+            lineJoin: 'round',
+            lineCap: 'round',
+          ),
+        );
       }
       _lineLayerReady = true;
     } catch (_) {
@@ -626,6 +701,7 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
     if (_visible) {
       _syncLines();
       _syncActiveRoute();
+      _syncDrivenTrail();
       _projectMarkers();
     }
   }
@@ -746,6 +822,51 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
     _lastActiveSig = sig;
     try {
       await map.setGeoJsonSource(_activeSrcId, {
+        'type': 'FeatureCollection',
+        'features': pts.length < 2
+            ? <dynamic>[]
+            : [
+                {
+                  'type': 'Feature',
+                  'properties': <String, dynamic>{},
+                  'geometry': {
+                    'type': 'LineString',
+                    'coordinates': [
+                      for (final p in pts) [p.longitude, p.latitude],
+                    ],
+                  },
+                },
+              ],
+      });
+    } catch (_) {}
+  }
+
+  /// 2026-06-09 (vucko Voll-Route-Sichtbar): grauer Driven-Trail (abgefahrenes
+  /// Fenster hinter dem Puck) in die eigene Quelle. Eigene Signatur — pusht nur
+  /// bei echtem Geometrie-Wechsel (im Page distanz-gegated), NICHT pro Frame. Die
+  /// rote Voll-Route bleibt dabei statisch (separate Quelle) → der „Strich" davor
+  /// kann NIE flackern; nur dieser Grau-Trail wandert mit.
+  Future<void> _syncDrivenTrail() async {
+    final map = _map;
+    if (!_styleLoaded ||
+        !_visible ||
+        !_appResumed ||
+        !_firstFrameSynced ||
+        !_lineLayerReady ||
+        map == null) {
+      return;
+    }
+    final pts = widget.drivenTrailPoints;
+    final sig = pts.length < 2
+        ? 'empty'
+        : '${pts.length}:${pts.first.latitude.toStringAsFixed(5)},'
+            '${pts.first.longitude.toStringAsFixed(5)}>'
+            '${pts.last.latitude.toStringAsFixed(5)},'
+            '${pts.last.longitude.toStringAsFixed(5)}';
+    if (sig == _lastDrivenSig) return;
+    _lastDrivenSig = sig;
+    try {
+      await map.setGeoJsonSource(_drivenSrcId, {
         'type': 'FeatureCollection',
         'features': pts.length < 2
             ? <dynamic>[]

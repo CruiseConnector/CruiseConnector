@@ -375,6 +375,12 @@ class _CruiseModePageState extends State<CruiseModePage>
   double? _stableInitialZoom;
   List<List<double>> _fullRouteCoordinates = [];
   List<List<double>> _remainingRouteCoordinates = [];
+  // 2026-06-09 (vucko Voll-Route-Sichtbar): grauer „Driven-Trail" = begrenztes
+  // Fenster HINTER dem Puck. Die rote aktive Linie (_routeLatLngs) ist jetzt die
+  // VOLLE Route (statisch) → immer sichtbar, kein 3km-Abschnitt mehr; dieser
+  // graue Trail frisst den abgefahrenen Teil hinter dem Puck deckend auf.
+  List<LatLng> _drivenTrailLatLngs = const [];
+  List<double>? _lastDrivenHead; // Puck-Projektion des letzten Trail-Pushes (Gate)
   // 2026-06-08 (vucko Leitlinie GPU-Trim): Metriken der aktiven Route für das
   // line-gradient-Trimmen. _activeRouteLatLngs = volle Route (an die Karte, wird
   // dort EINMAL je Wechsel gesetzt). _routeCumDist = kumulierte Distanz je Punkt;
@@ -486,13 +492,10 @@ class _CruiseModePageState extends State<CruiseModePage>
   // die GPS-Position geheftet wird. Darüber bleibt der echte Routenpunkt der
   // Kopf → keine Off-Route-Zacken bei GPS-Drift in Bergtälern.
   static const double _headSnapMaxMeters = 18.0;
-  // 2026-06-05 (vucko Task #4): Redraw-Kadenz entschärft (vorher 1 / 5m). Jeder
-  // Redraw erzeugt eine neue Window-Geometrie → die GL-Linie wird neu gezeichnet
-  // (clearLines+addLine = teuer). Bei 5m lief das ~6×/Sek (Lag). 25m / index 3 =
-  // ~1×/Sek → butterweich. Der Head-Snap + die volle Hintergrund-Route halten die
-  // Linie trotzdem optisch am Puck (kein sichtbares Nachhängen).
-  static const int _routeRedrawIndexThreshold = 3;
-  static const double _routeRedrawDistanceMeters = 25.0;
+  // 2026-06-09 (vucko Voll-Route-Sichtbar): die früheren Redraw-Schwellen
+  // (_routeRedrawIndexThreshold / _routeRedrawDistanceMeters) sind entfallen — es
+  // gibt keinen 3km-Sliding-Window-Redraw der sichtbaren Linie mehr (rote Linie =
+  // statische Voll-Route, grauer Driven-Trail macht den Schnitt).
   double _totalDistanceDriven = 0.0; // Gesamte gefahrene Strecke in Metern
   DateTime? _navigationStartTime; // Zeitpunkt des Navigations-Starts
   // 2026-06-03 (vucko): Getter _isActivelyDriving entfernt — die Karte rendert
@@ -925,35 +928,41 @@ class _CruiseModePageState extends State<CruiseModePage>
     }
     if (aheadStart > coords.length) aheadStart = coords.length;
 
-    final windowEnd = _findLookAheadIndex(aheadStart, 3000);
-    final newRemaining = <List<double>>[
-      projHead,
-      if (aheadStart < windowEnd)
-        for (final c in coords.sublist(aheadStart, windowEnd)) [c[0], c[1]],
-    ];
-    if (newRemaining.length < 2) return false;
-
-    // 2026-06-08 (vucko Sharp-Cut): Distanz-Gate für den Re-Slice/Re-Push der
-    // aktiven Reststrecke. Seit dem Sharp-Cut pusht _syncActiveRoute die (am Puck
-    // geschnittene, 3km-gefensterte) Reststrecke OHNE Zeit-Throttle — die Frequenz
-    // ist also nur noch durch dieses Gate gedeckelt. 3m hält selbst bei 130km/h
-    // die Push-Rate < ~12Hz auf einem KLEINEN 3km-Fenster (≈ 1/25 der Voll-Route)
-    // → weit weg vom Schwarz-Karte-Risiko (das kam von der VOLLEN Route bei 20Hz).
-    // 3m sind zudem klar < Puck-Durchmesser → der Schnitt sitzt optisch am Puck.
-    if (_remainingRouteCoordinates.isNotEmpty &&
-        _remainingRouteCoordinates.length == newRemaining.length) {
-      final cur = _remainingRouteCoordinates.first;
+    // 2026-06-09 (vucko Voll-Route-Sichtbar): Distanz-Gate auf die Puck-Projektion
+    // — nur bei echter Bewegung (≥4m) neu. Der graue Trail liegt HINTER dem Puck,
+    // ein 4m-Lag ist optisch unsichtbar (Puck deckt die Naht), hält aber die
+    // Push-Rate niedrig → butterweich, kein Tile-Hunger / Schwarz-Karte-Risiko.
+    if (_lastDrivenHead != null) {
       final moved = geo.Geolocator.distanceBetween(
-          cur[1], cur[0], projHead[1], projHead[0]);
-      if (moved < 3.0) return false;
+          _lastDrivenHead![1], _lastDrivenHead![0], projHead[1], projHead[0]);
+      if (moved < 4.0) return false;
     }
+    _lastDrivenHead = projHead;
 
-    _remainingRouteCoordinates = newRemaining;
-    _routeGeoJson = json.encode({
-      'type': 'LineString',
-      'coordinates': newRemaining,
-    });
-    _routeLatLngs = [for (final c in newRemaining) LatLng(c[1], c[0])];
+    // GRAUER Driven-Trail = begrenztes (~3km) Fenster HINTER dem Puck; Kopf =
+    // Puck-Projektion → scharfer Schnitt EXAKT am Puck. Die rote aktive Linie
+    // (_routeLatLngs) ist die VOLLE Route und bleibt statisch → die komplette
+    // Reststrecke ist IMMER kräftig rot sichtbar (kein „abgeschnitten wirkendes"
+    // 3km-Stück mehr). Begrenztes Fenster = konstant günstiger Push.
+    final behindStart = _findLookBehindIndex(aheadStart, 3000);
+    final clampedAhead = aheadStart.clamp(0, coords.length);
+    final driven = <List<double>>[
+      if (behindStart < clampedAhead)
+        for (final c in coords.sublist(behindStart, clampedAhead)) [c[0], c[1]],
+      projHead,
+    ];
+    _drivenTrailLatLngs = driven.length < 2
+        ? const []
+        : [for (final c in driven) LatLng(c[1], c[0])];
+
+    // Volle Reststrecke (Puck → Ende) für Restdistanz + Auto-Snapshot pflegen
+    // (nur Dart-Listen, KEIN Map-Push) — ersetzt den früheren 3km-Sliding-Window-
+    // Redraw, der zusätzlich die sichtbare Linie schnitt.
+    _remainingRouteCoordinates = <List<double>>[
+      projHead,
+      if (clampedAhead < coords.length)
+        for (final c in coords.sublist(clampedAhead)) [c[0], c[1]],
+    ];
     return true;
   }
 
@@ -4410,9 +4419,10 @@ class _CruiseModePageState extends State<CruiseModePage>
     //    Einzeichnen-Animation (_startRouteDrawAnimation) von 2 Punkten auf voll
     //    wachsen lässt. Darum hier _routeLatLngs nutzen (NICHT den statischen
     //    _fullRouteBackgroundLatLngs) → die Reveal-Animation ist wieder sichtbar.
-    //  - Navigation: _routeLatLngs ist das am Puck geschnittene 3-km-Fenster
-    //    (distanz-gegated → kein Black-Map) → scharfer Schnitt.
-    //  - NUR Übersicht (zoomed-out während der Fahrt) braucht die ganze Route.
+    //  - Navigation: _routeLatLngs ist jetzt die VOLLE Route (statisch) → die
+    //    komplette Reststrecke ist IMMER kräftig rot sichtbar; der scharfe Schnitt
+    //    macht der graue Driven-Trail (drivenTrailPoints), der sie hinter dem Puck
+    //    deckend auffrisst. Kein 3km-Fenster mehr (das wirkte „abgeschnitten").
     // 2026-06-09 (vucko Reveal-Fix): die _isRouteConfirmed-Bedingung fiel weg —
     // sie unterdrückte in der Preview die Animation.
     _ensureRouteMetrics();
@@ -4425,6 +4435,9 @@ class _CruiseModePageState extends State<CruiseModePage>
       lines: _buildMapLibreLines(),
       markers: _buildMapLibreMarkers(),
       activeRoutePoints: activePts,
+      // Grauer „abgefahren"-Trail nur im Folgemodus; in der Übersicht zeigt die
+      // ganze rote Route ohne Grau (sauberer Gesamtüberblick).
+      drivenTrailPoints: _isOverviewActive ? const [] : _drivenTrailLatLngs,
       routeProgress: _routeProgress,
       routeColor: AppAccentColors.accent,
       onControllerReady: (c) {
@@ -4442,21 +4455,12 @@ class _CruiseModePageState extends State<CruiseModePage>
   }
 
   List<CruiseMapLine> _buildMapLibreLines() {
-    final lines = <CruiseMapLine>[];
-    // 2026-06-08 (vucko Leitstrich-Premium): Hintergrund-Linie = GRAUER „Driven-
-    // Trail" der Gesamt-Route. Wo der aktive rote Gradient (Casing+Füllung)
-    // transparent ist (abgefahrener Teil HINTER dem Puck), scheint dieser dezente
-    // Grau-Faden durch → „abgefahren = grau, vor mir = kräftig rot", klar lesbar
-    // (Apple/Google-Maps-Look). Vor dem Puck verdeckt ihn das rote Casing.
-    if (_isRouteConfirmed && _fullRouteBackgroundLatLngs.length >= 2) {
-      lines.add(CruiseMapLine(
-        points: List<LatLng>.from(_fullRouteBackgroundLatLngs),
-        color: const Color(0xFF7B7E88),
-        opacity: 0.45,
-        width: 4,
-      ));
-    }
-    return lines;
+    // 2026-06-09 (vucko Voll-Route-Sichtbar): KEINE graue Gesamt-Route-Hintergrund-
+    // linie mehr. Die rote aktive Linie IST jetzt die volle Route (immer sichtbar),
+    // und der graue Driven-Trail (eigene Quelle, ÜBER der roten Linie) zeigt den
+    // abgefahrenen Teil. Der frühere graue Faden war zu dezent → wirkte, als ende
+    // die Route nach 3km („kaputt"). Generischer Linien-Layer bleibt ungenutzt.
+    return const <CruiseMapLine>[];
   }
 
   List<CruiseMapMarker> _buildMapLibreMarkers() {
@@ -4706,6 +4710,19 @@ class _CruiseModePageState extends State<CruiseModePage>
                 points: _routeLatLngs,
                 color: AppAccentColors.accent,
                 strokeWidth: kIsWeb ? 4 : 5,
+              ),
+            ],
+          ),
+        // ── Grauer „abgefahren"-Trail (ÜBER der roten Voll-Route) ─────────────
+        // 2026-06-09 (vucko Voll-Route-Sichtbar): frisst den abgefahrenen Teil
+        // hinter dem Puck grau auf — Pendant zum MapLibre-Driven-Layer.
+        if (_isRouteConfirmed && _drivenTrailLatLngs.length >= 2)
+          PolylineLayer(
+            polylines: [
+              Polyline(
+                points: _drivenTrailLatLngs,
+                color: const Color(0xFF6E7178),
+                strokeWidth: kIsWeb ? 4 : 6,
               ),
             ],
           ),
@@ -7376,6 +7393,8 @@ class _CruiseModePageState extends State<CruiseModePage>
       _routeLatLngs = [];
       _fullRouteCoordinates = [];
       _remainingRouteCoordinates = [];
+      _drivenTrailLatLngs = const [];
+      _lastDrivenHead = null;
       _maneuvers = [];
       _activeManeuverIndex = 0;
       _currentRouteIndex = 0;
@@ -7484,16 +7503,21 @@ class _CruiseModePageState extends State<CruiseModePage>
     _isCameraLocked = true;
     await _activateNavigationCamera();
 
-    final windowEnd = _findLookAheadIndex(_currentRouteIndex, 3000);
+    // 2026-06-09 (vucko Voll-Route-Sichtbar): die sichtbare aktive Linie ist ab
+    // jetzt die VOLLE Route (statisch) — der graue Driven-Trail frisst sie hinter
+    // dem Puck auf. _remainingRouteCoordinates bleibt die volle Reststrecke (für
+    // Restdistanz/Auto). Driven-Trail für die frische Fahrt zurücksetzen.
+    _lastDrivenHead = null;
+    _drivenTrailLatLngs = const [];
     _safeSetState(() {
       _remainingRouteCoordinates = _fullRouteCoordinates.sublist(
         _currentRouteIndex,
-        windowEnd,
+        _fullRouteCoordinates.length,
       );
     });
     await _drawRoute({
       'type': 'LineString',
-      'coordinates': _remainingRouteCoordinates,
+      'coordinates': _fullRouteCoordinates,
     }, animateCamera: false);
     final activeResult = _lastRouteResult;
     if (activeResult != null) {
@@ -8082,13 +8106,15 @@ class _CruiseModePageState extends State<CruiseModePage>
         math.max(0, result.coordinates.length - 1),
       );
     }
-    final windowEnd = _findLookAheadIndex(_currentRouteIndex, 3000);
-    final routeSlice = result.coordinates.sublist(
-      _currentRouteIndex,
-      math.min(windowEnd, result.coordinates.length),
+    // 2026-06-09 (vucko Voll-Route-Sichtbar): volle Reststrecke (Puck→Ende) für
+    // Restdistanz/Auto; SICHTBAR wird die VOLLE neue Route gezeichnet (statisch),
+    // der zurückgesetzte graue Driven-Trail frisst sie wieder hinter dem Puck auf.
+    final remaining = result.coordinates.sublist(
+      _currentRouteIndex.clamp(0, math.max(0, result.coordinates.length - 1)),
+      result.coordinates.length,
     );
-    if (routeSlice.isNotEmpty) {
-      final first = routeSlice.first;
+    if (remaining.isNotEmpty) {
+      final first = remaining.first;
       final distanceToFirst = geo.Geolocator.distanceBetween(
         position.latitude,
         position.longitude,
@@ -8098,17 +8124,20 @@ class _CruiseModePageState extends State<CruiseModePage>
       // 2026-06-01 (vucko): Kopf nur an GPS heften, wenn das Fahrzeug WIRKLICH
       // auf der Linie ist (≤18m). Bei GPS-Drift (Bergtal) sonst Off-Route-Zacken.
       if (distanceToFirst <= _headSnapMaxMeters) {
-        routeSlice[0] = [position.longitude, position.latitude];
+        remaining[0] = [position.longitude, position.latitude];
       }
     }
-
-    _remainingRouteCoordinates = routeSlice;
-    final clipped = {
+    _remainingRouteCoordinates = remaining;
+    _routeGeoJson = json.encode({
       'type': 'LineString',
-      'coordinates': _remainingRouteCoordinates,
-    };
-    _routeGeoJson = json.encode(clipped);
-    await _drawRoute(clipped, animateCamera: false);
+      'coordinates': result.coordinates,
+    });
+    _lastDrivenHead = null;
+    _drivenTrailLatLngs = const [];
+    await _drawRoute({
+      'type': 'LineString',
+      'coordinates': result.coordinates,
+    }, animateCamera: false);
     // 2026-06-06 (vucko P2/P4): Reroute-Banner-Flag zurücksetzen (nächster Off-
     // Route-Zyklus darf wieder genau EIN Banner zeigen) + die GRAUE Vorschau-/
     // Hintergrundroute deterministisch neu zeichnen (gleicher Signatur-
@@ -8316,6 +8345,21 @@ class _CruiseModePageState extends State<CruiseModePage>
       if (accumulated >= targetMeters) return math.min(i + 2, total);
     }
     return total;
+  }
+
+  /// 2026-06-09 (vucko Voll-Route-Sichtbar): Index ~targetMeters VOR startIndex
+  /// (rückwärts) — Startpunkt des begrenzten grauen Driven-Fensters hinter dem
+  /// Puck. Clamped auf ≥ 0. Begrenzt → konstant günstiger Push, kein Wachsen.
+  int _findLookBehindIndex(int startIndex, double targetMeters) {
+    double accumulated = 0.0;
+    final clampedStart = startIndex.clamp(0, _fullRouteCoordinates.length);
+    for (var i = clampedStart - 1; i > 0; i--) {
+      final c1 = _fullRouteCoordinates[i];
+      final c2 = _fullRouteCoordinates[i - 1];
+      accumulated += geo.Geolocator.distanceBetween(c1[1], c1[0], c2[1], c2[0]);
+      if (accumulated >= targetMeters) return i - 1;
+    }
+    return 0;
   }
 
   // ═══════════════════════ ROUTE DRAWING (flutter_map) ══════════════════════
@@ -8868,51 +8912,11 @@ class _CruiseModePageState extends State<CruiseModePage>
       needsRebuild = true;
       _maybeFinalizeAccessLegPhase();
 
-      // Route in Schritten neu zeichnen (Sliding Window, 3km voraus)
-      // Web: größere Schwellen um teure CanvasKit-Repaints zu reduzieren
-      const indexThreshold = kIsWeb
-          ? _routeRedrawIndexThreshold * 2
-          : _routeRedrawIndexThreshold;
-      const distThreshold = kIsWeb
-          ? _routeRedrawDistanceMeters * 2
-          : _routeRedrawDistanceMeters;
-      final redrawByIndex =
-          _currentRouteIndex - _lastDrawnRouteIndex >= indexThreshold;
-      final redrawByDistance = _distanceSinceLastRedraw >= distThreshold;
-      if (redrawByIndex || redrawByDistance) {
-        _lastDrawnRouteIndex = _currentRouteIndex;
-        _distanceSinceLastRedraw = 0.0;
-        final windowEnd = _findLookAheadIndex(_currentRouteIndex, 3000);
-        final routeSlice = _fullRouteCoordinates
-            .sublist(_currentRouteIndex, windowEnd)
-            .map((c) => [c[0], c[1]])
-            .toList();
-        // 2026-06-01 (vucko): Kopf nur an die GPS-Position heften, wenn das
-        // Fahrzeug wirklich auf der Linie ist (≤18m). Vorher BEDINGUNGSLOS →
-        // bei GPS-Drift in Bergtälern entstand ein Off-Route-Zacken vom realen
-        // Routenpunkt zur seitlich versetzten Position. Bei größerem Versatz
-        // bleibt der echte Routenpunkt der Kopf → Linie bleibt sauber auf der
-        // Straße (kleine Lücke zum Punkt ist unkritisch, ein Zacken nicht).
-        if (routeSlice.isNotEmpty) {
-          final head = routeSlice[0];
-          final distToHead = geo.Geolocator.distanceBetween(
-            position.latitude,
-            position.longitude,
-            head[1],
-            head[0],
-          );
-          if (distToHead <= _headSnapMaxMeters) {
-            routeSlice[0] = [position.longitude, position.latitude];
-          }
-        }
-        _remainingRouteCoordinates = routeSlice;
-        final clipped = {
-          'type': 'LineString',
-          'coordinates': _remainingRouteCoordinates,
-        };
-        _routeGeoJson = json.encode(clipped);
-        await _drawRoute(clipped, animateCamera: false);
-      }
+      // 2026-06-09 (vucko Voll-Route-Sichtbar): KEIN 3km-Sliding-Window-Redraw der
+      // sichtbaren Linie mehr. Die rote aktive Linie ist die VOLLE Route (statisch,
+      // einmal gepusht → kann NIE flackern), und _trimVisibleRouteToProjection
+      // pflegt sowohl den grauen Driven-Trail (sichtbar, hinter dem Puck) als auch
+      // _remainingRouteCoordinates (Restdistanz/Auto). Dieser Block ist damit weg.
     }
 
     // 2026-06-08 (vucko Leitlinie GPU-Trim): Fahrt-Fortschritt 0..1 entlang der
@@ -8927,10 +8931,11 @@ class _CruiseModePageState extends State<CruiseModePage>
         needsRebuild = true;
       }
     }
-    // _remainingRouteCoordinates für andere Logik (Restdistanz/Snapshot) weiter
-    // pflegen, aber NICHT mehr für die sichtbare Linie (die macht der Gradient).
+    // 2026-06-09 (vucko Voll-Route-Sichtbar): pflegt den grauen Driven-Trail
+    // (sichtbar, hinter dem Puck) + _remainingRouteCoordinates (Restdistanz/Auto).
+    // Bei echter Änderung Rebuild anstoßen → _syncDrivenTrail pusht den Trail.
     if (!isOutsideCorridor) {
-      _trimVisibleRouteToProjection(match);
+      if (_trimVisibleRouteToProjection(match)) needsRebuild = true;
     }
 
     // Prüfe ob Route zu Ende ist
