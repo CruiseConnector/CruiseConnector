@@ -297,13 +297,14 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
   // dunklen Map-Hintergrund ab (Apple/Google-Maps-Look).
   static const Color _routeCasingColor = Color(0xFF230806);
   // Zoom-abhängige Breiten: sichtbar, aber schlank. Casing ~1,5× = dunkler Rand.
+  // 2026-06-09 (vucko): nochmal 20% dünner (×0.8) — war „sehr dick".
   static const List<dynamic> _casingWidth = <dynamic>[
     'interpolate', <dynamic>['linear'], <dynamic>['zoom'],
-    10, 6.0, 14, 11.0, 16, 14.5, 18, 20.0, 22, 30.0,
+    10, 4.8, 14, 8.8, 16, 11.6, 18, 16.0, 22, 24.0,
   ];
   static const List<dynamic> _fillWidth = <dynamic>[
     'interpolate', <dynamic>['linear'], <dynamic>['zoom'],
-    10, 4.0, 14, 7.0, 16, 9.5, 18, 13.0, 22, 19.0,
+    10, 3.2, 14, 5.6, 16, 7.6, 18, 10.4, 22, 15.2,
   ];
   String _lastActiveSig = '';
   // View-/quellen-abhängige Calls (setGeoJsonSource, toScreenLocationBatch) erst
