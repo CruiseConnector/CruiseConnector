@@ -730,8 +730,23 @@ async function raceForFirstAcceptable<T>(
 // ─────────────────── Route-Generation mit Retries + Compensation ───────────
 
 async function generateRoute(req: RouteRequest): Promise<Response> {
-  const profile = resolveProfile(req.selected_style);
   const isRoundTrip = req.route_type === 'ROUND_TRIP';
+  // 2026-06-09 (vucko Direkt-Fastest-Fix): Eine DIREKTE A→B-Route (Detour 0, Stil
+  // 'Standard'/unbekannt) UND jeder Reroute sollen die SCHNELLSTE Strecke fahren
+  // (Google/Apple-Niveau) — NICHT die kurvige Sport-Gewichtung. ROOT CAUSE des
+  // User-Reports (Götzis→Hard, +27% Umweg-Schleife): resolveProfile() fiel für
+  // 'Standard' auf 'motorcycle_scenic' zurück → Kurven-Bonus + Scenic-Road-Boost +
+  // distance_influence 200 → GraphHopper bevorzugte kurvige Umwege statt des
+  // direkten Wegs. Das 'car'-Profil trifft den leeren default-Overlay (kein
+  // Kurven-/Scenic-Bonus) + nur die Safety-Blocks (Track/Path/Ferry/Autobahn) →
+  // kürzeste sinnvolle Strecke. Cruising-Stile (Sport/Kurvenjagd/…) + Umwege
+  // (detour_level>0) bleiben unverändert kurvig.
+  const _rawStyle = (req.selected_style ?? '').trim().toLowerCase();
+  const isDirectFastest =
+    !isRoundTrip &&
+    (req.detour_level ?? 0) === 0 &&
+    !STYLE_TO_PROFILE[_rawStyle];
+  const profile = isDirectFastest ? 'car' : resolveProfile(req.selected_style);
   const previousFps = new Set(req.previous_route_fingerprints ?? []);
 
   // Adaptive Distance Compensation (nur für Round-Trip relevant)
