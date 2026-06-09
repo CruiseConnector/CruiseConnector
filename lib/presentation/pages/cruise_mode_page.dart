@@ -914,6 +914,10 @@ class _CruiseModePageState extends State<CruiseModePage>
 
   /// 2026-06-09 (vucko Trip-Skip): markiert Zwischenstopps als besucht, sobald
   /// der Fahrer ≤120 m herankommt. Billig (≤8 Stopps, 1 Distanz je Tick).
+  /// 2026-06-10 (vucko Trip-Resume): besuchte Stopps zusätzlich in der DB
+  /// abhaken (actual_arrival) — beim Resume nach App-Neustart werden nur die
+  /// NOCH NICHT befahrenen Stopps + das Endziel geladen. Sequenz in trip_stops:
+  /// 0 = Start → Zwischenstopp i hat Sequenz i+1.
   void _markPassedWaypoints(geo.Position position) {
     if (_activeIntermediateWaypoints.isEmpty) return;
     for (var i = 0; i < _activeIntermediateWaypoints.length; i++) {
@@ -921,7 +925,19 @@ class _CruiseModePageState extends State<CruiseModePage>
       final wp = _activeIntermediateWaypoints[i];
       final d = geo.Geolocator.distanceBetween(
           position.latitude, position.longitude, wp[1], wp[0]);
-      if (d <= 120.0) _passedWaypointIndices.add(i);
+      if (d <= 120.0) {
+        _passedWaypointIndices.add(i);
+        final tripId = _activeTripId;
+        if (tripId != null) {
+          unawaited(
+            TripService.instance
+                .markStopReached(tripId, i + 1)
+                .catchError((Object e) {
+              debugPrint('[CruiseMode] markStopReached fail (silent): $e');
+            }),
+          );
+        }
+      }
     }
   }
 
@@ -1785,15 +1801,26 @@ class _CruiseModePageState extends State<CruiseModePage>
       await TripService.instance.resumeTrip(tripId);
       // Setze UI-State: Trip-Mode an, Wegpunkte = stops (ohne start),
       // _activeTripId = tripId damit Pause/Complete später greift.
+      // 2026-06-10 (vucko Trip-Resume): NUR die noch nicht befahrenen Stopps
+      // (actual_arrival == null) + IMMER das Endziel laden — bereits
+      // abgehakte Stopps (markStopReached während der Fahrt) werden beim
+      // Weiterfahren nicht erneut angefahren. Route wird unten von der
+      // AKTUELLEN Position aus neu generiert (egal wo man weiterfährt).
       final waypoints = stops
-          .where((s) => s.stopType != 'start')
+          .where((s) =>
+              s.stopType != 'start' &&
+              (s.actualArrival == null || s.stopType == 'end'))
           .map((s) => LatLng(s.lat, s.lng))
           .toList(growable: false);
       if (!mounted || _disposed) return;
-      if (waypoints.length < 2) {
+      // 2026-06-10 (vucko Trip-Resume): 1 verbleibender Punkt (= Endziel) ist
+      // VALIDE — Route von der aktuellen Position direkt zum Ziel (Audit T1-M:
+      // 1-Wegpunkt-Trip erzeugt eine saubere A→B-Route). Nur komplett leer
+      // (alle Stopps inkl. Ziel abgefahren) wird geschlossen.
+      if (waypoints.isEmpty) {
         TopToast.show(
           context,
-          message: 'Tour hat nicht genug Wegpunkte zum Fortsetzen.',
+          message: 'Alle Stopps dieser Tour sind bereits abgefahren.',
           icon: Icons.info_outline_rounded,
           duration: const Duration(milliseconds: 3500),
         );
@@ -6185,12 +6212,13 @@ class _CruiseModePageState extends State<CruiseModePage>
           countryPreference: _countryPreference,
           homeCountryCode: _homeCountryCode,
         );
-        // 2026-05-24 (vucko Task #53): Trip-Mode → Trip in DB persistieren
-        // NUR wenn der User in einer Gruppen-Session ist. Solo-Touren werden
-        // nicht als Resume-Card angezeigt (User-Wunsch), darum auch nicht
-        // in der trips-Tabelle landen — vermeidet DB-Pollution.
+        // 2026-05-24 (vucko Task #53): Trip-Mode → Trip in DB persistieren.
+        // 2026-06-10 (vucko Trip-Resume): JETZT AUCH SOLO-Trips (User-Wunsch
+        // geändert: „statt Route anhalten soll man zwischenspeichern und von
+        // egal wo weiterfahren können"). Die Resume-Card lädt die Stopps aus
+        // der DB und generiert die Route von der AKTUELLEN Position neu.
         // Best-effort, fail silent (Trip-Persistierung darf nie das Routing blockieren).
-        if (widget.groupId != null &&
+        if (_tripModeEnabled &&
             result.distanceMeters != null &&
             result.distanceMeters! > 0) {
           unawaited(_createTripInDb(

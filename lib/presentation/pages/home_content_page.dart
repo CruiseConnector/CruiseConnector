@@ -289,9 +289,12 @@ class _HomeContentPageState extends State<HomeContentPage>
       }
 
       // 2026-05-24 (vucko Task #53): Aktive/pausierte Trip checken für Resume-Card
+      // 2026-06-10 (vucko Trip-Resume): AUCH Solo-Trips (User-Wunsch geändert:
+      // Trips sollen zwischenspeicherbar sein und von egal wo fortsetzbar).
       TripSummary? activeTrip;
       try {
-        activeTrip = await TripService.instance.activeOrPausedTripForCurrentUser();
+        activeTrip = await TripService.instance
+            .activeOrPausedTripForCurrentUser(groupOnly: false);
       } catch (e) {
         debugPrint('[Home] Trip-Status laden fehlgeschlagen: $e');
       }
