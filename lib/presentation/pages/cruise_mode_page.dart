@@ -1373,14 +1373,26 @@ class _CruiseModePageState extends State<CruiseModePage>
       _activeDestinationCoordinate = null;
     } else if (routeType == 'POINT_TO_POINT') {
       _isRoundTrip = false;
+      List<double>? dest;
       final destination = routeData['destination'];
       if (destination is Map) {
         final lat = destination['latitude'];
         final lng = destination['longitude'];
         if (lat is num && lng is num) {
-          _activeDestinationCoordinate = [lng.toDouble(), lat.toDouble()];
+          dest = [lng.toDouble(), lat.toDouble()];
         }
       }
+      // 2026-06-09 (vucko Audit T1-H): bei fehlenden/defekten Ziel-Metadaten NICHT
+      // die ALTE Ziel-Koordinate behalten (zeigte sonst aufs Ziel der Vorgänger-
+      // Route → Reroute zielte falsch) — auf den letzten Routenpunkt (= echtes
+      // Ende) zurückfallen, sonst null.
+      _activeDestinationCoordinate = dest ??
+          (_fullRouteCoordinates.length >= 2
+              ? _fullRouteCoordinates.last
+              : null);
+    } else {
+      // Unbekannter Typ → kein stale Ziel aus einer Vorgänger-Route halten.
+      _activeDestinationCoordinate = null;
     }
     _selectedStyle = routeData['style']?.toString() ?? _selectedStyle;
     _avoidHighways = (routeData['avoid_highways'] as bool?) ?? _avoidHighways;

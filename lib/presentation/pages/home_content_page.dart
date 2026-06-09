@@ -63,6 +63,9 @@ class _HomeContentPageState extends State<HomeContentPage>
   TripSummary? _activeTrip; // 2026-05-24 (vucko Task #53): Resume-Card
   HomeRouteRecommendation? _todayRecommendation;
   bool _isRouteSaved = false;
+  // 2026-06-09 (vucko Audit T3-B): Re-Entry-Guard gegen Doppel-Tap auf Speichern
+  // → sonst nebenläufige saveExistingRoute-Calls = doppelte DB-Inserts.
+  bool _isSavingRoute = false;
   final Map<String, _HeroRouteInsights> _heroInsightsByRouteId = {};
   final Set<String> _heroInsightsLoading = <String>{};
   late final AnimationController _shimmerController;
@@ -1516,6 +1519,10 @@ class _HomeContentPageState extends State<HomeContentPage>
   Widget _buildSaveChip(SavedRoute route) {
     return GestureDetector(
       onTap: () async {
+        // 2026-06-09 (vucko Audit T3-B): Doppel-Tap-Schutz — verhindert nebenläufige
+        // save/unsave-Calls (doppelte DB-Inserts / Toggle-Race).
+        if (_isSavingRoute) return;
+        _isSavingRoute = true;
         // 2026-05-22 (vucko): Optimistic UI — setState SOFORT, dann async work.
         // Vorher: 5 sequenzielle awaits (save → reload → checkSaved → provider
         // reload → calculateAndSync) blockten UI 2-3s. Jetzt: User sieht
@@ -1556,7 +1563,10 @@ class _HomeContentPageState extends State<HomeContentPage>
           }());
         } catch (e) {
           debugPrint('[Home] Route speichern fehlgeschlagen: $e');
-          if (!mounted) return;
+          if (!mounted) {
+            _isSavingRoute = false;
+            return;
+          }
           // Rollback optimistic state
           setState(() => _isRouteSaved = wasSaved);
           TopToast.show(
@@ -1565,6 +1575,8 @@ class _HomeContentPageState extends State<HomeContentPage>
             icon: Icons.error_outline,
             isError: true,
           );
+        } finally {
+          _isSavingRoute = false;
         }
       },
       child: AnimatedContainer(
