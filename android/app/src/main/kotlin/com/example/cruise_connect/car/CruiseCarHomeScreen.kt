@@ -98,6 +98,14 @@ class CruiseCarHomeScreen(
                                 }
                                 .build(),
                         )
+                        .addAction(
+                            Action.Builder()
+                                .setTitle("Neu konfigurieren")
+                                .setOnClickListener {
+                                    screenManager.push(CruiseCarPlanStyleScreen(carContext))
+                                }
+                                .build(),
+                        )
                         .build(),
                 )
             }
@@ -111,18 +119,18 @@ class CruiseCarHomeScreen(
 
             snapshot != null && snapshot.status == "failed" -> {
                 builder.setNavigationInfo(
-                    MessageInfo.Builder("Keine Route gefunden — am Handy neu suchen.").build(),
+                    MessageInfo.Builder("Keine Route gefunden — Stil/Distanz neu wählen.").build(),
                 )
-                builder.setActionStrip(refreshStrip())
+                builder.setActionStrip(planStrip())
             }
 
             else -> {
                 builder.setNavigationInfo(
                     MessageInfo.Builder(
-                        "Plane eine Route — sie erscheint hier direkt auf der Karte.",
+                        "Plane eine Route — direkt hier im Auto.",
                     ).build(),
                 )
-                builder.setActionStrip(refreshStrip())
+                builder.setActionStrip(planStrip())
             }
         }
         return builder.build()
@@ -130,6 +138,29 @@ class CruiseCarHomeScreen(
 
     private fun refreshStrip(): ActionStrip {
         return ActionStrip.Builder()
+            .addAction(
+                Action.Builder()
+                    .setTitle("Aktualisieren")
+                    .setOnClickListener { invalidate() }
+                    .build(),
+            )
+            .build()
+    }
+
+    /**
+     * 2026-06-09 (vucko): „Route planen" → in-car Stil/Distanz/Autobahn-Picker
+     * (1:1 wie CarPlay). + „Aktualisieren" als Zweit-Aktion.
+     */
+    private fun planStrip(): ActionStrip {
+        return ActionStrip.Builder()
+            .addAction(
+                Action.Builder()
+                    .setTitle("Route planen")
+                    .setOnClickListener {
+                        screenManager.push(CruiseCarPlanStyleScreen(carContext))
+                    }
+                    .build(),
+            )
             .addAction(
                 Action.Builder()
                     .setTitle("Aktualisieren")

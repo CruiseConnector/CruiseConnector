@@ -505,7 +505,8 @@ final class CarPlayRouteCoordinator: NSObject {
 
     private var commandRequestId = 0
     private let availableStyles = ["Sport Mode", "Kurvenjagd", "Abendrunde", "Entdecker"]
-    private let availableDistances = [30, 50, 75, 100]
+    // 2026-06-09 (vucko): exakt die App-Distanzen 25/50/75/100 km (vorher 30).
+    private let availableDistances = [25, 50, 75, 100]
 
     /// Schreibt einen Befehl für die Flutter-Seite (CarCommandListener) in
     /// UserDefaults. Monoton steigende requestId, damit Flutter nur neue
@@ -696,7 +697,7 @@ final class CarPlayMapViewController: UIViewController, MKMapViewDelegate {
     /// tileSize 512 passt zum 512er-Rendering (retina über @2x-PNG).
     private func addCruiseTileOverlay() {
         let template =
-            "https://pub-0535dd4f86054de1820907b6f06bf17c.r2.dev/raster/{z}/{x}/{y}.png"
+            "https://tiles.cruiseconnector.at/raster/{z}/{x}/{y}.png"
         // 2026-06-02 (vucko): Eigene Overzoom-Overlay. MKTileOverlay überzoomt
         // NICHT von selbst über maximumZ hinaus → bei Navi-Zoom (z14+) gab's
         // keine Kachel → Apple-Grün (genau der Bug nach Routenbestätigung).
