@@ -4406,12 +4406,17 @@ class _CruiseModePageState extends State<CruiseModePage>
     // GESCHNITTENE Reststrecke (solide Farbe), der abgefahrene Teil = grauer
     // Hintergrund. Der Schnitt entsteht durch die Geometrie-Kante (knackscharf wie
     // Google/Apple) statt durch einen unscharfen line-gradient.
-    //  - Während der Navigation (Route bestätigt, NICHT Übersicht): das am Puck
-    //    geschnittene 3-km-Fenster (_routeLatLngs, distanz-gegated → kein Black-Map).
-    //  - Preview/Übersicht: die ganze Route (rot), damit auch zoomed-out alles rot ist.
+    //  - Preview: _routeLatLngs ist die VOLLE Route — und genau das, was die
+    //    Einzeichnen-Animation (_startRouteDrawAnimation) von 2 Punkten auf voll
+    //    wachsen lässt. Darum hier _routeLatLngs nutzen (NICHT den statischen
+    //    _fullRouteBackgroundLatLngs) → die Reveal-Animation ist wieder sichtbar.
+    //  - Navigation: _routeLatLngs ist das am Puck geschnittene 3-km-Fenster
+    //    (distanz-gegated → kein Black-Map) → scharfer Schnitt.
+    //  - NUR Übersicht (zoomed-out während der Fahrt) braucht die ganze Route.
+    // 2026-06-09 (vucko Reveal-Fix): die _isRouteConfirmed-Bedingung fiel weg —
+    // sie unterdrückte in der Preview die Animation.
     _ensureRouteMetrics();
-    final activePts =
-        (_isRouteConfirmed && !_isOverviewActive && _routeLatLngs.length >= 2)
+    final activePts = (!_isOverviewActive && _routeLatLngs.length >= 2)
         ? _routeLatLngs
         : _fullRouteBackgroundLatLngs;
     return CruiseMapLibreMap(
