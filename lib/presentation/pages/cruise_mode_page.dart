@@ -5997,6 +5997,11 @@ class _CruiseModePageState extends State<CruiseModePage>
           subscriptionTier: subscriptionTier,
           // 2026-05-28 (vucko Task #83): One-Shot direkte Route ohne Quality-Reject.
           forceAcceptDirect: _forceAcceptDirectOnce,
+          // 2026-06-09 (vucko A→B-Dijkstra): „Direkt" = EIN schnellster Dijkstra-/
+          // CH-Pfad statt 5–6-Varianten-Suche → deutlich schneller. Budget 1 +
+          // knappes Zeitbudget nur im Direkt-Fall; Umweg/Scenic behält die Vielfalt.
+          candidateBudgetOverride: scenicMode ? null : 1,
+          maxSearchMsOverride: scenicMode ? null : 8000,
           countryPreference: _countryPreference,
           homeCountryCode: _homeCountryCode,
         );
@@ -10109,7 +10114,16 @@ class _CruiseModePageState extends State<CruiseModePage>
         '[CruiseMode] Smart reroute plan: ${smartPlan.debugLabel}, strategy=${smartPlan.strategy.name}, rejoin=${smartPlan.rejoinIndex}',
       );
 
-      final destination = _activeDestinationCoordinate;
+      // 2026-06-09 (vucko A→B-Reroute-zum-Ziel): Bei A→B muss das Ziel IMMER bekannt
+      // sein, sonst wird der Ziel-Reroute-Zweig übersprungen → der Reroute zielt nur
+      // auf die alte Route statt direkt aufs Ziel. Fällt _activeDestinationCoordinate
+      // aus (z.B. defekte Gruppen-Metadaten), nimm den letzten Routenpunkt = das
+      // geplante Endziel als Fallback.
+      final destination =
+          _activeDestinationCoordinate ??
+          (!_isRoundTrip && _fullRouteCoordinates.length >= 2
+              ? _fullRouteCoordinates.last
+              : null);
       if (!_isRoundTrip && destination != null && !accessLegMode) {
         final destinationRerouteSeed = Object.hash(
           destination[0].round(),
@@ -10155,18 +10169,53 @@ class _CruiseModePageState extends State<CruiseModePage>
             avoidHighways: rerouteAvoidHighways,
             edgeMeta: destinationResult.edgeMeta,
           );
+          // 2026-06-09 (vucko A→B-Reroute-zum-Ziel): Bei A→B ist das ZIEL die
+          // Invariante. Wird der saubere Ziel-Kandidat verworfen, NICHT stumm in
+          // den Forward-Rejoin durchfallen (der zielt auf die ALTE Route und
+          // erreicht das Ziel evtl. nie) — sondern EIN zweiter Versuch mit
+          // forceAcceptDirect DIREKT zum Ziel: akzeptiert jede valide Strecke zum
+          // Endpunkt (Google/Apple: Reroute zielt immer aufs Ziel). Erst wenn auch
+          // das nichts liefert, greift weiter unten der Rejoin/Redock-Fallback.
+          RouteResult? acceptedDest;
           if (!destinationQuality.passed ||
               destinationTooFewPoints ||
               highwayViolation) {
             debugPrint(
-              '[CruiseMode] Direkter Ziel-Reroute verworfen: Qualität/Highway-Policy unzureichend.',
+              '[CruiseMode] Ziel-Reroute QA-verworfen → Force-Accept direkt zum Ziel.',
             );
+            try {
+              final forced = await _routeService.generatePointToPoint(
+                startPosition: position,
+                destinationLat: destination[1],
+                destinationLng: destination[0],
+                mode: 'Standard',
+                scenic: false,
+                routeVariant: 0,
+                avoidHighways: rerouteAvoidHighways,
+                forceFreshVariant: true,
+                navigationReroute: true,
+                forceAcceptDirect: true,
+                candidateBudgetOverride: 1,
+                maxSearchMsOverride: 9000,
+                currentHeadingDegrees: heading,
+                currentSpeedMetersPerSecond: rerouteSpeedMps,
+                locationAccuracyMeters: rerouteAccuracyMeters,
+              );
+              if (forced.coordinates.length >= 2) acceptedDest = forced;
+            } catch (e) {
+              debugPrint(
+                '[CruiseMode] Force-Accept Ziel-Reroute fehlgeschlagen: $e',
+              );
+            }
           } else {
+            acceptedDest = destinationResult;
+          }
+          if (acceptedDest != null) {
             final distanceMeters =
-                destinationResult.distanceMeters ??
-                _calculatePolylineDistanceMeters(destinationResult.coordinates);
+                acceptedDest.distanceMeters ??
+                _calculatePolylineDistanceMeters(acceptedDest.coordinates);
             final durationSeconds =
-                destinationResult.durationSeconds ??
+                acceptedDest.durationSeconds ??
                 _estimateDurationSecondsForDistance(distanceMeters);
             final rerouteMeta = buildRerouteTelemetry(
               rerouteReason: accessLegMode
@@ -10188,12 +10237,12 @@ class _CruiseModePageState extends State<CruiseModePage>
 
             await _commitRerouteResult(
               result: _buildRouteResultFromCoordinates(
-                coordinates: destinationResult.coordinates,
-                maneuvers: destinationResult.maneuvers,
+                coordinates: acceptedDest.coordinates,
+                maneuvers: acceptedDest.maneuvers,
                 distanceMeters: distanceMeters,
                 durationSeconds: durationSeconds,
-                speedLimits: destinationResult.speedLimits,
-                edgeMeta: {...destinationResult.edgeMeta, ...rerouteMeta},
+                speedLimits: acceptedDest.speedLimits,
+                edgeMeta: {...acceptedDest.edgeMeta, ...rerouteMeta},
               ),
               position: position,
               publishToGroup: !accessLegMode,

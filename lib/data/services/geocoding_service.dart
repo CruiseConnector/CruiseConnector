@@ -41,6 +41,23 @@ class GeocodingException implements Exception {
 class GeocodingService {
   const GeocodingService();
 
+  // 2026-06-09 (vucko A→B-Latenz): kleiner LRU-Cache für Autocomplete. Tippt der
+  // User zurück/erneut die gleiche Anfrage (sehr häufig), kommt das Ergebnis SOFORT
+  // ohne Netz-Round-Trip (Google-Maps-Gefühl). Statisch, weil GeocodingService const
+  // ist; geteilt über alle Felder, unkritisch (nur Vorschlags-Cache).
+  static final Map<String, List<MapboxSuggestion>> _suggestCache =
+      <String, List<MapboxSuggestion>>{};
+  static const int _suggestCacheMax = 24;
+
+  static void _cacheSuggestions(String key, List<MapboxSuggestion> value) {
+    if (value.isEmpty) return;
+    _suggestCache.remove(key);
+    _suggestCache[key] = value;
+    if (_suggestCache.length > _suggestCacheMax) {
+      _suggestCache.remove(_suggestCache.keys.first);
+    }
+  }
+
   static void _debugLog(String message) {
     if (kDebugMode) {
       debugPrint(message);
@@ -60,6 +77,9 @@ class GeocodingService {
     // KEIN Zeichenlimit - sofort suchen ab 1 Zeichen
     if (query.isEmpty) return const [];
     final searchQuery = _normalizePoiSearchAlias(query);
+    final cacheKey = '$searchQuery|$countryCodes|$limit';
+    final cached = _suggestCache[cacheKey];
+    if (cached != null) return cached; // Cache-Treffer → sofort, kein Netz
 
     final queryParameters = <String, String>{
       'access_token': AppConstants.mapboxPublicToken,
@@ -92,7 +112,10 @@ class GeocodingService {
     );
 
     try {
-      final response = await http.get(uri);
+      // 2026-06-09 (vucko A→B-Latenz): HARTES Timeout. Ohne dies hing ein einzelner
+      // langsamer/stehender Mapbox-Response den TypeAheadField-Spinner UNENDLICH
+      // („ewig nicht geladen"). 4s → spätestens dann leere Liste statt Dauerladen.
+      final response = await http.get(uri).timeout(const Duration(seconds: 4));
       _debugLog('[Geocoding] Autocomplete response: ${response.statusCode}');
 
       if (response.statusCode == 200) {
@@ -136,6 +159,7 @@ class GeocodingService {
             })
             .whereType<MapboxSuggestion>()
             .toList();
+        var result = geocodingSuggestions;
         if (_shouldPreferSearchBoxPoi(query, geocodingSuggestions)) {
           final searchBox = await _searchBoxSuggestions(
             searchQuery,
@@ -144,9 +168,10 @@ class GeocodingService {
             countryCodes: countryCodes,
             limit: limit,
           );
-          if (searchBox.isNotEmpty) return searchBox;
+          if (searchBox.isNotEmpty) result = searchBox;
         }
-        return geocodingSuggestions;
+        _cacheSuggestions(cacheKey, result);
+        return result;
       } else {
         _debugLog(
           '[Geocoding] Autocomplete failed: status=${response.statusCode}',
@@ -191,24 +216,34 @@ class GeocodingService {
       queryParameters,
     );
     try {
-      final response = await http.get(suggestUri);
+      final response =
+          await http.get(suggestUri).timeout(const Duration(seconds: 4));
       if (response.statusCode != 200) return const [];
       final data = json.decode(response.body) as Map<String, dynamic>;
       final suggestions = data['suggestions'] as List? ?? const [];
-      final results = <MapboxSuggestion>[];
-      for (final suggestion in suggestions.take(limit.clamp(1, 6))) {
+      // 2026-06-09 (vucko A→B-Latenz): Die Mapbox-SearchBox liefert pro Vorschlag
+      // KEINE Koordinaten — jeder braucht einen eigenen /retrieve-Call. Früher lief
+      // das in einer SEQUENZIELLEN Schleife (bis zu 6× await hintereinander) → pro
+      // Tastendruck bis zu 1 suggest + 6 retrieves NACHEINANDER = „unmengen an Zeit".
+      // Jetzt: Top-4 PARALLEL via Future.wait → ~1 statt 4-6 Round-Trips, Reihenfolge
+      // bleibt erhalten.
+      final ids = <String>[];
+      for (final suggestion in suggestions.take(limit.clamp(1, 4))) {
         if (suggestion is! Map<String, dynamic>) continue;
         final id = suggestion['mapbox_id'] as String?;
-        if (id == null || id.isEmpty) continue;
-        final retrieved = await _retrieveSearchBoxSuggestion(
-          id,
-          sessionToken: sessionToken,
-          proximityLatitude: proximityLatitude,
-          proximityLongitude: proximityLongitude,
-        );
-        if (retrieved != null) results.add(retrieved);
+        if (id != null && id.isNotEmpty) ids.add(id);
       }
-      return results;
+      final retrievedList = await Future.wait(
+        ids.map(
+          (id) => _retrieveSearchBoxSuggestion(
+            id,
+            sessionToken: sessionToken,
+            proximityLatitude: proximityLatitude,
+            proximityLongitude: proximityLongitude,
+          ).catchError((Object _) => null),
+        ),
+      );
+      return retrievedList.whereType<MapboxSuggestion>().toList();
     } catch (e) {
       _debugLog('[Geocoding] Search Box fallback failed: ${e.runtimeType}');
       return const [];
@@ -230,7 +265,8 @@ class GeocodingService {
         'session_token': sessionToken,
       },
     );
-    final response = await http.get(retrieveUri);
+    final response =
+        await http.get(retrieveUri).timeout(const Duration(seconds: 3));
     if (response.statusCode != 200) return null;
     final data = json.decode(response.body) as Map<String, dynamic>;
     final features = data['features'] as List? ?? const [];
@@ -326,7 +362,9 @@ class GeocodingService {
     );
 
     try {
-      final response = await http.get(uri);
+      // 2026-06-09 (vucko A→B-Latenz): Timeout auch hier — das ist der Geocode,
+      // der beim Tippen auf „Los" läuft; ohne Timeout hängt der Routenstart.
+      final response = await http.get(uri).timeout(const Duration(seconds: 6));
       if (response.statusCode != 200) {
         throw _mapHttpError(statusCode: response.statusCode, requestUri: uri);
       }
