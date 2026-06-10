@@ -124,9 +124,14 @@ jederzeit wiederholbar.
 
 **Offen (hardware-/zugriffsgebunden, nicht code-gebunden):**
 1. Resume-Durchklick als Sichttest — Maus-Event-Kette des Macs nach ~14 h tot
-   (App-/Sim-/Device-Neustart halfen nicht; Engine-Weg scheitert am
-   Home-Datenload im XCTest-Kontext, vermutlich Geolocator — dokumentiert).
-   → 2-Minuten-Test nach Mac-Neustart; alle Code-Fixes (`802d646`) sind drin.
+   (App-/Sim-/Device-Neustart halfen nicht). Alle drei Software-Alternativen
+   wurden gebaut und enden an derselben Grenze: XCTest und flutter-run
+   installieren einen FRISCHEN App-Container ohne Login-Session (die App steht
+   auf dem Anmelde-Screen — dessen Titel ist ebenfalls „Willkommen zurück!",
+   was die erste Test-Probe falsch-positiv machte). Der VM-Service-Eval-Kanal
+   funktioniert nachweislich (Intent-Setzen lief live), scheitert aber am
+   selben ausgeloggten Container. → 2-Minuten-Test nach Mac-Neustart ODER nach
+   einmaligem Login; alle Code-Fixes (`802d646`) sind drin.
 2. Android-Emulator eingeloggt — erfordert Anmeldung in den User-Account
    (Sicherheitsgrenze). Das echte Galaxy A34 lief eingeloggt fehlerfrei durch
    dieselben Flows.
