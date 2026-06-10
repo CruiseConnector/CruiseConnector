@@ -245,7 +245,13 @@ function styleOverlayForProfile(profile: string): StyleOverlay {
           { if: 'curvature < 0.7', multiply_by: '1.9' },
           { if: 'curvature < 0.5', multiply_by: '2.4' },
         ],
-        distance_influence: 55,
+        // 2026-06-10 (vucko): GH-Server erzwingt seit heute >=200 (HTTP 400:
+        // "CustomModel in query can only use distance_influence bigger or
+        // equal to 200.0") — 55/170 liessen ALLE Requests dieser Profile
+        // platzen -> Notfall-Mini-Routen ("katastrophal"-Screenshot). Wert
+        // serverkonform angehoben; Feintuning gehoert in die Server-Config
+        // (routing.max_distance_influence).
+        distance_influence: 200,
       };
     case 'motorcycle_scenic':
       // Sport: offene Genuss-Kurven, breite gut ausgebaute Straßen.
@@ -285,7 +291,7 @@ function styleOverlayForProfile(profile: string): StyleOverlay {
           { if: 'road_class == PRIMARY', multiply_by: '0.95' },
           { if: 'road_class == RESIDENTIAL', multiply_by: '1.05' },
         ],
-        distance_influence: 170,
+        distance_influence: 200,
       };
     default:
       return { priority: [] };
@@ -580,6 +586,29 @@ async function callGraphHopper(opts: {
   // Kurze A→B bevorzugen normale Straßen + Auf-/Abfahrten, außer die Autobahn
   // ist klar schneller. Der harte Block bleibt hinter avoidHighways (oben).
   overlay.priority.push({ if: 'road_class == MOTORWAY', multiply_by: '0.6' });
+  // 2026-06-10 (vucko GH-Default-Konformitaet): Der GH-Server lief bis heute
+  // mit gelockerter Config; nach Neustart gelten die GH-Defaults: in
+  // Query-CustomModels darf multiply_by NICHT > 1 sein (HTTP 400: "maximum of
+  // value '1.45' cannot be larger..."). Dadurch platzten ALLE Requests mit
+  // Boost-Werten -> Notfall-Mini-Routen ("katastrophal"-Screenshot).
+  // Fix: Prioritaeten normalisieren — alle multiply_by durch den groessten
+  // Wert teilen. Die relative Ordnung (= der Stil-Charakter) bleibt erhalten,
+  // das Modell ist serverkonform.
+  if (overlay.priority.length > 0) {
+    let maxMul = 1;
+    for (const rule of overlay.priority) {
+      const v = Number(rule.multiply_by);
+      if (Number.isFinite(v) && v > maxMul) maxMul = v;
+    }
+    if (maxMul > 1) {
+      for (const rule of overlay.priority) {
+        const v = Number(rule.multiply_by);
+        if (Number.isFinite(v)) {
+          rule.multiply_by = String(Math.min(1, Math.round((v / maxMul) * 100) / 100));
+        }
+      }
+    }
+  }
   if (overlay.priority.length > 0 || overlay.distance_influence != null || overlay.speed != null) {
     // Objekt, NICHT JSON.stringify — geht jetzt im POST-Body an GraphHopper.
     ghBody.custom_model = overlay;
@@ -1420,6 +1449,164 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
     candidates.push({ result, deltaPct, seed, isDup });
   }
 
+  // 2026-06-10 (vucko GOOGLE-MAPS-VERLAESSLICHKEIT): Der GH-round_trip-
+  // Algorithmus kann serverseitig degradieren (heute live gemessen: ALLE
+  // Profile/Styles/Standorte lieferten ueber den Notfall-Pfad Mini-Routen
+  // mit 57-80% Zielabweichung und Luftlinien-Gaps bis 402m — beim User als
+  // Dreieck quer ueber die Karte sichtbar). A->B-Routing lief dabei
+  // einwandfrei. Deshalb: Gibt es fuer einen Rundkurs KEINEN Kandidaten mit
+  // <=35% Zielabweichung, bauen wir den Rundkurs SELBST aus drei
+  // A->B-Segmenten (Dreieck; GH snappt die Eckpunkte auf Strassen). Erst
+  // wenn auch das scheitert, ist "keine Route" die ehrliche Antwort —
+  // NIE wieder eine 5km-Mini-"Route" fuer ein 25km-Ziel ausliefern.
+  const synthDiagTop: string[] = [];
+  if (isRoundTrip) {
+    const bestDelta = candidates.length
+      ? Math.min(...candidates.map((c) => c.deltaPct))
+      : Infinity;
+    if (bestDelta > 35) {
+      console.log(`[SYNTH-TRIANGLE] best roundtrip delta ${bestDelta === Infinity ? 'none' : bestDelta.toFixed(0) + '%'} — building stitched triangle roundtrip`);
+      const sLat = req.start_location.latitude;
+      const sLng = req.start_location.longitude;
+      const offsetPoint = (lat: number, lng: number, distKm: number, bearingDeg: number) => {
+        const rad = (bearingDeg * Math.PI) / 180;
+        return {
+          lat: lat + (distKm * Math.cos(rad)) / 111.32,
+          lng: lng + (distKm * Math.sin(rad)) / (111.32 * Math.cos((lat * Math.PI) / 180)),
+        };
+      };
+      // Eckpunkte koennen im Gebirge/Wald landen — gestaffelte Offsets bis
+      // ~1.3km, damit GH einen Strassen-Snap findet.
+      const synthSnapVariants = [
+        { latOff: 0, lngOff: 0 },
+        { latOff: 0.0014, lngOff: 0 },
+        { latOff: -0.0014, lngOff: 0.0014 },
+        { latOff: 0.006, lngOff: 0 },
+        { latOff: -0.006, lngOff: -0.006 },
+        { latOff: 0, lngOff: 0.012 },
+        { latOff: -0.012, lngOff: 0 },
+        { latOff: 0.012, lngOff: 0.012 },
+      ];
+      const synthDiag = synthDiagTop;
+      const firstRtErr = parallel.find((pp) => 'error' in pp.result);
+      synthDiag.push(`rt_err=${firstRtErr ? String((firstRtErr.result as { error: string }).error).slice(0, 160) : 'none(' + parallel.length + ' ok results, all mini)'}`);
+      // Strategie: Wendepunkt W aus einer ECHTEN A->B-Geometrie nehmen (liegt
+      // garantiert auf einer Strasse — kein "Cannot find point" mehr), dann
+      // Hinweg start->W direkt + Rueckweg W->start mit seitlichem Detour
+      // (anderer Weg zurueck). Distanz steuert sich ueber die Lage von W.
+      let reachKm = targetKm * 0.62; // Fernziel-Distanz fuer die Probe-Route
+      outer:
+      for (const bearing of [45, 160, 280, 100]) {
+        let probeOk: RouteResult | null = null;
+        let pr = reachKm;
+        for (let shrink = 0; shrink < 3 && !probeOk; shrink++) {
+          const far = offsetPoint(sLat, sLng, pr, bearing);
+          const probe = await callGraphHopper({
+            startLat: sLat,
+            startLng: sLng,
+            endLat: far.lat,
+            endLng: far.lng,
+            profile: 'motorcycle_entdecker',
+            isRoundTrip: false,
+            avoidHighways: req.avoid_highways ?? false,
+            serverUrl: serverChoice.primary,
+          });
+          if (!('error' in probe)) {
+            probeOk = probe as RouteResult;
+          } else {
+            synthDiag.push(`b${bearing} probe@${pr.toFixed(0)}km: ${('error' in probe ? probe.error : '?').toString().slice(0, 60)}`);
+            pr *= 0.6; // Snap-Fehler -> naeher ran (Richtung Tal/Stadt)
+          }
+        }
+        if (!probeOk) continue outer;
+        // Wendepunkt = Geometrie-Punkt bei ~targetKm*0.45 entlang der Probe.
+        const pc = probeOk.geometry.coordinates as [number, number][];
+        const wantKm = Math.min(targetKm * 0.45, probeOk.distanceKm * 0.9);
+        let acc = 0;
+        let wIdx = pc.length - 1;
+        for (let i = 1; i < pc.length; i++) {
+          const dx = (pc[i][0] - pc[i - 1][0]) * 111.32 * Math.cos((pc[i][1] * Math.PI) / 180);
+          const dy = (pc[i][1] - pc[i - 1][1]) * 110.54;
+          acc += Math.sqrt(dx * dx + dy * dy);
+          if (acc >= wantKm) { wIdx = i; break; }
+        }
+        const W = { lat: pc[wIdx][1], lng: pc[wIdx][0] };
+        // Hinweg: start->W = Probe-Geometrie bis wIdx (echte Strassen).
+        const outCoords = pc.slice(0, wIdx + 1) as [number, number][];
+        const outKm = Math.min(acc, wantKm + 1);
+        // Rueckweg: W->start mit seitlichem Detour (anderer Weg zurueck).
+        for (const detSide of [0]) {
+          const back = await callGraphHopper({
+            startLat: W.lat,
+            startLng: W.lng,
+            endLat: sLat,
+            endLng: sLng,
+            profile: 'motorcycle_entdecker',
+            isRoundTrip: false,
+            avoidHighways: req.avoid_highways ?? false,
+            serverUrl: serverChoice.primary,
+          });
+          if ('error' in back) {
+            synthDiag.push(`b${bearing} back det${detSide}: ${(back.error ?? '?').toString().slice(0, 60)}`);
+            continue;
+          }
+          const br = back as RouteResult;
+          const coords: [number, number][] = [...outCoords];
+          const bc = br.geometry.coordinates as [number, number][];
+          for (let j = 1; j < bc.length; j++) coords.push(bc[j] as [number, number]);
+          const dist = outKm + br.distanceKm;
+          const delta = Math.abs(dist - targetKm) / targetKm * 100;
+          if (delta > 35) {
+            synthDiag.push(`b${bearing} det${detSide}: dist=${dist.toFixed(1)} delta=${delta.toFixed(0)}`);
+            continue;
+          }
+          let maxGapM = 0;
+          for (let i = 1; i < coords.length; i++) {
+            const dx = (coords[i][0] - coords[i - 1][0]) * 111320 * Math.cos((coords[i][1] * Math.PI) / 180);
+            const dy = (coords[i][1] - coords[i - 1][1]) * 110540;
+            const g = Math.sqrt(dx * dx + dy * dy);
+            if (g > maxGapM) maxGapM = g;
+          }
+          // Gerade Tunnel haben keine Zwischenpunkte (Achrain ~850m) — erst
+          // ab >1200m ist es eine kaputte Naht/Luftlinie.
+          if (maxGapM > 1200) {
+            synthDiag.push(`b${bearing} det${detSide}: gap=${maxGapM.toFixed(0)}m`);
+            continue;
+          }
+          const synth: RouteResult = {
+            geometry: { type: 'LineString', coordinates: coords },
+            distanceKm: dist,
+            durationSeconds: Math.round((outKm / Math.max(br.distanceKm, 0.1)) * br.durationSeconds) + br.durationSeconds,
+            ascent: br.ascent,
+            coordinateCount: coords.length,
+            fingerprint: buildFingerprint(coords, dist),
+            meta: {
+              route_source: 'graphhopper-stitched-outback',
+              engine: 'graphhopper-8',
+              profile: 'motorcycle_entdecker',
+              bbox: br.meta.bbox,
+            },
+          };
+          console.log(`[SYNTH-OUTBACK] success: ${dist.toFixed(1)}km (delta ${delta.toFixed(0)}%, ${coords.length} pts)`);
+          candidates.length = 0;
+          candidates.push({ result: synth, deltaPct: delta, seed: 0, isDup: previousFps.has(synth.fingerprint) });
+          usedProfileFallback = true;
+          break outer;
+        }
+      }
+      // Immer noch nichts Brauchbares (>50% daneben)? Ehrlicher Fehler statt
+      // Muell — der Client zeigt eine saubere Meldung + Auto-Retry.
+      const finalBest = candidates.length
+        ? Math.min(...candidates.map((c) => c.deltaPct))
+        : Infinity;
+      if (finalBest > 50) {
+        console.log('[SYNTH-TRIANGLE] no acceptable roundtrip — returning error instead of garbage');
+        candidates.length = 0;
+        lastError = `roundtrip_quality_unavailable [${synthDiag.slice(0, 6).join(' | ')}]`;
+      }
+    }
+  }
+
   // Style-Quality-Bonus: bevorzuge Routen die zum gewählten Stil passen.
   // Min Turn-Count / km (Sport ≥0.8, Kurvenjagd ≥1.2, Abendrunde ≥0.3, Entdecker ≥0.5)
   const minTurnsPerKm = minTurnsPerKmForProfile(profile);
@@ -1523,6 +1710,7 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
         route_fingerprint: bestCandidate.fingerprint,
         attempts_used: candidates.length,
         delta_pct: Number((selectedCandidate?.deltaPct ?? 0).toFixed(1)),
+        synth_diag: synthDiagTop.length ? synthDiagTop.slice(0, 4) : undefined,
         was_duplicate: selectedCandidate?.isDup ?? false,
         region: region.label,
         compensation_factor: region.factor,
