@@ -6089,6 +6089,91 @@ class _CruiseModePageState extends State<CruiseModePage>
     return true;
   }
 
+  // 2026-06-10 (vucko Start-Fix): Frische-/Accuracy-Gate für die Startkoordinate.
+  // Auf echten Geräten lieferte getLastKnownPosition() beliebig alte Fixes →
+  // die Route begann „irgendwo in der Nähe" statt am aktuellen Standort. Ein
+  // Fix gilt als frisch, wenn er jünger als 10 s und genauer als 50 m ist.
+  static const Duration _startFixMaxAge = Duration(seconds: 10);
+  static const double _startFixMaxAccuracyMeters = 50.0;
+
+  bool _isFreshStartFix(geo.Position position) {
+    final ageMs = DateTime.now()
+        .difference(position.timestamp)
+        .inMilliseconds
+        .abs();
+    return ageMs <= _startFixMaxAge.inMilliseconds &&
+        position.accuracy > 0 &&
+        position.accuracy <= _startFixMaxAccuracyMeters;
+  }
+
+  String _describeStartFix(geo.Position position) =>
+      'age=${DateTime.now().difference(position.timestamp).inMilliseconds}ms '
+      'acc=${position.accuracy.toStringAsFixed(0)}m '
+      'lat=${position.latitude.toStringAsFixed(5)} '
+      'lng=${position.longitude.toStringAsFixed(5)}';
+
+  /// Liefert einen FRISCHEN GPS-Fix für die Routengenerierung.
+  ///
+  /// Reihenfolge:
+  /// 1. Laufender Idle-/Navigations-Stream, wenn frisch (<10 s) und genau
+  ///    (<50 m) — kein zusätzliches Warten.
+  /// 2. `getCurrentPosition()` mit 12 s Timeout (der Suche-Spinner läuft
+  ///    währenddessen bereits).
+  /// 3. Timeout-Fallback: letzter bekannter Fix — klar als VERALTET geloggt,
+  ///    damit ein Start-Versatz diagnostizierbar bleibt.
+  ///
+  /// Vorher wurde getLastKnownPosition() BEVORZUGT — auf echten Geräten konnte
+  /// der Fix Minuten/Stunden alt sein und die Route begann am falschen Ort.
+  Future<geo.Position> _acquireFreshStartFix() async {
+    final streamFix = _userLocation;
+    if (streamFix != null && _isFreshStartFix(streamFix)) {
+      debugPrint(
+        '[CruiseMode][StartFix] source=stream ${_describeStartFix(streamFix)}',
+      );
+      return streamFix;
+    }
+    try {
+      final fresh = await geo.Geolocator.getCurrentPosition(
+        locationSettings: const geo.LocationSettings(
+          accuracy: geo.LocationAccuracy.best,
+        ),
+      ).timeout(const Duration(seconds: 12));
+      debugPrint(
+        '[CruiseMode][StartFix] source=getCurrentPosition '
+        '${_describeStartFix(fresh)}',
+      );
+      return fresh;
+    } on TimeoutException {
+      debugPrint(
+        '[CruiseMode][StartFix] getCurrentPosition-Timeout (12s) — '
+        'Fallback auf letzten bekannten Fix',
+      );
+    } catch (e) {
+      final msg = e.toString().toLowerCase();
+      if (msg.contains('denied') || msg.contains('permission')) {
+        throw Exception(
+          'Bitte erlaube den Standortzugriff in deinen Browser-/Geräteeinstellungen und lade die Seite neu.',
+        );
+      }
+      rethrow;
+    }
+    geo.Position? fallback;
+    if (!kIsWeb) {
+      fallback = await geo.Geolocator.getLastKnownPosition();
+    }
+    fallback ??= _userLocation;
+    if (fallback != null) {
+      debugPrint(
+        '[CruiseMode][StartFix] source=staleFallback '
+        '${_describeStartFix(fallback)} — VERALTET, Start-Versatz möglich',
+      );
+      return fallback;
+    }
+    throw Exception(
+      'Standort konnte nicht ermittelt werden. Bitte versuche es erneut.',
+    );
+  }
+
   Future<geo.Position> _getStartCoordinates() async {
     // 2026-05-28 (vucko): "Standort wählen" mit gesetztem Punkt → von dort
     // starten (Karten-Tap oder Adresssuche). Dijkstra-Routing braucht nur
@@ -6096,6 +6181,11 @@ class _CruiseModePageState extends State<CruiseModePage>
     if (_selectedLocation == 'Standort wählen' &&
         _pickedStartLocation != null) {
       final picked = _pickedStartLocation!;
+      debugPrint(
+        '[CruiseMode][StartFix] source=pickedLocation '
+        'lat=${picked.latitude.toStringAsFixed(5)} '
+        'lng=${picked.longitude.toStringAsFixed(5)}',
+      );
       return geo.Position(
         longitude: picked.longitude,
         latitude: picked.latitude,
@@ -6130,37 +6220,22 @@ class _CruiseModePageState extends State<CruiseModePage>
         }
       }
 
-      if (!kIsWeb) {
-        geo.Position? lastPosition =
-            await geo.Geolocator.getLastKnownPosition();
-        if (lastPosition != null) return lastPosition;
-      }
-
-      try {
-        return await geo.Geolocator.getCurrentPosition(
-          locationSettings: const geo.LocationSettings(
-            accuracy: geo.LocationAccuracy.best,
-          ),
-        ).timeout(
-          const Duration(seconds: 15),
-          onTimeout: () {
-            throw Exception(
-              'Standort konnte nicht ermittelt werden. Bitte versuche es erneut.',
-            );
-          },
-        );
-      } catch (e) {
-        final msg = e.toString().toLowerCase();
-        if (msg.contains('denied') || msg.contains('permission')) {
-          throw Exception(
-            'Bitte erlaube den Standortzugriff in deinen Browser-/Geräteeinstellungen und lade die Seite neu.',
-          );
-        }
-        rethrow;
-      }
+      // 2026-06-10 (vucko Start-Fix): Frische-Gate statt getLastKnownPosition-
+      // Shortcut (der lieferte beliebig alte Positionen → falscher Routenstart).
+      return _acquireFreshStartFix();
     }
     // Fallback: Eigene Position verwenden wenn vorhanden, sonst Vorarlberg
-    if (_userLocation != null) return _userLocation!;
+    if (_userLocation != null) {
+      debugPrint(
+        '[CruiseMode][StartFix] source=userLocationFallback '
+        '${_describeStartFix(_userLocation!)}',
+      );
+      return _userLocation!;
+    }
+    debugPrint(
+      '[CruiseMode][StartFix] source=vorarlbergDefault — keine Position '
+      'verfügbar, nutze Default-Koordinate',
+    );
     return geo.Position(
       longitude: 9.7415,
       latitude: 47.2607,
@@ -6558,6 +6633,30 @@ class _CruiseModePageState extends State<CruiseModePage>
       );
     } catch (e, stack) {
       debugPrint('[CruiseMode] Route generation failed: $e');
+      // 2026-06-10 (vucko Fehler-Klassifizierung): EIN greppbarer Log pro
+      // Fehlschlag mit Typ + Edge-Code + Start-Versatz — vorher war jeder
+      // Generierungsfehler nur ein generisches "failed: Exception".
+      if (e is RouteServiceException) {
+        debugPrint(
+          '[CruiseMode][GenFail] mode=${_isRoundTrip ? 'roundtrip' : 'p2p'} '
+          'planning=$_planningType type=${e.type.name} '
+          'status=${e.statusCode ?? '-'} '
+          'code=${e.edgeMeta['response_code'] ?? '-'} '
+          'startOffset=${e.edgeMeta['start_offset_meters'] ?? '-'} '
+          'debug=${e.debugMessage}',
+        );
+      } else if (e is TimeoutException) {
+        debugPrint(
+          '[CruiseMode][GenFail] mode=${_isRoundTrip ? 'roundtrip' : 'p2p'} '
+          'planning=$_planningType type=timeout debug=$e',
+        );
+      } else {
+        debugPrint(
+          '[CruiseMode][GenFail] mode=${_isRoundTrip ? 'roundtrip' : 'p2p'} '
+          'planning=$_planningType type=exception '
+          'runtime=${e.runtimeType} debug=$e',
+        );
+      }
       debugPrintStack(
         label: '[CruiseMode] Route generation stacktrace',
         stackTrace: stack,
@@ -8289,6 +8388,62 @@ class _CruiseModePageState extends State<CruiseModePage>
     }
   }
 
+  // ─────────────── Reroute-Fehlerklassifizierung (2026-06-10, vucko) ────────
+  // Vorher mündete JEDER Reroute-Fehler in derselben generischen Meldung —
+  // unmöglich zu diagnostizieren, ob Edge-Fehler, Timeout, Validator-Reject
+  // oder Start-Versatz (Server-Snap-Bug). Jede Fehlstelle im Zyklus meldet
+  // jetzt eine Ursache; die letzte Meldung an den User ist ursachen-spezifisch.
+
+  /// Maximal akzeptierter Abstand zwischen aktuellem GPS-Fix und erstem Punkt
+  /// eines Reroute-Connectors. Während der Fahrt ist der User AUF einer Straße
+  /// — legitimes Snapping liegt unter ~100 m (Edge nutzt start_radius_m=65).
+  static const double _rerouteMaxStartOffsetMeters = 250.0;
+
+  String _classifyRerouteError(Object e) {
+    if (e is TimeoutException) return 'timeout';
+    if (e is RouteServiceException) {
+      final code = e.edgeMeta['response_code']?.toString();
+      if (code == 'start_offset_rejected') {
+        final meters = e.edgeMeta['start_offset_meters'];
+        return 'start_offset(${meters ?? '?'}m)';
+      }
+      switch (e.type) {
+        case RouteErrorType.network:
+          return 'network';
+        case RouteErrorType.server:
+        case RouteErrorType.rateLimit:
+        case RouteErrorType.workerLimit:
+        case RouteErrorType.auth:
+          return 'edge_error(${e.type.name}/${e.statusCode ?? '-'})';
+        case RouteErrorType.quality:
+          return 'validator_reject(${e.debugMessage})';
+        case RouteErrorType.noRoute:
+        case RouteErrorType.emptyResponse:
+          return 'no_route(${e.type.name})';
+        default:
+          return 'edge_error(${e.type.name})';
+      }
+    }
+    return 'exception(${e.runtimeType})';
+  }
+
+  String _rerouteFailureUserMessage(List<String> causes) {
+    if (causes.any((c) => c.startsWith('start_offset'))) {
+      return 'Reroute verworfen: Server-Route startete zu weit entfernt — folge der Linie, nächster Versuch kommt automatisch';
+    }
+    final last = causes.isNotEmpty ? causes.last : '';
+    if (last.startsWith('timeout') || last.startsWith('network')) {
+      return 'Reroute gerade nicht möglich (Netz/Server) — folge der Linie, nächster Versuch kommt automatisch';
+    }
+    if (last.startsWith('edge_error')) {
+      return 'Reroute-Server meldet einen Fehler — folge der Linie, nächster Versuch kommt automatisch';
+    }
+    if (last.startsWith('no_route') || last == 'no_candidate') {
+      return 'Keine Anschlussroute gefunden — folge der Linie, wende erst bei sicherer Möglichkeit';
+    }
+    return 'Keine sichere Reroute — folge der Linie, wende erst bei sicherer Möglichkeit';
+  }
+
   void _publishRerouteFailure({
     required String rerouteReason,
     required String rerouteMode,
@@ -8296,6 +8451,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     required double? etaBeforeSeconds,
     double? rerouteDistanceMeters,
     double? rejoinPointDistanceMeters,
+    String? userMessage,
   }) {
     final meta = buildRerouteTelemetry(
       rerouteReason: rerouteReason,
@@ -8320,7 +8476,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       ScaffoldMessenger.of(context).hideCurrentSnackBar();
       TopToast.show(
         context,
-        message:
+        message: userMessage ??
             'Keine sichere Reroute — folge der Linie, wende erst bei sicherer Möglichkeit',
         icon: Icons.warning_amber_rounded,
         isError: true,
@@ -10458,33 +10614,91 @@ class _CruiseModePageState extends State<CruiseModePage>
   /// Berechnet eine neue Route von der aktuellen Position zurück zur Originalroute.
   /// Nutzt einen Punkt weiter voraus auf der Route als Ziel und berechnet via
   /// Mapbox eine befahrbare Straßenroute (keine Luftlinie).
+  ///
+  /// 2026-06-10 (vucko Reroute-Retry): Schlägt der komplette Zyklus fehl, gibt
+  /// es EINEN automatischen zweiten Zyklus mit FRISCHEM GPS-Fix — der erste
+  /// Fehlschlag kann an einer veralteten/ungenauen Position liegen. Erst wenn
+  /// auch der Retry scheitert, sieht der User die (ursachen-spezifische)
+  /// Fehlermeldung.
   Future<void> _rerouteToOriginalRoute(geo.Position position) async {
     if (_isRerouting) return;
     _isRerouting = true;
     final remainingDistanceBeforeMeters = _remainingDistance ?? _routeDistance;
     final etaBeforeSeconds = _remainingDuration ?? _routeDuration;
 
-    if (!await _hasConnectivityForReroute()) {
-      _publishOfflineRerouteFallback(
+    try {
+      if (!await _hasConnectivityForReroute()) {
+        _publishOfflineRerouteFallback(
+          remainingDistanceBeforeMeters: remainingDistanceBeforeMeters,
+          etaBeforeSeconds: etaBeforeSeconds,
+        );
+        return;
+      }
+
+      if (mounted && !_rerouteBannerShown) {
+        // 2026-06-06 (vucko P2): NUR EINMAL pro Reroute-Zyklus (vorher pro Versuch
+        // → der Spam aus dem Test). P7 deckelt die Anzeige auf ≤5s.
+        _rerouteBannerShown = true;
+        TopToast.show(
+          context,
+          message: 'Route wird neu berechnet — bitte weiterfahren',
+          icon: Icons.refresh_rounded,
+          duration: const Duration(seconds: 5),
+        );
+      }
+
+      final firstCycleOk = await _runRerouteCycle(
+        position,
+        isRetry: false,
         remainingDistanceBeforeMeters: remainingDistanceBeforeMeters,
         etaBeforeSeconds: etaBeforeSeconds,
       );
-      _isRerouting = false;
-      return;
-    }
+      if (firstCycleOk || !mounted || _disposed) return;
 
-    if (mounted && !_rerouteBannerShown) {
-      // 2026-06-06 (vucko P2): NUR EINMAL pro Reroute-Zyklus (vorher pro Versuch
-      // → der Spam aus dem Test). P7 deckelt die Anzeige auf ≤5s.
-      _rerouteBannerShown = true;
-      TopToast.show(
-        context,
-        message: 'Route wird neu berechnet — bitte weiterfahren',
-        icon: Icons.refresh_rounded,
-        duration: const Duration(seconds: 5),
+      // EIN Auto-Retry mit frischem GPS-Fix. Liefert getCurrentPosition nichts
+      // (Timeout 5s), läuft der Retry mit der bisherigen Position — auch dann
+      // hilft er bei transienten Edge-/Netz-Fehlern.
+      var retryPosition = position;
+      try {
+        retryPosition = await geo.Geolocator.getCurrentPosition(
+          locationSettings: const geo.LocationSettings(
+            accuracy: geo.LocationAccuracy.best,
+          ),
+        ).timeout(const Duration(seconds: 5));
+        debugPrint(
+          '[CruiseMode][RerouteRetry] Frischer GPS-Fix für Auto-Retry: '
+          '${_describeStartFix(retryPosition)}',
+        );
+      } catch (e) {
+        debugPrint(
+          '[CruiseMode][RerouteRetry] Frischer Fix fehlgeschlagen '
+          '($e) — Auto-Retry mit letzter Position',
+        );
+      }
+      await _runRerouteCycle(
+        retryPosition,
+        isRetry: true,
+        remainingDistanceBeforeMeters: remainingDistanceBeforeMeters,
+        etaBeforeSeconds: etaBeforeSeconds,
       );
+    } finally {
+      _isRerouting = false;
     }
+  }
 
+  /// Ein kompletter Reroute-Zyklus (Ziel-Reroute → Rejoin-Versuche →
+  /// garantierter Re-Dock). Gibt `true` zurück, wenn eine Route committed
+  /// wurde (oder die UI weg ist), `false` bei Fehlschlag. Die Fehlermeldung an
+  /// den User erscheint nur im finalen Versuch (`isRetry == true`) — der erste
+  /// Fehlschlag löst stattdessen den Auto-Retry mit frischem Fix aus.
+  Future<bool> _runRerouteCycle(
+    geo.Position position, {
+    required bool isRetry,
+    required double? remainingDistanceBeforeMeters,
+    required double? etaBeforeSeconds,
+  }) async {
+    // Ursachen-Protokoll dieses Zyklus — jede Fehlstelle trägt sich ein.
+    final cycleFailures = <String>[];
     try {
       const validator = RouteQualityValidator();
       final accessLegMode =
@@ -10587,7 +10801,35 @@ class _CruiseModePageState extends State<CruiseModePage>
             intermediateWaypoints: rerouteWaypoints,
           );
         } catch (e) {
-          debugPrint('[CruiseMode] Direkter Ziel-Reroute fehlgeschlagen: $e');
+          final cause = _classifyRerouteError(e);
+          cycleFailures.add(cause);
+          debugPrint(
+            '[CruiseMode][RerouteFail] stage=ziel cause=$cause detail=$e',
+          );
+        }
+
+        // 2026-06-10 (vucko Start-Versatz-Gate): Connector muss am Fahrer
+        // beginnen — der Edge-Snap-Bug lieferte Connectors ~758m daneben.
+        if (destinationResult != null &&
+            destinationResult.coordinates.length >= 2) {
+          final destStartOffset = geo.Geolocator.distanceBetween(
+            position.latitude,
+            position.longitude,
+            destinationResult.coordinates.first[1],
+            destinationResult.coordinates.first[0],
+          );
+          if (destStartOffset > _rerouteMaxStartOffsetMeters) {
+            cycleFailures.add(
+              'start_offset(${destStartOffset.toStringAsFixed(0)}m)',
+            );
+            debugPrint(
+              '[CruiseMode][RerouteFail] stage=ziel cause=start_offset '
+              'offset=${destStartOffset.toStringAsFixed(0)}m '
+              'limit=${_rerouteMaxStartOffsetMeters.toStringAsFixed(0)}m '
+              '— Kandidat verworfen',
+            );
+            destinationResult = null;
+          }
         }
 
         if (destinationResult != null &&
@@ -10615,6 +10857,10 @@ class _CruiseModePageState extends State<CruiseModePage>
           if (!destinationQuality.passed ||
               destinationTooFewPoints ||
               highwayViolation) {
+            cycleFailures.add(
+              'validator_reject(ziel: quality=${!destinationQuality.passed} '
+              'fewPoints=$destinationTooFewPoints highway=$highwayViolation)',
+            );
             debugPrint(
               '[CruiseMode] Ziel-Reroute QA-verworfen → Force-Accept direkt zum Ziel.',
             );
@@ -10637,10 +10883,34 @@ class _CruiseModePageState extends State<CruiseModePage>
                 locationAccuracyMeters: rerouteAccuracyMeters,
                 intermediateWaypoints: rerouteWaypoints,
               );
-              if (forced.coordinates.length >= 2) acceptedDest = forced;
+              if (forced.coordinates.length >= 2) {
+                // Auch der Force-Accept-Connector muss am Fahrer beginnen.
+                final forcedStartOffset = geo.Geolocator.distanceBetween(
+                  position.latitude,
+                  position.longitude,
+                  forced.coordinates.first[1],
+                  forced.coordinates.first[0],
+                );
+                if (forcedStartOffset > _rerouteMaxStartOffsetMeters) {
+                  cycleFailures.add(
+                    'start_offset(${forcedStartOffset.toStringAsFixed(0)}m)',
+                  );
+                  debugPrint(
+                    '[CruiseMode][RerouteFail] stage=ziel_force_accept '
+                    'cause=start_offset '
+                    'offset=${forcedStartOffset.toStringAsFixed(0)}m '
+                    '— Kandidat verworfen',
+                  );
+                } else {
+                  acceptedDest = forced;
+                }
+              }
             } catch (e) {
+              final cause = _classifyRerouteError(e);
+              cycleFailures.add(cause);
               debugPrint(
-                '[CruiseMode] Force-Accept Ziel-Reroute fehlgeschlagen: $e',
+                '[CruiseMode][RerouteFail] stage=ziel_force_accept '
+                'cause=$cause detail=$e',
               );
             }
           } else {
@@ -10698,7 +10968,7 @@ class _CruiseModePageState extends State<CruiseModePage>
                   ),
                 );
             }
-            return;
+            return true;
           }
         }
       }
@@ -10780,14 +11050,45 @@ class _CruiseModePageState extends State<CruiseModePage>
           );
         } catch (e) {
           rejoinIndex = math.min(rejoinIndex + 80, maxRejoinIndex).toInt();
+          final cause = _classifyRerouteError(e);
+          cycleFailures.add(cause);
           debugPrint(
-            '[CruiseMode] Reroute-Attempt ${attempt + 1}: keine Route (${e.runtimeType})',
+            '[CruiseMode][RerouteFail] stage=rejoin attempt=${attempt + 1} '
+            'cause=$cause detail=$e',
           );
           continue;
         }
 
         if (candidate.coordinates.length < 2) {
           rejoinIndex = math.min(rejoinIndex + 80, maxRejoinIndex).toInt();
+          cycleFailures.add('no_route(leere_geometrie)');
+          debugPrint(
+            '[CruiseMode][RerouteFail] stage=rejoin attempt=${attempt + 1} '
+            'cause=no_route(leere_geometrie)',
+          );
+          continue;
+        }
+
+        // 2026-06-10 (vucko Start-Versatz-Gate): Connector muss am Fahrer
+        // beginnen (Edge-Snap-Bug lieferte ~758m Versatz).
+        final candidateStartOffset = geo.Geolocator.distanceBetween(
+          position.latitude,
+          position.longitude,
+          candidate.coordinates.first[1],
+          candidate.coordinates.first[0],
+        );
+        if (candidateStartOffset > _rerouteMaxStartOffsetMeters) {
+          rejoinIndex = math.min(rejoinIndex + 80, maxRejoinIndex).toInt();
+          cycleFailures.add(
+            'start_offset(${candidateStartOffset.toStringAsFixed(0)}m)',
+          );
+          debugPrint(
+            '[CruiseMode][RerouteFail] stage=rejoin attempt=${attempt + 1} '
+            'cause=start_offset '
+            'offset=${candidateStartOffset.toStringAsFixed(0)}m '
+            'limit=${_rerouteMaxStartOffsetMeters.toStringAsFixed(0)}m '
+            '— Kandidat verworfen',
+          );
           continue;
         }
 
@@ -10807,6 +11108,10 @@ class _CruiseModePageState extends State<CruiseModePage>
             candidateTooFewPoints ||
             highwayViolation) {
           rejoinIndex = math.min(rejoinIndex + 80, maxRejoinIndex).toInt();
+          cycleFailures.add(
+            'validator_reject(rejoin: quality=${!candidateQuality.passed} '
+            'fewPoints=$candidateTooFewPoints highway=$highwayViolation)',
+          );
           debugPrint(
             '[CruiseMode] Reroute-Attempt ${attempt + 1}: Kandidat verworfen (Qualität/Highway-Policy)',
           );
@@ -10824,6 +11129,9 @@ class _CruiseModePageState extends State<CruiseModePage>
           );
           if (joinDistance > 45.0 && rejoinIndex < maxRejoinIndex) {
             rejoinIndex = math.min(rejoinIndex + 80, maxRejoinIndex).toInt();
+            cycleFailures.add(
+              'validator_reject(join_gap ${joinDistance.toStringAsFixed(0)}m)',
+            );
             debugPrint(
               '[CruiseMode] Reroute-Attempt ${attempt + 1}: Join-Gap ${joinDistance.toStringAsFixed(0)}m, rejoinIndex=$rejoinIndex',
             );
@@ -10837,6 +11145,7 @@ class _CruiseModePageState extends State<CruiseModePage>
           );
           if (producesUTurn && rejoinIndex < maxRejoinIndex) {
             rejoinIndex = math.min(rejoinIndex + 80, maxRejoinIndex).toInt();
+            cycleFailures.add('validator_reject(join_uturn)');
             debugPrint(
               '[CruiseMode] Reroute-Attempt ${attempt + 1}: Join-U-Turn erkannt, rejoinIndex=$rejoinIndex',
             );
@@ -10857,6 +11166,7 @@ class _CruiseModePageState extends State<CruiseModePage>
           );
           if (foldsBack && rejoinIndex < maxRejoinIndex) {
             rejoinIndex = math.min(rejoinIndex + 80, maxRejoinIndex).toInt();
+            cycleFailures.add('validator_reject(merge_folds_back)');
             debugPrint(
               '[CruiseMode] Reroute-Attempt ${attempt + 1}: Merge-Naht faltet zurück, rejoinIndex=$rejoinIndex',
             );
@@ -10865,6 +11175,7 @@ class _CruiseModePageState extends State<CruiseModePage>
           if (foldsBack) {
             // Letzter Rejoin-Index und IMMER NOCH Faltung → diesen Kandidaten
             // NICHT mergen; der garantierte Re-Dock / Fallback übernimmt.
+            cycleFailures.add('validator_reject(merge_folds_back_final)');
             debugPrint(
               '[CruiseMode] Reroute-Attempt ${attempt + 1}: Merge-Naht faltet auch am Ende — Kandidat verworfen',
             );
@@ -10923,12 +11234,39 @@ class _CruiseModePageState extends State<CruiseModePage>
                 tail: redockTail,
               );
           if (redockFolds) {
+            cycleFailures.add('validator_reject(redock_folds_back)');
             debugPrint(
               '[CruiseMode] Garantierter Re-Dock faltet zurück — verworfen, alte Route bleibt',
             );
           }
+          // 2026-06-10 (vucko Start-Versatz-Gate): forceAcceptDirect umgeht die
+          // Service-Gates NICHT mehr beim Start-Versatz, aber doppelt hält
+          // besser — ein Re-Dock-Connector, der nicht am Fahrer beginnt, würde
+          // sofort wieder als off-route gelten.
+          var redockStartOffsetOk = true;
+          if (connector.coordinates.length >= 2) {
+            final redockStartOffset = geo.Geolocator.distanceBetween(
+              position.latitude,
+              position.longitude,
+              connector.coordinates.first[1],
+              connector.coordinates.first[0],
+            );
+            if (redockStartOffset > _rerouteMaxStartOffsetMeters) {
+              redockStartOffsetOk = false;
+              cycleFailures.add(
+                'start_offset(${redockStartOffset.toStringAsFixed(0)}m)',
+              );
+              debugPrint(
+                '[CruiseMode][RerouteFail] stage=redock cause=start_offset '
+                'offset=${redockStartOffset.toStringAsFixed(0)}m '
+                'limit=${_rerouteMaxStartOffsetMeters.toStringAsFixed(0)}m '
+                '— Re-Dock verworfen, alte Route bleibt',
+              );
+            }
+          }
           if (connector.coordinates.length >= 2 &&
               !redockFolds &&
+              redockStartOffsetOk &&
               mounted &&
               !_disposed) {
             final connLen = connector.coordinates.length;
@@ -10975,27 +11313,37 @@ class _CruiseModePageState extends State<CruiseModePage>
                 duration: const Duration(milliseconds: 2500),
               );
             }
-            return;
+            return true;
           }
         } catch (e) {
+          final cause = _classifyRerouteError(e);
+          cycleFailures.add(cause);
           debugPrint(
-              '[CruiseMode] Garantierter Re-Dock-Fallback fehlgeschlagen: $e');
+            '[CruiseMode][RerouteFail] stage=redock cause=$cause detail=$e',
+          );
         }
       }
 
-      if (rerouteResult == null ||
-          acceptedPlan == null ||
-          !mounted ||
-          _disposed) {
-        _publishRerouteFailure(
-          rerouteReason: rerouteResult == null
-              ? 'no_candidate'
-              : 'ui_unmounted',
-          rerouteMode: accessLegMode ? 'rejoin' : 'partial_rebuild',
-          remainingDistanceBeforeMeters: remainingDistanceBeforeMeters,
-          etaBeforeSeconds: etaBeforeSeconds,
+      if (!mounted || _disposed) {
+        // UI ist weg — kein Retry, keine Meldung.
+        return true;
+      }
+      if (rerouteResult == null || acceptedPlan == null) {
+        cycleFailures.add('no_candidate');
+        debugPrint(
+          '[CruiseMode][RerouteFail] Zyklus gescheitert '
+          '(isRetry=$isRetry) causes=${cycleFailures.join(' | ')}',
         );
-        return;
+        if (isRetry) {
+          _publishRerouteFailure(
+            rerouteReason: 'no_candidate',
+            rerouteMode: accessLegMode ? 'rejoin' : 'partial_rebuild',
+            remainingDistanceBeforeMeters: remainingDistanceBeforeMeters,
+            etaBeforeSeconds: etaBeforeSeconds,
+            userMessage: _rerouteFailureUserMessage(cycleFailures),
+          );
+        }
+        return false;
       }
 
       final resolvedRerouteResult = rerouteResult;
@@ -11213,31 +11561,28 @@ class _CruiseModePageState extends State<CruiseModePage>
           duration: const Duration(milliseconds: 2200),
         );
       }
+      return true;
     } catch (e, stack) {
-      debugPrint('Rerouting fehlgeschlagen: $e');
+      final cause = _classifyRerouteError(e);
+      cycleFailures.add(cause);
+      debugPrint(
+        '[CruiseMode][RerouteFail] Zyklus-Exception (isRetry=$isRetry) '
+        'cause=$cause causes=${cycleFailures.join(' | ')} detail=$e',
+      );
       debugPrintStack(
         label: '[CruiseMode] Rerouting stacktrace',
         stackTrace: stack,
       );
-      _publishRerouteFailure(
-        rerouteReason: 'exception',
-        rerouteMode: _isAccessLegActive ? 'rejoin' : 'partial_rebuild',
-        remainingDistanceBeforeMeters: remainingDistanceBeforeMeters,
-        etaBeforeSeconds: etaBeforeSeconds,
-      );
-      // 2026-05-25 (vucko UX): klarer Fail-Toast wenn Reroute nicht klappt.
-      // Vorher: Snackbar verschwand still → User wusste nicht ob das System
-      // versucht hat oder noch wartet.
-      if (mounted && !_disposed) {
-        TopToast.show(
-          context,
-          message: 'Route konnte nicht neu berechnet werden — folge der alten Linie',
-          icon: Icons.warning_amber_rounded,
-          duration: const Duration(milliseconds: 3500),
+      if (isRetry) {
+        _publishRerouteFailure(
+          rerouteReason: 'exception',
+          rerouteMode: _isAccessLegActive ? 'rejoin' : 'partial_rebuild',
+          remainingDistanceBeforeMeters: remainingDistanceBeforeMeters,
+          etaBeforeSeconds: etaBeforeSeconds,
+          userMessage: _rerouteFailureUserMessage(cycleFailures),
         );
       }
-    } finally {
-      _isRerouting = false;
+      return false;
     }
   }
 
