@@ -216,14 +216,14 @@ void main() {
       expect(creditedKm, 0);
     });
 
-    test('completed nutzt trotzdem nur die tatsaechlich gefahrene Strecke', () {
+    test('completed am Ziel gibt volle Strecken-XP', () {
       final creditedKm = GamificationService.creditedDistanceKmForProgress(
         plannedDistanceKm: 100,
         progressRatio: 0.96,
         completed: true,
       );
 
-      expect(creditedKm, 96);
+      expect(creditedKm, 100);
     });
 
     test('Level ist bei 100 gedeckelt', () {

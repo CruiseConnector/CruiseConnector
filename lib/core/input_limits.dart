@@ -9,6 +9,9 @@ class AppInputLimits {
   static const int commentMaxLength = 1000;
   static const int groupNameMaxLength = 25;
   static const int groupDescriptionMaxLength = 300;
+  static const int communityNameMaxLength = 40;
+  static const int communityDescriptionMaxLength = 300;
+  static const int communityMessageMaxLength = 2000;
   static const int groupRouteNameMaxLength = 80;
   static const int groupStatsMaxLength = 120;
   static const int groupTimeLocationMaxLength = 160;
@@ -23,6 +26,7 @@ class AppInputLimits {
   static const int passwordMaxLength = 128;
   static const int reportDetailsMaxLength = 280;
   static const int vehicleDescriptionMaxLength = 500;
+  static const int vehicleTuningMaxLength = 500;
 
   static final RegExp usernameRegExp = RegExp(r'^[A-Za-z0-9_]{3,20}$');
 

@@ -111,14 +111,8 @@ class _VehicleGarageCarouselState extends State<VehicleGarageCarousel> {
                   );
                   return value > preferred ? value : preferred;
                 });
-            final isShowingAddCard =
-                widget.onAddVehicle != null && _page >= widget.vehicles.length;
-            final height = isShowingAddCard
-                ? (preferredHeight < 320 ? preferredHeight : 320.0)
-                : preferredHeight;
-
             return SizedBox(
-              height: height,
+              height: preferredHeight,
               child: PageView.builder(
                 controller: _controller,
                 itemCount: _pageCount,
@@ -177,13 +171,10 @@ class _AddVehicleCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        final compactHeight = constraints.maxHeight < 360
-            ? constraints.maxHeight
-            : 286.0;
         return Align(
           alignment: Alignment.topCenter,
           child: SizedBox(
-            height: compactHeight,
+            height: constraints.maxHeight,
             width: double.infinity,
             child: InkWell(
               onTap: onTap,

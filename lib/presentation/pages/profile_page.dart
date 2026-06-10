@@ -358,6 +358,14 @@ class _ProfilePageState extends State<ProfilePage>
     await launchUrl(uri, mode: LaunchMode.externalApplication);
   }
 
+  Future<void> _openEditProfile() async {
+    final changed = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(builder: (_) => const EditProfilePage()),
+    );
+    if (changed == true) _loadData();
+  }
+
   @override
   Widget build(BuildContext context) {
     final accent = context.watch<AppAccentProvider>().color;
@@ -386,6 +394,13 @@ class _ProfilePageState extends State<ProfilePage>
         (liveProfile['follower_count'] as num?)?.toInt() ?? _followerCount;
     final liveFollowingCount =
         (liveProfile['following_count'] as num?)?.toInt() ?? _followingCount;
+    final profileCompletion = _profileCompletion(
+      profile: liveProfile,
+      vehicles: _vehicles,
+      avatarUrl: liveAvatarUrl,
+      bannerUrl: liveBannerUrl,
+      bio: userBio,
+    );
 
     return Scaffold(
       key: _scaffoldKey,
@@ -562,18 +577,7 @@ class _ProfilePageState extends State<ProfilePage>
                           Padding(
                             padding: const EdgeInsets.only(bottom: 10),
                             child: GestureDetector(
-                              onTap: () async {
-                                final changed = await Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (_) => const EditProfilePage(),
-                                  ),
-                                );
-                                // EditProfilePage liefert `true` zurück, wenn
-                                // Speichern erfolgreich war — dann frische Daten
-                                // ziehen, damit Banner/Avatar/Auto-Karte aktuell sind.
-                                if (changed == true) _loadData();
-                              },
+                              onTap: _openEditProfile,
                               child: Container(
                                 padding: const EdgeInsets.symmetric(
                                   horizontal: 16,
@@ -680,6 +684,11 @@ class _ProfilePageState extends State<ProfilePage>
                             ),
                           ],
                         ),
+                        if (profileCompletion.completed <
+                            profileCompletion.total) ...[
+                          const SizedBox(height: 12),
+                          _buildProfileCompletionCard(profileCompletion),
+                        ],
                       ],
                     ),
                   ],
@@ -1872,6 +1881,141 @@ class _ProfilePageState extends State<ProfilePage>
     );
   }
 
+  ({int completed, int total, List<String> missing}) _profileCompletion({
+    required Map<String, dynamic> profile,
+    required List<Map<String, dynamic>> vehicles,
+    required String? avatarUrl,
+    required String? bannerUrl,
+    required String? bio,
+  }) {
+    final vehicleCandidates = vehicles.isNotEmpty ? vehicles : [profile];
+    final hasVehicle = vehicleCandidates.any(
+      (vehicle) =>
+          _hasText(vehicle['brand'] ?? vehicle['car_brand']) ||
+          _hasText(vehicle['model'] ?? vehicle['car_name']) ||
+          _hasText(vehicle['description']) ||
+          _hasText(vehicle['tuning_details']) ||
+          _hasText(vehicle['image_url'] ?? vehicle['car_image_url']) ||
+          vehicle['horsepower'] != null ||
+          vehicle['top_speed'] != null ||
+          vehicle['car_horsepower'] != null ||
+          vehicle['car_top_speed'] != null,
+    );
+
+    final items = <({String label, bool done})>[
+      (label: 'Profilbild', done: _hasText(avatarUrl)),
+      (label: 'Banner', done: _hasText(bannerUrl)),
+      (label: 'Beschreibung', done: _hasText(bio)),
+      (label: 'Garage-Fahrzeug', done: hasVehicle),
+    ];
+    final missing = [
+      for (final item in items)
+        if (!item.done) item.label,
+    ];
+    return (
+      completed: items.length - missing.length,
+      total: items.length,
+      missing: missing,
+    );
+  }
+
+  bool _hasText(dynamic value) {
+    final text = (value as String?)?.trim();
+    return text != null && text.isNotEmpty;
+  }
+
+  Widget _buildProfileCompletionCard(
+    ({int completed, int total, List<String> missing}) completion,
+  ) {
+    final isComplete = completion.completed >= completion.total;
+    final progress = completion.total == 0
+        ? 0.0
+        : completion.completed / completion.total;
+    return InkWell(
+      onTap: () async {
+        final changed = await Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const EditProfilePage()),
+        );
+        if (changed == true) _loadData();
+      },
+      borderRadius: BorderRadius.circular(14),
+      child: Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: const Color(0xFF151821),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.07)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  isComplete ? Icons.verified_rounded : Icons.checklist_rounded,
+                  color: AppAccentColors.accent,
+                  size: 18,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    isComplete
+                        ? 'Profil vollständig'
+                        : 'Profil vervollständigen',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 13.5,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ),
+                Text(
+                  '${completion.completed}/${completion.total} vollständig',
+                  style: TextStyle(
+                    color: isComplete ? AppAccentColors.accent : Colors.white70,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(999),
+              child: LinearProgressIndicator(
+                value: progress.clamp(0, 1).toDouble(),
+                minHeight: 7,
+                backgroundColor: Colors.white.withValues(alpha: 0.08),
+                valueColor: AlwaysStoppedAnimation<Color>(
+                  AppAccentColors.accent,
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              isComplete
+                  ? 'Alles erledigt.'
+                  : 'Fehlt: ${completion.missing.join(', ')}',
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: isComplete
+                    ? AppAccentColors.accent
+                    : Colors.white.withValues(alpha: 0.62),
+                fontSize: 11.5,
+                height: 1.25,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   /// Bio: bei mehr als [_bioCollapseAt] Zeichen wird sie standardmäßig
   /// abgeschnitten und über "mehr" / "weniger" auf-/zugeklappt.
   Widget _buildBio(String bio) {
@@ -1955,6 +2099,35 @@ class _ProfilePageState extends State<ProfilePage>
                   ),
                 ],
                 const Spacer(),
+                TextButton.icon(
+                  onPressed: _openEditProfile,
+                  icon: Icon(
+                    Icons.add_rounded,
+                    color: AppAccentColors.accent,
+                    size: 17,
+                  ),
+                  label: const Text('Fahrzeug'),
+                  style: TextButton.styleFrom(
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 9,
+                      vertical: 6,
+                    ),
+                    minimumSize: const Size(0, 34),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(999),
+                      side: BorderSide(
+                        color: AppAccentColors.accent.withValues(alpha: 0.45),
+                      ),
+                    ),
+                    textStyle: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 4),
                 Icon(
                   _carCardExpanded
                       ? Icons.keyboard_arrow_up
@@ -1972,18 +2145,7 @@ class _ProfilePageState extends State<ProfilePage>
           child: _carCardExpanded
               ? Padding(
                   padding: const EdgeInsets.only(top: 12),
-                  child: VehicleGarageCarousel(
-                    vehicles: _vehicles,
-                    onAddVehicle: () async {
-                      final changed = await Navigator.push<bool>(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => const EditProfilePage(),
-                        ),
-                      );
-                      if (changed == true) _loadData();
-                    },
-                  ),
+                  child: VehicleGarageCarousel(vehicles: _vehicles),
                 )
               : const SizedBox(width: double.infinity),
         ),

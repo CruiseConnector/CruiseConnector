@@ -37,6 +37,7 @@ class CarCard extends StatelessWidget {
     double width = 320,
   }) {
     final description = _str(profile['description']);
+    final tuningDetails = _str(profile['tuning_details']);
     final stats = _statsFor(profile);
     final imageHeight = width / (16 / 9);
     final gridWidth = (width - 24).clamp(1, width);
@@ -46,35 +47,47 @@ class CarCard extends StatelessWidget {
         ? 0
         : 24 + (statRows * 66) + ((statRows - 1) * 10);
 
-    if (description == null) {
-      return (imageHeight + statsHeight + _footerHeight + 10).clamp(
-        baseHeight,
-        760,
-      );
+    final textWidth = (width - 48).clamp(160, width);
+    var textSectionsHeight = 0.0;
+    if (description != null) {
+      final descriptionPainter = TextPainter(
+        text: TextSpan(
+          text: description,
+          style: const TextStyle(
+            fontSize: 12,
+            height: 1.25,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout(maxWidth: textWidth.toDouble());
+      textSectionsHeight += 12 + 26 + descriptionPainter.height;
+    }
+    if (tuningDetails != null) {
+      final tuningPainter = TextPainter(
+        text: TextSpan(
+          text: tuningDetails,
+          style: const TextStyle(
+            fontSize: 12,
+            height: 1.25,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        maxLines: 3,
+        textDirection: TextDirection.ltr,
+      )..layout(maxWidth: textWidth.toDouble());
+      textSectionsHeight += 10 + 42 + tuningPainter.height;
     }
 
-    final textWidth = (width - 48).clamp(160, width);
-    final descriptionPainter = TextPainter(
-      text: TextSpan(
-        text: description,
-        style: const TextStyle(
-          fontSize: 12,
-          height: 1.25,
-          fontWeight: FontWeight.w700,
-        ),
-      ),
-      textDirection: TextDirection.ltr,
-    )..layout(maxWidth: textWidth.toDouble());
-    final descriptionHeight = 12 + 26 + descriptionPainter.height;
-
     final computedHeight =
-        imageHeight + statsHeight + descriptionHeight + _footerHeight + 24;
-    return computedHeight < baseHeight ? baseHeight : computedHeight;
+        imageHeight + statsHeight + textSectionsHeight + _footerHeight + 24;
+    return computedHeight.clamp(baseHeight, 860).toDouble();
   }
 
   static bool isEmpty(Map<String, dynamic> profile) {
     return _str(_field(profile, 'brand', 'car_brand')) == null &&
         _str(_field(profile, 'model', 'car_name')) == null &&
+        _str(profile['tuning_details']) == null &&
         _field(profile, 'top_speed', 'car_top_speed') == null &&
         profile['zero_to_hundred_seconds'] == null &&
         _str(profile['drivetrain']) == null &&
@@ -105,6 +118,7 @@ class CarCard extends StatelessWidget {
     final brand = _str(_field(profile, 'brand', 'car_brand'));
     final model = _str(_field(profile, 'model', 'car_name'));
     final description = _str(profile['description']);
+    final tuningDetails = _str(profile['tuning_details']);
     final imageUrl = _str(_field(profile, 'image_url', 'car_image_url'));
     final countryCode =
         (_str(_field(profile, 'country_code', 'car_country_code')) ?? 'AT')
@@ -214,8 +228,23 @@ class CarCard extends StatelessWidget {
             ),
           if (description != null)
             Padding(
-              padding: EdgeInsets.fromLTRB(12, stats.isEmpty ? 12 : 0, 12, 12),
+              padding: EdgeInsets.fromLTRB(
+                12,
+                stats.isEmpty ? 12 : 0,
+                12,
+                tuningDetails == null ? 12 : 8,
+              ),
               child: _DescriptionBox(description: description),
+            ),
+          if (tuningDetails != null)
+            Padding(
+              padding: EdgeInsets.fromLTRB(
+                12,
+                description == null && stats.isEmpty ? 12 : 0,
+                12,
+                12,
+              ),
+              child: _TuningBox(details: tuningDetails),
             ),
           const Spacer(),
           const _CardFooter(),
@@ -328,6 +357,56 @@ class _DescriptionBox extends StatelessWidget {
             description,
             style: TextStyle(
               color: Colors.white.withValues(alpha: 0.8),
+              fontSize: 12,
+              height: 1.25,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TuningBox extends StatelessWidget {
+  const _TuningBox({required this.details});
+
+  final String details;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+      decoration: BoxDecoration(
+        color: CarCard.accent.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: CarCard.accent.withValues(alpha: 0.18)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.tune_rounded, color: CarCard.accent, size: 14),
+              const SizedBox(width: 6),
+              Text(
+                'Tuning / Umbauten',
+                style: TextStyle(
+                  color: CarCard.accent,
+                  fontSize: 11,
+                  height: 1,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 7),
+          Text(
+            details,
+            maxLines: 3,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: Colors.white.withValues(alpha: 0.84),
               fontSize: 12,
               height: 1.25,
               fontWeight: FontWeight.w700,
