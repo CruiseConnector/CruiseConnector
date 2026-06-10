@@ -392,6 +392,18 @@ function offsetCoord(lat: number, lng: number, distKm: number, bearingDeg_: numb
   return { lat: toDeg(φ2), lng: toDeg(λ2) };
 }
 
+// 2026-06-10 (vucko START-SNAP-FIX): Haversine in Metern für die globale
+// Start-Wache (Route muss am echten Standort beginnen).
+function distanceMeters(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const R = 6371000;
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a = Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
 // ─────────────────── Style-Quality Metriken ───────────────────────────────
 //
 // 2026-05-21 (vucko): User-Beschwerde "Sport hat manchmal nur 10 Kurven".
@@ -796,9 +808,17 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
     !STYLE_TO_PROFILE[_rawStyle];
   const profile = isDirectFastest ? 'car' : resolveProfile(req.selected_style);
   const previousFps = new Set(req.previous_route_fingerprints ?? []);
+  const startLocation = req.start_location;
+  if (!startLocation) {
+    return jsonResponse({
+      error: 'missing_start_location',
+      user_message: 'Startposition fehlt.',
+      debug_message: 'Edge v2: missing start_location',
+    }, 400);
+  }
 
   // Adaptive Distance Compensation (nur für Round-Trip relevant)
-  const region = classifyRegion(req.start_location.latitude, req.start_location.longitude);
+  const region = classifyRegion(startLocation.latitude, startLocation.longitude);
   // 2026-06-03 (vucko): `let` statt `const` — die adaptive Distanz-Korrektur
   // unten justiert round_trip.distance nach, wenn GH in engem Terrain daneben
   // liegt (tryServerWithProfile liest diesen Wert zur Call-Zeit aus dem Closure).
@@ -812,8 +832,8 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
   // - Retry bei previous fingerprint match: nächster seed
   const seeds = generateSeeds({
     forceFresh: req.force_fresh_variant ?? false,
-    startLat: req.start_location.latitude,
-    startLng: req.start_location.longitude,
+    startLat: startLocation.latitude,
+    startLng: startLocation.longitude,
     targetKm: req.target_distance_km ?? 50,
   });
 
@@ -842,9 +862,9 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
     const directKm = (() => {
       const R = 6371;
       const toRad = (d: number) => (d * Math.PI) / 180;
-      const dLat = toRad(req.target_location.latitude - req.start_location.latitude);
-      const dLng = toRad(req.target_location.longitude - req.start_location.longitude);
-      const a = Math.sin(dLat/2)**2 + Math.cos(toRad(req.start_location.latitude))
+      const dLat = toRad(req.target_location.latitude - startLocation.latitude);
+      const dLng = toRad(req.target_location.longitude - startLocation.longitude);
+      const a = Math.sin(dLat/2)**2 + Math.cos(toRad(startLocation.latitude))
         * Math.cos(toRad(req.target_location.latitude)) * Math.sin(dLng/2)**2;
       return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
     })();
@@ -888,8 +908,8 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
   // Calls = max(call_time) sinkt um 20-30% weil kein einzelner Seed mehr auf
   // den überlasteten Pool wartet.
   const regionForHotspot = classifyRegion(
-    req.start_location.latitude,
-    req.start_location.longitude,
+    startLocation.latitude,
+    startLocation.longitude,
   );
   const isAlpineHotspot = regionForHotspot.label === 'alpine';
   // 2026-06-03 (vucko): moderater Seed-Bump. Mit strengerer Akzeptanz (kein
@@ -911,7 +931,7 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
   // Multi-Stopp-Tours die bis Frankfurt/Berlin gehen müssen automatisch
   // den DE-Server nutzen, sonst out-of-bounds.
   const allRoutePoints: Array<{ lat: number; lng: number }> = [
-    { lat: req.start_location.latitude, lng: req.start_location.longitude },
+    { lat: startLocation.latitude, lng: startLocation.longitude },
   ];
   if (req.target_location) {
     allRoutePoints.push({
@@ -925,12 +945,18 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
     }
   }
   const serverChoice = chooseGraphhopperUrlForRoute(allRoutePoints);
+  // 2026-06-10 (vucko START-SNAP-FIX): merkt sich, welcher GH-Server den
+  // aktuellen Kandidaten-Batch geliefert hat — die Start-Wache routet ihren
+  // Zubringer dann gegen DENSELBEN Server (Primary kann down/out-of-bounds
+  // sein, dann liefe der Zubringer in den 9s-Timeout).
+  let lastServerUsed = serverChoice.primary;
   const tryServerWithProfile = async (
     serverUrl: string,
     profileToUse: string,
     latOffset: number = 0,
     lngOffset: number = 0,
   ) => {
+    lastServerUsed = serverUrl;
     if (isRoundTrip) {
       // 2026-06-02 (vucko Routing-Speed/Stabilität): NICHT auf alle Seeds warten
       // (Promise.all = langsamster von N gewinnt → 9-11s). Stattdessen den ERSTEN
@@ -1072,31 +1098,78 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
         { sLat: 0, sLng: 0, tLat: 0, tLng: 0.010 },
         { sLat: 0, sLng: 0, tLat: -0.010, tLng: 0 },
       ];
+      // 2026-06-10 (vucko START-SNAP-FIX): Pässe statt gemischtem Cross-
+      // Product. Pass 0 hält Start+Ziel IMMER exakt — bei WP-Fails liegt das
+      // Problem fast nie am Start, und ein „zufällig" mitverschobener Start
+      // ließ Routen 150m-1.1km neben dem Standort beginnen. Meldet GH dabei
+      // „Cannot find point 0" (= der Start SELBST ist nicht snapbar), brechen
+      // wir Pass 0 sofort ab — alle weiteren Pass-0-Versuche teilen den
+      // exakten Start und scheitern identisch (sonst 21+16N tote Calls →
+      // Client-Timeout, Review-Befund 2026-06-10). Pass 1a rettet dann mit
+      // Start/Ziel-Offsets bei EXAKTEN WPs (Start-Offsets zuerst), Pass 1b
+      // zuletzt mit WP-Offsets × Start/Ziel-Offsets (alles kaputt).
+      const wpCallShared = {
+        profile: profileToUse,
+        isRoundTrip: false as const,
+        avoidHighways: req.avoid_highways ?? false,
+        serverUrl,
+        // 2026-06-09 (vucko U-Turn-Fix): Reroute startet in Fahrtrichtung.
+        headingDeg: req.reroute_request === true ? req.current_heading : undefined,
+      };
       for (let attempt = 0; attempt < offsetVariants.length; attempt++) {
-        const wps = offsetVariants[attempt];
-        // Bei letzten Versuchen auch start/target offsetten (cross-product
-        // wäre exponentiell — wir nehmen nur 0 oder 1 start/target offset).
-        const seOffset = attempt < smallOffsetVariants.length
-          ? startEndOffsets[0]
-          : startEndOffsets[attempt % startEndOffsets.length];
         const result = await callGraphHopper({
-          startLat: req.start_location!.latitude + seOffset.sLat,
-          startLng: req.start_location!.longitude + seOffset.sLng,
-          endLat: req.target_location!.latitude + seOffset.tLat,
-          endLng: req.target_location!.longitude + seOffset.tLng,
-          profile: profileToUse,
-          isRoundTrip: false,
-          avoidHighways: req.avoid_highways ?? false,
-          serverUrl,
-          intermediateWaypoints: wps,
-          // 2026-06-09 (vucko U-Turn-Fix): Reroute startet in Fahrtrichtung.
-          headingDeg: req.reroute_request === true ? req.current_heading : undefined,
+          ...wpCallShared,
+          startLat: req.start_location!.latitude,
+          startLng: req.start_location!.longitude,
+          endLat: req.target_location!.latitude,
+          endLng: req.target_location!.longitude,
+          intermediateWaypoints: offsetVariants[attempt],
         });
         if (!('error' in result)) {
           return [{ result, seed: attempt }];
         }
         if (attempt === 0) {
           console.log(`Waypoint snap attempt 0 failed: ${result.error.slice(0, 120)} — retrying with offsets`);
+        }
+        if (result.error.includes('Cannot find point 0:')) {
+          console.log('Waypoint pass 0: start itself un-snappable — escalating to start/end offsets immediately');
+          break;
+        }
+      }
+      // Pass 1a: exakte WPs, Start/Ziel-Offsets — Start-Offsets ZUERST (der
+      // häufige Rettungsfall „nur der Start ist unsnapbar" braucht so ≤3 Calls).
+      const seRescue = [
+        startEndOffsets[1], startEndOffsets[2], startEndOffsets[5], // Start: ±150m, dann ~1.1km
+        startEndOffsets[3], startEndOffsets[4], startEndOffsets[6], // Ziel: ±150m, dann ~1.1km
+        startEndOffsets[7], startEndOffsets[8],
+      ];
+      for (let i = 0; i < seRescue.length; i++) {
+        const seOffset = seRescue[i];
+        const result = await callGraphHopper({
+          ...wpCallShared,
+          startLat: req.start_location!.latitude + seOffset.sLat,
+          startLng: req.start_location!.longitude + seOffset.sLng,
+          endLat: req.target_location!.latitude + seOffset.tLat,
+          endLng: req.target_location!.longitude + seOffset.tLng,
+          intermediateWaypoints: baseWPs,
+        });
+        if (!('error' in result)) {
+          return [{ result, seed: offsetVariants.length + i }];
+        }
+      }
+      // Pass 1b: WP-Offsets (groß/mega) × Start/Ziel-Offsets.
+      for (let attempt = smallOffsetVariants.length; attempt < offsetVariants.length; attempt++) {
+        const seOffset = seRescue[(attempt - smallOffsetVariants.length) % seRescue.length];
+        const result = await callGraphHopper({
+          ...wpCallShared,
+          startLat: req.start_location!.latitude + seOffset.sLat,
+          startLng: req.start_location!.longitude + seOffset.sLng,
+          endLat: req.target_location!.latitude + seOffset.tLat,
+          endLng: req.target_location!.longitude + seOffset.tLng,
+          intermediateWaypoints: offsetVariants[attempt],
+        });
+        if (!('error' in result)) {
+          return [{ result, seed: 2 * offsetVariants.length + attempt }];
         }
       }
       // 2026-05-24 (vucko): SEGMENT-STITCH-FALLBACK.
@@ -1203,36 +1276,51 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
       // 2026-06-09 (vucko A→B-Endpunkt-Fix): GESTUFT statt alle 13 parallel.
       // Vorher konnten Varianten mit ZIEL-Offset bis ±1.1km gewinnen, obwohl
       // das exakte Ziel erreichbar war → die Route endete sichtbar NEBEN/HINTER
-      // dem Zielmarker (Bregenz→Götzis-Bug). Jetzt: Phase A = exaktes Ziel
-      // (nur Start-Snap-Varianten). Nur wenn ALLE scheitern, Phase B mit
-      // kleinen Ziel-Offsets (~150m), zuletzt Phase C mit großen Offsets
-      // (~1.1km, Insel/Hafen-Rettung wie Lindau/Mainau).
+      // dem Zielmarker (Bregenz→Götzis-Bug).
+      //
+      // 2026-06-10 (vucko START-SNAP-FIX): Phase A enthielt neben dem exakten
+      // Start auch ±150m/±1.1km-START-Offset-Varianten PARALLEL. Das Best-of-N-
+      // Scoring wählt nach Routen-Score (deltaPct gegen targetKm, das bei A→B
+      // auf 50km defaultet!) — die Route mit verschobenem Start ist oft länger
+      // und gewann dadurch DETERMINISTISCH gegen den exakten Start (Dornbirn
+      // live: erster Punkt 756m neben dem Standort → Client lehnt ab → „A→B
+      // und jeder Reroute kaputt"). Jetzt: Start IMMER exakt in Phase A-C.
+      // Start-Offsets erst als allerletzte Eskalation (Phase D klein, Phase E
+      // groß) — sie laufen also NUR, wenn der exakte Start nachweislich nicht
+      // snapbar ist (alle Phasen mit exaktem Start gescheitert).
       const heading = req.reroute_request === true ? req.current_heading : undefined;
       const phases: Array<Array<{
         sLatOff: number; sLngOff: number; eLatOff: number; eLngOff: number;
       }>> = [
-        [ // Phase A: Ziel EXAKT, Start-Snap-Varianten
+        [ // Phase A: Start EXAKT + Ziel EXAKT — einzige „normale" Variante
           { sLatOff: 0, sLngOff: 0, eLatOff: 0, eLngOff: 0 },
-          { sLatOff: 0.0014, sLngOff: 0, eLatOff: 0, eLngOff: 0 },
-          { sLatOff: 0, sLngOff: 0.0014, eLatOff: 0, eLngOff: 0 },
-          { sLatOff: 0.010, sLngOff: 0, eLatOff: 0, eLngOff: 0 },
-          { sLatOff: -0.010, sLngOff: 0, eLatOff: 0, eLngOff: 0 },
-          { sLatOff: 0, sLngOff: 0.010, eLatOff: 0, eLngOff: 0 },
-          { sLatOff: 0, sLngOff: -0.010, eLatOff: 0, eLngOff: 0 },
         ],
-        [ // Phase B: kleine Ziel-Offsets (~150m)
+        [ // Phase B: Start exakt, kleine Ziel-Offsets (~150m)
           { sLatOff: 0, sLngOff: 0, eLatOff: 0.0014, eLngOff: 0 },
           { sLatOff: 0, sLngOff: 0, eLatOff: 0, eLngOff: 0.0014 },
           { sLatOff: 0, sLngOff: 0, eLatOff: -0.0014, eLngOff: 0 },
           { sLatOff: 0, sLngOff: 0, eLatOff: 0, eLngOff: -0.0014 },
         ],
-        [ // Phase C: große Ziel-Offsets (~1.1km) — Insel/Hafen-Rettung
+        [ // Phase C: Start exakt, große Ziel-Offsets (~1.1km) — Insel/Hafen-Rettung
           { sLatOff: 0, sLngOff: 0, eLatOff: 0.010, eLngOff: 0 },
           { sLatOff: 0, sLngOff: 0, eLatOff: -0.010, eLngOff: 0 },
           { sLatOff: 0, sLngOff: 0, eLatOff: 0, eLngOff: 0.010 },
           { sLatOff: 0, sLngOff: 0, eLatOff: 0, eLngOff: -0.010 },
         ],
+        [ // Phase D: kleine Start-Offsets (~150m), Ziel exakt — Start-Rettung
+          { sLatOff: 0.0014, sLngOff: 0, eLatOff: 0, eLngOff: 0 },
+          { sLatOff: 0, sLngOff: 0.0014, eLatOff: 0, eLngOff: 0 },
+          { sLatOff: -0.0014, sLngOff: 0, eLatOff: 0, eLngOff: 0 },
+          { sLatOff: 0, sLngOff: -0.0014, eLatOff: 0, eLngOff: 0 },
+        ],
+        [ // Phase E: große Start-Offsets (~1.1km), Ziel exakt — letzte Eskalation
+          { sLatOff: 0.010, sLngOff: 0, eLatOff: 0, eLngOff: 0 },
+          { sLatOff: -0.010, sLngOff: 0, eLatOff: 0, eLngOff: 0 },
+          { sLatOff: 0, sLngOff: 0.010, eLatOff: 0, eLngOff: 0 },
+          { sLatOff: 0, sLngOff: -0.010, eLatOff: 0, eLngOff: 0 },
+        ],
       ];
+      const phaseNames = ['exact', 'end-offset-150m', 'end-offset-1km', 'start-offset-150m', 'start-offset-1km'];
       let lastResults: Array<{ result: RouteResult | { error: string }; seed: number }> = [];
       for (let p = 0; p < phases.length; p++) {
         const results = await Promise.all(
@@ -1252,7 +1340,7 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
         );
         if (results.some(r => !('error' in r.result))) {
           if (p > 0) {
-            console.log(`Direct A→B: exact-end phase(s) failed, phase ${p} (end-offset) succeeded`);
+            console.log(`Direct A→B: exact phase failed, ${phaseNames[p] ?? `phase-${p}`} succeeded`);
           }
           return results;
         }
@@ -1356,6 +1444,7 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
           console.log(`[ULTIMATE FALLBACK] motorcycle_scenic avoid-highway succeeded on ${scenicServer}`);
           parallel = [{ result: scenicResult, seed: 0 }];
           usedProfileFallback = true;
+          lastServerUsed = scenicServer;
           break;
         }
       } catch (e) {
@@ -1394,6 +1483,7 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
           carResult.meta.ultimate_car_fallback = true;
           parallel = [{ result: carResult, seed: 0 }];
           usedProfileFallback = true;
+          lastServerUsed = carServer;
           break;
         }
       } catch (e) {
@@ -1466,8 +1556,8 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
       : Infinity;
     if (bestDelta > 35) {
       console.log(`[SYNTH-TRIANGLE] best roundtrip delta ${bestDelta === Infinity ? 'none' : bestDelta.toFixed(0) + '%'} — building stitched triangle roundtrip`);
-      const sLat = req.start_location.latitude;
-      const sLng = req.start_location.longitude;
+      const sLat = startLocation.latitude;
+      const sLng = startLocation.longitude;
       const offsetPoint = (lat: number, lng: number, distKm: number, bearingDeg: number) => {
         const rad = (bearingDeg * Math.PI) / 180;
         return {
@@ -1509,7 +1599,7 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
             profile: 'motorcycle_entdecker',
             isRoundTrip: false,
             avoidHighways: req.avoid_highways ?? false,
-            serverUrl: serverChoice.primary,
+            serverUrl: lastServerUsed,
           });
           if (!('error' in probe)) {
             probeOk = probe as RouteResult;
@@ -1591,6 +1681,7 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
           candidates.length = 0;
           candidates.push({ result: synth, deltaPct: delta, seed: 0, isDup: previousFps.has(synth.fingerprint) });
           usedProfileFallback = true;
+          lastServerUsed = serverChoice.primary; // Outback-Segmente liefen gegen primary
           break outer;
         }
       }
@@ -1681,6 +1772,126 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
   if (bestCandidate) {
     const selectedCandidate = candidates.find(c => c.result.fingerprint === bestCandidate!.fingerprint);
     const selectedScored = scored.find(c => c.result.fingerprint === bestCandidate!.fingerprint);
+
+    // 2026-06-10 (vucko START-SNAP-FIX, Schicht 2): Globale Start-Wache —
+    // die ausgelieferte Route MUSS am echten Standort beginnen. Greift, wenn
+    // eine Offset-Eskalation gewonnen hat (A→B Phase D/E, Rundkurs-8-
+    // Richtungs-Rettung, WP-Snap-Pass-1) ODER GraphHopper selbst >50m weit
+    // gesnappt hat. Korrektur: kurzer Zubringer echter Start → erster
+    // Routenpunkt wird vorangestellt (Rundkurs: zusätzlich Rückweg letzter
+    // Punkt → echter Start), inkl. Instruction-Intervall-Shift. Scheitert der
+    // Zubringer (Start wirklich nicht snapbar, z.B. mitten im Bodensee),
+    // bleibt die Route erhalten — meta.start_offset_m macht den Versatz für
+    // Client und Diagnose sichtbar.
+    if (req.start_location) {
+      const sLatReq = req.start_location.latitude;
+      const sLngReq = req.start_location.longitude;
+      const mainCoords = bestCandidate.geometry.coordinates as [number, number][];
+      if (mainCoords.length > 1) {
+        const startOffsetM = distanceMeters(sLatReq, sLngReq, mainCoords[0][1], mainCoords[0][0]);
+        if (startOffsetM > 50) {
+          console.log(`[START-GUARD] route starts ${startOffsetM.toFixed(0)}m from requested start — building access connector`);
+          const connector = await callGraphHopper({
+            startLat: sLatReq,
+            startLng: sLngReq,
+            endLat: mainCoords[0][1],
+            endLng: mainCoords[0][0],
+            profile: 'car', // robustester Snap für den kurzen Zubringer
+            isRoundTrip: false,
+            avoidHighways: req.avoid_highways ?? false,
+            serverUrl: serverChoice.primary,
+            headingDeg: req.reroute_request === true ? req.current_heading : undefined,
+          });
+          // Zubringer plausibel? (kein 10km-Umweg für 150m Versatz)
+          const connectorOk = !('error' in connector) &&
+            connector.distanceKm * 1000 <= Math.max(1500, startOffsetM * 6);
+          if (connectorOk) {
+            const conn = connector as RouteResult;
+            // GH-Sign 4/5 = Ankunfts-Instructions des Zubringers — entfernen,
+            // die Hauptroute übernimmt; Intervalle ggf. um `by` Punkte schieben.
+            const stripArrival = (list: Array<Record<string, unknown>> | undefined) =>
+              (list ?? []).filter((ins) => {
+                const s = ins.sign as number | undefined;
+                return s !== 4 && s !== 5;
+              });
+            const shiftInstr = (list: Array<Record<string, unknown>>, by: number) =>
+              list.map((ins) => {
+                const iv = ins.interval as [number, number] | undefined;
+                return iv ? { ...ins, interval: [iv[0] + by, iv[1] + by] } : { ...ins };
+              });
+            const connCoords = conn.geometry.coordinates as [number, number][];
+            const prependPts = connCoords.slice(0, -1); // letzter ≈ mainCoords[0]
+            const shift = prependPts.length;
+            let finalCoords: [number, number][] = [...prependPts, ...mainCoords];
+            let mergedInstr = [
+              ...stripArrival(conn.instructions),
+              ...shiftInstr(bestCandidate.instructions ?? [], shift),
+            ];
+            let mergedDistKm = bestCandidate.distanceKm + conn.distanceKm;
+            let mergedDurS = bestCandidate.durationSeconds + conn.durationSeconds;
+            let mergedAscent = bestCandidate.ascent + conn.ascent;
+            // Rundkurs: auch das ENDE zum echten Start zurückführen, sonst
+            // schließt die Schleife am versetzten Punkt statt am Standort.
+            if (isRoundTrip) {
+              const lastPt = mainCoords[mainCoords.length - 1];
+              const back = await callGraphHopper({
+                startLat: lastPt[1],
+                startLng: lastPt[0],
+                endLat: sLatReq,
+                endLng: sLngReq,
+                profile: 'car',
+                isRoundTrip: false,
+                avoidHighways: req.avoid_highways ?? false,
+                serverUrl: lastServerUsed,
+              });
+              if (!('error' in back) && back.distanceKm * 1000 <= Math.max(1500, startOffsetM * 6)) {
+                const br = back as RouteResult;
+                const appendShift = finalCoords.length - 1;
+                const backCoords = (br.geometry.coordinates as [number, number][]).slice(1);
+                finalCoords = [...finalCoords, ...backCoords];
+                // „Ziel erreicht" der Hauptroute ans neue Ende verschieben.
+                const lastInstr = mergedInstr.length > 0
+                  ? mergedInstr[mergedInstr.length - 1] as Record<string, unknown>
+                  : undefined;
+                const lastSign = lastInstr ? (lastInstr.sign as number | undefined) : undefined;
+                const hasArrival = lastInstr != null && (lastSign === 4 || lastSign === 5);
+                const bodyInstr = hasArrival ? mergedInstr.slice(0, -1) : mergedInstr;
+                mergedInstr = [
+                  ...bodyInstr,
+                  ...shiftInstr(stripArrival(br.instructions), appendShift),
+                  ...(hasArrival
+                    ? [{ ...lastInstr, interval: [finalCoords.length - 1, finalCoords.length - 1] }]
+                    : []),
+                ];
+                mergedDistKm += br.distanceKm;
+                mergedDurS += br.durationSeconds;
+                mergedAscent += br.ascent;
+              } else {
+                console.log(`[START-GUARD] roundtrip return connector unavailable — loop closes at offset point`);
+              }
+            }
+            bestCandidate = {
+              ...bestCandidate,
+              geometry: { ...bestCandidate.geometry, coordinates: finalCoords },
+              distanceKm: mergedDistKm,
+              durationSeconds: mergedDurS,
+              ascent: mergedAscent,
+              coordinateCount: finalCoords.length,
+              fingerprint: buildFingerprint(finalCoords, mergedDistKm),
+              instructions: mergedInstr,
+              meta: { ...bestCandidate.meta, start_corrected_from_m: Math.round(startOffsetM) },
+            };
+            console.log(`[START-GUARD] connector ok (+${(conn.distanceKm * 1000).toFixed(0)}m) — route now starts at requested start`);
+          } else {
+            console.log(`[START-GUARD] connector unavailable (${'error' in connector ? connector.error.slice(0, 80) : 'detour too long'}) — start truly un-snappable, keeping offset route`);
+          }
+        }
+        const finalFirst = (bestCandidate.geometry.coordinates as [number, number][])[0];
+        bestCandidate.meta.start_offset_m = Math.round(
+          distanceMeters(sLatReq, sLngReq, finalFirst[1], finalFirst[0]),
+        );
+      }
+    }
     // V1-kompatible Response-Struktur damit Flutter route_service.dart
     // unverändert weiter funktioniert. Felder die der alte Mapbox-Code parst:
     //   route.geometry, route.distance (in METER), route.duration (in SEKUNDEN)
