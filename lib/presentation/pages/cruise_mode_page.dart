@@ -1067,10 +1067,35 @@ class _CruiseModePageState extends State<CruiseModePage>
     ];
 
     // BRIGHT: 3km-Fenster ab Puck (kleine Geometrie, 4m-gegated wie oben).
+    // 2026-06-10 (vucko Butterweich): Der Linien-KOPF bekommt ~3m VORHALT
+    // entlang der Route. Ohne Vorhalt pendelte der Kopf (Gate-bedingt) 0-5m
+    // HINTER dem 60fps-interpolierten Puck — die Linie ragte sichtbar hinten
+    // raus und "pumpte" (Frame-Serie-Beweis). Mit Vorhalt pendelt der
+    // Ueberhang um +-3m (~15px) und bleibt vollstaendig unter dem Puck-Marker
+    // verdeckt -> optisch butterweicher, fester Schnitt am Puck.
+    var headLng = projHead[0];
+    var headLat = projHead[1];
+    var headIdx = clampedAhead;
+    var lead = 3.0;
+    while (lead > 0 && headIdx < coords.length) {
+      final c = coords[headIdx];
+      final d = geo.Geolocator.distanceBetween(headLat, headLng, c[1], c[0]);
+      if (d <= lead || d <= 0) {
+        lead -= d;
+        headLng = c[0];
+        headLat = c[1];
+        headIdx++;
+      } else {
+        final f = lead / d;
+        headLng += (c[0] - headLng) * f;
+        headLat += (c[1] - headLat) * f;
+        lead = 0;
+      }
+    }
     var acc = 0.0;
-    var aheadEnd = clampedAhead;
-    var prevLng = projHead[0];
-    var prevLat = projHead[1];
+    var aheadEnd = headIdx;
+    var prevLng = headLng;
+    var prevLat = headLat;
     while (aheadEnd < coords.length && acc < 3000.0) {
       final c = coords[aheadEnd];
       acc += geo.Geolocator.distanceBetween(prevLat, prevLng, c[1], c[0]);
@@ -1079,8 +1104,8 @@ class _CruiseModePageState extends State<CruiseModePage>
       aheadEnd++;
     }
     _brightAheadLatLngs = [
-      LatLng(projHead[1], projHead[0]),
-      for (final c in coords.sublist(clampedAhead, aheadEnd)) LatLng(c[1], c[0]),
+      LatLng(headLat, headLng),
+      for (final c in coords.sublist(headIdx, aheadEnd)) LatLng(c[1], c[0]),
     ];
 
     // DIM: Reststrecke ab Puck — nur alle ~200m neu (Anfang ist von bright
