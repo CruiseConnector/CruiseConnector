@@ -147,6 +147,13 @@ class RouteService {
     'ROUTING_CLIENT_BUILD_TIME',
     defaultValue: 'local-dev',
   );
+
+  // 2026-06-10 (vucko Start-Versatz-Gate): Maximal akzeptierter Abstand
+  // zwischen angefragtem Start und erstem Punkt einer LIVE-Route. Legitimes
+  // Straßen-Snapping liegt deutlich unter 400 m (der Snap-Stub deckt 80–400 m
+  // ab); der Edge-Start-Snap-Bug lieferte ~758 m. Pool-/Access-Routen sind
+  // ausgenommen (eigene Access-Leg-Logik).
+  static const double maxAcceptedStartOffsetMeters = 500.0;
   static int _lastRandomSeed = 0;
   static const String _explorerBearingPrefsKey =
       'route_service_recent_explorer_bearings';
@@ -779,6 +786,11 @@ class RouteService {
       // Grenzübertritt verworfen wurde — dann ist die Ursache klar „kein
       // Inlandskurs hier", nicht „Backend kaputt".
       var sawCountryRejected = false;
+      // 2026-06-10 (vucko Start-Versatz-Gate): merkt, ob Kandidaten nur wegen
+      // Start-Versatz (Edge-Snap-Bug) verworfen wurden → präzise Fehlermeldung
+      // statt generischem noRoute.
+      var sawStartOffsetRejected = false;
+      var worstStartOffsetMeters = 0.0;
       RouteServiceException? lastError;
 
       for (var attempt = 0; attempt < maxAttempts; attempt++) {
@@ -844,6 +856,14 @@ class RouteService {
             // — NIEMALS wählen, auch nicht als Notnagel. Nur merken, dass es sie
             // gab (→ klarer „kein Inlandskurs"-Fehler statt Backend-Fehler).
             sawCountryRejected = true;
+          } else if (candidate.startOffsetRejected) {
+            // 2026-06-10 (vucko Start-Versatz-Gate): Route beginnt zu weit vom
+            // angefragten Start — NIEMALS wählen, auch nicht als Notnagel.
+            sawStartOffsetRejected = true;
+            worstStartOffsetMeters = math.max(
+              worstStartOffsetMeters,
+              candidate.startOffsetMeters ?? 0.0,
+            );
           } else if (candidate.route.coordinates.length >= 20 &&
               (bestRejectedCandidate == null ||
                   candidate.score < bestRejectedCandidate.score)) {
@@ -1230,6 +1250,26 @@ class RouteService {
               'grenzt direkt ans Ausland. Schalt „Im Land bleiben" aus oder wähl '
               'eine kürzere Distanz bzw. einen Start weiter im Landesinneren.',
           debugMessage: 'all_round_trip_candidates_crossed_border',
+        );
+      }
+
+      // 2026-06-10 (vucko Start-Versatz-Gate): Alle Kandidaten begannen zu weit
+      // vom angefragten Start (Edge-Start-Snap-Bug) → präzise Meldung statt
+      // generischem „kein Rundkurs gefunden".
+      if (sawStartOffsetRejected) {
+        throw RouteServiceException(
+          type: RouteErrorType.quality,
+          userMessage:
+              'Die berechnete Route startete zu weit von deinem Standort '
+              'entfernt. Bitte versuche es erneut.',
+          debugMessage:
+              'all_round_trip_candidates_start_offset_rejected '
+              '(worst=${worstStartOffsetMeters.toStringAsFixed(0)}m, '
+              'limit=${maxAcceptedStartOffsetMeters.toStringAsFixed(0)}m)',
+          edgeMeta: {
+            'response_code': 'start_offset_rejected',
+            'start_offset_meters': worstStartOffsetMeters,
+          },
         );
       }
 
@@ -1641,6 +1681,23 @@ class RouteService {
     _activeForceFreshVariantForDebug = forceFreshVariant;
     _activeTriggerForDebug = 'unknown';
 
+    debugPrint(
+      '[RouteService][P2PDiag] start='
+      '${startPosition.latitude.toStringAsFixed(5)},'
+      '${startPosition.longitude.toStringAsFixed(5)} '
+      'dest=${destinationLat.toStringAsFixed(5)},'
+      '${destinationLng.toStringAsFixed(5)} '
+      'directKm=${directDistanceKm.toStringAsFixed(1)} '
+      'targetKm=${targetDistanceKm.toStringAsFixed(1)} '
+      'detour=$normalizedVariant scenic=$scenic '
+      'forceFresh=$forceFreshVariant navReroute=$navigationReroute '
+      'forceAcceptDirect=$forceAcceptDirect '
+      'startAcc=${_safeFiniteDouble(startPosition.accuracy)?.toStringAsFixed(0) ?? '-'}m '
+      'argAcc=${locationAccuracyMeters?.toStringAsFixed(0) ?? '-'}m '
+      'waypoints=${intermediateWaypoints?.length ?? 0} '
+      'avoidHighways=$avoidHighways',
+    );
+
     if (forceFreshVariant) {
       RouteGenerationCoordinator.suspendBackgroundPreparation();
       PreparedRouteBuffer.clearScenario(scenario.scenarioKey);
@@ -1734,6 +1791,11 @@ class RouteService {
       _RouteCandidate? spareCandidate;
       _RouteCandidate? duplicateFallbackCandidate;
       _RouteCandidate? bestRejectedCandidate;
+      // 2026-06-10 (vucko Start-Versatz-Gate): Kandidaten mit zu großem Start-
+      // Versatz NIE als Notnagel verwenden — nur für die präzise Fehlermeldung
+      // merken.
+      var sawStartOffsetRejected = false;
+      var worstStartOffsetMeters = 0.0;
       RouteServiceException? lastError;
 
       for (var attempt = 0; attempt < maxAttempts; attempt++) {
@@ -1787,6 +1849,13 @@ class RouteService {
             } else if (_isBetterCandidate(candidate, spareCandidate)) {
               spareCandidate = candidate;
             }
+          } else if (candidate.startOffsetRejected) {
+            // 2026-06-10 (vucko Start-Versatz-Gate): NIE als Notnagel verwenden.
+            sawStartOffsetRejected = true;
+            worstStartOffsetMeters = math.max(
+              worstStartOffsetMeters,
+              candidate.startOffsetMeters ?? 0.0,
+            );
           } else if (bestRejectedCandidate == null ||
               candidate.score < bestRejectedCandidate.score) {
             bestRejectedCandidate = candidate;
@@ -1811,7 +1880,11 @@ class RouteService {
             _setWorkerLimitCooldown();
           }
           debugPrint(
-            '[RouteService] A→B candidate ${attempt + 1}/$maxAttempts fehlgeschlagen: ${mapped.debugMessage}',
+            '[RouteService][P2PDiag] candidate=${attempt + 1}/$maxAttempts '
+            'failed type=${mapped.type.name} status=${mapped.statusCode ?? '-'} '
+            'code=${mapped.edgeMeta['response_code'] ?? mapped.edgeMeta['code'] ?? '-'} '
+            'startOffset=${mapped.edgeMeta['start_offset_meters'] ?? '-'} '
+            'debug=${mapped.debugMessage}',
           );
           if (_isFatalStructuredError(mapped)) {
             break;
@@ -1881,6 +1954,29 @@ class RouteService {
           );
         }
         return finalized;
+      }
+
+      // 2026-06-10 (vucko Start-Versatz-Gate): Scheiterte die Suche NUR am
+      // Start-Versatz (Edge-Snap-Bug), das präzise benennen — der Reroute-/
+      // UI-Pfad klassifiziert über response_code='start_offset_rejected'.
+      if (lastError == null &&
+          bestCandidate == null &&
+          duplicateFallbackCandidate == null &&
+          sawStartOffsetRejected) {
+        lastError = RouteServiceException(
+          type: RouteErrorType.quality,
+          userMessage:
+              'Die berechnete Route startete zu weit von deinem Standort '
+              'entfernt. Bitte versuche es erneut.',
+          debugMessage:
+              'all_p2p_candidates_start_offset_rejected '
+              '(worst=${worstStartOffsetMeters.toStringAsFixed(0)}m, '
+              'limit=${maxAcceptedStartOffsetMeters.toStringAsFixed(0)}m)',
+          edgeMeta: {
+            'response_code': 'start_offset_rejected',
+            'start_offset_meters': worstStartOffsetMeters,
+          },
+        );
       }
 
       if (!forceAcceptDirect &&
@@ -4957,6 +5053,26 @@ class RouteService {
         scenario.countryPreference == CountryPreference.onlyHome &&
         scenario.homeCountryCode != null &&
         foreignFraction > 0.10;
+    // 2026-06-10 (vucko Start-Versatz-Gate): Beginnt die gelieferte Route weiter
+    // als maxAcceptedStartOffsetMeters vom angefragten Start, ist sie Müll
+    // (Edge-Start-Snap-Bug, im Feld ~758 m Versatz) — HARTER Reject, der auch
+    // forceAcceptDirect übersteuert. Pool-/Access-Routen laufen nicht über
+    // _snapRouteToStartPosition, haben das Meta nicht und bleiben unberührt.
+    final double? startOffsetMeters = _edgeMetaDouble(
+      route,
+      'start_offset_meters',
+    );
+    final bool startOffsetRejected =
+        startOffsetMeters != null &&
+        startOffsetMeters > maxAcceptedStartOffsetMeters;
+    if (startOffsetRejected) {
+      debugPrint(
+        '[RouteService][StartOffset] Kandidat ABGELEHNT: erster Punkt '
+        '${startOffsetMeters.toStringAsFixed(0)}m vom angefragten Start '
+        '(Limit ${maxAcceptedStartOffsetMeters.toStringAsFixed(0)}m, '
+        '${variant.variantHint})',
+      );
+    }
     final baseTier = _preferredTier(classification.tier, edgeTier);
     final effectiveTier = forceDirectAcceptable && !softRenderable
         ? RouteQualityTier.acceptable
@@ -4968,7 +5084,9 @@ class RouteService {
         ? RouteQualityTier.acceptable
         : baseTier;
     final accepted =
-        (softRenderable || forceDirectAcceptable) && !countryRejected;
+        (softRenderable || forceDirectAcceptable) &&
+        !countryRejected &&
+        !startOffsetRejected;
     final score =
         classification.score +
         (effectiveTier == RouteQualityTier.acceptable &&
@@ -4984,6 +5102,7 @@ class RouteService {
         countryPenalty +
         (detourDistanceOk ? 0.0 : 135.0) +
         (destinationReached ? 0.0 : 500.0) +
+        (startOffsetRejected ? 400.0 : 0.0) +
         (hasEnoughPoints ? 0.0 : 24.0) -
         styleFitScore * 0.18;
 
@@ -5011,6 +5130,8 @@ class RouteService {
       'edgeTier=${edgeTier?.name ?? 'none'}, '
       'detourOk=$detourDistanceOk, deliveredDetour=$pointToPointEvaluationDetourLevel, '
       'destinationReached=$destinationReached, '
+      'startOffset=${startOffsetMeters?.toStringAsFixed(0) ?? '-'}m, '
+      'startOffsetRejected=$startOffsetRejected, '
       'distanceWindow=${pointToPointMinDistance.toStringAsFixed(1)}-${pointToPointMaxDistance.isFinite ? pointToPointMaxDistance.toStringAsFixed(1) : 'inf'}',
     );
 
@@ -5032,6 +5153,8 @@ class RouteService {
       novelEnough: novelEnough,
       foreignFraction: foreignFraction,
       countryRejected: countryRejected,
+      startOffsetRejected: startOffsetRejected,
+      startOffsetMeters: startOffsetMeters,
     );
   }
 
@@ -9660,6 +9783,18 @@ class RouteService {
       lastCoord[0],
     );
     final isLikelyRoundTrip = coords.length > 1 && distLastToStart < 600;
+    // 2026-06-10 (vucko Start-Versatz-Gate): Roh-Versatz zwischen angefragtem
+    // Start und erstem Provider-Punkt festhalten, BEVOR Stub/Überschreiben ihn
+    // maskiert. Die Edge lieferte im Feld Routen mit ~758 m Versatz (Start-
+    // Snap-Bug) — das Gate in _evaluateCandidate lehnt darüber ab, hier wird
+    // nur gemessen und geloggt.
+    if (distToFirstPoint >= 400) {
+      debugPrint(
+        '[RouteService][StartOffset] Erster Routenpunkt '
+        '${distToFirstPoint.toStringAsFixed(0)}m vom angefragten Start entfernt '
+        '(roundTrip=$isLikelyRoundTrip)',
+      );
+    }
     if (distToFirstPoint < 80) {
       coords[0] = [startLng, startLat];
     } else if (distToFirstPoint < 400 && !isLikelyRoundTrip) {
@@ -9794,7 +9929,11 @@ class RouteService {
       durationSeconds: finalDuration,
       distanceKm: finalDistanceMeters / 1000.0,
       speedLimits: result.speedLimits,
-      edgeMeta: result.edgeMeta,
+      edgeMeta: {
+        ...result.edgeMeta,
+        // Roh-Versatz angefragter Start → erster Provider-Punkt (vor Stub).
+        'start_offset_meters': double.parse(distToFirstPoint.toStringAsFixed(1)),
+      },
     );
   }
 
@@ -9892,6 +10031,8 @@ class _RouteCandidate {
     required this.novelEnough,
     this.foreignFraction = 0.0,
     this.countryRejected = false,
+    this.startOffsetRejected = false,
+    this.startOffsetMeters,
   });
 
   final RouteResult route;
@@ -9913,6 +10054,11 @@ class _RouteCandidate {
   // 2026-06-08 (vucko HARTE Inland-Garantie): onlyHome + Grenzübertritt → dieser
   // Kandidat darf NIE gewählt werden, auch nicht als Notnagel-Fallback.
   final bool countryRejected;
+  // 2026-06-10 (vucko Start-Versatz-Gate): erster Routenpunkt zu weit vom
+  // angefragten Start (Edge-Start-Snap-Bug) → NIE wählen, auch nicht als
+  // Notnagel-Fallback.
+  final bool startOffsetRejected;
+  final double? startOffsetMeters;
 }
 
 class _ScoredPoolAccessRoute {
