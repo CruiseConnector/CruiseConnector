@@ -1004,6 +1004,21 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
     }
     return LayoutBuilder(
       builder: (context, constraints) {
+        // 2026-06-10 (vucko ERSTOPEN-CRASH-FIX, 9 byte-identische SIGABRTs):
+        // mbgl wirft beim Map-Setup std::domain_error („latitude must not be
+        // NaN" / „must be between -90 and 90" — Strings im Binary verifiziert),
+        // wenn die Mercator-Unprojektion mit View-Größe 0 rechnet (Division
+        // durch 0 → lat=∞ → LatLng-Ctor-Throw → über die ObjC++-Grenze nicht
+        // fangbar → SIGABRT). Genau das passierte sporadisch beim ALLERERSTEN
+        // Cruise-Open (kaltes erstes Layout, native View vor echter Größe).
+        // Fix: Die native MapLibre-View wird erst gebaut, wenn das Layout eine
+        // ECHTE, endliche Größe liefert — nie mehr Unprojektion mit size 0.
+        if (!constraints.maxWidth.isFinite ||
+            !constraints.maxHeight.isFinite ||
+            constraints.maxWidth < 2 ||
+            constraints.maxHeight < 2) {
+          return const ColoredBox(color: Color(0xFF0b0e13));
+        }
         // 2026-06-08 (vucko Marker-Glue): Live-Viewport-Größe der Karte (logische
         // Pixel) für die lokale Marker-Projektion festhalten.
         if (constraints.maxWidth != _mapW ||
@@ -1034,12 +1049,22 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
           },
           child: mb.MapLibreMap(
           styleString: style,
+          // 2026-06-10 (vucko ERSTOPEN-CRASH-FIX Schicht 2): Center/Zoom hart
+          // validieren — ein NaN/∞/out-of-range-Wert (z.B. korrupter
+          // persistierter Standort) würde denselben nativen LatLng-Throw
+          // auslösen wie die Size-0-Unprojektion.
           initialCameraPosition: mb.CameraPosition(
             target: mb.LatLng(
-              widget.initialCenter.latitude,
-              widget.initialCenter.longitude,
+              widget.initialCenter.latitude.isFinite
+                  ? widget.initialCenter.latitude.clamp(-85.0, 85.0)
+                  : 47.5,
+              widget.initialCenter.longitude.isFinite
+                  ? widget.initialCenter.longitude.clamp(-180.0, 180.0)
+                  : 9.74,
             ),
-            zoom: widget.initialZoom,
+            zoom: widget.initialZoom.isFinite
+                ? widget.initialZoom.clamp(1.0, 20.0)
+                : 6.0,
           ),
           onMapCreated: _onMapCreated,
           onStyleLoadedCallback: _onStyleLoaded,
