@@ -9,6 +9,10 @@ void main() {
     WidgetTester tester, {
     required Size logicalSize,
   }) async {
+    SharedPreferences.setMockInitialValues({});
+    RoutingOnboardingService.releaseLock();
+    await RoutingOnboardingService.reset();
+
     tester.view
       ..devicePixelRatio = 1
       ..physicalSize = logicalSize;
@@ -17,8 +21,6 @@ void main() {
         ..resetPhysicalSize()
         ..resetDevicePixelRatio();
     });
-
-    SharedPreferences.setMockInitialValues({});
 
     await tester.pumpWidget(
       MaterialApp(

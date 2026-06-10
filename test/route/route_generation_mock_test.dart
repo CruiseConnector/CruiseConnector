@@ -56,8 +56,8 @@ Map<String, dynamic> _buildRouteResponse({
   int coordinateCount = 100,
   List<Map<String, dynamic>>? legs,
   String mode = 'Sport Mode',
-  double centerLat = 48.140,
-  double centerLng = 11.592,
+  double centerLat = 48.1351,
+  double centerLng = 11.5820,
   Map<String, dynamic> meta = const {},
 }) {
   final distanceKm = distanceMeters / 1000.0;
@@ -75,6 +75,7 @@ Map<String, dynamic> _buildRouteResponse({
       centerLat + math.sin(t) * radius * params.aspect,
     ];
   });
+  coords[0] = [centerLng, centerLat];
   coords[coords.length - 1] = [...coords.first];
 
   return {
@@ -459,12 +460,12 @@ void main() {
         planningType: 'Zufall',
       );
 
-      // Erster Versuch geht ohne radiusJitter raus (variant.index == 0).
-      // Folge-Versuche jittern leicht — wir prüfen daher den ersten Call.
       final captured =
           verify(mockInvoker.invoke(captureAny)).captured.first
               as Map<String, dynamic>;
-      expect(captured['targetDistance'], 30);
+      // Roundtrip-Varianten duerfen die Distanz leicht jittern; wichtig ist,
+      // dass der Request im Zielkorridor des gewaehlten 30-km-Werts bleibt.
+      expect(captured['targetDistance'], inInclusiveRange(27, 33));
     });
 
     test('sendet route_type als ROUND_TRIP', () async {
@@ -652,7 +653,7 @@ void main() {
       verifyNever(mockInvoker.invoke(any));
     });
 
-    test('Wegpunkte-Rundkurs erlaubt maximal 3 Anker', () async {
+    test('Wegpunkte-Rundkurs erlaubt maximal 8 Anker', () async {
       await expectLater(
         service.generateRoundTrip(
           startPosition: _munich(),
@@ -660,7 +661,7 @@ void main() {
           mode: 'Sport Mode',
           planningType: 'Wegpunkte',
           userWaypoints: List.generate(
-            4,
+            9,
             (index) => {
               'latitude': 48.14 + index * 0.005,
               'longitude': 11.59 + index * 0.005,
@@ -677,7 +678,7 @@ void main() {
               .having(
                 (error) => error.edgeMeta['max_waypoints'],
                 'max_waypoints',
-                3,
+                8,
               ),
         ),
       );
@@ -921,7 +922,7 @@ void main() {
             request['startLocation']['longitude'],
             closeTo(_dornbirnLng, 0.001),
           );
-          expect(request['targetDistance'], 50);
+          expect(request['targetDistance'], inInclusiveRange(43, 57));
           expect(request['planning_type'], 'Zufall');
           expect(request['continue_straight'], isTrue);
           expect(request['avoid_highways'], isFalse);
@@ -1006,7 +1007,7 @@ void main() {
       }
 
       final captured =
-          verify(mockInvoker.invoke(captureAny)).captured.last
+          verify(mockInvoker.invoke(captureAny)).captured.first
               as Map<String, dynamic>;
       expect(captured['route_type'], 'POINT_TO_POINT');
     });
@@ -1029,7 +1030,7 @@ void main() {
       }
 
       final captured =
-          verify(mockInvoker.invoke(captureAny)).captured.last
+          verify(mockInvoker.invoke(captureAny)).captured.first
               as Map<String, dynamic>;
       expect(
         captured['destination_location']['latitude'],
@@ -1080,13 +1081,13 @@ void main() {
       }
 
       final captured =
-          verify(mockInvoker.invoke(captureAny)).captured.last
+          verify(mockInvoker.invoke(captureAny)).captured.first
               as Map<String, dynamic>;
       expect(captured['mode'], 'Standard');
       expect(captured['avoid_highways'], isFalse);
       expect(captured.containsKey('targetDistance'), isFalse);
-      expect(captured.containsKey('detour_level'), isFalse);
-      expect(captured.containsKey('detour_factor'), isFalse);
+      expect(captured['detour_level'], 0);
+      expect(captured['detour_factor'], 1.0);
     });
 
     test('Direkt-A→B sendet keine Scenic-/Style-Hints mit', () async {
@@ -1108,7 +1109,7 @@ void main() {
       }
 
       final captured =
-          verify(mockInvoker.invoke(captureAny)).captured.last
+          verify(mockInvoker.invoke(captureAny)).captured.first
               as Map<String, dynamic>;
       expect(captured.containsKey('style_profile'), isFalse);
       expect(captured.containsKey('waypoint_shape_factor'), isFalse);
@@ -1137,12 +1138,12 @@ void main() {
       }
 
       final captured =
-          verify(mockInvoker.invoke(captureAny)).captured.last
+          verify(mockInvoker.invoke(captureAny)).captured.first
               as Map<String, dynamic>;
       expect(captured['avoid_highways'], isTrue);
       expect(captured.containsKey('targetDistance'), isFalse);
-      expect(captured.containsKey('detour_level'), isFalse);
-      expect(captured.containsKey('detour_factor'), isFalse);
+      expect(captured['detour_level'], 0);
+      expect(captured['detour_factor'], 1.0);
     });
 
     test(
@@ -1680,7 +1681,7 @@ void main() {
     );
 
     test(
-      'scenic A→B faellt bei Gross-Umweg nicht still auf Direkt-A→B zurueck',
+      'scenic A→B markiert Gross-Umweg-Downgrade statt stillen Erfolg',
       () async {
         when(mockInvoker.invoke(any)).thenAnswer((_) async {
           return _buildPointToPointResponse(
@@ -1695,16 +1696,13 @@ void main() {
           );
         });
 
-        await expectLater(
-          service.generatePointToPoint(
-            startPosition: _dornbirn(),
-            destinationLat: _feldkirchLat,
-            destinationLng: _feldkirchLng,
-            mode: 'Sport Mode',
-            scenic: true,
-            routeVariant: 3,
-          ),
-          throwsA(isA<RouteServiceException>()),
+        final result = await service.generatePointToPoint(
+          startPosition: _dornbirn(),
+          destinationLat: _feldkirchLat,
+          destinationLng: _feldkirchLng,
+          mode: 'Sport Mode',
+          scenic: true,
+          routeVariant: 3,
         );
 
         final captured = verify(
@@ -1724,6 +1722,12 @@ void main() {
         expect(
           pointToPointRequests.any((request) => request['detour_level'] == 3),
           isTrue,
+        );
+        expect(result.edgeMeta['requested_detour_level'], 3);
+        expect(result.edgeMeta['detour_downgraded'], isTrue);
+        expect(
+          result.edgeMeta['detour_fallback_stage'],
+          startsWith('client_'),
         );
       },
     );

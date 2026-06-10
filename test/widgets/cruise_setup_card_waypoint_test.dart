@@ -1,11 +1,15 @@
+import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/cruise_setup_card.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
   late TextEditingController destinationController;
 
   setUp(() {
+    SharedPreferences.setMockInitialValues({});
     destinationController = TextEditingController();
   });
 
@@ -23,10 +27,12 @@ void main() {
     VoidCallback? onDeleteSelected,
     VoidCallback? onReplaceSelected,
   }) {
-    return MaterialApp(
-      home: Scaffold(
-        body: SingleChildScrollView(
-          child: CruiseSetupCard(
+    return ChangeNotifierProvider(
+      create: (_) => AppAccentProvider(),
+      child: MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: CruiseSetupCard(
             isRoundTrip: isRoundTrip,
             planningType: planningType,
             selectedLength: '50 km',
@@ -51,6 +57,7 @@ void main() {
             onReplaceSelectedWaypoint: onReplaceSelected,
             onClearWaypoints: () {},
             onGenerateWaypointSeed: () {},
+            ),
           ),
         ),
       ),

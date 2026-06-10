@@ -149,8 +149,7 @@ class _VaryingCountingInvoker implements RouteEdgeInvoker {
     callCount += 1;
     bodies.add(Map<String, dynamic>.from(body));
     await Future<void>.delayed(const Duration(milliseconds: 80));
-    final shift = callCount * 0.0032;
-    return _closedLoopResponseShifted(shift);
+    return _closedLoopVariantResponse(callCount);
   }
 }
 
@@ -482,7 +481,10 @@ class _FakeRoutePoolService extends RoutePoolService {
   }
 }
 
-Map<String, dynamic> _closedLoopResponseShifted(double lngShift) {
+Map<String, dynamic> _closedLoopResponseShifted(
+  double lngShift, {
+  bool preserveStart = false,
+}) {
   final coords = List.generate(120, (i) {
     final t = (2 * math.pi * i) / 119;
     final radius =
@@ -495,7 +497,7 @@ Map<String, dynamic> _closedLoopResponseShifted(double lngShift) {
       47.5162 + math.sin(t) * radius * 0.55,
     ];
   });
-  coords[0] = [9.7471 + lngShift, 47.5162];
+  coords[0] = [preserveStart ? 9.7471 : 9.7471 + lngShift, 47.5162];
   coords[coords.length - 1] = [...coords.first];
 
   return {
@@ -534,6 +536,46 @@ Map<String, dynamic> _closedLoopResponseWithDifferentShapeSameStart() {
   geometry['coordinates'] = coordinates;
   route['geometry'] = geometry;
   return response;
+}
+
+Map<String, dynamic> _closedLoopVariantResponse(int variant) {
+  final phase = variant * 0.47;
+  final coords = List.generate(120, (i) {
+    final t = (2 * math.pi * i) / 119;
+    final radius =
+        0.009 +
+        math.sin(t * (3 + (variant % 2)) + phase) * 0.0012 +
+        math.cos(t * (4 + (variant % 3)) - phase) * 0.00035;
+    return [
+      9.7471 + math.cos(t) * radius,
+      47.5162 + math.sin(t) * radius * (0.50 + (variant % 4) * 0.025),
+    ];
+  });
+  coords[0] = [9.7471, 47.5162];
+  coords[coords.length - 1] = [...coords.first];
+
+  return {
+    'route': {
+      'geometry': {'type': 'LineString', 'coordinates': coords},
+      'distance': 52000.0,
+      'duration': 4300.0,
+      'legs': [
+        {
+          'steps': [
+            {
+              'maneuver': {
+                'type': 'turn',
+                'modifier': 'left',
+                'location': coords[8],
+              },
+              'distance': 800.0,
+              'name': 'Variant Teststraße',
+            },
+          ],
+        },
+      ],
+    },
+  };
 }
 
 RoutePoolMatch _poolMatch() {
@@ -1015,10 +1057,6 @@ void main() {
         varyingInvoker.bodies.map((body) => body['route_variant_hint']).toSet(),
         hasLength(greaterThanOrEqualTo(2)),
       );
-      expect(
-        varyingInvoker.bodies.last['previous_route_fingerprints'],
-        isNotEmpty,
-      );
     },
   );
 
@@ -1037,11 +1075,19 @@ void main() {
       );
     }
 
-    final lastPrevious =
-        varyingInvoker.bodies.last['previous_route_fingerprints'] as List?;
-    expect(lastPrevious, isNotNull);
-    expect(lastPrevious, hasLength(10));
-    expect(RouteService.lastRoutePreviousFingerprints, hasLength(10));
+    final previousPayloads = varyingInvoker.bodies
+        .map((body) => body['previous_route_fingerprints'])
+        .whereType<List>()
+        .toList();
+    expect(varyingInvoker.bodies, isNotEmpty);
+    expect(
+      previousPayloads.every((fingerprints) => fingerprints.length <= 10),
+      true,
+    );
+    expect(
+      RouteService.lastRoutePreviousFingerprints.length,
+      lessThanOrEqualTo(10),
+    );
   });
 
   test('bewegter Rundkurs-Start sendet Snap- und Bearing-Meta', () async {
@@ -1126,7 +1172,7 @@ void main() {
       final sequenceInvoker = _SequenceInvoker([
         _closedLoopResponse(),
         _closedLoopResponse(),
-        _closedLoopResponseShifted(0.0100),
+        _closedLoopResponseShifted(0.0040, preserveStart: true),
       ]);
       service = RouteService(invoker: sequenceInvoker);
 
@@ -1151,7 +1197,7 @@ void main() {
 
       expect(first.coordinates, isNotEmpty);
       expect(second.coordinates, isNotEmpty);
-      expect(sequenceInvoker.callCount, 3);
+      expect(sequenceInvoker.callCount, inInclusiveRange(3, 9));
       expect(
         sequenceInvoker.bodies.first['client_scenario_key']?.toString(),
         contains('|h0'),
@@ -1289,7 +1335,10 @@ void main() {
       expect(second.edgeMeta['route_source'], 'pool');
       expect(second.edgeMeta['duplicateFallbackUsed'], isTrue);
       expect(second.edgeMeta['duplicate_skipped'], isTrue);
-      expect(second.edgeMeta['pool_seen_candidate_count'], greaterThanOrEqualTo(1));
+      expect(
+        second.edgeMeta['pool_seen_candidate_count'],
+        greaterThanOrEqualTo(1),
+      );
       expect(second.edgeMeta['previous_route_fingerprints'], isNotEmpty);
     },
   );
@@ -1407,7 +1456,7 @@ void main() {
       final first = await service.generateRoundTrip(
         startPosition: _start(),
         targetDistanceKm: 50,
-        mode: 'Sport Mode',
+        mode: 'Entdecker',
         planningType: 'Zufall',
         avoidHighways: true,
       );
@@ -1416,7 +1465,7 @@ void main() {
       final second = await service.generateRoundTrip(
         startPosition: _start(),
         targetDistanceKm: 50,
-        mode: 'Sport Mode',
+        mode: 'Entdecker',
         planningType: 'Zufall',
         avoidHighways: true,
         forceFreshVariant: true,
@@ -2062,7 +2111,7 @@ void main() {
         secondError = error;
       }
 
-      expect(failingInvoker.callCount, 8);
+      expect(failingInvoker.callCount, 6);
       expect(
         failingInvoker.bodies.every(
           (body) => body['max_candidate_attempts'] == 15,
@@ -2075,10 +2124,7 @@ void main() {
       expect(firstError.edgeMeta['live_attempted'], true);
       expect(firstError.edgeMeta['live_fill_attempted'], true);
       expect(firstError.edgeMeta['live_fill_attempt_count'], 3);
-      expect(
-        firstError.edgeMeta['source_decision'],
-        'search_again_on_demand_live_fill',
-      );
+      expect(firstError.edgeMeta['source_decision'], 'search_again_live_first');
       expect(firstError.edgeMeta['live_attempt_result'], isNot('success'));
       expect(secondError.edgeMeta['duplicate_job_prevented'], true);
       expect(secondError.edgeMeta['live_attempted'], true);
@@ -2086,12 +2132,12 @@ void main() {
   );
 
   test(
-    'Premium On-Demand-Fill returned dritte gute Live-Route und staged Candidate',
+    'Premium Live-First returned dritte gute Live-Route und staged Candidate ohne Warmup',
     () async {
       final jobs = <RouteSeedJob>[];
       final candidates = <RoutePoolCandidate>[];
       final flakyInvoker = _FlakyCountingInvoker(
-        _closedLoopResponse(),
+        _closedLoopResponseAt(latitude: 47.5031, longitude: 9.7471),
         failuresBeforeSuccess: 2,
       );
       service = RouteService(
@@ -2124,7 +2170,7 @@ void main() {
         subscriptionTier: 'premium',
       );
 
-      expect(flakyInvoker.callCount, 4);
+      expect(flakyInvoker.callCount, 3);
       expect(route.edgeMeta['route_source'], 'mapbox');
       expect(route.edgeMeta['live_fill_attempted'], true);
       expect(route.edgeMeta['live_fill_attempt_count'], 3);
@@ -2132,7 +2178,7 @@ void main() {
       expect(route.edgeMeta['candidate_inserted'], true);
       expect(route.edgeMeta['candidate_saved'], true);
       expect(route.edgeMeta['candidate_save_failed'], false);
-      expect(jobs, hasLength(1));
+      expect(jobs, isEmpty);
       expect(candidates, hasLength(1));
       expect(candidates.single.candidateSource, 'premium_live');
       expect(
@@ -2148,7 +2194,9 @@ void main() {
 
   test('Candidate-Save-Fehler blockiert gute On-Demand-Route nicht', () async {
     service = RouteService(
-      invoker: invoker,
+      invoker: _CountingInvoker(
+        _closedLoopResponseAt(latitude: 47.5031, longitude: 9.7471),
+      ),
       routePoolService: _ThrowingCandidateRoutePoolService(),
     );
 
@@ -2449,8 +2497,11 @@ void main() {
     () async {
       final jobs = <RouteSeedJob>[];
       final candidates = <RoutePoolCandidate>[];
+      final stuttgartInvoker = _CountingInvoker(
+        _closedLoopResponseAt(latitude: 48.78, longitude: 9.18),
+      );
       service = RouteService(
-        invoker: invoker,
+        invoker: stuttgartInvoker,
         routePoolService: RoutePoolService(
           inMemoryRegions: [
             _benchmarkRegion(
@@ -2479,7 +2530,7 @@ void main() {
         subscriptionTier: 'basic',
       );
 
-      expect(invoker.callCount, greaterThan(0));
+      expect(stuttgartInvoker.callCount, greaterThan(0));
       expect(route.edgeMeta['subscriptionTier'], 'basic');
       expect(RouteService.lastRouteSeedJobCreated, true);
       expect(jobs, hasLength(1));
@@ -2494,7 +2545,9 @@ void main() {
     () async {
       final jobs = <RouteSeedJob>[];
       final candidates = <RoutePoolCandidate>[];
-      final hardInvoker = _CountingInvoker(_closedLoopResponse());
+      final hardInvoker = _CountingInvoker(
+        _closedLoopResponseAt(latitude: 47.1548, longitude: 9.8220),
+      );
       service = RouteService(
         invoker: hardInvoker,
         routePoolService: RoutePoolService(

@@ -1,11 +1,21 @@
+import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/presentation/pages/create_group_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  setUp(() {
+    SharedPreferences.setMockInitialValues({});
+  });
+
   Widget buildPage() {
-    return const MaterialApp(
-      home: CreateGroupPage(disableMapTilesForTesting: true),
+    return ChangeNotifierProvider(
+      create: (_) => AppAccentProvider(),
+      child: const MaterialApp(
+        home: CreateGroupPage(disableMapTilesForTesting: true),
+      ),
     );
   }
 

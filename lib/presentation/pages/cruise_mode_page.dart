@@ -7145,7 +7145,8 @@ class _CruiseModePageState extends State<CruiseModePage>
     final code =
         error.edgeMeta['response_code']?.toString() ??
         error.edgeMeta['code']?.toString();
-    return code == 'start_offset_rejected';
+    return code == 'start_offset_rejected' ||
+        code == 'start_offset_uncorrectable';
   }
 
   Future<void> _acceptGeneratedRouteResult({
@@ -8608,7 +8609,8 @@ class _CruiseModePageState extends State<CruiseModePage>
     if (e is TimeoutException) return 'timeout';
     if (e is RouteServiceException) {
       final code = e.edgeMeta['response_code']?.toString();
-      if (code == 'start_offset_rejected') {
+      if (code == 'start_offset_rejected' ||
+          code == 'start_offset_uncorrectable') {
         final meters = e.edgeMeta['start_offset_meters'];
         return 'start_offset(${meters ?? '?'}m)';
       }
@@ -10860,16 +10862,21 @@ class _CruiseModePageState extends State<CruiseModePage>
       );
       if (firstCycleOk || !mounted || _disposed) return;
 
-      // EIN Auto-Retry mit frischem GPS-Fix. Liefert getCurrentPosition nichts
-      // (Timeout 5s), läuft der Retry mit der bisherigen Position — auch dann
-      // hilft er bei transienten Edge-/Netz-Fehlern.
-      var retryPosition = position;
+      // EIN Auto-Retry mit frischem GPS-Fix. Kein stiller Fallback auf die
+      // alte Position: Wenn der erste Zyklus wegen Start-Snap scheitert, muss
+      // der Retry wirklich mit neuer, genauer GPS-Position laufen.
+      geo.Position retryPosition;
       try {
         retryPosition = await geo.Geolocator.getCurrentPosition(
           locationSettings: const geo.LocationSettings(
             accuracy: geo.LocationAccuracy.best,
           ),
         ).timeout(const Duration(seconds: 5));
+        if (!_isFreshStartFix(retryPosition)) {
+          throw TimeoutException(
+            'fresh reroute fix stale/inaccurate: ${_describeStartFix(retryPosition)}',
+          );
+        }
         debugPrint(
           '[CruiseMode][RerouteRetry] Frischer GPS-Fix für Auto-Retry: '
           '${_describeStartFix(retryPosition)}',
@@ -10877,8 +10884,17 @@ class _CruiseModePageState extends State<CruiseModePage>
       } catch (e) {
         debugPrint(
           '[CruiseMode][RerouteRetry] Frischer Fix fehlgeschlagen '
-          '($e) — Auto-Retry mit letzter Position',
+          '($e) — kein Retry mit alter Position',
         );
+        _publishRerouteFailure(
+          rerouteReason: 'fresh_fix_unavailable',
+          rerouteMode: _isAccessLegActive ? 'rejoin' : 'partial_rebuild',
+          remainingDistanceBeforeMeters: remainingDistanceBeforeMeters,
+          etaBeforeSeconds: etaBeforeSeconds,
+          userMessage:
+              'Reroute gerade nicht möglich: GPS ist noch nicht präzise genug — bitte weiterfahren',
+        );
+        return;
       }
       await _runRerouteCycle(
         retryPosition,

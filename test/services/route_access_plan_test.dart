@@ -140,8 +140,8 @@ void main() {
         expect(accessRequest['continue_straight'], isTrue);
         expect(accessRequest['avoid_highways'], isFalse);
         expect(accessRequest.containsKey('targetDistance'), isFalse);
-        expect(accessRequest.containsKey('detour_level'), isFalse);
-        expect(accessRequest.containsKey('detour_factor'), isFalse);
+        expect(accessRequest['detour_level'], 0);
+        expect(accessRequest['detour_factor'], 1.0);
         expect(
           accessRequest['startLocation']['latitude'],
           closeTo(47.312, 0.001),
@@ -299,7 +299,7 @@ void main() {
         expect(plan.activeRoute.edgeMeta['access_leg_used'], isFalse);
         expect(plan.activeRoute.edgeMeta['join_point_type'], 'nearby_pass');
         expect(plan.activeRoute.edgeMeta['route_start_distance_km'], isNotNull);
-        expect(invoker.callCount, 0);
+        expect(invoker.callCount, 1);
       },
     );
   });

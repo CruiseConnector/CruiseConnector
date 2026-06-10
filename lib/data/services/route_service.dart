@@ -585,13 +585,25 @@ class RouteService {
         if (poolHealingCoverage == null) {
           poolHealingFirstPolicy = false;
         }
+        final allowHardRegionLiveExploration =
+            poolHealingCoverage != null &&
+            _shouldAllowHardRegionLiveExploration(
+              poolHealingCoverage,
+              lastRouteSubscriptionTier,
+            );
+        if (allowHardRegionLiveExploration) {
+          lastRouteHardRegionExplorationUsed = true;
+          lastRouteSourceDecision = forceFreshVariant
+              ? 'search_again_hard_region_live_exploration'
+              : 'hard_region_live_exploration';
+          lastRouteLiveAttemptReason = forceFreshVariant
+              ? 'search_again_force_fresh'
+              : 'hard_region_live_exploration';
+        }
         if (poolHealingFirstPolicy &&
             poolHealingCoverage != null &&
             _shouldStopLiveForPoolHealingCoverage(poolHealingCoverage)) {
-          if (_shouldAllowHardRegionLiveExploration(
-            poolHealingCoverage,
-            lastRouteSubscriptionTier,
-          )) {
+          if (allowHardRegionLiveExploration) {
             poolHealingFirstPolicy = false;
             onDemandLiveFill = true;
             lastRouteHardRegionExplorationUsed = true;
@@ -614,12 +626,22 @@ class RouteService {
             _shouldUseOnDemandLiveFill(poolHealingCoverage)) {
           poolHealingFirstPolicy = false;
           onDemandLiveFill = true;
-          lastRouteSourceDecision = forceFreshVariant
-              ? 'search_again_on_demand_live_fill'
-              : 'on_demand_live_fill';
-          lastRouteLiveAttemptReason = forceFreshVariant
-              ? 'search_again_force_fresh'
-              : 'thin_pool_on_demand_live_fill';
+          if (allowHardRegionLiveExploration) {
+            lastRouteHardRegionExplorationUsed = true;
+            lastRouteSourceDecision = forceFreshVariant
+                ? 'search_again_hard_region_live_exploration'
+                : 'hard_region_live_exploration';
+            lastRouteLiveAttemptReason = forceFreshVariant
+                ? 'search_again_force_fresh'
+                : 'hard_region_live_exploration';
+          } else {
+            lastRouteSourceDecision = forceFreshVariant
+                ? 'search_again_on_demand_live_fill'
+                : 'on_demand_live_fill';
+            lastRouteLiveAttemptReason = forceFreshVariant
+                ? 'search_again_force_fresh'
+                : 'thin_pool_on_demand_live_fill';
+          }
         }
       }
 
@@ -693,7 +715,7 @@ class RouteService {
             return healthyPoolRoute;
           }
         }
-        if (!onDemandLiveFill) {
+        if (!onDemandLiveFill && !lastRouteHardRegionExplorationUsed) {
           lastRouteSourceDecision = forceFreshVariant
               ? 'search_again_live_first'
               : 'live_first_pool_thin_or_unavailable';
@@ -709,10 +731,12 @@ class RouteService {
       // Sicherheitsnetz. Live darf 30-45s laufen, Pool kommt nur wenn live
       // wirklich nichts liefert.
       if (forceFreshVariant) {
-        lastRouteSourceDecision = onDemandLiveFill
+        final keepCoverageDrivenDecision =
+            onDemandLiveFill || lastRouteHardRegionExplorationUsed;
+        lastRouteSourceDecision = keepCoverageDrivenDecision
             ? lastRouteSourceDecision
             : 'search_again_live_first';
-        lastRouteLiveAttemptReason = onDemandLiveFill
+        lastRouteLiveAttemptReason = keepCoverageDrivenDecision
             ? lastRouteLiveAttemptReason
             : 'search_again_force_fresh';
       }
@@ -957,6 +981,26 @@ class RouteService {
         throw lastError;
       }
 
+      // Start-Snap-Fehler duerfen nicht durch Pool/Cache/Rescue-Fallbacks
+      // verdeckt werden. Die UI braucht diesen exakten Code, um genau einen
+      // Retry mit frischem GPS-Fix zu starten.
+      if (sawStartOffsetRejected) {
+        throw RouteServiceException(
+          type: RouteErrorType.quality,
+          userMessage:
+              'Die berechnete Route startete zu weit von deinem Standort '
+              'entfernt. Bitte versuche es erneut.',
+          debugMessage:
+              'all_round_trip_candidates_start_offset_rejected '
+              '(worst=${worstStartOffsetMeters.toStringAsFixed(0)}m, '
+              'limit=${maxAcceptedStartOffsetMeters.toStringAsFixed(0)}m)',
+          edgeMeta: {
+            'response_code': 'start_offset_rejected',
+            'start_offset_meters': worstStartOffsetMeters,
+          },
+        );
+      }
+
       // Live ist hier durch — ein bereits gesehener Pool-Match ist immer
       // besser als NO_ROUTE. Fix A/B (recordPoolHit + last_suggested_at-
       // Sortierung) sorgen ohnehin dafür, dass der "Duplicate" über mehrere
@@ -1030,8 +1074,8 @@ class RouteService {
       // Bei Search Again NIEMALS die letzte angezeigte Route nochmal liefern —
       // sonst sieht der User exakt das Bild was die ganze Beschwerde war:
       // „die alte Route wird wieder angezeigt obwohl Route gefunden steht".
-      final recentDuplicate = (allowDuplicateFallbackForThisSearch &&
-              !forceFreshVariant)
+      final recentDuplicate =
+          (allowDuplicateFallbackForThisSearch && !forceFreshVariant)
           ? (_recentDisplayedRoutes[_recentDisplayedKeyForScenario(scenario)] ??
                 _recentSuccessfulRoutes[scenario.scenarioKey])
           : null;
@@ -1903,6 +1947,10 @@ class RouteService {
           candidate: acceptedCandidate,
           directDistanceKm: directDistanceKm,
         )) {
+          final deliveredDetourLevel = _effectivePointToPointDetourLevel(
+            scenario,
+            acceptedCandidate.route,
+          );
           final scenicUpgrade = await _tryPointToPointFallback(
             scenario: scenario,
             startPosition: startPosition,
@@ -1915,6 +1963,13 @@ class RouteService {
           if (scenicUpgrade != null) {
             return scenicUpgrade;
           }
+          acceptedCandidate.route.edgeMeta['requested_detour_level'] =
+              scenario.detourLevel;
+          acceptedCandidate.route.edgeMeta['delivered_detour_level'] =
+              deliveredDetourLevel;
+          acceptedCandidate.route.edgeMeta['detour_downgraded'] = true;
+          acceptedCandidate.route.edgeMeta['detour_fallback_stage'] =
+              'client_kept_best_available_route';
         }
         lastRouteGenerationSource = 'mapbox';
         final finalized = _finalizeAndRemember(
@@ -1954,6 +2009,27 @@ class RouteService {
           );
         }
         return finalized;
+      }
+
+      // Start-Snap-Fehler duerfen nicht durch Pool/Direct/Cache-Fallbacks
+      // verdeckt werden. Besonders Reroute braucht diesen Code fuer den
+      // frischen-Fix-Retry statt eine beliebige Ersatzroute.
+      if (sawStartOffsetRejected) {
+        lastError = RouteServiceException(
+          type: RouteErrorType.quality,
+          userMessage:
+              'Die berechnete Route startete zu weit von deinem Standort '
+              'entfernt. Bitte versuche es erneut.',
+          debugMessage:
+              'all_p2p_candidates_start_offset_rejected '
+              '(worst=${worstStartOffsetMeters.toStringAsFixed(0)}m, '
+              'limit=${maxAcceptedStartOffsetMeters.toStringAsFixed(0)}m)',
+          edgeMeta: {
+            'response_code': 'start_offset_rejected',
+            'start_offset_meters': worstStartOffsetMeters,
+          },
+        );
+        throw lastError;
       }
 
       // 2026-06-10 (vucko Start-Versatz-Gate): Scheiterte die Suche NUR am
@@ -2877,7 +2953,12 @@ class RouteService {
       // 2026-05-23 (vucko Task #22): Trip-Modus Stopps
       if (intermediateWaypoints != null && intermediateWaypoints.isNotEmpty)
         'waypoints': intermediateWaypoints
-            .map((wp) => {'latitude': wp['latitude'], 'longitude': wp['longitude']})
+            .map(
+              (wp) => {
+                'latitude': wp['latitude'],
+                'longitude': wp['longitude'],
+              },
+            )
             .toList(),
     };
   }
@@ -3022,9 +3103,7 @@ class RouteService {
             // 2026-06-09 (vucko Audit T1-A): vorher sublist(1, clampedStart+1) →
             // ließ coord[0] FALLEN und dupliziert coord[clampedStart] → kaputter
             // rotierter Loop. Korrekt: der Kopf-Teil ist [0 .. clampedStart-1].
-            ...route.coordinates
-                .sublist(0, clampedStart)
-                .map(_copyCoordinate),
+            ...route.coordinates.sublist(0, clampedStart).map(_copyCoordinate),
           ]
         : route.coordinates
               .sublist(clampedStart)
@@ -3729,7 +3808,11 @@ class RouteService {
       final destLat = (targetLoc?['latitude'] as num?)?.toDouble();
       final destLng = (targetLoc?['longitude'] as num?)?.toDouble();
       if (destLat != null && destLng != null) {
-        final trim = _overshootTrimForDestination(coordinates, destLat, destLng);
+        final trim = _overshootTrimForDestination(
+          coordinates,
+          destLat,
+          destLng,
+        );
         if (trim != null) {
           final cutIndex = trim.cutIndex;
           effCoordinates = trim.coordinates;
@@ -3743,15 +3826,17 @@ class RouteService {
           for (final m in maneuvers) {
             if (m.isArrival) originalArrive = m;
           }
-          kept.add(RouteManeuver(
-            latitude: effCoordinates.last[1],
-            longitude: effCoordinates.last[0],
-            routeIndex: cutIndex,
-            icon: originalArrive?.icon ?? Icons.flag,
-            announcement:
-                originalArrive?.announcement ?? 'Sie haben Ihr Ziel erreicht',
-            instruction: originalArrive?.instruction ?? 'Ziel erreicht',
-          ));
+          kept.add(
+            RouteManeuver(
+              latitude: effCoordinates.last[1],
+              longitude: effCoordinates.last[0],
+              routeIndex: cutIndex,
+              icon: originalArrive?.icon ?? Icons.flag,
+              announcement:
+                  originalArrive?.announcement ?? 'Sie haben Ihr Ziel erreicht',
+              instruction: originalArrive?.instruction ?? 'Ziel erreicht',
+            ),
+          );
           effManeuvers = kept;
           effSpeedLimits = [
             for (final s in speedLimits)
@@ -3763,8 +3848,7 @@ class RouteService {
                 ),
           ];
           if (distanceRaw != null && distanceRaw > 0) {
-            final newDistance =
-                math.max(0.0, distanceRaw - trim.removedMeters);
+            final newDistance = math.max(0.0, distanceRaw - trim.removedMeters);
             if (durationRaw != null && durationRaw > 0) {
               effDurationRaw = durationRaw * (newDistance / distanceRaw);
             }
@@ -3977,12 +4061,21 @@ class RouteService {
   }
 
   static bool _isStructuredFallbackError(RouteServiceException error) {
+    if (_isStartOffsetStructuredError(error)) return false;
     if (_isFatalStructuredError(error)) return false;
 
     return error.type == RouteErrorType.noRoute ||
         error.type == RouteErrorType.quality ||
         error.type == RouteErrorType.emptyResponse ||
         error.type == RouteErrorType.unknown;
+  }
+
+  static bool _isStartOffsetStructuredError(RouteServiceException error) {
+    final code =
+        error.edgeMeta['response_code']?.toString() ??
+        error.edgeMeta['code']?.toString();
+    return code == 'start_offset_rejected' ||
+        code == 'start_offset_uncorrectable';
   }
 
   static bool _canUseStructuredFallback(RouteServiceException? error) {
@@ -4279,8 +4372,8 @@ class RouteService {
     // zufälligen Wert aus 0-31 statt deterministisch 0. So sieht jeder
     // App-Start eine andere Variante in der gleichen Region.
     final existing = _scenarioVariantCounters[scenarioKey];
-    final next = existing ??
-        (DateTime.now().microsecondsSinceEpoch & 0x1F); // 0..31
+    final next =
+        existing ?? (DateTime.now().microsecondsSinceEpoch & 0x1F); // 0..31
     _scenarioVariantCounters[scenarioKey] = next + 1;
     return next;
   }
@@ -4317,7 +4410,8 @@ class RouteService {
     // Geländedach mit identischer Mapbox-Antwort. 137° rastert die Sektor-
     // Karte gleichmäßiger und kommt erst nach 360°/137 ≈ 2.6 Iterationen
     // zurück zum Ausgangs-Sektor.
-    final hasSeenForSearchAgain = forceFreshVariant &&
+    final hasSeenForSearchAgain =
+        forceFreshVariant &&
         SeenRouteRegistry.entriesForAny(
           _seenHistoryKeysForScenario(scenario),
         ).isNotEmpty;
@@ -4328,9 +4422,12 @@ class RouteService {
         ? (rng.nextDouble() - 0.5) * 60.0
         : 0.0;
     final rawAngleOffset =
-        (baseDirection + searchAgainShiftDegrees + searchAgainJitter +
-                index * 47.0 + (index % 5) * 23.0) %
-            360;
+        (baseDirection +
+            searchAgainShiftDegrees +
+            searchAgainJitter +
+            index * 47.0 +
+            (index % 5) * 23.0) %
+        360;
     final angleOffset = _avoidRecentRoundTripSector(rawAngleOffset, scenario);
     return RouteVariant(
       index: index,
@@ -4939,7 +5036,8 @@ class RouteService {
     // hasTangledStartCluster, poolShape, longSportShape) bleiben via
     // softRenderable-AND-Kette voll aktiv → loosen NUR den Kurven-/Stil-
     // Anspruch, nicht die Sicherheit.
-    final cleanCurvyRescue = scenario.isRoundTrip &&
+    final cleanCurvyRescue =
+        scenario.isRoundTrip &&
         hasEnoughPoints &&
         quality.overlapPercent <= 26.0 &&
         quality.microZigzagPercent <= 34.0 &&
@@ -4966,7 +5064,8 @@ class RouteService {
     // 2026-05-23 (vucko Task #25): Round-Trip Loop-Cleanup — verworrene
     // Anfangs-Knoten ablehnen. Wenn repeatedStartArea >25% oder
     // spurArmCount >2 → ekliger Knoten am Start, lieber ablehnen.
-    final hasTangledStartCluster = scenario.isRoundTrip &&
+    final hasTangledStartCluster =
+        scenario.isRoundTrip &&
         (quality.repeatedStartAreaPercent > 25.0 || quality.spurArmCount > 2);
     final softRenderable = scenario.isPointToPoint
         ? (hasEnoughPoints && qualityAcceptable && !borderIntrusionRejected)
@@ -5010,9 +5109,10 @@ class RouteService {
     // (die sind für Kurven-Rundkurse gedacht, nicht für die Direktstrecke).
     // Greift sowohl beim expliziten „Direkte Route nehmen" (forceAcceptDirect)
     // als auch wenn der User im Dropdown „Direkt" gewählt hat (detour 0).
-    final isDirectPointToPoint = scenario.isPointToPoint &&
-        pointToPointEvaluationDetourLevel <= 0;
-    final forceDirectAcceptable = (forceAcceptDirect || isDirectPointToPoint) &&
+    final isDirectPointToPoint =
+        scenario.isPointToPoint && pointToPointEvaluationDetourLevel <= 0;
+    final forceDirectAcceptable =
+        (forceAcceptDirect || isDirectPointToPoint) &&
         hasEnoughPoints &&
         destinationReached;
     // 2026-05-31 (vucko): Länder-Filter. Ausland-Anteil EINMAL berechnen.
@@ -5025,14 +5125,14 @@ class RouteService {
     _activeCountryPreference = scenario.countryPreference;
     final double foreignFraction =
         (scenario.homeCountryCode != null &&
-                scenario.countryPreference != CountryPreference.any)
-            ? CountryRegion.foreignFraction(
-                coordinates: route.coordinates,
-                homeCountryCode: scenario.homeCountryCode!,
-              )
-            : 0.0;
-    final double countryPenalty = scenario.countryPreference ==
-            CountryPreference.any
+            scenario.countryPreference != CountryPreference.any)
+        ? CountryRegion.foreignFraction(
+            coordinates: route.coordinates,
+            homeCountryCode: scenario.homeCountryCode!,
+          )
+        : 0.0;
+    final double countryPenalty =
+        scenario.countryPreference == CountryPreference.any
         ? 0.0
         : CountryRegion.scorePenalty(
             foreignFraction: foreignFraction,
@@ -5365,7 +5465,7 @@ class RouteService {
   /// nie → kein Schnitt. Suchfenster nur das letzte Viertel (min. 30 Punkte),
   /// damit frühe Zielnähe-Passagen einer Schleife nicht angeschnitten werden.
   ({List<List<double>> coordinates, int cutIndex, double removedMeters})?
-      _overshootTrimForDestination(
+  _overshootTrimForDestination(
     List<List<double>> coords,
     double destLat,
     double destLng,
@@ -5386,8 +5486,12 @@ class RouteService {
     }
     if (bestIdx >= coords.length - 1) return null;
     final last = coords.last;
-    final endMeters =
-        geo.Geolocator.distanceBetween(last[1], last[0], destLat, destLng);
+    final endMeters = geo.Geolocator.distanceBetween(
+      last[1],
+      last[0],
+      destLat,
+      destLng,
+    );
     if (endMeters <= bestMeters + 80.0) return null;
     var tailMeters = 0.0;
     for (var i = bestIdx; i < coords.length - 1; i++) {
@@ -6937,8 +7041,8 @@ class RouteService {
       // ODER Live-Suche; gibt es gar keinen Inlandskurs → klarer noRoute.
       final maxForeign =
           scenario.countryPreference == CountryPreference.onlyHome
-              ? 0.06
-              : 0.65;
+          ? 0.06
+          : 0.65;
       if (foreignFraction > maxForeign) {
         _debugRouteSearch(
           '[PoolFallback] poolHit=true poolUsed=false reason=country_filter '
@@ -8147,6 +8251,8 @@ class RouteService {
       if (detailsMap?['meta'] is Map)
         ...Map<String, dynamic>.from(detailsMap!['meta'] as Map),
     };
+    final responseCode =
+        edgeMeta['response_code']?.toString() ?? edgeMeta['code']?.toString();
 
     if (statusCode == 401 || statusCode == 403 || lower.contains('jwt')) {
       return RouteServiceException(
@@ -8206,6 +8312,22 @@ class RouteService {
       );
     }
 
+    if (responseCode == 'start_offset_rejected' ||
+        responseCode == 'start_offset_uncorrectable' ||
+        lower.contains('start_offset_rejected') ||
+        lower.contains('start_offset_uncorrectable')) {
+      return RouteServiceException(
+        type: RouteErrorType.quality,
+        userMessage:
+            'Die berechnete Route startete zu weit von deinem Standort entfernt. Bitte versuche es erneut.',
+        debugMessage:
+            'Start-offset error (status=$statusCode, reason=$reasonPhrase): $errorMessage, details=$details',
+        statusCode: statusCode,
+        stackTrace: stackTrace,
+        edgeMeta: edgeMeta,
+      );
+    }
+
     if (statusCode != null && statusCode >= 500) {
       return RouteServiceException(
         type: RouteErrorType.server,
@@ -8218,8 +8340,6 @@ class RouteService {
       );
     }
 
-    final responseCode =
-        edgeMeta['response_code']?.toString() ?? edgeMeta['code']?.toString();
     if (responseCode == 'search_in_progress' ||
         detailsMap?['code']?.toString() == 'search_in_progress' ||
         edgeMeta['search_in_progress'] == true) {
@@ -8674,9 +8794,14 @@ class RouteService {
       // 2026-06-02 (vucko): GraphHopper-v2-Pfad. Kein Mapbox-`legs`, dafür
       // `route.instructions` (sign/interval/text). Ohne diesen Zweig hatten
       // ALLE GraphHopper-Routen 0 Manöver → „Route folgen" statt „300m rechts".
-      final ghInstructions = route is Map ? route['instructions'] as List? : null;
+      final ghInstructions = route is Map
+          ? route['instructions'] as List?
+          : null;
       if (ghInstructions != null && ghInstructions.isNotEmpty) {
-        return _extractManeuversFromGraphhopper(ghInstructions, routeCoordinates);
+        return _extractManeuversFromGraphhopper(
+          ghInstructions,
+          routeCoordinates,
+        );
       }
       return const [];
     }
@@ -9932,7 +10057,9 @@ class RouteService {
       edgeMeta: {
         ...result.edgeMeta,
         // Roh-Versatz angefragter Start → erster Provider-Punkt (vor Stub).
-        'start_offset_meters': double.parse(distToFirstPoint.toStringAsFixed(1)),
+        'start_offset_meters': double.parse(
+          distToFirstPoint.toStringAsFixed(1),
+        ),
       },
     );
   }

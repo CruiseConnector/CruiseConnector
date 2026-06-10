@@ -1779,10 +1779,8 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
     // Richtungs-Rettung, WP-Snap-Pass-1) ODER GraphHopper selbst >50m weit
     // gesnappt hat. Korrektur: kurzer Zubringer echter Start → erster
     // Routenpunkt wird vorangestellt (Rundkurs: zusätzlich Rückweg letzter
-    // Punkt → echter Start), inkl. Instruction-Intervall-Shift. Scheitert der
-    // Zubringer (Start wirklich nicht snapbar, z.B. mitten im Bodensee),
-    // bleibt die Route erhalten — meta.start_offset_m macht den Versatz für
-    // Client und Diagnose sichtbar.
+    // Punkt → echter Start), inkl. Instruction-Intervall-Shift. Scheitert die
+    // Korrektur, liefern wir KEINE versetzte Route aus.
     if (req.start_location) {
       const sLatReq = req.start_location.latitude;
       const sLngReq = req.start_location.longitude;
@@ -1799,7 +1797,7 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
             profile: 'car', // robustester Snap für den kurzen Zubringer
             isRoundTrip: false,
             avoidHighways: req.avoid_highways ?? false,
-            serverUrl: serverChoice.primary,
+            serverUrl: lastServerUsed,
             headingDeg: req.reroute_request === true ? req.current_heading : undefined,
           });
           // Zubringer plausibel? (kein 10km-Umweg für 150m Versatz)
@@ -1867,7 +1865,19 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
                 mergedDurS += br.durationSeconds;
                 mergedAscent += br.ascent;
               } else {
-                console.log(`[START-GUARD] roundtrip return connector unavailable — loop closes at offset point`);
+                const reason = 'error' in back ? back.error.slice(0, 120) : 'detour too long';
+                console.log(`[START-GUARD] roundtrip return connector unavailable (${reason}) — rejecting offset loop`);
+                return jsonResponse({
+                  error: 'start_offset_uncorrectable',
+                  user_message:
+                    'Die berechnete Route konnte nicht sauber an deinen Standort angebunden werden. Bitte versuche es erneut.',
+                  debug_message:
+                    `roundtrip_return_connector_unavailable offset=${Math.round(startOffsetM)}m reason=${reason}`,
+                  meta: {
+                    response_code: 'start_offset_uncorrectable',
+                    start_offset_meters: Math.round(startOffsetM),
+                  },
+                }, 502);
               }
             }
             bestCandidate = {
@@ -1883,7 +1893,19 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
             };
             console.log(`[START-GUARD] connector ok (+${(conn.distanceKm * 1000).toFixed(0)}m) — route now starts at requested start`);
           } else {
-            console.log(`[START-GUARD] connector unavailable (${'error' in connector ? connector.error.slice(0, 80) : 'detour too long'}) — start truly un-snappable, keeping offset route`);
+            const reason = 'error' in connector ? connector.error.slice(0, 120) : 'detour too long';
+            console.log(`[START-GUARD] connector unavailable (${reason}) — rejecting offset route`);
+            return jsonResponse({
+              error: 'start_offset_uncorrectable',
+              user_message:
+                'Die berechnete Route konnte nicht sauber an deinen Standort angebunden werden. Bitte versuche es erneut.',
+              debug_message:
+                `start_connector_unavailable offset=${Math.round(startOffsetM)}m reason=${reason}`,
+              meta: {
+                response_code: 'start_offset_uncorrectable',
+                start_offset_meters: Math.round(startOffsetM),
+              },
+            }, 502);
           }
         }
         const finalFirst = (bestCandidate.geometry.coordinates as [number, number][])[0];
