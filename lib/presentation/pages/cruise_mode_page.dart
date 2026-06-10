@@ -449,6 +449,8 @@ class _CruiseModePageState extends State<CruiseModePage>
 
   // ─────────────────────── Simulation State ─────────────────────────────────
   Timer? _simulationTimer;
+  // 2026-06-10 (vucko Perf-Harness): nur mit --dart-define=PERF_AUTOPILOT aktiv.
+  Timer? _perfAutopilotTimer;
   bool _isSimulationRunning = false;
   bool _isSimulationStepRunning = false;
   int _simulationIndex = 0;
@@ -478,7 +480,11 @@ class _CruiseModePageState extends State<CruiseModePage>
   // Vor dem finalen Release wieder auf false setzen (Testuser sollen ihn nicht sehen).
   // 2026-06-10 (vucko Release-Prep): Fahrsimulator NUR in Debug-Builds —
   // TestFlight-/Play-Store-User duerfen den Play-FAB nie sehen.
-  final bool _isSimulationEnabled = kDebugMode;
+  // 2026-06-10 (vucko Perf-Harness): SIM_ENABLED erlaubt die Simulation auch im
+  // Profile-Build (--dart-define=SIM_ENABLED=true) — Frame-Profiling braucht
+  // eine Fahrt ohne echtes GPS. Im Release ohne Define bleibt alles wie bisher.
+  final bool _isSimulationEnabled =
+      kDebugMode || const bool.fromEnvironment('SIM_ENABLED');
   // Konstante Sim-Speed. Default 30 km/h (man sieht Ruckler gut); für schnelle
   // Test-Durchläufe via --dart-define=SIM_KMH=70 hochsetzen.
   static const double _simulationConstantKmh =
@@ -1307,6 +1313,29 @@ class _CruiseModePageState extends State<CruiseModePage>
     WidgetsBinding.instance.addPostFrameCallback(
       (_) => _maybeShowRoutingOnboarding(),
     );
+    // 2026-06-10 (vucko Perf-Harness): PERF_AUTOPILOT bestätigt die per
+    // initialRoute geladene Route automatisch und startet die Simulation —
+    // Profiling am physischen Gerät ohne Tippen (lib/main_perf.dart). Ohne
+    // das Define ist der Timer nie aktiv; er cancelt sich nach dem Sim-Start.
+    if (const bool.fromEnvironment('PERF_AUTOPILOT')) {
+      _perfAutopilotTimer = Timer.periodic(const Duration(milliseconds: 500), (
+        t,
+      ) {
+        if (!mounted || _disposed || _isSimulationRunning) {
+          t.cancel();
+          return;
+        }
+        if (_isLoading || _fullRouteCoordinates.length < 2) return;
+        if (!_isRouteConfirmed) {
+          debugPrint('[PERF] Autopilot: Route bestätigen');
+          unawaited(_confirmRoute());
+          return;
+        }
+        debugPrint('[PERF] Autopilot: Simulation starten');
+        t.cancel();
+        unawaited(_startSimulation());
+      });
+    }
   }
 
   // 2026-06-01 (vucko): Trip-Modus-Tutorial nur EINMALIG (persistent) und nur
@@ -2145,6 +2174,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     _groupMembersBackfillTimer?.cancel();
     _groupMembersReconnectTimer?.cancel();
     _groupMembersFreshnessTimer?.cancel();
+    _perfAutopilotTimer?.cancel();
     _viewportPoiDebounce?.cancel();
     _groupRouteCh?.unsubscribe();
     _groupMembersCh?.unsubscribe();
@@ -2195,17 +2225,108 @@ class _CruiseModePageState extends State<CruiseModePage>
   // Geschwindigkeit pulsen ließ = Mini-Ruckeln) zieht der Ticker den Kamera-Stand
   // jeden Frame ein Stück linear Richtung Ziel und setzt ihn INSTANT (moveCamera).
   // Lineare Bewegung + 1 Channel-Call pro Frame (coalesced) = butterweich.
+  // 2026-06-10 (vucko Perf-Diag): Kamera-Bewegungs-Diagnostik, nur mit
+  // --dart-define=PERF_CAM_DIAG=true aktiv (const → kompiliert sonst raus).
+  // Misst die TATSÄCHLICH dispatchten Kamera-Schritte pro Frame: Puls-Bewegung
+  // (Ziel springt 1×/s, Kamera rast hinterher und steht dann) zeigt sich als
+  // hoher stall%-Anteil + hohes p95/avg-Verhältnis.
+  static const bool _perfCamDiag = bool.fromEnvironment('PERF_CAM_DIAG');
+  final List<double> _camDiagSteps = [];
+  int _camDiagStalls = 0;
+  int _camDiagTicks = 0;
+  DateTime? _camDiagLastReport;
+
+  void _camDiagRecord(double stepMeters) {
+    _camDiagTicks++;
+    if (stepMeters < 0.05) {
+      _camDiagStalls++;
+    } else {
+      _camDiagSteps.add(stepMeters);
+    }
+    final now = DateTime.now();
+    _camDiagLastReport ??= now;
+    if (now.difference(_camDiagLastReport!) <
+        const Duration(seconds: 10)) {
+      return;
+    }
+    _camDiagLastReport = now;
+    final steps = List<double>.from(_camDiagSteps)..sort();
+    final ticks = _camDiagTicks;
+    final stalls = _camDiagStalls;
+    _camDiagSteps.clear();
+    _camDiagStalls = 0;
+    _camDiagTicks = 0;
+    if (steps.isEmpty) {
+      debugPrint('[PERF-CAM] ticks=$ticks stall=100% (keine Bewegung)');
+      return;
+    }
+    final avg = steps.reduce((a, b) => a + b) / steps.length;
+    final p95 = steps[((steps.length - 1) * 0.95).round()];
+    debugPrint(
+      '[PERF-CAM] ticks=$ticks | moving=${steps.length} | '
+      'stall=${(stalls / ticks * 100).toStringAsFixed(1)}% | '
+      'step avg=${avg.toStringAsFixed(2)}m p95=${p95.toStringAsFixed(2)}m '
+      'max=${steps.last.toStringAsFixed(2)}m',
+    );
+  }
+
+  // 2026-06-10 (vucko Fahr-Ruckeln-Fix, MESSBELEGT): Zähler für den
+  // Konvergenz-Stop — steht die Kamera ~45 Frames praktisch still (Ampel,
+  // Stillstand), wird der 120Hz-Ticker gestoppt statt weiter pro Frame
+  // moveCamera zu feuern. Jeder GPS-Fix startet ihn über _animateCameraTo
+  // sofort wieder (`if (!controller.isAnimating) controller.repeat()`).
+  int _camIdleTicks = 0;
+
   void _onCameraAnimationTick() {
     if (!_isCameraLocked || !_mapReady || _isOverviewActive) {
       _cameraAnimController?.stop();
       return;
     }
     if (!_camHasState || _camMoveInFlight) return;
+    // 2026-06-10 (vucko Fahr-Ruckeln-Fix, MESSBELEGT): Das Kamera-ZIEL wurde
+    // bisher nur pro GPS-Event gesetzt. Echtes iOS-GPS liefert ~1Hz → das Ziel sprang
+    // 1×/Sekunde um ~Sekunden-Fahrstrecke (70 km/h ≈ 19 m), die Dämpfung
+    // raste in ~100 ms hinterher und stand dann ~900 ms still = das „Ruckeln"
+    // am Gerät (am Simulator unsichtbar, weil die Sim mit 20 Hz füttert).
+    // Jetzt wird das Ziel JEDEN Frame aus der Kalman-Prediction des Smoothers
+    // weitergeschoben (Dead Reckoning mit 150 ms Vorhalt wie bisher; dt-Clamp
+    // 1,5 s im Smoother verhindert Davonlaufen bei GPS-Aussetzern). Gleiche
+    // Optik/Framing (Zoom, Offset, Dämpfung, Heading-Dead-Zone unverändert) —
+    // nur kontinuierlich statt pulsierend. Web behält den Event-Pfad.
+    if (!kIsWeb) {
+      final pred = _nativeSmoother.predict(
+        DateTime.now().add(const Duration(milliseconds: 150)),
+      );
+      if (pred.lat != 0 || pred.lng != 0) {
+        _camToLat = pred.lat;
+        _camToLng = pred.lng;
+        // Heading-Ziel bleibt event-gesteuert (_animateCameraTo wendet dort
+        // die Bearing-Dead-Zone an) — Rotation soll nicht pro Frame zappeln.
+      }
+    }
     // Kritisch gedämpftes Annähern (Apple/Google-artig). Faktor pro Frame.
     const f = 0.18;
+    final prevLat = _camCurLat;
+    final prevLng = _camCurLng;
+    final prevHeading = _camCurHeading;
     _camCurLat += (_camToLat - _camCurLat) * f;
     _camCurLng += (_camToLng - _camCurLng) * f;
     _camCurHeading = _lerpAngleDeg(_camCurHeading, _camToHeading, f);
+    final stepMeters = geo.Geolocator.distanceBetween(
+        prevLat, prevLng, _camCurLat, _camCurLng);
+    if (_perfCamDiag) _camDiagRecord(stepMeters);
+    // Konvergenz-Stop: praktisch keine Bewegung mehr (<1 cm/Frame, <0.05°)
+    // über ~45 Frames → Ticker stoppen, kein moveCamera-Spam im Stillstand.
+    if (stepMeters < 0.01 &&
+        _angleDiff(prevHeading, _camCurHeading).abs() < 0.05) {
+      if (++_camIdleTicks >= 45) {
+        _camIdleTicks = 0;
+        _cameraAnimController?.stop();
+        return;
+      }
+    } else {
+      _camIdleTicks = 0;
+    }
     final ctrl = _mlController;
     if (ctrl == null) return;
     // Forward-Offset: Zentrum ~100m voraus → Puck sitzt im unteren Drittel.
@@ -4802,6 +4923,17 @@ class _CruiseModePageState extends State<CruiseModePage>
       // 0 → Gradient aus, ganze Route voll sichtbar.
       routeTotalMeters: _isOverviewActive ? 0.0 : _routeTotalLenM,
       routeColor: AppAccentColors.accent,
+      // 2026-06-10 (vucko Fahr-Ruckeln-Fix): Puck folgt pro Frame der Kalman-
+      // Prediction (Dead Reckoning zwischen den ~1Hz-GPS-Fixes) statt der
+      // rohen Fix-Position — kein Sekunden-Teleport mehr. Web: aus (dort
+      // glättet der WebPositionSmoother den Event-Pfad wie bisher).
+      liveSmoothedPosition: kIsWeb
+          ? null
+          : () {
+              final p = _nativeSmoother.predict(DateTime.now());
+              if (p.lat == 0 && p.lng == 0) return null;
+              return LatLng(p.lat, p.lng);
+            },
       onControllerReady: (c) {
         _mlController = c;
         if (!_mapReady) _onMapReady();
@@ -4934,6 +5066,9 @@ class _CruiseModePageState extends State<CruiseModePage>
         position: _userPosition!,
         width: _puckSize,
         height: _puckSize,
+        // Folgt pro Frame der Smoother-Prediction (liveSmoothedPosition) —
+        // _userPosition bleibt der Fallback, falls der Smoother leer ist.
+        followsLivePosition: true,
         child: _buildLocationPuck(_isCameraLocked ? 0.0 : _userHeading),
       ));
     }
@@ -11457,11 +11592,17 @@ class _CruiseModePageState extends State<CruiseModePage>
 
     // Fester 50ms Intervall (20 FPS) — smooth für alle Geschwindigkeiten
     // Die Anzahl übersprungener Punkte wird in _runSimulationStep berechnet
+    // 2026-06-10 (vucko Perf-Harness): SIM_TICK_MS macht die Sim-Kadenz
+    // konfigurierbar (z.B. 1000 = GPS-realistische 1Hz wie echtes iOS-GPS) —
+    // nur fürs Profiling, Default 50ms = bisheriges Verhalten.
     _simulationTimer = Timer(
-      const Duration(milliseconds: 50),
+      const Duration(milliseconds: _simTickMs),
       _runSimulationStep,
     );
   }
+
+  static const int _simTickMs =
+      int.fromEnvironment('SIM_TICK_MS', defaultValue: 50);
 
   Future<void> _runSimulationStep() async {
     if (!_isSimulationRunning ||
@@ -11486,7 +11627,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       // Jetzt: pro Tick exakt speedMs*0.05m weiter; Position WIRD im Segment
       // interpoliert → echte konstante 30 km/h + butterweich.
       final speedMs = _simulationSpeedKmh / 3.6;
-      _simulationDistanceM += speedMs * 0.05; // Meter in 50ms
+      _simulationDistanceM += speedMs * (_simTickMs / 1000.0); // Meter pro Tick
 
       // Vertex-Cursor vorrücken, bis das aktuelle Segment die Ziel-Distanz enthält.
       while (_simulationIndex < lastIndex) {

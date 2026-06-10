@@ -22,6 +22,7 @@ class CruiseMapMarker {
     this.width = 40,
     this.height = 40,
     this.alignment = Alignment.center,
+    this.followsLivePosition = false,
   });
 
   /// Stabile ID (für effizientes Diffing der Overlay-Children).
@@ -34,6 +35,12 @@ class CruiseMapMarker {
   /// Ankerpunkt: center = Marker-Mitte auf der Koordinate,
   /// bottomCenter = Spitze unten (z. B. Pin), topCenter = Spitze oben.
   final Alignment alignment;
+
+  /// 2026-06-10 (vucko Fahr-Ruckeln-Fix): true = dieser Marker (Nav-Puck)
+  /// wird bei der Projektion auf [CruiseMapLibreMap.liveSmoothedPosition]
+  /// gesetzt statt auf [position] — folgt damit pro Frame der Smoother-
+  /// Prediction statt der rohen 1Hz-GPS-Position (kein Sekunden-Teleport).
+  final bool followsLivePosition;
 }
 
 /// Eine Polylinie auf der Karte (GL-gerendert, scharf + flüssig).
@@ -233,6 +240,7 @@ class CruiseMapLibreMap extends StatefulWidget {
     this.routeProgress = 0.0,
     this.routeTotalMeters = 0.0,
     this.routeColor = const Color(0xFFFF4438),
+    this.liveSmoothedPosition,
   });
 
   final ll.LatLng initialCenter;
@@ -265,6 +273,12 @@ class CruiseMapLibreMap extends StatefulWidget {
   final double routeTotalMeters;
   final Color routeColor;
 
+  /// 2026-06-10 (vucko Fahr-Ruckeln-Fix): liefert die pro Frame fortge-
+  /// schriebene (Kalman-)Position des Fahrers — wird bei jeder Marker-
+  /// Projektion synchron abgefragt und ersetzt die Position aller Marker mit
+  /// [CruiseMapMarker.followsLivePosition]. null = Feature aus (z. B. Web).
+  final ll.LatLng? Function()? liveSmoothedPosition;
+
   @override
   State<CruiseMapLibreMap> createState() => _CruiseMapLibreMapState();
 }
@@ -281,7 +295,16 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
   bool _visible = false;
 
   /// Aktuelle Bildschirmpositionen der Marker (id -> Offset in logischen Pixeln).
-  final Map<String, Offset> _markerScreen = {};
+  // 2026-06-10 (vucko Fahr-Perf, MESSBELEGT): ValueNotifier statt setState.
+  // Vorher rebuildete JEDE Marker-Projektion (pro onCameraMove = pro Frame,
+  // am iPhone 13 Pro 120 Hz dauerhaft) den KOMPLETTEN Map-Subtree inkl.
+  // mb.MapLibreMap-Widget (dessen didUpdateWidget pro Rebuild zwei Options-
+  // Maps baut + difft). Jetzt rebuildet nur noch das Marker-Overlay (ein
+  // ValueListenableBuilder) — die Platform-View wird bei Projektion gar nicht
+  // mehr angefasst. Frische Map-Instanz pro Projektion → Notifier feuert
+  // zuverlässig (Map-Identität ≠).
+  final ValueNotifier<Map<String, Offset>> _markerScreen =
+      ValueNotifier<Map<String, Offset>>(const {});
   // 2026-06-05 (vucko Crash-Fix): Route-Linien laufen NICHT mehr über die
   // Annotation-LineManager. clearLines()+addLine() baute die GeoJSON-Quelle bei
   // JEDEM Sync live ab + neu auf → mbgl warf nativ eine C++-Exception SYNCHRON in
@@ -391,6 +414,7 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
     _initialSyncFallback?.cancel();
     _initialSyncFallback = null;
     _ctrl?.active = false;
+    _markerScreen.dispose();
     super.dispose();
   }
 
@@ -1025,8 +1049,8 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
         !_firstFrameSynced ||
         map == null ||
         widget.markers.isEmpty) {
-      if (_markerScreen.isNotEmpty && mounted) {
-        setState(_markerScreen.clear);
+      if (_markerScreen.value.isNotEmpty && mounted) {
+        _markerScreen.value = const {};
       }
       return;
     }
@@ -1050,24 +1074,24 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
     final cosT = math.cos(theta), sinT = math.sin(theta);
     final halfW = _mapW / 2, halfH = _mapH / 2;
 
+    final live = widget.liveSmoothedPosition?.call();
     final next = <String, Offset>{};
     for (final m in widget.markers) {
-      final px = _mercX(m.position.longitude) * ws;
+      // 2026-06-10 (vucko Fahr-Ruckeln-Fix): Der Nav-Puck folgt der pro Frame
+      // fortgeschriebenen Smoother-Position statt der rohen 1Hz-GPS-Position —
+      // sonst teleportiert er 1×/Sekunde um die Sekunden-Fahrstrecke (~19 m
+      // bei 70 km/h), während die Karte weich folgt.
+      final pos = (m.followsLivePosition && live != null) ? live : m.position;
+      final px = _mercX(pos.longitude) * ws;
       final py =
-          _mercY(m.position.latitude.clamp(-_maxMercLat, _maxMercLat)) * ws;
+          _mercY(pos.latitude.clamp(-_maxMercLat, _maxMercLat)) * ws;
       final dx = px - cx, dy = py - cy;
       next[m.id] = Offset(
         halfW + (dx * cosT - dy * sinT),
         halfH + (dx * sinT + dy * cosT),
       );
     }
-    if (mounted) {
-      setState(() {
-        _markerScreen
-          ..clear()
-          ..addAll(next);
-      });
-    }
+    if (mounted) _markerScreen.value = next;
   }
 
   /// Fallback (nur bei Tilt>0 — heute nie): native async Projektion.
@@ -1089,13 +1113,7 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
         next[markers[i].id] =
             Offset(pts[i].x.toDouble(), pts[i].y.toDouble());
       }
-      if (mounted) {
-        setState(() {
-          _markerScreen
-            ..clear()
-            ..addAll(next);
-        });
-      }
+      if (mounted) _markerScreen.value = next;
     } catch (_) {}
   }
 
@@ -1198,18 +1216,26 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
           ),
           ),
         ),
-        // Marker-Overlay
-        ..._buildMarkerOverlay(),
+        // Marker-Overlay — eigener Listenable-Scope: Projektions-Updates
+        // (pro Frame während der Fahrt) rebuilden NUR diese Positioned-Liste,
+        // nie mehr die Platform-View darunter (vucko 2026-06-10 Fahr-Perf).
+        Positioned.fill(
+          child: ValueListenableBuilder<Map<String, Offset>>(
+            valueListenable: _markerScreen,
+            builder: (context, positions, _) =>
+                Stack(children: _buildMarkerOverlay(positions)),
+          ),
+        ),
       ],
         );
       },
     );
   }
 
-  List<Widget> _buildMarkerOverlay() {
+  List<Widget> _buildMarkerOverlay(Map<String, Offset> positions) {
     final out = <Widget>[];
     for (final m in widget.markers) {
-      final pos = _markerScreen[m.id];
+      final pos = positions[m.id];
       if (pos == null) continue;
       // Ankerverschiebung relativ zur Marker-Box.
       final ax = (m.alignment.x + 1) / 2; // 0..1
@@ -1221,7 +1247,12 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
         height: m.height,
         child: IgnorePointer(
           ignoring: false,
-          child: SizedBox(width: m.width, height: m.height, child: m.child),
+          // RepaintBoundary: bewegt sich nur die POSITION (Kamera-Follow),
+          // wird der Marker-Inhalt (Schatten/Icons/CustomPaint) nicht neu
+          // gerastert — der Compositor verschiebt die gecachte Layer.
+          child: RepaintBoundary(
+            child: SizedBox(width: m.width, height: m.height, child: m.child),
+          ),
         ),
       ));
     }
