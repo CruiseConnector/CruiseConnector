@@ -6119,14 +6119,17 @@ class _CruiseModePageState extends State<CruiseModePage>
   ///    (<50 m) — kein zusätzliches Warten.
   /// 2. `getCurrentPosition()` mit 12 s Timeout (der Suche-Spinner läuft
   ///    währenddessen bereits).
-  /// 3. Timeout-Fallback: letzter bekannter Fix — klar als VERALTET geloggt,
-  ///    damit ein Start-Versatz diagnostizierbar bleibt.
+  /// 3. Fallback nur, wenn der letzte bekannte Fix ebenfalls frisch/genau ist.
   ///
   /// Vorher wurde getLastKnownPosition() BEVORZUGT — auf echten Geräten konnte
   /// der Fix Minuten/Stunden alt sein und die Route begann am falschen Ort.
-  Future<geo.Position> _acquireFreshStartFix() async {
+  Future<geo.Position> _acquireFreshStartFix({
+    bool forceCurrentPosition = false,
+  }) async {
     final streamFix = _userLocation;
-    if (streamFix != null && _isFreshStartFix(streamFix)) {
+    if (!forceCurrentPosition &&
+        streamFix != null &&
+        _isFreshStartFix(streamFix)) {
       debugPrint(
         '[CruiseMode][StartFix] source=stream ${_describeStartFix(streamFix)}',
       );
@@ -6142,11 +6145,19 @@ class _CruiseModePageState extends State<CruiseModePage>
         '[CruiseMode][StartFix] source=getCurrentPosition '
         '${_describeStartFix(fresh)}',
       );
-      return fresh;
+      if (_isFreshStartFix(fresh)) {
+        return fresh;
+      }
+      debugPrint(
+        '[CruiseMode][StartFix] source=getCurrentPosition rejected '
+        '${_describeStartFix(fresh)} '
+        'limitAge=${_startFixMaxAge.inSeconds}s '
+        'limitAcc=${_startFixMaxAccuracyMeters.toStringAsFixed(0)}m',
+      );
     } on TimeoutException {
       debugPrint(
         '[CruiseMode][StartFix] getCurrentPosition-Timeout (12s) — '
-        'Fallback auf letzten bekannten Fix',
+        'prüfe letzten bekannten Fix',
       );
     } catch (e) {
       final msg = e.toString().toLowerCase();
@@ -6163,18 +6174,31 @@ class _CruiseModePageState extends State<CruiseModePage>
     }
     fallback ??= _userLocation;
     if (fallback != null) {
+      if (_isFreshStartFix(fallback)) {
+        debugPrint(
+          '[CruiseMode][StartFix] source=freshFallback '
+          '${_describeStartFix(fallback)}',
+        );
+        return fallback;
+      }
       debugPrint(
         '[CruiseMode][StartFix] source=staleFallback '
-        '${_describeStartFix(fallback)} — VERALTET, Start-Versatz möglich',
+        '${_describeStartFix(fallback)} — ABGELEHNT',
       );
-      return fallback;
     }
-    throw Exception(
-      'Standort konnte nicht ermittelt werden. Bitte versuche es erneut.',
+    throw const RouteServiceException(
+      type: RouteErrorType.validation,
+      userMessage:
+          'GPS-Fix ist zu alt oder zu ungenau. Bitte kurz warten und erneut versuchen.',
+      debugMessage:
+          'No fresh start fix available within age/accuracy gate.',
+      edgeMeta: {'response_code': 'fresh_start_fix_unavailable'},
     );
   }
 
-  Future<geo.Position> _getStartCoordinates() async {
+  Future<geo.Position> _getStartCoordinates({
+    bool forceFreshGps = false,
+  }) async {
     // 2026-05-28 (vucko): "Standort wählen" mit gesetztem Punkt → von dort
     // starten (Karten-Tap oder Adresssuche). Dijkstra-Routing braucht nur
     // gültige Start-Koordinaten, egal woher.
@@ -6222,7 +6246,7 @@ class _CruiseModePageState extends State<CruiseModePage>
 
       // 2026-06-10 (vucko Start-Fix): Frische-Gate statt getLastKnownPosition-
       // Shortcut (der lieferte beliebig alte Positionen → falscher Routenstart).
-      return _acquireFreshStartFix();
+      return _acquireFreshStartFix(forceCurrentPosition: forceFreshGps);
     }
     // Fallback: Eigene Position verwenden wenn vorhanden, sonst Vorarlberg
     if (_userLocation != null) {
@@ -6252,7 +6276,7 @@ class _CruiseModePageState extends State<CruiseModePage>
 
   // ═══════════════════════ ROUTE GENERATION ════════════════════════════════
 
-  Future<void> _generateRoute() async {
+  Future<void> _generateRoute({bool startValidatorRetry = false}) async {
     // Doppelklick-Schutz: Wenn bereits generiert wird, ignorieren
     if (_isLoading) return;
 
@@ -6279,7 +6303,9 @@ class _CruiseModePageState extends State<CruiseModePage>
     var requestedDistance = 50;
     String? requestedWaypointSignature;
     try {
-      final startPosition = await _getStartCoordinates();
+      final startPosition = await _getStartCoordinates(
+        forceFreshGps: startValidatorRetry,
+      );
       if (_isRouteGenerationCancelled(generationId)) return;
 
       // 2026-05-30 (vucko): Heimatland automatisch aus dem Startpunkt ableiten
@@ -6367,6 +6393,7 @@ class _CruiseModePageState extends State<CruiseModePage>
         debugPrint(
           '[RouteDebug][UI] selectedKm=$distance selectedStyle=$_selectedStyle '
           'avoidHighways=$_avoidHighways forceFreshVariant=$forceFreshVariant '
+          'startValidatorRetry=$startValidatorRetry '
           'trigger=$routeDebugTrigger '
           'routeType=${_isRoundTrip ? 'ROUND_TRIP' : 'POINT_TO_POINT'} '
           'planningType=$_planningType selectedLength=$_selectedLength '
@@ -6472,6 +6499,16 @@ class _CruiseModePageState extends State<CruiseModePage>
         final subscriptionTier = RouteService.resolveEffectiveSubscriptionTier(
           isTesterOrBeta: true,
         );
+        debugPrint(
+          '[CruiseMode][P2PDiag] stage=generate_request '
+          'retry=$startValidatorRetry detour=$detourVariant '
+          'scenic=$scenicMode directOverride=$_forceAcceptDirectOnce '
+          'start=${_describeStartFix(startPosition)} '
+          'destLat=${destLat.toStringAsFixed(5)} '
+          'destLng=${destLng.toStringAsFixed(5)} '
+          'destDistance=${destinationDistanceMeters.toStringAsFixed(0)}m '
+          'avoidHighways=$_avoidHighways',
+        );
         result = await _routeService.generatePointToPoint(
           startPosition: startPosition,
           destinationLat: destLat,
@@ -6544,6 +6581,16 @@ class _CruiseModePageState extends State<CruiseModePage>
         _activeAvoidHighways = _avoidHighways;
         final subscriptionTier = RouteService.resolveEffectiveSubscriptionTier(
           isTesterOrBeta: true,
+        );
+        debugPrint(
+          '[CruiseMode][P2PDiag] stage=waypoint_request '
+          'retry=$startValidatorRetry detour=$tripDetourVariant '
+          'scenic=$tripScenic tripMode=$_tripModeEnabled '
+          'start=${_describeStartFix(startPosition)} '
+          'destLat=${destinationLatLng.latitude.toStringAsFixed(5)} '
+          'destLng=${destinationLatLng.longitude.toStringAsFixed(5)} '
+          'intermediates=${intermediates.length} '
+          'avoidHighways=$_avoidHighways',
         );
         result = await _routeService.generatePointToPoint(
           startPosition: startPosition,
@@ -6665,6 +6712,21 @@ class _CruiseModePageState extends State<CruiseModePage>
         debugPrint(
           '[CruiseMode] Route generation error ignored after user cancel.',
         );
+        return;
+      }
+      if (!startValidatorRetry && _isStartValidatorReject(e)) {
+        final preserveForceAcceptDirectOnce = _forceAcceptDirectOnce;
+        debugPrint(
+          '[CruiseMode][StartValidatorRetry] start_offset_rejected — '
+          'starte genau einen Retry mit frischem getCurrentPosition-Fix',
+        );
+        Future.microtask(() {
+          if (!mounted || _disposed) return;
+          if (preserveForceAcceptDirectOnce) {
+            _forceAcceptDirectOnce = true;
+          }
+          _generateRoute(startValidatorRetry: true);
+        });
         return;
       }
       Object errorForUi = e;
@@ -6941,6 +7003,14 @@ class _CruiseModePageState extends State<CruiseModePage>
         status == 'queued' ||
         status == 'running' ||
         status == 'hydrating';
+  }
+
+  bool _isStartValidatorReject(Object error) {
+    if (error is! RouteServiceException) return false;
+    final code =
+        error.edgeMeta['response_code']?.toString() ??
+        error.edgeMeta['code']?.toString();
+    return code == 'start_offset_rejected';
   }
 
   Future<void> _acceptGeneratedRouteResult({

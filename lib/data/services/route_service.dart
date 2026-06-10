@@ -1681,6 +1681,23 @@ class RouteService {
     _activeForceFreshVariantForDebug = forceFreshVariant;
     _activeTriggerForDebug = 'unknown';
 
+    debugPrint(
+      '[RouteService][P2PDiag] start='
+      '${startPosition.latitude.toStringAsFixed(5)},'
+      '${startPosition.longitude.toStringAsFixed(5)} '
+      'dest=${destinationLat.toStringAsFixed(5)},'
+      '${destinationLng.toStringAsFixed(5)} '
+      'directKm=${directDistanceKm.toStringAsFixed(1)} '
+      'targetKm=${targetDistanceKm.toStringAsFixed(1)} '
+      'detour=$normalizedVariant scenic=$scenic '
+      'forceFresh=$forceFreshVariant navReroute=$navigationReroute '
+      'forceAcceptDirect=$forceAcceptDirect '
+      'startAcc=${_safeFiniteDouble(startPosition.accuracy)?.toStringAsFixed(0) ?? '-'}m '
+      'argAcc=${locationAccuracyMeters?.toStringAsFixed(0) ?? '-'}m '
+      'waypoints=${intermediateWaypoints?.length ?? 0} '
+      'avoidHighways=$avoidHighways',
+    );
+
     if (forceFreshVariant) {
       RouteGenerationCoordinator.suspendBackgroundPreparation();
       PreparedRouteBuffer.clearScenario(scenario.scenarioKey);
@@ -1863,7 +1880,11 @@ class RouteService {
             _setWorkerLimitCooldown();
           }
           debugPrint(
-            '[RouteService] A→B candidate ${attempt + 1}/$maxAttempts fehlgeschlagen: ${mapped.debugMessage}',
+            '[RouteService][P2PDiag] candidate=${attempt + 1}/$maxAttempts '
+            'failed type=${mapped.type.name} status=${mapped.statusCode ?? '-'} '
+            'code=${mapped.edgeMeta['response_code'] ?? mapped.edgeMeta['code'] ?? '-'} '
+            'startOffset=${mapped.edgeMeta['start_offset_meters'] ?? '-'} '
+            'debug=${mapped.debugMessage}',
           );
           if (_isFatalStructuredError(mapped)) {
             break;
