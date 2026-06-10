@@ -476,7 +476,9 @@ class _CruiseModePageState extends State<CruiseModePage>
   // 2026-06-06 (vucko): Sim wieder AN für die Smoothness-/Kamera-/Linien-Tests
   // (konstant 30 km/h statt 100 → man sieht Ruckler/Kamera-Verhalten viel besser).
   // Vor dem finalen Release wieder auf false setzen (Testuser sollen ihn nicht sehen).
-  final bool _isSimulationEnabled = true;
+  // 2026-06-10 (vucko Release-Prep): Fahrsimulator NUR in Debug-Builds —
+  // TestFlight-/Play-Store-User duerfen den Play-FAB nie sehen.
+  final bool _isSimulationEnabled = kDebugMode;
   // Konstante Sim-Speed. Default 30 km/h (man sieht Ruckler gut); für schnelle
   // Test-Durchläufe via --dart-define=SIM_KMH=70 hochsetzen.
   static const double _simulationConstantKmh =
@@ -1137,7 +1139,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       prevLat = c[1];
       aheadEnd++;
     }
-    // On-route-Erkennung (fuer Gruppen-Regeln): Abstand Puck -> Projektion.
+    // On-route-Erkennung: Abstand Puck -> Projektion.
     final puck = _userLocation;
     if (puck != null) {
       final offM = geo.Geolocator.distanceBetween(
@@ -1146,6 +1148,16 @@ class _CruiseModePageState extends State<CruiseModePage>
       if (widget.groupId != null && !_everOnActiveRoute && offM > 80) {
         // Late-Joiner abseits der Route: KEIN 3km-Fenster — volle Route
         // kraeftig zeigen (Fallback in activePts), bis er drauf ist.
+        _brightAheadLatLngs = const [];
+        return true;
+      }
+      // 2026-06-10 (vucko Anti-Haenger, Screenshot-Bug): Haengt die
+      // Projektion >120m hinter/neben dem Puck (Match-Haenger nach Reroute,
+      // Off-Route-Phase), waere das 3km-Fenster an der FALSCHEN Stelle und
+      // vor dem Fahrer nur die dezente Linie ("Route wirkt ausgefallen").
+      // Dann lieber: Fenster aus -> die VOLLE Route kraeftig (Fallback) —
+      // niemals duenn/falsch vor dem Fahrer.
+      if (offM > 120) {
         _brightAheadLatLngs = const [];
         return true;
       }
@@ -1163,8 +1175,26 @@ class _CruiseModePageState extends State<CruiseModePage>
                 dimHead[1], dimHead[0], projHead[1], projHead[0]) >=
             200.0) {
       _lastDimHead = projHead;
+      // 2026-06-10 (vucko Schwanz-Fix): dim beginnt ~200m VORAUS — dieser
+      // Anfang liegt unsichtbar UNTER dem 3km-bright-Fenster. So kann das
+      // 200m-Push-Gate konstruktiv NIE einen dezenten Schwanz hinter dem
+      // Puck stehen lassen (Screenshot-Bug 2).
+      var dimSkip = 0;
+      var dAcc = 0.0;
+      var pLng = projHead[0];
+      var pLat = projHead[1];
+      while (dimSkip < _remainingRouteCoordinates.length && dAcc < 200.0) {
+        final c = _remainingRouteCoordinates[dimSkip];
+        dAcc += geo.Geolocator.distanceBetween(pLat, pLng, c[1], c[0]);
+        pLng = c[0];
+        pLat = c[1];
+        dimSkip++;
+      }
       _dimRemainingLatLngs = [
-        for (final c in _remainingRouteCoordinates) LatLng(c[1], c[0]),
+        for (final c in _remainingRouteCoordinates.skip(
+          dimSkip > 0 ? dimSkip - 1 : 0,
+        ))
+          LatLng(c[1], c[0]),
       ];
     }
     return true;
