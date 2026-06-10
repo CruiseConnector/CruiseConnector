@@ -77,6 +77,8 @@ PODS:
     - TOCropViewController (~> 3.1.2)
   - image_picker_ios (0.0.1):
     - Flutter
+  - integration_test (0.0.1):
+    - Flutter
   - MapLibre (6.26.0)
   - maplibre_gl (0.26.1):
     - Flutter
@@ -118,6 +120,7 @@ DEPENDENCIES:
   - geolocator_apple (from `.symlinks/plugins/geolocator_apple/darwin`)
   - image_cropper (from `.symlinks/plugins/image_cropper/ios`)
   - image_picker_ios (from `.symlinks/plugins/image_picker_ios/ios`)
+  - integration_test (from `.symlinks/plugins/integration_test/ios`)
   - maplibre_gl (from `.symlinks/plugins/maplibre_gl/ios`)
   - package_info_plus (from `.symlinks/plugins/package_info_plus/ios`)
   - path_provider_foundation (from `.symlinks/plugins/path_provider_foundation/darwin`)
@@ -164,6 +167,8 @@ EXTERNAL SOURCES:
     :path: ".symlinks/plugins/image_cropper/ios"
   image_picker_ios:
     :path: ".symlinks/plugins/image_picker_ios/ios"
+  integration_test:
+    :path: ".symlinks/plugins/integration_test/ios"
   maplibre_gl:
     :path: ".symlinks/plugins/maplibre_gl/ios"
   package_info_plus:
@@ -200,6 +205,7 @@ SPEC CHECKSUMS:
   GoogleUtilities: 00c88b9a86066ef77f0da2fab05f65d7768ed8e1
   image_cropper: fca51f94982730acae168c4b5d691e0f11aeb259
   image_picker_ios: e0ece4aa2a75771a7de3fa735d26d90817041326
+  integration_test: 4a889634ef21a45d28d50d622cf412dc6d9f586e
   MapLibre: b7ef5623a1a61468c4266a048e494181c10173ad
   maplibre_gl: 11d1987a778d0a5905ba6677f81a0e7a491ed8f5
   nanopb: fad817b59e0457d11a5dfbde799381cd727c1275
