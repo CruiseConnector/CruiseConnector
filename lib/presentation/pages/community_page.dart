@@ -13,6 +13,7 @@ import 'package:cruise_connect/data/services/gamification_service.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/presentation/pages/create_post_page.dart';
 import 'package:cruise_connect/presentation/pages/create_group_page.dart';
+import 'package:cruise_connect/presentation/pages/community_chats_tab.dart';
 import 'package:cruise_connect/presentation/pages/group_lobby_page.dart';
 import 'package:cruise_connect/presentation/pages/user_profile_page.dart';
 import 'package:cruise_connect/presentation/widgets/mentions.dart';
@@ -64,7 +65,7 @@ class _CommunityPageState extends State<CommunityPage>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 3, vsync: this);
+    _tabController = TabController(length: 4, vsync: this);
     _tabController.addListener(() {
       if (!_tabController.indexIsChanging) setState(() {});
     });
@@ -361,41 +362,47 @@ class _CommunityPageState extends State<CommunityPage>
           labelStyle: const TextStyle(
             fontWeight: FontWeight.bold,
             fontSize: 13.5,
+            height: 1.2,
           ),
           unselectedLabelStyle: const TextStyle(
             fontWeight: FontWeight.w600,
             fontSize: 12,
+            height: 1.2,
           ),
-          tabs: const [
-            Tab(text: 'Feed'),
-            Tab(text: 'Aktive Gruppen'),
-            Tab(text: 'Entdecken'),
+          tabs: [
+            _buildTabLabel('Feed'),
+            _buildTabLabel('Fahrten'),
+            _buildTabLabel('Chats'),
+            _buildTabLabel('Entdecken'),
           ],
         ),
         elevation: 0,
       ),
-      floatingActionButton: FloatingActionButton(
-        heroTag: 'community_fab',
-        backgroundColor: accent,
-        child: Icon(
-          _tabController.index == 1 ? Icons.group_add : Icons.add,
-          color: Colors.white,
-        ),
-        onPressed: () async {
-          if (_tabController.index == 0 || _tabController.index == 2) {
-            await Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const CreatePostPage()),
-            );
-          } else {
-            await Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const CreateGroupPage()),
-            );
-          }
-          _loadData();
-        },
-      ),
+      floatingActionButton: _tabController.index == 2
+          ? null
+          : FloatingActionButton(
+              heroTag: 'community_fab',
+              backgroundColor: accent,
+              child: Icon(
+                _tabController.index == 1 ? Icons.group_add : Icons.add,
+                color: Colors.white,
+              ),
+              onPressed: () async {
+                if (_tabController.index == 1) {
+                  await Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const CreateGroupPage()),
+                  );
+                } else {
+                  await Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const CreatePostPage()),
+                  );
+                }
+
+                _loadData();
+              },
+            ),
       body: _loading
           ? Center(child: CircularProgressIndicator(color: accent))
           : TabBarView(
@@ -403,9 +410,22 @@ class _CommunityPageState extends State<CommunityPage>
               children: [
                 _buildFeedTab(),
                 _buildGroupsTab(),
+                const CommunityChatsTab(),
                 _buildDiscoverTab(),
               ],
             ),
+    );
+  }
+
+  Widget _buildTabLabel(String label) {
+    return Tab(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 2),
+        child: FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Text(label, maxLines: 1, softWrap: false),
+        ),
+      ),
     );
   }
 
@@ -510,7 +530,6 @@ class _CommunityPageState extends State<CommunityPage>
       child: ListView(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 80),
         children: [
-          // Hinweis ganz oben
           Container(
             padding: const EdgeInsets.all(12),
             margin: const EdgeInsets.only(bottom: 16),
@@ -525,7 +544,7 @@ class _CommunityPageState extends State<CommunityPage>
                 SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    'Private Gruppen werden nur unter dem Profil angezeigt.',
+                    'Hier geht es um Gruppenfahrten mit Route und Startzeit.',
                     style: TextStyle(color: Colors.white70, fontSize: 12),
                   ),
                 ),
@@ -533,12 +552,11 @@ class _CommunityPageState extends State<CommunityPage>
             ),
           ),
 
-          // Bereich 1: Beigetretene öffentliche Gruppen
-          _buildSectionHeader('Beigetretene öffentliche Gruppen'),
+          _buildSectionHeader('Beigetretene öffentliche Gruppenfahrten'),
           const SizedBox(height: 8),
           if (!hasMine)
             _buildEmptyHint(
-              'Du bist noch in keiner öffentlichen Gruppe. Erstelle eine oder tritt weiter unten einer bei.',
+              'Du bist noch in keiner öffentlichen Gruppenfahrt. Erstelle eine Fahrt oder tritt weiter unten einer bei.',
             )
           else
             for (final g in _myGroups)
@@ -561,8 +579,7 @@ class _CommunityPageState extends State<CommunityPage>
 
           const SizedBox(height: 24),
 
-          // Bereich 2: Weitere Gruppen entdecken
-          _buildSectionHeader('Weitere Gruppen entdecken'),
+          _buildSectionHeader('Weitere Gruppenfahrten entdecken'),
           const SizedBox(height: 8),
           _buildGroupDiscoverFilters(),
           const SizedBox(height: 12),
@@ -2048,6 +2065,7 @@ class _CommunityPageState extends State<CommunityPage>
     final currentUserId = Supabase.instance.client.auth.currentUser?.id;
     final isOwner = group['created_by'] == currentUserId;
     final isActive = group['is_active'] == true;
+    final isPublic = group['is_public'] == true;
     final startTimeStr = group['start_time'] as String?;
     final startDt = startTimeStr != null
         ? DateTime.tryParse(startTimeStr)
@@ -2238,6 +2256,30 @@ class _CommunityPageState extends State<CommunityPage>
                   ),
               ],
             ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 6,
+              children: [
+                _buildGroupChip(
+                  isPublic ? 'Öffentlich' : 'Privat',
+                  isPublic ? Colors.greenAccent : Colors.orangeAccent,
+                  isPublic ? Icons.public_outlined : Icons.lock_outline_rounded,
+                ),
+                if (isOwner)
+                  _buildGroupChip(
+                    'Leader',
+                    AppAccentColors.accent,
+                    Icons.admin_panel_settings_outlined,
+                  )
+                else if (isJoined)
+                  _buildGroupChip(
+                    'Mitglied',
+                    Colors.white70,
+                    Icons.check_circle_outline,
+                  ),
+              ],
+            ),
             if (startDt != null) ...[
               const SizedBox(height: 8),
               Row(
@@ -2305,6 +2347,32 @@ class _CommunityPageState extends State<CommunityPage>
             ],
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildGroupChip(String label, Color color, IconData icon) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.13),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: color.withValues(alpha: 0.35)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, color: color, size: 12),
+          const SizedBox(width: 4),
+          Text(
+            label,
+            style: TextStyle(
+              color: color,
+              fontSize: 10.5,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ],
       ),
     );
   }

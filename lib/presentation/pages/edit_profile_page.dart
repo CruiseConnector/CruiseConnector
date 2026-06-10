@@ -19,6 +19,7 @@ enum _ImageCropPreset { avatar, banner, car }
 
 const int _vehicleDescriptionMaxLength =
     AppInputLimits.vehicleDescriptionMaxLength;
+const int _vehicleTuningMaxLength = AppInputLimits.vehicleTuningMaxLength;
 const bool _usernameEditingLockedForTest = true;
 
 final List<_CountryOption> _countryOptions = <_CountryOption>[
@@ -139,6 +140,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
   final _carBrandController = TextEditingController();
   final _carNameController = TextEditingController();
   final _vehicleDescriptionController = TextEditingController();
+  final _vehicleTuningController = TextEditingController();
   final _carMileageController = TextEditingController();
   final _carHorsepowerController = TextEditingController();
   final _carTopSpeedController = TextEditingController();
@@ -180,6 +182,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
     _carBrandController.dispose();
     _carNameController.dispose();
     _vehicleDescriptionController.dispose();
+    _vehicleTuningController.dispose();
     _carMileageController.dispose();
     _carHorsepowerController.dispose();
     _carTopSpeedController.dispose();
@@ -675,6 +678,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
       'brand': _carBrandController.text,
       'model': _carNameController.text,
       'description': _vehicleDescriptionController.text,
+      'tuning_details': _vehicleTuningController.text,
       'first_reg': null,
       'mileage': int.tryParse(_carMileageController.text.trim()),
       'horsepower': int.tryParse(_carHorsepowerController.text.trim()),
@@ -714,6 +718,8 @@ class _EditProfilePageState extends State<EditProfilePage> {
     _carNameController.text = (vehicle['model'] as String?) ?? '';
     _vehicleDescriptionController.text =
         (vehicle['description'] as String?) ?? '';
+    _vehicleTuningController.text =
+        (vehicle['tuning_details'] as String?) ?? '';
     _carMileageController.text = vehicle['mileage']?.toString() ?? '';
     _carHorsepowerController.text = vehicle['horsepower']?.toString() ?? '';
     _carTopSpeedController.text = vehicle['top_speed']?.toString() ?? '';
@@ -1177,6 +1183,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
       'brand': _carBrandController.text,
       'model': _carNameController.text,
       'description': _vehicleDescriptionController.text,
+      'tuning_details': _vehicleTuningController.text,
       'first_reg': null,
       'mileage': int.tryParse(_carMileageController.text.trim()),
       'horsepower': int.tryParse(_carHorsepowerController.text.trim()),
@@ -1201,12 +1208,13 @@ class _EditProfilePageState extends State<EditProfilePage> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        _buildAddVehicleButton(),
+        const SizedBox(height: 12),
         VehicleGarageCarousel(
           vehicles: previewVehicles,
           selectedIndex: _selectedVehicleIndex,
           viewportFraction: 1,
           height: _editableGarageCardHeight(context),
-          onAddVehicle: _addVehicleDraft,
           onVehicleTap: _selectVehicleDraft,
           onVehicleChanged: _selectVehicleDraft,
           vehicleBuilder: (context, index) {
@@ -1227,10 +1235,36 @@ class _EditProfilePageState extends State<EditProfilePage> {
     );
   }
 
+  Widget _buildAddVehicleButton() {
+    return SizedBox(
+      width: double.infinity,
+      child: OutlinedButton.icon(
+        onPressed: _saving ? null : _addVehicleDraft,
+        icon: Icon(
+          Icons.add_circle_outline_rounded,
+          color: AppAccentColors.accent,
+          size: 19,
+        ),
+        label: const Text('Fahrzeug hinzufügen'),
+        style: OutlinedButton.styleFrom(
+          foregroundColor: Colors.white,
+          side: BorderSide(
+            color: AppAccentColors.accent.withValues(alpha: 0.5),
+          ),
+          padding: const EdgeInsets.symmetric(vertical: 13),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+          ),
+          textStyle: const TextStyle(fontWeight: FontWeight.w900),
+        ),
+      ),
+    );
+  }
+
   double _editableGarageCardHeight(BuildContext context) {
     final width = MediaQuery.sizeOf(context).width;
-    if (width < 370) return 1160;
-    return 1080;
+    if (width < 370) return 760;
+    return 720;
   }
 
   Widget _buildVehicleEditorCard({
@@ -1255,245 +1289,280 @@ class _EditProfilePageState extends State<EditProfilePage> {
           ),
         ],
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                width: 44,
-                height: 44,
-                decoration: BoxDecoration(
-                  color: AppAccentColors.accent.withValues(alpha: 0.14),
-                  borderRadius: BorderRadius.circular(14),
-                ),
-                child: Icon(
-                  _vehicleType == 'motorcycle'
-                      ? Icons.two_wheeler_rounded
-                      : Icons.directions_car_filled_rounded,
-                  color: AppAccentColors.accent,
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 19,
-                        height: 1.05,
-                        fontWeight: FontWeight.w900,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      'Karte $position von $total',
-                      style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.5),
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              Tooltip(
-                message: 'Nur diese Fahrzeugkarte löschen',
-                child: TextButton.icon(
-                  onPressed: _saving ? null : _deleteSelectedVehicleDraft,
-                  style: TextButton.styleFrom(
-                    foregroundColor: Colors.redAccent,
-                    padding: const EdgeInsets.symmetric(horizontal: 10),
-                    minimumSize: const Size(0, 40),
-                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  ),
-                  icon: const Icon(Icons.delete_outline_rounded, size: 18),
-                  label: const Text(
-                    'Löschen',
-                    style: TextStyle(fontWeight: FontWeight.w800),
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          _buildVehiclePhotoEditor(),
-          const SizedBox(height: 10),
-          _buildVehicleTypeToggle(),
-          const SizedBox(height: 10),
-          _buildGarageGrid([
-            _buildGarageInputTile(
-              label: 'Marke',
-              icon: Icons.factory_outlined,
-              child: _buildMakeField(),
-            ),
-            _buildGarageInputTile(
-              label: 'Modell',
-              icon: Icons.badge_outlined,
-              child: _buildModelField(),
-            ),
-          ]),
-          const SizedBox(height: 10),
-          _buildGarageInputTile(
-            label: 'Beschreibung',
-            icon: Icons.notes_rounded,
-            child: Column(
+      child: SingleChildScrollView(
+        keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
               children: [
-                _buildTextField(
-                  _vehicleDescriptionController,
-                  'z.B. Tracktool, Daily, Umbau...',
-                  maxLines: 3,
-                  maxLength: _vehicleDescriptionMaxLength,
-                  compact: true,
+                Container(
+                  width: 44,
+                  height: 44,
+                  decoration: BoxDecoration(
+                    color: AppAccentColors.accent.withValues(alpha: 0.14),
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: Icon(
+                    _vehicleType == 'motorcycle'
+                        ? Icons.two_wheeler_rounded
+                        : Icons.directions_car_filled_rounded,
+                    color: AppAccentColors.accent,
+                  ),
                 ),
-                const SizedBox(height: 6),
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: Text(
-                    '${_vehicleDescriptionController.text.length}/$_vehicleDescriptionMaxLength',
-                    style: TextStyle(
-                      color:
-                          _vehicleDescriptionController.text.length >=
-                              _vehicleDescriptionMaxLength
-                          ? AppAccentColors.accent
-                          : Colors.white.withValues(alpha: 0.42),
-                      fontSize: 11,
-                      fontWeight: FontWeight.w700,
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 19,
+                          height: 1.05,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Karte $position von $total',
+                        style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.5),
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Tooltip(
+                  message: 'Nur diese Fahrzeugkarte löschen',
+                  child: TextButton.icon(
+                    onPressed: _saving ? null : _deleteSelectedVehicleDraft,
+                    style: TextButton.styleFrom(
+                      foregroundColor: Colors.redAccent,
+                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                      minimumSize: const Size(0, 40),
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    icon: const Icon(Icons.delete_outline_rounded, size: 18),
+                    label: const Text(
+                      'Löschen',
+                      style: TextStyle(fontWeight: FontWeight.w800),
                     ),
                   ),
                 ),
               ],
             ),
-          ),
-          const SizedBox(height: 10),
-          _buildGarageGrid([
+            const SizedBox(height: 12),
+            _buildVehiclePhotoEditor(),
+            const SizedBox(height: 10),
+            _buildVehicleTypeToggle(),
+            const SizedBox(height: 10),
+            _buildGarageGrid([
+              _buildGarageInputTile(
+                label: 'Marke',
+                icon: Icons.factory_outlined,
+                child: _buildMakeField(),
+              ),
+              _buildGarageInputTile(
+                label: 'Modell',
+                icon: Icons.badge_outlined,
+                child: _buildModelField(),
+              ),
+            ]),
+            const SizedBox(height: 10),
             _buildGarageInputTile(
-              label: 'Herkunft',
-              icon: Icons.flag_outlined,
-              child: _buildCountryDropdown(),
-            ),
-            _buildGarageInputTile(
-              label: 'Baujahr',
-              icon: Icons.calendar_today_outlined,
-              child: _buildTextField(
-                _carYearController,
-                '2021',
-                keyboardType: TextInputType.number,
-                inputFormatters: [
-                  FilteringTextInputFormatter.digitsOnly,
-                  LengthLimitingTextInputFormatter(4),
+              label: 'Beschreibung',
+              icon: Icons.notes_rounded,
+              child: Column(
+                children: [
+                  _buildTextField(
+                    _vehicleDescriptionController,
+                    'z.B. Tracktool, Daily, Umbau...',
+                    maxLines: 3,
+                    maxLength: _vehicleDescriptionMaxLength,
+                    compact: true,
+                  ),
+                  const SizedBox(height: 6),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: Text(
+                      '${_vehicleDescriptionController.text.length}/$_vehicleDescriptionMaxLength',
+                      style: TextStyle(
+                        color:
+                            _vehicleDescriptionController.text.length >=
+                                _vehicleDescriptionMaxLength
+                            ? AppAccentColors.accent
+                            : Colors.white.withValues(alpha: 0.42),
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
                 ],
-                compact: true,
               ),
             ),
+            const SizedBox(height: 10),
             _buildGarageInputTile(
-              label: 'Antrieb',
-              icon: Icons.settings_suggest_outlined,
-              child: _buildTextField(
-                _carDrivetrainController,
-                'Heck / Allrad / Front',
-                maxLength: 12,
-                compact: true,
-              ),
-            ),
-            _buildGarageInputTile(
-              label: 'Kilometer',
-              icon: Icons.speed_outlined,
-              child: _buildTextField(
-                _carMileageController,
-                '27870',
-                keyboardType: TextInputType.number,
-                inputFormatters: [
-                  FilteringTextInputFormatter.digitsOnly,
-                  LengthLimitingTextInputFormatter(6),
-                  _MaxIntFormatter(999999),
+              label: 'Tuning / Umbauten',
+              icon: Icons.tune_rounded,
+              child: Column(
+                children: [
+                  _buildTextField(
+                    _vehicleTuningController,
+                    'z.B. Software, Fahrwerk, Felgen, Auspuff...',
+                    maxLines: 3,
+                    maxLength: _vehicleTuningMaxLength,
+                    compact: true,
+                  ),
+                  const SizedBox(height: 6),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: Text(
+                      '${_vehicleTuningController.text.length}/$_vehicleTuningMaxLength',
+                      style: TextStyle(
+                        color:
+                            _vehicleTuningController.text.length >=
+                                _vehicleTuningMaxLength
+                            ? AppAccentColors.accent
+                            : Colors.white.withValues(alpha: 0.42),
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
                 ],
-                compact: true,
               ),
             ),
-            _buildGarageInputTile(
-              label: 'Leistung',
-              icon: Icons.bolt_rounded,
-              child: _buildTextField(
-                _carHorsepowerController,
-                '720',
-                keyboardType: TextInputType.number,
-                inputFormatters: [
-                  FilteringTextInputFormatter.digitsOnly,
-                  LengthLimitingTextInputFormatter(4),
-                  _MaxIntFormatter(1999),
-                ],
-                compact: true,
+            const SizedBox(height: 10),
+            _buildGarageGrid([
+              _buildGarageInputTile(
+                label: 'Herkunft',
+                icon: Icons.flag_outlined,
+                child: _buildCountryDropdown(),
               ),
-            ),
-            _buildGarageInputTile(
-              label: 'Top Speed',
-              icon: Icons.keyboard_double_arrow_up_rounded,
-              child: _buildTextField(
-                _carTopSpeedController,
-                '340',
-                keyboardType: TextInputType.number,
-                inputFormatters: [
-                  FilteringTextInputFormatter.digitsOnly,
-                  LengthLimitingTextInputFormatter(3),
-                  _MaxIntFormatter(999),
-                ],
-                compact: true,
-              ),
-            ),
-            _buildGarageInputTile(
-              label: '0-100',
-              icon: Icons.timer_outlined,
-              child: _buildTextField(
-                _carZeroToHundredController,
-                '7,3',
-                keyboardType: const TextInputType.numberWithOptions(
-                  decimal: true,
+              _buildGarageInputTile(
+                label: 'Baujahr',
+                icon: Icons.calendar_today_outlined,
+                child: _buildTextField(
+                  _carYearController,
+                  '2021',
+                  keyboardType: TextInputType.number,
+                  inputFormatters: [
+                    FilteringTextInputFormatter.digitsOnly,
+                    LengthLimitingTextInputFormatter(4),
+                  ],
+                  compact: true,
                 ),
-                inputFormatters: [
-                  LengthLimitingTextInputFormatter(4),
-                  _DecimalSecondsFormatter(),
-                ],
-                compact: true,
               ),
-            ),
-            _buildGarageInputTile(
-              label: 'Zylinder',
-              icon: Icons.adjust_rounded,
-              child: _buildTextField(
-                _carCylindersController,
-                '8',
-                keyboardType: TextInputType.number,
-                inputFormatters: [
-                  FilteringTextInputFormatter.digitsOnly,
-                  LengthLimitingTextInputFormatter(2),
-                  _MaxIntFormatter(24),
-                ],
-                compact: true,
+              _buildGarageInputTile(
+                label: 'Antrieb',
+                icon: Icons.settings_suggest_outlined,
+                child: _buildTextField(
+                  _carDrivetrainController,
+                  'Heck / Allrad / Front',
+                  maxLength: 12,
+                  compact: true,
+                ),
               ),
-            ),
-            _buildGarageInputTile(
-              label: 'Hubraum',
-              icon: Icons.blur_circular_rounded,
-              child: _buildTextField(
-                _carDisplacementController,
-                '3902',
-                keyboardType: TextInputType.number,
-                inputFormatters: [
-                  FilteringTextInputFormatter.digitsOnly,
-                  LengthLimitingTextInputFormatter(5),
-                  _MaxIntFormatter(99999),
-                ],
-                compact: true,
+              _buildGarageInputTile(
+                label: 'Kilometer',
+                icon: Icons.speed_outlined,
+                child: _buildTextField(
+                  _carMileageController,
+                  '27870',
+                  keyboardType: TextInputType.number,
+                  inputFormatters: [
+                    FilteringTextInputFormatter.digitsOnly,
+                    LengthLimitingTextInputFormatter(6),
+                    _MaxIntFormatter(999999),
+                  ],
+                  compact: true,
+                ),
               ),
-            ),
-          ]),
-        ],
+              _buildGarageInputTile(
+                label: 'Leistung',
+                icon: Icons.bolt_rounded,
+                child: _buildTextField(
+                  _carHorsepowerController,
+                  '720',
+                  keyboardType: TextInputType.number,
+                  inputFormatters: [
+                    FilteringTextInputFormatter.digitsOnly,
+                    LengthLimitingTextInputFormatter(4),
+                    _MaxIntFormatter(1999),
+                  ],
+                  compact: true,
+                ),
+              ),
+              _buildGarageInputTile(
+                label: 'Top Speed',
+                icon: Icons.keyboard_double_arrow_up_rounded,
+                child: _buildTextField(
+                  _carTopSpeedController,
+                  '340',
+                  keyboardType: TextInputType.number,
+                  inputFormatters: [
+                    FilteringTextInputFormatter.digitsOnly,
+                    LengthLimitingTextInputFormatter(3),
+                    _MaxIntFormatter(999),
+                  ],
+                  compact: true,
+                ),
+              ),
+              _buildGarageInputTile(
+                label: '0-100',
+                icon: Icons.timer_outlined,
+                child: _buildTextField(
+                  _carZeroToHundredController,
+                  '7,3',
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
+                  inputFormatters: [
+                    LengthLimitingTextInputFormatter(4),
+                    _DecimalSecondsFormatter(),
+                  ],
+                  compact: true,
+                ),
+              ),
+              _buildGarageInputTile(
+                label: 'Zylinder',
+                icon: Icons.adjust_rounded,
+                child: _buildTextField(
+                  _carCylindersController,
+                  '8',
+                  keyboardType: TextInputType.number,
+                  inputFormatters: [
+                    FilteringTextInputFormatter.digitsOnly,
+                    LengthLimitingTextInputFormatter(2),
+                    _MaxIntFormatter(24),
+                  ],
+                  compact: true,
+                ),
+              ),
+              _buildGarageInputTile(
+                label: 'Hubraum',
+                icon: Icons.blur_circular_rounded,
+                child: _buildTextField(
+                  _carDisplacementController,
+                  '3902',
+                  keyboardType: TextInputType.number,
+                  inputFormatters: [
+                    FilteringTextInputFormatter.digitsOnly,
+                    LengthLimitingTextInputFormatter(5),
+                    _MaxIntFormatter(99999),
+                  ],
+                  compact: true,
+                ),
+              ),
+            ]),
+          ],
+        ),
       ),
     );
   }

@@ -75,6 +75,7 @@ class GamificationService {
 
   static const int xpPerDrivenKm = 10;
   static const double minRouteProgressForXp = 0.20;
+  static const double minRouteProgressForFullXp = 0.95;
   static const Map<String, String> _legacyBadgeIds = {'route_1': 'badge_02'};
 
   @visibleForTesting
@@ -155,11 +156,21 @@ class GamificationService {
     return (math.max(0, distanceKm) * xpPerDrivenKm).round();
   }
 
+  static double routeProgressRatio({
+    required double plannedDistanceKm,
+    required double drivenDistanceKm,
+  }) {
+    if (plannedDistanceKm <= 0 || drivenDistanceKm <= 0) return 0;
+    return (drivenDistanceKm / plannedDistanceKm).clamp(0.0, 1.0).toDouble();
+  }
+
   static double completionCreditProgressStep(
     double progressRatio, {
     bool completed = false,
   }) {
-    return progressRatio.clamp(0.0, 1.0).toDouble();
+    final progress = progressRatio.clamp(0.0, 1.0).toDouble();
+    if (completed && progress >= minRouteProgressForFullXp) return 1.0;
+    return progress;
   }
 
   static double creditedDistanceKmForProgress({
@@ -174,6 +185,27 @@ class GamificationService {
     );
     if (progress < minRouteProgressForXp) return 0;
     return plannedDistanceKm * progress;
+  }
+
+  static RouteXpBreakdown calculateRouteXpBreakdownForProgress({
+    required double plannedDistanceKm,
+    required double progressRatio,
+    required int curves,
+    required String style,
+    bool completed = false,
+    int streakDays = 1,
+  }) {
+    final creditedDistanceKm = creditedDistanceKmForProgress(
+      plannedDistanceKm: plannedDistanceKm,
+      progressRatio: progressRatio,
+      completed: completed,
+    );
+    return calculateRouteXpBreakdown(
+      distanceKm: creditedDistanceKm,
+      curves: creditedDistanceKm > 0 ? curves : 0,
+      style: style,
+      streakDays: streakDays,
+    );
   }
 
   static double streakMultiplierForDays(int streakDays) {
@@ -289,12 +321,7 @@ class GamificationService {
       totalRoutes++;
       totalKm += math.max(0, session.distanceKm);
       totalSecs += math.max(0, session.durationSeconds);
-      totalXp += math.max(
-        0,
-        session.xpAwarded > 0
-            ? session.xpAwarded
-            : calculateDriveXp(session.distanceKm),
-      );
+      totalXp += math.max(0, session.xpAwarded);
     }
 
     return DriveSessionTotals(
@@ -316,6 +343,7 @@ class GamificationService {
     String? routeType,
     String? routeFingerprint,
     String source = 'navigation',
+    int? xpAwarded,
   }) {
     final safeDistanceKm = math.max(0.0, distanceKm);
     return {
@@ -323,7 +351,7 @@ class GamificationService {
       if (routeId?.trim().isNotEmpty == true) 'route_id': routeId!.trim(),
       'distance_km': double.parse(safeDistanceKm.toStringAsFixed(3)),
       'duration_seconds': math.max(0, durationSeconds),
-      'xp_awarded': calculateDriveXp(safeDistanceKm),
+      'xp_awarded': math.max(0, xpAwarded ?? calculateDriveXp(safeDistanceKm)),
       'completed_at_end': completedAtEnd,
       if (routeStyle?.trim().isNotEmpty == true)
         'route_style': routeStyle!.trim(),
@@ -343,9 +371,11 @@ class GamificationService {
     String? routeType,
     String? routeFingerprint,
     String source = 'navigation',
+    int? xpAwarded,
   }) async {
     final userId = _db.auth.currentUser?.id;
-    if (userId == null || distanceKm <= 0) return null;
+    if (userId == null) return null;
+    if (distanceKm <= 0 && (xpAwarded ?? 0) <= 0) return null;
 
     final row = buildDriveSessionInsert(
       userId: userId,
@@ -357,6 +387,7 @@ class GamificationService {
       routeType: routeType,
       routeFingerprint: routeFingerprint,
       source: source,
+      xpAwarded: xpAwarded,
     );
 
     try {

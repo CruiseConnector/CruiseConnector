@@ -72,6 +72,49 @@ void main() {
       expect(row['route_fingerprint'], 'fp-23');
     });
 
+    test('stores an explicit XP award even when distance would differ', () {
+      final row = GamificationService.buildDriveSessionInsert(
+        userId: 'user-1',
+        distanceKm: 23.004,
+        durationSeconds: 1800,
+        completedAtEnd: false,
+        xpAwarded: 200,
+      );
+
+      expect(row['distance_km'], 23.004);
+      expect(row['xp_awarded'], 200);
+    });
+
+    test('route progress XP is gated at 20 percent and proportional', () {
+      RouteXpBreakdown breakdown(double progress, {bool completed = false}) {
+        return GamificationService.calculateRouteXpBreakdownForProgress(
+          plannedDistanceKm: 100,
+          progressRatio: progress,
+          completed: completed,
+          curves: 999,
+          style: 'Kurvenjagd',
+        );
+      }
+
+      expect(breakdown(0).totalXp, 0);
+      expect(breakdown(0.199).totalXp, 0);
+      expect(breakdown(0.20).totalXp, 200);
+      expect(breakdown(0.50).totalXp, 500);
+      expect(breakdown(1.0, completed: true).totalXp, 1000);
+    });
+
+    test('completed flag below finish threshold does not grant full XP', () {
+      final xp = GamificationService.calculateRouteXpBreakdownForProgress(
+        plannedDistanceKm: 100,
+        progressRatio: 0.50,
+        completed: true,
+        curves: 0,
+        style: 'Sport Mode',
+      );
+
+      expect(xp.totalXp, 500);
+    });
+
     test(
       'summarizes only drive sessions, so saved-route deletion cannot remove XP',
       () {
@@ -104,6 +147,30 @@ void main() {
           afterSavedRouteDelete.totalDistanceKm,
           beforeDelete.totalDistanceKm,
         );
+      },
+    );
+
+    test(
+      'summarizing treats explicit zero XP as zero, not distance fallback',
+      () {
+        final totals = GamificationService.summarizeDriveSessions([
+          UserDriveSession(
+            id: 'drive-zero',
+            userId: 'user-1',
+            distanceKm: 50,
+            durationSeconds: 900,
+            xpAwarded: 0,
+            completedAtEnd: false,
+            routeStyle: 'Sport Mode',
+            routeType: 'ROUND_TRIP',
+            routeFingerprint: 'fp-zero',
+            createdAt: DateTime.utc(2026, 1, 2),
+          ),
+        ]);
+
+        expect(totals.totalRoutes, 1);
+        expect(totals.totalDistanceKm, 50);
+        expect(totals.totalXp, 0);
       },
     );
 

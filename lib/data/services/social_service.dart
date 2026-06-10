@@ -1971,6 +1971,7 @@ class SocialService {
       'brand': profile['car_brand'],
       'model': profile['car_name'],
       'description': null,
+      'tuning_details': null,
       'drivetrain': null,
       'country_code': profile['car_country_code'],
       'top_speed': profile['car_top_speed'],
@@ -2068,12 +2069,14 @@ class SocialService {
     } on PostgrestException catch (e) {
       if ((e.code == 'PGRST204' || e.code == '42703') &&
           (e.message.contains('drivetrain') ||
-              e.message.contains('zero_to_hundred_seconds'))) {
+              e.message.contains('zero_to_hundred_seconds') ||
+              e.message.contains('tuning_details'))) {
         final compatible = cleaned
             .map(
               (vehicle) => Map<String, dynamic>.from(vehicle)
                 ..remove('drivetrain')
-                ..remove('zero_to_hundred_seconds'),
+                ..remove('zero_to_hundred_seconds')
+                ..remove('tuning_details'),
             )
             .toList();
         await _db.from('profile_vehicles').delete().eq('user_id', uid);
@@ -2140,6 +2143,7 @@ class SocialService {
         maxLength: AppInputLimits.shortTextMaxLength,
       ),
       'description': cleanDescription(raw['description']),
+      'tuning_details': cleanDescription(raw['tuning_details']),
       'drivetrain': cleanText(raw['drivetrain'], maxLength: 12),
       'country_code': cleanText(raw['country_code'])?.toUpperCase(),
       'top_speed': (raw['top_speed'] as num?)?.toInt(),
