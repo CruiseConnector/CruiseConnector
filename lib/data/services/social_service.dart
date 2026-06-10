@@ -1489,6 +1489,26 @@ class SocialService {
         .delete()
         .eq('group_id', groupId)
         .eq('user_id', uid);
+    // 2026-06-10 (vucko Gruppen-Trip-Regel): Verlaesst das LETZTE Mitglied die
+    // Gruppe, endet der Gruppen-Trip (zweite Ende-Bedingung neben
+    // Zielerreichung). Best-effort — darf das Verlassen nie blockieren.
+    try {
+      final remaining = await _db
+          .from('group_members')
+          .select('user_id')
+          .eq('group_id', groupId)
+          .limit(1);
+      if ((remaining as List).isEmpty) {
+        await _db
+            .from('trips')
+            .update({
+              'status': 'completed',
+              'finished_at': DateTime.now().toUtc().toIso8601String(),
+            })
+            .eq('group_id', groupId)
+            .inFilter('status', ['active', 'paused']);
+      }
+    } catch (_) {}
   }
 
   static Future<void> removeGroupMember(String groupId, String userId) async {

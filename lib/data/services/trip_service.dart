@@ -92,14 +92,34 @@ class TripService {
     final userId = _client.auth.currentUser?.id;
     if (userId == null) return null;
     try {
+      // 2026-06-10 (vucko Gruppen-Trip): Auch Trips von Gruppen sehen, in
+      // denen ich MITGLIED (nicht Owner) bin — sonst bekommt nur der Ersteller
+      // die Resume-Card und der Rest der Gruppe kann nach App-Kill/Neustart
+      // nicht weiterfahren. RLS erlaubt das Lesen via group_members bereits.
+      var memberGroupIds = const <String>[];
+      try {
+        final rows = await _client
+            .from('group_members')
+            .select('group_id')
+            .eq('user_id', userId);
+        memberGroupIds = [
+          for (final r in rows as List)
+            if ((r as Map)['group_id'] != null) r['group_id'] as String,
+        ];
+      } catch (_) {}
       var query = _client
           .from('trips')
           .select(
             'id, title, status, paused_at, started_at, total_distance_km, '
             'total_duration_seconds, stop_count, default_style, group_id',
           )
-          .eq('owner_id', userId)
           .inFilter('status', ['active', 'paused']);
+      if (memberGroupIds.isEmpty) {
+        query = query.eq('owner_id', userId);
+      } else {
+        final inList = memberGroupIds.join(',');
+        query = query.or('owner_id.eq.$userId,group_id.in.($inList)');
+      }
       if (groupOnly) {
         query = query.not('group_id', 'is', null);
       }

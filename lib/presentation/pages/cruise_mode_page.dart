@@ -6312,7 +6312,10 @@ class _CruiseModePageState extends State<CruiseModePage>
         // egal wo weiterfahren können"). Die Resume-Card lädt die Stopps aus
         // der DB und generiert die Route von der AKTUELLEN Position neu.
         // Best-effort, fail silent (Trip-Persistierung darf nie das Routing blockieren).
-        if (_tripModeEnabled &&
+        // 2026-06-10 (vucko Gruppen-Trip): GRUPPEN-Fahrten werden IMMER als
+        // Trip persistiert (mehrtaegig weiterfahren, App-Kill/Neustart-fest) —
+        // nicht nur bei aktiviertem Trip-Modus.
+        if ((_tripModeEnabled || widget.groupId != null) &&
             result.distanceMeters != null &&
             result.distanceMeters! > 0) {
           unawaited(_createTripInDb(
@@ -11757,7 +11760,7 @@ class _CruiseModePageState extends State<CruiseModePage>
             ratingTags: tags,
             title: title,
           );
-          _resetAfterCompletion();
+          _resetAfterCompletion(tripGoalReached: false);
           return result;
         },
         onDiscard: () async {
@@ -11768,7 +11771,7 @@ class _CruiseModePageState extends State<CruiseModePage>
               discarded: true,
             );
           } finally {
-            _resetAfterCompletion();
+            _resetAfterCompletion(tripGoalReached: false);
           }
         },
       ),
@@ -11964,7 +11967,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     }
   }
 
-  void _resetAfterCompletion() {
+  void _resetAfterCompletion({bool tripGoalReached = true}) {
     unawaited(RouteCacheService.instance.clearConfirmedRoute());
     _stopSimulation(restartLiveTracking: false);
     _stopNavigationTracking();
@@ -11977,7 +11980,19 @@ class _CruiseModePageState extends State<CruiseModePage>
     final tripIdToComplete = _activeTripId;
     if (tripIdToComplete != null) {
       _activeTripId = null;
-      unawaited(_safeCompleteTrip(tripIdToComplete));
+      // 2026-06-10 (vucko Gruppen-Trip-Regel): Ein Trip endet NUR, wenn das
+      // Ziel erreicht wurde. Vorzeitiges Beenden (Early-Stop-Sheet) =
+      // ZWISCHENSPEICHERN: Trip wird pausiert und kann spaeter von der
+      // aktuellen Position fortgesetzt werden (Resume-Card). Gruppen-Trips
+      // enden zusaetzlich erst, wenn alle die Gruppe verlassen haben
+      // (leaveGroup-Pfad).
+      if (tripGoalReached) {
+        unawaited(_safeCompleteTrip(tripIdToComplete));
+      } else {
+        unawaited(
+          TripService.instance.pauseTrip(tripIdToComplete).catchError((_) {}),
+        );
+      }
     }
     final currentLocation = _userLocation;
     if (currentLocation != null) {
