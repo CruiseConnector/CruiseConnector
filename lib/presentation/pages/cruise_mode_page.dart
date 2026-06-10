@@ -1824,7 +1824,9 @@ class _CruiseModePageState extends State<CruiseModePage>
       final waypoints = stops
           .where((s) =>
               s.stopType != 'start' &&
-              (s.actualArrival == null || s.stopType == 'end'))
+              (s.actualArrival == null ||
+                  s.stopType == 'destination' ||
+                  s.stopType == 'end'))
           .map((s) => LatLng(s.lat, s.lng))
           .toList(growable: false);
       if (!mounted || _disposed) return;
@@ -11920,7 +11922,13 @@ class _CruiseModePageState extends State<CruiseModePage>
           lat: wp.latitude,
           lng: wp.longitude,
           name: isLast ? 'Ziel' : 'Stopp ${i + 1}',
-          stopType: isLast ? 'end' : 'waypoint',
+          // 2026-06-10 (vucko 0-Stops-Bug): Der DB-CHECK-Constraint
+          // trip_stops_stop_type_check erlaubt NUR start|waypoint|overnight|
+          // lunch|photo|fuel|destination — 'end' war invalide und ließ den
+          // GESAMTEN Batch-Insert platzen (Postgres-Log: "violates check
+          // constraint"). Folge: jeder Trip lag OHNE Stops in der DB und der
+          // Resume schloss die Tour sofort als kaputt. Ziel = 'destination'.
+          stopType: isLast ? 'destination' : 'waypoint',
         ));
       }
       final title = waypoints.length >= 2

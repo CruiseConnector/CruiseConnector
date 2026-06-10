@@ -94,6 +94,12 @@ class CruiseMapLibreController {
 
   mb.MapLibreMapController get raw => _map;
 
+  // 2026-06-10 (vucko ERSTOPEN-CRASH-Fix Schicht B): Ein NaN/∞ in lat/lng/zoom
+  // erreicht nativ denselben tödlichen LatLng-Throw wie die size-0-Altitude-
+  // Rechnung — deshalb wird JEDER Kamera-Wunsch hart validiert.
+  static bool _finiteLatLng(double lat, double lng) =>
+      lat.isFinite && lng.isFinite && lat.abs() <= 90 && lng.abs() <= 180;
+
   Future<void> animateTo({
     required double lat,
     required double lng,
@@ -102,6 +108,7 @@ class CruiseMapLibreController {
     Duration duration = const Duration(milliseconds: 600),
   }) async {
     if (!active) return;
+    if (!_finiteLatLng(lat, lng) || (zoom != null && !zoom.isFinite)) return;
     if (!firstFrameReady) {
       _pendingCamera = () =>
           animateTo(lat: lat, lng: lng, zoom: zoom, bearing: bearing, duration: duration);
@@ -126,6 +133,7 @@ class CruiseMapLibreController {
     double? bearing,
   }) async {
     if (!active) return;
+    if (!_finiteLatLng(lat, lng) || (zoom != null && !zoom.isFinite)) return;
     if (!firstFrameReady) {
       _pendingCamera = () => moveTo(lat: lat, lng: lng, zoom: zoom, bearing: bearing);
       return;
@@ -495,11 +503,33 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
     // Eine Quellen-/Layer- oder Kamera-Mutation in genau diesem Fenster warf auf
     // dem Gerät intermittierend synchron eine C++-Exception in onMethodCall
     // (uncatchbar → SIGABRT, bei jedem 5 frischen Crash byte-identischer Stack).
-    // Deshalb: ALLES (Linien-Quelle+Layer anlegen, erster Sync, Kamera) erst
-    // im ersten onCameraIdle (= erster gerenderter Frame) bzw. im Fallback-Timer.
+    //
+    // 2026-06-10 (vucko ERSTOPEN-CRASH, ENDGÜLTIGE WURZEL): Der alte 700ms-
+    // Fallback-Timer öffnete das Kamera-Gate BLIND — beim KALTEN Erstopen
+    // (Shader-Kompilierung + PMTiles) layoutet die native Platform-View aber
+    // erst nach >700ms. Die gepufferte initiale Zentrierung lief dann gegen
+    // frame.size == 0: das Plugin rechnet zoom→altitude via
+    // MLNAltitudeForZoomLevel(zoom, pitch, lat, mapView.frame.size)
+    // (Convert.swift getAltitude) → altitude = NaN → setCamera → mbgl easeTo →
+    // Mercator-Inverse → LatLng-Konstruktor wirft „latitude must not be NaN"
+    // → SIGABRT (Disassembly-bewiesen: MLNDurationFromTimeInterval +
+    // MLNZoomLevelForAltitude + Completion-Block im Crash-Pfad; 10 byte-
+    // identische Reports 5.–10. Juni). Warmer Start layoutet <100ms → darum
+    // traf es praktisch nur den ersten Open pro Install/Kaltphase.
+    // FIX: Niemand öffnet das Gate mehr „blind" — _runFirstSync verlangt seit
+    // heute einen NATIVEN GRÖSSEN-BEWEIS (toScreenLocation-Probe, s. dort),
+    // bevor markFirstFrameReady läuft. Idle-Events (onMapIdle/onCameraIdle)
+    // und dieser 700ms-Wächter sind nur noch AUSLÖSER für einen Probe-Versuch;
+    // ohne Größen-Beweis bricht _runFirstSync folgenlos ab und es wird erneut
+    // geprobt. Damit ist die size-0-Altitude-Rechnung (NaN → nativer
+    // LatLng-Throw → SIGABRT) konstruktiv unerreichbar.
     _initialSyncFallback?.cancel();
-    _initialSyncFallback = Timer(const Duration(milliseconds: 700), () {
-      if (mounted) _runFirstSync();
+    _initialSyncFallback = Timer.periodic(const Duration(milliseconds: 700), (t) {
+      if (!mounted || _firstFrameSynced) {
+        t.cancel();
+        return;
+      }
+      _runFirstSync();
     });
     // Controller wird IMMER übergeben — seine Methoden sind selbst gegatet
     // (firstFrameReady). Kamera-Wünsche vor dem ersten Frame werden gepuffert.
@@ -678,21 +708,63 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
   /// (onCameraIdle) bzw. nach dem 700ms-Fallback. Reihenfolge ist wichtig:
   /// erst die Linien-Quelle+Layer anlegen, DANN die Kamera freigeben + erster
   /// Sync (setGeoJsonSource braucht die Quelle).
+  // 2026-06-10 (vucko ERSTOPEN-CRASH, finale Wurzel): camera#onIdle feuert
+  // bereits beim Plugin-Init (setCenter → regionDidChange), lange bevor die
+  // native View vom Compositor ihre Größe bekommt — Idle-Events beweisen
+  // KEINE Größe. Der harte Beweis ist die Vorwärtsprojektion: bei
+  // frame.size == 0 projiziert mbgl das Kamera-Zentrum exakt auf (0,0), mit
+  // echter Größe auf (w/2, h/2). toScreenLocation hat keinen LatLng-
+  // Konstruktor im Pfad (reine Projektion) → crash-sichere Probe.
+  Future<bool> _nativeViewHasSize() async {
+    final map = _map;
+    if (map == null) return false;
+    try {
+      final cam = map.cameraPosition?.target ??
+          mb.LatLng(widget.initialCenter.latitude, widget.initialCenter.longitude);
+      final p = await map.toScreenLocation(cam);
+      final x = p.x.toDouble();
+      final y = p.y.toDouble();
+      return x.isFinite && y.isFinite && (x.abs() > 1.0 || y.abs() > 1.0);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  bool _firstSyncInFlight = false;
+
   Future<void> _runFirstSync() async {
-    if (_firstFrameSynced) return;
-    _firstFrameSynced = true;
+    if (_firstFrameSynced || _firstSyncInFlight) return;
+    _firstSyncInFlight = true;
+    try {
+      // Gate-Öffnung NUR mit nativem Größen-Beweis — sonst produziert die
+      // zoom→altitude-Konversion des Plugins (MLNAltitudeForZoomLevel mit
+      // frame.size) NaN und der erste Kamera-Call stirbt nativ (SIGABRT,
+      // 10 byte-identische Reports 5.–10. Juni). Kein Beweis → Abbruch;
+      // der 700ms-Wächter-Timer und jedes weitere Idle-Event proben erneut.
+      if (!await _nativeViewHasSize()) {
+        debugPrint('[CruiseMapLibre] native View noch ohne Größe — '
+            'Kamera-Gate bleibt zu, nächste Probe folgt');
+        return;
+      }
+      if (_firstFrameSynced) return;
+      _firstFrameSynced = true;
+    } finally {
+      _firstSyncInFlight = false;
+    }
     _initialSyncFallback?.cancel();
     _initialSyncFallback = null;
-    // 2026-06-08 (vucko Kamera-Fix — ROOT CAUSE): Kamera ZUERST freigeben, VOR dem
+    // 2026-06-08 (vucko Kamera-Fix): Kamera ZUERST freigeben, VOR dem
     // ge-await-eten _ensureLineLayer. Lag markFirstFrameReady danach und wurde
     // `mounted` während des awaits (transienter Rebuild) kurz false, sprang der
     // `if (!mounted) return` davor und markFirstFrameReady lief NIE — der
     // `if (_firstFrameSynced) return`-Guard verhinderte jeden Retry. Folge:
-    // firstFrameReady blieb false → ALLE Kamera-Ops (Follow + Recenter) wurden
-    // dauerhaft gepuffert und nie angewandt = „Kamera folgt/zentriert nicht,
-    // Karte eingefroren". Der erste Frame ist hier bereits gerendert
-    // (onCameraIdle bzw. 700ms-Fallback) → die Kamera-Freigabe ist sicher (der
-    // SIGABRT kam von Quellen-/Layer-Mutation vor dem Frame, nicht von Kamera).
+    // firstFrameReady blieb false → ALLE Kamera-Ops dauerhaft gepuffert.
+    // 2026-06-10 (KORREKTUR des 06-08-Irrtums): „Die Kamera-Freigabe ist
+    // sicher, der SIGABRT kam nicht von Kamera" war FALSCH — der Crash IST der
+    // Kamera-Pfad (setCamera→easeTo→NaN-LatLng bei frame.size 0, s. Kommentar
+    // in _onStyleLoaded). Sicher ist die Freigabe nur, weil _runFirstSync seit
+    // heute AUSSCHLIESSLICH von echten Render-Ereignissen (onMapIdle/
+    // onCameraIdle) aufgerufen wird — nie mehr vom blinden Timer.
     _ctrl?.markFirstFrameReady();
     // Persistente Linien-Quelle + Layer EINMAL anlegen (idempotent). Danach wird
     // NUR noch setGeoJsonSource aufgerufen — nie wieder remove/re-add.
@@ -714,6 +786,15 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
       return;
     }
     _projectMarkers();
+  }
+
+  // 2026-06-10 (vucko ERSTOPEN-CRASH-Fix): mapViewDidBecomeIdle — feuert nach
+  // jedem fertig gerenderten Frame, AUCH ohne Kamerabewegung. Zuverlässigstes
+  // Signal dafür, dass die native View layoutet ist (frame.size > 0) und
+  // Kamera-/Quellen-Calls sicher sind. Ersetzt den blinden 700ms-Timer als
+  // Erstfreigabe (s. _onStyleLoaded).
+  void _onMapIdle() {
+    if (!_firstFrameSynced) _runFirstSync();
   }
 
   void _onVisibilityChanged(VisibilityInfo info) {
@@ -1077,6 +1158,7 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
               widget.onMapClick?.call(ll.LatLng(latLng.latitude, latLng.longitude)),
           onCameraMove: _onCameraMove,
           onCameraIdle: _onCameraIdle,
+          onMapIdle: _onMapIdle,
           ),
           ),
         ),
