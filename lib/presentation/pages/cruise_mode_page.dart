@@ -194,7 +194,23 @@ class _GeneratedRouteUiStateSnapshot {
 }
 
 class _CruiseModePageState extends State<CruiseModePage>
-    with TickerProviderStateMixin {
+    with TickerProviderStateMixin, WidgetsBindingObserver {
+  // 2026-06-10 (vucko Find-My-Härtung): App kommt aus dem Hintergrund zurück
+  // (Lock/Anruf/App-Switch — die typischen Netz-Blip-Momente): Gruppen-
+  // Realtime sofort hart neu aufbauen + backfillen, statt auf Timer zu warten.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    if (state != AppLifecycleState.resumed) return;
+    final groupId = widget.groupId;
+    if (groupId == null || !mounted || _disposed) return;
+    final meId = Supabase.instance.client.auth.currentUser?.id;
+    _lastGroupRealtimeEventAt = DateTime.now();
+    _startGroupMembersRealtime(groupId, meId);
+    unawaited(_reloadGroupMembersFromBackfill(groupId, meId, forceRebuild: true));
+    unawaited(_uploadMyPosition());
+  }
+
   // ─────────────────────── Services ──────────────────────────────────────────
   final _geocodingService = const GeocodingService();
   final _routeService = RouteService();
@@ -543,6 +559,13 @@ class _CruiseModePageState extends State<CruiseModePage>
   RealtimeChannel? _groupRouteCh;
   RealtimeChannel? _groupMembersCh;
   Timer? _positionUploadTimer;
+  DateTime? _lastGroupRealtimeEventAt;
+  // 2026-06-10 (vucko Find-My-Smoothness): Peer-Marker gleiten zur neuesten
+  // Zielposition statt alle ~2s hart zu springen (39m-Spruenge bei 70 km/h).
+  // shown = angezeigte Position (lng,lat), target = letzte empfangene.
+  final Map<String, List<double>> _peerShownPos = {};
+  final Map<String, List<double>> _peerTargetPos = {};
+  Timer? _peerAnimTimer;
   Timer? _groupRouteBackfillTimer;
   Timer? _groupRouteReconnectTimer;
   Timer? _groupMembersBackfillTimer;
@@ -554,6 +577,12 @@ class _CruiseModePageState extends State<CruiseModePage>
   bool _groupRouteBackfillInFlight = false;
   bool _groupMembersBackfillInFlight = false;
   bool _canPublishGroupRoute = false;
+  // 2026-06-10 (vucko Gruppen-Reroute-Regel): true, sobald ICH der aktiven
+  // (Gruppen-)Route real gefolgt bin (on-route <80m). Nur dann darf mein
+  // Reroute die GRUPPEN-Route ersetzen — ein Late-Joiner, der noch nie auf
+  // der Route war, loest fuer die Gruppe KEIN Reroute aus und sieht die
+  // KOMPLETTE Route kraeftig, bis er selbst drauf faehrt.
+  bool _everOnActiveRoute = false;
   bool _applyingGroupRouteUpdate = false;
   int _groupRouteRevision = 0;
   Map<String, dynamic>? _activeGroupRouteData;
@@ -561,7 +590,12 @@ class _CruiseModePageState extends State<CruiseModePage>
   static const Duration _groupPositionUploadInterval = Duration(seconds: 2);
   static const Duration _groupRouteBackfillInterval = Duration(seconds: 15);
   static const Duration _groupRouteReconnectDelay = Duration(seconds: 3);
-  static const Duration _groupMembersBackfillInterval = Duration(seconds: 10);
+  // 2026-06-10 (vucko Find-My-Härtung): Backfill enger (5s) — er ist das
+  // Sicherheitsnetz gegen "silent dead" Realtime-Channels nach Netz-Blips.
+  static const Duration _groupMembersBackfillInterval = Duration(seconds: 5);
+  // Watchdog: kommt >15s weder ein Realtime-Event noch ein erfolgreicher
+  // Backfill an, wird der Channel HART neu aufgebaut (Socket-Blip-Recovery).
+  static const Duration _groupRealtimeWatchdogAge = Duration(seconds: 15);
   static const Duration _groupMembersReconnectDelay = Duration(seconds: 3);
   static const Duration _groupMembersFreshnessTick = Duration(seconds: 5);
   static const Duration _groupMemberFreshLocationAge = Duration(seconds: 12);
@@ -1103,6 +1137,19 @@ class _CruiseModePageState extends State<CruiseModePage>
       prevLat = c[1];
       aheadEnd++;
     }
+    // On-route-Erkennung (fuer Gruppen-Regeln): Abstand Puck -> Projektion.
+    final puck = _userLocation;
+    if (puck != null) {
+      final offM = geo.Geolocator.distanceBetween(
+          puck.latitude, puck.longitude, projHead[1], projHead[0]);
+      if (offM <= 80) _everOnActiveRoute = true;
+      if (widget.groupId != null && !_everOnActiveRoute && offM > 80) {
+        // Late-Joiner abseits der Route: KEIN 3km-Fenster — volle Route
+        // kraeftig zeigen (Fallback in activePts), bis er drauf ist.
+        _brightAheadLatLngs = const [];
+        return true;
+      }
+    }
     _brightAheadLatLngs = [
       LatLng(headLat, headLng),
       for (final c in coords.sublist(headIdx, aheadEnd)) LatLng(c[1], c[0]),
@@ -1126,6 +1173,7 @@ class _CruiseModePageState extends State<CruiseModePage>
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _loadVectorTiles();
     // 2026-06-06 (vucko P10): Zuletzt bekannten Standort laden → Karte öffnet
     // (auch beim Kaltstart) sofort dort statt bei „Deutschland-Mitte@z6".
@@ -1359,6 +1407,7 @@ class _CruiseModePageState extends State<CruiseModePage>
 
   Future<void> _bootstrapGroupSession(String groupId) async {
     _positionUploadTimer?.cancel();
+    _peerAnimTimer?.cancel();
     _groupRouteBackfillTimer?.cancel();
     _groupRouteReconnectTimer?.cancel();
     _groupMembersBackfillTimer?.cancel();
@@ -1590,6 +1639,9 @@ class _CruiseModePageState extends State<CruiseModePage>
     final groupId = widget.groupId;
     if (groupId == null ||
         !_canPublishGroupRoute ||
+        // 2026-06-10 (vucko Gruppen-Reroute-Regel): Nur wer der Route real
+        // gefolgt ist, darf sie fuer die GRUPPE ersetzen (Late-Join-Schutz).
+        !_everOnActiveRoute ||
         _applyingGroupRouteUpdate ||
         _groupRouteRevision <= 0) {
       return;
@@ -1635,6 +1687,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       groupId,
       (row) {
         if (row.isEmpty) return;
+        _lastGroupRealtimeEventAt = DateTime.now();
         final uid = row['user_id'] as String?;
         if (uid == null || uid == meId) return;
         try {
@@ -1693,6 +1746,29 @@ class _CruiseModePageState extends State<CruiseModePage>
   void _startGroupMembersRecovery(String groupId, String? meId) {
     _groupMembersBackfillTimer?.cancel();
     _groupMembersFreshnessTimer?.cancel();
+    _peerAnimTimer?.cancel();
+    // 20Hz-Glaettung: exponentielles Nachziehen (~1.2s Konvergenz, passend
+    // zum 2s-Upload-Takt) -> butterweiche Peer-Bewegung wie beim eigenen Puck.
+    _peerAnimTimer = Timer.periodic(const Duration(milliseconds: 50), (_) {
+      if (!mounted || _disposed || _peerTargetPos.isEmpty) return;
+      var moved = false;
+      _peerTargetPos.forEach((uid, target) {
+        final shown = _peerShownPos[uid];
+        if (shown == null) {
+          _peerShownPos[uid] = [target[0], target[1]];
+          moved = true;
+          return;
+        }
+        final dLng = target[0] - shown[0];
+        final dLat = target[1] - shown[1];
+        // ~0.5m-Schwelle (grob in Grad) -> konvergiert: nichts tun.
+        if (dLng.abs() < 0.000005 && dLat.abs() < 0.000005) return;
+        shown[0] += dLng * 0.08;
+        shown[1] += dLat * 0.08;
+        moved = true;
+      });
+      if (moved) _safeSetState(() {});
+    });
     _groupMembersBackfillTimer = Timer.periodic(
       _groupMembersBackfillInterval,
       (_) => _reloadGroupMembersFromBackfill(groupId, meId),
@@ -1703,6 +1779,27 @@ class _CruiseModePageState extends State<CruiseModePage>
       if (!mounted || _disposed) return;
       if (_groupMembers.values.any((member) => member.hasLocation)) {
         _safeSetState(() {});
+      }
+      // 2026-06-10 (vucko Find-My-Härtung): Watchdog gegen "silent dead"
+      // Realtime-Channels — nach Netz-Blips kann der Socket neu verbinden,
+      // ohne dass der Channel je wieder Events liefert ODER einen
+      // Fehlerstatus meldet. Kommt länger als _groupRealtimeWatchdogAge kein
+      // Event UND ist mind. ein Mitglied stale, wird der Channel hart neu
+      // aufgebaut + sofort backfillt.
+      final lastEvent = _lastGroupRealtimeEventAt;
+      final anyStale = _groupMembers.values.any(
+        (m) =>
+            m.hasLocation &&
+            !m.hasFreshLocation(maxAge: _groupMemberFreshLocationAge),
+      );
+      if (anyStale &&
+          (lastEvent == null ||
+              DateTime.now().difference(lastEvent) >
+                  _groupRealtimeWatchdogAge)) {
+        _lastGroupRealtimeEventAt = DateTime.now(); // Debounce
+        debugPrint('[CruiseMode] Realtime-Watchdog: Channel-Rebuild');
+        _startGroupMembersRealtime(groupId, meId);
+        unawaited(_reloadGroupMembersFromBackfill(groupId, meId));
       }
     });
   }
@@ -1724,7 +1821,8 @@ class _CruiseModePageState extends State<CruiseModePage>
     if (_groupMembersBackfillInFlight || !mounted || _disposed) return;
     _groupMembersBackfillInFlight = true;
     try {
-      final members = await CruiseGroupService.fetchMembers(groupId);
+      final members = await CruiseGroupService.fetchMembers(groupId)
+          .timeout(const Duration(seconds: 4));
       if (!mounted || _disposed || widget.groupId != groupId) return;
       final changed = _mergeGroupMembers(members, meId: meId);
       if (changed || forceRebuild) {
@@ -1769,6 +1867,13 @@ class _CruiseModePageState extends State<CruiseModePage>
       return false;
     }
     _groupMembers[incoming.userId] = merged;
+    final lat = merged.currentLat;
+    final lng = merged.currentLng;
+    if (lat != null && lng != null) {
+      _peerTargetPos[incoming.userId] = [lng, lat];
+      // Erste Position: direkt setzen (kein Anflug quer ueber die Karte).
+      _peerShownPos.putIfAbsent(incoming.userId, () => [lng, lat]);
+    }
     return true;
   }
 
@@ -1824,17 +1929,30 @@ class _CruiseModePageState extends State<CruiseModePage>
 
   bool _hasGroupMemberLocation(GroupMember m) => m.hasLocation;
 
+  bool _positionUploadInFlight = false;
+
   Future<void> _uploadMyPosition() async {
     if (widget.groupId == null) return;
     final pos = _userPosition;
     if (pos == null) return;
+    // 2026-06-10 (vucko Find-My-Härtung): Bei kaputtem Netz hingen die
+    // 2s-Uploads ohne Timeout minutenlang und stauten sich — der eigene
+    // Standort alterte für ALLE Mitfahrer ("man sieht sich nicht mehr").
+    // Jetzt: hartes 3s-Timeout, keine Überlappung, nächster Tick probiert
+    // sowieso erneut (Heartbeat-Charakter bleibt erhalten).
+    if (_positionUploadInFlight) return;
+    _positionUploadInFlight = true;
     try {
       await CruiseGroupService.updateMyPosition(
         groupId: widget.groupId!,
         lat: pos.latitude,
         lng: pos.longitude,
-      );
-    } catch (_) {}
+      ).timeout(const Duration(seconds: 3));
+    } catch (_) {
+      // still — Timer rettet beim nächsten Tick; Marker beim Peer dimmt nur.
+    } finally {
+      _positionUploadInFlight = false;
+    }
   }
 
   void _onPendingRoute() {
@@ -1960,6 +2078,7 @@ class _CruiseModePageState extends State<CruiseModePage>
   @override
   void dispose() {
     _disposed = true;
+    WidgetsBinding.instance.removeObserver(this);
     // 2026-06-02 (vucko Sync): CarPlay-Hooks lösen (Page-Lebenszyklus).
     if (CarCommandListener.instance.onCompletionDone != null) {
       CarCommandListener.instance.onCompletionDone = null;
@@ -1990,6 +2109,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     _positionSubscription?.cancel();
     _socketPositionSubscription?.cancel();
     _positionUploadTimer?.cancel();
+    _peerAnimTimer?.cancel();
     _groupRouteBackfillTimer?.cancel();
     _groupRouteReconnectTimer?.cancel();
     _groupMembersBackfillTimer?.cancel();
@@ -4791,9 +4911,12 @@ class _CruiseModePageState extends State<CruiseModePage>
       for (final entry in _groupMembers.entries) {
         final m = entry.value;
         if (!_hasGroupMemberLocation(m)) continue;
+        final shown = _peerShownPos[entry.key];
         markers.add(CruiseMapMarker(
           id: 'grp-${entry.key}',
-          position: LatLng(m.currentLat!, m.currentLng!),
+          position: shown != null
+              ? LatLng(shown[1], shown[0])
+              : LatLng(m.currentLat!, m.currentLng!),
           width: 40,
           height: 40,
           child: _buildGroupMemberMarker(m),
