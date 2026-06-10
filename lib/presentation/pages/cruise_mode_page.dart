@@ -327,6 +327,9 @@ class _CruiseModePageState extends State<CruiseModePage>
   // 2026-05-24 (vucko Task #53): Trip-DB-ID wenn Trip-Mode aktiv + Route gestartet.
   // null = kein Trip aktiv. Bei Pause/Verlassen → TripService.pauseTrip(this).
   String? _activeTripId;
+  // 2026-06-10 (vucko Resume-Crash-Fix): verhindert Doppel-Resume, solange der
+  // pendingTripResume-Intent (jetzt erst nach Erfolg konsumiert) noch gesetzt ist.
+  bool _tripResumeInFlight = false;
   bool _waypointTutorialShown = false;
   static const int _maxWaypointsNormal = 3;
   static const int _maxWaypointsTripMode = 5;
@@ -1153,6 +1156,10 @@ class _CruiseModePageState extends State<CruiseModePage>
     CruiseModePage.pendingTripResume.addListener(_onPendingTripResume);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _consumePendingRouteIfAvailable();
+      // 2026-06-10 (vucko Resume-Crash-Fix): Intent kann einen Crash/Fehlversuch
+      // überleben (wird erst nach Erfolg konsumiert) — beim Page-Aufbau einmal
+      // initial prüfen, nicht nur auf Listener-Events warten.
+      unawaited(_consumePendingTripResumeIfAvailable());
     });
     _destinationController.addListener(_onDestinationTextChanged);
     _destinationFocusNode.addListener(_onDestinationFocusChanged);
@@ -1780,7 +1787,14 @@ class _CruiseModePageState extends State<CruiseModePage>
     if (!mounted || _disposed) return;
     final tripId = CruiseModePage.pendingTripResume.value;
     if (tripId == null) return;
-    CruiseModePage.pendingTripResume.value = null;
+    if (_tripResumeInFlight) return;
+    _tripResumeInFlight = true;
+    // 2026-06-10 (vucko Resume-Crash-Fix): Der Intent wird erst NACH dem
+    // erfolgreichen Laden der Stopps konsumiert (siehe unten). Vorher wurde er
+    // SOFORT genullt — crashte die Cruise-Page beim allerersten Öffnen
+    // (MapLibre-Erstopen-Race), war der Resume-Wunsch weg und der nächste
+    // Öffnen-Versuch zeigte nur das leere Setup. Jetzt überlebt der Intent den
+    // Crash → der zweite Open lädt die Tour automatisch.
     try {
       final stops = await TripService.instance.stopsFor(tripId);
       if (!mounted || _disposed) return;
@@ -1795,6 +1809,7 @@ class _CruiseModePageState extends State<CruiseModePage>
           duration: const Duration(milliseconds: 3500),
         );
         unawaited(_safeCompleteTrip(tripId));
+        CruiseModePage.pendingTripResume.value = null; // bewusst geschlossen
         return;
       }
       // Resume in DB markieren (status=active, resumed_at=now)
@@ -1825,6 +1840,7 @@ class _CruiseModePageState extends State<CruiseModePage>
           duration: const Duration(milliseconds: 3500),
         );
         unawaited(_safeCompleteTrip(tripId));
+        CruiseModePage.pendingTripResume.value = null; // bewusst geschlossen
         return;
       }
       setState(() {
@@ -1836,6 +1852,8 @@ class _CruiseModePageState extends State<CruiseModePage>
           ..clear()
           ..addAll(waypoints);
       });
+      // ERFOLG → Intent jetzt (und erst jetzt) konsumieren.
+      CruiseModePage.pendingTripResume.value = null;
       // Visuelle Bestätigung
       TopToast.show(
         context,
@@ -1851,6 +1869,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       unawaited(_generateRoute());
     } catch (e) {
       debugPrint('[CruiseMode] Trip-Resume failed: $e');
+      // Intent NICHT konsumieren → nächster Page-Open versucht es erneut.
       if (mounted && !_disposed) {
         TopToast.show(
           context,
@@ -1859,6 +1878,8 @@ class _CruiseModePageState extends State<CruiseModePage>
           duration: const Duration(milliseconds: 3000),
         );
       }
+    } finally {
+      _tripResumeInFlight = false;
     }
   }
 

@@ -914,6 +914,11 @@ class _HomeContentPageState extends State<HomeContentPage>
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTap: () {
+          // 2026-06-10 (vucko Resume-Crash-Fix): erst null, dann id — ein
+          // ValueNotifier feuert bei GLEICHEM Wert nicht. Blieb der Intent von
+          // einem fehlgeschlagenen Versuch stehen (wird seit heute erst nach
+          // Erfolg konsumiert), wäre der zweite Tap sonst ein totes Event.
+          CruiseModePage.pendingTripResume.value = null;
           CruiseModePage.pendingTripResume.value = trip.id;
           widget.onTabChange?.call(2);
         },
