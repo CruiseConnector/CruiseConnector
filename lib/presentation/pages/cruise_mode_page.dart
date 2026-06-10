@@ -378,6 +378,11 @@ class _CruiseModePageState extends State<CruiseModePage>
   double? _stableInitialZoom;
   List<List<double>> _fullRouteCoordinates = [];
   List<List<double>> _remainingRouteCoordinates = [];
+  // 2026-06-10 (vucko 3km-Sichtdesign v2): helles 3km-Fenster ab Puck (bright)
+  // + dezente Reststrecke ab Puck (dim, 200m-gegated). Kein Trail mehr.
+  List<LatLng> _brightAheadLatLngs = const [];
+  List<LatLng> _dimRemainingLatLngs = const [];
+  List<double>? _lastDimHead;
   // 2026-06-09 (vucko Voll-Route-Sichtbar): grauer „Driven-Trail" = begrenztes
   // Fenster HINTER dem Puck. Die rote aktive Linie (_routeLatLngs) ist jetzt die
   // VOLLE Route (statisch) → immer sichtbar, kein 3km-Abschnitt mehr; dieser
@@ -1041,25 +1046,55 @@ class _CruiseModePageState extends State<CruiseModePage>
     // (_routeLatLngs) ist die VOLLE Route und bleibt statisch → die komplette
     // Reststrecke ist IMMER kräftig rot sichtbar (kein „abgeschnitten wirkendes"
     // 3km-Stück mehr). Begrenztes Fenster = konstant günstiger Push.
-    final behindStart = _findLookBehindIndex(aheadStart, 3000);
     final clampedAhead = aheadStart.clamp(0, coords.length);
-    final driven = <List<double>>[
-      if (behindStart < clampedAhead)
-        for (final c in coords.sublist(behindStart, clampedAhead)) [c[0], c[1]],
-      projHead,
-    ];
-    _drivenTrailLatLngs = driven.length < 2
-        ? const []
-        : [for (final c in driven) LatLng(c[1], c[0])];
+    // 2026-06-10 (vucko 3km-Sichtdesign v2): KEIN grauer Trail mehr —
+    // Abgefahrenes verschwindet einfach (beide sichtbaren Linien starten am
+    // Puck). Sichtbar sind:
+    //  • BRIGHT (aktive Quelle): [Puck .. +3 km] in VOLLEM Rot — „die
+    //    nächsten 3 km immer clean geladen", scharfer Schnitt exakt am Puck.
+    //  • DIM (Basis-Linien-Layer): [Puck .. Ende] dezent (Opacity ~0.30) —
+    //    man sieht leicht, dass es weitergeht; die ersten 3 km davon liegen
+    //    UNTER bright und sind unsichtbar, darum reicht ein träges 200m-Gate
+    //    (seltene Pushes, kein Tile-Hunger).
+    _drivenTrailLatLngs = const [];
 
     // Volle Reststrecke (Puck → Ende) für Restdistanz + Auto-Snapshot pflegen
-    // (nur Dart-Listen, KEIN Map-Push) — ersetzt den früheren 3km-Sliding-Window-
-    // Redraw, der zusätzlich die sichtbare Linie schnitt.
+    // (nur Dart-Listen, KEIN Map-Push).
     _remainingRouteCoordinates = <List<double>>[
       projHead,
       if (clampedAhead < coords.length)
         for (final c in coords.sublist(clampedAhead)) [c[0], c[1]],
     ];
+
+    // BRIGHT: 3km-Fenster ab Puck (kleine Geometrie, 4m-gegated wie oben).
+    var acc = 0.0;
+    var aheadEnd = clampedAhead;
+    var prevLng = projHead[0];
+    var prevLat = projHead[1];
+    while (aheadEnd < coords.length && acc < 3000.0) {
+      final c = coords[aheadEnd];
+      acc += geo.Geolocator.distanceBetween(prevLat, prevLng, c[1], c[0]);
+      prevLng = c[0];
+      prevLat = c[1];
+      aheadEnd++;
+    }
+    _brightAheadLatLngs = [
+      LatLng(projHead[1], projHead[0]),
+      for (final c in coords.sublist(clampedAhead, aheadEnd)) LatLng(c[1], c[0]),
+    ];
+
+    // DIM: Reststrecke ab Puck — nur alle ~200m neu (Anfang ist von bright
+    // überdeckt, das Lag ist unsichtbar).
+    final dimHead = _lastDimHead;
+    if (dimHead == null ||
+        geo.Geolocator.distanceBetween(
+                dimHead[1], dimHead[0], projHead[1], projHead[0]) >=
+            200.0) {
+      _lastDimHead = projHead;
+      _dimRemainingLatLngs = [
+        for (final c in _remainingRouteCoordinates) LatLng(c[1], c[0]),
+      ];
+    }
     return true;
   }
 
@@ -1265,6 +1300,12 @@ class _CruiseModePageState extends State<CruiseModePage>
       _originalRouteDuration = route.durationSeconds;
       _fullRouteCoordinates = route.coordinates;
       _remainingRouteCoordinates = route.coordinates;
+      // 2026-06-10 (3km-Design v2): Fenster-Caches bei neuer Route leeren —
+      // bright faellt auf die volle Route zurueck (nie unsichtbar), dim wird
+      // beim naechsten Tick sofort neu gesetzt (dimHead == null).
+      _brightAheadLatLngs = const [];
+      _dimRemainingLatLngs = const [];
+      _lastDimHead = null;
       _maneuvers = route.maneuvers;
       _activeManeuverIndex = 0;
       _currentRouteIndex = 0;
@@ -1448,6 +1489,12 @@ class _CruiseModePageState extends State<CruiseModePage>
         _originalRouteDuration = result.durationSeconds;
         _fullRouteCoordinates = result.coordinates;
         _remainingRouteCoordinates = result.coordinates;
+      // 2026-06-10 (3km-Design v2): Fenster-Caches bei neuer Route leeren —
+      // bright faellt auf die volle Route zurueck (nie unsichtbar), dim wird
+      // beim naechsten Tick sofort neu gesetzt (dimHead == null).
+      _brightAheadLatLngs = const [];
+      _dimRemainingLatLngs = const [];
+      _lastDimHead = null;
         _maneuvers = result.maneuvers;
         _activeManeuverIndex = 0;
         _currentRouteIndex = 0;
@@ -4554,8 +4601,16 @@ class _CruiseModePageState extends State<CruiseModePage>
     // 2026-06-09 (vucko Reveal-Fix): die _isRouteConfirmed-Bedingung fiel weg —
     // sie unterdrückte in der Preview die Animation.
     _ensureRouteMetrics();
+    // 2026-06-10 (vucko 3km-Sichtdesign v2): Waehrend der bestaetigten Fahrt
+    // zeigt die aktive (voll rote) Quelle NUR das 3km-Fenster ab Puck; die
+    // Andeutung der Reststrecke macht der dezente Basis-Layer
+    // (_buildMapLibreLines). Vor der Fahrt/in der Uebersicht: volle Route voll
+    // rot. Fallback: solange noch kein Fenster berechnet ist (Fahrtbeginn),
+    // bleibt die VOLLE Route sichtbar — der Strich darf nie verschwinden.
     final activePts = (!_isOverviewActive && _routeLatLngs.length >= 2)
-        ? _routeLatLngs
+        ? ((_isRouteConfirmed && _brightAheadLatLngs.length >= 2)
+            ? _brightAheadLatLngs
+            : _routeLatLngs)
         : _fullRouteBackgroundLatLngs;
     return CruiseMapLibreMap(
       initialCenter: _stableInitialCenter!,
@@ -4567,6 +4622,10 @@ class _CruiseModePageState extends State<CruiseModePage>
       // ganze rote Route ohne Grau (sauberer Gesamtüberblick).
       drivenTrailPoints: _isOverviewActive ? const [] : _drivenTrailLatLngs,
       routeProgress: _routeProgress,
+      // 2026-06-10 (vucko 3km-Sichtdesign): Gesamtlänge fürs GPU-Gradient
+      // (transparent hinterm Puck / 3 km voll / Rest dezent). In der Übersicht
+      // 0 → Gradient aus, ganze Route voll sichtbar.
+      routeTotalMeters: _isOverviewActive ? 0.0 : _routeTotalLenM,
       routeColor: AppAccentColors.accent,
       onControllerReady: (c) {
         _mlController = c;
@@ -4583,11 +4642,23 @@ class _CruiseModePageState extends State<CruiseModePage>
   }
 
   List<CruiseMapLine> _buildMapLibreLines() {
-    // 2026-06-09 (vucko Voll-Route-Sichtbar): KEINE graue Gesamt-Route-Hintergrund-
-    // linie mehr. Die rote aktive Linie IST jetzt die volle Route (immer sichtbar),
-    // und der graue Driven-Trail (eigene Quelle, ÜBER der roten Linie) zeigt den
-    // abgefahrenen Teil. Der frühere graue Faden war zu dezent → wirkte, als ende
-    // die Route nach 3km („kaputt"). Generischer Linien-Layer bleibt ungenutzt.
+    // 2026-06-10 (vucko 3km-Sichtdesign v2): Waehrend der bestaetigten Fahrt
+    // liegt hier die DEZENTE Reststrecke ab Puck (Opacity 0.30) — sie deutet
+    // „es geht weiter" an, waehrend die aktive Quelle nur das volle
+    // 3km-Fenster zeigt. 200m-Gate: ihr Anfang liegt unter dem bright-Fenster
+    // und ist unsichtbar, darum sind seltene Pushes voellig ausreichend.
+    if (_isRouteConfirmed &&
+        !_isOverviewActive &&
+        _dimRemainingLatLngs.length >= 2) {
+      return [
+        CruiseMapLine(
+          points: _dimRemainingLatLngs,
+          color: AppAccentColors.accent,
+          width: 5,
+          opacity: 0.30,
+        ),
+      ];
+    }
     return const <CruiseMapLine>[];
   }
 
@@ -6827,6 +6898,12 @@ class _CruiseModePageState extends State<CruiseModePage>
       _isRouteConfirmed = false;
       _fullRouteCoordinates = result.coordinates;
       _remainingRouteCoordinates = result.coordinates;
+      // 2026-06-10 (3km-Design v2): Fenster-Caches bei neuer Route leeren —
+      // bright faellt auf die volle Route zurueck (nie unsichtbar), dim wird
+      // beim naechsten Tick sofort neu gesetzt (dimHead == null).
+      _brightAheadLatLngs = const [];
+      _dimRemainingLatLngs = const [];
+      _lastDimHead = null;
       _maneuvers = result.maneuvers;
       _activeManeuverIndex = 0;
       _currentRouteIndex = 0;
@@ -8171,6 +8248,12 @@ class _CruiseModePageState extends State<CruiseModePage>
       _originalRouteDuration = result.durationSeconds;
       _fullRouteCoordinates = result.coordinates;
       _remainingRouteCoordinates = result.coordinates;
+      // 2026-06-10 (3km-Design v2): Fenster-Caches bei neuer Route leeren —
+      // bright faellt auf die volle Route zurueck (nie unsichtbar), dim wird
+      // beim naechsten Tick sofort neu gesetzt (dimHead == null).
+      _brightAheadLatLngs = const [];
+      _dimRemainingLatLngs = const [];
+      _lastDimHead = null;
       _currentRouteIndex = 0;
       // 2026-06-07 (vucko P-reroute): Beim Reroute wird _fullRouteCoordinates
       // KOMPLETT ersetzt (neuer, oft kürzerer Array; Index 0 = aktueller GPS-
@@ -8490,6 +8573,7 @@ class _CruiseModePageState extends State<CruiseModePage>
   /// 2026-06-09 (vucko Voll-Route-Sichtbar): Index ~targetMeters VOR startIndex
   /// (rückwärts) — Startpunkt des begrenzten grauen Driven-Fensters hinter dem
   /// Puck. Clamped auf ≥ 0. Begrenzt → konstant günstiger Push, kein Wachsen.
+  // ignore: unused_element
   int _findLookBehindIndex(int startIndex, double targetMeters) {
     double accumulated = 0.0;
     final clampedStart = startIndex.clamp(0, _fullRouteCoordinates.length);

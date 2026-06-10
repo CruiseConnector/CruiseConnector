@@ -231,6 +231,7 @@ class CruiseMapLibreMap extends StatefulWidget {
     this.activeRoutePoints = const [],
     this.drivenTrailPoints = const [],
     this.routeProgress = 0.0,
+    this.routeTotalMeters = 0.0,
     this.routeColor = const Color(0xFFFF4438),
   });
 
@@ -257,6 +258,11 @@ class CruiseMapLibreMap extends StatefulWidget {
   // der scharfe Schnitt am Puck erhalten bleibt (Apple/Google-Look).
   final List<ll.LatLng> drivenTrailPoints;
   final double routeProgress;
+
+  /// Gesamtlänge der aktiven Route in Metern — nötig, um „die nächsten 3 km"
+  /// als line-progress-Fraktion zu rechnen. 0 = unbekannt → Linie bleibt als
+  /// Fallback VOLL sichtbar (der Strich darf nie verschwinden).
+  final double routeTotalMeters;
   final Color routeColor;
 
   @override
@@ -421,6 +427,7 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
       // Reststrecke; bei Geometrie-Wechsel neu pushen (kein Gradient mehr).
       _syncActiveRoute();
       _syncDrivenTrail();
+      _applyRouteGradient();
       _projectMarkers();
     }
   }
@@ -494,6 +501,7 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
         _syncLines();
         _syncActiveRoute();
         _syncDrivenTrail();
+        _applyRouteGradient();
       });
     }
     // 2026-06-05 (vucko Crash-Fix #2): KEINE native Style-/Quellen-/Layer-/View-
@@ -613,6 +621,15 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
       // langer, schwammiger Gradient-Übergang, der durch die niedrig aufgelöste
       // line-gradient-Textur auf langen Routen entstand). Der abgefahrene Teil ist
       // der graue Hintergrund (Gesamt-Route) aus _buildMapLibreLines.
+      // 2026-06-10 (vucko 3km-Sichtdesign, FINAL): line-gradient ist auf iOS
+      // ueber setLayerProperties IMMER kaputt (Layer wird unsichtbar — egal
+      // welches Format; darum wurde es am 06-08 nach Stunden durch
+      // Geometrie-Slice ersetzt). Deshalb GEOMETRIE-Design ohne jeden
+      // Gradient-Update: Diese beiden Layer zeigen NUR das helle 3-km-Fenster
+      // ab Puck (kleiner Push pro Tick, Quelle = activeRoutePoints-Slice aus
+      // der Page); die "es geht weiter"-Andeutung macht die dezente statische
+      // Voll-Route aus _buildMapLibreLines (per-Feature opacity), und das
+      // "Verschwinden" hinterm Puck der Hintergrund-Farb-Trail (_drivenSrcId).
       if (!layerIds.contains(_activeGlowLayerId)) {
         await map.addLineLayer(
           _activeSrcId,
@@ -774,6 +791,7 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
       _syncLines();
       _syncActiveRoute();
       _syncDrivenTrail();
+      _applyRouteGradient();
       _projectMarkers();
     }
   }
@@ -882,6 +900,20 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
 
   /// Setzt die aktive Reststrecke (am Puck geschnitten) in die eigene Quelle —
   /// nur bei echtem Geometrie-Wechsel (distanz-gegated im Page), NICHT pro Frame.
+  // 2026-06-10 (vucko 3km-Sichtdesign): Das „Abfahren" + die Sichtbarkeits-
+  // Staffelung macht EIN line-gradient (GPU, lineMetrics-Quelle, kein
+  // Geometrie-Repush): hinter dem Puck TRANSPARENT (Abgefahrenes verschwindet,
+  // kein grauer Trail mehr), die nächsten 3 km VOLL rot („clean geladen"),
+  // danach dieselbe Farbe DEZENT (~28 %) — man sieht leicht, dass es
+  // weitergeht, ohne dass die Route „nach 3 km aufhört". Stops wandern pro
+  // Fortschritts-Tick mit (nur Paint-Property-Update, signatur-gegated).
+  // FALLBACK (Strich darf NIE verschwinden): ohne gültige Gesamtlänge oder bei
+  // einem Fehler bleibt die solide rote Volllinie aus addLineLayer stehen.
+  // 2026-06-10: line-gradient-Updates sind auf iOS unbrauchbar (s. oben) —
+  // das 3km-Design ist vollstaendig geometrie-basiert. No-op behalten, damit
+  // die Call-Sites schlank bleiben.
+  void _applyRouteGradient() {}
+
   Future<void> _syncActiveRoute() async {
     final map = _map;
     if (!_styleLoaded ||
@@ -937,6 +969,10 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
         map == null) {
       return;
     }
+    // 2026-06-10 (vucko Design-Wechsel v2): Der Trail ist jetzt der
+    // "VERSCHWINDE"-Layer — Map-Hintergrundfarbe statt grau. Er uebermalt die
+    // dezente Voll-Route hinter dem Puck, sodass Abgefahrenes optisch
+    // verschwindet (Wunsch: hinten keine nachgezogene Linie).
     final pts = widget.drivenTrailPoints;
     final sig = pts.length < 2
         ? 'empty'
