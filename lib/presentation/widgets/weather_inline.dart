@@ -52,7 +52,11 @@ class WeatherInline extends StatelessWidget {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Icon(Icons.cloud_outlined, color: AppAccentColors.accent.withValues(alpha: 0.35), size: 20),
+        Icon(
+          Icons.cloud_outlined,
+          color: AppAccentColors.accent.withValues(alpha: 0.35),
+          size: 20,
+        ),
         const SizedBox(height: 4),
         Text(
           '--°',
@@ -74,8 +78,7 @@ class WeatherInline extends StatelessWidget {
   }
 
   Widget _buildContent(WeatherSnapshot snap) {
-    final (iconCp, _, _) = WeatherCodeIcon.describe(snap.weatherCode);
-    final icon = IconData(iconCp, fontFamily: 'MaterialIcons');
+    final icon = _weatherIcon(snap.weatherCode);
     final condColor = switch (snap.ridingCondition) {
       RidingCondition.excellent => const Color(0xFF34D399),
       RidingCondition.good => const Color(0xFF60A5FA),
@@ -112,6 +115,19 @@ class WeatherInline extends StatelessWidget {
       ],
     );
   }
+
+  IconData _weatherIcon(int code) {
+    if (code == 0) return Icons.wb_sunny;
+    if (code <= 2) return Icons.wb_cloudy;
+    if (code <= 49) return Icons.cloud;
+    if (code <= 55) return Icons.grain;
+    if (code <= 67) return Icons.beach_access;
+    if (code <= 77) return Icons.ac_unit;
+    if (code <= 82) return Icons.beach_access;
+    if (code <= 86) return Icons.ac_unit;
+    if (code <= 99) return Icons.flash_on;
+    return Icons.cloud;
+  }
 }
 
 /// 2026-05-24 (vucko): Dezente einzeilige Warnung wenn Regen oder Trend.
@@ -145,10 +161,8 @@ class WeatherWarningStrip extends StatelessWidget {
         return TweenAnimationBuilder<double>(
           tween: Tween(begin: 0.0, end: 1.0),
           duration: const Duration(milliseconds: 280),
-          builder: (context, value, child) => Opacity(
-            opacity: value,
-            child: child,
-          ),
+          builder: (context, value, child) =>
+              Opacity(opacity: value, child: child),
           child: Container(
             margin: const EdgeInsets.only(top: 8),
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),

@@ -447,49 +447,9 @@ class _CruiseModePageState extends State<CruiseModePage>
   StreamSubscription<geo.Position>?
   _idlePositionSubscription; // Standort-Stream für Heading im Idle
 
-  // ─────────────────────── Simulation State ─────────────────────────────────
-  Timer? _simulationTimer;
-  // 2026-06-10 (vucko Perf-Harness): nur mit --dart-define=PERF_AUTOPILOT aktiv.
-  Timer? _perfAutopilotTimer;
-  bool _isSimulationRunning = false;
-  bool _isSimulationStepRunning = false;
-  int _simulationIndex = 0;
-  // 2026-06-08 (vucko Sim-Speed-Fix): Distanz-basierte Interpolation. _simulation
-  // DistanceM = zurückgelegte Strecke entlang der Route; _simulationDistAtIndexM =
-  // kumulierte Strecke bis zum Segment-Start _simulationIndex. So fährt der Sim
-  // EXAKT _simulationConstantKmh, egal wie dicht/dünn die Vertices liegen.
-  double _simulationDistanceM = 0.0;
-  double _simulationDistAtIndexM = 0.0;
-  // 2026-06-08 (vucko DACH-Test): ON-ROAD Reroute-Test-Hook. NUR mit
-  // --dart-define=SIM_DEVIATE=true. Nach _simDeviateAfterMeters holt der Sim eine
-  // ECHTE GraphHopper-Route quer zur Fahrtrichtung (bleibt auf Straßen!) und
-  // fährt sie ab statt der Nav-Route → realistisches Off-Route, das Reroute
-  // testet OHNE ins Gelände zu fahren. Endet nach erstem Reroute (devOnce).
-  static const bool _simDeviateEnabled = bool.fromEnvironment('SIM_DEVIATE');
-  static const double _simDeviateAfterMeters = 1500.0;
-  bool _simDeviateRequested = false;
-  bool _simDeviatedOnce = false;
-  List<List<double>>? _simDeviationRoute;
-  double _simDeviationDistM = 0.0;
-  double _simDeviationDistAtIndexM = 0.0;
-  int _simDeviationIndex = 0;
-  // 2026-05-30 (vucko): Fahrten-Simulator — grüner Play-FAB in der Navigation,
-  // um die Routenabfahrt zu prüfen.
-  // 2026-06-06 (vucko): Sim wieder AN für die Smoothness-/Kamera-/Linien-Tests
-  // (konstant 30 km/h statt 100 → man sieht Ruckler/Kamera-Verhalten viel besser).
-  // Vor dem finalen Release wieder auf false setzen (Testuser sollen ihn nicht sehen).
-  // 2026-06-10 (vucko Release-Prep): Fahrsimulator NUR in Debug-Builds —
-  // TestFlight-/Play-Store-User duerfen den Play-FAB nie sehen.
-  // 2026-06-10 (vucko Perf-Harness): SIM_ENABLED erlaubt die Simulation auch im
-  // Profile-Build (--dart-define=SIM_ENABLED=true) — Frame-Profiling braucht
-  // eine Fahrt ohne echtes GPS. Im Release ohne Define bleibt alles wie bisher.
-  final bool _isSimulationEnabled =
-      kDebugMode || const bool.fromEnvironment('SIM_ENABLED');
-  // Konstante Sim-Speed. Default 30 km/h (man sieht Ruckler gut); für schnelle
-  // Test-Durchläufe via --dart-define=SIM_KMH=70 hochsetzen.
-  static const double _simulationConstantKmh =
-      int.fromEnvironment('SIM_KMH', defaultValue: 30) * 1.0;
-  double _simulationSpeedKmh = _simulationConstantKmh;
+  // Fahrsimulator entfernt; bleibt immer false, damit bestehende
+  // Navigation-Helfer keinen Simulationspfad aktivieren.
+  final bool _isSimulationRunning = false;
 
   bool _isCameraLocked =
       false; // Compass-Toggle: true = Kamera folgt dem Standort
@@ -1313,29 +1273,6 @@ class _CruiseModePageState extends State<CruiseModePage>
     WidgetsBinding.instance.addPostFrameCallback(
       (_) => _maybeShowRoutingOnboarding(),
     );
-    // 2026-06-10 (vucko Perf-Harness): PERF_AUTOPILOT bestätigt die per
-    // initialRoute geladene Route automatisch und startet die Simulation —
-    // Profiling am physischen Gerät ohne Tippen (lib/main_perf.dart). Ohne
-    // das Define ist der Timer nie aktiv; er cancelt sich nach dem Sim-Start.
-    if (const bool.fromEnvironment('PERF_AUTOPILOT')) {
-      _perfAutopilotTimer = Timer.periodic(const Duration(milliseconds: 500), (
-        t,
-      ) {
-        if (!mounted || _disposed || _isSimulationRunning) {
-          t.cancel();
-          return;
-        }
-        if (_isLoading || _fullRouteCoordinates.length < 2) return;
-        if (!_isRouteConfirmed) {
-          debugPrint('[PERF] Autopilot: Route bestätigen');
-          unawaited(_confirmRoute());
-          return;
-        }
-        debugPrint('[PERF] Autopilot: Simulation starten');
-        t.cancel();
-        unawaited(_startSimulation());
-      });
-    }
   }
 
   // 2026-06-01 (vucko): Trip-Modus-Tutorial nur EINMALIG (persistent) und nur
@@ -2174,7 +2111,6 @@ class _CruiseModePageState extends State<CruiseModePage>
     _groupMembersBackfillTimer?.cancel();
     _groupMembersReconnectTimer?.cancel();
     _groupMembersFreshnessTimer?.cancel();
-    _perfAutopilotTimer?.cancel();
     _viewportPoiDebounce?.cancel();
     _groupRouteCh?.unsubscribe();
     _groupMembersCh?.unsubscribe();
@@ -2225,12 +2161,9 @@ class _CruiseModePageState extends State<CruiseModePage>
   // Geschwindigkeit pulsen ließ = Mini-Ruckeln) zieht der Ticker den Kamera-Stand
   // jeden Frame ein Stück linear Richtung Ziel und setzt ihn INSTANT (moveCamera).
   // Lineare Bewegung + 1 Channel-Call pro Frame (coalesced) = butterweich.
-  // 2026-06-10 (vucko Perf-Diag): Kamera-Bewegungs-Diagnostik, nur mit
-  // --dart-define=PERF_CAM_DIAG=true aktiv (const → kompiliert sonst raus).
-  // Misst die TATSÄCHLICH dispatchten Kamera-Schritte pro Frame: Puls-Bewegung
-  // (Ziel springt 1×/s, Kamera rast hinterher und steht dann) zeigt sich als
-  // hoher stall%-Anteil + hohes p95/avg-Verhältnis.
-  static const bool _perfCamDiag = bool.fromEnvironment('PERF_CAM_DIAG');
+  // Kamera-Bewegungs-Diagnostik bleibt für Entwickler im Code, ist für Uploads
+  // aber dauerhaft deaktiviert.
+  static const bool _perfCamDiag = false;
   final List<double> _camDiagSteps = [];
   int _camDiagStalls = 0;
   int _camDiagTicks = 0;
@@ -4940,9 +4873,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       },
       onMapClick: (p) => _handleMapTap(null, p),
       onCameraMoved: () {
-        if (_isCameraLocked && _isRouteConfirmed) {
-          _safeSetState(() => _isCameraLocked = false);
-        }
+        _unlockCameraFollow();
         _scheduleViewportPoiRefresh();
       },
     );
@@ -5106,17 +5037,18 @@ class _CruiseModePageState extends State<CruiseModePage>
         // Mapbox-Dark-Farbe statt System-Weiß. So sind Pan-Lücken kaum
         // sichtbar während die Tiles im Hintergrund nachgeladen werden.
         backgroundColor: OfflineMapService.mapboxDarkBackground,
-        // Bei Berührung der Karte: Kamera-Lock deaktivieren (war Listener-Widget)
+        // Bei echter Karten-Geste: Kamera-Follow in Vorschau und Navigation lösen.
         onPointerDown: (event, point) {
-          if (_isCameraLocked && _isRouteConfirmed) {
-            _safeSetState(() => _isCameraLocked = false);
-          }
+          _unlockCameraFollow();
         },
         // 2026-06-02 (vucko): Beim Schwenken/Zoomen automatisch die POIs im
         // sichtbaren Bereich nachladen → je weiter rausgezoomt, desto mehr
         // POIs über das ganze Sichtfeld. Debounced + nur beim Planen/Browsen.
         onPositionChanged: (camera, hasGesture) {
-          if (hasGesture) _scheduleViewportPoiRefresh();
+          if (hasGesture) {
+            _unlockCameraFollow();
+            _scheduleViewportPoiRefresh();
+          }
         },
       ),
       children: [
@@ -8799,23 +8731,6 @@ class _CruiseModePageState extends State<CruiseModePage>
       _dimRemainingLatLngs = const [];
       _lastDimHead = null;
       _currentRouteIndex = 0;
-      // 2026-06-07 (vucko P-reroute): Beim Reroute wird _fullRouteCoordinates
-      // KOMPLETT ersetzt (neuer, oft kürzerer Array; Index 0 = aktueller GPS-
-      // Standort, da der Connector via generatePointToPoint(startPosition) gebaut
-      // wird). Lief der Fahrsimulator, behielt _simulationIndex seinen alten,
-      // großen Wert → er indexierte den neuen Array am Ende (clamp auf lastIndex)
-      // → Puck teleportierte ans Routenende, Bearing kollabierte → „fährt nach
-      // Norden, zeigt Süden". Cursor auf 0 zurücksetzen = Sim fährt vom Standort
-      // vorwärts weiter.
-      if (_isSimulationRunning) {
-        _simulationIndex = 0;
-        _simulationDistanceM = 0.0;
-        _simulationDistAtIndexM = 0.0;
-        // 2026-06-08 (vucko DACH-Test): Reroute committet → Abweichung beenden,
-        // der Sim folgt ab jetzt der NEUEN (re-gedockten) Route.
-        _simDeviationRoute = null;
-        _simDeviatedOnce = true;
-      }
       _lastDrawnRouteIndex = 0;
       _distanceSinceLastRedraw = 0.0;
       _maneuvers = result.maneuvers;
@@ -9098,20 +9013,6 @@ class _CruiseModePageState extends State<CruiseModePage>
       speedLimits: _activeSpeedLimits,
       edgeMeta: const {'route_source': 'confirmed_route_cache'},
     );
-  }
-
-  // ═══════════════════════ LOOK-AHEAD HELPER ════════════════════════════════
-
-  int _findLookAheadIndex(int startIndex, double targetMeters) {
-    double accumulated = 0.0;
-    final total = _fullRouteCoordinates.length;
-    for (var i = startIndex; i < total - 1; i++) {
-      final c1 = _fullRouteCoordinates[i];
-      final c2 = _fullRouteCoordinates[i + 1];
-      accumulated += geo.Geolocator.distanceBetween(c1[1], c1[0], c2[1], c2[0]);
-      if (accumulated >= targetMeters) return math.min(i + 2, total);
-    }
-    return total;
   }
 
   /// 2026-06-09 (vucko Voll-Route-Sichtbar): Index ~targetMeters VOR startIndex
@@ -9798,7 +9699,9 @@ class _CruiseModePageState extends State<CruiseModePage>
       final filtered = pois.where((p) {
         final info = OpeningHoursParser.parse(p.openingHours);
         // Unbekannte/parseFailed → anzeigen (besser als nichts).
-        if (info.parseFailed || info.status == OpenStatus.unknown) return true;
+        if (info.parseFailed || info.status == OpenStatus.unknown) {
+          return true;
+        }
         return info.isOpenNow;
       }).take(50).toList();
       setState(() => _routePois = filtered);
@@ -10059,14 +9962,6 @@ class _CruiseModePageState extends State<CruiseModePage>
       setState(() {
         _fullRouteCoordinates = newCoords;
         _remainingRouteCoordinates = newCoords;
-        // 2026-06-07 (vucko P-reroute): wie beim Reroute-Commit — wird die Route
-        // mitten in der Sim-Fahrt durch einen POI-Umweg ersetzt, muss der Sim-
-        // Cursor mit zurück auf 0, sonst indexiert er den neuen Array am Ende.
-        if (_isSimulationRunning) {
-          _simulationIndex = 0;
-          _simulationDistanceM = 0.0;
-          _simulationDistAtIndexM = 0.0;
-        }
         _routeGeoJson = json.encode(geometry);
         _routeDistance = newDistanceM;
         _remainingDistance = newDistanceM;
@@ -10422,21 +10317,6 @@ class _CruiseModePageState extends State<CruiseModePage>
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                // Simulation Start/Stop — nur wenn Route da + sim enabled
-                if (hasRoute &&
-                    _isSimulationEnabled &&
-                    _fullRouteCoordinates.length > 1)
-                  _FabBubble(
-                    heroTag: 'simulation_fab',
-                    icon: _isSimulationRunning
-                        ? Icons.stop_rounded
-                        : Icons.play_arrow_rounded,
-                    color: _isSimulationRunning
-                        ? const Color(0xFFFF9500)
-                        : const Color(0xFF34C759),
-                    onPressed: _toggleSimulation,
-                    big: true,
-                  ),
                 // Route-Übersicht — nur wenn Route da
                 if (hasRoute)
                   _FabBubble(
@@ -11856,14 +11736,21 @@ class _CruiseModePageState extends State<CruiseModePage>
 
   // ═══════════════════════ CAMERA ═══════════════════════════════════════════
 
-  // 2026-06-07 (vucko P-centering): Der Kamera-FAB ist jetzt ein EXPLIZITER
-  // RECENTER, KEIN Toggle mehr. Vorher: beim Start ist _isCameraLocked bereits
-  // true (Sim/Nav) → der erste Tap flippte auf false und ZENTRIERTE NICHT
-  // („Button tut nichts / Kamera driftet weg"). Jetzt: Tap = immer auf den
-  // Standort zentrieren + Follow an. Entriegelt wird NUR per Finger-Pan (P1).
+  // Kamera-FAB als echter Toggle: aus = Karte frei bewegen, an = Standort folgen.
+  // Finger-Pan entriegelt ebenfalls, auch schon in der Routen-Vorschau.
   void _toggleCameraLock() {
+    if (_isCameraLocked) {
+      _unlockCameraFollow();
+      return;
+    }
     _safeSetState(() => _isCameraLocked = true);
     _recenterMap();
+  }
+
+  void _unlockCameraFollow() {
+    if (!_isCameraLocked) return;
+    _cameraAnimController?.stop();
+    _safeSetState(() => _isCameraLocked = false);
   }
 
   Future<void> _recenterMap() async {
@@ -11949,325 +11836,8 @@ class _CruiseModePageState extends State<CruiseModePage>
     unawaited(_recenterMap());
   }
 
-  // ═══════════════════════ SIMULATION ═══════════════════════════════════════
-
-  Future<void> _toggleSimulation() async {
-    if (_isSimulationRunning) {
-      _stopSimulation();
-      _safeSetState(() {});
-      return;
-    }
-    await _startSimulation();
-  }
-
-  Future<void> _startSimulation() async {
-    if (!_isSimulationEnabled) return;
-    if (_fullRouteCoordinates.length < 2) return;
-    _stopNavigationTracking();
-    _simulationIndex = 0;
-    _simulationDistanceM = 0.0;
-    _simulationDistAtIndexM = 0.0;
-    _currentRouteIndex = 0;
-    _lastDrawnRouteIndex = 0;
-    _distanceSinceLastRedraw = 0.0;
-    _totalDistanceDriven = 0;
-    _drivenTrackRecorder.reset();
-    _navigationStartTime = DateTime.now();
-    _announcedManeuverIndices.clear();
-    _activeManeuverIndex = 0;
-    // Speed-History entfernt
-    _isSimulationRunning = true;
-    // 2026-06-08 (vucko): Konstant 30 km/h (Sim-Speed, distanz-interpoliert).
-    _simulationSpeedKmh = _simulationConstantKmh;
-
-    // Initiale Route zeichnen
-    final windowEnd = _findLookAheadIndex(0, 3000);
-    _remainingRouteCoordinates = _fullRouteCoordinates.sublist(0, windowEnd);
-    final fullGeometry = {
-      'type': 'LineString',
-      'coordinates': _remainingRouteCoordinates,
-    };
-    _routeGeoJson = json.encode(fullGeometry);
-    await _drawRoute(fullGeometry, animateCamera: false);
-
-    // Simulations-Puck am Startpunkt anzeigen
-    final startCoord = _fullRouteCoordinates.first;
-    await _updateSimulationPuck(startCoord[0], startCoord[1]);
-
-    // Kamera aktivieren
-    _isCameraLocked = true;
-    await _activateNavigationCamera();
-
-    // Initiale Distanz/Zeit setzen
-    _updateRemainingDistanceAndDuration();
-    _safeSetState(() {});
-
-    _simulationTimer?.cancel();
-    _scheduleNextSimulationStep();
-  }
-
-  void _stopSimulation({bool restartLiveTracking = true}) {
-    _simulationTimer?.cancel();
-    _simulationTimer = null;
-    _isSimulationStepRunning = false;
-    _isSimulationRunning = false;
-    _removeSimulationPuck();
-    if (restartLiveTracking && _isRouteConfirmed) _startNavigationTracking();
-  }
-
-  void _scheduleNextSimulationStep() {
-    _simulationTimer?.cancel();
-    if (!_isSimulationRunning || _fullRouteCoordinates.length < 2) return;
-    final lastIndex = _fullRouteCoordinates.length - 1;
-    if (_simulationIndex >= lastIndex) return;
-
-    // Fester 50ms Intervall (20 FPS) — smooth für alle Geschwindigkeiten
-    // Die Anzahl übersprungener Punkte wird in _runSimulationStep berechnet
-    // 2026-06-10 (vucko Perf-Harness): SIM_TICK_MS macht die Sim-Kadenz
-    // konfigurierbar (z.B. 1000 = GPS-realistische 1Hz wie echtes iOS-GPS) —
-    // nur fürs Profiling, Default 50ms = bisheriges Verhalten.
-    _simulationTimer = Timer(
-      const Duration(milliseconds: _simTickMs),
-      _runSimulationStep,
-    );
-  }
-
-  static const int _simTickMs =
-      int.fromEnvironment('SIM_TICK_MS', defaultValue: 50);
-
-  Future<void> _runSimulationStep() async {
-    if (!_isSimulationRunning ||
-        _isSimulationStepRunning ||
-        _fullRouteCoordinates.length < 2 ||
-        !mounted ||
-        _disposed) {
-      return;
-    }
-    _isSimulationStepRunning = true;
-    try {
-      final lastIndex = _fullRouteCoordinates.length - 1;
-      if (_simulationIndex >= lastIndex) {
-        _stopSimulation(restartLiveTracking: false);
-        _onRouteCompleted();
-        return;
-      }
-
-      // 2026-06-08 (vucko Sim-Speed-Fix): DISTANZ-basierte Interpolation entlang
-      // der Polyline statt „mind. 1 Vertex pro Tick". GraphHopper-Vertices liegen
-      // 10–100m auseinander → der alte „1 Punkt/50ms" lief mit tausenden km/h.
-      // Jetzt: pro Tick exakt speedMs*0.05m weiter; Position WIRD im Segment
-      // interpoliert → echte konstante 30 km/h + butterweich.
-      final speedMs = _simulationSpeedKmh / 3.6;
-      _simulationDistanceM += speedMs * (_simTickMs / 1000.0); // Meter pro Tick
-
-      // Vertex-Cursor vorrücken, bis das aktuelle Segment die Ziel-Distanz enthält.
-      while (_simulationIndex < lastIndex) {
-        final a = _fullRouteCoordinates[_simulationIndex];
-        final b = _fullRouteCoordinates[_simulationIndex + 1];
-        final segLen = geo.Geolocator.distanceBetween(a[1], a[0], b[1], b[0]);
-        if (segLen <= 0) {
-          _simulationIndex++;
-          continue;
-        }
-        if (_simulationDistAtIndexM + segLen >= _simulationDistanceM) break;
-        _simulationDistAtIndexM += segLen;
-        _simulationIndex++;
-      }
-
-      if (_simulationIndex >= lastIndex) {
-        _simulationIndex = lastIndex;
-        _stopSimulation(restartLiveTracking: false);
-        _onRouteCompleted();
-        return;
-      }
-
-      final segA = _fullRouteCoordinates[_simulationIndex];
-      final segB = _fullRouteCoordinates[_simulationIndex + 1];
-      final segLen =
-          geo.Geolocator.distanceBetween(segA[1], segA[0], segB[1], segB[0]);
-      final segFrac = segLen > 0
-          ? ((_simulationDistanceM - _simulationDistAtIndexM) / segLen)
-              .clamp(0.0, 1.0)
-          : 0.0;
-      // Interpolierte Position INNERHALB des Segments (smooth, exakte Speed).
-      var current = <double>[
-        segA[0] + (segB[0] - segA[0]) * segFrac,
-        segA[1] + (segB[1] - segA[1]) * segFrac,
-      ];
-      var next = segB;
-
-      // 2026-06-08 (vucko DACH-Test): ON-ROAD-Abweichung für den Reroute-Test.
-      // Nach _simDeviateAfterMeters einmalig eine echte GraphHopper-Route quer
-      // zur Fahrtrichtung holen und abfahren (bleibt auf Straßen) → realistisches
-      // Off-Route. Endet, wenn der Abweichungs-Pfad zu Ende ist oder ein Reroute
-      // committet (dort wird _simDeviationRoute genullt).
-      if (_simDeviateEnabled &&
-          !_simDeviatedOnce &&
-          _simDeviationRoute == null &&
-          !_simDeviateRequested &&
-          _simulationDistanceM > _simDeviateAfterMeters) {
-        _simDeviateRequested = true;
-        unawaited(_fetchOnRoadDeviation(current, _userHeading));
-      }
-      final dev = _simDeviationRoute;
-      if (dev != null && dev.length >= 2) {
-        final devLast = dev.length - 1;
-        _simDeviationDistM += speedMs * 0.05;
-        while (_simDeviationIndex < devLast) {
-          final a = dev[_simDeviationIndex];
-          final b = dev[_simDeviationIndex + 1];
-          final sl = geo.Geolocator.distanceBetween(a[1], a[0], b[1], b[0]);
-          if (sl <= 0) {
-            _simDeviationIndex++;
-            continue;
-          }
-          if (_simDeviationDistAtIndexM + sl >= _simDeviationDistM) break;
-          _simDeviationDistAtIndexM += sl;
-          _simDeviationIndex++;
-        }
-        if (_simDeviationIndex >= devLast || _simDeviationDistM > 1200.0) {
-          // Abweichung endet (Pfad zu Ende ODER ~1.2km gefahren = kurzer,
-          // realistischer Falsch-Abzweig) → Sim folgt der (neuen) Route.
-          _simDeviatedOnce = true;
-          _simDeviationRoute = null;
-        } else {
-          final da = dev[_simDeviationIndex];
-          final db = dev[_simDeviationIndex + 1];
-          final dl =
-              geo.Geolocator.distanceBetween(da[1], da[0], db[1], db[0]);
-          final df = dl > 0
-              ? ((_simDeviationDistM - _simDeviationDistAtIndexM) / dl)
-                  .clamp(0.0, 1.0)
-              : 0.0;
-          current = <double>[
-            da[0] + (db[0] - da[0]) * df,
-            da[1] + (db[1] - da[1]) * df,
-          ];
-          next = db;
-        }
-      }
-
-      // Simulations-Puck auf der Karte bewegen
-      try {
-        await _updateSimulationPuck(current[0], current[1]);
-      } catch (e) {
-        debugPrint('[Sim] Puck-Update: $e');
-      }
-
-      // Location Update
-      try {
-        await _onLocationUpdate(
-          _buildSimulatedPosition(current, next, speedMs),
-        );
-      } catch (e) {
-        debugPrint('[Sim] Location-Update: $e');
-      }
-    } catch (e) {
-      debugPrint('[Sim] Simulationsschritt fehlgeschlagen: $e');
-    } finally {
-      _isSimulationStepRunning = false;
-    }
-    if (_isSimulationRunning) _scheduleNextSimulationStep();
-  }
-
-  // 2026-06-08 (vucko DACH-Test): holt eine ECHTE GraphHopper-Route quer zur
-  // Fahrtrichtung als On-Road-Abweichungs-Pfad (nur SIM_DEVIATE). So bleibt der
-  // Test-Puck auf Straßen statt geradeaus ins Gelände zu fahren.
-  Future<void> _fetchOnRoadDeviation(List<double> from, double headingDeg) async {
-    try {
-      // 2026-06-08 (vucko): Abweichungs-Ziel NACH AUSSEN (weg vom Routen-
-      // Schwerpunkt), nicht senkrecht — sonst kürzt die Abweichung bei dünnen
-      // Schleifen zur Gegenseite ab und der Reroute rejoint 60km voraus. Außen =
-      // der Puck verlässt die Schleife → Reroute rejoint nahe der Abzweigung.
-      double cLat = 0, cLng = 0;
-      final n = _fullRouteCoordinates.length;
-      for (final c in _fullRouteCoordinates) {
-        cLng += c[0];
-        cLat += c[1];
-      }
-      cLat /= n;
-      cLng /= n;
-      var mLat = (from[1] - cLat) * 111000.0;
-      var mLng = (from[0] - cLng) * 75000.0;
-      final mag = math.sqrt(mLat * mLat + mLng * mLng);
-      if (mag < 1.0) {
-        // Puck ~im Zentrum → Fallback senkrecht.
-        final perpRad = (headingDeg + 90.0) * math.pi / 180.0;
-        mLat = math.cos(perpRad);
-        mLng = math.sin(perpRad);
-      } else {
-        mLat /= mag;
-        mLng /= mag;
-      }
-      const outM = 900.0; // ~0.9 km nach außen
-      final destLat = from[1] + (mLat * outM) / 111000.0;
-      final destLng = from[0] + (mLng * outM) / 75000.0;
-      final res = await _routeService.generatePointToPoint(
-        startPosition: geo.Position(
-          latitude: from[1],
-          longitude: from[0],
-          timestamp: DateTime.now(),
-          accuracy: 5,
-          altitude: 0,
-          altitudeAccuracy: 0,
-          heading: 0,
-          headingAccuracy: 0,
-          speed: 0,
-          speedAccuracy: 0,
-        ),
-        destinationLat: destLat,
-        destinationLng: destLng,
-        mode: 'Standard',
-        scenic: false,
-        routeVariant: 0,
-        avoidHighways: true,
-        forceAcceptDirect: true,
-        subscriptionTier: 'premium',
-      );
-      if (!_disposed && res.coordinates.length >= 2) {
-        _simDeviationRoute = res.coordinates;
-        _simDeviationIndex = 0;
-        _simDeviationDistM = 0.0;
-        _simDeviationDistAtIndexM = 0.0;
-        debugPrint('[SIMDEV] ON-ROAD Abweichung gesetzt: '
-            '${res.coordinates.length} Punkte, '
-            '${res.distanceKm?.toStringAsFixed(1)} km');
-      } else {
-        _simDeviatedOnce = true;
-      }
-    } catch (e) {
-      debugPrint('[SIMDEV] Abweichung-Fetch fehlgeschlagen: $e');
-      _simDeviatedOnce = true;
-    }
-  }
-
-  Future<void> _updateSimulationPuck(double lng, double lat) async {
-    // Simulation deaktiviert — Puck nicht mehr anzeigen
-  }
-
-  Future<void> _removeSimulationPuck() async {
-    // Simulation deaktiviert
-  }
-
-  geo.Position _buildSimulatedPosition(
-    List<double> current,
-    List<double> next,
-    double speedMs,
-  ) {
-    final heading = calculateBearing(current[1], current[0], next[1], next[0]);
-    return geo.Position(
-      longitude: current[0],
-      latitude: current[1],
-      timestamp: DateTime.now(),
-      accuracy: 5,
-      altitude: 0,
-      heading: heading,
-      speed: speedMs,
-      speedAccuracy: 1,
-      altitudeAccuracy: 0,
-      headingAccuracy: 5,
-    );
-  }
+  // Fahrsimulator entfernt. Navigation nutzt nur echte GPS-Updates.
+  void _stopSimulation({bool restartLiveTracking = true}) {}
 
   // ═══════════════════════ ROUTE COMPLETION ═════════════════════════════════
 
