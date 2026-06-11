@@ -66,6 +66,11 @@ class _HomePageState extends State<HomePage> {
     // 2026-06-03 (vucko): DACH automatisch offline laden (User-Wunsch) — nur
     // über WLAN, resumierbar, im Hintergrund. Sobald lokal, rendert MapLibre die
     // ganze DACH-Karte ohne Netz. Deaktivieren via MapStyleService.autoDownloadEnabled.
+    // 2026-06-11 (vucko Karten-Selbstheilung): EINMALIG die lokale
+    // dach.pmtiles auf Defekte pruefen (Magic-Header + Groesse vs. Server) —
+    // eine fehlerhaft geladene Karte (User sieht Mapbox-Fallback/kaputte
+    // Tiles) wird geloescht und automatisch neu heruntergeladen.
+    await MapStyleService.instance.verifyLocalDachIntegrityOnce();
     unawaited(MapStyleService.instance.maybeAutoDownloadDach());
     // 2026-06-05 (vucko): refreshRemoteStyle entfernt — das Bundle ist die
     // Single Source of Truth (Style-Änderungen greifen sofort, besser offline).
@@ -74,6 +79,10 @@ class _HomePageState extends State<HomePage> {
       // (self-hosted CDN wenn erreichbar, sonst Mapbox-Fallback) — DANN cachen,
       // damit die Tiles im richtigen (quell-getrennten) Ordner landen.
       await OfflineMapService.instance.refreshTileSourceHealth();
+      // 2026-06-11 (vucko Karten-Selbstheilung): EINMALIG alte Mapbox-Tiles
+      // und korrupte Kacheln entfernen — der Pre-Warm direkt darunter laedt
+      // die Karte dann automatisch frisch von unserer Quelle neu.
+      await OfflineMapService.instance.runOneTimeCacheMigrationIfNeeded();
       await OfflineMapService.instance.ensureStyleCached();
       double lat = OfflineMapService.defaultHomeLat;
       double lng = OfflineMapService.defaultHomeLng;

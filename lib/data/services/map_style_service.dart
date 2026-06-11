@@ -5,7 +5,9 @@ import 'dart:io';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart' show rootBundle;
+import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 /// Baut den MapLibre-Style und verwaltet die OFFLINE-DACH-PMTiles.
 ///
@@ -114,6 +116,76 @@ class MapStyleService {
     return File('${mapDir.path}/$_localFileName');
   }
 
+  /// 2026-06-11 (vucko Karten-Selbstheilung): EINMALIGER Integritäts-Check der
+  /// lokalen dach.pmtiles. Problem: [isDachDownloaded] prüft nur die GRÖSSE —
+  /// eine korrupt heruntergeladene Datei (Resume-Lücke, Server-Wechsel waehrend
+  /// des Downloads, defekter Block) gilt als „fertig", die Karte rendert dann
+  /// dauerhaft fehlerhaft bzw. faellt auf den alten Mapbox-Raster-Look zurueck.
+  /// Heilung: (1) PMTiles-Magic-Header pruefen, (2) wenn Netz da: lokale Groesse
+  /// gegen die Server-Datei (HEAD Content-Length) — kleiner = unvollstaendig.
+  /// Bei Defekt wird die Datei geloescht und der bewaehrte Auto-Download
+  /// (NUR WLAN, resumierbar, graceful) laedt sie automatisch EINMALIG neu.
+  /// Das Erledigt-Flag wird nur gesetzt, wenn die Pruefung lief — so heilt ein
+  /// Offline-Start sich beim naechsten Start mit Netz selbst.
+  Future<void> verifyLocalDachIntegrityOnce() async {
+    const flagKey = 'dach_pmtiles_integrity_v1_done';
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (prefs.getBool(flagKey) == true) return;
+      final f = await _localFile();
+      if (!await f.exists()) {
+        // Nichts zu heilen — der normale Download-Pfad uebernimmt.
+        await prefs.setBool(flagKey, true);
+        return;
+      }
+      final localLen = await f.length();
+      var healthy = localLen >= _minValidBytes;
+      // PMTiles-v3-Dateien beginnen mit dem ASCII-Magic "PMTiles".
+      if (healthy) {
+        final raf = await f.open();
+        try {
+          final head = await raf.read(7);
+          healthy = head.length == 7 && String.fromCharCodes(head) == 'PMTiles';
+        } finally {
+          await raf.close();
+        }
+      }
+      var remoteChecked = false;
+      if (healthy) {
+        try {
+          final res = await http
+              .head(Uri.parse(_downloadUrl))
+              .timeout(const Duration(seconds: 5));
+          final remoteLen =
+              int.tryParse(res.headers['content-length'] ?? '') ?? 0;
+          if (res.statusCode >= 200 && res.statusCode < 300 && remoteLen > 0) {
+            remoteChecked = true;
+            // Kleiner als der Server = unvollstaendiger Download.
+            if (localLen < remoteLen) healthy = false;
+          }
+        } catch (_) {
+          // Kein Netz: Magic-+Groessen-Check muessen reichen; Flag bleibt
+          // ungesetzt, damit der naechste Start mit Netz voll prueft.
+        }
+      }
+      if (!healthy) {
+        await f.delete();
+        debugPrint(
+          '[MapStyle] Integritaets-Check: defekte/unvollstaendige dach.pmtiles '
+          'geloescht — automatischer Neu-Download startet (WLAN)',
+        );
+        // Kein eigener Download-Anstoss: der Pre-Warm ruft direkt nach diesem
+        // Check maybeAutoDownloadDach() — ein zweiter Aufruf hier erzeugte
+        // einen Doppel-Download (Live-Test-Befund).
+        await prefs.setBool(flagKey, true);
+      } else if (remoteChecked) {
+        await prefs.setBool(flagKey, true);
+      }
+    } catch (e) {
+      debugPrint('[MapStyle] Integritaets-Check uebersprungen: $e');
+    }
+  }
+
   /// Liegt die vollständige DACH-PMTiles lokal vor?
   Future<bool> isDachDownloaded() async {
     try {
@@ -196,8 +268,14 @@ class MapStyleService {
     void Function(int received, int total)? onProgress,
   }) async {
     if (_downloadInProgress) return false;
-    if (await isDachDownloaded()) return true;
+    // 2026-06-11 (vucko): Flag SOFORT setzen — vorher lag ein await zwischen
+    // Guard und Set, zwei zeitgleiche Aufrufer (Integritaets-Check + Pre-Warm)
+    // konnten BEIDE durchrutschen und parallel in dieselbe .part schreiben.
     _downloadInProgress = true;
+    if (await isDachDownloaded()) {
+      _downloadInProgress = false;
+      return true;
+    }
     final target = await _localFile();
     final part = File('${target.path}.part');
     final client = HttpClient();

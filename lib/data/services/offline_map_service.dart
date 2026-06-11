@@ -9,6 +9,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:vector_map_tiles_pmtiles/vector_map_tiles_pmtiles.dart';
 
 class OfflineTile {
@@ -230,6 +231,73 @@ class OfflineMapService {
           unawaited(refreshTileSourceHealth());
         }));
       }
+    }
+  }
+
+  /// 2026-06-11 (vucko Karten-Selbstheilung): Einmalige Cache-Migration beim
+  /// App-Start. Bestands-User koennen noch ALTE Mapbox-Tiles im Cache haben
+  /// (Quelle vor dem Wechsel auf unsere eigene Karte) oder fehlerhaft
+  /// geladene Kacheln (0-Byte-/Mini-Dateien von abgebrochenen Downloads).
+  /// Ablauf: (1) alten mapbox_dark_v11-Ordner restlos loeschen, (2) eigenen
+  /// Cache von korrupten Kacheln befreien (<=128 Bytes, gleiche Schwelle wie
+  /// der Health-Check), (3) DACH-Uebersichts-Flag zuruecksetzen, damit der
+  /// regulaere Pre-Warm direkt danach ALLES frisch von unserer Quelle laedt.
+  /// Das Erledigt-Flag wird NUR gesetzt, wenn unsere Quelle erreichbar war —
+  /// ein Offline-Start versucht die Migration beim naechsten Start erneut.
+  Future<void> runOneTimeCacheMigrationIfNeeded() async {
+    if (kIsWeb) return;
+    const flagKey = 'offline_map_cache_migration_v2_done';
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (prefs.getBool(flagKey) == true) return;
+      final base = await getApplicationSupportDirectory();
+      var cleaned = false;
+      // 1. Falls eine eigene Raster-Quelle aktiv ist: alte Mapbox-Tiles
+      //    restlos entfernen (sonst ist der Mapbox-Ordner der aktive
+      //    Fallback-Cache und bleibt bewusst stehen).
+      if (isSelfHostedActive) {
+        final legacyDir =
+            Directory('${base.path}/offline_tiles/mapbox_dark_v11');
+        if (await legacyDir.exists()) {
+          await legacyDir.delete(recursive: true);
+          cleaned = true;
+          debugPrint(
+              '[OfflineMap] Migration: alter Mapbox-Tile-Cache geloescht');
+        }
+      }
+      // 2. Korrupte Kacheln (0-Byte-/Mini-Dateien von abgebrochenen
+      //    Downloads) im AKTIVEN Cache-Ordner aufraeumen — der laufende
+      //    Verify/Repair-Mechanismus laedt sie danach automatisch nach.
+      final activeDir =
+          Directory('${base.path}/offline_tiles/$activeTileSourceId');
+      var removed = 0;
+      if (await activeDir.exists()) {
+        await for (final entity
+            in activeDir.list(recursive: true, followLinks: false)) {
+          if (entity is! File) continue;
+          try {
+            if (await entity.length() <= 128) {
+              await entity.delete();
+              removed++;
+            }
+          } catch (_) {
+            // Einzelne unleserliche Datei blockiert die Migration nicht.
+          }
+        }
+      }
+      if (removed > 0) {
+        cleaned = true;
+        debugPrint('[OfflineMap] Migration: $removed korrupte Kacheln entfernt');
+      }
+      // 3. Wurde aufgeraeumt: DACH-Uebersicht neu laden lassen (deren
+      //    Einmal-Flag zeigt sonst auf geloeschte/alte Kacheln).
+      if (cleaned) {
+        await prefs.remove('offline_map_dach_overview_v1');
+      }
+      await prefs.setBool(flagKey, true);
+      debugPrint('[OfflineMap] Migration abgeschlossen (cleaned=$cleaned)');
+    } catch (e) {
+      debugPrint('[OfflineMap] Cache-Migration uebersprungen: $e');
     }
   }
 
