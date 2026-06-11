@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 
-import 'package:cruise_connect/core/constants.dart';
 import 'package:cruise_connect/data/services/map_cache_status.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
@@ -52,34 +51,20 @@ class OfflineMapService {
   OfflineMapService._();
   static final OfflineMapService instance = OfflineMapService._();
 
-  static const String mapboxDarkTileUrlTemplate =
-      'https://api.mapbox.com/styles/v1/mapbox/dark-v11/tiles/256/{z}/{x}/{y}?access_token={accessToken}';
-
   // 2026-06-02 (vucko): Unsere gerasterten Cruise-Dark-Tiles (z6–12) aus R2 —
-  // dieselbe Quelle wie CarPlay, laden zuverlässig als einzelne PNGs. Ersetzt
-  // den Mapbox-Raster-Fallback im Phone-Map-Widget, damit der User IMMER unseren
-  // eigenen Dark-Look sieht (nie die graue Mapbox-Karte), auch wenn die Vektor-
-  // PMTiles gerade nicht laden.
+  // dieselbe Quelle wie CarPlay, laden zuverlässig als einzelne PNGs.
   static const String cruiseRasterTileUrl =
       'https://tiles.cruiseconnector.at/raster/{z}/{x}/{y}.png';
 
-  // 2026-06-01 (vucko): Self-hosted Tile-Quelle (Raster-Tiles aus einer
-  // PMTiles-Datei auf einem CDN), um die teuren Mapbox-Tile-Requests abzulösen.
-  //
-  //   null  → AUS. Es wird ausschließlich Mapbox genutzt (kein Verhaltenswechsel).
-  //   gesetzt → sobald der Health-Check die URL als erreichbar meldet, liefert
-  //             activeTileUrlTemplate die self-hosted URL. Fällt sie aus,
-  //             schaltet es AUTOMATISCH auf Mapbox zurück (Fallback).
-  //
-  // Format wie Mapbox: 'https://<cdn>/{z}/{x}/{y}.png' (256px, dark-Style nahe
-  // CARTO Dark / Mapbox-dark). Kein {accessToken} nötig.
-  static const String? selfHostedTileUrlTemplate = null;
+  // 2026-06-11: Fail-closed auf unsere eigenen Raster-Tiles. Es gibt bewusst
+  // keinen externen Tile-Fallback mehr, damit ein Ausfall keine Kosten erzeugt.
+  static const String selfHostedTileUrlTemplate = cruiseRasterTileUrl;
 
   // 2026-06-02 (vucko): Self-hosted VEKTOR-Tiles (PMTiles auf Cloudflare R2).
   // Eine Datei, per HTTP-Range gestreamt — löst die teuren Mapbox-Tile-Requests
   // ab. Wird clientseitig im Dark-Style gerendert (vector_map_tiles_pmtiles).
-  // Bei Lade-/Render-Fehler nutzt die App weiter den Mapbox-Raster-Layer.
-  // Leeren String setzen, um die Vektor-Quelle abzuschalten (→ Mapbox-Raster).
+  // Bei Lade-/Render-Fehler nutzt die App die eigenen CruiseConnect-Raster-Tiles.
+  // Leeren String setzen, um die Vektor-Quelle abzuschalten.
   static const String selfHostedPmtilesUrl =
       'https://tiles.cruiseconnector.at/dach.pmtiles';
 
@@ -95,12 +80,12 @@ class OfflineMapService {
   bool _worldPmtilesLoading = false;
 
   /// Lädt den PMTiles-Vektor-Provider (gecacht, MIT Retry). `null` = nicht
-  /// verfügbar (leere URL, Web oder nach mehreren Fehlversuchen) → Mapbox-Raster.
+  /// verfügbar (leere URL, Web oder nach mehreren Fehlversuchen) → Raster-Layer.
   ///
   /// 2026-06-02 (vucko): Retry-Logik. Vorher genau EIN Versuch — schlug der
   /// initiale Range-Request (r2.dev-Hänger / Cold-Start / kurze Drosselung)
   /// fehl, blieb der Provider für die GANZE Session null → das Handy fiel auf
-  /// Mapbox-Raster zurück (User sah „mal unsere Karte, mal Mapbox"). Jetzt
+  /// Raster zurück. Jetzt
   /// 4 Versuche mit Backoff; bei komplettem Fehlschlag darf ein späterer Aufruf
   /// erneut probieren (kein permanentes Aufgeben).
   Future<PmTilesVectorTileProvider?> loadPmtilesProvider() async {
@@ -114,16 +99,25 @@ class OfflineMapService {
       // Provider die GANZE Session null → stale Raster-Fallback (= die hellen
       // „Spotlights") die ganze Zeit. Mehr/geduldigere Versuche → der saubere
       // Vektor-Layer greift zuverlässiger, der Fallback erscheint seltener.
-      for (var attempt = 1; attempt <= 8 && _pmtilesProvider == null; attempt++) {
+      for (
+        var attempt = 1;
+        attempt <= 8 && _pmtilesProvider == null;
+        attempt++
+      ) {
         try {
-          _pmtilesProvider =
-              await PmTilesVectorTileProvider.fromSource(selfHostedPmtilesUrl);
+          _pmtilesProvider = await PmTilesVectorTileProvider.fromSource(
+            selfHostedPmtilesUrl,
+          );
           if (kDebugMode) {
-            debugPrint('[OfflineMap] PMTiles-Vektorquelle geladen (Versuch $attempt).');
+            debugPrint(
+              '[OfflineMap] PMTiles-Vektorquelle geladen (Versuch $attempt).',
+            );
           }
         } catch (e) {
           if (kDebugMode) {
-            debugPrint('[OfflineMap] PMTiles Versuch $attempt/8 fehlgeschlagen: $e');
+            debugPrint(
+              '[OfflineMap] PMTiles Versuch $attempt/8 fehlgeschlagen: $e',
+            );
           }
           if (attempt < 8) {
             await Future<void>.delayed(Duration(milliseconds: 500 * attempt));
@@ -144,19 +138,25 @@ class OfflineMapService {
     if (_worldPmtilesLoading) return null;
     _worldPmtilesLoading = true;
     try {
-      for (var attempt = 1;
-          attempt <= 4 && _worldPmtilesProvider == null;
-          attempt++) {
+      for (
+        var attempt = 1;
+        attempt <= 4 && _worldPmtilesProvider == null;
+        attempt++
+      ) {
         try {
           _worldPmtilesProvider = await PmTilesVectorTileProvider.fromSource(
             selfHostedWorldPmtilesUrl,
           );
           if (kDebugMode) {
-            debugPrint('[OfflineMap] Welt-PMTiles-Quelle geladen (Versuch $attempt).');
+            debugPrint(
+              '[OfflineMap] Welt-PMTiles-Quelle geladen (Versuch $attempt).',
+            );
           }
         } catch (e) {
           if (kDebugMode) {
-            debugPrint('[OfflineMap] Welt-PMTiles Versuch $attempt/4 fehlgeschlagen: $e');
+            debugPrint(
+              '[OfflineMap] Welt-PMTiles Versuch $attempt/4 fehlgeschlagen: $e',
+            );
           }
           if (attempt < 4) {
             await Future<void>.delayed(Duration(milliseconds: 400 * attempt));
@@ -173,24 +173,20 @@ class OfflineMapService {
   int _selfHostedErrorStreak = 0;
   bool _healthRecheckScheduled = false;
 
-  /// self-hosted Quelle aktiv = konfiguriert UND zuletzt als erreichbar geprüft.
-  bool get isSelfHostedActive =>
-      selfHostedTileUrlTemplate != null && _selfHostedHealthy;
+  /// Self-hosted Quelle ist die einzige Runtime-Quelle. Health steuert nur UI.
+  bool get isSelfHostedActive => true;
 
-  /// Aktive Tile-URL: self-hosted wenn gesund, sonst Mapbox (Auto-Fallback).
-  String get activeTileUrlTemplate =>
-      isSelfHostedActive ? selfHostedTileUrlTemplate! : mapboxDarkTileUrlTemplate;
+  /// Aktive Tile-URL: ausschließlich CruiseConnect-Raster-Tiles.
+  String get activeTileUrlTemplate => selfHostedTileUrlTemplate;
 
-  /// Quell-ID → getrennter Cache-Ordner + TileLayer-Key, damit sich die
-  /// Styles (Mapbox vs. self-hosted) im Cache nicht mischen.
-  String get activeTileSourceId =>
-      isSelfHostedActive ? 'self_hosted_dark' : 'mapbox_dark_v11';
+  /// Eigener Cache-Ordner, getrennt von alten externen Tile-Caches.
+  String get activeTileSourceId => 'cruise_raster_dark';
 
-  /// Prüft die self-hosted Quelle (ein Test-Tile). Erfolg → self-hosted aktiv,
-  /// Fehler/kein-URL → Mapbox. Beim App-Start + periodisch aufrufen.
+  /// Prüft die self-hosted Quelle (ein Test-Tile). Fehler erzeugt bewusst
+  /// keinen externen Fallback, damit Ausfälle keine Drittanbieter-Kosten machen.
   Future<void> refreshTileSourceHealth() async {
     const template = selfHostedTileUrlTemplate;
-    if (kIsWeb || template == null) {
+    if (kIsWeb) {
       _setSelfHostedHealthy(false);
       return;
     }
@@ -204,32 +200,38 @@ class OfflineMapService {
       final res = await http
           .get(Uri.parse(testUrl))
           .timeout(const Duration(seconds: 4));
-      final ok = res.statusCode >= 200 &&
+      final ok =
+          res.statusCode >= 200 &&
           res.statusCode < 300 &&
           res.bodyBytes.length > 128;
       _setSelfHostedHealthy(ok);
       if (kDebugMode) {
-        debugPrint('[OfflineMap] self-hosted Tiles health=$ok (${res.statusCode})');
+        debugPrint(
+          '[OfflineMap] self-hosted Tiles health=$ok (${res.statusCode})',
+        );
       }
     } catch (e) {
       _setSelfHostedHealthy(false);
-      if (kDebugMode) debugPrint('[OfflineMap] self-hosted health check failed: $e');
+      if (kDebugMode) {
+        debugPrint('[OfflineMap] self-hosted health check failed: $e');
+      }
     }
   }
 
-  /// Tile-Lade-Fehler melden (TileLayer.errorTileCallback). Häufen sie sich bei
-  /// aktiver self-hosted Quelle, wird automatisch auf Mapbox zurückgeschaltet.
+  /// Tile-Lade-Fehler melden (TileLayer.errorTileCallback). Es wird bewusst
+  /// nicht auf externe Provider zurückgeschaltet.
   void reportTileLoadError() {
-    if (!isSelfHostedActive) return;
     _selfHostedErrorStreak += 1;
     if (_selfHostedErrorStreak >= 6) {
       _setSelfHostedHealthy(false);
       if (!_healthRecheckScheduled) {
         _healthRecheckScheduled = true;
-        unawaited(Future<void>.delayed(const Duration(seconds: 45), () {
-          _healthRecheckScheduled = false;
-          unawaited(refreshTileSourceHealth());
-        }));
+        unawaited(
+          Future<void>.delayed(const Duration(seconds: 45), () {
+            _healthRecheckScheduled = false;
+            unawaited(refreshTileSourceHealth());
+          }),
+        );
       }
     }
   }
@@ -242,8 +244,8 @@ class OfflineMapService {
   /// Cache von korrupten Kacheln befreien (<=128 Bytes, gleiche Schwelle wie
   /// der Health-Check), (3) DACH-Uebersichts-Flag zuruecksetzen, damit der
   /// regulaere Pre-Warm direkt danach ALLES frisch von unserer Quelle laedt.
-  /// Das Erledigt-Flag wird NUR gesetzt, wenn unsere Quelle erreichbar war —
-  /// ein Offline-Start versucht die Migration beim naechsten Start erneut.
+  /// Das Erledigt-Flag wird gesetzt, sobald der alte Kosten-Cache entfernt und
+  /// der eigene Cache bereinigt wurde.
   Future<void> runOneTimeCacheMigrationIfNeeded() async {
     if (kIsWeb) return;
     const flagKey = 'offline_map_cache_migration_v2_done';
@@ -252,28 +254,25 @@ class OfflineMapService {
       if (prefs.getBool(flagKey) == true) return;
       final base = await getApplicationSupportDirectory();
       var cleaned = false;
-      // 1. Falls eine eigene Raster-Quelle aktiv ist: alte Mapbox-Tiles
-      //    restlos entfernen (sonst ist der Mapbox-Ordner der aktive
-      //    Fallback-Cache und bleibt bewusst stehen).
-      if (isSelfHostedActive) {
-        final legacyDir =
-            Directory('${base.path}/offline_tiles/mapbox_dark_v11');
-        if (await legacyDir.exists()) {
-          await legacyDir.delete(recursive: true);
-          cleaned = true;
-          debugPrint(
-              '[OfflineMap] Migration: alter Mapbox-Tile-Cache geloescht');
-        }
+      // 1. Alten externen Tile-Cache restlos entfernen.
+      final legacyDir = Directory('${base.path}/offline_tiles/mapbox_dark_v11');
+      if (await legacyDir.exists()) {
+        await legacyDir.delete(recursive: true);
+        cleaned = true;
+        debugPrint('[OfflineMap] Migration: alter Tile-Cache geloescht');
       }
       // 2. Korrupte Kacheln (0-Byte-/Mini-Dateien von abgebrochenen
       //    Downloads) im AKTIVEN Cache-Ordner aufraeumen — der laufende
       //    Verify/Repair-Mechanismus laedt sie danach automatisch nach.
-      final activeDir =
-          Directory('${base.path}/offline_tiles/$activeTileSourceId');
+      final activeDir = Directory(
+        '${base.path}/offline_tiles/$activeTileSourceId',
+      );
       var removed = 0;
       if (await activeDir.exists()) {
-        await for (final entity
-            in activeDir.list(recursive: true, followLinks: false)) {
+        await for (final entity in activeDir.list(
+          recursive: true,
+          followLinks: false,
+        )) {
           if (entity is! File) continue;
           try {
             if (await entity.length() <= 128) {
@@ -287,7 +286,9 @@ class OfflineMapService {
       }
       if (removed > 0) {
         cleaned = true;
-        debugPrint('[OfflineMap] Migration: $removed korrupte Kacheln entfernt');
+        debugPrint(
+          '[OfflineMap] Migration: $removed korrupte Kacheln entfernt',
+        );
       }
       // 3. Wurde aufgeraeumt: DACH-Uebersicht neu laden lassen (deren
       //    Einmal-Flag zeigt sonst auf geloeschte/alte Kacheln).
@@ -314,10 +315,10 @@ class OfflineMapService {
     _inflightTileFetches.clear();
   }
 
-  /// 2026-05-28 (vucko Task #70): Mapbox-Dark-V11-Hintergrundfarbe.
+  /// 2026-05-28 (vucko Task #70): Dunkle Karten-Hintergrundfarbe.
   /// Wird als TileLayer.backgroundColor + tileBuilder-Container verwendet
   /// damit Pan-Lücken nicht weiß sondern in Map-Style erscheinen.
-  static const Color mapboxDarkBackground = Color(0xFF0E1216);
+  static const Color cruiseDarkBackground = Color(0xFF0E1216);
 
   static const int defaultMinZoom = 10;
   // 2026-05-25 (vucko): Route-Cache maxZoom 17 statt 16 für scharfere Live-
@@ -600,8 +601,7 @@ class OfflineMapService {
       '[OfflineMap] DACH overview cache: requested=${tiles.length} '
       'downloaded=$downloaded existing=$existing failed=$failed',
     );
-    // Faustregel: Mapbox-Tile ~12 KB im Schnitt (Dark-V11 style). Real
-    // measured ~9-14 KB. Wir runden auf 12 KB pro Tile.
+    // Faustregel: CruiseConnect-Raster-Tile ~12 KB im Schnitt.
     final approxSizeMb = ((downloaded + existing) * 12) ~/ 1024;
     // 2026-05-28 (vucko Task #69): NACH dem ersten Pass automatisch
     // verify+repair laufen lassen — fängt die Connection-Reset-Fehler ab
@@ -650,7 +650,7 @@ class OfflineMapService {
   /// 2026-05-28 (vucko Task #69): Verifiziert dass alle DACH-Overview-Tiles
   /// wirklich auf der Disk liegen — und repariert fehlende automatisch.
   ///
-  /// Problem das das löst: Mapbox-Server hat ab und zu Connection-Resets
+  /// Problem das das löst: Tile-Server/Netz kann Connection-Resets liefern
   /// (sieht man in `http: connection closed before full header was received`),
   /// einzelne Tiles fallen durch obwohl der Download-Pass als „completed"
   /// (>90% success) markiert wurde. Diese Methode:
@@ -665,12 +665,14 @@ class OfflineMapService {
   /// [onProgress] wird mit (done, total) für Settings-UI gefeuert während
   /// der Repair-Phase läuft.
   Future<({int total, int ok, int repairedNow, int stillMissing})>
-      verifyAndRepairDachOverview({
+  verifyAndRepairDachOverview({
     void Function(int done, int total)? onProgress,
   }) async {
     if (kIsWeb) return (total: 0, ok: 0, repairedNow: 0, stillMissing: 0);
     final directory = await _resolveTileCacheDirectory();
-    if (directory == null) return (total: 0, ok: 0, repairedNow: 0, stillMissing: 0);
+    if (directory == null) {
+      return (total: 0, ok: 0, repairedNow: 0, stillMissing: 0);
+    }
     final expected = _tilesForBbox(
       southLat: dachBboxSouthLat,
       westLng: dachBboxWestLng,
@@ -711,7 +713,12 @@ class OfflineMapService {
         totalTiles: expected.length,
         approxSizeMb: (okCount * 12) ~/ 1024,
       );
-      return (total: expected.length, ok: okCount, repairedNow: 0, stillMissing: 0);
+      return (
+        total: expected.length,
+        ok: okCount,
+        repairedNow: 0,
+        stillMissing: 0,
+      );
     }
     // 2. Repair-Pass: fehlende mit höherem Timeout + 3 Retries nachladen.
     MapCacheStatus.instance.markStarted(totalTiles: expected.length);
@@ -719,16 +726,14 @@ class OfflineMapService {
     var repairedNow = 0;
     final client = http.Client();
     try {
-      const batchSize = 4; // kleiner Batch, längeres Timeout — fairer zu Mapbox
+      const batchSize = 4; // kleiner Batch, längeres Timeout — fairer zum Tile-CDN
       for (var i = 0; i < missing.length; i += batchSize) {
         final batch = missing.skip(i).take(batchSize);
         final outcomes = await Future.wait(
-          batch.map((tile) => _cacheTileWithRetry(
-                client,
-                directory,
-                tile,
-                maxRetries: 3,
-              )),
+          batch.map(
+            (tile) =>
+                _cacheTileWithRetry(client, directory, tile, maxRetries: 3),
+          ),
         );
         for (final outcome in outcomes) {
           if (outcome == _TileCacheOutcome.downloaded ||
@@ -808,9 +813,7 @@ class OfflineMapService {
         // Bei Connection-Reset: kurzes Backoff dann Retry.
       }
       if (attempt < maxRetries) {
-        await Future<void>.delayed(
-          Duration(milliseconds: 200 + attempt * 350),
-        );
+        await Future<void>.delayed(Duration(milliseconds: 200 + attempt * 350));
       }
     }
     return _TileCacheOutcome.failed;
@@ -826,9 +829,11 @@ class OfflineMapService {
     if (directory == null) return 0;
     var deleted = 0;
     try {
-      for (var zoom = dachOverviewMinZoom;
-          zoom <= dachOverviewMaxZoom;
-          zoom += 1) {
+      for (
+        var zoom = dachOverviewMinZoom;
+        zoom <= dachOverviewMaxZoom;
+        zoom += 1
+      ) {
         final zoomDir = Directory('${directory.path}/$zoom');
         if (await zoomDir.exists()) {
           await for (final entity in zoomDir.list(recursive: true)) {
@@ -974,7 +979,7 @@ class OfflineMapService {
     final tiles = <OfflineTile>{};
     // 2026-05-25 (vucko): Bewusst breiterer Korridor um die Route. So sind
     // beim Off-Route (User fährt 300-500m abseits) die Tiles schon im Cache
-    // → Mapbox-Map bleibt sichtbar + Reroute kann visualisiert werden ohne
+    // → Karte bleibt sichtbar + Reroute kann visualisiert werden ohne
     // dass leere graue Tiles erscheinen.
     for (var zoom = minZoom; zoom <= maxZoom; zoom += 1) {
       // Korridor-Ring abhängig vom Zoom:
@@ -985,10 +990,10 @@ class OfflineMapService {
       final ring = zoom <= 11
           ? 0
           : zoom <= 13
-              ? 1
-              : zoom <= 15
-                  ? 2
-                  : 3;
+          ? 1
+          : zoom <= 15
+          ? 2
+          : 3;
       for (final coordinate in sampled) {
         final tile = _tileForCoordinate(coordinate, zoom);
         for (var dx = -ring; dx <= ring; dx += 1) {
@@ -1048,8 +1053,9 @@ class OfflineMapService {
       final base = await getApplicationSupportDirectory();
       // 2026-06-01 (vucko): Ordner pro Quelle (mapbox_dark_v11 / self_hosted_dark)
       // → kein Style-Mix im Cache beim Umschalten.
-      final directory =
-          Directory('${base.path}/offline_tiles/$activeTileSourceId');
+      final directory = Directory(
+        '${base.path}/offline_tiles/$activeTileSourceId',
+      );
       await directory.create(recursive: true);
       _tileCacheDirectory = directory;
       return directory;
@@ -1063,17 +1069,13 @@ class OfflineMapService {
 
   Uri _tileUri(OfflineTile tile) => tileNetworkUri(tile);
 
-  /// 2026-06-01 (vucko): Baut die Tile-URL aus der AKTIVEN Quelle (self-hosted
-  /// oder Mapbox-Fallback). Wird sowohl vom Cache-Download als auch vom
+  /// Baut die Tile-URL aus der eigenen Quelle. Wird sowohl vom Cache-Download als auch vom
   /// [OfflineMapTileProvider] (Live-Tiles) genutzt → eine Source-of-Truth.
-  /// {accessToken} wird nur ersetzt, wenn das Template ihn enthält (Mapbox);
-  /// bei self-hosted ist es ein No-op.
   Uri tileNetworkUri(OfflineTile tile) {
     final url = activeTileUrlTemplate
         .replaceAll('{z}', tile.z.toString())
         .replaceAll('{x}', tile.x.toString())
-        .replaceAll('{y}', tile.y.toString())
-        .replaceAll('{accessToken}', AppConstants.mapboxPublicToken);
+        .replaceAll('{y}', tile.y.toString());
     return Uri.parse(url);
   }
 
@@ -1092,9 +1094,11 @@ class OfflineMapService {
     final key = '${tile.z}/${tile.x}/${tile.y}';
     if (_inflightTileFetches.contains(key)) return;
     _inflightTileFetches.add(key);
-    unawaited(_persistTileFromNetwork(tile).whenComplete(() {
-      _inflightTileFetches.remove(key);
-    }));
+    unawaited(
+      _persistTileFromNetwork(tile).whenComplete(() {
+        _inflightTileFetches.remove(key);
+      }),
+    );
   }
 
   Future<void> _persistTileFromNetwork(OfflineTile tile) async {
@@ -1103,9 +1107,9 @@ class OfflineMapService {
       if (directory == null) return;
       final file = _tileFile(directory, tile);
       if (await file.exists() && await file.length() >= 128) return;
-      final response = await http.get(_tileUri(tile)).timeout(
-        const Duration(seconds: 6),
-      );
+      final response = await http
+          .get(_tileUri(tile))
+          .timeout(const Duration(seconds: 6));
       if (response.statusCode >= 200 &&
           response.statusCode < 300 &&
           response.bodyBytes.length > 128) {
@@ -1195,9 +1199,8 @@ class OfflineMapTileProvider extends TileProvider {
     // schreiben. So fängt jedes mal-bewegen die fehlende Tiles ab und
     // beim nächsten Render ist die Datei da → kein weißes Kästchen mehr.
     _service.persistTileFromNetwork(tile);
-    // 2026-06-01 (vucko): URL aus der AKTIVEN Quelle bauen (self-hosted ODER
-    // Mapbox-Fallback) statt aus dem statischen TileLayer-Template — so greift
-    // ein Quellwechsel sofort, ohne Rebuild.
+    // 2026-06-01 (vucko): URL aus der AKTIVEN eigenen Quelle bauen statt aus
+    // dem statischen TileLayer-Template — so greift ein Quellwechsel sofort.
     return NetworkImage(
       _service.tileNetworkUri(tile).toString(),
       headers: headers.isEmpty ? null : headers,

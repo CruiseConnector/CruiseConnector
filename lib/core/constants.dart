@@ -7,7 +7,6 @@ import 'package:cruise_connect/config/secrets.dart';
 class AppConstants {
   AppConstants._();
 
-  static String get mapboxPublicToken => AppSecrets.mapboxPublicToken;
   static String get supabaseUrl => AppSecrets.supabaseUrl;
   static String get supabaseAnonKey => AppSecrets.supabaseAnonKey;
 }

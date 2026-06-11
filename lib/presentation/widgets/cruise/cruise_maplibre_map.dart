@@ -117,8 +117,13 @@ class CruiseMapLibreController {
     if (!active) return;
     if (!_finiteLatLng(lat, lng) || (zoom != null && !zoom.isFinite)) return;
     if (!firstFrameReady) {
-      _pendingCamera = () =>
-          animateTo(lat: lat, lng: lng, zoom: zoom, bearing: bearing, duration: duration);
+      _pendingCamera = () => animateTo(
+        lat: lat,
+        lng: lng,
+        zoom: zoom,
+        bearing: bearing,
+        duration: duration,
+      );
       return;
     }
     await _map.animateCamera(
@@ -142,7 +147,8 @@ class CruiseMapLibreController {
     if (!active) return;
     if (!_finiteLatLng(lat, lng) || (zoom != null && !zoom.isFinite)) return;
     if (!firstFrameReady) {
-      _pendingCamera = () => moveTo(lat: lat, lng: lng, zoom: zoom, bearing: bearing);
+      _pendingCamera = () =>
+          moveTo(lat: lat, lng: lng, zoom: zoom, bearing: bearing);
       return;
     }
     await _map.moveCamera(
@@ -191,8 +197,9 @@ class CruiseMapLibreController {
     var zoom = math.log(viewportTiles * 360.0 / span) / math.ln2 - 0.3;
     zoom = zoom.clamp(3.0, 16.0);
     debugPrint(
-        '[CruiseMapLibre] fitBounds span=${(maxLat - minLat).toStringAsFixed(4)}x'
-        '${(maxLng - minLng).toStringAsFixed(4)} -> zoom=${zoom.toStringAsFixed(2)} pts=${points.length}');
+      '[CruiseMapLibre] fitBounds span=${(maxLat - minLat).toStringAsFixed(4)}x'
+      '${(maxLng - minLng).toStringAsFixed(4)} -> zoom=${zoom.toStringAsFixed(2)} pts=${points.length}',
+    );
     // bearing:0 → Route Nord-oben in der Übersicht (kein gedrehter Ausschnitt).
     await animateTo(
       lat: centerLat,
@@ -221,7 +228,7 @@ class CruiseMapLibreController {
 
 /// Die self-contained MapLibre-Karte für CruiseConnect.
 ///
-/// Rendert die Mapbox-Dark-Basis (GPU, korrekt — kein vector_tile_renderer),
+/// Rendert die Cruise-Dark-Basis (GPU, korrekt — kein vector_tile_renderer),
 /// Routen als GL-Linien und Marker als projizierte Flutter-Overlays.
 class CruiseMapLibreMap extends StatefulWidget {
   const CruiseMapLibreMap({
@@ -354,12 +361,34 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
   // Zoom-abhängige Breiten: sichtbar, aber schlank. Casing ~1,5× = dunkler Rand.
   // 2026-06-09 (vucko): nochmal 20% dünner (×0.8) — war „sehr dick".
   static const List<dynamic> _casingWidth = <dynamic>[
-    'interpolate', <dynamic>['linear'], <dynamic>['zoom'],
-    10, 4.8, 14, 8.8, 16, 11.6, 18, 16.0, 22, 24.0,
+    'interpolate',
+    <dynamic>['linear'],
+    <dynamic>['zoom'],
+    10,
+    4.8,
+    14,
+    8.8,
+    16,
+    11.6,
+    18,
+    16.0,
+    22,
+    24.0,
   ];
   static const List<dynamic> _fillWidth = <dynamic>[
-    'interpolate', <dynamic>['linear'], <dynamic>['zoom'],
-    10, 3.2, 14, 5.6, 16, 7.6, 18, 10.4, 22, 15.2,
+    'interpolate',
+    <dynamic>['linear'],
+    <dynamic>['zoom'],
+    10,
+    3.2,
+    14,
+    5.6,
+    16,
+    7.6,
+    18,
+    10.4,
+    22,
+    15.2,
   ];
   String _lastActiveSig = '';
   String _lastDrivenSig = '';
@@ -368,6 +397,7 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
   // onStyleLoaded, solange Renderer/Tiles noch nicht idle sind (sonst Throw).
   bool _firstFrameSynced = false;
   Timer? _initialSyncFallback;
+
   /// Signatur der zuletzt gezeichneten Linien — _syncLines (teures clearLines+
   /// addLine = voller GeoJSON-Source-Rebuild) läuft NUR bei echter Geometrie-
   /// Änderung, nicht bei jedem Parent-Rebuild/GPS-Tick (Task #4 Lag).
@@ -393,6 +423,18 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
   Offset? _pointerDownPos;
   bool _userPanFired = false;
 
+  void _notifyUserCameraGesture() {
+    if (_userPanFired) return;
+    _userPanFired = true;
+    widget.onCameraMoved?.call();
+  }
+
+  void _handleMapControllerChanged() {
+    final map = _map;
+    if (_pointerDownPos == null || map == null || !map.isCameraMoving) return;
+    _notifyUserCameraGesture();
+  }
+
   @override
   void initState() {
     super.initState();
@@ -403,7 +445,9 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
     VisibilityDetectorController.instance.updateInterval = Duration.zero;
     // Style via Service bauen: nutzt automatisch die LOKALEN PMTiles, wenn DACH
     // offline geladen wurde — sonst remote von R2.
-    MapStyleService.instance.buildStyleString(asset: widget.styleAsset).then((s) {
+    MapStyleService.instance.buildStyleString(asset: widget.styleAsset).then((
+      s,
+    ) {
       if (mounted) setState(() => _style = s);
     });
   }
@@ -413,6 +457,7 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
     WidgetsBinding.instance.removeObserver(this);
     _initialSyncFallback?.cancel();
     _initialSyncFallback = null;
+    _map?.removeListener(_handleMapControllerChanged);
     _ctrl?.active = false;
     _markerScreen.dispose();
     super.dispose();
@@ -469,7 +514,8 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
       b.write(pts.length);
       if (pts.isNotEmpty) {
         void w(ll.LatLng p) => b.write(
-            '${p.latitude.toStringAsFixed(5)},${p.longitude.toStringAsFixed(5)};');
+          '${p.latitude.toStringAsFixed(5)},${p.longitude.toStringAsFixed(5)};',
+        );
         b.write('|');
         w(pts.first);
         if (pts.length > 3) {
@@ -484,7 +530,9 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
   }
 
   Future<void> _onMapCreated(mb.MapLibreMapController c) async {
+    _map?.removeListener(_handleMapControllerChanged);
     _map = c;
+    _map?.addListener(_handleMapControllerChanged);
     _ctrl = CruiseMapLibreController._(c);
     // 2026-06-08 (vucko Kamera-Fix): Wird der Controller NACH dem ersten Sync neu
     // erzeugt (z. B. Plattform-View-Rebuild), den Frame-Ready-Zustand übertragen —
@@ -556,7 +604,9 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
     // geprobt. Damit ist die size-0-Altitude-Rechnung (NaN → nativer
     // LatLng-Throw → SIGABRT) konstruktiv unerreichbar.
     _initialSyncFallback?.cancel();
-    _initialSyncFallback = Timer.periodic(const Duration(milliseconds: 700), (t) {
+    _initialSyncFallback = Timer.periodic(const Duration(milliseconds: 700), (
+      t,
+    ) {
       if (!mounted || _firstFrameSynced) {
         t.cancel();
         return;
@@ -760,8 +810,12 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
     final map = _map;
     if (map == null) return false;
     try {
-      final cam = map.cameraPosition?.target ??
-          mb.LatLng(widget.initialCenter.latitude, widget.initialCenter.longitude);
+      final cam =
+          map.cameraPosition?.target ??
+          mb.LatLng(
+            widget.initialCenter.latitude,
+            widget.initialCenter.longitude,
+          );
       final p = await map.toScreenLocation(cam);
       final x = p.x.toDouble();
       final y = p.y.toDouble();
@@ -783,8 +837,10 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
       // 10 byte-identische Reports 5.–10. Juni). Kein Beweis → Abbruch;
       // der 700ms-Wächter-Timer und jedes weitere Idle-Event proben erneut.
       if (!await _nativeViewHasSize()) {
-        debugPrint('[CruiseMapLibre] native View noch ohne Größe — '
-            'Kamera-Gate bleibt zu, nächste Probe folgt');
+        debugPrint(
+          '[CruiseMapLibre] native View noch ohne Größe — '
+          'Kamera-Gate bleibt zu, nächste Probe folgt',
+        );
         return;
       }
       if (_firstFrameSynced) return;
@@ -911,10 +967,10 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
       });
     }
     try {
-      await map.setGeoJsonSource(
-        _lineSourceId,
-        {'type': 'FeatureCollection', 'features': features},
-      );
+      await map.setGeoJsonSource(_lineSourceId, {
+        'type': 'FeatureCollection',
+        'features': features,
+      });
     } catch (_) {
       // Quelle noch nicht bereit / transienter Zustand — nächster Sync zieht nach.
     } finally {
@@ -952,9 +1008,9 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
     final sig = pts.length < 2
         ? 'empty'
         : '${pts.length}:${pts.first.latitude.toStringAsFixed(5)},'
-            '${pts.first.longitude.toStringAsFixed(5)}>'
-            '${pts.last.latitude.toStringAsFixed(5)},'
-            '${pts.last.longitude.toStringAsFixed(5)}';
+              '${pts.first.longitude.toStringAsFixed(5)}>'
+              '${pts.last.latitude.toStringAsFixed(5)},'
+              '${pts.last.longitude.toStringAsFixed(5)}';
     if (sig == _lastActiveSig) return;
     _lastActiveSig = sig;
     try {
@@ -1001,9 +1057,9 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
     final sig = pts.length < 2
         ? 'empty'
         : '${pts.length}:${pts.first.latitude.toStringAsFixed(5)},'
-            '${pts.first.longitude.toStringAsFixed(5)}>'
-            '${pts.last.latitude.toStringAsFixed(5)},'
-            '${pts.last.longitude.toStringAsFixed(5)}';
+              '${pts.first.longitude.toStringAsFixed(5)}>'
+              '${pts.last.latitude.toStringAsFixed(5)},'
+              '${pts.last.longitude.toStringAsFixed(5)}';
     if (sig == _lastDrivenSig) return;
     _lastDrivenSig = sig;
     try {
@@ -1065,9 +1121,9 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
     }
 
     final zoom = cam.zoom;
-    final ws = _tileSize * math.pow(2.0, zoom); // fraktionaler Zoom — NICHT runden
-    final cx =
-        _mercX(cam.target.longitude) * ws;
+    final ws =
+        _tileSize * math.pow(2.0, zoom); // fraktionaler Zoom — NICHT runden
+    final cx = _mercX(cam.target.longitude) * ws;
     final cy =
         _mercY(cam.target.latitude.clamp(-_maxMercLat, _maxMercLat)) * ws;
     final theta = -cam.bearing * math.pi / 180.0; // MapLibre: rotateZ(-bearing)
@@ -1083,8 +1139,7 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
       // bei 70 km/h), während die Karte weich folgt.
       final pos = (m.followsLivePosition && live != null) ? live : m.position;
       final px = _mercX(pos.longitude) * ws;
-      final py =
-          _mercY(pos.latitude.clamp(-_maxMercLat, _maxMercLat)) * ws;
+      final py = _mercY(pos.latitude.clamp(-_maxMercLat, _maxMercLat)) * ws;
       final dx = px - cx, dy = py - cy;
       next[m.id] = Offset(
         halfW + (dx * cosT - dy * sinT),
@@ -1104,14 +1159,18 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
       // Vorher las die Schleife widget.markers nach dem await neu → schrumpfte das
       // Eltern-Widget die Liste, gab es einen IndexOutOfRange-Crash.
       final markers = widget.markers;
+      final live = widget.liveSmoothedPosition?.call();
       final pts = await map.toScreenLocationBatch(
-        markers
-            .map((m) => mb.LatLng(m.position.latitude, m.position.longitude)),
+        markers.map((m) {
+          final pos = (m.followsLivePosition && live != null)
+              ? live
+              : m.position;
+          return mb.LatLng(pos.latitude, pos.longitude);
+        }),
       );
       final next = <String, Offset>{};
       for (var i = 0; i < markers.length && i < pts.length; i++) {
-        next[markers[i].id] =
-            Offset(pts[i].x.toDouble(), pts[i].y.toDouble());
+        next[markers[i].id] = Offset(pts[i].x.toDouble(), pts[i].y.toDouble());
       }
       if (mounted) _markerScreen.value = next;
     } catch (_) {}
@@ -1156,77 +1215,83 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
         }
         // 2026-06-08 (vucko Marker-Glue): Live-Viewport-Größe der Karte (logische
         // Pixel) für die lokale Marker-Projektion festhalten.
-        if (constraints.maxWidth != _mapW ||
-            constraints.maxHeight != _mapH) {
+        if (constraints.maxWidth != _mapW || constraints.maxHeight != _mapH) {
           _mapW = constraints.maxWidth;
           _mapH = constraints.maxHeight;
         }
         return Stack(
-      children: [
-        VisibilityDetector(
-          key: const ValueKey('cruise-maplibre-visibility'),
-          onVisibilityChanged: _onVisibilityChanged,
-          // 2026-06-06 (vucko P1): Pointer-Listener erkennt ECHTE Finger-Gesten
-          // (translucent → bekommt Events auch, während MapLibre selbst pannt).
-          // Nur ein echter Drag löst den Kamera-Lock — programmatische Moves nie.
-          child: Listener(
-          behavior: HitTestBehavior.translucent,
-          onPointerDown: (e) {
-            _pointerDownPos = e.position;
-            _userPanFired = false;
-          },
-          onPointerMove: (e) {
-            if (_userPanFired || _pointerDownPos == null) return;
-            if ((e.position - _pointerDownPos!).distance > 18) {
-              _userPanFired = true;
-              widget.onCameraMoved?.call();
-            }
-          },
-          child: mb.MapLibreMap(
-          styleString: style,
-          // 2026-06-10 (vucko ERSTOPEN-CRASH-FIX Schicht 2): Center/Zoom hart
-          // validieren — ein NaN/∞/out-of-range-Wert (z.B. korrupter
-          // persistierter Standort) würde denselben nativen LatLng-Throw
-          // auslösen wie die Size-0-Unprojektion.
-          initialCameraPosition: mb.CameraPosition(
-            target: mb.LatLng(
-              widget.initialCenter.latitude.isFinite
-                  ? widget.initialCenter.latitude.clamp(-85.0, 85.0)
-                  : 47.5,
-              widget.initialCenter.longitude.isFinite
-                  ? widget.initialCenter.longitude.clamp(-180.0, 180.0)
-                  : 9.74,
+          children: [
+            VisibilityDetector(
+              key: const ValueKey('cruise-maplibre-visibility'),
+              onVisibilityChanged: _onVisibilityChanged,
+              // 2026-06-06 (vucko P1): Pointer-Listener erkennt ECHTE Finger-Gesten
+              // (translucent → bekommt Events auch, während MapLibre selbst pannt).
+              // Nur ein echter Drag löst den Kamera-Lock — programmatische Moves nie.
+              child: Listener(
+                behavior: HitTestBehavior.translucent,
+                onPointerDown: (e) {
+                  _pointerDownPos = e.position;
+                  _userPanFired = false;
+                },
+                onPointerMove: (e) {
+                  if (_userPanFired || _pointerDownPos == null) return;
+                  if ((e.position - _pointerDownPos!).distance > 18) {
+                    _notifyUserCameraGesture();
+                  }
+                },
+                onPointerUp: (_) {
+                  _pointerDownPos = null;
+                },
+                onPointerCancel: (_) {
+                  _pointerDownPos = null;
+                },
+                child: mb.MapLibreMap(
+                  styleString: style,
+                  // 2026-06-10 (vucko ERSTOPEN-CRASH-FIX Schicht 2): Center/Zoom hart
+                  // validieren — ein NaN/∞/out-of-range-Wert (z.B. korrupter
+                  // persistierter Standort) würde denselben nativen LatLng-Throw
+                  // auslösen wie die Size-0-Unprojektion.
+                  initialCameraPosition: mb.CameraPosition(
+                    target: mb.LatLng(
+                      widget.initialCenter.latitude.isFinite
+                          ? widget.initialCenter.latitude.clamp(-85.0, 85.0)
+                          : 47.5,
+                      widget.initialCenter.longitude.isFinite
+                          ? widget.initialCenter.longitude.clamp(-180.0, 180.0)
+                          : 9.74,
+                    ),
+                    zoom: widget.initialZoom.isFinite
+                        ? widget.initialZoom.clamp(1.0, 20.0)
+                        : 6.0,
+                  ),
+                  onMapCreated: _onMapCreated,
+                  onStyleLoadedCallback: _onStyleLoaded,
+                  trackCameraPosition: true,
+                  rotateGesturesEnabled: widget.rotateGestures,
+                  tiltGesturesEnabled: false,
+                  compassEnabled: false,
+                  attributionButtonPosition:
+                      mb.AttributionButtonPosition.bottomRight,
+                  onMapClick: (point, latLng) => widget.onMapClick?.call(
+                    ll.LatLng(latLng.latitude, latLng.longitude),
+                  ),
+                  onCameraMove: _onCameraMove,
+                  onCameraIdle: _onCameraIdle,
+                  onMapIdle: _onMapIdle,
+                ),
+              ),
             ),
-            zoom: widget.initialZoom.isFinite
-                ? widget.initialZoom.clamp(1.0, 20.0)
-                : 6.0,
-          ),
-          onMapCreated: _onMapCreated,
-          onStyleLoadedCallback: _onStyleLoaded,
-          trackCameraPosition: true,
-          rotateGesturesEnabled: widget.rotateGestures,
-          tiltGesturesEnabled: false,
-          compassEnabled: false,
-          attributionButtonPosition: mb.AttributionButtonPosition.bottomRight,
-          onMapClick: (point, latLng) =>
-              widget.onMapClick?.call(ll.LatLng(latLng.latitude, latLng.longitude)),
-          onCameraMove: _onCameraMove,
-          onCameraIdle: _onCameraIdle,
-          onMapIdle: _onMapIdle,
-          ),
-          ),
-        ),
-        // Marker-Overlay — eigener Listenable-Scope: Projektions-Updates
-        // (pro Frame während der Fahrt) rebuilden NUR diese Positioned-Liste,
-        // nie mehr die Platform-View darunter (vucko 2026-06-10 Fahr-Perf).
-        Positioned.fill(
-          child: ValueListenableBuilder<Map<String, Offset>>(
-            valueListenable: _markerScreen,
-            builder: (context, positions, _) =>
-                Stack(children: _buildMarkerOverlay(positions)),
-          ),
-        ),
-      ],
+            // Marker-Overlay — eigener Listenable-Scope: Projektions-Updates
+            // (pro Frame während der Fahrt) rebuilden NUR diese Positioned-Liste,
+            // nie mehr die Platform-View darunter (vucko 2026-06-10 Fahr-Perf).
+            Positioned.fill(
+              child: ValueListenableBuilder<Map<String, Offset>>(
+                valueListenable: _markerScreen,
+                builder: (context, positions, _) =>
+                    Stack(children: _buildMarkerOverlay(positions)),
+              ),
+            ),
+          ],
         );
       },
     );
@@ -1240,21 +1305,23 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
       // Ankerverschiebung relativ zur Marker-Box.
       final ax = (m.alignment.x + 1) / 2; // 0..1
       final ay = (m.alignment.y + 1) / 2;
-      out.add(Positioned(
-        left: pos.dx - m.width * ax,
-        top: pos.dy - m.height * ay,
-        width: m.width,
-        height: m.height,
-        child: IgnorePointer(
-          ignoring: false,
-          // RepaintBoundary: bewegt sich nur die POSITION (Kamera-Follow),
-          // wird der Marker-Inhalt (Schatten/Icons/CustomPaint) nicht neu
-          // gerastert — der Compositor verschiebt die gecachte Layer.
-          child: RepaintBoundary(
-            child: SizedBox(width: m.width, height: m.height, child: m.child),
+      out.add(
+        Positioned(
+          left: pos.dx - m.width * ax,
+          top: pos.dy - m.height * ay,
+          width: m.width,
+          height: m.height,
+          child: IgnorePointer(
+            ignoring: false,
+            // RepaintBoundary: bewegt sich nur die POSITION (Kamera-Follow),
+            // wird der Marker-Inhalt (Schatten/Icons/CustomPaint) nicht neu
+            // gerastert — der Compositor verschiebt die gecachte Layer.
+            child: RepaintBoundary(
+              child: SizedBox(width: m.width, height: m.height, child: m.child),
+            ),
           ),
         ),
-      ));
+      );
     }
     return out;
   }

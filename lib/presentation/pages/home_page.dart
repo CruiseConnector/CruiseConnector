@@ -56,9 +56,11 @@ class _HomePageState extends State<HomePage> {
     // der Geräte-Verstärker für den MapLibre-SIGABRT (GPU/IO-Druck genau dann,
     // wenn der Renderer die Linien-Quelle aufbaut). Erst nach kurzer Idle-Phase,
     // damit das erste Cruise-Öffnen race-frei bleibt.
-    unawaited(Future<void>.delayed(const Duration(seconds: 10)).then((_) {
-      if (mounted) _prewarmOfflineMapRegion();
-    }));
+    unawaited(
+      Future<void>.delayed(const Duration(seconds: 10)).then((_) {
+        if (mounted) _prewarmOfflineMapRegion();
+      }),
+    );
   }
 
   Future<void> _prewarmOfflineMapRegion() async {
@@ -68,16 +70,15 @@ class _HomePageState extends State<HomePage> {
     // ganze DACH-Karte ohne Netz. Deaktivieren via MapStyleService.autoDownloadEnabled.
     // 2026-06-11 (vucko Karten-Selbstheilung): EINMALIG die lokale
     // dach.pmtiles auf Defekte pruefen (Magic-Header + Groesse vs. Server) —
-    // eine fehlerhaft geladene Karte (User sieht Mapbox-Fallback/kaputte
-    // Tiles) wird geloescht und automatisch neu heruntergeladen.
+    // eine fehlerhaft geladene Karte wird geloescht und automatisch neu
+    // heruntergeladen.
     await MapStyleService.instance.verifyLocalDachIntegrityOnce();
     unawaited(MapStyleService.instance.maybeAutoDownloadDach());
     // 2026-06-05 (vucko): refreshRemoteStyle entfernt — das Bundle ist die
     // Single Source of Truth (Style-Änderungen greifen sofort, besser offline).
     try {
-      // 2026-06-01 (vucko): Zuerst prüfen, welche Tile-Quelle aktiv ist
-      // (self-hosted CDN wenn erreichbar, sonst Mapbox-Fallback) — DANN cachen,
-      // damit die Tiles im richtigen (quell-getrennten) Ordner landen.
+      // 2026-06-01 (vucko): Zuerst prüfen, ob die self-hosted Tile-Quelle
+      // erreichbar ist — DANN cachen, damit kaputte Tiles nicht liegenbleiben.
       await OfflineMapService.instance.refreshTileSourceHealth();
       // 2026-06-11 (vucko Karten-Selbstheilung): EINMALIG alte Mapbox-Tiles
       // und korrupte Kacheln entfernen — der Pre-Warm direkt darunter laedt
@@ -105,22 +106,23 @@ class _HomePageState extends State<HomePage> {
       );
       // 2026-05-28 (vucko Task #71): Zusätzlicher Detail-Cache 25km @Zoom
       // 13-16 für hochauflösende Live-Navi-Tiles um die User-Position.
-      // Läuft 3s versetzt damit die Region-Pre-Warm Mapbox-Bandbreite
-      // zuerst bekommt.
-      unawaited(Future<void>.delayed(const Duration(seconds: 3)).then((_) {
-        if (!mounted) return;
-        unawaited(
-          OfflineMapService.instance.cacheDetailRegionAroundPoint(
-            latitude: lat,
-            longitude: lng,
-          ),
-        );
-      }));
+      // Läuft 3s versetzt damit das erste Region-Pre-Warm Vorrang bekommt.
+      unawaited(
+        Future<void>.delayed(const Duration(seconds: 3)).then((_) {
+          if (!mounted) return;
+          unawaited(
+            OfflineMapService.instance.cacheDetailRegionAroundPoint(
+              latitude: lat,
+              longitude: lng,
+            ),
+          );
+        }),
+      );
       // 2026-05-28 (vucko Task #64): DACH-Übersicht einmalig cachen.
       // Läuft im Hintergrund nach dem lokalen Pre-Warm. SharedPreferences-
       // Flag verhindert mehrfaches Ausführen — neuer Download nur wenn User
       // den Cache manuell aus Settings löscht oder wir hier die Version
-      // erhöhen (z.B. wenn Mapbox-Style ändert).
+      // erhöhen.
       unawaited(_prewarmDachOverviewIfNeeded());
     } catch (e) {
       debugPrint('[HomePage] Offline-Map pre-warm failed: $e');
@@ -170,8 +172,8 @@ class _HomePageState extends State<HomePage> {
       // wird.
       await Future.delayed(const Duration(seconds: 5));
       if (!mounted) return;
-      final verify =
-          await OfflineMapService.instance.verifyAndRepairDachOverview();
+      final verify = await OfflineMapService.instance
+          .verifyAndRepairDachOverview();
       if (verify.repairedNow > 0 || verify.stillMissing > 0) {
         debugPrint(
           '[HomePage] DACH-Background-Verify: '
@@ -235,15 +237,15 @@ class _HomePageState extends State<HomePage> {
   }
 
   IconData _iconForType(String type) => switch (type) {
-        'follow' => Icons.person_add_alt_1,
-        'like' => Icons.favorite,
-        'comment' => Icons.chat_bubble_outline,
-        'friend_request' => Icons.handshake_outlined,
-        'group_invite' => Icons.group_add_outlined,
-        'weather_recommendation' => Icons.wb_sunny_outlined,
-        'trip_reminder' => Icons.route_outlined,
-        _ => Icons.notifications_active_outlined,
-      };
+    'follow' => Icons.person_add_alt_1,
+    'like' => Icons.favorite,
+    'comment' => Icons.chat_bubble_outline,
+    'friend_request' => Icons.handshake_outlined,
+    'group_invite' => Icons.group_add_outlined,
+    'weather_recommendation' => Icons.wb_sunny_outlined,
+    'trip_reminder' => Icons.route_outlined,
+    _ => Icons.notifications_active_outlined,
+  };
 
   void _onPendingRoute() {
     if (CruiseModePage.pendingRoute.value != null && mounted) {

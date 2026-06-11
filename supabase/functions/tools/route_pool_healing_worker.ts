@@ -620,47 +620,7 @@ async function callHealingCandidateGenerator(
     reason: string;
   }
 > {
-  const accessToken = env("MAPBOX_ACCESS_TOKEN");
-  if (!accessToken) {
-    return await callRouteGenerator(job, region, start, attempt);
-  }
-
-  const plan = healingPlanForAttempt(job, start, attempt);
-  const exclude = applyAvoidHighwaysExcludes("", job.avoid_highways);
-  const fetchResult = await fetchHealingMapboxRoute(
-    plan,
-    exclude,
-    accessToken,
-    { timeoutMs: 3_800 },
-  );
-
-  const routeOptions = fetchResult.routes?.length
-    ? fetchResult.routes
-    : fetchResult.route
-    ? [fetchResult.route]
-    : [];
-  if (routeOptions.length === 0) {
-    return {
-      ok: false,
-      reason: fetchResult.outcome === "http_error"
-        ? `mapbox_http_${fetchResult.statusCode ?? "unknown"}`
-        : `mapbox_${fetchResult.outcome}`,
-    };
-  }
-
-  return {
-    ok: true,
-    route: routeOptions[0],
-    meta: {
-      mapbox_call_count: 1,
-      healing_strategy: "direct_mapbox_loop",
-      healing_family: plan.family,
-      healing_plan: plan.label,
-      healing_target_distance_km: plan.targetDistanceKm,
-      healing_route_options: routeOptions.length,
-      ...(fetchResult.meta ?? {}),
-    },
-  };
+  return await callRouteGenerator(job, region, start, attempt);
 }
 
 async function fetchHealingMapboxRoute(
@@ -674,92 +634,15 @@ async function fetchHealingMapboxRoute(
     steps?: boolean;
   },
 ): Promise<HealingMapboxFetchResult> {
-  const coordinatesStr = plan.waypoints
-    .map((point) => `${point.longitude},${point.latitude}`)
-    .join(";");
-  const params = new URLSearchParams({
-    access_token: accessToken,
-    geometries: "geojson",
-    overview: options.overview ?? "simplified",
-    steps: options.steps === false ? "false" : "true",
-    language: "de",
-    continue_straight: plan.continueStraight ? "true" : "false",
-    alternatives: "false",
-  });
-  if (exclude.trim().length > 0) params.set("exclude", exclude);
-  if (plan.radiuses.trim().length > 0) params.set("radiuses", plan.radiuses);
-  if (plan.waypoints.length > 2) {
-    params.set("waypoints", `0;${plan.waypoints.length - 1}`);
-  }
-
-  const url =
-    `https://api.mapbox.com/directions/v5/mapbox/driving/${coordinatesStr}?${params}`;
-  const controller = new AbortController();
-  let timeoutId: number | undefined;
-  const timeoutResult = new Promise<HealingMapboxFetchResult>((resolve) => {
-    timeoutId = setTimeout(() => {
-      controller.abort();
-      resolve({
-        route: null,
-        outcome: "timeout",
-        details: "healing_mapbox_timeout",
-      });
-    }, options.timeoutMs);
-  });
-  const request = (async (): Promise<HealingMapboxFetchResult> => {
-    const response = await fetch(url, { signal: controller.signal });
-    if (!response.ok) {
-      return {
-        route: null,
-        outcome: "http_error",
-        statusCode: response.status,
-        details: (await response.text()).slice(0, 300),
-      };
-    }
-    const data = await response.json();
-    const routes = Array.isArray(data?.routes) ? data.routes : [];
-    if (routes.length === 0) {
-      return {
-        route: null,
-        outcome: "no_route",
-        details: JSON.stringify(data).slice(0, 300),
-      };
-    }
-    const boundedRoutes = options.boundGeometry === false
-      ? routes
-      : routes.map(boundHealingRouteGeometry);
-    return {
-      route: boundedRoutes[0],
-      routes: boundedRoutes,
-      outcome: "ok",
-      meta: {
-        silent_via_used: plan.waypoints.length > 2,
-        silent_via_waypoints: plan.waypoints.length > 2
-          ? `0;${plan.waypoints.length - 1}`
-          : null,
-        shaping_point_count: Math.max(0, plan.waypoints.length - 2),
-        mapbox_leg_count: Array.isArray(boundedRoutes[0]?.legs)
-          ? boundedRoutes[0].legs.length
-          : null,
-        arrive_maneuver_count: countArriveManeuvers(boundedRoutes[0]),
-      },
-    };
-  })();
-
-  try {
-    return await Promise.race([request, timeoutResult]);
-  } catch (error) {
-    const details = error instanceof Error ? error.message : String(error);
-    const timeout = details.toLowerCase().includes("abort") ||
-      (error instanceof DOMException && error.name === "AbortError");
-    return {
-      route: null,
-      outcome: timeout ? "timeout" : "network_error",
-      details,
-    };
-  } finally {
-    if (timeoutId != null) clearTimeout(timeoutId);
-  }
+  void plan;
+  void exclude;
+  void accessToken;
+  void options;
+  return {
+    route: null,
+    outcome: "no_route",
+    details: "self_hosted_healing_uses_generate_cruise_route_v2",
+  };
 }
 
 function countArriveManeuvers(route: any): number | null {
@@ -1329,19 +1212,6 @@ async function claimSearchSession(
 async function processSearchSession(
   session: RouteSearchSession,
 ): Promise<void> {
-  const accessToken = env("MAPBOX_ACCESS_TOKEN");
-  if (!accessToken) {
-    await updateSearchSession(session.id, {
-      status: "failed",
-      progress_stage: "mapbox_token_missing",
-      last_error: "mapbox_token_missing",
-      worker_last_seen_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    });
-    stats.searchSessionsNoRoute += 1;
-    return;
-  }
-
   const queue = searchSessionCandidateQueue(session);
   const attempt = Math.max(0, session.attempts_count ?? 0);
   const candidate = queue[attempt] ?? null;
@@ -1380,9 +1250,8 @@ async function processSearchSession(
   const fetchResult = await fetchSearchSessionCandidateRoute(
     candidate,
     session,
-    accessToken,
   );
-  const callsUsed = 1;
+  const callsUsed = 0;
   stats.mapboxCallsUsed += callsUsed;
   const attemptsCount = attempt + 1;
   const totalCalls = (session.mapbox_calls_used ?? 0) + callsUsed;
@@ -1399,11 +1268,9 @@ async function processSearchSession(
   if (!route) {
     await continueOrFinishSearchSession(session, {
       ...basePatch,
-      last_error: fetchResult.outcome === "http_error"
-        ? `mapbox_http_${fetchResult.statusCode ?? "unknown"}`
-        : `mapbox_${fetchResult.outcome}`,
+      last_error: fetchResult.details ?? `self_hosted_${fetchResult.outcome}`,
       reject_summary: mergeRejectSummary(session.reject_summary, {
-        [`mapbox_${fetchResult.outcome}`]: 1,
+        [fetchResult.details ?? `self_hosted_${fetchResult.outcome}`]: 1,
       }),
     });
     return;
@@ -1669,127 +1536,14 @@ function isValidSearchSessionCandidate(
 async function fetchSearchSessionCandidateRoute(
   candidate: RouteSearchSessionCandidatePayload,
   session: RouteSearchSession,
-  accessToken: string,
 ): Promise<HealingMapboxFetchResult> {
-  const coordinatesStr = candidate.planned_coordinates
-    .map((point) => `${point[0]},${point[1]}`)
-    .join(";");
-  const params = new URLSearchParams({
-    access_token: accessToken,
-    geometries: "geojson",
-    overview: "full",
-    steps: "true",
-    language: "de",
-    continue_straight: String(candidate.continue_straight !== false),
-    alternatives: "false",
-  });
-  const exclude = applyAvoidHighwaysExcludes(
-    candidate.exclude_params ?? "",
-    session.avoid_highways,
-  );
-  if (exclude.trim().length > 0) params.set("exclude", exclude.trim());
-  params.set("radiuses", validSearchSessionRadiuses(candidate));
-  const bearings = candidate.bearings?.trim();
-  if (
-    bearings &&
-    bearings.split(";").length === candidate.planned_coordinates.length
-  ) {
-    params.set("bearings", bearings);
-  }
-  if (
-    typeof candidate.avoid_maneuver_radius_m === "number" &&
-    Number.isFinite(candidate.avoid_maneuver_radius_m)
-  ) {
-    params.set(
-      "avoid_maneuver_radius",
-      String(
-        Math.max(
-          1,
-          Math.min(1000, Math.round(candidate.avoid_maneuver_radius_m)),
-        ),
-      ),
-    );
-  }
-  if (!candidate.force_legacy_waypoints) {
-    const waypointString = candidate.silent_via_waypoints ??
-      (candidate.planned_coordinates.length > 2
-        ? `0;${candidate.planned_coordinates.length - 1}`
-        : null);
-    if (waypointString != null && waypointString.trim().length > 0) {
-      params.set("waypoints", waypointString);
-    }
-  }
-
-  const url =
-    `https://api.mapbox.com/directions/v5/mapbox/driving/${coordinatesStr}?${params}`;
-  const controller = new AbortController();
-  let timeoutId: number | undefined;
-  const timeoutResult = new Promise<HealingMapboxFetchResult>((resolve) => {
-    timeoutId = setTimeout(() => {
-      controller.abort();
-      resolve({
-        route: null,
-        outcome: "timeout",
-        details: "search_session_mapbox_timeout",
-      });
-    }, 10_000);
-  });
-  const request = (async (): Promise<HealingMapboxFetchResult> => {
-    const response = await fetch(url, { signal: controller.signal });
-    if (!response.ok) {
-      return {
-        route: null,
-        outcome: "http_error",
-        statusCode: response.status,
-        details: (await response.text()).slice(0, 300),
-      };
-    }
-    const data = await response.json();
-    const routes = Array.isArray(data?.routes) ? data.routes : [];
-    if (routes.length === 0) {
-      return {
-        route: null,
-        outcome: "no_route",
-        details: JSON.stringify(data).slice(0, 300),
-      };
-    }
-    const route = routes[0];
-    const silentViaUsed = !candidate.force_legacy_waypoints &&
-      candidate.planned_coordinates.length > 2;
-    return {
-      route,
-      routes,
-      outcome: "ok",
-      meta: {
-        silent_via_used: silentViaUsed,
-        silent_via_waypoints: silentViaUsed
-          ? candidate.silent_via_waypoints ??
-            `0;${candidate.planned_coordinates.length - 1}`
-          : null,
-        shaping_point_count: Math.max(
-          0,
-          candidate.planned_coordinates.length - 2,
-        ),
-        mapbox_leg_count: Array.isArray(route?.legs) ? route.legs.length : null,
-        arrive_maneuver_count: countArriveManeuvers(route),
-      },
-    };
-  })();
-
-  try {
-    return await Promise.race([request, timeoutResult]);
-  } catch (error) {
-    const details = error instanceof Error ? error.message : String(error);
-    const timeout = details.toLowerCase().includes("abort") ||
-      (error instanceof DOMException && error.name === "AbortError");
-    return {
-      route: null,
-      outcome: timeout ? "timeout" : "network_error",
-      details,
-    };
-  } finally {
-    if (timeoutId != null) clearTimeout(timeoutId);
-  }
+  void candidate;
+  void session;
+  return {
+    route: null,
+    outcome: "no_route",
+    details: "self_hosted_search_session_hydration_not_configured",
+  };
 }
 
 function validSearchSessionRadiuses(

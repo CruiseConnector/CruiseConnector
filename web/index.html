@@ -24,12 +24,8 @@
   <!-- GPS-Berechtigung explizit für diesen Origin erlauben -->
   <meta http-equiv="Permissions-Policy" content="geolocation=(self)">
 
-  <!-- Preconnect zu Mapbox-Domains für schnellere Tile-Requests -->
-  <link rel="preconnect" href="https://api.mapbox.com">
-  <link rel="preconnect" href="https://events.mapbox.com">
-  <link rel="preconnect" href="https://a.tiles.mapbox.com">
-  <link rel="preconnect" href="https://b.tiles.mapbox.com">
-  <link rel="preconnect" href="https://c.tiles.mapbox.com">
+  <!-- Preconnect zur eigenen Tile-Infrastruktur -->
+  <link rel="preconnect" href="https://tiles.cruiseconnector.at">
 
   <!-- iOS meta tags & icons -->
   <meta name="mobile-web-app-capable" content="yes">
@@ -47,8 +43,7 @@
   <title>CruiseConnect</title>
   <link rel="manifest" href="manifest.json">
 
-  <!-- flutter_map nutzt Mapbox Raster-Tiles direkt — kein mapbox-gl.js nötig -->
-  <!-- CORS-Header werden von Mapbox automatisch gesetzt für Tile-Requests -->
+  <!-- flutter_map nutzt eigene Raster-/PMTiles-Quellen. -->
 </head>
 <body>
   <!-- Lade-Indikator bis Flutter bereit ist -->

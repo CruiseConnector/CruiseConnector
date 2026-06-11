@@ -199,19 +199,19 @@ async function hydrateClaimedSession(session: SessionRow): Promise<JsonMap> {
     };
   }
 
-  const token = env("MAPBOX_ACCESS_TOKEN");
-  if (!token) {
-    await finish(session, "failed", "mapbox_token_missing");
-    return {
-      search_session_id: session.id,
-      found: false,
-      finished: true,
-      reason: "mapbox_token_missing",
-    };
-  }
+  const callsUsed = 0;
+  const disabledReason = "self_hosted_hydration_not_configured";
+  await rejectOrRetry(session, disabledReason, callsUsed, candidate, queue);
+  return {
+    search_session_id: session.id,
+    found: false,
+    finished: false,
+    reason: disabledReason,
+    mapbox_calls_used: callsUsed,
+    candidate_queue_index: attempt,
+  };
 
-  const fetchResult = await fetchFullRoute(candidate, session, token);
-  const callsUsed = 1;
+  const fetchResult = await fetchFullRoute(candidate, session, "");
   if (!fetchResult.route) {
     await rejectOrRetry(
       session,
@@ -236,12 +236,13 @@ async function hydrateClaimedSession(session: SessionRow): Promise<JsonMap> {
     candidate.distance_bucket ?? session.distance_bucket,
   );
   if (display.reason != null) {
-    await rejectOrRetry(session, display.reason, callsUsed, candidate, queue);
+    const reason = String(display.reason);
+    await rejectOrRetry(session, reason, callsUsed, candidate, queue);
     return {
       search_session_id: session.id,
       found: false,
       finished: false,
-      reason: display.reason,
+      reason,
       mapbox_calls_used: callsUsed,
       candidate_queue_index: attempt,
     };
@@ -818,79 +819,10 @@ async function fetchFullRoute(
   session: SessionRow,
   token: string,
 ): Promise<{ route: any | null; reason: string }> {
-  const coordinates = candidate.planned_coordinates
-    .map((point) => `${point[0]},${point[1]}`)
-    .join(";");
-  const params = new URLSearchParams({
-    access_token: token,
-    geometries: "geojson",
-    overview: "full",
-    steps: "true",
-    language: "de",
-    continue_straight: String(candidate.continue_straight !== false),
-    alternatives: "false",
-  });
-  const exclude = applyAvoidHighwaysExcludes(
-    candidate.exclude_params ?? "",
-    session.avoid_highways,
-  );
-  if (exclude.trim().length > 0) params.set("exclude", exclude.trim());
-  params.set("radiuses", validRadiuses(candidate));
-  if (
-    candidate.bearings != null &&
-    candidate.bearings.split(";").length ===
-      candidate.planned_coordinates.length
-  ) {
-    params.set("bearings", candidate.bearings);
-  }
-  if (
-    typeof candidate.avoid_maneuver_radius_m === "number" &&
-    Number.isFinite(candidate.avoid_maneuver_radius_m)
-  ) {
-    params.set(
-      "avoid_maneuver_radius",
-      String(Math.max(
-        1,
-        Math.min(1000, Math.round(candidate.avoid_maneuver_radius_m)),
-      )),
-    );
-  }
-  if (!candidate.force_legacy_waypoints) {
-    const waypointString = candidate.silent_via_waypoints ??
-      (candidate.planned_coordinates.length > 2
-        ? `0;${candidate.planned_coordinates.length - 1}`
-        : null);
-    if (waypointString != null && waypointString.trim().length > 0) {
-      params.set("waypoints", waypointString);
-    }
-  }
-
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 10_000);
-  try {
-    const response = await fetch(
-      `https://api.mapbox.com/directions/v5/mapbox/driving/${coordinates}?${params}`,
-      { signal: controller.signal },
-    );
-    if (!response.ok) {
-      return { route: null, reason: `mapbox_http_${response.status}` };
-    }
-    const data = await response.json();
-    const route = Array.isArray(data?.routes) ? data.routes[0] : null;
-    return route == null
-      ? { route: null, reason: "mapbox_no_route" }
-      : { route, reason: "ok" };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    return {
-      route: null,
-      reason: message.toLowerCase().includes("abort")
-        ? "mapbox_timeout"
-        : "mapbox_network_error",
-    };
-  } finally {
-    clearTimeout(timeoutId);
-  }
+  void candidate;
+  void session;
+  void token;
+  return { route: null, reason: "self_hosted_hydration_not_configured" };
 }
 
 function validRadiuses(candidate: CandidatePayload): string {

@@ -1,14 +1,13 @@
 # Friedrichshafen Curated Pool Seed
 
-Hand-designed Mapbox-Routen für Friedrichshafen/Bodensee-Region, da Live-Generation
-in flachen Regionen strukturell tentakelige Sport-Loops liefert.
+Historischer, bereits generierter Route-Pool für Friedrichshafen/Bodensee.
+Die alte Mapbox-Kuration ist deaktiviert, damit keine neuen Mapbox-Kosten
+mehr durch lokale Tools entstehen.
 
 ## Was hier liegt
 
-- **`curate_friedrichshafen.py`** — Python-Skript, das hand-designed Waypoint-Sets durch die
-  Mapbox Directions API schickt, Distanz validiert (±35% Toleranz pro distance_bucket) und
-  SQL-INSERTs für `route_pool` schreibt. Token wird aus `lib/config/secrets.dart` gelesen,
-  niemals ausgegeben.
+- **`curate_friedrichshafen.py`** — bewusst deaktivierter Stub. Er liest keinen Token
+  und ruft keinen externen Karten-/Routinganbieter mehr auf.
 - **`friedrichshafen_pool.sql`** — Generierte 33 INSERTs (4 Stile × 3 Distanzen × 2
   Highway-Optionen, gefiltert auf die mit passender Distanz). Geometrien subsampled auf
   ~180 Koordinaten pro Route für Storage-Effizienz.
@@ -40,15 +39,11 @@ psql "$(supabase status -o env | grep DB_URL | cut -d= -f2)" -f seed/friedrichsh
 ```
 (funktioniert nur wenn supabase lokal verbunden ist)
 
-## Skript neu laufen lassen / erweitern
+## Neue Seeds erzeugen
 
-Wenn du andere Städte machen willst (Konstanz, Lindau, Wien…), kopier
-`curate_friedrichshafen.py` und passe:
-- `FRIEDRICHSHAFEN` Tuple (lng, lat) → neuer Stadt-Center
-- `ROUTES` Liste → neue Waypoint-Sets
-- `OUTPUT_SQL` Path
-
-Dann `python3 curate_xyz.py`. Mapbox-Call-Limit beachten: 36 Routes ≈ 36 API-Calls.
+Neue Seeds sollen nur noch über die selbst gehostete GraphHopper/Supabase-v2
+Route-Generierung erzeugt werden. Dieser Ordner enthält nur historische SQL-
+Artefakte; `curate_friedrichshafen.py` bricht absichtlich ab.
 
 ## Coverage-Status
 
@@ -63,10 +58,9 @@ Verkehr ab.
 
 ## Warum hand-designed?
 
-`process-route-seed-jobs` (Worker) nutzt die gleichen Edge-Plan-Templates wie Live-Search.
-In flacher Region (Bodensee) erzeugen diese Templates strukturell u-turn-y Routes oder
-Distance-Bugs (100 km Plan → 200 km Route). Daher: für Bodensee-Stadt-Cluster die Pool-
-Routes manuell mit echten Cities als Waypoints (Tettnang, Wangen, Lindau, Markdorf, Salem,
-Überlingen etc.) generieren — Mapbox berechnet sauber zwischen ihnen.
+`process-route-seed-jobs` (Worker) nutzte historisch die gleichen Edge-Plan-Templates wie
+Live-Search. In flacher Region (Bodensee) erzeugten diese Templates strukturell u-turn-y
+Routes oder Distance-Bugs (100 km Plan → 200 km Route). Daher wurden fuer Bodensee-
+Stadt-Cluster manuelle Pool-Routes mit echten Cities als Waypoints erzeugt.
 
 Spätere Iterationen: dasselbe für Konstanz, Lindau, Stuttgart, Karlsruhe, Augsburg.

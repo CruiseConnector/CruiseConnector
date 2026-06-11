@@ -3,7 +3,7 @@ import 'dart:convert';
 import 'package:latlong2/latlong.dart';
 import 'package:flutter/material.dart';
 
-import '../../domain/models/mapbox_suggestion.dart';
+import '../../domain/models/place_suggestion.dart';
 import '../../domain/models/route_maneuver.dart';
 import '../../domain/models/route_result.dart';
 
@@ -17,7 +17,7 @@ class GroupRouteDataBuilder {
     required String style,
     required bool avoidHighways,
     int? targetDistanceKm,
-    MapboxSuggestion? destination,
+    PlaceSuggestion? destination,
     List<LatLng> requiredWaypoints = const [],
     String? waypointOrigin,
     int? waypointSeedAttempt,

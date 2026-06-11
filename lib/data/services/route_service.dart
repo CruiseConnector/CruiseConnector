@@ -139,6 +139,8 @@ class RouteService {
   //
   // Rollback: einfach diesen String auf 'generate-cruise-route' zurücksetzen.
   static const String edgeFunction = 'generate-cruise-route-v2';
+  static const String _liveRouteSource = 'graphhopper';
+  static const String _legacyMapboxRouteSource = 'mapbox';
   static const String clientRoutingBuildId = String.fromEnvironment(
     'ROUTING_CLIENT_BUILD_ID',
     defaultValue: 'local-dev',
@@ -154,6 +156,7 @@ class RouteService {
   // ab); der Edge-Start-Snap-Bug lieferte ~758 m. Pool-/Access-Routen sind
   // ausgenommen (eigene Access-Leg-Logik).
   static const double maxAcceptedStartOffsetMeters = 500.0;
+  static const double maxAcceptedAccessLegStartOffsetMeters = 180.0;
   static int _lastRandomSeed = 0;
   static const String _explorerBearingPrefsKey =
       'route_service_recent_explorer_bearings';
@@ -187,7 +190,7 @@ class RouteService {
   static int? lastRouteReturnedDistanceBucket;
   static bool lastRouteAccessLegUsed = false;
   static double? lastRouteAccessLegDistanceKm;
-  static String lastRouteGenerationSource = 'mapbox';
+  static String lastRouteGenerationSource = _liveRouteSource;
   static String lastRouteSubscriptionTier = 'premium';
   static String? lastRouteRequestedStyle;
   static String? lastRoutePoolMatchId;
@@ -222,6 +225,9 @@ class RouteService {
   static String? lastRouteStartSnapStrategy;
   static bool? lastRouteStartOnMotorway;
   static double? lastRouteAvoidManeuverRadiusUsed;
+
+  static bool _isLiveRouteSource(String? source) =>
+      source == _liveRouteSource || source == _legacyMapboxRouteSource;
 
   /// Letzte 3 Entdecker-Richtungen (in Grad) für Diversifizierung.
   // TODO: In SharedPreferences persistieren für Session-übergreifende Diversifizierung
@@ -308,7 +314,7 @@ class RouteService {
     lastRouteReturnedDistanceBucket = null;
     lastRouteAccessLegUsed = false;
     lastRouteAccessLegDistanceKm = null;
-    lastRouteGenerationSource = 'mapbox';
+    lastRouteGenerationSource = _liveRouteSource;
     lastRouteSubscriptionTier = 'premium';
     lastRouteRequestedStyle = null;
     lastRoutePoolMatchId = null;
@@ -943,7 +949,7 @@ class RouteService {
 
       if (bestCandidate?.accepted == true) {
         final acceptedMapboxCandidate = bestCandidate!;
-        lastRouteGenerationSource = 'mapbox';
+        lastRouteGenerationSource = _liveRouteSource;
         await _maybeRecordRoutePoolCandidate(
           scenario: scenario,
           route: acceptedMapboxCandidate.route,
@@ -1570,7 +1576,7 @@ class RouteService {
           bestCandidate == null) {
         lastRouteDuplicateFallbackUsed = true;
       }
-      lastRouteGenerationSource = 'mapbox';
+      lastRouteGenerationSource = _liveRouteSource;
       return _finalizeAndRemember(
         scenario: scenario,
         route: accepted!.route,
@@ -1971,7 +1977,7 @@ class RouteService {
           acceptedCandidate.route.edgeMeta['detour_fallback_stage'] =
               'client_kept_best_available_route';
         }
-        lastRouteGenerationSource = 'mapbox';
+        lastRouteGenerationSource = _liveRouteSource;
         final finalized = _finalizeAndRemember(
           scenario: scenario,
           route: acceptedCandidate.route,
@@ -2141,6 +2147,11 @@ class RouteService {
           avoidHighways: false,
           directDistanceKm: directDistanceKm,
           allowDirectFallback: true,
+          navigationReroute: true,
+          currentHeadingDegrees: currentHeadingDegrees,
+          currentSpeedMetersPerSecond: currentSpeedMetersPerSecond,
+          locationAccuracyMeters: locationAccuracyMeters,
+          maxSearchMsOverride: maxSearchMsOverride,
         );
         if (rerouteFallback != null) {
           return rerouteFallback;
@@ -2992,6 +3003,14 @@ class RouteService {
       variantHint: 'access',
       fingerprintHint: 'join_${joinPoint.index}',
       candidateBudget: 3,
+      navigationReroute: true,
+      currentHeadingDegrees: _usableHeading(currentPosition),
+      currentSpeedMetersPerSecond:
+          _safeFiniteDouble(currentPosition.speed) != null &&
+              currentPosition.speed >= 0
+          ? currentPosition.speed
+          : null,
+      locationAccuracyMeters: _safeFiniteDouble(currentPosition.accuracy),
     );
   }
 
@@ -3033,6 +3052,10 @@ class RouteService {
     required String variantHint,
     required String fingerprintHint,
     required int candidateBudget,
+    bool navigationReroute = false,
+    double? currentHeadingDegrees,
+    double? currentSpeedMetersPerSecond,
+    double? locationAccuracyMeters,
   }) async {
     final directDistanceKm = math.max(
       geo.Geolocator.distanceBetween(
@@ -3069,11 +3092,36 @@ class RouteService {
       // Access-/Return-Legs sind sicherheitskritisch — lieber wenige echte
       // Straßenpläne testen, als dem User ein Luftlinien-Fragment zu zeigen.
       candidateBudget: candidateBudget,
+      navigationReroute: navigationReroute,
+      currentHeadingDegrees: currentHeadingDegrees,
+      currentSpeedMetersPerSecond: currentSpeedMetersPerSecond,
+      locationAccuracyMeters: locationAccuracyMeters,
     );
 
     try {
       final route = await _invoke(request);
       final snapped = _snapRouteToStartPosition(route, startPosition);
+      if (navigationReroute) {
+        final startOffset = _edgeMetaDouble(snapped, 'start_offset_meters');
+        if (startOffset != null &&
+            startOffset > maxAcceptedAccessLegStartOffsetMeters) {
+          throw RouteServiceException(
+            type: RouteErrorType.quality,
+            userMessage:
+                'Die Anschlussroute startete zu weit von deinem Standort entfernt.',
+            debugMessage:
+                'Access leg rejected because first provider point was '
+                '${startOffset.toStringAsFixed(0)}m from requested start.',
+            edgeMeta: <String, dynamic>{
+              ...snapped.edgeMeta,
+              'response_code': 'start_offset_rejected',
+              'code': 'start_offset_rejected',
+              'start_offset_meters': startOffset,
+              'route_stage': variantHint,
+            },
+          );
+        }
+      }
       return _filteredRouteResult(snapped);
     } on RouteServiceException catch (e) {
       if (avoidHighways) {
@@ -3506,7 +3554,9 @@ class RouteService {
       'trigger=$clientTrigger apiCallCount=$lastRouteApiCallCount '
       'requestId=${body['request_id']}',
     );
-    debugPrint('[RouteService] 🗺️ Mapbox Request #$requestTimestamp gesendet');
+    debugPrint(
+      '[RouteService] 🗺️ Live route request #$requestTimestamp gesendet',
+    );
     final stopwatch = Stopwatch()..start();
 
     dynamic data;
@@ -3865,7 +3915,7 @@ class RouteService {
     }
 
     debugPrint(
-      '[RouteService] Route OK: ${coordinates.length} Punkte, ${distanceKmActual?.toStringAsFixed(1)} km (Mapbox: ${distanceRaw?.toStringAsFixed(0)} m)',
+      '[RouteService] Route OK: ${coordinates.length} Punkte, ${distanceKmActual?.toStringAsFixed(1)} km (Provider: ${distanceRaw?.toStringAsFixed(0)} m)',
     );
 
     stopwatch.stop();
@@ -4562,7 +4612,7 @@ class RouteService {
       snapped.edgeMeta['required_waypoint_count'] ??= userWaypoints.length;
       snapped.edgeMeta['waypoint_origin'] ??= waypointOrigin ?? 'manual';
       snapped.edgeMeta['auto_seed_waypoints'] ??= waypointOrigin == 'auto_seed';
-      snapped.edgeMeta['route_source'] ??= 'mapbox';
+      snapped.edgeMeta['route_source'] ??= _liveRouteSource;
     }
     return _evaluateCandidate(
       scenario: scenario,
@@ -6000,7 +6050,7 @@ class RouteService {
             ),
           );
     }
-    if (fromCache && lastRouteGenerationSource == 'mapbox') {
+    if (fromCache && _isLiveRouteSource(lastRouteGenerationSource)) {
       lastRouteGenerationSource = 'cache';
     }
     lastRouteFromCache = fromCache;
@@ -6899,7 +6949,7 @@ class RouteService {
   }) async {
     final normalizedTier = _normalizeSubscriptionTier(subscriptionTier);
     if (_isFreeTier(normalizedTier)) return;
-    if (lastRouteGenerationSource != 'mapbox') return;
+    if (!_isLiveRouteSource(lastRouteGenerationSource)) return;
     final bucket = _distanceBucketForPool(scenario.targetDistanceKm);
     if (bucket == null) return;
 
@@ -7772,7 +7822,7 @@ class RouteService {
         candidate.route.edgeMeta['mapbox_request_avoid_highways'] = true;
         candidate.route.edgeMeta['mapbox_request_motorway_excluded'] = true;
 
-        lastRouteGenerationSource = 'mapbox';
+        lastRouteGenerationSource = _liveRouteSource;
         lastRouteEmergencyFallbackUsed = true;
         lastRouteSourceDecision = 'highway_allowed_no_highway_live_fallback';
         lastRouteLiveAttemptReason = 'allowed_not_required_no_highway_retry';
@@ -7999,6 +8049,11 @@ class RouteService {
     required bool avoidHighways,
     required double directDistanceKm,
     bool allowDirectFallback = true,
+    bool navigationReroute = false,
+    int? maxSearchMsOverride,
+    double? currentHeadingDegrees,
+    double? currentSpeedMetersPerSecond,
+    double? locationAccuracyMeters,
   }) async {
     try {
       if (scenario.detourLevel > 0) {
@@ -8060,6 +8115,11 @@ class RouteService {
                 ? -1
                 : scenicVariant.offsetSide,
             candidateBudget: 2,
+            navigationReroute: navigationReroute,
+            maxSearchMsOverride: maxSearchMsOverride,
+            currentHeadingDegrees: currentHeadingDegrees,
+            currentSpeedMetersPerSecond: currentSpeedMetersPerSecond,
+            locationAccuracyMeters: locationAccuracyMeters,
           );
           scenicBody['simplify_waypoints'] = true;
           scenicBody['max_waypoints'] = fallbackDetourLevel >= 2
@@ -8126,6 +8186,11 @@ class RouteService {
         detourFactor: 1.0,
         variant: variant,
         candidateBudget: 2,
+        navigationReroute: navigationReroute,
+        maxSearchMsOverride: maxSearchMsOverride,
+        currentHeadingDegrees: currentHeadingDegrees,
+        currentSpeedMetersPerSecond: currentSpeedMetersPerSecond,
+        locationAccuracyMeters: locationAccuracyMeters,
       );
       body['simplify_waypoints'] = true;
       body['max_waypoints'] = 0;
@@ -9189,11 +9254,13 @@ class RouteService {
         ? (lastRouteLiveAttemptReason ?? 'route_generation')
         : (lastRouteGenerationSource == 'pool' ? 'pool_first' : 'not_needed');
     meta['live_attempt_result'] = lastRouteApiCallCount > 0
-        ? (lastRouteGenerationSource == 'mapbox' ? 'success' : 'not_selected')
+        ? (_isLiveRouteSource(lastRouteGenerationSource)
+              ? 'success'
+              : 'not_selected')
         : 'not_attempted';
     meta['live_fill_attempted'] = lastRouteApiCallCount > 0;
     meta['live_fill_attempt_count'] = lastRouteApiCallCount;
-    meta['live_fill_success'] = lastRouteGenerationSource == 'mapbox';
+    meta['live_fill_success'] = _isLiveRouteSource(lastRouteGenerationSource);
     meta['pool_candidate_count'] = lastRoutePoolCandidateCount;
     meta['pool_seen_candidate_count'] = lastRoutePoolSeenCandidateCount;
     meta['pool_used_reason'] = lastRoutePoolUsedReason;

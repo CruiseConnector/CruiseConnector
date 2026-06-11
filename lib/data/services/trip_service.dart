@@ -20,7 +20,8 @@ class TripService {
   /// 2026-05-24 (vucko Task #53): UI-Integration für Trip-Save+Resume.
   Future<String?> createTrip({
     required String title,
-    required List<({double lat, double lng, String name, String stopType})> stops,
+    required List<({double lat, double lng, String name, String stopType})>
+    stops,
     required String defaultStyle,
     required bool defaultAvoidHighways,
     String? groupId,
@@ -35,18 +36,22 @@ class TripService {
       // versendet wird. Sonst interpretiert Postgres die naive Time als UTC,
       // was bei Gerät in UTC+2 zu "in der Zukunft"-Eintrag führt → negative
       // "läuft seit X Min" im UI.
-      final tripRow = await _client.from('trips').insert({
-        'owner_id': userId,
-        'title': title,
-        'status': 'active',
-        'started_at': DateTime.now().toUtc().toIso8601String(),
-        'stop_count': stops.length,
-        'total_distance_km': totalDistanceKm,
-        'total_duration_seconds': totalDurationSeconds,
-        'default_style': defaultStyle,
-        'default_avoid_highways': defaultAvoidHighways,
-        if (groupId != null) 'group_id': groupId,
-      }).select('id').single();
+      final tripRow = await _client
+          .from('trips')
+          .insert({
+            'owner_id': userId,
+            'title': title,
+            'status': 'active',
+            'started_at': DateTime.now().toUtc().toIso8601String(),
+            'stop_count': stops.length,
+            'total_distance_km': totalDistanceKm,
+            'total_duration_seconds': totalDurationSeconds,
+            'default_style': defaultStyle,
+            'default_avoid_highways': defaultAvoidHighways,
+            if (groupId != null) 'group_id': groupId,
+          })
+          .select('id')
+          .single();
       final tripId = tripRow['id'] as String;
       // 2. Stops mit sequence (0=start, N-1=end)
       final stopRows = <Map<String, dynamic>>[];
@@ -74,9 +79,11 @@ class TripService {
 
   /// Markiert einen Stop als erreicht (actual_arrival = now).
   Future<void> markStopReached(String tripId, int sequence) async {
-    await _client.from('trip_stops').update({
-      'actual_arrival': DateTime.now().toUtc().toIso8601String(),
-    }).eq('trip_id', tripId).eq('sequence', sequence);
+    await _client
+        .from('trip_stops')
+        .update({'actual_arrival': DateTime.now().toUtc().toIso8601String()})
+        .eq('trip_id', tripId)
+        .eq('sequence', sequence);
   }
 
   /// Liefert die aktive ODER pausierte Trip des aktuellen Users, falls vorhanden.
@@ -110,7 +117,7 @@ class TripService {
       var query = _client
           .from('trips')
           .select(
-            'id, title, status, paused_at, started_at, total_distance_km, '
+            'id, owner_id, title, status, paused_at, started_at, total_distance_km, '
             'total_duration_seconds, stop_count, default_style, group_id',
           )
           .inFilter('status', ['active', 'paused']);
@@ -136,26 +143,51 @@ class TripService {
 
   /// Trip pausieren (z.B. Übernachtung).
   Future<void> pauseTrip(String tripId) async {
-    await _client.from('trips').update({
-      'status': 'paused',
-      'paused_at': DateTime.now().toUtc().toIso8601String(),
-    }).eq('id', tripId);
+    await _client
+        .from('trips')
+        .update({
+          'status': 'paused',
+          'paused_at': DateTime.now().toUtc().toIso8601String(),
+        })
+        .eq('id', tripId)
+        .eq('status', 'active');
   }
 
   /// Trip nach Pause weiterführen.
   Future<void> resumeTrip(String tripId) async {
-    await _client.from('trips').update({
-      'status': 'active',
-      'resumed_at': DateTime.now().toUtc().toIso8601String(),
-    }).eq('id', tripId);
+    await _client
+        .from('trips')
+        .update({
+          'status': 'active',
+          'resumed_at': DateTime.now().toUtc().toIso8601String(),
+        })
+        .eq('id', tripId)
+        .eq('status', 'paused');
   }
 
   /// Trip als abgeschlossen markieren.
   Future<void> completeTrip(String tripId) async {
-    await _client.from('trips').update({
-      'status': 'completed',
-      'finished_at': DateTime.now().toUtc().toIso8601String(),
-    }).eq('id', tripId);
+    await _client
+        .from('trips')
+        .update({
+          'status': 'completed',
+          'finished_at': DateTime.now().toUtc().toIso8601String(),
+        })
+        .eq('id', tripId)
+        .inFilter('status', ['active', 'paused']);
+  }
+
+  /// Trip bewusst abbrechen. Die Tour verschwindet aus Resume/Home,
+  /// bleibt aber als Lifecycle-Eintrag nachvollziehbar.
+  Future<void> cancelTrip(String tripId) async {
+    await _client
+        .from('trips')
+        .update({
+          'status': 'cancelled',
+          'finished_at': DateTime.now().toUtc().toIso8601String(),
+        })
+        .eq('id', tripId)
+        .inFilter('status', ['active', 'paused']);
   }
 
   /// Lädt die Stops eines Trips in Reihenfolge.
@@ -184,6 +216,7 @@ class TripService {
 
 class TripSummary {
   final String id;
+  final String? ownerId;
   final String title;
   final String status; // 'active' | 'paused'
   final DateTime? pausedAt;
@@ -195,6 +228,7 @@ class TripSummary {
 
   TripSummary({
     required this.id,
+    required this.ownerId,
     required this.title,
     required this.status,
     required this.pausedAt,
@@ -207,6 +241,7 @@ class TripSummary {
 
   factory TripSummary.fromMap(Map<String, dynamic> m) => TripSummary(
     id: m['id'] as String,
+    ownerId: m['owner_id'] as String?,
     title: (m['title'] ?? '') as String,
     status: (m['status'] ?? 'paused') as String,
     pausedAt: m['paused_at'] == null
@@ -263,7 +298,8 @@ class TripStop {
     actualArrival: m['actual_arrival'] == null
         ? null
         : DateTime.tryParse(m['actual_arrival'] as String),
-    plannedDurationMinutes: ((m['planned_duration_minutes'] ?? 0) as num).toInt(),
+    plannedDurationMinutes: ((m['planned_duration_minutes'] ?? 0) as num)
+        .toInt(),
     notes: m['notes'] as String?,
   );
 }

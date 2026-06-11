@@ -409,6 +409,11 @@ enabled = true
 verify_jwt = false
 entrypoint = "./functions/generate-cruise-route-v2/index.ts"
 
+[functions.geocode]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/geocode/index.ts"
+
 [functions.process-route-seed-jobs]
 enabled = true
 verify_jwt = false

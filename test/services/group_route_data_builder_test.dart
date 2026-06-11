@@ -1,5 +1,5 @@
 import 'package:cruise_connect/data/services/group_route_data_builder.dart';
-import 'package:cruise_connect/domain/models/mapbox_suggestion.dart';
+import 'package:cruise_connect/domain/models/place_suggestion.dart';
 import 'package:cruise_connect/domain/models/route_maneuver.dart';
 import 'package:cruise_connect/domain/models/route_result.dart';
 import 'package:flutter/material.dart';
@@ -33,7 +33,7 @@ void main() {
       planningType: 'Zufall',
       style: 'Sport Mode',
       avoidHighways: true,
-      destination: const MapboxSuggestion(
+      destination: const PlaceSuggestion(
         placeName: 'Bregenz',
         coordinates: [9.7471, 47.5031],
       ),

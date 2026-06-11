@@ -129,22 +129,22 @@ void main() {
           accuracyMeters: 5,
         );
 
-      final planned = RouteResult(
+      const planned = RouteResult(
         geoJson: '{"type":"LineString","coordinates":[[13,48],[13.1,48.1]]}',
-        geometry: const {
+        geometry: {
           'type': 'LineString',
           'coordinates': [
             [13.0, 48.0],
             [13.1, 48.1],
           ],
         },
-        coordinates: const [
+        coordinates: [
           [13.0, 48.0],
           [13.1, 48.1],
         ],
-        maneuvers: const [],
+        maneuvers: [],
         distanceMeters: 15000,
-        edgeMeta: const {'route_fingerprint': 'planned-fp'},
+        edgeMeta: {'route_fingerprint': 'planned-fp'},
       );
 
       final result = recorder.snapshot().toRouteResult(

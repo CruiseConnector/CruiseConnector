@@ -1,15 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 
-import 'package:cruise_connect/domain/models/mapbox_suggestion.dart';
+import 'package:cruise_connect/domain/models/place_suggestion.dart';
 
 /// Bottom-Sheet zur Auswahl des Routentyps (Schnellste, Sport, Abwechslung).
 void showRouteTypeDialog({
   required BuildContext context,
-  required MapboxSuggestion suggestion,
+  required PlaceSuggestion suggestion,
   required String selectedStyle,
   required void Function(
-    MapboxSuggestion suggestion, {
+    PlaceSuggestion suggestion, {
     required bool scenic,
     int routeVariant,
   })

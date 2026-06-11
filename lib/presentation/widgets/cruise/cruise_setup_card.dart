@@ -7,7 +7,7 @@ import 'package:flutter_typeahead/flutter_typeahead.dart';
 import 'package:cruise_connect/core/input_limits.dart';
 import 'package:cruise_connect/data/services/country_region.dart';
 import 'package:cruise_connect/data/services/geocoding_service.dart';
-import 'package:cruise_connect/domain/models/mapbox_suggestion.dart';
+import 'package:cruise_connect/domain/models/place_suggestion.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/mode_explainer_bubble.dart';
 
 /// Setup-Karte für die Routenplanung (Rundkurs / A-nach-B).
@@ -64,7 +64,7 @@ class CruiseSetupCard extends StatefulWidget {
   final String selectedLocation;
   final String selectedStyle;
   final String selectedDetour;
-  final MapboxSuggestion? selectedDestination;
+  final PlaceSuggestion? selectedDestination;
   final TextEditingController destinationController;
   // 2026-05-28 (vucko Startup-V Issue 3A): FocusNode wird von der Page
   // durchgereicht, damit dort beim Tippen die Bottom-Actions ausgeblendet
@@ -75,7 +75,7 @@ class CruiseSetupCard extends StatefulWidget {
   final FocusNode? startLocationFocusNode;
   final String? pickedStartLabel;
   final VoidCallback? onPickStartOnMap;
-  final ValueChanged<MapboxSuggestion>? onStartLocationSelected;
+  final ValueChanged<PlaceSuggestion>? onStartLocationSelected;
   final VoidCallback? onStartLocationCleared;
   final CountryPreference countryPreference;
   final String? homeCountryCode;
@@ -86,7 +86,7 @@ class CruiseSetupCard extends StatefulWidget {
   final ValueChanged<String> onLocationChanged;
   final ValueChanged<String> onStyleChanged;
   final ValueChanged<String> onDetourChanged;
-  final ValueChanged<MapboxSuggestion> onDestinationSelected;
+  final ValueChanged<PlaceSuggestion> onDestinationSelected;
   final VoidCallback onDestinationCleared;
   final ValueChanged<String>? onDestinationInputChanged;
   final bool selectedAvoidHighways;
@@ -228,7 +228,8 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
           ModeExplainerBubble(
             text: _modeExplanations[isRoundTrip ? 'roundtrip' : 'atob'] ?? '',
             accentColor: context.watch<AppAccentProvider>().color,
-            isOpen: _activeExplainer == 'roundtrip' || _activeExplainer == 'atob',
+            isOpen:
+                _activeExplainer == 'roundtrip' || _activeExplainer == 'atob',
             onDismiss: () => setState(() => _activeExplainer = null),
           ),
           const Divider(color: Colors.white10, height: 32),
@@ -358,9 +359,14 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
           ],
         ),
         ModeExplainerBubble(
-          text: _modeExplanations[widget.planningType == 'Zufall' ? 'zufall' : 'wegpunkte'] ?? '',
+          text:
+              _modeExplanations[widget.planningType == 'Zufall'
+                  ? 'zufall'
+                  : 'wegpunkte'] ??
+              '',
           accentColor: context.watch<AppAccentProvider>().color,
-          isOpen: _activeExplainer == 'zufall' || _activeExplainer == 'wegpunkte',
+          isOpen:
+              _activeExplainer == 'zufall' || _activeExplainer == 'wegpunkte',
           onDismiss: () => setState(() => _activeExplainer = null),
         ),
         AnimatedSwitcher(
@@ -556,7 +562,7 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
           ],
         ),
         const SizedBox(height: 10),
-        TypeAheadField<MapboxSuggestion>(
+        TypeAheadField<PlaceSuggestion>(
           controller: widget.destinationController,
           focusNode: widget.destinationFocusNode,
           debounceDuration: const Duration(milliseconds: 380),
@@ -599,8 +605,7 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
                 ? parts.sublist(1).join(',').trim()
                 : (suggestion.context ?? '');
             return Padding(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
               child: Row(
                 children: [
                   Container(
@@ -628,7 +633,8 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
                             fontWeight: FontWeight.w600,
                           ),
                         ),
-                        if (secondary.isNotEmpty || suggestion.distanceMeters != null)
+                        if (secondary.isNotEmpty ||
+                            suggestion.distanceMeters != null)
                           Padding(
                             padding: const EdgeInsets.only(top: 2),
                             child: Text(
@@ -636,7 +642,8 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
                                 if (secondary.isNotEmpty) secondary,
                                 if (suggestion.distanceMeters != null)
                                   _formatSuggestionDistance(
-                                      suggestion.distanceMeters!),
+                                    suggestion.distanceMeters!,
+                                  ),
                               ].join(' · '),
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
@@ -667,8 +674,11 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
             padding: const EdgeInsets.all(18),
             child: Row(
               children: [
-                Icon(Icons.search_off_rounded,
-                    color: Colors.white.withValues(alpha: 0.4), size: 18),
+                Icon(
+                  Icons.search_off_rounded,
+                  color: Colors.white.withValues(alpha: 0.4),
+                  size: 18,
+                ),
                 const SizedBox(width: 10),
                 const Expanded(
                   child: Text(
@@ -732,10 +742,7 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
                 fillColor: const Color(0xFF1E232C),
                 prefixIcon: Icon(Icons.search_rounded, color: accent, size: 22),
                 hintText: 'z.B. McDonald\'s, Flughafen Zürich …',
-                hintStyle: const TextStyle(
-                  color: Colors.white38,
-                  fontSize: 15,
-                ),
+                hintStyle: const TextStyle(color: Colors.white38, fontSize: 15),
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(14),
                   borderSide: BorderSide.none,
@@ -798,7 +805,7 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
     final homeShort = widget.homeCountryCode == null
         ? 'Inland'
         : (_countryShortNames[widget.homeCountryCode!.toUpperCase()] ??
-            'Inland');
+              'Inland');
     // Bool-State: AN = onlyHome, AUS = any. preferHome wird auf „an" gemappt
     // (Altwert aus Persistenz), damit nichts hängt.
     final onlyHome = widget.countryPreference != CountryPreference.any;
@@ -830,10 +837,7 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
             decoration: BoxDecoration(
               color: backgroundColor,
               borderRadius: BorderRadius.circular(12),
-              border: Border.all(
-                color: borderColor,
-                width: onlyHome ? 1.5 : 1,
-              ),
+              border: Border.all(color: borderColor, width: onlyHome ? 1.5 : 1),
               boxShadow: onlyHome
                   ? [
                       BoxShadow(
@@ -899,8 +903,7 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
                             child: Text(
                               onlyHome ? 'AN' : 'AUS',
                               style: TextStyle(
-                                color:
-                                    onlyHome ? accentColor : Colors.white70,
+                                color: onlyHome ? accentColor : Colors.white70,
                                 fontSize: 11,
                                 fontWeight: FontWeight.w800,
                                 letterSpacing: 0.5,
@@ -979,7 +982,7 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
     final homeShort = widget.homeCountryCode == null
         ? 'Inland'
         : (_countryShortNames[widget.homeCountryCode!.toUpperCase()] ??
-            'Inland');
+              'Inland');
     final options = <(CountryPreference, IconData, String, String)>[
       (
         CountryPreference.any,
@@ -1000,8 +1003,9 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
         'Vermeidet Grenzübertritte — ideal ohne Ausweis/Pass dabei.',
       ),
     ];
-    final activeSubtitle =
-        options.firstWhere((o) => o.$1 == widget.countryPreference).$4;
+    final activeSubtitle = options
+        .firstWhere((o) => o.$1 == widget.countryPreference)
+        .$4;
 
     return Container(
       padding: const EdgeInsets.all(14),
@@ -1023,8 +1027,11 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
                   color: accent.withValues(alpha: 0.15),
                   borderRadius: BorderRadius.circular(10),
                 ),
-                child: Icon(Icons.travel_explore_rounded,
-                    color: accent, size: 19),
+                child: Icon(
+                  Icons.travel_explore_rounded,
+                  color: accent,
+                  size: 19,
+                ),
               ),
               const SizedBox(width: 10),
               const Expanded(
@@ -1042,18 +1049,17 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
                     SizedBox(height: 1),
                     Text(
                       'Wie sehr im Heimatland bleiben?',
-                      style: TextStyle(
-                        color: Colors.white38,
-                        fontSize: 11,
-                      ),
+                      style: TextStyle(color: Colors.white38, fontSize: 11),
                     ),
                   ],
                 ),
               ),
               if (homeName != null)
                 Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 9,
+                    vertical: 5,
+                  ),
                   decoration: BoxDecoration(
                     color: Colors.white.withValues(alpha: 0.06),
                     borderRadius: BorderRadius.circular(20),
@@ -1077,8 +1083,7 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
               for (final (pref, icon, label, _) in options) ...[
                 Expanded(
                   child: GestureDetector(
-                    onTap: () =>
-                        widget.onCountryPreferenceChanged?.call(pref),
+                    onTap: () => widget.onCountryPreferenceChanged?.call(pref),
                     child: AnimatedContainer(
                       duration: const Duration(milliseconds: 180),
                       padding: const EdgeInsets.symmetric(vertical: 12),
@@ -1149,8 +1154,8 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
                 child: Text(
                   widget.countryPreference == CountryPreference.onlyHome
                       ? '$activeSubtitle In Grenzregionen (z.B. Vorarlberg) '
-                          'bleiben wir so nah wie möglich am Land, falls keine '
-                          'reine Inlandsroute existiert.'
+                            'bleiben wir so nah wie möglich am Land, falls keine '
+                            'reine Inlandsroute existiert.'
                       : activeSubtitle,
                   style: TextStyle(
                     color: Colors.white.withValues(alpha: 0.45),
@@ -1264,7 +1269,7 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
             color: const Color(0xFF1A1A1A),
             borderRadius: BorderRadius.circular(12),
           ),
-          child: TypeAheadField<MapboxSuggestion>(
+          child: TypeAheadField<PlaceSuggestion>(
             controller: widget.startLocationController,
             focusNode: widget.startLocationFocusNode,
             debounceDuration: const Duration(milliseconds: 450),
@@ -1312,9 +1317,7 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
             ),
             loadingBuilder: (context) => Padding(
               padding: const EdgeInsets.all(14),
-              child: Center(
-                child: CircularProgressIndicator(color: accent),
-              ),
+              child: Center(child: CircularProgressIndicator(color: accent)),
             ),
             builder: (context, controller, focusNode) => TextField(
               controller: controller,

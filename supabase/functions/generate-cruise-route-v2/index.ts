@@ -1136,13 +1136,20 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
           break;
         }
       }
-      // Pass 1a: exakte WPs, Start/Ziel-Offsets — Start-Offsets ZUERST (der
-      // häufige Rettungsfall „nur der Start ist unsnapbar" braucht so ≤3 Calls).
-      const seRescue = [
-        startEndOffsets[1], startEndOffsets[2], startEndOffsets[5], // Start: ±150m, dann ~1.1km
-        startEndOffsets[3], startEndOffsets[4], startEndOffsets[6], // Ziel: ±150m, dann ~1.1km
+      // Pass 1a: exakte WPs, Start/Ziel-Offsets. Bei Navigation/Reroute ist der
+      // Start die Fahrzeugposition und darf niemals verschoben werden; nur Ziel-
+      // oder WP-Snap darf eskalieren. Sonst gewinnt eine versetzte Anschlussroute
+      // und der Client verwirft sie als Start-Offset.
+      const targetOnlyRescue = [
+        startEndOffsets[3], startEndOffsets[4], startEndOffsets[6],
         startEndOffsets[7], startEndOffsets[8],
       ];
+      const seRescue = req.reroute_request === true
+        ? targetOnlyRescue
+        : [
+            startEndOffsets[1], startEndOffsets[2], startEndOffsets[5],
+            ...targetOnlyRescue,
+          ];
       for (let i = 0; i < seRescue.length; i++) {
         const seOffset = seRescue[i];
         const result = await callGraphHopper({
@@ -1206,8 +1213,11 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
       const segResults: Array<RouteResult> = [];
       for (let segIdx = 0; segIdx < segments.length; segIdx++) {
         const seg = segments[segIdx];
+        const segmentVariants = req.reroute_request === true && segIdx === 0
+          ? segDirectVariants.filter(v => v.sLatOff === 0 && v.sLngOff === 0)
+          : segDirectVariants;
         const tries = await Promise.all(
-          segDirectVariants.map(v =>
+          segmentVariants.map(v =>
             callGraphHopper({
               startLat: seg.start.lat + v.sLatOff,
               startLng: seg.start.lng + v.sLngOff,
@@ -1321,10 +1331,11 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
         ],
       ];
       const phaseNames = ['exact', 'end-offset-150m', 'end-offset-1km', 'start-offset-150m', 'start-offset-1km'];
+      const runnablePhases = req.reroute_request === true ? phases.slice(0, 3) : phases;
       let lastResults: Array<{ result: RouteResult | { error: string }; seed: number }> = [];
-      for (let p = 0; p < phases.length; p++) {
+      for (let p = 0; p < runnablePhases.length; p++) {
         const results = await Promise.all(
-          phases[p].map((v, idx) =>
+          runnablePhases[p].map((v, idx) =>
             callGraphHopper({
               startLat: req.start_location!.latitude + v.sLatOff,
               startLng: req.start_location!.longitude + v.sLngOff,

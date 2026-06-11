@@ -1,6 +1,6 @@
-/// Mapbox Geocoding Vorschlag für Autocomplete
-class MapboxSuggestion {
-  const MapboxSuggestion({
+/// Geocoding-Vorschlag für Autocomplete.
+class PlaceSuggestion {
+  const PlaceSuggestion({
     required this.placeName,
     required this.coordinates,
     this.context,

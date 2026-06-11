@@ -15,10 +15,11 @@ import 'package:cruise_connect/presentation/widgets/cruise/cruise_maplibre_map.d
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
-  testWidgets('Frische MLNMapView überlebt das Setup (kein LatLng-SIGABRT)',
-      (tester) async {
+  testWidgets('Frische MLNMapView überlebt das Setup (kein LatLng-SIGABRT)', (
+    tester,
+  ) async {
     await tester.pumpWidget(
-      MaterialApp(
+      const MaterialApp(
         home: Scaffold(
           body: CruiseMapLibreMap(
             initialCenter: ll.LatLng(47.5031, 9.7471), // Bregenz
@@ -42,8 +43,11 @@ void main() {
     );
     // ignore: avoid_print
     print('PROBE nativeMapInTree=${nativeMap.evaluate().length}');
-    expect(nativeMap.evaluate().isNotEmpty, isTrue,
-        reason: 'native MapLibreMap muss im Tree sein (Crash-Pfad betreten)');
+    expect(
+      nativeMap.evaluate().isNotEmpty,
+      isTrue,
+      reason: 'native MapLibreMap muss im Tree sein (Crash-Pfad betreten)',
+    );
     expect(WidgetsBinding.instance.isRootWidgetAttached, isTrue);
   });
 }

@@ -45,6 +45,7 @@ import 'package:vector_tile_renderer/vector_tile_renderer.dart' as vtr;
 import 'package:cruise_connect/data/services/cruise_dark_map_style.dart';
 import 'package:cruise_connect/data/services/car_route_bridge_service.dart';
 import 'package:cruise_connect/data/services/car_command_listener.dart';
+import 'package:cruise_connect/data/services/frame_timing_utils.dart';
 import 'package:cruise_connect/data/services/group_route_data_builder.dart';
 import 'package:cruise_connect/data/services/route_access_plan.dart';
 import 'package:cruise_connect/data/services/route_service.dart';
@@ -52,6 +53,7 @@ import 'package:cruise_connect/data/services/route_cache_service.dart';
 import 'package:cruise_connect/data/services/route_completion_candidate_service.dart';
 import 'package:cruise_connect/data/services/route_pool_service.dart';
 import 'package:cruise_connect/data/services/route_rating_service.dart';
+import 'package:cruise_connect/data/services/route_render_lock.dart';
 import 'package:cruise_connect/data/services/smart_reroute_engine.dart';
 import 'package:cruise_connect/data/services/saved_routes_service.dart';
 import 'package:cruise_connect/domain/models/place_suggestion.dart';
@@ -465,6 +467,7 @@ class _CruiseModePageState extends State<CruiseModePage>
   // zurückgesetzt.
   bool _rerouteBannerShown = false;
   DateTime? _lastRerouteTime; // Cooldown zwischen Reroutes
+  bool _lastRerouteFailed = false;
   int _offRouteCount = 0; // Zählt aufeinanderfolgende Off-Route-Updates
   // 2026-06-07 (vucko P-reroute): Zeit-basierte Hysterese wie Apple/Google —
   // Off-Route muss ANHALTEND sein (Wall-Clock), nicht nur N Ticks (bei 20Hz-Sim
@@ -484,6 +487,7 @@ class _CruiseModePageState extends State<CruiseModePage>
   // 2026-06-07 (vucko P-reroute): _offRouteCountThreshold (Tick-Count) entfernt —
   // durch zeit-basierte Hysterese (_offRouteSince, ≥3s/≥1.5s) ersetzt.
   static const Duration _rerouteCooldown = Duration(seconds: 12);
+  static const Duration _rerouteFailureCooldown = Duration(seconds: 4);
   // 2026-06-01 (vucko): Max. Versatz, bis zu dem der sichtbare Routenkopf an
   // die GPS-Position geheftet wird. Darüber bleibt der echte Routenpunkt der
   // Kopf → keine Off-Route-Zacken bei GPS-Drift in Bergtälern.
@@ -604,6 +608,7 @@ class _CruiseModePageState extends State<CruiseModePage>
   double _camCurLat = 0.0, _camCurLng = 0.0, _camCurHeading = 0.0;
   bool _camHasState = false;
   bool _camMoveInFlight = false; // Coalescing — kein Method-Channel-Stau
+  DateTime? _lastCameraFrameAt;
 
   // ──────────────────────────────────────────────────────────────────────────
 
@@ -1030,118 +1035,130 @@ class _CruiseModePageState extends State<CruiseModePage>
   // Navigation): waehrend der Fahrt wird der GERENDERTE Puck auf die Route
   // GESNAPPT und gleitet monoton ENTLANG der Geometrie; der Linien-Schnitt
   // nutzt DIESELBE Distanz → Puck und Linie koennen konstruktiv nicht mehr
-  // auseinanderlaufen. Off-route (lateral > Gate) faellt alles auf den freien
-  // Puck zurueck, der Schnitt friert nicht ein.
+  // auseinanderlaufen. Kurze GPS-Ausreisser werden visuell auf dem letzten
+  // Lock gehalten; echte Off-route-Fahrten fallen nach kurzer Hysterese auf
+  // den freien Puck zurueck. Reroute/Off-route-Pruefung nutzt weiter die echte
+  // GPS-Position und wird dadurch nicht maskiert.
   RouteWindowMatch? _lastWindowMatch;
-  List<double>? _routeCumDistM; // kumulierte Meter je Vertex der aktiven Route
-  int _routeCumHash = 0;
-  int _renderLockSegIdx = 0;
-  double _renderLockDistM = -1; // -1 = kein Lock
+  final RouteRenderLock _routeRenderLock = RouteRenderLock();
   double _lastTrimDistM = -1;
-  static const double _routeLockLateralMaxM = 30.0;
+  LatLng? _lastRouteLockedRenderLatLng;
+  DateTime? _lastRouteRenderLockAcceptedAt;
+  static const double _routeTrimPushGateM = 4.0;
+  static const double _routeTrimLeadM = 0.0;
+  static const Duration _routeOutlierVisualHold = Duration(milliseconds: 1500);
+  static const Duration _nativeRenderPredictionLead = Duration(
+    milliseconds: 150,
+  );
+  List<double>? get _routeCumDistM => _routeRenderLock.cumulativeDistances;
+  int get _renderLockSegIdx => _routeRenderLock.segmentIndex;
+  double get _renderLockDistM => _routeRenderLock.distanceM;
+
+  bool _clearLiveRouteWindowForOffRoute() {
+    if (_brightAheadLatLngs.isEmpty &&
+        _dimRemainingLatLngs.isEmpty &&
+        _drivenTrailLatLngs.isEmpty &&
+        _lastDimHead == null &&
+        _lastDrivenHead == null &&
+        _lastTrimDistM < 0) {
+      return false;
+    }
+    _brightAheadLatLngs = const [];
+    _dimRemainingLatLngs = const [];
+    _drivenTrailLatLngs = const [];
+    _lastDimHead = null;
+    _lastDrivenHead = null;
+    _lastTrimDistM = -1;
+    return true;
+  }
 
   void _ensureRouteCumDist() {
-    final coords = _fullRouteCoordinates;
-    final h = identityHashCode(coords);
-    if (_routeCumHash == h && _routeCumDistM != null) return;
-    _routeCumHash = h;
-    _renderLockSegIdx = 0;
-    _renderLockDistM = -1;
-    _lastTrimDistM = -1;
-    if (coords.length < 2) {
-      _routeCumDistM = null;
-      return;
+    if (_routeRenderLock.ensureRoute(_fullRouteCoordinates)) {
+      _lastTrimDistM = -1;
+      _lastRouteLockedRenderLatLng = null;
+      _lastRouteRenderLockAcceptedAt = null;
     }
-    final cum = List<double>.filled(coords.length, 0);
-    for (var i = 1; i < coords.length; i++) {
-      cum[i] = cum[i - 1] +
-          geo.Geolocator.distanceBetween(
-            coords[i - 1][1], coords[i - 1][0], coords[i][1], coords[i][0]);
-    }
-    _routeCumDistM = cum;
   }
 
   /// Projiziert (lat,lng) auf die aktive Route. Liefert die monotone Distanz
   /// entlang der Route oder null (off-route / keine Route).
-  double? _projectDistOnRoute(double lat, double lng) {
+  double? _projectDistOnRoute(double lat, double lng, DateTime timestamp) {
     final coords = _fullRouteCoordinates;
-    if (coords.length < 2 || !_isRouteConfirmed) return null;
-    _ensureRouteCumDist();
-    final cum = _routeCumDistM;
-    if (cum == null) return null;
-    final cosLat = math.cos(lat * math.pi / 180.0);
-    // Fenster um den letzten Lock; ohne Lock (Start/Resume) ganze Route.
-    final hasLock = _renderLockDistM >= 0;
-    final from = hasLock ? math.max(0, _renderLockSegIdx - 6) : 0;
-    final to = hasLock
-        ? math.min(coords.length - 1, _renderLockSegIdx + 80)
-        : coords.length - 1;
-    var bestLat2 = double.infinity;
-    var bestDist = -1.0;
-    var bestSeg = -1;
-    for (var i = from; i < to; i++) {
-      final ax = (coords[i][0] - lng) * 111320.0 * cosLat;
-      final ay = (coords[i][1] - lat) * 110540.0;
-      final bx = (coords[i + 1][0] - lng) * 111320.0 * cosLat;
-      final by = (coords[i + 1][1] - lat) * 110540.0;
-      final dx = bx - ax;
-      final dy = by - ay;
-      final len2 = dx * dx + dy * dy;
-      var t = 0.0;
-      if (len2 > 1e-9) t = (-(ax * dx + ay * dy) / len2).clamp(0.0, 1.0);
-      final px = ax + dx * t;
-      final py = ay + dy * t;
-      final lat2 = px * px + py * py;
-      if (lat2 < bestLat2) {
-        bestLat2 = lat2;
-        bestSeg = i;
-        bestDist = cum[i] + math.sqrt(len2) * t;
-      }
-    }
-    if (bestSeg < 0 || math.sqrt(bestLat2) > _routeLockLateralMaxM) {
-      return null;
-    }
-    // Monotonie: der gerenderte Fortschritt faehrt nie rueckwaerts (GPS-Jitter
-    // nach hinten wuerde sonst sichtbar zuruecksetzen).
-    if (hasLock && bestDist < _renderLockDistM) {
-      return _renderLockDistM;
-    }
-    _renderLockSegIdx = bestSeg;
-    _renderLockDistM = bestDist;
-    return bestDist;
+    final projection = _routeRenderLock.project(
+      coordinates: coords,
+      latitude: lat,
+      longitude: lng,
+      routeConfirmed: _isRouteConfirmed,
+      currentRouteIndex: _currentRouteIndex,
+      speedMps: _nativeSmoother.speed,
+      timestamp: timestamp,
+    );
+    return projection?.distanceM;
   }
 
   /// Punkt (lng,lat) bei Distanz d entlang der aktiven Route.
   List<double>? _pointAtRouteDist(double d) {
-    final coords = _fullRouteCoordinates;
-    final cum = _routeCumDistM;
-    if (coords.length < 2 || cum == null) return null;
-    if (d <= 0) return [coords.first[0], coords.first[1]];
-    if (d >= cum.last) return [coords.last[0], coords.last[1]];
-    var i = _renderLockSegIdx.clamp(0, coords.length - 2);
-    if (cum[i] > d) i = 0;
-    while (i < coords.length - 2 && cum[i + 1] < d) {
-      i++;
-    }
-    final segLen = cum[i + 1] - cum[i];
-    final f = segLen > 0 ? ((d - cum[i]) / segLen).clamp(0.0, 1.0) : 0.0;
-    return [
-      coords[i][0] + (coords[i + 1][0] - coords[i][0]) * f,
-      coords[i][1] + (coords[i + 1][1] - coords[i][1]) * f,
-    ];
+    _ensureRouteCumDist();
+    return _routeRenderLock.pointAtDistance(d);
+  }
+
+  bool _shouldHoldLastRouteLockedRenderPosition(DateTime now) {
+    return shouldHoldRouteRenderLock(
+      now: now,
+      lastAcceptedAt: _lastRouteRenderLockAcceptedAt,
+      offRouteSince: _offRouteSince,
+      routeConfirmed: _isRouteConfirmed,
+      overviewActive: _isOverviewActive,
+      hasLock: _renderLockDistM >= 0,
+      holdDuration: _routeOutlierVisualHold,
+    );
   }
 
   /// Render-Position fuer Puck UND Kamera: on-route = auf die Linie gesnappt.
-  LatLng? _routeLockedRenderPosition() {
-    final p = _nativeSmoother.predict(DateTime.now());
-    if (p.lat == 0 && p.lng == 0) return null;
-    if (!_isRouteConfirmed || _isOverviewActive) return LatLng(p.lat, p.lng);
-    final d = _projectDistOnRoute(p.lat, p.lng);
-    if (d == null) return LatLng(p.lat, p.lng); // off-route: freier Puck
+  LatLng? _routeLockedRenderPosition([DateTime? at]) {
+    final renderAt = at ?? DateTime.now();
+    final p = _nativeSmoother.predict(renderAt);
+    if (p.lat == 0 && p.lng == 0) {
+      _lastRouteLockedRenderLatLng = null;
+      _lastRouteRenderLockAcceptedAt = null;
+      return null;
+    }
+    if (!_isRouteConfirmed || _isOverviewActive) {
+      final free = LatLng(p.lat, p.lng);
+      _lastRouteLockedRenderLatLng = free;
+      return free;
+    }
+    final d = _projectDistOnRoute(p.lat, p.lng, renderAt);
+    if (d == null) {
+      if (_shouldHoldLastRouteLockedRenderPosition(renderAt)) {
+        final heldPt = _pointAtRouteDist(_renderLockDistM);
+        if (heldPt != null) {
+          final held = LatLng(heldPt[1], heldPt[0]);
+          _lastRouteLockedRenderLatLng = held;
+          return held;
+        }
+      }
+      final free = LatLng(p.lat, p.lng); // off-route: freier Puck
+      _lastRouteLockedRenderLatLng = free;
+      return free;
+    }
+    _lastRouteRenderLockAcceptedAt = renderAt;
     final pt = _pointAtRouteDist(d);
-    if (pt == null) return LatLng(p.lat, p.lng);
-    return LatLng(pt[1], pt[0]);
+    if (pt == null) {
+      final free = LatLng(p.lat, p.lng);
+      _lastRouteLockedRenderLatLng = free;
+      return free;
+    }
+    final locked = LatLng(pt[1], pt[0]);
+    _lastRouteLockedRenderLatLng = locked;
+    return locked;
   }
+
+  /// Read-only Render-Position fuer das Map-Overlay. Wichtig: Das Map-Widget
+  /// projiziert Marker bei jedem CameraMove; dieser Callback darf den Route-Lock
+  /// nicht fortschreiben, sonst kann der Puck einen Frame neuer sein als der
+  /// GeoJSON-Linienkopf.
+  LatLng? _readRouteLockedRenderPosition() => _lastRouteLockedRenderLatLng;
 
   bool _trimVisibleRouteToProjection(RouteWindowMatch match) {
     final coords = _fullRouteCoordinates;
@@ -1199,7 +1216,7 @@ class _CruiseModePageState extends State<CruiseModePage>
         projHead[1],
         projHead[0],
       );
-      if (moved < 4.0) return false;
+      if (moved < _routeTrimPushGateM) return false;
     }
     _lastDrivenHead = projHead;
 
@@ -1229,26 +1246,15 @@ class _CruiseModePageState extends State<CruiseModePage>
     ];
 
     // BRIGHT: 3km-Fenster ab Puck (kleine Geometrie, 4m-gegated wie oben).
-    // 2026-06-10 (vucko Butterweich): Der Linien-KOPF bekommt VORHALT entlang
-    // der Route. Ohne Vorhalt pendelte der Kopf (Gate-bedingt) HINTER dem
-    // 60fps-interpolierten Puck — die Linie ragte sichtbar hinten raus und
-    // "pumpte" (Frame-Serie-Beweis).
-    // 2026-06-11 (vucko 1Hz-GPS-Fix): Die festen 3m waren auf den 20-Hz-
-    // Fahrsimulator kalibriert. Echtes GPS liefert ~1 Fix/s; der per-Frame
-    // interpolierte Puck faehrt zwischen zwei Fixes speed*1s weiter (50km/h =
-    // 14m) — die Linie ragte am Geraet bis ~15m raus und schnappte 1x/s nach.
-    // Vorhalt jetzt dynamisch: ein Fix-Intervall Fahrweg (+20% Reserve),
-    // mindestens 3m (Stand/Schritttempo), gekappt bei 35m (>100km/h reicht
-    // der Kopf optisch trotzdem, weil der Puck-Marker den Schnitt verdeckt).
     var headLng = projHead[0];
     var headLat = projHead[1];
     var headIdx = clampedAhead;
-    // 2026-06-11 (vucko Route-Lock): Schnitt und Puck teilen dieselbe Distanz
-    // entlang der Route — der grosse speed-Vorhalt ist obsolet (er wuerde
-    // jetzt ein LOCH vor dem Puck reissen). 2,5m Mini-Vorhalt: der Schnitt
-    // liegt knapp in Fahrtrichtung unter dem Puck-Marker; der Tick-Retrim
-    // (>6m Drift) haelt ihn dort bei jedem Tempo.
-    var lead = 2.5;
+    // 2026-06-12 (vucko Geraete-Screenshots): Schnitt und Puck teilen exakt
+    // dieselbe Distanz. Der fruehere 6m-Vorhalt war als Naht-Verdeckung gedacht,
+    // erzeugte in echten Fahrbildern aber wieder den Eindruck, dass Route und
+    // Standort nicht zusammenkleben. Die Marker-Groesse verdeckt die GeoJSON-
+    // Push-Kadenz ausreichend; wichtiger ist ein identischer Geo-Anker.
+    var lead = _routeTrimLeadM;
     while (lead > 0 && headIdx < coords.length) {
       final c = coords[headIdx];
       final d = geo.Geolocator.distanceBetween(headLat, headLng, c[1], c[0]);
@@ -1275,12 +1281,19 @@ class _CruiseModePageState extends State<CruiseModePage>
       prevLat = c[1];
       aheadEnd++;
     }
-    // On-route-Erkennung: Abstand Puck -> Projektion.
-    final puck = _userLocation;
-    if (puck != null) {
+    // On-route-Erkennung: Abstand GERENDERTER Puck -> Projektion. Roh-GPS kann
+    // kurz seitlich ausreissen, waehrend der Route-Lock den sichtbaren Puck
+    // korrekt auf der Linie haelt. Dieser Guard darf dann nicht gegen eine
+    // andere Quelle entscheiden und die rote Vorwaerts-Linie ausblenden.
+    final visualPuck =
+        _lastRouteLockedRenderLatLng ??
+        (_userLocation == null
+            ? null
+            : LatLng(_userLocation!.latitude, _userLocation!.longitude));
+    if (visualPuck != null) {
       final offM = geo.Geolocator.distanceBetween(
-        puck.latitude,
-        puck.longitude,
+        visualPuck.latitude,
+        visualPuck.longitude,
         projHead[1],
         projHead[0],
       );
@@ -2347,8 +2360,8 @@ class _CruiseModePageState extends State<CruiseModePage>
   // jeden Frame ein Stück linear Richtung Ziel und setzt ihn INSTANT (moveCamera).
   // Lineare Bewegung + 1 Channel-Call pro Frame (coalesced) = butterweich.
   // Kamera-Bewegungs-Diagnostik bleibt für Entwickler im Code, ist für Uploads
-  // aber dauerhaft deaktiviert.
-  static const bool _perfCamDiag = false;
+  // aber per Default deaktiviert.
+  static const bool _perfCamDiag = bool.fromEnvironment('PERF_CAM_DIAG');
   final List<double> _camDiagSteps = [];
   int _camDiagStalls = 0;
   int _camDiagTicks = 0;
@@ -2397,9 +2410,13 @@ class _CruiseModePageState extends State<CruiseModePage>
   void _onCameraAnimationTick() {
     if (!_isCameraLocked || !_mapReady || _isOverviewActive) {
       _cameraAnimController?.stop();
+      _lastCameraFrameAt = null;
       return;
     }
     if (!_camHasState || _camMoveInFlight) return;
+    final frameNow = DateTime.now();
+    final previousFrameAt = _lastCameraFrameAt;
+    _lastCameraFrameAt = frameNow;
     // 2026-06-10 (vucko Fahr-Ruckeln-Fix, MESSBELEGT): Das Kamera-ZIEL wurde
     // bisher nur pro GPS-Event gesetzt. Echtes iOS-GPS liefert ~1Hz → das Ziel sprang
     // 1×/Sekunde um ~Sekunden-Fahrstrecke (70 km/h ≈ 19 m), die Dämpfung
@@ -2414,7 +2431,9 @@ class _CruiseModePageState extends State<CruiseModePage>
       // 2026-06-11 (vucko Route-Lock): Kamera folgt derselben route-gesnappten
       // Render-Position wie der Puck (eine Quelle) — vorher zog die freie
       // Kalman-Prediction die Kamera seitlich neben die Linie.
-      final lockPos = _routeLockedRenderPosition();
+      final lockPos = _routeLockedRenderPosition(
+        DateTime.now().add(_nativeRenderPredictionLead),
+      );
       if (lockPos != null) {
         _camToLat = lockPos.latitude;
         _camToLng = lockPos.longitude;
@@ -2422,20 +2441,29 @@ class _CruiseModePageState extends State<CruiseModePage>
         // die Bearing-Dead-Zone an) — Rotation soll nicht pro Frame zappeln.
       }
       // Linien-Schnitt mitziehen: ist der gerenderte Fortschritt dem letzten
-      // Trim >6m voraus, frisch nachtrimmen (throttled ueber das 4m-Gate im
-      // Trim selbst + diesen Schwellwert) — der Schnitt haengt damit nie
-      // mehr als ~6m hinter dem Puck und liegt unter dem Marker.
+      // Trim >4m voraus, frisch nachtrimmen. Der sichtbare Linienkopf ist exakt
+      // derselbe Route-Lock-Meter wie der Puck; kein separater Vorhalt.
       if (_renderLockDistM >= 0 &&
           _lastTrimDistM >= 0 &&
-          _renderLockDistM - _lastTrimDistM > 6.0 &&
+          _renderLockDistM - _lastTrimDistM > _routeTrimPushGateM &&
           _lastWindowMatch != null) {
         if (_trimVisibleRouteToProjection(_lastWindowMatch!)) {
           _safeSetState(() {});
         }
       }
     }
-    // Kritisch gedämpftes Annähern (Apple/Google-artig). Faktor pro Frame.
-    const f = 0.18;
+    // Kritisch gedämpftes Annähern (Apple/Google-artig). Auf dem echten Gerät
+    // kommt nicht jeder AnimationController-Tick bis zu MapLibre durch
+    // (_camMoveInFlight coalesced Method-Channel-Calls). Der alte fixe 0.18-
+    // Faktor war pro Tick kalibriert und wurde bei 30/20fps effektiv zu langsam.
+    // Zeitnormiert bleibt die Follow-Zeitkonstante stabil, ohne bei langen Pausen
+    // zu teleportieren (max 4 Frame-Äquivalente).
+    final f = frameNormalizedBlend(
+      perFrameBlend: 0.18,
+      elapsed: previousFrameAt == null
+          ? null
+          : frameNow.difference(previousFrameAt),
+    );
     final prevLat = _camCurLat;
     final prevLng = _camCurLng;
     final prevHeading = _camCurHeading;
@@ -2456,6 +2484,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       if (++_camIdleTicks >= 45) {
         _camIdleTicks = 0;
         _cameraAnimController?.stop();
+        _lastCameraFrameAt = null;
         return;
       }
     } else {
@@ -2503,7 +2532,10 @@ class _CruiseModePageState extends State<CruiseModePage>
       _camCurHeading = effectiveHeading;
       _camHasState = true;
     }
-    if (!controller.isAnimating) controller.repeat();
+    if (!controller.isAnimating) {
+      _lastCameraFrameAt = null;
+      controller.repeat();
+    }
   }
 
   /// Zirkuläre Interpolation für Heading (0–360°).
@@ -4221,7 +4253,7 @@ class _CruiseModePageState extends State<CruiseModePage>
                         ),
                         if (hasConfirmableRoute && _activeTripId != null) ...[
                           const SizedBox(height: 8),
-                          _buildTripSaveForLaterButton(height: 46),
+                          _buildTripLifecycleActions(height: 46),
                         ],
                       ],
                     );
@@ -5064,10 +5096,13 @@ class _CruiseModePageState extends State<CruiseModePage>
     // (_buildMapLibreLines). Vor der Fahrt/in der Uebersicht: volle Route voll
     // rot. Fallback: solange noch kein Fenster berechnet ist (Fahrtbeginn),
     // bleibt die VOLLE Route sichtbar — der Strich darf nie verschwinden.
+    final canUseLiveRouteWindow =
+        _isRouteConfirmed &&
+        !_isRerouting &&
+        _offRouteSince == null &&
+        _brightAheadLatLngs.length >= 2;
     final activePts = (!_isOverviewActive && _routeLatLngs.length >= 2)
-        ? ((_isRouteConfirmed && _brightAheadLatLngs.length >= 2)
-              ? _brightAheadLatLngs
-              : _routeLatLngs)
+        ? (canUseLiveRouteWindow ? _brightAheadLatLngs : _routeLatLngs)
         : _fullRouteBackgroundLatLngs;
     return CruiseMapLibreMap(
       initialCenter: _stableInitialCenter!,
@@ -5091,7 +5126,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       // 2026-06-11 (vucko Route-Lock): Der Puck folgt pro Frame der auf die
       // ROUTE gesnappten Render-Position (eine Quelle mit Linien-Schnitt +
       // Kamera) — Puck faehrt sichtbar AUF der Linie, kein Auseinanderlaufen.
-      liveSmoothedPosition: kIsWeb ? null : _routeLockedRenderPosition,
+      liveSmoothedPosition: kIsWeb ? null : _readRouteLockedRenderPosition,
       onControllerReady: (c) {
         _mlController = c;
         if (!_mapReady) _onMapReady();
@@ -5671,7 +5706,7 @@ class _CruiseModePageState extends State<CruiseModePage>
         if (hasConfirmableRoute && _activeTripId != null)
           Padding(
             padding: const EdgeInsets.only(bottom: 12),
-            child: _buildTripSaveForLaterButton(height: 46),
+            child: _buildTripLifecycleActions(height: 46),
           ),
         Container(
           height: 60,
@@ -5760,7 +5795,22 @@ class _CruiseModePageState extends State<CruiseModePage>
     );
   }
 
-  Widget _buildTripSaveForLaterButton({required double height}) {
+  Widget _buildTripLifecycleActions({required double height}) {
+    return Row(
+      children: [
+        Expanded(
+          child: _buildTripSaveForLaterButton(height: height, compact: true),
+        ),
+        const SizedBox(width: 8),
+        Expanded(child: _buildTripCancelButton(height: height)),
+      ],
+    );
+  }
+
+  Widget _buildTripSaveForLaterButton({
+    required double height,
+    bool compact = false,
+  }) {
     return SizedBox(
       width: double.infinity,
       height: height,
@@ -5771,18 +5821,54 @@ class _CruiseModePageState extends State<CruiseModePage>
           color: AppAccentColors.accent,
           size: 18,
         ),
-        label: const Text(
-          'Tour zwischenspeichern',
+        label: Text(
+          compact ? 'Speichern' : 'Tour zwischenspeichern',
           style: TextStyle(
             color: Colors.white,
-            fontSize: 15,
+            fontSize: compact ? 13 : 15,
             fontWeight: FontWeight.w700,
           ),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
         ),
         style: OutlinedButton.styleFrom(
           backgroundColor: const Color(0xFF1C1F26),
           side: BorderSide(
             color: AppAccentColors.accent.withValues(alpha: 0.42),
+          ),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(height / 2),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTripCancelButton({required double height}) {
+    return SizedBox(
+      width: double.infinity,
+      height: height,
+      child: OutlinedButton.icon(
+        onPressed: _isLoading ? null : _confirmCancelActiveTripFromMap,
+        icon: const Icon(
+          Icons.close_rounded,
+          color: Color(0xFFFF6B61),
+          size: 18,
+        ),
+        label: const Text(
+          'Abbrechen',
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: 13,
+            fontWeight: FontWeight.w700,
+          ),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+        style: OutlinedButton.styleFrom(
+          backgroundColor: const Color(0xFF1C1F26),
+          side: BorderSide(
+            color: const Color(0xFFFF6B61).withValues(alpha: 0.42),
           ),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(height / 2),
@@ -7592,6 +7678,11 @@ class _CruiseModePageState extends State<CruiseModePage>
         if (mounted) _showPoiFirstRunTutorial();
       });
     }
+    // Eine neu angezeigte Route ist Preview, keine aktive Navigation. Wenn der
+    // User während der Suche Recenter/Follow aktiv hatte, darf die Kamera die
+    // Preview nicht weiter festhalten und gegen Pans zurückziehen.
+    _cameraAnimController?.stop();
+    _lastCameraFrameAt = null;
     setState(() {
       _routeGeoJson = result.geoJson;
       _routeDistance = result.distanceMeters;
@@ -7599,6 +7690,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       _originalRouteDistance = result.distanceMeters;
       _originalRouteDuration = result.durationSeconds;
       _isRouteConfirmed = false;
+      _isCameraLocked = false;
       _fullRouteCoordinates = result.coordinates;
       _remainingRouteCoordinates = result.coordinates;
       // 2026-06-10 (3km-Design v2): Fenster-Caches bei neuer Route leeren —
@@ -7618,6 +7710,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       _navigationStartTime = null;
       _offRouteCount = 0;
       _lastRerouteTime = null;
+      _lastRerouteFailed = false;
       _remainingDistance = null;
       _remainingDuration = null;
       _distanceToFinalTargetMeters = null;
@@ -8310,6 +8403,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       _routeGenerationCancelled = false;
       _routeSearchNoticeTitle = null;
       _routeSearchNoticeMessage = null;
+      _lastRerouteFailed = false;
       _routeGeoJson = null;
       _routeDistance = null;
       _routeDuration = null;
@@ -8336,6 +8430,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       _navigationStartTime = null;
       _offRouteCount = 0;
       _lastRerouteTime = null;
+      _lastRerouteFailed = false;
       _isRerouting = false;
       _originalRouteDistance = null;
       _originalRouteDuration = null;
@@ -8354,6 +8449,70 @@ class _CruiseModePageState extends State<CruiseModePage>
 
   void _saveActiveTripForLater() {
     _returnToCruiseSetupFromActiveRoute();
+  }
+
+  Future<void> _confirmCancelActiveTripFromMap() async {
+    if (!mounted || _disposed || _isLoading) return;
+    final tripId = _activeTripId;
+    if (tripId == null) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: const Color(0xFF1C1F26),
+        title: const Text(
+          'Tour abbrechen?',
+          style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800),
+        ),
+        content: Text(
+          'Die Tour wird beendet und aus dem Fortsetzen-Bereich entfernt. Deine gefahrenen Strecken bleiben unverändert.',
+          style: TextStyle(color: Colors.white.withValues(alpha: 0.72)),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: Text(
+              'Zurück',
+              style: TextStyle(color: Colors.white.withValues(alpha: 0.72)),
+            ),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text(
+              'Abbrechen',
+              style: TextStyle(
+                color: Color(0xFFFF6B61),
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted || _disposed) return;
+
+    _activeTripId = null;
+    try {
+      await TripService.instance.cancelTrip(tripId);
+      if (!mounted || _disposed) return;
+      _returnToCruiseSetupFromActiveRoute();
+      TopToast.show(
+        context,
+        message: 'Tour abgebrochen',
+        icon: Icons.close_rounded,
+        duration: const Duration(milliseconds: 2600),
+      );
+    } catch (e) {
+      debugPrint('[CruiseMode] Trip cancel fail: $e');
+      if (!mounted || _disposed) return;
+      _activeTripId = tripId;
+      TopToast.show(
+        context,
+        message: 'Tour konnte nicht abgebrochen werden',
+        icon: Icons.error_outline_rounded,
+        isError: true,
+      );
+    }
   }
 
   void _returnToCruiseSetupFromActiveRoute() {
@@ -8916,9 +9075,11 @@ class _CruiseModePageState extends State<CruiseModePage>
     );
     _markCurrentRouteWithRerouteMeta(meta);
     _logRerouteMeta(meta);
-    // 2026-06-06 (vucko P2): Auch ein FEHLGESCHLAGENER Reroute verhängt den vollen
-    // Cooldown → kein erneutes Antriggern alle ~12s (das war der Meldungs-Spam).
+    // Fehlgeschlagene Reroutes sollen nicht spammen, aber auch nicht 12s lang
+    // eine alte aktive Linie stehen lassen. Der Off-Route-Loop nutzt dafuer den
+    // kurzen Failure-Cooldown.
     _lastRerouteTime = DateTime.now();
+    _lastRerouteFailed = true;
     _rerouteBannerShown = false;
     // 2026-06-06 (vucko P6): Meldung NUR oben (TopToast), nicht mehr als orange
     // SnackBar unten. P7 deckelt automatisch auf ≤5s + Swipe-to-dismiss.
@@ -8965,6 +9126,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     _markCurrentRouteWithRerouteMeta(meta);
     _logRerouteMeta(meta);
     _lastRerouteTime = DateTime.now();
+    _lastRerouteFailed = true;
     _rerouteBannerShown = false;
     // 2026-06-06 (vucko P6): oben statt orange Bottom-SnackBar.
     if (mounted) {
@@ -9070,6 +9232,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       _accessLegJoinIndex = null;
       _accessLegMainRouteResult = null;
       _lastRerouteTime = DateTime.now();
+      _lastRerouteFailed = false;
       _remainingDistance = result.distanceMeters;
       _remainingDuration = result.durationSeconds;
       _distanceToFinalTargetMeters = null;
@@ -9718,6 +9881,13 @@ class _CruiseModePageState extends State<CruiseModePage>
       }
     }
 
+    final nativePredictionTime = kIsWeb
+        ? null
+        : DateTime.now().add(_nativeRenderPredictionLead);
+    final nativeLockedTarget = nativePredictionTime == null
+        ? null
+        : _routeLockedRenderPosition(nativePredictionTime);
+
     // ── Kamera-Bewegung ──────────────────────────────────────────────────────
     // Alle Plattformen: Animierte Interpolation (60fps smooth)
     // 2026-06-06 (vucko P11): Während die Routen-Übersicht (Karten-Button) läuft,
@@ -9731,12 +9901,19 @@ class _CruiseModePageState extends State<CruiseModePage>
         _animateCameraTo(predicted.lat, predicted.lng, predicted.heading);
       } else {
         // iOS/Android: Vorhersage für noch flüssigere Animation
-        final predicted = _nativeSmoother.predict(
-          DateTime.now().add(const Duration(milliseconds: 150)),
-        );
+        final predictionTime =
+            nativePredictionTime ??
+            DateTime.now().add(_nativeRenderPredictionLead);
+        final predicted = _nativeSmoother.predict(predictionTime);
+        final lockedTarget =
+            nativeLockedTarget ?? _routeLockedRenderPosition(predictionTime);
         _animateCameraTo(
-          predicted.lat != 0 ? predicted.lat : effectivePosition.latitude,
-          predicted.lng != 0 ? predicted.lng : effectivePosition.longitude,
+          lockedTarget?.latitude ??
+              (predicted.lat != 0 ? predicted.lat : effectivePosition.latitude),
+          lockedTarget?.longitude ??
+              (predicted.lng != 0
+                  ? predicted.lng
+                  : effectivePosition.longitude),
           _nativeSmoother.hasValidHeading ? predicted.heading : _userHeading,
         );
       }
@@ -9800,6 +9977,8 @@ class _CruiseModePageState extends State<CruiseModePage>
       maxJumpMeters: math.max(offRouteCorridor + 15, 60.0),
     );
     final match = _guardRoundTripFinishMatch(rawMatch);
+    var routeProgressMatch = match;
+    var offRouteDecisionMatch = match;
     _updateDistanceToFinalTarget(position);
     final previousVisibleManeuverIndex = _activeVisibleManeuverIndex();
 
@@ -9810,7 +9989,7 @@ class _CruiseModePageState extends State<CruiseModePage>
         _isApproachingCurrentDestination(position);
     // Apple/Google-Regel: ein VORWÄRTS-laufender Puck fährt die Route — auch wenn
     // ein einzelner Fix seitlich zappelt. Dann niemals reroute.
-    final makingForwardProgress = match.index > prevRouteIndex;
+    var makingForwardProgress = match.index > prevRouteIndex;
 
     // 2026-06-08 (vucko P-reroute): GLOBALER RE-SNAP (wie Apple/Google). Das
     // gefensterte Matching kann hinter dem Fahrer zurückbleiben (Fenster
@@ -9829,11 +10008,16 @@ class _CruiseModePageState extends State<CruiseModePage>
         windowSize: _fullRouteCoordinates.length,
         maxJumpMeters: double.infinity,
       );
+      if (globalMatch.distanceMeters < offRouteDecisionMatch.distanceMeters) {
+        offRouteDecisionMatch = globalMatch;
+        makingForwardProgress = globalMatch.index > prevRouteIndex;
+      }
       if (globalMatch.distanceMeters <= offRouteCorridor) {
         _currentRouteIndex = globalMatch.index.clamp(
           0,
           _fullRouteCoordinates.length - 1,
         );
+        routeProgressMatch = globalMatch;
         isOutsideCorridor =
             false; // doch auf der Route — nur Fenster nachgehinkt
       }
@@ -9842,19 +10026,26 @@ class _CruiseModePageState extends State<CruiseModePage>
     if (isOutsideCorridor &&
         !approachingDestination &&
         !makingForwardProgress) {
+      if (_clearLiveRouteWindowForOffRoute()) {
+        _safeSetState(() {});
+      }
       // Zeit-basierte Hysterese: anhaltend ≥3.0s daneben ODER klar daneben
       // (≥2.5× Korridor, echtes Abbiegen) ≥1.5s. Kein Zappeln über Tick-Count.
       _offRouteSince ??= DateTime.now();
       final offFor = DateTime.now().difference(_offRouteSince!);
-      final clearlyOffRoute = match.distanceMeters > offRouteCorridor * 2.5;
+      final clearlyOffRoute =
+          offRouteDecisionMatch.distanceMeters > offRouteCorridor * 2.5;
       final sustained =
           offFor >= const Duration(milliseconds: 3000) ||
           (clearlyOffRoute && offFor >= const Duration(milliseconds: 1500));
       if (sustained && !_isRerouting) {
         final now = DateTime.now();
+        final rerouteCooldown = _lastRerouteFailed
+            ? _rerouteFailureCooldown
+            : _rerouteCooldown;
         final cooldownOk =
             _lastRerouteTime == null ||
-            now.difference(_lastRerouteTime!) >= _rerouteCooldown;
+            now.difference(_lastRerouteTime!) >= rerouteCooldown;
         if (cooldownOk) {
           _lastRerouteTime = now;
           _offRouteCount = 0;
@@ -9871,7 +10062,7 @@ class _CruiseModePageState extends State<CruiseModePage>
 
     var needsRebuild = false;
     if (!isOutsideCorridor &&
-        _updateRemainingDistanceAndDuration(routeMatch: match)) {
+        _updateRemainingDistanceAndDuration(routeMatch: routeProgressMatch)) {
       needsRebuild = true;
     }
 
@@ -11167,16 +11358,11 @@ class _CruiseModePageState extends State<CruiseModePage>
         maxJumpMeters: double.infinity,
       );
 
-      var heading = _userHeading;
-      if (!heading.isFinite || heading < 0 || heading > 360) {
-        heading = position.heading;
-      }
-      if (!heading.isFinite || heading < 0 || heading > 360) {
-        heading = routeHeadingAt(
-          planningCoordinates,
-          globalMatch.index.clamp(0, planningCoordinates.length - 1),
-        );
-      }
+      final heading = _resolveRerouteHeading(
+        position: position,
+        planningCoordinates: planningCoordinates,
+        nearestIndex: globalMatch.index,
+      );
       final rerouteSpeedMps = position.speed.isFinite && position.speed >= 0
           ? position.speed
           : null;
@@ -11196,7 +11382,9 @@ class _CruiseModePageState extends State<CruiseModePage>
       );
 
       debugPrint(
-        '[CruiseMode] Smart reroute plan: ${smartPlan.debugLabel}, strategy=${smartPlan.strategy.name}, rejoin=${smartPlan.rejoinIndex}',
+        '[CruiseMode] Smart reroute plan: ${smartPlan.debugLabel}, '
+        'strategy=${smartPlan.strategy.name}, rejoin=${smartPlan.rejoinIndex}, '
+        'heading=${heading.toStringAsFixed(0)}',
       );
 
       // 2026-06-09 (vucko A→B-Reroute-zum-Ziel): Bei A→B muss das Ziel IMMER bekannt
@@ -12031,6 +12219,42 @@ class _CruiseModePageState extends State<CruiseModePage>
     }
   }
 
+  double _resolveRerouteHeading({
+    required geo.Position position,
+    required List<List<double>> planningCoordinates,
+    required int nearestIndex,
+  }) {
+    double? smoothedHeading;
+    if (kIsWeb) {
+      if (_webSmoother.hasValidHeading) {
+        smoothedHeading = _webSmoother.heading;
+      }
+    } else if (_nativeSmoother.hasValidHeading) {
+      smoothedHeading = _nativeSmoother.heading;
+    }
+    if (_isUsableHeading(smoothedHeading)) {
+      return smoothedHeading! % 360;
+    }
+
+    final rawHeading = position.heading;
+    final rawAccuracy = position.headingAccuracy;
+    if (_isUsableHeading(rawHeading) &&
+        (!rawAccuracy.isFinite || rawAccuracy <= 45)) {
+      return rawHeading % 360;
+    }
+
+    if (planningCoordinates.length >= 2) {
+      return routeHeadingAt(
+        planningCoordinates,
+        nearestIndex.clamp(0, planningCoordinates.length - 1).toInt(),
+      );
+    }
+    return 0.0;
+  }
+
+  static bool _isUsableHeading(double? heading) =>
+      heading != null && heading.isFinite && heading >= 0 && heading <= 360;
+
   /// Berechnet die Distanz entlang der Route vom aktuellen Index zum nächsten Manöver.
   int? _activeVisibleManeuverIndex() {
     return selectActiveGuidanceManeuverIndex(
@@ -12094,6 +12318,7 @@ class _CruiseModePageState extends State<CruiseModePage>
   void _unlockCameraFollow() {
     if (!_isCameraLocked) return;
     _cameraAnimController?.stop();
+    _lastCameraFrameAt = null;
     _safeSetState(() => _isCameraLocked = false);
   }
 
@@ -12103,17 +12328,31 @@ class _CruiseModePageState extends State<CruiseModePage>
     // 2026-06-08 (vucko Butterweich): Recenter über den Smooth-Follow-Ticker.
     // Kamera-Stand UND Ziel auf den Standort setzen (Snap), Ticker (re)starten —
     // kein konkurrierendes animateCamera mehr.
+    //
+    // 2026-06-11 (vucko Route-Lock): Bei aktiver Navigation darf Recenter nicht
+    // auf das rohe GPS springen. Puck, Kamera und Linienkopf müssen dieselbe
+    // route-gesnappte Render-Position nutzen, sonst sieht das Follow-Umschalten
+    // wieder wie ein Standort/Route-Versatz aus.
+    final lockedAnchor = (!_isOverviewActive && _isRouteConfirmed)
+        ? _routeLockedRenderPosition(
+                DateTime.now().add(_nativeRenderPredictionLead),
+              ) ??
+              _lastRouteLockedRenderLatLng
+        : null;
+    final anchor =
+        lockedAnchor ?? LatLng(position.latitude, position.longitude);
     final heading = (_userHeading.isFinite && _userHeading >= 0)
         ? _userHeading
         : _lastCameraHeading;
-    _camCurLat = position.latitude;
-    _camCurLng = position.longitude;
+    _camCurLat = anchor.latitude;
+    _camCurLng = anchor.longitude;
     _camCurHeading = heading;
-    _camToLat = position.latitude;
-    _camToLng = position.longitude;
+    _camToLat = anchor.latitude;
+    _camToLng = anchor.longitude;
     _camToHeading = heading;
     _lastCameraHeading = heading;
     _camHasState = true;
+    _lastCameraFrameAt = null;
     if (!(_cameraAnimController?.isAnimating ?? false)) {
       _cameraAnimController?.repeat();
     }

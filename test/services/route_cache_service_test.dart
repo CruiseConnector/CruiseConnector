@@ -95,20 +95,20 @@ void main() {
     test(
       'clearConfirmedRoute entfernt gespeicherte Navigationsroute',
       () async {
-        final route = RouteResult(
+        const route = RouteResult(
           geoJson: '{"type":"LineString","coordinates":[[9,47],[9.1,47.1]]}',
-          geometry: const {
+          geometry: {
             'type': 'LineString',
             'coordinates': [
               [9.0, 47.0],
               [9.1, 47.1],
             ],
           },
-          coordinates: const [
+          coordinates: [
             [9.0, 47.0],
             [9.1, 47.1],
           ],
-          maneuvers: const [],
+          maneuvers: [],
         );
 
         await RouteCacheService.instance.storeConfirmedRoute(

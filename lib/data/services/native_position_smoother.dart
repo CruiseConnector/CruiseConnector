@@ -437,8 +437,25 @@ class NativePositionSmoother {
   void _updateSpeed(geo.Position raw) {
     if (raw.speed.isFinite && raw.speed >= 0) {
       _currentSpeed = raw.speed;
-      // Exponential smoothing für Speed
-      _smoothedSpeed = _smoothedSpeed * 0.7 + _currentSpeed * 0.3;
+      if (_lastTimestamp == null) {
+        _smoothedSpeed = _currentSpeed;
+        return;
+      }
+      // 2026-06-11 (vucko Real-GPS-Fix): Der alte Alpha-Wert 0.3 lief PRO
+      // Update. Im 20-Hz-Simulator konvergierte Speed dadurch in <0.5s; echtes
+      // iOS-GPS liefert oft nur 1 Hz, also hing _smoothedSpeed mehrere Sekunden
+      // hinterher. Diese Speed begrenzt den Route-Render-Lock-Forward-Catchup,
+      // wodurch Puck/Linie sichtbar hinter dem echten Fahrfortschritt bleiben
+      // konnten. Alpha jetzt zeitnormiert auf die 50ms-Sim-Kalibrierung.
+      final dtMs = raw.timestamp.difference(_lastTimestamp!).inMilliseconds;
+      var alpha = 0.3;
+      if (dtMs > 75) {
+        alpha = math.min(
+          0.9,
+          1.0 - math.pow(1.0 - alpha, dtMs / 50.0).toDouble(),
+        );
+      }
+      _smoothedSpeed += (_currentSpeed - _smoothedSpeed) * alpha;
     }
   }
 

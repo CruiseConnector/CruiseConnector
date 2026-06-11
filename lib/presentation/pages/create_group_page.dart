@@ -8,14 +8,13 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:geolocator/geolocator.dart' as geo;
 import 'package:latlong2/latlong.dart';
 
-import '../../core/constants.dart';
 import '../../core/input_limits.dart';
 import '../../data/services/cruise_group_service.dart';
 import '../../data/services/gamification_service.dart';
 import '../../data/services/geocoding_service.dart';
 import '../../data/services/group_route_data_builder.dart';
 import '../../data/services/route_service.dart';
-import '../../domain/models/mapbox_suggestion.dart';
+import '../../domain/models/place_suggestion.dart';
 import '../../domain/models/route_result.dart';
 import '../widgets/badge_unlock_popup.dart';
 import '../widgets/cruise/cruise_setup_card.dart';
@@ -54,7 +53,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
   DateTime? _selectedDateTime;
   bool _isRoundTrip = true;
   bool _avoidHighways = false;
-  MapboxSuggestion? _selectedDestination;
+  PlaceSuggestion? _selectedDestination;
 
   // Map-State
   LatLng? _startPoint;
@@ -323,7 +322,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
     );
   }
 
-  Future<MapboxSuggestion?> _resolveDestination(geo.Position start) async {
+  Future<PlaceSuggestion?> _resolveDestination(geo.Position start) async {
     final selected = _selectedDestination;
     if (selected != null) return selected;
     final query = _destinationCtrl.text.trim();
@@ -335,7 +334,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
       requireUnambiguous: true,
     );
     if (coordinates == null) return null;
-    final suggestion = MapboxSuggestion(
+    final suggestion = PlaceSuggestion(
       placeName: query,
       coordinates: [coordinates['longitude']!, coordinates['latitude']!],
     );
@@ -1156,14 +1155,12 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
         onTap: _handleMapTap,
         // 2026-05-28 (vucko Task #70): dunkler Map-Background statt System-
         // Weiß, gleicher Stil wie Cruise-Mode-Page.
-        backgroundColor: OfflineMapService.mapboxDarkBackground,
+        backgroundColor: OfflineMapService.cruiseDarkBackground,
       ),
       children: [
         if (!widget.disableMapTilesForTesting)
           TileLayer(
-            urlTemplate:
-                'https://api.mapbox.com/styles/v1/mapbox/dark-v11/tiles/256/{z}/{x}/{y}?access_token={accessToken}',
-            additionalOptions: {'accessToken': AppConstants.mapboxPublicToken},
+            urlTemplate: OfflineMapService.cruiseRasterTileUrl,
             userAgentPackageName: 'com.cruise_connect.app',
             // 2026-05-28 (vucko Task #77): retinaMode aus — verursacht
             // vertikale Streifen wegen URL-256-Mismatch auf iPhone-Retina.

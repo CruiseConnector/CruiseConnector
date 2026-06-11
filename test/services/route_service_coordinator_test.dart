@@ -335,8 +335,9 @@ class _FakeRoutePoolService extends RoutePoolService {
       'preferredCityCluster': preferredCityCluster,
       'candidateLimit': candidateLimit,
     });
-    if (_matches != null) {
-      return _matches!.isEmpty ? null : _matches!.first;
+    final matches = _matches;
+    if (matches != null) {
+      return matches.isEmpty ? null : matches.first;
     }
     return match;
   }
@@ -370,8 +371,9 @@ class _FakeRoutePoolService extends RoutePoolService {
       'preferredCityCluster': preferredCityCluster,
       'candidateLimit': candidateLimit,
     });
-    if (_matches != null) {
-      return _matches!;
+    final matches = _matches;
+    if (matches != null) {
+      return matches;
     }
     return match == null ? const [] : [match!];
   }
@@ -407,8 +409,9 @@ class _FakeRoutePoolService extends RoutePoolService {
       'candidateLimit': candidateLimit,
       'forceAllow': forceAllow,
     });
-    if (_reserveMatches != null) {
-      return _reserveMatches!;
+    final reserveMatches = _reserveMatches;
+    if (reserveMatches != null) {
+      return reserveMatches;
     }
     return reserveMatch == null ? const [] : [reserveMatch!];
   }
@@ -1988,8 +1991,8 @@ void main() {
     );
 
     // Phase 2: Pool-Probe entfernt — Live läuft zuerst. Bei Premium mit
-    // healthy Pool gibt die Standard-Live-Suche eine Route zurück (mapbox).
-    expect(route.edgeMeta['route_source'], 'mapbox');
+    // healthy Pool gibt die Standard-Live-Suche eine Route zurück.
+    expect(route.edgeMeta['route_source'], 'graphhopper');
     expect(route.edgeMeta['live_attempted'], true);
     expect(invoker.callCount, greaterThan(0));
     expect(jobs, isEmpty);
@@ -2171,7 +2174,7 @@ void main() {
       );
 
       expect(flakyInvoker.callCount, 3);
-      expect(route.edgeMeta['route_source'], 'mapbox');
+      expect(route.edgeMeta['route_source'], 'graphhopper');
       expect(route.edgeMeta['live_fill_attempted'], true);
       expect(route.edgeMeta['live_fill_attempt_count'], 3);
       expect(route.edgeMeta['live_fill_success'], true);
@@ -2210,7 +2213,7 @@ void main() {
       subscriptionTier: 'premium',
     );
 
-    expect(route.edgeMeta['route_source'], 'mapbox');
+    expect(route.edgeMeta['route_source'], 'graphhopper');
     expect(route.edgeMeta['candidate_inserted'], false);
     expect(route.edgeMeta['candidate_saved'], false);
     expect(route.edgeMeta['candidate_save_failed'], true);

@@ -66,6 +66,7 @@ class _HomeContentPageState extends State<HomeContentPage>
   // 2026-06-09 (vucko Audit T3-B): Re-Entry-Guard gegen Doppel-Tap auf Speichern
   // → sonst nebenläufige saveExistingRoute-Calls = doppelte DB-Inserts.
   bool _isSavingRoute = false;
+  bool _isClosingTrip = false;
   final Map<String, _HeroRouteInsights> _heroInsightsByRouteId = {};
   final Set<String> _heroInsightsLoading = <String>{};
   late final AnimationController _shimmerController;
@@ -114,15 +115,13 @@ class _HomeContentPageState extends State<HomeContentPage>
           _weeklyKmData = weekly
               .map((e) => (e as num?)?.toDouble() ?? 0.0)
               .toList(growable: false);
-          final maxKm = _weeklyKmData.fold<double>(
-            0,
-            (a, b) => a > b ? a : b,
-          );
+          final maxKm = _weeklyKmData.fold<double>(0, (a, b) => a > b ? a : b);
           _weeklyChartData = _weeklyKmData
               .map((km) => maxKm > 0 ? (km / maxKm).clamp(0.0, 1.0) : 0.0)
               .toList(growable: false);
         }
-        _profileUsername = map['profileUsername'] as String? ?? _profileUsername;
+        _profileUsername =
+            map['profileUsername'] as String? ?? _profileUsername;
         _avatarUrl = map['avatarUrl'] as String? ?? _avatarUrl;
         // 2026-05-28 (vucko Task #72): Cached Recommendation hydraten
         // damit die "Heute für dich"-Card beim 2.+ App-Start direkt sichtbar
@@ -195,8 +194,9 @@ class _HomeContentPageState extends State<HomeContentPage>
     } catch (_) {}
     // lastKnownPosition ist instant (gecached) — meistens genau genug
     try {
-      final last = await geo.Geolocator.getLastKnownPosition()
-          .timeout(const Duration(seconds: 1));
+      final last = await geo.Geolocator.getLastKnownPosition().timeout(
+        const Duration(seconds: 1),
+      );
       if (last != null) return (lat: last.latitude, lng: last.longitude);
     } catch (_) {}
     // Sonst: kurzes currentPosition mit medium accuracy + 3s timeout
@@ -224,12 +224,12 @@ class _HomeContentPageState extends State<HomeContentPage>
       final driveSessionsFuture = GamificationService.getDriveSessions();
       final profileFuture = userId != null
           ? Supabase.instance.client
-              .from('profiles')
-              .select('id, username, avatar_url')
-              .eq('id', userId)
-              .maybeSingle()
-              .then<Map<String, dynamic>?>((v) => v)
-              .catchError((_) => null)
+                .from('profiles')
+                .select('id, username, avatar_url')
+                .eq('id', userId)
+                .maybeSingle()
+                .then<Map<String, dynamic>?>((v) => v)
+                .catchError((_) => null)
           : Future<Map<String, dynamic>?>.value(null);
       final userPosFuture = _resolveUserPosition();
       final savedRoutesFuture = SavedRoutesService.getSavedRouteLibrary()
@@ -434,16 +434,16 @@ class _HomeContentPageState extends State<HomeContentPage>
         await Future.wait([
           GamificationService.calculateAndSync(),
           context.read<SavedRoutesProvider>().loadRoutes().catchError((_) {}),
-          context
-              .read<RouteBookmarkProvider>()
-              .loadSavedRoutes()
-              .catchError((_) {}),
+          context.read<RouteBookmarkProvider>().loadSavedRoutes().catchError(
+            (_) {},
+          ),
         ]);
         if (mounted) setState(() {});
       },
       child: SingleChildScrollView(
         physics: const AlwaysScrollableScrollPhysics(
-            parent: BouncingScrollPhysics()),
+          parent: BouncingScrollPhysics(),
+        ),
         child: Padding(
           padding: const EdgeInsets.fromLTRB(20, 10, 20, 30),
           child: Column(
@@ -451,355 +451,356 @@ class _HomeContentPageState extends State<HomeContentPage>
             children: [
               // Header
               Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'Willkommen zurück',
-                        style: TextStyle(
-                          color: Color(0xFFA0AEC0),
-                          fontSize: 13,
-                        ),
-                      ),
-                      Text(
-                        '$userName!',
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 32,
-                          fontWeight: FontWeight.bold,
-                        ),
-                        // 2026-06-09 (vucko Audit T3-C): maxLines:1 — ohne das war
-                        // ellipsis in der unbeschränkten Column wirkungslos (Overflow
-                        // bei langen Namen auf schmalen Screens).
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ],
-                  ),
-                ),
-                // 2026-05-23 (vucko): Bell-Icon mit Unread-Badge links
-                // vom Avatar — führt zur Notifications-Inbox.
-                Consumer<NotificationService>(
-                  builder: (context, notifSvc, _) {
-                    final count = notifSvc.unreadCount;
-                    return Padding(
-                      padding: const EdgeInsets.only(top: 8, right: 6),
-                      child: Stack(
-                        clipBehavior: Clip.none,
-                        children: [
-                          Material(
-                            color: Colors.transparent,
-                            shape: const CircleBorder(),
-                            child: InkWell(
-                              customBorder: const CircleBorder(),
-                              onTap: () => Navigator.of(context).push(
-                                MaterialPageRoute(
-                                  builder: (_) => const NotificationsPage(),
-                                ),
-                              ),
-                              child: Container(
-                                width: 42,
-                                height: 42,
-                                decoration: BoxDecoration(
-                                  color: Colors.white.withValues(alpha: 0.06),
-                                  shape: BoxShape.circle,
-                                  border: Border.all(
-                                    color:
-                                        Colors.white.withValues(alpha: 0.12),
-                                  ),
-                                ),
-                                child: const Icon(
-                                  Icons.notifications_none_rounded,
-                                  color: Colors.white,
-                                  size: 22,
-                                ),
-                              ),
-                            ),
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Willkommen zurück',
+                          style: TextStyle(
+                            color: Color(0xFFA0AEC0),
+                            fontSize: 13,
                           ),
-                          if (count > 0)
-                            Positioned(
-                              right: -2,
-                              top: -2,
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 6,
-                                  vertical: 2,
-                                ),
-                                constraints: const BoxConstraints(
-                                  minWidth: 18,
-                                  minHeight: 18,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: accent,
-                                  borderRadius: BorderRadius.circular(12),
-                                  border: Border.all(
-                                    color: const Color(0xFF0B0E14),
-                                    width: 2,
-                                  ),
-                                ),
-                                alignment: Alignment.center,
-                                child: Text(
-                                  count > 99 ? '99+' : '$count',
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 10,
-                                    fontWeight: FontWeight.w900,
-                                    letterSpacing: -0.2,
-                                  ),
-                                ),
-                              ),
-                            ),
-                        ],
-                      ),
-                    );
-                  },
-                ),
-                const SizedBox(width: 8),
-                Stack(
-                  alignment: Alignment.topRight,
-                  children: [
-                    Padding(
-                      padding: const EdgeInsets.only(top: 4, right: 2),
-                      child: UserAvatar(
-                        name: userName,
-                        avatarUrl: avatarUrl,
-                        radius: 28,
-                        backgroundColor: accent,
-                        onTap: () => widget.onTabChange?.call(4),
-                      ),
-                    ),
-                    Container(
-                      width: 24,
-                      height: 24,
-                      decoration: BoxDecoration(
-                        color: Colors.blue[700],
-                        shape: BoxShape.circle,
-                        border: Border.all(color: Colors.white, width: 2),
-                      ),
-                      child: Center(
-                        child: Text(
-                          '$userLevel',
+                        ),
+                        Text(
+                          '$userName!',
                           style: const TextStyle(
                             color: Colors.white,
-                            fontSize: 12,
+                            fontSize: 32,
                             fontWeight: FontWeight.bold,
                           ),
+                          // 2026-06-09 (vucko Audit T3-C): maxLines:1 — ohne das war
+                          // ellipsis in der unbeschränkten Column wirkungslos (Overflow
+                          // bei langen Namen auf schmalen Screens).
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
+                    ),
+                  ),
+                  // 2026-05-23 (vucko): Bell-Icon mit Unread-Badge links
+                  // vom Avatar — führt zur Notifications-Inbox.
+                  Consumer<NotificationService>(
+                    builder: (context, notifSvc, _) {
+                      final count = notifSvc.unreadCount;
+                      return Padding(
+                        padding: const EdgeInsets.only(top: 8, right: 6),
+                        child: Stack(
+                          clipBehavior: Clip.none,
+                          children: [
+                            Material(
+                              color: Colors.transparent,
+                              shape: const CircleBorder(),
+                              child: InkWell(
+                                customBorder: const CircleBorder(),
+                                onTap: () => Navigator.of(context).push(
+                                  MaterialPageRoute(
+                                    builder: (_) => const NotificationsPage(),
+                                  ),
+                                ),
+                                child: Container(
+                                  width: 42,
+                                  height: 42,
+                                  decoration: BoxDecoration(
+                                    color: Colors.white.withValues(alpha: 0.06),
+                                    shape: BoxShape.circle,
+                                    border: Border.all(
+                                      color: Colors.white.withValues(
+                                        alpha: 0.12,
+                                      ),
+                                    ),
+                                  ),
+                                  child: const Icon(
+                                    Icons.notifications_none_rounded,
+                                    color: Colors.white,
+                                    size: 22,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            if (count > 0)
+                              Positioned(
+                                right: -2,
+                                top: -2,
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 6,
+                                    vertical: 2,
+                                  ),
+                                  constraints: const BoxConstraints(
+                                    minWidth: 18,
+                                    minHeight: 18,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: accent,
+                                    borderRadius: BorderRadius.circular(12),
+                                    border: Border.all(
+                                      color: const Color(0xFF0B0E14),
+                                      width: 2,
+                                    ),
+                                  ),
+                                  alignment: Alignment.center,
+                                  child: Text(
+                                    count > 99 ? '99+' : '$count',
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.w900,
+                                      letterSpacing: -0.2,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+                  const SizedBox(width: 8),
+                  Stack(
+                    alignment: Alignment.topRight,
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4, right: 2),
+                        child: UserAvatar(
+                          name: userName,
+                          avatarUrl: avatarUrl,
+                          radius: 28,
+                          backgroundColor: accent,
+                          onTap: () => widget.onTabChange?.call(4),
                         ),
                       ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-            const SizedBox(height: 10),
-
-            // 2026-05-24 (vucko Task #42): Hero-Streak-Banner (nur sichtbar
-            // wenn 2+ Tage). Prominent, animiert, sofort sichtbar im
-            // Above-the-fold-Bereich für Daily-Retention.
-            if (_streakDays >= 2) ...[
-              _buildHeroStreakBanner(),
-              const SizedBox(height: 14),
-            ],
-
-            // Fortschritt Section
-            GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onTap: () => widget.onTabChange?.call(3),
-              child: Container(
-                padding: const EdgeInsets.all(20),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF1C1F26),
-                  borderRadius: BorderRadius.circular(24),
-                  border: Border.all(
-                    color: const Color(0xFFFFFFFF).withValues(alpha: 0.06),
-                    width: 1,
-                  ),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Row(
-                      children: [
-                        Expanded(
+                      Container(
+                        width: 24,
+                        height: 24,
+                        decoration: BoxDecoration(
+                          color: Colors.blue[700],
+                          shape: BoxShape.circle,
+                          border: Border.all(color: Colors.white, width: 2),
+                        ),
+                        child: Center(
                           child: Text(
-                            'Fortschritt',
-                            style: TextStyle(
+                            '$userLevel',
+                            style: const TextStyle(
                               color: Colors.white,
-                              fontSize: 15,
+                              fontSize: 12,
                               fontWeight: FontWeight.bold,
                             ),
                           ),
                         ),
-                        Icon(
-                          Icons.chevron_right_rounded,
-                          color: Color(0xFFA0AEC0),
-                          size: 22,
-                        ),
-                      ],
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+
+              // 2026-05-24 (vucko Task #42): Hero-Streak-Banner (nur sichtbar
+              // wenn 2+ Tage). Prominent, animiert, sofort sichtbar im
+              // Above-the-fold-Bereich für Daily-Retention.
+              if (_streakDays >= 2) ...[
+                _buildHeroStreakBanner(),
+                const SizedBox(height: 14),
+              ],
+
+              // Fortschritt Section
+              GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () => widget.onTabChange?.call(3),
+                child: Container(
+                  padding: const EdgeInsets.all(20),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF1C1F26),
+                    borderRadius: BorderRadius.circular(24),
+                    border: Border.all(
+                      color: const Color(0xFFFFFFFF).withValues(alpha: 0.06),
+                      width: 1,
                     ),
-                    const SizedBox(height: 12),
-                    _loading
-                        ? Center(
-                            child: SizedBox(
-                              width: 20,
-                              height: 20,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                color: accent,
-                              ),
-                            ),
-                          )
-                        : Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              // 2026-06-08 (vucko Homescreen-Redesign): 2×2-Raster
-                              // aus Icon-Kacheln statt Emoji-Liste → sofortiger
-                              // Überblick, crisp Material-Icons statt Emojis.
-                              Row(
-                                children: [
-                                  Expanded(
-                                    child: _statTile(
-                                      Icons.bolt,
-                                      _formatThousands(totalXp),
-                                      'XP GESAMT',
-                                      isAccent: true,
-                                    ),
-                                  ),
-                                  const SizedBox(width: 12),
-                                  Expanded(
-                                    child: _statTile(
-                                      Icons.speed,
-                                      totalDistanceKm.toStringAsFixed(0),
-                                      'KM GEFAHREN',
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 14),
-                              Row(
-                                children: [
-                                  Expanded(
-                                    child: _statTile(
-                                      Icons.route,
-                                      '$totalRoutes',
-                                      'STRECKEN',
-                                    ),
-                                  ),
-                                  const SizedBox(width: 12),
-                                  Expanded(
-                                    child: _statTile(
-                                      Icons.workspace_premium,
-                                      '$badgeCount',
-                                      'BADGES',
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ],
-                          ),
-                    const SizedBox(height: 12),
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          crossAxisAlignment: CrossAxisAlignment.end,
-                          children: [
-                            Flexible(
-                              child: Text(
-                                'Level $userLevel - $levelName',
-                                style: const TextStyle(
-                                  color: Color(0xFFA0AEC0),
-                                  fontSize: 12,
-                                ),
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                            Text(
-                              '${(levelProgress * 100).toStringAsFixed(0)}%',
-                              style: const TextStyle(
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              'Fortschritt',
+                              style: TextStyle(
                                 color: Colors.white,
-                                fontSize: 20,
+                                fontSize: 15,
                                 fontWeight: FontWeight.bold,
                               ),
                             ),
-                          ],
-                        ),
-                        const SizedBox(height: 4),
-                        // 2026-06-08 (vucko Homescreen-Redesign): akzent-getönte
-                        // Spur (statt flachem Grau) → der Balken wirkt integriert;
-                        // Mindest-Nub, damit kleiner Fortschritt sichtbar bleibt.
-                        Container(
-                          height: 8,
-                          width: double.infinity,
-                          decoration: BoxDecoration(
-                            color: accent.withValues(alpha: 0.14),
-                            borderRadius: BorderRadius.circular(4),
                           ),
-                          child: FractionallySizedBox(
-                            alignment: Alignment.centerLeft,
-                            widthFactor: levelProgress.clamp(0.02, 1.0),
-                            child: Container(
-                              decoration: BoxDecoration(
-                                borderRadius: BorderRadius.circular(4),
-                                gradient: LinearGradient(
-                                  colors: [
-                                    accent,
-                                    AppAccentColors.accentStrong,
+                          Icon(
+                            Icons.chevron_right_rounded,
+                            color: Color(0xFFA0AEC0),
+                            size: 22,
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      _loading
+                          ? Center(
+                              child: SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: accent,
+                                ),
+                              ),
+                            )
+                          : Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                // 2026-06-08 (vucko Homescreen-Redesign): 2×2-Raster
+                                // aus Icon-Kacheln statt Emoji-Liste → sofortiger
+                                // Überblick, crisp Material-Icons statt Emojis.
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: _statTile(
+                                        Icons.bolt,
+                                        _formatThousands(totalXp),
+                                        'XP GESAMT',
+                                        isAccent: true,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 12),
+                                    Expanded(
+                                      child: _statTile(
+                                        Icons.speed,
+                                        totalDistanceKm.toStringAsFixed(0),
+                                        'KM GEFAHREN',
+                                      ),
+                                    ),
                                   ],
-                                  begin: Alignment.centerLeft,
-                                  end: Alignment.centerRight,
+                                ),
+                                const SizedBox(height: 14),
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: _statTile(
+                                        Icons.route,
+                                        '$totalRoutes',
+                                        'STRECKEN',
+                                      ),
+                                    ),
+                                    const SizedBox(width: 12),
+                                    Expanded(
+                                      child: _statTile(
+                                        Icons.workspace_premium,
+                                        '$badgeCount',
+                                        'BADGES',
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                      const SizedBox(height: 12),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            crossAxisAlignment: CrossAxisAlignment.end,
+                            children: [
+                              Flexible(
+                                child: Text(
+                                  'Level $userLevel - $levelName',
+                                  style: const TextStyle(
+                                    color: Color(0xFFA0AEC0),
+                                    fontSize: 12,
+                                  ),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                              Text(
+                                '${(levelProgress * 100).toStringAsFixed(0)}%',
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 4),
+                          // 2026-06-08 (vucko Homescreen-Redesign): akzent-getönte
+                          // Spur (statt flachem Grau) → der Balken wirkt integriert;
+                          // Mindest-Nub, damit kleiner Fortschritt sichtbar bleibt.
+                          Container(
+                            height: 8,
+                            width: double.infinity,
+                            decoration: BoxDecoration(
+                              color: accent.withValues(alpha: 0.14),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: FractionallySizedBox(
+                              alignment: Alignment.centerLeft,
+                              widthFactor: levelProgress.clamp(0.02, 1.0),
+                              child: Container(
+                                decoration: BoxDecoration(
+                                  borderRadius: BorderRadius.circular(4),
+                                  gradient: LinearGradient(
+                                    colors: [
+                                      accent,
+                                      AppAccentColors.accentStrong,
+                                    ],
+                                    begin: Alignment.centerLeft,
+                                    end: Alignment.centerRight,
+                                  ),
                                 ),
                               ),
                             ),
                           ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        userLevel >= UserLevel.maxLevel
+                            ? 'Maximallevel erreicht'
+                            : 'Noch $xpToNextLevel XP bis Level ${userLevel + 1}',
+                        style: const TextStyle(
+                          color: Color(0xFFA0AEC0),
+                          fontSize: 10,
                         ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      userLevel >= UserLevel.maxLevel
-                          ? 'Maximallevel erreicht'
-                          : 'Noch $xpToNextLevel XP bis Level ${userLevel + 1}',
-                      style: const TextStyle(
-                        color: Color(0xFFA0AEC0),
-                        fontSize: 10,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+
+              // Top-Strecke dieser Woche
+              _buildSuggestedRouteSection(),
+              const SizedBox(height: 16),
+
+              // Community + Chart Section
+              SizedBox(
+                height: 244,
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Expanded(
+                      child: CommunityCarouselCard(
+                        onOpenCommunity: () => widget.onTabChange?.call(1),
                       ),
                     ),
+                    const SizedBox(width: 12),
+                    Expanded(child: _buildWeeklyActivityCard()),
                   ],
                 ),
               ),
-            ),
-            const SizedBox(height: 16),
+              const SizedBox(height: 16),
 
-            // Top-Strecke dieser Woche
-            _buildSuggestedRouteSection(),
-            const SizedBox(height: 16),
-
-            // Community + Chart Section
-            SizedBox(
-              height: 244,
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Expanded(
-                    child: CommunityCarouselCard(
-                      onOpenCommunity: () => widget.onTabChange?.call(1),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(child: _buildWeeklyActivityCard()),
-                ],
-              ),
-            ),
-            const SizedBox(height: 16),
-
-            // Streak Widget
-            _buildStreakWidget(),
-          ],
+              // Streak Widget
+              _buildStreakWidget(),
+            ],
           ),
         ),
       ),
@@ -842,12 +843,10 @@ class _HomeContentPageState extends State<HomeContentPage>
   late final PageController _carouselController = PageController();
 
   /// Carousel-Höhe synchron zur Heute-für-dich-Card.
-  /// "Heute für dich" Card hat intrinsisch ~175px (gemessen am Original-Layout).
-  /// Wir geben 180 als gemeinsame Höhe für beide Slides damit nichts gestretched
-  /// wird, die nachfolgenden Widgets (Community-Row, 244px) ihren festen Slot
-  /// behalten und der Carousel-Block sich genauso einfügt wie die alte
-  /// Single-Card.
-  static const double _carouselCardHeight = 180;
+  /// "Heute für dich" braucht mit Mini-Map, nachgeladenen Hero-Insights,
+  /// zwei Metric-Zeilen und 44px-CTA genug Luft, sonst overflowt sie im
+  /// Trip+Route-Carousel auf schmalen iPhones.
+  static const double _carouselCardHeight = 228;
 
   Widget _buildHomeCarousel({required List<Widget> cards}) {
     return Column(
@@ -909,151 +908,272 @@ class _HomeContentPageState extends State<HomeContentPage>
     final metricsLine = km > 0
         ? '${trip.stopCount} Stopps • ${km.toStringAsFixed(0)} km • ${trip.defaultStyle}'
         : '${trip.stopCount} Stopps • ${trip.defaultStyle}';
+    final canCancelTrip = _canCancelTrip(trip);
     return SizedBox(
       height: _carouselCardHeight,
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: () {
-          // 2026-06-10 (vucko Resume-Crash-Fix): erst null, dann id — ein
-          // ValueNotifier feuert bei GLEICHEM Wert nicht. Blieb der Intent von
-          // einem fehlgeschlagenen Versuch stehen (wird seit heute erst nach
-          // Erfolg konsumiert), wäre der zweite Tap sonst ein totes Event.
-          CruiseModePage.pendingTripResume.value = null;
-          CruiseModePage.pendingTripResume.value = trip.id;
-          widget.onTabChange?.call(2);
-        },
-        child: Container(
-          decoration: BoxDecoration(
-            color: const Color(0xFF1C1F26),
-            borderRadius: BorderRadius.circular(22),
-            border: Border.all(
-              color: const Color(0xFFFFFFFF).withValues(alpha: 0.06),
-              width: 1,
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.16),
-                blurRadius: 14,
-                offset: const Offset(0, 8),
-              ),
-            ],
+      child: Container(
+        decoration: BoxDecoration(
+          color: const Color(0xFF1C1F26),
+          borderRadius: BorderRadius.circular(22),
+          border: Border.all(
+            color: const Color(0xFFFFFFFF).withValues(alpha: 0.06),
+            width: 1,
           ),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(12, 11, 12, 12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Header-Zeile (exakt analog "Heute für dich")
-                Row(
-                  children: [
-                    Container(
-                      width: 7,
-                      height: 7,
-                      decoration: BoxDecoration(
-                        color: statusColor,
-                        shape: BoxShape.circle,
-                        boxShadow: [
-                          BoxShadow(
-                            color: statusColor.withValues(alpha: 0.45),
-                            blurRadius: 10,
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(width: 7),
-                    Text(
-                      statusLabel.toUpperCase(),
-                      style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.66),
-                        fontSize: 11.5,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: 0.35,
-                      ),
-                    ),
-                    if (statusSubtitle.isNotEmpty) ...[
-                      const SizedBox(width: 6),
-                      Flexible(
-                        child: Text(
-                          '· $statusSubtitle',
-                          style: TextStyle(
-                            color: Colors.white.withValues(alpha: 0.42),
-                            fontSize: 11,
-                            fontWeight: FontWeight.w500,
-                          ),
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  title,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 19,
-                    fontWeight: FontWeight.w900,
-                    letterSpacing: -0.25,
-                    height: 1.05,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                const SizedBox(height: 5),
-                Text(
-                  metricsLine,
-                  style: TextStyle(
-                    color: Colors.white.withValues(alpha: 0.64),
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                    height: 1.15,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                const Spacer(),
-                // CTA wie der Drive-Chip in der Heute-Card (orange filled)
-                SizedBox(
-                  height: 40,
-                  child: DecoratedBox(
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.16),
+              blurRadius: 14,
+              offset: const Offset(0, 8),
+            ),
+          ],
+        ),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 11, 12, 12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Header-Zeile (exakt analog "Heute für dich")
+              Row(
+                children: [
+                  Container(
+                    width: 7,
+                    height: 7,
                     decoration: BoxDecoration(
-                      color: AppAccentColors.accent,
-                      borderRadius: BorderRadius.circular(12),
+                      color: statusColor,
+                      shape: BoxShape.circle,
                       boxShadow: [
                         BoxShadow(
-                          color: AppAccentColors.accent.withValues(alpha: 0.32),
-                          blurRadius: 14,
-                          offset: const Offset(0, 4),
-                        ),
-                      ],
-                    ),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        const Icon(
-                          Icons.play_arrow_rounded,
-                          color: Colors.white,
-                          size: 19,
-                        ),
-                        const SizedBox(width: 4),
-                        Text(
-                          isPaused ? 'Tour fortsetzen' : 'Tour öffnen',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 13.5,
-                            fontWeight: FontWeight.w800,
-                          ),
+                          color: statusColor.withValues(alpha: 0.45),
+                          blurRadius: 10,
                         ),
                       ],
                     ),
                   ),
+                  const SizedBox(width: 7),
+                  Text(
+                    statusLabel.toUpperCase(),
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.66),
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 0.35,
+                    ),
+                  ),
+                  if (statusSubtitle.isNotEmpty) ...[
+                    const SizedBox(width: 6),
+                    Flexible(
+                      child: Text(
+                        '· $statusSubtitle',
+                        style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.42),
+                          fontSize: 11,
+                          fontWeight: FontWeight.w500,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+              const SizedBox(height: 6),
+              Text(
+                title,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 19,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: -0.25,
+                  height: 1.05,
                 ),
-              ],
-            ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              const SizedBox(height: 5),
+              Text(
+                metricsLine,
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.64),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  height: 1.15,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              const Spacer(),
+              // CTA wie der Drive-Chip in der Heute-Card (orange filled)
+              Row(
+                children: [
+                  Expanded(
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: () => _openTrip(trip),
+                      child: SizedBox(
+                        height: 40,
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            color: AppAccentColors.accent,
+                            borderRadius: BorderRadius.circular(12),
+                            boxShadow: [
+                              BoxShadow(
+                                color: AppAccentColors.accent.withValues(
+                                  alpha: 0.32,
+                                ),
+                                blurRadius: 14,
+                                offset: const Offset(0, 4),
+                              ),
+                            ],
+                          ),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              const Icon(
+                                Icons.play_arrow_rounded,
+                                color: Colors.white,
+                                size: 19,
+                              ),
+                              const SizedBox(width: 4),
+                              Text(
+                                isPaused ? 'Tour fortsetzen' : 'Tour öffnen',
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 13.5,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  if (canCancelTrip) ...[
+                    const SizedBox(width: 8),
+                    Tooltip(
+                      message: 'Tour abbrechen',
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTap: _isClosingTrip
+                            ? null
+                            : () => _confirmCancelTrip(trip),
+                        child: Container(
+                          width: 44,
+                          height: 40,
+                          alignment: Alignment.center,
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.14),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                              color: Colors.white.withValues(alpha: 0.10),
+                            ),
+                          ),
+                          child: _isClosingTrip
+                              ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Colors.white,
+                                  ),
+                                )
+                              : Icon(
+                                  Icons.close_rounded,
+                                  color: Colors.white.withValues(alpha: 0.76),
+                                  size: 20,
+                                ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ],
           ),
         ),
       ),
     );
+  }
+
+  void _openTrip(TripSummary trip) {
+    // 2026-06-10 (vucko Resume-Crash-Fix): erst null, dann id — ein
+    // ValueNotifier feuert bei GLEICHEM Wert nicht. Blieb der Intent von
+    // einem fehlgeschlagenen Versuch stehen (wird seit heute erst nach
+    // Erfolg konsumiert), wäre der zweite Tap sonst ein totes Event.
+    CruiseModePage.pendingTripResume.value = null;
+    CruiseModePage.pendingTripResume.value = trip.id;
+    widget.onTabChange?.call(2);
+  }
+
+  bool _canCancelTrip(TripSummary trip) {
+    final userId = Supabase.instance.client.auth.currentUser?.id;
+    return userId != null && trip.ownerId == userId;
+  }
+
+  Future<void> _confirmCancelTrip(TripSummary trip) async {
+    if (_isClosingTrip) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: const Color(0xFF1C1F26),
+        title: const Text(
+          'Tour abbrechen?',
+          style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800),
+        ),
+        content: Text(
+          'Die Tour wird aus dem Fortsetzen-Bereich entfernt. Deine gefahrenen Strecken bleiben unverändert.',
+          style: TextStyle(color: Colors.white.withValues(alpha: 0.72)),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: Text(
+              'Zurück',
+              style: TextStyle(color: Colors.white.withValues(alpha: 0.72)),
+            ),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: Text(
+              'Abbrechen',
+              style: TextStyle(
+                color: AppAccentColors.accent,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    final previousTrip = _activeTrip;
+    setState(() {
+      _isClosingTrip = true;
+      _activeTrip = null;
+    });
+
+    try {
+      await TripService.instance.cancelTrip(trip.id);
+      if (!mounted) return;
+      TopToast.show(
+        context,
+        message: 'Tour abgebrochen',
+        icon: Icons.close_rounded,
+      );
+      unawaited(_loadStats());
+    } catch (e) {
+      debugPrint('[Home] Trip abbrechen fehlgeschlagen: $e');
+      if (!mounted) return;
+      setState(() => _activeTrip = previousTrip);
+      TopToast.show(
+        context,
+        message: 'Tour konnte nicht abgebrochen werden',
+        icon: Icons.error_outline,
+        isError: true,
+      );
+    } finally {
+      if (mounted) setState(() => _isClosingTrip = false);
+    }
   }
 
   String _tripStatusSubtitle(TripSummary trip) {
@@ -1067,6 +1187,7 @@ class _HomeContentPageState extends State<HomeContentPage>
       if (h < 24) return '$prefix seit ${h}h';
       return '$prefix seit ${h ~/ 24}d';
     }
+
     if (trip.isPaused && trip.pausedAt != null) {
       return formatAgo(trip.pausedAt!, 'pausiert');
     }
@@ -1089,9 +1210,14 @@ class _HomeContentPageState extends State<HomeContentPage>
     return LayoutBuilder(
       builder: (context, constraints) {
         final isCompact = constraints.maxWidth < 430;
+        final isCarouselConstrained =
+            constraints.hasBoundedHeight &&
+            constraints.maxHeight <= _carouselCardHeight + 1;
         // 2026-06-08 (vucko Route-Widget): quadratische Mini-Map, ~Höhe der
         // dichten Titel-/Stat-Spalte links.
-        final previewSize = isCompact ? 96.0 : 104.0;
+        final previewSize = isCompact
+            ? (isCarouselConstrained ? 88.0 : 96.0)
+            : (isCarouselConstrained ? 96.0 : 104.0);
 
         return Container(
           width: double.infinity,
@@ -1115,7 +1241,12 @@ class _HomeContentPageState extends State<HomeContentPage>
           // bewusster 14px-Bruch vor der CTA. Stat-Chips → randlose Inline-Icon-
           // Metriken, Stil wandert in den Untertitel → kein Stil-Chip mehr.
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(14, 13, 14, 14),
+            padding: EdgeInsets.fromLTRB(
+              14,
+              isCarouselConstrained ? 12 : 13,
+              14,
+              isCarouselConstrained ? 12 : 14,
+            ),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -1175,7 +1306,7 @@ class _HomeContentPageState extends State<HomeContentPage>
                               height: 1.1,
                             ),
                           ),
-                          const SizedBox(height: 11),
+                          SizedBox(height: isCarouselConstrained ? 9 : 11),
                           Wrap(
                             spacing: 13,
                             runSpacing: 7,
@@ -1229,7 +1360,7 @@ class _HomeContentPageState extends State<HomeContentPage>
                     ),
                   ],
                 ),
-                const SizedBox(height: 14),
+                SizedBox(height: isCarouselConstrained ? 12 : 14),
                 Row(
                   children: [
                     Expanded(
@@ -1538,7 +1669,7 @@ class _HomeContentPageState extends State<HomeContentPage>
         final wasSaved = _isRouteSaved;
         try {
           if (wasSaved) {
-            setState(() => _isRouteSaved = false);  // optimistic
+            setState(() => _isRouteSaved = false); // optimistic
             unawaited(SavedRoutesService.unsaveRouteEverywhere(route));
             if (!mounted) return;
             unawaited(context.read<RouteBookmarkProvider>().loadSavedRoutes());
@@ -1701,7 +1832,9 @@ class _HomeContentPageState extends State<HomeContentPage>
   Widget _buildHeroStreakBanner() {
     final accent = AppAccentColors.accent;
     final mul = GamificationService.streakMultiplierForDays(_streakDays);
-    final mulNext = GamificationService.streakMultiplierForDays(_streakDays + 1);
+    final mulNext = GamificationService.streakMultiplierForDays(
+      _streakDays + 1,
+    );
     final extra = ((mulNext - mul) * 100).round();
     return TweenAnimationBuilder<double>(
       tween: Tween(begin: 0.94, end: 1.0),
@@ -1740,8 +1873,9 @@ class _HomeContentPageState extends State<HomeContentPage>
                 decoration: BoxDecoration(
                   color: Colors.white.withValues(alpha: 0.18),
                   shape: BoxShape.circle,
-                  border:
-                      Border.all(color: Colors.white.withValues(alpha: 0.30)),
+                  border: Border.all(
+                    color: Colors.white.withValues(alpha: 0.30),
+                  ),
                 ),
                 child: const Text('🔥', style: TextStyle(fontSize: 26)),
               ),
@@ -1773,13 +1907,16 @@ class _HomeContentPageState extends State<HomeContentPage>
                 ),
               ),
               Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 11,
+                  vertical: 7,
+                ),
                 decoration: BoxDecoration(
                   color: Colors.white.withValues(alpha: 0.22),
                   borderRadius: BorderRadius.circular(14),
-                  border:
-                      Border.all(color: Colors.white.withValues(alpha: 0.40)),
+                  border: Border.all(
+                    color: Colors.white.withValues(alpha: 0.40),
+                  ),
                 ),
                 child: Text(
                   '${mul.toStringAsFixed(2)}×',
@@ -2273,7 +2410,10 @@ class _RouteMiniMapPainter extends CustomPainter {
       final bw = 6.0 + rnd.nextDouble() * 13;
       final bh = 6.0 + rnd.nextDouble() * 13;
       canvas.save();
-      canvas.translate(rnd.nextDouble() * size.width, rnd.nextDouble() * size.height);
+      canvas.translate(
+        rnd.nextDouble() * size.width,
+        rnd.nextDouble() * size.height,
+      );
       canvas.rotate(theta + (rnd.nextDouble() - 0.5) * 0.3);
       canvas.drawRRect(
         RRect.fromRectAndRadius(
@@ -2427,8 +2567,12 @@ class _RouteMiniMapPainter extends CustomPainter {
     final ox = padding + (dw - lonRange * scale) / 2;
     final oy = padding + (dh - latRange * scale) / 2;
     return coordinates
-        .map((c) =>
-            Offset(ox + (c[0] - minLon) * scale, oy + (maxLat - c[1]) * scale))
+        .map(
+          (c) => Offset(
+            ox + (c[0] - minLon) * scale,
+            oy + (maxLat - c[1]) * scale,
+          ),
+        )
         .toList();
   }
 

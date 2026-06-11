@@ -6,7 +6,7 @@ import 'package:cruise_connect/data/services/country_region.dart';
 /// südlich davon fälschlich als AT → „Im Land bleiben" aufs falsche Land).
 void main() {
   void expectCountry(String name, double lat, double lng, String expected) {
-    expect(CountryRegion.classify(lat, lng), expected, reason: '$name');
+    expect(CountryRegion.classify(lat, lng), expected, reason: name);
   }
 
   test('DE/AT-Alpengrenze korrekt klassifiziert', () {
