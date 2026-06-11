@@ -1069,16 +1069,24 @@ class _CruiseModePageState extends State<CruiseModePage>
     ];
 
     // BRIGHT: 3km-Fenster ab Puck (kleine Geometrie, 4m-gegated wie oben).
-    // 2026-06-10 (vucko Butterweich): Der Linien-KOPF bekommt ~3m VORHALT
-    // entlang der Route. Ohne Vorhalt pendelte der Kopf (Gate-bedingt) 0-5m
-    // HINTER dem 60fps-interpolierten Puck — die Linie ragte sichtbar hinten
-    // raus und "pumpte" (Frame-Serie-Beweis). Mit Vorhalt pendelt der
-    // Ueberhang um +-3m (~15px) und bleibt vollstaendig unter dem Puck-Marker
-    // verdeckt -> optisch butterweicher, fester Schnitt am Puck.
+    // 2026-06-10 (vucko Butterweich): Der Linien-KOPF bekommt VORHALT entlang
+    // der Route. Ohne Vorhalt pendelte der Kopf (Gate-bedingt) HINTER dem
+    // 60fps-interpolierten Puck — die Linie ragte sichtbar hinten raus und
+    // "pumpte" (Frame-Serie-Beweis).
+    // 2026-06-11 (vucko 1Hz-GPS-Fix): Die festen 3m waren auf den 20-Hz-
+    // Fahrsimulator kalibriert. Echtes GPS liefert ~1 Fix/s; der per-Frame
+    // interpolierte Puck faehrt zwischen zwei Fixes speed*1s weiter (50km/h =
+    // 14m) — die Linie ragte am Geraet bis ~15m raus und schnappte 1x/s nach.
+    // Vorhalt jetzt dynamisch: ein Fix-Intervall Fahrweg (+20% Reserve),
+    // mindestens 3m (Stand/Schritttempo), gekappt bei 35m (>100km/h reicht
+    // der Kopf optisch trotzdem, weil der Puck-Marker den Schnitt verdeckt).
     var headLng = projHead[0];
     var headLat = projHead[1];
     var headIdx = clampedAhead;
-    var lead = 3.0;
+    final smoothedSpeedMps = _nativeSmoother.speed;
+    var lead = smoothedSpeedMps.isFinite
+        ? math.min(35.0, math.max(3.0, smoothedSpeedMps * 1.2))
+        : 3.0;
     while (lead > 0 && headIdx < coords.length) {
       final c = coords[headIdx];
       final d = geo.Geolocator.distanceBetween(headLat, headLng, c[1], c[0]);
@@ -9647,10 +9655,20 @@ class _CruiseModePageState extends State<CruiseModePage>
         _hapticStage150m = false;
         _hapticStage50m = false;
       }
+      // 2026-06-11 (vucko 1Hz-GPS-Fix): Stufen KASKADIEREND ohne Band-
+      // Untergrenze. Die alten Baender ((150,300], (50,150]) waren unter dem
+      // 20-Hz-Sim nicht ueberspringbar — echtes GPS mit 3-5s-Fix-Luecke
+      // (Tunnel/Empfangsloch) sprang bei Landstrassentempo ueber ein ganzes
+      // Band, und die EINZIGE Voice-Vorankuendigung (300m) entfiel. Jetzt
+      // feuert immer die hoechste noch offene Stufe <= aktueller Distanz;
+      // tiefere Stufen markieren die hoeheren als verbraucht.
       // 300m → lightImpact + EINE saubere Vorankündigung.
-      if (!_hapticStage300m && distToManeuver <= 300 && distToManeuver > 150) {
+      if (!_hapticStage300m && distToManeuver <= 300 && distToManeuver > 50) {
         HapticFeedback.lightImpact();
         _hapticStage300m = true;
+        // Erstkontakt schon <=150m (Fix-Luecke): 150er-Haptik gilt als
+        // mitverbraucht — sonst feuern light+medium im selben Tick doppelt.
+        if (distToManeuver <= 150) _hapticStage150m = true;
         _speakManeuverAnnouncement(distToManeuver.round(), important: true);
       }
       // 150m → 2026-06-05 (vucko Task #6): NUR Haptik, KEINE Voice mehr. Die

@@ -353,6 +353,26 @@ class NativePositionSmoother {
       }
     }
 
+    // 2026-06-11 (vucko 1Hz-GPS-Fix): Die Blendfaktoren (0.35-0.55) wirken PRO
+    // UPDATE und waren auf den 20-Hz-Fahrsimulator kalibriert (Konvergenz in
+    // ~0,4s). Echtes GPS liefert ~1 Fix/s — gleiche Faktoren ergaben dort eine
+    // ~2s-Zeitkonstante: in zuegigen Kurven hing Kamera-/Puck-Heading 20-30
+    // Grad nach ("saegende" Drehung). Zeitnormierung: alphaEff so waehlen,
+    // dass die KONVERGENZ PRO ZEIT der 20-Hz-Kalibrierung entspricht
+    // (alphaEff = 1-(1-alpha)^(dt/50ms)), gekappt bei 0.85, damit bei langen
+    // Fix-Luecken der rohe GPS-Jitter nicht 1:1 durchschlaegt.
+    final lastHeadingAt = _lastHeadingTime;
+    if (lastHeadingAt != null) {
+      final dtMs = DateTime.now().difference(lastHeadingAt).inMilliseconds;
+      if (dtMs > 75) {
+        final exponent = dtMs / 50.0;
+        blendFactor = math.min(
+          0.85,
+          1.0 - math.pow(1.0 - blendFactor, exponent).toDouble(),
+        );
+      }
+    }
+
     // Heading-Noise filtern
     if (_hasValidHeading) {
       final headingDelta = _angleDelta(_smoothedHeading, targetHeading);
