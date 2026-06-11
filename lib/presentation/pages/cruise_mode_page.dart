@@ -54,7 +54,7 @@ import 'package:cruise_connect/data/services/route_pool_service.dart';
 import 'package:cruise_connect/data/services/route_rating_service.dart';
 import 'package:cruise_connect/data/services/smart_reroute_engine.dart';
 import 'package:cruise_connect/data/services/saved_routes_service.dart';
-import 'package:cruise_connect/domain/models/mapbox_suggestion.dart';
+import 'package:cruise_connect/domain/models/place_suggestion.dart';
 import 'package:cruise_connect/domain/models/route_maneuver.dart'
     show RouteManeuver, RouteWindowMatch;
 import 'package:cruise_connect/domain/models/route_result.dart';
@@ -207,7 +207,9 @@ class _CruiseModePageState extends State<CruiseModePage>
     final meId = Supabase.instance.client.auth.currentUser?.id;
     _lastGroupRealtimeEventAt = DateTime.now();
     _startGroupMembersRealtime(groupId, meId);
-    unawaited(_reloadGroupMembersFromBackfill(groupId, meId, forceRebuild: true));
+    unawaited(
+      _reloadGroupMembersFromBackfill(groupId, meId, forceRebuild: true),
+    );
     unawaited(_uploadMyPosition());
   }
 
@@ -255,7 +257,7 @@ class _CruiseModePageState extends State<CruiseModePage>
   bool _destinationHasFocus = false;
 
   // ─────────────────────── A-to-B Route Selection State ──────────────────────
-  MapboxSuggestion? _selectedDestination;
+  PlaceSuggestion? _selectedDestination;
 
   // ─────────────────────── Route Result State ────────────────────────────────
   bool _isRouteConfirmed = false;
@@ -369,11 +371,12 @@ class _CruiseModePageState extends State<CruiseModePage>
       _fullRouteLatLngsCache = _fullRouteCoordinates.length < 2
           ? const []
           : _fullRouteCoordinates
-              .map((c) => LatLng(c[1], c[0]))
-              .toList(growable: false);
+                .map((c) => LatLng(c[1], c[0]))
+                .toList(growable: false);
     }
     return _fullRouteLatLngsCache;
   }
+
   // Aktuelle User-Position als Marker
   LatLng? _userPosition;
   double _userHeading = 0.0; // GPS-Heading in Grad (0=Nord, 90=Ost)
@@ -404,7 +407,8 @@ class _CruiseModePageState extends State<CruiseModePage>
   // VOLLE Route (statisch) → immer sichtbar, kein 3km-Abschnitt mehr; dieser
   // graue Trail frisst den abgefahrenen Teil hinter dem Puck deckend auf.
   List<LatLng> _drivenTrailLatLngs = const [];
-  List<double>? _lastDrivenHead; // Puck-Projektion des letzten Trail-Pushes (Gate)
+  List<double>?
+  _lastDrivenHead; // Puck-Projektion des letzten Trail-Pushes (Gate)
   // 2026-06-08 (vucko Leitlinie GPU-Trim): Metriken der aktiven Route für das
   // line-gradient-Trimmen. _activeRouteLatLngs = volle Route (an die Karte, wird
   // dort EINMAL je Wechsel gesetzt). _routeCumDist = kumulierte Distanz je Punkt;
@@ -886,16 +890,20 @@ class _CruiseModePageState extends State<CruiseModePage>
     final sig = coords.length < 2
         ? 'e'
         : '${coords.length}:${coords.first[0].toStringAsFixed(5)},'
-            '${coords.first[1].toStringAsFixed(5)}>'
-            '${coords.last[0].toStringAsFixed(5)},'
-            '${coords.last[1].toStringAsFixed(5)}';
+              '${coords.first[1].toStringAsFixed(5)}>'
+              '${coords.last[0].toStringAsFixed(5)},'
+              '${coords.last[1].toStringAsFixed(5)}';
     if (sig == _routeMetricsSig) return;
     _routeMetricsSig = sig;
     final cum = List<double>.filled(coords.length, 0.0);
     var total = 0.0;
     for (var i = 1; i < coords.length; i++) {
       total += geo.Geolocator.distanceBetween(
-          coords[i - 1][1], coords[i - 1][0], coords[i][1], coords[i][0]);
+        coords[i - 1][1],
+        coords[i - 1][0],
+        coords[i][1],
+        coords[i][0],
+      );
       cum[i] = total;
     }
     _routeCumDist = cum;
@@ -915,7 +923,8 @@ class _CruiseModePageState extends State<CruiseModePage>
     if (segIdx != null && frac != null && segIdx >= 0 && segIdx + 1 < n) {
       final f = frac.clamp(0.0, 1.0);
       along =
-          _routeCumDist[segIdx] + f * (_routeCumDist[segIdx + 1] - _routeCumDist[segIdx]);
+          _routeCumDist[segIdx] +
+          f * (_routeCumDist[segIdx + 1] - _routeCumDist[segIdx]);
     } else {
       along = _routeCumDist[match.index.clamp(0, n - 1)];
     }
@@ -934,15 +943,19 @@ class _CruiseModePageState extends State<CruiseModePage>
       if (_passedWaypointIndices.contains(i)) continue;
       final wp = _activeIntermediateWaypoints[i];
       final d = geo.Geolocator.distanceBetween(
-          position.latitude, position.longitude, wp[1], wp[0]);
+        position.latitude,
+        position.longitude,
+        wp[1],
+        wp[0],
+      );
       if (d <= 120.0) {
         _passedWaypointIndices.add(i);
         final tripId = _activeTripId;
         if (tripId != null) {
           unawaited(
-            TripService.instance
-                .markStopReached(tripId, i + 1)
-                .catchError((Object e) {
+            TripService.instance.markStopReached(tripId, i + 1).catchError((
+              Object e,
+            ) {
               debugPrint('[CruiseMode] markStopReached fail (silent): $e');
             }),
           );
@@ -969,7 +982,11 @@ class _CruiseModePageState extends State<CruiseModePage>
     }
     if (remaining.isEmpty) return null;
     double distTo(List<double> c) => geo.Geolocator.distanceBetween(
-        position.latitude, position.longitude, c[1], c[0]);
+      position.latitude,
+      position.longitude,
+      c[1],
+      c[0],
+    );
     final destDist = distTo(destination);
     var nearestIdx = 0;
     var nearestDist = double.infinity;
@@ -1001,34 +1018,173 @@ class _CruiseModePageState extends State<CruiseModePage>
     }
     return [
       for (var i = nearestIdx; i < remaining.length; i++)
-        {
-          'latitude': remaining[i].value[1],
-          'longitude': remaining[i].value[0],
-        },
+        {'latitude': remaining[i].value[1], 'longitude': remaining[i].value[0]},
     ];
+  }
+
+  // ── Route-Lock: EINE Quelle für Puck, Kamera und Linien-Schnitt ──────────
+  // 2026-06-11 (vucko Video-Befund vom Geraet): Puck (freier Kalman) und
+  // Linien-Schnitt (Fix-Match + Gates) waren ZWEI unabhaengige Systeme — am
+  // echten 1Hz-GPS liefen sie sichtbar auseinander (Linie ragte hinter den
+  // Puck, Puck "schwamm" neben der Linie). Industrie-Loesung (Google/Mapbox
+  // Navigation): waehrend der Fahrt wird der GERENDERTE Puck auf die Route
+  // GESNAPPT und gleitet monoton ENTLANG der Geometrie; der Linien-Schnitt
+  // nutzt DIESELBE Distanz → Puck und Linie koennen konstruktiv nicht mehr
+  // auseinanderlaufen. Off-route (lateral > Gate) faellt alles auf den freien
+  // Puck zurueck, der Schnitt friert nicht ein.
+  RouteWindowMatch? _lastWindowMatch;
+  List<double>? _routeCumDistM; // kumulierte Meter je Vertex der aktiven Route
+  int _routeCumHash = 0;
+  int _renderLockSegIdx = 0;
+  double _renderLockDistM = -1; // -1 = kein Lock
+  double _lastTrimDistM = -1;
+  static const double _routeLockLateralMaxM = 30.0;
+
+  void _ensureRouteCumDist() {
+    final coords = _fullRouteCoordinates;
+    final h = identityHashCode(coords);
+    if (_routeCumHash == h && _routeCumDistM != null) return;
+    _routeCumHash = h;
+    _renderLockSegIdx = 0;
+    _renderLockDistM = -1;
+    _lastTrimDistM = -1;
+    if (coords.length < 2) {
+      _routeCumDistM = null;
+      return;
+    }
+    final cum = List<double>.filled(coords.length, 0);
+    for (var i = 1; i < coords.length; i++) {
+      cum[i] = cum[i - 1] +
+          geo.Geolocator.distanceBetween(
+            coords[i - 1][1], coords[i - 1][0], coords[i][1], coords[i][0]);
+    }
+    _routeCumDistM = cum;
+  }
+
+  /// Projiziert (lat,lng) auf die aktive Route. Liefert die monotone Distanz
+  /// entlang der Route oder null (off-route / keine Route).
+  double? _projectDistOnRoute(double lat, double lng) {
+    final coords = _fullRouteCoordinates;
+    if (coords.length < 2 || !_isRouteConfirmed) return null;
+    _ensureRouteCumDist();
+    final cum = _routeCumDistM;
+    if (cum == null) return null;
+    final cosLat = math.cos(lat * math.pi / 180.0);
+    // Fenster um den letzten Lock; ohne Lock (Start/Resume) ganze Route.
+    final hasLock = _renderLockDistM >= 0;
+    final from = hasLock ? math.max(0, _renderLockSegIdx - 6) : 0;
+    final to = hasLock
+        ? math.min(coords.length - 1, _renderLockSegIdx + 80)
+        : coords.length - 1;
+    var bestLat2 = double.infinity;
+    var bestDist = -1.0;
+    var bestSeg = -1;
+    for (var i = from; i < to; i++) {
+      final ax = (coords[i][0] - lng) * 111320.0 * cosLat;
+      final ay = (coords[i][1] - lat) * 110540.0;
+      final bx = (coords[i + 1][0] - lng) * 111320.0 * cosLat;
+      final by = (coords[i + 1][1] - lat) * 110540.0;
+      final dx = bx - ax;
+      final dy = by - ay;
+      final len2 = dx * dx + dy * dy;
+      var t = 0.0;
+      if (len2 > 1e-9) t = (-(ax * dx + ay * dy) / len2).clamp(0.0, 1.0);
+      final px = ax + dx * t;
+      final py = ay + dy * t;
+      final lat2 = px * px + py * py;
+      if (lat2 < bestLat2) {
+        bestLat2 = lat2;
+        bestSeg = i;
+        bestDist = cum[i] + math.sqrt(len2) * t;
+      }
+    }
+    if (bestSeg < 0 || math.sqrt(bestLat2) > _routeLockLateralMaxM) {
+      return null;
+    }
+    // Monotonie: der gerenderte Fortschritt faehrt nie rueckwaerts (GPS-Jitter
+    // nach hinten wuerde sonst sichtbar zuruecksetzen).
+    if (hasLock && bestDist < _renderLockDistM) {
+      return _renderLockDistM;
+    }
+    _renderLockSegIdx = bestSeg;
+    _renderLockDistM = bestDist;
+    return bestDist;
+  }
+
+  /// Punkt (lng,lat) bei Distanz d entlang der aktiven Route.
+  List<double>? _pointAtRouteDist(double d) {
+    final coords = _fullRouteCoordinates;
+    final cum = _routeCumDistM;
+    if (coords.length < 2 || cum == null) return null;
+    if (d <= 0) return [coords.first[0], coords.first[1]];
+    if (d >= cum.last) return [coords.last[0], coords.last[1]];
+    var i = _renderLockSegIdx.clamp(0, coords.length - 2);
+    if (cum[i] > d) i = 0;
+    while (i < coords.length - 2 && cum[i + 1] < d) {
+      i++;
+    }
+    final segLen = cum[i + 1] - cum[i];
+    final f = segLen > 0 ? ((d - cum[i]) / segLen).clamp(0.0, 1.0) : 0.0;
+    return [
+      coords[i][0] + (coords[i + 1][0] - coords[i][0]) * f,
+      coords[i][1] + (coords[i + 1][1] - coords[i][1]) * f,
+    ];
+  }
+
+  /// Render-Position fuer Puck UND Kamera: on-route = auf die Linie gesnappt.
+  LatLng? _routeLockedRenderPosition() {
+    final p = _nativeSmoother.predict(DateTime.now());
+    if (p.lat == 0 && p.lng == 0) return null;
+    if (!_isRouteConfirmed || _isOverviewActive) return LatLng(p.lat, p.lng);
+    final d = _projectDistOnRoute(p.lat, p.lng);
+    if (d == null) return LatLng(p.lat, p.lng); // off-route: freier Puck
+    final pt = _pointAtRouteDist(d);
+    if (pt == null) return LatLng(p.lat, p.lng);
+    return LatLng(pt[1], pt[0]);
   }
 
   bool _trimVisibleRouteToProjection(RouteWindowMatch match) {
     final coords = _fullRouteCoordinates;
     if (coords.length < 2) return false;
-    // Nur heften, wenn der Fahrer wirklich auf der Route ist (lateral ≤ 18m) —
-    // sonst (echter Off-Route/Drift) den Kopf NICHT zwangsweise ziehen.
-    if (match.distanceMeters > _headSnapMaxMeters) return false;
+    _lastWindowMatch = match;
 
-    final segIdx = match.segmentIndex;
-    final frac = match.segmentFraction;
     List<double> projHead;
     int aheadStart;
-    if (segIdx != null && frac != null && segIdx + 1 < coords.length) {
-      final a = coords[segIdx];
-      final b = coords[segIdx + 1];
-      final f = frac.clamp(0.0, 1.0);
-      projHead = [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f];
-      aheadStart = segIdx + 1;
+    // 2026-06-11 (vucko Route-Lock): Ist der Render-Lock aktiv, ist SEINE
+    // monotone Distanz die Quelle des Schnitts — exakt dieselbe Position, an
+    // der der Puck gerendert wird. Das alte 18m-Fix-Gate entfaellt in diesem
+    // Pfad (der Lock garantiert on-route); es friert den Schnitt damit auch
+    // bei GPS-Jitter nicht mehr ein (Geraete-Video-Befund).
+    _ensureRouteCumDist();
+    final lockDist = _renderLockDistM;
+    if (lockDist >= 0 && _routeCumDistM != null) {
+      final pt = _pointAtRouteDist(lockDist);
+      if (pt == null) return false;
+      projHead = pt;
+      var i = _renderLockSegIdx.clamp(0, coords.length - 2);
+      final cum = _routeCumDistM!;
+      if (cum[i] > lockDist) i = 0;
+      while (i < coords.length - 2 && cum[i + 1] < lockDist) {
+        i++;
+      }
+      aheadStart = i + 1;
+      _lastTrimDistM = lockDist;
     } else {
-      final idx = match.index.clamp(0, coords.length - 1);
-      projHead = [coords[idx][0], coords[idx][1]];
-      aheadStart = idx + 1;
+      // Fallback (kein Lock, z. B. ganz frische Route): bisheriger Fix-Match.
+      if (match.distanceMeters > _headSnapMaxMeters) return false;
+      final segIdx = match.segmentIndex;
+      final frac = match.segmentFraction;
+      if (segIdx != null && frac != null && segIdx + 1 < coords.length) {
+        final a = coords[segIdx];
+        final b = coords[segIdx + 1];
+        final f = frac.clamp(0.0, 1.0);
+        projHead = [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f];
+        aheadStart = segIdx + 1;
+      } else {
+        final idx = match.index.clamp(0, coords.length - 1);
+        projHead = [coords[idx][0], coords[idx][1]];
+        aheadStart = idx + 1;
+      }
     }
     if (aheadStart > coords.length) aheadStart = coords.length;
 
@@ -1038,7 +1194,11 @@ class _CruiseModePageState extends State<CruiseModePage>
     // Push-Rate niedrig → butterweich, kein Tile-Hunger / Schwarz-Karte-Risiko.
     if (_lastDrivenHead != null) {
       final moved = geo.Geolocator.distanceBetween(
-          _lastDrivenHead![1], _lastDrivenHead![0], projHead[1], projHead[0]);
+        _lastDrivenHead![1],
+        _lastDrivenHead![0],
+        projHead[1],
+        projHead[0],
+      );
       if (moved < 4.0) return false;
     }
     _lastDrivenHead = projHead;
@@ -1083,10 +1243,12 @@ class _CruiseModePageState extends State<CruiseModePage>
     var headLng = projHead[0];
     var headLat = projHead[1];
     var headIdx = clampedAhead;
-    final smoothedSpeedMps = _nativeSmoother.speed;
-    var lead = smoothedSpeedMps.isFinite
-        ? math.min(35.0, math.max(3.0, smoothedSpeedMps * 1.2))
-        : 3.0;
+    // 2026-06-11 (vucko Route-Lock): Schnitt und Puck teilen dieselbe Distanz
+    // entlang der Route — der grosse speed-Vorhalt ist obsolet (er wuerde
+    // jetzt ein LOCH vor dem Puck reissen). 2,5m Mini-Vorhalt: der Schnitt
+    // liegt knapp in Fahrtrichtung unter dem Puck-Marker; der Tick-Retrim
+    // (>6m Drift) haelt ihn dort bei jedem Tempo.
+    var lead = 2.5;
     while (lead > 0 && headIdx < coords.length) {
       final c = coords[headIdx];
       final d = geo.Geolocator.distanceBetween(headLat, headLng, c[1], c[0]);
@@ -1117,7 +1279,11 @@ class _CruiseModePageState extends State<CruiseModePage>
     final puck = _userLocation;
     if (puck != null) {
       final offM = geo.Geolocator.distanceBetween(
-          puck.latitude, puck.longitude, projHead[1], projHead[0]);
+        puck.latitude,
+        puck.longitude,
+        projHead[1],
+        projHead[0],
+      );
       if (offM <= 80) _everOnActiveRoute = true;
       if (widget.groupId != null && !_everOnActiveRoute && offM > 80) {
         // Late-Joiner abseits der Route: KEIN 3km-Fenster — volle Route
@@ -1146,7 +1312,11 @@ class _CruiseModePageState extends State<CruiseModePage>
     final dimHead = _lastDimHead;
     if (dimHead == null ||
         geo.Geolocator.distanceBetween(
-                dimHead[1], dimHead[0], projHead[1], projHead[0]) >=
+              dimHead[1],
+              dimHead[0],
+              projHead[1],
+              projHead[0],
+            ) >=
             200.0) {
       _lastDimHead = projHead;
       // 2026-06-10 (vucko Schwanz-Fix): dim beginnt ~200m VORAUS — dieser
@@ -1197,7 +1367,9 @@ class _CruiseModePageState extends State<CruiseModePage>
     // echte Live-Wegbeschreibung/ETA via publishProgress. Abgesichert: nur wenn
     // die Cruise-Page offen ist, nicht gerade lädt und nicht schon navigiert.
     // Ist die Page zu, navigiert CarPlay eigenständig weiter (kein Abbruch).
-    CarCommandListener.instance.onStartNavigation = (route, style, avoidHighways) {
+    CarCommandListener
+        .instance
+        .onStartNavigation = (route, style, avoidHighways) {
       if (!mounted || _disposed || _isLoading) return;
       if (_navigationStartTime != null) return; // läuft bereits
       // Hat das Handy schon eine Route in der Vorschau (selbst geplant via
@@ -1567,12 +1739,12 @@ class _CruiseModePageState extends State<CruiseModePage>
         _originalRouteDuration = result.durationSeconds;
         _fullRouteCoordinates = result.coordinates;
         _remainingRouteCoordinates = result.coordinates;
-      // 2026-06-10 (3km-Design v2): Fenster-Caches bei neuer Route leeren —
-      // bright faellt auf die volle Route zurueck (nie unsichtbar), dim wird
-      // beim naechsten Tick sofort neu gesetzt (dimHead == null).
-      _brightAheadLatLngs = const [];
-      _dimRemainingLatLngs = const [];
-      _lastDimHead = null;
+        // 2026-06-10 (3km-Design v2): Fenster-Caches bei neuer Route leeren —
+        // bright faellt auf die volle Route zurueck (nie unsichtbar), dim wird
+        // beim naechsten Tick sofort neu gesetzt (dimHead == null).
+        _brightAheadLatLngs = const [];
+        _dimRemainingLatLngs = const [];
+        _lastDimHead = null;
         _maneuvers = result.maneuvers;
         _activeManeuverIndex = 0;
         _currentRouteIndex = 0;
@@ -1621,7 +1793,8 @@ class _CruiseModePageState extends State<CruiseModePage>
       // die ALTE Ziel-Koordinate behalten (zeigte sonst aufs Ziel der Vorgänger-
       // Route → Reroute zielte falsch) — auf den letzten Routenpunkt (= echtes
       // Ende) zurückfallen, sonst null.
-      _activeDestinationCoordinate = dest ??
+      _activeDestinationCoordinate =
+          dest ??
           (_fullRouteCoordinates.length >= 2
               ? _fullRouteCoordinates.last
               : null);
@@ -1825,8 +1998,9 @@ class _CruiseModePageState extends State<CruiseModePage>
     if (_groupMembersBackfillInFlight || !mounted || _disposed) return;
     _groupMembersBackfillInFlight = true;
     try {
-      final members = await CruiseGroupService.fetchMembers(groupId)
-          .timeout(const Duration(seconds: 4));
+      final members = await CruiseGroupService.fetchMembers(
+        groupId,
+      ).timeout(const Duration(seconds: 4));
       if (!mounted || _disposed || widget.groupId != groupId) return;
       final changed = _mergeGroupMembers(members, meId: meId);
       if (changed || forceRebuild) {
@@ -1998,7 +2172,8 @@ class _CruiseModePageState extends State<CruiseModePage>
       if (stops.length < 2) {
         TopToast.show(
           context,
-          message: 'Diese Tour hat keine gültigen Wegpunkte mehr — wird geschlossen.',
+          message:
+              'Diese Tour hat keine gültigen Wegpunkte mehr — wird geschlossen.',
           icon: Icons.info_outline_rounded,
           duration: const Duration(milliseconds: 3500),
         );
@@ -2016,11 +2191,13 @@ class _CruiseModePageState extends State<CruiseModePage>
       // Weiterfahren nicht erneut angefahren. Route wird unten von der
       // AKTUELLEN Position aus neu generiert (egal wo man weiterfährt).
       final waypoints = stops
-          .where((s) =>
-              s.stopType != 'start' &&
-              (s.actualArrival == null ||
-                  s.stopType == 'destination' ||
-                  s.stopType == 'end'))
+          .where(
+            (s) =>
+                s.stopType != 'start' &&
+                (s.actualArrival == null ||
+                    s.stopType == 'destination' ||
+                    s.stopType == 'end'),
+          )
           .map((s) => LatLng(s.lat, s.lng))
           .toList(growable: false);
       if (!mounted || _disposed) return;
@@ -2186,8 +2363,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     }
     final now = DateTime.now();
     _camDiagLastReport ??= now;
-    if (now.difference(_camDiagLastReport!) <
-        const Duration(seconds: 10)) {
+    if (now.difference(_camDiagLastReport!) < const Duration(seconds: 10)) {
       return;
     }
     _camDiagLastReport = now;
@@ -2235,14 +2411,27 @@ class _CruiseModePageState extends State<CruiseModePage>
     // Optik/Framing (Zoom, Offset, Dämpfung, Heading-Dead-Zone unverändert) —
     // nur kontinuierlich statt pulsierend. Web behält den Event-Pfad.
     if (!kIsWeb) {
-      final pred = _nativeSmoother.predict(
-        DateTime.now().add(const Duration(milliseconds: 150)),
-      );
-      if (pred.lat != 0 || pred.lng != 0) {
-        _camToLat = pred.lat;
-        _camToLng = pred.lng;
+      // 2026-06-11 (vucko Route-Lock): Kamera folgt derselben route-gesnappten
+      // Render-Position wie der Puck (eine Quelle) — vorher zog die freie
+      // Kalman-Prediction die Kamera seitlich neben die Linie.
+      final lockPos = _routeLockedRenderPosition();
+      if (lockPos != null) {
+        _camToLat = lockPos.latitude;
+        _camToLng = lockPos.longitude;
         // Heading-Ziel bleibt event-gesteuert (_animateCameraTo wendet dort
         // die Bearing-Dead-Zone an) — Rotation soll nicht pro Frame zappeln.
+      }
+      // Linien-Schnitt mitziehen: ist der gerenderte Fortschritt dem letzten
+      // Trim >6m voraus, frisch nachtrimmen (throttled ueber das 4m-Gate im
+      // Trim selbst + diesen Schwellwert) — der Schnitt haengt damit nie
+      // mehr als ~6m hinter dem Puck und liegt unter dem Marker.
+      if (_renderLockDistM >= 0 &&
+          _lastTrimDistM >= 0 &&
+          _renderLockDistM - _lastTrimDistM > 6.0 &&
+          _lastWindowMatch != null) {
+        if (_trimVisibleRouteToProjection(_lastWindowMatch!)) {
+          _safeSetState(() {});
+        }
       }
     }
     // Kritisch gedämpftes Annähern (Apple/Google-artig). Faktor pro Frame.
@@ -2254,7 +2443,11 @@ class _CruiseModePageState extends State<CruiseModePage>
     _camCurLng += (_camToLng - _camCurLng) * f;
     _camCurHeading = _lerpAngleDeg(_camCurHeading, _camToHeading, f);
     final stepMeters = geo.Geolocator.distanceBetween(
-        prevLat, prevLng, _camCurLat, _camCurLng);
+      prevLat,
+      prevLng,
+      _camCurLat,
+      _camCurLng,
+    );
     if (_perfCamDiag) _camDiagRecord(stepMeters);
     // Konvergenz-Stop: praktisch keine Bewegung mehr (<1 cm/Frame, <0.05°)
     // über ~45 Frames → Ticker stoppen, kein moveCamera-Spam im Stillstand.
@@ -2275,12 +2468,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     final offLng = _camCurLng + _forwardOffsetLng(_camCurHeading);
     _camMoveInFlight = true;
     ctrl
-        .moveTo(
-          lat: offLat,
-          lng: offLng,
-          zoom: 16.5,
-          bearing: _camCurHeading,
-        )
+        .moveTo(lat: offLat, lng: offLng, zoom: 16.5, bearing: _camCurHeading)
         .whenComplete(() => _camMoveInFlight = false);
   }
 
@@ -2544,9 +2732,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     if (mounted) {
       TopToast.show(
         context,
-        message: label == null
-            ? 'Startpunkt gesetzt'
-            : 'Startpunkt: $label',
+        message: label == null ? 'Startpunkt gesetzt' : 'Startpunkt: $label',
         icon: Icons.my_location_rounded,
         duration: const Duration(milliseconds: 2200),
       );
@@ -2570,7 +2756,7 @@ class _CruiseModePageState extends State<CruiseModePage>
   }
 
   // 2026-05-28 (vucko): Startort aus der Adresssuche übernommen.
-  void _onStartLocationSelected(MapboxSuggestion suggestion) {
+  void _onStartLocationSelected(PlaceSuggestion suggestion) {
     _setPickedStartLocation(
       LatLng(suggestion.latitude, suggestion.longitude),
       label: suggestion.placeName,
@@ -2661,8 +2847,11 @@ class _CruiseModePageState extends State<CruiseModePage>
                       color: AppAccentColors.accent.withValues(alpha: 0.15),
                       borderRadius: BorderRadius.circular(12),
                     ),
-                    child: Icon(Icons.tips_and_updates_rounded,
-                        color: AppAccentColors.accent, size: 24),
+                    child: Icon(
+                      Icons.tips_and_updates_rounded,
+                      color: AppAccentColors.accent,
+                      size: 24,
+                    ),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
@@ -2683,14 +2872,23 @@ class _CruiseModePageState extends State<CruiseModePage>
                 style: TextStyle(color: Colors.white70, fontSize: 14),
               ),
               const SizedBox(height: 14),
-              _tutorialBullet('🎯', 'Standard',
-                  'Bis zu 3 Stopps für eine schnelle Tour'),
+              _tutorialBullet(
+                '🎯',
+                'Standard',
+                'Bis zu 3 Stopps für eine schnelle Tour',
+              ),
               const SizedBox(height: 10),
-              _tutorialBullet('🗺️', 'Trip-Modus',
-                  'Bis zu 5 Stopps, mit Pause/Resume — perfekt für Mehrtages-Touren'),
+              _tutorialBullet(
+                '🗺️',
+                'Trip-Modus',
+                'Bis zu 5 Stopps, mit Pause/Resume — perfekt für Mehrtages-Touren',
+              ),
               const SizedBox(height: 10),
-              _tutorialBullet('💾', 'Auto-Save',
-                  'Trip wird gespeichert, du kannst später im Homescreen weitermachen'),
+              _tutorialBullet(
+                '💾',
+                'Auto-Save',
+                'Trip wird gespeichert, du kannst später im Homescreen weitermachen',
+              ),
               const SizedBox(height: 20),
               SizedBox(
                 width: double.infinity,
@@ -2772,7 +2970,11 @@ class _CruiseModePageState extends State<CruiseModePage>
               Text(
                 message,
                 textAlign: TextAlign.center,
-                style: const TextStyle(color: Colors.white70, fontSize: 14, height: 1.4),
+                style: const TextStyle(
+                  color: Colors.white70,
+                  fontSize: 14,
+                  height: 1.4,
+                ),
               ),
               const SizedBox(height: 20),
               if (!_tripModeEnabled) ...[
@@ -2792,7 +2994,11 @@ class _CruiseModePageState extends State<CruiseModePage>
                     ),
                     child: const Text(
                       'Trip-Modus aktivieren',
-                      style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w600),
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                   ),
                 ),
@@ -3607,15 +3813,12 @@ class _CruiseModePageState extends State<CruiseModePage>
                   AnimatedBuilder(
                     animation: PoiSettingsService.instance,
                     builder: (context, _) {
-                      final active =
-                          PoiSettingsService.instance.anyEnabled;
+                      final active = PoiSettingsService.instance.anyEnabled;
                       return _buildWaypointMapAction(
                         icon: Icons.tune_rounded,
                         label: 'POIs',
                         onTap: _isLoading ? null : _openPoiFilter,
-                        overrideAccent: active
-                            ? AppAccentColors.accent
-                            : null,
+                        overrideAccent: active ? AppAccentColors.accent : null,
                       );
                     },
                   ),
@@ -3624,18 +3827,15 @@ class _CruiseModePageState extends State<CruiseModePage>
                     builder: (context, _) {
                       final mode = VoiceSettingsService.instance.mode;
                       final (icon, color) = switch (mode) {
-                        VoiceMode.off => (
-                            Icons.volume_off_rounded,
-                            null,
-                          ),
+                        VoiceMode.off => (Icons.volume_off_rounded, null),
                         VoiceMode.important => (
-                            Icons.volume_down_rounded,
-                            const Color(0xFFFBBF24),
-                          ),
+                          Icons.volume_down_rounded,
+                          const Color(0xFFFBBF24),
+                        ),
                         VoiceMode.all => (
-                            Icons.volume_up_rounded,
-                            AppAccentColors.accent,
-                          ),
+                          Icons.volume_up_rounded,
+                          AppAccentColors.accent,
+                        ),
                       };
                       return _buildWaypointMapAction(
                         icon: icon,
@@ -3645,8 +3845,7 @@ class _CruiseModePageState extends State<CruiseModePage>
                           await VoiceSettingsService.instance.cycleMode();
                           HapticFeedback.selectionClick();
                           if (!context.mounted) return;
-                          final newMode =
-                              VoiceSettingsService.instance.mode;
+                          final newMode = VoiceSettingsService.instance.mode;
                           final newLabel = switch (newMode) {
                             VoiceMode.off => 'Stumm',
                             VoiceMode.important => 'Nur Wichtiges',
@@ -3657,8 +3856,7 @@ class _CruiseModePageState extends State<CruiseModePage>
                             message: 'Sprache: $newLabel',
                             icon: switch (newMode) {
                               VoiceMode.off => Icons.volume_off_rounded,
-                              VoiceMode.important =>
-                                  Icons.volume_down_rounded,
+                              VoiceMode.important => Icons.volume_down_rounded,
                               VoiceMode.all => Icons.volume_up_rounded,
                             },
                           );
@@ -3667,9 +3865,7 @@ class _CruiseModePageState extends State<CruiseModePage>
                     },
                   ),
                   _buildWaypointMapAction(
-                    icon: _isCameraLocked
-                        ? Icons.explore
-                        : Icons.explore_off,
+                    icon: _isCameraLocked ? Icons.explore : Icons.explore_off,
                     label: 'Kamera',
                     overrideAccent: _isCameraLocked
                         ? AppAccentColors.accent
@@ -3897,7 +4093,8 @@ class _CruiseModePageState extends State<CruiseModePage>
                     // bestätigen"-Button auch in den eingeklappten Zustand —
                     // direkt über „Strecke planen", damit man nicht erst wieder
                     // hochziehen muss, um loszufahren.
-                    final hasConfirmableRoute = _showRouteInfoBanner &&
+                    final hasConfirmableRoute =
+                        _showRouteInfoBanner &&
                         _lastRouteResult != null &&
                         (_fullRouteCoordinates.length >= 2 ||
                             _routeLatLngs.length >= 2);
@@ -3955,8 +4152,9 @@ class _CruiseModePageState extends State<CruiseModePage>
                                 ? null
                                 : [
                                     BoxShadow(
-                                      color: AppAccentColors.accent
-                                          .withValues(alpha: 0.3),
+                                      color: AppAccentColors.accent.withValues(
+                                        alpha: 0.3,
+                                      ),
                                       blurRadius: 12,
                                       offset: const Offset(0, 4),
                                     ),
@@ -3964,8 +4162,8 @@ class _CruiseModePageState extends State<CruiseModePage>
                           ),
                           child: hasConfirmableRoute
                               ? OutlinedButton.icon(
-                                  onPressed: () => setState(
-                                      () => _configCollapsed = false),
+                                  onPressed: () =>
+                                      setState(() => _configCollapsed = false),
                                   icon: Icon(
                                     Icons.tune_rounded,
                                     color: AppAccentColors.accent,
@@ -3982,8 +4180,9 @@ class _CruiseModePageState extends State<CruiseModePage>
                                   style: OutlinedButton.styleFrom(
                                     backgroundColor: const Color(0xFF1C1F26),
                                     side: BorderSide(
-                                      color: AppAccentColors.accent
-                                          .withValues(alpha: 0.5),
+                                      color: AppAccentColors.accent.withValues(
+                                        alpha: 0.5,
+                                      ),
                                     ),
                                     shape: RoundedRectangleBorder(
                                       borderRadius: BorderRadius.circular(30),
@@ -3991,8 +4190,8 @@ class _CruiseModePageState extends State<CruiseModePage>
                                   ),
                                 )
                               : ElevatedButton.icon(
-                                  onPressed: () => setState(
-                                      () => _configCollapsed = false),
+                                  onPressed: () =>
+                                      setState(() => _configCollapsed = false),
                                   icon: const Icon(
                                     Icons.tune_rounded,
                                     color: Colors.white,
@@ -4020,6 +4219,10 @@ class _CruiseModePageState extends State<CruiseModePage>
                                   ),
                                 ),
                         ),
+                        if (hasConfirmableRoute && _activeTripId != null) ...[
+                          const SizedBox(height: 8),
+                          _buildTripSaveForLaterButton(height: 46),
+                        ],
                       ],
                     );
                   },
@@ -4094,10 +4297,7 @@ class _CruiseModePageState extends State<CruiseModePage>
                       gradient: LinearGradient(
                         begin: Alignment.topCenter,
                         end: Alignment.bottomCenter,
-                        colors: [
-                          Colors.transparent,
-                          Color(0xFF0B0E14),
-                        ],
+                        colors: [Colors.transparent, Color(0xFF0B0E14)],
                         stops: [0.0, 1.0],
                       ),
                     ),
@@ -4175,8 +4375,7 @@ class _CruiseModePageState extends State<CruiseModePage>
                       // man die Route gleich auf der Karte sieht.
                       if (_showRouteInfoBanner && _lastRouteResult != null) ...[
                         GestureDetector(
-                          onTap: () =>
-                              setState(() => _configCollapsed = true),
+                          onTap: () => setState(() => _configCollapsed = true),
                           child: _buildRouteInfoBanner(),
                         ),
                         const SizedBox(height: 18),
@@ -4197,7 +4396,8 @@ class _CruiseModePageState extends State<CruiseModePage>
                         onStartLocationSelected: _onStartLocationSelected,
                         onStartLocationCleared: _clearPickedStartLocation,
                         countryPreference: _countryPreference,
-                        homeCountryCode: _homeCountryCode ??
+                        homeCountryCode:
+                            _homeCountryCode ??
                             CountryRegion.classify(
                               _userLocation?.latitude ?? 47.24,
                               _userLocation?.longitude ?? 9.6,
@@ -4331,11 +4531,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     // die volle Route-Info wieder zurück. Das macht das Wegräumen/Zurückholen
     // „lebendig" und gibt der Karte Platz, ohne die Route zu verlieren.
     if (_routeBannerDismissed) {
-      return Positioned(
-        top: top,
-        right: 12,
-        child: _buildRouteRecallPill(),
-      );
+      return Positioned(top: top, right: 12, child: _buildRouteRecallPill());
     }
     return Positioned(
       top: top,
@@ -4443,7 +4639,9 @@ class _CruiseModePageState extends State<CruiseModePage>
     };
     int durationMin;
     final realDurationSeconds = result.durationSeconds;
-    if (realDurationSeconds != null && realDurationSeconds > 30 && actualDistanceKm > 0) {
+    if (realDurationSeconds != null &&
+        realDurationSeconds > 30 &&
+        actualDistanceKm > 0) {
       final ghAvgKmh = actualDistanceKm / (realDurationSeconds / 3600);
       if (ghAvgKmh >= 25 && ghAvgKmh <= 110) {
         // GH-Wert plausibel — direkt nutzen
@@ -4493,14 +4691,30 @@ class _CruiseModePageState extends State<CruiseModePage>
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             children: [
-              Expanded(child: _buildInfoItem(Icons.straighten, '$distKm km', 'Distanz')),
-              Expanded(child: _buildInfoItem(Icons.timer_outlined, timeStr, 'Dauer')),
-              Expanded(child: _buildInfoItem(Icons.turn_right, '$curveCount', 'Kurven')),
-              Expanded(child: _buildInfoItem(
-                Icons.star_outline,
-                '${_calculateRouteXp()}',
-                'XP',
-              )),
+              Expanded(
+                child: _buildInfoItem(
+                  Icons.straighten,
+                  '$distKm km',
+                  'Distanz',
+                ),
+              ),
+              Expanded(
+                child: _buildInfoItem(Icons.timer_outlined, timeStr, 'Dauer'),
+              ),
+              Expanded(
+                child: _buildInfoItem(
+                  Icons.turn_right,
+                  '$curveCount',
+                  'Kurven',
+                ),
+              ),
+              Expanded(
+                child: _buildInfoItem(
+                  Icons.star_outline,
+                  '${_calculateRouteXp()}',
+                  'XP',
+                ),
+              ),
               if (_routeStartCoord() != null)
                 Expanded(
                   child: WeatherInline(
@@ -4556,8 +4770,11 @@ class _CruiseModePageState extends State<CruiseModePage>
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(Icons.terrain_outlined,
-                      size: 13, color: AppAccentColors.accent),
+                  Icon(
+                    Icons.terrain_outlined,
+                    size: 13,
+                    color: AppAccentColors.accent,
+                  ),
                   const SizedBox(width: 4),
                   Text(
                     '+${ascent}m',
@@ -4596,8 +4813,9 @@ class _CruiseModePageState extends State<CruiseModePage>
   String? _routeSourceLabel(RouteResult result) {
     final meta = result.edgeMeta;
     if (meta.isEmpty) return null;
-    final raw =
-        (meta['route_source'] ?? meta['source'] ?? '').toString().toLowerCase();
+    final raw = (meta['route_source'] ?? meta['source'] ?? '')
+        .toString()
+        .toLowerCase();
     if (raw.isEmpty) return null;
     if (raw == 'pool' || raw == 'route_pool') return 'POOL';
     if (raw == 'candidate_reserve') return 'POOL+';
@@ -4818,11 +5036,13 @@ class _CruiseModePageState extends State<CruiseModePage>
     // ständig neue initial-Props → Plattform-View/Controller wurde neu erzeugt →
     // firstFrameReady ging auf dem von der Page gehaltenen Controller verloren →
     // Kamera eingefroren. „Initial" ist per Definition einmalig.
-    _stableInitialCenter ??= _userPosition ??
+    _stableInitialCenter ??=
+        _userPosition ??
         _cachedUserCenter ??
         const LatLng(51.165691, 10.451526);
-    _stableInitialZoom ??=
-        (_userPosition ?? _cachedUserCenter) != null ? 13.0 : 6.0;
+    _stableInitialZoom ??= (_userPosition ?? _cachedUserCenter) != null
+        ? 13.0
+        : 6.0;
     // 2026-06-08 (vucko Leitstrich-Sharp-Cut): die AKTIVE rote Linie = die am Puck
     // GESCHNITTENE Reststrecke (solide Farbe), der abgefahrene Teil = grauer
     // Hintergrund. Der Schnitt entsteht durch die Geometrie-Kante (knackscharf wie
@@ -4846,8 +5066,8 @@ class _CruiseModePageState extends State<CruiseModePage>
     // bleibt die VOLLE Route sichtbar — der Strich darf nie verschwinden.
     final activePts = (!_isOverviewActive && _routeLatLngs.length >= 2)
         ? ((_isRouteConfirmed && _brightAheadLatLngs.length >= 2)
-            ? _brightAheadLatLngs
-            : _routeLatLngs)
+              ? _brightAheadLatLngs
+              : _routeLatLngs)
         : _fullRouteBackgroundLatLngs;
     return CruiseMapLibreMap(
       initialCenter: _stableInitialCenter!,
@@ -4868,13 +5088,10 @@ class _CruiseModePageState extends State<CruiseModePage>
       // Prediction (Dead Reckoning zwischen den ~1Hz-GPS-Fixes) statt der
       // rohen Fix-Position — kein Sekunden-Teleport mehr. Web: aus (dort
       // glättet der WebPositionSmoother den Event-Pfad wie bisher).
-      liveSmoothedPosition: kIsWeb
-          ? null
-          : () {
-              final p = _nativeSmoother.predict(DateTime.now());
-              if (p.lat == 0 && p.lng == 0) return null;
-              return LatLng(p.lat, p.lng);
-            },
+      // 2026-06-11 (vucko Route-Lock): Der Puck folgt pro Frame der auf die
+      // ROUTE gesnappten Render-Position (eine Quelle mit Linien-Schnitt +
+      // Kamera) — Puck faehrt sichtbar AUF der Linie, kein Auseinanderlaufen.
+      liveSmoothedPosition: kIsWeb ? null : _routeLockedRenderPosition,
       onControllerReady: (c) {
         _mlController = c;
         if (!_mapReady) _onMapReady();
@@ -4914,117 +5131,137 @@ class _CruiseModePageState extends State<CruiseModePage>
     final activeRouteEnd = _activeRouteEndMarkerPoint;
 
     if (_userLocation != null && !_isRouteConfirmed) {
-      markers.add(CruiseMapMarker(
-        id: 'user-loc',
-        position: LatLng(_userLocation!.latitude, _userLocation!.longitude),
-        width: _puckSize,
-        height: _puckSize,
-        child: _buildLocationPuck(_userHeading),
-      ));
+      markers.add(
+        CruiseMapMarker(
+          id: 'user-loc',
+          position: LatLng(_userLocation!.latitude, _userLocation!.longitude),
+          width: _puckSize,
+          height: _puckSize,
+          child: _buildLocationPuck(_userHeading),
+        ),
+      );
     }
     if (_pickedStartLocation != null &&
         _selectedLocation == 'Standort wählen' &&
         !_isRouteConfirmed) {
-      markers.add(CruiseMapMarker(
-        id: 'picked-start',
-        position: _pickedStartLocation!,
-        width: 46,
-        height: 56,
-        alignment: Alignment.topCenter,
-        child: _buildPickedStartMarker(),
-      ));
+      markers.add(
+        CruiseMapMarker(
+          id: 'picked-start',
+          position: _pickedStartLocation!,
+          width: 46,
+          height: 56,
+          alignment: Alignment.topCenter,
+          child: _buildPickedStartMarker(),
+        ),
+      );
     }
     if (_isWaypointPlanning && _roundTripWaypoints.isNotEmpty) {
       for (var i = 0; i < _roundTripWaypoints.length; i++) {
-        markers.add(CruiseMapMarker(
-          id: 'wp-$i',
-          position: _roundTripWaypoints[i],
-          width: 44,
-          height: 44,
-          child: GestureDetector(
-            onTap: _isLoading ? null : () => _selectRoundTripWaypoint(i),
-            onLongPress: _isLoading ? null : () => _deleteRoundTripWaypoint(i),
-            child: _buildWaypointMarker(
-              i + 1,
-              selected: _selectedRoundTripWaypointIndex == i,
-              replacing: _replaceRoundTripWaypointIndex == i,
+        markers.add(
+          CruiseMapMarker(
+            id: 'wp-$i',
+            position: _roundTripWaypoints[i],
+            width: 44,
+            height: 44,
+            child: GestureDetector(
+              onTap: _isLoading ? null : () => _selectRoundTripWaypoint(i),
+              onLongPress: _isLoading
+                  ? null
+                  : () => _deleteRoundTripWaypoint(i),
+              child: _buildWaypointMarker(
+                i + 1,
+                selected: _selectedRoundTripWaypointIndex == i,
+                replacing: _replaceRoundTripWaypointIndex == i,
+              ),
             ),
           ),
-        ));
+        );
       }
     }
     if (pointToPointDestination != null) {
-      markers.add(CruiseMapMarker(
-        id: 'p2p-dest',
-        position: pointToPointDestination,
-        width: 44,
-        height: 44,
-        child: _buildDestinationMarker(),
-      ));
+      markers.add(
+        CruiseMapMarker(
+          id: 'p2p-dest',
+          position: pointToPointDestination,
+          width: 44,
+          height: 44,
+          child: _buildDestinationMarker(),
+        ),
+      );
     }
     if (activeRouteEnd != null) {
-      markers.add(CruiseMapMarker(
-        id: 'route-end',
-        position: activeRouteEnd,
-        width: 46,
-        height: 46,
-        child: _buildDestinationMarker(),
-      ));
+      markers.add(
+        CruiseMapMarker(
+          id: 'route-end',
+          position: activeRouteEnd,
+          width: 46,
+          height: 46,
+          child: _buildDestinationMarker(),
+        ),
+      );
     }
     for (final poi in _routePois) {
-      markers.add(CruiseMapMarker(
-        id: 'poi-${poi.latitude},${poi.longitude}',
-        position: LatLng(poi.latitude, poi.longitude),
-        width: 36,
-        height: 36,
-        child: GestureDetector(
-          onTap: () => _showPoiInfoCard(poi),
-          child: _buildPoiMarker(poi),
+      markers.add(
+        CruiseMapMarker(
+          id: 'poi-${poi.latitude},${poi.longitude}',
+          position: LatLng(poi.latitude, poi.longitude),
+          width: 36,
+          height: 36,
+          child: GestureDetector(
+            onTap: () => _showPoiInfoCard(poi),
+            child: _buildPoiMarker(poi),
+          ),
         ),
-      ));
+      );
     }
     for (final c in _routeConstructions) {
-      markers.add(CruiseMapMarker(
-        id: 'cons-${c.latitude},${c.longitude}',
-        position: LatLng(c.latitude, c.longitude),
-        width: 40,
-        height: 40,
-        child: GestureDetector(
-          onTap: () => ConstructionAlertSheet.show(context, c),
-          child: _buildConstructionMarker(c),
+      markers.add(
+        CruiseMapMarker(
+          id: 'cons-${c.latitude},${c.longitude}',
+          position: LatLng(c.latitude, c.longitude),
+          width: 40,
+          height: 40,
+          child: GestureDetector(
+            onTap: () => ConstructionAlertSheet.show(context, c),
+            child: _buildConstructionMarker(c),
+          ),
         ),
-      ));
+      );
     }
     if (_userPosition != null && _isRouteConfirmed) {
       // Bei gesperrter Navi-Kamera dreht die MapLibre-Karte bereits per
       // bearing=heading (Fahrtrichtung oben) → der Screen-Overlay-Puck zeigt
       // gerade nach oben (0). Bei freigegebener Kamera (User hat gepannt) zeigt
       // er die echte Fahrtrichtung relativ zur (north-up) Karte.
-      markers.add(CruiseMapMarker(
-        id: 'user-pos',
-        position: _userPosition!,
-        width: _puckSize,
-        height: _puckSize,
-        // Folgt pro Frame der Smoother-Prediction (liveSmoothedPosition) —
-        // _userPosition bleibt der Fallback, falls der Smoother leer ist.
-        followsLivePosition: true,
-        child: _buildLocationPuck(_isCameraLocked ? 0.0 : _userHeading),
-      ));
+      markers.add(
+        CruiseMapMarker(
+          id: 'user-pos',
+          position: _userPosition!,
+          width: _puckSize,
+          height: _puckSize,
+          // Folgt pro Frame der Smoother-Prediction (liveSmoothedPosition) —
+          // _userPosition bleibt der Fallback, falls der Smoother leer ist.
+          followsLivePosition: true,
+          child: _buildLocationPuck(_isCameraLocked ? 0.0 : _userHeading),
+        ),
+      );
     }
     if (widget.groupId != null && _groupMembers.isNotEmpty) {
       for (final entry in _groupMembers.entries) {
         final m = entry.value;
         if (!_hasGroupMemberLocation(m)) continue;
         final shown = _peerShownPos[entry.key];
-        markers.add(CruiseMapMarker(
-          id: 'grp-${entry.key}',
-          position: shown != null
-              ? LatLng(shown[1], shown[0])
-              : LatLng(m.currentLat!, m.currentLng!),
-          width: 40,
-          height: 40,
-          child: _buildGroupMemberMarker(m),
-        ));
+        markers.add(
+          CruiseMapMarker(
+            id: 'grp-${entry.key}',
+            position: shown != null
+                ? LatLng(shown[1], shown[0])
+                : LatLng(m.currentLat!, m.currentLng!),
+            width: 40,
+            height: 40,
+            child: _buildGroupMemberMarker(m),
+          ),
+        );
       }
     }
     return markers;
@@ -5042,9 +5279,9 @@ class _CruiseModePageState extends State<CruiseModePage>
         onMapReady: _onMapReady,
         onTap: _handleMapTap,
         // 2026-05-28 (vucko Task #70): Map-Background bei Tile-Lücken auf
-        // Mapbox-Dark-Farbe statt System-Weiß. So sind Pan-Lücken kaum
+        // Dunkle Kartenfarbe statt System-Weiß. So sind Pan-Lücken kaum
         // sichtbar während die Tiles im Hintergrund nachgeladen werden.
-        backgroundColor: OfflineMapService.mapboxDarkBackground,
+        backgroundColor: OfflineMapService.cruiseDarkBackground,
         // Bei echter Karten-Geste: Kamera-Follow in Vorschau und Navigation lösen.
         onPointerDown: (event, point) {
           _unlockCameraFollow();
@@ -5060,11 +5297,11 @@ class _CruiseModePageState extends State<CruiseModePage>
         },
       ),
       children: [
-        // ── Mapbox Dark-Style als Raster-Tile-Layer ──────────────────────────
+        // ── Cruise-Dark-Raster-Tile-Layer ────────────────────────────────────
         // 2026-05-28 (vucko Task #77): retinaMode KOMPLETT DEAKTIVIERT.
         // User-Screenshots zeigen regelmäßige vertikale Streifen — das ist
-        // klassischer Symptom für retinaMode-URL-Mismatch (Mapbox liefert
-        // 256px Tiles, retinaMode würde @2x verlangen, aber unsere URL
+        // klassisches Symptom für retinaMode-URL-Mismatch (Tiles liefern
+        // 256px, retinaMode würde @2x verlangen, aber unsere URL
         // hat „/256/" hardcoded → flutter_map streched die Tiles in einer
         // Weise die auf iPhone 17 Pro Max (3x Display) die Streifen
         // produziert).
@@ -5091,7 +5328,7 @@ class _CruiseModePageState extends State<CruiseModePage>
           ),
         // 2026-06-02 (vucko): Self-hosted VEKTOR-Tiles (PMTiles aus R2) im
         // Cruise-Dark-Style, sobald geladen. Schlägt Laden/Rendern fehl, bleibt
-        // _pmtilesProvider null → Mapbox-Raster-Layer (else) als Fallback,
+        // _pmtilesProvider null → eigener Raster-Layer (else) als Fallback,
         // damit die Karte IMMER funktioniert.
         if (_pmtilesProvider != null)
           VectorTileLayer(
@@ -5111,23 +5348,23 @@ class _CruiseModePageState extends State<CruiseModePage>
           )
         else
           TileLayer(
-          // 2026-06-02 (vucko): MAPBOX DEAKTIVIERT (User-Wunsch). Fällt das
-          // Vektor-PMTiles-Laden aus (z.B. r2.dev rate-limitet die Range-
-          // Requests auf die 5GB-Datei), zeigen wir jetzt UNSERE gerasterten
-          // Cruise-Dark-Tiles (z6–12 aus R2 — dieselben wie CarPlay, laden
-          // zuverlässig als einzelne PNGs) statt der grauen Mapbox-Karte. So
-          // sieht der User IMMER unseren eigenen Look, nie Mapbox.
-          urlTemplate: OfflineMapService.cruiseRasterTileUrl,
-          tileProvider: NetworkTileProvider(),
-          userAgentPackageName: 'com.cruise_connect.app',
-          retinaMode: false,
-          // Tiles enden bei z12 → darüber skaliert flutter_map hoch (kein Schwarz).
-          maxNativeZoom: 12,
-          tileDisplay: const TileDisplay.instantaneous(),
-          keepBuffer: 5,
-          panBuffer: 3,
-          evictErrorTileStrategy: EvictErrorTileStrategy.notVisible,
-        ),
+            // 2026-06-02 (vucko): externer Karten-Fallback deaktiviert. Fällt das
+            // Vektor-PMTiles-Laden aus (z.B. r2.dev rate-limitet die Range-
+            // Requests auf die 5GB-Datei), zeigen wir jetzt UNSERE gerasterten
+            // Cruise-Dark-Tiles (z6–12 aus R2 — dieselben wie CarPlay, laden
+            // zuverlässig als einzelne PNGs). So sieht der User IMMER unseren
+            // eigenen Look.
+            urlTemplate: OfflineMapService.cruiseRasterTileUrl,
+            tileProvider: NetworkTileProvider(),
+            userAgentPackageName: 'com.cruise_connect.app',
+            retinaMode: false,
+            // Tiles enden bei z12 → darüber skaliert flutter_map hoch (kein Schwarz).
+            maxNativeZoom: 12,
+            tileDisplay: const TileDisplay.instantaneous(),
+            keepBuffer: 5,
+            panBuffer: 3,
+            evictErrorTileStrategy: EvictErrorTileStrategy.notVisible,
+          ),
         // ── Gesamt-Route als gedimmter Hintergrund ───────────────────────────
         // 2026-05-28 (vucko Task #86 / Startup-V Issue 2): Während der Fahrt
         // ist _routeLatLngs nur das 3km-Sliding-Window. Ohne diesen Hintergrund
@@ -5332,15 +5569,16 @@ class _CruiseModePageState extends State<CruiseModePage>
   /// Wird von flutter_map aufgerufen wenn die Karte bereit ist.
   /// PMTiles-Vektorquelle (R2). Sobald geladen, rendert die Karte die
   /// self-hosted Tiles im Dark-Style (siehe _buildMapWidget); bleibt sie null,
-  /// nutzt die App weiter den Mapbox-Raster-Layer (Fallback, nichts bricht).
+  /// nutzt die App weiter den eigenen Raster-Layer (Fallback, nichts bricht).
   PmTilesVectorTileProvider? _pmtilesProvider;
   // 2026-06-02 (vucko): Welt-Übersicht (z0–6) als Unterlage unter DACH-Detail.
   PmTilesVectorTileProvider? _worldPmtilesProvider;
 
   /// Eigenes Mapbox-Dark-ähnliches Theme für die self-hosted Protomaps-Tiles
   /// (einmal gebaut). Ersetzt das karge Standard-Protomaps-Dark.
-  late final vtr.Theme _cruiseMapTheme =
-      vtr.ThemeReader().read(cruiseDarkMapStyle);
+  late final vtr.Theme _cruiseMapTheme = vtr.ThemeReader().read(
+    cruiseDarkMapStyle,
+  );
 
   Future<void> _loadVectorTiles() async {
     final provider = await OfflineMapService.instance.loadPmtilesProvider();
@@ -5413,10 +5651,7 @@ class _CruiseModePageState extends State<CruiseModePage>
               child: OutlinedButton(
                 onPressed: _isLoading ? null : _confirmRoute,
                 style: OutlinedButton.styleFrom(
-                  side: BorderSide(
-                    color: AppAccentColors.accent,
-                    width: 1.5,
-                  ),
+                  side: BorderSide(color: AppAccentColors.accent, width: 1.5),
                   backgroundColor: const Color(0xFF1C1F26),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(25),
@@ -5432,6 +5667,11 @@ class _CruiseModePageState extends State<CruiseModePage>
                 ),
               ),
             ),
+          ),
+        if (hasConfirmableRoute && _activeTripId != null)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: _buildTripSaveForLaterButton(height: 46),
           ),
         Container(
           height: 60,
@@ -5516,6 +5756,38 @@ class _CruiseModePageState extends State<CruiseModePage>
           ),
         ),
         child: Center(child: actions),
+      ),
+    );
+  }
+
+  Widget _buildTripSaveForLaterButton({required double height}) {
+    return SizedBox(
+      width: double.infinity,
+      height: height,
+      child: OutlinedButton.icon(
+        onPressed: _isLoading ? null : _saveActiveTripForLater,
+        icon: Icon(
+          Icons.archive_outlined,
+          color: AppAccentColors.accent,
+          size: 18,
+        ),
+        label: const Text(
+          'Tour zwischenspeichern',
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: 15,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        style: OutlinedButton.styleFrom(
+          backgroundColor: const Color(0xFF1C1F26),
+          side: BorderSide(
+            color: AppAccentColors.accent.withValues(alpha: 0.42),
+          ),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(height / 2),
+          ),
+        ),
       ),
     );
   }
@@ -5743,11 +6015,7 @@ class _CruiseModePageState extends State<CruiseModePage>
             ],
           ),
           alignment: Alignment.center,
-          child: const Icon(
-            Icons.play_arrow_rounded,
-            color: color,
-            size: 22,
-          ),
+          child: const Icon(Icons.play_arrow_rounded, color: color, size: 22),
         ),
         Transform.translate(
           offset: const Offset(0, -4),
@@ -6009,7 +6277,9 @@ class _CruiseModePageState extends State<CruiseModePage>
         if (mounted && _mapReady && _userLocation == null) {
           _camMove(lat, lng, 13.0);
         } else if (mounted) {
-          _safeSetState(() {}); // nächster Build nutzt _cachedUserCenter als initialCenter
+          _safeSetState(
+            () {},
+          ); // nächster Build nutzt _cachedUserCenter als initialCenter
         }
       }
     } catch (_) {}
@@ -6265,8 +6535,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       type: RouteErrorType.validation,
       userMessage:
           'GPS-Fix ist zu alt oder zu ungenau. Bitte kurz warten und erneut versuchen.',
-      debugMessage:
-          'No fresh start fix available within age/accuracy gate.',
+      debugMessage: 'No fresh start fix available within age/accuracy gate.',
       edgeMeta: {'response_code': 'fresh_start_fix_unavailable'},
     );
   }
@@ -6358,7 +6627,8 @@ class _CruiseModePageState extends State<CruiseModePage>
     // 2026-05-22 (vucko Task #7): Limit-Check vor Routensuche.
     // Normal-Mode: max 3 WPs, Trip-Mode: max 5. UI lässt mehr setzen damit
     // User experimentieren kann, hier kommt der freundliche Hinweis.
-    if (_isWaypointPlanning && _roundTripWaypoints.length > _currentMaxWaypoints) {
+    if (_isWaypointPlanning &&
+        _roundTripWaypoints.length > _currentMaxWaypoints) {
       final extra = _roundTripWaypoints.length - _currentMaxWaypoints;
       final hint = _tripModeEnabled
           ? 'Im Trip-Modus max 5 Stopps. Du hast $extra zu viel.'
@@ -6628,10 +6898,12 @@ class _CruiseModePageState extends State<CruiseModePage>
             ? waypointSnapshot
             : waypointSnapshot.sublist(0, waypointSnapshot.length - 1);
         final intermediates = intermediateLatLngs
-            .map((p) => <String, double>{
-                  'latitude': p.latitude,
-                  'longitude': p.longitude,
-                })
+            .map(
+              (p) => <String, double>{
+                'latitude': p.latitude,
+                'longitude': p.longitude,
+              },
+            )
             .toList(growable: false);
         final tripDetourVariant = switch (_selectedDetour) {
           'Kleiner Umweg' => 1,
@@ -6651,8 +6923,7 @@ class _CruiseModePageState extends State<CruiseModePage>
         _passedWaypointIndices.clear();
         _activeDetourVariant = tripDetourVariant;
         _activePointToPointScenic = tripScenic;
-        _activePointToPointMode =
-            tripScenic ? _selectedStyle : 'Standard';
+        _activePointToPointMode = tripScenic ? _selectedStyle : 'Standard';
         _activeAvoidHighways = _avoidHighways;
         final subscriptionTier = RouteService.resolveEffectiveSubscriptionTier(
           isTesterOrBeta: true,
@@ -6693,15 +6964,17 @@ class _CruiseModePageState extends State<CruiseModePage>
         if ((_tripModeEnabled || widget.groupId != null) &&
             result.distanceMeters != null &&
             result.distanceMeters! > 0) {
-          unawaited(_createTripInDb(
-            startLat: startPosition.latitude,
-            startLng: startPosition.longitude,
-            waypoints: waypointSnapshot,
-            style: _selectedStyle,
-            avoidHighways: _avoidHighways,
-            distanceKm: (result.distanceMeters! / 1000),
-            durationSeconds: result.durationSeconds?.round() ?? 0,
-          ));
+          unawaited(
+            _createTripInDb(
+              startLat: startPosition.latitude,
+              startLng: startPosition.longitude,
+              waypoints: waypointSnapshot,
+              style: _selectedStyle,
+              avoidHighways: _avoidHighways,
+              distanceKm: (result.distanceMeters! / 1000),
+              durationSeconds: result.durationSeconds?.round() ?? 0,
+            ),
+          );
         }
       } else {
         _activeDestinationCoordinate = null;
@@ -7110,10 +7383,12 @@ class _CruiseModePageState extends State<CruiseModePage>
     // weg liegen); eine LIVE-Route startet ohnehin am User → ist sie „zu weit",
     // soll lieber der bestehende Guard werfen als ein Querfeldein-Connector.
     final routeSource =
-        (cleanedResult.edgeMeta['route_source'] ?? cleanedResult.edgeMeta['source'])
+        (cleanedResult.edgeMeta['route_source'] ??
+                cleanedResult.edgeMeta['source'])
             ?.toString() ??
         '';
-    final isPoolSourced = routeSource == 'pool' ||
+    final isPoolSourced =
+        routeSource == 'pool' ||
         routeSource == 'route_pool' ||
         routeSource == 'candidate_reserve';
     final prepared = await _prepareRouteForPreviewStart(
@@ -7179,7 +7454,8 @@ class _CruiseModePageState extends State<CruiseModePage>
     final newFingerprint =
         prepared.edgeMeta['route_fingerprint']?.toString() ??
         RouteService.lastRouteDebugFingerprint;
-    final isRepeatedRoute = newFingerprint != null &&
+    final isRepeatedRoute =
+        newFingerprint != null &&
         newFingerprint.isNotEmpty &&
         _lastDisplayedRouteFingerprint == newFingerprint;
     // Wall-Clock-Window: nach 30s Counter resetten — vermeidet dass ein
@@ -7191,7 +7467,8 @@ class _CruiseModePageState extends State<CruiseModePage>
       _searchAgainAutoRetryWindowStart = now;
       _searchAgainAutoRetryCount = 0;
     }
-    final canAutoRetry = isRepeatedRoute &&
+    final canAutoRetry =
+        isRepeatedRoute &&
         _lastDisplayedRouteFingerprint != null &&
         _searchAgainAutoRetryCount < _maxSearchAgainAutoRetries;
 
@@ -7449,7 +7726,8 @@ class _CruiseModePageState extends State<CruiseModePage>
       // anzeigen (un-rebased) statt sie zu verschlucken — sichtbare Route >
       // gar keine Route. (Die Distanz-Reject-Guard oben wirft weiterhin bewusst.)
       debugPrint(
-          '[CruiseMode] Preview-Access-Leg fehlgeschlagen, zeige Route ohne Rebase: $e');
+        '[CruiseMode] Preview-Access-Leg fehlgeschlagen, zeige Route ohne Rebase: $e',
+      );
       return result;
     }
     _logAccessLegMeta(accessPlan);
@@ -7473,7 +7751,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     return prepared;
   }
 
-  void _onDestinationSelected(MapboxSuggestion suggestion) {
+  void _onDestinationSelected(PlaceSuggestion suggestion) {
     setState(() {
       _selectedDestination = suggestion;
       _destinationController.text = suggestion.placeName;
@@ -7529,7 +7807,9 @@ class _CruiseModePageState extends State<CruiseModePage>
     double? speedMps,
   }) {
     final accuracy =
-        (accuracyMeters != null && accuracyMeters.isFinite && accuracyMeters > 0)
+        (accuracyMeters != null &&
+            accuracyMeters.isFinite &&
+            accuracyMeters > 0)
         ? math.min(accuracyMeters, 60.0)
         : 0.0;
     final speed = (speedMps != null && speedMps.isFinite && speedMps > 0)
@@ -7816,7 +8096,9 @@ class _CruiseModePageState extends State<CruiseModePage>
             ? 'Wir bereiten im Hintergrund neue Vorschläge vor.'
             : 'Keine neue Variante gefunden — deine Route passt.';
       });
-      _scheduleRouteSearchStatusDismiss(hold: const Duration(milliseconds: 1800));
+      _scheduleRouteSearchStatusDismiss(
+        hold: const Duration(milliseconds: 1800),
+      );
       return;
     }
     final title = healingQueued
@@ -8070,8 +8352,16 @@ class _CruiseModePageState extends State<CruiseModePage>
     unawaited(_carRouteBridge.clearCarSession());
   }
 
+  void _saveActiveTripForLater() {
+    _returnToCruiseSetupFromActiveRoute();
+  }
+
   void _returnToCruiseSetupFromActiveRoute() {
     if (!mounted || _disposed) return;
+    final tripIdToPause = _activeTripId;
+    if (tripIdToPause != null) {
+      _activeTripId = null;
+    }
     _dismissTransientRouteUi();
     _stopSimulation(restartLiveTracking: false);
     _stopNavigationTracking();
@@ -8086,6 +8376,18 @@ class _CruiseModePageState extends State<CruiseModePage>
       _setCameraToPosition(currentLocation);
     } else {
       unawaited(_initializeMapLocation());
+    }
+    if (tripIdToPause != null) {
+      unawaited(() async {
+        await _safePauseTrip(tripIdToPause);
+        if (!mounted || _disposed) return;
+        TopToast.show(
+          context,
+          message: 'Tour zwischengespeichert — auf Home fortsetzen',
+          icon: Icons.archive_outlined,
+          duration: const Duration(milliseconds: 3000),
+        );
+      }());
     }
   }
 
@@ -8427,16 +8729,18 @@ class _CruiseModePageState extends State<CruiseModePage>
       // Manöver, das näher als 25m an einem bereinigten Punkt liegt, behalten
       // (alles andere lag im entfernten Spike → wegfallen lassen).
       if (bestDist <= 25.0) {
-        remappedManeuvers.add(RouteManeuver(
-          latitude: m.latitude,
-          longitude: m.longitude,
-          routeIndex: bestIdx,
-          icon: m.icon,
-          announcement: m.announcement,
-          instruction: m.instruction,
-          maneuverType: m.maneuverType,
-          roundaboutExitNumber: m.roundaboutExitNumber,
-        ));
+        remappedManeuvers.add(
+          RouteManeuver(
+            latitude: m.latitude,
+            longitude: m.longitude,
+            routeIndex: bestIdx,
+            icon: m.icon,
+            announcement: m.announcement,
+            instruction: m.instruction,
+            maneuverType: m.maneuverType,
+            roundaboutExitNumber: m.roundaboutExitNumber,
+          ),
+        );
       }
     }
     final cleanedDistanceMeters = _calculatePolylineDistanceMeters(cleaned);
@@ -8475,7 +8779,6 @@ class _CruiseModePageState extends State<CruiseModePage>
       edgeMeta: {...result.edgeMeta, ...edgeMeta},
     );
   }
-
 
   bool get _effectiveNavigationAvoidHighways {
     return _activeAvoidHighways ||
@@ -8623,7 +8926,8 @@ class _CruiseModePageState extends State<CruiseModePage>
       ScaffoldMessenger.of(context).hideCurrentSnackBar();
       TopToast.show(
         context,
-        message: userMessage ??
+        message:
+            userMessage ??
             'Keine sichere Reroute — folge der Linie, wende erst bei sicherer Möglichkeit',
         icon: Icons.warning_amber_rounded,
         isError: true,
@@ -9106,10 +9410,10 @@ class _CruiseModePageState extends State<CruiseModePage>
               48.0,
               220.0,
             );
-        _camFitBounds(
-          [bounds.southWest, bounds.northEast],
-          EdgeInsets.fromLTRB(24, safeTop + 18, 24, bottomPad),
-        );
+        _camFitBounds([
+          bounds.southWest,
+          bounds.northEast,
+        ], EdgeInsets.fromLTRB(24, safeTop + 18, 24, bottomPad));
         debugPrint(
           '[CruiseMode] _drawRoute: Kamera auf Route-Bounds angepasst',
         );
@@ -9445,7 +9749,8 @@ class _CruiseModePageState extends State<CruiseModePage>
       effectivePosition.latitude,
       effectivePosition.longitude,
     );
-    _cachedUserCenter = _userPosition; // 2026-06-06 (vucko P10): Center-Cache frisch halten
+    _cachedUserCenter =
+        _userPosition; // 2026-06-06 (vucko P10): Center-Cache frisch halten
     if (_isRouteConfirmed && _navigationStartTime != null) {
       _recordDrivenTrackSample(effectivePosition);
     }
@@ -9525,23 +9830,30 @@ class _CruiseModePageState extends State<CruiseModePage>
         maxJumpMeters: double.infinity,
       );
       if (globalMatch.distanceMeters <= offRouteCorridor) {
-        _currentRouteIndex =
-            globalMatch.index.clamp(0, _fullRouteCoordinates.length - 1);
-        isOutsideCorridor = false; // doch auf der Route — nur Fenster nachgehinkt
+        _currentRouteIndex = globalMatch.index.clamp(
+          0,
+          _fullRouteCoordinates.length - 1,
+        );
+        isOutsideCorridor =
+            false; // doch auf der Route — nur Fenster nachgehinkt
       }
     }
 
-    if (isOutsideCorridor && !approachingDestination && !makingForwardProgress) {
+    if (isOutsideCorridor &&
+        !approachingDestination &&
+        !makingForwardProgress) {
       // Zeit-basierte Hysterese: anhaltend ≥3.0s daneben ODER klar daneben
       // (≥2.5× Korridor, echtes Abbiegen) ≥1.5s. Kein Zappeln über Tick-Count.
       _offRouteSince ??= DateTime.now();
       final offFor = DateTime.now().difference(_offRouteSince!);
       final clearlyOffRoute = match.distanceMeters > offRouteCorridor * 2.5;
-      final sustained = offFor >= const Duration(milliseconds: 3000) ||
+      final sustained =
+          offFor >= const Duration(milliseconds: 3000) ||
           (clearlyOffRoute && offFor >= const Duration(milliseconds: 1500));
       if (sustained && !_isRerouting) {
         final now = DateTime.now();
-        final cooldownOk = _lastRerouteTime == null ||
+        final cooldownOk =
+            _lastRerouteTime == null ||
             now.difference(_lastRerouteTime!) >= _rerouteCooldown;
         if (cooldownOk) {
           _lastRerouteTime = now;
@@ -9714,26 +10026,31 @@ class _CruiseModePageState extends State<CruiseModePage>
         maxResults: 80,
       );
       if (!mounted) return;
-      final filtered = pois.where((p) {
-        final info = OpeningHoursParser.parse(p.openingHours);
-        // Unbekannte/parseFailed → anzeigen (besser als nichts).
-        if (info.parseFailed || info.status == OpenStatus.unknown) {
-          return true;
-        }
-        return info.isOpenNow;
-      }).take(50).toList();
+      final filtered = pois
+          .where((p) {
+            final info = OpeningHoursParser.parse(p.openingHours);
+            // Unbekannte/parseFailed → anzeigen (besser als nichts).
+            if (info.parseFailed || info.status == OpenStatus.unknown) {
+              return true;
+            }
+            return info.isOpenNow;
+          })
+          .take(50)
+          .toList();
       setState(() => _routePois = filtered);
-    } catch (_) {/* silent */}
+    } catch (_) {
+      /* silent */
+    }
   }
 
   Widget _buildPoiMarker(RoutePoi poi) {
     final color = switch (poi.type) {
-      PoiType.fuel => const Color(0xFFEF4444),         // rot — Tankstelle
-      PoiType.restaurant => const Color(0xFFFB923C),   // orange — Restaurant
-      PoiType.cafe => const Color(0xFFA78BFA),         // violett — Café
-      PoiType.fastFood => const Color(0xFFFBBF24),     // gelb — Imbiss
-      PoiType.pub => const Color(0xFF22C55E),          // grün — Pub
-      PoiType.motorcycleRepair => const Color(0xFF2DD4BF),  // teal — Werkstatt
+      PoiType.fuel => const Color(0xFFEF4444), // rot — Tankstelle
+      PoiType.restaurant => const Color(0xFFFB923C), // orange — Restaurant
+      PoiType.cafe => const Color(0xFFA78BFA), // violett — Café
+      PoiType.fastFood => const Color(0xFFFBBF24), // gelb — Imbiss
+      PoiType.pub => const Color(0xFF22C55E), // grün — Pub
+      PoiType.motorcycleRepair => const Color(0xFF2DD4BF), // teal — Werkstatt
       PoiType.parking => const Color(0xFF60A5FA),
       PoiType.toilets => const Color(0xFF9CA3AF),
     };
@@ -9753,8 +10070,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     // damit User auf einen Blick sieht: hier nicht mehr lange offen.
     final info = OpeningHoursParser.parse(poi.openingHours);
     final isClosingSoon = info.isClosingSoon;
-    final ringColor =
-        isClosingSoon ? const Color(0xFFFB923C) : Colors.white;
+    final ringColor = isClosingSoon ? const Color(0xFFFB923C) : Colors.white;
     final ringWidth = isClosingSoon ? 2.6 : 2.2;
     return Container(
       decoration: BoxDecoration(
@@ -9763,8 +10079,9 @@ class _CruiseModePageState extends State<CruiseModePage>
         border: Border.all(color: ringColor, width: ringWidth),
         boxShadow: [
           BoxShadow(
-            color: (isClosingSoon ? const Color(0xFFFB923C) : color)
-                .withValues(alpha: 0.55),
+            color: (isClosingSoon ? const Color(0xFFFB923C) : color).withValues(
+              alpha: 0.55,
+            ),
             blurRadius: isClosingSoon ? 12 : 8,
             offset: const Offset(0, 2),
           ),
@@ -9782,19 +10099,18 @@ class _CruiseModePageState extends State<CruiseModePage>
     // 2026-05-28 (vucko Task #62): „Zur Route hinzufügen" Button — Reroute
     // mit POI als Pflicht-Wegpunkt. Sichtbar nur wenn eine aktive Route da
     // ist und User nicht in einer Group-Session ist (Group hat eigenen Flow).
-    final hasActiveRoute = _lastRouteResult != null &&
-        _fullRouteCoordinates.isNotEmpty;
-    final canAddToRoute = hasActiveRoute &&
-        widget.groupId == null &&
-        !_isLoading;
+    final hasActiveRoute =
+        _lastRouteResult != null && _fullRouteCoordinates.isNotEmpty;
+    final canAddToRoute =
+        hasActiveRoute && widget.groupId == null && !_isLoading;
     final isAlready = _poiIsOnRoute(poi);
     PoiDetailSheet.show(
       context,
       poi,
       onAddToRoute: canAddToRoute
           ? () => isAlready
-              ? _removePoiFromRoute(poi)
-              : _addPoiAsWaypointAndReroute(poi)
+                ? _removePoiFromRoute(poi)
+                : _addPoiAsWaypointAndReroute(poi)
           : null,
       isAlreadyOnRoute: isAlready,
     );
@@ -9812,7 +10128,10 @@ class _CruiseModePageState extends State<CruiseModePage>
     if (_isRoundTrip) {
       return _roundTripWaypoints.any((wp) {
         final dist = geo.Geolocator.distanceBetween(
-          poi.latitude, poi.longitude, wp.latitude, wp.longitude,
+          poi.latitude,
+          poi.longitude,
+          wp.latitude,
+          wp.longitude,
         );
         return dist < 50;
       });
@@ -9895,8 +10214,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     // 4. Window-Range — kleinerer Window bei kleinerer Route.
     final windowSize = math.max(5, math.min(20, coords.length ~/ 12));
     final entryIdx = math.max(0, nearestIdx - windowSize);
-    final exitIdx =
-        math.min(coords.length - 1, nearestIdx + windowSize);
+    final exitIdx = math.min(coords.length - 1, nearestIdx + windowSize);
     final entryCoord = coords[entryIdx];
     final exitCoord = coords[exitIdx];
     try {
@@ -9943,18 +10261,20 @@ class _CruiseModePageState extends State<CruiseModePage>
         ...coords.sublist(exitIdx + 1).map(List<double>.from),
       ];
       // Approximate-distance: Original-Distance ± patch-delta.
-      final originalDistanceM = activeRoute.distanceMeters ??
-          (activeRoute.distanceKm ?? 0) * 1000;
+      final originalDistanceM =
+          activeRoute.distanceMeters ?? (activeRoute.distanceKm ?? 0) * 1000;
       final removedSegmentM = _approximateSegmentDistanceMeters(
         coords,
         entryIdx,
         exitIdx,
       );
-      final patchDistanceM = patch.distanceMeters ??
-          ((patch.distanceKm ?? 0) * 1000);
+      final patchDistanceM =
+          patch.distanceMeters ?? ((patch.distanceKm ?? 0) * 1000);
       final newDistanceM =
-          (originalDistanceM - removedSegmentM + patchDistanceM)
-              .clamp(0.0, double.infinity);
+          (originalDistanceM - removedSegmentM + patchDistanceM).clamp(
+            0.0,
+            double.infinity,
+          );
       final geometry = <String, dynamic>{
         'type': 'LineString',
         'coordinates': newCoords,
@@ -10031,7 +10351,10 @@ class _CruiseModePageState extends State<CruiseModePage>
     if (!mounted || _disposed) return;
     final removedIndex = _roundTripWaypoints.indexWhere((wp) {
       final dist = geo.Geolocator.distanceBetween(
-        poi.latitude, poi.longitude, wp.latitude, wp.longitude,
+        poi.latitude,
+        poi.longitude,
+        wp.latitude,
+        wp.longitude,
       );
       return dist < 50;
     });
@@ -10150,11 +10473,7 @@ class _CruiseModePageState extends State<CruiseModePage>
         ],
       ),
       alignment: Alignment.center,
-      child: const Icon(
-        Icons.construction_rounded,
-        size: 18,
-        color: accent,
-      ),
+      child: const Icon(Icons.construction_rounded, size: 18, color: accent),
     );
   }
 
@@ -10304,7 +10623,8 @@ class _CruiseModePageState extends State<CruiseModePage>
     // integrierte Right-Rail inkl. POI/Voice/Camera-Lock zeigt. Das
     // verhindert Überlappung der beiden Spalten am rechten Bildschirmrand.
     final hasErrorBanner = _routeSearchNoticeTitle != null;
-    final waypointRailActive = !hasRoute &&
+    final waypointRailActive =
+        !hasRoute &&
         _isWaypointPlanning &&
         !_showRouteInfoBanner &&
         !hasErrorBanner;
@@ -10366,17 +10686,17 @@ class _CruiseModePageState extends State<CruiseModePage>
                     final mode = VoiceSettingsService.instance.mode;
                     final (icon, color) = switch (mode) {
                       VoiceMode.off => (
-                          Icons.volume_off_rounded,
-                          const Color(0xFF2D3138),
-                        ),
+                        Icons.volume_off_rounded,
+                        const Color(0xFF2D3138),
+                      ),
                       VoiceMode.important => (
-                          Icons.volume_down_rounded,
-                          const Color(0xFFFBBF24),
-                        ),
+                        Icons.volume_down_rounded,
+                        const Color(0xFFFBBF24),
+                      ),
                       VoiceMode.all => (
-                          Icons.volume_up_rounded,
-                          AppAccentColors.accent,
-                        ),
+                        Icons.volume_up_rounded,
+                        AppAccentColors.accent,
+                      ),
                     };
                     return _FabBubble(
                       heroTag: 'voice_toggle_fab',
@@ -10397,8 +10717,7 @@ class _CruiseModePageState extends State<CruiseModePage>
                           message: 'Sprache: $newLabel',
                           icon: switch (newMode) {
                             VoiceMode.off => Icons.volume_off_rounded,
-                            VoiceMode.important =>
-                                Icons.volume_down_rounded,
+                            VoiceMode.important => Icons.volume_down_rounded,
                             VoiceMode.all => Icons.volume_up_rounded,
                           },
                         );
@@ -10409,9 +10728,7 @@ class _CruiseModePageState extends State<CruiseModePage>
                 // Camera-Lock / Recenter — IMMER sichtbar
                 _FabBubble(
                   heroTag: 'recenter_map_fab',
-                  icon: _isCameraLocked
-                      ? Icons.explore
-                      : Icons.explore_off,
+                  icon: _isCameraLocked ? Icons.explore : Icons.explore_off,
                   color: _isCameraLocked
                       ? AppAccentColors.accent
                       : const Color(0xFF2D3138),
@@ -10517,8 +10834,11 @@ class _CruiseModePageState extends State<CruiseModePage>
               ),
               Row(
                 children: [
-                  Icon(Icons.local_gas_station_rounded,
-                      color: AppAccentColors.accent, size: 22),
+                  Icon(
+                    Icons.local_gas_station_rounded,
+                    color: AppAccentColors.accent,
+                    size: 22,
+                  ),
                   const SizedBox(width: 8),
                   Text(
                     '${_routePois.length} POIs entlang der Route',
@@ -10545,10 +10865,13 @@ class _CruiseModePageState extends State<CruiseModePage>
                       contentPadding: EdgeInsets.zero,
                       leading: CircleAvatar(
                         radius: 18,
-                        backgroundColor:
-                            AppAccentColors.accent.withValues(alpha: 0.20),
-                        child: Text(p.type.emoji,
-                            style: const TextStyle(fontSize: 16)),
+                        backgroundColor: AppAccentColors.accent.withValues(
+                          alpha: 0.20,
+                        ),
+                        child: Text(
+                          p.type.emoji,
+                          style: const TextStyle(fontSize: 16),
+                        ),
                       ),
                       title: Text(
                         p.displayName,
@@ -10602,8 +10925,8 @@ class _CruiseModePageState extends State<CruiseModePage>
       final rounded = distMeters < 250
           ? 200
           : distMeters < 400
-              ? 300
-              : ((distMeters / 100).round() * 100);
+          ? 300
+          : ((distMeters / 100).round() * 100);
       text = 'In $rounded Metern $raw';
     }
     if (important) {
@@ -10890,8 +11213,10 @@ class _CruiseModePageState extends State<CruiseModePage>
         // 2026-06-09 (vucko Trip-Skip): Reroute führt durch die VERBLEIBENDEN
         // Zwischenstopps (übersprungene werden automatisch abgehakt) statt
         // stumm direkt zum Endziel.
-        final rerouteWaypoints =
-            _remainingWaypointsForReroute(position, destination);
+        final rerouteWaypoints = _remainingWaypointsForReroute(
+          position,
+          destination,
+        );
         final destinationRerouteSeed = Object.hash(
           destination[0].round(),
           destination[1].round(),
@@ -11347,7 +11672,8 @@ class _CruiseModePageState extends State<CruiseModePage>
           // HART gegen Rückfaltung/Selbstüberschneidung der Naht prüfen. Faltet
           // sie zurück → NICHT committen: die alte Route bleibt sichtbar (besser
           // als eine sichtbar kaputte Route), nächster Tick versucht es erneut.
-          final redockFolds = connector.coordinates.length >= 2 &&
+          final redockFolds =
+              connector.coordinates.length >= 2 &&
               rerouteMergeFoldsBack(
                 connector: connector.coordinates,
                 tail: redockTail,
@@ -11805,10 +12131,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       final routeLatLngs = _fullRouteCoordinates
           .map((c) => LatLng(c[1], c[0]))
           .toList();
-      _camFitBounds(
-        routeLatLngs,
-        const EdgeInsets.fromLTRB(40, 80, 40, 160),
-      );
+      _camFitBounds(routeLatLngs, const EdgeInsets.fromLTRB(40, 80, 40, 160));
 
       // 4 Sekunden Übersicht anzeigen, dann zurück
       await Future.delayed(const Duration(seconds: 4));
@@ -12382,7 +12705,9 @@ class _CruiseModePageState extends State<CruiseModePage>
       );
       if (tripId != null && mounted && !_disposed) {
         setState(() => _activeTripId = tripId);
-        debugPrint('[CruiseMode] Trip #$tripId in DB erstellt mit ${stops.length} Stops');
+        debugPrint(
+          '[CruiseMode] Trip #$tripId in DB erstellt mit ${stops.length} Stops',
+        );
       }
     } catch (e) {
       debugPrint('[CruiseMode] Trip-Create fehlgeschlagen (silent): $e');
@@ -12571,10 +12896,7 @@ class _WaypointModeHeader extends StatelessWidget {
                 blurRadius: 18,
                 offset: const Offset(0, 6),
               ),
-              BoxShadow(
-                color: accent.withValues(alpha: 0.12),
-                blurRadius: 18,
-              ),
+              BoxShadow(color: accent.withValues(alpha: 0.12), blurRadius: 18),
             ],
           ),
           child: Row(
@@ -12602,8 +12924,7 @@ class _WaypointModeHeader extends StatelessWidget {
                 child: Text(
                   '$current/$max',
                   style: TextStyle(
-                    color:
-                        atLimit ? const Color(0xFFFFB74D) : Colors.white,
+                    color: atLimit ? const Color(0xFFFFB74D) : Colors.white,
                     fontSize: 12.5,
                     fontWeight: FontWeight.w900,
                     letterSpacing: -0.2,
@@ -12663,8 +12984,9 @@ class _SegmentedTabs extends StatelessWidget {
           AnimatedAlign(
             duration: const Duration(milliseconds: 260),
             curve: Curves.easeOutCubic,
-            alignment:
-                tripEnabled ? Alignment.centerRight : Alignment.centerLeft,
+            alignment: tripEnabled
+                ? Alignment.centerRight
+                : Alignment.centerLeft,
             child: Container(
               width: tabWidth,
               height: tabHeight,
