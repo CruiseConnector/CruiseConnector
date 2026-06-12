@@ -17,7 +17,8 @@ class RouteScenario {
     this.avoidHighways = false,
     this.waypointSignature,
     this.closeLoop = false,
-    // 2026-05-30 (vucko): Länder-Präferenz (Soft-Scoring, nie Reject).
+    // 2026-05-30/06-12 (vucko): Länder-Präferenz. `onlyHome` ist ein harter
+    // Inlandsfilter; darum muss sie Teil aller Scenario-/Novelty-Keys sein.
     this.countryPreference = CountryPreference.any,
     this.homeCountryCode,
   });
@@ -42,6 +43,17 @@ class RouteScenario {
   bool get isRoundTrip => normalizedRouteType == 'ROUND_TRIP';
   bool get isPointToPoint => normalizedRouteType == 'POINT_TO_POINT';
 
+  String get _countryKey {
+    if (countryPreference == CountryPreference.any) {
+      return 'cp${CountryPreference.any.storageValue}';
+    }
+    final home = homeCountryCode?.trim().toUpperCase();
+    return [
+      'cp${countryPreference.storageValue}',
+      if (home != null && home.isNotEmpty) 'hc$home',
+    ].join('|');
+  }
+
   String get noveltyKey {
     if (!isRoundTrip) return scenarioKey;
     final startLat = startLatitude.toStringAsFixed(3);
@@ -51,6 +63,7 @@ class RouteScenario {
       startLat,
       startLng,
       'novelty',
+      _countryKey,
       if (waypointSignature != null && waypointSignature!.isNotEmpty)
         'wp$waypointSignature',
       if (closeLoop) 'loop1',
@@ -66,6 +79,7 @@ class RouteScenario {
       startLat,
       startLng,
       'novelty_broad',
+      _countryKey,
       if (waypointSignature != null && waypointSignature!.isNotEmpty)
         'wp$waypointSignature',
       if (closeLoop) 'loop1',
@@ -91,6 +105,7 @@ class RouteScenario {
       distanceKey,
       'd$detourLevel',
       'h${avoidHighways ? 1 : 0}',
+      _countryKey,
       if (waypointSignature != null && waypointSignature!.isNotEmpty)
         'wp$waypointSignature',
       if (closeLoop) 'loop1',

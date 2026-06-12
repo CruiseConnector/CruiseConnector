@@ -3989,6 +3989,9 @@ class RouteService {
       'mode': body['mode'],
       'targetDistance': body['targetDistance'],
       'avoid_highways': body['avoid_highways'],
+      'country_preference': body['country_preference'],
+      'home_country_code': body['home_country_code'],
+      'avoid_cross_border': body['avoid_cross_border'],
       'startLocation': start == null
           ? null
           : <String, dynamic>{
@@ -4060,6 +4063,12 @@ class RouteService {
       if (distanceBucket != null) 'requested_distance_bucket': distanceBucket,
       if (body.containsKey('avoid_highways'))
         'avoid_highways': body['avoid_highways'] == true,
+      if (body['country_preference'] != null)
+        'country_preference': body['country_preference'],
+      if (body['home_country_code'] != null)
+        'home_country_code': body['home_country_code'],
+      if (body['avoid_cross_border'] != null)
+        'avoid_cross_border': body['avoid_cross_border'] == true,
       if (body['client_scenario_key'] != null)
         'client_scenario_key': body['client_scenario_key'],
       if (body['waypoint_origin'] != null)
@@ -4344,12 +4353,57 @@ class RouteService {
     final detourLevel = body['detour_level'] ?? 0;
     final waypointSignature = _requestWaypointSignature(body);
     final closeLoop = body['close_loop'] == true ? 1 : 0;
+    final countryKey = _countryRequestKey(body);
     return '${body['route_type']}_${body['mode']}_${body['planning_type']}_${body['targetDistance']}_${rLat}_$rLng$dKey'
         '_h${avoidHighways}_v${detourLevel}_s${seed}_d${dirHint}_o$offsetSide'
+        '_$countryKey'
         '_vh$variantHint'
         '_fh$fingerprintHint'
         '_wp$waypointSignature'
         '_loop$closeLoop';
+  }
+
+  static String _countryRequestKey(Map<String, dynamic> body) {
+    final preference = _normalizedCountryPreferenceValue(
+      body['country_preference'] ?? body['countryPreference'],
+    );
+    if (preference == CountryPreference.any.storageValue) {
+      return 'cp$preference';
+    }
+    final home = _normalizedHomeCountryCode(
+      body['home_country_code'] ?? body['homeCountryCode'],
+    );
+    return 'cp$preference${home == null ? '' : '_hc$home'}';
+  }
+
+  static String _normalizedCountryPreferenceValue(Object? value) {
+    final raw = value?.toString().trim();
+    if (raw == null || raw.isEmpty) return CountryPreference.any.storageValue;
+    return CountryPreferenceLabel.fromStorage(raw).storageValue;
+  }
+
+  static String? _normalizedHomeCountryCode(Object? value) {
+    final raw = value?.toString().trim().toUpperCase();
+    return raw == null || raw.isEmpty ? null : raw;
+  }
+
+  static void _applyCountryPolicyToRequest(
+    Map<String, dynamic> body,
+    RouteScenario scenario,
+  ) {
+    final preference = scenario.countryPreference.storageValue;
+    body['country_preference'] = preference;
+    if (scenario.countryPreference == CountryPreference.any) {
+      return;
+    }
+    final home = _normalizedHomeCountryCode(scenario.homeCountryCode);
+    if (home != null) {
+      body['home_country_code'] = home;
+      if (scenario.countryPreference == CountryPreference.onlyHome) {
+        body['avoid_cross_border'] = true;
+        body['allowed_countries'] = [home];
+      }
+    }
   }
 
   /// Erzeugt einen Szenario-Key OHNE Diversitäts-Parameter.
@@ -4369,9 +4423,11 @@ class RouteService {
     final detourLevel = body['detour_level'] ?? 0;
     final waypointSignature = _requestWaypointSignature(body);
     final closeLoop = body['close_loop'] == true ? 1 : 0;
+    final countryKey = _countryRequestKey(body);
     return '${body['route_type']}_${body['mode']}_${body['planning_type']}_${body['targetDistance']}_${rLat}_$rLng$dKey'
         '_h$avoidHighways'
         '_d$detourLevel'
+        '_$countryKey'
         '_wp$waypointSignature'
         '_loop$closeLoop';
   }
@@ -4601,6 +4657,7 @@ class RouteService {
       waypointOrigin: waypointOrigin,
       waypointSeedAttempt: waypointSeedAttempt,
     );
+    _applyCountryPolicyToRequest(body, scenario);
     body['client_scenario_key'] = scenario.scenarioKey;
     body['client_force_fresh_variant'] = forceFreshVariant;
     body['client_trigger'] = debugTrigger;
@@ -4682,6 +4739,7 @@ class RouteService {
       locationAccuracyMeters: locationAccuracyMeters,
       intermediateWaypoints: intermediateWaypoints,
     );
+    _applyCountryPolicyToRequest(body, scenario);
     final result = await _invoke(body);
     final snapped = _snapRouteToStartPosition(result, startPosition);
     return _evaluateCandidate(
@@ -5172,9 +5230,12 @@ class RouteService {
     // Vorarlberg nicht total ausfällt, bleibt der Reject WEICH: er kippt nur
     // `accepted`, nicht den bestRejectedCandidate-Fallback — gibt es gar keine
     // heimische Route, surft am Ende die am-wenigsten-ausländische hoch.
-    _activeCountryPreference = scenario.countryPreference;
+    _activeCountryPreference = scenario.isRoundTrip
+        ? scenario.countryPreference
+        : CountryPreference.any;
     final double foreignFraction =
-        (scenario.homeCountryCode != null &&
+        (scenario.isRoundTrip &&
+            scenario.homeCountryCode != null &&
             scenario.countryPreference != CountryPreference.any)
         ? CountryRegion.foreignFraction(
             coordinates: route.coordinates,
@@ -5195,14 +5256,13 @@ class RouteService {
     // Kandidaten vom bestRejected-Notnagel aus — er verursacht KEINE zusätzlichen
     // Edge-Calls (maxAttempts ist gedeckelt). Gibt es nur Auslandsrouten →
     // klarer noRoute statt einer Pass-pflichtigen Route.
-    // 2026-06-09 (vucko Audit T2-A): Schwelle 0.06 → 0.10. 6-7% „Ausland" aus
-    // Box-Rauschen an gezackten Grenzen (Vorarlberg/Konstanz/Götzis) kippte legitime
-    // INLAND-Routen fälschlich auf noRoute. Echte Grenzübertritte liegen klar bei
-    // 20%+ → 0.10 toleriert das Rauschen, fängt aber jeden echten Übertritt.
+    // 2026-06-12: dieselbe harte Schwelle wie Pool/Finalizer/Edge. So kann
+    // kein Kandidat erst akzeptiert und später am strengeren Finalizer sterben.
     final bool countryRejected =
+        scenario.isRoundTrip &&
         scenario.countryPreference == CountryPreference.onlyHome &&
         scenario.homeCountryCode != null &&
-        foreignFraction > 0.10;
+        foreignFraction > CountryRegion.onlyHomeMaxForeignFraction;
     // 2026-06-10 (vucko Start-Versatz-Gate): Beginnt die gelieferte Route weiter
     // als maxAcceptedStartOffsetMeters vom angefragten Start, ist sie Müll
     // (Edge-Start-Snap-Bug, im Feld ~758 m Versatz) — HARTER Reject, der auch
@@ -5611,7 +5671,7 @@ class RouteService {
     // beste verfügbare Route, keine Sackgasse.
     if (_activeCountryPreference != CountryPreference.any) {
       final thr = _activeCountryPreference == CountryPreference.onlyHome
-          ? 0.15
+          ? CountryRegion.onlyHomeMaxForeignFraction
           : 0.35;
       final candHome = candidate.foreignFraction <= thr;
       final curHome = current.foreignFraction <= thr;
@@ -6005,7 +6065,8 @@ class RouteService {
   // Emergency-Fallback, Search-Again) — bei „Im Land bleiben" darf sie NIE die
   // Grenze queren. Der Kandidaten-Gate (_evaluateCandidate.countryRejected)
   // bevorzugt schon Inland; dieser Finalizer-Guard ist das unumgehbare Netz
-  // darunter. >6% Ausland → klarer noRoute statt eine Pass-pflichtige Route.
+  // darunter. >onlyHomeMaxForeignFraction Ausland → klarer noRoute statt eine
+  // Pass-pflichtige Route.
   void _guardRoundTripCountry(RouteScenario scenario, RouteResult route) {
     if (scenario.routeType != 'ROUND_TRIP') return;
     if (scenario.countryPreference != CountryPreference.onlyHome) return;
@@ -6015,7 +6076,7 @@ class RouteService {
       coordinates: route.coordinates,
       homeCountryCode: home,
     );
-    if (foreign > 0.06) {
+    if (foreign > CountryRegion.onlyHomeMaxForeignFraction) {
       throw const RouteServiceException(
         type: RouteErrorType.noRoute,
         userMessage:
@@ -7068,7 +7129,7 @@ class RouteService {
     // _evaluateCandidate, daher hier ein eigener Länder-Gate. Bei aktiver
     // „eher/nur im Land"-Präferenz Pool-Matches mit zu hohem Ausland-Anteil
     // ablehnen (return null → nächstes Match oder Live-Fallback). „onlyHome"
-    // ist strikt (>10% Ausland raus), „preferHome" tolerant (>45% raus). So
+    // ist strikt, „preferHome" tolerant. So
     // wird ein 101km-Schweiz-Loop in Vorarlberg nicht mehr als Pool-Treffer
     // angezeigt, ohne in echten Grenzregionen alles zu blockieren.
     if (scenario.countryPreference != CountryPreference.any &&
@@ -7086,13 +7147,13 @@ class RouteService {
       // NICHTS (halb-ausländische Pool-Loops kamen durch = vucko-Beschwerde).
       // 2026-06-08 (vucko HARTE Inland-Garantie): onlyHome ist jetzt HART —
       // Pool-Routen, die die Grenze queren, werden wie im Live-Gate verworfen
-      // (>6% Ausland raus, Box-Rauschen toleriert). preferHome bleibt weich (65%).
+      // (Box-Rauschen toleriert). preferHome bleibt weich.
       // Sackgasse-sicher: Pool-Reject macht nur `return null` → nächstes Match
       // ODER Live-Suche; gibt es gar keinen Inlandskurs → klarer noRoute.
       final maxForeign =
           scenario.countryPreference == CountryPreference.onlyHome
-          ? 0.06
-          : 0.65;
+          ? CountryRegion.onlyHomeMaxForeignFraction
+          : CountryRegion.preferHomeMaxForeignFraction;
       if (foreignFraction > maxForeign) {
         _debugRouteSearch(
           '[PoolFallback] poolHit=true poolUsed=false reason=country_filter '

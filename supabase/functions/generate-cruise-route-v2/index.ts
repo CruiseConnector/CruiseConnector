@@ -45,6 +45,8 @@ const ALLOWED_ORIGINS = '*';
 ///   - UNKNOWN (außerhalb, z.B. Skandinavien-Nord oder weit außerhalb EU)
 enum GeoRegion { dach = 'dach', euWest = 'eu_west', euSouth = 'eu_south', euEast = 'eu_east', unknown = 'unknown' }
 
+const ONLY_HOME_MAX_FOREIGN_FRACTION = 0.10;
+
 function classifyPoint(lat: number, lng: number): GeoRegion {
   // 2026-05-27 (vucko v2): Explicit-First-Order mit Alpen-Trennlinie bei
   // lat 46.5. Süd der Alpen = euSouth/Balkan, nördlich = DACH/AT.
@@ -85,6 +87,76 @@ function classifyPoint(lat: number, lng: number): GeoRegion {
 
 function isInDachCoverage(lat: number, lng: number): boolean {
   return classifyPoint(lat, lng) === GeoRegion.dach;
+}
+
+function classifyCountry(lat: number, lng: number): string | null {
+  if (lat >= 47.05 && lat <= 47.27 && lng >= 9.47 && lng <= 9.64) return 'LI';
+  if (lat >= 47.52 && lat <= 47.58 && lng >= 9.63 && lng <= 9.74) return 'DE';
+  if (lat >= 45.80 && lat <= 47.81 && lng >= 5.95 && lng <= 9.55) return 'CH';
+  if (lat < 46.85 && lng >= 6.6 && lng <= 13.9) return 'IT';
+  if (lat >= 45.4 && lat <= 46.9 && lng >= 13.4 && lng <= 16.6) return 'SI';
+  if (lng >= 9.53 && lng <= 17.16 && lat >= 46.37) {
+    if (lat <= austriaNorthLimit(lng)) return 'AT';
+  }
+  if (lat >= 47.27 && lat <= 55.06 && lng >= 5.87 && lng <= 15.04) return 'DE';
+  return null;
+}
+
+function austriaNorthLimit(lng: number): number {
+  if (lng < 10.9) return 47.55;
+  if (lng < 11.6) return 47.42;
+  if (lng < 12.6) return 47.60;
+  if (lng < 13.4) return 47.82;
+  return 48.80;
+}
+
+function normalizeCountryPreference(value: unknown): 'any' | 'prefer_home' | 'only_home' {
+  const raw = String(value ?? '').trim().toLowerCase().replace(/[-\s]/g, '_');
+  if (raw === 'only_home' || raw === 'onlyhome') return 'only_home';
+  if (raw === 'prefer_home' || raw === 'preferhome') return 'prefer_home';
+  return 'any';
+}
+
+function normalizeCountryCode(value: unknown): string | null {
+  const raw = String(value ?? '').trim().toUpperCase();
+  return raw.length > 0 ? raw : null;
+}
+
+function countryForeignFraction(coords: [number, number][], homeCountryCode: string | null): number {
+  if (!homeCountryCode || coords.length === 0) return 0;
+  let classified = 0;
+  let foreign = 0;
+  const home = homeCountryCode.toUpperCase();
+  for (const [lng, lat] of coords) {
+    const country = classifyCountry(lat, lng);
+    if (!country) continue;
+    classified++;
+    if (country !== home) foreign++;
+  }
+  return classified === 0 ? 0 : foreign / classified;
+}
+
+function countriesTouched(coords: [number, number][], homeCountryCode: string | null): string[] {
+  const seen = new Set<string>();
+  for (const [lng, lat] of coords) {
+    const country = classifyCountry(lat, lng);
+    if (country) seen.add(country);
+  }
+  const list = [...seen];
+  if (homeCountryCode) {
+    const home = homeCountryCode.toUpperCase();
+    list.sort((a, b) => a === home ? -1 : b === home ? 1 : a.localeCompare(b));
+  } else {
+    list.sort();
+  }
+  return list;
+}
+
+function countryPenalty(foreignFraction: number, preference: 'any' | 'prefer_home' | 'only_home'): number {
+  if (preference === 'any' || foreignFraction <= 0) return 0;
+  const clamped = Math.min(1, Math.max(0, foreignFraction));
+  const maxPenalty = preference === 'only_home' ? 300 : 90;
+  return maxPenalty * Math.pow(clamped, 1.5);
 }
 
 /// 3-Server-Wahl mit intelligentem Routing.
@@ -149,6 +221,14 @@ interface RouteRequest {
   reroute_request?: boolean;
   moving_start?: boolean;
   current_heading?: number;
+  country_preference?: string;
+  countryPreference?: string;
+  home_country_code?: string;
+  homeCountryCode?: string;
+  avoid_cross_border?: boolean;
+  avoidCrossBorder?: boolean;
+  allowed_countries?: string[];
+  allowedCountries?: string[];
 }
 
 // Normalisierung: ergänzt fehlende v2-Felder aus den Flutter-Aliassen
@@ -162,6 +242,10 @@ function normalizeRequest(raw: RouteRequest): RouteRequest {
     selected_style: raw.selected_style ?? raw.mode,
     force_fresh_variant: raw.force_fresh_variant ?? raw.forceFreshVariant,
     detour_level: raw.detour_level ?? raw.detourLevel ?? 0,
+    country_preference: normalizeCountryPreference(raw.country_preference ?? raw.countryPreference),
+    home_country_code: normalizeCountryCode(raw.home_country_code ?? raw.homeCountryCode) ?? undefined,
+    avoid_cross_border: raw.avoid_cross_border ?? raw.avoidCrossBorder ?? false,
+    allowed_countries: raw.allowed_countries ?? raw.allowedCountries,
   };
 }
 
@@ -816,6 +900,12 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
       debug_message: 'Edge v2: missing start_location',
     }, 400);
   }
+  const countryPreference = normalizeCountryPreference(req.country_preference);
+  const homeCountryCode = normalizeCountryCode(req.home_country_code);
+  const strictInland =
+    isRoundTrip &&
+    (req.avoid_cross_border === true || countryPreference === 'only_home') &&
+    homeCountryCode != null;
 
   // Adaptive Distance Compensation (nur für Round-Trip relevant)
   const region = classifyRegion(startLocation.latitude, startLocation.longitude);
@@ -990,6 +1080,13 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
         // 2026-06-03 (vucko): „Autobahn aus" heißt KEINE Autobahn. Ein Kandidat
         // mit Motorway ist niemals akzeptabel wenn avoid_highways gesetzt ist.
         if ((req.avoid_highways ?? false) && r.meta.uses_motorway === true) return false;
+        if (strictInland) {
+          const foreign = countryForeignFraction(
+            r.geometry.coordinates as [number, number][],
+            homeCountryCode,
+          );
+          if (foreign > ONLY_HOME_MAX_FOREIGN_FRACTION) return false;
+        }
         // 2026-06-03 (vucko): Racer schließt NUR auf einer 0-U-Turn-Route kurz
         // (die ideale). Gibt es keine, sammelt er alle und das nicht-lineare
         // Best-of-N-Scoring wählt den Fallback: 0 < 1 (Kosten 14) < 2 (250). So
@@ -1756,27 +1853,57 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
         : uTurns === 1
         ? 14
         : 250 + (uTurns - 2) * 120;
+    const foreignFraction = countryForeignFraction(
+      c.result.geometry.coordinates as [number, number][],
+      homeCountryCode,
+    );
+    const countryRejected =
+      strictInland && foreignFraction > ONLY_HOME_MAX_FOREIGN_FRACTION;
+    const countryScorePenalty = countryPenalty(foreignFraction, countryPreference);
     return {
       ...c, turns, turnsPerKm, stylePenalty, speedPenalty, avgSpeedKmh,
-      isUnreasonablySlow,
-      score: c.deltaPct + stylePenalty + speedPenalty + highwayPenalty + uTurnPenalty,
+      isUnreasonablySlow, foreignFraction, countryRejected, countryScorePenalty,
+      score: c.deltaPct + stylePenalty + speedPenalty + highwayPenalty +
+        uTurnPenalty + countryScorePenalty + (countryRejected ? 10000 : 0),
     };
   });
+
+  const allCountryRejected =
+    strictInland && scored.length > 0 && scored.every(c => c.countryRejected);
+  if (allCountryRejected) {
+    return jsonResponse({
+      error: 'no_inland_route',
+      user_message:
+        'Hier ist kein Rundkurs möglich, der im Land bleibt. Schalt „Im Land bleiben" aus oder wähl eine kürzere Distanz bzw. einen Start weiter im Landesinneren.',
+      debug_message:
+        `all_candidates_crossed_border home=${homeCountryCode} max=${ONLY_HOME_MAX_FOREIGN_FRACTION}`,
+      meta: {
+        response_code: 'no_inland_route',
+        country_preference: countryPreference,
+        home_country_code: homeCountryCode,
+        avoid_cross_border: true,
+        candidate_count: scored.length,
+        country_rejected_count: scored.filter(c => c.countryRejected).length,
+        min_foreign_fraction: Number(Math.min(...scored.map(c => c.foreignFraction)).toFixed(3)),
+      },
+    }, 422);
+  }
 
   // Best non-duplicate mit niedrigstem combined Score.
   // Zuerst nur "reasonable speed" Routes betrachten (nicht isUnreasonablySlow).
   // Nur wenn ALLE slow sind, fallback auf besten slow.
-  const nonDupReasonable = scored.filter(c => !c.isDup && !c.isUnreasonablySlow)
+  const selectable = scored.filter(c => !c.countryRejected);
+  const nonDupReasonable = selectable.filter(c => !c.isDup && !c.isUnreasonablySlow)
     .sort((a, b) => a.score - b.score);
   if (nonDupReasonable.length > 0) {
     bestCandidate = nonDupReasonable[0].result;
   } else {
-    const nonDupAny = scored.filter(c => !c.isDup).sort((a, b) => a.score - b.score);
+    const nonDupAny = selectable.filter(c => !c.isDup).sort((a, b) => a.score - b.score);
     if (nonDupAny.length > 0) {
       bestCandidate = nonDupAny[0].result;
-    } else if (scored.length > 0) {
-      scored.sort((a, b) => a.score - b.score);
-      bestCandidate = scored[0].result;
+    } else if (selectable.length > 0) {
+      selectable.sort((a, b) => a.score - b.score);
+      bestCandidate = selectable[0].result;
     }
   }
 
@@ -1925,6 +2052,27 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
         );
       }
     }
+    const finalCoords = bestCandidate.geometry.coordinates as [number, number][];
+    const finalForeignFraction = countryForeignFraction(finalCoords, homeCountryCode);
+    const finalCountriesTouched = countriesTouched(finalCoords, homeCountryCode);
+    if (strictInland && finalForeignFraction > ONLY_HOME_MAX_FOREIGN_FRACTION) {
+      return jsonResponse({
+        error: 'no_inland_route',
+        user_message:
+          'Hier ist kein Rundkurs möglich, der im Land bleibt. Schalt „Im Land bleiben" aus oder wähl eine kürzere Distanz bzw. einen Start weiter im Landesinneren.',
+        debug_message:
+          `selected_candidate_crossed_border foreign=${finalForeignFraction.toFixed(3)} home=${homeCountryCode}`,
+        meta: {
+          response_code: 'no_inland_route',
+          country_preference: countryPreference,
+          home_country_code: homeCountryCode,
+          avoid_cross_border: true,
+          foreign_fraction: Number(finalForeignFraction.toFixed(3)),
+          countries_touched: finalCountriesTouched,
+        },
+      }, 422);
+    }
+
     // V1-kompatible Response-Struktur damit Flutter route_service.dart
     // unverändert weiter funktioniert. Felder die der alte Mapbox-Code parst:
     //   route.geometry, route.distance (in METER), route.duration (in SEKUNDEN)
@@ -1970,6 +2118,13 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
         avg_speed_kmh: Number((selectedScored?.avgSpeedKmh ?? 0).toFixed(1)),
         speed_penalty: Number((selectedScored?.speedPenalty ?? 0).toFixed(1)),
         profile_fallback_used: usedProfileFallback,
+        country_preference: countryPreference,
+        home_country_code: homeCountryCode,
+        avoid_cross_border: strictInland,
+        foreign_fraction: Number(finalForeignFraction.toFixed(3)),
+        countries_touched: finalCountriesTouched,
+        country_rejected_count: scored.filter(c => c.countryRejected).length,
+        country_penalty: Number((selectedScored?.countryScorePenalty ?? 0).toFixed(1)),
       },
     });
   }

@@ -1516,6 +1516,19 @@ class _CruiseModePageState extends State<CruiseModePage>
     }
   }
 
+  bool get _countryFilterAppliesToCurrentRoute =>
+      _isRoundTrip && !_isWaypointPlanning;
+
+  CountryPreference get _effectiveCountryPreferenceForGeneration =>
+      _countryFilterAppliesToCurrentRoute
+      ? _countryPreference
+      : CountryPreference.any;
+
+  String? get _effectiveHomeCountryCodeForGeneration =>
+      _effectiveCountryPreferenceForGeneration == CountryPreference.any
+      ? null
+      : _homeCountryCode;
+
   Future<void> _maybeShowRoutingOnboarding() async {
     if (!mounted || _disposed) return;
     if (_isRouteConfirmed) return;
@@ -6739,15 +6752,18 @@ class _CruiseModePageState extends State<CruiseModePage>
       );
       if (_isRouteGenerationCancelled(generationId)) return;
 
-      // 2026-05-30 (vucko): Heimatland automatisch aus dem Startpunkt ableiten
-      // (offline-Heuristik, kein extra API-Call). Nur relevant wenn eine
-      // Länder-Präferenz aktiv ist.
-      if (_countryPreference != CountryPreference.any) {
+      // 2026-05-30/06-12 (vucko): Heimatland automatisch aus dem Startpunkt
+      // ableiten (offline-Heuristik, kein extra API-Call). Der Filter gilt nur
+      // dort, wo der Toggle sichtbar ist: Rundkurs ohne Wegpunkt-/Trip-Modus.
+      if (_effectiveCountryPreferenceForGeneration != CountryPreference.any) {
         _homeCountryCode = CountryRegion.classify(
           startPosition.latitude,
           startPosition.longitude,
         );
       }
+      final effectiveCountryPreference =
+          _effectiveCountryPreferenceForGeneration;
+      final effectiveHomeCountryCode = _effectiveHomeCountryCodeForGeneration;
 
       final digits = _selectedLength.replaceAll(RegExp(r'[^0-9]'), '');
       var distance = digits.isNotEmpty ? int.parse(digits) : 50;
@@ -6830,6 +6846,8 @@ class _CruiseModePageState extends State<CruiseModePage>
           'planningType=$_planningType selectedLength=$_selectedLength '
           'waypointCount=${waypointSnapshot.length} '
           'waypointSignature=${waypointSignature ?? 'none'} '
+          'countryPreference=${effectiveCountryPreference.storageValue} '
+          'homeCountry=${effectiveHomeCountryCode ?? '-'} '
           'selectedLocation=$_selectedLocation '
           'useCurrentLocation=${_selectedLocation == 'Aktueller Standort'} '
           'startLat=${startPosition.latitude.toStringAsFixed(5)} '
@@ -6958,8 +6976,8 @@ class _CruiseModePageState extends State<CruiseModePage>
           // knappes Zeitbudget nur im Direkt-Fall; Umweg/Scenic behält die Vielfalt.
           candidateBudgetOverride: scenicMode ? null : 1,
           maxSearchMsOverride: scenicMode ? null : 8000,
-          countryPreference: _countryPreference,
-          homeCountryCode: _homeCountryCode,
+          countryPreference: effectiveCountryPreference,
+          homeCountryCode: effectiveHomeCountryCode,
         );
       } else if (_isWaypointPlanning && waypointSnapshot.isNotEmpty) {
         // 2026-05-23 (vucko Task #22): Trip-Modus = A→B mit Multi-Stopps.
@@ -7035,8 +7053,8 @@ class _CruiseModePageState extends State<CruiseModePage>
           forceFreshVariant: forceFreshVariant,
           subscriptionTier: subscriptionTier,
           intermediateWaypoints: intermediates,
-          countryPreference: _countryPreference,
-          homeCountryCode: _homeCountryCode,
+          countryPreference: effectiveCountryPreference,
+          homeCountryCode: effectiveHomeCountryCode,
         );
         // 2026-05-24 (vucko Task #53): Trip-Mode → Trip in DB persistieren.
         // 2026-06-10 (vucko Trip-Resume): JETZT AUCH SOLO-Trips (User-Wunsch
@@ -7095,8 +7113,8 @@ class _CruiseModePageState extends State<CruiseModePage>
           forceFreshVariant: forceFreshVariant,
           debugTrigger: routeDebugTrigger,
           subscriptionTier: subscriptionTier,
-          countryPreference: _countryPreference,
-          homeCountryCode: _homeCountryCode,
+          countryPreference: effectiveCountryPreference,
+          homeCountryCode: effectiveHomeCountryCode,
         );
       }
 
@@ -7486,14 +7504,9 @@ class _CruiseModePageState extends State<CruiseModePage>
       allowDistantAccess: isPoolSourced,
     );
 
-    // 2026-06-02 (vucko KRITISCHER FIX): Der Länder-Gate war ein HARTER Block
-    // (Route NICHT angezeigt + „keine reine Inlandsroute"-Sackgasse). In
-    // Grenzregionen (Vorarlberg liegt minutennah an CH/LI/IT) gibt es fast nie
-    // eine reine Inlandsroute → der User blieb stecken, SOGAR nach dem
-    // Ausschalten von „Im Land bleiben". Das darf nie passieren. „Im Land
-    // bleiben" ist jetzt wieder SOFT: es bevorzugt Inland NUR über den
-    // Routen-Score (in der Generierung), blockiert die Anzeige aber NIEMALS —
-    // die beste verfügbare Route wird immer gezeigt.
+    // 2026-06-12 (vucko): Länder-Gate sitzt im RouteService/Edge-Contract.
+    // Die UI zeigt nur noch validierte Ergebnisse; versteckte Filterzustände
+    // aus A→B/Wegpunkte werden vor dem Request neutralisiert.
 
     const validator = RouteQualityValidator();
     final actualKm = prepared.distanceKm ?? 0.0;

@@ -34,7 +34,10 @@ void main() {
         [9.75, 47.40],
       ];
       expect(
-        CountryRegion.foreignFraction(coordinates: coords, homeCountryCode: 'AT'),
+        CountryRegion.foreignFraction(
+          coordinates: coords,
+          homeCountryCode: 'AT',
+        ),
         0.0,
       );
     });
@@ -54,7 +57,7 @@ void main() {
     });
   });
 
-  group('CountryRegion.scorePenalty — WEICH, nie unendlich', () {
+  group('CountryRegion.scorePenalty', () {
     test('any-Präferenz → kein Penalty', () {
       expect(
         CountryRegion.scorePenalty(
@@ -77,9 +80,7 @@ void main() {
       expect(prefer, lessThan(only));
     });
 
-    test('Penalty bleibt endlich (kein Reject) auch bei 100% Ausland', () {
-      // Kritisch fürs Vorarlberg-Anti-Regression: selbst die strengste Stufe
-      // darf nur einen ENDLICHEN Malus geben, nie "unmöglich".
+    test('Penalty bleibt endlich; harter Reject sitzt im RouteService', () {
       final only = CountryRegion.scorePenalty(
         foreignFraction: 1.0,
         preference: CountryPreference.onlyHome,
@@ -87,6 +88,13 @@ void main() {
       expect(only.isFinite, isTrue);
       expect(only, lessThan(500.0)); // weit unter destinationReached-Reject 500
     });
+
+    test(
+      'onlyHome-Schwelle ist zentral und toleriert kleines Box-Rauschen',
+      () {
+        expect(CountryRegion.onlyHomeMaxForeignFraction, 0.10);
+      },
+    );
 
     test('kleiner Grenz-Touch → kaum Penalty', () {
       final small = CountryRegion.scorePenalty(

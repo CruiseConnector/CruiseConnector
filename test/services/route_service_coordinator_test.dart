@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:geolocator/geolocator.dart' as geo;
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:cruise_connect/data/services/country_region.dart';
 import 'package:cruise_connect/data/services/route_pool_service.dart';
 import 'package:cruise_connect/data/services/route_quality_validator.dart';
 import 'package:cruise_connect/data/services/route_service.dart';
@@ -905,6 +906,51 @@ void main() {
     // ideal ist. Ohne Single-Flight wären es 4 Edge-Calls (2 × 2).
     expect(invoker.callCount, lessThanOrEqualTo(2));
   });
+
+  test(
+    'Inlandsfilter trennt Session-Cache und wird an Edge v2 gesendet',
+    () async {
+      RouteService.disableBackgroundPreparation = true;
+      addTearDown(() => RouteService.disableBackgroundPreparation = false);
+
+      final countryInvoker = _CountingInvoker(
+        _closedLoopResponseAt(latitude: 47.3331, longitude: 9.6336),
+      );
+      final countryService = RouteService(invoker: countryInvoker);
+
+      await countryService.generateRoundTrip(
+        startPosition: _position(47.3331, 9.6336),
+        targetDistanceKm: 50,
+        mode: 'Sport Mode',
+        planningType: 'Zufall',
+        countryPreference: CountryPreference.any,
+      );
+      final callsAfterAny = countryInvoker.callCount;
+      final anyBody = countryInvoker.bodies.last;
+      final anyScenarioKey = RouteService.scenarioKey(anyBody);
+      expect(anyBody['country_preference'], 'any');
+      expect(anyBody.containsKey('home_country_code'), isFalse);
+      expect(anyBody.containsKey('avoid_cross_border'), isFalse);
+      expect(anyBody.containsKey('allowed_countries'), isFalse);
+
+      await countryService.generateRoundTrip(
+        startPosition: _position(47.3331, 9.6336),
+        targetDistanceKm: 50,
+        mode: 'Sport Mode',
+        planningType: 'Zufall',
+        countryPreference: CountryPreference.onlyHome,
+        homeCountryCode: 'AT',
+      );
+
+      expect(countryInvoker.callCount, greaterThan(callsAfterAny));
+      final inlandBody = countryInvoker.bodies.last;
+      expect(inlandBody['country_preference'], 'only_home');
+      expect(inlandBody['home_country_code'], 'AT');
+      expect(inlandBody['avoid_cross_border'], isTrue);
+      expect(inlandBody['allowed_countries'], ['AT']);
+      expect(RouteService.scenarioKey(inlandBody), isNot(anyScenarioKey));
+    },
+  );
 
   test('ROUND_TRIP verwirft sparse 100-km Anzeige-Geometrie', () async {
     service = RouteService(

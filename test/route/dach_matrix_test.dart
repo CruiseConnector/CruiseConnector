@@ -50,13 +50,23 @@ class _LiveHttpInvoker implements RouteEdgeInvoker {
     _callCount += 1;
     final payload = jsonEncode(body);
     final result = await Process.run('curl', [
-      '-sS', '--http1.1', '-X', 'POST', endpoint.toString(),
-      '-H', 'Content-Type: application/json',
-      '-H', 'Accept: application/json',
-      '-H', 'apikey: ${AppConstants.supabaseAnonKey}',
-      '-H', 'Authorization: Bearer ${AppConstants.supabaseAnonKey}',
-      '--data-binary', payload,
-      '-w', '\n__HTTP_STATUS__:%{http_code}',
+      '-sS',
+      '--http1.1',
+      '-X',
+      'POST',
+      endpoint.toString(),
+      '-H',
+      'Content-Type: application/json',
+      '-H',
+      'Accept: application/json',
+      '-H',
+      'apikey: ${AppConstants.supabaseAnonKey}',
+      '-H',
+      'Authorization: Bearer ${AppConstants.supabaseAnonKey}',
+      '--data-binary',
+      payload,
+      '-w',
+      '\n__HTTP_STATUS__:%{http_code}',
     ]);
     final stdout = (result.stdout as String).trimRight();
     final markerIndex = stdout.lastIndexOf('__HTTP_STATUS__:');
@@ -71,29 +81,29 @@ class _LiveHttpInvoker implements RouteEdgeInvoker {
 }
 
 geo.Position _pos(double lat, double lng) => geo.Position(
-      latitude: lat,
-      longitude: lng,
-      timestamp: DateTime.now(),
-      accuracy: 5,
-      altitude: 0,
-      altitudeAccuracy: 0,
-      heading: 0,
-      headingAccuracy: 0,
-      speed: 0,
-      speedAccuracy: 0,
-    );
+  latitude: lat,
+  longitude: lng,
+  timestamp: DateTime.now(),
+  accuracy: 5,
+  altitude: 0,
+  altitudeAccuracy: 0,
+  heading: 0,
+  headingAccuracy: 0,
+  speed: 0,
+  speedAccuracy: 0,
+);
 
 double _haversineM(double lat1, double lng1, double lat2, double lng2) {
   return geo.Geolocator.distanceBetween(lat1, lng1, lat2, lng2);
 }
 
 RoutePoolService _emptyPool() => RoutePoolService(
-      inMemoryRoutes: <RoutePoolEntry>[],
-      inMemoryRegions: <RouteRegion>[],
-      inMemoryCoverage: <RoutePoolCoverage>[],
-      inMemorySeedJobs: <RouteSeedJob>[],
-      inMemoryCandidates: <RoutePoolCandidate>[],
-    );
+  inMemoryRoutes: <RoutePoolEntry>[],
+  inMemoryRegions: <RouteRegion>[],
+  inMemoryCoverage: <RoutePoolCoverage>[],
+  inMemorySeedJobs: <RouteSeedJob>[],
+  inMemoryCandidates: <RoutePoolCandidate>[],
+);
 
 class _City {
   const _City(this.name, this.lat, this.lng, this.kind);
@@ -122,8 +132,10 @@ void main() {
 
   const run = bool.fromEnvironment('RUN_DACH_MATRIX', defaultValue: false);
   const onlyCity = String.fromEnvironment('DACH_CITY', defaultValue: '');
-  const outputPath =
-      String.fromEnvironment('DACH_OUTPUT', defaultValue: '/tmp/dach-matrix.json');
+  const outputPath = String.fromEnvironment(
+    'DACH_OUTPUT',
+    defaultValue: '/tmp/dach-matrix.json',
+  );
   const endpointValue = String.fromEnvironment(
     'DACH_ENDPOINT',
     defaultValue:
@@ -193,7 +205,8 @@ void main() {
                 );
                 final coords = result.coordinates;
                 final dist = result.distanceKm ?? 0.0;
-                final source = result.edgeMeta['route_source']?.toString() ??
+                final source =
+                    result.edgeMeta['route_source']?.toString() ??
                     result.edgeMeta['source']?.toString() ??
                     'mapbox';
 
@@ -201,11 +214,19 @@ void main() {
                 final startGapM = coords.isEmpty
                     ? 99999.0
                     : _haversineM(
-                        coords.first[1], coords.first[0], city.lat, city.lng);
+                        coords.first[1],
+                        coords.first[0],
+                        city.lat,
+                        city.lng,
+                      );
                 var maxGapM = 0.0;
                 for (var i = 1; i < coords.length; i++) {
-                  final g = _haversineM(coords[i - 1][1], coords[i - 1][0],
-                      coords[i][1], coords[i][0]);
+                  final g = _haversineM(
+                    coords[i - 1][1],
+                    coords[i - 1][0],
+                    coords[i][1],
+                    coords[i][0],
+                  );
                   if (g > maxGapM) maxGapM = g;
                 }
                 final foreign = CountryRegion.foreignFraction(
@@ -215,9 +236,10 @@ void main() {
                 final distRatio = km == 0 ? 0.0 : dist / km;
 
                 final okDistance = distRatio >= 0.55 && distRatio <= 1.6;
-                // Im-Land: bei AN sollte Ausland-Anteil moderat sein. In echten
-                // Grenz-Dörfern kann 0 nicht erreichbar sein → Schwelle 0.30.
-                final okInland = !inland || foreign <= 0.30;
+                // Im-Land: produktive harte Schwelle plus Box-Rauschen-Toleranz.
+                final okInland =
+                    !inland ||
+                    foreign <= CountryRegion.onlyHomeMaxForeignFraction;
                 final okStart = startGapM <= 250.0;
                 // on-road: GraphHopper liefert IMMER Straßen-Geometrie (ggf.
                 // vereinfacht → große Lücken sind kein Gelände). Nur eklatante
@@ -262,10 +284,13 @@ void main() {
       }
     }
 
-    await File(outputPath)
-        .writeAsString(const JsonEncoder.withIndent('  ').convert(rows));
-    print('DACH_SUMMARY total=$total pass=$pass fail=${total - pass} '
-        'rate=${(pass / total * 100).toStringAsFixed(1)}%');
+    await File(
+      outputPath,
+    ).writeAsString(const JsonEncoder.withIndent('  ').convert(rows));
+    print(
+      'DACH_SUMMARY total=$total pass=$pass fail=${total - pass} '
+      'rate=${(pass / total * 100).toStringAsFixed(1)}%',
+    );
 
     // Test selbst schlägt nie hart fehl — die Matrix wird ausgewertet, nicht geassertet.
     expect(rows, isNotEmpty);

@@ -2,13 +2,10 @@ import 'dart:math' as math;
 
 /// 2026-05-30 (vucko): Länder-Präferenz für die Routenplanung.
 ///
-/// Wichtigste Design-Entscheidung: Das ist eine **weiche** Präferenz. Selbst
-/// die strengste Stufe (`onlyHome`) lehnt eine Route NICHT hart ab, sondern
-/// vergibt nur einen Score-Penalty. Grund: Ein harter Länder-Lock hat im
-/// Vorarlberger Rheintal schon einmal eine 75-Edge-Call-Explosion ausgelöst
-/// (Task #67) — dort IST das Rheintal die Grenze, eine reine AT-Route ist oft
-/// gar nicht möglich. Penalty statt Reject heißt: heimische Routen gewinnen,
-/// aber wenn keine existiert, bekommt der User trotzdem eine (mit Hinweis).
+/// `preferHome` bleibt eine weiche Präferenz. `onlyHome` ist bewusst hart:
+/// eine grenzüberschreitende Route darf dann nicht als Erfolg angezeigt werden.
+/// Die harte Stufe ist trotzdem explosionssicher, weil sie nur Kandidaten
+/// verwirft und keine unbegrenzten Zusatz-Requests startet.
 enum CountryPreference {
   /// Egal — Land wird nicht bewertet.
   any,
@@ -22,16 +19,16 @@ enum CountryPreference {
 
 extension CountryPreferenceLabel on CountryPreference {
   String get storageValue => switch (this) {
-        CountryPreference.any => 'any',
-        CountryPreference.preferHome => 'prefer_home',
-        CountryPreference.onlyHome => 'only_home',
-      };
+    CountryPreference.any => 'any',
+    CountryPreference.preferHome => 'prefer_home',
+    CountryPreference.onlyHome => 'only_home',
+  };
 
   static CountryPreference fromStorage(String? value) => switch (value) {
-        'prefer_home' => CountryPreference.preferHome,
-        'only_home' => CountryPreference.onlyHome,
-        _ => CountryPreference.any,
-      };
+    'prefer_home' => CountryPreference.preferHome,
+    'only_home' => CountryPreference.onlyHome,
+    _ => CountryPreference.any,
+  };
 }
 
 /// Grobe Länder-Klassifikation per Lat/Lng-Boxen für die DACH-Region und
@@ -42,6 +39,16 @@ extension CountryPreferenceLabel on CountryPreference {
 /// ISO-3166-1 alpha-2 Codes. `null` = unbekannt/außerhalb der Boxen.
 class CountryRegion {
   const CountryRegion._();
+
+  /// Einheitliche Toleranz für grobes Box-Rauschen an gezackten Grenzen.
+  /// Echte Grenzübertritte lagen in den Vorarlberg-/Bodensee-Tests klar
+  /// darüber; 10% verhindert falsche Rejects durch einzelne falsch klassifizierte
+  /// Punkte, blockt aber sichtbare Auslands-Schleifen.
+  static const double onlyHomeMaxForeignFraction = 0.10;
+
+  /// Weiche Prefer-Home-Grenze für Pool/Ranking: große Auslandsschleifen raus,
+  /// kleine Grenzberührungen bleiben möglich.
+  static const double preferHomeMaxForeignFraction = 0.65;
 
   /// Klassifiziert einen Punkt grob. Reihenfolge wichtig: die kleinen Länder
   /// (LI) vor den großen, weil sie sonst von AT/CH verschluckt würden.

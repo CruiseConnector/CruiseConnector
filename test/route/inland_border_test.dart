@@ -2,7 +2,8 @@
 //
 // Harte Inland-Garantie (vucko 2026-06-08): an Grenzorten darf „Im Land bleiben"
 // NIEMALS eine grenzüberschreitende Route liefern. Pro Ort mehrere Läufe (Routen
-// sind zufällig) → JEDE muss entweder im Land bleiben (foreign ≤ 0.06) ODER ein
+// sind zufällig) → JEDE muss entweder im Land bleiben (foreign ≤ produktive
+// Box-Rauschen-Toleranz) ODER ein
 // sauberer noRoute sein. Eine einzige Cross-Border-Route = FAIL.
 //
 // Lauf: flutter test test/route/inland_border_test.dart --dart-define=RUN_BORDER=true
@@ -32,35 +33,53 @@ class _LiveHttpInvoker implements RouteEdgeInvoker {
   @override
   Future<dynamic> invoke(Map<String, dynamic> body) async {
     final result = await Process.run('curl', [
-      '-sS', '--http1.1', '-X', 'POST', endpoint.toString(),
-      '-H', 'Content-Type: application/json',
-      '-H', 'apikey: ${AppConstants.supabaseAnonKey}',
-      '-H', 'Authorization: Bearer ${AppConstants.supabaseAnonKey}',
-      '--data-binary', jsonEncode(body),
-      '-w', '\n__HTTP_STATUS__:%{http_code}',
+      '-sS',
+      '--http1.1',
+      '-X',
+      'POST',
+      endpoint.toString(),
+      '-H',
+      'Content-Type: application/json',
+      '-H',
+      'apikey: ${AppConstants.supabaseAnonKey}',
+      '-H',
+      'Authorization: Bearer ${AppConstants.supabaseAnonKey}',
+      '--data-binary',
+      jsonEncode(body),
+      '-w',
+      '\n__HTTP_STATUS__:%{http_code}',
     ]);
     final out = (result.stdout as String).trimRight();
     final i = out.lastIndexOf('__HTTP_STATUS__:');
     final raw = i >= 0 ? out.substring(0, i).trim() : '';
-    final status = i >= 0
-        ? int.tryParse(out.substring(i + 16).trim()) ?? 0
-        : 0;
+    final status = i >= 0 ? int.tryParse(out.substring(i + 16).trim()) ?? 0 : 0;
     return FunctionResponse(
-        data: raw.isEmpty ? null : jsonDecode(raw), status: status);
+      data: raw.isEmpty ? null : jsonDecode(raw),
+      status: status,
+    );
   }
 }
 
 geo.Position _pos(double lat, double lng) => geo.Position(
-      latitude: lat, longitude: lng, timestamp: DateTime.now(), accuracy: 5,
-      altitude: 0, altitudeAccuracy: 0, heading: 0, headingAccuracy: 0,
-      speed: 0, speedAccuracy: 0,
-    );
+  latitude: lat,
+  longitude: lng,
+  timestamp: DateTime.now(),
+  accuracy: 5,
+  altitude: 0,
+  altitudeAccuracy: 0,
+  heading: 0,
+  headingAccuracy: 0,
+  speed: 0,
+  speedAccuracy: 0,
+);
 
 RoutePoolService _emptyPool() => RoutePoolService(
-      inMemoryRoutes: <RoutePoolEntry>[], inMemoryRegions: <RouteRegion>[],
-      inMemoryCoverage: <RoutePoolCoverage>[], inMemorySeedJobs: <RouteSeedJob>[],
-      inMemoryCandidates: <RoutePoolCandidate>[],
-    );
+  inMemoryRoutes: <RoutePoolEntry>[],
+  inMemoryRegions: <RouteRegion>[],
+  inMemoryCoverage: <RoutePoolCoverage>[],
+  inMemorySeedJobs: <RouteSeedJob>[],
+  inMemoryCandidates: <RoutePoolCandidate>[],
+);
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -78,57 +97,80 @@ void main() {
     ('Goetzis-AT-75', 47.3331, 9.6336, 75),
   ];
 
-  test('Harte Inland-Garantie an Grenzen', skip: !run, () async {
-    RouteService.disableBackgroundPreparation = true;
-    SharedPreferences.setMockInitialValues(<String, Object>{});
-    HttpOverrides.global = null;
-    await Supabase.initialize(
+  test(
+    'Harte Inland-Garantie an Grenzen',
+    skip: !run,
+    () async {
+      RouteService.disableBackgroundPreparation = true;
+      SharedPreferences.setMockInitialValues(<String, Object>{});
+      HttpOverrides.global = null;
+      await Supabase.initialize(
         url: AppConstants.supabaseUrl,
         anonKey: AppConstants.supabaseAnonKey,
-        debug: false);
-    final endpoint = Uri.parse(
-        'https://tlcfaxvvqzobmzwvfnvb.supabase.co/functions/v1/generate-cruise-route-v2');
+        debug: false,
+      );
+      final endpoint = Uri.parse(
+        'https://tlcfaxvvqzobmzwvfnvb.supabase.co/functions/v1/generate-cruise-route-v2',
+      );
 
-    var crossings = 0, inland = 0, noRoute = 0;
-    for (final s in spots) {
-      final home = CountryRegion.classify(s.$2, s.$3) ?? '??';
-      for (var r = 0; r < runs; r++) {
-        RouteService.resetForTests();
-        final svc = RouteService(
-            invoker: _LiveHttpInvoker(endpoint), routePoolService: _emptyPool());
-        try {
-          final res = await svc.generateRoundTrip(
-            startPosition: _pos(s.$2, s.$3),
-            targetDistanceKm: s.$4,
-            mode: 'Sport Mode',
-            planningType: 'Zufall',
-            forceFreshVariant: r > 0,
-            debugTrigger: r > 0 ? 'searchAgain' : 'firstSearch',
-            countryPreference: CountryPreference.onlyHome,
-            homeCountryCode: home,
+      var crossings = 0, inland = 0, noRoute = 0;
+      for (final s in spots) {
+        final home = CountryRegion.classify(s.$2, s.$3) ?? '??';
+        for (var r = 0; r < runs; r++) {
+          RouteService.resetForTests();
+          final svc = RouteService(
+            invoker: _LiveHttpInvoker(endpoint),
+            routePoolService: _emptyPool(),
           );
-          final foreign = CountryRegion.foreignFraction(
-              coordinates: res.coordinates, homeCountryCode: home);
-          final touched = CountryRegion.countriesTouched(
-              coordinates: res.coordinates, homeCountryCode: home);
-          final crossed = foreign > 0.06;
-          if (crossed) {
-            crossings++;
-          } else {
-            inland++;
-          }
-          print('BORDERROW ${s.$1} home=$home run=$r '
+          try {
+            final res = await svc.generateRoundTrip(
+              startPosition: _pos(s.$2, s.$3),
+              targetDistanceKm: s.$4,
+              mode: 'Sport Mode',
+              planningType: 'Zufall',
+              forceFreshVariant: r > 0,
+              debugTrigger: r > 0 ? 'searchAgain' : 'firstSearch',
+              countryPreference: CountryPreference.onlyHome,
+              homeCountryCode: home,
+            );
+            final foreign = CountryRegion.foreignFraction(
+              coordinates: res.coordinates,
+              homeCountryCode: home,
+            );
+            final touched = CountryRegion.countriesTouched(
+              coordinates: res.coordinates,
+              homeCountryCode: home,
+            );
+            final crossed = foreign > CountryRegion.onlyHomeMaxForeignFraction;
+            if (crossed) {
+              crossings++;
+            } else {
+              inland++;
+            }
+            print(
+              'BORDERROW ${s.$1} home=$home run=$r '
               'foreign=${foreign.toStringAsFixed(2)} touched=${touched.join("+")} '
-              '${crossed ? "❌ CROSS" : "✓ inland"}');
-        } catch (e) {
-          noRoute++;
-          print('BORDERROW ${s.$1} home=$home run=$r noRoute '
-              '(${e.toString().split("\n").first.substring(0, 40)}) ✓ ok');
+              '${crossed ? "❌ CROSS" : "✓ inland"}',
+            );
+          } catch (e) {
+            noRoute++;
+            print(
+              'BORDERROW ${s.$1} home=$home run=$r noRoute '
+              '(${e.toString().split("\n").first.substring(0, 40)}) ✓ ok',
+            );
+          }
         }
       }
-    }
-    print('BORDER_SUMMARY crossings=$crossings inland=$inland noRoute=$noRoute');
-    // DIE harte Zusicherung: KEINE einzige grenzüberschreitende Route.
-    expect(crossings, 0, reason: '$crossings Cross-Border-Routen trotz Im-Land!');
-  }, timeout: const Timeout(Duration(minutes: 20)));
+      print(
+        'BORDER_SUMMARY crossings=$crossings inland=$inland noRoute=$noRoute',
+      );
+      // DIE harte Zusicherung: KEINE einzige grenzüberschreitende Route.
+      expect(
+        crossings,
+        0,
+        reason: '$crossings Cross-Border-Routen trotz Im-Land!',
+      );
+    },
+    timeout: const Timeout(Duration(minutes: 20)),
+  );
 }
