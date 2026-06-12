@@ -6746,6 +6746,8 @@ class _CruiseModePageState extends State<CruiseModePage>
 
     var requestedDistance = 50;
     String? requestedWaypointSignature;
+    var requestedCountryPreference = CountryPreference.any;
+    String? requestedHomeCountryCode;
     try {
       final startPosition = await _getStartCoordinates(
         forceFreshGps: startValidatorRetry,
@@ -6764,6 +6766,8 @@ class _CruiseModePageState extends State<CruiseModePage>
       final effectiveCountryPreference =
           _effectiveCountryPreferenceForGeneration;
       final effectiveHomeCountryCode = _effectiveHomeCountryCodeForGeneration;
+      requestedCountryPreference = effectiveCountryPreference;
+      requestedHomeCountryCode = effectiveHomeCountryCode;
 
       final digits = _selectedLength.replaceAll(RegExp(r'[^0-9]'), '');
       var distance = digits.isNotEmpty ? int.parse(digits) : 50;
@@ -7194,6 +7198,8 @@ class _CruiseModePageState extends State<CruiseModePage>
             final polled = await _pollRoundTripSearchSession(
               sessionId,
               generationId: generationId,
+              countryPreference: requestedCountryPreference,
+              homeCountryCode: requestedHomeCountryCode,
             );
             if (_isRouteGenerationCancelled(generationId)) return;
             if (polled != null) {
@@ -7256,6 +7262,8 @@ class _CruiseModePageState extends State<CruiseModePage>
                       mode: _selectedStyle,
                       avoidHighways: _avoidHighways,
                       planningType: _planningType,
+                      countryPreference: requestedCountryPreference,
+                      homeCountryCode: requestedHomeCountryCode,
                     );
                 if (lastChance != null &&
                     !_isRouteGenerationCancelled(generationId)) {
@@ -7307,6 +7315,8 @@ class _CruiseModePageState extends State<CruiseModePage>
   Future<RouteResult?> _pollRoundTripSearchSession(
     String sessionId, {
     required int generationId,
+    CountryPreference countryPreference = CountryPreference.any,
+    String? homeCountryCode,
   }) async {
     // 2026-05-25 (vucko): Polling beschleunigt — vorher 30 × 3s = 90s (User
     // hat in Feldkirch/Götzis bis zu mehrere Minuten warten muessen).
@@ -7328,7 +7338,11 @@ class _CruiseModePageState extends State<CruiseModePage>
         sessionId: sessionId,
         pollAttempt: poll + 1,
       );
-      final result = await _routeService.pollRoundTripSearchSession(sessionId);
+      final result = await _routeService.pollRoundTripSearchSession(
+        sessionId,
+        countryPreference: countryPreference,
+        homeCountryCode: homeCountryCode,
+      );
       if (_isRouteGenerationCancelled(generationId)) return null;
       if (result != null) {
         _logRoundTripSearchUiDecision(

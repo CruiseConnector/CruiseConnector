@@ -13,8 +13,34 @@ enum CountryPreference {
   /// Eher im Land bleiben — moderater Penalty für Ausland-Anteil.
   preferHome,
 
-  /// Möglichst nur im Land — starker Penalty, aber immer noch kein Reject.
+  /// Möglichst nur im Land — harte Ablehnung sichtbarer Auslandsabschnitte.
   onlyHome,
+}
+
+class CountryRouteMetrics {
+  const CountryRouteMetrics({
+    required this.foreignPointFraction,
+    required this.foreignDistanceFraction,
+    required this.maxForeignSegmentMeters,
+    required this.foreignDistanceMeters,
+    required this.totalDistanceMeters,
+    required this.countriesTouched,
+  });
+
+  final double foreignPointFraction;
+  final double foreignDistanceFraction;
+  final double maxForeignSegmentMeters;
+  final double foreignDistanceMeters;
+  final double totalDistanceMeters;
+  final List<String> countriesTouched;
+
+  double get effectiveForeignFraction =>
+      math.max(foreignPointFraction, foreignDistanceFraction);
+
+  bool get violatesOnlyHomeLimits =>
+      foreignPointFraction > CountryRegion.onlyHomeMaxForeignFraction ||
+      foreignDistanceFraction > CountryRegion.onlyHomeMaxForeignFraction ||
+      maxForeignSegmentMeters > CountryRegion.onlyHomeMaxForeignSegmentMeters;
 }
 
 extension CountryPreferenceLabel on CountryPreference {
@@ -45,6 +71,10 @@ class CountryRegion {
   /// darüber; 10% verhindert falsche Rejects durch einzelne falsch klassifizierte
   /// Punkte, blockt aber sichtbare Auslands-Schleifen.
   static const double onlyHomeMaxForeignFraction = 0.10;
+
+  /// Ein einzelner sichtbarer Auslandsabschnitt darf bei `onlyHome` nicht durch
+  /// Sparse-Geometrie unter die Punktquote rutschen.
+  static const double onlyHomeMaxForeignSegmentMeters = 500.0;
 
   /// Weiche Prefer-Home-Grenze für Pool/Ranking: große Auslandsschleifen raus,
   /// kleine Grenzberührungen bleiben möglich.
@@ -114,19 +144,106 @@ class CountryRegion {
     required List<List<double>> coordinates,
     required String homeCountryCode,
   }) {
-    if (coordinates.isEmpty) return 0.0;
+    return routeMetrics(
+      coordinates: coordinates,
+      homeCountryCode: homeCountryCode,
+    ).foreignPointFraction;
+  }
+
+  /// Robuste Routenmetrik für Länder-Filter.
+  ///
+  /// Punktquoten alleine reichen bei Routing-Geometrien nicht: Ein langer
+  /// Straßenabschnitt kann nur wenige Stützpunkte haben. Darum messen wir
+  /// zusätzlich die distanzgewichtete Auslandslänge und den längsten
+  /// zusammenhängenden Auslandsabschnitt.
+  static CountryRouteMetrics routeMetrics({
+    required List<List<double>> coordinates,
+    required String homeCountryCode,
+  }) {
+    if (coordinates.isEmpty) {
+      return const CountryRouteMetrics(
+        foreignPointFraction: 0.0,
+        foreignDistanceFraction: 0.0,
+        maxForeignSegmentMeters: 0.0,
+        foreignDistanceMeters: 0.0,
+        totalDistanceMeters: 0.0,
+        countriesTouched: <String>[],
+      );
+    }
+
     final home = homeCountryCode.toUpperCase();
-    var foreign = 0;
-    var classified = 0;
+    final seenCountries = <String>{};
+    var foreignPoints = 0;
+    var classifiedPoints = 0;
+    var foreignDistanceMeters = 0.0;
+    var totalDistanceMeters = 0.0;
+    var activeForeignMeters = 0.0;
+    var maxForeignSegmentMeters = 0.0;
+    List<double>? previous;
+    String? previousCountry;
+
     for (final c in coordinates) {
       if (c.length < 2) continue;
-      final country = classify(c[1], c[0]); // [lng, lat]
-      if (country == null) continue;
-      classified++;
-      if (country != home) foreign++;
+      final lng = c[0];
+      final lat = c[1];
+      final country = classify(lat, lng); // [lng, lat]
+      if (country != null) {
+        seenCountries.add(country);
+        classifiedPoints++;
+        if (country != home) foreignPoints++;
+      }
+
+      if (previous != null) {
+        final prevLng = previous[0];
+        final prevLat = previous[1];
+        final segmentMeters = _distanceMeters(prevLat, prevLng, lat, lng);
+        if (segmentMeters.isFinite && segmentMeters > 0) {
+          totalDistanceMeters += segmentMeters;
+          final midCountry = classify((prevLat + lat) / 2, (prevLng + lng) / 2);
+          if (midCountry != null) seenCountries.add(midCountry);
+
+          final endpointsForeign =
+              previousCountry != null &&
+              country != null &&
+              previousCountry != home &&
+              country != home;
+          final midpointForeign = midCountry != null && midCountry != home;
+          if (endpointsForeign || midpointForeign) {
+            foreignDistanceMeters += segmentMeters;
+            activeForeignMeters += segmentMeters;
+            maxForeignSegmentMeters = math.max(
+              maxForeignSegmentMeters,
+              activeForeignMeters,
+            );
+          } else {
+            activeForeignMeters = 0.0;
+          }
+        }
+      }
+
+      previous = c;
+      previousCountry = country;
     }
-    if (classified == 0) return 0.0;
-    return foreign / classified;
+
+    final orderedCountries = seenCountries.toList()
+      ..sort((a, b) {
+        if (a == home) return -1;
+        if (b == home) return 1;
+        return a.compareTo(b);
+      });
+
+    return CountryRouteMetrics(
+      foreignPointFraction: classifiedPoints == 0
+          ? 0.0
+          : foreignPoints / classifiedPoints,
+      foreignDistanceFraction: totalDistanceMeters <= 0
+          ? 0.0
+          : foreignDistanceMeters / totalDistanceMeters,
+      maxForeignSegmentMeters: maxForeignSegmentMeters,
+      foreignDistanceMeters: foreignDistanceMeters,
+      totalDistanceMeters: totalDistanceMeters,
+      countriesTouched: orderedCountries,
+    );
   }
 
   /// Die Liste der vom Heimatland abweichenden Länder entlang der Route
@@ -155,10 +272,29 @@ class CountryRegion {
     return ordered;
   }
 
+  static double _distanceMeters(
+    double lat1,
+    double lng1,
+    double lat2,
+    double lng2,
+  ) {
+    const earthRadiusMeters = 6371000.0;
+    final dLat = _toRadians(lat2 - lat1);
+    final dLng = _toRadians(lng2 - lng1);
+    final a =
+        math.sin(dLat / 2) * math.sin(dLat / 2) +
+        math.cos(_toRadians(lat1)) *
+            math.cos(_toRadians(lat2)) *
+            math.sin(dLng / 2) *
+            math.sin(dLng / 2);
+    return 2 * earthRadiusMeters * math.asin(math.sqrt(a));
+  }
+
+  static double _toRadians(double degrees) => degrees * math.pi / 180.0;
+
   /// Score-Penalty (additiv, höher = schlechter) für einen Ausland-Anteil.
-  /// Bewusst weich + nach Stufe skaliert. NIE so hoch, dass eine Route
-  /// dadurch komplett unbrauchbar/abgelehnt wird — das Acceptance-Gate bleibt
-  /// davon unberührt.
+  /// Bewusst weich + nach Stufe skaliert; harte Ablehnung passiert separat
+  /// über `CountryRouteMetrics.violatesOnlyHomeLimits`.
   static double scorePenalty({
     required double foreignFraction,
     required CountryPreference preference,

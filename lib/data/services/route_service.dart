@@ -1345,10 +1345,21 @@ class RouteService {
   }
 
   Future<RouteResult?> pollRoundTripSearchSession(
-    String searchSessionId,
-  ) async {
+    String searchSessionId, {
+    CountryPreference countryPreference = CountryPreference.any,
+    String? homeCountryCode,
+  }) async {
     final id = searchSessionId.trim();
     if (id.isEmpty) return null;
+    final scenario = RouteScenario(
+      routeType: 'ROUND_TRIP',
+      startLatitude: 0,
+      startLongitude: 0,
+      style: 'Standard',
+      planningType: 'Zufall',
+      countryPreference: countryPreference,
+      homeCountryCode: homeCountryCode,
+    );
     final body = <String, dynamic>{
       'action': 'get_search_session',
       'search_session_id': id,
@@ -1356,6 +1367,11 @@ class RouteService {
       'planning_type': 'Zufall',
       'client_trigger': 'searchSessionPoll',
       'client_scenario_key': 'search_session:$id',
+      'country_preference': countryPreference.storageValue,
+      if (homeCountryCode != null) 'home_country_code': homeCountryCode,
+      'avoid_cross_border':
+          countryPreference == CountryPreference.onlyHome &&
+          homeCountryCode != null,
     };
     try {
       debugPrint(
@@ -1366,6 +1382,7 @@ class RouteService {
       final result = await _invoke(body);
       result.edgeMeta['search_session_id'] ??= id;
       result.edgeMeta['route_source'] ??= 'search_session';
+      _guardRoundTripCountry(scenario, result);
       _lastRoundTripSearchSessionMeta = Map<String, dynamic>.from(
         result.edgeMeta,
       );
@@ -1414,6 +1431,8 @@ class RouteService {
     required String mode,
     required bool avoidHighways,
     String planningType = 'Zufall',
+    CountryPreference countryPreference = CountryPreference.any,
+    String? homeCountryCode,
   }) async {
     final styleConfig = RouteStyleConfig.forMode(mode);
     final normalizedTargetKm = styleConfig.clampRoundTripDistanceKm(
@@ -1429,6 +1448,8 @@ class RouteService {
       avoidHighways: avoidHighways,
       waypointSignature: null,
       closeLoop: false,
+      countryPreference: countryPreference,
+      homeCountryCode: homeCountryCode,
     );
     return _tryRoutePoolFallback(
       scenario: scenario,
@@ -5233,15 +5254,17 @@ class RouteService {
     _activeCountryPreference = scenario.isRoundTrip
         ? scenario.countryPreference
         : CountryPreference.any;
-    final double foreignFraction =
+    final CountryRouteMetrics? countryMetrics =
         (scenario.isRoundTrip &&
             scenario.homeCountryCode != null &&
             scenario.countryPreference != CountryPreference.any)
-        ? CountryRegion.foreignFraction(
+        ? CountryRegion.routeMetrics(
             coordinates: route.coordinates,
             homeCountryCode: scenario.homeCountryCode!,
           )
-        : 0.0;
+        : null;
+    final double foreignFraction =
+        countryMetrics?.effectiveForeignFraction ?? 0.0;
     final double countryPenalty =
         scenario.countryPreference == CountryPreference.any
         ? 0.0
@@ -5262,7 +5285,7 @@ class RouteService {
         scenario.isRoundTrip &&
         scenario.countryPreference == CountryPreference.onlyHome &&
         scenario.homeCountryCode != null &&
-        foreignFraction > CountryRegion.onlyHomeMaxForeignFraction;
+        (countryMetrics?.violatesOnlyHomeLimits ?? false);
     // 2026-06-10 (vucko Start-Versatz-Gate): Beginnt die gelieferte Route weiter
     // als maxAcceptedStartOffsetMeters vom angefragten Start, ist sie Müll
     // (Edge-Start-Snap-Bug, im Feld ~758 m Versatz) — HARTER Reject, der auch
@@ -5337,6 +5360,11 @@ class RouteService {
       'dominantSector=${routeDominantSector ?? '-'}, '
       'sameSectorRecent=$recentRouteSameSector/$seenRouteSameSector, '
       'tooSimilar=$tooSimilar, novelEnough=$novelEnough, '
+      'foreign=${foreignFraction.toStringAsFixed(2)}, '
+      'foreignPoint=${countryMetrics?.foreignPointFraction.toStringAsFixed(2) ?? '-'}, '
+      'foreignDist=${countryMetrics?.foreignDistanceFraction.toStringAsFixed(2) ?? '-'}, '
+      'foreignSeg=${countryMetrics?.maxForeignSegmentMeters.toStringAsFixed(0) ?? '-'}m, '
+      'countryRejected=$countryRejected, '
       'edgeTier=${edgeTier?.name ?? 'none'}, '
       'detourOk=$detourDistanceOk, deliveredDetour=$pointToPointEvaluationDetourLevel, '
       'destinationReached=$destinationReached, '
@@ -6072,18 +6100,23 @@ class RouteService {
     if (scenario.countryPreference != CountryPreference.onlyHome) return;
     final home = scenario.homeCountryCode;
     if (home == null) return;
-    final foreign = CountryRegion.foreignFraction(
+    final metrics = CountryRegion.routeMetrics(
       coordinates: route.coordinates,
       homeCountryCode: home,
     );
-    if (foreign > CountryRegion.onlyHomeMaxForeignFraction) {
-      throw const RouteServiceException(
+    if (metrics.violatesOnlyHomeLimits) {
+      throw RouteServiceException(
         type: RouteErrorType.noRoute,
         userMessage:
             'Hier ist kein Rundkurs möglich, der im Land bleibt — die Gegend '
             'grenzt direkt ans Ausland. Schalt „Im Land bleiben" aus oder wähl '
             'eine kürzere Distanz bzw. einen Start weiter im Landesinneren.',
-        debugMessage: 'finalized_round_trip_crosses_border',
+        debugMessage:
+            'finalized_round_trip_crosses_border '
+            'point=${metrics.foreignPointFraction.toStringAsFixed(3)} '
+            'distance=${metrics.foreignDistanceFraction.toStringAsFixed(3)} '
+            'maxSegmentM=${metrics.maxForeignSegmentMeters.toStringAsFixed(0)} '
+            'countries=${metrics.countriesTouched.join(',')}',
       );
     }
   }
@@ -7134,7 +7167,7 @@ class RouteService {
     // angezeigt, ohne in echten Grenzregionen alles zu blockieren.
     if (scenario.countryPreference != CountryPreference.any &&
         scenario.homeCountryCode != null) {
-      final foreignFraction = CountryRegion.foreignFraction(
+      final countryMetrics = CountryRegion.routeMetrics(
         coordinates: poolRoute.coordinates,
         homeCountryCode: scenario.homeCountryCode!,
       );
@@ -7154,11 +7187,19 @@ class RouteService {
           scenario.countryPreference == CountryPreference.onlyHome
           ? CountryRegion.onlyHomeMaxForeignFraction
           : CountryRegion.preferHomeMaxForeignFraction;
-      if (foreignFraction > maxForeign) {
+      final foreignFraction = countryMetrics.effectiveForeignFraction;
+      final countryRejected =
+          scenario.countryPreference == CountryPreference.onlyHome
+          ? countryMetrics.violatesOnlyHomeLimits
+          : foreignFraction > maxForeign;
+      if (countryRejected) {
         _debugRouteSearch(
           '[PoolFallback] poolHit=true poolUsed=false reason=country_filter '
           'poolMatchId=${match.route.id} '
           'foreignFraction=${foreignFraction.toStringAsFixed(2)} '
+          'foreignPoint=${countryMetrics.foreignPointFraction.toStringAsFixed(2)} '
+          'foreignDist=${countryMetrics.foreignDistanceFraction.toStringAsFixed(2)} '
+          'foreignSeg=${countryMetrics.maxForeignSegmentMeters.toStringAsFixed(0)}m '
           'maxForeign=$maxForeign pref=${scenario.countryPreference.name}',
         );
         return null;

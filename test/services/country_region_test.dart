@@ -57,6 +57,37 @@ void main() {
     });
   });
 
+  group('CountryRegion.routeMetrics', () {
+    test('erkennt lange sparse CH-Segmente trotz kleiner Punktquote', () {
+      final coords = <List<double>>[
+        for (var i = 0; i < 20; i++) [9.62 + i * 0.001, 47.33 + i * 0.001],
+        [9.50, 47.35], // CH
+        [9.44, 47.38], // CH
+        [9.63, 47.39], // AT
+      ];
+
+      final metrics = CountryRegion.routeMetrics(
+        coordinates: coords,
+        homeCountryCode: 'AT',
+      );
+
+      expect(
+        metrics.foreignPointFraction,
+        lessThanOrEqualTo(CountryRegion.onlyHomeMaxForeignFraction),
+      );
+      expect(
+        metrics.foreignDistanceFraction,
+        greaterThan(CountryRegion.onlyHomeMaxForeignFraction),
+      );
+      expect(
+        metrics.maxForeignSegmentMeters,
+        greaterThan(CountryRegion.onlyHomeMaxForeignSegmentMeters),
+      );
+      expect(metrics.violatesOnlyHomeLimits, isTrue);
+      expect(metrics.countriesTouched, containsAll(<String>['AT', 'CH']));
+    });
+  });
+
   group('CountryRegion.scorePenalty', () {
     test('any-Präferenz → kein Penalty', () {
       expect(

@@ -46,6 +46,7 @@ const ALLOWED_ORIGINS = '*';
 enum GeoRegion { dach = 'dach', euWest = 'eu_west', euSouth = 'eu_south', euEast = 'eu_east', unknown = 'unknown' }
 
 const ONLY_HOME_MAX_FOREIGN_FRACTION = 0.10;
+const ONLY_HOME_MAX_FOREIGN_SEGMENT_METERS = 500;
 
 function classifyPoint(lat: number, lng: number): GeoRegion {
   // 2026-05-27 (vucko v2): Explicit-First-Order mit Alpen-Trennlinie bei
@@ -122,34 +123,77 @@ function normalizeCountryCode(value: unknown): string | null {
   return raw.length > 0 ? raw : null;
 }
 
-function countryForeignFraction(coords: [number, number][], homeCountryCode: string | null): number {
-  if (!homeCountryCode || coords.length === 0) return 0;
+type CountryRouteMetrics = {
+  foreignPointFraction: number;
+  foreignDistanceFraction: number;
+  maxForeignSegmentMeters: number;
+  foreignDistanceMeters: number;
+  totalDistanceMeters: number;
+  countriesTouched: string[];
+};
+
+function countryRouteMetrics(coords: [number, number][], homeCountryCode: string | null): CountryRouteMetrics {
+  const home = homeCountryCode ? homeCountryCode.toUpperCase() : null;
+  const seen = new Set<string>();
   let classified = 0;
-  let foreign = 0;
-  const home = homeCountryCode.toUpperCase();
+  let foreignPoints = 0;
+  let foreignDistanceMeters = 0;
+  let totalDistanceMeters = 0;
+  let activeForeignMeters = 0;
+  let maxForeignSegmentMeters = 0;
+  let previous: [number, number] | null = null;
+  let previousCountry: string | null = null;
   for (const [lng, lat] of coords) {
     const country = classifyCountry(lat, lng);
-    if (!country) continue;
-    classified++;
-    if (country !== home) foreign++;
+    if (country) {
+      seen.add(country);
+      if (home) {
+        classified++;
+        if (country !== home) foreignPoints++;
+      }
+    }
+    if (previous) {
+      const [prevLng, prevLat] = previous;
+      const segmentMeters = distanceMeters(prevLat, prevLng, lat, lng);
+      if (Number.isFinite(segmentMeters) && segmentMeters > 0) {
+        totalDistanceMeters += segmentMeters;
+        const midCountry = classifyCountry((prevLat + lat) / 2, (prevLng + lng) / 2);
+        if (midCountry) seen.add(midCountry);
+        const endpointsForeign = Boolean(home && previousCountry && country && previousCountry !== home && country !== home);
+        const midpointForeign = Boolean(home && midCountry && midCountry !== home);
+        if (endpointsForeign || midpointForeign) {
+          foreignDistanceMeters += segmentMeters;
+          activeForeignMeters += segmentMeters;
+          maxForeignSegmentMeters = Math.max(maxForeignSegmentMeters, activeForeignMeters);
+        } else {
+          activeForeignMeters = 0;
+        }
+      }
+    }
+    previous = [lng, lat];
+    previousCountry = country;
   }
-  return classified === 0 ? 0 : foreign / classified;
+  const countriesTouchedList = [...seen].sort((a, b) => {
+    if (home && a === home) return -1;
+    if (home && b === home) return 1;
+    return a.localeCompare(b);
+  });
+  return {
+    foreignPointFraction: classified === 0 ? 0 : foreignPoints / classified,
+    foreignDistanceFraction: totalDistanceMeters <= 0 ? 0 : foreignDistanceMeters / totalDistanceMeters,
+    maxForeignSegmentMeters,
+    foreignDistanceMeters,
+    totalDistanceMeters,
+    countriesTouched: countriesTouchedList,
+  };
+}
+
+function countryForeignFraction(coords: [number, number][], homeCountryCode: string | null): number {
+  return countryRouteMetrics(coords, homeCountryCode).foreignPointFraction;
 }
 
 function countriesTouched(coords: [number, number][], homeCountryCode: string | null): string[] {
-  const seen = new Set<string>();
-  for (const [lng, lat] of coords) {
-    const country = classifyCountry(lat, lng);
-    if (country) seen.add(country);
-  }
-  const list = [...seen];
-  if (homeCountryCode) {
-    const home = homeCountryCode.toUpperCase();
-    list.sort((a, b) => a === home ? -1 : b === home ? 1 : a.localeCompare(b));
-  } else {
-    list.sort();
-  }
-  return list;
+  return countryRouteMetrics(coords, homeCountryCode).countriesTouched;
 }
 
 function countryPenalty(foreignFraction: number, preference: 'any' | 'prefer_home' | 'only_home'): number {
@@ -1081,11 +1125,15 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
         // mit Motorway ist niemals akzeptabel wenn avoid_highways gesetzt ist.
         if ((req.avoid_highways ?? false) && r.meta.uses_motorway === true) return false;
         if (strictInland) {
-          const foreign = countryForeignFraction(
+          const country = countryRouteMetrics(
             r.geometry.coordinates as [number, number][],
             homeCountryCode,
           );
-          if (foreign > ONLY_HOME_MAX_FOREIGN_FRACTION) return false;
+          if (
+            country.foreignPointFraction > ONLY_HOME_MAX_FOREIGN_FRACTION ||
+            country.foreignDistanceFraction > ONLY_HOME_MAX_FOREIGN_FRACTION ||
+            country.maxForeignSegmentMeters > ONLY_HOME_MAX_FOREIGN_SEGMENT_METERS
+          ) return false;
         }
         // 2026-06-03 (vucko): Racer schließt NUR auf einer 0-U-Turn-Route kurz
         // (die ideale). Gibt es keine, sammelt er alle und das nicht-lineare
@@ -1853,16 +1901,23 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
         : uTurns === 1
         ? 14
         : 250 + (uTurns - 2) * 120;
-    const foreignFraction = countryForeignFraction(
+    const country = countryRouteMetrics(
       c.result.geometry.coordinates as [number, number][],
       homeCountryCode,
     );
+    const foreignFraction = Math.max(country.foreignPointFraction, country.foreignDistanceFraction);
     const countryRejected =
-      strictInland && foreignFraction > ONLY_HOME_MAX_FOREIGN_FRACTION;
+      strictInland &&
+      (country.foreignPointFraction > ONLY_HOME_MAX_FOREIGN_FRACTION ||
+        country.foreignDistanceFraction > ONLY_HOME_MAX_FOREIGN_FRACTION ||
+        country.maxForeignSegmentMeters > ONLY_HOME_MAX_FOREIGN_SEGMENT_METERS);
     const countryScorePenalty = countryPenalty(foreignFraction, countryPreference);
     return {
       ...c, turns, turnsPerKm, stylePenalty, speedPenalty, avgSpeedKmh,
       isUnreasonablySlow, foreignFraction, countryRejected, countryScorePenalty,
+      foreignPointFraction: country.foreignPointFraction,
+      foreignDistanceFraction: country.foreignDistanceFraction,
+      maxForeignSegmentMeters: country.maxForeignSegmentMeters,
       score: c.deltaPct + stylePenalty + speedPenalty + highwayPenalty +
         uTurnPenalty + countryScorePenalty + (countryRejected ? 10000 : 0),
     };
@@ -1885,6 +1940,8 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
         candidate_count: scored.length,
         country_rejected_count: scored.filter(c => c.countryRejected).length,
         min_foreign_fraction: Number(Math.min(...scored.map(c => c.foreignFraction)).toFixed(3)),
+        min_foreign_distance_fraction: Number(Math.min(...scored.map(c => c.foreignDistanceFraction)).toFixed(3)),
+        min_max_foreign_segment_meters: Math.round(Math.min(...scored.map(c => c.maxForeignSegmentMeters))),
       },
     }, 422);
   }
@@ -2053,21 +2110,30 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
       }
     }
     const finalCoords = bestCandidate.geometry.coordinates as [number, number][];
-    const finalForeignFraction = countryForeignFraction(finalCoords, homeCountryCode);
-    const finalCountriesTouched = countriesTouched(finalCoords, homeCountryCode);
-    if (strictInland && finalForeignFraction > ONLY_HOME_MAX_FOREIGN_FRACTION) {
+    const finalCountry = countryRouteMetrics(finalCoords, homeCountryCode);
+    const finalForeignFraction = Math.max(finalCountry.foreignPointFraction, finalCountry.foreignDistanceFraction);
+    const finalCountriesTouched = finalCountry.countriesTouched;
+    const finalCountryRejected =
+      strictInland &&
+      (finalCountry.foreignPointFraction > ONLY_HOME_MAX_FOREIGN_FRACTION ||
+        finalCountry.foreignDistanceFraction > ONLY_HOME_MAX_FOREIGN_FRACTION ||
+        finalCountry.maxForeignSegmentMeters > ONLY_HOME_MAX_FOREIGN_SEGMENT_METERS);
+    if (finalCountryRejected) {
       return jsonResponse({
         error: 'no_inland_route',
         user_message:
           'Hier ist kein Rundkurs möglich, der im Land bleibt. Schalt „Im Land bleiben" aus oder wähl eine kürzere Distanz bzw. einen Start weiter im Landesinneren.',
         debug_message:
-          `selected_candidate_crossed_border foreign=${finalForeignFraction.toFixed(3)} home=${homeCountryCode}`,
+          `selected_candidate_crossed_border foreign=${finalForeignFraction.toFixed(3)} foreign_distance=${finalCountry.foreignDistanceFraction.toFixed(3)} max_segment_m=${Math.round(finalCountry.maxForeignSegmentMeters)} home=${homeCountryCode}`,
         meta: {
           response_code: 'no_inland_route',
           country_preference: countryPreference,
           home_country_code: homeCountryCode,
           avoid_cross_border: true,
           foreign_fraction: Number(finalForeignFraction.toFixed(3)),
+          foreign_point_fraction: Number(finalCountry.foreignPointFraction.toFixed(3)),
+          foreign_distance_fraction: Number(finalCountry.foreignDistanceFraction.toFixed(3)),
+          max_foreign_segment_meters: Math.round(finalCountry.maxForeignSegmentMeters),
           countries_touched: finalCountriesTouched,
         },
       }, 422);
@@ -2122,6 +2188,9 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
         home_country_code: homeCountryCode,
         avoid_cross_border: strictInland,
         foreign_fraction: Number(finalForeignFraction.toFixed(3)),
+        foreign_point_fraction: Number(finalCountry.foreignPointFraction.toFixed(3)),
+        foreign_distance_fraction: Number(finalCountry.foreignDistanceFraction.toFixed(3)),
+        max_foreign_segment_meters: Math.round(finalCountry.maxForeignSegmentMeters),
         countries_touched: finalCountriesTouched,
         country_rejected_count: scored.filter(c => c.countryRejected).length,
         country_penalty: Number((selectedScored?.countryScorePenalty ?? 0).toFixed(1)),
