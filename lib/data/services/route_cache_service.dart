@@ -160,6 +160,7 @@ class RouteCacheService {
               'icon_name': _iconName(maneuver.icon),
               'maneuver_type': maneuver.maneuverType.name,
               'roundabout_exit_number': maneuver.roundaboutExitNumber,
+              'roundabout_turn_angle': maneuver.roundaboutTurnAngleRad,
             },
           )
           .toList(growable: false),
@@ -236,6 +237,8 @@ class RouteCacheService {
             maneuverType: maneuverType,
             roundaboutExitNumber: (map['roundabout_exit_number'] as num?)
                 ?.toInt(),
+            roundaboutTurnAngleRad: (map['roundabout_turn_angle'] as num?)
+                ?.toDouble(),
           );
         })
         .toList(growable: false);

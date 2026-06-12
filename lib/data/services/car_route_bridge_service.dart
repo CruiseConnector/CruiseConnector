@@ -249,6 +249,7 @@ class CarRouteBridgeService {
       'maneuverType': maneuver.maneuverType.name,
       'kind': maneuverKindFromIcon(maneuver.icon),
       'roundaboutExitNumber': maneuver.roundaboutExitNumber,
+      'roundaboutTurnAngle': maneuver.roundaboutTurnAngleRad,
     };
   }
 

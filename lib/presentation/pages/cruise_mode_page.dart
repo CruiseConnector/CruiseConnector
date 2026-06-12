@@ -8925,6 +8925,7 @@ class _CruiseModePageState extends State<CruiseModePage>
             instruction: m.instruction,
             maneuverType: m.maneuverType,
             roundaboutExitNumber: m.roundaboutExitNumber,
+            roundaboutTurnAngleRad: m.roundaboutTurnAngleRad,
           ),
         );
       }
@@ -11948,6 +11949,7 @@ class _CruiseModePageState extends State<CruiseModePage>
                     instruction: m.instruction,
                     maneuverType: m.maneuverType,
                     roundaboutExitNumber: m.roundaboutExitNumber,
+                    roundaboutTurnAngleRad: m.roundaboutTurnAngleRad,
                   ),
             ];
             final dist = _calculatePolylineDistanceMeters(mergedCoords);
@@ -12076,6 +12078,7 @@ class _CruiseModePageState extends State<CruiseModePage>
                 instruction: m.instruction,
                 maneuverType: m.maneuverType,
                 roundaboutExitNumber: m.roundaboutExitNumber,
+                roundaboutTurnAngleRad: m.roundaboutTurnAngleRad,
               ),
             )
             .toList();
@@ -12118,6 +12121,7 @@ class _CruiseModePageState extends State<CruiseModePage>
                 instruction: m.instruction,
                 maneuverType: m.maneuverType,
                 roundaboutExitNumber: m.roundaboutExitNumber,
+                roundaboutTurnAngleRad: m.roundaboutTurnAngleRad,
               ),
             )
             .toList();

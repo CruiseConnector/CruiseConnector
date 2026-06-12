@@ -85,8 +85,10 @@ void main() {
     );
 
     expect(projected, isNotNull);
-    expect(projected!.distanceM, closeTo(before, 0.01));
-    expect(lock.distanceM, closeTo(before, 0.01));
+    // Monotonie heisst: nie rueckwaerts. Der Glide darf zum (eingefrorenen)
+    // Ziel weiterlaufen, deshalb >= statt exakt.
+    expect(projected!.distanceM, greaterThanOrEqualTo(before - 0.01));
+    expect(lock.distanceM, greaterThanOrEqualTo(before - 0.01));
   });
 
   test('rejects off-route outliers without moving the lock', () {
@@ -105,7 +107,7 @@ void main() {
     expect(initial, isNotNull);
     final before = lock.distanceM;
 
-    final outlier = pointAt(150, lateralMeters: 45.0);
+    final outlier = pointAt(150, lateralMeters: 70.0);
     final rejected = lock.project(
       coordinates: route,
       latitude: outlier[1],
@@ -136,7 +138,7 @@ void main() {
     expect(initial, isNotNull);
     final before = lock.distanceM;
 
-    final outlier = pointAt(150, lateralMeters: 45.0);
+    final outlier = pointAt(150, lateralMeters: 70.0);
     final rejected = lock.project(
       coordinates: route,
       latitude: outlier[1],
@@ -486,6 +488,66 @@ void main() {
       after!.distanceM,
       lessThan(2.0),
       reason: 'in-place reroute/restore must not keep stale render progress',
+    );
+  });
+
+  test('1 Hz stop-and-go fixes at 50 km/h render as smooth monotonic motion', () {
+    // Geraete-Video 2026-06-12: 1Hz-GPS + 60fps-Kamera-Frames. Zwischen den
+    // Fixen bewegt sich das Projektions-ZIEL kaum (Predict schreibt den
+    // letzten Fix nur leicht fort), beim naechsten Fix springt es ~10m vor —
+    // das ist das "rast kurz, steht dann"-Muster vom Geraet. Der Glide muss
+    // daraus STRENG monotone, gleichmaessige Bewegung machen: kein Frame
+    // rueckwaerts/stehend, und kein Frame-Schritt groesser als das 2,5-fache
+    // des Median-Schritts (= kein Rast-und-Steh mehr).
+    final route = <List<double>>[
+      for (var m = 0.0; m <= 200.0; m += 10.0) pointAt(m),
+    ];
+    final lock = RouteRenderLock();
+    const speedMps = 50 / 3.6;
+    final startTime = DateTime.utc(2026, 6, 11, 12);
+
+    final steps = <double>[];
+    double? lastRender;
+    for (var frame = 0; frame <= 312; frame++) {
+      final tMs = frame * 16;
+      final tSec = tMs / 1000.0;
+      final fixSec = tSec.floorToDouble();
+      final fixDist = speedMps * fixSec;
+      // Predict-artig leicht fortgeschrieben: gleicher Fix-Punkt + 30% der
+      // seither real gefahrenen Strecke (unter-praediziert wie echte
+      // Kalman-Prediction ohne frische Messung).
+      final inputDist = fixDist + speedMps * (tSec - fixSec) * 0.3;
+      final p = pointAt(inputDist);
+      final projected = lock.project(
+        coordinates: route,
+        latitude: p[1],
+        longitude: p[0],
+        routeConfirmed: true,
+        currentRouteIndex: (fixDist / 10.0).floor(),
+        speedMps: speedMps,
+        timestamp: startTime.add(Duration(milliseconds: tMs)),
+      );
+      expect(projected, isNotNull);
+      final render = projected!.distanceM;
+      if (lastRender != null) {
+        steps.add(render - lastRender);
+      }
+      lastRender = render;
+    }
+
+    expect(steps.length, 312);
+    // Streng monoton: jeder einzelne Frame bewegt den Puck vorwaerts.
+    for (final step in steps) {
+      expect(step, greaterThan(0.0), reason: 'kein Frame darf stehen bleiben');
+    }
+    final sorted = [...steps]..sort();
+    final median = sorted[sorted.length ~/ 2];
+    expect(
+      sorted.last,
+      lessThanOrEqualTo(median * 2.5),
+      reason: 'kein Rast-und-Steh: Schrittweite bleibt gleichmaessig '
+          '(max ${sorted.last.toStringAsFixed(3)}m vs '
+          'median ${median.toStringAsFixed(3)}m)',
     );
   });
 

@@ -3410,6 +3410,7 @@ class RouteService {
       instruction: maneuver.instruction,
       maneuverType: maneuver.maneuverType,
       roundaboutExitNumber: maneuver.roundaboutExitNumber,
+      roundaboutTurnAngleRad: maneuver.roundaboutTurnAngleRad,
     );
   }
 
@@ -9121,6 +9122,11 @@ class RouteService {
       final exitNumber = isRoundabout
           ? (ins['exit_number'] as num?)?.toInt()
           : null;
+      // GH liefert bei Kreisverkehren den echten Austritts-Winkel (Radiant):
+      // 0 = geradeaus durch, positiv = rechts raus, negativ = links raus.
+      final turnAngleRad = isRoundabout
+          ? (ins['turn_angle'] as num?)?.toDouble()
+          : null;
       final instruction = sign == 4
           ? 'Ziel erreicht.'
           : (text.isNotEmpty
@@ -9138,6 +9144,7 @@ class RouteService {
               ? ManeuverType.roundabout
               : ManeuverType.normal,
           roundaboutExitNumber: exitNumber,
+          roundaboutTurnAngleRad: turnAngleRad,
         ),
       );
     }

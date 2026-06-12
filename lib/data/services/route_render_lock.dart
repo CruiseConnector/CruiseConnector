@@ -70,27 +70,53 @@ class _ProjectionSearchResult {
 /// puck/line sync on real 1 Hz GPS.
 class RouteRenderLock {
   RouteRenderLock({
-    this.lateralMaxMeters = 30.0,
+    this.lateralMaxMeters = 35.0,
+    this.lateralReleaseMeters = 60.0,
     this.behindWindowMeters = 90.0,
     this.minAheadWindowMeters = 220.0,
     this.maxAheadWindowMeters = 520.0,
   });
 
   final double lateralMaxMeters;
+
+  /// 2026-06-12 (vucko Geraete-Video Autobahn): Hysterese. GPS driftet auf
+  /// Autobahnen 15-30m lateral (+ Parallelfahrbahn) — ein einzelnes hartes
+  /// Gate liess den Lock dort staendig abreissen: der Puck sprang sichtbar
+  /// zwischen "auf der Linie" und "frei daneben". Akquise bleibt streng
+  /// ([lateralMaxMeters]); ein BESTEHENDER Lock haelt bis zu diesem Wert.
+  final double lateralReleaseMeters;
   final double behindWindowMeters;
   final double minAheadWindowMeters;
   final double maxAheadWindowMeters;
+
+  /// Max. Render-Geschwindigkeit im Schnell-Aufhol-Modus (m/s). Deckelt das
+  /// exponentielle Aufholen, damit ein grosser validierter Re-Anchor pro
+  /// 60fps-Frame nur ~7m fliegt (animiert) statt in einem Frame zu
+  /// teleportieren.
+  static const double _catchUpMaxMps = 450.0;
 
   List<List<double>>? _coordinates;
   List<double>? _cumulativeDistances;
   String _routeSignature = '';
   int _segmentIndex = 0;
   double _distanceM = -1.0;
+  // 2026-06-12 (vucko Geraete-Video Stop-and-Go): Glide-Distanz. Das
+  // Projektions-ZIEL springt am echten 1Hz-GPS pro Fix (Kalman-Retarget) —
+  // direkt gerendert ergibt das "rast kurz, steht dann" im Sekundentakt.
+  // Google-Architektur: die RENDER-Distanz gleitet pro Frame mit
+  // kontinuierlicher Geschwindigkeit aufs Ziel zu; Aufholfehler wird ueber
+  // ~1,2s abgebaut, leichtes Vorauslaufen (max ~0,5s Fahrweg) statt
+  // Stehenbleiben am Ziel, nie rueckwaerts.
+  double _renderDistM = -1.0;
+  bool _catchingUp = false;
   DateTime? _lastProjectionAt;
 
   List<double>? get cumulativeDistances => _cumulativeDistances;
   int get segmentIndex => _segmentIndex;
-  double get distanceM => _distanceM;
+
+  /// Distanz, an der GERENDERT wird (Puck, Kamera, Linien-Schnitt) — die
+  /// geglättete Glide-Distanz, nicht das rohe Projektions-Ziel.
+  double get distanceM => _renderDistM;
 
   bool ensureRoute(List<List<double>> coordinates) {
     final signature = _routeSignatureFor(coordinates);
@@ -146,6 +172,8 @@ class RouteRenderLock {
   void resetLock() {
     _segmentIndex = 0;
     _distanceM = -1.0;
+    _renderDistM = -1.0;
+    _catchingUp = false;
     _lastProjectionAt = null;
   }
 
@@ -219,7 +247,9 @@ class RouteRenderLock {
     var bestDistanceM = best.distanceM;
     var bestSegment = best.segment;
     final lateralMeters = best.lateralMeters;
-    if (bestSegment < 0 || lateralMeters > lateralMaxMeters) {
+    // Hysterese: Akquise streng, Halten grosszuegig (Autobahn-GPS-Drift).
+    final lateralGate = hasLock ? lateralReleaseMeters : lateralMaxMeters;
+    if (bestSegment < 0 || lateralMeters > lateralGate) {
       return null;
     }
 
@@ -227,21 +257,35 @@ class RouteRenderLock {
       bestDistanceM = previousDistanceM;
       bestSegment = previousSegmentIndex;
     }
-    if (hasLock && timestamp != null && _lastProjectionAt != null) {
-      final dtSeconds = math
+    final speed = speedMps.isFinite ? speedMps.clamp(0.0, 60.0) : 0.0;
+    // Anti-Teleport fuer das Projektions-ZIEL. Ein Vorwaertssprung gilt als
+    // VALIDIERT, wenn der externe Matcher (currentRouteIndex) die neue
+    // Position bereits bestaetigt hat — dann darf das Ziel springen, die
+    // sichtbare Glaettung uebernimmt der Glide unten (Aufholen in ~0,5s,
+    // rate-gedeckelt). UNVALIDIERTE Spruenge (z.B. Quersprung auf ein nahes
+    // Zukunfts-Leg am Hairpin, waehrend der Matcher noch auf dem Hinweg
+    // steht) werden ZEITBASIERT gedeckelt: max. speed*2.2 + 3 m/s.
+    // 2026-06-12: frueher "+2.0m PRO AUFRUF" — bei 60fps entsprach das
+    // 120 m/s Drift-Budget, bei 1Hz nur 2 m/s: frameraten-abhaengig und
+    // damit gleichzeitig zu lasch (Frames) und zu streng (Fixe).
+    final corroboratedIdx = (currentRouteIndex + 1)
+        .clamp(0, cumulative.length - 1)
+        .toInt();
+    final indexCorroborated =
+        bestDistanceM <= cumulative[corroboratedIdx] + 1.0;
+    if (!indexCorroborated &&
+        hasLock &&
+        timestamp != null &&
+        _lastProjectionAt != null) {
+      final clampDtSeconds = math
           .max(
             0.0,
             timestamp.difference(_lastProjectionAt!).inMilliseconds / 1000.0,
           )
           .clamp(0.0, 2.0)
           .toDouble();
-      final speed = speedMps.isFinite ? speedMps.clamp(0.0, 60.0) : 0.0;
-      // Prevent visual teleports onto nearby future route legs. Real movement is
-      // still followed continuously because this method is called per camera
-      // frame. A real GPS pause gets up to two seconds of speed-scaled catch-up;
-      // a normal 16ms frame is limited to a few meters, not a route-index jump.
       final maxForwardDistance =
-          previousDistanceM + 2.0 + speed * dtSeconds * 2.2;
+          previousDistanceM + (speed * 2.2 + 3.0) * clampDtSeconds;
       if (bestDistanceM > maxForwardDistance) {
         bestDistanceM = maxForwardDistance;
         bestSegment = _segmentIndexForDistance(bestDistanceM);
@@ -250,17 +294,72 @@ class RouteRenderLock {
 
     _segmentIndex = bestSegment;
     _distanceM = bestDistanceM;
+
+    // Glide: Render-Distanz pro Frame mit kontinuierlicher Geschwindigkeit
+    // Richtung Ziel bewegen. v = Fahrgeschwindigkeit + Aufholterm (Fehler
+    // ueber ~1,2s abbauen), gedeckelt auf das 1,6-fache (+8 m/s Reserve fuer
+    // Stand-Anfahrt). Leichtes Vorauslaufen bis ~0,5s Fahrweg ist erlaubt
+    // (kein sichtbarer Stopp am Ziel zwischen zwei Fixes), rueckwaerts nie.
+    var dtSeconds = 1.0 / 60.0;
+    var rawGapSeconds = dtSeconds;
+    var hasFrameTiming = false;
+    if (timestamp != null && _lastProjectionAt != null) {
+      hasFrameTiming = true;
+      rawGapSeconds =
+          timestamp.difference(_lastProjectionAt!).inMilliseconds / 1000.0;
+      dtSeconds = rawGapSeconds.clamp(0.0, 0.5).toDouble();
+    }
+    if (_renderDistM < 0) {
+      _renderDistM = bestDistanceM;
+    } else {
+      final err = bestDistanceM - _renderDistM;
+      // Frame-Kette = die Projektion laeuft kontinuierlich (Timing bekannt,
+      // Abstand <=0,3s, also Kamera-Frames). Nur OHNE Frame-Kette war kein
+      // Gleiten sichtbar — dann ist Direkt-Aufschliessen unsichtbar/richtig.
+      final hasFrameChain = hasFrameTiming && rawGapSeconds <= 0.3;
+      if (rawGapSeconds > 1.0 || (err.abs() > 80.0 && !hasFrameChain)) {
+        // Echte Projektions-Luecke (>1s ohne Frames, z.B. App-Resume/GPS-
+        // Aussetzer) oder grosser Sprung ohne Frame-Kette: direkt
+        // aufschliessen — es gab keine Zwischenframes.
+        _renderDistM = bestDistanceM;
+        _catchingUp = false;
+      } else if (_catchingUp || err > speed * 1.5 + 10.0) {
+        // Re-Anchor-/Match-KORREKTUR (kein physischer Fahrweg): zuegig
+        // exponentiell aufschliessen (~0,5s sichtbar), nicht sekundenlang
+        // hinterhergleiten. Eigene Hysterese: einmal im Aufhol-Modus, bleibe
+        // bis der Fehler wirklich klein ist (sonst bremst der sanfte Zweig
+        // das Aufholen auf halber Strecke aus).
+        _catchingUp = err > 5.0;
+        if (_catchingUp) {
+          final blend = 1.0 - math.exp(-dtSeconds / 0.12);
+          // Rate-Deckel: auch ein validierter Riesen-Re-Anchor (z.B. 800m)
+          // fliegt pro Frame nur begrenzt (~7m bei 60fps) — sichtbar
+          // animiert statt Ein-Frame-Teleport. Typische Korrekturen
+          // (<=80m) schliessen weiterhin in ~0,5s.
+          _renderDistM += math.min(err * blend, _catchUpMaxMps * dtSeconds);
+        } else {
+          _renderDistM = bestDistanceM;
+        }
+      } else {
+        final v = (speed + err / 1.2).clamp(0.0, speed * 1.6 + 8.0);
+        final advanced = _renderDistM + v * dtSeconds;
+        final ceiling = math.max(bestDistanceM + speed * 0.5, _renderDistM);
+        _renderDistM = math.min(advanced, ceiling);
+      }
+    }
+
     if (timestamp != null &&
         (_lastProjectionAt == null ||
             !timestamp.isBefore(_lastProjectionAt!))) {
       _lastProjectionAt = timestamp;
     }
-    final point = pointAtDistance(bestDistanceM);
+    final renderSegment = _segmentIndexForDistance(_renderDistM);
+    final point = pointAtDistance(_renderDistM);
     if (point == null) return null;
 
     return RouteRenderLockProjection(
-      distanceM: bestDistanceM,
-      segmentIndex: bestSegment,
+      distanceM: _renderDistM,
+      segmentIndex: renderSegment,
       lateralMeters: lateralMeters,
       point: point,
     );

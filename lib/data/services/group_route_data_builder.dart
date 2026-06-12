@@ -78,6 +78,8 @@ class GroupRouteDataBuilder {
               'maneuver_type': maneuver.maneuverType.name,
               if (maneuver.roundaboutExitNumber != null)
                 'roundabout_exit_number': maneuver.roundaboutExitNumber,
+              if (maneuver.roundaboutTurnAngleRad != null)
+                'roundabout_turn_angle': maneuver.roundaboutTurnAngleRad,
             },
           )
           .toList(growable: false),
@@ -122,6 +124,8 @@ class GroupRouteDataBuilder {
               'maneuver_type': maneuver.maneuverType.name,
               if (maneuver.roundaboutExitNumber != null)
                 'roundabout_exit_number': maneuver.roundaboutExitNumber,
+              if (maneuver.roundaboutTurnAngleRad != null)
+                'roundabout_turn_angle': maneuver.roundaboutTurnAngleRad,
             },
           )
           .toList(growable: false)
@@ -225,6 +229,8 @@ class GroupRouteDataBuilder {
             maneuverType: maneuverType,
             roundaboutExitNumber: (map['roundabout_exit_number'] as num?)
                 ?.toInt(),
+            roundaboutTurnAngleRad: (map['roundabout_turn_angle'] as num?)
+                ?.toDouble(),
           );
         })
         .toList(growable: false);

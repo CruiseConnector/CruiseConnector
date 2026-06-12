@@ -5,6 +5,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:cruise_connect/data/services/route_service.dart';
+import 'package:cruise_connect/domain/models/route_maneuver.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/cruise_maneuver_indicator.dart';
 
 void main() {
@@ -39,6 +40,81 @@ void main() {
         roundaboutExitAngleForRightHandTraffic(3),
         closeTo(-math.pi, 0.001),
       );
+    });
+
+    test('GH turn_angle → Screen-Winkel: 0=oben, +π/2=rechts, -π/2=links', () {
+      // 0 = geradeaus durch den Kreisverkehr → Austritt oben (-π/2 y-down).
+      expect(
+        roundaboutExitAngleFromTurnAngle(0),
+        closeTo(-math.pi / 2, 0.001),
+      );
+      // +π/2 = rechts raus → Screen-Osten (0 rad).
+      expect(roundaboutExitAngleFromTurnAngle(math.pi / 2), closeTo(0, 0.001));
+      // -π/2 = links raus → Screen-Westen (±π).
+      expect(
+        roundaboutExitAngleFromTurnAngle(-math.pi / 2).abs(),
+        closeTo(math.pi, 0.001),
+      );
+    });
+
+    test('GraphHopper-Instruction: turn_angle landet im Manöver', () {
+      final coords = [
+        [9.480, 47.660],
+        [9.481, 47.661],
+        [9.482, 47.662],
+        [9.483, 47.663],
+      ];
+      final response = {
+        'route': {
+          'instructions': [
+            {
+              'sign': 6,
+              'exit_number': 2,
+              'turn_angle': -1.57,
+              'text': 'Im Kreisverkehr die zweite Ausfahrt nehmen',
+              'interval': [1, 2],
+            },
+            {
+              'sign': 4,
+              'text': 'Ziel erreicht',
+              'interval': [3, 3],
+            },
+          ],
+        },
+      };
+      final maneuvers = service.extractManeuvers(response, coords);
+      expect(maneuvers, hasLength(2));
+      final roundabout = maneuvers.first;
+      expect(roundabout.maneuverType, ManeuverType.roundabout);
+      expect(roundabout.roundaboutExitNumber, 2);
+      expect(roundabout.roundaboutTurnAngleRad, isNotNull);
+      expect(roundabout.roundaboutTurnAngleRad!, closeTo(-1.57, 0.001));
+      // Ziel-Manöver (kein Kreisverkehr) → kein turn_angle.
+      expect(maneuvers.last.roundaboutTurnAngleRad, isNull);
+    });
+
+    test('GraphHopper-Instruction ohne turn_angle → null (Fallback)', () {
+      final coords = [
+        [9.480, 47.660],
+        [9.481, 47.661],
+        [9.482, 47.662],
+      ];
+      final response = {
+        'route': {
+          'instructions': [
+            {
+              'sign': 6,
+              'exit_number': 3,
+              'text': 'Im Kreisverkehr die dritte Ausfahrt nehmen',
+              'interval': [1, 2],
+            },
+          ],
+        },
+      };
+      final maneuvers = service.extractManeuvers(response, coords);
+      expect(maneuvers, hasLength(1));
+      expect(maneuvers.first.roundaboutExitNumber, 3);
+      expect(maneuvers.first.roundaboutTurnAngleRad, isNull);
     });
   });
 

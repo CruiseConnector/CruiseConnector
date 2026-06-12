@@ -14,6 +14,7 @@ class RouteManeuver {
     required this.instruction,
     this.maneuverType = ManeuverType.normal,
     this.roundaboutExitNumber,
+    this.roundaboutTurnAngleRad,
   });
 
   final double latitude;
@@ -25,6 +26,12 @@ class RouteManeuver {
   final ManeuverType maneuverType;
   final int?
   roundaboutExitNumber; // Welche Ausfahrt im Kreisverkehr (1, 2, 3...)
+
+  /// Echter Ausfahrts-Winkel aus GraphHopper `turn_angle` (Radiant).
+  /// 0 = geradeaus durch den Kreisverkehr, positiv = rechts raus,
+  /// negativ = links raus (Rechtsverkehr/CCW). null beim Mapbox-Pfad →
+  /// Painter fällt auf die synthetische Gleichverteilung zurück.
+  final double? roundaboutTurnAngleRad;
 
   bool get isArrival => icon == Icons.flag;
 }

@@ -67,6 +67,7 @@ class CruiseManeuverIndicator extends StatelessWidget {
               child: CustomPaint(
                 painter: _RoundaboutPainter(
                   exitNumber: maneuver.roundaboutExitNumber ?? 1,
+                  turnAngleRad: maneuver.roundaboutTurnAngleRad,
                 ),
               ),
             )
@@ -133,10 +134,17 @@ class CruiseManeuverIndicator extends StatelessWidget {
 /// - Im Kreis fährt man CCW visuell (= negative sweep in Flutter).
 /// - Exit 1 = rechts (0 rad), Exit 2 = geradeaus, Exit 3 = links —
 ///   gegeben durch [roundaboutExitAngleForRightHandTraffic].
+/// - Ist [turnAngleRad] gesetzt (GraphHopper `turn_angle`), wird der ECHTE
+///   Austritts-Winkel gezeichnet statt der synthetischen Gleichverteilung —
+///   siehe [roundaboutExitAngleFromTurnAngle].
 class _RoundaboutPainter extends CustomPainter {
-  _RoundaboutPainter({required this.exitNumber});
+  _RoundaboutPainter({required this.exitNumber, this.turnAngleRad});
 
   final int exitNumber;
+
+  /// Echter GH-Austritts-Winkel (Radiant, 0 = geradeaus, + = rechts, − = links).
+  /// null → Fallback auf Gleichverteilung (Mapbox-Pfad).
+  final double? turnAngleRad;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -172,11 +180,16 @@ class _RoundaboutPainter extends CustomPainter {
 
     // 3. Aktiver Fahrweg: vom Einfahrtspunkt (π/2) CCW zur aktiven Ausfahrt.
     //    Wird ÜBER den Drehrichtungs-Arc gezeichnet, voller Accent.
+    //    Mit echtem GH turn_angle wird der reale Austritts-Winkel gezeichnet,
+    //    sonst (Mapbox) synthetische Gleichverteilung nach Exit-Nummer.
     final totalExits = math.max(4, exitNumber.clamp(1, 6).toInt());
-    final activeExitAngle = roundaboutExitAngleForRightHandTraffic(
-      exitNumber,
-      totalExits: totalExits,
-    );
+    final realTurnAngle = turnAngleRad;
+    final activeExitAngle = realTurnAngle != null
+        ? roundaboutExitAngleFromTurnAngle(realTurnAngle)
+        : roundaboutExitAngleForRightHandTraffic(
+            exitNumber,
+            totalExits: totalExits,
+          );
     var activeSweep = activeExitAngle - math.pi / 2;
     while (activeSweep > 0) {
       activeSweep -= 2 * math.pi;
@@ -200,11 +213,20 @@ class _RoundaboutPainter extends CustomPainter {
     }
 
     // 4. Ausfahrt-Stubs: inaktive dünn-weiß, aktive accent + Pfeilspitze.
+    //    Aktiver Stub sitzt am echten Winkel (falls vorhanden); inaktive Stubs
+    //    die dem echten Winkel zu nahe kommen werden ausgelassen, damit kein
+    //    weißer Stub unter dem Accent-Pfeil hervorlugt.
     for (var i = 1; i <= totalExits; i++) {
-      final angle = roundaboutExitAngleForRightHandTraffic(
-        i,
-        totalExits: totalExits,
-      );
+      final isActive = i == exitNumber;
+      final angle = isActive
+          ? activeExitAngle
+          : roundaboutExitAngleForRightHandTraffic(i, totalExits: totalExits);
+      if (!isActive && realTurnAngle != null) {
+        var delta = (angle - activeExitAngle) % (2 * math.pi);
+        if (delta > math.pi) delta -= 2 * math.pi;
+        if (delta < -math.pi) delta += 2 * math.pi;
+        if (delta.abs() < 0.45) continue;
+      }
       final exitOffset = Offset(
         center.dx + exitRadius * math.cos(angle),
         center.dy + exitRadius * math.sin(angle),
@@ -213,7 +235,6 @@ class _RoundaboutPainter extends CustomPainter {
         center.dx + ringRadius * math.cos(angle),
         center.dy + ringRadius * math.sin(angle),
       );
-      final isActive = i == exitNumber;
       final stubPaint = Paint()
         ..color = isActive
             ? accent
@@ -315,7 +336,8 @@ class _RoundaboutPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_RoundaboutPainter oldDelegate) =>
-      oldDelegate.exitNumber != exitNumber;
+      oldDelegate.exitNumber != exitNumber ||
+      oldDelegate.turnAngleRad != turnAngleRad;
 }
 
 @visibleForTesting
@@ -326,4 +348,21 @@ double roundaboutExitAngleForRightHandTraffic(
   final safeTotal = math.max(1, totalExits);
   final safeExit = exitNumber.clamp(1, safeTotal).toInt();
   return -((safeExit - 1) * 2 * math.pi / safeTotal);
+}
+
+/// Übersetzt den GraphHopper `turn_angle` (0 = geradeaus durch den
+/// Kreisverkehr, + = rechts raus, − = links raus) in den Screen-Winkel der
+/// Painter-Konvention (y-down: 0 = rechts/Osten, π/2 = unten = Einfahrt,
+/// −π/2 = oben = geradeaus). Einfahrt unten ⇒ Austritt = oben + turn_angle
+/// (im Uhrzeigersinn positiv): −π/2 + turnAngleRad, normalisiert auf (−π, π].
+@visibleForTesting
+double roundaboutExitAngleFromTurnAngle(double turnAngleRad) {
+  var angle = -math.pi / 2 + turnAngleRad;
+  while (angle <= -math.pi) {
+    angle += 2 * math.pi;
+  }
+  while (angle > math.pi) {
+    angle -= 2 * math.pi;
+  }
+  return angle;
 }
