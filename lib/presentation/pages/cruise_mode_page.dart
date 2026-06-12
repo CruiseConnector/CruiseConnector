@@ -474,6 +474,9 @@ class _CruiseModePageState extends State<CruiseModePage>
   // wären 5 Ticks = 0.25s = viel zu zappelig). Gesetzt beim ersten Außerhalb-
   // Tick, geleert sobald wieder im Korridor ODER der Puck weiter vorankommt.
   DateTime? _offRouteSince;
+  // 2026-06-12 (vucko): Manoever-Ueberfahren-Tracking fuer den Sofort-Reroute.
+  int? _overshootManeuverIndex;
+  double _overshootMinDistM = double.infinity;
   bool _isExistingRouteSession =
       false; // Route aus gespeicherter Vorlage gestartet
   bool _isAccessLegActive = false; // Nutzer fährt aktuell Zufahrts-Abschnitt
@@ -486,7 +489,10 @@ class _CruiseModePageState extends State<CruiseModePage>
       50.0; // Ab wann Off-Route erkannt wird (wie Apple/Google Maps)
   // 2026-06-07 (vucko P-reroute): _offRouteCountThreshold (Tick-Count) entfernt —
   // durch zeit-basierte Hysterese (_offRouteSince, ≥3s/≥1.5s) ersetzt.
-  static const Duration _rerouteCooldown = Duration(seconds: 12);
+  // 2026-06-12 (vucko Video): 12s -> 6s. Wer den frischen Reroute sofort
+  // wieder verlaesst (haeufig beim Verfahren), wartete sonst sichtbar lange
+  // auf den naechsten Versuch. Fehlschlaege behalten ihren eigenen Cooldown.
+  static const Duration _rerouteCooldown = Duration(seconds: 6);
   static const Duration _rerouteFailureCooldown = Duration(seconds: 4);
   // 2026-06-01 (vucko): Max. Versatz, bis zu dem der sichtbare Routenkopf an
   // die GPS-Position geheftet wird. Darüber bleibt der echte Routenpunkt der
@@ -7935,8 +7941,48 @@ class _CruiseModePageState extends State<CruiseModePage>
     final speed = (speedMps != null && speedMps.isFinite && speedMps > 0)
         ? speedMps
         : 0.0;
-    final speedBuffer = speed > 22 ? 35.0 : (speed > 12 ? 18.0 : 0.0);
-    return baseCorridor + accuracy * 0.8 + speedBuffer;
+    // 2026-06-12 (vucko Reroute-zu-spaet, Video-Befund): Der Korridor wuchs am
+    // Geraet auf ~80-100m (accuracy*0.8 bis 48 + speedBuffer bis 35) — eine
+    // Parallelstrasse 40m daneben galt als "on-route", das Banner fror bei 0m
+    // ein und der Reroute kam minutenlang nicht. Gestrafft auf Google-Niveau;
+    // Fehl-Reroutes verhindert weiterhin die Zeit-Hysterese + das
+    // heading-bedingte Vorwaerts-Veto, nicht ein Riesen-Korridor.
+    final speedBuffer = speed > 22 ? 18.0 : (speed > 12 ? 10.0 : 0.0);
+    return baseCorridor + math.min(accuracy, 40.0) * 0.6 + speedBuffer;
+  }
+
+  /// 2026-06-12 (vucko): Stimmt der GPS-Kurs grob mit der Routen-Tangente am
+  /// Match ueberein? Nur aussagekraeftig bei echter Fahrt (>4 m/s) und
+  /// gueltigem Kurs — sonst konservativ true.
+  bool _gpsHeadingAlignedWithRoute(geo.Position position, RouteWindowMatch match) {
+    if (!position.speed.isFinite || position.speed < 4.0) return true;
+    if (!position.heading.isFinite || position.heading < 0) return true;
+    final coords = _fullRouteCoordinates;
+    final i = match.index.clamp(0, coords.length - 2);
+    final tangent = _bearingDegrees(
+      coords[i][1],
+      coords[i][0],
+      coords[i + 1][1],
+      coords[i + 1][0],
+    );
+    var delta = (position.heading - tangent).abs() % 360.0;
+    if (delta > 180.0) delta = 360.0 - delta;
+    return delta <= 55.0;
+  }
+
+  static double _bearingDegrees(
+    double lat1,
+    double lng1,
+    double lat2,
+    double lng2,
+  ) {
+    final phi1 = lat1 * math.pi / 180.0;
+    final phi2 = lat2 * math.pi / 180.0;
+    final dLng = (lng2 - lng1) * math.pi / 180.0;
+    final y = math.sin(dLng) * math.cos(phi2);
+    final x = math.cos(phi1) * math.sin(phi2) -
+        math.sin(phi1) * math.cos(phi2) * math.cos(dLng);
+    return (math.atan2(y, x) * 180.0 / math.pi + 360.0) % 360.0;
   }
 
   bool _isApproachingCurrentDestination(geo.Position position) {
@@ -9218,6 +9264,38 @@ class _CruiseModePageState extends State<CruiseModePage>
     _activeSpeedLimits = result.speedLimits;
     _recentDestinationDistances = [];
 
+    // 2026-06-12 (vucko Video: "sagt rechts, meint wenden"): Startet die neue
+    // Route >135 Grad GEGEN die aktuelle Fahrtrichtung, faehrt der User von
+    // ihr weg — die erste regulaere Instruktion ("rechts abbiegen") waere
+    // irrefuehrend. Dann zuerst EXPLIZIT zum Wenden auffordern.
+    final c = result.coordinates;
+    if (c.length >= 2 &&
+        position.speed.isFinite &&
+        position.speed > 3.0 &&
+        position.heading.isFinite &&
+        position.heading >= 0) {
+      var probeIdx = 1;
+      var acc = 0.0;
+      while (probeIdx < c.length - 1 && acc < 25.0) {
+        acc += geo.Geolocator.distanceBetween(
+          c[probeIdx - 1][1], c[probeIdx - 1][0],
+          c[probeIdx][1], c[probeIdx][0]);
+        probeIdx++;
+      }
+      final routeStartBearing =
+          _bearingDegrees(c[0][1], c[0][0], c[probeIdx][1], c[probeIdx][0]);
+      var delta = (position.heading - routeStartBearing).abs() % 360.0;
+      if (delta > 180.0) delta = 360.0 - delta;
+      if (delta > 135.0) {
+        _speakManeuverAnnouncement(
+          0,
+          important: true,
+          interrupt: true,
+          overrideText: 'Bitte wenden, sobald es möglich ist.',
+        );
+      }
+    }
+
     _safeSetState(() {
       _routeGeoJson = result.geoJson;
       _routeDistance = result.distanceMeters;
@@ -10017,7 +10095,33 @@ class _CruiseModePageState extends State<CruiseModePage>
         _isApproachingCurrentDestination(position);
     // Apple/Google-Regel: ein VORWÄRTS-laufender Puck fährt die Route — auch wenn
     // ein einzelner Fix seitlich zappelt. Dann niemals reroute.
-    var makingForwardProgress = match.index > prevRouteIndex;
+    // 2026-06-12 (vucko Reroute-zu-spaet, Video): Das Veto gilt nur noch, wenn
+    // der GPS-KURS zur Route passt. Beim ueberfahrenen Abbiege-Manoever oder
+    // auf der Parallelstrasse kriecht der Match-Index naemlich WEITER vorwaerts
+    // (die Projektion wandert mit) — das alte Veto blockierte den Reroute
+    // damit minutenlang ("0 m"-Banner-Freeze im Geraete-Video).
+    var makingForwardProgress = match.index > prevRouteIndex &&
+        _gpsHeadingAlignedWithRoute(position, match);
+
+    // 2026-06-12 (vucko): Manoever-UEBERFAHREN-Trigger. War der Fahrer schon
+    // <35m am aktiven Manoever und entfernt sich wieder >60m davon, ist das
+    // Manoever verpasst — Off-Route-Verfahren sofort starten, auch wenn die
+    // Position noch im (breiten) Korridor liegt. Exakt der Video-Fall.
+    final distToManeuverNow = _calculateDistanceToManeuver();
+    final visibleIdxForOvershoot = _activeVisibleManeuverIndex();
+    if (visibleIdxForOvershoot != _overshootManeuverIndex) {
+      _overshootManeuverIndex = visibleIdxForOvershoot;
+      _overshootMinDistM = double.infinity;
+    }
+    var maneuverOvershoot = false;
+    if (distToManeuverNow != null) {
+      if (distToManeuverNow < _overshootMinDistM) {
+        _overshootMinDistM = distToManeuverNow;
+      }
+      maneuverOvershoot = _overshootMinDistM < 35.0 &&
+          distToManeuverNow > math.max(60.0, _overshootMinDistM + 45.0) &&
+          (position.speed.isFinite ? position.speed : 0) > 3.0;
+    }
 
     // 2026-06-08 (vucko P-reroute): GLOBALER RE-SNAP (wie Apple/Google). Das
     // gefensterte Matching kann hinter dem Fahrer zurückbleiben (Fenster
@@ -10051,6 +10155,11 @@ class _CruiseModePageState extends State<CruiseModePage>
       }
     }
 
+    // Manoever-Overshoot zaehlt wie "klar daneben" — auch innerhalb Korridor.
+    if (maneuverOvershoot) {
+      isOutsideCorridor = true;
+      makingForwardProgress = false;
+    }
     if (isOutsideCorridor &&
         !approachingDestination &&
         !makingForwardProgress) {
@@ -10061,7 +10170,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       // (≥2.5× Korridor, echtes Abbiegen) ≥1.5s. Kein Zappeln über Tick-Count.
       _offRouteSince ??= DateTime.now();
       final offFor = DateTime.now().difference(_offRouteSince!);
-      final clearlyOffRoute =
+      final clearlyOffRoute = maneuverOvershoot ||
           offRouteDecisionMatch.distanceMeters > offRouteCorridor * 2.5;
       final sustained =
           offFor >= const Duration(milliseconds: 3000) ||
@@ -11126,7 +11235,20 @@ class _CruiseModePageState extends State<CruiseModePage>
     int distMeters, {
     required bool important,
     bool interrupt = false,
+    String? overrideText,
   }) {
+    // 2026-06-12 (vucko): Fester Ansagetext (z. B. "Bitte wenden") — die
+    // regulaere Instruktion waere in dem Moment irrefuehrend.
+    if (overrideText != null) {
+      if (important) {
+        unawaited(
+          TtsService.instance.speakImportant(overrideText, interrupt: interrupt),
+        );
+      } else {
+        unawaited(TtsService.instance.speakOptional(overrideText));
+      }
+      return;
+    }
     final maneuver = _activeVisibleManeuver();
     if (maneuver == null) return;
     // 2026-06-05 (vucko Task #6): NUR die reine instruction (ohne Distanz) als
