@@ -620,8 +620,16 @@ async function callHealingCandidateGenerator(
     reason: string;
   }
 > {
+  // 2026-06-09 (Task #34 vollständig): Pool-Healing generiert IMMER über
+  // GraphHopper (v2, via callRouteGenerator → edgeEndpoint). Der alte
+  // Direkt-Mapbox-Pfad lieferte U-Turn-Loops, die das Quality-Gate zu 100%
+  // rejecten ("alte Form"). Er bleibt nur als Notfall-Rollback via
+  // ROUTE_POOL_HEALING_USE_MAPBOX=true erreichbar. MAPBOX_ACCESS_TOKEN bleibt
+  // gesetzt (der Such-Session-Worker braucht es weiterhin).
+  const useMapboxHealing =
+    (env("ROUTE_POOL_HEALING_USE_MAPBOX") ?? "").trim().toLowerCase() === "true";
   const accessToken = env("MAPBOX_ACCESS_TOKEN");
-  if (!accessToken) {
+  if (!useMapboxHealing || !accessToken) {
     return await callRouteGenerator(job, region, start, attempt);
   }
 
