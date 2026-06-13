@@ -74,4 +74,19 @@ void main() {
       matchesGoldenFile('goldens/roundabout_turnangle.png'),
     );
   });
+
+  // 2026-06-13 (vucko): Kreisverkehre mit vielen Ausfahrten (5–8) müssen
+  // symbolisch abgebildet werden — Ausfahrt-Nummer korrekt, keine Deko-Ausfahrt
+  // auf der Einfahrt.
+  for (final exit in [5, 6, 7, 8]) {
+    testWidgets('Kreisverkehr Ausfahrt $exit (viele Ausfahrten)',
+        (tester) async {
+      await tester.pumpWidget(harness(roundabout(exit: exit)));
+      await tester.pumpAndSettle();
+      await expectLater(
+        find.byType(CruiseManeuverIndicator),
+        matchesGoldenFile('goldens/roundabout_exit$exit.png'),
+      );
+    });
+  }
 }

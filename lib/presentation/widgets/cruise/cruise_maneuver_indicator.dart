@@ -259,7 +259,12 @@ class _RoundaboutPainter extends CustomPainter {
         ..strokeWidth = 2.5,
     );
 
-    final totalExits = math.max(4, exitNumber.clamp(1, 6).toInt());
+    // 2026-06-13 (vucko): Kreisverkehre bis 8 Ausfahrten symbolisch abbilden
+    // (war auf 6 gedeckelt → „7. Ausfahrt" wurde fälschlich als 6. gezeigt).
+    // Gezeichnet werden so viele Ausfahrt-Stubs wie die Ziel-Ausfahrt-Nummer
+    // (min 4), gleichmäßig verteilt; die GENOMMENE Ausfahrt sitzt am ECHTEN
+    // GraphHopper-Winkel (turn_angle), falls vorhanden.
+    final totalExits = math.max(4, exitNumber.clamp(1, 8).toInt());
     final realTurnAngle = turnAngleRad;
     final activeExitAngle = realTurnAngle != null
         ? roundaboutExitAngleFromTurnAngle(realTurnAngle)
@@ -270,6 +275,7 @@ class _RoundaboutPainter extends CustomPainter {
 
     // 2. Inaktive Ausfahrt-Stubs (dünn grau) — zuerst, damit der aktive Pfeil
     //    obenauf liegt.
+    const entryAngle = math.pi / 2; // unten = Einfahrt
     for (var i = 1; i <= totalExits; i++) {
       if (i == exitNumber) continue;
       final angle =
@@ -279,6 +285,13 @@ class _RoundaboutPainter extends CustomPainter {
       if (delta > math.pi) delta -= 2 * math.pi;
       if (delta < -math.pi) delta += 2 * math.pi;
       if (delta.abs() < 0.5) continue;
+      // 2026-06-13 (vucko): Deko-Stub NICHT auf die Einfahrt (unten) zeichnen —
+      // bei vielen Ausfahrten (≥4) fällt sonst eine synthetische Ausfahrt mit
+      // der Einfahrt zusammen und sieht falsch aus.
+      var entryDelta = (angle - entryAngle) % (2 * math.pi);
+      if (entryDelta > math.pi) entryDelta -= 2 * math.pi;
+      if (entryDelta < -math.pi) entryDelta += 2 * math.pi;
+      if (entryDelta.abs() < 0.4) continue;
       canvas.drawLine(
         Offset(center.dx + ringRadius * math.cos(angle),
             center.dy + ringRadius * math.sin(angle)),
