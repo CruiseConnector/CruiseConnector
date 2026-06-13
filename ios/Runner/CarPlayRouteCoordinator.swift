@@ -4,6 +4,7 @@ import UIKit
 #if canImport(CarPlay)
 import CarPlay
 import MapKit
+import MapLibre
 
 /// Steuert die CarPlay-Oberfläche.
 ///
@@ -51,6 +52,7 @@ final class CarPlayRouteCoordinator: NSObject {
     func start() {
         window.rootViewController = mapViewController
         mapTemplate.automaticallyHidesNavigationBar = false
+        mapTemplate.mapDelegate = self
         configureMapButtons()
         // 2026-06-02 (vucko v2): Apple verlangt bei Navi-Apps (carplay-maps)
         // zwingend ein CPMapTemplate als Root — ein anderes Root-Template crasht
@@ -114,15 +116,24 @@ final class CarPlayRouteCoordinator: NSObject {
         }
     }
 
-    /// Karten-Buttons im Maps-Stil: Zentrieren, Zoom raus, Zoom rein.
+    /// Karten-Buttons im Maps-Stil: Bewegen (Panning), Zentrieren, Zoom.
+    /// 2026-06-14 (vucko K2): „Bewegen"-Button öffnet die CarPlay-Panning-
+    /// Schnittstelle (Pfeile + Fertig) → Karte frei bewegbar. Zoom-Buttons
+    /// verlassen vorher den Follow-Modus (sonst überschreibt die Folge-Kamera
+    /// den Zoom sofort → „Rauszoomen geht nicht"). „Zentrieren" stellt Follow
+    /// wieder her.
     private func configureMapButtons() {
+        let pan = CPMapButton { [weak self] _ in
+            self?.mapTemplate.showPanningInterface(animated: true)
+        }
+        pan.image = UIImage(systemName: "hand.draw")
         let recenter = CPMapButton { [weak self] _ in self?.mapViewController.recenterOnRoute() }
         recenter.image = UIImage(systemName: "location.fill")
         let zoomOut = CPMapButton { [weak self] _ in self?.mapViewController.zoomOut() }
         zoomOut.image = UIImage(systemName: "minus.magnifyingglass")
         let zoomIn = CPMapButton { [weak self] _ in self?.mapViewController.zoomIn() }
         zoomIn.image = UIImage(systemName: "plus.magnifyingglass")
-        mapTemplate.mapButtons = [recenter, zoomOut, zoomIn]
+        mapTemplate.mapButtons = [pan, recenter, zoomOut, zoomIn]
     }
 
     private func startTimer() {
@@ -197,13 +208,18 @@ final class CarPlayRouteCoordinator: NSObject {
         let signature =
             "\(snapshot.routeId ?? "")|\(snapshot.fingerprint ?? "")|\(snapshot.coordinates.count)"
         guard signature != lastRouteSignature else { return }
-        lastRouteSignature = signature
-        // Frisch gefundene Route (Vorschau) → mit Zeichen-Animation; sonst direkt.
+        // 2026-06-14 (vucko K3): Signatur ERST setzen, wenn wirklich gezeichnet
+        // wurde. War der MapLibre-Style beim Scene-Connect noch nicht geladen,
+        // gibt updateRoute false zurück → der nächste 2s-Tick versucht es erneut,
+        // bis der Style da ist. Vorher wurde die Signatur sofort gesetzt und die
+        // Route blieb (Style-noch-nicht-bereit) für immer unsichtbar.
+        let drew: Bool
         if snapshot.status == "found" {
-            mapViewController.animateRouteDraw(coordinates: snapshot.coordinates)
+            drew = mapViewController.animateRouteDraw(coordinates: snapshot.coordinates)
         } else {
-            mapViewController.updateRoute(coordinates: snapshot.coordinates)
+            drew = mapViewController.updateRoute(coordinates: snapshot.coordinates)
         }
+        if drew { lastRouteSignature = signature }
     }
 
     // MARK: - Navigationsleiste (Info wenn keine Navi-Session läuft)
@@ -635,19 +651,64 @@ final class CarPlayRouteCoordinator: NSObject {
     }
 }
 
-/// Vollflächige MKMapView im CarPlay-Fenster, die die aktive Route als dunkle
-/// Karte mit roter Linie zeichnet. Liegt bewusst in derselben Datei wie der
-/// Coordinator, damit keine neue Datei im Xcode-Projekt registriert werden muss.
+// MARK: - K2: Panning/Zoom-Steuerung (CPMapTemplateDelegate)
+
+/// 2026-06-14 (vucko K2): Ohne gesetzten Delegate gab es KEINE CarPlay-Panning-
+/// Schnittstelle → „man kann sich nicht bewegen / nicht aus dem Zentriermodus
+/// raus". Jetzt: „Bewegen"-Button öffnet die Pfeil-Schnittstelle, jeder Pfeil-
+/// Tipp verschiebt die Karte (Free-Mode), „Fertig" schließt sie wieder.
 @available(iOS 14.0, *)
-final class CarPlayMapViewController: UIViewController, MKMapViewDelegate {
-    private let mapView = MKMapView()
-    private var routeOverlay: MKPolyline?
-    private var drawTimer: Timer?
+extension CarPlayRouteCoordinator: CPMapTemplateDelegate {
+    func mapTemplate(_ mapTemplate: CPMapTemplate, panWith direction: CPMapTemplate.PanDirection) {
+        mapViewController.pan(direction)
+    }
+
+    func mapTemplateDidShowPanningInterface(_ mapTemplate: CPMapTemplate) {
+        mapViewController.enterFreeMode()
+    }
+
+    func mapTemplateDidBeginPanGesture(_ mapTemplate: CPMapTemplate) {
+        mapViewController.enterFreeMode()
+    }
+}
+
+/// 2026-06-14 (vucko K1): Vektor-Karte im CarPlay-Fenster über MapLibre
+/// (MLNMapView) statt der bisherigen MKMapView mit überzoomten z12-Raster-
+/// Kacheln. Lädt EXAKT den Phone-Style (cruise_dark.json → PMTiles-Vektor) →
+/// gestochen scharf bei JEDER Zoomstufe, identischer Look zum Handy. Die Route
+/// ist ein Vektor-Linien-Layer (Casing + Akzent), die NavSession-Kamera folgt
+/// kurs-orientiert. Liegt bewusst in derselben Datei wie der Coordinator, damit
+/// keine neue Datei im Xcode-Projekt registriert werden muss.
+@available(iOS 14.0, *)
+final class CarPlayMapViewController: UIViewController, MLNMapViewDelegate {
+    private let mapView: MLNMapView
+    private var routeSource: MLNShapeSource?
+    private var lastRouteCoords: [CLLocationCoordinate2D] = []
+    private var pendingRouteCoords: [CLLocationCoordinate2D]?
+    /// True wenn der Nutzer die Karte frei bewegt (Pan) → Follow ruht bis Recenter.
+    private(set) var isPanning = false
+
+    /// Der kanonische Phone-Style (Cloudflare). Verweist auf die PMTiles-
+    /// Vektorquelle — MapLibre 6.26 liest `pmtiles://` nativ. So sieht CarPlay
+    /// aus wie die App, nicht wie Apple Maps.
+    private static let styleURL = URL(
+        string: "https://tiles.cruiseconnector.at/cruise_dark.json")!
+    private static let accent = UIColor(red: 1.0, green: 0.23, blue: 0.19, alpha: 1.0)
+
+    init() {
+        mapView = MLNMapView(frame: .zero, styleURL: CarPlayMapViewController.styleURL)
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) not used")
+    }
 
     /// Aktueller Standort des Nutzers (für CarPlay-seitige „Distanz zur nächsten
-    /// Kurve"-Berechnung). Nil, solange MapKit noch keine Position hat.
+    /// Kurve"-Berechnung). Nil, solange MapLibre noch keine Position hat.
     var currentUserCoordinate: CLLocationCoordinate2D? {
-        let c = mapView.userLocation.coordinate
+        guard let loc = mapView.userLocation else { return nil }
+        let c = loc.coordinate
         if !CLLocationCoordinate2DIsValid(c) || (c.latitude == 0 && c.longitude == 0) {
             return nil
         }
@@ -661,257 +722,200 @@ final class CarPlayMapViewController: UIViewController, MKMapViewDelegate {
     override func viewDidLoad() {
         super.viewDidLoad()
         mapView.delegate = self
-        mapView.showsCompass = false
-        mapView.showsScale = false
-        mapView.showsTraffic = false
-        mapView.pointOfInterestFilter = .excludingAll
-        // 2026-06-02 (vucko): Standort live anzeigen + ihm folgen, damit die
-        // CarPlay-Karte sofort nützlich ist (User sah nach dem Disclaimer eine
-        // leere Karte). Wie die Cruise-Mode-Page: Karte + eigene Position immer
-        // sichtbar. Route-Planung bleibt bewusst am Handy (Apple-Guideline) —
-        // eine geplante Route erscheint hier automatisch.
+        mapView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        // Standort live + folgen, damit die Karte sofort nützlich ist.
         mapView.showsUserLocation = true
         mapView.userTrackingMode = .follow
+        // Chrome aus (CarPlay-Karte = vollflächig, eigene Buttons via CPMapButtons).
+        mapView.compassView.isHidden = true
+        mapView.logoView.isHidden = true
+        mapView.attributionButton.isHidden = true
+        mapView.allowsRotating = true
+        mapView.allowsTilting = true
+        mapView.minimumZoomLevel = 3
+        mapView.maximumZoomLevel = 18
         if #available(iOS 13.0, *) {
-            mapView.overrideUserInterfaceStyle = .dark
+            overrideUserInterfaceStyle = .dark
         }
-        // 2026-06-02 (vucko v2): Zoom-Untergrenze auf ~z12 angehoben (2400m).
-        // Grund: bei z13+ überzoomt die Karte unsere z12-Tiles → (a) dunkel/
-        // unscharf, (b) die Overzoom-Subklasse muss JEDE Kachel croppen+skalieren
-        // (CPU-Last pro Tile → ruckelt, „es kracht"). Bei ≤z12 werden die Tiles
-        // NATIV geladen (gestochen scharf wie auf dem Handy) und der Overzoom-
-        // Pfad entfällt komplett → flüssig. Fürs Cruisen sieht man so auch mehr
-        // von der kommenden Strecke. Rauszoomen bleibt frei (Route-Übersicht).
-        mapView.setCameraZoomRange(
-            MKMapView.CameraZoomRange(minCenterCoordinateDistance: 2400),
-            animated: false
-        )
-        addCruiseTileOverlay()
     }
 
-    /// 2026-06-02 (vucko): UNSER eigener Karten-Look in CarPlay. Wir legen die
-    /// gerasterten Cruise-Dark-Tiles (aus R2, gerendert aus unserem PMTiles-
-    /// Style) als Overlay über die Apple-Karte. So sieht CarPlay aus wie unsere
-    /// App, nicht wie Apple Maps. canReplaceMapContent=false → außerhalb der
-    /// gerenderten Abdeckung fällt es auf die Apple-Karte zurück (kein Schwarz).
-    /// tileSize 512 passt zum 512er-Rendering (retina über @2x-PNG).
-    private func addCruiseTileOverlay() {
-        let template =
-            "https://tiles.cruiseconnector.at/raster/{z}/{x}/{y}.png"
-        // 2026-06-02 (vucko): Eigene Overzoom-Overlay. MKTileOverlay überzoomt
-        // NICHT von selbst über maximumZ hinaus → bei Navi-Zoom (z14+) gab's
-        // keine Kachel → Apple-Grün (genau der Bug nach Routenbestätigung).
-        // Die Subklasse holt bei hohem Zoom die höchste gerenderte Kachel (z13),
-        // schneidet den passenden Teilbereich aus + skaliert ihn → unser Look
-        // bleibt bei JEDER Zoomstufe. maximumZ hoch (19) damit MapKit überhaupt
-        // anfragt; minimumZ = unterste gerenderte Stufe.
-        // 2026-06-02 (vucko): DACH ist als z6–12 gerendert (kein flächiges z13).
-        // maxRenderedZ=12 → z6–12 direkt, z13+ überzoomt aus z12 (überall gültig,
-        // kein 404/Apple-Grün). Vorher 13 → z13 außerhalb Vorarlberg fehlte.
-        let overlay = OverzoomTileOverlay(urlTemplate: template, maxRenderedZ: 12)
-        // 2026-06-02 (vucko): canReplaceMapContent=true → MapKit zeichnet seine
-        // EIGENE Karte gar nicht erst darunter. Vorher (false) blitzte beim
-        // Zoomen/Pannen die Apple-Karte durch, bis unsere Kacheln nachgeladen
-        // waren („Apple-Style poppt auf, höherer Kontrast"). Jetzt nur noch
-        // unser Look (dort wo gerendert) bzw. dunkler Grund beim Nachladen.
-        overlay.canReplaceMapContent = true
-        overlay.tileSize = CGSize(width: 512, height: 512)
-        overlay.minimumZ = 6
-        overlay.maximumZ = 19
-        mapView.addOverlay(overlay, level: .aboveLabels)
+    // MARK: - Route (Vektor-Style-Layer)
+
+    /// 2026-06-14 (vucko K3): Route als MapLibre Style-Layer (MLNShapeSource +
+    /// MLNLineStyleLayer) — GENAU der Weg, den Mapbox Navigation SDK + Google
+    /// Maps auf CarPlay nutzen. Style-Layer rendern im GL-Kontext (CarPlay-tauglich),
+    /// im Gegensatz zu Annotationen (separater View-Pfad, auf dem CarPlay-Display
+    /// unzuverlässig). Casing (dunkel) unten, Akzent oben.
+    func mapView(_ mapView: MLNMapView, didFinishLoading style: MLNStyle) {
+        ensureRouteLayers()
+        if let pending = pendingRouteCoords {
+            applyRoute(pending, fit: true)
+            pendingRouteCoords = nil
+        }
     }
 
-    /// Folgt der eigenen Position (nur wenn keine Route aktiv ist) → „Wo bin
-    /// ich"-Live-Ansicht im Leerlauf.
+    private func ensureRouteLayers() {
+        guard let style = mapView.style, routeSource == nil else { return }
+        let source = MLNShapeSource(identifier: "cc-route", shape: nil, options: nil)
+        style.addSource(source)
+        routeSource = source
+
+        let casing = MLNLineStyleLayer(identifier: "cc-route-casing", source: source)
+        casing.lineColor = NSExpression(
+            forConstantValue: UIColor.black.withAlphaComponent(0.55))
+        casing.lineWidth = NSExpression(forConstantValue: 11.0)
+        casing.lineCap = NSExpression(forConstantValue: "round")
+        casing.lineJoin = NSExpression(forConstantValue: "round")
+        style.addLayer(casing)
+
+        let line = MLNLineStyleLayer(identifier: "cc-route-line", source: source)
+        line.lineColor = NSExpression(forConstantValue: CarPlayMapViewController.accent)
+        line.lineWidth = NSExpression(forConstantValue: 6.0)
+        line.lineCap = NSExpression(forConstantValue: "round")
+        line.lineJoin = NSExpression(forConstantValue: "round")
+        style.addLayer(line)
+    }
+
+    /// Zeichnet die Route. Gibt false zurück, wenn der Style noch nicht bereit
+    /// war (→ Aufrufer wiederholt beim nächsten 2s-Tick), sonst true.
+    @discardableResult
+    private func applyRoute(_ coords: [CLLocationCoordinate2D], fit: Bool) -> Bool {
+        ensureRouteLayers()
+        guard let source = routeSource else {
+            pendingRouteCoords = coords
+            return false
+        }
+        lastRouteCoords = coords
+        var mutable = coords
+        let polyline = MLNPolylineFeature(coordinates: &mutable, count: UInt(mutable.count))
+        source.shape = polyline
+        if fit { fitRoute(coords) }
+        return true
+    }
+
+    private func fitRoute(_ coords: [CLLocationCoordinate2D]) {
+        guard coords.count >= 2 else { return }
+        var minLat = coords[0].latitude, maxLat = coords[0].latitude
+        var minLng = coords[0].longitude, maxLng = coords[0].longitude
+        for c in coords {
+            minLat = min(minLat, c.latitude); maxLat = max(maxLat, c.latitude)
+            minLng = min(minLng, c.longitude); maxLng = max(maxLng, c.longitude)
+        }
+        let bounds = MLNCoordinateBounds(
+            sw: CLLocationCoordinate2D(latitude: minLat, longitude: minLng),
+            ne: CLLocationCoordinate2D(latitude: maxLat, longitude: maxLng))
+        mapView.userTrackingMode = .none
+        isPanning = false
+        mapView.setVisibleCoordinateBounds(
+            bounds,
+            edgePadding: UIEdgeInsets(top: 56, left: 56, bottom: 56, right: 56),
+            animated: true)
+    }
+
+    @discardableResult
+    func updateRoute(coordinates: [[Double]]) -> Bool {
+        let coords = coordinates.compactMap { pair -> CLLocationCoordinate2D? in
+            guard pair.count >= 2 else { return nil }
+            // Snapshot-Koordinaten sind [longitude, latitude] (Mapbox-Konvention).
+            return CLLocationCoordinate2D(latitude: pair[1], longitude: pair[0])
+        }
+        guard coords.count >= 2 else { clearRoute(); return true }
+        return applyRoute(coords, fit: true)
+    }
+
+    /// MapLibre zeichnet die Vektor-Linie sofort scharf — kein progressives
+    /// Reveal nötig (das war ein MKMapView-Workaround). Wir zeigen die ganze
+    /// Route + fitten die Kamera (Vorschau).
+    @discardableResult
+    func animateRouteDraw(coordinates: [[Double]]) -> Bool {
+        return updateRoute(coordinates: coordinates)
+    }
+
+    func clearRoute() {
+        routeSource?.shape = nil
+        lastRouteCoords = []
+        pendingRouteCoords = nil
+    }
+
+    // MARK: - Kamera-Modi
+
+    /// Folgt der eigenen Position (Leerlauf, keine Route) → „Wo bin ich".
     func followUser() {
-        guard routeOverlay == nil else { return }
+        guard lastRouteCoords.isEmpty else { return }
+        isPanning = false
         if mapView.userTrackingMode != .follow {
             mapView.setUserTrackingMode(.follow, animated: true)
         }
     }
 
-    /// 2026-06-02 (vucko): Aktive Navigation → Kamera führt flüssig mit dem
-    /// Standort mit und dreht in Fahrtrichtung (heading-up), wie die
-    /// Cruise-Mode-Page am Handy. MapKit animiert den blauen Punkt + die
-    /// Kamerafahrt nativ weich bei jedem GPS-Update.
+    /// Aktive Navigation: Kamera folgt kurs-orientiert (course-up, wie am Handy),
+    /// in Navi-Zoom. Die Route bleibt als Vektor-Linie sichtbar.
     func followWithHeading() {
-        if mapView.userTrackingMode != .followWithHeading {
-            mapView.setUserTrackingMode(.followWithHeading, animated: true)
+        isPanning = false
+        if mapView.userTrackingMode != .followWithCourse {
+            mapView.setUserTrackingMode(.followWithCourse, animated: true)
+        }
+        // Navi-Zoom (scharf, vektor). 15.5 ≈ „nächste Kreuzungen klar lesbar".
+        if mapView.zoomLevel < 14.5 || mapView.zoomLevel > 16.5 {
+            mapView.setZoomLevel(15.5, animated: true)
         }
     }
 
-    func updateRoute(coordinates: [[Double]]) {
-        clearRoute()
-        let points = coordinates.compactMap { pair -> CLLocationCoordinate2D? in
-            guard pair.count >= 2 else { return nil }
-            return CLLocationCoordinate2D(latitude: pair[1], longitude: pair[0])
-        }
-        guard points.count >= 2 else { return }
-        // Route aktiv → nicht mehr dem Standort folgen, sondern die Route zeigen.
-        mapView.setUserTrackingMode(.none, animated: false)
-        let polyline = MKPolyline(coordinates: points, count: points.count)
-        mapView.addOverlay(polyline)
-        routeOverlay = polyline
-        mapView.setVisibleMapRect(
-            polyline.boundingMapRect,
-            edgePadding: UIEdgeInsets(top: 48, left: 48, bottom: 48, right: 48),
-            animated: true
-        )
-    }
-
-    /// 2026-06-02 (vucko Task #115): Route-Vorschau mit „Zeichen-Animation" wie
-    /// in der App — die Linie wächst in ~0,7s vom Start zum Ziel. Umgesetzt als
-    /// progressives Reveal (wachsende Polyline), da MapKit kein natives
-    /// Linien-Stroke-Animieren bietet.
-    func animateRouteDraw(coordinates: [[Double]]) {
-        drawTimer?.invalidate()
-        clearRoute()
-        let pts = coordinates.compactMap { pair -> CLLocationCoordinate2D? in
-            guard pair.count >= 2 else { return nil }
-            return CLLocationCoordinate2D(latitude: pair[1], longitude: pair[0])
-        }
-        guard pts.count >= 2 else { return }
-        mapView.setUserTrackingMode(.none, animated: false)
-        let full = MKPolyline(coordinates: pts, count: pts.count)
-        mapView.setVisibleMapRect(
-            full.boundingMapRect,
-            edgePadding: UIEdgeInsets(top: 48, left: 48, bottom: 48, right: 48),
-            animated: true
-        )
-        let steps = 18
-        var step = 1
-        let timer = Timer.scheduledTimer(withTimeInterval: 0.04, repeats: true) {
-            [weak self] t in
-            guard let self = self else { t.invalidate(); return }
-            if step >= steps {
-                t.invalidate()
-                if let existing = self.routeOverlay { self.mapView.removeOverlay(existing) }
-                self.mapView.addOverlay(full)
-                self.routeOverlay = full
-                return
-            }
-            let count = max(2, Int(Double(pts.count) * Double(step) / Double(steps)))
-            let slice = Array(pts.prefix(count))
-            if let existing = self.routeOverlay { self.mapView.removeOverlay(existing) }
-            let pl = MKPolyline(coordinates: slice, count: slice.count)
-            self.mapView.addOverlay(pl)
-            self.routeOverlay = pl
-            step += 1
-        }
-        RunLoop.main.add(timer, forMode: .common)
-        drawTimer = timer
-    }
-
-    func clearRoute() {
-        drawTimer?.invalidate()
-        drawTimer = nil
-        if let existing = routeOverlay {
-            mapView.removeOverlay(existing)
-            routeOverlay = nil
-        }
-    }
-
-    // MARK: - Karten-Steuerung (CPMapButtons)
+    // MARK: - Karten-Steuerung (CPMapButtons + Panning)
 
     func zoomIn() {
-        var region = mapView.region
-        region.span.latitudeDelta = max(region.span.latitudeDelta * 0.5, 0.001)
-        region.span.longitudeDelta = max(region.span.longitudeDelta * 0.5, 0.001)
-        mapView.setRegion(region, animated: true)
+        let z = min(mapView.zoomLevel + 1.0, mapView.maximumZoomLevel)
+        mapView.setZoomLevel(z, animated: true)
     }
 
     func zoomOut() {
-        var region = mapView.region
-        region.span.latitudeDelta = min(region.span.latitudeDelta * 2.0, 80.0)
-        region.span.longitudeDelta = min(region.span.longitudeDelta * 2.0, 80.0)
-        mapView.setRegion(region, animated: true)
+        // Follow würde den Zoom sofort überschreiben → erst Free-Mode.
+        enterFreeMode()
+        let z = max(mapView.zoomLevel - 1.0, mapView.minimumZoomLevel)
+        mapView.setZoomLevel(z, animated: true)
     }
 
+    /// K2: Zentriermodus verlassen (Karte „einfrieren", frei bewegbar). Follow
+    /// hört auf, die Kamera zu steuern.
+    func enterFreeMode() {
+        isPanning = true
+        if mapView.userTrackingMode != .none {
+            mapView.setUserTrackingMode(.none, animated: false)
+        }
+    }
+
+    /// K2: Pan-Schritt aus der CarPlay-Panning-Schnittstelle (Richtungstasten /
+    /// Trackpad). Verschiebt das Kartenzentrum um einen Bruchteil der Sichtbreite
+    /// in Pan-Richtung (links = Inhalt links aufdecken).
+    func pan(_ direction: CPMapTemplate.PanDirection) {
+        enterFreeMode()
+        let b = mapView.bounds
+        let stepX = b.width * 0.35
+        let stepY = b.height * 0.35
+        var dx: CGFloat = 0
+        var dy: CGFloat = 0
+        if direction.contains(.left) { dx = -stepX }
+        if direction.contains(.right) { dx = stepX }
+        if direction.contains(.up) { dy = -stepY }
+        if direction.contains(.down) { dy = stepY }
+        let target = CGPoint(x: b.midX + dx, y: b.midY + dy)
+        let coord = mapView.convert(target, toCoordinateFrom: mapView)
+        mapView.setCenter(coord, animated: true)
+    }
+
+    /// Zentrieren-Button: gibt es eine Route → ganze Route einpassen; sonst
+    /// wieder dem Standort folgen. Beendet den Free-Mode.
     func recenterOnRoute() {
-        guard let overlay = routeOverlay else { return }
-        mapView.setVisibleMapRect(
-            overlay.boundingMapRect,
-            edgePadding: UIEdgeInsets(top: 48, left: 48, bottom: 48, right: 48),
-            animated: true
-        )
-    }
-
-    func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
-        // Unsere gerasterten Cruise-Dark-Kacheln.
-        if let tileOverlay = overlay as? MKTileOverlay {
-            return MKTileOverlayRenderer(tileOverlay: tileOverlay)
+        if !lastRouteCoords.isEmpty {
+            fitRoute(lastRouteCoords)
+        } else {
+            isPanning = false
+            mapView.setUserTrackingMode(.follow, animated: true)
         }
-        guard let polyline = overlay as? MKPolyline else {
-            return MKOverlayRenderer(overlay: overlay)
-        }
-        let renderer = MKPolylineRenderer(polyline: polyline)
-        renderer.strokeColor = UIColor(red: 1.0, green: 0.23, blue: 0.19, alpha: 1.0)
-        renderer.lineWidth = 6
-        renderer.lineCap = .round
-        renderer.lineJoin = .round
-        return renderer
-    }
-}
-
-/// 2026-06-02 (vucko): Raster-Overlay, das über die höchste gerenderte Zoom-
-/// stufe hinaus „überzoomt", indem es die Vorfahr-Kachel ausschneidet +
-/// skaliert. So zeigt CarPlay unseren eigenen Cruise-Dark-Look bei JEDER
-/// Zoomstufe (auch Navi z14+), statt auf die Apple-Karte zu fallen.
-@available(iOS 14.0, *)
-final class OverzoomTileOverlay: MKTileOverlay {
-    private let maxRenderedZ: Int
-    private let session = URLSession(configuration: .default)
-
-    init(urlTemplate: String?, maxRenderedZ: Int) {
-        self.maxRenderedZ = maxRenderedZ
-        super.init(urlTemplate: urlTemplate)
     }
 
-    private func tileURL(_ z: Int, _ x: Int, _ y: Int) -> URL? {
-        guard let t = urlTemplate else { return nil }
-        let s = t
-            .replacingOccurrences(of: "{z}", with: "\(z)")
-            .replacingOccurrences(of: "{x}", with: "\(x)")
-            .replacingOccurrences(of: "{y}", with: "\(y)")
-        return URL(string: s)
-    }
-
-    override func loadTile(
-        at path: MKTileOverlayPath,
-        result: @escaping (Data?, Error?) -> Void
-    ) {
-        // Innerhalb des gerenderten Bereichs: Kachel direkt laden.
-        if path.z <= maxRenderedZ {
-            guard let url = tileURL(path.z, path.x, path.y) else {
-                result(nil, nil); return
-            }
-            session.dataTask(with: url) { data, _, err in result(data, err) }.resume()
-            return
-        }
-        // Überzoom: Vorfahr-Kachel auf maxRenderedZ holen, Teilbereich ausschneiden.
-        let dz = path.z - maxRenderedZ
-        let factor = 1 << dz
-        let ax = path.x >> dz
-        let ay = path.y >> dz
-        guard let url = tileURL(maxRenderedZ, ax, ay) else { result(nil, nil); return }
-        let subX = path.x - (ax << dz)
-        let subY = path.y - (ay << dz)
-        let tile = tileSize
-        session.dataTask(with: url) { data, _, err in
-            guard let data, let img = UIImage(data: data), let cg = img.cgImage else {
-                result(data, err); return
-            }
-            let w = CGFloat(cg.width) / CGFloat(factor)
-            let h = CGFloat(cg.height) / CGFloat(factor)
-            let rect = CGRect(x: CGFloat(subX) * w, y: CGFloat(subY) * h, width: w, height: h)
-            guard let sub = cg.cropping(to: rect) else { result(data, nil); return }
-            let renderer = UIGraphicsImageRenderer(size: tile)
-            let out = renderer.image { ctx in
-                ctx.cgContext.interpolationQuality = .high
-                UIImage(cgImage: sub).draw(in: CGRect(origin: .zero, size: tile))
-            }
-            result(out.pngData() ?? data, nil)
-        }.resume()
+    func mapViewDidFailLoadingMap(_ mapView: MLNMapView, withError error: Error) {
+        NSLog("[CarPlay] MapLibre style load failed: \(error.localizedDescription)")
     }
 }
 #endif
