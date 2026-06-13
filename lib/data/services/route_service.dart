@@ -9175,6 +9175,8 @@ class RouteService {
       case -8:
       case -98:
         return Icons.u_turn_left;
+      case 8:
+        return Icons.u_turn_right;
       default:
         return Icons.straight;
     }
@@ -9201,6 +9203,7 @@ class RouteService {
       case 6:
         return 'Im Kreisverkehr.';
       case -8:
+      case 8:
       case -98:
         return 'Wenden.';
       default:

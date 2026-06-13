@@ -474,6 +474,11 @@ class _CruiseModePageState extends State<CruiseModePage>
   // wären 5 Ticks = 0.25s = viel zu zappelig). Gesetzt beim ersten Außerhalb-
   // Tick, geleert sobald wieder im Korridor ODER der Puck weiter vorankommt.
   DateTime? _offRouteSince;
+  // 2026-06-13 (vucko Video Banner-Freeze): Luftlinien-Abstand GPS→Route,
+  // solange der Fahrer off-route ist (sonst 0). Wird auf die Manöver-Distanz
+  // addiert → die Meter-Anzeige WÄCHST ehrlich beim Wegfahren (Google-
+  // Verhalten), statt minutenlang auf dem letzten On-Route-Wert einzufrieren.
+  double _offRouteGapMeters = 0.0;
   // 2026-06-12 (vucko): Manoever-Ueberfahren-Tracking fuer den Sofort-Reroute.
   int? _overshootManeuverIndex;
   double _overshootMinDistM = double.infinity;
@@ -492,8 +497,16 @@ class _CruiseModePageState extends State<CruiseModePage>
   // 2026-06-12 (vucko Video): 12s -> 6s. Wer den frischen Reroute sofort
   // wieder verlaesst (haeufig beim Verfahren), wartete sonst sichtbar lange
   // auf den naechsten Versuch. Fehlschlaege behalten ihren eigenen Cooldown.
-  static const Duration _rerouteCooldown = Duration(seconds: 6);
+  // 2026-06-13 (vucko Reroute-Videos): 6s→3s. Zusammen mit 3s Erkennungs-
+  // Hysterese + ~2s Edge-Latenz ergab der 6s-Cooldown 20-36s-Zyklen, in denen
+  // der Fahrer klar off-route war und NICHTS passierte.
+  static const Duration _rerouteCooldown = Duration(seconds: 3);
   static const Duration _rerouteFailureCooldown = Duration(seconds: 4);
+  // Ketten-Reroute: Commit landete nachweislich hinter dem Fahrer (>80m) →
+  // sofort mit frischer Position nachrouten, Cooldown überspringen. Max 2×
+  // hintereinander (Schutz gegen Loops bei kaputtem GPS).
+  bool _pendingChainedReroute = false;
+  int _chainedRerouteCount = 0;
   // 2026-06-01 (vucko): Max. Versatz, bis zu dem der sichtbare Routenkopf an
   // die GPS-Position geheftet wird. Darüber bleibt der echte Routenpunkt der
   // Kopf → keine Off-Route-Zacken bei GPS-Drift in Bergtälern.
@@ -9264,16 +9277,24 @@ class _CruiseModePageState extends State<CruiseModePage>
     _activeSpeedLimits = result.speedLimits;
     _recentDestinationDistances = [];
 
+    // 2026-06-13 (vucko Reroute-Videos): Beim Commit zaehlt die JETZT-Position
+    // (Smoother-Prediction), nicht die bis zu mehrere Sekunden alte Request-
+    // Position — fuer Wenden-Check, Re-Anchor und den Stale-Check unten.
+    final commitPos = _freshRerouteStartPosition(
+      position,
+      lead: Duration.zero,
+    );
+
     // 2026-06-12 (vucko Video: "sagt rechts, meint wenden"): Startet die neue
     // Route >135 Grad GEGEN die aktuelle Fahrtrichtung, faehrt der User von
     // ihr weg — die erste regulaere Instruktion ("rechts abbiegen") waere
     // irrefuehrend. Dann zuerst EXPLIZIT zum Wenden auffordern.
     final c = result.coordinates;
     if (c.length >= 2 &&
-        position.speed.isFinite &&
-        position.speed > 3.0 &&
-        position.heading.isFinite &&
-        position.heading >= 0) {
+        commitPos.speed.isFinite &&
+        commitPos.speed > 3.0 &&
+        commitPos.heading.isFinite &&
+        commitPos.heading >= 0) {
       var probeIdx = 1;
       var acc = 0.0;
       while (probeIdx < c.length - 1 && acc < 25.0) {
@@ -9284,7 +9305,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       }
       final routeStartBearing =
           _bearingDegrees(c[0][1], c[0][0], c[probeIdx][1], c[probeIdx][0]);
-      var delta = (position.heading - routeStartBearing).abs() % 360.0;
+      var delta = (commitPos.heading - routeStartBearing).abs() % 360.0;
       if (delta > 180.0) delta = 360.0 - delta;
       if (delta > 135.0) {
         _speakManeuverAnnouncement(
@@ -9339,6 +9360,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       _accessLegMainRouteResult = null;
       _lastRerouteTime = DateTime.now();
       _lastRerouteFailed = false;
+      _offRouteGapMeters = 0.0;
       _remainingDistance = result.distanceMeters;
       _remainingDuration = result.durationSeconds;
       _distanceToFinalTargetMeters = null;
@@ -9357,7 +9379,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     // ab 0 (Puck ist frisch am Connector-Start) → ein evtl. Self-Overlap trifft
     // nicht den falschen Ast.
     final reanchor = findNearestInWindow(
-      position: position,
+      position: commitPos,
       coordinates: result.coordinates,
       currentIndex: 0,
       windowSize: math.min(120, result.coordinates.length),
@@ -9369,6 +9391,20 @@ class _CruiseModePageState extends State<CruiseModePage>
         math.max(0, result.coordinates.length - 1),
       );
     }
+    // 2026-06-13 (vucko Reroute-Videos): Stale-Commit-Check. Ist der Fahrer
+    // beim Commit schon >80m von der NEUEN Route entfernt (Edge-Latenz bei
+    // schneller Fahrt / Fahrer ist abgebogen), waere die Route sofort wieder
+    // off-route → Ketten-Reroute mit frischer Position anstossen (Flag wird
+    // im finally von _rerouteToOriginalRoute verarbeitet).
+    if (reanchor.distanceMeters.isFinite && reanchor.distanceMeters > 80.0) {
+      _pendingChainedReroute = true;
+      debugPrint(
+        '[CruiseMode][Reroute] Stale-Commit: Fahrer '
+        '${reanchor.distanceMeters.toStringAsFixed(0)}m neben neuer Route',
+      );
+    } else {
+      _chainedRerouteCount = 0;
+    }
     // 2026-06-09 (vucko Voll-Route-Sichtbar): volle Reststrecke (Puck→Ende) für
     // Restdistanz/Auto; SICHTBAR wird die VOLLE neue Route gezeichnet (statisch),
     // der zurückgesetzte graue Driven-Trail frisst sie wieder hinter dem Puck auf.
@@ -9379,8 +9415,8 @@ class _CruiseModePageState extends State<CruiseModePage>
     if (remaining.isNotEmpty) {
       final first = remaining.first;
       final distanceToFirst = geo.Geolocator.distanceBetween(
-        position.latitude,
-        position.longitude,
+        commitPos.latitude,
+        commitPos.longitude,
         first[1],
         first[0],
       );
@@ -10160,9 +10196,20 @@ class _CruiseModePageState extends State<CruiseModePage>
       isOutsideCorridor = true;
       makingForwardProgress = false;
     }
+    // 2026-06-13 (vucko Video Banner-Freeze): Restdistanz/-zeit IMMER pflegen —
+    // auch off-route und VOR dem Reroute-Early-Return. Vorher fror „X,X km
+    // verbleibend" beim Verfahren minutenlang ein (nur die ETA-Uhr tickte).
+    final remainingChanged = _updateRemainingDistanceAndDuration(
+      routeMatch: routeProgressMatch,
+    );
+
     if (isOutsideCorridor &&
         !approachingDestination &&
         !makingForwardProgress) {
+      // Ehrliche Banner-Meter: Luftlinie zur Route fließt in die Anzeige ein.
+      _offRouteGapMeters = offRouteDecisionMatch.distanceMeters.isFinite
+          ? offRouteDecisionMatch.distanceMeters
+          : 0.0;
       if (_clearLiveRouteWindowForOffRoute()) {
         _safeSetState(() {});
       }
@@ -10170,7 +10217,15 @@ class _CruiseModePageState extends State<CruiseModePage>
       // (≥2.5× Korridor, echtes Abbiegen) ≥1.5s. Kein Zappeln über Tick-Count.
       _offRouteSince ??= DateTime.now();
       final offFor = DateTime.now().difference(_offRouteSince!);
+      // 2026-06-13 (vucko Reroute-Videos): Fährt der Kurs KLAR von der Route
+      // weg (>55° Abweichung, >25m daneben, >4 m/s), ist das ein echtes
+      // Verfahren — schnelle 1,5s-Schiene statt 3s warten.
+      final headingOpposed =
+          (position.speed.isFinite && position.speed > 4.0) &&
+          offRouteDecisionMatch.distanceMeters > 25.0 &&
+          !_gpsHeadingAlignedWithRoute(position, offRouteDecisionMatch);
       final clearlyOffRoute = maneuverOvershoot ||
+          headingOpposed ||
           offRouteDecisionMatch.distanceMeters > offRouteCorridor * 2.5;
       final sustained =
           offFor >= const Duration(milliseconds: 3000) ||
@@ -10195,13 +10250,10 @@ class _CruiseModePageState extends State<CruiseModePage>
       // Im Korridor ODER Fortschritt ODER Ziel-Annäherung → Off-Route-Timer aus.
       _offRouteSince = null;
       _offRouteCount = 0;
+      _offRouteGapMeters = 0.0;
     }
 
-    var needsRebuild = false;
-    if (!isOutsideCorridor &&
-        _updateRemainingDistanceAndDuration(routeMatch: routeProgressMatch)) {
-      needsRebuild = true;
-    }
+    var needsRebuild = remainingChanged;
 
     // 2026-06-07 (vucko P-reroute): Advance-Gate an den Korridor gekoppelt (war
     // hart 45m) → kein Dead-Band mehr zwischen 45m und Korridorbreite.
@@ -11389,9 +11441,41 @@ class _CruiseModePageState extends State<CruiseModePage>
   /// Fehlschlag kann an einer veralteten/ungenauen Position liegen. Erst wenn
   /// auch der Retry scheitert, sieht der User die (ursachen-spezifische)
   /// Fehlermeldung.
+  /// Frischeste verfügbare Start-Position für Reroute-Requests/-Commits:
+  /// Kalman-Prediction des Smoothers mit kleinem Vorhalt (kompensiert die
+  /// Edge-Latenz), synchron ohne GPS-Roundtrip. Fallback: [fallback].
+  geo.Position _freshRerouteStartPosition(
+    geo.Position fallback, {
+    Duration lead = const Duration(milliseconds: 800),
+  }) {
+    if (kIsWeb) return fallback;
+    final base = _nativeSmoother.current;
+    if (base == null) return fallback;
+    final p = _nativeSmoother.predict(DateTime.now().add(lead));
+    if (p.lat == 0 && p.lng == 0) return fallback;
+    return geo.Position(
+      latitude: p.lat,
+      longitude: p.lng,
+      timestamp: DateTime.now(),
+      accuracy: base.accuracy,
+      altitude: base.altitude,
+      altitudeAccuracy: base.altitudeAccuracy,
+      heading: _nativeSmoother.hasValidHeading ? p.heading : base.heading,
+      headingAccuracy: base.headingAccuracy,
+      speed: _nativeSmoother.speed,
+      speedAccuracy: base.speedAccuracy,
+    );
+  }
+
   Future<void> _rerouteToOriginalRoute(geo.Position position) async {
     if (_isRerouting) return;
     _isRerouting = true;
+    _pendingChainedReroute = false;
+    // 2026-06-13 (vucko Reroute-Videos): NIE mit der (bis zu 3s alten)
+    // Erkennungs-Position routen. Smoother-Prediction mit 800ms-Vorhalt →
+    // die neue Route startet dort, wo der Fahrer beim Commit WIRKLICH ist,
+    // nicht 100-300m hinter ihm.
+    position = _freshRerouteStartPosition(position);
     final remainingDistanceBeforeMeters = _remainingDistance ?? _routeDistance;
     final etaBeforeSeconds = _remainingDuration ?? _routeDuration;
 
@@ -11427,36 +11511,51 @@ class _CruiseModePageState extends State<CruiseModePage>
       // EIN Auto-Retry mit frischem GPS-Fix. Kein stiller Fallback auf die
       // alte Position: Wenn der erste Zyklus wegen Start-Snap scheitert, muss
       // der Retry wirklich mit neuer, genauer GPS-Position laufen.
+      // 2026-06-13 (vucko Reroute-Videos): Ist der letzte Smoother-Fix <2s
+      // alt, ist die Kalman-Prediction der frischeste verfügbare Fix —
+      // SYNCHRON statt bis zu 5s getCurrentPosition-Wartezeit.
       geo.Position retryPosition;
-      try {
-        retryPosition = await geo.Geolocator.getCurrentPosition(
-          locationSettings: const geo.LocationSettings(
-            accuracy: geo.LocationAccuracy.best,
-          ),
-        ).timeout(const Duration(seconds: 5));
-        if (!_isFreshStartFix(retryPosition)) {
-          throw TimeoutException(
-            'fresh reroute fix stale/inaccurate: ${_describeStartFix(retryPosition)}',
+      final smootherBase = kIsWeb ? null : _nativeSmoother.current;
+      final smootherAgeMs = smootherBase == null
+          ? null
+          : DateTime.now().difference(smootherBase.timestamp).inMilliseconds;
+      if (smootherAgeMs != null && smootherAgeMs < 2000) {
+        retryPosition = _freshRerouteStartPosition(position);
+        debugPrint(
+          '[CruiseMode][RerouteRetry] Smoother-Prediction als Frisch-Fix '
+          '(Basis ${smootherAgeMs}ms alt): ${_describeStartFix(retryPosition)}',
+        );
+      } else {
+        try {
+          retryPosition = await geo.Geolocator.getCurrentPosition(
+            locationSettings: const geo.LocationSettings(
+              accuracy: geo.LocationAccuracy.best,
+            ),
+          ).timeout(const Duration(seconds: 3));
+          if (!_isFreshStartFix(retryPosition)) {
+            throw TimeoutException(
+              'fresh reroute fix stale/inaccurate: ${_describeStartFix(retryPosition)}',
+            );
+          }
+          debugPrint(
+            '[CruiseMode][RerouteRetry] Frischer GPS-Fix für Auto-Retry: '
+            '${_describeStartFix(retryPosition)}',
           );
+        } catch (e) {
+          debugPrint(
+            '[CruiseMode][RerouteRetry] Frischer Fix fehlgeschlagen '
+            '($e) — kein Retry mit alter Position',
+          );
+          _publishRerouteFailure(
+            rerouteReason: 'fresh_fix_unavailable',
+            rerouteMode: _isAccessLegActive ? 'rejoin' : 'partial_rebuild',
+            remainingDistanceBeforeMeters: remainingDistanceBeforeMeters,
+            etaBeforeSeconds: etaBeforeSeconds,
+            userMessage:
+                'Reroute gerade nicht möglich: GPS ist noch nicht präzise genug — bitte weiterfahren',
+          );
+          return;
         }
-        debugPrint(
-          '[CruiseMode][RerouteRetry] Frischer GPS-Fix für Auto-Retry: '
-          '${_describeStartFix(retryPosition)}',
-        );
-      } catch (e) {
-        debugPrint(
-          '[CruiseMode][RerouteRetry] Frischer Fix fehlgeschlagen '
-          '($e) — kein Retry mit alter Position',
-        );
-        _publishRerouteFailure(
-          rerouteReason: 'fresh_fix_unavailable',
-          rerouteMode: _isAccessLegActive ? 'rejoin' : 'partial_rebuild',
-          remainingDistanceBeforeMeters: remainingDistanceBeforeMeters,
-          etaBeforeSeconds: etaBeforeSeconds,
-          userMessage:
-              'Reroute gerade nicht möglich: GPS ist noch nicht präzise genug — bitte weiterfahren',
-        );
-        return;
       }
       await _runRerouteCycle(
         retryPosition,
@@ -11466,6 +11565,27 @@ class _CruiseModePageState extends State<CruiseModePage>
       );
     } finally {
       _isRerouting = false;
+      // 2026-06-13 (vucko Reroute-Videos): Der Commit landete nachweislich
+      // hinter dem Fahrer (Stale-Check in _commitRerouteResult) → SOFORT mit
+      // frischer Position nachrouten statt erst beim nächsten Off-Route-
+      // Zyklus (+3s Hysterese +3s Cooldown). Max 2 Ketten.
+      if (_pendingChainedReroute && mounted && !_disposed) {
+        _pendingChainedReroute = false;
+        if (_chainedRerouteCount < 2) {
+          _chainedRerouteCount++;
+          _lastRerouteTime = null;
+          _offRouteSince = null;
+          debugPrint(
+            '[CruiseMode][Reroute] Commit veraltet → Ketten-Reroute '
+            '#$_chainedRerouteCount mit frischer Position',
+          );
+          unawaited(
+            _rerouteToOriginalRoute(_freshRerouteStartPosition(position)),
+          );
+        } else {
+          _chainedRerouteCount = 0;
+        }
+      }
     }
   }
 
@@ -11576,7 +11696,7 @@ class _CruiseModePageState extends State<CruiseModePage>
             forceFreshVariant: true,
             navigationReroute: true,
             candidateBudgetOverride: 1,
-            maxSearchMsOverride: 7500,
+            maxSearchMsOverride: 4500,
             currentHeadingDegrees: heading,
             currentSpeedMetersPerSecond: rerouteSpeedMps,
             locationAccuracyMeters: rerouteAccuracyMeters,
@@ -11659,7 +11779,7 @@ class _CruiseModePageState extends State<CruiseModePage>
                 navigationReroute: true,
                 forceAcceptDirect: true,
                 candidateBudgetOverride: 1,
-                maxSearchMsOverride: 9000,
+                maxSearchMsOverride: 6000,
                 currentHeadingDegrees: heading,
                 currentSpeedMetersPerSecond: rerouteSpeedMps,
                 locationAccuracyMeters: rerouteAccuracyMeters,
@@ -11825,7 +11945,7 @@ class _CruiseModePageState extends State<CruiseModePage>
             forceFreshVariant: true,
             navigationReroute: true,
             candidateBudgetOverride: 1,
-            maxSearchMsOverride: 7500,
+            maxSearchMsOverride: 4500,
             currentHeadingDegrees: heading,
             currentSpeedMetersPerSecond: rerouteSpeedMps,
             locationAccuracyMeters: rerouteAccuracyMeters,
@@ -12433,7 +12553,11 @@ class _CruiseModePageState extends State<CruiseModePage>
     final targetIndex = maneuver.routeIndex
         .clamp(0, _fullRouteCoordinates.length - 1)
         .toInt();
-    if (targetIndex <= _currentRouteIndex) return 0;
+    // 2026-06-13 (vucko Video Banner-Freeze): off-route kommt die Luftlinie
+    // GPS→Route dazu — die Anzeige wächst ehrlich mit, statt einzufrieren.
+    if (targetIndex <= _currentRouteIndex) {
+      return _offRouteGapMeters > 0 ? _offRouteGapMeters : 0;
+    }
 
     double dist = 0.0;
     for (var i = _currentRouteIndex; i < targetIndex; i++) {
@@ -12441,7 +12565,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       final c2 = _fullRouteCoordinates[i + 1];
       dist += geo.Geolocator.distanceBetween(c1[1], c1[0], c2[1], c2[0]);
     }
-    return dist;
+    return dist + _offRouteGapMeters;
   }
 
   void _updateActiveManeuver() {
