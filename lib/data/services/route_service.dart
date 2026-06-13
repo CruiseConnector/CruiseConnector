@@ -10438,6 +10438,65 @@ double calculateBearing(
   return (math.atan2(y, x) * 180 / math.pi + 360) % 360;
 }
 
+/// 2026-06-13 (vucko Manöver-26km-Bug, Geraete-Screenshot): Globaler Re-Snap
+/// für SELBSTÜBERLAPPENDE Routen (Rundkurse: Start==Ende, dieselbe Straße auf
+/// Hin- und Rückweg). Findet unter ALLEN Routenpunkten innerhalb
+/// [corridorMeters] denjenigen, der dem [referenceIndex] am NÄCHSTEN im
+/// Index-Raum liegt. Verhindert, dass der Puck auf einen geografisch nahen,
+/// aber routen-fernen Index teleportiert (sonst sprang das nächste Manöver
+/// 26 km voraus ans Routenende und blieb dort kleben). Liegt KEIN Punkt im
+/// Korridor (echtes Off-Route), wird der global-nächste für die Off-Route-
+/// Distanz zurückgegeben.
+RouteWindowMatch findNearestOnRoutePreferIndex({
+  required geo.Position position,
+  required List<List<double>> coordinates,
+  required int referenceIndex,
+  required double corridorMeters,
+}) {
+  if (coordinates.isEmpty) {
+    return const RouteWindowMatch(index: 0, distanceMeters: double.infinity);
+  }
+  var bestInCorridorIdx = -1;
+  var bestInCorridorGap = 1 << 30;
+  var bestInCorridorDist = double.infinity;
+  var globalNearestIdx = 0;
+  var globalNearestDist = double.infinity;
+  for (var i = 0; i < coordinates.length; i++) {
+    final c = coordinates[i];
+    if (c.length < 2) continue;
+    final d = geo.Geolocator.distanceBetween(
+      position.latitude,
+      position.longitude,
+      c[1],
+      c[0],
+    );
+    if (d < globalNearestDist) {
+      globalNearestDist = d;
+      globalNearestIdx = i;
+    }
+    if (d <= corridorMeters) {
+      final gap = (i - referenceIndex).abs();
+      // Kleinster Index-Abstand gewinnt; bei Gleichstand kleinere Distanz.
+      if (gap < bestInCorridorGap ||
+          (gap == bestInCorridorGap && d < bestInCorridorDist)) {
+        bestInCorridorGap = gap;
+        bestInCorridorIdx = i;
+        bestInCorridorDist = d;
+      }
+    }
+  }
+  if (bestInCorridorIdx >= 0) {
+    return RouteWindowMatch(
+      index: bestInCorridorIdx,
+      distanceMeters: bestInCorridorDist,
+    );
+  }
+  return RouteWindowMatch(
+    index: globalNearestIdx,
+    distanceMeters: globalNearestDist,
+  );
+}
+
 /// Sucht den nächsten Routenpunkt im Suchfenster ab dem aktuellen Index.
 RouteWindowMatch findNearestInWindow({
   required geo.Position position,

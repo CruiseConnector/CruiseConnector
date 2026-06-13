@@ -10425,12 +10425,15 @@ class _CruiseModePageState extends State<CruiseModePage>
     // ankert nur den Index) und hält currentRouteIndex/Restdistanz/3km-Fenster
     // aktuell, statt sie einzufrieren wenn man sich nahe dem Ziel verfährt.
     if (isOutsideCorridor) {
-      final globalMatch = findNearestInWindow(
+      // 2026-06-13 (vucko Manöver-26km-Bug): Re-Snap mit INDEX-Nähe-Präferenz
+      // statt blindem global-Nächsten — auf selbstüberlappenden Rundkursen
+      // (gleiche Straße Hin+Rück) springt der Index sonst auf den fernen
+      // Selbstüberlapp und das nächste Manöver schießt 26km ans Routenende.
+      final globalMatch = findNearestOnRoutePreferIndex(
         position: position,
         coordinates: _fullRouteCoordinates,
-        currentIndex: 0,
-        windowSize: _fullRouteCoordinates.length,
-        maxJumpMeters: double.infinity,
+        referenceIndex: _currentRouteIndex,
+        corridorMeters: offRouteCorridor,
       );
       if (globalMatch.distanceMeters < offRouteDecisionMatch.distanceMeters) {
         offRouteDecisionMatch = globalMatch;
@@ -12856,7 +12859,13 @@ class _CruiseModePageState extends State<CruiseModePage>
 
   void _updateActiveManeuver() {
     if (_maneuvers.isEmpty) return;
-    for (var i = _activeManeuverIndex; i < _maneuvers.length; i++) {
+    // 2026-06-13 (vucko Manöver-26km-Bug): IMMER von 0 das erste Manöver mit
+    // routeIndex >= _currentRouteIndex ableiten (statt nur ab dem alten Index
+    // vorwärts). Sprang _currentRouteIndex je kurz hoch (Selbstüberlapp-
+    // Teleport) und kam zurück, klebte der alte „nur vorwärts"-Index am
+    // End-Manöver fest → Banner zeigte „in 26 km abbiegen". Jetzt spiegelt der
+    // aktive Index immer den echten Fortschritt wider.
+    for (var i = 0; i < _maneuvers.length; i++) {
       if (_maneuvers[i].routeIndex >= _currentRouteIndex) {
         _activeManeuverIndex = i;
         return;
