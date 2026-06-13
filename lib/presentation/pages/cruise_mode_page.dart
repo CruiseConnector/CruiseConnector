@@ -2529,6 +2529,9 @@ class _CruiseModePageState extends State<CruiseModePage>
   // moveCamera zu feuern. Jeder GPS-Fix startet ihn über _animateCameraTo
   // sofort wieder (`if (!controller.isAnimating) controller.repeat()`).
   int _camIdleTicks = 0;
+  // 2026-06-13 (vucko Free-Cam-Ruckeln): Hysterese-Zähler für den Free-Cam-
+  // Idle-Stop — verhindert Ticker-Pause bei kurzen Speed-Dips.
+  int _freeCamIdleTicks = 0;
 
   void _onCameraAnimationTick() {
     if (!_mapReady || _isOverviewActive) {
@@ -2576,19 +2579,44 @@ class _CruiseModePageState extends State<CruiseModePage>
       if (!_isCameraLocked) {
         // Freie Kamera: Puck-Overlay pro Frame reprojizieren.
         _mlController?.reprojectMarkers();
-        // Idle-Stop: Fahrzeug steht → Ticker pausieren (der naechste
-        // GPS-Fix startet ihn in _onLocationUpdate wieder).
-        if (_nativeSmoother.speed < 0.3) {
-          _cameraAnimController?.stop();
-          _lastCameraFrameAt = null;
+        // 2026-06-13 (vucko Free-Cam-Ruckeln, Geraete-Video): Idle-Stop mit
+        // HYSTERESE. Vorher stoppte der Ticker bei einem EINZELNEN Frame
+        // <0,3 m/s — ein kurzer Smoother-Speed-Dip (nach Reroute, GPS-Glitch)
+        // hielt den Puck dann bis zum nächsten 1Hz-Fix an (Mikro-Ruckeln).
+        // Jetzt: erst nach ~0,5s anhaltendem Quasi-Stillstand (<0,15 m/s)
+        // pausieren; jeder Speed-Pickup setzt den Zähler zurück.
+        if (_nativeSmoother.speed < 0.15) {
+          _freeCamIdleTicks++;
+          if (_freeCamIdleTicks >= 30) {
+            _cameraAnimController?.stop();
+            _lastCameraFrameAt = null;
+            _freeCamIdleTicks = 0;
+          }
+        } else {
+          _freeCamIdleTicks = 0;
         }
         return;
       }
       if (lockPos != null) {
         _camToLat = lockPos.latitude;
         _camToLng = lockPos.longitude;
-        // Heading-Ziel bleibt event-gesteuert (_animateCameraTo wendet dort
-        // die Bearing-Dead-Zone an) — Rotation soll nicht pro Frame zappeln.
+        // 2026-06-13 (vucko Kamera-Abbiege-Ruckeln, Geraete-Video): Heading-Ziel
+        // jetzt AUCH pro Frame aus der Smoother-Prediction nachführen (analog
+        // zur Position). Vorher war es event-gesteuert (1×/GPS-Fix) → beim
+        // Abbiegen sprang das Ziel 1×/s und die Drehung kam in Bursts (Ruckeln).
+        // Der Smoother extrapoliert das Heading mit geglätteter Drehrate, die
+        // Dead-Zone (gegen GPS-Jitter im Stand) bleibt erhalten.
+        if (_nativeSmoother.hasValidHeading) {
+          final predHeading = _nativeSmoother
+              .predict(DateTime.now().add(_nativeRenderPredictionLead))
+              .heading;
+          final delta = _angleDiff(_camToHeading, predHeading).abs();
+          // Mikro-Jitter (<0,6°) ignorieren — sonst zappelt die Karte im Stand.
+          if (delta >= 0.6) {
+            _camToHeading = predHeading;
+            _lastCameraHeading = predHeading;
+          }
+        }
       }
     } else if (!_isCameraLocked) {
       _cameraAnimController?.stop();
@@ -10338,9 +10366,20 @@ class _CruiseModePageState extends State<CruiseModePage>
     final previousVisibleManeuverIndex = _activeVisibleManeuverIndex();
 
     var isOutsideCorridor = match.distanceMeters > offRouteCorridor;
+    // 2026-06-13 (vucko Geraete-Video „Reroute greift nicht nahe Ziel"):
+    // `approachingDestination` soll NUR die letzten Meter vor der Ankunft das
+    // Reroute unterdrücken (GPS-Rauschen am Ziel). Die alte Definition war
+    // aber „macht Fortschritt Richtung Ziel" und feuerte schon bei 2,2 km
+    // Reststrecke → unterdrückte globalen Re-Snap + Off-Route + Reroute:
+    // currentRouteIndex fror ein, „X km verbleibend" fror ein, das 3km-Fenster
+    // klebte an der falschen Stelle, und ein echtes Verfahren wurde NIE
+    // erkannt. Jetzt zusätzlich harte Restdistanz-Schranke (≤180 m): nur dann
+    // ist man wirklich „beim Ankommen".
+    final remainingForGate = _remainingDistance ?? _routeDistance;
     final approachingDestination =
         !_isRoundTrip &&
         _activeDestinationCoordinate != null &&
+        (remainingForGate != null && remainingForGate <= 180.0) &&
         _isApproachingCurrentDestination(position);
     // Apple/Google-Regel: ein VORWÄRTS-laufender Puck fährt die Route — auch wenn
     // ein einzelner Fix seitlich zappelt. Dann niemals reroute.
@@ -10381,7 +10420,11 @@ class _CruiseModePageState extends State<CruiseModePage>
     // Fenster-Verzug → re-ankern + NICHT off-route. Nur wirklich-daneben (auch
     // global > Korridor) zählt. Läuft nur wenn das Fenster off-route meldet →
     // kein Overhead im Normalbetrieb.
-    if (isOutsideCorridor && !approachingDestination) {
+    // 2026-06-13 (vucko Geraete-Video): Re-Snap läuft jetzt AUCH nahe dem Ziel
+    // (kein `!approachingDestination`-Gate mehr) — er ist immer sicher (re-
+    // ankert nur den Index) und hält currentRouteIndex/Restdistanz/3km-Fenster
+    // aktuell, statt sie einzufrieren wenn man sich nahe dem Ziel verfährt.
+    if (isOutsideCorridor) {
       final globalMatch = findNearestInWindow(
         position: position,
         coordinates: _fullRouteCoordinates,

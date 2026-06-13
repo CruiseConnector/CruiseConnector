@@ -94,5 +94,67 @@ void main() {
 
       expect(smoother.speed, closeTo((70 / 3.6) * 0.3, 0.1));
     });
+
+    test(
+      'predict() extrapoliert das Heading in Drehrichtung (Kamera-Abbiege-Glide)',
+      () async {
+        // 2026-06-13 (vucko Kamera-Abbiege-Ruckeln): Beim Abbiegen muss
+        // predict(future) das Heading ÜBER den letzten geglätteten Wert hinaus
+        // weiterdrehen (Dead Reckoning), damit das Kamera-Ziel zwischen den
+        // 1Hz-Fixes kontinuierlich wandert statt zu springen.
+        final smoother = NativePositionSmoother();
+        var lat = 47.4125;
+        const lng = 9.7417;
+        // Stetige Rechtsdrehung 0→60° in 6 Schritten mit echten Zeitlücken,
+        // damit die Winkelgeschwindigkeit (aus Wall-Clock-dt) aufgebaut wird.
+        // Die Positions-Timestamps müssen NAHE der realen Uhr liegen, sonst
+        // clampt pred() den Heading-dt (max 1s) für beide Abfragen gleich.
+        final base = DateTime.now();
+        for (var i = 0; i <= 6; i++) {
+          lat += 0.0002;
+          smoother.update(
+            position(
+              latitude: lat,
+              longitude: lng,
+              timestamp: base.add(Duration(milliseconds: 90 * i)),
+              heading: (i * 10).toDouble(),
+              headingAccuracy: 5,
+              speed: 15.0,
+            ),
+          );
+          await Future<void>.delayed(const Duration(milliseconds: 90));
+        }
+
+        // Abfragezeiten relativ zum LETZTEN Positions-Timestamp, beide < 1s
+        // Heading-Clamp, damit der Unterschied = Extrapolation ist.
+        final lastTs = base.add(const Duration(milliseconds: 90 * 6));
+        final hNow = smoother
+            .predict(lastTs.add(const Duration(milliseconds: 50)))
+            .heading;
+        final hAhead = smoother
+            .predict(lastTs.add(const Duration(milliseconds: 450)))
+            .heading;
+
+        double fwd(double from, double to) {
+          var d = (to - from) % 360.0;
+          if (d < 0) d += 360.0;
+          return d; // 0..360 im Uhrzeigersinn
+        }
+
+        // In Drehrichtung (im Uhrzeigersinn) voraus, aber nicht über die Kurve
+        // hinaus (Deckel): zwischen 3° und 70°.
+        final advance = fwd(hNow, hAhead);
+        expect(
+          advance,
+          greaterThan(3.0),
+          reason: 'Heading muss in Drehrichtung extrapoliert werden',
+        );
+        expect(
+          advance,
+          lessThan(70.0),
+          reason: 'Extrapolation gedeckelt (kein Überdrehen)',
+        );
+      },
+    );
   });
 }

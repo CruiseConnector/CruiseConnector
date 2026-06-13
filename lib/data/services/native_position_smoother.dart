@@ -65,6 +65,12 @@ class NativePositionSmoother {
 
   // ── Heading State ─────────────────────────────────────────────────────────
   double _smoothedHeading = 0.0;
+  // 2026-06-13 (vucko Kamera-Abbiege-Ruckeln, Geraete-Video): geglättete
+  // Winkelgeschwindigkeit (Grad/s) der Drehung. Damit kann predict() das
+  // Heading zwischen den ~1Hz-GPS-Fixes pro Frame EXTRAPOLIEREN (Dead
+  // Reckoning wie Position) — sonst sprang das Kamera-Ziel-Heading 1×/s und
+  // die Drehung kam in Bursts (Ruckeln beim Abbiegen, auf Geraden unsichtbar).
+  double _headingRateDegPerSec = 0.0;
   double _movementHeading = 0.0;
   // ignore: unused_field - Reserviert für zukünftige Diagnostik
   double _lastGpsHeading = 0.0;
@@ -249,10 +255,18 @@ class NativePositionSmoother {
     }
     final dt = now.difference(_lastTimestamp!).inMilliseconds / 1000.0;
     final clampedDt = dt.clamp(0.0, 1.5);
+    // 2026-06-13 (vucko Kamera-Abbiege-Ruckeln): Heading pro Frame
+    // EXTRAPOLIEREN (Dead Reckoning wie Position). Das Drehfeld wandert damit
+    // kontinuierlich statt 1×/Fix zu springen → die Kamera-Rotation gleitet
+    // beim Abbiegen. Extrapolations-dt eigener, kürzerer Clamp (1,0s): bei
+    // langen GPS-Lücken nicht über die Kurve hinausdrehen.
+    final headingDt = dt.clamp(0.0, 1.0);
+    final predictedHeading =
+        (_smoothedHeading + _headingRateDegPerSec * headingDt) % 360.0;
     return (
       lat: _lat! + _vLat * clampedDt,
       lng: _lng! + _vLng * clampedDt,
-      heading: _smoothedHeading,
+      heading: predictedHeading < 0 ? predictedHeading + 360.0 : predictedHeading,
     );
   }
 
@@ -270,6 +284,7 @@ class NativePositionSmoother {
     _lastRawLat = null;
     _lastRawLng = null;
     _smoothedHeading = 0.0;
+    _headingRateDegPerSec = 0.0;
     _movementHeading = 0.0;
     _lastGpsHeading = 0.0;
     _hasValidHeading = false;
@@ -380,17 +395,45 @@ class NativePositionSmoother {
       final effectiveBlend = headingDelta <= headingNoiseThresholdDegrees
           ? blendFactor * 0.6
           : blendFactor;
+      final previousHeading = _smoothedHeading;
       _smoothedHeading = _lerpAngle(
         _smoothedHeading,
         targetHeading,
         effectiveBlend,
       );
+      // 2026-06-13 (vucko Kamera-Abbiege-Ruckeln): Winkelgeschwindigkeit aus
+      // der tatsächlichen Heading-Änderung pro Zeit schätzen (signiert,
+      // kürzester Weg), stark geglättet (1Hz-GPS ist rausch-anfällig) und auf
+      // ±90°/s gedeckelt. predict() extrapoliert damit pro Frame.
+      final lastAt = _lastHeadingTime;
+      if (lastAt != null) {
+        final dtSec = DateTime.now().difference(lastAt).inMilliseconds / 1000.0;
+        if (dtSec > 0.04 && dtSec < 2.0) {
+          final signedDelta = _signedAngleDelta(previousHeading, _smoothedHeading);
+          final instRate = (signedDelta / dtSec).clamp(-90.0, 90.0);
+          // EMA: ruhige, kontinuierliche Rate statt zappelnder Momentanwerte.
+          _headingRateDegPerSec =
+              _headingRateDegPerSec * 0.6 + instRate * 0.4;
+        }
+      } else {
+        _headingRateDegPerSec = 0.0;
+      }
     } else {
       _smoothedHeading = targetHeading;
+      _headingRateDegPerSec = 0.0;
     }
 
     _hasValidHeading = true;
     _lastHeadingTime = DateTime.now();
+  }
+
+  /// Signierter Winkel-Unterschied (kürzester Weg) von [from] nach [to],
+  /// Bereich (-180, 180]. Positiv = im Uhrzeigersinn.
+  double _signedAngleDelta(double from, double to) {
+    var d = (to - from) % 360.0;
+    if (d > 180.0) d -= 360.0;
+    if (d < -180.0) d += 360.0;
+    return d;
   }
 
   void _updateMovementHeading(geo.Position raw) {
