@@ -16,6 +16,12 @@
 	     Berechtigung freigeben UND das Provisioning-Profil sie enthalten
 	     (Antrag läuft). Ein Debug-Build auf ein echtes iPhone würde sonst beim
 	     Signieren scheitern — dann dieses Entitlement temporär entfernen. -->
+	<!-- 2026-06-13: Apple hat das CarPlay-Navigations-Entitlement erteilt
+	     (Case-ID 20269585, Mail vom 12.06.) → wieder aktiv. Geräte-/TestFlight-
+	     Builds brauchen ab jetzt ein Provisioning-Profil MIT der CarPlay-
+	     Capability (Portal: App ID com.vucko.cruiserconnect → "CarPlay
+	     Navigation App" aktivieren → neues Profil erzeugen + in Xcode wählen,
+	     Automatically manage signing AUS). -->
 	<key>com.apple.developer.carplay-maps</key>
 	<true/>
 </dict>
