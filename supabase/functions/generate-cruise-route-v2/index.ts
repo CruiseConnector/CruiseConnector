@@ -635,12 +635,18 @@ async function callGraphHopper(opts: {
     // road_class/road_environment Details für echte Autobahn-Erkennung in meta.
     details: ['road_class', 'road_environment'],
   };
-  // 2026-06-09 (vucko U-Turn-Fix): EIN heading-Wert = gilt für den Startpunkt
-  // (GH-Doku). heading_penalty 120s: gegen die Fahrtrichtung starten kostet
-  // 2 Fahrminuten → nur wenn es WIRKLICH keine Alternative gibt, dreht GH um.
+  // 2026-06-09 (vucko U-Turn-Fix): EIN heading-Wert = gilt für den Startpunkt.
+  // 2026-06-13 (vucko Reroute-Videos): Der POST-Body-Feldname ist `headings`
+  // (Plural-Array)! `heading` (Singular) ist nur der GET-Query-Param und wird
+  // im JSON-Body von GH STILL ignoriert (live bewiesen: heading → byte-
+  // identische Routen bei 20° vs. 200°; headings → ehrliche „Wenden"-
+  // Instruktion sign -98). Gleiche Falle wie der custom_model-GET-Bug.
+  // heading_penalty 300 (GH-Default): gegen die Fahrtrichtung starten kostet
+  // 5 Fahrminuten → nur wenn es WIRKLICH keine Alternative gibt, dreht GH um —
+  // und dann sagt es das Wendemanöver explizit an.
   if (!opts.isRoundTrip && opts.headingDeg != null && Number.isFinite(opts.headingDeg)) {
-    ghBody.heading = [((Math.round(opts.headingDeg) % 360) + 360) % 360];
-    ghBody.heading_penalty = 120;
+    ghBody.headings = [((Math.round(opts.headingDeg) % 360) + 360) % 360];
+    ghBody.heading_penalty = 300;
   }
   if (opts.isRoundTrip) {
     ghBody.algorithm = 'round_trip';
