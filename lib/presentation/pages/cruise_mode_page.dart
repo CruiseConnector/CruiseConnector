@@ -484,7 +484,11 @@ class _CruiseModePageState extends State<CruiseModePage>
   LatLng? _puckBlendFrom;
   DateTime? _puckBlendStartAt;
   bool _puckSourceWasLocked = false;
-  static const Duration _puckBlendDuration = Duration(milliseconds: 600);
+  // 2026-06-13 (vucko Google/Apple-Bar-Review F6-2): 600→220ms. 600ms zeigte
+  // den Puck bis ~300ms auf einer Zwischenposition (Lag zur echten Position
+  // bei Tempo); Google/Apple springen quasi sofort. 220ms ist gerade noch
+  // weich, aber unter der Wahrnehmungsschwelle für „Puck hinkt nach".
+  static const Duration _puckBlendDuration = Duration(milliseconds: 220);
   // 2026-06-12 (vucko): Manoever-Ueberfahren-Tracking fuer den Sofort-Reroute.
   int? _overshootManeuverIndex;
   double _overshootMinDistM = double.infinity;
@@ -5035,9 +5039,24 @@ class _CruiseModePageState extends State<CruiseModePage>
 
   // ═══════════════════════ NAVIGATION OVERLAY ═════════════════════════════
 
+  /// 2026-06-13 (vucko Google/Apple-Bar-Review G1+F6-3): Das Banner soll den
+  /// neutralen „Neuberechnung"-Status zeigen (wie Google „Rerouting…"), sobald
+  /// ein Reroute läuft ODER der Fahrer klar+anhaltend off-route ist. Die
+  /// 1,2s/30m-Schwelle deckt zugleich das 0,6s-Fenster zwischen Lock-Release
+  /// und Reroute-Banner ab (kein „Position bewegt sich, aber keine UI-Reaktion").
+  bool get _isReroutingBannerActive {
+    if (_isRerouting) return true;
+    final since = _offRouteSince;
+    if (since == null) return false;
+    return _offRouteGapMeters > 30.0 &&
+        DateTime.now().difference(since) >=
+            const Duration(milliseconds: 1200);
+  }
+
   Widget _buildNavigationOverlay() {
     final topInset = MediaQuery.of(context).padding.top;
     final visibleManeuver = _activeVisibleManeuver();
+    final reroutingActive = _isReroutingBannerActive;
     return Stack(
       children: [
         Positioned(
@@ -5054,6 +5073,7 @@ class _CruiseModePageState extends State<CruiseModePage>
                     visibleManeuver,
                   ),
                   leading: _buildManeuverBackChevron(),
+                  isRerouting: reroutingActive,
                 )
               : _buildRoutePreviewBackButton(),
         ),
@@ -8094,6 +8114,62 @@ class _CruiseModePageState extends State<CruiseModePage>
     return delta <= 55.0;
   }
 
+  /// 2026-06-13 (vucko Google/Apple-Bar-Review F4/G6): KLAR gegenläufiger Kurs
+  /// (>72°) — strenger als das 55°-Korridor-Veto, damit ein verpasster Abbieger
+  /// schnell erkannt wird, ABER eine enge (Sport-Mode-)Kurve nicht fälschlich
+  /// als Verfahren zählt. Wird mit [_routeHasSharpTurnNear] kombiniert.
+  bool _gpsHeadingClearlyOpposed(geo.Position position, RouteWindowMatch match) {
+    if (!position.speed.isFinite || position.speed < 4.0) return false;
+    if (!position.heading.isFinite || position.heading < 0) return false;
+    final coords = _fullRouteCoordinates;
+    if (coords.length < 2) return false;
+    final i = match.index.clamp(0, coords.length - 2);
+    final tangent = _bearingDegrees(
+      coords[i][1],
+      coords[i][0],
+      coords[i + 1][1],
+      coords[i + 1][0],
+    );
+    var delta = (position.heading - tangent).abs() % 360.0;
+    if (delta > 180.0) delta = 360.0 - delta;
+    return delta > 72.0;
+  }
+
+  /// 2026-06-13 (vucko G6, Alpen-Haarnadel-Schutz): Liegt innerhalb der
+  /// nächsten [aheadMeters] auf der Route eine scharfe Richtungsänderung
+  /// (kumulierter Bearing-Wechsel > [turnDeg])? Dann ist ein momentan
+  /// gegenläufiger GPS-Kurs Kurvenfahrt, kein Verfahren — Schnell-Reroute
+  /// unterdrücken (die 3s-Spatial-Hysterese greift weiterhin, falls doch echt).
+  bool _routeHasSharpTurnNear(
+    int index, {
+    double aheadMeters = 35.0,
+    double turnDeg = 50.0,
+  }) {
+    final coords = _fullRouteCoordinates;
+    if (coords.length < 3) return false;
+    final start = index.clamp(0, coords.length - 2);
+    var acc = 0.0;
+    double? prevBearing;
+    var cumTurn = 0.0;
+    for (var i = start; i < coords.length - 1 && acc < aheadMeters; i++) {
+      final seg = geo.Geolocator.distanceBetween(
+        coords[i][1], coords[i][0], coords[i + 1][1], coords[i + 1][0],
+      );
+      acc += seg;
+      final b = _bearingDegrees(
+        coords[i][1], coords[i][0], coords[i + 1][1], coords[i + 1][0],
+      );
+      if (prevBearing != null) {
+        var d = (b - prevBearing).abs() % 360.0;
+        if (d > 180.0) d = 360.0 - d;
+        cumTurn += d;
+        if (cumTurn > turnDeg) return true;
+      }
+      prevBearing = b;
+    }
+    return false;
+  }
+
   static double _bearingDegrees(
     double lat1,
     double lng1,
@@ -9396,12 +9472,26 @@ class _CruiseModePageState extends State<CruiseModePage>
       lead: Duration.zero,
     );
 
+    // 2026-06-13 (vucko Google/Apple-Bar-Review G4): Liefert GraphHopper (dank
+    // des headings-Fixes) bereits ein echtes WENDEN-Manöver als erste
+    // Instruktion, übernimmt das normale Banner+Voice-Flow die Ansage nativ
+    // (U-Turn-Icon + Distanz-Eskalation wie Google). Der synthetische Override
+    // ist dann überflüssig und würde nur doppelt sprechen — nur als FALLBACK
+    // feuern, wenn GH KEIN führendes Wenden-Manöver hat.
+    final firstManeuverIsUTurn = result.maneuvers.isNotEmpty &&
+        result.maneuvers.first.routeIndex <= 2 &&
+        (result.maneuvers.first.icon == Icons.u_turn_left ||
+            result.maneuvers.first.icon == Icons.u_turn_right);
+
     // 2026-06-12 (vucko Video: "sagt rechts, meint wenden"): Startet die neue
-    // Route >135 Grad GEGEN die aktuelle Fahrtrichtung, faehrt der User von
+    // Route >120 Grad GEGEN die aktuelle Fahrtrichtung, faehrt der User von
     // ihr weg — die erste regulaere Instruktion ("rechts abbiegen") waere
     // irrefuehrend. Dann zuerst EXPLIZIT zum Wenden auffordern.
+    // 2026-06-13 (G5/F5-Review): Schwelle 135→120° (Industriestandard, fängt
+    // Wenden-Fälle 2-3s früher).
     final c = result.coordinates;
-    if (c.length >= 2 &&
+    if (!firstManeuverIsUTurn &&
+        c.length >= 2 &&
         commitPos.speed.isFinite &&
         commitPos.speed > 3.0 &&
         commitPos.heading.isFinite &&
@@ -9418,7 +9508,7 @@ class _CruiseModePageState extends State<CruiseModePage>
           _bearingDegrees(c[0][1], c[0][0], c[probeIdx][1], c[probeIdx][0]);
       var delta = (commitPos.heading - routeStartBearing).abs() % 360.0;
       if (delta > 180.0) delta = 360.0 - delta;
-      if (delta > 135.0) {
+      if (delta > 120.0) {
         _speakManeuverAnnouncement(
           0,
           important: true,
@@ -10341,12 +10431,15 @@ class _CruiseModePageState extends State<CruiseModePage>
       _offRouteSince ??= DateTime.now();
       final offFor = DateTime.now().difference(_offRouteSince!);
       // 2026-06-13 (vucko Reroute-Videos): Fährt der Kurs KLAR von der Route
-      // weg (>55° Abweichung, >25m daneben, >4 m/s), ist das ein echtes
+      // weg (>72° Abweichung, >25m daneben, >4 m/s), ist das ein echtes
       // Verfahren — schnelle 1,5s-Schiene statt 3s warten.
+      // 2026-06-13 (vucko G6, Alpen-Haarnadel): NICHT auf der schnellen
+      // Schiene, wenn unmittelbar vor uns selbst eine scharfe Kurve liegt —
+      // dort ist ein gegenläufiger Momentan-Kurs Kurvenfahrt, kein Verfahren.
       final headingOpposed =
-          (position.speed.isFinite && position.speed > 4.0) &&
+          _gpsHeadingClearlyOpposed(position, offRouteDecisionMatch) &&
           offRouteDecisionMatch.distanceMeters > 25.0 &&
-          !_gpsHeadingAlignedWithRoute(position, offRouteDecisionMatch);
+          !_routeHasSharpTurnNear(offRouteDecisionMatch.index);
       final clearlyOffRoute = maneuverOvershoot ||
           headingOpposed ||
           offRouteDecisionMatch.distanceMeters > offRouteCorridor * 2.5;
@@ -10355,9 +10448,16 @@ class _CruiseModePageState extends State<CruiseModePage>
           (clearlyOffRoute && offFor >= const Duration(milliseconds: 1500));
       if (sustained && !_isRerouting) {
         final now = DateTime.now();
+        // 2026-06-13 (vucko Google/Apple-Bar-Review G3): Bei hohem Tempo
+        // (>22 m/s ≈ 80 km/h) kostet jede Cooldown-Sekunde ~22m Off-Route.
+        // Google/Apple feuern Folge-Reroutes nahezu sofort → 1,5s statt 3s.
+        final highSpeed = position.speed.isFinite && position.speed > 22.0;
+        final successCooldown = highSpeed
+            ? const Duration(milliseconds: 1500)
+            : _rerouteCooldown;
         final rerouteCooldown = _lastRerouteFailed
             ? _rerouteFailureCooldown
-            : _rerouteCooldown;
+            : successCooldown;
         final cooldownOk =
             _lastRerouteTime == null ||
             now.difference(_lastRerouteTime!) >= rerouteCooldown;
@@ -11453,6 +11553,9 @@ class _CruiseModePageState extends State<CruiseModePage>
   }
 
   String? _currentCarManeuverText() {
+    // 2026-06-13 (vucko G1): off-route/Reroute → CarPlay zeigt „Neuberechnung"
+    // statt der veralteten Abbiege-Anweisung (wie Google).
+    if (_isReroutingBannerActive) return 'Neuberechnung';
     final maneuver = _activeVisibleManeuver();
     if (maneuver == null) return null;
     return maneuver.instruction.isNotEmpty
@@ -11463,6 +11566,7 @@ class _CruiseModePageState extends State<CruiseModePage>
   /// Maschinenlesbarer Manöver-Typ (links/rechts/Kreisverkehr…) für die
   /// Auto-Displays — abgeleitet aus dem Icon des nächsten Manövers.
   String? _currentCarManeuverKind() {
+    if (_isReroutingBannerActive) return null;
     final maneuver = _activeVisibleManeuver();
     if (maneuver == null) return null;
     return CarRouteBridgeService.maneuverKindFromIcon(maneuver.icon);
@@ -12673,13 +12777,27 @@ class _CruiseModePageState extends State<CruiseModePage>
     if (_maneuvers.isEmpty || _fullRouteCoordinates.length < 2) return null;
     final maneuver = visibleManeuver ?? _activeVisibleManeuver();
     if (maneuver == null) return null;
-    final targetIndex = maneuver.routeIndex
+    var targetIndex = maneuver.routeIndex
         .clamp(0, _fullRouteCoordinates.length - 1)
         .toInt();
-    // 2026-06-13 (vucko Video Banner-Freeze): off-route kommt die Luftlinie
-    // GPS→Route dazu — die Anzeige wächst ehrlich mit, statt einzufrieren.
+    // 2026-06-13 (vucko Google/Apple-Bar-Review G2): Ist das sichtbare Manöver
+    // bereits hinter dem Puck-Index (überfahren), zeigt Google IMMER das
+    // NÄCHSTE noch nicht passierte Manöver — nicht nur die Luftlinie. Das
+    // nächste Manöver mit routeIndex > _currentRouteIndex suchen.
     if (targetIndex <= _currentRouteIndex) {
-      return _offRouteGapMeters > 0 ? _offRouteGapMeters : 0;
+      var nextIdx = -1;
+      for (final m in _maneuvers) {
+        final mi = m.routeIndex.clamp(0, _fullRouteCoordinates.length - 1).toInt();
+        if (mi > _currentRouteIndex) {
+          nextIdx = mi;
+          break;
+        }
+      }
+      // Kein weiteres Manöver (Routenende) → ehrliche Luftlinie zur Route.
+      if (nextIdx < 0) {
+        return _offRouteGapMeters > 0 ? _offRouteGapMeters : 0;
+      }
+      targetIndex = nextIdx;
     }
 
     double dist = 0.0;
@@ -12688,6 +12806,8 @@ class _CruiseModePageState extends State<CruiseModePage>
       final c2 = _fullRouteCoordinates[i + 1];
       dist += geo.Geolocator.distanceBetween(c1[1], c1[0], c2[1], c2[0]);
     }
+    // 2026-06-13 (vucko Video Banner-Freeze): off-route kommt die Luftlinie
+    // GPS→Route dazu — die Anzeige wächst ehrlich mit, statt einzufrieren.
     return dist + _offRouteGapMeters;
   }
 

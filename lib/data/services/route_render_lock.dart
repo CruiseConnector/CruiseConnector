@@ -280,8 +280,13 @@ class RouteRenderLock {
       if (diff > 180.0) diff = 360.0 - diff;
       if (diff > 65.0) {
         _headingDivergenceSince ??= timestamp;
+        // 2026-06-13 (vucko Google/Apple-Bar-Review F6-1): 900→700ms. Mit der
+        // lateralen Wachstumsdynamik ergab 0,9s ~1,2s Gesamt-Klebezeit;
+        // Google/Apple fühlen sich <1s an. 0,7s + 22m-Gate hält den
+        // Kreisverkehr-Schutz (dort bleibt lateral klein) und kommt auf
+        // ~0,9s Gesamt — spürbar näher am Gold-Standard.
         if (timestamp.difference(_headingDivergenceSince!) >
-            const Duration(milliseconds: 900)) {
+            const Duration(milliseconds: 700)) {
           resetLock();
           return null;
         }

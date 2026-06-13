@@ -12,6 +12,7 @@ class CruiseManeuverIndicator extends StatelessWidget {
     required this.maneuver,
     this.distanceToManeuverMeters,
     this.leading,
+    this.isRerouting = false,
   });
 
   final RouteManeuver maneuver;
@@ -24,8 +25,16 @@ class CruiseManeuverIndicator extends StatelessWidget {
   /// oben alles als EINE Einheit statt zwei lose Pillen.
   final Widget? leading;
 
+  /// 2026-06-13 (vucko Google/Apple-Bar-Review G1): Klar off-route / Reroute in
+  /// flight → das Banner zeigt einen neutralen „Neuberechnung"-Status (wie
+  /// Google „Rerouting…") statt der veralteten, irreführenden Abbiege-Anweisung.
+  final bool isRerouting;
+
   @override
   Widget build(BuildContext context) {
+    if (isRerouting) {
+      return _buildReroutingBanner(context);
+    }
     final distanceText = distanceToManeuverMeters == null
         ? '--'
         : distanceToManeuverMeters! >= 1000.0
@@ -115,6 +124,84 @@ class CruiseManeuverIndicator extends StatelessWidget {
                   style: TextStyle(
                     color: Colors.white.withValues(alpha: 0.85),
                     fontSize: 15,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 2026-06-13 (vucko G1): „Neuberechnung"-Status — neutrale Karte mit
+  /// rotierendem Refresh-Icon, exakt wie Google „Rerouting…". Verhindert, dass
+  /// eine veraltete Abbiege-Anweisung den Fahrer in die Irre führt.
+  Widget _buildReroutingBanner(BuildContext context) {
+    return Container(
+      padding: EdgeInsets.fromLTRB(leading != null ? 6 : 16, 14, 16, 14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1C2028).withValues(alpha: 0.97),
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.4),
+            blurRadius: 20,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          if (leading != null) ...[
+            leading!,
+            const SizedBox(width: 6),
+            Container(
+              width: 1,
+              height: 44,
+              color: Colors.white.withValues(alpha: 0.10),
+            ),
+            const SizedBox(width: 14),
+          ],
+          SizedBox(
+            width: 48,
+            height: 48,
+            child: Center(
+              child: SizedBox(
+                width: 26,
+                height: 26,
+                child: CircularProgressIndicator(
+                  strokeWidth: 3,
+                  valueColor: AlwaysStoppedAnimation<Color>(
+                    AppAccentColors.accent,
+                  ),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text(
+                  'Neuberechnung',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 22,
+                    fontWeight: FontWeight.w700,
+                    height: 1.1,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  'Route wird angepasst — bitte weiterfahren',
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.65),
+                    fontSize: 14,
                     fontWeight: FontWeight.w500,
                   ),
                 ),
