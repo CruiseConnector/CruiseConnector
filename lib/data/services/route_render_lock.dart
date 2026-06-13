@@ -110,6 +110,14 @@ class RouteRenderLock {
   double _renderDistM = -1.0;
   bool _catchingUp = false;
   DateTime? _lastProjectionAt;
+  // 2026-06-13 (vucko Verfahren-"kracht"): Beginn der anhaltenden Heading-
+  // Divergenz (GPS-Kurs vs. Routen-Tangente). Beim echten Falsch-Abbiegen
+  // waechst die Lateral-Distanz nur mit ~10-20 m/s — bis zum 60m-Release-
+  // Gate klebte der Puck ~4s sichtbar falsch auf der Route. Divergiert der
+  // Kurs klar (>65 Grad) UND ist der Fahrer schon >22m daneben, wird der
+  // Lock nach 0,9s freigegeben (Kreisverkehr-sicher: dort bleibt die
+  // Lateral-Distanz klein).
+  DateTime? _headingDivergenceSince;
 
   List<double>? get cumulativeDistances => _cumulativeDistances;
   int get segmentIndex => _segmentIndex;
@@ -175,6 +183,7 @@ class RouteRenderLock {
     _renderDistM = -1.0;
     _catchingUp = false;
     _lastProjectionAt = null;
+    _headingDivergenceSince = null;
   }
 
   RouteRenderLockProjection? project({
@@ -185,6 +194,7 @@ class RouteRenderLock {
     required int currentRouteIndex,
     required double speedMps,
     DateTime? timestamp,
+    double? headingDeg,
   }) {
     if (coordinates.length < 2 || !routeConfirmed) return null;
     ensureRoute(coordinates);
@@ -251,6 +261,35 @@ class RouteRenderLock {
     final lateralGate = hasLock ? lateralReleaseMeters : lateralMaxMeters;
     if (bestSegment < 0 || lateralMeters > lateralGate) {
       return null;
+    }
+
+    // Heading-Divergenz-Release (siehe Feld-Kommentar): klarer Gegen-Kurs +
+    // bereits deutlich neben der Linie -> Lock nach 0,9s loslassen, damit der
+    // Puck beim Verfahren ehrlich der echten Position folgt statt bis 60m
+    // lateral "festzukleben" und dann zu springen.
+    if (hasLock &&
+        headingDeg != null &&
+        headingDeg.isFinite &&
+        headingDeg >= 0.0 &&
+        speedMps.isFinite &&
+        speedMps > 3.0 &&
+        lateralMeters > 22.0 &&
+        timestamp != null) {
+      final segBearing = _segmentBearingDeg(bestSegment);
+      var diff = (headingDeg - segBearing).abs() % 360.0;
+      if (diff > 180.0) diff = 360.0 - diff;
+      if (diff > 65.0) {
+        _headingDivergenceSince ??= timestamp;
+        if (timestamp.difference(_headingDivergenceSince!) >
+            const Duration(milliseconds: 900)) {
+          resetLock();
+          return null;
+        }
+      } else {
+        _headingDivergenceSince = null;
+      }
+    } else {
+      _headingDivergenceSince = null;
     }
 
     if (hasLock && bestDistanceM < previousDistanceM) {
@@ -435,6 +474,23 @@ class RouteRenderLock {
       distanceM: bestDistanceM,
       lateralMeters: math.sqrt(bestLateral2),
     );
+  }
+
+  /// Kurs (Grad, 0=Nord) des Routen-Segments [segIdx] -> [segIdx+1].
+  double _segmentBearingDeg(int segIdx) {
+    final coords = _coordinates;
+    if (coords == null || coords.length < 2) return 0.0;
+    final i = segIdx.clamp(0, coords.length - 2);
+    final a = coords[i];
+    final b = coords[i + 1];
+    final lat1 = a[1] * math.pi / 180.0;
+    final lat2 = b[1] * math.pi / 180.0;
+    final dLng = (b[0] - a[0]) * math.pi / 180.0;
+    final y = math.sin(dLng) * math.cos(lat2);
+    final x =
+        math.cos(lat1) * math.sin(lat2) -
+        math.sin(lat1) * math.cos(lat2) * math.cos(dLng);
+    return (math.atan2(y, x) * 180.0 / math.pi + 360.0) % 360.0;
   }
 
   int _segmentIndexForDistance(double distanceM) {

@@ -99,6 +99,13 @@ class CruiseMapLibreController {
   void Function()? onForceResyncLines;
   void forceResyncLines() => onForceResyncLines?.call();
 
+  // 2026-06-13 (vucko Free-Cam-Ruckeln): Marker-Reprojektion von außen
+  // anstoßbar. Im Follow-Modus projiziert onCameraMove pro Frame; steht die
+  // Kamera (freier Modus), treibt der Render-Ticker der Page den Puck über
+  // diesen Hook mit derselben 60fps-Kadenz.
+  void Function()? onReprojectMarkers;
+  void reprojectMarkers() => onReprojectMarkers?.call();
+
   mb.MapLibreMapController get raw => _map;
 
   // 2026-06-10 (vucko ERSTOPEN-CRASH-Fix Schicht B): Ein NaN/∞ in lat/lng/zoom
@@ -545,6 +552,7 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
       _lastLinesSig = '';
       _syncLines();
     };
+    _ctrl!.onReprojectMarkers = _projectMarkers;
   }
 
   Future<void> _onStyleLoaded() async {

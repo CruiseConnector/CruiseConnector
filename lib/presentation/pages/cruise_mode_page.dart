@@ -479,6 +479,12 @@ class _CruiseModePageState extends State<CruiseModePage>
   // addiert → die Meter-Anzeige WÄCHST ehrlich beim Wegfahren (Google-
   // Verhalten), statt minutenlang auf dem letzten On-Route-Wert einzufrieren.
   double _offRouteGapMeters = 0.0;
+  // 2026-06-13 (vucko Verfahren-„kracht"): Übergangs-Blend der Puck-Quelle
+  // (Route-gesnappt ↔ frei) — siehe _blendPuckTransition.
+  LatLng? _puckBlendFrom;
+  DateTime? _puckBlendStartAt;
+  bool _puckSourceWasLocked = false;
+  static const Duration _puckBlendDuration = Duration(milliseconds: 600);
   // 2026-06-12 (vucko): Manoever-Ueberfahren-Tracking fuer den Sofort-Reroute.
   int? _overshootManeuverIndex;
   double _overshootMinDistM = double.infinity;
@@ -1063,8 +1069,13 @@ class _CruiseModePageState extends State<CruiseModePage>
   double _lastTrimDistM = -1;
   LatLng? _lastRouteLockedRenderLatLng;
   DateTime? _lastRouteRenderLockAcceptedAt;
-  static const double _routeTrimPushGateM = 4.0;
-  static const double _routeTrimLeadM = 0.0;
+  // 2026-06-13 (vucko „Linie hinterm Puck"): Gate 4→2,5m + Vorhalt 0→2,5m.
+  // Der Schnitt liegt damit IMMER 0..2,5m VOR dem Lock-Meter — die Naht
+  // pendelt unsichtbar UNTER dem Puck-Kreis, nie als roter Schweif dahinter.
+  // (6m Vorhalt wirkte „abgekoppelt", 0m zeigte bis 4m Schweif — 2,5m ist
+  // der verifizierte Mittelweg, vgl. Linienkopf-Vorhalt-Fix 0495f57.)
+  static const double _routeTrimPushGateM = 2.5;
+  static const double _routeTrimLeadM = 2.5;
   static const Duration _routeOutlierVisualHold = Duration(milliseconds: 1500);
   static const Duration _nativeRenderPredictionLead = Duration(
     milliseconds: 150,
@@ -1111,6 +1122,11 @@ class _CruiseModePageState extends State<CruiseModePage>
       currentRouteIndex: _currentRouteIndex,
       speedMps: _nativeSmoother.speed,
       timestamp: timestamp,
+      // 2026-06-13 (vucko Verfahren-„kracht"): Kurs mitgeben → der Lock
+      // erkennt echtes Wegfahren (Heading-Divergenz) und lässt früh los.
+      headingDeg: _nativeSmoother.hasValidHeading
+          ? _nativeSmoother.heading
+          : null,
     );
     return projection?.distanceM;
   }
@@ -1133,6 +1149,58 @@ class _CruiseModePageState extends State<CruiseModePage>
     );
   }
 
+  /// 2026-06-13 (vucko Verfahren-„kracht"): Wechselt die Puck-Quelle zwischen
+  /// „auf der Route gesnappt" und „frei (echtes GPS)", wird NICHT mehr hart
+  /// gesprungen, sondern ~600ms weich uebergeblendet (smoothstep auf das pro
+  /// Frame weiterwandernde Ziel). Betrifft Lock-Release beim Verfahren,
+  /// Hold-Ablauf UND Re-Acquire nach dem Reroute.
+  LatLng _blendPuckTransition(
+    LatLng target, {
+    required bool locked,
+    required DateTime at,
+  }) {
+    final prev = _lastRouteLockedRenderLatLng;
+    if (locked != _puckSourceWasLocked) {
+      _puckSourceWasLocked = locked;
+      if (prev != null) {
+        final jumpM = geo.Geolocator.distanceBetween(
+          prev.latitude,
+          prev.longitude,
+          target.latitude,
+          target.longitude,
+        );
+        // Nur echte sichtbare Spruenge blenden; Mini-Differenzen direkt,
+        // Riesen-Spruenge (Teleport/Routenwechsel) ebenfalls direkt.
+        if (jumpM > 8.0 && jumpM < 500.0) {
+          _puckBlendFrom = prev;
+          _puckBlendStartAt = at;
+        }
+      }
+    }
+    final from = _puckBlendFrom;
+    final startAt = _puckBlendStartAt;
+    if (from == null || startAt == null) return target;
+    final t =
+        at.difference(startAt).inMilliseconds /
+        _puckBlendDuration.inMilliseconds;
+    if (t >= 1.0) {
+      _puckBlendFrom = null;
+      _puckBlendStartAt = null;
+      return target;
+    }
+    final e = t * t * (3.0 - 2.0 * t); // smoothstep
+    return LatLng(
+      from.latitude + (target.latitude - from.latitude) * e,
+      from.longitude + (target.longitude - from.longitude) * e,
+    );
+  }
+
+  void _resetPuckBlend() {
+    _puckBlendFrom = null;
+    _puckBlendStartAt = null;
+    _puckSourceWasLocked = false;
+  }
+
   /// Render-Position fuer Puck UND Kamera: on-route = auf die Linie gesnappt.
   LatLng? _routeLockedRenderPosition([DateTime? at]) {
     final renderAt = at ?? DateTime.now();
@@ -1140,11 +1208,13 @@ class _CruiseModePageState extends State<CruiseModePage>
     if (p.lat == 0 && p.lng == 0) {
       _lastRouteLockedRenderLatLng = null;
       _lastRouteRenderLockAcceptedAt = null;
+      _resetPuckBlend();
       return null;
     }
     if (!_isRouteConfirmed || _isOverviewActive) {
       final free = LatLng(p.lat, p.lng);
       _lastRouteLockedRenderLatLng = free;
+      _resetPuckBlend();
       return free;
     }
     final d = _projectDistOnRoute(p.lat, p.lng, renderAt);
@@ -1152,23 +1222,40 @@ class _CruiseModePageState extends State<CruiseModePage>
       if (_shouldHoldLastRouteLockedRenderPosition(renderAt)) {
         final heldPt = _pointAtRouteDist(_renderLockDistM);
         if (heldPt != null) {
-          final held = LatLng(heldPt[1], heldPt[0]);
+          final held = _blendPuckTransition(
+            LatLng(heldPt[1], heldPt[0]),
+            locked: true,
+            at: renderAt,
+          );
           _lastRouteLockedRenderLatLng = held;
           return held;
         }
       }
-      final free = LatLng(p.lat, p.lng); // off-route: freier Puck
+      // off-route: freier Puck — weich aus dem Lock ausblenden
+      final free = _blendPuckTransition(
+        LatLng(p.lat, p.lng),
+        locked: false,
+        at: renderAt,
+      );
       _lastRouteLockedRenderLatLng = free;
       return free;
     }
     _lastRouteRenderLockAcceptedAt = renderAt;
     final pt = _pointAtRouteDist(d);
     if (pt == null) {
-      final free = LatLng(p.lat, p.lng);
+      final free = _blendPuckTransition(
+        LatLng(p.lat, p.lng),
+        locked: false,
+        at: renderAt,
+      );
       _lastRouteLockedRenderLatLng = free;
       return free;
     }
-    final locked = LatLng(pt[1], pt[0]);
+    final locked = _blendPuckTransition(
+      LatLng(pt[1], pt[0]),
+      locked: true,
+      at: renderAt,
+    );
     _lastRouteLockedRenderLatLng = locked;
     return locked;
   }
@@ -2440,15 +2527,11 @@ class _CruiseModePageState extends State<CruiseModePage>
   int _camIdleTicks = 0;
 
   void _onCameraAnimationTick() {
-    if (!_isCameraLocked || !_mapReady || _isOverviewActive) {
+    if (!_mapReady || _isOverviewActive) {
       _cameraAnimController?.stop();
       _lastCameraFrameAt = null;
       return;
     }
-    if (!_camHasState || _camMoveInFlight) return;
-    final frameNow = DateTime.now();
-    final previousFrameAt = _lastCameraFrameAt;
-    _lastCameraFrameAt = frameNow;
     // 2026-06-10 (vucko Fahr-Ruckeln-Fix, MESSBELEGT): Das Kamera-ZIEL wurde
     // bisher nur pro GPS-Event gesetzt. Echtes iOS-GPS liefert ~1Hz → das Ziel sprang
     // 1×/Sekunde um ~Sekunden-Fahrstrecke (70 km/h ≈ 19 m), die Dämpfung
@@ -2459,6 +2542,15 @@ class _CruiseModePageState extends State<CruiseModePage>
     // 1,5 s im Smoother verhindert Davonlaufen bei GPS-Aussetzern). Gleiche
     // Optik/Framing (Zoom, Offset, Dämpfung, Heading-Dead-Zone unverändert) —
     // nur kontinuierlich statt pulsierend. Web behält den Event-Pfad.
+    //
+    // 2026-06-13 (vucko Free-Cam-/Off-Route-Ruckeln, Geraete-Videos): Der
+    // Puck-Glide + Linien-Schnitt laufen jetzt in JEDEM Kameramodus pro
+    // Frame. Vorher stoppte der Ticker beim Verlassen der Zentrierung
+    // komplett → die Render-Position wurde nur noch pro GPS-Fix (1Hz)
+    // fortgeschrieben und der Puck teleportierte sekuendlich (~19m bei
+    // 70 km/h). Kamera-Bewegung bleibt natuerlich an _isCameraLocked
+    // gebunden; bei stehender Kamera stossen wir die Marker-Projektion
+    // selbst an (sonst projiziert nur onCameraMove).
     if (!kIsWeb) {
       // 2026-06-11 (vucko Route-Lock): Kamera folgt derselben route-gesnappten
       // Render-Position wie der Puck (eine Quelle) — vorher zog die freie
@@ -2466,15 +2558,9 @@ class _CruiseModePageState extends State<CruiseModePage>
       final lockPos = _routeLockedRenderPosition(
         DateTime.now().add(_nativeRenderPredictionLead),
       );
-      if (lockPos != null) {
-        _camToLat = lockPos.latitude;
-        _camToLng = lockPos.longitude;
-        // Heading-Ziel bleibt event-gesteuert (_animateCameraTo wendet dort
-        // die Bearing-Dead-Zone an) — Rotation soll nicht pro Frame zappeln.
-      }
       // Linien-Schnitt mitziehen: ist der gerenderte Fortschritt dem letzten
-      // Trim >4m voraus, frisch nachtrimmen. Der sichtbare Linienkopf ist exakt
-      // derselbe Route-Lock-Meter wie der Puck; kein separater Vorhalt.
+      // Trim voraus, frisch nachtrimmen. Der sichtbare Linienkopf haengt am
+      // selben Route-Lock-Meter wie der Puck (+kleiner Vorhalt unterm Puck).
       if (_renderLockDistM >= 0 &&
           _lastTrimDistM >= 0 &&
           _renderLockDistM - _lastTrimDistM > _routeTrimPushGateM &&
@@ -2483,7 +2569,32 @@ class _CruiseModePageState extends State<CruiseModePage>
           _safeSetState(() {});
         }
       }
+      if (!_isCameraLocked) {
+        // Freie Kamera: Puck-Overlay pro Frame reprojizieren.
+        _mlController?.reprojectMarkers();
+        // Idle-Stop: Fahrzeug steht → Ticker pausieren (der naechste
+        // GPS-Fix startet ihn in _onLocationUpdate wieder).
+        if (_nativeSmoother.speed < 0.3) {
+          _cameraAnimController?.stop();
+          _lastCameraFrameAt = null;
+        }
+        return;
+      }
+      if (lockPos != null) {
+        _camToLat = lockPos.latitude;
+        _camToLng = lockPos.longitude;
+        // Heading-Ziel bleibt event-gesteuert (_animateCameraTo wendet dort
+        // die Bearing-Dead-Zone an) — Rotation soll nicht pro Frame zappeln.
+      }
+    } else if (!_isCameraLocked) {
+      _cameraAnimController?.stop();
+      _lastCameraFrameAt = null;
+      return;
     }
+    if (!_camHasState || _camMoveInFlight) return;
+    final frameNow = DateTime.now();
+    final previousFrameAt = _lastCameraFrameAt;
+    _lastCameraFrameAt = frameNow;
     // Kritisch gedämpftes Annähern (Apple/Google-artig). Auf dem echten Gerät
     // kommt nicht jeder AnimationController-Tick bis zu MapLibre durch
     // (_camMoveInFlight coalesced Method-Channel-Calls). Der alte fixe 0.18-
@@ -10061,6 +10172,18 @@ class _CruiseModePageState extends State<CruiseModePage>
       }
     }
 
+    // 2026-06-13 (vucko Free-Cam-Ruckeln): Render-Ticker laeuft in JEDEM
+    // Kameramodus, solange Fixes kommen — er treibt Puck-Glide, Linien-
+    // Schnitt und (bei stehender Kamera) die Marker-Projektion. Der Idle-
+    // Stop im Tick pausiert ihn im Stand; hier wird er wiederbelebt.
+    if (!kIsWeb && _mapReady && !_isOverviewActive) {
+      final renderTicker = _cameraAnimController;
+      if (renderTicker != null && !renderTicker.isAnimating) {
+        _lastCameraFrameAt = null;
+        renderTicker.repeat();
+      }
+    }
+
     // ── UI-Rebuild Throttling ───────────────────────────────────────────────
     // Marker-Position intern aktualisieren, Route-Geometrie aber stabil lassen.
     // setState nur wenn genug Zeit vergangen (Web: 16ms, Native: sofort).
@@ -12594,7 +12717,9 @@ class _CruiseModePageState extends State<CruiseModePage>
 
   void _unlockCameraFollow() {
     if (!_isCameraLocked) return;
-    _cameraAnimController?.stop();
+    // 2026-06-13 (vucko Free-Cam-Ruckeln): Ticker NICHT mehr stoppen — er
+    // treibt im freien Modus weiterhin Puck-Glide + Marker-Projektion
+    // (Kamera-Moves unterbindet der _isCameraLocked-Zweig im Tick selbst).
     _lastCameraFrameAt = null;
     _safeSetState(() => _isCameraLocked = false);
   }

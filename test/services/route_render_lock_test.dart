@@ -597,4 +597,90 @@ void main() {
       }
     },
   );
+
+  test('heading divergence releases the lock early while driving away', () {
+    final route = variableDensityRoute();
+    final lock = RouteRenderLock();
+    final t0 = DateTime(2026, 6, 13, 12);
+
+    final start = pointAt(0);
+    expect(
+      lock.project(
+        coordinates: route,
+        latitude: start[1],
+        longitude: start[0],
+        routeConfirmed: true,
+        currentRouteIndex: 0,
+        speedMps: 12.0,
+        timestamp: t0,
+        headingDeg: 90.0,
+      ),
+      isNotNull,
+    );
+
+    // Falsch abgebogen: Kurs quer zur Route (0 statt 90 Grad), Lateral
+    // waechst 26->44m — bleibt UNTER dem 60m-Release-Gate. Ohne den
+    // Divergenz-Release klebte der Puck hier sekundenlang auf der Route.
+    var released = false;
+    for (var i = 1; i <= 4; i++) {
+      final p = pointAt(40.0 + i * 4, lateralMeters: 20.0 + i * 6.0);
+      final proj = lock.project(
+        coordinates: route,
+        latitude: p[1],
+        longitude: p[0],
+        routeConfirmed: true,
+        currentRouteIndex: 0,
+        speedMps: 12.0,
+        timestamp: t0.add(Duration(milliseconds: 400 * i)),
+        headingDeg: 0.0,
+      );
+      if (proj == null) {
+        released = true;
+        break;
+      }
+    }
+    expect(
+      released,
+      isTrue,
+      reason: 'Lock muss bei klarer Heading-Divergenz vor 60m loslassen',
+    );
+  });
+
+  test('roundabout-style heading swing with small lateral keeps the lock', () {
+    final route = variableDensityRoute();
+    final lock = RouteRenderLock();
+    final t0 = DateTime(2026, 6, 13, 12);
+
+    final start = pointAt(0);
+    expect(
+      lock.project(
+        coordinates: route,
+        latitude: start[1],
+        longitude: start[0],
+        routeConfirmed: true,
+        currentRouteIndex: 0,
+        speedMps: 9.0,
+        timestamp: t0,
+        headingDeg: 90.0,
+      ),
+      isNotNull,
+    );
+
+    // Im Kreisverkehr dreht der Kurs voll durch, aber die Lateral-Distanz
+    // bleibt klein (<22m) — der Lock darf NICHT abreissen.
+    for (var i = 1; i <= 6; i++) {
+      final p = pointAt(20.0 + i * 6, lateralMeters: 10.0);
+      final proj = lock.project(
+        coordinates: route,
+        latitude: p[1],
+        longitude: p[0],
+        routeConfirmed: true,
+        currentRouteIndex: 0,
+        speedMps: 9.0,
+        timestamp: t0.add(Duration(milliseconds: 400 * i)),
+        headingDeg: (90.0 + i * 55.0) % 360.0,
+      );
+      expect(proj, isNotNull, reason: 'Fix $i darf den Lock nicht verlieren');
+    }
+  });
 }
