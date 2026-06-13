@@ -10208,15 +10208,14 @@ class RouteService {
 
     // ── Maneuver-Indices komplett neu berechnen (nach allen Koordinaten-Änderungen) ─
     // Statt Offset-Korrektur: lat/lng-Position des Maneuvers in neuen Koordinaten suchen.
+    // 2026-06-13 (vucko J3): copyWith erhält ALLE Felder (maneuverType,
+    // roundaboutExitNumber, roundaboutTurnAngleRad) — nur der routeIndex wird
+    // an die neuen Koordinaten angepasst. Vorher wurden die Kreisverkehr-Felder
+    // hier still verworfen → Banner zeigte das alte Material-Icon.
     final finalManeuvers = result.maneuvers
         .map(
-          (m) => RouteManeuver(
-            latitude: m.latitude,
-            longitude: m.longitude,
+          (m) => m.copyWith(
             routeIndex: _findNearestIndex(m.latitude, m.longitude, coords),
-            icon: m.icon,
-            announcement: m.announcement,
-            instruction: m.instruction,
           ),
         )
         .toList();

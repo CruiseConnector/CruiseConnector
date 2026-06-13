@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 
 import 'package:cruise_connect/domain/models/route_maneuver.dart';
+import 'package:cruise_connect/presentation/widgets/cruise/nav_distance_format.dart';
 
 /// Zeigt die nächste Navigationsanweisung mit Distanz-Anzeige.
 class CruiseManeuverIndicator extends StatelessWidget {
@@ -35,11 +36,12 @@ class CruiseManeuverIndicator extends StatelessWidget {
     if (isRerouting) {
       return _buildReroutingBanner(context);
     }
-    final distanceText = distanceToManeuverMeters == null
-        ? '--'
-        : distanceToManeuverMeters! >= 1000.0
-        ? '${(distanceToManeuverMeters! / 1000.0).toStringAsFixed(1).replaceAll('.', ',')} km'
-        : '${distanceToManeuverMeters!.clamp(0, 999).round()} m';
+    // 2026-06-13 (vucko J2): Google-Style Stufen (690/680/670), keine krummen
+    // Zahlen. Kurz vorm Manöver „Jetzt" statt „0 m".
+    final distanceText = formatNavDistance(
+      distanceToManeuverMeters,
+      nowLabelUnderTen: true,
+    );
 
     final isRoundabout = maneuver.maneuverType == ManeuverType.roundabout;
 

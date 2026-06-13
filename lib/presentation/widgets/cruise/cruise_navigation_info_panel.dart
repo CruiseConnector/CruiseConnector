@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
+import 'package:cruise_connect/presentation/widgets/cruise/nav_distance_format.dart';
 
 /// Zeigt verbleibende Zeit und Streckendistanz am unteren Rand der Karte.
 class CruiseNavigationInfoPanel extends StatelessWidget {
@@ -159,9 +160,8 @@ class CruiseNavigationInfoPanel extends StatelessWidget {
 
   static String _formatDistanceKm(double? rawDistance) {
     if (rawDistance == null || rawDistance <= 0) return '-- km';
-    // rawDistance ist immer in Metern
-    final km = rawDistance / 1000;
-    if (km < 0.1) return '${rawDistance.round()} m';
-    return '${km.toStringAsFixed(1).replaceAll('.', ',')} km';
+    // 2026-06-13 (vucko J2): Gleiche Google-Style-Stufung wie das Manöver-Banner
+    // (rawDistance ist immer in Metern).
+    return formatNavDistance(rawDistance);
   }
 }

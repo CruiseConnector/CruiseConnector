@@ -462,10 +462,8 @@ class _CruiseModePageState extends State<CruiseModePage>
   double? _remainingDistance; // Live verbleibende Distanz in Metern
   double? _remainingDuration; // Live verbleibende Zeit in Sekunden
   bool _isRerouting = false; // Verhindert mehrfaches gleichzeitiges Rerouting
-  // 2026-06-06 (vucko P2): „Route wird neu berechnet"-Banner NUR einmal pro
-  // Reroute-Zyklus zeigen (vorher pro Versuch → Spam). Wird beim Erfolg/Fehler
-  // zurückgesetzt.
-  bool _rerouteBannerShown = false;
+  // 2026-06-13 (vucko J4): _rerouteBannerShown entfernt — es gibt keinen
+  // separaten Reroute-Toast mehr (das obere Banner zeigt „Neuberechnung").
   DateTime? _lastRerouteTime; // Cooldown zwischen Reroutes
   bool _lastRerouteFailed = false;
   int _offRouteCount = 0; // Zählt aufeinanderfolgende Off-Route-Updates
@@ -5292,8 +5290,18 @@ class _CruiseModePageState extends State<CruiseModePage>
         !_isRerouting &&
         _offRouteSince == null &&
         _brightAheadLatLngs.length >= 2;
+    // 2026-06-13 (vucko J4): Fallback NIE mehr die volle Route (die hinter dem
+    // Puck weiterläuft) — sondern die Route AB Puck vorwärts. Während Reroute/
+    // Off-Route war das 3km-Fenster leer → vorher lag die alte volle Route rot
+    // durch den Puck (Video: „Strecke vor UND hinter mir"). In der Preview
+    // (noch nicht bestätigt) bleibt _routeLatLngs, damit die Reveal-Animation
+    // (2→voll) sichtbar bleibt.
     final activePts = (!_isOverviewActive && _routeLatLngs.length >= 2)
-        ? (canUseLiveRouteWindow ? _brightAheadLatLngs : _routeLatLngs)
+        ? (canUseLiveRouteWindow
+              ? _brightAheadLatLngs
+              : (_isRouteConfirmed
+                    ? _activeRouteAheadFromIndex()
+                    : _routeLatLngs))
         : _fullRouteBackgroundLatLngs;
     return CruiseMapLibreMap(
       initialCenter: _stableInitialCenter!,
@@ -5328,6 +5336,31 @@ class _CruiseModePageState extends State<CruiseModePage>
         _scheduleViewportPoiRefresh();
       },
     );
+  }
+
+  /// Aktive rote Linie als Fallback OHNE Stück hinter dem Puck: die Route ab
+  /// dem aktuellen Routen-Index vorwärts. Genutzt wenn das 3km-Fenster
+  /// (_brightAheadLatLngs) leer ist (Reroute in-flight, Off-Route-Phase,
+  /// Fenster-Lücke). _currentRouteIndex ist immer ein gültiger Index in
+  /// _fullRouteCoordinates (Commit/Re-Anchor setzen beide konsistent), darum
+  /// ist das billig und korrekt — nie hinter dem Standort.
+  List<LatLng> _activeRouteAheadFromIndex() {
+    final coords = _fullRouteCoordinates;
+    if (coords.length < 2) return _routeLatLngs;
+    final idx = _currentRouteIndex.clamp(0, coords.length - 1).toInt();
+    // Kopf = der auf die ROUTE gesnappte Puck (immer on-road, nie ein
+    // Off-Route-Verbinder). Ist er da, hängen wir die Vertices AB idx+1 an →
+    // die Linie startet exakt am Puck. Sonst ab dem ≤Puck-Vertex (idx), damit
+    // sie trotzdem am Puck klebt (kein vorlaufender Spalt).
+    final head = _lastRouteLockedRenderLatLng;
+    final tailStart = head != null
+        ? (idx + 1).clamp(0, coords.length).toInt()
+        : (idx >= coords.length - 1 ? coords.length - 2 : idx);
+    final pts = <LatLng>[
+      if (head != null) head,
+      for (final c in coords.sublist(tailStart)) LatLng(c[1], c[0]),
+    ];
+    return pts.length >= 2 ? pts : _routeLatLngs;
   }
 
   List<CruiseMapLine> _buildMapLibreLines() {
@@ -6320,20 +6353,18 @@ class _CruiseModePageState extends State<CruiseModePage>
     return _buildDefaultLocationPuck(headingDegrees);
   }
 
-  /// iOS Apple-Maps-Style Puck: Kompakter blauer Punkt mit kleinem
-  /// Richtungskeil — exakt wie in Apple Karten (Foto 2+3).
+  /// iOS Puck: reiner blauer Punkt, KEIN Richtungspfeil.
+  /// 2026-06-13 (vucko J5): Der Richtungskeil sprang mit dem (bei langsamer
+  /// Fahrt unzuverlässigen) GPS-/Geräte-Heading herum und wirkte wie ein
+  /// „wohin schaut das Handy"-Pfeil. Komplett entfernt — die Kamera ist eh
+  /// fahrtrichtungs-oben, der Punkt braucht keinen eigenen Pfeil.
   Widget _buildiOSLocationPuck(double headingDegrees) {
-    return SizedBox(
+    return const SizedBox(
       width: 44,
       height: 44,
-      child: AnimatedRotation(
-        turns: headingDegrees / 360.0,
-        duration: const Duration(milliseconds: 300),
-        curve: Curves.easeOutCubic,
-        child: CustomPaint(
-          size: const Size(44, 44),
-          painter: _AppleMapsPuckPainter(),
-        ),
+      child: CustomPaint(
+        size: Size(44, 44),
+        painter: _AppleMapsPuckPainter(),
       ),
     );
   }
@@ -6359,16 +6390,7 @@ class _CruiseModePageState extends State<CruiseModePage>
               ),
             ),
           ),
-          // Richtungspfeil (dreht sich smooth mit Heading)
-          AnimatedRotation(
-            turns: headingDegrees / 360.0,
-            duration: const Duration(milliseconds: 150),
-            curve: Curves.easeOutCubic,
-            child: CustomPaint(
-              size: const Size(80, 80),
-              painter: _NavigationArrowPainter(),
-            ),
-          ),
+          // 2026-06-13 (vucko J5): Richtungspfeil entfernt — reiner Punkt.
           // Weißer Ring mit Schatten
           Container(
             width: 22,
@@ -9381,9 +9403,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     // eine alte aktive Linie stehen lassen. Der Off-Route-Loop nutzt dafuer den
     // kurzen Failure-Cooldown.
     _lastRerouteTime = DateTime.now();
-    _lastRerouteFailed = true;
-    _rerouteBannerShown = false;
-    // 2026-06-06 (vucko P6): Meldung NUR oben (TopToast), nicht mehr als orange
+    _lastRerouteFailed = true;    // 2026-06-06 (vucko P6): Meldung NUR oben (TopToast), nicht mehr als orange
     // SnackBar unten. P7 deckelt automatisch auf ≤5s + Swipe-to-dismiss.
     if (mounted) {
       ScaffoldMessenger.of(context).hideCurrentSnackBar();
@@ -9428,9 +9448,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     _markCurrentRouteWithRerouteMeta(meta);
     _logRerouteMeta(meta);
     _lastRerouteTime = DateTime.now();
-    _lastRerouteFailed = true;
-    _rerouteBannerShown = false;
-    // 2026-06-06 (vucko P6): oben statt orange Bottom-SnackBar.
+    _lastRerouteFailed = true;    // 2026-06-06 (vucko P6): oben statt orange Bottom-SnackBar.
     if (mounted) {
       ScaffoldMessenger.of(context).hideCurrentSnackBar();
       TopToast.show(
@@ -9669,9 +9687,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     // 2026-06-06 (vucko P2/P4): Reroute-Banner-Flag zurücksetzen (nächster Off-
     // Route-Zyklus darf wieder genau EIN Banner zeigen) + die GRAUE Vorschau-/
     // Hintergrundroute deterministisch neu zeichnen (gleicher Signatur-
-    // Fingerprint bei Rundkurs-Reroute hätte sie sonst stehen lassen).
-    _rerouteBannerShown = false;
-    _mlController?.forceResyncLines();
+    // Fingerprint bei Rundkurs-Reroute hätte sie sonst stehen lassen).    _mlController?.forceResyncLines();
     unawaited(
       RouteCacheService.instance.storeConfirmedRoute(
         route: result,
@@ -10381,6 +10397,14 @@ class _CruiseModePageState extends State<CruiseModePage>
         _activeDestinationCoordinate != null &&
         (remainingForGate != null && remainingForGate <= 180.0) &&
         _isApproachingCurrentDestination(position);
+    // 2026-06-13 (vucko J4-Phantom): Nahe dem ENDE eines Rundkurses ist Start≈
+    // Ende ein Selbstüberlapp, an dem der Matcher kurz „off-route" meldete und
+    // auf den letzten Metern einen Phantom-Reroute auslöste („Neuberechnung"
+    // bei 0,5 km Rest im Video). Auf den letzten ~250 m eines Rundkurses NIE
+    // rerouten — Index/Distanz werden weiter gepflegt, nur der Trigger ruht.
+    final nearRouteEnd = _isRoundTrip &&
+        remainingForGate != null &&
+        remainingForGate <= 250.0;
     // Apple/Google-Regel: ein VORWÄRTS-laufender Puck fährt die Route — auch wenn
     // ein einzelner Fix seitlich zappelt. Dann niemals reroute.
     // 2026-06-12 (vucko Reroute-zu-spaet, Video): Das Veto gilt nur noch, wenn
@@ -10450,8 +10474,23 @@ class _CruiseModePageState extends State<CruiseModePage>
       }
     }
 
-    // Manoever-Overshoot zaehlt wie "klar daneben" — auch innerhalb Korridor.
-    if (maneuverOvershoot) {
+    // 2026-06-13 (vucko J1-Latenz, DER Kern-Fix): Ist man nach dem globalen
+    // Re-Snap IMMER NOCH außerhalb des Korridors (>Korridor von JEDEM
+    // Routenpunkt), kann es KEIN echtes „Vorwärts auf der Route" geben — der
+    // vorlaufende Match-Index ist dann nur das 80er-Fenster, das über einen
+    // Selbstüberlapp/Parallelweg gleitet. Genau dieser falsche Fortschritts-
+    // Veto (makingForwardProgress=true trotz off-route) ließ den Reroute auf
+    // Rundkursen 20-25 s hängen. Außerhalb Korridor ⇒ niemals Fortschritts-Veto.
+    if (isOutsideCorridor) {
+      makingForwardProgress = false;
+    }
+
+    // Manoever-Overshoot zaehlt wie "klar daneben" — aber NUR im breiten
+    // Point-to-Point-Korridor (300-800 m), wo ein verpasster Turn sonst
+    // distanz-technisch unentdeckt bliebe. Bei Rundkursen (50 m Korridor) ist
+    // ein verpasster Turn ohnehin sofort >Korridor → der Overshoot-Zwang löste
+    // dort nur Phantom-Reroutes an Kreisverkehren/Selbstüberlapp aus (Video).
+    if (maneuverOvershoot && !_isRoundTrip) {
       isOutsideCorridor = true;
       makingForwardProgress = false;
     }
@@ -10464,6 +10503,7 @@ class _CruiseModePageState extends State<CruiseModePage>
 
     if (isOutsideCorridor &&
         !approachingDestination &&
+        !nearRouteEnd &&
         !makingForwardProgress) {
       // Ehrliche Banner-Meter: Luftlinie zur Route fließt in die Anzeige ein.
       _offRouteGapMeters = offRouteDecisionMatch.distanceMeters.isFinite
@@ -11761,18 +11801,11 @@ class _CruiseModePageState extends State<CruiseModePage>
         return;
       }
 
-      if (mounted && !_rerouteBannerShown) {
-        // 2026-06-06 (vucko P2): NUR EINMAL pro Reroute-Zyklus (vorher pro Versuch
-        // → der Spam aus dem Test). P7 deckelt die Anzeige auf ≤5s.
-        _rerouteBannerShown = true;
-        TopToast.show(
-          context,
-          message: 'Route wird neu berechnet — bitte weiterfahren',
-          icon: Icons.refresh_rounded,
-          duration: const Duration(seconds: 5),
-        );
-      }
-
+      // 2026-06-13 (vucko J4-Doppelbanner): KEIN separater Reroute-Toast mehr.
+      // Das obere Manöver-Banner zeigt während _isRerouting bereits
+      // „Neuberechnung — Route wird angepasst". Der zusätzliche TopToast
+      // („Route wird neu berechnet — bitte weiterfahren") doppelte exakt diese
+      // Meldung → zwei überlappende Banner im Video.
       final firstCycleOk = await _runRerouteCycle(
         position,
         isRetry: false,
@@ -13589,28 +13622,19 @@ class _CruiseCompletionSnapshot {
   final bool belowMinimum;
 }
 
-/// iOS Apple-Maps Puck: Kompakter blauer Punkt + dezenter Richtungskeil.
-/// Exakt wie Apple Karten — der Pfeil ist ein kleines spitzes Dreieck
-/// unterhalb des Punkts, alles auf 44×44 Canvas zentriert.
+/// iOS Puck: reiner blauer Punkt (weißer Ring + blauer Kern), KEIN Pfeil.
+/// 2026-06-13 (vucko J5): Richtungskeil entfernt — der User wollte keinen
+/// Pfeil, der mit dem Heading herumspringt.
 class _AppleMapsPuckPainter extends CustomPainter {
+  const _AppleMapsPuckPainter();
+
   @override
   void paint(Canvas canvas, Size size) {
     final cx = size.width / 2;
     final cy = size.height / 2;
     const blue = Color(0xFF007AFF);
 
-    // ── 1. Richtungskeil (kleines Dreieck, zeigt nach oben = Fahrtrichtung) ──
-    final conePaint = Paint()
-      ..color = blue.withValues(alpha: 0.55)
-      ..style = PaintingStyle.fill;
-    final cone = ui.Path()
-      ..moveTo(cx, cy - 18) // Spitze
-      ..lineTo(cx - 5.5, cy - 7) // Links
-      ..lineTo(cx + 5.5, cy - 7) // Rechts
-      ..close();
-    canvas.drawPath(cone, conePaint);
-
-    // ── 2. Weißer Ring (Schatten + Rand) ──
+    // ── Weißer Ring (Schatten + Rand) ──
     final shadowPaint = Paint()
       ..color = const Color(0x40000000)
       ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2.5);
@@ -13626,40 +13650,6 @@ class _AppleMapsPuckPainter extends CustomPainter {
       ..color = blue
       ..style = PaintingStyle.fill;
     canvas.drawCircle(Offset(cx, cy), 7.5, corePaint);
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
-}
-
-/// Standard Navigations-Pfeil für Web/Android/macOS (bisheriges Design).
-class _NavigationArrowPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final cx = size.width / 2;
-    final cy = size.height / 2;
-
-    // Pfeil-Spitze (zeigt nach oben = Fahrtrichtung)
-    final arrowPaint = Paint()
-      ..color = const Color(0xFF007AFF)
-      ..style = PaintingStyle.fill;
-
-    final arrow = ui.Path()
-      ..moveTo(cx, cy - 32) // Spitze oben
-      ..lineTo(cx - 10, cy - 12) // Links unten
-      ..quadraticBezierTo(cx, cy - 16, cx + 10, cy - 12) // Kurve unten
-      ..close();
-
-    // Schatten für den Pfeil
-    canvas.drawShadow(arrow, const Color(0x60000000), 3.0, false);
-    canvas.drawPath(arrow, arrowPaint);
-
-    // Weißer Rand um den Pfeil für bessere Sichtbarkeit
-    final borderPaint = Paint()
-      ..color = const Color(0xCCFFFFFF)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.5;
-    canvas.drawPath(arrow, borderPaint);
   }
 
   @override

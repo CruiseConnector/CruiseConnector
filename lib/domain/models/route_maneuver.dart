@@ -34,6 +34,35 @@ class RouteManeuver {
   final double? roundaboutTurnAngleRad;
 
   bool get isArrival => icon == Icons.flag;
+
+  /// 2026-06-13 (vucko J3): Kopie mit überschriebenen Feldern. Wird beim
+  /// Start-Snap genutzt, damit beim Neuberechnen des routeIndex KEIN Feld mehr
+  /// still verloren geht (genau so verschwand der Kreisverkehr-Typ → Banner
+  /// zeigte das alte Material-Icon statt des Painters).
+  RouteManeuver copyWith({
+    double? latitude,
+    double? longitude,
+    int? routeIndex,
+    IconData? icon,
+    String? announcement,
+    String? instruction,
+    ManeuverType? maneuverType,
+    int? roundaboutExitNumber,
+    double? roundaboutTurnAngleRad,
+  }) {
+    return RouteManeuver(
+      latitude: latitude ?? this.latitude,
+      longitude: longitude ?? this.longitude,
+      routeIndex: routeIndex ?? this.routeIndex,
+      icon: icon ?? this.icon,
+      announcement: announcement ?? this.announcement,
+      instruction: instruction ?? this.instruction,
+      maneuverType: maneuverType ?? this.maneuverType,
+      roundaboutExitNumber: roundaboutExitNumber ?? this.roundaboutExitNumber,
+      roundaboutTurnAngleRad:
+          roundaboutTurnAngleRad ?? this.roundaboutTurnAngleRad,
+    );
+  }
 }
 
 /// Ergebnis einer Nearest-Route-Point Fenstersuche.
