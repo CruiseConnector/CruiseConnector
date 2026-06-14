@@ -10696,6 +10696,11 @@ class _CruiseModePageState extends State<CruiseModePage>
         nextManeuverText: _currentCarManeuverText(),
         nextManeuverDistance: distToManeuver,
         nextManeuverKind: _currentCarManeuverKind(),
+        // 2026-06-14 (vucko K7): Live-Position + Fortschritts-Index ans Auto.
+        latitude: position.latitude,
+        longitude: position.longitude,
+        heading: position.heading,
+        routeIndex: _currentRouteIndex,
       ),
     );
   }

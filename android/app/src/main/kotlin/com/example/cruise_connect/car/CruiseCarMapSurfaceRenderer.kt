@@ -204,7 +204,7 @@ class CruiseCarMapSurfaceRenderer(
     }
 
     companion object {
-        private const val REDRAW_INTERVAL_MS = 2500L
+        private const val REDRAW_INTERVAL_MS = 1000L // K7: 2500→1000
         private const val MIN_ZOOM = 0.4f
         private const val MAX_ZOOM = 8.0f
     }

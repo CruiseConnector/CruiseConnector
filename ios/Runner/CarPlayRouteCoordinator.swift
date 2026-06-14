@@ -138,7 +138,9 @@ final class CarPlayRouteCoordinator: NSObject {
 
     private func startTimer() {
         refreshTimer?.invalidate()
-        let timer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+        // 2026-06-14 (vucko K7 Sync straffer): 2s→1s. Zusammen mit dem 1s-Handy-
+        // Throttle liegt das Auto jetzt ≤2s hinter dem Handy (vorher ~5s).
+        let timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             self?.refresh()
         }
         RunLoop.main.add(timer, forMode: .common)

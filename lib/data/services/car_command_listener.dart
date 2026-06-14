@@ -73,8 +73,9 @@ class CarCommandListener {
 
   void start() {
     _pollTimer?.cancel();
-    // 1,5s-Poll: liest nur einen kleinen Pref-String — vernachlässigbar.
-    _pollTimer = Timer.periodic(const Duration(milliseconds: 1500), (_) {
+    // 2026-06-14 (vucko K7): 1,5s→1s. Auto-Tastendruck (Losfahren/planRoute)
+    // registriert das Handy jetzt in ≤1s. Liest nur einen kleinen Pref-String.
+    _pollTimer = Timer.periodic(const Duration(milliseconds: 1000), (_) {
       unawaited(_poll());
     });
   }

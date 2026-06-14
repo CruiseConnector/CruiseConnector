@@ -257,6 +257,6 @@ class CruiseCarNavigationScreen(
     }
 
     companion object {
-        private const val REFRESH_INTERVAL_MS = 2000L
+        private const val REFRESH_INTERVAL_MS = 1000L // K7: 2000→1000
     }
 }

@@ -60,7 +60,11 @@ class CarRouteBridgeService {
   // 2026-06-02 (vucko): Login-Status für CarPlay/Android-Auto. Ist niemand
   // eingeloggt, zeigt das Auto-Display „Bitte zuerst einloggen" statt der Karte.
   static const loggedInKey = 'cc_logged_in';
-  static const _progressThrottle = Duration(seconds: 3);
+  // 2026-06-14 (vucko K7 Sync straffer): 3s→1s. Vorher lagen ETA/Restdistanz/
+  // nächstes Manöver am Auto bis zu 3s (Throttle) + 2s (Auto-Poll) ≈ 5s hinter
+  // dem Handy. 1s + 1s ≈ 2s → sichtbar straffer, ohne SharedPreferences zu
+  // überlasten (kleiner String/Tick).
+  static const _progressThrottle = Duration(seconds: 1);
 
   SharedPreferences? _preferences;
   DateTime? _lastProgressWrite;
@@ -152,6 +156,15 @@ class CarRouteBridgeService {
     required String? nextManeuverText,
     required double? nextManeuverDistance,
     String? nextManeuverKind,
+    // 2026-06-14 (vucko K7): Live-Phone-Position + Fortschritts-Index ans Auto
+    // forwarden, damit das Auto die EXAKT gleiche Stelle wie das Handy kennt
+    // (statt sich nur auf sein eigenes GPS zu verlassen → die beiden konnten
+    // auseinanderlaufen) und die „Distanz zur nächsten Kurve" am Handy-Index
+    // ausrichten kann.
+    double? latitude,
+    double? longitude,
+    double? heading,
+    int? routeIndex,
     bool force = false,
   }) async {
     final now = DateTime.now();
@@ -168,6 +181,10 @@ class CarRouteBridgeService {
       'nextManeuverText': nextManeuverText,
       'nextManeuverDistance': nextManeuverDistance,
       'nextManeuverKind': nextManeuverKind,
+      'latitude': latitude,
+      'longitude': longitude,
+      'heading': heading,
+      'routeIndex': routeIndex,
       'updatedAt': now.toIso8601String(),
     });
   }
