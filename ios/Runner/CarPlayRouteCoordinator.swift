@@ -6,6 +6,13 @@ import CarPlay
 import MapKit
 import MapLibre
 
+/// Planungs-Modus für die CarPlay-Routenplanung (passend zu CarRouteType auf
+/// der Flutter-Seite).
+enum CarPlanMode {
+    static let roundtrip = "roundtrip"
+    static let pointToPoint = "point_to_point"
+}
+
 /// Steuert die CarPlay-Oberfläche.
 ///
 /// 2026-06-01 (vucko): Aus der statischen Info-Anzeige (CPMapTemplate +
@@ -53,6 +60,8 @@ final class CarPlayRouteCoordinator: NSObject {
         window.rootViewController = mapViewController
         mapTemplate.automaticallyHidesNavigationBar = false
         mapTemplate.mapDelegate = self
+        searchCompleter.delegate = self
+        searchCompleter.resultTypes = [.address, .pointOfInterest]
         configureMapButtons()
         // 2026-06-02 (vucko v2): Apple verlangt bei Navi-Apps (carplay-maps)
         // zwingend ein CPMapTemplate als Root — ein anderes Root-Template crasht
@@ -228,14 +237,30 @@ final class CarPlayRouteCoordinator: NSObject {
 
     private func applyIdleState() {
         dismissPostRouteIfShowing() // kein hängender Abschluss-Screen im Idle
-        // 2026-06-02 (vucko Task #115): Im Auto direkt eine Route planen können
-        // (Stil → km → Autobahn). Apple erlaubt listen-basierte Auswahl auch
-        // während der Fahrt — kein Freitext, daher Rundkurs.
-        mapTemplate.leadingNavigationBarButtons = [
-            CPBarButton(title: "🧭 Route planen") { [weak self] _ in
-                self?.presentStylePicker()
+        // 2026-06-14 (vucko K5/K6): Modus-Toggle oben links — Rundkurs ⇄ A→B.
+        // Rundkurs: Stil → km → Autobahn (Liste). A→B: Adress-Suche
+        // (CPSearchTemplate, von Apple beim Fahren erlaubt). Der zweite Button
+        // passt sich dem Modus an.
+        let modeButton = CPBarButton(
+            title: planMode == CarPlanMode.roundtrip ? "↻ Rundkurs" : "→ A nach B"
+        ) { [weak self] _ in
+            guard let self = self else { return }
+            self.planMode = self.planMode == CarPlanMode.roundtrip
+                ? CarPlanMode.pointToPoint
+                : CarPlanMode.roundtrip
+            self.applyIdleState() // Leiste neu zeichnen
+        }
+        let actionButton = CPBarButton(
+            title: planMode == CarPlanMode.roundtrip ? "🧭 Route planen" : "🔍 Ziel suchen"
+        ) { [weak self] _ in
+            guard let self = self else { return }
+            if self.planMode == CarPlanMode.roundtrip {
+                self.presentStylePicker()
+            } else {
+                self.presentDestinationSearch()
             }
-        ]
+        }
+        mapTemplate.leadingNavigationBarButtons = [modeButton, actionButton]
         mapTemplate.trailingNavigationBarButtons = []
         lastRouteSignature = nil
         mapViewController.clearRoute()
@@ -525,6 +550,11 @@ final class CarPlayRouteCoordinator: NSObject {
     private let availableStyles = ["Sport Mode", "Kurvenjagd", "Abendrunde", "Entdecker"]
     // 2026-06-09 (vucko): exakt die App-Distanzen 25/50/75/100 km (vorher 30).
     private let availableDistances = [25, 50, 75, 100]
+    // 2026-06-14 (vucko K5/K6): Planungs-Modus oben links + A→B-Adress-Suche.
+    private var planMode = CarPlanMode.roundtrip
+    private let searchCompleter = MKLocalSearchCompleter()
+    private var searchResultsHandler: (([CPListItem]) -> Void)?
+    private var lastSearchCompletions: [MKLocalSearchCompletion] = []
 
     /// Schreibt einen Befehl für die Flutter-Seite (CarCommandListener) in
     /// UserDefaults. Monoton steigende requestId, damit Flutter nur neue
@@ -622,6 +652,33 @@ final class CarPlayRouteCoordinator: NSObject {
         writeCommand(["action": "startNavigation"])
     }
 
+    // MARK: - K6: A→B-Adress-Suche (CPSearchTemplate + MapKit-Geocoding)
+
+    /// Öffnet die CarPlay-Suche. Adress-/POI-Vorschläge kommen nativ aus
+    /// MKLocalSearchCompleter (kein Token nötig). Auswahl → A→B-Route planen.
+    private func presentDestinationSearch() {
+        guard isLoggedIn() else { presentLoginAlertIfNeeded(); return }
+        let search = CPSearchTemplate()
+        search.delegate = self
+        interfaceController.pushTemplate(search, animated: true, completion: nil)
+    }
+
+    /// Schickt eine A→B-Planung an Flutter (Direktroute zum gewählten Ziel) und
+    /// kehrt zur Karte zurück. Snapshot wechselt auf „searching" → „found".
+    fileprivate func submitPointToPoint(destination: CLLocationCoordinate2D, name: String) {
+        writeCommand([
+            "action": "planRoute",
+            "routeType": CarPlanMode.pointToPoint,
+            "destinationLat": destination.latitude,
+            "destinationLng": destination.longitude,
+            "destinationName": name,
+            "style": "Sport Mode",
+            "avoidHighways": false,
+        ])
+        lastRouteSignature = nil
+        interfaceController.popToRootTemplate(animated: true, completion: nil)
+    }
+
     // MARK: - Formatierung
 
     private func title(for snapshot: CarPlayRouteSnapshot) -> String {
@@ -671,6 +728,71 @@ extension CarPlayRouteCoordinator: CPMapTemplateDelegate {
 
     func mapTemplateDidBeginPanGesture(_ mapTemplate: CPMapTemplate) {
         mapViewController.enterFreeMode()
+    }
+}
+
+// MARK: - K6: A→B-Suche (CPSearchTemplate + MKLocalSearchCompleter)
+
+@available(iOS 14.0, *)
+extension CarPlayRouteCoordinator: CPSearchTemplateDelegate {
+    func searchTemplate(
+        _ searchTemplate: CPSearchTemplate,
+        updatedSearchText searchText: String,
+        completionHandler: @escaping ([CPListItem]) -> Void
+    ) {
+        let trimmed = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count >= 2 else {
+            lastSearchCompletions = []
+            completionHandler([])
+            return
+        }
+        // Ergebnisse kommen async in completerDidUpdateResults → dort rufen wir
+        // den completionHandler. Letzten Handler merken.
+        searchResultsHandler = completionHandler
+        searchCompleter.queryFragment = trimmed
+    }
+
+    func searchTemplate(
+        _ searchTemplate: CPSearchTemplate,
+        selectedResult item: CPListItem,
+        completionHandler: @escaping () -> Void
+    ) {
+        guard let idx = item.userInfo as? Int, idx < lastSearchCompletions.count else {
+            completionHandler()
+            return
+        }
+        let completion = lastSearchCompletions[idx]
+        // Adresse/POI → Koordinate auflösen (MKLocalSearch), dann A→B planen.
+        let request = MKLocalSearch.Request(completion: completion)
+        MKLocalSearch(request: request).start { [weak self] response, _ in
+            defer { completionHandler() }
+            guard let self = self,
+                  let coord = response?.mapItems.first?.placemark.coordinate,
+                  CLLocationCoordinate2DIsValid(coord) else { return }
+            DispatchQueue.main.async {
+                self.submitPointToPoint(destination: coord, name: completion.title)
+            }
+        }
+    }
+}
+
+@available(iOS 14.0, *)
+extension CarPlayRouteCoordinator: MKLocalSearchCompleterDelegate {
+    func completerDidUpdateResults(_ completer: MKLocalSearchCompleter) {
+        lastSearchCompletions = completer.results
+        let items = completer.results.enumerated().map { (i, r) -> CPListItem in
+            let detail = r.subtitle.isEmpty ? nil : r.subtitle
+            let item = CPListItem(text: r.title, detailText: detail)
+            item.userInfo = i
+            return item
+        }
+        searchResultsHandler?(items)
+        searchResultsHandler = nil
+    }
+
+    func completer(_ completer: MKLocalSearchCompleter, didFailWithError error: Error) {
+        searchResultsHandler?([])
+        searchResultsHandler = nil
     }
 }
 

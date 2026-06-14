@@ -146,6 +146,15 @@ class CarCommandListener {
     final style = cmd['style']?.toString() ?? 'Sport Mode';
     final distanceKm = (cmd['distanceKm'] as num?)?.toInt() ?? 60;
     final avoidHighways = cmd['avoidHighways'] == true;
+    final routeType = cmd['routeType']?.toString() ?? CarRouteType.roundtrip;
+
+    // 2026-06-14 (vucko K5/K6): A→B-Modus vom Auto. Die Auto-Suche
+    // (CPSearchTemplate) liefert ein Ziel (destinationLat/Lng) → Direktroute.
+    if (routeType == CarRouteType.pointToPoint) {
+      await _handlePlanPointToPoint(cmd, style: style, avoidHighways: avoidHighways);
+      return;
+    }
+
     _lastStyle = style;
     _lastAvoidHighways = avoidHighways;
     _lastRouteType = CarRouteType.roundtrip;
@@ -199,6 +208,68 @@ class CarCommandListener {
       }
       await _bridge.publishFailed(
         message: 'Route konnte nicht berechnet werden. Bitte erneut versuchen.',
+      );
+    }
+  }
+
+  /// 2026-06-14 (vucko K6): A→B-Direktroute zum vom Auto gesuchten Ziel.
+  Future<void> _handlePlanPointToPoint(
+    Map<String, dynamic> cmd, {
+    required String style,
+    required bool avoidHighways,
+  }) async {
+    final destLat = (cmd['destinationLat'] as num?)?.toDouble();
+    final destLng = (cmd['destinationLng'] as num?)?.toDouble();
+    if (destLat == null || destLng == null) {
+      await _bridge.publishFailed(
+        message: 'Kein Ziel gewählt. Bitte Adresse suchen.',
+      );
+      return;
+    }
+    _lastStyle = style;
+    _lastAvoidHighways = avoidHighways;
+    _lastRouteType = CarRouteType.pointToPoint;
+
+    await _bridge.publishSearching(
+      routeType: CarRouteType.pointToPoint,
+      style: style,
+      avoidHighways: avoidHighways,
+    );
+
+    final start = await _resolveStartPosition();
+    if (start == null) {
+      await _bridge.publishFailed(
+        message: 'Kein GPS-Standort verfügbar. Bitte Standort freigeben.',
+      );
+      return;
+    }
+
+    try {
+      final result = await _routeService.generatePointToPoint(
+        startPosition: start,
+        destinationLat: destLat,
+        destinationLng: destLng,
+        mode: style,
+        avoidHighways: avoidHighways,
+        forceAcceptDirect: true,
+        subscriptionTier: RouteService.resolveEffectiveSubscriptionTier(
+          requestedTier: 'premium',
+          isTesterOrBeta: true,
+        ),
+      );
+      _lastRoute = result;
+      await _bridge.publishFound(
+        result: result,
+        routeType: CarRouteType.pointToPoint,
+        style: style,
+        avoidHighways: avoidHighways,
+      );
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('[CarCommandListener] generatePointToPoint failed: $e');
+      }
+      await _bridge.publishFailed(
+        message: 'Route zum Ziel konnte nicht berechnet werden.',
       );
     }
   }
