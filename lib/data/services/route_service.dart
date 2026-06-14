@@ -9119,19 +9119,47 @@ class RouteService {
       final lat = c[1];
       final text = (ins['text'] as String?)?.trim() ?? '';
       final isRoundabout = sign == 6;
-      final exitNumber = isRoundabout
+      var exitNumber = isRoundabout
           ? (ins['exit_number'] as num?)?.toInt()
           : null;
-      // GH liefert bei Kreisverkehren den echten Austritts-Winkel (Radiant):
-      // 0 = geradeaus durch, positiv = rechts raus, negativ = links raus.
-      final turnAngleRad = isRoundabout
-          ? (ins['turn_angle'] as num?)?.toDouble()
+      // 2026-06-14 (vucko L3, Geraete-Screenshot „Ausfahrt 1" falsch):
+      // GraphHoppers `turn_angle` ist fuer DACH (Rechtsverkehr) im Vorzeichen/
+      // in der Semantik mehrdeutig (swept arc vs. Orientierungsaenderung). Statt
+      // ihm blind zu vertrauen, berechnen wir den Austritts-Drehwinkel aus der
+      // GEFAHRENEN Geometrie (Bodenwahrheit): Einfahrts-Kurs vs. Ausfahrts-Kurs,
+      // rechts positiv (passt zur Painter-Formel −pi/2 + angle). Faellt das auf
+      // GHs turn_angle zurueck, wenn zu wenig Stuetzpunkte da sind.
+      int? exitIdx;
+      if (interval is List && interval.length >= 2) {
+        exitIdx = (interval[1] as num?)?.toInt();
+      }
+      final geomTurnRad = isRoundabout
+          ? roundaboutGeomTurnRad(routeCoordinates, coordIdx, exitIdx ?? coordIdx)
           : null;
+      final turnAngleRad = isRoundabout
+          ? (geomTurnRad ?? (ins['turn_angle'] as num?)?.toDouble())
+          : null;
+      // Plausibilitaet der GH-Exit-Nummer: In Rechtsverkehr ist die 1. Ausfahrt
+      // IMMER eine klare Rechtskurve. Sagt GH „1. Ausfahrt", die echte Geometrie
+      // zeigt aber geradeaus/links (geomTurn < ~20°), ist GHs Nummer falsch
+      // (bekannte GH-Schwaeche an Mini-Kreiseln/Slip-Lanes). Dann KEINE falsche
+      // Nummer ansagen → Richtungs-Ansage aus der Geometrie. Nur bei klarem
+      // Widerspruch; sonst bleibt GHs (meist korrekte) Nummer + Text unangetastet.
+      var roundaboutDirOverride = '';
+      if (isRoundabout &&
+          exitNumber == 1 &&
+          geomTurnRad != null &&
+          geomTurnRad < 0.35) {
+        exitNumber = null; // Painter nimmt dann den Geometrie-Winkel
+        roundaboutDirOverride = _roundaboutDirectionPhrase(geomTurnRad);
+      }
       final instruction = sign == 4
           ? 'Ziel erreicht.'
-          : (text.isNotEmpty
-                ? (text.endsWith('.') ? text : '$text.')
-                : _graphhopperFallbackText(sign));
+          : (roundaboutDirOverride.isNotEmpty
+                ? roundaboutDirOverride
+                : (text.isNotEmpty
+                      ? (text.endsWith('.') ? text : '$text.')
+                      : _graphhopperFallbackText(sign)));
       maneuvers.add(
         RouteManeuver(
           latitude: lat,
@@ -9150,6 +9178,15 @@ class RouteService {
     }
     maneuvers.sort((a, b) => a.routeIndex.compareTo(b.routeIndex));
     return maneuvers;
+  }
+
+  /// 2026-06-14 (vucko L3): Richtungs-Ansage statt einer (von GH falsch
+  /// gelieferten) Exit-Nummer. rechts/geradeaus/links aus dem Geometrie-
+  /// Drehwinkel (rechts positiv).
+  String _roundaboutDirectionPhrase(double turnRad) {
+    if (turnRad > 0.35) return 'Im Kreisverkehr rechts abbiegen.';
+    if (turnRad < -0.35) return 'Im Kreisverkehr links abbiegen.';
+    return 'Im Kreisverkehr geradeaus fahren.';
   }
 
   IconData _iconForGraphhopperSign(int sign) {
@@ -10435,6 +10472,50 @@ double calculateBearing(
       math.cos(startLatRad) * math.sin(endLatRad) -
       math.sin(startLatRad) * math.cos(endLatRad) * math.cos(dLonRad);
   return (math.atan2(y, x) * 180 / math.pi + 360) % 360;
+}
+
+/// 2026-06-14 (vucko L3): Austritts-Drehwinkel eines Kreisverkehrs aus der
+/// GEFAHRENEN Geometrie — Kurs-Aenderung Einfahrt→Ausfahrt in Radiant, RECHTS
+/// positiv (passt zur Painter-Formel −pi/2 + angle). Bodenwahrheit statt
+/// GraphHoppers mehrdeutigem `turn_angle` (swept arc vs. Orientierung). [coords]
+/// = Routen-Punkte [lng,lat], [entryIdx]/[exitIdx] = interval[0/1] der GH-
+/// Instruktion. null bei zu wenig Stuetzpunkten (dann GH-`turn_angle`-Fallback).
+double? roundaboutGeomTurnRad(
+  List<List<double>> coords,
+  int entryIdx,
+  int exitIdx,
+) {
+  final n = coords.length;
+  if (n < 3) return null;
+  // Einfahrts-Kurs: bis zu 3 Punkte VOR der Einfahrt (glaettet GPS-Zacken).
+  final a1 = (entryIdx - 3).clamp(0, n - 1).toInt();
+  final a2 = entryIdx.clamp(0, n - 1).toInt();
+  // Ausfahrts-Kurs: bis zu 3 Punkte NACH dem Austrittspunkt.
+  final b1 = exitIdx.clamp(0, n - 1).toInt();
+  final b2 = (exitIdx + 3).clamp(0, n - 1).toInt();
+  if (a2 <= a1 || b2 <= b1) return null;
+  if (coords[a1].length < 2 ||
+      coords[a2].length < 2 ||
+      coords[b1].length < 2 ||
+      coords[b2].length < 2) {
+    return null;
+  }
+  final entryBearing = calculateBearing(
+    coords[a1][1],
+    coords[a1][0],
+    coords[a2][1],
+    coords[a2][0],
+  );
+  final exitBearing = calculateBearing(
+    coords[b1][1],
+    coords[b1][0],
+    coords[b2][1],
+    coords[b2][0],
+  );
+  var deltaDeg = (exitBearing - entryBearing) % 360.0;
+  if (deltaDeg > 180.0) deltaDeg -= 360.0;
+  if (deltaDeg < -180.0) deltaDeg += 360.0;
+  return deltaDeg * math.pi / 180.0;
 }
 
 /// 2026-06-13 (vucko Manöver-26km-Bug, Geraete-Screenshot): Globaler Re-Snap

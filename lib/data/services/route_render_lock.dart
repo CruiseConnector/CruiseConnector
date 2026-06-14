@@ -186,6 +186,36 @@ class RouteRenderLock {
     _headingDivergenceSince = null;
   }
 
+  /// 2026-06-14 (vucko Re-Dock-Trim, Geraete-Screenshot „Strecke vor UND hinter
+  /// mir"): Ankert den Lock nach einem Wieder-Andocken auf die re-gesnappte
+  /// Routen-Distanz [distanceM]. Der Lock ist sonst MONOTON und friert bei
+  /// Off-Route ein (project() liefert null, kein Rueckwaerts) — der Linien-
+  /// Schnitt (= [distanceM] / _renderDistM) blieb damit hinter dem echten Puck
+  /// kleben, der abgefahrene Teil blieb rot. Der globale Re-Snap im
+  /// Aufrufer rueckt zwar _currentRouteIndex vor, fasste den Lock aber NIE an.
+  ///
+  /// Setzt das Projektions-ZIEL auf d; die sichtbare Render-Distanz gleitet im
+  /// project()-Glide zuegig nach (Schnitt UND Puck teilen _renderDistM → sie
+  /// bleiben zusammen, kein Gap). War der Lock zuvor freigegeben
+  /// (_renderDistM < 0, z. B. Heading-Divergenz-Release), wird hart gesetzt —
+  /// dann gibt es keine Zwischen-Distanz zum Hingleiten.
+  void reanchorToDistance(double distanceM) {
+    final cum = _cumulativeDistances;
+    if (cum == null || cum.isEmpty) return;
+    final d = distanceM.clamp(0.0, cum.last).toDouble();
+    _distanceM = d;
+    _segmentIndex = _segmentIndexForDistance(d);
+    if (_renderDistM < 0) {
+      _renderDistM = d;
+      _catchingUp = false;
+    } else {
+      // Aufhol-Modus: der Glide zieht _renderDistM in ~0,5s auf d, statt
+      // sekundenlang hinterherzukriechen (eigene Hysterese in project()).
+      _catchingUp = true;
+    }
+    _headingDivergenceSince = null;
+  }
+
   RouteRenderLockProjection? project({
     required List<List<double>> coordinates,
     required double latitude,

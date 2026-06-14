@@ -57,12 +57,16 @@ void main() {
       );
     });
 
-    test('GraphHopper-Instruction: turn_angle landet im Manöver', () {
+    test('Roundabout turn_angle kommt aus der GEFAHRENEN Geometrie (L3)', () {
+      // 2026-06-14 (vucko L3): Statt GHs mehrdeutigem turn_angle berechnen wir
+      // den Austritts-Drehwinkel aus der echten Geometrie. Hier: Einfahrt Kurs
+      // Nord (coords[0]→[1]), Ausfahrt Kurs West (coords[2]→[3]) = Linkskurve
+      // ≈ −90° (−π/2). GHs gesetzter turn_angle (+0.9) wird IGNORIERT.
       final coords = [
-        [9.480, 47.660],
-        [9.481, 47.661],
-        [9.482, 47.662],
-        [9.483, 47.663],
+        [9.480, 47.660], // 0
+        [9.480, 47.661], // 1 = Einfahrt (Kurs Nord)
+        [9.481, 47.6615], // 2 = Austritt
+        [9.480, 47.6615], // 3 = Ausfahrts-Bein (Kurs West)
       ];
       final response = {
         'route': {
@@ -70,7 +74,7 @@ void main() {
             {
               'sign': 6,
               'exit_number': 2,
-              'turn_angle': -1.57,
+              'turn_angle': 0.9, // bewusst falsch → Geometrie muss gewinnen
               'text': 'Im Kreisverkehr die zweite Ausfahrt nehmen',
               'interval': [1, 2],
             },
@@ -88,9 +92,37 @@ void main() {
       expect(roundabout.maneuverType, ManeuverType.roundabout);
       expect(roundabout.roundaboutExitNumber, 2);
       expect(roundabout.roundaboutTurnAngleRad, isNotNull);
-      expect(roundabout.roundaboutTurnAngleRad!, closeTo(-1.57, 0.001));
+      // Geometrie-Linkskurve ≈ −π/2, NICHT GHs +0.9.
+      expect(roundabout.roundaboutTurnAngleRad!, closeTo(-math.pi / 2, 0.1));
       // Ziel-Manöver (kein Kreisverkehr) → kein turn_angle.
       expect(maneuvers.last.roundaboutTurnAngleRad, isNull);
+    });
+
+    test('Roundabout: GH turn_angle als Fallback bei zu wenig Geometrie', () {
+      // Nur 3 Punkte, interval[1]=2 am Rand → Geometrie nicht berechenbar →
+      // GHs turn_angle dient als Fallback (statt null).
+      final coords = [
+        [9.480, 47.660],
+        [9.481, 47.661],
+        [9.482, 47.662],
+      ];
+      final response = {
+        'route': {
+          'instructions': [
+            {
+              'sign': 6,
+              'exit_number': 2,
+              'turn_angle': -1.2,
+              'text': 'Im Kreisverkehr die zweite Ausfahrt nehmen',
+              'interval': [1, 2],
+            },
+          ],
+        },
+      };
+      final maneuvers = service.extractManeuvers(response, coords);
+      expect(maneuvers, hasLength(1));
+      expect(maneuvers.first.roundaboutTurnAngleRad, isNotNull);
+      expect(maneuvers.first.roundaboutTurnAngleRad!, closeTo(-1.2, 0.001));
     });
 
     test('GraphHopper-Instruction ohne turn_angle → null (Fallback)', () {

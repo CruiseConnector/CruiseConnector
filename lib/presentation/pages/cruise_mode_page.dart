@@ -1139,6 +1139,24 @@ class _CruiseModePageState extends State<CruiseModePage>
     return _routeRenderLock.pointAtDistance(d);
   }
 
+  /// 2026-06-14 (vucko Re-Dock-Trim): Ankert den Render-Lock nach einem
+  /// Wieder-Andocken (globaler Re-Snap im Korridor) auf den re-gesnappten
+  /// Routen-[index]. Gibt true zurueck, wenn wirklich neu geankert wurde
+  /// (Versatz > 20 m oder Lock war freigegeben) — sonst false: Mini-Jitter
+  /// bleibt auf dem monotonen Glide, damit ein einzelner Seiten-Fix keinen
+  /// sichtbaren Schnitt-Ruecksprung erzeugt.
+  bool _reanchorRenderLockToIndex(int index) {
+    _ensureRouteCumDist();
+    final cum = _routeCumDistM;
+    if (cum == null || cum.isEmpty) return false;
+    final i = index.clamp(0, cum.length - 1);
+    final d = cum[i];
+    final lockDist = _renderLockDistM;
+    if (lockDist >= 0 && (d - lockDist).abs() <= 20.0) return false;
+    _routeRenderLock.reanchorToDistance(d);
+    return true;
+  }
+
   bool _shouldHoldLastRouteLockedRenderPosition(DateTime now) {
     return shouldHoldRouteRenderLock(
       now: now,
@@ -10471,6 +10489,21 @@ class _CruiseModePageState extends State<CruiseModePage>
         routeProgressMatch = globalMatch;
         isOutsideCorridor =
             false; // doch auf der Route — nur Fenster nachgehinkt
+        // 2026-06-14 (vucko Re-Dock-Trim, Geraete-Screenshot „Strecke vor UND
+        // hinter mir"): Beim Wieder-Andocken nach kurzer Abweichung rueckte der
+        // Re-Snap zwar _currentRouteIndex vor, aber der Render-Lock (= Quelle
+        // des Linien-Schnitts UND des Pucks) ist monoton und blieb hinter der
+        // echten Position eingefroren → das 3km-Bright-Fenster startete hinter
+        // dem Puck, der abgefahrene Teil blieb rot. Jetzt: Lock explizit auf den
+        // re-gesnappten Index ankern + Trim-Push-Caches leeren, damit der
+        // Schnitt diesen Tick neu vom echten Puck aus aufgebaut wird. Nur bei
+        // echtem Versatz (>20m) — Mini-Jitter bleibt auf dem monotonen Glide.
+        if (_reanchorRenderLockToIndex(globalMatch.index)) {
+          _lastTrimDistM = -1;
+          _lastDrivenHead = null;
+          _lastDimHead = null;
+          _lastWindowMatch = routeProgressMatch;
+        }
       }
     }
 
@@ -10526,11 +10559,17 @@ class _CruiseModePageState extends State<CruiseModePage>
           _gpsHeadingClearlyOpposed(position, offRouteDecisionMatch) &&
           offRouteDecisionMatch.distanceMeters > 25.0 &&
           !_routeHasSharpTurnNear(offRouteDecisionMatch.index);
+      // 2026-06-14 (vucko L2 „Reroute zu spaet", Geraete): clearlyOffRoute schon
+      // ab 2.0× Korridor (war 2.5×) → ein echtes Verfahren erreicht die schnelle
+      // 1,5s-Schiene frueher. 2.0× ist immer noch eindeutig daneben (kein Jitter).
       final clearlyOffRoute = maneuverOvershoot ||
           headingOpposed ||
-          offRouteDecisionMatch.distanceMeters > offRouteCorridor * 2.5;
+          offRouteDecisionMatch.distanceMeters > offRouteCorridor * 2.0;
+      // 2026-06-14 (vucko L2): Basis-Hysterese 3000→2200ms. Ein einzelner
+      // GPS-Ausreisser (1 Fix ≈ 1s bei 1Hz) haelt 2,2s nicht durch → kein
+      // Phantom-Reroute; ein echtes Verfahren wird ~0,8s frueher erkannt.
       final sustained =
-          offFor >= const Duration(milliseconds: 3000) ||
+          offFor >= const Duration(milliseconds: 2200) ||
           (clearlyOffRoute && offFor >= const Duration(milliseconds: 1500));
       if (sustained && !_isRerouting) {
         final now = DateTime.now();
@@ -10603,7 +10642,10 @@ class _CruiseModePageState extends State<CruiseModePage>
     // nie dahinter. Ersetzt das frühere Geometrie-Trimmen (das pro Frame die
     // ganze Route neu pushte → Lag/Schwarz). Nur bei echter Änderung rebuild.
     if (!isOutsideCorridor) {
-      final newProgress = _routeProgressFromMatch(match);
+      // 2026-06-14 (vucko Re-Dock-Trim): routeProgressMatch (re-gesnappt) statt
+      // dem veralteten Fenster-`match` — sonst ankert der Fortschritt nach dem
+      // Wieder-Andocken hinter dem Puck. Im Korridor sind beide identisch.
+      final newProgress = _routeProgressFromMatch(routeProgressMatch);
       if ((newProgress - _routeProgress).abs() > 0.00003) {
         _routeProgress = newProgress;
         needsRebuild = true;
@@ -10613,7 +10655,9 @@ class _CruiseModePageState extends State<CruiseModePage>
     // (sichtbar, hinter dem Puck) + _remainingRouteCoordinates (Restdistanz/Auto).
     // Bei echter Änderung Rebuild anstoßen → _syncDrivenTrail pusht den Trail.
     if (!isOutsideCorridor) {
-      if (_trimVisibleRouteToProjection(match)) needsRebuild = true;
+      // 2026-06-14 (vucko Re-Dock-Trim): re-gesnappter Match → der Fallback-Pfad
+      // (Lock freigegeben) schneidet am echten Puck statt am alten Fenster.
+      if (_trimVisibleRouteToProjection(routeProgressMatch)) needsRebuild = true;
     }
     // 2026-06-09 (vucko Trip-Skip): besuchte Zwischenstopps abhaken.
     _markPassedWaypoints(position);

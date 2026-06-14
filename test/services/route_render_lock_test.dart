@@ -646,6 +646,95 @@ void main() {
     );
   });
 
+  test('explicit re-dock reanchor unfreezes the trim onto the new puck', () {
+    // Geraete-Screenshot 2026-06-14 „Strecke vor UND hinter mir": nach kurzer
+    // Abweichung + Wieder-Andocken blieb der Linien-Schnitt (= render distanceM)
+    // hinter dem Puck eingefroren, weil der Lock monoton ist und ihn NICHTS auf
+    // die echte Position zog. reanchorToDistance() ist der Re-Snap-Eingriff.
+    final route = <List<double>>[
+      for (var m = 0.0; m <= 1200.0; m += 10.0) pointAt(m),
+    ];
+    final lock = RouteRenderLock();
+    final t0 = DateTime.utc(2026, 6, 14, 12);
+
+    // Auf der Route bei 100 m.
+    final initial = lock.project(
+      coordinates: route,
+      latitude: pointAt(100)[1],
+      longitude: pointAt(100)[0],
+      routeConfirmed: true,
+      currentRouteIndex: 10,
+      speedMps: 14.0,
+      timestamp: t0,
+    );
+    expect(initial, isNotNull);
+    expect(initial!.distanceM, closeTo(100, 1.0));
+
+    // Kurz weit abgekommen → Lock liefert null, friert bei 100 m ein.
+    final off = lock.project(
+      coordinates: route,
+      latitude: pointAt(130, lateralMeters: 80.0)[1],
+      longitude: pointAt(130, lateralMeters: 80.0)[0],
+      routeConfirmed: true,
+      currentRouteIndex: 10,
+      speedMps: 14.0,
+      timestamp: t0.add(const Duration(seconds: 1)),
+    );
+    expect(off, isNull);
+    expect(lock.distanceM, closeTo(100, 0.5));
+
+    // Re-Snap im Aufrufer dockt 300 m weiter vorne wieder an → Lock reankern.
+    lock.reanchorToDistance(300);
+
+    // Render-Distanz gleitet ueber wenige Frames auf ~300 m (Schnitt am Puck).
+    var rendered = lock.distanceM;
+    for (var frame = 1; frame <= 60; frame++) {
+      final proj = lock.project(
+        coordinates: route,
+        latitude: pointAt(300)[1],
+        longitude: pointAt(300)[0],
+        routeConfirmed: true,
+        currentRouteIndex: 30,
+        speedMps: 14.0,
+        timestamp: t0.add(Duration(seconds: 1, milliseconds: frame * 16)),
+      );
+      expect(proj, isNotNull);
+      rendered = proj!.distanceM;
+    }
+    // ~300 m ± Glide-Vorlauf (max ~0,5 s Fahrweg = ~7 m bei 14 m/s) — Kern:
+    // aufgeholt zum echten Puck, NICHT mehr eingefroren bei 100 m.
+    expect(
+      rendered,
+      closeTo(303, 12.0),
+      reason: 'nach Re-Dock-Reanchor sitzt der Schnitt am echten Puck (~300 m), '
+          'nicht mehr eingefroren bei 100 m',
+    );
+  });
+
+  test('reanchor never renders the lock backward (monotonic)', () {
+    final route = <List<double>>[
+      for (var m = 0.0; m <= 600.0; m += 10.0) pointAt(m),
+    ];
+    final lock = RouteRenderLock();
+    final t0 = DateTime.utc(2026, 6, 14, 12);
+
+    final initial = lock.project(
+      coordinates: route,
+      latitude: pointAt(200)[1],
+      longitude: pointAt(200)[0],
+      routeConfirmed: true,
+      currentRouteIndex: 20,
+      speedMps: 14.0,
+      timestamp: t0,
+    );
+    expect(initial, isNotNull);
+    final before = lock.distanceM;
+    // Reanchor setzt nur das Glide-ZIEL; die gerenderte Distanz springt nicht
+    // sofort zurueck (Monotonie der sichtbaren Linie bleibt erhalten).
+    lock.reanchorToDistance(180);
+    expect(lock.distanceM, greaterThanOrEqualTo(before - 0.01));
+  });
+
   test('roundabout-style heading swing with small lateral keeps the lock', () {
     final route = variableDensityRoute();
     final lock = RouteRenderLock();
