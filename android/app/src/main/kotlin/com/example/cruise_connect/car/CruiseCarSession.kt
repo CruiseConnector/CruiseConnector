@@ -10,7 +10,7 @@ class CruiseCarSession : Session() {
         val routeStore = CarRouteSnapshotStore(carContext)
         // Eine geteilte Renderer-Instanz: die Map-Buttons im NavigationScreen
         // steuern damit dieselbe Karte, die als Surface gezeichnet wird.
-        val renderer = CruiseCarMapSurfaceRenderer(routeStore)
+        val renderer = CruiseCarMapSurfaceRenderer(carContext, routeStore)
         carContext
             .getCarService(AppManager::class.java)
             .setSurfaceCallback(renderer)

@@ -74,4 +74,11 @@ dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
     implementation("androidx.car.app:app:1.7.0")
     implementation("androidx.car.app:app-projected:1.7.0")
+    // 2026-06-14 (vucko K8): MapLibre-Native für die echte Android-Auto-Karte.
+    // Exakt die Version, die das maplibre_gl-Flutter-Plugin transitiv bringt
+    // (org.maplibre.gl:android-sdk-opengl:13.1.0) — gleiche Coordinate → Gradle
+    // dedupliziert, kein Duplicate-Class-Konflikt. Das Plugin deklariert sie nur
+    // als `implementation` (nicht `api`), daher hier explizit, damit der
+    // CruiseCarMapSurfaceRenderer gegen org.maplibre.android.* kompiliert.
+    implementation("org.maplibre.gl:android-sdk-opengl:13.1.0")
 }
