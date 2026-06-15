@@ -10536,32 +10536,58 @@ RouteWindowMatch findNearestOnRoutePreferIndex({
   if (coordinates.isEmpty) {
     return const RouteWindowMatch(index: 0, distanceMeters: double.infinity);
   }
+  if (coordinates.length == 1) {
+    final c = coordinates.first;
+    final d = c.length >= 2
+        ? geo.Geolocator.distanceBetween(
+            position.latitude, position.longitude, c[1], c[0])
+        : double.infinity;
+    return RouteWindowMatch(index: 0, distanceMeters: d);
+  }
+  // 2026-06-15 (vucko M1 Phantom-Reroute): SENKRECHTE Punkt-zu-SEGMENT-Distanz
+  // statt Vertex-Distanz. Auf duennen GraphHopper-Segmenten (lange Landstrassen
+  // zwischen Kreiseln) kann der naechste VERTEX 55-70m weg sein, obwohl die
+  // Senkrechte auf die LINIE nur 12-20m ist → der alte Vertex-Check meldete
+  // faelschlich „kein Punkt im 50m-Korridor" = Off-Route, obwohl der Puck exakt
+  // auf der Linie fuhr → Phantom-„Neuberechnung" (Geraete-Video A_04). Mit der
+  // Segment-Projektion verschwindet das; die Index-Naehe-Praeferenz (Selbst-
+  // ueberlapp-Schutz bei Rundkursen) bleibt unveraendert.
   var bestInCorridorIdx = -1;
   var bestInCorridorGap = 1 << 30;
   var bestInCorridorDist = double.infinity;
+  int? bestInCorridorSeg;
+  double? bestInCorridorFrac;
   var globalNearestIdx = 0;
   var globalNearestDist = double.infinity;
-  for (var i = 0; i < coordinates.length; i++) {
-    final c = coordinates[i];
-    if (c.length < 2) continue;
-    final d = geo.Geolocator.distanceBetween(
-      position.latitude,
-      position.longitude,
-      c[1],
-      c[0],
+  int? globalSeg;
+  double? globalFrac;
+  for (var i = 0; i < coordinates.length - 1; i++) {
+    final from = coordinates[i];
+    final to = coordinates[i + 1];
+    if (from.length < 2 || to.length < 2) continue;
+    final proj = _projectPositionOnRouteSegment(
+      position: position,
+      from: from,
+      to: to,
     );
+    final d = proj.distanceMeters;
+    final repIdx = proj.fraction >= 0.5 ? i + 1 : i;
     if (d < globalNearestDist) {
       globalNearestDist = d;
-      globalNearestIdx = i;
+      globalNearestIdx = repIdx;
+      globalSeg = i;
+      globalFrac = proj.fraction;
     }
     if (d <= corridorMeters) {
-      final gap = (i - referenceIndex).abs();
+      final gap = (repIdx - referenceIndex).abs();
       // Kleinster Index-Abstand gewinnt; bei Gleichstand kleinere Distanz.
       if (gap < bestInCorridorGap ||
           (gap == bestInCorridorGap && d < bestInCorridorDist)) {
         bestInCorridorGap = gap;
-        bestInCorridorIdx = i;
+        bestInCorridorIdx = repIdx;
         bestInCorridorDist = d;
+        bestInCorridorSeg = i;
+        bestInCorridorFrac = proj.fraction;
       }
     }
   }
@@ -10569,11 +10595,15 @@ RouteWindowMatch findNearestOnRoutePreferIndex({
     return RouteWindowMatch(
       index: bestInCorridorIdx,
       distanceMeters: bestInCorridorDist,
+      segmentIndex: bestInCorridorSeg,
+      segmentFraction: bestInCorridorFrac,
     );
   }
   return RouteWindowMatch(
     index: globalNearestIdx,
     distanceMeters: globalNearestDist,
+    segmentIndex: globalSeg,
+    segmentFraction: globalFrac,
   );
 }
 

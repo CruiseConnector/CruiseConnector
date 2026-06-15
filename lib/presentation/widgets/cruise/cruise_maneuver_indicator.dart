@@ -235,140 +235,117 @@ class _RoundaboutPainter extends CustomPainter {
   /// null → Fallback auf Gleichverteilung (Mapbox-Pfad).
   final double? turnAngleRad;
 
+  // Winkel-Naehe-Test (zyklisch).
+  static bool _angClose(double a, double b, double tol) {
+    var d = (a - b) % (2 * math.pi);
+    if (d > math.pi) d -= 2 * math.pi;
+    if (d < -math.pi) d += 2 * math.pi;
+    return d.abs() < tol;
+  }
+
   @override
   void paint(Canvas canvas, Size size) {
-    // 2026-06-13 (vucko: Kreisverkehr UNMISSVERSTÄNDLICH Rechtsverkehr, wie
-    // Google): saubere Darstellung statt verwaschenem Doppel-Arc.
-    //  - Ring (weiß).
-    //  - Einfahrt von UNTEN (deine Straße rein), Accent.
-    //  - Dein Fahrweg im Ring GEGEN den Uhrzeigersinn (Rechtsverkehr!) vom
-    //    Einfahrtspunkt zur markierten Ausfahrt, Accent + dicker.
-    //  - Ausfahrten: aktive Accent + Pfeil, inaktive dünn grau.
+    // 2026-06-15 (vucko M2, Geraete-Video: „Symbol komplett falsch/verbuggt"):
+    // Komplett-Rebuild. EINE Winkelquelle treibt das ganze Glyph — der ECHTE
+    // Geometrie-Austrittswinkel (turn_angle = aus der gefahrenen Route, rechts
+    // positiv). Vorher kollidierten synthetisch gleichverteilte Stubs mit dem
+    // realen Pfeil (zwei Winkelraeume) → „verbuggt". Jetzt:
+    //   • Ring.
+    //   • Einfahrt von UNTEN (deine Strasse rein), Accent.
+    //   • Fahrbogen im Ring vom Einfahrtspunkt GEGEN den Uhrzeigersinn
+    //     (Rechtsverkehr) bis zum Austritt, Accent.
+    //   • EIN fetter Pfeil exakt am echten Austrittswinkel.
+    //   • dezente Deko-Stubs, die Einfahrt UND aktiven Pfeil garantiert nie
+    //     ueberlappen (rein dekorativ, kein Anspruch auf reale Position).
     // Canvas y-down: Winkel 0 = rechts, π/2 = unten (Einfahrt), −π/2 = oben.
     final center = Offset(size.width / 2, size.height / 2);
-    final ringRadius = size.width * 0.30;
-    final exitRadius = size.width * 0.46;
+    final ringRadius = size.width * 0.28;
+    final exitLen = size.width * 0.20;
     final accent = AppAccentColors.accent;
     final ringRect = Rect.fromCircle(center: center, radius: ringRadius);
+    const entryAngle = math.pi / 2; // unten = Einfahrt
 
-    // 1. Ring (weiß, dezent).
+    Offset onRing(double a, double r) =>
+        Offset(center.dx + r * math.cos(a), center.dy + r * math.sin(a));
+
+    // Austrittswinkel: ECHTE Geometrie bevorzugt (immer korrekte Richtung),
+    // sonst die Rechtsverkehr-Gleichverteilung (Mapbox-Fallback, turn_angle null).
+    final realTurnAngle = turnAngleRad;
+    final exitAngle = realTurnAngle != null
+        ? roundaboutExitAngleFromTurnAngle(realTurnAngle)
+        : roundaboutExitAngleForRightHandTraffic(
+            exitNumber,
+            totalExits: math.max(4, exitNumber.clamp(1, 8).toInt()),
+          );
+
+    // 1) Dezente Deko-Stubs (gleichmaessig, aber Einfahrt + aktiver Pfeil
+    //    ausgespart → nie Kollision). Anzahl skaliert grob mit der Ausfahrt-Nr.
+    final deco = math.max(4, exitNumber.clamp(1, 7).toInt() + 1);
+    final decoPaint = Paint()
+      ..color = Colors.white.withValues(alpha: 0.22)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.0
+      ..strokeCap = StrokeCap.round;
+    for (var i = 0; i < deco; i++) {
+      final a = -math.pi / 2 + i * (2 * math.pi / deco);
+      if (_angClose(a, entryAngle, 0.5)) continue;
+      if (_angClose(a, exitAngle, 0.5)) continue;
+      canvas.drawLine(
+        onRing(a, ringRadius),
+        onRing(a, ringRadius + exitLen * 0.7),
+        decoPaint,
+      );
+    }
+
+    // 2) Ring.
     canvas.drawCircle(
       center,
       ringRadius,
       Paint()
-        ..color = Colors.white.withValues(alpha: 0.45)
+        ..color = Colors.white.withValues(alpha: 0.5)
         ..style = PaintingStyle.stroke
         ..strokeWidth = 2.5,
     );
 
-    // 2026-06-13 (vucko): Kreisverkehre bis 8 Ausfahrten symbolisch abbilden
-    // (war auf 6 gedeckelt → „7. Ausfahrt" wurde fälschlich als 6. gezeigt).
-    // Gezeichnet werden so viele Ausfahrt-Stubs wie die Ziel-Ausfahrt-Nummer
-    // (min 4), gleichmäßig verteilt; die GENOMMENE Ausfahrt sitzt am ECHTEN
-    // GraphHopper-Winkel (turn_angle), falls vorhanden.
-    final totalExits = math.max(4, exitNumber.clamp(1, 8).toInt());
-    final realTurnAngle = turnAngleRad;
-    final activeExitAngle = realTurnAngle != null
-        ? roundaboutExitAngleFromTurnAngle(realTurnAngle)
-        : roundaboutExitAngleForRightHandTraffic(
-            exitNumber,
-            totalExits: totalExits,
-          );
+    final accentStroke = Paint()
+      ..color = accent
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 3.5
+      ..strokeCap = StrokeCap.round;
 
-    // 2. Inaktive Ausfahrt-Stubs (dünn grau) — zuerst, damit der aktive Pfeil
-    //    obenauf liegt.
-    const entryAngle = math.pi / 2; // unten = Einfahrt
-    for (var i = 1; i <= totalExits; i++) {
-      if (i == exitNumber) continue;
-      final angle =
-          roundaboutExitAngleForRightHandTraffic(i, totalExits: totalExits);
-      // Stubs die dem aktiven Winkel zu nahe sind auslassen (kein Hervorlugen).
-      var delta = (angle - activeExitAngle) % (2 * math.pi);
-      if (delta > math.pi) delta -= 2 * math.pi;
-      if (delta < -math.pi) delta += 2 * math.pi;
-      if (delta.abs() < 0.5) continue;
-      // 2026-06-13 (vucko): Deko-Stub NICHT auf die Einfahrt (unten) zeichnen —
-      // bei vielen Ausfahrten (≥4) fällt sonst eine synthetische Ausfahrt mit
-      // der Einfahrt zusammen und sieht falsch aus.
-      var entryDelta = (angle - entryAngle) % (2 * math.pi);
-      if (entryDelta > math.pi) entryDelta -= 2 * math.pi;
-      if (entryDelta < -math.pi) entryDelta += 2 * math.pi;
-      if (entryDelta.abs() < 0.4) continue;
-      canvas.drawLine(
-        Offset(center.dx + ringRadius * math.cos(angle),
-            center.dy + ringRadius * math.sin(angle)),
-        Offset(center.dx + exitRadius * 0.92 * math.cos(angle),
-            center.dy + exitRadius * 0.92 * math.sin(angle)),
-        Paint()
-          ..color = Colors.white.withValues(alpha: 0.28)
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 2.0
-          ..strokeCap = StrokeCap.round,
-      );
-    }
-
-    // 3. Einfahrt von unten (deine Straße in den Kreis), Accent.
+    // 3) Einfahrt von unten.
     canvas.drawLine(
-      Offset(center.dx, center.dy + exitRadius),
-      Offset(center.dx, center.dy + ringRadius),
-      Paint()
-        ..color = accent
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 3.5
-        ..strokeCap = StrokeCap.round,
+      onRing(entryAngle, ringRadius + exitLen),
+      onRing(entryAngle, ringRadius),
+      accentStroke,
     );
 
-    // 4. Dein Fahrweg im Ring: vom Einfahrtspunkt (unten, π/2) GEGEN den
-    //    Uhrzeigersinn (negativer Sweep = CCW visuell = Rechtsverkehr) zur
-    //    aktiven Ausfahrt.
-    var activeSweep = activeExitAngle - math.pi / 2;
-    while (activeSweep > 0) {
-      activeSweep -= 2 * math.pi;
+    // 4) Fahrbogen Einfahrt → Austritt, GEGEN den Uhrzeigersinn (negativer
+    //    Sweep in y-down = visuell CCW = Rechtsverkehr).
+    var sweep = exitAngle - entryAngle;
+    while (sweep > 0) {
+      sweep -= 2 * math.pi;
     }
-    while (activeSweep <= -2 * math.pi) {
-      activeSweep += 2 * math.pi;
+    while (sweep <= -2 * math.pi) {
+      sweep += 2 * math.pi;
     }
-    if (activeSweep < 0) {
-      canvas.drawArc(
-        ringRect,
-        math.pi / 2,
-        activeSweep,
-        false,
-        Paint()
-          ..color = accent
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 3.5
-          ..strokeCap = StrokeCap.round,
-      );
-    }
+    canvas.drawArc(ringRect, entryAngle, sweep, false, accentStroke);
 
-    // 5. Aktive Ausfahrt: Stub vom Ring nach außen + klare Pfeilspitze.
-    final exitOuter = Offset(center.dx + exitRadius * math.cos(activeExitAngle),
-        center.dy + exitRadius * math.sin(activeExitAngle));
-    final exitInner = Offset(
-        center.dx + ringRadius * math.cos(activeExitAngle),
-        center.dy + ringRadius * math.sin(activeExitAngle));
-    canvas.drawLine(
-      exitInner,
-      exitOuter,
-      Paint()
-        ..color = accent
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 3.5
-        ..strokeCap = StrokeCap.round,
-    );
-    const arrowSize = 6.5;
+    // 5) EIN fetter Austritts-Pfeil am echten Winkel.
+    final outer = onRing(exitAngle, ringRadius + exitLen);
+    canvas.drawLine(onRing(exitAngle, ringRadius), outer, accentStroke);
+    const head = 6.5;
     final aLeft = Offset(
-      exitOuter.dx - arrowSize * math.cos(activeExitAngle - 0.5),
-      exitOuter.dy - arrowSize * math.sin(activeExitAngle - 0.5),
+      outer.dx - head * math.cos(exitAngle - 0.5),
+      outer.dy - head * math.sin(exitAngle - 0.5),
     );
     final aRight = Offset(
-      exitOuter.dx - arrowSize * math.cos(activeExitAngle + 0.5),
-      exitOuter.dy - arrowSize * math.sin(activeExitAngle + 0.5),
+      outer.dx - head * math.cos(exitAngle + 0.5),
+      outer.dy - head * math.sin(exitAngle + 0.5),
     );
     canvas.drawPath(
       Path()
-        ..moveTo(exitOuter.dx, exitOuter.dy)
+        ..moveTo(outer.dx, outer.dy)
         ..lineTo(aLeft.dx, aLeft.dy)
         ..lineTo(aRight.dx, aRight.dy)
         ..close(),

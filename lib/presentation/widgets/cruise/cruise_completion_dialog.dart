@@ -209,21 +209,38 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
     if (_isSaving || _isSharing) return;
     setState(() => _isSaving = true);
     final title = _titleController.text.trim();
-    final result = await widget.onSave(
-      _selectedRating > 0 ? _selectedRating : null,
-      _selectedTags.toList(growable: false),
-      title.isEmpty ? null : title,
-    );
+    // 2026-06-15 (vucko M5 „niemals crashen"): onSave macht DB-Save + XP/Level/
+    // Badge-Sync — wirft das (Netz/Null/Supabase), darf es weder propagieren
+    // noch den Dialog haengen lassen. Im Fehlerfall trotzdem sauber schliessen.
+    CruiseCompletionActionResult result;
+    try {
+      result = await widget.onSave(
+        _selectedRating > 0 ? _selectedRating : null,
+        _selectedTags.toList(growable: false),
+        title.isEmpty ? null : title,
+      );
+    } catch (e, st) {
+      debugPrint('[CruiseCompletion] onSave fehlgeschlagen: $e\n$st');
+      if (mounted) {
+        setState(() => _isSaving = false);
+        Navigator.of(context).pop();
+      }
+      return;
+    }
     if (!mounted) return;
     setState(() => _isSaving = false);
     if (!result.success) return;
 
-    if (result.newBadges.isNotEmpty) {
-      await showBadgeUnlockPopup(context: context, badges: result.newBadges);
-    } else if (result.hasCelebration) {
-      setState(() => _celebration = result);
-      await _celebrationController.forward(from: 0);
-      await Future<void>.delayed(const Duration(milliseconds: 220));
+    try {
+      if (result.newBadges.isNotEmpty) {
+        await showBadgeUnlockPopup(context: context, badges: result.newBadges);
+      } else if (result.hasCelebration) {
+        setState(() => _celebration = result);
+        await _celebrationController.forward(from: 0);
+        await Future<void>.delayed(const Duration(milliseconds: 220));
+      }
+    } catch (e) {
+      debugPrint('[CruiseCompletion] Celebration-Overlay übersprungen: $e');
     }
 
     if (mounted) Navigator.of(context).pop();
@@ -263,6 +280,9 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
       }
       final image = await boundary.toImage(pixelRatio: pixelRatio);
       final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+      // 2026-06-15 (vucko M5 OOM): die ui.Image hält GPU/Native-Speicher — nach
+      // dem Byte-Export sofort freigeben, sonst Speicher-Spitze beim Teilen.
+      image.dispose();
       if (byteData == null) {
         throw Exception('PNG-Export fehlgeschlagen');
       }

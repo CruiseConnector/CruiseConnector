@@ -2411,6 +2411,9 @@ class _CruiseModePageState extends State<CruiseModePage>
   @override
   void dispose() {
     _disposed = true;
+    // 2026-06-15 (vucko M5): Map SOFORT inaktiv — ein in-flight Render-/Kamera-
+    // Tick während des Page-Teardowns darf keinen Native-Call mehr absetzen.
+    _mlController?.active = false;
     WidgetsBinding.instance.removeObserver(this);
     // 2026-06-02 (vucko Sync): CarPlay-Hooks lösen (Page-Lebenszyklus).
     if (CarCommandListener.instance.onCompletionDone != null) {
@@ -2601,7 +2604,12 @@ class _CruiseModePageState extends State<CruiseModePage>
         // hielt den Puck dann bis zum nächsten 1Hz-Fix an (Mikro-Ruckeln).
         // Jetzt: erst nach ~0,5s anhaltendem Quasi-Stillstand (<0,15 m/s)
         // pausieren; jeder Speed-Pickup setzt den Zähler zurück.
-        if (_nativeSmoother.speed < 0.15) {
+        // 2026-06-15 (vucko M4 „Puck IMMER fluessig"): Auch das ROHE GPS-Tempo
+        // prüfen. Bei einem fehlerhaften Reroute kann die Smoother-Geschwindigkeit
+        // kurz auf ~0 einfrieren, OBWOHL der Wagen faehrt — dann darf der Ticker
+        // NICHT pausieren, sonst klebt der Puck bis zum naechsten 1Hz-Fix.
+        final movingByGps = (_userLocation?.speed ?? 0) > 0.6;
+        if (_nativeSmoother.speed < 0.15 && !movingByGps) {
           _freeCamIdleTicks++;
           if (_freeCamIdleTicks >= 30) {
             _cameraAnimController?.stop();
@@ -13214,6 +13222,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     // SOFORT beim Ankommen (nicht erst nach dem Beantworten am Handy, das war
     // der „CarPlay kam zu spät"-Bug). Distanz mitgeben → kein „-- gefahren".
     _completionSheetOpen = true;
+    _freezeMapForCompletion();
     unawaited(
       _carRouteBridge.publishEnded(distanceMeters: snapshot.distanceKm * 1000),
     );
@@ -13286,6 +13295,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     // 2026-06-02 (vucko Sync): Abschluss-Screen synchron aufs Auto (siehe
     // _onRouteCompleted).
     _completionSheetOpen = true;
+    _freezeMapForCompletion();
     unawaited(
       _carRouteBridge.publishEnded(distanceMeters: snapshot.distanceKm * 1000),
     );
@@ -13523,7 +13533,23 @@ class _CruiseModePageState extends State<CruiseModePage>
     }
   }
 
+  /// 2026-06-15 (vucko M5 „niemals crashen"): Friert die unter dem Abschluss-
+  /// Sheet LIEGENDE MapLibre-Map vollständig ein. Das Sheet ist nur ein Dialog
+  /// ÜBER der Cruise-Page → die native Karte rendert/projiziert sonst weiter,
+  /// während Tracking gestoppt + ein neuer Idle-GPS-Stream läuft. Ein
+  /// view-abhängiger Native-Call in diesem Fenster = SIGABRT (von Dart nicht
+  /// fangbar, schließt die App zur iOS-Startseite — exakt der Geräte-Crash).
+  void _freezeMapForCompletion() {
+    _mlController?.active = false;
+    _cameraAnimController?.stop();
+    _stopIdlePositionStream();
+  }
+
   void _resetAfterCompletion({bool tripGoalReached = true}) {
+    // 2026-06-15 (vucko M5): Map wieder aktivieren — die Page bleibt nach dem
+    // Sheet am Leben, _setCameraToPosition unten + der (von _stopNavigationTracking
+    // neu gestartete) Idle-Stream brauchen eine aktive Karte.
+    _mlController?.active = mounted && !_disposed;
     unawaited(RouteCacheService.instance.clearConfirmedRoute());
     _stopSimulation(restartLiveTracking: false);
     _stopNavigationTracking();

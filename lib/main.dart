@@ -35,6 +35,31 @@ void main() {
   runZonedGuarded(
     () async {
       WidgetsFlutterBinding.ensureInitialized();
+
+      // 2026-06-15 (vucko M5 „Die App darf NIEMALS crashen"): Globale Dart-
+      // Fehler-Auffangnetze. runZonedGuarded fängt nur asynchrone Zonen-Fehler;
+      // diese hier fangen ZUSÄTZLICH:
+      //  • Framework-Fehler (Build/Layout/Paint) → nur loggen, kein Re-Throw.
+      //  • Fehler aus Futures/Plattform-Callbacks außerhalb der Zone.
+      //  • Build-Fehler eines Widgets → dezentes Fallback statt rotem/grauem
+      //    Vollbild; der Rest der App bleibt bedienbar.
+      // (Native Crashes wie MapLibre-SIGABRT/OOM kann Dart NICHT abfangen — die
+      //  werden separat an der Quelle entschärft, siehe Cruise-End-Flow.)
+      FlutterError.onError = (FlutterErrorDetails details) {
+        FlutterError.presentError(details);
+        if (kDebugMode) {
+          debugPrint('[GlobalError] ${details.exceptionAsString()}');
+        }
+      };
+      WidgetsBinding.instance.platformDispatcher.onError = (error, stack) {
+        debugPrint('[GlobalError/platform] $error');
+        return true; // als behandelt markieren → kein Prozess-Abbruch
+      };
+      ErrorWidget.builder = (FlutterErrorDetails details) {
+        if (kDebugMode) return ErrorWidget(details.exception);
+        return const _SafeErrorFallback();
+      };
+
       if (kIsWeb) {
         usePathUrlStrategy();
       }
@@ -85,6 +110,38 @@ void main() {
       );
     },
   );
+}
+
+/// 2026-06-15 (vucko M5): Dezentes Fallback statt rotem/grauem Crash-Screen,
+/// wenn ein Widget beim Bauen wirft. Die App lebt weiter, der User kann
+/// zurück/erneut — niemals ein toter Bildschirm.
+class _SafeErrorFallback extends StatelessWidget {
+  const _SafeErrorFallback();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: const Color(0xFF0B1017),
+      alignment: Alignment.center,
+      padding: const EdgeInsets.all(24),
+      child: const Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.refresh_rounded, color: Color(0xFF8A93A6), size: 34),
+          SizedBox(height: 12),
+          Text(
+            'Kurz hakte etwas — bitte zurück und erneut versuchen.',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: Color(0xFFB6BDC9),
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class MyApp extends StatefulWidget {

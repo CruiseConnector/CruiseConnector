@@ -81,4 +81,30 @@ void main() {
     );
     expect(match.distanceMeters, greaterThan(50));
   });
+
+  test('M1 Phantom: senkrecht-nah aber Vertex-fern → IN Korridor', () {
+    // 2026-06-15 (vucko M1, Geraete-Video A_04): DUENNE Geometrie — zwei Vertices
+    // ~377m auseinander (lange Landstrasse zwischen Kreiseln). Der Puck faehrt in
+    // der Segment-MITTE, nur ~15m senkrecht neben der Linie. Der naechste VERTEX
+    // ist aber ~188m weg. Der alte Vertex-Check meldete >50m = Off-Route =
+    // Phantom-„Neuberechnung". Die SENKRECHTE (15m) muss als on-route gelten.
+    final sparse = <List<double>>[
+      [9.70, 47.40],
+      [9.705, 47.40], // ~377m oestlich (lat 47.4)
+      [9.710, 47.40],
+    ];
+    final midLng = (sparse[0][0] + sparse[1][0]) / 2; // 9.7025
+    final p = pos(47.40 + 15.0 / 110540.0, midLng); // 15m noerdlich der Linie
+    final match = findNearestOnRoutePreferIndex(
+      position: p,
+      coordinates: sparse,
+      referenceIndex: 0,
+      corridorMeters: 50,
+    );
+    expect(
+      match.distanceMeters,
+      lessThan(25.0),
+      reason: 'Senkrechte ~15m, NICHT die ~188m Vertex-Distanz → kein Phantom',
+    );
+  });
 }

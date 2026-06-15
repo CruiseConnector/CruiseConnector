@@ -72,6 +72,16 @@ class CruiseMapLibreController {
   /// werfen (SIGABRT, von Dart nicht fangbar → App-Crash).
   bool active = true;
 
+  // 2026-06-15 (vucko M5 „niemals crashen"): Wird beim Widget-dispose gesetzt.
+  // Sobald die native Plattform-View abgebaut wird, darf KEIN Kamera-/View-Call
+  // mehr abgesetzt werden — ein in-flight-Call der mit dem Teardown rennt, wirft
+  // nativ (SIGABRT, von Dart nicht fangbar). Gated VOR jedem Native-Call.
+  bool _disposed = false;
+  void markDisposed() {
+    _disposed = true;
+    active = false;
+  }
+
   // 2026-06-05 (vucko Crash-Fix #2): Erst NACH dem ersten gerenderten Frame
   // dürfen view-abhängige native Calls (Kamera/Projektion/getVisibleRegion)
   // laufen. Vorher hat MapLibre auf dem Gerät beim ersten Cruise-Öffnen
@@ -121,7 +131,7 @@ class CruiseMapLibreController {
     double? bearing,
     Duration duration = const Duration(milliseconds: 600),
   }) async {
-    if (!active) return;
+    if (!active || _disposed) return;
     if (!_finiteLatLng(lat, lng) || (zoom != null && !zoom.isFinite)) return;
     if (!firstFrameReady) {
       _pendingCamera = () => animateTo(
@@ -133,16 +143,20 @@ class CruiseMapLibreController {
       );
       return;
     }
-    await _map.animateCamera(
-      mb.CameraUpdate.newCameraPosition(
-        mb.CameraPosition(
-          target: mb.LatLng(lat, lng),
-          zoom: zoom ?? _map.cameraPosition?.zoom ?? 14,
-          bearing: bearing ?? _map.cameraPosition?.bearing ?? 0,
+    try {
+      await _map.animateCamera(
+        mb.CameraUpdate.newCameraPosition(
+          mb.CameraPosition(
+            target: mb.LatLng(lat, lng),
+            zoom: zoom ?? _map.cameraPosition?.zoom ?? 14,
+            bearing: bearing ?? _map.cameraPosition?.bearing ?? 0,
+          ),
         ),
-      ),
-      duration: duration,
-    );
+        duration: duration,
+      );
+    } catch (_) {
+      // View während des Calls abgebaut/inaktiv → no-op statt Crash.
+    }
   }
 
   Future<void> moveTo({
@@ -151,29 +165,33 @@ class CruiseMapLibreController {
     double? zoom,
     double? bearing,
   }) async {
-    if (!active) return;
+    if (!active || _disposed) return;
     if (!_finiteLatLng(lat, lng) || (zoom != null && !zoom.isFinite)) return;
     if (!firstFrameReady) {
       _pendingCamera = () =>
           moveTo(lat: lat, lng: lng, zoom: zoom, bearing: bearing);
       return;
     }
-    await _map.moveCamera(
-      mb.CameraUpdate.newCameraPosition(
-        mb.CameraPosition(
-          target: mb.LatLng(lat, lng),
-          zoom: zoom ?? _map.cameraPosition?.zoom ?? 14,
-          bearing: bearing ?? _map.cameraPosition?.bearing ?? 0,
+    try {
+      await _map.moveCamera(
+        mb.CameraUpdate.newCameraPosition(
+          mb.CameraPosition(
+            target: mb.LatLng(lat, lng),
+            zoom: zoom ?? _map.cameraPosition?.zoom ?? 14,
+            bearing: bearing ?? _map.cameraPosition?.bearing ?? 0,
+          ),
         ),
-      ),
-    );
+      );
+    } catch (_) {
+      // View während des Calls abgebaut/inaktiv → no-op statt Crash.
+    }
   }
 
   Future<void> fitBounds(
     List<ll.LatLng> points, {
     EdgeInsets padding = const EdgeInsets.all(40),
   }) async {
-    if (!active || points.length < 2) return;
+    if (!active || _disposed || points.length < 2) return;
     if (!firstFrameReady) {
       _pendingCamera = () => fitBounds(points, padding: padding);
       return;
@@ -220,7 +238,7 @@ class CruiseMapLibreController {
   /// Sichtbarer Kartenausschnitt als [southwest, northeast] in latlong2-Koords.
   /// Hält die maplibre-Typen aus den Aufrufern heraus (kein LatLng-Konflikt).
   Future<List<ll.LatLng>?> visibleBounds() async {
-    if (!active || !firstFrameReady) return null;
+    if (!active || _disposed || !firstFrameReady) return null;
     try {
       final r = await _map.getVisibleRegion();
       return [
@@ -465,7 +483,10 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
     _initialSyncFallback?.cancel();
     _initialSyncFallback = null;
     _map?.removeListener(_handleMapControllerChanged);
-    _ctrl?.active = false;
+    // 2026-06-15 (vucko M5): markDisposed() statt nur active=false → kein
+    // in-flight Kamera-/View-Call rennt mehr mit dem Plattform-View-Teardown
+    // (SIGABRT-Schutz).
+    _ctrl?.markDisposed();
     _markerScreen.dispose();
     super.dispose();
   }

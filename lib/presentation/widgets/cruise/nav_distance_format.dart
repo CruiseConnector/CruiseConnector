@@ -21,7 +21,15 @@ String formatNavDistance(double? meters, {bool nowLabelUnderTen = false}) {
   if (nowLabelUnderTen && m < 10.0) {
     return 'Jetzt';
   }
-  // Saubere 10-m-Stufen: 670, 680, 690 … nie 671, 683, 522.
-  final rounded = ((m / 10).round() * 10).clamp(0, 990).toInt();
+  // 2026-06-15 (vucko M3): Kadenz wie Google. Unter 200 m IMMER feine 10-m-
+  // Stufen (kurz vor dem Manöver zählt jeder Schritt); darüber gröber, damit
+  // die Zahl bei Tempo nicht hektisch springt: 200–500 m → 20-m-Stufen,
+  // 500–<1000 m → 50-m-Stufen. Nie krumm (670/680/690 statt 671/683).
+  final step = m <= 200.0
+      ? 10
+      : m <= 500.0
+          ? 20
+          : 50;
+  final rounded = ((m / step).round() * step).clamp(0, 990).toInt();
   return '$rounded m';
 }
