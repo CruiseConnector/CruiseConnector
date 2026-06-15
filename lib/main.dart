@@ -27,6 +27,7 @@ import 'package:cruise_connect/data/services/poi_settings_service.dart';
 import 'package:cruise_connect/data/services/car_route_bridge_service.dart';
 import 'package:cruise_connect/data/services/car_command_listener.dart';
 import 'package:cruise_connect/presentation/pages/auth_page.dart';
+import 'package:cruise_connect/presentation/pages/home_page.dart';
 import 'package:cruise_connect/presentation/pages/post_detail_page.dart';
 
 final GlobalKey<NavigatorState> rootNavigatorKey = GlobalKey<NavigatorState>();
@@ -58,8 +59,11 @@ void main() {
       // Geister-Navigation und der Listener führt einen alten Plan-Befehl erneut
       // aus. MUSS vor dem Listener-Start passieren (awaited).
       await carBridge.clearCarSession();
-      unawaited(carBridge.publishLoginState(
-          Supabase.instance.client.auth.currentSession != null));
+      unawaited(
+        carBridge.publishLoginState(
+          Supabase.instance.client.auth.currentSession != null,
+        ),
+      );
       Supabase.instance.client.auth.onAuthStateChange.listen((state) {
         unawaited(carBridge.publishLoginState(state.session != null));
       });
@@ -122,6 +126,10 @@ class _MyAppState extends State<MyApp> {
     if (kDebugMode) {
       debugPrint('[DeepLink] $uri');
     }
+    if (_isAuthDeepLink(uri)) {
+      unawaited(_handleAuthDeepLinkFeedback());
+      return;
+    }
     final postId = _postIdFromDeepLink(uri);
     if (postId != null) {
       await Future.delayed(const Duration(milliseconds: 400));
@@ -147,6 +155,44 @@ class _MyAppState extends State<MyApp> {
             time: '',
             sharedRouteId: post['shared_route_id'] as String?,
             avatarUrl: profile?['avatar_url'] as String?,
+          ),
+        ),
+      );
+    }
+  }
+
+  bool _isAuthDeepLink(Uri uri) {
+    return uri.fragment.contains('access_token') ||
+        uri.fragment.contains('error_description') ||
+        uri.queryParameters.containsKey('code') ||
+        uri.queryParameters.containsKey('error') ||
+        (uri.scheme == 'cruiseconnect' && uri.host == 'auth');
+  }
+
+  Future<void> _handleAuthDeepLinkFeedback() async {
+    await Future.delayed(const Duration(milliseconds: 900));
+    final session = Supabase.instance.client.auth.currentSession;
+    final nav = rootNavigatorKey.currentState;
+    final context = rootNavigatorKey.currentContext;
+
+    if (session != null && nav != null) {
+      nav.pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const HomePage()),
+        (route) => false,
+      );
+      if (context != null && context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Anmeldung bestaetigt. Willkommen!')),
+        );
+      }
+      return;
+    }
+
+    if (context != null && context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Auth-Link empfangen. Falls du nicht eingeloggt bist, bitte erneut versuchen.',
           ),
         ),
       );
@@ -198,7 +244,8 @@ class _MyAppState extends State<MyApp> {
         // 2026-05-23 (vucko): Notification-Service als Provider —
         // Realtime-Subscription wird in HomePage initState gestartet.
         ChangeNotifierProvider<NotificationService>.value(
-            value: NotificationService.instance),
+          value: NotificationService.instance,
+        ),
       ],
       child: Consumer<AppAccentProvider>(
         builder: (context, accentProvider, _) {

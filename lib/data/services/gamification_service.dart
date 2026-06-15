@@ -141,14 +141,15 @@ class GamificationService {
   }) {
     final distanceXp = calculateDriveXp(distanceKm);
     final safeStreakDays = math.max(1, streakDays);
+    final multiplier = streakMultiplierForDays(safeStreakDays);
     return RouteXpBreakdown(
       distanceXp: distanceXp,
       curveXp: 0,
       styleBonus: 0,
       baseXp: distanceXp,
       streakDays: safeStreakDays,
-      multiplier: 1.0,
-      totalXp: distanceXp,
+      multiplier: multiplier,
+      totalXp: (distanceXp * multiplier).round(),
     );
   }
 
@@ -209,7 +210,9 @@ class GamificationService {
   }
 
   static double streakMultiplierForDays(int streakDays) {
-    return 1.0;
+    final safeDays = math.max(1, streakDays);
+    final bonus = math.min(0.50, (safeDays - 1) * 0.05);
+    return double.parse((1.0 + bonus).toStringAsFixed(2));
   }
 
   static int calculateDrivingStreakDays(

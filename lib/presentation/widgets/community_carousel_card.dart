@@ -241,8 +241,7 @@ class _CommunityCarouselCardState extends State<CommunityCarouselCard> {
               const Expanded(
                 child: Text(
                   'Community',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+                  maxLines: 2,
                   style: TextStyle(
                     color: Colors.white,
                     fontSize: 16,
@@ -333,8 +332,7 @@ class SuggestedContactsSlide extends StatelessWidget {
       children: [
         const Text(
           'Vorschläge',
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
+          maxLines: 2,
           style: TextStyle(
             color: Color(0xFFA0AEC0),
             fontSize: 11,
@@ -413,8 +411,7 @@ class PublicGroupsSlide extends StatelessWidget {
       children: [
         const Text(
           'Öffentliche Gruppen',
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
+          maxLines: 2,
           style: TextStyle(
             color: Color(0xFFA0AEC0),
             fontSize: 11,
@@ -502,7 +499,6 @@ class EventsComingSoonSlide extends StatelessWidget {
           const Text(
             'Hier kannst du in Zukunft deine Events planen.',
             maxLines: 3,
-            overflow: TextOverflow.ellipsis,
             style: TextStyle(
               color: Color(0xFFA0AEC0),
               fontSize: 11,
@@ -563,8 +559,7 @@ class _ContactRow extends StatelessWidget {
                     children: [
                       Text(
                         name,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
+                        maxLines: 2,
                         style: const TextStyle(
                           color: Colors.white,
                           fontSize: 12,
@@ -573,8 +568,7 @@ class _ContactRow extends StatelessWidget {
                       ),
                       Text(
                         handle,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
+                        maxLines: 2,
                         style: const TextStyle(
                           color: Color(0xFFA0AEC0),
                           fontSize: 10,
@@ -643,8 +637,7 @@ class _GroupPreviewRow extends StatelessWidget {
             children: [
               Text(
                 name,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
+                maxLines: 2,
                 style: const TextStyle(
                   color: Colors.white,
                   fontSize: 12,
@@ -661,8 +654,7 @@ class _GroupPreviewRow extends StatelessWidget {
                   const SizedBox(width: 4),
                   Text(
                     '$memberCount Mitglieder',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
+                    maxLines: 2,
                     style: const TextStyle(
                       color: Color(0xFFA0AEC0),
                       fontSize: 10,
@@ -742,8 +734,7 @@ class _MiniActionButton extends StatelessWidget {
               Flexible(
                 child: Text(
                   label,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+                  maxLines: 2,
                   style: const TextStyle(
                     color: Colors.white,
                     fontSize: 11,
@@ -817,8 +808,7 @@ class _EmptySlide extends StatelessWidget {
               Expanded(
                 child: Text(
                   title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+                  maxLines: 2,
                   style: const TextStyle(
                     color: Colors.white,
                     fontSize: 13,
@@ -832,7 +822,6 @@ class _EmptySlide extends StatelessWidget {
           Text(
             text,
             maxLines: 3,
-            overflow: TextOverflow.ellipsis,
             style: const TextStyle(
               color: Color(0xFFA0AEC0),
               fontSize: 10,

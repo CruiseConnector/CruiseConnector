@@ -1,7 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
+import 'package:cruise_connect/data/services/auth_service.dart';
+import 'package:cruise_connect/presentation/pages/home_page.dart';
 import 'package:cruise_connect/presentation/pages/login_page.dart';
-// import 'package:cruise_connect/presentation/pages/register_page.dart';
+import 'package:cruise_connect/presentation/pages/register_page.dart';
+import 'package:cruise_connect/presentation/widgets/auth_social_buttons.dart';
 
 const _authBackground = Color(0xFF0D141E);
 const _authSurface = Color(0xFF151E2A);
@@ -9,14 +14,85 @@ const _authCard = Color(0xFF1A2432);
 const _authBorder = Color(0xFF344156);
 const _authTextMuted = Color(0xFFB6BECC);
 const _brandMarkAsset = 'assets/branding/cruiseconnect_icon_foreground.png';
-const _googleMarkAsset = 'lib/images/google_mark.png';
 const _brandLogoBoxWidth = 204.0;
 const _brandLogoBoxHeight = 102.0;
 const _brandLogoWidth = 150.0;
 const _brandLogoHeight = 62.0;
 
-class WelcomePage extends StatelessWidget {
+class WelcomePage extends StatefulWidget {
   const WelcomePage({super.key});
+
+  @override
+  State<WelcomePage> createState() => _WelcomePageState();
+}
+
+class _WelcomePageState extends State<WelcomePage> {
+  bool _googleLoading = false;
+  bool _appleLoading = false;
+  String? _errorMsg;
+
+  Future<void> _continueWithGoogle() async {
+    await _runSocialLogin(
+      setLoading: (value) => setState(() => _googleLoading = value),
+      action: AuthService.signInWithGoogle,
+    );
+  }
+
+  Future<void> _continueWithApple() async {
+    await _runSocialLogin(
+      setLoading: (value) => setState(() => _appleLoading = value),
+      action: AuthService.signInWithApple,
+    );
+  }
+
+  Future<void> _runSocialLogin({
+    required ValueChanged<bool> setLoading,
+    required Future<void> Function() action,
+  }) async {
+    setLoading(true);
+    setState(() => _errorMsg = null);
+    try {
+      await action();
+      if (!mounted) return;
+      if (AuthService.currentUser != null) {
+        Navigator.of(context).pushAndRemoveUntil(
+          MaterialPageRoute(builder: (_) => const HomePage()),
+          (route) => false,
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Anmeldung geoeffnet. Kehre danach zur App zurueck.'),
+          ),
+        );
+      }
+    } on AuthException catch (e) {
+      if (mounted) setState(() => _errorMsg = _translateAuthError(e.message));
+    } catch (e) {
+      debugPrint('[Welcome] Social Login Fehler: $e');
+      if (mounted) {
+        setState(
+          () => _errorMsg = 'Anmeldung fehlgeschlagen. Bitte erneut versuchen.',
+        );
+      }
+    } finally {
+      if (mounted) setLoading(false);
+    }
+  }
+
+  String _translateAuthError(String message) {
+    final lower = message.toLowerCase();
+    if (lower.contains('abgebrochen') || lower.contains('cancel')) {
+      return 'Anmeldung abgebrochen.';
+    }
+    if (lower.contains('google login ist noch nicht konfiguriert')) {
+      return 'Google Login ist noch nicht fertig konfiguriert.';
+    }
+    if (lower.contains('apple') && lower.contains('nicht verfuegbar')) {
+      return 'Apple Anmeldung ist auf diesem Geraet nicht verfuegbar.';
+    }
+    return message;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -24,7 +100,6 @@ class WelcomePage extends StatelessWidget {
     final padding = MediaQuery.of(context).padding;
     final brand = AppAccentColors.accent;
 
-    // Feste Werte damit das Layout auf Web genauso aussieht wie auf Mobile.
     final double iconAreaHeight = (size.height * 0.35).clamp(300.0, 330.0);
     final double iconTopGap = (size.height * 0.08).clamp(60.0, 76.0);
     final double contentGap =
@@ -51,7 +126,6 @@ class WelcomePage extends StatelessWidget {
               ),
             ),
           ),
-
           Positioned(
             top: iconAreaHeight,
             bottom: 0,
@@ -67,20 +141,15 @@ class WelcomePage extends StatelessWidget {
               ),
             ),
           ),
-
-          // ── Inhalt ───────────────────────────────────────────────────────
           SafeArea(
             child: Align(
               alignment: Alignment.topCenter,
               child: ConstrainedBox(
-                // Auf Web: max 460px breit — wirkt wie Mobile
                 constraints: const BoxConstraints(maxWidth: 460),
                 child: SingleChildScrollView(
                   child: Column(
                     children: [
                       SizedBox(height: iconTopGap),
-
-                      // Brand mark sits in the red hero area, not down in the form.
                       Container(
                         height: _brandLogoBoxHeight,
                         width: _brandLogoBoxWidth,
@@ -118,51 +187,46 @@ class WelcomePage extends StatelessWidget {
                           ),
                         ),
                       ),
-
                       SizedBox(height: contentGap),
-
-                      // ── Auth Sektion ──────────────────────────────────
                       const Text(
                         'Cruise Connector',
                         style: TextStyle(
                           fontSize: 32,
                           fontWeight: FontWeight.w900,
                           color: Colors.white,
-                          letterSpacing: -0.5,
                         ),
                       ),
                       const SizedBox(height: 8),
                       const Text(
-                        'Willkommen zurück!',
+                        'Willkommen zurueck!',
                         style: TextStyle(
                           fontSize: 18,
                           color: _authTextMuted,
                           fontWeight: FontWeight.w500,
                         ),
                       ),
-                      const SizedBox(height: 36),
-
-                      // Registrierung temporär deaktiviert (Testphase — Testnutzer werden manuell vergeben)
-                      // _buildButton(
-                      //   context,
-                      //   text: 'Registrieren',
-                      //   onTap: () => Navigator.push(
-                      //     context,
-                      //     MaterialPageRoute(builder: (_) => const RegisterPage()),
-                      //   ),
-                      // ),
-                      // const SizedBox(height: 16),
+                      const SizedBox(height: 32),
+                      _buildButton(
+                        context,
+                        text: 'Konto erstellen',
+                        onTap: () => Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => const RegisterPage(),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 14),
                       _buildButton(
                         context,
                         text: 'Anmelden',
+                        filled: false,
                         onTap: () => Navigator.push(
                           context,
                           MaterialPageRoute(builder: (_) => const LoginPage()),
                         ),
                       ),
                       const SizedBox(height: 28),
-
-                      // Divider
                       Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 40),
                         child: Row(
@@ -173,7 +237,7 @@ class WelcomePage extends StatelessWidget {
                                 horizontal: 12,
                               ),
                               child: Text(
-                                'oder anmelden mit',
+                                'oder weiter mit',
                                 style: TextStyle(
                                   color: _authTextMuted.withValues(alpha: 0.72),
                                   fontSize: 13,
@@ -185,31 +249,17 @@ class WelcomePage extends StatelessWidget {
                         ),
                       ),
                       const SizedBox(height: 20),
-
-                      // Social Buttons
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          _buildSocialButton(
-                            label: 'Google Anmeldung folgt',
-                            child: Image.asset(
-                              _googleMarkAsset,
-                              width: 34,
-                              height: 34,
-                              filterQuality: FilterQuality.high,
-                            ),
-                          ),
-                          const SizedBox(width: 20),
-                          _buildSocialButton(
-                            label: 'Apple Anmeldung folgt',
-                            child: Icon(
-                              Icons.apple,
-                              size: 36,
-                              color: Colors.white.withValues(alpha: 0.9),
-                            ),
-                          ),
-                        ],
+                      AuthSocialButtons(
+                        googleLoading: _googleLoading,
+                        appleLoading: _appleLoading,
+                        enabled: !_googleLoading && !_appleLoading,
+                        onGoogle: _continueWithGoogle,
+                        onApple: _continueWithApple,
                       ),
+                      if (_errorMsg != null) ...[
+                        const SizedBox(height: 18),
+                        _buildErrorBox(_errorMsg!),
+                      ],
                       const SizedBox(height: 40),
                     ],
                   ),
@@ -226,38 +276,34 @@ class WelcomePage extends StatelessWidget {
     BuildContext context, {
     required String text,
     required VoidCallback onTap,
+    bool filled = true,
   }) {
+    final brand = AppAccentColors.accent;
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 35),
       child: SizedBox(
         width: double.infinity,
         height: 60,
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            color: AppAccentColors.accent,
-            borderRadius: BorderRadius.circular(30),
-            boxShadow: [
-              BoxShadow(
-                color: AppAccentColors.accent.withValues(alpha: 0.28),
-                blurRadius: 20,
-                spreadRadius: -6,
-                offset: const Offset(0, 10),
-              ),
-            ],
+        child: Material(
+          color: filled ? brand : Colors.transparent,
+          shape: StadiumBorder(
+            side: BorderSide(
+              color: filled ? Colors.transparent : _authBorder,
+              width: 1.2,
+            ),
           ),
-          child: Material(
-            color: Colors.transparent,
-            child: InkWell(
-              onTap: onTap,
-              borderRadius: BorderRadius.circular(30),
-              child: Center(
-                child: Text(
-                  text,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                  ),
+          elevation: filled ? 5 : 0,
+          shadowColor: brand.withValues(alpha: 0.28),
+          child: InkWell(
+            onTap: onTap,
+            customBorder: const StadiumBorder(),
+            child: Center(
+              child: Text(
+                text,
+                style: TextStyle(
+                  color: filled ? Colors.white : _authTextMuted,
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
                 ),
               ),
             ),
@@ -267,38 +313,23 @@ class WelcomePage extends StatelessWidget {
     );
   }
 
-  Widget _buildSocialButton({required String label, required Widget child}) {
-    return Semantics(
-      label: label,
-      button: true,
-      enabled: false,
-      child: IgnorePointer(
-        child: Opacity(
-          opacity: 0.76,
-          child: Container(
-            height: 64,
-            width: 64,
-            decoration: BoxDecoration(
-              color: Color.lerp(_authCard, Colors.white, 0.02),
-              borderRadius: BorderRadius.circular(17),
-              border: Border.all(color: _authBorder),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.24),
-                  blurRadius: 16,
-                  spreadRadius: -8,
-                  offset: const Offset(0, 10),
-                ),
-                BoxShadow(
-                  color: Colors.white.withValues(alpha: 0.05),
-                  blurRadius: 12,
-                  spreadRadius: -10,
-                  offset: const Offset(0, -4),
-                ),
-              ],
-            ),
-            child: Center(child: child),
+  Widget _buildErrorBox(String message) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 35),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: const Color(0xFF331316),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: const Color(0xFFFF6B6B).withValues(alpha: 0.42),
           ),
+        ),
+        child: Text(
+          message,
+          style: const TextStyle(color: Color(0xFFFFB4B4), fontSize: 13),
+          textAlign: TextAlign.center,
         ),
       ),
     );

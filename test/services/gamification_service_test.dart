@@ -43,15 +43,23 @@ void main() {
       expect(GamificationService.calculateDriveXp(23), 230);
     });
 
-    test('ignores curves, style bonuses, and streak multipliers for XP', () {
+    test('ignores curves and style bonuses, but applies streak multiplier', () {
       final xp = GamificationService.calculateRouteXp(
         distanceKm: 23,
         curves: 999,
         style: 'Kurvenjagd',
-        streakDays: 30,
+        streakDays: 3,
       );
 
-      expect(xp, 230);
+      expect(xp, 253);
+    });
+
+    test('streak multiplier starts at 1.00x and grows predictably', () {
+      expect(GamificationService.streakMultiplierForDays(0), 1.00);
+      expect(GamificationService.streakMultiplierForDays(1), 1.00);
+      expect(GamificationService.streakMultiplierForDays(2), 1.05);
+      expect(GamificationService.streakMultiplierForDays(3), 1.10);
+      expect(GamificationService.streakMultiplierForDays(30), 1.50);
     });
 
     test('builds an immutable drive-session insert from actual distance', () {
