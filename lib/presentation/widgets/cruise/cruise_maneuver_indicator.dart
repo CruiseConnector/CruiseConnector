@@ -235,29 +235,20 @@ class _RoundaboutPainter extends CustomPainter {
   /// null → Fallback auf Gleichverteilung (Mapbox-Pfad).
   final double? turnAngleRad;
 
-  // Winkel-Naehe-Test (zyklisch).
-  static bool _angClose(double a, double b, double tol) {
-    var d = (a - b) % (2 * math.pi);
-    if (d > math.pi) d -= 2 * math.pi;
-    if (d < -math.pi) d += 2 * math.pi;
-    return d.abs() < tol;
-  }
-
   @override
   void paint(Canvas canvas, Size size) {
-    // 2026-06-15 (vucko M2, Geraete-Video: „Symbol komplett falsch/verbuggt"):
-    // Komplett-Rebuild. EINE Winkelquelle treibt das ganze Glyph — der ECHTE
-    // Geometrie-Austrittswinkel (turn_angle = aus der gefahrenen Route, rechts
-    // positiv). Vorher kollidierten synthetisch gleichverteilte Stubs mit dem
-    // realen Pfeil (zwei Winkelraeume) → „verbuggt". Jetzt:
-    //   • Ring.
-    //   • Einfahrt von UNTEN (deine Strasse rein), Accent.
-    //   • Fahrbogen im Ring vom Einfahrtspunkt GEGEN den Uhrzeigersinn
-    //     (Rechtsverkehr) bis zum Austritt, Accent.
-    //   • EIN fetter Pfeil exakt am echten Austrittswinkel.
-    //   • dezente Deko-Stubs, die Einfahrt UND aktiven Pfeil garantiert nie
-    //     ueberlappen (rein dekorativ, kein Anspruch auf reale Position).
-    // Canvas y-down: Winkel 0 = rechts, π/2 = unten (Einfahrt), −π/2 = oben.
+    // 2026-06-15 (vucko N2, Geraete-Video „zeigt 4 Ausfahrten obwohl es 2 sind"):
+    // Die alten synthetisch GLEICHVERTEILTEN Deko-Stubs (max(4, exitNr+1) Stueck)
+    // suggerierten eine FALSCHE Ausfahrts-Zahl — der Nutzer las „4 Ausfahrten,
+    // nimm die 1.", obwohl der Kreisel nur 2 hat. Wir KENNEN die echte Topologie
+    // (Anzahl/Lage der anderen Ausfahrten) aber gar nicht, also zeichnen wir sie
+    // auch nicht. Apple-Stil: NUR was sicher ist — Ring + deine Einfahrt + EIN
+    // hervorgehobener Pfeil am echten Austrittswinkel. Die Ausfahrts-NUMMER steht
+    // unzweideutig im Text daneben („Ausfahrt 1"). So ist das Symbol bei JEDEM
+    // Kreisel (klein wie gross) korrekt, weil es nichts Falsches mehr behauptet.
+    // EINE Winkelquelle: der ECHTE Geometrie-Austrittswinkel (turn_angle aus der
+    // gefahrenen Route, rechts positiv). Canvas y-down: 0 = rechts, π/2 = unten
+    // (Einfahrt), −π/2 = oben.
     final center = Offset(size.width / 2, size.height / 2);
     final ringRadius = size.width * 0.28;
     final exitLen = size.width * 0.20;
@@ -278,26 +269,7 @@ class _RoundaboutPainter extends CustomPainter {
             totalExits: math.max(4, exitNumber.clamp(1, 8).toInt()),
           );
 
-    // 1) Dezente Deko-Stubs (gleichmaessig, aber Einfahrt + aktiver Pfeil
-    //    ausgespart → nie Kollision). Anzahl skaliert grob mit der Ausfahrt-Nr.
-    final deco = math.max(4, exitNumber.clamp(1, 7).toInt() + 1);
-    final decoPaint = Paint()
-      ..color = Colors.white.withValues(alpha: 0.22)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 2.0
-      ..strokeCap = StrokeCap.round;
-    for (var i = 0; i < deco; i++) {
-      final a = -math.pi / 2 + i * (2 * math.pi / deco);
-      if (_angClose(a, entryAngle, 0.5)) continue;
-      if (_angClose(a, exitAngle, 0.5)) continue;
-      canvas.drawLine(
-        onRing(a, ringRadius),
-        onRing(a, ringRadius + exitLen * 0.7),
-        decoPaint,
-      );
-    }
-
-    // 2) Ring.
+    // Ring.
     canvas.drawCircle(
       center,
       ringRadius,

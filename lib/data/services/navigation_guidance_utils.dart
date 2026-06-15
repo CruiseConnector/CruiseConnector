@@ -328,6 +328,37 @@ int? selectActiveGuidanceManeuverIndex({
   return lastIndex;
 }
 
+/// 2026-06-15 (vucko N1): Darf dieser GPS-Fix für ein Reroute „voten"?
+/// Mapbox-/Apple-Gating gegen Kaltstart-Phantom-Reroutes (Geräte-Fahrt 23min:
+/// der gesnappte Puck wirkt dead-on, während ROHES GPS am Fahrtbeginn seitlich
+/// ausreißt und grundlose „Neuberechnung" auslöst). Zwei Sperren:
+///   1. Mapbox `isQualified`: Accuracy ≤0 oder >[maxQualifiedAccuracyMeters] →
+///      Fix bewegt den Puck, votet aber NIE für ein Reroute.
+///   2. Apple Departure-Suppression (US9835469B2): solange der Puck noch nicht auf
+///      der Route eingerastet ist ([routeLockedOn] == false), nur bei KLAREM,
+///      gut-vermessenem Verfahren rerouten (Abstand > 2× Korridor & Accuracy ≤
+///      [lockOnMaxAccuracyMeters]). Sonst Kaltstart-Rauschen.
+/// Sobald einmal eingerastet, gilt die normale (schnelle) Off-Route-Logik für die
+/// ganze Fahrt. Pur, damit unit-testbar.
+bool rerouteVoteAllowed({
+  required double accuracyMeters,
+  required bool routeLockedOn,
+  required double offRouteDistanceMeters,
+  required double corridorMeters,
+  double maxQualifiedAccuracyMeters = 100.0,
+  double lockOnMaxAccuracyMeters = 35.0,
+}) {
+  final qualifiedFix =
+      accuracyMeters > 0 && accuracyMeters <= maxQualifiedAccuracyMeters;
+  if (!qualifiedFix) return false;
+  if (routeLockedOn) return true;
+  final goodAccuracy =
+      accuracyMeters > 0 && accuracyMeters <= lockOnMaxAccuracyMeters;
+  final clearGenuineDivergence =
+      offRouteDistanceMeters > corridorMeters * 2.0 && goodAccuracy;
+  return clearGenuineDivergence;
+}
+
 /// Baut kompakte Telemetrie für einen echten Straßen-Reroute.
 Map<String, dynamic> buildRerouteTelemetry({
   required String rerouteReason,

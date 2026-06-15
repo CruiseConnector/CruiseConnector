@@ -477,6 +477,31 @@ class _CruiseModePageState extends State<CruiseModePage>
   // addiert → die Meter-Anzeige WÄCHST ehrlich beim Wegfahren (Google-
   // Verhalten), statt minutenlang auf dem letzten On-Route-Wert einzufrieren.
   double _offRouteGapMeters = 0.0;
+  // 2026-06-15 (vucko N1, Geräte-Fahrt 23min): Phantom-Reroutes am Fahrtbeginn.
+  // Der SICHTBARE Puck ist route-locked (klebt auf der Linie), die Off-Route-
+  // Prüfung nutzt aber das ROHE GPS. Beim Kaltstart (Multipath/Schlucht,
+  // schlechte Accuracy, Access-Leg-Versatz) reißt Roh-GPS sekundenlang seitlich
+  // aus und löst grundlose „Neuberechnung" aus, die der Nutzer NIE als Abweichung
+  // sieht (der gesnappte Puck wirkt dead-on). Genau das, was Apple (Patent
+  // US9835469B2 „Start-of-route … suppression of off-route feedback") und Mapbox
+  // (`isWithinDepartureStep`/`isQualified`/`RouteSnappingMinimumHorizontalAccuracy`)
+  // unterbinden: NIE auf rohem GPS rerouten, erst bei eingerastetem Puck. Erst wenn
+  // der Puck nachweislich (≥4 Fixes, ≤25m senkrecht, Accuracy ≤35m) eingerastet
+  // ist, gilt normale Off-Route-Logik voll. Vorher nur bei eindeutigem,
+  // gut-vermessenem Verfahren (>2× Korridor & gute Accuracy). [[navi_m1_m5_crash_reroute_2026_06_15]]
+  int _onRouteLockStreak = 0;
+  bool _routeLockedOn = false;
+  static const double _lockOnPerpMeters = 25.0;
+  static const double _lockOnMaxAccuracyMeters = 35.0;
+  static const int _lockOnStreakNeeded = 4;
+  // Harte Decke der Kaltstart-Grace: nach 90s ist die Anfangsphase definitiv
+  // vorbei (auch bei dauerhaft mäßigem GPS, das nie ≤35m einrastet) → normale
+  // Off-Route-Logik, damit ein echtes Verfahren NIE ewig unterdrückt bleibt. Der
+  // beobachtete Phantom-Cluster lag ganz innerhalb der ersten ~66s.
+  static const Duration _lockOnGraceCeiling = Duration(seconds: 90);
+  // Mapbox isQualified: Fix mit Accuracy ≤0 oder >100m ist unbrauchbar und darf
+  // NIE off-route voten (er bewegt weiter den Puck, aber nicht das Reroute).
+  static const double _maxQualifiedAccuracyMeters = 100.0;
   // 2026-06-13 (vucko Verfahren-„kracht"): Übergangs-Blend der Puck-Quelle
   // (Route-gesnappt ↔ frei) — siehe _blendPuckTransition.
   LatLng? _puckBlendFrom;
@@ -8406,6 +8431,11 @@ class _CruiseModePageState extends State<CruiseModePage>
       _sessionRouteStartIndexInActiveRoute =
           snapshot.sessionRouteStartIndexInActiveRoute;
       _navigationStartTime = snapshot.navigationStartTime;
+      // 2026-06-15 (vucko N1): Eine wiederaufgenommene Fahrt ist per Definition
+      // hinter dem Fahrt-Start → sofort als eingerastet behandeln, damit die
+      // Kaltstart-Reroute-Sperre nicht erneut greift.
+      _routeLockedOn = snapshot.navigationStartTime != null;
+      _onRouteLockStreak = _routeLockedOn ? _lockOnStreakNeeded : 0;
       _offRouteCount = snapshot.offRouteCount;
       _lastRerouteTime = snapshot.lastRerouteTime;
       _isRerouting = snapshot.isRerouting;
@@ -9634,6 +9664,11 @@ class _CruiseModePageState extends State<CruiseModePage>
       _lastRerouteTime = DateTime.now();
       _lastRerouteFailed = false;
       _offRouteGapMeters = 0.0;
+      // 2026-06-15 (vucko N1, Verify-Hygiene): Overshoot-Tracker auf der frisch
+      // gebauten Route zurücksetzen — der alte „min<35 gesehen"-Latch zeigt sonst
+      // auf ein Manöver, das es in der neuen Geometrie nicht mehr gibt.
+      _overshootManeuverIndex = null;
+      _overshootMinDistM = double.infinity;
       _remainingDistance = result.distanceMeters;
       _remainingDuration = result.durationSeconds;
       _distanceToFinalTargetMeters = null;
@@ -10109,6 +10144,10 @@ class _CruiseModePageState extends State<CruiseModePage>
     if (startsNewDriveSession) {
       _drivenTrackRecorder.reset();
       _totalDistanceDriven = 0.0;
+      // 2026-06-15 (vucko N1): Lock-On frisch — bis der Puck eingerastet ist, gilt
+      // die Kaltstart-Reroute-Sperre (kein Phantom am Fahrtbeginn).
+      _onRouteLockStreak = 0;
+      _routeLockedOn = false;
     }
     _navigationStartTime ??= DateTime.now();
     _driveSessionRecordedForCompletion = false;
@@ -10542,10 +10581,53 @@ class _CruiseModePageState extends State<CruiseModePage>
       routeMatch: routeProgressMatch,
     );
 
+    // 2026-06-15 (vucko N1): Mapbox-/Apple-Gating gegen Kaltstart-Phantom-Reroutes
+    // (Geräte-Fahrt 23min: „Neue Strecke übernommen" feuerte ~alle 10-25s am Anfang,
+    // während der gesnappte Puck dead-on wirkte). Der gesnappte Render verdeckt, dass
+    // ROHES GPS beim Kaltstart seitlich ausreißt; die Off-Route-Prüfung lief darauf.
+    final accuracyM = position.accuracy.isFinite ? position.accuracy : -1.0;
+    // Accuracy ≤35m = vertrauenswürdig genug zum Einrasten / für die Schnell-Schiene
+    // (≈ Mapbox RouteSnappingMinimumHorizontalAccuracy 20m + GPS-Slack).
+    final goodAccuracy = accuracyM > 0 && accuracyM <= _lockOnMaxAccuracyMeters;
+    // Lock-On-Streak: senkrecht nah + im Korridor + gute Accuracy = eingerastet.
+    final perpToRoute = math.min(
+      offRouteDecisionMatch.distanceMeters.isFinite
+          ? offRouteDecisionMatch.distanceMeters
+          : double.infinity,
+      routeProgressMatch.distanceMeters.isFinite
+          ? routeProgressMatch.distanceMeters
+          : double.infinity,
+    );
+    if (!isOutsideCorridor && perpToRoute <= _lockOnPerpMeters && goodAccuracy) {
+      if (_onRouteLockStreak < _lockOnStreakNeeded) _onRouteLockStreak++;
+      if (_onRouteLockStreak >= _lockOnStreakNeeded) _routeLockedOn = true;
+    } else if (isOutsideCorridor) {
+      _onRouteLockStreak = 0;
+    }
+    // Harte Decke: nach _lockOnGraceCeiling gilt der Puck als eingerastet, selbst
+    // wenn das GPS nie sauber ≤35m wurde — sonst bliebe ein echtes Verfahren in
+    // dauerhaft mäßiger GPS-Lage ewig gesperrt.
+    if (!_routeLockedOn &&
+        _navigationStartTime != null &&
+        DateTime.now().difference(_navigationStartTime!) > _lockOnGraceCeiling) {
+      _routeLockedOn = true;
+    }
+    // Mapbox-/Apple-Gating (siehe rerouteVoteAllowed): unqualifizierter Fix bzw.
+    // Kaltstart-Rauschen vor dem Einrasten darf KEIN Reroute auslösen.
+    final rerouteMayVote = rerouteVoteAllowed(
+      accuracyMeters: accuracyM,
+      routeLockedOn: _routeLockedOn,
+      offRouteDistanceMeters: offRouteDecisionMatch.distanceMeters,
+      corridorMeters: offRouteCorridor,
+      maxQualifiedAccuracyMeters: _maxQualifiedAccuracyMeters,
+      lockOnMaxAccuracyMeters: _lockOnMaxAccuracyMeters,
+    );
+
     if (isOutsideCorridor &&
         !approachingDestination &&
         !nearRouteEnd &&
-        !makingForwardProgress) {
+        !makingForwardProgress &&
+        rerouteMayVote) {
       // Ehrliche Banner-Meter: Luftlinie zur Route fließt in die Anzeige ein.
       _offRouteGapMeters = offRouteDecisionMatch.distanceMeters.isFinite
           ? offRouteDecisionMatch.distanceMeters
@@ -10570,9 +10652,14 @@ class _CruiseModePageState extends State<CruiseModePage>
       // 2026-06-14 (vucko L2 „Reroute zu spaet", Geraete): clearlyOffRoute schon
       // ab 2.0× Korridor (war 2.5×) → ein echtes Verfahren erreicht die schnelle
       // 1,5s-Schiene frueher. 2.0× ist immer noch eindeutig daneben (kein Jitter).
-      final clearlyOffRoute = maneuverOvershoot ||
-          headingOpposed ||
-          offRouteDecisionMatch.distanceMeters > offRouteCorridor * 2.0;
+      // 2026-06-15 (vucko N1): Schnell-Schiene (1,5s) nur bei guter Accuracy —
+      // ein verrauschter Fix (>35m) soll nicht fast-tracken, sondern die 2,2s-
+      // Basis-Hysterese durchlaufen (Mapbox: schlechtere Accuracy ⇒ träger).
+      final clearlyOffRoute =
+          (maneuverOvershoot ||
+              headingOpposed ||
+              offRouteDecisionMatch.distanceMeters > offRouteCorridor * 2.0) &&
+          goodAccuracy;
       // 2026-06-14 (vucko L2): Basis-Hysterese 3000→2200ms. Ein einzelner
       // GPS-Ausreisser (1 Fix ≈ 1s bei 1Hz) haelt 2,2s nicht durch → kein
       // Phantom-Reroute; ein echtes Verfahren wird ~0,8s frueher erkannt.
