@@ -359,6 +359,49 @@ bool rerouteVoteAllowed({
   return clearGenuineDivergence;
 }
 
+/// 2026-06-15 (vucko N-Runde-2): DIE klar definierte On-Route-Regel (Mapbox/Google).
+/// Gilt dieser GPS-Fix als „auf der Route"? Wenn ja, wird der Zähler
+/// aufeinanderfolgender Off-Route-Fixes auf 0 gesetzt — d.h. ein einzelner
+/// in-Korridor-/kurs-passender/Fortschritts-Fix beendet jeden Off-Streak sofort.
+/// Genau das macht einen 2-3s-Multipath-Ausreißer (Kurve/Auffahrt/Baumdecke)
+/// harmlos: er erreicht nie die nötigen ≥4 Fixes am Stück.
+/// - [perpMeters] = SNAP-FIRST Senkrechte (window ODER globaler Re-Snap, der
+///   kleinere) — NICHT die rohe GPS-Distanz, sonst zählt der gesnappte Puck falsch.
+/// - bis 2× Korridor + passender Kurs gilt noch als on-route (Kurven-/Parallel-
+///   Toleranz); darüber zählt es als off, auch wenn der Kurs zufällig passt
+///   (echtes Verfahren auf eine Parallelstraße).
+bool fixIsOnRoute({
+  required bool isOutsideCorridor,
+  required double perpMeters,
+  required double corridorMeters,
+  required bool courseAligned,
+  required bool makingForwardProgress,
+  required bool approachingDestination,
+  required bool nearRouteEnd,
+}) {
+  return !isOutsideCorridor ||
+      (perpMeters <= corridorMeters * 2.0 && courseAligned) ||
+      makingForwardProgress ||
+      approachingDestination ||
+      nearRouteEnd;
+}
+
+/// 2026-06-15 (vucko N-Runde-2): Wie viele aufeinanderfolgende Off-Route-Fixes
+/// sind nötig, bevor ein Reroute ausgelöst wird? Mapbox: max(4, accuracy/4) —
+/// schlechtes GPS braucht MEHR Fixes (träger, aber nie hart blockiert). Bei
+/// EINDEUTIGEM Verfahren ([clearWrongTurn]: Manöver-Overshoot/klar gegenläufiger
+/// Kurs) auf 3 verkürzt (≈3s) — entspricht der J1/L2-Latenzvorgabe.
+int requiredOffRouteFixes({
+  required double accuracyMeters,
+  required bool clearWrongTurn,
+}) {
+  final accForScale = (accuracyMeters.isFinite && accuracyMeters > 0)
+      ? math.min(accuracyMeters, 100.0)
+      : 16.0;
+  final base = math.max(4, (accForScale / 4).floor());
+  return clearWrongTurn ? math.min(3, base) : base;
+}
+
 /// Baut kompakte Telemetrie für einen echten Straßen-Reroute.
 Map<String, dynamic> buildRerouteTelemetry({
   required String rerouteReason,

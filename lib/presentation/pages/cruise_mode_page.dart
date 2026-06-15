@@ -467,6 +467,13 @@ class _CruiseModePageState extends State<CruiseModePage>
   DateTime? _lastRerouteTime; // Cooldown zwischen Reroutes
   bool _lastRerouteFailed = false;
   int _offRouteCount = 0; // Zählt aufeinanderfolgende Off-Route-Updates
+  // 2026-06-15 (vucko N-Runde-2, Geräte-Video: 3 Phantom-Reroutes MITTEN in der
+  // Fahrt bei dead-on Puck): Mapbox-/Google-Regel — Zähler aufeinanderfolgender
+  // Off-Route-Fixes, den JEDER „auf-Route"-Fix sofort auf 0 setzt. Ein 2-3s-
+  // Multipath-Ausreißer (Kurve/Auffahrt/Baumdecke) kann so per Definition nie die
+  // nötigen ≥4 Fixes am Stück „off" erreichen. Ersetzt die Zeit-Hysterese
+  // (_offRouteSince) als Auslöse-Kriterium. [[navi_n1_n2_phantom_roundabout_2026_06_15]]
+  int _consecutiveOffRouteFixes = 0;
   // 2026-06-07 (vucko P-reroute): Zeit-basierte Hysterese wie Apple/Google —
   // Off-Route muss ANHALTEND sein (Wall-Clock), nicht nur N Ticks (bei 20Hz-Sim
   // wären 5 Ticks = 0.25s = viel zu zappelig). Gesetzt beim ersten Außerhalb-
@@ -506,6 +513,9 @@ class _CruiseModePageState extends State<CruiseModePage>
   // (Route-gesnappt ↔ frei) — siehe _blendPuckTransition.
   LatLng? _puckBlendFrom;
   DateTime? _puckBlendStartAt;
+  // 2026-06-15 (vucko N-Runde-2, „off-route nicht flüssig"): Zeitstempel des
+  // letzten Frei-Puck-Ease-Frames für die framerate-unabhängige Glättung.
+  DateTime? _lastFreePuckEaseAt;
   bool _puckSourceWasLocked = false;
   // 2026-06-13 (vucko Google/Apple-Bar-Review F6-2): 600→220ms. 600ms zeigte
   // den Puck bis ~300ms auf einer Zwischenposition (Lag zur echten Position
@@ -1224,7 +1234,16 @@ class _CruiseModePageState extends State<CruiseModePage>
     }
     final from = _puckBlendFrom;
     final startAt = _puckBlendStartAt;
-    if (from == null || startAt == null) return target;
+    if (from == null || startAt == null) {
+      // 2026-06-15 (vucko N-Runde-2): Off-Route fehlt der Route-Lock, der die
+      // 1Hz-GPS-Korrektur sonst versteckt → den FREIEN Puck pro Frame weich ans
+      // (bereits dead-reckon-extrapolierte) Ziel heranziehen, damit er gleitet
+      // statt bei jedem Fix zu springen. Den gesnappten Puck NICHT ziehen (er
+      // würde hinter den Linienkopf zurückfallen). Große Sprünge direkt.
+      if (!locked) return _easeFreePuck(target, at);
+      _lastFreePuckEaseAt = null;
+      return target;
+    }
     final t =
         at.difference(startAt).inMilliseconds /
         _puckBlendDuration.inMilliseconds;
@@ -1244,6 +1263,35 @@ class _CruiseModePageState extends State<CruiseModePage>
     _puckBlendFrom = null;
     _puckBlendStartAt = null;
     _puckSourceWasLocked = false;
+    _lastFreePuckEaseAt = null;
+  }
+
+  /// 2026-06-15 (vucko N-Runde-2): Framerate-unabhängige exponentielle Glättung
+  /// des freien (off-route) Pucks. Zieht die vorige Render-Position pro Frame ein
+  /// Stück Richtung [target] (= bereits extrapolierter Smoother-Punkt), sodass die
+  /// per-Fix-Korrektur als sanftes Gleiten statt als Sprung erscheint. Lag ≈
+  /// 1/lambda ≈ 0,11s (bei 30 m/s ~3m, unsichtbar). Große Sprünge (Teleport/
+  /// Reroute/Quellenwechsel) und Lücken werden direkt durchgereicht.
+  LatLng _easeFreePuck(LatLng target, DateTime at) {
+    final prev = _lastRouteLockedRenderLatLng;
+    final prevAt = _lastFreePuckEaseAt;
+    _lastFreePuckEaseAt = at;
+    if (prev == null || prevAt == null) return target;
+    final dt = at.difference(prevAt).inMicroseconds / 1e6;
+    if (dt <= 0 || dt > 0.5) return target; // Lücke/erster Frame → direkt
+    final jumpM = geo.Geolocator.distanceBetween(
+      prev.latitude,
+      prev.longitude,
+      target.latitude,
+      target.longitude,
+    );
+    if (jumpM > 60.0 || jumpM < 0.05) return target; // Teleport / Mikro → direkt
+    const lambda = 9.0;
+    final a = 1.0 - math.exp(-lambda * dt);
+    return LatLng(
+      prev.latitude + (target.latitude - prev.latitude) * a,
+      prev.longitude + (target.longitude - prev.longitude) * a,
+    );
   }
 
   /// Render-Position fuer Puck UND Kamera: on-route = auf die Linie gesnappt.
@@ -9649,6 +9697,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       _hapticStage50m = false;
       _lastHapticManeuverIndex = null;
       _offRouteCount = 0;
+      _consecutiveOffRouteFixes = 0;
       // 2026-06-08 (vucko Task #47): Access-Leg-State MUSS beim Reroute-Commit
       // zurück. _fullRouteCoordinates wird komplett durch neue (kürzere) Geometrie
       // ersetzt — ein alter _accessLegJoinIndex zeigt dann in den ALTEN Array
@@ -10623,6 +10672,51 @@ class _CruiseModePageState extends State<CruiseModePage>
       lockOnMaxAccuracyMeters: _lockOnMaxAccuracyMeters,
     );
 
+    // 2026-06-15 (vucko N-Runde-2): KLAR DEFINIERTE REGEL — Zähler statt Zeit.
+    // UNBEDINGT vor dem Gate berechnen (auch bei Fortschritt/Ziel-Annäherung den
+    // Zähler zurücksetzen, sonst überlebt ein Reststand einen Korridor-Tick).
+    // „Auf Route diesen Fix" = im Korridor, ODER etwas weiter aber Kurs passt
+    // (Kurven-/Parallel-Toleranz bis 2× Korridor), ODER klarer Fortschritt/Ziel.
+    // Der Kurs-Check ist bei Langsamfahrt/ungültigem Heading konservativ „aligned"
+    // (GPS-Kurs dann unbrauchbar). JEDER solche Fix nullt den Zähler.
+    final perpOffM = offRouteDecisionMatch.distanceMeters.isFinite
+        ? offRouteDecisionMatch.distanceMeters
+        : double.infinity;
+    final courseAlignedNow =
+        _gpsHeadingAlignedWithRoute(position, offRouteDecisionMatch);
+    final onRouteThisFix = fixIsOnRoute(
+      isOutsideCorridor: isOutsideCorridor,
+      perpMeters: perpOffM,
+      corridorMeters: offRouteCorridor,
+      courseAligned: courseAlignedNow,
+      makingForwardProgress: makingForwardProgress,
+      approachingDestination: approachingDestination,
+      nearRouteEnd: nearRouteEnd,
+    );
+    // Unbrauchbarer Fix (>100m Accuracy) zählt NICHT als off, nullt aber auch
+    // nicht (neutral halten) — sonst würde ein einzelner Müll-Fix einen echten
+    // Off-Streak löschen.
+    final fixUsableForOffRoute =
+        accuracyM > 0 && accuracyM <= _maxQualifiedAccuracyMeters;
+    if (onRouteThisFix) {
+      _consecutiveOffRouteFixes = 0;
+    } else if (fixUsableForOffRoute && _consecutiveOffRouteFixes < 1000) {
+      _consecutiveOffRouteFixes++;
+    }
+    // Nötige Off-Fixes accuracy-skaliert (Mapbox: max(4, accuracy/4)). Schlechtes
+    // GPS ⇒ MEHR Fixes (träger), aber NIE hart blockiert — ein echtes Verfahren
+    // unter mäßigem Himmel (A14-Auffahrt) feuert weiterhin, nur etwas später.
+    // Schnell-Schiene (3 Fixes) nur bei EINDEUTIGEM Verfahren: Manöver-Overshoot
+    // ODER klar gegenläufiger Kurs (>72°, >25m daneben, keine scharfe Kurve voraus).
+    final clearWrongTurn = maneuverOvershoot ||
+        (_gpsHeadingClearlyOpposed(position, offRouteDecisionMatch) &&
+            offRouteDecisionMatch.distanceMeters > 25.0 &&
+            !_routeHasSharpTurnNear(offRouteDecisionMatch.index));
+    final effRequiredOffFixes = requiredOffRouteFixes(
+      accuracyMeters: accuracyM,
+      clearWrongTurn: clearWrongTurn,
+    );
+
     if (isOutsideCorridor &&
         !approachingDestination &&
         !nearRouteEnd &&
@@ -10635,38 +10729,16 @@ class _CruiseModePageState extends State<CruiseModePage>
       if (_clearLiveRouteWindowForOffRoute()) {
         _safeSetState(() {});
       }
-      // Zeit-basierte Hysterese: anhaltend ≥3.0s daneben ODER klar daneben
-      // (≥2.5× Korridor, echtes Abbiegen) ≥1.5s. Kein Zappeln über Tick-Count.
+      // 2026-06-15 (vucko N-Runde-2): Zähler-Regel statt Zeit-Hysterese. Ein
+      // 2-3s-Multipath-Ausreißer kann den Zähler nie auf ≥4 bringen (jeder
+      // in-Korridor-/kurs-passende/Fortschritts-Fix nullt ihn oben). Schnell-
+      // Schiene (3 Fixes ≈ 3s) nur bei EINDEUTIGEM Verfahren: Manöver-Overshoot
+      // ODER klar gegenläufiger Kurs (>72°, >25m daneben, keine scharfe Kurve
+      // unmittelbar voraus). Sonst accuracy-skalierte Basis (≥4 Fixes ≈ 4s).
+      // _offRouteSince bleibt nur für Banner-/Snapshot-Konsumenten gesetzt.
       _offRouteSince ??= DateTime.now();
-      final offFor = DateTime.now().difference(_offRouteSince!);
-      // 2026-06-13 (vucko Reroute-Videos): Fährt der Kurs KLAR von der Route
-      // weg (>72° Abweichung, >25m daneben, >4 m/s), ist das ein echtes
-      // Verfahren — schnelle 1,5s-Schiene statt 3s warten.
-      // 2026-06-13 (vucko G6, Alpen-Haarnadel): NICHT auf der schnellen
-      // Schiene, wenn unmittelbar vor uns selbst eine scharfe Kurve liegt —
-      // dort ist ein gegenläufiger Momentan-Kurs Kurvenfahrt, kein Verfahren.
-      final headingOpposed =
-          _gpsHeadingClearlyOpposed(position, offRouteDecisionMatch) &&
-          offRouteDecisionMatch.distanceMeters > 25.0 &&
-          !_routeHasSharpTurnNear(offRouteDecisionMatch.index);
-      // 2026-06-14 (vucko L2 „Reroute zu spaet", Geraete): clearlyOffRoute schon
-      // ab 2.0× Korridor (war 2.5×) → ein echtes Verfahren erreicht die schnelle
-      // 1,5s-Schiene frueher. 2.0× ist immer noch eindeutig daneben (kein Jitter).
-      // 2026-06-15 (vucko N1): Schnell-Schiene (1,5s) nur bei guter Accuracy —
-      // ein verrauschter Fix (>35m) soll nicht fast-tracken, sondern die 2,2s-
-      // Basis-Hysterese durchlaufen (Mapbox: schlechtere Accuracy ⇒ träger).
-      final clearlyOffRoute =
-          (maneuverOvershoot ||
-              headingOpposed ||
-              offRouteDecisionMatch.distanceMeters > offRouteCorridor * 2.0) &&
-          goodAccuracy;
-      // 2026-06-14 (vucko L2): Basis-Hysterese 3000→2200ms. Ein einzelner
-      // GPS-Ausreisser (1 Fix ≈ 1s bei 1Hz) haelt 2,2s nicht durch → kein
-      // Phantom-Reroute; ein echtes Verfahren wird ~0,8s frueher erkannt.
-      final sustained =
-          offFor >= const Duration(milliseconds: 2200) ||
-          (clearlyOffRoute && offFor >= const Duration(milliseconds: 1500));
-      if (sustained && !_isRerouting) {
+      final offRouteDeclared = _consecutiveOffRouteFixes >= effRequiredOffFixes;
+      if (offRouteDeclared && !_isRerouting) {
         final now = DateTime.now();
         // 2026-06-13 (vucko Google/Apple-Bar-Review G3): Bei hohem Tempo
         // (>22 m/s ≈ 80 km/h) kostet jede Cooldown-Sekunde ~22m Off-Route.
@@ -10684,6 +10756,7 @@ class _CruiseModePageState extends State<CruiseModePage>
         if (cooldownOk) {
           _lastRerouteTime = now;
           _offRouteCount = 0;
+          _consecutiveOffRouteFixes = 0;
           _offRouteSince = null;
           _rerouteToOriginalRoute(position);
           return;
