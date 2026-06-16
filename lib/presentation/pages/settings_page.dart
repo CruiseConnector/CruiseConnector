@@ -10,6 +10,7 @@ import 'package:cruise_connect/data/services/voice_settings_service.dart';
 import 'package:cruise_connect/application/providers/community_provider.dart';
 import 'package:cruise_connect/presentation/pages/welcome_page.dart';
 import 'package:cruise_connect/presentation/widgets/accent_color_picker.dart';
+import 'package:cruise_connect/presentation/widgets/login_options_section.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/routing_onboarding_sheet.dart';
 import 'package:cruise_connect/presentation/widgets/top_toast.dart';
 import 'package:flutter/material.dart';
@@ -397,6 +398,12 @@ class _SettingsPageState extends State<SettingsPage> {
                   const Divider(color: Colors.white10, height: 1),
                   _buildNavTile('Passwort ändern', Icons.lock_outline),
                 ]),
+
+                const SizedBox(height: 24),
+
+                // 2026-06-16 (vucko): Konto-Verknüpfung — ein Account, mehrere
+                // Anmeldeoptionen (E-Mail / Apple / Google verbinden).
+                const LoginOptionsSection(),
 
                 const SizedBox(height: 24),
 

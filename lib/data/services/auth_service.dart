@@ -168,6 +168,105 @@ class AuthService {
     }
   }
 
+  // ── Konto-Verknüpfung (mehrere Anmeldeoptionen pro Account) ───────────────
+  // 2026-06-16 (vucko): Ein Account, mehrere Login-Wege. Supabase verknüpft
+  // Identitäten per linkIdentityWithIdToken (nativer idToken-Flow). Voraussetzung
+  // im Supabase-Dashboard: „Manual linking" muss aktiviert sein, sonst kommt ein
+  // klarer Fehler zurück (wird in der UI angezeigt). Apple läuft nativ sofort;
+  // Google braucht zusätzlich die iOS-Client-ID (sonst sauberer Hinweis).
+
+  /// Alle mit dem aktuellen Account verknüpften Identitäten (email/google/apple).
+  static Future<List<UserIdentity>> linkedIdentities() async {
+    try {
+      return await _db.auth.getUserIdentities();
+    } catch (_) {
+      return _db.auth.currentUser?.identities ?? const <UserIdentity>[];
+    }
+  }
+
+  /// Ob ein bestimmter Provider bereits verknüpft ist.
+  static bool hasProvider(List<UserIdentity> identities, String provider) =>
+      identities.any((i) => i.provider == provider);
+
+  /// Apple mit dem aktuellen Account verknüpfen (nativ, iOS/macOS).
+  static Future<void> linkApple() async {
+    final isApplePlatform =
+        !kIsWeb &&
+        (defaultTargetPlatform == TargetPlatform.iOS ||
+            defaultTargetPlatform == TargetPlatform.macOS);
+    if (!isApplePlatform || !await SignInWithApple.isAvailable()) {
+      throw const AuthException(
+        'Apple-Verbinden ist auf diesem Gerät nicht verfügbar.',
+      );
+    }
+    final rawNonce = _db.auth.generateRawNonce();
+    final hashedNonce = sha256.convert(utf8.encode(rawNonce)).toString();
+    try {
+      final credential = await SignInWithApple.getAppleIDCredential(
+        scopes: const [
+          AppleIDAuthorizationScopes.email,
+          AppleIDAuthorizationScopes.fullName,
+        ],
+        nonce: hashedNonce,
+      );
+      final idToken = credential.identityToken;
+      if (idToken == null) {
+        throw const AuthException('Apple hat kein ID Token geliefert.');
+      }
+      await _db.auth.linkIdentityWithIdToken(
+        provider: OAuthProvider.apple,
+        idToken: idToken,
+        nonce: rawNonce,
+      );
+      await _saveAppleDisplayName(credential);
+    } on SignInWithAppleAuthorizationException catch (e) {
+      if (e.code == AuthorizationErrorCode.canceled) {
+        throw const AuthException('Apple-Verbinden abgebrochen.');
+      }
+      throw AuthException(e.message);
+    }
+  }
+
+  /// Google mit dem aktuellen Account verknüpfen (nativ, braucht iOS-Client-ID).
+  static Future<void> linkGoogle() async {
+    final webClientId = AppConstants.googleWebClientId.trim();
+    final iosClientId = AppConstants.googleIosClientId.trim();
+    final onIos = !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS;
+    if (webClientId.isEmpty || (onIos && iosClientId.isEmpty)) {
+      throw const AuthException(
+        'Google-Verbinden ist noch nicht konfiguriert (iOS-Client-ID fehlt).',
+      );
+    }
+    await _ensureGoogleInitialized();
+    try {
+      final googleUser = await GoogleSignIn.instance.authenticate();
+      final googleAuth = googleUser.authentication;
+      final authorization = await googleUser.authorizationClient
+          .authorizationForScopes(const <String>['email', 'profile']);
+      final idToken = googleAuth.idToken;
+      if (idToken == null) {
+        throw const AuthException('Google hat kein ID Token geliefert.');
+      }
+      await _db.auth.linkIdentityWithIdToken(
+        provider: OAuthProvider.google,
+        idToken: idToken,
+        accessToken: authorization?.accessToken,
+      );
+    } on GoogleSignInException catch (e) {
+      if (e.code == GoogleSignInExceptionCode.canceled ||
+          e.code == GoogleSignInExceptionCode.interrupted) {
+        throw const AuthException('Google-Verbinden abgebrochen.');
+      }
+      throw AuthException(e.description ?? 'Google-Verbinden fehlgeschlagen.');
+    }
+  }
+
+  /// Eine verknüpfte Identität wieder entfernen (nie die letzte — Supabase
+  /// verweigert das Trennen der einzigen verbleibenden Identität).
+  static Future<void> unlinkProvider(UserIdentity identity) async {
+    await _db.auth.unlinkIdentity(identity);
+  }
+
   static Future<void> signOut() async {
     await SavedRoutesCacheService.clearAll();
     try {
