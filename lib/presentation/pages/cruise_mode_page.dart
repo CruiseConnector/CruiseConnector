@@ -474,6 +474,13 @@ class _CruiseModePageState extends State<CruiseModePage>
   // nötigen ≥4 Fixes am Stück „off" erreichen. Ersetzt die Zeit-Hysterese
   // (_offRouteSince) als Auslöse-Kriterium. [[navi_n1_n2_phantom_roundabout_2026_06_15]]
   int _consecutiveOffRouteFixes = 0;
+
+  // 2026-06-16 (vucko O4): Post-Reroute-Lock-Grace. Nach einem Reroute wird die
+  // Lock-On-Grace neu gestartet (Lock zurückgesetzt) und für dieses Fenster die
+  // 90s-Grace-Decke ausgesetzt — sonst rastet der Puck sofort wieder „ein" und
+  // ein minimal neben der Fahrbahn liegender frischer Routen-Abschnitt löst eine
+  // Reroute-Kaskade aus (User-Video: „rerouted auch wenn ich der Route folge").
+  DateTime? _postRerouteGraceUntil;
   // 2026-06-07 (vucko P-reroute): Zeit-basierte Hysterese wie Apple/Google —
   // Off-Route muss ANHALTEND sein (Wall-Clock), nicht nur N Ticks (bei 20Hz-Sim
   // wären 5 Ticks = 0.25s = viel zu zappelig). Gesetzt beim ersten Außerhalb-
@@ -6841,15 +6848,32 @@ class _CruiseModePageState extends State<CruiseModePage>
   // Fix gilt als frisch, wenn er jünger als 10 s und genauer als 50 m ist.
   static const Duration _startFixMaxAge = Duration(seconds: 10);
   static const double _startFixMaxAccuracyMeters = 50.0;
+  // 2026-06-16 (vucko O4/P0 Start-Koordinaten-Bug, Video Churer Straße 9): Beim
+  // FAHREN ist der Versatz in Sekunden allein nicht aussagekräftig — ein 10s-alter
+  // Stream-Fix ist bei 60 km/h ~150m, bei 100 km/h ~280m daneben. Folge: der
+  // A→B-Startpunkt war nicht die echte Position (Such-Puck ≠ Navi-Start-Puck),
+  // die Initial-Route passte nicht → ständige Folge-Reroutes. Wir begrenzen den
+  // Versatz daher in METERN (Tempo × Alter); im Stand bleibt der 10s-Rahmen.
+  static const double _startFixMaxStalenessMeters = 25.0;
 
   bool _isFreshStartFix(geo.Position position) {
     final ageMs = DateTime.now()
         .difference(position.timestamp)
         .inMilliseconds
         .abs();
-    return ageMs <= _startFixMaxAge.inMilliseconds &&
-        position.accuracy > 0 &&
-        position.accuracy <= _startFixMaxAccuracyMeters;
+    if (position.accuracy <= 0 ||
+        position.accuracy > _startFixMaxAccuracyMeters) {
+      return false;
+    }
+    // Positions-Versatz in Metern (Tempo × Alter) hart deckeln — ein frischer
+    // getCurrentPosition-Fix (Alter ~0) passiert immer, ein alter Stream-Fix bei
+    // Fahrt wird abgelehnt → es wird ein frischer geholt (Such-Spinner läuft eh).
+    final speed = position.speed.isFinite && position.speed > 0
+        ? position.speed
+        : 0.0;
+    final positionalStalenessM = speed * (ageMs / 1000.0);
+    if (positionalStalenessM > _startFixMaxStalenessMeters) return false;
+    return ageMs <= _startFixMaxAge.inMilliseconds;
   }
 
   String _describeStartFix(geo.Position position) =>
@@ -9701,6 +9725,13 @@ class _CruiseModePageState extends State<CruiseModePage>
       _lastHapticManeuverIndex = null;
       _offRouteCount = 0;
       _consecutiveOffRouteFixes = 0;
+      // 2026-06-16 (vucko O4): Lock-On-Grace nach Reroute neu starten — der Puck
+      // muss sich erst wieder sauber auf die NEUE Route einrasten, bevor schnelle
+      // Off-Route-Votes wieder greifen. Bricht die Reroute-Kaskade, wenn der
+      // frische Routen-Abschnitt minimal neben der Fahrbahn liegt (snap-first).
+      _routeLockedOn = false;
+      _onRouteLockStreak = 0;
+      _postRerouteGraceUntil = DateTime.now().add(const Duration(seconds: 6));
       // 2026-06-08 (vucko Task #47): Access-Leg-State MUSS beim Reroute-Commit
       // zurück. _fullRouteCoordinates wird komplett durch neue (kürzere) Geometrie
       // ersetzt — ein alter _accessLegJoinIndex zeigt dann in den ALTEN Array
@@ -10661,7 +10692,13 @@ class _CruiseModePageState extends State<CruiseModePage>
     // dauerhaft mäßiger GPS-Lage ewig gesperrt.
     if (!_routeLockedOn &&
         _navigationStartTime != null &&
-        DateTime.now().difference(_navigationStartTime!) > _lockOnGraceCeiling) {
+        DateTime.now().difference(_navigationStartTime!) > _lockOnGraceCeiling &&
+        (_postRerouteGraceUntil == null ||
+            DateTime.now().isAfter(_postRerouteGraceUntil!))) {
+      // 2026-06-16 (vucko O4): Die 90s-Grace-Decke darf NICHT mitten in der
+      // Post-Reroute-Grace force-locken — sonst wäre der Lock-Reset oben sofort
+      // wieder aufgehoben und die Kaskade bliebe. Während der 6s-Grace gilt die
+      // strenge Divergenz-Schwelle (rerouteVoteAllowed, lockedOn=false).
       _routeLockedOn = true;
     }
     // Mapbox-/Apple-Gating (siehe rerouteVoteAllowed): unqualifizierter Fix bzw.

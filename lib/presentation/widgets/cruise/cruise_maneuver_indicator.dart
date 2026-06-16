@@ -237,93 +237,93 @@ class _RoundaboutPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    // 2026-06-15 (vucko N2, Geraete-Video „zeigt 4 Ausfahrten obwohl es 2 sind"):
-    // Die alten synthetisch GLEICHVERTEILTEN Deko-Stubs (max(4, exitNr+1) Stueck)
-    // suggerierten eine FALSCHE Ausfahrts-Zahl — der Nutzer las „4 Ausfahrten,
-    // nimm die 1.", obwohl der Kreisel nur 2 hat. Wir KENNEN die echte Topologie
-    // (Anzahl/Lage der anderen Ausfahrten) aber gar nicht, also zeichnen wir sie
-    // auch nicht. Apple-Stil: NUR was sicher ist — Ring + deine Einfahrt + EIN
-    // hervorgehobener Pfeil am echten Austrittswinkel. Die Ausfahrts-NUMMER steht
-    // unzweideutig im Text daneben („Ausfahrt 1"). So ist das Symbol bei JEDEM
-    // Kreisel (klein wie gross) korrekt, weil es nichts Falsches mehr behauptet.
-    // EINE Winkelquelle: der ECHTE Geometrie-Austrittswinkel (turn_angle aus der
-    // gefahrenen Route, rechts positiv). Canvas y-down: 0 = rechts, π/2 = unten
-    // (Einfahrt), −π/2 = oben.
+    // 2026-06-16 (vucko O5, Geräte-Video „Symbol oft falsch/unklar, Pfeil springt
+    // links/rechts"): Die Ausfahrts-NUMMER ist die stabile Wahrheit (direkt aus
+    // GraphHopper exit_number) — sie wird jetzt GROSS in die Mitte gezeichnet, so
+    // liest der Fahrer „1/2/3…" sofort, ohne den kleinen Pfeilwinkel deuten zu
+    // müssen (Apple-/Google-Stil). Der Richtungspfeil wird NUR gezeichnet, wenn
+    // der ECHTE Geometrie-Winkel (turn_angle) vorliegt; der synthetische
+    // Gleichverteilungs-Fallback (sprang je Frame zwischen links/rechts und stellte
+    // die Ausfahrt falsch dar) ist ENTFERNT. So ist das Symbol bei JEDEM Kreisel
+    // eindeutig UND stabil. Canvas y-down: 0 = rechts, π/2 = unten (Einfahrt),
+    // −π/2 = oben.
     final center = Offset(size.width / 2, size.height / 2);
-    final ringRadius = size.width * 0.28;
-    final exitLen = size.width * 0.20;
+    final ringRadius = size.width * 0.30;
+    final exitLen = size.width * 0.17;
     final accent = AppAccentColors.accent;
-    final ringRect = Rect.fromCircle(center: center, radius: ringRadius);
     const entryAngle = math.pi / 2; // unten = Einfahrt
 
     Offset onRing(double a, double r) =>
         Offset(center.dx + r * math.cos(a), center.dy + r * math.sin(a));
 
-    // Austrittswinkel: ECHTE Geometrie bevorzugt (immer korrekte Richtung),
-    // sonst die Rechtsverkehr-Gleichverteilung (Mapbox-Fallback, turn_angle null).
-    final realTurnAngle = turnAngleRad;
-    final exitAngle = realTurnAngle != null
-        ? roundaboutExitAngleFromTurnAngle(realTurnAngle)
-        : roundaboutExitAngleForRightHandTraffic(
-            exitNumber,
-            totalExits: math.max(4, exitNumber.clamp(1, 8).toInt()),
-          );
-
-    // Ring.
+    // Ring (dezent — Kontext, nicht der Star).
     canvas.drawCircle(
       center,
       ringRadius,
       Paint()
-        ..color = Colors.white.withValues(alpha: 0.5)
+        ..color = Colors.white.withValues(alpha: 0.28)
         ..style = PaintingStyle.stroke
-        ..strokeWidth = 2.5,
+        ..strokeWidth = 2.0,
     );
 
     final accentStroke = Paint()
       ..color = accent
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 3.5
+      ..strokeWidth = 3.0
       ..strokeCap = StrokeCap.round;
 
-    // 3) Einfahrt von unten.
+    // Einfahrt von unten (immer).
     canvas.drawLine(
       onRing(entryAngle, ringRadius + exitLen),
       onRing(entryAngle, ringRadius),
       accentStroke,
     );
 
-    // 4) Fahrbogen Einfahrt → Austritt, GEGEN den Uhrzeigersinn (negativer
-    //    Sweep in y-down = visuell CCW = Rechtsverkehr).
-    var sweep = exitAngle - entryAngle;
-    while (sweep > 0) {
-      sweep -= 2 * math.pi;
+    // Richtungspfeil NUR bei echtem GraphHopper-turn_angle — kein synthetischer
+    // Fallback mehr (der die Ausfahrt falsch/springend darstellte).
+    final realTurnAngle = turnAngleRad;
+    if (realTurnAngle != null) {
+      final exitAngle = roundaboutExitAngleFromTurnAngle(realTurnAngle);
+      final outer = onRing(exitAngle, ringRadius + exitLen);
+      canvas.drawLine(onRing(exitAngle, ringRadius), outer, accentStroke);
+      const head = 6.0;
+      final aLeft = Offset(
+        outer.dx - head * math.cos(exitAngle - 0.5),
+        outer.dy - head * math.sin(exitAngle - 0.5),
+      );
+      final aRight = Offset(
+        outer.dx - head * math.cos(exitAngle + 0.5),
+        outer.dy - head * math.sin(exitAngle + 0.5),
+      );
+      canvas.drawPath(
+        Path()
+          ..moveTo(outer.dx, outer.dy)
+          ..lineTo(aLeft.dx, aLeft.dy)
+          ..lineTo(aRight.dx, aRight.dy)
+          ..close(),
+        Paint()
+          ..color = accent
+          ..style = PaintingStyle.fill,
+      );
     }
-    while (sweep <= -2 * math.pi) {
-      sweep += 2 * math.pi;
-    }
-    canvas.drawArc(ringRect, entryAngle, sweep, false, accentStroke);
 
-    // 5) EIN fetter Austritts-Pfeil am echten Winkel.
-    final outer = onRing(exitAngle, ringRadius + exitLen);
-    canvas.drawLine(onRing(exitAngle, ringRadius), outer, accentStroke);
-    const head = 6.5;
-    final aLeft = Offset(
-      outer.dx - head * math.cos(exitAngle - 0.5),
-      outer.dy - head * math.sin(exitAngle - 0.5),
-    );
-    final aRight = Offset(
-      outer.dx - head * math.cos(exitAngle + 0.5),
-      outer.dy - head * math.sin(exitAngle + 0.5),
-    );
-    canvas.drawPath(
-      Path()
-        ..moveTo(outer.dx, outer.dy)
-        ..lineTo(aLeft.dx, aLeft.dy)
-        ..lineTo(aRight.dx, aRight.dy)
-        ..close(),
-      Paint()
-        ..color = accent
-        ..style = PaintingStyle.fill,
+    // Ausfahrts-NUMMER groß + zentriert (die stabile Wahrheit für den Fahrer).
+    final label = exitNumber.clamp(1, 9).toString();
+    final tp = TextPainter(
+      text: TextSpan(
+        text: label,
+        style: TextStyle(
+          color: Colors.white,
+          fontSize: size.width * 0.36,
+          fontWeight: FontWeight.w800,
+          height: 1.0,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    tp.paint(
+      canvas,
+      Offset(center.dx - tp.width / 2, center.dy - tp.height / 2),
     );
   }
 
