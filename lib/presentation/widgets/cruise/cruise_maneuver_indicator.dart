@@ -259,46 +259,70 @@ class _RoundaboutPainter extends CustomPainter {
     // die Ausfahrt falsch dar) ist ENTFERNT. So ist das Symbol bei JEDEM Kreisel
     // eindeutig UND stabil. Canvas y-down: 0 = rechts, π/2 = unten (Einfahrt),
     // −π/2 = oben.
-    final center = Offset(size.width / 2, size.height / 2);
-    final ringRadius = size.width * 0.30;
-    final exitLen = size.width * 0.17;
+    final w = size.width;
+    final center = Offset(w / 2, w / 2);
+    final ringR = w * 0.34; // Fahrbahn-Ring
+    final hubR = w * 0.13; // Kreisinsel
+    final stubOut = w * 0.13; // Überstand der Ausfahrt-Stummel
     final accent = AppAccentColors.accent;
+    final ringRect = Rect.fromCircle(center: center, radius: ringR);
     const entryAngle = math.pi / 2; // unten = Einfahrt
 
     Offset onRing(double a, double r) =>
         Offset(center.dx + r * math.cos(a), center.dy + r * math.sin(a));
 
-    // Ring (dezent — Kontext, nicht der Star).
-    canvas.drawCircle(
-      center,
-      ringRadius,
-      Paint()
-        ..color = Colors.white.withValues(alpha: 0.28)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 2.0,
-    );
-
+    final faint = Paint()
+      ..color = Colors.white.withValues(alpha: 0.32)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.0
+      ..strokeCap = StrokeCap.round;
     final accentStroke = Paint()
       ..color = accent
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 3.0
+      ..strokeWidth = 3.2
       ..strokeCap = StrokeCap.round;
 
+    // Kreisinsel (Hub) + Fahrbahn-Ring.
+    canvas.drawCircle(
+      center,
+      hubR,
+      Paint()
+        ..color = Colors.white.withValues(alpha: 0.13)
+        ..style = PaintingStyle.fill,
+    );
+    canvas.drawCircle(center, ringR, faint);
     // Einfahrt von unten (immer).
     canvas.drawLine(
-      onRing(entryAngle, ringRadius + exitLen),
-      onRing(entryAngle, ringRadius),
-      accentStroke,
+      onRing(entryAngle, ringR + stubOut),
+      onRing(entryAngle, ringR),
+      faint,
     );
 
-    // Richtungspfeil NUR bei echtem GraphHopper-turn_angle — kein synthetischer
-    // Fallback mehr (der die Ausfahrt falsch/springend darstellte).
     final realTurnAngle = turnAngleRad;
     if (realTurnAngle != null) {
       final exitAngle = roundaboutExitAngleFromTurnAngle(realTurnAngle);
-      final outer = onRing(exitAngle, ringRadius + exitLen);
-      canvas.drawLine(onRing(exitAngle, ringRadius), outer, accentStroke);
-      const head = 6.0;
+      // CCW-Sweep (Rechtsverkehr) von Einfahrt zur Ausfahrt — negativ in y-down.
+      var sweep = exitAngle - entryAngle;
+      while (sweep > 0) {
+        sweep -= 2 * math.pi;
+      }
+      while (sweep <= -2 * math.pi) {
+        sweep += 2 * math.pi;
+      }
+      // Ausfahrten, an denen man VORBEIfährt (Anzahl = exit_number − 1), als
+      // dezente Stummel gleichverteilt im gefahrenen Bogen → zahl-genau je
+      // Kreisverkehr (mehr Ausfahrten vorher ⇒ mehr Stummel).
+      final passed = exitNumber.clamp(1, 12) - 1;
+      for (var i = 1; i <= passed; i++) {
+        final a = entryAngle + sweep * (i / exitNumber);
+        canvas.drawLine(onRing(a, ringR), onRing(a, ringR + stubOut), faint);
+      }
+      // Hervorgehobene Fahrlinie auf dem Ring (Einfahrt → eigene Ausfahrt).
+      canvas.drawArc(ringRect, entryAngle, sweep, false, accentStroke);
+      // Ausfahrts-Pfeil nach außen am ECHTEN Winkel.
+      final outer = onRing(exitAngle, ringR + stubOut + 1);
+      canvas.drawLine(onRing(exitAngle, ringR), outer, accentStroke);
+      const head = 5.5;
       final aLeft = Offset(
         outer.dx - head * math.cos(exitAngle - 0.5),
         outer.dy - head * math.sin(exitAngle - 0.5),
@@ -317,26 +341,25 @@ class _RoundaboutPainter extends CustomPainter {
           ..color = accent
           ..style = PaintingStyle.fill,
       );
-    }
-
-    // Ausfahrts-NUMMER groß + zentriert (die stabile Wahrheit für den Fahrer).
-    final label = exitNumber.clamp(1, 9).toString();
-    final tp = TextPainter(
-      text: TextSpan(
-        text: label,
-        style: TextStyle(
-          color: Colors.white,
-          fontSize: size.width * 0.36,
-          fontWeight: FontWeight.w800,
-          height: 1.0,
+    } else {
+      // Kein echter Winkel → keine erfundene Ausfahrt; Nummer als Sicherheit.
+      final tp = TextPainter(
+        text: TextSpan(
+          text: exitNumber.clamp(1, 9).toString(),
+          style: TextStyle(
+            color: accent,
+            fontSize: w * 0.30,
+            fontWeight: FontWeight.w800,
+            height: 1.0,
+          ),
         ),
-      ),
-      textDirection: TextDirection.ltr,
-    )..layout();
-    tp.paint(
-      canvas,
-      Offset(center.dx - tp.width / 2, center.dy - tp.height / 2),
-    );
+        textDirection: TextDirection.ltr,
+      )..layout();
+      tp.paint(
+        canvas,
+        Offset(center.dx - tp.width / 2, center.dy - tp.height / 2),
+      );
+    }
   }
 
   @override
