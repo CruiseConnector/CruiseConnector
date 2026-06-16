@@ -5211,7 +5211,7 @@ class _CruiseModePageState extends State<CruiseModePage>
           child: visibleManeuver != null
               ? CruiseManeuverIndicator(
                   maneuver: visibleManeuver,
-                  distanceToManeuverMeters: _calculateDistanceToManeuver(
+                  distanceToManeuverMeters: _displayManeuverDistanceMeters(
                     visibleManeuver,
                   ),
                   leading: _buildManeuverBackChevron(),
@@ -13224,6 +13224,28 @@ class _CruiseModePageState extends State<CruiseModePage>
     // 2026-06-13 (vucko Video Banner-Freeze): off-route kommt die Luftlinie
     // GPS→Route dazu — die Anzeige wächst ehrlich mit, statt einzufrieren.
     return dist + _offRouteGapMeters;
+  }
+
+  /// 2026-06-17 (vucko Manöver-Distanz smooth, Video): Glatte Distanz NUR für die
+  /// Banner-ANZEIGE. [_calculateDistanceToManeuver] rechnet ab dem 1-Hz-Index
+  /// (_currentRouteIndex) → die Meter stehen zwischen GPS-Fixen ~1 s still und
+  /// stufen dann. Hier ziehen wir den Vorlauf der KONTINUIERLICHEN Render-Distanz
+  /// (gleitet pro Frame, geo-verankert am Puck) über den Index-Punkt ab → die
+  /// Anzeige zählt bei JEDEM Tempo geschmeidig runter (1,9→1,8→1,7 km, 750→700…),
+  /// nie eingefroren. Auswahl des Manövers + Voice-/Haptik-Schwellen bleiben
+  /// bewusst auf dem stabilen Index-Wert.
+  double? _displayManeuverDistanceMeters([RouteManeuver? visibleManeuver]) {
+    final base = _calculateDistanceToManeuver(visibleManeuver);
+    if (base == null) return null;
+    final cum = _routeCumDistM;
+    final render = _renderLockDistM;
+    if (cum == null || render < 0) return base;
+    final cri = _currentRouteIndex.clamp(0, cum.length - 1).toInt();
+    final ahead = render - cum[cri];
+    // Nur plausibler Intra-Fix-Vorlauf (0..80 m) wird abgezogen; alles andere
+    // (stale/Sprung) → ehrlicher Index-Wert.
+    if (ahead <= 0 || ahead > 80.0) return base;
+    return (base - ahead).clamp(0.0, base);
   }
 
   void _updateActiveManeuver() {
