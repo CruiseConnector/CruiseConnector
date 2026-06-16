@@ -657,6 +657,12 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
       !widget.belowMinimum && widget.xpMultiplier > 1 && widget.baseXp != null;
 
   Widget _buildStreakBonusNote() {
+    // 2026-06-15 (vucko): den ECHT verdienten Streak-Bonus zeigen (klarer +
+    // belohnender als die nackte Rechnung), im selben Accent-Pill — kein
+    // Layout-Eingriff. Multiplikator deutsch mit Komma.
+    final base = widget.baseXp ?? 0;
+    final bonusXp = (base * (widget.xpMultiplier - 1)).round();
+    final mulText = widget.xpMultiplier.toStringAsFixed(1).replaceAll('.', ',');
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
@@ -667,14 +673,23 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
           color: AppAccentColors.accent.withValues(alpha: 0.25),
         ),
       ),
-      child: Text(
-        '${widget.streakDays} Tage Streak: ${widget.baseXp} Basis-XP x ${widget.xpMultiplier.toStringAsFixed(2)}',
-        textAlign: TextAlign.center,
-        style: const TextStyle(
-          color: Colors.white,
-          fontSize: 11,
-          fontWeight: FontWeight.w700,
-        ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Text('🔥', style: TextStyle(fontSize: 13)),
+          const SizedBox(width: 7),
+          Flexible(
+            child: Text(
+              '${widget.streakDays} Tage Streak · +$bonusXp XP Bonus (×$mulText)',
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 11.5,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
