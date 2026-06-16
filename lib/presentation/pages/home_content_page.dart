@@ -952,6 +952,9 @@ class _HomeContentPageState extends State<HomeContentPage>
         distanceKm: route.distanceKm,
         curves: curves,
         style: route.style,
+        // 2026-06-16 (vucko): Streak-Bonus in der Empfehlungs-XP mitzeigen
+        // (N6-Feature beim Merge wieder eingebaut).
+        streakDays: _streakDays,
       );
       final elevationSummary = await const RouteElevationService().getSummary(
         routeKey: route.id,
