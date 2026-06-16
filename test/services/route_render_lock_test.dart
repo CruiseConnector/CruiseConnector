@@ -442,6 +442,43 @@ void main() {
     );
   });
 
+  test(
+    'keeps projection on sparse geometry at 200 km/h when route index lags',
+    () {
+      final route = <List<double>>[
+        pointAt(0),
+        pointAt(350),
+        pointAt(700),
+        pointAt(1050),
+      ];
+      final lock = RouteRenderLock();
+
+      final first = lock.project(
+        coordinates: route,
+        latitude: pointAt(0)[1],
+        longitude: pointAt(0)[0],
+        routeConfirmed: true,
+        currentRouteIndex: 0,
+        speedMps: 200 / 3.6,
+      );
+      expect(first, isNotNull);
+
+      final fastPoint = pointAt(720, lateralMeters: 2);
+      final projected = lock.project(
+        coordinates: route,
+        latitude: fastPoint[1],
+        longitude: fastPoint[0],
+        routeConfirmed: true,
+        currentRouteIndex: 0,
+        speedMps: 200 / 3.6,
+      );
+
+      expect(projected, isNotNull);
+      expect(projected!.distanceM, closeTo(720, 3.0));
+      expect(projected.lateralMeters, lessThan(3.5));
+    },
+  );
+
   test('interpolates point at distance on long sparse segments', () {
     final route = variableDensityRoute();
     final lock = RouteRenderLock()..ensureRoute(route);

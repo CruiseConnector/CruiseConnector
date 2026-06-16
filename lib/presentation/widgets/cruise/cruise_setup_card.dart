@@ -382,7 +382,7 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
               opacity: animation,
               child: SizeTransition(
                 sizeFactor: animation,
-                axisAlignment: -1,
+                alignment: Alignment.topCenter,
                 child: SlideTransition(position: offsetAnimation, child: child),
               ),
             );

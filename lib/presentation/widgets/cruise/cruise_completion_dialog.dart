@@ -106,6 +106,7 @@ class CruiseCompletionDialog extends StatefulWidget {
   final bool isRoundTrip;
   final List<List<double>> routeCoordinates;
   final List<List<List<double>>>? routeSegments;
+
   /// 2026-05-24 (vucko Task #41): GPS-Track der ECHT gefahren wurde.
   /// Wenn vorhanden, wird er als accent-Overlay über die geplante Route
   /// (grau) gezeichnet → "Das bin ich wirklich gefahren".
@@ -209,41 +210,44 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
     if (_isSaving || _isSharing) return;
     setState(() => _isSaving = true);
     final title = _titleController.text.trim();
-    // 2026-06-15 (vucko M5 „niemals crashen"): onSave macht DB-Save + XP/Level/
-    // Badge-Sync — wirft das (Netz/Null/Supabase), darf es weder propagieren
-    // noch den Dialog haengen lassen. Im Fehlerfall trotzdem sauber schliessen.
-    CruiseCompletionActionResult result;
     try {
-      result = await widget.onSave(
+      final result = await widget.onSave(
         _selectedRating > 0 ? _selectedRating : null,
         _selectedTags.toList(growable: false),
         title.isEmpty ? null : title,
       );
-    } catch (e, st) {
-      debugPrint('[CruiseCompletion] onSave fehlgeschlagen: $e\n$st');
-      if (mounted) {
-        setState(() => _isSaving = false);
-        Navigator.of(context).pop();
-      }
-      return;
-    }
-    if (!mounted) return;
-    setState(() => _isSaving = false);
-    if (!result.success) return;
+      if (!mounted) return;
+      setState(() => _isSaving = false);
+      if (!result.success) return;
 
-    try {
-      if (result.newBadges.isNotEmpty) {
-        await showBadgeUnlockPopup(context: context, badges: result.newBadges);
-      } else if (result.hasCelebration) {
-        setState(() => _celebration = result);
-        await _celebrationController.forward(from: 0);
-        await Future<void>.delayed(const Duration(milliseconds: 220));
+      try {
+        if (result.newBadges.isNotEmpty) {
+          await showBadgeUnlockPopup(
+            context: context,
+            badges: result.newBadges,
+          );
+        } else if (result.hasCelebration) {
+          setState(() => _celebration = result);
+          await _celebrationController.forward(from: 0);
+          await Future<void>.delayed(const Duration(milliseconds: 220));
+        }
+      } catch (error) {
+        debugPrint('[CruiseCompletion] Celebration skipped: $error');
       }
-    } catch (e) {
-      debugPrint('[CruiseCompletion] Celebration-Overlay übersprungen: $e');
-    }
 
-    if (mounted) Navigator.of(context).pop();
+      if (mounted) Navigator.of(context).pop();
+    } catch (error, stack) {
+      debugPrint('[CruiseCompletion] Speichern fehlgeschlagen: $error');
+      debugPrint('$stack');
+      if (!mounted) return;
+      setState(() => _isSaving = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Speichern fehlgeschlagen. Bitte erneut versuchen.'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
   }
 
   Future<void> _handleDiscard() async {
@@ -432,11 +436,14 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
                       const _LegendDot(
-                          color: Color(0xAAFFFFFF), label: 'Geplant'),
+                        color: Color(0xAAFFFFFF),
+                        label: 'Geplant',
+                      ),
                       const SizedBox(width: 14),
                       _LegendDot(
-                          color: AppAccentColors.accent,
-                          label: 'Wirklich gefahren'),
+                        color: AppAccentColors.accent,
+                        label: 'Wirklich gefahren',
+                      ),
                     ],
                   ),
                 ],
@@ -534,7 +541,10 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
           size: 16,
           color: AppAccentColors.accent.withValues(alpha: 0.8),
         ),
-        suffixIconConstraints: const BoxConstraints(minWidth: 26, minHeight: 26),
+        suffixIconConstraints: const BoxConstraints(
+          minWidth: 26,
+          minHeight: 26,
+        ),
       ),
     );
   }
@@ -1297,6 +1307,7 @@ class _RoutePreviewPainter extends CustomPainter {
 
   final List<List<double>> coordinates;
   final List<List<List<double>>>? segments;
+
   /// 2026-05-24 (vucko Task #41): Echter GPS-Track (überlagert geplant).
   final List<List<List<double>>>? drivenSegments;
 
@@ -1315,6 +1326,8 @@ class _RoutePreviewPainter extends CustomPainter {
 
     final drawableSegments = _effectiveSegments();
     if (drawableSegments.isEmpty) return;
+    final validDrivenSegments =
+        _validSegments(drivenSegments) ?? const <List<List<double>>>[];
 
     final allPoints = drawableSegments.expand((segment) => segment).toList();
     double minLng = allPoints.first[0];
@@ -1342,11 +1355,11 @@ class _RoutePreviewPainter extends CustomPainter {
 
     // 2026-05-24 (vucko Task #41): Zwei-Layer-Rendering wenn DrivenTrack
     // verfügbar. Geplante Route in dezentem Grau, echter Track in accent.
-    final hasDrivenTrack = drivenSegments != null &&
-        drivenSegments!.any((s) => s.length >= 2);
+    final hasDrivenTrack = validDrivenSegments.isNotEmpty;
 
-    final plannedColor =
-        hasDrivenTrack ? const Color(0x66FFFFFF) : AppAccentColors.accent;
+    final plannedColor = hasDrivenTrack
+        ? const Color(0x66FFFFFF)
+        : AppAccentColors.accent;
     final plannedGlowAlpha = hasDrivenTrack ? 0.12 : 0.40;
 
     final glowPaint = Paint()
@@ -1392,8 +1405,7 @@ class _RoutePreviewPainter extends CustomPainter {
         ..strokeWidth = 5
         ..strokeCap = StrokeCap.round
         ..strokeJoin = StrokeJoin.round;
-      for (final segment in drivenSegments!) {
-        if (segment.length < 2) continue;
+      for (final segment in validDrivenSegments) {
         final p = Path();
         for (var i = 0; i < segment.length; i++) {
           final pt = project(segment[i]);
@@ -1422,23 +1434,32 @@ class _RoutePreviewPainter extends CustomPainter {
   }
 
   List<List<List<double>>> _effectiveSegments() {
-    final provided = segments
+    final provided = _validSegments(segments);
+    if (provided != null && provided.isNotEmpty) return provided;
+    final route = coordinates
+        .where(_isValidPoint)
+        .map((point) => [point[0], point[1]])
+        .toList(growable: false);
+    if (route.length >= 2) return [route];
+    final driven = _validSegments(drivenSegments);
+    if (driven != null && driven.isNotEmpty) return driven;
+    return const [];
+  }
+
+  List<List<List<double>>>? _validSegments(List<List<List<double>>>? raw) {
+    return raw
         ?.map(
           (segment) => segment
-              .where((point) => point.length >= 2)
+              .where(_isValidPoint)
               .map((point) => [point[0], point[1]])
               .toList(growable: false),
         )
         .where((segment) => segment.length >= 2)
         .toList(growable: false);
-    if (provided != null && provided.isNotEmpty) return provided;
-    if (coordinates.length < 2) return const [];
-    return [
-      coordinates
-          .where((point) => point.length >= 2)
-          .map((point) => [point[0], point[1]])
-          .toList(growable: false),
-    ];
+  }
+
+  bool _isValidPoint(List<double> point) {
+    return point.length >= 2 && point[0].isFinite && point[1].isFinite;
   }
 }
 

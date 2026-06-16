@@ -42,17 +42,17 @@ void main() {
       );
     });
 
-    test('GH turn_angle → Screen-Winkel: 0=oben, +π/2=rechts, -π/2=links', () {
+    test('GH turn_angle → Screen-Winkel: 0=oben, -π/2=rechts, +π/2=links', () {
       // 0 = geradeaus durch den Kreisverkehr → Austritt oben (-π/2 y-down).
       expect(
         roundaboutExitAngleFromTurnAngle(0),
         closeTo(-math.pi / 2, 0.001),
       );
-      // +π/2 = rechts raus → Screen-Osten (0 rad).
-      expect(roundaboutExitAngleFromTurnAngle(math.pi / 2), closeTo(0, 0.001));
-      // -π/2 = links raus → Screen-Westen (±π).
+      // -π/2 = rechts raus → Screen-Osten (0 rad).
+      expect(roundaboutExitAngleFromTurnAngle(-math.pi / 2), closeTo(0, 0.001));
+      // +π/2 = links raus → Screen-Westen (±π).
       expect(
-        roundaboutExitAngleFromTurnAngle(-math.pi / 2).abs(),
+        roundaboutExitAngleFromTurnAngle(math.pi / 2).abs(),
         closeTo(math.pi, 0.001),
       );
     });

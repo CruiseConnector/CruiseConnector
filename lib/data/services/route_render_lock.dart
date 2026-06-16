@@ -74,7 +74,7 @@ class RouteRenderLock {
     this.lateralReleaseMeters = 60.0,
     this.behindWindowMeters = 90.0,
     this.minAheadWindowMeters = 220.0,
-    this.maxAheadWindowMeters = 520.0,
+    this.maxAheadWindowMeters = 760.0,
   });
 
   final double lateralMaxMeters;
@@ -450,8 +450,8 @@ class RouteRenderLock {
       return _RouteSearchWindow(0, coordinates.length - 1);
     }
 
-    final speed = speedMps.isFinite ? speedMps.clamp(0.0, 45.0) : 0.0;
-    final aheadWindow = (80.0 + speed * 8.0)
+    final speed = speedMps.isFinite ? speedMps.clamp(0.0, 60.0) : 0.0;
+    final aheadWindow = (100.0 + speed * 12.0)
         .clamp(minAheadWindowMeters, maxAheadWindowMeters)
         .toDouble();
     final behindDist = centerDistanceM - behindWindowMeters;

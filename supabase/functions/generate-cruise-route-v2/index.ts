@@ -588,6 +588,9 @@ async function callGraphHopper(opts: {
   // verhindert Reroutes, die mit einer Wende/U-Turn beginnen. ch.disable ist
   // ohnehin global true (custom_model) → heading wird ehrt.
   headingDeg?: number;
+  // Standard-A→B, Trip-Wegpunkte und Navigation-Reroutes sollen sich wie
+  // Google/Apple verhalten: Hauptstraßen/Autobahn vor Wohnstraßen-Shortcuts.
+  preferMainRoads?: boolean;
   // 2026-06-02 (vucko): externes Abbruch-Signal (Round-Trip-Racer bricht die
   // nicht mehr benötigten Verlierer-Calls ab) + optionaler Per-Call-Timeout.
   signal?: AbortSignal;
@@ -728,31 +731,28 @@ async function callGraphHopper(opts: {
   overlay.priority.push({ if: 'road_class == BRIDLEWAY', multiply_by: '0' });
   overlay.priority.push({ if: 'road_class == CYCLEWAY', multiply_by: '0' });
   overlay.priority.push({ if: 'road_class == SERVICE', multiply_by: '0.15' });
-  // 2026-05-28 (vucko Task #82): Milde Autobahn-De-Präferenz für die CRUISING-
-  // Profile (Scenic/Kurvenjagd/Abendrunde/Entdecker): kurze Touren bevorzugen
-  // normale Straßen + Auf-/Abfahrten, außer die Autobahn ist klar schneller.
-  // 2026-06-16 (vucko O2): NICHT fürs 'car'-Profil — dort gilt „Autobahn zuerst"
-  // (car-Block unten). Der harte Block bleibt hinter avoidHighways (oben).
-  if (opts.profile !== 'car') {
-    overlay.priority.push({ if: 'road_class == MOTORWAY', multiply_by: '0.6' });
-  }
-  // 2026-06-16 (vucko O2/O3): „Vernünftiges" A→B / Reroute / Standard-Trip-
-  // Routing über das 'car'-Profil (isDirectFastest). Apple/Google bevorzugen
-  // Haupt- und Autobahnen statt des absolut-schnellsten Schleichwegs.
-  //   (O2) Autobahn zuerst wenn erlaubt: Nicht-Autobahnen leicht abwerten → GH
-  //        nimmt bei sinnvoller Distanz die Autobahn (z.B. Götzis→Dornbirn = A14).
-  //        multiply_by NUR <=1 (LM-Server lehnt >1 ab; vgl. Normalisierung unten).
-  //   (O3) Hauptstraßen statt Mini-Nebenstraßen: residential/unclassified
-  //        abwerten — NICHT 0, sonst sind Adressen an Wohnstraßen als Start/Ziel
-  //        unerreichbar. SERVICE/TRACK/PATH sind bereits oben geblockt/bestraft.
-  // road_class-Werte (MOTORWAY/RESIDENTIAL/UNCLASSIFIED) sind exakt die bereits
-  // server-erprobten aus den Scenic-Overlays → kein Enum-400-Risiko.
-  if (opts.profile === 'car') {
+  if (opts.preferMainRoads) {
+    // 2026-06-16 (Codex): Standard-A→B/Trip/Reroute dürfen nicht mehr über
+    // Mini-Nebenstraßen gewinnen, wenn Hauptstraßen/Autobahn sinnvoll sind.
+    // GraphHopper Custom-Models erlauben serverseitig keine Boosts >1; deshalb
+    // lassen wir die gewünschten Klassen bei 1 und werten Nebenstraßen ab.
     if (!opts.avoidHighways) {
-      overlay.priority.push({ if: 'road_class != MOTORWAY', multiply_by: '0.85' });
+      overlay.priority.push({ if: 'road_class == TRUNK', multiply_by: '0.88' });
+      overlay.priority.push({ if: 'road_class == PRIMARY', multiply_by: '0.78' });
+      overlay.priority.push({ if: 'road_class == SECONDARY', multiply_by: '0.70' });
+      overlay.priority.push({ if: 'road_class == TERTIARY', multiply_by: '0.45' });
+      overlay.priority.push({ if: 'road_class == UNCLASSIFIED', multiply_by: '0.32' });
+      overlay.priority.push({ if: 'road_class == RESIDENTIAL', multiply_by: '0.22' });
+    } else {
+      overlay.priority.push({ if: 'road_class == SECONDARY', multiply_by: '0.88' });
+      overlay.priority.push({ if: 'road_class == TERTIARY', multiply_by: '0.55' });
+      overlay.priority.push({ if: 'road_class == UNCLASSIFIED', multiply_by: '0.35' });
+      overlay.priority.push({ if: 'road_class == RESIDENTIAL', multiply_by: '0.24' });
     }
-    overlay.priority.push({ if: 'road_class == RESIDENTIAL', multiply_by: '0.3' });
-    overlay.priority.push({ if: 'road_class == UNCLASSIFIED', multiply_by: '0.5' });
+  } else {
+    // Scenic/Rundkurs bleibt wie bisher: Autobahn mild abwerten, außer sie ist
+    // klar schneller. Standard-A→B bekommt diese Abwertung bewusst NICHT.
+    overlay.priority.push({ if: 'road_class == MOTORWAY', multiply_by: '0.6' });
   }
   // 2026-06-10 (vucko GH-Default-Konformitaet): Der GH-Server lief bis heute
   // mit gelockerter Config; nach Neustart gelten die GH-Defaults: in
@@ -870,6 +870,27 @@ async function callGraphHopper(opts: {
     const leadingSegment = upperSegs.length > 0 ? upperSegs[0] : '';
     const startOnMotorway =
       leadingSegment === 'MOTORWAY' || leadingSegment === 'TRUNK';
+    const classMeters: Record<string, number> = {};
+    let detailMeters = 0;
+    for (const seg of roadClassSegments) {
+      const from = Math.max(0, Number(seg[0]) || 0);
+      const to = Math.min(coords.length - 1, Number(seg[1]) || 0);
+      const cls = String(seg[2] ?? 'UNKNOWN').toUpperCase();
+      let meters = 0;
+      for (let i = from + 1; i <= to && i < coords.length; i++) {
+        meters += distanceMeters(coords[i - 1][1], coords[i - 1][0], coords[i][1], coords[i][0]);
+      }
+      classMeters[cls] = (classMeters[cls] ?? 0) + meters;
+      detailMeters += meters;
+    }
+    const denomMeters = detailMeters > 0 ? detailMeters : Math.max(1, p.distance);
+    const fractionFor = (...classes: string[]) =>
+      Number((classes.reduce((sum, cls) => sum + (classMeters[cls] ?? 0), 0) / denomMeters).toFixed(3));
+    const motorwayFraction = fractionFor('MOTORWAY');
+    const majorRoadFraction = fractionFor('MOTORWAY', 'TRUNK', 'PRIMARY', 'SECONDARY');
+    const minorRoadFraction = fractionFor('TERTIARY', 'UNCLASSIFIED', 'RESIDENTIAL', 'SERVICE');
+    const residentialFraction = fractionFor('RESIDENTIAL');
+    const serviceFraction = fractionFor('SERVICE');
     const instructions = p.instructions ?? [];
     // 2026-06-03 (vucko): echte U-Turns aus den GraphHopper-Instructions zählen
     // (sign -8/8 = U-Turn links/rechts, -98 = U-Turn unbekannte Richtung). Das
@@ -897,6 +918,12 @@ async function callGraphHopper(opts: {
         uses_trunk: usesTrunk,
         u_turn_count: uTurnCount,
         start_on_motorway: startOnMotorway,
+        prefer_main_roads: opts.preferMainRoads === true,
+        motorway_distance_fraction: motorwayFraction,
+        major_road_distance_fraction: majorRoadFraction,
+        minor_road_distance_fraction: minorRoadFraction,
+        residential_distance_fraction: residentialFraction,
+        service_distance_fraction: serviceFraction,
       },
       instructions,
     };
@@ -1063,6 +1090,9 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
     }
   }
   const hasExplicitWaypoints = !isRoundTrip && (req.waypoints?.length ?? 0) > 0;
+  const shouldPreferMainRoads =
+    !isRoundTrip &&
+    (isDirectFastest || hasExplicitWaypoints || req.reroute_request === true);
 
   // 2026-05-28 (vucko Speed-Boost): Hard-Regions (Vorarlberg/Tirol/CH-Alpen)
   // bekommen weniger parallele Seeds — GraphHopper-Thread-Pool ist dort
@@ -1286,6 +1316,7 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
         isRoundTrip: false as const,
         avoidHighways: req.avoid_highways ?? false,
         serverUrl,
+        preferMainRoads: shouldPreferMainRoads,
         // 2026-06-09 (vucko U-Turn-Fix): Reroute startet in Fahrtrichtung.
         headingDeg: req.reroute_request === true ? req.current_heading : undefined,
       };
@@ -1400,6 +1431,7 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
               isRoundTrip: false,
               avoidHighways: req.avoid_highways ?? false,
               serverUrl,
+              preferMainRoads: shouldPreferMainRoads,
               // Heading nur fürs ERSTE Segment (= Fahrzeugposition); an den
               // Zwischenstopps ist die Ankunftsrichtung unbekannt.
               headingDeg: segIdx === 0 && req.reroute_request === true
@@ -1518,6 +1550,7 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
               isRoundTrip: false,
               avoidHighways: req.avoid_highways ?? false,
               serverUrl,
+              preferMainRoads: shouldPreferMainRoads,
               headingDeg: heading,
             }).then(result => ({ result, seed: p * 16 + idx })),
           ),
@@ -1544,6 +1577,7 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
           isRoundTrip: false,
           avoidHighways: req.avoid_highways ?? false,
           serverUrl,
+          preferMainRoads: req.reroute_request === true,
           detourBearingDeg: spec.bearing,
           detourPerpendicularKm: spec.distKm,
           // 2026-06-09 (vucko U-Turn-Fix): Reroute startet in Fahrtrichtung.
@@ -1623,6 +1657,7 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
           intermediateWaypoints: req.waypoints?.map(w => ({
             lat: w.latitude, lng: w.longitude,
           })),
+          preferMainRoads: shouldPreferMainRoads,
         });
         if (!('error' in scenicResult)) {
           console.log(`[ULTIMATE FALLBACK] motorcycle_scenic avoid-highway succeeded on ${scenicServer}`);
@@ -1660,6 +1695,7 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
           intermediateWaypoints: req.waypoints?.map(w => ({
             lat: w.latitude, lng: w.longitude,
           })),
+          preferMainRoads: true,
         });
         if (!('error' in carResult)) {
           console.log(`[ULTIMATE FALLBACK] car profile succeeded on ${carServer}`);
@@ -1784,6 +1820,7 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
             isRoundTrip: false,
             avoidHighways: req.avoid_highways ?? false,
             serverUrl: lastServerUsed,
+            preferMainRoads: shouldPreferMainRoads,
           });
           if (!('error' in probe)) {
             probeOk = probe as RouteResult;
@@ -1915,6 +1952,17 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
     const usesMotorway = c.result.meta.uses_motorway === true;
     const uTurns = (c.result.meta.u_turn_count as number | undefined) ?? 0;
     const highwayPenalty = ((req.avoid_highways ?? false) && usesMotorway) ? 1000 : 0;
+    const minorRoadFraction = Number(c.result.meta.minor_road_distance_fraction ?? 0);
+    const residentialFraction = Number(c.result.meta.residential_distance_fraction ?? 0);
+    const serviceFraction = Number(c.result.meta.service_distance_fraction ?? 0);
+    const mainRoadPenalty = shouldPreferMainRoads
+      ? Math.min(
+          140,
+          minorRoadFraction * 70 +
+          residentialFraction * 130 +
+          serviceFraction * 160,
+        )
+      : 0;
     // 2026-06-03 (vucko KRITISCH): NICHT-linearer U-Turn-Penalty, an die
     // CLIENT-Akzeptanz angepasst. Der Flutter-Validator (route_quality_validator
     // hardUturnFailure) wirft Rundkurse mit ≥2 U-Turns HART weg → die Edge darf
@@ -1943,11 +1991,13 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
     return {
       ...c, turns, turnsPerKm, stylePenalty, speedPenalty, avgSpeedKmh,
       isUnreasonablySlow, foreignFraction, countryRejected, countryScorePenalty,
+      mainRoadPenalty,
       foreignPointFraction: country.foreignPointFraction,
       foreignDistanceFraction: country.foreignDistanceFraction,
       maxForeignSegmentMeters: country.maxForeignSegmentMeters,
       score: c.deltaPct + stylePenalty + speedPenalty + highwayPenalty +
-        uTurnPenalty + countryScorePenalty + (countryRejected ? 10000 : 0),
+        uTurnPenalty + countryScorePenalty + mainRoadPenalty +
+        (countryRejected ? 10000 : 0),
     };
   });
 
@@ -2021,6 +2071,7 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
             isRoundTrip: false,
             avoidHighways: req.avoid_highways ?? false,
             serverUrl: lastServerUsed,
+            preferMainRoads: shouldPreferMainRoads,
             headingDeg: req.reroute_request === true ? req.current_heading : undefined,
           });
           // Zubringer plausibel? (kein 10km-Umweg für 150m Versatz)
@@ -2064,6 +2115,7 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
                 isRoundTrip: false,
                 avoidHighways: req.avoid_highways ?? false,
                 serverUrl: lastServerUsed,
+                preferMainRoads: shouldPreferMainRoads,
               });
               if (!('error' in back) && back.distanceKm * 1000 <= Math.max(1500, startOffsetM * 6)) {
                 const br = back as RouteResult;
@@ -2211,6 +2263,7 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
         style_penalty: Number((selectedScored?.stylePenalty ?? 0).toFixed(1)),
         avg_speed_kmh: Number((selectedScored?.avgSpeedKmh ?? 0).toFixed(1)),
         speed_penalty: Number((selectedScored?.speedPenalty ?? 0).toFixed(1)),
+        main_road_penalty: Number((selectedScored?.mainRoadPenalty ?? 0).toFixed(1)),
         profile_fallback_used: usedProfileFallback,
         country_preference: countryPreference,
         home_country_code: homeCountryCode,

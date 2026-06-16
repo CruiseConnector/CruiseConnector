@@ -65,7 +65,7 @@ void main() {
 
   testWidgets('Kreisverkehr echter GH turn_angle (leicht rechts raus)',
       (tester) async {
-    await tester.pumpWidget(harness(roundabout(exit: 2, turnAngle: 0.6)));
+    await tester.pumpWidget(harness(roundabout(exit: 2, turnAngle: -0.6)));
     await tester.pumpAndSettle();
     await expectLater(
       find.byType(CruiseManeuverIndicator),

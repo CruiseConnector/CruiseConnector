@@ -37,6 +37,7 @@ import 'package:cruise_connect/presentation/widgets/weather_inline.dart';
 import 'package:cruise_connect/presentation/widgets/top_toast.dart';
 import 'package:cruise_connect/data/services/driven_track_recorder.dart';
 import 'package:cruise_connect/data/services/navigation_guidance_utils.dart';
+import 'package:cruise_connect/data/services/navigation_reroute_decision.dart';
 import 'package:cruise_connect/data/services/navigation_progress_socket_service.dart';
 import 'package:cruise_connect/data/services/offline_map_service.dart';
 import 'package:vector_map_tiles/vector_map_tiles.dart';
@@ -540,11 +541,11 @@ class _CruiseModePageState extends State<CruiseModePage>
   // 2026-06-12 (vucko Video): 12s -> 6s. Wer den frischen Reroute sofort
   // wieder verlaesst (haeufig beim Verfahren), wartete sonst sichtbar lange
   // auf den naechsten Versuch. Fehlschlaege behalten ihren eigenen Cooldown.
-  // 2026-06-13 (vucko Reroute-Videos): 6s→3s. Zusammen mit 3s Erkennungs-
-  // Hysterese + ~2s Edge-Latenz ergab der 6s-Cooldown 20-36s-Zyklen, in denen
-  // der Fahrer klar off-route war und NICHTS passierte.
-  static const Duration _rerouteCooldown = Duration(seconds: 3);
-  static const Duration _rerouteFailureCooldown = Duration(seconds: 4);
+  // 2026-06-16 (Codex Video-Befund): Reroute muss nach echtem Verfahren
+  // innerhalb von ca. 4s sichtbar aktiv sein. Die Hysterese unten erkennt
+  // schneller; der Cooldown darf danach nicht wieder 3-4s blockieren.
+  static const Duration _rerouteCooldown = Duration(seconds: 2);
+  static const Duration _rerouteFailureCooldown = Duration(seconds: 3);
   // Ketten-Reroute: Commit landete nachweislich hinter dem Fahrer (>80m) →
   // sofort mit frischer Position nachrouten, Cooldown überspringen. Max 2×
   // hintereinander (Schutz gegen Loops bei kaputtem GPS).
@@ -1285,7 +1286,9 @@ class _CruiseModePageState extends State<CruiseModePage>
       target.latitude,
       target.longitude,
     );
-    if (jumpM > 60.0 || jumpM < 0.05) return target; // Teleport / Mikro → direkt
+    if (jumpM > 60.0 || jumpM < 0.05) {
+      return target; // Teleport / Mikro → direkt
+    }
     const lambda = 9.0;
     final a = 1.0 - math.exp(-lambda * dt);
     return LatLng(
@@ -5177,8 +5180,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     final since = _offRouteSince;
     if (since == null) return false;
     return _offRouteGapMeters > 30.0 &&
-        DateTime.now().difference(since) >=
-            const Duration(milliseconds: 1200);
+        DateTime.now().difference(since) >= const Duration(milliseconds: 1200);
   }
 
   Widget _buildNavigationOverlay() {
@@ -6464,10 +6466,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     return const SizedBox(
       width: 44,
       height: 44,
-      child: CustomPaint(
-        size: Size(44, 44),
-        painter: _AppleMapsPuckPainter(),
-      ),
+      child: CustomPaint(size: Size(44, 44), painter: _AppleMapsPuckPainter()),
     );
   }
 
@@ -8210,12 +8209,12 @@ class _CruiseModePageState extends State<CruiseModePage>
 
   double _currentPointToPointCorridorMeters() {
     if (_activeDetourVariant >= 2) {
-      return 800;
+      return 110;
     }
     if (_activeDetourVariant == 1) {
-      return 500;
+      return 80;
     }
-    return 300;
+    return 45;
   }
 
   /// 2026-06-01 (vucko): Effektiver Off-Route-Korridor — wie Google/Apple werden
@@ -8232,7 +8231,7 @@ class _CruiseModePageState extends State<CruiseModePage>
         (accuracyMeters != null &&
             accuracyMeters.isFinite &&
             accuracyMeters > 0)
-        ? math.min(accuracyMeters, 60.0)
+        ? math.min(accuracyMeters, 30.0)
         : 0.0;
     final speed = (speedMps != null && speedMps.isFinite && speedMps > 0)
         ? speedMps
@@ -8243,14 +8242,17 @@ class _CruiseModePageState extends State<CruiseModePage>
     // ein und der Reroute kam minutenlang nicht. Gestrafft auf Google-Niveau;
     // Fehl-Reroutes verhindert weiterhin die Zeit-Hysterese + das
     // heading-bedingte Vorwaerts-Veto, nicht ein Riesen-Korridor.
-    final speedBuffer = speed > 22 ? 18.0 : (speed > 12 ? 10.0 : 0.0);
-    return baseCorridor + math.min(accuracy, 40.0) * 0.6 + speedBuffer;
+    final speedBuffer = speed > 22 ? 10.0 : (speed > 12 ? 6.0 : 0.0);
+    return baseCorridor + accuracy * 0.45 + speedBuffer;
   }
 
   /// 2026-06-12 (vucko): Stimmt der GPS-Kurs grob mit der Routen-Tangente am
   /// Match ueberein? Nur aussagekraeftig bei echter Fahrt (>4 m/s) und
   /// gueltigem Kurs — sonst konservativ true.
-  bool _gpsHeadingAlignedWithRoute(geo.Position position, RouteWindowMatch match) {
+  bool _gpsHeadingAlignedWithRoute(
+    geo.Position position,
+    RouteWindowMatch match,
+  ) {
     if (!position.speed.isFinite || position.speed < 4.0) return true;
     if (!position.heading.isFinite || position.heading < 0) return true;
     final coords = _fullRouteCoordinates;
@@ -8270,7 +8272,10 @@ class _CruiseModePageState extends State<CruiseModePage>
   /// (>72°) — strenger als das 55°-Korridor-Veto, damit ein verpasster Abbieger
   /// schnell erkannt wird, ABER eine enge (Sport-Mode-)Kurve nicht fälschlich
   /// als Verfahren zählt. Wird mit [_routeHasSharpTurnNear] kombiniert.
-  bool _gpsHeadingClearlyOpposed(geo.Position position, RouteWindowMatch match) {
+  bool _gpsHeadingClearlyOpposed(
+    geo.Position position,
+    RouteWindowMatch match,
+  ) {
     if (!position.speed.isFinite || position.speed < 4.0) return false;
     if (!position.heading.isFinite || position.heading < 0) return false;
     final coords = _fullRouteCoordinates;
@@ -8305,11 +8310,17 @@ class _CruiseModePageState extends State<CruiseModePage>
     var cumTurn = 0.0;
     for (var i = start; i < coords.length - 1 && acc < aheadMeters; i++) {
       final seg = geo.Geolocator.distanceBetween(
-        coords[i][1], coords[i][0], coords[i + 1][1], coords[i + 1][0],
+        coords[i][1],
+        coords[i][0],
+        coords[i + 1][1],
+        coords[i + 1][0],
       );
       acc += seg;
       final b = _bearingDegrees(
-        coords[i][1], coords[i][0], coords[i + 1][1], coords[i + 1][0],
+        coords[i][1],
+        coords[i][0],
+        coords[i + 1][1],
+        coords[i + 1][0],
       );
       if (prevBearing != null) {
         var d = (b - prevBearing).abs() % 360.0;
@@ -8332,7 +8343,8 @@ class _CruiseModePageState extends State<CruiseModePage>
     final phi2 = lat2 * math.pi / 180.0;
     final dLng = (lng2 - lng1) * math.pi / 180.0;
     final y = math.sin(dLng) * math.cos(phi2);
-    final x = math.cos(phi1) * math.sin(phi2) -
+    final x =
+        math.cos(phi1) * math.sin(phi2) -
         math.sin(phi1) * math.cos(phi2) * math.cos(dLng);
     return (math.atan2(y, x) * 180.0 / math.pi + 360.0) % 360.0;
   }
@@ -9510,7 +9522,8 @@ class _CruiseModePageState extends State<CruiseModePage>
     // eine alte aktive Linie stehen lassen. Der Off-Route-Loop nutzt dafuer den
     // kurzen Failure-Cooldown.
     _lastRerouteTime = DateTime.now();
-    _lastRerouteFailed = true;    // 2026-06-06 (vucko P6): Meldung NUR oben (TopToast), nicht mehr als orange
+    _lastRerouteFailed =
+        true; // 2026-06-06 (vucko P6): Meldung NUR oben (TopToast), nicht mehr als orange
     // SnackBar unten. P7 deckelt automatisch auf ≤5s + Swipe-to-dismiss.
     if (mounted) {
       ScaffoldMessenger.of(context).hideCurrentSnackBar();
@@ -9555,7 +9568,8 @@ class _CruiseModePageState extends State<CruiseModePage>
     _markCurrentRouteWithRerouteMeta(meta);
     _logRerouteMeta(meta);
     _lastRerouteTime = DateTime.now();
-    _lastRerouteFailed = true;    // 2026-06-06 (vucko P6): oben statt orange Bottom-SnackBar.
+    _lastRerouteFailed =
+        true; // 2026-06-06 (vucko P6): oben statt orange Bottom-SnackBar.
     if (mounted) {
       ScaffoldMessenger.of(context).hideCurrentSnackBar();
       TopToast.show(
@@ -9620,10 +9634,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     // 2026-06-13 (vucko Reroute-Videos): Beim Commit zaehlt die JETZT-Position
     // (Smoother-Prediction), nicht die bis zu mehrere Sekunden alte Request-
     // Position — fuer Wenden-Check, Re-Anchor und den Stale-Check unten.
-    final commitPos = _freshRerouteStartPosition(
-      position,
-      lead: Duration.zero,
-    );
+    final commitPos = _freshRerouteStartPosition(position, lead: Duration.zero);
 
     // 2026-06-13 (vucko Google/Apple-Bar-Review G4): Liefert GraphHopper (dank
     // des headings-Fixes) bereits ein echtes WENDEN-Manöver als erste
@@ -9631,7 +9642,8 @@ class _CruiseModePageState extends State<CruiseModePage>
     // (U-Turn-Icon + Distanz-Eskalation wie Google). Der synthetische Override
     // ist dann überflüssig und würde nur doppelt sprechen — nur als FALLBACK
     // feuern, wenn GH KEIN führendes Wenden-Manöver hat.
-    final firstManeuverIsUTurn = result.maneuvers.isNotEmpty &&
+    final firstManeuverIsUTurn =
+        result.maneuvers.isNotEmpty &&
         result.maneuvers.first.routeIndex <= 2 &&
         (result.maneuvers.first.icon == Icons.u_turn_left ||
             result.maneuvers.first.icon == Icons.u_turn_right);
@@ -9653,12 +9665,19 @@ class _CruiseModePageState extends State<CruiseModePage>
       var acc = 0.0;
       while (probeIdx < c.length - 1 && acc < 25.0) {
         acc += geo.Geolocator.distanceBetween(
-          c[probeIdx - 1][1], c[probeIdx - 1][0],
-          c[probeIdx][1], c[probeIdx][0]);
+          c[probeIdx - 1][1],
+          c[probeIdx - 1][0],
+          c[probeIdx][1],
+          c[probeIdx][0],
+        );
         probeIdx++;
       }
-      final routeStartBearing =
-          _bearingDegrees(c[0][1], c[0][0], c[probeIdx][1], c[probeIdx][0]);
+      final routeStartBearing = _bearingDegrees(
+        c[0][1],
+        c[0][0],
+        c[probeIdx][1],
+        c[probeIdx][0],
+      );
       var delta = (commitPos.heading - routeStartBearing).abs() % 360.0;
       if (delta > 180.0) delta = 360.0 - delta;
       if (delta > 120.0) {
@@ -10519,9 +10538,8 @@ class _CruiseModePageState extends State<CruiseModePage>
     // auf den letzten Metern einen Phantom-Reroute auslöste („Neuberechnung"
     // bei 0,5 km Rest im Video). Auf den letzten ~250 m eines Rundkurses NIE
     // rerouten — Index/Distanz werden weiter gepflegt, nur der Trigger ruht.
-    final nearRouteEnd = _isRoundTrip &&
-        remainingForGate != null &&
-        remainingForGate <= 250.0;
+    final nearRouteEnd =
+        _isRoundTrip && remainingForGate != null && remainingForGate <= 250.0;
     // Apple/Google-Regel: ein VORWÄRTS-laufender Puck fährt die Route — auch wenn
     // ein einzelner Fix seitlich zappelt. Dann niemals reroute.
     // 2026-06-12 (vucko Reroute-zu-spaet, Video): Das Veto gilt nur noch, wenn
@@ -10529,7 +10547,8 @@ class _CruiseModePageState extends State<CruiseModePage>
     // auf der Parallelstrasse kriecht der Match-Index naemlich WEITER vorwaerts
     // (die Projektion wandert mit) — das alte Veto blockierte den Reroute
     // damit minutenlang ("0 m"-Banner-Freeze im Geraete-Video).
-    var makingForwardProgress = match.index > prevRouteIndex &&
+    var makingForwardProgress =
+        match.index > prevRouteIndex &&
         _gpsHeadingAlignedWithRoute(position, match);
 
     // 2026-06-12 (vucko): Manoever-UEBERFAHREN-Trigger. War der Fahrer schon
@@ -10547,7 +10566,8 @@ class _CruiseModePageState extends State<CruiseModePage>
       if (distToManeuverNow < _overshootMinDistM) {
         _overshootMinDistM = distToManeuverNow;
       }
-      maneuverOvershoot = _overshootMinDistM < 35.0 &&
+      maneuverOvershoot =
+          _overshootMinDistM < 35.0 &&
           distToManeuverNow > math.max(60.0, _overshootMinDistM + 45.0) &&
           (position.speed.isFinite ? position.speed : 0) > 3.0;
     }
@@ -10650,7 +10670,9 @@ class _CruiseModePageState extends State<CruiseModePage>
           ? routeProgressMatch.distanceMeters
           : double.infinity,
     );
-    if (!isOutsideCorridor && perpToRoute <= _lockOnPerpMeters && goodAccuracy) {
+    if (!isOutsideCorridor &&
+        perpToRoute <= _lockOnPerpMeters &&
+        goodAccuracy) {
       if (_onRouteLockStreak < _lockOnStreakNeeded) _onRouteLockStreak++;
       if (_onRouteLockStreak >= _lockOnStreakNeeded) _routeLockedOn = true;
     } else if (isOutsideCorridor) {
@@ -10661,7 +10683,8 @@ class _CruiseModePageState extends State<CruiseModePage>
     // dauerhaft mäßiger GPS-Lage ewig gesperrt.
     if (!_routeLockedOn &&
         _navigationStartTime != null &&
-        DateTime.now().difference(_navigationStartTime!) > _lockOnGraceCeiling) {
+        DateTime.now().difference(_navigationStartTime!) >
+            _lockOnGraceCeiling) {
       _routeLockedOn = true;
     }
     // Mapbox-/Apple-Gating (siehe rerouteVoteAllowed): unqualifizierter Fix bzw.
@@ -10685,8 +10708,10 @@ class _CruiseModePageState extends State<CruiseModePage>
     final perpOffM = offRouteDecisionMatch.distanceMeters.isFinite
         ? offRouteDecisionMatch.distanceMeters
         : double.infinity;
-    final courseAlignedNow =
-        _gpsHeadingAlignedWithRoute(position, offRouteDecisionMatch);
+    final courseAlignedNow = _gpsHeadingAlignedWithRoute(
+      position,
+      offRouteDecisionMatch,
+    );
     final onRouteThisFix = fixIsOnRoute(
       isOutsideCorridor: isOutsideCorridor,
       perpMeters: perpOffM,
@@ -10711,7 +10736,8 @@ class _CruiseModePageState extends State<CruiseModePage>
     // unter mäßigem Himmel (A14-Auffahrt) feuert weiterhin, nur etwas später.
     // Schnell-Schiene (3 Fixes) nur bei EINDEUTIGEM Verfahren: Manöver-Overshoot
     // ODER klar gegenläufiger Kurs (>72°, >25m daneben, keine scharfe Kurve voraus).
-    final clearWrongTurn = maneuverOvershoot ||
+    final clearWrongTurn =
+        maneuverOvershoot ||
         (_gpsHeadingClearlyOpposed(position, offRouteDecisionMatch) &&
             offRouteDecisionMatch.distanceMeters > 25.0 &&
             !_routeHasSharpTurnNear(offRouteDecisionMatch.index));
@@ -10732,43 +10758,44 @@ class _CruiseModePageState extends State<CruiseModePage>
       if (_clearLiveRouteWindowForOffRoute()) {
         _safeSetState(() {});
       }
-      // 2026-06-15 (vucko N-Runde-2): Zähler-Regel statt Zeit-Hysterese. Ein
-      // 2-3s-Multipath-Ausreißer kann den Zähler nie auf ≥4 bringen (jeder
-      // in-Korridor-/kurs-passende/Fortschritts-Fix nullt ihn oben). Schnell-
-      // Schiene (3 Fixes ≈ 3s) nur bei EINDEUTIGEM Verfahren: Manöver-Overshoot
-      // ODER klar gegenläufiger Kurs (>72°, >25m daneben, keine scharfe Kurve
-      // unmittelbar voraus). Sonst accuracy-skalierte Basis (≥4 Fixes ≈ 4s).
-      // _offRouteSince bleibt nur für Banner-/Snapshot-Konsumenten gesetzt.
-      _offRouteSince ??= DateTime.now();
-      final offRouteDeclared = _consecutiveOffRouteFixes >= effRequiredOffFixes;
-      if (offRouteDeclared && !_isRerouting) {
-        final now = DateTime.now();
-        // 2026-06-13 (vucko Google/Apple-Bar-Review G3): Bei hohem Tempo
-        // (>22 m/s ≈ 80 km/h) kostet jede Cooldown-Sekunde ~22m Off-Route.
-        // Google/Apple feuern Folge-Reroutes nahezu sofort → 1,5s statt 3s.
-        final highSpeed = position.speed.isFinite && position.speed > 22.0;
-        final successCooldown = highSpeed
-            ? const Duration(milliseconds: 1500)
-            : _rerouteCooldown;
-        final rerouteCooldown = _lastRerouteFailed
-            ? _rerouteFailureCooldown
-            : successCooldown;
-        final cooldownOk =
-            _lastRerouteTime == null ||
-            now.difference(_lastRerouteTime!) >= rerouteCooldown;
-        if (cooldownOk) {
-          _lastRerouteTime = now;
-          _offRouteCount = 0;
-          _consecutiveOffRouteFixes = 0;
-          _offRouteSince = null;
-          _rerouteToOriginalRoute(position);
-          return;
-        }
+      // Zähler + Zeit-Hysterese: normale GPS-Ausreißer müssen mehrere
+      // Off-Route-Fixes liefern; eindeutiges Verfahren darf schneller feuern.
+      final rerouteDecisionAt = DateTime.now();
+      _offRouteSince ??= rerouteDecisionAt;
+      final rerouteDecision = NavigationRerouteDecisionEngine.evaluate(
+        isOutsideCorridor: isOutsideCorridor,
+        approachingDestination: approachingDestination,
+        nearRouteEnd: nearRouteEnd,
+        makingForwardProgress: makingForwardProgress,
+        maneuverOvershoot: maneuverOvershoot,
+        headingOpposed: clearWrongTurn && !maneuverOvershoot,
+        distanceMeters: offRouteDecisionMatch.distanceMeters,
+        corridorMeters: offRouteCorridor,
+        offRouteSince: _offRouteSince,
+        now: rerouteDecisionAt,
+        isRerouting: _isRerouting,
+        lastRerouteTime: _lastRerouteTime,
+        lastRerouteFailed: _lastRerouteFailed,
+        speedMps: position.speed,
+        normalCooldown: _rerouteCooldown,
+        failedCooldown: _rerouteFailureCooldown,
+      );
+      final offRouteDeclared =
+          _consecutiveOffRouteFixes >= effRequiredOffFixes ||
+          (rerouteDecision.clearlyOffRoute && rerouteDecision.sustained);
+      if (offRouteDeclared && rerouteDecision.shouldTrigger) {
+        _lastRerouteTime = rerouteDecisionAt;
+        _offRouteCount = 0;
+        _consecutiveOffRouteFixes = 0;
+        _offRouteSince = null;
+        _rerouteToOriginalRoute(position);
+        return;
       }
     } else {
       // Im Korridor ODER Fortschritt ODER Ziel-Annäherung → Off-Route-Timer aus.
       _offRouteSince = null;
       _offRouteCount = 0;
+      _consecutiveOffRouteFixes = 0;
       _offRouteGapMeters = 0.0;
     }
 
@@ -10828,7 +10855,9 @@ class _CruiseModePageState extends State<CruiseModePage>
     if (!isOutsideCorridor) {
       // 2026-06-14 (vucko Re-Dock-Trim): re-gesnappter Match → der Fallback-Pfad
       // (Lock freigegeben) schneidet am echten Puck statt am alten Fenster.
-      if (_trimVisibleRouteToProjection(routeProgressMatch)) needsRebuild = true;
+      if (_trimVisibleRouteToProjection(routeProgressMatch)) {
+        needsRebuild = true;
+      }
     }
     // 2026-06-09 (vucko Trip-Skip): besuchte Zwischenstopps abhaken.
     _markPassedWaypoints(position);
@@ -11823,7 +11852,10 @@ class _CruiseModePageState extends State<CruiseModePage>
     if (overrideText != null) {
       if (important) {
         unawaited(
-          TtsService.instance.speakImportant(overrideText, interrupt: interrupt),
+          TtsService.instance.speakImportant(
+            overrideText,
+            interrupt: interrupt,
+          ),
         );
       } else {
         unawaited(TtsService.instance.speakOptional(overrideText));
@@ -13086,7 +13118,9 @@ class _CruiseModePageState extends State<CruiseModePage>
     if (targetIndex <= _currentRouteIndex) {
       var nextIdx = -1;
       for (final m in _maneuvers) {
-        final mi = m.routeIndex.clamp(0, _fullRouteCoordinates.length - 1).toInt();
+        final mi = m.routeIndex
+            .clamp(0, _fullRouteCoordinates.length - 1)
+            .toInt();
         if (mi > _currentRouteIndex) {
           nextIdx = mi;
           break;
