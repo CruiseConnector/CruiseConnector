@@ -382,7 +382,12 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
               opacity: animation,
               child: SizeTransition(
                 sizeFactor: animation,
-                alignment: Alignment.topCenter,
+                // 2026-06-16 (vucko): SizeTransition kennt KEIN `alignment` —
+                // top-Ausrichtung läuft über axisAlignment (-1.0 = oben). Das alte
+                // `alignment: Alignment.topCenter` brach den Build unter Flutter
+                // 3.38.5 (kernel_snapshot Compile-Fehler); axisAlignment ist
+                // versionsübergreifend gültig und optisch identisch.
+                axisAlignment: -1.0,
                 child: SlideTransition(position: offsetAnimation, child: child),
               ),
             );
