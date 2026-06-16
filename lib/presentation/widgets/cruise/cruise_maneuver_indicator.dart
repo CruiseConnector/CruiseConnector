@@ -14,6 +14,7 @@ class CruiseManeuverIndicator extends StatelessWidget {
     this.distanceToManeuverMeters,
     this.leading,
     this.isRerouting = false,
+    this.reroutingDuration,
   });
 
   final RouteManeuver maneuver;
@@ -30,6 +31,11 @@ class CruiseManeuverIndicator extends StatelessWidget {
   /// flight → das Banner zeigt einen neutralen „Neuberechnung"-Status (wie
   /// Google „Rerouting…") statt der veralteten, irreführenden Abbiege-Anweisung.
   final bool isRerouting;
+
+  /// Wie lange der aktuelle Reroute schon sichtbar ist. Nach einigen Sekunden
+  /// wechselt der Untertext von "warte" zu einem sicheren Weiterfahr-Hinweis,
+  /// damit die UI nicht wie eingefroren wirkt.
+  final Duration? reroutingDuration;
 
   @override
   Widget build(BuildContext context) {
@@ -141,6 +147,9 @@ class CruiseManeuverIndicator extends StatelessWidget {
   /// rotierendem Refresh-Icon, exakt wie Google „Rerouting…". Verhindert, dass
   /// eine veraltete Abbiege-Anweisung den Fahrer in die Irre führt.
   Widget _buildReroutingBanner(BuildContext context) {
+    final isTakingLong =
+        reroutingDuration != null &&
+        reroutingDuration! >= const Duration(seconds: 6);
     return Container(
       padding: EdgeInsets.fromLTRB(leading != null ? 6 : 16, 14, 16, 14),
       decoration: BoxDecoration(
@@ -200,7 +209,9 @@ class CruiseManeuverIndicator extends StatelessWidget {
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  'Route wird angepasst — bitte weiterfahren',
+                  isTakingLong
+                      ? 'Suche läuft weiter — Route bleibt sichtbar'
+                      : 'Route wird angepasst — bitte weiterfahren',
                   style: TextStyle(
                     color: Colors.white.withValues(alpha: 0.65),
                     fontSize: 14,
@@ -231,7 +242,8 @@ class _RoundaboutPainter extends CustomPainter {
 
   final int exitNumber;
 
-  /// Echter GH-Austritts-Winkel (Radiant, 0 = geradeaus, + = rechts, − = links).
+  /// Echter GH-Austritts-Winkel (Radiant, 0 = geradeaus, - = rechts, + = links
+  /// in DACH/Rechtsverkehr, weil die Kreisfahrt dort gegen den Uhrzeigersinn ist).
   /// null → Fallback auf Gleichverteilung (Mapbox-Pfad).
   final double? turnAngleRad;
 
@@ -343,14 +355,15 @@ double roundaboutExitAngleForRightHandTraffic(
   return -((safeExit - 1) * 2 * math.pi / safeTotal);
 }
 
-/// Übersetzt den GraphHopper `turn_angle` (0 = geradeaus durch den
-/// Kreisverkehr, + = rechts raus, − = links raus) in den Screen-Winkel der
-/// Painter-Konvention (y-down: 0 = rechts/Osten, π/2 = unten = Einfahrt,
-/// −π/2 = oben = geradeaus). Einfahrt unten ⇒ Austritt = oben + turn_angle
-/// (im Uhrzeigersinn positiv): −π/2 + turnAngleRad, normalisiert auf (−π, π].
+/// Übersetzt den GraphHopper `turn_angle` in den Screen-Winkel der Painter-
+/// Konvention (y-down: 0 = rechts/Osten, π/2 = unten = Einfahrt, −π/2 = oben).
+/// GH liefert die Durchfahrt im Kreisverkehr: positive Werte = clockwise,
+/// negative Werte = counter-clockwise. DACH/Rechtsverkehr ist counter-clockwise,
+/// also ist eine rechte/fruehe Ausfahrt negativ. Einfahrt unten, geradeaus oben:
+/// Austritt = oben - turn_angle.
 @visibleForTesting
 double roundaboutExitAngleFromTurnAngle(double turnAngleRad) {
-  var angle = -math.pi / 2 + turnAngleRad;
+  var angle = -math.pi / 2 - turnAngleRad;
   while (angle <= -math.pi) {
     angle += 2 * math.pi;
   }

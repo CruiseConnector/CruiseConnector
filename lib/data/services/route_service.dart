@@ -289,6 +289,30 @@ class RouteService {
     PreparedRouteBuffer.clearAll();
   }
 
+  @visibleForTesting
+  static int requestTimeoutSecondsFor({
+    required Object? requestedMaxSearchMs,
+    required bool navigationRerouteRequest,
+  }) {
+    if (requestedMaxSearchMs is! num) {
+      return navigationRerouteRequest ? 8 : 26;
+    }
+
+    final searchSeconds = (requestedMaxSearchMs / 1000).ceil();
+    if (navigationRerouteRequest) {
+      return math.max(5, math.min(10, searchSeconds + 2)).toInt();
+    }
+
+    return math.max(26, math.min(40, searchSeconds + 6)).toInt();
+  }
+
+  @visibleForTesting
+  static int edgeInvokeAttemptCountFor({
+    required bool navigationRerouteRequest,
+  }) {
+    return navigationRerouteRequest ? 1 : 2;
+  }
+
   static void _resetRouteDebugState() {
     lastRouteFromCache = false;
     lastRouteSessionCacheHit = false;
@@ -3584,16 +3608,21 @@ class RouteService {
     dynamic data;
     int? statusCode;
     RouteServiceException? lastMappedError;
-    // Exponential Backoff: nur bei HTTP 429/5xx, max 2 Retries.
-    // Timeout muss das Edge-Time-Budget plus Serialisierungs-Reserve abdecken,
-    // sonst killt der Client bei tough cases die Generierung mitten im Lauf.
+    // Exponential Backoff: nur bei HTTP 429/5xx.
+    // Normale Planung darf laenger rechnen; Live-Navi-Reroutes muessen aber
+    // schnell scheitern/fallen backen, sonst steht der Fahrer sekundenlang nur
+    // mit "Neuberechnung" da (Video 2026-06-16).
     final requestedMaxSearchMs = body['max_search_ms'];
-    final requestTimeoutSeconds = requestedMaxSearchMs is num
-        ? math.max(26, math.min(40, (requestedMaxSearchMs / 1000).ceil() + 6))
-        : 26;
-    const maxRetries = 2;
+    final navigationRerouteRequest = body['reroute_request'] == true;
+    final requestTimeoutSeconds = requestTimeoutSecondsFor(
+      requestedMaxSearchMs: requestedMaxSearchMs,
+      navigationRerouteRequest: navigationRerouteRequest,
+    );
+    final maxAttempts = edgeInvokeAttemptCountFor(
+      navigationRerouteRequest: navigationRerouteRequest,
+    );
     final retryRng = math.Random();
-    for (var attempt = 1; attempt <= maxRetries; attempt++) {
+    for (var attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
         final rawResponse = await _invoker
             .invoke(body)
@@ -3620,9 +3649,9 @@ class RouteService {
         );
         lastMappedError = mapped;
         debugPrint(
-          '[RouteService] Edge Function Fehler (Versuch $attempt/$maxRetries): ${mapped.debugMessage}',
+          '[RouteService] Edge Function Fehler (Versuch $attempt/$maxAttempts): ${mapped.debugMessage}',
         );
-        if (!_isRetryable(mapped) || attempt == maxRetries) {
+        if (!_isRetryable(mapped) || attempt == maxAttempts) {
           throw mapped;
         }
         // Shorter Backoff + Jitter. Die strukturierten Fallbacks sitzen
@@ -9118,9 +9147,12 @@ class RouteService {
       final lng = c[0];
       final lat = c[1];
       final text = (ins['text'] as String?)?.trim() ?? '';
-      final isRoundabout = sign == 6;
+      final textLooksRoundabout =
+          sign != 4 && _graphhopperTextLooksRoundabout(text);
+      final isRoundabout = sign == 6 || textLooksRoundabout;
       var exitNumber = isRoundabout
-          ? (ins['exit_number'] as num?)?.toInt()
+          ? ((ins['exit_number'] as num?)?.toInt() ??
+                _roundaboutExitNumberFromText(text))
           : null;
       // 2026-06-14 (vucko L3, Geraete-Screenshot „Ausfahrt 1" falsch):
       // GraphHoppers `turn_angle` ist fuer DACH (Rechtsverkehr) im Vorzeichen/
@@ -9134,7 +9166,11 @@ class RouteService {
         exitIdx = (interval[1] as num?)?.toInt();
       }
       final geomTurnRad = isRoundabout
-          ? roundaboutGeomTurnRad(routeCoordinates, coordIdx, exitIdx ?? coordIdx)
+          ? roundaboutGeomTurnRad(
+              routeCoordinates,
+              coordIdx,
+              exitIdx ?? coordIdx,
+            )
           : null;
       final turnAngleRad = isRoundabout
           ? (geomTurnRad ?? (ins['turn_angle'] as num?)?.toDouble())
@@ -9165,7 +9201,9 @@ class RouteService {
           latitude: lat,
           longitude: lng,
           routeIndex: coordIdx,
-          icon: _iconForGraphhopperSign(sign),
+          icon: isRoundabout
+              ? Icons.roundabout_right
+              : _iconForGraphhopperSign(sign),
           announcement: instruction,
           instruction: instruction,
           maneuverType: isRoundabout
@@ -9187,6 +9225,32 @@ class RouteService {
     if (turnRad > 0.35) return 'Im Kreisverkehr rechts abbiegen.';
     if (turnRad < -0.35) return 'Im Kreisverkehr links abbiegen.';
     return 'Im Kreisverkehr geradeaus fahren.';
+  }
+
+  bool _graphhopperTextLooksRoundabout(String text) {
+    final lower = text.toLowerCase();
+    return lower.contains('kreisverkehr') ||
+        lower.contains('roundabout') ||
+        lower.contains('traffic circle') ||
+        lower.contains('rotary');
+  }
+
+  int? _roundaboutExitNumberFromText(String text) {
+    final lower = text.toLowerCase();
+    const words = <int, List<String>>{
+      1: ['1.', '1 ', 'erste', 'ersten', 'first'],
+      2: ['2.', '2 ', 'zweite', 'zweiten', 'second'],
+      3: ['3.', '3 ', 'dritte', 'dritten', 'third'],
+      4: ['4.', '4 ', 'vierte', 'vierten', 'fourth'],
+      5: ['5.', '5 ', 'fuenfte', 'fuenften', 'fünfte', 'fünften', 'fifth'],
+      6: ['6.', '6 ', 'sechste', 'sechsten', 'sixth'],
+      7: ['7.', '7 ', 'siebte', 'siebten', 'seventh'],
+      8: ['8.', '8 ', 'achte', 'achten', 'eighth'],
+    };
+    for (final entry in words.entries) {
+      if (entry.value.any(lower.contains)) return entry.key;
+    }
+    return null;
   }
 
   IconData _iconForGraphhopperSign(int sign) {
@@ -10540,7 +10604,11 @@ RouteWindowMatch findNearestOnRoutePreferIndex({
     final c = coordinates.first;
     final d = c.length >= 2
         ? geo.Geolocator.distanceBetween(
-            position.latitude, position.longitude, c[1], c[0])
+            position.latitude,
+            position.longitude,
+            c[1],
+            c[0],
+          )
         : double.infinity;
     return RouteWindowMatch(index: 0, distanceMeters: d);
   }

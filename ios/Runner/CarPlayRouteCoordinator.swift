@@ -70,7 +70,9 @@ final class CarPlayRouteCoordinator: NSObject {
         // ZWINGEND verzögert (DispatchQueue.main.async) präsentiert wird — sonst
         // racet er beim Scene-Connect und erscheint nie („es kommt nichts wenn
         // ausgeloggt"). refresh() wechselt live, sobald man sich am Handy einloggt.
-        interfaceController.setRootTemplate(mapTemplate, animated: false)
+        interfaceController.setRootTemplate(mapTemplate, animated: false) { [weak self] success, error in
+            self?.logTemplateTransition("setRootTemplate", success: success, error: error)
+        }
         if isLoggedIn() {
             loggedOut = false
             showSafetyNoticeIfNeeded()
@@ -121,7 +123,9 @@ final class CarPlayRouteCoordinator: NSObject {
                 ],
                 actions: [ok]
             )
-            self.interfaceController.presentTemplate(alert, animated: true)
+            self.presentModalTemplate(alert, reason: "loginAlert") { [weak self] in
+                self?.loginAlertShown = false
+            }
         }
     }
 
@@ -143,6 +147,52 @@ final class CarPlayRouteCoordinator: NSObject {
         let zoomIn = CPMapButton { [weak self] _ in self?.mapViewController.zoomIn() }
         zoomIn.image = UIImage(systemName: "plus.magnifyingglass")
         mapTemplate.mapButtons = [pan, recenter, zoomOut, zoomIn]
+    }
+
+    private func logTemplateTransition(_ action: String, success: Bool, error: Error?) {
+        guard !success else { return }
+        if let error {
+            NSLog("[CruiseConnect CarPlay] \(action) failed: \(error.localizedDescription)")
+        } else {
+            NSLog("[CruiseConnect CarPlay] \(action) failed")
+        }
+    }
+
+    /// CarPlay wirft eine Objective-C-Exception, wenn Template-Operationen ohne
+    /// Completion fehlschlagen. Deshalb laufen alle modalen Screens über diesen
+    /// Guard: nur ein Modal gleichzeitig und Fehler werden geloggt statt App-Abbruch.
+    private func presentModalTemplate(
+        _ template: CPTemplate,
+        reason: String,
+        onSuccess: (() -> Void)? = nil,
+        onFailure: (() -> Void)? = nil
+    ) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            guard self.interfaceController.presentedTemplate == nil else {
+                NSLog("[CruiseConnect CarPlay] \(reason) skipped: modal already presented")
+                onFailure?()
+                return
+            }
+            self.interfaceController.presentTemplate(template, animated: true) { [weak self] success, error in
+                self?.logTemplateTransition(reason, success: success, error: error)
+                if success {
+                    onSuccess?()
+                } else {
+                    onFailure?()
+                }
+            }
+        }
+    }
+
+    private func dismissPresentedTemplate(_ expectedTemplate: CPTemplate? = nil, reason: String) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self, let presented = self.interfaceController.presentedTemplate else { return }
+            if let expectedTemplate, presented !== expectedTemplate { return }
+            self.interfaceController.dismissTemplate(animated: true) { [weak self] success, error in
+                self?.logTemplateTransition(reason, success: success, error: error)
+            }
+        }
     }
 
     private func startTimer() {
@@ -335,9 +385,8 @@ final class CarPlayRouteCoordinator: NSObject {
     private var lastNavDistanceMeters: Double?
 
     private func showPostRouteScreenIfNeeded(_ snapshot: CarPlayRouteSnapshot) {
-        let sig = "\(snapshot.routeId ?? "")|\(snapshot.updatedAt ?? "")"
-        guard postRouteShownSignature != sig else { return }
-        postRouteShownSignature = sig
+        let sig = postRouteSignature(for: snapshot)
+        guard postRouteAlert == nil, postRouteShownSignature != sig else { return }
         let meters = snapshot.distanceMeters ?? lastNavDistanceMeters
         let titleMain: String
         if let m = meters, m > 0 {
@@ -347,10 +396,11 @@ final class CarPlayRouteCoordinator: NSObject {
         }
         let ok = CPAlertAction(title: "Fertig", style: .default) { [weak self] _ in
             guard let self = self else { return }
+            let alert = self.postRouteAlert
             self.postRouteAlert = nil
             // Beidseitige Sync: Handy soll seine Bewertung auch schließen.
             self.writeCommand(["action": "completionDone"])
-            self.interfaceController.dismissTemplate(animated: true, completion: nil)
+            self.dismissPresentedTemplate(alert, reason: "postRouteActionDismiss")
             self.applyIdleState()
         }
         let alert = CPAlertTemplate(
@@ -358,18 +408,36 @@ final class CarPlayRouteCoordinator: NSObject {
             actions: [ok]
         )
         postRouteAlert = alert
-        DispatchQueue.main.async { [weak self] in
-            self?.interfaceController.presentTemplate(alert, animated: true, completion: nil)
-        }
+        presentModalTemplate(
+            alert,
+            reason: "postRouteAlert",
+            onSuccess: { [weak self, weak alert] in
+                guard let self = self, let alert = alert, self.postRouteAlert === alert else { return }
+                self.postRouteShownSignature = sig
+            },
+            onFailure: { [weak self, weak alert] in
+                guard let self = self else { return }
+                if let alert = alert, self.postRouteAlert === alert {
+                    self.postRouteAlert = nil
+                }
+            }
+        )
+    }
+
+    private func postRouteSignature(for snapshot: CarPlayRouteSnapshot) -> String {
+        if let routeId = snapshot.routeId, !routeId.isEmpty { return "route:\(routeId)" }
+        if let fingerprint = snapshot.fingerprint, !fingerprint.isEmpty { return "fp:\(fingerprint)" }
+        let meters = Int(((snapshot.distanceMeters ?? lastNavDistanceMeters ?? 0) / 10).rounded())
+        return "fallback:\(snapshot.routeType):\(meters)"
     }
 
     /// Schließt den Abschluss-Screen, falls er noch offen ist — z.B. weil das
     /// Handy die Bewertung schon abgeschlossen hat (Snapshot ist nicht mehr
     /// „ended"). So verschwindet er auf beiden Geräten synchron.
     private func dismissPostRouteIfShowing() {
-        guard postRouteAlert != nil else { return }
+        guard let alert = postRouteAlert else { return }
         postRouteAlert = nil
-        interfaceController.dismissTemplate(animated: true, completion: nil)
+        dismissPresentedTemplate(alert, reason: "postRouteDismiss")
     }
 
     private func beginNavigationSession(_ snapshot: CarPlayRouteSnapshot) {
@@ -541,7 +609,7 @@ final class CarPlayRouteCoordinator: NSObject {
             titleVariants: ["Cruise Connector sicher nutzen"],
             actions: [action]
         )
-        interfaceController.presentTemplate(alert, animated: true)
+        presentModalTemplate(alert, reason: "safetyNotice")
     }
 
     // MARK: - Config-Flow (Route im Auto planen)
@@ -594,7 +662,9 @@ final class CarPlayRouteCoordinator: NSObject {
             title: "Fahrstil wählen",
             sections: [CPListSection(items: items)]
         )
-        interfaceController.pushTemplate(template, animated: true, completion: nil)
+        interfaceController.pushTemplate(template, animated: true) { [weak self] success, error in
+            self?.logTemplateTransition("pushStylePicker", success: success, error: error)
+        }
     }
 
     /// Schritt 2: Distanz.
@@ -611,7 +681,9 @@ final class CarPlayRouteCoordinator: NSObject {
             title: "Distanz wählen",
             sections: [CPListSection(items: items)]
         )
-        interfaceController.pushTemplate(template, animated: true, completion: nil)
+        interfaceController.pushTemplate(template, animated: true) { [weak self] success, error in
+            self?.logTemplateTransition("pushDistancePicker", success: success, error: error)
+        }
     }
 
     /// Schritt 3: Autobahn an/aus (User-Terminologie: voll ausschreiben).
@@ -630,7 +702,9 @@ final class CarPlayRouteCoordinator: NSObject {
             title: "Autobahn",
             sections: [CPListSection(items: [on, off])]
         )
-        interfaceController.pushTemplate(template, animated: true, completion: nil)
+        interfaceController.pushTemplate(template, animated: true) { [weak self] success, error in
+            self?.logTemplateTransition("pushHighwayPicker", success: success, error: error)
+        }
     }
 
     /// Schickt die Konfiguration an Flutter und kehrt zur Karte zurück. Der
@@ -643,7 +717,9 @@ final class CarPlayRouteCoordinator: NSObject {
             "avoidHighways": avoidHighways,
         ])
         lastRouteSignature = nil // erzwingt Neu-Zeichnen der kommenden Route
-        interfaceController.popToRootTemplate(animated: true, completion: nil)
+        interfaceController.popToRootTemplate(animated: true) { [weak self] success, error in
+            self?.logTemplateTransition("popToRootAfterPlan", success: success, error: error)
+        }
     }
 
     /// „Losfahren" aus der Vorschau → Navigation starten (Flutter übernimmt

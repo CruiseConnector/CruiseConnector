@@ -120,6 +120,10 @@ flutter_launcher_icons:
 
 # The following section is specific to Flutter packages.
 flutter:
+  # Flutter 3.44 enables SwiftPM by default. This project is still CocoaPods-
+  # based; Xcode 26 hangs resolving the generated package graph here.
+  config:
+    enable-swift-package-manager: false
 
   # The following line ensures that the Material Icons font is
   # included with your application, so that you can use the icons in
