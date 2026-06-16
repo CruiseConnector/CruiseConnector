@@ -44,10 +44,7 @@ void main() {
 
     test('GH turn_angle → Screen-Winkel: 0=oben, -π/2=rechts, +π/2=links', () {
       // 0 = geradeaus durch den Kreisverkehr → Austritt oben (-π/2 y-down).
-      expect(
-        roundaboutExitAngleFromTurnAngle(0),
-        closeTo(-math.pi / 2, 0.001),
-      );
+      expect(roundaboutExitAngleFromTurnAngle(0), closeTo(-math.pi / 2, 0.001));
       // -π/2 = rechts raus → Screen-Osten (0 rad).
       expect(roundaboutExitAngleFromTurnAngle(-math.pi / 2), closeTo(0, 0.001));
       // +π/2 = links raus → Screen-Westen (±π).
@@ -148,6 +145,35 @@ void main() {
       expect(maneuvers.first.roundaboutExitNumber, 3);
       expect(maneuvers.first.roundaboutTurnAngleRad, isNull);
     });
+
+    test(
+      'GraphHopper-Kreisverkehr-Text gewinnt gegen falsches Abbiege-Sign',
+      () {
+        final coords = [
+          [9.480, 47.660],
+          [9.480, 47.661],
+          [9.481, 47.6615],
+          [9.482, 47.6615],
+        ];
+        final response = {
+          'route': {
+            'instructions': [
+              {
+                'sign': -2, // Provider meldet links, Text ist aber eindeutig.
+                'text': 'Im Kreisverkehr die zweite Ausfahrt nehmen',
+                'interval': [1, 2],
+              },
+            ],
+          },
+        };
+        final maneuvers = service.extractManeuvers(response, coords);
+        expect(maneuvers, hasLength(1));
+        expect(maneuvers.first.maneuverType, ManeuverType.roundabout);
+        expect(maneuvers.first.icon, Icons.roundabout_right);
+        expect(maneuvers.first.roundaboutExitNumber, 2);
+        expect(maneuvers.first.instruction, contains('Kreisverkehr'));
+      },
+    );
   });
 
   group('iconForManeuver – Ziel & Start', () {

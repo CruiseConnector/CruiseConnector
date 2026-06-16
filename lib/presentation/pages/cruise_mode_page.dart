@@ -463,6 +463,7 @@ class _CruiseModePageState extends State<CruiseModePage>
   double? _remainingDistance; // Live verbleibende Distanz in Metern
   double? _remainingDuration; // Live verbleibende Zeit in Sekunden
   bool _isRerouting = false; // Verhindert mehrfaches gleichzeitiges Rerouting
+  DateTime? _rerouteStartedAt;
   // 2026-06-13 (vucko J4): _rerouteBannerShown entfernt — es gibt keinen
   // separaten Reroute-Toast mehr (das obere Banner zeigt „Neuberechnung").
   DateTime? _lastRerouteTime; // Cooldown zwischen Reroutes
@@ -5187,6 +5188,9 @@ class _CruiseModePageState extends State<CruiseModePage>
     final topInset = MediaQuery.of(context).padding.top;
     final visibleManeuver = _activeVisibleManeuver();
     final reroutingActive = _isReroutingBannerActive;
+    final reroutingDuration = _rerouteStartedAt == null
+        ? null
+        : DateTime.now().difference(_rerouteStartedAt!);
     return Stack(
       children: [
         Positioned(
@@ -5204,6 +5208,7 @@ class _CruiseModePageState extends State<CruiseModePage>
                   ),
                   leading: _buildManeuverBackChevron(),
                   isRerouting: reroutingActive,
+                  reroutingDuration: reroutingDuration,
                 )
               : _buildRoutePreviewBackButton(),
         ),
@@ -12035,6 +12040,7 @@ class _CruiseModePageState extends State<CruiseModePage>
   Future<void> _rerouteToOriginalRoute(geo.Position position) async {
     if (_isRerouting) return;
     _isRerouting = true;
+    _rerouteStartedAt = DateTime.now();
     _pendingChainedReroute = false;
     // 2026-06-13 (vucko Reroute-Videos): NIE mit der (bis zu 3s alten)
     // Erkennungs-Position routen. Smoother-Prediction mit 800ms-Vorhalt →
@@ -12123,6 +12129,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       );
     } finally {
       _isRerouting = false;
+      _rerouteStartedAt = null;
       // 2026-06-13 (vucko Reroute-Videos): Der Commit landete nachweislich
       // hinter dem Fahrer (Stale-Check in _commitRerouteResult) → SOFORT mit
       // frischer Position nachrouten statt erst beim nächsten Off-Route-
@@ -12678,6 +12685,8 @@ class _CruiseModePageState extends State<CruiseModePage>
             avoidHighways: rerouteAvoidHighways,
             navigationReroute: true,
             forceAcceptDirect: true,
+            candidateBudgetOverride: 1,
+            maxSearchMsOverride: 4500,
             currentHeadingDegrees: heading,
             currentSpeedMetersPerSecond: rerouteSpeedMps,
             locationAccuracyMeters: rerouteAccuracyMeters,

@@ -343,6 +343,55 @@ void main() {
       expect(RouteService.requiresDestination('ROUND_TRIP'), isFalse);
       expect(RouteService.requiresDestination('POINT_TO_POINT'), isTrue);
     });
+
+    test('Navigations-Reroutes nutzen kurzes Timeout-Fenster', () {
+      expect(
+        RouteService.requestTimeoutSecondsFor(
+          requestedMaxSearchMs: 4500,
+          navigationRerouteRequest: true,
+        ),
+        7,
+      );
+      expect(
+        RouteService.requestTimeoutSecondsFor(
+          requestedMaxSearchMs: 6000,
+          navigationRerouteRequest: true,
+        ),
+        8,
+      );
+      expect(
+        RouteService.requestTimeoutSecondsFor(
+          requestedMaxSearchMs: null,
+          navigationRerouteRequest: true,
+        ),
+        8,
+      );
+    });
+
+    test('Normale Routen behalten langes Suchfenster und Retry', () {
+      expect(
+        RouteService.requestTimeoutSecondsFor(
+          requestedMaxSearchMs: 4500,
+          navigationRerouteRequest: false,
+        ),
+        26,
+      );
+      expect(
+        RouteService.requestTimeoutSecondsFor(
+          requestedMaxSearchMs: 42000,
+          navigationRerouteRequest: false,
+        ),
+        40,
+      );
+      expect(
+        RouteService.edgeInvokeAttemptCountFor(navigationRerouteRequest: false),
+        2,
+      );
+      expect(
+        RouteService.edgeInvokeAttemptCountFor(navigationRerouteRequest: true),
+        1,
+      );
+    });
   });
 
   // ─────────────────────── Distanztoleranzen ─────────────────────────────────
@@ -1725,10 +1774,7 @@ void main() {
         );
         expect(result.edgeMeta['requested_detour_level'], 3);
         expect(result.edgeMeta['detour_downgraded'], isTrue);
-        expect(
-          result.edgeMeta['detour_fallback_stage'],
-          startsWith('client_'),
-        );
+        expect(result.edgeMeta['detour_fallback_stage'], startsWith('client_'));
       },
     );
 
