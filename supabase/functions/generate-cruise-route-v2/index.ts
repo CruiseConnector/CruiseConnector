@@ -728,10 +728,32 @@ async function callGraphHopper(opts: {
   overlay.priority.push({ if: 'road_class == BRIDLEWAY', multiply_by: '0' });
   overlay.priority.push({ if: 'road_class == CYCLEWAY', multiply_by: '0' });
   overlay.priority.push({ if: 'road_class == SERVICE', multiply_by: '0.15' });
-  // 2026-05-28 (vucko Task #82): Unbedingte milde Autobahn-De-Präferenz.
-  // Kurze A→B bevorzugen normale Straßen + Auf-/Abfahrten, außer die Autobahn
-  // ist klar schneller. Der harte Block bleibt hinter avoidHighways (oben).
-  overlay.priority.push({ if: 'road_class == MOTORWAY', multiply_by: '0.6' });
+  // 2026-05-28 (vucko Task #82): Milde Autobahn-De-Präferenz für die CRUISING-
+  // Profile (Scenic/Kurvenjagd/Abendrunde/Entdecker): kurze Touren bevorzugen
+  // normale Straßen + Auf-/Abfahrten, außer die Autobahn ist klar schneller.
+  // 2026-06-16 (vucko O2): NICHT fürs 'car'-Profil — dort gilt „Autobahn zuerst"
+  // (car-Block unten). Der harte Block bleibt hinter avoidHighways (oben).
+  if (opts.profile !== 'car') {
+    overlay.priority.push({ if: 'road_class == MOTORWAY', multiply_by: '0.6' });
+  }
+  // 2026-06-16 (vucko O2/O3): „Vernünftiges" A→B / Reroute / Standard-Trip-
+  // Routing über das 'car'-Profil (isDirectFastest). Apple/Google bevorzugen
+  // Haupt- und Autobahnen statt des absolut-schnellsten Schleichwegs.
+  //   (O2) Autobahn zuerst wenn erlaubt: Nicht-Autobahnen leicht abwerten → GH
+  //        nimmt bei sinnvoller Distanz die Autobahn (z.B. Götzis→Dornbirn = A14).
+  //        multiply_by NUR <=1 (LM-Server lehnt >1 ab; vgl. Normalisierung unten).
+  //   (O3) Hauptstraßen statt Mini-Nebenstraßen: residential/unclassified
+  //        abwerten — NICHT 0, sonst sind Adressen an Wohnstraßen als Start/Ziel
+  //        unerreichbar. SERVICE/TRACK/PATH sind bereits oben geblockt/bestraft.
+  // road_class-Werte (MOTORWAY/RESIDENTIAL/UNCLASSIFIED) sind exakt die bereits
+  // server-erprobten aus den Scenic-Overlays → kein Enum-400-Risiko.
+  if (opts.profile === 'car') {
+    if (!opts.avoidHighways) {
+      overlay.priority.push({ if: 'road_class != MOTORWAY', multiply_by: '0.85' });
+    }
+    overlay.priority.push({ if: 'road_class == RESIDENTIAL', multiply_by: '0.3' });
+    overlay.priority.push({ if: 'road_class == UNCLASSIFIED', multiply_by: '0.5' });
+  }
   // 2026-06-10 (vucko GH-Default-Konformitaet): Der GH-Server lief bis heute
   // mit gelockerter Config; nach Neustart gelten die GH-Defaults: in
   // Query-CustomModels darf multiply_by NICHT > 1 sein (HTTP 400: "maximum of
