@@ -10869,27 +10869,44 @@ class _CruiseModePageState extends State<CruiseModePage>
     if (match.index > _currentRouteIndex &&
         match.index - _currentRouteIndex <= 60 &&
         match.distanceMeters <= offRouteCorridor) {
-      // Gefahrene Distanz tracken
+      // Gefahrene Distanz tracken (Routen-Meter zwischen altem und neuem Index).
+      var advanceMeters = 0.0;
       for (var i = _currentRouteIndex; i < match.index; i++) {
         final c1 = _fullRouteCoordinates[i];
         final c2 = _fullRouteCoordinates[i + 1];
-        final segmentMeters = geo.Geolocator.distanceBetween(
+        advanceMeters += geo.Geolocator.distanceBetween(
           c1[1],
           c1[0],
           c2[1],
           c2[0],
         );
-        _distanceSinceLastRedraw += segmentMeters;
       }
-      _currentRouteIndex = match.index;
-      needsRebuild = true;
-      _maybeFinalizeAccessLegPhase();
-
-      // 2026-06-09 (vucko Voll-Route-Sichtbar): KEIN 3km-Sliding-Window-Redraw der
-      // sichtbaren Linie mehr. Die rote aktive Linie ist die VOLLE Route (statisch,
-      // einmal gepusht → kann NIE flackern), und _trimVisibleRouteToProjection
-      // pflegt sowohl den grauen Driven-Trail (sichtbar, hinter dem Puck) als auch
-      // _remainingRouteCoordinates (Restdistanz/Auto). Dieser Block ist damit weg.
+      // 2026-06-16 (vucko Banner-Freeze + Standort-Sprung, Video-Analyse): Den
+      // Index-Vorschub AUCH in METERN kappen, nicht nur in Vertices. 60 Vertices
+      // sind auf dünner GraphHopper-Geometrie oft hunderte Meter → ein
+      // Selbstüberlapp-/Parallel-Match springt den Index weit voraus; danach
+      // friert die Manöver-Distanz ein (Banner hängt 10-25 s, dann Sprung) und
+      // der Puck wirkt vorausgesprungen, bis der Wagen real aufgeschlossen hat.
+      // Echte Fahrt rückt höchstens ~Tempo × ein paar Sekunden vor; ein
+      // implausibler Meter-Sprung wird verworfen (Index bleibt am echten
+      // Standort, rückt nächsten Fix plausibel weiter).
+      final sp = position.speed.isFinite && position.speed > 0
+          ? position.speed.clamp(0.0, 70.0)
+          : 0.0;
+      final maxAdvanceMeters = sp * 3.0 + 60.0;
+      // Plausibler Vorschub → übernehmen. Implausibler Meter-Sprung → diesen Fix
+      // verwerfen (Index bleibt am echten Standort, rückt nächsten Fix plausibel
+      // weiter). So kein Index-Leap → keine eingefrorene Manöver-Distanz.
+      if (advanceMeters <= maxAdvanceMeters) {
+        _distanceSinceLastRedraw += advanceMeters;
+        _currentRouteIndex = match.index;
+        needsRebuild = true;
+        _maybeFinalizeAccessLegPhase();
+        // 2026-06-09 (vucko Voll-Route-Sichtbar): KEIN 3km-Sliding-Window-Redraw
+        // der sichtbaren Linie mehr. Die rote aktive Linie ist die VOLLE Route
+        // (statisch, einmal gepusht → kann NIE flackern); _trimVisibleRouteToProjection
+        // pflegt den grauen Driven-Trail + _remainingRouteCoordinates.
+      }
     }
 
     // 2026-06-08 (vucko Leitlinie GPU-Trim): Fahrt-Fortschritt 0..1 entlang der
