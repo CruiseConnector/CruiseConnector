@@ -326,6 +326,53 @@ void main() {
     expect(reanchored.distanceM, greaterThan(initial.distanceM));
   });
 
+  test('self-overlap index leap does not shoot the puck 200-300m forward', () {
+    // Rundkurs: 0→500m hin (lateral 0), 500→1000m zurück auf einer 8m parallelen
+    // Linie. Routen-Distanz 120 (hin) und ~880 (zurück) liegen damit räumlich
+    // ~8m nebeneinander — exakt die Selbstüberlapp-Falle. Springt der externe
+    // Index auf das ferne Rück-Leg, DARF der Puck nicht 760m vorausschießen.
+    final route = <List<double>>[
+      for (var m = 0.0; m <= 500.0; m += 5.0) pointAt(m),
+      for (var m = 5.0; m <= 500.0; m += 5.0)
+        pointAt(500.0 - m, lateralMeters: 8.0),
+    ];
+    final lock = RouteRenderLock();
+    final t0 = DateTime.utc(2026, 6, 16, 12);
+
+    final p1 = pointAt(100);
+    final first = lock.project(
+      coordinates: route,
+      latitude: p1[1],
+      longitude: p1[0],
+      routeConfirmed: true,
+      currentRouteIndex: 20, // 100m / 5m
+      speedMps: 25.0,
+      timestamp: t0,
+    );
+    expect(first, isNotNull);
+    expect(first!.distanceM, closeTo(100, 3.0));
+
+    // Fahrer real bei 120m auf dem HIN-Leg — Index leapt aufs Rück-Leg (~880m).
+    final p2 = pointAt(120);
+    final leapt = lock.project(
+      coordinates: route,
+      latitude: p2[1],
+      longitude: p2[0],
+      routeConfirmed: true,
+      currentRouteIndex: 176, // Rück-Leg bei ~880m Routen-Distanz
+      speedMps: 25.0,
+      timestamp: t0.add(const Duration(seconds: 1)),
+    );
+    expect(leapt, isNotNull);
+    expect(
+      leapt!.distanceM,
+      lessThan(200.0),
+      reason:
+          'Puck muss am echten Standort (~120m) bleiben, nicht auf das ferne '
+          'Selbstüberlapp-Leg (~880m) springen.',
+    );
+  });
+
   test('false far reanchor keeps searching near the current render lock', () {
     final route = <List<double>>[
       for (var m = 0.0; m <= 1200.0; m += 10.0) pointAt(m),

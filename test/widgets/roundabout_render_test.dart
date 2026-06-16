@@ -87,6 +87,20 @@ void main() {
     // Spezial: Ankunft direkt am Kreisel
     'ankunft_am_kreisel':
         ra(entry: 180, exit: 90, arms: cardinal, arrival: true),
+    // Fallback: keine OSM-Topologie → STANDARD-4-Arm (nicht sparsam/kaputt).
+    'fallback_standard_4arm': RouteManeuver(
+      latitude: 47.4,
+      longitude: 9.7,
+      routeIndex: 5,
+      icon: Icons.roundabout_right,
+      announcement: 'Im Kreisverkehr',
+      instruction: 'Im Kreisverkehr',
+      maneuverType: ManeuverType.roundabout,
+      roundaboutExitNumber: 1,
+      roundaboutEntryBearing: 180,
+      roundaboutExitBearing: 95, // krumm → rastet auf 90 (Standard-Form)
+      // roundaboutArmBearings: null  → Fallback-Pfad
+    ),
   };
 
   cases.forEach((name, m) {

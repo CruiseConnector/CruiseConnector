@@ -264,8 +264,9 @@ class RouteRenderLock {
     );
     final usedReanchorWindow =
         hasLock && searchSegmentIndex != previousSegmentIndex;
-    if ((best.segment < 0 || best.lateralMeters > lateralMaxMeters) &&
-        usedReanchorWindow) {
+    if (usedReanchorWindow) {
+      final farFailed =
+          best.segment < 0 || best.lateralMeters > lateralMaxMeters;
       final fallbackWindow = _windowFor(
         coordinates: coordinates,
         cumulative: cumulative,
@@ -273,7 +274,7 @@ class RouteRenderLock {
         centerSegmentIndex: previousSegmentIndex,
         speedMps: speedMps,
       );
-      best = _searchBestProjection(
+      final nearBest = _searchBestProjection(
         coordinates: coordinates,
         cumulative: cumulative,
         latitude: latitude,
@@ -282,6 +283,20 @@ class RouteRenderLock {
         from: fallbackWindow.from,
         to: fallbackWindow.to,
       );
+      // 2026-06-16 (vucko Standort-Sprung 200-300m): Der Index-Re-Anchor schob das
+      // Such-Zentrum weit voraus. Liegt das GPS in Wahrheit weiter NAH bei der
+      // bisherigen Position (selbstüberlappender Rundkurs / Parallelspur — das GPS
+      // passt geometrisch auf BEIDE Legs), darf der Puck NICHT auf das ferne Leg
+      // springen und dann 200-300 m vorne „warten". Wir nehmen das NAHE Ergebnis,
+      // wenn es akzeptabel ist UND deutlich weniger weit voraus liegt — oder wenn
+      // das ferne ganz versagt. Bei einem ECHTEN GPS-Sprung (Tunnelausfahrt)
+      // versagt das nahe Fenster (GPS ist wirklich weit weg) → das ferne bleibt.
+      final nearAcceptable = nearBest.segment >= 0 &&
+          nearBest.lateralMeters <= lateralReleaseMeters;
+      if (nearAcceptable &&
+          (farFailed || nearBest.distanceM < best.distanceM - 30.0)) {
+        best = nearBest;
+      }
     }
 
     var bestDistanceM = best.distanceM;

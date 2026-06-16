@@ -299,17 +299,32 @@ _RoundaboutDesign _resolveRoundaboutDesign(RouteManeuver m) {
     _snapNearest(mapped, exitDeg); // genommene Ausfahrt
     armsDeg = mapped;
   } else {
-    // Synthese: Einfahrt (unten) + vorbeigefahrene Ausfahrten + genommene
-    // Ausfahrt, gleichmäßig über den CCW-Bogen verteilt.
-    final sweep = _wrap360(180 - exitDeg); // CCW von 180 zur Ausfahrt
-    final out = <double>[180.0];
-    for (var i = 1; i < exitNumber; i++) {
-      out.add(_wrap360(180 - sweep * (i / exitNumber)));
-    }
-    out.add(exitDeg);
-    armsDeg = out;
+    // 2026-06-16 (vucko P3): Lässt sich die echte Topologie NICHT bestimmen
+    // (keine OSM-Arme), zeichnen wir den STANDARD-Kreisverkehr mit VIER
+    // Ausfahrten (Einfahrt unten + 1./2./3. Ausfahrt + zurück) statt einer
+    // sparsamen Teil-Form, die wie „nur eine Ausfahrt" aussah. Die genommene
+    // Ausfahrt rastet auf die nächste Himmelsrichtung — so sieht das Symbol immer
+    // wie ein echter Kreisverkehr aus und nie kaputt. (User-Wunsch: unbekannte
+    // Form ⇒ Standard-4-Arm-Symbol.)
+    const cardinal = [0.0, 90.0, 180.0, 270.0];
+    exitDeg = _nearestOf(cardinal, exitDeg);
+    armsDeg = cardinal;
   }
   return _RoundaboutDesign(exitDeg: exitDeg, armsDeg: armsDeg);
+}
+
+double _nearestOf(List<double> options, double target) {
+  var best = options.first;
+  var bestD = 999.0;
+  for (final o in options) {
+    var d = (o - target).abs() % 360.0;
+    if (d > 180) d = 360 - d;
+    if (d < bestD) {
+      bestD = d;
+      best = o;
+    }
+  }
+  return best;
 }
 
 void _snapNearest(List<double> list, double target) {

@@ -10768,9 +10768,24 @@ class _CruiseModePageState extends State<CruiseModePage>
     // Off-Streak löschen.
     final fixUsableForOffRoute =
         accuracyM > 0 && accuracyM <= _maxQualifiedAccuracyMeters;
+    // 2026-06-16 (vucko P1 Phantom-Reroute trotz Auf-der-Strecke): Den Off-Route-
+    // Zähler NICHT hochzählen, wenn der gematchte Routen-Index gleichzeitig
+    // VORWÄRTS läuft UND wir noch nah an der Route sind (≤2,5× Korridor). Genau
+    // das ist die Signatur des Selbstüberlapp-/Parallelspur-Phantoms: das
+    // gefensterte Matching gleitet kurz auf das ferne/parallele Leg, meldet
+    // „outside", obwohl der Fahrer exakt auf der Linie weiterfährt. Ein ECHTES
+    // Verfahren unterscheidet sich klar: der Index bleibt stehen/läuft rückwärts
+    // (falsch abgebogen) ODER die Distanz wächst über 2,5× Korridor — beides
+    // zählt weiter und feuert den Reroute normal. Verzögert echtes Verfahren also
+    // nicht, eliminiert aber den Rest-Phantom.
+    final advancingButNearRoute =
+        offRouteDecisionMatch.index > prevRouteIndex &&
+        perpOffM <= offRouteCorridor * 2.5;
     if (onRouteThisFix) {
       _consecutiveOffRouteFixes = 0;
-    } else if (fixUsableForOffRoute && _consecutiveOffRouteFixes < 1000) {
+    } else if (fixUsableForOffRoute &&
+        !advancingButNearRoute &&
+        _consecutiveOffRouteFixes < 1000) {
       _consecutiveOffRouteFixes++;
     }
     // Nötige Off-Fixes accuracy-skaliert (Mapbox: max(4, accuracy/4)). Schlechtes
