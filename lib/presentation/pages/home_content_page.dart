@@ -1836,7 +1836,6 @@ class _HomeContentPageState extends State<HomeContentPage>
     final mulNext = GamificationService.streakMultiplierForDays(
       _streakDays + 1,
     );
-    final extra = ((mulNext - mul) * 100).round();
     return TweenAnimationBuilder<double>(
       tween: Tween(begin: 0.94, end: 1.0),
       duration: const Duration(milliseconds: 420),
@@ -1896,8 +1895,7 @@ class _HomeContentPageState extends State<HomeContentPage>
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      'Heute fahren: ${mulNext.toStringAsFixed(2)}× XP'
-                      '${extra > 0 ? " (+$extra%)" : ""}',
+                      'Heute fahren: ${mulNext.toStringAsFixed(2)}× XP',
                       style: TextStyle(
                         color: Colors.white.withValues(alpha: 0.92),
                         fontSize: 12.5,
