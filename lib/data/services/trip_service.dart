@@ -31,6 +31,28 @@ class TripService {
     final userId = _client.auth.currentUser?.id;
     if (userId == null) return null;
     try {
+      // 2026-06-15 (vucko: „gelöschter Trip taucht am Homescreen wieder auf"):
+      // EIN aktiver Trip pro User+Kontext. Vor dem Anlegen alle anderen noch
+      // offenen (active/paused) EIGENEN Trips im selben Kontext (solo↔solo,
+      // gleiche Gruppe) beenden. Sonst stapeln sich nach Crash/Force-Quit am
+      // Fahrt-Ende (siehe M5) „Geister-Trips", und die Resume-Card zeigt nach
+      // jedem Abbrechen den nächsten — der User wird sie nie los. Best-effort;
+      // schlägt es fehl, blockiert es das Anlegen NICHT.
+      try {
+        var stale = _client
+            .from('trips')
+            .update({
+              'status': 'cancelled',
+              'finished_at': DateTime.now().toUtc().toIso8601String(),
+            })
+            .eq('owner_id', userId)
+            .inFilter('status', ['active', 'paused']);
+        stale = groupId != null
+            ? stale.eq('group_id', groupId)
+            : stale.filter('group_id', 'is', null);
+        await stale;
+      } catch (_) {}
+
       // 1. Trip erzeugen (aktiv direkt nach Erstellung)
       // 2026-05-24 (vucko Fix): `.toUtc()` damit der ISO-String mit Z suffix
       // versendet wird. Sonst interpretiert Postgres die naive Time als UTC,
@@ -179,6 +201,10 @@ class TripService {
 
   /// Trip bewusst abbrechen. Die Tour verschwindet aus Resume/Home,
   /// bleibt aber als Lifecycle-Eintrag nachvollziehbar.
+  /// 2026-06-15 (vucko: „Trip taucht wieder auf"): Status-Filter auf ALLE
+  /// nicht-terminalen Zustände erweitert (auch draft/planned), damit ein in einem
+  /// unerwarteten Status hängender Geister-Trip garantiert aus der Resume-Card
+  /// verschwindet — nur completed/cancelled bleiben unangetastet.
   Future<void> cancelTrip(String tripId) async {
     await _client
         .from('trips')
@@ -187,7 +213,7 @@ class TripService {
           'finished_at': DateTime.now().toUtc().toIso8601String(),
         })
         .eq('id', tripId)
-        .inFilter('status', ['active', 'paused']);
+        .inFilter('status', ['active', 'paused', 'draft', 'planned']);
   }
 
   /// Lädt die Stops eines Trips in Reihenfolge.
