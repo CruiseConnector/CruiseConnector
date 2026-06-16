@@ -18,6 +18,8 @@ class RouteManeuver {
     this.roundaboutEntryBearing,
     this.roundaboutExitBearing,
     this.roundaboutArmBearings,
+    this.roundaboutIslandScale,
+    this.roundaboutIsArrival = false,
   });
 
   final double latitude;
@@ -48,6 +50,16 @@ class RouteManeuver {
   final double? roundaboutExitBearing;
   final List<double>? roundaboutArmBearings;
 
+  /// 2026-06-16 (vucko O9, Figma-Design): Mittelinsel-Größe relativ (1.0 =
+  /// Standard). <1 = Mini-Kreisel, >1 = großer Kreisel/Autobahnkreisel. Aus dem
+  /// OSM-Ringradius abgeleitet; null ⇒ Standard.
+  final double? roundaboutIslandScale;
+
+  /// 2026-06-16 (vucko O9, Figma-Design): Das Ziel liegt direkt an der
+  /// genommenen Ausfahrt → der Painter setzt einen Ziel-Pin statt des
+  /// Ausfahrt-Pfeils.
+  final bool roundaboutIsArrival;
+
   bool get isArrival => icon == Icons.flag;
 
   /// 2026-06-13 (vucko J3): Kopie mit überschriebenen Feldern. Wird beim
@@ -67,6 +79,8 @@ class RouteManeuver {
     double? roundaboutEntryBearing,
     double? roundaboutExitBearing,
     List<double>? roundaboutArmBearings,
+    double? roundaboutIslandScale,
+    bool? roundaboutIsArrival,
   }) {
     return RouteManeuver(
       latitude: latitude ?? this.latitude,
@@ -85,6 +99,9 @@ class RouteManeuver {
           roundaboutExitBearing ?? this.roundaboutExitBearing,
       roundaboutArmBearings:
           roundaboutArmBearings ?? this.roundaboutArmBearings,
+      roundaboutIslandScale:
+          roundaboutIslandScale ?? this.roundaboutIslandScale,
+      roundaboutIsArrival: roundaboutIsArrival ?? this.roundaboutIsArrival,
     );
   }
 }

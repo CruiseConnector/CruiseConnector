@@ -9110,6 +9110,7 @@ class RouteService {
     }
 
     maneuvers.sort((a, b) => a.routeIndex.compareTo(b.routeIndex));
+    _markRoundaboutArrivals(maneuvers);
     return maneuvers;
   }
 
@@ -9234,7 +9235,30 @@ class RouteService {
       );
     }
     maneuvers.sort((a, b) => a.routeIndex.compareTo(b.routeIndex));
+    _markRoundaboutArrivals(maneuvers);
     return maneuvers;
+  }
+
+  /// 2026-06-16 (vucko O9): „Ankunft am Kreisel" markieren — liegt das Ziel
+  /// direkt an der Kreisel-Ausfahrt (nächstes Manöver = Ankunft, <90 m hinter
+  /// dem Kreisel), zeigt das Symbol einen Ziel-Pin statt des Ausfahrt-Pfeils
+  /// (Figma-Situation „Ankunft am Kreisel").
+  void _markRoundaboutArrivals(List<RouteManeuver> maneuvers) {
+    for (var i = 0; i < maneuvers.length - 1; i++) {
+      final m = maneuvers[i];
+      if (m.maneuverType != ManeuverType.roundabout) continue;
+      final next = maneuvers[i + 1];
+      if (!next.isArrival) continue;
+      final d = geo.Geolocator.distanceBetween(
+        m.latitude,
+        m.longitude,
+        next.latitude,
+        next.longitude,
+      );
+      if (d <= 90) {
+        maneuvers[i] = m.copyWith(roundaboutIsArrival: true);
+      }
+    }
   }
 
   /// 2026-06-14 (vucko L3): Richtungs-Ansage statt einer (von GH falsch

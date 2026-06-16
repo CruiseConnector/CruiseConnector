@@ -234,244 +234,304 @@ class RoundaboutSymbol extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final d = _resolveRoundaboutDesign(maneuver);
     return SizedBox(
       width: size,
       height: size,
       child: CustomPaint(
         painter: _RoundaboutPainter(
-          exitNumber: maneuver.roundaboutExitNumber ?? 1,
-          turnAngleRad: maneuver.roundaboutTurnAngleRad,
-          entryBearing: maneuver.roundaboutEntryBearing,
-          exitBearing: maneuver.roundaboutExitBearing,
-          armBearings: maneuver.roundaboutArmBearings,
+          entryDeg: 180, // Einfahrt immer unten (Heading-up wie Apple/Google)
+          exitDeg: d.exitDeg,
+          armsDeg: d.armsDeg,
+          islandScale: maneuver.roundaboutIslandScale ?? 1.0,
+          armLenF: 1.0,
+          arrival: maneuver.roundaboutIsArrival,
+          accent: AppAccentColors.accent,
         ),
       ),
     );
   }
 }
 
-/// Zeichnet einen Kreisverkehr mit markierter Ausfahrt.
+/// 2026-06-16 (vucko O9): Aufgelöste Design-Parameter (in der DESIGN-Konvention
+/// des Figma: 0=oben, 90=rechts, 180=unten, 270=links, im Uhrzeigersinn). Die
+/// Einfahrt liegt IMMER bei 180 (unten, Heading-up).
+class _RoundaboutDesign {
+  const _RoundaboutDesign({required this.exitDeg, required this.armsDeg});
+  final double exitDeg;
+  final List<double> armsDeg;
+}
+
+double _wrap360(double d) => ((d % 360) + 360) % 360;
+
+/// Wandelt die geografischen Manöver-Daten (Kompass-Bearings aus OSM/Geometrie)
+/// in die Design-Konvention um — Einfahrt nach unten (180) gedreht, übrige Arme
+/// relativ dazu. Hat das Manöver echte OSM-Arme, werden sie 1:1 (nur rotiert)
+/// übernommen; sonst wird eine plausible Topologie aus Ausfahrtsnummer +
+/// turn_angle synthetisiert, damit das Symbol nie leer/kaputt wirkt.
+_RoundaboutDesign _resolveRoundaboutDesign(RouteManeuver m) {
+  final eB = m.roundaboutEntryBearing;
+  final xB = m.roundaboutExitBearing;
+  final arms = m.roundaboutArmBearings;
+  final exitNumber = (m.roundaboutExitNumber ?? 1).clamp(1, 12);
+
+  // Design-Winkel der genommenen Ausfahrt.
+  double exitDeg;
+  if (eB != null && xB != null) {
+    exitDeg = _wrap360(xB - eB + 180);
+  } else if (m.roundaboutTurnAngleRad != null) {
+    // Screen-Winkel (0=rechts, -π/2=oben) → Design-Grad (+90).
+    final screenDeg = roundaboutExitAngleFromTurnAngle(m.roundaboutTurnAngleRad!) *
+        180 /
+        math.pi;
+    exitDeg = _wrap360(screenDeg + 90);
+  } else {
+    // Reine Ausfahrtsnummer (4-Arm-Annahme, 90°-Schritte, CCW ab unten).
+    exitDeg = _wrap360(180 - exitNumber * 90);
+  }
+
+  // Arme in Design-Konvention.
+  List<double> armsDeg;
+  if (eB != null && arms != null && arms.length >= 2) {
+    // Echte OSM-Topologie: jeden Arm rotieren, Einfahrt/Ausfahrt exakt rasten.
+    final mapped = arms.map((b) => _wrap360(b - eB + 180)).toList();
+    _snapNearest(mapped, 180); // Einfahrt
+    _snapNearest(mapped, exitDeg); // genommene Ausfahrt
+    armsDeg = mapped;
+  } else {
+    // Synthese: Einfahrt (unten) + vorbeigefahrene Ausfahrten + genommene
+    // Ausfahrt, gleichmäßig über den CCW-Bogen verteilt.
+    final sweep = _wrap360(180 - exitDeg); // CCW von 180 zur Ausfahrt
+    final out = <double>[180.0];
+    for (var i = 1; i < exitNumber; i++) {
+      out.add(_wrap360(180 - sweep * (i / exitNumber)));
+    }
+    out.add(exitDeg);
+    armsDeg = out;
+  }
+  return _RoundaboutDesign(exitDeg: exitDeg, armsDeg: armsDeg);
+}
+
+void _snapNearest(List<double> list, double target) {
+  var best = -1;
+  var bestD = 999.0;
+  for (var i = 0; i < list.length; i++) {
+    var d = (list[i] - target).abs() % 360.0;
+    if (d > 180) d = 360 - d;
+    if (d < bestD) {
+      bestD = d;
+      best = i;
+    }
+  }
+  if (best >= 0) list[best] = _wrap360(target);
+}
+
+/// Zeichnet das Kreisverkehr-Symbol — eine 1:1-Portierung der Figma-Vorlage
+/// `RoundaboutIcon` (Cruise-Connector-Design, Datei RoundaboutIcons.tsx).
 ///
-/// Layout (DACH/Rechtsverkehr):
-/// - Einfahrt unten (π/2 in Bildschirm-Koordinaten, y-down).
-/// - Im Kreis fährt man CCW visuell (= negative sweep in Flutter).
-/// - Exit 1 = rechts (0 rad), Exit 2 = geradeaus, Exit 3 = links —
-///   gegeben durch [roundaboutExitAngleForRightHandTraffic].
-/// - Ist [turnAngleRad] gesetzt (GraphHopper `turn_angle`), wird der ECHTE
-///   Austritts-Winkel gezeichnet statt der synthetischen Gleichverteilung —
-///   siehe [roundaboutExitAngleFromTurnAngle].
+/// Konvention (Figma): Kompass-Grad 0=oben, 90=rechts, 180=unten, 270=links,
+/// im Uhrzeigersinn. Rechtsverkehr → Kreisel wird gegen den Uhrzeigersinn
+/// durchfahren (1. Ausfahrt rechts) → `dir = -1`. Struktur (Ring/Insel/Arme/
+/// Chevrons/Pfeile) exakt aus dem Design; Akzentfarbe = App-Akzent.
+/// Deckt JEDE Form ab: beliebige Armzahl/-winkel, Mini & große Kreisel
+/// ([islandScale]), lange Zufahrten ([armLenF]), Umkehren/U-Turn (Bogen >180°)
+/// und Ankunft am Kreisel ([arrival] → Ziel-Pin statt Ausfahrt-Pfeil).
 class _RoundaboutPainter extends CustomPainter {
   _RoundaboutPainter({
-    required this.exitNumber,
-    this.turnAngleRad,
-    this.entryBearing,
-    this.exitBearing,
-    this.armBearings,
+    required this.entryDeg,
+    required this.exitDeg,
+    required this.armsDeg,
+    required this.islandScale,
+    required this.armLenF,
+    required this.arrival,
+    required this.accent,
   });
 
-  final int exitNumber;
+  final double entryDeg;
+  final double exitDeg;
+  final List<double> armsDeg;
+  final double islandScale;
+  final double armLenF;
+  final bool arrival;
+  final Color accent;
 
-  /// GraphHopper `turn_angle` (Radiant) — Fallback für den Ausfahrtswinkel.
-  final double? turnAngleRad;
+  // Struktur-Farben exakt aus dem Figma-Token-Objekt `C`.
+  static const Color _road = Color(0xFF3A3A42);
+  static const Color _island = Color(0xFF101013);
+  static const Color _islandEdge = Color(0xFF3A3A42);
+  static const Color _chevron = Color(0xFF4A4A54);
 
-  /// Kompass-Winkel (0..360°) der Einfahrt (Richtung zur Herkunft) bzw. der
-  /// genommenen Ausfahrt — aus der gefahrenen Geometrie.
-  final double? entryBearing;
-  final double? exitBearing;
+  // Kompass-Grad → Punkt (0=oben). dir steckt in ringArc.
+  Offset _polar(Offset c, double r, double deg) {
+    final rad = (deg - 90) * math.pi / 180.0;
+    return Offset(c.dx + r * math.cos(rad), c.dy + r * math.sin(rad));
+  }
 
-  /// 2026-06-16 (vucko O9): ALLE Arme des Kreisels (Kompass-Winkel, aus OSM).
-  /// Vorhanden ⇒ echte Topologie (3-/4-/5-/6-armig, asymmetrisch) wie Apple/
-  /// Google. null/leer ⇒ Fallback auf Einfahrt + genommene Ausfahrt.
-  final List<double>? armBearings;
+  // Pfeil-Polygon: Spitze bei p, zeigt in Richtung deg (Kompass-Grad).
+  Path _arrowHead(Offset p, double deg, double s) {
+    final rad = (deg - 90) * math.pi / 180.0;
+    final cos = math.cos(rad), sin = math.sin(rad);
+    final back = s, half = s * 0.62;
+    final l = Offset(p.dx - back * cos + half * sin, p.dy - back * sin - half * cos);
+    final r = Offset(p.dx - back * cos - half * sin, p.dy - back * sin + half * cos);
+    return Path()
+      ..moveTo(p.dx, p.dy)
+      ..lineTo(l.dx, l.dy)
+      ..lineTo(r.dx, r.dy)
+      ..close();
+  }
 
-  /// Kompass-Bearing → Screen-Winkel (y-down), so dass die EINFAHRT unten (π/2)
-  /// liegt. Rechtskurve→rechts, geradeaus→oben, Linkskurve→links (verifiziert).
-  double _screen(double bearing) =>
-      (bearing - (entryBearing ?? 0) + 90.0) * math.pi / 180.0;
+  // Bogen entlang des Kreises, gegen den Uhrzeigersinn (dir = -1). Sweep wird in
+  // [0,360) berechnet → eine fast-volle Umrundung (U-Turn) wird korrekt als
+  // langer Bogen (largeArc) gezeichnet.
+  Path _ringArc(Offset c, double r, double startDeg, double endDeg) {
+    final s = _polar(c, r, startDeg);
+    final e = _polar(c, r, endDeg);
+    final sweep = _wrap360(startDeg - endDeg); // dir = -1
+    final large = sweep > 180;
+    return Path()
+      ..moveTo(s.dx, s.dy)
+      ..arcToPoint(
+        e,
+        radius: Radius.circular(r),
+        largeArc: large,
+        clockwise: false,
+      );
+  }
 
-  int _nearestArm(List<double> arms, double bearing) {
-    var best = 0;
-    var bestD = 999.0;
-    for (var i = 0; i < arms.length; i++) {
-      var d = (arms[i] - bearing).abs() % 360.0;
-      if (d > 180) d = 360 - d;
-      if (d < bestD) {
-        bestD = d;
-        best = i;
-      }
-    }
-    return best;
+  bool _isPathArm(double a) => _near(a, entryDeg) || _near(a, exitDeg);
+
+  static bool _near(double a, double b) {
+    var d = (a - b).abs() % 360.0;
+    if (d > 180) d = 360 - d;
+    return d < 1.0;
   }
 
   @override
   void paint(Canvas canvas, Size size) {
-    // 2026-06-16 (vucko O9, User-Figma-Referenz): Das Symbol zeigt den
-    // Kreisverkehr so, wie er WIRKLICH aussieht — Hub + Ring + ALLE Arme an
-    // ihren echten Winkeln (aus OSM), die Einfahrt nach unten gedreht, die
-    // genommene Ausfahrt + Fahrlinie in Akzentfarbe hervorgehoben. Liegen keine
-    // OSM-Arme vor, fällt es auf Einfahrt + genommene Ausfahrt (Geometrie/
-    // turn_angle) zurück — nie eine erfundene Topologie. Canvas y-down.
-    final w = size.width;
-    final center = Offset(w / 2, w / 2);
-    final ringR = w * 0.30;
-    final hubR = w * 0.115;
-    final stubOut = w * 0.155;
-    final accent = AppAccentColors.accent;
-    final ringRect = Rect.fromCircle(center: center, radius: ringR);
-    const entryScreen = math.pi / 2; // unten
+    final s = size.width;
+    final c = Offset(s / 2, s / 2);
 
-    Offset on(double a, double r) =>
-        Offset(center.dx + r * math.cos(a), center.dy + r * math.sin(a));
+    final outerR = s * 0.27;
+    final innerR = math.max(s * 0.06, s * 0.135 * islandScale);
+    final laneR = (outerR + innerR) / 2;
+    final roadBand = outerR - innerR;
+    final armLen = s * 0.2 * armLenF;
+    final armW = math.max(s * 0.07, roadBand * 0.9);
+    final travelW = roadBand * 0.62;
 
-    final ringPaint = Paint()
-      ..color = Colors.white.withValues(alpha: 0.30)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = w * 0.045;
-    final armPaint = Paint()
-      ..color = Colors.white.withValues(alpha: 0.34)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = w * 0.05
-      ..strokeCap = StrokeCap.round;
-    final accentStroke = Paint()
-      ..color = accent
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = w * 0.072
-      ..strokeCap = StrokeCap.round;
-    final armFill = Paint()
-      ..color = Colors.white.withValues(alpha: 0.34)
-      ..style = PaintingStyle.fill;
-    final accentFill = Paint()
-      ..color = accent
-      ..style = PaintingStyle.fill;
-
-    // Hub + Ring.
+    // Aktiv-Glow.
     canvas.drawCircle(
-      center,
-      hubR,
+      c,
+      outerR + s * 0.085,
       Paint()
-        ..color = Colors.white.withValues(alpha: 0.16)
-        ..style = PaintingStyle.fill,
+        ..style = PaintingStyle.stroke
+        ..color = accent.withValues(alpha: 0.22)
+        ..strokeWidth = s * 0.02,
     );
-    canvas.drawCircle(center, ringR, ringPaint);
 
-    void exitStub(double screenAngle, {required bool highlight}) {
-      final p = highlight ? accentStroke : armPaint;
-      final outer = on(screenAngle, ringR + stubOut);
-      canvas.drawLine(on(screenAngle, ringR), outer, p);
-      final head = highlight ? w * 0.135 : w * 0.085;
-      final spread = highlight ? 0.5 : 0.6;
-      final aL = Offset(
-        outer.dx - head * math.cos(screenAngle - spread),
-        outer.dy - head * math.sin(screenAngle - spread),
+    // Alle Arme (Straßen) — Pfad-Arme (Einfahrt/Ausfahrt) in Akzent, sonst grau.
+    for (final a in armsDeg) {
+      final inner = _polar(c, outerR - s * 0.005, a);
+      final outer = _polar(c, outerR + armLen, a);
+      final path = _isPathArm(a);
+      canvas.drawLine(
+        inner,
+        outer,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeCap = StrokeCap.round
+          ..strokeWidth = armW
+          ..color = path ? accent : _road.withValues(alpha: 0.85),
       );
-      final aR = Offset(
-        outer.dx - head * math.cos(screenAngle + spread),
-        outer.dy - head * math.sin(screenAngle + spread),
-      );
+    }
+
+    // Kreisring (Fahrbahn).
+    canvas.drawCircle(
+      c,
+      laneR,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..color = _road.withValues(alpha: 0.85)
+        ..strokeWidth = roadBand,
+    );
+
+    // Richtungs-Chevrons (Fahrtrichtung gegen den Uhrzeigersinn).
+    for (final a in const [0.0, 60.0, 120.0, 180.0, 240.0, 300.0]) {
+      final p = _polar(c, laneR, a);
       canvas.drawPath(
-        Path()
-          ..moveTo(outer.dx, outer.dy)
-          ..lineTo(aL.dx, aL.dy)
-          ..lineTo(aR.dx, aR.dy)
-          ..close(),
-        highlight ? accentFill : armFill,
+        _arrowHead(p, a - 90, s * 0.032),
+        Paint()
+          ..color = _chevron.withValues(alpha: 0.5)
+          ..style = PaintingStyle.fill,
       );
     }
 
-    void driveArc(double takenScreen) {
-      var sweep = takenScreen - entryScreen;
-      while (sweep > 0) {
-        sweep -= 2 * math.pi;
-      }
-      while (sweep <= -2 * math.pi) {
-        sweep += 2 * math.pi;
-      }
-      if (sweep.abs() > 0.04) {
-        canvas.drawArc(ringRect, entryScreen, sweep, false, accentStroke);
-      }
-    }
-
-    // Einfahrt-Stummel (unten) — Teil der Fahrlinie, daher in Akzentfarbe von
-    // außen bis an den Ring (wie Apple/Google: durchgehender Pfad rein → Bogen →
-    // raus). Ohne Pfeilspitze (Pfeil sitzt nur an der genommenen Ausfahrt).
-    canvas.drawLine(
-      on(entryScreen, ringR + stubOut),
-      on(entryScreen, ringR),
-      accentStroke,
+    // Mittelinsel.
+    canvas.drawCircle(c, innerR, Paint()..color = _island);
+    canvas.drawCircle(
+      c,
+      innerR,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..color = _islandEdge
+        ..strokeWidth = s * 0.012,
     );
 
-    final arms = armBearings;
-    // Genommene Ausfahrt als Screen-Winkel: echte exitBearing bevorzugt, sonst
-    // turn_angle.
-    double? takenScreen;
-    if (entryBearing != null && exitBearing != null) {
-      takenScreen = _screen(exitBearing!);
-    } else if (turnAngleRad != null) {
-      takenScreen = roundaboutExitAngleFromTurnAngle(turnAngleRad!);
-    }
+    // ── Genommene Route (Akzent): Einfahrt-Stub → Bogen → Ausfahrt-Stub ──────
+    final route = Paint()
+      ..color = accent
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round
+      ..strokeWidth = travelW;
+    canvas.drawLine(
+      _polar(c, outerR + armLen, entryDeg),
+      _polar(c, laneR, entryDeg),
+      route,
+    );
+    canvas.drawPath(_ringArc(c, laneR, entryDeg, exitDeg), route);
+    canvas.drawLine(
+      _polar(c, laneR, exitDeg),
+      _polar(c, outerR + armLen * 0.78, exitDeg),
+      route,
+    );
 
-    // ── ECHTE TOPOLOGIE (OSM-Arme vorhanden) ──────────────────────────────
-    if (arms != null && arms.length >= 2 && entryBearing != null) {
-      final entryIdx = _nearestArm(arms, entryBearing!);
-      final takenIdx = exitBearing != null
-          ? _nearestArm(arms, exitBearing!)
-          : -1;
-      for (var i = 0; i < arms.length; i++) {
-        if (i == entryIdx) continue; // Einfahrt schon gezeichnet
-        if (i == takenIdx) continue; // Ausfahrt unten als Highlight
-        exitStub(_screen(arms[i]), highlight: false);
-      }
-      final ts = takenIdx >= 0 ? _screen(arms[takenIdx]) : takenScreen;
-      if (ts != null) {
-        driveArc(ts);
-        exitStub(ts, highlight: true);
-      }
-      return;
-    }
+    // Einfahrt-Pfeil (zeigt in den Kreisel hinein).
+    canvas.drawPath(
+      _arrowHead(
+        _polar(c, outerR + armLen * 0.45, entryDeg),
+        _wrap360(entryDeg + 180),
+        s * 0.06,
+      ),
+      Paint()..color = accent,
+    );
 
-    // ── FALLBACK (keine OSM-Arme): Einfahrt + genommene Ausfahrt ───────────
-    if (takenScreen != null) {
-      // Ausfahrten, an denen man vorbeifährt (Näherung über exit_number).
-      var sweep = takenScreen - entryScreen;
-      while (sweep > 0) {
-        sweep -= 2 * math.pi;
-      }
-      while (sweep <= -2 * math.pi) {
-        sweep += 2 * math.pi;
-      }
-      final passed = exitNumber.clamp(1, 12) - 1;
-      for (var i = 1; i <= passed; i++) {
-        exitStub(entryScreen + sweep * (i / exitNumber), highlight: false);
-      }
-      driveArc(takenScreen);
-      exitStub(takenScreen, highlight: true);
+    // Ausfahrt-Pfeil — oder Ziel-Pin bei Ankunft direkt am Kreisel.
+    final exitTip = _polar(c, outerR + armLen, exitDeg);
+    if (arrival) {
+      canvas.drawCircle(exitTip, s * 0.075, Paint()..color = accent);
+      canvas.drawCircle(
+        exitTip,
+        s * 0.032,
+        Paint()..color = const Color(0xFFF4F4F6),
+      );
     } else {
-      final tp = TextPainter(
-        text: TextSpan(
-          text: exitNumber.clamp(1, 9).toString(),
-          style: TextStyle(
-            color: accent,
-            fontSize: w * 0.30,
-            fontWeight: FontWeight.w800,
-            height: 1.0,
-          ),
-        ),
-        textDirection: TextDirection.ltr,
-      )..layout();
-      tp.paint(
-        canvas,
-        Offset(center.dx - tp.width / 2, center.dy - tp.height / 2),
+      canvas.drawPath(
+        _arrowHead(exitTip, exitDeg, s * 0.075),
+        Paint()..color = accent,
       );
     }
   }
 
   @override
   bool shouldRepaint(_RoundaboutPainter o) =>
-      o.exitNumber != exitNumber ||
-      o.turnAngleRad != turnAngleRad ||
-      o.entryBearing != entryBearing ||
-      o.exitBearing != exitBearing ||
-      !listEquals(o.armBearings, armBearings);
+      o.entryDeg != entryDeg ||
+      o.exitDeg != exitDeg ||
+      o.islandScale != islandScale ||
+      o.armLenF != armLenF ||
+      o.arrival != arrival ||
+      o.accent != accent ||
+      !listEquals(o.armsDeg, armsDeg);
 }
 
 @visibleForTesting

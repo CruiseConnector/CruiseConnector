@@ -20,6 +20,7 @@ class RoundaboutTopology {
     required this.centerLat,
     required this.centerLng,
     required this.armBearings,
+    required this.radiusMeters,
   });
 
   final double centerLat;
@@ -30,7 +31,22 @@ class RoundaboutTopology {
   /// (Einbahn-Paare derselben Straße zu einem Arm gemerged).
   final List<double> armBearings;
 
+  /// Radius des Kreisel-Rings (Meter, Median Zentrum→Ring-Knoten). Daraus leitet
+  /// das Symbol die Insel-Größe ab (Mini vs. großer/Autobahn-Kreisel).
+  final double radiusMeters;
+
   int get armCount => armBearings.length;
+
+  /// Insel-Größe relativ fürs Symbol (1.0 = Standard). Mini-Kreisel < 1, große
+  /// Kreisel > 1 — exakt die `islandScale`-Achse aus dem Figma-Design.
+  double get islandScale {
+    final r = radiusMeters;
+    if (r <= 0) return 1.0;
+    if (r < 11) return 0.5; // Mini-Kreisel
+    if (r < 26) return 1.0; // Standard
+    if (r < 42) return 1.25; // groß
+    return 1.45; // sehr groß / Autobahnkreisel
+  }
 }
 
 class RoundaboutTopologyService {
@@ -136,6 +152,28 @@ class RoundaboutTopologyService {
     final cLat = sumLat / n;
     final cLng = sumLng / n;
 
+    // Ring-Radius = Median der Distanzen Zentrum→Ring-Knoten (robust gegen
+    // ovale/asymmetrische Kreisel). Für die Insel-Größe im Symbol.
+    final radii = <double>[];
+    final seenR = <int>{};
+    for (var i = 0; i < ringIds.length && i < ringGeom.length; i++) {
+      if (!seenR.add(ringIds[i])) continue;
+      final g = ringGeom[i];
+      if (g is! Map) continue;
+      radii.add(
+        _metersBetween(
+          cLat,
+          cLng,
+          (g['lat'] as num).toDouble(),
+          (g['lon'] as num).toDouble(),
+        ),
+      );
+    }
+    radii.sort();
+    final radiusMeters = radii.isEmpty
+        ? 0.0
+        : radii[radii.length ~/ 2];
+
     // Pro Arm: Winkel vom Zentrum zu einem Punkt ~30m draußen (robust gegen
     // tangentiale Stummel am Knoten).
     final raw = <double>[];
@@ -191,6 +229,7 @@ class RoundaboutTopologyService {
       centerLat: cLat,
       centerLng: cLng,
       armBearings: arms,
+      radiusMeters: radiusMeters,
     );
   }
 

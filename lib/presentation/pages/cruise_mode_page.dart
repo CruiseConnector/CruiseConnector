@@ -13239,8 +13239,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       }
       final svc = RoundaboutTopologyService.instance;
       if (svc.isResolved(m.latitude, m.longitude)) {
-        final topo = svc.cached(m.latitude, m.longitude);
-        _applyRoundaboutTopology(i, topo?.armBearings ?? const <double>[]);
+        _applyRoundaboutTopology(i, svc.cached(m.latitude, m.longitude));
       } else {
         final lat = m.latitude;
         final lng = m.longitude;
@@ -13253,10 +13252,7 @@ class _CruiseModePageState extends State<CruiseModePage>
                 mm.roundaboutArmBearings == null &&
                 (mm.latitude - lat).abs() < 1e-6 &&
                 (mm.longitude - lng).abs() < 1e-6) {
-              _applyRoundaboutTopology(
-                j,
-                topo?.armBearings ?? const <double>[],
-              );
+              _applyRoundaboutTopology(j, topo);
               break;
             }
           }
@@ -13266,11 +13262,14 @@ class _CruiseModePageState extends State<CruiseModePage>
     }
   }
 
-  void _applyRoundaboutTopology(int index, List<double> arms) {
+  void _applyRoundaboutTopology(int index, RoundaboutTopology? topo) {
     if (index < 0 || index >= _maneuvers.length) return;
     if (_maneuvers[index].roundaboutArmBearings != null) return;
+    // Auch bei null (kein Kreisel/Netzfehler) eine leere Liste setzen →
+    // markiert „aufgelöst", Painter nutzt sauber den Geometrie-Fallback.
     _maneuvers[index] = _maneuvers[index].copyWith(
-      roundaboutArmBearings: arms,
+      roundaboutArmBearings: topo?.armBearings ?? const <double>[],
+      roundaboutIslandScale: topo?.islandScale,
     );
     _safeSetState(() {});
   }
