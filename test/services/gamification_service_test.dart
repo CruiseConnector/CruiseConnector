@@ -43,15 +43,52 @@ void main() {
       expect(GamificationService.calculateDriveXp(23), 230);
     });
 
-    test('ignores curves, style bonuses, and streak multipliers for XP', () {
-      final xp = GamificationService.calculateRouteXp(
+    test('ignores curves and style bonuses; distance is the only base', () {
+      final breakdown = GamificationService.calculateRouteXpBreakdown(
         distanceKm: 23,
         curves: 999,
         style: 'Kurvenjagd',
-        streakDays: 30,
+        streakDays: 1,
+      );
+      expect(breakdown.baseXp, 230);
+    });
+
+    test('applies the streak multiplier (1.0 + days*0.1, uncapped) to XP', () {
+      // 2026-06-15 (vucko): pro aktivem Tag +0,1, KEIN Cap. Wird auch echt aufs
+      // Konto angerechnet (xp_awarded), nicht nur angezeigt.
+      expect(GamificationService.streakMultiplierForDays(0), 1.0);
+      expect(GamificationService.streakMultiplierForDays(1), closeTo(1.1, 1e-9));
+      expect(GamificationService.streakMultiplierForDays(2), closeTo(1.2, 1e-9));
+      expect(GamificationService.streakMultiplierForDays(4), closeTo(1.4, 1e-9));
+      expect(
+        GamificationService.streakMultiplierForDays(10),
+        closeTo(2.0, 1e-9),
+      );
+      expect(
+        GamificationService.streakMultiplierForDays(20),
+        closeTo(3.0, 1e-9),
       );
 
-      expect(xp, 230);
+      // 10 km Basis = 100 XP; 4-Tage-Streak (×1,4) → 140 XP.
+      expect(
+        GamificationService.calculateRouteXp(
+          distanceKm: 10,
+          curves: 0,
+          style: 'Sport Mode',
+          streakDays: 4,
+        ),
+        140,
+      );
+      // 23 km Basis = 230 XP; 2-Tage-Streak (×1,2) → 276 XP.
+      expect(
+        GamificationService.calculateRouteXp(
+          distanceKm: 23,
+          curves: 0,
+          style: 'Sport Mode',
+          streakDays: 2,
+        ),
+        276,
+      );
     });
 
     test('builds an immutable drive-session insert from actual distance', () {
@@ -96,11 +133,13 @@ void main() {
         );
       }
 
-      expect(breakdown(0).totalXp, 0);
-      expect(breakdown(0.199).totalXp, 0);
-      expect(breakdown(0.20).totalXp, 200);
-      expect(breakdown(0.50).totalXp, 500);
-      expect(breakdown(1.0, completed: true).totalXp, 1000);
+      // baseXp = Distanz-XP VOR dem Streak-Multiplikator → testet das
+      // Fortschritts-Gating sauber (der Multiplikator wird separat getestet).
+      expect(breakdown(0).baseXp, 0);
+      expect(breakdown(0.199).baseXp, 0);
+      expect(breakdown(0.20).baseXp, 200);
+      expect(breakdown(0.50).baseXp, 500);
+      expect(breakdown(1.0, completed: true).baseXp, 1000);
     });
 
     test('completed flag below finish threshold does not grant full XP', () {
@@ -112,7 +151,7 @@ void main() {
         style: 'Sport Mode',
       );
 
-      expect(xp.totalXp, 500);
+      expect(xp.baseXp, 500);
     });
 
     test(

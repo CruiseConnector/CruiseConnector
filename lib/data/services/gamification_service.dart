@@ -141,14 +141,19 @@ class GamificationService {
   }) {
     final distanceXp = calculateDriveXp(distanceKm);
     final safeStreakDays = math.max(1, streakDays);
+    // 2026-06-15 (vucko): Streak-Multiplikator JETZT echt auf die Distanz-XP
+    // anwenden (vorher hart 1.0 = wirkungslos). Aufgerundet, damit der Bonus
+    // nie verschluckt wird.
+    final multiplier = streakMultiplierForDays(safeStreakDays);
+    final totalXp = (distanceXp * multiplier).round();
     return RouteXpBreakdown(
       distanceXp: distanceXp,
       curveXp: 0,
       styleBonus: 0,
       baseXp: distanceXp,
       streakDays: safeStreakDays,
-      multiplier: 1.0,
-      totalXp: distanceXp,
+      multiplier: multiplier,
+      totalXp: totalXp,
     );
   }
 
@@ -208,8 +213,13 @@ class GamificationService {
     );
   }
 
+  /// 2026-06-15 (vucko): XP-Streak-Multiplikator. Pro aktivem Tag +0,1, KEIN Cap:
+  /// 1 Tag→1,1 · 2→1,2 · 3→1,3 · … · 10→2,0 · 11→2,1 … Wird auf die Distanz-XP
+  /// jeder Fahrt angewandt UND fix in user_drive_sessions.xp_awarded geschrieben
+  /// (konto-relevant, siehe [calculateRouteXpBreakdown] + recordDriveSession),
+  /// nicht nur im Frontend.
   static double streakMultiplierForDays(int streakDays) {
-    return 1.0;
+    return 1.0 + math.max(0, streakDays) * 0.1;
   }
 
   static int calculateDrivingStreakDays(

@@ -5135,6 +5135,9 @@ class _CruiseModePageState extends State<CruiseModePage>
       distanceKm: distKm,
       curves: _cachedCurveCount,
       style: _selectedStyle,
+      // 2026-06-15 (vucko): Streak-Multiplikator auch in der XP-Vorschau zeigen,
+      // damit die Anzeige der echten Gutschrift entspricht.
+      streakDays: _xpStreakDays,
     );
   }
 
@@ -13635,6 +13638,17 @@ class _CruiseModePageState extends State<CruiseModePage>
     );
     if (progressFraction < _minProgressForXpCredit) return;
 
+    // 2026-06-15 (vucko): Streak-Multiplikator FIX aufs Konto anrechnen — die
+    // boosted XP werden hier in user_drive_sessions.xp_awarded geschrieben (Summe
+    // → profiles.total_xp via calculateAndSync), nicht nur im Abschluss-Sheet
+    // angezeigt. _xpStreakDays = Streak für DIESE Fahrt (inkl. heute, via
+    // _prepareXpStreakContext) und ist exakt die Zahl, die das Sheet anzeigt.
+    final xpBreakdown = GamificationService.calculateRouteXpBreakdown(
+      distanceKm: drivenKm,
+      curves: 0,
+      style: _selectedStyle,
+      streakDays: _xpStreakDays,
+    );
     await GamificationService.recordDriveSession(
       distanceKm: drivenKm,
       durationSeconds: adjustedResult.durationSeconds?.round() ?? 0,
@@ -13643,6 +13657,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       routeType: _isRoundTrip ? 'ROUND_TRIP' : 'POINT_TO_POINT',
       routeFingerprint: adjustedResult.edgeMeta['route_fingerprint']
           ?.toString(),
+      xpAwarded: xpBreakdown.totalXp,
     );
     _driveSessionRecordedForCompletion = true;
     await GamificationService.calculateAndSync();

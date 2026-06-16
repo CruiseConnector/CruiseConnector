@@ -361,6 +361,8 @@ class _HomeContentPageState extends State<HomeContentPage>
         distanceKm: route.distanceKm,
         curves: curves,
         style: route.style,
+        // 2026-06-15 (vucko): Streak-Bonus in der Empfehlungs-XP mitzeigen.
+        streakDays: _streakDays,
       );
       final elevationSummary = await const RouteElevationService().getSummary(
         routeKey: route.id,
@@ -796,10 +798,9 @@ class _HomeContentPageState extends State<HomeContentPage>
                   ],
                 ),
               ),
-              const SizedBox(height: 16),
-
-              // Streak Widget
-              _buildStreakWidget(),
+              // 2026-06-15 (vucko): unteres Streak-Widget entfernt — es war eine
+              // Dublette zum Hero-Streak-Banner ganz oben. Nur das obere Banner
+              // (mit echtem Multiplikator) bleibt.
             ],
           ),
         ),
@@ -1930,93 +1931,6 @@ class _HomeContentPageState extends State<HomeContentPage>
             ],
           ),
         ),
-      ),
-    );
-  }
-
-  // ── Streak Widget ────────────────────────────────────────────────────────
-
-  Widget _buildStreakWidget() {
-    final hasStreak = _streakDays > 0;
-    final nextStreakDays = hasStreak ? _streakDays + 1 : 1;
-    final nextMultiplier = GamificationService.streakMultiplierForDays(
-      nextStreakDays,
-    );
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: const Color(0xFF1C1F26),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(
-          color: hasStreak
-              ? AppAccentColors.accent.withValues(alpha: 0.3)
-              : const Color(0xFFFFFFFF).withValues(alpha: 0.06),
-        ),
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 48,
-            height: 48,
-            decoration: BoxDecoration(
-              color: hasStreak
-                  ? AppAccentColors.accent.withValues(alpha: 0.15)
-                  : const Color(0xFF2D3748),
-              borderRadius: BorderRadius.circular(14),
-            ),
-            child: Center(
-              child: Text(
-                hasStreak ? '🔥' : '❄️',
-                style: const TextStyle(fontSize: 24),
-              ),
-            ),
-          ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  hasStreak
-                      ? '$_streakDays Tage Streak'
-                      : 'Keine aktive Streak',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  hasStreak
-                      ? 'Fahre heute für ${nextMultiplier.toStringAsFixed(2)}x XP.'
-                      : 'Starte eine Fahrt und beginne deinen XP-Streak.',
-                  style: const TextStyle(
-                    color: Color(0xFFA0AEC0),
-                    fontSize: 12,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          if (hasStreak)
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              decoration: BoxDecoration(
-                gradient: AppAccentColors.primaryGradient,
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Text(
-                '${nextMultiplier.toStringAsFixed(2)}x',
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 14,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ),
-        ],
       ),
     );
   }
