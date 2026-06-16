@@ -6,6 +6,8 @@ class NavigationRerouteDecision {
     required this.cooldownOk,
     required this.shouldTrigger,
     required this.requiredOffRouteDuration,
+    required this.maxOffRouteDuration,
+    required this.maximumWaitExceeded,
     required this.cooldownDuration,
   });
 
@@ -15,6 +17,8 @@ class NavigationRerouteDecision {
   final bool cooldownOk;
   final bool shouldTrigger;
   final Duration requiredOffRouteDuration;
+  final Duration maxOffRouteDuration;
+  final bool maximumWaitExceeded;
   final Duration cooldownDuration;
 }
 
@@ -23,6 +27,7 @@ class NavigationRerouteDecisionEngine {
 
   static const normalOffRouteDuration = Duration(milliseconds: 1800);
   static const clearOffRouteDuration = Duration(milliseconds: 900);
+  static const maxOffRouteDuration = Duration(seconds: 4);
   static const normalSuccessCooldown = Duration(seconds: 2);
   static const highSpeedSuccessCooldown = Duration(milliseconds: 1000);
   static const failureCooldown = Duration(seconds: 3);
@@ -46,6 +51,7 @@ class NavigationRerouteDecisionEngine {
     required double speedMps,
     Duration normalDuration = normalOffRouteDuration,
     Duration clearDuration = clearOffRouteDuration,
+    Duration maxDuration = maxOffRouteDuration,
     Duration normalCooldown = normalSuccessCooldown,
     Duration highSpeedCooldown = highSpeedSuccessCooldown,
     Duration failedCooldown = failureCooldown,
@@ -71,6 +77,7 @@ class NavigationRerouteDecisionEngine {
         ? Duration.zero
         : now.difference(offRouteSince);
     final requiredDuration = clearly ? clearDuration : normalDuration;
+    final maximumWaitExceeded = offFor >= maxDuration;
     final sustained =
         offFor >= normalDuration || (clearly && offFor >= clearDuration);
 
@@ -89,6 +96,8 @@ class NavigationRerouteDecisionEngine {
       cooldownOk: cooldownOk,
       shouldTrigger: shouldTrack && sustained && !isRerouting && cooldownOk,
       requiredOffRouteDuration: requiredDuration,
+      maxOffRouteDuration: maxDuration,
+      maximumWaitExceeded: maximumWaitExceeded,
       cooldownDuration: cooldown,
     );
   }

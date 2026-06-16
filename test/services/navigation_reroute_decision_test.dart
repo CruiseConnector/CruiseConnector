@@ -137,4 +137,17 @@ void main() {
   test('does not start a second reroute while one is already running', () {
     expect(evaluate(isRerouting: true).shouldTrigger, isFalse);
   });
+
+  test('maximum wait cap exposes the 4s reroute deadline', () {
+    expect(
+      evaluate(offFor: const Duration(milliseconds: 3999)).maximumWaitExceeded,
+      isFalse,
+    );
+
+    final decision = evaluate(offFor: const Duration(seconds: 4));
+
+    expect(decision.maxOffRouteDuration, const Duration(seconds: 4));
+    expect(decision.maximumWaitExceeded, isTrue);
+    expect(decision.shouldTrigger, isTrue);
+  });
 }

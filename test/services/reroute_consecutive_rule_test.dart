@@ -1,4 +1,5 @@
 import 'package:cruise_connect/data/services/navigation_guidance_utils.dart';
+import 'package:cruise_connect/data/services/navigation_reroute_decision.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// 2026-06-15 (vucko N-Runde-2, Geräte-Video: 3 Phantom-Reroutes MITTEN in der
@@ -15,16 +16,15 @@ void main() {
       bool fwd = false,
       bool approach = false,
       bool nearEnd = false,
-    }) =>
-        fixIsOnRoute(
-          isOutsideCorridor: outside,
-          perpMeters: perp,
-          corridorMeters: corridor,
-          courseAligned: aligned,
-          makingForwardProgress: fwd,
-          approachingDestination: approach,
-          nearRouteEnd: nearEnd,
-        );
+    }) => fixIsOnRoute(
+      isOutsideCorridor: outside,
+      perpMeters: perp,
+      corridorMeters: corridor,
+      courseAligned: aligned,
+      makingForwardProgress: fwd,
+      approachingDestination: approach,
+      nearRouteEnd: nearEnd,
+    );
 
     test('im Korridor → auf Route', () {
       expect(onRoute(outside: false, perp: 5, aligned: false), isTrue);
@@ -35,37 +35,58 @@ void main() {
     test('weiter + Kurs misaligned → off', () {
       expect(onRoute(outside: true, perp: 450, aligned: false), isFalse);
     });
-    test('SEHR weit (>2× Korridor) auch bei passendem Kurs → off (Parallelstraße)',
-        () {
-      expect(onRoute(outside: true, perp: 700, aligned: true), isFalse);
-    });
+    test(
+      'SEHR weit (>2× Korridor) auch bei passendem Kurs → off (Parallelstraße)',
+      () {
+        expect(onRoute(outside: true, perp: 700, aligned: true), isFalse);
+      },
+    );
     test('Fortschritt / Ziel-Annäherung / Routen-Ende → auf Route', () {
-      expect(onRoute(outside: true, perp: 700, aligned: false, fwd: true), isTrue);
-      expect(onRoute(outside: true, perp: 700, aligned: false, approach: true),
-          isTrue);
-      expect(onRoute(outside: true, perp: 700, aligned: false, nearEnd: true),
-          isTrue);
+      expect(
+        onRoute(outside: true, perp: 700, aligned: false, fwd: true),
+        isTrue,
+      );
+      expect(
+        onRoute(outside: true, perp: 700, aligned: false, approach: true),
+        isTrue,
+      );
+      expect(
+        onRoute(outside: true, perp: 700, aligned: false, nearEnd: true),
+        isTrue,
+      );
     });
   });
 
   group('requiredOffRouteFixes — accuracy-skaliert, nie hart blockiert', () {
     test('gutes GPS (10m) → 4 Fixes', () {
       expect(
-          requiredOffRouteFixes(accuracyMeters: 10, clearWrongTurn: false), 4);
+        requiredOffRouteFixes(accuracyMeters: 10, clearWrongTurn: false),
+        4,
+      );
     });
     test('gutes GPS + eindeutiges Verfahren → 3 Fixes (Schnell-Schiene)', () {
-      expect(requiredOffRouteFixes(accuracyMeters: 10, clearWrongTurn: true), 3);
+      expect(
+        requiredOffRouteFixes(accuracyMeters: 10, clearWrongTurn: true),
+        3,
+      );
     });
     test('mäßiges GPS (60m) → 15 Fixes (träger, aber nicht blockiert)', () {
       expect(
-          requiredOffRouteFixes(accuracyMeters: 60, clearWrongTurn: false), 15);
+        requiredOffRouteFixes(accuracyMeters: 60, clearWrongTurn: false),
+        15,
+      );
     });
     test('mäßiges GPS + eindeutiges Verfahren → trotzdem 3 (min)', () {
-      expect(requiredOffRouteFixes(accuracyMeters: 60, clearWrongTurn: true), 3);
+      expect(
+        requiredOffRouteFixes(accuracyMeters: 60, clearWrongTurn: true),
+        3,
+      );
     });
     test('ungültige Accuracy → 4 (16/4 Default)', () {
       expect(
-          requiredOffRouteFixes(accuracyMeters: -1, clearWrongTurn: false), 4);
+        requiredOffRouteFixes(accuracyMeters: -1, clearWrongTurn: false),
+        4,
+      );
     });
   });
 
@@ -93,8 +114,10 @@ void main() {
       } else if (usable) {
         counter++;
       }
-      final req =
-          requiredOffRouteFixes(accuracyMeters: f.acc, clearWrongTurn: f.clearTurn);
+      final req = requiredOffRouteFixes(
+        accuracyMeters: f.acc,
+        clearWrongTurn: f.clearTurn,
+      );
       if (counter >= req) declared = true;
     }
     return (counter: counter, declared: declared);
@@ -114,20 +137,32 @@ void main() {
       expect(r.counter, 0);
     });
 
-    test('PHANTOM: EIN in-Korridor-Blip mitten im langen Burst nullt alles', () {
-      final fixes = <({double perp, bool aligned, double acc, bool clearTurn})>[];
-      // 3 off, dann 1 on (Blip), dann wieder 3 off — nie 4 am Stück
-      for (var i = 0; i < 3; i++) {
-        fixes.add((perp: 450, aligned: false, acc: 12, clearTurn: false));
-      }
-      fixes.add((perp: 10, aligned: true, acc: 12, clearTurn: false)); // Blip on
-      for (var i = 0; i < 3; i++) {
-        fixes.add((perp: 450, aligned: false, acc: 12, clearTurn: false));
-      }
-      final r = runFixes(fixes);
-      expect(r.declared, isFalse,
-          reason: 'der On-Blip setzt den Zähler zurück → nie ≥4 am Stück');
-    });
+    test(
+      'PHANTOM: EIN in-Korridor-Blip mitten im langen Burst nullt alles',
+      () {
+        final fixes =
+            <({double perp, bool aligned, double acc, bool clearTurn})>[];
+        // 3 off, dann 1 on (Blip), dann wieder 3 off — nie 4 am Stück
+        for (var i = 0; i < 3; i++) {
+          fixes.add((perp: 450, aligned: false, acc: 12, clearTurn: false));
+        }
+        fixes.add((
+          perp: 10,
+          aligned: true,
+          acc: 12,
+          clearTurn: false,
+        )); // Blip on
+        for (var i = 0; i < 3; i++) {
+          fixes.add((perp: 450, aligned: false, acc: 12, clearTurn: false));
+        }
+        final r = runFixes(fixes);
+        expect(
+          r.declared,
+          isFalse,
+          reason: 'der On-Blip setzt den Zähler zurück → nie ≥4 am Stück',
+        );
+      },
+    );
 
     test('ECHTES VERFAHREN: 4 durchgehende off-Fixes (gutes GPS) → feuert', () {
       final r = runFixes([
@@ -145,14 +180,56 @@ void main() {
       expect(r.declared, isTrue, reason: 'Schnell-Schiene 3 Fixes');
     });
 
-    test('PARALLELSTRASSE: weit weg aber Kurs passt → feuert ab >2× Korridor',
-        () {
-      final r = runFixes([
-        for (var i = 0; i < 4; i++)
-          (perp: 700, aligned: true, acc: 12, clearTurn: false), // aligned!
-      ]);
-      expect(r.declared, isTrue,
-          reason: '>2× Korridor zählt als off trotz passendem Kurs');
+    test(
+      'PARALLELSTRASSE: weit weg aber Kurs passt → feuert ab >2× Korridor',
+      () {
+        final r = runFixes([
+          for (var i = 0; i < 4; i++)
+            (perp: 700, aligned: true, acc: 12, clearTurn: false), // aligned!
+        ]);
+        expect(
+          r.declared,
+          isTrue,
+          reason: '>2× Korridor zählt als off trotz passendem Kurs',
+        );
+      },
+    );
+
+    test('4s-Max-Cap überstimmt Accuracy-Zähler bei mäßigem GPS', () {
+      // Accuracy 60m verlangt nach alter Formel 15 Off-Fixes. Das widerspricht
+      // der Navi-Anforderung "spätestens 4s". Die Wall-Clock-Cap gewinnt.
+      final required = requiredOffRouteFixes(
+        accuracyMeters: 60,
+        clearWrongTurn: false,
+      );
+      expect(required, 15);
+
+      final t0 = DateTime(2026, 6, 16, 12);
+      const observedCounter = 4;
+      final decision = NavigationRerouteDecisionEngine.evaluate(
+        isOutsideCorridor: true,
+        approachingDestination: false,
+        nearRouteEnd: false,
+        makingForwardProgress: false,
+        maneuverOvershoot: false,
+        headingOpposed: false,
+        distanceMeters: 450,
+        corridorMeters: corridor,
+        offRouteSince: t0.subtract(const Duration(seconds: 4)),
+        now: t0,
+        isRerouting: false,
+        lastRerouteTime: null,
+        lastRerouteFailed: false,
+        speedMps: 13,
+      );
+      final declared =
+          observedCounter >= required ||
+          (decision.clearlyOffRoute && decision.sustained) ||
+          decision.maximumWaitExceeded;
+
+      expect(decision.clearlyOffRoute, isFalse);
+      expect(decision.maximumWaitExceeded, isTrue);
+      expect(declared, isTrue);
     });
   });
 }

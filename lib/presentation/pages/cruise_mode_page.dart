@@ -10787,7 +10787,8 @@ class _CruiseModePageState extends State<CruiseModePage>
       );
       final offRouteDeclared =
           _consecutiveOffRouteFixes >= effRequiredOffFixes ||
-          (rerouteDecision.clearlyOffRoute && rerouteDecision.sustained);
+          (rerouteDecision.clearlyOffRoute && rerouteDecision.sustained) ||
+          rerouteDecision.maximumWaitExceeded;
       if (offRouteDeclared && rerouteDecision.shouldTrigger) {
         _lastRerouteTime = rerouteDecisionAt;
         _offRouteCount = 0;
