@@ -9,4 +9,7 @@ class AppConstants {
 
   static String get supabaseUrl => AppSecrets.supabaseUrl;
   static String get supabaseAnonKey => AppSecrets.supabaseAnonKey;
+
+  static String get googleWebClientId => AppSecrets.googleWebClientId;
+  static String get googleIosClientId => AppSecrets.googleIosClientId;
 }

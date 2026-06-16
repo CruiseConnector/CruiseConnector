@@ -1,5 +1,3 @@
-import 'dart:math' as math;
-
 import 'package:cruise_connect/domain/models/route_maneuver.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/cruise_maneuver_indicator.dart';
 import 'package:flutter/material.dart';

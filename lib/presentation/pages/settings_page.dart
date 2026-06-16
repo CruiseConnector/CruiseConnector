@@ -1,12 +1,14 @@
 import 'dart:async';
 
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
+import 'package:cruise_connect/data/services/auth_service.dart';
 import 'package:cruise_connect/data/services/map_cache_status.dart';
 import 'package:cruise_connect/data/services/notification_settings_service.dart';
 import 'package:cruise_connect/data/services/offline_map_service.dart';
 import 'package:cruise_connect/data/services/poi_settings_service.dart';
 import 'package:cruise_connect/data/services/voice_settings_service.dart';
 import 'package:cruise_connect/application/providers/community_provider.dart';
+import 'package:cruise_connect/presentation/pages/welcome_page.dart';
 import 'package:cruise_connect/presentation/widgets/accent_color_picker.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/routing_onboarding_sheet.dart';
 import 'package:cruise_connect/presentation/widgets/top_toast.dart';
@@ -27,6 +29,7 @@ class _SettingsPageState extends State<SettingsPage> {
   bool _pushNotifications = true;
   bool _metricUnits = true;
   bool _loading = true;
+  bool _deletingAccount = false;
 
   @override
   void initState() {
@@ -139,6 +142,224 @@ class _SettingsPageState extends State<SettingsPage> {
     }
   }
 
+  Future<void> _confirmDeleteAccount() async {
+    if (_deletingAccount) return;
+
+    final warningAccepted = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1C1F26),
+        title: const Text(
+          'Konto endgültig löschen?',
+          style: TextStyle(color: Colors.white),
+        ),
+        content: Text(
+          'Dadurch werden dein Profil, deine Routen, Posts, Gruppen-Daten, '
+          'Fahrzeuge, Medien und lokale App-Daten entfernt. Diese Aktion kann '
+          'nicht rückgängig gemacht werden.',
+          style: TextStyle(
+            color: Colors.white.withValues(alpha: 0.72),
+            height: 1.35,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: Text(
+              'Abbrechen',
+              style: TextStyle(color: Colors.white.withValues(alpha: 0.7)),
+            ),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: Text(
+              'Weiter',
+              style: TextStyle(
+                color: AppAccentColors.accent,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (warningAccepted != true || !mounted) return;
+
+    final typedConfirmation = await _showDeleteAccountTypeDialog();
+    if (typedConfirmation != true || !mounted) return;
+
+    final rootNavigator = Navigator.of(context, rootNavigator: true);
+    var navigatedAway = false;
+    setState(() => _deletingAccount = true);
+    try {
+      await AuthService.deleteCurrentAccount();
+      if (!rootNavigator.mounted) return;
+      navigatedAway = true;
+      rootNavigator.pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const WelcomePage()),
+        (route) => false,
+      );
+    } on AuthException catch (e) {
+      if (!mounted) return;
+      TopToast.show(
+        context,
+        message: _deleteAccountErrorMessage(e.message),
+        icon: Icons.error_outline_rounded,
+        isError: true,
+        duration: const Duration(seconds: 4),
+      );
+    } on TimeoutException {
+      if (!mounted) return;
+      TopToast.show(
+        context,
+        message: 'Supabase ist gerade nicht erreichbar. Verbindung prüfen.',
+        icon: Icons.wifi_off_rounded,
+        isError: true,
+        duration: const Duration(seconds: 4),
+      );
+    } catch (e, stack) {
+      debugPrint('[Settings] Konto löschen fehlgeschlagen: $e\n$stack');
+      if (!mounted) return;
+      TopToast.show(
+        context,
+        message: _deleteAccountErrorMessage(e.toString()),
+        icon: Icons.error_outline_rounded,
+        isError: true,
+        duration: const Duration(seconds: 4),
+      );
+    } finally {
+      if (mounted && !navigatedAway) {
+        setState(() => _deletingAccount = false);
+      }
+    }
+  }
+
+  Future<bool?> _showDeleteAccountTypeDialog() async {
+    final controller = TextEditingController();
+    try {
+      return await showDialog<bool>(
+        context: context,
+        builder: (ctx) => StatefulBuilder(
+          builder: (ctx, setDialogState) {
+            final canDelete = controller.text.trim().toLowerCase() == 'löschen';
+            return AlertDialog(
+              backgroundColor: const Color(0xFF1C1F26),
+              title: const Text(
+                'Letzte Bestätigung',
+                style: TextStyle(color: Colors.white),
+              ),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Tippe Löschen ein, um dein Konto wirklich komplett zu entfernen.',
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.72),
+                      height: 1.35,
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  TextField(
+                    controller: controller,
+                    autofocus: true,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w700,
+                    ),
+                    cursorColor: AppAccentColors.accent,
+                    textCapitalization: TextCapitalization.characters,
+                    onChanged: (_) => setDialogState(() {}),
+                    decoration: InputDecoration(
+                      hintText: 'Löschen',
+                      hintStyle: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.28),
+                      ),
+                      filled: true,
+                      fillColor: const Color(0xFF11151D),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: BorderSide(
+                          color: Colors.white.withValues(alpha: 0.12),
+                        ),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: BorderSide(color: AppAccentColors.accent),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () {
+                    FocusManager.instance.primaryFocus?.unfocus();
+                    Navigator.of(ctx, rootNavigator: true).pop(false);
+                  },
+                  child: Text(
+                    'Abbrechen',
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.7),
+                    ),
+                  ),
+                ),
+                TextButton(
+                  onPressed: canDelete
+                      ? () async {
+                          FocusManager.instance.primaryFocus?.unfocus();
+                          await Future<void>.delayed(
+                            const Duration(milliseconds: 80),
+                          );
+                          if (ctx.mounted) {
+                            Navigator.of(ctx, rootNavigator: true).pop(true);
+                          }
+                        }
+                      : null,
+                  child: Text(
+                    'Konto löschen',
+                    style: TextStyle(
+                      color: canDelete
+                          ? AppAccentColors.accent
+                          : Colors.white.withValues(alpha: 0.25),
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
+      );
+    } finally {
+      controller.dispose();
+    }
+  }
+
+  String _deleteAccountErrorMessage(String message) {
+    final lower = message.toLowerCase();
+    if (lower.contains('not_authenticated') || lower.contains('jwt')) {
+      return 'Bitte melde dich neu an und versuche es nochmal.';
+    }
+    if (lower.contains('failed host lookup') ||
+        lower.contains('socketexception') ||
+        lower.contains('network') ||
+        lower.contains('timed out') ||
+        lower.contains('timeout')) {
+      return 'Supabase ist gerade nicht erreichbar. Verbindung prüfen.';
+    }
+    if (lower.contains('foreign key') || lower.contains('violates')) {
+      return 'Datenbank-Verknüpfung blockiert. Migration bitte nochmal ausführen.';
+    }
+    if (lower.contains('permission denied') || lower.contains('42501')) {
+      return 'RPC-Rechte fehlen. Migration bitte nochmal ausführen.';
+    }
+    if (lower.contains('delete_current_user')) {
+      return 'Account-Loeschfunktion ist noch nicht in Supabase deployed.';
+    }
+    return 'Konto konnte nicht geloescht werden. Bitte erneut versuchen.';
+  }
+
   @override
   Widget build(BuildContext context) {
     final accentProvider = context.watch<AppAccentProvider>();
@@ -222,8 +443,7 @@ class _SettingsPageState extends State<SettingsPage> {
                     builder: (context, _) => _buildSwitchTile(
                       'Sprach-Navigation (Ansagen)',
                       VoiceSettingsService.instance.isEnabled,
-                      (val) =>
-                          VoiceSettingsService.instance.setEnabled(val),
+                      (val) => VoiceSettingsService.instance.setEnabled(val),
                     ),
                   ),
                   const Divider(color: Colors.white10, height: 1),
@@ -237,8 +457,10 @@ class _SettingsPageState extends State<SettingsPage> {
                         context: context,
                         builder: (_) => AlertDialog(
                           backgroundColor: const Color(0xFF1A1E28),
-                          title: const Text('CarPlay & Android Auto',
-                              style: TextStyle(color: Colors.white)),
+                          title: const Text(
+                            'CarPlay & Android Auto',
+                            style: TextStyle(color: Colors.white),
+                          ),
                           content: const Text(
                             'Die Flutter-Bridge ist bereit. Native CarPlay-/AA-Targets '
                             'werden in einem separaten Dev-Sprint angelegt '
@@ -279,18 +501,29 @@ class _SettingsPageState extends State<SettingsPage> {
                       final s = PoiSettingsService.instance;
                       return Column(
                         children: [
-                          _buildSwitchTile('⛽  Tankstellen', s.fuel,
-                              (v) => s.setFuel(v)),
+                          _buildSwitchTile(
+                            '⛽  Tankstellen',
+                            s.fuel,
+                            (v) => s.setFuel(v),
+                          ),
                           const Divider(color: Colors.white10, height: 1),
-                          _buildSwitchTile('🍴  Restaurants', s.restaurant,
-                              (v) => s.setRestaurant(v)),
+                          _buildSwitchTile(
+                            '🍴  Restaurants',
+                            s.restaurant,
+                            (v) => s.setRestaurant(v),
+                          ),
                           const Divider(color: Colors.white10, height: 1),
-                          _buildSwitchTile('☕  Cafés', s.cafe,
-                              (v) => s.setCafe(v)),
+                          _buildSwitchTile(
+                            '☕  Cafés',
+                            s.cafe,
+                            (v) => s.setCafe(v),
+                          ),
                           const Divider(color: Colors.white10, height: 1),
-                          _buildSwitchTile('🔧  Motorrad-Werkstätten',
-                              s.repair,
-                              (v) => s.setRepair(v)),
+                          _buildSwitchTile(
+                            '🔧  Motorrad-Werkstätten',
+                            s.repair,
+                            (v) => s.setRepair(v),
+                          ),
                         ],
                       );
                     },
@@ -307,27 +540,41 @@ class _SettingsPageState extends State<SettingsPage> {
                       final s = NotificationSettingsService.instance;
                       return Column(
                         children: [
-                          _buildSwitchTile('Neue Follower', s.follows,
-                              (v) => s.setFollows(v)),
-                          const Divider(color: Colors.white10, height: 1),
-                          _buildSwitchTile('Likes auf deine Posts', s.likes,
-                              (v) => s.setLikes(v)),
-                          const Divider(color: Colors.white10, height: 1),
-                          _buildSwitchTile('Kommentare', s.comments,
-                              (v) => s.setComments(v)),
-                          const Divider(color: Colors.white10, height: 1),
-                          _buildSwitchTile('Freundschaftsanfragen',
-                              s.friendRequests,
-                              (v) => s.setFriendRequests(v)),
-                          const Divider(color: Colors.white10, height: 1),
-                          _buildSwitchTile('Gruppen-Einladungen',
-                              s.groupInvites,
-                              (v) => s.setGroupInvites(v)),
+                          _buildSwitchTile(
+                            'Neue Follower',
+                            s.follows,
+                            (v) => s.setFollows(v),
+                          ),
                           const Divider(color: Colors.white10, height: 1),
                           _buildSwitchTile(
-                              'Wetter-Tipp morgens (wenn schön)',
-                              s.dailyWeather,
-                              (v) => s.setDailyWeather(v)),
+                            'Likes auf deine Posts',
+                            s.likes,
+                            (v) => s.setLikes(v),
+                          ),
+                          const Divider(color: Colors.white10, height: 1),
+                          _buildSwitchTile(
+                            'Kommentare',
+                            s.comments,
+                            (v) => s.setComments(v),
+                          ),
+                          const Divider(color: Colors.white10, height: 1),
+                          _buildSwitchTile(
+                            'Freundschaftsanfragen',
+                            s.friendRequests,
+                            (v) => s.setFriendRequests(v),
+                          ),
+                          const Divider(color: Colors.white10, height: 1),
+                          _buildSwitchTile(
+                            'Gruppen-Einladungen',
+                            s.groupInvites,
+                            (v) => s.setGroupInvites(v),
+                          ),
+                          const Divider(color: Colors.white10, height: 1),
+                          _buildSwitchTile(
+                            'Wetter-Tipp morgens (wenn schön)',
+                            s.dailyWeather,
+                            (v) => s.setDailyWeather(v),
+                          ),
                         ],
                       );
                     },
@@ -351,10 +598,20 @@ class _SettingsPageState extends State<SettingsPage> {
                 _buildSectionHeader('GEFAHRENZONE'),
                 _buildSectionContainer([
                   ListTile(
-                    leading: Icon(
-                      Icons.delete_outline,
-                      color: AppAccentColors.accent,
-                    ),
+                    enabled: !_deletingAccount,
+                    leading: _deletingAccount
+                        ? SizedBox(
+                            width: 24,
+                            height: 24,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2.4,
+                              color: AppAccentColors.accent,
+                            ),
+                          )
+                        : Icon(
+                            Icons.delete_outline,
+                            color: AppAccentColors.accent,
+                          ),
                     title: Text(
                       'Konto löschen',
                       style: TextStyle(
@@ -362,9 +619,13 @@ class _SettingsPageState extends State<SettingsPage> {
                         fontWeight: FontWeight.bold,
                       ),
                     ),
-                    onTap: () {
-                      // Delete logic
-                    },
+                    subtitle: Text(
+                      _deletingAccount
+                          ? 'Account wird geloescht...'
+                          : 'Profil, Routen, Posts und Medien entfernen',
+                      style: const TextStyle(color: Colors.grey, fontSize: 12),
+                    ),
+                    onTap: _deletingAccount ? null : _confirmDeleteAccount,
                   ),
                 ]),
               ],
@@ -654,8 +915,8 @@ class _SettingsPageState extends State<SettingsPage> {
       icon: Icons.verified_outlined,
       duration: const Duration(seconds: 3),
     );
-    final result =
-        await OfflineMapService.instance.verifyAndRepairDachOverview();
+    final result = await OfflineMapService.instance
+        .verifyAndRepairDachOverview();
     if (!mounted) return;
     if (result.stillMissing == 0) {
       TopToast.show(
@@ -710,8 +971,7 @@ class _SettingsPageState extends State<SettingsPage> {
       ),
     );
     if (confirmed != true) return;
-    final deleted =
-        await OfflineMapService.instance.clearDachOverviewCache();
+    final deleted = await OfflineMapService.instance.clearDachOverviewCache();
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('offline_map_dach_overview_v1');
     if (!mounted) return;
@@ -749,10 +1009,7 @@ class _OfflineMapButton extends StatelessWidget {
           decoration: BoxDecoration(
             color: color.withValues(alpha: 0.12),
             borderRadius: BorderRadius.circular(12),
-            border: Border.all(
-              color: color.withValues(alpha: 0.4),
-              width: 1,
-            ),
+            border: Border.all(color: color.withValues(alpha: 0.4), width: 1),
           ),
           padding: const EdgeInsets.symmetric(vertical: 11, horizontal: 12),
           child: Row(

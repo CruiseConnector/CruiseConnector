@@ -5,7 +5,9 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/core/input_limits.dart';
 import 'package:cruise_connect/data/services/auth_service.dart';
+import 'package:cruise_connect/presentation/pages/home_page.dart';
 import 'package:cruise_connect/presentation/pages/login_page.dart';
+import 'package:cruise_connect/presentation/widgets/auth_social_buttons.dart';
 
 const _authBackground = Color(0xFF0D141E);
 const _authSurface = Color(0xFF151E2A);
@@ -27,6 +29,8 @@ class _RegisterPageState extends State<RegisterPage> {
   final _passwordController = TextEditingController();
   final _confirmController = TextEditingController();
   bool _isLoading = false;
+  bool _googleLoading = false;
+  bool _appleLoading = false;
   bool _obscure = true;
   bool _obscureConf = true;
   String? _errorMsg;
@@ -38,6 +42,55 @@ class _RegisterPageState extends State<RegisterPage> {
     _passwordController.dispose();
     _confirmController.dispose();
     super.dispose();
+  }
+
+  Future<void> _continueWithGoogle() async {
+    await _runSocialLogin(
+      setLoading: (value) => setState(() => _googleLoading = value),
+      action: AuthService.signInWithGoogle,
+    );
+  }
+
+  Future<void> _continueWithApple() async {
+    await _runSocialLogin(
+      setLoading: (value) => setState(() => _appleLoading = value),
+      action: AuthService.signInWithApple,
+    );
+  }
+
+  Future<void> _runSocialLogin({
+    required ValueChanged<bool> setLoading,
+    required Future<void> Function() action,
+  }) async {
+    setLoading(true);
+    setState(() => _errorMsg = null);
+    try {
+      await action();
+      if (!mounted) return;
+      if (AuthService.currentUser != null) {
+        Navigator.of(context).pushAndRemoveUntil(
+          MaterialPageRoute(builder: (_) => const HomePage()),
+          (route) => false,
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Anmeldung geoeffnet. Kehre danach zur App zurueck.'),
+          ),
+        );
+      }
+    } on AuthException catch (e) {
+      if (mounted) setState(() => _errorMsg = _translateError(e.message));
+    } catch (e) {
+      debugPrint('[Register] Social Login Fehler: $e');
+      if (mounted) {
+        setState(
+          () => _errorMsg = 'Anmeldung fehlgeschlagen. Bitte erneut versuchen.',
+        );
+      }
+    } finally {
+      if (mounted) setLoading(false);
+    }
   }
 
   Future<void> _signUp() async {
@@ -81,7 +134,7 @@ class _RegisterPageState extends State<RegisterPage> {
       await showDialog(
         context: context,
         barrierDismissible: false,
-        builder: (_) => AlertDialog(
+        builder: (dialogContext) => AlertDialog(
           backgroundColor: _authSurface,
           shape: RoundedRectangleBorder(
             side: BorderSide(
@@ -108,7 +161,32 @@ class _RegisterPageState extends State<RegisterPage> {
           ),
           actions: [
             TextButton(
-              onPressed: () => Navigator.pop(context),
+              onPressed: () async {
+                try {
+                  await AuthService.resendVerificationEmail(email);
+                  if (!mounted) return;
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(
+                        'Bestaetigungs-E-Mail an $email erneut gesendet.',
+                      ),
+                    ),
+                  );
+                } catch (e) {
+                  if (!mounted) return;
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text(
+                        'E-Mail konnte nicht erneut gesendet werden.',
+                      ),
+                    ),
+                  );
+                }
+              },
+              child: const Text('Erneut senden'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
               child: Text(
                 'Zur Anmeldung',
                 style: TextStyle(
@@ -148,6 +226,15 @@ class _RegisterPageState extends State<RegisterPage> {
     }
     if (m.contains('invalid email')) {
       return 'Ungültige E-Mail-Adresse.';
+    }
+    if (m.contains('abgebrochen') || m.contains('cancel')) {
+      return 'Anmeldung abgebrochen.';
+    }
+    if (m.contains('apple') && m.contains('nicht verfuegbar')) {
+      return 'Apple Anmeldung ist auf diesem Geraet nicht verfuegbar.';
+    }
+    if (m.contains('provider') || m.contains('oauth')) {
+      return 'Social Login ist noch nicht vollstaendig konfiguriert.';
     }
     return 'Registrierung fehlgeschlagen. Bitte erneut versuchen.';
   }
@@ -295,7 +382,39 @@ class _RegisterPageState extends State<RegisterPage> {
                           style: TextStyle(fontSize: 14, color: _authTextMuted),
                         ),
                       ),
-                      const SizedBox(height: 28),
+                      const SizedBox(height: 24),
+
+                      AuthSocialButtons(
+                        googleLoading: _googleLoading,
+                        appleLoading: _appleLoading,
+                        enabled:
+                            !_isLoading && !_googleLoading && !_appleLoading,
+                        onGoogle: _continueWithGoogle,
+                        onApple: _continueWithApple,
+                      ),
+                      const SizedBox(height: 22),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 10),
+                        child: Row(
+                          children: [
+                            const Expanded(child: Divider(color: _authBorder)),
+                            Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                              ),
+                              child: Text(
+                                'oder mit E-Mail',
+                                style: TextStyle(
+                                  color: _authTextMuted.withValues(alpha: 0.72),
+                                  fontSize: 13,
+                                ),
+                              ),
+                            ),
+                            const Expanded(child: Divider(color: _authBorder)),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 22),
 
                       _label('Benutzername'),
                       _inputField(

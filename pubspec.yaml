@@ -81,6 +81,9 @@ dependencies:
   vector_map_tiles: ^8.0.0
   vector_map_tiles_pmtiles: ^1.5.0
   vector_tile_renderer: ^5.2.1
+  google_sign_in: ^7.2.0
+  sign_in_with_apple: ^8.1.0
+  crypto: ^3.0.7
 dev_dependencies:
   flutter_test:
     sdk: flutter

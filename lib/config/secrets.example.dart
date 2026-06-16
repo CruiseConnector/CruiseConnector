@@ -16,4 +16,13 @@ class AppSecrets {
 
   // Supabase – Anon Key (anon-Rolle, kein Admin-Zugriff)
   static const String supabaseAnonKey = 'DEIN_SUPABASE_ANON_KEY';
+  // Google OAuth - Public Client IDs, keine Secrets.
+  // Web Client ID: Google Cloud Console -> APIs & Services -> Credentials.
+  static const String googleWebClientId =
+      'DEIN_GOOGLE_WEB_CLIENT_ID.apps.googleusercontent.com';
+
+  // iOS Client ID: Google Cloud Console -> OAuth Client ID -> iOS.
+  // Android braucht hier normalerweise keinen eigenen Wert.
+  static const String googleIosClientId =
+      'DEIN_GOOGLE_IOS_CLIENT_ID.apps.googleusercontent.com';
 }

@@ -5,6 +5,8 @@ import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/core/input_limits.dart';
 import 'package:cruise_connect/data/services/auth_service.dart';
 import 'package:cruise_connect/presentation/pages/home_page.dart';
+import 'package:cruise_connect/presentation/pages/register_page.dart';
+import 'package:cruise_connect/presentation/widgets/auth_social_buttons.dart';
 
 const _authBackground = Color(0xFF0D141E);
 const _authSurface = Color(0xFF151E2A);
@@ -28,7 +30,10 @@ class _LoginPageState extends State<LoginPage> {
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   bool _isLoading = false;
+  bool _googleLoading = false;
+  bool _appleLoading = false;
   bool _obscure = true;
+  bool _emailNeedsVerification = false;
   String? _errorMsg;
 
   @override
@@ -50,6 +55,7 @@ class _LoginPageState extends State<LoginPage> {
     setState(() {
       _isLoading = true;
       _errorMsg = null;
+      _emailNeedsVerification = false;
     });
 
     try {
@@ -60,12 +66,101 @@ class _LoginPageState extends State<LoginPage> {
         (route) => false,
       );
     } on AuthException catch (e) {
-      setState(() => _errorMsg = _translateError(e.message));
+      final needsVerification = e.message.toLowerCase().contains(
+        'email not confirmed',
+      );
+      setState(() {
+        _errorMsg = _translateError(e.message);
+        _emailNeedsVerification = needsVerification;
+      });
     } catch (e) {
       debugPrint('[Login] Unerwarteter Fehler: $e');
       setState(
         () => _errorMsg = 'Login fehlgeschlagen. Bitte erneut versuchen.',
       );
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _continueWithGoogle() async {
+    await _runSocialLogin(
+      setLoading: (value) => setState(() => _googleLoading = value),
+      action: AuthService.signInWithGoogle,
+    );
+  }
+
+  Future<void> _continueWithApple() async {
+    await _runSocialLogin(
+      setLoading: (value) => setState(() => _appleLoading = value),
+      action: AuthService.signInWithApple,
+    );
+  }
+
+  Future<void> _runSocialLogin({
+    required ValueChanged<bool> setLoading,
+    required Future<void> Function() action,
+  }) async {
+    setLoading(true);
+    setState(() {
+      _errorMsg = null;
+      _emailNeedsVerification = false;
+    });
+    try {
+      await action();
+      if (!mounted) return;
+      if (AuthService.currentUser != null) {
+        Navigator.of(context).pushAndRemoveUntil(
+          MaterialPageRoute(builder: (_) => const HomePage()),
+          (route) => false,
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Anmeldung geoeffnet. Kehre danach zur App zurueck.'),
+          ),
+        );
+      }
+    } on AuthException catch (e) {
+      if (mounted) setState(() => _errorMsg = _translateError(e.message));
+    } catch (e) {
+      debugPrint('[Login] Social Login Fehler: $e');
+      if (mounted) {
+        setState(
+          () => _errorMsg = 'Anmeldung fehlgeschlagen. Bitte erneut versuchen.',
+        );
+      }
+    } finally {
+      if (mounted) setLoading(false);
+    }
+  }
+
+  Future<void> _resendVerificationEmail() async {
+    final email = _emailController.text.trim();
+    if (email.isEmpty) {
+      setState(() => _errorMsg = 'Bitte E-Mail eintragen.');
+      return;
+    }
+
+    setState(() => _isLoading = true);
+    try {
+      await AuthService.resendVerificationEmail(email);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Bestaetigungs-E-Mail an $email erneut gesendet.'),
+        ),
+      );
+    } on AuthException catch (e) {
+      if (mounted) setState(() => _errorMsg = _translateError(e.message));
+    } catch (e) {
+      debugPrint('[Login] Verification resend Fehler: $e');
+      if (mounted) {
+        setState(
+          () => _errorMsg =
+              'E-Mail konnte nicht erneut gesendet werden. Bitte kurz warten.',
+        );
+      }
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -78,6 +173,15 @@ class _LoginPageState extends State<LoginPage> {
     }
     if (m.contains('email not confirmed')) {
       return 'Bitte bestätige zuerst deine E-Mail.';
+    }
+    if (m.contains('abgebrochen') || m.contains('cancel')) {
+      return 'Anmeldung abgebrochen.';
+    }
+    if (m.contains('google login ist noch nicht konfiguriert')) {
+      return 'Google Login ist noch nicht fertig konfiguriert.';
+    }
+    if (m.contains('apple') && m.contains('nicht verfuegbar')) {
+      return 'Apple Anmeldung ist auf diesem Geraet nicht verfuegbar.';
     }
     if (m.contains('too many requests')) {
       return 'Zu viele Versuche. Bitte kurz warten.';
@@ -303,6 +407,19 @@ class _LoginPageState extends State<LoginPage> {
                           ),
                         ),
 
+                      if (_emailNeedsVerification)
+                        Align(
+                          alignment: Alignment.centerRight,
+                          child: TextButton.icon(
+                            onPressed: _isLoading
+                                ? null
+                                : _resendVerificationEmail,
+                            icon: const Icon(Icons.mark_email_unread_outlined),
+                            label: const Text('E-Mail erneut senden'),
+                            style: TextButton.styleFrom(foregroundColor: brand),
+                          ),
+                        ),
+
                       const SizedBox(height: 28),
 
                       // Anmelden Button
@@ -359,6 +476,65 @@ class _LoginPageState extends State<LoginPage> {
                       //     ),
                       //   ),
                       // ),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 10),
+                        child: Row(
+                          children: [
+                            const Expanded(child: Divider(color: _authBorder)),
+                            Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                              ),
+                              child: Text(
+                                'oder',
+                                style: TextStyle(
+                                  color: _authTextMuted.withValues(alpha: 0.72),
+                                  fontSize: 13,
+                                ),
+                              ),
+                            ),
+                            const Expanded(child: Divider(color: _authBorder)),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 18),
+                      AuthSocialButtons(
+                        googleLoading: _googleLoading,
+                        appleLoading: _appleLoading,
+                        enabled:
+                            !_isLoading && !_googleLoading && !_appleLoading,
+                        onGoogle: _continueWithGoogle,
+                        onApple: _continueWithApple,
+                      ),
+                      const SizedBox(height: 24),
+                      Center(
+                        child: GestureDetector(
+                          onTap: () => Navigator.pushReplacement(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => const RegisterPage(),
+                            ),
+                          ),
+                          child: RichText(
+                            text: TextSpan(
+                              text: 'Noch kein Konto? ',
+                              style: const TextStyle(
+                                color: _authTextMuted,
+                                fontSize: 14,
+                              ),
+                              children: [
+                                TextSpan(
+                                  text: 'Jetzt registrieren',
+                                  style: TextStyle(
+                                    color: brand,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
                       const SizedBox(height: 50),
                     ],
                   ),

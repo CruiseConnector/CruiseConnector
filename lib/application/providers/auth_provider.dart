@@ -14,6 +14,9 @@ class AuthProvider extends ChangeNotifier {
     // Auf Auth-Änderungen (Login / Logout) reagieren
     _authSub = AuthService.authStateChanges.listen((state) {
       _currentUser = state.session?.user;
+      if (_currentUser != null) {
+        unawaited(AuthService.ensureCurrentUserProfile());
+      }
       notifyListeners();
     });
   }
