@@ -21,6 +21,28 @@ void main() {
     );
   }
 
+  // 2026-06-16 (vucko O9): echte OSM-Topologie. entry/exit/arms in Kompass-Grad.
+  RouteManeuver topoRoundabout({
+    required int exit,
+    required double entry,
+    required double exitB,
+    required List<double> arms,
+  }) {
+    return RouteManeuver(
+      latitude: 47.4,
+      longitude: 9.7,
+      routeIndex: 5,
+      icon: Icons.roundabout_right,
+      announcement: 'Im Kreisverkehr Ausfahrt $exit nehmen.',
+      instruction: 'Im Kreisverkehr Ausfahrt $exit nehmen.',
+      maneuverType: ManeuverType.roundabout,
+      roundaboutExitNumber: exit,
+      roundaboutEntryBearing: entry,
+      roundaboutExitBearing: exitB,
+      roundaboutArmBearings: arms,
+    );
+  }
+
   Widget harness(RouteManeuver m) => MaterialApp(
         home: Scaffold(
           backgroundColor: const Color(0xFF0b0e13),
@@ -87,4 +109,80 @@ void main() {
       );
     });
   }
+
+  // ── ECHTE OSM-TOPOLOGIE (vucko O9) ──────────────────────────────────────
+  // Einfahrt aus Süden (entry 180°). Rechtsverkehr/CCW: 1. Ausfahrt = Ost (90°,
+  // rechts), 2. = Nord (0°, geradeaus), 3. = West (270°, links). Das Symbol muss
+  // ALLE realen Arme an ihren echten Winkeln zeigen + die genommene hervorheben.
+  testWidgets('Topo 4-armig — 1. Ausfahrt rechts', (tester) async {
+    await tester.pumpWidget(harness(topoRoundabout(
+      exit: 1,
+      entry: 180,
+      exitB: 90,
+      arms: [0, 90, 180, 270],
+    )));
+    await tester.pumpAndSettle();
+    await expectLater(
+      find.byType(CruiseManeuverIndicator),
+      matchesGoldenFile('goldens/roundabout_topo4_exit1.png'),
+    );
+  });
+
+  testWidgets('Topo 4-armig — 2. Ausfahrt geradeaus', (tester) async {
+    await tester.pumpWidget(harness(topoRoundabout(
+      exit: 2,
+      entry: 180,
+      exitB: 0,
+      arms: [0, 90, 180, 270],
+    )));
+    await tester.pumpAndSettle();
+    await expectLater(
+      find.byType(CruiseManeuverIndicator),
+      matchesGoldenFile('goldens/roundabout_topo4_exit2.png'),
+    );
+  });
+
+  testWidgets('Topo 4-armig — 3. Ausfahrt links', (tester) async {
+    await tester.pumpWidget(harness(topoRoundabout(
+      exit: 3,
+      entry: 180,
+      exitB: 270,
+      arms: [0, 90, 180, 270],
+    )));
+    await tester.pumpAndSettle();
+    await expectLater(
+      find.byType(CruiseManeuverIndicator),
+      matchesGoldenFile('goldens/roundabout_topo4_exit3.png'),
+    );
+  });
+
+  // 3-armiger Y-Kreisel (asymmetrisch): Einfahrt Süd, Arme Süd/NO/NW.
+  testWidgets('Topo 3-armig Y — Ausfahrt NO', (tester) async {
+    await tester.pumpWidget(harness(topoRoundabout(
+      exit: 1,
+      entry: 180,
+      exitB: 55,
+      arms: [180, 55, 305],
+    )));
+    await tester.pumpAndSettle();
+    await expectLater(
+      find.byType(CruiseManeuverIndicator),
+      matchesGoldenFile('goldens/roundabout_topo3_y.png'),
+    );
+  });
+
+  // 5-armiger asymmetrischer Kreisel.
+  testWidgets('Topo 5-armig asymmetrisch', (tester) async {
+    await tester.pumpWidget(harness(topoRoundabout(
+      exit: 2,
+      entry: 200,
+      exitB: 20,
+      arms: [200, 20, 80, 140, 300],
+    )));
+    await tester.pumpAndSettle();
+    await expectLater(
+      find.byType(CruiseManeuverIndicator),
+      matchesGoldenFile('goldens/roundabout_topo5.png'),
+    );
+  });
 }

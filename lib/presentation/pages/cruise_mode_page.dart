@@ -49,6 +49,7 @@ import 'package:cruise_connect/data/services/car_command_listener.dart';
 import 'package:cruise_connect/data/services/frame_timing_utils.dart';
 import 'package:cruise_connect/data/services/group_route_data_builder.dart';
 import 'package:cruise_connect/data/services/route_access_plan.dart';
+import 'package:cruise_connect/data/services/roundabout_topology_service.dart';
 import 'package:cruise_connect/data/services/route_service.dart';
 import 'package:cruise_connect/data/services/route_cache_service.dart';
 import 'package:cruise_connect/data/services/route_completion_candidate_service.dart';
@@ -59,7 +60,7 @@ import 'package:cruise_connect/data/services/smart_reroute_engine.dart';
 import 'package:cruise_connect/data/services/saved_routes_service.dart';
 import 'package:cruise_connect/domain/models/place_suggestion.dart';
 import 'package:cruise_connect/domain/models/route_maneuver.dart'
-    show RouteManeuver, RouteWindowMatch;
+    show RouteManeuver, RouteWindowMatch, ManeuverType;
 import 'package:cruise_connect/domain/models/route_result.dart';
 import 'package:cruise_connect/domain/models/saved_route.dart';
 import 'package:cruise_connect/presentation/widgets/user_avatar.dart';
@@ -10930,6 +10931,9 @@ class _CruiseModePageState extends State<CruiseModePage>
         HapticFeedback.heavyImpact();
       }
     }
+    // 2026-06-16 (vucko O9): Echte Kreisverkehr-Topologie lazy holen, sobald
+    // ein Kreisel ins Anfahr-Fenster (≤1500m) rückt — pro Tick max. 1 Fetch.
+    _maybeEnrichRoundaboutTopology();
     // 2026-05-23 (vucko Task #16): 3-Stufen-Annäherungs-Haptic.
     // Jede Stufe feuert nur 1× pro Manöver — verhindert Spam bei
     // GPS-Updates alle 200-500ms im Annäherungsbereich.
@@ -13205,6 +13209,70 @@ class _CruiseModePageState extends State<CruiseModePage>
       }
     }
     _activeManeuverIndex = _maneuvers.length - 1;
+  }
+
+  // 2026-06-16 (vucko O9): Echte Kreisverkehr-Topologie lazy beim Anfahren
+  // holen. Sucht das nächste Kreisverkehr-Manöver ab dem aktiven Index, das
+  // noch keine Arm-Winkel hat und <1500m entfernt ist. Liegt das Ergebnis schon
+  // im Cache (synchron), wird es sofort angewandt; sonst genau EIN Overpass-Fetch
+  // ausgelöst (dedupliziert im Service), dessen Resultat danach ins Manöver
+  // gespiegelt wird. Schlägt der Fetch fehl, markieren wir das Manöver mit einer
+  // leeren Liste → der Painter fällt sauber auf entry/exit/exit_number zurück und
+  // wir versuchen es nicht endlos neu.
+  void _maybeEnrichRoundaboutTopology() {
+    if (_maneuvers.isEmpty) return;
+    final start = _activeManeuverIndex.clamp(0, _maneuvers.length - 1);
+    final origin = _userLocation;
+    for (var i = start; i < _maneuvers.length; i++) {
+      final m = _maneuvers[i];
+      if (m.maneuverType != ManeuverType.roundabout) continue;
+      if (m.roundaboutArmBearings != null) continue; // schon aufgelöst
+      // Nur anfahrende Kreisel (≤1500m) enrichen — spart Calls weit voraus.
+      if (origin != null) {
+        final d = geo.Geolocator.distanceBetween(
+          origin.latitude,
+          origin.longitude,
+          m.latitude,
+          m.longitude,
+        );
+        if (d > 1500) break; // weitere liegen noch weiter weg → Schluss
+      }
+      final svc = RoundaboutTopologyService.instance;
+      if (svc.isResolved(m.latitude, m.longitude)) {
+        final topo = svc.cached(m.latitude, m.longitude);
+        _applyRoundaboutTopology(i, topo?.armBearings ?? const <double>[]);
+      } else {
+        final lat = m.latitude;
+        final lng = m.longitude;
+        svc.fetch(lat, lng).then((topo) {
+          if (!mounted) return;
+          // Index könnte inzwischen anders sein → über Koordinate wiederfinden.
+          for (var j = 0; j < _maneuvers.length; j++) {
+            final mm = _maneuvers[j];
+            if (mm.maneuverType == ManeuverType.roundabout &&
+                mm.roundaboutArmBearings == null &&
+                (mm.latitude - lat).abs() < 1e-6 &&
+                (mm.longitude - lng).abs() < 1e-6) {
+              _applyRoundaboutTopology(
+                j,
+                topo?.armBearings ?? const <double>[],
+              );
+              break;
+            }
+          }
+        });
+      }
+      return; // pro Tick nur das nächste Manöver behandeln
+    }
+  }
+
+  void _applyRoundaboutTopology(int index, List<double> arms) {
+    if (index < 0 || index >= _maneuvers.length) return;
+    if (_maneuvers[index].roundaboutArmBearings != null) return;
+    _maneuvers[index] = _maneuvers[index].copyWith(
+      roundaboutArmBearings: arms,
+    );
+    _safeSetState(() {});
   }
 
   // ═══════════════════════ CAMERA ═══════════════════════════════════════════

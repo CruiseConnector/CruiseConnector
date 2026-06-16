@@ -15,6 +15,9 @@ class RouteManeuver {
     this.maneuverType = ManeuverType.normal,
     this.roundaboutExitNumber,
     this.roundaboutTurnAngleRad,
+    this.roundaboutEntryBearing,
+    this.roundaboutExitBearing,
+    this.roundaboutArmBearings,
   });
 
   final double latitude;
@@ -33,6 +36,18 @@ class RouteManeuver {
   /// Painter fällt auf die synthetische Gleichverteilung zurück.
   final double? roundaboutTurnAngleRad;
 
+  /// 2026-06-16 (vucko O9): Echte Kreisverkehr-Topologie für ein akkurates
+  /// Symbol (wie Apple/Google). Kompass-Winkel (0..360°):
+  /// - [roundaboutEntryBearing]: Richtung, aus der man EINFÄHRT (= Arm zur
+  ///   Herkunft) — wird im Painter nach unten gedreht.
+  /// - [roundaboutExitBearing]: Richtung der GENOMMENEN Ausfahrt.
+  /// Beide aus der Routen-Geometrie. [roundaboutArmBearings] = ALLE Arme (aus
+  /// OpenStreetMap/Overpass, lazy beim Anfahren geholt); null/leer → Painter
+  /// fällt auf entry+exit+exit_number zurück.
+  final double? roundaboutEntryBearing;
+  final double? roundaboutExitBearing;
+  final List<double>? roundaboutArmBearings;
+
   bool get isArrival => icon == Icons.flag;
 
   /// 2026-06-13 (vucko J3): Kopie mit überschriebenen Feldern. Wird beim
@@ -49,6 +64,9 @@ class RouteManeuver {
     ManeuverType? maneuverType,
     int? roundaboutExitNumber,
     double? roundaboutTurnAngleRad,
+    double? roundaboutEntryBearing,
+    double? roundaboutExitBearing,
+    List<double>? roundaboutArmBearings,
   }) {
     return RouteManeuver(
       latitude: latitude ?? this.latitude,
@@ -61,6 +79,12 @@ class RouteManeuver {
       roundaboutExitNumber: roundaboutExitNumber ?? this.roundaboutExitNumber,
       roundaboutTurnAngleRad:
           roundaboutTurnAngleRad ?? this.roundaboutTurnAngleRad,
+      roundaboutEntryBearing:
+          roundaboutEntryBearing ?? this.roundaboutEntryBearing,
+      roundaboutExitBearing:
+          roundaboutExitBearing ?? this.roundaboutExitBearing,
+      roundaboutArmBearings:
+          roundaboutArmBearings ?? this.roundaboutArmBearings,
     );
   }
 }

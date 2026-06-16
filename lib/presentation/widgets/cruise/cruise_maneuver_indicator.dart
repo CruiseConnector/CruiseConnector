@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 
@@ -78,16 +79,7 @@ class CruiseManeuverIndicator extends StatelessWidget {
             const SizedBox(width: 14),
           ],
           if (isRoundabout)
-            SizedBox(
-              width: 48,
-              height: 48,
-              child: CustomPaint(
-                painter: _RoundaboutPainter(
-                  exitNumber: maneuver.roundaboutExitNumber ?? 1,
-                  turnAngleRad: maneuver.roundaboutTurnAngleRad,
-                ),
-              ),
-            )
+            RoundaboutSymbol(maneuver: maneuver, size: 50)
           else
             Container(
               width: 48,
@@ -227,6 +219,37 @@ class CruiseManeuverIndicator extends StatelessWidget {
   }
 }
 
+/// 2026-06-16 (vucko O9): Eigenständiges Kreisverkehr-Symbol (für das Banner,
+/// CarPlay/Android-Auto und Golden-Tests gleichermaßen). Rendert die echte
+/// Topologie aus dem Manöver (entry/exit/arms) bzw. den Fallback.
+class RoundaboutSymbol extends StatelessWidget {
+  const RoundaboutSymbol({
+    super.key,
+    required this.maneuver,
+    this.size = 50,
+  });
+
+  final RouteManeuver maneuver;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: size,
+      height: size,
+      child: CustomPaint(
+        painter: _RoundaboutPainter(
+          exitNumber: maneuver.roundaboutExitNumber ?? 1,
+          turnAngleRad: maneuver.roundaboutTurnAngleRad,
+          entryBearing: maneuver.roundaboutEntryBearing,
+          exitBearing: maneuver.roundaboutExitBearing,
+          armBearings: maneuver.roundaboutArmBearings,
+        ),
+      ),
+    );
+  }
+}
+
 /// Zeichnet einen Kreisverkehr mit markierter Ausfahrt.
 ///
 /// Layout (DACH/Rechtsverkehr):
@@ -238,111 +261,191 @@ class CruiseManeuverIndicator extends StatelessWidget {
 ///   Austritts-Winkel gezeichnet statt der synthetischen Gleichverteilung —
 ///   siehe [roundaboutExitAngleFromTurnAngle].
 class _RoundaboutPainter extends CustomPainter {
-  _RoundaboutPainter({required this.exitNumber, this.turnAngleRad});
+  _RoundaboutPainter({
+    required this.exitNumber,
+    this.turnAngleRad,
+    this.entryBearing,
+    this.exitBearing,
+    this.armBearings,
+  });
 
   final int exitNumber;
 
-  /// Echter GH-Austritts-Winkel (Radiant, 0 = geradeaus, - = rechts, + = links
-  /// in DACH/Rechtsverkehr, weil die Kreisfahrt dort gegen den Uhrzeigersinn ist).
-  /// null → Fallback auf Gleichverteilung (Mapbox-Pfad).
+  /// GraphHopper `turn_angle` (Radiant) — Fallback für den Ausfahrtswinkel.
   final double? turnAngleRad;
+
+  /// Kompass-Winkel (0..360°) der Einfahrt (Richtung zur Herkunft) bzw. der
+  /// genommenen Ausfahrt — aus der gefahrenen Geometrie.
+  final double? entryBearing;
+  final double? exitBearing;
+
+  /// 2026-06-16 (vucko O9): ALLE Arme des Kreisels (Kompass-Winkel, aus OSM).
+  /// Vorhanden ⇒ echte Topologie (3-/4-/5-/6-armig, asymmetrisch) wie Apple/
+  /// Google. null/leer ⇒ Fallback auf Einfahrt + genommene Ausfahrt.
+  final List<double>? armBearings;
+
+  /// Kompass-Bearing → Screen-Winkel (y-down), so dass die EINFAHRT unten (π/2)
+  /// liegt. Rechtskurve→rechts, geradeaus→oben, Linkskurve→links (verifiziert).
+  double _screen(double bearing) =>
+      (bearing - (entryBearing ?? 0) + 90.0) * math.pi / 180.0;
+
+  int _nearestArm(List<double> arms, double bearing) {
+    var best = 0;
+    var bestD = 999.0;
+    for (var i = 0; i < arms.length; i++) {
+      var d = (arms[i] - bearing).abs() % 360.0;
+      if (d > 180) d = 360 - d;
+      if (d < bestD) {
+        bestD = d;
+        best = i;
+      }
+    }
+    return best;
+  }
 
   @override
   void paint(Canvas canvas, Size size) {
-    // 2026-06-16 (vucko O5, Geräte-Video „Symbol oft falsch/unklar, Pfeil springt
-    // links/rechts"): Die Ausfahrts-NUMMER ist die stabile Wahrheit (direkt aus
-    // GraphHopper exit_number) — sie wird jetzt GROSS in die Mitte gezeichnet, so
-    // liest der Fahrer „1/2/3…" sofort, ohne den kleinen Pfeilwinkel deuten zu
-    // müssen (Apple-/Google-Stil). Der Richtungspfeil wird NUR gezeichnet, wenn
-    // der ECHTE Geometrie-Winkel (turn_angle) vorliegt; der synthetische
-    // Gleichverteilungs-Fallback (sprang je Frame zwischen links/rechts und stellte
-    // die Ausfahrt falsch dar) ist ENTFERNT. So ist das Symbol bei JEDEM Kreisel
-    // eindeutig UND stabil. Canvas y-down: 0 = rechts, π/2 = unten (Einfahrt),
-    // −π/2 = oben.
+    // 2026-06-16 (vucko O9, User-Figma-Referenz): Das Symbol zeigt den
+    // Kreisverkehr so, wie er WIRKLICH aussieht — Hub + Ring + ALLE Arme an
+    // ihren echten Winkeln (aus OSM), die Einfahrt nach unten gedreht, die
+    // genommene Ausfahrt + Fahrlinie in Akzentfarbe hervorgehoben. Liegen keine
+    // OSM-Arme vor, fällt es auf Einfahrt + genommene Ausfahrt (Geometrie/
+    // turn_angle) zurück — nie eine erfundene Topologie. Canvas y-down.
     final w = size.width;
     final center = Offset(w / 2, w / 2);
-    final ringR = w * 0.34; // Fahrbahn-Ring
-    final hubR = w * 0.13; // Kreisinsel
-    final stubOut = w * 0.13; // Überstand der Ausfahrt-Stummel
+    final ringR = w * 0.30;
+    final hubR = w * 0.115;
+    final stubOut = w * 0.155;
     final accent = AppAccentColors.accent;
     final ringRect = Rect.fromCircle(center: center, radius: ringR);
-    const entryAngle = math.pi / 2; // unten = Einfahrt
+    const entryScreen = math.pi / 2; // unten
 
-    Offset onRing(double a, double r) =>
+    Offset on(double a, double r) =>
         Offset(center.dx + r * math.cos(a), center.dy + r * math.sin(a));
 
-    final faint = Paint()
-      ..color = Colors.white.withValues(alpha: 0.32)
+    final ringPaint = Paint()
+      ..color = Colors.white.withValues(alpha: 0.30)
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 2.0
+      ..strokeWidth = w * 0.045;
+    final armPaint = Paint()
+      ..color = Colors.white.withValues(alpha: 0.34)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = w * 0.05
       ..strokeCap = StrokeCap.round;
     final accentStroke = Paint()
       ..color = accent
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 3.2
+      ..strokeWidth = w * 0.072
       ..strokeCap = StrokeCap.round;
+    final armFill = Paint()
+      ..color = Colors.white.withValues(alpha: 0.34)
+      ..style = PaintingStyle.fill;
+    final accentFill = Paint()
+      ..color = accent
+      ..style = PaintingStyle.fill;
 
-    // Kreisinsel (Hub) + Fahrbahn-Ring.
+    // Hub + Ring.
     canvas.drawCircle(
       center,
       hubR,
       Paint()
-        ..color = Colors.white.withValues(alpha: 0.13)
+        ..color = Colors.white.withValues(alpha: 0.16)
         ..style = PaintingStyle.fill,
     );
-    canvas.drawCircle(center, ringR, faint);
-    // Einfahrt von unten (immer).
-    canvas.drawLine(
-      onRing(entryAngle, ringR + stubOut),
-      onRing(entryAngle, ringR),
-      faint,
-    );
+    canvas.drawCircle(center, ringR, ringPaint);
 
-    final realTurnAngle = turnAngleRad;
-    if (realTurnAngle != null) {
-      final exitAngle = roundaboutExitAngleFromTurnAngle(realTurnAngle);
-      // CCW-Sweep (Rechtsverkehr) von Einfahrt zur Ausfahrt — negativ in y-down.
-      var sweep = exitAngle - entryAngle;
+    void exitStub(double screenAngle, {required bool highlight}) {
+      final p = highlight ? accentStroke : armPaint;
+      final outer = on(screenAngle, ringR + stubOut);
+      canvas.drawLine(on(screenAngle, ringR), outer, p);
+      final head = highlight ? w * 0.135 : w * 0.085;
+      final spread = highlight ? 0.5 : 0.6;
+      final aL = Offset(
+        outer.dx - head * math.cos(screenAngle - spread),
+        outer.dy - head * math.sin(screenAngle - spread),
+      );
+      final aR = Offset(
+        outer.dx - head * math.cos(screenAngle + spread),
+        outer.dy - head * math.sin(screenAngle + spread),
+      );
+      canvas.drawPath(
+        Path()
+          ..moveTo(outer.dx, outer.dy)
+          ..lineTo(aL.dx, aL.dy)
+          ..lineTo(aR.dx, aR.dy)
+          ..close(),
+        highlight ? accentFill : armFill,
+      );
+    }
+
+    void driveArc(double takenScreen) {
+      var sweep = takenScreen - entryScreen;
       while (sweep > 0) {
         sweep -= 2 * math.pi;
       }
       while (sweep <= -2 * math.pi) {
         sweep += 2 * math.pi;
       }
-      // Ausfahrten, an denen man VORBEIfährt (Anzahl = exit_number − 1), als
-      // dezente Stummel gleichverteilt im gefahrenen Bogen → zahl-genau je
-      // Kreisverkehr (mehr Ausfahrten vorher ⇒ mehr Stummel).
+      if (sweep.abs() > 0.04) {
+        canvas.drawArc(ringRect, entryScreen, sweep, false, accentStroke);
+      }
+    }
+
+    // Einfahrt-Stummel (unten) — Teil der Fahrlinie, daher in Akzentfarbe von
+    // außen bis an den Ring (wie Apple/Google: durchgehender Pfad rein → Bogen →
+    // raus). Ohne Pfeilspitze (Pfeil sitzt nur an der genommenen Ausfahrt).
+    canvas.drawLine(
+      on(entryScreen, ringR + stubOut),
+      on(entryScreen, ringR),
+      accentStroke,
+    );
+
+    final arms = armBearings;
+    // Genommene Ausfahrt als Screen-Winkel: echte exitBearing bevorzugt, sonst
+    // turn_angle.
+    double? takenScreen;
+    if (entryBearing != null && exitBearing != null) {
+      takenScreen = _screen(exitBearing!);
+    } else if (turnAngleRad != null) {
+      takenScreen = roundaboutExitAngleFromTurnAngle(turnAngleRad!);
+    }
+
+    // ── ECHTE TOPOLOGIE (OSM-Arme vorhanden) ──────────────────────────────
+    if (arms != null && arms.length >= 2 && entryBearing != null) {
+      final entryIdx = _nearestArm(arms, entryBearing!);
+      final takenIdx = exitBearing != null
+          ? _nearestArm(arms, exitBearing!)
+          : -1;
+      for (var i = 0; i < arms.length; i++) {
+        if (i == entryIdx) continue; // Einfahrt schon gezeichnet
+        if (i == takenIdx) continue; // Ausfahrt unten als Highlight
+        exitStub(_screen(arms[i]), highlight: false);
+      }
+      final ts = takenIdx >= 0 ? _screen(arms[takenIdx]) : takenScreen;
+      if (ts != null) {
+        driveArc(ts);
+        exitStub(ts, highlight: true);
+      }
+      return;
+    }
+
+    // ── FALLBACK (keine OSM-Arme): Einfahrt + genommene Ausfahrt ───────────
+    if (takenScreen != null) {
+      // Ausfahrten, an denen man vorbeifährt (Näherung über exit_number).
+      var sweep = takenScreen - entryScreen;
+      while (sweep > 0) {
+        sweep -= 2 * math.pi;
+      }
+      while (sweep <= -2 * math.pi) {
+        sweep += 2 * math.pi;
+      }
       final passed = exitNumber.clamp(1, 12) - 1;
       for (var i = 1; i <= passed; i++) {
-        final a = entryAngle + sweep * (i / exitNumber);
-        canvas.drawLine(onRing(a, ringR), onRing(a, ringR + stubOut), faint);
+        exitStub(entryScreen + sweep * (i / exitNumber), highlight: false);
       }
-      // Hervorgehobene Fahrlinie auf dem Ring (Einfahrt → eigene Ausfahrt).
-      canvas.drawArc(ringRect, entryAngle, sweep, false, accentStroke);
-      // Ausfahrts-Pfeil nach außen am ECHTEN Winkel.
-      final outer = onRing(exitAngle, ringR + stubOut + 1);
-      canvas.drawLine(onRing(exitAngle, ringR), outer, accentStroke);
-      const head = 5.5;
-      final aLeft = Offset(
-        outer.dx - head * math.cos(exitAngle - 0.5),
-        outer.dy - head * math.sin(exitAngle - 0.5),
-      );
-      final aRight = Offset(
-        outer.dx - head * math.cos(exitAngle + 0.5),
-        outer.dy - head * math.sin(exitAngle + 0.5),
-      );
-      canvas.drawPath(
-        Path()
-          ..moveTo(outer.dx, outer.dy)
-          ..lineTo(aLeft.dx, aLeft.dy)
-          ..lineTo(aRight.dx, aRight.dy)
-          ..close(),
-        Paint()
-          ..color = accent
-          ..style = PaintingStyle.fill,
-      );
+      driveArc(takenScreen);
+      exitStub(takenScreen, highlight: true);
     } else {
-      // Kein echter Winkel → keine erfundene Ausfahrt; Nummer als Sicherheit.
       final tp = TextPainter(
         text: TextSpan(
           text: exitNumber.clamp(1, 9).toString(),
@@ -363,9 +466,12 @@ class _RoundaboutPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_RoundaboutPainter oldDelegate) =>
-      oldDelegate.exitNumber != exitNumber ||
-      oldDelegate.turnAngleRad != turnAngleRad;
+  bool shouldRepaint(_RoundaboutPainter o) =>
+      o.exitNumber != exitNumber ||
+      o.turnAngleRad != turnAngleRad ||
+      o.entryBearing != entryBearing ||
+      o.exitBearing != exitBearing ||
+      !listEquals(o.armBearings, armBearings);
 }
 
 @visibleForTesting

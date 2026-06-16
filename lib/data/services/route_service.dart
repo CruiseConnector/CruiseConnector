@@ -14,6 +14,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:cruise_connect/core/constants.dart';
 import 'package:cruise_connect/data/services/navigation_guidance_utils.dart';
 import 'package:cruise_connect/data/services/prepared_route_buffer.dart';
+import 'package:cruise_connect/data/services/roundabout_topology_service.dart';
 import 'package:cruise_connect/data/services/route_access_plan.dart';
 import 'package:cruise_connect/data/services/route_cache_service.dart';
 import 'package:cruise_connect/data/services/route_generation_coordinator.dart';
@@ -9211,6 +9212,24 @@ class RouteService {
               : ManeuverType.normal,
           roundaboutExitNumber: exitNumber,
           roundaboutTurnAngleRad: turnAngleRad,
+          // 2026-06-16 (vucko O9): Einfahrt-/Ausfahrt-Kompasswinkel aus der
+          // gefahrenen Geometrie — der Painter dreht damit die Einfahrt nach
+          // unten und hebt die echte Ausfahrt hervor. Arme (alle) kommen lazy
+          // aus OSM dazu (RoundaboutTopologyService).
+          roundaboutEntryBearing: isRoundabout
+              ? RoundaboutTopologyService.armBearingAlong(
+                  routeCoordinates,
+                  coordIdx,
+                  -1,
+                )
+              : null,
+          roundaboutExitBearing: isRoundabout
+              ? RoundaboutTopologyService.armBearingAlong(
+                  routeCoordinates,
+                  exitIdx ?? coordIdx,
+                  1,
+                )
+              : null,
         ),
       );
     }
