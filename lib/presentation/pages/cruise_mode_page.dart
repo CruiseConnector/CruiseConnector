@@ -10,7 +10,8 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/foundation.dart' show kDebugMode, kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
-import 'package:flutter/services.dart' show HapticFeedback;
+import 'package:flutter/services.dart'
+    show HapticFeedback, SystemChrome, DeviceOrientation;
 import 'package:geolocator/geolocator.dart' as geo;
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
@@ -508,6 +509,13 @@ class _CruiseModePageState extends State<CruiseModePage>
   // gut-vermessenem Verfahren (>2× Korridor & gute Accuracy). [[navi_m1_m5_crash_reroute_2026_06_15]]
   int _onRouteLockStreak = 0;
   bool _routeLockedOn = false;
+  // 2026-06-17 (vucko Kaltstart-Reroute): Wurde der Puck in DIESER Sitzung schon
+  // EINMAL eingerastet? Nur im allerersten Kaltstart-Fenster (nie eingerastet)
+  // gilt die abgesenkte Reroute-Schwelle (1,4× statt 2× Korridor), damit eine
+  // echte Start-Fehlroute in ~4s statt ~11s korrigiert wird. Nach Reroutes
+  // (_routeLockedOn wieder false, aber everLocked=true) bleibt es bei 2× — kein
+  // Re-Reroute-Loop.
+  bool _everLockedOn = false;
   static const double _lockOnPerpMeters = 25.0;
   static const double _lockOnMaxAccuracyMeters = 35.0;
   static const int _lockOnStreakNeeded = 4;
@@ -1386,13 +1394,21 @@ class _CruiseModePageState extends State<CruiseModePage>
     _ensureRouteCumDist();
     final lockDist = _renderLockDistM;
     if (lockDist >= 0 && _routeCumDistM != null) {
-      final pt = _pointAtRouteDist(lockDist);
+      final cum = _routeCumDistM!;
+      // 2026-06-17 (vucko „Linie hinter Puck", Geräte-Video 7×): Den roten Schnitt
+      // einen kleinen Vorhalt (= Trim-Gate, 2,5 m) VOR den Puck legen. Vorher
+      // schnitt der Lock-Pfad EXAKT am Puck (0 Vorhalt) → zwischen zwei Trim-
+      // Pushes (Gate 2,5 m) lag der Puck bis zu 2,5 m vor dem Schnitt und ein
+      // rotes Stück ragte HINTER dem Puck heraus. Der Vorhalt garantiert: Schnitt
+      // immer ≥ Puck, nie rote Linie dahinter. _lastTrimDistM bleibt am echten
+      // Render-Meter (Gate-Kadenz unverändert).
+      final cutDist = math.min(lockDist + _routeTrimPushGateM, cum.last);
+      final pt = _pointAtRouteDist(cutDist);
       if (pt == null) return false;
       projHead = pt;
       var i = _renderLockSegIdx.clamp(0, coords.length - 2);
-      final cum = _routeCumDistM!;
-      if (cum[i] > lockDist) i = 0;
-      while (i < coords.length - 2 && cum[i + 1] < lockDist) {
+      if (cum[i] > cutDist) i = 0;
+      while (i < coords.length - 2 && cum[i + 1] < cutDist) {
         i++;
       }
       aheadStart = i + 1;
@@ -1572,6 +1588,14 @@ class _CruiseModePageState extends State<CruiseModePage>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    // 2026-06-17 (vucko Geräte-Video, 90°-Kipper): Die Fahransicht ist
+    // portrait-designt (Banner/Karte/Buttons). Dreht das Telefon während der
+    // Navigation, kippte die UI in ein kaputtes Querformat (Banner seitlich).
+    // Wie jede Navi sperren wir die Cruise-Seite auf Hochkant; beim Verlassen
+    // (dispose) wird die App wieder für alle Orientierungen freigegeben.
+    SystemChrome.setPreferredOrientations(const [
+      DeviceOrientation.portraitUp,
+    ]);
     _loadVectorTiles();
     // 2026-06-06 (vucko P10): Zuletzt bekannten Standort laden → Karte öffnet
     // (auch beim Kaltstart) sofort dort statt bei „Deutschland-Mitte@z6".
@@ -2496,6 +2520,14 @@ class _CruiseModePageState extends State<CruiseModePage>
   @override
   void dispose() {
     _disposed = true;
+    // 2026-06-17 (vucko 90°-Kipper): Orientierungs-Sperre der Fahransicht wieder
+    // aufheben — der Rest der App darf drehen.
+    SystemChrome.setPreferredOrientations(const [
+      DeviceOrientation.portraitUp,
+      DeviceOrientation.portraitDown,
+      DeviceOrientation.landscapeLeft,
+      DeviceOrientation.landscapeRight,
+    ]);
     // 2026-06-15 (vucko M5): Map SOFORT inaktiv — ein in-flight Render-/Kamera-
     // Tick während des Page-Teardowns darf keinen Native-Call mehr absetzen.
     _mlController?.active = false;
@@ -9122,7 +9154,15 @@ class _CruiseModePageState extends State<CruiseModePage>
   }
 
   Future<void> _prepareAccessLegForOffRouteStart() async {
-    if (!_isExistingRouteSession || _fullRouteCoordinates.length < 2) return;
+    // 2026-06-17 (vucko Kaltstart-Off-Route, Video 0:16-0:27): Auch für FRISCHE
+    // A→B-Suchen re-ankern. Vorher nur für gespeicherte Sessions
+    // (_isExistingRouteSession) — bei einer frischen Suche fuhr der Nutzer aber
+    // zwischen „Suchen" und „Fahrt starten" oft schon ein Stück; die Route
+    // startete dann seitlich vom echten Standort und ein später Reroute musste
+    // es reparieren. Die Methode ist defensiv (sie kehrt sofort zurück, wenn der
+    // Puck am Start liegt oder keine Quell-Route vorliegt), also kein Risiko für
+    // den Normalstart.
+    if (_fullRouteCoordinates.length < 2) return;
     if (_isAccessLegActive) return;
 
     final position = await _resolveCurrentPositionForNavigationStart();
@@ -10256,6 +10296,9 @@ class _CruiseModePageState extends State<CruiseModePage>
       // die Kaltstart-Reroute-Sperre (kein Phantom am Fahrtbeginn).
       _onRouteLockStreak = 0;
       _routeLockedOn = false;
+      // 2026-06-17 (vucko Kaltstart-Reroute): neue Sitzung → Kaltstart-Schnell-
+      // schiene (1,4× Korridor) wieder scharf, bis zum ersten Einrasten.
+      _everLockedOn = false;
     }
     _navigationStartTime ??= DateTime.now();
     _driveSessionRecordedForCompletion = false;
@@ -10711,7 +10754,10 @@ class _CruiseModePageState extends State<CruiseModePage>
         perpToRoute <= _lockOnPerpMeters &&
         goodAccuracy) {
       if (_onRouteLockStreak < _lockOnStreakNeeded) _onRouteLockStreak++;
-      if (_onRouteLockStreak >= _lockOnStreakNeeded) _routeLockedOn = true;
+      if (_onRouteLockStreak >= _lockOnStreakNeeded) {
+        _routeLockedOn = true;
+        _everLockedOn = true;
+      }
     } else if (isOutsideCorridor) {
       _onRouteLockStreak = 0;
     }
@@ -10728,12 +10774,14 @@ class _CruiseModePageState extends State<CruiseModePage>
       // wieder aufgehoben und die Kaskade bliebe. Während der 6s-Grace gilt die
       // strenge Divergenz-Schwelle (rerouteVoteAllowed, lockedOn=false).
       _routeLockedOn = true;
+      _everLockedOn = true;
     }
     // Mapbox-/Apple-Gating (siehe rerouteVoteAllowed): unqualifizierter Fix bzw.
     // Kaltstart-Rauschen vor dem Einrasten darf KEIN Reroute auslösen.
     final rerouteMayVote = rerouteVoteAllowed(
       accuracyMeters: accuracyM,
       routeLockedOn: _routeLockedOn,
+      everLockedOn: _everLockedOn,
       offRouteDistanceMeters: offRouteDecisionMatch.distanceMeters,
       corridorMeters: offRouteCorridor,
       maxQualifiedAccuracyMeters: _maxQualifiedAccuracyMeters,

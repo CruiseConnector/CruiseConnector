@@ -345,6 +345,7 @@ bool rerouteVoteAllowed({
   required bool routeLockedOn,
   required double offRouteDistanceMeters,
   required double corridorMeters,
+  bool everLockedOn = true,
   double maxQualifiedAccuracyMeters = 100.0,
   double lockOnMaxAccuracyMeters = 35.0,
 }) {
@@ -354,8 +355,18 @@ bool rerouteVoteAllowed({
   if (routeLockedOn) return true;
   final goodAccuracy =
       accuracyMeters > 0 && accuracyMeters <= lockOnMaxAccuracyMeters;
+  // 2026-06-17 (vucko Kaltstart-Reroute, Video 0:16-0:27): War der Puck in DIESER
+  // Sitzung NOCH NIE eingerastet (echtes Kaltstart-Fenster, z.B. Route startete
+  // seitlich vom Standort weil der Nutzer zwischen Suche und „Fahrt starten"
+  // angefahren ist), genügt schon ein klar gut-vermessenes Verfahren > 1,4×
+  // Korridor zum Voten — sonst wartete der Reroute bis zur 90s-Grace-Decke (~11s
+  // im Video). Nach dem ersten Einrasten (everLockedOn=true, auch nach Reroutes,
+  // wo routeLockedOn vorübergehend false ist) bleibt es bei der strengen 2×-
+  // Schwelle → kein Re-Reroute-Loop, Kaltstart-Phantom-Schutz unberührt
+  // (echtes Rauschen zappelt < 1× Korridor).
+  final divergenceFactor = everLockedOn ? 2.0 : 1.4;
   final clearGenuineDivergence =
-      offRouteDistanceMeters > corridorMeters * 2.0 && goodAccuracy;
+      offRouteDistanceMeters > corridorMeters * divergenceFactor && goodAccuracy;
   return clearGenuineDivergence;
 }
 

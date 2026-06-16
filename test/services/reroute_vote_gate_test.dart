@@ -110,4 +110,51 @@ void main() {
       );
     });
   });
+
+  // 2026-06-17 (vucko Kaltstart-Reroute, Video 0:16-0:27): echte Start-Fehlroute
+  // muss in ~4s korrigiert werden — im NIE-eingerasteten Kaltstart-Fenster gilt
+  // die abgesenkte 1,4×-Schwelle; nach erstem Einrasten wieder strikt 2×.
+  group('rerouteVoteAllowed — Kaltstart-Schnellschiene (everLockedOn)', () {
+    test('Nie eingerastet + gute Accuracy + zw. 1,4× und 2× Korridor → votet', () {
+      expect(
+        rerouteVoteAllowed(
+          accuracyMeters: 20,
+          routeLockedOn: false,
+          everLockedOn: false,
+          offRouteDistanceMeters: 460, // >420 (1,4×), <600 (2×)
+          corridorMeters: corridor,
+        ),
+        isTrue,
+        reason: 'Kaltstart: klar daneben + gut vermessen → schnell korrigieren',
+      );
+    });
+
+    test('Schon mal eingerastet (Post-Reroute) bei gleicher Lage → votet NICHT', () {
+      expect(
+        rerouteVoteAllowed(
+          accuracyMeters: 20,
+          routeLockedOn: false,
+          everLockedOn: true,
+          offRouteDistanceMeters: 460,
+          corridorMeters: corridor,
+        ),
+        isFalse,
+        reason: 'Post-Reroute strikt 2× → kein Re-Reroute-Loop',
+      );
+    });
+
+    test('Kaltstart aber knapp (<1,4× Korridor) → votet NICHT (Phantom-Schutz)', () {
+      expect(
+        rerouteVoteAllowed(
+          accuracyMeters: 20,
+          routeLockedOn: false,
+          everLockedOn: false,
+          offRouteDistanceMeters: 380, // <420 (1,4×)
+          corridorMeters: corridor,
+        ),
+        isFalse,
+        reason: 'Kaltstart-Rauschen unter 1,4× Korridor bleibt unterdrückt',
+      );
+    });
+  });
 }
