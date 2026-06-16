@@ -4761,86 +4761,138 @@ class _HomeContentPageState extends State<HomeContentPage>
 
   // ── Streak Widget ────────────────────────────────────────────────────────
 
+  // 2026-06-16 (vucko): Streak-Dashboard-Kachel = das ALTE orange Streak-Hero
+  // (nicht mehr die schlichte dunkle Karte/N6-Dublette). Bei aktiver Streak
+  // leuchtend orange mit 🔥, sonst dezent dunkel mit ❄️. OHNE „(+10%)"-Zusatz.
   Widget _buildStreakWidget() {
     final hasStreak = _streakDays > 0;
-    final currentMultiplier = GamificationService.streakMultiplierForDays(
-      _streakDays,
+    final accent = AppAccentColors.accent;
+    final mul = GamificationService.streakMultiplierForDays(_streakDays);
+    final mulNext = GamificationService.streakMultiplierForDays(
+      _streakDays + 1,
     );
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: const Color(0xFF1C1F26),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(
-          color: hasStreak
-              ? AppAccentColors.accent.withValues(alpha: 0.3)
-              : const Color(0xFFFFFFFF).withValues(alpha: 0.06),
+    return TweenAnimationBuilder<double>(
+      tween: Tween(begin: 0.96, end: 1.0),
+      duration: const Duration(milliseconds: 420),
+      curve: Curves.easeOutBack,
+      builder: (context, scale, child) =>
+          Transform.scale(scale: scale, child: child),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+        decoration: BoxDecoration(
+          gradient: hasStreak
+              ? LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [
+                    const Color(0xFFFF6B35).withValues(alpha: 0.92),
+                    accent.withValues(alpha: 0.85),
+                  ],
+                )
+              : null,
+          color: hasStreak ? null : const Color(0xFF1C1F26),
+          borderRadius: BorderRadius.circular(22),
+          border: hasStreak
+              ? null
+              : Border.all(
+                  color: const Color(0xFFFFFFFF).withValues(alpha: 0.06),
+                ),
+          boxShadow: hasStreak
+              ? [
+                  BoxShadow(
+                    color: const Color(0xFFFF6B35).withValues(alpha: 0.32),
+                    blurRadius: 20,
+                    offset: const Offset(0, 8),
+                  ),
+                ]
+              : null,
         ),
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 48,
-            height: 48,
-            decoration: BoxDecoration(
-              color: hasStreak
-                  ? AppAccentColors.accent.withValues(alpha: 0.15)
-                  : const Color(0xFF2D3748),
-              borderRadius: BorderRadius.circular(14),
-            ),
-            child: Center(
+        child: Row(
+          children: [
+            Container(
+              width: 52,
+              height: 52,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: hasStreak
+                    ? Colors.white.withValues(alpha: 0.18)
+                    : const Color(0xFF2D3748),
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: hasStreak
+                      ? Colors.white.withValues(alpha: 0.30)
+                      : Colors.transparent,
+                ),
+              ),
               child: Text(
                 hasStreak ? '🔥' : '❄️',
-                style: const TextStyle(fontSize: 24),
+                style: const TextStyle(fontSize: 26),
               ),
             ),
-          ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  hasStreak
-                      ? '$_streakDays Tage Streak'
-                      : 'Keine aktive Streak',
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    hasStreak
+                        ? '$_streakDays Tage Streak'
+                        : 'Keine aktive Streak',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 17,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: -0.2,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    hasStreak
+                        ? 'Heute fahren: ${mulNext.toStringAsFixed(2)}× XP'
+                        : 'Starte eine Fahrt und beginne deinen Streak.',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: hasStreak
+                          ? Colors.white.withValues(alpha: 0.92)
+                          : const Color(0xFFA0AEC0),
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (hasStreak) ...[
+              const SizedBox(width: 10),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 11,
+                  vertical: 7,
+                ),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.22),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(
+                    color: Colors.white.withValues(alpha: 0.40),
+                  ),
+                ),
+                child: Text(
+                  '${mul.toStringAsFixed(2)}×',
                   style: const TextStyle(
                     color: Colors.white,
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w900,
                   ),
                 ),
-                const SizedBox(height: 2),
-                Text(
-                  hasStreak
-                      ? 'Fahre heute für ${currentMultiplier.toStringAsFixed(2)}x XP.'
-                      : 'Starte eine Fahrt und beginne deinen XP-Streak.',
-                  style: const TextStyle(
-                    color: Color(0xFFA0AEC0),
-                    fontSize: 12,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          if (hasStreak)
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              decoration: BoxDecoration(
-                gradient: AppAccentColors.primaryGradient,
-                borderRadius: BorderRadius.circular(12),
               ),
-              child: Text(
-                '${currentMultiplier.toStringAsFixed(2)}x',
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 14,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ),
-        ],
+            ],
+          ],
+        ),
       ),
     );
   }
