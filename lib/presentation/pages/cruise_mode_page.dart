@@ -65,6 +65,7 @@ import 'package:cruise_connect/domain/models/saved_route.dart';
 import 'package:cruise_connect/presentation/widgets/user_avatar.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/cruise_completion_dialog.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/cruise_maneuver_indicator.dart';
+import 'package:cruise_connect/presentation/widgets/cruise/nav_distance_format.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/cruise_navigation_info_panel.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/cruise_setup_card.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/drive_control_panel.dart';
@@ -13139,14 +13140,18 @@ class _CruiseModePageState extends State<CruiseModePage>
     final base = _calculateDistanceToManeuver(visibleManeuver);
     if (base == null) return null;
     final cum = _routeCumDistM;
-    final render = _renderLockDistM;
-    if (cum == null || render < 0) return base;
-    final cri = _currentRouteIndex.clamp(0, cum.length - 1).toInt();
-    final ahead = render - cum[cri];
-    // Nur plausibler Intra-Fix-Vorlauf (0..80 m) wird abgezogen; alles andere
-    // (stale/Sprung) → ehrlicher Index-Wert.
-    if (ahead <= 0 || ahead > 80.0) return base;
-    return (base - ahead).clamp(0.0, base);
+    if (cum == null) return base;
+    // 2026-06-17 (vucko Schnellstraße-Freeze, Video): GESAMTEN gleitenden
+    // Render-Vorlauf abziehen (keine 80-m-Kappe mehr). Sonst klebte das Banner
+    // auf Schnellstraßen (weite Routen-Stützpunkte) beim Index-Wert (~„1,0 km"),
+    // während die echte Distanz längst sank. Logik + Tests in
+    // nav_distance_format.dart::smoothManeuverDistanceMeters.
+    return smoothManeuverDistanceMeters(
+      base: base,
+      cum: cum,
+      render: _renderLockDistM,
+      currentIndex: _currentRouteIndex,
+    );
   }
 
   void _updateActiveManeuver() {
