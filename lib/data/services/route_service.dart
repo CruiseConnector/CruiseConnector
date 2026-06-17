@@ -9191,13 +9191,35 @@ class RouteService {
         exitNumber = null; // Painter nimmt dann den Geometrie-Winkel
         roundaboutDirOverride = _roundaboutDirectionPhrase(geomTurnRad);
       }
+      // 2026-06-17 (vucko Geräte-Video, Banner zeigte „rechts" obwohl die rote
+      // Route klar nach LINKS bog): Richtung gegen die ECHTE Geometrie absichern.
+      // Widerspricht GraphHoppers `sign` der gefahrenen Linie (links/rechts
+      // vertauscht), GEWINNT die Geometrie — das Banner muss zur sichtbaren roten
+      // Route passen, sonst leitet es falsch ab. Nur bei eindeutigem Konflikt;
+      // Kreisverkehre/Ziel bleiben unberührt.
+      var effectiveSign = sign;
+      String? geomDirText;
+      if (!isRoundabout && sign != 4) {
+        final maneuverTurnRad =
+            roundaboutGeomTurnRad(routeCoordinates, coordIdx, coordIdx);
+        final geomSign = maneuverSignFromGeometryRad(maneuverTurnRad);
+        if (geomSign != null && turnSignsContradict(sign, geomSign)) {
+          effectiveSign = geomSign;
+          geomDirText = _rewriteTurnDirection(text, geomSign);
+          debugPrint(
+            '[RouteService] Manöver-Richtung aus Geometrie korrigiert: '
+            'GH sign=$sign ("$text") ↔ Geometrie sign=$geomSign → "$geomDirText"',
+          );
+        }
+      }
       final instruction = sign == 4
           ? 'Ziel erreicht.'
           : (roundaboutDirOverride.isNotEmpty
                 ? roundaboutDirOverride
-                : (text.isNotEmpty
-                      ? (text.endsWith('.') ? text : '$text.')
-                      : _graphhopperFallbackText(sign)));
+                : (geomDirText ??
+                      (text.isNotEmpty
+                          ? (text.endsWith('.') ? text : '$text.')
+                          : _graphhopperFallbackText(sign))));
       maneuvers.add(
         RouteManeuver(
           latitude: lat,
@@ -9205,7 +9227,7 @@ class RouteService {
           routeIndex: coordIdx,
           icon: isRoundabout
               ? Icons.roundabout_right
-              : _iconForGraphhopperSign(sign),
+              : _iconForGraphhopperSign(effectiveSign),
           announcement: instruction,
           instruction: instruction,
           maneuverType: isRoundabout
@@ -9294,6 +9316,23 @@ class RouteService {
       if (entry.value.any(lower.contains)) return entry.key;
     }
     return null;
+  }
+
+  /// 2026-06-17 (vucko): Ersetzt nur das RICHTUNGS-Wort in GraphHoppers Text,
+  /// behält aber den Straßennamen ("… auf Churer Straße"). Z.B. GH "Rechts
+  /// abbiegen auf Churer Straße" + Geometrie=links → "Links abbiegen auf Churer
+  /// Straße." Ohne "auf …"-Teil → reiner Fallback-Text der neuen Richtung.
+  String _rewriteTurnDirection(String ghText, int geomSign) {
+    final base = _graphhopperFallbackText(geomSign);
+    final baseNoDot =
+        base.endsWith('.') ? base.substring(0, base.length - 1) : base;
+    final i = ghText.toLowerCase().indexOf(' auf ');
+    if (i >= 0) {
+      var suffix = ghText.substring(i);
+      if (!suffix.endsWith('.')) suffix = '$suffix.';
+      return '$baseNoDot$suffix';
+    }
+    return base;
   }
 
   IconData _iconForGraphhopperSign(int sign) {
@@ -10623,6 +10662,34 @@ double? roundaboutGeomTurnRad(
   if (deltaDeg > 180.0) deltaDeg -= 360.0;
   if (deltaDeg < -180.0) deltaDeg += 360.0;
   return deltaDeg * math.pi / 180.0;
+}
+
+/// 2026-06-17 (vucko Geräte-Video, Banner-Richtung invertiert): Abbiege-`sign`
+/// (GraphHopper-Konvention − = links / + = rechts) aus dem geometrischen
+/// Drehwinkel [turnRad] (rechts positiv, aus [roundaboutGeomTurnRad]).
+///
+/// Dient als BODENWAHRHEIT, wenn GraphHoppers `sign`/`text` der tatsächlich
+/// gerenderten roten Route widerspricht — der Fahrer navigiert nach der
+/// sichtbaren Linie, also MUSS das Banner dazu passen. Gibt null bei zu kleiner
+/// / uneindeutiger Drehung (< ~28°) → dann GraphHoppers `sign` behalten.
+int? maneuverSignFromGeometryRad(double? turnRad) {
+  if (turnRad == null) return null;
+  final deg = turnRad * 180.0 / math.pi;
+  if (deg >= 110.0) return 3; // scharf rechts
+  if (deg >= 28.0) return 2; // rechts
+  if (deg <= -110.0) return -3; // scharf links
+  if (deg <= -28.0) return -2; // links
+  return null; // ~geradeaus / leichte Kurve → uneindeutig, GH behalten
+}
+
+/// Widersprechen sich GraphHopper-`sign` und Geometrie-`sign` in der HÄNDIGKEIT
+/// (einer links, einer rechts)? Nur bei echtem Links/Rechts-Konflikt wird die
+/// Richtung aus der Geometrie übernommen. Geradeaus/Ziel/Via/Kreisverkehr
+/// (0,4,5,6) sind keine Abbiegungen und lösen nie ein Override aus.
+bool turnSignsContradict(int ghSign, int geomSign) {
+  bool isTurn(int s) => s.abs() >= 1 && s.abs() <= 3;
+  if (!isTurn(ghSign) || !isTurn(geomSign)) return false;
+  return (ghSign > 0) != (geomSign > 0);
 }
 
 /// 2026-06-13 (vucko Manöver-26km-Bug, Geraete-Screenshot): Globaler Re-Snap

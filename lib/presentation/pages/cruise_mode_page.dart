@@ -474,6 +474,16 @@ class _CruiseModePageState extends State<CruiseModePage>
   // (_offRouteSince) als Auslöse-Kriterium. [[navi_n1_n2_phantom_roundabout_2026_06_15]]
   int _consecutiveOffRouteFixes = 0;
 
+  // 2026-06-17 (vucko Geräte-Video, Banner-Freeze an langsamer Abbiegung): Zähler
+  // für aufeinanderfolgende Index-Vorschübe, die der Meter-Cap (sp×3+60) ablehnt,
+  // obwohl der Puck nachweislich auf der Route NACH VORN läuft. Auf sparser
+  // GraphHopper-Geometrie an einer langsamen Abbiegung (Cap nur 60 m) blockierte
+  // der Cap JEDEN Fix → der Index fror ein → Manöver/Distanz/Rest-km wurden stale.
+  // Nach 2 abgelehnten Fixes am Stück erzwingen wir den Vorschub (Escape-Hatch),
+  // damit nie ein Dauer-Freeze entsteht; transiente Selbstüberlapp-Leaps bleiben
+  // bei einem einzelnen Fix geblockt.
+  int _advanceCapRejects = 0;
+
   // 2026-06-16 (vucko O4): Post-Reroute-Lock-Grace. Nach einem Reroute wird die
   // Lock-On-Grace neu gestartet (Lock zurückgesetzt) und für dieses Fenster die
   // 90s-Grace-Decke ausgesetzt — sonst rastet der Puck sofort wieder „ein" und
@@ -10833,7 +10843,14 @@ class _CruiseModePageState extends State<CruiseModePage>
       // Plausibler Vorschub → übernehmen. Implausibler Meter-Sprung → diesen Fix
       // verwerfen (Index bleibt am echten Standort, rückt nächsten Fix plausibel
       // weiter). So kein Index-Leap → keine eingefrorene Manöver-Distanz.
-      if (advanceMeters <= maxAdvanceMeters) {
+      // Plausibler Vorschub → übernehmen. Ein EINZELNER implausibler Meter-Sprung
+      // (Selbstüberlapp-/Parallel-Leap) wird weiter verworfen. Bleibt der Sprung
+      // aber ≥2 Fixes am Stück bestehen (echte Abbiegung auf sparser Geometrie:
+      // der Puck ist nachweislich vorn auf der Route, der Cap würde sonst JEDEN
+      // Fix blocken → Dauer-Freeze von Manöver/Distanz/Rest-km), wird er ERZWUNGEN.
+      final advanceCapOk = advanceMeters <= maxAdvanceMeters;
+      if (advanceCapOk || _advanceCapRejects >= 2) {
+        _advanceCapRejects = 0;
         _distanceSinceLastRedraw += advanceMeters;
         _currentRouteIndex = match.index;
         needsRebuild = true;
@@ -10842,7 +10859,13 @@ class _CruiseModePageState extends State<CruiseModePage>
         // der sichtbaren Linie mehr. Die rote aktive Linie ist die VOLLE Route
         // (statisch, einmal gepusht → kann NIE flackern); _trimVisibleRouteToProjection
         // pflegt den grauen Driven-Trail + _remainingRouteCoordinates.
+      } else {
+        _advanceCapRejects++;
       }
+    } else {
+      // Kein Vorwärts-Match (Puck nicht vor dem Index) → Reject-Zähler nullen,
+      // damit sich kein veralteter Stand zu einem späteren Fehl-Force summiert.
+      _advanceCapRejects = 0;
     }
 
     // 2026-06-08 (vucko Leitlinie GPU-Trim): Fahrt-Fortschritt 0..1 entlang der
