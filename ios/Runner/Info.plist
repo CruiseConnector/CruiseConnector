@@ -49,8 +49,6 @@
 	<string>Cruise Connector zeigt dir deine Position auf der Karte und nutzt GPS zur Navigation.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Cruise Connector liest Bilder aus deiner Galerie, damit du ein Profilbild auswählen kannst.</string>
-	<key>UIApplicationSupportsIndirectInputEvents</key>
-	<true/>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
@@ -66,30 +64,10 @@
 					<string>$(PRODUCT_MODULE_NAME).SceneDelegate</string>
 				</dict>
 			</array>
-			<key>CPTemplateApplicationSceneSessionRoleApplication</key>
-			<array>
-				<dict>
-					<key>UISceneClassName</key>
-					<string>CPTemplateApplicationScene</string>
-					<key>UISceneConfigurationName</key>
-					<string>CarPlay Configuration</string>
-					<key>UISceneDelegateClassName</key>
-					<string>$(PRODUCT_MODULE_NAME).CarPlaySceneDelegate</string>
-				</dict>
-			</array>
-				<key>CPTemplateApplicationDashboardSceneSessionRoleApplication</key>
-				<array>
-					<dict>
-						<key>UISceneClassName</key>
-						<string>CPTemplateApplicationDashboardScene</string>
-						<key>UISceneConfigurationName</key>
-						<string>CarPlay Dashboard</string>
-						<key>UISceneDelegateClassName</key>
-						<string>$(PRODUCT_MODULE_NAME).CarPlayDashboardSceneDelegate</string>
-					</dict>
-				</array>
 		</dict>
 	</dict>
+	<key>UIApplicationSupportsIndirectInputEvents</key>
+	<true/>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>location</string>

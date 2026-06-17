@@ -2,28 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- 2026-05-31 (vucko): Push-Notifications (FCM/APNs). 'development' für
-	     Debug/TestFlight; Xcode setzt für App-Store-Release automatisch
-	     'production', sobald die Push-Capability aktiviert ist. -->
 	<key>aps-environment</key>
 	<string>development</string>
-	<!-- 2026-06-02 (vucko): CarPlay-Navigations-Entitlement. OHNE dieses
-	     Entitlement aktiviert iOS die CPTemplateApplicationScene NICHT → die
-	     App taucht im CarPlay-Home gar nicht auf (genau das Symptom). Im
-	     iOS-SIMULATOR reicht der Eintrag hier (kein Provisioning-Profil-Check)
-	     → App erscheint sofort im CarPlay-Fenster.
-	     WICHTIG fürs ECHTE Gerät / App Store: Dort muss Apple die CarPlay-
-	     Berechtigung freigeben UND das Provisioning-Profil sie enthalten
-	     (Antrag läuft). Ein Debug-Build auf ein echtes iPhone würde sonst beim
-	     Signieren scheitern — dann dieses Entitlement temporär entfernen. -->
-	<!-- 2026-06-13: Apple hat das CarPlay-Navigations-Entitlement erteilt
-	     (Case-ID 20269585, Mail vom 12.06.) → wieder aktiv. Geräte-/TestFlight-
-	     Builds brauchen ab jetzt ein Provisioning-Profil MIT der CarPlay-
-	     Capability (Portal: App ID com.vucko.cruiserconnect → "CarPlay
-	     Navigation App" aktivieren → neues Profil erzeugen + in Xcode wählen,
-	     Automatically manage signing AUS). -->
-	<key>com.apple.developer.carplay-maps</key>
-	<true/>
 	<key>com.apple.developer.applesignin</key>
 	<array>
 		<string>Default</string>

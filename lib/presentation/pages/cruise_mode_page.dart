@@ -45,8 +45,6 @@ import 'package:vector_map_tiles/vector_map_tiles.dart';
 import 'package:vector_map_tiles_pmtiles/vector_map_tiles_pmtiles.dart';
 import 'package:vector_tile_renderer/vector_tile_renderer.dart' as vtr;
 import 'package:cruise_connect/data/services/cruise_dark_map_style.dart';
-import 'package:cruise_connect/data/services/car_route_bridge_service.dart';
-import 'package:cruise_connect/data/services/car_command_listener.dart';
 import 'package:cruise_connect/data/services/frame_timing_utils.dart';
 import 'package:cruise_connect/data/services/group_route_data_builder.dart';
 import 'package:cruise_connect/data/services/route_access_plan.dart';
@@ -221,10 +219,6 @@ class _CruiseModePageState extends State<CruiseModePage>
   // ─────────────────────── Services ──────────────────────────────────────────
   final _geocodingService = const GeocodingService();
   final _routeService = RouteService();
-  final _carRouteBridge = CarRouteBridgeService();
-  // 2026-06-02 (vucko Sync): true solange der Abschluss-Screen (Bewertung)
-  // offen ist — damit CarPlays „Fertig" das Handy-Sheet gezielt schließen kann.
-  bool _completionSheetOpen = false;
   final _smartRerouteEngine = const SmartRerouteEngine();
   final _navigationSocketService = NavigationProgressSocketService();
   final _drivenTrackRecorder = DrivenTrackRecorder();
@@ -790,13 +784,6 @@ class _CruiseModePageState extends State<CruiseModePage>
       _routeSearchNoticeMessage = null;
       _configCollapsed = true;
     });
-    unawaited(
-      _carRouteBridge.publishSearching(
-        routeType: _carRouteType,
-        style: _selectedStyle,
-        avoidHighways: _avoidHighways,
-      ),
-    );
     _routeLoadingPhaseTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (!mounted ||
           _disposed ||
@@ -1600,60 +1587,6 @@ class _CruiseModePageState extends State<CruiseModePage>
     // 2026-06-06 (vucko P10): Zuletzt bekannten Standort laden → Karte öffnet
     // (auch beim Kaltstart) sofort dort statt bei „Deutschland-Mitte@z6".
     unawaited(_loadPersistedUserCenter());
-    // 2026-06-02 (vucko Sync): Schließt das Auto den Abschluss-Screen mit
-    // „Fertig", soll das Handy-Sheet ebenfalls zugehen (beidseitige Sync).
-    CarCommandListener.instance.onCompletionDone = () {
-      if (!mounted || _disposed) return;
-      if (_completionSheetOpen) {
-        _completionSheetOpen = false;
-        Navigator.of(context, rootNavigator: true).pop();
-      }
-      _resetAfterCompletion();
-    };
-    // 2026-06-02 (vucko Sync): „Losfahren" auf CarPlay → das HANDY übernimmt die
-    // Fahrt (GPS/Voice-Treiber) → beide Geräte 1:1 synchron, und CarPlay bekommt
-    // echte Live-Wegbeschreibung/ETA via publishProgress. Abgesichert: nur wenn
-    // die Cruise-Page offen ist, nicht gerade lädt und nicht schon navigiert.
-    // Ist die Page zu, navigiert CarPlay eigenständig weiter (kein Abbruch).
-    CarCommandListener
-        .instance
-        .onStartNavigation = (route, style, avoidHighways) {
-      if (!mounted || _disposed || _isLoading) return;
-      if (_navigationStartTime != null) return; // läuft bereits
-      // Hat das Handy schon eine Route in der Vorschau (selbst geplant via
-      // onPlanRoute)? Dann die fahren. Sonst die vom Auto gelieferte übernehmen.
-      final hasCurrentRoute = _fullRouteCoordinates.length >= 2;
-      if (!hasCurrentRoute && route != null) {
-        setState(() {
-          _selectedStyle = style;
-          _isRoundTrip = true; // CarPlay plant Rundkurse
-        });
-        _applyRouteResult(route);
-      }
-      WidgetsBinding.instance.addPostFrameCallback((_) async {
-        if (!mounted || _disposed) return;
-        if (_fullRouteCoordinates.length < 2) return; // keine Route da
-        await _confirmRoute();
-        await _startNavigationFlow();
-      });
-    };
-    // 2026-06-02 (vucko Mirror): „Route planen" auf CarPlay → das HANDY fährt
-    // die Suche (Lade-Popup + Vorschau-Animation) und publisht searching/found
-    // selbst an CarPlay zurück → beide Geräte suchen gleichzeitig, beide zeichnen
-    // die Route. true = Page hat übernommen (sonst rechnet der Listener standalone).
-    CarCommandListener.instance.onPlanRoute = (style, km, avoidHighways) {
-      if (!mounted || _disposed || _isLoading) return false;
-      if (_navigationStartTime != null) return false; // fährt schon
-      setState(() {
-        _isRoundTrip = true;
-        _planningType = 'Zufall';
-        _selectedStyle = style;
-        _selectedLength = '$km Km';
-        _avoidHighways = avoidHighways;
-      });
-      unawaited(_generateRoute());
-      return true;
-    };
     // Animierte Kamera-Bewegung zwischen GPS-Updates (alle Plattformen, 60fps)
     // 2026-05-22 (vucko): GPS-Update-Frequenz jetzt 200ms (Android). Camera-
     // Animation muss noch dazu passen damit zwischen Updates ohne Stop weitergeht.
@@ -2532,16 +2465,6 @@ class _CruiseModePageState extends State<CruiseModePage>
     // Tick während des Page-Teardowns darf keinen Native-Call mehr absetzen.
     _mlController?.active = false;
     WidgetsBinding.instance.removeObserver(this);
-    // 2026-06-02 (vucko Sync): CarPlay-Hooks lösen (Page-Lebenszyklus).
-    if (CarCommandListener.instance.onCompletionDone != null) {
-      CarCommandListener.instance.onCompletionDone = null;
-    }
-    if (CarCommandListener.instance.onStartNavigation != null) {
-      CarCommandListener.instance.onStartNavigation = null;
-    }
-    if (CarCommandListener.instance.onPlanRoute != null) {
-      CarCommandListener.instance.onPlanRoute = null;
-    }
     // 2026-05-24 (vucko Task #53): aktive Trip pausieren beim Verlassen
     // (z. B. App-Backgrounding, Tab-Wechsel). Best-effort.
     final tripIdToPause = _activeTripId;
@@ -2928,11 +2851,6 @@ class _CruiseModePageState extends State<CruiseModePage>
   bool _requiresDestination(bool isRoundTrip) => !isRoundTrip;
 
   bool get _isWaypointPlanning => _isRoundTrip && _planningType == 'Wegpunkte';
-
-  String get _carRouteType {
-    if (_isWaypointPlanning) return CarRouteType.waypoints;
-    return _isRoundTrip ? CarRouteType.roundtrip : CarRouteType.pointToPoint;
-  }
 
   LatLng? get _pointToPointDestinationMarkerPoint {
     if (_isRoundTrip || _isRouteConfirmed) return null;
@@ -7665,7 +7583,6 @@ class _CruiseModePageState extends State<CruiseModePage>
         errorMessage,
         error: errorForUi,
       );
-      unawaited(_carRouteBridge.publishFailed(message: errorMessage));
     } finally {
       // Hintergrund-Generierung wieder erlauben
       RouteCacheService.endUserGeneration();
@@ -7973,14 +7890,6 @@ class _CruiseModePageState extends State<CruiseModePage>
         OfflineMapService.instance.cacheRouteRegion(prepared.coordinates),
       );
     }
-    unawaited(
-      _carRouteBridge.publishFound(
-        result: prepared,
-        routeType: _carRouteType,
-        style: _selectedStyle,
-        avoidHighways: _avoidHighways,
-      ),
-    );
     _hideRouteSearchStatusForAcceptedRoute();
     _lastGeneratedWasRoundTrip = _isRoundTrip;
     _lastGeneratedSelectedKm = _isRoundTrip ? distance : null;
@@ -8943,12 +8852,6 @@ class _CruiseModePageState extends State<CruiseModePage>
       _isCameraLocked = false;
       _configCollapsed = false;
     });
-    // 2026-06-02 (vucko Sync): Bewertung am Handy fertig → Auto-Session leeren.
-    // CarPlay liest den geleerten Snapshot → schließt seinen Abschluss-Screen
-    // automatisch (beidseitige Sync). publishEnded (status=ended) hätte CarPlay
-    // dagegen am Abschluss-Screen hängen lassen.
-    _completionSheetOpen = false;
-    unawaited(_carRouteBridge.clearCarSession());
   }
 
   void _saveActiveTripForLater() {
@@ -9127,22 +9030,6 @@ class _CruiseModePageState extends State<CruiseModePage>
       'type': 'LineString',
       'coordinates': _fullRouteCoordinates,
     }, animateCamera: false);
-    final activeResult = _lastRouteResult;
-    if (activeResult != null) {
-      unawaited(
-        _carRouteBridge.publishNavigationStarted(
-          result: activeResult,
-          routeType: _carRouteType,
-          style: _selectedStyle,
-          avoidHighways: _avoidHighways,
-          remainingDistanceMeters: _remainingDistance ?? _routeDistance,
-          remainingDurationSeconds: _remainingDuration ?? _routeDuration,
-          nextManeuverText: _currentCarManeuverText(),
-          nextManeuverDistance: _calculateDistanceToManeuver(),
-          nextManeuverKind: _currentCarManeuverKind(),
-        ),
-      );
-    }
   }
 
   Future<void> _prepareXpStreakContext() async {
@@ -11059,20 +10946,6 @@ class _CruiseModePageState extends State<CruiseModePage>
     }
 
     if (needsRebuild) _safeSetState(() {});
-    unawaited(
-      _carRouteBridge.publishProgress(
-        remainingDistanceMeters: _remainingDistance,
-        remainingDurationSeconds: _remainingDuration,
-        nextManeuverText: _currentCarManeuverText(),
-        nextManeuverDistance: distToManeuver,
-        nextManeuverKind: _currentCarManeuverKind(),
-        // 2026-06-14 (vucko K7): Live-Position + Fortschritts-Index ans Auto.
-        latitude: position.latitude,
-        longitude: position.longitude,
-        heading: position.heading,
-        routeIndex: _currentRouteIndex,
-      ),
-    );
   }
 
   // 2026-05-24 (vucko Task #49): POI-Auto-Fetch + Map-Marker.
@@ -12014,26 +11887,6 @@ class _CruiseModePageState extends State<CruiseModePage>
     } else {
       unawaited(TtsService.instance.speakOptional(text));
     }
-  }
-
-  String? _currentCarManeuverText() {
-    // 2026-06-13 (vucko G1): off-route/Reroute → CarPlay zeigt „Neuberechnung"
-    // statt der veralteten Abbiege-Anweisung (wie Google).
-    if (_isReroutingBannerActive) return 'Neuberechnung';
-    final maneuver = _activeVisibleManeuver();
-    if (maneuver == null) return null;
-    return maneuver.instruction.isNotEmpty
-        ? maneuver.instruction
-        : maneuver.announcement;
-  }
-
-  /// Maschinenlesbarer Manöver-Typ (links/rechts/Kreisverkehr…) für die
-  /// Auto-Displays — abgeleitet aus dem Icon des nächsten Manövers.
-  String? _currentCarManeuverKind() {
-    if (_isReroutingBannerActive) return null;
-    final maneuver = _activeVisibleManeuver();
-    if (maneuver == null) return null;
-    return CarRouteBridgeService.maneuverKindFromIcon(maneuver.icon);
   }
 
   bool _updateRemainingDistanceAndDuration({RouteWindowMatch? routeMatch}) {
@@ -13630,14 +13483,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       belowMinimum: _completionProgressBelowXpMinimum(completed: true),
       completed: true,
     );
-    // 2026-06-02 (vucko Sync): Abschluss-Screen SYNCHRON aufs Auto bringen —
-    // SOFORT beim Ankommen (nicht erst nach dem Beantworten am Handy, das war
-    // der „CarPlay kam zu spät"-Bug). Distanz mitgeben → kein „-- gefahren".
-    _completionSheetOpen = true;
     _freezeMapForCompletion();
-    unawaited(
-      _carRouteBridge.publishEnded(distanceMeters: snapshot.distanceKm * 1000),
-    );
     unawaited(
       _recordRouteCompletionCandidate(completed: true, discarded: false),
     );
@@ -13704,13 +13550,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       isEarlyStop: true,
       belowMinimum: _completionProgressBelowXpMinimum(completed: false),
     );
-    // 2026-06-02 (vucko Sync): Abschluss-Screen synchron aufs Auto (siehe
-    // _onRouteCompleted).
-    _completionSheetOpen = true;
     _freezeMapForCompletion();
-    unawaited(
-      _carRouteBridge.publishEnded(distanceMeters: snapshot.distanceKm * 1000),
-    );
 
     final drivenSnap = _drivenTrackRecorder.snapshot();
     showCruiseCompletionSheet(
