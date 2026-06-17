@@ -19,7 +19,12 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 version: 1.0.4+9
 
 environment:
-  sdk: ^3.9.2
+  # Dieses Projekt benoetigt Flutter 3.44.2 / Dart 3.12.2 (wegen sign_in_with_apple
+  # ^8.1.0 + der Android-Migrator-Flags). Eine aeltere Flutter-Version
+  # (z.B. 3.38.5 / Dart 3.10.4) bricht `flutter pub get` ab. Diese Schranke macht
+  # den Fehler sofort eindeutig ("requires Flutter SDK version >=3.44.0"). NICHT lockern.
+  sdk: ^3.12.0
+  flutter: ">=3.44.0"
 
 # Dependencies specify other packages that your package needs in order to work.
 # To automatically upgrade your package dependencies to the latest versions
