@@ -77,10 +77,9 @@ void main() {
     verifyStyle('cruise_dark.json', loadJson('assets/map/cruise_dark.json'));
   });
 
-  test('carplay_raster/style.json — synchron zu cruise_dark', () {
-    verifyStyle(
-        'carplay style.json', loadJson('tools/carplay_raster/style.json'));
-  });
+  // (2026-06-17: carplay_raster/style.json-Test entfernt — CarPlay/AA wurde aus
+  //  main entfernt, die Raster-Quelle existiert nicht mehr. Lebt im Branch
+  //  carplay-android-auto/design-and-functions weiter.)
 
   test('cruise_dark_map_style.dart (Fallback) — synchron zu cruise_dark', () {
     verifyStyle('cruise_dark_map_style.dart',
