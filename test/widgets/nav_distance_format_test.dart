@@ -116,4 +116,80 @@ void main() {
       );
     });
   });
+
+  // 2026-06-17 (vucko Geräte-Video): Manöver-Distanz fror an Kreisverkehren ein
+  // und sprang am Routenende/Reroute nach OBEN („10 m → 40 m"). monoton +
+  // sprung-frei anzeigen.
+  group('monotonicManeuverDistanceMeters', () {
+    test('erster Wert (prevShown null) → Ziel', () {
+      expect(
+        monotonicManeuverDistanceMeters(
+            prevShown: null, target: 120, maneuverChanged: false),
+        120,
+      );
+    });
+
+    test('neues Manöver → snap auf neuen (größeren) Wert', () {
+      expect(
+        monotonicManeuverDistanceMeters(
+            prevShown: 50, target: 110, maneuverChanged: true),
+        110,
+      );
+    });
+
+    test('SPRUNG NACH OBEN im selben Manöver → halten (der Video-Bug)', () {
+      // „10 m → 40 m" am Routenende, gleiches Manöver: NICHT hochspringen.
+      expect(
+        monotonicManeuverDistanceMeters(
+            prevShown: 10, target: 40, maneuverChanged: false),
+        10,
+      );
+      // „50 m → 110 m" Walserstraße, gleiches Manöver: halten.
+      expect(
+        monotonicManeuverDistanceMeters(
+            prevShown: 50, target: 110, maneuverChanged: false),
+        50,
+      );
+    });
+
+    test('grobe Stufe nach unten → weich gleiten (1 Schritt)', () {
+      // 800 → 700, dtMs 90, ease 0.35 → 765 (Zwischenwert, nicht hart 700).
+      expect(
+        monotonicManeuverDistanceMeters(
+            prevShown: 800, target: 700, maneuverChanged: false, dtMs: 90),
+        closeTo(765, 0.5),
+      );
+    });
+
+    test('mehrere Schritte konvergieren zum Ziel', () {
+      var shown = 800.0;
+      for (var i = 0; i < 30; i++) {
+        shown = monotonicManeuverDistanceMeters(
+            prevShown: shown, target: 700, maneuverChanged: false, dtMs: 90);
+      }
+      expect(shown, closeTo(700, 1.0));
+    });
+
+    test('praktisch erreicht (≤ Epsilon) → snap aufs Ziel', () {
+      expect(
+        monotonicManeuverDistanceMeters(
+            prevShown: 700, target: 699, maneuverChanged: false),
+        699,
+      );
+    });
+
+    test('gleitet nie UNTER das Ziel', () {
+      final v = monotonicManeuverDistanceMeters(
+          prevShown: 100, target: 90, maneuverChanged: false, dtMs: 5000);
+      expect(v >= 90, isTrue);
+    });
+
+    test('negatives/ungültiges Ziel → 0', () {
+      expect(
+        monotonicManeuverDistanceMeters(
+            prevShown: null, target: -5, maneuverChanged: false),
+        0,
+      );
+    });
+  });
 }

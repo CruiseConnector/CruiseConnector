@@ -413,6 +413,55 @@ int requiredOffRouteFixes({
   return clearWrongTurn ? math.min(3, base) : base;
 }
 
+/// 2026-06-17 (vucko Geräte-Video: Standort-Teleport + grundloses Reroute):
+/// Ist dieser GPS-Fix ein physikalisch UNMÖGLICHER Sprung vom letzten guten Fix?
+/// In der Stadt/Schlucht meldet das GPS gelegentlich eine brauchbare Accuracy,
+/// springt aber per Multipath 50–150 m weg. Bisher trieb so ein Ausreißer 1:1 die
+/// Routen-/Off-Route-Logik (→ grundlose „Neuberechnung", obwohl der Fahrer exakt
+/// auf der Linie fuhr — im Video in JEDEM Frame on-route bestätigt) UND über den
+/// Smoother den Puck (→ sichtbarer Teleport). Apple/Google verwerfen solche Fixes.
+///
+/// Hier wird NUR das physikalisch Unmögliche erkannt, damit ein ECHTES Verfahren
+/// (immer mit realem Tempo erreichbar) NIE gefiltert wird. Zwei Bedingungen MÜSSEN
+/// beide gelten:
+///   1. implizites Tempo ([jumpMeters]/[dtSeconds]) über einem TEMPO-RELATIVEN
+///      Deckel `max(speed·[speedFactor]+[speedMarginMps], [hardFloorMps])` — ein
+///      60-m-Sprung ist bei 40 km/h unmöglich, auf der Autobahn bei 140 km/h nicht.
+///   2. der Sprung ist absolut weder durch GPS-Unschärfe noch durch Fahrstrecke
+///      erklärbar: `jump > accuracySlack + fahrstrecke + [minJumpFloorMeters]`.
+/// Lange Lücke (Tunnel, dt > [maxGapSeconds]) oder erster Fix → akzeptieren.
+/// Pur + zahlenbasiert (Distanz reicht der Aufrufer rein), damit unit-testbar.
+bool isImplausibleGpsJump({
+  required double jumpMeters,
+  required double dtSeconds,
+  required double plausibleSpeedMps,
+  required double accuracySlackMeters,
+  double speedFactor = 3.0,
+  double speedMarginMps = 8.0,
+  double hardFloorMps = 28.0,
+  double minJumpFloorMeters = 35.0,
+  double maxGapSeconds = 4.0,
+}) {
+  if (!dtSeconds.isFinite || dtSeconds <= 0 || dtSeconds > maxGapSeconds) {
+    return false;
+  }
+  if (!jumpMeters.isFinite || jumpMeters <= 0) return false;
+  final speed = (plausibleSpeedMps.isFinite && plausibleSpeedMps > 0)
+      ? plausibleSpeedMps
+      : 0.0;
+  final impliedSpeed = jumpMeters / dtSeconds;
+  final speedCeiling = math.max(
+    speed * speedFactor + speedMarginMps,
+    hardFloorMps,
+  );
+  final slack = (accuracySlackMeters.isFinite && accuracySlackMeters > 0)
+      ? accuracySlackMeters
+      : 0.0;
+  final beyondExplainable =
+      jumpMeters > slack + speed * dtSeconds + minJumpFloorMeters;
+  return impliedSpeed > speedCeiling && beyondExplainable;
+}
+
 /// Baut kompakte Telemetrie für einen echten Straßen-Reroute.
 Map<String, dynamic> buildRerouteTelemetry({
   required String rerouteReason,

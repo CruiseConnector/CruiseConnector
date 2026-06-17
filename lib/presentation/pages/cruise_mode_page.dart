@@ -484,6 +484,26 @@ class _CruiseModePageState extends State<CruiseModePage>
   // bei einem einzelnen Fix geblockt.
   int _advanceCapRejects = 0;
 
+  // 2026-06-17 (vucko Geräte-Video: Standort-Teleport + grundloses Reroute):
+  // GPS-Ausreißer-Gate. Letzter als plausibel akzeptierter ROH-Fix + Zähler der
+  // am Stück verworfenen Ausreißer. Ein physikalisch unmöglicher Sprung
+  // (Multipath/Stadt-Schlucht: Accuracy ok, Position springt 50–150 m) wird für
+  // die GESAMTE Logik verworfen → kein Puck-Teleport, kein grundloses Reroute.
+  // Fail-open nach _maxGpsJumpRejects, damit ein ECHTER anhaltender Sprung
+  // (Tunnelausfahrt / GPS-Recovery) nicht einfriert.
+  geo.Position? _lastPlausibleRawFix;
+  int _gpsJumpRejects = 0;
+  static const int _maxGpsJumpRejects = 4;
+
+  // 2026-06-17 (vucko Geräte-Video: Manöver-Distanz friert ein / springt HOCH):
+  // Monotone, sprung-freie Banner-Distanz. _shownManeuverDistM = zuletzt
+  // gezeigter Wert, _shownManeuverSig = Identität des aktiven sichtbaren
+  // Manövers (Routen-Index), _shownManeuverAt = Zeitstempel für die zeit-
+  // normierte Glättung. Siehe monotonicManeuverDistanceMeters.
+  double? _shownManeuverDistM;
+  int? _shownManeuverSig;
+  DateTime? _shownManeuverAt;
+
   // 2026-06-16 (vucko O4): Post-Reroute-Lock-Grace. Nach einem Reroute wird die
   // Lock-On-Grace neu gestartet (Lock zurückgesetzt) und für dieses Fenster die
   // 90s-Grace-Decke ausgesetzt — sonst rastet der Puck sofort wieder „ein" und
@@ -10361,6 +10381,70 @@ class _CruiseModePageState extends State<CruiseModePage>
   Future<void> _onLocationUpdate(geo.Position position) async {
     if (!mounted || _disposed) return;
 
+    // 2026-06-17 (vucko Geräte-Video: Standort teleportiert + grundloses Reroute):
+    // GPS-AUSREISSER-GATE. Physikalisch unmögliche Sprünge (Stadt/Schlucht-
+    // Multipath: Accuracy ok, Position springt 50–150 m weg) trieben bisher 1:1
+    // die Routen-Logik UND (über den Smoother) den Puck → sichtbarer Teleport +
+    // „Neuberechnung", obwohl der Fahrer exakt auf der Linie fuhr (im 22-Agenten-
+    // Video-Audit in JEDEM Navigations-Frame on-route bestätigt; ein Reroute kann
+    // nur feuern, wenn die ROHE Position > Korridor von der GANZEN Route liegt =
+    // genau so ein Ausreißer). Apple/Google verwerfen solche Fixes. Wir halten den
+    // letzten guten Stand — der Puck gleitet per Dead-Reckoning (Smoother-predict)
+    // + Kamera weiter. Höchstens _maxGpsJumpRejects Fixes am Stück verwerfen
+    // (fail-open), damit ein ECHTER anhaltender Sprung (Tunnelausfahrt) nicht
+    // einfriert. Die echte Off-Route-/Reroute-Logik bleibt 1:1 — ein Verfahren ist
+    // immer mit realem Tempo erreichbar, wird also NIE gefiltert.
+    final lastPlausible = _lastPlausibleRawFix;
+    if (lastPlausible != null) {
+      final jumpMeters = geo.Geolocator.distanceBetween(
+        lastPlausible.latitude,
+        lastPlausible.longitude,
+        position.latitude,
+        position.longitude,
+      );
+      final dtSeconds =
+          position.timestamp
+              .difference(lastPlausible.timestamp)
+              .inMilliseconds /
+          1000.0;
+      final plausibleSpeed = math.max(
+        math.max(
+          position.speed.isFinite && position.speed > 0 ? position.speed : 0.0,
+          lastPlausible.speed.isFinite && lastPlausible.speed > 0
+              ? lastPlausible.speed
+              : 0.0,
+        ),
+        _nativeSmoother.speed.isFinite ? _nativeSmoother.speed : 0.0,
+      );
+      final accuracySlack =
+          (position.accuracy.isFinite && position.accuracy > 0
+              ? position.accuracy
+              : 0.0) +
+          (lastPlausible.accuracy.isFinite && lastPlausible.accuracy > 0
+              ? lastPlausible.accuracy
+              : 0.0);
+      if (isImplausibleGpsJump(
+            jumpMeters: jumpMeters,
+            dtSeconds: dtSeconds,
+            plausibleSpeedMps: plausibleSpeed,
+            accuracySlackMeters: accuracySlack,
+          ) &&
+          _gpsJumpRejects < _maxGpsJumpRejects) {
+        _gpsJumpRejects++;
+        if (kDebugMode) {
+          debugPrint(
+            '[gps-jump] Ausreißer verworfen #$_gpsJumpRejects: '
+            'sprung=${jumpMeters.toStringAsFixed(0)}m '
+            'dt=${dtSeconds.toStringAsFixed(1)}s '
+            'acc=${position.accuracy.toStringAsFixed(0)}m',
+          );
+        }
+        return; // Roh-Ausreißer ignorieren: Puck/Kamera laufen per Dead-Reckoning
+      }
+    }
+    _gpsJumpRejects = 0;
+    _lastPlausibleRawFix = position;
+
     // Plattformspezifisches GPS-Smoothing und Heading-Fusion
     geo.Position effectivePosition;
     if (kIsWeb) {
@@ -13161,20 +13245,56 @@ class _CruiseModePageState extends State<CruiseModePage>
   /// bewusst auf dem stabilen Index-Wert.
   double? _displayManeuverDistanceMeters([RouteManeuver? visibleManeuver]) {
     final base = _calculateDistanceToManeuver(visibleManeuver);
-    if (base == null) return null;
+    if (base == null) {
+      _shownManeuverDistM = null;
+      _shownManeuverSig = null;
+      _shownManeuverAt = null;
+      return null;
+    }
     final cum = _routeCumDistM;
-    if (cum == null) return base;
     // 2026-06-17 (vucko Schnellstraße-Freeze, Video): GESAMTEN gleitenden
     // Render-Vorlauf abziehen (keine 80-m-Kappe mehr). Sonst klebte das Banner
     // auf Schnellstraßen (weite Routen-Stützpunkte) beim Index-Wert (~„1,0 km"),
     // während die echte Distanz längst sank. Logik + Tests in
     // nav_distance_format.dart::smoothManeuverDistanceMeters.
-    return smoothManeuverDistanceMeters(
-      base: base,
-      cum: cum,
-      render: _renderLockDistM,
-      currentIndex: _currentRouteIndex,
+    final raw = cum == null
+        ? base
+        : smoothManeuverDistanceMeters(
+            base: base,
+            cum: cum,
+            render: _renderLockDistM,
+            currentIndex: _currentRouteIndex,
+          );
+    // 2026-06-17 (vucko Geräte-Video: Manöver-Distanz friert ein / springt HOCH):
+    // Die Roh-Distanz [raw] sprang am Kreisverkehr/Routenende in groben Stufen
+    // und nach Reroute-/Re-Anchor nach OBEN („10 m → 40 m"). monoton + sprung-frei
+    // anzeigen: innerhalb DESSELBEN Manövers (gleicher Routen-Index) nie hoch,
+    // grobe Stufen weich runter; bei echtem neuem Manöver auf den neuen Wert
+    // snappen. Idempotent bei Mehrfach-Aufruf im selben Frame.
+    final sig =
+        (visibleManeuver ?? _activeVisibleManeuver())?.routeIndex ??
+        _activeManeuverIndex;
+    final now = DateTime.now();
+    final sameManeuver = _shownManeuverSig == sig;
+    final lastAt = _shownManeuverAt;
+    if (sameManeuver &&
+        _shownManeuverDistM != null &&
+        lastAt != null &&
+        now.difference(lastAt).inMilliseconds < 16) {
+      return _shownManeuverDistM;
+    }
+    final shown = monotonicManeuverDistanceMeters(
+      prevShown: sameManeuver ? _shownManeuverDistM : null,
+      target: raw,
+      maneuverChanged: !sameManeuver,
+      dtMs: (!sameManeuver || lastAt == null)
+          ? 90
+          : now.difference(lastAt).inMilliseconds,
     );
+    _shownManeuverSig = sig;
+    _shownManeuverDistM = shown;
+    _shownManeuverAt = now;
+    return shown;
   }
 
   void _updateActiveManeuver() {
