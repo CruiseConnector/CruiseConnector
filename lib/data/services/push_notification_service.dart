@@ -122,6 +122,13 @@ class PushNotificationService {
 
   Future<void> _registerToken() async {
     try {
+      // iOS: FirebaseMessaging.getToken() liefert null, solange Apple den
+      // APNS-Token noch nicht gesetzt hat (die Registrierung läuft async nach
+      // App-Start). Ohne dieses Warten registriert sich das Gerät beim ersten
+      // Start gar nicht — der FCM-Token käme erst verzögert über onTokenRefresh.
+      if (defaultTargetPlatform == TargetPlatform.iOS) {
+        await _awaitApnsToken();
+      }
       final token = await FirebaseMessaging.instance.getToken();
       if (token != null && token.isNotEmpty) {
         await _saveToken(token);
@@ -129,6 +136,22 @@ class PushNotificationService {
     } catch (e) {
       debugPrint('[Push] getToken failed: $e');
     }
+  }
+
+  /// iOS: bis zu ~5s auf den APNS-Token warten (Apples Registrierung ist async).
+  /// Solange er null ist, gibt [FirebaseMessaging.getToken] auf iOS null zurück.
+  Future<void> _awaitApnsToken() async {
+    for (var i = 0; i < 10; i++) {
+      try {
+        final apns = await FirebaseMessaging.instance.getAPNSToken();
+        if (apns != null && apns.isNotEmpty) return;
+      } catch (_) {
+        // noch nicht bereit → erneut versuchen
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+    }
+    debugPrint('[Push] APNS-Token nach Wartezeit noch null — '
+        'getToken() könnte null liefern (Registrierung evtl. verzögert)');
   }
 
   Future<void> _saveToken(String token) async {

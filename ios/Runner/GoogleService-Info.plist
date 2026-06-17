@@ -9,7 +9,7 @@
 	<key>PLIST_VERSION</key>
 	<string>1</string>
 	<key>BUNDLE_ID</key>
-	<string>com.example.cruiseConnect</string>
+	<string>com.vucko.cruiserconnect</string>
 	<key>PROJECT_ID</key>
 	<string>cruise-connect-a1772</string>
 	<key>STORAGE_BUCKET</key>
@@ -25,6 +25,6 @@
 	<key>IS_SIGNIN_ENABLED</key>
 	<true></true>
 	<key>GOOGLE_APP_ID</key>
-	<string>1:643677007260:ios:f1c5d37b5fca499bb76c59</string>
+	<string>1:643677007260:ios:805b15ff4dde7131b76c59</string>
 </dict>
 </plist>

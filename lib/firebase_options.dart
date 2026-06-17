@@ -5,10 +5,12 @@
 // da `flutterfire configure` interaktiv/CLI-Login braucht. Wird ausschließlich
 // auf Android + iOS verwendet (Plattform-Guard in main.dart / PushNotificationService).
 //
-// HINWEIS iOS: iosBundleId ist aktuell der Firebase-Default-Platzhalter
-// (com.example.cruiseConnect). Stimmt das nicht mit der echten iOS-Bundle-ID
-// überein, muss in der Firebase Console eine iOS-App mit der korrekten Bundle-ID
-// angelegt und diese Werte aktualisiert werden (siehe Setup-Doku).
+// 2026-06-17 (vucko): iOS-App auf die ECHTE Bundle-ID umgestellt
+// (com.vucko.cruiserconnect, GOOGLE_APP_ID …ios:805b15ff…). Vorher stand hier
+// noch der Firebase-Default-Platzhalter com.example.cruiseConnect — dadurch
+// registrierte sich das Gerät unter der falschen iOS-App und APNs wies jeden
+// Push wegen falschem apns-topic ab. Werte synchron zur neuen
+// ios/Runner/GoogleService-Info.plist.
 
 import 'package:firebase_core/firebase_core.dart' show FirebaseOptions;
 import 'package:flutter/foundation.dart'
@@ -43,10 +45,10 @@ class DefaultFirebaseOptions {
 
   static const FirebaseOptions ios = FirebaseOptions(
     apiKey: 'AIzaSyBnG4JDcppSoWYZd35Wdvf8ESGSeB18vJs',
-    appId: '1:643677007260:ios:f1c5d37b5fca499bb76c59',
+    appId: '1:643677007260:ios:805b15ff4dde7131b76c59',
     messagingSenderId: '643677007260',
     projectId: 'cruise-connect-a1772',
     storageBucket: 'cruise-connect-a1772.firebasestorage.app',
-    iosBundleId: 'com.example.cruiseConnect',
+    iosBundleId: 'com.vucko.cruiserconnect',
   );
 }
