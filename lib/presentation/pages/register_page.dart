@@ -230,6 +230,9 @@ class _RegisterPageState extends State<RegisterPage> {
     if (m.contains('abgebrochen') || m.contains('cancel')) {
       return 'Anmeldung abgebrochen.';
     }
+    if (m.contains('google login ist noch nicht konfiguriert')) {
+      return 'Google Login ist noch nicht fertig konfiguriert.';
+    }
     if (m.contains('apple') && m.contains('nicht verfuegbar')) {
       return 'Apple Anmeldung ist auf diesem Geraet nicht verfuegbar.';
     }

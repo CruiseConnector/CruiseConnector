@@ -75,10 +75,25 @@ class AuthService {
   /// Supabase OAuth mit Redirect zurueck.
   static Future<void> signInWithGoogle() async {
     final webClientId = AppConstants.googleWebClientId.trim();
-    final canUseNative =
+    final iosClientId = AppConstants.googleIosClientId.trim();
+    final onMobile =
         !kIsWeb &&
-        webClientId.isNotEmpty &&
-        GoogleSignIn.instance.supportsAuthenticate();
+        (defaultTargetPlatform == TargetPlatform.android ||
+            defaultTargetPlatform == TargetPlatform.iOS);
+    final onIos = !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS;
+
+    if (onMobile && webClientId.isEmpty) {
+      throw const AuthException(
+        'Google Login ist noch nicht konfiguriert (Web Client ID fehlt).',
+      );
+    }
+    if (onIos && iosClientId.isEmpty) {
+      throw const AuthException(
+        'Google Login ist noch nicht konfiguriert (iOS Client ID fehlt).',
+      );
+    }
+    final canUseNative =
+        onMobile && GoogleSignIn.instance.supportsAuthenticate();
 
     if (!canUseNative) {
       await _startOAuthSignIn(OAuthProvider.google, scopes: 'email profile');

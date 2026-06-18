@@ -45,6 +45,8 @@ enum _HomeWidgetId {
 
 enum _DashboardWidgetSize { small, large }
 
+enum _DashboardDropIntent { before, after, merge }
+
 class _HomeWidgetMeta {
   const _HomeWidgetMeta({
     required this.id,
@@ -134,6 +136,34 @@ class _HomeWidgetDragPayload {
   final String itemKey;
 }
 
+class _DashboardDropPreview {
+  const _DashboardDropPreview({
+    required this.sourceKey,
+    required this.targetKey,
+    required this.intent,
+  });
+
+  final String sourceKey;
+  final String targetKey;
+  final _DashboardDropIntent intent;
+
+  bool matches(_DashboardDropPreview other) {
+    return sourceKey == other.sourceKey &&
+        targetKey == other.targetKey &&
+        intent == other.intent;
+  }
+}
+
+class _DashboardLayoutEntry {
+  const _DashboardLayoutEntry.item(this.item) : preview = null;
+  const _DashboardLayoutEntry.preview(this.item, this.preview);
+
+  final _HomeDashboardItem item;
+  final _DashboardDropPreview? preview;
+
+  bool get isPreview => preview != null;
+}
+
 class _BadgeGoal {
   const _BadgeGoal({
     required this.badge,
@@ -208,6 +238,9 @@ class _HomeContentPageState extends State<HomeContentPage>
   late final AnimationController _shimmerController;
   static const String _dashboardPrefsKey = 'home_dashboard_layout_v1';
   static const String _badgeHuntPrefsKey = 'home_badge_hunt_id_v1';
+  static const double _dashboardGap = 12;
+  static const double _dashboardHalfTileHeight = 184;
+  static const double _dashboardFolderFullHeight = 300;
   final Map<String, PageController> _folderControllers = {};
   final Map<String, int> _folderPages = {};
   List<_HomeDashboardItem> _dashboardItems = _defaultDashboardItems();
@@ -216,6 +249,8 @@ class _HomeContentPageState extends State<HomeContentPage>
   bool _showLegacyHomeBodyForDebug = false;
   String? _recentlyChangedItemKey;
   String? _activeDropTargetKey;
+  String? _draggingDashboardItemKey;
+  _DashboardDropPreview? _dropPreview;
   int _dashboardItemSerial = 0;
 
   static List<_HomeDashboardItem> _defaultDashboardItems() => const [
@@ -649,6 +684,31 @@ class _HomeContentPageState extends State<HomeContentPage>
     final sourceKey = payload.itemKey;
     if (sourceKey == target.key) return;
 
+    final intent = _resolveDashboardDropIntent(
+      payload,
+      target,
+      localOffset: localOffset,
+      size: size,
+    );
+    if (intent == _DashboardDropIntent.before) {
+      _moveDashboardItemBeside(sourceKey, target.key, after: false);
+    } else if (intent == _DashboardDropIntent.after) {
+      _moveDashboardItemBeside(sourceKey, target.key, after: true);
+    } else if (intent == _DashboardDropIntent.merge) {
+      final merged = _mergeDashboardItems(sourceKey, target.key);
+      if (!merged) {
+        _moveDashboardItemBeside(sourceKey, target.key, after: true);
+      }
+    }
+  }
+
+  _DashboardDropIntent? _resolveDashboardDropIntent(
+    _HomeWidgetDragPayload payload,
+    _HomeDashboardItem target, {
+    Offset? localOffset,
+    Size? size,
+  }) {
+    if (!_canAcceptOnItem(payload, target)) return null;
     if (localOffset != null && size != null) {
       final edgeX = size.width * 0.24;
       final edgeY = size.height * 0.22;
@@ -657,19 +717,107 @@ class _HomeContentPageState extends State<HomeContentPage>
       final after =
           localOffset.dx >= size.width - edgeX ||
           localOffset.dy >= size.height - math.max(24, edgeY);
-      if (before || after) {
-        _moveDashboardItemBeside(sourceKey, target.key, after: after);
-        return;
-      }
+      if (before) return _DashboardDropIntent.before;
+      if (after) return _DashboardDropIntent.after;
     }
+    if (_canMergeOnItem(payload, target)) return _DashboardDropIntent.merge;
+    final after = localOffset != null && size != null
+        ? localOffset.dx >= size.width / 2
+        : true;
+    return after ? _DashboardDropIntent.after : _DashboardDropIntent.before;
+  }
 
-    final merged = _mergeDashboardItems(sourceKey, target.key);
-    if (!merged) {
-      final after = localOffset != null && size != null
-          ? localOffset.dx >= size.width / 2
-          : true;
-      _moveDashboardItemBeside(sourceKey, target.key, after: after);
+  void _updateDashboardDropPreview(
+    _HomeWidgetDragPayload payload,
+    _HomeDashboardItem target, {
+    Offset? localOffset,
+    Size? size,
+  }) {
+    final intent = _resolveDashboardDropIntent(
+      payload,
+      target,
+      localOffset: localOffset,
+      size: size,
+    );
+    if (intent == null) return;
+    _setDashboardDropPreview(
+      _DashboardDropPreview(
+        sourceKey: payload.itemKey,
+        targetKey: target.key,
+        intent: intent,
+      ),
+    );
+  }
+
+  void _updateDashboardSlotDropPreview(
+    _HomeWidgetDragPayload payload,
+    String afterKey,
+  ) {
+    if (!_canAcceptInEmptySlot(payload, afterKey)) return;
+    _setDashboardDropPreview(
+      _DashboardDropPreview(
+        sourceKey: payload.itemKey,
+        targetKey: afterKey,
+        intent: _DashboardDropIntent.after,
+      ),
+    );
+  }
+
+  void _setDashboardDropPreview(_DashboardDropPreview preview) {
+    final current = _dropPreview;
+    if (current != null &&
+        current.matches(preview) &&
+        _activeDropTargetKey == preview.targetKey) {
+      return;
     }
+    setState(() {
+      _dropPreview = preview;
+      _activeDropTargetKey = preview.targetKey;
+    });
+  }
+
+  void _clearDashboardDragState() {
+    if (_draggingDashboardItemKey == null &&
+        _activeDropTargetKey == null &&
+        _dropPreview == null) {
+      return;
+    }
+    setState(() {
+      _draggingDashboardItemKey = null;
+      _activeDropTargetKey = null;
+      _dropPreview = null;
+    });
+  }
+
+  void _commitDashboardDropPreview(_DashboardDropPreview preview) {
+    if (mounted) {
+      setState(() {
+        _draggingDashboardItemKey = null;
+        _activeDropTargetKey = null;
+        _dropPreview = null;
+      });
+    }
+    if (preview.intent == _DashboardDropIntent.before) {
+      _moveDashboardItemBeside(
+        preview.sourceKey,
+        preview.targetKey,
+        after: false,
+      );
+    } else if (preview.intent == _DashboardDropIntent.after) {
+      _moveDashboardItemBeside(
+        preview.sourceKey,
+        preview.targetKey,
+        after: true,
+      );
+    } else {
+      _mergeDashboardItems(preview.sourceKey, preview.targetKey);
+    }
+  }
+
+  bool _canAcceptInEmptySlot(_HomeWidgetDragPayload? payload, String afterKey) {
+    if (payload == null || payload.itemKey == afterKey) return false;
+    return _dashboardItemByKey(payload.itemKey) != null &&
+        _dashboardItemByKey(afterKey) != null;
   }
 
   bool _mergeDashboardItems(String sourceKey, String targetKey) {
@@ -1821,37 +1969,119 @@ class _HomeContentPageState extends State<HomeContentPage>
     _removeDashboardItem(key, id);
   }
 
+  List<_DashboardLayoutEntry> _normalDashboardEntries() {
+    return [
+      for (final item in _dashboardItems) _DashboardLayoutEntry.item(item),
+    ];
+  }
+
+  _HomeDashboardItem? _dashboardItemByKey(String key) {
+    for (final item in _dashboardItems) {
+      if (item.key == key) return item;
+    }
+    return null;
+  }
+
+  List<_DashboardLayoutEntry> _dashboardLayoutEntries() {
+    final preview = _dropPreview;
+    if (preview == null) return _normalDashboardEntries();
+
+    final sourceIndex = _dashboardItems.indexWhere(
+      (item) => item.key == preview.sourceKey,
+    );
+    final targetIndex = _dashboardItems.indexWhere(
+      (item) => item.key == preview.targetKey,
+    );
+    if (sourceIndex < 0 || targetIndex < 0 || sourceIndex == targetIndex) {
+      return _normalDashboardEntries();
+    }
+
+    final source = _dashboardItems[sourceIndex];
+    final target = _dashboardItems[targetIndex];
+
+    if (preview.intent == _DashboardDropIntent.merge) {
+      if (!_canFolder(target.widgetIds, source.widgetIds)) {
+        return _normalDashboardEntries();
+      }
+      final mergedIds = <_HomeWidgetId>[
+        ...target.widgetIds,
+        ...source.widgetIds.where((id) => !target.widgetIds.contains(id)),
+      ];
+      final mergedSize = _validSizeFor(
+        mergedIds,
+        target.size == _DashboardWidgetSize.large ||
+                source.size == _DashboardWidgetSize.large
+            ? _DashboardWidgetSize.large
+            : _DashboardWidgetSize.small,
+      );
+      final entries = <_DashboardLayoutEntry>[];
+      for (final item in _dashboardItems) {
+        if (item.key == preview.sourceKey) continue;
+        if (item.key == preview.targetKey) {
+          entries.add(
+            _DashboardLayoutEntry.preview(
+              item.copyWith(widgetIds: mergedIds, size: mergedSize),
+              preview,
+            ),
+          );
+          continue;
+        }
+        entries.add(_DashboardLayoutEntry.item(item));
+      }
+      return entries;
+    }
+
+    final itemsWithoutSource = [..._dashboardItems]..removeAt(sourceIndex);
+    var insertIndex =
+        targetIndex + (preview.intent == _DashboardDropIntent.after ? 1 : 0);
+    if (sourceIndex < insertIndex) insertIndex -= 1;
+    insertIndex = insertIndex.clamp(0, itemsWithoutSource.length).toInt();
+
+    final entries = <_DashboardLayoutEntry>[];
+    for (var index = 0; index <= itemsWithoutSource.length; index++) {
+      if (index == insertIndex) {
+        entries.add(_DashboardLayoutEntry.preview(source, preview));
+      }
+      if (index < itemsWithoutSource.length) {
+        entries.add(_DashboardLayoutEntry.item(itemsWithoutSource[index]));
+      }
+    }
+    return entries;
+  }
+
   Widget _buildDashboard() {
     return LayoutBuilder(
       builder: (context, constraints) {
         final maxWidth = constraints.maxWidth;
-        final useOneColumn = maxWidth < 360;
+        final useOneColumn = maxWidth < 300;
+        final entries = _dashboardLayoutEntries();
 
         if (_dashboardItems.isEmpty) {
           return _buildEmptyDashboard();
         }
 
         final blocks = <Widget>[];
-        final pendingSmall = <_HomeDashboardItem>[];
+        final pendingSmall = <_DashboardLayoutEntry>[];
 
         void flushSmall() {
           if (pendingSmall.isEmpty) return;
           blocks.add(
             _buildDashboardSmallCluster(
-              List<_HomeDashboardItem>.from(pendingSmall),
+              List<_DashboardLayoutEntry>.from(pendingSmall),
               useOneColumn: useOneColumn,
             ),
           );
           pendingSmall.clear();
         }
 
-        for (final item in _dashboardItems) {
+        for (final entry in entries) {
+          final item = entry.item;
           if (useOneColumn || item.size == _DashboardWidgetSize.large) {
             flushSmall();
-            blocks.add(_buildDashboardCell(item));
+            blocks.add(_buildDashboardEntry(entry));
             continue;
           }
-          pendingSmall.add(item);
+          pendingSmall.add(entry);
         }
         flushSmall();
 
@@ -1863,7 +2093,8 @@ class _HomeContentPageState extends State<HomeContentPage>
             children: [
               for (var index = 0; index < blocks.length; index++) ...[
                 blocks[index],
-                if (index < blocks.length - 1) const SizedBox(height: 14),
+                if (index < blocks.length - 1)
+                  const SizedBox(height: _dashboardGap),
               ],
             ],
           ),
@@ -1873,48 +2104,61 @@ class _HomeContentPageState extends State<HomeContentPage>
   }
 
   Widget _buildDashboardSmallCluster(
-    List<_HomeDashboardItem> items, {
+    List<_DashboardLayoutEntry> entries, {
     required bool useOneColumn,
   }) {
-    const spacing = 12.0;
-    if (useOneColumn || items.length == 1) {
+    if (useOneColumn) {
       return Column(
         children: [
-          for (var index = 0; index < items.length; index++) ...[
-            _buildDashboardCell(items[index]),
-            if (index < items.length - 1) const SizedBox(height: 14),
+          for (var index = 0; index < entries.length; index++) ...[
+            _buildDashboardEntry(entries[index]),
+            if (index < entries.length - 1)
+              const SizedBox(height: _dashboardGap),
           ],
         ],
       );
     }
 
-    final columns = <List<_HomeDashboardItem>>[[], []];
-    final heights = <double>[0, 0];
-    for (final item in items) {
-      final columnIndex = heights[0] <= heights[1] ? 0 : 1;
-      columns[columnIndex].add(item);
-      heights[columnIndex] += _dashboardItemHeight(item) + 14;
-    }
-
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
+    return Column(
       children: [
-        Expanded(child: _buildDashboardSmallColumn(columns[0])),
-        const SizedBox(width: spacing),
-        Expanded(child: _buildDashboardSmallColumn(columns[1])),
+        for (var index = 0; index < entries.length; index += 2) ...[
+          _buildDashboardHalfRow(
+            first: entries[index],
+            second: index + 1 < entries.length ? entries[index + 1] : null,
+          ),
+          if (index + 2 < entries.length) const SizedBox(height: _dashboardGap),
+        ],
       ],
     );
   }
 
-  Widget _buildDashboardSmallColumn(List<_HomeDashboardItem> items) {
-    return Column(
-      children: [
-        for (var itemIndex = 0; itemIndex < items.length; itemIndex++) ...[
-          _buildDashboardCell(items[itemIndex]),
-          if (itemIndex < items.length - 1) const SizedBox(height: 14),
+  Widget _buildDashboardHalfRow({
+    required _DashboardLayoutEntry first,
+    _DashboardLayoutEntry? second,
+  }) {
+    return SizedBox(
+      height: _dashboardHalfTileHeight,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Expanded(child: _buildDashboardEntry(first)),
+          const SizedBox(width: _dashboardGap),
+          Expanded(
+            child: second == null
+                ? _buildDashboardEmptyHalfSlot(afterKey: first.item.key)
+                : _buildDashboardEntry(second),
+          ),
         ],
-      ],
+      ),
     );
+  }
+
+  Widget _buildDashboardEntry(_DashboardLayoutEntry entry) {
+    final preview = entry.preview;
+    if (preview != null) {
+      return _buildDashboardPreviewCell(entry.item, preview);
+    }
+    return _buildDashboardCell(entry.item);
   }
 
   Widget _buildDashboardEditHint() {
@@ -2031,44 +2275,181 @@ class _HomeContentPageState extends State<HomeContentPage>
   }
 
   double _dashboardItemHeight(_HomeDashboardItem item) {
-    if (item.size == _DashboardWidgetSize.large) {
-      return item.isFolder ? 320 : 0;
+    if (item.size == _DashboardWidgetSize.small) {
+      return _dashboardHalfTileHeight;
     }
-    if (item.isFolder) return 244;
-
-    switch (item.widgetIds.first) {
-      case _HomeWidgetId.community:
-      case _HomeWidgetId.weekly:
-        return 244;
-      case _HomeWidgetId.monthly:
-        return 190;
-      case _HomeWidgetId.badgeHunt:
-      case _HomeWidgetId.totals:
-        return 178;
-      case _HomeWidgetId.xp:
-        return 180;
-      case _HomeWidgetId.quickStart:
-        return 176;
-      case _HomeWidgetId.savedRoutes:
-        return 150;
-      case _HomeWidgetId.profile:
-        return 136;
-      case _HomeWidgetId.streak:
-        return 104;
-      case _HomeWidgetId.todayRoute:
-        return 0;
-    }
+    return item.isFolder ? _dashboardFolderFullHeight : 0;
   }
 
-  Widget _buildDashboardCell(_HomeDashboardItem item) {
-    final recentlyChanged = _recentlyChangedItemKey == item.key;
+  Widget _buildDashboardSizedContent(_HomeDashboardItem item) {
     final content = item.isFolder
         ? _buildFolderCard(item)
         : _buildSingleDashboardWidget(item.widgetIds.first, item.size);
     final height = _dashboardItemHeight(item);
-    final preview = height > 0
-        ? SizedBox(height: height, child: content)
-        : content;
+    return height > 0 ? SizedBox(height: height, child: content) : content;
+  }
+
+  Widget _buildDashboardPreviewCell(
+    _HomeDashboardItem item,
+    _DashboardDropPreview preview,
+  ) {
+    final content = _buildDashboardSizedContent(item);
+    final label = preview.intent == _DashboardDropIntent.merge
+        ? 'Ordner-Vorschau'
+        : 'Landet hier';
+
+    return DragTarget<_HomeWidgetDragPayload>(
+      onWillAcceptWithDetails: (details) {
+        return details.data.itemKey == preview.sourceKey;
+      },
+      onMove: (_) => _setDashboardDropPreview(preview),
+      onAcceptWithDetails: (_) => _commitDashboardDropPreview(preview),
+      builder: (context, candidates, rejected) {
+        final active =
+            candidates.isNotEmpty || (_dropPreview?.matches(preview) ?? false);
+        return AnimatedScale(
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOutCubic,
+          scale: active ? 1.015 : 1.0,
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 180),
+                curve: Curves.easeOutCubic,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(24),
+                  border: Border.all(
+                    color: AppAccentColors.accent.withValues(alpha: 0.72),
+                    width: 1.7,
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: AppAccentColors.accent.withValues(alpha: 0.20),
+                      blurRadius: 24,
+                      offset: const Offset(0, 10),
+                    ),
+                  ],
+                ),
+                child: IgnorePointer(
+                  child: Opacity(
+                    opacity: preview.intent == _DashboardDropIntent.merge
+                        ? 0.88
+                        : 0.68,
+                    child: content,
+                  ),
+                ),
+              ),
+              Positioned(
+                right: 10,
+                top: -10,
+                child: _buildDropPreviewBadge(label),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildDashboardEmptyHalfSlot({required String afterKey}) {
+    final visible = _customizingDashboard || _draggingDashboardItemKey != null;
+    final active =
+        _dropPreview?.targetKey == afterKey &&
+        _dropPreview?.intent == _DashboardDropIntent.after;
+
+    return DragTarget<_HomeWidgetDragPayload>(
+      onWillAcceptWithDetails: (details) {
+        final canAccept = _canAcceptInEmptySlot(details.data, afterKey);
+        if (canAccept) {
+          setState(() => _activeDropTargetKey = afterKey);
+        }
+        return canAccept;
+      },
+      onMove: (details) =>
+          _updateDashboardSlotDropPreview(details.data, afterKey),
+      onLeave: (_) {
+        if (_activeDropTargetKey == afterKey) {
+          setState(() => _activeDropTargetKey = null);
+        }
+      },
+      onAcceptWithDetails: (details) {
+        final preview = _DashboardDropPreview(
+          sourceKey: details.data.itemKey,
+          targetKey: afterKey,
+          intent: _DashboardDropIntent.after,
+        );
+        _commitDashboardDropPreview(preview);
+      },
+      builder: (context, candidates, rejected) {
+        final isHighlighted = active || candidates.isNotEmpty;
+        return AnimatedOpacity(
+          duration: const Duration(milliseconds: 180),
+          opacity: visible || isHighlighted ? 1 : 0,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            curve: Curves.easeOutCubic,
+            decoration: BoxDecoration(
+              color: isHighlighted
+                  ? AppAccentColors.accent.withValues(alpha: 0.12)
+                  : Colors.white.withValues(alpha: 0.035),
+              borderRadius: BorderRadius.circular(22),
+              border: Border.all(
+                color: isHighlighted
+                    ? AppAccentColors.accent.withValues(alpha: 0.58)
+                    : Colors.white.withValues(alpha: 0.08),
+              ),
+            ),
+            child: Center(
+              child: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 150),
+                child: isHighlighted
+                    ? _buildDropPreviewBadge('Hier loslassen')
+                    : Icon(
+                        Icons.add_rounded,
+                        key: const ValueKey('empty-slot-icon'),
+                        color: Colors.white.withValues(alpha: 0.34),
+                        size: 24,
+                      ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildDropPreviewBadge(String label) {
+    return Container(
+      key: ValueKey(label),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      decoration: BoxDecoration(
+        color: const Color(0xFF090B10).withValues(alpha: 0.90),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.28),
+            blurRadius: 14,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: Text(
+        label,
+        maxLines: 1,
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 10.5,
+          fontWeight: FontWeight.w900,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDashboardCell(_HomeDashboardItem item) {
+    final recentlyChanged = _recentlyChangedItemKey == item.key;
+    final content = _buildDashboardSizedContent(item);
     final targetKey = GlobalKey();
 
     final target = DragTarget<_HomeWidgetDragPayload>(
@@ -2077,17 +2458,32 @@ class _HomeContentPageState extends State<HomeContentPage>
         if (canAccept) setState(() => _activeDropTargetKey = item.key);
         return canAccept;
       },
+      onMove: (details) {
+        final renderBox =
+            targetKey.currentContext?.findRenderObject() as RenderBox?;
+        final localOffset = renderBox?.globalToLocal(details.offset);
+        final size = renderBox?.size;
+        _updateDashboardDropPreview(
+          details.data,
+          item,
+          localOffset: localOffset,
+          size: size,
+        );
+      },
       onLeave: (_) {
         if (_activeDropTargetKey == item.key) {
           setState(() => _activeDropTargetKey = null);
         }
       },
       onAcceptWithDetails: (details) {
-        setState(() => _activeDropTargetKey = null);
         final renderBox =
             targetKey.currentContext?.findRenderObject() as RenderBox?;
         final localOffset = renderBox?.globalToLocal(details.offset);
         final size = renderBox?.size;
+        setState(() {
+          _activeDropTargetKey = null;
+          _dropPreview = null;
+        });
         _handleDropOnDashboardItem(
           details.data,
           item,
@@ -2134,7 +2530,7 @@ class _HomeContentPageState extends State<HomeContentPage>
                         ]
                       : const [],
                 ),
-                child: preview,
+                child: content,
               ),
               if (active && _customizingDashboard)
                 Positioned.fill(
@@ -2193,14 +2589,16 @@ class _HomeContentPageState extends State<HomeContentPage>
       childWhenDragging: Opacity(opacity: 0.38, child: target),
       onDragStarted: () {
         HapticFeedback.selectionClick();
-        if (!_customizingDashboard) {
-          setState(() => _customizingDashboard = true);
-        }
+        setState(() {
+          _draggingDashboardItemKey = item.key;
+          _dropPreview = null;
+          if (!_customizingDashboard) {
+            _customizingDashboard = true;
+          }
+        });
       },
       onDragEnd: (_) {
-        if (_activeDropTargetKey != null && mounted) {
-          setState(() => _activeDropTargetKey = null);
-        }
+        if (mounted) _clearDashboardDragState();
       },
       child: target,
     );
@@ -2229,9 +2627,11 @@ class _HomeContentPageState extends State<HomeContentPage>
     _HomeDashboardItem target,
   ) {
     if (payload == null || payload.itemKey == target.key) return false;
+    final currentTarget = _dashboardItemByKey(target.key);
+    if (currentTarget == null) return false;
     for (final item in _dashboardItems) {
       if (item.key == payload.itemKey) {
-        return _canFolder(target.widgetIds, item.widgetIds);
+        return _canFolder(currentTarget.widgetIds, item.widgetIds);
       }
     }
     return false;
@@ -2352,7 +2752,9 @@ class _HomeContentPageState extends State<HomeContentPage>
         return _buildSuggestedRouteSection();
       case _HomeWidgetId.community:
         return SizedBox(
-          height: size == _DashboardWidgetSize.large ? 288 : 244,
+          height: size == _DashboardWidgetSize.large
+              ? 288
+              : _dashboardHalfTileHeight,
           child: CommunityCarouselCard(
             onOpenCommunity: () => widget.onTabChange?.call(1),
           ),
@@ -2362,7 +2764,9 @@ class _HomeContentPageState extends State<HomeContentPage>
           behavior: HitTestBehavior.opaque,
           onTap: () => widget.onTabChange?.call(3),
           child: SizedBox(
-            height: size == _DashboardWidgetSize.large ? 280 : 244,
+            height: size == _DashboardWidgetSize.large
+                ? 280
+                : _dashboardHalfTileHeight,
             child: _buildWeeklyActivityCard(),
           ),
         );
@@ -2392,7 +2796,9 @@ class _HomeContentPageState extends State<HomeContentPage>
       item.key,
       () => PageController(),
     );
-    final height = item.size == _DashboardWidgetSize.large ? 320.0 : 244.0;
+    final height = item.size == _DashboardWidgetSize.large
+        ? _dashboardFolderFullHeight
+        : _dashboardHalfTileHeight;
     return Container(
       height: height,
       decoration: _dashboardCardDecoration(),
@@ -2958,7 +3364,9 @@ class _HomeContentPageState extends State<HomeContentPage>
 
   Widget _buildMonthlyActivityWidget(_DashboardWidgetSize size) {
     final maxKm = _monthlyWeekKmData.fold<double>(0, math.max);
-    final height = size == _DashboardWidgetSize.large ? 254.0 : 190.0;
+    final height = size == _DashboardWidgetSize.large
+        ? 254.0
+        : _dashboardHalfTileHeight;
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: () => widget.onTabChange?.call(3),
@@ -3063,7 +3471,9 @@ class _HomeContentPageState extends State<HomeContentPage>
 
   Widget _buildBadgeHuntWidget(_DashboardWidgetSize size) {
     final goal = _selectedBadgeGoal() ?? _recommendedBadgeGoal();
-    final height = size == _DashboardWidgetSize.large ? 230.0 : 178.0;
+    final height = size == _DashboardWidgetSize.large
+        ? 230.0
+        : _dashboardHalfTileHeight;
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: _openBadgeHuntPicker,
@@ -3175,7 +3585,9 @@ class _HomeContentPageState extends State<HomeContentPage>
   }
 
   Widget _buildTotalsWidget(_DashboardWidgetSize size) {
-    final height = size == _DashboardWidgetSize.large ? 230.0 : 178.0;
+    final height = size == _DashboardWidgetSize.large
+        ? 230.0
+        : _dashboardHalfTileHeight;
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: () => widget.onTabChange?.call(3),
