@@ -462,6 +462,100 @@ bool isImplausibleGpsJump({
   return impliedSpeed > speedCeiling && beyondExplainable;
 }
 
+/// Kontinuierliche Routenmeter eines Matches. Wenn der Matcher auf ein Segment
+/// projiziert hat, gewinnt die echte Segment-Fraktion gegenüber dem diskreten
+/// Vertex-Index. Genau dort entstehen sonst sichtbare "Vorsprünge" auf langen
+/// GraphHopper-Segmenten: fraction 0.51 würde bereits den naechsten Vertex als
+/// Index setzen, obwohl der Puck erst knapp über die Segmentmitte gefahren ist.
+double routeDistanceForMatchMeters({
+  required List<double> cumulativeDistances,
+  required RouteWindowMatch match,
+}) {
+  if (cumulativeDistances.isEmpty) return 0.0;
+  final segmentIndex = match.segmentIndex;
+  final fraction = match.segmentFraction;
+  if (segmentIndex != null &&
+      fraction != null &&
+      segmentIndex >= 0 &&
+      segmentIndex + 1 < cumulativeDistances.length) {
+    final f = fraction.clamp(0.0, 1.0).toDouble();
+    return cumulativeDistances[segmentIndex] +
+        (cumulativeDistances[segmentIndex + 1] -
+                cumulativeDistances[segmentIndex]) *
+            f;
+  }
+  final idx = match.index.clamp(0, cumulativeDistances.length - 1).toInt();
+  return cumulativeDistances[idx];
+}
+
+/// Diskreter Fortschritts-Index, der nie vor die echte Segmentprojektion springt.
+///
+/// Der bisherige repIdx (`fraction >= 0.5 ? i+1 : i`) war für "welcher Vertex ist
+/// naeher" sinnvoll, aber als Navigations-Fortschritt zu aggressiv: Auf einem
+/// 180-m-Segment lag der Index bis zu ~90 m vor dem Fahrzeug. Darum wird der
+/// naechste Vertex erst kurz vor Segmentende committed.
+int stableRouteIndexForMatch({
+  required RouteWindowMatch match,
+  required int currentIndex,
+  double commitNextVertexFraction = 0.92,
+}) {
+  final segmentIndex = match.segmentIndex;
+  final fraction = match.segmentFraction;
+  if (segmentIndex == null || fraction == null) {
+    return math.max(currentIndex, match.index);
+  }
+  final f = fraction.clamp(0.0, 1.0).toDouble();
+  final candidate = f >= commitNextVertexFraction
+      ? segmentIndex + 1
+      : segmentIndex;
+  return math.max(currentIndex, candidate);
+}
+
+double plausibleRouteAdvanceLimitMeters({
+  required double elapsedSeconds,
+  required double speedMps,
+  required double accuracyMeters,
+  double speedFactor = 2.2,
+  double slackMeters = 35.0,
+  double minLimitMeters = 60.0,
+  double maxAccuracySlackMeters = 35.0,
+}) {
+  final dt = elapsedSeconds.isFinite && elapsedSeconds > 0
+      ? elapsedSeconds
+      : 0.0;
+  final speed = speedMps.isFinite && speedMps > 0 ? speedMps : 0.0;
+  final accuracySlack = accuracyMeters.isFinite && accuracyMeters > 0
+      ? math.min(accuracyMeters, maxAccuracySlackMeters)
+      : 0.0;
+  return math.max(
+    minLimitMeters,
+    speed * speedFactor * dt + slackMeters + accuracySlack,
+  );
+}
+
+/// Plausibilitaets-Gate fuer Fortschritt entlang der Route.
+///
+/// Wichtig: Das ist NICHT Off-Route/Reroute-Logik. Es verhindert nur, dass ein
+/// nahe liegender Zukunfts-Ast oder ein langer Segment-Vertex den
+/// Navigationsfortschritt schneller vorzieht als das Fahrzeug physisch dort sein
+/// kann. Weil [elapsedSeconds] seit dem letzten akzeptierten Index laeuft, bleibt
+/// Sparse-Geometrie beweglich: echte Fahrt wird nach ausreichender realer Zeit
+/// akzeptiert, ein 200-m-Teleport nach zwei GPS-Fixes aber nicht.
+bool isPlausibleRouteAdvance({
+  required double advanceMeters,
+  required double elapsedSeconds,
+  required double speedMps,
+  required double accuracyMeters,
+}) {
+  if (!advanceMeters.isFinite || advanceMeters <= 0) return true;
+  final limit = plausibleRouteAdvanceLimitMeters(
+    elapsedSeconds: elapsedSeconds,
+    speedMps: speedMps,
+    accuracyMeters: accuracyMeters,
+  );
+  return advanceMeters <= limit;
+}
+
 /// Baut kompakte Telemetrie für einen echten Straßen-Reroute.
 Map<String, dynamic> buildRerouteTelemetry({
   required String rerouteReason,

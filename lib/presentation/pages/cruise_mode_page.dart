@@ -474,15 +474,14 @@ class _CruiseModePageState extends State<CruiseModePage>
   // (_offRouteSince) als Auslöse-Kriterium. [[navi_n1_n2_phantom_roundabout_2026_06_15]]
   int _consecutiveOffRouteFixes = 0;
 
-  // 2026-06-17 (vucko Geräte-Video, Banner-Freeze an langsamer Abbiegung): Zähler
-  // für aufeinanderfolgende Index-Vorschübe, die der Meter-Cap (sp×3+60) ablehnt,
-  // obwohl der Puck nachweislich auf der Route NACH VORN läuft. Auf sparser
-  // GraphHopper-Geometrie an einer langsamen Abbiegung (Cap nur 60 m) blockierte
-  // der Cap JEDEN Fix → der Index fror ein → Manöver/Distanz/Rest-km wurden stale.
-  // Nach 2 abgelehnten Fixes am Stück erzwingen wir den Vorschub (Escape-Hatch),
-  // damit nie ein Dauer-Freeze entsteht; transiente Selbstüberlapp-Leaps bleiben
-  // bei einem einzelnen Fix geblockt.
+  // 2026-06-18 (vucko Video: Puck springt voraus und wartet): Zähler + Zeitanker
+  // für abgelehnte Index-Vorschübe. Früher wurde nach 2 Rejects trotzdem committed;
+  // genau das konnte den Render-Lock auf ein Zukunfts-Leg ziehen. Jetzt wächst das
+  // erlaubte Meterbudget mit real verstrichener Zeit seit dem letzten akzeptierten
+  // Index — echte Fahrt auf sparser Geometrie kommt weiter, Selbstüberlapp-Teleports
+  // bleiben blockiert.
   int _advanceCapRejects = 0;
+  DateTime? _lastRouteIndexAdvanceAt;
 
   // 2026-06-17 (vucko Geräte-Video: Standort-Teleport + grundloses Reroute):
   // GPS-Ausreißer-Gate. Letzter als plausibel akzeptierter ROH-Fix + Zähler der
@@ -8863,6 +8862,13 @@ class _CruiseModePageState extends State<CruiseModePage>
       _currentRouteIndex = 0;
       _lastDrawnRouteIndex = 0;
       _distanceSinceLastRedraw = 0.0;
+      _advanceCapRejects = 0;
+      _lastRouteIndexAdvanceAt = null;
+      _lastPlausibleRawFix = null;
+      _gpsJumpRejects = 0;
+      _shownManeuverDistM = null;
+      _shownManeuverSig = null;
+      _shownManeuverAt = null;
       _showRouteInfoBanner = false;
       _isRouteConfirmed = false;
       _isExistingRouteSession = false;
@@ -9695,6 +9701,11 @@ class _CruiseModePageState extends State<CruiseModePage>
       _currentRouteIndex = 0;
       _lastDrawnRouteIndex = 0;
       _distanceSinceLastRedraw = 0.0;
+      _advanceCapRejects = 0;
+      _lastRouteIndexAdvanceAt = null;
+      _shownManeuverDistM = null;
+      _shownManeuverSig = null;
+      _shownManeuverAt = null;
       _maneuvers = result.maneuvers;
       _activeManeuverIndex = 0;
       _announcedManeuverIndices.clear();
@@ -10217,6 +10228,13 @@ class _CruiseModePageState extends State<CruiseModePage>
       // 2026-06-17 (vucko Kaltstart-Reroute): neue Sitzung → Kaltstart-Schnell-
       // schiene (1,4× Korridor) wieder scharf, bis zum ersten Einrasten.
       _everLockedOn = false;
+      _advanceCapRejects = 0;
+      _lastRouteIndexAdvanceAt = null;
+      _lastPlausibleRawFix = null;
+      _gpsJumpRejects = 0;
+      _shownManeuverDistM = null;
+      _shownManeuverSig = null;
+      _shownManeuverAt = null;
     }
     _navigationStartTime ??= DateTime.now();
     _driveSessionRecordedForCompletion = false;
@@ -10896,47 +10914,53 @@ class _CruiseModePageState extends State<CruiseModePage>
     // dieselbe Straße) könnte das 80er-Fenster sonst auf die RÜCKWEG-Spur
     // springen → Fortschritt korrupt, nötiger Reroute unterdrückt. Echtes Fahren
     // rückt <2 Punkte/Tick vor, der Cap blockt also nur anomale Sprünge.
-    if (match.index > _currentRouteIndex &&
-        match.index - _currentRouteIndex <= 60 &&
+    _ensureRouteMetrics();
+    final stableMatchIndex = stableRouteIndexForMatch(
+      match: match,
+      currentIndex: _currentRouteIndex,
+    ).clamp(0, _fullRouteCoordinates.length - 1).toInt();
+    if (stableMatchIndex > _currentRouteIndex &&
+        stableMatchIndex - _currentRouteIndex <= 60 &&
         match.distanceMeters <= offRouteCorridor) {
-      // Gefahrene Distanz tracken (Routen-Meter zwischen altem und neuem Index).
-      var advanceMeters = 0.0;
-      for (var i = _currentRouteIndex; i < match.index; i++) {
-        final c1 = _fullRouteCoordinates[i];
-        final c2 = _fullRouteCoordinates[i + 1];
-        advanceMeters += geo.Geolocator.distanceBetween(
-          c1[1],
-          c1[0],
-          c2[1],
-          c2[0],
-        );
-      }
-      // 2026-06-16 (vucko Banner-Freeze + Standort-Sprung, Video-Analyse): Den
-      // Index-Vorschub AUCH in METERN kappen, nicht nur in Vertices. 60 Vertices
-      // sind auf dünner GraphHopper-Geometrie oft hunderte Meter → ein
-      // Selbstüberlapp-/Parallel-Match springt den Index weit voraus; danach
-      // friert die Manöver-Distanz ein (Banner hängt 10-25 s, dann Sprung) und
-      // der Puck wirkt vorausgesprungen, bis der Wagen real aufgeschlossen hat.
-      // Echte Fahrt rückt höchstens ~Tempo × ein paar Sekunden vor; ein
-      // implausibler Meter-Sprung wird verworfen (Index bleibt am echten
-      // Standort, rückt nächsten Fix plausibel weiter).
-      final sp = position.speed.isFinite && position.speed > 0
-          ? position.speed.clamp(0.0, 70.0)
-          : 0.0;
-      final maxAdvanceMeters = sp * 3.0 + 60.0;
-      // Plausibler Vorschub → übernehmen. Implausibler Meter-Sprung → diesen Fix
-      // verwerfen (Index bleibt am echten Standort, rückt nächsten Fix plausibel
-      // weiter). So kein Index-Leap → keine eingefrorene Manöver-Distanz.
-      // Plausibler Vorschub → übernehmen. Ein EINZELNER implausibler Meter-Sprung
-      // (Selbstüberlapp-/Parallel-Leap) wird weiter verworfen. Bleibt der Sprung
-      // aber ≥2 Fixes am Stück bestehen (echte Abbiegung auf sparser Geometrie:
-      // der Puck ist nachweislich vorn auf der Route, der Cap würde sonst JEDEN
-      // Fix blocken → Dauer-Freeze von Manöver/Distanz/Rest-km), wird er ERZWUNGEN.
-      final advanceCapOk = advanceMeters <= maxAdvanceMeters;
-      if (advanceCapOk || _advanceCapRejects >= 2) {
+      final currentDist = _routeCumDist[_currentRouteIndex.clamp(
+        0,
+        _routeCumDist.length - 1,
+      ).toInt()];
+      final matchDist = routeDistanceForMatchMeters(
+        cumulativeDistances: _routeCumDist,
+        match: match,
+      );
+      final advanceMeters = math.max(0.0, matchDist - currentDist);
+      final lastAdvanceAt =
+          _lastRouteIndexAdvanceAt ??= position.timestamp;
+      final elapsedSinceAdvance =
+          position.timestamp.difference(lastAdvanceAt).inMilliseconds / 1000.0;
+      final speedForAdvance = math.max(
+        position.speed.isFinite && position.speed > 0 ? position.speed : 0.0,
+        _nativeSmoother.speed.isFinite && _nativeSmoother.speed > 0
+            ? _nativeSmoother.speed
+            : 0.0,
+      );
+      // 2026-06-18 (vucko Standort-Teleport): Den Fortschritt nicht mehr nach N
+      // Rejects erzwingen. Das erlaubte Meterbudget wächst mit echter Zeit seit dem
+      // letzten akzeptierten Index. Dadurch bleibt sparse Geometrie beweglich, aber
+      // ein Zukunfts-Leg kann den Puck nicht 100-300 m vorziehen und dort warten
+      // lassen, bis das Auto real aufschließt.
+      final advanceCapOk = isPlausibleRouteAdvance(
+        advanceMeters: advanceMeters,
+        elapsedSeconds: elapsedSinceAdvance,
+        speedMps: speedForAdvance,
+        accuracyMeters: position.accuracy,
+      );
+      if (advanceCapOk) {
         _advanceCapRejects = 0;
-        _distanceSinceLastRedraw += advanceMeters;
-        _currentRouteIndex = match.index;
+        final committedAdvanceMeters = math.max(
+          0.0,
+          _routeCumDist[stableMatchIndex] - currentDist,
+        );
+        _distanceSinceLastRedraw += committedAdvanceMeters;
+        _currentRouteIndex = stableMatchIndex;
+        _lastRouteIndexAdvanceAt = position.timestamp;
         needsRebuild = true;
         _maybeFinalizeAccessLegPhase();
         // 2026-06-09 (vucko Voll-Route-Sichtbar): KEIN 3km-Sliding-Window-Redraw
@@ -10945,11 +10969,26 @@ class _CruiseModePageState extends State<CruiseModePage>
         // pflegt den grauen Driven-Trail + _remainingRouteCoordinates.
       } else {
         _advanceCapRejects++;
+        if (kDebugMode) {
+          final limit = plausibleRouteAdvanceLimitMeters(
+            elapsedSeconds: elapsedSinceAdvance,
+            speedMps: speedForAdvance,
+            accuracyMeters: position.accuracy,
+          );
+          debugPrint(
+            '[route-advance] Zukunfts-Match verworfen #$_advanceCapRejects: '
+            'advance=${advanceMeters.toStringAsFixed(0)}m '
+            'limit=${limit.toStringAsFixed(0)}m '
+            'dt=${elapsedSinceAdvance.toStringAsFixed(1)}s '
+            'idx=$_currentRouteIndex->$stableMatchIndex',
+          );
+        }
       }
     } else {
       // Kein Vorwärts-Match (Puck nicht vor dem Index) → Reject-Zähler nullen,
       // damit sich kein veralteter Stand zu einem späteren Fehl-Force summiert.
       _advanceCapRejects = 0;
+      _lastRouteIndexAdvanceAt ??= position.timestamp;
     }
 
     // 2026-06-08 (vucko Leitlinie GPU-Trim): Fahrt-Fortschritt 0..1 entlang der

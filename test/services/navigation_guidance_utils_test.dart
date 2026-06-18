@@ -1,5 +1,6 @@
 import 'package:cruise_connect/data/services/navigation_guidance_utils.dart';
 import 'package:cruise_connect/data/services/route_service.dart';
+import 'package:cruise_connect/domain/models/route_maneuver.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:geolocator/geolocator.dart' as geo;
 
@@ -134,6 +135,70 @@ void main() {
       );
 
       expect(distance, closeTo(1000, 30));
+    });
+  });
+
+  group('route progress anti-teleport helpers', () {
+    test('Segment-Match springt diskret erst nahe Segmentende zum nächsten Vertex', () {
+      const matchHalfway = RouteWindowMatch(
+        index: 11,
+        distanceMeters: 3,
+        segmentIndex: 10,
+        segmentFraction: 0.55,
+      );
+      const matchNearEnd = RouteWindowMatch(
+        index: 11,
+        distanceMeters: 3,
+        segmentIndex: 10,
+        segmentFraction: 0.94,
+      );
+
+      expect(
+        stableRouteIndexForMatch(match: matchHalfway, currentIndex: 9),
+        10,
+      );
+      expect(
+        stableRouteIndexForMatch(match: matchNearEnd, currentIndex: 9),
+        11,
+      );
+    });
+
+    test('Routenmeter nutzen Segment-Fraktion statt vorausliegenden Vertex', () {
+      const match = RouteWindowMatch(
+        index: 2,
+        distanceMeters: 0,
+        segmentIndex: 1,
+        segmentFraction: 0.25,
+      );
+
+      expect(
+        routeDistanceForMatchMeters(
+          cumulativeDistances: const [0, 100, 300],
+          match: match,
+        ),
+        150,
+      );
+    });
+
+    test('unphysischer Zukunfts-Fortschritt wird blockiert, echte Zeit holt auf', () {
+      expect(
+        isPlausibleRouteAdvance(
+          advanceMeters: 180,
+          elapsedSeconds: 1,
+          speedMps: 12,
+          accuracyMeters: 8,
+        ),
+        isFalse,
+      );
+      expect(
+        isPlausibleRouteAdvance(
+          advanceMeters: 180,
+          elapsedSeconds: 6,
+          speedMps: 12,
+          accuracyMeters: 8,
+        ),
+        isTrue,
+      );
     });
   });
 

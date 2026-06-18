@@ -7,13 +7,15 @@ void main() {
   group('formatNavDistance', () {
     test('null → --', () => expect(formatNavDistance(null), '--'));
 
-    test('< 1 km auf 10er-Stufen gerundet', () {
-      expect(formatNavDistance(522), '520 m');
-      expect(formatNavDistance(694), '690 m');
-      expect(formatNavDistance(685), '690 m'); // .5 → auf
-      expect(formatNavDistance(683), '680 m');
-      expect(formatNavDistance(677), '680 m');
-      expect(formatNavDistance(671), '670 m');
+    test('< 1 km auf Google-ähnliche Stufen gerundet', () {
+      // Aktueller Takt: 500-999 m in 50er-Stufen, 201-500 m in 20er-Stufen,
+      // darunter 10er-Stufen.
+      expect(formatNavDistance(522), '500 m');
+      expect(formatNavDistance(694), '700 m');
+      expect(formatNavDistance(685), '700 m');
+      expect(formatNavDistance(483), '480 m');
+      expect(formatNavDistance(177), '180 m');
+      expect(formatNavDistance(171), '170 m');
     });
 
     test('NIE krumme Einer-Stelle unter 1 km', () {

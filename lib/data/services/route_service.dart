@@ -9047,16 +9047,27 @@ class RouteService {
             type == 'roundabout' ||
             type == 'rotary' ||
             type == 'roundabout turn';
-        final exitNumber = isRoundabout
+        final providerExitNumber = isRoundabout
             ? (maneuver['exit'] as num?)?.toInt()
             : null;
+        final geomTurnRad = isRoundabout
+            ? roundaboutGeomTurnRad(routeCoordinates, routeIndex, routeIndex)
+            : null;
+        final exitNumber = isRoundabout
+            ? correctedRoundaboutExitNumber(
+                providerExitNumber: providerExitNumber,
+                geomTurnRad: geomTurnRad,
+              )
+            : null;
+        final exitNumberCorrected =
+            providerExitNumber != null && exitNumber != providerExitNumber;
 
         // Instruction bestimmen
         String instruction;
         if (isRoundabout) {
           instruction = _roundaboutInstruction(
             exitNumber,
-            rawInstruction,
+            exitNumberCorrected ? '' : rawInstruction,
             modifier,
           );
         } else if (type == 'arrive') {
@@ -9104,6 +9115,21 @@ class RouteService {
                 ? ManeuverType.roundabout
                 : ManeuverType.normal,
             roundaboutExitNumber: exitNumber,
+            roundaboutTurnAngleRad: geomTurnRad,
+            roundaboutEntryBearing: isRoundabout
+                ? RoundaboutTopologyService.armBearingAlong(
+                    routeCoordinates,
+                    routeIndex,
+                    -1,
+                  )
+                : null,
+            roundaboutExitBearing: isRoundabout
+                ? RoundaboutTopologyService.armBearingAlong(
+                    routeCoordinates,
+                    routeIndex,
+                    1,
+                  )
+                : null,
           ),
         );
       }
@@ -9152,7 +9178,7 @@ class RouteService {
       final textLooksRoundabout =
           sign != 4 && _graphhopperTextLooksRoundabout(text);
       final isRoundabout = sign == 6 || textLooksRoundabout;
-      var exitNumber = isRoundabout
+      final providerExitNumber = isRoundabout
           ? ((ins['exit_number'] as num?)?.toInt() ??
                 _roundaboutExitNumberFromText(text))
           : null;
@@ -9177,6 +9203,20 @@ class RouteService {
       final turnAngleRad = isRoundabout
           ? (geomTurnRad ?? (ins['turn_angle'] as num?)?.toDouble())
           : null;
+      var exitNumber = isRoundabout
+          ? correctedRoundaboutExitNumber(
+              providerExitNumber: providerExitNumber,
+              geomTurnRad: geomTurnRad,
+            )
+          : null;
+      final exitNumberCorrected =
+          providerExitNumber != null && exitNumber != providerExitNumber;
+      if (exitNumberCorrected && kDebugMode) {
+        debugPrint(
+          '[RouteService] Kreisverkehr-Ausfahrt aus Geometrie korrigiert: '
+          'provider=$providerExitNumber → geom=$exitNumber ("$text")',
+        );
+      }
       // Plausibilitaet der GH-Exit-Nummer: In Rechtsverkehr ist die 1. Ausfahrt
       // IMMER eine klare Rechtskurve. Sagt GH „1. Ausfahrt", die echte Geometrie
       // zeigt aber geradeaus/links (geomTurn < ~20°), ist GHs Nummer falsch
@@ -9214,7 +9254,9 @@ class RouteService {
       }
       final instruction = sign == 4
           ? 'Ziel erreicht.'
-          : (roundaboutDirOverride.isNotEmpty
+          : (exitNumberCorrected && exitNumber != null
+                ? _roundaboutInstruction(exitNumber, '', '')
+                : roundaboutDirOverride.isNotEmpty
                 ? roundaboutDirOverride
                 : (geomDirText ??
                       (text.isNotEmpty
@@ -10680,6 +10722,38 @@ int? maneuverSignFromGeometryRad(double? turnRad) {
   if (deg <= -110.0) return -3; // scharf links
   if (deg <= -28.0) return -2; // links
   return null; // ~geradeaus / leichte Kurve → uneindeutig, GH behalten
+}
+
+/// 2026-06-18 (vucko Kreisverkehr-Video): Plausible Ausfahrtsnummer aus der
+/// GEFAHRENEN Geometrie. Rechtsverkehr/Heading-up-Konvention:
+///   rechts ≈ 1. Ausfahrt, geradeaus ≈ 2., links ≈ 3., U-Turn ≈ 4.
+///
+/// Das ist bewusst konservativ für die Standard-/Fallback-Darstellung. Echte OSM-
+/// Topologie kann später das Symbol genauer zeichnen; die Ansage darf aber nicht
+/// "3. Ausfahrt" sagen, wenn die Route geometrisch geradeaus durch den Kreisel
+/// führt.
+int? roundaboutExitNumberFromGeometryRad(double? turnRad) {
+  if (turnRad == null) return null;
+  final deg = turnRad * 180.0 / math.pi;
+  if (!deg.isFinite) return null;
+  if (deg >= 45.0) return 1;
+  if (deg > -45.0) return 2;
+  if (deg > -145.0) return 3;
+  return 4;
+}
+
+int? correctedRoundaboutExitNumber({
+  required int? providerExitNumber,
+  required double? geomTurnRad,
+}) {
+  final geomExit = roundaboutExitNumberFromGeometryRad(geomTurnRad);
+  if (providerExitNumber == null) return null;
+  if (geomExit == null) return providerExitNumber;
+  if (providerExitNumber == geomExit) return providerExitNumber;
+  // Sehr hohe Exit-Nummern können echte mehrarmige Kreisel sein. Ohne Topologie
+  // korrigieren wir nur den Standardbereich, in dem die Video-Verwechslung liegt.
+  if (providerExitNumber > 4) return providerExitNumber;
+  return geomExit;
 }
 
 /// Widersprechen sich GraphHopper-`sign` und Geometrie-`sign` in der HÄNDIGKEIT

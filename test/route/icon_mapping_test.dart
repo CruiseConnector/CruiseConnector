@@ -54,6 +54,13 @@ void main() {
       );
     });
 
+    test('Geometrie-Ausfahrtsnummer: rechts=1, geradeaus=2, links=3', () {
+      expect(roundaboutExitNumberFromGeometryRad(90 * math.pi / 180), 1);
+      expect(roundaboutExitNumberFromGeometryRad(0), 2);
+      expect(roundaboutExitNumberFromGeometryRad(-90 * math.pi / 180), 3);
+      expect(roundaboutExitNumberFromGeometryRad(-170 * math.pi / 180), 4);
+    });
+
     test('Roundabout turn_angle kommt aus der GEFAHRENEN Geometrie (L3)', () {
       // 2026-06-14 (vucko L3): Statt GHs mehrdeutigem turn_angle berechnen wir
       // den Austritts-Drehwinkel aus der echten Geometrie. Hier: Einfahrt Kurs
@@ -87,7 +94,7 @@ void main() {
       expect(maneuvers, hasLength(2));
       final roundabout = maneuvers.first;
       expect(roundabout.maneuverType, ManeuverType.roundabout);
-      expect(roundabout.roundaboutExitNumber, 2);
+      expect(roundabout.roundaboutExitNumber, 3);
       expect(roundabout.roundaboutTurnAngleRad, isNotNull);
       // Geometrie-Linkskurve ≈ −π/2, NICHT GHs +0.9.
       expect(roundabout.roundaboutTurnAngleRad!, closeTo(-math.pi / 2, 0.1));
@@ -147,13 +154,56 @@ void main() {
     });
 
     test(
+      'GraphHopper Exit 3 wird zu Exit 2 korrigiert, wenn Geometrie geradeaus ist',
+      () {
+        const baseLat = 47.18;
+        const baseLng = 9.65;
+        final mPerDegLng = 111320.0 * math.cos(baseLat * math.pi / 180.0);
+        List<double> pt(double eastM, double northM) => [
+              baseLng + eastM / mPerDegLng,
+              baseLat + northM / 110540.0,
+            ];
+        final coords = <List<double>>[
+          pt(0, -30),
+          pt(0, -20),
+          pt(0, -10),
+          pt(0, 0), // entryIdx
+          pt(4, 6),
+          pt(0, 10), // exitIdx
+          pt(0, 22),
+          pt(0, 34),
+          pt(0, 46),
+        ];
+        final response = {
+          'route': {
+            'instructions': [
+              {
+                'sign': 6,
+                'exit_number': 3,
+                'text': 'Im Kreisverkehr die dritte Ausfahrt nehmen',
+                'interval': [3, 5],
+              },
+            ],
+          },
+        };
+
+        final maneuvers = service.extractManeuvers(response, coords);
+
+        expect(maneuvers, hasLength(1));
+        expect(maneuvers.first.roundaboutExitNumber, 2);
+        expect(maneuvers.first.instruction, contains('2.'));
+        expect(maneuvers.first.instruction, isNot(contains('3.')));
+      },
+    );
+
+    test(
       'GraphHopper-Kreisverkehr-Text gewinnt gegen falsches Abbiege-Sign',
       () {
         final coords = [
           [9.480, 47.660],
           [9.480, 47.661],
-          [9.481, 47.6615],
-          [9.482, 47.6615],
+          [9.480, 47.662],
+          [9.480, 47.663],
         ];
         final response = {
           'route': {
