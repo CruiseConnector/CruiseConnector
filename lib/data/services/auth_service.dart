@@ -17,7 +17,7 @@ class AuthService {
 
   static const String authCallbackUrl = 'cruiseconnect://auth/callback';
 
-  static Future<void>? _googleInitFuture;
+  static Future<String>? _googleInitFuture;
 
   /// Der aktuell eingeloggte User (null = nicht eingeloggt).
   static User? get currentUser => _db.auth.currentUser;
@@ -100,7 +100,7 @@ class AuthService {
       return;
     }
 
-    await _ensureGoogleInitialized();
+    final googleRawNonce = await _ensureGoogleInitialized();
 
     try {
       final googleUser = await GoogleSignIn.instance.authenticate();
@@ -118,6 +118,7 @@ class AuthService {
         provider: OAuthProvider.google,
         idToken: idToken,
         accessToken: accessToken,
+        nonce: googleRawNonce,
       );
       await ensureCurrentUserProfile();
     } on GoogleSignInException catch (e) {
@@ -252,7 +253,7 @@ class AuthService {
         'Google-Verbinden ist noch nicht konfiguriert (iOS-Client-ID fehlt).',
       );
     }
-    await _ensureGoogleInitialized();
+    final googleRawNonce = await _ensureGoogleInitialized();
     try {
       final googleUser = await GoogleSignIn.instance.authenticate();
       final googleAuth = googleUser.authentication;
@@ -266,6 +267,7 @@ class AuthService {
         provider: OAuthProvider.google,
         idToken: idToken,
         accessToken: authorization?.accessToken,
+        nonce: googleRawNonce,
       );
     } on GoogleSignInException catch (e) {
       if (e.code == GoogleSignInExceptionCode.canceled ||
@@ -379,18 +381,36 @@ class AuthService {
     }
   }
 
-  static Future<void> _ensureGoogleInitialized() {
+  static Future<String> _ensureGoogleInitialized() {
+    final existing = _googleInitFuture;
+    if (existing != null) {
+      return existing;
+    }
+
     final webClientId = AppConstants.googleWebClientId.trim();
     final iosClientId = AppConstants.googleIosClientId.trim();
     final clientId =
         defaultTargetPlatform == TargetPlatform.iOS && iosClientId.isNotEmpty
         ? iosClientId
         : null;
+    final rawNonce = _db.auth.generateRawNonce();
+    final nonceDigest = sha256.convert(utf8.encode(rawNonce)).toString();
 
-    return _googleInitFuture ??= GoogleSignIn.instance.initialize(
-      clientId: clientId,
-      serverClientId: webClientId,
-    );
+    final initFuture = GoogleSignIn.instance
+        .initialize(
+          clientId: clientId,
+          serverClientId: webClientId,
+          nonce: nonceDigest,
+        )
+        .then((_) => rawNonce);
+    _googleInitFuture = initFuture.catchError((
+      Object error,
+      StackTrace stackTrace,
+    ) {
+      _googleInitFuture = null;
+      Error.throwWithStackTrace(error, stackTrace);
+    });
+    return _googleInitFuture!;
   }
 
   static Future<void> _startOAuthSignIn(
