@@ -1610,9 +1610,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     // Navigation, kippte die UI in ein kaputtes Querformat (Banner seitlich).
     // Wie jede Navi sperren wir die Cruise-Seite auf Hochkant; beim Verlassen
     // (dispose) wird die App wieder für alle Orientierungen freigegeben.
-    SystemChrome.setPreferredOrientations(const [
-      DeviceOrientation.portraitUp,
-    ]);
+    SystemChrome.setPreferredOrientations(const [DeviceOrientation.portraitUp]);
     _loadVectorTiles();
     // 2026-06-06 (vucko P10): Zuletzt bekannten Standort laden → Karte öffnet
     // (auch beim Kaltstart) sofort dort statt bei „Deutschland-Mitte@z6".
@@ -10766,7 +10764,8 @@ class _CruiseModePageState extends State<CruiseModePage>
     // dauerhaft mäßiger GPS-Lage ewig gesperrt.
     if (!_routeLockedOn &&
         _navigationStartTime != null &&
-        DateTime.now().difference(_navigationStartTime!) > _lockOnGraceCeiling &&
+        DateTime.now().difference(_navigationStartTime!) >
+            _lockOnGraceCeiling &&
         (_postRerouteGraceUntil == null ||
             DateTime.now().isAfter(_postRerouteGraceUntil!))) {
       // 2026-06-16 (vucko O4): Die 90s-Grace-Decke darf NICHT mitten in der
@@ -10922,17 +10921,16 @@ class _CruiseModePageState extends State<CruiseModePage>
     if (stableMatchIndex > _currentRouteIndex &&
         stableMatchIndex - _currentRouteIndex <= 60 &&
         match.distanceMeters <= offRouteCorridor) {
-      final currentDist = _routeCumDist[_currentRouteIndex.clamp(
-        0,
-        _routeCumDist.length - 1,
-      ).toInt()];
+      final currentDist =
+          _routeCumDist[_currentRouteIndex
+              .clamp(0, _routeCumDist.length - 1)
+              .toInt()];
       final matchDist = routeDistanceForMatchMeters(
         cumulativeDistances: _routeCumDist,
         match: match,
       );
       final advanceMeters = math.max(0.0, matchDist - currentDist);
-      final lastAdvanceAt =
-          _lastRouteIndexAdvanceAt ??= position.timestamp;
+      final lastAdvanceAt = _lastRouteIndexAdvanceAt ??= position.timestamp;
       final elapsedSinceAdvance =
           position.timestamp.difference(lastAdvanceAt).inMilliseconds / 1000.0;
       final speedForAdvance = math.max(
@@ -13792,15 +13790,18 @@ class _CruiseModePageState extends State<CruiseModePage>
     bool completed = false,
   }) async {
     int? previousLevel;
+    int? previousTotalXp;
+    var xpAwardedForResult = 0;
     final userId = Supabase.instance.client.auth.currentUser?.id;
     if (userId != null) {
       try {
         final profile = await Supabase.instance.client
             .from('profiles')
-            .select('level')
+            .select('level,total_xp')
             .eq('id', userId)
             .maybeSingle();
         previousLevel = (profile?['level'] as num?)?.toInt();
+        previousTotalXp = (profile?['total_xp'] as num?)?.toInt();
       } catch (e) {
         debugPrint('[CruiseMode] Vorheriges Level nicht lesbar: $e');
       }
@@ -13823,6 +13824,7 @@ class _CruiseModePageState extends State<CruiseModePage>
           creditedDistanceKm: creditEligible ? drivenKm : 0.0,
           curves: creditEligible ? xpCurves : 0,
         );
+        xpAwardedForResult = xpBreakdown.totalXp;
         debugPrint(
           '[CruiseMode] Saving route: style=$_selectedStyle, roundTrip=$_isRoundTrip, '
           'distKm=${adjustedResult.distanceKm}, durationSec=${adjustedResult.durationSeconds?.round()}, '
@@ -13878,11 +13880,17 @@ class _CruiseModePageState extends State<CruiseModePage>
         debugPrint('[CruiseMode] Route saved successfully!');
       }
       final gamResult = await GamificationService.calculateAndSync();
+      final oldTotalXp =
+          previousTotalXp ??
+          math.max(0, gamResult.totalXp - xpAwardedForResult);
       return CruiseCompletionActionResult(
         success: true,
         newBadges: gamResult.newBadges,
         levelUp: previousLevel != null && gamResult.level.level > previousLevel,
         newLevel: gamResult.level.level,
+        previousTotalXp: oldTotalXp,
+        newTotalXp: gamResult.totalXp,
+        xpEarned: xpAwardedForResult,
       );
     } catch (e, stack) {
       debugPrint('Route speichern / XP sync fehlgeschlagen: $e');

@@ -8,6 +8,7 @@ import 'package:cruise_connect/data/services/completion_title_generator.dart';
 import 'package:cruise_connect/domain/models/badge.dart' as app;
 import 'package:flutter/rendering.dart';
 import 'package:cruise_connect/presentation/widgets/badge_unlock_popup.dart';
+import 'package:cruise_connect/presentation/widgets/xp_level_progress_popup.dart';
 import 'package:cruise_connect/presentation/utils/share_helper.dart';
 
 Future<T?> showCruiseCompletionSheet<T>({
@@ -65,14 +66,25 @@ class CruiseCompletionActionResult {
     this.newBadges = const [],
     this.levelUp = false,
     this.newLevel,
+    this.previousTotalXp,
+    this.newTotalXp,
+    this.xpEarned,
   });
 
   final bool success;
   final List<app.Badge> newBadges;
   final bool levelUp;
   final int? newLevel;
+  final int? previousTotalXp;
+  final int? newTotalXp;
+  final int? xpEarned;
 
-  bool get hasCelebration => newBadges.isNotEmpty || levelUp;
+  bool get hasXpProgress =>
+      previousTotalXp != null &&
+      newTotalXp != null &&
+      newTotalXp! > previousTotalXp!;
+
+  bool get hasCelebration => newBadges.isNotEmpty || levelUp || hasXpProgress;
 }
 
 class CruiseCompletionDialog extends StatefulWidget {
@@ -133,14 +145,12 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
   final GlobalKey _shareCardKey = GlobalKey();
   late final AnimationController _xpController;
   late final Animation<int> _xpAnimation;
-  late final AnimationController _celebrationController;
   bool _isExportMode = false;
   bool _isSaving = false;
   bool _isSharing = false;
   bool _showRatingDetails = false;
   int _selectedRating = 0;
   final Set<String> _selectedTags = <String>{};
-  CruiseCompletionActionResult? _celebration;
   // 2026-05-31 (vucko): Editierbarer Auto-Titel + optionales Foto fürs Teilen.
   late final TextEditingController _titleController;
   Uint8List? _photoBytes;
@@ -166,18 +176,12 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
       CurvedAnimation(parent: _xpController, curve: Curves.easeOutCubic),
     );
     _xpController.forward();
-
-    _celebrationController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 500),
-    );
   }
 
   @override
   void dispose() {
     _titleController.dispose();
     _xpController.dispose();
-    _celebrationController.dispose();
     super.dispose();
   }
 
@@ -221,15 +225,20 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
       if (!result.success) return;
 
       try {
+        if (result.hasXpProgress) {
+          await showXpLevelProgressPopup(
+            context: context,
+            previousTotalXp: result.previousTotalXp!,
+            newTotalXp: result.newTotalXp!,
+            xpEarned: result.xpEarned ?? widget.xpEarned,
+          );
+        }
+        if (!mounted) return;
         if (result.newBadges.isNotEmpty) {
           await showBadgeUnlockPopup(
             context: context,
             badges: result.newBadges,
           );
-        } else if (result.hasCelebration) {
-          setState(() => _celebration = result);
-          await _celebrationController.forward(from: 0);
-          await Future<void>.delayed(const Duration(milliseconds: 220));
         }
       } catch (error) {
         debugPrint('[CruiseCompletion] Celebration skipped: $error');
@@ -377,7 +386,6 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
                       : _buildInteractiveContent(),
                 ),
               ),
-              if (_celebration != null) _buildCelebrationOverlay(),
             ],
           ),
         );
@@ -735,96 +743,6 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
           ),
         ),
       ],
-    );
-  }
-
-  Widget _buildCelebrationOverlay() {
-    final label = _celebration!.levelUp
-        ? 'Level ${_celebration!.newLevel} erreicht'
-        : 'Neues Badge freigeschaltet';
-
-    return IgnorePointer(
-      child: AnimatedBuilder(
-        animation: _celebrationController,
-        builder: (context, child) {
-          final t = Curves.easeOutBack.transform(_celebrationController.value);
-          final fade =
-              (1 - (_celebrationController.value - 0.7).clamp(0.0, 0.3) / 0.3)
-                  .clamp(0.0, 1.0);
-          final bursts = <Offset>[
-            const Offset(-84, -26),
-            const Offset(-54, -74),
-            const Offset(0, -92),
-            const Offset(54, -74),
-            const Offset(84, -26),
-            const Offset(-68, 40),
-            const Offset(68, 40),
-          ];
-
-          return Opacity(
-            opacity: fade,
-            child: Center(
-              child: Stack(
-                alignment: Alignment.center,
-                children: [
-                  Container(
-                    width: 180,
-                    height: 180,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      gradient: RadialGradient(
-                        colors: [
-                          AppAccentColors.accent.withValues(alpha: 0.27),
-                          Colors.transparent,
-                        ],
-                      ),
-                    ),
-                  ),
-                  for (final burst in bursts)
-                    Transform.translate(
-                      offset: Offset(burst.dx * t, burst.dy * t),
-                      child: Transform.scale(
-                        scale: 0.7 + (0.6 * t),
-                        child: const Icon(
-                          Icons.auto_awesome_rounded,
-                          color: Color(0xFFFFD76A),
-                          size: 18,
-                        ),
-                      ),
-                    ),
-                  Transform.scale(
-                    scale: 0.82 + (0.18 * t),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 18,
-                        vertical: 14,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.black.withValues(alpha: 0.82),
-                        borderRadius: BorderRadius.circular(22),
-                        border: Border.all(color: Colors.white24),
-                      ),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(
-                            label,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 15,
-                              fontWeight: FontWeight.w800,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          );
-        },
-      ),
     );
   }
 
