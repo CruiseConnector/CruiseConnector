@@ -14688,15 +14688,18 @@ class _CruiseModePageState extends State<CruiseModePage>
     bool completed = false,
   }) async {
     int? previousLevel;
+    int? previousTotalXp;
+    var xpAwardedForResult = 0;
     final userId = Supabase.instance.client.auth.currentUser?.id;
     if (userId != null) {
       try {
         final profile = await Supabase.instance.client
             .from('profiles')
-            .select('level')
+            .select('level,total_xp')
             .eq('id', userId)
             .maybeSingle();
         previousLevel = (profile?['level'] as num?)?.toInt();
+        previousTotalXp = (profile?['total_xp'] as num?)?.toInt();
       } catch (e) {
         debugPrint('[CruiseMode] Vorheriges Level nicht lesbar: $e');
       }
@@ -14719,6 +14722,7 @@ class _CruiseModePageState extends State<CruiseModePage>
           creditedDistanceKm: creditEligible ? drivenKm : 0.0,
           curves: creditEligible ? xpCurves : 0,
         );
+        xpAwardedForResult = xpBreakdown.totalXp;
         debugPrint(
           '[CruiseMode] Saving route: style=$_selectedStyle, roundTrip=$_isRoundTrip, '
           'distKm=${adjustedResult.distanceKm}, durationSec=${adjustedResult.durationSeconds?.round()}, '
@@ -14774,11 +14778,17 @@ class _CruiseModePageState extends State<CruiseModePage>
         debugPrint('[CruiseMode] Route saved successfully!');
       }
       final gamResult = await GamificationService.calculateAndSync();
+      final oldTotalXp =
+          previousTotalXp ??
+          math.max(0, gamResult.totalXp - xpAwardedForResult);
       return CruiseCompletionActionResult(
         success: true,
         newBadges: gamResult.newBadges,
         levelUp: previousLevel != null && gamResult.level.level > previousLevel,
         newLevel: gamResult.level.level,
+        previousTotalXp: oldTotalXp,
+        newTotalXp: gamResult.totalXp,
+        xpEarned: xpAwardedForResult,
       );
     } catch (e, stack) {
       debugPrint('Route speichern / XP sync fehlgeschlagen: $e');
