@@ -455,9 +455,18 @@ class _CruiseModePageState extends State<CruiseModePage>
   StreamSubscription<geo.Position>?
   _idlePositionSubscription; // Standort-Stream für Heading im Idle
 
-  // Fahrsimulator entfernt; bleibt immer false, damit bestehende
-  // Navigation-Helfer keinen Simulationspfad aktivieren.
-  final bool _isSimulationRunning = false;
+  // 2026-06-19 (vucko Kreisverkehr-Sim-Test): Fahrsimulator NUR in Debug-Builds
+  // wieder aktiv. Speist synthetische GPS-Positionen entlang der Route in den
+  // ECHTEN _onLocationUpdate-Intake — testet damit exakt die Live-Logik (inkl.
+  // Kreisverkehr-Symbol/Nummer + GPS-Ausreißer-Gate + Render-Lock), nicht einen
+  // Sonderpfad. kDebugMode-gated → kommt nie in TestFlight/Store.
+  bool _isSimulationRunning = false;
+  Timer? _simTimer;
+  int _simIndex = 0;
+  double _simDistM = 0.0;
+  double _simDistAtIndexM = 0.0;
+  static const int _simTickMs = 100; // 10 Hz
+  static const double _simSpeedKmh = 30.0;
 
   bool _isCameraLocked =
       false; // Compass-Toggle: true = Kamera folgt dem Standort
@@ -12429,6 +12438,26 @@ class _CruiseModePageState extends State<CruiseModePage>
                   onPressed: _toggleCameraLock,
                   big: true,
                 ),
+                // 2026-06-19 (vucko Kreisverkehr-Sim): Debug-only Play/Stop-FAB
+                // für den Fahrsimulator (Live-Navigation ohne echtes GPS testen).
+                if (kDebugMode && _isRouteConfirmed)
+                  _FabBubble(
+                    heroTag: 'sim_drive_fab',
+                    icon: _isSimulationRunning
+                        ? Icons.stop_rounded
+                        : Icons.play_arrow_rounded,
+                    color: _isSimulationRunning
+                        ? const Color(0xFFD64545)
+                        : const Color(0xFF2BA84A),
+                    onPressed: () {
+                      if (_isSimulationRunning) {
+                        _stopSimulation();
+                      } else {
+                        unawaited(_startSimulation());
+                      }
+                    },
+                    big: true,
+                  ),
               ],
             ),
           ),
@@ -14439,8 +14468,103 @@ class _CruiseModePageState extends State<CruiseModePage>
     unawaited(_recenterMap());
   }
 
-  // Fahrsimulator entfernt. Navigation nutzt nur echte GPS-Updates.
-  void _stopSimulation({bool restartLiveTracking = true}) {}
+  // 2026-06-19 (vucko Kreisverkehr-Sim-Test): Debug-Fahrsimulator. Fährt die
+  // bestätigte Route mit konstant 30 km/h ab und speist die Positionen in den
+  // ECHTEN _onLocationUpdate-Pfad — so testet er die Live-Navigation (Banner,
+  // Kreisel-Symbol/Nummer, Puck, Render-Lock) ohne echtes GPS. NUR in kDebugMode.
+  Future<void> _startSimulation() async {
+    if (!kDebugMode) return;
+    if (_isSimulationRunning) return;
+    if (_fullRouteCoordinates.length < 2) return;
+    _stopNavigationTracking(); // echtes GPS pausieren
+    _simIndex = 0;
+    _simDistM = 0.0;
+    _simDistAtIndexM = 0.0;
+    // GPS-Ausreißer-Gate zurücksetzen, damit die erste Sim-Position (evtl. weit
+    // vom letzten echten Fix) nicht als unmöglicher Sprung verworfen wird.
+    _lastPlausibleRawFix = null;
+    _gpsJumpRejects = 0;
+    _isSimulationRunning = true;
+    if (!_isCameraLocked) {
+      _isCameraLocked = true;
+      await _activateNavigationCamera();
+    }
+    _safeSetState(() {});
+    _simStep();
+  }
+
+  void _stopSimulation({bool restartLiveTracking = true}) {
+    _simTimer?.cancel();
+    _simTimer = null;
+    if (!_isSimulationRunning) return;
+    _isSimulationRunning = false;
+    if (restartLiveTracking && _isRouteConfirmed) _startNavigationTracking();
+    _safeSetState(() {});
+  }
+
+  void _simStep() {
+    _simTimer?.cancel();
+    if (!_isSimulationRunning || !mounted || _disposed) return;
+    final coords = _fullRouteCoordinates;
+    if (coords.length < 2) {
+      _stopSimulation(restartLiveTracking: false);
+      return;
+    }
+    final lastIndex = coords.length - 1;
+    const speedMs = _simSpeedKmh / 3.6;
+    _simDistM += speedMs * (_simTickMs / 1000.0);
+    // Vertex-Cursor bis zum Segment, das _simDistM enthält (distanz-interpoliert
+    // → konstante 30 km/h egal wie dicht die GraphHopper-Stützpunkte liegen).
+    while (_simIndex < lastIndex) {
+      final a = coords[_simIndex];
+      final b = coords[_simIndex + 1];
+      final segLen = geo.Geolocator.distanceBetween(a[1], a[0], b[1], b[0]);
+      if (segLen <= 0) {
+        _simIndex++;
+        continue;
+      }
+      if (_simDistAtIndexM + segLen >= _simDistM) break;
+      _simDistAtIndexM += segLen;
+      _simIndex++;
+    }
+    if (_simIndex >= lastIndex) {
+      final end = coords[lastIndex];
+      final prev = coords[lastIndex - 1];
+      _feedSimPosition(
+        end[1],
+        end[0],
+        calculateBearing(prev[1], prev[0], end[1], end[0]),
+      );
+      _stopSimulation(restartLiveTracking: false);
+      return;
+    }
+    final a = coords[_simIndex];
+    final b = coords[_simIndex + 1];
+    final segLen = geo.Geolocator.distanceBetween(a[1], a[0], b[1], b[0]);
+    final t = segLen <= 0
+        ? 0.0
+        : ((_simDistM - _simDistAtIndexM) / segLen).clamp(0.0, 1.0);
+    final lat = a[1] + (b[1] - a[1]) * t;
+    final lng = a[0] + (b[0] - a[0]) * t;
+    _feedSimPosition(lat, lng, calculateBearing(a[1], a[0], b[1], b[0]));
+    _simTimer = Timer(const Duration(milliseconds: _simTickMs), _simStep);
+  }
+
+  void _feedSimPosition(double lat, double lng, double heading) {
+    final pos = geo.Position(
+      latitude: lat,
+      longitude: lng,
+      timestamp: DateTime.now(),
+      accuracy: 4.0,
+      altitude: 0.0,
+      altitudeAccuracy: 1.0,
+      heading: heading,
+      headingAccuracy: 5.0,
+      speed: _simSpeedKmh / 3.6,
+      speedAccuracy: 1.0,
+    );
+    unawaited(_onLocationUpdate(pos));
+  }
 
   // ═══════════════════════ ROUTE COMPLETION ═════════════════════════════════
 
