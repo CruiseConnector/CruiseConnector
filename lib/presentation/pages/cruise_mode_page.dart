@@ -111,6 +111,14 @@ class CruiseModePage extends StatefulWidget {
     null,
   );
 
+  /// 2026-06-20 (vucko Gruppen-Rejoin): Geräte-lokales Set von Gruppen, deren
+  /// AKTIVE Fahrt der Nutzer bewusst verlassen hat. Die Lobby darf ihn dann
+  /// NICHT automatisch zurück in die Navigation ziehen — sonst reisst ihn der
+  /// nächste Leader-Reroute (jede Route-Änderung pingt die Lobby) sofort wieder
+  /// rein. Rejoin passiert NUR bewusst über den „Zur laufenden Route"-Button.
+  /// Wird geleert, sobald die Gruppe inaktiv wird oder bewusst rejoined wird.
+  static final Set<String> suppressedAutoEnterGroupIds = <String>{};
+
   @override
   State<CruiseModePage> createState() => _CruiseModePageState();
 }
@@ -683,8 +691,14 @@ class _CruiseModePageState extends State<CruiseModePage>
   Map<String, dynamic>? _activeGroupRouteData;
   final Map<String, GroupMember> _groupMembers = {};
   static const Duration _groupPositionUploadInterval = Duration(seconds: 2);
-  static const Duration _groupRouteBackfillInterval = Duration(seconds: 15);
-  static const Duration _groupRouteReconnectDelay = Duration(seconds: 3);
+  // 2026-06-20 (vucko Gruppen-Reroute-Sync): Backfill 15s→5s und Reconnect 3s→1s.
+  // Realtime ist der Primärpfad (sub-Sekunde), aber wenn der Channel nach einem
+  // Netz-Blip „silent dead" ist, ist der Backfill das EINZIGE Sicherheitsnetz,
+  // damit ein Follower den Reroute des Vorausfahrenden SYNCHRON mitbekommt. 5s
+  // statt 15s drittelt die Worst-Case-Latenz; ein kleiner SELECT/Follower/5s ist
+  // vernachlässigbar (Member-Backfill läuft eh schon mit 5s).
+  static const Duration _groupRouteBackfillInterval = Duration(seconds: 5);
+  static const Duration _groupRouteReconnectDelay = Duration(seconds: 1);
   // 2026-06-10 (vucko Find-My-Härtung): Backfill enger (5s) — er ist das
   // Sicherheitsnetz gegen "silent dead" Realtime-Channels nach Netz-Blips.
   static const Duration _groupMembersBackfillInterval = Duration(seconds: 5);
@@ -4006,7 +4020,19 @@ class _CruiseModePageState extends State<CruiseModePage>
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    // 2026-06-20 (vucko Gruppen-Exit-Flow): System-Back (iOS-Swipe / Android-
+    // Back) während einer AKTIVEN Gruppen-Fahrt darf NICHT direkt rauspoppen —
+    // sonst umgeht es Bestätigung + Post-Route-Screen und der User landet wieder
+    // auf der Routensuche. Wir fangen ihn ab und leiten in denselben Flow wie der
+    // Zurück-Button (_handleActiveRouteBack → Bestätigen → Abschluss → Lobby).
+    final blockSystemBack = widget.groupId != null && _isRouteConfirmed;
+    return PopScope(
+      canPop: !blockSystemBack,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop || !blockSystemBack) return;
+        _handleActiveRouteBack();
+      },
+      child: Scaffold(
       backgroundColor: const Color(0xFF0B0E14),
       body: Stack(
         children: [
@@ -4067,6 +4093,7 @@ class _CruiseModePageState extends State<CruiseModePage>
               child: _buildExitButton(),
             ),
         ],
+      ),
       ),
     );
   }
@@ -9376,10 +9403,56 @@ class _CruiseModePageState extends State<CruiseModePage>
 
   void _handleActiveRouteBack() {
     if (widget.groupId != null) {
-      _returnToGroupLobbyFromActiveRoute();
+      unawaited(_confirmAndStopGroupRide());
       return;
     }
     _returnToCruiseSetupFromActiveRoute();
+  }
+
+  // 2026-06-20 (vucko Gruppen-Exit-Flow): Verlässt ein Gruppen-Mitglied die
+  // Fahrt über den Zurück-Button, MUSS es (1) bestätigen, (2) den Post-Route-
+  // Screen mit seinen Stats/anteiligem XP sehen und (3) danach zurück in die
+  // LOBBY — NIEMALS in eine eigene Routensuche. Wir leiten über den normalen
+  // Abschluss-Flow (_onRouteEarlyStopped → Completion-Sheet), der die WIRKLICH
+  // gefahrene Strecke (Driven-Track) + daraus berechnetes XP zeigt; die Lobby-
+  // Navigation passiert nach dem Sheet-Schliessen (_presentCompletionSheet).
+  Future<void> _confirmAndStopGroupRide() async {
+    if (!mounted || _disposed) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: const Color(0xFF1C1F26),
+        title: const Text(
+          'Fahrt verlassen?',
+          style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800),
+        ),
+        content: Text(
+          'Bist du sicher, dass du die Fahrt verlassen willst?',
+          style: TextStyle(color: Colors.white.withValues(alpha: 0.72)),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: Text(
+              'Abbrechen',
+              style: TextStyle(color: Colors.white.withValues(alpha: 0.72)),
+            ),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text(
+              'Verlassen',
+              style: TextStyle(
+                color: Color(0xFFFF6B61),
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted || _disposed) return;
+    _onRouteEarlyStopped();
   }
 
   Future<void> _returnToGroupLobbyFromActiveRoute() async {
@@ -9389,6 +9462,12 @@ class _CruiseModePageState extends State<CruiseModePage>
     _stopNavigationTracking();
     CruiseModePage.isFullscreen.value = false;
     final groupId = widget.groupId;
+    if (groupId != null) {
+      // 2026-06-20 (vucko Gruppen-Rejoin): Bewusstes Verlassen → die Lobby darf
+      // mich NICHT automatisch in die laufende Fahrt zurückziehen. Rejoin nur
+      // über den expliziten „Zur laufenden Route"-Button.
+      CruiseModePage.suppressedAutoEnterGroupIds.add(groupId);
+    }
     final popped = await Navigator.of(context).maybePop();
     if (!popped && mounted && !_disposed) {
       if (groupId != null) {
@@ -14694,6 +14773,20 @@ class _CruiseModePageState extends State<CruiseModePage>
     );
   }
 
+  // 2026-06-20 (vucko Gruppen-Exit-Flow): Zeigt das Post-Route-Sheet (gefahrene
+  // km + anteiliges XP) und kehrt NUR für Gruppen-Mitglieder NACH dem Schliessen
+  // zurück in die Lobby — statt auf der Routensuche-Karte zu stranden. Solo-
+  // Fahrten bleiben unverändert (Sheet → Reset auf Setup wie bisher).
+  void _presentCompletionSheet(CruiseCompletionDialog dialog) {
+    unawaited(() async {
+      await showCruiseCompletionSheet<void>(context: context, child: dialog);
+      if (!mounted || _disposed) return;
+      if (widget.groupId != null) {
+        await _returnToGroupLobbyFromActiveRoute();
+      }
+    }());
+  }
+
   void _onRouteCompleted() {
     if (!mounted || _disposed) return;
     final snapshot = _buildCompletionSnapshot(
@@ -14706,9 +14799,8 @@ class _CruiseModePageState extends State<CruiseModePage>
       _recordRouteCompletionCandidate(completed: true, discarded: false),
     );
     final drivenSnap = _drivenTrackRecorder.snapshot();
-    showCruiseCompletionSheet(
-      context: context,
-      child: CruiseCompletionDialog(
+    _presentCompletionSheet(
+      CruiseCompletionDialog(
         distanceKm: snapshot.distanceKm,
         durationText: snapshot.durationText,
         curves: snapshot.curves,
@@ -14771,9 +14863,8 @@ class _CruiseModePageState extends State<CruiseModePage>
     _freezeMapForCompletion();
 
     final drivenSnap = _drivenTrackRecorder.snapshot();
-    showCruiseCompletionSheet(
-      context: context,
-      child: CruiseCompletionDialog(
+    _presentCompletionSheet(
+      CruiseCompletionDialog(
         distanceKm: snapshot.distanceKm,
         durationText: snapshot.durationText,
         curves: snapshot.curves,

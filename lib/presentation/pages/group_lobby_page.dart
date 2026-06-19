@@ -116,7 +116,22 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
 
   void _subscribe() {
     _groupCh = CruiseGroupService.subscribeGroup(widget.groupId, (row) {
-      if (row['is_active'] == true) _enterNavigation();
+      if (row['is_active'] == true) {
+        // 2026-06-20 (vucko Gruppen-Rejoin): Hat der Nutzer die Fahrt bewusst
+        // verlassen, NICHT automatisch zurückziehen — sonst reisst ihn der
+        // nächste Leader-Reroute (jede Route-Änderung pingt die Lobby) sofort
+        // wieder in die Navigation. Er sieht stattdessen den „Zur laufenden
+        // Route"-Button und steigt bewusst wieder ein.
+        if (!CruiseModePage.suppressedAutoEnterGroupIds.contains(
+          widget.groupId,
+        )) {
+          _enterNavigation();
+        }
+      } else {
+        // Fahrt vorbei → Suppress aufheben, damit eine neue Fahrt wieder alle
+        // automatisch reinholt.
+        CruiseModePage.suppressedAutoEnterGroupIds.remove(widget.groupId);
+      }
       _load();
     });
     _membersCh = CruiseGroupService.subscribeMembers(
@@ -139,8 +154,19 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
         });
   }
 
+  /// 2026-06-20 (vucko Gruppen-Rejoin): Bewusster Wiedereinstieg in die laufende
+  /// Fahrt. Hebt den Auto-Enter-Suppress auf und steigt ab der AKTUELLEN Position
+  /// wieder ein (Access-Leg). XP zählt nur die ab hier wirklich gefahrene Strecke
+  /// (Driven-Track wird beim Access-Leg resettet).
+  void _rejoinNavigation() {
+    CruiseModePage.suppressedAutoEnterGroupIds.remove(widget.groupId);
+    _enterNavigation();
+  }
+
   Future<void> _startRoute() async {
     if (_starting) return;
+    // Owner startet bewusst → evtl. alten Suppress-Flag aufheben.
+    CruiseModePage.suppressedAutoEnterGroupIds.remove(widget.groupId);
     setState(() => _starting = true);
     try {
       await CruiseGroupService.activate(widget.groupId);
@@ -955,7 +981,7 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
           height: 56,
           child: ElevatedButton(
             onPressed: isActive
-                ? _enterNavigation
+                ? _rejoinNavigation
                 : _hasOwnerPower && !_starting
                 ? _startRoute
                 : null,
