@@ -26,10 +26,16 @@ void main() {
     expectCountry('Kufstein', 47.5830, 12.1690, 'AT');
     expectCountry('Lochau', 47.5350, 9.7550, 'AT'); // AT, südöstl. von Lindau
     expectCountry('Bregenz', 47.5031, 9.7471, 'AT'); // südl. von Lindau
+    expectCountry('Dornbirn', 47.4125, 9.7417, 'AT');
+    expectCountry('Feldkirch', 47.2380, 9.5980, 'AT');
+    expectCountry('Frastanz', 47.2170, 9.6290, 'AT');
     expectCountry('Salzburg', 47.8000, 13.0450, 'AT');
     expectCountry('Wien', 48.2082, 16.3738, 'AT');
     // Schweiz / weitere
     expectCountry('Zürich', 47.3769, 8.5417, 'CH');
     expectCountry('Andermatt', 46.6340, 8.5940, 'CH');
+    expectCountry('Buchs SG', 47.1660, 9.4770, 'CH');
+    expectCountry('St. Margrethen', 47.4520, 9.6370, 'CH');
+    expectCountry('Schaan', 47.1660, 9.5100, 'LI');
   });
 }

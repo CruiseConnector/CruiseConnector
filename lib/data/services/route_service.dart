@@ -533,11 +533,14 @@ class RouteService {
       );
     }
 
-    // Stabiler Suffix statt Timestamp: rapid Double-Click auf "Erneut suchen"
-    // dedupliziert auf einen einzigen Single-Flight statt parallele Edge-Calls
-    // zu erzeugen — verhindert Mapbox-5xx-Flood unter Last.
+    // A→B-Search-Again muss wirklich eine neue Live-Suche sein. Der frühere
+    // stabile `|sa`-Key deduplizierte schnelle erneute Klicks in denselben
+    // SingleFlight und konnte dadurch wieder exakt die alte Route liefern.
+    final forceFreshSingleFlightNonce = forceFreshVariant
+        ? _nextRandomSeed()
+        : null;
     final singleFlightKey = forceFreshVariant
-        ? '${scenario.scenarioKey}|sa'
+        ? '${scenario.scenarioKey}|sa|$forceFreshSingleFlightNonce'
         : scenario.scenarioKey;
     return RouteGenerationCoordinator.runSingleFlight(singleFlightKey, () async {
       if (isWaypointRequiredRoundTrip) {
@@ -841,6 +844,10 @@ class RouteService {
       // Grenzübertritt verworfen wurde — dann ist die Ursache klar „kein
       // Inlandskurs hier", nicht „Backend kaputt".
       var sawCountryRejected = false;
+      final strictInlandRoundTrip =
+          scenario.isRoundTrip &&
+          scenario.countryPreference == CountryPreference.onlyHome &&
+          scenario.homeCountryCode != null;
       // 2026-06-10 (vucko Start-Versatz-Gate): merkt, ob Kandidaten nur wegen
       // Start-Versatz (Edge-Snap-Bug) verworfen wurden → präzise Fehlermeldung
       // statt generischem noRoute.
@@ -1293,6 +1300,7 @@ class RouteService {
       // damit die UI klar zeigt „beste verfügbare Form" statt eine
       // perfekte Route vorzutäuschen.
       if (bestRejectedCandidate != null &&
+          !strictInlandRoundTrip &&
           bestRejectedCandidate.route.coordinates.isNotEmpty) {
         lastRouteEmergencyFallbackUsed = true;
         // 2026-05-21: Label umbenannt von 'mapbox_rescue' (historisch aus
@@ -1310,6 +1318,14 @@ class RouteService {
           route: bestRejectedCandidate.route,
           sampledCoordinates: bestRejectedCandidate.sampledCoordinates,
           fingerprint: bestRejectedCandidate.fingerprint,
+        );
+      } else if (bestRejectedCandidate != null && strictInlandRoundTrip) {
+        _debugRouteSearch(
+          '[Fallback] liveRescueFallbackSkipped=true '
+          'reason=strict_inland_requires_accepted_quality '
+          'scenarioKey=${scenario.scenarioKey} '
+          'forceFreshVariant=$forceFreshVariant trigger=$debugTrigger '
+          'score=${bestRejectedCandidate.score.toStringAsFixed(1)}',
         );
       }
 
@@ -1929,6 +1945,7 @@ class RouteService {
             locationAccuracyMeters: locationAccuracyMeters,
             intermediateWaypoints: intermediateWaypoints,
             forceAcceptDirect: forceAcceptDirect,
+            forceFreshVariant: forceFreshVariant,
           );
           if (candidate.accepted && !candidate.novelEnough) {
             lastRouteDuplicateSkipped = true;
@@ -1988,7 +2005,11 @@ class RouteService {
         }
       }
 
-      final acceptedCandidate = bestCandidate ?? duplicateFallbackCandidate;
+      final allowDuplicateFallback =
+          !forceFreshVariant || !shouldDiversify || navigationReroute;
+      final acceptedCandidate =
+          bestCandidate ??
+          (allowDuplicateFallback ? duplicateFallbackCandidate : null);
       if (acceptedCandidate != null && acceptedCandidate.accepted) {
         if (bestCandidate == null && duplicateFallbackCandidate != null) {
           lastRouteDuplicateFallbackUsed = true;
@@ -2564,13 +2585,48 @@ class RouteService {
 
   static Iterable<String> _seenHistoryKeysForScenario(RouteScenario scenario) {
     if (!scenario.isRoundTrip) {
-      return <String>{scenario.scenarioKey};
+      return <String>{
+        scenario.scenarioKey,
+        _pointToPointNoveltyKey(scenario, broad: false),
+        _pointToPointNoveltyKey(scenario, broad: true),
+      };
     }
     return <String>{
       scenario.scenarioKey,
       scenario.noveltyKey,
       scenario.broadNoveltyKey,
     };
+  }
+
+  static String _pointToPointNoveltyKey(
+    RouteScenario scenario, {
+    required bool broad,
+  }) {
+    final startPrecision = broad ? 2 : 3;
+    final startLat = scenario.startLatitude.toStringAsFixed(startPrecision);
+    final startLng = scenario.startLongitude.toStringAsFixed(startPrecision);
+    final destKey =
+        scenario.destinationLatitude != null &&
+            scenario.destinationLongitude != null
+        ? '${scenario.destinationLatitude!.toStringAsFixed(startPrecision)},'
+              '${scenario.destinationLongitude!.toStringAsFixed(startPrecision)}'
+        : 'none';
+    final home = scenario.homeCountryCode?.trim().toUpperCase();
+    return [
+      scenario.normalizedRouteType,
+      startLat,
+      startLng,
+      destKey,
+      broad ? 'p2p_novelty_broad' : 'p2p_novelty',
+      scenario.style,
+      'h${scenario.avoidHighways ? 1 : 0}',
+      'cp${scenario.countryPreference.storageValue}',
+      if (home != null && home.isNotEmpty) 'hc$home',
+      if (scenario.waypointSignature != null &&
+          scenario.waypointSignature!.isNotEmpty)
+        'wp${scenario.waypointSignature}',
+      if (scenario.closeLoop) 'loop1',
+    ].join('|');
   }
 
   static List<String> _recentFingerprintsForScenario(RouteScenario scenario) =>
@@ -2951,6 +3007,7 @@ class RouteService {
     double? currentHeadingDegrees,
     double? currentSpeedMetersPerSecond,
     double? locationAccuracyMeters,
+    bool forceFreshVariant = false,
     // 2026-05-23 (vucko Task #22): Trip-Modus = A→B mit Stopps
     List<Map<String, double>>? intermediateWaypoints,
   }) {
@@ -2978,6 +3035,7 @@ class RouteService {
       'randomSeed': variant.seed,
       'route_variant_hint': variant.variantHint,
       'route_fingerprint_hint': variant.fingerprintHint,
+      'force_fresh_variant': forceFreshVariant,
       'max_candidate_attempts': candidateBudget,
       if (navigationReroute) 'reroute_request': true,
       if (navigationReroute) 'moving_start': true,
@@ -4756,6 +4814,7 @@ class RouteService {
     // 2026-05-28 (vucko Task #83): "Direkte Route nehmen" akzeptiert jede
     // gültige Geometrie ohne Quality-Reject.
     bool forceAcceptDirect = false,
+    bool forceFreshVariant = false,
   }) async {
     final jitteredTargetKm = styleConfig.clampPointToPointTargetKm(
       targetDistanceKm * variant.radiusJitter,
@@ -4790,8 +4849,16 @@ class RouteService {
       currentSpeedMetersPerSecond: currentSpeedMetersPerSecond,
       locationAccuracyMeters: locationAccuracyMeters,
       intermediateWaypoints: intermediateWaypoints,
+      forceFreshVariant: forceFreshVariant,
     );
     _applyCountryPolicyToRequest(body, scenario);
+    body['client_scenario_key'] = scenario.scenarioKey;
+    body['client_force_fresh_variant'] = forceFreshVariant;
+    body['client_trigger'] = navigationReroute
+        ? 'navigationReroute'
+        : forceFreshVariant
+        ? 'searchAgain'
+        : 'unknown';
     final result = await _invoke(body);
     final snapped = _snapRouteToStartPosition(result, startPosition);
     return _evaluateCandidate(
@@ -4851,7 +4918,7 @@ class RouteService {
         : scenario.targetDistanceKm ?? 0.0;
     final sampledCoordinates = _sampleRouteForSimilarity(route.coordinates);
     final fingerprint = RouteQualityValidator.buildRouteFingerprint(
-      sampledCoordinates,
+      route.coordinates,
       distanceKm: route.distanceKm,
       precision: 4,
     );
@@ -4991,6 +5058,13 @@ class RouteService {
       detourLevel: pointToPointEvaluationDetourLevel,
       minDistanceKm: pointToPointMinDistance,
       maxDistanceKm: pointToPointMaxDistance,
+    );
+    final pointToPointDetourShapeOk = _pointToPointDetourShapeRenderable(
+      scenario: scenario,
+      detourLevel: pointToPointEvaluationDetourLevel,
+      quality: quality,
+      classification: classification,
+      deadEndSpikeDetected: deadEndSpikeDetected,
     );
     final successFirstDistanceOk = isRequiredWaypointRoundTrip
         ? true
@@ -5208,7 +5282,9 @@ class RouteService {
               serverApprovedAcceptable ||
               serverApprovedSportRescue ||
               cleanCurvyRescue
-        : destinationReached;
+        : destinationReached &&
+              (pointToPointEvaluationDetourLevel <= 0 ||
+                  pointToPointDetourShapeOk);
     final isPoolFallbackRoute =
         scenario.isRoundTrip && variant.variantHint.startsWith('pool-');
     final poolShapeQualityOk =
@@ -5228,7 +5304,12 @@ class RouteService {
         scenario.isRoundTrip &&
         (quality.repeatedStartAreaPercent > 25.0 || quality.spurArmCount > 2);
     final softRenderable = scenario.isPointToPoint
-        ? (hasEnoughPoints && qualityAcceptable && !borderIntrusionRejected)
+        ? (hasEnoughPoints &&
+              qualityAcceptable &&
+              renderableDistanceOk &&
+              !borderIntrusionRejected &&
+              (pointToPointEvaluationDetourLevel <= 0 ||
+                  pointToPointDetourShapeOk))
         : (hasEnoughPoints &&
               qualityAcceptable &&
               poolShapeQualityOk &&
@@ -5624,6 +5705,47 @@ class RouteService {
           1.04,
     );
     return actualDistanceKm >= rescueMinKm && actualDistanceKm <= rescueMaxKm;
+  }
+
+  bool _pointToPointDetourShapeRenderable({
+    required RouteScenario scenario,
+    required int detourLevel,
+    required RouteQualityResult quality,
+    required RouteQualityClassification classification,
+    required bool deadEndSpikeDetected,
+  }) {
+    if (!scenario.isPointToPoint || detourLevel <= 0) return true;
+    if (deadEndSpikeDetected || quality.uturnPositions.isNotEmpty) {
+      return false;
+    }
+    if (classification.isRejected) return false;
+
+    final maxShapePenalty = switch (detourLevel) {
+      1 => 52.0,
+      2 => 50.0,
+      3 => 48.0,
+      _ => 50.0,
+    };
+    final maxOverlapPercent = switch (detourLevel) {
+      1 => 26.0,
+      2 => 24.0,
+      3 => 22.0,
+      _ => 24.0,
+    };
+    final maxMicroZigzagPercent = switch (detourLevel) {
+      1 => 58.0,
+      2 => 56.0,
+      3 => 54.0,
+      _ => 56.0,
+    };
+
+    return quality.overlapPercent <= maxOverlapPercent &&
+        quality.shapePenalty <= maxShapePenalty &&
+        quality.foldedAreaPenalty <= 94.0 &&
+        quality.repeatedStartAreaPercent <= 72.0 &&
+        quality.microZigzagPercent <= maxMicroZigzagPercent &&
+        quality.corridorSwitchCount <= 4 &&
+        quality.progressReversalCount <= 1;
   }
 
   /// 2026-06-09 (vucko A→B-Endpunkt): Findet den zielnächsten Punkt im END-
@@ -8329,6 +8451,15 @@ class RouteService {
       body['max_waypoints'] = 0;
       final result = await _invoke(body);
       final snapped = _snapRouteToStartPosition(result, startPosition);
+      if (scenario.detourLevel > 0) {
+        snapped.edgeMeta['requested_detour_level'] = scenario.detourLevel;
+        snapped.edgeMeta['delivered_detour_level'] = 0;
+        snapped.edgeMeta['detour_downgraded'] = true;
+        snapped.edgeMeta['detour_fallback_stage'] = 'client_direct_fallback';
+      } else {
+        snapped.edgeMeta['requested_detour_level'] ??= 0;
+        snapped.edgeMeta['delivered_detour_level'] ??= 0;
+      }
       final directCandidate = _evaluateCandidate(
         scenario: scenario,
         styleConfig: RouteStyleConfig.forMode('Sport Mode'),

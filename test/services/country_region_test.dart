@@ -8,6 +8,11 @@ void main() {
       expect(CountryRegion.classify(47.33, 9.64), 'AT');
     });
 
+    test('Feldkirch / Frastanz liegen nicht in der LI-Box', () {
+      expect(CountryRegion.classify(47.238, 9.598), 'AT');
+      expect(CountryRegion.classify(47.217, 9.629), 'AT');
+    });
+
     test('Wien ist AT', () {
       expect(CountryRegion.classify(48.21, 16.37), 'AT');
     });
@@ -15,6 +20,12 @@ void main() {
     test('Punkt westlich des Rheins (CH) ist CH', () {
       // St. Gallen ~47.42, 9.37
       expect(CountryRegion.classify(47.42, 9.37), 'CH');
+    });
+
+    test('Rheintal westlich des Rheins bleibt CH/LI', () {
+      expect(CountryRegion.classify(47.452, 9.637), 'CH'); // St. Margrethen
+      expect(CountryRegion.classify(47.166, 9.477), 'CH'); // Buchs SG
+      expect(CountryRegion.classify(47.166, 9.510), 'LI'); // Schaan
     });
 
     test('München ist DE', () {
@@ -42,6 +53,21 @@ void main() {
       );
     });
 
+    test('Vorarlberg-Rheintal AT-Route bleibt bei 0 Ausland-Anteil', () {
+      final coords = [
+        [9.598, 47.238], // Feldkirch
+        [9.633, 47.333], // Götzis
+        [9.742, 47.412], // Dornbirn
+      ];
+      expect(
+        CountryRegion.foreignFraction(
+          coordinates: coords,
+          homeCountryCode: 'AT',
+        ),
+        0.0,
+      );
+    });
+
     test('Route mit CH-Anteil hat >0 Ausland-Anteil', () {
       final coords = [
         [9.64, 47.33], // AT
@@ -58,6 +84,27 @@ void main() {
   });
 
   group('CountryRegion.routeMetrics', () {
+    test('erkennt sichtbaren CH/LI-Abstecher ab Feldkirch', () {
+      final coords = <List<double>>[
+        [9.598, 47.238], // Feldkirch AT
+        [9.540, 47.238], // westlich der AT-Grenze
+        [9.477, 47.166], // Buchs SG CH
+      ];
+
+      final metrics = CountryRegion.routeMetrics(
+        coordinates: coords,
+        homeCountryCode: 'AT',
+      );
+
+      expect(metrics.countriesTouched, containsAll(<String>['AT', 'CH']));
+      expect(metrics.foreignDistanceFraction, greaterThan(0.10));
+      expect(
+        metrics.maxForeignSegmentMeters,
+        greaterThan(CountryRegion.onlyHomeMaxForeignSegmentMeters),
+      );
+      expect(metrics.violatesOnlyHomeLimits, isTrue);
+    });
+
     test('erkennt lange sparse CH-Segmente trotz kleiner Punktquote', () {
       final coords = <List<double>>[
         for (var i = 0; i < 20; i++) [9.62 + i * 0.001, 47.33 + i * 0.001],

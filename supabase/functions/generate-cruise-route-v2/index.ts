@@ -91,9 +91,10 @@ function isInDachCoverage(lat: number, lng: number): boolean {
 }
 
 function classifyCountry(lat: number, lng: number): string | null {
-  if (lat >= 47.05 && lat <= 47.27 && lng >= 9.47 && lng <= 9.64) return 'LI';
+  if (isLiechtensteinApprox(lat, lng)) return 'LI';
   if (lat >= 47.52 && lat <= 47.58 && lng >= 9.63 && lng <= 9.74) return 'DE';
-  if (lat >= 45.80 && lat <= 47.81 && lng >= 5.95 && lng <= 9.55) return 'CH';
+  if (isVorarlbergAustria(lat, lng)) return 'AT';
+  if (lat >= 45.80 && lat <= 47.81 && lng >= 5.95 && lng <= 9.66) return 'CH';
   if (lat < 46.85 && lng >= 6.6 && lng <= 13.9) return 'IT';
   if (lat >= 45.4 && lat <= 46.9 && lng >= 13.4 && lng <= 16.6) return 'SI';
   if (lng >= 9.53 && lng <= 17.16 && lat >= 46.37) {
@@ -101,6 +102,46 @@ function classifyCountry(lat: number, lng: number): string | null {
   }
   if (lat >= 47.27 && lat <= 55.06 && lng >= 5.87 && lng <= 15.04) return 'DE';
   return null;
+}
+
+function isLiechtensteinApprox(lat: number, lng: number): boolean {
+  if (lat < 47.04 || lat > 47.28 || lng < 9.47 || lng > 9.64) return false;
+  return pointInPolygon(lat, lng, [
+    [9.485, 47.270],
+    [9.545, 47.270],
+    [9.585, 47.235],
+    [9.626, 47.165],
+    [9.615, 47.047],
+    [9.490, 47.045],
+    [9.485, 47.165],
+  ]);
+}
+
+function isVorarlbergAustria(lat: number, lng: number): boolean {
+  if (lat < 46.82 || lat > 47.56 || lng < 9.52 || lng > 10.30) return false;
+  if (isLiechtensteinApprox(lat, lng)) return false;
+  return lng >= vorarlbergWestLimit(lat);
+}
+
+function vorarlbergWestLimit(lat: number): number {
+  if (lat >= 47.50) return 9.70;
+  if (lat >= 47.44) return 9.645;
+  if (lat >= 47.32) return 9.585;
+  if (lat >= 47.22) return 9.565;
+  if (lat >= 47.15) return 9.600;
+  return 9.650;
+}
+
+function pointInPolygon(lat: number, lng: number, polygon: Array<[number, number]>): boolean {
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const [xi, yi] = polygon[i];
+    const [xj, yj] = polygon[j];
+    const intersects = ((yi > lat) !== (yj > lat)) &&
+      (lng < ((xj - xi) * (lat - yi)) / (yj - yi) + xi);
+    if (intersects) inside = !inside;
+  }
+  return inside;
 }
 
 function austriaNorthLimit(lng: number): number {
@@ -251,6 +292,14 @@ interface RouteRequest {
   avoid_highways?: boolean;
   force_fresh_variant?: boolean;
   forceFreshVariant?: boolean;
+  randomSeed?: number;
+  random_seed?: number;
+  route_variant_hint?: string;
+  routeVariantHint?: string;
+  detour_factor?: number;
+  detourFactor?: number;
+  offset_side?: number;
+  offsetSide?: number;
   previous_route_fingerprints?: string[];
   client_trigger?: string;
   // 2026-05-22 (Task #41): A→B Detour-Level (0=direkt, 1=klein, 2=mittel, 3=groß)
@@ -285,6 +334,10 @@ function normalizeRequest(raw: RouteRequest): RouteRequest {
     target_distance_km: raw.target_distance_km ?? raw.targetDistance,
     selected_style: raw.selected_style ?? raw.mode,
     force_fresh_variant: raw.force_fresh_variant ?? raw.forceFreshVariant,
+    randomSeed: raw.randomSeed ?? raw.random_seed,
+    route_variant_hint: raw.route_variant_hint ?? raw.routeVariantHint,
+    detour_factor: raw.detour_factor ?? raw.detourFactor,
+    offset_side: raw.offset_side ?? raw.offsetSide,
     detour_level: raw.detour_level ?? raw.detourLevel ?? 0,
     country_preference: normalizeCountryPreference(raw.country_preference ?? raw.countryPreference),
     home_country_code: normalizeCountryCode(raw.home_country_code ?? raw.homeCountryCode) ?? undefined,
@@ -518,6 +571,27 @@ function offsetCoord(lat: number, lng: number, distKm: number, bearingDeg_: numb
     Math.cos(distKm / R) - Math.sin(φ1) * Math.sin(φ2),
   );
   return { lat: toDeg(φ2), lng: toDeg(λ2) };
+}
+
+function stableHashInt(text: string | undefined): number {
+  let hash = 0;
+  const value = text ?? '';
+  for (let i = 0; i < value.length; i++) {
+    hash = ((hash << 5) - hash + value.charCodeAt(i)) | 0;
+  }
+  return Math.abs(hash);
+}
+
+function finiteNumberOr(value: unknown, fallback: number): number {
+  const parsed = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function normalizeOffsetSide(value: unknown, seed: number): -1 | 1 {
+  const parsed = finiteNumberOr(value, 0);
+  if (parsed < 0) return -1;
+  if (parsed > 0) return 1;
+  return seed % 2 === 0 ? 1 : -1;
 }
 
 // 2026-06-10 (vucko START-SNAP-FIX): Haversine in Metern für die globale
@@ -1046,7 +1120,7 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
   // detour_level 2 = mittel (Sub-WP 6-12 km, 4 Versuche)
   // detour_level 3 = groß (Sub-WP 12-25 km, 5 Versuche)
   const detourLevel = isRoundTrip ? 0 : (req.detour_level ?? 0);
-  const detourSpec: Array<{ bearing: number; distKm: number }> = [];
+  const detourSpec: Array<{ bearing: number; distKm: number; side: -1 | 1; family: number }> = [];
   if (!isRoundTrip && req.target_location && detourLevel > 0) {
     const directKm = (() => {
       const R = 6371;
@@ -1067,26 +1141,57 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
       : profile === 'motorcycle_entdecker' ? 1.0
       : 1.0;
     const baseFactor = detourLevel === 1 ? 0.15 : detourLevel === 2 ? 0.30 : 0.50;
-    const baseKm = Math.max(2, directKm * baseFactor * profileDetourMultiplier);
+    const detourFactor = Math.max(1, finiteNumberOr(req.detour_factor, 1));
+    const requestedTargetKm = finiteNumberOr(req.target_distance_km, directKm);
+    const factorKm = directKm * Math.max(0.08, (detourFactor - 1) * 0.55);
+    const targetExtraKm = Math.max(0, requestedTargetKm - directKm) * 0.48;
+    const baseKm = Math.max(
+      2,
+      directKm * baseFactor * profileDetourMultiplier,
+      factorKm * profileDetourMultiplier,
+      targetExtraKm,
+    );
+    const variantSeed =
+      Math.abs(Math.round(finiteNumberOr(req.randomSeed, 0))) +
+      stableHashInt(req.route_variant_hint) +
+      (req.force_fresh_variant ? Date.now() % 1009 : 0);
+    const preferredSide = normalizeOffsetSide(req.offset_side, variantSeed);
     // Bearing-Sets pro Stil unterschiedlich damit Routes sich klar
     // unterscheiden (sonst pickt GH die kürzeste path egal welches profile).
-    const bearingsForStyle = profile === 'motorcycle_kurvenjagd'
-      ? [90, -90, 120, -120, 60, -60]  // breit + tief — viele Optionen
+    const absBearingsForStyle = profile === 'motorcycle_kurvenjagd'
+      ? [90, 120, 60, 135, 75, 105]  // breit + tief — viele Optionen
       : profile === 'motorcycle_scenic'
-      ? [75, -75, 60, -60, 90, -90]    // schmaler Spread — Cruiser-feeling
+      ? [75, 60, 90, 105, 45, 120]   // schmaler Spread — Cruiser-feeling
       : profile === 'motorcycle_abendrunde'
-      ? [60, -60, 45, -45, 75]         // wenig Umweg
-      : [80, -80, 100, -100, 60, -60]; // entdecker: variability
+      ? [60, 45, 75, 90, 35]         // wenig Umweg
+      : [80, 100, 60, 120, 45, 95];  // entdecker: variability
+    const rotation = absBearingsForStyle.length > 0
+      ? variantSeed % absBearingsForStyle.length
+      : 0;
+    const rotatedAbsBearings = [
+      ...absBearingsForStyle.slice(rotation),
+      ...absBearingsForStyle.slice(0, rotation),
+    ];
+    const bearingsForStyle = [
+      ...rotatedAbsBearings.map((b) => b * preferredSide),
+      ...rotatedAbsBearings.map((b) => -b * preferredSide),
+    ];
     const limit = detourLevel === 1 ? 4 : detourLevel === 2 ? 6 : 8;
     // 2026-05-22 (vucko Task #11): Pro Bearing zwei distanzen probieren —
     // wenn der primäre Sub-WP im Wasser/Berg landet, fängt der kleinere
     // baseKm-Wert oft trotzdem. Verdoppelt effektiv die Erfolgsrate
     // ohne Latenz zu sprengen (Promise.all parallel).
-    const distanceVariants = [baseKm, Math.max(2, baseKm * 0.55)];
-    for (const b of bearingsForStyle.slice(0, Math.ceil(limit / 2))) {
+    const seedJitter = 0.90 + (variantSeed % 17) / 100;
+    const distanceVariants = detourLevel >= 2
+      ? [baseKm * seedJitter, Math.max(2, baseKm * 0.68), baseKm * 1.22]
+      : [baseKm * seedJitter, Math.max(2, baseKm * 0.62)];
+    for (const b of bearingsForStyle) {
       for (const d of distanceVariants) {
-        detourSpec.push({ bearing: b, distKm: d });
+        const side = b < 0 ? -1 : 1;
+        detourSpec.push({ bearing: b, distKm: d, side, family: detourSpec.length });
+        if (detourSpec.length >= limit) break;
       }
+      if (detourSpec.length >= limit) break;
     }
   }
   const hasExplicitWaypoints = !isRoundTrip && (req.waypoints?.length ?? 0) > 0;
@@ -1582,7 +1687,18 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
           detourPerpendicularKm: spec.distKm,
           // 2026-06-09 (vucko U-Turn-Fix): Reroute startet in Fahrtrichtung.
           headingDeg: req.reroute_request === true ? req.current_heading : undefined,
-        }).then(result => ({ result, seed: idx })),
+        }).then((result) => {
+          if (!('error' in result)) {
+            result.meta.detour_level = detourLevel;
+            result.meta.requested_detour_level = detourLevel;
+            result.meta.delivered_detour_level = detourLevel;
+            result.meta.detour_offset_side = spec.side;
+            result.meta.detour_bearing_deg = spec.bearing;
+            result.meta.detour_perpendicular_km = Number(spec.distKm.toFixed(2));
+            result.meta.detour_family = spec.family;
+          }
+          return { result, seed: idx };
+        }),
       ),
     );
   };
@@ -2193,6 +2309,31 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
     const finalCountry = countryRouteMetrics(finalCoords, homeCountryCode);
     const finalForeignFraction = Math.max(finalCountry.foreignPointFraction, finalCountry.foreignDistanceFraction);
     const finalCountriesTouched = finalCountry.countriesTouched;
+    const deliveredDetourLevel = !isRoundTrip
+      ? Math.max(
+          0,
+          Math.min(
+            detourLevel,
+            Math.round(
+              finiteNumberOr(
+                bestCandidate.meta.delivered_detour_level ?? bestCandidate.meta.detour_level,
+                0,
+              ),
+            ),
+          ),
+        )
+      : 0;
+    const detourRatio = !isRoundTrip && req.start_location && req.target_location
+      ? Number((bestCandidate.distanceKm / Math.max(
+          0.1,
+          distanceMeters(
+            req.start_location.latitude,
+            req.start_location.longitude,
+            req.target_location.latitude,
+            req.target_location.longitude,
+          ) / 1000,
+        )).toFixed(2))
+      : undefined;
     const finalCountryRejected =
       strictInland &&
       (finalCountry.foreignPointFraction > ONLY_HOME_MAX_FOREIGN_FRACTION ||
@@ -2254,6 +2395,13 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
         compensation_factor: region.factor,
         requested_target_km: req.target_distance_km,
         effective_target_km: Number(effectiveDistanceKm?.toFixed(1)),
+        requested_detour_level: !isRoundTrip ? detourLevel : undefined,
+        delivered_detour_level: !isRoundTrip ? deliveredDetourLevel : undefined,
+        detour_downgraded: !isRoundTrip && deliveredDetourLevel < detourLevel,
+        detour_ratio: detourRatio,
+        detour_offset_side: bestCandidate.meta.detour_offset_side,
+        detour_bearing_deg: bestCandidate.meta.detour_bearing_deg,
+        detour_perpendicular_km: bestCandidate.meta.detour_perpendicular_km,
         // v1-kompatible meta-Felder
         distance_km: Number(bestCandidate.distanceKm.toFixed(2)),
         duration_seconds: Math.round(bestCandidate.durationSeconds),

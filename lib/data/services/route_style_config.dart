@@ -550,14 +550,24 @@ class RouteStyleConfig {
     required bool scenic,
     required int detourVariant,
   }) {
-    // 2026-05-23 (vucko Bug-Fix A→B): Min-Distanz darf NICHT mehr eine
-    // gefundene Route ablehnen. User wählt detour weil er mehr Umweg
-    // wünscht, aber wenn GH nicht so viel Umweg findet wie gewünscht
-    // ist eine kurze Route immer noch besser als "Stopps prüfen".
-    // → min = direct distance (jede sinnvolle Route ≥ direct).
-    // scenic/detourVariant werden weiter im Konstruktor evaluiert,
-    // aber für Min-Bound jetzt egal.
-    return directDistanceKm;
+    if (!scenic && detourVariant <= 0) return directDistanceKm;
+    final reference = pointToPointScenicReferenceDistanceKm(
+      directDistanceKm: directDistanceKm,
+      detourVariant: detourVariant,
+    );
+    final minByDirect = switch (detourVariant) {
+      1 => math.max(directDistanceKm * 1.14, directDistanceKm + 2.5),
+      2 => math.max(directDistanceKm * 1.34, directDistanceKm + 6.0),
+      3 => math.max(directDistanceKm * 1.58, directDistanceKm + 10.0),
+      _ => math.max(directDistanceKm * 1.08, directDistanceKm + 2.0),
+    };
+    final minByReference = switch (detourVariant) {
+      1 => reference * 0.94,
+      2 => reference * 1.02,
+      3 => reference * 1.10,
+      _ => reference * 0.92,
+    };
+    return math.max(directDistanceKm, math.max(minByDirect, minByReference));
   }
 
   double maximumPointToPointDistanceKm({

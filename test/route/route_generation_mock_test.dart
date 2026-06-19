@@ -322,6 +322,60 @@ Map<String, dynamic> _buildPointToPointResponse({
   };
 }
 
+Map<String, dynamic> _buildZigZagPointToPointResponse({
+  required double distanceMeters,
+  required double durationSeconds,
+  required double destinationLat,
+  required double destinationLng,
+  double startLat = 48.1351,
+  double startLng = 11.5820,
+  int coordinateCount = 120,
+  Map<String, dynamic> meta = const {},
+}) {
+  final dx = destinationLng - startLng;
+  final dy = destinationLat - startLat;
+  final length = math.sqrt(dx * dx + dy * dy);
+  final perpX = length == 0 ? 0.0 : -dy / length;
+  final perpY = length == 0 ? 0.0 : dx / length;
+  final coords = List.generate(coordinateCount, (i) {
+    final t = i / (coordinateCount - 1);
+    final spike = (i.isEven ? 0.038 : -0.038) * math.sin(t * math.pi);
+    return [
+      startLng + dx * t + perpX * spike,
+      startLat + dy * t + perpY * spike,
+    ];
+  });
+
+  return {
+    if (meta.isNotEmpty) 'meta': meta,
+    'route': {
+      'geometry': {'type': 'LineString', 'coordinates': coords},
+      'distance': distanceMeters,
+      'duration': durationSeconds,
+      'legs': [
+        {
+          'steps': [
+            {
+              'maneuver': {
+                'type': 'turn',
+                'modifier': 'left',
+                'location': coords[(coordinateCount * 0.4).round()],
+              },
+              'distance': distanceMeters * 0.45,
+              'name': 'Broken Detour',
+            },
+            {
+              'maneuver': {'type': 'arrive', 'location': coords.last},
+              'distance': 0.0,
+              'name': '',
+            },
+          ],
+        },
+      ],
+    },
+  };
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 @GenerateMocks([RouteEdgeInvoker])
@@ -1550,11 +1604,17 @@ void main() {
             1000.0;
         final styleConfig = RouteStyleConfig.forMode('Sport Mode');
         final targets = <int, double>{};
+        final minimums = <int, double>{};
 
         for (final variant in const [1, 2, 3]) {
           final request = byDetourLevel[variant]!;
           final targetDistance = (request['targetDistance'] as num).toDouble();
           targets[variant] = targetDistance;
+          minimums[variant] = styleConfig.minimumPointToPointDistanceKm(
+            directDistanceKm: directKm,
+            scenic: true,
+            detourVariant: variant,
+          );
 
           expect(
             request['startLocation']['latitude'],
@@ -1631,6 +1691,9 @@ void main() {
         );
         expect(targets[2]!, greaterThan(targets[1]!));
         expect(targets[3]!, greaterThan(targets[2]!));
+        expect(minimums[1]!, greaterThan(directKm));
+        expect(minimums[2]!, greaterThan(minimums[1]!));
+        expect(minimums[3]!, greaterThan(minimums[2]!));
       },
     );
 
@@ -1685,6 +1748,67 @@ void main() {
                 as Map<String, dynamic>;
 
         expect(first['randomSeed'], isNot(equals(second['randomSeed'])));
+        expect(first['force_fresh_variant'], true);
+        expect(second['force_fresh_variant'], true);
+        expect(first['client_force_fresh_variant'], true);
+        expect(second['client_force_fresh_variant'], true);
+        expect(
+          first['route_variant_hint'],
+          isNot(equals(second['route_variant_hint'])),
+        );
+        expect(first['offset_side'], isIn(const [-1, 1]));
+        expect(second['offset_side'], isIn(const [-1, 1]));
+      },
+    );
+
+    test(
+      'scenic A→B verwirft zackige Detour-Geometrie und nimmt saubere Alternative',
+      () async {
+        var callCount = 0;
+        when(mockInvoker.invoke(any)).thenAnswer((_) async {
+          callCount++;
+          if (callCount == 1) {
+            return _buildZigZagPointToPointResponse(
+              distanceMeters: 28000,
+              durationSeconds: 2200,
+              destinationLat: _feldkirchLat,
+              destinationLng: _feldkirchLng,
+              startLat: _dornbirnLat,
+              startLng: _dornbirnLng,
+              meta: const {
+                'requested_detour_level': 1,
+                'delivered_detour_level': 1,
+              },
+            );
+          }
+          return _buildPointToPointResponse(
+            distanceMeters: 28500,
+            durationSeconds: 2250,
+            destinationLat: _feldkirchLat,
+            destinationLng: _feldkirchLng,
+            coordinateCount: 180,
+            bendScale: 0.075,
+            startLat: _dornbirnLat,
+            startLng: _dornbirnLng,
+            meta: const {
+              'requested_detour_level': 1,
+              'delivered_detour_level': 1,
+            },
+          );
+        });
+
+        final result = await service.generatePointToPoint(
+          startPosition: _dornbirn(),
+          destinationLat: _feldkirchLat,
+          destinationLng: _feldkirchLng,
+          mode: 'Sport Mode',
+          scenic: true,
+          routeVariant: 1,
+        );
+
+        expect(callCount, greaterThanOrEqualTo(2));
+        expect(result.coordinates, isNotEmpty);
+        expect(result.edgeMeta['delivered_detour_level'], 1);
       },
     );
 
@@ -1760,12 +1884,9 @@ void main() {
         final pointToPointRequests = captured.where(
           (request) => request['route_type'] == 'POINT_TO_POINT',
         );
+        expect(pointToPointRequests.first['detour_level'], 3);
         expect(
-          pointToPointRequests.every(
-            (request) =>
-                (request['detour_level'] as int?) != null &&
-                (request['detour_level'] as int) > 0,
-          ),
+          pointToPointRequests.any((request) => request['detour_level'] == 0),
           isTrue,
         );
         expect(

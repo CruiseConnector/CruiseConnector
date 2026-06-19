@@ -80,11 +80,11 @@ class CountryRegion {
   /// kleine Grenzberührungen bleiben möglich.
   static const double preferHomeMaxForeignFraction = 0.65;
 
-  /// Klassifiziert einen Punkt grob. Reihenfolge wichtig: die kleinen Länder
-  /// (LI) vor den großen, weil sie sonst von AT/CH verschluckt würden.
+  /// Klassifiziert einen Punkt grob. Reihenfolge wichtig: Grenzregionen werden
+  /// vor großen Länderboxen geprüft, damit Vorarlberg nicht als CH/LI und echte
+  /// CH/LI-Ausflüge nicht als AT durchrutschen.
   static String? classify(double lat, double lng) {
-    // Liechtenstein — winziges Kästchen zwischen CH und AT (Rheintal-Süd).
-    if (lat >= 47.05 && lat <= 47.27 && lng >= 9.47 && lng <= 9.64) {
+    if (_isLiechtensteinApprox(lat, lng)) {
       return 'LI';
     }
     // 2026-06-08 (vucko Grenz-Test): Lindau (DE) ragt als Halbinsel in den
@@ -94,9 +94,14 @@ class CountryRegion {
     if (lat >= 47.52 && lat <= 47.58 && lng >= 9.63 && lng <= 9.74) {
       return 'DE';
     }
-    // Schweiz — westlich/südlich des Rheins, grob.
-    if (lat >= 45.80 && lat <= 47.81 && lng >= 5.95 && lng <= 9.55) {
-      // Ostgrenze CH läuft im Rheintal ~lng 9.55; AT beginnt östlich davon.
+    // Vorarlberg/Rheintal zuerst: Feldkirch/Frastanz liegen in der alten
+    // LI-Rechteckbox, St. Margrethen/Buchs in der alten CH-Box. Die
+    // lat-abhängige Westgrenze trennt grob entlang Rhein/Liechtenstein.
+    if (_isVorarlbergAustria(lat, lng)) {
+      return 'AT';
+    }
+    // Schweiz — westlich/südlich des Rheins, inkl. Bodensee/Rheintal.
+    if (lat >= 45.80 && lat <= 47.81 && lng >= 5.95 && lng <= 9.66) {
       return 'CH';
     }
     // Italien (Südtirol/Norditalien) — südlich der Alpen.
@@ -121,6 +126,58 @@ class CountryRegion {
       return 'DE';
     }
     return null;
+  }
+
+  static bool _isLiechtensteinApprox(double lat, double lng) {
+    if (lat < 47.04 || lat > 47.28 || lng < 9.47 || lng > 9.64) {
+      return false;
+    }
+    const polygon = <List<double>>[
+      [9.485, 47.270],
+      [9.545, 47.270],
+      [9.585, 47.235],
+      [9.626, 47.165],
+      [9.615, 47.047],
+      [9.490, 47.045],
+      [9.485, 47.165],
+    ];
+    return _pointInPolygon(lat, lng, polygon);
+  }
+
+  static bool _isVorarlbergAustria(double lat, double lng) {
+    if (lat < 46.82 || lat > 47.56 || lng < 9.52 || lng > 10.30) {
+      return false;
+    }
+    if (_isLiechtensteinApprox(lat, lng)) return false;
+    return lng >= _vorarlbergWestLimit(lat);
+  }
+
+  static double _vorarlbergWestLimit(double lat) {
+    if (lat >= 47.50) return 9.70; // Bodensee: Bregenz/Lochau, nicht Lindau/CH
+    if (lat >= 47.44) return 9.645; // Höchst/St. Margrethen Grenzstreifen
+    if (lat >= 47.32) return 9.585; // Dornbirn/Götzis östlich des Rheins
+    if (lat >= 47.22) return 9.565; // Feldkirch/Frastanz
+    if (lat >= 47.15) return 9.600; // nördlich Bludenz, östlich LI/CH
+    return 9.650;
+  }
+
+  static bool _pointInPolygon(
+    double lat,
+    double lng,
+    List<List<double>> polygon,
+  ) {
+    var inside = false;
+    for (var i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+      final xi = polygon[i][0];
+      final yi = polygon[i][1];
+      final xj = polygon[j][0];
+      final yj = polygon[j][1];
+      final intersects =
+          ((yi > lat) != (yj > lat)) &&
+          (lng < (xj - xi) * (lat - yi) / (yj - yi) + xi);
+      if (intersects) inside = !inside;
+    }
+    return inside;
   }
 
   /// 2026-06-08 (vucko DACH-Test): Die AT/DE-Grenze ist im Alpenraum stark

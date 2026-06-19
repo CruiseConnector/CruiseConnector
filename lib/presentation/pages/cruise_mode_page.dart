@@ -5758,28 +5758,25 @@ class _CruiseModePageState extends State<CruiseModePage>
     // 2026-06-09 (vucko Reveal-Fix): die _isRouteConfirmed-Bedingung fiel weg —
     // sie unterdrückte in der Preview die Animation.
     _ensureRouteMetrics();
-    // 2026-06-10 (vucko 3km-Sichtdesign v2): Waehrend der bestaetigten Fahrt
-    // zeigt die aktive (voll rote) Quelle NUR das 3km-Fenster ab Puck; die
-    // Andeutung der Reststrecke macht der dezente Basis-Layer
-    // (_buildMapLibreLines). Vor der Fahrt/in der Uebersicht: volle Route voll
-    // rot. Fallback: solange noch kein Fenster berechnet ist (Fahrtbeginn),
-    // bleibt die VOLLE Route sichtbar — der Strich darf nie verschwinden.
+    // 2026-06-10/19 (vucko 3km-Sichtdesign): Waehrend der bestaetigten Fahrt
+    // zeigt die aktive (voll rote) Quelle fuer Rundkurs/Umweg/Trip nur das
+    // 3km-Fenster ab Puck; die dezente Rest-Preview kommt aus
+    // _buildMapLibreLines. Nur direkte A→B-Navigation darf die volle aktive
+    // Reststrecke zeigen.
     final canUseLiveRouteWindow =
         _isRouteConfirmed &&
         !_isRerouting &&
         _offRouteSince == null &&
         _brightAheadLatLngs.length >= 2;
-    // 2026-06-13 (vucko J4): Fallback NIE mehr die volle Route (die hinter dem
-    // Puck weiterläuft) — sondern die Route AB Puck vorwärts. Während Reroute/
-    // Off-Route war das 3km-Fenster leer → vorher lag die alte volle Route rot
-    // durch den Puck (Video: „Strecke vor UND hinter mir"). In der Preview
-    // (noch nicht bestätigt) bleibt _routeLatLngs, damit die Reveal-Animation
-    // (2→voll) sichtbar bleibt.
+    // Fallback bei leerem Live-Fenster: Direkt-A→B zeigt die volle Reststrecke,
+    // alle anderen Modi bekommen maximal 3 km aktiv plus dezente Preview.
+    // In der Preview (noch nicht bestätigt) bleibt _routeLatLngs, damit die
+    // Reveal-Animation (2→voll) sichtbar bleibt.
     final activePts = (!_isOverviewActive && _routeLatLngs.length >= 2)
         ? (canUseLiveRouteWindow
               ? _brightAheadLatLngs
               : (_isRouteConfirmed
-                    ? _activeRouteAheadFromIndex()
+                    ? _activeRouteFallbackPointsForNavigation()
                     : _routeLatLngs))
         : _fullRouteBackgroundLatLngs;
     return CruiseMapLibreMap(
@@ -5842,18 +5839,86 @@ class _CruiseModePageState extends State<CruiseModePage>
     return pts.length >= 2 ? pts : _routeLatLngs;
   }
 
+  bool get _directPointToPointShowsFullActiveRoute =>
+      !_isRoundTrip &&
+      !_activePointToPointScenic &&
+      _activeDetourVariant <= 0 &&
+      _activeIntermediateWaypoints.isEmpty;
+
+  List<LatLng> _activeRouteFallbackPointsForNavigation() {
+    if (_directPointToPointShowsFullActiveRoute) {
+      return _activeRouteAheadFromIndex();
+    }
+    return _activeRouteWindowFromIndex(maxMeters: 3000.0);
+  }
+
+  List<LatLng> _activeRouteWindowFromIndex({required double maxMeters}) {
+    final coords = _fullRouteCoordinates;
+    if (coords.length < 2) return _routeLatLngs.take(2).toList(growable: false);
+    final idx = _currentRouteIndex.clamp(0, coords.length - 1).toInt();
+    final head = _lastRouteLockedRenderLatLng;
+    final pts = <LatLng>[];
+    var prevLat = 0.0;
+    var prevLng = 0.0;
+    var nextIndex = 0;
+
+    if (head != null) {
+      pts.add(head);
+      prevLat = head.latitude;
+      prevLng = head.longitude;
+      nextIndex = (idx + 1).clamp(0, coords.length).toInt();
+    } else {
+      final c = coords[idx];
+      pts.add(LatLng(c[1], c[0]));
+      prevLat = c[1];
+      prevLng = c[0];
+      nextIndex = (idx + 1).clamp(0, coords.length).toInt();
+    }
+
+    var acc = 0.0;
+    while (nextIndex < coords.length && acc < maxMeters) {
+      final c = coords[nextIndex];
+      final d = geo.Geolocator.distanceBetween(prevLat, prevLng, c[1], c[0]);
+      if (!d.isFinite || d <= 0) {
+        nextIndex++;
+        continue;
+      }
+      if (acc + d <= maxMeters) {
+        pts.add(LatLng(c[1], c[0]));
+        acc += d;
+        prevLat = c[1];
+        prevLng = c[0];
+        nextIndex++;
+        continue;
+      }
+      final remain = maxMeters - acc;
+      final f = (remain / d).clamp(0.0, 1.0);
+      pts.add(
+        LatLng(prevLat + (c[1] - prevLat) * f, prevLng + (c[0] - prevLng) * f),
+      );
+      break;
+    }
+
+    if (pts.length >= 2) return pts;
+    return _routeLatLngs.take(2).toList(growable: false);
+  }
+
   List<CruiseMapLine> _buildMapLibreLines() {
     // 2026-06-10 (vucko 3km-Sichtdesign v2): Waehrend der bestaetigten Fahrt
     // liegt hier die DEZENTE Reststrecke ab Puck (Opacity 0.30) — sie deutet
     // „es geht weiter" an, waehrend die aktive Quelle nur das volle
     // 3km-Fenster zeigt. 200m-Gate: ihr Anfang liegt unter dem bright-Fenster
     // und ist unsichtbar, darum sind seltene Pushes voellig ausreichend.
-    if (_isRouteConfirmed &&
-        !_isOverviewActive &&
-        _dimRemainingLatLngs.length >= 2) {
+    if (_isRouteConfirmed && !_isOverviewActive) {
+      final previewPts = _dimRemainingLatLngs.length >= 2
+          ? _dimRemainingLatLngs
+          : _directPointToPointShowsFullActiveRoute
+          ? const <LatLng>[]
+          : _activeRouteAheadFromIndex();
+      if (previewPts.length < 2) return const <CruiseMapLine>[];
       return [
         CruiseMapLine(
-          points: _dimRemainingLatLngs,
+          points: previewPts,
           color: AppAccentColors.accent,
           width: 5,
           opacity: 0.30,
@@ -6008,6 +6073,9 @@ class _CruiseModePageState extends State<CruiseModePage>
   Widget _buildFlutterMap() {
     final pointToPointDestination = _pointToPointDestinationMarkerPoint;
     final activeRouteEnd = _activeRouteEndMarkerPoint;
+    final visibleRouteLatLngs = _isRouteConfirmed
+        ? _activeRouteFallbackPointsForNavigation()
+        : _routeLatLngs;
     return FlutterMap(
       mapController: _mapController,
       options: MapOptions(
@@ -6122,19 +6190,19 @@ class _CruiseModePageState extends State<CruiseModePage>
           ),
         // ── Route (Glow + Hauptlinie) ────────────────────────────────────────
         // Web: Glow-Effekt entfernt — spart eine komplette Polyline-Layer-Berechnung.
-        if (_routeLatLngs.length >= 2)
+        if (visibleRouteLatLngs.length >= 2)
           PolylineLayer(
             polylines: [
               if (!kIsWeb)
                 // Glow-Effekt (nur native — auf Web zu teuer für CanvasKit)
                 Polyline(
-                  points: _routeLatLngs,
+                  points: visibleRouteLatLngs,
                   color: AppAccentColors.accent.withValues(alpha: 0.30),
                   strokeWidth: 12,
                 ),
               // Haupt-Routenlinie
               Polyline(
-                points: _routeLatLngs,
+                points: visibleRouteLatLngs,
                 color: AppAccentColors.accent,
                 strokeWidth: kIsWeb ? 4 : 5,
               ),
