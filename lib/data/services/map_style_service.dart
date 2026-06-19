@@ -52,6 +52,8 @@ class MapStyleService {
 
   bool _downloadInProgress = false;
   bool get isDownloading => _downloadInProgress;
+  Timer? _autoDownloadTimer;
+  bool _autoBootstrapRunning = false;
 
   /// Lädt den DACH-Raum automatisch offline (User-Wunsch „automatisch"). NUR
   /// über WLAN (kein Mobilfunk-Volumen). Auf `false` setzen, um den
@@ -81,6 +83,52 @@ class MapStyleService {
   // (home_page Prewarm-Delay) → kollidiert nicht mehr mit dem Karten-Öffnen.
   static const bool autoDownloadEnabled = true;
 
+  /// Garantiert, dass Nutzer ohne lokale DACH-Karte automatisch in den
+  /// Hintergrund-Download laufen. Mehrere Einstiegspunkte (App-Start, Home,
+  /// erste MapLibre-Karte) dürfen diese Methode aufrufen; sie dedupliziert Timer
+  /// und laufende Checks. Ein sofortiger Aufruf darf einen verzögerten App-Start-
+  /// Timer vorziehen, damit die Karte nicht auf den Home-Prewarm angewiesen ist.
+  void ensureAutoDownloadScheduled({
+    Duration delay = Duration.zero,
+    String reason = 'startup',
+  }) {
+    if (!autoDownloadEnabled || kIsWeb) return;
+    if (_autoBootstrapRunning || _downloadInProgress) return;
+    if (_autoDownloadTimer != null) {
+      if (delay == Duration.zero) {
+        _autoDownloadTimer?.cancel();
+        _autoDownloadTimer = null;
+      } else {
+        return;
+      }
+    }
+
+    void start() {
+      _autoDownloadTimer = null;
+      unawaited(_runAutoDownloadBootstrap(reason));
+    }
+
+    if (delay == Duration.zero) {
+      start();
+    } else {
+      _autoDownloadTimer = Timer(delay, start);
+    }
+  }
+
+  Future<void> _runAutoDownloadBootstrap(String reason) async {
+    if (_autoBootstrapRunning || _downloadInProgress) return;
+    _autoBootstrapRunning = true;
+    try {
+      debugPrint('[MapStyle] Auto-DACH-Bootstrap: $reason');
+      await verifyLocalDachIntegrityOnce();
+      await maybeAutoDownloadDach();
+    } catch (e) {
+      debugPrint('[MapStyle] Auto-DACH-Bootstrap fehlgeschlagen: $e');
+    } finally {
+      _autoBootstrapRunning = false;
+    }
+  }
+
   /// Startet den DACH-Offline-Download automatisch, wenn sinnvoll: aktiviert,
   /// noch nicht geladen, nicht schon laufend, und auf WLAN. Fire-and-forget —
   /// blockiert nichts. MapLibre cached parallel ohnehin jede geladene Kachel.
@@ -97,14 +145,20 @@ class MapStyleService {
       return;
     }
     debugPrint('[MapStyle] Auto-DACH-Offline-Download startet (WLAN)…');
-    unawaited(downloadDach(onProgress: (received, total) {
-      // Grob alle ~100 MB loggen.
-      if (received % (100 * 1024 * 1024) < (2 * 1024 * 1024)) {
-        final mb = (received / 1024 / 1024).round();
-        final totalMb = total > 0 ? (total / 1024 / 1024).round() : -1;
-        debugPrint('[MapStyle] DACH offline: $mb${totalMb > 0 ? '/$totalMb' : ''} MB');
-      }
-    }));
+    unawaited(
+      downloadDach(
+        onProgress: (received, total) {
+          // Grob alle ~100 MB loggen.
+          if (received % (100 * 1024 * 1024) < (2 * 1024 * 1024)) {
+            final mb = (received / 1024 / 1024).round();
+            final totalMb = total > 0 ? (total / 1024 / 1024).round() : -1;
+            debugPrint(
+              '[MapStyle] DACH offline: $mb${totalMb > 0 ? '/$totalMb' : ''} MB',
+            );
+          }
+        },
+      ),
+    );
   }
 
   Future<File> _localFile() async {
@@ -297,11 +351,11 @@ class MapStyleService {
       }
       final total = resp.contentLength < 0
           ? -1
-          : resp.contentLength + (resp.statusCode == HttpStatus.partialContent
-              ? existing
-              : 0);
-      var received =
-          resp.statusCode == HttpStatus.partialContent ? existing : 0;
+          : resp.contentLength +
+                (resp.statusCode == HttpStatus.partialContent ? existing : 0);
+      var received = resp.statusCode == HttpStatus.partialContent
+          ? existing
+          : 0;
       final sink = part.openWrite(
         mode: resp.statusCode == HttpStatus.partialContent
             ? FileMode.append

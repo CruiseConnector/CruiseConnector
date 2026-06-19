@@ -72,8 +72,9 @@ class _HomePageState extends State<HomePage> {
     // dach.pmtiles auf Defekte pruefen (Magic-Header + Groesse vs. Server) —
     // eine fehlerhaft geladene Karte wird geloescht und automatisch neu
     // heruntergeladen.
-    await MapStyleService.instance.verifyLocalDachIntegrityOnce();
-    unawaited(MapStyleService.instance.maybeAutoDownloadDach());
+    MapStyleService.instance.ensureAutoDownloadScheduled(
+      reason: 'home_prewarm',
+    );
     // 2026-06-05 (vucko): refreshRemoteStyle entfernt — das Bundle ist die
     // Single Source of Truth (Style-Änderungen greifen sofort, besser offline).
     try {

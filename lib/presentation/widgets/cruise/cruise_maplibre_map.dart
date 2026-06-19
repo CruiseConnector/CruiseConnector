@@ -470,6 +470,7 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
     VisibilityDetectorController.instance.updateInterval = Duration.zero;
     // Style via Service bauen: nutzt automatisch die LOKALEN PMTiles, wenn DACH
     // offline geladen wurde — sonst remote von R2.
+    MapStyleService.instance.ensureAutoDownloadScheduled(reason: 'map_open');
     MapStyleService.instance.buildStyleString(asset: widget.styleAsset).then((
       s,
     ) {

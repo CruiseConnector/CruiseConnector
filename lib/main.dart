@@ -19,6 +19,7 @@ import 'package:cruise_connect/application/providers/saved_routes_provider.dart'
 import 'package:cruise_connect/core/constants.dart';
 import 'package:cruise_connect/core/deep_links.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
+import 'package:cruise_connect/data/services/map_style_service.dart';
 import 'package:cruise_connect/data/services/voice_settings_service.dart';
 import 'package:cruise_connect/data/services/notification_service.dart';
 import 'package:cruise_connect/data/services/notification_settings_service.dart';
@@ -72,6 +73,10 @@ void main() {
       unawaited(VoiceSettingsService.instance.load());
       unawaited(NotificationSettingsService.instance.load());
       unawaited(PoiSettingsService.instance.load());
+      MapStyleService.instance.ensureAutoDownloadScheduled(
+        delay: const Duration(seconds: 10),
+        reason: 'app_start',
+      );
 
       // 2026-05-31 (vucko): Push (FCM) nur auf Android/iOS. Firebase ist hier
       // REIN der Push-Kanal (kein Parallelbackend, vgl. codex.md). Der
