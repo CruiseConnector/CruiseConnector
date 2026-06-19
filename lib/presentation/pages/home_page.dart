@@ -16,6 +16,7 @@ import 'package:cruise_connect/presentation/widgets/top_toast.dart';
 import 'package:cruise_connect/presentation/pages/community_page.dart';
 import 'package:cruise_connect/presentation/pages/cruise_mode_page.dart';
 import 'package:cruise_connect/presentation/pages/analytics_page.dart';
+import 'package:cruise_connect/presentation/pages/group_lobby_page.dart';
 import 'package:cruise_connect/presentation/pages/profile_page.dart';
 import 'package:cruise_connect/presentation/widgets/location_always_notice_sheet.dart';
 import 'package:cruise_connect/presentation/widgets/map_download_preference_sheet.dart';
@@ -45,6 +46,7 @@ class _HomePageState extends State<HomePage> {
     super.initState();
     CruiseModePage.isFullscreen.addListener(_onFullscreenChanged);
     CruiseModePage.pendingRoute.addListener(_onPendingRoute);
+    CruiseModePage.pendingGroupView.addListener(_onPendingGroupView);
     _requestLocationPermission();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
@@ -229,6 +231,7 @@ class _HomePageState extends State<HomePage> {
   void dispose() {
     CruiseModePage.isFullscreen.removeListener(_onFullscreenChanged);
     CruiseModePage.pendingRoute.removeListener(_onPendingRoute);
+    CruiseModePage.pendingGroupView.removeListener(_onPendingGroupView);
     _communityProvider?.stopRealtime();
     NotificationService.instance.onNew = null;
     unawaited(NotificationService.instance.stopRealtime());
@@ -274,6 +277,24 @@ class _HomePageState extends State<HomePage> {
         _visitedTabs.add(2);
       });
     }
+  }
+
+  void _onPendingGroupView() {
+    final groupId = CruiseModePage.pendingGroupView.value;
+    if (groupId == null || !mounted) return;
+    CruiseModePage.pendingGroupView.value = null;
+    CommunityPage.pendingGroupFocus.value = groupId;
+    setState(() {
+      _selectedIndex = 1;
+      _refreshCounter++;
+      _visitedTabs.add(1);
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => GroupLobbyPage(groupId: groupId)),
+      );
+    });
   }
 
   void _onFullscreenChanged() {

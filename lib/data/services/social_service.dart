@@ -167,6 +167,15 @@ class SocialService {
     return false;
   }
 
+  static bool isDuplicateGroupMemberError(Object error) {
+    if (error is! PostgrestException) return false;
+    final text = '${error.message} ${error.details ?? ''}'.toLowerCase();
+    return error.code == '23505' &&
+        (text.contains('group_members_group_id_user_id_key') ||
+            text.contains('group_id, user_id') ||
+            text.contains('group_members'));
+  }
+
   static Future<int> _countPostReactions(String table, String postId) async {
     final rows = await _db.from(table).select('id').eq('post_id', postId);
     return (rows as List).length;
@@ -1338,6 +1347,7 @@ class SocialService {
   /// Sortiert nach `start_time` (nächstes Event zuerst).
   static Future<List<Map<String, dynamic>>> getDiscoverGroups() async {
     final uid = _userId;
+    if (uid == null) return [];
     final blocked = await getBlockedAndBlockerIds();
 
     final groups = await _db
@@ -1351,10 +1361,6 @@ class SocialService {
 
     final list = List<Map<String, dynamic>>.from(groups);
     list.removeWhere((g) => blocked.contains(g['created_by']));
-    if (uid == null) {
-      _sortByStartTime(list);
-      return list.take(40).toList();
-    }
 
     // Ausfiltern: Gruppen in denen ich Mitglied ODER Owner bin.
     final filtered = list.where((g) {
@@ -1466,8 +1472,11 @@ class SocialService {
         'group_id': groupId,
         'user_id': uid,
         'ride_role': 'passenger',
-      });
+      }, onConflict: 'group_id,user_id');
     } on PostgrestException catch (e) {
+      if (isDuplicateGroupMemberError(e)) {
+        return;
+      }
       if (e.code == '42501') {
         throw const SocialServiceException(
           'Die Session laeuft bereits oder wurde schon beendet.',

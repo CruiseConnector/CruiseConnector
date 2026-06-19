@@ -118,6 +118,17 @@ void main() {
 
       expect(SocialService.isDuplicateSharedRoutePostError(error), isTrue);
     });
+
+    test('Duplicate-Membership bei Gruppenbeitritt wird erkannt', () {
+      const error = PostgrestException(
+        message:
+            'duplicate key value violates unique constraint "group_members_group_id_user_id_key"',
+        code: '23505',
+        details: 'Key (group_id, user_id)=(group-1, user-1) already exists.',
+      );
+
+      expect(SocialService.isDuplicateGroupMemberError(error), isTrue);
+    });
   });
 
   group('SocialService – Öffentliche Profilinfos', () {

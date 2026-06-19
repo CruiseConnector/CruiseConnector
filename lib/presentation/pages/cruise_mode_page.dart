@@ -107,6 +107,9 @@ class CruiseModePage extends StatefulWidget {
   /// + setzt Wegpunkte + öffnet Routing-Sheet im Trip-Mode.
   static final ValueNotifier<String?> pendingTripResume =
       ValueNotifier<String?>(null);
+  static final ValueNotifier<String?> pendingGroupView = ValueNotifier<String?>(
+    null,
+  );
 
   @override
   State<CruiseModePage> createState() => _CruiseModePageState();
@@ -2111,6 +2114,10 @@ class _CruiseModePageState extends State<CruiseModePage>
         result.edgeMeta['route_rebased_to_user'] == true) {
       return null;
     }
+    final isRoundTrip = _routeDataDescribesRoundTrip(routeData, result);
+    if (!groupRouteAccessLegAllowed(isRoundTrip: isRoundTrip)) {
+      return null;
+    }
 
     final position = await _resolveFreshPositionForGroupRouteAccess();
     if (position == null) return null;
@@ -2135,11 +2142,8 @@ class _CruiseModePageState extends State<CruiseModePage>
       start[1],
       start[0],
     );
-    final isRoundTrip = _routeDataDescribesRoundTrip(routeData, result);
     final preferredJoinIndex =
-        !isRoundTrip || distanceToStartMeters <= _groupRouteStartAccessMaxMeters
-        ? 0
-        : null;
+        distanceToStartMeters <= _groupRouteStartAccessMaxMeters ? 0 : null;
     final style = routeData['style']?.toString() ?? _selectedStyle;
     final avoidHighways =
         (routeData['avoid_highways'] as bool?) ??
@@ -9375,11 +9379,15 @@ class _CruiseModePageState extends State<CruiseModePage>
     _stopSimulation(restartLiveTracking: false);
     _stopNavigationTracking();
     CruiseModePage.isFullscreen.value = false;
+    final groupId = widget.groupId;
     final popped = await Navigator.of(context).maybePop();
     if (!popped && mounted && !_disposed) {
+      if (groupId != null) {
+        CruiseModePage.pendingGroupView.value = groupId;
+      }
       TopToast.show(
         context,
-        message: 'Gruppenfahrt läuft weiter',
+        message: 'Zur Gruppenfahrt gewechselt',
         icon: Icons.groups_rounded,
         duration: const Duration(milliseconds: 2600),
       );
@@ -9452,6 +9460,10 @@ class _CruiseModePageState extends State<CruiseModePage>
 
   void _returnToCruiseSetupFromActiveRoute() {
     if (!mounted || _disposed) return;
+    if (widget.groupId != null) {
+      unawaited(_returnToGroupLobbyFromActiveRoute());
+      return;
+    }
     final tripIdToPause = _activeTripId;
     if (tripIdToPause != null) {
       _activeTripId = null;

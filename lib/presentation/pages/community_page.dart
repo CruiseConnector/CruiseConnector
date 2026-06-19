@@ -27,6 +27,9 @@ class CommunityPage extends StatefulWidget {
   final int refreshKey;
   const CommunityPage({super.key, this.refreshKey = 0});
 
+  static final ValueNotifier<String?> pendingGroupFocus =
+      ValueNotifier<String?>(null);
+
   @override
   State<CommunityPage> createState() => _CommunityPageState();
 }
@@ -69,8 +72,20 @@ class _CommunityPageState extends State<CommunityPage>
     _tabController.addListener(() {
       if (!_tabController.indexIsChanging) setState(() {});
     });
+    CommunityPage.pendingGroupFocus.addListener(_onPendingGroupFocus);
     _scheduleLoadData();
     _setupRealtime();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _onPendingGroupFocus());
+  }
+
+  void _onPendingGroupFocus() {
+    final groupId = CommunityPage.pendingGroupFocus.value;
+    if (groupId == null || !mounted) return;
+    CommunityPage.pendingGroupFocus.value = null;
+    if (_tabController.index != 1) {
+      _tabController.animateTo(1);
+    }
+    _scheduleLoadData();
   }
 
   void _scheduleLoadData() {
@@ -84,6 +99,7 @@ class _CommunityPageState extends State<CommunityPage>
     _postsChannel?.unsubscribe();
     _groupsChannel?.unsubscribe();
     _notificationsChannel?.unsubscribe();
+    CommunityPage.pendingGroupFocus.removeListener(_onPendingGroupFocus);
     _tabController.dispose();
     _searchController.dispose();
     _groupSearchController.dispose();

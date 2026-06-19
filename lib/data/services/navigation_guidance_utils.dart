@@ -395,6 +395,15 @@ bool groupReroutePublisherIsLeader({
   return myProgressMeters + leadToleranceMeters >= maxPeerProgress;
 }
 
+/// Darf ein Teilnehmer lokal eine Zufahrt vor die kanonische Gruppenroute
+/// bauen?
+///
+/// A→B-Gruppenfahrten müssen für alle exakt dieselbe Leader-Route anzeigen.
+/// Ein lokaler Zubringer würde Distanz, Dauer und Geometrie pro Gerät ändern
+/// und erzeugt dann 400m-vs-4,9km-Abweichungen. Rundkurse dürfen weiter einen
+/// Zubringer bekommen, weil dort "zur Runde andocken" produktlogisch ist.
+bool groupRouteAccessLegAllowed({required bool isRoundTrip}) => isRoundTrip;
+
 /// Schützt Rundkurs-/Gruppenfahrten vor Reroute-Kaskaden, die die geplante
 /// Reststrecke massiv verkürzen.
 ///

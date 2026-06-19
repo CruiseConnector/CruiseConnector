@@ -251,6 +251,7 @@ class TripSummary {
   final int totalDurationSeconds;
   final int stopCount;
   final String defaultStyle;
+  final String? groupId;
 
   TripSummary({
     required this.id,
@@ -263,6 +264,7 @@ class TripSummary {
     required this.totalDurationSeconds,
     required this.stopCount,
     required this.defaultStyle,
+    required this.groupId,
   });
 
   factory TripSummary.fromMap(Map<String, dynamic> m) => TripSummary(
@@ -280,6 +282,7 @@ class TripSummary {
     totalDurationSeconds: ((m['total_duration_seconds'] ?? 0) as num).toInt(),
     stopCount: ((m['stop_count'] ?? 0) as num).toInt(),
     defaultStyle: (m['default_style'] ?? 'Sport Mode') as String,
+    groupId: m['group_id'] as String?,
   );
 
   bool get isPaused => status == 'paused';

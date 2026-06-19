@@ -212,7 +212,7 @@ class CruiseGroupService {
       'ride_role': rideRoleToString(
         role == MemberRole.driver ? RideRole.driver : RideRole.passenger,
       ),
-    });
+    }, onConflict: 'group_id,user_id');
     await _notifyGroupOwners(groupId, 'group_joined', fromUserId: uid);
   }
 

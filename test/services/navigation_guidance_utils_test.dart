@@ -126,6 +126,13 @@ void main() {
     });
   });
 
+  group('groupRouteAccessLegAllowed', () {
+    test('erlaubt lokale Zubringer nur fuer Rundkurs-Gruppenrouten', () {
+      expect(groupRouteAccessLegAllowed(isRoundTrip: true), isTrue);
+      expect(groupRouteAccessLegAllowed(isRoundTrip: false), isFalse);
+    });
+  });
+
   group('reroutePreservesPlannedRemainingDistance', () {
     test('verhindert massives Kürzen langer Rundkurs-Reststrecken', () {
       expect(

@@ -5319,6 +5319,12 @@ class _HomeContentPageState extends State<HomeContentPage>
   }
 
   void _openTrip(TripSummary trip) {
+    final groupId = trip.groupId;
+    if (groupId != null) {
+      CruiseModePage.pendingGroupView.value = groupId;
+      widget.onTabChange?.call(1);
+      return;
+    }
     // 2026-06-10 (vucko Resume-Crash-Fix): erst null, dann id — ein
     // ValueNotifier feuert bei GLEICHEM Wert nicht. Blieb der Intent von
     // einem fehlgeschlagenen Versuch stehen (wird seit heute erst nach
