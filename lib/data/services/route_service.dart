@@ -9327,9 +9327,14 @@ class RouteService {
               exitIdx ?? coordIdx,
             )
           : null;
-      final turnAngleRad = isRoundabout
-          ? (geomTurnRad ?? (ins['turn_angle'] as num?)?.toDouble())
-          : null;
+      // 2026-06-19 (vucko Kreisverkehr 100%, adversarialer Review-Befund): NUR
+      // den echten Geometrie-Drehwinkel (rechts positiv) fürs Symbol speichern —
+      // NIE GHs rohen `turn_angle`. Der hat eine andere/unzuverlässige Vorzeichen-
+      // Konvention (Deep-Research 0:3 zum Positionieren widerlegt); gemischt in
+      // EINEM Feld hätte der Painter in seltenen Kurz-Routen-/Cache-Fällen den
+      // Pfeil exakt verkehrt herum gezeigt (SS2-Klasse). Fehlt die Geometrie,
+      // nimmt der Painter sauber den nummern-basierten Fallback-Winkel.
+      final turnAngleRad = isRoundabout ? geomTurnRad : null;
       var exitNumber = isRoundabout
           ? correctedRoundaboutExitNumber(
               providerExitNumber: providerExitNumber,

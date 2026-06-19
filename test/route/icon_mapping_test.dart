@@ -151,9 +151,13 @@ void main() {
       expect(maneuvers.last.roundaboutTurnAngleRad, isNull);
     });
 
-    test('Roundabout: GH turn_angle als Fallback bei zu wenig Geometrie', () {
-      // Nur 3 Punkte, interval[1]=2 am Rand → Geometrie nicht berechenbar →
-      // GHs turn_angle dient als Fallback (statt null).
+    test('Kurz-Route ohne Geometrie → turnAngleRad null (KEIN roher GH-turn_angle)',
+        () {
+      // 2026-06-19 (vucko Kreisverkehr 100%): GHs roher turn_angle hat eine
+      // andere/unzuverlässige Vorzeichen-Konvention und darf den Symbol-Pfeil NIE
+      // positionieren (Deep-Research 0:3 widerlegt). Lässt sich die Geometrie
+      // nicht berechnen (nur 3 Punkte), bleibt turnAngleRad null — der Painter
+      // nimmt dann den nummern-basierten Fallback-Winkel. Die NUMMER bleibt GHs.
       final coords = [
         [9.480, 47.660],
         [9.481, 47.661],
@@ -174,8 +178,8 @@ void main() {
       };
       final maneuvers = service.extractManeuvers(response, coords);
       expect(maneuvers, hasLength(1));
-      expect(maneuvers.first.roundaboutTurnAngleRad, isNotNull);
-      expect(maneuvers.first.roundaboutTurnAngleRad!, closeTo(-1.2, 0.001));
+      expect(maneuvers.first.roundaboutExitNumber, 2);
+      expect(maneuvers.first.roundaboutTurnAngleRad, isNull);
     });
 
     test('GraphHopper-Instruction ohne turn_angle → null (Fallback)', () {

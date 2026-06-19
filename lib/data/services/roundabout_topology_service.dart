@@ -357,8 +357,15 @@ class RoundaboutTopologyService {
         (nearLat != farLat || nearLng != farLng)) {
       return _bearing(nearLat, nearLng, farLat, farLng);
     }
-    // Fallback: zu wenig Strecke außerhalb des Rings → alte Sehne vom Manöver-
-    // punkt zum letzten erreichten Punkt.
+    // Zu kurz für 42 m (kleiner Kreisel / nächstes Manöver nah): wenigstens vom
+    // 14-m-Punkt (außerhalb des Rings) zum letzten erreichten Punkt messen —
+    // besser als die tangentiale Sehne vom Ringpunkt. Erst wenn auch der
+    // 14-m-Punkt fehlt, die alte Sehne vom Manöverpunkt.
+    if (nearLat != null &&
+        nearLng != null &&
+        (nearLat != tLat || nearLng != tLng)) {
+      return _bearing(nearLat, nearLng, tLat, tLng);
+    }
     return _bearing(from[1], from[0], tLat, tLng);
   }
 
