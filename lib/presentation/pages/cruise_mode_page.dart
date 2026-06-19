@@ -2420,10 +2420,25 @@ class _CruiseModePageState extends State<CruiseModePage>
     }
 
     final expectedRevision = _groupRouteRevision;
+    final publisherProgressMeters = _currentRouteProgressMetersFallback();
+    if (publisherProgressMeters == null || !publisherProgressMeters.isFinite) {
+      debugPrint(
+        '[CruiseMode] Gruppenroute nicht geschrieben: kein Fortschritt fuer Publish-Guard',
+      );
+      return false;
+    }
+    final meId = Supabase.instance.client.auth.currentUser?.id;
     final routeData = GroupRouteDataBuilder.replaceRoutePayload(
       route: result,
       previousRouteData: _activeGroupRouteData,
       updateReason: 'navigation_reroute',
+      publishMeta: {
+        'client_guard': 'leader_progress_v1',
+        'is_leading_vehicle': wasLeadingBeforeCommit,
+        'publisher_progress_meters': publisherProgressMeters,
+        'publisher_user_id': meId,
+        'published_at': DateTime.now().toUtc().toIso8601String(),
+      },
     );
     try {
       final update = await CruiseGroupService.updateCurrentRoute(
@@ -2435,7 +2450,6 @@ class _CruiseModePageState extends State<CruiseModePage>
         debugPrint(
           '[CruiseMode] Gruppenroute nicht geschrieben: revision_conflict expected=$expectedRevision',
         );
-        final meId = Supabase.instance.client.auth.currentUser?.id;
         unawaited(_reloadGroupRouteFromBackfill(groupId, meId));
         return false;
       }
@@ -2449,7 +2463,6 @@ class _CruiseModePageState extends State<CruiseModePage>
       debugPrint(
         '[CruiseMode] Gruppenroute konnte nicht geschrieben werden: $e',
       );
-      final meId = Supabase.instance.client.auth.currentUser?.id;
       unawaited(_reloadGroupRouteFromBackfill(groupId, meId));
       return false;
     }
@@ -9927,7 +9940,14 @@ class _CruiseModePageState extends State<CruiseModePage>
   /// Maximal akzeptierter Abstand zwischen aktuellem GPS-Fix und erstem Punkt
   /// eines Reroute-Connectors. Während der Fahrt ist der User AUF einer Straße
   /// — legitimes Snapping liegt unter ~100 m (Edge nutzt start_radius_m=65).
-  static const double _rerouteMaxStartOffsetMeters = 250.0;
+  static const double _rerouteMaxStartOffsetMeters = 120.0;
+
+  /// Maximaler Abstand zwischen der Commit-Position und der Route, die sichtbar
+  /// übernommen oder in die Gruppe publiziert werden darf. Liegt der Fahrer nach
+  /// Edge-/Netz-Latenz schon weiter daneben, bleibt die alte Linie stehen und
+  /// der nächste Zyklus startet mit frischer Position statt eine versetzte Route
+  /// kurz sichtbar zu machen.
+  static const double _rerouteCommitMaxRouteOffsetMeters = 65.0;
 
   String _classifyRerouteError(Object e) {
     if (e is TimeoutException) return 'timeout';
@@ -10168,6 +10188,40 @@ class _CruiseModePageState extends State<CruiseModePage>
       _lastRerouteFailed = true;
       return false;
     }
+    if (result.coordinates.length < 2) {
+      _lastRerouteTime = DateTime.now();
+      _lastRerouteFailed = true;
+      return false;
+    }
+    // 2026-06-19 (vucko Gruppen-/Reroute-Video): Stale-Commit vor JEDEM
+    // sichtbaren State-Update und vor Gruppen-Publish prüfen. Vorher wurde eine
+    // Route, die beim Commit schon >80m neben dem Fahrer lag, kurz übernommen
+    // und erst danach eine Ketten-Reroute angestoßen. Das erzeugte genau den
+    // sichtbaren "Route/Puck versetzt"-Zustand aus den Testfahrten.
+    final commitRouteMatch = findNearestInWindow(
+      position: commitPos,
+      coordinates: result.coordinates,
+      currentIndex: 0,
+      windowSize: math.min(160, result.coordinates.length),
+      maxJumpMeters: double.infinity,
+    );
+    if (!commitRouteMatch.distanceMeters.isFinite ||
+        commitRouteMatch.distanceMeters > _rerouteCommitMaxRouteOffsetMeters) {
+      final offsetLabel = commitRouteMatch.distanceMeters.isFinite
+          ? commitRouteMatch.distanceMeters.toStringAsFixed(0)
+          : commitRouteMatch.distanceMeters.toString();
+      _pendingChainedReroute = true;
+      _lastRerouteTime = DateTime.now();
+      _lastRerouteFailed = true;
+      debugPrint(
+        '[CruiseMode][Reroute] Stale-Commit verworfen: Fahrer '
+        '${offsetLabel}m neben '
+        'neuer Route (limit=${_rerouteCommitMaxRouteOffsetMeters.toStringAsFixed(0)}m)',
+      );
+      return false;
+    }
+    _pendingChainedReroute = false;
+    _chainedRerouteCount = 0;
     final wasLeadingGroupVehicleBeforeCommit =
         publishToGroup && widget.groupId != null
         ? _isCurrentDeviceLeadingGroupRoute(commitPos)
@@ -10335,32 +10389,12 @@ class _CruiseModePageState extends State<CruiseModePage>
     // darf das Puck-Fenster NICHT über eine Naht hinweg slicen. Kleines Fenster
     // ab 0 (Puck ist frisch am Connector-Start) → ein evtl. Self-Overlap trifft
     // nicht den falschen Ast.
-    final reanchor = findNearestInWindow(
-      position: commitPos,
-      coordinates: result.coordinates,
-      currentIndex: 0,
-      windowSize: math.min(120, result.coordinates.length),
-      maxJumpMeters: double.infinity,
-    );
-    if (reanchor.distanceMeters <= _headSnapMaxMeters) {
+    final reanchor = commitRouteMatch;
+    if (reanchor.distanceMeters <= _rerouteCommitMaxRouteOffsetMeters) {
       _currentRouteIndex = reanchor.index.clamp(
         0,
         math.max(0, result.coordinates.length - 1),
       );
-    }
-    // 2026-06-13 (vucko Reroute-Videos): Stale-Commit-Check. Ist der Fahrer
-    // beim Commit schon >80m von der NEUEN Route entfernt (Edge-Latenz bei
-    // schneller Fahrt / Fahrer ist abgebogen), waere die Route sofort wieder
-    // off-route → Ketten-Reroute mit frischer Position anstossen (Flag wird
-    // im finally von _rerouteToOriginalRoute verarbeitet).
-    if (reanchor.distanceMeters.isFinite && reanchor.distanceMeters > 80.0) {
-      _pendingChainedReroute = true;
-      debugPrint(
-        '[CruiseMode][Reroute] Stale-Commit: Fahrer '
-        '${reanchor.distanceMeters.toStringAsFixed(0)}m neben neuer Route',
-      );
-    } else {
-      _chainedRerouteCount = 0;
     }
     // 2026-06-09 (vucko Voll-Route-Sichtbar): volle Reststrecke (Puck→Ende) für
     // Restdistanz/Auto; SICHTBAR wird die VOLLE neue Route gezeichnet (statisch),
@@ -10377,10 +10411,12 @@ class _CruiseModePageState extends State<CruiseModePage>
         first[1],
         first[0],
       );
-      // 2026-06-01 (vucko): Kopf nur an GPS heften, wenn das Fahrzeug WIRKLICH
-      // auf der Linie ist (≤18m). Bei GPS-Drift (Bergtal) sonst Off-Route-Zacken.
-      if (distanceToFirst <= _headSnapMaxMeters) {
-        remaining[0] = [position.longitude, position.latitude];
+      // Der Stale-Commit-Guard oben garantiert bereits, dass diese Geometrie
+      // dicht genug am Fahrzeug liegt. Den Restkopf an die Commit-Position
+      // heften verhindert, dass die rote Linie im ersten Frame hinter/neben dem
+      // Puck startet.
+      if (distanceToFirst <= _rerouteCommitMaxRouteOffsetMeters) {
+        remaining[0] = [commitPos.longitude, commitPos.latitude];
       }
     }
     _remainingRouteCoordinates = remaining;

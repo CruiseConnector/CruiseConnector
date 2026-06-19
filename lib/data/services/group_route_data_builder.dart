@@ -93,6 +93,7 @@ class GroupRouteDataBuilder {
     required RouteResult route,
     required Map<String, dynamic>? previousRouteData,
     required String updateReason,
+    Map<String, dynamic>? publishMeta,
   }) {
     final next = _sanitizeJsonMap(previousRouteData ?? const {});
     final edgeMeta = _sanitizeJsonMap(route.edgeMeta);
@@ -133,6 +134,9 @@ class GroupRouteDataBuilder {
       ..['routeMeta'] = edgeMeta
       ..['update_reason'] = updateReason;
 
+    if (publishMeta != null && publishMeta.isNotEmpty) {
+      next['route_publish'] = _sanitizeJsonMap(publishMeta);
+    }
     if (fingerprint != null) next['fingerprint'] = fingerprint;
     return next;
   }

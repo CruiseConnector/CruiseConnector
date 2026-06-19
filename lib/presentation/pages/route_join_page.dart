@@ -1,11 +1,24 @@
 import 'package:flutter/material.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
+import 'package:latlong2/latlong.dart';
+
+import '../widgets/cruise/cruise_maplibre_map.dart';
 
 class RouteJoinPage extends StatelessWidget {
   const RouteJoinPage({super.key});
 
   @override
   Widget build(BuildContext context) {
+    final previewRoute = <LatLng>[
+      const LatLng(47.2692, 11.4041),
+      const LatLng(47.2820, 11.3660),
+      const LatLng(47.3045, 11.3430),
+      const LatLng(47.3318, 11.3740),
+      const LatLng(47.3495, 11.4205),
+      const LatLng(47.3250, 11.4560),
+      const LatLng(47.2920, 11.4440),
+      const LatLng(47.2692, 11.4041),
+    ];
     return Scaffold(
       backgroundColor: const Color(0xFF0B0E14),
       body: Stack(
@@ -16,42 +29,32 @@ class RouteJoinPage extends StatelessWidget {
             left: 0,
             right: 0,
             height: MediaQuery.of(context).size.height * 0.55,
-            child: Container(
-              decoration: BoxDecoration(
-                // Fallback Gradient, falls kein Bild da ist
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [Colors.teal[900]!, Colors.teal[600]!],
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                CruiseMapLibreMap(
+                  initialCenter: const LatLng(47.31, 11.40),
+                  initialZoom: 9.5,
+                  rotateGestures: false,
+                  activeRoutePoints: previewRoute,
+                  routeColor: AppAccentColors.accent,
                 ),
-              ),
-              child: Stack(
-                fit: StackFit.expand,
-                children: [
-                  // Platzhalter für echte Karte
-                  Icon(
-                    Icons.map_outlined,
-                    size: 120,
-                    color: Colors.white.withValues(alpha: 0.1),
-                  ),
-
-                  // Verlauf nach unten (Fade to Black)
-                  Container(
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
-                        colors: [
-                          Colors.transparent,
-                          const Color(0xFF0B0E14).withValues(alpha: 0.8),
-                          const Color(0xFF0B0E14),
-                        ],
-                        stops: const [0.6, 0.9, 1.0],
-                      ),
+                // Verlauf nach unten (Fade to Black)
+                Container(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [
+                        Colors.transparent,
+                        const Color(0xFF0B0E14).withValues(alpha: 0.8),
+                        const Color(0xFF0B0E14),
+                      ],
+                      stops: const [0.6, 0.9, 1.0],
                     ),
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
           ),
 

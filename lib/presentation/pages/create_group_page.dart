@@ -3,8 +3,6 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
-import 'package:cruise_connect/data/services/offline_map_service.dart';
-import 'package:flutter_map/flutter_map.dart';
 import 'package:geolocator/geolocator.dart' as geo;
 import 'package:latlong2/latlong.dart';
 
@@ -17,6 +15,7 @@ import '../../data/services/route_service.dart';
 import '../../domain/models/place_suggestion.dart';
 import '../../domain/models/route_result.dart';
 import '../widgets/badge_unlock_popup.dart';
+import '../widgets/cruise/cruise_maplibre_map.dart';
 import '../widgets/cruise/cruise_setup_card.dart';
 import 'group_lobby_page.dart';
 
@@ -35,7 +34,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
   // ignore: prefer_const_constructors
   final _routeService = RouteService();
   final _geocodingService = const GeocodingService();
-  final _mapController = MapController();
+  CruiseMapLibreController? _mapController;
 
   // Form
   final _nameCtrl = TextEditingController();
@@ -100,7 +99,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
       final pos = await _getCurrentPosition();
       if (!mounted) return;
       setState(() => _startPoint = LatLng(pos.latitude, pos.longitude));
-      _mapController.move(_startPoint!, 12);
+      _moveMapTo(_startPoint!, zoom: 12);
     } catch (_) {
       // Permission verweigert — User kann per Karte wählen.
     }
@@ -138,7 +137,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
     setState(() {
       _startPoint = LatLng(res['latitude']!, res['longitude']!);
     });
-    _mapController.move(_startPoint!, 12);
+    _moveMapTo(_startPoint!, zoom: 12);
   }
 
   Future<void> _generateRoute() async {
@@ -461,10 +460,17 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
 
   void _fitRouteBounds(List<LatLng> coords) {
     if (coords.isEmpty) return;
-    _mapController.fitCamera(
-      CameraFit.bounds(
-        bounds: LatLngBounds.fromPoints(coords),
-        padding: const EdgeInsets.all(40),
+    unawaited(
+      _mapController?.fitBounds(coords, padding: const EdgeInsets.all(40)),
+    );
+  }
+
+  void _moveMapTo(LatLng point, {required double zoom}) {
+    unawaited(
+      _mapController?.moveTo(
+        lat: point.latitude,
+        lng: point.longitude,
+        zoom: zoom,
       ),
     );
   }
@@ -679,7 +685,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
     });
   }
 
-  void _handleMapTap(TapPosition _, LatLng point) {
+  void _handleMapTap(LatLng point) {
     if (_isGenerating) return;
     if (_isWaypointPlanning) {
       _setWaypointFromMap(point);
@@ -1147,72 +1153,78 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
   }
 
   Widget _buildMap() {
-    return FlutterMap(
-      mapController: _mapController,
-      options: MapOptions(
-        initialCenter: _startPoint ?? const LatLng(48.1351, 11.5820),
-        initialZoom: 10,
-        onTap: _handleMapTap,
-        // 2026-05-28 (vucko Task #70): dunkler Map-Background statt System-
-        // Weiß, gleicher Stil wie Cruise-Mode-Page.
-        backgroundColor: OfflineMapService.cruiseDarkBackground,
-      ),
+    if (widget.disableMapTilesForTesting) {
+      return const ColoredBox(color: Color(0xFF0B0E14));
+    }
+
+    final initialCenter = _startPoint ?? const LatLng(48.1351, 11.5820);
+    return Stack(
       children: [
-        if (!widget.disableMapTilesForTesting)
-          TileLayer(
-            urlTemplate: OfflineMapService.cruiseRasterTileUrl,
-            userAgentPackageName: 'com.cruise_connect.app',
-            // 2026-05-28 (vucko Task #77): retinaMode aus — verursacht
-            // vertikale Streifen wegen URL-256-Mismatch auf iPhone-Retina.
-            retinaMode: false,
-            tileDisplay: const TileDisplay.instantaneous(),
-          )
-        else
-          const ColoredBox(color: Color(0xFF0B0E14)),
-        if (_routeLatLngs.isNotEmpty)
-          PolylineLayer(
-            polylines: [
-              Polyline(
-                points: _routeLatLngs,
-                color: AppAccentColors.accent,
-                strokeWidth: 5,
-              ),
-            ],
-          ),
-        if (_startPoint != null)
-          MarkerLayer(
-            markers: [
-              Marker(
-                point: _startPoint!,
-                width: 36,
-                height: 36,
-                child: _buildMapMarker(Icons.my_location),
-              ),
-              if (!_isRoundTrip && _selectedDestination != null)
-                Marker(
-                  point: LatLng(
-                    _selectedDestination!.latitude,
-                    _selectedDestination!.longitude,
-                  ),
-                  width: 42,
-                  height: 42,
-                  child: _buildMapMarker(Icons.flag_rounded),
-                ),
-              for (var i = 0; i < _roundTripWaypoints.length; i++)
-                Marker(
-                  point: _roundTripWaypoints[i],
-                  width: 42,
-                  height: 42,
-                  child: GestureDetector(
-                    onTap: () => setState(() => _selectedWaypointIndex = i),
-                    child: _buildWaypointMarker(i),
-                  ),
-                ),
-            ],
-          ),
+        CruiseMapLibreMap(
+          initialCenter: initialCenter,
+          initialZoom: _startPoint == null ? 10 : 12,
+          activeRoutePoints: _routeLatLngs,
+          routeColor: AppAccentColors.accent,
+          markers: _buildMapLibreMarkers(),
+          onMapClick: _handleMapTap,
+          onControllerReady: _handleMapReady,
+        ),
         if (_isWaypointPlanning) _buildWaypointActionOverlay(),
       ],
     );
+  }
+
+  void _handleMapReady(CruiseMapLibreController controller) {
+    _mapController = controller;
+    if (_routeLatLngs.length >= 2) {
+      _fitRouteBounds(_routeLatLngs);
+      return;
+    }
+    final start = _startPoint;
+    if (start != null) _moveMapTo(start, zoom: 12);
+  }
+
+  List<CruiseMapMarker> _buildMapLibreMarkers() {
+    final markers = <CruiseMapMarker>[];
+    final start = _startPoint;
+    if (start != null) {
+      markers.add(
+        CruiseMapMarker(
+          id: 'group-start',
+          position: start,
+          width: 36,
+          height: 36,
+          child: _buildMapMarker(Icons.my_location),
+        ),
+      );
+    }
+    final destination = _selectedDestination;
+    if (!_isRoundTrip && destination != null) {
+      markers.add(
+        CruiseMapMarker(
+          id: 'group-destination',
+          position: LatLng(destination.latitude, destination.longitude),
+          width: 42,
+          height: 42,
+          child: _buildMapMarker(Icons.flag_rounded),
+        ),
+      );
+    }
+    for (var i = 0; i < _roundTripWaypoints.length; i++) {
+      markers.add(
+        CruiseMapMarker(
+          id: 'group-waypoint-$i',
+          position: _roundTripWaypoints[i],
+          width: 42,
+          height: 42,
+          child: GestureDetector(
+            onTap: () => setState(() => _selectedWaypointIndex = i),
+            child: _buildWaypointMarker(i),
+          ),
+        ),
+      );
+    }
+    return markers;
   }
 
   Widget _buildMapMarker(IconData icon) {

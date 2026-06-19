@@ -117,6 +117,12 @@ void main() {
       ),
       previousRouteData: previous,
       updateReason: 'navigation_reroute',
+      publishMeta: {
+        'client_guard': 'leader_progress_v1',
+        'is_leading_vehicle': true,
+        'publisher_progress_meters': 1234.5,
+        'service_role_token': 'should-not-persist',
+      },
     );
 
     expect(replacement['planning_type'], 'Wegpunkte');
@@ -125,6 +131,10 @@ void main() {
     expect(replacement['fingerprint'], 'new-fp');
     expect(replacement['update_reason'], 'navigation_reroute');
     expect(replacement.containsKey('client_secret'), isFalse);
+    final publish = replacement['route_publish'] as Map<String, dynamic>;
+    expect(publish['is_leading_vehicle'], isTrue);
+    expect(publish['publisher_progress_meters'], 1234.5);
+    expect(publish.containsKey('service_role_token'), isFalse);
     final meta = replacement['edgeMeta'] as Map<String, dynamic>;
     expect(meta.containsKey('mapbox_token'), isFalse);
   });
