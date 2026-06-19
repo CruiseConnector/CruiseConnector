@@ -239,6 +239,54 @@ void main() {
     );
 
     test(
+      'baut Gruppen-Zubringer zum kanonischen Start ohne Route abzuschneiden',
+      () async {
+        final invoker = _AccessInvoker();
+        final service = RouteService(invoker: invoker);
+        final existingRoute = _buildLoopRoute();
+        final groupStart = existingRoute.coordinates.first;
+        final participantStart = _position(latitude: 47.432, longitude: 9.74);
+
+        final plan = await service.buildAccessRouteToExistingRoute(
+          currentPosition: participantStart,
+          existingRoute: existingRoute,
+          preferredJoinIndex: 0,
+          returnToSessionOrigin: false,
+          rebaseClosedLoop: true,
+        );
+
+        expect(plan.joinPoint.index, 0);
+        expect(plan.joinPointType, 'preferred_join');
+        expect(plan.hasAccessLeg, isTrue);
+        expect(plan.hasReturnLeg, isFalse);
+        expect(invoker.callCount, 1);
+        expect(
+          jsonEncode(plan.sessionRoute.coordinates),
+          jsonEncode(existingRoute.coordinates),
+        );
+        expect(
+          jsonEncode(plan.followOnRoute.coordinates),
+          jsonEncode(existingRoute.coordinates),
+        );
+        expect(
+          plan.activeRoute.distanceMeters!,
+          greaterThan(existingRoute.distanceMeters!),
+        );
+
+        final request = invoker.bodies.single;
+        expect(request['route_variant_hint'], 'access');
+        expect(
+          request['destination_location']['latitude'],
+          closeTo(groupStart[1], 0.001),
+        );
+        expect(
+          request['destination_location']['longitude'],
+          closeTo(groupStart[0], 0.001),
+        );
+      },
+    );
+
+    test(
       'rebased geschlossener Rundkurs joint lokal statt unnoetig zum Originalstart zu fahren',
       () async {
         final invoker = _AccessInvoker();

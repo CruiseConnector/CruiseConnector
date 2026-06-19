@@ -2019,31 +2019,42 @@ class _CruiseModePageState extends State<CruiseModePage>
 
     final wasConfirmed = _isRouteConfirmed;
     final resumeState = _resumeGroupRouteStateForCurrentPosition(result);
+    final accessPlan = resumeState == null
+        ? await _buildGroupAccessPlanForCurrentPosition(result, routeData)
+        : null;
+    final activeResult = accessPlan?.activeRoute ?? result;
+    final activeSessionRoute = accessPlan?.activeRoute ?? result;
+    final accessLegJoinIndex = accessPlan == null
+        ? null
+        : _accessLegJoinIndexForPlan(accessPlan);
+    final accessLegMainRoute = accessPlan?.sessionRoute;
     _applyingGroupRouteUpdate = true;
     try {
-      _lastRouteResult = result;
-      _sessionRouteResult = result;
-      _activeSpeedLimits = result.speedLimits;
+      _lastRouteResult = activeResult;
+      _sessionRouteResult = activeSessionRoute;
+      _activeSpeedLimits = activeResult.speedLimits;
       _activeGroupRouteData = Map<String, dynamic>.from(routeData);
       _groupRouteRevision = math.max(_groupRouteRevision, revision).toInt();
       _recentDestinationDistances = [];
-      _clearAccessLegState();
+      if (accessPlan == null || !accessPlan.hasAccessLeg) {
+        _clearAccessLegState();
+      }
       _safeSetState(() {
-        _routeGeoJson = result.geoJson;
-        _routeDistance = result.distanceMeters;
-        _routeDuration = result.durationSeconds;
-        _originalRouteDistance = result.distanceMeters;
-        _originalRouteDuration = result.durationSeconds;
-        _fullRouteCoordinates = result.coordinates;
+        _routeGeoJson = activeResult.geoJson;
+        _routeDistance = activeResult.distanceMeters;
+        _routeDuration = activeResult.durationSeconds;
+        _originalRouteDistance = activeResult.distanceMeters;
+        _originalRouteDuration = activeResult.durationSeconds;
+        _fullRouteCoordinates = activeResult.coordinates;
         _remainingRouteCoordinates =
-            resumeState?.remainingCoordinates ?? result.coordinates;
+            resumeState?.remainingCoordinates ?? activeResult.coordinates;
         // 2026-06-10 (3km-Design v2): Fenster-Caches bei neuer Route leeren —
         // bright faellt auf die volle Route zurueck (nie unsichtbar), dim wird
         // beim naechsten Tick sofort neu gesetzt (dimHead == null).
         _brightAheadLatLngs = const [];
         _dimRemainingLatLngs = const [];
         _lastDimHead = null;
-        _maneuvers = result.maneuvers;
+        _maneuvers = activeResult.maneuvers;
         _currentRouteIndex = resumeState?.routeIndex ?? 0;
         _lastDrawnRouteIndex = _currentRouteIndex;
         _updateActiveManeuver();
@@ -2052,25 +2063,156 @@ class _CruiseModePageState extends State<CruiseModePage>
         _offRouteCount = 0;
         _lastRerouteTime = DateTime.now();
         _remainingDistance =
-            resumeState?.remainingDistanceMeters ?? result.distanceMeters;
+            resumeState?.remainingDistanceMeters ?? activeResult.distanceMeters;
         _remainingDuration =
-            resumeState?.remainingDurationSeconds ?? result.durationSeconds;
+            resumeState?.remainingDurationSeconds ??
+            activeResult.durationSeconds;
         _distanceToFinalTargetMeters = null;
         _isExistingRouteSession = true;
         _isRouteConfirmed = wasConfirmed;
         _applyGroupRouteMetadata(routeData);
+        if (accessPlan != null && accessPlan.hasAccessLeg) {
+          _isAccessLegActive = true;
+          _accessLegJoinIndex = accessLegJoinIndex;
+          _accessLegMainRouteResult = accessLegMainRoute;
+          _sessionRouteStartIndexInActiveRoute = 0;
+          _totalDistanceDriven = 0.0;
+          _drivenTrackRecorder.reset();
+        }
       });
 
-      await _drawRoute(result.geometry, animateCamera: !wasConfirmed);
+      await _drawRoute(activeResult.geometry, animateCamera: !wasConfirmed);
       if (autoConfirm && !wasConfirmed) {
-        await _confirmRoute(preserveCurrentProgress: resumeState != null);
+        await _confirmRoute(
+          preserveCurrentProgress: resumeState != null || accessPlan != null,
+        );
       }
       debugPrint(
-        '[CruiseMode] Gruppenroute übernommen: revision=$revision source=$source',
+        '[CruiseMode] Gruppenroute übernommen: revision=$revision source=$source '
+        'access_leg_used=${activeResult.edgeMeta['access_leg_used']} '
+        'join_type=${activeResult.edgeMeta['join_point_type']}',
       );
     } finally {
       _applyingGroupRouteUpdate = false;
     }
+  }
+
+  static const double _groupRouteStartAccessMaxMeters = 5000.0;
+
+  Future<RouteAccessPlan?> _buildGroupAccessPlanForCurrentPosition(
+    RouteResult result,
+    Map<String, dynamic> routeData,
+  ) async {
+    if (widget.groupId == null || result.coordinates.length < 2) return null;
+    if (result.edgeMeta['access_leg_used'] != null ||
+        result.edgeMeta['route_rebased_to_user'] == true) {
+      return null;
+    }
+
+    final position = await _resolveFreshPositionForGroupRouteAccess();
+    if (position == null) return null;
+
+    final match = findNearestInWindow(
+      position: position,
+      coordinates: result.coordinates,
+      currentIndex: 0,
+      windowSize: result.coordinates.length,
+      maxJumpMeters: double.infinity,
+    );
+    if (match.distanceMeters.isFinite &&
+        match.distanceMeters <=
+            RouteAccessPlanner.nearbyPassJoinDistanceMeters) {
+      return null;
+    }
+
+    final start = result.coordinates.first;
+    final distanceToStartMeters = geo.Geolocator.distanceBetween(
+      position.latitude,
+      position.longitude,
+      start[1],
+      start[0],
+    );
+    final isRoundTrip = _routeDataDescribesRoundTrip(routeData, result);
+    final preferredJoinIndex =
+        !isRoundTrip || distanceToStartMeters <= _groupRouteStartAccessMaxMeters
+        ? 0
+        : null;
+    final style = routeData['style']?.toString() ?? _selectedStyle;
+    final avoidHighways =
+        (routeData['avoid_highways'] as bool?) ??
+        _effectiveNavigationAvoidHighways;
+
+    try {
+      final plan = await _routeService.buildAccessRouteToExistingRoute(
+        currentPosition: position,
+        existingRoute: result,
+        mode: style,
+        avoidHighways: avoidHighways,
+        preferredJoinIndex: preferredJoinIndex,
+        returnToSessionOrigin: false,
+        rebaseClosedLoop: isRoundTrip,
+      );
+      _logAccessLegMeta(plan);
+      if (plan.hasAccessLeg ||
+          plan.joinPoint.index > 0 ||
+          plan.routeStartDistanceMeters >
+              RouteAccessPlanner.directJoinDistanceMeters) {
+        return plan;
+      }
+    } catch (e) {
+      debugPrint(
+        '[CruiseMode] Gruppen-Access-Leg konnte nicht vorbereitet werden: $e',
+      );
+    }
+    return null;
+  }
+
+  Future<geo.Position?> _resolveFreshPositionForGroupRouteAccess() async {
+    final streamFix = _userLocation;
+    if (streamFix != null && _isFreshStartFix(streamFix)) return streamFix;
+    try {
+      final fresh = await geo.Geolocator.getCurrentPosition(
+        locationSettings: const geo.LocationSettings(
+          accuracy: geo.LocationAccuracy.best,
+          timeLimit: Duration(seconds: 6),
+        ),
+      );
+      _userLocation = fresh;
+      if (_isFreshStartFix(fresh)) return fresh;
+    } catch (e) {
+      debugPrint('[CruiseMode] Kein frischer Gruppen-Access-Fix: $e');
+    }
+    return null;
+  }
+
+  bool _routeDataDescribesRoundTrip(
+    Map<String, dynamic> routeData,
+    RouteResult result,
+  ) {
+    final routeType = routeData['route_type']?.toString();
+    if (routeType == 'ROUND_TRIP') return true;
+    if (routeType == 'POINT_TO_POINT') return false;
+    if (result.coordinates.length < 3) return false;
+    final first = result.coordinates.first;
+    final last = result.coordinates.last;
+    return geo.Geolocator.distanceBetween(
+          first[1],
+          first[0],
+          last[1],
+          last[0],
+        ) <=
+        RouteAccessPlanner.closedLoopEndpointDistanceMeters;
+  }
+
+  int _accessLegJoinIndexForPlan(RouteAccessPlan plan) {
+    return math
+        .max(
+          1,
+          plan.activeRoute.coordinates.length -
+              plan.sessionRoute.coordinates.length,
+        )
+        .clamp(1, math.max(1, plan.activeRoute.coordinates.length - 1))
+        .toInt();
   }
 
   void _applyGroupRouteMetadata(Map<String, dynamic> routeData) {
