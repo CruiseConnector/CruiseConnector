@@ -87,8 +87,10 @@ void main() {
     // Spezial: Ankunft direkt am Kreisel
     'ankunft_am_kreisel':
         ra(entry: 180, exit: 90, arms: cardinal, arrival: true),
-    // Fallback: keine OSM-Topologie → STANDARD-4-Arm (nicht sparsam/kaputt).
-    'fallback_standard_4arm': RouteManeuver(
+    // Fallback: keine OSM-Topologie → sauberer Kreisel, aber der Ausfahrts-Pfeil
+    // bleibt am ECHTEN Winkel (95°) statt auf 90° zu rasten (2026-06-19, Apple-
+    // Ansatz: der Pfeil muss exakt zur gefahrenen Ausfahrt passen).
+    'fallback_synth_echter_winkel': RouteManeuver(
       latitude: 47.4,
       longitude: 9.7,
       routeIndex: 5,
@@ -98,8 +100,8 @@ void main() {
       maneuverType: ManeuverType.roundabout,
       roundaboutExitNumber: 1,
       roundaboutEntryBearing: 180,
-      roundaboutExitBearing: 95, // krumm → rastet auf 90 (Standard-Form)
-      // roundaboutArmBearings: null  → Fallback-Pfad
+      roundaboutExitBearing: 95, // bleibt 95° (kein Cardinal-Snap mehr)
+      // roundaboutArmBearings: null  → Fallback-Pfad (synthetische Arme)
     ),
   };
 

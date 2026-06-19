@@ -14264,60 +14264,59 @@ class _CruiseModePageState extends State<CruiseModePage>
     if (current.maneuverType != ManeuverType.roundabout && topo == null) {
       return;
     }
+
+    // 2026-06-19 (vucko Kreisverkehr 100% wie Apple): War das Manöver schon von
+    // GraphHopper als Kreisel erkannt, ist GHs exit_number die topologie-
+    // abgeleitete Wahrheit — wir tasten Nummer/Text/Winkel NICHT an und hängen
+    // NUR die echten OSM-Arme + Inselgröße fürs Symbol an. (Früher überschrieb
+    // roundaboutExitNumberFromTopologyBearings hier GHs korrekte Nummer und
+    // konnte sie verschlechtern — genau die Screenshot-Fehler.)
+    if (current.maneuverType == ManeuverType.roundabout) {
+      _maneuvers[index] = current.copyWith(
+        roundaboutArmBearings: topo?.armBearings ?? const <double>[],
+        roundaboutIslandScale: topo?.islandScale,
+      );
+      _safeSetState(() {});
+      return;
+    }
+
+    // „Versteckter" Kreisel: GH hat ihn NICHT als Kreisel geliefert (keine
+    // Nummer). Erst hier promotet → die Nummer kommt aus OSM-Topologie, sonst
+    // aus der Geometrie. Symbol-Pfeil weiter aus dem echten Routen-Drehwinkel.
     final geomTurnRad = roundaboutGeomTurnRad(
       _fullRouteCoordinates,
       current.routeIndex,
       current.routeIndex,
     );
-    final promoted = current.maneuverType == ManeuverType.roundabout
-        ? current
-        : current.copyWith(
-            icon: Icons.roundabout_right,
-            maneuverType: ManeuverType.roundabout,
-            roundaboutExitNumber: correctedRoundaboutExitNumber(
-              providerExitNumber: null,
-              geomTurnRad: geomTurnRad,
-            ),
-            roundaboutTurnAngleRad: geomTurnRad,
-            roundaboutEntryBearing: RoundaboutTopologyService.armBearingAlong(
-              _fullRouteCoordinates,
-              current.routeIndex,
-              -1,
-            ),
-            roundaboutExitBearing: RoundaboutTopologyService.armBearingAlong(
-              _fullRouteCoordinates,
-              current.routeIndex,
-              1,
-            ),
-          );
+    final entryBearing = RoundaboutTopologyService.armBearingAlong(
+      _fullRouteCoordinates,
+      current.routeIndex,
+      -1,
+    );
+    final exitBearing = RoundaboutTopologyService.armBearingAlong(
+      _fullRouteCoordinates,
+      current.routeIndex,
+      1,
+    );
     final topologyExit = roundaboutExitNumberFromTopologyBearings(
-      entryBearing: promoted.roundaboutEntryBearing,
-      exitBearing: promoted.roundaboutExitBearing,
+      entryBearing: entryBearing,
+      exitBearing: exitBearing,
       armBearings: topo?.armBearings,
     );
-    final fallbackExit = promoted.roundaboutExitNumber;
-    final correctedInstruction = topologyExit != null
-        ? roundaboutInstructionForExitNumber(topologyExit)
-        : current.maneuverType == ManeuverType.roundabout
-        ? null
-        : fallbackExit != null
-        ? roundaboutInstructionForExitNumber(fallbackExit)
+    final exitNumber =
+        topologyExit ?? roundaboutExitNumberFromGeometryRad(geomTurnRad);
+    final instruction = exitNumber != null
+        ? roundaboutInstructionForExitNumber(exitNumber)
         : 'Im Kreisverkehr weiterfahren';
-    if (topologyExit != null &&
-        topologyExit != promoted.roundaboutExitNumber &&
-        kDebugMode) {
-      debugPrint(
-        '[Roundabout] Exit aus OSM-Topologie korrigiert: '
-        '${promoted.roundaboutExitNumber} → $topologyExit '
-        'arms=${topo?.armBearings.length ?? 0}',
-      );
-    }
-    // Auch bei erfolgreichem null ("kein Ring hier") eine leere Liste setzen →
-    // markiert „aufgelöst", Painter nutzt sauber den Geometrie-Fallback.
-    _maneuvers[index] = promoted.copyWith(
-      announcement: correctedInstruction,
-      instruction: correctedInstruction,
-      roundaboutExitNumber: topologyExit ?? fallbackExit,
+    _maneuvers[index] = current.copyWith(
+      icon: Icons.roundabout_right,
+      maneuverType: ManeuverType.roundabout,
+      announcement: instruction,
+      instruction: instruction,
+      roundaboutExitNumber: exitNumber,
+      roundaboutTurnAngleRad: geomTurnRad,
+      roundaboutEntryBearing: entryBearing,
+      roundaboutExitBearing: exitBearing,
       roundaboutArmBearings: topo?.armBearings ?? const <double>[],
       roundaboutIslandScale: topo?.islandScale,
     );

@@ -323,7 +323,15 @@ class RoundaboutTopologyService {
     if (coords.isEmpty || idx < 0 || idx >= coords.length) return null;
     final from = coords[idx];
     if (from.length < 2) return null;
+    // 2026-06-19 (vucko Kreisverkehr 100% wie Apple): Früher die Sehne vom
+    // Manöverpunkt (liegt AUF dem Ring) zu einem 25-m-Punkt — die bei großen
+    // Kreiseln noch IM Ring landet und tangential statt radial zeigt → Pfeil-
+    // winkel verbogen. Jetzt messen wir den Kurs des ARM-STRAẞENSTÜCKS:
+    // vom Punkt ~14 m außerhalb (klar jenseits des Rings) zum Punkt ~42 m
+    // außerhalb. Das ist die echte Heading des Ein-/Ausfahrtsarms. Fällt bei
+    // sehr kurzen Routenstücken (Mini-Kreisel) sauber auf die alte Sehne zurück.
     var tLat = from[1], tLng = from[0];
+    double? nearLat, nearLng, farLat, farLng;
     var acc = 0.0;
     for (var i = idx + step; i >= 0 && i < coords.length; i += step) {
       final c = coords[i];
@@ -331,9 +339,26 @@ class RoundaboutTopologyService {
       acc += _metersBetween(tLat, tLng, c[1], c[0]);
       tLat = c[1];
       tLng = c[0];
-      if (acc >= 25) break;
+      if (nearLat == null && acc >= 14) {
+        nearLat = tLat;
+        nearLng = tLng;
+      }
+      if (acc >= 42) {
+        farLat = tLat;
+        farLng = tLng;
+        break;
+      }
     }
     if (tLat == from[1] && tLng == from[0]) return null;
+    if (nearLat != null &&
+        nearLng != null &&
+        farLat != null &&
+        farLng != null &&
+        (nearLat != farLat || nearLng != farLng)) {
+      return _bearing(nearLat, nearLng, farLat, farLng);
+    }
+    // Fallback: zu wenig Strecke außerhalb des Rings → alte Sehne vom Manöver-
+    // punkt zum letzten erreichten Punkt.
     return _bearing(from[1], from[0], tLat, tLng);
   }
 

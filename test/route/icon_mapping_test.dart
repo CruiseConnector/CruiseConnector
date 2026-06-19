@@ -139,7 +139,11 @@ void main() {
       expect(maneuvers, hasLength(2));
       final roundabout = maneuvers.first;
       expect(roundabout.maneuverType, ManeuverType.roundabout);
-      expect(roundabout.roundaboutExitNumber, 3);
+      // 2026-06-19 (vucko Kreisverkehr 100% wie Apple): Die NUMMER kommt jetzt
+      // direkt aus GraphHoppers exit_number (=2) und wird NICHT mehr von der
+      // Geometrie überschrieben. Nur der Symbol-WINKEL (turn_angle) stammt weiter
+      // aus der echten Geometrie.
+      expect(roundabout.roundaboutExitNumber, 2);
       expect(roundabout.roundaboutTurnAngleRad, isNotNull);
       // Geometrie-Linkskurve ≈ −π/2, NICHT GHs +0.9.
       expect(roundabout.roundaboutTurnAngleRad!, closeTo(-math.pi / 2, 0.1));
@@ -199,7 +203,8 @@ void main() {
     });
 
     test(
-      'GraphHopper Exit 3 wird zu Exit 2 korrigiert, wenn Geometrie geradeaus ist',
+      'GraphHopper Exit-Nummer wird NICHT von der Geometrie überschrieben '
+      '(Apple-Ansatz: die Engine-Zählung ist die Wahrheit)',
       () {
         const baseLat = 47.18;
         const baseLng = 9.65;
@@ -234,10 +239,14 @@ void main() {
 
         final maneuvers = service.extractManeuvers(response, coords);
 
+        // 2026-06-19 (vucko Kreisverkehr 100% wie Apple, Deep-Research + OSRM-
+        // Bodenwahrheit): Früher überschrieb eine grobe 4-Arm-90°-Geometrie-
+        // Schätzung GHs korrekte exit_number (3 → 2) — exakt der Screenshot-
+        // Fehler („3. Ausfahrt" wurde verbogen). Jetzt gewinnt GHs topologie-
+        // abgeleitete Nummer IMMER und der Originaltext bleibt erhalten.
         expect(maneuvers, hasLength(1));
-        expect(maneuvers.first.roundaboutExitNumber, 2);
-        expect(maneuvers.first.instruction, contains('2.'));
-        expect(maneuvers.first.instruction, isNot(contains('3.')));
+        expect(maneuvers.first.roundaboutExitNumber, 3);
+        expect(maneuvers.first.instruction, contains('dritte'));
       },
     );
 

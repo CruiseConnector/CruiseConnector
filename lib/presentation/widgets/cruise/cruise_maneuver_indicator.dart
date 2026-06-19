@@ -119,7 +119,13 @@ class CruiseManeuverIndicator extends StatelessWidget {
                 const SizedBox(height: 4),
                 Text(
                   maneuver.instruction,
-                  maxLines: 2,
+                  // 2026-06-19 (vucko Kreisverkehr 100% wie Apple): 3 Zeilen
+                  // statt 2 — lange Kreisel-Ansagen („Im Kreisverkehr die N.
+                  // Ausfahrt nehmen auf <Straße>") wurden sonst genau am
+                  // Straßennamen abgeschnitten („…Dornbirner Straße…"). Apple
+                  // zeigt den Zielnamen voll; die Spalte ist mainAxisSize.min,
+                  // kurze Manöver bleiben also einzeilig.
+                  maxLines: 3,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     color: Colors.white.withValues(alpha: 0.85),
@@ -275,57 +281,65 @@ _RoundaboutDesign _resolveRoundaboutDesign(RouteManeuver m) {
   final arms = m.roundaboutArmBearings;
   final exitNumber = (m.roundaboutExitNumber ?? 1).clamp(1, 12);
 
-  // Design-Winkel der genommenen Ausfahrt.
-  double exitDeg;
+  // 2026-06-19 (vucko Kreisverkehr 100% wie Apple): Der Ausfahrts-PFEIL kommt
+  // IMMER aus der ECHTEN Routen-Geometrie (Einfahrts-Arm vs. Ausfahrts-Arm bzw.
+  // der gefahrene Drehwinkel) und zeigt damit exakt dorthin, wo die rote Route
+  // den Kreisel verlässt — NIE aus der Ausfahrtsnummer und NIE aus GHs
+  // `turn_angle` (Deep-Research hat letzteres zum Positionieren 0:3 widerlegt).
+  // So kann der Pfeil dem sichtbaren Linienverlauf nie widersprechen.
+  double? exitDeg;
   if (eB != null && xB != null) {
     exitDeg = _wrap360(xB - eB + 180);
-  } else if (m.roundaboutTurnAngleRad != null) {
-    // Screen-Winkel (0=rechts, -π/2=oben) → Design-Grad (+90).
-    final screenDeg = roundaboutExitAngleFromTurnAngle(m.roundaboutTurnAngleRad!) *
-        180 /
-        math.pi;
-    exitDeg = _wrap360(screenDeg + 90);
-  } else {
-    // Reine Ausfahrtsnummer (4-Arm-Annahme, 90°-Schritte, CCW ab unten).
-    exitDeg = _wrap360(180 - exitNumber * 90);
+  } else if (m.roundaboutTurnAngleRad != null &&
+      m.roundaboutTurnAngleRad!.isFinite) {
+    // geomTurnRad: rechts positiv. Einfahrt unten (180), Fahrt nach oben (0);
+    // eine Rechtsdrehung θ → Ausfahrt im Design-Winkel θ (im Uhrzeigersinn ab
+    // oben). Das deckt sich exakt mit (xB − eB + 180) der echten Arme.
+    exitDeg = _wrap360(m.roundaboutTurnAngleRad! * 180 / math.pi);
   }
 
   // Arme in Design-Konvention.
   List<double> armsDeg;
   if (eB != null && arms != null && arms.length >= 2) {
-    // Echte OSM-Topologie: jeden Arm rotieren, Einfahrt/Ausfahrt exakt rasten.
+    // Echte OSM-Topologie: jeden Arm rotieren, Einfahrt + genommene Ausfahrt
+    // exakt rasten → der Pfeil deckt sich mit einem echten Arm.
     final mapped = arms.map((b) => _wrap360(b - eB + 180)).toList();
     _snapNearest(mapped, 180); // Einfahrt
-    _snapNearest(mapped, exitDeg); // genommene Ausfahrt
+    if (exitDeg != null) _snapNearest(mapped, exitDeg); // genommene Ausfahrt
     armsDeg = mapped;
   } else {
-    // 2026-06-16 (vucko P3): Lässt sich die echte Topologie NICHT bestimmen
-    // (keine OSM-Arme), zeichnen wir den STANDARD-Kreisverkehr mit VIER
-    // Ausfahrten (Einfahrt unten + 1./2./3. Ausfahrt + zurück) statt einer
-    // sparsamen Teil-Form, die wie „nur eine Ausfahrt" aussah. Die genommene
-    // Ausfahrt rastet auf die nächste Himmelsrichtung — so sieht das Symbol immer
-    // wie ein echter Kreisverkehr aus und nie kaputt. (User-Wunsch: unbekannte
-    // Form ⇒ Standard-4-Arm-Symbol.)
-    const cardinal = [0.0, 90.0, 180.0, 270.0];
-    exitDeg = _nearestOf(cardinal, exitDeg);
-    armsDeg = cardinal;
+    // KEINE OSM-Arme: sauberen Kreisel zeichnen, OHNE den Ausfahrts-Pfeil zu
+    // verfälschen. Früher rastete die Ausfahrt auf die nächste Himmelsrichtung —
+    // das verbog den Pfeil sichtbar weg von der roten Linie (genau der
+    // Screenshot-Fehler). Jetzt: Einfahrt unten (180) + ECHTE Ausfahrt am realen
+    // Winkel + plausible Füllarme, damit es nach Kreisverkehr aussieht und der
+    // Pfeil trotzdem exakt auf der gefahrenen Ausfahrt sitzt.
+    final ex = exitDeg ?? _wrap360(180 - exitNumber * 90);
+    exitDeg = ex;
+    armsDeg = _syntheticRoundaboutArms(ex);
   }
-  return _RoundaboutDesign(exitDeg: exitDeg, armsDeg: armsDeg);
+  return _RoundaboutDesign(exitDeg: exitDeg ?? 0, armsDeg: armsDeg);
 }
 
-double _nearestOf(List<double> options, double target) {
-  var best = options.first;
-  var bestD = 999.0;
-  for (final o in options) {
-    var d = (o - target).abs() % 360.0;
-    if (d > 180) d = 360 - d;
-    if (d < bestD) {
-      bestD = d;
-      best = o;
-    }
+/// Plausible Armverteilung, wenn KEINE OSM-Topologie vorliegt: Einfahrt (unten,
+/// 180) + die echte genommene Ausfahrt [exitDeg] + Füllarme an Himmelsrichtungen,
+/// die ≥35° Abstand zu allen bestehenden Armen halten. So wirkt das Symbol wie
+/// ein echter Kreisverkehr, ohne den Ausfahrts-Pfeil zu verschieben.
+List<double> _syntheticRoundaboutArms(double exitDeg) {
+  final arms = <double>[180.0, _wrap360(exitDeg)];
+  bool farEnough(double cand) => arms.every((a) {
+        var d = (a - cand).abs() % 360.0;
+        if (d > 180) d = 360 - d;
+        return d >= 35.0;
+      });
+  for (final cand in const [0.0, 90.0, 270.0, 45.0, 135.0, 225.0, 315.0]) {
+    if (arms.length >= 4) break;
+    if (farEnough(cand)) arms.add(_wrap360(cand));
   }
-  return best;
+  arms.sort();
+  return arms;
 }
+
 
 void _snapNearest(List<double> list, double target) {
   var best = -1;

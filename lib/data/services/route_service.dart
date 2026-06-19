@@ -9344,20 +9344,13 @@ class RouteService {
           'provider=$providerExitNumber → geom=$exitNumber ("$text")',
         );
       }
-      // Plausibilitaet der GH-Exit-Nummer: In Rechtsverkehr ist die 1. Ausfahrt
-      // IMMER eine klare Rechtskurve. Sagt GH „1. Ausfahrt", die echte Geometrie
-      // zeigt aber geradeaus/links (geomTurn < ~20°), ist GHs Nummer falsch
-      // (bekannte GH-Schwaeche an Mini-Kreiseln/Slip-Lanes). Dann KEINE falsche
-      // Nummer ansagen → Richtungs-Ansage aus der Geometrie. Nur bei klarem
-      // Widerspruch; sonst bleibt GHs (meist korrekte) Nummer + Text unangetastet.
-      var roundaboutDirOverride = '';
-      if (isRoundabout &&
-          exitNumber == 1 &&
-          geomTurnRad != null &&
-          geomTurnRad < 0.35) {
-        exitNumber = null; // Painter nimmt dann den Geometrie-Winkel
-        roundaboutDirOverride = _roundaboutDirectionPhrase(geomTurnRad);
-      }
+      // 2026-06-19 (vucko Kreisverkehr 100% wie Apple): Der frühere Exit-1-Guard
+      // löschte hier die Nummer, wenn GH „1. Ausfahrt" sagte, die Geometrie aber
+      // flach war — er konnte damit aber auch KORREKTE „1. Ausfahrt"-Ansagen
+      // löschen. Da wir GHs topologie-abgeleiteter exit_number jetzt durchgehend
+      // vertrauen (Apple-/Google-Ansatz, Deep-Research-bestätigt) und der Symbol-
+      // Pfeil ohnehin aus dem ECHTEN Routen-Drehwinkel kommt (zeigt die wahre
+      // Ausfahrt-Richtung), wird die Nummer hier NICHT mehr gelöscht.
       // 2026-06-17 (vucko Geräte-Video, Banner zeigte „rechts" obwohl die rote
       // Route klar nach LINKS bog): Richtung gegen die ECHTE Geometrie absichern.
       // Widerspricht GraphHoppers `sign` der gefahrenen Linie (links/rechts
@@ -9382,12 +9375,16 @@ class RouteService {
           );
         }
       }
+      // 2026-06-19 (vucko Kreisverkehr 100% wie Apple): Kreisel → GHs eigener
+      // deutscher Text wird direkt übernommen („Im Kreisverkehr die N. Ausfahrt
+      // nehmen [auf <Straße>]"), weil wir GHs Nummer vertrauen (exitNumberCorrected
+      // ist damit immer false). Nur wenn GH gar keinen Text liefert, synthetisieren
+      // wir aus der Nummer. Für Nicht-Kreisel bleibt die Geometrie-Richtungs-
+      // Korrektur (geomDirText) erhalten.
       final instruction = sign == 4
           ? 'Ziel erreicht.'
-          : (exitNumberCorrected && exitNumber != null
+          : (isRoundabout && text.isEmpty && exitNumber != null
                 ? _roundaboutInstruction(exitNumber, '', '')
-                : roundaboutDirOverride.isNotEmpty
-                ? roundaboutDirOverride
                 : (geomDirText ??
                       (text.isNotEmpty
                           ? (text.endsWith('.') ? text : '$text.')
@@ -9453,15 +9450,6 @@ class RouteService {
         maneuvers[i] = m.copyWith(roundaboutIsArrival: true);
       }
     }
-  }
-
-  /// 2026-06-14 (vucko L3): Richtungs-Ansage statt einer (von GH falsch
-  /// gelieferten) Exit-Nummer. rechts/geradeaus/links aus dem Geometrie-
-  /// Drehwinkel (rechts positiv).
-  String _roundaboutDirectionPhrase(double turnRad) {
-    if (turnRad > 0.35) return 'Im Kreisverkehr rechts abbiegen.';
-    if (turnRad < -0.35) return 'Im Kreisverkehr links abbiegen.';
-    return 'Im Kreisverkehr geradeaus fahren.';
   }
 
   bool _graphhopperTextLooksRoundabout(String text) {
@@ -10914,14 +10902,21 @@ int? correctedRoundaboutExitNumber({
   required int? providerExitNumber,
   required double? geomTurnRad,
 }) {
-  final geomExit = roundaboutExitNumberFromGeometryRad(geomTurnRad);
-  if (providerExitNumber == null) return geomExit;
-  if (geomExit == null) return providerExitNumber;
-  if (providerExitNumber == geomExit) return providerExitNumber;
-  // Sehr hohe Exit-Nummern können echte mehrarmige Kreisel sein. Ohne Topologie
-  // korrigieren wir nur den Standardbereich, in dem die Video-Verwechslung liegt.
-  if (providerExitNumber > 4) return providerExitNumber;
-  return geomExit;
+  // 2026-06-19 (vucko Kreisverkehr 100% wie Apple — Deep-Research, 18 Quellen
+  // adversarial verifiziert + OSRM-Bodenwahrheit für die echten Vorarlberg-
+  // Kreisel): GraphHoppers `exit_number` (sign 6) wird DIREKT aus der OSM-
+  // Topologie gezählt (jede Ausfahrt, an der die Route den Ring verlässt, inkl.
+  // einer ko-lokierten Ausfahrt am Einfahrtsknoten) — exakt die Quelle, der auch
+  // Apple/Google vertrauen. Die frühere 4-Arm-90°-Geometrie-Schätzung
+  // (roundaboutExitNumberFromGeometryRad) ÜBERSCHRIEB diese korrekte Router-Nummer
+  // an asymmetrischen/mehrarmigen Kreiseln und erzeugte genau die Screenshot-
+  // Fehler („3. Ausfahrt" bei gerader Durchfahrt). Deshalb: die Router-Nummer
+  // gewinnt IMMER; die Geometrie ist NUR noch Fallback, wenn der Router gar keine
+  // Nummer liefert. Der Symbol-PFEIL kommt separat aus dem ECHTEN Routen-
+  // Drehwinkel (nie aus dieser Zahl und nie aus GHs `turn_angle` — Deep-Research
+  // hat `turn_angle` zum Positionieren 0:3 widerlegt).
+  if (providerExitNumber != null) return providerExitNumber;
+  return roundaboutExitNumberFromGeometryRad(geomTurnRad);
 }
 
 int? roundaboutExitNumberFromTopologyBearings({
