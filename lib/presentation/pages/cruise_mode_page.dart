@@ -38,6 +38,7 @@ import 'package:cruise_connect/presentation/widgets/weather_inline.dart';
 import 'package:cruise_connect/presentation/widgets/top_toast.dart';
 import 'package:cruise_connect/data/services/driven_track_recorder.dart';
 import 'package:cruise_connect/data/services/navigation_guidance_utils.dart';
+import 'package:cruise_connect/data/services/navigation_live_activity_service.dart';
 import 'package:cruise_connect/data/services/navigation_reroute_decision.dart';
 import 'package:cruise_connect/data/services/navigation_progress_socket_service.dart';
 import 'package:cruise_connect/data/services/offline_map_service.dart';
@@ -502,6 +503,8 @@ class _CruiseModePageState extends State<CruiseModePage>
   double? _shownManeuverDistM;
   int? _shownManeuverSig;
   DateTime? _shownManeuverAt;
+  String? _lastLiveActivitySignature;
+  DateTime? _lastLiveActivitySentAt;
 
   // 2026-06-16 (vucko O4): Post-Reroute-Lock-Grace. Nach einem Reroute wird die
   // Lock-On-Grace neu gestartet (Lock zurückgesetzt) und für dieses Fenster die
@@ -9539,6 +9542,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       await TtsService.instance.prepare();
     }
     _startNavigationTracking();
+    _startNavigationLiveActivity();
     _isCameraLocked = true;
     await _activateNavigationCamera();
 
@@ -10932,6 +10936,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     _socketPositionSubscription?.cancel();
     _socketPositionSubscription = null;
     unawaited(_navigationSocketService.close());
+    _endNavigationLiveActivity();
     _startIdlePositionStream(); // Idle-Stream wieder starten
   }
 
@@ -11690,6 +11695,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       }
     }
 
+    _updateNavigationLiveActivity();
     if (needsRebuild) _safeSetState(() {});
   }
 
@@ -13955,6 +13961,72 @@ class _CruiseModePageState extends State<CruiseModePage>
     _shownManeuverDistM = shown;
     _shownManeuverAt = now;
     return shown;
+  }
+
+  NavigationLiveActivitySnapshot _navigationLiveActivitySnapshot() {
+    final maneuver = _activeVisibleManeuver();
+    final instruction = _isReroutingBannerActive
+        ? 'Route wird neu berechnet'
+        : (maneuver?.instruction.trim().isNotEmpty == true
+              ? maneuver!.instruction.trim()
+              : 'Der Route folgen');
+    final kind = maneuver == null
+        ? 'continue'
+        : maneuver.isArrival
+        ? 'arrival'
+        : maneuver.maneuverType == ManeuverType.roundabout
+        ? 'roundabout:${maneuver.roundaboutExitNumber ?? 0}'
+        : _maneuverKindFromInstruction(maneuver.instruction);
+    final distanceToManeuver = maneuver == null
+        ? null
+        : _smoothManeuverDistanceTargetMeters(maneuver);
+    return NavigationLiveActivitySnapshot(
+      instruction: instruction,
+      maneuverType: kind,
+      distanceToManeuverMeters: distanceToManeuver,
+      remainingDistanceMeters: _remainingDistance ?? _routeDistance,
+      remainingDurationSeconds: (_remainingDuration ?? _routeDuration)?.round(),
+      isRerouting: _isReroutingBannerActive,
+    );
+  }
+
+  String _maneuverKindFromInstruction(String instruction) {
+    final lower = instruction.toLowerCase();
+    if (lower.contains('links')) return 'left';
+    if (lower.contains('rechts')) return 'right';
+    if (lower.contains('wenden')) return 'uturn';
+    if (lower.contains('ziel') || lower.contains('ankunft')) return 'arrival';
+    return 'continue';
+  }
+
+  void _startNavigationLiveActivity() {
+    _lastLiveActivitySignature = null;
+    _lastLiveActivitySentAt = null;
+    final snapshot = _navigationLiveActivitySnapshot();
+    _lastLiveActivitySignature = snapshot.signature();
+    _lastLiveActivitySentAt = DateTime.now();
+    unawaited(NavigationLiveActivityService.instance.start(snapshot));
+  }
+
+  void _updateNavigationLiveActivity({bool force = false}) {
+    final snapshot = _navigationLiveActivitySnapshot();
+    final signature = snapshot.signature();
+    final now = DateTime.now();
+    if (!force &&
+        signature == _lastLiveActivitySignature &&
+        _lastLiveActivitySentAt != null &&
+        now.difference(_lastLiveActivitySentAt!) < const Duration(seconds: 8)) {
+      return;
+    }
+    _lastLiveActivitySignature = signature;
+    _lastLiveActivitySentAt = now;
+    unawaited(NavigationLiveActivityService.instance.update(snapshot));
+  }
+
+  void _endNavigationLiveActivity() {
+    _lastLiveActivitySignature = null;
+    _lastLiveActivitySentAt = null;
+    unawaited(NavigationLiveActivityService.instance.end());
   }
 
   void _updateActiveManeuver() {

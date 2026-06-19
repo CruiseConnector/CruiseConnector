@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/data/services/auth_service.dart';
 import 'package:cruise_connect/data/services/map_cache_status.dart';
+import 'package:cruise_connect/data/services/map_style_service.dart';
 import 'package:cruise_connect/data/services/notification_settings_service.dart';
 import 'package:cruise_connect/data/services/offline_map_service.dart';
 import 'package:cruise_connect/data/services/poi_settings_service.dart';
@@ -10,8 +11,11 @@ import 'package:cruise_connect/data/services/voice_settings_service.dart';
 import 'package:cruise_connect/application/providers/community_provider.dart';
 import 'package:cruise_connect/presentation/pages/welcome_page.dart';
 import 'package:cruise_connect/presentation/widgets/accent_color_picker.dart';
+import 'package:cruise_connect/presentation/widgets/group_safety_notice_sheet.dart';
+import 'package:cruise_connect/presentation/widgets/location_always_notice_sheet.dart';
 import 'package:cruise_connect/presentation/widgets/login_options_section.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/routing_onboarding_sheet.dart';
+import 'package:cruise_connect/presentation/widgets/map_download_preference_sheet.dart';
 import 'package:cruise_connect/presentation/widgets/top_toast.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -31,6 +35,7 @@ class _SettingsPageState extends State<SettingsPage> {
   bool _metricUnits = true;
   bool _loading = true;
   bool _deletingAccount = false;
+  MapAutoDownloadPolicy _mapAutoDownloadPolicy = MapAutoDownloadPolicy.wifiOnly;
 
   @override
   void initState() {
@@ -45,6 +50,7 @@ class _SettingsPageState extends State<SettingsPage> {
       return;
     }
     try {
+      await MapStyleService.instance.loadAutoDownloadSettings();
       final data = await Supabase.instance.client
           .from('profiles')
           .select('is_private')
@@ -53,6 +59,7 @@ class _SettingsPageState extends State<SettingsPage> {
       if (mounted) {
         setState(() {
           _isPrivateAccount = data['is_private'] ?? false;
+          _mapAutoDownloadPolicy = MapStyleService.instance.autoDownloadPolicy;
           _loading = false;
         });
       }
@@ -60,6 +67,18 @@ class _SettingsPageState extends State<SettingsPage> {
       debugPrint('[Settings] Privacy laden fehlgeschlagen: $e');
       if (mounted) setState(() => _loading = false);
     }
+  }
+
+  String get _mapAutoDownloadSubtitle {
+    return _mapAutoDownloadPolicy == MapAutoDownloadPolicy.wifiOnly
+        ? 'Automatisch nur im WLAN'
+        : 'Automatisch auch mit mobilen Daten';
+  }
+
+  Future<void> _openMapDownloadPreference() async {
+    final selected = await showMapDownloadPreferenceSheet(context, force: true);
+    if (!mounted || selected == null) return;
+    setState(() => _mapAutoDownloadPolicy = selected);
   }
 
   Future<void> _togglePrivacy(bool newValue) async {
@@ -462,6 +481,24 @@ class _SettingsPageState extends State<SettingsPage> {
                     onTap: () =>
                         showRoutingOnboardingSheet(context, force: true),
                   ),
+                  const Divider(color: Colors.white10, height: 1),
+                  _buildNavTile(
+                    'Gruppenfahrt-Hinweise',
+                    Icons.groups_2_outlined,
+                    subtitle:
+                        'Keine Veranstaltung, Verantwortung und sichere Gruppenregeln',
+                    onTap: () =>
+                        showGroupSafetyNoticeSheet(context, force: true),
+                  ),
+                  const Divider(color: Colors.white10, height: 1),
+                  _buildNavTile(
+                    'Standort im Hintergrund',
+                    Icons.location_on_outlined,
+                    subtitle:
+                        'Warum „Immer erlauben" für aktive Fahrten wichtig ist',
+                    onTap: () =>
+                        showLocationAlwaysNoticeSheet(context, force: true),
+                  ),
                 ]),
 
                 const SizedBox(height: 24),
@@ -560,6 +597,13 @@ class _SettingsPageState extends State<SettingsPage> {
                 // manuelles Re-Download / Cache löschen.
                 _buildSectionHeader('OFFLINE-KARTE (DACH)'),
                 _buildSectionContainer([
+                  _buildNavTile(
+                    'Automatischer Download',
+                    Icons.cloud_download_outlined,
+                    subtitle: _mapAutoDownloadSubtitle,
+                    onTap: _openMapDownloadPreference,
+                  ),
+                  const Divider(color: Colors.white10, height: 1),
                   AnimatedBuilder(
                     animation: MapCacheStatus.instance,
                     builder: (context, _) => _buildOfflineMapCard(),

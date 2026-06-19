@@ -17,6 +17,8 @@ import 'package:cruise_connect/presentation/pages/community_page.dart';
 import 'package:cruise_connect/presentation/pages/cruise_mode_page.dart';
 import 'package:cruise_connect/presentation/pages/analytics_page.dart';
 import 'package:cruise_connect/presentation/pages/profile_page.dart';
+import 'package:cruise_connect/presentation/widgets/location_always_notice_sheet.dart';
+import 'package:cruise_connect/presentation/widgets/map_download_preference_sheet.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -32,6 +34,7 @@ class _HomePageState extends State<HomePage> {
   // Refresh-Counter pro Tab — wird beim Tab-Wechsel erhöht,
   // damit die Zielseite ihre Daten automatisch neu lädt.
   int _refreshCounter = 0;
+  bool _firstRunGuidanceStarted = false;
 
   // Web-only: Lazy-Loading — Tabs werden erst beim ersten Besuch erstellt.
   // Auf Native bleibt IndexedStack unverändert (schnell genug).
@@ -50,6 +53,7 @@ class _HomePageState extends State<HomePage> {
       // 2026-05-23 (vucko): Notification-Service starten + Toast bei
       // neuen Einträgen anzeigen.
       _setupNotificationService();
+      unawaited(_runFirstLoginGuidance());
     });
     // 2026-06-05 (vucko Crash-Fix): Pre-Warm NICHT mehr sofort. Die schwere
     // Download-/Cache-IO lief gleichzeitig mit dem ersten Karten-Öffnen und war
@@ -61,6 +65,20 @@ class _HomePageState extends State<HomePage> {
         if (mounted) _prewarmOfflineMapRegion();
       }),
     );
+  }
+
+  Future<void> _runFirstLoginGuidance() async {
+    if (_firstRunGuidanceStarted || kIsWeb) return;
+    _firstRunGuidanceStarted = true;
+    await Future<void>.delayed(const Duration(milliseconds: 1600));
+    if (!mounted) return;
+    await MapStyleService.instance.loadAutoDownloadSettings();
+    if (!mounted) return;
+    await showMapDownloadPreferenceSheet(context);
+    if (!mounted) return;
+    await Future<void>.delayed(const Duration(milliseconds: 350));
+    if (!mounted) return;
+    await showLocationAlwaysNoticeSheet(context);
   }
 
   Future<void> _prewarmOfflineMapRegion() async {

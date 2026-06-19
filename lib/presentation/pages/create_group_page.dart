@@ -17,6 +17,7 @@ import '../../domain/models/route_result.dart';
 import '../widgets/badge_unlock_popup.dart';
 import '../widgets/cruise/cruise_maplibre_map.dart';
 import '../widgets/cruise/cruise_setup_card.dart';
+import '../widgets/group_safety_notice_sheet.dart';
 import 'group_lobby_page.dart';
 
 /// Gruppenerstellung mit Live-Map: Startpunkt wählen (GPS / Karte / Adresse),
@@ -81,6 +82,11 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
   void initState() {
     super.initState();
     _tryLocateUser();
+    if (widget.disableMapTilesForTesting) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      unawaited(showGroupSafetyNoticeSheet(context));
+    });
   }
 
   @override
@@ -570,6 +576,8 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
 
   Future<void> _createGroup() async {
     if (_isCreating) return;
+    final acceptedSafety = await showGroupSafetyNoticeSheet(context);
+    if (!acceptedSafety) return;
     if (_lastRoute == null || _startPoint == null) {
       _showError('Bitte zuerst eine Route generieren.');
       return;

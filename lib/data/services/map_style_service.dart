@@ -19,6 +19,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 ///
 /// MapLibre Native (iOS-SDK ≥6.14) liest `pmtiles://<url>` sowohl remote als auch
 /// für lokale Dateien (`pmtiles://file://…`).
+enum MapAutoDownloadPolicy { wifiOnly, wifiAndMobile }
+
 class MapStyleService {
   MapStyleService._();
   static final MapStyleService instance = MapStyleService._();
@@ -45,6 +47,10 @@ class MapStyleService {
       'https://tiles.cruiseconnector.at/cruise_dark.json';
 
   static const String _localFileName = 'dach.pmtiles';
+  static const String _autoDownloadPolicyKey =
+      'offline_map_auto_download_policy_v1';
+  static const String _autoDownloadPromptSeenKey =
+      'offline_map_auto_download_prompt_v1_seen';
 
   /// Mindestgröße, damit eine abgebrochene/teilweise Datei NICHT als „fertig"
   /// gilt (die echte DACH-Datei ist mehrere GB groß).
@@ -54,6 +60,37 @@ class MapStyleService {
   bool get isDownloading => _downloadInProgress;
   Timer? _autoDownloadTimer;
   bool _autoBootstrapRunning = false;
+  MapAutoDownloadPolicy _autoDownloadPolicy = MapAutoDownloadPolicy.wifiOnly;
+  bool _settingsLoaded = false;
+
+  MapAutoDownloadPolicy get autoDownloadPolicy => _autoDownloadPolicy;
+
+  Future<void> loadAutoDownloadSettings() async {
+    if (_settingsLoaded) return;
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_autoDownloadPolicyKey);
+    _autoDownloadPolicy = raw == MapAutoDownloadPolicy.wifiAndMobile.name
+        ? MapAutoDownloadPolicy.wifiAndMobile
+        : MapAutoDownloadPolicy.wifiOnly;
+    _settingsLoaded = true;
+  }
+
+  Future<void> setAutoDownloadPolicy(MapAutoDownloadPolicy policy) async {
+    _autoDownloadPolicy = policy;
+    _settingsLoaded = true;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_autoDownloadPolicyKey, policy.name);
+  }
+
+  Future<bool> hasSeenAutoDownloadPrompt() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_autoDownloadPromptSeenKey) ?? false;
+  }
+
+  Future<void> markAutoDownloadPromptSeen() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_autoDownloadPromptSeenKey, true);
+  }
 
   /// Lädt den DACH-Raum automatisch offline (User-Wunsch „automatisch"). NUR
   /// über WLAN (kein Mobilfunk-Volumen). Auf `false` setzen, um den
@@ -135,16 +172,28 @@ class MapStyleService {
   Future<void> maybeAutoDownloadDach() async {
     if (!autoDownloadEnabled || _downloadInProgress) return;
     try {
+      await loadAutoDownloadSettings();
       if (await isDachDownloaded()) return;
       final conn = await Connectivity().checkConnectivity();
-      if (!conn.contains(ConnectivityResult.wifi)) {
-        debugPrint('[MapStyle] Auto-DACH-Download übersprungen (kein WLAN).');
+      final hasWifi = conn.contains(ConnectivityResult.wifi);
+      final hasNetwork = conn.any(
+        (result) => result != ConnectivityResult.none,
+      );
+      final canDownload = _autoDownloadPolicy == MapAutoDownloadPolicy.wifiOnly
+          ? hasWifi
+          : hasNetwork;
+      if (!canDownload) {
+        debugPrint(
+          _autoDownloadPolicy == MapAutoDownloadPolicy.wifiOnly
+              ? '[MapStyle] Auto-DACH-Download übersprungen (kein WLAN).'
+              : '[MapStyle] Auto-DACH-Download übersprungen (offline).',
+        );
         return;
       }
     } catch (_) {
       return;
     }
-    debugPrint('[MapStyle] Auto-DACH-Offline-Download startet (WLAN)…');
+    debugPrint('[MapStyle] Auto-DACH-Offline-Download startet…');
     unawaited(
       downloadDach(
         onProgress: (received, total) {

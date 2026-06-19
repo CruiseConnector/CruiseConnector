@@ -63,6 +63,8 @@
 	<string>Cruise Connector zeigt dir deine Position auf der Karte und nutzt GPS zur Navigation.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Cruise Connector liest Bilder aus deiner Galerie, damit du ein Profilbild auswählen kannst.</string>
+	<key>NSSupportsLiveActivities</key>
+	<true/>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
