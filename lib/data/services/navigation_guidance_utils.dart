@@ -366,8 +366,56 @@ bool rerouteVoteAllowed({
   // (echtes Rauschen zappelt < 1× Korridor).
   final divergenceFactor = everLockedOn ? 2.0 : 1.4;
   final clearGenuineDivergence =
-      offRouteDistanceMeters > corridorMeters * divergenceFactor && goodAccuracy;
+      offRouteDistanceMeters > corridorMeters * divergenceFactor &&
+      goodAccuracy;
   return clearGenuineDivergence;
+}
+
+/// Darf dieses Gerät eine lokale Reroute als neue Gruppenroute veröffentlichen?
+///
+/// Gruppenfahrten brauchen eine einzige kanonische Route. Darum darf nicht jeder
+/// Fahrer, der kurz lokal off-route ist, die gemeinsame Route überschreiben.
+/// Produktregel: Das vorderste Fahrzeug bestimmt die Gruppenroute. Fahrer hinter
+/// dem Leader dürfen lokal zu dieser Route zurückgeführt werden, aber ihre
+/// lokale Reroute nicht in `groups.current_route_data` schreiben.
+bool groupReroutePublisherIsLeader({
+  required double myProgressMeters,
+  required Iterable<double> peerProgressMeters,
+  double leadToleranceMeters = 75.0,
+}) {
+  if (!myProgressMeters.isFinite || myProgressMeters < 0) return false;
+  var maxPeerProgress = 0.0;
+  var hasPeer = false;
+  for (final progress in peerProgressMeters) {
+    if (!progress.isFinite || progress < 0) continue;
+    hasPeer = true;
+    if (progress > maxPeerProgress) maxPeerProgress = progress;
+  }
+  if (!hasPeer) return true;
+  return myProgressMeters + leadToleranceMeters >= maxPeerProgress;
+}
+
+/// Schützt Rundkurs-/Gruppenfahrten vor Reroute-Kaskaden, die die geplante
+/// Reststrecke massiv verkürzen.
+///
+/// Ein Reroute darf etwas kürzer werden (z.B. sauberer Rejoin), aber nicht aus
+/// einer längeren Tour eine Kurzstrecke machen. Nach oben wird nicht begrenzt:
+/// ein längerer Anschluss ist produktseitig weniger kritisch als ein
+/// abgeschnittener Rundkurs.
+bool reroutePreservesPlannedRemainingDistance({
+  required double? beforeMeters,
+  required double? afterMeters,
+  double minGuardBeforeMeters = 3000.0,
+  double maxDropRatio = 0.25,
+  double maxDropMeters = 2500.0,
+}) {
+  if (beforeMeters == null || afterMeters == null) return true;
+  if (!beforeMeters.isFinite || !afterMeters.isFinite) return true;
+  if (beforeMeters <= 0 || afterMeters <= 0) return true;
+  if (beforeMeters < minGuardBeforeMeters) return true;
+  if (afterMeters >= beforeMeters) return true;
+  final allowedDrop = math.max(maxDropMeters, beforeMeters * maxDropRatio);
+  return beforeMeters - afterMeters <= allowedDrop;
 }
 
 /// 2026-06-15 (vucko N-Runde-2): DIE klar definierte On-Route-Regel (Mapbox/Google).

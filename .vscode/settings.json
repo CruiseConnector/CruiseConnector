@@ -1,5 +1,10 @@
 {
   "extensions.ignoreRecommendations": true,
+  "dart.flutterSdkPath": "/Users/vucko/Flutter/flutter-3.44.2",
+  "dart.sdkPath": "/Users/vucko/Flutter/flutter-3.44.2/bin/cache/dart-sdk",
+  "terminal.integrated.env.osx": {
+    "PATH": "/Users/vucko/Flutter/flutter-3.44.2/bin:${env:PATH}"
+  },
   "dart.enableSdkFormatter": true,
   "dart.runPubGetOnPubspecChanges": "always",
   "files.exclude": {

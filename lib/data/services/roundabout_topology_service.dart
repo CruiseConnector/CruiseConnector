@@ -13,8 +13,9 @@ import 'package:http/http.dart' as http;
 /// Architektur (rate-limit-/offline-sicher):
 /// - Pro Kreisel EINE kleine Query, Ergebnis im RAM gecacht (Geometrie ändert
 ///   sich praktisch nie). Wird beim ANFAHREN lazy geholt (nicht alle vorab).
-/// - Kurzer Netz-Timeout + Endpoint-Failover; bei Fehler → null → der Painter
-///   fällt auf die Router-Daten (exit_number/turn_angle) zurück (nie leer).
+/// - Kurzer Netz-Timeout + Endpoint-Failover; bei Fehler → null ohne Cache, damit
+///   der nächste Navigations-Tick erneut versuchen kann. Bei erfolgreicher
+///   Antwort ohne Ring wird null gecacht ("kein Kreisel hier").
 class RoundaboutTopology {
   const RoundaboutTopology({
     required this.centerLat,
@@ -60,6 +61,7 @@ class RoundaboutTopologyService {
   ];
 
   // Cache: gerundete Koordinate → Topologie (oder null = „kein Kreisel hier").
+  // Temporäre Netzfehler werden bewusst NICHT gecacht.
   final Map<String, RoundaboutTopology?> _cache = {};
   // Läuft gerade eine Abfrage für diese Koordinate? (kein Doppel-Fetch)
   final Set<String> _inFlight = {};
@@ -73,7 +75,8 @@ class RoundaboutTopologyService {
   bool isResolved(double lat, double lng) => _cache.containsKey(_key(lat, lng));
 
   /// Holt die Topologie (aus Cache oder Overpass). Liefert null, wenn kein
-  /// Kreisel gefunden / Netz-Fehler. Idempotent + dedupliziert parallele Calls.
+  /// Kreisel gefunden / Netz-Fehler. Nur erfolgreiche "kein Kreisel"-Antworten
+  /// werden als null gecacht; temporäre Netzfehler bleiben retry-fähig.
   Future<RoundaboutTopology?> fetch(double lat, double lng) async {
     final key = _key(lat, lng);
     if (_cache.containsKey(key)) return _cache[key];
@@ -101,19 +104,25 @@ class RoundaboutTopologyService {
         'way(bn.rn)->.arms;'
         '(.ring;.arms;);'
         'out geom;';
+    var gotSuccessfulResponse = false;
     for (final endpoint in _endpoints) {
       try {
         final resp = await http
             .post(Uri.parse(endpoint), body: {'data': ql})
             .timeout(const Duration(seconds: 7));
         if (resp.statusCode != 200) continue;
+        gotSuccessfulResponse = true;
         final data = json.decode(resp.body) as Map<String, dynamic>;
-        final elements = (data['elements'] as List?)?.cast<dynamic>() ?? const [];
+        final elements =
+            (data['elements'] as List?)?.cast<dynamic>() ?? const [];
         final parsed = _parse(elements);
         return parsed; // kann null sein (kein Ring) → als „kein Kreisel" cachen
       } catch (_) {
         // Timeout/Socket/Parse → nächster Endpoint, dann aufgeben.
       }
+    }
+    if (!gotSuccessfulResponse) {
+      throw StateError('overpass_unavailable');
     }
     return null;
   }
@@ -131,7 +140,10 @@ class RoundaboutTopologyService {
     }
     if (ring == null) return null;
 
-    final ringIds = (ring['nodes'] as List?)?.cast<num>().map((n) => n.toInt()).toList();
+    final ringIds = (ring['nodes'] as List?)
+        ?.cast<num>()
+        .map((n) => n.toInt())
+        .toList();
     final ringGeom = (ring['geometry'] as List?)?.cast<dynamic>();
     if (ringIds == null || ringGeom == null || ringIds.length < 3) return null;
     final ringNodeSet = ringIds.toSet();
@@ -170,16 +182,17 @@ class RoundaboutTopologyService {
       );
     }
     radii.sort();
-    final radiusMeters = radii.isEmpty
-        ? 0.0
-        : radii[radii.length ~/ 2];
+    final radiusMeters = radii.isEmpty ? 0.0 : radii[radii.length ~/ 2];
 
     // Pro Arm: Winkel vom Zentrum zu einem Punkt ~30m draußen (robust gegen
     // tangentiale Stummel am Knoten).
     final raw = <double>[];
     for (final e in elements) {
       if (identical(e, ring) || e is! Map<String, dynamic>) continue;
-      final ids = (e['nodes'] as List?)?.cast<num>().map((x) => x.toInt()).toList();
+      final ids = (e['nodes'] as List?)
+          ?.cast<num>()
+          .map((x) => x.toInt())
+          .toList();
       final geom = (e['geometry'] as List?)?.cast<dynamic>();
       if (ids == null || geom == null || ids.length < 2) continue;
       // Tag junction überspringen (das ist nochmal der Ring/ein Kreisel-Segment).
@@ -237,11 +250,7 @@ class RoundaboutTopologyService {
   /// [step] vom Kreisverkehr wegführt — über ~25 m gemittelt (robust gegen
   /// kurze tangentiale Stummel). step −1 = zurück zur Herkunft (Einfahrt-Arm),
   /// +1 = die genommene Ausfahrt. coords sind [lng, lat] (Mapbox-Format).
-  static double? armBearingAlong(
-    List<List<double>> coords,
-    int idx,
-    int step,
-  ) {
+  static double? armBearingAlong(List<List<double>> coords, int idx, int step) {
     if (coords.isEmpty || idx < 0 || idx >= coords.length) return null;
     final from = coords[idx];
     if (from.length < 2) return null;
@@ -277,7 +286,8 @@ class RoundaboutTopologyService {
   ) {
     const r = 6371000.0;
     final p1 = lat1 * math.pi / 180, p2 = lat2 * math.pi / 180;
-    final dp = (lat2 - lat1) * math.pi / 180, dl = (lon2 - lon1) * math.pi / 180;
+    final dp = (lat2 - lat1) * math.pi / 180,
+        dl = (lon2 - lon1) * math.pi / 180;
     final a =
         math.sin(dp / 2) * math.sin(dp / 2) +
         math.cos(p1) * math.cos(p2) * math.sin(dl / 2) * math.sin(dl / 2);

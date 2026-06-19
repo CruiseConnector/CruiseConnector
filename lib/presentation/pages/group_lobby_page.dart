@@ -128,11 +128,15 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
   void _enterNavigation() {
     if (!mounted || _enteringNavigation) return;
     _enteringNavigation = true;
-    Navigator.of(context).pushReplacement(
-      MaterialPageRoute(
-        builder: (_) => CruiseModePage(groupId: widget.groupId),
-      ),
-    );
+    Navigator.of(context)
+        .push(
+          MaterialPageRoute(
+            builder: (_) => CruiseModePage(groupId: widget.groupId),
+          ),
+        )
+        .whenComplete(() {
+          if (mounted) _enteringNavigation = false;
+        });
   }
 
   Future<void> _startRoute() async {

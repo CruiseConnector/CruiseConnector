@@ -83,6 +83,91 @@ void main() {
     });
   });
 
+  group('groupReroutePublisherIsLeader', () {
+    test('alleiniger Fahrer darf Gruppenroute veröffentlichen', () {
+      expect(
+        groupReroutePublisherIsLeader(
+          myProgressMeters: 1200,
+          peerProgressMeters: const [],
+        ),
+        isTrue,
+      );
+    });
+
+    test('vorderer Fahrer darf veröffentlichen', () {
+      expect(
+        groupReroutePublisherIsLeader(
+          myProgressMeters: 2200,
+          peerProgressMeters: const [900, 1800],
+        ),
+        isTrue,
+      );
+    });
+
+    test('hinterer Fahrer darf die Gruppenroute nicht überschreiben', () {
+      expect(
+        groupReroutePublisherIsLeader(
+          myProgressMeters: 1400,
+          peerProgressMeters: const [1550, 2300],
+        ),
+        isFalse,
+      );
+    });
+
+    test('Toleranz verhindert Ping-Pong bei fast gleicher Position', () {
+      expect(
+        groupReroutePublisherIsLeader(
+          myProgressMeters: 1950,
+          peerProgressMeters: const [2010],
+          leadToleranceMeters: 75,
+        ),
+        isTrue,
+      );
+    });
+  });
+
+  group('reroutePreservesPlannedRemainingDistance', () {
+    test('verhindert massives Kürzen langer Rundkurs-Reststrecken', () {
+      expect(
+        reroutePreservesPlannedRemainingDistance(
+          beforeMeters: 25000,
+          afterMeters: 3000,
+        ),
+        isFalse,
+      );
+    });
+
+    test('erlaubt moderat kürzere Rejoin-Strecken', () {
+      expect(
+        reroutePreservesPlannedRemainingDistance(
+          beforeMeters: 25000,
+          afterMeters: 19000,
+        ),
+        isTrue,
+      );
+    });
+
+    test('erlaubt längere Anschlussrouten', () {
+      expect(
+        reroutePreservesPlannedRemainingDistance(
+          beforeMeters: 25000,
+          afterMeters: 31000,
+        ),
+        isTrue,
+      );
+    });
+
+    test('greift nahe am Ziel nicht hart ein', () {
+      expect(
+        reroutePreservesPlannedRemainingDistance(
+          beforeMeters: 2200,
+          afterMeters: 900,
+        ),
+        isTrue,
+      );
+    });
+  });
+
   group('findNearestInWindow', () {
     final coords = List.generate(30, (i) => [13.0 + i * 0.0001, 47.0]);
 
@@ -139,67 +224,76 @@ void main() {
   });
 
   group('route progress anti-teleport helpers', () {
-    test('Segment-Match springt diskret erst nahe Segmentende zum nächsten Vertex', () {
-      const matchHalfway = RouteWindowMatch(
-        index: 11,
-        distanceMeters: 3,
-        segmentIndex: 10,
-        segmentFraction: 0.55,
-      );
-      const matchNearEnd = RouteWindowMatch(
-        index: 11,
-        distanceMeters: 3,
-        segmentIndex: 10,
-        segmentFraction: 0.94,
-      );
+    test(
+      'Segment-Match springt diskret erst nahe Segmentende zum nächsten Vertex',
+      () {
+        const matchHalfway = RouteWindowMatch(
+          index: 11,
+          distanceMeters: 3,
+          segmentIndex: 10,
+          segmentFraction: 0.55,
+        );
+        const matchNearEnd = RouteWindowMatch(
+          index: 11,
+          distanceMeters: 3,
+          segmentIndex: 10,
+          segmentFraction: 0.94,
+        );
 
-      expect(
-        stableRouteIndexForMatch(match: matchHalfway, currentIndex: 9),
-        10,
-      );
-      expect(
-        stableRouteIndexForMatch(match: matchNearEnd, currentIndex: 9),
-        11,
-      );
-    });
+        expect(
+          stableRouteIndexForMatch(match: matchHalfway, currentIndex: 9),
+          10,
+        );
+        expect(
+          stableRouteIndexForMatch(match: matchNearEnd, currentIndex: 9),
+          11,
+        );
+      },
+    );
 
-    test('Routenmeter nutzen Segment-Fraktion statt vorausliegenden Vertex', () {
-      const match = RouteWindowMatch(
-        index: 2,
-        distanceMeters: 0,
-        segmentIndex: 1,
-        segmentFraction: 0.25,
-      );
+    test(
+      'Routenmeter nutzen Segment-Fraktion statt vorausliegenden Vertex',
+      () {
+        const match = RouteWindowMatch(
+          index: 2,
+          distanceMeters: 0,
+          segmentIndex: 1,
+          segmentFraction: 0.25,
+        );
 
-      expect(
-        routeDistanceForMatchMeters(
-          cumulativeDistances: const [0, 100, 300],
-          match: match,
-        ),
-        150,
-      );
-    });
+        expect(
+          routeDistanceForMatchMeters(
+            cumulativeDistances: const [0, 100, 300],
+            match: match,
+          ),
+          150,
+        );
+      },
+    );
 
-    test('unphysischer Zukunfts-Fortschritt wird blockiert, echte Zeit holt auf', () {
-      expect(
-        isPlausibleRouteAdvance(
-          advanceMeters: 180,
-          elapsedSeconds: 1,
-          speedMps: 12,
-          accuracyMeters: 8,
-        ),
-        isFalse,
-      );
-      expect(
-        isPlausibleRouteAdvance(
-          advanceMeters: 180,
-          elapsedSeconds: 6,
-          speedMps: 12,
-          accuracyMeters: 8,
-        ),
-        isTrue,
-      );
-    });
+    test(
+      'unphysischer Zukunfts-Fortschritt wird blockiert, echte Zeit holt auf',
+      () {
+        expect(
+          isPlausibleRouteAdvance(
+            advanceMeters: 180,
+            elapsedSeconds: 1,
+            speedMps: 12,
+            accuracyMeters: 8,
+          ),
+          isFalse,
+        );
+        expect(
+          isPlausibleRouteAdvance(
+            advanceMeters: 180,
+            elapsedSeconds: 6,
+            speedMps: 12,
+            accuracyMeters: 8,
+          ),
+          isTrue,
+        );
+      },
+    );
   });
 
   group('isApproachingDestination', () {

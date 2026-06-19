@@ -61,6 +61,51 @@ void main() {
       expect(roundaboutExitNumberFromGeometryRad(-170 * math.pi / 180), 4);
     });
 
+    test('Topologie-Ausfahrtsnummer zählt echte Arme statt 4-Arm-Schema', () {
+      expect(
+        roundaboutExitNumberFromTopologyBearings(
+          entryBearing: 180,
+          exitBearing: 90,
+          armBearings: const [180, 90, 0, 270],
+        ),
+        1,
+      );
+      expect(
+        roundaboutExitNumberFromTopologyBearings(
+          entryBearing: 180,
+          exitBearing: 0,
+          armBearings: const [180, 90, 0, 270],
+        ),
+        2,
+      );
+      expect(
+        roundaboutExitNumberFromTopologyBearings(
+          entryBearing: 180,
+          exitBearing: 270,
+          armBearings: const [180, 90, 0, 270],
+        ),
+        3,
+      );
+    });
+
+    test(
+      'Topologie korrigiert asymmetrischen Kreisel links auf 2. Ausfahrt',
+      () {
+        expect(
+          roundaboutExitNumberFromTopologyBearings(
+            entryBearing: 180,
+            exitBearing: 270,
+            armBearings: const [180, 90, 270],
+          ),
+          2,
+        );
+        expect(
+          roundaboutInstructionForExitNumber(2),
+          'Im Kreisverkehr 2. Ausfahrt nehmen',
+        );
+      },
+    );
+
     test('Roundabout turn_angle kommt aus der GEFAHRENEN Geometrie (L3)', () {
       // 2026-06-14 (vucko L3): Statt GHs mehrdeutigem turn_angle berechnen wir
       // den Austritts-Drehwinkel aus der echten Geometrie. Hier: Einfahrt Kurs
@@ -160,9 +205,9 @@ void main() {
         const baseLng = 9.65;
         final mPerDegLng = 111320.0 * math.cos(baseLat * math.pi / 180.0);
         List<double> pt(double eastM, double northM) => [
-              baseLng + eastM / mPerDegLng,
-              baseLat + northM / 110540.0,
-            ];
+          baseLng + eastM / mPerDegLng,
+          baseLat + northM / 110540.0,
+        ];
         final coords = <List<double>>[
           pt(0, -30),
           pt(0, -20),

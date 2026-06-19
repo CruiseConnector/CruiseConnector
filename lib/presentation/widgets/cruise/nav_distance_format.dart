@@ -30,10 +30,25 @@ String formatNavDistance(double? meters, {bool nowLabelUnderTen = false}) {
   final step = m <= 200.0
       ? 10
       : m <= 500.0
-          ? 20
-          : 50;
+      ? 20
+      : 50;
   final rounded = ((m / step).round() * step).clamp(0, 990).toInt();
   return '$rounded m';
+}
+
+/// Distanzstufe für gesprochene Manöver-Ansagen.
+///
+/// Nutzt dieselbe Kadenz wie [formatNavDistance], liefert aber nur den
+/// Zahlenwert. Wichtig: kurze Distanzen bleiben kurz (`70 m` bleibt `70 m`) und
+/// werden nicht pauschal auf `200 m` hochgezogen.
+int formatSpokenNavDistanceMeters(double meters) {
+  final m = meters < 0 ? 0.0 : meters;
+  final step = m <= 200.0
+      ? 10
+      : m <= 500.0
+      ? 20
+      : 50;
+  return ((m / step).round() * step).clamp(0, 990).toInt();
 }
 
 /// 2026-06-17 (vucko Schnellstraße-Freeze, Video): Gleitende Manöver-Distanz für
@@ -99,8 +114,8 @@ double monotonicManeuverDistanceMeters({
   final clampedDt = dtMs <= 0
       ? 90
       : dtMs > 1000
-          ? 1000
-          : dtMs;
+      ? 1000
+      : dtMs;
   final ease = 1.0 - math.pow(1.0 - perFrameEase, clampedDt / 90.0).toDouble();
   final eased = prev + (t - prev) * ease;
   return eased < t ? t : eased; // nie unter das Ziel

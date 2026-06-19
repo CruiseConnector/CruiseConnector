@@ -64,7 +64,7 @@ void main() {
     expect(group.activeRouteData?['fingerprint'], 'legacy');
   });
 
-  test('erlaubt Route-Updates fuer Owner und Fahrer', () {
+  test('erlaubt Route-Updates fuer aktive Gruppenmitglieder', () {
     final group = CruiseGroup.fromMap(
       groupRow(
         members: [
@@ -77,6 +77,7 @@ void main() {
 
     expect(group.canUpdateRoute('owner-1'), isTrue);
     expect(group.canUpdateRoute('driver-1'), isTrue);
-    expect(group.canUpdateRoute('passenger-1'), isFalse);
+    expect(group.canUpdateRoute('passenger-1'), isTrue);
+    expect(group.canUpdateRoute('stranger-1'), isFalse);
   });
 }

@@ -90,7 +90,8 @@ class CruiseGroup {
     return members.any(
       (member) =>
           member.userId == userId &&
-          (member.role == MemberRole.driver ||
+          (isActive ||
+              member.role == MemberRole.driver ||
               member.rideRole == RideRole.driver),
     );
   }

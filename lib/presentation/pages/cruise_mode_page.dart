@@ -1215,16 +1215,94 @@ class _CruiseModePageState extends State<CruiseModePage>
   /// (Versatz > 20 m oder Lock war freigegeben) — sonst false: Mini-Jitter
   /// bleibt auf dem monotonen Glide, damit ein einzelner Seiten-Fix keinen
   /// sichtbaren Schnitt-Ruecksprung erzeugt.
-  bool _reanchorRenderLockToIndex(int index) {
+  bool _reanchorRenderLockToDistance(double distanceM) {
     _ensureRouteCumDist();
     final cum = _routeCumDistM;
     if (cum == null || cum.isEmpty) return false;
-    final i = index.clamp(0, cum.length - 1);
-    final d = cum[i];
+    final d = distanceM.clamp(0.0, cum.last).toDouble();
     final lockDist = _renderLockDistM;
     if (lockDist >= 0 && (d - lockDist).abs() <= 20.0) return false;
     _routeRenderLock.reanchorToDistance(d);
     return true;
+  }
+
+  ({
+    int stableIndex,
+    double currentDist,
+    double matchDist,
+    double advanceMeters,
+    double elapsedSeconds,
+    double speedMps,
+    bool plausible,
+  })
+  _routeProgressDecision(RouteWindowMatch match, geo.Position position) {
+    _ensureRouteMetrics();
+    final stableIndex = stableRouteIndexForMatch(
+      match: match,
+      currentIndex: _currentRouteIndex,
+    ).clamp(0, _fullRouteCoordinates.length - 1).toInt();
+    final currentDist =
+        _routeCumDist[_currentRouteIndex
+            .clamp(0, _routeCumDist.length - 1)
+            .toInt()];
+    final matchDist = routeDistanceForMatchMeters(
+      cumulativeDistances: _routeCumDist,
+      match: match,
+    );
+    final advanceMeters = math.max(0.0, matchDist - currentDist);
+    final lastAdvanceAt = _lastRouteIndexAdvanceAt ??= position.timestamp;
+    final elapsedSeconds =
+        position.timestamp.difference(lastAdvanceAt).inMilliseconds / 1000.0;
+    final speedMps = math.max(
+      position.speed.isFinite && position.speed > 0 ? position.speed : 0.0,
+      _nativeSmoother.speed.isFinite && _nativeSmoother.speed > 0
+          ? _nativeSmoother.speed
+          : 0.0,
+    );
+    final plausible = isPlausibleRouteAdvance(
+      advanceMeters: advanceMeters,
+      elapsedSeconds: elapsedSeconds,
+      speedMps: speedMps,
+      accuracyMeters: position.accuracy,
+    );
+    return (
+      stableIndex: stableIndex,
+      currentDist: currentDist,
+      matchDist: matchDist,
+      advanceMeters: advanceMeters,
+      elapsedSeconds: elapsedSeconds,
+      speedMps: speedMps,
+      plausible: plausible,
+    );
+  }
+
+  void _debugRejectedRouteAdvance(
+    String context,
+    ({
+      int stableIndex,
+      double currentDist,
+      double matchDist,
+      double advanceMeters,
+      double elapsedSeconds,
+      double speedMps,
+      bool plausible,
+    })
+    decision,
+    geo.Position position,
+  ) {
+    if (!kDebugMode) return;
+    final limit = plausibleRouteAdvanceLimitMeters(
+      elapsedSeconds: decision.elapsedSeconds,
+      speedMps: decision.speedMps,
+      accuracyMeters: position.accuracy,
+    );
+    debugPrint(
+      '[$context] Zukunfts-Match verworfen #$_advanceCapRejects: '
+      'advance=${decision.advanceMeters.toStringAsFixed(0)}m '
+      'limit=${limit.toStringAsFixed(0)}m '
+      'dt=${decision.elapsedSeconds.toStringAsFixed(1)}s '
+      'idx=$_currentRouteIndex->${decision.stableIndex}',
+    );
   }
 
   bool _shouldHoldLastRouteLockedRenderPosition(DateTime now) {
@@ -1610,9 +1688,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     // Navigation, kippte die UI in ein kaputtes Querformat (Banner seitlich).
     // Wie jede Navi sperren wir die Cruise-Seite auf Hochkant; beim Verlassen
     // (dispose) wird die App wieder für alle Orientierungen freigegeben.
-    SystemChrome.setPreferredOrientations(const [
-      DeviceOrientation.portraitUp,
-    ]);
+    SystemChrome.setPreferredOrientations(const [DeviceOrientation.portraitUp]);
     _loadVectorTiles();
     // 2026-06-06 (vucko P10): Zuletzt bekannten Standort laden → Karte öffnet
     // (auch beim Kaltstart) sofort dort statt bei „Deutschland-Mitte@z6".
@@ -1738,16 +1814,12 @@ class _CruiseModePageState extends State<CruiseModePage>
     if (_fullRouteCoordinates.isNotEmpty) return;
     final cached = await RouteCacheService.instance.loadConfirmedRoute();
     if (cached == null || !mounted || _disposed) return;
-    // 2026-05-28 (vucko Task #77): TTL drastisch verkürzt auf 15 Min UND
-    // nur restoren wenn der Cache-Eintrag eine groupId hat (= aktive
-    // Gruppenfahrt). Solo-Routes verschwinden beim Tab-Wechsel komplett —
-    // User-Beschwerde: „beim Cruise-Open kommt alte Route, was nicht
-    // passieren darf". Echtes Funkloch-Recovery passiert über Tour-Resume
-    // (groupId basiert), nicht über diesen Cache.
+    // 2026-06-19 (Gruppenfahrt Sync): Auf der Solo-Cruise-Seite darf keine
+    // bestätigte Navigationsroute automatisch wieder erscheinen. Gruppen-
+    // Recovery kommt aus der Gruppe/Revision, Solo-Recovery aus Trip-Resume.
     final age = DateTime.now().toUtc().difference(cached.savedAt.toUtc());
     final isStale = age > const Duration(minutes: 15);
-    final isSoloRoute = cached.groupId == null;
-    if (isStale || isSoloRoute) {
+    if (isStale || widget.groupId == null || cached.groupId != widget.groupId) {
       debugPrint(
         '[CruiseMode] Bestätigte Route nicht wiederhergestellt: '
         'age=${age.inMinutes}min groupId=${cached.groupId} — Cache geleert.',
@@ -1946,6 +2018,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     if (!mounted || _disposed) return;
 
     final wasConfirmed = _isRouteConfirmed;
+    final resumeState = _resumeGroupRouteStateForCurrentPosition(result);
     _applyingGroupRouteUpdate = true;
     try {
       _lastRouteResult = result;
@@ -1962,7 +2035,8 @@ class _CruiseModePageState extends State<CruiseModePage>
         _originalRouteDistance = result.distanceMeters;
         _originalRouteDuration = result.durationSeconds;
         _fullRouteCoordinates = result.coordinates;
-        _remainingRouteCoordinates = result.coordinates;
+        _remainingRouteCoordinates =
+            resumeState?.remainingCoordinates ?? result.coordinates;
         // 2026-06-10 (3km-Design v2): Fenster-Caches bei neuer Route leeren —
         // bright faellt auf die volle Route zurueck (nie unsichtbar), dim wird
         // beim naechsten Tick sofort neu gesetzt (dimHead == null).
@@ -1970,15 +2044,17 @@ class _CruiseModePageState extends State<CruiseModePage>
         _dimRemainingLatLngs = const [];
         _lastDimHead = null;
         _maneuvers = result.maneuvers;
-        _activeManeuverIndex = 0;
-        _currentRouteIndex = 0;
-        _lastDrawnRouteIndex = 0;
+        _currentRouteIndex = resumeState?.routeIndex ?? 0;
+        _lastDrawnRouteIndex = _currentRouteIndex;
+        _updateActiveManeuver();
         _distanceSinceLastRedraw = 0.0;
         _announcedManeuverIndices.clear();
         _offRouteCount = 0;
         _lastRerouteTime = DateTime.now();
-        _remainingDistance = result.distanceMeters;
-        _remainingDuration = result.durationSeconds;
+        _remainingDistance =
+            resumeState?.remainingDistanceMeters ?? result.distanceMeters;
+        _remainingDuration =
+            resumeState?.remainingDurationSeconds ?? result.durationSeconds;
         _distanceToFinalTargetMeters = null;
         _isExistingRouteSession = true;
         _isRouteConfirmed = wasConfirmed;
@@ -1987,7 +2063,7 @@ class _CruiseModePageState extends State<CruiseModePage>
 
       await _drawRoute(result.geometry, animateCamera: !wasConfirmed);
       if (autoConfirm && !wasConfirmed) {
-        await _confirmRoute();
+        await _confirmRoute(preserveCurrentProgress: resumeState != null);
       }
       debugPrint(
         '[CruiseMode] Gruppenroute übernommen: revision=$revision source=$source',
@@ -2036,16 +2112,169 @@ class _CruiseModePageState extends State<CruiseModePage>
     _activePointToPointMode = _selectedStyle;
   }
 
-  Future<void> _publishGroupRouteIfAllowed(RouteResult result) async {
+  ({
+    int routeIndex,
+    List<List<double>> remainingCoordinates,
+    double remainingDistanceMeters,
+    double? remainingDurationSeconds,
+  })?
+  _resumeGroupRouteStateForCurrentPosition(RouteResult result) {
+    final position = _userLocation;
+    final coords = result.coordinates;
+    if (position == null || coords.length < 2) return null;
+    final match = findNearestInWindow(
+      position: position,
+      coordinates: coords,
+      currentIndex: 0,
+      windowSize: coords.length,
+      maxJumpMeters: double.infinity,
+    );
+    if (!match.distanceMeters.isFinite || match.distanceMeters > 160.0) {
+      return null;
+    }
+    final routeIndex = stableRouteIndexForMatch(
+      match: match,
+      currentIndex: 0,
+    ).clamp(0, coords.length - 1).toInt();
+    final remaining = coords.sublist(routeIndex);
+    if (remaining.isNotEmpty) {
+      final first = remaining.first;
+      final headDistance = geo.Geolocator.distanceBetween(
+        position.latitude,
+        position.longitude,
+        first[1],
+        first[0],
+      );
+      if (headDistance <= _headSnapMaxMeters) {
+        remaining[0] = [position.longitude, position.latitude];
+      }
+    }
+    final remainingDistance = _calculatePolylineDistanceMeters(remaining);
+    final totalDistance =
+        result.distanceMeters ?? _calculatePolylineDistanceMeters(coords);
+    final remainingDuration =
+        result.durationSeconds != null && totalDistance > 0
+        ? result.durationSeconds! * (remainingDistance / totalDistance)
+        : null;
+    return (
+      routeIndex: routeIndex,
+      remainingCoordinates: remaining,
+      remainingDistanceMeters: remainingDistance,
+      remainingDurationSeconds: remainingDuration,
+    );
+  }
+
+  geo.Position _positionFromLatLngForRouteMatch({
+    required double latitude,
+    required double longitude,
+    DateTime? timestamp,
+  }) {
+    return geo.Position(
+      longitude: longitude,
+      latitude: latitude,
+      timestamp: timestamp ?? DateTime.now(),
+      accuracy: 20,
+      altitude: 0,
+      altitudeAccuracy: 0,
+      heading: 0,
+      headingAccuracy: 0,
+      speed: 0,
+      speedAccuracy: 0,
+      floor: null,
+      isMocked: false,
+    );
+  }
+
+  double? _routeProgressMetersForPosition(
+    geo.Position position, {
+    double maxDistanceMeters = 180.0,
+  }) {
+    if (_fullRouteCoordinates.length < 2) return null;
+    _ensureRouteMetrics();
+    final match = findNearestInWindow(
+      position: position,
+      coordinates: _fullRouteCoordinates,
+      currentIndex: 0,
+      windowSize: _fullRouteCoordinates.length,
+      maxJumpMeters: double.infinity,
+    );
+    if (!match.distanceMeters.isFinite ||
+        match.distanceMeters > maxDistanceMeters) {
+      return null;
+    }
+    return routeDistanceForMatchMeters(
+      cumulativeDistances: _routeCumDist,
+      match: match,
+    );
+  }
+
+  double? _currentRouteProgressMetersFallback() {
+    if (_fullRouteCoordinates.length < 2) return null;
+    _ensureRouteMetrics();
+    if (_routeCumDist.isEmpty) return null;
+    if (_renderLockDistM.isFinite &&
+        _renderLockDistM >= 0 &&
+        _renderLockDistM <= _routeTotalLenM + 100.0) {
+      return _renderLockDistM;
+    }
+    final idx = _currentRouteIndex.clamp(0, _routeCumDist.length - 1).toInt();
+    return _routeCumDist[idx];
+  }
+
+  bool _isCurrentDeviceLeadingGroupRoute(geo.Position position) {
+    if (widget.groupId == null) return true;
+    final myProgress =
+        _routeProgressMetersForPosition(position, maxDistanceMeters: 220.0) ??
+        _currentRouteProgressMetersFallback();
+    if (myProgress == null) return false;
+    final now = DateTime.now();
+    final peerProgress = <double>[];
+    for (final member in _groupMembers.values) {
+      if (!member.hasFreshLocation(
+        now: now,
+        maxAge: _groupMemberFreshLocationAge,
+      )) {
+        continue;
+      }
+      final peerPosition = _positionFromLatLngForRouteMatch(
+        latitude: member.currentLat!,
+        longitude: member.currentLng!,
+        timestamp: member.lastUpdatedAt,
+      );
+      final progress = _routeProgressMetersForPosition(
+        peerPosition,
+        maxDistanceMeters: 220.0,
+      );
+      if (progress != null) peerProgress.add(progress);
+    }
+    final isLeader = groupReroutePublisherIsLeader(
+      myProgressMeters: myProgress,
+      peerProgressMeters: peerProgress,
+    );
+    if (!isLeader && kDebugMode) {
+      debugPrint(
+        '[CruiseMode] Gruppen-Reroute nicht publiziert: '
+        'nicht vorderstes Fahrzeug '
+        'my=${myProgress.toStringAsFixed(0)}m peers=$peerProgress',
+      );
+    }
+    return isLeader;
+  }
+
+  Future<bool> _publishGroupRouteIfAllowed(
+    RouteResult result, {
+    required bool wasLeadingBeforeCommit,
+  }) async {
     final groupId = widget.groupId;
     if (groupId == null ||
+        !wasLeadingBeforeCommit ||
         !_canPublishGroupRoute ||
         // 2026-06-10 (vucko Gruppen-Reroute-Regel): Nur wer der Route real
         // gefolgt ist, darf sie fuer die GRUPPE ersetzen (Late-Join-Schutz).
         !_everOnActiveRoute ||
         _applyingGroupRouteUpdate ||
         _groupRouteRevision <= 0) {
-      return;
+      return false;
     }
 
     final expectedRevision = _groupRouteRevision;
@@ -2066,19 +2295,21 @@ class _CruiseModePageState extends State<CruiseModePage>
         );
         final meId = Supabase.instance.client.auth.currentUser?.id;
         unawaited(_reloadGroupRouteFromBackfill(groupId, meId));
-        return;
+        return false;
       }
       _groupRouteRevision = update.routeRevision;
       _activeGroupRouteData = routeData;
       debugPrint(
         '[CruiseMode] Gruppenroute geschrieben: revision=${update.routeRevision}',
       );
+      return true;
     } catch (e) {
       debugPrint(
         '[CruiseMode] Gruppenroute konnte nicht geschrieben werden: $e',
       );
       final meId = Supabase.instance.client.auth.currentUser?.id;
       unawaited(_reloadGroupRouteFromBackfill(groupId, meId));
+      return false;
     }
   }
 
@@ -4140,8 +4371,13 @@ class _CruiseModePageState extends State<CruiseModePage>
                         onTap: () async {
                           await VoiceSettingsService.instance.cycleMode();
                           HapticFeedback.selectionClick();
-                          if (!context.mounted) return;
                           final newMode = VoiceSettingsService.instance.mode;
+                          if (newMode == VoiceMode.off) {
+                            unawaited(TtsService.instance.stop());
+                          } else {
+                            unawaited(TtsService.instance.prepare());
+                          }
+                          if (!context.mounted) return;
                           final newLabel = switch (newMode) {
                             VoiceMode.off => 'Stumm',
                             VoiceMode.important => 'Nur Wichtiges',
@@ -5248,11 +5484,13 @@ class _CruiseModePageState extends State<CruiseModePage>
   Widget _buildManeuverBackChevron() {
     return Semantics(
       button: true,
-      label: 'Zurück zum Strecken-Setup',
+      label: widget.groupId != null
+          ? 'Zurück zur Gruppe'
+          : 'Zurück zum Strecken-Setup',
       child: Material(
         color: Colors.transparent,
         child: InkWell(
-          onTap: _returnToCruiseSetupFromActiveRoute,
+          onTap: _handleActiveRouteBack,
           borderRadius: BorderRadius.circular(13),
           child: const SizedBox(
             width: 44,
@@ -5271,7 +5509,9 @@ class _CruiseModePageState extends State<CruiseModePage>
   Widget _buildRoutePreviewBackButton() {
     return Semantics(
       button: true,
-      label: 'Zurück zum Strecken-Setup',
+      label: widget.groupId != null
+          ? 'Zurück zur Gruppe'
+          : 'Zurück zum Strecken-Setup',
       child: Container(
         width: 46,
         height: 46,
@@ -5290,7 +5530,7 @@ class _CruiseModePageState extends State<CruiseModePage>
         child: Material(
           color: Colors.transparent,
           child: InkWell(
-            onTap: _returnToCruiseSetupFromActiveRoute,
+            onTap: _handleActiveRouteBack,
             borderRadius: BorderRadius.circular(14),
             child: const Center(
               child: Icon(
@@ -8895,6 +9135,31 @@ class _CruiseModePageState extends State<CruiseModePage>
     _returnToCruiseSetupFromActiveRoute();
   }
 
+  void _handleActiveRouteBack() {
+    if (widget.groupId != null) {
+      _returnToGroupLobbyFromActiveRoute();
+      return;
+    }
+    _returnToCruiseSetupFromActiveRoute();
+  }
+
+  Future<void> _returnToGroupLobbyFromActiveRoute() async {
+    if (!mounted || _disposed) return;
+    _dismissTransientRouteUi();
+    _stopSimulation(restartLiveTracking: false);
+    _stopNavigationTracking();
+    CruiseModePage.isFullscreen.value = false;
+    final popped = await Navigator.of(context).maybePop();
+    if (!popped && mounted && !_disposed) {
+      TopToast.show(
+        context,
+        message: 'Gruppenfahrt läuft weiter',
+        icon: Icons.groups_rounded,
+        duration: const Duration(milliseconds: 2600),
+      );
+    }
+  }
+
   Future<void> _confirmCancelActiveTripFromMap() async {
     if (!mounted || _disposed || _isLoading) return;
     final tripId = _activeTripId;
@@ -9047,6 +9312,9 @@ class _CruiseModePageState extends State<CruiseModePage>
 
     await _prepareAccessLegForOffRouteStart();
     await _prepareXpStreakContext();
+    if (VoiceSettingsService.instance.mode != VoiceMode.off) {
+      await TtsService.instance.prepare();
+    }
     _startNavigationTracking();
     _isCameraLocked = true;
     await _activateNavigationCamera();
@@ -9111,12 +9379,17 @@ class _CruiseModePageState extends State<CruiseModePage>
     final onStartCorridor = _isRoundTrip
         ? _offRouteThresholdMeters + 20
         : _currentPointToPointCorridorMeters() + 40;
+    final movingNavigationStart =
+        position.speed.isFinite && position.speed >= 2.5;
+    final startIsPinnedEnoughForMoving =
+        !movingNavigationStart || distanceToRouteStart <= _headSnapMaxMeters;
     final matchesRouteStartIndex =
         globalMatch.index <= 24 ||
         (_isRoundTrip &&
             globalMatch.index >=
                 math.max(0, _fullRouteCoordinates.length - 25));
-    if (distanceToRouteStart <= onStartCorridor &&
+    if (startIsPinnedEnoughForMoving &&
+        distanceToRouteStart <= onStartCorridor &&
         matchesRouteStartIndex &&
         globalMatch.distanceMeters <= onStartCorridor) {
       return;
@@ -9144,12 +9417,13 @@ class _CruiseModePageState extends State<CruiseModePage>
 
     if (!accessPlan.hasAccessLeg) {
       if (accessPlan.joinPoint.index > 0) {
-        await _commitRerouteResult(
+        final committed = await _commitRerouteResult(
           result: accessPlan.sessionRoute,
           sessionRouteResult: accessPlan.sessionRoute,
           position: position,
           publishToGroup: false,
         );
+        if (!committed) return;
         _safeSetState(() {
           _clearAccessLegState();
           _sessionRouteStartIndexInActiveRoute = 0;
@@ -9160,12 +9434,13 @@ class _CruiseModePageState extends State<CruiseModePage>
       return;
     }
 
-    await _commitRerouteResult(
+    final committed = await _commitRerouteResult(
       result: accessPlan.activeRoute,
       sessionRouteResult: accessPlan.activeRoute,
       position: position,
       publishToGroup: false,
     );
+    if (!committed) return;
 
     final joinIndexInMergedRoute = math
         .max(
@@ -9605,11 +9880,62 @@ class _CruiseModePageState extends State<CruiseModePage>
     return distanceMeters / 13.89;
   }
 
-  Future<void> _commitRerouteResult({
+  double? _kmMetaToMeters(Map<String, dynamic> meta, String key) {
+    final value = meta[key];
+    if (value is num && value.isFinite) return value.toDouble() * 1000.0;
+    return null;
+  }
+
+  double _routeResultDistanceMeters(RouteResult result) {
+    final distance = result.distanceMeters;
+    if (distance != null && distance.isFinite && distance > 0) {
+      return distance;
+    }
+    return _calculatePolylineDistanceMeters(result.coordinates);
+  }
+
+  bool _rejectsProtectedShortReroute(
+    RouteResult result, {
+    required double? remainingDistanceBeforeMeters,
+  }) {
+    if (!_isRoundTrip && widget.groupId == null) return false;
+    final meta = result.edgeMeta;
+    final isReroute =
+        meta['reroute_triggered'] == true || meta['reroute_mode'] != null;
+    if (!isReroute) return false;
+    final before =
+        remainingDistanceBeforeMeters ??
+        _kmMetaToMeters(meta, 'remaining_distance_before') ??
+        _remainingDistance ??
+        (_remainingRouteCoordinates.length >= 2
+            ? _calculatePolylineDistanceMeters(_remainingRouteCoordinates)
+            : null) ??
+        _routeDistance;
+    final after =
+        _kmMetaToMeters(meta, 'remaining_distance_after') ??
+        _routeResultDistanceMeters(result);
+    final keepsDistance = reroutePreservesPlannedRemainingDistance(
+      beforeMeters: before,
+      afterMeters: after,
+    );
+    if (keepsDistance) return false;
+    debugPrint(
+      '[CruiseMode][RerouteGuard] Kandidat verworfen: Reststrecke würde '
+      'zu stark schrumpfen '
+      'before=${((before ?? 0) / 1000).toStringAsFixed(1)}km '
+      'after=${(after / 1000).toStringAsFixed(1)}km '
+      'mode=${meta['reroute_mode']} group=${widget.groupId != null} '
+      'roundtrip=$_isRoundTrip',
+    );
+    return true;
+  }
+
+  Future<bool> _commitRerouteResult({
     required RouteResult result,
     required geo.Position position,
     RouteResult? sessionRouteResult,
     bool publishToGroup = true,
+    double? remainingDistanceBeforeMeters,
   }) async {
     if (result.edgeMeta.isNotEmpty) {
       debugPrint(
@@ -9620,15 +9946,51 @@ class _CruiseModePageState extends State<CruiseModePage>
         'reroute_failed=${result.edgeMeta['reroute_failed']}',
       );
     }
-    _lastRouteResult = result;
-    _sessionRouteResult = sessionRouteResult ?? result;
-    _activeSpeedLimits = result.speedLimits;
-    _recentDestinationDistances = [];
-
     // 2026-06-13 (vucko Reroute-Videos): Beim Commit zaehlt die JETZT-Position
     // (Smoother-Prediction), nicht die bis zu mehrere Sekunden alte Request-
     // Position — fuer Wenden-Check, Re-Anchor und den Stale-Check unten.
     final commitPos = _freshRerouteStartPosition(position, lead: Duration.zero);
+    if (_rejectsProtectedShortReroute(
+      result,
+      remainingDistanceBeforeMeters: remainingDistanceBeforeMeters,
+    )) {
+      _lastRerouteTime = DateTime.now();
+      _lastRerouteFailed = true;
+      return false;
+    }
+    final wasLeadingGroupVehicleBeforeCommit =
+        publishToGroup && widget.groupId != null
+        ? _isCurrentDeviceLeadingGroupRoute(commitPos)
+        : true;
+    if (publishToGroup &&
+        widget.groupId != null &&
+        !wasLeadingGroupVehicleBeforeCommit) {
+      final groupId = widget.groupId!;
+      final meId = Supabase.instance.client.auth.currentUser?.id;
+      unawaited(_reloadGroupRouteFromBackfill(groupId, meId));
+      _lastRerouteTime = DateTime.now();
+      _lastRerouteFailed = true;
+      return false;
+    }
+    if (publishToGroup && widget.groupId != null) {
+      final published = await _publishGroupRouteIfAllowed(
+        result,
+        wasLeadingBeforeCommit: wasLeadingGroupVehicleBeforeCommit,
+      );
+      if (!published) {
+        final groupId = widget.groupId!;
+        final meId = Supabase.instance.client.auth.currentUser?.id;
+        unawaited(_reloadGroupRouteFromBackfill(groupId, meId));
+        _lastRerouteTime = DateTime.now();
+        _lastRerouteFailed = true;
+        return false;
+      }
+    }
+
+    _lastRouteResult = result;
+    _sessionRouteResult = sessionRouteResult ?? result;
+    _activeSpeedLimits = result.speedLimits;
+    _recentDestinationDistances = [];
 
     // 2026-06-13 (vucko Google/Apple-Bar-Review G4): Liefert GraphHopper (dank
     // des headings-Fixes) bereits ein echtes WENDEN-Manöver als erste
@@ -9836,9 +10198,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       ),
     );
     unawaited(OfflineMapService.instance.cacheRouteRegion(result.coordinates));
-    if (publishToGroup) {
-      unawaited(_publishGroupRouteIfAllowed(result));
-    }
+    return true;
   }
 
   // ═══════════════════════ LOAD SAVED ROUTE ══════════════════════════════════
@@ -9950,16 +10310,28 @@ class _CruiseModePageState extends State<CruiseModePage>
 
   // ═══════════════════════ ROUTE CONFIRM ═════════════════════════════════════
 
-  Future<void> _confirmRoute() async {
+  Future<void> _confirmRoute({bool preserveCurrentProgress = false}) async {
     if (_isLoading || _fullRouteCoordinates.isEmpty) return;
     setState(() {
       _isRouteConfirmed = true;
-      _currentRouteIndex = 0;
-      _lastDrawnRouteIndex = 0;
+      if (!preserveCurrentProgress) {
+        _currentRouteIndex = 0;
+        _lastDrawnRouteIndex = 0;
+        _remainingRouteCoordinates = _fullRouteCoordinates;
+      } else {
+        _lastDrawnRouteIndex = _currentRouteIndex;
+        if (_remainingRouteCoordinates.isEmpty) {
+          final startIndex = _currentRouteIndex
+              .clamp(0, math.max(0, _fullRouteCoordinates.length - 1))
+              .toInt();
+          _remainingRouteCoordinates = _fullRouteCoordinates.sublist(
+            startIndex,
+          );
+        }
+      }
       _distanceSinceLastRedraw = 0.0;
       _showRouteInfoBanner = false;
       _configCollapsed = false;
-      _remainingRouteCoordinates = _fullRouteCoordinates;
       // Kein _viewportState mehr (flutter_map nutzt MapController)
     });
     _recentDestinationDistances = [];
@@ -10681,11 +11053,29 @@ class _CruiseModePageState extends State<CruiseModePage>
         makingForwardProgress = globalMatch.index > prevRouteIndex;
       }
       if (globalMatch.distanceMeters <= offRouteCorridor) {
-        _currentRouteIndex = globalMatch.index.clamp(
-          0,
-          _fullRouteCoordinates.length - 1,
-        );
-        routeProgressMatch = globalMatch;
+        final globalDecision = _routeProgressDecision(globalMatch, position);
+        final globalIsForwardOrCurrent =
+            globalDecision.matchDist + 1.0 >= globalDecision.currentDist;
+        final canCommitGlobalProgress =
+            globalDecision.plausible &&
+            globalIsForwardOrCurrent &&
+            globalDecision.stableIndex >= _currentRouteIndex;
+        if (canCommitGlobalProgress) {
+          _currentRouteIndex = globalDecision.stableIndex;
+          _lastRouteIndexAdvanceAt = position.timestamp;
+          routeProgressMatch = globalMatch;
+        } else {
+          routeProgressMatch = RouteWindowMatch(
+            index: _currentRouteIndex,
+            distanceMeters: globalMatch.distanceMeters,
+          );
+          _advanceCapRejects++;
+          _debugRejectedRouteAdvance(
+            'global-re-snap',
+            globalDecision,
+            position,
+          );
+        }
         isOutsideCorridor =
             false; // doch auf der Route — nur Fenster nachgehinkt
         // 2026-06-14 (vucko Re-Dock-Trim, Geraete-Screenshot „Strecke vor UND
@@ -10697,7 +11087,8 @@ class _CruiseModePageState extends State<CruiseModePage>
         // re-gesnappten Index ankern + Trim-Push-Caches leeren, damit der
         // Schnitt diesen Tick neu vom echten Puck aus aufgebaut wird. Nur bei
         // echtem Versatz (>20m) — Mini-Jitter bleibt auf dem monotonen Glide.
-        if (_reanchorRenderLockToIndex(globalMatch.index)) {
+        if (canCommitGlobalProgress &&
+            _reanchorRenderLockToDistance(globalDecision.matchDist)) {
           _lastTrimDistM = -1;
           _lastDrivenHead = null;
           _lastDimHead = null;
@@ -10766,7 +11157,8 @@ class _CruiseModePageState extends State<CruiseModePage>
     // dauerhaft mäßiger GPS-Lage ewig gesperrt.
     if (!_routeLockedOn &&
         _navigationStartTime != null &&
-        DateTime.now().difference(_navigationStartTime!) > _lockOnGraceCeiling &&
+        DateTime.now().difference(_navigationStartTime!) >
+            _lockOnGraceCeiling &&
         (_postRerouteGraceUntil == null ||
             DateTime.now().isAfter(_postRerouteGraceUntil!))) {
       // 2026-06-16 (vucko O4): Die 90s-Grace-Decke darf NICHT mitten in der
@@ -10915,48 +11307,21 @@ class _CruiseModePageState extends State<CruiseModePage>
     // springen → Fortschritt korrupt, nötiger Reroute unterdrückt. Echtes Fahren
     // rückt <2 Punkte/Tick vor, der Cap blockt also nur anomale Sprünge.
     _ensureRouteMetrics();
-    final stableMatchIndex = stableRouteIndexForMatch(
-      match: match,
-      currentIndex: _currentRouteIndex,
-    ).clamp(0, _fullRouteCoordinates.length - 1).toInt();
+    final advanceDecision = _routeProgressDecision(match, position);
+    final stableMatchIndex = advanceDecision.stableIndex;
     if (stableMatchIndex > _currentRouteIndex &&
         stableMatchIndex - _currentRouteIndex <= 60 &&
         match.distanceMeters <= offRouteCorridor) {
-      final currentDist = _routeCumDist[_currentRouteIndex.clamp(
-        0,
-        _routeCumDist.length - 1,
-      ).toInt()];
-      final matchDist = routeDistanceForMatchMeters(
-        cumulativeDistances: _routeCumDist,
-        match: match,
-      );
-      final advanceMeters = math.max(0.0, matchDist - currentDist);
-      final lastAdvanceAt =
-          _lastRouteIndexAdvanceAt ??= position.timestamp;
-      final elapsedSinceAdvance =
-          position.timestamp.difference(lastAdvanceAt).inMilliseconds / 1000.0;
-      final speedForAdvance = math.max(
-        position.speed.isFinite && position.speed > 0 ? position.speed : 0.0,
-        _nativeSmoother.speed.isFinite && _nativeSmoother.speed > 0
-            ? _nativeSmoother.speed
-            : 0.0,
-      );
       // 2026-06-18 (vucko Standort-Teleport): Den Fortschritt nicht mehr nach N
       // Rejects erzwingen. Das erlaubte Meterbudget wächst mit echter Zeit seit dem
       // letzten akzeptierten Index. Dadurch bleibt sparse Geometrie beweglich, aber
       // ein Zukunfts-Leg kann den Puck nicht 100-300 m vorziehen und dort warten
       // lassen, bis das Auto real aufschließt.
-      final advanceCapOk = isPlausibleRouteAdvance(
-        advanceMeters: advanceMeters,
-        elapsedSeconds: elapsedSinceAdvance,
-        speedMps: speedForAdvance,
-        accuracyMeters: position.accuracy,
-      );
-      if (advanceCapOk) {
+      if (advanceDecision.plausible) {
         _advanceCapRejects = 0;
         final committedAdvanceMeters = math.max(
           0.0,
-          _routeCumDist[stableMatchIndex] - currentDist,
+          _routeCumDist[stableMatchIndex] - advanceDecision.currentDist,
         );
         _distanceSinceLastRedraw += committedAdvanceMeters;
         _currentRouteIndex = stableMatchIndex;
@@ -10969,20 +11334,7 @@ class _CruiseModePageState extends State<CruiseModePage>
         // pflegt den grauen Driven-Trail + _remainingRouteCoordinates.
       } else {
         _advanceCapRejects++;
-        if (kDebugMode) {
-          final limit = plausibleRouteAdvanceLimitMeters(
-            elapsedSeconds: elapsedSinceAdvance,
-            speedMps: speedForAdvance,
-            accuracyMeters: position.accuracy,
-          );
-          debugPrint(
-            '[route-advance] Zukunfts-Match verworfen #$_advanceCapRejects: '
-            'advance=${advanceMeters.toStringAsFixed(0)}m '
-            'limit=${limit.toStringAsFixed(0)}m '
-            'dt=${elapsedSinceAdvance.toStringAsFixed(1)}s '
-            'idx=$_currentRouteIndex->$stableMatchIndex',
-          );
-        }
+        _debugRejectedRouteAdvance('route-advance', advanceDecision, position);
       }
     } else {
       // Kein Vorwärts-Match (Puck nicht vor dem Index) → Reject-Zähler nullen,
@@ -11051,7 +11403,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     // 2026-05-23 (vucko Task #16): 3-Stufen-Annäherungs-Haptic.
     // Jede Stufe feuert nur 1× pro Manöver — verhindert Spam bei
     // GPS-Updates alle 200-500ms im Annäherungsbereich.
-    final distToManeuver = _calculateDistanceToManeuver();
+    final distToManeuver = _smoothManeuverDistanceTargetMeters();
     if (visibleManeuverIndex != null && distToManeuver != null) {
       // Reset state wenn neues Manöver
       if (_lastHapticManeuverIndex != visibleManeuverIndex) {
@@ -11789,8 +12141,13 @@ class _CruiseModePageState extends State<CruiseModePage>
                       onPressed: () async {
                         await VoiceSettingsService.instance.cycleMode();
                         HapticFeedback.selectionClick();
-                        if (!context.mounted) return;
                         final newMode = VoiceSettingsService.instance.mode;
+                        if (newMode == VoiceMode.off) {
+                          unawaited(TtsService.instance.stop());
+                        } else {
+                          unawaited(TtsService.instance.prepare());
+                        }
+                        if (!context.mounted) return;
                         final newLabel = switch (newMode) {
                           VoiceMode.off => 'Stumm',
                           VoiceMode.important => 'Nur Wichtiges',
@@ -12022,11 +12379,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     if (distMeters <= 30) {
       text = 'Jetzt $raw';
     } else {
-      final rounded = distMeters < 250
-          ? 200
-          : distMeters < 400
-          ? 300
-          : ((distMeters / 100).round() * 100);
+      final rounded = formatSpokenNavDistanceMeters(distMeters.toDouble());
       text = 'In $rounded Metern $raw';
     }
     if (important) {
@@ -12529,7 +12882,7 @@ class _CruiseModePageState extends State<CruiseModePage>
               ),
             );
 
-            await _commitRerouteResult(
+            final committed = await _commitRerouteResult(
               result: _buildRouteResultFromCoordinates(
                 coordinates: acceptedDest.coordinates,
                 maneuvers: acceptedDest.maneuvers,
@@ -12540,7 +12893,12 @@ class _CruiseModePageState extends State<CruiseModePage>
               ),
               position: position,
               publishToGroup: !accessLegMode,
+              remainingDistanceBeforeMeters: remainingDistanceBeforeMeters,
             );
+            if (!committed) {
+              cycleFailures.add('distance_guard(destination)');
+              return false;
+            }
             _logRerouteMeta(rerouteMeta);
             _clearAccessLegState();
             _sessionRouteStartIndexInActiveRoute = 0;
@@ -12883,7 +13241,7 @@ class _CruiseModePageState extends State<CruiseModePage>
                   ),
             ];
             final dist = _calculatePolylineDistanceMeters(mergedCoords);
-            await _commitRerouteResult(
+            final committed = await _commitRerouteResult(
               result: _buildRouteResultFromCoordinates(
                 coordinates: mergedCoords,
                 maneuvers: mergedManeuvers,
@@ -12896,7 +13254,12 @@ class _CruiseModePageState extends State<CruiseModePage>
                 },
               ),
               position: position,
+              remainingDistanceBeforeMeters: remainingDistanceBeforeMeters,
             );
+            if (!committed) {
+              cycleFailures.add('distance_guard(redock)');
+              return false;
+            }
             if (mounted) {
               TopToast.show(
                 context,
@@ -13123,12 +13486,17 @@ class _CruiseModePageState extends State<CruiseModePage>
         sessionRouteResult = finalResult;
       }
 
-      await _commitRerouteResult(
+      final committed = await _commitRerouteResult(
         result: finalResult,
         sessionRouteResult: sessionRouteResult,
         position: position,
         publishToGroup: !accessLegMode,
+        remainingDistanceBeforeMeters: remainingDistanceBeforeMeters,
       );
+      if (!committed) {
+        cycleFailures.add('distance_guard');
+        return false;
+      }
       _logRerouteMeta(rerouteMeta);
       if (accessLegMode) {
         final joinIndexInMergedRoute = resolvedRerouteResult.coordinates.length
@@ -13274,29 +13642,23 @@ class _CruiseModePageState extends State<CruiseModePage>
     return dist + _offRouteGapMeters;
   }
 
-  /// 2026-06-17 (vucko Manöver-Distanz smooth, Video): Glatte Distanz NUR für die
-  /// Banner-ANZEIGE. [_calculateDistanceToManeuver] rechnet ab dem 1-Hz-Index
-  /// (_currentRouteIndex) → die Meter stehen zwischen GPS-Fixen ~1 s still und
-  /// stufen dann. Hier ziehen wir den Vorlauf der KONTINUIERLICHEN Render-Distanz
-  /// (gleitet pro Frame, geo-verankert am Puck) über den Index-Punkt ab → die
-  /// Anzeige zählt bei JEDEM Tempo geschmeidig runter (1,9→1,8→1,7 km, 750→700…),
-  /// nie eingefroren. Auswahl des Manövers + Voice-/Haptik-Schwellen bleiben
-  /// bewusst auf dem stabilen Index-Wert.
-  double? _displayManeuverDistanceMeters([RouteManeuver? visibleManeuver]) {
+  /// 2026-06-17 (vucko Manöver-Distanz smooth, Video): Glatte Distanzbasis für
+  /// Banner, Haptik und Voice. [_calculateDistanceToManeuver] rechnet ab dem
+  /// 1-Hz-Index (_currentRouteIndex) → die Meter stehen zwischen GPS-Fixen ~1 s
+  /// still und stufen dann. Hier ziehen wir den Vorlauf der KONTINUIERLICHEN
+  /// Render-Distanz (gleitet pro Frame, geo-verankert am Puck) ab.
+  double? _smoothManeuverDistanceTargetMeters([
+    RouteManeuver? visibleManeuver,
+  ]) {
     final base = _calculateDistanceToManeuver(visibleManeuver);
-    if (base == null) {
-      _shownManeuverDistM = null;
-      _shownManeuverSig = null;
-      _shownManeuverAt = null;
-      return null;
-    }
+    if (base == null) return null;
     final cum = _routeCumDistM;
     // 2026-06-17 (vucko Schnellstraße-Freeze, Video): GESAMTEN gleitenden
     // Render-Vorlauf abziehen (keine 80-m-Kappe mehr). Sonst klebte das Banner
     // auf Schnellstraßen (weite Routen-Stützpunkte) beim Index-Wert (~„1,0 km"),
     // während die echte Distanz längst sank. Logik + Tests in
     // nav_distance_format.dart::smoothManeuverDistanceMeters.
-    final raw = cum == null
+    return cum == null
         ? base
         : smoothManeuverDistanceMeters(
             base: base,
@@ -13304,6 +13666,19 @@ class _CruiseModePageState extends State<CruiseModePage>
             render: _renderLockDistM,
             currentIndex: _currentRouteIndex,
           );
+  }
+
+  /// Banner-Distanz: gleiche geglättete Rohdistanz wie Voice/Haptik, danach nur
+  /// noch visuelle Monotonie, damit der Text innerhalb desselben Manövers nicht
+  /// nach oben springt.
+  double? _displayManeuverDistanceMeters([RouteManeuver? visibleManeuver]) {
+    final raw = _smoothManeuverDistanceTargetMeters(visibleManeuver);
+    if (raw == null) {
+      _shownManeuverDistM = null;
+      _shownManeuverSig = null;
+      _shownManeuverAt = null;
+      return null;
+    }
     // 2026-06-17 (vucko Geräte-Video: Manöver-Distanz friert ein / springt HOCH):
     // Die Roh-Distanz [raw] sprang am Kreisverkehr/Routenende in groben Stufen
     // und nach Reroute-/Re-Anchor nach OBEN („10 m → 40 m"). monoton + sprung-frei
@@ -13353,14 +13728,119 @@ class _CruiseModePageState extends State<CruiseModePage>
     _activeManeuverIndex = _maneuvers.length - 1;
   }
 
+  List<({double lat, double lng})> _roundaboutTopologyProbePoints(
+    RouteManeuver maneuver,
+  ) {
+    final points = <({double lat, double lng})>[];
+    void add(double lat, double lng) {
+      if (!lat.isFinite || !lng.isFinite) return;
+      for (final p in points) {
+        final d = geo.Geolocator.distanceBetween(p.lat, p.lng, lat, lng);
+        if (d < 14.0) return;
+      }
+      points.add((lat: lat, lng: lng));
+    }
+
+    add(maneuver.latitude, maneuver.longitude);
+    if (_fullRouteCoordinates.isEmpty) return points;
+
+    final idx = maneuver.routeIndex
+        .clamp(0, _fullRouteCoordinates.length - 1)
+        .toInt();
+    void addCoord(int i) {
+      if (i < 0 || i >= _fullRouteCoordinates.length) return;
+      final c = _fullRouteCoordinates[i];
+      if (c.length < 2) return;
+      add(c[1], c[0]);
+    }
+
+    addCoord(idx);
+
+    // 2026-06-18 (Dormagen-Videos): GH/Mapbox-Manöverkoordinaten liegen an
+    // Kreiseln teils auf Zufahrt, Ring oder Ausfahrt. Eine einzige 45-m-
+    // Overpass-Probe kann dann den Ring knapp verfehlen und cached "kein Ring".
+    // Deshalb entlang der gefahrenen Route rund um das Manöver probieren.
+    var walked = 0.0;
+    for (var i = idx; i < _fullRouteCoordinates.length - 1; i++) {
+      final a = _fullRouteCoordinates[i];
+      final b = _fullRouteCoordinates[i + 1];
+      if (a.length < 2 || b.length < 2) break;
+      walked += geo.Geolocator.distanceBetween(a[1], a[0], b[1], b[0]);
+      if (walked > 115.0 || points.length >= 8) break;
+      addCoord(i + 1);
+    }
+
+    walked = 0.0;
+    for (var i = idx; i > 0; i--) {
+      final a = _fullRouteCoordinates[i];
+      final b = _fullRouteCoordinates[i - 1];
+      if (a.length < 2 || b.length < 2) break;
+      walked += geo.Geolocator.distanceBetween(a[1], a[0], b[1], b[0]);
+      if (walked > 70.0 || points.length >= 10) break;
+      addCoord(i - 1);
+    }
+    return points;
+  }
+
+  RoundaboutTopology? _cachedRoundaboutTopologyFor(
+    Iterable<({double lat, double lng})> probes,
+    RoundaboutTopologyService svc,
+  ) {
+    for (final p in probes) {
+      final cached = svc.cached(p.lat, p.lng);
+      if (cached != null) return cached;
+    }
+    return null;
+  }
+
+  bool _allRoundaboutTopologyProbesResolved(
+    Iterable<({double lat, double lng})> probes,
+    RoundaboutTopologyService svc,
+  ) {
+    var hasProbe = false;
+    for (final p in probes) {
+      hasProbe = true;
+      if (!svc.isResolved(p.lat, p.lng)) return false;
+    }
+    return hasProbe;
+  }
+
+  bool _applyResolvedRoundaboutTopologyIfReady(
+    int index,
+    RoundaboutTopologyService svc,
+  ) {
+    if (index < 0 || index >= _maneuvers.length) return false;
+    final probes = _roundaboutTopologyProbePoints(_maneuvers[index]);
+    final cached = _cachedRoundaboutTopologyFor(probes, svc);
+    if (cached != null) {
+      _applyRoundaboutTopology(index, cached);
+      return true;
+    }
+    if (_allRoundaboutTopologyProbesResolved(probes, svc)) {
+      _applyRoundaboutTopology(index, null);
+      return true;
+    }
+    return false;
+  }
+
+  ({double lat, double lng})? _firstUnresolvedRoundaboutProbe(
+    Iterable<({double lat, double lng})> probes,
+    RoundaboutTopologyService svc,
+  ) {
+    for (final p in probes) {
+      if (!svc.isResolved(p.lat, p.lng)) return p;
+    }
+    return null;
+  }
+
   // 2026-06-16 (vucko O9): Echte Kreisverkehr-Topologie lazy beim Anfahren
   // holen. Sucht das nächste Kreisverkehr-Manöver ab dem aktiven Index, das
   // noch keine Arm-Winkel hat und <1500m entfernt ist. Liegt das Ergebnis schon
   // im Cache (synchron), wird es sofort angewandt; sonst genau EIN Overpass-Fetch
   // ausgelöst (dedupliziert im Service), dessen Resultat danach ins Manöver
-  // gespiegelt wird. Schlägt der Fetch fehl, markieren wir das Manöver mit einer
-  // leeren Liste → der Painter fällt sauber auf entry/exit/exit_number zurück und
-  // wir versuchen es nicht endlos neu.
+  // gespiegelt wird. Schlägt nur das Netz fehl, bleibt das Manöver offen und der
+  // nächste Tick darf erneut versuchen. Nur wenn alle lokalen Proben erfolgreich
+  // "kein Ring" liefern, wird der Geometrie-Fallback endgültig markiert.
   void _maybeEnrichRoundaboutTopology() {
     if (_maneuvers.isEmpty) return;
     final start = _activeManeuverIndex.clamp(0, _maneuvers.length - 1);
@@ -13380,21 +13860,40 @@ class _CruiseModePageState extends State<CruiseModePage>
         if (d > 1500) break; // weitere liegen noch weiter weg → Schluss
       }
       final svc = RoundaboutTopologyService.instance;
-      if (svc.isResolved(m.latitude, m.longitude)) {
-        _applyRoundaboutTopology(i, svc.cached(m.latitude, m.longitude));
-      } else {
-        final lat = m.latitude;
-        final lng = m.longitude;
-        svc.fetch(lat, lng).then((topo) {
+      if (_applyResolvedRoundaboutTopologyIfReady(i, svc)) return;
+
+      final probes = _roundaboutTopologyProbePoints(m);
+      final probe = _firstUnresolvedRoundaboutProbe(probes, svc);
+      if (probe != null) {
+        final maneuverLat = m.latitude;
+        final maneuverLng = m.longitude;
+        final maneuverRouteIndex = m.routeIndex;
+        final probeLat = probe.lat;
+        final probeLng = probe.lng;
+        svc.fetch(probeLat, probeLng).then((topo) {
           if (!mounted) return;
-          // Index könnte inzwischen anders sein → über Koordinate wiederfinden.
+          if (topo == null && !svc.isResolved(probeLat, probeLng)) {
+            // Netz-/Endpoint-Fehler: nicht als "aufgelöst" markieren, sonst
+            // bleibt genau der Kreisel dieser Fahrt dauerhaft im Fallback.
+            return;
+          }
+          // Index könnte inzwischen anders sein → über ursprüngliches Manöver
+          // wiederfinden, nicht über die Probe-Koordinate.
           for (var j = 0; j < _maneuvers.length; j++) {
             final mm = _maneuvers[j];
-            if (mm.maneuverType == ManeuverType.roundabout &&
-                mm.roundaboutArmBearings == null &&
-                (mm.latitude - lat).abs() < 1e-6 &&
-                (mm.longitude - lng).abs() < 1e-6) {
-              _applyRoundaboutTopology(j, topo);
+            if (mm.maneuverType != ManeuverType.roundabout ||
+                mm.roundaboutArmBearings != null) {
+              continue;
+            }
+            final sameCoordinate =
+                (mm.latitude - maneuverLat).abs() < 1e-6 &&
+                (mm.longitude - maneuverLng).abs() < 1e-6;
+            if (sameCoordinate || mm.routeIndex == maneuverRouteIndex) {
+              if (topo != null) {
+                _applyRoundaboutTopology(j, topo);
+              } else {
+                _applyResolvedRoundaboutTopologyIfReady(j, svc);
+              }
               break;
             }
           }
@@ -13407,9 +13906,30 @@ class _CruiseModePageState extends State<CruiseModePage>
   void _applyRoundaboutTopology(int index, RoundaboutTopology? topo) {
     if (index < 0 || index >= _maneuvers.length) return;
     if (_maneuvers[index].roundaboutArmBearings != null) return;
-    // Auch bei null (kein Kreisel/Netzfehler) eine leere Liste setzen →
+    final current = _maneuvers[index];
+    final topologyExit = roundaboutExitNumberFromTopologyBearings(
+      entryBearing: current.roundaboutEntryBearing,
+      exitBearing: current.roundaboutExitBearing,
+      armBearings: topo?.armBearings,
+    );
+    final correctedInstruction = topologyExit == null
+        ? null
+        : roundaboutInstructionForExitNumber(topologyExit);
+    if (topologyExit != null &&
+        topologyExit != current.roundaboutExitNumber &&
+        kDebugMode) {
+      debugPrint(
+        '[Roundabout] Exit aus OSM-Topologie korrigiert: '
+        '${current.roundaboutExitNumber} → $topologyExit '
+        'arms=${topo?.armBearings.length ?? 0}',
+      );
+    }
+    // Auch bei erfolgreichem null ("kein Ring hier") eine leere Liste setzen →
     // markiert „aufgelöst", Painter nutzt sauber den Geometrie-Fallback.
-    _maneuvers[index] = _maneuvers[index].copyWith(
+    _maneuvers[index] = current.copyWith(
+      announcement: correctedInstruction,
+      instruction: correctedInstruction,
+      roundaboutExitNumber: topologyExit,
       roundaboutArmBearings: topo?.armBearings ?? const <double>[],
       roundaboutIslandScale: topo?.islandScale,
     );

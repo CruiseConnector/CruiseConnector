@@ -291,7 +291,8 @@ class RouteRenderLock {
       // wenn es akzeptabel ist UND deutlich weniger weit voraus liegt — oder wenn
       // das ferne ganz versagt. Bei einem ECHTEN GPS-Sprung (Tunnelausfahrt)
       // versagt das nahe Fenster (GPS ist wirklich weit weg) → das ferne bleibt.
-      final nearAcceptable = nearBest.segment >= 0 &&
+      final nearAcceptable =
+          nearBest.segment >= 0 &&
           nearBest.lateralMeters <= lateralReleaseMeters;
       if (nearAcceptable &&
           (farFailed || nearBest.distanceM < best.distanceM - 30.0)) {
@@ -347,25 +348,18 @@ class RouteRenderLock {
       bestSegment = previousSegmentIndex;
     }
     final speed = speedMps.isFinite ? speedMps.clamp(0.0, 60.0) : 0.0;
-    // Anti-Teleport fuer das Projektions-ZIEL. Ein Vorwaertssprung gilt als
-    // VALIDIERT, wenn der externe Matcher (currentRouteIndex) die neue
-    // Position bereits bestaetigt hat — dann darf das Ziel springen, die
-    // sichtbare Glaettung uebernimmt der Glide unten (Aufholen in ~0,5s,
-    // rate-gedeckelt). UNVALIDIERTE Spruenge (z.B. Quersprung auf ein nahes
-    // Zukunfts-Leg am Hairpin, waehrend der Matcher noch auf dem Hinweg
-    // steht) werden ZEITBASIERT gedeckelt: max. speed*2.2 + 3 m/s.
+    // Anti-Teleport fuer das Projektions-ZIEL. Der externe Matcher
+    // (currentRouteIndex) ist nur noch eine enge Plausibilitaetsstuetze, kein
+    // Freifahrtschein bis zum naechsten Vertex. Auf langen GraphHopper-Segmenten
+    // kann currentRouteIndex+1 naemlich 100-300 m voraus liegen; genau dort zog
+    // der sichtbare Puck im Geraetevideo kurz nach vorne und wartete dann.
+    // Darum wird jeder Vorwaertssprung mit bekanntem Frame-Timing zeitbasiert
+    // gedeckelt. Explizite Re-Dock-Korrekturen nutzen reanchorToDistance() und
+    // bleiben weiterhin als schneller, animierter Catch-up moeglich.
     // 2026-06-12: frueher "+2.0m PRO AUFRUF" — bei 60fps entsprach das
     // 120 m/s Drift-Budget, bei 1Hz nur 2 m/s: frameraten-abhaengig und
     // damit gleichzeitig zu lasch (Frames) und zu streng (Fixe).
-    final corroboratedIdx = (currentRouteIndex + 1)
-        .clamp(0, cumulative.length - 1)
-        .toInt();
-    final indexCorroborated =
-        bestDistanceM <= cumulative[corroboratedIdx] + 1.0;
-    if (!indexCorroborated &&
-        hasLock &&
-        timestamp != null &&
-        _lastProjectionAt != null) {
+    if (hasLock && timestamp != null && _lastProjectionAt != null) {
       final clampDtSeconds = math
           .max(
             0.0,
@@ -373,10 +367,17 @@ class RouteRenderLock {
           )
           .clamp(0.0, 2.0)
           .toDouble();
+      final corroboratedIdx = currentRouteIndex
+          .clamp(0, cumulative.length - 1)
+          .toInt();
+      final currentIdxDist = cumulative[corroboratedIdx];
+      final indexSlackM = math.max(14.0, speed * 0.45);
+      final indexCeiling = currentIdxDist + indexSlackM;
       final maxForwardDistance =
           previousDistanceM + (speed * 2.2 + 3.0) * clampDtSeconds;
-      if (bestDistanceM > maxForwardDistance) {
-        bestDistanceM = maxForwardDistance;
+      final ceiling = math.max(indexCeiling, maxForwardDistance);
+      if (bestDistanceM > ceiling) {
+        bestDistanceM = ceiling;
         bestSegment = _segmentIndexForDistance(bestDistanceM);
       }
     }

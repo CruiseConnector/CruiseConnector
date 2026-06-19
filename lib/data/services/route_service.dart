@@ -9240,8 +9240,11 @@ class RouteService {
       var effectiveSign = sign;
       String? geomDirText;
       if (!isRoundabout && sign != 4) {
-        final maneuverTurnRad =
-            roundaboutGeomTurnRad(routeCoordinates, coordIdx, coordIdx);
+        final maneuverTurnRad = roundaboutGeomTurnRad(
+          routeCoordinates,
+          coordIdx,
+          coordIdx,
+        );
         final geomSign = maneuverSignFromGeometryRad(maneuverTurnRad);
         if (geomSign != null && turnSignsContradict(sign, geomSign)) {
           effectiveSign = geomSign;
@@ -9366,8 +9369,9 @@ class RouteService {
   /// Straße." Ohne "auf …"-Teil → reiner Fallback-Text der neuen Richtung.
   String _rewriteTurnDirection(String ghText, int geomSign) {
     final base = _graphhopperFallbackText(geomSign);
-    final baseNoDot =
-        base.endsWith('.') ? base.substring(0, base.length - 1) : base;
+    final baseNoDot = base.endsWith('.')
+        ? base.substring(0, base.length - 1)
+        : base;
     final i = ghText.toLowerCase().indexOf(' auf ');
     if (i >= 0) {
       var suffix = ghText.substring(i);
@@ -9909,29 +9913,11 @@ class RouteService {
     String modifier,
   ) {
     if (exitNumber != null && exitNumber > 0) {
-      final ordinal = _exitOrdinal(exitNumber);
-      return 'Im Kreisverkehr $ordinal Ausfahrt nehmen';
+      return roundaboutInstructionForExitNumber(exitNumber);
     }
     final normalized = _normalizeInstruction(rawInstruction, modifier);
     if (normalized.toLowerCase().contains('kreisverkehr')) return normalized;
     return 'Im Kreisverkehr weiterfahren';
-  }
-
-  String _exitOrdinal(int exit) {
-    switch (exit) {
-      case 1:
-        return '1.';
-      case 2:
-        return '2.';
-      case 3:
-        return '3.';
-      case 4:
-        return '4.';
-      case 5:
-        return '5.';
-      default:
-        return '$exit.';
-    }
   }
 
   String _announcementForModifier(
@@ -10675,6 +10661,13 @@ double? roundaboutGeomTurnRad(
 ) {
   final n = coords.length;
   if (n < 3) return null;
+  final armTurnRad = roundaboutTurnRadFromRouteArmBearings(
+    coords,
+    entryIdx,
+    exitIdx,
+  );
+  if (armTurnRad != null) return armTurnRad;
+
   // Einfahrts-Kurs: bis zu 3 Punkte VOR der Einfahrt (glaettet GPS-Zacken).
   final a1 = (entryIdx - 3).clamp(0, n - 1).toInt();
   final a2 = entryIdx.clamp(0, n - 1).toInt();
@@ -10703,6 +10696,34 @@ double? roundaboutGeomTurnRad(
   var deltaDeg = (exitBearing - entryBearing) % 360.0;
   if (deltaDeg > 180.0) deltaDeg -= 360.0;
   if (deltaDeg < -180.0) deltaDeg += 360.0;
+  return deltaDeg * math.pi / 180.0;
+}
+
+/// Kreisverkehr-Drehwinkel aus echten Einfahrts-/Ausfahrtsarmen der Route.
+///
+/// Der alte Fallback nahm starre `±3` Routenpunkte. Bei dicht gesnappten
+/// Kreiseln oder langen Stützpunkt-Abständen kann das noch innerhalb des Rings
+/// landen und eine Links-Ausfahrt als "geradeaus/2. Ausfahrt" lesen. Diese
+/// Variante misst stattdessen je ca. 25 m entlang der Route vom Manöverpunkt weg:
+/// Einfahrtsarm = vom Kreisel zurück zur Herkunft, Ausfahrtsarm = aus dem
+/// Kreisel heraus. Daraus entsteht die tatsächliche Kursänderung.
+double? roundaboutTurnRadFromRouteArmBearings(
+  List<List<double>> coords,
+  int entryIdx,
+  int exitIdx,
+) {
+  final entryArm = RoundaboutTopologyService.armBearingAlong(
+    coords,
+    entryIdx,
+    -1,
+  );
+  final exitArm = RoundaboutTopologyService.armBearingAlong(coords, exitIdx, 1);
+  if (entryArm == null || exitArm == null) return null;
+  if (!entryArm.isFinite || !exitArm.isFinite) return null;
+
+  final entryTravelBearing = (entryArm + 180.0) % 360.0;
+  var deltaDeg = ((exitArm - entryTravelBearing) % 360.0 + 360.0) % 360.0;
+  if (deltaDeg > 180.0) deltaDeg -= 360.0;
   return deltaDeg * math.pi / 180.0;
 }
 
@@ -10747,13 +10768,98 @@ int? correctedRoundaboutExitNumber({
   required double? geomTurnRad,
 }) {
   final geomExit = roundaboutExitNumberFromGeometryRad(geomTurnRad);
-  if (providerExitNumber == null) return null;
+  if (providerExitNumber == null) return geomExit;
   if (geomExit == null) return providerExitNumber;
   if (providerExitNumber == geomExit) return providerExitNumber;
   // Sehr hohe Exit-Nummern können echte mehrarmige Kreisel sein. Ohne Topologie
   // korrigieren wir nur den Standardbereich, in dem die Video-Verwechslung liegt.
   if (providerExitNumber > 4) return providerExitNumber;
   return geomExit;
+}
+
+int? roundaboutExitNumberFromTopologyBearings({
+  required double? entryBearing,
+  required double? exitBearing,
+  required List<double>? armBearings,
+  double minExitSeparationDeg = 24.0,
+  double matchToleranceDeg = 38.0,
+}) {
+  if (entryBearing == null ||
+      exitBearing == null ||
+      armBearings == null ||
+      armBearings.length < 2) {
+    return null;
+  }
+  if (!entryBearing.isFinite || !exitBearing.isFinite) return null;
+
+  // DACH/Rechtsverkehr: Im Kreisverkehr faehrt man gegen den Uhrzeigersinn.
+  // Bearings sind Kompasswinkel vom Kreiselzentrum nach aussen. Bei Einfahrt
+  // von Sueden (180°) ist die erste Ausfahrt typischerweise Osten (90°), also
+  // absteigende Bearings: delta = entry - arm.
+  double driveDelta(double bearing) =>
+      ((entryBearing - bearing) % 360.0 + 360.0) % 360.0;
+  double angularDelta(double a, double b) {
+    final raw = ((a - b) % 360.0 + 360.0) % 360.0;
+    return raw > 180.0 ? 360.0 - raw : raw;
+  }
+
+  final candidates = <({double bearing, double delta})>[];
+  for (final raw in armBearings) {
+    if (!raw.isFinite) continue;
+    final delta = driveDelta(raw);
+    // Einfahrtsarm nicht als Ausfahrt zaehlen. Arme direkt hinter 360° sind der
+    // gleiche Arm von der anderen Richtung und werden ebenfalls ignoriert.
+    if (delta < minExitSeparationDeg || delta > 360.0 - minExitSeparationDeg) {
+      continue;
+    }
+    candidates.add((bearing: raw, delta: delta));
+  }
+  if (candidates.isEmpty) return null;
+  candidates.sort((a, b) => a.delta.compareTo(b.delta));
+
+  var bestIdx = -1;
+  var bestDiff = double.infinity;
+  for (var i = 0; i < candidates.length; i++) {
+    final diff = angularDelta(candidates[i].bearing, exitBearing);
+    if (diff < bestDiff) {
+      bestDiff = diff;
+      bestIdx = i;
+    }
+  }
+  if (bestIdx >= 0 && bestDiff <= matchToleranceDeg) return bestIdx + 1;
+
+  final exitDelta = driveDelta(exitBearing);
+  if (exitDelta < minExitSeparationDeg ||
+      exitDelta > 360.0 - minExitSeparationDeg) {
+    return null;
+  }
+  var count = 0;
+  for (final c in candidates) {
+    if (c.delta <= exitDelta + matchToleranceDeg) count++;
+  }
+  return count <= 0 ? null : count;
+}
+
+String roundaboutInstructionForExitNumber(int exitNumber) {
+  final safeExit = math.max(1, exitNumber);
+  return 'Im Kreisverkehr ${exitOrdinalText(safeExit)} Ausfahrt nehmen';
+}
+
+String exitOrdinalText(int exit) {
+  switch (exit) {
+    case 1:
+      return '1.';
+    case 2:
+      return '2.';
+    case 3:
+      return '3.';
+    case 4:
+      return '4.';
+    case 5:
+      return '5.';
+    default:
+      return '$exit.';
+  }
 }
 
 /// Widersprechen sich GraphHopper-`sign` und Geometrie-`sign` in der HÄNDIGKEIT

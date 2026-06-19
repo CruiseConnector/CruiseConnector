@@ -17,9 +17,9 @@ void main() {
 
   // Punkt aus Ost-/Nord-Versatz in Metern → [lng, lat].
   List<double> pt(double eastM, double northM) => [
-        baseLng + eastM / mPerDegLng,
-        baseLat + northM / 110540.0,
-      ];
+    baseLng + eastM / mPerDegLng,
+    baseLat + northM / 110540.0,
+  ];
 
   // Anfahrt aus Sueden (Kurs Nord, bearing 0) bis zur Einfahrt (Index 3),
   // kurzer Kreis-Bogen, dann das Ausfahrts-Bein in [exitDx,exitDy]-Richtung.
@@ -44,8 +44,11 @@ void main() {
     final route = roundaboutRoute(exitEastStep: 12, exitNorthStep: 1);
     final turn = roundaboutGeomTurnRad(route, 3, 5);
     expect(turn, isNotNull);
-    expect(turn!, greaterThan(0.5),
-        reason: 'Rechts-Ausfahrt muss positiven Drehwinkel liefern');
+    expect(
+      turn!,
+      greaterThan(0.5),
+      reason: 'Rechts-Ausfahrt muss positiven Drehwinkel liefern',
+    );
   });
 
   test('exit to the NORTH-WEST (left) → clearly negative — screenshot case', () {
@@ -54,16 +57,41 @@ void main() {
     final route = roundaboutRoute(exitEastStep: -12, exitNorthStep: 12);
     final turn = roundaboutGeomTurnRad(route, 3, 5);
     expect(turn, isNotNull);
-    expect(turn!, lessThan(-0.35),
-        reason: 'NW-Ausfahrt ist links → negativ → nicht die 1. Ausfahrt');
+    expect(
+      turn!,
+      lessThan(-0.35),
+      reason: 'NW-Ausfahrt ist links → negativ → nicht die 1. Ausfahrt',
+    );
   });
+
+  test(
+    'arm-bearing geometry keeps left exit negative on sparse support points',
+    () {
+      final route = <List<double>>[
+        pt(0, -80),
+        pt(0, -35),
+        pt(0, 0), // entry
+        pt(-8, 8),
+        pt(-35, 14), // exit
+        pt(-80, 14),
+      ];
+
+      final turn = roundaboutTurnRadFromRouteArmBearings(route, 2, 4);
+      expect(turn, isNotNull);
+      expect(turn!, lessThan(-0.7));
+      expect(roundaboutExitNumberFromGeometryRad(turn), 3);
+    },
+  );
 
   test('straight through (2nd exit) → near zero', () {
     final route = roundaboutRoute(exitEastStep: 0, exitNorthStep: 12);
     final turn = roundaboutGeomTurnRad(route, 3, 5);
     expect(turn, isNotNull);
-    expect(turn!.abs(), lessThan(0.3),
-        reason: 'Geradeaus durch → Drehwinkel ~0');
+    expect(
+      turn!.abs(),
+      lessThan(0.3),
+      reason: 'Geradeaus durch → Drehwinkel ~0',
+    );
   });
 
   test('too few support points → null (falls back to GH turn_angle)', () {

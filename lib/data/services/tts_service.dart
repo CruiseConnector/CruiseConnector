@@ -13,11 +13,27 @@ class TtsService {
 
   final FlutterTts _tts = FlutterTts();
   bool _initialized = false;
+  Future<void>? _initFuture;
+  int _speechEpoch = 0;
   String? _lastSpoken;
   DateTime? _lastSpokenAt;
 
   Future<void> _initIfNeeded() async {
     if (_initialized) return;
+    final runningInit = _initFuture;
+    if (runningInit != null) {
+      await runningInit;
+      return;
+    }
+    _initFuture = _configure();
+    try {
+      await _initFuture!;
+    } finally {
+      _initFuture = null;
+    }
+  }
+
+  Future<void> _configure() async {
     try {
       // 2026-06-05 (vucko Task #6): iOS-Audiosession konfigurieren. OHNE diese
       // wird die ERSTE Ansage im Fahrbetrieb von laufender Musik/anderem Audio
@@ -25,7 +41,6 @@ class TtsService {
       // duckOthers/mixWithOthers = andere Audioquellen werden während der Ansage
       // leiser, die Navi-Stimme spielt zuverlässig.
       if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS) {
-        await _tts.setSharedInstance(true);
         await _tts.setIosAudioCategory(
           IosTextToSpeechAudioCategory.playback,
           [
@@ -34,16 +49,23 @@ class TtsService {
           ],
           IosTextToSpeechAudioMode.voicePrompt,
         );
+        await _tts.setSharedInstance(true);
       }
       await _tts.setLanguage('de-DE');
-      await _tts.setSpeechRate(0.50);  // 0.5 = natürlich, motorradtauglich
+      await _tts.setSpeechRate(0.50); // 0.5 = natürlich, motorradtauglich
       await _tts.setPitch(1.0);
       await _tts.setVolume(0.95);
-      await _tts.awaitSpeakCompletion(false);  // don't block
+      await _tts.awaitSpeakCompletion(false); // don't block
       _initialized = true;
     } catch (e) {
       debugPrint('[TtsService] init failed: $e');
     }
+  }
+
+  /// Initialisiert Engine + iOS-Audiosession vor der ersten echten Ansage.
+  Future<void> prepare() async {
+    if (!_shouldSpeak(isImportant: true)) return;
+    await _initIfNeeded();
   }
 
   bool _shouldSpeak({required bool isImportant}) {
@@ -74,7 +96,9 @@ class TtsService {
   Future<void> speakImportant(String text, {bool interrupt = false}) async {
     if (!_shouldSpeak(isImportant: true)) return;
     if (_isDuplicate(text)) return;
+    final epoch = interrupt ? ++_speechEpoch : _speechEpoch;
     await _initIfNeeded();
+    if (epoch != _speechEpoch) return;
     try {
       if (interrupt) {
         await _tts.stop();
@@ -91,7 +115,9 @@ class TtsService {
   Future<void> speakOptional(String text) async {
     if (!_shouldSpeak(isImportant: false)) return;
     if (_isDuplicate(text)) return;
+    final epoch = _speechEpoch;
     await _initIfNeeded();
+    if (epoch != _speechEpoch) return;
     try {
       _lastSpoken = text;
       _lastSpokenAt = DateTime.now();
@@ -103,6 +129,7 @@ class TtsService {
 
   Future<void> stop() async {
     try {
+      _speechEpoch++;
       await _tts.stop();
     } catch (_) {}
   }

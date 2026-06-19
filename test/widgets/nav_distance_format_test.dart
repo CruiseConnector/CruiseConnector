@@ -48,6 +48,20 @@ void main() {
     });
   });
 
+  group('formatSpokenNavDistanceMeters', () {
+    test('kurze Ansagedistanzen werden nicht auf 200 m hochgezogen', () {
+      expect(formatSpokenNavDistanceMeters(70), 70);
+      expect(formatSpokenNavDistanceMeters(177), 180);
+      expect(formatSpokenNavDistanceMeters(240), 240);
+    });
+
+    test('nutzt dieselbe saubere Stufung wie der Banner', () {
+      expect(formatSpokenNavDistanceMeters(287), 280);
+      expect(formatSpokenNavDistanceMeters(522), 500);
+      expect(formatSpokenNavDistanceMeters(-20), 0);
+    });
+  });
+
   // 2026-06-17 (vucko Schnellstraße-Freeze, Geräte-Video): Das Banner blieb auf
   // der Schnellstraße bei „1,0 km" hängen, weil der gleitende Render-Vorlauf bei
   // 80 m abgekappt wurde. Auf weiten Routen-Stützpunkten (Index springt selten)
@@ -59,13 +73,21 @@ void main() {
       // Früher (>80 m Kappe) → 1000 (eingefroren). Jetzt → 600.
       expect(
         smoothManeuverDistanceMeters(
-          base: 1000, cum: [0, 1500, 3000], render: 400, currentIndex: 0),
+          base: 1000,
+          cum: [0, 1500, 3000],
+          render: 400,
+          currentIndex: 0,
+        ),
         600,
       );
       // weiter gefahren (700 m Vorlauf) → 300, NICHT 1000.
       expect(
         smoothManeuverDistanceMeters(
-          base: 1000, cum: [0, 1500, 3000], render: 700, currentIndex: 0),
+          base: 1000,
+          cum: [0, 1500, 3000],
+          render: 700,
+          currentIndex: 0,
+        ),
         300,
       );
     });
@@ -73,7 +95,11 @@ void main() {
     test('Stadt: kleiner Vorlauf (<80 m) wie bisher abgezogen', () {
       expect(
         smoothManeuverDistanceMeters(
-          base: 200, cum: [0, 100, 200], render: 50, currentIndex: 0),
+          base: 200,
+          cum: [0, 100, 200],
+          render: 50,
+          currentIndex: 0,
+        ),
         150,
       );
     });
@@ -81,7 +107,11 @@ void main() {
     test('stale (render hinter dem Index) → ehrlicher Index-Wert', () {
       expect(
         smoothManeuverDistanceMeters(
-          base: 500, cum: [0, 1000], render: 900, currentIndex: 1),
+          base: 500,
+          cum: [0, 1000],
+          render: 900,
+          currentIndex: 1,
+        ),
         500,
       );
     });
@@ -89,7 +119,11 @@ void main() {
     test('render nicht initialisiert (<0) → base', () {
       expect(
         smoothManeuverDistanceMeters(
-          base: 500, cum: [0, 1000], render: -1, currentIndex: 0),
+          base: 500,
+          cum: [0, 1000],
+          render: -1,
+          currentIndex: 0,
+        ),
         500,
       );
     });
@@ -97,23 +131,38 @@ void main() {
     test('Puck am/über Manöver → 0 (Jetzt), nicht negativ', () {
       expect(
         smoothManeuverDistanceMeters(
-          base: 300, cum: [0, 1000], render: 320, currentIndex: 0),
+          base: 300,
+          cum: [0, 1000],
+          render: 320,
+          currentIndex: 0,
+        ),
         0,
       );
     });
 
-    test('grober Render-Sprung (weit hinters Manöver) → base (kein Unsinn)', () {
-      expect(
-        smoothManeuverDistanceMeters(
-          base: 300, cum: [0, 1000], render: 900, currentIndex: 0),
-        300,
-      );
-    });
+    test(
+      'grober Render-Sprung (weit hinters Manöver) → base (kein Unsinn)',
+      () {
+        expect(
+          smoothManeuverDistanceMeters(
+            base: 300,
+            cum: [0, 1000],
+            render: 900,
+            currentIndex: 0,
+          ),
+          300,
+        );
+      },
+    );
 
     test('leere cum / Randfälle → base', () {
       expect(
         smoothManeuverDistanceMeters(
-            base: 750, cum: const [], render: 100, currentIndex: 0),
+          base: 750,
+          cum: const [],
+          render: 100,
+          currentIndex: 0,
+        ),
         750,
       );
     });
@@ -126,7 +175,10 @@ void main() {
     test('erster Wert (prevShown null) → Ziel', () {
       expect(
         monotonicManeuverDistanceMeters(
-            prevShown: null, target: 120, maneuverChanged: false),
+          prevShown: null,
+          target: 120,
+          maneuverChanged: false,
+        ),
         120,
       );
     });
@@ -134,7 +186,10 @@ void main() {
     test('neues Manöver → snap auf neuen (größeren) Wert', () {
       expect(
         monotonicManeuverDistanceMeters(
-            prevShown: 50, target: 110, maneuverChanged: true),
+          prevShown: 50,
+          target: 110,
+          maneuverChanged: true,
+        ),
         110,
       );
     });
@@ -143,13 +198,19 @@ void main() {
       // „10 m → 40 m" am Routenende, gleiches Manöver: NICHT hochspringen.
       expect(
         monotonicManeuverDistanceMeters(
-            prevShown: 10, target: 40, maneuverChanged: false),
+          prevShown: 10,
+          target: 40,
+          maneuverChanged: false,
+        ),
         10,
       );
       // „50 m → 110 m" Walserstraße, gleiches Manöver: halten.
       expect(
         monotonicManeuverDistanceMeters(
-            prevShown: 50, target: 110, maneuverChanged: false),
+          prevShown: 50,
+          target: 110,
+          maneuverChanged: false,
+        ),
         50,
       );
     });
@@ -158,7 +219,11 @@ void main() {
       // 800 → 700, dtMs 90, ease 0.35 → 765 (Zwischenwert, nicht hart 700).
       expect(
         monotonicManeuverDistanceMeters(
-            prevShown: 800, target: 700, maneuverChanged: false, dtMs: 90),
+          prevShown: 800,
+          target: 700,
+          maneuverChanged: false,
+          dtMs: 90,
+        ),
         closeTo(765, 0.5),
       );
     });
@@ -167,7 +232,11 @@ void main() {
       var shown = 800.0;
       for (var i = 0; i < 30; i++) {
         shown = monotonicManeuverDistanceMeters(
-            prevShown: shown, target: 700, maneuverChanged: false, dtMs: 90);
+          prevShown: shown,
+          target: 700,
+          maneuverChanged: false,
+          dtMs: 90,
+        );
       }
       expect(shown, closeTo(700, 1.0));
     });
@@ -175,21 +244,31 @@ void main() {
     test('praktisch erreicht (≤ Epsilon) → snap aufs Ziel', () {
       expect(
         monotonicManeuverDistanceMeters(
-            prevShown: 700, target: 699, maneuverChanged: false),
+          prevShown: 700,
+          target: 699,
+          maneuverChanged: false,
+        ),
         699,
       );
     });
 
     test('gleitet nie UNTER das Ziel', () {
       final v = monotonicManeuverDistanceMeters(
-          prevShown: 100, target: 90, maneuverChanged: false, dtMs: 5000);
+        prevShown: 100,
+        target: 90,
+        maneuverChanged: false,
+        dtMs: 5000,
+      );
       expect(v >= 90, isTrue);
     });
 
     test('negatives/ungültiges Ziel → 0', () {
       expect(
         monotonicManeuverDistanceMeters(
-            prevShown: null, target: -5, maneuverChanged: false),
+          prevShown: null,
+          target: -5,
+          maneuverChanged: false,
+        ),
         0,
       );
     });
