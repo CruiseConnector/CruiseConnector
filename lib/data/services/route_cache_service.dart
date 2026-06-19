@@ -161,6 +161,11 @@ class RouteCacheService {
               'maneuver_type': maneuver.maneuverType.name,
               'roundabout_exit_number': maneuver.roundaboutExitNumber,
               'roundabout_turn_angle': maneuver.roundaboutTurnAngleRad,
+              'roundabout_entry_bearing': maneuver.roundaboutEntryBearing,
+              'roundabout_exit_bearing': maneuver.roundaboutExitBearing,
+              'roundabout_arm_bearings': maneuver.roundaboutArmBearings,
+              'roundabout_island_scale': maneuver.roundaboutIslandScale,
+              'roundabout_is_arrival': maneuver.roundaboutIsArrival,
             },
           )
           .toList(growable: false),
@@ -239,8 +244,26 @@ class RouteCacheService {
                 ?.toInt(),
             roundaboutTurnAngleRad: (map['roundabout_turn_angle'] as num?)
                 ?.toDouble(),
+            roundaboutEntryBearing: (map['roundabout_entry_bearing'] as num?)
+                ?.toDouble(),
+            roundaboutExitBearing: (map['roundabout_exit_bearing'] as num?)
+                ?.toDouble(),
+            roundaboutArmBearings: _doubleListFromJson(
+              map['roundabout_arm_bearings'],
+            ),
+            roundaboutIslandScale: (map['roundabout_island_scale'] as num?)
+                ?.toDouble(),
+            roundaboutIsArrival: map['roundabout_is_arrival'] == true,
           );
         })
+        .toList(growable: false);
+  }
+
+  List<double>? _doubleListFromJson(Object? value) {
+    if (value is! List) return null;
+    return value
+        .whereType<num>()
+        .map((number) => number.toDouble())
         .toList(growable: false);
   }
 

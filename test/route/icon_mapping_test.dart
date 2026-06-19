@@ -269,6 +269,48 @@ void main() {
         expect(maneuvers.first.instruction, contains('Kreisverkehr'));
       },
     );
+
+    test(
+      'Mapbox turn/right mit Roundabout-Instruction wird als Kreisverkehr erkannt',
+      () {
+        final coords = [
+          [9.480, 47.660],
+          [9.480, 47.661],
+          [9.480, 47.662],
+          [9.480, 47.663],
+        ];
+        final response = {
+          'route': {
+            'legs': [
+              {
+                'steps': [
+                  {
+                    'distance': 180.0,
+                    'name': 'Im Buch',
+                    'maneuver': {
+                      'type': 'turn',
+                      'modifier': 'right',
+                      'location': [9.480, 47.661],
+                      'instruction':
+                          'At the roundabout, take the 2nd exit onto Im Buch',
+                      'exit': 2,
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+        };
+
+        final maneuvers = service.extractManeuvers(response, coords);
+
+        expect(maneuvers, hasLength(1));
+        expect(maneuvers.single.maneuverType, ManeuverType.roundabout);
+        expect(maneuvers.single.icon, Icons.roundabout_right);
+        expect(maneuvers.single.roundaboutExitNumber, 2);
+        expect(maneuvers.single.instruction, contains('Kreisverkehr'));
+      },
+    );
   });
 
   group('iconForManeuver – Ziel & Start', () {

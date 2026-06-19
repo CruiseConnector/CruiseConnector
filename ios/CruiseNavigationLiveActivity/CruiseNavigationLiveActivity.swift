@@ -129,10 +129,16 @@ private func iconName(for state: CruiseNavigationAttributes.ContentState) -> Str
 
 private func formatDistance(_ meters: Double?) -> String {
     guard let meters else { return "--" }
-    if meters < 950 {
-        return "\(max(0, Int(meters.rounded()))) m"
+    let m = max(0.0, meters)
+    if m < 10 {
+        return "Jetzt"
     }
-    let km = meters / 1000.0
+    if m < 1000 {
+        let step = m <= 200 ? 10.0 : (m <= 500 ? 20.0 : 50.0)
+        let rounded = min(990, max(0, Int((m / step).rounded() * step)))
+        return "\(rounded) m"
+    }
+    let km = m / 1000.0
     return String(format: "%.1f km", km)
 }
 

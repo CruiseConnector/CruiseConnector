@@ -9826,19 +9826,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       // Manöver, das näher als 25m an einem bereinigten Punkt liegt, behalten
       // (alles andere lag im entfernten Spike → wegfallen lassen).
       if (bestDist <= 25.0) {
-        remappedManeuvers.add(
-          RouteManeuver(
-            latitude: m.latitude,
-            longitude: m.longitude,
-            routeIndex: bestIdx,
-            icon: m.icon,
-            announcement: m.announcement,
-            instruction: m.instruction,
-            maneuverType: m.maneuverType,
-            roundaboutExitNumber: m.roundaboutExitNumber,
-            roundaboutTurnAngleRad: m.roundaboutTurnAngleRad,
-          ),
-        );
+        remappedManeuvers.add(m.copyWith(routeIndex: bestIdx));
       }
     }
     final cleanedDistanceMeters = _calculatePolylineDistanceMeters(cleaned);
@@ -11654,7 +11642,8 @@ class _CruiseModePageState extends State<CruiseModePage>
     // 2026-05-23 (vucko Task #16): 3-Stufen-Annäherungs-Haptic.
     // Jede Stufe feuert nur 1× pro Manöver — verhindert Spam bei
     // GPS-Updates alle 200-500ms im Annäherungsbereich.
-    final distToManeuver = _smoothManeuverDistanceTargetMeters();
+    final visibleManeuver = _activeVisibleManeuver();
+    final distToManeuver = _displayManeuverDistanceMeters(visibleManeuver);
     if (visibleManeuverIndex != null && distToManeuver != null) {
       // Reset state wenn neues Manöver
       if (_lastHapticManeuverIndex != visibleManeuverIndex) {
@@ -13979,7 +13968,7 @@ class _CruiseModePageState extends State<CruiseModePage>
         : _maneuverKindFromInstruction(maneuver.instruction);
     final distanceToManeuver = maneuver == null
         ? null
-        : _smoothManeuverDistanceTargetMeters(maneuver);
+        : _displayManeuverDistanceMeters(maneuver);
     return NavigationLiveActivitySnapshot(
       instruction: instruction,
       maneuverType: kind,
@@ -14128,15 +14117,19 @@ class _CruiseModePageState extends State<CruiseModePage>
     RoundaboutTopologyService svc,
   ) {
     if (index < 0 || index >= _maneuvers.length) return false;
-    final probes = _roundaboutTopologyProbePoints(_maneuvers[index]);
+    final maneuver = _maneuvers[index];
+    final probes = _roundaboutTopologyProbePoints(maneuver);
     final cached = _cachedRoundaboutTopologyFor(probes, svc);
     if (cached != null) {
       _applyRoundaboutTopology(index, cached);
       return true;
     }
     if (_allRoundaboutTopologyProbesResolved(probes, svc)) {
-      _applyRoundaboutTopology(index, null);
-      return true;
+      if (maneuver.maneuverType == ManeuverType.roundabout) {
+        _applyRoundaboutTopology(index, null);
+        return true;
+      }
+      return false;
     }
     return false;
   }
@@ -14165,8 +14158,13 @@ class _CruiseModePageState extends State<CruiseModePage>
     final origin = _userLocation;
     for (var i = start; i < _maneuvers.length; i++) {
       final m = _maneuvers[i];
-      if (m.maneuverType != ManeuverType.roundabout) continue;
-      if (m.roundaboutArmBearings != null) continue; // schon aufgelöst
+      final isKnownRoundabout = m.maneuverType == ManeuverType.roundabout;
+      final isHiddenRoundaboutCandidate =
+          !isKnownRoundabout && _maneuverCouldBeHiddenRoundabout(m);
+      if (!isKnownRoundabout && !isHiddenRoundaboutCandidate) continue;
+      if (isKnownRoundabout && m.roundaboutArmBearings != null) {
+        continue; // schon aufgelöst
+      }
       // Nur anfahrende Kreisel (≤1500m) enrichen — spart Calls weit voraus.
       if (origin != null) {
         final d = geo.Geolocator.distanceBetween(
@@ -14181,6 +14179,10 @@ class _CruiseModePageState extends State<CruiseModePage>
       if (_applyResolvedRoundaboutTopologyIfReady(i, svc)) return;
 
       final probes = _roundaboutTopologyProbePoints(m);
+      if (!isKnownRoundabout &&
+          _allRoundaboutTopologyProbesResolved(probes, svc)) {
+        continue;
+      }
       final probe = _firstUnresolvedRoundaboutProbe(probes, svc);
       if (probe != null) {
         final maneuverLat = m.latitude;
@@ -14199,8 +14201,12 @@ class _CruiseModePageState extends State<CruiseModePage>
           // wiederfinden, nicht über die Probe-Koordinate.
           for (var j = 0; j < _maneuvers.length; j++) {
             final mm = _maneuvers[j];
-            if (mm.maneuverType != ManeuverType.roundabout ||
-                mm.roundaboutArmBearings != null) {
+            final mmKnownRoundabout =
+                mm.maneuverType == ManeuverType.roundabout;
+            if (!mmKnownRoundabout && !_maneuverCouldBeHiddenRoundabout(mm)) {
+              continue;
+            }
+            if (mmKnownRoundabout && mm.roundaboutArmBearings != null) {
               continue;
             }
             final sameCoordinate =
@@ -14221,33 +14227,85 @@ class _CruiseModePageState extends State<CruiseModePage>
     }
   }
 
+  bool _maneuverCouldBeHiddenRoundabout(RouteManeuver maneuver) {
+    if (maneuver.maneuverType == ManeuverType.roundabout) return true;
+    if (maneuver.isArrival) return false;
+    final text = maneuver.instruction.toLowerCase();
+    if (text.contains('kreisverkehr') ||
+        text.contains('roundabout') ||
+        text.contains('traffic circle') ||
+        text.contains('rotary')) {
+      return true;
+    }
+    return maneuver.icon == Icons.turn_right ||
+        maneuver.icon == Icons.turn_left ||
+        maneuver.icon == Icons.turn_slight_right ||
+        maneuver.icon == Icons.turn_slight_left ||
+        maneuver.icon == Icons.turn_sharp_right ||
+        maneuver.icon == Icons.turn_sharp_left;
+  }
+
   void _applyRoundaboutTopology(int index, RoundaboutTopology? topo) {
     if (index < 0 || index >= _maneuvers.length) return;
     if (_maneuvers[index].roundaboutArmBearings != null) return;
     final current = _maneuvers[index];
+    if (current.maneuverType != ManeuverType.roundabout && topo == null) {
+      return;
+    }
+    final geomTurnRad = roundaboutGeomTurnRad(
+      _fullRouteCoordinates,
+      current.routeIndex,
+      current.routeIndex,
+    );
+    final promoted = current.maneuverType == ManeuverType.roundabout
+        ? current
+        : current.copyWith(
+            icon: Icons.roundabout_right,
+            maneuverType: ManeuverType.roundabout,
+            roundaboutExitNumber: correctedRoundaboutExitNumber(
+              providerExitNumber: null,
+              geomTurnRad: geomTurnRad,
+            ),
+            roundaboutTurnAngleRad: geomTurnRad,
+            roundaboutEntryBearing: RoundaboutTopologyService.armBearingAlong(
+              _fullRouteCoordinates,
+              current.routeIndex,
+              -1,
+            ),
+            roundaboutExitBearing: RoundaboutTopologyService.armBearingAlong(
+              _fullRouteCoordinates,
+              current.routeIndex,
+              1,
+            ),
+          );
     final topologyExit = roundaboutExitNumberFromTopologyBearings(
-      entryBearing: current.roundaboutEntryBearing,
-      exitBearing: current.roundaboutExitBearing,
+      entryBearing: promoted.roundaboutEntryBearing,
+      exitBearing: promoted.roundaboutExitBearing,
       armBearings: topo?.armBearings,
     );
-    final correctedInstruction = topologyExit == null
+    final fallbackExit = promoted.roundaboutExitNumber;
+    final correctedInstruction = topologyExit != null
+        ? roundaboutInstructionForExitNumber(topologyExit)
+        : current.maneuverType == ManeuverType.roundabout
         ? null
-        : roundaboutInstructionForExitNumber(topologyExit);
+        : fallbackExit != null
+        ? roundaboutInstructionForExitNumber(fallbackExit)
+        : 'Im Kreisverkehr weiterfahren';
     if (topologyExit != null &&
-        topologyExit != current.roundaboutExitNumber &&
+        topologyExit != promoted.roundaboutExitNumber &&
         kDebugMode) {
       debugPrint(
         '[Roundabout] Exit aus OSM-Topologie korrigiert: '
-        '${current.roundaboutExitNumber} → $topologyExit '
+        '${promoted.roundaboutExitNumber} → $topologyExit '
         'arms=${topo?.armBearings.length ?? 0}',
       );
     }
     // Auch bei erfolgreichem null ("kein Ring hier") eine leere Liste setzen →
     // markiert „aufgelöst", Painter nutzt sauber den Geometrie-Fallback.
-    _maneuvers[index] = current.copyWith(
+    _maneuvers[index] = promoted.copyWith(
       announcement: correctedInstruction,
       instruction: correctedInstruction,
-      roundaboutExitNumber: topologyExit,
+      roundaboutExitNumber: topologyExit ?? fallbackExit,
       roundaboutArmBearings: topo?.armBearings ?? const <double>[],
       roundaboutIslandScale: topo?.islandScale,
     );

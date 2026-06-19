@@ -3484,17 +3484,7 @@ class RouteService {
     RouteManeuver maneuver, {
     required int routeIndex,
   }) {
-    return RouteManeuver(
-      latitude: maneuver.latitude,
-      longitude: maneuver.longitude,
-      routeIndex: routeIndex,
-      icon: maneuver.icon,
-      announcement: maneuver.announcement,
-      instruction: maneuver.instruction,
-      maneuverType: maneuver.maneuverType,
-      roundaboutExitNumber: maneuver.roundaboutExitNumber,
-      roundaboutTurnAngleRad: maneuver.roundaboutTurnAngleRad,
-    );
+    return maneuver.copyWith(routeIndex: routeIndex);
   }
 
   List<double> _copyCoordinate(List<double> coordinate) {
@@ -9173,11 +9163,17 @@ class RouteService {
           routeCoordinates,
         );
 
-        // Kreisverkehr erkennen
-        final isRoundabout =
-            type == 'roundabout' ||
-            type == 'rotary' ||
-            type == 'roundabout turn';
+        // Kreisverkehr erkennen. Mapbox liefert kleine/komplexe Kreisel nicht
+        // immer als `type=roundabout`; teilweise kommt `type=turn/right`,
+        // während Instruction oder `exit` eindeutig auf einen Kreisverkehr
+        // zeigen. Diese Klassifizierung ist deshalb bewusst text- und
+        // providerfeld-basiert, bevor generische Turn-Logik greift.
+        final isRoundabout = _mapboxStepLooksRoundabout(
+          type: type,
+          rawInstruction: rawInstruction,
+          maneuver: maneuver,
+          step: step,
+        );
         final providerExitNumber = isRoundabout
             ? (maneuver['exit'] as num?)?.toInt()
             : null;
@@ -9474,6 +9470,26 @@ class RouteService {
         lower.contains('roundabout') ||
         lower.contains('traffic circle') ||
         lower.contains('rotary');
+  }
+
+  bool _mapboxStepLooksRoundabout({
+    required String type,
+    required String rawInstruction,
+    required Map maneuver,
+    required Map step,
+  }) {
+    final typ = type.toLowerCase().trim();
+    if (typ == 'roundabout' || typ == 'rotary' || typ == 'roundabout turn') {
+      return true;
+    }
+    if (maneuver['exit'] != null) return true;
+    final text = <String>[
+      rawInstruction,
+      (maneuver['instruction'] as String?) ?? '',
+      (step['name'] as String?) ?? '',
+      (step['rotary_name'] as String?) ?? '',
+    ].join(' ').toLowerCase();
+    return _graphhopperTextLooksRoundabout(text);
   }
 
   int? _roundaboutExitNumberFromText(String text) {

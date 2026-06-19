@@ -215,6 +215,24 @@ void main() {
       );
     });
 
+    test(
+      'Shared-Navi-Distanz verhindert Live/Voice-Abweichung bei Rohsprung',
+      () {
+        // Video-Pattern: Banner zeigt z. B. 650 m, Roh-/Provider-Distanz springt
+        // im selben Manöver wieder auf 920 m. Live Activity und TTS müssen den
+        // sichtbaren Banner-Wert verwenden, nicht den Rohsprung.
+        final visible = monotonicManeuverDistanceMeters(
+          prevShown: 650,
+          target: 920,
+          maneuverChanged: false,
+        );
+
+        expect(visible, 650);
+        expect(formatNavDistance(visible), '650 m');
+        expect(formatSpokenNavDistanceMeters(visible), 650);
+      },
+    );
+
     test('grobe Stufe nach unten → weich gleiten (1 Schritt)', () {
       // 800 → 700, dtMs 90, ease 0.35 → 765 (Zwischenwert, nicht hart 700).
       expect(

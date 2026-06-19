@@ -95,14 +95,17 @@ class RoundaboutTopologyService {
   }
 
   Future<RoundaboutTopology?> _query(double lat, double lng) async {
-    // Ring (junction=roundabout|circular) im 45m-Umkreis + alle Arme, die seine
+    // Ring (junction=roundabout|circular) ODER OSM-Mini-Kreisverkehr
+    // (node[highway=mini_roundabout]) im 45m-Umkreis + alle Arme, die seine
     // Knoten berühren. `out geom` liefert geordnete Geometrie + Knoten-IDs.
     final ql =
         '[out:json][timeout:20];'
         'way(around:45,$lat,$lng)["junction"~"roundabout|circular"]->.ring;'
+        'node(around:45,$lat,$lng)["highway"="mini_roundabout"]->.mini;'
         'node(w.ring)->.rn;'
         'way(bn.rn)->.arms;'
-        '(.ring;.arms;);'
+        'way(bn.mini)->.miniarms;'
+        '(.ring;.arms;.mini;.miniarms;);'
         'out geom;';
     var gotSuccessfulResponse = false;
     for (final endpoint in _endpoints) {
@@ -138,7 +141,7 @@ class RoundaboutTopologyService {
         break;
       }
     }
-    if (ring == null) return null;
+    if (ring == null) return _parseMiniRoundabout(elements);
 
     final ringIds = (ring['nodes'] as List?)
         ?.cast<num>()
@@ -243,6 +246,72 @@ class RoundaboutTopologyService {
       centerLng: cLng,
       armBearings: arms,
       radiusMeters: radiusMeters,
+    );
+  }
+
+  RoundaboutTopology? _parseMiniRoundabout(List<dynamic> elements) {
+    Map<String, dynamic>? node;
+    for (final e in elements) {
+      if (e is! Map<String, dynamic>) continue;
+      if (e['type'] != 'node') continue;
+      final tags = e['tags'];
+      final highway = tags is Map ? tags['highway'] : null;
+      if (highway == 'mini_roundabout') {
+        node = e;
+        break;
+      }
+    }
+    if (node == null) return null;
+    final nodeId = (node['id'] as num?)?.toInt();
+    final cLat = (node['lat'] as num?)?.toDouble();
+    final cLng = (node['lon'] as num?)?.toDouble();
+    if (nodeId == null || cLat == null || cLng == null) return null;
+
+    final raw = <double>[];
+    for (final e in elements) {
+      if (e is! Map<String, dynamic> || e['type'] != 'way') continue;
+      final ids = (e['nodes'] as List?)
+          ?.cast<num>()
+          .map((x) => x.toInt())
+          .toList();
+      final geom = (e['geometry'] as List?)?.cast<dynamic>();
+      if (ids == null || geom == null || ids.length < 2) continue;
+      final jIdx = ids.indexOf(nodeId);
+      if (jIdx < 0) continue;
+      final outward = jIdx == 0 ? 1 : -1;
+      var tLat = cLat;
+      var tLng = cLng;
+      var acc = 0.0;
+      for (var i = jIdx + outward; i >= 0 && i < geom.length; i += outward) {
+        final g = geom[i];
+        if (g is! Map) break;
+        final la = (g['lat'] as num).toDouble();
+        final lo = (g['lon'] as num).toDouble();
+        acc += _metersBetween(tLat, tLng, la, lo);
+        tLat = la;
+        tLng = lo;
+        if (acc >= 30) break;
+      }
+      if (tLat != cLat || tLng != cLng) {
+        raw.add(_bearing(cLat, cLng, tLat, tLng));
+      }
+    }
+    if (raw.isEmpty) return null;
+
+    raw.sort();
+    final arms = <double>[];
+    for (final b in raw) {
+      final dup = arms.any((a) {
+        final d = (a - b).abs();
+        return math.min(d, 360 - d) < 20;
+      });
+      if (!dup) arms.add(b);
+    }
+    return RoundaboutTopology(
+      centerLat: cLat,
+      centerLng: cLng,
+      armBearings: arms,
+      radiusMeters: 5.0,
     );
   }
 

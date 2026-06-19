@@ -165,5 +165,59 @@ void main() {
       expect(cached, isNotNull);
       expect(cached!.route.maneuvers.single.icon, Icons.turn_left);
     });
+
+    test('erhaelt Kreisverkehr-Topologie-Felder beim Speichern', () async {
+      const route = RouteResult(
+        geoJson: '{"type":"LineString","coordinates":[[9,47],[9.1,47.1]]}',
+        geometry: {
+          'type': 'LineString',
+          'coordinates': [
+            [9.0, 47.0],
+            [9.1, 47.1],
+          ],
+        },
+        coordinates: [
+          [9.0, 47.0],
+          [9.1, 47.1],
+        ],
+        maneuvers: [
+          RouteManeuver(
+            latitude: 47.1,
+            longitude: 9.1,
+            routeIndex: 1,
+            icon: Icons.roundabout_right,
+            announcement: 'Im Kreisverkehr 2. Ausfahrt nehmen',
+            instruction: 'Im Kreisverkehr 2. Ausfahrt nehmen',
+            maneuverType: ManeuverType.roundabout,
+            roundaboutExitNumber: 2,
+            roundaboutTurnAngleRad: -0.7,
+            roundaboutEntryBearing: 180,
+            roundaboutExitBearing: 0,
+            roundaboutArmBearings: [180, 90, 0, 270],
+            roundaboutIslandScale: 1.25,
+            roundaboutIsArrival: true,
+          ),
+        ],
+      );
+
+      await RouteCacheService.instance.storeConfirmedRoute(
+        route: route,
+        isRoundTrip: true,
+        style: 'Sport Mode',
+        avoidHighways: false,
+      );
+
+      final cached = await RouteCacheService.instance.loadConfirmedRoute();
+      final maneuver = cached!.route.maneuvers.single;
+
+      expect(maneuver.maneuverType, ManeuverType.roundabout);
+      expect(maneuver.roundaboutExitNumber, 2);
+      expect(maneuver.roundaboutTurnAngleRad, -0.7);
+      expect(maneuver.roundaboutEntryBearing, 180);
+      expect(maneuver.roundaboutExitBearing, 0);
+      expect(maneuver.roundaboutArmBearings, [180, 90, 0, 270]);
+      expect(maneuver.roundaboutIslandScale, 1.25);
+      expect(maneuver.roundaboutIsArrival, isTrue);
+    });
   });
 }
