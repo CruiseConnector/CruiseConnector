@@ -217,6 +217,10 @@ class _CruiseModePageState extends State<CruiseModePage>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
+    // 2026-06-20 (vucko Live-Activity-Sync): Lead-Kompensation NUR im Hintergrund
+    // (Sperrbildschirm/Dynamic-Island ohne sichtbare In-App-Zahl). Im Vordergrund
+    // exakt senden, damit Dynamic Island und In-App-Banner dieselbe Zahl zeigen.
+    _appInForeground = state == AppLifecycleState.resumed;
     if (state != AppLifecycleState.resumed) return;
     final groupId = widget.groupId;
     if (groupId == null || !mounted || _disposed) return;
@@ -14088,15 +14092,44 @@ class _CruiseModePageState extends State<CruiseModePage>
         : _maneuverKindFromInstruction(maneuver.instruction);
     final distanceToManeuver = maneuver == null
         ? null
-        : _displayManeuverDistanceMeters(maneuver);
+        : _leadCompensatedLiveDistance(_displayManeuverDistanceMeters(maneuver));
     return NavigationLiveActivitySnapshot(
       instruction: instruction,
       maneuverType: kind,
       distanceToManeuverMeters: distanceToManeuver,
-      remainingDistanceMeters: _remainingDistance ?? _routeDistance,
+      remainingDistanceMeters: _leadCompensatedLiveDistance(
+        _remainingDistance ?? _routeDistance,
+      ),
       remainingDurationSeconds: (_remainingDuration ?? _routeDuration)?.round(),
       isRerouting: _isReroutingBannerActive,
     );
+  }
+
+  // 2026-06-20 (vucko Live-Activity-Sync): Die Sperrbildschirm-Live-Activity
+  // rendert erst ~1-2 s nach unserem Push (ActivityKit-Latenz + der Wert bleibt
+  // bis zum nächsten Push STATISCH) → bei Tempo hängt die Lock-Screen-Zahl 50-150 m
+  // hinter der In-App-Meteranzeige. Gegenmittel: wir senden eine LEAD-kompensierte
+  // Distanz — den Wert, den die In-App in ~_liveActivityLeadSeconds ZEIGEN wird.
+  // Wenn iOS den Push dann tatsächlich rendert, stimmt er ~mit der In-App-Zahl
+  // überein → synchron. Skaliert mit der (geglätteten) Geschwindigkeit: langsam/
+  // stehend = exakt; nah am Manöver (≤100 m) ebenfalls exakt, damit kein
+  // verfrühtes „Jetzt" entsteht. Gedeckelt, damit es nie weit vorausläuft.
+  static const double _liveActivityLeadSeconds = 1.5;
+  static const double _liveActivityLeadCapMeters = 80.0;
+
+  bool _appInForeground = true;
+
+  double? _leadCompensatedLiveDistance(double? meters) {
+    if (meters == null) return null;
+    if (_appInForeground) return meters; // Vordergrund: exakt = wie Banner
+    if (meters <= 100) return meters;
+    final speed = _nativeSmoother.speed;
+    if (!speed.isFinite || speed <= 2.0) return meters;
+    final lead = (speed * _liveActivityLeadSeconds).clamp(
+      0.0,
+      _liveActivityLeadCapMeters,
+    );
+    return math.max(0.0, meters - lead);
   }
 
   String _maneuverKindFromInstruction(String instruction) {

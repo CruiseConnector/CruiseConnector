@@ -32,12 +32,17 @@ class NavigationLiveActivitySnapshot {
   }
 
   String signature() {
+    // 2026-06-20 (vucko Live-Activity-Sync): feinere Buckets → die Lock-Screen-
+    // Zahl wird viel häufiger nachgezogen (alle ~10 m statt ~25 m Manöver-Distanz,
+    // alle ~50 m statt ~100 m Reststrecke). Zusammen mit der Lead-Kompensation
+    // (siehe cruise_mode_page::_leadCompensatedLiveDistance) hängt sie kaum noch
+    // hinter der In-App-Anzeige.
     final maneuverBucket = distanceToManeuverMeters == null
         ? -1
-        : (distanceToManeuverMeters! / 25).round();
+        : (distanceToManeuverMeters! / 10).round();
     final remainingBucket = remainingDistanceMeters == null
         ? -1
-        : (remainingDistanceMeters! / 100).round();
+        : (remainingDistanceMeters! / 50).round();
     return [
       instruction,
       maneuverType,
