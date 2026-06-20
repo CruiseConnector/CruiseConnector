@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:flutter/services.dart';
@@ -30,6 +32,17 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
   bool _starting = false;
   bool _enteringNavigation = false;
   final Set<String> _busyRoleUpdates = {};
+
+  // 2026-06-21 (vucko Lobby-Netzfehler): Ein vorübergehender Netz-/DNS-Fehler
+  // ("Failed host lookup") warf eine Exception, die wie "Gruppe nicht gefunden"
+  // aussah und in einer Sackgasse OHNE Retry endete. Jetzt: jede Exception =
+  // transienter Fehler → "Verbindung wird hergestellt …" + Auto-Retry mit
+  // Backoff, bis es lädt. NUR ein echtes null-Ergebnis (Gruppe existiert
+  // wirklich nicht) zeigt "Gruppe nicht gefunden".
+  bool _hadNetworkError = false;
+  bool _loadInFlight = false;
+  int _retryAttempt = 0;
+  Timer? _retryTimer;
 
   List<Map<String, dynamic>> _pendingRequests = [];
 
@@ -77,12 +90,16 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
 
   @override
   void dispose() {
+    _retryTimer?.cancel();
     _groupCh?.unsubscribe();
     _membersCh?.unsubscribe();
     super.dispose();
   }
 
   Future<void> _load() async {
+    // Überlappende Loads vermeiden (Realtime + Retry + manuelle Calls).
+    if (_loadInFlight) return;
+    _loadInFlight = true;
     try {
       final results = await Future.wait([
         CruiseGroupService.fetch(widget.groupId),
@@ -91,10 +108,15 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
       final g = results[0] as CruiseGroup?;
       final blocked = results[1] as Set<String>;
       if (!mounted) return;
+      // Erfolg (auch g == null = Gruppe existiert wirklich nicht): kein
+      // Netzfehler mehr, laufenden Retry stoppen.
+      _retryTimer?.cancel();
+      _retryAttempt = 0;
       setState(() {
         _group = g;
         _blockedIds = blocked;
         _loading = false;
+        _hadNetworkError = false;
       });
       // Pending-Requests nur laden, wenn ich Owner bin (RLS sorgt für Rest).
       if (g != null && (g.isOwner(_myId) || g.ownerId == _myId)) {
@@ -105,13 +127,33 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
         setState(() => _pendingRequests = pending);
       }
     } catch (e) {
-      if (mounted) {
-        setState(() => _loading = false);
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Fehler: $e')));
-      }
+      // JEDE Exception hier ist ein transienter Fehler (Netz/DNS/Timeout/RLS-
+      // Hänger) — NIEMALS als "Gruppe nicht gefunden" rendern. Wir halten den
+      // bereits geladenen Stand (falls vorhanden) und planen einen Auto-Retry.
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _hadNetworkError = true;
+      });
+      _scheduleReload();
+    } finally {
+      _loadInFlight = false;
     }
+  }
+
+  /// Plant einen automatischen Reload mit Backoff (1,5s → 3s → 6s, gedeckelt),
+  /// damit die Lobby NIE in einer Netzfehler-Sackgasse hängenbleibt: Sobald die
+  /// Verbindung zurück ist, lädt sie von selbst. Zusätzlich triggert auch der
+  /// Realtime-Reconnect ein _load().
+  void _scheduleReload() {
+    if (!mounted) return;
+    _retryTimer?.cancel();
+    _retryAttempt = (_retryAttempt + 1).clamp(1, 4);
+    final delayMs = (1500 * (1 << (_retryAttempt - 1))).clamp(1500, 6000);
+    _retryTimer = Timer(Duration(milliseconds: delayMs), () {
+      if (!mounted) return;
+      _load();
+    });
   }
 
   void _subscribe() {
@@ -376,15 +418,70 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
-          : _group == null
-          ? const Center(
-              child: Text(
-                'Gruppe nicht gefunden',
-                style: TextStyle(color: Colors.white),
-              ),
-            )
-          : _buildBody(),
+          : _group != null
+          ? _buildBody()
+          : _hadNetworkError
+          ? _buildConnecting()
+          : _buildNotFound(),
       bottomNavigationBar: _loading || _group == null ? null : _buildBottom(),
+    );
+  }
+
+  /// Transienter Netzfehler: NICHT "Gruppe nicht gefunden", sondern ehrlicher
+  /// Verbindungs-Status. Lädt automatisch (Backoff-Retry läuft im Hintergrund)
+  /// und bietet zusätzlich einen manuellen Sofort-Versuch.
+  Widget _buildConnecting() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const CircularProgressIndicator(),
+            const SizedBox(height: 18),
+            const Text(
+              'Verbindung wird hergestellt …',
+              style: TextStyle(color: Colors.white, fontSize: 16),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Die Gruppe lädt automatisch, sobald du wieder online bist.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Colors.white54, fontSize: 13),
+            ),
+            const SizedBox(height: 16),
+            TextButton(
+              onPressed: () {
+                _retryTimer?.cancel();
+                _retryAttempt = 0;
+                setState(() => _loading = true);
+                _load();
+              },
+              child: const Text('Jetzt erneut versuchen'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Echtes null-Ergebnis: die Gruppe existiert wirklich nicht (mehr).
+  Widget _buildNotFound() {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Text(
+            'Gruppe nicht gefunden',
+            style: TextStyle(color: Colors.white),
+          ),
+          const SizedBox(height: 12),
+          TextButton(
+            onPressed: () => Navigator.of(context).maybePop(),
+            child: const Text('Zurück'),
+          ),
+        ],
+      ),
     );
   }
 
