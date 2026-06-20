@@ -397,8 +397,10 @@ class _CruiseModePageState extends State<CruiseModePage>
   LatLng? _userPosition;
   double _userHeading = 0.0; // GPS-Heading in Grad (0=Nord, 90=Ost)
 
-  /// Marker-Größe: iOS-Puck ist kompakter (44px) als Default (80px).
-  double get _puckSize => !kIsWeb && Platform.isIOS ? 44.0 : 80.0;
+  /// Marker-Größe: einheitlich der kompakte Apple-Maps-Puck (44px) auf ALLEN
+  /// Plattformen. 2026-06-21 (vucko Geräte-Video): der alte 80px-Android-Puck
+  /// trug einen großen transluzenten Accuracy-Halo („zwei Ringe") — entfernt.
+  double get _puckSize => 44.0;
 
   // ─────────────────────── Navigation State ─────────────────────────────────
   geo.Position? _userLocation;
@@ -3114,21 +3116,25 @@ class _CruiseModePageState extends State<CruiseModePage>
       if (lockPos != null) {
         _camToLat = lockPos.latitude;
         _camToLng = lockPos.longitude;
-        // 2026-06-13 (vucko Kamera-Abbiege-Ruckeln, Geraete-Video): Heading-Ziel
-        // jetzt AUCH pro Frame aus der Smoother-Prediction nachführen (analog
-        // zur Position). Vorher war es event-gesteuert (1×/GPS-Fix) → beim
-        // Abbiegen sprang das Ziel 1×/s und die Drehung kam in Bursts (Ruckeln).
-        // Der Smoother extrapoliert das Heading mit geglätteter Drehrate, die
-        // Dead-Zone (gegen GPS-Jitter im Stand) bleibt erhalten.
-        if (_nativeSmoother.hasValidHeading) {
-          final predHeading = _nativeSmoother
+        // 2026-06-21 (vucko Geräte-Video „Route immer leicht geneigt"): Heading-
+        // Ziel PRIMÄR aus der ROUTEN-TANGENTE (Straße zeigt senkrecht nach oben),
+        // nicht aus dem verrauschten GPS-Kurs. Auf dem Gerät kippte der GPS-Course
+        // die Karte um den Rauschwinkel; on-route ist die Tangente die Wahrheit.
+        // Fallback auf das geglättete GPS-Heading nur, wenn keine Tangente da ist
+        // (off-route / sehr kurze Restroute). Die Dead-Zone + der Tick-Lerp
+        // glätten die Drehung weiterhin (kein Stand-Zappeln, kein Burst-Ruck).
+        double? targetHeading = _routeTangentCameraBearing(lockPos);
+        if (targetHeading == null && _nativeSmoother.hasValidHeading) {
+          targetHeading = _nativeSmoother
               .predict(DateTime.now().add(_nativeRenderPredictionLead))
               .heading;
-          final delta = _angleDiff(_camToHeading, predHeading).abs();
+        }
+        if (targetHeading != null) {
+          final delta = _angleDiff(_camToHeading, targetHeading).abs();
           // Mikro-Jitter (<0,6°) ignorieren — sonst zappelt die Karte im Stand.
           if (delta >= 0.6) {
-            _camToHeading = predHeading;
-            _lastCameraHeading = predHeading;
+            _camToHeading = targetHeading;
+            _lastCameraHeading = targetHeading;
           }
         }
       }
@@ -5832,13 +5838,22 @@ class _CruiseModePageState extends State<CruiseModePage>
     // alle anderen Modi bekommen maximal 3 km aktiv plus dezente Preview.
     // In der Preview (noch nicht bestätigt) bleibt _routeLatLngs, damit die
     // Reveal-Animation (2→voll) sichtbar bleibt.
-    final activePts = (!_isOverviewActive && _routeLatLngs.length >= 2)
-        ? (canUseLiveRouteWindow
-              ? _brightAheadLatLngs
-              : (_isRouteConfirmed
-                    ? _activeRouteFallbackPointsForNavigation()
-                    : _routeLatLngs))
-        : _fullRouteBackgroundLatLngs;
+    // 2026-06-21 (vucko Geräte-Video „Luftlinie zur alten Linie beim Reroute"):
+    // Während aktiver Neuberechnung NIE eine Linie zeichnen. Vorher hing die
+    // aktive Quelle den Live-Puck-Kopf an die ALTE Routengeometrie → eine gerade
+    // Luftlinie quer über Felder vom Puck zur seitlich liegenden alten Route.
+    // Im Folgemodus (nicht Übersicht) blenden wir sie aus, bis die neue Route
+    // committet ist; das ehrliche „Neuberechnung"-Banner erklärt den Zustand.
+    final hideLineForReroute = _isReroutingBannerActive && !_isOverviewActive;
+    final activePts = hideLineForReroute
+        ? const <LatLng>[]
+        : (!_isOverviewActive && _routeLatLngs.length >= 2)
+            ? (canUseLiveRouteWindow
+                  ? _brightAheadLatLngs
+                  : (_isRouteConfirmed
+                        ? _activeRouteFallbackPointsForNavigation()
+                        : _routeLatLngs))
+            : _fullRouteBackgroundLatLngs;
     return CruiseMapLibreMap(
       initialCenter: _stableInitialCenter!,
       initialZoom: _stableInitialZoom!,
@@ -5969,7 +5984,10 @@ class _CruiseModePageState extends State<CruiseModePage>
     // „es geht weiter" an, waehrend die aktive Quelle nur das volle
     // 3km-Fenster zeigt. 200m-Gate: ihr Anfang liegt unter dem bright-Fenster
     // und ist unsichtbar, darum sind seltene Pushes voellig ausreichend.
-    if (_isRouteConfirmed && !_isOverviewActive) {
+    // 2026-06-21 (vucko Reroute-Luftlinie): auch die dezente Vorschau-Linie
+    // während aktiver Neuberechnung ausblenden — sonst zeichnet sie denselben
+    // Off-Road-Verbinder zur alten Route.
+    if (_isRouteConfirmed && !_isOverviewActive && !_isReroutingBannerActive) {
       final previewPts = _dimRemainingLatLngs.length >= 2
           ? _dimRemainingLatLngs
           : _directPointToPointShowsFullActiveRoute
@@ -6954,10 +6972,11 @@ class _CruiseModePageState extends State<CruiseModePage>
   }
 
   Widget _buildLocationPuck(double headingDegrees) {
-    if (!kIsWeb && Platform.isIOS) {
-      return _buildiOSLocationPuck(headingDegrees);
-    }
-    return _buildDefaultLocationPuck(headingDegrees);
+    // 2026-06-21 (vucko Geräte-Video „Puck wie iOS, keine zwei Ringe"): auf
+    // ALLEN Plattformen der saubere Apple-Maps-Punkt. Der frühere Android-Puck
+    // (_buildDefaultLocationPuck) legte einen großen transluzenten blauen
+    // Accuracy-Halo um den Punkt → wirkte wie zwei Ringe. Weg damit.
+    return _buildiOSLocationPuck(headingDegrees);
   }
 
   /// iOS Puck: reiner blauer Punkt, KEIN Richtungspfeil.
@@ -6970,58 +6989,6 @@ class _CruiseModePageState extends State<CruiseModePage>
       width: 44,
       height: 44,
       child: CustomPaint(size: Size(44, 44), painter: _AppleMapsPuckPainter()),
-    );
-  }
-
-  /// Standard-Puck für Web / Android / macOS (bisheriges Design).
-  Widget _buildDefaultLocationPuck(double headingDegrees) {
-    return SizedBox(
-      width: 80,
-      height: 80,
-      child: Stack(
-        alignment: Alignment.center,
-        children: [
-          // Äußerer Genauigkeits-Pulse (halbtransparenter Ring)
-          Container(
-            width: 52,
-            height: 52,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: const Color(0xFF007AFF).withValues(alpha: 0.12),
-              border: Border.all(
-                color: const Color(0xFF007AFF).withValues(alpha: 0.25),
-                width: 1.5,
-              ),
-            ),
-          ),
-          // 2026-06-13 (vucko J5): Richtungspfeil entfernt — reiner Punkt.
-          // Weißer Ring mit Schatten
-          Container(
-            width: 22,
-            height: 22,
-            decoration: const BoxDecoration(
-              color: Colors.white,
-              shape: BoxShape.circle,
-              boxShadow: [
-                BoxShadow(
-                  color: Color(0x50000000),
-                  blurRadius: 6,
-                  spreadRadius: 1,
-                ),
-              ],
-            ),
-          ),
-          // Blauer Kern
-          Container(
-            width: 15,
-            height: 15,
-            decoration: const BoxDecoration(
-              color: Color(0xFF007AFF),
-              shape: BoxShape.circle,
-            ),
-          ),
-        ],
-      ),
     );
   }
 
@@ -8858,6 +8825,55 @@ class _CruiseModePageState extends State<CruiseModePage>
         math.cos(phi1) * math.sin(phi2) -
         math.sin(phi1) * math.cos(phi2) * math.cos(dLng);
     return (math.atan2(y, x) * 180.0 / math.pi + 360.0) % 360.0;
+  }
+
+  /// 2026-06-21 (vucko Geräte-Video „Route immer leicht geneigt"): Kamera-Bearing
+  /// aus der ROUTEN-TANGENTE statt aus dem verrauschten GPS-Kurs. Schaut von der
+  /// route-gesnappten Render-Position [head] ~[lookAheadMeters] entlang der Route
+  /// voraus und liefert die Richtung dorthin → die befahrene Straße zeigt im
+  /// Display senkrecht nach oben (wie Apple/Google). Liefert null bei Off-Route
+  /// oder zu kurzer Restroute (dann GPS-Heading-Fallback).
+  double? _routeTangentCameraBearing(LatLng head, {double lookAheadMeters = 30.0}) {
+    if (_offRouteSince != null) return null;
+    final coords = _fullRouteCoordinates;
+    if (coords.length < 2) return null;
+    final idx = _currentRouteIndex.clamp(0, coords.length - 2).toInt();
+    var acc = 0.0;
+    var prevLat = head.latitude;
+    var prevLng = head.longitude;
+    double? aheadLat;
+    double? aheadLng;
+    for (var i = idx + 1; i < coords.length; i++) {
+      final lat = coords[i][1];
+      final lng = coords[i][0];
+      final d = geo.Geolocator.distanceBetween(prevLat, prevLng, lat, lng);
+      if (!d.isFinite || d <= 0) {
+        prevLat = lat;
+        prevLng = lng;
+        continue;
+      }
+      if (acc + d >= lookAheadMeters) {
+        final f = ((lookAheadMeters - acc) / d).clamp(0.0, 1.0);
+        aheadLat = prevLat + (lat - prevLat) * f;
+        aheadLng = prevLng + (lng - prevLng) * f;
+        break;
+      }
+      acc += d;
+      prevLat = lat;
+      prevLng = lng;
+      aheadLat = lat;
+      aheadLng = lng;
+    }
+    if (aheadLat == null || aheadLng == null) return null;
+    final dist = geo.Geolocator.distanceBetween(
+      head.latitude,
+      head.longitude,
+      aheadLat,
+      aheadLng,
+    );
+    // Zu kurzer Vorlauf → unzuverlässige Tangente, lieber GPS-Fallback.
+    if (dist < 5.0) return null;
+    return _bearingDegrees(head.latitude, head.longitude, aheadLat, aheadLng);
   }
 
   bool _isApproachingCurrentDestination(geo.Position position) {
@@ -13259,19 +13275,12 @@ class _CruiseModePageState extends State<CruiseModePage>
             _clearAccessLegState();
             _sessionRouteStartIndexInActiveRoute = 0;
 
-            if (mounted) {
-              // 2026-06-20 (vucko Gruppen-Video): Reroute-Bestätigung als TOP-Toast
-              // statt Bottom-SnackBar — die SnackBar verdeckte sonst ~2s lang die
-              // Pause/Beenden-Buttons (genau nach dem Reroute). Wording gruppen-
-              // bewusst: ein Follower bekommt die LEADER-Route, nicht „seine" zum Ziel.
-              TopToast.show(
-                context,
-                message: widget.groupId != null
-                    ? 'Gruppen-Route aktualisiert'
-                    : 'Neue Strecke zum Ziel wurde übernommen.',
-                icon: Icons.alt_route_rounded,
-              );
-            }
+            // 2026-06-21 (vucko Geräte-Video „Doppelbanner"): KEIN Reroute-Toast
+            // mehr. Der frühere „Gruppen-Route aktualisiert"/„Neue Strecke"-Top-
+            // Toast lag über dem Manöver-Banner (beide oben verankert) und kam in
+            // Gruppenfahrten bei jedem Leader-Update — Doppelbanner-Kollision.
+            // Die neu gezeichnete Linie + das aktualisierte Manöver-Banner sind
+            // die Rückmeldung (wie Apple/Google, die Reroutes nicht toasten).
             return true;
           }
         }

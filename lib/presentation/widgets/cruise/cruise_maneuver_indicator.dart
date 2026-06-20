@@ -388,7 +388,6 @@ class _RoundaboutPainter extends CustomPainter {
   static const Color _road = Color(0xFF3A3A42);
   static const Color _island = Color(0xFF101013);
   static const Color _islandEdge = Color(0xFF3A3A42);
-  static const Color _chevron = Color(0xFF4A4A54);
 
   // Kompass-Grad → Punkt (0=oben). dir steckt in ringArc.
   Offset _polar(Offset c, double r, double deg) {
@@ -428,125 +427,90 @@ class _RoundaboutPainter extends CustomPainter {
       );
   }
 
-  bool _isPathArm(double a) => _near(a, entryDeg) || _near(a, exitDeg);
-
-  static bool _near(double a, double b) {
-    var d = (a - b).abs() % 360.0;
-    if (d > 180) d = 360 - d;
-    return d < 1.0;
-  }
-
+  // 2026-06-21 (vucko Geräte-Video „Kreisverkehr sieht katastrophal aus"):
+  // KOMPLETT vereinfacht auf das klare Apple-/Google-Schema. Vorher: grauer
+  // Arm-Kranz + 6 Chevrons + Fadenkreuz-Mitte → bei 50px ein unleserlicher
+  // „durchgestrichener Kreis". Jetzt nur noch: neutraler Ring + die GENOMMENE
+  // Route in Akzent (Einfahrt unten → Bogen → großer Ausfahrt-Pfeil). Immer
+  // sauber lesbar, unabhängig von der (oft unsicheren) Arm-Topologie.
   @override
   void paint(Canvas canvas, Size size) {
     final s = size.width;
     final c = Offset(s / 2, s / 2);
 
-    final outerR = s * 0.27;
-    final innerR = math.max(s * 0.06, s * 0.135 * islandScale);
-    final laneR = (outerR + innerR) / 2;
-    final roadBand = outerR - innerR;
-    final armLen = s * 0.2 * armLenF;
-    final armW = math.max(s * 0.07, roadBand * 0.9);
-    final travelW = roadBand * 0.62;
+    final ringR = s * 0.255; // Mittellinie der Kreisbahn
+    final ringW = s * 0.11; // Bandbreite der Kreisbahn
+    final islandR = math.max(s * 0.055, s * 0.075 * islandScale);
+    final stub = s * 0.205 * armLenF.clamp(0.8, 1.2); // Ein-/Ausfahrt-Länge
+    final travelW = s * 0.105; // Strichbreite der genommenen Route
+    final arrowS = s * 0.092; // Größe Ausfahrt-Pfeil
 
-    // Aktiv-Glow.
+    // Dezenter Aktiv-Glow.
     canvas.drawCircle(
       c,
-      outerR + s * 0.085,
+      ringR + ringW * 0.5 + s * 0.045,
       Paint()
         ..style = PaintingStyle.stroke
-        ..color = accent.withValues(alpha: 0.22)
+        ..color = accent.withValues(alpha: 0.16)
         ..strokeWidth = s * 0.02,
     );
 
-    // Alle Arme (Straßen) — Pfad-Arme (Einfahrt/Ausfahrt) in Akzent, sonst grau.
-    for (final a in armsDeg) {
-      final inner = _polar(c, outerR - s * 0.005, a);
-      final outer = _polar(c, outerR + armLen, a);
-      final path = _isPathArm(a);
-      canvas.drawLine(
-        inner,
-        outer,
-        Paint()
-          ..style = PaintingStyle.stroke
-          ..strokeCap = StrokeCap.round
-          ..strokeWidth = armW
-          ..color = path ? accent : _road.withValues(alpha: 0.85),
-      );
-    }
-
-    // Kreisring (Fahrbahn).
+    // Neutrale Kreisbahn (die Straße des Kreisverkehrs).
     canvas.drawCircle(
       c,
-      laneR,
+      ringR,
       Paint()
         ..style = PaintingStyle.stroke
-        ..color = _road.withValues(alpha: 0.85)
-        ..strokeWidth = roadBand,
+        ..color = _road
+        ..strokeWidth = ringW,
     );
 
-    // Richtungs-Chevrons (Fahrtrichtung gegen den Uhrzeigersinn).
-    for (final a in const [0.0, 60.0, 120.0, 180.0, 240.0, 300.0]) {
-      final p = _polar(c, laneR, a);
-      canvas.drawPath(
-        _arrowHead(p, a - 90, s * 0.032),
-        Paint()
-          ..color = _chevron.withValues(alpha: 0.5)
-          ..style = PaintingStyle.fill,
-      );
-    }
+    // ── Genommene Route in Akzent ──────────────────────────────────────────
+    final route = Paint()
+      ..color = accent
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round
+      ..strokeWidth = travelW;
 
-    // Mittelinsel.
-    canvas.drawCircle(c, innerR, Paint()..color = _island);
+    // Einfahrt-Stummel von außen (unten) an die Kreisbahn.
+    canvas.drawLine(
+      _polar(c, ringR + stub, entryDeg),
+      _polar(c, ringR, entryDeg),
+      route,
+    );
+    // Bogen auf der Kreisbahn (DACH = gegen den Uhrzeigersinn).
+    canvas.drawPath(_ringArc(c, ringR, entryDeg, exitDeg), route);
+    // Ausfahrt-Stummel von der Kreisbahn nach außen.
+    canvas.drawLine(
+      _polar(c, ringR, exitDeg),
+      _polar(c, ringR + stub, exitDeg),
+      route,
+    );
+
+    // Mittelinsel über der Bahn.
+    canvas.drawCircle(c, islandR, Paint()..color = _island);
     canvas.drawCircle(
       c,
-      innerR,
+      islandR,
       Paint()
         ..style = PaintingStyle.stroke
         ..color = _islandEdge
         ..strokeWidth = s * 0.012,
     );
 
-    // ── Genommene Route (Akzent): Einfahrt-Stub → Bogen → Ausfahrt-Stub ──────
-    final route = Paint()
-      ..color = accent
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round
-      ..strokeWidth = travelW;
-    canvas.drawLine(
-      _polar(c, outerR + armLen, entryDeg),
-      _polar(c, laneR, entryDeg),
-      route,
-    );
-    canvas.drawPath(_ringArc(c, laneR, entryDeg, exitDeg), route);
-    canvas.drawLine(
-      _polar(c, laneR, exitDeg),
-      _polar(c, outerR + armLen * 0.78, exitDeg),
-      route,
-    );
-
-    // Einfahrt-Pfeil (zeigt in den Kreisel hinein).
-    canvas.drawPath(
-      _arrowHead(
-        _polar(c, outerR + armLen * 0.45, entryDeg),
-        _wrap360(entryDeg + 180),
-        s * 0.06,
-      ),
-      Paint()..color = accent,
-    );
-
-    // Ausfahrt-Pfeil — oder Ziel-Pin bei Ankunft direkt am Kreisel.
-    final exitTip = _polar(c, outerR + armLen, exitDeg);
+    // Ausfahrt — großer Pfeil (oder Ziel-Pin bei Ankunft am Kreisel).
+    final exitTip = _polar(c, ringR + stub, exitDeg);
     if (arrival) {
-      canvas.drawCircle(exitTip, s * 0.075, Paint()..color = accent);
+      canvas.drawCircle(exitTip, s * 0.085, Paint()..color = accent);
       canvas.drawCircle(
         exitTip,
-        s * 0.032,
+        s * 0.036,
         Paint()..color = const Color(0xFFF4F4F6),
       );
     } else {
       canvas.drawPath(
-        _arrowHead(exitTip, exitDeg, s * 0.075),
+        _arrowHead(exitTip, exitDeg, arrowS),
         Paint()..color = accent,
       );
     }
