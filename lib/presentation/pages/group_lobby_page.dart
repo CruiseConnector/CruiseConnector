@@ -163,6 +163,19 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
     _enterNavigation();
   }
 
+  // 2026-06-20 (vucko Gruppen-Audit): Crash-sicherer Mitglieder-Name. Ein LEERER
+  // (nicht null) displayName liess `''.characters.first` werfen → Lobby-Tile-Crash.
+  // Null UND Leerstring werden jetzt sauber abgefangen.
+  static String _memberInitial(String? name) {
+    final n = (name ?? '').trim();
+    return n.isEmpty ? '?' : n.characters.first.toUpperCase();
+  }
+
+  static String _memberName(String? name) {
+    final n = (name ?? '').trim();
+    return n.isEmpty ? 'User' : n;
+  }
+
   Future<void> _startRoute() async {
     if (_starting) return;
     // Owner startet bewusst → evtl. alten Suppress-Flag aufheben.
@@ -683,7 +696,7 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
                   radius: 18,
                 ),
                 child: Text(
-                  (m.displayName ?? '?').characters.first.toUpperCase(),
+                  _memberInitial(m.displayName),
                   style: const TextStyle(color: Colors.white),
                 ),
               ),
@@ -695,7 +708,7 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(
-                    '${m.displayName ?? 'User'}${isMe ? ' (Du)' : ''}',
+                    '${_memberName(m.displayName)}${isMe ? ' (Du)' : ''}',
                     style: const TextStyle(color: Colors.white),
                   ),
                   const SizedBox(height: 4),
