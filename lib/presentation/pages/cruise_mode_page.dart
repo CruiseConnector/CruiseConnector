@@ -9599,17 +9599,12 @@ class _CruiseModePageState extends State<CruiseModePage>
       _clearAccessLegState();
     });
     if (mounted) {
-      ScaffoldMessenger.of(context)
-        ..hideCurrentSnackBar()
-        ..showSnackBar(
-          const SnackBar(
-            content: Text(
-              'Hauptroute erreicht. Navigation läuft normal weiter.',
-            ),
-            backgroundColor: Colors.green,
-            duration: Duration(seconds: 2),
-          ),
-        );
+      // 2026-06-20 (vucko Gruppen-Video): Top-Toast statt Bottom-SnackBar, damit
+      // die Meldung die Pause/Beenden-Buttons während der Fahrt nicht verdeckt.
+      TopToast.show(
+        context,
+        message: 'Hauptroute erreicht. Navigation läuft normal weiter.',
+      );
     }
   }
 
@@ -9791,17 +9786,13 @@ class _CruiseModePageState extends State<CruiseModePage>
     });
 
     if (mounted) {
-      ScaffoldMessenger.of(context)
-        ..hideCurrentSnackBar()
-        ..showSnackBar(
-          const SnackBar(
-            content: Text(
-              'Anfahrts-Abschnitt aktiv. Danach geht es auf die gespeicherte Route.',
-            ),
-            backgroundColor: Color(0xFF0A84FF),
-            duration: Duration(seconds: 2),
-          ),
-        );
+      // 2026-06-20 (vucko Gruppen-Video): Top-Toast statt Bottom-SnackBar — nicht
+      // über die Pause/Beenden-Buttons legen.
+      TopToast.show(
+        context,
+        message: 'Anfahrts-Abschnitt aktiv. Danach geht es auf die gespeicherte Route.',
+        icon: Icons.route_rounded,
+      );
     }
   }
 
@@ -13269,15 +13260,17 @@ class _CruiseModePageState extends State<CruiseModePage>
             _sessionRouteStartIndexInActiveRoute = 0;
 
             if (mounted) {
-              ScaffoldMessenger.of(context)
-                ..hideCurrentSnackBar()
-                ..showSnackBar(
-                  const SnackBar(
-                    content: Text('Neue Strecke zum Ziel wurde übernommen.'),
-                    backgroundColor: Colors.green,
-                    duration: Duration(seconds: 2),
-                  ),
-                );
+              // 2026-06-20 (vucko Gruppen-Video): Reroute-Bestätigung als TOP-Toast
+              // statt Bottom-SnackBar — die SnackBar verdeckte sonst ~2s lang die
+              // Pause/Beenden-Buttons (genau nach dem Reroute). Wording gruppen-
+              // bewusst: ein Follower bekommt die LEADER-Route, nicht „seine" zum Ziel.
+              TopToast.show(
+                context,
+                message: widget.groupId != null
+                    ? 'Gruppen-Route aktualisiert'
+                    : 'Neue Strecke zum Ziel wurde übernommen.',
+                icon: Icons.alt_route_rounded,
+              );
             }
             return true;
           }
