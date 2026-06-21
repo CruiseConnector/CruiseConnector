@@ -674,6 +674,11 @@ class _CruiseModePageState extends State<CruiseModePage>
   // shown = angezeigte Position (lng,lat), target = letzte empfangene.
   final Map<String, List<double>> _peerShownPos = {};
   final Map<String, List<double>> _peerTargetPos = {};
+  // Zeitstempel (ms) + Geschwindigkeit [vlng,vlat] deg/s je Peer für
+  // Dead-Reckoning-Extrapolation zwischen Updates.
+  final Map<String, int> _peerFixTimeMs = {};
+  final Map<String, List<double>> _peerVelDegPerSec = {};
+  String? _myUserId;
   Timer? _peerAnimTimer;
   Timer? _groupRouteBackfillTimer;
   Timer? _groupRouteReconnectTimer;
@@ -696,7 +701,16 @@ class _CruiseModePageState extends State<CruiseModePage>
   int _groupRouteRevision = 0;
   Map<String, dynamic>? _activeGroupRouteData;
   final Map<String, GroupMember> _groupMembers = {};
-  static const Duration _groupPositionUploadInterval = Duration(seconds: 2);
+  static const Duration _groupPositionUploadInterval = Duration(seconds: 1);
+  // Peer-Sync „maximal synchron" (2026-06-21): Peer wird wie der eigene Puck
+  // per Dead-Reckoning vorausgerechnet + schneller geglättet, Position kommt
+  // primär per Broadcast (Fast-Path) und wird auf die Route projiziert.
+  static const double _peerEaseFactor =
+      0.22; // war 0.08 (schnellere Konvergenz)
+  static const double _peerExtrapMaxSeconds = 3.0; // höchstens 3s vorausrechnen
+  static const double _peerExtrapMaxMeters = 60.0; // Deckel gegen Runaway
+  static const double _peerRouteSnapMeters =
+      25.0; // auf Route snappen wenn ≤25m
   // 2026-06-20 (vucko Gruppen-Reroute-Sync): Backfill 15s→5s und Reconnect 3s→1s.
   // Realtime ist der Primärpfad (sub-Sekunde), aber wenn der Channel nach einem
   // Netz-Blip „silent dead" ist, ist der Backfill das EINZIGE Sicherheitsnetz,
@@ -2525,6 +2539,7 @@ class _CruiseModePageState extends State<CruiseModePage>
 
   void _startGroupMembersRealtime(String groupId, String? meId) {
     _groupMembersCh?.unsubscribe();
+    _myUserId = meId;
     _groupMembersCh = CruiseGroupService.subscribeMembers(
       groupId,
       (row) {
@@ -2547,6 +2562,7 @@ class _CruiseModePageState extends State<CruiseModePage>
         );
         if (removed) _safeSetState(() {});
       },
+      onBroadcastPosition: (payload) => _onPeerBroadcast(payload, meId),
       onStatus: (status, _) {
         if (!mounted || _disposed) return;
         if (status == RealtimeSubscribeStatus.subscribed) {
@@ -2589,24 +2605,55 @@ class _CruiseModePageState extends State<CruiseModePage>
     _groupMembersBackfillTimer?.cancel();
     _groupMembersFreshnessTimer?.cancel();
     _peerAnimTimer?.cancel();
-    // 20Hz-Glaettung: exponentielles Nachziehen (~1.2s Konvergenz, passend
-    // zum 2s-Upload-Takt) -> butterweiche Peer-Bewegung wie beim eigenen Puck.
+    // 20Hz: Peer wird wie der eigene Puck per Dead-Reckoning auf JETZT
+    // vorausgerechnet (Anker + Tempo×Zeit, gedeckelt) und schnell dorthin
+    // geglättet — so steht er dort, wo er aktuell real ist, statt ~2s/100m
+    // hinter dem letzten Upload.
     _peerAnimTimer = Timer.periodic(const Duration(milliseconds: 50), (_) {
       if (!mounted || _disposed || _peerTargetPos.isEmpty) return;
+      final nowMs = DateTime.now().millisecondsSinceEpoch;
       var moved = false;
-      _peerTargetPos.forEach((uid, target) {
+      _peerTargetPos.forEach((uid, anchor) {
         final shown = _peerShownPos[uid];
         if (shown == null) {
-          _peerShownPos[uid] = [target[0], target[1]];
+          _peerShownPos[uid] = [anchor[0], anchor[1]];
           moved = true;
           return;
         }
-        final dLng = target[0] - shown[0];
-        final dLat = target[1] - shown[1];
-        // ~0.5m-Schwelle (grob in Grad) -> konvergiert: nichts tun.
-        if (dLng.abs() < 0.000005 && dLat.abs() < 0.000005) return;
-        shown[0] += dLng * 0.08;
-        shown[1] += dLat * 0.08;
+        var tgtLng = anchor[0];
+        var tgtLat = anchor[1];
+        final vel = _peerVelDegPerSec[uid];
+        final tFix = _peerFixTimeMs[uid];
+        if (vel != null && tFix != null) {
+          final dt = ((nowMs - tFix) / 1000.0).clamp(
+            0.0,
+            _peerExtrapMaxSeconds,
+          );
+          if (dt > 0) {
+            final exLng = anchor[0] + vel[0] * dt;
+            final exLat = anchor[1] + vel[1] * dt;
+            final exMeters = geo.Geolocator.distanceBetween(
+              anchor[1],
+              anchor[0],
+              exLat,
+              exLng,
+            );
+            if (exMeters <= _peerExtrapMaxMeters || exMeters < 0.01) {
+              tgtLng = exLng;
+              tgtLat = exLat;
+            } else {
+              final s = _peerExtrapMaxMeters / exMeters;
+              tgtLng = anchor[0] + (exLng - anchor[0]) * s;
+              tgtLat = anchor[1] + (exLat - anchor[1]) * s;
+            }
+          }
+        }
+        final dLng = tgtLng - shown[0];
+        final dLat = tgtLat - shown[1];
+        // ~0.05m-Schwelle (grob in Grad) -> konvergiert: nichts tun.
+        if (dLng.abs() < 0.0000005 && dLat.abs() < 0.0000005) return;
+        shown[0] += dLng * _peerEaseFactor;
+        shown[1] += dLat * _peerEaseFactor;
         moved = true;
       });
       if (moved) _safeSetState(() {});
@@ -2713,11 +2760,162 @@ class _CruiseModePageState extends State<CruiseModePage>
     final lat = merged.currentLat;
     final lng = merged.currentLng;
     if (lat != null && lng != null) {
-      _peerTargetPos[incoming.userId] = [lng, lat];
-      // Erste Position: direkt setzen (kein Anflug quer ueber die Karte).
-      _peerShownPos.putIfAbsent(incoming.userId, () => [lng, lat]);
+      _setPeerFix(
+        incoming.userId,
+        lng: lng,
+        lat: lat,
+        tMs:
+            merged.lastUpdatedAt?.millisecondsSinceEpoch ??
+            DateTime.now().millisecondsSinceEpoch,
+      );
     }
     return true;
+  }
+
+  /// Nimmt einen neuen Peer-Fix auf (aus DB-Realtime ODER Broadcast).
+  /// Reihenfolge-Guard (kein Rückwärts-Sprung dedupt Broadcast↔DB), leitet bei
+  /// Bedarf die Geschwindigkeit aus zwei aufeinanderfolgenden Fixes ab und
+  /// setzt Anker + Zeit + Velocity. Der _peerAnimTimer rechnet daraus pro Frame
+  /// die aktuelle Position voraus (Dead-Reckoning wie der eigene Puck).
+  void _setPeerFix(
+    String uid, {
+    required double lng,
+    required double lat,
+    required int tMs,
+    List<double>? velDegPerSec,
+  }) {
+    final prevT = _peerFixTimeMs[uid];
+    if (prevT != null && tMs <= prevT) return; // veraltet/Duplikat
+    if (velDegPerSec == null) {
+      final prevAnchor = _peerTargetPos[uid];
+      if (prevAnchor != null && prevT != null) {
+        final dt = (tMs - prevT) / 1000.0;
+        if (dt > 0.2 && dt < 6.0) {
+          velDegPerSec = [
+            (lng - prevAnchor[0]) / dt,
+            (lat - prevAnchor[1]) / dt,
+          ];
+        }
+      }
+    }
+    _peerTargetPos[uid] = [lng, lat];
+    _peerFixTimeMs[uid] = tMs;
+    if (velDegPerSec != null) _peerVelDegPerSec[uid] = velDegPerSec;
+    // Erste Position: direkt setzen (kein Anflug quer über die Karte).
+    _peerShownPos.putIfAbsent(uid, () => [lng, lat]);
+  }
+
+  /// m/s + Heading → [vlng, vlat] in Grad/Sekunde (für sofortige Extrapolation
+  /// aus EINEM Broadcast, ohne auf zwei Fixes warten zu müssen).
+  List<double> _peerVelFromSpeedHeading(
+    double speedMps,
+    double headingDeg,
+    double lat,
+  ) {
+    if (!speedMps.isFinite ||
+        speedMps <= 0.3 ||
+        !headingDeg.isFinite ||
+        headingDeg < 0) {
+      return const [0.0, 0.0];
+    }
+    final rad = headingDeg * math.pi / 180.0;
+    const metersPerDegLat = 111320.0;
+    final metersPerDegLng = 111320.0 * math.cos(lat * math.pi / 180.0);
+    final north = speedMps * math.cos(rad);
+    final east = speedMps * math.sin(rad);
+    return [
+      metersPerDegLng.abs() < 1e-6 ? 0.0 : east / metersPerDegLng,
+      north / metersPerDegLat,
+    ];
+  }
+
+  /// Verarbeitet einen Live-Positions-Broadcast eines Peers (Fast-Path).
+  void _onPeerBroadcast(Map<String, dynamic> payload, String? meId) {
+    if (!mounted || _disposed) return;
+    final inner = payload['payload'];
+    final m = inner is Map
+        ? Map<String, dynamic>.from(inner)
+        : Map<String, dynamic>.from(payload);
+    final uid = m['user_id'] as String?;
+    if (uid == null || uid == meId) return;
+    final lat = (m['lat'] as num?)?.toDouble();
+    final lng = (m['lng'] as num?)?.toDouble();
+    final tMs = (m['t'] as num?)?.toInt();
+    if (lat == null || lng == null || tMs == null) return;
+    if (!lat.isFinite || !lng.isFinite) return;
+    final member = _groupMembers[uid];
+    if (member == null) return; // erst rendern, wenn die DB-Row da ist
+    final speed = (m['speed'] as num?)?.toDouble();
+    final heading = (m['heading'] as num?)?.toDouble();
+    final vel = (speed != null && heading != null)
+        ? _peerVelFromSpeedHeading(speed, heading, lat)
+        : null;
+    _lastGroupRealtimeEventAt = DateTime.now();
+    _groupMembers[uid] = member.copyWith(
+      currentLat: lat,
+      currentLng: lng,
+      lastUpdatedAt: DateTime.fromMillisecondsSinceEpoch(tMs, isUtc: true),
+    );
+    _setPeerFix(uid, lng: lng, lat: lat, tMs: tMs, velDegPerSec: vel);
+    _safeSetState(() {});
+  }
+
+  /// Aktuelle Render-Position eines Peers: geglättet+extrapoliert (_peerShownPos)
+  /// und — wenn nah genug — auf die gemeinsame Route projiziert, damit Peer und
+  /// eigener Puck auf DERSELBEN Linie liegen.
+  LatLng _peerRenderPoint(String uid, GroupMember m) {
+    final shown = _peerShownPos[uid];
+    final base = shown != null
+        ? LatLng(shown[1], shown[0])
+        : LatLng(m.currentLat!, m.currentLng!);
+    return _projectPeerOntoRoute(base) ?? base;
+  }
+
+  /// Projiziert eine Peer-Position auf die aktive Routen-Geometrie, WENN sie
+  /// ≤_peerRouteSnapMeters dran ist (sonst null = Rohpunkt). Konservativ: ein
+  /// off-route-Peer wird NIE auf die Linie teleportiert.
+  LatLng? _projectPeerOntoRoute(LatLng p) {
+    if (widget.groupId == null) return null;
+    final pts = _routeLatLngs;
+    if (pts.length < 2) return null;
+    final cosLat = math.cos(p.latitude * math.pi / 180.0);
+    final px = p.longitude * cosLat;
+    final py = p.latitude;
+    var best2 = double.infinity;
+    var bestLng = 0.0;
+    var bestLat = 0.0;
+    for (var i = 0; i < pts.length - 1; i++) {
+      final a = pts[i];
+      final b = pts[i + 1];
+      final ax = a.longitude * cosLat;
+      final ay = a.latitude;
+      final bx = b.longitude * cosLat;
+      final by = b.latitude;
+      final dx = bx - ax;
+      final dy = by - ay;
+      final segLen2 = dx * dx + dy * dy;
+      var t = segLen2 <= 0 ? 0.0 : ((px - ax) * dx + (py - ay) * dy) / segLen2;
+      if (t < 0) t = 0;
+      if (t > 1) t = 1;
+      final qx = ax + dx * t;
+      final qy = ay + dy * t;
+      final ddx = px - qx;
+      final ddy = py - qy;
+      final d2 = ddx * ddx + ddy * ddy;
+      if (d2 < best2) {
+        best2 = d2;
+        bestLng = cosLat.abs() < 1e-9 ? p.longitude : qx / cosLat;
+        bestLat = qy;
+      }
+    }
+    if (!best2.isFinite) return null;
+    final meters = geo.Geolocator.distanceBetween(
+      p.latitude,
+      p.longitude,
+      bestLat,
+      bestLng,
+    );
+    return meters <= _peerRouteSnapMeters ? LatLng(bestLat, bestLng) : null;
   }
 
   bool _sameGroupMemberState(GroupMember a, GroupMember b) {
@@ -2778,6 +2976,9 @@ class _CruiseModePageState extends State<CruiseModePage>
     if (widget.groupId == null) return;
     final pos = _userPosition;
     if (pos == null) return;
+    // Fast-Path: Broadcast (kein DB-Roundtrip) — sub-Sekunde, auch wenn der
+    // DB-Write gerade hängt. Tempo+Heading gehen mit, damit Peers extrapolieren.
+    _broadcastMyPosition(pos);
     // 2026-06-10 (vucko Find-My-Härtung): Bei kaputtem Netz hingen die
     // 2s-Uploads ohne Timeout minutenlang und stauten sich — der eigene
     // Standort alterte für ALLE Mitfahrer ("man sieht sich nicht mehr").
@@ -2796,6 +2997,26 @@ class _CruiseModePageState extends State<CruiseModePage>
     } finally {
       _positionUploadInFlight = false;
     }
+  }
+
+  void _broadcastMyPosition(LatLng pos) {
+    final ch = _groupMembersCh;
+    final uid = _myUserId;
+    if (ch == null || uid == null) return;
+    // Tempo/Heading vom Smoother bzw. GPS-Heading mitschicken, damit Peers
+    // sofort extrapolieren können (sonst leiten sie es aus 2 Fixes ab).
+    final speed = _nativeSmoother.speed;
+    unawaited(
+      CruiseGroupService.broadcastPosition(
+        ch,
+        userId: uid,
+        lat: pos.latitude,
+        lng: pos.longitude,
+        tMs: DateTime.now().toUtc().millisecondsSinceEpoch,
+        speed: speed.isFinite && speed > 0 ? speed : null,
+        heading: _userHeading.isFinite ? _userHeading : null,
+      ),
+    );
   }
 
   void _onPendingRoute() {
@@ -4062,67 +4283,67 @@ class _CruiseModePageState extends State<CruiseModePage>
         _handleActiveRouteBack();
       },
       child: Scaffold(
-      backgroundColor: const Color(0xFF0B0E14),
-      body: Stack(
-        children: [
-          // Map IMMER an gleicher Stelle im Widget-Tree (verhindert Neu-Erstellung)
-          // RepaintBoundary isoliert Canvas-Repaints vom Rest der UI (Web-Performance).
-          Positioned.fill(child: RepaintBoundary(child: _buildMapWidget())),
+        backgroundColor: const Color(0xFF0B0E14),
+        body: Stack(
+          children: [
+            // Map IMMER an gleicher Stelle im Widget-Tree (verhindert Neu-Erstellung)
+            // RepaintBoundary isoliert Canvas-Repaints vom Rest der UI (Web-Performance).
+            Positioned.fill(child: RepaintBoundary(child: _buildMapWidget())),
 
-          // Config-Overlay ODER Navigation-Overlay
-          // RepaintBoundary trennt UI-Overlays vom Karten-Repaint (Web-Performance).
-          if (!_isRouteConfirmed)
-            RepaintBoundary(
-              // 2026-05-28 (vucko): Weicher Übergang beim Auf-/Zuklappen statt
-              // hartem setState-Wechsel. Collapsed- und Expanded-Tree haben
-              // distinkte Keys (config_collapsed / config_expanded), der
-              // AnimatedSwitcher faded+slidet zwischen ihnen. Beide Trees sind
-              // bottom-anchored → vertikaler Slide liest sich wie ein
-              // hochfahrendes/absinkendes Sheet.
-              child: AnimatedSwitcher(
-                duration: const Duration(milliseconds: 320),
-                switchInCurve: Curves.easeOutCubic,
-                switchOutCurve: Curves.easeInCubic,
-                transitionBuilder: (child, animation) {
-                  final slide = Tween<Offset>(
-                    begin: const Offset(0, 0.06),
-                    end: Offset.zero,
-                  ).animate(animation);
-                  return FadeTransition(
-                    opacity: animation,
-                    child: SlideTransition(position: slide, child: child),
-                  );
-                },
-                layoutBuilder: (currentChild, previousChildren) => Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    ...previousChildren,
-                    if (currentChild != null) currentChild,
-                  ],
+            // Config-Overlay ODER Navigation-Overlay
+            // RepaintBoundary trennt UI-Overlays vom Karten-Repaint (Web-Performance).
+            if (!_isRouteConfirmed)
+              RepaintBoundary(
+                // 2026-05-28 (vucko): Weicher Übergang beim Auf-/Zuklappen statt
+                // hartem setState-Wechsel. Collapsed- und Expanded-Tree haben
+                // distinkte Keys (config_collapsed / config_expanded), der
+                // AnimatedSwitcher faded+slidet zwischen ihnen. Beide Trees sind
+                // bottom-anchored → vertikaler Slide liest sich wie ein
+                // hochfahrendes/absinkendes Sheet.
+                child: AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 320),
+                  switchInCurve: Curves.easeOutCubic,
+                  switchOutCurve: Curves.easeInCubic,
+                  transitionBuilder: (child, animation) {
+                    final slide = Tween<Offset>(
+                      begin: const Offset(0, 0.06),
+                      end: Offset.zero,
+                    ).animate(animation);
+                    return FadeTransition(
+                      opacity: animation,
+                      child: SlideTransition(position: slide, child: child),
+                    );
+                  },
+                  layoutBuilder: (currentChild, previousChildren) => Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      ...previousChildren,
+                      if (currentChild != null) currentChild,
+                    ],
+                  ),
+                  child: _buildConfigOverlay(),
                 ),
-                child: _buildConfigOverlay(),
               ),
-            ),
-          if (_isRouteConfirmed)
-            RepaintBoundary(child: _buildNavigationOverlay()),
-          // 2026-05-28 (vucko Task #79): Komplette FAB-Spalte auch ohne
-          // Route — verschwindet animiert wenn Setup-Sheet hochgezogen ist.
-          if (!_isRouteConfirmed) _buildFabColumn(hasRoute: false),
-          if (_shouldShowRoundTripSearchStatus)
-            _buildRoundTripSearchStatusOverlay(),
+            if (_isRouteConfirmed)
+              RepaintBoundary(child: _buildNavigationOverlay()),
+            // 2026-05-28 (vucko Task #79): Komplette FAB-Spalte auch ohne
+            // Route — verschwindet animiert wenn Setup-Sheet hochgezogen ist.
+            if (!_isRouteConfirmed) _buildFabColumn(hasRoute: false),
+            if (_shouldShowRoundTripSearchStatus)
+              _buildRoundTripSearchStatusOverlay(),
 
-          // Exit-Button wenn wir als Gruppen-Session gestartet wurden
-          // (sonst ist man in der Fullscreen-Navigation gefangen).
-          if (widget.groupId != null &&
-              !_isRouteConfirmed &&
-              Navigator.canPop(context))
-            Positioned(
-              top: MediaQuery.of(context).padding.top + 12,
-              left: 12,
-              child: _buildExitButton(),
-            ),
-        ],
-      ),
+            // Exit-Button wenn wir als Gruppen-Session gestartet wurden
+            // (sonst ist man in der Fullscreen-Navigation gefangen).
+            if (widget.groupId != null &&
+                !_isRouteConfirmed &&
+                Navigator.canPop(context))
+              Positioned(
+                top: MediaQuery.of(context).padding.top + 12,
+                left: 12,
+                child: _buildExitButton(),
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -5867,12 +6088,12 @@ class _CruiseModePageState extends State<CruiseModePage>
     final activePts = hideLineForReroute
         ? const <LatLng>[]
         : (!_isOverviewActive && _routeLatLngs.length >= 2)
-            ? (canUseLiveRouteWindow
-                  ? _brightAheadLatLngs
-                  : (_isRouteConfirmed
-                        ? _activeRouteFallbackPointsForNavigation()
-                        : _routeLatLngs))
-            : _fullRouteBackgroundLatLngs;
+        ? (canUseLiveRouteWindow
+              ? _brightAheadLatLngs
+              : (_isRouteConfirmed
+                    ? _activeRouteFallbackPointsForNavigation()
+                    : _routeLatLngs))
+        : _fullRouteBackgroundLatLngs;
     return CruiseMapLibreMap(
       initialCenter: _stableInitialCenter!,
       initialZoom: _stableInitialZoom!,
@@ -6150,13 +6371,10 @@ class _CruiseModePageState extends State<CruiseModePage>
       for (final entry in _groupMembers.entries) {
         final m = entry.value;
         if (!_hasGroupMemberLocation(m)) continue;
-        final shown = _peerShownPos[entry.key];
         markers.add(
           CruiseMapMarker(
             id: 'grp-${entry.key}',
-            position: shown != null
-                ? LatLng(shown[1], shown[0])
-                : LatLng(m.currentLat!, m.currentLng!),
+            position: _peerRenderPoint(entry.key, m),
             width: 40,
             height: 40,
             child: _buildGroupMemberMarker(m),
@@ -6455,7 +6673,7 @@ class _CruiseModePageState extends State<CruiseModePage>
                 .where(_hasGroupMemberLocation)
                 .map(
                   (m) => Marker(
-                    point: LatLng(m.currentLat!, m.currentLng!),
+                    point: _peerRenderPoint(m.userId, m),
                     width: 40,
                     height: 40,
                     child: _buildGroupMemberMarker(m),
@@ -8852,7 +9070,10 @@ class _CruiseModePageState extends State<CruiseModePage>
   /// voraus und liefert die Richtung dorthin → die befahrene Straße zeigt im
   /// Display senkrecht nach oben (wie Apple/Google). Liefert null bei Off-Route
   /// oder zu kurzer Restroute (dann GPS-Heading-Fallback).
-  double? _routeTangentCameraBearing(LatLng head, {double lookAheadMeters = 30.0}) {
+  double? _routeTangentCameraBearing(
+    LatLng head, {
+    double lookAheadMeters = 30.0,
+  }) {
     if (_offRouteSince != null) return null;
     final coords = _fullRouteCoordinates;
     if (coords.length < 2) return null;
@@ -9825,7 +10046,8 @@ class _CruiseModePageState extends State<CruiseModePage>
       // über die Pause/Beenden-Buttons legen.
       TopToast.show(
         context,
-        message: 'Anfahrts-Abschnitt aktiv. Danach geht es auf die gespeicherte Route.',
+        message:
+            'Anfahrts-Abschnitt aktiv. Danach geht es auf die gespeicherte Route.',
         icon: Icons.route_rounded,
       );
     }
@@ -14119,7 +14341,9 @@ class _CruiseModePageState extends State<CruiseModePage>
         : _maneuverKindFromInstruction(maneuver.instruction);
     final distanceToManeuver = maneuver == null
         ? null
-        : _leadCompensatedLiveDistance(_displayManeuverDistanceMeters(maneuver));
+        : _leadCompensatedLiveDistance(
+            _displayManeuverDistanceMeters(maneuver),
+          );
     return NavigationLiveActivitySnapshot(
       instruction: instruction,
       maneuverType: kind,

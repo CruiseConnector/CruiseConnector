@@ -254,9 +254,19 @@ class CruiseGroupService {
     String groupId,
     void Function(Map<String, dynamic> row) onChange, {
     void Function(Map<String, dynamic> oldRow)? onDelete,
+    void Function(Map<String, dynamic> payload)? onBroadcastPosition,
     void Function(RealtimeSubscribeStatus status, Object? error)? onStatus,
   }) {
-    final ch = _db.channel('location_sync_$groupId');
+    final ch = _db.channel(
+      'location_sync_$groupId',
+      // self:false → eigene Positions-Broadcasts nicht zurückbekommen.
+      opts: const RealtimeChannelConfig(self: false),
+    );
+    if (onBroadcastPosition != null) {
+      // Schneller Pfad: Live-Position per Broadcast (kein DB-WAL-Roundtrip),
+      // sub-Sekunde statt 2s. Der DB-Upsert bleibt als Persistenz/Backfill.
+      ch.onBroadcast(event: 'grp_pos', callback: onBroadcastPosition);
+    }
     ch.onPostgresChanges(
       event: PostgresChangeEvent.all,
       schema: 'public',
@@ -279,6 +289,33 @@ class CruiseGroupService {
     );
     ch.subscribe(onStatus);
     return ch;
+  }
+
+  /// Sendet die eigene Live-Position als Realtime-Broadcast (Fast-Path, kein
+  /// DB-Roundtrip). Tempo + Heading erlauben dem Empfänger, den Peer-Marker
+  /// zwischen Updates vorauszurechnen (Dead-Reckoning).
+  static Future<void> broadcastPosition(
+    RealtimeChannel channel, {
+    required String userId,
+    required double lat,
+    required double lng,
+    required int tMs,
+    double? speed,
+    double? heading,
+  }) async {
+    try {
+      await channel.sendBroadcastMessage(
+        event: 'grp_pos',
+        payload: {
+          'user_id': userId,
+          'lat': lat,
+          'lng': lng,
+          't': tMs,
+          if (speed != null && speed.isFinite) 'speed': speed,
+          if (heading != null && heading.isFinite) 'heading': heading,
+        },
+      );
+    } catch (_) {}
   }
 
   static Future<void> _attachProfiles(
