@@ -63,4 +63,5 @@ secrets/
 
 # Build/Output Artefakte
 output/
+outputs/
 logs/

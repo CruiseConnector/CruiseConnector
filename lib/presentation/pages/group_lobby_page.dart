@@ -68,6 +68,28 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
           .rideRole ??
       RideRole.passenger;
 
+  void _showLobbySnack(String message, {bool error = false}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          message,
+          style: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+        backgroundColor: error
+            ? const Color(0xFF301B20)
+            : const Color(0xFF171B24),
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(milliseconds: 1350),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      ),
+    );
+  }
+
   @override
   void initState() {
     super.initState();
@@ -107,9 +129,7 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
     } catch (e) {
       if (mounted) {
         setState(() => _loading = false);
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Fehler: $e')));
+        _showLobbySnack('Gruppe konnte nicht geladen werden.', error: true);
       }
     }
   }
@@ -173,9 +193,7 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
       // Eigener Realtime-Handler bringt uns in die Navigation.
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Start fehlgeschlagen: $e')));
+        _showLobbySnack('Start fehlgeschlagen.', error: true);
       }
     } finally {
       if (mounted) setState(() => _starting = false);
@@ -196,9 +214,7 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
     } catch (e) {
       _restoreGroup(previous);
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Fehler: $e')));
+        _showLobbySnack('Rolle konnte nicht gespeichert werden.', error: true);
       }
     } finally {
       _busyRoleUpdates.remove(key);
@@ -465,15 +481,14 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
     );
   }
 
-  /// Öffentliche Gruppen: Code für alle Mitglieder sichtbar.
+  /// Öffentliche Gruppen zeigen keinen Code im UI.
   /// Private Gruppen: Code nur für Owner sichtbar.
   bool _shouldShowInviteCode() {
     final g = _group;
     if (g == null || g.inviteCode == null || g.inviteCode!.isEmpty) {
       return false;
     }
-    if (g.isPublic) return true;
-    return _hasOwnerPower;
+    return !g.isPublic && _hasOwnerPower;
   }
 
   Widget _buildInviteCodeCard() {
@@ -489,7 +504,7 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
       ),
       child: Row(
         children: [
-          Icon(Icons.qr_code_2, color: AppAccentColors.accent, size: 22),
+          Icon(Icons.key_rounded, color: AppAccentColors.accent, size: 22),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
@@ -521,7 +536,7 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
               if (!mounted) return;
               ScaffoldMessenger.of(
                 context,
-              ).showSnackBar(SnackBar(content: Text('$code kopiert')));
+              ).showSnackBar(const SnackBar(content: Text('Code kopiert')));
             },
           ),
         ],
@@ -627,9 +642,7 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
       }
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Fehler: $e')));
+      _showLobbySnack('Anfrage konnte nicht bearbeitet werden.', error: true);
       return;
     }
     if (!mounted) return;
@@ -895,9 +908,7 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
       }
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Aktion fehlgeschlagen: $e')));
+      _showLobbySnack('Aktion fehlgeschlagen.', error: true);
     }
   }
 
@@ -1043,14 +1054,11 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setSheet) {
           Future<void> doInvite(String userId) async {
-            final messenger = ScaffoldMessenger.of(ctx);
             try {
               await SocialService.inviteToGroup(widget.groupId, userId);
               setSheet(() => invited.add(userId));
-            } catch (e) {
-              messenger.showSnackBar(
-                SnackBar(content: Text('Einladung fehlgeschlagen: $e')),
-              );
+            } catch (_) {
+              _showLobbySnack('Einladung fehlgeschlagen.', error: true);
             }
           }
 

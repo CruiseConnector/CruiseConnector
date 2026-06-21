@@ -13,9 +13,18 @@ class CommunityChatsTab extends StatefulWidget {
 }
 
 class _CommunityChatsTabState extends State<CommunityChatsTab> {
+  final _codeSearchController = TextEditingController();
   bool _loading = true;
+  bool _codeSearchLoading = false;
   List<Map<String, dynamic>> _myCommunities = [];
   List<Map<String, dynamic>> _discoverCommunities = [];
+  Map<String, dynamic>? _codeSearchResult;
+
+  @override
+  void dispose() {
+    _codeSearchController.dispose();
+    super.dispose();
+  }
 
   @override
   void initState() {
@@ -59,7 +68,37 @@ class _CommunityChatsTabState extends State<CommunityChatsTab> {
       if (!mounted) return;
       await _openCommunity(id);
     } catch (e) {
-      _showError(e.toString());
+      _showError(e);
+    }
+  }
+
+  Future<void> _lookupCommunityCode(String raw) async {
+    final normalized = CommunityChatService.normalizeInviteCode(raw);
+    if (normalized == null) {
+      setState(() {
+        _codeSearchResult = null;
+        _codeSearchLoading = false;
+      });
+      return;
+    }
+    setState(() => _codeSearchLoading = true);
+    final result = await CommunityChatService.findCommunityByCode(normalized);
+    if (!mounted || _codeSearchController.text.trim() != raw.trim()) return;
+    setState(() {
+      _codeSearchResult = result;
+      _codeSearchLoading = false;
+    });
+  }
+
+  Future<void> _joinCommunityWithCode(String rawCode) async {
+    try {
+      final id = await CommunityChatService.joinCommunityWithCode(rawCode);
+      if (!mounted) return;
+      _codeSearchController.clear();
+      setState(() => _codeSearchResult = null);
+      await _openCommunity(id);
+    } catch (e) {
+      _showError(e);
     }
   }
 
@@ -77,6 +116,7 @@ class _CommunityChatsTabState extends State<CommunityChatsTab> {
       builder: (_) => CommunityMembersSheet(
         communityId: communityId,
         initialMembers: const [],
+        ownerOnlyMessages: community['owner_only_messages'] == true,
         onChanged: _load,
       ),
     );
@@ -122,7 +162,7 @@ class _CommunityChatsTabState extends State<CommunityChatsTab> {
       await CommunityChatService.leaveCommunity(communityId);
       if (mounted) _load();
     } catch (e) {
-      _showError(e.toString());
+      _showError(e);
     }
   }
 
@@ -163,14 +203,45 @@ class _CommunityChatsTabState extends State<CommunityChatsTab> {
       await CommunityChatService.deleteCommunity(communityId);
       if (mounted) _load();
     } catch (e) {
-      _showError(e.toString());
+      _showError(e);
     }
   }
 
-  void _showError(String message) {
+  String _friendlyError(Object error) {
+    final raw = error.toString();
+    final lower = raw.toLowerCase();
+    final isBackendNoise =
+        lower.contains('postgrest') ||
+        lower.contains('supabase') ||
+        lower.contains('row-level') ||
+        lower.contains('rls') ||
+        lower.contains('policy') ||
+        lower.contains('permission') ||
+        lower.contains('schema cache') ||
+        lower.contains('violates');
+    if (raw.trim().isEmpty || isBackendNoise || raw.length > 110) {
+      return 'Aktion gerade nicht möglich.';
+    }
+    return raw;
+  }
+
+  void _showError(Object message) {
     if (!mounted) return;
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message), backgroundColor: Colors.redAccent),
+      SnackBar(
+        content: Text(
+          message is String ? message : _friendlyError(message),
+          style: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+        backgroundColor: const Color(0xFF301B20),
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(milliseconds: 1350),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      ),
     );
   }
 
@@ -190,6 +261,8 @@ class _CommunityChatsTabState extends State<CommunityChatsTab> {
         padding: const EdgeInsets.fromLTRB(16, 14, 16, 96),
         children: [
           _buildActionRow(),
+          const SizedBox(height: 12),
+          _buildInlineCodeSearch(),
           const SizedBox(height: 18),
           _buildSectionHeader('Meine Communities', _myCommunities.length),
           const SizedBox(height: 10),
@@ -229,6 +302,68 @@ class _CommunityChatsTabState extends State<CommunityChatsTab> {
             ),
         ],
       ),
+    );
+  }
+
+  Widget _buildInlineCodeSearch() {
+    final result = _codeSearchResult;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          decoration: BoxDecoration(
+            color: const Color(0xFF1C1F26),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.07)),
+          ),
+          child: TextField(
+            controller: _codeSearchController,
+            textCapitalization: TextCapitalization.characters,
+            style: const TextStyle(color: Colors.white),
+            decoration: InputDecoration(
+              hintText: 'Community-Code suchen (CCC-XXXXXX)',
+              hintStyle: const TextStyle(color: Colors.grey),
+              counterText: '',
+              prefixIcon: const Icon(Icons.search, color: Colors.grey),
+              suffixIcon: _codeSearchLoading
+                  ? const Padding(
+                      padding: EdgeInsets.all(14),
+                      child: SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                    )
+                  : IconButton(
+                      icon: const Icon(Icons.login, color: Colors.white70),
+                      onPressed: _codeSearchController.text.trim().isEmpty
+                          ? null
+                          : () {
+                              _joinCommunityWithCode(
+                                _codeSearchController.text,
+                              );
+                            },
+                    ),
+              border: InputBorder.none,
+              contentPadding: const EdgeInsets.symmetric(vertical: 14),
+            ),
+            onChanged: (value) => _lookupCommunityCode(value),
+            onSubmitted: (value) {
+              _joinCommunityWithCode(value);
+            },
+          ),
+        ),
+        if (result != null) ...[
+          const SizedBox(height: 10),
+          _buildCommunityCard(
+            result,
+            joined: false,
+            onTap: () => _joinCommunityWithCode(
+              result['invite_code']?.toString() ?? _codeSearchController.text,
+            ),
+          ),
+        ],
+      ],
     );
   }
 
@@ -554,6 +689,7 @@ class _CommunityChatsTabState extends State<CommunityChatsTab> {
     final nameCtrl = TextEditingController();
     final descCtrl = TextEditingController();
     var isPublic = false;
+    var ownerOnlyMessages = false;
     var saving = false;
 
     showModalBottomSheet<void>(
@@ -574,13 +710,14 @@ class _CommunityChatsTabState extends State<CommunityChatsTab> {
                   name: nameCtrl.text,
                   description: descCtrl.text,
                   isPublic: isPublic,
+                  ownerOnlyMessages: ownerOnlyMessages,
                 );
                 if (!sheetContext.mounted) return;
                 Navigator.pop(sheetContext);
                 if (!mounted) return;
                 await _openCommunity(id);
               } catch (e) {
-                _showError(e.toString());
+                _showError(e);
               } finally {
                 if (sheetContext.mounted) {
                   setSheetState(() => saving = false);
@@ -642,6 +779,56 @@ class _CommunityChatsTabState extends State<CommunityChatsTab> {
                         ),
                       ),
                     ],
+                  ),
+                  const SizedBox(height: 12),
+                  InkWell(
+                    onTap: () => setSheetState(
+                      () => ownerOnlyMessages = !ownerOnlyMessages,
+                    ),
+                    borderRadius: BorderRadius.circular(12),
+                    child: Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF0F121A),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: ownerOnlyMessages
+                              ? AppAccentColors.accent
+                              : Colors.white.withValues(alpha: 0.08),
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            ownerOnlyMessages
+                                ? Icons.admin_panel_settings
+                                : Icons.chat_bubble_outline,
+                            color: ownerOnlyMessages
+                                ? AppAccentColors.accent
+                                : Colors.grey,
+                          ),
+                          const SizedBox(width: 10),
+                          const Expanded(
+                            child: Text(
+                              'Nur Owner darf schreiben',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                          Switch.adaptive(
+                            value: ownerOnlyMessages,
+                            activeThumbColor: AppAccentColors.accent,
+                            activeTrackColor: AppAccentColors.accent.withValues(
+                              alpha: 0.35,
+                            ),
+                            onChanged: (value) =>
+                                setSheetState(() => ownerOnlyMessages = value),
+                          ),
+                        ],
+                      ),
+                    ),
                   ),
                   const SizedBox(height: 18),
                   SizedBox(
@@ -709,7 +896,7 @@ class _CommunityChatsTabState extends State<CommunityChatsTab> {
                 if (!mounted) return;
                 await _openCommunity(id);
               } catch (e) {
-                _showError(e.toString());
+                _showError(e);
               } finally {
                 if (sheetContext.mounted) {
                   setSheetState(() => saving = false);
@@ -739,7 +926,7 @@ class _CommunityChatsTabState extends State<CommunityChatsTab> {
                   const SizedBox(height: 16),
                   _buildSheetTextField(
                     controller: codeCtrl,
-                    label: 'CM-ABC123',
+                    label: 'CCC-ABC123',
                     textCapitalization: TextCapitalization.characters,
                   ),
                   const SizedBox(height: 18),

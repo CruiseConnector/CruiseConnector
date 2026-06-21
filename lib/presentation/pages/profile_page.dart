@@ -29,6 +29,7 @@ import 'package:cruise_connect/presentation/widgets/cruiser_dna_card.dart';
 import 'package:cruise_connect/presentation/widgets/mentions.dart';
 import 'package:cruise_connect/presentation/widgets/accent_color_picker.dart';
 import 'package:cruise_connect/presentation/widgets/social/route_attachment_card.dart';
+import 'package:cruise_connect/presentation/widgets/profile_badge_showcase.dart';
 import 'package:cruise_connect/presentation/widgets/user_avatar.dart';
 import 'package:cruise_connect/presentation/widgets/vehicle_garage_carousel.dart';
 import 'package:cruise_connect/presentation/pages/group_lobby_page.dart';
@@ -495,201 +496,217 @@ class _ProfilePageState extends State<ProfilePage>
             SliverToBoxAdapter(
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 16.0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                child: Stack(
+                  clipBehavior: Clip.none,
                   children: [
-                    Padding(
-                      padding: const EdgeInsets.only(top: 12),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        crossAxisAlignment: CrossAxisAlignment.end,
-                        children: [
-                          GestureDetector(
-                            onTap: _pickAndUploadAvatar,
-                            child: Container(
-                              padding: const EdgeInsets.all(5),
-                              decoration: const BoxDecoration(
-                                color: Color(0xFF0B0E14),
-                                shape: BoxShape.circle,
-                              ),
-                              child: Stack(
-                                children: [
-                                  CircleAvatar(
-                                    radius: 40,
-                                    backgroundColor: accent,
-                                    foregroundImage:
-                                        UserAvatar.avatarImageProvider(
-                                          context,
-                                          liveAvatarUrl,
-                                          radius: 40,
-                                        ),
-                                    child: Text(
-                                      userName.isNotEmpty
-                                          ? userName[0].toUpperCase()
-                                          : 'U',
-                                      style: const TextStyle(
-                                        color: Colors.white,
-                                        fontSize: 32,
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                    ),
-                                  ),
-                                  if (_uploadingAvatar)
-                                    const Positioned.fill(
-                                      child: CircleAvatar(
-                                        radius: 40,
-                                        backgroundColor: Colors.black54,
-                                        child: SizedBox(
-                                          width: 24,
-                                          height: 24,
-                                          child: CircularProgressIndicator(
-                                            strokeWidth: 2,
-                                            color: Colors.white,
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                  Positioned(
-                                    bottom: 0,
-                                    right: 0,
-                                    child: Container(
-                                      width: 28,
-                                      height: 28,
-                                      decoration: BoxDecoration(
-                                        color: accent,
-                                        shape: BoxShape.circle,
-                                        border: Border.all(
-                                          color: const Color(0xFF0B0E14),
-                                          width: 2,
-                                        ),
-                                      ),
-                                      child: const Icon(
-                                        Icons.camera_alt,
-                                        color: Colors.white,
-                                        size: 14,
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                          Padding(
-                            padding: const EdgeInsets.only(bottom: 10),
-                            child: GestureDetector(
-                              onTap: _openEditProfile,
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 16,
-                                  vertical: 8,
-                                ),
-                                decoration: BoxDecoration(
-                                  borderRadius: BorderRadius.circular(20),
-                                  border: Border.all(color: Colors.white30),
-                                ),
-                                child: const Text(
-                                  'Profil bearbeiten',
-                                  style: TextStyle(
-                                    color: Colors.white,
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 14,
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
                     Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          userName,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 24,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          userHandle,
-                          style: const TextStyle(
-                            color: Colors.grey,
-                            fontSize: 15,
-                          ),
-                        ),
-                        if (userBio != null && userBio.isNotEmpty) ...[
-                          const SizedBox(height: 10),
-                          if (userBioTitle != null &&
-                              userBioTitle.isNotEmpty) ...[
-                            Align(
-                              alignment: Alignment.centerLeft,
-                              child: Text(
-                                userBioTitle,
-                                style: TextStyle(
-                                  color: accent,
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w900,
+                        Padding(
+                          padding: const EdgeInsets.only(top: 12),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            crossAxisAlignment: CrossAxisAlignment.end,
+                            children: [
+                              GestureDetector(
+                                onTap: _pickAndUploadAvatar,
+                                child: Container(
+                                  padding: const EdgeInsets.all(5),
+                                  decoration: const BoxDecoration(
+                                    color: Color(0xFF0B0E14),
+                                    shape: BoxShape.circle,
+                                  ),
+                                  child: Stack(
+                                    clipBehavior: Clip.none,
+                                    children: [
+                                      CircleAvatar(
+                                        radius: 40,
+                                        backgroundColor: accent,
+                                        foregroundImage:
+                                            UserAvatar.avatarImageProvider(
+                                              context,
+                                              liveAvatarUrl,
+                                              radius: 40,
+                                            ),
+                                        child: Text(
+                                          userName.isNotEmpty
+                                              ? userName[0].toUpperCase()
+                                              : 'U',
+                                          style: const TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 32,
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
+                                      ),
+                                      if (_uploadingAvatar)
+                                        const Positioned.fill(
+                                          child: CircleAvatar(
+                                            radius: 40,
+                                            backgroundColor: Colors.black54,
+                                            child: SizedBox(
+                                              width: 24,
+                                              height: 24,
+                                              child: CircularProgressIndicator(
+                                                strokeWidth: 2,
+                                                color: Colors.white,
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                      Positioned(
+                                        bottom: 0,
+                                        right: 0,
+                                        child: Container(
+                                          width: 28,
+                                          height: 28,
+                                          decoration: BoxDecoration(
+                                            color: accent,
+                                            shape: BoxShape.circle,
+                                            border: Border.all(
+                                              color: const Color(0xFF0B0E14),
+                                              width: 2,
+                                            ),
+                                          ),
+                                          child: const Icon(
+                                            Icons.camera_alt,
+                                            color: Colors.white,
+                                            size: 14,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
                                 ),
+                              ),
+                              Padding(
+                                padding: const EdgeInsets.only(bottom: 10),
+                                child: GestureDetector(
+                                  onTap: _openEditProfile,
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 16,
+                                      vertical: 8,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      borderRadius: BorderRadius.circular(20),
+                                      border: Border.all(color: Colors.white30),
+                                    ),
+                                    child: const Text(
+                                      'Profil bearbeiten',
+                                      style: TextStyle(
+                                        color: Colors.white,
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 14,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              userName,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 24,
+                                fontWeight: FontWeight.bold,
                               ),
                             ),
                             const SizedBox(height: 4),
-                          ],
-                          _buildBio(userBio),
-                        ],
-                        if (userLink != null && userLink.isNotEmpty) ...[
-                          const SizedBox(height: 8),
-                          InkWell(
-                            onTap: () => _openExternalLink(userLink),
-                            borderRadius: BorderRadius.circular(8),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(Icons.link, size: 14, color: accent),
-                                const SizedBox(width: 4),
-                                Flexible(
+                            Text(
+                              userHandle,
+                              style: const TextStyle(
+                                color: Colors.grey,
+                                fontSize: 15,
+                              ),
+                            ),
+                            if (userBio != null && userBio.isNotEmpty) ...[
+                              const SizedBox(height: 10),
+                              if (userBioTitle != null &&
+                                  userBioTitle.isNotEmpty) ...[
+                                Align(
+                                  alignment: Alignment.centerLeft,
                                   child: Text(
-                                    userLink,
-                                    overflow: TextOverflow.ellipsis,
+                                    userBioTitle,
                                     style: TextStyle(
                                       color: accent,
                                       fontSize: 13,
-                                      fontWeight: FontWeight.w500,
+                                      fontWeight: FontWeight.w900,
                                     ),
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                              ],
+                              _buildBio(userBio),
+                            ],
+                            if (userLink != null && userLink.isNotEmpty) ...[
+                              const SizedBox(height: 8),
+                              InkWell(
+                                onTap: () => _openExternalLink(userLink),
+                                borderRadius: BorderRadius.circular(8),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(Icons.link, size: 14, color: accent),
+                                    const SizedBox(width: 4),
+                                    Flexible(
+                                      child: Text(
+                                        userLink,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                          color: accent,
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w500,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                            const SizedBox(height: 12),
+                            Row(
+                              children: [
+                                GestureDetector(
+                                  onTap: () => _showFollowList('following'),
+                                  child: _buildFollowStat(
+                                    '$liveFollowingCount',
+                                    'Folge ich',
+                                  ),
+                                ),
+                                const SizedBox(width: 16),
+                                GestureDetector(
+                                  onTap: () => _showFollowList('followers'),
+                                  child: _buildFollowStat(
+                                    '$liveFollowerCount',
+                                    'Follower',
                                   ),
                                 ),
                               ],
                             ),
-                          ),
-                        ],
-                        const SizedBox(height: 12),
-                        Row(
-                          children: [
-                            GestureDetector(
-                              onTap: () => _showFollowList('following'),
-                              child: _buildFollowStat(
-                                '$liveFollowingCount',
-                                'Folge ich',
-                              ),
-                            ),
-                            const SizedBox(width: 16),
-                            GestureDetector(
-                              onTap: () => _showFollowList('followers'),
-                              child: _buildFollowStat(
-                                '$liveFollowerCount',
-                                'Follower',
-                              ),
-                            ),
+                            if (profileCompletion.completed <
+                                profileCompletion.total) ...[
+                              const SizedBox(height: 12),
+                              _buildProfileCompletionCard(profileCompletion),
+                            ],
                           ],
                         ),
-                        if (profileCompletion.completed <
-                            profileCompletion.total) ...[
-                          const SizedBox(height: 12),
-                          _buildProfileCompletionCard(profileCompletion),
-                        ],
                       ],
+                    ),
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      top: 0,
+                      height: 210,
+                      child: ProfileBadgeShowcase(
+                        profile: liveProfile,
+                        baseSize: 36,
+                      ),
                     ),
                   ],
                 ),

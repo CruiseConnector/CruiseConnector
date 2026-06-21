@@ -14,7 +14,6 @@ import '../../data/services/group_route_data_builder.dart';
 import '../../data/services/route_service.dart';
 import '../../domain/models/place_suggestion.dart';
 import '../../domain/models/route_result.dart';
-import '../widgets/badge_unlock_popup.dart';
 import '../widgets/cruise/cruise_maplibre_map.dart';
 import '../widgets/cruise/cruise_setup_card.dart';
 import '../widgets/group_safety_notice_sheet.dart';
@@ -635,18 +634,10 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
       );
 
       if (!mounted) return;
-      final gamResult = await GamificationService.calculateAndSync();
-      if (!mounted) return;
-      if (gamResult.newBadges.isNotEmpty) {
-        await showBadgeUnlockPopup(
-          context: context,
-          badges: gamResult.newBadges,
-        );
-      }
-      if (!mounted) return;
       Navigator.of(context).pushReplacement(
         MaterialPageRoute(builder: (_) => GroupLobbyPage(groupId: groupId)),
       );
+      unawaited(GamificationService.calculateAndSync());
     } catch (e) {
       _showError('Gruppe konnte nicht erstellt werden: $e');
     } finally {

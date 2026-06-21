@@ -12,6 +12,7 @@ import 'package:cruise_connect/core/input_limits.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/data/services/vehicle_api_service.dart';
 import 'package:cruise_connect/presentation/widgets/car_card.dart';
+import 'package:cruise_connect/presentation/widgets/profile_badge_showcase.dart';
 import 'package:cruise_connect/presentation/widgets/user_avatar.dart';
 import 'package:cruise_connect/presentation/widgets/vehicle_garage_carousel.dart';
 
@@ -153,6 +154,8 @@ class _EditProfilePageState extends State<EditProfilePage> {
   String? _avatarUrl;
   String? _bannerUrl;
   String? _carImageUrl;
+  Map<String, dynamic> _profile = {};
+  List<Map<String, dynamic>> _badgeShowcase = [];
   String _carCountryCode = 'AT';
   String _vehicleType = 'car';
   List<Map<String, dynamic>> _vehicleDrafts = [];
@@ -219,6 +222,10 @@ class _EditProfilePageState extends State<EditProfilePage> {
         _linkController.text = (profile?['link'] as String?) ?? '';
         _avatarUrl = profile?['avatar_url'] as String?;
         _bannerUrl = profile?['banner_url'] as String?;
+        _profile = Map<String, dynamic>.from(profile ?? const {});
+        _badgeShowcase = ProfileBadgeShowcase.storageFromSlots(
+          ProfileBadgeShowcase.stickerSlotsFromProfile(_profile),
+        );
         _nextUsernameChange = usernameCheck.canChange
             ? null
             : usernameCheck.nextChange;
@@ -629,6 +636,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
         bio: _bioController.text,
         link: _linkController.text,
       );
+      await SocialService.updateBadgeShowcase(_badgeShowcase);
       // 3) Garage: mehrere Autos/Motorräder. Das erste Fahrzeug wird vom
       // Service zusätzlich in die Legacy-Profile-Spalten gespiegelt.
       await SocialService.saveUserVehicles(_vehicleDrafts);
@@ -643,6 +651,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
           'link': _linkController.text.trim(),
           'avatar_url': _avatarUrl,
           'banner_url': _bannerUrl,
+          'badge_showcase': _badgeShowcase,
           'car_image_url': _vehicleDrafts.isEmpty
               ? _carImageUrl
               : _vehicleDrafts.first['image_url'],
@@ -883,6 +892,25 @@ class _EditProfilePageState extends State<EditProfilePage> {
     setState(() => _carCountryCode = detected);
   }
 
+  Map<String, dynamic> _badgeEditorProfile() {
+    return {
+      ..._profile,
+      'username': _usernameController.text.trim().isEmpty
+          ? _initialUsername
+          : _usernameController.text.trim(),
+      'avatar_url': _avatarUrl,
+      'banner_url': _bannerUrl,
+      'badge_showcase': _badgeShowcase,
+    };
+  }
+
+  void _handleBadgeShowcaseChanged(List<Map<String, dynamic>> next) {
+    setState(() {
+      _badgeShowcase = next;
+      _profile = {..._profile, 'badge_showcase': next};
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -965,6 +993,23 @@ class _EditProfilePageState extends State<EditProfilePage> {
                         ),
 
                         const SizedBox(height: 20),
+
+                        _buildSectionHeader(
+                          'Badge-Sticker',
+                          Icons.workspace_premium_rounded,
+                        ),
+                        const SizedBox(height: 16),
+                        ProfileBadgeStickerEditor(
+                          profile: _badgeEditorProfile(),
+                          displayName: _usernameController.text.trim().isEmpty
+                              ? _initialUsername
+                              : _usernameController.text.trim(),
+                          avatarUrl: _avatarUrl,
+                          bannerUrl: _bannerUrl,
+                          onChanged: _handleBadgeShowcaseChanged,
+                        ),
+
+                        const SizedBox(height: 28),
 
                         _buildLabel('Bio-Überschrift'),
                         _buildTextField(

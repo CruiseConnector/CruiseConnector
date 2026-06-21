@@ -46,6 +46,7 @@ import 'package:vector_map_tiles/vector_map_tiles.dart';
 import 'package:vector_map_tiles_pmtiles/vector_map_tiles_pmtiles.dart';
 import 'package:vector_tile_renderer/vector_tile_renderer.dart' as vtr;
 import 'package:cruise_connect/data/services/cruise_dark_map_style.dart';
+import 'package:cruise_connect/data/services/app_tutorial_service.dart';
 import 'package:cruise_connect/data/services/frame_timing_utils.dart';
 import 'package:cruise_connect/data/services/group_route_data_builder.dart';
 import 'package:cruise_connect/data/services/route_access_plan.dart';
@@ -1839,6 +1840,8 @@ class _CruiseModePageState extends State<CruiseModePage>
   Future<void> _maybeShowRoutingOnboarding() async {
     if (!mounted || _disposed) return;
     if (_isRouteConfirmed) return;
+    if (!await AppTutorialService.hasCompleted()) return;
+    if (!mounted || _disposed || _isRouteConfirmed) return;
     await showRoutingOnboardingSheet(context);
   }
 

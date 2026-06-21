@@ -4,14 +4,14 @@ import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/data/services/safety_notice_service.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
-import 'package:geolocator/geolocator.dart' as geo;
 
-Future<bool> showLocationAlwaysNoticeSheet(
+Future<bool> showNotificationPermissionNoticeSheet(
   BuildContext context, {
   bool force = false,
 }) async {
-  if (!force && await SafetyNoticeService.hasSeenLocationAlwaysNotice()) {
-    return true;
+  if (!force &&
+      await SafetyNoticeService.hasSeenNotificationPermissionNotice()) {
+    return SafetyNoticeService.hasAcceptedNotificationPermissionNotice();
   }
   if (!context.mounted) return false;
 
@@ -23,47 +23,31 @@ Future<bool> showLocationAlwaysNoticeSheet(
     useSafeArea: true,
     backgroundColor: Colors.transparent,
     barrierColor: Colors.black.withValues(alpha: 0.70),
-    builder: (_) => const LocationAlwaysNoticeSheet(),
+    builder: (_) => const NotificationPermissionNoticeSheet(),
   );
   return accepted ?? false;
 }
 
-class LocationAlwaysNoticeSheet extends StatefulWidget {
-  const LocationAlwaysNoticeSheet({super.key});
+class NotificationPermissionNoticeSheet extends StatefulWidget {
+  const NotificationPermissionNoticeSheet({super.key});
 
   @override
-  State<LocationAlwaysNoticeSheet> createState() =>
-      _LocationAlwaysNoticeSheetState();
+  State<NotificationPermissionNoticeSheet> createState() =>
+      _NotificationPermissionNoticeSheetState();
 }
 
-class _LocationAlwaysNoticeSheetState extends State<LocationAlwaysNoticeSheet> {
+class _NotificationPermissionNoticeSheetState
+    extends State<NotificationPermissionNoticeSheet> {
   bool _busy = false;
 
-  Future<void> _markAndClose() async {
-    await SafetyNoticeService.markLocationAlwaysNoticeSeen();
-    if (!mounted) return;
-    Navigator.of(context).pop(false);
-  }
-
-  Future<void> _acceptPermission() async {
+  Future<void> _close(bool accepted) async {
     if (_busy) return;
     setState(() => _busy = true);
-    await SafetyNoticeService.markLocationAlwaysNoticeSeen();
-    try {
-      final serviceEnabled = await geo.Geolocator.isLocationServiceEnabled();
-      if (serviceEnabled) {
-        final current = await geo.Geolocator.checkPermission();
-        if (current == geo.LocationPermission.denied) {
-          await geo.Geolocator.requestPermission();
-        } else if (current == geo.LocationPermission.deniedForever) {
-          await geo.Geolocator.openAppSettings();
-        }
-      }
-    } catch (_) {
-      // Best-effort: Wenn iOS/Android gerade nicht antwortet, bleibt die App ruhig.
-    }
+    await SafetyNoticeService.markNotificationPermissionNotice(
+      accepted: accepted,
+    );
     if (!mounted) return;
-    Navigator.of(context).pop(true);
+    Navigator.of(context).pop(accepted);
   }
 
   @override
@@ -73,7 +57,7 @@ class _LocationAlwaysNoticeSheetState extends State<LocationAlwaysNoticeSheet> {
     final clampedMedia = media.copyWith(
       textScaler: media.textScaler.clamp(maxScaleFactor: 1.08),
     );
-    final height = (media.size.height * 0.76).clamp(520.0, 680.0).toDouble();
+    final height = (media.size.height * 0.58).clamp(420.0, 560.0).toDouble();
 
     return MediaQuery(
       data: clampedMedia,
@@ -129,13 +113,13 @@ class _LocationAlwaysNoticeSheetState extends State<LocationAlwaysNoticeSheet> {
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
                                     Icon(
-                                      CupertinoIcons.location_fill,
+                                      CupertinoIcons.bell_fill,
                                       color: accent,
                                       size: 34,
                                     ),
                                     const SizedBox(height: 12),
                                     const Text(
-                                      'Standort immer erlauben',
+                                      'Mitteilungen erlauben',
                                       style: TextStyle(
                                         color: Colors.white,
                                         fontSize: 25,
@@ -144,7 +128,7 @@ class _LocationAlwaysNoticeSheetState extends State<LocationAlwaysNoticeSheet> {
                                     ),
                                     const SizedBox(height: 10),
                                     Text(
-                                      'Für aktive Navigation, Gruppenfahrten und sichere Re-Updates muss Cruise Connector deinen Standort auch weiter nutzen können, wenn du kurz die App wechselst oder der Bildschirm gesperrt ist.',
+                                      'Wir schicken dir nur wichtige Hinweise wie Gruppen-Updates, neue Follower, Antworten und Routen-Erinnerungen.',
                                       style: TextStyle(
                                         color: Colors.white.withValues(
                                           alpha: 0.72,
@@ -157,21 +141,21 @@ class _LocationAlwaysNoticeSheetState extends State<LocationAlwaysNoticeSheet> {
                                     const SizedBox(height: 16),
                                     _HintRow(
                                       accent: accent,
-                                      icon: CupertinoIcons.lock_rotation,
-                                      text:
-                                          'Aktive Fahrt bleibt stabil im Hintergrund.',
-                                    ),
-                                    _HintRow(
-                                      accent: accent,
                                       icon: CupertinoIcons.person_2_fill,
                                       text:
-                                          'Gruppenmitglieder sehen weiter deinen echten Fortschritt.',
+                                          'Gruppenfahrten und Einladungen kommen rechtzeitig an.',
                                     ),
                                     _HintRow(
                                       accent: accent,
-                                      icon: CupertinoIcons.gear,
+                                      icon: CupertinoIcons.chat_bubble_2_fill,
                                       text:
-                                          'Du kannst die Freigabe jederzeit in iOS/Android ändern.',
+                                          'Antworten, Likes und neue Kontakte landen nicht unbemerkt.',
+                                    ),
+                                    _HintRow(
+                                      accent: accent,
+                                      icon: CupertinoIcons.slider_horizontal_3,
+                                      text:
+                                          'Du kannst Mitteilungen später in den Einstellungen ändern.',
                                     ),
                                   ],
                                 ),
@@ -184,7 +168,9 @@ class _LocationAlwaysNoticeSheetState extends State<LocationAlwaysNoticeSheet> {
                                   child: SizedBox(
                                     height: 52,
                                     child: OutlinedButton(
-                                      onPressed: _busy ? null : _markAndClose,
+                                      onPressed: _busy
+                                          ? null
+                                          : () => _close(false),
                                       style: OutlinedButton.styleFrom(
                                         foregroundColor: Colors.white,
                                         side: BorderSide(
@@ -214,7 +200,7 @@ class _LocationAlwaysNoticeSheetState extends State<LocationAlwaysNoticeSheet> {
                                     child: FilledButton(
                                       onPressed: _busy
                                           ? null
-                                          : _acceptPermission,
+                                          : () => _close(true),
                                       style: FilledButton.styleFrom(
                                         backgroundColor: accent,
                                         shape: RoundedRectangleBorder(

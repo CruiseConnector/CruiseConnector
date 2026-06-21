@@ -25,7 +25,8 @@ import 'package:cruise_connect/presentation/utils/share_helper.dart';
 
 class CommunityPage extends StatefulWidget {
   final int refreshKey;
-  const CommunityPage({super.key, this.refreshKey = 0});
+  final int? tutorialTabIndex;
+  const CommunityPage({super.key, this.refreshKey = 0, this.tutorialTabIndex});
 
   static final ValueNotifier<String?> pendingGroupFocus =
       ValueNotifier<String?>(null);
@@ -41,6 +42,10 @@ class _CommunityPageState extends State<CommunityPage>
     super.didUpdateWidget(old);
     if (widget.refreshKey != old.refreshKey && widget.refreshKey > 0) {
       _scheduleLoadData();
+    }
+    if (widget.tutorialTabIndex != null &&
+        widget.tutorialTabIndex != old.tutorialTabIndex) {
+      _animateToTutorialTab(widget.tutorialTabIndex!);
     }
   }
 
@@ -69,6 +74,10 @@ class _CommunityPageState extends State<CommunityPage>
   void initState() {
     super.initState();
     _tabController = TabController(length: 4, vsync: this);
+    final tutorialIndex = widget.tutorialTabIndex;
+    if (tutorialIndex != null && tutorialIndex >= 0 && tutorialIndex < 4) {
+      _tabController.index = tutorialIndex;
+    }
     _tabController.addListener(() {
       if (!_tabController.indexIsChanging) setState(() {});
     });
@@ -91,6 +100,14 @@ class _CommunityPageState extends State<CommunityPage>
   void _scheduleLoadData() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _loadData();
+    });
+  }
+
+  void _animateToTutorialTab(int index) {
+    if (index < 0 || index >= _tabController.length) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _tabController.index == index) return;
+      _tabController.animateTo(index);
     });
   }
 
@@ -282,6 +299,24 @@ class _CommunityPageState extends State<CommunityPage>
           ? results[1] as Map<String, dynamic>?
           : null;
     });
+  }
+
+  bool _looksLikeGroupCode(String query) {
+    return RegExp(
+      r'^\s*cc[\s\-_]?[A-Z0-9]{0,6}',
+      caseSensitive: false,
+    ).hasMatch(query);
+  }
+
+  Future<void> _handleGroupDiscoverSearchChanged(String value) async {
+    setState(() => _groupSearchQuery = value);
+    if (!_looksLikeGroupCode(value)) {
+      setState(() => _searchedGroup = null);
+      return;
+    }
+    final result = await SocialService.findGroupByCode(value);
+    if (!mounted || _groupSearchController.text != value) return;
+    setState(() => _searchedGroup = result);
   }
 
   String _formatGroupDate(DateTime dt) {
@@ -602,6 +637,35 @@ class _CommunityPageState extends State<CommunityPage>
           Builder(
             builder: (_) {
               final filtered = _applyGroupDiscoverFilters(_discoverGroups);
+              final codeResult = _looksLikeGroupCode(_groupSearchQuery)
+                  ? _searchedGroup
+                  : null;
+              if (codeResult != null) {
+                return Column(
+                  children: [
+                    _buildInlineGroupCodeResult(codeResult),
+                    const SizedBox(height: 12),
+                    for (final g in filtered)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 12),
+                        child: GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onTap: () async {
+                            await Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) =>
+                                    GroupLobbyPage(groupId: g['id']),
+                              ),
+                            );
+                            _loadData();
+                          },
+                          child: _buildGroupCard(g, false),
+                        ),
+                      ),
+                  ],
+                );
+              }
               if (!hasDiscover) {
                 return _buildEmptyHint(
                   'Gerade keine offenen Gruppen in Sicht.',
@@ -665,7 +729,7 @@ class _CommunityPageState extends State<CommunityPage>
               border: InputBorder.none,
               contentPadding: EdgeInsets.symmetric(vertical: 12),
             ),
-            onChanged: (v) => setState(() => _groupSearchQuery = v),
+            onChanged: _handleGroupDiscoverSearchChanged,
           ),
         ),
         const SizedBox(height: 12),
@@ -2536,6 +2600,7 @@ class _CommunityPageState extends State<CommunityPage>
     );
     final code = group['invite_code'] as String? ?? '';
     final joinCode = group['_join_code'] as String? ?? code;
+    final subtitle = isPublic ? '@$creatorName' : '$code · @$creatorName';
 
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -2592,7 +2657,7 @@ class _CommunityPageState extends State<CommunityPage>
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  '$code · @$creatorName',
+                  subtitle,
                   style: const TextStyle(color: Colors.grey, fontSize: 12),
                 ),
               ],
@@ -2712,6 +2777,90 @@ class _CommunityPageState extends State<CommunityPage>
                 child: const Text('Anfrage'),
               );
             },
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildInlineGroupCodeResult(Map<String, dynamic> group) {
+    final isPublic = group['is_public'] == true;
+    final creator = group['profiles'] as Map<String, dynamic>?;
+    final creatorName = SocialService.publicDisplayName(
+      creator,
+      fallbackUserId: group['created_by'] as String?,
+    );
+    final code = group['invite_code'] as String? ?? '';
+    final joinCode = group['_join_code'] as String? ?? code;
+    final subtitle = isPublic ? '@$creatorName' : '$code · @$creatorName';
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1C1F26),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: AppAccentColors.accent.withValues(alpha: 0.42),
+        ),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            isPublic ? Icons.groups_rounded : Icons.lock_rounded,
+            color: AppAccentColors.accent,
+            size: 28,
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  group['name']?.toString() ?? 'Gruppe',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w900,
+                    fontSize: 15,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  subtitle,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: Colors.grey, fontSize: 12),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 10),
+          ElevatedButton(
+            onPressed: () async {
+              final groupId = await _joinGroupByCode(joinCode);
+              if (groupId == null || !mounted) return;
+              await Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => GroupLobbyPage(groupId: groupId),
+                ),
+              );
+              if (mounted) _loadData();
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppAccentColors.accent,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+            child: const Text(
+              'Beitreten',
+              style: TextStyle(fontWeight: FontWeight.w900),
+            ),
           ),
         ],
       ),

@@ -1,11 +1,14 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/data/services/gamification_service.dart';
 import 'package:cruise_connect/domain/models/badge.dart' as app;
 import 'package:cruise_connect/domain/models/user_drive_session.dart';
 import 'package:cruise_connect/domain/models/user_level.dart';
+import 'package:cruise_connect/presentation/pages/user_profile_page.dart';
+import 'package:cruise_connect/presentation/widgets/user_avatar.dart';
 
 const List<String> _weekdayLabels = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
 const List<String> _monthLabelsShort = [
@@ -74,6 +77,31 @@ class _AnalyticsBucket {
   }
 }
 
+enum _LeaderboardPeriod { allTime, month, week }
+
+class _LeaderboardEntry {
+  const _LeaderboardEntry({
+    required this.userId,
+    required this.rank,
+    required this.distanceKm,
+    required this.routeCount,
+    this.username,
+    this.avatarUrl,
+  });
+
+  final String userId;
+  final int rank;
+  final double distanceKm;
+  final int routeCount;
+  final String? username;
+  final String? avatarUrl;
+
+  String get displayName {
+    final clean = username?.trim();
+    return clean == null || clean.isEmpty ? 'Cruiser' : clean;
+  }
+}
+
 class AnalyticsPage extends StatefulWidget {
   final int refreshKey;
   const AnalyticsPage({super.key, this.refreshKey = 0});
@@ -102,6 +130,10 @@ class _AnalyticsPageState extends State<AnalyticsPage>
   UserLevel _level = UserLevel.fromXp(0);
   List<app.Badge> _earnedBadges = [];
   List<UserDriveSession> _driveSessions = [];
+  List<_LeaderboardEntry> _leaderboardAllTime = const [];
+  List<_LeaderboardEntry> _leaderboardWeek = const [];
+  List<_LeaderboardEntry> _leaderboardMonth = const [];
+  _LeaderboardPeriod _leaderboardPeriod = _LeaderboardPeriod.allTime;
 
   List<_AnalyticsBucket> _weeklyBuckets = List.generate(
     7,
@@ -128,7 +160,7 @@ class _AnalyticsPageState extends State<AnalyticsPage>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 4, vsync: this);
+    _tabController = TabController(length: 5, vsync: this);
     _tabController.addListener(() {
       if (mounted && !_tabController.indexIsChanging) {
         setState(() {});
@@ -146,8 +178,19 @@ class _AnalyticsPageState extends State<AnalyticsPage>
   Future<void> _loadData() async {
     setState(() => _loading = true);
     try {
-      final gamResult = await GamificationService.calculateAndSync();
-      final driveSessions = await GamificationService.getDriveSessions();
+      final gamificationFuture = GamificationService.calculateAndSync();
+      final driveSessionsFuture = GamificationService.getDriveSessions();
+      final leaderboardsFuture = _loadLeaderboards();
+
+      final results = await Future.wait<Object>([
+        gamificationFuture,
+        driveSessionsFuture,
+        leaderboardsFuture,
+      ]);
+      final gamResult = results[0] as GamificationResult;
+      final driveSessions = results[1] as List<UserDriveSession>;
+      final leaderboards =
+          results[2] as Map<_LeaderboardPeriod, List<_LeaderboardEntry>>;
       driveSessions.sort((a, b) => b.createdAt.compareTo(a.createdAt));
 
       final now = DateTime.now();
@@ -260,6 +303,11 @@ class _AnalyticsPageState extends State<AnalyticsPage>
           _level = gamResult.level;
           _earnedBadges = gamResult.earnedBadges;
           _driveSessions = driveSessions;
+          _leaderboardAllTime =
+              leaderboards[_LeaderboardPeriod.allTime] ?? const [];
+          _leaderboardWeek = leaderboards[_LeaderboardPeriod.week] ?? const [];
+          _leaderboardMonth =
+              leaderboards[_LeaderboardPeriod.month] ?? const [];
           _weeklyBuckets = weekBuckets;
           _streakDays = streak;
           _monthlyBuckets = monthBuckets;
@@ -285,6 +333,130 @@ class _AnalyticsPageState extends State<AnalyticsPage>
       debugPrint('[Analytics] Daten laden fehlgeschlagen: $e');
       if (mounted) setState(() => _loading = false);
     }
+  }
+
+  Future<Map<_LeaderboardPeriod, List<_LeaderboardEntry>>>
+  _loadLeaderboards() async {
+    try {
+      final allTimeFuture = _loadLeaderboardForColumn(column: 'all_time_km');
+      final monthFuture = _loadLeaderboardForColumn(
+        column: 'month_km',
+        periodColumn: 'month_start',
+        periodStart: _currentMonthStartIso(),
+      );
+      final weekFuture = _loadLeaderboardForColumn(
+        column: 'week_km',
+        periodColumn: 'week_start',
+        periodStart: _currentWeekStartIso(),
+      );
+      return {
+        _LeaderboardPeriod.allTime: await allTimeFuture,
+        _LeaderboardPeriod.month: await monthFuture,
+        _LeaderboardPeriod.week: await weekFuture,
+      };
+    } catch (e) {
+      debugPrint('[Analytics] Leaderboard-Rollup nicht verfügbar: $e');
+      return {
+        _LeaderboardPeriod.allTime: await _loadAllTimeProfileFallback(),
+        _LeaderboardPeriod.week: const [],
+        _LeaderboardPeriod.month: const [],
+      };
+    }
+  }
+
+  Future<List<_LeaderboardEntry>> _loadLeaderboardForColumn({
+    required String column,
+    String? periodColumn,
+    String? periodStart,
+  }) async {
+    var query = Supabase.instance.client
+        .from('user_distance_leaderboard')
+        .select(
+          'user_id, all_time_km, week_km, month_km, route_count, '
+          'profiles(id, username, avatar_url)',
+        );
+    if (periodColumn != null && periodStart != null) {
+      query = query.eq(periodColumn, periodStart);
+    }
+    final data = await query.order(column, ascending: false).limit(25);
+    return _parseLeaderboardRows(data as List, distanceColumn: column);
+  }
+
+  String _currentMonthStartIso() {
+    final now = DateTime.now();
+    return _dateOnlyIso(DateTime(now.year, now.month));
+  }
+
+  String _currentWeekStartIso() {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    return _dateOnlyIso(today.subtract(Duration(days: now.weekday - 1)));
+  }
+
+  String _dateOnlyIso(DateTime date) {
+    final month = date.month.toString().padLeft(2, '0');
+    final day = date.day.toString().padLeft(2, '0');
+    return '${date.year}-$month-$day';
+  }
+
+  Future<List<_LeaderboardEntry>> _loadAllTimeProfileFallback() async {
+    try {
+      final data = await Supabase.instance.client
+          .from('profiles')
+          .select('id, username, avatar_url, total_km, total_routes')
+          .order('total_km', ascending: false)
+          .limit(25);
+      return [
+        for (var i = 0; i < (data as List).length; i++)
+          _leaderboardEntryFromProfileRow(
+            Map<String, dynamic>.from(data[i] as Map),
+            i + 1,
+          ),
+      ].where((entry) => entry.distanceKm > 0.05).toList();
+    } catch (e) {
+      debugPrint('[Analytics] All-time-Fallback fehlgeschlagen: $e');
+      return const [];
+    }
+  }
+
+  List<_LeaderboardEntry> _parseLeaderboardRows(
+    List rows, {
+    required String distanceColumn,
+  }) {
+    final entries = <_LeaderboardEntry>[];
+    for (final row in rows) {
+      final map = Map<String, dynamic>.from(row as Map);
+      final profile = map['profiles'] is Map
+          ? Map<String, dynamic>.from(map['profiles'] as Map)
+          : const <String, dynamic>{};
+      final distance = (map[distanceColumn] as num?)?.toDouble() ?? 0;
+      if (distance <= 0.05) continue;
+      entries.add(
+        _LeaderboardEntry(
+          userId: (map['user_id'] ?? profile['id']).toString(),
+          rank: entries.length + 1,
+          distanceKm: distance,
+          routeCount: (map['route_count'] as num?)?.toInt() ?? 0,
+          username: profile['username'] as String?,
+          avatarUrl: profile['avatar_url'] as String?,
+        ),
+      );
+    }
+    return entries;
+  }
+
+  _LeaderboardEntry _leaderboardEntryFromProfileRow(
+    Map<String, dynamic> row,
+    int rank,
+  ) {
+    return _LeaderboardEntry(
+      userId: row['id'].toString(),
+      rank: rank,
+      distanceKm: (row['total_km'] as num?)?.toDouble() ?? 0,
+      routeCount: (row['total_routes'] as num?)?.toInt() ?? 0,
+      username: row['username'] as String?,
+      avatarUrl: row['avatar_url'] as String?,
+    );
   }
 
   @override
@@ -1228,6 +1400,10 @@ class _AnalyticsPageState extends State<AnalyticsPage>
                 icon: Icon(Icons.calendar_month_rounded, size: 17),
                 text: 'Monat',
               ),
+              Tab(
+                icon: Icon(Icons.leaderboard_rounded, size: 17),
+                text: 'Rang',
+              ),
               Tab(icon: Icon(Icons.route_rounded, size: 17), text: 'Routen'),
               Tab(
                 icon: Icon(Icons.emoji_events_rounded, size: 17),
@@ -1249,8 +1425,10 @@ class _AnalyticsPageState extends State<AnalyticsPage>
       case 1:
         return _buildMonthlyTab();
       case 2:
-        return _buildRoutesTab();
+        return _buildLeaderboardTab();
       case 3:
+        return _buildRoutesTab();
+      case 4:
       default:
         return _buildBadgesTab();
     }
@@ -1877,6 +2055,225 @@ class _AnalyticsPageState extends State<AnalyticsPage>
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildLeaderboardTab() {
+    final entries = switch (_leaderboardPeriod) {
+      _LeaderboardPeriod.allTime => _leaderboardAllTime,
+      _LeaderboardPeriod.week => _leaderboardWeek,
+      _LeaderboardPeriod.month => _leaderboardMonth,
+    };
+    final subtitle = switch (_leaderboardPeriod) {
+      _LeaderboardPeriod.allTime => 'Meiste Kilometer insgesamt.',
+      _LeaderboardPeriod.week => 'Meiste Kilometer seit Montag.',
+      _LeaderboardPeriod.month => 'Meiste Kilometer in diesem Monat.',
+    };
+
+    return _buildSectionCard(
+      title: 'Leaderboard',
+      subtitle: subtitle,
+      icon: Icons.leaderboard_rounded,
+      accentColor: AppAccentColors.accent,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _buildLeaderboardPeriodPicker(),
+          const SizedBox(height: 14),
+          if (entries.isEmpty)
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: const Color(0xFF0B0E14).withValues(alpha: 0.45),
+                borderRadius: BorderRadius.circular(18),
+                border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
+              ),
+              child: const Text(
+                'Noch keine Fahrten in diesem Zeitraum.',
+                style: TextStyle(color: Color(0xFFA0AEC0), fontSize: 13),
+              ),
+            )
+          else
+            for (var i = 0; i < entries.length; i++) ...[
+              _buildLeaderboardRow(entries[i]),
+              if (i < entries.length - 1) const SizedBox(height: 9),
+            ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLeaderboardPeriodPicker() {
+    return Row(
+      children: [
+        Expanded(
+          child: _buildLeaderboardPeriodChip(
+            period: _LeaderboardPeriod.allTime,
+            label: 'Gesamt',
+          ),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: _buildLeaderboardPeriodChip(
+            period: _LeaderboardPeriod.month,
+            label: 'Monat',
+          ),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: _buildLeaderboardPeriodChip(
+            period: _LeaderboardPeriod.week,
+            label: 'Woche',
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildLeaderboardPeriodChip({
+    required _LeaderboardPeriod period,
+    required String label,
+  }) {
+    final selected = _leaderboardPeriod == period;
+    return GestureDetector(
+      onTap: () => setState(() => _leaderboardPeriod = period),
+      behavior: HitTestBehavior.opaque,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
+        curve: Curves.easeOutCubic,
+        height: 40,
+        decoration: BoxDecoration(
+          color: selected
+              ? AppAccentColors.accent.withValues(alpha: 0.18)
+              : const Color(0xFF0B0E14).withValues(alpha: 0.42),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(
+            color: selected
+                ? AppAccentColors.accent.withValues(alpha: 0.50)
+                : Colors.white.withValues(alpha: 0.07),
+          ),
+        ),
+        child: Center(
+          child: Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: selected ? Colors.white : const Color(0xFFA0AEC0),
+              fontSize: 12,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLeaderboardRow(_LeaderboardEntry entry) {
+    final currentUserId = Supabase.instance.client.auth.currentUser?.id;
+    final isMe = entry.userId == currentUserId;
+    final medalColor = switch (entry.rank) {
+      1 => const Color(0xFFFFD166),
+      2 => const Color(0xFFCBD5E1),
+      3 => const Color(0xFFD08A5B),
+      _ => AppAccentColors.accent,
+    };
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(18),
+        onTap: () => Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => UserProfilePage(
+              userId: entry.userId,
+              initialUsername: entry.displayName,
+            ),
+          ),
+        ),
+        child: Ink(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: isMe
+                ? AppAccentColors.accent.withValues(alpha: 0.11)
+                : const Color(0xFF0B0E14).withValues(alpha: 0.45),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(
+              color: isMe
+                  ? AppAccentColors.accent.withValues(alpha: 0.32)
+                  : Colors.white.withValues(alpha: 0.055),
+            ),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 34,
+                height: 34,
+                decoration: BoxDecoration(
+                  color: medalColor.withValues(alpha: 0.16),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Center(
+                  child: Text(
+                    '#${entry.rank}',
+                    style: TextStyle(
+                      color: medalColor,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 11),
+              UserAvatar(
+                name: entry.displayName,
+                avatarUrl: entry.avatarUrl,
+                radius: 18,
+              ),
+              const SizedBox(width: 11),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      isMe ? '${entry.displayName} · du' : entry.displayName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      '${entry.routeCount} ${entry.routeCount == 1 ? 'Fahrt' : 'Fahrten'}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Color(0xFFA0AEC0),
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 10),
+              Text(
+                _formatDistanceShort(entry.distanceKm),
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 15,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
