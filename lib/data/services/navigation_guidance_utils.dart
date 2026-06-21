@@ -448,8 +448,9 @@ bool groupFollowerShouldDeferLocalReroute({
 }) {
   if (!inGroup) return false; // Solo → normal rerouten.
   if (!hasSharedGroupRoute) return false; // keine kanonische Route → normal.
-  if (!hasFreshLeaderPeer)
+  if (!hasFreshLeaderPeer) {
     return false; // allein (Leader weg) → normal rerouten.
+  }
   if (isLeadingGroupRoute) return false; // ich führe → rerouten + publizieren.
   return true; // Nicht-Leader-Follower → der Route folgen, nicht selbst rerouten.
 }
