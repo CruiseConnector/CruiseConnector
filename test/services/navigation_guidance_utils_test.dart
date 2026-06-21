@@ -126,6 +126,69 @@ void main() {
     });
   });
 
+  group('groupFollowerShouldDeferLocalReroute (Feldkirch-Hang-Fix)', () {
+    test('Solo-Fahrer reroutet IMMER normal (nie deferren)', () {
+      expect(
+        groupFollowerShouldDeferLocalReroute(
+          inGroup: false,
+          hasSharedGroupRoute: false,
+          hasFreshLeaderPeer: false,
+          isLeadingGroupRoute: true,
+        ),
+        isFalse,
+      );
+    });
+
+    test('Gruppen-LEADER reroutet normal (publiziert für die Gruppe)', () {
+      expect(
+        groupFollowerShouldDeferLocalReroute(
+          inGroup: true,
+          hasSharedGroupRoute: true,
+          hasFreshLeaderPeer: true,
+          isLeadingGroupRoute: true,
+        ),
+        isFalse,
+      );
+    });
+
+    test('Allein in der Gruppe (kein frischer Peer) → normal rerouten', () {
+      expect(
+        groupFollowerShouldDeferLocalReroute(
+          inGroup: true,
+          hasSharedGroupRoute: true,
+          hasFreshLeaderPeer: false,
+          isLeadingGroupRoute: false,
+        ),
+        isFalse,
+      );
+    });
+
+    test('Ohne geteilte Gruppenroute → normal rerouten', () {
+      expect(
+        groupFollowerShouldDeferLocalReroute(
+          inGroup: true,
+          hasSharedGroupRoute: false,
+          hasFreshLeaderPeer: true,
+          isLeadingGroupRoute: false,
+        ),
+        isFalse,
+      );
+    });
+
+    test('Nicht-Leader-Follower mit Leader voraus → DEFERREN (kein '
+        'Eigen-Reroute, der die Leader-Updates fightet)', () {
+      expect(
+        groupFollowerShouldDeferLocalReroute(
+          inGroup: true,
+          hasSharedGroupRoute: true,
+          hasFreshLeaderPeer: true,
+          isLeadingGroupRoute: false,
+        ),
+        isTrue,
+      );
+    });
+  });
+
   group('groupRouteAccessLegAllowed', () {
     test('erlaubt lokale Zubringer nur fuer Rundkurs-Gruppenrouten', () {
       expect(groupRouteAccessLegAllowed(isRoundTrip: true), isTrue);

@@ -395,6 +395,31 @@ bool groupReroutePublisherIsLeader({
   return myProgressMeters + leadToleranceMeters >= maxPeerProgress;
 }
 
+/// 2026-06-21 (vucko Feldkirch-Gruppen-Video): Soll ein NICHT-führender Gruppen-
+/// Follower seine lokale Off-Route-Reroute AUSSETZEN?
+///
+/// Root Cause des 38s-„Neuberechnung"-Hangs: Ein Follower, der kurz off der
+/// geteilten Route ist, reroutet lokal zur (alten) Route — WÄHREND der Leader
+/// ständig neue Routen pusht. Beide fighten sich → Dauer-Churn, der Rundkurs-
+/// Rejoin scheitert am Fold-Back/Quality-Guard, „Neuberechnung" committet nie.
+///
+/// Produktregel (G4: „Vorderster führt"): Der Follower folgt der GETEILTEN
+/// Route zurück statt eine eigene zu rechnen. SICHER PER KONSTRUKTION — nur ein
+/// echter Nicht-Leader-Follower mit geteilter Route UND einem frischen Voraus-
+/// Peer deferred. Solo, Leader und Allein-in-Gruppe rerouten unverändert normal.
+bool groupFollowerShouldDeferLocalReroute({
+  required bool inGroup,
+  required bool hasSharedGroupRoute,
+  required bool hasFreshLeaderPeer,
+  required bool isLeadingGroupRoute,
+}) {
+  if (!inGroup) return false; // Solo → normal rerouten.
+  if (!hasSharedGroupRoute) return false; // keine kanonische Route → normal.
+  if (!hasFreshLeaderPeer) return false; // allein (Leader weg) → normal rerouten.
+  if (isLeadingGroupRoute) return false; // ich führe → rerouten + publizieren.
+  return true; // Nicht-Leader-Follower → der Route folgen, nicht selbst rerouten.
+}
+
 /// Darf ein Teilnehmer lokal eine Zufahrt vor die kanonische Gruppenroute
 /// bauen?
 ///

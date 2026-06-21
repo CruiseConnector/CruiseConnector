@@ -2439,6 +2439,25 @@ class _CruiseModePageState extends State<CruiseModePage>
     return isLeader;
   }
 
+  /// 2026-06-21 (vucko Feldkirch-Gruppen-Reroute-Hang): Soll dieser Follower
+  /// seine lokale Off-Route-Reroute aussetzen und der geteilten Leader-Route
+  /// folgen? Reine Entscheidung in [groupFollowerShouldDeferLocalReroute];
+  /// hier nur die Live-Inputs gesammelt. Sicher per Konstruktion: solo
+  /// (groupId null), Leader und Allein-in-Gruppe geben false → unverändert.
+  bool _groupFollowerShouldDeferReroute(geo.Position position) {
+    if (widget.groupId == null) return false;
+    final now = DateTime.now();
+    final hasFreshPeer = _groupMembers.values.any(
+      (m) => m.hasFreshLocation(now: now, maxAge: _groupMemberFreshLocationAge),
+    );
+    return groupFollowerShouldDeferLocalReroute(
+      inGroup: true,
+      hasSharedGroupRoute: _groupRouteRevision > 0,
+      hasFreshLeaderPeer: hasFreshPeer,
+      isLeadingGroupRoute: _isCurrentDeviceLeadingGroupRoute(position),
+    );
+  }
+
   Future<bool> _publishGroupRouteIfAllowed(
     RouteResult result, {
     required bool wasLeadingBeforeCommit,
@@ -11597,7 +11616,13 @@ class _CruiseModePageState extends State<CruiseModePage>
         !approachingDestination &&
         !nearRouteEnd &&
         !makingForwardProgress &&
-        rerouteMayVote) {
+        rerouteMayVote &&
+        // 2026-06-21 (vucko Feldkirch-Gruppen-Reroute-Hang): Ein NICHT-führender
+        // Gruppen-Follower reroutet NICHT selbst — er folgt der geteilten Leader-
+        // Route zurück (G4). Sonst fighten lokale Reroutes die Leader-Updates →
+        // 38s-„Neuberechnung"-Churn. Sicher per Konstruktion (solo/Leader/allein
+        // unverändert). Off-Route wird dann wie „im Korridor" behandelt (else).
+        !_groupFollowerShouldDeferReroute(position)) {
       // Ehrliche Banner-Meter: Luftlinie zur Route fließt in die Anzeige ein.
       _offRouteGapMeters = offRouteDecisionMatch.distanceMeters.isFinite
           ? offRouteDecisionMatch.distanceMeters
