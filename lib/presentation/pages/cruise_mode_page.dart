@@ -6078,15 +6078,18 @@ class _CruiseModePageState extends State<CruiseModePage>
     // alle anderen Modi bekommen maximal 3 km aktiv plus dezente Preview.
     // In der Preview (noch nicht bestätigt) bleibt _routeLatLngs, damit die
     // Reveal-Animation (2→voll) sichtbar bleibt.
-    // 2026-06-21 (vucko Geräte-Video „Luftlinie zur alten Linie beim Reroute"):
-    // Während aktiver Neuberechnung NIE eine Linie zeichnen. Vorher hing die
-    // aktive Quelle den Live-Puck-Kopf an die ALTE Routengeometrie → eine gerade
-    // Luftlinie quer über Felder vom Puck zur seitlich liegenden alten Route.
-    // Im Folgemodus (nicht Übersicht) blenden wir sie aus, bis die neue Route
-    // committet ist; das ehrliche „Neuberechnung"-Banner erklärt den Zustand.
+    // 2026-06-21 (vucko 2-Geräte-Video): Beim Reroute die Route SICHTBAR lassen.
+    // Früher (commit 8f61df0) wurde die Linie während „Neuberechnung" komplett
+    // ausgeblendet, um eine Luftlinie vom Puck zur alten Geometrie zu vermeiden —
+    // das ließ die rote Route aber 15s+ KOMPLETT verschwinden (Video-Befund).
+    // Jetzt: volle Routen-Geometrie OHNE Puck-Trim zeigen (keine Luftlinie, weil
+    // nicht an den Live-Puck-Kopf gehängt) bis die neue Route committet ist —
+    // wie Google/Apple, die die alte Route bis zum Reroute-Commit stehen lassen.
     final hideLineForReroute = _isReroutingBannerActive && !_isOverviewActive;
     final activePts = hideLineForReroute
-        ? const <LatLng>[]
+        ? (_routeLatLngs.length >= 2
+              ? _fullRouteBackgroundLatLngs
+              : const <LatLng>[])
         : (!_isOverviewActive && _routeLatLngs.length >= 2)
         ? (canUseLiveRouteWindow
               ? _brightAheadLatLngs
@@ -9888,6 +9891,7 @@ class _CruiseModePageState extends State<CruiseModePage>
   }
 
   Future<void> _startNavigationFlow() async {
+    _completionSheetShown = false; // neue Fahrt → genau ein Post-Sheet erlauben
     final hasLocationPermission = await _ensureNavigationLocationPermission();
     if (!hasLocationPermission) return;
 
@@ -15061,7 +15065,14 @@ class _CruiseModePageState extends State<CruiseModePage>
   // km + anteiliges XP) und kehrt NUR für Gruppen-Mitglieder NACH dem Schliessen
   // zurück in die Lobby — statt auf der Routensuche-Karte zu stranden. Solo-
   // Fahrten bleiben unverändert (Sheet → Reset auf Setup wie bisher).
+  // Ein-Schuss-Schutz: pro Fahrt erscheint NUR EIN Post-Route-Sheet. Sonst
+  // stapelten Ankunft + Beenden (oder ein doppelter Trigger) zwei Abschluss-
+  // Sheets → der „zweite Post-Screen" aus dem 2-Geräte-Video. Reset für die
+  // nächste Fahrt in _startNavigationFlow.
+  bool _completionSheetShown = false;
   void _presentCompletionSheet(CruiseCompletionDialog dialog) {
+    if (_completionSheetShown) return;
+    _completionSheetShown = true;
     unawaited(() async {
       await showCruiseCompletionSheet<void>(context: context, child: dialog);
       if (!mounted || _disposed) return;
