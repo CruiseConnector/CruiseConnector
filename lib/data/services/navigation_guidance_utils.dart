@@ -328,6 +328,39 @@ int? selectActiveGuidanceManeuverIndex({
   return lastIndex;
 }
 
+/// 2026-06-22 (vucko Banner-fehlt bei Rundkursen): Rotiert die Manöver-Indizes
+/// für einen gewrappten Rundkurs-Slice. Die Koordinaten werden ab [clampedStart]
+/// rotiert ([start..N-1] + [0..start-1]); ohne diese Mit-Rotation wurden die
+/// Manöver verworfen → leeres `_maneuvers` → das Manöver-Banner kam die GANZE
+/// Rundkurs-Fahrt nicht. Die Ankunft (Rückkehr zum Start) wird frisch ans Ende
+/// (Index N-1) gesetzt. Pur, damit unit-testbar.
+List<RouteManeuver> rotateManeuversForWrap(
+  List<RouteManeuver> source,
+  int clampedStart,
+  int coordCount,
+) {
+  if (source.isEmpty || coordCount < 2 || clampedStart <= 0) {
+    return source;
+  }
+  final n = coordCount;
+  final rotated = <RouteManeuver>[];
+  for (final maneuver in source) {
+    if (maneuver.isArrival) {
+      continue; // Ankunft kommt frisch ans Ende
+    }
+    final oldIdx = maneuver.routeIndex.clamp(0, n - 1).toInt();
+    final newIdx = (oldIdx - clampedStart + n) % n;
+    rotated.add(maneuver.copyWith(routeIndex: newIdx));
+  }
+  rotated.sort((a, b) => a.routeIndex.compareTo(b.routeIndex));
+  final arrival = source.firstWhere(
+    (m) => m.isArrival,
+    orElse: () => source.last,
+  );
+  rotated.add(arrival.copyWith(routeIndex: n - 1));
+  return rotated;
+}
+
 /// 2026-06-15 (vucko N1): Darf dieser GPS-Fix für ein Reroute „voten"?
 /// Mapbox-/Apple-Gating gegen Kaltstart-Phantom-Reroutes (Geräte-Fahrt 23min:
 /// der gesnappte Puck wirkt dead-on, während ROHES GPS am Fahrtbeginn seitlich
@@ -415,7 +448,8 @@ bool groupFollowerShouldDeferLocalReroute({
 }) {
   if (!inGroup) return false; // Solo → normal rerouten.
   if (!hasSharedGroupRoute) return false; // keine kanonische Route → normal.
-  if (!hasFreshLeaderPeer) return false; // allein (Leader weg) → normal rerouten.
+  if (!hasFreshLeaderPeer)
+    return false; // allein (Leader weg) → normal rerouten.
   if (isLeadingGroupRoute) return false; // ich führe → rerouten + publizieren.
   return true; // Nicht-Leader-Follower → der Route folgen, nicht selbst rerouten.
 }

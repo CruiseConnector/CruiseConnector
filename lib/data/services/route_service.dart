@@ -3285,7 +3285,7 @@ class RouteService {
         // ALLE Manöver verworfen → _maneuvers leer → das Manöver-Banner kam die
         // GANZE Fahrt nie (Lasso-Start-Screenshot, 24-km-Rundkurs). Jetzt werden
         // die Manöver-Indizes MIT-rotiert statt geleert.
-        ? _rotateManeuversForWrap(
+        ? rotateManeuversForWrap(
             route.maneuvers,
             clampedStart,
             slicedCoordinates.length,
@@ -3494,34 +3494,6 @@ class RouteService {
     required int routeIndex,
   }) {
     return maneuver.copyWith(routeIndex: routeIndex);
-  }
-
-  /// 2026-06-22 (vucko Banner-fehlt): Rotiert die Manöver-Indizes für einen
-  /// gewrappten Rundkurs-Slice (Koordinaten werden ab [clampedStart] rotiert:
-  /// [start..N-1] + [0..start-1]). Ohne diese Rotation wurden die Manöver
-  /// verworfen → leeres `_maneuvers` → kein Banner die ganze Fahrt. Die Ankunft
-  /// (Rückkehr zum Startpunkt) wird frisch ans Ende (Index N-1) gesetzt.
-  List<RouteManeuver> _rotateManeuversForWrap(
-    List<RouteManeuver> source,
-    int clampedStart,
-    int coordCount,
-  ) {
-    if (source.isEmpty || coordCount < 2 || clampedStart <= 0) return source;
-    final n = coordCount;
-    final rotated = <RouteManeuver>[];
-    for (final m in source) {
-      if (m.isArrival) continue; // Ankunft kommt frisch ans Ende
-      final oldIdx = m.routeIndex.clamp(0, n - 1).toInt();
-      final newIdx = (oldIdx - clampedStart + n) % n;
-      rotated.add(_copyManeuver(m, routeIndex: newIdx));
-    }
-    rotated.sort((a, b) => a.routeIndex.compareTo(b.routeIndex));
-    final arrival = source.firstWhere(
-      (m) => m.isArrival,
-      orElse: () => source.last,
-    );
-    rotated.add(_copyManeuver(arrival, routeIndex: n - 1));
-    return rotated;
   }
 
   List<double> _copyCoordinate(List<double> coordinate) {
