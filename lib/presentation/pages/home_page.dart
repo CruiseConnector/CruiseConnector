@@ -50,7 +50,6 @@ class _HomePageState extends State<HomePage> {
     CruiseModePage.isFullscreen.addListener(_onFullscreenChanged);
     CruiseModePage.pendingRoute.addListener(_onPendingRoute);
     CruiseModePage.pendingGroupView.addListener(_onPendingGroupView);
-    _requestLocationPermission();
     AppTutorialService.replayRequests.addListener(_onTutorialReplayRequested);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;

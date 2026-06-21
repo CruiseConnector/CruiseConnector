@@ -1,3 +1,5 @@
+// ignore_for_file: prefer_initializing_formals
+
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
@@ -3944,10 +3946,8 @@ class RoutePoolService {
       'kurvenjagd' ||
       'kurvenreich' ||
       'alpenstrassen' => const {'sport_mode', 'sport'},
-      'abendrunde' ||
-      'panorama' => const {'entdecker', 'zufall'},
-      'entdecker' ||
-      'zufall' => const {'abendrunde', 'panorama'},
+      'abendrunde' || 'panorama' => const {'entdecker', 'zufall'},
+      'entdecker' || 'zufall' => const {'abendrunde', 'panorama'},
       _ => const <String>{},
     };
     return candidateKeys.any(allowed.contains);
