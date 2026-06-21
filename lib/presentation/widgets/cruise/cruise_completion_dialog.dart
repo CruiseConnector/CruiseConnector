@@ -974,10 +974,18 @@ class _StatTile extends StatelessWidget {
               ? AnimatedBuilder(
                   animation: animatedValue!,
                   builder: (context, child) {
-                    return Text('${animatedValue!.value}', style: valueStyle);
+                    return FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: Alignment.centerLeft,
+                      child: Text('${animatedValue!.value}', style: valueStyle),
+                    );
                   },
                 )
-              : Text(value ?? '--', style: valueStyle),
+              : FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Text(value ?? '--', style: valueStyle),
+                ),
           SizedBox(height: exportMode ? 6 : 4),
           Text(
             label,

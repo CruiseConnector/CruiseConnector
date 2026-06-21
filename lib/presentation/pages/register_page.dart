@@ -149,9 +149,13 @@ class _RegisterPageState extends State<RegisterPage> {
                 color: AppAccentColors.accent,
               ),
               const SizedBox(width: 10),
-              const Text(
-                'E-Mail bestätigen',
-                style: TextStyle(color: Colors.white),
+              const Flexible(
+                child: Text(
+                  'E-Mail bestätigen',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(color: Colors.white),
+                ),
               ),
             ],
           ),

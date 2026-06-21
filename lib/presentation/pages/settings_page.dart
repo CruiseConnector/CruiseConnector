@@ -263,6 +263,7 @@ class _SettingsPageState extends State<SettingsPage> {
           builder: (ctx, setDialogState) {
             final canDelete = controller.text.trim().toLowerCase() == 'löschen';
             return AlertDialog(
+              scrollable: true,
               backgroundColor: const Color(0xFF1C1F26),
               title: const Text(
                 'Letzte Bestätigung',

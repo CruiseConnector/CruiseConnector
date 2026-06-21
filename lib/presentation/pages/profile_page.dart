@@ -1492,6 +1492,7 @@ class _ProfilePageState extends State<ProfilePage>
         route.userId == Supabase.instance.client.auth.currentUser?.id;
     showModalBottomSheet(
       context: context,
+      isScrollControlled: true,
       backgroundColor: const Color(0xFF1C1F26),
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
@@ -1500,116 +1501,120 @@ class _ProfilePageState extends State<ProfilePage>
         return SafeArea(
           child: Padding(
             padding: const EdgeInsets.symmetric(vertical: 16),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  width: 40,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: Colors.grey[600],
-                    borderRadius: BorderRadius.circular(2),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 40,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: Colors.grey[600],
+                      borderRadius: BorderRadius.circular(2),
+                    ),
                   ),
-                ),
-                const SizedBox(height: 16),
-                Text(
-                  route.name ?? route.style,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 18,
+                  const SizedBox(height: 16),
+                  Text(
+                    route.name ?? route.style,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 18,
+                    ),
                   ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  '${route.formattedDistance} · ${route.formattedDuration}',
-                  style: const TextStyle(color: Colors.grey, fontSize: 13),
-                ),
-                const SizedBox(height: 20),
-                _buildOptionTile(
-                  Icons.play_circle_fill,
-                  'Nochmal fahren',
-                  AppAccentColors.accent,
-                  () {
-                    Navigator.pop(ctx);
-                    CruiseModePage.pendingRoute.value = route;
-                  },
-                ),
-                if (isOwnRoute)
+                  const SizedBox(height: 4),
+                  Text(
+                    '${route.formattedDistance} · ${route.formattedDuration}',
+                    style: const TextStyle(color: Colors.grey, fontSize: 13),
+                  ),
+                  const SizedBox(height: 20),
                   _buildOptionTile(
-                    Icons.edit_outlined,
-                    'Route umbenennen',
-                    const Color(0xFFFFD166),
+                    Icons.play_circle_fill,
+                    'Nochmal fahren',
+                    AppAccentColors.accent,
                     () {
                       Navigator.pop(ctx);
-                      _renameRoute(route);
+                      CruiseModePage.pendingRoute.value = route;
                     },
                   ),
-                _buildOptionTile(
-                  Icons.share,
-                  'Als Post teilen',
-                  const Color(0xFF00E5FF),
-                  () {
-                    Navigator.pop(ctx);
-                    _shareRouteAsPost(route);
-                  },
-                ),
-                _buildOptionTile(
-                  Icons.ios_share_rounded,
-                  'Extern als Bild teilen',
-                  const Color(0xFFD7B48A),
-                  () {
-                    Navigator.pop(ctx);
-                    _shareRouteExternally(route);
-                  },
-                ),
-                _buildOptionTile(
-                  Icons.bookmark_remove_outlined,
-                  'Gespeicherte Route entfernen',
-                  Colors.grey,
-                  () async {
-                    Navigator.pop(ctx);
-                    final confirmed = await showDialog<bool>(
-                      context: context,
-                      builder: (c) => AlertDialog(
-                        backgroundColor: const Color(0xFF1C1F26),
-                        title: const Text(
-                          'Route entfernen?',
-                          style: TextStyle(color: Colors.white),
-                        ),
-                        content: const Text(
-                          'Diese Route wird aus deinen gespeicherten Routen entfernt. Du kannst sie später wieder speichern.',
-                          style: TextStyle(color: Colors.grey),
-                        ),
-                        actions: [
-                          TextButton(
-                            onPressed: () => Navigator.pop(c, false),
-                            child: const Text(
-                              'Abbrechen',
-                              style: TextStyle(color: Colors.grey),
-                            ),
+                  if (isOwnRoute)
+                    _buildOptionTile(
+                      Icons.edit_outlined,
+                      'Route umbenennen',
+                      const Color(0xFFFFD166),
+                      () {
+                        Navigator.pop(ctx);
+                        _renameRoute(route);
+                      },
+                    ),
+                  _buildOptionTile(
+                    Icons.share,
+                    'Als Post teilen',
+                    const Color(0xFF00E5FF),
+                    () {
+                      Navigator.pop(ctx);
+                      _shareRouteAsPost(route);
+                    },
+                  ),
+                  _buildOptionTile(
+                    Icons.ios_share_rounded,
+                    'Extern als Bild teilen',
+                    const Color(0xFFD7B48A),
+                    () {
+                      Navigator.pop(ctx);
+                      _shareRouteExternally(route);
+                    },
+                  ),
+                  _buildOptionTile(
+                    Icons.bookmark_remove_outlined,
+                    'Gespeicherte Route entfernen',
+                    Colors.grey,
+                    () async {
+                      Navigator.pop(ctx);
+                      final confirmed = await showDialog<bool>(
+                        context: context,
+                        builder: (c) => AlertDialog(
+                          backgroundColor: const Color(0xFF1C1F26),
+                          title: const Text(
+                            'Route entfernen?',
+                            style: TextStyle(color: Colors.white),
                           ),
-                          TextButton(
-                            onPressed: () => Navigator.pop(c, true),
-                            child: Text(
-                              'Entfernen',
-                              style: TextStyle(color: AppAccentColors.accent),
-                            ),
+                          content: const Text(
+                            'Diese Route wird aus deinen gespeicherten Routen entfernt. Du kannst sie später wieder speichern.',
+                            style: TextStyle(color: Colors.grey),
                           ),
-                        ],
-                      ),
-                    );
-                    if (confirmed == true) {
-                      await SavedRoutesService.unsaveRouteEverywhere(route);
-                      if (!mounted) return;
-                      await context
-                          .read<RouteBookmarkProvider>()
-                          .loadSavedRoutes();
-                      _loadData();
-                    }
-                  },
-                ),
-              ],
+                          actions: [
+                            TextButton(
+                              onPressed: () => Navigator.pop(c, false),
+                              child: const Text(
+                                'Abbrechen',
+                                style: TextStyle(color: Colors.grey),
+                              ),
+                            ),
+                            TextButton(
+                              onPressed: () => Navigator.pop(c, true),
+                              child: Text(
+                                'Entfernen',
+                                style: TextStyle(color: AppAccentColors.accent),
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                      if (confirmed == true) {
+                        await SavedRoutesService.unsaveRouteEverywhere(route);
+                        if (!mounted) return;
+                        await context
+                            .read<RouteBookmarkProvider>()
+                            .loadSavedRoutes();
+                        _loadData();
+                      }
+                    },
+                  ),
+                ],
+              ),
             ),
           ),
         );

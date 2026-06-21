@@ -384,52 +384,64 @@ class _SlidePage extends StatelessWidget {
               ),
               child: Padding(
                 padding: const EdgeInsets.all(22),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Container(
-                      width: 64,
-                      height: 64,
-                      decoration: BoxDecoration(
-                        color: Colors.black.withValues(alpha: 0.22),
-                        borderRadius: BorderRadius.circular(24),
-                        border: Border.all(
-                          color: accent.withValues(alpha: 0.36),
+                // Ganzer Karten-Inhalt scrollt bei kleinen Screens / großer
+                // Schrift, statt je überzulaufen (RenderFlex-sicher).
+                child: SingleChildScrollView(
+                  physics: const ClampingScrollPhysics(),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Container(
+                        width: 64,
+                        height: 64,
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.22),
+                          borderRadius: BorderRadius.circular(24),
+                          border: Border.all(
+                            color: accent.withValues(alpha: 0.36),
+                          ),
+                        ),
+                        child: Icon(slide.icon, color: accent, size: 30),
+                      ),
+                      const SizedBox(height: 22),
+                      Text(
+                        slide.title,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 28,
+                          height: 1.05,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: -0.4,
                         ),
                       ),
-                      child: Icon(slide.icon, color: accent, size: 30),
-                    ),
-                    const SizedBox(height: 22),
-                    Text(
-                      slide.title,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 28,
-                        height: 1.05,
-                        fontWeight: FontWeight.w900,
-                        letterSpacing: -0.4,
+                      const SizedBox(height: 12),
+                      Text(
+                        slide.body,
+                        style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.76),
+                          fontSize: 15.5,
+                          height: 1.34,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 12),
-                    Text(
-                      slide.body,
-                      style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.76),
-                        fontSize: 15.5,
-                        height: 1.34,
-                        fontWeight: FontWeight.w600,
+                      const SizedBox(height: 18),
+                      LayoutBuilder(
+                        builder: (context, c) => Wrap(
+                          spacing: 10,
+                          runSpacing: 10,
+                          children: [
+                            for (final fact in slide.facts)
+                              ConstrainedBox(
+                                constraints: BoxConstraints(
+                                  maxWidth: c.maxWidth,
+                                ),
+                                child: _FactPill(fact: fact, accent: accent),
+                              ),
+                          ],
+                        ),
                       ),
-                    ),
-                    const Spacer(),
-                    Wrap(
-                      spacing: 10,
-                      runSpacing: 10,
-                      children: [
-                        for (final fact in slide.facts)
-                          _FactPill(fact: fact, accent: accent),
-                      ],
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -467,12 +479,16 @@ class _FactPill extends StatelessWidget {
         children: [
           Icon(fact.icon, color: accent, size: 17),
           const SizedBox(width: 8),
-          Text(
-            fact.label,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 12.5,
-              fontWeight: FontWeight.w800,
+          Flexible(
+            child: Text(
+              fact.label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 12.5,
+                fontWeight: FontWeight.w800,
+              ),
             ),
           ),
         ],

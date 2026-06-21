@@ -5,9 +5,19 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  // Checkbox-Texte der 5 Wizard-Slides (in Reihenfolge).
+  const slideChecks = [
+    'Ich entscheide als Fahrer selbst und folge keiner Route blind.',
+    'Ich weiß, dass Kartendaten und Routenberechnung abweichen können.',
+    'Ich halte mich an die lokalen Verkehrsregeln und Anweisungen.',
+    'Ich bediene das Gerät nicht während der Fahrt.',
+    'Ich habe die Sicherheits- und Nutzungshinweise verstanden.',
+  ];
+
   Future<void> pumpOnboarding(
     WidgetTester tester, {
     required Size logicalSize,
+    double textScale = 1.0,
   }) async {
     SharedPreferences.setMockInitialValues({});
     RoutingOnboardingService.releaseLock();
@@ -25,11 +35,16 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         home: Builder(
-          builder: (context) => Scaffold(
-            body: Center(
-              child: ElevatedButton(
-                onPressed: () => showRoutingOnboardingSheet(context),
-                child: const Text('Onboarding öffnen'),
+          builder: (context) => MediaQuery(
+            data: MediaQuery.of(
+              context,
+            ).copyWith(textScaler: TextScaler.linear(textScale)),
+            child: Scaffold(
+              body: Center(
+                child: ElevatedButton(
+                  onPressed: () => showRoutingOnboardingSheet(context),
+                  child: const Text('Onboarding öffnen'),
+                ),
               ),
             ),
           ),
@@ -41,43 +56,59 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  testWidgets('Routing-Onboarding bleibt gesperrt bis zum Scroll-Ende', (
-    tester,
-  ) async {
-    await pumpOnboarding(tester, logicalSize: const Size(390, 844));
-
-    expect(find.text('Erst vollständig lesen'), findsOneWidget);
-    await tester.tap(find.text('Erst vollständig lesen'));
-    await tester.pumpAndSettle();
-    expect(await RoutingOnboardingService.hasAccepted(), isFalse);
-
-    await tester.drag(
-      find.byType(SingleChildScrollView),
-      const Offset(0, -5000),
-    );
-    await tester.pumpAndSettle();
-
-    expect(find.text('Verstanden'), findsOneWidget);
-    await tester.tap(find.text('Verstanden'));
-    await tester.pumpAndSettle();
-
-    expect(await RoutingOnboardingService.hasAccepted(), isTrue);
-    expect(find.text('Routing verstehen'), findsNothing);
-  });
-
-  testWidgets('Routing-Onboarding rendert auf kleinem iPhone ohne Overflow', (
+  testWidgets('Sicher-fahren-Wizard rendert auf kleinem iPhone ohne Overflow', (
     tester,
   ) async {
     await pumpOnboarding(tester, logicalSize: const Size(375, 667));
     expect(tester.takeException(), isNull);
-    expect(find.text('Routing verstehen'), findsOneWidget);
+    expect(find.text('Sicher fahren'), findsOneWidget);
+    expect(find.text('Du entscheidest'), findsOneWidget);
   });
 
-  testWidgets('Routing-Onboarding rendert auf großem iPhone ohne Overflow', (
+  testWidgets('Sicher-fahren-Wizard rendert auf großem iPhone ohne Overflow', (
     tester,
   ) async {
     await pumpOnboarding(tester, logicalSize: const Size(430, 932));
     expect(tester.takeException(), isNull);
-    expect(find.text('Routing verstehen'), findsOneWidget);
+    expect(find.text('Sicher fahren'), findsOneWidget);
+  });
+
+  testWidgets(
+    'Sicher-fahren-Wizard: kein Overflow bei großer Schrift (textScale 1.3)',
+    (tester) async {
+      await pumpOnboarding(
+        tester,
+        logicalSize: const Size(375, 667),
+        textScale: 1.3,
+      );
+      expect(tester.takeException(), isNull);
+      expect(find.text('Sicher fahren'), findsOneWidget);
+    },
+  );
+
+  testWidgets('Wizard bleibt gesperrt bis zum Häkchen und akzeptiert am Ende', (
+    tester,
+  ) async {
+    await pumpOnboarding(tester, logicalSize: const Size(390, 844));
+
+    // Ohne Häkchen: Button gesperrt mit „Häkchen setzen".
+    expect(find.text('Häkchen setzen'), findsOneWidget);
+    await tester.tap(find.text('Häkchen setzen'));
+    await tester.pumpAndSettle();
+    expect(await RoutingOnboardingService.hasAccepted(), isFalse);
+
+    // 5 Slides durchklicken: je Häkchen setzen → Weiter/Akzeptieren.
+    for (var i = 0; i < slideChecks.length; i++) {
+      await tester.tap(find.text(slideChecks[i]));
+      await tester.pumpAndSettle();
+      final isLast = i == slideChecks.length - 1;
+      final label = isLast ? 'Akzeptieren' : 'Weiter';
+      expect(find.text(label), findsOneWidget);
+      await tester.tap(find.text(label));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+    }
+
+    expect(await RoutingOnboardingService.hasAccepted(), isTrue);
   });
 }

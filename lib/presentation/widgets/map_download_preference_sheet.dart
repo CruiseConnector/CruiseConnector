@@ -143,38 +143,40 @@ class _MapDownloadPreferenceSheetState
                       Expanded(
                         child: Padding(
                           padding: const EdgeInsets.fromLTRB(18, 8, 18, 0),
-                          child: Column(
-                            children: [
-                              _PolicyCard(
-                                selected:
-                                    _policy == MapAutoDownloadPolicy.wifiOnly,
-                                accent: accent,
-                                icon: CupertinoIcons.wifi,
-                                title: 'Nur im WLAN',
-                                body:
-                                    'Empfohlen. Lädt automatisch, sobald WLAN verfügbar ist.',
-                                onTap: () => setState(
-                                  () =>
-                                      _policy = MapAutoDownloadPolicy.wifiOnly,
+                          child: SingleChildScrollView(
+                            child: Column(
+                              children: [
+                                _PolicyCard(
+                                  selected:
+                                      _policy == MapAutoDownloadPolicy.wifiOnly,
+                                  accent: accent,
+                                  icon: CupertinoIcons.wifi,
+                                  title: 'Nur im WLAN',
+                                  body:
+                                      'Empfohlen. Lädt automatisch, sobald WLAN verfügbar ist.',
+                                  onTap: () => setState(
+                                    () => _policy =
+                                        MapAutoDownloadPolicy.wifiOnly,
+                                  ),
                                 ),
-                              ),
-                              const SizedBox(height: 10),
-                              _PolicyCard(
-                                selected:
-                                    _policy ==
-                                    MapAutoDownloadPolicy.wifiAndMobile,
-                                accent: accent,
-                                icon: CupertinoIcons
-                                    .antenna_radiowaves_left_right,
-                                title: 'WLAN & mobile Daten',
-                                body:
-                                    'Startet auch über Mobilfunk. Kann viel Datenvolumen verbrauchen.',
-                                onTap: () => setState(
-                                  () => _policy =
+                                const SizedBox(height: 10),
+                                _PolicyCard(
+                                  selected:
+                                      _policy ==
                                       MapAutoDownloadPolicy.wifiAndMobile,
+                                  accent: accent,
+                                  icon: CupertinoIcons
+                                      .antenna_radiowaves_left_right,
+                                  title: 'WLAN & mobile Daten',
+                                  body:
+                                      'Startet auch über Mobilfunk. Kann viel Datenvolumen verbrauchen.',
+                                  onTap: () => setState(
+                                    () => _policy =
+                                        MapAutoDownloadPolicy.wifiAndMobile,
+                                  ),
                                 ),
-                              ),
-                            ],
+                              ],
+                            ),
                           ),
                         ),
                       ),

@@ -276,31 +276,34 @@ class _Slide extends StatelessWidget {
               ),
               child: Padding(
                 padding: const EdgeInsets.all(22),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Icon(slide.icon, color: accent, size: 42),
-                    const SizedBox(height: 20),
-                    Text(
-                      slide.title,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 27,
-                        fontWeight: FontWeight.w900,
-                        letterSpacing: -0.3,
+                child: SingleChildScrollView(
+                  physics: const ClampingScrollPhysics(),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(slide.icon, color: accent, size: 42),
+                      const SizedBox(height: 20),
+                      Text(
+                        slide.title,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 27,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: -0.3,
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 12),
-                    Text(
-                      slide.body,
-                      style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.76),
-                        fontSize: 15.5,
-                        height: 1.36,
-                        fontWeight: FontWeight.w600,
+                      const SizedBox(height: 12),
+                      Text(
+                        slide.body,
+                        style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.76),
+                          fontSize: 15.5,
+                          height: 1.36,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
             ),

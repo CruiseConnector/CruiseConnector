@@ -93,61 +93,75 @@ class _LocationAlwaysNoticeSheetState extends State<LocationAlwaysNoticeSheet> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Center(
-                            child: Container(
-                              width: 38,
-                              height: 4,
-                              decoration: BoxDecoration(
-                                color: Colors.white.withValues(alpha: 0.20),
-                                borderRadius: BorderRadius.circular(99),
+                          Expanded(
+                            child: SingleChildScrollView(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Center(
+                                    child: Container(
+                                      width: 38,
+                                      height: 4,
+                                      decoration: BoxDecoration(
+                                        color: Colors.white.withValues(
+                                          alpha: 0.20,
+                                        ),
+                                        borderRadius: BorderRadius.circular(99),
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(height: 20),
+                                  Icon(
+                                    CupertinoIcons.location_fill,
+                                    color: accent,
+                                    size: 34,
+                                  ),
+                                  const SizedBox(height: 12),
+                                  const Text(
+                                    'Standort immer erlauben',
+                                    style: TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 25,
+                                      fontWeight: FontWeight.w900,
+                                      letterSpacing: -0.3,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 10),
+                                  Text(
+                                    'Für aktive Navigation, Gruppenfahrten und sichere Re-Updates muss Cruise Connector deinen Standort auch weiter nutzen können, wenn du kurz die App wechselst oder der Bildschirm gesperrt ist.',
+                                    style: TextStyle(
+                                      color: Colors.white.withValues(
+                                        alpha: 0.72,
+                                      ),
+                                      fontSize: 14.2,
+                                      height: 1.36,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 16),
+                                  _HintRow(
+                                    accent: accent,
+                                    icon: CupertinoIcons.lock_rotation,
+                                    text:
+                                        'Aktive Fahrt bleibt stabil im Hintergrund.',
+                                  ),
+                                  _HintRow(
+                                    accent: accent,
+                                    icon: CupertinoIcons.person_2_fill,
+                                    text:
+                                        'Gruppenmitglieder sehen weiter deinen echten Fortschritt.',
+                                  ),
+                                  _HintRow(
+                                    accent: accent,
+                                    icon: CupertinoIcons.gear,
+                                    text:
+                                        'Du kannst die Freigabe jederzeit in iOS/Android ändern.',
+                                  ),
+                                ],
                               ),
                             ),
                           ),
-                          const SizedBox(height: 20),
-                          Icon(
-                            CupertinoIcons.location_fill,
-                            color: accent,
-                            size: 34,
-                          ),
-                          const SizedBox(height: 12),
-                          const Text(
-                            'Standort immer erlauben',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 25,
-                              fontWeight: FontWeight.w900,
-                              letterSpacing: -0.3,
-                            ),
-                          ),
-                          const SizedBox(height: 10),
-                          Text(
-                            'Für aktive Navigation, Gruppenfahrten und sichere Re-Updates muss Cruise Connector deinen Standort auch weiter nutzen können, wenn du kurz die App wechselst oder der Bildschirm gesperrt ist.',
-                            style: TextStyle(
-                              color: Colors.white.withValues(alpha: 0.72),
-                              fontSize: 14.2,
-                              height: 1.36,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
                           const SizedBox(height: 16),
-                          _HintRow(
-                            accent: accent,
-                            icon: CupertinoIcons.lock_rotation,
-                            text: 'Aktive Fahrt bleibt stabil im Hintergrund.',
-                          ),
-                          _HintRow(
-                            accent: accent,
-                            icon: CupertinoIcons.person_2_fill,
-                            text:
-                                'Gruppenmitglieder sehen weiter deinen echten Fortschritt.',
-                          ),
-                          _HintRow(
-                            accent: accent,
-                            icon: CupertinoIcons.gear,
-                            text:
-                                'Du kannst die Freigabe jederzeit in iOS/Android ändern.',
-                          ),
-                          const Spacer(),
                           Row(
                             children: [
                               Expanded(

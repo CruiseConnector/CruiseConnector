@@ -1124,6 +1124,7 @@ class _GroupPreviewRow extends StatelessWidget {
               Text(
                 name,
                 maxLines: 2,
+                overflow: TextOverflow.ellipsis,
                 style: const TextStyle(
                   color: Colors.white,
                   fontSize: 12,

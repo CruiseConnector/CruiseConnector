@@ -1112,7 +1112,7 @@ class _CommunityPageState extends State<CommunityPage>
   Widget _buildGroupsCarousel() {
     return _buildCarouselSection(
       title: 'Gruppen entdecken',
-      height: 140,
+      height: 170,
       itemCount: _discoverGroups.length,
       itemWidth: 220,
       itemBuilder: (ctx, i) {
@@ -1150,9 +1150,7 @@ class _CommunityPageState extends State<CommunityPage>
                     child: Text(
                       group['name'] ?? '',
                       maxLines: nameExpanded ? 3 : 1,
-                      overflow: nameExpanded
-                          ? TextOverflow.visible
-                          : TextOverflow.ellipsis,
+                      overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
                         color: Colors.white,
                         fontWeight: FontWeight.bold,
@@ -1331,18 +1329,22 @@ class _CommunityPageState extends State<CommunityPage>
               children: [
                 Row(
                   children: [
-                    GestureDetector(
-                      onTap: () {
-                        if (postUserId != null) {
-                          _openUserProfile(postUserId, name);
-                        }
-                      },
-                      child: Text(
-                        name,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 15,
+                    Flexible(
+                      child: GestureDetector(
+                        onTap: () {
+                          if (postUserId != null) {
+                            _openUserProfile(postUserId, name);
+                          }
+                        },
+                        child: Text(
+                          name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 15,
+                          ),
                         ),
                       ),
                     ),
