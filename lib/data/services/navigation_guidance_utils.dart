@@ -361,6 +361,25 @@ List<RouteManeuver> rotateManeuversForWrap(
   return rotated;
 }
 
+/// 2026-06-22 (vucko Geräte-Video „Autobahn-Ausfahrt kommt zu spät"): Distanz
+/// (m), ab der die Voice-Vorankündigung eines Manövers feuern soll —
+/// GESCHWINDIGKEITSABHÄNGIG (Google/Apple/OsmAnd-Ansatz: ~konstante Zeit bis zum
+/// Manöver). Die alten fixen 300 m waren bei Autobahntempo (~28 m/s) nur ~11 s
+/// Vorlauf → „in 200 m raus" kam erst auf der Rampe. Mit [leadSeconds] Vorlauf
+/// ergibt das bei 100 km/h ~780 m, bei 130 km/h ~1 km, im Ort min. [minMeters].
+/// Pur, unit-testbar.
+double maneuverPreAnnounceDistanceMeters(
+  double speedMetersPerSecond, {
+  double leadSeconds = 28.0,
+  double minMeters = 250.0,
+  double maxMeters = 1200.0,
+}) {
+  if (!speedMetersPerSecond.isFinite || speedMetersPerSecond <= 0) {
+    return minMeters;
+  }
+  return (speedMetersPerSecond * leadSeconds).clamp(minMeters, maxMeters);
+}
+
 /// 2026-06-15 (vucko N1): Darf dieser GPS-Fix für ein Reroute „voten"?
 /// Mapbox-/Apple-Gating gegen Kaltstart-Phantom-Reroutes (Geräte-Fahrt 23min:
 /// der gesnappte Puck wirkt dead-on, während ROHES GPS am Fahrtbeginn seitlich

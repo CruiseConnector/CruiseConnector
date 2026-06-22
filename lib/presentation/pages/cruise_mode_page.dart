@@ -461,6 +461,9 @@ class _CruiseModePageState extends State<CruiseModePage>
   // 2026-05-23 (vucko): Haptic-Tracking damit jede Stufe (300m/150m/50m)
   // nur 1× pro Manöver feuert statt bei jedem GPS-Tick.
   int? _lastHapticManeuverIndex;
+  // 2026-06-22 (vucko Autobahn-Ausfahrt): welcher Manöver-Index schon eine
+  // (geschwindigkeitsabhängige) Voice-Vorankündigung bekommen hat.
+  int? _voicePreAnnouncedManeuverIndex;
   bool _hapticStage300m = false;
   bool _hapticStage150m = false;
   bool _hapticStage50m = false;
@@ -12021,14 +12024,26 @@ class _CruiseModePageState extends State<CruiseModePage>
       // Band, und die EINZIGE Voice-Vorankuendigung (300m) entfiel. Jetzt
       // feuert immer die hoechste noch offene Stufe <= aktueller Distanz;
       // tiefere Stufen markieren die hoeheren als verbraucht.
-      // 300m → lightImpact + EINE saubere Vorankündigung.
+      // 2026-06-22 (vucko Geräte-Video „Autobahn-Ausfahrt zu spät"): Voice-
+      // Vorankündigung GESCHWINDIGKEITSABHÄNGIG vorziehen — bei Autobahntempo
+      // ~780 m statt fix 300 m (sonst kam „in 200 m raus" erst auf der Rampe).
+      // Genau 1× pro Manöver; Distanz im Text macht es ehrlich („In 800 Metern…").
+      final preAnnounceDist = maneuverPreAnnounceDistanceMeters(
+        _nativeSmoother.speed,
+      );
+      if (_voicePreAnnouncedManeuverIndex != visibleManeuverIndex &&
+          distToManeuver <= preAnnounceDist &&
+          distToManeuver > 60) {
+        _voicePreAnnouncedManeuverIndex = visibleManeuverIndex;
+        _speakManeuverAnnouncement(distToManeuver.round(), important: true);
+      }
+      // 300m → lightImpact (Haptik bleibt fix; die Voice kommt jetzt früher).
       if (!_hapticStage300m && distToManeuver <= 300 && distToManeuver > 50) {
         HapticFeedback.lightImpact();
         _hapticStage300m = true;
         // Erstkontakt schon <=150m (Fix-Luecke): 150er-Haptik gilt als
         // mitverbraucht — sonst feuern light+medium im selben Tick doppelt.
         if (distToManeuver <= 150) _hapticStage150m = true;
-        _speakManeuverAnnouncement(distToManeuver.round(), important: true);
       }
       // 150m → 2026-06-05 (vucko Task #6): NUR Haptik, KEINE Voice mehr. Die
       // 150m-Ansage würgte sonst per stop() die 300m-Vorankündigung mitten im

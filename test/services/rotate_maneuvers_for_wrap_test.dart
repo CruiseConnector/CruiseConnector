@@ -53,4 +53,25 @@ void main() {
       expect(rotateManeuversForWrap(const [], 3, 10), isEmpty);
     });
   });
+
+  group('maneuverPreAnnounceDistanceMeters (Autobahn-Voice-Timing)', () {
+    test('skaliert mit Tempo — Autobahn deutlich früher als Ort', () {
+      final city = maneuverPreAnnounceDistanceMeters(14); // ~50 km/h
+      final hwy = maneuverPreAnnounceDistanceMeters(28); // ~100 km/h
+      expect(hwy, greaterThan(city));
+      expect(hwy, closeTo(784, 1)); // 28 * 28 s
+      expect(city, closeTo(392, 1)); // 14 * 28 s
+    });
+
+    test('Untergrenze im Stand / sehr langsam', () {
+      expect(maneuverPreAnnounceDistanceMeters(0), 250);
+      expect(maneuverPreAnnounceDistanceMeters(8), 250); // 8*28=224 < 250
+      expect(maneuverPreAnnounceDistanceMeters(-5), 250);
+      expect(maneuverPreAnnounceDistanceMeters(double.nan), 250);
+    });
+
+    test('Obergrenze bei sehr hohem Tempo', () {
+      expect(maneuverPreAnnounceDistanceMeters(60), 1200); // 60*28 > 1200
+    });
+  });
 }
