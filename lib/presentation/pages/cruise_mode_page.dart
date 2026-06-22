@@ -2472,11 +2472,20 @@ class _CruiseModePageState extends State<CruiseModePage>
     final hasFreshPeer = _groupMembers.values.any(
       (m) => m.hasFreshLocation(now: now, maxAge: _groupMemberFreshLocationAge),
     );
+    // 2026-06-22 (vucko Gruppen-Video „Follower strandet"): Wie lange/weit ist
+    // der Follower schon off-route? Bei anhaltender/weiter Divergenz hört der
+    // Defer auf, damit der Follower nicht ewig auf eine Leader-Route wartet, die
+    // nie kommt (Leader fährt korrekt weiter), sondern selbst zurück-rerouted.
+    final offRouteFor = _offRouteSince == null
+        ? Duration.zero
+        : now.difference(_offRouteSince!);
     return groupFollowerShouldDeferLocalReroute(
       inGroup: true,
       hasSharedGroupRoute: _groupRouteRevision > 0,
       hasFreshLeaderPeer: hasFreshPeer,
       isLeadingGroupRoute: _isCurrentDeviceLeadingGroupRoute(position),
+      offRouteFor: offRouteFor,
+      offRouteGapMeters: _offRouteGapMeters,
     );
   }
 

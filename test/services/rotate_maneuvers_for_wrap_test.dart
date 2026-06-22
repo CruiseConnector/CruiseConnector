@@ -158,4 +158,44 @@ void main() {
       expect(out.map((m) => m.routeIndex), [0, 5]);
     });
   });
+
+  group('groupFollowerShouldDeferLocalReroute (Follower strandet nicht)', () {
+    bool call({
+      bool inGroup = true,
+      bool hasSharedGroupRoute = true,
+      bool hasFreshLeaderPeer = true,
+      bool isLeadingGroupRoute = false,
+      Duration offRouteFor = Duration.zero,
+      double offRouteGapMeters = 0.0,
+    }) => groupFollowerShouldDeferLocalReroute(
+      inGroup: inGroup,
+      hasSharedGroupRoute: hasSharedGroupRoute,
+      hasFreshLeaderPeer: hasFreshLeaderPeer,
+      isLeadingGroupRoute: isLeadingGroupRoute,
+      offRouteFor: offRouteFor,
+      offRouteGapMeters: offRouteGapMeters,
+    );
+
+    test('transient off-route mit Leader voraus → deferred', () {
+      expect(
+        call(offRouteFor: const Duration(seconds: 3), offRouteGapMeters: 60),
+        isTrue,
+      );
+    });
+
+    test('anhaltend off-route (>10s) → eigener Reroute', () {
+      expect(call(offRouteFor: const Duration(seconds: 12)), isFalse);
+    });
+
+    test('weit off-route (>200m) → eigener Reroute', () {
+      expect(call(offRouteGapMeters: 240), isFalse);
+    });
+
+    test('Basisfälle bleiben: solo / kein Plan / kein Peer / Leader → false', () {
+      expect(call(inGroup: false), isFalse);
+      expect(call(hasSharedGroupRoute: false), isFalse);
+      expect(call(hasFreshLeaderPeer: false), isFalse);
+      expect(call(isLeadingGroupRoute: true), isFalse);
+    });
+  });
 }

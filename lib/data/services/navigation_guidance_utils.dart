@@ -498,11 +498,23 @@ bool groupReroutePublisherIsLeader({
 /// Route zurück statt eine eigene zu rechnen. SICHER PER KONSTRUKTION — nur ein
 /// echter Nicht-Leader-Follower mit geteilter Route UND einem frischen Voraus-
 /// Peer deferred. Solo, Leader und Allein-in-Gruppe rerouten unverändert normal.
+/// 2026-06-22 (vucko Gruppen-Video „Follower strandet auf der Routensuche"):
+/// Der Defer ist BEGRENZT. Er deckt nur den transienten Fall ab (Follower kurz
+/// neben der geteilten Route an einer Kreuzung — Leader führt, dessen Republish
+/// kommt per Realtime). Ist der Follower ANHALTEND oder WEIT off-route (echte
+/// Abzweigung / falsche Abbiegung), hilft Warten nicht: dann muss er LOKAL zur
+/// geteilten Route zurück-rerouten (Rejoin). Er überschreibt die Gruppenroute
+/// dabei NICHT (Publish verlangt Leader-Status) — er navigiert nur selbst zurück.
+/// [maxDeferDuration] deckt das Realtime+5s-Backfill-Fenster mit Reserve ab.
 bool groupFollowerShouldDeferLocalReroute({
   required bool inGroup,
   required bool hasSharedGroupRoute,
   required bool hasFreshLeaderPeer,
   required bool isLeadingGroupRoute,
+  Duration offRouteFor = Duration.zero,
+  double offRouteGapMeters = 0.0,
+  Duration maxDeferDuration = const Duration(seconds: 10),
+  double maxDeferGapMeters = 200.0,
 }) {
   if (!inGroup) return false; // Solo → normal rerouten.
   if (!hasSharedGroupRoute) return false; // keine kanonische Route → normal.
@@ -510,6 +522,9 @@ bool groupFollowerShouldDeferLocalReroute({
     return false; // allein (Leader weg) → normal rerouten.
   }
   if (isLeadingGroupRoute) return false; // ich führe → rerouten + publizieren.
+  // Anhaltend/weit off-route = echte Divergenz → nicht länger warten.
+  if (offRouteFor >= maxDeferDuration) return false;
+  if (offRouteGapMeters >= maxDeferGapMeters) return false;
   return true; // Nicht-Leader-Follower → der Route folgen, nicht selbst rerouten.
 }
 
