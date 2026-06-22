@@ -380,6 +380,24 @@ double maneuverPreAnnounceDistanceMeters(
   return (speedMetersPerSecond * leadSeconds).clamp(minMeters, maxMeters);
 }
 
+/// 2026-06-22 (vucko Kreisverkehr „generischer Pfeil statt Kreisel"): Ob eine
+/// GraphHopper-Instruktion ein Kreisverkehr ist. `sign == 6` (USE_ROUNDABOUT)
+/// ist die kanonische Quelle, aber GraphHopper setzt `exit_number` AUSSCHLIESSLICH
+/// auf Kreisverkehr-Instruktionen — taucht es auf, ist es robust ein Kreisel,
+/// selbst wenn (durch eine GH-Version/-Config-Eigenheit) das Vorzeichen mal
+/// abweicht und der Text die Schlagworte nicht enthält. So fällt ein Kreisel nie
+/// auf das generische Abbiege-Symbol zurück. `sign == 4` (Ankunft/Finish) wird
+/// nie als Kreisel klassifiziert. Pur, unit-testbar.
+bool graphhopperManeuverIsRoundabout({
+  required int sign,
+  required bool hasExitNumber,
+  required bool textLooksRoundabout,
+}) {
+  if (sign == 6) return true;
+  if (sign == 4) return false;
+  return hasExitNumber || textLooksRoundabout;
+}
+
 /// 2026-06-15 (vucko N1): Darf dieser GPS-Fix für ein Reroute „voten"?
 /// Mapbox-/Apple-Gating gegen Kaltstart-Phantom-Reroutes (Geräte-Fahrt 23min:
 /// der gesnappte Puck wirkt dead-on, während ROHES GPS am Fahrtbeginn seitlich

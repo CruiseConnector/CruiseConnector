@@ -9311,9 +9311,16 @@ class RouteService {
       final lng = c[0];
       final lat = c[1];
       final text = (ins['text'] as String?)?.trim() ?? '';
-      final textLooksRoundabout =
-          sign != 4 && _graphhopperTextLooksRoundabout(text);
-      final isRoundabout = sign == 6 || textLooksRoundabout;
+      // 2026-06-22 (vucko Kreisverkehr-Robustheit): `exit_number` ist GHs
+      // exklusiver Kreisverkehr-Marker — ihn als Klassifikations-Signal mit
+      // aufnehmen, damit ein Kreisel nie als generische Abbiegung (= Pfeil statt
+      // Kreisel-Symbol) durchrutscht, falls Vorzeichen/Text mal nicht greifen.
+      final hasExitNumber = (ins['exit_number'] as num?) != null;
+      final isRoundabout = graphhopperManeuverIsRoundabout(
+        sign: sign,
+        hasExitNumber: hasExitNumber,
+        textLooksRoundabout: _graphhopperTextLooksRoundabout(text),
+      );
       final providerExitNumber = isRoundabout
           ? ((ins['exit_number'] as num?)?.toInt() ??
                 _roundaboutExitNumberFromText(text))

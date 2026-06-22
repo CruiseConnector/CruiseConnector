@@ -74,4 +74,61 @@ void main() {
       expect(maneuverPreAnnounceDistanceMeters(60), 1200); // 60*28 > 1200
     });
   });
+
+  group('graphhopperManeuverIsRoundabout (Kreisel-Klassifikation)', () {
+    test('sign 6 ist immer Kreisel', () {
+      expect(
+        graphhopperManeuverIsRoundabout(
+          sign: 6,
+          hasExitNumber: false,
+          textLooksRoundabout: false,
+        ),
+        isTrue,
+      );
+    });
+
+    test('exit_number klassifiziert Kreisel auch ohne sign 6', () {
+      expect(
+        graphhopperManeuverIsRoundabout(
+          sign: 0,
+          hasExitNumber: true,
+          textLooksRoundabout: false,
+        ),
+        isTrue,
+      );
+    });
+
+    test('Schlagwort-Text klassifiziert Kreisel', () {
+      expect(
+        graphhopperManeuverIsRoundabout(
+          sign: 2,
+          hasExitNumber: false,
+          textLooksRoundabout: true,
+        ),
+        isTrue,
+      );
+    });
+
+    test('Ankunft (sign 4) nie Kreisel, auch mit exit_number', () {
+      expect(
+        graphhopperManeuverIsRoundabout(
+          sign: 4,
+          hasExitNumber: true,
+          textLooksRoundabout: true,
+        ),
+        isFalse,
+      );
+    });
+
+    test('normale Abbiegung ohne Signale ist kein Kreisel', () {
+      expect(
+        graphhopperManeuverIsRoundabout(
+          sign: 2,
+          hasExitNumber: false,
+          textLooksRoundabout: false,
+        ),
+        isFalse,
+      );
+    });
+  });
 }
