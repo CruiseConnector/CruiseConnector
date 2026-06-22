@@ -491,6 +491,11 @@ class _CruiseModePageState extends State<CruiseModePage>
   double? _remainingDuration; // Live verbleibende Zeit in Sekunden
   bool _isRerouting = false; // Verhindert mehrfaches gleichzeitiges Rerouting
   DateTime? _rerouteStartedAt;
+  // 2026-06-22 (vucko Reroute-Hang): Sicherheits-Watchdog. Falls ein await im
+  // Reroute-Pfad wider Erwarten nicht zurückkommt (hängendes Plugin/SDK), wird
+  // _isRerouting garantiert zurückgesetzt und ein sanfter Fallback gezeigt,
+  // statt das Banner endlos auf „Neuberechnung" stehen zu lassen.
+  Timer? _rerouteWatchdog;
   // 2026-06-13 (vucko J4): _rerouteBannerShown entfernt — es gibt keinen
   // separaten Reroute-Toast mehr (das obere Banner zeigt „Neuberechnung").
   DateTime? _lastRerouteTime; // Cooldown zwischen Reroutes
@@ -3171,6 +3176,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     _routeDrawAnimationTimer?.cancel();
     _routeLoadingPhaseTimer?.cancel();
     _routeSearchExitTimer?.cancel();
+    _rerouteWatchdog?.cancel();
     _cameraAnimController?.removeListener(_onCameraAnimationTick);
     _cameraAnimController?.dispose();
     CruiseModePage.isFullscreen.value = false;
@@ -10300,6 +10306,14 @@ class _CruiseModePageState extends State<CruiseModePage>
   /// kurz sichtbar zu machen.
   static const double _rerouteCommitMaxRouteOffsetMeters = 65.0;
 
+  /// 2026-06-22 (vucko Reroute-Hang): Obergrenze, ab der ein laufender Reroute
+  /// als „hängend" gilt. Bewusst großzügig über dem realistischen Worst-Case
+  /// (zwei Zyklen mit je mehreren sequenziellen ≤10s-HTTP-Calls können legitim
+  /// 15-20s dauern) — der Watchdog soll NUR im echten Hänger feuern, nicht eine
+  /// noch laufende, normal-langsame Neuberechnung abwürgen. Ein evtl. doch noch
+  /// committender Spät-Zyklus wird vom 65m-Stale-Check abgefangen.
+  static const Duration _rerouteWatchdogTimeout = Duration(seconds: 22);
+
   String _classifyRerouteError(Object e) {
     if (e is TimeoutException) return 'timeout';
     if (e is RouteServiceException) {
@@ -10392,7 +10406,14 @@ class _CruiseModePageState extends State<CruiseModePage>
   Future<bool> _hasConnectivityForReroute() async {
     if (kIsWeb) return true;
     try {
-      final results = await Connectivity().checkConnectivity();
+      // 2026-06-22 (vucko Reroute-Hang): Der Connectivity-Plugin-Call hat KEIN
+      // eigenes Timeout und kann auf manchen Android-Geräten hängen — dann blieb
+      // _isRerouting für immer true und das Banner stand endlos auf
+      // „Neuberechnung". Hart deckeln; bei Timeout online annehmen (der HTTP-
+      // Reroute scheitert ohnehin schnell, wenn wir wirklich offline sind).
+      final results = await Connectivity().checkConnectivity().timeout(
+        const Duration(seconds: 2),
+      );
       return results.any((result) => result != ConnectivityResult.none);
     } catch (error) {
       debugPrint(
@@ -13154,6 +13175,36 @@ class _CruiseModePageState extends State<CruiseModePage>
     _isRerouting = true;
     _rerouteStartedAt = DateTime.now();
     _pendingChainedReroute = false;
+    // 2026-06-22 (vucko Reroute-Hang): Harter Watchdog. Alle await-Stellen sind
+    // einzeln per .timeout() gedeckelt (Connectivity 2s, HTTP ≤10s, GPS 3s) →
+    // das finally läuft garantiert. Dieser Timer ist das Sicherheitsnetz für den
+    // pathologischen Fall, dass ein Future trotzdem hängt: nach _rerouteWatchdog
+    // Timeout wird der „Neuberechnung"-Status zwangsweise beendet. Ein evtl.
+    // spät zurückkommender Commit wird vom 80m-Stale-Check in
+    // _commitRerouteResult ohnehin verworfen (der Fahrer ist längst weiter).
+    _rerouteWatchdog?.cancel();
+    _rerouteWatchdog = Timer(_rerouteWatchdogTimeout, () {
+      if (!_isRerouting || !mounted || _disposed) return;
+      debugPrint(
+        '[CruiseMode][Reroute] Watchdog: Reroute >${_rerouteWatchdogTimeout.inSeconds}s '
+        'ohne Commit → harter Reset des „Neuberechnung"-Status',
+      );
+      _isRerouting = false;
+      _rerouteStartedAt = null;
+      _lastRerouteTime = DateTime.now();
+      _lastRerouteFailed = true;
+      if (mounted) {
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        TopToast.show(
+          context,
+          message: 'Reroute dauert zu lange — bitte weiterfahren, ich versuche es gleich erneut',
+          icon: Icons.refresh_rounded,
+          isError: true,
+          duration: const Duration(milliseconds: 4000),
+        );
+        _safeSetState(() {});
+      }
+    });
     // 2026-06-13 (vucko Reroute-Videos): NIE mit der (bis zu 3s alten)
     // Erkennungs-Position routen. Smoother-Prediction mit 800ms-Vorhalt →
     // die neue Route startet dort, wo der Fahrer beim Commit WIRKLICH ist,
@@ -13240,6 +13291,10 @@ class _CruiseModePageState extends State<CruiseModePage>
         etaBeforeSeconds: etaBeforeSeconds,
       );
     } finally {
+      // 2026-06-22 (vucko Reroute-Hang): Watchdog abräumen — der reguläre Pfad
+      // ist fertig, ein verspäteter Zwangs-Reset wäre jetzt nur störend.
+      _rerouteWatchdog?.cancel();
+      _rerouteWatchdog = null;
       _isRerouting = false;
       _rerouteStartedAt = null;
       // 2026-06-13 (vucko Reroute-Videos): Der Commit landete nachweislich
