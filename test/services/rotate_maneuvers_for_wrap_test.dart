@@ -131,4 +131,31 @@ void main() {
       );
     });
   });
+
+  group('sliceManeuversForRange (Banner-leer-Pfade)', () {
+    test('behält Manöver im Bereich und mappt Indizes 0-basiert', () {
+      final source = [_m(0), _m(4), _m(9), _m(14, icon: Icons.flag)];
+      final out = sliceManeuversForRange(source, 4, 9);
+      // Nur 4 und 9 liegen im Bereich → neue Indizes 0 und 5.
+      expect(out.map((m) => m.routeIndex), [0, 5]);
+    });
+
+    test('Manöver außerhalb des Bereichs fallen weg', () {
+      final source = [_m(0), _m(2), _m(20)];
+      final out = sliceManeuversForRange(source, 5, 15);
+      expect(out, isEmpty);
+    });
+
+    test('leere Quelle / ungültiger Bereich → leer', () {
+      expect(sliceManeuversForRange(const [], 0, 5), isEmpty);
+      expect(sliceManeuversForRange([_m(3)], 5, 5), isEmpty);
+      expect(sliceManeuversForRange([_m(3)], 8, 2), isEmpty);
+    });
+
+    test('Bereichsgrenzen sind inklusiv', () {
+      final source = [_m(5), _m(10)];
+      final out = sliceManeuversForRange(source, 5, 10);
+      expect(out.map((m) => m.routeIndex), [0, 5]);
+    });
+  });
 }

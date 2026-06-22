@@ -398,6 +398,27 @@ bool graphhopperManeuverIsRoundabout({
   return hasExitNumber || textLooksRoundabout;
 }
 
+/// 2026-06-22 (vucko Banner-leer-Pfade): Schneidet eine Manöver-Liste auf den
+/// Koordinaten-Indexbereich [start, end] eines Routen-Slices zu und mappt
+/// `routeIndex` auf den neuen 0-basierten Bereich. Manöver außerhalb fallen weg.
+/// Pendant zu [rotateManeuversForWrap] für den Range-Slice (`_sliceRouteRange`),
+/// der die Manöver bislang komplett verwarf — sobald eine Route Manöver trägt,
+/// darf ein Zuschnitt sie nicht mehr verlieren (sonst leeres Banner auf dem
+/// zugeschnittenen Stück). Pur, unit-testbar.
+List<RouteManeuver> sliceManeuversForRange(
+  List<RouteManeuver> source,
+  int start,
+  int end,
+) {
+  if (source.isEmpty || end <= start) return const <RouteManeuver>[];
+  final out = <RouteManeuver>[];
+  for (final m in source) {
+    if (m.routeIndex < start || m.routeIndex > end) continue;
+    out.add(m.copyWith(routeIndex: m.routeIndex - start));
+  }
+  return out;
+}
+
 /// 2026-06-15 (vucko N1): Darf dieser GPS-Fix für ein Reroute „voten"?
 /// Mapbox-/Apple-Gating gegen Kaltstart-Phantom-Reroutes (Geräte-Fahrt 23min:
 /// der gesnappte Puck wirkt dead-on, während ROHES GPS am Fahrtbeginn seitlich

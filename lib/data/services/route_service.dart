@@ -7735,16 +7735,40 @@ class RouteService {
         ? route.durationSeconds! * (distanceMeters / sourceDistanceMeters)
         : route.durationSeconds;
 
+    // 2026-06-22 (vucko Banner-leer-Pfade): Manöver + Speed-Limits im Bereich
+    // [safeStart, safeEnd] MITNEHMEN statt sie zu verwerfen. Solange Pool-Routen
+    // keine Manöver tragen ist das ein No-Op; sobald eine zugeschnittene Route
+    // welche hat (z.B. künftig persistierte GH-Instruktionen im Pool, oder ein
+    // Slice einer Live-Route), darf der Zuschnitt das Banner nicht leeren.
+    final slicedManeuvers = sliceManeuversForRange(
+      route.maneuvers,
+      safeStart,
+      safeEnd,
+    );
+    final slicedSpeedLimits = <SpeedLimitSegment>[];
+    for (final s in route.speedLimits) {
+      final segStart = s.startIndex.clamp(safeStart, safeEnd).toInt();
+      final segEnd = s.endIndex.clamp(safeStart, safeEnd).toInt();
+      if (segEnd <= segStart) continue;
+      slicedSpeedLimits.add(
+        SpeedLimitSegment(
+          startIndex: segStart - safeStart,
+          endIndex: segEnd - safeStart,
+          speedKmh: s.speedKmh,
+        ),
+      );
+    }
+
     return _filteredRouteResult(
       RouteResult(
         geoJson: json.encode(geometry),
         geometry: geometry,
         coordinates: slicedCoordinates,
-        maneuvers: const <RouteManeuver>[],
+        maneuvers: slicedManeuvers,
         distanceMeters: distanceMeters,
         durationSeconds: durationSeconds,
         distanceKm: distanceMeters / 1000.0,
-        speedLimits: const <SpeedLimitSegment>[],
+        speedLimits: slicedSpeedLimits,
       ),
     );
   }
