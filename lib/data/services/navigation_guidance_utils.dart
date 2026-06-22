@@ -398,6 +398,28 @@ bool graphhopperManeuverIsRoundabout({
   return hasExitNumber || textLooksRoundabout;
 }
 
+/// 2026-06-23 (vucko 2-Geräte-Video „Banner + Rest-km frieren nach verpasstem
+/// Turn/Reroute ein"): Frozen-Progress-Watchdog-Entscheidung. Nach einem
+/// verpassten Abbieger hält der Render-Lock auf dem Manöverpunkt, die Distanz-
+/// entlang-der-Route friert dort ein (der Puck fährt perpendikular vorbei, bleibt
+/// aber unter dem 60m-Lateral-Release-Gate) → der normale Off-Route-Detektor
+/// feuert ~85s NICHT, Banner + Rest-km stehen still. Dieser Watchdog erkennt das
+/// (Fortschritt eingefroren TROTZ klarer Fahrt) und erzwingt EINEN Reroute, der
+/// alles re-ankert. STRENG gegated: nur bei echter Fahrt ([minSpeedMps]) und nicht
+/// an Ziel-/Routenende — feuert also nie an der Ampel oder bei normalem Halt. Pur.
+bool shouldForceRerouteOnFrozenProgress({
+  required Duration sinceProgressChanged,
+  required double speedMps,
+  required bool approachingDestination,
+  required bool nearRouteEnd,
+  Duration frozenLimit = const Duration(seconds: 15),
+  double minSpeedMps = 5.0,
+}) {
+  if (approachingDestination || nearRouteEnd) return false;
+  if (!speedMps.isFinite || speedMps < minSpeedMps) return false;
+  return sinceProgressChanged >= frozenLimit;
+}
+
 /// 2026-06-23 (vucko 2-Geräte-Video „Reroute findet ab einem Punkt KEINE Route
 /// mehr"): Ergebnis des lokalen Re-Anchor-Notnagels.
 class LocalReanchorRoute {

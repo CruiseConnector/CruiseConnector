@@ -517,6 +517,12 @@ class _CruiseModePageState extends State<CruiseModePage>
   // bleiben blockiert.
   int _advanceCapRejects = 0;
   DateTime? _lastRouteIndexAdvanceAt;
+  // 2026-06-23 (vucko 2-Geräte-Video „Banner+Rest-km frieren nach verpasstem
+  // Turn ein"): Frozen-Progress-Watchdog. Friert die Distanz-entlang-der-Route
+  // (Render-Lock) trotz klarer Fahrt zu lange ein (Map-Matcher klebt am
+  // verpassten Manöver, Off-Route feuert noch nicht), wird EIN Reroute erzwungen.
+  double? _lastRenderDistForFreeze;
+  DateTime? _renderDistChangedAt;
 
   // 2026-06-17 (vucko Geräte-Video: Standort-Teleport + grundloses Reroute):
   // GPS-Ausreißer-Gate. Letzter als plausibel akzeptierter ROH-Fix + Zähler der
@@ -11984,6 +11990,52 @@ class _CruiseModePageState extends State<CruiseModePage>
       // damit sich kein veralteter Stand zu einem späteren Fehl-Force summiert.
       _advanceCapRejects = 0;
       _lastRouteIndexAdvanceAt ??= position.timestamp;
+    }
+
+    // 2026-06-23 (vucko 2-Geräte-Video „Banner+Rest-km frieren nach verpasstem
+    // Turn ~85s ein"): Frozen-Progress-Watchdog. Die Render-Lock-Distanz gleitet
+    // normal mit dem Puck (auch mitten auf langen Segmenten) — friert sie TROTZ
+    // klarer Fahrt zu lange ein, klebt der Map-Matcher am verpassten Manöver und
+    // der Off-Route-Detektor feuert (noch) nicht (Puck geometrisch nah). Dann EIN
+    // Reroute erzwingen (re-ankert Banner+Linie+Rest-km; V1 committet garantiert).
+    final renderDistNow = _renderLockDistM;
+    if (_lastRenderDistForFreeze == null ||
+        (renderDistNow - _lastRenderDistForFreeze!).abs() > 5.0) {
+      _lastRenderDistForFreeze = renderDistNow;
+      _renderDistChangedAt = position.timestamp;
+    }
+    final frozenFor = _renderDistChangedAt == null
+        ? Duration.zero
+        : position.timestamp.difference(_renderDistChangedAt!);
+    final watchdogSpeedMps = math.max(
+      position.speed.isFinite && position.speed > 0 ? position.speed : 0.0,
+      _nativeSmoother.speed.isFinite && _nativeSmoother.speed > 0
+          ? _nativeSmoother.speed
+          : 0.0,
+    );
+    if (!_isRerouting &&
+        _isRouteConfirmed &&
+        shouldForceRerouteOnFrozenProgress(
+          sinceProgressChanged: frozenFor,
+          speedMps: watchdogSpeedMps,
+          approachingDestination: approachingDestination,
+          nearRouteEnd: nearRouteEnd,
+        ) &&
+        (_lastRerouteTime == null ||
+            position.timestamp.difference(_lastRerouteTime!) >
+                _rerouteFailureCooldown) &&
+        !_groupFollowerShouldDeferReroute(position)) {
+      debugPrint(
+        '[CruiseMode] Frozen-Progress-Watchdog: Fortschritt '
+        '${frozenFor.inSeconds}s eingefroren bei '
+        '${watchdogSpeedMps.toStringAsFixed(0)}m/s → Reroute erzwungen',
+      );
+      _renderDistChangedAt = position.timestamp; // Anti-Spam
+      _lastRenderDistForFreeze = renderDistNow;
+      _lastRerouteTime = position.timestamp;
+      _offRouteSince = null;
+      unawaited(_rerouteToOriginalRoute(position));
+      return;
     }
 
     // 2026-06-08 (vucko Leitlinie GPU-Trim): Fahrt-Fortschritt 0..1 entlang der

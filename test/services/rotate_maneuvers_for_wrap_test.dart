@@ -258,4 +258,37 @@ void main() {
       expect(out.coordinates.last, [9.4, 47.4]);
     });
   });
+
+  group('shouldForceRerouteOnFrozenProgress (Banner-Freeze-Watchdog)', () {
+    bool call({
+      Duration frozen = const Duration(seconds: 16),
+      double speed = 10.0,
+      bool approachingDestination = false,
+      bool nearRouteEnd = false,
+    }) => shouldForceRerouteOnFrozenProgress(
+      sinceProgressChanged: frozen,
+      speedMps: speed,
+      approachingDestination: approachingDestination,
+      nearRouteEnd: nearRouteEnd,
+    );
+
+    test('eingefroren bei klarer Fahrt → Reroute erzwingen', () {
+      expect(call(frozen: const Duration(seconds: 16), speed: 10), isTrue);
+    });
+
+    test('langsam/gestoppt (Ampel) → nicht feuern', () {
+      expect(call(speed: 3), isFalse);
+      expect(call(speed: 0), isFalse);
+      expect(call(speed: double.nan), isFalse);
+    });
+
+    test('noch nicht lange genug eingefroren → nicht feuern', () {
+      expect(call(frozen: const Duration(seconds: 10)), isFalse);
+    });
+
+    test('Ziel-/Routenende-Annäherung → nicht feuern', () {
+      expect(call(approachingDestination: true), isFalse);
+      expect(call(nearRouteEnd: true), isFalse);
+    });
+  });
 }
