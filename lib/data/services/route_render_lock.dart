@@ -244,6 +244,19 @@ class RouteRenderLock {
         searchSegmentIndex = math.min(idx, coordinates.length - 2);
         searchDistanceM = idxDist;
       }
+    } else if (!hasLock) {
+      // 2026-06-23 (vucko 2-Geräte-Video „komischer Start: Lasso/Dogleg"): Die
+      // ERST-Akquise suchte über die GANZE Route (_windowFor mit centerDistanceM<0).
+      // Auf einem selbstüberlappenden Rundkurs liegt der Puck am Start nah an
+      // Start UND Rückweg-Leg — die Voll-Suche rastete dann aufs FERNE Rückweg-
+      // Segment ein, das 3km-Fenster begann dort → sichtbarer Lasso-/Dogleg-Spike
+      // am Puck, der erst der Reroute heilte. Erst-Akquise stattdessen um
+      // currentRouteIndex bounden (= wo der Fahrer real auf der Route ist; beim
+      // Fahrtstart 0, nach Reroute-Commit der Re-Anchor-Index). Greift NUR vor dem
+      // ersten Lock; ein bestehender Lock ist monoton und davon unberührt.
+      final hintIdx = currentRouteIndex.clamp(0, coordinates.length - 2).toInt();
+      searchSegmentIndex = hintIdx;
+      searchDistanceM = cumulative[hintIdx];
     }
 
     final primaryWindow = _windowFor(
