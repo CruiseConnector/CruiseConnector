@@ -398,6 +398,60 @@ bool graphhopperManeuverIsRoundabout({
   return hasExitNumber || textLooksRoundabout;
 }
 
+/// 2026-06-23 (vucko 2-Geräte-Video „Reroute findet ab einem Punkt KEINE Route
+/// mehr"): Ergebnis des lokalen Re-Anchor-Notnagels.
+class LocalReanchorRoute {
+  const LocalReanchorRoute({required this.coordinates, required this.maneuvers});
+  final List<List<double>> coordinates;
+  final List<RouteManeuver> maneuvers;
+}
+
+/// Baut OHNE Netz eine garantiert gültige Reroute-Geometrie aus der BESTEHENDEN
+/// Planungs-Route + der aktuellen GPS-Position. Notnagel, wenn alle GraphHopper-
+/// Versuche (Ziel / Rejoin / garantierter Re-Dock) nichts liefern — typisch wenn
+/// GH nach vielen Reroutes 429-rate-limitet ODER jeder Kandidat durch die Shape-/
+/// Merge-Gates fällt (Video: >2,5 Min Endlos-„Neuberechnung" ohne Commit). Die
+/// Route wird ab dem nächsten VORWÄRTS-Punkt der Planungsroute geschnitten und
+/// die GPS-Position als Start davorgesetzt (kurzer gerader „zurück zur Route"-
+/// Anschluss wie bei Apple/Google). So bekommt der Fahrer IMMER Linie + Manöver
+/// zurück statt endlos zu hängen. Pur, unit-testbar.
+///
+/// [currentPosition] = [lng, lat]. [forwardRejoinIndex] = heading-bewusst
+/// gewählter Vorwärts-Wiedereinstiegspunkt (selectForwardRejoinIndex).
+LocalReanchorRoute buildLocalReanchorRoute({
+  required List<double> currentPosition,
+  required List<List<double>> planningCoordinates,
+  required List<RouteManeuver> planningManeuvers,
+  required int forwardRejoinIndex,
+}) {
+  final n = planningCoordinates.length;
+  if (n < 2) {
+    return LocalReanchorRoute(
+      coordinates: [
+        [currentPosition[0], currentPosition[1]],
+      ],
+      maneuvers: const <RouteManeuver>[],
+    );
+  }
+  final rejoin = forwardRejoinIndex.clamp(0, n - 1).toInt();
+  final coords = <List<double>>[
+    [currentPosition[0], currentPosition[1]],
+  ];
+  for (var i = rejoin; i < n; i++) {
+    coords.add([planningCoordinates[i][0], planningCoordinates[i][1]]);
+  }
+  // Manöver ab dem Rejoin übernehmen; Index um (-rejoin + 1) verschieben, weil
+  // die GPS-Position als Index 0 davorsteht (tail-Punkt rejoin → coords-Index 1).
+  final maneuvers = <RouteManeuver>[];
+  for (final m in planningManeuvers) {
+    if (m.routeIndex < rejoin) continue;
+    final newIdx = m.routeIndex - rejoin + 1;
+    if (newIdx < 1 || newIdx >= coords.length) continue;
+    maneuvers.add(m.copyWith(routeIndex: newIdx));
+  }
+  return LocalReanchorRoute(coordinates: coords, maneuvers: maneuvers);
+}
+
 /// 2026-06-22 (vucko Banner-leer-Pfade): Schneidet eine Manöver-Liste auf den
 /// Koordinaten-Indexbereich [start, end] eines Routen-Slices zu und mappt
 /// `routeIndex` auf den neuen 0-basierten Bereich. Manöver außerhalb fallen weg.

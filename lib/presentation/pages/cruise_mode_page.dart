@@ -10547,6 +10547,12 @@ class _CruiseModePageState extends State<CruiseModePage>
     RouteResult? sessionRouteResult,
     bool publishToGroup = true,
     double? remainingDistanceBeforeMeters,
+    // 2026-06-23 (vucko 2-Geräte-Video „Reroute findet ab einem Punkt KEINE
+    // Route mehr"): Der lokale Re-Anchor-Notnagel beginnt PER KONSTRUKTION exakt
+    // an der GPS-Position und ist die letzte Rettung gegen die Endlos-
+    // „Neuberechnung". Er darf NICHT an den Shape-/Stale-Gates scheitern (sonst
+    // bleibt der Fahrer ohne Route) → diese beiden Gates für ihn überspringen.
+    bool allowStaleReanchor = false,
   }) async {
     if (result.edgeMeta.isNotEmpty) {
       debugPrint(
@@ -10561,10 +10567,11 @@ class _CruiseModePageState extends State<CruiseModePage>
     // (Smoother-Prediction), nicht die bis zu mehrere Sekunden alte Request-
     // Position — fuer Wenden-Check, Re-Anchor und den Stale-Check unten.
     final commitPos = _freshRerouteStartPosition(position, lead: Duration.zero);
-    if (_rejectsProtectedShortReroute(
-      result,
-      remainingDistanceBeforeMeters: remainingDistanceBeforeMeters,
-    )) {
+    if (!allowStaleReanchor &&
+        _rejectsProtectedShortReroute(
+          result,
+          remainingDistanceBeforeMeters: remainingDistanceBeforeMeters,
+        )) {
       _lastRerouteTime = DateTime.now();
       _lastRerouteFailed = true;
       return false;
@@ -10586,8 +10593,10 @@ class _CruiseModePageState extends State<CruiseModePage>
       windowSize: math.min(160, result.coordinates.length),
       maxJumpMeters: double.infinity,
     );
-    if (!commitRouteMatch.distanceMeters.isFinite ||
-        commitRouteMatch.distanceMeters > _rerouteCommitMaxRouteOffsetMeters) {
+    if (!allowStaleReanchor &&
+        (!commitRouteMatch.distanceMeters.isFinite ||
+            commitRouteMatch.distanceMeters >
+                _rerouteCommitMaxRouteOffsetMeters)) {
       final offsetLabel = commitRouteMatch.distanceMeters.isFinite
           ? commitRouteMatch.distanceMeters.toStringAsFixed(0)
           : commitRouteMatch.distanceMeters.toString();
@@ -13179,6 +13188,59 @@ class _CruiseModePageState extends State<CruiseModePage>
     );
   }
 
+  /// 2026-06-23 (vucko 2-Geräte-Video „Reroute findet ab einem Punkt KEINE Route
+  /// mehr"): Netz-freier Re-Anchor-Notnagel. Baut aus der bestehenden Planungs-
+  /// route + GPS-Position eine garantiert gültige Route und committet sie unter
+  /// Umgehung der Shape-/Stale-Gates (`allowStaleReanchor`). Bricht die Endlos-
+  /// „Neuberechnung", wenn GraphHopper nichts liefert (429-Rate-Limit oder jeder
+  /// Kandidat ge-gated). Gibt true zurück, wenn committed.
+  Future<bool> _commitLocalReanchorFallback({
+    required geo.Position position,
+    required List<List<double>> planningCoordinates,
+    required List<RouteManeuver> planningManeuvers,
+    required double? remainingDistanceBeforeMeters,
+  }) async {
+    if (planningCoordinates.length < 2) return false;
+    // Nächsten Punkt auf der Planungsroute suchen + EINEN Schritt vorwärts →
+    // kurzer gerader Anschluss am Puck (kein 1-2km-Fern-Rejoin-Diagonale).
+    final match = findNearestInWindow(
+      position: position,
+      coordinates: planningCoordinates,
+      currentIndex: 0,
+      windowSize: planningCoordinates.length,
+      maxJumpMeters: double.infinity,
+    );
+    final rejoin = math
+        .min(match.index + 1, planningCoordinates.length - 1)
+        .clamp(0, planningCoordinates.length - 1)
+        .toInt();
+    final reanchor = buildLocalReanchorRoute(
+      currentPosition: [position.longitude, position.latitude],
+      planningCoordinates: planningCoordinates,
+      planningManeuvers: planningManeuvers,
+      forwardRejoinIndex: rejoin,
+    );
+    if (reanchor.coordinates.length < 2) return false;
+    final dist = _calculatePolylineDistanceMeters(reanchor.coordinates);
+    return _commitRerouteResult(
+      result: _buildRouteResultFromCoordinates(
+        coordinates: reanchor.coordinates,
+        maneuvers: reanchor.maneuvers,
+        distanceMeters: dist,
+        durationSeconds: _estimateDurationSecondsForDistance(dist),
+        speedLimits: const <SpeedLimitSegment>[],
+        edgeMeta: const {'reroute_mode': 'local_reanchor'},
+      ),
+      position: position,
+      remainingDistanceBeforeMeters: remainingDistanceBeforeMeters,
+      allowStaleReanchor: true,
+      // Lokaler Notnagel = nur SELBST zurück auf die bestehende Route. Die
+      // (degradierte, gerade-Anschluss-)Geometrie NICHT in die Gruppe
+      // publizieren — der nächste echte GH-Reroute übernimmt das.
+      publishToGroup: false,
+    );
+  }
+
   Future<void> _rerouteToOriginalRoute(geo.Position position) async {
     if (_isRerouting) return;
     _isRerouting = true;
@@ -13955,6 +14017,18 @@ class _CruiseModePageState extends State<CruiseModePage>
             );
             if (!committed) {
               cycleFailures.add('distance_guard(redock)');
+              // 2026-06-23 (vucko Video): Selbst der „garantierte" Re-Dock wurde
+              // ge-gated (Fahrer beim Commit zu weit weg / Stale) → lokaler
+              // Re-Anchor (bypasst die Gates, beginnt exakt am Puck).
+              if (mounted && !_disposed) {
+                final local = await _commitLocalReanchorFallback(
+                  position: position,
+                  planningCoordinates: planningCoordinates,
+                  planningManeuvers: planningManeuvers,
+                  remainingDistanceBeforeMeters: remainingDistanceBeforeMeters,
+                );
+                if (local) return true;
+              }
               return false;
             }
             if (mounted) {
@@ -13986,6 +14060,29 @@ class _CruiseModePageState extends State<CruiseModePage>
           '[CruiseMode][RerouteFail] Zyklus gescheitert '
           '(isRetry=$isRetry) causes=${cycleFailures.join(' | ')}',
         );
+        // 2026-06-23 (vucko 2-Geräte-Video „Reroute findet ab einem Punkt KEINE
+        // Route mehr"): LETZTER AUSWEG — lokaler Re-Anchor OHNE Netz. Lieferten
+        // alle GH-Versuche (Ziel/Rejoin/garantierter Re-Dock) nichts — typisch
+        // wenn GH nach vielen Reroutes 429-rate-limitet ODER jeder Kandidat durch
+        // die Shape-/Merge-Gates fällt — committen wir die bestehende Planungs-
+        // route ab dem nächsten Vorwärtspunkt mit der GPS-Position als Start. So
+        // bekommt der Fahrer IMMER eine Linie+Manöver zurück statt >2,5 Min
+        // Endlos-„Neuberechnung" (genau die Endlosschleife aus dem Video).
+        if (mounted && !_disposed && planningCoordinates.length >= 2) {
+          final localCommitted = await _commitLocalReanchorFallback(
+            position: position,
+            planningCoordinates: planningCoordinates,
+            planningManeuvers: planningManeuvers,
+            remainingDistanceBeforeMeters: remainingDistanceBeforeMeters,
+          );
+          if (localCommitted) {
+            debugPrint(
+              '[CruiseMode][Reroute] Lokaler Re-Anchor committed '
+              '(Netz-Notnagel) — Endlos-Neuberechnung gebrochen',
+            );
+            return true;
+          }
+        }
         if (isRetry) {
           _publishRerouteFailure(
             rerouteReason: 'no_candidate',

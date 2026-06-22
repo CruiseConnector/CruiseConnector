@@ -198,4 +198,64 @@ void main() {
       expect(call(isLeadingGroupRoute: true), isFalse);
     });
   });
+
+  group('buildLocalReanchorRoute (Reroute-Notnagel ohne Netz)', () {
+    final planning = [
+      [9.0, 47.0],
+      [9.1, 47.1],
+      [9.2, 47.2],
+      [9.3, 47.3],
+      [9.4, 47.4],
+    ];
+
+    test('schneidet ab Vorwärts-Rejoin, GPS als Start, Manöver remapped', () {
+      final m = [_m(0), _m(2), _m(4, icon: Icons.flag)];
+      final out = buildLocalReanchorRoute(
+        currentPosition: [8.9, 46.9],
+        planningCoordinates: planning,
+        planningManeuvers: m,
+        forwardRejoinIndex: 2,
+      );
+      // coords = [pos, planning[2], planning[3], planning[4]] = 4 Punkte
+      expect(out.coordinates.length, 4);
+      expect(out.coordinates.first, [8.9, 46.9]);
+      expect(out.coordinates[1], [9.2, 47.2]);
+      // Manöver: routeIndex 2→1, 4→3; das bei 0 (vor rejoin) fällt weg.
+      expect(out.maneuvers.map((x) => x.routeIndex).toList(), [1, 3]);
+    });
+
+    test('rejoin 0 → ganze Planungsroute nach GPS-Start', () {
+      final out = buildLocalReanchorRoute(
+        currentPosition: [8.9, 46.9],
+        planningCoordinates: planning,
+        planningManeuvers: const [],
+        forwardRejoinIndex: 0,
+      );
+      expect(out.coordinates.length, planning.length + 1);
+    });
+
+    test('Planung < 2 → nur GPS-Punkt, keine Manöver', () {
+      final out = buildLocalReanchorRoute(
+        currentPosition: [8.9, 46.9],
+        planningCoordinates: [
+          [9.0, 47.0],
+        ],
+        planningManeuvers: [_m(0)],
+        forwardRejoinIndex: 0,
+      );
+      expect(out.coordinates.length, 1);
+      expect(out.maneuvers, isEmpty);
+    });
+
+    test('rejoin am Ende → kurzer gerader Anschluss (nur GPS + letzter Punkt)', () {
+      final out = buildLocalReanchorRoute(
+        currentPosition: [8.9, 46.9],
+        planningCoordinates: planning,
+        planningManeuvers: const [],
+        forwardRejoinIndex: 4,
+      );
+      expect(out.coordinates.length, 2);
+      expect(out.coordinates.last, [9.4, 47.4]);
+    });
+  });
 }
