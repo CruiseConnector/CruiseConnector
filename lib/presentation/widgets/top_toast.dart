@@ -19,6 +19,9 @@ class TopToast {
     IconData icon = Icons.check_circle,
     bool isError = false,
     Duration duration = const Duration(seconds: 2),
+    // 2026-06-23 (vucko Banner-Verdeckung): zusätzlicher Abstand von oben, damit
+    // ein Toast während der Navigation NICHT über dem Manöver-Banner liegt.
+    double topOffset = 0,
   }) {
     final overlay = Overlay.maybeOf(context, rootOverlay: true);
     if (overlay == null) return;
@@ -37,6 +40,7 @@ class TopToast {
         icon: icon,
         accent: accent,
         duration: effective,
+        topOffset: topOffset,
         onDismiss: () {
           _current?.remove();
           _current = null;
@@ -53,6 +57,7 @@ class _TopToastWidget extends StatefulWidget {
   final IconData icon;
   final Color accent;
   final Duration duration;
+  final double topOffset;
   final VoidCallback onDismiss;
 
   const _TopToastWidget({
@@ -60,6 +65,7 @@ class _TopToastWidget extends StatefulWidget {
     required this.icon,
     required this.accent,
     required this.duration,
+    required this.topOffset,
     required this.onDismiss,
   });
 
@@ -105,7 +111,7 @@ class _TopToastWidgetState extends State<_TopToastWidget>
   Widget build(BuildContext context) {
     final media = MediaQuery.of(context);
     return Positioned(
-      top: media.padding.top + 10,
+      top: media.padding.top + 10 + widget.topOffset,
       left: 16,
       right: 16,
       child: SlideTransition(

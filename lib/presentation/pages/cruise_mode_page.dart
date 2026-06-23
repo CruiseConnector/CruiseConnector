@@ -9924,6 +9924,9 @@ class _CruiseModePageState extends State<CruiseModePage>
         VoiceMode.important => Icons.volume_down_rounded,
         VoiceMode.all => Icons.volume_up_rounded,
       },
+      // 2026-06-23 (vucko Video s19-21): während der Navigation den Toast UNTER
+      // das Manöver-Banner schieben statt darüber (verdeckte sonst die Abbiegung).
+      topOffset: _isRouteConfirmed ? 96.0 : 0.0,
     );
   }
 
