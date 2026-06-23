@@ -705,6 +705,11 @@ class _CruiseModePageState extends State<CruiseModePage>
   Timer? _viewportPoiDebounce;
   bool _groupRouteBackfillInFlight = false;
   bool _groupMembersBackfillInFlight = false;
+  // 2026-06-23 (vucko 2-Geräte-Gruppen-Video, C2): Ein off-route Follower zieht
+  // die Leader-Route SOFORT per Backfill (statt nur auf die 5-s-Kadenz zu
+  // warten) → frische Rest-km/ETA kommen schneller. Debounce gegen Server-Spam.
+  DateTime? _lastFollowerBackfillPullAt;
+  static const Duration _followerBackfillMinInterval = Duration(seconds: 2);
   bool _canPublishGroupRoute = false;
   // 2026-06-10 (vucko Gruppen-Reroute-Regel): true, sobald ICH der aktiven
   // (Gruppen-)Route real gefolgt bin (on-route <80m). Nur dann darf mein
@@ -722,8 +727,15 @@ class _CruiseModePageState extends State<CruiseModePage>
   // primär per Broadcast (Fast-Path) und wird auf die Route projiziert.
   static const double _peerEaseFactor =
       0.22; // war 0.08 (schnellere Konvergenz)
-  static const double _peerExtrapMaxSeconds = 3.0; // höchstens 3s vorausrechnen
-  static const double _peerExtrapMaxMeters = 60.0; // Deckel gegen Runaway
+  // 2026-06-23 (vucko 2-Geräte-Video „Peer hängt beim Reroute"): Während das
+  // andere Gerät reroutet (3-12s), brach dessen Broadcast-Kadenz ein → der
+  // Peer-Marker fror nach nur 3s/60m Vorausrechnung ein. Auf 8s/200m angehoben,
+  // damit der Marker durch die typische Reroute-Lücke WEITER GLEITET (Tempo +
+  // Heading kommen ja mit). Ein echter Halt sendet speed≈0 → kein Overshoot; nur
+  // eine echte Bewegungs-Lücke wird länger extrapoliert, der nächste Broadcast
+  // snappt per _peerEaseFactor + Route-Snap sofort zurück.
+  static const double _peerExtrapMaxSeconds = 8.0;
+  static const double _peerExtrapMaxMeters = 200.0;
   static const double _peerRouteSnapMeters =
       25.0; // auf Route snappen wenn ≤25m
   // 2026-06-20 (vucko Gruppen-Reroute-Sync): Backfill 15s→5s und Reconnect 3s→1s.
@@ -2042,6 +2054,27 @@ class _CruiseModePageState extends State<CruiseModePage>
     } finally {
       _groupRouteBackfillInFlight = false;
     }
+  }
+
+  /// 2026-06-23 (vucko 2-Geräte-Gruppen-Video, C2): Zieht die kanonische Leader-
+  /// Route SOFORT (debounced ≤1×/2s) per Backfill, wenn dieses Gerät ein NICHT-
+  /// führender Gruppen-Follower ist. So bekommt ein off-route Follower frische
+  /// Rest-km/ETA aus der Leader-Route schneller als über die 5-s-Periodik. Reine
+  /// Leseoperation (Fetch + Adopt nur höherer Revision); _reloadGroupRouteFrom
+  /// Backfill hat eigenen In-Flight-Guard. Leader/solo lösen nichts aus.
+  void _maybePullFollowerGroupRouteBackfill(geo.Position position) {
+    final groupId = widget.groupId;
+    if (groupId == null) return;
+    if (_isCurrentDeviceLeadingGroupRoute(position)) return;
+    final now = DateTime.now();
+    if (_lastFollowerBackfillPullAt != null &&
+        now.difference(_lastFollowerBackfillPullAt!) <
+            _followerBackfillMinInterval) {
+      return;
+    }
+    _lastFollowerBackfillPullAt = now;
+    final meId = Supabase.instance.client.auth.currentUser?.id;
+    unawaited(_reloadGroupRouteFromBackfill(groupId, meId));
   }
 
   Future<void> _applyGroupRouteRow(
@@ -13705,6 +13738,28 @@ class _CruiseModePageState extends State<CruiseModePage>
             );
             if (!committed) {
               cycleFailures.add('distance_guard(destination)');
+              // 2026-06-23 (vucko 2-Geräte-Gruppen-Video „Reroute oszilliert,
+              // ETA hängt auf alter Route"): Auch der ZIEL-Pfad braucht das
+              // Local-Reanchor-Netz (wie Redock + no_candidate). Ein NICHT-
+              // führender Gruppen-Follower wird in _commitRerouteResult VOR dem
+              // lokalen Apply abgewiesen (Nicht-Leader-Zweig, publishToGroup) →
+              // ohne dieses Netz bekäme er GAR KEINE Route: er oszillierte
+              // zwischen „Neuberechnung" und alter Linie und behielt die alte
+              // Rest-km/ETA, bis die Leader-Route adoptiert ist (Realtime/5s-
+              // Backfill). Der Reanchor (publishToGroup:false) gibt ihm SOFORT
+              // eine eigene Brücken-Linie+Manöver+ETA ab der GPS-Position; die
+              // nächste Leader-Adoption (_applyGroupRouteData) überschreibt sie
+              // sauber. Solo/Leader: ohnehin committet der reguläre Pfad → der
+              // Reanchor greift dort nur bei echtem Stale/Distance-Guard (safe).
+              if (mounted && !_disposed) {
+                final local = await _commitLocalReanchorFallback(
+                  position: position,
+                  planningCoordinates: planningCoordinates,
+                  planningManeuvers: planningManeuvers,
+                  remainingDistanceBeforeMeters: remainingDistanceBeforeMeters,
+                );
+                if (local) return true;
+              }
               return false;
             }
             _logRerouteMeta(rerouteMeta);
