@@ -216,6 +216,24 @@ class RouteRenderLock {
     _headingDivergenceSince = null;
   }
 
+  /// 2026-06-23 (vucko 2-Geräte-Video „Nav-Freeze bei GPS-Verlust"): Schiebt die
+  /// Render-Distanz während einer GPS-Lücke MONOTON vorwärts (Dead-Reckoning
+  /// entlang der Route), damit Puck + Linie weitergleiten statt einzufrieren.
+  /// Nur vorwärts, auf das Routenende geclampt; zieht [_distanceM] mit, damit ein
+  /// späterer project() nicht zurückspringt. Greift NUR während eines bestätigten
+  /// GPS-Stalls (der Aufrufer gated streng) — der Normalpfad ist unberührt.
+  void glideRenderForward(double targetDistanceM) {
+    final cum = _cumulativeDistances;
+    if (cum == null || cum.isEmpty || _renderDistM < 0) return;
+    final maxD = cum.last;
+    final d = targetDistanceM.clamp(_renderDistM, maxD).toDouble();
+    if (d <= _renderDistM) return;
+    _renderDistM = d;
+    if (d > _distanceM) _distanceM = d;
+    _segmentIndex = _segmentIndexForDistance(d);
+    _catchingUp = false;
+  }
+
   RouteRenderLockProjection? project({
     required List<List<double>> coordinates,
     required double latitude,

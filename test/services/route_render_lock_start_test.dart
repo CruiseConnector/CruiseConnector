@@ -48,5 +48,33 @@ void main() {
       expect(proj, isNotNull);
       expect(proj!.segmentIndex, 3);
     });
+
+    test('glideRenderForward schiebt Render-Distanz monoton vorwärts + clampt',
+        () {
+      final lock = RouteRenderLock();
+      // Lock am Start setzen.
+      final p0 = lock.project(
+        coordinates: route,
+        latitude: 47.0,
+        longitude: 9.0,
+        routeConfirmed: true,
+        currentRouteIndex: 0,
+        speedMps: 10.0,
+      );
+      expect(p0, isNotNull);
+      final before = lock.distanceM;
+      lock.glideRenderForward(before + 50.0);
+      expect(lock.distanceM, greaterThan(before)); // vorwärts
+      // Auf Routenende geclampt (kein Davonlaufen).
+      lock.glideRenderForward(1e9);
+      expect(
+        lock.distanceM,
+        lessThanOrEqualTo(lock.cumulativeDistances!.last + 0.001),
+      );
+      // Rückwärts ist ein No-Op (monoton).
+      final cur = lock.distanceM;
+      lock.glideRenderForward(0.0);
+      expect(lock.distanceM, cur);
+    });
   });
 }

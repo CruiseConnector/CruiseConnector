@@ -524,6 +524,17 @@ class _CruiseModePageState extends State<CruiseModePage>
   // verpassten Manöver, Off-Route feuert noch nicht), wird EIN Reroute erzwungen.
   double? _lastRenderDistForFreeze;
   DateTime? _renderDistChangedAt;
+  // 2026-06-23 (vucko 2-Geräte-Video „Nav-Freeze bei GPS-Verlust" + „GPS-Hinweis"):
+  // GPS-Stall-Watchdog. Friert der Standort-Stream ein (Tunnel/Wald), clampt der
+  // Smoother-Predict nach 1,5s → location-getriebener Nav-Tick + Puck + Banner
+  // froren ein. Timer-basiert (unabhängig vom Stream).
+  DateTime? _lastLocationFixAt; // wann kam der letzte verarbeitete GPS-Fix
+  double _gpsLastFixSpeedMps = 0.0; // Tempo beim LETZTEN Fix (fährt vs. steht)
+  DateTime? _lastStallGlideAt; // letzter Dead-Reckoning-Glide-Tick während Stall
+  Timer? _gpsStallWatchdog;
+  bool _gpsWeak = false; // „GPS schwach"-Hinweis sichtbar?
+  static const Duration _gpsWeakThreshold = Duration(seconds: 5);
+  static const Duration _gpsStallGlideThreshold = Duration(milliseconds: 1800);
 
   // 2026-06-17 (vucko Geräte-Video: Standort-Teleport + grundloses Reroute):
   // GPS-Ausreißer-Gate. Letzter als plausibel akzeptierter ROH-Fix + Zähler der
@@ -1486,6 +1497,73 @@ class _CruiseModePageState extends State<CruiseModePage>
   }
 
   /// Render-Position fuer Puck UND Kamera: on-route = auf die Linie gesnappt.
+  /// 2026-06-23 (vucko 2-Geräte-Video „Nav-Freeze bei GPS-Verlust"): Während eines
+  /// BESTÄTIGTEN GPS-Stalls (Stream liefert >1,8s nichts, Wagen fuhr zuletzt
+  /// klar, sicher route-locked) den Render-Lock entlang der Route weiterschieben
+  /// (Dead-Reckoning) statt am eingefrorenen Smoother-Predict (1,5s-Clamp) zu
+  /// hängen. Gibt die geglittene Route-Position zurück, sonst null. Greift NUR im
+  /// Stall — der Normalpfad (GPS fließt) ruft das wegen `gap < threshold` nie auf,
+  /// bleibt also unberührt; im Stall wäre der Schirm ohnehin eingefroren.
+  LatLng? _gpsStallRouteGlide(DateTime renderAt) {
+    if (!_routeLockedOn) return null;
+    final last = _lastLocationFixAt;
+    if (last == null) return null;
+    final gap = renderAt.difference(last);
+    if (gap < _gpsStallGlideThreshold) return null; // GPS fließt → normal
+    if (gap > const Duration(seconds: 25)) return null; // aufgeben, kein Run-away
+    if (_gpsLastFixSpeedMps < 3.0) return null; // Wagen stand → kein Glide
+    if (_renderLockDistM < 0) return null;
+    final lastGlide = _lastStallGlideAt ?? last;
+    final dt = (renderAt.difference(lastGlide).inMilliseconds / 1000.0)
+        .clamp(0.0, 0.5)
+        .toDouble();
+    _lastStallGlideAt = renderAt;
+    if (dt > 0) {
+      _routeRenderLock.glideRenderForward(
+        _renderLockDistM + _gpsLastFixSpeedMps * dt,
+      );
+    }
+    final pt = _pointAtRouteDist(_renderLockDistM);
+    if (pt == null) return null;
+    final glided = LatLng(pt[1], pt[0]);
+    _lastRouteLockedRenderLatLng = glided;
+    _lastRouteRenderLockAcceptedAt = renderAt;
+    return glided;
+  }
+
+  /// 2026-06-23 (vucko GPS-Stall-Watchdog, Timer-getrieben): unabhängig vom
+  /// Standort-Stream. Zeigt „GPS schwach" NUR wenn der Wagen zuletzt FUHR (nicht
+  /// im Stand/Tankstelle) + hält während des Stalls den Kamera-Ticker am Leben,
+  /// damit der per-Frame-Glide (oben) Puck + Linie weitergleiten lässt.
+  void _checkGpsStall() {
+    if (!mounted || _disposed || !_isRouteConfirmed) {
+      if (_gpsWeak) {
+        _gpsWeak = false;
+        _safeSetState(() {});
+      }
+      return;
+    }
+    final last = _lastLocationFixAt;
+    if (last == null) return;
+    final gap = DateTime.now().difference(last);
+    final moving = _gpsLastFixSpeedMps >= 3.0;
+    final warn = moving && gap >= _gpsWeakThreshold;
+    if (warn != _gpsWeak) {
+      _gpsWeak = warn;
+      _safeSetState(() {});
+    }
+    if (moving &&
+        _routeLockedOn &&
+        gap >= _gpsStallGlideThreshold &&
+        gap <= const Duration(seconds: 25)) {
+      // Ticker am Leben halten: das Ziel auf die geglittene Position setzen.
+      final cur = _routeLockedRenderPosition(DateTime.now());
+      if (cur != null) {
+        _animateCameraTo(cur.latitude, cur.longitude, _camToHeading);
+      }
+    }
+  }
+
   LatLng? _routeLockedRenderPosition([DateTime? at]) {
     final renderAt = at ?? DateTime.now();
     final p = _nativeSmoother.predict(renderAt);
@@ -1501,6 +1579,10 @@ class _CruiseModePageState extends State<CruiseModePage>
       _resetPuckBlend();
       return free;
     }
+    // 2026-06-23 (vucko Nav-Freeze bei GPS-Verlust): im bestätigten GPS-Stall
+    // entlang der Route weitergleiten statt einzufrieren (greift NUR im Stall).
+    final stallGlide = _gpsStallRouteGlide(renderAt);
+    if (stallGlide != null) return stallGlide;
     final d = _projectDistOnRoute(p.lat, p.lng, renderAt);
     if (d == null) {
       if (_shouldHoldLastRouteLockedRenderPosition(renderAt)) {
@@ -2529,6 +2611,25 @@ class _CruiseModePageState extends State<CruiseModePage>
     );
   }
 
+  /// 2026-06-23 (vucko 2-Geräte-Gruppen-Video, C1): Ist dieses Gerät ein NICHT-
+  /// führender Gruppen-Follower mit frischem Leader voraus und geteilter Route?
+  /// Dann zeigt das „Neuberechnung"-Banner ruhig „Folge der Gruppe" — der Fahrer
+  /// folgt nur dem Leader, dessen Republish gleich adoptiert wird (kein Flackern).
+  /// Wird NUR im Build aufgerufen, wenn das Reroute-Banner ohnehin aktiv ist
+  /// (begrenzte Kosten). Fällt der Leader-Peer weg (>12s stale), greift wieder
+  /// das normale „Neuberechnung", weil der Follower dann selbst zurück muss.
+  bool _groupFollowerWaitingForLeaderRoute() {
+    if (widget.groupId == null || _groupRouteRevision <= 0) return false;
+    final pos = _userLocation;
+    if (pos == null) return false;
+    final now = DateTime.now();
+    final hasFreshPeer = _groupMembers.values.any(
+      (m) => m.hasFreshLocation(now: now, maxAge: _groupMemberFreshLocationAge),
+    );
+    if (!hasFreshPeer) return false;
+    return !_isCurrentDeviceLeadingGroupRoute(pos);
+  }
+
   Future<bool> _publishGroupRouteIfAllowed(
     RouteResult result, {
     required bool wasLeadingBeforeCommit,
@@ -3226,6 +3327,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     _routeLoadingPhaseTimer?.cancel();
     _routeSearchExitTimer?.cancel();
     _rerouteWatchdog?.cancel();
+    _gpsStallWatchdog?.cancel();
     _cameraAnimController?.removeListener(_onCameraAnimationTick);
     _cameraAnimController?.dispose();
     CruiseModePage.isFullscreen.value = false;
@@ -5899,6 +6001,63 @@ class _CruiseModePageState extends State<CruiseModePage>
         : DateTime.now().difference(_rerouteStartedAt!);
     return Stack(
       children: [
+        // 2026-06-23 (vucko 2-Geräte-Video „GPS-Hinweis"): dezenter, NICHT-
+        // verdeckender Hinweis UNTER dem Manöver-Banner — nur wenn der Wagen
+        // zuletzt fuhr + der GPS-Stream eingefroren ist (Tunnel/Wald), nie im
+        // Stand. Mittig, klein, animiert ein/aus; liegt weder über dem Banner
+        // (oben) noch über den unteren Buttons.
+        Positioned(
+          top: topInset + 8 + (visibleManeuver != null ? 102 : 60),
+          left: 0,
+          right: 0,
+          child: IgnorePointer(
+            child: AnimatedOpacity(
+              opacity: _gpsWeak ? 1.0 : 0.0,
+              duration: const Duration(milliseconds: 250),
+              child: Center(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 8,
+                  ),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF1C2028).withValues(alpha: 0.94),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(
+                      color: const Color(0xFFFFB74D).withValues(alpha: 0.5),
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.35),
+                        blurRadius: 14,
+                        offset: const Offset(0, 3),
+                      ),
+                    ],
+                  ),
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        Icons.satellite_alt_rounded,
+                        color: Color(0xFFFFB74D),
+                        size: 17,
+                      ),
+                      SizedBox(width: 8),
+                      Text(
+                        'GPS-Signal schwach',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 13.5,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
         Positioned(
           top: topInset + 8,
           left: 12,
@@ -5915,6 +6074,12 @@ class _CruiseModePageState extends State<CruiseModePage>
                   leading: _buildManeuverBackChevron(),
                   isRerouting: reroutingActive,
                   reroutingDuration: reroutingDuration,
+                  // 2026-06-23 (vucko 2-Geräte-Gruppen-Video, C1): ruhiges
+                  // „Folge der Gruppe" statt oszillierendem „Neuberechnung",
+                  // wenn dieses Gerät als Follower nur auf die Leader-Route
+                  // wartet (nur ausgewertet, wenn das Reroute-Banner aktiv ist).
+                  groupFollowerWaiting:
+                      reroutingActive && _groupFollowerWaitingForLeaderRoute(),
                 )
               : _buildRoutePreviewBackButton(),
         ),
@@ -11278,6 +11443,13 @@ class _CruiseModePageState extends State<CruiseModePage>
     _stopIdlePositionStream(); // Idle-Stream stoppen, Navigation übernimmt
     _positionSubscription?.cancel();
     _socketPositionSubscription?.cancel();
+    // 2026-06-23 (vucko GPS-Stall-Watchdog): unabhängig vom Standort-Stream.
+    _lastLocationFixAt = DateTime.now();
+    _gpsStallWatchdog?.cancel();
+    _gpsStallWatchdog = Timer.periodic(
+      const Duration(seconds: 1),
+      (_) => _checkGpsStall(),
+    );
 
     // Navigations-Startzeit setzen (nur beim ersten Start, nicht bei Resume)
     final startsNewDriveSession = _navigationStartTime == null;
@@ -11376,6 +11548,9 @@ class _CruiseModePageState extends State<CruiseModePage>
     _positionSubscription = null;
     _socketPositionSubscription?.cancel();
     _socketPositionSubscription = null;
+    _gpsStallWatchdog?.cancel();
+    _gpsStallWatchdog = null;
+    _gpsWeak = false;
     unawaited(_navigationSocketService.close());
     _endNavigationLiveActivity();
     _startIdlePositionStream(); // Idle-Stream wieder starten
@@ -11462,6 +11637,22 @@ class _CruiseModePageState extends State<CruiseModePage>
 
   Future<void> _onLocationUpdate(geo.Position position) async {
     if (!mounted || _disposed) return;
+
+    // 2026-06-23 (vucko GPS-Stall-Watchdog): frischer Fix → Stempel + Tempo
+    // merken (für „fährt vs. steht"). Sobald wieder Fixes fließen, ist die GPS-
+    // Lücke vorbei → Hinweis weg + Glide-Tracker zurücksetzen (der nächste
+    // reguläre Render-Pfad übernimmt; der Render-Lock-Glide war monoton, springt
+    // also nicht zurück).
+    _lastLocationFixAt = DateTime.now();
+    final fixSpeed = position.speed.isFinite && position.speed > 0
+        ? position.speed
+        : _nativeSmoother.speed;
+    _gpsLastFixSpeedMps = fixSpeed.isFinite && fixSpeed > 0 ? fixSpeed : 0.0;
+    _lastStallGlideAt = null;
+    if (_gpsWeak) {
+      _gpsWeak = false;
+      _safeSetState(() {});
+    }
 
     // 2026-06-17 (vucko Geräte-Video: Standort teleportiert + grundloses Reroute):
     // GPS-AUSREISSER-GATE. Physikalisch unmögliche Sprünge (Stadt/Schlucht-
@@ -11934,6 +12125,15 @@ class _CruiseModePageState extends State<CruiseModePage>
       accuracyMeters: accuracyM,
       clearWrongTurn: clearWrongTurn,
     );
+
+    // 2026-06-23 (vucko 2-Geräte-Gruppen-Video, C2): Sobald ein Gruppen-Gerät
+    // off-route ist, sofort (debounced) die Leader-Route per Backfill ziehen —
+    // egal ob es gleich deferred (Leader führt zurück) ODER selbst rerouted.
+    // Ein nicht-führender Follower bekommt so die frische Rest-km/ETA schneller
+    // als über die reine 5-s-Periodik. Leader/solo: No-Op (siehe Helper-Guard).
+    if (isOutsideCorridor && widget.groupId != null) {
+      _maybePullFollowerGroupRouteBackfill(position);
+    }
 
     if (isOutsideCorridor &&
         !approachingDestination &&
