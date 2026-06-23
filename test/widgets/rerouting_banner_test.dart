@@ -40,4 +40,50 @@ void main() {
     );
     expect(find.text('Rechts abbiegen.'), findsNothing);
   });
+
+  // 2026-06-23 (vucko 2-Geräte-Gruppen-Video, C1): Ein nicht-führender Follower,
+  // der nur auf die Leader-Route wartet, sieht das ruhige „Folge der Gruppe"
+  // statt des alarmierenden, oszillierenden „Neuberechnung".
+  testWidgets('Follower-Banner zeigt „Folge der Gruppe" statt „Neuberechnung"', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      harness(
+        CruiseManeuverIndicator(
+          maneuver: maneuver(),
+          isRerouting: true,
+          reroutingDuration: const Duration(seconds: 2),
+          groupFollowerWaiting: true,
+        ),
+      ),
+    );
+
+    expect(find.text('Folge der Gruppe'), findsOneWidget);
+    expect(find.text('Neue Route der Gruppe kommt gleich'), findsOneWidget);
+    expect(find.text('Neuberechnung'), findsNothing);
+    expect(find.text('Rechts abbiegen.'), findsNothing);
+  });
+
+  // Gegenprobe: ohne Follower-Flag bleibt der Standard-„Neuberechnung"-Status
+  // byte-gleich (kein Regress am Solo-/Leader-Pfad).
+  testWidgets('Standard-Reroute-Banner bleibt „Neuberechnung" ohne Follower-Flag', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      harness(
+        CruiseManeuverIndicator(
+          maneuver: maneuver(),
+          isRerouting: true,
+          reroutingDuration: const Duration(seconds: 2),
+        ),
+      ),
+    );
+
+    expect(find.text('Neuberechnung'), findsOneWidget);
+    expect(
+      find.text('Route wird angepasst — bitte weiterfahren'),
+      findsOneWidget,
+    );
+    expect(find.text('Folge der Gruppe'), findsNothing);
+  });
 }

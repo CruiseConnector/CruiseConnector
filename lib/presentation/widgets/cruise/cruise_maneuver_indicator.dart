@@ -16,6 +16,7 @@ class CruiseManeuverIndicator extends StatelessWidget {
     this.leading,
     this.isRerouting = false,
     this.reroutingDuration,
+    this.groupFollowerWaiting = false,
   });
 
   final RouteManeuver maneuver;
@@ -37,6 +38,13 @@ class CruiseManeuverIndicator extends StatelessWidget {
   /// wechselt der Untertext von "warte" zu einem sicheren Weiterfahr-Hinweis,
   /// damit die UI nicht wie eingefroren wirkt.
   final Duration? reroutingDuration;
+
+  /// 2026-06-23 (vucko 2-Geräte-Gruppen-Video, C1): Dieses Gerät ist ein NICHT-
+  /// führender Gruppen-Follower mit frischem Leader voraus. Statt des
+  /// alarmierenden „Neuberechnung" zeigt das Banner dann ruhig „Folge der
+  /// Gruppe", während die geteilte Leader-Route adoptiert wird — kein Flackern,
+  /// kein Fehlalarm „ich suche", obwohl der Fahrer nur dem Leader folgt.
+  final bool groupFollowerWaiting;
 
   @override
   Widget build(BuildContext context) {
@@ -196,9 +204,9 @@ class CruiseManeuverIndicator extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Text(
-                  'Neuberechnung',
-                  style: TextStyle(
+                Text(
+                  groupFollowerWaiting ? 'Folge der Gruppe' : 'Neuberechnung',
+                  style: const TextStyle(
                     color: Colors.white,
                     fontSize: 22,
                     fontWeight: FontWeight.w700,
@@ -207,7 +215,9 @@ class CruiseManeuverIndicator extends StatelessWidget {
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  isTakingLong
+                  groupFollowerWaiting
+                      ? 'Neue Route der Gruppe kommt gleich'
+                      : isTakingLong
                       ? 'Suche läuft weiter — Route bleibt sichtbar'
                       : 'Route wird angepasst — bitte weiterfahren',
                   style: TextStyle(
