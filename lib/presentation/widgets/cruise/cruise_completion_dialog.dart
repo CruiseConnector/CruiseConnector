@@ -106,12 +106,17 @@ class CruiseCompletionDialog extends StatefulWidget {
     this.belowMinimum = false,
     this.routeStyle = '',
     this.isRoundTrip = true,
+    this.topSpeedKmh = 0,
+    this.avgSpeedKmh = 0,
   });
 
   final double distanceKm;
   final String durationText;
   final int curves;
   final int xpEarned;
+  // 2026-06-23 (vucko Post-Route Top-Speed): höchstes + Ø-Tempo der Fahrt (km/h).
+  final double topSpeedKmh;
+  final double avgSpeedKmh;
   // 2026-05-31 (vucko): Für den automatisch generierten, passenden Titel
   // (Wochentag + Tageszeit + Fahrstil) im Header.
   final String routeStyle;
@@ -667,6 +672,32 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
             ),
           ],
         ),
+        // 2026-06-23 (vucko Post-Route Top-Speed): dritte Reihe — Top-Speed +
+        // Ø-Tempo. Nur zeigen, wenn echte Werte vorliegen (Single + Gruppe).
+        if (widget.topSpeedKmh > 0) ...[
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: _StatTile(
+                  value: '${widget.topSpeedKmh.round()} km/h',
+                  label: 'Top-Speed',
+                  exportMode: _isExportMode,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _StatTile(
+                  value: widget.avgSpeedKmh > 0
+                      ? '${widget.avgSpeedKmh.round()} km/h'
+                      : '—',
+                  label: 'Ø Tempo',
+                  exportMode: _isExportMode,
+                ),
+              ),
+            ],
+          ),
+        ],
       ],
     );
   }

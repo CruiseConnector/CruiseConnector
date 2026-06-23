@@ -240,6 +240,10 @@ class _CruiseModePageState extends State<CruiseModePage>
   final _smartRerouteEngine = const SmartRerouteEngine();
   final _navigationSocketService = NavigationProgressSocketService();
   final _drivenTrackRecorder = DrivenTrackRecorder();
+  // 2026-06-23 (vucko Post-Route Top-Speed): höchstes geglättetes Tempo der
+  // aktuellen Fahrt (m/s). Smoother statt Roh-GPS → kein Multipath-Spike; <100
+  // m/s-Guard filtert absurde Glitches. Reset bei jeder NEUEN Fahrt.
+  double _maxSpeedMps = 0.0;
 
   // ─────────────────────── Route Setup State ─────────────────────────────────
   bool _isRoundTrip = true;
@@ -11467,6 +11471,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     if (startsNewDriveSession) {
       _drivenTrackRecorder.reset();
       _totalDistanceDriven = 0.0;
+      _maxSpeedMps = 0.0; // 2026-06-23 (vucko Top-Speed): pro Fahrt frisch.
       // 2026-06-15 (vucko N1): Lock-On frisch — bis der Puck eingerastet ist, gilt
       // die Kaltstart-Reroute-Sperre (kein Phantom am Fahrtbeginn).
       _onRouteLockStreak = 0;
@@ -11541,6 +11546,12 @@ class _CruiseModePageState extends State<CruiseModePage>
       speedMetersPerSecond: position.speed,
     );
     if (result == DrivenTrackSampleResult.ignored) return;
+
+    // 2026-06-23 (vucko Post-Route Top-Speed): höchstes geglättetes Tempo merken.
+    final smSpeed = _nativeSmoother.speed;
+    if (smSpeed.isFinite && smSpeed > 0 && smSpeed < 100) {
+      if (smSpeed > _maxSpeedMps) _maxSpeedMps = smSpeed;
+    }
 
     _totalDistanceDriven = _drivenTrackRecorder.distanceMeters;
     if (result == DrivenTrackSampleResult.newSegment) {
@@ -15534,6 +15545,10 @@ class _CruiseModePageState extends State<CruiseModePage>
     );
     final xpEarned = xpBreakdown.totalXp;
 
+    final durationSeconds = adjustedResult?.durationSeconds ?? 0;
+    final avgKmh = durationSeconds > 0
+        ? drivenKm / (durationSeconds / 3600.0)
+        : 0.0;
     return _CruiseCompletionSnapshot(
       distanceKm: drivenKm,
       durationText: _formatCompletionDuration(adjustedResult?.durationSeconds),
@@ -15544,6 +15559,11 @@ class _CruiseModePageState extends State<CruiseModePage>
       segments: previewSegments,
       isEarlyStop: isEarlyStop,
       belowMinimum: belowMinimum,
+      topSpeedKmh: _maxSpeedMps * 3.6,
+      // Ø nur plausibel zeigen (≤ Top-Speed, kein Glitch durch Mini-Distanz).
+      avgSpeedKmh: avgKmh.isFinite && avgKmh > 0 && avgKmh <= _maxSpeedMps * 3.6 + 5
+          ? avgKmh
+          : 0.0,
     );
   }
 
@@ -15594,6 +15614,8 @@ class _CruiseModePageState extends State<CruiseModePage>
         drivenSegments: drivenSnap.segments.isEmpty
             ? null
             : drivenSnap.segments,
+        topSpeedKmh: snapshot.topSpeedKmh,
+        avgSpeedKmh: snapshot.avgSpeedKmh,
         routeStyle: _selectedStyle,
         isRoundTrip: _isRoundTrip,
         onSave: (rating, tags, title) async {
@@ -15658,6 +15680,8 @@ class _CruiseModePageState extends State<CruiseModePage>
         drivenSegments: drivenSnap.segments.isEmpty
             ? null
             : drivenSnap.segments,
+        topSpeedKmh: snapshot.topSpeedKmh,
+        avgSpeedKmh: snapshot.avgSpeedKmh,
         isEarlyStop: snapshot.isEarlyStop,
         belowMinimum: snapshot.belowMinimum,
         routeStyle: _selectedStyle,
@@ -16048,6 +16072,8 @@ class _CruiseCompletionSnapshot {
     required this.segments,
     required this.isEarlyStop,
     required this.belowMinimum,
+    this.topSpeedKmh = 0,
+    this.avgSpeedKmh = 0,
   });
 
   final double distanceKm;
@@ -16059,6 +16085,9 @@ class _CruiseCompletionSnapshot {
   final List<List<List<double>>> segments;
   final bool isEarlyStop;
   final bool belowMinimum;
+  // 2026-06-23 (vucko Post-Route Top-Speed).
+  final double topSpeedKmh;
+  final double avgSpeedKmh;
 }
 
 /// iOS Puck: reiner blauer Punkt (weißer Ring + blauer Kern), KEIN Pfeil.
