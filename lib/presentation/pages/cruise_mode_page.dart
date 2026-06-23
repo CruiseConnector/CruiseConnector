@@ -4814,7 +4814,18 @@ class _CruiseModePageState extends State<CruiseModePage>
               ],
             ),
           );
-          if (leave == true && mounted) Navigator.of(context).pop();
+          if (leave == true && mounted) {
+            if (widget.groupId != null) {
+              // 2026-06-23 (vucko Gruppe-verlassen-Video): NICHT roh poppen —
+              // das umging Post-Screen + Suppress-Flag, die Lobby zog einen
+              // sofort per Realtime („is_active") wieder in die Navigation →
+              // man landete im Route-Setup, immer noch im Gruppenmodus. Über den
+              // richtigen Flow: Post-Screen → Suppress → zurück in die Lobby.
+              _onRouteEarlyStopped();
+            } else {
+              Navigator.of(context).pop();
+            }
+          }
         },
         child: const Padding(
           padding: EdgeInsets.all(10),
