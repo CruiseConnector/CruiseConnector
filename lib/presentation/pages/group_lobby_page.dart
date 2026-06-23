@@ -34,6 +34,13 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
   bool _enteringNavigation = false;
   final Set<String> _busyRoleUpdates = {};
 
+  // 2026-06-23 (vucko X3): Die Rangliste kommt aus user_drive_sessions, das wegen
+  // RLS (own-rows-only) NICHT per Realtime an Mitfahrer geliefert wird. Damit
+  // jeder in der Lobby zeitnah DASSELBE Ergebnis sieht, fragen wir die
+  // deterministische RPC alle paar Sekunden frisch ab (nur solange die Lobby
+  // offen ist). Zusätzlich Pull-to-Refresh + Reload bei Rückkehr aus der Fahrt.
+  Timer? _leaderboardPoll;
+
   // 2026-06-21 (vucko Lobby-Netzfehler): Ein vorübergehender Netz-/DNS-Fehler
   // ("Failed host lookup") warf eine Exception, die wie "Gruppe nicht gefunden"
   // aussah und in einer Sackgasse OHNE Retry endete. Jetzt: jede Exception =
@@ -92,14 +99,49 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
     super.initState();
     _load();
     _subscribe();
+    _startLeaderboardPolling();
   }
 
   @override
   void dispose() {
     _retryTimer?.cancel();
+    _leaderboardPoll?.cancel();
     _groupCh?.unsubscribe();
     _membersCh?.unsubscribe();
     super.dispose();
+  }
+
+  void _startLeaderboardPolling() {
+    _leaderboardPoll?.cancel();
+    _leaderboardPoll = Timer.periodic(
+      const Duration(seconds: 12),
+      (_) => _refreshLeaderboardQuietly(),
+    );
+  }
+
+  /// Holt NUR die Rangliste neu (kein Voll-Reload, kein Flackern). setState nur
+  /// bei echter Änderung — so erscheinen die Eckdaten der Kollegen wenige
+  /// Sekunden nachdem sie ihre Fahrt beendet haben, ohne dass die ganze Lobby
+  /// neu aufblitzt.
+  Future<void> _refreshLeaderboardQuietly() async {
+    if (!mounted || _group == null) return;
+    final next = await GroupLeaderboardService.fetch(widget.groupId);
+    if (!mounted || !_leaderboardChanged(next)) return;
+    setState(() => _leaderboard = next);
+  }
+
+  bool _leaderboardChanged(List<GroupLeaderboardEntry> next) {
+    if (next.length != _leaderboard.length) return true;
+    for (var i = 0; i < next.length; i++) {
+      final a = _leaderboard[i];
+      final b = next[i];
+      if (a.userId != b.userId ||
+          a.totalDistanceKm != b.totalDistanceKm ||
+          a.maxTopSpeedKmh != b.maxTopSpeedKmh) {
+        return true;
+      }
+    }
+    return false;
   }
 
   Future<void> _load() async {
@@ -201,7 +243,12 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
           ),
         )
         .whenComplete(() {
-          if (mounted) _enteringNavigation = false;
+          if (mounted) {
+            _enteringNavigation = false;
+            // Zurück aus der Fahrt → Rangliste sofort aktualisieren (die eigene
+            // beendete Fahrt + zwischenzeitliche Kollegen-Ergebnisse).
+            _load();
+          }
         });
   }
 
@@ -497,9 +544,15 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
   Widget _buildBody() {
     final g = _group!;
     final km = ((g.routeData?['distance_meters'] ?? 0) as num) / 1000;
-    return ListView(
-      padding: const EdgeInsets.all(20),
-      children: [
+    return RefreshIndicator(
+      onRefresh: _load,
+      color: AppAccentColors.accent,
+      backgroundColor: const Color(0xFF1C1F26),
+      child: ListView(
+        // AlwaysScrollable, damit Pull-to-Refresh auch bei kurzer Liste greift.
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.all(20),
+        children: [
         Container(
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
@@ -585,6 +638,7 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
         const SizedBox(height: 8),
         _buildRoleSelector(),
       ],
+      ),
     );
   }
 
